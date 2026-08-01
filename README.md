@@ -27,6 +27,7 @@ docker run -d \
   -p 18080:18080 \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
+  -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
   -e QQBOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
@@ -190,10 +191,11 @@ WebUI 的 LLM 配置页会直接显示当前保存的 API Key，方便本地控�
 
 ## WebUI 访问安全
 
-WebUI 默认无需登录（便于本机开发）。**部署到公网或局域网前，请务必开启密码保护**，两种方式任选：
+WebUI 从首次启动起强制登录，本机和公网访问使用相同规则。默认管理员账号为 `admin@diana.local`。
 
-- 设置页 →「访问安全」→ 设置管理密码（至少 8 位）
-- 启动时注入环境变量 `DIANA_ADMIN_PASSWORD=你的密码`（仅首次初始化生效，不会覆盖已设密码）
+- 首次启动未提供 `DIANA_ADMIN_PASSWORD` 时，Diana 会生成安全随机密码，并仅在该次启动的标准错误日志中显示一次。
+- 也可在首次启动时注入 `DIANA_ADMIN_PASSWORD=你的密码`；已有凭据时不会覆盖数据库中的密码。
+- 登录后可在设置页的「访问安全」中修改密码（至少 8 位）。
 
 开启后所有 `/api` 接口需要登录，会话有效期 30 天；改密会使全部已登录会话失效。
 
@@ -295,7 +297,7 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
 | `DIANA_LOG_PATH` | 空 | `LOG_PATH` 的兼容别名 |
 | `APP_DB_PATH` | `data/diana.db` | 本地 SQLite 配置数据库路径 |
-| `DIANA_ADMIN_PASSWORD` | 空 | WebUI 管理密码引导值（首次初始化用，之后以 WebUI 设置为准） |
+| `DIANA_ADMIN_PASSWORD` | 自动随机生成 | WebUI 管理员首次初始化密码；账号固定为 `admin@diana.local`，之后以 SQLite 中的凭据为准 |
 | `LLM_PROVIDER` | `openai_compatible` | LLM provider |
 | `LLM_API_KEY` | 空 | LLM API Key |
 | `LLM_BASE_URL` | 空 | OpenAI-compatible 自定义 Base URL |

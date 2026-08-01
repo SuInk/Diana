@@ -5,7 +5,13 @@
         <BotMessageSquare :size="22" aria-hidden="true" />
       </span>
       <h1>Diana</h1>
-      <p class="muted">请输入管理密码进入控制台</p>
+      <p class="muted">请输入管理员账号和密码</p>
+      <input
+        v-model="username"
+        class="input"
+        placeholder="管理员账号"
+        autocomplete="username"
+      />
       <div class="input-group">
         <input
           ref="passwordInput"
@@ -59,6 +65,7 @@ import { toastError, toastSuccess } from "../toast";
 
 const emit = defineEmits<{ success: [] }>();
 
+const username = ref("admin@diana.local");
 const password = ref("");
 const show = ref(false);
 const busy = ref(false);
@@ -76,7 +83,7 @@ async function submit(): Promise<void> {
   busy.value = true;
   error.value = "";
   try {
-    await login(password.value);
+    await login(username.value, password.value);
     password.value = "";
     emit("success");
   } catch (err) {

@@ -74,13 +74,13 @@ func newAuthTestRouter(t *testing.T) (*gin.Engine, *AuthManager, *memoryAuthStor
 	return router, manager, store
 }
 
-// TestAuthDisabledByDefaultAllowsAll 验证对应功能场景。
-func TestAuthDisabledByDefaultAllowsAll(t *testing.T) {
+// TestAuthMissingCredentialsFailsClosed verifies that an uninitialized store never opens the API.
+func TestAuthMissingCredentialsFailsClosed(t *testing.T) {
 	router, _, _ := newAuthTestRouter(t)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/protected", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("open mode should allow access, got %d", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing credentials should deny access, got %d", rec.Code)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestAuthFullFlow(t *testing.T) {
 
 	// 错误密码登录失败。
 	rec = httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"wrong-password"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"admin@diana.local","password":"wrong-password"}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -118,7 +118,7 @@ func TestAuthFullFlow(t *testing.T) {
 
 	// 正确密码登录拿到 cookie。
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"diana-secret-1"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"admin@diana.local","password":"diana-secret-1"}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -162,20 +162,20 @@ func TestAuthFullFlow(t *testing.T) {
 func TestAuthBootstrapAndPasswordRules(t *testing.T) {
 	store := &memoryAuthStore{}
 	manager := NewAuthManager(store)
-	if err := manager.Bootstrap("bootstrap-pass"); err != nil {
+	if _, err := manager.Bootstrap("bootstrap-pass"); err != nil {
 		t.Fatalf("Bootstrap() error = %v", err)
 	}
 	if !manager.Required() {
 		t.Fatal("bootstrap should enable auth")
 	}
 	// Bootstrap 不覆盖已有密码。
-	if err := manager.Bootstrap("another-pass-xx"); err != nil {
+	if _, err := manager.Bootstrap("another-pass-xx"); err != nil {
 		t.Fatalf("Bootstrap() second error = %v", err)
 	}
-	if _, err := manager.Login("another-pass-xx"); err == nil {
+	if _, err := manager.Login(defaultAdminUser, "another-pass-xx"); err == nil {
 		t.Fatal("second bootstrap should not overwrite password")
 	}
-	if _, err := manager.Login("bootstrap-pass"); err != nil {
+	if _, err := manager.Login(defaultAdminUser, "bootstrap-pass"); err != nil {
 		t.Fatalf("original password should work: %v", err)
 	}
 	// 修改密码需要旧密码，且新密码有长度下限。
@@ -188,7 +188,29 @@ func TestAuthBootstrapAndPasswordRules(t *testing.T) {
 	if err := manager.SetPassword("bootstrap-pass", "new-password-1"); err != nil {
 		t.Fatalf("SetPassword() error = %v", err)
 	}
-	if _, err := manager.Login("new-password-1"); err != nil {
+	if _, err := manager.Login(defaultAdminUser, "new-password-1"); err != nil {
 		t.Fatalf("new password login failed: %v", err)
+	}
+}
+
+func TestAuthBootstrapGeneratesInitialCredentials(t *testing.T) {
+	store := &memoryAuthStore{}
+	manager := NewAuthManager(store)
+	password, err := manager.Bootstrap("")
+	if err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if len(password) < authMinPasswordLen {
+		t.Fatalf("generated password is too short: %d", len(password))
+	}
+	if _, err := manager.Login(defaultAdminUser, password); err != nil {
+		t.Fatalf("generated credentials should work: %v", err)
+	}
+	if _, err := manager.Login("admin", password); err == nil {
+		t.Fatal("wrong username was accepted")
+	}
+	restarted := NewAuthManager(store)
+	if generated, err := restarted.Bootstrap(""); err != nil || generated != "" {
+		t.Fatalf("restart generated new credentials: password=%q err=%v", generated, err)
 	}
 }

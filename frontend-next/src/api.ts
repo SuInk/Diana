@@ -301,10 +301,10 @@ export function getAuthStatus(): Promise<AuthStatus> {
   return requestJSON<AuthStatus>("/api/auth/status");
 }
 
-export function login(password: string): Promise<{ ok: boolean }> {
+export function login(username: string, password: string): Promise<{ ok: boolean }> {
   return requestJSON<{ ok: boolean }>("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ password })
+    body: JSON.stringify({ username, password })
   });
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -140,8 +141,12 @@ func main() {
 	router.Use(gin.LoggerWithWriter(logWriter), gin.RecoveryWithWriter(logWriter))
 	// 鉴权中间件必须在业务路由之前挂载；未设密码时等价于关闭。
 	authManager := webui.NewAuthManager(sqliteStore)
-	if err := authManager.Bootstrap(os.Getenv("DIANA_ADMIN_PASSWORD")); err != nil {
+	generatedPassword, err := authManager.Bootstrap(os.Getenv("DIANA_ADMIN_PASSWORD"))
+	if err != nil {
 		log.Fatalf("bootstrap admin password: %v", err)
+	}
+	if generatedPassword != "" {
+		_, _ = fmt.Fprintf(os.Stderr, "\nDiana administrator credentials (shown once)\n  username: admin@diana.local\n  password: %s\n\n", generatedPassword)
 	}
 	router.Use(authManager.Middleware())
 	authHandler := webui.NewAuthHandler(authManager)

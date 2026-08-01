@@ -27,6 +27,7 @@ docker run -d \
   -p 18080:18080 \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
+  -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
   -e QQBOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
@@ -188,6 +189,14 @@ Supported providers:
 
 The WebUI LLM configuration page directly displays the saved API key for local copy/edit workflows. Plain `GET /api/llm/config` still omits secrets by default; the frontend explicitly uses `include_secrets=true` when it needs the full configuration.
 
+## WebUI Access Security
+
+The WebUI requires authentication from the first startup, with identical rules for local and public access. The administrator username is `admin@diana.local`.
+
+- If `DIANA_ADMIN_PASSWORD` is not provided on first startup, Diana generates a cryptographically secure random password and prints it once to standard error.
+- You may provide `DIANA_ADMIN_PASSWORD` on first startup instead. It never overwrites credentials already stored in SQLite.
+- After login, the password can be changed under Access Security in Settings. The minimum length is eight characters.
+
 ## WebUI Log Center
 
 The WebUI `Log Center` page shows persistent operation logs and error logs. Operation logs cover actions such as saving or switching LLM profiles, starting or stopping the bot, managing plugins, and running system updates. Error logs record failed API operations. Logs include an `actor`: WebUI operations default to `web:<client IP>` and can be overridden by a gateway with headers such as `X-Diana-Actor`, `X-Operator`, or `X-Forwarded-User`; the QQ built-in LLM config skill records `qq:<user QQ>`.
@@ -279,6 +288,7 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `LOG_PATH` | empty | Log file path; when set, logs are written to both stdout and the file |
 | `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
 | `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database path |
+| `DIANA_ADMIN_PASSWORD` | securely generated | Initial administrator password; the username is `admin@diana.local`, then SQLite credentials take precedence |
 | `LLM_PROVIDER` | `openai_compatible` | LLM provider |
 | `LLM_API_KEY` | empty | LLM API key |
 | `LLM_BASE_URL` | empty | Custom OpenAI-compatible base URL |

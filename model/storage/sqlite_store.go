@@ -132,6 +132,7 @@ func (s *SQLiteStore) SaveQQBotGroupConfigs(ctx context.Context, set assistant.G
 
 // WebUIAuth 是 WebUI 管理密码的持久化记录。
 type WebUIAuth struct {
+	Username     string    `json:"username"`
 	PasswordHash string    `json:"password_hash"`
 	Salt         string    `json:"salt"`
 	Iterations   int       `json:"iterations"`
