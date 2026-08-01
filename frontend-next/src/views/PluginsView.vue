@@ -1,0 +1,338 @@
+<template>
+  <div>
+    <header class="view-header">
+      <div class="view-title">
+        <h1>插件</h1>
+        <p>官方内置插件的安装、启停与详细设置</p>
+      </div>
+      <div class="view-actions">
+        <button class="btn" type="button" :disabled="loading" @click="reload">
+          <RefreshCw :size="15" aria-hidden="true" />
+          刷新
+        </button>
+      </div>
+    </header>
+
+    <div v-if="plugins.length > 0" class="plugin-grid">
+      <article
+        v-for="plugin in plugins"
+        :key="plugin.manifest.id"
+        class="plugin-card"
+        :class="{ off: plugin.installed && !plugin.enabled, uninstalled: !plugin.installed }"
+      >
+        <div class="plugin-card-head">
+          <h2 class="plugin-card-name">{{ plugin.manifest.name }}</h2>
+          <label
+            v-if="plugin.installed"
+            class="switch"
+            :title="plugin.enabled ? '点击停用' : '点击启用'"
+          >
+            <input
+              type="checkbox"
+              :checked="plugin.enabled"
+              :disabled="busyID === plugin.manifest.id"
+              @change="toggleEnabled(plugin)"
+            />
+            <span class="track" aria-hidden="true"></span>
+          </label>
+        </div>
+
+        <div class="cluster plugin-card-badges">
+          <span v-if="plugin.manifest.official" class="badge accent">官方</span>
+          <span v-if="plugin.manifest.built_in" class="badge">内置</span>
+          <span class="badge mono">v{{ plugin.manifest.version }}</span>
+        </div>
+
+        <p class="plugin-card-desc">{{ plugin.manifest.description }}</p>
+
+        <div v-if="plugin.manifest.permissions?.length" class="cluster plugin-card-perms">
+          <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
+        </div>
+
+        <footer class="plugin-card-foot">
+          <template v-if="plugin.installed">
+            <button
+              v-if="plugin.manifest.settings?.length"
+              class="btn small"
+              type="button"
+              :disabled="busyID === plugin.manifest.id"
+              @click="openSettings(plugin)"
+            >
+              <SlidersHorizontal :size="14" aria-hidden="true" />
+              设置
+            </button>
+            <span v-else class="plugin-card-hint">无可配置项</span>
+            <button
+              v-if="!plugin.manifest.built_in"
+              class="btn small ghost danger"
+              type="button"
+              :disabled="busyID === plugin.manifest.id"
+              @click="uninstall(plugin)"
+            >
+              卸载
+            </button>
+          </template>
+          <button
+            v-else
+            class="btn small primary"
+            type="button"
+            :disabled="busyID === plugin.manifest.id"
+            @click="install(plugin)"
+          >
+            安装
+          </button>
+        </footer>
+      </article>
+    </div>
+    <EmptyState v-else-if="!loading" title="没有可用插件" />
+    <div v-else class="plugin-grid">
+      <div v-for="n in 3" :key="n" class="skeleton" style="height: 190px; border-radius: var(--radius-lg)"></div>
+    </div>
+
+    <Modal
+      v-if="settingsTarget"
+      :title="`${settingsTarget.manifest.name} · 设置`"
+      @close="closeSettings"
+    >
+      <div class="stack plugin-settings-form">
+        <div v-for="spec in settingsSpecs" :key="spec.key" class="field">
+          <template v-if="spec.type === 'bool'">
+            <div class="plugin-setting-switch">
+              <div class="plugin-setting-switch-text">
+                <label :for="`setting-${spec.key}`">{{ spec.label }}</label>
+                <span v-if="spec.description" class="hint">{{ spec.description }}</span>
+              </div>
+              <label class="switch">
+                <input :id="`setting-${spec.key}`" v-model="settingsForm[spec.key]" type="checkbox" />
+                <span class="track" aria-hidden="true"></span>
+              </label>
+            </div>
+          </template>
+          <template v-else>
+            <label :for="`setting-${spec.key}`">{{ spec.label }}</label>
+            <div v-if="spec.type === 'number'" class="plugin-setting-number">
+              <input
+                :id="`setting-${spec.key}`"
+                v-model.number="settingsForm[spec.key]"
+                class="input"
+                type="number"
+                :min="spec.min"
+                :max="spec.max"
+                :step="spec.step || 1"
+              />
+              <span v-if="spec.unit" class="plugin-setting-unit">{{ spec.unit }}</span>
+            </div>
+            <AppSelect
+              v-else-if="spec.type === 'select'"
+              :id="`setting-${spec.key}`"
+              v-model="settingsForm[spec.key]"
+              :options="spec.options ?? []"
+            />
+            <div v-else-if="spec.type === 'multi_select'" class="plugin-setting-checks">
+              <label v-for="option in spec.options ?? []" :key="option.value" class="check-item">
+                <input
+                  type="checkbox"
+                  :checked="multiSelected(spec.key, option.value)"
+                  @change="toggleMultiSelect(spec.key, option.value, $event)"
+                />
+                <span>{{ option.label }}</span>
+              </label>
+            </div>
+            <input v-else :id="`setting-${spec.key}`" v-model="settingsForm[spec.key]" class="input" type="text" />
+            <span v-if="spec.description" class="hint">{{ spec.description }}</span>
+          </template>
+        </div>
+      </div>
+      <template #footer>
+        <button class="btn ghost small plugin-settings-reset" type="button" :disabled="savingSettings" @click="resetSettings">
+          恢复默认
+        </button>
+        <button class="btn" type="button" :disabled="savingSettings" @click="closeSettings">取消</button>
+        <button class="btn primary" type="button" :disabled="savingSettings" @click="saveSettings">保存</button>
+      </template>
+    </Modal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref } from "vue";
+import { RefreshCw, SlidersHorizontal } from "@lucide/vue";
+import {
+  installPlugin,
+  listPlugins,
+  setPluginEnabled,
+  uninstallPlugin,
+  updatePluginSettings,
+  type PluginSettingSpec,
+  type PluginState
+} from "../api";
+import { toastError, toastSuccess } from "../toast";
+import EmptyState from "../components/EmptyState.vue";
+import AppSelect from "../components/AppSelect.vue";
+import Modal from "../components/Modal.vue";
+
+const plugins = ref<PluginState[]>([]);
+const loading = ref(false);
+const busyID = ref("");
+
+const settingsTarget = ref<PluginState | null>(null);
+// 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
+const settingsForm = ref<Record<string, any>>({});
+const savingSettings = ref(false);
+
+const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
+
+function upsert(state: PluginState): void {
+  const index = plugins.value.findIndex((plugin) => plugin.manifest.id === state.manifest.id);
+  if (index >= 0) {
+    plugins.value[index] = state;
+  }
+}
+
+async function reload(): Promise<void> {
+  loading.value = true;
+  try {
+    plugins.value = await listPlugins();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "加载插件失败");
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function toggleEnabled(plugin: PluginState): Promise<void> {
+  busyID.value = plugin.manifest.id;
+  try {
+    upsert(await setPluginEnabled(plugin.manifest.id, !plugin.enabled));
+    toastSuccess(plugin.enabled ? `已停用 ${plugin.manifest.name}` : `已启用 ${plugin.manifest.name}`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "操作失败");
+    await reload();
+  } finally {
+    busyID.value = "";
+  }
+}
+
+async function install(plugin: PluginState): Promise<void> {
+  busyID.value = plugin.manifest.id;
+  try {
+    upsert(await installPlugin(plugin.manifest.id));
+    toastSuccess(`已安装 ${plugin.manifest.name}`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "安装失败");
+  } finally {
+    busyID.value = "";
+  }
+}
+
+async function uninstall(plugin: PluginState): Promise<void> {
+  if (!window.confirm(`确定卸载「${plugin.manifest.name}」吗？`)) {
+    return;
+  }
+  busyID.value = plugin.manifest.id;
+  try {
+    upsert(await uninstallPlugin(plugin.manifest.id));
+    toastSuccess(`已卸载 ${plugin.manifest.name}`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "卸载失败");
+  } finally {
+    busyID.value = "";
+  }
+}
+
+function openSettings(plugin: PluginState): void {
+  const form: Record<string, any> = {};
+  for (const spec of plugin.manifest.settings ?? []) {
+    const value = plugin.settings?.[spec.key] ?? spec.default;
+    // 数组值拷贝一份，避免勾选直接改到列表里的原对象。
+    form[spec.key] = Array.isArray(value) ? [...value] : value;
+  }
+  settingsForm.value = form;
+  settingsTarget.value = plugin;
+}
+
+function multiSelected(key: string, option: string): boolean {
+  const value = settingsForm.value[key];
+  return Array.isArray(value) && value.includes(option);
+}
+
+function toggleMultiSelect(key: string, option: string, event: Event): void {
+  const checked = (event.target as HTMLInputElement).checked;
+  const current: string[] = Array.isArray(settingsForm.value[key]) ? [...settingsForm.value[key]] : [];
+  if (checked && !current.includes(option)) {
+    current.push(option);
+  }
+  if (!checked) {
+    const index = current.indexOf(option);
+    if (index >= 0) {
+      current.splice(index, 1);
+    }
+  }
+  settingsForm.value[key] = current;
+}
+
+function closeSettings(): void {
+  settingsTarget.value = null;
+  settingsForm.value = {};
+}
+
+function resetSettings(): void {
+  const form: Record<string, any> = {};
+  for (const spec of settingsSpecs.value) {
+    form[spec.key] = spec.default;
+  }
+  settingsForm.value = form;
+}
+
+// 只提交与默认值不同的键：等于默认值的键不落库，插件默认值升级后能自动跟随。
+function buildSettingsPayload(): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  for (const spec of settingsSpecs.value) {
+    const value = settingsForm.value[spec.key];
+    if (spec.type === "number") {
+      // 数字输入被清空时视为使用默认值。
+      if (value === "" || value === null || Number.isNaN(Number(value))) {
+        continue;
+      }
+      if (Number(value) !== Number(spec.default)) {
+        payload[spec.key] = Number(value);
+      }
+      continue;
+    }
+    if (spec.type === "multi_select") {
+      // 数组按内容比较，与默认勾选一致时不落库。
+      const current = Array.isArray(value) ? [...value].sort() : [];
+      const defaults = Array.isArray(spec.default) ? [...(spec.default as string[])].sort() : [];
+      if (JSON.stringify(current) !== JSON.stringify(defaults)) {
+        payload[spec.key] = value;
+      }
+      continue;
+    }
+    if (value !== spec.default) {
+      payload[spec.key] = value;
+    }
+  }
+  return payload;
+}
+
+async function saveSettings(): Promise<void> {
+  const target = settingsTarget.value;
+  if (!target) {
+    return;
+  }
+  savingSettings.value = true;
+  try {
+    upsert(await updatePluginSettings(target.manifest.id, buildSettingsPayload()));
+    toastSuccess(`已保存 ${target.manifest.name} 的设置`);
+    closeSettings();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存设置失败");
+  } finally {
+    savingSettings.value = false;
+  }
+}
+
+onMounted(() => {
+  void reload();
+});
+</script>

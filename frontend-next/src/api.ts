@@ -1,0 +1,696 @@
+export type Provider = "openai_compatible" | "gemini" | "anthropic";
+
+export interface LLMConfig {
+  id?: string;
+  name?: string;
+  group?: string;
+  description?: string;
+  updated_at?: string;
+  active_profile_id?: string;
+  profiles?: LLMConfig[];
+  provider: Provider;
+  api_style?: "responses" | "chat_completions";
+  api_key?: string;
+  api_key_configured?: boolean;
+  base_url?: string;
+  model: string;
+  image_model?: string;
+  user_agent?: string;
+  headers?: Record<string, string>;
+  temperature?: number | null;
+  max_output_tokens?: number;
+  timeout_ms?: number;
+}
+
+export interface GenerateResponse {
+  provider: Provider;
+  model?: string;
+  text: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
+}
+
+export interface LLMModelInfo {
+  id: string;
+  name?: string;
+  object?: string;
+  owned_by?: string;
+  created?: number;
+}
+
+export interface LLMModelsResponse {
+  models: LLMModelInfo[];
+}
+
+export interface QQBotConfig {
+  id?: string;
+  name?: string;
+  platform?: string;
+  avatar_url?: string;
+  active_profile_id?: string;
+  profiles?: QQBotConfig[];
+  enabled: boolean;
+  onebot_reverse_ws_endpoint: string;
+  onebot_access_token?: string;
+  onebot_access_token_configured?: boolean;
+  nonebot_bridge_enabled?: boolean;
+  nonebot_bridge_endpoint?: string;
+  nonebot_bridge_token?: string;
+  nonebot_bridge_token_configured?: boolean;
+  bot_qq?: string;
+  owner_id?: string;
+  owner_login_enabled?: boolean;
+  group_triggers?: string[];
+  disabled_groups?: string[];
+  welcome_enabled?: boolean;
+  welcome_message?: string;
+  system_prompt?: string;
+  /** 回复行为个性化；后端缺省（字段不存在）等价于开启。 */
+  reply_reference_enabled?: boolean;
+  mention_user_enabled?: boolean;
+  markdown_to_plain?: boolean;
+  error_notify_enabled?: boolean;
+  error_reply_prefix?: string;
+  send_retry_attempts?: number;
+  send_chunk_interval_ms?: number;
+  /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
+  model_roles?: Record<string, { profile_id?: string; group?: string; model: string }>;
+  /** 提示词增强开关；缺省等价于开启。 */
+  prompt_inject_time?: boolean;
+  prompt_inject_plaintext_rules?: boolean;
+  prompt_inject_group_sender?: boolean;
+  prompt_chinese_slang_hint?: boolean;
+  prompt_chinese_slang_text?: string;
+  prompt_plaintext_rules_text?: string;
+  prompt_time_template?: string;
+  prompt_group_sender_template?: string;
+  prompt_image_only_text?: string;
+  prompt_wake_only_text?: string;
+  max_input_chars?: number;
+  max_reply_chars?: number;
+  direct_reply_chunk_size?: number;
+  forward_reply_threshold?: number;
+  recent_context_limit?: number;
+  max_bot_concurrency?: number;
+  request_timeout_ms?: number;
+  agent_enabled?: boolean;
+  agent_work_dir?: string;
+  agent_max_steps?: number;
+  agent_command_allowlist?: string[];
+  agent_command_timeout_ms?: number;
+  agent_browser_cdp_url?: string;
+  agent_browser_timeout_ms?: number;
+}
+
+export interface PluginSettingOption {
+  value: string;
+  label: string;
+}
+
+export interface PluginSettingSpec {
+  key: string;
+  label: string;
+  description?: string;
+  type: "bool" | "number" | "string" | "select" | "multi_select";
+  default: unknown;
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
+  options?: PluginSettingOption[];
+}
+
+export interface PluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  official: boolean;
+  built_in: boolean;
+  permissions?: string[];
+  settings?: PluginSettingSpec[];
+}
+
+export interface PluginState {
+  manifest: PluginManifest;
+  installed: boolean;
+  enabled: boolean;
+  /** 用户显式覆盖的设置值，默认值以 manifest.settings 声明为准。 */
+  settings?: Record<string, unknown>;
+}
+
+export interface QQBotGroupConfig {
+  group_id: string;
+  enabled: boolean;
+  enabled_set?: boolean;
+  group_triggers?: string[];
+  /** 群专属人设；留空沿用全局系统提示词。 */
+  system_prompt?: string;
+  welcome_enabled?: boolean;
+  welcome_message?: string;
+  recent_context_limit?: number;
+  max_reply_chars?: number;
+  plugin_overrides?: Record<string, boolean>;
+  updated_at?: string;
+}
+
+export interface QQBotGroupAdminChallengeResponse {
+  group_id: string;
+  user_id: string;
+  expires_at: string;
+  message: string;
+}
+
+export interface QQBotGroupAdminConfigResponse {
+  group_id: string;
+  user_id?: string;
+  token?: string;
+  expires_at?: string;
+  config: QQBotGroupConfig;
+  plugins: PluginState[];
+}
+
+export interface UpdateStatus {
+  root: string;
+  branch?: string;
+  remote_name?: string;
+  remote_url?: string;
+  head_commit?: string;
+  head_subject?: string;
+  dirty: boolean;
+  ahead?: number;
+  behind?: number;
+  upstream?: string;
+  last_fetched_at?: string;
+  last_update_at?: string;
+  last_update_text?: string;
+}
+
+export interface UpdateResult {
+  status: UpdateStatus;
+  fetched: boolean;
+  updated: boolean;
+  output?: string;
+  at: string;
+}
+
+export type AppLogKind = "operation" | "error";
+export type AppLogLevel = "info" | "error";
+
+export interface AppLogEntry {
+  id: string;
+  kind: AppLogKind;
+  level: AppLogLevel;
+  action: string;
+  message: string;
+  detail?: string;
+  actor?: string;
+  target?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AppLogsResponse {
+  logs: AppLogEntry[];
+}
+
+export interface QQBotStatus {
+  running: boolean;
+  config: QQBotConfig;
+  channel: {
+    connected: boolean;
+    endpoint: string;
+    self_id?: string;
+    last_error?: string;
+    updated_at: string;
+  };
+  nonebot_bridge: {
+    enabled: boolean;
+    connected: boolean;
+    endpoint?: string;
+    last_error?: string;
+    updated_at: string;
+  };
+  plugins: PluginState[];
+  recent_events?: Array<{
+    at: string;
+    kind: string;
+    user_id?: string;
+    group_id?: string;
+    text?: string;
+    reply?: string;
+    error?: string;
+    handled: boolean;
+    duration_ms?: number;
+  }>;
+  active_workers: number;
+  last_error?: string;
+  updated_at: string;
+}
+
+export interface QQGroupTestResponse {
+  group_id: string;
+  message?: string;
+  message_id?: string;
+  sent: boolean;
+  send_result?: Record<string, unknown>;
+  channel: QQBotStatus["channel"];
+  recent_events?: NonNullable<QQBotStatus["recent_events"]>;
+  status: QQBotStatus;
+}
+
+export interface QQBotFeatureFlags {
+  group_test: boolean;
+}
+
+export interface QQBotPlatform {
+  id: string;
+  name: string;
+  protocol: string;
+  description?: string;
+}
+
+async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {})
+    },
+    ...init
+  });
+  const data = (await response.json().catch(() => ({}))) as T & { error?: string; auth_required?: boolean };
+  if (!response.ok) {
+    // 会话过期或未登录：广播事件让 App 切到登录界面，而不是每个视图各自报错。
+    if (response.status === 401 && data.auth_required && !url.startsWith("/api/auth/")) {
+      window.dispatchEvent(new CustomEvent("diana:unauthorized"));
+    }
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+export interface AuthStatus {
+  auth_required: boolean;
+  authenticated: boolean;
+}
+
+export function getAuthStatus(): Promise<AuthStatus> {
+  return requestJSON<AuthStatus>("/api/auth/status");
+}
+
+export function login(password: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+}
+
+export function logout(): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+}
+
+export function changePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>("/api/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+  });
+}
+
+export function getOwnerLoginStatus(): Promise<{ available: boolean }> {
+  return requestJSON<{ available: boolean }>("/api/auth/owner/status");
+}
+
+export interface OwnerLoginPairing {
+  ok: boolean;
+  code: string;
+  poll_token: string;
+  expires_in_seconds: number;
+}
+
+export interface OwnerLoginPairingStatus {
+  approved: boolean;
+  expired?: boolean;
+  expires_in_seconds?: number;
+}
+
+export function createOwnerLoginPairing(): Promise<OwnerLoginPairing> {
+  return requestJSON<OwnerLoginPairing>("/api/auth/owner/pair", { method: "POST" });
+}
+
+export function pollOwnerLoginPairing(pollToken: string): Promise<OwnerLoginPairingStatus> {
+  return requestJSON<OwnerLoginPairingStatus>("/api/auth/owner/pair/status", {
+    method: "POST",
+    body: JSON.stringify({ poll_token: pollToken })
+  });
+}
+
+export function getConfig(includeSecrets = false): Promise<LLMConfig> {
+  const suffix = includeSecrets ? "?include_secrets=true" : "";
+  return requestJSON<LLMConfig>(`/api/llm/config${suffix}`);
+}
+
+export function exportConfig(): Promise<LLMConfig> {
+  return requestJSON<LLMConfig>("/api/llm/config/export");
+}
+
+export function saveConfig(config: LLMConfig): Promise<LLMConfig> {
+  return requestJSON<LLMConfig>("/api/llm/config", {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
+}
+
+export function activateConfigProfile(id: string): Promise<LLMConfig> {
+  return requestJSON<LLMConfig>("/api/llm/config/activate", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function reorderConfigProfiles(ids: string[]): Promise<LLMConfig> {
+  return requestJSON<LLMConfig>("/api/llm/config/reorder", {
+    method: "POST",
+    body: JSON.stringify({ ids })
+  });
+}
+
+export function cloneConfigProfile(id: string): Promise<LLMConfig> {
+  return requestJSON<LLMConfig>("/api/llm/config/clone", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function deleteConfigProfile(id: string): Promise<LLMConfig> {
+  return requestJSON<LLMConfig>("/api/llm/config/delete", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function importConfigProfiles(payload: Pick<LLMConfig, "active_profile_id" | "profiles">): Promise<LLMConfig> {
+  return requestJSON<LLMConfig>("/api/llm/config/import", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function testLLM(message: string, config?: LLMConfig): Promise<GenerateResponse> {
+  return requestJSON<GenerateResponse>("/api/llm/test", {
+    method: "POST",
+    body: JSON.stringify({ ...(config || {}), message })
+  });
+}
+
+export function listLLMModels(config: LLMConfig): Promise<LLMModelsResponse> {
+  return requestJSON<LLMModelsResponse>("/api/llm/models", {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
+}
+
+export function getQQBotConfig(): Promise<QQBotConfig> {
+  return requestJSON<QQBotConfig>("/api/assistant/config");
+}
+
+export function getQQBotPlatforms(): Promise<{ platforms: QQBotPlatform[] }> {
+  return requestJSON<{ platforms: QQBotPlatform[] }>("/api/assistant/platforms");
+}
+
+export function saveQQBotConfig(config: QQBotConfig): Promise<QQBotConfig> {
+  return requestJSON<QQBotConfig>("/api/assistant/config", {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
+}
+
+export function activateQQBotProfile(id: string): Promise<QQBotConfig> {
+  return requestJSON<QQBotConfig>("/api/assistant/config/activate", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function cloneQQBotProfile(id: string): Promise<QQBotConfig> {
+  return requestJSON<QQBotConfig>("/api/assistant/config/clone", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function deleteQQBotProfile(id: string): Promise<QQBotConfig> {
+  return requestJSON<QQBotConfig>("/api/assistant/config/delete", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function getQQBotStatus(): Promise<QQBotStatus> {
+  return requestJSON<QQBotStatus>("/api/assistant/status");
+}
+
+export function startQQBot(): Promise<QQBotStatus> {
+  return requestJSON<QQBotStatus>("/api/assistant/start", { method: "POST" });
+}
+
+export function stopQQBot(): Promise<QQBotStatus> {
+  return requestJSON<QQBotStatus>("/api/assistant/stop", { method: "POST" });
+}
+
+export function getQQBotFeatures(): Promise<QQBotFeatureFlags> {
+  return requestJSON<QQBotFeatureFlags>("/api/assistant/features");
+}
+
+export function getQQGroupTest(groupID: string): Promise<QQGroupTestResponse> {
+  const params = new URLSearchParams({ group_id: groupID });
+  return requestJSON<QQGroupTestResponse>(`/api/assistant/group-test?${params.toString()}`);
+}
+
+export function sendQQGroupTest(groupID: string, message: string): Promise<QQGroupTestResponse> {
+  return requestJSON<QQGroupTestResponse>("/api/assistant/group-test", {
+    method: "POST",
+    body: JSON.stringify({ group_id: groupID, message })
+  });
+}
+
+export function listPlugins(): Promise<PluginState[]> {
+  return requestJSON<PluginState[]>("/api/assistant/plugins");
+}
+
+export function installPlugin(id: string): Promise<PluginState> {
+  return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/install`, { method: "POST" });
+}
+
+export function uninstallPlugin(id: string): Promise<PluginState> {
+  return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/uninstall`, { method: "POST" });
+}
+
+export function setPluginEnabled(id: string, enabled: boolean): Promise<PluginState> {
+  return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/enabled`, {
+    method: "POST",
+    body: JSON.stringify({ enabled })
+  });
+}
+
+export function updatePluginSettings(id: string, settings: Record<string, unknown>): Promise<PluginState> {
+  return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/settings`, {
+    method: "POST",
+    body: JSON.stringify({ settings })
+  });
+}
+
+export function requestQQBotGroupAdminChallenge(groupID: string, userID: string): Promise<QQBotGroupAdminChallengeResponse> {
+  return requestJSON<QQBotGroupAdminChallengeResponse>("/api/assistant/group-admin/challenge", {
+    method: "POST",
+    body: JSON.stringify({ group_id: groupID, user_id: userID })
+  });
+}
+
+export function verifyQQBotGroupAdmin(groupID: string, userID: string, code: string): Promise<QQBotGroupAdminConfigResponse> {
+  return requestJSON<QQBotGroupAdminConfigResponse>("/api/assistant/group-admin/verify", {
+    method: "POST",
+    body: JSON.stringify({ group_id: groupID, user_id: userID, code })
+  });
+}
+
+export function getQQBotGroupAdminConfig(token: string): Promise<QQBotGroupAdminConfigResponse> {
+  return requestJSON<QQBotGroupAdminConfigResponse>("/api/assistant/group-admin/config", {
+    headers: { "X-Diana-Group-Token": token }
+  });
+}
+
+export function saveQQBotGroupAdminConfig(token: string, config: QQBotGroupConfig): Promise<QQBotGroupAdminConfigResponse> {
+  return requestJSON<QQBotGroupAdminConfigResponse>("/api/assistant/group-admin/config", {
+    method: "POST",
+    headers: { "X-Diana-Group-Token": token },
+    body: JSON.stringify({ config })
+  });
+}
+
+export function getUpdateStatus(): Promise<UpdateStatus> {
+  return requestJSON<UpdateStatus>("/api/system/update");
+}
+
+export function pullFromGitHub(): Promise<UpdateResult> {
+  return requestJSON<UpdateResult>("/api/system/update", { method: "POST" });
+}
+
+export interface SystemVersion {
+  build_version: string;
+  version_label: string;
+  git_available: boolean;
+  head_commit?: string;
+  head_subject?: string;
+  branch?: string;
+  behind?: number;
+}
+
+export interface ChangelogEntry {
+  sha: string;
+  short: string;
+  message: string;
+  author?: string;
+  date?: string;
+  url?: string;
+}
+
+export interface ReleaseEntry {
+  tag: string;
+  name?: string;
+  notes?: string;
+  prerelease?: boolean;
+  date?: string;
+  url?: string;
+}
+
+export interface ChangelogResponse {
+  repo: string;
+  kind: "releases" | "commits";
+  entries?: ChangelogEntry[];
+  releases?: ReleaseEntry[];
+  cached?: boolean;
+}
+
+export interface RollbackResponse {
+  result: UpdateResult;
+  auto_update_disabled: boolean;
+}
+
+export interface ConsoleGroupsResponse {
+  groups: QQBotGroupConfig[];
+  plugins: PluginState[];
+}
+
+export function listQQBotGroups(): Promise<ConsoleGroupsResponse> {
+  return requestJSON<ConsoleGroupsResponse>("/api/assistant/groups");
+}
+
+export function saveQQBotGroup(config: QQBotGroupConfig): Promise<{ config: QQBotGroupConfig }> {
+  return requestJSON<{ config: QQBotGroupConfig }>("/api/assistant/groups", {
+    method: "POST",
+    body: JSON.stringify({ config })
+  });
+}
+
+export function rollbackSystem(ref: string): Promise<RollbackResponse> {
+  return requestJSON<RollbackResponse>("/api/system/update/rollback", {
+    method: "POST",
+    body: JSON.stringify({ ref })
+  });
+}
+
+export interface UpdateSettings {
+  auto_update_enabled: boolean;
+  interval_minutes: number;
+}
+
+export interface UpdateSettingsResponse {
+  settings: UpdateSettings;
+  last_run_at?: string;
+  last_result?: string;
+  last_error?: string;
+}
+
+export function getSystemVersion(): Promise<SystemVersion> {
+  return requestJSON<SystemVersion>("/api/system/version");
+}
+
+export function checkForUpdate(): Promise<UpdateStatus> {
+  return requestJSON<UpdateStatus>("/api/system/update/check", { method: "POST" });
+}
+
+export function getChangelog(): Promise<ChangelogResponse> {
+  return requestJSON<ChangelogResponse>("/api/system/update/changelog");
+}
+
+export function getUpdateSettings(): Promise<UpdateSettingsResponse> {
+  return requestJSON<UpdateSettingsResponse>("/api/system/update/settings");
+}
+
+export function saveUpdateSettings(settings: UpdateSettings): Promise<UpdateSettingsResponse> {
+  return requestJSON<UpdateSettingsResponse>("/api/system/update/settings", {
+    method: "POST",
+    body: JSON.stringify(settings)
+  });
+}
+
+export function listAppLogs(kind?: AppLogKind, limit = 100): Promise<AppLogsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (kind) {
+    params.set("kind", kind);
+  }
+  return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
+}
+
+export interface StatsHourBucket {
+  hour_unix: number;
+  total: number;
+  handled: number;
+  errors: number;
+}
+
+export interface StatsBotSummary {
+  running: boolean;
+  connected: boolean;
+  self_id?: string;
+  active_workers: number;
+  plugins_enabled: number;
+  plugins_total: number;
+  last_error?: string;
+  bridge_enabled: boolean;
+  bridge_connected: boolean;
+}
+
+export interface StatsSnapshot {
+  started_at: string;
+  uptime_seconds: number;
+  total_events: number;
+  handled_events: number;
+  error_events: number;
+  today_events: number;
+  today_handled: number;
+  today_errors: number;
+  by_kind: Record<string, number>;
+  hourly: StatsHourBucket[];
+  avg_reply_ms: number;
+  last_event_at?: string;
+  bot: StatsBotSummary;
+}
+
+export interface HealthResponse {
+  status: string;
+  started_at: string;
+  uptime_seconds: number;
+  version: string;
+}
+
+export function getStats(): Promise<StatsSnapshot> {
+  return requestJSON<StatsSnapshot>("/api/stats");
+}
+
+export function getHealth(): Promise<HealthResponse> {
+  return requestJSON<HealthResponse>("/api/health");
+}

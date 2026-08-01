@@ -1,0 +1,24 @@
+services:
+  diana:
+    build: .
+    image: diana:latest
+    container_name: diana
+    restart: unless-stopped
+    ports:
+      - "18080:18080"
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      PORT: "18080"
+      LOG_PATH: "/app/logs/diana.log"
+      QQBOT_ENABLED: "true"
+      ONEBOT_REVERSE_WS_ENDPOINT: "ws://127.0.0.1:18080/onebot/v11/ws"
+      ONEBOT_ACCESS_TOKEN: "change-me"
+      NONEBOT_BRIDGE_ENABLED: "false"
+      NONEBOT_BRIDGE_ENDPOINT: "ws://127.0.0.1:8080/onebot/v11/ws"
+      NONEBOT_BRIDGE_TOKEN: ""
+      QQBOT_QQ: "123456789"
+      LLM_PROVIDER: "openai_compatible"
+      LLM_API_KEY: "change-me"
+      LLM_MODEL: "gp5.5"
+      LLM_USER_AGENT: "codex-cli/0.142.0"
