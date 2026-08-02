@@ -344,6 +344,10 @@ func uniqueModels(models []ModelInfo) []ModelInfo {
 	seen := make(map[string]struct{}, len(models))
 	out := make([]ModelInfo, 0, len(models))
 	for _, model := range models {
+		model.ID = strings.TrimSpace(model.ID)
+		model.Name = strings.TrimSpace(model.Name)
+		model.Object = strings.TrimSpace(model.Object)
+		model.OwnedBy = strings.TrimSpace(model.OwnedBy)
 		if model.ID == "" {
 			continue
 		}

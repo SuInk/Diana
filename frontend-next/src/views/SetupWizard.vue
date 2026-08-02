@@ -421,6 +421,7 @@ async function saveAndTestLLM(): Promise<void> {
       provider: llmForm.value.provider,
       api_style: llmForm.value.api_style,
       model: llmForm.value.model.trim(),
+      models: modelOptions.value,
       base_url: llmForm.value.base_url.trim() || undefined,
       api_key: llmForm.value.api_key.trim() || undefined
     };

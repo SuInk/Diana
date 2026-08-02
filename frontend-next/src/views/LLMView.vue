@@ -3,7 +3,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>LLM 配置</h1>
-        <p>管理模型渠道（Provider / 地址 / Key）；具体模型在「机器人」页按用途分配</p>
+        <p>管理 Provider、凭据、分组与可用模型；机器人按用途选择 Provider 和模型</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" @click="exportProfiles">
@@ -31,9 +31,11 @@
         </div>
         <div class="card-body stack" style="gap: 14px">
           <div v-for="section in groupedProfiles" :key="section.group" class="stack" style="gap: 6px">
-            <div v-if="groupedProfiles.length > 1" class="group-header">
+            <div class="group-header">
               <span>{{ groupLabel(section.group) }}</span>
-              <span class="muted" style="font-size: 12px">{{ section.items.length }} 套 · 顺序即降级优先级</span>
+              <span class="muted" style="font-size: 12px">
+                {{ section.items.length }} 个 Provider · {{ sectionModelCount(section.items) }} 个模型 · 顺序即降级优先级
+              </span>
             </div>
             <div class="row-list">
             <div
@@ -47,7 +49,7 @@
                   {{ profile.name || profile.model }}
                 </div>
                 <div class="row-sub">
-                  {{ providerLabel(profile.provider) }} · {{ profile.model }}
+                  {{ providerLabel(profile.provider) }} · 默认 {{ profile.model || "未选择" }} · {{ profileModelCount(profile) }} 个模型
                   <template v-if="profile.description"> · {{ profile.description }}</template>
                 </div>
               </div>
@@ -160,7 +162,7 @@
           </div>
         </div>
         <div class="field wide">
-          <label for="llm-model">模型</label>
+          <label for="llm-model">默认模型（可选）</label>
           <div ref="modelFieldRef" class="input-group model-picker-anchor">
             <input
               id="llm-model"
@@ -202,8 +204,10 @@
               </ul>
             </div>
           </div>
-          <span v-if="modelOptions.length > 0" class="hint">共 {{ modelOptions.length }} 个可用模型；输入可筛选，点击即可选用。</span>
-          <span v-else class="hint">填写 API Key 后会自动获取；不选择则保存时自动采用列表第一项，也可手动输入模型 ID。</span>
+          <span v-if="modelOptions.length > 0" class="hint">
+            已保存 {{ modelOptions.length }} 个可用模型；这里仅选择默认项，机器人页可为不同用途选择同一 Provider 下的其他模型。
+          </span>
+          <span v-else class="hint">填写 API Key 后获取完整模型列表；不选择默认项时保存会采用列表第一项。</span>
           <details v-if="modelsError" class="request-error" open>
             <summary>模型列表获取失败，查看完整错误</summary>
             <pre>{{ modelsError }}</pre>
@@ -347,6 +351,9 @@ function applyServicePreset(id: string): void {
   form.value.api_style = preset.apiStyle;
   form.value.base_url = preset.baseURL;
   form.value.model = preset.model;
+  modelOptions.value = [];
+  modelsError.value = "";
+  modelPickerOpen.value = false;
 }
 
 const profiles = computed<LLMConfig[]>(() => profileSet.value?.profiles ?? []);
@@ -407,6 +414,21 @@ function groupLabel(group: string): string {
   return groupLabels[group] ?? group;
 }
 
+function profileModelCount(profile: LLMConfig): number {
+  const ids = new Set((profile.models ?? []).map((model) => model.id).filter(Boolean));
+  if (profile.model) ids.add(profile.model);
+  return ids.size;
+}
+
+function sectionModelCount(items: LLMConfig[]): number {
+  const ids = new Set<string>();
+  for (const profile of items) {
+    for (const model of profile.models ?? []) ids.add(model.id);
+    if (profile.model) ids.add(profile.model);
+  }
+  return ids.size;
+}
+
 function defaultTestMessage(profile: LLMConfig): string {
   return groupOf(profile) === "image" ? "生成小猫" : "hi";
 }
@@ -464,7 +486,7 @@ function startEdit(profile: LLMConfig): void {
     timeout_ms: profile.timeout_ms ? String(profile.timeout_ms) : ""
   };
   selectedService.value = detectLLMService(profile.base_url);
-  modelOptions.value = [];
+  modelOptions.value = [...(profile.models ?? [])];
   modelsError.value = "";
   editorOpen.value = true;
 }
@@ -479,6 +501,7 @@ function formToPayload(): LLMConfig {
     model: form.value.model.trim(),
     base_url: form.value.base_url.trim() || undefined,
     api_key: form.value.api_key.trim() || undefined,
+    models: modelOptions.value,
     user_agent: form.value.user_agent.trim() || undefined,
     description: form.value.description.trim() || undefined
   };

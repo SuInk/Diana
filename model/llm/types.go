@@ -78,6 +78,7 @@ type ProviderConfig struct {
 	APIStyle        APIStyle          `json:"api_style,omitempty"`
 	APIKey          string            `json:"api_key,omitempty"`
 	BaseURL         string            `json:"base_url,omitempty"`
+	Models          []ModelInfo       `json:"models,omitempty"`
 	Model           string            `json:"model"`
 	ImageModel      string            `json:"image_model,omitempty"`
 	UserAgent       string            `json:"user_agent,omitempty"`
@@ -158,6 +159,7 @@ func (cfg ProviderConfig) Validate() error {
 	}
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
+	cfg.Models = uniqueModels(cfg.Models)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Headers = normalizeHeaders(cfg.Headers)
 	if cfg.Provider == "" {
@@ -212,6 +214,7 @@ func (cfg ProviderConfig) WithDefaults() ProviderConfig {
 	cfg.APIStyle = APIStyle(strings.TrimSpace(string(cfg.APIStyle)))
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
+	cfg.Models = uniqueModels(cfg.Models)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.ImageModel = strings.TrimSpace(cfg.ImageModel)
 	cfg.UserAgent = strings.TrimSpace(cfg.UserAgent)

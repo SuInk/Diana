@@ -105,7 +105,7 @@ GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui-darwin-amd64
 ./dist/diana-webui-darwin-amd64
 ```
 
-也可以直接下载 GitHub Release 中的 `darwin-arm64` 或 `darwin-amd64` 二进制。
+也可以直接下载 GitHub Release 中的 `darwin-arm64` 或 `darwin-amd64` 二进制。裸二进制不包含前端资源，普通用户请下载对应平台的 Release 完整包。
 
 ## Linux 部署
 
@@ -137,7 +137,11 @@ go build -o dist\diana-webui-windows-amd64.exe .\cmd\webui
 .\dist\diana-webui-windows-amd64.exe
 ```
 
-Windows 下也可以直接下载 GitHub Release 中的 `windows-amd64.exe`。
+Windows 下也可以直接下载 GitHub Release 中的 `windows-amd64.exe`。裸二进制不包含前端资源，普通用户请下载对应平台的 Release 完整包。
+
+### Release 完整包
+
+每个平台的 GitHub Release 同时提供完整包（Linux/macOS 为 `.tar.gz`，Windows 为 `.zip`）。完整包包含后端二进制、新版 `frontend-next/dist`、旧版前端回退资源和启动脚本；解压后无需安装 Go、Node.js、npm 或源码即可运行。Unix 平台运行 `run.sh`，Windows 平台运行 `run.bat`。
 
 ## 快速运行
 

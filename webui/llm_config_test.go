@@ -23,7 +23,7 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 	handler := NewLLMConfigHandler(store)
 	router := testRouter(handler)
 
-	postBody := []byte(`{"id":"` + store.Profiles().ActiveID + `","name":"主配置","group":"chat","description":"主力 OpenAI 配置","provider":"openai_compatible","api_key":"new-key-123","model":"gpt-test","image_model":"gpt-image-1-mini","user_agent":"codex-test/1.0","headers":{"X-Relay":"earlyso"},"temperature":0.5,"max_output_tokens":128,"timeout_ms":5000}`)
+	postBody := []byte(`{"id":"` + store.Profiles().ActiveID + `","name":"主配置","group":"chat","description":"主力 OpenAI 配置","provider":"openai_compatible","api_key":"new-key-123","models":[{"id":"gpt-test"},{"id":"gpt-vision"}],"model":"gpt-test","image_model":"gpt-image-1-mini","user_agent":"codex-test/1.0","headers":{"X-Relay":"earlyso"},"temperature":0.5,"max_output_tokens":128,"timeout_ms":5000}`)
 	postReq := httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(postBody))
 	postRec := httptest.NewRecorder()
 	router.ServeHTTP(postRec, postReq)
@@ -32,7 +32,7 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 		t.Fatalf("POST status = %d, body = %s", postRec.Code, postRec.Body.String())
 	}
 	current := store.Current()
-	if current.Provider != llm.ProviderOpenAICompatible || current.APIKey != "new-key-123" || current.Model != "gpt-test" || current.ImageModel != "gpt-image-1-mini" || current.UserAgent != "codex-test/1.0" || current.Headers["X-Relay"] != "earlyso" || current.MaxOutputTokens != 128 {
+	if current.Provider != llm.ProviderOpenAICompatible || current.APIKey != "new-key-123" || current.Model != "gpt-test" || len(current.Models) != 2 || current.Models[1].ID != "gpt-vision" || current.ImageModel != "gpt-image-1-mini" || current.UserAgent != "codex-test/1.0" || current.Headers["X-Relay"] != "earlyso" || current.MaxOutputTokens != 128 {
 		t.Fatalf("current config = %#v", current)
 	}
 
@@ -48,7 +48,7 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 	if err := json.NewDecoder(getRec.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if payload.Name != "主配置" || payload.Group != "chat" || payload.Description != "主力 OpenAI 配置" || payload.UpdatedAt == "" || payload.TimeoutMS != 5000 || payload.ImageModel != "gpt-image-1-mini" || payload.UserAgent != "codex-test/1.0" || payload.Headers["X-Relay"] != "earlyso" || payload.MaxOutputTokens != 128 {
+	if payload.Name != "主配置" || payload.Group != "chat" || payload.Description != "主力 OpenAI 配置" || payload.UpdatedAt == "" || len(payload.Models) != 2 || payload.Models[1].ID != "gpt-vision" || payload.TimeoutMS != 5000 || payload.ImageModel != "gpt-image-1-mini" || payload.UserAgent != "codex-test/1.0" || payload.Headers["X-Relay"] != "earlyso" || payload.MaxOutputTokens != 128 {
 		t.Fatalf("payload = %#v", payload)
 	}
 	if payload.APIKey != "" || !payload.APIKeyConfigured {
@@ -518,8 +518,33 @@ func TestLLMConfigHandlerSaveResolvesEmptyModelFromList(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if current := store.Current(); current.Model != "auto-model" {
-		t.Fatalf("saved model = %q, want auto-model", current.Model)
+	if current := store.Current(); current.Model != "auto-model" || len(current.Models) != 2 || current.Models[1].ID != "other-model" {
+		t.Fatalf("saved config = %#v, want auto-model and complete model list", current)
+	}
+}
+
+func TestLLMConfigHandlerLegacySavePreservesModels(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible,
+		APIKey:   "existing-key",
+		BaseURL:  "https://saved.example/v1",
+		Models:   []llm.ModelInfo{{ID: "model-a"}, {ID: "model-b"}},
+		Model:    "model-a",
+	})
+	handler := NewLLMConfigHandler(store)
+	router := testRouter(handler)
+
+	body := []byte(`{"id":"` + store.Profiles().ActiveID + `","provider":"openai_compatible","base_url":"https://saved.example/v1","model":"model-b"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	current := store.Current()
+	if current.Model != "model-b" || len(current.Models) != 2 {
+		t.Fatalf("saved config = %#v", current)
 	}
 }
 

@@ -105,7 +105,7 @@ GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui-darwin-amd64
 ./dist/diana-webui-darwin-amd64
 ```
 
-You can also download the `darwin-arm64` or `darwin-amd64` binary from GitHub Releases.
+You can also download the `darwin-arm64` or `darwin-amd64` binary from GitHub Releases. Standalone binaries do not include frontend assets; regular users should download the matching complete release package.
 
 ## Linux Deployment
 
@@ -137,7 +137,11 @@ go build -o dist\diana-webui-windows-amd64.exe .\cmd\webui
 .\dist\diana-webui-windows-amd64.exe
 ```
 
-You can also download the `windows-amd64.exe` binary from GitHub Releases.
+You can also download the `windows-amd64.exe` binary from GitHub Releases. Standalone binaries do not include frontend assets; regular users should download the matching complete release package.
+
+### Complete Release Packages
+
+Each platform also has a complete release package (`.tar.gz` for Linux/macOS and `.zip` for Windows). It contains the backend binary, the `frontend-next/dist` build, the legacy frontend fallback, and a launch script. Extracting the package is enough to run Diana without Go, Node.js, npm, or the source tree. Run `run.sh` on Unix platforms or `run.bat` on Windows.
 
 ## Quick Run
 

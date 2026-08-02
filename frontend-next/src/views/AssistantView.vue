@@ -210,9 +210,14 @@
         <section class="card">
           <div class="card-header">
             <h2>模型分配</h2>
-            <span class="card-sub">按用途选择渠道与模型；渠道在「LLM 配置」页管理</span>
+            <span class="card-sub">按用途选择 Provider 与模型；Provider 在「LLM 配置」页管理</span>
           </div>
           <div class="card-body stack" style="gap: 12px">
+            <div class="model-role-row model-role-head" aria-hidden="true">
+              <span>用途</span>
+              <span>Provider / 分组</span>
+              <span>模型</span>
+            </div>
             <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
               <span class="model-role-label">{{ role.label }}</span>
               <AppSelect
@@ -220,12 +225,11 @@
                 :options="channelOptionsFor(role.key)"
                 @update:model-value="(value) => setRoleChannel(role.key, value)"
               />
-              <input
+              <AppSelect
                 v-if="roleForm[role.key]"
-                class="input"
-                :value="roleForm[role.key]?.model ?? ''"
-                placeholder="模型 ID，如 gpt-4o-mini"
-                @input="setRoleModel(role.key, ($event.target as HTMLInputElement).value)"
+                :model-value="roleForm[role.key]?.model ?? ''"
+                :options="modelOptionsFor(role.key)"
+                @update:model-value="(value) => setRoleModel(role.key, value)"
               />
               <span v-else class="muted" style="font-size: 12.5px">{{ role.fallbackHint }}</span>
             </div>
@@ -514,6 +518,7 @@ import {
   startQQBot,
   stopQQBot,
   type LLMConfig,
+  type LLMModelInfo,
   type QQBotConfig,
   type QQBotPlatform
 } from "../api";
@@ -589,6 +594,26 @@ const roleForm = ref<Partial<Record<RoleKey, { profile_id?: string; group?: stri
 // 下拉里分组选项用 group: 前缀编码，与单渠道的 profile id 区分。
 const GROUP_PREFIX = "group:";
 
+function llmProviderLabel(provider: LLMConfig["provider"]): string {
+  const labels: Record<LLMConfig["provider"], string> = {
+    openai_compatible: "OpenAI 兼容",
+    gemini: "Gemini",
+    anthropic: "Anthropic"
+  };
+  return labels[provider];
+}
+
+function profileModels(profile: LLMConfig): LLMModelInfo[] {
+  const models = new Map<string, LLMModelInfo>();
+  for (const model of profile.models ?? []) {
+    if (model.id) models.set(model.id, model);
+  }
+  if (profile.model && !models.has(profile.model)) {
+    models.set(profile.model, { id: profile.model });
+  }
+  return [...models.values()];
+}
+
 function channelGroups(): { name: string; count: number }[] {
   const counts = new Map<string, number>();
   for (const channel of llmChannels.value) {
@@ -607,18 +632,53 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   for (const group of channelGroups()) {
     base.push({
       value: GROUP_PREFIX + group.name,
-      label: `${group.name === "default" ? "默认分组" : group.name}（分组轮换）`,
-      hint: `${group.count} 个渠道按顺序降级`
+      label: `${group.name === "default" ? "默认分组" : group.name}（Provider 分组）`,
+      hint: `${group.count} 个 Provider 按顺序降级`
     });
   }
   for (const channel of llmChannels.value) {
     base.push({
       value: channel.id ?? "",
-      label: channel.name || channel.model || channel.id || "未命名渠道",
-      hint: channel.provider
+      label: channel.name || llmProviderLabel(channel.provider),
+      hint: `${llmProviderLabel(channel.provider)} · ${profileModels(channel).length} 个模型`
     });
   }
   return base;
+}
+
+function selectedRoleProfiles(role: RoleKey): LLMConfig[] {
+  const selection = roleForm.value[role];
+  if (!selection) return [];
+  if (selection.group) {
+    return llmChannels.value.filter((channel) => (channel.group?.trim() || "default") === selection.group);
+  }
+  return llmChannels.value.filter((channel) => channel.id === selection.profile_id);
+}
+
+function modelOptionsFor(role: RoleKey): AppSelectOption[] {
+  const profiles = selectedRoleProfiles(role);
+  if (profiles.length === 0) {
+    return [{ value: "", label: "先选择 Provider" }];
+  }
+  const models = new Map<string, { model: LLMModelInfo; count: number }>();
+  for (const profile of profiles) {
+    const seen = new Set<string>();
+    for (const model of profileModels(profile)) {
+      if (seen.has(model.id)) continue;
+      seen.add(model.id);
+      const current = models.get(model.id);
+      models.set(model.id, { model: current?.model ?? model, count: (current?.count ?? 0) + 1 });
+    }
+  }
+  const options: AppSelectOption[] = [{ value: "", label: "选择模型" }];
+  for (const { model, count } of models.values()) {
+    options.push({
+      value: model.id,
+      label: model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id,
+      hint: profiles.length > 1 ? `${count}/${profiles.length} 个 Provider 支持` : (model.owned_by || undefined)
+    });
+  }
+  return options;
 }
 
 function roleSelectionValue(role: RoleKey): string {
@@ -639,6 +699,10 @@ function setRoleChannel(role: RoleKey, value: string): void {
     roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model };
   } else {
     roleForm.value[role] = { profile_id: value, model };
+  }
+  const options = modelOptionsFor(role).filter((option) => option.value !== "");
+  if (!options.some((option) => option.value === model)) {
+    roleForm.value[role]!.model = options[0]?.value ?? "";
   }
 }
 

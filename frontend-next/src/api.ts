@@ -13,6 +13,7 @@ export interface LLMConfig {
   api_key?: string;
   api_key_configured?: boolean;
   base_url?: string;
+  models?: LLMModelInfo[];
   model: string;
   image_model?: string;
   user_agent?: string;

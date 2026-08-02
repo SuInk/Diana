@@ -36,6 +36,7 @@ type llmConfigPayload struct {
 	APIKey           string             `json:"api_key,omitempty"`
 	APIKeyConfigured bool               `json:"api_key_configured,omitempty"`
 	BaseURL          string             `json:"base_url,omitempty"`
+	Models           []llm.ModelInfo    `json:"models,omitempty"`
 	Model            string             `json:"model"`
 	ImageModel       string             `json:"image_model,omitempty"`
 	UserAgent        string             `json:"user_agent,omitempty"`
@@ -128,6 +129,11 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 	if cfg.APIKey == "" && existing.Provider == cfg.Provider {
 		cfg.APIKey = existing.APIKey
 	}
+	// 旧版前端不会提交 models；编辑同一渠道时保留已缓存的完整模型列表。
+	// 地址改变时不沿用，避免把旧 Provider 的模型错误展示到新服务。
+	if payload.Models == nil && existing.Provider == cfg.Provider && strings.TrimSpace(existing.BaseURL) == strings.TrimSpace(cfg.BaseURL) {
+		cfg.Models = existing.Models
+	}
 	if strings.TrimSpace(payload.APIKey) != "" && utf8.RuneCountInString(cfg.APIKey) < minLLMAPIKeyChars {
 		h.writeError(c, 400, "llm.config.save", fmt.Errorf("api_key must be at least %d characters", minLLMAPIKeyChars), llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 		return
@@ -137,16 +143,19 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
-		models, err := h.listModels(c.Request.Context(), cfg)
-		if err != nil {
-			h.writeError(c, 502, "llm.config.save.models", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
-			return
+		if len(cfg.Models) == 0 {
+			models, err := h.listModels(c.Request.Context(), cfg)
+			if err != nil {
+				h.writeError(c, 502, "llm.config.save.models", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
+				return
+			}
+			cfg.Models = models
 		}
-		if len(models) == 0 || strings.TrimSpace(models[0].ID) == "" {
+		if len(cfg.Models) == 0 || strings.TrimSpace(cfg.Models[0].ID) == "" {
 			h.writeError(c, 422, "llm.config.save.models", fmt.Errorf("provider returned no usable models"), llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 			return
 		}
-		cfg.Model = strings.TrimSpace(models[0].ID)
+		cfg.Model = strings.TrimSpace(cfg.Models[0].ID)
 	}
 
 	next := upsertProfileSet(set, payload, cfg)
@@ -390,6 +399,7 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 		APIStyle:         cfg.APIStyle,
 		APIKeyConfigured: cfg.APIKey != "",
 		BaseURL:          cfg.BaseURL,
+		Models:           cfg.Models,
 		Model:            cfg.Model,
 		ImageModel:       cfg.ImageModelWithDefault(),
 		UserAgent:        cfg.UserAgentWithDefault(),
@@ -471,6 +481,7 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 		APIStyle:        payload.APIStyle,
 		APIKey:          payload.APIKey,
 		BaseURL:         payload.BaseURL,
+		Models:          payload.Models,
 		Model:           payload.Model,
 		ImageModel:      payload.ImageModel,
 		UserAgent:       payload.UserAgent,

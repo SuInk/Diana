@@ -281,9 +281,19 @@ code {
   font-weight: 600;
 }
 
+.model-role-head {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
 @media (max-width: 720px) {
   .model-role-row {
     grid-template-columns: 1fr;
+  }
+
+  .model-role-head {
+    display: none;
   }
 }
 

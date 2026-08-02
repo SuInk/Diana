@@ -211,6 +211,21 @@ func TestProviderConfigWithDefaultsUsesProviderModel(t *testing.T) {
 	}
 }
 
+func TestProviderConfigWithDefaultsNormalizesModels(t *testing.T) {
+	cfg := (ProviderConfig{
+		Provider: ProviderOpenAICompatible,
+		Models: []ModelInfo{
+			{ID: " model-a ", Name: " Model A "},
+			{ID: "model-a"},
+			{ID: "model-b"},
+		},
+	}).WithDefaults()
+
+	if len(cfg.Models) != 2 || cfg.Models[0].ID != "model-a" || cfg.Models[0].Name != "Model A" || cfg.Models[1].ID != "model-b" {
+		t.Fatalf("Models = %#v", cfg.Models)
+	}
+}
+
 // TestListModelsReturnsLocalPresets 验证对应功能场景。
 func TestListModelsReturnsLocalPresets(t *testing.T) {
 	models, err := ListModels(context.Background(), ProviderConfig{Provider: ProviderAnthropic})
