@@ -206,10 +206,15 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 // rollback 回退到指定版本；成功后自动关闭自动更新，避免下个周期又被拉回最新。
 func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 	var payload struct {
-		Ref string `json:"ref"`
+		Ref          string `json:"ref"`
+		Confirmation string `json:"confirmation"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	if payload.Confirmation != "rollback-version" {
+		writeError(c, http.StatusBadRequest, errors.New("版本回退需要明确确认"))
 		return
 	}
 	result, err := h.updater.Rollback(c.Request.Context(), payload.Ref)

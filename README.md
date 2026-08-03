@@ -69,7 +69,7 @@ cd diana
 
 go mod download
 
-cd frontend
+cd frontend-next
 npm ci
 npm run build
 cd ..
@@ -141,7 +141,7 @@ Windows 下也可以直接下载 GitHub Release 中的 `windows-amd64.exe`。裸
 
 ### Release 完整包
 
-每个平台的 GitHub Release 同时提供完整包（Linux/macOS 为 `.tar.gz`，Windows 为 `.zip`）。完整包包含后端二进制、新版 `frontend-next/dist`、旧版前端回退资源和启动脚本；解压后无需安装 Go、Node.js、npm 或源码即可运行。Unix 平台运行 `run.sh`，Windows 平台运行 `run.bat`。
+每个平台的 GitHub Release 同时提供完整包（Linux/macOS 为 `.tar.gz`，Windows 为 `.zip`）。完整包包含后端二进制、`frontend-next/dist` 和启动脚本；解压后无需安装 Go、Node.js、npm 或源码即可运行。Unix 平台运行 `run.sh`，Windows 平台运行 `run.bat`。
 
 Release 同时提供 `SHA256SUMS`。下载后应先校验再解压或替换程序；强制更新也不会绕过该校验：
 
@@ -302,7 +302,7 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PORT` | `18080` | WebUI 和 OneBot endpoint 监听端口 |
-| `FRONTEND_DIST` | 自动探测 | 前端构建产物目录；未设置时优先 `frontend-next/dist`，回退 `frontend/dist` |
+| `FRONTEND_DIST` | 自动探测 | 前端构建产物目录；未设置时使用 `frontend-next/dist` |
 | `DIANA_SEND_RETRY_ATTEMPTS` | `3` | 单条消息发送重试次数（1–5） |
 | `DIANA_SEND_CHUNK_INTERVAL_MS` | `300` | 分段回复的段间间隔（毫秒） |
 | `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | 聊天内错误提示前缀 |
@@ -390,29 +390,29 @@ go test ./...
 前端开发：
 
 ```sh
-cd frontend
+cd frontend-next
 npm run dev
 ```
 
 生产构建：
 
 ```sh
-cd frontend
+cd frontend-next
 npm run build
 cd ..
 go build -o dist/diana-webui ./cmd/webui
 ```
 
-## 新版 WebUI（frontend-next）
+## WebUI（frontend-next）
 
-`frontend-next/` 是控制台的组件化重构版本，新增总览 Dashboard（连接检查清单、今日/24h 消息统计、实时事件流）、SSE 实时推送、三步配置向导和移动端适配。与旧版并存：
+`frontend-next/` 是当前唯一受支持的控制台，包含总览 Dashboard（连接检查清单、今日/24h 消息统计、实时事件流）、SSE 实时推送、三步配置向导和移动端适配：
 
 ```sh
-make deps-next      # 安装依赖
-make run-next       # 构建新版前端并以 FRONTEND_DIST=frontend-next/dist 运行后端
+make deps           # 安装依赖
+make run            # 构建前端并以 FRONTEND_DIST=frontend-next/dist 运行后端
 ```
 
-开发模式：`make backend` + `make frontend-next`（Vite 端口 5174）。详见 [frontend-next/README.md](./frontend-next/README.md)。
+开发模式直接使用 `make dev`。详见 [frontend-next/README.md](./frontend-next/README.md)。
 
 配套新增后端接口：
 

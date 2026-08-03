@@ -205,6 +205,14 @@ func TestRollbackEndpointDisablesAutoUpdate(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":"de9c9be"}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unconfirmed rollback = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":"de9c9be","confirmation":"rollback-version"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rollback = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -216,7 +224,7 @@ func TestRollbackEndpointDisablesAutoUpdate(t *testing.T) {
 	}
 	// 非法 ref 直接 400。
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":""}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":"","confirmation":"rollback-version"}`))
 	req.Header.Set("Content-Type", "application/json")
 	badHandler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRemoteNotConfigured})
 	badRouter := gin.New()

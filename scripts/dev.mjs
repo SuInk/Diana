@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const frontendDir = path.join(rootDir, "frontend");
+const frontendDir = path.join(rootDir, "frontend-next");
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
 
@@ -32,7 +32,7 @@ async function main() {
   // 首次运行时自动安装前端依赖；正常重启不会重复安装，启动速度更快。
   if (!existsSync(path.join(frontendDir, "node_modules"))) {
     const installCommand = existsSync(path.join(frontendDir, "package-lock.json")) ? "ci" : "install";
-    console.log(`[dev] frontend/node_modules not found, running npm ${installCommand}...`);
+    console.log(`[dev] frontend-next/node_modules not found, running npm ${installCommand}...`);
     await runForeground(npmCommand, [installCommand], { cwd: frontendDir });
   }
 

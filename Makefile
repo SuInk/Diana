@@ -34,10 +34,10 @@ export VITE_BACKEND_TARGET
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev backend frontend frontend-next deps deps-next fmt test test-go test-web build build-go build-web build-web-next run run-next preview clean docker-build docker-up docker-down
+.PHONY: help dev backend frontend frontend-next frontend-legacy deps deps-next fmt test test-go test-web build build-go build-web build-web-next build-web-legacy run run-next preview preview-legacy clean docker-build docker-up docker-down
 
 help:
-	@$(NODE) -e "console.log(['Diana Makefile','', 'Usage:', '  make dev                         Start Go backend and Vite frontend', '  make dev BACKEND_PORT=18081      Start with custom backend port', '  make backend                     Start Go backend only', '  make frontend                    Start Vite frontend only', '  make deps                        Install Go and frontend dependencies', '  make fmt                         Format Go code', '  make test                        Run Go tests and frontend build check', '  make build                       Build frontend and backend binary', '  make run                         Build frontend, then run backend', '  make clean                       Remove build artifacts', '  make docker-build                Build Docker image', '  make docker-up                   Start Docker Compose stack', '  make docker-down                 Stop Docker Compose stack'].join('\n'))"
+	@$(NODE) -e "console.log(['Diana Makefile','', 'Usage:', '  make dev                         Start Go backend and frontend-next', '  make dev BACKEND_PORT=18081      Start with custom backend port', '  make backend                     Start Go backend only', '  make frontend                    Start frontend-next only', '  make deps                        Install Go and frontend-next dependencies', '  make fmt                         Format Go code', '  make test                        Run Go tests and frontend-next build check', '  make build                       Build frontend-next and backend binary', '  make run                         Build frontend-next, then run backend', '  make clean                       Remove build artifacts', '  make docker-build                Build Docker image', '  make docker-up                   Start Docker Compose stack', '  make docker-down                 Stop Docker Compose stack'].join('\n'))"
 
 dev:
 	$(NODE) scripts/dev.mjs
@@ -46,15 +46,17 @@ backend:
 	$(GO) run ./cmd/webui
 
 frontend:
-	cd frontend && $(NPM) run dev -- --host $(FRONTEND_HOST) --port $(FRONTEND_PORT) --strictPort
+	cd frontend-next && $(NPM) run dev -- --host $(FRONTEND_HOST) --port $(FRONTEND_PORT) --strictPort
 
-# 新版 UX（frontend-next）开发服务器，默认端口 5174。
-frontend-next:
-	cd frontend-next && $(NPM) run dev -- --host $(FRONTEND_HOST)
+frontend-next: frontend
+
+# 旧版界面仅保留显式兼容入口，不参与默认开发、测试或发布。
+frontend-legacy:
+	cd frontend && $(NPM) run dev -- --host $(FRONTEND_HOST) --port $(FRONTEND_PORT) --strictPort
 
 deps:
 	$(GO) mod download
-	cd frontend && $(NPM) ci
+	cd frontend-next && $(NPM) ci
 
 deps-next:
 	cd frontend-next && $(NPM) install
@@ -68,7 +70,7 @@ test-go:
 	$(GO) test ./...
 
 test-web:
-	cd frontend && $(NPM) run build
+	cd frontend-next && $(NPM) run build
 
 build: build-web build-go
 
@@ -77,23 +79,26 @@ build-go:
 	$(GO) build -o $(DIST_BIN) ./cmd/webui
 
 build-web:
-	cd frontend && $(NPM) run build
-
-build-web-next:
 	cd frontend-next && $(NPM) run build
 
-run: build-web
-	$(GO) run ./cmd/webui
+build-web-next: build-web
 
-# 构建并使用新版 UX 运行后端。
-run-next: build-web-next
+build-web-legacy:
+	cd frontend && $(NPM) run build
+
+run: build-web
 	FRONTEND_DIST=frontend-next/dist $(GO) run ./cmd/webui
 
+run-next: run
+
 preview:
+	cd frontend-next && $(NPM) run preview -- --host $(FRONTEND_HOST)
+
+preview-legacy:
 	cd frontend && $(NPM) run preview -- --host $(FRONTEND_HOST)
 
 clean:
-	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend/dist']) fs.rmSync(p,{recursive:true,force:true})"
+	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend-next/dist','frontend/dist']) fs.rmSync(p,{recursive:true,force:true})"
 
 docker-build:
 	$(DOCKER) build -t diana:latest .

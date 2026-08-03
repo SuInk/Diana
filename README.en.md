@@ -69,7 +69,7 @@ cd diana
 
 go mod download
 
-cd frontend
+cd frontend-next
 npm ci
 npm run build
 cd ..
@@ -141,7 +141,7 @@ You can also download the `windows-amd64.exe` binary from GitHub Releases. Stand
 
 ### Complete Release Packages
 
-Each platform also has a complete release package (`.tar.gz` for Linux/macOS and `.zip` for Windows). It contains the backend binary, the `frontend-next/dist` build, the legacy frontend fallback, and a launch script. Extracting the package is enough to run Diana without Go, Node.js, npm, or the source tree. Run `run.sh` on Unix platforms or `run.bat` on Windows.
+Each platform also has a complete release package (`.tar.gz` for Linux/macOS and `.zip` for Windows). It contains the backend binary, the `frontend-next/dist` build, and a launch script. Extracting the package is enough to run Diana without Go, Node.js, npm, or the source tree. Run `run.sh` on Unix platforms or `run.bat` on Windows.
 
 Every Release also includes `SHA256SUMS`. Verify the downloaded file before extracting or replacing Diana; forced updates never bypass this check:
 
@@ -296,7 +296,7 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `18080` | WebUI and OneBot endpoint listen port |
-| `FRONTEND_DIST` | `frontend/dist` | Frontend build output directory |
+| `FRONTEND_DIST` | auto-detected | Frontend build output directory; defaults to `frontend-next/dist` |
 | `LOG_PATH` | empty | Log file path; when set, logs are written to both stdout and the file |
 | `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
 | `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database path |
@@ -381,14 +381,14 @@ go test ./...
 Frontend development:
 
 ```sh
-cd frontend
+cd frontend-next
 npm run dev
 ```
 
 Production build:
 
 ```sh
-cd frontend
+cd frontend-next
 npm run build
 cd ..
 go build -o dist/diana-webui ./cmd/webui
@@ -399,7 +399,7 @@ go build -o dist/diana-webui ./cmd/webui
 ```text
 .
 ├── cmd/webui/              # Gin WebUI and OneBot endpoint entrypoint
-├── frontend/               # Vue + TypeScript frontend
+├── frontend-next/          # Supported Vue + TypeScript WebUI
 ├── model/llm/              # Unified LLM interface and provider adapters
 ├── model/assistant/            # QQ bot runtime, OneBot channel, and plugin system
 ├── webui/                  # WebUI API handlers

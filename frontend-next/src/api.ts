@@ -606,7 +606,7 @@ export function saveQQBotGroup(config: QQBotGroupConfig): Promise<{ config: QQBo
 export function rollbackSystem(ref: string): Promise<RollbackResponse> {
   return requestJSON<RollbackResponse>("/api/system/update/rollback", {
     method: "POST",
-    body: JSON.stringify({ ref })
+    body: JSON.stringify({ ref, confirmation: "rollback-version" })
   });
 }
 

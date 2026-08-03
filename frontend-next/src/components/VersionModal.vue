@@ -76,6 +76,76 @@
       </p>
 
       <hr class="divider" style="margin: 0" />
+      <section v-if="recentReleases.length" class="stack" style="gap: 8px">
+        <div class="cluster" style="justify-content: space-between">
+          <h3 style="margin: 0; font-size: 14px">最近版本</h3>
+          <span class="muted" style="font-size: 12.5px">
+            {{ deploymentMode === "git" ? "回退后自动暂停更新" : "固定镜像标签后由部署环境重启" }}
+          </span>
+        </div>
+        <ul class="recent-version-list">
+          <li v-for="release in recentReleases" :key="release.tag" class="recent-version-item">
+            <div class="recent-version-meta">
+              <span class="cluster" style="gap: 7px">
+                <a class="mono changelog-sha" :href="release.url" target="_blank" rel="noreferrer">{{ release.tag }}</a>
+                <span v-if="release.tag === currentTag" class="badge ok">当前</span>
+              </span>
+              <span class="muted changelog-date">{{ formatDate(release.date) }}</span>
+            </div>
+            <div class="cluster" style="gap: 6px">
+              <a
+                v-if="release.checksum_available && release.checksum_url"
+                class="badge ok"
+                :href="release.checksum_url"
+                target="_blank"
+                rel="noreferrer"
+                title="查看 SHA-256 清单"
+              >
+                SHA-256
+              </a>
+              <span v-else-if="deploymentMode === 'release'" class="badge ok" title="容器镜像由 OCI digest 校验">OCI digest</span>
+              <button
+                v-if="deploymentMode === 'git' && release.tag !== currentTag"
+                class="btn danger small"
+                type="button"
+                :disabled="updating"
+                @click="rollbackTarget = release"
+              >
+                <History :size="13" aria-hidden="true" />
+                回退
+              </button>
+              <button
+                v-else-if="deploymentMode === 'release' && release.tag !== currentTag"
+                class="btn ghost icon-only small"
+                type="button"
+                :title="`复制固定镜像标签 ${release.tag}`"
+                :aria-label="`复制固定镜像标签 ${release.tag}`"
+                @click="copyImageTag(release.tag)"
+              >
+                <Copy :size="14" aria-hidden="true" />
+              </button>
+            </div>
+          </li>
+        </ul>
+        <div v-if="deploymentMode === 'release'" class="release-rollback-note">
+          <Container :size="16" aria-hidden="true" />
+          <span>回退时将部署镜像固定为 <code>ghcr.io/suink/diana:&lt;版本&gt;</code>，并暂停 Watchtower 等自动更新器；镜像拉取会校验 OCI digest。</span>
+        </div>
+      </section>
+
+      <div v-if="rollbackTarget" class="rollback-confirm">
+        <AlertTriangle :size="17" aria-hidden="true" />
+        <div class="stack" style="gap: 8px; flex: 1">
+          <strong>回退到 {{ rollbackTarget.tag }}？</strong>
+          <span class="muted" style="font-size: 12.5px">这会把已跟踪代码重置到该版本，工作区有未提交修改时服务端会拒绝执行。回退后需重启服务。</span>
+          <div class="cluster" style="gap: 8px">
+            <button class="btn danger small" type="button" :disabled="updating" @click="rollback">确认回退</button>
+            <button class="btn ghost small" type="button" :disabled="updating" @click="rollbackTarget = null">取消</button>
+          </div>
+        </div>
+      </div>
+
+      <hr v-if="recentReleases.length" class="divider" style="margin: 0" />
       <div class="stack" style="gap: 8px">
         <div class="cluster" style="justify-content: space-between">
           <h3 style="margin: 0; font-size: 14px">更新日志</h3>
@@ -127,7 +197,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { AlertTriangle, Download, RefreshCcw, RefreshCw } from "@lucide/vue";
+import { AlertTriangle, Container, Copy, Download, History, RefreshCcw, RefreshCw } from "@lucide/vue";
 import Modal from "./Modal.vue";
 import {
   checkForUpdate,
@@ -135,6 +205,7 @@ import {
   getSystemVersion,
   getUpdateStatus,
   pullFromGitHub,
+  rollbackSystem,
   type ChangelogEntry,
   type ReleaseEntry,
   type SystemVersion,
@@ -158,6 +229,7 @@ const checking = ref(false);
 const updating = ref(false);
 const updatedHint = ref("");
 const forceConfirming = ref(false);
+const rollbackTarget = ref<ReleaseEntry | null>(null);
 
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 
@@ -169,6 +241,13 @@ const versionLabel = computed(() => {
   }
   return label || commit || version.value?.build_version || "—";
 });
+
+const currentTag = computed(() => {
+  const raw = version.value?.version_label || version.value?.build_version || "";
+  return raw.split("+")[0].split("（")[0].trim();
+});
+
+const recentReleases = computed(() => releases.value.filter((release) => !release.prerelease).slice(0, 5));
 
 function formatDate(value?: string): string {
   if (!value) return "";
@@ -250,11 +329,39 @@ async function forceUpdate(): Promise<void> {
   }
 }
 
+async function rollback(): Promise<void> {
+  if (!rollbackTarget.value) return;
+  updating.value = true;
+  try {
+    const target = rollbackTarget.value.tag;
+    const response = await rollbackSystem(target);
+    status.value = response.result.status;
+    updatedHint.value = `已回退到 ${target}，自动更新已暂停；重启服务后生效`;
+    rollbackTarget.value = null;
+    toastSuccess(`已回退到 ${target}`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "版本回退失败");
+  } finally {
+    updating.value = false;
+  }
+}
+
+async function copyImageTag(tag: string): Promise<void> {
+  const image = `ghcr.io/suink/diana:${tag}`;
+  try {
+    await navigator.clipboard.writeText(image);
+    toastSuccess(`已复制 ${image}`);
+  } catch {
+    toastError("复制失败，请手动复制镜像标签");
+  }
+}
+
 onMounted(load);
 </script>
 
 <style scoped>
-.force-update-confirm {
+.force-update-confirm,
+.rollback-confirm {
   display: flex;
   gap: 10px;
   align-items: flex-start;
@@ -263,5 +370,59 @@ onMounted(load);
   border-radius: 6px;
   color: var(--err);
   background: var(--err-soft);
+}
+
+.recent-version-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recent-version-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.recent-version-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.release-rollback-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.release-rollback-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+@media (max-width: 640px) {
+  .recent-version-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
 }
 </style>

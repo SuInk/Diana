@@ -277,12 +277,10 @@ func llmConfigFromEnv() llm.ProviderConfig {
 // frontendDistDir 查找生产前端静态文件目录。
 func frontendDistDir() string {
 	// 同时兼容源码目录运行、打包后从二进制旁边运行、以及测试工作目录切换。
-	// 未显式指定时优先服务 frontend-next 的构建产物，旧版 frontend 作为回退。
+	// 旧版 frontend 已停用，不再静默回退，避免误把过时控制台部署到生产环境。
 	candidates := []string{
 		"frontend-next/dist",
-		"frontend/dist",
 		"../../frontend-next/dist",
-		"../../frontend/dist",
 	}
 	if custom := envOr("FRONTEND_DIST", ""); custom != "" {
 		// 显式指定的目录永远最优先，即使暂时不存在也按它返回，方便部署脚本预创建。
