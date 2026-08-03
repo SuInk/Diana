@@ -4,12 +4,27 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/SuInk/diana/model/updater"
 
 	"github.com/gin-gonic/gin"
 )
+
+const (
+	defaultReleaseOwner = "SuInk"
+	defaultReleaseRepo  = "Diana"
+)
+
+type systemUpdateCheckResponse struct {
+	DeploymentMode  string          `json:"deployment_mode"`
+	CurrentVersion  string          `json:"current_version"`
+	LatestVersion   string          `json:"latest_version,omitempty"`
+	UpdateAvailable bool            `json:"update_available"`
+	Status          *updater.Status `json:"status,omitempty"`
+}
 
 type SystemUpdater interface {
 	Status(context.Context) (updater.Status, error)
@@ -68,7 +83,9 @@ func (h *SystemUpdateHandler) version(c *gin.Context) {
 	payload := gin.H{"build_version": h.buildVersion}
 	label := h.buildVersion
 	if status, err := h.updater.Status(c.Request.Context()); err == nil {
-		payload["git_available"] = status.HeadCommit != ""
+		gitAvailable := status.RemoteURL != ""
+		payload["git_available"] = gitAvailable
+		payload["deployment_mode"] = deploymentMode(gitAvailable)
 		payload["head_commit"] = status.HeadCommit
 		payload["head_subject"] = status.HeadSubject
 		payload["branch"] = status.Branch
@@ -79,6 +96,7 @@ func (h *SystemUpdateHandler) version(c *gin.Context) {
 		}
 	} else {
 		payload["git_available"] = false
+		payload["deployment_mode"] = "release"
 	}
 	payload["version_label"] = label
 	c.JSON(http.StatusOK, payload)
@@ -95,14 +113,38 @@ func (h *SystemUpdateHandler) status(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
-// check 只 fetch 远端刷新落后状态，不执行合并。
+// check 在源码部署中 fetch Git，在 Release/Docker 部署中查询 GitHub Release。
 func (h *SystemUpdateHandler) check(c *gin.Context) {
-	status, err := h.updater.Check(c.Request.Context())
-	if err != nil {
-		h.writeUpdateError(c, "system.update.check", err)
+	status, statusErr := h.updater.Status(c.Request.Context())
+	if statusErr == nil && status.RemoteURL != "" {
+		status, err := h.updater.Check(c.Request.Context())
+		if err != nil {
+			h.writeUpdateError(c, "system.update.check", err)
+			return
+		}
+		current := status.VersionLabel()
+		c.JSON(http.StatusOK, systemUpdateCheckResponse{
+			DeploymentMode:  "git",
+			CurrentVersion:  current,
+			UpdateAvailable: status.Behind > 0,
+			Status:          &status,
+		})
 		return
 	}
-	c.JSON(http.StatusOK, status)
+
+	releases, err := fetchGitHubReleases(c.Request.Context(), h.httpClient, h.githubAPIBase, defaultReleaseOwner, defaultReleaseRepo, 10)
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err)
+		return
+	}
+	latest := latestStableRelease(releases)
+	current := strings.TrimSpace(h.buildVersion)
+	c.JSON(http.StatusOK, systemUpdateCheckResponse{
+		DeploymentMode:  "release",
+		CurrentVersion:  current,
+		LatestVersion:   latest.Tag,
+		UpdateAvailable: isNewerVersion(current, latest.Tag),
+	})
 }
 
 // update 执行系统更新并记录操作日志。
@@ -156,20 +198,19 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"result": result, "auto_update_disabled": autoDisabled})
 }
 
-// changelogList 返回更新日志（仅支持 GitHub 远端）：优先 Release 列表，
-// 仓库还没发过 Release 时回退为最近提交，带短缓存。
+// changelogList 返回 GitHub 更新日志：源码部署使用 origin，Release/Docker 使用官方仓库。
+// 优先返回 Release；仓库尚未发布 Release 时回退为最近提交，带短缓存。
 func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
-	status, err := h.updater.Status(c.Request.Context())
-	if err != nil {
-		writeUpdateHTTPError(c, err)
-		return
-	}
+	status, _ := h.updater.Status(c.Request.Context())
 	owner, repo, ok := githubRepoFromRemote(status.RemoteURL)
 	if !ok {
-		writeError(c, http.StatusBadRequest, errors.New("更新日志目前只支持 GitHub 远端"))
-		return
+		owner, repo = defaultReleaseOwner, defaultReleaseRepo
 	}
-	cacheKey := owner + "/" + repo + "@" + status.Branch
+	branch := strings.TrimSpace(status.Branch)
+	if branch == "" {
+		branch = "main"
+	}
+	cacheKey := owner + "/" + repo + "@" + branch
 
 	h.changelog.mu.Lock()
 	if h.changelog.key == cacheKey && time.Since(h.changelog.fetchedAt) < changelogCacheTTL {
@@ -188,7 +229,7 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 		payload["releases"] = releases
 	} else {
 		// 没有正式 Release（或列表拉取失败）时退回提交记录，前端会标注来源。
-		entries, commitErr := fetchGitHubChangelog(c.Request.Context(), h.httpClient, h.githubAPIBase, owner, repo, status.Branch, 20)
+		entries, commitErr := fetchGitHubChangelog(c.Request.Context(), h.httpClient, h.githubAPIBase, owner, repo, branch, 20)
 		if commitErr != nil {
 			writeError(c, http.StatusBadGateway, commitErr)
 			return
@@ -211,7 +252,10 @@ func (h *SystemUpdateHandler) getSettings(c *gin.Context) {
 		return
 	}
 	lastRunAt, lastResult, lastError := h.auto.LastRun()
-	payload := gin.H{"settings": h.auto.Settings()}
+	payload := gin.H{
+		"settings":        h.auto.Settings(),
+		"deployment_mode": h.currentDeploymentMode(c.Request.Context()),
+	}
 	if !lastRunAt.IsZero() {
 		payload["last_run_at"] = lastRunAt
 		payload["last_result"] = lastResult
@@ -243,16 +287,72 @@ func (h *SystemUpdateHandler) saveSettings(c *gin.Context) {
 	recordRequestOperation(c, h.logs, "system.update.settings", "自动更新已"+state, "", map[string]any{
 		"interval_minutes": saved.IntervalMinutes,
 	})
-	c.JSON(http.StatusOK, gin.H{"settings": saved})
+	c.JSON(http.StatusOK, gin.H{
+		"settings":        saved,
+		"deployment_mode": h.currentDeploymentMode(c.Request.Context()),
+	})
 }
 
 // writeUpdateError 记录系统更新错误并返回响应。
 func (h *SystemUpdateHandler) writeUpdateError(c *gin.Context, action string, err error) {
 	if errors.Is(err, updater.ErrRemoteNotConfigured) {
-		logAndWriteError(c, h.logs, http.StatusBadRequest, action, err, "", nil)
+		writeError(c, http.StatusBadRequest, errors.New("当前为 Release/Docker 部署，更新由部署环境的镜像更新器管理"))
 		return
 	}
 	logAndWriteError(c, h.logs, http.StatusBadRequest, action, err, "", nil)
+}
+
+func (h *SystemUpdateHandler) currentDeploymentMode(ctx context.Context) string {
+	status, err := h.updater.Status(ctx)
+	return deploymentMode(err == nil && status.RemoteURL != "")
+}
+
+func deploymentMode(gitAvailable bool) string {
+	if gitAvailable {
+		return "git"
+	}
+	return "release"
+}
+
+func latestStableRelease(releases []ReleaseEntry) ReleaseEntry {
+	for _, release := range releases {
+		if !release.Prerelease && strings.TrimSpace(release.Tag) != "" {
+			return release
+		}
+	}
+	return ReleaseEntry{}
+}
+
+func isNewerVersion(current, latest string) bool {
+	currentParts, currentOK := versionParts(current)
+	latestParts, latestOK := versionParts(latest)
+	if !currentOK || !latestOK {
+		return false
+	}
+	for i := range currentParts {
+		if latestParts[i] != currentParts[i] {
+			return latestParts[i] > currentParts[i]
+		}
+	}
+	return false
+}
+
+func versionParts(value string) ([3]int, bool) {
+	var parts [3]int
+	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
+	value = strings.SplitN(value, "-", 2)[0]
+	raw := strings.Split(value, ".")
+	if len(raw) != len(parts) {
+		return parts, false
+	}
+	for i, item := range raw {
+		parsed, err := strconv.Atoi(item)
+		if err != nil || parsed < 0 {
+			return parts, false
+		}
+		parts[i] = parsed
+	}
+	return parts, true
 }
 
 // writeUpdateHTTPError 返回系统更新状态查询错误。

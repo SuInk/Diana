@@ -60,10 +60,15 @@ type Settings struct {
 	IntervalMinutes   int  `json:"interval_minutes"`
 }
 
+// DefaultSettings 返回新安装使用的自动更新配置。
+func DefaultSettings() Settings {
+	return Settings{AutoUpdateEnabled: true, IntervalMinutes: 30}
+}
+
 // WithDefaults 补齐自动更新设置的默认值并收敛区间。
 func (s Settings) WithDefaults() Settings {
 	if s.IntervalMinutes <= 0 {
-		s.IntervalMinutes = 60
+		s.IntervalMinutes = 30
 	}
 	if s.IntervalMinutes < 10 {
 		// 过于频繁的自动拉取既没意义又容易触发远端限流。

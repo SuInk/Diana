@@ -76,41 +76,53 @@
       <section class="card">
         <div class="card-header">
           <h2>系统更新</h2>
-          <button class="btn small ghost" type="button" :disabled="loading" @click="loadStatus">
+          <span class="badge">{{ deploymentMode === "git" ? "源码更新" : "Release / Docker" }}</span>
+          <button class="btn small ghost" type="button" :disabled="loading" title="刷新更新状态" @click="loadUpdates">
             <RefreshCw :size="14" aria-hidden="true" />
           </button>
         </div>
         <div class="card-body stack" style="gap: 10px; font-size: 13px">
-          <template v-if="updateStatus">
+          <div class="cluster" style="justify-content: space-between">
+            <span class="muted">当前版本</span>
+            <span class="mono">{{ systemVersion?.version_label || systemVersion?.build_version || "—" }}</span>
+          </div>
+          <label class="switch">
+            <input v-model="autoEnabled" type="checkbox" @change="saveAutoSettings" />
+            <span class="track" aria-hidden="true"></span>
+            <span class="switch-label">自动更新</span>
+          </label>
+          <div v-if="autoEnabled" class="field" style="max-width: 220px">
+            <label for="settings-update-interval">检查间隔（分钟）</label>
+            <input
+              id="settings-update-interval"
+              v-model.number="autoInterval"
+              class="input"
+              type="number"
+              min="10"
+              max="1440"
+              inputmode="numeric"
+              @change="saveAutoSettings"
+            />
+          </div>
+          <p class="muted" style="font-size: 12.5px; margin: 0">
+            {{ deploymentMode === "git" ? "后台检查 GitHub 并快进拉取更新，默认每 30 分钟执行。" : "后台检查 Release；Docker 镜像由部署环境的更新器自动安装。" }}
+          </p>
+          <p v-if="lastAutoRun" class="muted" style="font-size: 12.5px; margin: 0">上次检查：{{ lastAutoRun }}</p>
+
+          <template v-if="deploymentMode === 'git' && updateStatus">
+            <hr class="divider" style="margin: 4px 0" />
             <div class="cluster" style="justify-content: space-between">
-              <span class="muted">当前分支</span>
-              <span class="mono">{{ updateStatus.branch || "—" }}</span>
-            </div>
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">当前提交</span>
-              <span class="mono">{{ shortCommit }}</span>
-            </div>
-            <div class="cluster" style="justify-content: space-between; gap: 12px">
-              <span class="muted">提交说明</span>
-              <span style="text-align: right; max-width: 65%">{{ updateStatus.head_subject || "—" }}</span>
-            </div>
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">与远端差异</span>
-              <span>
-                <span v-if="(updateStatus.behind ?? 0) > 0" class="badge warn">落后 {{ updateStatus.behind }} 个提交</span>
-                <span v-else class="badge ok">已是最新</span>
-              </span>
+              <span class="muted">分支 / 提交</span>
+              <span class="mono">{{ updateStatus.branch || "—" }} · {{ shortCommit }}</span>
             </div>
             <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
-            <hr class="divider" style="margin: 4px 0" />
             <button class="btn primary" type="button" :disabled="updating" @click="runUpdate">
               <Download :size="15" aria-hidden="true" />
               {{ updating ? "更新中…" : "从 GitHub 拉取更新" }}
             </button>
             <pre v-if="updateOutput" class="mono" style="margin: 0; font-size: 11.5px; white-space: pre-wrap; color: var(--muted)">{{ updateOutput }}</pre>
           </template>
-          <p v-else-if="!loading" class="muted">无法读取更新状态（可能不是 git 部署）。</p>
-          <div v-else class="skeleton" style="height: 120px"></div>
+          <div v-if="loading" class="skeleton" style="height: 72px"></div>
         </div>
       </section>
     </div>
@@ -123,7 +135,7 @@
       <div class="card-body stack" style="gap: 8px; font-size: 13px">
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">后端版本</span>
-          <span class="mono">{{ health?.version ?? "—" }}</span>
+          <span class="mono">{{ systemVersion?.version_label || systemVersion?.build_version || health?.version || "—" }}</span>
         </div>
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">运行时长</span>
@@ -145,10 +157,14 @@ import {
   changePassword,
   getAuthStatus,
   getHealth,
+  getSystemVersion,
+  getUpdateSettings,
   getUpdateStatus,
   logout,
   pullFromGitHub,
+  saveUpdateSettings,
   type HealthResponse,
+  type SystemVersion,
   type UpdateStatus
 } from "../api";
 import { accentOptions, theme } from "../theme";
@@ -156,6 +172,7 @@ import { formatTime, formatUptime } from "../format";
 import { toastError, toastSuccess } from "../toast";
 
 const updateStatus = ref<UpdateStatus | null>(null);
+const systemVersion = ref<SystemVersion | null>(null);
 const health = ref<HealthResponse | null>(null);
 const loading = ref(false);
 const updating = ref(false);
@@ -164,6 +181,10 @@ const authRequired = ref(false);
 const currentPassword = ref("");
 const newPassword = ref("");
 const savingPassword = ref(false);
+const autoEnabled = ref(true);
+const autoInterval = ref(30);
+const deploymentMode = ref<"git" | "release">("release");
+const lastAutoRun = ref("");
 
 async function loadAuthStatus(): Promise<void> {
   try {
@@ -201,14 +222,41 @@ const shortCommit = computed(() => {
   return commit ? commit.slice(0, 10) : "—";
 });
 
-async function loadStatus(): Promise<void> {
+async function loadUpdates(): Promise<void> {
   loading.value = true;
   try {
-    updateStatus.value = await getUpdateStatus();
+    systemVersion.value = await getSystemVersion();
+    deploymentMode.value = systemVersion.value.deployment_mode;
+    const settings = await getUpdateSettings();
+    autoEnabled.value = settings.settings.auto_update_enabled;
+    autoInterval.value = settings.settings.interval_minutes;
+    deploymentMode.value = settings.deployment_mode;
+    if (settings.last_run_at) {
+      const at = new Date(settings.last_run_at).toLocaleString();
+      lastAutoRun.value = settings.last_error ? `${at}（失败：${settings.last_error}）` : `${at}（${settings.last_result || "完成"}）`;
+    } else {
+      lastAutoRun.value = "";
+    }
+    updateStatus.value = deploymentMode.value === "git" ? await getUpdateStatus() : null;
   } catch {
     updateStatus.value = null;
   } finally {
     loading.value = false;
+  }
+}
+
+async function saveAutoSettings(): Promise<void> {
+  try {
+    const saved = await saveUpdateSettings({
+      auto_update_enabled: autoEnabled.value,
+      interval_minutes: autoInterval.value
+    });
+    autoEnabled.value = saved.settings.auto_update_enabled;
+    autoInterval.value = saved.settings.interval_minutes;
+    deploymentMode.value = saved.deployment_mode;
+    toastSuccess(autoEnabled.value ? `自动更新已开启，每 ${autoInterval.value} 分钟检查` : "自动更新已关闭");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存自动更新设置失败");
   }
 }
 
@@ -228,7 +276,7 @@ async function runUpdate(): Promise<void> {
 }
 
 onMounted(() => {
-  void loadStatus();
+  void loadUpdates();
   void loadAuthStatus();
   void getHealth()
     .then((result) => {

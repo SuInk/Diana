@@ -543,6 +543,7 @@ export interface SystemVersion {
   build_version: string;
   version_label: string;
   git_available: boolean;
+  deployment_mode: "git" | "release";
   head_commit?: string;
   head_subject?: string;
   branch?: string;
@@ -610,6 +611,7 @@ export interface UpdateSettings {
 
 export interface UpdateSettingsResponse {
   settings: UpdateSettings;
+  deployment_mode: "git" | "release";
   last_run_at?: string;
   last_result?: string;
   last_error?: string;
@@ -619,8 +621,16 @@ export function getSystemVersion(): Promise<SystemVersion> {
   return requestJSON<SystemVersion>("/api/system/version");
 }
 
-export function checkForUpdate(): Promise<UpdateStatus> {
-  return requestJSON<UpdateStatus>("/api/system/update/check", { method: "POST" });
+export interface UpdateCheckResponse {
+  deployment_mode: "git" | "release";
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  status?: UpdateStatus;
+}
+
+export function checkForUpdate(): Promise<UpdateCheckResponse> {
+  return requestJSON<UpdateCheckResponse>("/api/system/update/check", { method: "POST" });
 }
 
 export function getChangelog(): Promise<ChangelogResponse> {

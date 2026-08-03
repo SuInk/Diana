@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +30,7 @@ type AutoUpdater struct {
 	lastError  string
 }
 
-// NewAutoUpdater 创建自动更新循环，settings 从存储加载，缺省关闭。
+// NewAutoUpdater 创建自动更新循环，settings 从存储加载，新安装默认每 30 分钟自动更新。
 func NewAutoUpdater(systemUpdater SystemUpdater, store UpdateSettingsStore, logs AppLogWriter) *AutoUpdater {
 	a := &AutoUpdater{
 		updater:  systemUpdater,
@@ -41,10 +42,10 @@ func NewAutoUpdater(systemUpdater SystemUpdater, store UpdateSettingsStore, logs
 		if settings, ok, err := store.LoadUpdateSettings(context.Background()); err == nil && ok {
 			a.settings = settings.WithDefaults()
 		} else {
-			a.settings = updater.Settings{}.WithDefaults()
+			a.settings = updater.DefaultSettings()
 		}
 	} else {
-		a.settings = updater.Settings{}.WithDefaults()
+		a.settings = updater.DefaultSettings()
 	}
 	return a
 }
@@ -111,10 +112,19 @@ func (a *AutoUpdater) runOnce(ctx context.Context) {
 	runCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	result, err := a.updater.Update(runCtx)
 	cancel()
+	managedExternally := errors.Is(err, updater.ErrRemoteNotConfigured)
+	if managedExternally {
+		// Release/Docker 部署没有 Git remote，实际替换由包管理器或镜像更新器完成。
+		// 这不是运行故障，不应周期性写错误日志或向用户弹出英文 Git 错误。
+		err = nil
+	}
 
 	a.mu.Lock()
 	a.lastRunAt = time.Now()
-	if err != nil {
+	if managedExternally {
+		a.lastResult = "由部署环境管理更新"
+		a.lastError = ""
+	} else if err != nil {
 		a.lastResult = ""
 		a.lastError = err.Error()
 	} else {
@@ -134,6 +144,8 @@ func (a *AutoUpdater) runOnce(ctx context.Context) {
 	switch {
 	case err != nil:
 		recordError(context.Background(), a.logs, "system.update.auto", err, "", nil)
+	case managedExternally:
+		return
 	case result.Updated:
 		summary := strings.TrimSpace(result.Status.HeadCommit + " " + result.Status.HeadSubject)
 		recordOperation(context.Background(), a.logs, "system.update.auto", "自动更新完成: "+summary, "", map[string]any{

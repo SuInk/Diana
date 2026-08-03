@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +98,40 @@ func TestSystemUpdateHandlerRemoteMissing(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSystemUpdateHandlerReleaseCheckUsesGitHubRelease(t *testing.T) {
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/repos/SuInk/Diana/releases") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","name":"v1.3.0","published_at":"2026-08-03T10:00:00Z"}]`))
+	}))
+	defer github.Close()
+
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRemoteNotConfigured})
+	handler.SetBuildVersion("v1.2.3")
+	handler.githubAPIBase = github.URL
+	router := systemUpdateTestRouter(handler)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/system/update/check", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"deployment_mode":"release"`) || !strings.Contains(body, `"latest_version":"v1.3.0"`) || !strings.Contains(body, `"update_available":true`) {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestVersionComparison(t *testing.T) {
+	if !isNewerVersion("v1.2.3", "v1.3.0") {
+		t.Fatal("newer minor version not detected")
+	}
+	if isNewerVersion("v1.3.0", "v1.2.9") || isNewerVersion("dev", "v1.3.0") {
+		t.Fatal("older or invalid version detected as newer")
 	}
 }
 

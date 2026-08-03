@@ -67,7 +67,14 @@ func TestAutoUpdaterTickRespectsToggleAndInterval(t *testing.T) {
 	}}
 	auto := NewAutoUpdater(fake, &memorySettingsStore{}, nil)
 
-	// 默认关闭：tick 不触发更新。
+	if settings := auto.Settings(); !settings.AutoUpdateEnabled || settings.IntervalMinutes != 30 {
+		t.Fatalf("default settings = %+v", settings)
+	}
+
+	// 显式关闭后 tick 不触发更新。
+	if _, err := auto.SaveSettings(context.Background(), updater.Settings{AutoUpdateEnabled: false, IntervalMinutes: 30}); err != nil {
+		t.Fatalf("SaveSettings(disabled) error = %v", err)
+	}
 	auto.tick(context.Background())
 	if fake.updates != 0 {
 		t.Fatalf("disabled auto updater ran %d times", fake.updates)
@@ -93,6 +100,17 @@ func TestAutoUpdaterTickRespectsToggleAndInterval(t *testing.T) {
 	auto.tick(context.Background())
 	if fake.updates != 2 {
 		t.Fatalf("updates = %d, want 2", fake.updates)
+	}
+}
+
+func TestAutoUpdaterTreatsMissingRemoteAsManagedDeployment(t *testing.T) {
+	fake := &countingUpdater{fakeSystemUpdater: fakeSystemUpdater{err: updater.ErrRemoteNotConfigured}}
+	auto := NewAutoUpdater(fake, &memorySettingsStore{}, nil)
+
+	auto.tick(context.Background())
+	_, result, lastError := auto.LastRun()
+	if fake.updates != 1 || result != "由部署环境管理更新" || lastError != "" {
+		t.Fatalf("updates=%d result=%q error=%q", fake.updates, result, lastError)
 	}
 }
 
@@ -268,7 +286,7 @@ func TestVersionEndpointFallsBackToBuildVersion(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("version = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"build_version":"v1.2.3"`) || !strings.Contains(rec.Body.String(), `"git_available":false`) {
+	if !strings.Contains(rec.Body.String(), `"build_version":"v1.2.3"`) || !strings.Contains(rec.Body.String(), `"git_available":false`) || !strings.Contains(rec.Body.String(), `"deployment_mode":"release"`) {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
