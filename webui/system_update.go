@@ -19,17 +19,21 @@ const (
 )
 
 type systemUpdateCheckResponse struct {
-	DeploymentMode  string          `json:"deployment_mode"`
-	CurrentVersion  string          `json:"current_version"`
-	LatestVersion   string          `json:"latest_version,omitempty"`
-	UpdateAvailable bool            `json:"update_available"`
-	Status          *updater.Status `json:"status,omitempty"`
+	DeploymentMode    string          `json:"deployment_mode"`
+	CurrentVersion    string          `json:"current_version"`
+	LatestVersion     string          `json:"latest_version,omitempty"`
+	UpdateAvailable   bool            `json:"update_available"`
+	IntegrityMode     string          `json:"integrity_mode"`
+	ChecksumAvailable bool            `json:"checksum_available"`
+	ChecksumURL       string          `json:"checksum_url,omitempty"`
+	Status            *updater.Status `json:"status,omitempty"`
 }
 
 type SystemUpdater interface {
 	Status(context.Context) (updater.Status, error)
 	Check(context.Context) (updater.Status, error)
 	Update(context.Context) (updater.Result, error)
+	ForceUpdate(context.Context) (updater.Result, error)
 	Rollback(ctx context.Context, ref string) (updater.Result, error)
 }
 
@@ -127,6 +131,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 			DeploymentMode:  "git",
 			CurrentVersion:  current,
 			UpdateAvailable: status.Behind > 0,
+			IntegrityMode:   "git-object-hash",
 			Status:          &status,
 		})
 		return
@@ -140,30 +145,60 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 	latest := latestStableRelease(releases)
 	current := strings.TrimSpace(h.buildVersion)
 	c.JSON(http.StatusOK, systemUpdateCheckResponse{
-		DeploymentMode:  "release",
-		CurrentVersion:  current,
-		LatestVersion:   latest.Tag,
-		UpdateAvailable: isNewerVersion(current, latest.Tag),
+		DeploymentMode:    "release",
+		CurrentVersion:    current,
+		LatestVersion:     latest.Tag,
+		UpdateAvailable:   isNewerVersion(current, latest.Tag),
+		IntegrityMode:     "sha256",
+		ChecksumAvailable: latest.ChecksumAvailable,
+		ChecksumURL:       latest.ChecksumURL,
 	})
 }
 
 // update 执行系统更新并记录操作日志。
 func (h *SystemUpdateHandler) update(c *gin.Context) {
-	result, err := h.updater.Update(c.Request.Context())
+	var request struct {
+		Force        bool   `json:"force"`
+		Confirmation string `json:"confirmation"`
+	}
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&request); err != nil {
+			writeError(c, http.StatusBadRequest, err)
+			return
+		}
+	}
+	if request.Force && request.Confirmation != "force-update" {
+		writeError(c, http.StatusBadRequest, errors.New("强制更新需要明确确认"))
+		return
+	}
+
+	var (
+		result updater.Result
+		err    error
+	)
+	action := "system.update.pull"
+	if request.Force {
+		action = "system.update.force"
+		result, err = h.updater.ForceUpdate(c.Request.Context())
+	} else {
+		result, err = h.updater.Update(c.Request.Context())
+	}
 	if err != nil {
-		// 真正的更新动作属于运维操作，失败需要写入错误日志。
-		h.writeUpdateError(c, "system.update.pull", err)
+		h.writeUpdateError(c, action, err)
 		return
 	}
 	message := "系统更新已执行"
-	if !result.Updated {
+	if request.Force {
+		message = "系统已强制同步到远端"
+	} else if !result.Updated {
 		message = "系统更新已检查"
 	}
-	recordRequestOperation(c, h.logs, "system.update.pull", message, result.Status.Root, map[string]any{
+	recordRequestOperation(c, h.logs, action, message, result.Status.Root, map[string]any{
 		"branch":  result.Status.Branch,
 		"remote":  result.Status.RemoteURL,
 		"updated": result.Updated,
 		"fetched": result.Fetched,
+		"forced":  result.Forced,
 	})
 	c.JSON(http.StatusOK, result)
 }

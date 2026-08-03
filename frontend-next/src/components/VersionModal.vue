@@ -17,6 +17,20 @@
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
           <span v-else class="muted">尚未检查</span>
         </div>
+        <div v-if="checkResult" class="cluster" style="justify-content: space-between">
+          <span class="muted">完整性校验</span>
+          <span v-if="deploymentMode === 'git'" class="badge ok">Git 对象哈希</span>
+          <a
+            v-else-if="checkResult.checksum_available && checkResult.checksum_url"
+            class="badge ok"
+            :href="checkResult.checksum_url"
+            target="_blank"
+            rel="noreferrer"
+          >
+            SHA-256 可用
+          </a>
+          <span v-else class="badge warn">缺少 SHA-256 清单</span>
+        </div>
       </div>
 
       <div class="cluster" style="gap: 8px">
@@ -34,10 +48,31 @@
           <Download :size="14" aria-hidden="true" />
           {{ updating ? "更新中…" : "立即更新" }}
         </button>
+        <button
+          v-if="deploymentMode === 'git'"
+          class="btn ghost"
+          type="button"
+          :disabled="checking || updating"
+          @click="forceConfirming = true"
+        >
+          <RefreshCcw :size="14" aria-hidden="true" />
+          强制更新
+        </button>
+      </div>
+      <div v-if="forceConfirming" class="force-update-confirm">
+        <AlertTriangle :size="17" aria-hidden="true" />
+        <div class="stack" style="gap: 8px; flex: 1">
+          <strong>强制同步远端版本？</strong>
+          <span class="muted" style="font-size: 12.5px">这会丢弃已跟踪文件的本地修改，但不会绕过 Git 对象哈希校验。</span>
+          <div class="cluster" style="gap: 8px">
+            <button class="btn danger small" type="button" :disabled="updating" @click="forceUpdate">确认强制同步</button>
+            <button class="btn ghost small" type="button" :disabled="updating" @click="forceConfirming = false">取消</button>
+          </div>
+        </div>
       </div>
       <p v-if="updatedHint" class="badge ok" style="align-self: flex-start">{{ updatedHint }}</p>
       <p v-if="deploymentMode === 'release'" class="muted" style="font-size: 12.5px; margin: 0">
-        当前为 Release / Docker 部署，新版本由部署环境的镜像更新器自动安装。
+        Release 下载必须通过 SHA-256 校验；Docker 镜像由 OCI digest 校验并由部署环境安装。
       </p>
 
       <hr class="divider" style="margin: 0" />
@@ -92,7 +127,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Download, RefreshCw } from "@lucide/vue";
+import { AlertTriangle, Download, RefreshCcw, RefreshCw } from "@lucide/vue";
 import Modal from "./Modal.vue";
 import {
   checkForUpdate,
@@ -122,6 +157,7 @@ const changelogError = ref("");
 const checking = ref(false);
 const updating = ref(false);
 const updatedHint = ref("");
+const forceConfirming = ref(false);
 
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 
@@ -198,5 +234,34 @@ async function update(): Promise<void> {
   }
 }
 
+async function forceUpdate(): Promise<void> {
+  updating.value = true;
+  try {
+    const result = await pullFromGitHub(true);
+    status.value = result.status;
+    updatedHint.value = `已强制同步到 ${result.status.head_commit}，重启服务后生效`;
+    forceConfirming.value = false;
+    if (checkResult.value) checkResult.value.update_available = false;
+    toastSuccess("强制更新完成");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "强制更新失败");
+  } finally {
+    updating.value = false;
+  }
+}
+
 onMounted(load);
 </script>
+
+<style scoped>
+.force-update-confirm {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--err);
+  border-radius: 6px;
+  color: var(--err);
+  background: var(--err-soft);
+}
+</style>

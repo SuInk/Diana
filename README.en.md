@@ -143,6 +143,14 @@ You can also download the `windows-amd64.exe` binary from GitHub Releases. Stand
 
 Each platform also has a complete release package (`.tar.gz` for Linux/macOS and `.zip` for Windows). It contains the backend binary, the `frontend-next/dist` build, the legacy frontend fallback, and a launch script. Extracting the package is enough to run Diana without Go, Node.js, npm, or the source tree. Run `run.sh` on Unix platforms or `run.bat` on Windows.
 
+Every Release also includes `SHA256SUMS`. Verify the downloaded file before extracting or replacing Diana; forced updates never bypass this check:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+On macOS, compare `shasum -a 256 <file>` with `SHA256SUMS`. On Windows, use `Get-FileHash <file> -Algorithm SHA256`.
+
 ## Quick Run
 
 For local development or testing, start the Go backend and Vite frontend together:

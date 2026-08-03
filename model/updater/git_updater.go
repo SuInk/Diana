@@ -50,6 +50,7 @@ type Result struct {
 	Status  Status    `json:"status"`
 	Fetched bool      `json:"fetched"`
 	Updated bool      `json:"updated"`
+	Forced  bool      `json:"forced,omitempty"`
 	Output  string    `json:"output,omitempty"`
 	At      time.Time `json:"at"`
 }
@@ -198,6 +199,62 @@ func (u *GitUpdater) Update(ctx context.Context) (Result, error) {
 		Status:  nextStatus,
 		Fetched: true,
 		Updated: !strings.Contains(updateOut, "Already up to date."),
+		Output:  strings.TrimSpace(strings.Join(outputs, "\n\n")),
+		At:      time.Now(),
+	}
+	nextStatus.LastUpdateText = result.Output
+	result.Status = nextStatus
+	return result, nil
+}
+
+// ForceUpdate 强制把当前分支同步到 origin 的同名分支。
+// fetch 和 reset 仍由 Git 校验对象哈希；该操作会丢弃已跟踪文件的本地修改。
+func (u *GitUpdater) ForceUpdate(ctx context.Context) (Result, error) {
+	status, err := u.Status(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if status.RemoteURL == "" {
+		return Result{}, ErrRemoteNotConfigured
+	}
+	if strings.TrimSpace(status.Branch) == "" {
+		return Result{}, errors.New("updater: detached HEAD cannot be force-updated")
+	}
+
+	outputs := make([]string, 0, 2)
+	fetchOut, err := u.gitCombined(ctx, "fetch", "--prune", "--force", "origin")
+	if err != nil {
+		return Result{}, err
+	}
+	u.lastFetchedAt = time.Now()
+	if trimmed := strings.TrimSpace(fetchOut); trimmed != "" {
+		outputs = append(outputs, trimmed)
+	}
+
+	target := "refs/remotes/origin/" + status.Branch
+	if _, err := u.gitOutput(ctx, "rev-parse", "--verify", "--quiet", target+"^{commit}"); err != nil {
+		return Result{}, fmt.Errorf("updater: remote branch %q not found: %w", status.Branch, err)
+	}
+	resetOut, err := u.gitCombined(ctx, "reset", "--hard", target)
+	if err != nil {
+		return Result{}, err
+	}
+	u.lastUpdateAt = time.Now()
+	if trimmed := strings.TrimSpace(resetOut); trimmed != "" {
+		outputs = append(outputs, trimmed)
+	}
+
+	nextStatus, err := u.Status(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	nextStatus.LastFetchedAt = u.lastFetchedAt
+	nextStatus.LastUpdateAt = u.lastUpdateAt
+	result := Result{
+		Status:  nextStatus,
+		Fetched: true,
+		Updated: status.HeadCommit != nextStatus.HeadCommit || status.Dirty,
+		Forced:  true,
 		Output:  strings.TrimSpace(strings.Join(outputs, "\n\n")),
 		At:      time.Now(),
 	}

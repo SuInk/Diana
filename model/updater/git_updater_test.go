@@ -138,3 +138,62 @@ func TestRollbackRefusesDirtyTreeAndBadRef(t *testing.T) {
 		t.Fatal("dirty tree rollback accepted")
 	}
 }
+
+func TestForceUpdateResetsDirtyTreeToRemote(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "origin.git")
+	source := t.TempDir()
+	work := filepath.Join(t.TempDir(), "work")
+
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v in %s: %v (%s)", args, dir, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	run(source, "init", "--bare", remote)
+	run(source, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(source, "a.txt"), []byte("remote-v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(source, "add", "a.txt")
+	run(source, "commit", "-m", "first")
+	run(source, "remote", "add", "origin", remote)
+	run(source, "push", "-u", "origin", "main")
+	run(source, "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main")
+	run(source, "clone", remote, work)
+
+	if err := os.WriteFile(filepath.Join(source, "a.txt"), []byte("remote-v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(source, "add", "a.txt")
+	run(source, "commit", "-m", "second")
+	run(source, "push", "origin", "main")
+	if err := os.WriteFile(filepath.Join(work, "a.txt"), []byte("local-dirty"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	u, err := NewGitUpdater(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := u.ForceUpdate(context.Background())
+	if err != nil {
+		t.Fatalf("ForceUpdate() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(work, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Forced || !result.Updated || result.Status.Dirty || string(data) != "remote-v2" {
+		t.Fatalf("result=%+v content=%q", result, data)
+	}
+}

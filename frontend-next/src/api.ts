@@ -194,6 +194,7 @@ export interface UpdateResult {
   status: UpdateStatus;
   fetched: boolean;
   updated: boolean;
+  forced?: boolean;
   output?: string;
   at: string;
 }
@@ -535,8 +536,11 @@ export function getUpdateStatus(): Promise<UpdateStatus> {
   return requestJSON<UpdateStatus>("/api/system/update");
 }
 
-export function pullFromGitHub(): Promise<UpdateResult> {
-  return requestJSON<UpdateResult>("/api/system/update", { method: "POST" });
+export function pullFromGitHub(force = false): Promise<UpdateResult> {
+  return requestJSON<UpdateResult>("/api/system/update", {
+    method: "POST",
+    body: JSON.stringify(force ? { force: true, confirmation: "force-update" } : { force: false })
+  });
 }
 
 export interface SystemVersion {
@@ -566,6 +570,8 @@ export interface ReleaseEntry {
   prerelease?: boolean;
   date?: string;
   url?: string;
+  checksum_available: boolean;
+  checksum_url?: string;
 }
 
 export interface ChangelogResponse {
@@ -626,6 +632,9 @@ export interface UpdateCheckResponse {
   current_version: string;
   latest_version?: string;
   update_available: boolean;
+  integrity_mode: "git-object-hash" | "sha256";
+  checksum_available: boolean;
+  checksum_url?: string;
   status?: UpdateStatus;
 }
 

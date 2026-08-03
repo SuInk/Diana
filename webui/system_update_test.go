@@ -36,6 +36,15 @@ func (f fakeSystemUpdater) Update(context.Context) (updater.Result, error) {
 	return f.result, nil
 }
 
+func (f fakeSystemUpdater) ForceUpdate(context.Context) (updater.Result, error) {
+	if f.err != nil {
+		return updater.Result{}, f.err
+	}
+	result := f.result
+	result.Forced = true
+	return result, nil
+}
+
 // Check 返回 fetch 后的状态快照。
 func (f fakeSystemUpdater) Check(context.Context) (updater.Status, error) {
 	if f.err != nil {
@@ -107,7 +116,7 @@ func TestSystemUpdateHandlerReleaseCheckUsesGitHubRelease(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","name":"v1.3.0","published_at":"2026-08-03T10:00:00Z"}]`))
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","name":"v1.3.0","published_at":"2026-08-03T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"}]}]`))
 	}))
 	defer github.Close()
 
@@ -121,8 +130,31 @@ func TestSystemUpdateHandlerReleaseCheckUsesGitHubRelease(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, `"deployment_mode":"release"`) || !strings.Contains(body, `"latest_version":"v1.3.0"`) || !strings.Contains(body, `"update_available":true`) {
+	if body := rec.Body.String(); !strings.Contains(body, `"deployment_mode":"release"`) || !strings.Contains(body, `"latest_version":"v1.3.0"`) || !strings.Contains(body, `"update_available":true`) || !strings.Contains(body, `"checksum_available":true`) {
 		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestSystemUpdateHandlerForceUpdateRequiresConfirmation(t *testing.T) {
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{result: updater.Result{
+		Status: updater.Status{HeadCommit: "abc1234"},
+	}})
+	router := systemUpdateTestRouter(handler)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"force":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unconfirmed force status = %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"force":true,"confirmation":"force-update"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"forced":true`) {
+		t.Fatalf("confirmed force status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 

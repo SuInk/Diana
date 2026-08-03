@@ -23,12 +23,14 @@ type ChangelogEntry struct {
 
 // ReleaseEntry 是 GitHub Release 的一条记录。
 type ReleaseEntry struct {
-	Tag        string    `json:"tag"`
-	Name       string    `json:"name,omitempty"`
-	Notes      string    `json:"notes,omitempty"`
-	Prerelease bool      `json:"prerelease,omitempty"`
-	Date       time.Time `json:"date,omitempty"`
-	URL        string    `json:"url,omitempty"`
+	Tag               string    `json:"tag"`
+	Name              string    `json:"name,omitempty"`
+	Notes             string    `json:"notes,omitempty"`
+	Prerelease        bool      `json:"prerelease,omitempty"`
+	Date              time.Time `json:"date,omitempty"`
+	URL               string    `json:"url,omitempty"`
+	ChecksumAvailable bool      `json:"checksum_available"`
+	ChecksumURL       string    `json:"checksum_url,omitempty"`
 }
 
 const releaseNotesMaxRunes = 600
@@ -67,6 +69,10 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 		Draft       bool      `json:"draft"`
 		PublishedAt time.Time `json:"published_at"`
 		HTMLURL     string    `json:"html_url"`
+		Assets      []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, err
@@ -80,13 +86,22 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 		if runes := []rune(notes); len(runes) > releaseNotesMaxRunes {
 			notes = string(runes[:releaseNotesMaxRunes]) + "…"
 		}
+		checksumURL := ""
+		for _, asset := range item.Assets {
+			if asset.Name == "SHA256SUMS" {
+				checksumURL = asset.BrowserDownloadURL
+				break
+			}
+		}
 		entries = append(entries, ReleaseEntry{
-			Tag:        item.TagName,
-			Name:       strings.TrimSpace(item.Name),
-			Notes:      notes,
-			Prerelease: item.Prerelease,
-			Date:       item.PublishedAt,
-			URL:        item.HTMLURL,
+			Tag:               item.TagName,
+			Name:              strings.TrimSpace(item.Name),
+			Notes:             notes,
+			Prerelease:        item.Prerelease,
+			Date:              item.PublishedAt,
+			URL:               item.HTMLURL,
+			ChecksumAvailable: checksumURL != "",
+			ChecksumURL:       checksumURL,
 		})
 	}
 	return entries, nil

@@ -284,6 +284,10 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: Generate SHA-256 checksums
+        working-directory: release
+        run: sha256sum diana-* > SHA256SUMS
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

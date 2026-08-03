@@ -143,6 +143,14 @@ Windows 下也可以直接下载 GitHub Release 中的 `windows-amd64.exe`。裸
 
 每个平台的 GitHub Release 同时提供完整包（Linux/macOS 为 `.tar.gz`，Windows 为 `.zip`）。完整包包含后端二进制、新版 `frontend-next/dist`、旧版前端回退资源和启动脚本；解压后无需安装 Go、Node.js、npm 或源码即可运行。Unix 平台运行 `run.sh`，Windows 平台运行 `run.bat`。
 
+Release 同时提供 `SHA256SUMS`。下载后应先校验再解压或替换程序；强制更新也不会绕过该校验：
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+macOS 可使用 `shasum -a 256 <文件名>` 与 `SHA256SUMS` 对照；Windows 可使用 `Get-FileHash <文件名> -Algorithm SHA256`。
+
 ## 快速运行
 
 开发或本机测试可以一键同时启动 Go 后端和 Vite 前端：
