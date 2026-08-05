@@ -30,26 +30,35 @@ export const navItems: NavItem[] = [
 
 const validViews = new Set<ViewID>(["dashboard", "setup", "llm", "test", "bot", "groups", "plugins", "logs", "settings"]);
 
-function parseHash(): ViewID {
+function parseHash(): { view: ViewID; param: string } {
   const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0] ?? "";
-  if (validViews.has(raw as ViewID)) {
-    return raw as ViewID;
+  // 机器人实例作为子菜单项，用 #/bot/<id> 携带选中的实例，刷新后不丢。
+  const [head, ...rest] = raw.split("/");
+  if (validViews.has(head as ViewID)) {
+    return { view: head as ViewID, param: decodeURIComponent(rest.join("/")) };
   }
-  return "dashboard";
+  return { view: "dashboard", param: "" };
 }
 
-export const currentView = ref<ViewID>(parseHash());
+const initial = parseHash();
+export const currentView = ref<ViewID>(initial.view);
+/** 当前视图的子项标识；目前只有机器人视图用来记住选中的实例。 */
+export const currentParam = ref<string>(initial.param);
 
-export function navigate(view: ViewID): void {
-  if (window.location.hash !== `#/${view}`) {
-    window.location.hash = `#/${view}`;
+export function navigate(view: ViewID, param = ""): void {
+  const target = param ? `#/${view}/${encodeURIComponent(param)}` : `#/${view}`;
+  if (window.location.hash !== target) {
+    window.location.hash = target;
   } else {
     currentView.value = view;
+    currentParam.value = param;
   }
 }
 
 export function setupRouter(): void {
   window.addEventListener("hashchange", () => {
-    currentView.value = parseHash();
+    const next = parseHash();
+    currentView.value = next.view;
+    currentParam.value = next.param;
   });
 }
