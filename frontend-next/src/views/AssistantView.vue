@@ -2,7 +2,7 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="leaveEditor">
+        <button v-if="page === 'edit' && profiles.length > 1" class="btn ghost back-link" type="button" @click="leaveEditor">
           <ArrowLeft :size="16" aria-hidden="true" />
           机器人列表
         </button>
@@ -12,6 +12,10 @@
         </div>
       </div>
       <div v-if="page === 'edit'" class="view-actions">
+        <button class="btn ghost" type="button" :disabled="busy" @click="platformPickerOpen = true">
+          <Plus :size="15" aria-hidden="true" />
+          新增机器人
+        </button>
         <button v-if="status && !status.running" class="btn primary" type="button" :disabled="busy" @click="toggle(true)">
           <Power :size="15" aria-hidden="true" />
           启动
@@ -29,10 +33,7 @@
 
     <section v-if="form && page === 'list'" class="bot-switcher">
       <div class="bot-switcher-head">
-        <div>
-          <h2>机器人</h2>
-          <p>选择要编辑和运行的机器人实例</p>
-        </div>
+        <p>选择要编辑和运行的机器人实例</p>
         <button class="btn primary" type="button" :disabled="busy" @click="platformPickerOpen = true">
           <Plus :size="15" aria-hidden="true" />
           新增机器人
@@ -876,6 +877,12 @@ function setForm(config: QQBotConfig): void {
 function applyConfig(config: QQBotConfig): void {
   profileSet.value = config;
   setForm(config);
+  // 只有一个机器人时列表页就是「空房间里放着一扇门」，直接进编辑页。
+  // 多机器人时才需要先选一个。
+  if (page.value === "list" && (config.profiles?.length ?? 0) === 1) {
+    editorTab.value = "access";
+    page.value = "edit";
+  }
 }
 
 function splitList(raw: string): string[] {
