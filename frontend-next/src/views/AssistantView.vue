@@ -82,382 +82,413 @@
 
     <div v-if="form && page === 'edit'" class="grid-main-side">
       <div class="stack">
-        <!-- 接入 -->
-        <section class="card">
-          <div class="card-header">
-            <h2>{{ platformName(form.platform) }} 接入</h2>
-            <span class="card-sub">通过 {{ platformProtocol(form.platform) }} 连接</span>
-          </div>
-          <div class="card-body stack">
-            <div class="field">
-              <label for="bot-onebot-endpoint">NapCat 回连地址</label>
-              <div class="input-group">
-                <input
-                  id="bot-onebot-endpoint"
-                  v-model="form.onebot_reverse_ws_endpoint"
-                  class="input mono"
-                  placeholder="ws://127.0.0.1:18080/onebot/v11/ws"
-                  autocomplete="off"
-                />
-                <button class="btn icon-only" type="button" aria-label="复制地址" @click="copyEndpoint">
-                  <Copy :size="14" aria-hidden="true" />
-                </button>
-              </div>
-              <span class="hint">填写接入端实际可访问的地址；自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
+        <nav class="editor-tabs" role="tablist" aria-label="机器人配置分区">
+          <button
+            v-for="tab in editorTabs"
+            :key="tab.key"
+            class="editor-tab"
+            :class="{ active: editorTab === tab.key }"
+            type="button"
+            role="tab"
+            :aria-selected="editorTab === tab.key"
+            @click="editorTab = tab.key"
+          >
+            {{ tab.label }}
+          </button>
+        </nav>
+
+        <div v-show="editorTab === 'access'" class="stack">
+          <!-- 接入 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>{{ platformName(form.platform) }} 接入</h2>
+              <span class="card-sub">通过 {{ platformProtocol(form.platform) }} 连接</span>
             </div>
-            <div class="form-grid">
+            <div class="card-body stack">
+              <div class="field">
+                <label for="bot-onebot-endpoint">NapCat 回连地址</label>
+                <div class="input-group">
+                  <input
+                    id="bot-onebot-endpoint"
+                    v-model="form.onebot_reverse_ws_endpoint"
+                    class="input mono"
+                    placeholder="ws://127.0.0.1:18080/onebot/v11/ws"
+                    autocomplete="off"
+                  />
+                  <button class="btn icon-only" type="button" aria-label="复制地址" @click="copyEndpoint">
+                    <Copy :size="14" aria-hidden="true" />
+                  </button>
+                </div>
+                <span class="hint">填写接入端实际可访问的地址；自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
+              </div>
+              <div class="form-grid">
+                <div class="field wide">
+                  <label for="bot-name">机器人名称</label>
+                  <input id="bot-name" v-model="form.name" class="input" placeholder="例如：主群助手、客服机器人" />
+                  <span class="hint">用于控制台区分多个机器人，不会自动修改 QQ 昵称。</span>
+                </div>
+                <div class="field wide">
+                  <label>接入平台</label>
+                  <AppSelect
+                    :model-value="form.platform ?? ''"
+                    :options="platformOptions"
+                    @update:model-value="(value) => { if (form) form.platform = value; }"
+                  />
+                  <span class="hint">{{ platformDescription(form.platform) }}</span>
+                </div>
+                <div class="field">
+                  <label for="bot-owner">主人 QQ 号</label>
+                  <input
+                    id="bot-owner"
+                    v-model="form.owner_id"
+                    class="input"
+                    inputmode="numeric"
+                    placeholder="例如 123456789，用于管理指令和私聊登录"
+                  />
+                  <span class="hint">不需要聊天内管理或 QQ 配对登录时可以留空。</span>
+                </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.owner_login_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许主人通过 QQ 私聊确认登录控制台</span>
+                  </label>
+                  <span class="hint">开启密码保护后，登录页可把一次性验证码私聊发给主人 QQ；需机器人在线。</span>
+                </div>
+                <div class="field wide">
+                  <label for="bot-token">OneBot Access Token</label>
+                  <input
+                    id="bot-token"
+                    v-model="tokenDraft"
+                    class="input"
+                    type="password"
+                    autocomplete="off"
+                    :placeholder="form.onebot_access_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '可选，至少 16 位'"
+                  />
+                </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">服务启动时自动运行机器人</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+        </div>
+
+        <div v-show="editorTab === 'behavior'" class="stack">
+          <!-- 触发与回复 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>触发与回复</h2>
+            </div>
+            <div class="card-body form-grid">
               <div class="field wide">
-                <label for="bot-name">机器人名称</label>
-                <input id="bot-name" v-model="form.name" class="input" placeholder="例如：主群助手、客服机器人" />
-                <span class="hint">用于控制台区分多个机器人，不会自动修改 QQ 昵称。</span>
+                <label for="bot-triggers">群聊触发词（逗号分隔）</label>
+                <input id="bot-triggers" v-model="triggersDraft" class="input" placeholder="嘉然,然然,Diana,diana" />
+                <span class="hint">群聊中 @ 机器人或以触发词开头会触发；私聊总是触发。</span>
+              </div>
+              <div class="field">
+                <label for="bot-maxinput">单次输入上限（字符）</label>
+                <input id="bot-maxinput" v-model.number="form.max_input_chars" class="input" inputmode="numeric" />
+              </div>
+              <div class="field">
+                <label for="bot-maxreply">单次回复上限（字符）</label>
+                <input id="bot-maxreply" v-model.number="form.max_reply_chars" class="input" inputmode="numeric" />
+              </div>
+              <div class="field">
+                <label for="bot-chunk">分段发送长度</label>
+                <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" />
+              </div>
+              <div class="field">
+                <label for="bot-context">群聊上下文条数</label>
+                <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
+              </div>
+              <div class="field">
+                <label for="bot-concurrency">全局并发数</label>
+                <input id="bot-concurrency" v-model.number="form.max_bot_concurrency" class="input" inputmode="numeric" />
               </div>
               <div class="field wide">
-                <label>接入平台</label>
+                <label class="switch">
+                  <input v-model="form.welcome_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">开启入群欢迎</span>
+                </label>
+              </div>
+              <div v-if="form.welcome_enabled" class="field wide">
+                <label for="bot-welcome">欢迎语</label>
+                <textarea id="bot-welcome" v-model="form.welcome_message" class="textarea" rows="2"></textarea>
+              </div>
+            </div>
+          </section>
+
+          <!-- 回复行为 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>回复行为</h2>
+              <span class="card-sub">发送细节按习惯个性化，默认值即推荐值</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.reply_reference_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">群聊引用原消息</span>
+                </label>
+              </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.mention_user_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">群聊 @ 发送者</span>
+                </label>
+              </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.markdown_to_plain" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">Markdown 转纯文本</span>
+                </label>
+                <span class="hint">QQ 不渲染 Markdown，关闭后按模型原文发送。</span>
+              </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.error_notify_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">出错时在聊天里提示</span>
+                </label>
+              </div>
+              <div v-if="form.error_notify_enabled" class="field">
+                <label for="bot-errprefix">错误提示前缀</label>
+                <input id="bot-errprefix" v-model="form.error_reply_prefix" class="input" placeholder="出错了：" />
+              </div>
+              <div class="field">
+                <label for="bot-retry">发送重试次数（1–5）</label>
+                <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
+              </div>
+              <div class="field">
+                <label for="bot-interval">分段发送间隔（毫秒）</label>
+                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" />
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 准入控制 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>准入控制</h2>
+                <span class="card-sub">决定机器人在哪些群工作、满足什么条件才回复</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label for="bot-admission-mode">群准入模式</label>
                 <AppSelect
-                  :model-value="form.platform ?? ''"
-                  :options="platformOptions"
-                  @update:model-value="(value) => { if (form) form.platform = value; }"
+                  id="bot-admission-mode"
+                  :model-value="admissionMode"
+                  :options="admissionModeOptions"
+                  @update:model-value="setAdmissionMode($event as 'blacklist' | 'whitelist')"
                 />
-                <span class="hint">{{ platformDescription(form.platform) }}</span>
               </div>
-              <div class="field">
-                <label for="bot-owner">主人 QQ 号</label>
-                <input
-                  id="bot-owner"
-                  v-model="form.owner_id"
-                  class="input"
-                  inputmode="numeric"
-                  placeholder="例如 123456789，用于管理指令和私聊登录"
-                />
-                <span class="hint">不需要聊天内管理或 QQ 配对登录时可以留空。</span>
+              <div v-if="admissionMode === 'whitelist'" class="field wide">
+                <label for="bot-allowed-groups">工作群白名单（逗号分隔群号）</label>
+                <input id="bot-allowed-groups" v-model="allowedGroupsDraft" class="input" placeholder="123456789,987654321" />
+                <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
+              </div>
+              <div class="field wide">
+                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" />
+              </div>
+            </div>
+          </section>
+
+        </div>
+
+        <div v-show="editorTab === 'persona'" class="stack">
+          <!-- 提示词 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>提示词</h2>
+                <span class="card-sub">人设、场景上下文和输入兜底均可定制</span>
+              </div>
+              <button class="btn small" type="button" @click="resetPromptDefaults">
+                <RotateCcw :size="14" aria-hidden="true" />
+                恢复内置默认
+              </button>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label for="bot-prompt">基础人设</label>
+                <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
+                <span class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.owner_login_enabled" type="checkbox" />
+                  <input v-model="form.prompt_chinese_slang_hint" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人通过 QQ 私聊确认登录控制台</span>
+                  <span class="switch-label">中文语境提示</span>
                 </label>
-                <span class="hint">开启密码保护后，登录页可把一次性验证码私聊发给主人 QQ；需机器人在线。</span>
-              </div>
-              <div class="field wide">
-                <label for="bot-token">OneBot Access Token</label>
-                <input
-                  id="bot-token"
-                  v-model="tokenDraft"
-                  class="input"
-                  type="password"
-                  autocomplete="off"
-                  :placeholder="form.onebot_access_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '可选，至少 16 位'"
-                />
+                <textarea v-model="form.prompt_chinese_slang_text" class="textarea" rows="3"></textarea>
               </div>
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.enabled" type="checkbox" />
+                  <input v-model="form.prompt_inject_plaintext_rules" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">服务启动时自动运行机器人</span>
+                  <span class="switch-label">注入纯文本输出规范</span>
+                </label>
+                <textarea v-model="form.prompt_plaintext_rules_text" class="textarea" rows="3"></textarea>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.prompt_inject_time" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">注入当前时间</span>
+                </label>
+                <textarea v-model="form.prompt_time_template" class="textarea" rows="2"></textarea>
+                <span class="hint">可用占位符：{datetime}、{weekday}</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.prompt_inject_group_sender" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">注入群聊发言者身份</span>
+                </label>
+                <textarea v-model="form.prompt_group_sender_template" class="textarea" rows="3"></textarea>
+                <span class="hint">可用占位符：{sender}</span>
+              </div>
+              <div class="field wide">
+                <label for="bot-image-only-prompt">仅发送图片时</label>
+                <textarea id="bot-image-only-prompt" v-model="form.prompt_image_only_text" class="textarea" rows="2"></textarea>
+              </div>
+              <div class="field wide">
+                <label for="bot-wake-only-prompt">仅唤醒机器人时</label>
+                <textarea id="bot-wake-only-prompt" v-model="form.prompt_wake_only_text" class="textarea" rows="2"></textarea>
+              </div>
+            </div>
+          </section>
+
+        </div>
+
+        <div v-show="editorTab === 'model'" class="stack">
+          <!-- 模型分配 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>模型分配</h2>
+              <span class="card-sub">按用途选择 Provider 与模型；Provider 在「LLM 配置」页管理</span>
+            </div>
+            <div class="card-body stack" style="gap: 12px">
+              <div class="model-role-row model-role-head" aria-hidden="true">
+                <span>用途</span>
+                <span>Provider / 分组</span>
+                <span>模型</span>
+              </div>
+              <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
+                <span class="model-role-label">{{ role.label }}</span>
+                <AppSelect
+                  :model-value="roleSelectionValue(role.key)"
+                  :options="channelOptionsFor(role.key)"
+                  @update:model-value="(value) => setRoleChannel(role.key, value)"
+                />
+                <AppSelect
+                  v-if="roleForm[role.key]"
+                  :model-value="roleForm[role.key]?.model ?? ''"
+                  :options="modelOptionsFor(role.key)"
+                  @update:model-value="(value) => setRoleModel(role.key, value)"
+                />
+                <span v-else class="muted" style="font-size: 12.5px">{{ role.fallbackHint }}</span>
+              </div>
+              <p class="muted" style="margin: 0; font-size: 12.5px">
+                未分配的用途自动回退「对话」；「对话」也未分配时使用 LLM 配置页的激活配置与降级链。
+              </p>
+            </div>
+          </section>
+
+        </div>
+
+        <div v-show="editorTab === 'advanced'" class="stack">
+          <!-- Agent -->
+          <section class="card">
+            <div class="card-header">
+              <h2>内置 Agent</h2>
+              <span class="badge" :class="form.agent_enabled ? 'accent' : ''">{{ form.agent_enabled ? "已启用" : "未启用" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.agent_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">启用工具循环（文件读写 / 命令 / 浏览器）</span>
+                </label>
+                <span class="hint">Agent 可在工作目录内执行白名单命令，生产环境请谨慎放开。</span>
+              </div>
+              <template v-if="form.agent_enabled">
+                <div class="field">
+                  <label for="agent-dir">工作目录</label>
+                  <input id="agent-dir" v-model="form.agent_work_dir" class="input" placeholder="." />
+                </div>
+                <div class="field">
+                  <label for="agent-steps">最大工具步数（≤8）</label>
+                  <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" inputmode="numeric" />
+                </div>
+                <div class="field wide">
+                  <label for="agent-allow">命令白名单（逗号分隔，* 表示全部）</label>
+                  <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="ls,cat,git" />
+                </div>
+                <div class="field">
+                  <label for="agent-cdp">浏览器 CDP 地址</label>
+                  <input id="agent-cdp" v-model="form.agent_browser_cdp_url" class="input" placeholder="http://127.0.0.1:9222" />
+                </div>
+                <div class="field">
+                  <label for="agent-timeout">命令超时（毫秒）</label>
+                  <input id="agent-timeout" v-model.number="form.agent_command_timeout_ms" class="input" inputmode="numeric" />
+                </div>
+              </template>
+            </div>
+          </section>
+
+          <!-- NoneBot 桥 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>NoneBot 插件桥</h2>
+              <span class="badge" :class="form.nonebot_bridge_enabled ? 'accent' : ''">
+                {{ form.nonebot_bridge_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.nonebot_bridge_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">把 OneBot 事件转发给独立运行的 NoneBot2</span>
                 </label>
               </div>
+              <template v-if="form.nonebot_bridge_enabled">
+                <div class="field wide">
+                  <label for="bridge-endpoint">NoneBot 反向 WebSocket</label>
+                  <input id="bridge-endpoint" v-model="form.nonebot_bridge_endpoint" class="input" placeholder="ws://127.0.0.1:8080/onebot/v11/ws" />
+                </div>
+                <div class="field wide">
+                  <label for="bridge-token">Bridge Token</label>
+                  <input
+                    id="bridge-token"
+                    v-model="bridgeTokenDraft"
+                    class="input"
+                    type="password"
+                    autocomplete="off"
+                    :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 16 位'"
+                  />
+                </div>
+              </template>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- 触发与回复 -->
-        <section class="card">
-          <div class="card-header">
-            <h2>触发与回复</h2>
-          </div>
-          <div class="card-body form-grid">
-            <div class="field wide">
-              <label for="bot-triggers">群聊触发词（逗号分隔）</label>
-              <input id="bot-triggers" v-model="triggersDraft" class="input" placeholder="嘉然,然然,Diana,diana" />
-              <span class="hint">群聊中 @ 机器人或以触发词开头会触发；私聊总是触发。</span>
-            </div>
-            <div class="field">
-              <label for="bot-maxinput">单次输入上限（字符）</label>
-              <input id="bot-maxinput" v-model.number="form.max_input_chars" class="input" inputmode="numeric" />
-            </div>
-            <div class="field">
-              <label for="bot-maxreply">单次回复上限（字符）</label>
-              <input id="bot-maxreply" v-model.number="form.max_reply_chars" class="input" inputmode="numeric" />
-            </div>
-            <div class="field">
-              <label for="bot-chunk">分段发送长度</label>
-              <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" />
-            </div>
-            <div class="field">
-              <label for="bot-context">群聊上下文条数</label>
-              <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
-            </div>
-            <div class="field">
-              <label for="bot-concurrency">全局并发数</label>
-              <input id="bot-concurrency" v-model.number="form.max_bot_concurrency" class="input" inputmode="numeric" />
-            </div>
-            <div class="field wide">
-              <label class="switch">
-                <input v-model="form.welcome_enabled" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">开启入群欢迎</span>
-              </label>
-            </div>
-            <div v-if="form.welcome_enabled" class="field wide">
-              <label for="bot-welcome">欢迎语</label>
-              <textarea id="bot-welcome" v-model="form.welcome_message" class="textarea" rows="2"></textarea>
-            </div>
-          </div>
-        </section>
+        </div>
 
-        <!-- 模型分配 -->
-        <section class="card">
-          <div class="card-header">
-            <h2>模型分配</h2>
-            <span class="card-sub">按用途选择 Provider 与模型；Provider 在「LLM 配置」页管理</span>
-          </div>
-          <div class="card-body stack" style="gap: 12px">
-            <div class="model-role-row model-role-head" aria-hidden="true">
-              <span>用途</span>
-              <span>Provider / 分组</span>
-              <span>模型</span>
-            </div>
-            <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
-              <span class="model-role-label">{{ role.label }}</span>
-              <AppSelect
-                :model-value="roleSelectionValue(role.key)"
-                :options="channelOptionsFor(role.key)"
-                @update:model-value="(value) => setRoleChannel(role.key, value)"
-              />
-              <AppSelect
-                v-if="roleForm[role.key]"
-                :model-value="roleForm[role.key]?.model ?? ''"
-                :options="modelOptionsFor(role.key)"
-                @update:model-value="(value) => setRoleModel(role.key, value)"
-              />
-              <span v-else class="muted" style="font-size: 12.5px">{{ role.fallbackHint }}</span>
-            </div>
-            <p class="muted" style="margin: 0; font-size: 12.5px">
-              未分配的用途自动回退「对话」；「对话」也未分配时使用 LLM 配置页的激活配置与降级链。
-            </p>
-          </div>
-        </section>
-
-        <!-- 回复行为 -->
-        <section class="card">
-          <div class="card-header">
-            <h2>回复行为</h2>
-            <span class="card-sub">发送细节按习惯个性化，默认值即推荐值</span>
-          </div>
-          <div class="card-body form-grid">
-            <div class="field">
-              <label class="switch">
-                <input v-model="form.reply_reference_enabled" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">群聊引用原消息</span>
-              </label>
-            </div>
-            <div class="field">
-              <label class="switch">
-                <input v-model="form.mention_user_enabled" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">群聊 @ 发送者</span>
-              </label>
-            </div>
-            <div class="field">
-              <label class="switch">
-                <input v-model="form.markdown_to_plain" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">Markdown 转纯文本</span>
-              </label>
-              <span class="hint">QQ 不渲染 Markdown，关闭后按模型原文发送。</span>
-            </div>
-            <div class="field">
-              <label class="switch">
-                <input v-model="form.error_notify_enabled" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">出错时在聊天里提示</span>
-              </label>
-            </div>
-            <div v-if="form.error_notify_enabled" class="field">
-              <label for="bot-errprefix">错误提示前缀</label>
-              <input id="bot-errprefix" v-model="form.error_reply_prefix" class="input" placeholder="出错了：" />
-            </div>
-            <div class="field">
-              <label for="bot-retry">发送重试次数（1–5）</label>
-              <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
-            </div>
-            <div class="field">
-              <label for="bot-interval">分段发送间隔（毫秒）</label>
-              <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" />
-              <span class="hint">连续多段之间的停顿，过快容易触发风控。</span>
-            </div>
-          </div>
-        </section>
-
-        <!-- 准入控制 -->
-        <section class="card">
-          <div class="card-header">
-            <div>
-              <h2>准入控制</h2>
-              <span class="card-sub">决定机器人在哪些群工作、满足什么条件才回复</span>
-            </div>
-          </div>
-          <div class="card-body form-grid">
-            <div class="field wide">
-              <label for="bot-admission-mode">群准入模式</label>
-              <AppSelect
-                id="bot-admission-mode"
-                :model-value="admissionMode"
-                :options="admissionModeOptions"
-                @update:model-value="setAdmissionMode($event as 'blacklist' | 'whitelist')"
-              />
-            </div>
-            <div v-if="admissionMode === 'whitelist'" class="field wide">
-              <label for="bot-allowed-groups">工作群白名单（逗号分隔群号）</label>
-              <input id="bot-allowed-groups" v-model="allowedGroupsDraft" class="input" placeholder="123456789,987654321" />
-              <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
-            </div>
-            <div class="field wide">
-              <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" />
-            </div>
-          </div>
-        </section>
-
-        <!-- 提示词 -->
-        <section class="card">
-          <div class="card-header">
-            <div>
-              <h2>提示词</h2>
-              <span class="card-sub">人设、场景上下文和输入兜底均可定制</span>
-            </div>
-            <button class="btn small" type="button" @click="resetPromptDefaults">
-              <RotateCcw :size="14" aria-hidden="true" />
-              恢复内置默认
-            </button>
-          </div>
-          <div class="card-body form-grid">
-            <div class="field wide">
-              <label for="bot-prompt">基础人设</label>
-              <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
-              <span class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。</span>
-            </div>
-            <div class="field wide">
-              <label class="switch">
-                <input v-model="form.prompt_chinese_slang_hint" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">中文语境提示</span>
-              </label>
-              <textarea v-model="form.prompt_chinese_slang_text" class="textarea" rows="3"></textarea>
-            </div>
-            <div class="field wide">
-              <label class="switch">
-                <input v-model="form.prompt_inject_plaintext_rules" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">注入纯文本输出规范</span>
-              </label>
-              <textarea v-model="form.prompt_plaintext_rules_text" class="textarea" rows="3"></textarea>
-            </div>
-            <div class="field wide">
-              <label class="switch">
-                <input v-model="form.prompt_inject_time" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">注入当前时间</span>
-              </label>
-              <textarea v-model="form.prompt_time_template" class="textarea" rows="2"></textarea>
-              <span class="hint">可用占位符：{datetime}、{weekday}</span>
-            </div>
-            <div class="field wide">
-              <label class="switch">
-                <input v-model="form.prompt_inject_group_sender" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">注入群聊发言者身份</span>
-              </label>
-              <textarea v-model="form.prompt_group_sender_template" class="textarea" rows="3"></textarea>
-              <span class="hint">可用占位符：{sender}</span>
-            </div>
-            <div class="field wide">
-              <label for="bot-image-only-prompt">仅发送图片时</label>
-              <textarea id="bot-image-only-prompt" v-model="form.prompt_image_only_text" class="textarea" rows="2"></textarea>
-            </div>
-            <div class="field wide">
-              <label for="bot-wake-only-prompt">仅唤醒机器人时</label>
-              <textarea id="bot-wake-only-prompt" v-model="form.prompt_wake_only_text" class="textarea" rows="2"></textarea>
-            </div>
-          </div>
-        </section>
-
-        <!-- Agent -->
-        <section class="card">
-          <div class="card-header">
-            <h2>内置 Agent</h2>
-            <span class="badge" :class="form.agent_enabled ? 'accent' : ''">{{ form.agent_enabled ? "已启用" : "未启用" }}</span>
-          </div>
-          <div class="card-body form-grid">
-            <div class="field wide">
-              <label class="switch">
-                <input v-model="form.agent_enabled" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">启用工具循环（文件读写 / 命令 / 浏览器）</span>
-              </label>
-              <span class="hint">Agent 可在工作目录内执行白名单命令，生产环境请谨慎放开。</span>
-            </div>
-            <template v-if="form.agent_enabled">
-              <div class="field">
-                <label for="agent-dir">工作目录</label>
-                <input id="agent-dir" v-model="form.agent_work_dir" class="input" placeholder="." />
-              </div>
-              <div class="field">
-                <label for="agent-steps">最大工具步数（≤8）</label>
-                <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" inputmode="numeric" />
-              </div>
-              <div class="field wide">
-                <label for="agent-allow">命令白名单（逗号分隔，* 表示全部）</label>
-                <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="ls,cat,git" />
-              </div>
-              <div class="field">
-                <label for="agent-cdp">浏览器 CDP 地址</label>
-                <input id="agent-cdp" v-model="form.agent_browser_cdp_url" class="input" placeholder="http://127.0.0.1:9222" />
-              </div>
-              <div class="field">
-                <label for="agent-timeout">命令超时（毫秒）</label>
-                <input id="agent-timeout" v-model.number="form.agent_command_timeout_ms" class="input" inputmode="numeric" />
-              </div>
-            </template>
-          </div>
-        </section>
-
-        <!-- NoneBot 桥 -->
-        <section class="card">
-          <div class="card-header">
-            <h2>NoneBot 插件桥</h2>
-            <span class="badge" :class="form.nonebot_bridge_enabled ? 'accent' : ''">
-              {{ form.nonebot_bridge_enabled ? "已启用" : "未启用" }}
-            </span>
-          </div>
-          <div class="card-body form-grid">
-            <div class="field wide">
-              <label class="switch">
-                <input v-model="form.nonebot_bridge_enabled" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-                <span class="switch-label">把 OneBot 事件转发给独立运行的 NoneBot2</span>
-              </label>
-            </div>
-            <template v-if="form.nonebot_bridge_enabled">
-              <div class="field wide">
-                <label for="bridge-endpoint">NoneBot 反向 WebSocket</label>
-                <input id="bridge-endpoint" v-model="form.nonebot_bridge_endpoint" class="input" placeholder="ws://127.0.0.1:8080/onebot/v11/ws" />
-              </div>
-              <div class="field wide">
-                <label for="bridge-token">Bridge Token</label>
-                <input
-                  id="bridge-token"
-                  v-model="bridgeTokenDraft"
-                  class="input"
-                  type="password"
-                  autocomplete="off"
-                  :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 16 位'"
-                />
-              </div>
-            </template>
-          </div>
-        </section>
       </div>
 
       <!-- 侧栏状态 -->
@@ -564,6 +595,18 @@ const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const allowlistDraft = ref("");
 const allowedGroupsDraft = ref("");
+
+// 机器人配置项太多（41 个字段），平铺成一列要滚 6 屏。按「配一次就不动」
+// 和「经常调」的区别分区，每区一屏内看完。
+const editorTabs = [
+  { key: "access", label: "接入" },
+  { key: "behavior", label: "行为" },
+  { key: "persona", label: "人设" },
+  { key: "model", label: "模型" },
+  { key: "advanced", label: "高级" }
+] as const;
+type EditorTab = (typeof editorTabs)[number]["key"];
+const editorTab = ref<EditorTab>("access");
 const platforms = ref<QQBotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
 const platformPickerOpen = ref(false);
@@ -922,6 +965,7 @@ async function editProfile(profile: QQBotConfig): Promise<void> {
     setForm(profile);
   }
   creating.value = false;
+  editorTab.value = "access";
   page.value = "edit";
 }
 
@@ -941,7 +985,8 @@ async function cloneProfile(profile: QQBotConfig): Promise<void> {
   busy.value = true;
   try {
     applyConfig(await cloneQQBotProfile(profile.id));
-    page.value = "edit";
+    editorTab.value = "access";
+  page.value = "edit";
     toastSuccess("已克隆配置档");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "克隆失败");
@@ -964,6 +1009,7 @@ function beginCreate(platform: QQBotPlatform): void {
   });
   creating.value = true;
   platformPickerOpen.value = false;
+  editorTab.value = "access";
   page.value = "edit";
 }
 

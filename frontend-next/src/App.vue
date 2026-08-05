@@ -32,17 +32,6 @@
         <span class="nav-label">{{ item.label }}</span>
       </button>
 
-      <button
-        type="button"
-        class="nav-item"
-        :class="{ active: currentView === 'setup' }"
-        title="引导式配置流程"
-        @click="go('setup')"
-      >
-        <Sparkles :size="17" aria-hidden="true" />
-        <span class="nav-label">配置向导</span>
-      </button>
-
       <div class="nav-footer">
         <span class="cluster" style="gap: 6px">
           <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
@@ -105,7 +94,6 @@ import {
   PanelLeftOpen,
   PlugZap,
   Moon,
-  Sparkles,
   Sun,
   SunMoon,
   Users,
@@ -139,6 +127,7 @@ const updateBehind = computed(() => systemVersion.value?.behind ?? 0);
 const health = ref<HealthResponse | null>(null);
 
 const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
+
 
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
@@ -214,13 +203,11 @@ async function bootApp(): Promise<void> {
   } catch {
     /* 版本信息失败时侧栏只显示占位 */
   }
-  // 首次访问且 LLM 未配置时，自动进入配置向导。
+  // 首次访问且 LLM 未配置时自动进入向导；之后只在总览顶部保留一条引导。
   try {
-    if (!window.localStorage.getItem(SETUP_DISMISS_KEY)) {
-      const config = await getConfig();
-      if (!config.api_key_configured) {
-        navigate("setup");
-      }
+    const config = await getConfig();
+    if (!config.api_key_configured && !window.localStorage.getItem(SETUP_DISMISS_KEY)) {
+      navigate("setup");
       window.localStorage.setItem(SETUP_DISMISS_KEY, "1");
     }
   } catch {
