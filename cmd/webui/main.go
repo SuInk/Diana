@@ -16,6 +16,12 @@ import (
 	"syscall"
 	"time"
 
+	// 把 IANA 时区表编进二进制。运行镜像是不带 tzdata 的 alpine，
+	// Release 里的裸二进制在 Windows 上也没有系统时区库；缺了它
+	// LoadLocation("Asia/Shanghai") 会静默退回 UTC，让按时区配置的
+	// 回复时段整体偏移几个小时。
+	_ "time/tzdata"
+
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/storage"
@@ -33,6 +39,8 @@ var buildVersion = "dev"
 func main() {
 	logWriter, closeLog := setupLogging()
 	defer closeLog()
+	port := envOr("PORT", "18080")
+	host := envOrAny([]string{"HOST", "BACKEND_HOST"}, "")
 
 	// 所有后台 goroutine 共用这个根 context，收到 Ctrl+C 或 SIGTERM 时统一退出。
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -105,6 +113,12 @@ func main() {
 	botRuntime.SetGroupConfigStore(botGroupConfigStore)
 	botRuntime.SetLLMModelLister(modelListFactory)
 	botRuntime.SetAppLogWriter(sqliteStore)
+	localMediaBaseURL := envOr(
+		"DIANA_LOCAL_MEDIA_BASE_URL",
+		"http://"+net.JoinHostPort(displayHost(host), port)+"/media/resolver",
+	)
+	localMediaStore := assistant.NewLocalMediaStore(localMediaBaseURL)
+	botRuntime.SetLocalMediaSharer(localMediaStore)
 	// 统计和 SSE 推送共用同一个事件监听器，Dashboard 依赖这两条链路。
 	statsCollector := webui.NewStatsCollector()
 	eventHub := webui.NewEventHub()
@@ -167,12 +181,15 @@ func main() {
 	statsHandler.Register(router)
 	eventStreamHandler.Register(router)
 	healthHandler.Register(router)
+	// This tokenized endpoint intentionally sits outside /api so a separate
+	// NapCat container can fetch media without a WebUI login session.
+	router.GET("/media/resolver/:token", func(c *gin.Context) {
+		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
+	})
 	// OneBot 路由必须在 SPA fallback 之前注册，否则 NapCat 会拿到前端 HTML 而不是 WebSocket。
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
 	router.NoRoute(spaHandler(http.Dir(frontendDistDir())))
 
-	port := envOr("PORT", "18080")
-	host := envOrAny([]string{"HOST", "BACKEND_HOST"}, "")
 	addr := net.JoinHostPort(host, port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

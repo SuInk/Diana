@@ -272,7 +272,7 @@ Open the WebUI and go to the bot plugins section:
 
 1. View official built-in plugins.
 2. Install or enable a plugin.
-3. The default built-in Go version of `nonebot-plugin-resolver` resolves links from Bilibili, YouTube, X, Xiaohongshu, Douyin, and other platforms as LLM context.
+3. The built-in Go social media resolver extracts and sends images or videos from Bilibili, YouTube, X, Xiaohongshu, and Douyin. Size, duration, and gallery limits are configurable in the plugin settings.
 4. The default built-in Go file parser handles QQ file segments and text file links, extracting file text as LLM context.
 5. The default built-in `LLM config skill` lets the owner change the active provider and model with natural language in chat, for example: `把提供商切到 gemini`, `把模型换成 gemini-2.5-pro`, or `以后用 anthropic 的 claude-sonnet-4-5`; requested models are validated against the backend model list before they are saved.
 
@@ -299,6 +299,12 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `FRONTEND_DIST` | auto-detected | Frontend build output directory; defaults to `frontend-next/dist` |
 | `LOG_PATH` | empty | Log file path; when set, logs are written to both stdout and the file |
 | `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
+| `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Diana media URL reachable by NapCat; use `http://diana:18080/media/resolver` for separate containers |
+| `DIANA_BILI_SESSDATA` | empty | Bilibili `SESSDATA` cookie for protected content |
+| `DIANA_DOUYIN_CK` | empty | Douyin cookie; required for Douyin resolution |
+| `DIANA_XHS_CK` | empty | Xiaohongshu cookie; required for Xiaohongshu resolution |
+| `DIANA_YTDLP_COOKIES` | empty | Path to a Netscape cookie file for yt-dlp |
+| `DIANA_RESOLVER_PROXY` | empty | Proxy used by the social resolver and yt-dlp |
 | `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database path |
 | `DIANA_ADMIN_PASSWORD` | securely generated | Initial administrator password; the username is `admin@diana.local`, then SQLite credentials take precedence |
 | `LLM_PROVIDER` | `openai_compatible` | LLM provider |

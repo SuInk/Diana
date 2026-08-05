@@ -66,6 +66,10 @@ export interface QQBotConfig {
   owner_login_enabled?: boolean;
   group_triggers?: string[];
   disabled_groups?: string[];
+  /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
+  group_admission?: GroupAdmission;
+  /** 全局回复门槛（等级/时段/用户名单）；不设表示无门槛。 */
+  reply_gate?: ReplyGate | null;
   welcome_enabled?: boolean;
   welcome_message?: string;
   system_prompt?: string;
@@ -122,6 +126,8 @@ export interface PluginSettingSpec {
   step?: number;
   unit?: string;
   options?: PluginSettingOption[];
+  /** 凭据类设置；读接口不返回明文，提交空串表示保持原值。 */
+  secret?: boolean;
 }
 
 export interface PluginManifest {
@@ -141,6 +147,16 @@ export interface PluginState {
   enabled: boolean;
   /** 用户显式覆盖的设置值，默认值以 manifest.settings 声明为准。 */
   settings?: Record<string, unknown>;
+  /** 凭据是否已配置；明文永远不会下发。 */
+  secrets_configured?: Record<string, boolean>;
+}
+
+export interface ResolverDependency {
+  name: string;
+  purpose: string;
+  available: boolean;
+  path?: string;
+  version?: string;
 }
 
 export interface QQBotGroupConfig {
@@ -155,7 +171,36 @@ export interface QQBotGroupConfig {
   recent_context_limit?: number;
   max_reply_chars?: number;
   plugin_overrides?: Record<string, boolean>;
+  /** 本群专属准入门槛；不设表示跟随全局。 */
+  reply_gate?: ReplyGate | null;
   updated_at?: string;
+}
+
+/** 群准入模式：blacklist 为默认（除禁用群外都工作），whitelist 只在指定群工作。 */
+export type GroupAdmissionMode = "blacklist" | "whitelist";
+
+export interface GroupAdmission {
+  mode?: GroupAdmissionMode;
+  allowed_groups?: string[];
+}
+
+export interface ReplyGate {
+  /** QQ 群等级门槛，0 表示不限。 */
+  min_group_level?: number;
+  /** 等级拿不到时的策略，默认 allow（放行）。 */
+  level_unknown_policy?: "allow" | "deny";
+  exempt_users?: string[];
+  blocked_users?: string[];
+  active_hours_enabled?: boolean;
+  /** HH:MM；结束早于开始表示跨夜。 */
+  active_start?: string;
+  active_end?: string;
+  /** IANA 时区名，留空用服务器本地时区。 */
+  timezone?: string;
+  /** 静默期主人是否仍可用，默认 true。 */
+  owner_bypass?: boolean | null;
+  /** 静默期提示语，留空表示完全不出声。 */
+  quiet_reply?: string;
 }
 
 export interface QQBotGroupAdminChallengeResponse {
@@ -497,11 +542,19 @@ export function setPluginEnabled(id: string, enabled: boolean): Promise<PluginSt
   });
 }
 
-export function updatePluginSettings(id: string, settings: Record<string, unknown>): Promise<PluginState> {
+export function updatePluginSettings(
+  id: string,
+  settings: Record<string, unknown>,
+  clearSecrets: string[] = []
+): Promise<PluginState> {
   return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/settings`, {
     method: "POST",
-    body: JSON.stringify({ settings })
+    body: JSON.stringify({ settings, clear_secrets: clearSecrets })
   });
+}
+
+export function listResolverDependencies(): Promise<{ resolver: ResolverDependency[] }> {
+  return requestJSON<{ resolver: ResolverDependency[] }>("/api/assistant/plugins/dependencies");
 }
 
 export function requestQQBotGroupAdminChallenge(groupID: string, userID: string): Promise<QQBotGroupAdminChallengeResponse> {

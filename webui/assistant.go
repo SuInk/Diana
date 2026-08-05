@@ -53,6 +53,9 @@ type pluginEnabledPayload struct {
 type pluginSettingsPayload struct {
 	// Settings 是要保存的覆盖值全集，空 map 表示恢复默认。
 	Settings map[string]any `json:"settings"`
+	// ClearSecrets 列出要显式清除的凭据键。凭据不会因为没提交或提交空串
+	// 而被清空，只有出现在这里才会真的删掉。
+	ClearSecrets []string `json:"clear_secrets,omitempty"`
 }
 
 type groupTestPayload struct {
@@ -179,6 +182,7 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 		router.POST(base+"/group-test", h.sendGroupTest)
 	}
 	router.GET(base+"/plugins", h.listPlugins)
+	router.GET(base+"/plugins/dependencies", h.pluginDependencies)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
 	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
@@ -439,7 +443,13 @@ func (h *QQBotHandler) sendGroupTest(c *gin.Context) {
 
 // listPlugins 返回机器人插件列表。
 func (h *QQBotHandler) listPlugins(c *gin.Context) {
-	c.JSON(http.StatusOK, h.runtime.Plugins().List())
+	c.JSON(http.StatusOK, assistant.RedactStates(h.runtime.Plugins().List()))
+}
+
+// pluginDependencies 返回解析器外部依赖的探测结果，让控制台能直接看出
+// yt-dlp / ffmpeg / node 是否齐全，而不是等用户发链接后才报错。
+func (h *QQBotHandler) pluginDependencies(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"resolver": assistant.ResolverDependencies()})
 }
 
 // installPlugin 处理插件安装请求。
@@ -451,7 +461,7 @@ func (h *QQBotHandler) installPlugin(c *gin.Context) {
 	}
 	h.persistState()
 	recordRequestOperation(c, h.logs, "assistant.plugin.install", "机器人插件已安装", state.Manifest.ID, pluginLogMetadata(state))
-	c.JSON(http.StatusOK, state)
+	c.JSON(http.StatusOK, state.Redacted())
 }
 
 // uninstallPlugin 处理插件卸载请求。
@@ -463,7 +473,7 @@ func (h *QQBotHandler) uninstallPlugin(c *gin.Context) {
 	}
 	h.persistState()
 	recordRequestOperation(c, h.logs, "assistant.plugin.uninstall", "机器人插件已卸载", state.Manifest.ID, pluginLogMetadata(state))
-	c.JSON(http.StatusOK, state)
+	c.JSON(http.StatusOK, state.Redacted())
 }
 
 // setPluginEnabled 处理插件启用状态变更请求。
@@ -480,7 +490,7 @@ func (h *QQBotHandler) setPluginEnabled(c *gin.Context) {
 	}
 	h.persistState()
 	recordRequestOperation(c, h.logs, "assistant.plugin.enabled", "机器人插件开关已更新", state.Manifest.ID, pluginLogMetadata(state))
-	c.JSON(http.StatusOK, state)
+	c.JSON(http.StatusOK, state.Redacted())
 }
 
 // updatePluginSettings 处理插件详细设置变更请求。
@@ -490,14 +500,14 @@ func (h *QQBotHandler) updatePluginSettings(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.plugin.settings", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
 		return
 	}
-	state, err := h.runtime.Plugins().UpdateSettings(c.Param("id"), payload.Settings)
+	state, err := h.runtime.Plugins().UpdateSettingsWithClears(c.Param("id"), payload.Settings, payload.ClearSecrets)
 	if err != nil {
 		h.writePluginError(c, "assistant.plugin.settings", err, c.Param("id"))
 		return
 	}
 	h.persistState()
 	recordRequestOperation(c, h.logs, "assistant.plugin.settings", "机器人插件设置已更新", state.Manifest.ID, pluginLogMetadata(state))
-	c.JSON(http.StatusOK, state)
+	c.JSON(http.StatusOK, state.Redacted())
 }
 
 // writePluginError 按插件错误类型返回合适的 HTTP 状态码。

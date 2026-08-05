@@ -184,7 +184,7 @@ func (h *QQBotHandler) verifyGroupAdminChallenge(c *gin.Context) {
 		Token:     token,
 		ExpiresAt: expiresAt,
 		Config:    config,
-		Plugins:   h.runtime.Plugins().List(),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().List()),
 	})
 }
 
@@ -199,7 +199,7 @@ func (h *QQBotHandler) getGroupAdminConfig(c *gin.Context) {
 		UserID:    session.userID,
 		ExpiresAt: session.expiresAt,
 		Config:    h.groupConfigForResponse(session.groupID),
-		Plugins:   h.runtime.Plugins().List(),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().List()),
 	})
 }
 
@@ -226,7 +226,7 @@ func (h *QQBotHandler) saveGroupAdminConfig(c *gin.Context) {
 		UserID:    session.userID,
 		ExpiresAt: session.expiresAt,
 		Config:    saved.WithDefaults(session.groupID, h.runtime.Config()),
-		Plugins:   h.runtime.Plugins().List(),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().List()),
 	})
 }
 

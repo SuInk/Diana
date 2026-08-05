@@ -291,6 +291,35 @@
           </div>
         </section>
 
+        <!-- 准入控制 -->
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2>准入控制</h2>
+              <span class="card-sub">决定机器人在哪些群工作、满足什么条件才回复</span>
+            </div>
+          </div>
+          <div class="card-body form-grid">
+            <div class="field wide">
+              <label for="bot-admission-mode">群准入模式</label>
+              <AppSelect
+                id="bot-admission-mode"
+                :model-value="admissionMode"
+                :options="admissionModeOptions"
+                @update:model-value="setAdmissionMode($event as 'blacklist' | 'whitelist')"
+              />
+            </div>
+            <div v-if="admissionMode === 'whitelist'" class="field wide">
+              <label for="bot-allowed-groups">工作群白名单（逗号分隔群号）</label>
+              <input id="bot-allowed-groups" v-model="allowedGroupsDraft" class="input" placeholder="123456789,987654321" />
+              <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
+            </div>
+            <div class="field wide">
+              <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" />
+            </div>
+          </div>
+        </section>
+
         <!-- 提示词 -->
         <section class="card">
           <div class="card-header">
@@ -523,6 +552,7 @@ import {
   type QQBotPlatform
 } from "../api";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
+import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { pushStatusSnapshot, stream } from "../stream";
 import { toastError, toastSuccess } from "../toast";
 
@@ -533,10 +563,36 @@ const tokenDraft = ref("");
 const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const allowlistDraft = ref("");
+const allowedGroupsDraft = ref("");
 const platforms = ref<QQBotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
 const platformPickerOpen = ref(false);
 const creating = ref(false);
+
+const admissionModeOptions: AppSelectOption[] = [
+  { value: "blacklist", label: "黑名单（默认）", hint: "除禁用群外都工作" },
+  { value: "whitelist", label: "白名单", hint: "只在指定群工作" }
+];
+
+const admissionMode = computed(() => form.value?.group_admission?.mode ?? "blacklist");
+
+function setAdmissionMode(mode: "blacklist" | "whitelist"): void {
+  if (!form.value) {
+    return;
+  }
+  form.value.group_admission = { ...(form.value.group_admission ?? {}), mode };
+}
+
+// 全局门槛用 null 表示「不设门槛」，和群级的「跟随全局」是不同语义，
+// 所以全局表单不给「跟随」那一档。
+const globalGate = computed({
+  get: () => form.value?.reply_gate ?? {},
+  set: (value) => {
+    if (form.value) {
+      form.value.reply_gate = value;
+    }
+  }
+});
 
 const status = computed(() => stream.status);
 const profiles = computed<QQBotConfig[]>(() => profileSet.value?.profiles ?? []);
@@ -730,6 +786,7 @@ function setForm(config: QQBotConfig): void {
   };
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
+  allowedGroupsDraft.value = (config.group_admission?.allowed_groups ?? []).join(",");
   tokenDraft.value = "";
   bridgeTokenDraft.value = "";
   const roles: typeof roleForm.value = {};
@@ -801,6 +858,10 @@ async function save(): Promise<void> {
       agent_command_allowlist: splitList(allowlistDraft.value),
       onebot_access_token: tokenDraft.value.trim() || undefined,
       nonebot_bridge_token: bridgeTokenDraft.value.trim() || undefined,
+      group_admission: {
+        mode: admissionMode.value,
+        allowed_groups: splitList(allowedGroupsDraft.value)
+      },
       model_roles: modelRoles
     };
     const saved = await saveQQBotConfig(payload);

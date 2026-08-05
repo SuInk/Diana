@@ -36,6 +36,7 @@
             <span v-if="(group.group_triggers?.length ?? 0) > 0" class="badge">触发词 {{ group.group_triggers?.length }}</span>
             <span v-if="overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.welcome_enabled" class="badge">入群欢迎</span>
+            <span v-if="group.reply_gate" class="badge accent">专属准入</span>
           </div>
           <p class="plugin-card-desc">
             {{ group.system_prompt ? truncate(group.system_prompt, 60) : "沿用全局人设与默认行为。" }}
@@ -99,6 +100,10 @@
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
         <div class="field wide">
+          <label>本群准入条件</label>
+          <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" />
+        </div>
+        <div class="field wide">
           <label>本群插件开关（未设置跟随全局）</label>
           <div class="row-list" style="margin-top: 6px">
             <div v-for="plugin in plugins" :key="plugin.manifest.id" class="row-item">
@@ -138,6 +143,7 @@ import { Plus, Save, SlidersHorizontal } from "@lucide/vue";
 import { listQQBotGroups, saveQQBotGroup, type PluginState, type QQBotGroupConfig } from "../api";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
+import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { toastError, toastSuccess } from "../toast";
 
 const groups = ref<QQBotGroupConfig[]>([]);

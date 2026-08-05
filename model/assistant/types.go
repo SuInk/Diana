@@ -38,13 +38,21 @@ type MessageEvent struct {
 	RawMessage  string           `json:"raw_message,omitempty"`
 	Segments    []MessageSegment `json:"segments,omitempty"`
 	SenderName  string           `json:"sender_name,omitempty"`
-	ToMe        bool             `json:"to_me,omitempty"`
+	// SenderRole 为 owner/admin/member；SenderLevel 是群等级（按群独立累积，
+	// 拿不到时为 0）；SenderTitle 是群头衔。部分 OneBot 实现不会在消息事件里
+	// 带 level，需要时由 memberCache 走 get_group_member_info 兜底。
+	SenderRole  string `json:"sender_role,omitempty"`
+	SenderLevel int    `json:"sender_level,omitempty"`
+	SenderTitle string `json:"sender_title,omitempty"`
+	ToMe        bool   `json:"to_me,omitempty"`
 }
 
 type OutgoingMessage struct {
 	GroupID        string
 	UserID         string
 	Text           string
+	ImageURLs      []string
+	VideoURLs      []string
 	ReplyMessageID string
 	MentionUserID  string
 }
@@ -94,9 +102,14 @@ type BotConfig struct {
 	OwnerLoginEnabled bool     `json:"owner_login_enabled,omitempty"`
 	GroupTriggers     []string `json:"group_triggers,omitempty"`
 	DisabledGroups    []string `json:"disabled_groups,omitempty"`
-	WelcomeEnabled    bool     `json:"welcome_enabled,omitempty"`
-	WelcomeMessage    string   `json:"welcome_message,omitempty"`
-	SystemPrompt      string   `json:"system_prompt,omitempty"`
+	// GroupAdmission 决定在哪些群工作；Mode 留空等同 blacklist，
+	// DisabledGroups 行为不变。
+	GroupAdmission GroupAdmission `json:"group_admission,omitempty"`
+	// ReplyGate 是全局回复门槛（等级/时段/用户名单），nil 表示不设门槛。
+	ReplyGate      *ReplyGate `json:"reply_gate,omitempty"`
+	WelcomeEnabled bool       `json:"welcome_enabled,omitempty"`
+	WelcomeMessage string     `json:"welcome_message,omitempty"`
+	SystemPrompt   string     `json:"system_prompt,omitempty"`
 	// 回复行为个性化；*bool 为 nil 表示沿用默认值（开启），旧数据自动兼容。
 	ReplyReferenceEnabled *bool  `json:"reply_reference_enabled,omitempty"`
 	MentionUserEnabled    *bool  `json:"mention_user_enabled,omitempty"`
@@ -185,7 +198,9 @@ type GroupConfig struct {
 	RecentContextLimit int             `json:"recent_context_limit,omitempty"`
 	MaxReplyChars      int             `json:"max_reply_chars,omitempty"`
 	PluginOverrides    map[string]bool `json:"plugin_overrides,omitempty"`
-	UpdatedAt          time.Time       `json:"updated_at,omitempty"`
+	// ReplyGate 非 nil 时整体替换全局门槛，nil 表示跟随全局。
+	ReplyGate *ReplyGate `json:"reply_gate,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at,omitempty"`
 }
 
 type GroupConfigSet struct {
@@ -212,6 +227,8 @@ type ConfigPayload struct {
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
+	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
+	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
@@ -294,6 +311,10 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	}
 	if cfg.PluginOverrides == nil {
 		cfg.PluginOverrides = map[string]bool{}
+	}
+	if cfg.ReplyGate != nil {
+		normalized := cfg.ReplyGate.WithDefaults()
+		cfg.ReplyGate = &normalized
 	}
 	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
 	if cfg.UpdatedAt.IsZero() {
@@ -518,6 +539,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.DisabledGroups == nil {
 		cfg.DisabledGroups = append([]string(nil), defaults.DisabledGroups...)
 	}
+	cfg.GroupAdmission = cfg.GroupAdmission.WithDefaults()
+	if cfg.ReplyGate != nil {
+		normalized := cfg.ReplyGate.WithDefaults()
+		cfg.ReplyGate = &normalized
+	}
 	if strings.TrimSpace(cfg.SystemPrompt) == "" {
 		cfg.SystemPrompt = defaults.SystemPrompt
 	}
@@ -649,6 +675,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		OwnerLoginEnabled:            cfg.OwnerLoginEnabled,
 		GroupTriggers:                append([]string(nil), cfg.GroupTriggers...),
 		DisabledGroups:               append([]string(nil), cfg.DisabledGroups...),
+		GroupAdmission:               cfg.GroupAdmission.WithDefaults(),
+		ReplyGate:                    cfg.ReplyGate.Clone(),
 		WelcomeEnabled:               cfg.WelcomeEnabled,
 		WelcomeMessage:               cfg.WelcomeMessage,
 		SystemPrompt:                 cfg.SystemPrompt,
@@ -723,6 +751,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		OwnerLoginEnabled:          payload.OwnerLoginEnabled,
 		GroupTriggers:              payload.GroupTriggers,
 		DisabledGroups:             payload.DisabledGroups,
+		GroupAdmission:             payload.GroupAdmission,
+		ReplyGate:                  payload.ReplyGate.Clone(),
 		WelcomeEnabled:             payload.WelcomeEnabled,
 		WelcomeMessage:             payload.WelcomeMessage,
 		SystemPrompt:               payload.SystemPrompt,

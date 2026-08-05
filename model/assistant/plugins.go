@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,45 @@ type PluginState struct {
 	Enabled   bool           `json:"enabled"`
 	// Settings 只保存用户显式覆盖的值，默认值以 Manifest.Settings 声明为准。
 	Settings map[string]any `json:"settings,omitempty"`
+	// SecretsConfigured 只在脱敏后的响应里出现，标记哪些凭据已经配置过。
+	// 明文永远不出现在读接口里。
+	SecretsConfigured map[string]bool `json:"secrets_configured,omitempty"`
+}
+
+// Redacted 返回可以安全交给 WebUI 的副本：凭据类设置抹掉明文，
+// 只保留「是否已配置」的标记。所有对外返回 PluginState 的接口都必须走这里。
+func (s PluginState) Redacted() PluginState {
+	secrets := secretSettingKeys(s.Manifest.Settings)
+	if len(secrets) == 0 {
+		return s
+	}
+	out := s
+	out.Settings = make(map[string]any, len(s.Settings))
+	out.SecretsConfigured = make(map[string]bool, len(secrets))
+	for key := range secrets {
+		out.SecretsConfigured[key] = false
+	}
+	for key, value := range s.Settings {
+		if !secrets[key] {
+			out.Settings[key] = value
+			continue
+		}
+		text, _ := value.(string)
+		out.SecretsConfigured[key] = strings.TrimSpace(text) != ""
+	}
+	if len(out.Settings) == 0 {
+		out.Settings = nil
+	}
+	return out
+}
+
+// RedactStates 批量脱敏。
+func RedactStates(states []PluginState) []PluginState {
+	out := make([]PluginState, 0, len(states))
+	for _, state := range states {
+		out = append(out, state.Redacted())
+	}
+	return out
 }
 
 type PluginRequest struct {
@@ -47,9 +88,11 @@ type PluginRequest struct {
 }
 
 type PluginResponse struct {
-	Handled bool   `json:"handled"`
-	Context string `json:"context,omitempty"`
-	Reply   string `json:"reply,omitempty"`
+	Handled   bool     `json:"handled"`
+	Context   string   `json:"context,omitempty"`
+	Reply     string   `json:"reply,omitempty"`
+	ImageURLs []string `json:"image_urls,omitempty"`
+	VideoURLs []string `json:"video_urls,omitempty"`
 }
 
 type Plugin interface {
@@ -64,6 +107,8 @@ type PluginManager struct {
 }
 
 var ErrPluginNotFound = errors.New("qqbot: plugin not found")
+
+const resolverPluginID = "official.nonebot-plugin-resolver-go"
 
 // NewPluginManager 创建插件管理器并登记插件目录。
 func NewPluginManager(plugins ...Plugin) *PluginManager {
@@ -106,6 +151,23 @@ func (m *PluginManager) Get(id string) (PluginState, bool) {
 	defer m.mu.RUnlock()
 	state, ok := m.states[id]
 	return state, ok
+}
+
+// EnabledWithOverrides reports the effective plugin switch for one event.
+func (m *PluginManager) EnabledWithOverrides(id string, overrides map[string]bool) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	state, ok := m.states[id]
+	if !ok || !state.Installed {
+		return false
+	}
+	if enabled, overridden := overrides[id]; overridden {
+		return enabled
+	}
+	return state.Enabled
 }
 
 // Snapshot 返回插件状态快照用于持久化。
@@ -177,7 +239,17 @@ func (m *PluginManager) Uninstall(id string) (PluginState, error) {
 }
 
 // UpdateSettings 校验并整体替换插件的设置覆盖值，传入空 map 表示恢复全部默认。
+// 凭据类设置不会被这个接口清空，要清除请用 UpdateSettingsWithClears。
 func (m *PluginManager) UpdateSettings(id string, values map[string]any) (PluginState, error) {
+	return m.UpdateSettingsWithClears(id, values, nil)
+}
+
+// UpdateSettingsWithClears 在保存设置的同时显式清除指定的凭据。
+//
+// 凭据的保留规则：读接口只回传「是否已配置」，前端既可能提交空串、也可能
+// 整个键都不提交（值等于默认值时会被过滤掉）。这两种都必须视为「没改动」，
+// 否则用户改一下超时时间就会把 Cookie 弄丢；真要清除只能走 clear 参数。
+func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]any, clear []string) (PluginState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	plugin, ok := m.catalog[id]
@@ -194,6 +266,28 @@ func (m *PluginManager) UpdateSettings(id string, values map[string]any) (Plugin
 	}
 	state := m.states[id]
 	state.Manifest = manifest
+	cleared := map[string]bool{}
+	for _, key := range clear {
+		cleared[strings.TrimSpace(key)] = true
+	}
+	for key := range secretSettingKeys(manifest.Settings) {
+		if cleared[key] {
+			delete(normalized, key)
+			continue
+		}
+		// 空串和「整个键没提交」都表示没改动，沿用已存的值。
+		if text, _ := normalized[key].(string); strings.TrimSpace(text) != "" {
+			continue
+		}
+		if previous, ok := state.Settings[key]; ok {
+			if normalized == nil {
+				normalized = map[string]any{}
+			}
+			normalized[key] = previous
+		} else {
+			delete(normalized, key)
+		}
+	}
 	state.Settings = normalized
 	m.states[id] = state
 	return state, nil
@@ -225,6 +319,7 @@ func (m *PluginManager) Run(ctx context.Context, req PluginRequest) []PluginResp
 // RunWithOverrides 依次执行插件，并允许调用方按会话覆盖已安装插件的启用状态。
 func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest, overrides map[string]bool) []PluginResponse {
 	type runnable struct {
+		id       string
 		plugin   Plugin
 		settings SettingValues
 	}
@@ -238,6 +333,7 @@ func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest,
 		}
 		if state.Installed && enabled {
 			plugins = append(plugins, runnable{
+				id:     id,
 				plugin: plugin,
 				// 生效设置在锁内合并成快照，插件执行期间的设置变更不影响本次请求。
 				settings: effectivePluginSettings(state.Manifest.Settings, state.Settings),
@@ -250,14 +346,50 @@ func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest,
 	for _, item := range plugins {
 		pluginReq := req
 		pluginReq.Settings = item.settings
-		resp, err := item.plugin.Handle(ctx, pluginReq)
-		if err != nil || resp == nil || !resp.Handled {
+		resp, err := safeHandlePlugin(ctx, item.id, item.plugin, pluginReq)
+		if err != nil {
+			recordPluginFailure(ctx, req, item.id, err)
+			continue
+		}
+		if resp == nil || !resp.Handled {
 			// 插件失败或未处理不打断主回复链路，运行时会继续调用其它插件/LLM。
 			continue
 		}
 		responses = append(responses, *resp)
 	}
 	return responses
+}
+
+func safeHandlePlugin(ctx context.Context, id string, plugin Plugin, req PluginRequest) (resp *PluginResponse, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			resp = nil
+			err = fmt.Errorf("qqbot: plugin %q panicked: %v", id, recovered)
+		}
+	}()
+	return plugin.Handle(ctx, req)
+}
+
+func recordPluginFailure(ctx context.Context, req PluginRequest, id string, err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("plugin %s failed: %v", id, err)
+	if req.AppLogs == nil {
+		return
+	}
+	_ = req.AppLogs.AppendLog(ctx, applog.Entry{
+		Kind:    applog.KindError,
+		Level:   applog.LevelError,
+		Action:  "assistant.plugin.execute",
+		Message: "插件执行失败",
+		Detail:  err.Error(),
+		Actor:   strings.TrimSpace(req.Event.UserID),
+		Target:  id,
+		Metadata: map[string]any{
+			"group_id": req.Event.GroupID,
+		},
+	})
 }
 
 // savedStateDisabled 判断保存状态里插件是否被显式关闭。
@@ -276,6 +408,18 @@ const (
 	resolverSettingSummaryMaxRunes  = "summary_max_runes"
 	resolverSettingCacheTTLMinutes  = "cache_ttl_minutes"
 	resolverSettingUserAgent        = "user_agent"
+	resolverSettingDownloadMedia    = "download_media"
+	resolverSettingMaxVideoMB       = "max_video_mb"
+	resolverSettingMaxDuration      = "max_video_duration_seconds"
+	resolverSettingMaxImages        = "max_images"
+	resolverSettingMaxVideoHeight   = "max_video_height"
+	// 凭据类设置。这些值最容易过期、最需要频繁更换，只靠环境变量意味着
+	// Docker 用户改一次 Cookie 就得重启容器。
+	resolverSettingBiliSessdata = "bili_sessdata"
+	resolverSettingDouyinCookie = "douyin_cookie"
+	resolverSettingXHSCookie    = "xhs_cookie"
+	resolverSettingYTDLPCookies = "ytdlp_cookies_path"
+	resolverSettingProxyURL     = "proxy_url"
 
 	defaultResolverMaxLinks        = 5
 	defaultResolverTimeoutSeconds  = 8
@@ -292,9 +436,10 @@ const (
 type browserFetchFunc func(ctx context.Context, cdpURL string, pageURL string) (agent.RenderedPage, error)
 
 type ResolverPlugin struct {
-	client       *http.Client
-	cache        resolverCache
-	browserFetch browserFetchFunc
+	client          *http.Client
+	cache           resolverCache
+	browserFetch    browserFetchFunc
+	mediaDownloader func(context.Context, string) string
 }
 
 // NewResolverPlugin 创建官方内置链接解析插件。
@@ -304,7 +449,8 @@ func NewResolverPlugin(client *http.Client) *ResolverPlugin {
 		client = &http.Client{Timeout: maxResolverTimeoutSeconds * time.Second}
 	}
 	return &ResolverPlugin{
-		client: client,
+		client:          client,
+		mediaDownloader: downloadPlatformVideoFile,
 		browserFetch: func(ctx context.Context, cdpURL string, pageURL string) (agent.RenderedPage, error) {
 			return agent.FetchRenderedPage(ctx, cdpURL, pageURL, resolverBrowserTimeout, 4000)
 		},
@@ -314,14 +460,69 @@ func NewResolverPlugin(client *http.Client) *ResolverPlugin {
 // Manifest 返回链接解析插件清单。
 func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID:          "official.nonebot-plugin-resolver-go",
+		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.1.0",
-		Description: "官方内置 Go 版链接解析插件，兼容 QQ/NapCat 场景下常见 B 站、YouTube、X、小红书、抖音等链接上下文。",
+		Version:     "0.2.0",
+		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频。",
 		Official:    true,
 		BuiltIn:     true,
-		Permissions: []string{"network:http", "message:read"},
+		Permissions: []string{"network:http", "message:read", "message:write", "filesystem:temp", "process:media"},
 		Settings: []PluginSettingSpec{
+			{
+				Key:         resolverSettingDownloadMedia,
+				Label:       "下载并发送媒体",
+				Description: "识别支持的平台后下载视频或提取图集，并通过当前机器人发送；关闭后只提供网页上下文。",
+				Type:        PluginSettingTypeBool,
+				Default:     true,
+			},
+			{
+				Key:         resolverSettingMaxVideoMB,
+				Label:       "视频大小上限",
+				Description: "下载和发送的单个视频最大体积。",
+				Type:        PluginSettingTypeNumber,
+				Default:     defaultVideoMaxMB,
+				Min:         settingRange(5),
+				Max:         settingRange(500),
+				Step:        5,
+				Unit:        "MB",
+			},
+			{
+				Key:         resolverSettingMaxDuration,
+				Label:       "视频时长上限",
+				Description: "超过该时长的视频只返回元数据，不执行下载。",
+				Type:        PluginSettingTypeNumber,
+				Default:     defaultVideoMaxDuration,
+				Min:         settingRange(30),
+				Max:         settingRange(3600),
+				Step:        30,
+				Unit:        "秒",
+			},
+			{
+				Key:         resolverSettingMaxImages,
+				Label:       "图集发送上限",
+				Description: "单条社交链接最多发送的图片数量。",
+				Type:        PluginSettingTypeNumber,
+				Default:     9,
+				Min:         settingRange(1),
+				Max:         settingRange(20),
+				Step:        1,
+				Unit:        "张",
+			},
+			{
+				Key:   resolverSettingMaxVideoHeight,
+				Label: "视频清晰度上限",
+				// 注意和大小上限的联动：调高清晰度但不放大 max_video_mb，
+				// 结果是下完才发现超限被丢弃，白费带宽和时间。
+				Description: "下载时选择的最高分辨率。调高后建议同步放宽「视频大小上限」，否则容易下完才因超限被丢弃。",
+				Type:        PluginSettingTypeSelect,
+				Default:     "720",
+				Options: []PluginSettingOption{
+					{Value: "480", Label: "480p"},
+					{Value: "720", Label: "720p（默认）"},
+					{Value: "1080", Label: "1080p"},
+					{Value: "0", Label: "不限制（可能很大）"},
+				},
+			},
 			{
 				Key:         resolverSettingFetchTitle,
 				Label:       "抓取网页标题",
@@ -402,7 +603,79 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
+			{
+				Key:         resolverSettingBiliSessdata,
+				Label:       "B 站 SESSDATA",
+				Description: "B 站登录 Cookie 中的 SESSDATA，用于需要登录态的内容。留空则沿用 DIANA_BILI_SESSDATA 环境变量。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+			},
+			{
+				Key:         resolverSettingDouyinCookie,
+				Label:       "抖音 Cookie",
+				Description: "抖音解析必需，不配置无法解析。留空则沿用 DIANA_DOUYIN_CK 环境变量。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+			},
+			{
+				Key:         resolverSettingXHSCookie,
+				Label:       "小红书 Cookie",
+				Description: "小红书解析必需，不配置无法解析。留空则沿用 DIANA_XHS_CK 环境变量。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+			},
+			{
+				Key:         resolverSettingYTDLPCookies,
+				Label:       "yt-dlp Cookie 文件路径",
+				Description: "Netscape 格式 Cookie 文件路径，供 YouTube/X 等需要登录的内容使用。留空则沿用 DIANA_YTDLP_COOKIES 环境变量。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
+			{
+				Key:         resolverSettingProxyURL,
+				Label:       "解析代理",
+				Description: "社交媒体解析与 yt-dlp 使用的代理地址，例如 http://127.0.0.1:7890。留空则沿用 DIANA_RESOLVER_PROXY 环境变量。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
 		},
+	}
+}
+
+// resolverMaxHeightFromSetting 把清晰度选项解析成像素高度，"0" 表示不限。
+func resolverMaxHeightFromSetting(settings SettingValues) int {
+	raw := strings.TrimSpace(settings.String(resolverSettingMaxVideoHeight, ""))
+	if raw == "" {
+		return defaultVideoMaxHeight
+	}
+	height, err := strconv.Atoi(raw)
+	if err != nil || height < 0 {
+		return defaultVideoMaxHeight
+	}
+	return height
+}
+
+// resolverCredentials 是一次解析用到的凭据与代理，由插件设置注入、
+// 缺省时回落环境变量，这样现有部署不改任何东西也不会坏。
+type resolverCredentials struct {
+	BiliSessdata string
+	DouyinCookie string
+	XHSCookie    string
+	YTDLPCookies string
+	ProxyURL     string
+}
+
+// resolverCredentialsFromSettings 读取插件设置，未配置的项留空交给环境变量兜底。
+func resolverCredentialsFromSettings(settings SettingValues) resolverCredentials {
+	return resolverCredentials{
+		BiliSessdata: strings.TrimSpace(settings.String(resolverSettingBiliSessdata, "")),
+		DouyinCookie: strings.TrimSpace(settings.String(resolverSettingDouyinCookie, "")),
+		XHSCookie:    strings.TrimSpace(settings.String(resolverSettingXHSCookie, "")),
+		YTDLPCookies: strings.TrimSpace(settings.String(resolverSettingYTDLPCookies, "")),
+		ProxyURL:     strings.TrimSpace(settings.String(resolverSettingProxyURL, "")),
 	}
 }
 
@@ -439,6 +712,23 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	}
 
 	parts := make([]string, 0, len(urls))
+	directParts := make([]string, 0, len(urls))
+	imageURLs := make([]string, 0)
+	videoURLs := make([]string, 0)
+	// PluginManager always injects effective settings. Direct unit callers that
+	// omit Settings keep the legacy metadata-only behavior and never perform a
+	// real media download unexpectedly.
+	downloadMedia := len(req.Settings) > 0 && req.Settings.Bool(resolverSettingDownloadMedia, true)
+	// 凭据挂在 ctx 上一路带到底层下载函数；没在设置里配的项会在取值时
+	// 回落到对应环境变量，现有部署不受影响。
+	ctx = withResolverCredentials(ctx, resolverCredentialsFromSettings(req.Settings))
+	mediaCtx := withResolverMediaLimits(
+		ctx,
+		req.Settings.Int(resolverSettingMaxVideoMB, defaultVideoMaxMB),
+		req.Settings.Int(resolverSettingMaxDuration, defaultVideoMaxDuration),
+		resolverMaxHeightFromSetting(req.Settings),
+	)
+	maxImages := req.Settings.Int(resolverSettingMaxImages, 9)
 	for _, raw := range urls {
 		if len(opts.excludePlatforms) > 0 {
 			if parsed, err := url.Parse(raw); err == nil {
@@ -449,15 +739,32 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 				}
 			}
 		}
+		if downloadMedia {
+			if media := p.resolveSocialMedia(mediaCtx, req, raw, maxImages); media.Handled {
+				if strings.TrimSpace(media.Context) != "" {
+					parts = append(parts, media.Context)
+					directParts = append(directParts, media.Context)
+				}
+				imageURLs = append(imageURLs, media.ImageURLs...)
+				videoURLs = append(videoURLs, media.VideoURLs...)
+				continue
+			}
+		}
 		parts = append(parts, p.resolveURL(ctx, raw, opts))
 	}
 	if len(parts) == 0 {
 		return nil, nil
 	}
-	return &PluginResponse{
-		Handled: true,
-		Context: "链接解析结果：\n" + strings.Join(parts, "\n"),
-	}, nil
+	response := &PluginResponse{
+		Handled:   true,
+		Context:   "链接解析结果：\n" + strings.Join(parts, "\n"),
+		ImageURLs: dedupeMediaURLs(imageURLs),
+		VideoURLs: dedupeMediaURLs(videoURLs),
+	}
+	if len(directParts) > 0 {
+		response.Reply = strings.Join(directParts, "\n\n")
+	}
+	return response, nil
 }
 
 var urlPattern = regexp.MustCompile(`https?://[^\s<>"'，。！？、]+`)
@@ -525,19 +832,35 @@ func (p *ResolverPlugin) resolveURL(ctx context.Context, raw string, opts resolv
 
 // platformName 根据域名识别常见平台名称。
 // resolverPlatforms 是链接解析认识的平台清单；排除平台勾选项与平台识别共用同一张表。
+//
+// media 表示这个平台有真正的图片/视频提取分支（见 resolveSocialMedia 的分发）。
+// 为 false 的平台只能抓标题和描述——界面上必须区分标注，否则用户看到「微博」
+// 会以为支持解析视频。
 var resolverPlatforms = []struct {
 	key   string
 	label string
 	hosts []string
+	media bool
 }{
-	{"bilibili", "Bilibili", []string{"bilibili.com", "b23.tv"}},
-	{"youtube", "YouTube", []string{"youtube.com", "youtu.be"}},
-	{"x", "X / Twitter", []string{"x.com", "twitter.com"}},
-	{"xiaohongshu", "小红书", []string{"xiaohongshu.com", "xhslink.com"}},
-	{"zhihu", "知乎", []string{"zhihu.com"}},
-	{"weibo", "微博", []string{"weibo.com", "weibo.cn"}},
-	{"douyin", "抖音", []string{"douyin.com"}},
-	{"github", "GitHub", []string{"github.com"}},
+	{"bilibili", "Bilibili", []string{"bilibili.com", "b23.tv"}, true},
+	{"youtube", "YouTube", []string{"youtube.com", "youtu.be"}, true},
+	{"x", "X / Twitter", []string{"x.com", "twitter.com"}, true},
+	{"xiaohongshu", "小红书", []string{"xiaohongshu.com", "xhslink.com"}, true},
+	{"zhihu", "知乎", []string{"zhihu.com"}, false},
+	{"weibo", "微博", []string{"weibo.com", "weibo.cn"}, false},
+	{"douyin", "抖音", []string{"douyin.com"}, true},
+	{"github", "GitHub", []string{"github.com"}, false},
+}
+
+// platformSupportsMedia 判断平台是否有真正的媒体提取分支。
+// resolveSocialMedia 的分发和排除平台的标注都以这里为准，避免三处清单各自漂移。
+func platformSupportsMedia(key string) bool {
+	for _, platform := range resolverPlatforms {
+		if platform.key == key {
+			return platform.media
+		}
+	}
+	return false
 }
 
 // platformKeyAndLabel 识别域名对应的平台键与展示名；未知平台键为空、展示名回退域名。
@@ -563,7 +886,13 @@ func platformName(host string) string {
 func resolverPlatformOptions() []PluginSettingOption {
 	options := make([]PluginSettingOption, 0, len(resolverPlatforms))
 	for _, platform := range resolverPlatforms {
-		options = append(options, PluginSettingOption{Value: platform.key, Label: platform.label})
+		label := platform.label
+		if platform.media {
+			label += "（可下载媒体）"
+		} else {
+			label += "（仅标题）"
+		}
+		options = append(options, PluginSettingOption{Value: platform.key, Label: label})
 	}
 	return options
 }

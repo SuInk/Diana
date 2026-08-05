@@ -253,6 +253,22 @@ LLM_USER_AGENT=codex-cli/0.142.0 \
 
 启动后，私聊会直接触发；群聊中 `@机器人` 或以触发词开头会触发。
 
+## 准入控制
+
+「机器人」页的「准入控制」和「群管理」页的每个群，都可以限制机器人在什么条件下才回复。全局设置为默认值，群级设置整体覆盖全局（不是逐字段合并）。
+
+- **群准入模式**：默认「黑名单」，除禁用群外都工作，与旧版行为一致；切到「白名单」后只在列出的群工作，被拉进其它群不会回话。白名单模式下禁用群列表仍然生效。
+- **QQ 群等级门槛**：指群内活跃度等级（Lv.1~6），不是 QQ 账号等级（太阳月亮星星，OneBot 协议拿不到）。等级按群独立累积，同一个人在不同群的等级不同。
+- **回复时段**：结束时间早于开始时间表示跨夜，例如 `22:00-06:00`；两者相同视为全天开放。时区填 IANA 名称（如 `Asia/Shanghai`），留空用服务器本地时区。静默期可以配一句提示语，同一会话每小时最多提示一次。
+- **豁免 / 屏蔽用户**：豁免用户无视等级与时段；屏蔽用户在群聊和私聊都不回。
+- **主人绕过**：默认开启，建议保持——否则时段或等级配错时，你自己也会被挡在门外，QQ 侧没有补救手段。
+
+关于群等级的两点说明：
+
+部分 OneBot 实现不会在消息事件里带 `level`，Diana 会在需要时通过 `get_group_member_info` 补齐，结果缓存在内存里（按「群号+QQ号」区分，10 分钟有效，重启后靠日常聊天自动重建）。
+
+拿不到等级时**默认放行**。各实现返回的 `level` 差异很大，把「读不到」当成「等级 0」去拒绝会让整个群失联。需要严格拦截时可以把「等级读不到时」改成「拦截」，但要清楚代价。
+
 ## 内置 Agent
 
 WebUI 的“QQ 机器人配置”页可以启用内置 Agent。启用后，机器人会使用 Codex CLI 风格的“模型规划、工具调用、观察结果、最终回复”循环处理消息。
@@ -278,7 +294,11 @@ chrome --remote-debugging-port=9222
 
 1. 查看官方内置插件。
 2. 点击安装或启用。
-3. 默认内置 Go 版 `nonebot-plugin-resolver`，用于解析 B 站、YouTube、X、小红书、抖音等链接并作为上下文交给 LLM。
+3. 默认内置 Go 社交媒体解析器，可解析并发送 B 站、YouTube、X、小红书、抖音的图片或视频；大小、时长、清晰度、图集数量可以在插件设置中调整。知乎、微博、GitHub 只抓标题描述，不下载媒体，排除平台列表里已按「可下载媒体 / 仅标题」标注。
+
+   各平台的 Cookie、yt-dlp Cookie 文件和代理地址都可以直接在插件设置里填写，不必再改环境变量重启容器；填写后优先于同名环境变量。凭据保存后读接口只回传「已配置」标记，不返回明文，留空提交表示沿用原值，要清除需点设置项旁的「清除」。
+
+   插件页顶部会显示 `yt-dlp`、`ffmpeg`、`node` 三个外部依赖的探测结果，缺失时对应平台无法下载。
 4. 默认内置 Go 文件解析插件，支持 QQ 文件段和文本类文件链接，提取内容作为 LLM 上下文。
 5. 默认内置 `LLM 配置技能`，主人可用自然语言修改当前配置的 provider 和模型，例如“把提供商切到 gemini”“把模型换成 gemini-2.5-pro”“以后用 anthropic 的 claude-sonnet-4-5”；指定模型会先通过后端模型列表校验，列表里没有就不会保存。
 
@@ -308,6 +328,12 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | 聊天内错误提示前缀 |
 | `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
 | `DIANA_LOG_PATH` | 空 | `LOG_PATH` 的兼容别名 |
+| `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | NapCat 可访问的 Diana 媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
+| `DIANA_BILI_SESSDATA` | 空 | B 站登录 Cookie 中的 `SESSDATA`；WebUI 插件设置优先 |
+| `DIANA_DOUYIN_CK` | 空 | 抖音 Cookie；抖音解析必需，WebUI 插件设置优先 |
+| `DIANA_XHS_CK` | 空 | 小红书 Cookie；小红书解析必需，WebUI 插件设置优先 |
+| `DIANA_YTDLP_COOKIES` | 空 | yt-dlp Netscape Cookie 文件路径；WebUI 插件设置优先 |
+| `DIANA_RESOLVER_PROXY` | 空 | 社交媒体解析与 yt-dlp 使用的代理地址；WebUI 插件设置优先 |
 | `APP_DB_PATH` | `data/diana.db` | 本地 SQLite 配置数据库路径 |
 | `DIANA_ADMIN_PASSWORD` | 自动随机生成 | WebUI 管理员首次初始化密码；账号固定为 `admin@diana.local`，之后以 SQLite 中的凭据为准 |
 | `LLM_PROVIDER` | `openai_compatible` | LLM provider |
