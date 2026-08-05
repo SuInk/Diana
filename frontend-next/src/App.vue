@@ -33,6 +33,10 @@
       </button>
 
       <div class="nav-footer">
+        <button class="nav-logout" type="button" @click="doLogout">
+          <LogOut :size="15" aria-hidden="true" />
+          退出登录
+        </button>
         <span class="cluster" style="gap: 6px">
           <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
           {{ stream.connected ? "实时连接正常" : "实时连接已断开" }}
@@ -91,6 +95,7 @@ import {
   FileClock,
   LayoutGrid,
   MessageCircle,
+  LogOut,
   PanelLeftOpen,
   PlugZap,
   Moon,
@@ -103,7 +108,7 @@ import { currentView, navItems, navigate, type ViewID } from "./router";
 import { startEventStream, stream } from "./stream";
 import { theme } from "./theme";
 import { formatUptime } from "./format";
-import { getAuthStatus, getConfig, getHealth, getSystemVersion, type HealthResponse, type SystemVersion } from "./api";
+import { getAuthStatus, getConfig, getHealth, getSystemVersion, logout, type HealthResponse, type SystemVersion } from "./api";
 import ToastHost from "./components/ToastHost.vue";
 import { toastSuccess } from "./toast";
 import VersionModal from "./components/VersionModal.vue";
@@ -212,6 +217,15 @@ async function bootApp(): Promise<void> {
     }
   } catch {
     /* 配置读取失败时停留在总览 */
+  }
+}
+
+async function doLogout(): Promise<void> {
+  try {
+    await logout();
+  } finally {
+    // 重载最简单，能确保清掉所有视图里缓存的配置数据。
+    window.location.reload();
   }
 }
 

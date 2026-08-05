@@ -2,8 +2,9 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <button v-if="page === 'edit'" class="btn ghost icon-only" type="button" title="返回机器人列表" @click="leaveEditor">
-          <ArrowLeft :size="18" aria-hidden="true" />
+        <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="leaveEditor">
+          <ArrowLeft :size="16" aria-hidden="true" />
+          机器人列表
         </button>
         <div>
           <h1>{{ page === "list" ? "机器人" : (form?.name || "新机器人") }}</h1>
@@ -395,12 +396,10 @@
                   @update:model-value="(value) => setRoleChannel(role.key, value)"
                 />
                 <AppSelect
-                  v-if="roleForm[role.key]"
-                  :model-value="roleForm[role.key]?.model ?? ''"
+                  :model-value="roleModelValue(role.key)"
                   :options="modelOptionsFor(role.key)"
                   @update:model-value="(value) => setRoleModel(role.key, value)"
                 />
-                <span v-else class="muted" style="font-size: 12.5px">{{ role.fallbackHint }}</span>
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
                 未分配的用途自动回退「对话」；「对话」也未分配时使用 LLM 配置页的激活配置与降级链。
@@ -754,10 +753,30 @@ function selectedRoleProfiles(role: RoleKey): LLMConfig[] {
   return llmChannels.value.filter((channel) => channel.id === selection.profile_id);
 }
 
+// 未指定 Provider 时，模型下拉直接聚合所有 Provider 的模型，选中即自动
+// 带出对应 Provider——不必先在左边选一次再回来选模型。
+const MODEL_PAIR_SEP = "::";
+
+function crossProviderModelOptions(role: RoleKey): AppSelectOption[] {
+  const fallback = modelRoleRows.find((row) => row.key === role)?.fallbackHint ?? "跟随对话模型";
+  const options: AppSelectOption[] = [{ value: "", label: fallback }];
+  for (const channel of llmChannels.value) {
+    const channelName = channel.name || llmProviderLabel(channel.provider);
+    for (const model of profileModels(channel)) {
+      options.push({
+        value: `${channel.id ?? ""}${MODEL_PAIR_SEP}${model.id}`,
+        label: model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id,
+        hint: channelName
+      });
+    }
+  }
+  return options;
+}
+
 function modelOptionsFor(role: RoleKey): AppSelectOption[] {
   const profiles = selectedRoleProfiles(role);
   if (profiles.length === 0) {
-    return [{ value: "", label: "先选择 Provider" }];
+    return crossProviderModelOptions(role);
   }
   const models = new Map<string, { model: LLMModelInfo; count: number }>();
   for (const profile of profiles) {
@@ -778,6 +797,10 @@ function modelOptionsFor(role: RoleKey): AppSelectOption[] {
     });
   }
   return options;
+}
+
+function roleModelValue(role: RoleKey): string {
+  return roleForm.value[role]?.model ?? "";
 }
 
 function roleSelectionValue(role: RoleKey): string {
@@ -805,10 +828,21 @@ function setRoleChannel(role: RoleKey, value: string): void {
   }
 }
 
-function setRoleModel(role: RoleKey, model: string): void {
+function setRoleModel(role: RoleKey, value: string): void {
+  if (value.includes(MODEL_PAIR_SEP)) {
+    // 跨 Provider 选择：一次确定 Provider 和模型。
+    const [profileID, model] = value.split(MODEL_PAIR_SEP);
+    roleForm.value[role] = { profile_id: profileID, model };
+    return;
+  }
+  if (!value) {
+    // 选回「跟随/未分配」时清掉整条分配。
+    delete roleForm.value[role];
+    return;
+  }
   const current = roleForm.value[role];
   if (current) {
-    current.model = model;
+    current.model = value;
   }
 }
 
