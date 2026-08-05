@@ -247,6 +247,22 @@ LLM_USER_AGENT=codex-cli/0.142.0 \
 
 After startup, private messages trigger directly. In group chats, mentioning the bot or starting a message with a configured alias triggers the bot.
 
+## Reply Admission
+
+The "Reply admission" panel on the bot page and each group on the "Groups" page control the conditions under which the bot replies. The global settings act as defaults, and a group's settings replace the global ones as a whole (not merged field by field).
+
+- **Group admission mode**: defaults to blacklist, which works in every group except disabled ones and matches the previous behavior. Switching to whitelist restricts the bot to the listed groups, so it stays silent when added to any other group. The disabled-group list still applies in whitelist mode.
+- **QQ group level threshold**: this is the in-group activity level (Lv.1–6), not the QQ account level (the sun/moon/star rank, which the OneBot protocol does not expose). Levels accumulate per group, so the same person can have different levels in different groups.
+- **Active hours**: an end time earlier than the start time means the window crosses midnight, for example `22:00-06:00`; identical values mean always open. Set the time zone to an IANA name such as `Asia/Shanghai`, or leave it empty to use the server's local zone. You can configure a quiet-hours notice, which is sent at most once per hour per conversation.
+- **Exempt / blocked users**: exempt users bypass the level and time checks; blocked users get no reply in either group or private chats.
+- **Owner bypass**: enabled by default, and worth keeping. Otherwise a wrong time or level setting locks you out too, with no way to recover from QQ.
+
+Two notes about group levels:
+
+Some OneBot implementations omit `level` from message events. Diana fills the gap through `get_group_member_info` when needed and caches the result in memory, keyed by group ID plus user ID, valid for 10 minutes and rebuilt from ordinary chat traffic after a restart.
+
+When the level cannot be read, the bot **allows the message through** by default. Implementations vary widely in what they return for `level`, and treating "unknown" as level 0 would silence an entire group. Switch "when the level is unknown" to "block" if you need strict enforcement, but understand the tradeoff.
+
 ## Built-In Agent
 
 You can enable the built-in Agent in the WebUI bot configuration page. When enabled, the bot handles messages through a Codex CLI-style loop: model planning, tool call, observation, and final response.
@@ -272,7 +288,11 @@ Open the WebUI and go to the bot plugins section:
 
 1. View official built-in plugins.
 2. Install or enable a plugin.
-3. The built-in Go social media resolver extracts and sends images or videos from Bilibili, YouTube, X, Xiaohongshu, and Douyin. Size, duration, and gallery limits are configurable in the plugin settings.
+3. The built-in Go social media resolver extracts and sends images or videos from Bilibili, YouTube, X, Xiaohongshu, and Douyin. Size, duration, resolution, and gallery limits are configurable in the plugin settings. Zhihu, Weibo, and GitHub links only yield a title and description with no media download; the exclude-platform list labels each entry as either downloadable media or title only.
+
+   Per-platform cookies, the yt-dlp cookie file, and the proxy address can all be filled in directly from the plugin settings, so there is no need to edit environment variables and restart the container. Values set here take precedence over the matching environment variables. Once saved, read endpoints only return a "configured" flag rather than the plaintext; submitting an empty value keeps the stored credential, and clearing one requires the "Clear" button next to the field.
+
+   The top of the plugins page reports whether `yt-dlp`, `ffmpeg`, and `node` are present. Downloads for the affected platforms fail when one is missing.
 4. The default built-in Go file parser handles QQ file segments and text file links, extracting file text as LLM context.
 5. The default built-in `LLM config skill` lets the owner change the active provider and model with natural language in chat, for example: `把提供商切到 gemini`, `把模型换成 gemini-2.5-pro`, or `以后用 anthropic 的 claude-sonnet-4-5`; requested models are validated against the backend model list before they are saved.
 
@@ -300,11 +320,11 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `LOG_PATH` | empty | Log file path; when set, logs are written to both stdout and the file |
 | `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
 | `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Diana media URL reachable by NapCat; use `http://diana:18080/media/resolver` for separate containers |
-| `DIANA_BILI_SESSDATA` | empty | Bilibili `SESSDATA` cookie for protected content |
-| `DIANA_DOUYIN_CK` | empty | Douyin cookie; required for Douyin resolution |
-| `DIANA_XHS_CK` | empty | Xiaohongshu cookie; required for Xiaohongshu resolution |
-| `DIANA_YTDLP_COOKIES` | empty | Path to a Netscape cookie file for yt-dlp |
-| `DIANA_RESOLVER_PROXY` | empty | Proxy used by the social resolver and yt-dlp |
+| `DIANA_BILI_SESSDATA` | empty | Bilibili `SESSDATA` cookie for protected content; WebUI plugin settings take precedence |
+| `DIANA_DOUYIN_CK` | empty | Douyin cookie; required for Douyin resolution, WebUI plugin settings take precedence |
+| `DIANA_XHS_CK` | empty | Xiaohongshu cookie; required for Xiaohongshu resolution, WebUI plugin settings take precedence |
+| `DIANA_YTDLP_COOKIES` | empty | Path to a Netscape cookie file for yt-dlp; WebUI plugin settings take precedence |
+| `DIANA_RESOLVER_PROXY` | empty | Proxy used by the social resolver and yt-dlp; WebUI plugin settings take precedence |
 | `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database path |
 | `DIANA_ADMIN_PASSWORD` | securely generated | Initial administrator password; the username is `admin@diana.local`, then SQLite credentials take precedence |
 | `LLM_PROVIDER` | `openai_compatible` | LLM provider |
