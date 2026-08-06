@@ -33,9 +33,12 @@
       </button>
 
       <div class="nav-footer">
-        <button class="nav-logout" type="button" @click="doLogout">
-          <LogOut :size="15" aria-hidden="true" />
-          退出登录
+        <button class="nav-theme" type="button" :title="themeToggleLabel" @click="cycleTheme">
+          <component :is="themeIcon" :size="15" aria-hidden="true" />
+          <span class="nav-theme-text">
+            <span class="nav-theme-title">外观</span>
+            <span class="nav-theme-value">{{ themeModeLabel }}</span>
+          </span>
         </button>
         <span class="cluster" style="gap: 6px">
           <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
@@ -56,14 +59,9 @@
           <span class="status-dot" :class="{ pulse: botSummary.kind === 'ok' }" aria-hidden="true" />
           {{ botSummary.label }}
         </span>
-        <button
-          class="btn ghost icon-only"
-          type="button"
-          :aria-label="themeToggleLabel"
-          :title="themeToggleLabel"
-          @click="cycleTheme"
-        >
-          <component :is="themeIcon" :size="17" aria-hidden="true" />
+        <button class="btn ghost small topbar-logout" type="button" title="退出登录" @click="doLogout">
+          <LogOut :size="15" aria-hidden="true" />
+          退出登录
         </button>
       </header>
 
@@ -164,10 +162,10 @@ const botSummary = computed(() => {
   return { kind: "ok", label: `已连接 ${status.channel.self_id || ""}`.trim() };
 });
 
-const themeToggleLabel = computed(() => {
-  const labels: Record<string, string> = { auto: "主题：跟随系统", light: "主题：浅色", dark: "主题：深色" };
-  return labels[theme.mode] ?? "主题";
-});
+const themeModeLabels: Record<string, string> = { auto: "跟随系统", light: "浅色", dark: "深色" };
+
+const themeModeLabel = computed(() => themeModeLabels[theme.mode] ?? "跟随系统");
+const themeToggleLabel = computed(() => `外观：${themeModeLabel.value}（点击切换）`);
 
 function cycleTheme(): void {
   theme.mode = theme.mode === "auto" ? "light" : theme.mode === "light" ? "dark" : "auto";
