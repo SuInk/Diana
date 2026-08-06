@@ -27,9 +27,16 @@
       </div>
     </header>
 
-    <div v-if="form && page === 'list'" class="bot-profile-grid">
+    <div v-if="form && page === 'list'" class="stack">
+      <!-- 按聊天平台分组：QQ 下面挂着几种 OneBot 实现，Telegram 自成一类。 -->
+      <section v-for="group in groupedProfiles" :key="group.category" class="bot-profile-group">
+        <h2 class="bot-profile-group-title">
+          {{ group.label }}
+          <span class="bot-profile-group-count">{{ group.profiles.length }}</span>
+        </h2>
+        <div class="bot-profile-grid">
       <article
-        v-for="profile in profiles"
+        v-for="profile in group.profiles"
         :key="profile.id ?? profile.name"
         class="bot-profile-tile"
         :class="{ active: profile.id === activeProfileID }"
@@ -46,7 +53,7 @@
           <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
           <span class="bot-profile-meta">
             <span class="platform-chip">{{ platformName(profile.platform) }}</span>
-            <span class="bot-profile-qq">{{ profile.bot_qq || "未填 QQ 号" }}</span>
+            <span class="bot-profile-qq">{{ profile.bot_qq || accountPlaceholder(profile) }}</span>
           </span>
         </button>
         <div class="bot-profile-actions">
@@ -69,11 +76,15 @@
           </button>
         </div>
       </article>
+        </div>
+      </section>
 
-      <button class="bot-profile-add" type="button" :disabled="busy" @click="platformPickerOpen = true">
-        <Plus :size="18" aria-hidden="true" />
-        新增机器人
-      </button>
+      <div class="bot-profile-grid">
+        <button class="bot-profile-add" type="button" :disabled="busy" @click="platformPickerOpen = true">
+          <Plus :size="18" aria-hidden="true" />
+          新增机器人
+        </button>
+      </div>
     </div>
 
     <div v-if="form && page === 'edit'" class="grid-main-side">
@@ -101,8 +112,10 @@
               <span class="card-sub">通过 {{ platformProtocol(form.platform) }} 连接</span>
             </div>
             <div class="card-body stack">
-              <div class="field">
-                <label for="bot-onebot-endpoint">NapCat 回连地址</label>
+              <!-- OneBot 是接入端反连过来，Telegram 是我们主动出站长轮询，
+                   两者需要的凭据完全不同，按平台分别展示。 -->
+              <div v-if="isOneBotPlatform" class="field">
+                <label for="bot-onebot-endpoint">回连地址</label>
                 <div class="input-group">
                   <input
                     id="bot-onebot-endpoint"
@@ -117,6 +130,42 @@
                 </div>
                 <span class="hint">填写接入端实际可访问的地址；自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
               </div>
+              <template v-else>
+                <div class="field">
+                  <label for="bot-tg-token">Bot Token</label>
+                  <input
+                    id="bot-tg-token"
+                    v-model="telegramTokenDraft"
+                    class="input"
+                    type="password"
+                    autocomplete="off"
+                    :placeholder="form.telegram_bot_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '从 @BotFather 获取'"
+                  />
+                  <span class="hint">Telegram 用长轮询出站连接，不需要公网地址，也不用配置 webhook。</span>
+                </div>
+                <div class="field">
+                  <label for="bot-tg-proxy">代理地址</label>
+                  <input
+                    id="bot-tg-proxy"
+                    v-model="form.telegram_proxy_url"
+                    class="input mono"
+                    placeholder="http://127.0.0.1:7890"
+                    autocomplete="off"
+                  />
+                  <span class="hint">国内网络访问 api.telegram.org 通常需要代理，支持 http/https/socks5。</span>
+                </div>
+                <div class="field">
+                  <label for="bot-tg-base">自建 Bot API 地址</label>
+                  <input
+                    id="bot-tg-base"
+                    v-model="form.telegram_api_base_url"
+                    class="input mono"
+                    placeholder="留空使用官方 https://api.telegram.org"
+                    autocomplete="off"
+                  />
+                  <span class="hint">部署了本地 Bot API server 时填写，可绕过 50MB 上传限制。</span>
+                </div>
+              </template>
               <div class="form-grid">
                 <div class="field wide">
                   <label for="bot-name">机器人名称</label>
@@ -133,13 +182,13 @@
                   <span class="hint">{{ platformDescription(form.platform) }}</span>
                 </div>
                 <div class="field">
-                  <label for="bot-owner">主人 QQ 号</label>
+                  <label for="bot-owner">{{ isOneBotPlatform ? "主人 QQ 号" : "主人用户 ID" }}</label>
                   <input
                     id="bot-owner"
                     v-model="form.owner_id"
                     class="input"
                     inputmode="numeric"
-                    placeholder="例如 123456789，用于管理指令和私聊登录"
+                    :placeholder="isOneBotPlatform ? '例如 123456789，用于管理指令和私聊登录' : 'Telegram 数字用户 ID，用于管理指令'"
                   />
                   <span class="hint">不需要聊天内管理或 QQ 配对登录时可以留空。</span>
                 </div>
@@ -151,7 +200,7 @@
                   </label>
                   <span class="hint">开启密码保护后，登录页可把一次性验证码私聊发给主人 QQ；需机器人在线。</span>
                 </div>
-                <div class="field wide">
+                <div v-if="isOneBotPlatform" class="field wide">
                   <label for="bot-token">OneBot Access Token</label>
                   <input
                     id="bot-token"
@@ -589,6 +638,38 @@ const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const allowlistDraft = ref("");
 const allowedGroupsDraft = ref("");
+const telegramTokenDraft = ref("");
+
+/** OneBot 系平台（NapCat / Lagrange / go-cqhttp）与 Telegram 的接入字段完全不同。 */
+/** 账号字段在不同平台叫法不同，列表卡片的占位文案跟着平台走。 */
+function accountPlaceholder(profile: QQBotConfig): string {
+  const def = platforms.value.find((item) => item.id === profile.platform);
+  if (def && !def.protocol.startsWith("onebot")) {
+    return "未填账号";
+  }
+  return "未填 QQ 号";
+}
+
+/** 机器人按聊天平台分组展示；未知平台归到「其他」。 */
+const groupedProfiles = computed(() => {
+  const byCategory = new Map<string, { category: string; label: string; profiles: QQBotConfig[] }>();
+  for (const profile of profiles.value) {
+    const def = platforms.value.find((item) => item.id === profile.platform);
+    const category = def?.category ?? "other";
+    const label = def?.category_label ?? "其他";
+    if (!byCategory.has(category)) {
+      byCategory.set(category, { category, label, profiles: [] });
+    }
+    byCategory.get(category)!.profiles.push(profile);
+  }
+  return [...byCategory.values()];
+});
+
+const isOneBotPlatform = computed(() => {
+  const id = form.value?.platform ?? "";
+  const def = platforms.value.find((item) => item.id === id);
+  return def ? def.protocol.startsWith("onebot") : true;
+});
 
 // 机器人配置项太多（41 个字段），平铺成一列要滚 6 屏。按「配一次就不动」
 // 和「经常调」的区别分区，每区一屏内看完。
@@ -859,6 +940,7 @@ function setForm(config: QQBotConfig): void {
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
   allowedGroupsDraft.value = (config.group_admission?.allowed_groups ?? []).join(",");
+  telegramTokenDraft.value = "";
   tokenDraft.value = "";
   bridgeTokenDraft.value = "";
   const roles: typeof roleForm.value = {};
@@ -930,6 +1012,7 @@ async function save(): Promise<void> {
       agent_command_allowlist: splitList(allowlistDraft.value),
       onebot_access_token: tokenDraft.value.trim() || undefined,
       nonebot_bridge_token: bridgeTokenDraft.value.trim() || undefined,
+      telegram_bot_token: telegramTokenDraft.value.trim() || undefined,
       group_admission: {
         mode: admissionMode.value,
         allowed_groups: splitList(allowedGroupsDraft.value)
@@ -1078,7 +1161,7 @@ onMounted(async () => {
     platforms.value = (await getQQBotPlatforms()).platforms;
   } catch {
     platforms.value = [
-      { id: "napcat", name: "NapCat", protocol: "onebot-v11-reverse-ws" }
+      { id: "napcat", name: "NapCat", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ" }
     ];
   }
   try {

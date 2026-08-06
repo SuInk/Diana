@@ -57,6 +57,11 @@ export interface QQBotConfig {
   onebot_reverse_ws_endpoint: string;
   onebot_access_token?: string;
   onebot_access_token_configured?: boolean;
+  /** Telegram 走官方 Bot API 长轮询，凭据与 OneBot 完全不同。 */
+  telegram_bot_token?: string;
+  telegram_bot_token_configured?: boolean;
+  telegram_api_base_url?: string;
+  telegram_proxy_url?: string;
   nonebot_bridge_enabled?: boolean;
   nonebot_bridge_endpoint?: string;
   nonebot_bridge_token?: string;
@@ -317,6 +322,9 @@ export interface QQBotPlatform {
   id: string;
   name: string;
   protocol: string;
+  /** 聊天平台本身，用于分组；同一分类下通常只是不同协议实现。 */
+  category: string;
+  category_label: string;
   description?: string;
 }
 

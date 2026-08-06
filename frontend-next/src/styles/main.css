@@ -1372,6 +1372,29 @@ code {
 }
 
 /* 机器人实例切换器 */
+.bot-profile-group + .bot-profile-group {
+  margin-top: 22px;
+}
+
+.bot-profile-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.bot-profile-group-count {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .bot-profile-grid {
   display: grid;
   /* auto-fit 让空轨道塌陷：只有一个机器人时卡片不会被挤在左边一小格。 */
@@ -1586,7 +1609,30 @@ code {
 }
 
 @media (max-width: 640px) {
-  .bot-profile-grid {
+  .bot-profile-group + .bot-profile-group {
+  margin-top: 22px;
+}
+
+.bot-profile-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.bot-profile-group-count {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.bot-profile-grid {
     grid-template-columns: 1fr;
   }
 }

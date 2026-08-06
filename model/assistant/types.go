@@ -93,11 +93,18 @@ type BotConfig struct {
 	Enabled                 bool   `json:"enabled"`
 	OneBotReverseWSEndpoint string `json:"onebot_reverse_ws_endpoint"`
 	OneBotAccessToken       string `json:"onebot_access_token,omitempty"`
-	NoneBotBridgeEnabled    bool   `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint   string `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken      string `json:"nonebot_bridge_token,omitempty"`
-	BotQQ                   string `json:"bot_qq,omitempty"`
-	OwnerID                 string `json:"owner_id,omitempty"`
+	// Telegram 走官方 Bot API 长轮询，认证方式和 OneBot 完全不同：
+	// 只需要 BotFather 给的 token，不需要公网地址。
+	TelegramBotToken string `json:"telegram_bot_token,omitempty"`
+	// TelegramAPIBaseURL 留空用官方 api.telegram.org，可指向自建 Bot API server。
+	TelegramAPIBaseURL string `json:"telegram_api_base_url,omitempty"`
+	// TelegramProxyURL 国内网络通常必须配置。
+	TelegramProxyURL      string `json:"telegram_proxy_url,omitempty"`
+	NoneBotBridgeEnabled  bool   `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint string `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken    string `json:"nonebot_bridge_token,omitempty"`
+	BotQQ                 string `json:"bot_qq,omitempty"`
+	OwnerID               string `json:"owner_id,omitempty"`
 	// OwnerLoginEnabled 允许主人通过 QQ 私聊一次性验证码确认 WebUI 登录（默认关）。
 	OwnerLoginEnabled bool     `json:"owner_login_enabled,omitempty"`
 	GroupTriggers     []string `json:"group_triggers,omitempty"`
@@ -218,6 +225,10 @@ type ConfigPayload struct {
 	OneBotReverseWSEndpoint      string               `json:"onebot_reverse_ws_endpoint"`
 	OneBotAccessToken            string               `json:"onebot_access_token,omitempty"`
 	OneBotAccessTokenConfigured  bool                 `json:"onebot_access_token_configured,omitempty"`
+	TelegramBotToken             string               `json:"telegram_bot_token,omitempty"`
+	TelegramBotTokenConfigured   bool                 `json:"telegram_bot_token_configured,omitempty"`
+	TelegramAPIBaseURL           string               `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL             string               `json:"telegram_proxy_url,omitempty"`
 	NoneBotBridgeEnabled         bool                 `json:"nonebot_bridge_enabled,omitempty"`
 	NoneBotBridgeEndpoint        string               `json:"nonebot_bridge_endpoint,omitempty"`
 	NoneBotBridgeToken           string               `json:"nonebot_bridge_token,omitempty"`
@@ -376,8 +387,11 @@ type ProfileSet struct {
 
 var (
 	ErrMissingOneBotEndpoint = errors.New("qqbot: onebot reverse websocket endpoint is required")
-	ErrInvalidOneBotEndpoint = errors.New("qqbot: onebot reverse websocket endpoint must use ws or wss and include a host")
-	ErrBotDisabled           = errors.New("qqbot: bot is disabled")
+	// Telegram 专有校验错误。
+	ErrMissingTelegramToken   = errors.New("assistant: telegram bot token is required")
+	ErrInvalidTelegramAPIBase = errors.New("assistant: telegram api base url must be http(s)")
+	ErrInvalidOneBotEndpoint  = errors.New("qqbot: onebot reverse websocket endpoint must use ws or wss and include a host")
+	ErrBotDisabled            = errors.New("qqbot: bot is disabled")
 )
 
 // NewProfileSet 基于单个机器人配置创建配置集。
@@ -642,6 +656,19 @@ func (cfg BotConfig) Validate() error {
 	if err := ValidatePlatform(cfg.Platform); err != nil {
 		return err
 	}
+	// Telegram 出站长轮询，没有回连地址可填；校验它自己的凭据。
+	if !IsOneBotPlatform(cfg.Platform) {
+		if cfg.Enabled && strings.TrimSpace(cfg.TelegramBotToken) == "" {
+			return ErrMissingTelegramToken
+		}
+		if base := strings.TrimSpace(cfg.TelegramAPIBaseURL); base != "" {
+			parsed, err := url.Parse(base)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+				return ErrInvalidTelegramAPIBase
+			}
+		}
+		return nil
+	}
 	endpoint := strings.TrimSpace(cfg.OneBotReverseWSEndpoint)
 	if cfg.Enabled && endpoint == "" {
 		return ErrMissingOneBotEndpoint
@@ -667,6 +694,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		Enabled:                      cfg.Enabled,
 		OneBotReverseWSEndpoint:      cfg.OneBotReverseWSEndpoint,
 		OneBotAccessTokenConfigured:  cfg.OneBotAccessToken != "",
+		TelegramBotTokenConfigured:   cfg.TelegramBotToken != "",
+		TelegramAPIBaseURL:           cfg.TelegramAPIBaseURL,
+		TelegramProxyURL:             cfg.TelegramProxyURL,
 		NoneBotBridgeEnabled:         cfg.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:        cfg.NoneBotBridgeEndpoint,
 		NoneBotBridgeTokenConfigured: cfg.NoneBotBridgeToken != "",
@@ -743,6 +773,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		Enabled:                    payload.Enabled,
 		OneBotReverseWSEndpoint:    payload.OneBotReverseWSEndpoint,
 		OneBotAccessToken:          payload.OneBotAccessToken,
+		TelegramBotToken:           payload.TelegramBotToken,
+		TelegramAPIBaseURL:         payload.TelegramAPIBaseURL,
+		TelegramProxyURL:           payload.TelegramProxyURL,
 		NoneBotBridgeEnabled:       payload.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:      payload.NoneBotBridgeEndpoint,
 		NoneBotBridgeToken:         payload.NoneBotBridgeToken,
@@ -798,6 +831,10 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	if cfg.NoneBotBridgeToken == "" {
 		// NoneBot bridge token 与 OneBot token 语义一致，也保留旧值。
 		cfg.NoneBotBridgeToken = existing.NoneBotBridgeToken
+	}
+	if cfg.TelegramBotToken == "" {
+		// Telegram bot token 同理：读接口不回传明文，留空表示没改动。
+		cfg.TelegramBotToken = existing.TelegramBotToken
 	}
 	return cfg
 }

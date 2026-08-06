@@ -111,6 +111,13 @@ const minQQBotTokenChars = 16
 // NewQQBotHandler 创建 QQBotHandler 实例。
 func NewQQBotHandler(ctx context.Context, runtime QQBotRuntime) *QQBotHandler {
 	return NewQQBotHandlerWithFactory(ctx, runtime, func(cfg assistant.BotConfig) assistant.Channel {
+		if cfg.Platform == assistant.PlatformTelegram {
+			return assistant.NewTelegramChannel(assistant.TelegramConfig{
+				BotToken:   cfg.TelegramBotToken,
+				APIBaseURL: cfg.TelegramAPIBaseURL,
+				ProxyURL:   cfg.TelegramProxyURL,
+			})
+		}
 		return assistant.NewOneBotReverseServer(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,
 			AccessToken: cfg.OneBotAccessToken,

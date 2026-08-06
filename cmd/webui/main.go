@@ -131,7 +131,22 @@ func main() {
 			log.Printf("assistant start skipped: %v", err)
 		}
 	}
+	// Telegram 走出站长轮询，和 OneBot 反向 WS 是两套通道；这里各保留一个
+	// 实例，切换平台时只更新对应实例的配置。
+	telegramChannel := assistant.NewTelegramChannel(assistant.TelegramConfig{
+		BotToken:   botCfg.TelegramBotToken,
+		APIBaseURL: botCfg.TelegramAPIBaseURL,
+		ProxyURL:   botCfg.TelegramProxyURL,
+	})
 	botHandler := webui.NewQQBotHandlerWithFactory(ctx, botRuntime, func(cfg assistant.BotConfig) assistant.Channel {
+		if cfg.Platform == assistant.PlatformTelegram {
+			telegramChannel.SetConfig(assistant.TelegramConfig{
+				BotToken:   cfg.TelegramBotToken,
+				APIBaseURL: cfg.TelegramAPIBaseURL,
+				ProxyURL:   cfg.TelegramProxyURL,
+			})
+			return telegramChannel
+		}
 		oneBotServer.SetConfig(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,
 			AccessToken: cfg.OneBotAccessToken,
