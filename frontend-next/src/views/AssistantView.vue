@@ -2,24 +2,16 @@
   <div>
     <header class="view-header">
       <div class="view-title">
+        <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="leaveEditor">
+          <ArrowLeft :size="16" aria-hidden="true" />
+          机器人列表
+        </button>
         <div>
-          <h1>{{ form?.name || "新机器人" }}</h1>
-          <p>{{ `${platformName(form?.platform)} · 机器人配置` }}</p>
+          <h1>{{ page === "list" ? "机器人" : (form?.name || "新机器人") }}</h1>
+          <p>{{ page === "list" ? "多机器人配置、平台接入与运行管理" : `${platformName(form?.platform)} · 机器人配置` }}</p>
         </div>
       </div>
       <div v-if="page === 'edit'" class="view-actions">
-        <button class="btn ghost icon-only" type="button" :disabled="busy" title="复制这个机器人" @click="cloneProfile(form!)">
-          <Copy :size="15" aria-hidden="true" />
-        </button>
-        <button
-          class="btn ghost icon-only danger"
-          type="button"
-          :disabled="busy || profiles.length <= 1"
-          title="删除这个机器人"
-          @click="removeProfile(form!)"
-        >
-          <Trash2 :size="15" aria-hidden="true" />
-        </button>
         <button v-if="status && !status.running" class="btn primary" type="button" :disabled="busy" @click="toggle(true)">
           <Power :size="15" aria-hidden="true" />
           启动
@@ -34,6 +26,57 @@
         </button>
       </div>
     </header>
+
+    <section v-if="form && page === 'list'" class="bot-switcher">
+      <div class="bot-switcher-head">
+        <p>选择要编辑和运行的机器人实例</p>
+        <button class="btn primary" type="button" :disabled="busy" @click="platformPickerOpen = true">
+          <Plus :size="15" aria-hidden="true" />
+          新增机器人
+        </button>
+      </div>
+      <div class="bot-profile-grid">
+        <article
+          v-for="profile in profiles"
+          :key="profile.id ?? profile.name"
+          class="bot-profile-tile"
+          :class="{ active: profile.id === activeProfileID }"
+        >
+          <button class="bot-profile-select" type="button" :disabled="busy" @click="editProfile(profile)">
+            <span class="bot-profile-icon">
+              <Bot :size="20" aria-hidden="true" />
+            </span>
+            <span class="bot-profile-main">
+              <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
+              <span class="bot-profile-meta">
+                <span class="platform-chip">{{ platformName(profile.platform) }}</span>
+                <span>{{ profile.bot_qq || "未填 QQ 号" }}</span>
+              </span>
+            </span>
+            <span class="bot-profile-state" :class="profileState(profile).tone">
+              {{ profileState(profile).label }}
+            </span>
+          </button>
+          <div class="bot-profile-actions">
+            <button class="btn ghost icon-only small" type="button" :disabled="busy" title="配置机器人" @click="editProfile(profile)">
+              <Settings2 :size="14" aria-hidden="true" />
+            </button>
+            <button class="btn ghost icon-only small" type="button" :disabled="busy" title="复制机器人" @click="cloneProfile(profile)">
+              <Copy :size="14" aria-hidden="true" />
+            </button>
+            <button
+              class="btn ghost icon-only small danger"
+              type="button"
+              :disabled="busy || profiles.length <= 1"
+              title="删除机器人"
+              @click="removeProfile(profile)"
+            >
+              <Trash2 :size="14" aria-hidden="true" />
+            </button>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <div v-if="form && page === 'edit'" class="grid-main-side">
       <div class="stack">
@@ -518,8 +561,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { Bot, ChevronRight, Copy, Power, PowerOff, RotateCcw, Save, Trash2, X } from "@lucide/vue";
+import { computed, onMounted, ref } from "vue";
+import { ArrowLeft, Bot, ChevronRight, Copy, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Trash2, X } from "@lucide/vue";
 import {
   activateQQBotProfile,
   cloneQQBotProfile,
@@ -537,8 +580,6 @@ import {
 } from "../api";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
-import { applyBotProfiles } from "../bots";
-import { currentParam, navigate } from "../router";
 import { pushStatusSnapshot, stream } from "../stream";
 import { toastError, toastSuccess } from "../toast";
 
@@ -832,25 +873,6 @@ function setForm(config: QQBotConfig): void {
 function applyConfig(config: QQBotConfig): void {
   profileSet.value = config;
   setForm(config);
-  // 侧栏子菜单和本页共享同一份实例列表。
-  applyBotProfiles(config);
-  page.value = "edit";
-}
-
-/** 按路由里的实例 ID 切换编辑对象；"new" 表示新建。 */
-async function syncFromRoute(): Promise<void> {
-  const target = currentParam.value;
-  if (target === "new") {
-    platformPickerOpen.value = true;
-    return;
-  }
-  if (!target || target === form.value?.id) {
-    return;
-  }
-  const profile = profiles.value.find((item) => item.id === target);
-  if (profile) {
-    await editProfile(profile);
-  }
 }
 
 function splitList(raw: string): string[] {
@@ -978,20 +1000,24 @@ async function editProfile(profile: QQBotConfig): Promise<void> {
   page.value = "edit";
 }
 
+function leaveEditor(): void {
+  const current = profiles.value.find((profile) => profile.id === activeProfileID.value);
+  if (current) {
+    setForm(current);
+  }
+  creating.value = false;
+  page.value = "list";
+}
+
 async function cloneProfile(profile: QQBotConfig): Promise<void> {
   if (!profile.id) {
     return;
   }
   busy.value = true;
   try {
-    const cloned = await cloneQQBotProfile(profile.id);
-    applyConfig(cloned);
+    applyConfig(await cloneQQBotProfile(profile.id));
     editorTab.value = "access";
-    // 克隆出来的是最后一个，直接切过去。
-    const created = cloned.profiles?.[(cloned.profiles?.length ?? 1) - 1];
-    if (created?.id) {
-      navigate("bot", created.id);
-    }
+  page.value = "edit";
     toastSuccess("已克隆配置档");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "克隆失败");
@@ -1016,8 +1042,6 @@ function beginCreate(platform: QQBotPlatform): void {
   platformPickerOpen.value = false;
   editorTab.value = "access";
   page.value = "edit";
-  // 清掉 new 标记，否则刷新会再弹一次平台选择。
-  navigate("bot", "");
 }
 
 async function removeProfile(profile: QQBotConfig): Promise<void> {
@@ -1029,10 +1053,7 @@ async function removeProfile(profile: QQBotConfig): Promise<void> {
   }
   busy.value = true;
   try {
-    const next = await deleteQQBotProfile(profile.id);
-    applyConfig(next);
-    const fallback = next.active_profile_id || next.profiles?.[0]?.id || "";
-    navigate("bot", fallback);
+    applyConfig(await deleteQQBotProfile(profile.id));
     toastSuccess("配置档已删除");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "删除失败");
@@ -1054,11 +1075,6 @@ async function copyEndpoint(): Promise<void> {
   }
 }
 
-// 侧栏点了别的实例就跟着切换编辑对象。
-watch(currentParam, () => {
-  void syncFromRoute();
-});
-
 onMounted(async () => {
   try {
     platforms.value = (await getQQBotPlatforms()).platforms;
@@ -1069,7 +1085,6 @@ onMounted(async () => {
   }
   try {
     applyConfig(await getQQBotConfig());
-    await syncFromRoute();
   } catch (error) {
     toastError(error instanceof Error ? error.message : "加载配置失败");
   }

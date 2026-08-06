@@ -19,38 +19,18 @@
         </span>
       </div>
 
-      <template v-for="item in navItems" :key="item.id">
-        <button
-          type="button"
-          class="nav-item"
-          :class="{ active: currentView === item.id }"
-          :title="item.hint"
-          @click="go(item.id)"
-        >
-          <component :is="navIcon(item.id)" :size="17" aria-hidden="true" />
-          <span class="nav-label">{{ item.label }}</span>
-        </button>
-
-        <!-- 机器人实例作为子菜单：选哪个机器人本来就是导航问题，
-             不该占一个只用来点一下的列表页。 -->
-        <div v-if="item.id === 'bot' && currentView === 'bot'" class="nav-sublist">
-          <button
-            v-for="profile in bots.profiles"
-            :key="profile.id ?? profile.name"
-            type="button"
-            class="nav-subitem"
-            :class="{ active: currentParam === profile.id }"
-            @click="go('bot', profile.id)"
-          >
-            <span class="nav-subitem-dot" :class="botDotTone(profile)" aria-hidden="true"></span>
-            <span class="nav-subitem-label">{{ profile.name || "未命名机器人" }}</span>
-          </button>
-          <button type="button" class="nav-subitem nav-subitem-add" @click="createBot">
-            <Plus :size="13" aria-hidden="true" />
-            新增机器人
-          </button>
-        </div>
-      </template>
+      <button
+        v-for="item in navItems"
+        :key="item.id"
+        type="button"
+        class="nav-item"
+        :class="{ active: currentView === item.id }"
+        :title="item.hint"
+        @click="go(item.id)"
+      >
+        <component :is="navIcon(item.id)" :size="17" aria-hidden="true" />
+        <span class="nav-label">{{ item.label }}</span>
+      </button>
 
       <div class="nav-footer">
         <button class="nav-logout" type="button" @click="doLogout">
@@ -116,7 +96,6 @@ import {
   LayoutGrid,
   MessageCircle,
   LogOut,
-  Plus,
   PanelLeftOpen,
   PlugZap,
   Moon,
@@ -125,8 +104,7 @@ import {
   Users,
   Wrench
 } from "@lucide/vue";
-import { currentParam, currentView, navItems, navigate, type ViewID } from "./router";
-import { bots, refreshBotProfiles } from "./bots";
+import { currentView, navItems, navigate, type ViewID } from "./router";
 import { startEventStream, stream } from "./stream";
 import { theme } from "./theme";
 import { formatUptime } from "./format";
@@ -212,25 +190,8 @@ function navIcon(id: ViewID): Component {
   return icons[id] ?? LayoutGrid;
 }
 
-function go(view: ViewID, param?: string): void {
-  // 点「机器人」父项时落到当前激活的实例，而不是一个空壳页面。
-  if (view === "bot" && !param) {
-    param = currentParam.value || bots.activeID || bots.profiles[0]?.id || "";
-  }
-  navigate(view, param);
-  drawerOpen.value = false;
-}
-
-/** 子项前的状态点：运行中的实例一眼可见。 */
-function botDotTone(profile: { id?: string }): string {
-  if (profile.id !== bots.activeID) {
-    return "";
-  }
-  return stream.status?.running ? "ok" : "warn";
-}
-
-function createBot(): void {
-  navigate("bot", "new");
+function go(view: ViewID): void {
+  navigate(view);
   drawerOpen.value = false;
 }
 
@@ -247,7 +208,6 @@ async function bootApp(): Promise<void> {
   } catch {
     /* 版本信息失败时侧栏只显示占位 */
   }
-  await refreshBotProfiles();
   // 首次访问且 LLM 未配置时自动进入向导；之后只在总览顶部保留一条引导。
   try {
     const config = await getConfig();
