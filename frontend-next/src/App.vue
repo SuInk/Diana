@@ -5,7 +5,7 @@
       <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false" />
     </transition>
 
-    <aside class="app-sidebar" :class="{ open: drawerOpen }" aria-label="主导航">
+    <aside class="app-sidebar" :class="{ open: drawerOpen, collapsed }" aria-label="主导航">
       <div class="brand">
         <span class="brand-mark">
           <BotMessageSquare :size="19" aria-hidden="true" />
@@ -33,18 +33,15 @@
       </button>
 
       <div class="nav-footer">
-        <button class="nav-theme" type="button" :title="themeToggleLabel" @click="cycleTheme">
-          <component :is="themeIcon" :size="15" aria-hidden="true" />
-          <span class="nav-theme-text">
-            <span class="nav-theme-title">外观</span>
-            <span class="nav-theme-value">{{ themeModeLabel }}</span>
-          </span>
+        <button class="nav-action" type="button" :title="themeToggleLabel" @click="cycleTheme">
+          <component :is="themeIcon" :size="16" aria-hidden="true" />
+          <span class="nav-label">{{ themeModeLabel }}</span>
         </button>
-        <span class="cluster" style="gap: 6px">
-          <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
-          {{ stream.connected ? "实时连接正常" : "实时连接已断开" }}
-        </span>
-        <span v-if="health" class="mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
+        <button class="nav-action" type="button" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggleCollapsed">
+          <ChevronsLeft :size="16" class="nav-collapse-icon" aria-hidden="true" />
+          <span class="nav-label">{{ collapsed ? "展开" : "收起" }}</span>
+        </button>
+        <span v-if="health" class="nav-uptime mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
       </div>
     </aside>
 
@@ -58,6 +55,10 @@
         <span v-if="botSummary" class="badge" :class="botSummary.kind">
           <span class="status-dot" :class="{ pulse: botSummary.kind === 'ok' }" aria-hidden="true" />
           {{ botSummary.label }}
+        </span>
+        <span class="topbar-stream" :title="stream.connected ? '事件实时推送中' : '实时通道已断开，页面数据可能不是最新'">
+          <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
+          {{ stream.connected ? "实时连接正常" : "实时连接已断开" }}
         </span>
         <button class="btn ghost small topbar-logout" type="button" title="退出登录" @click="doLogout">
           <LogOut :size="15" aria-hidden="true" />
@@ -94,6 +95,7 @@ import {
   FileClock,
   LayoutGrid,
   MessageCircle,
+  ChevronsLeft,
   LogOut,
   PanelLeftOpen,
   PlugZap,
@@ -124,6 +126,15 @@ import LogsView from "./views/LogsView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
 const drawerOpen = ref(false);
+
+// 侧栏收起状态记在 localStorage，刷新后保持。
+const COLLAPSE_KEY = "dqb-next:sidebar-collapsed";
+const collapsed = ref(window.localStorage.getItem(COLLAPSE_KEY) === "1");
+
+function toggleCollapsed(): void {
+  collapsed.value = !collapsed.value;
+  window.localStorage.setItem(COLLAPSE_KEY, collapsed.value ? "1" : "0");
+}
 const locked = ref(false);
 const versionOpen = ref(false);
 const systemVersion = ref<SystemVersion | null>(null);

@@ -39,6 +39,7 @@
   --accent-contrast: #ffffff;
 
   --sidebar-width: 236px;
+  --sidebar-collapsed-width: 64px;
   --topbar-height: 56px;
 }
 
@@ -956,42 +957,78 @@ code {
   margin-bottom: 20px;
 }
 
-/* 侧栏底部的外观切换：带文字说明当前模式，不用靠图标猜 */
-.nav-theme {
+/* 侧栏底部动作项：和导航项同一套「图标 + 文字」单行样式 */
+.nav-action {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  margin-bottom: 10px;
-  padding: 8px 10px;
+  padding: 9px 12px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-secondary);
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
-.nav-theme:hover {
+.nav-action:hover {
   background: var(--surface-2);
   color: var(--text);
 }
 
-.nav-theme-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.3;
+.nav-collapse-icon {
+  transition: transform 0.2s ease;
 }
 
-.nav-theme-title {
-  font-size: 12.5px;
-  font-weight: 550;
+.app-sidebar.collapsed .nav-collapse-icon {
+  transform: rotate(180deg);
 }
 
-.nav-theme-value {
-  color: var(--muted);
+.nav-uptime {
+  padding: 4px 12px 0;
   font-size: 11px;
+  color: var(--muted);
+}
+
+/* 收起态：只留图标，主内容区跟着让出空间 */
+.app-sidebar.collapsed {
+  width: var(--sidebar-collapsed-width);
+}
+
+.app-sidebar.collapsed .nav-label,
+.app-sidebar.collapsed .brand-name,
+.app-sidebar.collapsed .nav-uptime {
+  display: none;
+}
+
+.app-sidebar.collapsed .brand {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.app-sidebar.collapsed .nav-item,
+.app-sidebar.collapsed .nav-action {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.app-sidebar.collapsed ~ .app-main {
+  margin-left: var(--sidebar-collapsed-width);
+}
+
+/* 顶栏实时连接状态 */
+.topbar-stream {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 /* 顶栏退出登录 */
@@ -2409,6 +2446,29 @@ code {
 
   .app-sidebar.open {
     transform: none;
+  }
+
+  /* 移动端是抽屉，收起态没有意义，恢复完整宽度 */
+  .app-sidebar.collapsed {
+    width: var(--sidebar-width);
+  }
+
+  .app-sidebar.collapsed .nav-label,
+  .app-sidebar.collapsed .brand-name,
+  .app-sidebar.collapsed .nav-uptime {
+    display: revert;
+  }
+
+  .app-sidebar.collapsed .nav-item,
+  .app-sidebar.collapsed .nav-action,
+  .app-sidebar.collapsed .brand {
+    justify-content: flex-start;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .app-sidebar.collapsed ~ .app-main {
+    margin-left: 0;
   }
 
   .app-main {
