@@ -28,56 +28,79 @@
     </header>
 
     <div v-if="form && page === 'list'" class="stack">
-      <!-- 按聊天平台分组：QQ 下面挂着几种 OneBot 实现，Telegram 自成一类。 -->
-      <section v-for="group in groupedProfiles" :key="group.category" class="bot-profile-group">
-        <h2 class="bot-profile-group-title">
-          {{ group.label }}
-          <span class="bot-profile-group-count">{{ group.profiles.length }}</span>
-        </h2>
-        <div class="bot-profile-grid">
-      <article
-        v-for="profile in group.profiles"
-        :key="profile.id ?? profile.name"
-        class="bot-profile-tile"
-        :class="{ active: profile.id === activeProfileID }"
-      >
-        <button class="bot-profile-select" type="button" :disabled="busy" @click="editProfile(profile)">
-          <span class="bot-profile-head">
-            <span class="bot-profile-icon">
-              <Bot :size="20" aria-hidden="true" />
-            </span>
-            <span class="bot-profile-state" :class="profileState(profile).tone">
-              {{ profileState(profile).label }}
-            </span>
-          </span>
-          <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
-          <span class="bot-profile-meta">
-            <span class="platform-chip">{{ platformName(profile.platform) }}</span>
-            <span class="bot-profile-qq">{{ profile.bot_qq || accountPlaceholder(profile) }}</span>
-          </span>
+      <!-- 平台筛选：默认全选，点标签可以只看某个平台。 -->
+      <div v-if="platformFilters.length > 1" class="platform-filters">
+        <button
+          type="button"
+          class="platform-filter"
+          :class="{ active: allPlatformsSelected }"
+          @click="selectAllPlatforms"
+        >
+          全部
+          <span class="platform-filter-count">{{ profiles.length }}</span>
         </button>
-        <div class="bot-profile-actions">
-          <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
-            <Settings2 :size="13" aria-hidden="true" />
-            配置
-          </button>
-          <span class="bot-profile-actions-spacer"></span>
-          <button class="btn ghost icon-only small" type="button" :disabled="busy" title="复制机器人" @click="cloneProfile(profile)">
-            <Copy :size="14" aria-hidden="true" />
-          </button>
-          <button
-            class="btn ghost icon-only small danger"
-            type="button"
-            :disabled="busy || profiles.length <= 1"
-            title="删除机器人"
-            @click="removeProfile(profile)"
-          >
-            <Trash2 :size="14" aria-hidden="true" />
-          </button>
-        </div>
-      </article>
-        </div>
-      </section>
+        <button
+          v-for="filter in platformFilters"
+          :key="filter.category"
+          type="button"
+          class="platform-filter"
+          :class="{ active: !allPlatformsSelected && selectedPlatforms.includes(filter.category) }"
+          @click="togglePlatform(filter.category)"
+        >
+          {{ filter.label }}
+          <span class="platform-filter-count">{{ filter.count }}</span>
+        </button>
+      </div>
+
+      <div class="bot-profile-grid">
+    <article
+      v-for="profile in filteredProfiles"
+      :key="profile.id ?? profile.name"
+      class="bot-profile-tile"
+      :class="{ active: profile.id === activeProfileID }"
+    >
+      <button class="bot-profile-select" type="button" :disabled="busy" @click="editProfile(profile)">
+        <span class="bot-profile-head">
+          <span class="bot-profile-icon">
+            <Bot :size="20" aria-hidden="true" />
+          </span>
+          <span class="bot-profile-state" :class="profileState(profile).tone">
+            {{ profileState(profile).label }}
+          </span>
+        </span>
+        <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
+        <span class="bot-profile-meta">
+          <span class="platform-chip">{{ platformName(profile.platform) }}</span>
+          <span class="bot-profile-qq">{{ profile.bot_qq || accountPlaceholder(profile) }}</span>
+        </span>
+      </button>
+      <div class="bot-profile-actions">
+        <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
+          <Settings2 :size="13" aria-hidden="true" />
+          配置
+        </button>
+        <span class="bot-profile-actions-spacer"></span>
+        <button class="btn ghost icon-only small" type="button" :disabled="busy" title="复制机器人" @click="cloneProfile(profile)">
+          <Copy :size="14" aria-hidden="true" />
+        </button>
+        <button
+          class="btn ghost icon-only small danger"
+          type="button"
+          :disabled="busy || profiles.length <= 1"
+          title="删除机器人"
+          @click="removeProfile(profile)"
+        >
+          <Trash2 :size="14" aria-hidden="true" />
+        </button>
+      </div>
+    </article>
+      </div>
+
+      <EmptyState
+        v-if="filteredProfiles.length === 0"
+        title="没有匹配的机器人"
+        hint="当前筛选条件下没有机器人，点「全部」查看所有。"
+      />
 
       <div class="bot-profile-grid">
         <button class="bot-profile-add" type="button" :disabled="busy" @click="platformPickerOpen = true">
@@ -626,8 +649,10 @@ import {
   type QQBotPlatform
 } from "../api";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
+import EmptyState from "../components/EmptyState.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { pushStatusSnapshot, stream } from "../stream";
+import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 
 const form = ref<QQBotConfig | null>(null);
@@ -650,20 +675,51 @@ function accountPlaceholder(profile: QQBotConfig): string {
   return "未填 QQ 号";
 }
 
-/** 机器人按聊天平台分组展示；未知平台归到「其他」。 */
-const groupedProfiles = computed(() => {
-  const byCategory = new Map<string, { category: string; label: string; profiles: QQBotConfig[] }>();
+/** 平台筛选项，按机器人实际使用的平台生成。 */
+const selectedPlatforms = ref<string[]>([]);
+
+function platformCategoryOf(profile: QQBotConfig): { category: string; label: string } {
+  const def = platforms.value.find((item) => item.id === profile.platform);
+  return { category: def?.category ?? "other", label: def?.category_label ?? "其他" };
+}
+
+const platformFilters = computed(() => {
+  const byCategory = new Map<string, { category: string; label: string; count: number }>();
   for (const profile of profiles.value) {
-    const def = platforms.value.find((item) => item.id === profile.platform);
-    const category = def?.category ?? "other";
-    const label = def?.category_label ?? "其他";
-    if (!byCategory.has(category)) {
-      byCategory.set(category, { category, label, profiles: [] });
-    }
-    byCategory.get(category)!.profiles.push(profile);
+    const { category, label } = platformCategoryOf(profile);
+    const current = byCategory.get(category);
+    byCategory.set(category, { category, label, count: (current?.count ?? 0) + 1 });
   }
   return [...byCategory.values()];
 });
+
+// 空数组表示「全部」，这样新增平台时不用回头维护默认选中列表。
+const allPlatformsSelected = computed(() => selectedPlatforms.value.length === 0);
+
+const filteredProfiles = computed(() => {
+  if (allPlatformsSelected.value) {
+    return profiles.value;
+  }
+  return profiles.value.filter((profile) => selectedPlatforms.value.includes(platformCategoryOf(profile).category));
+});
+
+function selectAllPlatforms(): void {
+  selectedPlatforms.value = [];
+}
+
+function togglePlatform(category: string): void {
+  if (allPlatformsSelected.value) {
+    // 从「全部」点某一项，视为只看这一项。
+    selectedPlatforms.value = [category];
+    return;
+  }
+  const index = selectedPlatforms.value.indexOf(category);
+  if (index >= 0) {
+    selectedPlatforms.value.splice(index, 1);
+  } else {
+    selectedPlatforms.value.push(category);
+  }
+}
 
 const isOneBotPlatform = computed(() => {
   const id = form.value?.platform ?? "";
@@ -1129,7 +1185,13 @@ async function removeProfile(profile: QQBotConfig): Promise<void> {
   if (!profile.id) {
     return;
   }
-  if (!window.confirm(`确定删除配置档「${profile.name || "未命名"}」吗？`)) {
+  const ok = await askConfirm({
+    title: "删除机器人",
+    message: `确定删除「${profile.name || "未命名"}」吗？该机器人的配置会被移除，此操作不可撤销。`,
+    confirmLabel: "删除",
+    danger: true
+  });
+  if (!ok) {
     return;
   }
   busy.value = true;

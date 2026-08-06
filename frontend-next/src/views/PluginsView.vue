@@ -208,6 +208,7 @@ import {
   type PluginState,
   type ResolverDependency
 } from "../api";
+import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
@@ -272,7 +273,13 @@ async function install(plugin: PluginState): Promise<void> {
 }
 
 async function uninstall(plugin: PluginState): Promise<void> {
-  if (!window.confirm(`确定卸载「${plugin.manifest.name}」吗？`)) {
+  const ok = await askConfirm({
+    title: "卸载插件",
+    message: `确定卸载「${plugin.manifest.name}」吗？插件设置会保留，重新安装后仍然可用。`,
+    confirmLabel: "卸载",
+    danger: true
+  });
+  if (!ok) {
     return;
   }
   busyID.value = plugin.manifest.id;

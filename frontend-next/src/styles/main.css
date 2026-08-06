@@ -1372,27 +1372,56 @@ code {
 }
 
 /* 机器人实例切换器 */
-.bot-profile-group + .bot-profile-group {
-  margin-top: 22px;
-}
-
-.bot-profile-group-title {
+/* 平台筛选标签 */
+.platform-filters {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 
-.bot-profile-group-count {
-  padding: 0 7px;
+.platform-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.platform-filter:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.platform-filter.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+:root[data-theme="dark"] .platform-filter.active {
+  color: var(--accent);
+}
+
+.platform-filter-count {
+  padding: 0 6px;
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--muted);
   font-size: 11px;
   font-weight: 500;
+}
+
+.platform-filter.active .platform-filter-count {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: inherit;
 }
 
 .bot-profile-grid {
@@ -1609,27 +1638,56 @@ code {
 }
 
 @media (max-width: 640px) {
-  .bot-profile-group + .bot-profile-group {
-  margin-top: 22px;
-}
-
-.bot-profile-group-title {
+  /* 平台筛选标签 */
+.platform-filters {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 
-.bot-profile-group-count {
-  padding: 0 7px;
+.platform-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.platform-filter:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.platform-filter.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+:root[data-theme="dark"] .platform-filter.active {
+  color: var(--accent);
+}
+
+.platform-filter-count {
+  padding: 0 6px;
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--muted);
   font-size: 11px;
   font-weight: 500;
+}
+
+.platform-filter.active .platform-filter-count {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: inherit;
 }
 
 .bot-profile-grid {

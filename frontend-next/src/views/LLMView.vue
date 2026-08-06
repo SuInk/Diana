@@ -262,6 +262,7 @@ import {
   type LLMModelInfo,
   type Provider
 } from "../api";
+import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import Modal from "../components/Modal.vue";
 import AppSelect from "../components/AppSelect.vue";
@@ -564,7 +565,13 @@ async function remove(profile: LLMConfig): Promise<void> {
   if (!profile.id) {
     return;
   }
-  if (!window.confirm(`确定删除配置「${profile.name || profile.model}」吗？`)) {
+  const ok = await askConfirm({
+    title: "删除 LLM 配置",
+    message: `确定删除「${profile.name || profile.model}」吗？此操作不可撤销。`,
+    confirmLabel: "删除",
+    danger: true
+  });
+  if (!ok) {
     return;
   }
   busy.value = true;

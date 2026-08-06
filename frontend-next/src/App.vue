@@ -81,6 +81,7 @@
     </div>
 
     <ToastHost />
+    <ConfirmHost />
     <VersionModal v-if="versionOpen" @close="versionOpen = false" />
   </div>
 </template>
@@ -110,6 +111,7 @@ import { theme } from "./theme";
 import { formatUptime } from "./format";
 import { getAuthStatus, getConfig, getHealth, getSystemVersion, logout, type HealthResponse, type SystemVersion } from "./api";
 import ToastHost from "./components/ToastHost.vue";
+import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
 import VersionModal from "./components/VersionModal.vue";
 import LoginView from "./views/LoginView.vue";
