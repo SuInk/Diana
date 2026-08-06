@@ -27,56 +27,54 @@
       </div>
     </header>
 
-    <section v-if="form && page === 'list'" class="bot-switcher">
-      <div class="bot-switcher-head">
-        <p>选择要编辑和运行的机器人实例</p>
-        <button class="btn primary" type="button" :disabled="busy" @click="platformPickerOpen = true">
-          <Plus :size="15" aria-hidden="true" />
-          新增机器人
-        </button>
-      </div>
-      <div class="bot-profile-grid">
-        <article
-          v-for="profile in profiles"
-          :key="profile.id ?? profile.name"
-          class="bot-profile-tile"
-          :class="{ active: profile.id === activeProfileID }"
-        >
-          <button class="bot-profile-select" type="button" :disabled="busy" @click="editProfile(profile)">
+    <div v-if="form && page === 'list'" class="bot-profile-grid">
+      <article
+        v-for="profile in profiles"
+        :key="profile.id ?? profile.name"
+        class="bot-profile-tile"
+        :class="{ active: profile.id === activeProfileID }"
+      >
+        <button class="bot-profile-select" type="button" :disabled="busy" @click="editProfile(profile)">
+          <span class="bot-profile-head">
             <span class="bot-profile-icon">
               <Bot :size="20" aria-hidden="true" />
-            </span>
-            <span class="bot-profile-main">
-              <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
-              <span class="bot-profile-meta">
-                <span class="platform-chip">{{ platformName(profile.platform) }}</span>
-                <span>{{ profile.bot_qq || "未填 QQ 号" }}</span>
-              </span>
             </span>
             <span class="bot-profile-state" :class="profileState(profile).tone">
               {{ profileState(profile).label }}
             </span>
+          </span>
+          <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
+          <span class="bot-profile-meta">
+            <span class="platform-chip">{{ platformName(profile.platform) }}</span>
+            <span class="bot-profile-qq">{{ profile.bot_qq || "未填 QQ 号" }}</span>
+          </span>
+        </button>
+        <div class="bot-profile-actions">
+          <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
+            <Settings2 :size="13" aria-hidden="true" />
+            配置
           </button>
-          <div class="bot-profile-actions">
-            <button class="btn ghost icon-only small" type="button" :disabled="busy" title="配置机器人" @click="editProfile(profile)">
-              <Settings2 :size="14" aria-hidden="true" />
-            </button>
-            <button class="btn ghost icon-only small" type="button" :disabled="busy" title="复制机器人" @click="cloneProfile(profile)">
-              <Copy :size="14" aria-hidden="true" />
-            </button>
-            <button
-              class="btn ghost icon-only small danger"
-              type="button"
-              :disabled="busy || profiles.length <= 1"
-              title="删除机器人"
-              @click="removeProfile(profile)"
-            >
-              <Trash2 :size="14" aria-hidden="true" />
-            </button>
-          </div>
-        </article>
-      </div>
-    </section>
+          <span class="bot-profile-actions-spacer"></span>
+          <button class="btn ghost icon-only small" type="button" :disabled="busy" title="复制机器人" @click="cloneProfile(profile)">
+            <Copy :size="14" aria-hidden="true" />
+          </button>
+          <button
+            class="btn ghost icon-only small danger"
+            type="button"
+            :disabled="busy || profiles.length <= 1"
+            title="删除机器人"
+            @click="removeProfile(profile)"
+          >
+            <Trash2 :size="14" aria-hidden="true" />
+          </button>
+        </div>
+      </article>
+
+      <button class="bot-profile-add" type="button" :disabled="busy" @click="platformPickerOpen = true">
+        <Plus :size="18" aria-hidden="true" />
+        新增机器人
+      </button>
+    </div>
 
     <div v-if="form && page === 'edit'" class="grid-main-side">
       <div class="stack">

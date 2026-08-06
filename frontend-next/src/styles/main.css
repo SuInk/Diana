@@ -1372,51 +1372,21 @@ code {
 }
 
 /* 机器人实例切换器 */
-.bot-switcher {
-  margin-bottom: 18px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-}
-
-.bot-switcher-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-
-.bot-switcher-head p {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.bot-switcher-head h2 {
-  font-size: 16px;
-}
-
-.bot-switcher-head p {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
 .bot-profile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 10px;
+  /* auto-fit 让空轨道塌陷：只有一个机器人时卡片不会被挤在左边一小格。 */
+  grid-template-columns: repeat(auto-fit, minmax(240px, 300px));
+  gap: 12px;
 }
 
 .bot-profile-tile {
   display: flex;
-  align-items: stretch;
+  flex-direction: column;
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-raised);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 
@@ -1427,11 +1397,11 @@ code {
 
 .bot-profile-select {
   display: flex;
-  align-items: center;
-  gap: 11px;
+  flex-direction: column;
+  gap: 9px;
   flex: 1;
   min-width: 0;
-  padding: 13px;
+  padding: 16px 16px 14px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -1443,31 +1413,30 @@ code {
   cursor: wait;
 }
 
+.bot-profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .bot-profile-icon {
   display: grid;
   place-items: center;
   width: 38px;
   height: 38px;
   flex: 0 0 38px;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--accent-soft);
   color: var(--accent);
 }
 
-.bot-profile-main {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-}
-
 .bot-profile-name {
   overflow: hidden;
-  font-size: 13.5px;
-  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 14.5px;
+  font-weight: 650;
 }
 
 .bot-profile-meta {
@@ -1479,11 +1448,20 @@ code {
   font-size: 11.5px;
 }
 
+/* QQ 号这类短文本不该被挤断行。 */
+.bot-profile-qq {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .platform-chip {
+  flex: none;
   padding: 2px 6px;
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--surface-2);
   color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .bot-profile-state {
@@ -1503,13 +1481,41 @@ code {
   color: var(--muted);
 }
 
+/* 操作横排在卡片底部，不再挤成右侧竖条。 */
 .bot-profile-actions {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.bot-profile-actions-spacer {
+  flex: 1;
+}
+
+/* 新增入口和机器人卡片同一网格，不额外套一层容器。 */
+.bot-profile-add {
+  display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 2px;
-  padding: 6px;
-  border-left: 1px solid var(--border);
+  gap: 8px;
+  min-height: 132px;
+  padding: 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.bot-profile-add:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .platform-picker {
@@ -1580,11 +1586,6 @@ code {
 }
 
 @media (max-width: 640px) {
-  .bot-switcher-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .bot-profile-grid {
     grid-template-columns: 1fr;
   }
