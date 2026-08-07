@@ -76,7 +76,6 @@
         <DashboardView v-if="currentView === 'dashboard'" />
         <SetupWizard v-else-if="currentView === 'setup'" />
         <LLMView v-else-if="currentView === 'llm'" />
-        <TestChatView v-else-if="currentView === 'test'" />
         <AssistantView v-else-if="currentView === 'bot'" />
         <PluginsView v-else-if="currentView === 'plugins'" />
         <GroupsView v-else-if="currentView === 'groups'" />
@@ -124,7 +123,6 @@ import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import SetupWizard from "./views/SetupWizard.vue";
 import LLMView from "./views/LLMView.vue";
-import TestChatView from "./views/TestChatView.vue";
 import AssistantView from "./views/AssistantView.vue";
 import PluginsView from "./views/PluginsView.vue";
 import GroupsView from "./views/GroupsView.vue";
@@ -175,7 +173,6 @@ const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
   setup: "配置向导",
   llm: "LLM 配置",
-  test: "测试台",
   bot: "机器人",
   plugins: "插件",
   groups: "群管理",
@@ -217,7 +214,6 @@ function navIcon(id: ViewID): Component {
   const icons: Partial<Record<ViewID, Component>> = {
     dashboard: LayoutGrid,
     llm: BrainCircuit,
-    test: MessageCircle,
     bot: Bot,
     plugins: PlugZap,
     groups: Users,

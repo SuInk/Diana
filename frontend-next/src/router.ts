@@ -4,7 +4,6 @@ export type ViewID =
   | "dashboard"
   | "setup"
   | "llm"
-  | "test"
   | "bot"
   | "groups"
   | "plugins"
@@ -20,7 +19,6 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
   { id: "llm", label: "LLM 配置", hint: "Provider 与模型管理" },
-  { id: "test", label: "测试台", hint: "连通与对话测试" },
   { id: "bot", label: "机器人", hint: "NapCat 接入与行为" },
   { id: "plugins", label: "插件", hint: "内置插件启停" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置" },
@@ -28,7 +26,7 @@ export const navItems: NavItem[] = [
   { id: "settings", label: "设置", hint: "主题与系统更新" }
 ];
 
-const validViews = new Set<ViewID>(["dashboard", "setup", "llm", "test", "bot", "groups", "plugins", "logs", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "setup", "llm", "bot", "groups", "plugins", "logs", "settings"]);
 
 function parseHash(): ViewID {
   const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0] ?? "";
