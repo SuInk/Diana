@@ -194,9 +194,18 @@ code {
 }
 
 /* 品牌区 */
+.sidebar-head {
+  display: flex;
+  align-items: flex-start;
+  min-height: 60px;
+  padding-right: 44px;
+}
+
 .brand {
   display: flex;
   align-items: center;
+  flex: 1;
+  min-width: 0;
   gap: 10px;
   padding: 6px 8px 18px;
 }
@@ -652,8 +661,11 @@ code {
   flex: 1;
 }
 
-.menu-button {
-  display: none;
+.sidebar-toggle {
+  position: absolute;
+  top: 16px;
+  right: 14px;
+  margin: 0;
 }
 
 /* ---------- 通用组件 ---------- */
@@ -979,35 +991,23 @@ code {
   color: var(--text);
 }
 
-.nav-collapse-icon {
-  transition: transform 0.2s ease;
-}
-
-.app-sidebar.collapsed .nav-collapse-icon {
-  transform: rotate(180deg);
-}
-
-.nav-uptime {
-  padding: 4px 12px 0;
-  font-size: 11px;
-  color: var(--muted);
-}
-
 /* 收起态：只留图标，主内容区跟着让出空间 */
 .app-sidebar.collapsed {
   width: var(--sidebar-collapsed-width);
 }
 
 .app-sidebar.collapsed .nav-label,
-.app-sidebar.collapsed .brand-name,
-.app-sidebar.collapsed .nav-uptime {
+.app-sidebar.collapsed .brand-name {
   display: none;
 }
 
-.app-sidebar.collapsed .brand {
+.app-sidebar.collapsed .sidebar-head {
   justify-content: center;
-  padding-left: 0;
   padding-right: 0;
+}
+
+.app-sidebar.collapsed .brand {
+  display: none;
 }
 
 .app-sidebar.collapsed .nav-item,
@@ -1025,10 +1025,41 @@ code {
 .topbar-stream {
   display: inline-flex;
   align-items: center;
+  flex: none;
   gap: 6px;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+
+.topbar-uptime {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.app-topbar > .badge {
+  /* 不加会被 flex 压成竖排字符 */
+  flex: none;
+}
+
+/* 顶栏信息按宽度渐进降级，避免窄屏横向溢出 */
+@media (max-width: 900px) {
+  /* 运行时长在总览页的「运行信息」卡片里已经有了，窄屏优先让位 */
+  .topbar-uptime {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .topbar-stream-text {
+    display: none;
+  }
+
+  .topbar-logout .topbar-logout-text {
+    display: none;
+  }
 }
 
 /* 顶栏退出登录 */
@@ -2313,11 +2344,16 @@ code {
 
 .checklist-item .check-main {
   flex: 1;
+  /* 不加 min-width:0，里面的等宽 ws:// 地址会把整页撑出横向滚动 */
+  min-width: 0;
 }
 
 .checklist-item .check-hint {
   font-size: 12px;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 布局工具 */
@@ -2439,44 +2475,64 @@ code {
 /* ---------- 响应式 ---------- */
 @media (max-width: 960px) {
   .app-sidebar {
-    transform: translateX(-100%);
-    transition: transform 0.22s ease;
+    width: var(--sidebar-collapsed-width);
+    overflow: hidden;
+    transition: width 0.22s ease;
     box-shadow: var(--shadow-lg);
   }
 
   .app-sidebar.open {
-    transform: none;
-  }
-
-  /* 移动端是抽屉，收起态没有意义，恢复完整宽度 */
-  .app-sidebar.collapsed {
     width: var(--sidebar-width);
   }
 
-  .app-sidebar.collapsed .nav-label,
-  .app-sidebar.collapsed .brand-name,
-  .app-sidebar.collapsed .nav-uptime {
+  /* 窄屏保留一条控制栏，展开后覆盖在主内容上方。 */
+  .app-sidebar.collapsed {
+    width: var(--sidebar-collapsed-width);
+  }
+
+  .app-sidebar.collapsed.open {
+    width: var(--sidebar-width);
+  }
+
+  .app-sidebar:not(.open) .brand,
+  .app-sidebar:not(.open) .nav-item,
+  .app-sidebar:not(.open) .nav-footer {
+    display: none;
+  }
+
+  .app-sidebar:not(.open) .sidebar-head {
+    justify-content: center;
+    padding-right: 0;
+  }
+
+  .app-sidebar.open .sidebar-head {
+    justify-content: flex-start;
+    padding-right: 44px;
+  }
+
+  .app-sidebar.open .brand {
+    display: flex;
+  }
+
+  .app-sidebar.open .nav-label,
+  .app-sidebar.open .brand-name {
     display: revert;
   }
 
-  .app-sidebar.collapsed .nav-item,
-  .app-sidebar.collapsed .nav-action,
-  .app-sidebar.collapsed .brand {
+  .app-sidebar.open .nav-item,
+  .app-sidebar.open .nav-action,
+  .app-sidebar.open .brand {
     justify-content: flex-start;
     padding-left: 12px;
     padding-right: 12px;
   }
 
   .app-sidebar.collapsed ~ .app-main {
-    margin-left: 0;
+    margin-left: var(--sidebar-collapsed-width);
   }
 
   .app-main {
-    margin-left: 0;
-  }
-
-  .menu-button {
-    display: inline-flex;
+    margin-left: var(--sidebar-collapsed-width);
   }
 
   .drawer-backdrop {

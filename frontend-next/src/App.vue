@@ -5,18 +5,31 @@
       <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false" />
     </transition>
 
-    <aside class="app-sidebar" :class="{ open: drawerOpen, collapsed }" aria-label="主导航">
-      <div class="brand">
-        <span class="brand-mark">
-          <BotMessageSquare :size="19" aria-hidden="true" />
-        </span>
-        <span class="brand-name">
-          <strong>Diana</strong>
-          <button class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
-            {{ versionLabel }}
-            <span v-if="updateBehind > 0" class="version-dot" aria-label="有新版本"></span>
-          </button>
-        </span>
+    <aside id="app-sidebar" class="app-sidebar" :class="{ open: drawerOpen, collapsed }" aria-label="主导航">
+      <div class="sidebar-head">
+        <div class="brand">
+          <span class="brand-mark">
+            <BotMessageSquare :size="19" aria-hidden="true" />
+          </span>
+          <span class="brand-name">
+            <strong>Diana</strong>
+            <button class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
+              {{ versionLabel }}
+              <span v-if="updateBehind > 0" class="version-dot" aria-label="有新版本"></span>
+            </button>
+          </span>
+        </div>
+        <button
+          class="btn ghost icon-only sidebar-toggle"
+          type="button"
+          :aria-label="sidebarToggleLabel"
+          :aria-expanded="sidebarExpanded"
+          aria-controls="app-sidebar"
+          :title="sidebarToggleLabel"
+          @click="toggleSidebar"
+        >
+          <component :is="sidebarToggleIcon" :size="18" aria-hidden="true" />
+        </button>
       </div>
 
       <button
@@ -37,19 +50,11 @@
           <component :is="themeIcon" :size="16" aria-hidden="true" />
           <span class="nav-label">{{ themeModeLabel }}</span>
         </button>
-        <button class="nav-action" type="button" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggleCollapsed">
-          <ChevronsLeft :size="16" class="nav-collapse-icon" aria-hidden="true" />
-          <span class="nav-label">{{ collapsed ? "展开" : "收起" }}</span>
-        </button>
-        <span v-if="health" class="nav-uptime mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
       </div>
     </aside>
 
     <div class="app-main">
       <header class="app-topbar">
-        <button class="btn ghost icon-only menu-button" type="button" aria-label="打开导航" @click="drawerOpen = true">
-          <PanelLeftOpen :size="18" aria-hidden="true" />
-        </button>
         <span class="topbar-title">{{ viewTitle }}</span>
         <span class="topbar-spacer" />
         <span v-if="botSummary" class="badge" :class="botSummary.kind">
@@ -58,11 +63,12 @@
         </span>
         <span class="topbar-stream" :title="stream.connected ? '事件实时推送中' : '实时通道已断开，页面数据可能不是最新'">
           <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
-          {{ stream.connected ? "实时连接正常" : "实时连接已断开" }}
+          <span class="topbar-stream-text">{{ stream.connected ? "实时连接正常" : "实时连接已断开" }}</span>
         </span>
+        <span v-if="health" class="topbar-uptime mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
         <button class="btn ghost small topbar-logout" type="button" title="退出登录" @click="doLogout">
           <LogOut :size="15" aria-hidden="true" />
-          退出登录
+          <span class="topbar-logout-text">退出登录</span>
         </button>
       </header>
 
@@ -86,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Component } from "vue";
 import {
   Bot,
@@ -95,8 +101,8 @@ import {
   FileClock,
   LayoutGrid,
   MessageCircle,
-  ChevronsLeft,
   LogOut,
+  PanelLeftClose,
   PanelLeftOpen,
   PlugZap,
   Moon,
@@ -126,6 +132,9 @@ import LogsView from "./views/LogsView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
 const drawerOpen = ref(false);
+const SIDEBAR_DRAWER_QUERY = "(max-width: 960px)";
+const sidebarMedia = window.matchMedia(SIDEBAR_DRAWER_QUERY);
+const narrowSidebar = ref(sidebarMedia.matches);
 
 // 侧栏收起状态记在 localStorage，刷新后保持。
 const COLLAPSE_KEY = "dqb-next:sidebar-collapsed";
@@ -134,6 +143,23 @@ const collapsed = ref(window.localStorage.getItem(COLLAPSE_KEY) === "1");
 function toggleCollapsed(): void {
   collapsed.value = !collapsed.value;
   window.localStorage.setItem(COLLAPSE_KEY, collapsed.value ? "1" : "0");
+}
+
+const sidebarExpanded = computed(() => (narrowSidebar.value ? drawerOpen.value : !collapsed.value));
+const sidebarToggleLabel = computed(() => (sidebarExpanded.value ? "收起侧栏" : "展开侧栏"));
+const sidebarToggleIcon = computed<Component>(() => (sidebarExpanded.value ? PanelLeftClose : PanelLeftOpen));
+
+function toggleSidebar(): void {
+  if (narrowSidebar.value) {
+    drawerOpen.value = !drawerOpen.value;
+    return;
+  }
+  toggleCollapsed();
+}
+
+function syncSidebarMode(event: MediaQueryListEvent): void {
+  narrowSidebar.value = event.matches;
+  drawerOpen.value = false;
 }
 const locked = ref(false);
 const versionOpen = ref(false);
@@ -246,6 +272,7 @@ function onLoginSuccess(): void {
 }
 
 onMounted(async () => {
+  sidebarMedia.addEventListener("change", syncSidebarMode);
   // 会话失效时任意接口的 401 会广播这个事件，统一切回登录界面。
   window.addEventListener("diana:unauthorized", () => {
     locked.value = true;
@@ -260,5 +287,9 @@ onMounted(async () => {
     /* 状态接口失败按未开启鉴权处理，避免把用户锁在门外 */
   }
   await bootApp();
+});
+
+onBeforeUnmount(() => {
+  sidebarMedia.removeEventListener("change", syncSidebarMode);
 });
 </script>
