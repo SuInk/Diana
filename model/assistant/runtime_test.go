@@ -35,6 +35,23 @@ func TestRuntimeShouldHandleGroupMentionAndTrigger(t *testing.T) {
 	}
 }
 
+func TestRuntimeShouldHandleSupportedSocialLink(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456"}
+	if !runtime.shouldHandle(event, "https://www.bilibili.com/video/BV1xx411c7mD") {
+		t.Fatal("supported social link should trigger the resolver")
+	}
+	if runtime.shouldHandle(event, "https://example.com/article") {
+		t.Fatal("ordinary link should not trigger a group reply")
+	}
+	if _, err := runtime.plugins.SetEnabled(resolverPluginID, false); err != nil {
+		t.Fatalf("SetEnabled() error = %v", err)
+	}
+	if runtime.shouldHandle(event, "https://youtu.be/example") {
+		t.Fatal("disabled resolver should not trigger")
+	}
+}
+
 // TestRuntimeSystemPromptMentionsHomophoneJokes 验证系统提示包含中文谐音梗处理要求。
 func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

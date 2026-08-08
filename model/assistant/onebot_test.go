@@ -64,6 +64,20 @@ func TestOneBotChannelSendPrefixesReplyAndMention(t *testing.T) {
 	}
 }
 
+func TestOneBotOutgoingSegmentsIncludeImagesAndVideos(t *testing.T) {
+	message := buildOutgoingSegments(OutgoingMessage{
+		Text:      "媒体",
+		ImageURLs: []string{"https://example.com/image.jpg"},
+		VideoURLs: []string{"https://example.com/video.mp4"},
+	})
+	if len(message) != 3 {
+		t.Fatalf("message = %#v", message)
+	}
+	if message[1]["type"] != "image" || message[2]["type"] != "video" {
+		t.Fatalf("message = %#v", message)
+	}
+}
+
 // TestMessageEventFromEnvelopeNoticeGroupIncrease 验证对应功能场景。
 func TestMessageEventFromEnvelopeNoticeGroupIncrease(t *testing.T) {
 	event := messageEventFromEnvelope(oneBotEnvelope{

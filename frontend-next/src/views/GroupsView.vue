@@ -36,6 +36,7 @@
             <span v-if="(group.group_triggers?.length ?? 0) > 0" class="badge">触发词 {{ group.group_triggers?.length }}</span>
             <span v-if="overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.welcome_enabled" class="badge">入群欢迎</span>
+            <span v-if="group.reply_gate" class="badge accent">专属准入</span>
           </div>
           <p class="plugin-card-desc">
             {{ group.system_prompt ? truncate(group.system_prompt, 60) : "沿用全局人设与默认行为。" }}
@@ -99,6 +100,10 @@
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
         <div class="field wide">
+          <label>本群准入条件</label>
+          <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
+        </div>
+        <div class="field wide">
           <label>本群插件开关（未设置跟随全局）</label>
           <div class="row-list" style="margin-top: 6px">
             <div v-for="plugin in plugins" :key="plugin.manifest.id" class="row-item">
@@ -135,12 +140,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { Plus, Save, SlidersHorizontal } from "@lucide/vue";
-import { listQQBotGroups, saveQQBotGroup, type PluginState, type QQBotGroupConfig } from "../api";
+import { getQQBotConfig, getQQBotPlatforms, listQQBotGroups, saveQQBotGroup, type PluginState, type QQBotGroupConfig } from "../api";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
+import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { toastError, toastSuccess } from "../toast";
 
 const groups = ref<QQBotGroupConfig[]>([]);
+// 群等级只有 QQ 有；按当前激活的机器人平台决定要不要显示这一项。
+const supportsGroupLevel = ref(true);
 const plugins = ref<PluginState[]>([]);
 const loaded = ref(false);
 const newGroupID = ref("");
@@ -161,6 +169,15 @@ async function load(): Promise<void> {
     const response = await listQQBotGroups();
     groups.value = response.groups;
     plugins.value = response.plugins;
+    try {
+      const [config, platformList] = await Promise.all([getQQBotConfig(), getQQBotPlatforms()]);
+      const active = config.profiles?.find((item) => item.id === config.active_profile_id) ?? config.profiles?.[0];
+      const def = platformList.platforms.find((item) => item.id === active?.platform);
+      supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
+    } catch {
+      // 拿不到平台信息时保守地把等级门槛显示出来。
+      supportsGroupLevel.value = true;
+    }
   } catch (error) {
     toastError(error instanceof Error ? error.message : "读取群配置失败");
   } finally {

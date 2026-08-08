@@ -38,13 +38,21 @@ type MessageEvent struct {
 	RawMessage  string           `json:"raw_message,omitempty"`
 	Segments    []MessageSegment `json:"segments,omitempty"`
 	SenderName  string           `json:"sender_name,omitempty"`
-	ToMe        bool             `json:"to_me,omitempty"`
+	// SenderRole 为 owner/admin/member；SenderLevel 是群等级（按群独立累积，
+	// 拿不到时为 0）；SenderTitle 是群头衔。部分 OneBot 实现不会在消息事件里
+	// 带 level，需要时由 memberCache 走 get_group_member_info 兜底。
+	SenderRole  string `json:"sender_role,omitempty"`
+	SenderLevel int    `json:"sender_level,omitempty"`
+	SenderTitle string `json:"sender_title,omitempty"`
+	ToMe        bool   `json:"to_me,omitempty"`
 }
 
 type OutgoingMessage struct {
 	GroupID        string
 	UserID         string
 	Text           string
+	ImageURLs      []string
+	VideoURLs      []string
 	ReplyMessageID string
 	MentionUserID  string
 }
@@ -85,18 +93,30 @@ type BotConfig struct {
 	Enabled                 bool   `json:"enabled"`
 	OneBotReverseWSEndpoint string `json:"onebot_reverse_ws_endpoint"`
 	OneBotAccessToken       string `json:"onebot_access_token,omitempty"`
-	NoneBotBridgeEnabled    bool   `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint   string `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken      string `json:"nonebot_bridge_token,omitempty"`
-	BotQQ                   string `json:"bot_qq,omitempty"`
-	OwnerID                 string `json:"owner_id,omitempty"`
+	// Telegram 走官方 Bot API 长轮询，认证方式和 OneBot 完全不同：
+	// 只需要 BotFather 给的 token，不需要公网地址。
+	TelegramBotToken string `json:"telegram_bot_token,omitempty"`
+	// TelegramAPIBaseURL 留空用官方 api.telegram.org，可指向自建 Bot API server。
+	TelegramAPIBaseURL string `json:"telegram_api_base_url,omitempty"`
+	// TelegramProxyURL 国内网络通常必须配置。
+	TelegramProxyURL      string `json:"telegram_proxy_url,omitempty"`
+	NoneBotBridgeEnabled  bool   `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint string `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken    string `json:"nonebot_bridge_token,omitempty"`
+	BotQQ                 string `json:"bot_qq,omitempty"`
+	OwnerID               string `json:"owner_id,omitempty"`
 	// OwnerLoginEnabled 允许主人通过 QQ 私聊一次性验证码确认 WebUI 登录（默认关）。
 	OwnerLoginEnabled bool     `json:"owner_login_enabled,omitempty"`
 	GroupTriggers     []string `json:"group_triggers,omitempty"`
 	DisabledGroups    []string `json:"disabled_groups,omitempty"`
-	WelcomeEnabled    bool     `json:"welcome_enabled,omitempty"`
-	WelcomeMessage    string   `json:"welcome_message,omitempty"`
-	SystemPrompt      string   `json:"system_prompt,omitempty"`
+	// GroupAdmission 决定在哪些群工作；Mode 留空等同 blacklist，
+	// DisabledGroups 行为不变。
+	GroupAdmission GroupAdmission `json:"group_admission,omitempty"`
+	// ReplyGate 是全局回复门槛（等级/时段/用户名单），nil 表示不设门槛。
+	ReplyGate      *ReplyGate `json:"reply_gate,omitempty"`
+	WelcomeEnabled bool       `json:"welcome_enabled,omitempty"`
+	WelcomeMessage string     `json:"welcome_message,omitempty"`
+	SystemPrompt   string     `json:"system_prompt,omitempty"`
 	// 回复行为个性化；*bool 为 nil 表示沿用默认值（开启），旧数据自动兼容。
 	ReplyReferenceEnabled *bool  `json:"reply_reference_enabled,omitempty"`
 	MentionUserEnabled    *bool  `json:"mention_user_enabled,omitempty"`
@@ -185,7 +205,9 @@ type GroupConfig struct {
 	RecentContextLimit int             `json:"recent_context_limit,omitempty"`
 	MaxReplyChars      int             `json:"max_reply_chars,omitempty"`
 	PluginOverrides    map[string]bool `json:"plugin_overrides,omitempty"`
-	UpdatedAt          time.Time       `json:"updated_at,omitempty"`
+	// ReplyGate 非 nil 时整体替换全局门槛，nil 表示跟随全局。
+	ReplyGate *ReplyGate `json:"reply_gate,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at,omitempty"`
 }
 
 type GroupConfigSet struct {
@@ -203,6 +225,10 @@ type ConfigPayload struct {
 	OneBotReverseWSEndpoint      string               `json:"onebot_reverse_ws_endpoint"`
 	OneBotAccessToken            string               `json:"onebot_access_token,omitempty"`
 	OneBotAccessTokenConfigured  bool                 `json:"onebot_access_token_configured,omitempty"`
+	TelegramBotToken             string               `json:"telegram_bot_token,omitempty"`
+	TelegramBotTokenConfigured   bool                 `json:"telegram_bot_token_configured,omitempty"`
+	TelegramAPIBaseURL           string               `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL             string               `json:"telegram_proxy_url,omitempty"`
 	NoneBotBridgeEnabled         bool                 `json:"nonebot_bridge_enabled,omitempty"`
 	NoneBotBridgeEndpoint        string               `json:"nonebot_bridge_endpoint,omitempty"`
 	NoneBotBridgeToken           string               `json:"nonebot_bridge_token,omitempty"`
@@ -212,6 +238,8 @@ type ConfigPayload struct {
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
+	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
+	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
@@ -295,6 +323,10 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if cfg.PluginOverrides == nil {
 		cfg.PluginOverrides = map[string]bool{}
 	}
+	if cfg.ReplyGate != nil {
+		normalized := cfg.ReplyGate.WithDefaults()
+		cfg.ReplyGate = &normalized
+	}
 	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
 	if cfg.UpdatedAt.IsZero() {
 		cfg.UpdatedAt = time.Now()
@@ -355,8 +387,11 @@ type ProfileSet struct {
 
 var (
 	ErrMissingOneBotEndpoint = errors.New("qqbot: onebot reverse websocket endpoint is required")
-	ErrInvalidOneBotEndpoint = errors.New("qqbot: onebot reverse websocket endpoint must use ws or wss and include a host")
-	ErrBotDisabled           = errors.New("qqbot: bot is disabled")
+	// Telegram 专有校验错误。
+	ErrMissingTelegramToken   = errors.New("assistant: telegram bot token is required")
+	ErrInvalidTelegramAPIBase = errors.New("assistant: telegram api base url must be http(s)")
+	ErrInvalidOneBotEndpoint  = errors.New("qqbot: onebot reverse websocket endpoint must use ws or wss and include a host")
+	ErrBotDisabled            = errors.New("qqbot: bot is disabled")
 )
 
 // NewProfileSet 基于单个机器人配置创建配置集。
@@ -518,6 +553,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.DisabledGroups == nil {
 		cfg.DisabledGroups = append([]string(nil), defaults.DisabledGroups...)
 	}
+	cfg.GroupAdmission = cfg.GroupAdmission.WithDefaults()
+	if cfg.ReplyGate != nil {
+		normalized := cfg.ReplyGate.WithDefaults()
+		cfg.ReplyGate = &normalized
+	}
 	if strings.TrimSpace(cfg.SystemPrompt) == "" {
 		cfg.SystemPrompt = defaults.SystemPrompt
 	}
@@ -616,6 +656,19 @@ func (cfg BotConfig) Validate() error {
 	if err := ValidatePlatform(cfg.Platform); err != nil {
 		return err
 	}
+	// Telegram 出站长轮询，没有回连地址可填；校验它自己的凭据。
+	if !IsOneBotPlatform(cfg.Platform) {
+		if cfg.Enabled && strings.TrimSpace(cfg.TelegramBotToken) == "" {
+			return ErrMissingTelegramToken
+		}
+		if base := strings.TrimSpace(cfg.TelegramAPIBaseURL); base != "" {
+			parsed, err := url.Parse(base)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+				return ErrInvalidTelegramAPIBase
+			}
+		}
+		return nil
+	}
 	endpoint := strings.TrimSpace(cfg.OneBotReverseWSEndpoint)
 	if cfg.Enabled && endpoint == "" {
 		return ErrMissingOneBotEndpoint
@@ -641,6 +694,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		Enabled:                      cfg.Enabled,
 		OneBotReverseWSEndpoint:      cfg.OneBotReverseWSEndpoint,
 		OneBotAccessTokenConfigured:  cfg.OneBotAccessToken != "",
+		TelegramBotTokenConfigured:   cfg.TelegramBotToken != "",
+		TelegramAPIBaseURL:           cfg.TelegramAPIBaseURL,
+		TelegramProxyURL:             cfg.TelegramProxyURL,
 		NoneBotBridgeEnabled:         cfg.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:        cfg.NoneBotBridgeEndpoint,
 		NoneBotBridgeTokenConfigured: cfg.NoneBotBridgeToken != "",
@@ -649,6 +705,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		OwnerLoginEnabled:            cfg.OwnerLoginEnabled,
 		GroupTriggers:                append([]string(nil), cfg.GroupTriggers...),
 		DisabledGroups:               append([]string(nil), cfg.DisabledGroups...),
+		GroupAdmission:               cfg.GroupAdmission.WithDefaults(),
+		ReplyGate:                    cfg.ReplyGate.Clone(),
 		WelcomeEnabled:               cfg.WelcomeEnabled,
 		WelcomeMessage:               cfg.WelcomeMessage,
 		SystemPrompt:                 cfg.SystemPrompt,
@@ -715,6 +773,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		Enabled:                    payload.Enabled,
 		OneBotReverseWSEndpoint:    payload.OneBotReverseWSEndpoint,
 		OneBotAccessToken:          payload.OneBotAccessToken,
+		TelegramBotToken:           payload.TelegramBotToken,
+		TelegramAPIBaseURL:         payload.TelegramAPIBaseURL,
+		TelegramProxyURL:           payload.TelegramProxyURL,
 		NoneBotBridgeEnabled:       payload.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:      payload.NoneBotBridgeEndpoint,
 		NoneBotBridgeToken:         payload.NoneBotBridgeToken,
@@ -723,6 +784,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		OwnerLoginEnabled:          payload.OwnerLoginEnabled,
 		GroupTriggers:              payload.GroupTriggers,
 		DisabledGroups:             payload.DisabledGroups,
+		GroupAdmission:             payload.GroupAdmission,
+		ReplyGate:                  payload.ReplyGate.Clone(),
 		WelcomeEnabled:             payload.WelcomeEnabled,
 		WelcomeMessage:             payload.WelcomeMessage,
 		SystemPrompt:               payload.SystemPrompt,
@@ -768,6 +831,10 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	if cfg.NoneBotBridgeToken == "" {
 		// NoneBot bridge token 与 OneBot token 语义一致，也保留旧值。
 		cfg.NoneBotBridgeToken = existing.NoneBotBridgeToken
+	}
+	if cfg.TelegramBotToken == "" {
+		// Telegram bot token 同理：读接口不回传明文，留空表示没改动。
+		cfg.TelegramBotToken = existing.TelegramBotToken
 	}
 	return cfg
 }

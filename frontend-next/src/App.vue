@@ -5,18 +5,31 @@
       <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false" />
     </transition>
 
-    <aside class="app-sidebar" :class="{ open: drawerOpen }" aria-label="主导航">
-      <div class="brand">
-        <span class="brand-mark">
-          <BotMessageSquare :size="19" aria-hidden="true" />
-        </span>
-        <span class="brand-name">
-          <strong>Diana</strong>
-          <button class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
-            {{ versionLabel }}
-            <span v-if="updateBehind > 0" class="version-dot" aria-label="有新版本"></span>
-          </button>
-        </span>
+    <aside id="app-sidebar" class="app-sidebar" :class="{ open: drawerOpen, collapsed }" aria-label="主导航">
+      <div class="sidebar-head">
+        <div class="brand">
+          <span class="brand-mark">
+            <BotMessageSquare :size="19" aria-hidden="true" />
+          </span>
+          <span class="brand-name">
+            <strong>Diana</strong>
+            <button class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
+              {{ versionLabel }}
+              <span v-if="updateBehind > 0" class="version-dot" aria-label="有新版本"></span>
+            </button>
+          </span>
+        </div>
+        <button
+          class="btn ghost icon-only sidebar-toggle"
+          type="button"
+          :aria-label="sidebarToggleLabel"
+          :aria-expanded="sidebarExpanded"
+          aria-controls="app-sidebar"
+          :title="sidebarToggleLabel"
+          @click="toggleSidebar"
+        >
+          <component :is="sidebarToggleIcon" :size="18" aria-hidden="true" />
+        </button>
       </div>
 
       <button
@@ -32,29 +45,25 @@
         <span class="nav-label">{{ item.label }}</span>
       </button>
 
-      <button
-        type="button"
-        class="nav-item"
-        :class="{ active: currentView === 'setup' }"
-        title="引导式配置流程"
-        @click="go('setup')"
-      >
-        <Sparkles :size="17" aria-hidden="true" />
-        <span class="nav-label">配置向导</span>
-      </button>
-
       <div class="nav-footer">
-        <span class="cluster" style="gap: 6px">
-          <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
-          {{ stream.connected ? "实时连接正常" : "实时连接已断开" }}
-        </span>
-        <span v-if="health" class="mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
+        <button class="nav-action" type="button" :title="themeToggleLabel" @click="cycleTheme">
+          <component :is="themeIcon" :size="16" aria-hidden="true" />
+          <span class="nav-label">{{ themeModeLabel }}</span>
+        </button>
       </div>
     </aside>
 
     <div class="app-main">
       <header class="app-topbar">
-        <button class="btn ghost icon-only menu-button" type="button" aria-label="打开导航" @click="drawerOpen = true">
+        <!-- 窄屏侧栏整体收起为抽屉，开关放在顶栏；桌面端用侧栏里那个。 -->
+        <button
+          class="btn ghost icon-only menu-button"
+          type="button"
+          :aria-label="sidebarToggleLabel"
+          aria-controls="app-sidebar"
+          :aria-expanded="sidebarExpanded"
+          @click="toggleSidebar"
+        >
           <PanelLeftOpen :size="18" aria-hidden="true" />
         </button>
         <span class="topbar-title">{{ viewTitle }}</span>
@@ -63,14 +72,14 @@
           <span class="status-dot" :class="{ pulse: botSummary.kind === 'ok' }" aria-hidden="true" />
           {{ botSummary.label }}
         </span>
-        <button
-          class="btn ghost icon-only"
-          type="button"
-          :aria-label="themeToggleLabel"
-          :title="themeToggleLabel"
-          @click="cycleTheme"
-        >
-          <component :is="themeIcon" :size="17" aria-hidden="true" />
+        <span class="topbar-stream" :title="stream.connected ? '事件实时推送中' : '实时通道已断开，页面数据可能不是最新'">
+          <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
+          <span class="topbar-stream-text">{{ stream.connected ? "实时连接正常" : "实时连接已断开" }}</span>
+        </span>
+        <span v-if="health" class="topbar-uptime mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
+        <button class="btn ghost small topbar-logout" type="button" title="退出登录" @click="doLogout">
+          <LogOut :size="15" aria-hidden="true" />
+          <span class="topbar-logout-text">退出登录</span>
         </button>
       </header>
 
@@ -78,7 +87,6 @@
         <DashboardView v-if="currentView === 'dashboard'" />
         <SetupWizard v-else-if="currentView === 'setup'" />
         <LLMView v-else-if="currentView === 'llm'" />
-        <TestChatView v-else-if="currentView === 'test'" />
         <AssistantView v-else-if="currentView === 'bot'" />
         <PluginsView v-else-if="currentView === 'plugins'" />
         <GroupsView v-else-if="currentView === 'groups'" />
@@ -88,12 +96,13 @@
     </div>
 
     <ToastHost />
+    <ConfirmHost />
     <VersionModal v-if="versionOpen" @close="versionOpen = false" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Component } from "vue";
 import {
   Bot,
@@ -102,10 +111,11 @@ import {
   FileClock,
   LayoutGrid,
   MessageCircle,
+  LogOut,
+  PanelLeftClose,
   PanelLeftOpen,
   PlugZap,
   Moon,
-  Sparkles,
   Sun,
   SunMoon,
   Users,
@@ -115,15 +125,15 @@ import { currentView, navItems, navigate, type ViewID } from "./router";
 import { startEventStream, stream } from "./stream";
 import { theme } from "./theme";
 import { formatUptime } from "./format";
-import { getAuthStatus, getConfig, getHealth, getSystemVersion, type HealthResponse, type SystemVersion } from "./api";
+import { getAuthStatus, getConfig, getHealth, getSystemVersion, logout, type HealthResponse, type SystemVersion } from "./api";
 import ToastHost from "./components/ToastHost.vue";
+import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
 import VersionModal from "./components/VersionModal.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import SetupWizard from "./views/SetupWizard.vue";
 import LLMView from "./views/LLMView.vue";
-import TestChatView from "./views/TestChatView.vue";
 import AssistantView from "./views/AssistantView.vue";
 import PluginsView from "./views/PluginsView.vue";
 import GroupsView from "./views/GroupsView.vue";
@@ -131,6 +141,35 @@ import LogsView from "./views/LogsView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
 const drawerOpen = ref(false);
+const SIDEBAR_DRAWER_QUERY = "(max-width: 960px)";
+const sidebarMedia = window.matchMedia(SIDEBAR_DRAWER_QUERY);
+const narrowSidebar = ref(sidebarMedia.matches);
+
+// 侧栏收起状态记在 localStorage，刷新后保持。
+const COLLAPSE_KEY = "dqb-next:sidebar-collapsed";
+const collapsed = ref(window.localStorage.getItem(COLLAPSE_KEY) === "1");
+
+function toggleCollapsed(): void {
+  collapsed.value = !collapsed.value;
+  window.localStorage.setItem(COLLAPSE_KEY, collapsed.value ? "1" : "0");
+}
+
+const sidebarExpanded = computed(() => (narrowSidebar.value ? drawerOpen.value : !collapsed.value));
+const sidebarToggleLabel = computed(() => (sidebarExpanded.value ? "收起侧栏" : "展开侧栏"));
+const sidebarToggleIcon = computed<Component>(() => (sidebarExpanded.value ? PanelLeftClose : PanelLeftOpen));
+
+function toggleSidebar(): void {
+  if (narrowSidebar.value) {
+    drawerOpen.value = !drawerOpen.value;
+    return;
+  }
+  toggleCollapsed();
+}
+
+function syncSidebarMode(event: MediaQueryListEvent): void {
+  narrowSidebar.value = event.matches;
+  drawerOpen.value = false;
+}
 const locked = ref(false);
 const versionOpen = ref(false);
 const systemVersion = ref<SystemVersion | null>(null);
@@ -140,11 +179,11 @@ const health = ref<HealthResponse | null>(null);
 
 const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
+
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
   setup: "配置向导",
   llm: "LLM 配置",
-  test: "测试台",
   bot: "机器人",
   plugins: "插件",
   groups: "群管理",
@@ -168,10 +207,10 @@ const botSummary = computed(() => {
   return { kind: "ok", label: `已连接 ${status.channel.self_id || ""}`.trim() };
 });
 
-const themeToggleLabel = computed(() => {
-  const labels: Record<string, string> = { auto: "主题：跟随系统", light: "主题：浅色", dark: "主题：深色" };
-  return labels[theme.mode] ?? "主题";
-});
+const themeModeLabels: Record<string, string> = { auto: "跟随系统", light: "浅色", dark: "深色" };
+
+const themeModeLabel = computed(() => themeModeLabels[theme.mode] ?? "跟随系统");
+const themeToggleLabel = computed(() => `外观：${themeModeLabel.value}（点击切换）`);
 
 function cycleTheme(): void {
   theme.mode = theme.mode === "auto" ? "light" : theme.mode === "light" ? "dark" : "auto";
@@ -186,7 +225,6 @@ function navIcon(id: ViewID): Component {
   const icons: Partial<Record<ViewID, Component>> = {
     dashboard: LayoutGrid,
     llm: BrainCircuit,
-    test: MessageCircle,
     bot: Bot,
     plugins: PlugZap,
     groups: Users,
@@ -214,17 +252,24 @@ async function bootApp(): Promise<void> {
   } catch {
     /* 版本信息失败时侧栏只显示占位 */
   }
-  // 首次访问且 LLM 未配置时，自动进入配置向导。
+  // 首次访问且 LLM 未配置时自动进入向导；之后只在总览顶部保留一条引导。
   try {
-    if (!window.localStorage.getItem(SETUP_DISMISS_KEY)) {
-      const config = await getConfig();
-      if (!config.api_key_configured) {
-        navigate("setup");
-      }
+    const config = await getConfig();
+    if (!config.api_key_configured && !window.localStorage.getItem(SETUP_DISMISS_KEY)) {
+      navigate("setup");
       window.localStorage.setItem(SETUP_DISMISS_KEY, "1");
     }
   } catch {
     /* 配置读取失败时停留在总览 */
+  }
+}
+
+async function doLogout(): Promise<void> {
+  try {
+    await logout();
+  } finally {
+    // 重载最简单，能确保清掉所有视图里缓存的配置数据。
+    window.location.reload();
   }
 }
 
@@ -234,6 +279,7 @@ function onLoginSuccess(): void {
 }
 
 onMounted(async () => {
+  sidebarMedia.addEventListener("change", syncSidebarMode);
   // 会话失效时任意接口的 401 会广播这个事件，统一切回登录界面。
   window.addEventListener("diana:unauthorized", () => {
     locked.value = true;
@@ -248,5 +294,9 @@ onMounted(async () => {
     /* 状态接口失败按未开启鉴权处理，避免把用户锁在门外 */
   }
   await bootApp();
+});
+
+onBeforeUnmount(() => {
+  sidebarMedia.removeEventListener("change", syncSidebarMode);
 });
 </script>

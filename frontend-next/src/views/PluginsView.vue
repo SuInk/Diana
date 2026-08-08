@@ -13,6 +13,27 @@
       </div>
     </header>
 
+    <section v-if="missingDependencies.length > 0" class="card" style="margin-bottom: 16px">
+      <div class="card-header">
+        <div>
+          <h2>解析器依赖缺失</h2>
+          <span class="card-sub">缺少这些命令时，对应平台的视频解析会直接失败</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="row-list">
+          <div v-for="dep in dependencies" :key="dep.name" class="row-item">
+            <div class="row-main">
+              <div class="row-title mono">{{ dep.name }}</div>
+              <div class="row-sub">{{ dep.purpose }}</div>
+            </div>
+            <span v-if="dep.available" class="badge accent" :title="dep.path">{{ dep.version || "已安装" }}</span>
+            <span v-else class="badge warn">未安装</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <div v-if="plugins.length > 0" class="plugin-grid">
       <article
         v-for="plugin in plugins"
@@ -138,6 +159,25 @@
                 <span>{{ option.label }}</span>
               </label>
             </div>
+            <div v-else-if="spec.secret" class="input-group">
+              <input
+                :id="`setting-${spec.key}`"
+                v-model="settingsForm[spec.key]"
+                class="input"
+                type="password"
+                autocomplete="off"
+                :disabled="clearSecrets.includes(spec.key)"
+                :placeholder="secretPlaceholder(spec.key)"
+              />
+              <button
+                v-if="secretConfigured(spec.key)"
+                class="btn small"
+                type="button"
+                @click="toggleClearSecret(spec.key)"
+              >
+                {{ clearSecrets.includes(spec.key) ? "取消清除" : "清除" }}
+              </button>
+            </div>
             <input v-else :id="`setting-${spec.key}`" v-model="settingsForm[spec.key]" class="input" type="text" />
             <span v-if="spec.description" class="hint">{{ spec.description }}</span>
           </template>
@@ -163,9 +203,12 @@ import {
   setPluginEnabled,
   uninstallPlugin,
   updatePluginSettings,
+  listResolverDependencies,
   type PluginSettingSpec,
-  type PluginState
+  type PluginState,
+  type ResolverDependency
 } from "../api";
+import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
@@ -175,9 +218,13 @@ const plugins = ref<PluginState[]>([]);
 const loading = ref(false);
 const busyID = ref("");
 
+const dependencies = ref<ResolverDependency[]>([]);
+const missingDependencies = computed(() => dependencies.value.filter((dep) => !dep.available));
+
 const settingsTarget = ref<PluginState | null>(null);
 // 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
 const settingsForm = ref<Record<string, any>>({});
+const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
@@ -226,7 +273,13 @@ async function install(plugin: PluginState): Promise<void> {
 }
 
 async function uninstall(plugin: PluginState): Promise<void> {
-  if (!window.confirm(`确定卸载「${plugin.manifest.name}」吗？`)) {
+  const ok = await askConfirm({
+    title: "卸载插件",
+    message: `确定卸载「${plugin.manifest.name}」吗？插件设置会保留，重新安装后仍然可用。`,
+    confirmLabel: "卸载",
+    danger: true
+  });
+  if (!ok) {
     return;
   }
   busyID.value = plugin.manifest.id;
@@ -248,7 +301,29 @@ function openSettings(plugin: PluginState): void {
     form[spec.key] = Array.isArray(value) ? [...value] : value;
   }
   settingsForm.value = form;
+  clearSecrets.value = [];
   settingsTarget.value = plugin;
+}
+
+function secretConfigured(key: string): boolean {
+  return settingsTarget.value?.secrets_configured?.[key] === true;
+}
+
+function secretPlaceholder(key: string): string {
+  if (clearSecrets.value.includes(key)) {
+    return "保存后将清除";
+  }
+  return secretConfigured(key) ? "已配置 — 留空沿用，填写则覆盖" : "尚未配置";
+}
+
+function toggleClearSecret(key: string): void {
+  const index = clearSecrets.value.indexOf(key);
+  if (index >= 0) {
+    clearSecrets.value.splice(index, 1);
+    return;
+  }
+  clearSecrets.value.push(key);
+  settingsForm.value[key] = "";
 }
 
 function multiSelected(key: string, option: string): boolean {
@@ -274,6 +349,7 @@ function toggleMultiSelect(key: string, option: string, event: Event): void {
 function closeSettings(): void {
   settingsTarget.value = null;
   settingsForm.value = {};
+  clearSecrets.value = [];
 }
 
 function resetSettings(): void {
@@ -322,7 +398,7 @@ async function saveSettings(): Promise<void> {
   }
   savingSettings.value = true;
   try {
-    upsert(await updatePluginSettings(target.manifest.id, buildSettingsPayload()));
+    upsert(await updatePluginSettings(target.manifest.id, buildSettingsPayload(), clearSecrets.value));
     toastSuccess(`已保存 ${target.manifest.name} 的设置`);
     closeSettings();
   } catch (error) {
@@ -332,7 +408,17 @@ async function saveSettings(): Promise<void> {
   }
 }
 
+async function loadDependencies(): Promise<void> {
+  try {
+    dependencies.value = (await listResolverDependencies()).resolver;
+  } catch {
+    // 依赖探测只是辅助信息，失败不该打断插件页。
+    dependencies.value = [];
+  }
+}
+
 onMounted(() => {
   void reload();
+  void loadDependencies();
 });
 </script>

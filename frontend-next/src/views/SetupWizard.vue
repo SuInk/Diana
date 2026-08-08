@@ -223,9 +223,9 @@
             <LayoutGrid :size="15" aria-hidden="true" />
             进入总览
           </button>
-          <button class="btn" type="button" @click="navigate('test')">
+          <button class="btn" type="button" @click="navigate('llm')">
             <MessageCircle :size="15" aria-hidden="true" />
-            先在测试台试一下
+            去 LLM 配置再测一次
           </button>
         </div>
       </div>

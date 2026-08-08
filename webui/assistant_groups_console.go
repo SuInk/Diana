@@ -39,7 +39,7 @@ func (h *QQBotHandler) listConsoleGroups(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, consoleGroupsResponse{
 		Groups:  groups,
-		Plugins: h.runtime.Plugins().List(),
+		Plugins: assistant.RedactStates(h.runtime.Plugins().List()),
 	})
 }
 

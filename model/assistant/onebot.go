@@ -50,6 +50,11 @@ type oneBotEnvelope struct {
 	Sender      struct {
 		Nickname string `json:"nickname,omitempty"`
 		Card     string `json:"card,omitempty"`
+		Role     string `json:"role,omitempty"`
+		// Level 是群等级。OneBot v11 规定为字符串，但各实现有的给数字、
+		// 有的给等级名，所以按 any 收下再宽松解析。
+		Level any    `json:"level,omitempty"`
+		Title string `json:"title,omitempty"`
 	} `json:"sender,omitempty"`
 
 	Echo    string         `json:"echo,omitempty"`
@@ -122,7 +127,7 @@ func (c *OneBotChannel) Connect(ctx context.Context, handler EventHandler) error
 
 // Send 通过 OneBot API 发送私聊或群聊消息。
 func (c *OneBotChannel) Send(ctx context.Context, msg OutgoingMessage) error {
-	if strings.TrimSpace(msg.Text) == "" {
+	if strings.TrimSpace(msg.Text) == "" && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 {
 		return nil
 	}
 	params := map[string]any{"message": buildOutgoingSegments(msg)}
@@ -147,7 +152,7 @@ func (c *OneBotChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 
 // buildOutgoingSegments 将回复消息转换为 OneBot segment 列表。
 func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
-	segments := make([]map[string]any, 0, 3)
+	segments := make([]map[string]any, 0, 3+len(msg.ImageURLs)+len(msg.VideoURLs))
 	if msg.ReplyMessageID != "" {
 		// 群聊回复先带 reply，再 at 原发送者，NapCat 会按 OneBot segment 顺序发送。
 		segments = append(segments, map[string]any{
@@ -166,6 +171,22 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 			"type": segment.Type,
 			"data": segment.Data,
 		})
+	}
+	for _, imageURL := range msg.ImageURLs {
+		if imageURL = strings.TrimSpace(imageURL); imageURL != "" {
+			segments = append(segments, map[string]any{
+				"type": "image",
+				"data": map[string]string{"file": imageURL},
+			})
+		}
+	}
+	for _, videoURL := range msg.VideoURLs {
+		if videoURL = strings.TrimSpace(videoURL); videoURL != "" {
+			segments = append(segments, map[string]any{
+				"type": "video",
+				"data": map[string]string{"file": videoURL},
+			})
+		}
 	}
 	return segments
 }
@@ -388,6 +409,9 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 		RawMessage:  rawMessage,
 		Segments:    segments,
 		SenderName:  envelope.Sender.Card,
+		SenderRole:  strings.TrimSpace(envelope.Sender.Role),
+		SenderLevel: parseGroupLevel(envelope.Sender.Level),
+		SenderTitle: strings.TrimSpace(envelope.Sender.Title),
 	}
 	if event.SenderName == "" {
 		event.SenderName = envelope.Sender.Nickname
@@ -427,6 +451,22 @@ func stringifyID(value any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
+}
+
+// parseGroupLevel 宽松解析群等级。拿不到或不是数字一律返回 0，
+// 由调用方按 fail-open 处理——OneBot 实现之间差异很大，把「解析不出」
+// 当成「等级 0」去拒绝会让换实现的用户整群失联。
+func parseGroupLevel(value any) int {
+	text := stringifyID(value)
+	if text == "" {
+		return 0
+	}
+	level, err := strconv.Atoi(text)
+	if err != nil || level < 0 {
+		// 有的实现返回的是等级名（如「潜水」）而不是数字。
+		return 0
+	}
+	return level
 }
 
 // PlainText 将 OneBot segment 列表转换为可读纯文本。

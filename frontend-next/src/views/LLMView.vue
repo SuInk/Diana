@@ -208,6 +208,32 @@
             已保存 {{ modelOptions.length }} 个可用模型；这里仅选择默认项，机器人页可为不同用途选择同一 Provider 下的其他模型。
           </span>
           <span v-else class="hint">填写 API Key 后获取完整模型列表；不选择默认项时保存会采用列表第一项。</span>
+
+          <!-- 中转和自建 endpoint 常常不实现 /models，拉不到时得能手填，
+               否则机器人页的「模型分配」只有默认模型一个可选。 -->
+          <div class="model-manual">
+            <div class="input-group">
+              <input
+                v-model="manualModelDraft"
+                class="input"
+                placeholder="手动添加模型 ID，多个用逗号或换行分隔"
+                autocomplete="off"
+                @keydown.enter.prevent="addManualModels"
+              />
+              <button class="btn" type="button" :disabled="manualModelDraft.trim() === ''" @click="addManualModels">
+                <Plus :size="14" aria-hidden="true" />
+                添加
+              </button>
+            </div>
+            <div v-if="modelOptions.length > 0" class="model-chips">
+              <span v-for="model in modelOptions" :key="model.id" class="model-chip">
+                <span class="model-chip-id">{{ model.id }}</span>
+                <button type="button" class="model-chip-remove" :title="`移除 ${model.id}`" @click="removeModel(model.id)">
+                  <X :size="12" aria-hidden="true" />
+                </button>
+              </span>
+            </div>
+          </div>
           <details v-if="modelsError" class="request-error" open>
             <summary>模型列表获取失败，查看完整错误</summary>
             <pre>{{ modelsError }}</pre>
@@ -247,7 +273,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from "@lucide/vue";
+import { ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
 import {
   cloneConfigProfile,
   deleteConfigProfile,
@@ -262,6 +288,7 @@ import {
   type LLMModelInfo,
   type Provider
 } from "../api";
+import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import Modal from "../components/Modal.vue";
 import AppSelect from "../components/AppSelect.vue";
@@ -307,6 +334,7 @@ const showKey = ref(false);
 const form = ref<LLMFormState>({ ...emptyForm });
 const selectedService = ref("openai");
 const modelOptions = ref<LLMModelInfo[]>([]);
+const manualModelDraft = ref("");
 const modelsLoading = ref(false);
 const modelsError = ref("");
 const modelPickerOpen = ref(false);
@@ -564,7 +592,13 @@ async function remove(profile: LLMConfig): Promise<void> {
   if (!profile.id) {
     return;
   }
-  if (!window.confirm(`确定删除配置「${profile.name || profile.model}」吗？`)) {
+  const ok = await askConfirm({
+    title: "删除 LLM 配置",
+    message: `确定删除「${profile.name || profile.model}」吗？此操作不可撤销。`,
+    confirmLabel: "删除",
+    danger: true
+  });
+  if (!ok) {
     return;
   }
   busy.value = true;
@@ -585,7 +619,13 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
   try {
     const payload = formToPayload();
     const result = await listLLMModels(payload);
-    modelOptions.value = result.models;
+    // 合并而不是覆盖：手动补充的模型不该被一次刷新冲掉。
+    const merged = [...result.models];
+    const fetched = new Set(result.models.map((model) => model.id));
+    for (const model of modelOptions.value) {
+      if (!fetched.has(model.id)) merged.push(model);
+    }
+    modelOptions.value = merged;
     if (result.models.length === 0) {
       toastError("该 Provider 未返回模型列表");
       return false;
@@ -611,6 +651,38 @@ function openModelPicker(): void {
     modelPickerOpen.value = true;
   } else if (!form.value.model.trim() && (form.value.api_key.trim() || editingConfigured.value)) {
     void loadModels(false);
+  }
+}
+
+/** 手动补充模型：拉不到列表时也能让机器人页有多个模型可分配。 */
+function addManualModels(): void {
+  const ids = manualModelDraft.value
+    .split(/[,，\s]+/)
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+  if (ids.length === 0) {
+    return;
+  }
+  const existing = new Set(modelOptions.value.map((model) => model.id));
+  let added = 0;
+  for (const id of ids) {
+    if (existing.has(id)) continue;
+    existing.add(id);
+    modelOptions.value.push({ id });
+    added++;
+  }
+  // 还没有默认模型时，第一个手填的就当默认。
+  if (!form.value?.model.trim() && modelOptions.value.length > 0 && form.value) {
+    form.value.model = modelOptions.value[0].id;
+  }
+  manualModelDraft.value = "";
+  toastSuccess(added > 0 ? `已添加 ${added} 个模型` : "这些模型已在列表里");
+}
+
+function removeModel(id: string): void {
+  modelOptions.value = modelOptions.value.filter((model) => model.id !== id);
+  if (form.value?.model === id) {
+    form.value.model = modelOptions.value[0]?.id ?? "";
   }
 }
 

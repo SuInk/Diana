@@ -39,6 +39,7 @@
   --accent-contrast: #ffffff;
 
   --sidebar-width: 236px;
+  --sidebar-collapsed-width: 64px;
   --topbar-height: 56px;
 }
 
@@ -193,9 +194,18 @@ code {
 }
 
 /* 品牌区 */
+.sidebar-head {
+  display: flex;
+  align-items: flex-start;
+  min-height: 60px;
+  padding-right: 44px;
+}
+
 .brand {
   display: flex;
   align-items: center;
+  flex: 1;
+  min-width: 0;
   gap: 10px;
   padding: 6px 8px 18px;
 }
@@ -651,8 +661,11 @@ code {
   flex: 1;
 }
 
-.menu-button {
-  display: none;
+.sidebar-toggle {
+  position: absolute;
+  top: 16px;
+  right: 14px;
+  margin: 0;
 }
 
 /* ---------- 通用组件 ---------- */
@@ -954,6 +967,118 @@ code {
   flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 20px;
+}
+
+/* 侧栏底部动作项：和导航项同一套「图标 + 文字」单行样式 */
+.nav-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nav-action:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* 收起态：只留图标，主内容区跟着让出空间 */
+.app-sidebar.collapsed {
+  width: var(--sidebar-collapsed-width);
+}
+
+.app-sidebar.collapsed .nav-label,
+.app-sidebar.collapsed .brand-name {
+  display: none;
+}
+
+.app-sidebar.collapsed .sidebar-head {
+  justify-content: center;
+  padding-right: 0;
+}
+
+.app-sidebar.collapsed .brand {
+  display: none;
+}
+
+.app-sidebar.collapsed .nav-item,
+.app-sidebar.collapsed .nav-action {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.app-sidebar.collapsed ~ .app-main {
+  margin-left: var(--sidebar-collapsed-width);
+}
+
+/* 顶栏实时连接状态 */
+.topbar-stream {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.topbar-uptime {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.app-topbar > .badge {
+  /* 不加会被 flex 压成竖排字符 */
+  flex: none;
+}
+
+/* 顶栏信息按宽度渐进降级，避免窄屏横向溢出 */
+@media (max-width: 900px) {
+  /* 运行时长在总览页的「运行信息」卡片里已经有了，窄屏优先让位 */
+  .topbar-uptime {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .topbar-stream-text {
+    display: none;
+  }
+
+  .topbar-logout .topbar-logout-text {
+    display: none;
+  }
+}
+
+/* 顶栏退出登录 */
+.topbar-logout:hover {
+  color: var(--err);
+  border-color: var(--err);
+}
+
+/* 返回链接：带文字说明去向，避免光秃秃的箭头被误当成「退出」 */
+.back-link {
+  align-self: flex-start;
+  margin-bottom: 8px;
+  padding: 4px 10px 4px 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.back-link:hover {
+  color: var(--text);
 }
 
 .view-header .view-title h1 {
@@ -1336,50 +1461,73 @@ code {
 }
 
 /* 机器人实例切换器 */
-.bot-switcher {
-  margin-bottom: 18px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-}
-
-.bot-switcher-head {
+/* 平台筛选标签 */
+.platform-filters {
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.platform-filter {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-
-.bot-switcher-head h2,
-.bot-switcher-head p {
-  margin: 0;
-}
-
-.bot-switcher-head h2 {
-  font-size: 16px;
-}
-
-.bot-switcher-head p {
-  margin-top: 3px;
-  color: var(--muted);
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
   font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.platform-filter:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.platform-filter.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+:root[data-theme="dark"] .platform-filter.active {
+  color: var(--accent);
+}
+
+.platform-filter-count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.platform-filter.active .platform-filter-count {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: inherit;
 }
 
 .bot-profile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 10px;
+  /* auto-fit 让空轨道塌陷：只有一个机器人时卡片不会被挤在左边一小格。 */
+  grid-template-columns: repeat(auto-fit, minmax(240px, 300px));
+  gap: 12px;
 }
 
 .bot-profile-tile {
   display: flex;
-  align-items: stretch;
+  flex-direction: column;
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-raised);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 
@@ -1390,11 +1538,11 @@ code {
 
 .bot-profile-select {
   display: flex;
-  align-items: center;
-  gap: 11px;
+  flex-direction: column;
+  gap: 9px;
   flex: 1;
   min-width: 0;
-  padding: 13px;
+  padding: 16px 16px 14px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -1406,31 +1554,30 @@ code {
   cursor: wait;
 }
 
+.bot-profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .bot-profile-icon {
   display: grid;
   place-items: center;
   width: 38px;
   height: 38px;
   flex: 0 0 38px;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--accent-soft);
   color: var(--accent);
 }
 
-.bot-profile-main {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-}
-
 .bot-profile-name {
   overflow: hidden;
-  font-size: 13.5px;
-  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 14.5px;
+  font-weight: 650;
 }
 
 .bot-profile-meta {
@@ -1442,11 +1589,20 @@ code {
   font-size: 11.5px;
 }
 
+/* QQ 号这类短文本不该被挤断行。 */
+.bot-profile-qq {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .platform-chip {
+  flex: none;
   padding: 2px 6px;
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--surface-2);
   color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .bot-profile-state {
@@ -1466,13 +1622,43 @@ code {
   color: var(--muted);
 }
 
+/* 操作横排在卡片底部，不再挤成右侧竖条。 */
 .bot-profile-actions {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.bot-profile-actions-spacer {
+  flex: 1;
+}
+
+/* 新增入口和机器人卡片同一网格，不额外套一层容器。 */
+.bot-profile-add {
+  display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 2px;
-  padding: 6px;
-  border-left: 1px solid var(--border);
+  gap: 8px;
+  /* 和机器人卡片同处一个网格，高度跟着这一行拉满 */
+  min-height: 132px;
+  height: 100%;
+  padding: 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.bot-profile-add:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .platform-picker {
@@ -1543,12 +1729,59 @@ code {
 }
 
 @media (max-width: 640px) {
-  .bot-switcher-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
+  /* 平台筛选标签 */
+.platform-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
 
-  .bot-profile-grid {
+.platform-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.platform-filter:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.platform-filter.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+:root[data-theme="dark"] .platform-filter.active {
+  color: var(--accent);
+}
+
+.platform-filter-count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.platform-filter.active .platform-filter-count {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: inherit;
+}
+
+.bot-profile-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -2005,6 +2238,45 @@ code {
   box-shadow: var(--shadow-sm);
 }
 
+/* 机器人配置分区标签 */
+.editor-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.editor-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.editor-tab {
+  flex: 1 1 auto;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.editor-tab:hover {
+  color: var(--text);
+}
+
+.editor-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
 /* 主题色选择 */
 .accent-swatches {
   display: flex;
@@ -2074,11 +2346,69 @@ code {
 
 .checklist-item .check-main {
   flex: 1;
+  /* 不加 min-width:0，里面的等宽 ws:// 地址会把整页撑出横向滚动 */
+  min-width: 0;
 }
 
 .checklist-item .check-hint {
   font-size: 12px;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 手动维护模型列表 */
+.model-manual {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 4px 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+}
+
+.model-chip-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.model-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.model-chip-remove:hover {
+  background: var(--err-soft);
+  color: var(--err);
 }
 
 /* 布局工具 */
@@ -2192,6 +2522,11 @@ code {
   }
 }
 
+/* 顶栏抽屉开关：只在窄屏出现，桌面端用侧栏头部那个 */
+.menu-button {
+  display: none;
+}
+
 /* 侧栏抽屉遮罩 */
 .drawer-backdrop {
   display: none;
@@ -2199,22 +2534,52 @@ code {
 
 /* ---------- 响应式 ---------- */
 @media (max-width: 960px) {
+  /* 窄屏不保留侧栏轨道：64px 里只放得下一个图标，白占一列宽度。
+     侧栏整体变成覆盖式抽屉，开关移到顶栏。 */
   .app-sidebar {
+    width: var(--sidebar-width);
     transform: translateX(-100%);
     transition: transform 0.22s ease;
     box-shadow: var(--shadow-lg);
   }
 
-  .app-sidebar.open {
+  .app-sidebar.open,
+  .app-sidebar.collapsed.open {
+    width: var(--sidebar-width);
     transform: none;
   }
 
-  .app-main {
+  /* 抽屉里始终是完整形态，桌面端的收起态不适用。 */
+  .app-sidebar.collapsed {
+    width: var(--sidebar-width);
+  }
+
+  .app-sidebar.collapsed .nav-label,
+  .app-sidebar.collapsed .brand-name,
+  .app-sidebar.collapsed .nav-uptime {
+    display: revert;
+  }
+
+  .app-sidebar.collapsed .brand,
+  .app-sidebar.collapsed .nav-item,
+  .app-sidebar.collapsed .nav-action {
+    justify-content: flex-start;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .app-main,
+  .app-sidebar.collapsed ~ .app-main {
     margin-left: 0;
   }
 
   .menu-button {
     display: inline-flex;
+  }
+
+  /* 抽屉自带关闭按钮，侧栏头部那个在窄屏下多余。 */
+  .sidebar-toggle {
+    display: none;
   }
 
   .drawer-backdrop {
