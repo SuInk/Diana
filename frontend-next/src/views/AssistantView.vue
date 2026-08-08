@@ -53,47 +53,52 @@
       </div>
 
       <div class="bot-profile-grid">
-    <article
-      v-for="profile in filteredProfiles"
-      :key="profile.id ?? profile.name"
-      class="bot-profile-tile"
-      :class="{ active: profile.id === activeProfileID }"
-    >
-      <button class="bot-profile-select" type="button" :disabled="busy" @click="editProfile(profile)">
-        <span class="bot-profile-head">
-          <span class="bot-profile-icon">
-            <Bot :size="20" aria-hidden="true" />
-          </span>
-          <span class="bot-profile-state" :class="profileState(profile).tone">
-            {{ profileState(profile).label }}
-          </span>
-        </span>
-        <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
-        <span class="bot-profile-meta">
-          <span class="platform-chip">{{ platformName(profile.platform) }}</span>
-          <span class="bot-profile-qq">{{ profile.bot_qq || accountPlaceholder(profile) }}</span>
-        </span>
-      </button>
-      <div class="bot-profile-actions">
-        <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
-          <Settings2 :size="13" aria-hidden="true" />
-          配置
-        </button>
-        <span class="bot-profile-actions-spacer"></span>
-        <button class="btn ghost icon-only small" type="button" :disabled="busy" title="复制机器人" @click="cloneProfile(profile)">
-          <Copy :size="14" aria-hidden="true" />
-        </button>
-        <button
-          class="btn ghost icon-only small danger"
-          type="button"
-          :disabled="busy || profiles.length <= 1"
-          title="删除机器人"
-          @click="removeProfile(profile)"
+        <article
+          v-for="profile in filteredProfiles"
+          :key="profile.id ?? profile.name"
+          class="bot-profile-tile"
+          :class="{ active: profile.id === activeProfileID }"
         >
-          <Trash2 :size="14" aria-hidden="true" />
+          <button class="bot-profile-select" type="button" :disabled="busy" @click="editProfile(profile)">
+            <span class="bot-profile-head">
+              <span class="bot-profile-icon">
+                <Bot :size="20" aria-hidden="true" />
+              </span>
+              <span class="bot-profile-state" :class="profileState(profile).tone">
+                {{ profileState(profile).label }}
+              </span>
+            </span>
+            <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
+            <span class="bot-profile-meta">
+              <span class="platform-chip">{{ platformName(profile.platform) }}</span>
+              <span class="bot-profile-qq">{{ profile.bot_qq || accountPlaceholder(profile) }}</span>
+            </span>
+          </button>
+          <div class="bot-profile-actions">
+            <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
+              <Settings2 :size="13" aria-hidden="true" />
+              配置
+            </button>
+            <span class="bot-profile-actions-spacer"></span>
+            <button class="btn ghost icon-only small" type="button" :disabled="busy" title="复制机器人" @click="cloneProfile(profile)">
+              <Copy :size="14" aria-hidden="true" />
+            </button>
+            <button
+              class="btn ghost icon-only small danger"
+              type="button"
+              :disabled="busy || profiles.length <= 1"
+              title="删除机器人"
+              @click="removeProfile(profile)"
+            >
+              <Trash2 :size="14" aria-hidden="true" />
+            </button>
+          </div>
+        </article>
+
+        <button class="bot-profile-add" type="button" :disabled="busy" @click="platformPickerOpen = true">
+          <Plus :size="18" aria-hidden="true" />
+          新增机器人
         </button>
-      </div>
-    </article>
       </div>
 
       <EmptyState
@@ -101,13 +106,6 @@
         title="没有匹配的机器人"
         hint="当前筛选条件下没有机器人，点「全部」查看所有。"
       />
-
-      <div class="bot-profile-grid">
-        <button class="bot-profile-add" type="button" :disabled="busy" @click="platformPickerOpen = true">
-          <Plus :size="18" aria-hidden="true" />
-          新增机器人
-        </button>
-      </div>
     </div>
 
     <div v-if="form && page === 'edit'" class="grid-main-side">
@@ -707,18 +705,11 @@ function selectAllPlatforms(): void {
   selectedPlatforms.value = [];
 }
 
+// 单选切换：点哪个平台就只看哪个，不保留上一个选中项。
+// 再点一次当前选中的标签回到「全部」。
 function togglePlatform(category: string): void {
-  if (allPlatformsSelected.value) {
-    // 从「全部」点某一项，视为只看这一项。
-    selectedPlatforms.value = [category];
-    return;
-  }
-  const index = selectedPlatforms.value.indexOf(category);
-  if (index >= 0) {
-    selectedPlatforms.value.splice(index, 1);
-  } else {
-    selectedPlatforms.value.push(category);
-  }
+  const only = selectedPlatforms.value.length === 1 && selectedPlatforms.value[0] === category;
+  selectedPlatforms.value = only ? [] : [category];
 }
 
 const isOneBotPlatform = computed(() => {

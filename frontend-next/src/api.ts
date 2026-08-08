@@ -350,6 +350,7 @@ async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
 export interface AuthStatus {
   auth_required: boolean;
   authenticated: boolean;
+  username?: string;
 }
 
 export function getAuthStatus(): Promise<AuthStatus> {
@@ -367,10 +368,10 @@ export function logout(): Promise<{ ok: boolean }> {
   return requestJSON<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
 }
 
-export function changePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean }> {
-  return requestJSON<{ ok: boolean }>("/api/auth/password", {
+export function changeCredentials(currentPassword: string, newUsername: string, newPassword: string): Promise<{ ok: boolean; username: string }> {
+  return requestJSON<{ ok: boolean; username: string }>("/api/auth/password", {
     method: "POST",
-    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+    body: JSON.stringify({ current_password: currentPassword, new_username: newUsername, new_password: newPassword })
   });
 }
 

@@ -9,7 +9,7 @@
       <input
         v-model="username"
         class="input"
-        placeholder="管理员账号"
+        placeholder="diana#账号"
         autocomplete="username"
       />
       <div class="input-group">
@@ -65,7 +65,7 @@ import { toastError, toastSuccess } from "../toast";
 
 const emit = defineEmits<{ success: [] }>();
 
-const username = ref("admin@diana.local");
+const username = ref("");
 const password = ref("");
 const show = ref(false);
 const busy = ref(false);

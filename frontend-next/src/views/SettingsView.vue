@@ -17,6 +17,10 @@
         <p v-if="!authRequired" class="muted field wide" style="margin: 0; font-size: 13px">
           当前控制台无需登录即可访问。部署在公网或局域网前，请务必设置管理密码。
         </p>
+        <div class="field">
+          <label for="sec-username">管理账号</label>
+          <input id="sec-username" v-model="username" class="input" placeholder="diana#账号" autocomplete="username" />
+        </div>
         <div v-if="authRequired" class="field">
           <label for="sec-current">当前密码</label>
           <input id="sec-current" v-model="currentPassword" class="input" type="password" autocomplete="current-password" />
@@ -26,9 +30,9 @@
           <input id="sec-new" v-model="newPassword" class="input" type="password" autocomplete="new-password" />
         </div>
         <div class="field wide cluster" style="gap: 8px">
-          <button class="btn primary" type="button" :disabled="savingPassword || newPassword.length === 0" @click="savePassword">
+          <button class="btn primary" type="button" :disabled="savingPassword || username.length === 0 || newPassword.length === 0" @click="saveCredentials">
             <KeyRound :size="15" aria-hidden="true" />
-            {{ savingPassword ? "保存中…" : authRequired ? "修改密码" : "开启密码保护" }}
+            {{ savingPassword ? "保存中…" : authRequired ? "更新账号与密码" : "开启密码保护" }}
           </button>
           <button v-if="authRequired" class="btn ghost" type="button" @click="doLogout">
             <LogOut :size="15" aria-hidden="true" />
@@ -154,7 +158,7 @@
 import { computed, onMounted, ref } from "vue";
 import { Download, KeyRound, LogOut, RefreshCw } from "@lucide/vue";
 import {
-  changePassword,
+  changeCredentials,
   getAuthStatus,
   getHealth,
   getSystemVersion,
@@ -178,6 +182,7 @@ const loading = ref(false);
 const updating = ref(false);
 const updateOutput = ref("");
 const authRequired = ref(false);
+const username = ref("");
 const currentPassword = ref("");
 const newPassword = ref("");
 const savingPassword = ref(false);
@@ -188,17 +193,20 @@ const lastAutoRun = ref("");
 
 async function loadAuthStatus(): Promise<void> {
   try {
-    authRequired.value = (await getAuthStatus()).auth_required;
+    const status = await getAuthStatus();
+    authRequired.value = status.auth_required;
+    username.value = status.username || "";
   } catch {
     /* 状态读取失败保持默认展示 */
   }
 }
 
-async function savePassword(): Promise<void> {
+async function saveCredentials(): Promise<void> {
   savingPassword.value = true;
   try {
-    await changePassword(currentPassword.value, newPassword.value);
-    toastSuccess(authRequired.value ? "密码已更新" : "密码保护已开启");
+    const result = await changeCredentials(currentPassword.value, username.value, newPassword.value);
+    username.value = result.username;
+    toastSuccess(authRequired.value ? "账号与密码已更新" : "密码保护已开启");
     authRequired.value = true;
     currentPassword.value = "";
     newPassword.value = "";

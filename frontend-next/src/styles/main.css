@@ -1642,7 +1642,9 @@ code {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  /* 和机器人卡片同处一个网格，高度跟着这一行拉满 */
   min-height: 132px;
+  height: 100%;
   padding: 16px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-lg);
@@ -2520,6 +2522,11 @@ code {
   }
 }
 
+/* 顶栏抽屉开关：只在窄屏出现，桌面端用侧栏头部那个 */
+.menu-button {
+  display: none;
+}
+
 /* 侧栏抽屉遮罩 */
 .drawer-backdrop {
   display: none;
@@ -2527,65 +2534,52 @@ code {
 
 /* ---------- 响应式 ---------- */
 @media (max-width: 960px) {
+  /* 窄屏不保留侧栏轨道：64px 里只放得下一个图标，白占一列宽度。
+     侧栏整体变成覆盖式抽屉，开关移到顶栏。 */
   .app-sidebar {
-    width: var(--sidebar-collapsed-width);
-    overflow: hidden;
-    transition: width 0.22s ease;
+    width: var(--sidebar-width);
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
     box-shadow: var(--shadow-lg);
   }
 
-  .app-sidebar.open {
-    width: var(--sidebar-width);
-  }
-
-  /* 窄屏保留一条控制栏，展开后覆盖在主内容上方。 */
-  .app-sidebar.collapsed {
-    width: var(--sidebar-collapsed-width);
-  }
-
+  .app-sidebar.open,
   .app-sidebar.collapsed.open {
     width: var(--sidebar-width);
+    transform: none;
   }
 
-  .app-sidebar:not(.open) .brand,
-  .app-sidebar:not(.open) .nav-item,
-  .app-sidebar:not(.open) .nav-footer {
-    display: none;
+  /* 抽屉里始终是完整形态，桌面端的收起态不适用。 */
+  .app-sidebar.collapsed {
+    width: var(--sidebar-width);
   }
 
-  .app-sidebar:not(.open) .sidebar-head {
-    justify-content: center;
-    padding-right: 0;
-  }
-
-  .app-sidebar.open .sidebar-head {
-    justify-content: flex-start;
-    padding-right: 44px;
-  }
-
-  .app-sidebar.open .brand {
-    display: flex;
-  }
-
-  .app-sidebar.open .nav-label,
-  .app-sidebar.open .brand-name {
+  .app-sidebar.collapsed .nav-label,
+  .app-sidebar.collapsed .brand-name,
+  .app-sidebar.collapsed .nav-uptime {
     display: revert;
   }
 
-  .app-sidebar.open .nav-item,
-  .app-sidebar.open .nav-action,
-  .app-sidebar.open .brand {
+  .app-sidebar.collapsed .brand,
+  .app-sidebar.collapsed .nav-item,
+  .app-sidebar.collapsed .nav-action {
     justify-content: flex-start;
     padding-left: 12px;
     padding-right: 12px;
   }
 
+  .app-main,
   .app-sidebar.collapsed ~ .app-main {
-    margin-left: var(--sidebar-collapsed-width);
+    margin-left: 0;
   }
 
-  .app-main {
-    margin-left: var(--sidebar-collapsed-width);
+  .menu-button {
+    display: inline-flex;
+  }
+
+  /* 抽屉自带关闭按钮，侧栏头部那个在窄屏下多余。 */
+  .sidebar-toggle {
+    display: none;
   }
 
   .drawer-backdrop {

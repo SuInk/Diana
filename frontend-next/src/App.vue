@@ -55,6 +55,17 @@
 
     <div class="app-main">
       <header class="app-topbar">
+        <!-- 窄屏侧栏整体收起为抽屉，开关放在顶栏；桌面端用侧栏里那个。 -->
+        <button
+          class="btn ghost icon-only menu-button"
+          type="button"
+          :aria-label="sidebarToggleLabel"
+          aria-controls="app-sidebar"
+          :aria-expanded="sidebarExpanded"
+          @click="toggleSidebar"
+        >
+          <PanelLeftOpen :size="18" aria-hidden="true" />
+        </button>
         <span class="topbar-title">{{ viewTitle }}</span>
         <span class="topbar-spacer" />
         <span v-if="botSummary" class="badge" :class="botSummary.kind">
