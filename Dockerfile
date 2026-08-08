@@ -18,7 +18,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.buildVersion=${GIT_
 FROM alpine:3.22
 WORKDIR /app
 # data/logs 预建并交给运行用户，容器不挂卷也能直接跑（SQLite 与日志有处可写）。
-RUN adduser -D -H -u 10001 diana \
+RUN apk add --no-cache ffmpeg nodejs yt-dlp \
+    && adduser -D -H -u 10001 diana \
     && mkdir -p /app/data /app/logs \
     && chown -R diana:diana /app/data /app/logs
 COPY --from=backend /out/diana-webui /app/diana-webui

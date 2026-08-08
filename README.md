@@ -203,17 +203,32 @@ WebUI 的 LLM 配置页会直接显示当前保存的 API Key，方便本地控�
 
 ## WebUI 访问安全
 
-WebUI 从首次启动起强制登录，本机和公网访问使用相同规则。默认管理员账号为 `admin@diana.local`。
+WebUI 从首次启动起强制登录，本机和公网访问使用相同规则。默认管理员账号会安全随机生成，格式为 `diana#` 加 16 位随机字符串，并持久化到 SQLite。
 
-- 首次启动未提供 `DIANA_ADMIN_PASSWORD` 时，Diana 会生成安全随机密码，并仅在该次启动的标准错误日志中显示一次。
-- 也可在首次启动时注入 `DIANA_ADMIN_PASSWORD=你的密码`；已有凭据时不会覆盖数据库中的密码。
-- 登录后可在设置页的「访问安全」中修改密码（至少 8 位）。
+- 首次启动未提供 `DIANA_ADMIN_PASSWORD` 时，Diana 会生成安全随机密码；随机账号和密码仅在该次启动的标准错误日志中显示一次。
+- 也可在首次启动时注入 `DIANA_ADMIN_USERNAME=diana#你的账号` 和 `DIANA_ADMIN_PASSWORD=你的密码`；已有凭据时不会覆盖数据库中的账号或密码。
+- 登录后可在设置页的「访问安全」中修改账号和密码（账号须以 `diana#` 开头，密码至少 8 位）。
 
 开启后所有 `/api` 接口需要登录，会话有效期 30 天；改密会使全部已登录会话失效。
 
 **主人 QQ 配对登录**：在「机器人」页开启「允许主人通过 QQ 私聊确认登录控制台」并配置主人 QQ 后，登录页会生成 6 位一次性验证码。主人把验证码私聊发送给机器人，保持网页开启即可自动登录。仅配置的主人 QQ 私聊有效，群聊和其他账号无效；验证码 5 分钟有效，匹配后立即作废，登录会话只能由生成验证码的网页领取。需要机器人在线。豁免路径：登录及 QQ 配对端点、`/api/health`（监控探活）、`/onebot/*`（由 OneBot access token 单独鉴权）、群管理页（自有群验证码流程）。会话 cookie 未设 Secure 以兼容内网 HTTP，公网部署请套 HTTPS 反向代理。
 
-**多机器人与平台**：机器人页顶部可创建、复制和切换多个机器人配置，每个配置独立保存平台、QQ、主人、人设、触发规则及模型分配。当前可选 NapCat、Lagrange.Core 和 go-cqhttp，均通过 OneBot V11 反向 WebSocket 适配器接入；运行时一次启用一个机器人配置。
+**多机器人与平台**：机器人页可创建、复制和切换多个机器人配置，每个配置独立保存平台、账号、主人、人设、触发规则及模型分配；列表按聊天平台分类，可用顶部标签筛选。运行时一次启用一个机器人配置。
+
+当前支持两类平台：
+
+| 分类 | 平台 | 接入方式 |
+| --- | --- | --- |
+| QQ | NapCat、Lagrange.Core、go-cqhttp | OneBot V11 反向 WebSocket，由接入端连到 Diana |
+| Telegram | Telegram | 官方 Bot API 长轮询，由 Diana 主动出站连接 |
+
+Telegram 只需要 BotFather 给的 Bot Token，不需要公网地址，也不用配置 webhook；国内网络通常还要在机器人页填写代理地址。部署了本地 Bot API server 时可填自建地址，绕过 50MB 上传限制。
+
+两个平台的能力差异：
+
+- **群等级门槛只对 QQ 生效**。Telegram 没有群等级这个概念，准入设置里的等级门槛在 Telegram 机器人上不显示，后台也不会去查群成员信息。
+- **语音消息、@某人** 依赖 OneBot 的 CQ 码，在 Telegram 上会自然降级：欢迎语正文照发，但不会 @ 到人。
+- **本地媒体**：OneBot 侧由接入端来拉 Diana 的 `/media/resolver` 地址；Telegram 拉不到本机地址，改为直接 multipart 上传。
 
 ## WebUI 日志中心
 
@@ -253,6 +268,22 @@ LLM_USER_AGENT=codex-cli/0.142.0 \
 
 启动后，私聊会直接触发；群聊中 `@机器人` 或以触发词开头会触发。
 
+## 准入控制
+
+「机器人」页的「准入控制」和「群管理」页的每个群，都可以限制机器人在什么条件下才回复。全局设置为默认值，群级设置整体覆盖全局（不是逐字段合并）。
+
+- **群准入模式**：默认「黑名单」，除禁用群外都工作，与旧版行为一致；切到「白名单」后只在列出的群工作，被拉进其它群不会回话。白名单模式下禁用群列表仍然生效。
+- **QQ 群等级门槛**：指群内活跃度等级（Lv.1~6），不是 QQ 账号等级（太阳月亮星星，OneBot 协议拿不到）。等级按群独立累积，同一个人在不同群的等级不同。
+- **回复时段**：结束时间早于开始时间表示跨夜，例如 `22:00-06:00`；两者相同视为全天开放。时区填 IANA 名称（如 `Asia/Shanghai`），留空用服务器本地时区。静默期可以配一句提示语，同一会话每小时最多提示一次。
+- **豁免 / 屏蔽用户**：豁免用户无视等级与时段；屏蔽用户在群聊和私聊都不回。
+- **主人绕过**：默认开启，建议保持——否则时段或等级配错时，你自己也会被挡在门外，QQ 侧没有补救手段。
+
+关于群等级的两点说明：
+
+部分 OneBot 实现不会在消息事件里带 `level`，Diana 会在需要时通过 `get_group_member_info` 补齐，结果缓存在内存里（按「群号+QQ号」区分，10 分钟有效，重启后靠日常聊天自动重建）。
+
+拿不到等级时**默认放行**。各实现返回的 `level` 差异很大，把「读不到」当成「等级 0」去拒绝会让整个群失联。需要严格拦截时可以把「等级读不到时」改成「拦截」，但要清楚代价。
+
 ## 内置 Agent
 
 WebUI 的“QQ 机器人配置”页可以启用内置 Agent。启用后，机器人会使用 Codex CLI 风格的“模型规划、工具调用、观察结果、最终回复”循环处理消息。
@@ -278,7 +309,11 @@ chrome --remote-debugging-port=9222
 
 1. 查看官方内置插件。
 2. 点击安装或启用。
-3. 默认内置 Go 版 `nonebot-plugin-resolver`，用于解析 B 站、YouTube、X、小红书、抖音等链接并作为上下文交给 LLM。
+3. 默认内置 Go 社交媒体解析器，可解析并发送 B 站、YouTube、X、小红书、抖音的图片或视频；大小、时长、清晰度、图集数量可以在插件设置中调整。知乎、微博、GitHub 只抓标题描述，不下载媒体，排除平台列表里已按「可下载媒体 / 仅标题」标注。
+
+   各平台的 Cookie、yt-dlp Cookie 文件和代理地址都可以直接在插件设置里填写，不必再改环境变量重启容器；填写后优先于同名环境变量。凭据保存后读接口只回传「已配置」标记，不返回明文，留空提交表示沿用原值，要清除需点设置项旁的「清除」。
+
+   插件页顶部会显示 `yt-dlp`、`ffmpeg`、`node` 三个外部依赖的探测结果，缺失时对应平台无法下载。
 4. 默认内置 Go 文件解析插件，支持 QQ 文件段和文本类文件链接，提取内容作为 LLM 上下文。
 5. 默认内置 `LLM 配置技能`，主人可用自然语言修改当前配置的 provider 和模型，例如“把提供商切到 gemini”“把模型换成 gemini-2.5-pro”“以后用 anthropic 的 claude-sonnet-4-5”；指定模型会先通过后端模型列表校验，列表里没有就不会保存。
 
@@ -308,8 +343,15 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | 聊天内错误提示前缀 |
 | `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
 | `DIANA_LOG_PATH` | 空 | `LOG_PATH` 的兼容别名 |
+| `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | NapCat 可访问的 Diana 媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
+| `DIANA_BILI_SESSDATA` | 空 | B 站登录 Cookie 中的 `SESSDATA`；WebUI 插件设置优先 |
+| `DIANA_DOUYIN_CK` | 空 | 抖音 Cookie；抖音解析必需，WebUI 插件设置优先 |
+| `DIANA_XHS_CK` | 空 | 小红书 Cookie；小红书解析必需，WebUI 插件设置优先 |
+| `DIANA_YTDLP_COOKIES` | 空 | yt-dlp Netscape Cookie 文件路径；WebUI 插件设置优先 |
+| `DIANA_RESOLVER_PROXY` | 空 | 社交媒体解析与 yt-dlp 使用的代理地址；WebUI 插件设置优先 |
 | `APP_DB_PATH` | `data/diana.db` | 本地 SQLite 配置数据库路径 |
-| `DIANA_ADMIN_PASSWORD` | 自动随机生成 | WebUI 管理员首次初始化密码；账号固定为 `admin@diana.local`，之后以 SQLite 中的凭据为准 |
+| `DIANA_ADMIN_USERNAME` | 自动随机生成 | WebUI 管理员首次初始化账号；默认为 `diana#` 加 16 位随机字符串，之后以 SQLite 中的凭据为准 |
+| `DIANA_ADMIN_PASSWORD` | 自动随机生成 | WebUI 管理员首次初始化密码；之后以 SQLite 中的凭据为准 |
 | `LLM_PROVIDER` | `openai_compatible` | LLM provider |
 | `LLM_API_KEY` | 空 | LLM API Key |
 | `LLM_BASE_URL` | 空 | OpenAI-compatible 自定义 Base URL |
@@ -327,7 +369,7 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `NONEBOT_BRIDGE_ENDPOINT` | `ws://127.0.0.1:8080/onebot/v11/ws` | NoneBot sidecar 的反向 WebSocket 地址 |
 | `NONEBOT_BRIDGE_TOKEN` | 空 | NoneBot 插件桥 access token |
 | `QQBOT_QQ` | 空 | 机器人 QQ 号 |
-| `DIANA_OWNER_ID` | 空 | 主人 QQ 号 |
+| `DIANA_OWNER_ID` | 空 | 主人 QQ 号（Telegram 上填数字用户 ID） |
 | `DIANA_GROUP_TRIGGERS` | `嘉然,然然,Diana,diana` | 群聊触发词 |
 | `DIANA_SYSTEM_PROMPT` | 内置提示词 | 机器人系统提示词 |
 | `DIANA_MAX_INPUT_CHARS` | `2000` | 单次输入最大字符数 |

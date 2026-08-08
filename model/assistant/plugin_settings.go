@@ -31,6 +31,20 @@ type PluginSettingSpec struct {
 	Step        float64               `json:"step,omitempty"`
 	Unit        string                `json:"unit,omitempty"`
 	Options     []PluginSettingOption `json:"options,omitempty"`
+	// Secret 标记凭据类设置（Cookie、密钥等）。这类值读接口一律不回传明文，
+	// 前端用密码框 + 「已配置」徽章展示，提交空串表示保持原值不变。
+	Secret bool `json:"secret,omitempty"`
+}
+
+// secretSettingKeys 返回声明为凭据的设置键。
+func secretSettingKeys(specs []PluginSettingSpec) map[string]bool {
+	out := map[string]bool{}
+	for _, spec := range specs {
+		if spec.Secret {
+			out[spec.Key] = true
+		}
+	}
+	return out
 }
 
 // SettingValues 是运行时注入插件请求的生效设置，读取方法在键缺失或类型不符时返回兜底值。

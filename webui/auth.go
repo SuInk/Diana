@@ -21,17 +21,27 @@ import (
 )
 
 const (
-	authCookieName     = "diana_session"
-	defaultAdminUser   = "admin@diana.local"
-	authSessionTTL     = 30 * 24 * time.Hour
-	authPBKDF2Iters    = 210_000
-	authMinPasswordLen = 8
+	authCookieName          = "diana_session"
+	legacyAdminUser         = "admin@diana.local"
+	adminUsernamePrefix     = "diana#"
+	authRandomUsernameBytes = 8
+	authSessionTTL          = 30 * 24 * time.Hour
+	authPBKDF2Iters         = 210_000
+	authMinPasswordLen      = 8
 )
 
 var (
 	ErrWrongPassword    = errors.New("账号或密码不正确")
 	ErrPasswordTooShort = errors.New("密码至少 8 位")
+	ErrUsernameInvalid  = errors.New("账号必须以 diana# 开头，后面至少包含 8 位字母或数字")
 )
+
+// AuthBootstrapResult 描述首次启动创建的管理员凭据。
+type AuthBootstrapResult struct {
+	Created           bool
+	Username          string
+	GeneratedPassword string
+}
 
 // AuthStore 持久化 WebUI 密码与会话。
 type AuthStore interface {
@@ -87,7 +97,7 @@ func NewAuthManager(store AuthStore) *AuthManager {
 	ctx := context.Background()
 	if auth, ok, err := store.LoadWebUIAuth(ctx); err == nil && ok && auth.PasswordHash != "" {
 		if strings.TrimSpace(auth.Username) == "" {
-			auth.Username = defaultAdminUser
+			auth.Username = legacyAdminUser
 		}
 		m.auth = &auth
 	}
@@ -101,28 +111,62 @@ func NewAuthManager(store AuthStore) *AuthManager {
 	return m
 }
 
-// Bootstrap 首次初始化管理员；空密码会生成安全随机密码并返回明文。
-func (m *AuthManager) Bootstrap(password string) (string, error) {
+// Bootstrap 首次初始化管理员；空账号和密码会分别生成安全随机值。
+func (m *AuthManager) Bootstrap(username, password string) (AuthBootstrapResult, error) {
 	password = strings.TrimSpace(password)
 	m.mu.Lock()
-	configured := m.auth != nil
+	auth := m.auth
 	m.mu.Unlock()
-	if configured {
-		return "", nil
+	if auth != nil {
+		return AuthBootstrapResult{Username: auth.Username}, nil
 	}
-	generated := ""
+	username = strings.TrimSpace(username)
+	if username == "" {
+		var err error
+		username, err = randomAdminUsername()
+		if err != nil {
+			return AuthBootstrapResult{}, err
+		}
+	} else if err := validateAdminUsername(username); err != nil {
+		return AuthBootstrapResult{}, err
+	}
+	generatedPassword := ""
 	if password == "" {
 		raw := make([]byte, 24)
 		if _, err := rand.Read(raw); err != nil {
-			return "", err
+			return AuthBootstrapResult{}, err
 		}
 		password = base64.RawURLEncoding.EncodeToString(raw)
-		generated = password
+		generatedPassword = password
 	}
-	if err := m.setPassword(password); err != nil {
+	if err := m.setCredentials(username, password); err != nil {
+		return AuthBootstrapResult{}, err
+	}
+	return AuthBootstrapResult{Created: true, Username: username, GeneratedPassword: generatedPassword}, nil
+}
+
+func randomAdminUsername() (string, error) {
+	raw := make([]byte, authRandomUsernameBytes)
+	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
-	return generated, nil
+	return adminUsernamePrefix + hex.EncodeToString(raw), nil
+}
+
+func validateAdminUsername(username string) error {
+	if !strings.HasPrefix(username, adminUsernamePrefix) {
+		return ErrUsernameInvalid
+	}
+	suffix := strings.TrimPrefix(username, adminUsernamePrefix)
+	if len(suffix) < 8 {
+		return ErrUsernameInvalid
+	}
+	for _, char := range suffix {
+		if !(char >= 'a' && char <= 'z') && !(char >= 'A' && char <= 'Z') && !(char >= '0' && char <= '9') {
+			return ErrUsernameInvalid
+		}
+	}
+	return nil
 }
 
 // Required 返回当前是否启用了密码鉴权。
@@ -130,6 +174,16 @@ func (m *AuthManager) Required() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.auth != nil
+}
+
+// Username 返回当前管理员账号。
+func (m *AuthManager) Username() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.auth == nil {
+		return ""
+	}
+	return m.auth.Username
 }
 
 // verify 校验明文密码；恒定时间比较。
@@ -155,8 +209,8 @@ func (m *AuthManager) verify(username, password string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
-// setPassword 生成盐并保存新密码，同时清空全部旧会话。
-func (m *AuthManager) setPassword(password string) error {
+// setCredentials 生成盐并保存新凭据，同时清空全部旧会话。
+func (m *AuthManager) setCredentials(username, password string) error {
 	if len([]rune(password)) < authMinPasswordLen {
 		return ErrPasswordTooShort
 	}
@@ -166,7 +220,7 @@ func (m *AuthManager) setPassword(password string) error {
 	}
 	hash := pbkdf2SHA256([]byte(password), salt, authPBKDF2Iters, sha256.Size)
 	record := storage.WebUIAuth{
-		Username:     defaultAdminUser,
+		Username:     username,
 		PasswordHash: base64.StdEncoding.EncodeToString(hash),
 		Salt:         base64.StdEncoding.EncodeToString(salt),
 		Iterations:   authPBKDF2Iters,
@@ -186,12 +240,38 @@ func (m *AuthManager) setPassword(password string) error {
 	return nil
 }
 
-// SetPassword 设置或修改密码；已有密码时必须先校验当前密码。
-func (m *AuthManager) SetPassword(current, next string) error {
-	if m.Required() && !m.verify(defaultAdminUser, current) {
-		return ErrWrongPassword
+// SetCredentials 设置或修改账号密码；已有凭据时必须先校验当前密码。
+func (m *AuthManager) SetCredentials(current, nextUsername, nextPassword string) (string, error) {
+	username := strings.TrimSpace(nextUsername)
+	if m.Required() {
+		currentUsername := m.Username()
+		if !m.verify(currentUsername, current) {
+			return "", ErrWrongPassword
+		}
+		if username == "" {
+			username = currentUsername
+		} else if err := validateAdminUsername(username); err != nil {
+			return "", err
+		}
+	} else if username == "" {
+		var err error
+		username, err = randomAdminUsername()
+		if err != nil {
+			return "", err
+		}
+	} else if err := validateAdminUsername(username); err != nil {
+		return "", err
 	}
-	return m.setPassword(next)
+	if err := m.setCredentials(username, nextPassword); err != nil {
+		return "", err
+	}
+	return username, nil
+}
+
+// SetPassword 保留旧调用方式，并在首次设置时生成随机账号。
+func (m *AuthManager) SetPassword(current, next string) error {
+	_, err := m.SetCredentials(current, "", next)
+	return err
 }
 
 // Login 校验密码并签发会话 token。
@@ -338,10 +418,15 @@ func (h *AuthHandler) Register(router gin.IRouter) {
 // status 返回鉴权开关与当前登录态。
 func (h *AuthHandler) status(c *gin.Context) {
 	token, _ := c.Cookie(authCookieName)
-	c.JSON(http.StatusOK, gin.H{
+	authenticated := h.manager.Authenticate(token)
+	result := gin.H{
 		"auth_required": h.manager.Required(),
-		"authenticated": h.manager.Authenticate(token),
-	})
+		"authenticated": authenticated,
+	}
+	if authenticated {
+		result["username"] = h.manager.Username()
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 // login 校验密码并写入会话 cookie。
@@ -375,17 +460,19 @@ func (h *AuthHandler) logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// setPassword 设置或修改管理密码。
+// setPassword 设置或修改管理账号与密码。
 func (h *AuthHandler) setPassword(c *gin.Context) {
 	var payload struct {
 		CurrentPassword string `json:"current_password"`
+		NewUsername     string `json:"new_username"`
 		NewPassword     string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := h.manager.SetPassword(payload.CurrentPassword, payload.NewPassword); err != nil {
+	username, err := h.manager.SetCredentials(payload.CurrentPassword, payload.NewUsername, payload.NewPassword)
+	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, ErrWrongPassword) {
 			status = http.StatusUnauthorized
@@ -395,12 +482,12 @@ func (h *AuthHandler) setPassword(c *gin.Context) {
 		return
 	}
 	// 改密清空了所有会话，立刻给当前端签发新会话，避免自己被登出。
-	token, err := h.manager.Login(defaultAdminUser, payload.NewPassword)
+	token, err := h.manager.Login(username, payload.NewPassword)
 	if err == nil {
 		h.setSessionCookie(c, token, int(authSessionTTL/time.Second))
 	}
-	recordRequestOperation(c, h.logs, "auth.password", "WebUI 管理密码已更新", "", nil)
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	recordRequestOperation(c, h.logs, "auth.password", "WebUI 管理凭据已更新", "", nil)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "username": username})
 }
 
 // setSessionCookie 写会话 cookie；不设 Secure 以兼容内网 HTTP 部署，公网请套 HTTPS 反代。

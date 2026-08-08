@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,6 +87,7 @@ type Runtime struct {
 	llmStore                  LLMProfileStore
 	modelLister               LLMModelLister
 	appLogs                   applog.Writer
+	localMedia                LocalMediaSharer
 	reminders                 ReminderStore
 	groupConfigs              GroupConfigStore
 	configSaver               ConfigSaver
@@ -97,6 +99,13 @@ type Runtime struct {
 	updatedAt                 time.Time
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
+
+	// members 缓存群成员的群等级与身份，供准入判定使用。
+	members *memberCache
+	// now 供测试注入时钟，nil 时用 time.Now。
+	now func() time.Time
+	// quietNotices 记录各会话上次发静默提示的时间，用于限频。
+	quietNotices map[string]time.Time
 
 	// sem 控制同时生成回复的 worker 数，history/recent 支撑上下文和状态页展示。
 	sem      chan struct{}
@@ -147,7 +156,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	if plugins == nil {
 		plugins = NewDefaultPluginManager()
 	}
-	return &Runtime{
+	rt := &Runtime{
 		cfg:         cfg,
 		channel:     channel,
 		bridge:      NewNoneBotBridge(bridgeConfigFromBotConfig(cfg), channel),
@@ -161,6 +170,9 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		sem:         make(chan struct{}, cfg.MaxBotConcurrency),
 		history:     map[string][]historyEntry{},
 	}
+	// 兜底查询走 Runtime 自己的 CallOneBotAPI，这样换 channel 后依然有效。
+	rt.members = newMemberCache(rt.CallOneBotAPI)
+	return rt
 }
 
 // SetLLMModelLister 注入运行时使用的模型列表读取器。
@@ -189,6 +201,14 @@ func (r *Runtime) SetAppLogWriter(writer applog.Writer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.appLogs = writer
+}
+
+// SetLocalMediaSharer exposes downloaded media through short-lived URLs that
+// a separately deployed OneBot implementation can fetch.
+func (r *Runtime) SetLocalMediaSharer(sharer LocalMediaSharer) {
+	r.mu.Lock()
+	r.localMedia = sharer
+	r.mu.Unlock()
 }
 
 // appLogWriter 返回当前审计日志写入器。
@@ -422,6 +442,11 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		// 群级人设覆盖全局，同一个机器人在不同群可以是不同角色。
 		cfg.SystemPrompt = groupCfg.SystemPrompt
 	}
+	if groupCfg.ReplyGate != nil {
+		// 群级门槛整体替换全局，而不是逐字段合并——界面上一个
+		// 「跟随全局 / 自定义」开关就能表达清楚。
+		cfg.ReplyGate = groupCfg.ReplyGate.Clone()
+	}
 	return cfg
 }
 
@@ -467,6 +492,9 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	if event.Kind == EventKindNotice {
 		return r.handleNotice(ctx, event)
 	}
+	// 放在准入判定之前：被机器人忽略的群消息同样能喂缓存，
+	// 等级信息就靠群里的日常水聊免费攒起来。
+	r.members.Observe(event)
 	text := PlainText(event.Segments)
 	if text == "" {
 		text = event.RawMessage
@@ -492,6 +520,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	}
 	r.remember(event)
 	if !r.shouldHandle(event, text) {
+		r.maybeNotifyQuietHours(ctx, event, text)
 		r.record(EventRecord{At: time.Now(), Kind: event.Kind, UserID: event.UserID, GroupID: event.GroupID, Text: text, Handled: false})
 		return nil
 	}
@@ -540,18 +569,46 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 }
 
 // shouldHandle 判断消息是否需要机器人回复。
+//
+// 拆成「准入」和「触发匹配」两步：静默时段提示需要区分「被门槛挡掉」和
+// 「本来就没触发」，混在一起判断不出来。
 func (r *Runtime) shouldHandle(event MessageEvent, text string) bool {
 	cfg := r.effectiveConfigForEvent(event)
+	return r.admits(cfg, event) && r.matchesTrigger(cfg, event, text)
+}
+
+// admits 做准入判定：群是否在工作范围内、是否被禁用、是否过得了回复门槛。
+func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
+	if event.Kind == EventKindPrivate {
+		// 私聊只受用户黑名单和时段约束，群相关的门槛不适用。
+		return r.replyGateAllows(cfg, event)
+	}
+	if event.Kind != EventKindGroup {
+		return false
+	}
+	if !cfg.GroupAdmission.Allows(event.GroupID) {
+		return false
+	}
+	if r.isGroupDisabled(event.GroupID) {
+		return false
+	}
+	return r.replyGateAllows(cfg, event)
+}
+
+// matchesTrigger 判断消息内容本身是否构成一次触发，不涉及任何准入判断。
+func (r *Runtime) matchesTrigger(cfg BotConfig, event MessageEvent, text string) bool {
 	if event.Kind == EventKindPrivate {
 		return true
 	}
 	if event.Kind != EventKindGroup {
 		return false
 	}
-	if r.isGroupDisabled(event.GroupID) {
-		return false
-	}
 	if event.ToMe {
+		return true
+	}
+	if r.resolverEnabledForEvent(event) && hasKnownResolverMediaURL(event, text) {
+		// Social media links are a direct plugin trigger, matching the behavior
+		// of the original Go resolver before the assistant package migration.
 		return true
 	}
 	// 有些 OneBot 实现不会把 at 转成 ToMe，这里用 raw_message 再兜底一次。
@@ -565,6 +622,114 @@ func (r *Runtime) shouldHandle(event MessageEvent, text string) bool {
 		}
 	}
 	return false
+}
+
+// quietNoticeInterval 限制静默期提示的频率。群里连着有人喊机器人时，
+// 不限频会把「现在休息中」刷成新的骚扰。
+const quietNoticeInterval = time.Hour
+
+// maybeNotifyQuietHours 在「本来会回复、但正处于静默时段」时给一句提示。
+// 只针对时段拦截：黑名单和等级不足都保持沉默，不解释原因。
+func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent, text string) {
+	cfg := r.effectiveConfigForEvent(event)
+	gate := cfg.ReplyGate
+	if gate == nil || gate.QuietReply == "" {
+		return
+	}
+	if gate.WithinActiveHours(r.clock()) {
+		// 不是时段挡的，别把别的拦截原因也提示出去。
+		return
+	}
+	ownerID := strings.TrimSpace(cfg.OwnerID)
+	if ownerID != "" && event.UserID == ownerID && gate.OwnerBypassEnabled() {
+		return
+	}
+	if gate.IsBlocked(event.UserID) || gate.IsExempt(event.UserID) {
+		return
+	}
+	if event.Kind == EventKindGroup {
+		if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(event.GroupID) {
+			return
+		}
+	} else if event.Kind != EventKindPrivate {
+		return
+	}
+	if !r.matchesTrigger(cfg, event, text) {
+		return
+	}
+	if !r.allowQuietNotice(event) {
+		return
+	}
+	_ = r.send(ctx, event, gate.QuietReply)
+}
+
+// allowQuietNotice 按会话限频，返回 true 表示这次可以提示。
+func (r *Runtime) allowQuietNotice(event MessageEvent) bool {
+	scope := "private:" + event.UserID
+	if event.Kind == EventKindGroup {
+		scope = "group:" + event.GroupID
+	}
+	now := r.clock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.quietNotices == nil {
+		r.quietNotices = map[string]time.Time{}
+	}
+	if last, ok := r.quietNotices[scope]; ok && now.Sub(last) < quietNoticeInterval {
+		return false
+	}
+	r.quietNotices[scope] = now
+	return true
+}
+
+// replyGateAllows 判断消息是否通过回复门槛。
+//
+// 判定顺序是刻意的：先做纯本地的廉价判断，最后才做可能要发 OneBot 请求的
+// 等级校验，避免被时段或黑名单挡掉的消息还白查一次群成员。
+func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
+	gate := cfg.ReplyGate
+	if gate == nil {
+		return true
+	}
+	ownerID := strings.TrimSpace(cfg.OwnerID)
+	if ownerID != "" && event.UserID == ownerID && gate.OwnerBypassEnabled() {
+		// 主人永远畅通，否则时段或等级配错了就把自己锁在门外，
+		// QQ 侧没有任何补救手段。
+		return true
+	}
+	if gate.IsBlocked(event.UserID) {
+		return false
+	}
+	if gate.IsExempt(event.UserID) {
+		return true
+	}
+	if !gate.WithinActiveHours(r.clock()) {
+		return false
+	}
+	// 群等级是 QQ 独有的概念，只有 OneBot 平台才查。否则 Telegram 上每条
+	// 未命中缓存的消息都会白白调一次不存在的 get_group_member_info。
+	if event.Kind == EventKindGroup && gate.MinGroupLevel > 0 && IsOneBotPlatform(cfg.Platform) {
+		level, known := r.members.LevelFor(event)
+		if !gate.LevelAllows(level, known) {
+			return false
+		}
+	}
+	return true
+}
+
+// clock 返回当前时间，测试可注入。
+func (r *Runtime) clock() time.Time {
+	r.mu.RLock()
+	now := r.now
+	r.mu.RUnlock()
+	if now != nil {
+		return now()
+	}
+	return time.Now()
+}
+
+func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
+	return r.plugins != nil && r.plugins.EnabledWithOverrides(resolverPluginID, r.pluginOverridesForEvent(event))
 }
 
 // replyTo 执行 owner 命令、插件和 LLM 回复链路。
@@ -595,12 +760,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		AppLogs:        r.appLogWriter(),
 	}, r.pluginOverridesForEvent(event))
 	for _, resp := range pluginResponses {
-		if resp.Reply != "" {
-			// 插件如果直接给出回复，就不再调用 LLM；只给 Context 时继续作为提示词补充。
-			if err := r.send(ctx, event, resp.Reply); err != nil {
+		if resp.Reply != "" || len(resp.ImageURLs) > 0 || len(resp.VideoURLs) > 0 {
+			// A media-producing plugin owns the reply so the downloaded assets are
+			// sent immediately instead of being reduced to LLM context.
+			if err := r.sendPluginResponse(ctx, event, resp); err != nil {
 				return "", err
 			}
-			return resp.Reply, nil
+			return directPluginReply(resp), nil
 		}
 	}
 
@@ -1043,6 +1209,67 @@ func (r *Runtime) send(ctx context.Context, event MessageEvent, reply string) er
 	return nil
 }
 
+const resolverLocalMediaTTL = 10 * time.Minute
+
+func directPluginReply(resp PluginResponse) string {
+	if reply := strings.TrimSpace(resp.Reply); reply != "" {
+		return reply
+	}
+	return strings.TrimSpace(resp.Context)
+}
+
+// sendPluginResponse sends text and remote images in one OneBot message. Local
+// videos are exposed through an expiring random URL so NapCat may run in a
+// different container without sharing Diana's temporary directory.
+func (r *Runtime) sendPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse) error {
+	r.mu.RLock()
+	sharer := r.localMedia
+	r.mu.RUnlock()
+	videoURLs := make([]string, 0, len(resp.VideoURLs))
+	localPaths := make([]string, 0, len(resp.VideoURLs))
+	for _, value := range resp.VideoURLs {
+		if path := localMediaPath(value); path != "" {
+			if sharer == nil {
+				return fmt.Errorf("qqbot: local media sharing is not configured")
+			}
+			sharedURL, ok := sharer.Share(path, resolverLocalMediaTTL)
+			if !ok {
+				return fmt.Errorf("qqbot: cannot share downloaded media %q", filepath.Base(path))
+			}
+			videoURLs = append(videoURLs, sharedURL)
+			localPaths = append(localPaths, path)
+			continue
+		}
+		if value = strings.TrimSpace(value); value != "" {
+			videoURLs = append(videoURLs, value)
+		}
+	}
+
+	msg := OutgoingMessage{
+		Text:      directPluginReply(resp),
+		ImageURLs: append([]string(nil), resp.ImageURLs...),
+		VideoURLs: videoURLs,
+	}
+	cfg := r.effectiveConfigForEvent(event)
+	if event.Kind == EventKindGroup {
+		msg.GroupID = event.GroupID
+		if boolValue(cfg.ReplyReferenceEnabled, true) {
+			msg.ReplyMessageID = event.MessageID
+		}
+		if boolValue(cfg.MentionUserEnabled, true) {
+			msg.MentionUserID = event.UserID
+		}
+	} else {
+		msg.UserID = event.UserID
+	}
+	if err := r.sendWithRetry(ctx, msg, cfg.SendRetryAttempts); err != nil {
+		cleanupLocalMediaFilesLater(localPaths, time.Second)
+		return err
+	}
+	cleanupLocalMediaFilesLater(localPaths, resolverLocalMediaTTL)
+	return nil
+}
+
 // sendWithRetry 发送单条消息，对非取消类错误做带退避的重试。
 func (r *Runtime) sendWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) error {
 	if attempts <= 0 {
@@ -1146,7 +1373,15 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if event.SubType != "group_increase" || event.GroupID == "" || event.UserID == "" {
 		return nil
 	}
+	if !cfg.GroupAdmission.Allows(event.GroupID) {
+		return nil
+	}
 	if r.isGroupDisabled(event.GroupID) {
+		return nil
+	}
+	// 欢迎语同样受时段约束，半夜不该往群里弹消息。新人的群等级必然是
+	// 最低档，这里只判时段，不套等级门槛。
+	if gate := cfg.ReplyGate; gate != nil && !gate.WithinActiveHours(r.clock()) {
 		return nil
 	}
 	// 只处理群成员增加通知，避免把其它 notice 类型误当作可回复消息。
