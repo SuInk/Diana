@@ -203,11 +203,11 @@ The WebUI LLM configuration page directly displays the saved API key for local c
 
 ## WebUI Access Security
 
-The WebUI requires authentication from the first startup, with identical rules for local and public access. The administrator username is `admin@diana.local`.
+The WebUI requires authentication from the first startup, with identical rules for local and public access. The default administrator username is generated securely as `diana#` followed by 16 random characters and persisted in SQLite.
 
-- If `DIANA_ADMIN_PASSWORD` is not provided on first startup, Diana generates a cryptographically secure random password and prints it once to standard error.
-- You may provide `DIANA_ADMIN_PASSWORD` on first startup instead. It never overwrites credentials already stored in SQLite.
-- After login, the password can be changed under Access Security in Settings. The minimum length is eight characters.
+- If `DIANA_ADMIN_PASSWORD` is not provided on first startup, Diana generates a cryptographically secure random password. The generated username and password are printed once to standard error.
+- You may provide `DIANA_ADMIN_USERNAME=diana#yourname` and `DIANA_ADMIN_PASSWORD` on first startup instead. They never overwrite credentials already stored in SQLite.
+- After login, the username and password can be updated under Settings > Access Security. Usernames must start with `diana#`; passwords must contain at least 8 characters.
 
 ## WebUI Log Center
 
@@ -262,6 +262,23 @@ Two notes about group levels:
 Some OneBot implementations omit `level` from message events. Diana fills the gap through `get_group_member_info` when needed and caches the result in memory, keyed by group ID plus user ID, valid for 10 minutes and rebuilt from ordinary chat traffic after a restart.
 
 When the level cannot be read, the bot **allows the message through** by default. Implementations vary widely in what they return for `level`, and treating "unknown" as level 0 would silence an entire group. Switch "when the level is unknown" to "block" if you need strict enforcement, but understand the tradeoff.
+
+## Platforms
+
+The bot page groups profiles by chat platform and lets you filter them with the tabs at the top. One profile runs at a time.
+
+| Category | Platform | How it connects |
+| --- | --- | --- |
+| QQ | NapCat, Lagrange.Core, go-cqhttp | OneBot V11 reverse WebSocket — the client dials into Diana |
+| Telegram | Telegram | Official Bot API long polling — Diana dials out |
+
+Telegram only needs the bot token from BotFather. There is no public address to expose and no webhook to configure; on restricted networks you will usually also want the proxy field. Point the custom Bot API field at a local Bot API server to lift the 50MB upload limit.
+
+Capability differences between the two:
+
+- **The group level threshold only applies to QQ.** Telegram has no group level, so the field is hidden for Telegram profiles and the backend never queries member info for them.
+- **Voice messages and @-mentions** ride on OneBot CQ codes and degrade gracefully on Telegram: a welcome message still sends, it just does not ping the member.
+- **Local media**: OneBot clients fetch Diana's `/media/resolver` URL, while Telegram cannot reach a local address and receives a direct multipart upload instead.
 
 ## Built-In Agent
 
@@ -326,7 +343,8 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `DIANA_YTDLP_COOKIES` | empty | Path to a Netscape cookie file for yt-dlp; WebUI plugin settings take precedence |
 | `DIANA_RESOLVER_PROXY` | empty | Proxy used by the social resolver and yt-dlp; WebUI plugin settings take precedence |
 | `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database path |
-| `DIANA_ADMIN_PASSWORD` | securely generated | Initial administrator password; the username is `admin@diana.local`, then SQLite credentials take precedence |
+| `DIANA_ADMIN_USERNAME` | securely generated | Initial administrator username; defaults to `diana#` followed by 16 random characters, then SQLite credentials take precedence |
+| `DIANA_ADMIN_PASSWORD` | securely generated | Initial administrator password; then SQLite credentials take precedence |
 | `LLM_PROVIDER` | `openai_compatible` | LLM provider |
 | `LLM_API_KEY` | empty | LLM API key |
 | `LLM_BASE_URL` | empty | Custom OpenAI-compatible base URL |

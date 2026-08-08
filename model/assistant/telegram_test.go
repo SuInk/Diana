@@ -181,12 +181,12 @@ func TestTelegramGroupMessageMapping(t *testing.T) {
 	msg := &telegramMessage{
 		MessageID: 7,
 		Date:      1700000000,
-		Text:      "@bot 你好",
+		Text:      "@diana_bot 你好",
 		From:      &telegramUser{ID: 42, FirstName: "小", LastName: "明"},
 		Chat:      &telegramChat{ID: -100999, Type: "supergroup", Title: "测试群"},
-		Entities:  []telegramEntity{{Type: "mention", Offset: 0, Length: 4}},
+		Entities:  []telegramEntity{{Type: "mention", Offset: 0, Length: 10}},
 	}
-	event := telegramMessageToEvent(msg, "8888")
+	event := telegramMessageToEvent(msg, "8888", "diana_bot")
 
 	if event.Kind != EventKindGroup {
 		t.Fatalf("应识别为群聊，实际 %q", event.Kind)
@@ -219,7 +219,7 @@ func TestTelegramPrivateMessageAlwaysToMe(t *testing.T) {
 		From:      &telegramUser{ID: 5, Username: "someone"},
 		Chat:      &telegramChat{ID: 5, Type: "private"},
 	}
-	event := telegramMessageToEvent(msg, "8888")
+	event := telegramMessageToEvent(msg, "8888", "diana_bot")
 	if event.Kind != EventKindPrivate {
 		t.Fatalf("应识别为私聊，实际 %q", event.Kind)
 	}
@@ -241,7 +241,7 @@ func TestTelegramUsesCaptionWhenTextEmpty(t *testing.T) {
 		From:      &telegramUser{ID: 5},
 		Chat:      &telegramChat{ID: 5, Type: "private"},
 	}
-	event := telegramMessageToEvent(msg, "")
+	event := telegramMessageToEvent(msg, "", "diana_bot")
 	if event.RawMessage != "图片说明" {
 		t.Fatalf("纯图片消息应取 caption，实际 %q", event.RawMessage)
 	}
@@ -249,10 +249,10 @@ func TestTelegramUsesCaptionWhenTextEmpty(t *testing.T) {
 
 func TestTelegramIgnoresUnknownChatType(t *testing.T) {
 	msg := &telegramMessage{Chat: &telegramChat{ID: 1, Type: "unknown"}}
-	if event := telegramMessageToEvent(msg, ""); event.Kind != "" {
+	if event := telegramMessageToEvent(msg, "", "diana_bot"); event.Kind != "" {
 		t.Fatalf("未知会话类型应被忽略，实际 %q", event.Kind)
 	}
-	if event := telegramMessageToEvent(nil, ""); event.Kind != "" {
+	if event := telegramMessageToEvent(nil, "", "diana_bot"); event.Kind != "" {
 		t.Fatal("nil 消息应被忽略")
 	}
 }
@@ -380,5 +380,92 @@ func TestTelegramCloseStopsPolling(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Close 后轮询未退出")
+	}
+}
+
+// —— @提及 精确匹配 ——
+
+// 只要看到「有 @ 就算」的话，群里任何带邮箱或 @别人的消息都会误触发。
+func TestTelegramMentionMustMatchBotUsername(t *testing.T) {
+	cases := []struct {
+		name     string
+		text     string
+		entities []telegramEntity
+		want     bool
+	}{
+		{"@本机器人", "@diana_bot 在吗", []telegramEntity{{Type: "mention", Offset: 0, Length: 10}}, true},
+		{"@别人", "@someone_else 在吗", []telegramEntity{{Type: "mention", Offset: 0, Length: 13}}, false},
+		{"纯邮箱不算", "联系 a@b.com", nil, false},
+		{"文本里有@但无实体", "价格 @ 100", nil, false},
+		{"大小写不敏感", "@Diana_Bot hi", []telegramEntity{{Type: "mention", Offset: 0, Length: 10}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := telegramMentionsBot(tc.text, tc.entities, "8888", "diana_bot")
+			if got != tc.want {
+				t.Fatalf("%q 期望 %v，实际 %v", tc.text, tc.want, got)
+			}
+		})
+	}
+}
+
+// entity 的 offset/length 以 UTF-16 码元计，中文前缀不能按字节切。
+func TestTelegramMentionHandlesUTF16Offsets(t *testing.T) {
+	text := "你好呀 @diana_bot"
+	// "你好呀 " 是 4 个 UTF-16 码元，@diana_bot 是 10 个。
+	entities := []telegramEntity{{Type: "mention", Offset: 4, Length: 10}}
+	if !telegramMentionsBot(text, entities, "8888", "diana_bot") {
+		t.Fatal("中文前缀后的 @提及 应能正确识别")
+	}
+}
+
+func TestTelegramTextMentionMatchesBySelfID(t *testing.T) {
+	entities := []telegramEntity{{Type: "text_mention", Offset: 0, Length: 2, User: &telegramUser{ID: 8888}}}
+	if !telegramMentionsBot("机器人 hi", entities, "8888", "") {
+		t.Fatal("text_mention 应按用户 ID 匹配")
+	}
+	other := []telegramEntity{{Type: "text_mention", Offset: 0, Length: 2, User: &telegramUser{ID: 9999}}}
+	if telegramMentionsBot("别人 hi", other, "8888", "") {
+		t.Fatal("text_mention 指向别人时不该触发")
+	}
+}
+
+// —— 入群通知 ——
+
+// 不映射 new_chat_members 的话，欢迎语在 Telegram 上永远不触发。
+func TestTelegramMapsNewChatMemberToNotice(t *testing.T) {
+	msg := &telegramMessage{
+		MessageID:      9,
+		Date:           1700000000,
+		Chat:           &telegramChat{ID: -100777, Type: "supergroup"},
+		From:           &telegramUser{ID: 1, FirstName: "邀请人"},
+		NewChatMembers: []telegramUser{{ID: 4242, FirstName: "新", LastName: "人"}},
+	}
+	event := telegramMessageToEvent(msg, "8888", "diana_bot")
+
+	if event.Kind != EventKindNotice {
+		t.Fatalf("应映射为 notice，实际 %q", event.Kind)
+	}
+	if event.SubType != "group_increase" {
+		t.Fatalf("SubType 应为 group_increase，实际 %q", event.SubType)
+	}
+	if event.GroupID != "-100777" {
+		t.Fatalf("GroupID 错误：%q", event.GroupID)
+	}
+	// UserID 必须是新加入的人，不是发出通知的人。
+	if event.UserID != "4242" {
+		t.Fatalf("UserID 应为新成员，实际 %q", event.UserID)
+	}
+	if event.SenderName != "新 人" {
+		t.Fatalf("SenderName 错误：%q", event.SenderName)
+	}
+}
+
+func TestTelegramDisplayNameFallsBackToUsername(t *testing.T) {
+	if got := telegramDisplayName(&telegramUser{Username: "nick"}); got != "nick" {
+		t.Fatalf("无姓名时应回落 username，实际 %q", got)
+	}
+	if got := telegramDisplayName(nil); got != "" {
+		t.Fatalf("nil 用户应返回空串，实际 %q", got)
 	}
 }

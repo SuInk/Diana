@@ -1,6 +1,8 @@
 package assistant
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -369,5 +371,41 @@ func TestQuietNoticeIsRateLimited(t *testing.T) {
 	// 不同群互不影响。
 	if !rt.allowQuietNotice(MessageEvent{Kind: EventKindGroup, GroupID: "200", UserID: "7"}) {
 		t.Fatal("另一个群应独立计频")
+	}
+}
+
+// 群等级是 QQ 独有的概念。Telegram 上不该为此调用 get_group_member_info，
+// 否则每条未命中缓存的消息都会白发一次注定 404 的请求。
+func TestLevelGateSkippedOnNonOneBotPlatform(t *testing.T) {
+	calls := 0
+	newRT := func(platform string) *Runtime {
+		rt := gateRuntime(t, BotConfig{
+			Platform: platform,
+			BotQQ:    "42",
+			ReplyGate: &ReplyGate{
+				MinGroupLevel:      5,
+				LevelUnknownPolicy: "deny",
+			},
+		}, time.Date(2026, 8, 4, 12, 0, 0, 0, time.Local))
+		rt.members = newMemberCache(func(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+			calls++
+			return nil, errors.New("unsupported")
+		})
+		return rt
+	}
+
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "1", UserID: "7", ToMe: true}
+
+	// Telegram：门槛整体跳过，消息照常处理，且不查成员信息。
+	if !newRT(PlatformTelegram).shouldHandle(event, "hi") {
+		t.Fatal("Telegram 上不应被群等级门槛拦下")
+	}
+	if calls != 0 {
+		t.Fatalf("Telegram 上不该查群成员信息，实际调用 %d 次", calls)
+	}
+
+	// OneBot：门槛照常生效，deny 策略下拿不到等级就拦截。
+	if newRT(PlatformNapCat).shouldHandle(event, "hi") {
+		t.Fatal("OneBot 上 deny 策略应拦下未知等级")
 	}
 }

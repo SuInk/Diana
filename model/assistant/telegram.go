@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 )
 
 // TelegramConfig 是 Telegram Bot API 通道的连接配置。
@@ -49,6 +50,8 @@ type TelegramChannel struct {
 
 	client *http.Client
 	cancel context.CancelFunc
+	// botUsername 来自 getMe，用于精确判断 @提及。
+	botUsername string
 	// offset 是下一次 getUpdates 的起点，保证已处理的更新不会重复投递。
 	offset int64
 }
@@ -119,8 +122,13 @@ func (c *TelegramChannel) Connect(ctx context.Context, handler EventHandler) err
 	c.mu.Unlock()
 	defer cancel()
 
-	// 先用 getMe 确认 token 有效，顺便拿到 bot 自己的 ID。
+	// 先用 getMe 确认 token 有效，顺便拿到 bot 自己的 ID 和 username。
+	// username 是判断「这条消息有没有 @我」的唯一依据，必须拿到。
 	if me, err := c.CallAPI(pollCtx, "getMe", nil); err == nil {
+		username, _ := me["username"].(string)
+		c.mu.Lock()
+		c.botUsername = username
+		c.mu.Unlock()
 		c.setStatus(true, telegramAnyID(me["id"]), "")
 	} else {
 		c.setStatus(false, "", err.Error())
@@ -206,12 +214,13 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 	}
 	c.mu.RLock()
 	handler := c.handler
-	selfID := c.Status().SelfID
+	username := c.botUsername
 	c.mu.RUnlock()
+	selfID := c.Status().SelfID
 	if handler == nil {
 		return
 	}
-	event := telegramMessageToEvent(message, selfID)
+	event := telegramMessageToEvent(message, selfID, username)
 	if event.Kind == "" {
 		return
 	}
@@ -460,15 +469,16 @@ type telegramUpdate struct {
 }
 
 type telegramMessage struct {
-	MessageID int64         `json:"message_id"`
-	Date      int64         `json:"date"`
-	Text      string        `json:"text"`
-	Caption   string        `json:"caption"`
-	From      *telegramUser `json:"from"`
-	Chat      *telegramChat `json:"chat"`
-	ReplyTo   *telegramMessage
-	Entities  []telegramEntity `json:"entities"`
-	Photo     []telegramPhoto  `json:"photo"`
+	MessageID      int64          `json:"message_id"`
+	Date           int64          `json:"date"`
+	Text           string         `json:"text"`
+	Caption        string         `json:"caption"`
+	From           *telegramUser  `json:"from"`
+	Chat           *telegramChat  `json:"chat"`
+	NewChatMembers []telegramUser `json:"new_chat_members,omitempty"`
+	ReplyTo        *telegramMessage
+	Entities       []telegramEntity `json:"entities"`
+	Photo          []telegramPhoto  `json:"photo"`
 }
 
 type telegramUser struct {
@@ -486,9 +496,10 @@ type telegramChat struct {
 }
 
 type telegramEntity struct {
-	Type   string `json:"type"`
-	Offset int    `json:"offset"`
-	Length int    `json:"length"`
+	Type   string        `json:"type"`
+	Offset int           `json:"offset"`
+	Length int           `json:"length"`
+	User   *telegramUser `json:"user,omitempty"`
 }
 
 type telegramPhoto struct {
@@ -502,10 +513,27 @@ type telegramPhoto struct {
 //   - from.id -> 用户 ID；Telegram 没有 QQ 那样的群等级，SenderLevel 保持 0，
 //     ReplyGate 的等级门槛会按「读不到即放行」处理
 //   - ToMe 由文本里的 @username 提及判断
-func telegramMessageToEvent(msg *telegramMessage, selfID string) MessageEvent {
+func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) MessageEvent {
 	if msg == nil || msg.Chat == nil {
 		return MessageEvent{}
 	}
+	// 入群通知：Telegram 把它作为带 new_chat_members 的普通消息下发，
+	// 不映射的话欢迎语在 Telegram 上永远不会触发。
+	if len(msg.NewChatMembers) > 0 && msg.Chat.Type != "private" {
+		joined := msg.NewChatMembers[0]
+		return MessageEvent{
+			Kind:        EventKindNotice,
+			SubType:     "group_increase",
+			Time:        msg.Date,
+			SelfID:      selfID,
+			MessageID:   strconv.FormatInt(msg.MessageID, 10),
+			MessageType: "notice",
+			GroupID:     strconv.FormatInt(msg.Chat.ID, 10),
+			UserID:      strconv.FormatInt(joined.ID, 10),
+			SenderName:  telegramDisplayName(&joined),
+		}
+	}
+
 	text := msg.Text
 	if text == "" {
 		text = msg.Caption
@@ -533,33 +561,60 @@ func telegramMessageToEvent(msg *telegramMessage, selfID string) MessageEvent {
 
 	if msg.From != nil {
 		event.UserID = strconv.FormatInt(msg.From.ID, 10)
-		event.SenderName = strings.TrimSpace(strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName))
-		if event.SenderName == "" {
-			event.SenderName = msg.From.Username
-		}
+		event.SenderName = telegramDisplayName(msg.From)
 	}
 
 	// 私聊天然是对机器人说的；群里靠 @提及 判断。
 	if event.Kind == EventKindPrivate {
 		event.ToMe = true
 	} else {
-		event.ToMe = telegramMentionsBot(text, msg.Entities)
+		event.ToMe = telegramMentionsBot(text, msg.Entities, selfID, botUsername)
 	}
 	return event
 }
 
-// telegramMentionsBot 判断消息里是否有 mention 实体。
+// telegramMentionsBot 判断消息是否 @ 了本机器人。
 //
-// 这里只认「有没有 @某人」，不校验 @ 的是不是本 bot：Bot API 不回传自己的
-// username，拿到它要额外一次 getMe 并缓存。群里默认也有触发词机制兜底，
-// 宁可多触发一次交给上层判断，也不要漏掉真正 @ 机器人的消息。
-func telegramMentionsBot(text string, entities []telegramEntity) bool {
+// 必须精确匹配 username：只要看到「有 @ 就算」的话，群里任何带邮箱或
+// @别人的消息都会触发机器人。
+//
+// Bot API 的 entity offset/length 以 UTF-16 码元计，中文等非 BMP 前缀会让
+// 直接按字节切片取错位置，所以先转成 UTF-16 再切。
+func telegramMentionsBot(text string, entities []telegramEntity, selfID, botUsername string) bool {
+	units := utf16.Encode([]rune(text))
 	for _, entity := range entities {
-		if entity.Type == "mention" || entity.Type == "text_mention" {
-			return true
+		switch entity.Type {
+		case "mention":
+			if botUsername == "" {
+				continue
+			}
+			if entity.Offset < 0 || entity.Offset+entity.Length > len(units) {
+				continue
+			}
+			mention := string(utf16.Decode(units[entity.Offset : entity.Offset+entity.Length]))
+			if strings.EqualFold(strings.TrimPrefix(mention, "@"), botUsername) {
+				return true
+			}
+		case "text_mention":
+			// 没有 username 的机器人不会收到 text_mention，这里仍按 ID 兜底。
+			if entity.User != nil && selfID != "" && strconv.FormatInt(entity.User.ID, 10) == selfID {
+				return true
+			}
 		}
 	}
-	return strings.Contains(text, "@")
+	return false
+}
+
+// telegramDisplayName 取「名 姓」，都没有时回落 username。
+func telegramDisplayName(user *telegramUser) string {
+	if user == nil {
+		return ""
+	}
+	name := strings.TrimSpace(strings.TrimSpace(user.FirstName) + " " + strings.TrimSpace(user.LastName))
+	if name == "" {
+		return user.Username
+	}
+	return name
 }
 
 func telegramAnyID(value any) string {

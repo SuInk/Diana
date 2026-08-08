@@ -10,7 +10,7 @@
     </div>
 
     <div v-if="!allowInherit || custom" class="form-grid">
-      <div class="field">
+      <div v-if="supportsGroupLevel" class="field">
         <label :for="`${idPrefix}-level`">QQ 群等级门槛</label>
         <input
           :id="`${idPrefix}-level`"
@@ -22,7 +22,7 @@
         <p class="muted" style="margin-top: 4px">0 表示不限。指群内活跃度等级（Lv.1~6），不是 QQ 账号等级。</p>
       </div>
 
-      <div class="field">
+      <div v-if="supportsGroupLevel" class="field">
         <label :for="`${idPrefix}-unknown`">等级读不到时</label>
         <AppSelect
           :id="`${idPrefix}-unknown`"
@@ -111,24 +111,24 @@
             @change="patch({ owner_bypass: checkedOf($event) })"
           />
           <span class="track" aria-hidden="true"></span>
-          <span class="switch-label">主人不受时段与等级限制</span>
+          <span class="switch-label">{{ supportsGroupLevel ? "主人不受时段与等级限制" : "主人不受时段限制" }}</span>
         </label>
         <p class="muted" style="margin-top: 4px">建议保持开启，否则配置写错时你自己也会被挡在门外。</p>
       </div>
 
       <div class="field">
-        <label :for="`${idPrefix}-exempt`">豁免用户（逗号分隔 QQ 号）</label>
+        <label :for="`${idPrefix}-exempt`">豁免用户（逗号分隔{{ accountNoun }}）</label>
         <input
           :id="`${idPrefix}-exempt`"
           class="input"
           :value="(gate.exempt_users ?? []).join(',')"
           @input="patch({ exempt_users: listOf($event) })"
         />
-        <p class="muted" style="margin-top: 4px">无视等级与时段门槛。</p>
+        <p class="muted" style="margin-top: 4px">{{ supportsGroupLevel ? "无视等级与时段门槛。" : "无视时段门槛。" }}</p>
       </div>
 
       <div class="field">
-        <label :for="`${idPrefix}-blocked`">屏蔽用户（逗号分隔 QQ 号）</label>
+        <label :for="`${idPrefix}-blocked`">屏蔽用户（逗号分隔{{ accountNoun }}）</label>
         <input
           :id="`${idPrefix}-blocked`"
           class="input"
@@ -151,8 +151,16 @@ const props = defineProps<{
   /** 群级表单需要「跟随全局」这一档；全局表单不需要。 */
   allowInherit?: boolean;
   idPrefix: string;
+  /**
+   * 群等级是 QQ 独有的概念，Telegram 上没有对应字段，
+   * 显示出来只会让人以为配了会生效。
+   */
+  supportsGroupLevel?: boolean;
 }>();
 const emit = defineEmits<{ "update:modelValue": [ReplyGate | null] }>();
+
+// 账号在不同平台叫法不同，文案跟着平台走。
+const accountNoun = computed(() => (props.supportsGroupLevel ? " QQ 号" : "用户 ID"));
 
 const unknownPolicyOptions: AppSelectOption[] = [
   { value: "allow", label: "放行（推荐）", hint: "读不到等级时不拦截" },

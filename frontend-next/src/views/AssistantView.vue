@@ -369,7 +369,7 @@
                 <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
               </div>
               <div class="field wide">
-                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" />
+                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" :supports-group-level="isOneBotPlatform" />
               </div>
             </div>
           </section>

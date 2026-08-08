@@ -706,7 +706,9 @@ func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
 	if !gate.WithinActiveHours(r.clock()) {
 		return false
 	}
-	if event.Kind == EventKindGroup && gate.MinGroupLevel > 0 {
+	// 群等级是 QQ 独有的概念，只有 OneBot 平台才查。否则 Telegram 上每条
+	// 未命中缓存的消息都会白白调一次不存在的 get_group_member_info。
+	if event.Kind == EventKindGroup && gate.MinGroupLevel > 0 && IsOneBotPlatform(cfg.Platform) {
 		level, known := r.members.LevelFor(event)
 		if !gate.LevelAllows(level, known) {
 			return false
