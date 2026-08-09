@@ -102,6 +102,8 @@ type Runtime struct {
 
 	// members 缓存群成员的群等级与身份，供准入判定使用。
 	members *memberCache
+	// media 把入站图片下载到本地持久化，后续处理统一读本地文件。
+	media *MediaStore
 	// now 供测试注入时钟，nil 时用 time.Now。
 	now func() time.Time
 	// quietNotices 记录各会话上次发静默提示的时间，用于限频。
@@ -717,6 +719,38 @@ func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
 	return true
 }
 
+// SetMediaStore 注入入站媒体持久化存储。未设置时图片地址原样交给模型，
+// 这在服务商能直接访问该地址时仍可用，只是不稳定。
+func (r *Runtime) SetMediaStore(store *MediaStore) {
+	r.mu.Lock()
+	r.media = store
+	r.mu.Unlock()
+}
+
+// resolveImageForLLM 把图片地址换成本地文件的 base64 data URL。
+//
+// 下载或读取失败时回落到原地址：识图退化成「看服务商能不能拉到」，
+// 总好过整条消息丢掉图片。
+func (r *Runtime) resolveImageForLLM(ctx context.Context, imageURL string) string {
+	r.mu.RLock()
+	store := r.media
+	r.mu.RUnlock()
+	if store == nil {
+		return imageURL
+	}
+	path, err := store.Fetch(ctx, imageURL)
+	if err != nil {
+		log.Printf("media: fetch %s failed: %v", redactURLQuery(imageURL), err)
+		return imageURL
+	}
+	dataURL, err := store.DataURL(path)
+	if err != nil {
+		log.Printf("media: encode %s failed: %v", filepath.Base(path), err)
+		return imageURL
+	}
+	return dataURL
+}
+
 // clock 返回当前时间，测试可注入。
 func (r *Runtime) clock() time.Time {
 	r.mu.RLock()
@@ -770,6 +804,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 
+	resolveImage := func(imageURL string) string { return r.resolveImageForLLM(ctx, imageURL) }
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: r.systemPrompt(event, pluginResponses)}}
 	for _, entry := range r.contextHistory(event) {
 		if entry.botReply != "" {
@@ -781,13 +816,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if entry.event.MessageID == event.MessageID {
 			continue
 		}
-		historyMessage := llmMessageFromEvent(entry.event, historyPromptText(entry.event), cfg.PromptImageOnlyText)
+		historyMessage := llmMessageFromEvent(entry.event, historyPromptText(entry.event), cfg.PromptImageOnlyText, resolveImage)
 		if runtimeLLMMessageEmpty(historyMessage) {
 			continue
 		}
 		messages = append(messages, historyMessage)
 	}
-	messages = append(messages, llmMessageFromEvent(event, cleanText, cfg.PromptImageOnlyText))
+	messages = append(messages, llmMessageFromEvent(event, cleanText, cfg.PromptImageOnlyText, resolveImage))
 
 	reply, err := r.generateReply(ctx, cfg, messages)
 	if err != nil {
@@ -1111,7 +1146,7 @@ func historyPromptText(event MessageEvent) string {
 	return fmt.Sprintf("%s: %s", event.SenderNameOrID(), text)
 }
 
-func llmMessageFromEvent(event MessageEvent, text string, imageOnlyText string) llm.Message {
+func llmMessageFromEvent(event MessageEvent, text string, imageOnlyText string, resolveImage func(string) string) llm.Message {
 	text = strings.TrimSpace(text)
 	imageURLs := ImageURLs(event.Segments)
 	if len(imageURLs) == 0 {
@@ -1125,6 +1160,9 @@ func llmMessageFromEvent(event MessageEvent, text string, imageOnlyText string) 
 		parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: text})
 	}
 	for _, imageURL := range imageURLs {
+		if resolveImage != nil {
+			imageURL = resolveImage(imageURL)
+		}
 		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "auto"})
 	}
 	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}

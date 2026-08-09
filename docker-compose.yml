@@ -7,6 +7,9 @@ services:
     ports:
       - "18080:18080"
     volumes:
+      # data 目录放 SQLite（配置、管理员凭据、插件状态）和入站图片缓存，
+      # 不挂出来的话容器重建就全丢了。
+      - ./data:/app/data
       - ./logs:/app/logs
     environment:
       PORT: "18080"

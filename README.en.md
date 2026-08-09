@@ -25,6 +25,7 @@ docker run -d \
   --name diana \
   --restart unless-stopped \
   -p 18080:18080 \
+  -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
   -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
@@ -336,6 +337,9 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `FRONTEND_DIST` | auto-detected | Frontend build output directory; defaults to `frontend-next/dist` |
 | `LOG_PATH` | empty | Log file path; when set, logs are written to both stdout and the file |
 | `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
+| `DIANA_MEDIA_DIR` | `data/media` | Where inbound images are persisted; vision requests submit the local file as base64 |
+| `DIANA_MEDIA_MAX_MB` | `10` | Per-image download limit |
+| `DIANA_MEDIA_CACHE_MB` | `512` | Total cache size; least recently used files are evicted past this |
 | `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Diana media URL reachable by NapCat; use `http://diana:18080/media/resolver` for separate containers |
 | `DIANA_BILI_SESSDATA` | empty | Bilibili `SESSDATA` cookie for protected content; WebUI plugin settings take precedence |
 | `DIANA_DOUYIN_CK` | empty | Douyin cookie; required for Douyin resolution, WebUI plugin settings take precedence |

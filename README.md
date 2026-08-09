@@ -25,6 +25,7 @@ docker run -d \
   --name diana \
   --restart unless-stopped \
   -p 18080:18080 \
+  -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
   -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
@@ -343,6 +344,9 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | 聊天内错误提示前缀 |
 | `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
 | `DIANA_LOG_PATH` | 空 | `LOG_PATH` 的兼容别名 |
+| `DIANA_MEDIA_DIR` | `data/media` | 入站图片持久化目录；识图用本地文件的 base64 提交 |
+| `DIANA_MEDIA_MAX_MB` | `10` | 单张入站图片下载上限 |
+| `DIANA_MEDIA_CACHE_MB` | `512` | 图片目录总量上限，超出后按最后使用时间淘汰 |
 | `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | NapCat 可访问的 Diana 媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
 | `DIANA_BILI_SESSDATA` | 空 | B 站登录 Cookie 中的 `SESSDATA`；WebUI 插件设置优先 |
 | `DIANA_DOUYIN_CK` | 空 | 抖音 Cookie；抖音解析必需，WebUI 插件设置优先 |
