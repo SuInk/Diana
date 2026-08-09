@@ -13,7 +13,7 @@
       </div>
     </header>
 
-    <div v-if="plugins.length > 0" class="plugin-grid">
+    <div v-if="plugins.length > 0" class="plugin-grid plugins-page-grid">
       <article
         v-for="plugin in plugins"
         :key="plugin.manifest.id"
@@ -49,8 +49,8 @@
           <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
         </div>
 
-        <section v-if="plugin.manifest.id === resolverPluginID" class="plugin-dependencies" aria-label="链接解析运行依赖">
-          <div class="plugin-dependencies-head">
+        <details v-if="plugin.manifest.id === resolverPluginID" class="plugin-dependencies">
+          <summary class="plugin-dependencies-head">
             <span>运行依赖</span>
             <span
               v-if="dependencies.length > 0"
@@ -59,38 +59,41 @@
             >
               {{ readyDependencyCount }}/{{ dependencies.length }} 已就绪
             </span>
-          </div>
-          <p v-if="dependenciesLoading && dependencies.length === 0" class="plugin-dependencies-empty">正在检测依赖...</p>
-          <p v-else-if="dependencies.length === 0" class="plugin-dependencies-empty">暂时无法读取依赖状态</p>
-          <div v-else class="plugin-dependency-list">
-            <div v-for="dep in dependencies" :key="dep.name" class="plugin-dependency-row">
-              <div class="plugin-dependency-main">
-                <strong class="mono">{{ dep.name }}</strong>
-                <span>{{ dep.purpose }}</span>
+            <ChevronDown class="plugin-dependencies-chevron" :size="15" aria-hidden="true" />
+          </summary>
+          <div class="plugin-dependencies-body">
+            <p v-if="dependenciesLoading && dependencies.length === 0" class="plugin-dependencies-empty">正在检测依赖...</p>
+            <p v-else-if="dependencies.length === 0" class="plugin-dependencies-empty">暂时无法读取依赖状态</p>
+            <div v-else class="plugin-dependency-list">
+              <div v-for="dep in dependencies" :key="dep.name" class="plugin-dependency-row">
+                <div class="plugin-dependency-main">
+                  <strong class="mono">{{ dep.name }}</strong>
+                  <span>{{ dep.purpose }}</span>
+                </div>
+                <span
+                  v-if="dep.available"
+                  class="badge accent plugin-dependency-status"
+                  :title="[dep.version, dep.path].filter(Boolean).join(' · ')"
+                >
+                  {{ dep.version || "已安装" }}
+                </span>
+                <button
+                  v-else-if="dep.installable"
+                  class="btn small"
+                  type="button"
+                  :disabled="busyDependency !== ''"
+                  :title="`使用 ${dep.installer || '系统包管理器'} 安装 ${dep.name}`"
+                  @click="installDependency(dep)"
+                >
+                  <LoaderCircle v-if="busyDependency === dep.name" class="spin" :size="14" aria-hidden="true" />
+                  <Download v-else :size="14" aria-hidden="true" />
+                  {{ busyDependency === dep.name ? "安装中" : "安装" }}
+                </button>
+                <span v-else class="badge warn">需手动安装</span>
               </div>
-              <span
-                v-if="dep.available"
-                class="badge accent plugin-dependency-status"
-                :title="[dep.version, dep.path].filter(Boolean).join(' · ')"
-              >
-                {{ dep.version || "已安装" }}
-              </span>
-              <button
-                v-else-if="dep.installable"
-                class="btn small"
-                type="button"
-                :disabled="busyDependency !== ''"
-                :title="`使用 ${dep.installer || '系统包管理器'} 安装 ${dep.name}`"
-                @click="installDependency(dep)"
-              >
-                <LoaderCircle v-if="busyDependency === dep.name" class="spin" :size="14" aria-hidden="true" />
-                <Download v-else :size="14" aria-hidden="true" />
-                {{ busyDependency === dep.name ? "安装中" : "安装" }}
-              </button>
-              <span v-else class="badge warn">需手动安装</span>
             </div>
           </div>
-        </section>
+        </details>
 
         <footer class="plugin-card-foot">
           <template v-if="plugin.installed">
@@ -218,7 +221,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Download, LoaderCircle, RefreshCw, SlidersHorizontal } from "@lucide/vue";
+import { ChevronDown, Download, LoaderCircle, RefreshCw, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installResolverDependency,
