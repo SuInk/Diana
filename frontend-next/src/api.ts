@@ -162,6 +162,14 @@ export interface ResolverDependency {
   available: boolean;
   path?: string;
   version?: string;
+  installable: boolean;
+  installer?: string;
+}
+
+export interface ResolverDependencyInstallResponse {
+  dependency: ResolverDependency;
+  resolver: ResolverDependency[];
+  installer?: string;
 }
 
 export interface QQBotGroupConfig {
@@ -564,6 +572,13 @@ export function updatePluginSettings(
 
 export function listResolverDependencies(): Promise<{ resolver: ResolverDependency[] }> {
   return requestJSON<{ resolver: ResolverDependency[] }>("/api/assistant/plugins/dependencies");
+}
+
+export function installResolverDependency(name: string): Promise<ResolverDependencyInstallResponse> {
+  return requestJSON<ResolverDependencyInstallResponse>(
+    `/api/assistant/plugins/dependencies/${encodeURIComponent(name)}/install`,
+    { method: "POST" }
+  );
 }
 
 export function requestQQBotGroupAdminChallenge(groupID: string, userID: string): Promise<QQBotGroupAdminChallengeResponse> {

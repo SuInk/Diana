@@ -1897,6 +1897,76 @@ code {
   color: var(--muted);
 }
 
+.plugin-dependencies {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.plugin-dependencies-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.plugin-dependencies-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.plugin-dependency-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.plugin-dependency-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.plugin-dependency-row:first-child {
+  border-top: 0;
+}
+
+.plugin-dependency-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plugin-dependency-main strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.plugin-dependency-main span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.plugin-dependency-status {
+  display: block;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 插件设置弹窗 */
 .plugin-settings-form {
   gap: 16px;
