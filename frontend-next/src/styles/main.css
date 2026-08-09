@@ -39,7 +39,6 @@
   --accent-contrast: #ffffff;
 
   --sidebar-width: 236px;
-  --sidebar-collapsed-width: 64px;
   --topbar-height: 56px;
 }
 
@@ -161,6 +160,9 @@ code {
   background: var(--bg-raised);
   border-right: 1px solid var(--border);
   z-index: 40;
+  opacity: 1;
+  visibility: visible;
+  transition: transform 0.2s ease, opacity 0.2s ease;
 }
 
 .app-main {
@@ -169,6 +171,7 @@ code {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  transition: margin-left 0.2s ease;
 }
 
 .app-topbar {
@@ -1026,34 +1029,21 @@ code {
   color: var(--text);
 }
 
-/* 收起态：只留图标，主内容区跟着让出空间 */
+/* 桌面收起态：侧栏完全隐藏，不保留只有图标的中间形态。 */
 .app-sidebar.collapsed {
-  width: var(--sidebar-collapsed-width);
-}
-
-.app-sidebar.collapsed .nav-label,
-.app-sidebar.collapsed .brand-name {
-  display: none;
-}
-
-.app-sidebar.collapsed .sidebar-head {
-  justify-content: center;
-  padding-right: 0;
-}
-
-.app-sidebar.collapsed .brand {
-  display: none;
-}
-
-.app-sidebar.collapsed .nav-item,
-.app-sidebar.collapsed .nav-action {
-  justify-content: center;
-  padding-left: 0;
-  padding-right: 0;
+  transform: translateX(-100%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 0.2s ease, opacity 0.2s ease, visibility 0s linear 0.2s;
 }
 
 .app-sidebar.collapsed ~ .app-main {
-  margin-left: var(--sidebar-collapsed-width);
+  margin-left: 0;
+}
+
+.app-sidebar.collapsed ~ .app-main .menu-button {
+  display: inline-flex;
 }
 
 /* 顶栏实时连接状态 */
@@ -2679,25 +2669,9 @@ code {
   .app-sidebar.collapsed.open {
     width: var(--sidebar-width);
     transform: none;
-  }
-
-  /* 抽屉里始终是完整形态，桌面端的收起态不适用。 */
-  .app-sidebar.collapsed {
-    width: var(--sidebar-width);
-  }
-
-  .app-sidebar.collapsed .nav-label,
-  .app-sidebar.collapsed .brand-name,
-  .app-sidebar.collapsed .nav-uptime {
-    display: revert;
-  }
-
-  .app-sidebar.collapsed .brand,
-  .app-sidebar.collapsed .nav-item,
-  .app-sidebar.collapsed .nav-action {
-    justify-content: flex-start;
-    padding-left: 12px;
-    padding-right: 12px;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
   }
 
   .app-main,
