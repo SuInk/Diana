@@ -31,15 +31,16 @@ type QQBotRuntime interface {
 type QQBotChannelFactory func(assistant.BotConfig) assistant.Channel
 
 type QQBotHandler struct {
-	runtime      QQBotRuntime
-	newChannel   QQBotChannelFactory
-	ctx          context.Context
-	profiles     QQBotProfileStore
-	groupConfigs QQBotGroupConfigStore
-	groupAdmin   *groupAdminVerifier
-	sqlite       *storage.SQLiteStore
-	logs         AppLogWriter
-	features     QQBotFeatureFlags
+	runtime                   QQBotRuntime
+	newChannel                QQBotChannelFactory
+	ctx                       context.Context
+	profiles                  QQBotProfileStore
+	groupConfigs              QQBotGroupConfigStore
+	groupAdmin                *groupAdminVerifier
+	sqlite                    *storage.SQLiteStore
+	logs                      AppLogWriter
+	features                  QQBotFeatureFlags
+	installResolverDependency func(context.Context, string) (assistant.ResolverDependencyInstallResult, error)
 }
 
 type QQBotFeatureFlags struct {
@@ -128,9 +129,10 @@ func NewQQBotHandler(ctx context.Context, runtime QQBotRuntime) *QQBotHandler {
 // NewQQBotHandlerWithFactory 创建 QQBotHandler 实例。
 func NewQQBotHandlerWithFactory(ctx context.Context, runtime QQBotRuntime, factory QQBotChannelFactory) *QQBotHandler {
 	return &QQBotHandler{
-		runtime:    runtime,
-		newChannel: factory,
-		ctx:        ctx,
+		runtime:                   runtime,
+		newChannel:                factory,
+		ctx:                       ctx,
+		installResolverDependency: assistant.InstallResolverDependency,
 		// 没有显式持久化 store 时，至少保证本次进程内也能按配置集语义工作。
 		profiles:     NewMemoryQQBotProfileStore(runtime.Config()),
 		groupConfigs: NewMemoryQQBotGroupConfigStore(),
@@ -190,6 +192,7 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	}
 	router.GET(base+"/plugins", h.listPlugins)
 	router.GET(base+"/plugins/dependencies", h.pluginDependencies)
+	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
 	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
@@ -456,7 +459,32 @@ func (h *QQBotHandler) listPlugins(c *gin.Context) {
 // pluginDependencies 返回解析器外部依赖的探测结果，让控制台能直接看出
 // yt-dlp / ffmpeg / node 是否齐全，而不是等用户发链接后才报错。
 func (h *QQBotHandler) pluginDependencies(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"resolver": assistant.ResolverDependencies()})
+	c.JSON(http.StatusOK, gin.H{"resolver": assistant.RefreshResolverDependencies()})
+}
+
+// installPluginDependency 安装链接解析插件白名单中的外部命令。
+func (h *QQBotHandler) installPluginDependency(c *gin.Context) {
+	name := strings.TrimSpace(c.Param("name"))
+	result, err := h.installResolverDependency(c.Request.Context(), name)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, assistant.ErrUnknownResolverDependency):
+			status = http.StatusNotFound
+		case errors.Is(err, assistant.ErrResolverInstallerUnavailable):
+			status = http.StatusNotImplemented
+		case errors.Is(err, context.DeadlineExceeded):
+			status = http.StatusGatewayTimeout
+		}
+		h.writeError(c, status, "assistant.plugin.dependency.install", err, name, map[string]any{"dependency": name})
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.plugin.dependency.install", "链接解析运行依赖已安装", name, map[string]any{
+		"dependency": name,
+		"installer":  result.Installer,
+		"version":    result.Dependency.Version,
+	})
+	c.JSON(http.StatusOK, result)
 }
 
 // installPlugin 处理插件安装请求。
