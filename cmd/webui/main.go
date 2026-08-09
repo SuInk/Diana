@@ -119,6 +119,14 @@ func main() {
 	)
 	localMediaStore := assistant.NewLocalMediaStore(localMediaBaseURL)
 	botRuntime.SetLocalMediaSharer(localMediaStore)
+	// 入站图片下载后持久化，识图一律用本地文件的 base64，不依赖模型服务商
+	// 能否访问聊天平台那些短时效地址。
+	mediaStore := assistant.NewMediaStore(envOr("DIANA_MEDIA_DIR", ""))
+	mediaStore.SetLimits(
+		int64(envInt("DIANA_MEDIA_MAX_MB", 0))<<20,
+		int64(envInt("DIANA_MEDIA_CACHE_MB", 0))<<20,
+	)
+	botRuntime.SetMediaStore(mediaStore)
 	// 统计和 SSE 推送共用同一个事件监听器，Dashboard 依赖这两条链路。
 	statsCollector := webui.NewStatsCollector()
 	eventHub := webui.NewEventHub()
@@ -392,6 +400,19 @@ func serveFile(c *gin.Context, root http.FileSystem, path string) {
 }
 
 // envOr 读取环境变量，空值时返回默认值。
+// envInt 读取正整数环境变量，未设置或非法时返回 fallback。
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
 func envOr(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		return value
