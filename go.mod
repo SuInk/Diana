@@ -14,6 +14,7 @@ require (
 	github.com/klippa-app/go-pdfium v1.19.4
 	github.com/openai/openai-go/v3 v3.41.0
 	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tetratelabs/wazero v1.12.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.2
 	golang.org/x/net v0.55.0
@@ -62,7 +63,6 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
