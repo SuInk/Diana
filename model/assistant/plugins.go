@@ -100,6 +100,13 @@ type Plugin interface {
 	Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error)
 }
 
+// AgentToolPlugin is implemented by plugins that add tools to the model's
+// tool-calling loop. It is intentionally optional so ordinary context/reply
+// plugins keep the smaller Plugin contract.
+type AgentToolPlugin interface {
+	AgentTools(settings SettingValues) ([]agent.Tool, error)
+}
+
 type PluginManager struct {
 	mu      sync.RWMutex
 	catalog map[string]Plugin
@@ -131,7 +138,13 @@ func NewPluginManager(plugins ...Plugin) *PluginManager {
 
 // NewDefaultPluginManager 创建包含官方内置插件的默认插件管理器。
 func NewDefaultPluginManager() *PluginManager {
-	return NewPluginManager(NewResolverPlugin(nil), NewFileParserPlugin(nil), NewLLMConfigPlugin(), NewVoiceTTSPlugin(nil))
+	return NewPluginManager(
+		NewResolverPlugin(nil),
+		NewFileParserPlugin(nil),
+		NewLLMConfigPlugin(),
+		NewVoiceTTSPlugin(nil),
+		NewWebSearchPlugin(nil),
+	)
 }
 
 // List 返回所有插件状态。
@@ -142,6 +155,15 @@ func (m *PluginManager) List() []PluginState {
 	for _, state := range m.states {
 		out = append(out, state)
 	}
+	slices.SortFunc(out, func(a, b PluginState) int {
+		if a.Manifest.BuiltIn != b.Manifest.BuiltIn {
+			if a.Manifest.BuiltIn {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Manifest.ID, b.Manifest.ID)
+	})
 	return out
 }
 
@@ -358,6 +380,53 @@ func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest,
 		responses = append(responses, *resp)
 	}
 	return responses
+}
+
+// AgentToolsWithOverrides returns a stable snapshot of tools contributed by
+// installed and enabled plugins for one conversation.
+func (m *PluginManager) AgentToolsWithOverrides(overrides map[string]bool) ([]agent.Tool, error) {
+	if m == nil {
+		return nil, nil
+	}
+	type provider struct {
+		id       string
+		plugin   AgentToolPlugin
+		settings SettingValues
+	}
+
+	m.mu.RLock()
+	providers := make([]provider, 0, len(m.catalog))
+	for id, plugin := range m.catalog {
+		toolPlugin, ok := plugin.(AgentToolPlugin)
+		if !ok {
+			continue
+		}
+		state := m.states[id]
+		enabled := state.Enabled
+		if override, ok := overrides[id]; ok {
+			enabled = override
+		}
+		if !state.Installed || !enabled {
+			continue
+		}
+		providers = append(providers, provider{
+			id:       id,
+			plugin:   toolPlugin,
+			settings: effectivePluginSettings(state.Manifest.Settings, state.Settings),
+		})
+	}
+	m.mu.RUnlock()
+	slices.SortFunc(providers, func(a, b provider) int { return strings.Compare(a.id, b.id) })
+
+	var tools []agent.Tool
+	for _, item := range providers {
+		provided, err := item.plugin.AgentTools(item.settings)
+		if err != nil {
+			return nil, fmt.Errorf("qqbot: plugin %q agent tools: %w", item.id, err)
+		}
+		tools = append(tools, provided...)
+	}
+	return tools, nil
 }
 
 func safeHandlePlugin(ctx context.Context, id string, plugin Plugin, req PluginRequest) (resp *PluginResponse, err error) {

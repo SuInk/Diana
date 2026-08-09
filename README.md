@@ -317,6 +317,7 @@ chrome --remote-debugging-port=9222
    插件页顶部会显示 `yt-dlp`、`ffmpeg`、`node` 三个外部依赖的探测结果，缺失时对应平台无法下载。
 4. 默认内置 Go 文件解析插件，支持 QQ 文件段和文本类文件链接，提取内容作为 LLM 上下文。
 5. 默认内置 `LLM 配置技能`，主人可用自然语言修改当前配置的 provider 和模型，例如“把提供商切到 gemini”“把模型换成 gemini-2.5-pro”“以后用 anthropic 的 claude-sonnet-4-5”；指定模型会先通过后端模型列表校验，列表里没有就不会保存。
+6. `联网搜索` 是官方可选插件，默认不安装。安装后，对话模型可以调用 `web_search.search` 获取实时网页信息；首选免费 Exa MCP，失败时可用已配置 API Key 的 Tavily 自动回退。搜索插件独立于内置 Agent 开关，未开启 Agent 时不会同时开放本地文件、命令或浏览器工具。
 
 ## 使用第三方 NoneBot 插件
 

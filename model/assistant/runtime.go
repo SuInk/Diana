@@ -785,6 +785,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return reply, nil
 	}
 
+	pluginOverrides := r.pluginOverridesForEvent(event)
 	pluginResponses := r.plugins.RunWithOverrides(ctx, PluginRequest{
 		Event:          event,
 		Text:           cleanText,
@@ -792,7 +793,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		LLMStore:       r.llmStore,
 		LLMModelLister: r.llmModelLister(),
 		AppLogs:        r.appLogWriter(),
-	}, r.pluginOverridesForEvent(event))
+	}, pluginOverrides)
 	for _, resp := range pluginResponses {
 		if resp.Reply != "" || len(resp.ImageURLs) > 0 || len(resp.VideoURLs) > 0 {
 			// A media-producing plugin owns the reply so the downloaded assets are
@@ -825,7 +826,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	messages = append(messages, llmMessageFromEvent(event, cleanText, cfg.PromptImageOnlyText, resolveImage))
 	messages = capImageParts(messages, maxImagePartsPerRequest)
 
-	reply, err := r.generateReply(ctx, cfg, messages)
+	agentTools, err := r.plugins.AgentToolsWithOverrides(pluginOverrides)
+	if err != nil {
+		return "", err
+	}
+	reply, err := r.generateReplyWithAgentTools(ctx, cfg, messages, agentTools)
 	if err != nil {
 		return "", err
 	}
@@ -851,15 +856,19 @@ func messagesContainImages(messages []llm.Message) bool {
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, messages []llm.Message) (string, error) {
+	return r.generateReplyWithAgentTools(ctx, cfg, messages, nil)
+}
+
+func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig, messages []llm.Message, extraTools []agent.Tool) (string, error) {
 	// 带图片的请求优先用「识图」组模型；未配置该组时自动回落到对话组。
 	group := llm.GroupChat
 	if messagesContainImages(messages) {
 		group = llm.GroupVision
 	}
 	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
-		if cfg.AgentEnabled {
+		if cfg.AgentEnabled || len(extraTools) > 0 {
 			// Agent 模式允许模型调用受限本地工具；普通模式只走一次 LLM 生成。
-			agentRunner, err := agent.NewRunner(client, agent.Config{
+			agentConfig := agent.Config{
 				WorkDir:          cfg.AgentWorkDir,
 				MaxSteps:         cfg.AgentMaxSteps,
 				SkillRoots:       cfg.AgentSkillRoots,
@@ -868,7 +877,19 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, messages []l
 				CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
 				BrowserCDPURL:    cfg.AgentBrowserCDPURL,
 				BrowserTimeoutMS: cfg.AgentBrowserTimeoutMS,
-			}, nil)
+			}
+			registry := agent.NewToolRegistry()
+			if cfg.AgentEnabled {
+				var err error
+				registry, err = agent.NewCodexToolRegistry(ctx, agentConfig)
+				if err != nil {
+					return "", err
+				}
+			}
+			for _, tool := range extraTools {
+				registry.Register(tool)
+			}
+			agentRunner, err := agent.NewRunner(client, agentConfig, registry)
 			if err != nil {
 				return "", err
 			}
