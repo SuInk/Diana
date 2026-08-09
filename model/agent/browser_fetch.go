@@ -9,14 +9,6 @@ import (
 	"time"
 )
 
-// RenderedPage 是浏览器渲染后从页面提取的元数据与正文摘要。
-type RenderedPage struct {
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Text        string `json:"text"`
-}
-
 // FetchRenderedPage 通过 CDP 在新标签页渲染网页并提取标题、描述和正文摘要，结束后关闭标签页。
 // 始终新开标签页而不复用现有标签，避免自动抓取动到用户正在看的页面。
 func FetchRenderedPage(ctx context.Context, cdpURL string, pageURL string, timeout time.Duration, maxTextChars int) (RenderedPage, error) {

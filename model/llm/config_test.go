@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestProviderConfigValidate(t *testing.T) {
 	cfg := ProviderConfig{
 		Provider:    ProviderOpenAICompatible,
 		APIKey:      "sk-test",
-		Model:       "gp5.5",
+		Model:       "example-chat-model",
 		Temperature: &temp,
 	}
 
@@ -32,7 +33,7 @@ func TestProviderConfigValidateMissingFields(t *testing.T) {
 			name: "api key",
 			cfg: ProviderConfig{
 				Provider: ProviderOpenAICompatible,
-				Model:    "gp5.5",
+				Model:    "example-chat-model",
 			},
 			want: ErrMissingAPIKey,
 		},
@@ -74,11 +75,57 @@ func TestProviderConfigValidateRejectsInvalidBaseURL(t *testing.T) {
 		Provider: ProviderOpenAICompatible,
 		APIKey:   "sk-test",
 		BaseURL:  "api.example.com/v1",
-		Model:    "gp5.5",
+		Model:    "example-chat-model",
 	}
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("Validate() error = nil, want invalid base_url")
+	}
+}
+
+func TestProviderConfigAPIFormatDefaultsAndValidation(t *testing.T) {
+	defaultConfig := (ProviderConfig{Provider: ProviderOpenAICompatible}).WithDefaults()
+	if defaultConfig.APIFormat != APIFormatResponses {
+		t.Fatalf("APIFormat = %q, want %q", defaultConfig.APIFormat, APIFormatResponses)
+	}
+
+	chatConfig := ProviderConfig{
+		Provider:  ProviderOpenAICompatible,
+		APIKey:    "sk-test",
+		Model:     "test-model",
+		APIFormat: APIFormatChatCompletions,
+	}
+	if err := chatConfig.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	chatConfig.APIFormat = APIFormat("legacy_completions")
+	if err := chatConfig.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want unsupported api_format")
+	}
+}
+
+func TestProviderConfigContextBudgetDefaultsAndValidation(t *testing.T) {
+	defaults := (ProviderConfig{Provider: ProviderOpenAICompatible}).WithDefaults()
+	if defaults.ContextWindowTokens != DefaultContextWindowTokens || defaults.MaxContextTokens != DefaultMaxContextTokens {
+		t.Fatalf("context defaults = window %d max %d", defaults.ContextWindowTokens, defaults.MaxContextTokens)
+	}
+	if defaults.MaxOutputTokens != 0 {
+		t.Fatalf("MaxOutputTokens = %d, want 0 so incompatible gateways do not receive the parameter", defaults.MaxOutputTokens)
+	}
+
+	invalid := ProviderConfig{
+		Provider:            ProviderOpenAICompatible,
+		APIKey:              "sk-test",
+		Model:               "test-model",
+		ContextWindowTokens: 8192,
+		MaxContextTokens:    16384,
+	}
+	if err := invalid.Validate(); err == nil || !strings.Contains(err.Error(), "cannot exceed") {
+		t.Fatalf("Validate() error = %v, want context window error", err)
+	}
+	if got := invalid.MaxContextTokensWithDefault(); got != 8192 {
+		t.Fatalf("effective max context = %d, want 8192", got)
 	}
 }
 
@@ -144,6 +191,7 @@ func TestGenerateRequestDefaults(t *testing.T) {
 	got := req.withDefaults(ProviderConfig{
 		Model:           "default-model",
 		Temperature:     &temp,
+		ReasoningEffort: "high",
 		MaxOutputTokens: 256,
 	})
 
@@ -155,6 +203,9 @@ func TestGenerateRequestDefaults(t *testing.T) {
 	}
 	if got.MaxOutputTokens != 256 {
 		t.Fatalf("MaxOutputTokens = %d, want 256", got.MaxOutputTokens)
+	}
+	if got.ReasoningEffort != "high" {
+		t.Fatalf("ReasoningEffort = %q, want high", got.ReasoningEffort)
 	}
 }
 
@@ -168,7 +219,7 @@ func TestProviderConfigImageModelWithDefault(t *testing.T) {
 		{
 			name: "openai default",
 			cfg:  ProviderConfig{Provider: ProviderOpenAICompatible},
-			want: "gpt-image-1",
+			want: "gpt-image-2",
 		},
 		{
 			name: "gemini default",

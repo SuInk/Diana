@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,11 +20,27 @@ const (
 	ProviderAnthropic        Provider = "anthropic"
 )
 
+type APIFormat string
+
+const (
+	APIFormatResponses       APIFormat = "responses"
+	APIFormatChatCompletions APIFormat = "chat_completions"
+)
+
+// APIStyle is the WebUI-facing name retained by the newer configuration API.
+// APIFormat remains the runtime field used by the restored provider adapters.
 type APIStyle string
 
 const (
 	APIStyleResponses       APIStyle = "responses"
 	APIStyleChatCompletions APIStyle = "chat_completions"
+)
+
+const (
+	DefaultContextWindowTokens int64 = 16384
+	DefaultMaxContextTokens    int64 = 16384
+	DefaultMaxOutputTokens     int64 = 1024
+	minContextWindowTokens     int64 = 1024
 )
 
 type Role string
@@ -34,10 +52,23 @@ const (
 )
 
 type Message struct {
-	Role    Role          `json:"role"`
-	Content string        `json:"content"`
-	Parts   []ContentPart `json:"parts,omitempty"`
+	Role     Role            `json:"role"`
+	Content  string          `json:"content"`
+	Parts    []ContentPart   `json:"parts,omitempty"`
+	Priority MessagePriority `json:"-"`
 }
+
+type MessagePriority int
+
+const (
+	MessagePriorityDefault MessagePriority = 0
+	MessagePriorityHistory MessagePriority = 20
+	MessagePrioritySummary MessagePriority = 60
+	MessagePriorityMemory  MessagePriority = 80
+	MessagePrioritySystem  MessagePriority = 120
+	MessagePriorityPlugin  MessagePriority = 130
+	MessagePriorityCurrent MessagePriority = 140
+)
 
 type ContentPartType string
 
@@ -57,6 +88,7 @@ type GenerateRequest struct {
 	Model           string    `json:"model,omitempty"`
 	Messages        []Message `json:"messages"`
 	Temperature     *float64  `json:"temperature,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 	MaxOutputTokens int64     `json:"max_output_tokens,omitempty"`
 }
 
@@ -73,19 +105,47 @@ type GenerateResponse struct {
 	Usage    Usage    `json:"usage,omitempty"`
 }
 
+type ImageGenerateRequest struct {
+	Model  string `json:"model,omitempty"`
+	Prompt string `json:"prompt"`
+	Size   string `json:"size,omitempty"`
+	N      int    `json:"n,omitempty"`
+}
+
+type ImageEditRequest struct {
+	Model  string   `json:"model,omitempty"`
+	Prompt string   `json:"prompt"`
+	Images []string `json:"images"`
+	Size   string   `json:"size,omitempty"`
+	N      int      `json:"n,omitempty"`
+}
+
+type ImageGenerateResponse struct {
+	Provider Provider `json:"provider"`
+	Model    string   `json:"model,omitempty"`
+	Images   []string `json:"images"`
+}
+
 type ProviderConfig struct {
-	Provider        Provider          `json:"provider"`
-	APIStyle        APIStyle          `json:"api_style,omitempty"`
-	APIKey          string            `json:"api_key,omitempty"`
-	BaseURL         string            `json:"base_url,omitempty"`
-	Models          []ModelInfo       `json:"models,omitempty"`
-	Model           string            `json:"model"`
-	ImageModel      string            `json:"image_model,omitempty"`
-	UserAgent       string            `json:"user_agent,omitempty"`
-	Headers         map[string]string `json:"headers,omitempty"`
-	Temperature     *float64          `json:"temperature,omitempty"`
-	MaxOutputTokens int64             `json:"max_output_tokens,omitempty"`
-	Timeout         time.Duration     `json:"timeout,omitempty"`
+	Provider            Provider          `json:"provider"`
+	APIKey              string            `json:"api_key,omitempty"`
+	BaseURL             string            `json:"base_url,omitempty"`
+	APIFormat           APIFormat         `json:"api_format,omitempty"`
+	APIStyle            APIStyle          `json:"api_style,omitempty"`
+	Models              []ModelInfo       `json:"models,omitempty"`
+	Model               string            `json:"model"`
+	ImageModel          string            `json:"image_model,omitempty"`
+	ImageBaseURL        string            `json:"image_base_url,omitempty"`
+	ImageOrigin         string            `json:"image_origin,omitempty"`
+	ImageTimeout        time.Duration     `json:"image_timeout,omitempty"`
+	UserAgent           string            `json:"user_agent,omitempty"`
+	Headers             map[string]string `json:"headers,omitempty"`
+	Temperature         *float64          `json:"temperature,omitempty"`
+	ReasoningEffort     string            `json:"reasoning_effort,omitempty"`
+	ContextWindowTokens int64             `json:"context_window_tokens,omitempty"`
+	MaxContextTokens    int64             `json:"max_context_tokens,omitempty"`
+	MaxOutputTokens     int64             `json:"max_output_tokens,omitempty"`
+	Timeout             time.Duration     `json:"timeout,omitempty"`
 }
 
 type ClientOption func(*clientOptions)
@@ -103,6 +163,14 @@ func WithHTTPClient(client *http.Client) ClientOption {
 
 type LLMClient interface {
 	Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error)
+}
+
+type ImageGenerator interface {
+	GenerateImage(ctx context.Context, req ImageGenerateRequest) (*ImageGenerateResponse, error)
+}
+
+type ImageEditor interface {
+	EditImage(ctx context.Context, req ImageEditRequest) (*ImageGenerateResponse, error)
 }
 
 var (
@@ -138,38 +206,61 @@ func NewClient(cfg ProviderConfig, opts ...ClientOption) (LLMClient, error) {
 	}
 }
 
-// ValidateChannel 校验渠道级配置（provider/key/地址）；模型允许留空，
-// 由机器人配置按用途分配后在调用前补齐。
-func (cfg ProviderConfig) ValidateChannel() error {
-	probe := cfg
-	if strings.TrimSpace(probe.Model) == "" {
-		// 用占位模型跳过必填校验，其余字段（地址/密钥/参数）仍完整检查。
-		probe.Model = "channel-placeholder"
+// GenerateImage 根据 provider 配置生成图片。
+func GenerateImage(ctx context.Context, cfg ProviderConfig, req ImageGenerateRequest, opts ...ClientOption) (*ImageGenerateResponse, error) {
+	client, err := NewClient(cfg, opts...)
+	if err != nil {
+		return nil, err
 	}
-	return probe.Validate()
+	generator, ok := client.(ImageGenerator)
+	if !ok {
+		return nil, fmt.Errorf("llm: image generation is not supported for provider %q", cfg.Provider)
+	}
+	return generator.GenerateImage(ctx, req)
+}
+
+// EditImage 根据 provider 配置编辑图片。
+func EditImage(ctx context.Context, cfg ProviderConfig, req ImageEditRequest, opts ...ClientOption) (*ImageGenerateResponse, error) {
+	client, err := NewClient(cfg, opts...)
+	if err != nil {
+		return nil, err
+	}
+	editor, ok := client.(ImageEditor)
+	if !ok {
+		return nil, fmt.Errorf("llm: image editing is not supported for provider %q", cfg.Provider)
+	}
+	return editor.EditImage(ctx, req)
 }
 
 // Validate 校验 provider 配置是否可用于调用。
 func (cfg ProviderConfig) Validate() error {
 	// Validate 会先规整空白，避免前端输入带空格导致 provider/model 比较失败。
 	cfg.Provider = Provider(strings.TrimSpace(string(cfg.Provider)))
-	cfg.APIStyle = APIStyle(strings.TrimSpace(string(cfg.APIStyle)))
-	if cfg.Provider == ProviderOpenAICompatible && cfg.APIStyle == "" {
-		cfg.APIStyle = APIStyleResponses
-	}
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
+	cfg.APIFormat = APIFormat(strings.TrimSpace(string(cfg.APIFormat)))
+	cfg.APIStyle = APIStyle(strings.TrimSpace(string(cfg.APIStyle)))
+	if cfg.APIStyle != "" {
+		cfg.APIFormat = APIFormat(cfg.APIStyle)
+	}
 	cfg.Models = uniqueModels(cfg.Models)
+	cfg.ImageBaseURL = strings.TrimSpace(cfg.ImageBaseURL)
+	cfg.ImageOrigin = strings.TrimSpace(cfg.ImageOrigin)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Headers = normalizeHeaders(cfg.Headers)
+	cfg.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
 	if cfg.Provider == "" {
 		return errors.New("llm: provider is required")
 	}
 	if !cfg.Provider.Supported() {
 		return fmt.Errorf("llm: unsupported provider %q", cfg.Provider)
 	}
-	if cfg.Provider == ProviderOpenAICompatible && cfg.APIStyle != APIStyleResponses && cfg.APIStyle != APIStyleChatCompletions {
-		return fmt.Errorf("llm: unsupported api style %q", cfg.APIStyle)
+	if cfg.Provider == ProviderOpenAICompatible {
+		if cfg.APIFormat != "" && !cfg.APIFormat.Supported() {
+			return fmt.Errorf("llm: unsupported api_format %q", cfg.APIFormat)
+		}
+	} else if cfg.APIFormat != "" {
+		return fmt.Errorf("llm: api_format is only supported for provider %q", ProviderOpenAICompatible)
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return ErrMissingAPIKey
@@ -180,11 +271,41 @@ func (cfg ProviderConfig) Validate() error {
 	if err := validateBaseURL(cfg.BaseURL); err != nil {
 		return err
 	}
+	if err := validateBaseURL(cfg.ImageBaseURL); err != nil {
+		return fmt.Errorf("llm: invalid image_base_url: %w", err)
+	}
+	if err := validateImageOrigin(cfg.ImageOrigin); err != nil {
+		return err
+	}
+	if cfg.ImageTimeout < 0 {
+		return errors.New("llm: image_timeout must be greater than or equal to 0")
+	}
 	if cfg.MaxOutputTokens < 0 {
 		return errors.New("llm: max_output_tokens must be greater than or equal to 0")
 	}
+	if cfg.ContextWindowTokens < 0 {
+		return errors.New("llm: context_window_tokens must be greater than or equal to 0")
+	}
+	if cfg.MaxContextTokens < 0 {
+		return errors.New("llm: max_context_tokens must be greater than or equal to 0")
+	}
+	if cfg.ContextWindowTokens > 0 && cfg.ContextWindowTokens < minContextWindowTokens {
+		return fmt.Errorf("llm: context_window_tokens must be at least %d", minContextWindowTokens)
+	}
+	if cfg.MaxContextTokens > 0 && cfg.MaxContextTokens < minContextWindowTokens {
+		return fmt.Errorf("llm: max_context_tokens must be at least %d", minContextWindowTokens)
+	}
+	if cfg.ContextWindowTokens > 0 && cfg.MaxContextTokens > cfg.ContextWindowTokens {
+		return errors.New("llm: max_context_tokens cannot exceed context_window_tokens")
+	}
+	if cfg.MaxContextTokens > 0 && cfg.MaxOutputTokens >= cfg.MaxContextTokens {
+		return errors.New("llm: max_output_tokens must be smaller than max_context_tokens")
+	}
 	if cfg.Temperature != nil && (*cfg.Temperature < 0 || *cfg.Temperature > 2) {
 		return errors.New("llm: temperature must be between 0 and 2")
+	}
+	if err := validateReasoningEffort(cfg.ReasoningEffort); err != nil {
+		return err
 	}
 	for name, value := range cfg.Headers {
 		if !validHeaderName(name) {
@@ -197,6 +318,16 @@ func (cfg ProviderConfig) Validate() error {
 	return nil
 }
 
+// ValidateChannel validates provider credentials and transport settings while
+// allowing the model to be assigned by a bot profile later.
+func (cfg ProviderConfig) ValidateChannel() error {
+	probe := cfg
+	if strings.TrimSpace(probe.Model) == "" {
+		probe.Model = "channel-placeholder"
+	}
+	return probe.Validate()
+}
+
 // Supported 判断 provider 是否被当前项目支持。
 func (provider Provider) Supported() bool {
 	switch provider {
@@ -207,20 +338,46 @@ func (provider Provider) Supported() bool {
 	}
 }
 
+// Supported 判断 OpenAI-compatible 文本 API 格式是否受支持。
+func (format APIFormat) Supported() bool {
+	switch format {
+	case APIFormatResponses, APIFormatChatCompletions:
+		return true
+	default:
+		return false
+	}
+}
+
 // WithDefaults 补齐 provider 配置默认值。
 func (cfg ProviderConfig) WithDefaults() ProviderConfig {
 	// WithDefaults 只补配置默认值，不校验密钥；这样 WebUI 可以展示未填 key 的草稿配置。
 	cfg.Provider = Provider(strings.TrimSpace(string(cfg.Provider)))
-	cfg.APIStyle = APIStyle(strings.TrimSpace(string(cfg.APIStyle)))
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
+	cfg.APIFormat = APIFormat(strings.TrimSpace(string(cfg.APIFormat)))
+	cfg.APIStyle = APIStyle(strings.TrimSpace(string(cfg.APIStyle)))
+	if cfg.APIStyle != "" {
+		cfg.APIFormat = APIFormat(cfg.APIStyle)
+	} else if cfg.APIFormat != "" {
+		cfg.APIStyle = APIStyle(cfg.APIFormat)
+	}
 	cfg.Models = uniqueModels(cfg.Models)
+	cfg.ImageBaseURL = strings.TrimSpace(cfg.ImageBaseURL)
+	cfg.ImageOrigin = strings.TrimSpace(cfg.ImageOrigin)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.ImageModel = strings.TrimSpace(cfg.ImageModel)
 	cfg.UserAgent = strings.TrimSpace(cfg.UserAgent)
+	cfg.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
 	cfg.Headers = normalizeHeaders(cfg.Headers)
-	if cfg.Provider == ProviderOpenAICompatible && cfg.APIStyle == "" {
-		cfg.APIStyle = APIStyleResponses
+	if cfg.Provider == ProviderOpenAICompatible {
+		if cfg.APIFormat == "" {
+			cfg.APIFormat = APIFormatResponses
+		}
+		cfg.APIStyle = APIStyle(cfg.APIFormat)
+	} else {
+		// Provider 切换会复用当前配置对象，OpenAI 专用格式不能跟到 Gemini/Anthropic。
+		cfg.APIFormat = ""
+		cfg.APIStyle = ""
 	}
 	if cfg.Model == "" {
 		cfg.Model = DefaultModel(cfg.Provider)
@@ -231,7 +388,36 @@ func (cfg ProviderConfig) WithDefaults() ProviderConfig {
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = DefaultUserAgent(cfg.Provider)
 	}
+	if cfg.ContextWindowTokens == 0 {
+		cfg.ContextWindowTokens = DefaultContextWindowTokens
+	}
+	if cfg.MaxContextTokens == 0 {
+		cfg.MaxContextTokens = DefaultMaxContextTokens
+		if cfg.ContextWindowTokens > 0 && cfg.MaxContextTokens > cfg.ContextWindowTokens {
+			cfg.MaxContextTokens = cfg.ContextWindowTokens
+		}
+	}
 	return cfg
+}
+
+// MaxContextTokensWithDefault 返回不超过模型窗口的请求总 token 预算。
+func (cfg ProviderConfig) MaxContextTokensWithDefault() int64 {
+	cfg = cfg.WithDefaults()
+	if cfg.ContextWindowTokens > 0 && cfg.MaxContextTokens > cfg.ContextWindowTokens {
+		return cfg.ContextWindowTokens
+	}
+	return cfg.MaxContextTokens
+}
+
+// APIFormatWithDefault 返回 OpenAI-compatible 文本 API 格式。
+func (cfg ProviderConfig) APIFormatWithDefault() APIFormat {
+	if format := APIFormat(strings.TrimSpace(string(cfg.APIFormat))); format != "" {
+		return format
+	}
+	if cfg.Provider == ProviderOpenAICompatible {
+		return APIFormatResponses
+	}
+	return ""
 }
 
 // NormalizedHeaders 返回规整后的自定义 HTTP headers。
@@ -294,11 +480,27 @@ func validateBaseURL(raw string) error {
 	return nil
 }
 
+func validateImageOrigin(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(raw)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return fmt.Errorf("llm: image_origin must use host:port format")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("llm: image_origin port must be between 1 and 65535")
+	}
+	return nil
+}
+
 // DefaultImageModel 返回 provider 对应的默认图片模型。
 func DefaultImageModel(provider Provider) string {
 	switch provider {
 	case ProviderOpenAICompatible:
-		return "gpt-image-1"
+		return "gpt-image-2"
 	case ProviderGemini:
 		return "imagen-4.0-generate-001"
 	default:
@@ -324,6 +526,20 @@ func (cfg ProviderConfig) ImageModelWithDefault() string {
 	return DefaultImageModel(cfg.Provider)
 }
 
+func (cfg ProviderConfig) ImageBaseURLWithDefault() string {
+	if strings.TrimSpace(cfg.ImageBaseURL) != "" {
+		return cfg.ImageBaseURL
+	}
+	return cfg.BaseURL
+}
+
+func (cfg ProviderConfig) ImageTimeoutWithDefault() time.Duration {
+	if cfg.ImageTimeout > 0 {
+		return cfg.ImageTimeout
+	}
+	return cfg.Timeout
+}
+
 // UserAgentWithDefault 返回 User-Agent 配置或默认值。
 func (cfg ProviderConfig) UserAgentWithDefault() string {
 	if strings.TrimSpace(cfg.UserAgent) != "" {
@@ -340,6 +556,10 @@ func (req GenerateRequest) withDefaults(cfg ProviderConfig) GenerateRequest {
 	if req.Temperature == nil {
 		req.Temperature = cfg.Temperature
 	}
+	if strings.TrimSpace(req.ReasoningEffort) == "" {
+		req.ReasoningEffort = cfg.ReasoningEffort
+	}
+	req.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
 	if req.MaxOutputTokens == 0 {
 		// 0 表示调用方没覆盖，沿用 provider config；负数会在 Validate 阶段拒绝。
 		req.MaxOutputTokens = cfg.MaxOutputTokens
@@ -355,6 +575,9 @@ func validateGenerateRequest(req GenerateRequest) error {
 	if len(req.Messages) == 0 {
 		return ErrMissingMessages
 	}
+	if err := validateReasoningEffort(req.ReasoningEffort); err != nil {
+		return err
+	}
 	for i, msg := range req.Messages {
 		if msg.Role == "" {
 			return fmt.Errorf("llm: messages[%d].role is required", i)
@@ -364,6 +587,19 @@ func validateGenerateRequest(req GenerateRequest) error {
 		}
 	}
 	return nil
+}
+
+func normalizeReasoningEffort(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func validateReasoningEffort(value string) error {
+	switch normalizeReasoningEffort(value) {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		return nil
+	default:
+		return fmt.Errorf("llm: unsupported reasoning_effort %q", value)
+	}
 }
 
 func messageHasContent(msg Message) bool {

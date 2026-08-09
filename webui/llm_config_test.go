@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 
@@ -56,6 +57,44 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 	}
 	if len(payload.Profiles) != 1 {
 		t.Fatalf("profiles = %#v", payload.Profiles)
+	}
+}
+
+func TestLLMAdvancedConfigRoundTripAndCompactEditorPreservation(t *testing.T) {
+	advanced := llm.ProviderConfig{
+		Provider:            llm.ProviderOpenAICompatible,
+		APIKey:              "secret-key",
+		BaseURL:             "https://chat.example.test/v1",
+		APIFormat:           llm.APIFormatChatCompletions,
+		Model:               "gpt-test",
+		ImageModel:          "gpt-image-2",
+		ImageBaseURL:        "https://image.example.test/v1",
+		ImageOrigin:         "203.0.113.10:443",
+		ImageTimeout:        10 * time.Minute,
+		Headers:             map[string]string{"X-Relay": "preserve-me"},
+		ReasoningEffort:     "high",
+		ContextWindowTokens: 200000,
+		MaxContextTokens:    12000,
+	}
+	payload := payloadFromConfig(advanced)
+	roundTrip := configFromPayload(payload)
+	if roundTrip.ImageBaseURL != advanced.ImageBaseURL || roundTrip.ImageOrigin != advanced.ImageOrigin || roundTrip.ImageTimeout != advanced.ImageTimeout || roundTrip.APIFormat != advanced.APIFormat || roundTrip.ReasoningEffort != "high" || roundTrip.ContextWindowTokens != 200000 || roundTrip.MaxContextTokens != 12000 {
+		t.Fatalf("advanced round trip = %#v", roundTrip)
+	}
+
+	store := NewMemoryLLMProfileStore(advanced)
+	handler := NewLLMConfigHandler(store)
+	router := testRouter(handler)
+	body := []byte(`{"id":"` + store.Profiles().ActiveID + `","name":"主配置","provider":"openai_compatible","api_style":"chat_completions","model":"gpt-test","base_url":"https://chat.example.test/v1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	got := store.Current()
+	if got.ImageModel != advanced.ImageModel || got.ImageBaseURL != advanced.ImageBaseURL || got.ImageOrigin != advanced.ImageOrigin || got.ImageTimeout != advanced.ImageTimeout || got.Headers["X-Relay"] != "preserve-me" || got.ReasoningEffort != "high" || got.ContextWindowTokens != 200000 || got.MaxContextTokens != 12000 {
+		t.Fatalf("compact editor dropped advanced settings: %#v", got)
 	}
 }
 

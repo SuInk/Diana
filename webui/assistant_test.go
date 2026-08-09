@@ -93,6 +93,61 @@ func TestQQBotHandlerPluginInstallAndEnable(t *testing.T) {
 	}
 }
 
+func TestQQBotHandlerInstallsResolverDependency(t *testing.T) {
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+		return fakeChannel{}
+	})
+	calledWith := ""
+	handler.installResolverDependency = func(_ context.Context, name string) (assistant.ResolverDependencyInstallResult, error) {
+		calledWith = name
+		dep := assistant.ResolverDependency{Name: name, Available: true, Version: "2026.08.09"}
+		return assistant.ResolverDependencyInstallResult{
+			Dependency: dep,
+			Resolver:   []assistant.ResolverDependency{dep},
+			Installer:  "test-installer",
+		}, nil
+	}
+	router := qqBotTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/dependencies/yt-dlp/install", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if calledWith != "yt-dlp" {
+		t.Fatalf("dependency = %q", calledWith)
+	}
+	var result assistant.ResolverDependencyInstallResult
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if !result.Dependency.Available || result.Installer != "test-installer" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestQQBotHandlerRejectsUnknownResolverDependency(t *testing.T) {
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+		return fakeChannel{}
+	})
+	handler.installResolverDependency = func(context.Context, string) (assistant.ResolverDependencyInstallResult, error) {
+		return assistant.ResolverDependencyInstallResult{}, assistant.ErrUnknownResolverDependency
+	}
+	router := qqBotTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/dependencies/not-allowed/install", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestQQBotHandlerPluginSettingsUpdateAndReject 验证对应功能场景。
 func TestQQBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)

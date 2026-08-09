@@ -3,7 +3,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>插件</h1>
-        <p>官方内置插件的安装、启停与详细设置</p>
+        <p>官方插件的安装、启停与详细设置</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="loading" @click="reload">
@@ -13,28 +13,7 @@
       </div>
     </header>
 
-    <section v-if="missingDependencies.length > 0" class="card" style="margin-bottom: 16px">
-      <div class="card-header">
-        <div>
-          <h2>解析器依赖缺失</h2>
-          <span class="card-sub">缺少这些命令时，对应平台的视频解析会直接失败</span>
-        </div>
-      </div>
-      <div class="card-body">
-        <div class="row-list">
-          <div v-for="dep in dependencies" :key="dep.name" class="row-item">
-            <div class="row-main">
-              <div class="row-title mono">{{ dep.name }}</div>
-              <div class="row-sub">{{ dep.purpose }}</div>
-            </div>
-            <span v-if="dep.available" class="badge accent" :title="dep.path">{{ dep.version || "已安装" }}</span>
-            <span v-else class="badge warn">未安装</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <div v-if="plugins.length > 0" class="plugin-grid">
+    <div v-if="plugins.length > 0" class="plugin-grid plugins-page-grid">
       <article
         v-for="plugin in plugins"
         :key="plugin.manifest.id"
@@ -69,6 +48,52 @@
         <div v-if="plugin.manifest.permissions?.length" class="cluster plugin-card-perms">
           <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
         </div>
+
+        <details v-if="plugin.manifest.id === resolverPluginID" class="plugin-dependencies">
+          <summary class="plugin-dependencies-head">
+            <span>运行依赖</span>
+            <span
+              v-if="dependencies.length > 0"
+              class="badge"
+              :class="readyDependencyCount === dependencies.length ? 'accent' : 'warn'"
+            >
+              {{ readyDependencyCount }}/{{ dependencies.length }} 已就绪
+            </span>
+            <ChevronDown class="plugin-dependencies-chevron" :size="15" aria-hidden="true" />
+          </summary>
+          <div class="plugin-dependencies-body">
+            <p v-if="dependenciesLoading && dependencies.length === 0" class="plugin-dependencies-empty">正在检测依赖...</p>
+            <p v-else-if="dependencies.length === 0" class="plugin-dependencies-empty">暂时无法读取依赖状态</p>
+            <div v-else class="plugin-dependency-list">
+              <div v-for="dep in dependencies" :key="dep.name" class="plugin-dependency-row">
+                <div class="plugin-dependency-main">
+                  <strong class="mono">{{ dep.name }}</strong>
+                  <span>{{ dep.purpose }}</span>
+                </div>
+                <span
+                  v-if="dep.available"
+                  class="badge accent plugin-dependency-status"
+                  :title="[dep.version, dep.path].filter(Boolean).join(' · ')"
+                >
+                  {{ dep.version || "已安装" }}
+                </span>
+                <button
+                  v-else-if="dep.installable"
+                  class="btn small"
+                  type="button"
+                  :disabled="busyDependency !== ''"
+                  :title="`使用 ${dep.installer || '系统包管理器'} 安装 ${dep.name}`"
+                  @click="installDependency(dep)"
+                >
+                  <LoaderCircle v-if="busyDependency === dep.name" class="spin" :size="14" aria-hidden="true" />
+                  <Download v-else :size="14" aria-hidden="true" />
+                  {{ busyDependency === dep.name ? "安装中" : "安装" }}
+                </button>
+                <span v-else class="badge warn">需手动安装</span>
+              </div>
+            </div>
+          </div>
+        </details>
 
         <footer class="plugin-card-foot">
           <template v-if="plugin.installed">
@@ -196,9 +221,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { RefreshCw, SlidersHorizontal } from "@lucide/vue";
+import { ChevronDown, Download, LoaderCircle, RefreshCw, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
+  installResolverDependency,
   listPlugins,
   setPluginEnabled,
   uninstallPlugin,
@@ -218,8 +244,11 @@ const plugins = ref<PluginState[]>([]);
 const loading = ref(false);
 const busyID = ref("");
 
+const resolverPluginID = "official.nonebot-plugin-resolver-go";
 const dependencies = ref<ResolverDependency[]>([]);
-const missingDependencies = computed(() => dependencies.value.filter((dep) => !dep.available));
+const dependenciesLoading = ref(false);
+const busyDependency = ref("");
+const readyDependencyCount = computed(() => dependencies.value.filter((dep) => dep.available).length);
 
 const settingsTarget = ref<PluginState | null>(null);
 // 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
@@ -238,11 +267,13 @@ function upsert(state: PluginState): void {
 
 async function reload(): Promise<void> {
   loading.value = true;
+  const dependencyRequest = loadDependencies();
   try {
     plugins.value = await listPlugins();
   } catch (error) {
     toastError(error instanceof Error ? error.message : "加载插件失败");
   } finally {
+    await dependencyRequest;
     loading.value = false;
   }
 }
@@ -409,16 +440,32 @@ async function saveSettings(): Promise<void> {
 }
 
 async function loadDependencies(): Promise<void> {
+  dependenciesLoading.value = true;
   try {
     dependencies.value = (await listResolverDependencies()).resolver;
   } catch {
     // 依赖探测只是辅助信息，失败不该打断插件页。
     dependencies.value = [];
+  } finally {
+    dependenciesLoading.value = false;
+  }
+}
+
+async function installDependency(dependency: ResolverDependency): Promise<void> {
+  busyDependency.value = dependency.name;
+  try {
+    const result = await installResolverDependency(dependency.name);
+    dependencies.value = result.resolver;
+    toastSuccess(`已安装 ${dependency.name}`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : `安装 ${dependency.name} 失败`);
+    await loadDependencies();
+  } finally {
+    busyDependency.value = "";
   }
 }
 
 onMounted(() => {
   void reload();
-  void loadDependencies();
 });
 </script>

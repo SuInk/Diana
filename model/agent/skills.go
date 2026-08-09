@@ -32,7 +32,7 @@ type skillFrontmatter struct {
 	} `yaml:"metadata"`
 }
 
-// LoadSkills scans configured roots for Codex-style skill folders.
+// LoadSkills scans configured roots for local SKILL.md skill folders.
 func LoadSkills(roots []string) ([]SkillMetadata, error) {
 	var skills []SkillMetadata
 	var errs []string
@@ -166,7 +166,7 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// RenderSkillsPrompt returns the compact skills catalog that Codex keeps in context.
+// RenderSkillsPrompt returns the compact skills catalog that the Agent keeps in context.
 func RenderSkillsPrompt(skills []SkillMetadata, budget int) string {
 	if len(skills) == 0 {
 		return ""
@@ -249,7 +249,7 @@ func (t *SkillsListTool) Name() string {
 }
 
 func (t *SkillsListTool) Description() string {
-	return `列出可用 Codex-style skills。input: {}`
+	return `列出可用本地 SKILL.md skills。input: {}`
 }
 
 func (t *SkillsListTool) Run(context.Context, map[string]any) (string, error) {
