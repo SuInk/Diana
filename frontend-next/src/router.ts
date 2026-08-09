@@ -20,7 +20,7 @@ export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
   { id: "llm", label: "LLM 配置", hint: "Provider 与模型管理" },
   { id: "bot", label: "机器人", hint: "NapCat 接入与行为" },
-  { id: "plugins", label: "插件", hint: "内置插件启停" },
+  { id: "plugins", label: "插件", hint: "插件安装与设置" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置" },
   { id: "logs", label: "日志", hint: "操作与错误日志" },
   { id: "settings", label: "设置", hint: "主题与系统更新" }

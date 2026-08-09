@@ -25,13 +25,14 @@ docker run -d \
   --name diana \
   --restart unless-stopped \
   -p 18080:18080 \
+  -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
   -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
   -e QQBOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e QQBOT_QQ=123456789 \
+  -e QQBOT_QQ=10001 \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
@@ -236,7 +237,7 @@ Bot startup example:
 QQBOT_ENABLED=true \
 ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
 ONEBOT_ACCESS_TOKEN=your-onebot-token \
-QQBOT_QQ=123456789 \
+QQBOT_QQ=10001 \
 DIANA_GROUP_TRIGGERS=嘉然,然然,Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
@@ -336,6 +337,9 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `FRONTEND_DIST` | auto-detected | Frontend build output directory; defaults to `frontend-next/dist` |
 | `LOG_PATH` | empty | Log file path; when set, logs are written to both stdout and the file |
 | `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
+| `DIANA_MEDIA_DIR` | `data/media` | Where inbound images are persisted; vision requests submit the local file as base64 |
+| `DIANA_MEDIA_MAX_MB` | `10` | Per-image download limit |
+| `DIANA_MEDIA_CACHE_MB` | `512` | Total cache size; least recently used files are evicted past this |
 | `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Diana media URL reachable by NapCat; use `http://diana:18080/media/resolver` for separate containers |
 | `DIANA_BILI_SESSDATA` | empty | Bilibili `SESSDATA` cookie for protected content; WebUI plugin settings take precedence |
 | `DIANA_DOUYIN_CK` | empty | Douyin cookie; required for Douyin resolution, WebUI plugin settings take precedence |
@@ -401,7 +405,7 @@ Environment=LOG_PATH=/var/log/diana/diana.log
 Environment=QQBOT_ENABLED=true
 Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
 Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=QQBOT_QQ=123456789
+Environment=QQBOT_QQ=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini

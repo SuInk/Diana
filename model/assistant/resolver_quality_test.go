@@ -91,3 +91,31 @@ func TestDownloadFailureHintNamesMissingCredential(t *testing.T) {
 		t.Fatalf("已配置 Cookie 时应提示可能失效，实际：%s", got)
 	}
 }
+
+func TestResolverPlatformDomainsRejectLookalikes(t *testing.T) {
+	valid := []string{
+		"https://www.bilibili.com/video/BV1xx",
+		"https://v.douyin.com/abc/",
+		"https://www.xiaohongshu.com/explore/abc",
+		"https://mobile.twitter.com/example/status/1",
+		"https://x.com/example/status/1",
+	}
+	for _, raw := range valid {
+		if !isKnownResolverPlatformURL(raw) {
+			t.Errorf("valid resolver URL rejected: %s", raw)
+		}
+	}
+	invalid := []string{
+		"https://bilibili.com.attacker.example/video/1",
+		"https://fake-douyin.com/video/1",
+		"https://xiaohongshu.com.attacker.example/explore/1",
+		"https://notx.com/status/1",
+		"https://twitter.com.attacker.example/status/1",
+		"file:///tmp/video.mp4",
+	}
+	for _, raw := range invalid {
+		if isKnownResolverPlatformURL(raw) || isBilibiliURL(raw) || isDouyinURL(raw) || isXiaohongshuURL(raw) || isTwitterURL(raw) {
+			t.Errorf("lookalike resolver URL accepted: %s", raw)
+		}
+	}
+}

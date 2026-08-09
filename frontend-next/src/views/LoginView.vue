@@ -12,7 +12,7 @@
         placeholder="diana#账号"
         autocomplete="username"
       />
-      <div class="input-group">
+      <div class="password-field">
         <input
           ref="passwordInput"
           v-model="password"
@@ -21,9 +21,9 @@
           placeholder="管理密码"
           autocomplete="current-password"
         />
-        <button class="btn icon-only" type="button" :aria-label="show ? '隐藏密码' : '显示密码'" @click="show = !show">
-          <EyeOff v-if="show" :size="14" aria-hidden="true" />
-          <Eye v-else :size="14" aria-hidden="true" />
+        <button class="password-toggle" type="button" :aria-label="show ? '隐藏密码' : '显示密码'" @click="show = !show">
+          <EyeOff v-if="show" :size="16" aria-hidden="true" />
+          <Eye v-else :size="16" aria-hidden="true" />
         </button>
       </div>
       <button class="btn primary" type="submit" :disabled="busy || password.length === 0">

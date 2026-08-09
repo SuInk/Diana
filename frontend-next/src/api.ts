@@ -69,6 +69,7 @@ export interface QQBotConfig {
   bot_qq?: string;
   owner_id?: string;
   owner_login_enabled?: boolean;
+  owner_llm_config_enabled?: boolean;
   group_triggers?: string[];
   disabled_groups?: string[];
   /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
@@ -162,6 +163,14 @@ export interface ResolverDependency {
   available: boolean;
   path?: string;
   version?: string;
+  installable: boolean;
+  installer?: string;
+}
+
+export interface ResolverDependencyInstallResponse {
+  dependency: ResolverDependency;
+  resolver: ResolverDependency[];
+  installer?: string;
 }
 
 export interface QQBotGroupConfig {
@@ -564,6 +573,13 @@ export function updatePluginSettings(
 
 export function listResolverDependencies(): Promise<{ resolver: ResolverDependency[] }> {
   return requestJSON<{ resolver: ResolverDependency[] }>("/api/assistant/plugins/dependencies");
+}
+
+export function installResolverDependency(name: string): Promise<ResolverDependencyInstallResponse> {
+  return requestJSON<ResolverDependencyInstallResponse>(
+    `/api/assistant/plugins/dependencies/${encodeURIComponent(name)}/install`,
+    { method: "POST" }
+  );
 }
 
 export function requestQQBotGroupAdminChallenge(groupID: string, userID: string): Promise<QQBotGroupAdminChallengeResponse> {

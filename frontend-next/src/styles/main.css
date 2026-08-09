@@ -39,7 +39,6 @@
   --accent-contrast: #ffffff;
 
   --sidebar-width: 236px;
-  --sidebar-collapsed-width: 64px;
   --topbar-height: 56px;
 }
 
@@ -161,6 +160,9 @@ code {
   background: var(--bg-raised);
   border-right: 1px solid var(--border);
   z-index: 40;
+  opacity: 1;
+  visibility: visible;
+  transition: transform 0.2s ease, opacity 0.2s ease;
 }
 
 .app-main {
@@ -169,6 +171,7 @@ code {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  transition: margin-left 0.2s ease;
 }
 
 .app-topbar {
@@ -474,6 +477,41 @@ code {
   align-self: center;
   width: 44px;
   height: 44px;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field .input {
+  padding-right: 44px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.password-toggle:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .login-error {
@@ -991,34 +1029,21 @@ code {
   color: var(--text);
 }
 
-/* 收起态：只留图标，主内容区跟着让出空间 */
+/* 桌面收起态：侧栏完全隐藏，不保留只有图标的中间形态。 */
 .app-sidebar.collapsed {
-  width: var(--sidebar-collapsed-width);
-}
-
-.app-sidebar.collapsed .nav-label,
-.app-sidebar.collapsed .brand-name {
-  display: none;
-}
-
-.app-sidebar.collapsed .sidebar-head {
-  justify-content: center;
-  padding-right: 0;
-}
-
-.app-sidebar.collapsed .brand {
-  display: none;
-}
-
-.app-sidebar.collapsed .nav-item,
-.app-sidebar.collapsed .nav-action {
-  justify-content: center;
-  padding-left: 0;
-  padding-right: 0;
+  transform: translateX(-100%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 0.2s ease, opacity 0.2s ease, visibility 0s linear 0.2s;
 }
 
 .app-sidebar.collapsed ~ .app-main {
-  margin-left: var(--sidebar-collapsed-width);
+  margin-left: 0;
+}
+
+.app-sidebar.collapsed ~ .app-main .menu-button {
+  display: inline-flex;
 }
 
 /* 顶栏实时连接状态 */
@@ -1793,10 +1818,15 @@ code {
   gap: 14px;
 }
 
+.plugins-page-grid {
+  align-items: start;
+}
+
 .plugin-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
   padding: 16px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1860,6 +1890,98 @@ code {
 .plugin-card-hint {
   font-size: 11.5px;
   color: var(--muted);
+}
+
+.plugin-dependencies {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.plugin-dependencies-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.plugin-dependencies-head::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-dependencies-head:hover {
+  color: var(--text);
+}
+
+.plugin-dependencies-chevron {
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.plugin-dependencies[open] .plugin-dependencies-chevron {
+  transform: rotate(180deg);
+}
+
+.plugin-dependencies-body {
+  padding-top: 8px;
+}
+
+.plugin-dependencies-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.plugin-dependency-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.plugin-dependency-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.plugin-dependency-row:first-child {
+  border-top: 0;
+}
+
+.plugin-dependency-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plugin-dependency-main strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.plugin-dependency-main span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.plugin-dependency-status {
+  display: block;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 插件设置弹窗 */
@@ -2547,25 +2669,9 @@ code {
   .app-sidebar.collapsed.open {
     width: var(--sidebar-width);
     transform: none;
-  }
-
-  /* 抽屉里始终是完整形态，桌面端的收起态不适用。 */
-  .app-sidebar.collapsed {
-    width: var(--sidebar-width);
-  }
-
-  .app-sidebar.collapsed .nav-label,
-  .app-sidebar.collapsed .brand-name,
-  .app-sidebar.collapsed .nav-uptime {
-    display: revert;
-  }
-
-  .app-sidebar.collapsed .brand,
-  .app-sidebar.collapsed .nav-item,
-  .app-sidebar.collapsed .nav-action {
-    justify-content: flex-start;
-    padding-left: 12px;
-    padding-right: 12px;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
   }
 
   .app-main,

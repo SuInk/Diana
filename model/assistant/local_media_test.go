@@ -18,7 +18,7 @@ func TestLocalMediaStoreServesSharedFile(t *testing.T) {
 	if err := os.WriteFile(videoPath, []byte("fake video"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	store := NewLocalMediaStore("http://127.0.0.1:18080/media/resolver")
+	store := NewLocalMediaStore("http://127.0.0.1:18080/api/qqbot/media")
 	sharedURL, ok := store.Share(videoPath, time.Minute)
 	if !ok {
 		t.Fatal("Share() returned false")
@@ -28,7 +28,7 @@ func TestLocalMediaStoreServesSharedFile(t *testing.T) {
 		t.Fatalf("Parse() error = %v", err)
 	}
 	token := path.Base(parsed.Path)
-	req := httptest.NewRequest(http.MethodGet, "/media/resolver/"+token, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/qqbot/media/"+token, nil)
 	rec := httptest.NewRecorder()
 	store.ServeToken(rec, req, token)
 	if rec.Code != http.StatusOK {
@@ -50,7 +50,7 @@ func TestLocalMediaStoreExpiresSharedFile(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	now := time.Now()
-	store := NewLocalMediaStore("http://127.0.0.1:18080/media/resolver")
+	store := NewLocalMediaStore("http://127.0.0.1:18080/api/qqbot/media")
 	store.now = func() time.Time { return now }
 	sharedURL, ok := store.Share(videoPath, time.Second)
 	if !ok {
@@ -63,7 +63,7 @@ func TestLocalMediaStoreExpiresSharedFile(t *testing.T) {
 	token := path.Base(parsed.Path)
 	now = now.Add(2 * time.Second)
 
-	req := httptest.NewRequest(http.MethodGet, "/media/resolver/"+token, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/qqbot/media/"+token, nil)
 	rec := httptest.NewRecorder()
 	store.ServeToken(rec, req, token)
 	if rec.Code != http.StatusNotFound {

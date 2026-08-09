@@ -5,7 +5,12 @@
       <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false" />
     </transition>
 
-    <aside id="app-sidebar" class="app-sidebar" :class="{ open: drawerOpen, collapsed }" aria-label="主导航">
+    <aside
+      id="app-sidebar"
+      class="app-sidebar"
+      :class="{ open: drawerOpen, collapsed: collapsed && !narrowSidebar }"
+      aria-label="主导航"
+    >
       <div class="sidebar-head">
         <div class="brand">
           <span class="brand-mark">
@@ -55,7 +60,7 @@
 
     <div class="app-main">
       <header class="app-topbar">
-        <!-- 窄屏侧栏整体收起为抽屉，开关放在顶栏；桌面端用侧栏里那个。 -->
+        <!-- 窄屏或桌面侧栏完全隐藏时，开关放在顶栏。 -->
         <button
           class="btn ghost icon-only menu-button"
           type="button"

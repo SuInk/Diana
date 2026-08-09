@@ -20,6 +20,19 @@ type Tool interface {
 	Run(ctx context.Context, input map[string]any) (string, error)
 }
 
+type ToolCatalogItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// TerminalResultTool can finish the agent loop immediately after a successful
+// tool call. It is intended for tools that already performed the requested
+// action and return an authoritative user-facing acknowledgement.
+type TerminalResultTool interface {
+	Tool
+	TerminalResult(output string) (string, bool)
+}
+
 type closeableTool interface {
 	Close() error
 }
@@ -42,18 +55,20 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验。
 	registry.Register(&ListFilesTool{root: root, limit: cfg.ListDirectoryLimit})
 	registry.Register(&ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes})
-	registry.Register(&RunCommandTool{
-		root:      root,
-		allowlist: commandAllowlistSet(cfg.CommandAllowlist),
-		timeout:   time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
-		maxBytes:  cfg.MaxToolOutputChars,
-	})
+	if len(cfg.CommandAllowlist) > 0 {
+		registry.Register(&RunCommandTool{
+			root:      root,
+			allowlist: commandAllowlistSet(cfg.CommandAllowlist),
+			timeout:   time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
+			maxBytes:  cfg.MaxToolOutputChars,
+		})
+	}
 	registry.RegisterBrowserTools(root, cfg)
 	return registry, nil
 }
 
-// NewCodexToolRegistry 创建包含本地工具、skills 工具和 MCP 工具的注册表。
-func NewCodexToolRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error) {
+// NewAgentToolRegistry 创建包含本地工具、skills 工具和 MCP 工具的注册表。
+func NewAgentToolRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error) {
 	registry, err := NewDefaultToolRegistry(cfg)
 	if err != nil {
 		return nil, err
@@ -78,7 +93,7 @@ func NewCodexToolRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error
 	return registry, nil
 }
 
-// SetSkills 记录可用 skill 元数据，供 Runner 构造 Codex 风格 skills 上下文。
+// SetSkills 记录可用 skill 元数据，供 Runner 构造 skills 上下文。
 func (r *ToolRegistry) SetSkills(skills []SkillMetadata) {
 	r.skills = append([]SkillMetadata(nil), skills...)
 }
@@ -142,6 +157,93 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	tool, ok := r.tools[name]
 	return tool, ok
+}
+
+// Retain removes every tool not present in allowed. A nil allowlist keeps all
+// tools and is used only for the bot Owner's unrestricted registry.
+func (r *ToolRegistry) Retain(allowed map[string]bool) {
+	if r == nil || allowed == nil {
+		return
+	}
+	order := make([]string, 0, len(r.order))
+	for _, name := range r.order {
+		if allowed[name] {
+			order = append(order, name)
+			continue
+		}
+		delete(r.tools, name)
+	}
+	r.order = order
+	if !allowed["skills.list"] && !allowed["skills.read"] {
+		r.skills = nil
+	}
+}
+
+// Remove deletes one tool while preserving the stable order of the remaining
+// registry entries.
+func (r *ToolRegistry) Remove(name string) {
+	if r == nil {
+		return
+	}
+	name = strings.TrimSpace(name)
+	if _, exists := r.tools[name]; !exists {
+		return
+	}
+	delete(r.tools, name)
+	order := r.order[:0]
+	for _, current := range r.order {
+		if current != name {
+			order = append(order, current)
+		}
+	}
+	r.order = order
+	if name == "skills.list" || name == "skills.read" {
+		if _, hasList := r.tools["skills.list"]; !hasList {
+			if _, hasRead := r.tools["skills.read"]; !hasRead {
+				r.skills = nil
+			}
+		}
+	}
+}
+
+func (r *ToolRegistry) Len() int {
+	if r == nil {
+		return 0
+	}
+	return len(r.tools)
+}
+
+// Names returns the registered tool names in the same stable order used by the
+// Agent prompt.
+func (r *ToolRegistry) Names() []string {
+	if r == nil {
+		return nil
+	}
+	return append([]string(nil), r.order...)
+}
+
+// Catalog returns a compact semantic routing catalog. Input schemas stay out of
+// the router request and are shown only to the answering Agent after selection.
+func (r *ToolRegistry) Catalog(descriptionRunes int) []ToolCatalogItem {
+	if r == nil {
+		return nil
+	}
+	if descriptionRunes <= 0 {
+		descriptionRunes = 180
+	}
+	items := make([]ToolCatalogItem, 0, len(r.order))
+	for _, name := range r.order {
+		description := strings.TrimSpace(r.tools[name].Description())
+		if index := strings.Index(strings.ToLower(description), "input:"); index >= 0 {
+			description = strings.TrimSpace(description[:index])
+		}
+		description = strings.Join(strings.Fields(description), " ")
+		items = append(items, ToolCatalogItem{
+			Name:        name,
+			Description: truncateRunes(description, descriptionRunes),
+		})
+	}
+	return items
 }
 
 // Descriptions 返回给模型看的工具描述列表。
@@ -277,7 +379,7 @@ func (t *RunCommandTool) Name() string {
 
 // Description 返回命令执行工具说明。
 func (t *RunCommandTool) Description() string {
-	return `在 Agent 工作目录内执行本地命令，不经过 shell。input: {"command":"命令名","args":["参数"],"cwd":"相对目录，可选","timeout_ms":10000}`
+	return `在 Agent 工作目录内执行短时本地命令，不经过 shell。不要用于网页搜索、计时、提醒、周期任务、sleep 或后台驻留；这些场景必须使用对应的专用工具。实时网页搜索必须优先使用 web_search.search。input: {"command":"命令名","args":["参数"],"cwd":"相对目录，可选","timeout_ms":10000}`
 }
 
 // Run 在 Agent 工作目录内执行白名单命令。
@@ -472,7 +574,45 @@ func safePath(root, rel string) (string, error) {
 		// filepath.Clean 后再 Rel 校验，阻止 ../ 逃出 Agent 工作目录。
 		return "", errors.New("path escapes agent workdir")
 	}
+	resolvedRoot, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		return "", err
+	}
+	resolvedCandidate, err := evalSymlinksAllowMissing(candidate)
+	if err != nil {
+		return "", err
+	}
+	relation, err = filepath.Rel(resolvedRoot, resolvedCandidate)
+	if err != nil {
+		return "", err
+	}
+	if relation == ".." || strings.HasPrefix(relation, ".."+string(filepath.Separator)) {
+		return "", errors.New("path resolves outside agent workdir")
+	}
 	return candidate, nil
+}
+
+func evalSymlinksAllowMissing(path string) (string, error) {
+	current := path
+	missing := make([]string, 0, 4)
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return resolved, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 // stringFromInput 从工具输入中读取字符串字段。

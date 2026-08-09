@@ -41,3 +41,41 @@ func TestConfigFromPayloadKeepsNoneBotBridgeToken(t *testing.T) {
 		t.Fatalf("NoneBotBridgeToken = %q", got.NoneBotBridgeToken)
 	}
 }
+
+func TestConfigPayloadKeepsPassiveReplyChance(t *testing.T) {
+	cfg := ConfigFromPayload(ConfigPayload{
+		Enabled:               true,
+		PassiveReplyChance:    0.4,
+		PassiveReplyThreshold: 0.92,
+	}, BotConfig{})
+	if cfg.PassiveReplyChance != 0.4 {
+		t.Fatalf("PassiveReplyChance = %v", cfg.PassiveReplyChance)
+	}
+	payload := PayloadFromConfig(cfg)
+	if payload.PassiveReplyChance != 0.4 {
+		t.Fatalf("payload PassiveReplyChance = %v", payload.PassiveReplyChance)
+	}
+	if cfg.PassiveReplyThreshold != 0.92 || payload.PassiveReplyThreshold != 0.92 {
+		t.Fatalf("threshold cfg=%v payload=%v", cfg.PassiveReplyThreshold, payload.PassiveReplyThreshold)
+	}
+}
+
+func TestConfigPayloadKeepsEditablePrompts(t *testing.T) {
+	cfg := ConfigFromPayload(ConfigPayload{
+		Enabled:                  true,
+		SystemPrompt:             "custom system prompt",
+		PassiveReplyRouterPrompt: "custom router prompt",
+		PassiveReplyPrompt:       "custom passive reply prompt",
+	}, BotConfig{})
+	payload := PayloadFromConfig(cfg)
+
+	if payload.SystemPrompt != "custom system prompt" {
+		t.Fatalf("SystemPrompt = %q", payload.SystemPrompt)
+	}
+	if payload.PassiveReplyRouterPrompt != "custom router prompt" {
+		t.Fatalf("PassiveReplyRouterPrompt = %q", payload.PassiveReplyRouterPrompt)
+	}
+	if payload.PassiveReplyPrompt != "custom passive reply prompt" {
+		t.Fatalf("PassiveReplyPrompt = %q", payload.PassiveReplyPrompt)
+	}
+}

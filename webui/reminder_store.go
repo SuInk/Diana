@@ -39,12 +39,13 @@ func (s *PersistentReminderStore) Reminders() []assistant.Reminder {
 }
 
 // SaveReminders 保存提醒列表并落盘。
-func (s *PersistentReminderStore) SaveReminders(items []assistant.Reminder) {
+func (s *PersistentReminderStore) SaveReminders(items []assistant.Reminder) error {
 	s.mu.Lock()
 	// 保存副本，调用方后续 append/delete 不会影响内存快照。
 	s.items = append([]assistant.Reminder(nil), items...)
 	s.mu.Unlock()
 	if s.store != nil {
-		_ = s.store.SaveReminders(s.ctx, items)
+		return s.store.SaveReminders(s.ctx, items)
 	}
+	return nil
 }

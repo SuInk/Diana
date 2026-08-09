@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 const (
@@ -120,6 +122,9 @@ type bilibiliDashMedia struct {
 func downloadPlatformVideoFile(ctx context.Context, raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
+		return ""
+	}
+	if !isKnownResolverPlatformURL(raw) {
 		return ""
 	}
 	if isBilibiliURL(raw) {
@@ -495,7 +500,7 @@ func fetchBilibiliJSON(ctx context.Context, raw string, referer string, out any)
 	if strings.TrimSpace(referer) != "" {
 		req.Header.Set("Referer", referer)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := netguard.NewPublicHTTPClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("resolver bilibili api failed for %s: %v", redactURLQuery(raw), err)
@@ -518,7 +523,7 @@ func resolveBilibiliURL(ctx context.Context, raw string) string {
 	if err != nil {
 		return raw
 	}
-	if parsed.Hostname() != "b23.tv" && parsed.Hostname() != "bili2233.cn" {
+	if !hostMatchesDomain(parsed.Hostname(), "b23.tv", "bili2233.cn") {
 		return raw
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, raw, nil)
@@ -528,7 +533,7 @@ func resolveBilibiliURL(ctx context.Context, raw string) string {
 	for key, value := range bilibiliDownloadHeaders(ctx, nil) {
 		req.Header.Set(key, value)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := netguard.NewPublicHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return raw
@@ -740,9 +745,9 @@ func platformCookieHeader(ctx context.Context, raw string) string {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	switch {
-	case strings.Contains(host, "douyin.com"):
+	case hostMatchesDomain(host, "douyin.com"):
 		return resolverDouyinCookie(ctx)
-	case strings.Contains(host, "xiaohongshu.com") || host == "xhslink.com":
+	case hostMatchesDomain(host, "xiaohongshu.com", "xhslink.com"):
 		return resolverXHSCookie(ctx)
 	default:
 		return ""
@@ -768,7 +773,7 @@ func fetchFinalURLDetails(ctx context.Context, raw string, headers map[string]st
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	client := &http.Client{Timeout: 12 * time.Second}
+	client := netguard.NewPublicHTTPClient(12 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, err
@@ -800,7 +805,7 @@ func fetchResolverBody(ctx context.Context, raw string, headers map[string]strin
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	client := &http.Client{Timeout: defaultPlatformTimeout}
+	client := netguard.NewPublicHTTPClient(defaultPlatformTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("resolver request failed for %s: %v", redactURLQuery(raw), err)
@@ -865,7 +870,7 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 	}
 	headers := xiaohongshuPageHeaders(cookie)
 	pageURL := raw
-	if strings.Contains(strings.ToLower(raw), "xhslink.com") {
+	if urlMatchesDomain(raw, "xhslink.com") {
 		finalURL, statusCode, err := fetchFinalURLDetails(ctx, raw, headers)
 		if err != nil {
 			return nil, "request_failed"
@@ -915,8 +920,8 @@ func isXiaohongshuLiveURL(raw string) bool {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	path := strings.ToLower(parsed.Path)
-	return (host == "xhslink.com" && strings.HasPrefix(path, "/m/")) ||
-		(strings.Contains(host, "xiaohongshu.com") && (strings.Contains(path, "/live/") || strings.Contains(path, "/livestream/")))
+	return (hostMatchesDomain(host, "xhslink.com") && strings.HasPrefix(path, "/m/")) ||
+		(hostMatchesDomain(host, "xiaohongshu.com") && (strings.Contains(path, "/live/") || strings.Contains(path, "/livestream/")))
 }
 
 func xiaohongshuPageHeaders(cookie string) map[string]string {
@@ -972,15 +977,6 @@ func xiaohongshuVideoMasterURL(note map[string]any) string {
 	return firstNonEmptyString(xiaohongshuVideoCandidateURLs(note))
 }
 
-func firstNonEmptyString(values []string) string {
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func anyString(value any) string {
 	switch typed := value.(type) {
 	case string:
@@ -1013,7 +1009,7 @@ func downloadURLToFile(ctx context.Context, raw string, path string, headers map
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	client := &http.Client{Timeout: defaultPlatformTimeout}
+	client := netguard.NewPublicHTTPClient(defaultPlatformTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("resolver media download failed for %s: %v", redactURLQuery(raw), err)
@@ -1153,6 +1149,9 @@ func resolverVideoDownloadMaxBytes(ctx context.Context) int64 {
 func resolverVideoDownloadMaxMB(ctx context.Context) int {
 	// Never allow an unlimited stream: the configured final-file limit is also
 	// enforced while downloading so a hostile server cannot fill the disk.
+	if legacy := envInt("DIANA_RESOLVER_VIDEO_DOWNLOAD_MAX_MB", 0); legacy > 0 {
+		return legacy
+	}
 	return resolverVideoMaxMB(ctx)
 }
 
@@ -1228,38 +1227,19 @@ func envInt(key string, fallback int) int {
 }
 
 func isBilibiliURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return strings.Contains(raw, "bilibili.com") || strings.Contains(raw, "b23.tv")
-	}
-	host := strings.ToLower(parsed.Host)
-	return strings.Contains(host, "bilibili.com") || strings.Contains(host, "b23.tv") || strings.Contains(host, "bili2233.cn")
+	return urlMatchesDomain(raw, "bilibili.com", "b23.tv", "bili2233.cn")
 }
 
 func isDouyinURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return strings.Contains(raw, "douyin.com")
-	}
-	return strings.Contains(strings.ToLower(parsed.Hostname()), "douyin.com")
+	return urlMatchesDomain(raw, "douyin.com")
 }
 
 func isXiaohongshuURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return strings.Contains(raw, "xiaohongshu.com") || strings.Contains(raw, "xhslink.com")
-	}
-	host := strings.ToLower(parsed.Hostname())
-	return strings.Contains(host, "xiaohongshu.com") || host == "xhslink.com"
+	return urlMatchesDomain(raw, "xiaohongshu.com", "xhslink.com")
 }
 
 func isTwitterURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return strings.Contains(raw, "x.com") || strings.Contains(raw, "twitter.com")
-	}
-	host := strings.ToLower(parsed.Hostname())
-	return strings.Contains(host, "x.com") || strings.Contains(host, "twitter.com")
+	return urlMatchesDomain(raw, "x.com", "twitter.com")
 }
 
 func redactURLQuery(raw string) string {

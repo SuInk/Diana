@@ -23,11 +23,45 @@
         </div>
         <div v-if="authRequired" class="field">
           <label for="sec-current">当前密码</label>
-          <input id="sec-current" v-model="currentPassword" class="input" type="password" autocomplete="current-password" />
+          <div class="password-field">
+            <input
+              id="sec-current"
+              v-model="currentPassword"
+              class="input"
+              :type="showCurrentPassword ? 'text' : 'password'"
+              autocomplete="current-password"
+            />
+            <button
+              class="password-toggle"
+              type="button"
+              :aria-label="showCurrentPassword ? '隐藏当前密码' : '显示当前密码'"
+              @click="showCurrentPassword = !showCurrentPassword"
+            >
+              <EyeOff v-if="showCurrentPassword" :size="16" aria-hidden="true" />
+              <Eye v-else :size="16" aria-hidden="true" />
+            </button>
+          </div>
         </div>
         <div class="field">
           <label for="sec-new">{{ authRequired ? "新密码（至少 8 位）" : "设置管理密码（至少 8 位）" }}</label>
-          <input id="sec-new" v-model="newPassword" class="input" type="password" autocomplete="new-password" />
+          <div class="password-field">
+            <input
+              id="sec-new"
+              v-model="newPassword"
+              class="input"
+              :type="showNewPassword ? 'text' : 'password'"
+              autocomplete="new-password"
+            />
+            <button
+              class="password-toggle"
+              type="button"
+              :aria-label="showNewPassword ? '隐藏新密码' : '显示新密码'"
+              @click="showNewPassword = !showNewPassword"
+            >
+              <EyeOff v-if="showNewPassword" :size="16" aria-hidden="true" />
+              <Eye v-else :size="16" aria-hidden="true" />
+            </button>
+          </div>
         </div>
         <div class="field wide cluster" style="gap: 8px">
           <button class="btn primary" type="button" :disabled="savingPassword || username.length === 0 || newPassword.length === 0" @click="saveCredentials">
@@ -156,7 +190,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Download, KeyRound, LogOut, RefreshCw } from "@lucide/vue";
+import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -185,6 +219,8 @@ const authRequired = ref(false);
 const username = ref("");
 const currentPassword = ref("");
 const newPassword = ref("");
+const showCurrentPassword = ref(false);
+const showNewPassword = ref(false);
 const savingPassword = ref(false);
 const autoEnabled = ref(true);
 const autoInterval = ref(30);
@@ -210,6 +246,8 @@ async function saveCredentials(): Promise<void> {
     authRequired.value = true;
     currentPassword.value = "";
     newPassword.value = "";
+    showCurrentPassword.value = false;
+    showNewPassword.value = false;
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存密码失败");
   } finally {

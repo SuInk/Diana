@@ -25,13 +25,14 @@ docker run -d \
   --name diana \
   --restart unless-stopped \
   -p 18080:18080 \
+  -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
   -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
   -e QQBOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e QQBOT_QQ=123456789 \
+  -e QQBOT_QQ=10001 \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
@@ -232,7 +233,7 @@ Telegram 只需要 BotFather 给的 Bot Token，不需要公网地址，也不�
 
 ## WebUI 日志中心
 
-WebUI 的“日志中心”页可查看持久化的操作日志和错误日志。操作日志会记录 LLM 配置保存/切换、机器人启停、插件管理、系统更新等动作；错误日志会记录这些接口返回失败时的错误信息。日志会带 `actor` 操作人：WebUI 默认记录 `web:<客户端 IP>`，也可由网关通过 `X-Diana-Actor`、`X-Operator`、`X-Forwarded-User` 等请求头传入；QQ 内置 LLM 配置技能记录 `qq:<用户 QQ>`。
+WebUI 的“日志中心”页可查看持久化的操作日志和错误日志。操作日志会记录 LLM 配置保存/切换、机器人启停、插件管理、系统更新等动作；错误日志会记录这些接口返回失败时的错误信息。日志会带 `actor` 操作人：WebUI 默认记录 `web:<客户端 IP>`，也可由网关通过 `X-Diana-Actor`、`X-Operator`、`X-Forwarded-User` 等请求头传入；机器人内置的聊天模型配置命令记录 `qq:<用户 QQ>`。
 
 ```text
 GET /api/logs?kind=operation&limit=100
@@ -257,7 +258,7 @@ ws://127.0.0.1:18080/onebot/v11/ws
 QQBOT_ENABLED=true \
 ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
 ONEBOT_ACCESS_TOKEN=your-onebot-token \
-QQBOT_QQ=123456789 \
+QQBOT_QQ=10001 \
 DIANA_GROUP_TRIGGERS=嘉然,然然,Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
@@ -313,9 +314,11 @@ chrome --remote-debugging-port=9222
 
    各平台的 Cookie、yt-dlp Cookie 文件和代理地址都可以直接在插件设置里填写，不必再改环境变量重启容器；填写后优先于同名环境变量。凭据保存后读接口只回传「已配置」标记，不返回明文，留空提交表示沿用原值，要清除需点设置项旁的「清除」。
 
-   插件页顶部会显示 `yt-dlp`、`ffmpeg`、`node` 三个外部依赖的探测结果，缺失时对应平台无法下载。
+   “链接解析”插件卡片内会显示 `yt-dlp`、`ffmpeg`、`node` 三个外部依赖的探测结果，并可通过受控的系统包管理器直接安装缺失项。
 4. 默认内置 Go 文件解析插件，支持 QQ 文件段和文本类文件链接，提取内容作为 LLM 上下文。
-5. 默认内置 `LLM 配置技能`，主人可用自然语言修改当前配置的 provider 和模型，例如“把提供商切到 gemini”“把模型换成 gemini-2.5-pro”“以后用 anthropic 的 claude-sonnet-4-5”；指定模型会先通过后端模型列表校验，列表里没有就不会保存。
+5. `联网搜索` 是官方可选插件，默认不安装。安装后，对话模型可以调用 `web_search.search` 获取实时网页信息；首选免费 Exa MCP，失败时可用已配置 API Key 的 Tavily 自动回退。搜索插件独立于内置 Agent 开关，未开启 Agent 时不会同时开放本地文件、命令或浏览器工具。
+
+主人通过自然语言修改当前 provider 和模型的能力属于机器人本身，不作为插件展示。在“机器人 → 模型 → 聊天内模型管理”中可以按机器人独立开关；目标模型保存前会通过后端模型列表校验。
 
 ## 使用第三方 NoneBot 插件
 
@@ -343,6 +346,9 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | 聊天内错误提示前缀 |
 | `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
 | `DIANA_LOG_PATH` | 空 | `LOG_PATH` 的兼容别名 |
+| `DIANA_MEDIA_DIR` | `data/media` | 入站图片持久化目录；识图用本地文件的 base64 提交 |
+| `DIANA_MEDIA_MAX_MB` | `10` | 单张入站图片下载上限 |
+| `DIANA_MEDIA_CACHE_MB` | `512` | 图片目录总量上限，超出后按最后使用时间淘汰 |
 | `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | NapCat 可访问的 Diana 媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
 | `DIANA_BILI_SESSDATA` | 空 | B 站登录 Cookie 中的 `SESSDATA`；WebUI 插件设置优先 |
 | `DIANA_DOUYIN_CK` | 空 | 抖音 Cookie；抖音解析必需，WebUI 插件设置优先 |
@@ -408,7 +414,7 @@ Environment=LOG_PATH=/var/log/diana/diana.log
 Environment=QQBOT_ENABLED=true
 Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
 Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=QQBOT_QQ=123456789
+Environment=QQBOT_QQ=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini
