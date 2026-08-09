@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,11 +38,17 @@ import (
 // 源码运行或未注入时展示 dev，git 可用时前端优先展示 git 提交号。
 var buildVersion = "dev"
 
-const legacyLLMConfigPluginID = "official.llm-config-skill"
+const (
+	legacyLLMConfigPluginID = "official.llm-config-skill"
+	webSearchPluginID       = "official.web-search"
+)
+
+const maxHTTPRequestBodyBytes = 8 << 20
 
 func main() {
 	logWriter, closeLog := setupLogging()
 	defer closeLog()
+	probeMacOSQQAppDataAccess()
 	port := envOr("PORT", "18080")
 	host := envOrAny([]string{"HOST", "BACKEND_HOST"}, "")
 
@@ -82,7 +90,7 @@ func main() {
 	handler := webui.NewLLMConfigHandler(store)
 	handler.SetModelListFactory(modelListFactory)
 	handler.SetLogStore(sqliteStore)
-	systemUpdater, err := updater.NewGitUpdater(".")
+	systemUpdater, err := newSystemUpdater()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -98,11 +106,18 @@ func main() {
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
 		log.Fatal(err)
 	} else if ok {
+		statesChanged := false
 		if _, exists := savedPluginStates[legacyLLMConfigPluginID]; exists {
 			profiles, changed := migrateLegacyLLMConfigPluginState(botProfileStore.Profiles(), savedPluginStates)
 			if changed {
 				botProfileStore.SaveProfiles(profiles)
 			}
+			statesChanged = true
+		}
+		if catalogState, exists := plugins.Get(webSearchPluginID); exists && migrateRestoredWebSearchPluginState(savedPluginStates, catalogState) {
+			statesChanged = true
+		}
+		if statesChanged {
 			if err := sqliteStore.SavePluginStates(ctx, savedPluginStates); err != nil {
 				log.Fatal(err)
 			}
@@ -122,6 +137,13 @@ func main() {
 		return llm.NewClient(cfg)
 	})
 	botRuntime.SetGroupConfigStore(botGroupConfigStore)
+	botRuntime.SetMessageHistoryStore(sqliteStore)
+	botRuntime.SetInboundEventStore(sqliteStore)
+	botRuntime.SetUserMemoryStore(sqliteStore)
+	botRuntime.SetStructuredMemoryStore(sqliteStore)
+	if err := botRuntime.SetReplySuppressionStore(ctx, sqliteStore); err != nil {
+		log.Printf("assistant reply suppression load failed: %v", err)
+	}
 	botRuntime.SetLLMModelLister(modelListFactory)
 	botRuntime.SetAppLogWriter(sqliteStore)
 	localMediaBaseURL := envOr(
@@ -175,10 +197,18 @@ func main() {
 	botHandler.SetFeatureFlags(webui.QQBotFeatureFlags{
 		GroupTest: boolFromEnv("QQBOT_GROUP_TEST_ENABLED", false),
 	})
+	botHandler.SetLocalMediaSharer(localMediaStore)
 	botHandler.SetProfileStore(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
 	botHandler.SetSQLiteStore(sqliteStore)
 	logHandler := webui.NewAppLogHandler(sqliteStore)
+	napCatLoginHandler, err := webui.NewNapCatLoginHandler(webui.NapCatLoginConfig{
+		BaseURL: os.Getenv("DIANA_NAPCAT_WEBUI_URL"),
+		Token:   os.Getenv("DIANA_NAPCAT_WEBUI_TOKEN"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime)
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector)
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
@@ -186,6 +216,7 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
+	router.Use(limitRequestBody(maxHTTPRequestBodyBytes))
 	router.Use(gin.LoggerWithWriter(logWriter), gin.RecoveryWithWriter(logWriter))
 	// 鉴权中间件必须在业务路由之前挂载；未设密码时等价于关闭。
 	authManager := webui.NewAuthManager(sqliteStore)
@@ -215,6 +246,7 @@ func main() {
 	ownerLoginHandler.SetLogStore(sqliteStore)
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
+	napCatLoginHandler.Register(router)
 	logHandler.Register(router)
 	statsHandler.Register(router)
 	eventStreamHandler.Register(router)
@@ -222,6 +254,14 @@ func main() {
 	// This tokenized endpoint intentionally sits outside /api so a separate
 	// NapCat container can fetch media without a WebUI login session.
 	router.GET("/media/resolver/:token", func(c *gin.Context) {
+		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
+	})
+	// Keep historical media URLs valid across upgrades. These token-only routes
+	// contain no browseable file path and are intentionally exempt from sessions.
+	router.GET("/api/qqbot/media/:token", func(c *gin.Context) {
+		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
+	})
+	router.GET("/api/assistant/media/:token", func(c *gin.Context) {
 		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
 	})
 	// OneBot 路由必须在 SPA fallback 之前注册，否则 NapCat 会拿到前端 HTML 而不是 WebSocket。
@@ -234,9 +274,63 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("webui listening on http://%s:%s", displayHost(host), port)
-	if err := router.RunListener(listener); err != nil {
+	server := &http.Server{
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if shutdownErr := server.Shutdown(shutdownCtx); shutdownErr != nil {
+			log.Printf("webui shutdown failed: %v", shutdownErr)
+		}
+	}()
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+func newSystemUpdater() (*updater.GitUpdater, error) {
+	root := strings.TrimSpace(os.Getenv("DIANA_UPDATE_ROOT"))
+	if root == "" {
+		root = "."
+	}
+	runningExecutable, _ := os.Executable()
+	runningCommit := strings.TrimSpace(buildVersion)
+	if strings.EqualFold(runningCommit, "dev") {
+		runningCommit = ""
+	}
+	options := updater.Options{
+		RunningCommit:     runningCommit,
+		RunningExecutable: runningExecutable,
+	}
+	applyScript := filepath.Join(root, "scripts", "apply-update.sh")
+	if runtime.GOOS != "windows" && boolFromEnv("DIANA_UPDATE_APPLY_ENABLED", true) {
+		if info, statErr := os.Stat(applyScript); statErr == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			options.ApplyCommand = []string{applyScript}
+		}
+	}
+	return updater.NewGitUpdaterWithOptions(root, options)
+}
+
+func probeMacOSQQAppDataAccess() {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("macOS QQ app data access probe skipped: %v", err)
+		return
+	}
+	path := filepath.Join(home, "Library", "Containers", "com.tencent.qq", "Data", ".config", "QQ", "NapCat", "temp")
+	if _, err := os.ReadDir(path); err != nil {
+		log.Printf("macOS QQ app data access denied: %v", err)
+		return
+	}
+	log.Printf("macOS QQ app data access granted")
 }
 
 // migrateLegacyLLMConfigPluginState 把旧全局插件开关迁到每个机器人，并从插件状态中移除旧条目。
@@ -262,6 +356,19 @@ func migrateLegacyLLMConfigPluginState(set assistant.ProfileSet, states map[stri
 	return set, changed
 }
 
+// migrateRestoredWebSearchPluginState preserves the search capability that
+// pre-plugin releases exposed automatically. Explicit plugin choices win once
+// the new state has been persisted.
+func migrateRestoredWebSearchPluginState(states map[string]assistant.PluginState, catalogState assistant.PluginState) bool {
+	if _, exists := states[webSearchPluginID]; exists {
+		return false
+	}
+	catalogState.Installed = true
+	catalogState.Enabled = true
+	states[webSearchPluginID] = catalogState
+	return true
+}
+
 func displayHost(host string) string {
 	host = strings.TrimSpace(host)
 	switch host {
@@ -272,6 +379,21 @@ func displayHost(host string) string {
 	}
 }
 
+func limitRequestBody(maxBytes int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body == nil || maxBytes <= 0 {
+			c.Next()
+			return
+		}
+		if c.Request.ContentLength > maxBytes {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body is too large"})
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		c.Next()
+	}
+}
+
 // setupLogging 配置控制台和文件日志输出。
 func setupLogging() (io.Writer, func()) {
 	logPath := envOrAny([]string{"LOG_PATH", "DIANA_LOG_PATH"}, "")
@@ -279,13 +401,18 @@ func setupLogging() (io.Writer, func()) {
 		return os.Stdout, func() {}
 	}
 	// Gin 请求日志和标准 log 共用同一个 writer，方便部署时只收集一个文件。
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		log.Printf("create log directory skipped: %v", err)
 		return os.Stdout, func() {}
 	}
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		log.Printf("open log file skipped: %v", err)
+		return os.Stdout, func() {}
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		log.Printf("secure log file skipped: %v", err)
 		return os.Stdout, func() {}
 	}
 	writer := io.MultiWriter(os.Stdout, file)
@@ -311,6 +438,8 @@ func qqBotConfigFromEnv() assistant.BotConfig {
 	cfg.OwnerID = envOrAny([]string{"DIANA_OWNER_ID", "QQBOT_OWNER_ID"}, "")
 	cfg.GroupTriggers = stringListFromEnv("DIANA_GROUP_TRIGGERS", cfg.GroupTriggers)
 	cfg.SystemPrompt = envOrAny([]string{"DIANA_SYSTEM_PROMPT", "QQBOT_SYSTEM_PROMPT"}, cfg.SystemPrompt)
+	cfg.PassiveReplyRouterPrompt = envOr("DIANA_PASSIVE_REPLY_ROUTER_PROMPT", cfg.PassiveReplyRouterPrompt)
+	cfg.PassiveReplyPrompt = envOr("DIANA_PASSIVE_REPLY_PROMPT", cfg.PassiveReplyPrompt)
 	cfg.ErrorReplyPrefix = envOr("DIANA_ERROR_REPLY_PREFIX", cfg.ErrorReplyPrefix)
 	cfg.SendRetryAttempts = intFromEnv("DIANA_SEND_RETRY_ATTEMPTS", cfg.SendRetryAttempts)
 	cfg.SendChunkIntervalMS = intFromEnv("DIANA_SEND_CHUNK_INTERVAL_MS", cfg.SendChunkIntervalMS)
@@ -318,7 +447,17 @@ func qqBotConfigFromEnv() assistant.BotConfig {
 	cfg.MaxReplyChars = intFromEnv("DIANA_MAX_REPLY_CHARS", cfg.MaxReplyChars)
 	cfg.DirectReplyChunkSize = intFromEnv("DIANA_DIRECT_REPLY_CHUNK_SIZE", cfg.DirectReplyChunkSize)
 	cfg.ForwardReplyThreshold = intFromEnv("DIANA_FORWARD_REPLY_THRESHOLD", cfg.ForwardReplyThreshold)
+	cfg.RecallReplyMode = assistant.RecallReplyMode(envOr("DIANA_RECALL_REPLY_MODE", string(cfg.RecallReplyMode)))
+	llmQQIDMaskingEnabled := boolFromEnv("DIANA_LLM_QQ_ID_MASKING_ENABLED", true)
+	cfg.LLMQQIDMaskingEnabled = &llmQQIDMaskingEnabled
 	cfg.RecentContextLimit = intFromEnv("DIANA_RECENT_GROUP_CONTEXT_LIMIT", cfg.RecentContextLimit)
+	cfg.ContextSummaryThreshold = intFromEnv("DIANA_CONTEXT_SUMMARY_THRESHOLD", cfg.ContextSummaryThreshold)
+	if chance, ok := floatFromEnv("DIANA_PASSIVE_REPLY_CHANCE"); ok {
+		cfg.PassiveReplyChance = chance
+	}
+	if threshold, ok := floatFromEnv("DIANA_PASSIVE_REPLY_THRESHOLD"); ok {
+		cfg.PassiveReplyThreshold = threshold
+	}
 	cfg.MaxBotConcurrency = intFromEnv("DIANA_MAX_BOT_CONCURRENCY", cfg.MaxBotConcurrency)
 	cfg.RequestTimeout = time.Duration(int64FromEnv("DIANA_HTTP_TIMEOUT_SECONDS", int64(cfg.RequestTimeout.Seconds()))) * time.Second
 	cfg.AgentEnabled = boolFromEnv("DIANA_AGENT_ENABLED", cfg.AgentEnabled)
@@ -337,14 +476,21 @@ func qqBotConfigFromEnv() assistant.BotConfig {
 func llmConfigFromEnv() llm.ProviderConfig {
 	provider := providerFromEnv("LLM_PROVIDER", llm.ProviderOpenAICompatible)
 	cfg := llm.ProviderConfig{
-		Provider:        provider,
-		APIKey:          os.Getenv("LLM_API_KEY"),
-		BaseURL:         os.Getenv("LLM_BASE_URL"),
-		Model:           envOr("LLM_MODEL", llm.DefaultModel(provider)),
-		ImageModel:      os.Getenv("LLM_IMAGE_MODEL"),
-		UserAgent:       os.Getenv("LLM_USER_AGENT"),
-		MaxOutputTokens: int64FromEnv("LLM_MAX_OUTPUT_TOKENS", 1024),
-		Timeout:         time.Duration(int64FromEnv("LLM_TIMEOUT_MS", 30000)) * time.Millisecond,
+		Provider:            provider,
+		APIKey:              os.Getenv("LLM_API_KEY"),
+		BaseURL:             os.Getenv("LLM_BASE_URL"),
+		APIFormat:           llm.APIFormat(os.Getenv("LLM_API_FORMAT")),
+		Model:               envOr("LLM_MODEL", llm.DefaultModel(provider)),
+		ImageModel:          os.Getenv("LLM_IMAGE_MODEL"),
+		ImageBaseURL:        os.Getenv("LLM_IMAGE_BASE_URL"),
+		ImageOrigin:         os.Getenv("LLM_IMAGE_ORIGIN"),
+		ImageTimeout:        time.Duration(int64FromEnv("LLM_IMAGE_TIMEOUT_MS", 0)) * time.Millisecond,
+		UserAgent:           os.Getenv("LLM_USER_AGENT"),
+		ReasoningEffort:     os.Getenv("LLM_REASONING_EFFORT"),
+		ContextWindowTokens: int64FromEnv("LLM_CONTEXT_WINDOW_TOKENS", llm.DefaultContextWindowTokens),
+		MaxContextTokens:    int64FromEnv("LLM_MAX_CONTEXT_TOKENS", llm.DefaultMaxContextTokens),
+		MaxOutputTokens:     int64FromEnv("LLM_MAX_OUTPUT_TOKENS", 1024),
+		Timeout:             time.Duration(int64FromEnv("LLM_TIMEOUT_MS", 60000)) * time.Millisecond,
 	}
 	if temp, ok := floatFromEnv("LLM_TEMPERATURE"); ok {
 		cfg.Temperature = &temp
@@ -359,6 +505,15 @@ func frontendDistDir() string {
 	candidates := []string{
 		"frontend-next/dist",
 		"../../frontend-next/dist",
+	}
+	if executable, err := os.Executable(); err == nil {
+		executableDir := filepath.Dir(executable)
+		candidates = append([]string{
+			filepath.Clean(filepath.Join(executableDir, "..", "Resources", "frontend-next", "dist")),
+		}, candidates...)
+	}
+	if configDir, err := os.UserConfigDir(); err == nil {
+		candidates = append(candidates, filepath.Join(configDir, "diana", "frontend-next", "dist"))
 	}
 	if custom := envOr("FRONTEND_DIST", ""); custom != "" {
 		// 显式指定的目录永远最优先，即使暂时不存在也按它返回，方便部署脚本预创建。

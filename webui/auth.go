@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -85,12 +86,29 @@ type AuthManager struct {
 
 	mu       sync.Mutex
 	auth     *storage.WebUIAuth
-	sessions map[string]time.Time // token 哈希 -> 过期时间
+	sessions map[string]storage.WebUISession // token 哈希 -> 会话元数据
+}
+
+type AuthSessionMetadata struct {
+	DeviceName string
+	UserAgent  string
+	IPAddress  string
+}
+
+type AuthSessionInfo struct {
+	ID         string    `json:"id"`
+	DeviceName string    `json:"device_name"`
+	UserAgent  string    `json:"user_agent,omitempty"`
+	IPAddress  string    `json:"ip_address,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Current    bool      `json:"current"`
 }
 
 // NewAuthManager 创建鉴权管理器并从存储加载状态。
 func NewAuthManager(store AuthStore) *AuthManager {
-	m := &AuthManager{store: store, sessions: map[string]time.Time{}}
+	m := &AuthManager{store: store, sessions: map[string]storage.WebUISession{}}
 	if store == nil {
 		return m
 	}
@@ -102,9 +120,12 @@ func NewAuthManager(store AuthStore) *AuthManager {
 		m.auth = &auth
 	}
 	if set, ok, err := store.LoadWebUISessions(ctx); err == nil && ok {
+		now := time.Now()
 		for _, session := range set.Sessions {
-			if time.Now().Before(session.ExpiresAt) {
-				m.sessions[session.TokenHash] = session.ExpiresAt
+			session.TokenHash = strings.TrimSpace(session.TokenHash)
+			if session.TokenHash != "" && now.Before(session.ExpiresAt) {
+				normalizeWebUISession(&session, now)
+				m.sessions[session.TokenHash] = session
 			}
 		}
 	}
@@ -234,7 +255,7 @@ func (m *AuthManager) setCredentials(username, password string) error {
 	m.mu.Lock()
 	m.auth = &record
 	// 改密后旧会话全部失效，所有端重新登录。
-	m.sessions = map[string]time.Time{}
+	m.sessions = map[string]storage.WebUISession{}
 	m.mu.Unlock()
 	m.persistSessions()
 	return nil
@@ -276,21 +297,44 @@ func (m *AuthManager) SetPassword(current, next string) error {
 
 // Login 校验密码并签发会话 token。
 func (m *AuthManager) Login(username, password string) (string, error) {
+	return m.LoginWithMetadata(username, password, AuthSessionMetadata{DeviceName: "Web 登录"})
+}
+
+// LoginWithMetadata 校验凭据并记录当前浏览器会话来源。
+func (m *AuthManager) LoginWithMetadata(username, password string, metadata AuthSessionMetadata) (string, error) {
 	if !m.verify(username, password) {
 		return "", ErrWrongPassword
 	}
-	return m.IssueSession()
+	return m.IssueSessionWithMetadata(metadata)
 }
 
 // IssueSession 直接签发一个新会话；供密码之外的受信登录方式（如主人验证码）使用。
 func (m *AuthManager) IssueSession() (string, error) {
+	return m.IssueSessionWithMetadata(AuthSessionMetadata{DeviceName: "主人验证码"})
+}
+
+// IssueSessionWithMetadata 直接签发带来源信息的新会话。
+func (m *AuthManager) IssueSessionWithMetadata(metadata AuthSessionMetadata) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(raw)
+	tokenHash := hashToken(token)
+	now := time.Now()
+	session := storage.WebUISession{
+		ID:         webUISessionID(tokenHash),
+		TokenHash:  tokenHash,
+		DeviceName: strings.TrimSpace(metadata.DeviceName),
+		UserAgent:  strings.TrimSpace(metadata.UserAgent),
+		IPAddress:  strings.TrimSpace(metadata.IPAddress),
+		CreatedAt:  now,
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(authSessionTTL),
+	}
+	normalizeWebUISession(&session, now)
 	m.mu.Lock()
-	m.sessions[hashToken(token)] = time.Now().Add(authSessionTTL)
+	m.sessions[tokenHash] = session
 	m.mu.Unlock()
 	m.persistSessions()
 	return token, nil
@@ -303,14 +347,26 @@ func (m *AuthManager) Authenticate(token string) bool {
 	}
 	key := hashToken(token)
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	expiry, ok := m.sessions[key]
+	session, ok := m.sessions[key]
 	if !ok {
+		m.mu.Unlock()
 		return false
 	}
-	if time.Now().After(expiry) {
+	now := time.Now()
+	if now.After(session.ExpiresAt) {
 		delete(m.sessions, key)
+		m.mu.Unlock()
+		m.persistSessions()
 		return false
+	}
+	persist := session.LastSeenAt.IsZero() || now.Sub(session.LastSeenAt) >= 5*time.Minute
+	if persist {
+		session.LastSeenAt = now
+		m.sessions[key] = session
+	}
+	m.mu.Unlock()
+	if persist {
+		m.persistSessions()
 	}
 	return true
 }
@@ -323,6 +379,86 @@ func (m *AuthManager) Logout(token string) {
 	m.persistSessions()
 }
 
+// Sessions 返回有效会话，当前会话排在最前，其余按最后使用时间倒序。
+func (m *AuthManager) Sessions(currentToken string) []AuthSessionInfo {
+	currentHash := hashToken(currentToken)
+	now := time.Now()
+	m.mu.Lock()
+	items := make([]AuthSessionInfo, 0, len(m.sessions))
+	changed := false
+	for tokenHash, session := range m.sessions {
+		if !now.Before(session.ExpiresAt) {
+			delete(m.sessions, tokenHash)
+			changed = true
+			continue
+		}
+		normalizeWebUISession(&session, now)
+		items = append(items, AuthSessionInfo{
+			ID:         session.ID,
+			DeviceName: session.DeviceName,
+			UserAgent:  session.UserAgent,
+			IPAddress:  session.IPAddress,
+			CreatedAt:  session.CreatedAt,
+			LastSeenAt: session.LastSeenAt,
+			ExpiresAt:  session.ExpiresAt,
+			Current:    tokenHash == currentHash,
+		})
+	}
+	m.mu.Unlock()
+	if changed {
+		m.persistSessions()
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Current != items[j].Current {
+			return items[i].Current
+		}
+		return items[i].LastSeenAt.After(items[j].LastSeenAt)
+	})
+	return items
+}
+
+// RevokeSession 撤销指定会话 ID，并报告它是否是当前会话。
+func (m *AuthManager) RevokeSession(id, currentToken string) (bool, bool) {
+	id = strings.TrimSpace(id)
+	currentHash := hashToken(currentToken)
+	m.mu.Lock()
+	foundHash := ""
+	for tokenHash, session := range m.sessions {
+		if session.ID == id || webUISessionID(tokenHash) == id {
+			foundHash = tokenHash
+			break
+		}
+	}
+	if foundHash != "" {
+		delete(m.sessions, foundHash)
+	}
+	m.mu.Unlock()
+	if foundHash == "" {
+		return false, false
+	}
+	m.persistSessions()
+	return foundHash == currentHash, true
+}
+
+// RevokeOtherSessions 保留当前会话并撤销其他所有会话。
+func (m *AuthManager) RevokeOtherSessions(currentToken string) int {
+	currentHash := hashToken(currentToken)
+	m.mu.Lock()
+	revoked := 0
+	for tokenHash := range m.sessions {
+		if tokenHash == currentHash {
+			continue
+		}
+		delete(m.sessions, tokenHash)
+		revoked++
+	}
+	m.mu.Unlock()
+	if revoked > 0 {
+		m.persistSessions()
+	}
+	return revoked
+}
+
 // persistSessions 把有效会话写回存储；失败只影响重启后需要重新登录。
 func (m *AuthManager) persistSessions() {
 	if m.store == nil {
@@ -331,13 +467,38 @@ func (m *AuthManager) persistSessions() {
 	m.mu.Lock()
 	set := storage.WebUISessionSet{Sessions: make([]storage.WebUISession, 0, len(m.sessions))}
 	now := time.Now()
-	for tokenHash, expiresAt := range m.sessions {
-		if now.Before(expiresAt) {
-			set.Sessions = append(set.Sessions, storage.WebUISession{TokenHash: tokenHash, ExpiresAt: expiresAt})
+	for tokenHash, session := range m.sessions {
+		if now.Before(session.ExpiresAt) {
+			session.TokenHash = tokenHash
+			normalizeWebUISession(&session, now)
+			set.Sessions = append(set.Sessions, session)
 		}
 	}
 	m.mu.Unlock()
 	_ = m.store.SaveWebUISessions(context.Background(), set)
+}
+
+func webUISessionID(tokenHash string) string {
+	tokenHash = strings.TrimSpace(tokenHash)
+	if len(tokenHash) > 24 {
+		return tokenHash[:24]
+	}
+	return tokenHash
+}
+
+func normalizeWebUISession(session *storage.WebUISession, now time.Time) {
+	if session.ID == "" {
+		session.ID = webUISessionID(session.TokenHash)
+	}
+	if session.DeviceName == "" {
+		session.DeviceName = "Web 登录"
+	}
+	if session.CreatedAt.IsZero() {
+		session.CreatedAt = now
+	}
+	if session.LastSeenAt.IsZero() {
+		session.LastSeenAt = session.CreatedAt
+	}
 }
 
 // hashToken 计算会话 token 的存储哈希。
@@ -360,6 +521,9 @@ func authExemptPath(path string) bool {
 		return true
 	case strings.HasPrefix(path, "/onebot/"):
 		// NapCat 反向 WebSocket 由 OneBot access token 单独鉴权。
+		return true
+	case strings.HasPrefix(path, "/api/qqbot/media/"), strings.HasPrefix(path, "/api/assistant/media/"):
+		// 临时媒体使用高熵、短有效期 token，供 NapCat 在独立进程或容器中拉取。
 		return true
 	case strings.HasPrefix(path, "/api/assistant/group-admin"), strings.HasPrefix(path, "/api/qqbot/group-admin"):
 		// 群管理页有自己的一次性群验证码 token 流程。
@@ -413,6 +577,9 @@ func (h *AuthHandler) Register(router gin.IRouter) {
 	router.POST("/api/auth/login", h.login)
 	router.POST("/api/auth/logout", h.logout)
 	router.POST("/api/auth/password", h.setPassword)
+	router.GET("/api/auth/sessions", h.listSessions)
+	router.DELETE("/api/auth/sessions/:id", h.revokeSession)
+	router.POST("/api/auth/sessions/revoke-others", h.revokeOtherSessions)
 }
 
 // status 返回鉴权开关与当前登录态。
@@ -439,7 +606,7 @@ func (h *AuthHandler) login(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
-	token, err := h.manager.Login(payload.Username, payload.Password)
+	token, err := h.manager.LoginWithMetadata(payload.Username, payload.Password, authSessionMetadata(c))
 	if err != nil {
 		// 失败固定延迟，抬高在线爆破成本。
 		time.Sleep(400 * time.Millisecond)
@@ -449,6 +616,40 @@ func (h *AuthHandler) login(c *gin.Context) {
 	h.setSessionCookie(c, token, int(authSessionTTL/time.Second))
 	recordRequestOperation(c, h.logs, "auth.login", "WebUI 登录成功", "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *AuthHandler) listSessions(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	token, _ := c.Cookie(authCookieName)
+	c.JSON(http.StatusOK, gin.H{"sessions": h.manager.Sessions(token)})
+}
+
+func (h *AuthHandler) revokeSession(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		writeError(c, http.StatusBadRequest, errors.New("session id is required"))
+		return
+	}
+	token, _ := c.Cookie(authCookieName)
+	current, found := h.manager.RevokeSession(id, token)
+	if !found {
+		writeError(c, http.StatusNotFound, errors.New("session not found"))
+		return
+	}
+	if current {
+		h.setSessionCookie(c, "", -1)
+	}
+	recordRequestOperation(c, h.logs, "auth.session.revoke", "WebUI 会话已撤销", id, map[string]any{"current": current})
+	c.JSON(http.StatusOK, gin.H{"revoked": true, "current": current})
+}
+
+func (h *AuthHandler) revokeOtherSessions(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	token, _ := c.Cookie(authCookieName)
+	revoked := h.manager.RevokeOtherSessions(token)
+	recordRequestOperation(c, h.logs, "auth.session.revoke_others", "其他 WebUI 会话已撤销", "", map[string]any{"revoked": revoked})
+	c.JSON(http.StatusOK, gin.H{"revoked": revoked})
 }
 
 // logout 使当前会话失效并清除 cookie。
@@ -482,12 +683,39 @@ func (h *AuthHandler) setPassword(c *gin.Context) {
 		return
 	}
 	// 改密清空了所有会话，立刻给当前端签发新会话，避免自己被登出。
-	token, err := h.manager.Login(username, payload.NewPassword)
+	token, err := h.manager.LoginWithMetadata(username, payload.NewPassword, authSessionMetadata(c))
 	if err == nil {
 		h.setSessionCookie(c, token, int(authSessionTTL/time.Second))
 	}
 	recordRequestOperation(c, h.logs, "auth.password", "WebUI 管理凭据已更新", "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "username": username})
+}
+
+func authSessionMetadata(c *gin.Context) AuthSessionMetadata {
+	userAgent := strings.TrimSpace(c.Request.UserAgent())
+	return AuthSessionMetadata{
+		DeviceName: authDeviceName(userAgent),
+		UserAgent:  userAgent,
+		IPAddress:  strings.TrimSpace(c.ClientIP()),
+	}
+}
+
+func authDeviceName(userAgent string) string {
+	lower := strings.ToLower(userAgent)
+	device := "浏览器"
+	switch {
+	case strings.Contains(lower, "iphone") || strings.Contains(lower, "ipad"):
+		device = "iOS 浏览器"
+	case strings.Contains(lower, "android"):
+		device = "Android 浏览器"
+	case strings.Contains(lower, "macintosh") || strings.Contains(lower, "mac os"):
+		device = "macOS 浏览器"
+	case strings.Contains(lower, "windows"):
+		device = "Windows 浏览器"
+	case strings.Contains(lower, "linux"):
+		device = "Linux 浏览器"
+	}
+	return device
 }
 
 // setSessionCookie 写会话 cookie；不设 Secure 以兼容内网 HTTP 部署，公网请套 HTTPS 反代。

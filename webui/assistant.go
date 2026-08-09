@@ -37,6 +37,7 @@ type QQBotHandler struct {
 	profiles                  QQBotProfileStore
 	groupConfigs              QQBotGroupConfigStore
 	groupAdmin                *groupAdminVerifier
+	localMedia                assistant.LocalMediaSharer
 	sqlite                    *storage.SQLiteStore
 	logs                      AppLogWriter
 	features                  QQBotFeatureFlags
@@ -145,6 +146,11 @@ func (h *QQBotHandler) SetFeatureFlags(flags QQBotFeatureFlags) {
 	h.features = flags
 }
 
+// SetLocalMediaSharer lets OneBot fetch local diagnostic files over HTTP.
+func (h *QQBotHandler) SetLocalMediaSharer(sharer assistant.LocalMediaSharer) {
+	h.localMedia = sharer
+}
+
 // SetProfileStore 注入 QQ 机器人配置集存储。
 func (h *QQBotHandler) SetProfileStore(store QQBotProfileStore) {
 	if store == nil {
@@ -184,11 +190,20 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/delete", h.deleteProfile)
 	router.GET(base+"/features", h.featuresStatus)
 	router.GET(base+"/status", h.status)
+	router.GET(base+"/auto-info", h.autoInfo)
+	router.GET(base+"/dashboard-stats", h.dashboardStats)
+	router.GET(base+"/tasks", h.listTasks)
 	router.POST(base+"/start", h.start)
 	router.POST(base+"/stop", h.stop)
 	if h.features.GroupTest {
 		router.GET(base+"/group-test", h.getGroupTest)
+		router.GET(base+"/group-test/files", h.listGroupTestFiles)
 		router.POST(base+"/group-test", h.sendGroupTest)
+		router.POST(base+"/group-test/recall", h.recallGroupTestMessage)
+		router.POST(base+"/group-test/file", h.parseGroupTestFile)
+		router.POST(base+"/group-test/napcat-qrcode", h.shareNapCatQRCode)
+		router.POST(base+"/group-test/upload-file", h.uploadGroupTestFile)
+		router.POST(base+"/group-test/onebot", h.callGroupTestOneBot)
 	}
 	router.GET(base+"/plugins", h.listPlugins)
 	router.GET(base+"/plugins/dependencies", h.pluginDependencies)

@@ -1,0 +1,555 @@
+package webui
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/storage"
+
+	"github.com/gin-gonic/gin"
+)
+
+type groupTestRecallPayload struct {
+	MessageID string `json:"message_id"`
+}
+
+type groupTestRecallResponse struct {
+	MessageID string         `json:"message_id"`
+	Recalled  bool           `json:"recalled"`
+	Result    map[string]any `json:"result,omitempty"`
+}
+
+type groupTestFilePayload struct {
+	GroupID   string `json:"group_id"`
+	FileID    string `json:"file_id"`
+	BusID     string `json:"busid,omitempty"`
+	Name      string `json:"name"`
+	LocalPath string `json:"local_path,omitempty"`
+}
+
+type groupTestFileResponse struct {
+	GroupID string `json:"group_id"`
+	FileID  string `json:"file_id"`
+	Name    string `json:"name"`
+	Context string `json:"context"`
+}
+
+type groupTestUploadFilePayload struct {
+	GroupID string `json:"group_id"`
+	File    string `json:"file"`
+	Name    string `json:"name"`
+}
+
+type groupTestOneBotPayload struct {
+	Action string         `json:"action"`
+	Params map[string]any `json:"params"`
+}
+
+type qqbotAutoInfoResponse struct {
+	BotQQ         string               `json:"bot_qq,omitempty"`
+	Nickname      string               `json:"nickname,omitempty"`
+	AvatarURL     string               `json:"avatar_url,omitempty"`
+	Groups        []qqbotAutoGroupInfo `json:"groups,omitempty"`
+	RecentGroupID string               `json:"recent_group_id,omitempty"`
+	RecentUserID  string               `json:"recent_user_id,omitempty"`
+}
+
+type qqbotAutoGroupInfo struct {
+	GroupID        string `json:"group_id"`
+	GroupName      string `json:"group_name,omitempty"`
+	MemberCount    int    `json:"member_count,omitempty"`
+	MaxMemberCount int    `json:"max_member_count,omitempty"`
+}
+
+type qqbotTasksResponse struct {
+	Items []qqbotTaskPayload `json:"items"`
+}
+
+type qqbotTaskPayload struct {
+	ID                  string    `json:"id"`
+	Kind                string    `json:"kind"`
+	OwnerID             string    `json:"owner_id"`
+	GroupID             string    `json:"group_id,omitempty"`
+	UserID              string    `json:"user_id,omitempty"`
+	Message             string    `json:"message"`
+	Status              string    `json:"status"`
+	TriggerAt           time.Time `json:"trigger_at"`
+	IntervalSeconds     int64     `json:"interval_seconds,omitempty"`
+	LastRunAt           time.Time `json:"last_run_at,omitempty"`
+	CancelledAt         time.Time `json:"cancelled_at,omitempty"`
+	LastError           string    `json:"last_error,omitempty"`
+	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
+	PendingDelivery     bool      `json:"pending_delivery,omitempty"`
+	PendingSince        time.Time `json:"pending_since,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+
+type pluginTaskRunner interface {
+	RunPluginTask(context.Context, assistant.PluginTask) (assistant.PluginTaskResult, error)
+}
+
+var groupTestOneBotReadActions = map[string]struct{}{
+	"get_version_info":      {},
+	"get_login_info":        {},
+	"get_stranger_info":     {},
+	"get_group_list":        {},
+	"get_group_member_info": {},
+	"get_group_member_list": {},
+	"get_group_msg_history": {},
+	"get_forward_msg":       {},
+	"get_group_file_url":    {},
+	"get_file":              {},
+	"get_image":             {},
+	"get_msg":               {},
+}
+
+func (h *QQBotHandler) dashboardStats(c *gin.Context) {
+	if h.sqlite == nil {
+		c.JSON(http.StatusOK, storage.DashboardStats{Server: collectDashboardServerStats(time.Now())})
+		return
+	}
+	stats, err := h.sqlite.DashboardStatsForDay(c.Request.Context(), time.Now())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.dashboard_stats", err, "dashboard", nil)
+		return
+	}
+	stats.Server = collectDashboardServerStats(time.Now())
+	c.JSON(http.StatusOK, stats)
+}
+
+func (h *QQBotHandler) shareNapCatQRCode(c *gin.Context) {
+	if h.localMedia == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.group_test.napcat_qrcode", fmt.Errorf("local media store is unavailable"), "napcat-qrcode", nil)
+		return
+	}
+	path := strings.TrimSpace(os.Getenv("DIANA_NAPCAT_QRCODE_PATH"))
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			h.writeError(c, http.StatusInternalServerError, "assistant.group_test.napcat_qrcode", err, "napcat-qrcode", nil)
+			return
+		}
+		path = filepath.Join(home, "Library", "Containers", "com.tencent.qq", "Data", "Library", "Application Support", "QQ", "NapCat", "cache", "qrcode.png")
+	}
+	sharedURL, ok := h.localMedia.Share(path, 2*time.Minute)
+	if !ok {
+		h.writeError(c, http.StatusNotFound, "assistant.group_test.napcat_qrcode", fmt.Errorf("NapCat login QR code is unavailable"), "napcat-qrcode", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"url": sharedURL, "expires_in_seconds": 120})
+}
+
+func (h *QQBotHandler) listGroupTestFiles(c *gin.Context) {
+	groupID := strings.TrimSpace(c.Query("group_id"))
+	parsedGroupID, err := strconv.ParseInt(groupID, 10, 64)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.files", fmt.Errorf("valid group_id is required"), groupID, nil)
+		return
+	}
+	result, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_group_root_files", map[string]any{"group_id": parsedGroupID})
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.files", err, groupID, map[string]any{"group_id": groupID})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"group_id": groupID, "result": result})
+}
+
+func (h *QQBotHandler) uploadGroupTestFile(c *gin.Context) {
+	var payload groupTestUploadFilePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", err, "", nil)
+		return
+	}
+	groupID := strings.TrimSpace(payload.GroupID)
+	file := strings.TrimSpace(payload.File)
+	name := strings.TrimSpace(payload.Name)
+	parsedGroupID, err := strconv.ParseInt(groupID, 10, 64)
+	if err != nil || file == "" || name == "" {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", fmt.Errorf("valid group_id, file and name are required"), groupID, nil)
+		return
+	}
+	uploadSource := file
+	if h.localMedia != nil {
+		if sharedURL, ok := h.localMedia.Share(file, 10*time.Minute); ok {
+			uploadSource = sharedURL
+		}
+	}
+	result, err := h.runtime.CallOneBotAPI(c.Request.Context(), "upload_group_file", map[string]any{
+		"group_id": parsedGroupID,
+		"file":     uploadSource,
+		"name":     name,
+	})
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", err, groupID, map[string]any{"group_id": groupID, "name": name})
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.group_test.upload_file", "QQ群测试文件已上传", groupID, map[string]any{"group_id": groupID, "name": name})
+	c.JSON(http.StatusOK, gin.H{"group_id": groupID, "name": name, "result": result})
+}
+
+func (h *QQBotHandler) autoInfo(c *gin.Context) {
+	status := h.runtime.Status()
+	info := qqbotAutoInfoResponse{
+		BotQQ:     strings.TrimSpace(status.Channel.SelfID),
+		AvatarURL: assistant.QQMemberAvatarURL(status.Channel.SelfID),
+	}
+	if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_login_info", map[string]any{}); err == nil {
+		if userID := firstNonEmptyWebUI(stringFromAnyWebUI(data["user_id"]), stringFromAnyWebUI(data["self_id"])); userID != "" {
+			info.BotQQ = userID
+			info.AvatarURL = assistant.QQMemberAvatarURL(userID)
+		}
+		info.Nickname = firstNonEmptyWebUI(stringFromAnyWebUI(data["nickname"]), stringFromAnyWebUI(data["user_name"]), stringFromAnyWebUI(data["name"]))
+	}
+	if info.BotQQ != "" && info.Nickname == "" {
+		if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_stranger_info", map[string]any{"user_id": oneBotIDParam(info.BotQQ), "no_cache": true}); err == nil {
+			info.Nickname = firstNonEmptyWebUI(stringFromAnyWebUI(data["nickname"]), stringFromAnyWebUI(data["user_name"]), stringFromAnyWebUI(data["name"]))
+		}
+	}
+	if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_group_list", map[string]any{"no_cache": true}); err == nil {
+		info.Groups = autoGroupsFromOneBotData(data)
+	}
+	for _, event := range status.RecentEvents {
+		if info.RecentGroupID == "" && strings.TrimSpace(event.GroupID) != "" {
+			info.RecentGroupID = strings.TrimSpace(event.GroupID)
+		}
+		if info.RecentUserID == "" && strings.TrimSpace(event.UserID) != "" && strings.TrimSpace(event.UserID) != info.BotQQ {
+			info.RecentUserID = strings.TrimSpace(event.UserID)
+		}
+		if info.RecentGroupID != "" && info.RecentUserID != "" {
+			break
+		}
+	}
+	c.JSON(http.StatusOK, info)
+}
+
+func autoGroupsFromOneBotData(data map[string]any) []qqbotAutoGroupInfo {
+	for _, key := range []string{"items", "list", "groups"} {
+		if groups := autoGroupsFromAny(data[key]); len(groups) > 0 {
+			return groups
+		}
+	}
+	if groups := autoGroupsFromAny(data["data"]); len(groups) > 0 {
+		return groups
+	}
+	return autoGroupsFromAny(data)
+}
+
+func autoGroupsFromAny(value any) []qqbotAutoGroupInfo {
+	switch typed := value.(type) {
+	case []any:
+		groups := make([]qqbotAutoGroupInfo, 0, len(typed))
+		for _, item := range typed {
+			if group := autoGroupFromAny(item); group.GroupID != "" {
+				groups = append(groups, group)
+			}
+		}
+		return groups
+	case []map[string]any:
+		groups := make([]qqbotAutoGroupInfo, 0, len(typed))
+		for _, item := range typed {
+			if group := autoGroupFromMap(item); group.GroupID != "" {
+				groups = append(groups, group)
+			}
+		}
+		return groups
+	case map[string]any:
+		if group := autoGroupFromMap(typed); group.GroupID != "" {
+			return []qqbotAutoGroupInfo{group}
+		}
+	}
+	return nil
+}
+
+func autoGroupFromAny(value any) qqbotAutoGroupInfo {
+	if item, ok := value.(map[string]any); ok {
+		return autoGroupFromMap(item)
+	}
+	return qqbotAutoGroupInfo{}
+}
+
+func autoGroupFromMap(item map[string]any) qqbotAutoGroupInfo {
+	return qqbotAutoGroupInfo{
+		GroupID:        firstNonEmptyWebUI(stringFromAnyWebUI(item["group_id"]), stringFromAnyWebUI(item["id"])),
+		GroupName:      firstNonEmptyWebUI(stringFromAnyWebUI(item["group_name"]), stringFromAnyWebUI(item["name"])),
+		MemberCount:    intFromAnyWebUI(item["member_count"]),
+		MaxMemberCount: intFromAnyWebUI(item["max_member_count"]),
+	}
+}
+
+func (h *QQBotHandler) callGroupTestOneBot(c *gin.Context) {
+	var payload groupTestOneBotPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.onebot", err, "", nil)
+		return
+	}
+	action := strings.TrimSpace(payload.Action)
+	if _, ok := groupTestOneBotReadActions[action]; !ok {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.onebot", fmt.Errorf("OneBot action %q is not allowed", action), action, nil)
+		return
+	}
+	if payload.Params == nil {
+		payload.Params = map[string]any{}
+	}
+	result, err := h.runtime.CallOneBotAPI(c.Request.Context(), action, payload.Params)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.onebot", err, action, nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"action": action, "result": result})
+}
+
+func (h *QQBotHandler) listTasks(c *gin.Context) {
+	if h.sqlite == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.tasks.list", fmt.Errorf("task store is unavailable"), "", nil)
+		return
+	}
+	items, _, err := h.sqlite.LoadReminders(c.Request.Context())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.tasks.list", err, "", nil)
+		return
+	}
+	out := make([]qqbotTaskPayload, 0, len(items))
+	for _, item := range items {
+		out = append(out, qqbotTaskPayload{
+			ID:                  item.ID,
+			Kind:                qqbotTaskKind(item),
+			OwnerID:             item.OwnerID,
+			GroupID:             item.GroupID,
+			UserID:              item.UserID,
+			Message:             item.Message,
+			Status:              qqbotTaskStatus(item),
+			TriggerAt:           item.TriggerAt,
+			IntervalSeconds:     item.IntervalSeconds,
+			LastRunAt:           item.LastRunAt,
+			CancelledAt:         item.CancelledAt,
+			LastError:           item.LastError,
+			ConsecutiveFailures: item.ConsecutiveFailures,
+			PendingDelivery:     strings.TrimSpace(item.PendingDelivery) != "",
+			PendingSince:        item.PendingSince,
+			CreatedAt:           item.CreatedAt,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	c.JSON(http.StatusOK, qqbotTasksResponse{Items: out})
+}
+
+func qqbotTaskKind(item assistant.Reminder) string {
+	if item.Kind == assistant.ReminderKindQuery && item.IntervalSeconds > 0 {
+		return "schedule"
+	}
+	return "reminder"
+}
+
+func qqbotTaskStatus(item assistant.Reminder) string {
+	if !item.CancelledAt.IsZero() {
+		return "cancelled"
+	}
+	if item.Kind == assistant.ReminderKindQuery && item.IntervalSeconds > 0 {
+		if item.ConsecutiveFailures > 0 {
+			return "retrying"
+		}
+		return "active"
+	}
+	if !item.LastRunAt.IsZero() {
+		return "used"
+	}
+	return "active"
+}
+
+func (h *QQBotHandler) recallGroupTestMessage(c *gin.Context) {
+	var payload groupTestRecallPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", err, "", nil)
+		return
+	}
+	messageID := strings.TrimSpace(payload.MessageID)
+	if messageID == "" {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", fmt.Errorf("message_id is required"), "", nil)
+		return
+	}
+	result, err := h.runtime.CallOneBotAPI(c.Request.Context(), "delete_msg", map[string]any{"message_id": oneBotIDParam(messageID)})
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", err, messageID, map[string]any{"message_id": messageID})
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.group_test.recall", "QQ群测试消息已撤回", messageID, map[string]any{"message_id": messageID})
+	c.JSON(http.StatusOK, groupTestRecallResponse{MessageID: messageID, Recalled: true, Result: result})
+}
+
+func (h *QQBotHandler) parseGroupTestFile(c *gin.Context) {
+	var payload groupTestFilePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", err, "", nil)
+		return
+	}
+	groupID := strings.TrimSpace(payload.GroupID)
+	fileID := strings.TrimSpace(payload.FileID)
+	name := strings.TrimSpace(payload.Name)
+	localPath := strings.TrimSpace(payload.LocalPath)
+	if name == "" || (localPath == "" && (groupID == "" || fileID == "")) {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("name and either local_path or group_id plus file_id are required"), groupID, nil)
+		return
+	}
+	if localPath != "" && !filepath.IsAbs(localPath) {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("local_path must be absolute"), name, nil)
+		return
+	}
+	if groupID != "" {
+		if _, err := strconv.ParseInt(groupID, 10, 64); err != nil {
+			h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("invalid group_id %q", groupID), groupID, nil)
+			return
+		}
+	}
+	segmentData := map[string]string{
+		"name":    name,
+		"file_id": fileID,
+		"busid":   strings.TrimSpace(payload.BusID),
+	}
+	if localPath != "" {
+		segmentData["path"] = localPath
+	}
+	logTarget := fileID
+	if logTarget == "" {
+		logTarget = name
+	}
+	plugin := assistant.NewFileParserPlugin(nil)
+	resp, err := plugin.Handle(c.Request.Context(), assistant.PluginRequest{
+		Channel: runtimeAPICallChannel{runtime: h.runtime},
+		Event: assistant.MessageEvent{
+			Kind:     assistant.EventKindGroup,
+			GroupID:  groupID,
+			Segments: []assistant.MessageSegment{{Type: "file", Data: segmentData}},
+		},
+		Text: "QQ群文件解析测试",
+	})
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", err, logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+		return
+	}
+	if resp == nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("file parser returned no result"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+		return
+	}
+	contextText := strings.TrimSpace(resp.Context)
+	if contextText == "" && len(resp.Tasks) > 0 {
+		runner, ok := h.runtime.(pluginTaskRunner)
+		if !ok {
+			h.writeError(c, http.StatusServiceUnavailable, "assistant.group_test.file", fmt.Errorf("plugin task runner is unavailable"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+			return
+		}
+		results := make([]string, 0, len(resp.Tasks))
+		for _, task := range resp.Tasks {
+			result, taskErr := runner.RunPluginTask(c.Request.Context(), task)
+			if taskErr != nil {
+				h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", taskErr, logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+				return
+			}
+			if text := strings.TrimSpace(result.Reply); text != "" {
+				results = append(results, text)
+			}
+		}
+		contextText = strings.Join(results, "\n\n")
+	}
+	if contextText == "" {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("file parser returned no result"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.group_test.file", "QQ群文件解析测试完成", logTarget, map[string]any{"group_id": groupID, "file_id": fileID, "name": name})
+	c.JSON(http.StatusOK, groupTestFileResponse{GroupID: groupID, FileID: fileID, Name: name, Context: contextText})
+}
+
+func oneBotIDParam(value string) any {
+	value = strings.TrimSpace(value)
+	if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return parsed
+	}
+	return value
+}
+
+func firstNonEmptyWebUI(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func stringFromAnyWebUI(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return strings.TrimSpace(typed.String())
+	case int:
+		return strconv.Itoa(typed)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case float64:
+		if typed == float64(int64(typed)) {
+			return strconv.FormatInt(int64(typed), 10)
+		}
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func intFromAnyWebUI(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case uint:
+		return int(typed)
+	case uint64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return int(parsed)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(typed))
+		return parsed
+	default:
+		return 0
+	}
+}
+
+type runtimeAPICallChannel struct {
+	runtime QQBotRuntime
+}
+
+func (c runtimeAPICallChannel) Connect(context.Context, assistant.EventHandler) error { return nil }
+func (c runtimeAPICallChannel) Send(context.Context, assistant.OutgoingMessage) error { return nil }
+func (c runtimeAPICallChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	return c.runtime.CallOneBotAPI(ctx, action, params)
+}
+func (c runtimeAPICallChannel) Status() assistant.ChannelStatus { return c.runtime.Status().Channel }
+func (c runtimeAPICallChannel) Close() error                    { return nil }

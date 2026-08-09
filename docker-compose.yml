@@ -22,7 +22,7 @@ services:
       NONEBOT_BRIDGE_ENABLED: "false"
       NONEBOT_BRIDGE_ENDPOINT: "ws://127.0.0.1:8080/onebot/v11/ws"
       NONEBOT_BRIDGE_TOKEN: ""
-      QQBOT_QQ: "123456789"
+      QQBOT_QQ: "10001"
       LLM_PROVIDER: "openai_compatible"
       LLM_API_KEY: "change-me"
       LLM_MODEL: "gp5.5"

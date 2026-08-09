@@ -5,17 +5,28 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/SuInk/diana/model/applog"
 )
 
 type resolverSocialResult struct {
-	Handled   bool
-	Context   string
-	ImageURLs []string
-	VideoURLs []string
+	Handled         bool
+	Suppressed      bool
+	Context         string
+	ImageURLs       []string
+	VideoURLs       []string
+	ForwardMessages []OutgoingMessage
+}
+
+func resolverNickname() string {
+	return firstNonEmpty(
+		strings.TrimSpace(os.Getenv("DIANA_RESOLVER_NICKNAME")),
+		strings.TrimSpace(os.Getenv("R_GLOBAL_NICKNAME")),
+	)
 }
 
 func hasKnownResolverMediaURL(event MessageEvent, text string) bool {
@@ -49,10 +60,87 @@ func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginReque
 		return p.resolveDouyinMedia(ctx, req, raw, maxImages)
 	case "xiaohongshu":
 		return p.resolveXiaohongshuMedia(ctx, req, raw, maxImages)
-	case "youtube", "x":
+	case "x":
+		return p.resolveTwitterMedia(ctx, req, raw)
+	case "youtube":
 		return p.resolveYTDLPMedia(ctx, req, raw, label)
 	default:
 		return resolverSocialResult{}
+	}
+}
+
+func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequest, raw string) resolverSocialResult {
+	if !twitterResolverRequestAllowed(ctx, req) {
+		return resolverSocialResult{Suppressed: true}
+	}
+	if p.videoDownloader != nil && p.twitterPostFetcher == nil && p.twitterMediaDownloader == nil {
+		result := resolverSocialResult{Handled: true, Context: fmt.Sprintf("%s识别：小蓝鸟学习版", resolverNickname())}
+		return p.attachDownloadedVideo(ctx, req, raw, "x", result)
+	}
+	fetchPost := p.twitterPostFetcher
+	if fetchPost == nil {
+		fetchPost = fetchTwitterPost
+	}
+	post, ok := fetchPost(ctx, raw)
+	if !ok {
+		return p.resolveYTDLPMedia(ctx, req, raw, "X / Twitter")
+	}
+	metaText := twitterMetaText(resolverNickname(), post)
+	nodes := []OutgoingMessage{{Text: metaText}}
+	if len(post.Media) == 0 {
+		return resolverSocialResult{Handled: true, Context: metaText, ForwardMessages: nodes}
+	}
+
+	downloadMedia := p.twitterMediaDownloader
+	if downloadMedia == nil {
+		downloadMedia = downloadTwitterMediaFile
+	}
+	resolved := make([]string, len(post.Media))
+	var downloads sync.WaitGroup
+	for index := range post.Media {
+		index := index
+		downloads.Add(1)
+		go func() {
+			defer downloads.Done()
+			resolved[index] = downloadMedia(ctx, post.Media[index])
+		}()
+	}
+	downloads.Wait()
+
+	imageURLs := make([]string, 0, len(post.Media))
+	videoURLs := make([]string, 0, len(post.Media))
+	localImages := make([]string, 0, len(post.Media))
+	failed := 0
+	for index, media := range post.Media {
+		mediaPath := strings.TrimSpace(resolved[index])
+		if mediaPath == "" {
+			failed++
+			continue
+		}
+		if media.sendAsImage() {
+			imageURLs = append(imageURLs, mediaPath)
+			nodes = append(nodes, OutgoingMessage{ImageURLs: []string{mediaPath}})
+			if localPath := localMediaPath(mediaPath); localPath != "" {
+				if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+					localImages = append(localImages, localPath)
+				}
+			}
+			continue
+		}
+		videoURLs = append(videoURLs, mediaPath)
+		nodes = append(nodes, OutgoingMessage{VideoURLs: []string{mediaPath}})
+		recordResolverVideoLog(ctx, req, raw, mediaPath)
+	}
+	if failed > 0 {
+		nodes = append(nodes, OutgoingMessage{Text: fmt.Sprintf("有 %d 个媒体下载失败，未发送。", failed)})
+	}
+	cleanupLocalMediaFilesLater(localImages, resolverLocalMediaTTL)
+	return resolverSocialResult{
+		Handled:         true,
+		Context:         metaText,
+		ImageURLs:       imageURLs,
+		VideoURLs:       videoURLs,
+		ForwardMessages: nodes,
 	}
 }
 
@@ -161,6 +249,9 @@ func (p *ResolverPlugin) resolveYTDLPMedia(ctx context.Context, req PluginReques
 
 func (p *ResolverPlugin) attachDownloadedVideo(ctx context.Context, req PluginRequest, raw, platform string, result resolverSocialResult) resolverSocialResult {
 	download := p.mediaDownloader
+	if p.videoDownloader != nil {
+		download = p.videoDownloader
+	}
 	if download == nil {
 		download = downloadPlatformVideoFile
 	}
@@ -321,6 +412,30 @@ func recordResolverMediaLog(ctx context.Context, req PluginRequest, raw, platfor
 			"platform": platform,
 			"group_id": req.Event.GroupID,
 		},
+	})
+}
+
+func recordResolverVideoLog(ctx context.Context, req PluginRequest, raw, videoPath string) {
+	if req.AppLogs == nil || strings.TrimSpace(videoPath) == "" {
+		return
+	}
+	metadata := map[string]any{
+		"user_id":    req.Event.UserID,
+		"kind":       string(req.Event.Kind),
+		"url":        raw,
+		"video_path": videoPath,
+	}
+	if req.Event.GroupID != "" {
+		metadata["group_id"] = req.Event.GroupID
+	}
+	_ = req.AppLogs.AppendLog(ctx, applog.Entry{
+		Kind:     applog.KindOperation,
+		Level:    applog.LevelInfo,
+		Action:   "qqbot.resolver.video_download",
+		Message:  "链接解析插件已下载视频",
+		Actor:    qqEventActor(req.Event),
+		Target:   raw,
+		Metadata: metadata,
 	})
 }
 
