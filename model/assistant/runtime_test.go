@@ -204,8 +204,8 @@ func TestRuntimeOwnerCommandsSwitchProfilesAndClearHistory(t *testing.T) {
 	}
 }
 
-// TestRuntimeLLMConfigSkillRepliesBeforeLLM 验证对应功能场景。
-func TestRuntimeLLMConfigSkillRepliesBeforeLLM(t *testing.T) {
+// TestRuntimeLLMConfigCommandRepliesBeforeLLM 验证内置配置命令不依赖插件管理器。
+func TestRuntimeLLMConfigCommandRepliesBeforeLLM(t *testing.T) {
 	channel := &recordingChannel{}
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
@@ -223,8 +223,8 @@ func TestRuntimeLLMConfigSkillRepliesBeforeLLM(t *testing.T) {
 			},
 		},
 	}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, channel, NewDefaultPluginManager(), store, nil, nil, func() (LLMProvider, error) {
-		t.Fatal("llmFactory should not be called for config skill command")
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, channel, NewPluginManager(), store, nil, nil, func() (LLMProvider, error) {
+		t.Fatal("llmFactory should not be called for config command")
 		return nil, nil
 	})
 
@@ -237,6 +237,37 @@ func TestRuntimeLLMConfigSkillRepliesBeforeLLM(t *testing.T) {
 	}
 	if got := store.Current(); got.Provider != llm.ProviderAnthropic || got.Model != "claude-sonnet-4-5" {
 		t.Fatalf("current = %#v", got)
+	}
+}
+
+func TestRuntimeLLMConfigCommandCanBeDisabledPerBot(t *testing.T) {
+	disabled := false
+	store := &stubLLMProfileStore{
+		set: llm.ProfileSet{
+			ActiveID: "main",
+			Profiles: []llm.Profile{{
+				ID: "main",
+				Config: llm.ProviderConfig{
+					Provider: llm.ProviderOpenAICompatible,
+					APIKey:   "valid-key",
+					Model:    "gp5.5",
+				},
+			}},
+		},
+	}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", OwnerLLMConfigEnabled: &disabled}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+
+	reply, handled := runtime.handleLLMConfigCommand(
+		context.Background(),
+		runtime.Config(),
+		MessageEvent{Kind: EventKindPrivate, UserID: "10001"},
+		"把模型换成 gpt-4.1-mini",
+	)
+	if handled || reply != "" {
+		t.Fatalf("reply=%q handled=%v, want command disabled", reply, handled)
+	}
+	if got := store.Current().Model; got != "gp5.5" {
+		t.Fatalf("model = %q, want unchanged", got)
 	}
 }
 

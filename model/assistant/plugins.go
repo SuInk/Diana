@@ -141,7 +141,6 @@ func NewDefaultPluginManager() *PluginManager {
 	return NewPluginManager(
 		NewResolverPlugin(nil),
 		NewFileParserPlugin(nil),
-		NewLLMConfigPlugin(),
 		NewVoiceTTSPlugin(nil),
 		NewWebSearchPlugin(nil),
 	)

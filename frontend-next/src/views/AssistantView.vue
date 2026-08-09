@@ -441,6 +441,26 @@
         </div>
 
         <div v-show="editorTab === 'model'" class="stack">
+          <!-- 聊天内模型管理 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>聊天内模型管理</h2>
+              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
+                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">允许主人在聊天中修改 Provider 和模型</span>
+                </label>
+                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
+              </div>
+            </div>
+          </section>
+
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
@@ -975,6 +995,7 @@ function setForm(config: QQBotConfig): void {
     profiles: undefined,
     active_profile_id: undefined,
     // 可选布尔字段缺省等价于开启，归一化成具体值供开关绑定。
+    owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     reply_reference_enabled: config.reply_reference_enabled ?? true,
     mention_user_enabled: config.mention_user_enabled ?? true,
     markdown_to_plain: config.markdown_to_plain ?? true,

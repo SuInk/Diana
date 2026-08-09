@@ -72,15 +72,11 @@ func TestDefaultPluginManagerIncludesFileParser(t *testing.T) {
 	}
 }
 
-// TestDefaultPluginManagerIncludesLLMConfigSkill 验证对应功能场景。
-func TestDefaultPluginManagerIncludesLLMConfigSkill(t *testing.T) {
+// TestDefaultPluginManagerDoesNotExposeLLMConfigCommand 验证内置命令不再作为插件展示。
+func TestDefaultPluginManagerDoesNotExposeLLMConfigCommand(t *testing.T) {
 	manager := NewDefaultPluginManager()
-	state, ok := manager.Get("official.llm-config-skill")
-	if !ok {
-		t.Fatal("llm config skill missing")
-	}
-	if !state.Installed || !state.Enabled {
-		t.Fatalf("llm config skill state = %#v", state)
+	if state, ok := manager.Get("official.llm-config-skill"); ok {
+		t.Fatalf("legacy llm config plugin still exposed: %#v", state)
 	}
 }
 
@@ -156,10 +152,9 @@ func TestLLMConfigPluginUpdatesProviderAndModel(t *testing.T) {
 			},
 		},
 	}
-	plugin := NewLLMConfigPlugin()
 	logs := &captureAppLogs{}
 
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp, err := handleLLMConfigRequest(context.Background(), PluginRequest{
 		Event:    MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002"},
 		Text:     "把提供商切到 Gemini，模型换成 gemini-2.5-pro",
 		OwnerID:  "10001",
@@ -205,9 +200,7 @@ func TestLLMConfigPluginUpdatesModelOnly(t *testing.T) {
 			},
 		},
 	}
-	plugin := NewLLMConfigPlugin()
-
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp, err := handleLLMConfigRequest(context.Background(), PluginRequest{
 		Event:    MessageEvent{UserID: "10001"},
 		Text:     "把模型换成 gpt-4.1-mini",
 		OwnerID:  "10001",
@@ -246,9 +239,7 @@ func TestLLMConfigPluginRejectsModelOutsideList(t *testing.T) {
 			},
 		},
 	}
-	plugin := NewLLMConfigPlugin()
-
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp, err := handleLLMConfigRequest(context.Background(), PluginRequest{
 		Event:    MessageEvent{UserID: "10001"},
 		Text:     "把模型换成 gemini-9-ultra",
 		OwnerID:  "10001",
@@ -275,10 +266,9 @@ func TestLLMConfigPluginRejectsNonOwner(t *testing.T) {
 			},
 		},
 	}
-	plugin := NewLLMConfigPlugin()
 	logs := &captureAppLogs{}
 
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp, err := handleLLMConfigRequest(context.Background(), PluginRequest{
 		Event:    MessageEvent{UserID: "20002"},
 		Text:     "把模型换成 gpt-4.1-mini",
 		OwnerID:  "10001",
@@ -301,8 +291,7 @@ func TestLLMConfigPluginRejectsNonOwner(t *testing.T) {
 
 // TestLLMConfigPluginIgnoresModelQuestion 验证对应功能场景。
 func TestLLMConfigPluginIgnoresModelQuestion(t *testing.T) {
-	plugin := NewLLMConfigPlugin()
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp, err := handleLLMConfigRequest(context.Background(), PluginRequest{
 		Event:   MessageEvent{UserID: "10001"},
 		Text:    "怎么用 gpt-4.1-mini 写代码？",
 		OwnerID: "10001",
@@ -353,11 +342,6 @@ func TestPluginManagerUpdateSettingsValidatesAndClamps(t *testing.T) {
 	if _, err := manager.UpdateSettings("missing", map[string]any{"a": 1}); err == nil {
 		t.Fatal("missing plugin accepted")
 	}
-	// LLM 配置技能没有声明设置项，应拒绝设置请求。
-	if _, err := manager.UpdateSettings("official.llm-config-skill", map[string]any{"a": 1}); err == nil {
-		t.Fatal("plugin without settings accepted")
-	}
-
 	state, err = manager.UpdateSettings(resolverID, map[string]any{})
 	if err != nil {
 		t.Fatalf("UpdateSettings(reset) error = %v", err)

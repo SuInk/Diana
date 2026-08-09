@@ -106,9 +106,12 @@ type BotConfig struct {
 	BotQQ                 string `json:"bot_qq,omitempty"`
 	OwnerID               string `json:"owner_id,omitempty"`
 	// OwnerLoginEnabled 允许主人通过 QQ 私聊一次性验证码确认 WebUI 登录（默认关）。
-	OwnerLoginEnabled bool     `json:"owner_login_enabled,omitempty"`
-	GroupTriggers     []string `json:"group_triggers,omitempty"`
-	DisabledGroups    []string `json:"disabled_groups,omitempty"`
+	OwnerLoginEnabled bool `json:"owner_login_enabled,omitempty"`
+	// OwnerLLMConfigEnabled 允许主人在聊天中用自然语言修改当前 Provider/模型。
+	// nil 兼容旧配置，等价于开启。
+	OwnerLLMConfigEnabled *bool    `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers         []string `json:"group_triggers,omitempty"`
+	DisabledGroups        []string `json:"disabled_groups,omitempty"`
 	// GroupAdmission 决定在哪些群工作；Mode 留空等同 blacklist，
 	// DisabledGroups 行为不变。
 	GroupAdmission GroupAdmission `json:"group_admission,omitempty"`
@@ -236,6 +239,7 @@ type ConfigPayload struct {
 	BotQQ                        string               `json:"bot_qq,omitempty"`
 	OwnerID                      string               `json:"owner_id,omitempty"`
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
 	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
@@ -703,6 +707,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		BotQQ:                        cfg.BotQQ,
 		OwnerID:                      cfg.OwnerID,
 		OwnerLoginEnabled:            cfg.OwnerLoginEnabled,
+		OwnerLLMConfigEnabled:        cfg.OwnerLLMConfigEnabled,
 		GroupTriggers:                append([]string(nil), cfg.GroupTriggers...),
 		DisabledGroups:               append([]string(nil), cfg.DisabledGroups...),
 		GroupAdmission:               cfg.GroupAdmission.WithDefaults(),
@@ -782,6 +787,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		BotQQ:                      payload.BotQQ,
 		OwnerID:                    payload.OwnerID,
 		OwnerLoginEnabled:          payload.OwnerLoginEnabled,
+		OwnerLLMConfigEnabled:      payload.OwnerLLMConfigEnabled,
 		GroupTriggers:              payload.GroupTriggers,
 		DisabledGroups:             payload.DisabledGroups,
 		GroupAdmission:             payload.GroupAdmission,

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/SuInk/diana/model/assistant"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -65,5 +67,39 @@ func TestSPAHandlerReturnsNotModifiedForMatchingETag(t *testing.T) {
 	}
 	if second.Body.Len() != 0 {
 		t.Fatalf("body length = %d, want 0", second.Body.Len())
+	}
+}
+
+func TestMigrateLegacyLLMConfigPluginState(t *testing.T) {
+	explicitlyEnabled := true
+	set := assistant.ProfileSet{
+		ActiveID: "primary",
+		Profiles: []assistant.BotConfig{
+			{ID: "primary", Name: "Primary"},
+			{ID: "secondary", Name: "Secondary", OwnerLLMConfigEnabled: &explicitlyEnabled},
+		},
+	}
+	states := map[string]assistant.PluginState{
+		legacyLLMConfigPluginID: {Enabled: false},
+		"official.file-parser-go": {
+			Enabled: true,
+		},
+	}
+
+	migrated, changed := migrateLegacyLLMConfigPluginState(set, states)
+	if !changed {
+		t.Fatal("expected profile migration")
+	}
+	if _, exists := states[legacyLLMConfigPluginID]; exists {
+		t.Fatal("legacy plugin state was not removed")
+	}
+	if _, exists := states["official.file-parser-go"]; !exists {
+		t.Fatal("unrelated plugin state was removed")
+	}
+	if migrated.Profiles[0].OwnerLLMConfigEnabled == nil || *migrated.Profiles[0].OwnerLLMConfigEnabled {
+		t.Fatalf("primary setting = %#v, want false", migrated.Profiles[0].OwnerLLMConfigEnabled)
+	}
+	if migrated.Profiles[1].OwnerLLMConfigEnabled == nil || !*migrated.Profiles[1].OwnerLLMConfigEnabled {
+		t.Fatalf("explicit setting = %#v, want preserved true", migrated.Profiles[1].OwnerLLMConfigEnabled)
 	}
 }

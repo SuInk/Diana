@@ -91,3 +91,16 @@ func TestTelegramTokenKeptWhenPayloadOmitsIt(t *testing.T) {
 		t.Fatalf("留空提交应沿用旧 token，实际 %q", restored.TelegramBotToken)
 	}
 }
+
+func TestOwnerLLMConfigSettingRoundTripsThroughPayload(t *testing.T) {
+	disabled := false
+	existing := BotConfig{OwnerLLMConfigEnabled: &disabled}
+	payload := PayloadFromConfig(existing)
+	if payload.OwnerLLMConfigEnabled == nil || *payload.OwnerLLMConfigEnabled {
+		t.Fatalf("payload setting = %#v, want false", payload.OwnerLLMConfigEnabled)
+	}
+	restored := ConfigFromPayload(payload, existing)
+	if restored.OwnerLLMConfigEnabled == nil || *restored.OwnerLLMConfigEnabled {
+		t.Fatalf("restored setting = %#v, want false", restored.OwnerLLMConfigEnabled)
+	}
+}

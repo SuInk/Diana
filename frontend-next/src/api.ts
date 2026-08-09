@@ -69,6 +69,7 @@ export interface QQBotConfig {
   bot_qq?: string;
   owner_id?: string;
   owner_login_enabled?: boolean;
+  owner_llm_config_enabled?: boolean;
   group_triggers?: string[];
   disabled_groups?: string[];
   /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */

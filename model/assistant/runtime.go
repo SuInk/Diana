@@ -766,7 +766,7 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 	return r.plugins != nil && r.plugins.EnabledWithOverrides(resolverPluginID, r.pluginOverridesForEvent(event))
 }
 
-// replyTo 执行 owner 命令、插件和 LLM 回复链路。
+// replyTo 执行 owner 命令、内置能力、插件和 LLM 回复链路。
 func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (string, error) {
 	cfg := r.effectiveConfigForEvent(event)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
@@ -779,6 +779,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply, handled := r.handleOwnerCommand(event, cleanText); handled {
 		// owner 指令优先级最高，避免“切模型/禁群”等管理命令被普通 LLM 回复吞掉。
+		if err := r.send(ctx, event, reply); err != nil {
+			return "", err
+		}
+		return reply, nil
+	}
+	if reply, handled := r.handleLLMConfigCommand(ctx, cfg, event, cleanText); handled {
 		if err := r.send(ctx, event, reply); err != nil {
 			return "", err
 		}
@@ -1613,6 +1619,25 @@ func sessionKey(event MessageEvent) string {
 	return "private:" + event.UserID
 }
 
+// handleLLMConfigCommand 处理每个机器人独立开关的自然语言模型配置命令。
+func (r *Runtime) handleLLMConfigCommand(ctx context.Context, cfg BotConfig, event MessageEvent, text string) (string, bool) {
+	if !boolValue(cfg.OwnerLLMConfigEnabled, true) {
+		return "", false
+	}
+	resp, err := handleLLMConfigRequest(ctx, PluginRequest{
+		Event:          event,
+		Text:           text,
+		OwnerID:        cfg.OwnerID,
+		LLMStore:       r.llmStore,
+		LLMModelLister: r.llmModelLister(),
+		AppLogs:        r.appLogWriter(),
+	})
+	if err != nil || resp == nil || !resp.Handled {
+		return "", false
+	}
+	return resp.Reply, true
+}
+
 // handleOwnerCommand 处理 owner 的强格式管理命令。
 func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
 	cfg := r.Config().WithDefaults()
@@ -1620,7 +1645,7 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 		return "", false
 	}
 
-	// 这些是强格式管理命令；自然语言切模型由官方 LLM 配置插件处理。
+	// 这些是强格式管理命令；自然语言切模型由机器人内置配置命令处理。
 	command := strings.TrimSpace(text)
 	switch {
 	case command == "lllm 列表":
