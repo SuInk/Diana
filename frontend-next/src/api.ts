@@ -40,6 +40,8 @@ export interface LLMModelInfo {
   object?: string;
   owned_by?: string;
   created?: number;
+  input_modalities?: string[];
+  output_modalities?: string[];
 }
 
 export interface LLMModelsResponse {

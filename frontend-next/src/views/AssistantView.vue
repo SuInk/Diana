@@ -487,7 +487,7 @@
                 />
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                未分配的用途自动回退「对话」；「对话」也未分配时使用 LLM 配置页的激活配置与降级链。
+                识图与意图未分配时跟随「对话」；图片生成未分配时使用对话 Provider 的生图配置。
               </p>
             </div>
           </section>
@@ -658,6 +658,7 @@ import {
   getConfig,
   getQQBotConfig,
   getQQBotPlatforms,
+  listLLMModels,
   saveQQBotConfig,
   startQQBot,
   stopQQBot,
@@ -827,7 +828,7 @@ const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
   { key: "chat", label: "对话", fallbackHint: "使用 LLM 配置页的激活配置" },
   { key: "vision", label: "识图", fallbackHint: "跟随对话模型" },
   { key: "intent", label: "意图识别", fallbackHint: "跟随对话模型" },
-  { key: "image", label: "图片生成", fallbackHint: "跟随对话模型" }
+  { key: "image", label: "图片生成", fallbackHint: "跟随对话 Provider 的生图模型" }
 ];
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, { profile_id?: string; group?: string; model: string }>>>({});
@@ -844,15 +845,106 @@ function llmProviderLabel(provider: LLMConfig["provider"]): string {
   return labels[provider];
 }
 
+type ModelCompatibility = "compatible" | "unknown" | "incompatible";
+
+function normalizedModalities(values?: string[]): string[] {
+  return [...new Set((values ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean))];
+}
+
+function mergeModelInfo(preferred: LLMModelInfo, fallback?: LLMModelInfo): LLMModelInfo {
+  return {
+    ...fallback,
+    ...preferred,
+    input_modalities: normalizedModalities([
+      ...(preferred.input_modalities ?? []),
+      ...(fallback?.input_modalities ?? [])
+    ]),
+    output_modalities: normalizedModalities([
+      ...(preferred.output_modalities ?? []),
+      ...(fallback?.output_modalities ?? [])
+    ])
+  };
+}
+
 function profileModels(profile: LLMConfig): LLMModelInfo[] {
   const models = new Map<string, LLMModelInfo>();
   for (const model of profile.models ?? []) {
-    if (model.id) models.set(model.id, model);
+    if (!model.id) continue;
+    models.set(model.id, mergeModelInfo(models.get(model.id) ?? model, model));
   }
   if (profile.model && !models.has(profile.model)) {
     models.set(profile.model, { id: profile.model });
   }
+
+  // image_model 是 Provider 配置明确声明的生图模型；即使 /models 没返回它，
+  // 也应出现在图片生成用途里。已有明确输出能力时尊重目录结果。
+  const declaredImageModels = [profile.image_model, profile.group === "image" ? profile.model : undefined];
+  for (const id of declaredImageModels) {
+    if (!id) continue;
+    const current = models.get(id);
+    if (!current) {
+      models.set(id, { id, output_modalities: ["image"] });
+    } else if (normalizedModalities(current.output_modalities).length === 0) {
+      models.set(id, { ...current, output_modalities: ["image"] });
+    }
+  }
   return [...models.values()];
+}
+
+function modelCompatibility(model: LLMModelInfo, role: RoleKey): ModelCompatibility {
+  const input = new Set(normalizedModalities(model.input_modalities));
+  const output = new Set(normalizedModalities(model.output_modalities));
+  const inputKnown = input.size > 0;
+  const outputKnown = output.size > 0;
+
+  if (role === "image") {
+    return !outputKnown ? "unknown" : output.has("image") ? "compatible" : "incompatible";
+  }
+  if (role === "chat" || role === "intent") {
+    return !outputKnown ? "unknown" : output.has("text") ? "compatible" : "incompatible";
+  }
+  if ((inputKnown && !input.has("image")) || (outputKnown && !output.has("text"))) {
+    return "incompatible";
+  }
+  return input.has("image") && output.has("text") ? "compatible" : "unknown";
+}
+
+function compatibilityRank(value: ModelCompatibility): number {
+  if (value === "compatible") return 0;
+  if (value === "unknown") return 1;
+  return 2;
+}
+
+function modelCapabilityLabel(model: LLMModelInfo): string {
+  const input = new Set(normalizedModalities(model.input_modalities));
+  const output = new Set(normalizedModalities(model.output_modalities));
+  const labels: string[] = [];
+  if (output.has("text")) {
+    labels.push(input.has("image") ? "文字 / 识图" : "文字");
+  }
+  if (output.has("image")) {
+    labels.push(input.has("image") ? "图片生成 / 编辑" : "图片生成");
+  }
+  return labels.join(" · ") || "能力待验证";
+}
+
+function modelHint(model: LLMModelInfo, compatibility: ModelCompatibility, prefix?: string): string {
+  const capability = compatibility === "incompatible" ? "当前模型能力不匹配" : modelCapabilityLabel(model);
+  return [prefix, capability].filter(Boolean).join(" · ");
+}
+
+function modelsForRole(profile: LLMConfig, role: RoleKey): { model: LLMModelInfo; compatibility: ModelCompatibility }[] {
+  const current = roleForm.value[role];
+  const profileIsSelected = current?.group
+    ? (profile.group?.trim() || "default") === current.group
+    : Boolean(current?.profile_id && profile.id === current.profile_id);
+  return profileModels(profile)
+    .map((model) => ({ model, compatibility: modelCompatibility(model, role) }))
+    .filter(
+      ({ model, compatibility }) =>
+        compatibility !== "incompatible" || (profileIsSelected && model.id === current?.model)
+    )
+    .sort((a, b) => compatibilityRank(a.compatibility) - compatibilityRank(b.compatibility));
 }
 
 function channelGroups(): { name: string; count: number }[] {
@@ -878,10 +970,11 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
     });
   }
   for (const channel of llmChannels.value) {
+    const selectableModels = modelsForRole(channel, role);
     base.push({
       value: channel.id ?? "",
       label: channel.name || llmProviderLabel(channel.provider),
-      hint: `${llmProviderLabel(channel.provider)} · ${profileModels(channel).length} 个模型`
+      hint: `${llmProviderLabel(channel.provider)} · ${selectableModels.length} 个匹配模型`
     });
   }
   return base;
@@ -903,16 +996,22 @@ const MODEL_PAIR_SEP = "::";
 function crossProviderModelOptions(role: RoleKey): AppSelectOption[] {
   const fallback = modelRoleRows.find((row) => row.key === role)?.fallbackHint ?? "跟随对话模型";
   const options: AppSelectOption[] = [{ value: "", label: fallback }];
+  const candidates: { option: AppSelectOption; compatibility: ModelCompatibility }[] = [];
   for (const channel of llmChannels.value) {
     const channelName = channel.name || llmProviderLabel(channel.provider);
-    for (const model of profileModels(channel)) {
-      options.push({
-        value: `${channel.id ?? ""}${MODEL_PAIR_SEP}${model.id}`,
-        label: model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id,
-        hint: channelName
+    for (const { model, compatibility } of modelsForRole(channel, role)) {
+      candidates.push({
+        compatibility,
+        option: {
+          value: `${channel.id ?? ""}${MODEL_PAIR_SEP}${model.id}`,
+          label: model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id,
+          hint: modelHint(model, compatibility, channelName)
+        }
       });
     }
   }
+  candidates.sort((a, b) => compatibilityRank(a.compatibility) - compatibilityRank(b.compatibility));
+  options.push(...candidates.map(({ option }) => option));
   return options;
 }
 
@@ -921,25 +1020,67 @@ function modelOptionsFor(role: RoleKey): AppSelectOption[] {
   if (profiles.length === 0) {
     return crossProviderModelOptions(role);
   }
-  const models = new Map<string, { model: LLMModelInfo; count: number }>();
+  const models = new Map<string, { model: LLMModelInfo; count: number; compatibility: ModelCompatibility }>();
   for (const profile of profiles) {
     const seen = new Set<string>();
-    for (const model of profileModels(profile)) {
+    for (const { model, compatibility } of modelsForRole(profile, role)) {
       if (seen.has(model.id)) continue;
       seen.add(model.id);
       const current = models.get(model.id);
-      models.set(model.id, { model: current?.model ?? model, count: (current?.count ?? 0) + 1 });
+      models.set(model.id, {
+        model: current ? mergeModelInfo(current.model, model) : model,
+        count: (current?.count ?? 0) + 1,
+        compatibility:
+          current && compatibilityRank(current.compatibility) < compatibilityRank(compatibility)
+            ? current.compatibility
+            : compatibility
+      });
     }
   }
   const options: AppSelectOption[] = [{ value: "", label: "选择模型" }];
-  for (const { model, count } of models.values()) {
+  const candidates = [...models.values()].sort(
+    (a, b) => compatibilityRank(a.compatibility) - compatibilityRank(b.compatibility)
+  );
+  for (const { model, count, compatibility } of candidates) {
     options.push({
       value: model.id,
       label: model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id,
-      hint: profiles.length > 1 ? `${count}/${profiles.length} 个 Provider 支持` : (model.owned_by || undefined)
+      hint: modelHint(
+        model,
+        compatibility,
+        profiles.length > 1 ? `${count}/${profiles.length} 个 Provider 可用` : (model.owned_by || undefined)
+      )
     });
   }
   return options;
+}
+
+function mergeModelLists(preferred: LLMModelInfo[], fallback: LLMModelInfo[]): LLMModelInfo[] {
+  const models = new Map<string, LLMModelInfo>();
+  for (const model of fallback) {
+    if (model.id) models.set(model.id, model);
+  }
+  for (const model of preferred) {
+    if (model.id) models.set(model.id, mergeModelInfo(model, models.get(model.id)));
+  }
+  return [...models.values()];
+}
+
+async function refreshLLMChannelCapabilities(channels: LLMConfig[]): Promise<void> {
+  const refreshed = await Promise.all(
+    channels.map(async (channel) => {
+      if (channel.provider === "openai_compatible" && !channel.api_key_configured && !channel.api_key) {
+        return channel;
+      }
+      try {
+        const result = await listLLMModels(channel);
+        return { ...channel, models: mergeModelLists(result.models, channel.models ?? []) };
+      } catch {
+        return channel;
+      }
+    })
+  );
+  llmChannels.value = refreshed;
 }
 
 function roleModelValue(role: RoleKey): string {
@@ -966,9 +1107,18 @@ function setRoleChannel(role: RoleKey, value: string): void {
     roleForm.value[role] = { profile_id: value, model };
   }
   const options = modelOptionsFor(role).filter((option) => option.value !== "");
-  if (!options.some((option) => option.value === model)) {
-    roleForm.value[role]!.model = options[0]?.value ?? "";
+  if (!roleModelIsSelectable(role, model)) {
+    roleForm.value[role]!.model = options.find((option) => roleModelIsSelectable(role, option.value))?.value ?? "";
   }
+}
+
+function roleModelIsSelectable(role: RoleKey, modelID: string): boolean {
+  if (!modelID) return false;
+  return selectedRoleProfiles(role).some((profile) =>
+    profileModels(profile).some(
+      (model) => model.id === modelID && modelCompatibility(model, role) !== "incompatible"
+    )
+  );
 }
 
 function setRoleModel(role: RoleKey, value: string): void {
@@ -1245,7 +1395,9 @@ onMounted(async () => {
   }
   try {
     // 渠道下拉用 LLM 配置页的配置集。
-    llmChannels.value = (await getConfig()).profiles ?? [];
+    const channels = (await getConfig()).profiles ?? [];
+    llmChannels.value = channels;
+    await refreshLLMChannelCapabilities(channels);
   } catch {
     llmChannels.value = [];
   }
