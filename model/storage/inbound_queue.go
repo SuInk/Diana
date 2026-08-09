@@ -349,16 +349,16 @@ func stableInboundEventID(session string, event assistant.MessageEvent) (string,
 		return persistedMessageID(session, event), nil
 	}
 	canonical, err := json.Marshal(struct {
-		Session     string                 `json:"session"`
+		Session     string                     `json:"session"`
 		Kind        assistant.EventKind        `json:"kind"`
-		SubType     string                 `json:"sub_type,omitempty"`
-		Time        int64                  `json:"time,omitempty"`
-		SelfID      string                 `json:"self_id,omitempty"`
-		UserID      string                 `json:"user_id,omitempty"`
-		OperatorID  string                 `json:"operator_id,omitempty"`
-		GroupID     string                 `json:"group_id,omitempty"`
-		MessageType string                 `json:"message_type,omitempty"`
-		RawMessage  string                 `json:"raw_message,omitempty"`
+		SubType     string                     `json:"sub_type,omitempty"`
+		Time        int64                      `json:"time,omitempty"`
+		SelfID      string                     `json:"self_id,omitempty"`
+		UserID      string                     `json:"user_id,omitempty"`
+		OperatorID  string                     `json:"operator_id,omitempty"`
+		GroupID     string                     `json:"group_id,omitempty"`
+		MessageType string                     `json:"message_type,omitempty"`
+		RawMessage  string                     `json:"raw_message,omitempty"`
 		Segments    []assistant.MessageSegment `json:"segments,omitempty"`
 	}{
 		Session:     session,
