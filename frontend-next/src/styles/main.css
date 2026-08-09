@@ -1828,10 +1828,15 @@ code {
   gap: 14px;
 }
 
+.plugins-page-grid {
+  align-items: start;
+}
+
 .plugin-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
   padding: 16px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1898,21 +1903,43 @@ code {
 }
 
 .plugin-dependencies {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 
 .plugin-dependencies-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+  min-height: 26px;
+  list-style: none;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.plugin-dependencies-head::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-dependencies-head:hover {
+  color: var(--text);
+}
+
+.plugin-dependencies-chevron {
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.plugin-dependencies[open] .plugin-dependencies-chevron {
+  transform: rotate(180deg);
+}
+
+.plugin-dependencies-body {
+  padding-top: 8px;
 }
 
 .plugin-dependencies-empty {
