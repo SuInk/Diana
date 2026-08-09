@@ -16,9 +16,9 @@ const (
 	modelsDevCacheTTL   = 6 * time.Hour
 )
 
-// ModelsDevCatalog adds model context/output limits that many OpenAI-compatible
-// /models endpoints omit. Failures are non-fatal; the configured conservative
-// context fallback remains in force.
+// ModelsDevCatalog adds model modalities and context/output limits that many
+// OpenAI-compatible /models endpoints omit. Failures are non-fatal; unknown
+// capabilities and the configured conservative context fallback remain in force.
 type ModelsDevCatalog struct {
 	mu        sync.Mutex
 	client    *http.Client
@@ -56,6 +56,12 @@ func (c *ModelsDevCatalog) Enrich(ctx context.Context, cfg ProviderConfig, model
 			}
 			if out[index].Name == "" {
 				out[index].Name = info.Name
+			}
+			if len(out[index].InputModalities) == 0 {
+				out[index].InputModalities = append([]string(nil), info.InputModalities...)
+			}
+			if len(out[index].OutputModalities) == 0 {
+				out[index].OutputModalities = append([]string(nil), info.OutputModalities...)
 			}
 			if out[index].ContextWindowTokens == 0 {
 				out[index].ContextWindowTokens = info.ContextWindowTokens
@@ -107,7 +113,11 @@ func (c *ModelsDevCatalog) load(ctx context.Context) (map[string]map[string]Mode
 func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, error) {
 	var payload map[string]struct {
 		Models map[string]struct {
-			Name  string `json:"name"`
+			Name       string `json:"name"`
+			Modalities struct {
+				Input  []string `json:"input"`
+				Output []string `json:"output"`
+			} `json:"modalities"`
 			Limit struct {
 				Context int64 `json:"context"`
 				Input   int64 `json:"input"`
@@ -125,6 +135,8 @@ func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, error
 			models[modelID] = ModelInfo{
 				ID:                  modelID,
 				Name:                model.Name,
+				InputModalities:     normalizeModalities(model.Modalities.Input),
+				OutputModalities:    normalizeModalities(model.Modalities.Output),
 				ContextWindowTokens: model.Limit.Context,
 				MaxInputTokens:      model.Limit.Input,
 				MaxOutputTokens:     model.Limit.Output,
@@ -142,6 +154,9 @@ func modelsDevProviderCandidates(cfg ProviderConfig) []string {
 	case ProviderAnthropic:
 		return []string{"anthropic"}
 	case ProviderOpenAICompatible:
+		if strings.TrimSpace(cfg.BaseURL) == "" {
+			return []string{"openai"}
+		}
 		parsed, err := url.Parse(strings.TrimSpace(cfg.BaseURL))
 		if err != nil {
 			return nil
@@ -155,6 +170,12 @@ func modelsDevProviderCandidates(cfg ProviderConfig) []string {
 			return []string{"opencode"}
 		case host == "api.openai.com":
 			return []string{"openai"}
+		case host == "api.deepseek.com":
+			return []string{"deepseek"}
+		case host == "generativelanguage.googleapis.com":
+			return []string{"google"}
+		case host == "openrouter.ai":
+			return []string{"openrouter"}
 		}
 	}
 	return nil

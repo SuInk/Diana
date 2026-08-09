@@ -18,14 +18,16 @@ const DefaultAnthropicModel = "claude-sonnet-4-5"
 const DefaultOpenAICompatibleUserAgent = "codex-cli/0.142.0"
 
 type ModelInfo struct {
-	ID                  string `json:"id"`
-	Name                string `json:"name,omitempty"`
-	Object              string `json:"object,omitempty"`
-	OwnedBy             string `json:"owned_by,omitempty"`
-	Created             int64  `json:"created,omitempty"`
-	ContextWindowTokens int64  `json:"context_window_tokens,omitempty"`
-	MaxInputTokens      int64  `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens     int64  `json:"max_output_tokens,omitempty"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name,omitempty"`
+	Object              string   `json:"object,omitempty"`
+	OwnedBy             string   `json:"owned_by,omitempty"`
+	Created             int64    `json:"created,omitempty"`
+	InputModalities     []string `json:"input_modalities,omitempty"`
+	OutputModalities    []string `json:"output_modalities,omitempty"`
+	ContextWindowTokens int64    `json:"context_window_tokens,omitempty"`
+	MaxInputTokens      int64    `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens     int64    `json:"max_output_tokens,omitempty"`
 }
 
 // DefaultModel 返回 provider 对应的默认文本模型。
@@ -305,9 +307,27 @@ func modelInfoFromPayload(payload any) ModelInfo {
 			Object:              stringField(value, "object"),
 			OwnedBy:             stringField(value, "owned_by", "ownedBy", "owner"),
 			Created:             int64Field(value, "created", "created_at"),
+			InputModalities:     stringSliceField(value, "input_modalities", "inputModalities"),
+			OutputModalities:    stringSliceField(value, "output_modalities", "outputModalities"),
 			ContextWindowTokens: int64Field(value, "context_window_tokens", "context_window", "context_length", "max_context_length"),
 			MaxInputTokens:      int64Field(value, "max_input_tokens", "input_token_limit"),
 			MaxOutputTokens:     int64Field(value, "max_output_tokens", "output_token_limit"),
+		}
+		// models.dev uses modalities.input/output while OpenRouter-style catalogs
+		// commonly put input_modalities/output_modalities under architecture.
+		for _, capabilities := range []map[string]any{
+			nestedObject(value, "modalities"),
+			nestedObject(value, "architecture"),
+		} {
+			if capabilities == nil {
+				continue
+			}
+			if len(model.InputModalities) == 0 {
+				model.InputModalities = stringSliceField(capabilities, "input", "input_modalities", "inputModalities")
+			}
+			if len(model.OutputModalities) == 0 {
+				model.OutputModalities = stringSliceField(capabilities, "output", "output_modalities", "outputModalities")
+			}
 		}
 		if limit := nestedObject(value, "limit", "limits"); limit != nil {
 			if model.ContextWindowTokens == 0 {
@@ -350,6 +370,52 @@ func stringField(values map[string]any, keys ...string) string {
 	return ""
 }
 
+// stringSliceField 从模型目录的常见字段读取并规整模态列表。
+func stringSliceField(values map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		switch value := values[key].(type) {
+		case []any:
+			items := make([]string, 0, len(value))
+			for _, item := range value {
+				if text, ok := item.(string); ok {
+					items = append(items, text)
+				}
+			}
+			if normalized := normalizeModalities(items); len(normalized) > 0 {
+				return normalized
+			}
+		case []string:
+			if normalized := normalizeModalities(value); len(normalized) > 0 {
+				return normalized
+			}
+		case string:
+			if normalized := normalizeModalities(strings.FieldsFunc(value, func(r rune) bool {
+				return r == ',' || r == ';'
+			})); len(normalized) > 0 {
+				return normalized
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeModalities(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 // int64Field 从 map 中按候选 key 读取 int64 字段。
 func int64Field(values map[string]any, keys ...string) int64 {
 	for _, key := range keys {
@@ -375,6 +441,8 @@ func uniqueModels(models []ModelInfo) []ModelInfo {
 		model.Name = strings.TrimSpace(model.Name)
 		model.Object = strings.TrimSpace(model.Object)
 		model.OwnedBy = strings.TrimSpace(model.OwnedBy)
+		model.InputModalities = normalizeModalities(model.InputModalities)
+		model.OutputModalities = normalizeModalities(model.OutputModalities)
 		if model.ID == "" {
 			continue
 		}

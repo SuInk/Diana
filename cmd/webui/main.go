@@ -83,9 +83,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// 模型列表必须从当前 provider 后端读取，QQ 聊天技能和 WebUI 共用同一套校验逻辑。
+	// 模型列表必须从当前 provider 后端读取；公共目录只补全后端常常省略的
+	// 模态和 token 限制，失败时保留原列表与“能力未知”状态。
+	modelCatalog := llm.NewModelsDevCatalog(nil)
 	modelListFactory := func(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
-		return llm.ListModels(ctx, cfg)
+		models, err := llm.ListModels(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return modelCatalog.Enrich(ctx, cfg, models), nil
 	}
 	handler := webui.NewLLMConfigHandler(store)
 	handler.SetModelListFactory(modelListFactory)
