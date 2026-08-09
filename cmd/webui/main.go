@@ -36,6 +36,8 @@ import (
 // 源码运行或未注入时展示 dev，git 可用时前端优先展示 git 提交号。
 var buildVersion = "dev"
 
+const legacyLLMConfigPluginID = "official.llm-config-skill"
+
 func main() {
 	logWriter, closeLog := setupLogging()
 	defer closeLog()
@@ -92,13 +94,22 @@ func main() {
 	systemHandler.SetAutoUpdater(autoUpdater)
 	go autoUpdater.Run(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
-	botCfg := botProfileStore.Current()
 	plugins := assistant.NewDefaultPluginManager()
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
 		log.Fatal(err)
 	} else if ok {
+		if _, exists := savedPluginStates[legacyLLMConfigPluginID]; exists {
+			profiles, changed := migrateLegacyLLMConfigPluginState(botProfileStore.Profiles(), savedPluginStates)
+			if changed {
+				botProfileStore.SaveProfiles(profiles)
+			}
+			if err := sqliteStore.SavePluginStates(ctx, savedPluginStates); err != nil {
+				log.Fatal(err)
+			}
+		}
 		plugins.Restore(savedPluginStates)
 	}
+	botCfg := botProfileStore.Current()
 	// NapCat 使用反向 WebSocket 连接本服务；这里保留同一个 server 实例，配置变更时只更新 token/endpoint。
 	oneBotServer := assistant.NewOneBotReverseServer(assistant.OneBotConfig{
 		Endpoint:    botCfg.OneBotReverseWSEndpoint,
@@ -226,6 +237,29 @@ func main() {
 	if err := router.RunListener(listener); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// migrateLegacyLLMConfigPluginState 把旧全局插件开关迁到每个机器人，并从插件状态中移除旧条目。
+func migrateLegacyLLMConfigPluginState(set assistant.ProfileSet, states map[string]assistant.PluginState) (assistant.ProfileSet, bool) {
+	legacy, ok := states[legacyLLMConfigPluginID]
+	if !ok {
+		return set, false
+	}
+	delete(states, legacyLLMConfigPluginID)
+	if legacy.Enabled {
+		return set, false
+	}
+
+	disabled := false
+	changed := false
+	for i := range set.Profiles {
+		if set.Profiles[i].OwnerLLMConfigEnabled != nil {
+			continue
+		}
+		set.Profiles[i].OwnerLLMConfigEnabled = &disabled
+		changed = true
+	}
+	return set, changed
 }
 
 func displayHost(host string) string {

@@ -10,8 +10,6 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-type LLMConfigPlugin struct{}
-
 type llmConfigCommand struct {
 	Matched     bool
 	Provider    llm.Provider
@@ -31,26 +29,8 @@ type llmConfigApplyResult struct {
 	NewModel    string
 }
 
-// NewLLMConfigPlugin 创建官方内置 LLM 配置技能插件。
-func NewLLMConfigPlugin() *LLMConfigPlugin {
-	return &LLMConfigPlugin{}
-}
-
-// Manifest 返回 LLM 配置技能插件清单。
-func (p *LLMConfigPlugin) Manifest() PluginManifest {
-	return PluginManifest{
-		ID:          "official.llm-config-skill",
-		Name:        "LLM 配置技能",
-		Version:     "0.1.0",
-		Description: "官方内置 LLM 配置技能，允许主人在聊天中修改当前使用的模型提供商和模型名称。",
-		Official:    true,
-		BuiltIn:     true,
-		Permissions: []string{"message:read", "llm:config:write"},
-	}
-}
-
-// Handle 处理聊天里的 LLM 配置修改请求。
-func (p *LLMConfigPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
+// handleLLMConfigRequest 处理机器人内置的聊天 LLM 配置修改请求。
+func handleLLMConfigRequest(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
 	// 这里先做自然语言意图抽取，只有明确要改 provider/model 时才接管消息。
 	command := parseLLMConfigIntent(req.Text)
 	if !command.Matched {
@@ -58,26 +38,26 @@ func (p *LLMConfigPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugi
 	}
 	if ownerID := strings.TrimSpace(req.OwnerID); ownerID == "" {
 		reply := "未配置主人 QQ，无法通过聊天修改 LLM 配置。"
-		recordLLMConfigSkillLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
+		recordLLMConfigCommandLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
 		return &PluginResponse{Handled: true, Reply: reply}, nil
 	} else if req.Event.UserID != ownerID {
 		reply := "只有主人可以修改 LLM 配置。"
-		recordLLMConfigSkillLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
+		recordLLMConfigCommandLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
 		return &PluginResponse{Handled: true, Reply: reply}, nil
 	}
 	if command.Err != nil {
 		reply := command.Err.Error() + "\n" + llmConfigUsage()
-		recordLLMConfigSkillLog(ctx, req, llmConfigApplyResult{Reply: reply}, command.Err)
+		recordLLMConfigCommandLog(ctx, req, llmConfigApplyResult{Reply: reply}, command.Err)
 		return &PluginResponse{Handled: true, Reply: reply}, nil
 	}
 	if req.LLMStore == nil {
 		reply := "当前未接入 LLM 配置集。"
-		recordLLMConfigSkillLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
+		recordLLMConfigCommandLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
 		return &PluginResponse{Handled: true, Reply: reply}, nil
 	}
 
 	result := applyLLMConfigCommand(ctx, req.LLMStore, command, req.LLMModelLister)
-	recordLLMConfigSkillLog(ctx, req, result, nil)
+	recordLLMConfigCommandLog(ctx, req, result, nil)
 	return &PluginResponse{Handled: true, Reply: result.Reply}, nil
 }
 
@@ -151,8 +131,8 @@ func applyLLMConfigCommand(ctx context.Context, store LLMProfileStore, command l
 	return llmConfigApplyResult{Reply: "当前没有激活的 LLM 配置。"}
 }
 
-// recordLLMConfigSkillLog 记录聊天修改 LLM 配置的审计日志。
-func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmConfigApplyResult, err error) {
+// recordLLMConfigCommandLog 记录聊天修改 LLM 配置的审计日志。
+func recordLLMConfigCommandLog(ctx context.Context, req PluginRequest, result llmConfigApplyResult, err error) {
 	if req.AppLogs == nil {
 		return
 	}
@@ -200,7 +180,7 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 	_ = req.AppLogs.AppendLog(ctx, applog.Entry{
 		Kind:     kind,
 		Level:    level,
-		Action:   "assistant.llm_config_skill",
+		Action:   "assistant.llm_config.command",
 		Message:  message,
 		Detail:   detail,
 		Actor:    qqEventActor(req.Event),
