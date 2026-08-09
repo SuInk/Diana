@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 // pngBytes 造一张真实 PNG，DataURL 会按内容嗅探类型。
@@ -300,5 +302,60 @@ func TestLLMMessageKeepsURLWithoutStore(t *testing.T) {
 	remote := "https://example.com/a.png"
 	if got := rt.resolveImageForLLM(context.Background(), remote); got != remote {
 		t.Fatalf("未配置存储时应原样返回，实际 %q", got)
+	}
+}
+
+// 追问场景必须保住：先发图、再问「这是什么」，历史里那张图要能进请求。
+// 同时单次请求的图片总数要有上限，否则 20 条上下文全是 base64 会撑爆请求。
+func TestImagePartsCappedKeepingRecent(t *testing.T) {
+	img := func(url string) llm.ContentPart {
+		return llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: url}
+	}
+	messages := []llm.Message{
+		{Role: llm.RoleSystem, Content: "sys"},
+		{Role: llm.RoleUser, Content: "旧图", Parts: []llm.ContentPart{img("old-1"), img("old-2")}},
+		{Role: llm.RoleUser, Content: "近图", Parts: []llm.ContentPart{img("recent-1")}},
+		{Role: llm.RoleUser, Content: "这是什么", Parts: []llm.ContentPart{
+			{Type: llm.ContentPartText, Text: "这是什么"}, img("newest"),
+		}},
+	}
+	capped := capImageParts(messages, 2)
+
+	var urls []string
+	for _, msg := range capped {
+		for _, part := range msg.Parts {
+			if part.Type == llm.ContentPartImageURL {
+				urls = append(urls, part.ImageURL)
+			}
+		}
+	}
+	if len(urls) != 2 {
+		t.Fatalf("应只保留 2 张图，实际 %v", urls)
+	}
+	// 保留的必须是最近的两张——用户问的就是刚发的那张。
+	if urls[0] != "recent-1" || urls[1] != "newest" {
+		t.Fatalf("应保留最近两张，实际 %v", urls)
+	}
+	// 图片被丢光的那条消息要退回纯文本，不留只有文本部件的空壳。
+	if len(capped[1].Parts) != 0 {
+		t.Fatalf("旧图消息应退回纯文本，实际 %#v", capped[1].Parts)
+	}
+	if capped[1].Content != "旧图" {
+		t.Fatalf("退回纯文本时不该丢掉正文，实际 %q", capped[1].Content)
+	}
+	// 最后一条里的文本部件必须保留。
+	if len(capped[3].Parts) != 2 {
+		t.Fatalf("当前消息应保留文本+图片两个部件，实际 %#v", capped[3].Parts)
+	}
+}
+
+// 未超过上限时原样返回。
+func TestImagePartsUnderCapUnchanged(t *testing.T) {
+	messages := []llm.Message{{
+		Role:  llm.RoleUser,
+		Parts: []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: "a"}},
+	}}
+	if got := capImageParts(messages, 4); len(got[0].Parts) != 1 {
+		t.Fatalf("未超限不该改动，实际 %#v", got[0].Parts)
 	}
 }

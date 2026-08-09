@@ -823,6 +823,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		messages = append(messages, historyMessage)
 	}
 	messages = append(messages, llmMessageFromEvent(event, cleanText, cfg.PromptImageOnlyText, resolveImage))
+	messages = capImageParts(messages, maxImagePartsPerRequest)
 
 	reply, err := r.generateReply(ctx, cfg, messages)
 	if err != nil {
@@ -1144,6 +1145,66 @@ func historyPromptText(event MessageEvent) string {
 		return ""
 	}
 	return fmt.Sprintf("%s: %s", event.SenderNameOrID(), text)
+}
+
+// maxImagePartsPerRequest 限制单次请求携带的图片数量。
+//
+// 上下文默认保留 20 条且每轮重放，图片改成 base64 之后不设上限的话，
+// 一次请求能堆到几十 MB，服务商会直接拒绝，表现是整条回复失败。
+// 保留最近的几张即可：追问「这是什么」时要看的就是刚发的那张。
+const maxImagePartsPerRequest = 4
+
+// capImageParts 从后往前保留最近的若干张图片，更早的图片降级成文本标记。
+// 从后往前是关键：最新的图片才是用户正在问的那张。
+func capImageParts(messages []llm.Message, limit int) []llm.Message {
+	if limit <= 0 {
+		return messages
+	}
+	kept := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if len(msg.Parts) == 0 {
+			continue
+		}
+		parts := make([]llm.ContentPart, 0, len(msg.Parts))
+		dropped := false
+		for j := len(msg.Parts) - 1; j >= 0; j-- {
+			part := msg.Parts[j]
+			if part.Type != llm.ContentPartImageURL {
+				parts = append(parts, part)
+				continue
+			}
+			if kept < limit {
+				kept++
+				parts = append(parts, part)
+				continue
+			}
+			dropped = true
+		}
+		if !dropped {
+			continue
+		}
+		// parts 是倒序收集的，写回前翻转还原顺序。
+		for l, r := 0, len(parts)-1; l < r; l, r = l+1, r-1 {
+			parts[l], parts[r] = parts[r], parts[l]
+		}
+		if !hasImagePart(parts) {
+			// 整条消息的图片都被丢掉时退回纯文本，避免留下只有文本部件的空壳。
+			messages[i] = llm.Message{Role: msg.Role, Content: msg.Content}
+			continue
+		}
+		messages[i] = llm.Message{Role: msg.Role, Content: msg.Content, Parts: parts}
+	}
+	return messages
+}
+
+func hasImagePart(parts []llm.ContentPart) bool {
+	for _, part := range parts {
+		if part.Type == llm.ContentPartImageURL {
+			return true
+		}
+	}
+	return false
 }
 
 func llmMessageFromEvent(event MessageEvent, text string, imageOnlyText string, resolveImage func(string) string) llm.Message {
