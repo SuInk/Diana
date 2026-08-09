@@ -32,7 +32,7 @@ docker run -d \
   -e QQBOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e QQBOT_QQ=123456789 \
+  -e QQBOT_QQ=10001 \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
@@ -237,7 +237,7 @@ Bot startup example:
 QQBOT_ENABLED=true \
 ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
 ONEBOT_ACCESS_TOKEN=your-onebot-token \
-QQBOT_QQ=123456789 \
+QQBOT_QQ=10001 \
 DIANA_GROUP_TRIGGERS=嘉然,然然,Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
@@ -405,7 +405,7 @@ Environment=LOG_PATH=/var/log/diana/diana.log
 Environment=QQBOT_ENABLED=true
 Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
 Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=QQBOT_QQ=123456789
+Environment=QQBOT_QQ=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini

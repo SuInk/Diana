@@ -16,7 +16,7 @@ func TestWebSearchPluginRequiresInstallationAndHonorsOverrides(t *testing.T) {
 		t.Fatalf("initial state = %#v", state)
 	}
 	tools, err := manager.AgentToolsWithOverrides(nil)
-	if err != nil || len(tools) != 0 {
+	if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) {
 		t.Fatalf("uninstalled tools=%#v err=%v", tools, err)
 	}
 
@@ -24,13 +24,22 @@ func TestWebSearchPluginRequiresInstallationAndHonorsOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools, err = manager.AgentToolsWithOverrides(nil)
-	if err != nil || len(tools) != 1 || tools[0].Name() != agent.WebSearchToolName {
+	if err != nil || !hasAgentToolNamed(tools, agent.WebSearchToolName) {
 		t.Fatalf("installed tools=%#v err=%v", tools, err)
 	}
 	tools, err = manager.AgentToolsWithOverrides(map[string]bool{webSearchPluginID: false})
-	if err != nil || len(tools) != 0 {
+	if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) {
 		t.Fatalf("disabled override tools=%#v err=%v", tools, err)
 	}
+}
+
+func hasAgentToolNamed(tools []agent.Tool, name string) bool {
+	for _, tool := range tools {
+		if tool != nil && tool.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestWebSearchPluginSecretsAreRedacted(t *testing.T) {

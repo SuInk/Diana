@@ -24,26 +24,33 @@ type LLMClientFactory func(llm.ProviderConfig) (llm.LLMClient, error)
 type LLMModelListFactory func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error)
 
 type llmConfigPayload struct {
-	ID               string             `json:"id,omitempty"`
-	Name             string             `json:"name,omitempty"`
-	Group            string             `json:"group,omitempty"`
-	Description      string             `json:"description,omitempty"`
-	UpdatedAt        string             `json:"updated_at,omitempty"`
-	ActiveProfileID  string             `json:"active_profile_id,omitempty"`
-	Profiles         []llmConfigPayload `json:"profiles,omitempty"`
-	Provider         llm.Provider       `json:"provider"`
-	APIStyle         llm.APIStyle       `json:"api_style,omitempty"`
-	APIKey           string             `json:"api_key,omitempty"`
-	APIKeyConfigured bool               `json:"api_key_configured,omitempty"`
-	BaseURL          string             `json:"base_url,omitempty"`
-	Models           []llm.ModelInfo    `json:"models,omitempty"`
-	Model            string             `json:"model"`
-	ImageModel       string             `json:"image_model,omitempty"`
-	UserAgent        string             `json:"user_agent,omitempty"`
-	Headers          map[string]string  `json:"headers,omitempty"`
-	Temperature      *float64           `json:"temperature,omitempty"`
-	MaxOutputTokens  int64              `json:"max_output_tokens,omitempty"`
-	TimeoutMS        int64              `json:"timeout_ms,omitempty"`
+	ID                  string             `json:"id,omitempty"`
+	Name                string             `json:"name,omitempty"`
+	Group               string             `json:"group,omitempty"`
+	Description         string             `json:"description,omitempty"`
+	UpdatedAt           string             `json:"updated_at,omitempty"`
+	ActiveProfileID     string             `json:"active_profile_id,omitempty"`
+	Profiles            []llmConfigPayload `json:"profiles,omitempty"`
+	Provider            llm.Provider       `json:"provider"`
+	APIStyle            llm.APIStyle       `json:"api_style,omitempty"`
+	APIFormat           llm.APIFormat      `json:"api_format,omitempty"`
+	APIKey              string             `json:"api_key,omitempty"`
+	APIKeyConfigured    bool               `json:"api_key_configured,omitempty"`
+	BaseURL             string             `json:"base_url,omitempty"`
+	Models              []llm.ModelInfo    `json:"models,omitempty"`
+	Model               string             `json:"model"`
+	ImageModel          string             `json:"image_model,omitempty"`
+	ImageBaseURL        string             `json:"image_base_url,omitempty"`
+	ImageOrigin         string             `json:"image_origin,omitempty"`
+	ImageTimeoutMS      int64              `json:"image_timeout_ms,omitempty"`
+	UserAgent           string             `json:"user_agent,omitempty"`
+	Headers             map[string]string  `json:"headers,omitempty"`
+	Temperature         *float64           `json:"temperature,omitempty"`
+	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
+	ContextWindowTokens int64              `json:"context_window_tokens,omitempty"`
+	MaxContextTokens    int64              `json:"max_context_tokens,omitempty"`
+	MaxOutputTokens     int64              `json:"max_output_tokens,omitempty"`
+	TimeoutMS           int64              `json:"timeout_ms,omitempty"`
 }
 
 type llmTestPayload struct {
@@ -125,6 +132,7 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 	set := h.store.Profiles()
 	cfg := configFromPayload(payload)
 	existing := existingProfileConfig(set, payload)
+	cfg = mergeUnsubmittedLLMConfig(payload, cfg, existing)
 	// 前端留空 API Key 表示沿用已保存密钥，不表示把密钥清空。
 	if cfg.APIKey == "" && existing.Provider == cfg.Provider {
 		cfg.APIKey = existing.APIKey
@@ -331,6 +339,7 @@ func (h *LLMConfigHandler) models(c *gin.Context) {
 		}
 		cfg = configFromPayload(payload)
 		existing := existingProfileConfig(h.store.Profiles(), payload)
+		cfg = mergeUnsubmittedLLMConfig(payload, cfg, existing)
 		if cfg.APIKey == "" && existing.Provider == cfg.Provider {
 			cfg.APIKey = existing.APIKey
 		}
@@ -365,9 +374,10 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 
 	cfg := h.store.Current()
 	// 连通测试允许直接使用表单里的临时配置，成功与否不影响当前已保存配置。
-	if payload.Provider != "" || payload.Model != "" || payload.BaseURL != "" || payload.APIKey != "" || payload.UserAgent != "" || payload.ImageModel != "" || payload.MaxOutputTokens != 0 || payload.TimeoutMS != 0 || payload.Temperature != nil {
+	if payload.Provider != "" || payload.Model != "" || payload.BaseURL != "" || payload.APIStyle != "" || payload.APIFormat != "" || payload.APIKey != "" || payload.UserAgent != "" || payload.ImageModel != "" || payload.ImageBaseURL != "" || payload.ImageOrigin != "" || payload.ImageTimeoutMS != 0 || payload.ContextWindowTokens != 0 || payload.MaxContextTokens != 0 || payload.MaxOutputTokens != 0 || payload.TimeoutMS != 0 || payload.Temperature != nil || payload.ReasoningEffort != "" {
 		cfg = configFromPayload(payload.llmConfigPayload)
 		existing := existingProfileConfig(h.store.Profiles(), payload.llmConfigPayload)
+		cfg = mergeUnsubmittedLLMConfig(payload.llmConfigPayload, cfg, existing)
 		if cfg.APIKey == "" && existing.Provider == cfg.Provider {
 			cfg.APIKey = existing.APIKey
 		}
@@ -395,18 +405,25 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 	cfg = cfg.WithDefaults()
 	// API Key 只暴露“是否已配置”，实际值由 WithSecrets 版本在可信场景下返回。
 	payload := llmConfigPayload{
-		Provider:         cfg.Provider,
-		APIStyle:         cfg.APIStyle,
-		APIKeyConfigured: cfg.APIKey != "",
-		BaseURL:          cfg.BaseURL,
-		Models:           cfg.Models,
-		Model:            cfg.Model,
-		ImageModel:       cfg.ImageModelWithDefault(),
-		UserAgent:        cfg.UserAgentWithDefault(),
-		Headers:          cfg.NormalizedHeaders(),
-		Temperature:      cfg.Temperature,
-		MaxOutputTokens:  cfg.MaxOutputTokens,
-		TimeoutMS:        cfg.Timeout.Milliseconds(),
+		Provider:            cfg.Provider,
+		APIStyle:            cfg.APIStyle,
+		APIFormat:           cfg.APIFormatWithDefault(),
+		APIKeyConfigured:    cfg.APIKey != "",
+		BaseURL:             cfg.BaseURL,
+		Models:              cfg.Models,
+		Model:               cfg.Model,
+		ImageModel:          cfg.ImageModelWithDefault(),
+		ImageBaseURL:        cfg.ImageBaseURL,
+		ImageOrigin:         cfg.ImageOrigin,
+		ImageTimeoutMS:      cfg.ImageTimeout.Milliseconds(),
+		UserAgent:           cfg.UserAgentWithDefault(),
+		Headers:             cfg.NormalizedHeaders(),
+		Temperature:         cfg.Temperature,
+		ReasoningEffort:     cfg.ReasoningEffort,
+		ContextWindowTokens: cfg.ContextWindowTokens,
+		MaxContextTokens:    cfg.MaxContextTokensWithDefault(),
+		MaxOutputTokens:     cfg.MaxOutputTokens,
+		TimeoutMS:           cfg.Timeout.Milliseconds(),
 	}
 	return payload
 }
@@ -476,20 +493,70 @@ func payloadFromProfileSetWithSecrets(set llm.ProfileSet) llmConfigPayload {
 
 // configFromPayload 把前端 LLM payload 转回内部 provider 配置。
 func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
-	return llm.ProviderConfig{
-		Provider:        payload.Provider,
-		APIStyle:        payload.APIStyle,
-		APIKey:          payload.APIKey,
-		BaseURL:         payload.BaseURL,
-		Models:          payload.Models,
-		Model:           payload.Model,
-		ImageModel:      payload.ImageModel,
-		UserAgent:       payload.UserAgent,
-		Headers:         payload.Headers,
-		Temperature:     payload.Temperature,
-		MaxOutputTokens: payload.MaxOutputTokens,
-		Timeout:         time.Duration(payload.TimeoutMS) * time.Millisecond,
+	cfg := llm.ProviderConfig{
+		Provider:            payload.Provider,
+		APIStyle:            payload.APIStyle,
+		APIFormat:           payload.APIFormat,
+		APIKey:              payload.APIKey,
+		BaseURL:             payload.BaseURL,
+		Models:              payload.Models,
+		Model:               payload.Model,
+		ImageModel:          payload.ImageModel,
+		ImageBaseURL:        payload.ImageBaseURL,
+		ImageOrigin:         payload.ImageOrigin,
+		ImageTimeout:        time.Duration(payload.ImageTimeoutMS) * time.Millisecond,
+		UserAgent:           payload.UserAgent,
+		Headers:             payload.Headers,
+		Temperature:         payload.Temperature,
+		ReasoningEffort:     payload.ReasoningEffort,
+		ContextWindowTokens: payload.ContextWindowTokens,
+		MaxContextTokens:    payload.MaxContextTokens,
+		MaxOutputTokens:     payload.MaxOutputTokens,
+		Timeout:             time.Duration(payload.TimeoutMS) * time.Millisecond,
 	}.WithDefaults()
+	// An explicitly empty model asks the save handler to discover the provider's
+	// model list before choosing the first available model.
+	if strings.TrimSpace(payload.Model) == "" {
+		cfg.Model = ""
+	}
+	return cfg
+}
+
+// mergeUnsubmittedLLMConfig protects advanced settings that the compact current
+// editor does not expose. Legacy API clients can still submit those fields.
+func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.ProviderConfig) llm.ProviderConfig {
+	if existing.Provider == "" || existing.Provider != cfg.Provider {
+		return cfg
+	}
+	if payload.APIStyle == "" && payload.APIFormat == "" {
+		cfg.APIStyle = existing.APIStyle
+		cfg.APIFormat = existing.APIFormat
+	}
+	if strings.TrimSpace(payload.ImageModel) == "" {
+		cfg.ImageModel = existing.ImageModel
+	}
+	if strings.TrimSpace(payload.ImageBaseURL) == "" {
+		cfg.ImageBaseURL = existing.ImageBaseURL
+	}
+	if strings.TrimSpace(payload.ImageOrigin) == "" {
+		cfg.ImageOrigin = existing.ImageOrigin
+	}
+	if payload.ImageTimeoutMS == 0 {
+		cfg.ImageTimeout = existing.ImageTimeout
+	}
+	if payload.Headers == nil {
+		cfg.Headers = existing.Headers
+	}
+	if strings.TrimSpace(payload.ReasoningEffort) == "" {
+		cfg.ReasoningEffort = existing.ReasoningEffort
+	}
+	if payload.ContextWindowTokens == 0 {
+		cfg.ContextWindowTokens = existing.ContextWindowTokens
+	}
+	if payload.MaxContextTokens == 0 {
+		cfg.MaxContextTokens = existing.MaxContextTokens
+	}
+	return cfg.WithDefaults()
 }
 
 // existingProfileConfig 在配置集中查找 payload 对应的旧配置。

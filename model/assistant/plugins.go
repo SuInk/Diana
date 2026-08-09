@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/llm"
 )
 
 type PluginManifest struct {
@@ -77,22 +79,61 @@ func RedactStates(states []PluginState) []PluginState {
 }
 
 type PluginRequest struct {
-	Event          MessageEvent    `json:"event"`
-	Text           string          `json:"text"`
-	OwnerID        string          `json:"owner_id,omitempty"`
-	LLMStore       LLMProfileStore `json:"-"`
-	LLMModelLister LLMModelLister  `json:"-"`
-	AppLogs        applog.Writer   `json:"-"`
+	Event                   MessageEvent    `json:"event"`
+	RecentEvents            []MessageEvent  `json:"recent_events,omitempty"`
+	RecallEvents            []MessageEvent  `json:"recall_events,omitempty"`
+	Text                    string          `json:"text"`
+	OwnerID                 string          `json:"owner_id,omitempty"`
+	SandboxedBrowserEnabled bool            `json:"sandboxed_browser_enabled,omitempty"`
+	Channel                 Channel         `json:"-"`
+	LLMStore                LLMProfileStore `json:"-"`
+	LLMModelLister          LLMModelLister  `json:"-"`
+	AppLogs                 applog.Writer   `json:"-"`
 	// Settings 由 PluginManager 在调用前注入当前插件的生效设置，直接构造请求时可留空走默认值。
 	Settings SettingValues `json:"-"`
 }
 
 type PluginResponse struct {
-	Handled   bool     `json:"handled"`
-	Context   string   `json:"context,omitempty"`
-	Reply     string   `json:"reply,omitempty"`
-	ImageURLs []string `json:"image_urls,omitempty"`
-	VideoURLs []string `json:"video_urls,omitempty"`
+	Handled             bool              `json:"handled"`
+	Context             string            `json:"context,omitempty"`
+	Reply               string            `json:"reply,omitempty"`
+	ImageURLs           []string          `json:"image_urls,omitempty"`
+	ContextImageURLs    []string          `json:"-"`
+	VideoURLs           []string          `json:"video_urls,omitempty"`
+	Forward             bool              `json:"forward,omitempty"`
+	NestedForward       bool              `json:"-"`
+	ForwardMessages     []OutgoingMessage `json:"-"`
+	Tasks               []PluginTask      `json:"-"`
+	RecallDisclosure    bool              `json:"-"`
+	RecallEvents        []MessageEvent    `json:"-"`
+	RecallReferenceTime int64             `json:"-"`
+}
+
+// PluginTask describes work that should outlive the incoming message request.
+type PluginTask struct {
+	Kind           string
+	Name           string
+	Key            string
+	StartedMessage string
+	Timeout        time.Duration
+	Run            func(context.Context, PluginTaskServices) (PluginTaskResult, error)
+}
+
+type PluginTaskResult struct {
+	Reply    string
+	Messages []OutgoingMessage
+}
+
+type PluginTaskProgress struct {
+	Phase     string
+	Message   string
+	Completed int
+	Total     int
+}
+
+type PluginTaskServices struct {
+	Generate func(context.Context, llm.GenerateRequest) (string, error)
+	Report   func(PluginTaskProgress)
 }
 
 type Plugin interface {
@@ -100,11 +141,27 @@ type Plugin interface {
 	Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error)
 }
 
+type DirectTriggerPlugin interface {
+	ShouldHandle(event MessageEvent, text string) bool
+}
+
+type EventObserverPlugin interface {
+	Observe(ctx context.Context, event MessageEvent) MessageEvent
+}
+
 // AgentToolPlugin is implemented by plugins that add tools to the model's
 // tool-calling loop. It is intentionally optional so ordinary context/reply
 // plugins keep the smaller Plugin contract.
 type AgentToolPlugin interface {
 	AgentTools(settings SettingValues) ([]agent.Tool, error)
+}
+
+type AgentToolProviderPlugin interface {
+	AgentTools() []agent.Tool
+}
+
+type LocalMediaSharerAwarePlugin interface {
+	SetLocalMediaSharer(LocalMediaSharer)
 }
 
 type PluginManager struct {
@@ -115,7 +172,11 @@ type PluginManager struct {
 
 var ErrPluginNotFound = errors.New("qqbot: plugin not found")
 
-const resolverPluginID = "official.nonebot-plugin-resolver-go"
+const (
+	resolverPluginID         = "official.nonebot-plugin-resolver-go"
+	messageHistoryPluginID   = "official.message-history"
+	sandboxedBrowserPluginID = "official.sandboxed-browser-renderer"
+)
 
 // NewPluginManager 创建插件管理器并登记插件目录。
 func NewPluginManager(plugins ...Plugin) *PluginManager {
@@ -138,12 +199,44 @@ func NewPluginManager(plugins ...Plugin) *PluginManager {
 
 // NewDefaultPluginManager 创建包含官方内置插件的默认插件管理器。
 func NewDefaultPluginManager() *PluginManager {
-	return NewPluginManager(
+	capabilities := NewCapabilityKnowledgePlugin()
+	manager := NewPluginManager(
+		NewMessageHistoryPlugin(),
 		NewResolverPlugin(nil),
 		NewFileParserPlugin(nil),
+		NewSandboxedBrowserRenderPlugin(),
 		NewVoiceTTSPlugin(nil),
 		NewWebSearchPlugin(nil),
+		capabilities,
 	)
+	capabilities.setPluginStateProvider(manager.List)
+	return manager
+}
+
+func (m *PluginManager) ShouldHandleWithOverrides(event MessageEvent, text string, overrides map[string]bool) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	plugins := make([]DirectTriggerPlugin, 0)
+	for id, plugin := range m.catalog {
+		state := m.states[id]
+		enabled := state.Enabled
+		if override, ok := overrides[id]; ok {
+			enabled = override
+		}
+		trigger, ok := plugin.(DirectTriggerPlugin)
+		if state.Installed && enabled && ok {
+			plugins = append(plugins, trigger)
+		}
+	}
+	m.mu.RUnlock()
+	for _, plugin := range plugins {
+		if plugin.ShouldHandle(event, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // List 返回所有插件状态。
@@ -189,6 +282,10 @@ func (m *PluginManager) EnabledWithOverrides(id string, overrides map[string]boo
 		return enabled
 	}
 	return state.Enabled
+}
+
+func (m *PluginManager) Enabled(id string) bool {
+	return m.EnabledWithOverrides(id, nil)
 }
 
 // Snapshot 返回插件状态快照用于持久化。
@@ -381,6 +478,26 @@ func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest,
 	return responses
 }
 
+func (m *PluginManager) RunOneWithOverrides(ctx context.Context, id string, req PluginRequest, overrides map[string]bool) (*PluginResponse, error) {
+	if m == nil {
+		return nil, nil
+	}
+	m.mu.RLock()
+	plugin, ok := m.catalog[id]
+	state := m.states[id]
+	enabled := state.Enabled
+	if override, overridden := overrides[id]; overridden {
+		enabled = override
+	}
+	settings := effectivePluginSettings(state.Manifest.Settings, state.Settings)
+	m.mu.RUnlock()
+	if !ok || !state.Installed || !enabled {
+		return nil, nil
+	}
+	req.Settings = settings
+	return safeHandlePlugin(ctx, id, plugin, req)
+}
+
 // AgentToolsWithOverrides returns a stable snapshot of tools contributed by
 // installed and enabled plugins for one conversation.
 func (m *PluginManager) AgentToolsWithOverrides(overrides map[string]bool) ([]agent.Tool, error) {
@@ -425,7 +542,80 @@ func (m *PluginManager) AgentToolsWithOverrides(overrides map[string]bool) ([]ag
 		}
 		tools = append(tools, provided...)
 	}
+
+	m.mu.RLock()
+	legacyProviders := make([]AgentToolProviderPlugin, 0)
+	for id, plugin := range m.catalog {
+		provider, ok := plugin.(AgentToolProviderPlugin)
+		if !ok {
+			continue
+		}
+		state := m.states[id]
+		enabled := state.Enabled
+		if override, overridden := overrides[id]; overridden {
+			enabled = override
+		}
+		if state.Installed && enabled {
+			legacyProviders = append(legacyProviders, provider)
+		}
+	}
+	m.mu.RUnlock()
+	for _, provider := range legacyProviders {
+		tools = append(tools, provider.AgentTools()...)
+	}
 	return tools, nil
+}
+
+func (m *PluginManager) SetLocalMediaSharer(sharer LocalMediaSharer) {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	plugins := make([]LocalMediaSharerAwarePlugin, 0)
+	for _, plugin := range m.catalog {
+		if aware, ok := plugin.(LocalMediaSharerAwarePlugin); ok {
+			plugins = append(plugins, aware)
+		}
+	}
+	m.mu.RUnlock()
+	for _, plugin := range plugins {
+		plugin.SetLocalMediaSharer(sharer)
+	}
+}
+
+func (m *PluginManager) ObserveEvent(ctx context.Context, event MessageEvent) MessageEvent {
+	if m == nil {
+		return event
+	}
+	m.mu.RLock()
+	type observerEntry struct {
+		id       string
+		observer EventObserverPlugin
+	}
+	observers := make([]observerEntry, 0)
+	for id, plugin := range m.catalog {
+		state := m.states[id]
+		observer, ok := plugin.(EventObserverPlugin)
+		if state.Installed && state.Enabled && ok {
+			observers = append(observers, observerEntry{id: id, observer: observer})
+		}
+	}
+	m.mu.RUnlock()
+	for _, entry := range observers {
+		event = safeObservePlugin(ctx, entry.id, entry.observer, event)
+	}
+	return event
+}
+
+func safeObservePlugin(ctx context.Context, id string, observer EventObserverPlugin, event MessageEvent) (result MessageEvent) {
+	result = event
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("plugin %s observer failed: %v", id, recovered)
+			result = event
+		}
+	}()
+	return observer.Observe(ctx, event)
 }
 
 func safeHandlePlugin(ctx context.Context, id string, plugin Plugin, req PluginRequest) (resp *PluginResponse, err error) {
@@ -508,6 +698,11 @@ type ResolverPlugin struct {
 	cache           resolverCache
 	browserFetch    browserFetchFunc
 	mediaDownloader func(context.Context, string) string
+	// videoDownloader is the legacy injection point retained for the complete
+	// resolver implementation and its integrations.
+	videoDownloader        func(context.Context, string) string
+	twitterPostFetcher     func(context.Context, string) (twitterPost, bool)
+	twitterMediaDownloader func(context.Context, twitterMedia) string
 }
 
 // NewResolverPlugin 创建官方内置链接解析插件。
@@ -761,7 +956,7 @@ type resolveOptions struct {
 
 // Handle 解析消息中的链接并生成上下文。
 func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
-	urls := extractURLs(req.Text)
+	urls := extractResolverRequestURLs(req)
 	if len(urls) == 0 {
 		return nil, nil
 	}
@@ -783,10 +978,15 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	directParts := make([]string, 0, len(urls))
 	imageURLs := make([]string, 0)
 	videoURLs := make([]string, 0)
+	forwardMessages := make([]OutgoingMessage, 0)
+	deferredToBrowser := false
 	// PluginManager always injects effective settings. Direct unit callers that
 	// omit Settings keep the legacy metadata-only behavior and never perform a
 	// real media download unexpectedly.
 	downloadMedia := len(req.Settings) > 0 && req.Settings.Bool(resolverSettingDownloadMedia, true)
+	if p.videoDownloader != nil || p.twitterPostFetcher != nil || p.twitterMediaDownloader != nil {
+		downloadMedia = true
+	}
 	// 凭据挂在 ctx 上一路带到底层下载函数；没在设置里配的项会在取值时
 	// 回落到对应环境变量，现有部署不受影响。
 	ctx = withResolverCredentials(ctx, resolverCredentialsFromSettings(req.Settings))
@@ -797,6 +997,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 		resolverMaxHeightFromSetting(req.Settings),
 	)
 	maxImages := req.Settings.Int(resolverSettingMaxImages, 9)
+	legacyResolver := p.videoDownloader != nil || p.twitterPostFetcher != nil || p.twitterMediaDownloader != nil
 	for _, raw := range urls {
 		if len(opts.excludePlatforms) > 0 {
 			if parsed, err := url.Parse(raw); err == nil {
@@ -807,27 +1008,56 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 				}
 			}
 		}
+		if legacyResolver && isKnownResolverPlatformURL(raw) {
+			if isTwitterURL(raw) && !twitterResolverRequestAllowed(mediaCtx, req) {
+				continue
+			}
+			media := p.resolveKnownPlatform(mediaCtx, req, raw)
+			if strings.TrimSpace(media.Context) != "" {
+				parts = append(parts, media.Context)
+				directParts = append(directParts, media.Context)
+			}
+			imageURLs = append(imageURLs, media.ImageURLs...)
+			videoURLs = append(videoURLs, media.VideoURLs...)
+			forwardMessages = append(forwardMessages, media.ForwardMessages...)
+			continue
+		}
 		if downloadMedia {
-			if media := p.resolveSocialMedia(mediaCtx, req, raw, maxImages); media.Handled {
+			if media := p.resolveSocialMedia(mediaCtx, req, raw, maxImages); media.Suppressed {
+				continue
+			} else if media.Handled {
 				if strings.TrimSpace(media.Context) != "" {
 					parts = append(parts, media.Context)
 					directParts = append(directParts, media.Context)
 				}
 				imageURLs = append(imageURLs, media.ImageURLs...)
 				videoURLs = append(videoURLs, media.VideoURLs...)
+				forwardMessages = append(forwardMessages, media.ForwardMessages...)
 				continue
 			}
+		}
+		if req.SandboxedBrowserEnabled && !isKnownResolverPlatformURL(raw) {
+			deferredToBrowser = true
+			continue
 		}
 		parts = append(parts, p.resolveURL(ctx, raw, opts))
 	}
 	if len(parts) == 0 {
+		if deferredToBrowser {
+			return &PluginResponse{Handled: true}, nil
+		}
 		return nil, nil
 	}
 	response := &PluginResponse{
-		Handled:   true,
-		Context:   "链接解析结果：\n" + strings.Join(parts, "\n"),
-		ImageURLs: dedupeMediaURLs(imageURLs),
-		VideoURLs: dedupeMediaURLs(videoURLs),
+		Handled:         true,
+		Context:         "链接解析结果：\n" + strings.Join(parts, "\n"),
+		ImageURLs:       dedupeMediaURLs(imageURLs),
+		VideoURLs:       dedupeMediaURLs(videoURLs),
+		Forward:         len(forwardMessages) > 0,
+		ForwardMessages: forwardMessages,
+	}
+	if len(forwardMessages) > 0 && len(parts) == 1 {
+		response.Context = strings.TrimSpace(parts[0])
 	}
 	if len(directParts) > 0 {
 		response.Reply = strings.Join(directParts, "\n\n")
@@ -837,24 +1067,146 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 
 var urlPattern = regexp.MustCompile(`https?://[^\s<>"'，。！？、]+`)
 
+func extractResolverRequestURLs(req PluginRequest) []string {
+	return dedupeURLs(append(append(
+		extractURLs(req.Text),
+		extractURLs(req.Event.RawMessage)...,
+	), extractURLs(PlainText(req.Event.Segments))...))
+}
+
 // extractURLs 从消息文本中提取并去重 URL。
 func extractURLs(text string) []string {
-	matches := urlPattern.FindAllString(text, -1)
-	out := make([]string, 0, len(matches))
+	var out []string
+	for _, candidate := range resolverURLTextVariants(text) {
+		for _, match := range urlPattern.FindAllString(candidate, -1) {
+			match = normalizeResolverURL(match)
+			if match != "" {
+				out = append(out, match)
+			}
+		}
+	}
+	return dedupeURLs(out)
+}
+
+func resolverURLTextVariants(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	variants := []string{text}
+	current := text
+	for i := 0; i < 3; i++ {
+		next := html.UnescapeString(current)
+		if next == current {
+			break
+		}
+		variants = append(variants, next)
+		current = next
+	}
+	baseLen := len(variants)
+	for i := 0; i < baseLen; i++ {
+		decoded := decodeResolverEscapedURLText(variants[i])
+		if decoded != variants[i] {
+			variants = append(variants, decoded)
+		}
+	}
+	return variants
+}
+
+func decodeResolverEscapedURLText(text string) string {
+	return strings.NewReplacer(
+		`\/`, `/`,
+		`\u002f`, `/`,
+		`\u002F`, `/`,
+		`\\u002f`, `/`,
+		`\\u002F`, `/`,
+	).Replace(text)
+}
+
+func dedupeURLs(urls []string) []string {
+	out := make([]string, 0, len(urls))
 	seen := map[string]struct{}{}
-	for _, match := range matches {
-		// QQ 消息里的链接常贴着中文标点，解析前去掉尾部标点并做去重。
-		match = strings.TrimRight(match, ".,;:!?)]}")
-		if match == "" {
+	for _, raw := range urls {
+		raw = normalizeResolverURL(raw)
+		if raw == "" {
 			continue
 		}
-		if _, ok := seen[match]; ok {
+		key := resolverURLDedupeKey(raw)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[match] = struct{}{}
-		out = append(out, match)
+		seen[key] = struct{}{}
+		out = append(out, raw)
 	}
 	return out
+}
+
+func normalizeResolverURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	for i := 0; i < 3; i++ {
+		next := html.UnescapeString(raw)
+		if next == raw {
+			break
+		}
+		raw = next
+	}
+	raw = decodeResolverEscapedURLText(raw)
+	return strings.TrimRight(raw, ".,;:!?)]}\\")
+}
+
+func resolverURLDedupeKey(raw string) string {
+	parsed, err := url.Parse(normalizeResolverURL(raw))
+	if err != nil {
+		return raw
+	}
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := values[:0]
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func firstNonEmptyString(values []string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func knownResolverPlatformURLs(text string) []string {
+	urls := extractURLs(text)
+	out := make([]string, 0, len(urls))
+	for _, raw := range urls {
+		if isKnownResolverPlatformURL(raw) {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
+func isKnownResolverPlatformURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	return isKnownResolverPlatformHost(parsed.Hostname())
+}
+
+func isKnownResolverPlatformHost(host string) bool {
+	return hostMatchesDomain(host, "bilibili.com", "b23.tv", "bili2233.cn") ||
+		hostMatchesDomain(host, "youtube.com", "youtu.be") ||
+		hostMatchesDomain(host, "x.com", "twitter.com") ||
+		hostMatchesDomain(host, "xiaohongshu.com", "xhslink.com") ||
+		hostMatchesDomain(host, "douyin.com")
 }
 
 // resolveURL 获取链接平台、标题和摘要。

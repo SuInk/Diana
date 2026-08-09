@@ -538,7 +538,7 @@ func (t *WebSearchTool) callRemoteMCP(ctx context.Context, endpoint, apiKey, ses
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
-	req.Header.Set("User-Agent", "diana-qq-bot/0.1")
+	req.Header.Set("User-Agent", "github.com/SuInk/diana/0.1")
 	if sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", sessionID)
 	}
@@ -707,7 +707,7 @@ func (t *WebSearchTool) runTavily(ctx context.Context, provider webSearchProvide
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "diana-qq-bot/0.1")
+	req.Header.Set("User-Agent", "github.com/SuInk/diana/0.1")
 	resp, err := t.httpClient().Do(req)
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)

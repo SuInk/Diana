@@ -5,37 +5,51 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-var ErrRemoteNotConfigured = errors.New("updater: git remote origin is not configured")
+var (
+	ErrRepositoryNotFound  = errors.New("updater: update root is not a Git work tree")
+	ErrRemoteNotConfigured = errors.New("updater: git remote origin is not configured")
+	ErrRemoteBranchMissing = errors.New("updater: matching branch does not exist on origin")
+	ErrDetachedHead        = errors.New("updater: detached HEAD cannot be updated")
+	ErrWorkingTreeDirty    = errors.New("updater: working tree has uncommitted changes")
+	ErrNonFastForward      = errors.New("updater: local and remote branches have diverged")
+	ErrUpdateInProgress    = errors.New("updater: another update operation is already running")
+	ErrFetchFailed         = errors.New("updater: failed to fetch origin")
+	ErrApplyFailed         = errors.New("updater: failed to build or apply the update")
+)
 
 type Status struct {
-	Root        string `json:"root"`
-	Branch      string `json:"branch,omitempty"`
-	RemoteName  string `json:"remote_name,omitempty"`
-	RemoteURL   string `json:"remote_url,omitempty"`
-	HeadCommit  string `json:"head_commit,omitempty"`
-	HeadSubject string `json:"head_subject,omitempty"`
-	// NearestTag 是 HEAD 可达的最近 tag，CommitsSinceTag 是从该 tag 到 HEAD 的提交数。
+	Root            string    `json:"root"`
+	Branch          string    `json:"branch,omitempty"`
+	RemoteName      string    `json:"remote_name,omitempty"`
+	RemoteURL       string    `json:"remote_url,omitempty"`
+	HeadCommit      string    `json:"head_commit,omitempty"`
+	HeadSubject     string    `json:"head_subject,omitempty"`
+	RunningCommit   string    `json:"running_commit,omitempty"`
 	NearestTag      string    `json:"nearest_tag,omitempty"`
 	CommitsSinceTag int       `json:"commits_since_tag,omitempty"`
 	Dirty           bool      `json:"dirty"`
 	Ahead           int       `json:"ahead,omitempty"`
 	Behind          int       `json:"behind,omitempty"`
 	Upstream        string    `json:"upstream,omitempty"`
+	Updating        bool      `json:"updating"`
+	ApplySupported  bool      `json:"apply_supported"`
+	UpdateAvailable bool      `json:"update_available"`
+	RestartRequired bool      `json:"restart_required"`
 	LastFetchedAt   time.Time `json:"last_fetched_at,omitempty"`
 	LastUpdateAt    time.Time `json:"last_update_at,omitempty"`
 	LastUpdateText  string    `json:"last_update_text,omitempty"`
 }
 
-// VersionLabel 返回人类可读的版本号：正好在 tag 上显示 tag，落后若干提交
-// 显示 tag+N，没有任何 tag 时回退为提交短号。
 func (s Status) VersionLabel() string {
 	if s.NearestTag != "" {
 		if s.CommitsSinceTag > 0 {
@@ -47,32 +61,33 @@ func (s Status) VersionLabel() string {
 }
 
 type Result struct {
-	Status  Status    `json:"status"`
-	Fetched bool      `json:"fetched"`
-	Updated bool      `json:"updated"`
-	Forced  bool      `json:"forced,omitempty"`
-	Output  string    `json:"output,omitempty"`
-	At      time.Time `json:"at"`
+	Status          Status    `json:"status"`
+	Fetched         bool      `json:"fetched"`
+	Updated         bool      `json:"updated"`
+	Forced          bool      `json:"forced,omitempty"`
+	SourceUpdated   bool      `json:"source_updated"`
+	Applied         bool      `json:"applied"`
+	RestartRequired bool      `json:"restart_required"`
+	PreviousCommit  string    `json:"previous_commit,omitempty"`
+	TargetCommit    string    `json:"target_commit,omitempty"`
+	Output          string    `json:"output,omitempty"`
+	At              time.Time `json:"at"`
 }
 
-// Settings 是系统更新的持久化配置。
 type Settings struct {
 	AutoUpdateEnabled bool `json:"auto_update_enabled"`
 	IntervalMinutes   int  `json:"interval_minutes"`
 }
 
-// DefaultSettings 返回新安装使用的自动更新配置。
 func DefaultSettings() Settings {
 	return Settings{AutoUpdateEnabled: true, IntervalMinutes: 30}
 }
 
-// WithDefaults 补齐自动更新设置的默认值并收敛区间。
 func (s Settings) WithDefaults() Settings {
 	if s.IntervalMinutes <= 0 {
 		s.IntervalMinutes = 30
 	}
 	if s.IntervalMinutes < 10 {
-		// 过于频繁的自动拉取既没意义又容易触发远端限流。
 		s.IntervalMinutes = 10
 	}
 	if s.IntervalMinutes > 1440 {
@@ -81,26 +96,60 @@ func (s Settings) WithDefaults() Settings {
 	return s
 }
 
-type GitUpdater struct {
-	root          string
-	lastFetchedAt time.Time
-	lastUpdateAt  time.Time
+// Options configures the fixed build/apply command. It is set at process
+// startup and is never accepted from an HTTP request.
+type Options struct {
+	ApplyCommand      []string
+	RunningCommit     string
+	RunningExecutable string
 }
 
-// NewGitUpdater 创建 Git 更新器。
+type GitUpdater struct {
+	root              string
+	applyCommand      []string
+	runningCommit     string
+	runningExecutable string
+
+	operationMu     sync.Mutex
+	stateMu         sync.RWMutex
+	updating        bool
+	lastFetchedAt   time.Time
+	lastUpdateAt    time.Time
+	lastUpdateText  string
+	restartRequired bool
+}
+
 func NewGitUpdater(root string) (*GitUpdater, error) {
+	return NewGitUpdaterWithOptions(root, Options{})
+}
+
+func NewGitUpdaterWithOptions(root string, options Options) (*GitUpdater, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
-	return &GitUpdater{root: absRoot}, nil
+	applyCommand := append([]string(nil), options.ApplyCommand...)
+	if len(applyCommand) > 0 && !filepath.IsAbs(applyCommand[0]) && strings.ContainsRune(applyCommand[0], filepath.Separator) {
+		applyCommand[0] = filepath.Join(absRoot, applyCommand[0])
+	}
+	return &GitUpdater{
+		root:              absRoot,
+		applyCommand:      applyCommand,
+		runningCommit:     strings.TrimSpace(options.RunningCommit),
+		runningExecutable: strings.TrimSpace(options.RunningExecutable),
+	}, nil
 }
 
-// Status 读取当前 Git 仓库更新状态。
 func (u *GitUpdater) Status(ctx context.Context) (Status, error) {
-	status := Status{Root: u.root}
-
-	// 状态接口尽量容错：单个 Git 信息读不到时保留空值，只有非退出类错误才返回。
+	status := Status{
+		Root:           u.root,
+		RunningCommit:  u.runningCommit,
+		ApplySupported: len(u.applyCommand) > 0,
+	}
+	inside, err := u.gitOutput(ctx, "rev-parse", "--is-inside-work-tree")
+	if err != nil || inside != "true" {
+		return status, fmt.Errorf("%w: %s", ErrRepositoryNotFound, u.root)
+	}
 	if branch, err := u.gitOutput(ctx, "branch", "--show-current"); err == nil {
 		status.Branch = branch
 	}
@@ -110,14 +159,13 @@ func (u *GitUpdater) Status(ctx context.Context) (Status, error) {
 	if subject, err := u.gitOutput(ctx, "log", "-1", "--pretty=%s"); err == nil {
 		status.HeadSubject = subject
 	}
-	// describe --long 输出形如 v0.1.0-12-gc8e8432；仓库没有 tag 时该命令报错，保持空值即可。
 	if describe, err := u.gitOutput(ctx, "describe", "--tags", "--long"); err == nil {
 		if tag, count, ok := parseDescribe(describe); ok {
 			status.NearestTag = tag
 			status.CommitsSinceTag = count
 		}
 	}
-	if dirty, err := u.gitOutput(ctx, "status", "--porcelain"); err == nil {
+	if dirty, err := u.gitOutput(ctx, "status", "--porcelain", "--untracked-files=normal"); err == nil {
 		status.Dirty = strings.TrimSpace(dirty) != ""
 	}
 	if remoteURL, err := u.gitOutput(ctx, "remote", "get-url", "origin"); err == nil {
@@ -127,19 +175,36 @@ func (u *GitUpdater) Status(ctx context.Context) (Status, error) {
 	if upstream, err := u.gitOutput(ctx, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err == nil {
 		status.Upstream = upstream
 	}
+	if status.Upstream == "" && status.Branch != "" && u.refExists(ctx, remoteBranchRef(status.Branch)) {
+		status.Upstream = "origin/" + status.Branch
+	}
 	if status.Upstream != "" {
 		if aheadBehind, err := u.gitOutput(ctx, "rev-list", "--left-right", "--count", status.Upstream+"...HEAD"); err == nil {
-			// rev-list 输出顺序是 behind ahead，因为左边是 upstream，右边是 HEAD。
-			fmt.Sscanf(aheadBehind, "%d %d", &status.Behind, &status.Ahead)
+			_, _ = fmt.Sscanf(aheadBehind, "%d %d", &status.Behind, &status.Ahead)
 		}
 	}
+
+	u.stateMu.RLock()
+	status.Updating = u.updating
 	status.LastFetchedAt = u.lastFetchedAt
 	status.LastUpdateAt = u.lastUpdateAt
+	status.LastUpdateText = u.lastUpdateText
+	status.RestartRequired = u.restartRequired
+	u.stateMu.RUnlock()
+
+	status.UpdateAvailable = status.Behind > 0
+	if status.ApplySupported && status.RunningCommit != "" && status.HeadCommit != "" && !sameCommit(status.RunningCommit, status.HeadCommit) {
+		status.UpdateAvailable = true
+	}
 	return status, nil
 }
 
-// Check 只 fetch 远端并刷新状态，不执行合并；用于"检查更新"。
 func (u *GitUpdater) Check(ctx context.Context) (Status, error) {
+	if !u.beginOperation() {
+		return Status{}, ErrUpdateInProgress
+	}
+	defer u.endOperation()
+
 	status, err := u.Status(ctx)
 	if err != nil {
 		return Status{}, err
@@ -147,20 +212,31 @@ func (u *GitUpdater) Check(ctx context.Context) (Status, error) {
 	if status.RemoteURL == "" {
 		return Status{}, ErrRemoteNotConfigured
 	}
-	if _, err := u.gitCombined(ctx, "fetch", "--prune", "origin"); err != nil {
-		return Status{}, err
+	if status.Branch == "" {
+		return Status{}, ErrDetachedHead
 	}
-	u.lastFetchedAt = time.Now()
+	output, err := u.gitCombined(ctx, "fetch", "--prune", "origin")
+	if err != nil {
+		return Status{}, fmt.Errorf("%w: %v", ErrFetchFailed, err)
+	}
+	u.recordFetch(time.Now())
+	if text := strings.TrimSpace(output); text != "" {
+		u.recordUpdateText(text)
+	}
 	next, err := u.Status(ctx)
 	if err != nil {
 		return Status{}, err
 	}
-	next.LastFetchedAt = u.lastFetchedAt
+	next.Updating = false
 	return next, nil
 }
 
-// Update 执行 fetch 和 ff-only pull 更新。
 func (u *GitUpdater) Update(ctx context.Context) (Result, error) {
+	if !u.beginOperation() {
+		return Result{}, ErrUpdateInProgress
+	}
+	defer u.endOperation()
+
 	status, err := u.Status(ctx)
 	if err != nil {
 		return Result{}, err
@@ -168,48 +244,60 @@ func (u *GitUpdater) Update(ctx context.Context) (Result, error) {
 	if status.RemoteURL == "" {
 		return Result{}, ErrRemoteNotConfigured
 	}
+	if status.Branch == "" {
+		return Result{}, ErrDetachedHead
+	}
+	if status.Dirty {
+		return Result{}, ErrWorkingTreeDirty
+	}
 
-	outputs := make([]string, 0, 2)
-	// 先 fetch 再 ff-only pull，避免在 WebUI 更新时产生本地 merge commit。
+	outputs := make([]string, 0, 3)
 	fetchOut, err := u.gitCombined(ctx, "fetch", "--prune", "origin")
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w: %v", ErrFetchFailed, err)
 	}
-	u.lastFetchedAt = time.Now()
-	if trimmed := strings.TrimSpace(fetchOut); trimmed != "" {
-		outputs = append(outputs, trimmed)
-	}
+	u.recordFetch(time.Now())
+	appendOutput(&outputs, fetchOut)
 
-	updateOut, err := u.gitCombined(ctx, "pull", "--ff-only", "origin", status.Branch)
+	previousCommit, err := u.gitOutput(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return Result{}, err
 	}
-	u.lastUpdateAt = time.Now()
-	if trimmed := strings.TrimSpace(updateOut); trimmed != "" {
-		outputs = append(outputs, trimmed)
+	remoteRef := remoteBranchRef(status.Branch)
+	targetCommit, err := u.gitOutput(ctx, "rev-parse", "--verify", remoteRef)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: origin/%s", ErrRemoteBranchMissing, status.Branch)
+	}
+	sourceUpdated := !sameCommit(previousCommit, targetCommit)
+	if sourceUpdated {
+		ancestor, err := u.isAncestor(ctx, previousCommit, targetCommit)
+		if err != nil {
+			return Result{}, err
+		}
+		if !ancestor {
+			return Result{}, ErrNonFastForward
+		}
+		mergeOut, err := u.gitCombined(ctx, "merge", "--ff-only", remoteRef)
+		if err != nil {
+			return Result{}, fmt.Errorf("updater: fast-forward origin/%s: %w", status.Branch, err)
+		}
+		appendOutput(&outputs, mergeOut)
 	}
 
-	nextStatus, err := u.Status(ctx)
+	applyNeeded := len(u.applyCommand) > 0 && (sourceUpdated || runningCommitBehind(status.RunningCommit, status.HeadCommit))
+	applied, restartRequired, err := u.applyIfNeeded(ctx, targetCommit, applyNeeded, &outputs)
 	if err != nil {
 		return Result{}, err
 	}
-	nextStatus.LastFetchedAt = u.lastFetchedAt
-	nextStatus.LastUpdateAt = u.lastUpdateAt
-	result := Result{
-		Status:  nextStatus,
-		Fetched: true,
-		Updated: !strings.Contains(updateOut, "Already up to date."),
-		Output:  strings.TrimSpace(strings.Join(outputs, "\n\n")),
-		At:      time.Now(),
-	}
-	nextStatus.LastUpdateText = result.Output
-	result.Status = nextStatus
-	return result, nil
+	return u.finishResult(false, true, sourceUpdated, applied, restartRequired, previousCommit, targetCommit, outputs)
 }
 
-// ForceUpdate 强制把当前分支同步到 origin 的同名分支。
-// fetch 和 reset 仍由 Git 校验对象哈希；该操作会丢弃已跟踪文件的本地修改。
 func (u *GitUpdater) ForceUpdate(ctx context.Context) (Result, error) {
+	if !u.beginOperation() {
+		return Result{}, ErrUpdateInProgress
+	}
+	defer u.endOperation()
+
 	status, err := u.Status(ctx)
 	if err != nil {
 		return Result{}, err
@@ -217,54 +305,259 @@ func (u *GitUpdater) ForceUpdate(ctx context.Context) (Result, error) {
 	if status.RemoteURL == "" {
 		return Result{}, ErrRemoteNotConfigured
 	}
-	if strings.TrimSpace(status.Branch) == "" {
-		return Result{}, errors.New("updater: detached HEAD cannot be force-updated")
+	if status.Branch == "" {
+		return Result{}, ErrDetachedHead
 	}
-
-	outputs := make([]string, 0, 2)
+	outputs := make([]string, 0, 3)
 	fetchOut, err := u.gitCombined(ctx, "fetch", "--prune", "--force", "origin")
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w: %v", ErrFetchFailed, err)
 	}
-	u.lastFetchedAt = time.Now()
-	if trimmed := strings.TrimSpace(fetchOut); trimmed != "" {
-		outputs = append(outputs, trimmed)
-	}
+	u.recordFetch(time.Now())
+	appendOutput(&outputs, fetchOut)
 
-	target := "refs/remotes/origin/" + status.Branch
-	if _, err := u.gitOutput(ctx, "rev-parse", "--verify", "--quiet", target+"^{commit}"); err != nil {
-		return Result{}, fmt.Errorf("updater: remote branch %q not found: %w", status.Branch, err)
-	}
-	resetOut, err := u.gitCombined(ctx, "reset", "--hard", target)
+	previousCommit, err := u.gitOutput(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return Result{}, err
 	}
-	u.lastUpdateAt = time.Now()
-	if trimmed := strings.TrimSpace(resetOut); trimmed != "" {
-		outputs = append(outputs, trimmed)
+	remoteRef := remoteBranchRef(status.Branch)
+	targetCommit, err := u.gitOutput(ctx, "rev-parse", "--verify", "--quiet", remoteRef+"^{commit}")
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: origin/%s", ErrRemoteBranchMissing, status.Branch)
 	}
-
-	nextStatus, err := u.Status(ctx)
+	resetOut, err := u.gitCombined(ctx, "reset", "--hard", remoteRef)
 	if err != nil {
 		return Result{}, err
 	}
-	nextStatus.LastFetchedAt = u.lastFetchedAt
-	nextStatus.LastUpdateAt = u.lastUpdateAt
-	result := Result{
-		Status:  nextStatus,
-		Fetched: true,
-		Updated: status.HeadCommit != nextStatus.HeadCommit || status.Dirty,
-		Forced:  true,
-		Output:  strings.TrimSpace(strings.Join(outputs, "\n\n")),
-		At:      time.Now(),
+	appendOutput(&outputs, resetOut)
+	sourceUpdated := !sameCommit(previousCommit, targetCommit) || status.Dirty
+	applied, restartRequired, err := u.applyIfNeeded(ctx, targetCommit, len(u.applyCommand) > 0, &outputs)
+	if err != nil {
+		return Result{}, err
 	}
-	nextStatus.LastUpdateText = result.Output
-	result.Status = nextStatus
-	return result, nil
+	return u.finishResult(true, true, sourceUpdated, applied, restartRequired, previousCommit, targetCommit, outputs)
 }
 
-// parseDescribe 解析 git describe --tags --long 的输出（tag-N-ghash）。
-// tag 名本身可能含 '-'，所以从右往左拆两段。
+var rollbackRefPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._/\-]{0,127}$`)
+
+func (u *GitUpdater) Rollback(ctx context.Context, ref string) (Result, error) {
+	ref = strings.TrimSpace(ref)
+	if !rollbackRefPattern.MatchString(ref) {
+		return Result{}, fmt.Errorf("updater: invalid rollback ref %q", ref)
+	}
+	if !u.beginOperation() {
+		return Result{}, ErrUpdateInProgress
+	}
+	defer u.endOperation()
+
+	status, err := u.Status(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if status.Dirty {
+		return Result{}, ErrWorkingTreeDirty
+	}
+	previousCommit, err := u.gitOutput(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return Result{}, err
+	}
+	targetCommit, err := u.gitOutput(ctx, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil {
+		return Result{}, fmt.Errorf("updater: rollback target %q not found: %w", ref, err)
+	}
+	outputs := make([]string, 0, 2)
+	resetOut, err := u.gitCombined(ctx, "reset", "--hard", targetCommit)
+	if err != nil {
+		return Result{}, err
+	}
+	appendOutput(&outputs, resetOut)
+	applied, restartRequired, err := u.applyIfNeeded(ctx, targetCommit, len(u.applyCommand) > 0, &outputs)
+	if err != nil {
+		return Result{}, err
+	}
+	return u.finishResult(false, false, true, applied, restartRequired, previousCommit, targetCommit, outputs)
+}
+
+func (u *GitUpdater) applyIfNeeded(ctx context.Context, targetCommit string, needed bool, outputs *[]string) (bool, bool, error) {
+	if !needed {
+		return false, false, nil
+	}
+	applyOut, err := u.runApply(ctx, targetCommit)
+	appendOutput(outputs, applyOut)
+	if err != nil {
+		message := strings.TrimSpace(strings.Join(*outputs, "\n\n"))
+		if message == "" {
+			message = err.Error()
+		}
+		u.recordUpdate(time.Now(), message, false)
+		return false, false, fmt.Errorf("%w: %v", ErrApplyFailed, err)
+	}
+	return true, true, nil
+}
+
+func (u *GitUpdater) finishResult(forced, fetched, sourceUpdated, applied, restartRequired bool, previousCommit, targetCommit string, outputs []string) (Result, error) {
+	if len(outputs) == 0 {
+		outputs = append(outputs, "Already up to date.")
+	}
+	output := strings.TrimSpace(strings.Join(outputs, "\n\n"))
+	now := time.Now()
+	u.recordUpdate(now, output, restartRequired)
+	nextStatus, err := u.Status(context.Background())
+	if err != nil {
+		return Result{}, err
+	}
+	nextStatus.Updating = false
+	return Result{
+		Status:          nextStatus,
+		Fetched:         fetched,
+		Updated:         sourceUpdated || applied,
+		Forced:          forced,
+		SourceUpdated:   sourceUpdated,
+		Applied:         applied,
+		RestartRequired: restartRequired,
+		PreviousCommit:  previousCommit,
+		TargetCommit:    targetCommit,
+		Output:          output,
+		At:              now,
+	}, nil
+}
+
+func runningCommitBehind(running, head string) bool {
+	running = strings.TrimSpace(running)
+	if running == "" || strings.EqualFold(running, "dev") {
+		return false
+	}
+	return !sameCommit(running, head)
+}
+
+func (u *GitUpdater) beginOperation() bool {
+	if !u.operationMu.TryLock() {
+		return false
+	}
+	u.stateMu.Lock()
+	u.updating = true
+	u.stateMu.Unlock()
+	return true
+}
+
+func (u *GitUpdater) endOperation() {
+	u.stateMu.Lock()
+	u.updating = false
+	u.stateMu.Unlock()
+	u.operationMu.Unlock()
+}
+
+func (u *GitUpdater) recordFetch(at time.Time) {
+	u.stateMu.Lock()
+	u.lastFetchedAt = at
+	u.stateMu.Unlock()
+}
+
+func (u *GitUpdater) recordUpdateText(output string) {
+	u.stateMu.Lock()
+	u.lastUpdateText = output
+	u.stateMu.Unlock()
+}
+
+func (u *GitUpdater) recordUpdate(at time.Time, output string, restartRequired bool) {
+	u.stateMu.Lock()
+	u.lastUpdateAt = at
+	u.lastUpdateText = output
+	if restartRequired {
+		u.restartRequired = true
+	}
+	u.stateMu.Unlock()
+}
+
+func (u *GitUpdater) runApply(ctx context.Context, targetCommit string) (string, error) {
+	cmd := exec.CommandContext(ctx, u.applyCommand[0], u.applyCommand[1:]...)
+	cmd.Dir = u.root
+	cmd.Env = environmentWithOverrides(os.Environ(),
+		"DIANA_UPDATE_ROOT="+u.root,
+		"DIANA_UPDATE_TARGET_COMMIT="+targetCommit,
+		"DIANA_RUNNING_COMMIT="+u.runningCommit,
+		"DIANA_RUNNING_EXECUTABLE="+u.runningExecutable,
+	)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		text := strings.TrimSpace(out.String())
+		if text == "" {
+			return "", err
+		}
+		return text, fmt.Errorf("%w (%s)", err, text)
+	}
+	return out.String(), nil
+}
+
+func environmentWithOverrides(base []string, overrides ...string) []string {
+	keys := make(map[string]struct{}, len(overrides))
+	for _, value := range overrides {
+		if index := strings.IndexByte(value, '='); index > 0 {
+			keys[value[:index]] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(base)+len(overrides))
+	for _, value := range base {
+		index := strings.IndexByte(value, '=')
+		if index <= 0 {
+			result = append(result, value)
+			continue
+		}
+		if _, replaced := keys[value[:index]]; !replaced {
+			result = append(result, value)
+		}
+	}
+	return append(result, overrides...)
+}
+
+func (u *GitUpdater) isAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = u.root
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	text := strings.TrimSpace(out.String())
+	if text == "" {
+		return false, err
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor: %w (%s)", err, text)
+}
+
+func (u *GitUpdater) refExists(ctx context.Context, ref string) bool {
+	cmd := exec.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", ref)
+	cmd.Dir = u.root
+	return cmd.Run() == nil
+}
+
+func remoteBranchRef(branch string) string {
+	return "refs/remotes/origin/" + branch
+}
+
+func sameCommit(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	return left == right || strings.HasPrefix(left, right) || strings.HasPrefix(right, left)
+}
+
+func appendOutput(outputs *[]string, output string) {
+	if trimmed := strings.TrimSpace(output); trimmed != "" {
+		*outputs = append(*outputs, trimmed)
+	}
+}
+
 func parseDescribe(describe string) (string, int, bool) {
 	describe = strings.TrimSpace(describe)
 	last := strings.LastIndex(describe, "-")
@@ -283,56 +576,12 @@ func parseDescribe(describe string) (string, int, bool) {
 	return rest[:mid], count, true
 }
 
-// rollbackRefPattern 限制回退目标只能是提交号或 tag 这类安全字符，防止参数注入。
-var rollbackRefPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._/\-]{0,127}$`)
-
-// Rollback 把当前分支硬回退到指定提交或 tag；工作区有未提交修改时拒绝执行。
-func (u *GitUpdater) Rollback(ctx context.Context, ref string) (Result, error) {
-	ref = strings.TrimSpace(ref)
-	if !rollbackRefPattern.MatchString(ref) {
-		return Result{}, fmt.Errorf("updater: invalid rollback ref %q", ref)
-	}
-	status, err := u.Status(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	if status.Dirty {
-		return Result{}, errors.New("updater: 工作区有未提交修改，回退会丢失这些改动，已拒绝执行")
-	}
-	// 先确认目标真实存在且是提交对象，再执行 reset。
-	if _, err := u.gitOutput(ctx, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
-		return Result{}, fmt.Errorf("updater: rollback target %q not found: %w", ref, err)
-	}
-	out, err := u.gitCombined(ctx, "reset", "--hard", ref)
-	if err != nil {
-		return Result{}, err
-	}
-	u.lastUpdateAt = time.Now()
-	nextStatus, err := u.Status(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	nextStatus.LastUpdateAt = u.lastUpdateAt
-	result := Result{
-		Status:  nextStatus,
-		Updated: true,
-		Output:  strings.TrimSpace(out),
-		At:      time.Now(),
-	}
-	nextStatus.LastUpdateText = result.Output
-	result.Status = nextStatus
-	return result, nil
-}
-
-// gitOutput 执行 Git 命令并返回去空白输出。
 func (u *GitUpdater) gitOutput(ctx context.Context, args ...string) (string, error) {
 	out, err := u.gitCombined(ctx, args...)
 	return strings.TrimSpace(out), err
 }
 
-// gitCombined 执行 Git 命令并合并 stdout/stderr。
 func (u *GitUpdater) gitCombined(ctx context.Context, args ...string) (string, error) {
-	// 所有 Git 命令都绑定仓库根目录运行，stdout/stderr 合并后返回给前端展示。
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = u.root
 	var out bytes.Buffer
@@ -343,7 +592,6 @@ func (u *GitUpdater) gitCombined(ctx context.Context, args ...string) (string, e
 		if text == "" {
 			return "", err
 		}
-		// 用 %w 保留底层退出错误，这样状态查询可以继续把“无远端/无上游”当成可忽略分支处理。
 		return text, fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, text)
 	}
 	return out.String(), nil

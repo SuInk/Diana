@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +33,8 @@ type OneBotChannel struct {
 	closed  chan struct{}
 }
 
+func (c *OneBotChannel) OutboundBackoffEnabled() bool { return true }
+
 type callResult struct {
 	data map[string]any
 	err  error
@@ -42,26 +46,28 @@ type oneBotEnvelope struct {
 	PostType    string          `json:"post_type,omitempty"`
 	MessageType string          `json:"message_type,omitempty"`
 	SubType     string          `json:"sub_type,omitempty"`
+	NoticeType  string          `json:"notice_type,omitempty"`
 	MessageID   any             `json:"message_id,omitempty"`
+	MessageSeq  any             `json:"message_seq,omitempty"`
 	UserID      any             `json:"user_id,omitempty"`
 	GroupID     any             `json:"group_id,omitempty"`
+	OperatorID  any             `json:"operator_id,omitempty"`
+	TargetID    any             `json:"target_id,omitempty"`
 	Message     json.RawMessage `json:"message,omitempty"`
 	RawMessage  string          `json:"raw_message,omitempty"`
 	Sender      struct {
 		Nickname string `json:"nickname,omitempty"`
 		Card     string `json:"card,omitempty"`
 		Role     string `json:"role,omitempty"`
-		// Level 是群等级。OneBot v11 规定为字符串，但各实现有的给数字、
-		// 有的给等级名，所以按 any 收下再宽松解析。
-		Level any    `json:"level,omitempty"`
-		Title string `json:"title,omitempty"`
+		Level    any    `json:"level,omitempty"`
+		Title    string `json:"title,omitempty"`
 	} `json:"sender,omitempty"`
 
-	Echo    string         `json:"echo,omitempty"`
-	Status  any            `json:"status,omitempty"`
-	RetCode int            `json:"retcode,omitempty"`
-	Data    map[string]any `json:"data,omitempty"`
-	Wording string         `json:"wording,omitempty"`
+	Echo    string `json:"echo,omitempty"`
+	Status  any    `json:"status,omitempty"`
+	RetCode int    `json:"retcode,omitempty"`
+	Data    any    `json:"data,omitempty"`
+	Wording string `json:"wording,omitempty"`
 }
 
 // NewOneBotChannel 创建正向 OneBot WebSocket channel。
@@ -127,8 +133,14 @@ func (c *OneBotChannel) Connect(ctx context.Context, handler EventHandler) error
 
 // Send 通过 OneBot API 发送私聊或群聊消息。
 func (c *OneBotChannel) Send(ctx context.Context, msg OutgoingMessage) error {
+	_, err := c.SendWithResult(ctx, msg)
+	return err
+}
+
+// SendWithResult sends a message and preserves the OneBot response message_id.
+func (c *OneBotChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
 	if strings.TrimSpace(msg.Text) == "" && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 {
-		return nil
+		return nil, nil
 	}
 	params := map[string]any{"message": buildOutgoingSegments(msg)}
 	action := "send_private_msg"
@@ -136,18 +148,17 @@ func (c *OneBotChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 		action = "send_group_msg"
 		groupID, err := strconv.ParseInt(msg.GroupID, 10, 64)
 		if err != nil {
-			return fmt.Errorf("qqbot: invalid group id %q", msg.GroupID)
+			return nil, fmt.Errorf("qqbot: invalid group id %q", msg.GroupID)
 		}
 		params["group_id"] = groupID
 	} else {
 		userID, err := strconv.ParseInt(msg.UserID, 10, 64)
 		if err != nil {
-			return fmt.Errorf("qqbot: invalid user id %q", msg.UserID)
+			return nil, fmt.Errorf("qqbot: invalid user id %q", msg.UserID)
 		}
 		params["user_id"] = userID
 	}
-	_, err := c.CallAPI(ctx, action, params)
-	return err
+	return c.CallAPI(ctx, action, params)
 }
 
 // buildOutgoingSegments 将回复消息转换为 OneBot segment 列表。
@@ -165,30 +176,121 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 			"type": "at",
 			"data": map[string]string{"qq": msg.MentionUserID},
 		})
-	}
-	for _, segment := range TextToOneBotSegments(msg.Text) {
 		segments = append(segments, map[string]any{
-			"type": segment.Type,
-			"data": segment.Data,
+			"type": "text",
+			"data": map[string]string{"text": " "},
 		})
 	}
-	for _, imageURL := range msg.ImageURLs {
-		if imageURL = strings.TrimSpace(imageURL); imageURL != "" {
+	if len(msg.Segments) > 0 {
+		for _, segment := range msg.Segments {
+			segmentType := strings.TrimSpace(segment.Type)
+			if segmentType == "" || segmentType == "notice" {
+				continue
+			}
+			data := cloneSegmentData(segment.Data)
+			if (segmentType == "image" || segmentType == "video") && strings.TrimSpace(data["cached_file"]) != "" {
+				data["file"] = data["cached_file"]
+			}
+			segments = append(segments, map[string]any{"type": segmentType, "data": data})
+		}
+		return segments
+	}
+	if msg.ImagesFirst {
+		segments = appendOutgoingImageSegments(segments, msg.ImageURLs)
+	}
+	if msg.Text != "" {
+		for _, segment := range TextToOneBotSegments(msg.Text) {
 			segments = append(segments, map[string]any{
-				"type": "image",
-				"data": map[string]string{"file": imageURL},
+				"type": segment.Type,
+				"data": segment.Data,
 			})
 		}
+	}
+	if !msg.ImagesFirst {
+		segments = appendOutgoingImageSegments(segments, msg.ImageURLs)
 	}
 	for _, videoURL := range msg.VideoURLs {
-		if videoURL = strings.TrimSpace(videoURL); videoURL != "" {
-			segments = append(segments, map[string]any{
-				"type": "video",
-				"data": map[string]string{"file": videoURL},
-			})
+		videoURL = videoFileForOutgoingSegment(videoURL)
+		if videoURL == "" {
+			continue
 		}
+		segments = append(segments, map[string]any{
+			"type": "video",
+			"data": map[string]string{"file": videoURL},
+		})
 	}
 	return segments
+}
+
+func buildForwardOutgoingSegments(msg OutgoingMessage) []map[string]any {
+	msg.MentionUserID = ""
+	segments := buildOutgoingSegments(msg)
+	filtered := make([]map[string]any, 0, len(segments))
+	for _, segment := range segments {
+		if segment["type"] == "at" {
+			continue
+		}
+		filtered = append(filtered, segment)
+	}
+	return filtered
+}
+
+func appendOutgoingImageSegments(segments []map[string]any, imageURLs []string) []map[string]any {
+	for _, imageURL := range imageURLs {
+		imageURL = imageFileForOutgoingSegment(imageURL)
+		if imageURL == "" {
+			continue
+		}
+		segments = append(segments, map[string]any{
+			"type": "image",
+			"data": map[string]string{"file": imageURL},
+		})
+	}
+	return segments
+}
+
+func imageFileForOutgoingSegment(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "data:image/") {
+		if _, data, ok := strings.Cut(value, ","); ok && strings.TrimSpace(data) != "" {
+			return "base64://" + strings.TrimSpace(data)
+		}
+		return ""
+	}
+	return value
+}
+
+func videoFileForOutgoingSegment(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if filepath.IsAbs(value) {
+		return "file://" + value
+	}
+	return value
+}
+
+func buildForwardNodes(chunks []string, senderName string, senderUIN string) []map[string]any {
+	nodes := make([]map[string]any, 0, len(chunks))
+	for _, chunk := range chunks {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		nodes = append(nodes, map[string]any{
+			"type": "node",
+			"data": map[string]any{
+				"name":    senderName,
+				"uin":     senderUIN,
+				"content": buildForwardOutgoingSegments(OutgoingMessage{Text: chunk}),
+			},
+		})
+	}
+	return nodes
 }
 
 // CallAPI 发送 OneBot action 并等待 echo 响应。
@@ -285,7 +387,12 @@ func (c *OneBotChannel) handleFrame(ctx context.Context, handler EventHandler, d
 	if handler == nil {
 		return nil
 	}
-	return handler(ctx, event)
+	go func() {
+		if err := handler(ctx, event); err != nil {
+			c.setStatus(c.Status().Connected, c.Status().SelfID, err.Error())
+		}
+	}()
+	return nil
 }
 
 // resolveCall 根据 echo 唤醒等待中的 API 调用。
@@ -299,7 +406,7 @@ func (c *OneBotChannel) resolveCall(envelope oneBotEnvelope) {
 		return
 	}
 	if envelopeStatusOK(envelope) {
-		resultCh <- callResult{data: envelope.Data}
+		resultCh <- callResult{data: oneBotDataMap(envelope.Data)}
 		return
 	}
 	// 不同 OneBot 实现错误字段不一致，尽量取 wording/message/body，最后再拼状态码。
@@ -311,6 +418,19 @@ func (c *OneBotChannel) resolveCall(envelope oneBotEnvelope) {
 		message = fmt.Sprintf("onebot api failed: status=%s retcode=%d", envelopeStatusText(envelope.Status), envelope.RetCode)
 	}
 	resultCh <- callResult{err: errors.New(message)}
+}
+
+func oneBotDataMap(data any) map[string]any {
+	switch value := data.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		return value
+	case []any:
+		return map[string]any{"items": value, "list": value}
+	default:
+		return map[string]any{"value": value}
+	}
 }
 
 // oneBotErrorMessage 从 OneBot 响应中提取错误信息。
@@ -372,14 +492,19 @@ func (c *OneBotChannel) setStatus(connected bool, selfID string, lastError strin
 func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 	if envelope.PostType == "notice" {
 		// notice 没有正文，只保留群/用户/子类型供欢迎语等逻辑判断。
+		subType := firstNonEmpty(envelope.NoticeType, envelope.SubType)
+		messageID := firstNonEmpty(stringifyID(envelope.MessageID), stringifyID(envelope.TargetID))
 		return MessageEvent{
 			Kind:        EventKindNotice,
-			SubType:     envelope.SubType,
+			SubType:     subType,
 			Time:        envelope.Time,
 			SelfID:      stringifyID(envelope.SelfID),
 			UserID:      stringifyID(envelope.UserID),
+			OperatorID:  stringifyID(envelope.OperatorID),
 			GroupID:     stringifyID(envelope.GroupID),
+			MessageID:   messageID,
 			MessageType: envelope.MessageType,
+			Segments:    noticeSegmentsFromEnvelope(envelope, subType, messageID),
 		}
 	}
 	kind := EventKindPrivate
@@ -398,26 +523,46 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 	}
 	selfID := stringifyID(envelope.SelfID)
 	event := MessageEvent{
-		Kind:        kind,
-		SubType:     envelope.SubType,
-		Time:        envelope.Time,
-		SelfID:      selfID,
-		UserID:      stringifyID(envelope.UserID),
-		GroupID:     stringifyID(envelope.GroupID),
-		MessageID:   stringifyID(envelope.MessageID),
-		MessageType: envelope.MessageType,
-		RawMessage:  rawMessage,
-		Segments:    segments,
-		SenderName:  envelope.Sender.Card,
-		SenderRole:  strings.TrimSpace(envelope.Sender.Role),
-		SenderLevel: parseGroupLevel(envelope.Sender.Level),
-		SenderTitle: strings.TrimSpace(envelope.Sender.Title),
+		Kind:             kind,
+		SubType:          envelope.SubType,
+		Time:             envelope.Time,
+		SelfID:           selfID,
+		UserID:           stringifyID(envelope.UserID),
+		GroupID:          stringifyID(envelope.GroupID),
+		MessageID:        stringifyID(envelope.MessageID),
+		MessageSeq:       stringifyID(envelope.MessageSeq),
+		MessageType:      envelope.MessageType,
+		RawMessage:       rawMessage,
+		Segments:         segments,
+		SenderName:       envelope.Sender.Card,
+		SenderRole:       strings.ToLower(strings.TrimSpace(envelope.Sender.Role)),
+		SenderLevel:      parseGroupLevel(envelope.Sender.Level),
+		SenderLevelLabel: strings.TrimSpace(stringFromAny(envelope.Sender.Level)),
+		SenderTitle:      strings.TrimSpace(envelope.Sender.Title),
 	}
 	if event.SenderName == "" {
 		event.SenderName = envelope.Sender.Nickname
 	}
 	event.ToMe = hasAt(segments, selfID)
 	return event
+}
+
+func noticeSegmentsFromEnvelope(envelope oneBotEnvelope, subType string, messageID string) []MessageSegment {
+	data := map[string]string{}
+	add := func(key string, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			data[key] = value
+		}
+	}
+	add("notice_type", subType)
+	add("sub_type", envelope.SubType)
+	add("message_id", messageID)
+	add("target_id", stringifyID(envelope.TargetID))
+	add("operator_id", stringifyID(envelope.OperatorID))
+	if len(data) == 0 {
+		return nil
+	}
+	return []MessageSegment{{Type: "notice", Data: data}}
 }
 
 // parseOneBotMessage 解析 OneBot message 字段为 segment 列表。
@@ -453,17 +598,13 @@ func stringifyID(value any) string {
 	}
 }
 
-// parseGroupLevel 宽松解析群等级。拿不到或不是数字一律返回 0，
-// 由调用方按 fail-open 处理——OneBot 实现之间差异很大，把「解析不出」
-// 当成「等级 0」去拒绝会让换实现的用户整群失联。
 func parseGroupLevel(value any) int {
 	text := stringifyID(value)
-	if text == "" {
-		return 0
+	if len(text) >= 2 && strings.EqualFold(text[:2], "lv") {
+		text = strings.TrimSpace(text[2:])
 	}
 	level, err := strconv.Atoi(text)
 	if err != nil || level < 0 {
-		// 有的实现返回的是等级名（如「潜水」）而不是数字。
 		return 0
 	}
 	return level
@@ -501,6 +642,16 @@ func PlainText(segments []MessageSegment) string {
 				builder.WriteString(id)
 				builder.WriteString("]")
 			}
+		case "forward":
+			if summary := strings.TrimSpace(segment.Data["summary"]); summary != "" {
+				builder.WriteString(summary)
+			} else if id := firstNonEmpty(segment.Data["id"], segment.Data["resid"], segment.Data["forward_id"]); id != "" {
+				builder.WriteString("[合并转发:")
+				builder.WriteString(id)
+				builder.WriteString("]")
+			} else {
+				builder.WriteString("[合并转发]")
+			}
 		}
 	}
 	return strings.TrimSpace(builder.String())
@@ -514,7 +665,7 @@ func ImageURLs(segments []MessageSegment) []string {
 		if segment.Type != "image" {
 			continue
 		}
-		for _, key := range []string{"url", "image_url", "src", "file"} {
+		for _, key := range []string{"cached_file", "url", "image_url", "src", "file"} {
 			imageURL := normalizedImageURL(segment.Data[key])
 			if imageURL == "" {
 				continue
@@ -524,6 +675,33 @@ func ImageURLs(segments []MessageSegment) []string {
 			}
 			seen[imageURL] = struct{}{}
 			out = append(out, imageURL)
+			break
+		}
+	}
+	return out
+}
+
+// VideoURLs 提取 OneBot 视频段里的远程 URL 或 NapCat 提供的本地绝对路径。
+func VideoURLs(segments []MessageSegment) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, segment := range segments {
+		if segment.Type != "video" {
+			continue
+		}
+		for _, key := range []string{"url", "video_url", "src", "file", "path"} {
+			videoURL := normalizedHTTPURL(segment.Data[key])
+			if videoURL == "" {
+				videoURL = localVideoPath(segment.Data[key])
+			}
+			if videoURL == "" {
+				continue
+			}
+			if _, ok := seen[videoURL]; ok {
+				break
+			}
+			seen[videoURL] = struct{}{}
+			out = append(out, videoURL)
 			break
 		}
 	}
@@ -545,6 +723,32 @@ func normalizedImageURL(value string) string {
 	if strings.HasPrefix(value, "data:image/") {
 		return value
 	}
+	if localPath := normalizedLocalImagePath(value); localPath != "" {
+		return localPath
+	}
+	return normalizedHTTPURL(value)
+}
+
+func normalizedLocalImagePath(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "file://") {
+		value = strings.TrimPrefix(value, "file://")
+	}
+	if value == "" || !filepath.IsAbs(value) {
+		return ""
+	}
+	info, err := os.Stat(value)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return value
+}
+
+func normalizedHTTPURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
 	parsed, err := url.Parse(value)
 	if err != nil {
 		return ""
@@ -560,7 +764,83 @@ func normalizedImageURL(value string) string {
 
 // TextToOneBotSegments 将文本转换为 OneBot segment 列表。
 func TextToOneBotSegments(text string) []MessageSegment {
-	return CQToSegments(text)
+	parsed := CQToSegments(text)
+	segments := make([]MessageSegment, 0, len(parsed)+2)
+	for index, segment := range parsed {
+		if segment.Type == "text" {
+			segments = appendTextWithQQMentions(segments, segment.Data["text"])
+			continue
+		}
+		segments = append(segments, segment)
+		if segment.Type == "at" && !nextSegmentStartsWithWhitespace(parsed, index+1) {
+			segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": " "}})
+		}
+	}
+	if len(segments) == 0 {
+		return []MessageSegment{{Type: "text", Data: map[string]string{"text": ""}}}
+	}
+	return segments
+}
+
+func appendTextWithQQMentions(segments []MessageSegment, text string) []MessageSegment {
+	start := 0
+	for index := 0; index < len(text); index++ {
+		if text[index] != '@' || !qqMentionPrefixAllowed(text, index) {
+			continue
+		}
+		end := index + 1
+		for end < len(text) && text[end] >= '0' && text[end] <= '9' {
+			end++
+		}
+		digits := end - index - 1
+		if digits < 5 || digits > 12 || (end < len(text) && qqMentionIDContinuation(text[end])) {
+			continue
+		}
+		if index > start {
+			segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": text[start:index]}})
+		}
+		segments = append(segments, MessageSegment{Type: "at", Data: map[string]string{"qq": text[index+1 : end]}})
+		if end >= len(text) || !chatWhitespaceByte(text[end]) {
+			segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": " "}})
+		}
+		start = end
+		index = end - 1
+	}
+	if start < len(text) {
+		segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": text[start:]}})
+	} else if start == 0 && text == "" {
+		segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": ""}})
+	}
+	return segments
+}
+
+func qqMentionPrefixAllowed(text string, index int) bool {
+	if index == 0 {
+		return true
+	}
+	previous := text[index-1]
+	return !((previous >= 'a' && previous <= 'z') ||
+		(previous >= 'A' && previous <= 'Z') ||
+		(previous >= '0' && previous <= '9') ||
+		previous == '_' || previous == '@' || previous == '/')
+}
+
+func qqMentionIDContinuation(value byte) bool {
+	return (value >= 'a' && value <= 'z') ||
+		(value >= 'A' && value <= 'Z') ||
+		(value >= '0' && value <= '9') || value == '_'
+}
+
+func chatWhitespaceByte(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
+}
+
+func nextSegmentStartsWithWhitespace(segments []MessageSegment, index int) bool {
+	if index >= len(segments) || segments[index].Type != "text" {
+		return false
+	}
+	text := segments[index].Data["text"]
+	return text != "" && chatWhitespaceByte(text[0])
 }
 
 // CQToSegments 将 CQ 码文本解析为 OneBot segment 列表。

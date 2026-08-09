@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -18,22 +19,24 @@ import (
 )
 
 const (
-	defaultDatabasePath = "data/diana.db"
-	legacyDatabasePath  = "data/diana-qq-bot.db"
-	llmConfigKey        = "llm_config"
-	llmProfilesKey      = "llm_profiles"
-	qqbotConfigKey      = "qqbot_config"
-	qqbotProfilesKey    = "qqbot_profiles"
-	qqbotGroupConfigKey = "qqbot_group_configs"
-	pluginStateKey      = "plugin_states"
-	remindersKey        = "reminders"
-	updateSettingsKey   = "system_update_settings"
-	webuiAuthKey        = "webui_auth"
-	webuiSessionsKey    = "webui_sessions"
+	defaultDatabasePath  = "data/diana.db"
+	legacyDatabasePath   = "data/diana-qq-bot.db"
+	llmConfigKey         = "llm_config"
+	llmProfilesKey       = "llm_profiles"
+	qqbotConfigKey       = "qqbot_config"
+	qqbotProfilesKey     = "qqbot_profiles"
+	qqbotGroupConfigKey  = "qqbot_group_configs"
+	pluginStateKey       = "plugin_states"
+	remindersKey         = "reminders"
+	replySuppressionsKey = "qqbot_reply_suppressions"
+	updateSettingsKey    = "system_update_settings"
+	webuiAuthKey         = "webui_auth"
+	webuiSessionsKey     = "webui_sessions"
 )
 
 type SQLiteStore struct {
-	db *sql.DB
+	db           *sql.DB
+	userMemoryMu sync.Mutex
 }
 
 // NewSQLiteStore 打开 SQLite 数据库并执行迁移。
@@ -53,6 +56,16 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.Exec(`
+PRAGMA journal_mode = WAL;
+PRAGMA busy_timeout = 5000;
+PRAGMA foreign_keys = ON;
+`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure sqlite: %w", err)
 	}
 	store := &SQLiteStore{db: db}
 	if err := store.migrate(); err != nil {
@@ -141,8 +154,14 @@ type WebUIAuth struct {
 
 // WebUISession 是一次已登录会话；只存 token 哈希，不落明文。
 type WebUISession struct {
-	TokenHash string    `json:"token_hash"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID         string    `json:"id,omitempty"`
+	TokenHash  string    `json:"token_hash"`
+	DeviceName string    `json:"device_name,omitempty"`
+	UserAgent  string    `json:"user_agent,omitempty"`
+	IPAddress  string    `json:"ip_address,omitempty"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
+	LastSeenAt time.Time `json:"last_seen_at,omitempty"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 // WebUISessionSet 是全部有效会话集合。
@@ -236,7 +255,10 @@ CREATE TABLE IF NOT EXISTS app_logs (
 CREATE INDEX IF NOT EXISTS idx_app_logs_kind_created_at ON app_logs(kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_logs_created_at ON app_logs(created_at DESC);
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.migrateRestoredFeatures()
 }
 
 // saveJSON 将指定 key 的结构体编码为 JSON 保存。

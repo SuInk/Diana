@@ -46,6 +46,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 		// Anthropic messages API 要求 MaxTokens，未配置时给一个保守默认值。
 		req.MaxOutputTokens = defaultAnthropicMaxTokens
 	}
+	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, err
 	}

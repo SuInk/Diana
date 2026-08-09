@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -73,6 +74,8 @@ func newAuthTestRouter(t *testing.T) (*gin.Engine, *AuthManager, *memoryAuthStor
 	router.GET("/api/protected", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 	router.GET("/api/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	router.GET("/api/qqbot/group-admin/session", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	router.GET("/api/qqbot/media/:token", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/api/assistant/media/:token", func(c *gin.Context) { c.Status(http.StatusOK) })
 	return router, manager, store
 }
 
@@ -102,7 +105,7 @@ func TestAuthFullFlow(t *testing.T) {
 	}
 
 	// 豁免路径不受影响。
-	for _, path := range []string{"/api/health", "/api/qqbot/group-admin/session", "/api/auth/status"} {
+	for _, path := range []string{"/api/health", "/api/qqbot/group-admin/session", "/api/qqbot/media/token", "/api/assistant/media/token", "/api/auth/status"} {
 		rec = httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusOK {
@@ -244,5 +247,79 @@ func TestAuthRejectsInvalidUsername(t *testing.T) {
 	manager := NewAuthManager(&memoryAuthStore{})
 	if _, err := manager.Bootstrap("admin@example.com", "bootstrap-pass"); !errors.Is(err, ErrUsernameInvalid) {
 		t.Fatalf("Bootstrap() error = %v, want ErrUsernameInvalid", err)
+	}
+}
+
+func TestAuthSessionManagementRoutes(t *testing.T) {
+	router, manager, store := newAuthTestRouter(t)
+	if err := manager.SetPassword("", "diana-session-password"); err != nil {
+		t.Fatalf("SetPassword() error = %v", err)
+	}
+	username := manager.Username()
+	login := func(userAgent string) string {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(fmt.Sprintf(`{"username":%q,"password":"diana-session-password"}`, username)))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("User-Agent", userAgent)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("login = %d: %s", recorder.Code, recorder.Body.String())
+		}
+		return strings.TrimPrefix(strings.Split(recorder.Header().Get("Set-Cookie"), ";")[0], authCookieName+"=")
+	}
+	firstToken := login("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
+	secondToken := login("Mozilla/5.0 (Linux; Android 14)")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/auth/sessions", nil)
+	request.Header.Set("Cookie", authCookieName+"="+secondToken)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("sessions = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var list struct {
+		Sessions []AuthSessionInfo `json:"sessions"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&list); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(list.Sessions) != 2 || !list.Sessions[0].Current || list.Sessions[0].DeviceName != "Android 浏览器" {
+		t.Fatalf("sessions = %#v", list.Sessions)
+	}
+	if list.Sessions[1].DeviceName != "macOS 浏览器" || list.Sessions[1].Current {
+		t.Fatalf("other session = %#v", list.Sessions[1])
+	}
+	if len(store.sessions.Sessions) != 2 || store.sessions.Sessions[0].ID == "" {
+		t.Fatalf("persisted sessions = %#v", store.sessions.Sessions)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/auth/sessions/revoke-others", nil)
+	request.Header.Set("Cookie", authCookieName+"="+secondToken)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"revoked":1`) {
+		t.Fatalf("revoke others = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if manager.Authenticate(firstToken) || !manager.Authenticate(secondToken) {
+		t.Fatal("revoke others kept or removed the wrong session")
+	}
+
+	current := manager.Sessions(secondToken)
+	if len(current) != 1 {
+		t.Fatalf("current sessions = %#v", current)
+	}
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodDelete, "/api/auth/sessions/"+current[0].ID, nil)
+	request.Header.Set("Cookie", authCookieName+"="+secondToken)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"current":true`) {
+		t.Fatalf("revoke current = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if manager.Authenticate(secondToken) {
+		t.Fatal("current session still valid after revoke")
+	}
+	if cookie := recorder.Header().Get("Set-Cookie"); !strings.Contains(cookie, "Max-Age=0") {
+		t.Fatalf("current session cookie was not cleared: %q", cookie)
 	}
 }

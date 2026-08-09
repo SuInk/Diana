@@ -10,18 +10,22 @@ import (
 	"strings"
 )
 
-// OpenAI-compatible 后端千差万别，不预设模型名；用户从"拉取模型列表"里选或手动填写。
+// OpenAI-compatible backends do not share a universal model name. The model
+// must come from the backend list or an explicit user selection.
 const DefaultOpenAICompatibleModel = ""
 const DefaultGeminiModel = "gemini-2.5-flash"
 const DefaultAnthropicModel = "claude-sonnet-4-5"
 const DefaultOpenAICompatibleUserAgent = "codex-cli/0.142.0"
 
 type ModelInfo struct {
-	ID      string `json:"id"`
-	Name    string `json:"name,omitempty"`
-	Object  string `json:"object,omitempty"`
-	OwnedBy string `json:"owned_by,omitempty"`
-	Created int64  `json:"created,omitempty"`
+	ID                  string `json:"id"`
+	Name                string `json:"name,omitempty"`
+	Object              string `json:"object,omitempty"`
+	OwnedBy             string `json:"owned_by,omitempty"`
+	Created             int64  `json:"created,omitempty"`
+	ContextWindowTokens int64  `json:"context_window_tokens,omitempty"`
+	MaxInputTokens      int64  `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens     int64  `json:"max_output_tokens,omitempty"`
 }
 
 // DefaultModel 返回 provider 对应的默认文本模型。
@@ -42,7 +46,6 @@ func DefaultModel(provider Provider) string {
 func ModelPresets(provider Provider) []ModelInfo {
 	switch provider {
 	case ProviderOpenAICompatible:
-		// 无通用预设，模型列表必须从后端实时拉取。
 		return nil
 	case ProviderGemini:
 		return []ModelInfo{
@@ -98,8 +101,9 @@ func listOpenAICompatibleModels(ctx context.Context, cfg ProviderConfig, httpCli
 	if !isModelListFallbackError(err) {
 		return nil, err
 	}
-	// 部分网关使用单数 /model，标准 OpenAI 兼容接口使用复数 /models。
-	// Base URL 路径完全由用户配置，这里不会猜测或自动追加 /v1。
+	// Some gateways use /model while the standard endpoint is /models. A
+	// malformed success response is also a useful signal to try the standard
+	// endpoint because reverse proxies often return an HTML page for /model.
 	return requestOpenAICompatibleModels(ctx, httpClient, baseURL, "models", cfg.APIKey, cfg.UserAgentWithDefault(), cfg.NormalizedHeaders())
 }
 
@@ -296,11 +300,25 @@ func modelInfoFromPayload(payload any) ModelInfo {
 		return ModelInfo{ID: value}
 	case map[string]any:
 		model := ModelInfo{
-			ID:      stringField(value, "id", "model", "name"),
-			Name:    stringField(value, "name"),
-			Object:  stringField(value, "object"),
-			OwnedBy: stringField(value, "owned_by", "ownedBy", "owner"),
-			Created: int64Field(value, "created", "created_at"),
+			ID:                  stringField(value, "id", "model", "name"),
+			Name:                stringField(value, "name"),
+			Object:              stringField(value, "object"),
+			OwnedBy:             stringField(value, "owned_by", "ownedBy", "owner"),
+			Created:             int64Field(value, "created", "created_at"),
+			ContextWindowTokens: int64Field(value, "context_window_tokens", "context_window", "context_length", "max_context_length"),
+			MaxInputTokens:      int64Field(value, "max_input_tokens", "input_token_limit"),
+			MaxOutputTokens:     int64Field(value, "max_output_tokens", "output_token_limit"),
+		}
+		if limit := nestedObject(value, "limit", "limits"); limit != nil {
+			if model.ContextWindowTokens == 0 {
+				model.ContextWindowTokens = int64Field(limit, "context", "context_window", "context_window_tokens")
+			}
+			if model.MaxInputTokens == 0 {
+				model.MaxInputTokens = int64Field(limit, "input", "max_input_tokens")
+			}
+			if model.MaxOutputTokens == 0 {
+				model.MaxOutputTokens = int64Field(limit, "output", "max_output_tokens")
+			}
 		}
 		if model.ID == model.Name {
 			model.Name = ""
@@ -309,6 +327,15 @@ func modelInfoFromPayload(payload any) ModelInfo {
 	default:
 		return ModelInfo{}
 	}
+}
+
+func nestedObject(values map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		if value, ok := values[key].(map[string]any); ok {
+			return value
+		}
+	}
+	return nil
 }
 
 // stringField 从 map 中按候选 key 读取字符串字段。
