@@ -117,6 +117,30 @@ func TestRuntimeDirectTriggersBypassPassiveRouter(t *testing.T) {
 			},
 			text: "帮我看看",
 		},
+		{
+			name: "reply plus explicit mention",
+			event: MessageEvent{
+				Kind:       EventKindGroup,
+				GroupID:    "123456",
+				UserID:     "10001",
+				SelfID:     "42",
+				MessageID:  "reply-mention-1",
+				ToMe:       true,
+				RawMessage: "[CQ:reply,id=bot-message][CQ:at,qq=42] 帮我重新看看",
+				Segments: []MessageSegment{
+					{Type: "reply", Data: map[string]string{"id": "bot-message"}},
+					{Type: "at", Data: map[string]string{"qq": "42"}},
+					{Type: "text", Data: map[string]string{"text": " 帮我重新看看"}},
+				},
+				Quoted: &QuotedMessage{
+					MessageID:  "bot-message",
+					UserID:     "42",
+					RawMessage: "之前的回答",
+					Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "之前的回答"}}},
+				},
+			},
+			text: "帮我重新看看",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
