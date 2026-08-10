@@ -42,10 +42,13 @@ type Config struct {
 	ReadFileMaxBytes      int
 	ListDirectoryLimit    int
 	SkillRoots            []string
+	ManagedSkillRoot      string
 	SkillsListBudget      int
 	MCPConfigPath         string
 	MCPStartupTimeoutMS   int
 	MCPToolTimeoutMS      int
+	ExtensionManagement   bool
+	BuiltinExtensions     []BuiltinExtension
 	CommandAllowlist      []string
 	CommandTimeoutMS      int
 	BrowserCDPURL         string
@@ -187,14 +190,22 @@ func (cfg Config) WithDefaults() Config {
 		cfg.BrowserCDPURL = "http://127.0.0.1:9222"
 	}
 	cfg.SkillRoots = defaultSkillRoots(cfg.WorkDir, cfg.SkillRoots)
-	if strings.TrimSpace(cfg.MCPConfigPath) == "" {
-		cfg.MCPConfigPath = defaultMCPConfigPath(cfg.WorkDir)
+	workDir, err := filepath.Abs(cfg.WorkDir)
+	if err != nil {
+		workDir = cfg.WorkDir
 	}
+	if strings.TrimSpace(cfg.ManagedSkillRoot) == "" {
+		cfg.ManagedSkillRoot = filepath.Join(workDir, ".agents", "skills")
+	}
+	if !filepath.IsAbs(cfg.ManagedSkillRoot) {
+		cfg.ManagedSkillRoot = filepath.Join(workDir, cfg.ManagedSkillRoot)
+	}
+	cfg.ManagedSkillRoot = filepath.Clean(cfg.ManagedSkillRoot)
+	if strings.TrimSpace(cfg.MCPConfigPath) == "" {
+		cfg.MCPConfigPath = filepath.Join(workDir, ".mcp.json")
+	}
+	cfg.BuiltinExtensions = normalizeBuiltinExtensions(cfg.BuiltinExtensions)
 	return cfg
-}
-
-func defaultMCPConfigPath(workDir string) string {
-	return filepath.Join(workDir, ".mcp.json")
 }
 
 func cleanStringList(values []string) []string {

@@ -20,14 +20,16 @@ type agentReplyScope struct {
 
 func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, extraTools ...agent.Tool) (*agent.ToolRegistry, error) {
 	agentCfg := agent.Config{
-		WorkDir:          cfg.AgentWorkDir,
-		MaxSteps:         cfg.AgentMaxSteps,
-		SkillRoots:       cfg.AgentSkillRoots,
-		MCPConfigPath:    cfg.AgentMCPConfigPath,
-		CommandAllowlist: cfg.AgentCommandAllowlist,
-		CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
-		BrowserCDPURL:    cfg.AgentBrowserCDPURL,
-		BrowserTimeoutMS: cfg.AgentBrowserTimeoutMS,
+		WorkDir:             cfg.AgentWorkDir,
+		MaxSteps:            cfg.AgentMaxSteps,
+		SkillRoots:          cfg.AgentSkillRoots,
+		MCPConfigPath:       cfg.AgentMCPConfigPath,
+		ExtensionManagement: relationship.Owner,
+		BuiltinExtensions:   r.agentBuiltinExtensions(event),
+		CommandAllowlist:    cfg.AgentCommandAllowlist,
+		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
+		BrowserCDPURL:       cfg.AgentBrowserCDPURL,
+		BrowserTimeoutMS:    cfg.AgentBrowserTimeoutMS,
 	}
 	var registry *agent.ToolRegistry
 	var err error
@@ -47,6 +49,29 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	}
 	registry.Retain(relationship.allowedAgentToolNames())
 	return registry, nil
+}
+
+func (r *Runtime) agentBuiltinExtensions(event MessageEvent) []agent.BuiltinExtension {
+	if r == nil || r.plugins == nil {
+		return nil
+	}
+	overrides := r.pluginOverridesForEvent(event)
+	states := r.plugins.List()
+	extensions := make([]agent.BuiltinExtension, 0, len(states))
+	for _, state := range states {
+		extensions = append(extensions, agent.BuiltinExtension{
+			ID:          state.Manifest.ID,
+			Name:        state.Manifest.Name,
+			Version:     state.Manifest.Version,
+			Description: state.Manifest.Description,
+			Official:    state.Manifest.Official,
+			BuiltIn:     state.Manifest.BuiltIn,
+			Installed:   state.Installed,
+			Enabled:     r.plugins.EnabledWithOverrides(state.Manifest.ID, overrides),
+			Permissions: append([]string(nil), state.Manifest.Permissions...),
+		})
+	}
+	return extensions
 }
 
 func (scope agentReplyScope) toolSet() map[string]bool {
