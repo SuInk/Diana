@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -259,8 +260,16 @@ func TestMemoryJobQueueIsDurableAndDeduplicated(t *testing.T) {
 	if err != nil || !ok || job.Attempts != 2 {
 		t.Fatalf("recovered claim job=%#v ok=%v err=%v", job, ok, err)
 	}
-	if err := store.RetryMemoryJob(ctx, id, "worker-new", time.Now().Add(time.Hour), "temporary"); err != nil {
+	lastError := strings.Repeat("temporary-error-", 80) + "tail-marker"
+	if err := store.RetryMemoryJob(ctx, id, "worker-new", time.Now().Add(time.Hour), lastError); err != nil {
 		t.Fatal(err)
+	}
+	var storedError string
+	if err := store.db.QueryRowContext(ctx, `SELECT last_error FROM memory_jobs WHERE id = ?`, id).Scan(&storedError); err != nil {
+		t.Fatal(err)
+	}
+	if storedError != lastError {
+		t.Fatalf("stored error length = %d, want %d", len(storedError), len(lastError))
 	}
 	if _, ok, err := store.ClaimNextMemoryJob(ctx, "worker-new", time.Now().Add(time.Minute)); err != nil || ok {
 		t.Fatalf("future retry was claimable ok=%v err=%v", ok, err)

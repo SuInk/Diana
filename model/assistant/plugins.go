@@ -170,7 +170,10 @@ type PluginManager struct {
 	states  map[string]PluginState
 }
 
-var ErrPluginNotFound = errors.New("qqbot: plugin not found")
+var (
+	ErrPluginNotFound      = errors.New("qqbot: plugin not found")
+	ErrBuiltInPluginAction = errors.New("qqbot: built-in plugins do not support install or uninstall")
+)
 
 const (
 	resolverPluginID         = "official.nonebot-plugin-resolver-go"
@@ -334,6 +337,9 @@ func (m *PluginManager) Install(id string) (PluginState, error) {
 	}
 	state := m.states[id]
 	state.Manifest = plugin.Manifest()
+	if state.Manifest.BuiltIn {
+		return state, ErrBuiltInPluginAction
+	}
 	state.Installed = true
 	state.Enabled = true
 	m.states[id] = state
@@ -350,6 +356,9 @@ func (m *PluginManager) Uninstall(id string) (PluginState, error) {
 	}
 	state := m.states[id]
 	state.Manifest = plugin.Manifest()
+	if state.Manifest.BuiltIn {
+		return state, ErrBuiltInPluginAction
+	}
 	state.Installed = false
 	state.Enabled = false
 	m.states[id] = state

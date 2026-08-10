@@ -408,9 +408,14 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 	args := stringSliceFromInput(input, "args")
 	cmd := exec.CommandContext(runCtx, command, args...)
 	cmd.Dir = cwd
-	buffer := &limitedBuffer{limit: t.maxBytes}
-	cmd.Stdout = buffer
-	cmd.Stderr = buffer
+	commandOutput, err := os.CreateTemp("", "diana-agent-command-*")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(commandOutput.Name()) }()
+	defer func() { _ = commandOutput.Close() }()
+	cmd.Stdout = commandOutput
+	cmd.Stderr = commandOutput
 	start := time.Now()
 	err = cmd.Run()
 	duration := time.Since(start)
@@ -426,6 +431,10 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 			return "", err
 		}
 	}
+	output, truncated, readErr := readCommandOutput(commandOutput, t.maxBytes, exitCode != 0)
+	if readErr != nil {
+		return "", readErr
+	}
 	body, err := json.MarshalIndent(map[string]any{
 		"command":     command,
 		"args":        args,
@@ -433,13 +442,38 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 		"exit_code":   exitCode,
 		"timed_out":   runCtx.Err() == context.DeadlineExceeded,
 		"duration_ms": duration.Milliseconds(),
-		"truncated":   buffer.truncated,
-		"output":      buffer.String(),
+		"truncated":   truncated,
+		"output":      output,
 	}, "", "  ")
 	if err != nil {
 		return "", err
 	}
+	if exitCode != 0 {
+		return "", errors.New(string(body))
+	}
 	return string(body), nil
+}
+
+func readCommandOutput(file *os.File, maxBytes int, complete bool) (string, bool, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", false, err
+	}
+	if complete {
+		data, err := io.ReadAll(file)
+		return string(data), false, err
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxToolOutputChars
+	}
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
+	if err != nil {
+		return "", false, err
+	}
+	truncated := len(data) > maxBytes
+	if truncated {
+		data = data[:maxBytes]
+	}
+	return string(data), truncated, nil
 }
 
 func (t *RunCommandTool) commandAllowed(command string) bool {
@@ -458,34 +492,6 @@ func commandAllowlistSet(values []string) map[string]bool {
 		}
 	}
 	return out
-}
-
-type limitedBuffer struct {
-	builder   strings.Builder
-	limit     int
-	truncated bool
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	written := len(p)
-	if b.limit <= 0 {
-		b.limit = DefaultMaxToolOutputChars
-	}
-	remaining := b.limit - b.builder.Len()
-	if remaining <= 0 {
-		b.truncated = true
-		return written, nil
-	}
-	if len(p) > remaining {
-		b.truncated = true
-		p = p[:remaining]
-	}
-	_, _ = b.builder.Write(p)
-	return written, nil
-}
-
-func (b *limitedBuffer) String() string {
-	return b.builder.String()
 }
 
 // Name 返回读文件工具名称。

@@ -71,55 +71,64 @@
             />
             <span class="hint">Key 只保存在本机 SQLite，不会上传到其他服务。</span>
           </div>
-          <div class="field wide">
-            <label for="wizard-model">模型</label>
-            <div class="input-group model-picker-anchor">
-              <input
-                id="wizard-model"
-                v-model="llmForm.model"
-                class="input"
-                placeholder="留空将自动获取模型列表"
-                autocomplete="off"
-                @focus="openModelPicker"
-                @input="openModelPicker"
-                @keydown.esc.stop="modelPickerOpen = false"
-              />
+          <div class="field wide model-config-field">
+            <div class="model-sync-row">
+              <div class="model-sync-copy">
+                <span class="model-sync-title">模型列表</span>
+                <span v-if="modelOptions.length > 0" class="hint">已同步 {{ modelOptions.length }} 个可用模型。</span>
+                <span v-else class="hint">填写 API Key 后，从服务同步可用模型。</span>
+              </div>
               <button class="btn" type="button" :disabled="modelsLoading" @click="loadModels(false)">
                 <RefreshCw :size="14" aria-hidden="true" />
-                {{ modelsLoading ? "获取中…" : modelOptions.length > 0 ? "刷新列表" : "获取模型列表" }}
+                {{ modelsLoading ? "同步中…" : "同步模型列表" }}
               </button>
-              <div v-if="modelPickerOpen && modelOptions.length > 0" class="model-picker">
-                <div class="model-picker-meta">
-                  <span>
-                    共 {{ modelOptions.length }} 个模型<template v-if="llmForm.model.trim() && filteredModels.length < modelOptions.length"
-                      >，匹配 {{ filteredModels.length }} 个</template
-                    >
-                  </span>
-                  <button class="btn ghost small" type="button" @click="modelPickerOpen = false">收起</button>
-                </div>
-                <p v-if="llmForm.model.trim() && filteredModels.length === 0" class="model-picker-empty">
-                  没有包含「{{ llmForm.model.trim() }}」的模型，已显示全部
-                </p>
-                <ul class="model-picker-list">
-                  <li v-for="model in displayModels" :key="model.id">
-                    <button
-                      type="button"
-                      class="model-picker-item"
-                      :class="{ active: model.id === llmForm.model }"
-                      @mousedown.prevent="pickModel(model.id)"
-                    >
-                      {{ model.id }}
-                    </button>
-                  </li>
-                </ul>
-              </div>
             </div>
-            <span v-if="modelOptions.length > 0" class="hint">共 {{ modelOptions.length }} 个可用模型；输入可筛选，点击即可选用。</span>
-            <span v-else class="hint">填写 API Key 后会自动获取；不选择则保存时自动采用列表第一项。</span>
             <details v-if="modelsError" class="request-error" open>
               <summary>模型列表获取失败，查看完整错误</summary>
               <pre>{{ modelsError }}</pre>
             </details>
+            <div class="model-default-field">
+              <label for="wizard-model">默认模型</label>
+              <div class="model-picker-anchor">
+                <input
+                  id="wizard-model"
+                  v-model="llmForm.model"
+                  class="input"
+                  placeholder="填写默认模型 ID，或从已同步列表中选择"
+                  autocomplete="off"
+                  @focus="openModelPicker"
+                  @input="openModelPicker"
+                  @keydown.esc.stop="modelPickerOpen = false"
+                />
+                <div v-if="modelPickerOpen && modelOptions.length > 0" class="model-picker">
+                  <div class="model-picker-meta">
+                    <span>
+                      共 {{ modelOptions.length }} 个模型<template v-if="llmForm.model.trim() && filteredModels.length < modelOptions.length"
+                        >，匹配 {{ filteredModels.length }} 个</template
+                      >
+                    </span>
+                    <button class="btn ghost small" type="button" @click="modelPickerOpen = false">收起</button>
+                  </div>
+                  <p v-if="llmForm.model.trim() && filteredModels.length === 0" class="model-picker-empty">
+                    没有包含「{{ llmForm.model.trim() }}」的模型，已显示全部
+                  </p>
+                  <ul class="model-picker-list">
+                    <li v-for="model in displayModels" :key="model.id">
+                      <button
+                        type="button"
+                        class="model-picker-item"
+                        :class="{ active: model.id === llmForm.model }"
+                        @mousedown.prevent="pickModel(model.id)"
+                      >
+                        {{ model.id }}
+                      </button>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+              <span v-if="modelOptions.length > 0" class="hint">输入可筛选同步结果；留空保存时采用列表第一项。</span>
+              <span v-else class="hint">也可以直接填写服务支持的模型 ID。</span>
+            </div>
           </div>
           <div class="field wide">
             <label for="wizard-test-message">测试内容</label>

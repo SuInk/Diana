@@ -129,7 +129,9 @@ func TestMigrateRestoredWebSearchPluginState(t *testing.T) {
 		"official.file-parser-go": {Installed: true, Enabled: true},
 	}
 	catalog := assistant.PluginState{
-		Manifest: assistant.PluginManifest{ID: webSearchPluginID, Name: "联网搜索"},
+		Manifest:  assistant.PluginManifest{ID: webSearchPluginID, Name: "联网搜索", BuiltIn: true},
+		Installed: true,
+		Enabled:   true,
 	}
 	if !migrateRestoredWebSearchPluginState(states, catalog) {
 		t.Fatal("expected legacy installation to gain the restored search plugin")
@@ -139,10 +141,33 @@ func TestMigrateRestoredWebSearchPluginState(t *testing.T) {
 		t.Fatalf("migrated state = %#v", got)
 	}
 
-	got.Enabled = false
-	states[webSearchPluginID] = got
+	states[webSearchPluginID] = assistant.PluginState{
+		Manifest: assistant.PluginManifest{ID: webSearchPluginID, BuiltIn: false},
+		Settings: map[string]any{"max_results": float64(7)},
+	}
+	if !migrateRestoredWebSearchPluginState(states, catalog) {
+		t.Fatal("expected old uninstalled search state to be upgraded")
+	}
+	got = states[webSearchPluginID]
+	if !got.Installed || !got.Enabled || !got.Manifest.BuiltIn || got.Settings["max_results"] != float64(7) {
+		t.Fatalf("upgraded uninstalled state = %#v", got)
+	}
+
+	states[webSearchPluginID] = assistant.PluginState{
+		Manifest:  assistant.PluginManifest{ID: webSearchPluginID, BuiltIn: false},
+		Installed: true,
+		Enabled:   false,
+	}
+	if !migrateRestoredWebSearchPluginState(states, catalog) {
+		t.Fatal("expected old installed search state to gain built-in manifest")
+	}
+	got = states[webSearchPluginID]
+	if !got.Installed || got.Enabled || !got.Manifest.BuiltIn {
+		t.Fatalf("upgraded disabled state = %#v", got)
+	}
+
 	if migrateRestoredWebSearchPluginState(states, catalog) {
-		t.Fatal("explicit search plugin state must be preserved")
+		t.Fatal("current built-in search state must be preserved")
 	}
 	if states[webSearchPluginID].Enabled {
 		t.Fatal("explicitly disabled search plugin was re-enabled")

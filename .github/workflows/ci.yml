@@ -156,7 +156,8 @@ jobs:
             'Run ./run.sh on Linux/macOS or run.bat on Windows.' \
             'Default WebUI port: 18080' \
             'Set DIANA_ADMIN_PASSWORD before first start to choose the administrator password.' \
-            'The frontend is included under frontend-next/dist.' > "${package_dir}/README.txt"
+            'The frontend is included under frontend-next/dist.' \
+            'Future stable Releases can be installed from the WebUI with SHA-256 verification, backup, restart, and health-check rollback.' > "${package_dir}/README.txt"
 
           if [[ "${{ matrix.goos }}" == "windows" ]]; then
             printf '%s\n' \

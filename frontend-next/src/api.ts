@@ -34,12 +34,20 @@ export interface GenerateResponse {
   };
 }
 
+export interface ImageGenerateResponse {
+  provider: Provider;
+  model?: string;
+  images: string[];
+}
+
 export interface LLMModelInfo {
   id: string;
   name?: string;
   object?: string;
   owned_by?: string;
   created?: number;
+  input_modalities?: string[];
+  output_modalities?: string[];
 }
 
 export interface LLMModelsResponse {
@@ -53,6 +61,8 @@ export interface QQBotConfig {
   avatar_url?: string;
   active_profile_id?: string;
   profiles?: QQBotConfig[];
+  /** 默认开启；关闭后不同平台可复用相同会话键中的上下文。 */
+  isolate_platform_contexts?: boolean;
   enabled: boolean;
   onebot_reverse_ws_endpoint: string;
   onebot_access_token?: string;
@@ -89,6 +99,8 @@ export interface QQBotConfig {
   send_chunk_interval_ms?: number;
   /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
   model_roles?: Record<string, { profile_id?: string; group?: string; model: string }>;
+  /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
+  bot_reply_loop_detection_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
   prompt_inject_time?: boolean;
   prompt_inject_plaintext_rules?: boolean;
@@ -190,6 +202,15 @@ export interface QQBotGroupConfig {
   updated_at?: string;
 }
 
+export interface QQBotGroupSummary extends QQBotGroupConfig {
+  group_name?: string;
+  avatar_url?: string;
+  member_count?: number;
+  max_member_count?: number;
+  configured: boolean;
+  joined: boolean;
+}
+
 /** 群准入模式：blacklist 为默认（除禁用群外都工作），whitelist 只在指定群工作。 */
 export type GroupAdmissionMode = "blacklist" | "whitelist";
 
@@ -254,6 +275,10 @@ export interface UpdateResult {
   fetched: boolean;
   updated: boolean;
   forced?: boolean;
+  applied?: boolean;
+  restart_required?: boolean;
+  previous_commit?: string;
+  target_commit?: string;
   output?: string;
   at: string;
 }
@@ -278,16 +303,40 @@ export interface AppLogsResponse {
   logs: AppLogEntry[];
 }
 
+export interface QQBotEvent {
+  at: string;
+  kind: string;
+  platform?: string;
+  profile_id?: string;
+  user_id?: string;
+  group_id?: string;
+  message_id?: string;
+  text?: string;
+  reply?: string;
+  error?: string;
+  handled: boolean;
+  outcome?: string;
+  decision?: "replied" | "not_replied" | "pending" | "error" | string;
+  reason?: string;
+  duration_ms?: number;
+}
+
+export interface QQBotChannelStatus {
+  profile_id?: string;
+  platform?: string;
+  name?: string;
+  connected: boolean;
+  endpoint: string;
+  self_id?: string;
+  last_error?: string;
+  updated_at: string;
+}
+
 export interface QQBotStatus {
   running: boolean;
   config: QQBotConfig;
-  channel: {
-    connected: boolean;
-    endpoint: string;
-    self_id?: string;
-    last_error?: string;
-    updated_at: string;
-  };
+  channel: QQBotChannelStatus;
+  channels?: QQBotChannelStatus[];
   nonebot_bridge: {
     enabled: boolean;
     connected: boolean;
@@ -296,17 +345,7 @@ export interface QQBotStatus {
     updated_at: string;
   };
   plugins: PluginState[];
-  recent_events?: Array<{
-    at: string;
-    kind: string;
-    user_id?: string;
-    group_id?: string;
-    text?: string;
-    reply?: string;
-    error?: string;
-    handled: boolean;
-    duration_ms?: number;
-  }>;
+  recent_events?: QQBotEvent[];
   active_workers: number;
   last_error?: string;
   updated_at: string;
@@ -384,8 +423,31 @@ export function changeCredentials(currentPassword: string, newUsername: string, 
   });
 }
 
-export function getOwnerLoginStatus(): Promise<{ available: boolean }> {
-  return requestJSON<{ available: boolean }>("/api/auth/owner/status");
+export interface OwnerLoginStatus {
+  available: boolean;
+  code_delivery_available: boolean;
+}
+
+export function getOwnerLoginStatus(): Promise<OwnerLoginStatus> {
+  return requestJSON<OwnerLoginStatus>("/api/auth/owner/status");
+}
+
+export interface OwnerLoginChallenge {
+  ok: boolean;
+  challenge_token: string;
+  expires_in_seconds: number;
+  cooldown_seconds: number;
+}
+
+export function requestOwnerLoginCode(): Promise<OwnerLoginChallenge> {
+  return requestJSON<OwnerLoginChallenge>("/api/auth/owner/challenge", { method: "POST" });
+}
+
+export function verifyOwnerLoginCode(challengeToken: string, code: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>("/api/auth/owner/verify", {
+    method: "POST",
+    body: JSON.stringify({ challenge_token: challengeToken, code })
+  });
 }
 
 export interface OwnerLoginPairing {
@@ -470,6 +532,13 @@ export function testLLM(message: string, config?: LLMConfig): Promise<GenerateRe
   });
 }
 
+export function testLLMImage(prompt: string, config?: LLMConfig): Promise<ImageGenerateResponse> {
+  return requestJSON<ImageGenerateResponse>("/api/llm/test", {
+    method: "POST",
+    body: JSON.stringify({ ...(config || {}), message: prompt, mode: "image" })
+  });
+}
+
 export function listLLMModels(config: LLMConfig): Promise<LLMModelsResponse> {
   return requestJSON<LLMModelsResponse>("/api/llm/models", {
     method: "POST",
@@ -510,6 +579,13 @@ export function deleteQQBotProfile(id: string): Promise<QQBotConfig> {
   return requestJSON<QQBotConfig>("/api/assistant/config/delete", {
     method: "POST",
     body: JSON.stringify({ id })
+  });
+}
+
+export function setQQBotContextIsolation(enabled: boolean): Promise<QQBotConfig> {
+  return requestJSON<QQBotConfig>("/api/assistant/config/context-isolation", {
+    method: "POST",
+    body: JSON.stringify({ enabled })
   });
 }
 
@@ -626,6 +702,7 @@ export interface SystemVersion {
   version_label: string;
   git_available: boolean;
   deployment_mode: "git" | "release";
+  update_supported: boolean;
   head_commit?: string;
   head_subject?: string;
   branch?: string;
@@ -666,8 +743,10 @@ export interface RollbackResponse {
 }
 
 export interface ConsoleGroupsResponse {
-  groups: QQBotGroupConfig[];
+  groups: QQBotGroupSummary[];
   plugins: PluginState[];
+  live_available: boolean;
+  warning?: string;
 }
 
 export function listQQBotGroups(): Promise<ConsoleGroupsResponse> {
@@ -710,6 +789,7 @@ export interface UpdateCheckResponse {
   current_version: string;
   latest_version?: string;
   update_available: boolean;
+  update_supported: boolean;
   integrity_mode: "git-object-hash" | "sha256";
   checksum_available: boolean;
   checksum_url?: string;
@@ -787,6 +867,77 @@ export interface HealthResponse {
 
 export function getStats(): Promise<StatsSnapshot> {
   return requestJSON<StatsSnapshot>("/api/stats");
+}
+
+export type AssistantEventRange = "1h" | "24h" | "7d" | "30d" | "all";
+
+export interface AssistantEventDetail extends QQBotEvent {
+  id: string;
+  sender_name?: string;
+  status: string;
+  outcome?: string;
+  llm_calls?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  decision: "replied" | "not_replied" | "pending" | "error" | string;
+  reason: string;
+}
+
+export interface AssistantEventsResponse {
+  range: AssistantEventRange;
+  since?: string;
+  events: AssistantEventDetail[];
+  total: number;
+  replied: number;
+  not_replied: number;
+  pending: number;
+  errors: number;
+  llm_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  page: number;
+  limit: number;
+  has_more: boolean;
+}
+
+export function getAssistantEvents(range: AssistantEventRange, page = 1, limit = 50): Promise<AssistantEventsResponse> {
+  const params = new URLSearchParams({ range, page: String(page), limit: String(limit) });
+  return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
+}
+
+export type AssistantTaskKind = "reminder" | "schedule";
+export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
+
+export interface AssistantTask {
+  id: string;
+  kind: AssistantTaskKind;
+  platform?: string;
+  profile_id?: string;
+  owner_id: string;
+  group_id?: string;
+  user_id?: string;
+  message: string;
+  status: AssistantTaskStatus;
+  trigger_at: string;
+  interval_seconds?: number;
+  last_run_at?: string;
+  cancelled_at?: string;
+  last_error?: string;
+  consecutive_failures?: number;
+  pending_delivery?: boolean;
+  pending_since?: string;
+  created_at: string;
+  consumes_quota: boolean;
+}
+
+export interface AssistantTasksResponse {
+  items: AssistantTask[];
+}
+
+export function getAssistantTasks(): Promise<AssistantTasksResponse> {
+  return requestJSON<AssistantTasksResponse>("/api/assistant/tasks");
 }
 
 export function getHealth(): Promise<HealthResponse> {

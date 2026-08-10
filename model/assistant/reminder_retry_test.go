@@ -206,3 +206,22 @@ func TestDurableReminderRetryDelayUsesSeparateQueryAndDeliveryBackoff(t *testing
 		t.Fatalf("maximum delay = %s", capped)
 	}
 }
+
+func TestReminderRetriesPreserveCompleteErrors(t *testing.T) {
+	longError := strings.Repeat("reminder-error-", 80) + "tail-marker"
+	now := time.Now()
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "query", Kind: ReminderKindQuery, TriggerAt: now, IntervalSeconds: 3600},
+		{ID: "message", Kind: ReminderKindMessage, TriggerAt: now},
+	}}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, store, nil, nil)
+	if _, err := runtime.finishScheduledQuery("query", now, errors.New(longError)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.rescheduleOneTimeReminder("message", errors.New(longError)); err != nil {
+		t.Fatal(err)
+	}
+	if store.items[0].LastError != longError || store.items[1].LastError != longError {
+		t.Fatalf("errors were truncated: query=%d message=%d want=%d", len(store.items[0].LastError), len(store.items[1].LastError), len(longError))
+	}
+}

@@ -96,11 +96,25 @@
         <p class="muted" style="margin: 0; font-size: 12.5px">
           {{ providerLabel(testTarget.provider) }} · {{ testTarget.model }} · {{ groupLabel(groupOf(testTarget)) }}
         </p>
-        <textarea v-model="testMessage" class="textarea" rows="3" placeholder="输入一句话测试连通…"></textarea>
+        <textarea
+          v-model="testMessage"
+          class="textarea"
+          rows="3"
+          :placeholder="isImageTest ? '描述要生成的测试图片…' : '输入一句话测试连通…'"
+        ></textarea>
         <button class="btn primary" type="button" :disabled="busy || !testMessage.trim()" @click="runTest">
-          <Send :size="15" aria-hidden="true" />
-          {{ busy ? "请求中…" : "发送测试" }}
+          <ImageIcon v-if="isImageTest" :size="15" aria-hidden="true" />
+          <Send v-else :size="15" aria-hidden="true" />
+          {{ busy ? (isImageTest ? "生成中…" : "请求中…") : (isImageTest ? "生成测试图片" : "发送测试") }}
         </button>
+        <div v-if="testImages.length > 0" class="llm-test-images" aria-live="polite">
+          <img
+            v-for="(image, index) in testImages"
+            :key="`${index}-${image.slice(0, 48)}`"
+            :src="image"
+            :alt="`生图测试结果 ${index + 1}`"
+          />
+        </div>
         <div v-if="testReply" class="event-reply" style="margin: 0">{{ testReply }}</div>
         <p v-if="testUsage" class="muted" style="font-size: 12px; margin: 0">{{ testUsage }}</p>
       </div>
@@ -161,54 +175,18 @@
             </button>
           </div>
         </div>
-        <div class="field wide">
-          <label for="llm-model">默认模型（可选）</label>
-          <div ref="modelFieldRef" class="input-group model-picker-anchor">
-            <input
-              id="llm-model"
-              v-model="form.model"
-              class="input"
-              placeholder="留空将自动获取模型列表"
-              autocomplete="off"
-              @focus="openModelPicker"
-              @input="openModelPicker"
-              @keydown="onModelKeydown"
-            />
+        <div class="field wide model-config-field">
+          <div class="model-sync-row">
+            <div class="model-sync-copy">
+              <span class="model-sync-title">模型列表</span>
+              <span v-if="modelOptions.length > 0" class="hint">当前有 {{ modelOptions.length }} 个可用模型，可同步刷新或手动补充。</span>
+              <span v-else class="hint">从服务同步模型列表，也可手动添加中转或自建模型 ID。</span>
+            </div>
             <button class="btn" type="button" :disabled="modelsLoading" @click="loadModels(false)">
               <RefreshCw :size="14" aria-hidden="true" />
-              {{ modelsLoading ? "获取中…" : modelOptions.length > 0 ? "刷新列表" : "获取模型列表" }}
+              {{ modelsLoading ? "同步中…" : "同步模型列表" }}
             </button>
-            <div v-if="modelPickerOpen && modelOptions.length > 0" class="model-picker">
-              <div class="model-picker-meta">
-                <span>
-                  共 {{ modelOptions.length }} 个模型<template v-if="form.model.trim() && filteredModels.length < modelOptions.length"
-                    >，匹配 {{ filteredModels.length }} 个</template
-                  >
-                </span>
-                <button class="btn ghost small" type="button" @click="modelPickerOpen = false">收起</button>
-              </div>
-              <p v-if="form.model.trim() && filteredModels.length === 0" class="model-picker-empty">
-                没有包含「{{ form.model.trim() }}」的模型，已显示全部
-              </p>
-              <ul class="model-picker-list">
-                <li v-for="model in displayModels" :key="model.id">
-                  <button
-                    type="button"
-                    class="model-picker-item"
-                    :class="{ active: model.id === form.model }"
-                    @mousedown.prevent="pickModel(model.id)"
-                  >
-                    {{ model.id }}
-                  </button>
-                </li>
-              </ul>
-            </div>
           </div>
-          <span v-if="modelOptions.length > 0" class="hint">
-            已保存 {{ modelOptions.length }} 个可用模型；这里仅选择默认项，机器人页可为不同用途选择同一 Provider 下的其他模型。
-          </span>
-          <span v-else class="hint">填写 API Key 后获取完整模型列表；不选择默认项时保存会采用列表第一项。</span>
-
           <!-- 中转和自建 endpoint 常常不实现 /models，拉不到时得能手填，
                否则机器人页的「模型分配」只有默认模型一个可选。 -->
           <div class="model-manual">
@@ -238,6 +216,50 @@
             <summary>模型列表获取失败，查看完整错误</summary>
             <pre>{{ modelsError }}</pre>
           </details>
+          <div class="model-default-field">
+            <label for="llm-model">默认模型（可选）</label>
+            <div ref="modelFieldRef" class="model-picker-anchor">
+              <input
+                id="llm-model"
+                v-model="form.model"
+                class="input"
+                placeholder="填写默认模型 ID，或从已同步列表中选择"
+                autocomplete="off"
+                @focus="openModelPicker"
+                @input="openModelPicker"
+                @keydown="onModelKeydown"
+              />
+              <div v-if="modelPickerOpen && modelOptions.length > 0" class="model-picker">
+                <div class="model-picker-meta">
+                  <span>
+                    共 {{ modelOptions.length }} 个模型<template v-if="form.model.trim() && filteredModels.length < modelOptions.length"
+                      >，匹配 {{ filteredModels.length }} 个</template
+                    >
+                  </span>
+                  <button class="btn ghost small" type="button" @click="modelPickerOpen = false">收起</button>
+                </div>
+                <p v-if="form.model.trim() && filteredModels.length === 0" class="model-picker-empty">
+                  没有包含「{{ form.model.trim() }}」的模型，已显示全部
+                </p>
+                <ul class="model-picker-list">
+                  <li v-for="model in displayModels" :key="model.id">
+                    <button
+                      type="button"
+                      class="model-picker-item"
+                      :class="{ active: model.id === form.model }"
+                      @mousedown.prevent="pickModel(model.id)"
+                    >
+                      {{ model.id }}
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <span v-if="modelOptions.length > 0" class="hint">
+              输入可筛选同步结果；留空保存时采用列表第一项，机器人页仍可为不同用途选择其他模型。
+            </span>
+            <span v-else class="hint">可直接填写模型 ID；留空时会先尝试同步模型列表。</span>
+          </div>
         </div>
         <div class="field">
           <label for="llm-temp">Temperature（可选）</label>
@@ -246,10 +268,6 @@
         <div class="field">
           <label for="llm-maxtokens">最大输出 Token</label>
           <input id="llm-maxtokens" v-model="form.max_output_tokens" class="input" inputmode="numeric" placeholder="1024" />
-        </div>
-        <div class="field">
-          <label for="llm-timeout">超时（毫秒）</label>
-          <input id="llm-timeout" v-model="form.timeout_ms" class="input" inputmode="numeric" placeholder="30000" />
         </div>
         <div v-if="form.provider === 'openai_compatible'" class="field">
           <label for="llm-ua">User-Agent（可选）</label>
@@ -273,7 +291,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
+import { ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
 import {
   cloneConfigProfile,
   deleteConfigProfile,
@@ -284,6 +302,7 @@ import {
   listLLMModels,
   saveConfig,
   testLLM,
+  testLLMImage,
   type LLMConfig,
   type LLMModelInfo,
   type Provider
@@ -307,7 +326,6 @@ interface LLMFormState {
   description: string;
   temperature: string;
   max_output_tokens: string;
-  timeout_ms: string;
 }
 
 const emptyForm: LLMFormState = {
@@ -321,8 +339,7 @@ const emptyForm: LLMFormState = {
   user_agent: "",
   description: "",
   temperature: "",
-  max_output_tokens: "",
-  timeout_ms: ""
+  max_output_tokens: ""
 };
 
 const profileSet = ref<LLMConfig | null>(null);
@@ -364,6 +381,8 @@ const testMessage = ref("");
 const testTarget = ref<LLMConfig | null>(null);
 const testReply = ref("");
 const testUsage = ref("");
+const testImages = ref<string[]>([]);
+const isImageTest = computed(() => testTarget.value !== null && groupOf(testTarget.value) === "image");
 const serviceOptions = llmServicePresets.map((preset) => ({
   value: preset.id,
   label: preset.label,
@@ -510,8 +529,7 @@ function startEdit(profile: LLMConfig): void {
     user_agent: profile.user_agent ?? "",
     description: profile.description ?? "",
     temperature: profile.temperature === null || profile.temperature === undefined ? "" : String(profile.temperature),
-    max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : "",
-    timeout_ms: profile.timeout_ms ? String(profile.timeout_ms) : ""
+    max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : ""
   };
   selectedService.value = detectLLMService(profile.base_url);
   modelOptions.value = [...(profile.models ?? [])];
@@ -540,10 +558,6 @@ function formToPayload(): LLMConfig {
   const maxTokens = form.value.max_output_tokens.trim();
   if (maxTokens !== "" && !Number.isNaN(Number(maxTokens))) {
     payload.max_output_tokens = Number(maxTokens);
-  }
-  const timeout = form.value.timeout_ms.trim();
-  if (timeout !== "" && !Number.isNaN(Number(timeout))) {
-    payload.timeout_ms = Number(timeout);
   }
   return payload;
 }
@@ -714,6 +728,7 @@ function openTest(profile: LLMConfig): void {
   testMessage.value = defaultTestMessage(profile);
   testReply.value = "";
   testUsage.value = "";
+  testImages.value = [];
 }
 
 async function runTest(): Promise<void> {
@@ -721,8 +736,15 @@ async function runTest(): Promise<void> {
   busy.value = true;
   testReply.value = "";
   testUsage.value = "";
+  testImages.value = [];
   try {
     // 带上目标配置（含 id），后端会自动复用该配置已保存的 API Key，无需先激活。
+    if (target && groupOf(target) === "image") {
+      const result = await testLLMImage(testMessage.value.trim(), target);
+      testImages.value = result.images;
+      testUsage.value = `${result.model || target.model} · 已生成 ${result.images.length} 张`;
+      return;
+    }
     const result = await testLLM(testMessage.value.trim(), target ?? undefined);
     testReply.value = result.text;
     if (result.usage) {

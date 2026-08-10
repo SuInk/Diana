@@ -23,7 +23,6 @@ type Runner struct {
 const (
 	webSearchToolName            = "web_search.search"
 	maxWebSearchCallsPerAgentRun = 3
-	maxToolErrorChars            = 2000
 )
 
 // NewRunner 创建内置 Agent 运行器。
@@ -114,7 +113,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			ToolCall:     toolCalls,
 			MaxToolCalls: r.cfg.MaxSteps,
 			DurationMS:   time.Since(startedAt).Milliseconds(),
-			Error:        truncateRunes(err.Error(), maxToolErrorChars),
+			Error:        err.Error(),
 			Usage:        usage,
 		})
 		return nil, err
@@ -260,7 +259,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		toolDuration := time.Since(toolStartedAt)
 		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, DurationMS: toolDuration.Milliseconds()}
 		if err != nil {
-			record.Error = truncateRunes(normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS), maxToolErrorChars)
+			record.Error = normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS)
 			output = "ERROR: " + record.Error
 		} else {
 			record.Output = truncateRunes(output, r.cfg.MaxToolOutputChars)
@@ -364,7 +363,7 @@ func emitProtocolRepair(ctx context.Context, observer RunObserver, traceID strin
 		ModelTurn:    modelTurn,
 		ToolCall:     toolCall,
 		MaxToolCalls: maxToolCalls,
-		Error:        truncateRunes(reason, maxToolErrorChars),
+		Error:        reason,
 	})
 }
 
@@ -506,7 +505,8 @@ func (r *Runner) systemPrompt(req Request) string {
 	}
 	if hasTool(webSearchToolName) {
 		rules = append(rules,
-			"- 需要实时网页搜索时使用 web_search.search；工具内部会按配置顺序自动回退，一次回复中仍可以根据首轮结果改写 query 后继续搜索，但最多调用 "+fmt.Sprintf("%d", maxWebSearchCallsPerAgentRun)+" 次，并与总计 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 个工具步骤共享预算。每次 input 只传针对当前信息缺口整理后的 query，不要传入其他字段，不要把完整聊天记录塞进 query，也不要重复相同 query。",
+			"- 遇到需要外部事实、可能随时间变化、自己不能可靠确认或适合参考公开评价的问题，先调用 web_search.search 再回答。典型场景包括新闻、价格、规则、日程、人物或机构现状，以及具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议；不要凭印象编造亲身体验或把不确定判断说成事实。纯闲聊、创作请求以及完全可由当前上下文回答的问题不需要搜索。",
+			"- web_search.search 内部会按配置顺序自动回退，一次回复中可以根据首轮结果改写 query 后继续搜索，但最多调用 "+fmt.Sprintf("%d", maxWebSearchCallsPerAgentRun)+" 次，并与总计 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 个工具步骤共享预算。每次 input 只传针对当前信息缺口整理后的 query，不要传入其他字段，不要把完整聊天记录塞进 query，也不要重复相同 query。",
 			"- 首轮搜索结果缺失、陈旧、含义不明确或只有概览时，不要立即假定信息不存在；应在次数上限内改用实体全名、日期、官网、公告等更精确的搜索词。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分申购日、发行日和上市交易日等不同概念。",
 			"- 如果 web_search.search 报告没有可用配置，最终回复要说明当前搜索提供商均不可用，不要改用其他方式爬取搜索引擎。",
 		)

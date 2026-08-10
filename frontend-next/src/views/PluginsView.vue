@@ -3,7 +3,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>插件</h1>
-        <p>官方插件的安装、启停与详细设置</p>
+        <p>管理内置能力的启停与详细设置</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="loading" @click="reload">

@@ -66,6 +66,124 @@ type DashboardStatsMeasure struct {
 	Value int64  `json:"value"`
 }
 
+// DashboardEventStats is the durable baseline used by the live Dashboard
+// collector after a process restart. Only terminal inbound events are included;
+// queued work is counted by the live collector after it actually runs.
+type DashboardEventStats struct {
+	TotalEvents     int64
+	HandledEvents   int64
+	ErrorEvents     int64
+	ByKind          map[string]int64
+	Hourly          []DashboardEventStatsBucket
+	LastEventAt     time.Time
+	DurationTotalMS int64
+	DurationCount   int64
+}
+
+type DashboardEventStatsBucket struct {
+	HourUnix int64
+	Total    int64
+	Handled  int64
+	Errors   int64
+}
+
+// DashboardEventStatsSnapshot rebuilds the live collector baseline from
+// deduplicated SQLite records. It runs once during process startup so normal
+// config reloads keep using the same in-memory collector.
+func (s *SQLiteStore) DashboardEventStatsSnapshot(ctx context.Context, now time.Time) (DashboardEventStats, error) {
+	stats := DashboardEventStats{ByKind: map[string]int64{}}
+	if s == nil || s.db == nil {
+		return stats, nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT kind, event_time, outcome, created_at, completed_at
+FROM (
+  SELECT kind, event_time, COALESCE(outcome, '') AS outcome,
+         created_at, COALESCE(completed_at, 0) AS completed_at
+  FROM inbound_events
+  WHERE status = 'done' AND COALESCE(outcome, '') != 'ignored_stale'
+
+  UNION ALL
+
+  SELECT m.kind, m.event_time, '', 0, 0
+  FROM message_events AS m
+  LEFT JOIN inbound_events AS i ON i.id = m.id
+  WHERE i.id IS NULL
+    AND m.kind IN ('group', 'private')
+    AND NULLIF(TRIM(m.message_id), '') IS NOT NULL
+)
+`)
+	if err != nil {
+		return DashboardEventStats{}, fmt.Errorf("query dashboard event baseline: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	currentHour := now.Truncate(time.Hour).Unix()
+	cutoffHour := currentHour - 47*int64(time.Hour/time.Second)
+	buckets := map[int64]*DashboardEventStatsBucket{}
+	for rows.Next() {
+		var kind, outcome string
+		var eventTime, createdAt, completedAt int64
+		if err := rows.Scan(&kind, &eventTime, &outcome, &createdAt, &completedAt); err != nil {
+			return DashboardEventStats{}, fmt.Errorf("scan dashboard event baseline: %w", err)
+		}
+
+		stats.TotalEvents++
+		stats.ByKind[kind]++
+		handled := dashboardOutcomeHandled(outcome)
+		failed := outcome == "error_replied"
+		if handled {
+			stats.HandledEvents++
+			if completedAt > createdAt && createdAt > 0 {
+				stats.DurationTotalMS += (completedAt - createdAt) / int64(time.Millisecond)
+				stats.DurationCount++
+			}
+		}
+		if failed {
+			stats.ErrorEvents++
+		}
+
+		at := time.Unix(eventTime, 0).In(now.Location())
+		if at.After(stats.LastEventAt) {
+			stats.LastEventAt = at
+		}
+		hour := at.Truncate(time.Hour).Unix()
+		if hour < cutoffHour || hour > currentHour {
+			continue
+		}
+		bucket := buckets[hour]
+		if bucket == nil {
+			bucket = &DashboardEventStatsBucket{HourUnix: hour}
+			buckets[hour] = bucket
+		}
+		bucket.Total++
+		if handled {
+			bucket.Handled++
+		}
+		if failed {
+			bucket.Errors++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return DashboardEventStats{}, fmt.Errorf("iterate dashboard event baseline: %w", err)
+	}
+
+	stats.Hourly = make([]DashboardEventStatsBucket, 0, len(buckets))
+	for _, bucket := range buckets {
+		stats.Hourly = append(stats.Hourly, *bucket)
+	}
+	return stats, nil
+}
+
+func dashboardOutcomeHandled(outcome string) bool {
+	outcome = strings.TrimSpace(outcome)
+	return outcome == "replied" || outcome == "error_replied" || strings.HasPrefix(outcome, "replied_")
+}
+
 // DashboardStatsForDay 汇总本地当天的消息处理和 API 使用统计。
 func (s *SQLiteStore) DashboardStatsForDay(ctx context.Context, now time.Time) (DashboardStats, error) {
 	if s == nil || s.db == nil {
@@ -211,11 +329,17 @@ WHERE created_at >= ? AND created_at < ?
 			_ = json.Unmarshal([]byte(metadata.String), &meta)
 		}
 		switch action {
-		case "assistant.llm_usage":
+		case "assistant.llm_usage", "qqbot.llm_usage":
 			stats.LLMCalls++
-			stats.LLMInputTokens += int64FromAny(meta["input_tokens"])
-			stats.LLMOutputTokens += int64FromAny(meta["output_tokens"])
-			stats.LLMTotalTokens += int64FromAny(meta["total_tokens"])
+			inputTokens := int64FromAny(meta["input_tokens"])
+			outputTokens := int64FromAny(meta["output_tokens"])
+			totalTokens := int64FromAny(meta["total_tokens"])
+			if totalTokens <= 0 && (inputTokens > 0 || outputTokens > 0) {
+				totalTokens = inputTokens + outputTokens
+			}
+			stats.LLMInputTokens += inputTokens
+			stats.LLMOutputTokens += outputTokens
+			stats.LLMTotalTokens += totalTokens
 		case "assistant.image.generate":
 			stats.ImageGenerations++
 			if bucketIndex >= 0 && bucketIndex < len(stats.Hourly) {

@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,28 +24,43 @@ type systemUpdateCheckResponse struct {
 	CurrentVersion    string          `json:"current_version"`
 	LatestVersion     string          `json:"latest_version,omitempty"`
 	UpdateAvailable   bool            `json:"update_available"`
+	UpdateSupported   bool            `json:"update_supported"`
 	IntegrityMode     string          `json:"integrity_mode"`
 	ChecksumAvailable bool            `json:"checksum_available"`
 	ChecksumURL       string          `json:"checksum_url,omitempty"`
 	Status            *updater.Status `json:"status,omitempty"`
 }
 
+type ReleasePackageUpdater interface {
+	Supported() bool
+	ExpectedAssetName() string
+	Status(context.Context) (updater.Status, error)
+	Install(context.Context, updater.ReleasePackage, bool) (updater.Result, error)
+}
+
 type SystemUpdater interface {
 	Status(context.Context) (updater.Status, error)
 	Check(context.Context) (updater.Status, error)
-	Update(context.Context) (updater.Result, error)
-	ForceUpdate(context.Context) (updater.Result, error)
+	UpdateToRelease(context.Context, string) (updater.Result, error)
+	ForceUpdateToRelease(context.Context, string) (updater.Result, error)
 	Rollback(ctx context.Context, ref string) (updater.Result, error)
 }
 
 type SystemUpdateHandler struct {
-	updater       SystemUpdater
-	logs          AppLogWriter
-	auto          *AutoUpdater
-	buildVersion  string
-	httpClient    *http.Client
-	githubAPIBase string
-	changelog     changelogCache
+	updater        SystemUpdater
+	releaseUpdater ReleasePackageUpdater
+	logs           AppLogWriter
+	auto           *AutoUpdater
+	buildVersion   string
+	httpClient     *http.Client
+	githubAPIBase  string
+	changelog      changelogCache
+}
+
+// SetReleasePackageUpdater enables self-update for complete Release packages.
+// Source checkouts continue to use the Git updater.
+func (h *SystemUpdateHandler) SetReleasePackageUpdater(releaseUpdater ReleasePackageUpdater) {
+	h.releaseUpdater = releaseUpdater
 }
 
 // NewSystemUpdateHandler 创建系统更新接口处理器。
@@ -84,9 +100,18 @@ func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 
 // version 返回版本信息；git 状态可选，容器等非 git 部署时只有编译版本。
 func (h *SystemUpdateHandler) version(c *gin.Context) {
-	payload := gin.H{"build_version": h.buildVersion}
+	payload := gin.H{"build_version": h.buildVersion, "update_supported": false}
 	label := h.buildVersion
-	if status, err := h.updater.Status(c.Request.Context()); err == nil {
+	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
+		payload["git_available"] = false
+		payload["deployment_mode"] = "release"
+		payload["update_supported"] = true
+		if status, statusErr := h.releaseUpdater.Status(c.Request.Context()); statusErr == nil {
+			if v := status.VersionLabel(); v != "" {
+				label = v
+			}
+		}
+	} else if status, err := h.updater.Status(c.Request.Context()); err == nil {
 		gitAvailable := status.RemoteURL != ""
 		payload["git_available"] = gitAvailable
 		payload["deployment_mode"] = deploymentMode(gitAvailable)
@@ -98,6 +123,7 @@ func (h *SystemUpdateHandler) version(c *gin.Context) {
 			// 侧栏展示语义化版本（tag 或 tag+N），只有仓库完全没有 tag 时才退回提交短号。
 			label = v
 		}
+		payload["update_supported"] = gitAvailable
 	} else {
 		payload["git_available"] = false
 		payload["deployment_mode"] = "release"
@@ -108,7 +134,13 @@ func (h *SystemUpdateHandler) version(c *gin.Context) {
 
 // status 处理系统更新状态查询请求。
 func (h *SystemUpdateHandler) status(c *gin.Context) {
-	status, err := h.updater.Status(c.Request.Context())
+	var status updater.Status
+	var err error
+	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
+		status, err = h.releaseUpdater.Status(c.Request.Context())
+	} else {
+		status, err = h.updater.Status(c.Request.Context())
+	}
 	if err != nil {
 		// 状态页会频繁轮询，查询失败只返回 HTTP 错误，避免把日志中心刷满。
 		writeUpdateHTTPError(c, err)
@@ -117,41 +149,61 @@ func (h *SystemUpdateHandler) status(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
-// check 在源码部署中 fetch Git，在 Release/Docker 部署中查询 GitHub Release。
+// check 始终以最新稳定 GitHub Release 判断版本；Git 只负责源码状态和安装传输。
 func (h *SystemUpdateHandler) check(c *gin.Context) {
 	status, statusErr := h.updater.Status(c.Request.Context())
-	if statusErr == nil && status.RemoteURL != "" {
-		status, err := h.updater.Check(c.Request.Context())
+	releaseAvailable := h.releaseUpdater != nil && h.releaseUpdater.Supported()
+	gitAvailable := !releaseAvailable && statusErr == nil && status.RemoteURL != ""
+	if gitAvailable {
+		var err error
+		status, err = h.updater.Check(c.Request.Context())
 		if err != nil {
 			h.writeUpdateError(c, "system.update.check", err)
 			return
 		}
-		current := status.VersionLabel()
-		c.JSON(http.StatusOK, systemUpdateCheckResponse{
-			DeploymentMode:  "git",
-			CurrentVersion:  current,
-			UpdateAvailable: status.Behind > 0,
-			IntegrityMode:   "git-object-hash",
-			Status:          &status,
-		})
-		return
 	}
 
-	releases, err := fetchGitHubReleases(c.Request.Context(), h.httpClient, h.githubAPIBase, defaultReleaseOwner, defaultReleaseRepo, 10)
+	remoteURL := ""
+	if gitAvailable {
+		remoteURL = status.RemoteURL
+	}
+	latest, err := h.latestStableRelease(c.Request.Context(), remoteURL)
 	if err != nil {
 		writeError(c, http.StatusBadGateway, err)
 		return
 	}
-	latest := latestStableRelease(releases)
 	current := strings.TrimSpace(h.buildVersion)
+	mode := "release"
+	integrity := "sha256"
+	var gitStatus *updater.Status
+	if gitAvailable {
+		current = status.VersionLabel()
+		mode = "git"
+		integrity = "git-object-hash"
+		gitStatus = &status
+	} else if releaseAvailable {
+		if packageStatus, packageErr := h.releaseUpdater.Status(c.Request.Context()); packageErr == nil {
+			status = packageStatus
+			if value := packageStatus.VersionLabel(); value != "" {
+				current = value
+			}
+			gitStatus = &packageStatus
+		}
+	}
+	packageReady := false
+	if releaseAvailable && latest.ChecksumAvailable {
+		_, packageReady = latest.asset(h.releaseUpdater.ExpectedAssetName())
+	}
 	c.JSON(http.StatusOK, systemUpdateCheckResponse{
-		DeploymentMode:    "release",
+		DeploymentMode:    mode,
 		CurrentVersion:    current,
 		LatestVersion:     latest.Tag,
-		UpdateAvailable:   isNewerVersion(current, latest.Tag),
-		IntegrityMode:     "sha256",
+		UpdateAvailable:   isNewerVersion(current, latest.Tag) || releaseApplyPending(status, gitAvailable),
+		UpdateSupported:   gitAvailable || packageReady,
+		IntegrityMode:     integrity,
 		ChecksumAvailable: latest.ChecksumAvailable,
 		ChecksumURL:       latest.ChecksumURL,
+		Status:            gitStatus,
 	})
 }
 
@@ -172,17 +224,12 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 		return
 	}
 
-	var (
-		result updater.Result
-		err    error
-	)
+	var result updater.Result
 	action := "system.update.pull"
 	if request.Force {
 		action = "system.update.force"
-		result, err = h.updater.ForceUpdate(c.Request.Context())
-	} else {
-		result, err = h.updater.Update(c.Request.Context())
 	}
+	result, err := h.UpdateLatest(c.Request.Context(), request.Force)
 	if err != nil {
 		h.writeUpdateError(c, action, err)
 		return
@@ -203,8 +250,95 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// UpdateLatest updates a source checkout to the newest stable Release tag.
+// It is shared by the HTTP endpoint and the automatic updater.
+func (h *SystemUpdateHandler) UpdateLatest(ctx context.Context, force bool) (updater.Result, error) {
+	status, err := h.updater.Status(ctx)
+	releaseAvailable := h.releaseUpdater != nil && h.releaseUpdater.Supported()
+	gitAvailable := !releaseAvailable && err == nil && status.RemoteURL != ""
+	if !gitAvailable && !releaseAvailable {
+		return updater.Result{}, updater.ErrReleaseUpdateUnsupported
+	}
+	remoteURL := ""
+	if gitAvailable {
+		remoteURL = status.RemoteURL
+	} else {
+		status, err = h.releaseUpdater.Status(ctx)
+		if err != nil {
+			return updater.Result{}, err
+		}
+	}
+	latest, err := h.latestStableRelease(ctx, remoteURL)
+	if err != nil {
+		return updater.Result{}, err
+	}
+	if !force && !isNewerVersion(status.VersionLabel(), latest.Tag) && !releaseApplyPending(status, gitAvailable) {
+		return updater.Result{
+			Status:       status,
+			TargetCommit: status.HeadCommit,
+			Output:       "Already at the latest stable release.",
+			At:           time.Now(),
+		}, nil
+	}
+	if releaseAvailable {
+		archive, ok := latest.asset(h.releaseUpdater.ExpectedAssetName())
+		if !ok {
+			return updater.Result{}, fmt.Errorf("%w: %s", updater.ErrReleaseAssetMissing, h.releaseUpdater.ExpectedAssetName())
+		}
+		checksums, ok := latest.asset("SHA256SUMS")
+		if !ok {
+			return updater.Result{}, updater.ErrChecksumMissing
+		}
+		return h.releaseUpdater.Install(ctx, updater.ReleasePackage{
+			Tag:       latest.Tag,
+			Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
+			Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
+		}, force)
+	}
+	if force {
+		return h.updater.ForceUpdateToRelease(ctx, latest.Tag)
+	}
+	return h.updater.UpdateToRelease(ctx, latest.Tag)
+}
+
+func releaseApplyPending(status updater.Status, gitAvailable bool) bool {
+	if !gitAvailable || !status.ApplySupported || status.RunningCommit == "" || status.HeadCommit == "" || strings.EqualFold(status.RunningCommit, "dev") {
+		return false
+	}
+	return !sameCommitID(status.RunningCommit, status.HeadCommit)
+}
+
+func sameCommitID(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	return left == right || strings.HasPrefix(left, right) || strings.HasPrefix(right, left)
+}
+
+func (h *SystemUpdateHandler) latestStableRelease(ctx context.Context, remoteURL string) (ReleaseEntry, error) {
+	owner, repo, ok := githubRepoFromRemote(remoteURL)
+	if !ok {
+		owner, repo = defaultReleaseOwner, defaultReleaseRepo
+	}
+	releases, err := fetchGitHubReleases(ctx, h.httpClient, h.githubAPIBase, owner, repo, 10)
+	if err != nil {
+		return ReleaseEntry{}, err
+	}
+	latest := latestStableRelease(releases)
+	if strings.TrimSpace(latest.Tag) == "" {
+		return ReleaseEntry{}, errors.New("没有可用的稳定 Release")
+	}
+	return latest, nil
+}
+
 // rollback 回退到指定版本；成功后自动关闭自动更新，避免下个周期又被拉回最新。
 func (h *SystemUpdateHandler) rollback(c *gin.Context) {
+	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
+		writeError(c, http.StatusBadRequest, errors.New("Release 包仅在健康检查失败时自动回退；手动回退请重新安装目标完整包"))
+		return
+	}
 	var payload struct {
 		Ref          string `json:"ref"`
 		Confirmation string `json:"confirmation"`
@@ -241,7 +375,10 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 // changelogList 返回 GitHub 更新日志：源码部署使用 origin，Release/Docker 使用官方仓库。
 // 优先返回 Release；仓库尚未发布 Release 时回退为最近提交，带短缓存。
 func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
-	status, _ := h.updater.Status(c.Request.Context())
+	status := updater.Status{}
+	if h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
+		status, _ = h.updater.Status(c.Request.Context())
+	}
 	owner, repo, ok := githubRepoFromRemote(status.RemoteURL)
 	if !ok {
 		owner, repo = defaultReleaseOwner, defaultReleaseRepo
@@ -335,7 +472,7 @@ func (h *SystemUpdateHandler) saveSettings(c *gin.Context) {
 
 // writeUpdateError 记录系统更新错误并返回响应。
 func (h *SystemUpdateHandler) writeUpdateError(c *gin.Context, action string, err error) {
-	if errors.Is(err, updater.ErrRemoteNotConfigured) {
+	if errors.Is(err, updater.ErrRemoteNotConfigured) || errors.Is(err, updater.ErrReleaseUpdateUnsupported) {
 		writeError(c, http.StatusBadRequest, errors.New("当前为 Release/Docker 部署，更新由部署环境的镜像更新器管理"))
 		return
 	}
@@ -343,6 +480,9 @@ func (h *SystemUpdateHandler) writeUpdateError(c *gin.Context, action string, er
 }
 
 func (h *SystemUpdateHandler) currentDeploymentMode(ctx context.Context) string {
+	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
+		return "release"
+	}
 	status, err := h.updater.Status(ctx)
 	return deploymentMode(err == nil && status.RemoteURL != "")
 }
@@ -380,7 +520,9 @@ func isNewerVersion(current, latest string) bool {
 func versionParts(value string) ([3]int, bool) {
 	var parts [3]int
 	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
-	value = strings.SplitN(value, "-", 2)[0]
+	if index := strings.IndexAny(value, "+-"); index >= 0 {
+		value = value[:index]
+	}
 	raw := strings.Split(value, ".")
 	if len(raw) != len(parts) {
 		return parts, false

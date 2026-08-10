@@ -104,3 +104,50 @@ func TestOwnerLLMConfigSettingRoundTripsThroughPayload(t *testing.T) {
 		t.Fatalf("restored setting = %#v, want false", restored.OwnerLLMConfigEnabled)
 	}
 }
+
+func TestBotReplyLoopDetectionSettingDefaultsAndRoundTripsThroughPayload(t *testing.T) {
+	defaultPayload := PayloadFromConfig(BotConfig{})
+	if defaultPayload.BotReplyLoopDetectionEnabled == nil || !*defaultPayload.BotReplyLoopDetectionEnabled {
+		t.Fatalf("default setting = %#v, want true", defaultPayload.BotReplyLoopDetectionEnabled)
+	}
+
+	disabled := false
+	existing := BotConfig{BotReplyLoopDetectionEnabled: &disabled}
+	payload := PayloadFromConfig(existing)
+	if payload.BotReplyLoopDetectionEnabled == nil || *payload.BotReplyLoopDetectionEnabled {
+		t.Fatalf("payload setting = %#v, want false", payload.BotReplyLoopDetectionEnabled)
+	}
+	restored := ConfigFromPayload(payload, existing)
+	if restored.BotReplyLoopDetectionEnabled == nil || *restored.BotReplyLoopDetectionEnabled {
+		t.Fatalf("restored setting = %#v, want false", restored.BotReplyLoopDetectionEnabled)
+	}
+}
+
+func TestProfileSetPlatformContextIsolationDefaultsOnAndCanBeDisabled(t *testing.T) {
+	set := ProfileSet{Profiles: []BotConfig{{ID: "qq", Platform: PlatformNapCat}}}.WithDefaults()
+	if !set.PlatformContextsIsolated() {
+		t.Fatal("legacy profile sets must default to isolated contexts")
+	}
+	payload := PayloadFromProfileSet(set)
+	if payload.IsolatePlatformContexts == nil || !*payload.IsolatePlatformContexts {
+		t.Fatalf("payload isolation=%#v, want true", payload.IsolatePlatformContexts)
+	}
+	set = set.WithPlatformContextIsolation(false)
+	if set.PlatformContextsIsolated() {
+		t.Fatal("context isolation should be disabled")
+	}
+}
+
+func TestProfileSetRuntimeConfigKeepsOtherEnabledChannelOnline(t *testing.T) {
+	set := ProfileSet{
+		ActiveID: "disabled",
+		Profiles: []BotConfig{
+			{ID: "disabled", Platform: PlatformNapCat, Enabled: false},
+			{ID: "telegram", Platform: PlatformTelegram, Enabled: true, TelegramBotToken: "token"},
+		},
+	}
+	cfg, ok := set.RuntimeConfig()
+	if !ok || cfg.ID != "telegram" || !cfg.Enabled {
+		t.Fatalf("runtime config=%#v ok=%v", cfg, ok)
+	}
+}

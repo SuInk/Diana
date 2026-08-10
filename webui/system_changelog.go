@@ -23,14 +23,32 @@ type ChangelogEntry struct {
 
 // ReleaseEntry 是 GitHub Release 的一条记录。
 type ReleaseEntry struct {
-	Tag               string    `json:"tag"`
-	Name              string    `json:"name,omitempty"`
-	Notes             string    `json:"notes,omitempty"`
-	Prerelease        bool      `json:"prerelease,omitempty"`
-	Date              time.Time `json:"date,omitempty"`
-	URL               string    `json:"url,omitempty"`
-	ChecksumAvailable bool      `json:"checksum_available"`
-	ChecksumURL       string    `json:"checksum_url,omitempty"`
+	Tag               string         `json:"tag"`
+	Name              string         `json:"name,omitempty"`
+	Notes             string         `json:"notes,omitempty"`
+	Prerelease        bool           `json:"prerelease,omitempty"`
+	Date              time.Time      `json:"date,omitempty"`
+	URL               string         `json:"url,omitempty"`
+	ChecksumAvailable bool           `json:"checksum_available"`
+	ChecksumURL       string         `json:"checksum_url,omitempty"`
+	Assets            []ReleaseAsset `json:"-"`
+}
+
+// ReleaseAsset is retained internally so the updater can select the exact
+// package for the running OS and architecture without trusting a constructed URL.
+type ReleaseAsset struct {
+	Name string
+	URL  string
+	Size int64
+}
+
+func (r ReleaseEntry) asset(name string) (ReleaseAsset, bool) {
+	for _, asset := range r.Assets {
+		if asset.Name == name && strings.TrimSpace(asset.URL) != "" {
+			return asset, true
+		}
+	}
+	return ReleaseAsset{}, false
 }
 
 const releaseNotesMaxRunes = 600
@@ -72,6 +90,7 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 		Assets      []struct {
 			Name               string `json:"name"`
 			BrowserDownloadURL string `json:"browser_download_url"`
+			Size               int64  `json:"size"`
 		} `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
@@ -87,10 +106,11 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 			notes = string(runes[:releaseNotesMaxRunes]) + "…"
 		}
 		checksumURL := ""
+		assets := make([]ReleaseAsset, 0, len(item.Assets))
 		for _, asset := range item.Assets {
+			assets = append(assets, ReleaseAsset{Name: asset.Name, URL: asset.BrowserDownloadURL, Size: asset.Size})
 			if asset.Name == "SHA256SUMS" {
 				checksumURL = asset.BrowserDownloadURL
-				break
 			}
 		}
 		entries = append(entries, ReleaseEntry{
@@ -102,6 +122,7 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 			URL:               item.HTMLURL,
 			ChecksumAvailable: checksumURL != "",
 			ChecksumURL:       checksumURL,
+			Assets:            assets,
 		})
 	}
 	return entries, nil

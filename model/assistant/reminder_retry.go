@@ -80,7 +80,7 @@ func (r *Runtime) rescheduleOneTimeReminder(id string, cause error) (Reminder, e
 			continue
 		}
 		found = true
-		item.LastError = truncateRunesFromStart(cause.Error(), 500)
+		item.LastError = cause.Error()
 		item.ConsecutiveFailures++
 		item.TriggerAt = time.Now().Add(durableReminderRetryDelay(*item, cause, item.ConsecutiveFailures))
 		updated = *item

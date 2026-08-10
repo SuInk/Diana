@@ -137,7 +137,7 @@ func TestRestoredTaskListKeepsStatusAndNewestFirst(t *testing.T) {
 	now := time.Now().Round(time.Second)
 	items := []assistant.Reminder{
 		{ID: "old", Kind: assistant.ReminderKindMessage, OwnerID: "1", Message: "旧提醒", TriggerAt: now.Add(time.Hour), CreatedAt: now.Add(-time.Hour)},
-		{ID: "new", Kind: assistant.ReminderKindQuery, OwnerID: "1", Message: "新任务", TriggerAt: now.Add(time.Hour), IntervalSeconds: 3600, ConsecutiveFailures: 1, CreatedAt: now},
+		{ID: "new", Kind: assistant.ReminderKindQuery, Platform: assistant.PlatformTelegram, ProfileID: "telegram-main", OwnerID: "1", Message: "新任务", TriggerAt: now.Add(time.Hour), IntervalSeconds: 3600, ConsecutiveFailures: 1, CreatedAt: now},
 	}
 	if err := store.SaveReminders(context.Background(), items); err != nil {
 		t.Fatalf("SaveReminders() error = %v", err)
@@ -157,6 +157,23 @@ func TestRestoredTaskListKeepsStatusAndNewestFirst(t *testing.T) {
 	}
 	if len(payload.Items) != 2 || payload.Items[0].ID != "new" || payload.Items[0].Kind != "schedule" || payload.Items[0].Status != "retrying" {
 		t.Fatalf("tasks = %#v", payload.Items)
+	}
+	if payload.Items[0].Platform != assistant.PlatformTelegram || payload.Items[0].ProfileID != "telegram-main" || !payload.Items[0].ConsumesQuota {
+		t.Fatalf("task source/quota = %#v", payload.Items[0])
+	}
+}
+
+func TestRestoredOneTimeTaskReportsRetryingAndQuota(t *testing.T) {
+	item := assistant.Reminder{Kind: assistant.ReminderKindMessage, ConsecutiveFailures: 2}
+	if status := qqbotTaskStatus(item); status != "retrying" {
+		t.Fatalf("status = %q, want retrying", status)
+	}
+	if !taskConsumesQuota(item) {
+		t.Fatal("retrying one-time reminder should consume quota")
+	}
+	item.LastRunAt = time.Now()
+	if taskConsumesQuota(item) {
+		t.Fatal("used one-time reminder should release quota")
 	}
 }
 

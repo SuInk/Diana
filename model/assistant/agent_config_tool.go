@@ -75,6 +75,7 @@ type dianaBotConfigSnapshot struct {
 	PromptImageOnlyConfigured    bool                     `json:"prompt_image_only_text_configured"`
 	PromptWakeOnlyConfigured     bool                     `json:"prompt_wake_only_text_configured"`
 	ModelRoles                   map[string]ModelRole     `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled bool                     `json:"bot_reply_loop_detection_enabled"`
 	PassiveRouterPromptChars     int                      `json:"passive_reply_router_prompt_chars,omitempty"`
 	PassiveReplyPromptChars      int                      `json:"passive_reply_prompt_chars,omitempty"`
 	MaxInputChars                int                      `json:"max_input_chars"`
@@ -276,6 +277,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		PromptImageOnlyConfigured:    strings.TrimSpace(cfg.PromptImageOnlyText) != "",
 		PromptWakeOnlyConfigured:     strings.TrimSpace(cfg.PromptWakeOnlyText) != "",
 		ModelRoles:                   normalizeModelRoles(cfg.ModelRoles),
+		BotReplyLoopDetectionEnabled: boolValue(cfg.BotReplyLoopDetectionEnabled, true),
 		PassiveRouterPromptChars:     len([]rune(cfg.PassiveReplyRouterPrompt)),
 		PassiveReplyPromptChars:      len([]rune(cfg.PassiveReplyPrompt)),
 		MaxInputChars:                cfg.MaxInputChars,

@@ -3,6 +3,7 @@ package webui
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -15,8 +16,20 @@ import (
 // 无需再经过 QQ 验证码流程（该流程保留给群管自助场景）。
 
 type consoleGroupsResponse struct {
-	Groups  []assistant.GroupConfig `json:"groups"`
-	Plugins []assistant.PluginState `json:"plugins"`
+	Groups        []consoleGroupItem      `json:"groups"`
+	Plugins       []assistant.PluginState `json:"plugins"`
+	LiveAvailable bool                    `json:"live_available"`
+	Warning       string                  `json:"warning,omitempty"`
+}
+
+type consoleGroupItem struct {
+	assistant.GroupConfig
+	GroupName      string `json:"group_name,omitempty"`
+	AvatarURL      string `json:"avatar_url,omitempty"`
+	MemberCount    int    `json:"member_count,omitempty"`
+	MaxMemberCount int    `json:"max_member_count,omitempty"`
+	Configured     bool   `json:"configured"`
+	Joined         bool   `json:"joined"`
 }
 
 type consoleGroupSavePayload struct {
@@ -25,22 +38,95 @@ type consoleGroupSavePayload struct {
 
 // registerConsoleGroupRoutes 注册控制台群配置直连路由。
 func (h *QQBotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
-	router.GET("/api/qqbot/groups", h.listConsoleGroups)
-	router.POST("/api/qqbot/groups", h.saveConsoleGroup)
+	for _, base := range []string{"/api/assistant", "/api/qqbot"} {
+		router.GET(base+"/groups", h.listConsoleGroups)
+		router.POST(base+"/groups", h.saveConsoleGroup)
+	}
 }
 
-// listConsoleGroups 返回全部群配置与插件清单。
+// listConsoleGroups 返回机器人已加入的群、已保存群配置与插件清单。
 func (h *QQBotHandler) listConsoleGroups(c *gin.Context) {
 	base := h.runtime.Config()
 	set := h.groupConfigs.Groups()
-	groups := make([]assistant.GroupConfig, 0, len(set.Groups))
-	for _, cfg := range set.Groups {
-		groups = append(groups, cfg.WithDefaults(cfg.GroupID, base))
+	liveGroups := []qqbotAutoGroupInfo{}
+	liveAvailable := false
+	warning := ""
+	if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_group_list", map[string]any{"no_cache": true}); err != nil {
+		warning = "机器人尚未连接，暂时只显示已保存的群配置"
+	} else {
+		liveGroups = autoGroupsFromOneBotData(data)
+		liveAvailable = true
 	}
 	c.JSON(http.StatusOK, consoleGroupsResponse{
-		Groups:  groups,
-		Plugins: assistant.RedactStates(h.runtime.Plugins().List()),
+		Groups:        mergeConsoleGroupItems(base, set, liveGroups),
+		Plugins:       assistant.RedactStates(h.runtime.Plugins().List()),
+		LiveAvailable: liveAvailable,
+		Warning:       warning,
 	})
+}
+
+func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []qqbotAutoGroupInfo) []consoleGroupItem {
+	saved := make(map[string]assistant.GroupConfig, len(set.Groups))
+	for _, cfg := range set.Groups {
+		groupID := strings.TrimSpace(cfg.GroupID)
+		if groupID != "" {
+			saved[groupID] = cfg.WithDefaults(groupID, base)
+		}
+	}
+
+	items := make([]consoleGroupItem, 0, len(liveGroups)+len(saved))
+	seen := make(map[string]struct{}, len(liveGroups))
+	for _, live := range liveGroups {
+		groupID := strings.TrimSpace(live.GroupID)
+		if groupID == "" {
+			continue
+		}
+		if _, ok := seen[groupID]; ok {
+			continue
+		}
+		seen[groupID] = struct{}{}
+		cfg, configured := saved[groupID]
+		if !configured {
+			cfg = assistant.DefaultGroupConfig(groupID, base)
+		}
+		items = append(items, consoleGroupItem{
+			GroupConfig:    cfg.WithDefaults(groupID, base),
+			GroupName:      strings.TrimSpace(live.GroupName),
+			AvatarURL:      assistant.QQGroupAvatarURL(groupID),
+			MemberCount:    live.MemberCount,
+			MaxMemberCount: live.MaxMemberCount,
+			Configured:     configured,
+			Joined:         true,
+		})
+		delete(saved, groupID)
+	}
+	for groupID, cfg := range saved {
+		items = append(items, consoleGroupItem{
+			GroupConfig: cfg,
+			AvatarURL:   assistant.QQGroupAvatarURL(groupID),
+			Configured:  true,
+			Joined:      false,
+		})
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Joined != items[j].Joined {
+			return items[i].Joined
+		}
+		leftName := strings.ToLower(strings.TrimSpace(items[i].GroupName))
+		rightName := strings.ToLower(strings.TrimSpace(items[j].GroupName))
+		if leftName != rightName {
+			if leftName == "" {
+				return false
+			}
+			if rightName == "" {
+				return true
+			}
+			return leftName < rightName
+		}
+		return items[i].GroupID < items[j].GroupID
+	})
+	return items
 }
 
 // saveConsoleGroup 创建或更新单个群配置。

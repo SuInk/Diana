@@ -295,14 +295,17 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 			triggerAt = now
 		}
 		created = append(created, Reminder{
-			ID:        uuid.NewString()[:8],
-			Kind:      ReminderKindMessage,
-			OwnerID:   event.UserID,
-			GroupID:   event.GroupID,
-			UserID:    event.UserID,
-			Message:   message,
-			TriggerAt: triggerAt,
-			CreatedAt: now,
+			ID:               uuid.NewString()[:8],
+			Kind:             ReminderKindMessage,
+			Platform:         event.Platform,
+			ProfileID:        event.ProfileID,
+			ContextNamespace: event.ContextNamespace,
+			OwnerID:          event.UserID,
+			GroupID:          event.GroupID,
+			UserID:           event.UserID,
+			Message:          message,
+			TriggerAt:        triggerAt,
+			CreatedAt:        now,
 		})
 	}
 	if err := r.reminders.SaveReminders(append(items, created...)); err != nil {

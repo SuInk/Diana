@@ -109,6 +109,25 @@ func TestNewWebSearchToolRejectsUnsafeRemoteURL(t *testing.T) {
 	}
 }
 
+func TestExtractMCPToolTextPreservesCompleteErrors(t *testing.T) {
+	message := strings.Repeat("provider-error-", 40) + "tail-marker"
+	raw, err := json.Marshal(map[string]any{
+		"content": []map[string]any{{"type": "text", "text": message}},
+		"isError": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = extractMCPToolText(raw)
+	if err == nil {
+		t.Fatal("expected MCP tool error")
+	}
+	want := "MCP tool reported an error: " + message
+	if err.Error() != want {
+		t.Fatalf("error length = %d, want %d", len(err.Error()), len(want))
+	}
+}
+
 func TestWebSearchToolLiveExaMCP(t *testing.T) {
 	if os.Getenv("DIANA_LIVE_WEB_SEARCH") != "1" {
 		t.Skip("set DIANA_LIVE_WEB_SEARCH=1 to run a real Exa MCP search")

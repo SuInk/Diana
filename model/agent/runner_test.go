@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,50 @@ func TestRunnerCallsToolAndReturnsFinal(t *testing.T) {
 	}
 	if !foundToolResult {
 		t.Fatalf("second request did not include tool result: %#v", client.requests[1].Messages)
+	}
+}
+
+func TestRunnerPreservesCompleteToolErrors(t *testing.T) {
+	longError := strings.Repeat("tool-error-segment-", 180) + "tail-marker"
+	tool := &errorTestTool{message: longError}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"error","input":{}}`,
+		`{"action":"final","content":"reported"}`,
+	}}
+	var completedEvent RunEvent
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "执行"}},
+		Observer: func(_ context.Context, event RunEvent) {
+			if event.Phase == RunPhaseToolCompleted {
+				completedEvent = event
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Steps) != 1 || resp.Steps[0].Error != longError {
+		t.Fatalf("tool error was truncated: %#v", resp.Steps)
+	}
+	if completedEvent.Error != longError {
+		t.Fatalf("observer error length = %d, want %d", len(completedEvent.Error), len(longError))
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(client.requests))
+	}
+	foundCompleteError := false
+	for _, message := range client.requests[1].Messages {
+		if strings.Contains(message.Content, longError) {
+			foundCompleteError = true
+			break
+		}
+	}
+	if !foundCompleteError {
+		t.Fatal("the next model turn did not receive the complete tool error")
 	}
 }
 
@@ -428,6 +473,10 @@ type countingTool struct {
 
 type blockingTool struct{}
 
+type errorTestTool struct {
+	message string
+}
+
 func (*countingWebSearchTool) Name() string        { return webSearchToolName }
 func (*countingWebSearchTool) Description() string { return "test web search tool" }
 func (t *countingWebSearchTool) Run(_ context.Context, input map[string]any) (string, error) {
@@ -448,6 +497,12 @@ func (*blockingTool) Description() string { return "waits for context cancellati
 func (*blockingTool) Run(ctx context.Context, _ map[string]any) (string, error) {
 	<-ctx.Done()
 	return "", ctx.Err()
+}
+
+func (*errorTestTool) Name() string        { return "error" }
+func (*errorTestTool) Description() string { return "returns a test error" }
+func (t *errorTestTool) Run(context.Context, map[string]any) (string, error) {
+	return "", errors.New(t.message)
 }
 
 func (*terminalTestTool) Name() string        { return "terminal" }

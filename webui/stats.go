@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +24,8 @@ type hourBucket struct {
 	Errors   int64 `json:"errors"`
 }
 
-// StatsCollector 聚合运行时事件计数，进程内内存统计，重启后清零。
+// StatsCollector 聚合运行时事件计数；进程启动时可从 SQLite 恢复基线，
+// 之后配置重载继续复用同一个实例。
 type StatsCollector struct {
 	mu          sync.Mutex
 	startedAt   time.Time
@@ -36,6 +38,34 @@ type StatsCollector struct {
 	durTotalMS  int64
 	durCount    int64
 	now         func() time.Time
+}
+
+// RestoreDurableBaseline restores counters collected before this process
+// started. Call it before attaching Observe as the runtime event listener.
+func (s *StatsCollector) RestoreDurableBaseline(stats storage.DashboardEventStats) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.total = stats.TotalEvents
+	s.handled = stats.HandledEvents
+	s.errors = stats.ErrorEvents
+	s.byKind = make(map[string]int64, len(stats.ByKind))
+	for kind, count := range stats.ByKind {
+		s.byKind[kind] = count
+	}
+	s.buckets = make(map[int64]*hourBucket, len(stats.Hourly))
+	for _, restored := range stats.Hourly {
+		bucket := restored
+		s.buckets[restored.HourUnix] = &hourBucket{
+			HourUnix: bucket.HourUnix,
+			Total:    bucket.Total,
+			Handled:  bucket.Handled,
+			Errors:   bucket.Errors,
+		}
+	}
+	s.lastEventAt = stats.LastEventAt
+	s.durTotalMS = stats.DurationTotalMS
+	s.durCount = stats.DurationCount
 }
 
 // NewStatsCollector 创建 StatsCollector。
