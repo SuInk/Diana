@@ -15,13 +15,24 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-const skillFileName = "SKILL.md"
+const (
+	skillFileName            = "SKILL.md"
+	skillInstallMetadataName = ".diana-skill.json"
+)
 
 type SkillMetadata struct {
 	Name             string `json:"name"`
 	Description      string `json:"description"`
 	Path             string `json:"path"`
 	ShortDescription string `json:"short_description,omitempty"`
+	Source           string `json:"source,omitempty"`
+	Managed          bool   `json:"managed,omitempty"`
+}
+
+type skillInstallMetadata struct {
+	Source      string `json:"source,omitempty"`
+	InstalledAt string `json:"installed_at,omitempty"`
+	Managed     bool   `json:"managed"`
 }
 
 type skillFrontmatter struct {
@@ -129,6 +140,13 @@ func parseSkill(path string) (SkillMetadata, error) {
 		ShortDescription: strings.TrimSpace(frontmatter.Metadata.ShortDescription),
 		Path:             abs,
 	}
+	if metadataBody, readErr := os.ReadFile(filepath.Join(filepath.Dir(abs), skillInstallMetadataName)); readErr == nil {
+		var installed skillInstallMetadata
+		if json.Unmarshal(metadataBody, &installed) == nil {
+			skill.Source = strings.TrimSpace(installed.Source)
+			skill.Managed = installed.Managed
+		}
+	}
 	if skill.Name == "" {
 		return SkillMetadata{}, errors.New("missing skill name")
 	}
@@ -234,14 +252,20 @@ type SkillTools struct {
 
 func NewSkillTools(skills []SkillMetadata) SkillTools {
 	copied := append([]SkillMetadata(nil), skills...)
+	return newLiveSkillTools(func() []SkillMetadata {
+		return append([]SkillMetadata(nil), copied...)
+	})
+}
+
+func newLiveSkillTools(provider func() []SkillMetadata) SkillTools {
 	return SkillTools{
-		List: &SkillsListTool{skills: copied},
-		Read: &SkillsReadTool{skills: copied},
+		List: &SkillsListTool{provider: provider},
+		Read: &SkillsReadTool{provider: provider},
 	}
 }
 
 type SkillsListTool struct {
-	skills []SkillMetadata
+	provider func() []SkillMetadata
 }
 
 func (t *SkillsListTool) Name() string {
@@ -253,7 +277,7 @@ func (t *SkillsListTool) Description() string {
 }
 
 func (t *SkillsListTool) Run(context.Context, map[string]any) (string, error) {
-	body, err := json.MarshalIndent(map[string]any{"skills": t.skills}, "", "  ")
+	body, err := json.MarshalIndent(map[string]any{"skills": t.skills()}, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -261,7 +285,7 @@ func (t *SkillsListTool) Run(context.Context, map[string]any) (string, error) {
 }
 
 type SkillsReadTool struct {
-	skills []SkillMetadata
+	provider func() []SkillMetadata
 }
 
 func (t *SkillsReadTool) Name() string {
@@ -277,7 +301,7 @@ func (t *SkillsReadTool) Run(_ context.Context, input map[string]any) (string, e
 	if name == "" {
 		return "", errors.New("name is required")
 	}
-	for _, skill := range t.skills {
+	for _, skill := range t.skills() {
 		if skill.Name != name {
 			continue
 		}
@@ -297,4 +321,18 @@ func (t *SkillsReadTool) Run(_ context.Context, input map[string]any) (string, e
 		return string(encoded), nil
 	}
 	return "", fmt.Errorf("skill %q not found", name)
+}
+
+func (t *SkillsListTool) skills() []SkillMetadata {
+	if t == nil || t.provider == nil {
+		return nil
+	}
+	return t.provider()
+}
+
+func (t *SkillsReadTool) skills() []SkillMetadata {
+	if t == nil || t.provider == nil {
+		return nil
+	}
+	return t.provider()
 }

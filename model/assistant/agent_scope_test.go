@@ -35,6 +35,43 @@ func TestParseReplyIntentDecisionKeepsOnlyRegisteredTools(t *testing.T) {
 	}
 }
 
+func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
+	plugins := NewDefaultPluginManager()
+	runtime := &Runtime{plugins: plugins}
+	workDir := t.TempDir()
+	cfg := DefaultBotConfig()
+	cfg.AgentWorkDir = workDir
+	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
+	registry, err := runtime.newAgentRegistry(
+		context.Background(),
+		cfg.WithDefaults(),
+		MessageEvent{Kind: EventKindPrivate, UserID: "owner"},
+		RelationshipPolicy{Owner: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	list, ok := registry.Get("extensions.list")
+	if !ok {
+		t.Fatal("extensions.list is missing for owner")
+	}
+	body, err := list.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range plugins.List() {
+		if !strings.Contains(body, state.Manifest.ID) || !strings.Contains(body, state.Manifest.Name) {
+			t.Fatalf("default plugin %q missing from extension catalog: %s", state.Manifest.ID, body)
+		}
+	}
+	for _, toolName := range []string{"skills.install", "mcp.install", "mcp.uninstall"} {
+		if _, ok := registry.Get(toolName); !ok {
+			t.Fatalf("owner extension management tool %q is missing", toolName)
+		}
+	}
+}
+
 func TestFilterAgentReplyHistoryKeepsSelectedReferencesAndNeighbors(t *testing.T) {
 	history := make([]MessageEvent, 0, 10)
 	for index := 1; index <= 10; index++ {
