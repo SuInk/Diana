@@ -1,7 +1,14 @@
 # Diana Documentation Site
 
-This directory contains the static documentation site published to GitHub Pages.
-It has no build-time dependencies.
+This directory contains the dependency-free, multi-page documentation site published to GitHub Pages.
+
+Pages:
+
+- `index.html`: product overview and quick start
+- `deploy.html`: one-click installer, Release, Docker, and source deployment
+- `configuration.html`: channels, models, groups, and Agent tools
+- `implementation.html`: architecture, message flow, memory, media, and storage
+- `operations.html`: updates, backup, troubleshooting, and development
 
 Preview locally from the repository root:
 

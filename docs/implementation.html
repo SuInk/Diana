@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Diana 架构、消息流程、长期记忆与存储实现。" />
+    <meta name="theme-color" content="#f7f5f6" />
+    <title>Diana 文档 - 实现</title>
+    <link rel="stylesheet" href="./styles.css?v=20260811" />
+  </head>
+  <body data-page="implementation">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">实现</p><h1>消息、模型、工具和记忆如何协作</h1><p class="lead">平台适配器只负责收发与归一化，Assistant Runtime 拥有决策边界，模型和工具在明确权限内执行，SQLite 保存可恢复的状态。</p></header>
+
+      <section class="section searchable" id="architecture">
+        <div class="section-heading"><p class="eyebrow">架构</p><h2>核心模块与所有权边界</h2></div>
+        <div class="architecture" role="img" aria-label="Diana 系统架构图">
+          <div class="arch-row sources"><div><strong>QQ</strong><span>OneBot V11 WS</span></div><div><strong>Telegram</strong><span>Bot API polling</span></div><div><strong>WebUI</strong><span>REST + SSE</span></div></div>
+          <div class="arch-arrow" aria-hidden="true">↓</div>
+          <div class="arch-core"><strong>Assistant Runtime</strong><span>事件归一化 · 群级策略 · 回复路由 · 并发控制 · 来源通道回发</span></div>
+          <div class="arch-arrow" aria-hidden="true">↓</div>
+          <div class="arch-row services"><div><strong>LLM</strong><span>Provider 与角色路由</span></div><div><strong>Agent</strong><span>工具、MCP、Skills</span></div><div><strong>Memory</strong><span>历史、摘要、长期事实</span></div><div><strong>Plugins</strong><span>搜索、解析、OCR、语音</span></div></div>
+          <div class="arch-arrow" aria-hidden="true">↓</div>
+          <div class="arch-row foundations"><div><strong>SQLite</strong><span>配置与持久状态</span></div><div><strong>Media</strong><span>原图与历史媒体</span></div><div><strong>App Logs</strong><span>操作与调用链</span></div></div>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>目录</th><th>职责</th></tr></thead><tbody>
+          <tr><td><code>cmd/webui/</code></td><td>进程入口、环境装配、SQLite 和运行时依赖注入。</td></tr>
+          <tr><td><code>model/assistant/</code></td><td>消息事件、通道、回复决策、Agent、媒体、记忆与任务。</td></tr>
+          <tr><td><code>model/llm/</code></td><td>统一请求、Provider adapter、模型目录、token 预算和重试。</td></tr>
+          <tr><td><code>model/storage/</code></td><td>Schema、配置、消息、事件、记忆和任务持久化。</td></tr>
+          <tr><td><code>webui/</code></td><td>Gin API、鉴权、配置、事件、更新和 SSE。</td></tr>
+          <tr><td><code>frontend-next/</code></td><td>Vue 3 管理控制台。</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section class="section searchable" id="message-flow">
+        <div class="section-heading"><p class="eyebrow">调用链</p><h2>一条消息如何决定回复或忽略</h2></div>
+        <ol class="timeline">
+          <li><strong>接收与归一化</strong><p>平台 adapter 将文本、@、引用、图片、文件和发送者转换为统一 <code>MessageEvent</code>。</p></li>
+          <li><strong>补全与缓存</strong><p>解析引用、转发和媒体引用，将短效平台图片写入本地历史媒体缓存。</p></li>
+          <li><strong>确定性门禁</strong><p>检查机器人/群启用、回复时间、屏蔽用户、群等级和机器人互聊抑制。</p></li>
+          <li><strong>触发判断</strong><p>私聊直接处理；群聊检查显式 @、引用、触发词和插件命令。显式 @ 的优先级高于引用。</p></li>
+          <li><strong>被动语义路由</strong><p>未直接触发的普通群聊由轻量意图模型直接判断，候选最多等待 60 秒，避免永久排队。</p></li>
+          <li><strong>上下文组装</strong><p>组合系统提示、关系、长期记忆、近期历史、图片和工具证据，并按 token 预算裁剪。</p></li>
+          <li><strong>模型与工具循环</strong><p>选择对话或视觉角色；Agent 执行受限工具并记录每一步。</p></li>
+          <li><strong>发送与审计</strong><p>回复回到来源通道，持久化是否回复的详细原因、发送结果、耗时与 token。</p></li>
+        </ol>
+      </section>
+
+      <section class="section searchable" id="memory">
+        <div class="section-heading"><p class="eyebrow">记忆</p><h2>超长历史不直接塞进每次请求</h2></div>
+        <div class="memory-layers">
+          <article><span>01</span><h3>近期上下文</h3><p>保留当前会话最近消息，优先满足引用、追问和连续对话。</p></article>
+          <article><span>02</span><h3>压缩摘要</h3><p>历史达到阈值后提炼主题、结论和未完成事项，减少重复 token。</p></article>
+          <article><span>03</span><h3>长期事实</h3><p>异步提取稳定事实、偏好和关系信息，带来源、置信度和更新时间。</p></article>
+          <article><span>04</span><h3>按需检索</h3><p>按时间、关键词、用户、群和平台检索；跨群与跨通道分别受独立开关控制。</p></article>
+        </div>
+        <p>检索先使用结构化过滤缩小范围，再做文本相关性与时间衰减排序，最后只向模型提供命中的证据片段。摘要重新加载配置时不会重新计算，只有输入历史变化或摘要版本升级才失效。</p>
+      </section>
+
+      <section class="section searchable" id="media">
+        <div class="section-heading"><p class="eyebrow">多模态</p><h2>原图、OCR 与历史描述各司其职</h2></div>
+        <div class="flow-strip"><span>平台媒体引用</span><b>→</b><span>下载与校验</span><b>→</b><span>原图缓存</span><b>→</b><span>视觉模型 / OCR</span><b>→</b><span>回答与描述缓存</span></div>
+        <ul class="check-list">
+          <li>普通图片转换成 Provider 支持的输入，不在媒体层无条件缩小原图。</li>
+          <li>文本密集截图同时使用高细节视觉输入和 OCR 证据。</li>
+          <li>历史图片描述按内容 SHA-256 和算法版本缓存。</li>
+          <li>图片数量和视觉 token 受预算约束，避免 base64 历史无限增长。</li>
+          <li>视频只抽取有限数量上下文帧，完成后清理临时文件。</li>
+        </ul>
+      </section>
+
+      <section class="section searchable" id="storage">
+        <div class="section-heading"><p class="eyebrow">数据</p><h2>SQLite 主库与可管理的媒体缓存</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>数据</th><th>默认位置</th><th>备份要求</th></tr></thead><tbody>
+          <tr><td>配置、凭据、会话、消息、记忆、任务</td><td><code>data/diana.db</code></td><td>必须备份，并保持主库与 WAL/SHM 一致。</td></tr>
+          <tr><td>入站媒体</td><td><code>data/media</code></td><td>可按容量淘汰；历史识图需要时一并备份。</td></tr>
+          <tr><td>运行日志</td><td><code>logs/diana.log</code></td><td>定期轮转，不公开平台事件和调试上下文。</td></tr>
+          <tr><td>安装与更新备份</td><td><code>.installer/backups</code>、<code>.diana-updates</code></td><td>保留最近可用版本和恢复证据。</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <nav class="page-nav" aria-label="文档分页"><a href="./configuration.html"><small>上一页</small><strong>← 配置</strong></a><a href="./operations.html"><small>下一页</small><strong>运维 →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="./app.js?v=20260811" defer></script>
+  </body>
+</html>
