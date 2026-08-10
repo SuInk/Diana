@@ -29,10 +29,16 @@ type QQBotRuntime interface {
 }
 
 type QQBotChannelFactory func(assistant.BotConfig) assistant.Channel
+type QQBotChannelSetFactory func(assistant.ProfileSet) assistant.Channel
+
+type profileAwareRuntime interface {
+	SetProfiles(assistant.ProfileSet)
+}
 
 type QQBotHandler struct {
 	runtime                   QQBotRuntime
 	newChannel                QQBotChannelFactory
+	newChannelSet             QQBotChannelSetFactory
 	ctx                       context.Context
 	profiles                  QQBotProfileStore
 	groupConfigs              QQBotGroupConfigStore
@@ -159,6 +165,12 @@ func (h *QQBotHandler) SetProfileStore(store QQBotProfileStore) {
 	h.profiles = store
 }
 
+// SetChannelSetFactory enables all configured transports to be rebuilt as one
+// routed channel whenever a profile is saved, enabled, disabled, or deleted.
+func (h *QQBotHandler) SetChannelSetFactory(factory QQBotChannelSetFactory) {
+	h.newChannelSet = factory
+}
+
 // SetGroupConfigStore 注入 QQ 群级配置存储。
 func (h *QQBotHandler) SetGroupConfigStore(store QQBotGroupConfigStore) {
 	if store == nil {
@@ -188,10 +200,12 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/activate", h.activateProfile)
 	router.POST(base+"/config/clone", h.cloneProfile)
 	router.POST(base+"/config/delete", h.deleteProfile)
+	router.POST(base+"/config/context-isolation", h.setContextIsolation)
 	router.GET(base+"/features", h.featuresStatus)
 	router.GET(base+"/status", h.status)
 	router.GET(base+"/auto-info", h.autoInfo)
 	router.GET(base+"/dashboard-stats", h.dashboardStats)
+	router.GET(base+"/events", h.listEvents)
 	router.GET(base+"/tasks", h.listTasks)
 	router.POST(base+"/start", h.start)
 	router.POST(base+"/stop", h.stop)
@@ -264,7 +278,7 @@ func (h *QQBotHandler) saveConfig(c *gin.Context) {
 		return
 	}
 	// 当前激活机器人配置发生变化时，运行时要同步切换并按需重启连接。
-	if err := h.runtime.UpdateConfig(h.ctx, current, h.newChannel(current)); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, qqbotLogTarget(current), botLogMetadata(current))
 		return
 	}
@@ -291,7 +305,7 @@ func (h *QQBotHandler) activateProfile(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "assistant.profile.activate", fmt.Errorf("profile %q not found", targetID), targetID, nil)
 		return
 	}
-	if err := h.runtime.UpdateConfig(h.ctx, current, h.newChannel(current)); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.activate", err, qqbotLogTarget(current), botLogMetadata(current))
 		return
 	}
@@ -319,13 +333,16 @@ func (h *QQBotHandler) cloneProfile(c *gin.Context) {
 		cloned := profile
 		cloned.ID = ""
 		cloned.Name = profile.Name + " 副本"
+		// A cloned credential must never start a second poller/socket until the
+		// administrator explicitly enables it.
+		cloned.Enabled = false
 		next := upsertQQBotProfileSet(set, assistant.ConfigPayload{Name: cloned.Name}, cloned)
 		current, ok := next.Current()
 		if !ok {
 			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("qqbot profile set is empty"), "", nil)
 			return
 		}
-		if err := h.runtime.UpdateConfig(h.ctx, current, h.newChannel(current)); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", err, qqbotLogTarget(current), botLogMetadata(current))
 			return
 		}
@@ -364,13 +381,49 @@ func (h *QQBotHandler) deleteProfile(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", fmt.Errorf("qqbot profile set is empty"), "", nil)
 		return
 	}
-	if err := h.runtime.UpdateConfig(h.ctx, current, h.newChannel(current)); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, qqbotLogTarget(current), botLogMetadata(current))
 		return
 	}
 	h.profiles.SaveProfiles(next)
 	recordRequestOperation(c, h.logs, "assistant.profile.delete", "QQ 机器人配置已删除", targetID, map[string]any{"profile_id": targetID})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+}
+
+type contextIsolationPayload struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (h *QQBotHandler) setContextIsolation(c *gin.Context) {
+	var payload contextIsolationPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.context_isolation.update", err, "", nil)
+		return
+	}
+	next := h.profiles.Profiles().WithPlatformContextIsolation(payload.Enabled)
+	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		h.writeError(c, http.StatusBadRequest, "assistant.context_isolation.update", err, "", nil)
+		return
+	}
+	h.profiles.SaveProfiles(next)
+	recordRequestOperation(c, h.logs, "assistant.context_isolation.update", "平台上下文隔离设置已更新", "", map[string]any{"enabled": payload.Enabled})
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+}
+
+func (h *QQBotHandler) applyProfileSet(set assistant.ProfileSet) error {
+	set = set.WithDefaults()
+	cfg, ok := set.RuntimeConfig()
+	if !ok {
+		return fmt.Errorf("assistant profile set is empty")
+	}
+	if runtime, ok := h.runtime.(profileAwareRuntime); ok {
+		runtime.SetProfiles(set)
+	}
+	channel := h.newChannel(cfg)
+	if h.newChannelSet != nil {
+		channel = h.newChannelSet(set)
+	}
+	return h.runtime.UpdateConfig(h.ctx, cfg, channel)
 }
 
 // validateTokenLength 校验用户显式填写的 token 长度。

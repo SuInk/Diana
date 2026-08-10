@@ -46,6 +46,13 @@ const (
 const maxHTTPRequestBodyBytes = 8 << 20
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == updater.InternalReleaseApplyCommand {
+		if err := updater.RunReleaseApplyHelper(os.Args[2]); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "release update failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	logWriter, closeLog := setupLogging()
 	defer closeLog()
 	probeMacOSQQAppDataAccess()
@@ -103,8 +110,21 @@ func main() {
 	systemHandler := webui.NewSystemUpdateHandler(systemUpdater)
 	systemHandler.SetLogStore(sqliteStore)
 	systemHandler.SetBuildVersion(buildVersion)
-	// 自动更新循环：按持久化设置周期性 fetch + ff-only pull，重启后生效的提示由前端负责。
-	autoUpdater := webui.NewAutoUpdater(systemUpdater, sqliteStore, sqliteStore)
+	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
+		CurrentVersion: buildVersion,
+		FrontendDir:    frontendDistDir(),
+		DatabasePath:   sqliteStore.Path(),
+		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
+		Arguments:      os.Args[1:],
+		Shutdown:       cancel,
+		Disable:        !boolFromEnv("DIANA_RELEASE_UPDATE_ENABLED", true),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	systemHandler.SetReleasePackageUpdater(releaseUpdater)
+	// 自动更新循环：按持久化设置周期性安装最新稳定 Release，重启后生效的提示由前端负责。
+	autoUpdater := webui.NewAutoUpdater(systemHandler, sqliteStore, sqliteStore)
 	systemHandler.SetAutoUpdater(autoUpdater)
 	go autoUpdater.Run(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
@@ -130,15 +150,61 @@ func main() {
 		}
 		plugins.Restore(savedPluginStates)
 	}
-	botCfg := botProfileStore.Current()
+	botSet := botProfileStore.Profiles()
+	botCfg, ok := botSet.RuntimeConfig()
+	if !ok {
+		botCfg = botProfileStore.Current()
+	}
 	// NapCat 使用反向 WebSocket 连接本服务；这里保留同一个 server 实例，配置变更时只更新 token/endpoint。
 	oneBotServer := assistant.NewOneBotReverseServer(assistant.OneBotConfig{
 		Endpoint:    botCfg.OneBotReverseWSEndpoint,
 		AccessToken: botCfg.OneBotAccessToken,
 	})
-	botRuntime := assistant.NewRuntime(botCfg, oneBotServer, plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
+	channelSetFactory := func(set assistant.ProfileSet) assistant.Channel {
+		set = set.WithDefaults()
+		bindings := make([]assistant.ChannelBinding, 0, len(set.Profiles))
+		oneBotAdded := false
+		for _, profile := range set.Profiles {
+			profile = profile.WithDefaults()
+			if !profile.Enabled {
+				continue
+			}
+			var channel assistant.Channel
+			if assistant.IsOneBotPlatform(profile.Platform) {
+				// The reverse WebSocket endpoint is process-wide. QQ and Telegram can
+				// run together; multiple enabled OneBot profiles still share this one
+				// listener, so only the first is attached.
+				if oneBotAdded {
+					continue
+				}
+				oneBotAdded = true
+				oneBotServer.SetConfig(assistant.OneBotConfig{
+					Endpoint:    profile.OneBotReverseWSEndpoint,
+					AccessToken: profile.OneBotAccessToken,
+				})
+				channel = oneBotServer
+			} else if profile.Platform == assistant.PlatformTelegram {
+				channel = assistant.NewTelegramChannel(assistant.TelegramConfig{
+					BotToken:   profile.TelegramBotToken,
+					APIBaseURL: profile.TelegramAPIBaseURL,
+					ProxyURL:   profile.TelegramProxyURL,
+				})
+			}
+			if channel != nil {
+				bindings = append(bindings, assistant.ChannelBinding{
+					ProfileID: profile.ID,
+					Platform:  profile.Platform,
+					Name:      profile.Name,
+					Channel:   channel,
+				})
+			}
+		}
+		return assistant.NewMultiChannel(bindings, set.PlatformContextsIsolated())
+	}
+	botRuntime := assistant.NewRuntime(botCfg, channelSetFactory(botSet), plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
 		return llm.NewClient(store.Current())
 	})
+	botRuntime.SetProfiles(botSet)
 	botRuntime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (assistant.LLMProvider, error) {
 		return llm.NewClient(cfg)
 	})
@@ -166,8 +232,14 @@ func main() {
 		int64(envInt("DIANA_MEDIA_CACHE_MB", 0))<<20,
 	)
 	botRuntime.SetMediaStore(mediaStore)
-	// 统计和 SSE 推送共用同一个事件监听器，Dashboard 依赖这两条链路。
+	// 先恢复持久统计再挂监听器。配置保存或切换只重启机器人连接，
+	// 不会重置这组计数；进程重启也能从去重消息记录恢复基线。
 	statsCollector := webui.NewStatsCollector()
+	if baseline, err := sqliteStore.DashboardEventStatsSnapshot(ctx, time.Now()); err != nil {
+		log.Printf("dashboard stats restore failed: %v", err)
+	} else {
+		statsCollector.RestoreDurableBaseline(baseline)
+	}
 	eventHub := webui.NewEventHub()
 	botRuntime.SetEventListener(func(event assistant.EventRecord) {
 		statsCollector.Observe(event)
@@ -178,21 +250,13 @@ func main() {
 			log.Printf("assistant start skipped: %v", err)
 		}
 	}
-	// Telegram 走出站长轮询，和 OneBot 反向 WS 是两套通道；这里各保留一个
-	// 实例，切换平台时只更新对应实例的配置。
-	telegramChannel := assistant.NewTelegramChannel(assistant.TelegramConfig{
-		BotToken:   botCfg.TelegramBotToken,
-		APIBaseURL: botCfg.TelegramAPIBaseURL,
-		ProxyURL:   botCfg.TelegramProxyURL,
-	})
 	botHandler := webui.NewQQBotHandlerWithFactory(ctx, botRuntime, func(cfg assistant.BotConfig) assistant.Channel {
 		if cfg.Platform == assistant.PlatformTelegram {
-			telegramChannel.SetConfig(assistant.TelegramConfig{
+			return assistant.NewTelegramChannel(assistant.TelegramConfig{
 				BotToken:   cfg.TelegramBotToken,
 				APIBaseURL: cfg.TelegramAPIBaseURL,
 				ProxyURL:   cfg.TelegramProxyURL,
 			})
-			return telegramChannel
 		}
 		oneBotServer.SetConfig(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,
@@ -200,6 +264,7 @@ func main() {
 		})
 		return oneBotServer
 	})
+	botHandler.SetChannelSetFactory(channelSetFactory)
 	botHandler.SetFeatureFlags(webui.QQBotFeatureFlags{
 		GroupTest: boolFromEnv("QQBOT_GROUP_TEST_ENABLED", false),
 	})
@@ -362,16 +427,27 @@ func migrateLegacyLLMConfigPluginState(set assistant.ProfileSet, states map[stri
 	return set, changed
 }
 
-// migrateRestoredWebSearchPluginState preserves the search capability that
-// pre-plugin releases exposed automatically. Explicit plugin choices win once
-// the new state has been persisted.
+// migrateRestoredWebSearchPluginState upgrades the former optional search plugin
+// to a built-in capability. An explicitly disabled installed plugin stays
+// disabled, while the old "not installed" state becomes installed and enabled.
 func migrateRestoredWebSearchPluginState(states map[string]assistant.PluginState, catalogState assistant.PluginState) bool {
-	if _, exists := states[webSearchPluginID]; exists {
+	state, exists := states[webSearchPluginID]
+	if !exists {
+		catalogState.Installed = true
+		catalogState.Enabled = true
+		states[webSearchPluginID] = catalogState
+		return true
+	}
+	if state.Manifest.BuiltIn && state.Installed {
 		return false
 	}
-	catalogState.Installed = true
-	catalogState.Enabled = true
-	states[webSearchPluginID] = catalogState
+	wasInstalled := state.Installed
+	state.Manifest = catalogState.Manifest
+	state.Installed = true
+	if !wasInstalled {
+		state.Enabled = true
+	}
+	states[webSearchPluginID] = state
 	return true
 }
 

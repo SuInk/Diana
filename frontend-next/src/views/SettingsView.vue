@@ -114,7 +114,7 @@
       <section class="card">
         <div class="card-header">
           <h2>系统更新</h2>
-          <span class="badge">{{ deploymentMode === "git" ? "源码更新" : "Release / Docker" }}</span>
+          <span class="badge">{{ deploymentMode === "git" ? "源码更新" : systemVersion?.update_supported ? "Release 自更新" : "Docker" }}</span>
           <button class="btn small ghost" type="button" :disabled="loading" title="刷新更新状态" @click="loadUpdates">
             <RefreshCw :size="14" aria-hidden="true" />
           </button>
@@ -143,7 +143,7 @@
             />
           </div>
           <p class="muted" style="font-size: 12.5px; margin: 0">
-            {{ deploymentMode === "git" ? "后台检查 GitHub 并快进拉取更新，默认每 30 分钟执行。" : "后台检查 Release；Docker 镜像由部署环境的更新器自动安装。" }}
+            {{ deploymentMode === "git" ? "后台检查 GitHub 并快进拉取更新，默认每 30 分钟执行。" : systemVersion?.update_supported ? "后台下载并校验完整 Release 包，切换后自动探活并在失败时恢复。" : "后台检查 Release；Docker 镜像由部署环境的更新器自动安装。" }}
           </p>
           <p v-if="lastAutoRun" class="muted" style="font-size: 12.5px; margin: 0">上次检查：{{ lastAutoRun }}</p>
 
@@ -154,12 +154,12 @@
               <span class="mono">{{ updateStatus.branch || "—" }} · {{ shortCommit }}</span>
             </div>
             <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
-            <button class="btn primary" type="button" :disabled="updating" @click="runUpdate">
-              <Download :size="15" aria-hidden="true" />
-              {{ updating ? "更新中…" : "从 GitHub 拉取更新" }}
-            </button>
-            <pre v-if="updateOutput" class="mono" style="margin: 0; font-size: 11.5px; white-space: pre-wrap; color: var(--muted)">{{ updateOutput }}</pre>
           </template>
+          <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="updating" @click="runUpdate">
+            <Download :size="15" aria-hidden="true" />
+            {{ updating ? "更新中…" : deploymentMode === "git" ? "安装最新稳定 Release" : "下载并安装最新 Release" }}
+          </button>
+          <pre v-if="updateOutput" class="mono" style="margin: 0; font-size: 11.5px; white-space: pre-wrap; color: var(--muted)">{{ updateOutput }}</pre>
           <div v-if="loading" class="skeleton" style="height: 72px"></div>
         </div>
       </section>
@@ -283,7 +283,7 @@ async function loadUpdates(): Promise<void> {
     } else {
       lastAutoRun.value = "";
     }
-    updateStatus.value = deploymentMode.value === "git" ? await getUpdateStatus() : null;
+    updateStatus.value = systemVersion.value.update_supported ? await getUpdateStatus() : null;
   } catch {
     updateStatus.value = null;
   } finally {
@@ -313,7 +313,7 @@ async function runUpdate(): Promise<void> {
     const result = await pullFromGitHub();
     updateStatus.value = result.status;
     updateOutput.value = result.output ?? "";
-    toastSuccess(result.updated ? "更新完成，重启服务后生效" : "已是最新，无需更新");
+    toastSuccess(result.updated ? (deploymentMode.value === "release" ? "更新已暂存，服务即将自动重启并探活" : "更新完成，重启服务后生效") : "已是最新，无需更新");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "更新失败");
   } finally {

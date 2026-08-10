@@ -673,7 +673,7 @@ func extractMCPToolText(raw json.RawMessage) (string, error) {
 		content = strings.TrimSpace(string(result.StructuredContent))
 	}
 	if result.IsError {
-		return "", fmt.Errorf("MCP tool reported an error: %s", truncateRunes(content, 300))
+		return "", fmt.Errorf("MCP tool reported an error: %s", content)
 	}
 	if content == "" {
 		return "", errors.New("MCP tool returned empty content")

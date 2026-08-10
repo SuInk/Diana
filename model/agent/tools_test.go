@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,67 @@ func TestRunCommandToolRunsAllowedCommand(t *testing.T) {
 		t.Fatalf("Unmarshal() error = %v, json = %s", err, got)
 	}
 	if payload.Command != "go" || payload.ExitCode != 0 || !strings.Contains(payload.Output, "go version") {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestRunCommandToolPreservesCompleteFailureOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires sh")
+	}
+	message := strings.Repeat("failure-output-", 80) + "tail-marker"
+	tool := &RunCommandTool{
+		root:      t.TempDir(),
+		allowlist: map[string]bool{"sh": true},
+		timeout:   time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
+		maxBytes:  32,
+	}
+	_, err := tool.Run(context.Background(), map[string]any{
+		"command": "sh",
+		"args":    []any{"-c", `printf '%s' "$1" >&2; exit 7`, "sh", message},
+	})
+	if err == nil {
+		t.Fatal("expected command failure")
+	}
+	var payload struct {
+		ExitCode  int    `json:"exit_code"`
+		Truncated bool   `json:"truncated"`
+		Output    string `json:"output"`
+	}
+	if unmarshalErr := json.Unmarshal([]byte(err.Error()), &payload); unmarshalErr != nil {
+		t.Fatalf("error is not structured JSON: %v; error = %s", unmarshalErr, err)
+	}
+	if payload.ExitCode != 7 || payload.Truncated || payload.Output != message {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestRunCommandToolStillLimitsSuccessfulOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires sh")
+	}
+	message := strings.Repeat("success-output-", 20)
+	tool := &RunCommandTool{
+		root:      t.TempDir(),
+		allowlist: map[string]bool{"sh": true},
+		timeout:   time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
+		maxBytes:  32,
+	}
+	got, err := tool.Run(context.Background(), map[string]any{
+		"command": "sh",
+		"args":    []any{"-c", `printf '%s' "$1"`, "sh", message},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Truncated bool   `json:"truncated"`
+		Output    string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Truncated || len(payload.Output) != 32 {
 		t.Fatalf("payload = %#v", payload)
 	}
 }

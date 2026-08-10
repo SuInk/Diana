@@ -77,6 +77,8 @@ type qqbotTasksResponse struct {
 type qqbotTaskPayload struct {
 	ID                  string    `json:"id"`
 	Kind                string    `json:"kind"`
+	Platform            string    `json:"platform,omitempty"`
+	ProfileID           string    `json:"profile_id,omitempty"`
 	OwnerID             string    `json:"owner_id"`
 	GroupID             string    `json:"group_id,omitempty"`
 	UserID              string    `json:"user_id,omitempty"`
@@ -91,6 +93,7 @@ type qqbotTaskPayload struct {
 	PendingDelivery     bool      `json:"pending_delivery,omitempty"`
 	PendingSince        time.Time `json:"pending_since,omitempty"`
 	CreatedAt           time.Time `json:"created_at"`
+	ConsumesQuota       bool      `json:"consumes_quota"`
 }
 
 type pluginTaskRunner interface {
@@ -322,6 +325,8 @@ func (h *QQBotHandler) listTasks(c *gin.Context) {
 		out = append(out, qqbotTaskPayload{
 			ID:                  item.ID,
 			Kind:                qqbotTaskKind(item),
+			Platform:            item.Platform,
+			ProfileID:           item.ProfileID,
 			OwnerID:             item.OwnerID,
 			GroupID:             item.GroupID,
 			UserID:              item.UserID,
@@ -336,6 +341,7 @@ func (h *QQBotHandler) listTasks(c *gin.Context) {
 			PendingDelivery:     strings.TrimSpace(item.PendingDelivery) != "",
 			PendingSince:        item.PendingSince,
 			CreatedAt:           item.CreatedAt,
+			ConsumesQuota:       taskConsumesQuota(item),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -358,16 +364,23 @@ func qqbotTaskStatus(item assistant.Reminder) string {
 	if !item.CancelledAt.IsZero() {
 		return "cancelled"
 	}
+	if item.ConsecutiveFailures > 0 {
+		return "retrying"
+	}
 	if item.Kind == assistant.ReminderKindQuery && item.IntervalSeconds > 0 {
-		if item.ConsecutiveFailures > 0 {
-			return "retrying"
-		}
 		return "active"
 	}
 	if !item.LastRunAt.IsZero() {
 		return "used"
 	}
 	return "active"
+}
+
+func taskConsumesQuota(item assistant.Reminder) bool {
+	if item.Kind == assistant.ReminderKindQuery && item.IntervalSeconds > 0 {
+		return item.CancelledAt.IsZero()
+	}
+	return item.LastRunAt.IsZero() && item.CancelledAt.IsZero()
 }
 
 func (h *QQBotHandler) recallGroupTestMessage(c *gin.Context) {

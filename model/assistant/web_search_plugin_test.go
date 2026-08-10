@@ -1,31 +1,35 @@
 package assistant
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
 )
 
-func TestWebSearchPluginRequiresInstallationAndHonorsOverrides(t *testing.T) {
+func TestWebSearchPluginIsBuiltInAndHonorsOverrides(t *testing.T) {
 	manager := NewDefaultPluginManager()
 	state, ok := manager.Get(webSearchPluginID)
 	if !ok {
 		t.Fatal("web search plugin missing")
 	}
-	if state.Installed || state.Enabled || !state.Manifest.Official || state.Manifest.BuiltIn {
+	if !state.Installed || !state.Enabled || !state.Manifest.Official || !state.Manifest.BuiltIn {
 		t.Fatalf("initial state = %#v", state)
 	}
 	tools, err := manager.AgentToolsWithOverrides(nil)
-	if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) {
-		t.Fatalf("uninstalled tools=%#v err=%v", tools, err)
+	if err != nil || !hasAgentToolNamed(tools, agent.WebSearchToolName) {
+		t.Fatalf("built-in tools=%#v err=%v", tools, err)
 	}
 
-	if _, err := manager.Install(webSearchPluginID); err != nil {
-		t.Fatal(err)
+	if _, err := manager.Install(webSearchPluginID); !errors.Is(err, ErrBuiltInPluginAction) {
+		t.Fatalf("Install() error = %v", err)
 	}
-	tools, err = manager.AgentToolsWithOverrides(nil)
-	if err != nil || !hasAgentToolNamed(tools, agent.WebSearchToolName) {
-		t.Fatalf("installed tools=%#v err=%v", tools, err)
+	if _, err := manager.Uninstall(webSearchPluginID); !errors.Is(err, ErrBuiltInPluginAction) {
+		t.Fatalf("Uninstall() error = %v", err)
+	}
+	state, _ = manager.Get(webSearchPluginID)
+	if !state.Installed || !state.Enabled {
+		t.Fatalf("built-in state changed after lifecycle request: %#v", state)
 	}
 	tools, err = manager.AgentToolsWithOverrides(map[string]bool{webSearchPluginID: false})
 	if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) {
