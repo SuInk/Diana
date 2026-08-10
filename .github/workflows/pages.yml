@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "docs/**"
+      - "scripts/install.sh"
+      - "scripts/install.ps1"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
