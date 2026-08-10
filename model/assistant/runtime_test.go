@@ -61,6 +61,28 @@ func TestRuntimeShouldHandleGroupMentionAndTrigger(t *testing.T) {
 	}
 }
 
+func TestRuntimeRecordLLMUsageCalculatesMissingTotal(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(logs)
+	runtime.recordLLMUsage(
+		context.Background(),
+		MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"},
+		llm.ProviderOpenAICompatible,
+		"test-model",
+		llm.Usage{InputTokens: 12, OutputTokens: 8},
+		"reply",
+	)
+
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 {
+		t.Fatalf("usage logs = %#v, want one entry", entries)
+	}
+	if got := entries[0].Metadata["total_tokens"]; got != int64(20) {
+		t.Fatalf("total_tokens = %#v, want 20", got)
+	}
+}
+
 func TestRuntimeDirectTriggersBypassPassiveRouter(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -99,6 +99,11 @@ func TestRouteReplyIntentUsesCompactToolCatalog(t *testing.T) {
 	if strings.Contains(strings.ToLower(payload.AvailableTools[0].Description), "input:") || strings.Contains(payload.AvailableTools[0].Description, "num_results") {
 		t.Fatalf("router catalog leaked schema: %#v", payload.AvailableTools[0])
 	}
+	for _, expected := range []string{"具体商品", "口碑", "味道", "好不好", "web_search.search"} {
+		if !strings.Contains(provider.request.Messages[0].Content, expected) {
+			t.Fatalf("router search guidance missing %q: %s", expected, provider.request.Messages[0].Content)
+		}
+	}
 }
 
 func TestQQSystemPromptOmitsUnselectedToolRules(t *testing.T) {

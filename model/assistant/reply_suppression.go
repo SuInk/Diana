@@ -861,7 +861,7 @@ func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySup
 		"trigger_message_id": item.TriggerMessageID, "llm_generated": llmGenerated,
 	}
 	if generationErr != nil {
-		metadata["generation_error"] = truncateRunesFromStart(generationErr.Error(), 240)
+		metadata["generation_error"] = generationErr.Error()
 	}
 	logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

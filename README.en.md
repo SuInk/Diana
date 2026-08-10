@@ -152,6 +152,8 @@ sha256sum -c SHA256SUMS --ignore-missing
 
 On macOS, compare `shasum -a 256 <file>` with `SHA256SUMS`. On Windows, use `Get-FileHash <file> -Algorithm SHA256`.
 
+When Diana is running from a complete Release package, the WebUI can install later stable releases directly. The backend downloads the package for the current OS and architecture together with `SHA256SUMS`, verifies it, and extracts it into a staging directory. After the old process exits, a detached update helper backs up the SQLite database and current binary/frontend, switches the files, starts the new version, and probes `/api/health`. A failed probe restores both the database and the old version automatically. Backups and the latest result are kept under `.diana-updates` in the installation directory. Containers remain managed by their image updater, while source checkouts continue to use the Git update path.
+
 ## Quick Run
 
 For local development or testing, start the Go backend and Vite frontend together:
@@ -210,6 +212,8 @@ The WebUI requires authentication from the first startup, with identical rules f
 - You may provide `DIANA_ADMIN_USERNAME=diana#yourname` and `DIANA_ADMIN_PASSWORD` on first startup instead. They never overwrite credentials already stored in SQLite.
 - After login, the username and password can be updated under Settings > Access Security. Usernames must start with `diana#`; passwords must contain at least 8 characters.
 
+**Administrator quick login:** enable it on the Assistant page and configure the owner account to expose two one-time login methods. Code login sends a six-digit code to the owner's QQ or Telegram account and also requires the browser-bound challenge token. Private-message confirmation displays a code in the browser which the owner sends privately to the bot. Codes expire after five minutes, are attempt-limited and single-use, while delivery has a 60-second cooldown. The active bot must be online for either method.
+
 ## WebUI Log Center
 
 The WebUI `Log Center` page shows persistent operation logs and error logs. Operation logs cover actions such as saving or switching LLM profiles, starting or stopping the bot, managing plugins, and running system updates. Error logs record failed API operations. Logs include an `actor`: WebUI operations default to `web:<client IP>` and can be overridden by a gateway with headers such as `X-Diana-Actor`, `X-Operator`, or `X-Forwarded-User`; the QQ built-in LLM config skill records `qq:<user QQ>`.
@@ -266,7 +270,7 @@ When the level cannot be read, the bot **allows the message through** by default
 
 ## Platforms
 
-The bot page groups profiles by chat platform and lets you filter them with the tabs at the top. One profile runs at a time.
+The bot page groups profiles by chat platform and lets you filter them with the tabs at the top. All enabled QQ and Telegram profiles run concurrently, while replies, media, and reminders are routed back through the source channel. Cross-platform conversation context is isolated per profile by default and can be shared by disabling isolation at the top of the bot list.
 
 | Category | Platform | How it connects |
 | --- | --- | --- |
@@ -300,19 +304,20 @@ chrome --remote-debugging-port=9222
 
 Set `Agent work dir` to a dedicated reference directory. Avoid pointing it at directories that contain secrets or production data. Command execution is powerful; in production, set `DIANA_AGENT_COMMAND_ALLOWLIST` to only the commands you need.
 
-## Install Plugins In WebUI
+## Manage Plugins In WebUI
 
 Open the WebUI and go to the bot plugins section:
 
 1. View official built-in plugins.
-2. Install or enable a plugin.
+2. Built-in capabilities require no installation or removal; enable, disable, and configure them directly.
 3. The built-in Go social media resolver extracts and sends images or videos from Bilibili, YouTube, X, Xiaohongshu, and Douyin. Size, duration, resolution, and gallery limits are configurable in the plugin settings. Zhihu, Weibo, and GitHub links only yield a title and description with no media download; the exclude-platform list labels each entry as either downloadable media or title only.
 
    Per-platform cookies, the yt-dlp cookie file, and the proxy address can all be filled in directly from the plugin settings, so there is no need to edit environment variables and restart the container. Values set here take precedence over the matching environment variables. Once saved, read endpoints only return a "configured" flag rather than the plaintext; submitting an empty value keeps the stored credential, and clearing one requires the "Clear" button next to the field.
 
    The top of the plugins page reports whether `yt-dlp`, `ffmpeg`, and `node` are present. Downloads for the affected platforms fail when one is missing.
 4. The default built-in Go file parser handles QQ file segments and text file links, extracting file text as LLM context.
-5. The default built-in `LLM config skill` lets the owner change the active provider and model with natural language in chat, for example: `把提供商切到 gemini`, `把模型换成 gemini-2.5-pro`, or `以后用 anthropic 的 claude-sonnet-4-5`; requested models are validated against the backend model list before they are saved.
+5. `Web search` is installed and enabled as a built-in capability. The model can call `web_search.search` directly, using the free Exa MCP endpoint first and an API-key-configured Tavily provider as fallback. It can be disabled or configured, but not installed or removed, and it remains independent of the local Agent switch.
+6. The default built-in `LLM config skill` lets the owner change the active provider and model with natural language in chat, for example: `把提供商切到 gemini`, `把模型换成 gemini-2.5-pro`, or `以后用 anthropic 的 claude-sonnet-4-5`; requested models are validated against the backend model list before they are saved.
 
 ## Use Third-Party NoneBot Plugins
 
@@ -347,6 +352,7 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `DIANA_YTDLP_COOKIES` | empty | Path to a Netscape cookie file for yt-dlp; WebUI plugin settings take precedence |
 | `DIANA_RESOLVER_PROXY` | empty | Proxy used by the social resolver and yt-dlp; WebUI plugin settings take precedence |
 | `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database path |
+| `DIANA_RELEASE_UPDATE_ENABLED` | `true` | Allow complete Release packages to download, verify, back up, and self-update; source and container deployments do not enable package replacement |
 | `DIANA_ADMIN_USERNAME` | securely generated | Initial administrator username; defaults to `diana#` followed by 16 random characters, then SQLite credentials take precedence |
 | `DIANA_ADMIN_PASSWORD` | securely generated | Initial administrator password; then SQLite credentials take precedence |
 | `LLM_PROVIDER` | `openai_compatible` | LLM provider |

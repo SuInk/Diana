@@ -6,6 +6,7 @@ func TestDianaBotConfigSnapshotIncludesRestoredBehavior(t *testing.T) {
 	disabled := false
 	cfg := BotConfig{
 		OwnerLoginEnabled:            true,
+		BotReplyLoopDetectionEnabled: &disabled,
 		GroupAdmission:               GroupAdmission{Mode: GroupAdmissionWhitelist, AllowedGroups: []string{"10001"}},
 		ReplyGate:                    &ReplyGate{MinGroupLevel: 12},
 		ReplyReferenceEnabled:        &disabled,
@@ -26,7 +27,7 @@ func TestDianaBotConfigSnapshotIncludesRestoredBehavior(t *testing.T) {
 	if snapshot.ReplyGate == nil || snapshot.ReplyGate.MinGroupLevel != 12 {
 		t.Fatalf("reply gate = %#v", snapshot.ReplyGate)
 	}
-	if snapshot.ReplyReferenceEnabled || snapshot.RecallReplyAutoDeleteEnabled {
+	if snapshot.ReplyReferenceEnabled || snapshot.RecallReplyAutoDeleteEnabled || snapshot.BotReplyLoopDetectionEnabled {
 		t.Fatalf("explicitly disabled behavior was not preserved: %#v", snapshot)
 	}
 	if snapshot.ModelRoles["chat"].Model != "model-a" || len(snapshot.ReplyRules) != 1 {

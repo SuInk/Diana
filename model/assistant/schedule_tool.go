@@ -259,15 +259,18 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 			return nil, fmt.Errorf("第 %d 个周期任务 query 无效", index+1)
 		}
 		created = append(created, Reminder{
-			ID:              uuid.NewString()[:8],
-			Kind:            ReminderKindQuery,
-			OwnerID:         event.UserID,
-			GroupID:         event.GroupID,
-			UserID:          event.UserID,
-			Message:         query,
-			TriggerAt:       now.Add(request.Interval),
-			IntervalSeconds: int64(request.Interval / time.Second),
-			CreatedAt:       now,
+			ID:               uuid.NewString()[:8],
+			Kind:             ReminderKindQuery,
+			Platform:         event.Platform,
+			ProfileID:        event.ProfileID,
+			ContextNamespace: event.ContextNamespace,
+			OwnerID:          event.UserID,
+			GroupID:          event.GroupID,
+			UserID:           event.UserID,
+			Message:          query,
+			TriggerAt:        now.Add(request.Interval),
+			IntervalSeconds:  int64(request.Interval / time.Second),
+			CreatedAt:        now,
 		})
 	}
 	if err := r.reminders.SaveReminders(append(items, created...)); err != nil {

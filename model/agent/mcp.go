@@ -456,9 +456,6 @@ type lockedBuffer struct {
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.buffer.Len() > 32*1024 {
-		b.buffer.Reset()
-	}
 	return b.buffer.Write(p)
 }
 

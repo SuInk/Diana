@@ -20,7 +20,7 @@
             <strong>Diana</strong>
             <button class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
               {{ versionLabel }}
-              <span v-if="updateBehind > 0" class="version-dot" aria-label="有新版本"></span>
+              <span v-if="releaseUpdateAvailable" class="version-dot" aria-label="有新版本"></span>
             </button>
           </span>
         </div>
@@ -90,6 +90,8 @@
 
       <main class="app-content">
         <DashboardView v-if="currentView === 'dashboard'" />
+        <EventsView v-else-if="currentView === 'events'" />
+        <TasksView v-else-if="currentView === 'tasks'" />
         <SetupWizard v-else-if="currentView === 'setup'" />
         <LLMView v-else-if="currentView === 'llm'" />
         <AssistantView v-else-if="currentView === 'bot'" />
@@ -102,7 +104,7 @@
 
     <ToastHost />
     <ConfirmHost />
-    <VersionModal v-if="versionOpen" @close="versionOpen = false" />
+    <VersionModal v-if="versionOpen" @close="versionOpen = false" @checked="releaseUpdateAvailable = $event" />
   </div>
 </template>
 
@@ -112,7 +114,9 @@ import type { Component } from "vue";
 import {
   Bot,
   BotMessageSquare,
+  Activity,
   BrainCircuit,
+  CalendarClock,
   FileClock,
   LayoutGrid,
   MessageCircle,
@@ -137,6 +141,8 @@ import { toastSuccess } from "./toast";
 import VersionModal from "./components/VersionModal.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
+import EventsView from "./views/EventsView.vue";
+import TasksView from "./views/TasksView.vue";
 import SetupWizard from "./views/SetupWizard.vue";
 import LLMView from "./views/LLMView.vue";
 import AssistantView from "./views/AssistantView.vue";
@@ -179,7 +185,7 @@ const locked = ref(false);
 const versionOpen = ref(false);
 const systemVersion = ref<SystemVersion | null>(null);
 const versionLabel = computed(() => systemVersion.value?.version_label || systemVersion.value?.build_version || "控制台");
-const updateBehind = computed(() => systemVersion.value?.behind ?? 0);
+const releaseUpdateAvailable = ref(false);
 const health = ref<HealthResponse | null>(null);
 
 const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
@@ -187,6 +193,8 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
+  events: "事件明细",
+  tasks: "提醒与订阅",
   setup: "配置向导",
   llm: "LLM 配置",
   bot: "机器人",
@@ -206,10 +214,12 @@ const botSummary = computed(() => {
   if (!status.running) {
     return { kind: "warn", label: "机器人未启动" };
   }
-  if (!status.channel.connected) {
-    return { kind: "err", label: "等待 NapCat 连接" };
+  const channels = status.channels ?? [status.channel];
+  const connected = channels.filter((channel) => channel.connected).length;
+  if (connected === 0) {
+    return { kind: "err", label: "等待通道连接" };
   }
-  return { kind: "ok", label: `已连接 ${status.channel.self_id || ""}`.trim() };
+  return { kind: connected === channels.length ? "ok" : "warn", label: `已连接 ${connected}/${channels.length}` };
 });
 
 const themeModeLabels: Record<string, string> = { auto: "跟随系统", light: "浅色", dark: "深色" };
@@ -229,6 +239,8 @@ const themeIcon = computed<Component>(() => (theme.mode === "light" ? Sun : them
 function navIcon(id: ViewID): Component {
   const icons: Partial<Record<ViewID, Component>> = {
     dashboard: LayoutGrid,
+    events: Activity,
+    tasks: CalendarClock,
     llm: BrainCircuit,
     bot: Bot,
     plugins: PlugZap,

@@ -19,6 +19,7 @@ var (
 	ErrRepositoryNotFound  = errors.New("updater: update root is not a Git work tree")
 	ErrRemoteNotConfigured = errors.New("updater: git remote origin is not configured")
 	ErrRemoteBranchMissing = errors.New("updater: matching branch does not exist on origin")
+	ErrReleaseTagMissing   = errors.New("updater: release tag does not exist on origin")
 	ErrDetachedHead        = errors.New("updater: detached HEAD cannot be updated")
 	ErrWorkingTreeDirty    = errors.New("updater: working tree has uncommitted changes")
 	ErrNonFastForward      = errors.New("updater: local and remote branches have diverged")
@@ -336,6 +337,94 @@ func (u *GitUpdater) ForceUpdate(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	return u.finishResult(true, true, sourceUpdated, applied, restartRequired, previousCommit, targetCommit, outputs)
+}
+
+var releaseTagPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+
+// UpdateToRelease fast-forwards the current branch to an exact Release tag.
+func (u *GitUpdater) UpdateToRelease(ctx context.Context, tag string) (Result, error) {
+	return u.updateToRelease(ctx, tag, false)
+}
+
+// ForceUpdateToRelease resets tracked files to an exact Release tag.
+func (u *GitUpdater) ForceUpdateToRelease(ctx context.Context, tag string) (Result, error) {
+	return u.updateToRelease(ctx, tag, true)
+}
+
+func (u *GitUpdater) updateToRelease(ctx context.Context, tag string, force bool) (Result, error) {
+	tag = strings.TrimSpace(tag)
+	if !releaseTagPattern.MatchString(tag) {
+		return Result{}, fmt.Errorf("updater: invalid release tag %q", tag)
+	}
+	if !u.beginOperation() {
+		return Result{}, ErrUpdateInProgress
+	}
+	defer u.endOperation()
+
+	status, err := u.Status(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if status.RemoteURL == "" {
+		return Result{}, ErrRemoteNotConfigured
+	}
+	if status.Branch == "" {
+		return Result{}, ErrDetachedHead
+	}
+	if status.Dirty && !force {
+		return Result{}, ErrWorkingTreeDirty
+	}
+
+	outputs := make([]string, 0, 3)
+	fetchArgs := []string{"fetch", "--prune", "--tags"}
+	if force {
+		fetchArgs = append(fetchArgs, "--force")
+	}
+	fetchArgs = append(fetchArgs, "origin")
+	fetchOut, err := u.gitCombined(ctx, fetchArgs...)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrFetchFailed, err)
+	}
+	u.recordFetch(time.Now())
+	appendOutput(&outputs, fetchOut)
+
+	previousCommit, err := u.gitOutput(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return Result{}, err
+	}
+	tagRef := "refs/tags/" + tag
+	targetCommit, err := u.gitOutput(ctx, "rev-parse", "--verify", "--quiet", tagRef+"^{commit}")
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %s", ErrReleaseTagMissing, tag)
+	}
+	sourceUpdated := !sameCommit(previousCommit, targetCommit) || (force && status.Dirty)
+	if force {
+		resetOut, err := u.gitCombined(ctx, "reset", "--hard", targetCommit)
+		if err != nil {
+			return Result{}, err
+		}
+		appendOutput(&outputs, resetOut)
+	} else if sourceUpdated {
+		ancestor, err := u.isAncestor(ctx, previousCommit, targetCommit)
+		if err != nil {
+			return Result{}, err
+		}
+		if !ancestor {
+			return Result{}, ErrNonFastForward
+		}
+		mergeOut, err := u.gitCombined(ctx, "merge", "--ff-only", targetCommit)
+		if err != nil {
+			return Result{}, fmt.Errorf("updater: fast-forward release %s: %w", tag, err)
+		}
+		appendOutput(&outputs, mergeOut)
+	}
+
+	applyNeeded := len(u.applyCommand) > 0 && (force || sourceUpdated || runningCommitBehind(status.RunningCommit, targetCommit))
+	applied, restartRequired, err := u.applyIfNeeded(ctx, targetCommit, applyNeeded, &outputs)
+	if err != nil {
+		return Result{}, err
+	}
+	return u.finishResult(force, true, sourceUpdated, applied, restartRequired, previousCommit, targetCommit, outputs)
 }
 
 var rollbackRefPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._/\-]{0,127}$`)

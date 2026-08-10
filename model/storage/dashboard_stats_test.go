@@ -45,3 +45,112 @@ func TestDashboardStatsForDayCountsDistinctActiveMembers(t *testing.T) {
 		t.Fatalf("active members = %d, want 2", stats.ActiveMembers)
 	}
 }
+
+func TestDashboardStatsForDayTotalsCurrentAndLegacyLLMUsage(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "dashboard-token-usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Date(2026, time.July, 19, 15, 30, 0, 0, time.Local)
+	for _, entry := range []AppLogEntry{
+		{Action: "qqbot.llm_usage", CreatedAt: now.Add(-time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 80, "output_tokens": 20}},
+		{Action: "assistant.llm_usage", CreatedAt: now.Add(-2 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 30, "output_tokens": 10, "total_tokens": 45}},
+		{Action: "qqbot.llm_usage", CreatedAt: now.Add(-24 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 1000, "output_tokens": 1000}},
+	} {
+		if err := store.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stats, err := store.DashboardStatsForDay(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.LLMCalls != 2 || stats.LLMInputTokens != 110 || stats.LLMOutputTokens != 30 || stats.LLMTotalTokens != 145 {
+		t.Fatalf("LLM totals = calls:%d input:%d output:%d total:%d, want 2/110/30/145", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens, stats.LLMTotalTokens)
+	}
+}
+
+func TestDashboardEventStatsSnapshotRestoresOnlyCompletedDeduplicatedMessages(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "dashboard-events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Date(2026, time.July, 19, 15, 30, 0, 0, time.Local)
+	insertInbound := func(id string, kind assistant.EventKind, at time.Time, status string, outcome string, duration time.Duration) {
+		t.Helper()
+		completedAt := int64(0)
+		createdAt := at.UnixNano()
+		if status == inboundStatusDone {
+			completedAt = createdAt + duration.Nanoseconds()
+		}
+		_, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, event_time, payload, priority, status, attempts,
+  available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES (?, ?, ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
+`, id, string(kind)+":"+id, string(kind), at.Unix(), status, createdAt, outcome, createdAt, createdAt, completedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertInbound("replied", assistant.EventKindGroup, now.Add(-30*time.Minute), inboundStatusDone, "replied", time.Second)
+	insertInbound("error", assistant.EventKindPrivate, now.Add(-90*time.Minute), inboundStatusDone, "error_replied", 3*time.Second)
+	insertInbound("ignored", assistant.EventKindGroup, now.Add(-2*time.Hour), inboundStatusDone, "ignored", 0)
+	insertInbound("old", assistant.EventKindPrivate, now.Add(-72*time.Hour), inboundStatusDone, "replied_passive_batch", 5*time.Second)
+	insertInbound("pending", assistant.EventKindGroup, now.Add(-15*time.Minute), inboundStatusPending, "", 0)
+	insertInbound("stale", assistant.EventKindGroup, now.Add(-10*time.Minute), inboundStatusDone, "ignored_stale", 0)
+
+	legacy := assistant.MessageEvent{
+		Kind:       assistant.EventKindGroup,
+		Time:       now.Add(-3 * time.Hour).Unix(),
+		GroupID:    "legacy-group",
+		UserID:     "legacy-user",
+		MessageID:  "legacy-message",
+		RawMessage: "legacy inbound",
+	}
+	if err := store.AppendMessageEvent(ctx, "group:legacy", legacy); err != nil {
+		t.Fatal(err)
+	}
+	// Old assistant-history rows have no message ID. They must not be counted as
+	// another inbound message when restoring the Dashboard baseline.
+	legacy.MessageID = ""
+	legacy.RawMessage = "legacy bot reply"
+	if err := store.AppendMessageEvent(ctx, "group:legacy", legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.DashboardEventStatsSnapshot(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalEvents != 5 || stats.HandledEvents != 3 || stats.ErrorEvents != 1 {
+		t.Fatalf("totals = total:%d handled:%d errors:%d, want 5/3/1", stats.TotalEvents, stats.HandledEvents, stats.ErrorEvents)
+	}
+	if stats.ByKind[string(assistant.EventKindGroup)] != 3 || stats.ByKind[string(assistant.EventKindPrivate)] != 2 {
+		t.Fatalf("by kind = %#v, want group:3 private:2", stats.ByKind)
+	}
+	if stats.DurationCount != 3 || stats.DurationTotalMS != 9000 {
+		t.Fatalf("duration = %dms/%d, want 9000ms/3", stats.DurationTotalMS, stats.DurationCount)
+	}
+	if stats.LastEventAt.Unix() != now.Add(-30*time.Minute).Unix() {
+		t.Fatalf("last event = %s, want %s", stats.LastEventAt, now.Add(-30*time.Minute))
+	}
+	var recentTotal, recentHandled, recentErrors int64
+	for _, bucket := range stats.Hourly {
+		recentTotal += bucket.Total
+		recentHandled += bucket.Handled
+		recentErrors += bucket.Errors
+	}
+	if recentTotal != 4 || recentHandled != 2 || recentErrors != 1 {
+		t.Fatalf("recent buckets = total:%d handled:%d errors:%d, want 4/2/1", recentTotal, recentHandled, recentErrors)
+	}
+}

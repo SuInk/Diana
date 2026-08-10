@@ -63,6 +63,16 @@ func TestEventHubDropsWhenSubscriberSlow(t *testing.T) {
 	}
 }
 
+func TestStatusSignatureIncludesPerChannelState(t *testing.T) {
+	base := assistant.RuntimeStatus{Channels: []assistant.ChannelStatus{{ProfileID: "qq", Platform: assistant.PlatformNapCat}}}
+	connected := base
+	connected.Channels = append([]assistant.ChannelStatus(nil), base.Channels...)
+	connected.Channels[0].Connected = true
+	if statusSignature(base) == statusSignature(connected) {
+		t.Fatal("per-channel connection change did not affect status signature")
+	}
+}
+
 // TestEventStreamSendsInitialSnapshot 验证对应功能场景。
 func TestEventStreamSendsInitialSnapshot(t *testing.T) {
 	hub := NewEventHub()

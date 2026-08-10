@@ -41,7 +41,7 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 		Version:     "0.2.0",
 		Description: "为对话提供实时网页搜索。优先使用 Exa MCP，失败时自动回退到 Tavily。",
 		Official:    true,
-		BuiltIn:     false,
+		BuiltIn:     true,
 		Permissions: []string{"network:http", "llm:tool"},
 		Settings: []PluginSettingSpec{
 			{

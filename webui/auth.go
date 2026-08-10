@@ -513,6 +513,8 @@ func authExemptPath(path string) bool {
 	case path == "/api/auth/status",
 		path == "/api/auth/login",
 		path == "/api/auth/owner/status",
+		path == "/api/auth/owner/challenge",
+		path == "/api/auth/owner/verify",
 		path == "/api/auth/owner/pair",
 		path == "/api/auth/owner/pair/status":
 		return true

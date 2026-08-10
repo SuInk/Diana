@@ -56,6 +56,9 @@ type ImageDescriptionRecord struct {
 }
 
 type MessageEvent struct {
+	Platform         string           `json:"platform,omitempty"`
+	ProfileID        string           `json:"profile_id,omitempty"`
+	ContextNamespace string           `json:"context_namespace,omitempty"`
 	Kind             EventKind        `json:"kind"`
 	SubType          string           `json:"sub_type,omitempty"`
 	Time             int64            `json:"time,omitempty"`
@@ -98,6 +101,8 @@ type QuotedMessage struct {
 }
 
 type OutgoingMessage struct {
+	Platform       string
+	ProfileID      string
 	GroupID        string
 	UserID         string
 	Text           string
@@ -122,6 +127,9 @@ const (
 type Reminder struct {
 	ID                  string       `json:"id"`
 	Kind                ReminderKind `json:"kind,omitempty"`
+	Platform            string       `json:"platform,omitempty"`
+	ProfileID           string       `json:"profile_id,omitempty"`
+	ContextNamespace    string       `json:"context_namespace,omitempty"`
 	OwnerID             string       `json:"owner_id"`
 	GroupID             string       `json:"group_id,omitempty"`
 	UserID              string       `json:"user_id,omitempty"`
@@ -152,6 +160,9 @@ type ResultChannel interface {
 }
 
 type ChannelStatus struct {
+	ProfileID string    `json:"profile_id,omitempty"`
+	Platform  string    `json:"platform,omitempty"`
+	Name      string    `json:"name,omitempty"`
 	Connected bool      `json:"connected"`
 	Endpoint  string    `json:"endpoint"`
 	SelfID    string    `json:"self_id,omitempty"`
@@ -195,6 +206,7 @@ type BotConfig struct {
 	SendRetryAttempts            int                  `json:"send_retry_attempts,omitempty"`
 	SendChunkIntervalMS          int                  `json:"send_chunk_interval_ms,omitempty"`
 	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	PromptInjectTime             *bool                `json:"prompt_inject_time,omitempty"`
 	PromptInjectPlaintextRules   *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
 	PromptInjectGroupSender      *bool                `json:"prompt_inject_group_sender,omitempty"`
@@ -304,6 +316,7 @@ type ConfigPayload struct {
 	AvatarURL                    string               `json:"avatar_url,omitempty"`
 	ActiveProfileID              string               `json:"active_profile_id,omitempty"`
 	Profiles                     []ConfigPayload      `json:"profiles,omitempty"`
+	IsolatePlatformContexts      *bool                `json:"isolate_platform_contexts,omitempty"`
 	Enabled                      bool                 `json:"enabled"`
 	OneBotReverseWSEndpoint      string               `json:"onebot_reverse_ws_endpoint"`
 	OneBotAccessToken            string               `json:"onebot_access_token,omitempty"`
@@ -346,6 +359,7 @@ type ConfigPayload struct {
 	PromptImageOnlyText          string               `json:"prompt_image_only_text,omitempty"`
 	PromptWakeOnlyText           string               `json:"prompt_wake_only_text,omitempty"`
 	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	PassiveReplyRouterPrompt     string               `json:"passive_reply_router_prompt,omitempty"`
 	PassiveReplyPrompt           string               `json:"passive_reply_prompt,omitempty"`
 	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
@@ -486,8 +500,9 @@ const (
 )
 
 type ProfileSet struct {
-	ActiveID string      `json:"active_id"`
-	Profiles []BotConfig `json:"profiles"`
+	ActiveID                string      `json:"active_id"`
+	Profiles                []BotConfig `json:"profiles"`
+	IsolatePlatformContexts *bool       `json:"isolate_platform_contexts,omitempty"`
 }
 
 var (
@@ -502,10 +517,23 @@ var (
 func NewProfileSet(cfg BotConfig) ProfileSet {
 	profile := cfg.WithDefaults()
 	profile.ID = uuid.NewString()
+	isolate := true
 	return ProfileSet{
-		ActiveID: profile.ID,
-		Profiles: []BotConfig{profile},
+		ActiveID:                profile.ID,
+		Profiles:                []BotConfig{profile},
+		IsolatePlatformContexts: &isolate,
 	}
+}
+
+// PlatformContextsIsolated reports whether each bot profile gets its own
+// conversation namespace. Older profile sets default to isolation.
+func (s ProfileSet) PlatformContextsIsolated() bool {
+	return s.IsolatePlatformContexts == nil || *s.IsolatePlatformContexts
+}
+
+func (s ProfileSet) WithPlatformContextIsolation(enabled bool) ProfileSet {
+	s.IsolatePlatformContexts = &enabled
+	return s.WithDefaults()
 }
 
 // NormalizeProfileName 规范化机器人配置名称。
@@ -527,6 +555,26 @@ func (s ProfileSet) Current() (BotConfig, bool) {
 		return BotConfig{}, false
 	}
 	return s.Profiles[0].WithDefaults(), true
+}
+
+// RuntimeConfig keeps the active profile as the management target when it is
+// enabled, otherwise it selects another enabled profile so the shared runtime
+// can stay online for the remaining channels.
+func (s ProfileSet) RuntimeConfig() (BotConfig, bool) {
+	s = s.WithDefaults()
+	current, ok := s.Current()
+	if ok && current.Enabled {
+		return current, true
+	}
+	for _, profile := range s.Profiles {
+		if profile.Enabled {
+			return profile.WithDefaults(), true
+		}
+	}
+	if ok {
+		return current, true
+	}
+	return BotConfig{}, false
 }
 
 // WithActive 返回切换 active_id 后的机器人配置集。
@@ -567,6 +615,10 @@ func (s ProfileSet) Delete(id string) ProfileSet {
 
 // WithDefaults 补齐机器人配置集的默认字段、唯一 ID 和激活项。
 func (s ProfileSet) WithDefaults() ProfileSet {
+	if s.IsolatePlatformContexts == nil {
+		isolate := true
+		s.IsolatePlatformContexts = &isolate
+	}
 	if len(s.Profiles) > 0 {
 		profiles := make([]BotConfig, len(s.Profiles))
 		copy(profiles, s.Profiles)
@@ -633,6 +685,7 @@ func DefaultBotConfig() BotConfig {
 		RecallReplyMode:              RecallReplyModeLLMSummary,
 		RecallReplyAutoDeleteEnabled: boolPointer(true),
 		LLMQQIDMaskingEnabled:        boolPointer(true),
+		BotReplyLoopDetectionEnabled: boolPointer(true),
 		RecentContextLimit:           20,
 		ContextSummaryThreshold:      100,
 		PassiveReplyChance:           1,
@@ -745,6 +798,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.LLMQQIDMaskingEnabled == nil {
 		cfg.LLMQQIDMaskingEnabled = boolPointer(true)
+	}
+	if cfg.BotReplyLoopDetectionEnabled == nil {
+		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
 	}
 	if cfg.RecentContextLimit < 0 {
 		cfg.RecentContextLimit = defaults.RecentContextLimit
@@ -892,6 +948,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		PromptImageOnlyText:          cfg.PromptImageOnlyText,
 		PromptWakeOnlyText:           cfg.PromptWakeOnlyText,
 		ModelRoles:                   normalizeModelRoles(cfg.ModelRoles),
+		BotReplyLoopDetectionEnabled: copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		PassiveReplyRouterPrompt:     cfg.PassiveReplyRouterPrompt,
 		PassiveReplyPrompt:           cfg.PassiveReplyPrompt,
 		MaxInputChars:                cfg.MaxInputChars,
@@ -929,6 +986,7 @@ func PayloadFromProfileSet(set ProfileSet) ConfigPayload {
 	}
 	payload := PayloadFromConfig(current)
 	payload.ActiveProfileID = set.ActiveID
+	payload.IsolatePlatformContexts = copyBoolPointer(set.IsolatePlatformContexts)
 	payload.Profiles = make([]ConfigPayload, 0, len(set.Profiles))
 	for _, profile := range set.Profiles {
 		payload.Profiles = append(payload.Profiles, PayloadFromConfig(profile))
@@ -982,6 +1040,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		PromptImageOnlyText:          payload.PromptImageOnlyText,
 		PromptWakeOnlyText:           payload.PromptWakeOnlyText,
 		ModelRoles:                   normalizeModelRoles(payload.ModelRoles),
+		BotReplyLoopDetectionEnabled: copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		PassiveReplyRouterPrompt:     payload.PassiveReplyRouterPrompt,
 		PassiveReplyPrompt:           payload.PassiveReplyPrompt,
 		MaxInputChars:                payload.MaxInputChars,

@@ -381,6 +381,39 @@ func TestQQBotPlatforms(t *testing.T) {
 	}
 }
 
+func TestQQBotContextIsolationEndpointPersistsAndRebuildsChannels(t *testing.T) {
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	profiles := NewMemoryQQBotProfileStore(assistant.DefaultBotConfig())
+	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+		return fakeChannel{}
+	})
+	handler.SetProfileStore(profiles)
+	var rebuilt assistant.ProfileSet
+	handler.SetChannelSetFactory(func(set assistant.ProfileSet) assistant.Channel {
+		rebuilt = set
+		return fakeChannel{}
+	})
+	router := qqBotTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config/context-isolation", bytes.NewReader([]byte(`{"enabled":false}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if profiles.Profiles().PlatformContextsIsolated() || rebuilt.PlatformContextsIsolated() {
+		t.Fatalf("stored=%v rebuilt=%v, want both false", profiles.Profiles().PlatformContextsIsolated(), rebuilt.PlatformContextsIsolated())
+	}
+	var payload assistant.ConfigPayload
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.IsolatePlatformContexts == nil || *payload.IsolatePlatformContexts {
+		t.Fatalf("response isolation=%#v, want false", payload.IsolatePlatformContexts)
+	}
+}
+
 type fakeChannel struct{}
 
 // Connect 封装当前模块的 Connect 逻辑。

@@ -215,7 +215,7 @@ UPDATE memory_jobs
 SET status = 'pending', available_at = ?, lease_owner = NULL, lease_until = NULL,
     last_error = ?, updated_at = ?
 WHERE id = ? AND status = 'processing' AND lease_owner = ?
-`, availableAt.UTC().UnixNano(), truncateMemoryText(lastError, 800), time.Now().UTC().UnixNano(), strings.TrimSpace(id), strings.TrimSpace(leaseOwner))
+`, availableAt.UTC().UnixNano(), lastError, time.Now().UTC().UnixNano(), strings.TrimSpace(id), strings.TrimSpace(leaseOwner))
 	return err
 }
 

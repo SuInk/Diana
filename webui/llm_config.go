@@ -55,6 +55,7 @@ type llmConfigPayload struct {
 
 type llmTestPayload struct {
 	Message string `json:"message"`
+	Mode    string `json:"mode,omitempty"`
 }
 
 type llmModelsPayload struct {
@@ -371,6 +372,17 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 	if payload.Message == "" {
 		payload.Message = "ping"
 	}
+	testMode := strings.ToLower(strings.TrimSpace(payload.Mode))
+	if testMode == "" && llm.NormalizeProfileGroup(payload.Group) == llm.GroupImage {
+		testMode = "image"
+	}
+	if testMode == "" {
+		testMode = "text"
+	}
+	if testMode != "text" && testMode != "image" {
+		h.writeError(c, 400, "llm.test", fmt.Errorf("unsupported test mode %q", payload.Mode), payload.Model, nil)
+		return
+	}
 
 	cfg := h.store.Current()
 	// 连通测试允许直接使用表单里的临时配置，成功与否不影响当前已保存配置。
@@ -382,9 +394,34 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 			cfg.APIKey = existing.APIKey
 		}
 	}
+	// image 分组里的 model 就是机器人 image 角色实际使用的模型。
+	// 测试时同步到 ImageModel，避免误测 provider 的默认生图模型或文本模型。
+	if testMode == "image" && strings.TrimSpace(payload.Model) != "" {
+		cfg.ImageModel = strings.TrimSpace(payload.Model)
+	}
 	client, err := h.newClient(cfg)
 	if err != nil {
 		h.writeError(c, 400, "llm.test", err, cfg.Model, llmLogMetadata(cfg, ""))
+		return
+	}
+	if testMode == "image" {
+		generator, ok := client.(llm.ImageGenerator)
+		if !ok {
+			err := fmt.Errorf("llm: image generation is not supported for provider %q", cfg.Provider)
+			h.writeError(c, 400, "llm.test.image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
+			return
+		}
+		resp, err := generator.GenerateImage(c.Request.Context(), llm.ImageGenerateRequest{
+			Model:  cfg.ImageModelWithDefault(),
+			Prompt: payload.Message,
+			N:      1,
+		})
+		if err != nil {
+			h.writeError(c, 502, "llm.test.image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
+			return
+		}
+		recordRequestOperation(c, h.logs, "llm.test.image", "LLM 生图测试成功", resp.Model, llmLogMetadata(cfg, ""))
+		c.JSON(200, resp)
 		return
 	}
 
@@ -555,6 +592,9 @@ func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.Provi
 	}
 	if payload.MaxContextTokens == 0 {
 		cfg.MaxContextTokens = existing.MaxContextTokens
+	}
+	if payload.TimeoutMS == 0 {
+		cfg.Timeout = existing.Timeout
 	}
 	return cfg.WithDefaults()
 }

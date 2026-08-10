@@ -2,14 +2,32 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+func TestLockedBufferPreservesCompleteStderr(t *testing.T) {
+	var buffer bytes.Buffer
+	var mu sync.Mutex
+	writer := &lockedBuffer{buffer: &buffer, mu: &mu}
+	prefix := strings.Repeat("stderr-segment-", 3000)
+	if _, err := writer.Write([]byte(prefix)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("tail-marker")); err != nil {
+		t.Fatal(err)
+	}
+	if got := buffer.String(); got != prefix+"tail-marker" {
+		t.Fatalf("stderr length = %d, want %d", len(got), len(prefix)+len("tail-marker"))
+	}
+}
 
 // TestMCPRegistryCallsStdioTool 验证 MCP stdio server 能被启动、列工具并调用。
 func TestMCPRegistryCallsStdioTool(t *testing.T) {

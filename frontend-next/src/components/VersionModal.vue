@@ -39,7 +39,7 @@
           {{ checking ? "检查中…" : "检查更新" }}
         </button>
         <button
-          v-if="deploymentMode === 'git' && checkResult?.update_available"
+          v-if="checkResult?.update_supported && checkResult.update_available"
           class="btn primary"
           type="button"
           :disabled="updating"
@@ -56,14 +56,14 @@
           @click="forceConfirming = true"
         >
           <RefreshCcw :size="14" aria-hidden="true" />
-          强制更新
+          强制同步 Release
         </button>
       </div>
       <div v-if="forceConfirming" class="force-update-confirm">
         <AlertTriangle :size="17" aria-hidden="true" />
         <div class="stack" style="gap: 8px; flex: 1">
-          <strong>强制同步远端版本？</strong>
-          <span class="muted" style="font-size: 12.5px">这会丢弃已跟踪文件的本地修改，但不会绕过 Git 对象哈希校验。</span>
+          <strong>强制同步最新稳定 Release？</strong>
+          <span class="muted" style="font-size: 12.5px">这会丢弃已跟踪文件的本地修改，并重置到最新稳定 Release tag；不会绕过 Git 对象哈希校验。</span>
           <div class="cluster" style="gap: 8px">
             <button class="btn danger small" type="button" :disabled="updating" @click="forceUpdate">确认强制同步</button>
             <button class="btn ghost small" type="button" :disabled="updating" @click="forceConfirming = false">取消</button>
@@ -71,8 +71,11 @@
         </div>
       </div>
       <p v-if="updatedHint" class="badge ok" style="align-self: flex-start">{{ updatedHint }}</p>
-      <p v-if="deploymentMode === 'release'" class="muted" style="font-size: 12.5px; margin: 0">
-        Release 下载必须通过 SHA-256 校验；Docker 镜像由 OCI digest 校验并由部署环境安装。
+      <p v-if="releaseSelfUpdate" class="muted" style="font-size: 12.5px; margin: 0">
+        完整 Release 包会先校验 SHA-256，再备份数据库与当前版本；切换后自动重启并执行健康检查，失败时自动恢复。
+      </p>
+      <p v-else-if="deploymentMode === 'release'" class="muted" style="font-size: 12.5px; margin: 0">
+        Docker 镜像由 OCI digest 校验并由部署环境安装。
       </p>
 
       <hr class="divider" style="margin: 0" />
@@ -80,7 +83,7 @@
         <div class="cluster" style="justify-content: space-between">
           <h3 style="margin: 0; font-size: 14px">最近版本</h3>
           <span class="muted" style="font-size: 12.5px">
-            {{ deploymentMode === "git" ? "回退后自动暂停更新" : "固定镜像标签后由部署环境重启" }}
+            {{ deploymentMode === "git" ? "回退后自动暂停更新" : releaseSelfUpdate ? "异常时自动回退" : "固定镜像标签后由部署环境重启" }}
           </span>
         </div>
         <ul class="recent-version-list">
@@ -103,9 +106,9 @@
               >
                 SHA-256
               </a>
-              <span v-else-if="deploymentMode === 'release'" class="badge ok" title="容器镜像由 OCI digest 校验">OCI digest</span>
+              <span v-else-if="deploymentMode === 'release' && !releaseSelfUpdate" class="badge ok" title="容器镜像由 OCI digest 校验">OCI digest</span>
               <button
-                v-if="deploymentMode === 'git' && release.tag !== currentTag"
+                v-if="deploymentMode === 'git' && isOlderRelease(release.tag)"
                 class="btn danger small"
                 type="button"
                 :disabled="updating"
@@ -115,7 +118,7 @@
                 回退
               </button>
               <button
-                v-else-if="deploymentMode === 'release' && release.tag !== currentTag"
+                v-else-if="deploymentMode === 'release' && !releaseSelfUpdate && release.tag !== currentTag"
                 class="btn ghost icon-only small"
                 type="button"
                 :title="`复制固定镜像标签 ${release.tag}`"
@@ -127,7 +130,7 @@
             </div>
           </li>
         </ul>
-        <div v-if="deploymentMode === 'release'" class="release-rollback-note">
+        <div v-if="deploymentMode === 'release' && !releaseSelfUpdate" class="release-rollback-note">
           <Container :size="16" aria-hidden="true" />
           <span>回退时将部署镜像固定为 <code>ghcr.io/suink/diana:&lt;版本&gt;</code>，并暂停 Watchtower 等自动更新器；镜像拉取会校验 OCI digest。</span>
         </div>
@@ -214,7 +217,7 @@ import {
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: []; checked: [available: boolean] }>();
 
 const version = ref<SystemVersion | null>(null);
 const status = ref<UpdateStatus | null>(null);
@@ -232,6 +235,7 @@ const forceConfirming = ref(false);
 const rollbackTarget = ref<ReleaseEntry | null>(null);
 
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
+const releaseSelfUpdate = computed(() => deploymentMode.value === "release" && version.value?.update_supported === true);
 
 const versionLabel = computed(() => {
   const label = version.value?.version_label;
@@ -255,13 +259,28 @@ function formatDate(value?: string): string {
   return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function comparableVersion(value: string): number[] | null {
+  const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+function isOlderRelease(tag: string): boolean {
+  const candidate = comparableVersion(tag);
+  const current = comparableVersion(currentTag.value);
+  if (!candidate || !current) return false;
+  for (let index = 0; index < current.length; index += 1) {
+    if (candidate[index] !== current[index]) return candidate[index] < current[index];
+  }
+  return false;
+}
+
 async function load(): Promise<void> {
   try {
     version.value = await getSystemVersion();
   } catch {
     version.value = null;
   }
-  if (deploymentMode.value === "git") {
+  if (deploymentMode.value === "git" || version.value?.update_supported) {
     try {
       status.value = await getUpdateStatus();
     } catch {
@@ -287,6 +306,7 @@ async function check(): Promise<void> {
   try {
     checkResult.value = await checkForUpdate();
     status.value = checkResult.value.status ?? status.value;
+    emit("checked", checkResult.value.update_available);
     if (checkResult.value.update_available) {
       toastSuccess(`发现新版本 ${checkResult.value.latest_version || ""}`.trim());
     } else {
@@ -304,8 +324,14 @@ async function update(): Promise<void> {
   try {
     const result = await pullFromGitHub();
     status.value = result.status;
-    updatedHint.value = result.updated ? `已更新到 ${result.status.head_commit}，重启服务后生效` : "没有可用更新";
+    const target = checkResult.value?.latest_version || result.target_commit || result.status.head_commit;
+    updatedHint.value = result.updated
+      ? releaseSelfUpdate.value
+        ? `已校验并暂存 ${target}，服务将自动重启并执行健康检查`
+        : `已更新到 ${target}，重启服务后生效`
+      : "已是最新稳定版本";
     if (checkResult.value) checkResult.value.update_available = false;
+    emit("checked", false);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "更新失败");
   } finally {
@@ -318,9 +344,11 @@ async function forceUpdate(): Promise<void> {
   try {
     const result = await pullFromGitHub(true);
     status.value = result.status;
-    updatedHint.value = `已强制同步到 ${result.status.head_commit}，重启服务后生效`;
+    const target = checkResult.value?.latest_version || result.status.head_commit;
+    updatedHint.value = `已强制同步到 ${target}，重启服务后生效`;
     forceConfirming.value = false;
     if (checkResult.value) checkResult.value.update_available = false;
+    emit("checked", false);
     toastSuccess("强制更新完成");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "强制更新失败");

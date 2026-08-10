@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +37,7 @@ const (
 
 type SQLiteStore struct {
 	db           *sql.DB
+	path         string
 	userMemoryMu sync.Mutex
 }
 
@@ -48,6 +50,15 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 				path = legacyDatabasePath
 			}
 		}
+	}
+	resolvedPath := ""
+	if path != ":memory:" && !strings.HasPrefix(path, "file:") {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve sqlite path: %w", err)
+		}
+		path = absPath
+		resolvedPath = absPath
 	}
 	// 数据库目录可能不存在，先创建目录再打开 SQLite 文件。
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -67,12 +78,21 @@ PRAGMA foreign_keys = ON;
 		_ = db.Close()
 		return nil, fmt.Errorf("configure sqlite: %w", err)
 	}
-	store := &SQLiteStore{db: db}
+	store := &SQLiteStore{db: db, path: resolvedPath}
 	if err := store.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return store, nil
+}
+
+// Path returns the absolute path of the SQLite database opened by this store.
+// The Release updater uses it after shutdown to create a consistent backup.
+func (s *SQLiteStore) Path() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
 }
 
 // Close 关闭 SQLite 数据库连接。
