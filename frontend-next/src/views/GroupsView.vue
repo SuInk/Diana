@@ -3,13 +3,12 @@
     <header class="view-header">
       <div class="view-title">
         <h1>群管理</h1>
-        <p>按群配置触发词、专属人设与插件开关；登录控制台即可直接管理</p>
+        <p>查看机器人已加入的全部群，并按群配置触发词、专属人设与插件开关</p>
       </div>
-      <div class="cluster" style="gap: 8px">
+      <div class="group-manual-add">
         <input
           v-model="newGroupID"
           class="input"
-          style="width: 160px"
           inputmode="numeric"
           placeholder="群号"
           @keydown.enter="addGroup"
@@ -22,42 +21,88 @@
     </header>
 
     <div v-if="loaded">
-      <div v-if="groups.length > 0" class="plugin-grid">
-        <section v-for="group in groups" :key="group.group_id" class="plugin-card">
-          <div class="plugin-card-head">
-            <h2 class="mono">{{ group.group_id }}</h2>
+      <div class="group-list-toolbar">
+        <div class="group-list-summary">
+          <strong>{{ liveAvailable ? joinedCount : groups.length }}</strong>
+          <span>{{ liveAvailable ? "个已加入群" : "个已保存配置" }}</span>
+          <span class="muted">· {{ configuredCount }} 个独立配置</span>
+        </div>
+        <div class="group-list-actions">
+          <label class="group-search">
+            <Search :size="15" aria-hidden="true" />
+            <input v-model="searchQuery" type="search" placeholder="搜索群名或群号" aria-label="搜索群名或群号" />
+          </label>
+          <button class="btn" type="button" :disabled="refreshing" title="从机器人同步最新群列表" @click="load(true)">
+            <RefreshCw :size="14" :class="{ spin: refreshing }" aria-hidden="true" />
+            {{ refreshing ? "同步中…" : "刷新群列表" }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="syncWarning" class="group-sync-warning" role="status">
+        <WifiOff :size="16" aria-hidden="true" />
+        <span>{{ syncWarning }}</span>
+      </div>
+
+      <div v-if="filteredGroups.length > 0" class="group-grid">
+        <section v-for="group in filteredGroups" :key="group.group_id" class="group-card">
+          <div class="group-card-head">
+            <div class="group-identity">
+              <img :src="group.avatar_url || groupAvatarURL(group.group_id)" :alt="group.group_name || `群 ${group.group_id}`" @error="hideBrokenAvatar" />
+              <div class="group-identity-copy">
+                <h2>{{ group.group_name || `群 ${group.group_id}` }}</h2>
+                <span class="mono">{{ group.group_id }}</span>
+              </div>
+            </div>
             <label class="switch" :title="group.enabled ? '在本群启用' : '在本群停用'">
-              <input type="checkbox" :checked="group.enabled" @change="toggleGroup(group, $event)" />
+              <input
+                type="checkbox"
+                :checked="group.enabled"
+                :disabled="togglingGroupID === group.group_id"
+                @change="toggleGroup(group, $event)"
+              />
               <span class="track" aria-hidden="true"></span>
             </label>
           </div>
-          <div class="plugin-card-badges">
-            <span v-if="group.system_prompt" class="badge accent">专属人设</span>
-            <span v-if="(group.group_triggers?.length ?? 0) > 0" class="badge">触发词 {{ group.group_triggers?.length }}</span>
-            <span v-if="overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
-            <span v-if="group.welcome_enabled" class="badge">入群欢迎</span>
-            <span v-if="group.reply_gate" class="badge accent">专属准入</span>
+          <div class="group-card-badges">
+            <span v-if="liveAvailable" class="badge" :class="{ accent: group.joined }">{{ group.joined ? "已加入" : "当前未加入" }}</span>
+            <span class="badge" :class="{ accent: group.configured }">{{ group.configured ? "已配置" : "跟随全局" }}</span>
+            <span v-if="group.member_count" class="badge">
+              <Users :size="12" aria-hidden="true" />
+              {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
+            </span>
+            <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
+            <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
+            <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
+            <span v-if="group.configured && group.reply_gate" class="badge">专属准入</span>
           </div>
-          <p class="plugin-card-desc">
-            {{ group.system_prompt ? truncate(group.system_prompt, 60) : "沿用全局人设与默认行为。" }}
+          <p class="group-card-desc">
+            {{ group.system_prompt ? truncate(group.system_prompt, 68) : group.configured ? "沿用全局人设与默认行为。" : "尚未设置群级覆盖，当前跟随全局配置。" }}
           </p>
-          <div class="plugin-card-foot">
-            <button class="btn small" type="button" @click="openEditor(group)">
+          <div class="group-card-foot">
+            <span class="muted">{{ group.enabled ? "机器人已启用" : "机器人已停用" }}</span>
+            <button class="btn small" type="button" @click="openEditor(group, group.group_name)">
               <SlidersHorizontal :size="13" aria-hidden="true" />
-              设置
+              配置
             </button>
           </div>
         </section>
       </div>
-      <EmptyState v-else title="还没有群配置" hint="输入群号添加第一个群，配置会在机器人进群消息时生效。" />
+      <EmptyState v-else-if="groups.length > 0" title="没有匹配的群" hint="换一个群名或群号搜索。" />
+      <EmptyState
+        v-else-if="syncWarning"
+        title="暂时无法读取群列表"
+        hint="机器人连接后点击刷新群列表；也可以先输入群号创建配置。"
+      />
+      <EmptyState v-else title="机器人还没有加入群" hint="机器人加入群后会自动显示在这里，也可以输入群号预先创建配置。" />
     </div>
-    <div v-else class="plugin-grid">
+    <div v-else class="group-grid">
       <div class="skeleton" style="height: 180px"></div>
       <div class="skeleton" style="height: 180px"></div>
     </div>
 
     <!-- 群配置编辑弹窗 -->
-    <Modal v-if="editing" :title="`群 ${editing.group_id} · 配置`" wide @close="editing = null">
+    <Modal v-if="editing" :title="`${editingGroupName || `群 ${editing.group_id}`} · 配置`" wide @close="editing = null">
       <div class="form-grid">
         <div class="field wide">
           <label class="switch">
@@ -138,23 +183,47 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { Plus, Save, SlidersHorizontal } from "@lucide/vue";
-import { getQQBotConfig, getQQBotPlatforms, listQQBotGroups, saveQQBotGroup, type PluginState, type QQBotGroupConfig } from "../api";
+import { computed, onMounted, ref } from "vue";
+import { Plus, RefreshCw, Save, Search, SlidersHorizontal, Users, WifiOff } from "@lucide/vue";
+import {
+  getQQBotConfig,
+  getQQBotPlatforms,
+  listQQBotGroups,
+  saveQQBotGroup,
+  type PluginState,
+  type QQBotGroupConfig,
+  type QQBotGroupSummary
+} from "../api";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { toastError, toastSuccess } from "../toast";
 
-const groups = ref<QQBotGroupConfig[]>([]);
+const groups = ref<QQBotGroupSummary[]>([]);
 // 群等级只有 QQ 有；按当前激活的机器人平台决定要不要显示这一项。
 const supportsGroupLevel = ref(true);
 const plugins = ref<PluginState[]>([]);
 const loaded = ref(false);
+const refreshing = ref(false);
+const liveAvailable = ref(false);
+const syncWarning = ref("");
+const searchQuery = ref("");
 const newGroupID = ref("");
 const editing = ref<QQBotGroupConfig | null>(null);
+const editingGroupName = ref("");
 const triggersDraft = ref("");
 const saving = ref(false);
+const togglingGroupID = ref("");
+
+const filteredGroups = computed(() => {
+  const query = searchQuery.value.trim().toLocaleLowerCase();
+  if (!query) {
+    return groups.value;
+  }
+  return groups.value.filter((group) => group.group_id.includes(query) || group.group_name?.toLocaleLowerCase().includes(query));
+});
+const joinedCount = computed(() => groups.value.filter((group) => group.joined).length);
+const configuredCount = computed(() => groups.value.filter((group) => group.configured).length);
 
 function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + "…" : text;
@@ -164,11 +233,21 @@ function overrideCount(group: QQBotGroupConfig): number {
   return Object.keys(group.plugin_overrides ?? {}).length;
 }
 
-async function load(): Promise<void> {
+async function load(showFeedback = false): Promise<void> {
+  refreshing.value = true;
   try {
     const response = await listQQBotGroups();
     groups.value = response.groups;
     plugins.value = response.plugins;
+    liveAvailable.value = response.live_available;
+    syncWarning.value = response.warning ?? "";
+    if (showFeedback) {
+      if (response.live_available) {
+        toastSuccess(`已同步 ${response.groups.filter((group) => group.joined).length} 个群`);
+      } else {
+        toastError(response.warning ?? "暂时无法同步群列表");
+      }
+    }
     try {
       const [config, platformList] = await Promise.all([getQQBotConfig(), getQQBotPlatforms()]);
       const active = config.profiles?.find((item) => item.id === config.active_profile_id) ?? config.profiles?.[0];
@@ -182,6 +261,7 @@ async function load(): Promise<void> {
     toastError(error instanceof Error ? error.message : "读取群配置失败");
   } finally {
     loaded.value = true;
+    refreshing.value = false;
   }
 }
 
@@ -198,15 +278,32 @@ function addGroup(): void {
       enabled: true,
       group_triggers: [],
       plugin_overrides: {}
-    }
+    },
+    existing?.group_name
   );
   newGroupID.value = "";
 }
 
-function openEditor(group: QQBotGroupConfig): void {
+function openEditor(group: QQBotGroupConfig, groupName = ""): void {
   // 深拷贝编辑，取消时不污染列表数据。
-  editing.value = JSON.parse(JSON.stringify(group)) as QQBotGroupConfig;
+  editing.value = JSON.parse(JSON.stringify(groupConfigOf(group))) as QQBotGroupConfig;
+  editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
+}
+
+function groupConfigOf(group: QQBotGroupConfig): QQBotGroupConfig {
+  const summary = group as Partial<QQBotGroupSummary>;
+  const { group_name, avatar_url, member_count, max_member_count, configured, joined, ...config } = summary;
+  return config as QQBotGroupConfig;
+}
+
+function groupAvatarURL(groupID: string): string {
+  const encoded = encodeURIComponent(groupID.trim());
+  return encoded ? `https://p.qlogo.cn/gh/${encoded}/${encoded}/640` : "";
+}
+
+function hideBrokenAvatar(event: Event): void {
+  (event.currentTarget as HTMLImageElement).hidden = true;
 }
 
 function overrideOf(pluginID: string): boolean | undefined {
@@ -226,15 +323,18 @@ function setOverride(pluginID: string, value: boolean | undefined): void {
   editing.value.plugin_overrides = overrides;
 }
 
-async function toggleGroup(group: QQBotGroupConfig, event: Event): Promise<void> {
+async function toggleGroup(group: QQBotGroupSummary, event: Event): Promise<void> {
   const enabled = (event.target as HTMLInputElement).checked;
+  togglingGroupID.value = group.group_id;
   try {
-    const saved = await saveQQBotGroup({ ...group, enabled });
+    const saved = await saveQQBotGroup({ ...groupConfigOf(group), enabled });
     upsert(saved.config);
     toastSuccess(enabled ? `群 ${group.group_id} 已启用` : `群 ${group.group_id} 已停用`);
   } catch (error) {
     (event.target as HTMLInputElement).checked = !enabled;
     toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    togglingGroupID.value = "";
   }
 }
 
@@ -266,11 +366,16 @@ async function saveEditing(): Promise<void> {
 function upsert(config: QQBotGroupConfig): void {
   const index = groups.value.findIndex((group) => group.group_id === config.group_id);
   if (index >= 0) {
-    groups.value[index] = config;
+    groups.value[index] = { ...groups.value[index], ...config, configured: true };
   } else {
-    groups.value.push(config);
+    groups.value.push({
+      ...config,
+      avatar_url: groupAvatarURL(config.group_id),
+      configured: true,
+      joined: false
+    });
   }
 }
 
-onMounted(load);
+onMounted(() => load());
 </script>

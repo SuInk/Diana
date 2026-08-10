@@ -654,6 +654,31 @@ func TestBotReplyLoopSuppressesThirdAIClassifiedMessageAcrossLowFrequency(t *tes
 	}
 }
 
+func TestBotReplyLoopDetectionCanBeDisabled(t *testing.T) {
+	disabled := false
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"should_reply":false,"confidence":0.99,"category":"none","directed_at_bot":true,"answerable":false,"reason":"普通路由决定静默"}`,
+	}}
+	runtime := NewRuntime(BotConfig{
+		OwnerID:                      "10001",
+		BotQQ:                        "42",
+		BotReplyLoopDetectionEnabled: &disabled,
+	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	handled, outcome := prepareBotReplyLoopRound(t, runtime, "disabled-loop", "20002", 0, time.Now().Add(-time.Minute), time.Minute, "收到，我会继续自动回复")
+	if handled || outcome != "ignored" {
+		t.Fatalf("handled=%v outcome=%q, want ordinary routing result", handled, outcome)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 || len(requests[0].Messages) == 0 || strings.Contains(requests[0].Messages[0].Content, "反机器人循环分类器") {
+		t.Fatalf("disabled detection reached the classifier: %#v", requests)
+	}
+	if _, active := runtime.activeReplySuppression(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "20002"}, time.Now()); active {
+		t.Fatal("disabled detection activated reply suppression")
+	}
+}
+
 func TestBotReplyLoopDoesNotCountHumanClassifiedMessages(t *testing.T) {
 	provider := &sequenceLLMProvider{}
 	for i := 0; i < botReplyLoopThreshold+2; i++ {

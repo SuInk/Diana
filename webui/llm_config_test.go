@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -75,10 +76,11 @@ func TestLLMAdvancedConfigRoundTripAndCompactEditorPreservation(t *testing.T) {
 		ReasoningEffort:     "high",
 		ContextWindowTokens: 200000,
 		MaxContextTokens:    12000,
+		Timeout:             45 * time.Second,
 	}
 	payload := payloadFromConfig(advanced)
 	roundTrip := configFromPayload(payload)
-	if roundTrip.ImageBaseURL != advanced.ImageBaseURL || roundTrip.ImageOrigin != advanced.ImageOrigin || roundTrip.ImageTimeout != advanced.ImageTimeout || roundTrip.APIFormat != advanced.APIFormat || roundTrip.ReasoningEffort != "high" || roundTrip.ContextWindowTokens != 200000 || roundTrip.MaxContextTokens != 12000 {
+	if roundTrip.ImageBaseURL != advanced.ImageBaseURL || roundTrip.ImageOrigin != advanced.ImageOrigin || roundTrip.ImageTimeout != advanced.ImageTimeout || roundTrip.APIFormat != advanced.APIFormat || roundTrip.ReasoningEffort != "high" || roundTrip.ContextWindowTokens != 200000 || roundTrip.MaxContextTokens != 12000 || roundTrip.Timeout != advanced.Timeout {
 		t.Fatalf("advanced round trip = %#v", roundTrip)
 	}
 
@@ -93,7 +95,7 @@ func TestLLMAdvancedConfigRoundTripAndCompactEditorPreservation(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	got := store.Current()
-	if got.ImageModel != advanced.ImageModel || got.ImageBaseURL != advanced.ImageBaseURL || got.ImageOrigin != advanced.ImageOrigin || got.ImageTimeout != advanced.ImageTimeout || got.Headers["X-Relay"] != "preserve-me" || got.ReasoningEffort != "high" || got.ContextWindowTokens != 200000 || got.MaxContextTokens != 12000 {
+	if got.ImageModel != advanced.ImageModel || got.ImageBaseURL != advanced.ImageBaseURL || got.ImageOrigin != advanced.ImageOrigin || got.ImageTimeout != advanced.ImageTimeout || got.Headers["X-Relay"] != "preserve-me" || got.ReasoningEffort != "high" || got.ContextWindowTokens != 200000 || got.MaxContextTokens != 12000 || got.Timeout != advanced.Timeout {
 		t.Fatalf("compact editor dropped advanced settings: %#v", got)
 	}
 }
@@ -472,6 +474,42 @@ func TestLLMConfigHandlerTestEndpointUsesPayloadConfig(t *testing.T) {
 	}
 }
 
+func TestLLMConfigHandlerTestEndpointUsesImageGenerationForImageGroup(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{
+		Provider:   llm.ProviderOpenAICompatible,
+		APIKey:     "saved-key",
+		Model:      "saved-text-model",
+		ImageModel: "saved-image-model",
+	})
+	var gotRequest llm.ImageGenerateRequest
+	handler := NewLLMConfigHandlerWithFactory(store, func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
+		if cfg.APIKey != "saved-key" || cfg.ImageModel != "selected-image-model" {
+			t.Fatalf("factory config = %#v", cfg)
+		}
+		return fakeImageLLMClient{request: &gotRequest}, nil
+	})
+	router := testRouter(handler)
+
+	body := []byte(`{"message":"生成一只小猫","id":"` + store.Profiles().ActiveID + `","group":"image","provider":"openai_compatible","model":"selected-image-model"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/llm/test", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if gotRequest.Prompt != "生成一只小猫" || gotRequest.Model != "selected-image-model" || gotRequest.N != 1 {
+		t.Fatalf("image request = %#v", gotRequest)
+	}
+	var resp llm.ImageGenerateResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if resp.Model != "selected-image-model" || len(resp.Images) != 1 || resp.Images[0] != "data:image/png;base64,YWJjZA==" {
+		t.Fatalf("image response = %#v", resp)
+	}
+}
+
 // TestLLMConfigHandlerModelsEndpointKeepsExistingAPIKey 验证对应功能场景。
 func TestLLMConfigHandlerModelsEndpointKeepsExistingAPIKey(t *testing.T) {
 	store := NewMemoryLLMProfileStore(llm.ProviderConfig{
@@ -595,6 +633,25 @@ func (fakeLLMClient) Generate(ctx context.Context, req llm.GenerateRequest) (*ll
 		Provider: llm.ProviderOpenAICompatible,
 		Model:    req.Model,
 		Text:     "ok: " + req.Messages[0].Content,
+	}, nil
+}
+
+type fakeImageLLMClient struct {
+	request *llm.ImageGenerateRequest
+}
+
+func (fakeImageLLMClient) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	return nil, fmt.Errorf("text generation should not be called for an image test")
+}
+
+func (client fakeImageLLMClient) GenerateImage(_ context.Context, req llm.ImageGenerateRequest) (*llm.ImageGenerateResponse, error) {
+	if client.request != nil {
+		*client.request = req
+	}
+	return &llm.ImageGenerateResponse{
+		Provider: llm.ProviderOpenAICompatible,
+		Model:    req.Model,
+		Images:   []string{"data:image/png;base64,YWJjZA=="},
 	}, nil
 }
 

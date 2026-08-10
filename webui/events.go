@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -138,11 +139,23 @@ func statusSignature(status assistant.RuntimeStatus) string {
 	if len(status.RecentEvents) > 0 {
 		recentAt = status.RecentEvents[0].At.Format(time.RFC3339Nano)
 	}
-	return fmt.Sprintf("%t|%t|%s|%s|%t|%t|%d|%s|%s|%s",
+	var channels strings.Builder
+	for _, channel := range status.Channels {
+		fmt.Fprintf(&channels, "%s:%s:%t:%s:%s:%s|",
+			channel.ProfileID,
+			channel.Platform,
+			channel.Connected,
+			channel.SelfID,
+			channel.LastError,
+			channel.UpdatedAt.Format(time.RFC3339Nano),
+		)
+	}
+	return fmt.Sprintf("%t|%t|%s|%s|%s|%t|%t|%d|%s|%s|%s",
 		status.Running,
 		status.Channel.Connected,
 		status.Channel.SelfID,
 		status.Channel.LastError,
+		channels.String(),
 		status.NoneBotBridge.Enabled,
 		status.NoneBotBridge.Connected,
 		status.ActiveWorkers,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -99,6 +100,49 @@ func TestStatsCollectorPrunesOldBuckets(t *testing.T) {
 	snapshot := collector.Snapshot()
 	if snapshot.TotalEvents != 2 {
 		t.Fatalf("TotalEvents = %d, want 2", snapshot.TotalEvents)
+	}
+}
+
+func TestStatsCollectorRestoresDurableBaselineAndContinuesIncrementally(t *testing.T) {
+	now := time.Date(2026, 7, 26, 15, 30, 0, 0, time.Local)
+	collector := NewStatsCollector()
+	collector.now = func() time.Time { return now }
+	collector.startedAt = now.Add(-90 * time.Second)
+	collector.RestoreDurableBaseline(storage.DashboardEventStats{
+		TotalEvents:     4,
+		HandledEvents:   2,
+		ErrorEvents:     1,
+		ByKind:          map[string]int64{"group": 3, "private": 1},
+		LastEventAt:     now.Add(-time.Hour),
+		DurationTotalMS: 4000,
+		DurationCount:   2,
+		Hourly: []storage.DashboardEventStatsBucket{
+			{HourUnix: now.Add(-time.Hour).Truncate(time.Hour).Unix(), Total: 4, Handled: 2, Errors: 1},
+		},
+	})
+
+	collector.Observe(assistant.EventRecord{
+		At:       now,
+		Kind:     assistant.EventKindGroup,
+		Handled:  true,
+		Duration: 2000,
+	})
+
+	snapshot := collector.Snapshot()
+	if snapshot.TotalEvents != 5 || snapshot.HandledEvents != 3 || snapshot.ErrorEvents != 1 {
+		t.Fatalf("totals = total:%d handled:%d errors:%d, want 5/3/1", snapshot.TotalEvents, snapshot.HandledEvents, snapshot.ErrorEvents)
+	}
+	if snapshot.ByKind["group"] != 4 || snapshot.ByKind["private"] != 1 {
+		t.Fatalf("by kind = %#v, want group:4 private:1", snapshot.ByKind)
+	}
+	if snapshot.AvgReplyMS != 2000 {
+		t.Fatalf("AvgReplyMS = %d, want 2000", snapshot.AvgReplyMS)
+	}
+	if snapshot.UptimeSeconds != 90 || !snapshot.StartedAt.Equal(now.Add(-90*time.Second)) {
+		t.Fatalf("process timing changed during restore: started=%s uptime=%d", snapshot.StartedAt, snapshot.UptimeSeconds)
+	}
+	if snapshot.LastEventAt == nil || !snapshot.LastEventAt.Equal(now) {
+		t.Fatalf("LastEventAt = %v, want %s", snapshot.LastEventAt, now)
 	}
 }
 

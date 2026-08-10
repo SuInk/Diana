@@ -104,6 +104,7 @@ type RuntimeStatus struct {
 	Running       bool                 `json:"running"`
 	Config        ConfigPayload        `json:"config"`
 	Channel       ChannelStatus        `json:"channel"`
+	Channels      []ChannelStatus      `json:"channels,omitempty"`
 	NoneBotBridge NoneBotBridgeStatus  `json:"nonebot_bridge"`
 	Plugins       []PluginState        `json:"plugins"`
 	RecentEvents  []EventRecord        `json:"recent_events,omitempty"`
@@ -116,15 +117,69 @@ type RuntimeStatus struct {
 }
 
 type EventRecord struct {
-	At       time.Time `json:"at"`
-	Kind     EventKind `json:"kind"`
-	UserID   string    `json:"user_id,omitempty"`
-	GroupID  string    `json:"group_id,omitempty"`
-	Text     string    `json:"text,omitempty"`
-	Reply    string    `json:"reply,omitempty"`
-	Error    string    `json:"error,omitempty"`
-	Handled  bool      `json:"handled"`
-	Duration int64     `json:"duration_ms,omitempty"`
+	At        time.Time `json:"at"`
+	Kind      EventKind `json:"kind"`
+	Platform  string    `json:"platform,omitempty"`
+	ProfileID string    `json:"profile_id,omitempty"`
+	UserID    string    `json:"user_id,omitempty"`
+	GroupID   string    `json:"group_id,omitempty"`
+	MessageID string    `json:"message_id,omitempty"`
+	Text      string    `json:"text,omitempty"`
+	Reply     string    `json:"reply,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	Handled   bool      `json:"handled"`
+	Outcome   string    `json:"outcome,omitempty"`
+	Decision  string    `json:"decision,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	Duration  int64     `json:"duration_ms,omitempty"`
+}
+
+// DescribeEventOutcome converts durable queue outcomes into stable UI-facing
+// decision categories and explanations. Callers may replace the generic
+// replied reason with a more specific trigger description available at runtime.
+func DescribeEventOutcome(outcome string) (decision string, reason string, handled bool) {
+	outcome = strings.TrimSpace(outcome)
+	switch outcome {
+	case "":
+		return "pending", "消息仍在等待处理", false
+	case "replied":
+		return "replied", "消息命中当前回复触发规则", true
+	case "replied_direct_followup":
+		return "replied", "用户直接回复了机器人，语义路由判断应继续回答", true
+	case "replied_passive", "replied_passive_batch":
+		return "replied", "群聊主动回复路由判断这条消息值得回答", true
+	case "error_replied":
+		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
+	case "queued_passive":
+		return "pending", "已进入群聊主动回复候选队列，等待批量语义判断", false
+	case "ignored_unavailable_group":
+		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
+	case "ignored_member_level":
+		return "not_replied", "发送者群等级低于该群设置的最低回复等级", false
+	case "ignored_response_suppression":
+		return "not_replied", "该用户处于临时响应限制期，消息被回复抑制规则拦截", false
+	case "ignored_ai_reply_loop":
+		return "not_replied", "识别到其他机器人的自动回复，为避免循环接续而停止回答", false
+	case "ignored_video":
+		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
+	case "ignored_stale":
+		return "not_replied", "消息已超过离线恢复窗口，为避免补发过期回复而忽略", false
+	case "ignored_policy":
+		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
+	case "superseded_passive":
+		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
+	case "dropped_outbound_delivery":
+		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
+	case "processing_error":
+		return "error", "消息处理失败，运行时将按队列策略重试", false
+	case "ignored":
+		return "not_replied", "未命中明确触发条件，群聊主动回复判断也未选择这条消息", false
+	default:
+		if strings.HasPrefix(outcome, "replied_") {
+			return "replied", "消息通过当前回复路由并已完成回答", true
+		}
+		return "not_replied", "处理结果：" + outcome, false
+	}
 }
 
 type EventListener func(EventRecord)
@@ -133,6 +188,7 @@ type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 type Runtime struct {
 	mu                        sync.RWMutex
 	cfg                       BotConfig
+	profileConfigs            map[string]BotConfig
 	channel                   Channel
 	bridge                    *NoneBotBridge
 	plugins                   *PluginManager
@@ -309,6 +365,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	}
 	runtime := &Runtime{
 		cfg:                 cfg,
+		profileConfigs:      map[string]BotConfig{cfg.ID: cfg},
 		channel:             channel,
 		bridge:              NewNoneBotBridge(bridgeConfigFromBotConfig(cfg), channel),
 		plugins:             plugins,
@@ -341,6 +398,19 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	}
 	runtime.members = newMemberCache(runtime.CallOneBotAPI)
 	return runtime
+}
+
+// SetProfiles lets one runtime apply the configuration belonging to the
+// channel that produced each event while keeping one shared worker pipeline.
+func (r *Runtime) SetProfiles(set ProfileSet) {
+	set = set.WithDefaults()
+	profiles := make(map[string]BotConfig, len(set.Profiles))
+	for _, profile := range set.Profiles {
+		profiles[strings.TrimSpace(profile.ID)] = profile.WithDefaults()
+	}
+	r.mu.Lock()
+	r.profileConfigs = profiles
+	r.mu.Unlock()
 }
 
 // SetLLMModelLister 注入运行时使用的模型列表读取器。
@@ -765,14 +835,29 @@ func (r *Runtime) Status() RuntimeStatus {
 	recent := append([]EventRecord(nil), r.recent...)
 	r.mu.RUnlock()
 	channelStatus := channel.Status()
-	if cfg.BotQQ == "" && channelStatus.SelfID != "" {
-		cfg = r.rememberBotQQ(channelStatus.SelfID)
+	channelStatuses := []ChannelStatus{channelStatus}
+	if provider, ok := channel.(interface{ ChannelStatuses() []ChannelStatus }); ok {
+		channelStatuses = provider.ChannelStatuses()
+	}
+	selfID := channelStatus.SelfID
+	if cfg.ID != "" && len(channelStatuses) > 1 {
+		selfID = ""
+		for _, status := range channelStatuses {
+			if status.ProfileID == cfg.ID {
+				selfID = status.SelfID
+				break
+			}
+		}
+	}
+	if cfg.BotQQ == "" && selfID != "" {
+		cfg = r.rememberBotQQ(selfID)
 	}
 
 	return RuntimeStatus{
 		Running:       running,
 		Config:        PayloadFromConfig(cfg),
 		Channel:       channelStatus,
+		Channels:      channelStatuses,
 		NoneBotBridge: r.bridge.Status(),
 		Plugins:       r.plugins.List(),
 		RecentEvents:  recent,
@@ -817,6 +902,11 @@ func (r *Runtime) effectiveConfigForEvent(event MessageEvent) BotConfig {
 
 func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg := r.cfg.WithDefaults()
+	if profileID := strings.TrimSpace(event.ProfileID); profileID != "" {
+		if profile, ok := r.profileConfigs[profileID]; ok {
+			cfg = profile.WithDefaults()
+		}
+	}
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || r.groupConfigs == nil {
 		return cfg
 	}
@@ -911,7 +1001,9 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		interceptor := r.privateMessageInterceptor
 		r.mu.RUnlock()
 		if interceptor != nil && interceptor(ctx, event, text) {
-			r.record(EventRecord{At: time.Now(), Kind: event.Kind, UserID: event.UserID, Text: "[控制台登录配对]", Handled: true})
+			record := r.decisionEventRecord(event, "[控制台登录配对]", "replied")
+			record.Reason = "私聊消息完成了控制台登录配对"
+			r.record(record)
 			return nil
 		}
 	}
@@ -945,7 +1037,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		if text == "" {
 			text = event.RawMessage
 		}
-		r.record(EventRecord{At: time.Now(), Kind: event.Kind, UserID: event.UserID, GroupID: event.GroupID, Text: text, Handled: false})
+		r.record(r.decisionEventRecord(event, text, "ignored_unavailable_group"))
 		return event, text, false, "ignored_unavailable_group"
 	}
 	if r.bridge != nil {
@@ -967,7 +1059,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	now := time.Now()
 	restriction, blocked := r.activeReplySuppression(event, now)
 	loopCandidate, shouldClassifyLoop := botReplyLoopCandidate{}, false
-	if !blocked {
+	if !blocked && boolValue(r.effectiveConfigForEvent(event).BotReplyLoopDetectionEnabled, true) {
 		loopCandidate, shouldClassifyLoop = r.botReplyLoopCandidate(event, text)
 	}
 	r.remember(event)
@@ -975,13 +1067,13 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	ctx = r.withQQPrivacyContext(ctx, event, history)
 	if ignored, decision := r.shouldIgnoreGroupReplyByMemberLevel(ctx, event); ignored {
 		r.recordGroupReplyLevelIgnored(ctx, event, decision)
-		r.record(EventRecord{At: now, Kind: event.Kind, UserID: event.UserID, GroupID: event.GroupID, Text: text, Handled: false})
+		r.record(r.decisionEventRecord(event, text, "ignored_member_level"))
 		return event, text, false, "ignored_member_level"
 	}
 	if blocked {
 		r.updateUserMemory(event, 0)
 		r.recordReplySuppressionBlocked(event, restriction)
-		r.record(EventRecord{At: now, Kind: event.Kind, UserID: event.UserID, GroupID: event.GroupID, Text: text, Handled: false})
+		r.record(r.decisionEventRecord(event, text, "ignored_response_suppression"))
 		return event, text, false, "ignored_response_suppression"
 	}
 	if shouldClassifyLoop {
@@ -998,19 +1090,19 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 				r.sendReplySuppressionActivationNotice(ctx, event, restriction)
 			}
 			r.updateUserMemory(event, 0)
-			r.record(EventRecord{At: now, Kind: event.Kind, UserID: event.UserID, GroupID: event.GroupID, Text: text, Handled: false})
+			r.record(r.decisionEventRecord(event, text, "ignored_ai_reply_loop"))
 			return event, text, false, "ignored_ai_reply_loop"
 		}
 		if concurrentRestriction, concurrentlyBlocked := r.activeReplySuppression(event, time.Now()); concurrentlyBlocked {
 			r.updateUserMemory(event, 0)
 			r.recordReplySuppressionBlocked(event, concurrentRestriction)
-			r.record(EventRecord{At: now, Kind: event.Kind, UserID: event.UserID, GroupID: event.GroupID, Text: text, Handled: false})
+			r.record(r.decisionEventRecord(event, text, "ignored_response_suppression"))
 			return event, text, false, "ignored_response_suppression"
 		}
 	}
 	if videoOnlyMessage(event, text) {
 		r.updateUserMemory(event, 0)
-		r.record(EventRecord{At: time.Now(), Kind: event.Kind, UserID: event.UserID, GroupID: event.GroupID, Text: text, Handled: false})
+		r.record(r.decisionEventRecord(event, text, "ignored_video"))
 		return event, text, false, "ignored_video"
 	}
 	// Long-term extraction is durable and asynchronous. It never blocks reply
@@ -1018,6 +1110,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	r.enqueueEventMemory(event, memoryEventText(event))
 	directBotFollowup := eventRepliesToBot(event, r.effectiveConfigForEvent(event))
 	handled := r.shouldHandle(event, text)
+	successOutcome := "replied"
 	passiveQueued := false
 	if handled {
 		// An explicit keyword, mention, reply, plugin, or resolver request takes
@@ -1047,13 +1140,16 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		if !passiveQueued {
 			r.maybeNotifyQuietHours(ctx, event, text)
 		}
-		r.record(EventRecord{At: time.Now(), Kind: event.Kind, UserID: event.UserID, GroupID: event.GroupID, Text: text, Handled: false})
+		ignoredOutcome := "ignored"
 		if passiveQueued {
-			return event, text, false, "queued_passive"
+			ignoredOutcome = "queued_passive"
+		} else if !r.admits(r.effectiveConfigForEvent(event), event) {
+			ignoredOutcome = "ignored_policy"
 		}
-		return event, text, false, "ignored"
+		r.record(r.decisionEventRecord(event, text, ignoredOutcome))
+		return event, text, false, ignoredOutcome
 	}
-	return event, text, true, "replied"
+	return event, text, true, successOutcome
 }
 
 func (r *Runtime) startReplyWorker(ctx context.Context, event MessageEvent, text string, outcome string) error {
@@ -1076,65 +1172,66 @@ func (r *Runtime) startReplyWorker(ctx context.Context, event MessageEvent, text
 
 func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text string, successOutcome string) (string, error) {
 	start := time.Now()
-	record := EventRecord{
-		At:      start,
-		Kind:    event.Kind,
-		UserID:  event.UserID,
-		GroupID: event.GroupID,
-		Text:    text,
-		Handled: true,
-	}
+	record := r.decisionEventRecord(event, text, successOutcome)
+	record.At = start
 	replyCtx := withReplySuppressionSendGuard(ctx)
 	reply, err := r.replyTo(replyCtx, event, text)
 	record.Duration = time.Since(start).Milliseconds()
 	if err != nil {
 		if errors.Is(err, errReplySuppressedBeforeSend) {
-			record.Handled = false
+			setEventRecordOutcome(&record, "ignored_response_suppression")
 			r.record(record)
 			return "ignored_response_suppression", nil
 		}
 		if errors.Is(err, errPassiveReplySuperseded) {
-			record.Handled = false
+			setEventRecordOutcome(&record, "superseded_passive")
 			r.record(record)
 			return "superseded_passive", err
 		}
 		record.Error = err.Error()
 		r.setError(err.Error())
 		if errors.Is(err, errOutboundSend) {
-			record.Handled = false
-			r.record(record)
 			switch {
 			case errors.Is(err, errGroupSendUnavailable):
+				setEventRecordOutcome(&record, "ignored_unavailable_group")
+				r.record(record)
 				return "ignored_unavailable_group", nil
 			case errors.Is(err, errOutboundDeliveryDropped):
+				setEventRecordOutcome(&record, "dropped_outbound_delivery")
+				r.record(record)
 				return "dropped_outbound_delivery", nil
 			}
+			setEventRecordOutcome(&record, "dropped_outbound_delivery")
+			r.record(record)
 			return "", err
 		}
 		if ctx.Err() != nil {
+			setEventRecordOutcome(&record, "processing_error")
 			r.record(record)
 			return "", ctx.Err()
 		}
 		if sendErr := r.send(replyCtx, event, "出错了："+publicQQErrorMessage(err)); sendErr != nil {
 			if errors.Is(sendErr, errReplySuppressedBeforeSend) {
-				record.Handled = false
+				setEventRecordOutcome(&record, "ignored_response_suppression")
 				record.Error = ""
 				r.record(record)
 				return "ignored_response_suppression", nil
 			}
 			if errors.Is(sendErr, errGroupSendUnavailable) {
-				record.Handled = false
+				setEventRecordOutcome(&record, "ignored_unavailable_group")
 				r.record(record)
 				return "ignored_unavailable_group", nil
 			}
 			if errors.Is(sendErr, errOutboundDeliveryDropped) {
-				record.Handled = false
+				setEventRecordOutcome(&record, "dropped_outbound_delivery")
 				r.record(record)
 				return "dropped_outbound_delivery", nil
 			}
+			setEventRecordOutcome(&record, "processing_error")
 			r.record(record)
 			return "", errors.Join(err, sendErr)
 		}
+		setEventRecordOutcome(&record, "error_replied")
 		r.record(record)
 		return "error_replied", nil
 	}
@@ -1142,6 +1239,69 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	r.setError("")
 	r.record(record)
 	return successOutcome, nil
+}
+
+func (r *Runtime) decisionEventRecord(event MessageEvent, text string, outcome string) EventRecord {
+	decision, reason, handled := DescribeEventOutcome(outcome)
+	if decision == "replied" {
+		reason = r.replyDecisionReason(event, text, outcome)
+	}
+	return EventRecord{
+		At:        time.Now(),
+		Kind:      event.Kind,
+		Platform:  event.Platform,
+		ProfileID: event.ProfileID,
+		UserID:    event.UserID,
+		GroupID:   event.GroupID,
+		MessageID: event.MessageID,
+		Text:      text,
+		Handled:   handled,
+		Outcome:   strings.TrimSpace(outcome),
+		Decision:  decision,
+		Reason:    reason,
+	}
+}
+
+func setEventRecordOutcome(record *EventRecord, outcome string) {
+	if record == nil {
+		return
+	}
+	decision, reason, handled := DescribeEventOutcome(outcome)
+	record.Outcome = strings.TrimSpace(outcome)
+	record.Decision = decision
+	record.Reason = reason
+	record.Handled = handled
+}
+
+func (r *Runtime) replyDecisionReason(event MessageEvent, text string, outcome string) string {
+	_, fallback, _ := DescribeEventOutcome(outcome)
+	if outcome != "replied" {
+		return fallback
+	}
+	if r.isOwnerReplySuppressionCommand(event, text) {
+		return "机器人主人发送了响应限制管理命令"
+	}
+	if event.Kind == EventKindPrivate {
+		return "私聊消息通过当前回复权限规则，默认进入回复流程"
+	}
+	cfg := r.effectiveConfigForEvent(event)
+	if eventRepliesToBot(event, cfg) {
+		return "用户直接回复了机器人，语义路由判断应继续回答"
+	}
+	if eventDirectlyMentionsBot(event, cfg) {
+		return "群消息直接提及了机器人"
+	}
+	trimmed := strings.TrimSpace(readableEventText(event, text))
+	for _, trigger := range cfg.GroupTriggers {
+		trigger = strings.TrimSpace(trigger)
+		if trigger != "" && strings.Contains(trimmed, trigger) {
+			return "群消息命中了触发称呼“" + trigger + "”"
+		}
+	}
+	if r.shouldHandleResolver(event, text) {
+		return "消息命中了链接或内容解析功能"
+	}
+	return "消息命中了已启用插件或其他回复触发规则"
 }
 
 func (r *Runtime) observeSelfMessage(ctx context.Context, event MessageEvent) {
@@ -2618,7 +2778,8 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 19. context_message_ids 只能填写 recent_messages 中真实存在的 message_id。保留所有可能帮助理解当前指代、话题延续、约束或用户意图的消息；只删除确定无关的旁支聊天，不要为了追求数量少而丢上下文。
 20. 当前消息的直接引用和语义指向会由运行时强制保留，不必依靠关键词。older_summary_available=true 且当前问题确实延续更早话题时，keep_older_summary=true；独立新问题则为 false。
 21. 工具参数应保持最小且符合工具说明。搜索只需要工具根据当前信息缺口整理出的 query，不要把聊天记录、工具目录或系统说明塞进搜索词。
-22. tools、context_message_ids 和 keep_older_summary 三个字段必须始终给出，即使它们为空或为 false。`)
+22. available_tools 中存在 web_search.search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
+23. tools、context_message_ids 和 keep_older_summary 三个字段必须始终给出，即使它们为空或为 false。`)
 		userPrompt = "请判断图片动作，并选择本轮真正可能有用的上下文和工具。消息上下文 JSON：\n"
 		outputFormat = `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`
 	}
@@ -2964,6 +3125,9 @@ func (r *Runtime) recordImageOperation(ctx context.Context, event MessageEvent, 
 }
 
 func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provider llm.Provider, model string, usage llm.Usage, purpose string) {
+	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
 		return
 	}
@@ -5196,6 +5360,8 @@ func dedupeStrings(values []string) []string {
 }
 
 func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	msg.Platform = event.Platform
+	msg.ProfileID = event.ProfileID
 	if event.Kind == EventKindGroup {
 		msg.GroupID = event.GroupID
 	} else {
@@ -5340,6 +5506,7 @@ func (r *Runtime) sendOutgoing(ctx context.Context, event MessageEvent, msg Outg
 }
 
 func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent, msg OutgoingMessage) (map[string]any, error) {
+	msg = routeOutgoingToEvent(event, msg)
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
@@ -5464,6 +5631,9 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 	selfID := firstNonEmpty(strings.TrimSpace(source.SelfID), strings.TrimSpace(cfg.BotQQ), "bot")
 	senderName := firstNonEmpty(strings.TrimSpace(cfg.Name), "Diana")
 	event := MessageEvent{
+		Platform:                source.Platform,
+		ProfileID:               source.ProfileID,
+		ContextNamespace:        source.ContextNamespace,
 		Kind:                    source.Kind,
 		Time:                    time.Now().Unix(),
 		SelfID:                  selfID,
@@ -5921,13 +6091,19 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 		return err
 	}
 	r.record(EventRecord{
-		At:      time.Now(),
-		Kind:    event.Kind,
-		UserID:  event.UserID,
-		GroupID: event.GroupID,
-		Text:    "[notice] group_increase",
-		Reply:   welcome,
-		Handled: true,
+		At:        time.Now(),
+		Kind:      event.Kind,
+		Platform:  event.Platform,
+		ProfileID: event.ProfileID,
+		UserID:    event.UserID,
+		GroupID:   event.GroupID,
+		MessageID: event.MessageID,
+		Text:      "[notice] group_increase",
+		Reply:     welcome,
+		Handled:   true,
+		Outcome:   "replied_welcome",
+		Decision:  "replied",
+		Reason:    "新成员入群通知触发了欢迎消息",
 	})
 	return nil
 }
@@ -6312,10 +6488,14 @@ func (r *Runtime) activeCount() int {
 
 // sessionKey 根据事件生成上下文会话 key。
 func sessionKey(event MessageEvent) string {
-	if event.GroupID != "" {
-		return "group:" + event.GroupID
+	prefix := strings.TrimSpace(event.ContextNamespace)
+	if prefix != "" {
+		prefix += ":"
 	}
-	return "private:" + event.UserID
+	if event.GroupID != "" {
+		return prefix + "group:" + event.GroupID
+	}
+	return prefix + "private:" + event.UserID
 }
 
 // handleOwnerCommand 处理 owner 的强格式管理命令。
@@ -6822,7 +7002,7 @@ func (r *Runtime) finishScheduledQuery(id string, startedAt time.Time, runErr er
 		found = true
 		items[index].LastRunAt = startedAt
 		if runErr != nil {
-			items[index].LastError = truncateRunesFromStart(runErr.Error(), 500)
+			items[index].LastError = runErr.Error()
 			items[index].ConsecutiveFailures++
 			items[index].TriggerAt = time.Now().Add(durableReminderRetryDelay(items[index], runErr, items[index].ConsecutiveFailures))
 		} else {
@@ -6930,7 +7110,13 @@ func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Remind
 }
 
 func reminderSourceEvent(item Reminder) MessageEvent {
-	event := MessageEvent{Kind: EventKindPrivate, UserID: item.UserID}
+	event := MessageEvent{
+		Kind:             EventKindPrivate,
+		Platform:         item.Platform,
+		ProfileID:        item.ProfileID,
+		ContextNamespace: item.ContextNamespace,
+		UserID:           item.UserID,
+	}
 	if item.GroupID != "" {
 		event.Kind = EventKindGroup
 		event.GroupID = item.GroupID

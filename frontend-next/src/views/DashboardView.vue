@@ -54,18 +54,18 @@
               </span>
             </div>
 
-            <div class="checklist-item" :class="status?.channel.connected ? 'done' : 'todo'">
+            <div class="checklist-item" :class="connectedChannelCount > 0 ? 'done' : 'todo'">
               <span class="check-icon">
-                <CheckCircle2 v-if="status?.channel.connected" :size="15" aria-hidden="true" />
+                <CheckCircle2 v-if="connectedChannelCount > 0" :size="15" aria-hidden="true" />
                 <Cable v-else :size="14" aria-hidden="true" />
               </span>
               <span class="check-main">
-                NapCat / OneBot 连接
-                <div class="check-hint mono">{{ status?.channel.endpoint || "—" }}</div>
+                机器人通道
+                <div class="check-hint">{{ channelSummary }}</div>
                 <div v-if="status?.channel.last_error" class="check-hint text-err">{{ status.channel.last_error }}</div>
               </span>
-              <span v-if="status" class="badge" :class="status.channel.connected ? 'ok' : 'err'">
-                {{ status.channel.connected ? `已连接 ${status.channel.self_id || ""}` : "未连接" }}
+              <span v-if="status" class="badge" :class="connectedChannelCount > 0 ? 'ok' : 'err'">
+                {{ connectedChannelCount > 0 ? `已连接 ${connectedChannelCount} / ${channelCount}` : "未连接" }}
               </span>
             </div>
 
@@ -144,11 +144,17 @@
       <!-- 实时事件流 -->
       <section class="card">
         <div class="card-header">
-          <h2>实时事件</h2>
-          <span class="badge" :class="stream.connected ? 'ok' : 'warn'">
-            <span class="status-dot" :class="{ pulse: stream.connected }" aria-hidden="true" />
-            {{ stream.connected ? "实时推送中" : "等待重连" }}
-          </span>
+          <div class="cluster">
+            <h2>实时事件</h2>
+            <span class="badge" :class="stream.connected ? 'ok' : 'warn'">
+              <span class="status-dot" :class="{ pulse: stream.connected }" aria-hidden="true" />
+              {{ stream.connected ? "实时推送中" : "等待重连" }}
+            </span>
+          </div>
+          <button class="btn ghost small" type="button" @click="navigate('events')">
+            查看明细
+            <ArrowRight :size="14" aria-hidden="true" />
+          </button>
         </div>
         <div class="card-body">
           <div v-if="feed.length > 0" class="event-feed">
@@ -156,13 +162,16 @@
               <span class="event-time">{{ formatClock(event.at) }}</span>
               <div class="event-main">
                 <div class="event-meta">
+                  <span v-if="event.platform" class="badge">{{ platformLabel(event.platform) }}</span>
                   <span class="badge" :class="eventBadgeClass(event)">{{ eventKindLabel(event.kind) }}</span>
                   <span v-if="event.group_id" class="muted mono">群 {{ event.group_id }}</span>
                   <span v-if="event.user_id" class="muted mono">{{ event.user_id }}</span>
                   <span v-if="event.duration_ms" class="muted">{{ (event.duration_ms / 1000).toFixed(1) }}s</span>
+                  <span v-if="event.decision" class="badge" :class="eventDecisionClass(event)">{{ eventDecisionLabel(event) }}</span>
                 </div>
                 <p v-if="event.text" class="event-text">{{ truncate(event.text, 140) }}</p>
                 <p v-if="event.reply" class="event-reply">{{ truncate(event.reply, 200) }}</p>
+                <p v-if="event.reason" class="event-reason">{{ event.handled ? "回复原因" : "未回复原因" }}：{{ event.reason }}</p>
                 <p v-if="event.error" class="event-error">{{ event.error }}</p>
               </div>
             </article>
@@ -206,6 +215,13 @@ const setupNeeded = ref(false);
 
 const status = computed(() => stream.status);
 const stats = computed(() => stream.stats);
+const channelCount = computed(() => status.value?.channels?.length ?? (status.value?.channel ? 1 : 0));
+const connectedChannelCount = computed(() => status.value?.channels?.filter((channel) => channel.connected).length ?? (status.value?.channel?.connected ? 1 : 0));
+const channelSummary = computed(() => {
+  const channels = status.value?.channels ?? [];
+  if (channels.length === 0) return status.value?.channel?.endpoint || "—";
+  return channels.map((channel) => `${channel.name || channel.platform || "通道"} · ${channel.connected ? "在线" : "离线"}`).join("  /  ");
+});
 const hourlyBuckets = computed<StatsHourBucket[]>(() => (stream.stats ? [...stream.stats.hourly] : []));
 
 const feed = computed<BotEvent[]>(() => {
@@ -220,6 +236,12 @@ function eventKindLabel(kind: string): string {
   return labels[kind] ?? kind;
 }
 
+function platformLabel(platform: string): string {
+  if (platform === "telegram") return "Telegram";
+  if (platform === "napcat" || platform === "onebot") return "QQ";
+  return platform;
+}
+
 function eventBadgeClass(event: BotEvent): string {
   if (event.error) {
     return "err";
@@ -227,6 +249,20 @@ function eventBadgeClass(event: BotEvent): string {
   if (event.handled) {
     return "ok";
   }
+  return "";
+}
+
+function eventDecisionLabel(event: BotEvent): string {
+  if (event.decision === "replied" || event.handled) return "已回复";
+  if (event.decision === "pending") return "等待判断";
+  if (event.decision === "error" || event.error) return "处理异常";
+  return "未回复";
+}
+
+function eventDecisionClass(event: BotEvent): string {
+  if (event.decision === "replied" || event.handled) return "ok";
+  if (event.decision === "pending") return "warn";
+  if (event.decision === "error" || event.error) return "err";
   return "";
 }
 

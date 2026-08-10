@@ -14,15 +14,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type countingUpdater struct {
-	fakeSystemUpdater
+type countingReleaseUpdater struct {
+	result  updater.Result
+	err     error
 	updates int
 }
 
-// Update 记录调用次数并转发到假实现。
-func (c *countingUpdater) Update(ctx context.Context) (updater.Result, error) {
+// UpdateLatest 记录调用次数并返回预设结果。
+func (c *countingReleaseUpdater) UpdateLatest(context.Context, bool) (updater.Result, error) {
 	c.updates++
-	return c.fakeSystemUpdater.Update(ctx)
+	return c.result, c.err
 }
 
 type memorySettingsStore struct {
@@ -62,9 +63,7 @@ func TestGithubRepoFromRemote(t *testing.T) {
 
 // TestAutoUpdaterTickRespectsToggleAndInterval 验证对应功能场景。
 func TestAutoUpdaterTickRespectsToggleAndInterval(t *testing.T) {
-	fake := &countingUpdater{fakeSystemUpdater: fakeSystemUpdater{
-		result: updater.Result{Updated: true, Status: updater.Status{HeadCommit: "abc1234"}},
-	}}
+	fake := &countingReleaseUpdater{result: updater.Result{Updated: true, Status: updater.Status{HeadCommit: "abc1234"}}}
 	auto := NewAutoUpdater(fake, &memorySettingsStore{}, nil)
 
 	if settings := auto.Settings(); !settings.AutoUpdateEnabled || settings.IntervalMinutes != 30 {
@@ -104,7 +103,7 @@ func TestAutoUpdaterTickRespectsToggleAndInterval(t *testing.T) {
 }
 
 func TestAutoUpdaterTreatsMissingRemoteAsManagedDeployment(t *testing.T) {
-	fake := &countingUpdater{fakeSystemUpdater: fakeSystemUpdater{err: updater.ErrRemoteNotConfigured}}
+	fake := &countingReleaseUpdater{err: updater.ErrRemoteNotConfigured}
 	auto := NewAutoUpdater(fake, &memorySettingsStore{}, nil)
 
 	auto.tick(context.Background())
@@ -118,7 +117,7 @@ func TestAutoUpdaterTreatsMissingRemoteAsManagedDeployment(t *testing.T) {
 func TestUpdateSettingsEndpointsRoundtrip(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := &memorySettingsStore{}
-	auto := NewAutoUpdater(&countingUpdater{}, store, nil)
+	auto := NewAutoUpdater(&countingReleaseUpdater{}, store, nil)
 	handler := NewSystemUpdateHandler(fakeSystemUpdater{})
 	handler.SetAutoUpdater(auto)
 	router := gin.New()
@@ -192,7 +191,7 @@ func TestChangelogPrefersReleases(t *testing.T) {
 func TestRollbackEndpointDisablesAutoUpdate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := &memorySettingsStore{}
-	auto := NewAutoUpdater(&countingUpdater{}, store, nil)
+	auto := NewAutoUpdater(&countingReleaseUpdater{}, store, nil)
 	if _, err := auto.SaveSettings(context.Background(), updater.Settings{AutoUpdateEnabled: true, IntervalMinutes: 30}); err != nil {
 		t.Fatal(err)
 	}

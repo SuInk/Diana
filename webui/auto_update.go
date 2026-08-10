@@ -16,9 +16,13 @@ type UpdateSettingsStore interface {
 	SaveUpdateSettings(ctx context.Context, settings updater.Settings) error
 }
 
-// AutoUpdater 周期性执行系统更新（fetch + ff-only pull）。
+type LatestReleaseUpdater interface {
+	UpdateLatest(context.Context, bool) (updater.Result, error)
+}
+
+// AutoUpdater 周期性安装最新稳定 Release。
 type AutoUpdater struct {
-	updater  SystemUpdater
+	updater  LatestReleaseUpdater
 	store    UpdateSettingsStore
 	logs     AppLogWriter
 	interval time.Duration // 循环唤醒粒度，测试可调小
@@ -31,9 +35,9 @@ type AutoUpdater struct {
 }
 
 // NewAutoUpdater 创建自动更新循环，settings 从存储加载，新安装默认每 30 分钟自动更新。
-func NewAutoUpdater(systemUpdater SystemUpdater, store UpdateSettingsStore, logs AppLogWriter) *AutoUpdater {
+func NewAutoUpdater(releaseUpdater LatestReleaseUpdater, store UpdateSettingsStore, logs AppLogWriter) *AutoUpdater {
 	a := &AutoUpdater{
-		updater:  systemUpdater,
+		updater:  releaseUpdater,
 		store:    store,
 		logs:     logs,
 		interval: time.Minute,
@@ -109,12 +113,12 @@ func (a *AutoUpdater) tick(ctx context.Context) {
 
 // runOnce 执行一次自动更新并记录结果。
 func (a *AutoUpdater) runOnce(ctx context.Context) {
-	runCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	result, err := a.updater.Update(runCtx)
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	result, err := a.updater.UpdateLatest(runCtx, false)
 	cancel()
-	managedExternally := errors.Is(err, updater.ErrRemoteNotConfigured)
+	managedExternally := errors.Is(err, updater.ErrRemoteNotConfigured) || errors.Is(err, updater.ErrReleaseUpdateUnsupported)
 	if managedExternally {
-		// Release/Docker 部署没有 Git remote，实际替换由包管理器或镜像更新器完成。
+		// Unsupported package layouts and containers are replaced by their deployment manager.
 		// 这不是运行故障，不应周期性写错误日志或向用户弹出英文 Git 错误。
 		err = nil
 	}
@@ -130,7 +134,11 @@ func (a *AutoUpdater) runOnce(ctx context.Context) {
 	} else {
 		a.lastError = ""
 		if result.Updated {
-			a.lastResult = "已更新到 " + result.Status.HeadCommit
+			target := result.TargetCommit
+			if target == "" {
+				target = result.Status.HeadCommit
+			}
+			a.lastResult = "已更新到 " + target
 		} else {
 			a.lastResult = "已是最新"
 		}
@@ -147,7 +155,11 @@ func (a *AutoUpdater) runOnce(ctx context.Context) {
 	case managedExternally:
 		return
 	case result.Updated:
-		summary := strings.TrimSpace(result.Status.HeadCommit + " " + result.Status.HeadSubject)
+		target := result.TargetCommit
+		if target == "" {
+			target = result.Status.HeadCommit
+		}
+		summary := strings.TrimSpace(target + " " + result.Status.HeadSubject)
 		recordOperation(context.Background(), a.logs, "system.update.auto", "自动更新完成: "+summary, "", map[string]any{
 			"branch":  result.Status.Branch,
 			"updated": true,

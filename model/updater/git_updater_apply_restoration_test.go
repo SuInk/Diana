@@ -76,6 +76,47 @@ func TestGitUpdaterFastForwardAndAlreadyCurrent(t *testing.T) {
 	}
 }
 
+func TestGitUpdaterFastForwardsFeatureBranchToReleaseTag(t *testing.T) {
+	repo := newRestoredUpdaterTestRepo(t)
+	restoredGitRun(t, repo.work, "checkout", "-b", "feature/update-test")
+	restoredGitRun(t, repo.work, "push", "-u", "origin", "feature/update-test")
+	target := repo.commitRemote(t, "released update")
+	restoredGitRun(t, repo.seed, "tag", "v1.3.0", target)
+	restoredGitRun(t, repo.seed, "push", "origin", "v1.3.0")
+
+	u, err := NewGitUpdater(repo.work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := u.UpdateToRelease(context.Background(), "v1.3.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated || result.TargetCommit != target || result.Status.Branch != "feature/update-test" {
+		t.Fatalf("UpdateToRelease() = %#v", result)
+	}
+	if head := restoredGitOutput(t, repo.work, "rev-parse", "HEAD"); head != target {
+		t.Fatalf("HEAD = %s, want release %s", head, target)
+	}
+	if tag := restoredGitOutput(t, repo.work, "describe", "--tags", "--exact-match"); tag != "v1.3.0" {
+		t.Fatalf("exact tag = %q", tag)
+	}
+}
+
+func TestGitUpdaterReleaseTargetValidation(t *testing.T) {
+	repo := newRestoredUpdaterTestRepo(t)
+	u, err := NewGitUpdater(repo.work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.UpdateToRelease(context.Background(), "origin/main"); err == nil {
+		t.Fatal("branch ref accepted as a Release tag")
+	}
+	if _, err := u.UpdateToRelease(context.Background(), "v9.9.9"); !errors.Is(err, ErrReleaseTagMissing) {
+		t.Fatalf("missing release error = %v", err)
+	}
+}
+
 func TestGitUpdaterRejectsUnsafeRepositoryStates(t *testing.T) {
 	t.Run("dirty work tree", func(t *testing.T) {
 		repo := newRestoredUpdaterTestRepo(t)
