@@ -1285,6 +1285,9 @@ func (r *Runtime) replyDecisionReason(event MessageEvent, text string, outcome s
 		return "私聊消息通过当前回复权限规则，默认进入回复流程"
 	}
 	cfg := r.effectiveConfigForEvent(event)
+	if eventExplicitlyMentionsBot(event, cfg) {
+		return "群消息显式提及了机器人"
+	}
 	if eventRepliesToBot(event, cfg) {
 		return "用户直接回复了机器人，语义路由判断应继续回答"
 	}
@@ -1379,6 +1382,12 @@ func (r *Runtime) shouldHandleChatTrigger(event MessageEvent, text string) bool 
 		return false
 	}
 	if r.isOwnerReplySuppressionCommand(event, text) {
+		return true
+	}
+	// NapCat can include both reply and at segments in one message. An actual
+	// at is an explicit direct trigger; only reply-only messages use the
+	// semantic answerability gate.
+	if eventExplicitlyMentionsBot(event, cfg) {
 		return true
 	}
 	if eventRepliesToBot(event, cfg) {

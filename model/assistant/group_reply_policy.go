@@ -60,8 +60,15 @@ func eventDirectlyMentionsBot(event MessageEvent, cfg BotConfig) bool {
 	if event.Kind != EventKindGroup {
 		return false
 	}
-	if event.ToMe {
-		return true
+	return event.ToMe || eventExplicitlyMentionsBot(event, cfg)
+}
+
+// eventExplicitlyMentionsBot only accepts an actual at segment. OneBot also
+// sets ToMe for replies to the bot, so ToMe alone cannot distinguish an
+// explicit mention from a quoted follow-up that needs semantic routing.
+func eventExplicitlyMentionsBot(event MessageEvent, cfg BotConfig) bool {
+	if event.Kind != EventKindGroup {
+		return false
 	}
 	for _, botID := range []string{event.SelfID, cfg.BotQQ} {
 		botID = strings.TrimSpace(botID)
