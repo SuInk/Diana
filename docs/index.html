@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Diana 多平台 AI 助手的完整介绍、部署指南、配置说明、实现原理与运维手册。"
+    />
+    <meta name="theme-color" content="#f7f5f6" />
+    <title>Diana 文档</title>
+    <link rel="icon" href="https://raw.githubusercontent.com/SuInk/Diana/main/frontend-next/public/favicon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到正文</a>
+
+    <header class="topbar">
+      <button class="icon-button menu-button" type="button" aria-label="打开目录" title="打开目录" data-menu-toggle>
+        <span aria-hidden="true">☰</span>
+      </button>
+      <a class="brand" href="#top" aria-label="Diana 文档首页">
+        <span class="brand-mark" aria-hidden="true">D</span>
+        <span>
+          <strong>Diana</strong>
+          <small>文档</small>
+        </span>
+      </a>
+      <nav class="top-links" aria-label="外部链接">
+        <a href="https://github.com/SuInk/Diana/releases/latest">下载</a>
+        <a href="https://github.com/SuInk/Diana">GitHub</a>
+        <button class="icon-button" type="button" aria-label="切换明暗主题" title="切换明暗主题" data-theme-toggle>
+          <span data-theme-icon aria-hidden="true">☾</span>
+        </button>
+      </nav>
+    </header>
+
+    <div class="docs-shell" id="top">
+      <aside class="sidebar" data-sidebar>
+        <div class="sidebar-search">
+          <label for="docs-search">搜索文档</label>
+          <input id="docs-search" type="search" placeholder="部署、模型、NapCat…" autocomplete="off" data-search />
+          <p class="search-status" data-search-status aria-live="polite"></p>
+        </div>
+        <nav class="sidebar-nav" aria-label="文档目录" data-nav>
+          <p>开始使用</p>
+          <a href="#overview">产品介绍</a>
+          <a href="#quickstart">五分钟开始</a>
+          <a href="#deployment">部署方式</a>
+          <a href="#first-run">首次配置</a>
+
+          <p>配置指南</p>
+          <a href="#channels">QQ 与 Telegram</a>
+          <a href="#models">模型与视觉能力</a>
+          <a href="#groups">群聊策略</a>
+          <a href="#agent">Agent 与工具</a>
+
+          <p>实现原理</p>
+          <a href="#architecture">系统架构</a>
+          <a href="#message-flow">消息调用链</a>
+          <a href="#memory">记忆与上下文</a>
+          <a href="#media">图片与文件</a>
+          <a href="#storage">数据与安全</a>
+
+          <p>维护</p>
+          <a href="#updates">更新与回滚</a>
+          <a href="#operations">运维与备份</a>
+          <a href="#troubleshooting">故障排查</a>
+          <a href="#development">开发与验证</a>
+        </nav>
+      </aside>
+
+      <div class="sidebar-backdrop" data-sidebar-backdrop></div>
+
+      <main id="main" class="content">
+        <section class="hero searchable" id="overview" data-title="产品介绍">
+          <div class="hero-copy">
+            <p class="eyebrow">多平台 · 多模型 · 可观测</p>
+            <h1>Diana 多平台 AI 助手</h1>
+            <p class="lead">
+              用一个安静、可管理的 Web 控制台连接 QQ 与 Telegram，将对话模型、视觉模型、图片生成、长期记忆、联网搜索和自动化任务组合成可持续运行的助手服务。
+            </p>
+            <div class="hero-actions">
+              <a class="button primary" href="#deployment">开始部署</a>
+              <a class="button secondary" href="#architecture">查看实现</a>
+            </div>
+            <dl class="hero-facts">
+              <div><dt>后端</dt><dd>Go + Gin</dd></div>
+              <div><dt>控制台</dt><dd>Vue 3 + TypeScript</dd></div>
+              <div><dt>存储</dt><dd>SQLite + 本地媒体</dd></div>
+              <div><dt>稳定版</dt><dd><a href="https://github.com/SuInk/Diana/releases/latest">v0.4.2</a></dd></div>
+            </dl>
+          </div>
+          <figure class="product-preview">
+            <img
+              src="https://raw.githubusercontent.com/SuInk/Diana/main/frontend/public/landing-console-preview.png"
+              alt="Diana Web 控制台总览界面"
+              width="1440"
+              height="1000"
+            />
+            <figcaption>控制台统一呈现连接状态、消息统计、事件处理和运行信息。</figcaption>
+          </figure>
+        </section>
+
+        <section class="section searchable" data-title="核心能力">
+          <div class="section-heading">
+            <p class="eyebrow">核心能力</p>
+            <h2>从接入到运维都在同一套边界内</h2>
+          </div>
+          <div class="feature-grid">
+            <article>
+              <h3>多通道同时在线</h3>
+              <p>QQ OneBot V11 与 Telegram Bot API 可同时运行；回复、图片和提醒始终回到消息来源通道。</p>
+            </article>
+            <article>
+              <h3>模型职责拆分</h3>
+              <p>对话、识图、意图识别和图片生成可以分别绑定 Provider 与模型，未绑定时按明确规则回退。</p>
+            </article>
+            <article>
+              <h3>内置联网能力</h3>
+              <p>联网搜索属于内置能力，不依赖用户安装插件；Agent 可按问题时效性决定是否检索后回答。</p>
+            </article>
+            <article>
+              <h3>群级回复策略</h3>
+              <p>每个群可独立配置触发词、人设、回复时间、屏蔽 QQ 号、群等级门槛和插件覆盖。</p>
+            </article>
+            <article>
+              <h3>长期记忆与检索</h3>
+              <p>近期上下文、结构化事实、用户关系画像和压缩摘要分层保存，可选择是否跨群共享非敏感记忆。</p>
+            </article>
+            <article>
+              <h3>可解释的处理记录</h3>
+              <p>事件明细记录回复与不回复原因、模型用量和最终结果；调试模式进一步呈现上下文与工具调用链。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section searchable" id="quickstart" data-title="五分钟开始">
+          <div class="section-heading">
+            <p class="eyebrow">快速开始</p>
+            <h2>五分钟启动一个可登录的控制台</h2>
+          </div>
+          <ol class="steps">
+            <li>
+              <span>1</span>
+              <div><h3>下载完整包</h3><p>从最新 Release 选择与你的系统和架构一致的 `.tar.gz` 或 `.zip`，不要给普通部署只下载裸二进制。</p></div>
+            </li>
+            <li>
+              <span>2</span>
+              <div><h3>校验 SHA-256</h3><p>下载同一 Release 的 <code>SHA256SUMS</code>，确认归档在传输过程中没有损坏或被替换。</p></div>
+            </li>
+            <li>
+              <span>3</span>
+              <div><h3>运行启动脚本</h3><p>Linux/macOS 执行 <code>./run.sh</code>，Windows 执行 <code>run.bat</code>。</p></div>
+            </li>
+            <li>
+              <span>4</span>
+              <div><h3>登录 WebUI</h3><p>打开 <code>http://127.0.0.1:18080</code>，使用首次启动日志中生成的管理员账号和密码。</p></div>
+            </li>
+            <li>
+              <span>5</span>
+              <div><h3>配置模型与通道</h3><p>先保存 LLM 配置并执行测试，再添加 QQ 或 Telegram 机器人并启动。</p></div>
+            </li>
+          </ol>
+        </section>
+
+        <section class="section searchable" id="deployment" data-title="部署方式 Release Docker 源码">
+          <div class="section-heading split-heading">
+            <div>
+              <p class="eyebrow">部署</p>
+              <h2>选择与你维护方式匹配的安装形态</h2>
+            </div>
+            <p>完整 Release 包适合直接运行；Docker 适合容器运维；源码部署适合开发和深度定制。</p>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="部署方式">
+            <button type="button" role="tab" aria-selected="true" data-tab="release">完整 Release 包</button>
+            <button type="button" role="tab" aria-selected="false" data-tab="docker">Docker</button>
+            <button type="button" role="tab" aria-selected="false" data-tab="source">源码部署</button>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" data-panel="release">
+            <div class="callout recommended"><strong>推荐</strong><p>归档已经包含后端、启动脚本和 <code>frontend-next/dist</code>，目标机器不需要 Go、Node.js 或 npm。</p></div>
+            <h3>1. 下载与校验</h3>
+            <pre><code># Linux
+sha256sum -c SHA256SUMS --ignore-missing
+
+# macOS
+shasum -a 256 diana-webui-darwin-arm64.tar.gz
+
+# Windows PowerShell
+Get-FileHash .\diana-webui-windows-amd64.zip -Algorithm SHA256</code></pre>
+            <h3>2. 解压并启动</h3>
+            <pre><code># Linux / macOS
+tar -xzf diana-webui-darwin-arm64.tar.gz
+cd diana-webui-darwin-arm64
+chmod +x run.sh
+./run.sh
+
+# Windows
+Expand-Archive .\diana-webui-windows-amd64.zip
+.\diana-webui-windows-amd64\run.bat</code></pre>
+            <p class="note">Apple Silicon 使用 <code>darwin-arm64</code>，Intel Mac 使用 <code>darwin-amd64</code>。首次启动前可设置 <code>DIANA_ADMIN_PASSWORD</code> 固定管理员密码。</p>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" data-panel="docker" hidden>
+            <div class="callout"><strong>持久化</strong><p>必须挂载 <code>/app/data</code> 和 <code>/app/logs</code>；否则重建容器会丢失 SQLite 配置、凭据与运行记录。</p></div>
+            <pre><code>git clone https://github.com/SuInk/Diana.git
+cd Diana
+cp docker-compose.yml docker-compose.local.yml
+# 修改管理员密码、OneBot token、QQ 号和 LLM 配置
+docker compose -f docker-compose.local.yml up -d --build</code></pre>
+            <h3>NapCat 与 Diana 分容器</h3>
+            <p>反向 WebSocket 地址必须使用容器间可达的服务名，不能写对 NapCat 容器自身生效的 <code>127.0.0.1</code>。</p>
+            <pre><code>ONEBOT_REVERSE_WS_ENDPOINT=ws://diana:18080/onebot/v11/ws
+DIANA_LOCAL_MEDIA_BASE_URL=http://diana:18080/media/resolver</code></pre>
+            <h3>更新容器</h3>
+            <pre><code>docker compose -f docker-compose.local.yml pull
+docker compose -f docker-compose.local.yml up -d --build
+docker compose -f docker-compose.local.yml logs -f diana</code></pre>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" data-panel="source" hidden>
+            <div class="requirements">
+              <span>Go 1.25.8</span><span>Node.js 22</span><span>npm</span><span>Git</span>
+            </div>
+            <pre><code>git clone https://github.com/SuInk/Diana.git
+cd Diana
+go mod download
+
+cd frontend-next
+npm ci
+npm run build
+cd ..
+
+mkdir -p dist
+go build -trimpath -o dist/diana-webui ./cmd/webui
+FRONTEND_DIST=frontend-next/dist ./dist/diana-webui</code></pre>
+            <h3>开发模式</h3>
+            <pre><code>make dev
+# 后端默认 http://127.0.0.1:18080
+# Vite 默认 http://127.0.0.1:5173，并代理 /api 与 /onebot</code></pre>
+            <p class="note">源码部署的更新方式是 Git 拉取、重新构建和重启。WebUI 不会把源码 checkout 当成 Release 完整包直接覆盖。</p>
+          </div>
+        </section>
+
+        <section class="section searchable" id="first-run" data-title="首次配置 管理员 登录 HTTPS">
+          <div class="section-heading">
+            <p class="eyebrow">首次配置</p>
+            <h2>先保证访问安全，再连接外部服务</h2>
+          </div>
+          <div class="two-column">
+            <div>
+              <h3>管理员凭据</h3>
+              <p>未设置环境变量时，首次启动会随机生成 <code>diana#</code> 开头的账号和安全密码，仅在该次启动日志显示一次。之后以 SQLite 中的凭据为准。</p>
+              <pre><code>DIANA_ADMIN_USERNAME=diana#operator
+DIANA_ADMIN_PASSWORD=replace-with-a-long-password</code></pre>
+            </div>
+            <div>
+              <h3>公网访问</h3>
+              <p>Diana 默认适合本机或内网访问。暴露到公网时应在前面放置 HTTPS 反向代理，并限制管理端来源；OneBot 连接同时配置 access token。</p>
+              <pre><code># Nginx 核心代理头
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;</code></pre>
+            </div>
+          </div>
+          <div class="callout warn"><strong>不要提交密钥</strong><p><code>runtime.env</code>、<code>.env</code>、模型 API Key、Telegram Bot Token 和平台 Cookie 都不应进入 Git。</p></div>
+        </section>
+
+        <section class="section searchable" id="channels" data-title="QQ Telegram NapCat OneBot 多通道">
+          <div class="section-heading">
+            <p class="eyebrow">平台接入</p>
+            <h2>QQ 与 Telegram 可以同时在线</h2>
+          </div>
+          <div class="comparison">
+            <article>
+              <h3>QQ / OneBot V11</h3>
+              <dl>
+                <div><dt>适配器</dt><dd>NapCat、Lagrange.Core、go-cqhttp</dd></div>
+                <div><dt>连接</dt><dd>适配器主动连接 Diana 的反向 WebSocket</dd></div>
+                <div><dt>地址</dt><dd><code>ws://HOST:18080/onebot/v11/ws</code></dd></div>
+                <div><dt>特有能力</dt><dd>群等级、CQ 码、引用、群文件和本地媒体回传</dd></div>
+              </dl>
+            </article>
+            <article>
+              <h3>Telegram</h3>
+              <dl>
+                <div><dt>凭据</dt><dd>BotFather 生成的 Bot Token</dd></div>
+                <div><dt>连接</dt><dd>Diana 通过官方 Bot API 长轮询主动出站</dd></div>
+                <div><dt>公网要求</dt><dd>不需要 webhook，也不需要公网入口</dd></div>
+                <div><dt>网络</dt><dd>可配置代理或自建 Bot API 地址</dd></div>
+              </dl>
+            </article>
+          </div>
+          <h3>多机器人上下文</h3>
+          <p>每个机器人配置独立保存平台、账号、主人、人设、触发规则和模型分配。默认按配置隔离会话与记忆；关闭隔离后仍保持发送通道路由，不会把 QQ 回复误发到 Telegram。</p>
+        </section>
+
+        <section class="section searchable" id="models" data-title="模型 LLM 视觉 生图 意图 OpenAI Gemini Anthropic">
+          <div class="section-heading">
+            <p class="eyebrow">模型配置</p>
+            <h2>Provider 管连接，角色分配管职责</h2>
+          </div>
+          <p>Diana 支持 <code>openai_compatible</code>、<code>gemini</code> 和 <code>anthropic</code>。一个 Provider 配置可以同步模型列表；机器人再为不同职责选择具体模型。</p>
+          <div class="role-table table-wrap">
+            <table>
+              <thead><tr><th>角色</th><th>用途</th><th>未分配时</th><th>测试重点</th></tr></thead>
+              <tbody>
+                <tr><td>对话</td><td>最终回复、Agent 推理</td><td>使用激活 LLM 配置</td><td>中文表达、工具调用、长上下文</td></tr>
+                <tr><td>识图</td><td>普通图片、截图、历史图片描述</td><td>跟随对话模型</td><td>小字 OCR、界面结构、多图关系</td></tr>
+                <tr><td>意图识别</td><td>主动回复、回复抑制、关系评估</td><td>跟随对话模型</td><td>速度、稳定 JSON、低成本</td></tr>
+                <tr><td>图片生成</td><td>文生图与图片编辑</td><td>使用对话 Provider 的生图配置</td><td>必须实际生成图片验证</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>上下文预算</h3>
+          <p>每次请求会为输出预留 token，再按系统指令、工具证据、当前消息、摘要和历史消息的优先级裁剪。图片也占用视觉 token；多图和 <code>high</code>/<code>original</code> 清晰度应配合更大的上下文上限。</p>
+          <pre><code>LLM_CONTEXT_WINDOW_TOKENS=65536
+LLM_MAX_CONTEXT_TOKENS=65536
+LLM_MAX_OUTPUT_TOKENS=2048
+LLM_TIMEOUT_MS=60000</code></pre>
+        </section>
+
+        <section class="section searchable" id="groups" data-title="群管理 回复时间 屏蔽 QQ 触发词">
+          <div class="section-heading">
+            <p class="eyebrow">群聊策略</p>
+            <h2>每个群都可以拥有独立行为</h2>
+          </div>
+          <div class="policy-list">
+            <div><strong>启用状态</strong><span>单独停止某个群，不影响其他群和私聊。</span></div>
+            <div><strong>触发与主动回复</strong><span>触发词负责确定性唤醒；被动语义路由判断普通群聊是否值得回复。</span></div>
+            <div><strong>回复时间</strong><span>支持同日和跨夜时间段、IANA 时区、主人绕过和静默期提示。</span></div>
+            <div><strong>屏蔽 QQ 号</strong><span>群级名单只影响对应群，不影响同一用户在其他群或私聊中的消息。</span></div>
+            <div><strong>人设与上下文</strong><span>群级系统提示词、历史条数和回复长度可以覆盖机器人默认值。</span></div>
+            <div><strong>插件覆盖</strong><span>每个群可跟随全局、强制开启或强制关闭具体插件。</span></div>
+          </div>
+        </section>
+
+        <section class="section searchable" id="agent" data-title="Agent 工具 MCP Skills 联网搜索 提醒订阅">
+          <div class="section-heading">
+            <p class="eyebrow">Agent 与工具</p>
+            <h2>模型只有在权限与场景允许时才能行动</h2>
+          </div>
+          <p>Agent 循环由模型选择工具，运行器执行后把结构化结果送回模型，直到生成最终回复或达到步数上限。工具注册表按平台、关系权限、群配置和插件状态收敛，不把所有能力无条件暴露给每条消息。</p>
+          <div class="tool-grid">
+            <article><h3>内置联网搜索</h3><p>时效性、事实核验和陌生实体问题可先搜索再回答；这是内置工具，不提供安装或卸载入口。</p></article>
+            <article><h3>提醒与订阅</h3><p>一次性提醒和周期任务持久化到 SQLite，后台调度后由来源通道发送。</p></article>
+            <article><h3>MCP 与 Skills</h3><p>按配置加载外部 MCP server 和技能目录，支持启停与扩展发现，并受工作目录和命令白名单限制。</p></article>
+            <article><h3>图片工具</h3><p>识别、生成和编辑分开授权；生图请求必须走真实图片结果测试。</p></article>
+          </div>
+        </section>
+
+        <section class="section searchable" id="architecture" data-title="系统架构 实现方法 Go Gin Vue SQLite">
+          <div class="section-heading">
+            <p class="eyebrow">实现原理</p>
+            <h2>核心模块与所有权边界</h2>
+          </div>
+          <div class="architecture" role="img" aria-label="Diana 系统架构图">
+            <div class="arch-row sources">
+              <div><strong>QQ</strong><span>OneBot V11 WS</span></div>
+              <div><strong>Telegram</strong><span>Bot API polling</span></div>
+              <div><strong>WebUI</strong><span>REST + SSE</span></div>
+            </div>
+            <div class="arch-arrow" aria-hidden="true">↓</div>
+            <div class="arch-core">
+              <strong>Assistant Runtime</strong>
+              <span>事件归一化 · 群级策略 · 回复路由 · 并发控制 · 来源通道回发</span>
+            </div>
+            <div class="arch-arrow" aria-hidden="true">↓</div>
+            <div class="arch-row services">
+              <div><strong>LLM</strong><span>Provider 与角色路由</span></div>
+              <div><strong>Agent</strong><span>工具、MCP、Skills</span></div>
+              <div><strong>Memory</strong><span>历史、摘要、长期事实</span></div>
+              <div><strong>Plugins</strong><span>搜索、解析、OCR、语音</span></div>
+            </div>
+            <div class="arch-arrow" aria-hidden="true">↓</div>
+            <div class="arch-row foundations">
+              <div><strong>SQLite</strong><span>配置与持久状态</span></div>
+              <div><strong>Media</strong><span>原图与历史媒体缓存</span></div>
+              <div><strong>App Logs</strong><span>操作、错误与调试调用链</span></div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>目录</th><th>职责</th></tr></thead>
+              <tbody>
+                <tr><td><code>cmd/webui/</code></td><td>进程入口、环境变量装配、SQLite 与各运行时依赖注入。</td></tr>
+                <tr><td><code>model/assistant/</code></td><td>消息事件、平台通道、回复决策、Agent、插件、媒体、记忆与任务。</td></tr>
+                <tr><td><code>model/llm/</code></td><td>统一请求结构、Provider adapter、模型目录、token 预算和重试。</td></tr>
+                <tr><td><code>model/storage/</code></td><td>SQLite schema、配置快照、消息历史、日志、记忆和任务持久化。</td></tr>
+                <tr><td><code>webui/</code></td><td>Gin API、登录鉴权、配置管理、事件查询、更新与 SSE。</td></tr>
+                <tr><td><code>frontend-next/</code></td><td>Vue 3 管理控制台和配置交互。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section searchable" id="message-flow" data-title="消息调用链 回复原因 工具调用">
+          <div class="section-heading">
+            <p class="eyebrow">调用链</p>
+            <h2>一条消息如何决定回复或忽略</h2>
+          </div>
+          <ol class="timeline">
+            <li><strong>接收与归一化</strong><p>平台 adapter 把文本、@、引用、图片、文件和发送者信息转换成统一 <code>MessageEvent</code>。</p></li>
+            <li><strong>补全与缓存</strong><p>解析引用、转发和媒体引用；短效平台图片尽量写入本地历史媒体缓存。</p></li>
+            <li><strong>确定性门禁</strong><p>检查机器人/群启用状态、群白名单、屏蔽用户、回复时间、群等级和回复抑制。</p></li>
+            <li><strong>触发判断</strong><p>私聊直接处理；群聊依次识别显式 @、引用、触发词和插件命令。显式 @ 优先于引用语义。</p></li>
+            <li><strong>被动语义路由</strong><p>未直接触发的群聊可交给轻量意图模型判断是否指向机器人、是否值得主动加入。</p></li>
+            <li><strong>上下文组装</strong><p>组合系统提示、用户关系、长期记忆、近期历史、图片和工具证据，并按 token 预算裁剪。</p></li>
+            <li><strong>模型与工具循环</strong><p>按消息内容选择对话或识图角色；Agent 模式下执行受限工具并持续记录调用步骤。</p></li>
+            <li><strong>发送与审计</strong><p>格式化、分段或转发发送到来源通道，持久化回复结果、耗时、token 和决策原因。</p></li>
+          </ol>
+        </section>
+
+        <section class="section searchable" id="memory" data-title="长期记忆 跨群记忆 历史检索 压缩摘要">
+          <div class="section-heading">
+            <p class="eyebrow">记忆</p>
+            <h2>短期上下文与长期事实分层处理</h2>
+          </div>
+          <div class="memory-layers">
+            <article><span>01</span><h3>近期上下文</h3><p>保留当前会话最近消息，优先满足引用、追问和连续对话。</p></article>
+            <article><span>02</span><h3>压缩摘要</h3><p>历史增长到阈值后提炼会话摘要，减少重复 token，同时保留主题和未完成事项。</p></article>
+            <article><span>03</span><h3>结构化长期记忆</h3><p>异步提取稳定事实、偏好与关系信息，避免每轮请求都携带全部原始聊天。</p></article>
+            <article><span>04</span><h3>按需检索</h3><p>历史工具按时间、关键词、用户和群范围搜索；跨群检索默认关闭，可按机器人配置启用。</p></article>
+          </div>
+          <div class="callout"><strong>隐私边界</strong><p>跨群记忆开启后仍应只检索适合共享的非敏感事实。平台上下文隔离与跨群检索是两个独立开关。</p></div>
+        </section>
+
+        <section class="section searchable" id="media" data-title="图片 视觉 OCR 文件 视频 媒体缓存">
+          <div class="section-heading">
+            <p class="eyebrow">多模态</p>
+            <h2>原图、OCR 与历史描述各司其职</h2>
+          </div>
+          <div class="flow-strip">
+            <span>平台媒体引用</span><b>→</b><span>下载与类型校验</span><b>→</b><span>本地原图缓存</span><b>→</b><span>视觉模型 / OCR</span><b>→</b><span>回答与可复用描述</span>
+          </div>
+          <ul class="check-list">
+            <li>普通聊天图片转成 Provider 可用的 data URL，不在媒体层主动缩放原图。</li>
+            <li>文档页渲染后走高精度 OCR 提示，表格、页码和脚注尽量保留。</li>
+            <li>历史图片按内容 SHA-256 缓存客观描述；缓存版本变化时应重新计算。</li>
+            <li>单次请求限制图片数量，并将图片开销纳入 token 预算，防止 base64 历史无限增长。</li>
+            <li>视频提取有限数量的上下文帧，临时帧处理完成后清理。</li>
+          </ul>
+        </section>
+
+        <section class="section searchable" id="storage" data-title="SQLite 数据目录 安全 权限">
+          <div class="section-heading">
+            <p class="eyebrow">数据与安全</p>
+            <h2>一个 SQLite 主库，加上可清理的媒体缓存</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>数据</th><th>默认位置</th><th>备份要求</th></tr></thead>
+              <tbody>
+                <tr><td>配置、管理员凭据、会话、消息、记忆、任务</td><td><code>data/diana.db</code></td><td>必须备份；更新前应复制主库，并保留 WAL/SHM 一致性。</td></tr>
+                <tr><td>入站媒体缓存</td><td><code>data/media</code></td><td>可按容量淘汰；历史识图依赖时建议随数据备份。</td></tr>
+                <tr><td>历史媒体</td><td><code>DIANA_HISTORY_MEDIA_DIR</code> 或系统缓存目录</td><td>长期历史回看需要；可单独设置持久目录。</td></tr>
+                <tr><td>运行日志</td><td><code>logs/diana.log</code></td><td>按运维策略轮转；不要公开包含平台事件的日志。</td></tr>
+                <tr><td>更新备份</td><td><code>.diana-updates</code></td><td>保留最近可回滚版本和更新结果。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>安全模型</h3>
+          <p>WebUI 使用登录会话保护 API；OneBot 使用独立 access token；外部 URL 下载经过网络边界检查；Agent 命令受工作目录、允许列表和超时限制。调试模式可能记录完整模型上下文与工具参数，只应在可信环境短期开启。</p>
+        </section>
+
+        <section class="section searchable" id="updates" data-title="更新 Release SHA256 备份 回滚 Docker Git">
+          <div class="section-heading">
+            <p class="eyebrow">更新</p>
+            <h2>发现更新与执行更新是两件事</h2>
+          </div>
+          <p>控制台只显示新版本提示点，不会自动安装。管理员点击并确认后，才根据部署形态执行对应更新流程。</p>
+          <div class="update-paths">
+            <article><h3>完整 Release 包</h3><p>下载匹配系统架构的完整包与 <code>SHA256SUMS</code>，校验、暂存、备份数据库和旧版本、切换、启动并请求 <code>/api/health</code>；失败自动恢复。</p></article>
+            <article><h3>Docker</h3><p>由镜像与编排系统更新，不在运行中的容器内替换二进制。先确认数据卷，再拉取或重建镜像。</p></article>
+            <article><h3>源码 checkout</h3><p>使用 Git 更新源码，重新执行前端构建与 Go 编译。工作区有未提交修改时必须先处理冲突。</p></article>
+          </div>
+          <div class="callout warn"><strong>旧版本边界</strong><p>如果当前运行版本尚未包含 Release 自更新器，第一次升级仍需手工下载完整包、校验、备份并切换；仅出现按钮不能替代后端能力。</p></div>
+        </section>
+
+        <section class="section searchable" id="operations" data-title="运维 健康检查 日志 备份 systemd">
+          <div class="section-heading">
+            <p class="eyebrow">运维</p>
+            <h2>上线前至少完成这份检查</h2>
+          </div>
+          <div class="ops-grid">
+            <div><strong>健康检查</strong><code>GET /api/health</code><span>确认版本、进程和运行时长。</span></div>
+            <div><strong>持久化</strong><code>APP_DB_PATH</code><span>使用明确的绝对路径或持久卷。</span></div>
+            <div><strong>日志</strong><code>LOG_PATH</code><span>配置轮转、权限与磁盘告警。</span></div>
+            <div><strong>媒体</strong><code>DIANA_MEDIA_CACHE_MB</code><span>按机器容量设置缓存上限。</span></div>
+            <div><strong>超时</strong><code>LLM_TIMEOUT_MS</code><span>与 Provider、视觉任务的实际延迟匹配。</span></div>
+            <div><strong>反向代理</strong><code>HTTPS / WSS</code><span>公网访问强制 TLS 并限制管理入口。</span></div>
+          </div>
+          <h3>systemd 最小示例</h3>
+          <pre><code>[Unit]
+Description=Diana AI Assistant
+After=network-online.target
+
+[Service]
+Type=simple
+User=diana
+WorkingDirectory=/opt/diana
+EnvironmentFile=/opt/diana/runtime.env
+ExecStart=/opt/diana/run.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+          <pre><code>sudo systemctl daemon-reload
+sudo systemctl enable --now diana
+sudo systemctl status diana
+journalctl -u diana -f</code></pre>
+        </section>
+
+        <section class="section searchable" id="troubleshooting" data-title="故障排查 not found 不回复 图片差 WebSocket">
+          <div class="section-heading">
+            <p class="eyebrow">故障排查</p>
+            <h2>先从事件明细和调用链定位</h2>
+          </div>
+          <div class="faq">
+            <details>
+              <summary>机器人在线，但群里不回复</summary>
+              <p>检查事件明细中的决策原因，再依次核对：群是否启用、回复时间、屏蔽 QQ 号、群等级门槛、显式 @ 是否识别、触发词、被动回复阈值和回复抑制状态。</p>
+            </details>
+            <details>
+              <summary>引用机器人消息并 @，却被当成普通引用</summary>
+              <p>运行版本需要包含“显式 @ 优先于引用”的修复。事件中应看到 <code>to_me=true</code>，后端首先检查 at segment，再进入引用语义判断。</p>
+            </details>
+            <details>
+              <summary>视觉模型看不清截图或小字</summary>
+              <p>为“识图”单独绑定已验证的视觉模型；提高上下文上限；截图使用高细节；文本密集图片采用 OCR + 原图双通道，并确认图片没有被数量或 token 预算裁掉。</p>
+            </details>
+            <details>
+              <summary>群管理显示 not found 或看不到已加入群</summary>
+              <p>确认 OneBot 已连接，并验证 <code>get_group_list</code> 可用。连接不可用时页面只能展示 SQLite 中已经保存的群配置。</p>
+            </details>
+            <details>
+              <summary>Telegram 无法发送本地图片</summary>
+              <p>Telegram 不能拉取只对本机开放的媒体 URL，Diana 会改为 multipart 上传。确认 Bot API 地址、代理、文件大小限制和本地文件读取权限。</p>
+            </details>
+            <details>
+              <summary>更新后健康检查失败</summary>
+              <p>查看 <code>.diana-updates</code> 中的最近结果与备份，检查端口冲突、前端目录、数据库权限和新二进制架构。Release 更新 helper 会在探活失败时尝试恢复旧版本。</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="section searchable" id="development" data-title="开发 测试 CI 交叉编译 GitHub Pages">
+          <div class="section-heading">
+            <p class="eyebrow">开发</p>
+            <h2>本地验证与发布门槛</h2>
+          </div>
+          <pre><code># 格式与 Go 测试
+gofmt -l .
+git diff --check
+go test ./...
+
+# 前端生产构建
+cd frontend-next
+npm ci
+npm run build
+
+# 本地运行
+cd ..
+make dev</code></pre>
+          <p>CI 还应覆盖 Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker 构建。版本发布必须从已合并的默认分支打标签，Release 需要完整包、裸二进制与 <code>SHA256SUMS</code>。</p>
+          <h3>文档站</h3>
+          <p>本站点位于 <code>docs/</code>，没有运行时依赖。默认分支更新后，GitHub Actions 上传静态 artifact 并由 Pages 环境发布。</p>
+        </section>
+
+        <footer class="footer">
+          <div>
+            <strong>Diana</strong>
+            <p>多平台 AI 助手服务</p>
+          </div>
+          <div>
+            <a href="https://github.com/SuInk/Diana">源代码</a>
+            <a href="https://github.com/SuInk/Diana/releases/latest">最新版本</a>
+            <a href="https://github.com/SuInk/Diana/issues">问题反馈</a>
+            <a href="https://github.com/SuInk/Diana/blob/main/LICENSE">许可证</a>
+          </div>
+        </footer>
+      </main>
+    </div>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>
