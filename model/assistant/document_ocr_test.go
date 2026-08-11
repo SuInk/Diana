@@ -134,6 +134,29 @@ func TestWASMPDFRendererRendersImageOnlyPage(t *testing.T) {
 	}
 }
 
+func TestWASMPDFRendererExtractsTextLayer(t *testing.T) {
+	t.Setenv("DIANA_OCR_RENDER_CONCURRENCY", "1")
+	renderer := newWASMPDFRenderer()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	session, err := renderer.Open(ctx, minimalTextPDF())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	textSession, ok := session.(pdfTextPageSession)
+	if !ok {
+		t.Fatal("PDFium session does not expose text extraction")
+	}
+	text, err := textSession.PageText(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "Hello PDFium text") {
+		t.Fatalf("page text = %q", text)
+	}
+}
+
 func requestContainsImage(req llm.GenerateRequest) bool {
 	for _, message := range req.Messages {
 		for _, part := range message.Parts {
@@ -171,7 +194,21 @@ func minimalImageOnlyPDF() []byte {
 	}
 	stream := "0.9 g\n0 0 100 100 re f\n"
 	objects = append(objects, fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(stream), stream))
+	return buildMinimalPDF(objects)
+}
 
+func minimalTextPDF() []byte {
+	stream := "BT\n/F1 12 Tf\n10 50 Td\n(Hello PDFium text) Tj\nET\n"
+	return buildMinimalPDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(stream), stream),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	})
+}
+
+func buildMinimalPDF(objects []string) []byte {
 	var pdf bytes.Buffer
 	pdf.WriteString("%PDF-1.4\n")
 	offsets := make([]int, len(objects)+1)
