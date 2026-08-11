@@ -289,7 +289,7 @@ LLM_USER_AGENT=codex-cli/0.142.0 \
 
 ## 内置 Agent
 
-WebUI 的“QQ 机器人配置”页可以启用内置 Agent。启用后，机器人会使用 Codex CLI 风格的“模型规划、工具调用、观察结果、最终回复”循环处理消息。
+WebUI 的“QQ 机器人配置”页可以启用内置 Agent。启用后，机器人会使用 [Pi Agent](https://github.com/earendil-works/pi) 风格的最小状态与工具循环处理消息：模型规划、工具调用、观察结果、最终回复。运行时仍由 Go 原生实现，因此完整 Release 包不需要额外安装 Node。
 
 当前内置工具：
 
@@ -297,6 +297,14 @@ WebUI 的“QQ 机器人配置”页可以启用内置 Agent。启用后，机�
 - `read_file`：读取 Agent 工作目录内文本文件。
 - `run_command`：在 Agent 工作目录内执行白名单命令，不经过 shell，带超时和输出截断。
 - `browser_open` / `browser_text` / `browser_click` / `browser_type` / `browser_screenshot`：通过 Chrome DevTools Protocol 操纵浏览器。
+
+Agent 使用统一扩展目录管理三类能力：
+
+- **内置插件**：WebUI 中已有的官方插件会默认出现在 `extensions.list`，原有启停、配置和权限规则保持不变。
+- **Skills**：按 Agent Skills 的渐进式加载方式，只把名称和说明放入上下文，需要使用时再通过 `skills.read` 读取完整 `SKILL.md`。主人可让 Agent 从完整 `SKILL.md`、公开 HTTP(S) 地址或 ZIP 包安装；托管 Skill 保存到工作目录的 `.agents/skills/`，卸载时移动到 `.trash/` 以便恢复。
+- **MCP 服务**：支持 stdio 和 Streamable HTTP；主人可通过自然语言安装、替换、启用、停用或卸载，服务通过连接测试后才写入 `.mcp.json`，发现到的工具会立即加入当前会话。`env` 和 `headers` 可使用 `${ENV_VAR}`，配置文件按私密文件权限写入；自安装的 stdio 服务只继承运行所需的最小环境，凭据必须在 `env` 中显式声明。
+
+扩展管理工具只提供给主人，并且只有当前用户消息明确要求变更时才能执行。网页、工具结果、Skill 或 MCP 返回内容都不能代替用户授权；其他用户仍只能使用其权限范围内已经启用的能力。
 
 浏览器工具需要 Chrome/Chromium 开启远程调试端口，例如：
 
@@ -391,6 +399,8 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `DIANA_AGENT_MAX_STEPS` | `4` | Agent 单次回复最大工具循环步数，最高 `8` |
 | `DIANA_AGENT_COMMAND_ALLOWLIST` | 常见开发命令 | Agent `run_command` 可执行命令，逗号分隔；填 `*` 允许全部命令 |
 | `DIANA_AGENT_COMMAND_TIMEOUT_MS` | `10000` | Agent 本地命令执行超时，最高 `60000` |
+| `DIANA_AGENT_SKILL_ROOTS` | `.agents/skills,skills` | Agent Skill 搜索目录，逗号分隔；自安装内容固定写入工作目录下的 `.agents/skills` |
+| `DIANA_AGENT_MCP_CONFIG` | `.mcp.json` | MCP 服务配置文件；相对路径以 Agent 工作目录为基准 |
 | `DIANA_AGENT_BROWSER_CDP_URL` | `http://127.0.0.1:9222` | 浏览器工具连接的 Chrome DevTools 地址 |
 | `AGENT_BROWSER_CDP_URL` | 同上 | `DIANA_AGENT_BROWSER_CDP_URL` 的兼容别名 |
 | `DIANA_AGENT_BROWSER_TIMEOUT_MS` | `15000` | 浏览器工具调用超时，最高 `60000` |

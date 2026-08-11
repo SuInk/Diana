@@ -64,6 +64,32 @@ func TestConfigDefaultsUseWorkDirSkillsAndMCPConfig(t *testing.T) {
 	}
 }
 
+func TestConfigRelativeExtensionPathsResolveOnceFromWorkDir(t *testing.T) {
+	base, err := filepath.Abs("relative-agent-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{WorkDir: "relative-agent-work"}.WithDefaults()
+	if want := filepath.Join(base, ".agents", "skills"); cfg.ManagedSkillRoot != want {
+		t.Fatalf("ManagedSkillRoot = %q, want %q", cfg.ManagedSkillRoot, want)
+	}
+	if want := filepath.Join(base, ".mcp.json"); resolveMCPConfigPath(cfg) != want {
+		t.Fatalf("resolved MCPConfigPath = %q, want %q", resolveMCPConfigPath(cfg), want)
+	}
+
+	custom := Config{
+		WorkDir:          "relative-agent-work",
+		ManagedSkillRoot: "managed-skills",
+		MCPConfigPath:    filepath.Join("config", "mcp.json"),
+	}.WithDefaults()
+	if want := filepath.Join(base, "managed-skills"); custom.ManagedSkillRoot != want {
+		t.Fatalf("custom ManagedSkillRoot = %q, want %q", custom.ManagedSkillRoot, want)
+	}
+	if want := filepath.Join(base, "config", "mcp.json"); resolveMCPConfigPath(custom) != want {
+		t.Fatalf("custom resolved MCPConfigPath = %q, want %q", resolveMCPConfigPath(custom), want)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
