@@ -30,6 +30,10 @@ type pdfRenderSession interface {
 	Close() error
 }
 
+type pdfTextPageSession interface {
+	PageText(context.Context, int) (string, error)
+}
+
 type wasmPDFRenderer struct {
 	once    sync.Once
 	pool    pdfium.Pool
@@ -106,6 +110,25 @@ type wasmPDFRenderSession struct {
 
 func (s *wasmPDFRenderSession) PageCount() int {
 	return s.pages
+}
+
+func (s *wasmPDFRenderSession) PageText(ctx context.Context, page int) (string, error) {
+	if page < 0 || page >= s.pages {
+		return "", fmt.Errorf("pdf renderer: page %d is out of range", page+1)
+	}
+	text, err := callPDFiumWithContext(ctx, s.instance, func() (string, error) {
+		resp, textErr := s.instance.GetPageText(&requests.GetPageText{
+			Page: requests.Page{ByIndex: &requests.PageByIndex{Document: s.document, Index: page}},
+		})
+		if textErr != nil {
+			return "", textErr
+		}
+		return resp.Text, nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("extract page %d text: %w", page+1, err)
+	}
+	return text, nil
 }
 
 func (s *wasmPDFRenderSession) RenderJPEG(ctx context.Context, page int) ([]byte, error) {
