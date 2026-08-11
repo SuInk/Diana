@@ -7,7 +7,7 @@ Diana 是一个 Go 语言多平台 AI 助手服务，内置 LLM 兼容层、平�
 ## 安装要求
 
 - 使用 QQ 适配器时需要 NapCat，并开启 OneBot v11 反向 WebSocket
-- 使用源码安装时需要 Go `1.25.8`、Node.js `22` 和 npm
+- 使用源码安装时需要 Go `1.26.5`、Node.js `22` 和 npm
 - 使用 Docker 部署时需要 Docker 或 Docker Compose
 
 ## Docker 部署
