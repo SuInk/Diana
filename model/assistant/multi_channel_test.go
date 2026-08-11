@@ -8,10 +8,12 @@ import (
 )
 
 type multiChannelProbe struct {
-	mu     sync.Mutex
-	event  MessageEvent
-	sent   []OutgoingMessage
-	status ChannelStatus
+	mu        sync.Mutex
+	event     MessageEvent
+	sent      []OutgoingMessage
+	apiCalls  []string
+	apiCalled chan string
+	status    ChannelStatus
 }
 
 func (c *multiChannelProbe) Connect(ctx context.Context, handler EventHandler) error {
@@ -29,7 +31,14 @@ func (c *multiChannelProbe) Send(_ context.Context, msg OutgoingMessage) error {
 	return nil
 }
 
-func (c *multiChannelProbe) CallAPI(context.Context, string, map[string]any) (map[string]any, error) {
+func (c *multiChannelProbe) CallAPI(_ context.Context, action string, _ map[string]any) (map[string]any, error) {
+	c.mu.Lock()
+	c.apiCalls = append(c.apiCalls, action)
+	called := c.apiCalled
+	c.mu.Unlock()
+	if called != nil {
+		called <- action
+	}
 	return map[string]any{}, nil
 }
 
@@ -53,6 +62,31 @@ func TestMultiChannelRoutesRepliesToSourceProfile(t *testing.T) {
 	statuses := channel.ChannelStatuses()
 	if len(statuses) != 2 || statuses[0].ProfileID != "qq-profile" || statuses[1].Platform != PlatformTelegram {
 		t.Fatalf("statuses=%#v", statuses)
+	}
+}
+
+func TestRuntimeRoutesDelayedDeleteToSourceProfile(t *testing.T) {
+	first := &multiChannelProbe{apiCalled: make(chan string, 1)}
+	second := &multiChannelProbe{apiCalled: make(chan string, 1)}
+	channel := NewMultiChannel([]ChannelBinding{
+		{ProfileID: "first", Platform: PlatformNapCat, Channel: first},
+		{ProfileID: "second", Platform: PlatformNapCat, Channel: second},
+	})
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.scheduleMessageDeletes(MessageEvent{ProfileID: "second", Platform: PlatformNapCat}, []string{"42"}, 5*time.Millisecond)
+
+	select {
+	case action := <-second.apiCalled:
+		if action != "delete_msg" {
+			t.Fatalf("second profile action = %q", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("source profile did not receive delete_msg")
+	}
+	select {
+	case action := <-first.apiCalled:
+		t.Fatalf("first profile received unexpected action %q", action)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

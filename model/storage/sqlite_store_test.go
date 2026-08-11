@@ -59,17 +59,20 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		t.Fatalf("gotBot = %#v", gotBot)
 	}
 
+	recallReplyAutoDeleteEnabled := false
 	groupConfigs := assistant.GroupConfigSet{
 		Groups: []assistant.GroupConfig{
 			{
-				GroupID:            "123456",
-				Enabled:            true,
-				GroupTriggers:      []string{"Diana"},
-				WelcomeEnabled:     true,
-				WelcomeMessage:     "欢迎 {user_id}",
-				RecentContextLimit: 8,
-				MaxReplyChars:      1200,
-				PluginOverrides:    map[string]bool{"official.file-parser-go": true},
+				GroupID:                      "123456",
+				Enabled:                      true,
+				GroupTriggers:                []string{"Diana"},
+				WelcomeEnabled:               true,
+				WelcomeMessage:               "欢迎 {user_id}",
+				RecentContextLimit:           8,
+				MaxReplyChars:                1200,
+				RecallReplyAutoDeleteEnabled: &recallReplyAutoDeleteEnabled,
+				RecallReplyTTLSeconds:        90,
+				PluginOverrides:              map[string]bool{"official.file-parser-go": true},
 			},
 		},
 	}
@@ -83,6 +86,9 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	gotGroup, ok := gotGroupConfigs.ConfigForGroup("123456")
 	if !ok || !gotGroup.PluginOverrides["official.file-parser-go"] || gotGroup.RecentContextLimit != 8 {
 		t.Fatalf("gotGroupConfigs = %#v", gotGroupConfigs)
+	}
+	if gotGroup.RecallReplyAutoDeleteEnabled == nil || *gotGroup.RecallReplyAutoDeleteEnabled || gotGroup.RecallReplyTTLSeconds != 90 {
+		t.Fatalf("recall auto-delete config = %#v", gotGroup)
 	}
 
 	pluginStates := map[string]assistant.PluginState{

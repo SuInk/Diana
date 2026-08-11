@@ -96,6 +96,15 @@ func (c *MultiChannel) CallAPI(ctx context.Context, action string, params map[st
 	return nil, fmt.Errorf("assistant: API call %q has no routable OneBot channel", action)
 }
 
+// CallAPIFor routes an API call to the transport that owns the source event.
+func (c *MultiChannel) CallAPIFor(ctx context.Context, profileID, platform, action string, params map[string]any) (map[string]any, error) {
+	binding, err := c.bindingFor(profileID, platform)
+	if err != nil {
+		return nil, err
+	}
+	return binding.Channel.CallAPI(ctx, action, params)
+}
+
 func (c *MultiChannel) Status() ChannelStatus {
 	statuses := c.ChannelStatuses()
 	combined := ChannelStatus{Endpoint: fmt.Sprintf("%d enabled channels", len(statuses))}

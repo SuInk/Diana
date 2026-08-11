@@ -26,6 +26,9 @@ type RecallReplyMode string
 const (
 	RecallReplyModeLLMSummary      RecallReplyMode = "llm_summary"
 	RecallReplyModeOriginalForward RecallReplyMode = "original_forward"
+
+	defaultRecallReplyTTLSeconds = 60
+	maximumRecallReplyTTLSeconds = 60 * 60
 )
 
 func normalizeRecallReplyMode(mode RecallReplyMode) RecallReplyMode {
@@ -225,6 +228,7 @@ type BotConfig struct {
 	ForwardReplyThreshold        int                  `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
 	RecentContextLimit           int                  `json:"recent_context_limit,omitempty"`
 	ContextSummaryThreshold      int                  `json:"context_summary_threshold,omitempty"`
@@ -288,21 +292,23 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
-	GroupID                 string          `json:"group_id"`
-	Enabled                 bool            `json:"enabled"`
-	EnabledSet              bool            `json:"enabled_set,omitempty"`
-	GroupTriggers           []string        `json:"group_triggers,omitempty"`
-	SystemPrompt            string          `json:"system_prompt,omitempty"`
-	WelcomeEnabled          bool            `json:"welcome_enabled,omitempty"`
-	WelcomeMessage          string          `json:"welcome_message,omitempty"`
-	RecentContextLimit      int             `json:"recent_context_limit,omitempty"`
-	MaxReplyChars           int             `json:"max_reply_chars,omitempty"`
-	PassiveReplyChance      float64         `json:"passive_reply_chance,omitempty"`
-	PassiveReplyThreshold   float64         `json:"passive_reply_threshold,omitempty"`
-	MinimumReplyMemberLevel int             `json:"minimum_reply_member_level,omitempty"`
-	PluginOverrides         map[string]bool `json:"plugin_overrides,omitempty"`
-	ReplyGate               *ReplyGate      `json:"reply_gate,omitempty"`
-	UpdatedAt               time.Time       `json:"updated_at,omitempty"`
+	GroupID                      string          `json:"group_id"`
+	Enabled                      bool            `json:"enabled"`
+	EnabledSet                   bool            `json:"enabled_set,omitempty"`
+	GroupTriggers                []string        `json:"group_triggers,omitempty"`
+	SystemPrompt                 string          `json:"system_prompt,omitempty"`
+	WelcomeEnabled               bool            `json:"welcome_enabled,omitempty"`
+	WelcomeMessage               string          `json:"welcome_message,omitempty"`
+	RecentContextLimit           int             `json:"recent_context_limit,omitempty"`
+	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	PassiveReplyChance           float64         `json:"passive_reply_chance,omitempty"`
+	PassiveReplyThreshold        float64         `json:"passive_reply_threshold,omitempty"`
+	MinimumReplyMemberLevel      int             `json:"minimum_reply_member_level,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	PluginOverrides              map[string]bool `json:"plugin_overrides,omitempty"`
+	ReplyGate                    *ReplyGate      `json:"reply_gate,omitempty"`
+	UpdatedAt                    time.Time       `json:"updated_at,omitempty"`
 }
 
 type GroupConfigSet struct {
@@ -368,6 +374,7 @@ type ConfigPayload struct {
 	ForwardReplyThreshold        int                  `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
 	RecentContextLimit           int                  `json:"recent_context_limit,omitempty"`
 	ContextSummaryThreshold      int                  `json:"context_summary_threshold,omitempty"`
@@ -391,18 +398,20 @@ type ConfigPayload struct {
 func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 	base = base.WithDefaults()
 	return GroupConfig{
-		GroupID:                 strings.TrimSpace(groupID),
-		Enabled:                 true,
-		EnabledSet:              true,
-		GroupTriggers:           append([]string(nil), base.GroupTriggers...),
-		WelcomeEnabled:          base.WelcomeEnabled,
-		WelcomeMessage:          base.WelcomeMessage,
-		RecentContextLimit:      base.RecentContextLimit,
-		MaxReplyChars:           base.MaxReplyChars,
-		PassiveReplyChance:      base.PassiveReplyChance,
-		PassiveReplyThreshold:   base.PassiveReplyThreshold,
-		MinimumReplyMemberLevel: 0,
-		PluginOverrides:         map[string]bool{},
+		GroupID:                      strings.TrimSpace(groupID),
+		Enabled:                      true,
+		EnabledSet:                   true,
+		GroupTriggers:                append([]string(nil), base.GroupTriggers...),
+		WelcomeEnabled:               base.WelcomeEnabled,
+		WelcomeMessage:               base.WelcomeMessage,
+		RecentContextLimit:           base.RecentContextLimit,
+		MaxReplyChars:                base.MaxReplyChars,
+		PassiveReplyChance:           base.PassiveReplyChance,
+		PassiveReplyThreshold:        base.PassiveReplyThreshold,
+		MinimumReplyMemberLevel:      0,
+		RecallReplyAutoDeleteEnabled: copyBoolPointer(base.RecallReplyAutoDeleteEnabled),
+		RecallReplyTTLSeconds:        base.RecallReplyTTLSeconds,
+		PluginOverrides:              map[string]bool{},
 	}
 }
 
@@ -446,6 +455,14 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		cfg.MinimumReplyMemberLevel = 0
 	} else if cfg.MinimumReplyMemberLevel > maximumReplyMemberLevel {
 		cfg.MinimumReplyMemberLevel = maximumReplyMemberLevel
+	}
+	if cfg.RecallReplyAutoDeleteEnabled == nil {
+		cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(defaults.RecallReplyAutoDeleteEnabled)
+	}
+	if cfg.RecallReplyTTLSeconds <= 0 {
+		cfg.RecallReplyTTLSeconds = defaults.RecallReplyTTLSeconds
+	} else if cfg.RecallReplyTTLSeconds > maximumRecallReplyTTLSeconds {
+		cfg.RecallReplyTTLSeconds = maximumRecallReplyTTLSeconds
 	}
 	if cfg.PluginOverrides == nil {
 		cfg.PluginOverrides = map[string]bool{}
@@ -684,6 +701,7 @@ func DefaultBotConfig() BotConfig {
 		ForwardReplyThreshold:        900,
 		RecallReplyMode:              RecallReplyModeLLMSummary,
 		RecallReplyAutoDeleteEnabled: boolPointer(true),
+		RecallReplyTTLSeconds:        defaultRecallReplyTTLSeconds,
 		LLMQQIDMaskingEnabled:        boolPointer(true),
 		BotReplyLoopDetectionEnabled: boolPointer(true),
 		RecentContextLimit:           20,
@@ -795,6 +813,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
 	if cfg.RecallReplyAutoDeleteEnabled == nil {
 		cfg.RecallReplyAutoDeleteEnabled = boolPointer(true)
+	}
+	if cfg.RecallReplyTTLSeconds <= 0 {
+		cfg.RecallReplyTTLSeconds = defaults.RecallReplyTTLSeconds
+	} else if cfg.RecallReplyTTLSeconds > maximumRecallReplyTTLSeconds {
+		cfg.RecallReplyTTLSeconds = maximumRecallReplyTTLSeconds
 	}
 	if cfg.LLMQQIDMaskingEnabled == nil {
 		cfg.LLMQQIDMaskingEnabled = boolPointer(true)
@@ -957,6 +980,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ForwardReplyThreshold:        cfg.ForwardReplyThreshold,
 		RecallReplyMode:              cfg.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
+		RecallReplyTTLSeconds:        cfg.RecallReplyTTLSeconds,
 		LLMQQIDMaskingEnabled:        copyBoolPointer(cfg.LLMQQIDMaskingEnabled),
 		RecentContextLimit:           cfg.RecentContextLimit,
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
@@ -1049,6 +1073,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ForwardReplyThreshold:        payload.ForwardReplyThreshold,
 		RecallReplyMode:              payload.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
+		RecallReplyTTLSeconds:        payload.RecallReplyTTLSeconds,
 		LLMQQIDMaskingEnabled:        copyBoolPointer(payload.LLMQQIDMaskingEnabled),
 		RecentContextLimit:           payload.RecentContextLimit,
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,

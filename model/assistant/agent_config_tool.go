@@ -84,6 +84,7 @@ type dianaBotConfigSnapshot struct {
 	ForwardReplyThreshold        int                      `json:"forward_reply_threshold"`
 	RecallReplyMode              RecallReplyMode          `json:"recall_reply_mode"`
 	RecallReplyAutoDeleteEnabled bool                     `json:"recall_reply_auto_delete_enabled"`
+	RecallReplyTTLSeconds        int                      `json:"recall_reply_auto_delete_delay_seconds"`
 	OwnerLLMConfigEnabled        bool                     `json:"owner_llm_config_enabled"`
 	LLMQQIDMaskingEnabled        bool                     `json:"llm_qq_id_masking_enabled"`
 	RecentContextLimit           int                      `json:"recent_context_limit"`
@@ -286,6 +287,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ForwardReplyThreshold:        cfg.ForwardReplyThreshold,
 		RecallReplyMode:              cfg.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled: boolValue(cfg.RecallReplyAutoDeleteEnabled, true),
+		RecallReplyTTLSeconds:        cfg.RecallReplyTTLSeconds,
 		OwnerLLMConfigEnabled:        boolValue(cfg.OwnerLLMConfigEnabled, true),
 		LLMQQIDMaskingEnabled:        llmQQIDMaskingEnabled(cfg),
 		RecentContextLimit:           cfg.RecentContextLimit,

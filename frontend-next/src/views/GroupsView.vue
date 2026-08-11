@@ -75,6 +75,9 @@
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
             <span v-if="group.configured && group.reply_gate" class="badge">专属准入</span>
+            <span v-if="group.configured" class="badge">
+              {{ group.recall_reply_auto_delete_enabled ? `撤回回复 ${group.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds} 秒` : "撤回回复不自动撤回" }}
+            </span>
           </div>
           <p class="group-card-desc">
             {{ group.system_prompt ? truncate(group.system_prompt, 68) : group.configured ? "沿用全局人设与默认行为。" : "尚未设置群级覆盖，当前跟随全局配置。" }}
@@ -143,6 +146,26 @@
         <div class="field">
           <label for="group-maxreply">回复上限（字符）</label>
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
+        </div>
+        <div class="field wide">
+          <label class="switch">
+            <input v-model="editing.recall_reply_auto_delete_enabled" type="checkbox" />
+            <span class="track" aria-hidden="true"></span>
+            <span class="switch-label">撤回记录回复自动撤回</span>
+          </label>
+        </div>
+        <div v-if="editing.recall_reply_auto_delete_enabled" class="field">
+          <label for="group-recall-delete-delay">保留时间（秒）</label>
+          <input
+            id="group-recall-delete-delay"
+            v-model.number="editing.recall_reply_auto_delete_delay_seconds"
+            class="input"
+            type="number"
+            min="1"
+            :max="maximumRecallReplyAutoDeleteDelaySeconds"
+            step="1"
+            inputmode="numeric"
+          />
         </div>
         <div class="field wide">
           <label>本群准入条件</label>
@@ -214,6 +237,10 @@ const editingGroupName = ref("");
 const triggersDraft = ref("");
 const saving = ref(false);
 const togglingGroupID = ref("");
+const defaultRecallReplyAutoDeleteEnabled = ref(true);
+const defaultRecallReplyAutoDeleteDelaySeconds = 60;
+const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
+const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
 
 const filteredGroups = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase();
@@ -251,6 +278,9 @@ async function load(showFeedback = false): Promise<void> {
     try {
       const [config, platformList] = await Promise.all([getQQBotConfig(), getQQBotPlatforms()]);
       const active = config.profiles?.find((item) => item.id === config.active_profile_id) ?? config.profiles?.[0];
+      const current = active ?? config;
+      defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? true;
+      defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
     } catch {
@@ -277,6 +307,8 @@ function addGroup(): void {
       group_id: groupID,
       enabled: true,
       group_triggers: [],
+      recall_reply_auto_delete_enabled: defaultRecallReplyAutoDeleteEnabled.value,
+      recall_reply_auto_delete_delay_seconds: defaultRecallReplyAutoDeleteDelay.value,
       plugin_overrides: {}
     },
     existing?.group_name
@@ -286,7 +318,11 @@ function addGroup(): void {
 
 function openEditor(group: QQBotGroupConfig, groupName = ""): void {
   // 深拷贝编辑，取消时不污染列表数据。
-  editing.value = JSON.parse(JSON.stringify(groupConfigOf(group))) as QQBotGroupConfig;
+  const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as QQBotGroupConfig;
+  config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
+  const delay = Number(config.recall_reply_auto_delete_delay_seconds);
+  config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
+  editing.value = config;
   editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
 }
@@ -343,10 +379,19 @@ async function saveEditing(): Promise<void> {
   if (!current) {
     return;
   }
+  const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);
+  if (
+    current.recall_reply_auto_delete_enabled &&
+    (!Number.isInteger(recallDeleteDelay) || recallDeleteDelay < 1 || recallDeleteDelay > maximumRecallReplyAutoDeleteDelaySeconds)
+  ) {
+    toastError(`保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
+    return;
+  }
   saving.value = true;
   try {
     const payload: QQBotGroupConfig = {
       ...current,
+      recall_reply_auto_delete_delay_seconds: recallDeleteDelay,
       group_triggers: triggersDraft.value
         .split(/[,，]/)
         .map((item) => item.trim())

@@ -1213,8 +1213,12 @@ func TestRuntimeSendsRecallSummaryWithFlatForgedForward(t *testing.T) {
 		{Text: "第一条原消息", ForwardName: "Alice", ForwardUIN: "10001", ForwardTime: 100},
 		{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"cached_file": "/tmp/recalled.jpg", "cached_mime": "image/jpeg", "url": "https://example.com/recalled.jpg"}}}, ForwardName: "Bob", ForwardUIN: "10002", ForwardTime: 200},
 	}}
-	if err := runtime.sendNestedForwardPluginResponse(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "123456", SelfID: "42"}, resp, "最近24小时共有两条撤回消息。", runtime.Config()); err != nil {
+	messageIDs, err := runtime.sendNestedForwardPluginResponse(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "123456", SelfID: "42"}, resp, "最近24小时共有两条撤回消息。", runtime.Config())
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(messageIDs) != 1 || messageIDs[0] != "42" {
+		t.Fatalf("message ids = %#v", messageIDs)
 	}
 	if len(channel.calls) != 1 || channel.calls[0].action != "send_group_forward_msg" {
 		t.Fatalf("recall forward calls = %#v", channel.calls)
@@ -1244,8 +1248,12 @@ func TestRuntimeFallsBackToTextRecallForwardWhenMediaForwardFails(t *testing.T) 
 		ForwardUIN:  "10001",
 	}}}
 
-	if err := runtime.sendNestedForwardPluginResponse(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "123456", SelfID: "42"}, resp, "最近有一条图片撤回。", runtime.Config()); err != nil {
+	messageIDs, err := runtime.sendNestedForwardPluginResponse(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "123456", SelfID: "42"}, resp, "最近有一条图片撤回。", runtime.Config())
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(messageIDs) != 1 || messageIDs[0] != "902" {
+		t.Fatalf("message ids = %#v", messageIDs)
 	}
 	forwardCalls := recordedCallsByAction(channel.calls, "send_group_forward_msg")
 	if len(forwardCalls) != 2 {
