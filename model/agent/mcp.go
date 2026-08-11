@@ -1,24 +1,24 @@
 package agent
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/SuInk/diana/model/netguard"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -32,136 +32,115 @@ type mcpConfigFile struct {
 }
 
 type mcpServerConfig struct {
-	Command           string            `json:"command" toml:"command"`
-	Args              []string          `json:"args" toml:"args"`
-	Env               map[string]string `json:"env" toml:"env"`
-	CWD               string            `json:"cwd" toml:"cwd"`
-	URL               string            `json:"url" toml:"url"`
-	Enabled           *bool             `json:"enabled" toml:"enabled"`
-	Required          bool              `json:"required" toml:"required"`
-	StartupTimeoutSec int               `json:"startup_timeout_sec" toml:"startup_timeout_sec"`
-	ToolTimeoutSec    int               `json:"tool_timeout_sec" toml:"tool_timeout_sec"`
-	EnabledTools      []string          `json:"enabled_tools" toml:"enabled_tools"`
-	DisabledTools     []string          `json:"disabled_tools" toml:"disabled_tools"`
+	Command           string            `json:"command,omitempty" toml:"command,omitempty"`
+	Args              []string          `json:"args,omitempty" toml:"args,omitempty"`
+	Env               map[string]string `json:"env,omitempty" toml:"env,omitempty"`
+	CWD               string            `json:"cwd,omitempty" toml:"cwd,omitempty"`
+	URL               string            `json:"url,omitempty" toml:"url,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty" toml:"headers,omitempty"`
+	InheritEnv        *bool             `json:"inherit_env,omitempty" toml:"inherit_env,omitempty"`
+	Enabled           *bool             `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Required          bool              `json:"required,omitempty" toml:"required,omitempty"`
+	StartupTimeoutSec int               `json:"startup_timeout_sec,omitempty" toml:"startup_timeout_sec,omitempty"`
+	ToolTimeoutSec    int               `json:"tool_timeout_sec,omitempty" toml:"tool_timeout_sec,omitempty"`
+	EnabledTools      []string          `json:"enabled_tools,omitempty" toml:"enabled_tools,omitempty"`
+	DisabledTools     []string          `json:"disabled_tools,omitempty" toml:"disabled_tools,omitempty"`
 }
 
 func (cfg mcpServerConfig) enabled() bool {
 	return cfg.Enabled == nil || *cfg.Enabled
 }
 
-func (cfg mcpServerConfig) allowsTool(name string) bool {
-	if len(cfg.EnabledTools) > 0 {
-		found := false
-		for _, item := range cfg.EnabledTools {
-			if item == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	for _, item := range cfg.DisabledTools {
-		if item == name {
-			return false
-		}
-	}
-	return true
+func (cfg mcpServerConfig) inheritEnvironment() bool {
+	// Existing hand-written configurations historically inherited Diana's full
+	// process environment. Self-installed servers persist false explicitly.
+	return cfg.InheritEnv == nil || *cfg.InheritEnv
 }
 
-// NewMCPRegistry loads configured MCP stdio servers and exposes their tools.
+func (cfg mcpServerConfig) transport() string {
+	if strings.TrimSpace(cfg.URL) != "" {
+		return "streamable_http"
+	}
+	if strings.TrimSpace(cfg.Command) != "" {
+		return "stdio"
+	}
+	return "unknown"
+}
+
+func (cfg mcpServerConfig) allowsTool(name string) bool {
+	if len(cfg.EnabledTools) > 0 && !slices.Contains(cfg.EnabledTools, name) {
+		return false
+	}
+	return !slices.Contains(cfg.DisabledTools, name)
+}
+
+func (cfg mcpServerConfig) validate() error {
+	hasCommand := strings.TrimSpace(cfg.Command) != ""
+	hasURL := strings.TrimSpace(cfg.URL) != ""
+	if hasCommand == hasURL {
+		return errors.New("configure exactly one of command or url")
+	}
+	if cfg.StartupTimeoutSec < 0 || cfg.ToolTimeoutSec < 0 {
+		return errors.New("timeouts cannot be negative")
+	}
+	return nil
+}
+
+// NewMCPRegistry remains the standalone MCP loader used by tests and callers
+// that do not need self-management. The official SDK handles protocol
+// negotiation for both current and legacy MCP servers.
 func NewMCPRegistry(ctx context.Context, cfg Config) (MCPRegistry, error) {
 	cfg = cfg.WithDefaults()
-	path := strings.TrimSpace(cfg.MCPConfigPath)
-	if path == "" {
-		return MCPRegistry{}, nil
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(cfg.WorkDir, path)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return MCPRegistry{}, nil
-		}
-		return MCPRegistry{}, err
-	}
-	if info.IsDir() {
-		return MCPRegistry{}, nil
-	}
+	path := resolveMCPConfigPath(cfg)
 	servers, err := loadMCPServers(path)
 	if err != nil {
 		return MCPRegistry{}, err
 	}
-	if len(servers) == 0 {
-		return MCPRegistry{}, nil
-	}
 	var registry MCPRegistry
-	usedToolNames := map[string]bool{}
-	names := make([]string, 0, len(servers))
-	for name := range servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	usedNames := map[string]bool{}
+	for _, name := range sortedMCPServerNames(servers) {
 		server := servers[name]
 		if !server.enabled() {
 			continue
 		}
-		if strings.TrimSpace(server.Command) == "" {
+		runtime, startErr := startMCPServerRuntime(ctx, name, server, cfg, usedNames)
+		if startErr != nil {
 			if server.Required {
-				return registry, fmt.Errorf("mcp server %q has no stdio command", name)
+				closeMCPClosers(registry.Closers)
+				return MCPRegistry{}, startErr
 			}
 			continue
 		}
-		startupTimeout := time.Duration(firstPositive(server.StartupTimeoutSec*1000, cfg.MCPStartupTimeoutMS)) * time.Millisecond
-		toolTimeout := time.Duration(firstPositive(server.ToolTimeoutSec*1000, cfg.MCPToolTimeoutMS)) * time.Millisecond
-		startCtx, cancel := context.WithTimeout(ctx, startupTimeout)
-		client, err := startMCPStdioClient(startCtx, name, server, toolTimeout)
-		cancel()
-		if err != nil {
-			if server.Required {
-				return registry, err
-			}
+		if len(runtime.tools) == 0 {
+			_ = runtime.Close()
 			continue
 		}
-		tools, err := client.ListTools(ctx)
-		if err != nil {
-			_ = client.Close()
-			if server.Required {
-				return registry, err
-			}
-			continue
+		for _, tool := range runtime.tools {
+			registry.Tools = append(registry.Tools, tool)
 		}
-		registered := 0
-		for _, raw := range tools {
-			if !server.allowsTool(raw.Name) {
-				continue
-			}
-			modelName := uniqueMCPModelToolName(name, raw.Name, usedToolNames)
-			registry.Tools = append(registry.Tools, &MCPTool{
-				client:      client,
-				serverName:  name,
-				rawName:     raw.Name,
-				modelName:   modelName,
-				description: raw.Description,
-				inputSchema: raw.InputSchema,
-			})
-			registered++
-		}
-		if registered == 0 {
-			_ = client.Close()
-			continue
-		}
-		registry.Closers = append(registry.Closers, client)
+		registry.Closers = append(registry.Closers, runtime)
 	}
 	return registry, nil
+}
+
+func resolveMCPConfigPath(cfg Config) string {
+	path := strings.TrimSpace(cfg.MCPConfigPath)
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	base, err := filepath.Abs(cfg.WorkDir)
+	if err != nil {
+		base = cfg.WorkDir
+	}
+	return filepath.Clean(filepath.Join(base, path))
 }
 
 func loadMCPServers(path string) (map[string]mcpServerConfig, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]mcpServerConfig{}, nil
+		}
 		return nil, err
 	}
 	var cfg mcpConfigFile
@@ -175,17 +154,126 @@ func loadMCPServers(path string) (map[string]mcpServerConfig, error) {
 			return nil, err
 		}
 	}
+	if cfg.MCPServers == nil {
+		cfg.MCPServers = map[string]mcpServerConfig{}
+	}
 	return cfg.MCPServers, nil
 }
 
+func saveMCPServers(path string, servers map[string]mcpServerConfig) error {
+	file := mcpConfigFile{MCPServers: servers}
+	var (
+		body []byte
+		err  error
+	)
+	if strings.EqualFold(filepath.Ext(path), ".toml") {
+		body, err = toml.Marshal(file)
+	} else {
+		body, err = json.MarshalIndent(file, "", "  ")
+		body = append(body, '\n')
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".mcp-config-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(body); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err == nil {
+		return nil
+	}
+	// Windows cannot atomically replace an existing file with Rename. Keep a
+	// rollback copy while performing the two renames.
+	backup := path + ".replace-backup"
+	_ = os.Remove(backup)
+	if err := os.Rename(path, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		_ = os.Rename(backup, path)
+		return err
+	}
+	_ = os.Remove(backup)
+	return nil
+}
+
+type mcpServerRuntime struct {
+	name   string
+	config mcpServerConfig
+	client *MCPClient
+	tools  []*MCPTool
+}
+
+func startMCPServerRuntime(ctx context.Context, name string, server mcpServerConfig, cfg Config, usedNames map[string]bool) (*mcpServerRuntime, error) {
+	if err := server.validate(); err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", name, err)
+	}
+	startupTimeout := time.Duration(firstPositive(server.StartupTimeoutSec*1000, cfg.MCPStartupTimeoutMS)) * time.Millisecond
+	toolTimeout := time.Duration(firstPositive(server.ToolTimeoutSec*1000, cfg.MCPToolTimeoutMS)) * time.Millisecond
+	startCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	client, err := startMCPClient(startCtx, name, server, cfg.WorkDir, toolTimeout)
+	if err != nil {
+		return nil, err
+	}
+	runtime := &mcpServerRuntime{name: name, config: server, client: client}
+	tools, err := client.ListTools(startCtx)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("mcp server %q tools/list failed: %w", name, err)
+	}
+	for _, raw := range tools {
+		if !server.allowsTool(raw.Name) {
+			continue
+		}
+		modelName := uniqueMCPModelToolName(name, raw.Name, usedNames)
+		runtime.tools = append(runtime.tools, &MCPTool{
+			client:      client,
+			serverName:  name,
+			rawName:     raw.Name,
+			modelName:   modelName,
+			description: raw.Description,
+			inputSchema: append(json.RawMessage(nil), raw.InputSchema...),
+		})
+	}
+	return runtime, nil
+}
+
+func (r *mcpServerRuntime) Close() error {
+	if r == nil || r.client == nil {
+		return nil
+	}
+	return r.client.Close()
+}
+
 type mcpToolInfo struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	Name        string
+	Description string
+	InputSchema json.RawMessage
 }
 
 type MCPTool struct {
-	client      *MCPStdioClient
+	client      *MCPClient
 	serverName  string
 	rawName     string
 	modelName   string
@@ -193,14 +281,12 @@ type MCPTool struct {
 	inputSchema json.RawMessage
 }
 
-func (t *MCPTool) Name() string {
-	return t.modelName
-}
+func (t *MCPTool) Name() string { return t.modelName }
 
 func (t *MCPTool) Description() string {
 	var parts []string
 	if strings.TrimSpace(t.description) != "" {
-		parts = append(parts, t.description)
+		parts = append(parts, strings.TrimSpace(t.description))
 	}
 	if len(t.inputSchema) > 0 && string(t.inputSchema) != "null" {
 		parts = append(parts, "input schema: "+string(t.inputSchema))
@@ -215,99 +301,76 @@ func (t *MCPTool) Run(ctx context.Context, input map[string]any) (string, error)
 	return t.client.CallTool(ctx, t.rawName, input)
 }
 
-type MCPStdioClient struct {
+type MCPClient struct {
 	name        string
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
-	responses   chan json.RawMessage
-	stderr      bytes.Buffer
-	stderrMu    sync.Mutex
-	requestMu   sync.Mutex
-	writeMu     sync.Mutex
-	nextID      atomic.Int64
+	session     *mcpsdk.ClientSession
+	stderr      *lockedBuffer
 	toolTimeout time.Duration
-	closed      atomic.Bool
+	closeOnce   sync.Once
+	closeErr    error
 }
 
-func startMCPStdioClient(ctx context.Context, name string, cfg mcpServerConfig, toolTimeout time.Duration) (*MCPStdioClient, error) {
-	command := strings.TrimSpace(cfg.Command)
-	if command == "" {
-		return nil, errors.New("mcp command is required")
+func startMCPClient(ctx context.Context, name string, cfg mcpServerConfig, workDir string, toolTimeout time.Duration) (*MCPClient, error) {
+	var (
+		transport mcpsdk.Transport
+		stderr    *lockedBuffer
+	)
+	if command := strings.TrimSpace(cfg.Command); command != "" {
+		cmd := exec.Command(command, cfg.Args...)
+		if cwd := strings.TrimSpace(cfg.CWD); cwd != "" {
+			if !filepath.IsAbs(cwd) {
+				cwd = filepath.Join(workDir, cwd)
+			}
+			cmd.Dir = filepath.Clean(cwd)
+		}
+		cmd.Env = mergedCommandEnvironment(cfg.Env, cfg.inheritEnvironment())
+		stderr = &lockedBuffer{}
+		cmd.Stderr = stderr
+		transport = &mcpsdk.CommandTransport{Command: cmd, TerminateDuration: 2 * time.Second}
+	} else {
+		endpoint := strings.TrimSpace(cfg.URL)
+		if err := netguard.ValidatePublicURL(ctx, endpoint); err != nil {
+			return nil, fmt.Errorf("mcp server %q URL rejected: %w", name, err)
+		}
+		origin, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("mcp server %q URL rejected: %w", name, err)
+		}
+		httpClient := netguard.NewPublicHTTPClient(toolTimeout)
+		httpClient.Transport = &mcpHeaderTransport{base: httpClient.Transport, headers: expandedMCPHeaders(cfg.Headers), origin: origin}
+		transport = &mcpsdk.StreamableClientTransport{
+			Endpoint:             endpoint,
+			HTTPClient:           httpClient,
+			MaxRetries:           -1,
+			DisableStandaloneSSE: true,
+		}
 	}
-	cmd := exec.Command(command, cfg.Args...)
-	if strings.TrimSpace(cfg.CWD) != "" {
-		cmd.Dir = cfg.CWD
-	}
-	cmd.Env = os.Environ()
-	for key, value := range cfg.Env {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
-	stdin, err := cmd.StdinPipe()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "diana-agent", Version: "0.5.0"}, &mcpsdk.ClientOptions{
+		Capabilities: &mcpsdk.ClientCapabilities{},
+	})
+	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
-		return nil, err
+		return nil, withMCPStderr(fmt.Errorf("mcp server %q connect failed: %w", name, err), stderr)
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	client := &MCPStdioClient{
-		name:        name,
-		cmd:         cmd,
-		stdin:       stdin,
-		responses:   make(chan json.RawMessage, 32),
-		toolTimeout: toolTimeout,
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	go client.readStdout(stdout)
-	go client.readStderr(stderr)
-	if err := client.initialize(ctx); err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("mcp server %q initialize failed: %w", name, err)
-	}
-	return client, nil
+	return &MCPClient{name: name, session: session, stderr: stderr, toolTimeout: toolTimeout}, nil
 }
 
-func (c *MCPStdioClient) initialize(ctx context.Context) error {
-	params := map[string]any{
-		"protocolVersion": "2025-06-18",
-		"capabilities":    map[string]any{},
-		"clientInfo": map[string]any{
-			"name":    "diana-qq-bot-agent",
-			"version": "0.0.1",
-		},
-	}
-	if _, err := c.request(ctx, "initialize", params); err != nil {
-		return err
-	}
-	return c.notify("notifications/initialized", nil)
-}
-
-func (c *MCPStdioClient) ListTools(ctx context.Context) ([]mcpToolInfo, error) {
+func (c *MCPClient) ListTools(ctx context.Context) ([]mcpToolInfo, error) {
 	var all []mcpToolInfo
 	var cursor string
 	for {
-		params := map[string]any{}
-		if cursor != "" {
-			params["cursor"] = cursor
-		}
-		raw, err := c.request(ctx, "tools/list", params)
+		params := &mcpsdk.ListToolsParams{Cursor: cursor}
+		result, err := c.session.ListTools(ctx, params)
 		if err != nil {
-			return nil, fmt.Errorf("mcp server %q tools/list failed: %w", c.name, err)
+			return nil, withMCPStderr(err, c.stderr)
 		}
-		var result struct {
-			Tools      []mcpToolInfo `json:"tools"`
-			NextCursor string        `json:"nextCursor"`
+		for _, tool := range result.Tools {
+			if tool == nil || strings.TrimSpace(tool.Name) == "" {
+				continue
+			}
+			schema, _ := json.Marshal(tool.InputSchema)
+			all = append(all, mcpToolInfo{Name: tool.Name, Description: tool.Description, InputSchema: schema})
 		}
-		if err := json.Unmarshal(raw, &result); err != nil {
-			return nil, err
-		}
-		all = append(all, result.Tools...)
 		if strings.TrimSpace(result.NextCursor) == "" {
 			return all, nil
 		}
@@ -315,7 +378,7 @@ func (c *MCPStdioClient) ListTools(ctx context.Context) ([]mcpToolInfo, error) {
 	}
 }
 
-func (c *MCPStdioClient) CallTool(ctx context.Context, name string, arguments map[string]any) (string, error) {
+func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[string]any) (string, error) {
 	if arguments == nil {
 		arguments = map[string]any{}
 	}
@@ -325,181 +388,205 @@ func (c *MCPStdioClient) CallTool(ctx context.Context, name string, arguments ma
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	raw, err := c.request(callCtx, "tools/call", map[string]any{
-		"name":      name,
-		"arguments": arguments,
-	})
+	result, err := c.session.CallTool(callCtx, &mcpsdk.CallToolParams{Name: name, Arguments: arguments})
 	if err != nil {
-		return "", fmt.Errorf("mcp server %q tools/call %q failed: %w", c.name, name, err)
+		return "", withMCPStderr(fmt.Errorf("mcp server %q tools/call %q failed: %w", c.name, name, err), c.stderr)
 	}
-	return formatMCPToolResult(raw)
+	output, resultErr := formatSDKMCPToolResult(result)
+	if resultErr != nil {
+		return output, resultErr
+	}
+	return output, nil
 }
 
-func (c *MCPStdioClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	c.requestMu.Lock()
-	defer c.requestMu.Unlock()
-	id := c.nextID.Add(1)
-	if err := c.writeJSON(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"method":  method,
-		"params":  params,
-	}); err != nil {
-		return nil, err
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case raw, ok := <-c.responses:
-			if !ok {
-				return nil, c.closedError()
-			}
-			var envelope struct {
-				ID     any             `json:"id"`
-				Result json.RawMessage `json:"result"`
-				Error  *struct {
-					Code    int    `json:"code"`
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			if err := json.Unmarshal(raw, &envelope); err != nil {
-				continue
-			}
-			if !jsonIDMatches(envelope.ID, id) {
-				continue
-			}
-			if envelope.Error != nil {
-				return nil, fmt.Errorf("%d: %s", envelope.Error.Code, envelope.Error.Message)
-			}
-			return envelope.Result, nil
-		}
-	}
-}
-
-func (c *MCPStdioClient) notify(method string, params any) error {
-	msg := map[string]any{
-		"jsonrpc": "2.0",
-		"method":  method,
-	}
-	if params != nil {
-		msg["params"] = params
-	}
-	return c.writeJSON(msg)
-}
-
-func (c *MCPStdioClient) writeJSON(message any) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	if c.closed.Load() {
-		return c.closedError()
-	}
-	body, err := json.Marshal(message)
-	if err != nil {
-		return err
-	}
-	body = append(body, '\n')
-	_, err = c.stdin.Write(body)
-	return err
-}
-
-func (c *MCPStdioClient) readStdout(stdout io.Reader) {
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		raw := append(json.RawMessage(nil), line...)
-		select {
-		case c.responses <- raw:
-		default:
-		}
-	}
-	close(c.responses)
-}
-
-func (c *MCPStdioClient) readStderr(stderr io.Reader) {
-	_, _ = io.Copy(&lockedBuffer{buffer: &c.stderr, mu: &c.stderrMu}, stderr)
-}
-
-func (c *MCPStdioClient) Close() error {
-	if c == nil || c.closed.Swap(true) {
+func (c *MCPClient) Close() error {
+	if c == nil {
 		return nil
 	}
-	_ = c.stdin.Close()
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
-	}
-	if c.cmd != nil {
-		_ = c.cmd.Wait()
-	}
-	return nil
+	c.closeOnce.Do(func() {
+		if c.session != nil {
+			c.closeErr = c.session.Close()
+		}
+	})
+	return c.closeErr
 }
 
-func (c *MCPStdioClient) closedError() error {
-	c.stderrMu.Lock()
-	stderr := strings.TrimSpace(c.stderr.String())
-	c.stderrMu.Unlock()
-	if stderr != "" {
-		return fmt.Errorf("mcp server %q closed: %s", c.name, stderr)
+func formatSDKMCPToolResult(result *mcpsdk.CallToolResult) (string, error) {
+	if result == nil {
+		return "", errors.New("empty MCP tool result")
 	}
-	return fmt.Errorf("mcp server %q closed", c.name)
+	var parts []string
+	for _, content := range result.Content {
+		if textContent, ok := content.(*mcpsdk.TextContent); ok {
+			parts = append(parts, textContent.Text)
+			continue
+		}
+		body, err := content.MarshalJSON()
+		if err == nil {
+			parts = append(parts, string(body))
+		}
+	}
+	if result.StructuredContent != nil && len(parts) == 0 {
+		if body, err := json.Marshal(result.StructuredContent); err == nil {
+			parts = append(parts, string(body))
+		}
+	}
+	output := strings.TrimSpace(strings.Join(parts, "\n"))
+	if result.NeedsInput() {
+		return output, errors.New("MCP tool requires interactive input, which Diana cannot satisfy in the current chat turn")
+	}
+	if result.IsError {
+		if output == "" {
+			output = "MCP tool returned an error"
+		}
+		return output, errors.New(output)
+	}
+	return output, nil
 }
 
 type lockedBuffer struct {
-	buffer *bytes.Buffer
-	mu     *sync.Mutex
+	mu   sync.Mutex
+	data []byte
 }
+
+const maxMCPStderrBytes = 64 << 10
 
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buffer.Write(p)
+	written := len(p)
+	if len(p) >= maxMCPStderrBytes {
+		b.data = append(b.data[:0], p[len(p)-maxMCPStderrBytes:]...)
+		return written, nil
+	}
+	if overflow := len(b.data) + len(p) - maxMCPStderrBytes; overflow > 0 {
+		copy(b.data, b.data[overflow:])
+		b.data = b.data[:len(b.data)-overflow]
+	}
+	b.data = append(b.data, p...)
+	return written, nil
 }
 
-func jsonIDMatches(value any, want int64) bool {
-	switch typed := value.(type) {
-	case float64:
-		return int64(typed) == want
-	case string:
-		return typed == fmt.Sprint(want)
+func (b *lockedBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.data)
+}
+
+func withMCPStderr(err error, stderr *lockedBuffer) error {
+	detail := strings.TrimSpace(stderr.String())
+	if detail == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, detail)
+}
+
+type mcpHeaderTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+	origin  *url.URL
+}
+
+func (t *mcpHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := req.Clone(req.Context())
+	cloned.Header = req.Header.Clone()
+	if sameHTTPOrigin(t.origin, cloned.URL) {
+		for key, value := range t.headers {
+			cloned.Header.Set(key, value)
+		}
+	}
+	return t.base.RoundTrip(cloned)
+}
+
+func sameHTTPOrigin(left, right *url.URL) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Hostname(), right.Hostname()) &&
+		effectiveHTTPPort(left) == effectiveHTTPPort(right)
+}
+
+func effectiveHTTPPort(value *url.URL) string {
+	if value == nil {
+		return ""
+	}
+	if port := value.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(value.Scheme, "https") {
+		return "443"
+	}
+	if strings.EqualFold(value.Scheme, "http") {
+		return "80"
+	}
+	return ""
+}
+
+func expandedMCPHeaders(headers map[string]string) map[string]string {
+	expanded := make(map[string]string, len(headers))
+	for key, value := range headers {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			expanded[key] = os.ExpandEnv(value)
+		}
+	}
+	return expanded
+}
+
+func mergedCommandEnvironment(overrides map[string]string, inheritAll bool) []string {
+	values := map[string]string{}
+	for _, item := range os.Environ() {
+		key, value, found := strings.Cut(item, "=")
+		if found && (inheritAll || safeMCPEnvironmentKey(key)) {
+			values[key] = value
+		}
+	}
+	for key, value := range overrides {
+		if key = strings.TrimSpace(key); key != "" {
+			values[key] = os.ExpandEnv(value)
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, key+"="+values[key])
+	}
+	return out
+}
+
+func safeMCPEnvironmentKey(key string) bool {
+	switch strings.ToUpper(strings.TrimSpace(key)) {
+	case "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP",
+		"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+		"LANG", "LANGUAGE", "LC_ALL", "TERM", "SSL_CERT_FILE", "SSL_CERT_DIR",
+		"XDG_CACHE_HOME", "XDG_CONFIG_HOME", "NPM_CONFIG_CACHE":
+		return true
 	default:
 		return false
 	}
 }
 
-func formatMCPToolResult(raw json.RawMessage) (string, error) {
-	var result struct {
-		Content []struct {
-			Type string          `json:"type"`
-			Text string          `json:"text,omitempty"`
-			Data json.RawMessage `json:"data,omitempty"`
-		} `json:"content"`
-		IsError bool `json:"isError,omitempty"`
+func sortedMCPServerNames(servers map[string]mcpServerConfig) []string {
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
 	}
-	if err := json.Unmarshal(raw, &result); err != nil || len(result.Content) == 0 {
-		return string(raw), nil
+	sort.Strings(names)
+	return names
+}
+
+func closeMCPClosers(closers []closeableTool) {
+	for _, closer := range closers {
+		_ = closer.Close()
 	}
-	var parts []string
-	for _, item := range result.Content {
-		if item.Type == "text" {
-			parts = append(parts, item.Text)
-			continue
-		}
-		if len(item.Data) > 0 {
-			parts = append(parts, string(item.Data))
-			continue
-		}
-		encoded, _ := json.Marshal(item)
-		parts = append(parts, string(encoded))
-	}
-	output := strings.TrimSpace(strings.Join(parts, "\n"))
-	if result.IsError {
-		return output, errors.New(output)
-	}
-	return output, nil
 }
 
 func mcpModelToolName(server, tool string) string {
@@ -507,13 +594,8 @@ func mcpModelToolName(server, tool string) string {
 	if len(name) <= 64 {
 		return name
 	}
-	sum := sha256.Sum256([]byte(name))
-	suffix := "_" + hex.EncodeToString(sum[:])[:8]
-	limit := 64 - len(suffix)
-	if limit < 1 {
-		return suffix[1:]
-	}
-	return name[:limit] + suffix
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))[:12]
+	return name[:51] + "_" + hash
 }
 
 func uniqueMCPModelToolName(server, tool string, used map[string]bool) string {
@@ -522,13 +604,11 @@ func uniqueMCPModelToolName(server, tool string, used map[string]bool) string {
 		used[base] = true
 		return base
 	}
-	for i := 1; ; i++ {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%s\000%s\000%d", server, tool, i)))
-		suffix := "_" + hex.EncodeToString(sum[:])[:8]
-		limit := 64 - len(suffix)
+	for index := 2; ; index++ {
+		suffix := fmt.Sprintf("_%d", index)
 		candidate := base
-		if len(candidate) > limit {
-			candidate = candidate[:limit]
+		if len(candidate)+len(suffix) > 64 {
+			candidate = candidate[:64-len(suffix)]
 		}
 		candidate += suffix
 		if !used[candidate] {

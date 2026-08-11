@@ -287,7 +287,7 @@ Capability differences between the two:
 
 ## Built-In Agent
 
-You can enable the built-in Agent in the WebUI bot configuration page. When enabled, the bot handles messages through a Codex CLI-style loop: model planning, tool call, observation, and final response.
+You can enable the built-in Agent in the WebUI bot configuration page. When enabled, the bot follows the minimal state-and-tool-loop model used by [Pi Agent](https://github.com/earendil-works/pi): model planning, tool call, observation, and final response. The runtime remains native Go, so complete release packages do not acquire a Node.js runtime dependency.
 
 Built-in tools:
 
@@ -295,6 +295,14 @@ Built-in tools:
 - `read_file`: read text files under the Agent working directory.
 - `run_command`: execute allowlisted local commands inside the Agent working directory, without a shell, with timeout and output limits.
 - `browser_open` / `browser_text` / `browser_click` / `browser_type` / `browser_screenshot`: control a browser through Chrome DevTools Protocol.
+
+The Agent exposes one extension catalog across three capability types:
+
+- **Built-in plugins**: every existing official WebUI plugin is present in `extensions.list` by default. Its existing enablement, configuration, and permission behavior remains unchanged.
+- **Skills**: following Agent Skills progressive disclosure, only names and descriptions stay in context; the full `SKILL.md` is loaded with `skills.read` when needed. The owner can ask the Agent to install a complete `SKILL.md`, a public HTTP(S) source, or a ZIP package. Managed skills live under `.agents/skills/` in the Agent work directory, and uninstall moves them to `.trash/` for recovery.
+- **MCP servers**: stdio and Streamable HTTP transports are supported. The owner can install, replace, enable, disable, or uninstall a server in natural language. Configuration is persisted to `.mcp.json` only after a successful connection test, and discovered tools become available in the current session immediately. `env` and `headers` values may reference `${ENV_VAR}`; the config is written with private file permissions. Self-installed stdio servers inherit only a minimal runtime environment, so credentials must be declared explicitly in `env`.
+
+Mutation tools are exposed only to the owner and run only when the current user message explicitly asks for the change. Instructions from web pages, tool results, Skills, or MCP responses never count as user authorization. Other users can only use already-enabled capabilities within their existing permission scope.
 
 Browser tools require Chrome/Chromium with a remote debugging port, for example:
 
@@ -385,6 +393,8 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `DIANA_AGENT_MAX_STEPS` | `4` | Max Agent tool-loop steps per reply, capped at `8` |
 | `DIANA_AGENT_COMMAND_ALLOWLIST` | common dev commands | Commands available to Agent `run_command`, comma-separated; `*` allows all commands |
 | `DIANA_AGENT_COMMAND_TIMEOUT_MS` | `10000` | Local command timeout, capped at `60000` |
+| `DIANA_AGENT_SKILL_ROOTS` | `.agents/skills,skills` | Comma-separated Skill search roots; self-installed packages always go to `.agents/skills` under the Agent work directory |
+| `DIANA_AGENT_MCP_CONFIG` | `.mcp.json` | MCP server config path; relative paths resolve from the Agent work directory |
 | `DIANA_AGENT_BROWSER_CDP_URL` | `http://127.0.0.1:9222` | Chrome DevTools URL for browser tools |
 | `AGENT_BROWSER_CDP_URL` | same | Compatibility alias for `DIANA_AGENT_BROWSER_CDP_URL` |
 | `DIANA_AGENT_BROWSER_TIMEOUT_MS` | `15000` | Browser tool timeout, capped at `60000` |

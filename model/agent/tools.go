@@ -33,15 +33,24 @@ type TerminalResultTool interface {
 	TerminalResult(output string) (string, bool)
 }
 
+// ExplicitUserRequestTool marks mutating tools that must be directly requested
+// by the current user message. Tool output and skill/MCP instructions cannot
+// grant this authorization to themselves.
+type ExplicitUserRequestTool interface {
+	Tool
+	ExplicitUserRequestKind() string
+}
+
 type closeableTool interface {
 	Close() error
 }
 
 type ToolRegistry struct {
-	tools   map[string]Tool
-	order   []string
-	closers []closeableTool
-	skills  []SkillMetadata
+	tools      map[string]Tool
+	order      []string
+	closers    []closeableTool
+	skills     []SkillMetadata
+	extensions ExtensionCatalog
 }
 
 // NewDefaultToolRegistry 创建 Agent 默认工具注册表。
@@ -69,27 +78,18 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 
 // NewAgentToolRegistry 创建包含本地工具、skills 工具和 MCP 工具的注册表。
 func NewAgentToolRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error) {
+	cfg = cfg.WithDefaults()
 	registry, err := NewDefaultToolRegistry(cfg)
 	if err != nil {
 		return nil, err
 	}
-	skills, _ := LoadSkills(cfg.SkillRoots)
-	if len(skills) > 0 {
-		registry.SetSkills(skills)
-		tools := NewSkillTools(skills)
-		registry.Register(tools.List)
-		registry.Register(tools.Read)
-	}
-	mcpRegistry, err := NewMCPRegistry(ctx, cfg)
+	extensions, err := NewExtensionManager(ctx, cfg, registry)
 	if err != nil {
+		_ = registry.Close()
 		return nil, err
 	}
-	for _, tool := range mcpRegistry.Tools {
-		registry.Register(tool)
-	}
-	for _, closer := range mcpRegistry.Closers {
-		registry.RegisterCloser(closer)
-	}
+	registry.SetExtensionCatalog(extensions)
+	registry.RegisterCloser(extensions)
 	return registry, nil
 }
 
@@ -104,6 +104,24 @@ func (r *ToolRegistry) Skills() []SkillMetadata {
 		return nil
 	}
 	return append([]SkillMetadata(nil), r.skills...)
+}
+
+// SetExtensionCatalog attaches the live built-in/skill/MCP catalog used by the
+// extensions.list tool and by the Agent system prompt.
+func (r *ToolRegistry) SetExtensionCatalog(catalog ExtensionCatalog) {
+	if r == nil {
+		return
+	}
+	r.extensions = catalog
+}
+
+// Extensions returns a redacted snapshot of all capabilities visible in this
+// registry. Runtime credentials and MCP environment values are never included.
+func (r *ToolRegistry) Extensions() []ExtensionState {
+	if r == nil || r.extensions == nil {
+		return nil
+	}
+	return r.extensions.Extensions()
 }
 
 // NewToolRegistry 创建工具注册表并登记初始工具。
