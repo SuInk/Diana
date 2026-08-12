@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -120,6 +121,122 @@ func TestDescribeEventOutcomeExplainsReplyAndSilence(t *testing.T) {
 		_, reason, _ := assistant.DescribeEventOutcome(outcome)
 		if !strings.Contains(reason, expected) {
 			t.Fatalf("outcome %q reason = %q, want %q", outcome, reason, expected)
+		}
+	}
+}
+
+func TestRecordInboundEventAuditPersistsDecisionReasonAndReply(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	event := assistant.MessageEvent{
+		Kind:       assistant.EventKindGroup,
+		GroupID:    "group-1",
+		UserID:     "user-1",
+		MessageID:  "message-1",
+		RawMessage: "这个问题怎么解决",
+		Time:       time.Now().Unix(),
+	}
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:group-1", event); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "audit-test", time.Now().Add(time.Minute))
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	if err := store.CompleteInboundEvent(ctx, item.ID, "audit-test", "replied_passive"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind:      event.Kind,
+		GroupID:   event.GroupID,
+		UserID:    event.UserID,
+		MessageID: event.MessageID,
+		Decision:  "replied",
+		Reason:    "主动回复判断允许回复：问题明确且可回答",
+		Reply:     "可以先检查错误日志。",
+		Duration:  1340,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, time.Now().Add(-time.Hour), 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("events = %#v", page.Events)
+	}
+	got := page.Events[0]
+	if got.Decision != "replied" || got.Reason != "主动回复判断允许回复：问题明确且可回答" || got.Reply != "可以先检查错误日志。" || got.DurationMS != 1340 {
+		t.Fatalf("audit detail = %#v", got)
+	}
+}
+
+func TestInboundEventAuditColumnsMigrateExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-event-audit.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE inbound_events (
+  id TEXT PRIMARY KEY,
+  session TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  group_id TEXT,
+  user_id TEXT,
+  message_id TEXT,
+  event_time INTEGER NOT NULL,
+  payload TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  available_at INTEGER NOT NULL,
+  lease_owner TEXT,
+  lease_until INTEGER,
+  outcome TEXT,
+  last_error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER
+)
+`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	rows, err := store.db.Query(`PRAGMA table_info(inbound_events)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	found := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		found[name] = true
+	}
+	for _, name := range []string{"decision", "decision_reason", "reply_text", "processing_error", "duration_ms"} {
+		if !found[name] {
+			t.Fatalf("audit column %q was not migrated", name)
 		}
 	}
 }

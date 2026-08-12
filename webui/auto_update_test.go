@@ -1,47 +1,15 @@
 package webui
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/SuInk/diana/model/updater"
 
 	"github.com/gin-gonic/gin"
 )
-
-type countingReleaseUpdater struct {
-	result  updater.Result
-	err     error
-	updates int
-}
-
-// UpdateLatest 记录调用次数并返回预设结果。
-func (c *countingReleaseUpdater) UpdateLatest(context.Context, bool) (updater.Result, error) {
-	c.updates++
-	return c.result, c.err
-}
-
-type memorySettingsStore struct {
-	settings updater.Settings
-	saved    bool
-}
-
-// LoadUpdateSettings 返回内存中的设置。
-func (m *memorySettingsStore) LoadUpdateSettings(context.Context) (updater.Settings, bool, error) {
-	return m.settings, m.saved, nil
-}
-
-// SaveUpdateSettings 保存设置到内存。
-func (m *memorySettingsStore) SaveUpdateSettings(_ context.Context, settings updater.Settings) error {
-	m.settings = settings
-	m.saved = true
-	return nil
-}
 
 // TestGithubRepoFromRemote 验证对应功能场景。
 func TestGithubRepoFromRemote(t *testing.T) {
@@ -58,97 +26,6 @@ func TestGithubRepoFromRemote(t *testing.T) {
 	}
 	if _, _, ok := githubRepoFromRemote("https://gitee.com/x/y.git"); ok {
 		t.Fatal("non-github remote should not match")
-	}
-}
-
-// TestAutoUpdaterTickRespectsToggleAndInterval 验证对应功能场景。
-func TestAutoUpdaterTickRespectsToggleAndInterval(t *testing.T) {
-	fake := &countingReleaseUpdater{result: updater.Result{Updated: true, Status: updater.Status{HeadCommit: "abc1234"}}}
-	auto := NewAutoUpdater(fake, &memorySettingsStore{}, nil)
-
-	if settings := auto.Settings(); !settings.AutoUpdateEnabled || settings.IntervalMinutes != 30 {
-		t.Fatalf("default settings = %+v", settings)
-	}
-
-	// 显式关闭后 tick 不触发更新。
-	if _, err := auto.SaveSettings(context.Background(), updater.Settings{AutoUpdateEnabled: false, IntervalMinutes: 30}); err != nil {
-		t.Fatalf("SaveSettings(disabled) error = %v", err)
-	}
-	auto.tick(context.Background())
-	if fake.updates != 0 {
-		t.Fatalf("disabled auto updater ran %d times", fake.updates)
-	}
-
-	// 开启后立即触发一次，且间隔内不重复执行。
-	if _, err := auto.SaveSettings(context.Background(), updater.Settings{AutoUpdateEnabled: true, IntervalMinutes: 60}); err != nil {
-		t.Fatalf("SaveSettings() error = %v", err)
-	}
-	auto.tick(context.Background())
-	auto.tick(context.Background())
-	if fake.updates != 1 {
-		t.Fatalf("updates = %d, want 1", fake.updates)
-	}
-	if runAt, result, _ := auto.LastRun(); runAt.IsZero() || !strings.Contains(result, "abc1234") {
-		t.Fatalf("LastRun() = %v %q", runAt, result)
-	}
-
-	// 手动把上次执行时间拨回超过间隔，应再次执行。
-	auto.mu.Lock()
-	auto.lastRunAt = time.Now().Add(-2 * time.Hour)
-	auto.mu.Unlock()
-	auto.tick(context.Background())
-	if fake.updates != 2 {
-		t.Fatalf("updates = %d, want 2", fake.updates)
-	}
-}
-
-func TestAutoUpdaterTreatsMissingRemoteAsManagedDeployment(t *testing.T) {
-	fake := &countingReleaseUpdater{err: updater.ErrRemoteNotConfigured}
-	auto := NewAutoUpdater(fake, &memorySettingsStore{}, nil)
-
-	auto.tick(context.Background())
-	_, result, lastError := auto.LastRun()
-	if fake.updates != 1 || result != "由部署环境管理更新" || lastError != "" {
-		t.Fatalf("updates=%d result=%q error=%q", fake.updates, result, lastError)
-	}
-}
-
-// TestUpdateSettingsEndpointsRoundtrip 验证对应功能场景。
-func TestUpdateSettingsEndpointsRoundtrip(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	store := &memorySettingsStore{}
-	auto := NewAutoUpdater(&countingReleaseUpdater{}, store, nil)
-	handler := NewSystemUpdateHandler(fakeSystemUpdater{})
-	handler.SetAutoUpdater(auto)
-	router := gin.New()
-	handler.Register(router)
-
-	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"auto_update_enabled":true,"interval_minutes":3}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/system/update/settings", body)
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("POST settings = %d: %s", rec.Code, rec.Body.String())
-	}
-	var saved struct {
-		Settings updater.Settings `json:"settings"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	// interval 3 低于下限，应被收敛到 10。
-	if !saved.Settings.AutoUpdateEnabled || saved.Settings.IntervalMinutes != 10 {
-		t.Fatalf("saved = %+v", saved.Settings)
-	}
-	if !store.saved || store.settings.IntervalMinutes != 10 {
-		t.Fatalf("store = %+v", store.settings)
-	}
-
-	rec = httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/system/update/settings", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"interval_minutes":10`) {
-		t.Fatalf("GET settings = %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -187,16 +64,10 @@ func TestChangelogPrefersReleases(t *testing.T) {
 	}
 }
 
-// TestRollbackEndpointDisablesAutoUpdate 验证对应功能场景。
-func TestRollbackEndpointDisablesAutoUpdate(t *testing.T) {
+// TestRollbackEndpointRequiresConfirmation 验证版本回退只能由用户明确确认触发。
+func TestRollbackEndpointRequiresConfirmation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	store := &memorySettingsStore{}
-	auto := NewAutoUpdater(&countingReleaseUpdater{}, store, nil)
-	if _, err := auto.SaveSettings(context.Background(), updater.Settings{AutoUpdateEnabled: true, IntervalMinutes: 30}); err != nil {
-		t.Fatal(err)
-	}
 	handler := NewSystemUpdateHandler(fakeSystemUpdater{result: updater.Result{Status: updater.Status{HeadCommit: "de9c9be"}}})
-	handler.SetAutoUpdater(auto)
 	router := gin.New()
 	handler.Register(router)
 
@@ -215,11 +86,8 @@ func TestRollbackEndpointDisablesAutoUpdate(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rollback = %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"auto_update_disabled":true`) {
-		t.Fatalf("body = %s", rec.Body.String())
-	}
-	if auto.Settings().AutoUpdateEnabled {
-		t.Fatal("auto update should be paused after rollback")
+	if strings.Contains(rec.Body.String(), "auto_update") {
+		t.Fatalf("rollback response should not expose removed auto-update state: %s", rec.Body.String())
 	}
 	// 非法 ref 直接 400。
 	rec = httptest.NewRecorder()

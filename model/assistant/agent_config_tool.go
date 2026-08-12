@@ -88,6 +88,8 @@ type dianaBotConfigSnapshot struct {
 	LLMQQIDMaskingEnabled        bool                     `json:"llm_qq_id_masking_enabled"`
 	RecentContextLimit           int                      `json:"recent_context_limit"`
 	ContextSummaryThreshold      int                      `json:"context_summary_threshold"`
+	LongTermMemoryEnabled        bool                     `json:"long_term_memory_enabled"`
+	CrossGroupMemoryEnabled      bool                     `json:"cross_group_memory_enabled"`
 	PassiveReplyChance           float64                  `json:"passive_reply_chance"`
 	PassiveReplyThreshold        float64                  `json:"passive_reply_threshold"`
 	ReplyRules                   []ReplyRule              `json:"reply_rules,omitempty"`
@@ -290,6 +292,8 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		LLMQQIDMaskingEnabled:        llmQQIDMaskingEnabled(cfg),
 		RecentContextLimit:           cfg.RecentContextLimit,
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
+		LongTermMemoryEnabled:        boolValue(cfg.LongTermMemoryEnabled, true),
+		CrossGroupMemoryEnabled:      boolValue(cfg.CrossGroupMemoryEnabled, false),
 		PassiveReplyChance:           cfg.PassiveReplyChance,
 		PassiveReplyThreshold:        cfg.PassiveReplyThreshold,
 		ReplyRules:                   append([]ReplyRule(nil), cfg.ReplyRules...),

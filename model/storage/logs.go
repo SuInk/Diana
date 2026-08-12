@@ -20,6 +20,7 @@ type AppLogKind = applog.Kind
 const (
 	LogKindOperation = applog.KindOperation
 	LogKindError     = applog.KindError
+	LogKindDebug     = applog.KindDebug
 )
 
 type AppLogLevel = applog.Level

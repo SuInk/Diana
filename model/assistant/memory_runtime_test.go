@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +103,48 @@ func TestStructuredMemoryRankingExcludesUnrelatedFacts(t *testing.T) {
 	if !strings.Contains(contextText, "稳定事实") || !strings.Contains(contextText, "Alice的猫叫小白") || strings.Contains(contextText, "舞萌DX") {
 		t.Fatalf("compiled memory context = %s", contextText)
 	}
+	if !strings.Contains(contextText, "依据") || ranked[0].RetrievalReason == "" {
+		t.Fatalf("retrieval explanation missing: ranked=%#v context=%s", ranked, contextText)
+	}
+}
+
+func TestStructuredMemoryRankingUnderstandsTimeIntent(t *testing.T) {
+	now := time.Now()
+	items := []StructuredMemoryItem{
+		{
+			ID: "old", SubjectUserID: "user", Key: "episode.deploy.old", Kind: MemoryKindEpisode,
+			Topic: "部署方案", Content: "讨论过使用容器部署", Confidence: 0.96, Importance: 0.8,
+			SourceSession: "group:123", LastVerifiedAt: now.AddDate(-1, 0, 0),
+		},
+		{
+			ID: "recent", SubjectUserID: "user", Key: "episode.deploy.recent", Kind: MemoryKindEpisode,
+			Topic: "部署方案", Content: "讨论过使用二进制部署", Confidence: 0.96, Importance: 0.7,
+			SourceSession: "group:123", LastVerifiedAt: now.Add(-24 * time.Hour),
+		},
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "user"}
+	recent := rankStructuredMemories(items, event, "最近讨论的部署方案是什么", now)
+	if len(recent) < 2 || recent[0].ID != "recent" || !strings.Contains(recent[0].RetrievalReason, "近期记忆") {
+		t.Fatalf("recent ranking = %#v", recent)
+	}
+	historical := rankStructuredMemories(items, event, "以前讨论过的部署方案是什么", now)
+	if len(historical) < 2 || historical[0].ID != "old" || !strings.Contains(historical[0].RetrievalReason, "历史回忆") {
+		t.Fatalf("historical ranking = %#v", historical)
+	}
+}
+
+func TestStructuredMemoryRankingDiversifiesNearDuplicates(t *testing.T) {
+	now := time.Now()
+	items := []StructuredMemoryItem{
+		{ID: "cat-1", Key: "pet.cat.food.1", Kind: MemoryKindFact, Topic: "猫粮", Content: "小白喜欢鸡肉猫粮", Confidence: 0.98, Importance: 0.9, LastVerifiedAt: now},
+		{ID: "cat-2", Key: "pet.cat.food.2", Kind: MemoryKindFact, Topic: "猫粮", Content: "小白偏爱鸡肉口味猫粮", Confidence: 0.98, Importance: 0.89, LastVerifiedAt: now},
+		{ID: "dog", Key: "pet.dog.food", Kind: MemoryKindFact, Topic: "狗粮", Content: "旺财喜欢牛肉狗粮", Confidence: 0.98, Importance: 0.86, LastVerifiedAt: now},
+	}
+	ranked := rankStructuredMemories(items, MessageEvent{}, "猫粮狗粮这些宠物食物偏好", now)
+	if len(ranked) < 3 || (ranked[0].ID != "dog" && ranked[1].ID != "dog") ||
+		(strings.HasPrefix(ranked[0].ID, "cat-") && strings.HasPrefix(ranked[1].ID, "cat-")) {
+		t.Fatalf("diversified ranking = %#v", ranked)
+	}
 }
 
 func TestMemoryEnqueueSkipsResolverAndMediaOnlyMessages(t *testing.T) {
@@ -160,6 +203,26 @@ func TestContextCompressionEnqueuesStructuredSummary(t *testing.T) {
 	}
 }
 
+func TestLongTermMemoryCanBeDisabled(t *testing.T) {
+	disabled := false
+	memory := &testStructuredMemoryStore{}
+	runtime := NewRuntime(BotConfig{
+		RecentContextLimit: 2, ContextSummaryThreshold: 3, LongTermMemoryEnabled: &disabled,
+	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetStructuredMemoryStore(memory)
+	for index := 0; index < 4; index++ {
+		event := MessageEvent{
+			Kind: EventKindGroup, GroupID: "123", UserID: "user", MessageID: fmt.Sprintf("m%d", index),
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "需要记住的稳定偏好"}}},
+		}
+		runtime.remember(event)
+		runtime.enqueueEventMemory(event, memoryEventText(event))
+	}
+	if len(memory.enqueued) != 0 {
+		t.Fatalf("disabled memory enqueued jobs = %#v", memory.enqueued)
+	}
+}
+
 func TestSummaryMemoryJobStoresTopicSummary(t *testing.T) {
 	memory := &testStructuredMemoryStore{}
 	provider := &capturingLLMProvider{reply: `{"memories":[{"action":"upsert","key":"summary.2026-07-15.memory-design","kind":"summary","topic":"记忆系统设计","entity":"Diana","content":"群友讨论将记忆拆分为事实、情景、任务与摘要，并按相关性召回。","evidence":"较早会话整合","source_type":"summary","confidence":0.97,"importance":0.82,"visibility":"session","sensitive":false,"retention_days":365}]}`}
@@ -183,6 +246,78 @@ func TestSummaryMemoryJobStoresTopicSummary(t *testing.T) {
 	candidate := request.Candidates[0]
 	if request.SubjectUserID != "" || request.SourceMessageID != "summary:summary-job" || candidate.Kind != MemoryKindSummary || candidate.SourceType != MemorySourceSummary || candidate.Visibility != MemoryVisibilitySession {
 		t.Fatalf("summary request = %#v", request)
+	}
+}
+
+func TestSelectMemorySummaryRollupBuildsMonthThenYearLevels(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	daily := make([]StructuredMemoryItem, 0, memorySummaryRollupSize)
+	for index := 0; index < memorySummaryRollupSize; index++ {
+		daily = append(daily, StructuredMemoryItem{
+			Key: fmt.Sprintf("summary.2025-01-%02d.topic", index+1), Kind: MemoryKindSummary,
+			Content: "主题摘要", SourceEventTime: base.AddDate(0, 0, index),
+		})
+	}
+	month := selectMemorySummaryRollup(daily)
+	if month == nil || month.Level != "month" || len(month.Items) != memorySummaryRollupSize || !strings.HasPrefix(month.TargetKey, "summary.rollup.month.") {
+		t.Fatalf("month rollup = %#v", month)
+	}
+
+	monthly := make([]StructuredMemoryItem, 0, memorySummaryRollupSize)
+	for index := 0; index < memorySummaryRollupSize; index++ {
+		monthly = append(monthly, StructuredMemoryItem{
+			Key:  fmt.Sprintf("summary.rollup.month.2025-%02d-01.2025-%02d-28", index+1, index+1),
+			Kind: MemoryKindSummary, Content: "月摘要", SourceEventTime: base.AddDate(0, index, 0),
+		})
+	}
+	year := selectMemorySummaryRollup(monthly)
+	if year == nil || year.Level != "year" || !strings.HasPrefix(year.TargetKey, "summary.rollup.year.") {
+		t.Fatalf("year rollup = %#v", year)
+	}
+}
+
+func TestSummaryMemoryJobRetiresSourcesOnlyAfterRollupIsWritten(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	memory := &testStructuredMemoryStore{}
+	for index := 0; index < memorySummaryRollupSize; index++ {
+		memory.items = append(memory.items, StructuredMemoryItem{
+			Key: fmt.Sprintf("summary.2025.01.%02d.topic", index+1), Kind: MemoryKindSummary,
+			Content: "主题摘要", Importance: 0.8, Status: MemoryStatusActive,
+			SourceEventTime: base.AddDate(0, 0, index),
+		})
+	}
+	rollup := selectMemorySummaryRollup(memory.items)
+	provider := &capturingLLMProvider{reply: fmt.Sprintf(
+		`{"memories":[{"action":"upsert","key":%q,"kind":"summary","topic":"历史滚动摘要","content":"十二条主题摘要已合并。","source_type":"summary","confidence":0.98,"importance":0.9,"visibility":"session","sensitive":false,"retention_days":730}]}`,
+		rollup.TargetKey,
+	)}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "123", UserID: "a", MessageID: "new", Time: base.AddDate(0, 1, 0).Unix(),
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "新的长期主题"}}},
+	}
+	err := runtime.processSummaryMemoryJob(context.Background(), memory, MemoryJob{
+		ID: "rollup-job", Payload: MemoryJobPayload{Kind: MemoryJobSummary, Session: "group:123", Events: []MessageEvent{event}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memory.applied) != 3 {
+		t.Fatalf("apply requests = %#v", memory.applied)
+	}
+	forgotten := 0
+	for _, request := range memory.applied[1:] {
+		for _, candidate := range request.Candidates {
+			if candidate.Action != MemoryActionForget {
+				t.Fatalf("retirement candidate = %#v", candidate)
+			}
+			forgotten++
+		}
+	}
+	if forgotten != memorySummaryRollupSize {
+		t.Fatalf("forgotten summaries = %d", forgotten)
 	}
 }
 
@@ -221,7 +356,13 @@ func (s *testStructuredMemoryStore) ApplyMemoryCandidates(_ context.Context, req
 	defer s.mu.Unlock()
 	request.Candidates = append([]MemoryCandidate(nil), request.Candidates...)
 	s.applied = append(s.applied, request)
-	return nil, nil
+	written := make([]StructuredMemoryItem, 0, len(request.Candidates))
+	for _, candidate := range request.Candidates {
+		if candidate.Action == MemoryActionUpsert {
+			written = append(written, StructuredMemoryItem{Key: candidate.Key, Kind: candidate.Kind, Status: MemoryStatusActive})
+		}
+	}
+	return written, nil
 }
 
 func (s *testStructuredMemoryStore) ListStructuredMemories(_ context.Context, query StructuredMemoryQuery) ([]StructuredMemoryItem, error) {

@@ -52,8 +52,8 @@ fi
 
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-18080}"
-export APP_DB_PATH="${APP_DB_PATH:-$ROOT/data/diana-qq-bot.db}"
-export LOG_PATH="${LOG_PATH:-$ROOT/logs/diana-qq-bot.log}"
+export APP_DB_PATH="${APP_DB_PATH:-$ROOT/data/diana.db}"
+export LOG_PATH="${LOG_PATH:-$ROOT/logs/diana.log}"
 export FRONTEND_DIST="${FRONTEND_DIST:-$ROOT/frontend-next/dist}"
 if [[ -z "${DIANA_UPDATE_ROOT:-}" && -d "$ROOT/.git" ]]; then
 	export DIANA_UPDATE_ROOT="$ROOT"

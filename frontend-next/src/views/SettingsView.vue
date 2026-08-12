@@ -124,28 +124,9 @@
             <span class="muted">当前版本</span>
             <span class="mono">{{ systemVersion?.version_label || systemVersion?.build_version || "—" }}</span>
           </div>
-          <label class="switch">
-            <input v-model="autoEnabled" type="checkbox" @change="saveAutoSettings" />
-            <span class="track" aria-hidden="true"></span>
-            <span class="switch-label">自动更新</span>
-          </label>
-          <div v-if="autoEnabled" class="field" style="max-width: 220px">
-            <label for="settings-update-interval">检查间隔（分钟）</label>
-            <input
-              id="settings-update-interval"
-              v-model.number="autoInterval"
-              class="input"
-              type="number"
-              min="10"
-              max="1440"
-              inputmode="numeric"
-              @change="saveAutoSettings"
-            />
-          </div>
           <p class="muted" style="font-size: 12.5px; margin: 0">
-            {{ deploymentMode === "git" ? "后台检查 GitHub 并快进拉取更新，默认每 30 分钟执行。" : systemVersion?.update_supported ? "后台下载并校验完整 Release 包，切换后自动探活并在失败时恢复。" : "后台检查 Release；Docker 镜像由部署环境的更新器自动安装。" }}
+            {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "发现新版本时仅显示黄色提示点，确认后才会下载、校验、备份并切换完整 Release 包。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
           </p>
-          <p v-if="lastAutoRun" class="muted" style="font-size: 12.5px; margin: 0">上次检查：{{ lastAutoRun }}</p>
 
           <template v-if="deploymentMode === 'git' && updateStatus">
             <hr class="divider" style="margin: 4px 0" />
@@ -196,11 +177,9 @@ import {
   getAuthStatus,
   getHealth,
   getSystemVersion,
-  getUpdateSettings,
   getUpdateStatus,
   logout,
   pullFromGitHub,
-  saveUpdateSettings,
   type HealthResponse,
   type SystemVersion,
   type UpdateStatus
@@ -208,6 +187,7 @@ import {
 import { accentOptions, theme } from "../theme";
 import { formatTime, formatUptime } from "../format";
 import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../confirm";
 
 const updateStatus = ref<UpdateStatus | null>(null);
 const systemVersion = ref<SystemVersion | null>(null);
@@ -222,10 +202,7 @@ const newPassword = ref("");
 const showCurrentPassword = ref(false);
 const showNewPassword = ref(false);
 const savingPassword = ref(false);
-const autoEnabled = ref(true);
-const autoInterval = ref(30);
 const deploymentMode = ref<"git" | "release">("release");
-const lastAutoRun = ref("");
 
 async function loadAuthStatus(): Promise<void> {
   try {
@@ -273,16 +250,6 @@ async function loadUpdates(): Promise<void> {
   try {
     systemVersion.value = await getSystemVersion();
     deploymentMode.value = systemVersion.value.deployment_mode;
-    const settings = await getUpdateSettings();
-    autoEnabled.value = settings.settings.auto_update_enabled;
-    autoInterval.value = settings.settings.interval_minutes;
-    deploymentMode.value = settings.deployment_mode;
-    if (settings.last_run_at) {
-      const at = new Date(settings.last_run_at).toLocaleString();
-      lastAutoRun.value = settings.last_error ? `${at}（失败：${settings.last_error}）` : `${at}（${settings.last_result || "完成"}）`;
-    } else {
-      lastAutoRun.value = "";
-    }
     updateStatus.value = systemVersion.value.update_supported ? await getUpdateStatus() : null;
   } catch {
     updateStatus.value = null;
@@ -291,22 +258,15 @@ async function loadUpdates(): Promise<void> {
   }
 }
 
-async function saveAutoSettings(): Promise<void> {
-  try {
-    const saved = await saveUpdateSettings({
-      auto_update_enabled: autoEnabled.value,
-      interval_minutes: autoInterval.value
-    });
-    autoEnabled.value = saved.settings.auto_update_enabled;
-    autoInterval.value = saved.settings.interval_minutes;
-    deploymentMode.value = saved.deployment_mode;
-    toastSuccess(autoEnabled.value ? `自动更新已开启，每 ${autoInterval.value} 分钟检查` : "自动更新已关闭");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "保存自动更新设置失败");
-  }
-}
-
 async function runUpdate(): Promise<void> {
+  const confirmed = await askConfirm({
+    title: "安装最新稳定版本？",
+    message: deploymentMode.value === "release"
+      ? "确认后才会下载并校验完整 Release 包、备份数据库和当前版本，再切换版本并执行健康检查。"
+      : "确认后才会同步到最新稳定 Release。更新完成前请勿关闭服务。",
+    confirmLabel: "确认更新"
+  });
+  if (!confirmed) return;
   updating.value = true;
   updateOutput.value = "";
   try {

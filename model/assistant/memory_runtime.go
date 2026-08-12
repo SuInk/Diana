@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ const (
 	memoryLeaseDuration     = 3 * time.Minute
 	memoryExtractionTimeout = 60 * time.Second
 	memorySummaryMaxEvents  = 100
+	memorySummaryRollupSize = 12
 )
 
 var memoryProfileGroups = []string{"memory", "memories", "recall"}
@@ -50,6 +52,13 @@ type memoryGateMemory struct {
 	Importance float64          `json:"importance"`
 	Visibility MemoryVisibility `json:"visibility"`
 	Version    int              `json:"version"`
+}
+
+type memorySummaryRollup struct {
+	Level     string                 `json:"level"`
+	TargetKey string                 `json:"target_key"`
+	Sources   []memoryGateMemory     `json:"source_summaries"`
+	Items     []StructuredMemoryItem `json:"-"`
 }
 
 func (r *Runtime) runMemoryCoordinator(ctx context.Context, leaseOwner string, releaseStale bool, done chan struct{}) {
@@ -238,7 +247,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	existing, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
 		Session:       job.Payload.Session,
 		Now:           time.Now(),
-		MaxCandidates: 30,
+		MaxCandidates: 200,
 		Kinds:         []MemoryKind{MemoryKindSummary},
 	})
 	if err != nil {
@@ -253,14 +262,17 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	if len(lines) == 0 {
 		return nil
 	}
+	rollup := selectMemorySummaryRollup(existing)
 	input := struct {
-		Session  string             `json:"session"`
-		Events   []string           `json:"events"`
-		Existing []memoryGateMemory `json:"existing_summaries,omitempty"`
+		Session  string               `json:"session"`
+		Events   []string             `json:"events"`
+		Existing []memoryGateMemory   `json:"existing_summaries,omitempty"`
+		Rollup   *memorySummaryRollup `json:"rollup,omitempty"`
 	}{
 		Session:  job.Payload.Session,
 		Events:   lines,
 		Existing: memoryGateExistingMemories(existing, ""),
+		Rollup:   rollup,
 	}
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
@@ -275,9 +287,10 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 1. 理解整段对话后按主题聚合，保留人物、时间、事件、决定、未解决问题和事实变化；删除寒暄、重复和无后续价值的噪声。
 2. 不得按关键词机械摘抄，不得把提问误当事实，不得补充原文没有的信息。
 3. existing_summaries 是同会话已有摘要。相同日期和主题必须复用原 key，并生成包含旧摘要与新事件的完整更新版；不同主题建立新 key。
-4. key 使用 summary.<YYYY-MM-DD>.<topic>，topic 简短明确，content 自包含。importance/confidence 为 0 到 1，visibility 固定 session，source_type 固定 summary，sensitive 按内容判断，retention_days 默认 365。
-5. 最多输出 5 条；完全没有长期价值时输出空数组。
-6. 只输出合法 JSON：{"memories":[{"action":"upsert","key":"summary.2026-07-15.memory-design","kind":"summary","topic":"记忆系统设计","entity":"Diana","content":"...","evidence":"事件范围摘要","source_type":"summary","confidence":0.96,"importance":0.8,"visibility":"session","sensitive":false,"retention_days":365}]}`),
+4. 若提供 rollup，必须额外输出且只输出一条 key 精确等于 rollup.target_key 的层级摘要，把 source_summaries 合并为自包含的时间线；保留人物、关键事实、决定、变化和未解决事项，不得遗漏相互矛盾的信息。不要为 source_summaries 输出逐条副本。
+5. 普通摘要 key 使用 summary.<YYYY-MM-DD>.<topic>；层级摘要必须使用给定 target_key。topic 简短明确，content 自包含。importance/confidence 为 0 到 1，visibility 固定 session，source_type 固定 summary，sensitive 按内容判断。普通摘要 retention_days=365，month 层级=730，year 层级=3650。
+6. 最多输出 6 条；完全没有长期价值且没有 rollup 时输出空数组。
+7. 只输出合法 JSON：{"memories":[{"action":"upsert","key":"summary.2026-07-15.memory-design","kind":"summary","topic":"记忆系统设计","entity":"Diana","content":"...","evidence":"事件范围摘要","source_type":"summary","confidence":0.96,"importance":0.8,"visibility":"session","sensitive":false,"retention_days":365}]}`),
 		},
 		{Role: llm.RoleUser, Content: "请整合这批较早会话。上下文 JSON：\n" + string(inputJSON)},
 	}
@@ -301,7 +314,14 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 		candidates[index].SourceType = MemorySourceSummary
 		candidates[index].Visibility = MemoryVisibilitySession
 		if candidates[index].RetentionDays == 0 {
-			candidates[index].RetentionDays = 365
+			switch {
+			case strings.HasPrefix(candidates[index].Key, "summary.rollup.year."):
+				candidates[index].RetentionDays = 3650
+			case strings.HasPrefix(candidates[index].Key, "summary.rollup.month."):
+				candidates[index].RetentionDays = 730
+			default:
+				candidates[index].RetentionDays = 365
+			}
 		}
 	}
 	if len(candidates) == 0 {
@@ -309,7 +329,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	}
 	first := events[0]
 	last := events[len(events)-1]
-	_, err = store.ApplyMemoryCandidates(ctx, MemoryWriteRequest{
+	written, err := store.ApplyMemoryCandidates(ctx, MemoryWriteRequest{
 		Session:         job.Payload.Session,
 		EventKind:       first.Kind,
 		GroupID:         first.GroupID,
@@ -319,6 +339,90 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	})
 	if err != nil {
 		return fmt.Errorf("apply conversation summaries: %w", err)
+	}
+	if rollup != nil && memoryRollupWasWritten(written, rollup.TargetKey) {
+		if err := forgetRolledUpSummaries(ctx, store, job, first, last, rollup); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func selectMemorySummaryRollup(existing []StructuredMemoryItem) *memorySummaryRollup {
+	monthly := make([]StructuredMemoryItem, 0)
+	daily := make([]StructuredMemoryItem, 0)
+	for _, item := range existing {
+		switch {
+		case strings.HasPrefix(item.Key, "summary.rollup.month."):
+			monthly = append(monthly, item)
+		case !strings.HasPrefix(item.Key, "summary.rollup."):
+			daily = append(daily, item)
+		}
+	}
+	if len(monthly) >= memorySummaryRollupSize {
+		return buildMemorySummaryRollup("year", monthly)
+	}
+	if len(daily) >= memorySummaryRollupSize {
+		return buildMemorySummaryRollup("month", daily)
+	}
+	return nil
+}
+
+func buildMemorySummaryRollup(level string, items []StructuredMemoryItem) *memorySummaryRollup {
+	sort.SliceStable(items, func(left, right int) bool {
+		return memorySummaryItemTime(items[left]).Before(memorySummaryItemTime(items[right]))
+	})
+	if len(items) > memorySummaryRollupSize {
+		items = items[:memorySummaryRollupSize]
+	}
+	start := memorySummaryItemTime(items[0]).Format("2006.01.02")
+	end := memorySummaryItemTime(items[len(items)-1]).Format("2006.01.02")
+	return &memorySummaryRollup{
+		Level:     level,
+		TargetKey: fmt.Sprintf("summary.rollup.%s.%s.%s", level, start, end),
+		Sources:   memoryGateExistingMemories(items, ""),
+		Items:     append([]StructuredMemoryItem(nil), items...),
+	}
+}
+
+func memorySummaryItemTime(item StructuredMemoryItem) time.Time {
+	for _, value := range []time.Time{item.SourceEventTime, item.LastVerifiedAt, item.CreatedAt} {
+		if !value.IsZero() {
+			return value.UTC()
+		}
+	}
+	return time.Unix(0, 0).UTC()
+}
+
+func memoryRollupWasWritten(items []StructuredMemoryItem, targetKey string) bool {
+	for _, item := range items {
+		if item.Status == MemoryStatusActive && item.Key == targetKey {
+			return true
+		}
+	}
+	return false
+}
+
+func forgetRolledUpSummaries(ctx context.Context, store StructuredMemoryStore, job MemoryJob, first, last MessageEvent, rollup *memorySummaryRollup) error {
+	const batchSize = 8
+	for offset := 0; offset < len(rollup.Items); offset += batchSize {
+		end := min(offset+batchSize, len(rollup.Items))
+		candidates := make([]MemoryCandidate, 0, end-offset)
+		for _, item := range rollup.Items[offset:end] {
+			candidates = append(candidates, MemoryCandidate{
+				Action: MemoryActionForget, Key: item.Key, Kind: MemoryKindSummary,
+				Topic: "分层摘要压缩", SourceType: MemorySourceSummary,
+				Confidence: 1, Importance: item.Importance, Visibility: MemoryVisibilitySession,
+			})
+		}
+		_, err := store.ApplyMemoryCandidates(ctx, MemoryWriteRequest{
+			Session: job.Payload.Session, EventKind: first.Kind, GroupID: first.GroupID,
+			SourceMessageID: fmt.Sprintf("summary-rollup-forget:%s:%d", job.ID, offset),
+			SourceEventTime: memoryEventTime(last), Candidates: candidates,
+		})
+		if err != nil {
+			return fmt.Errorf("retire rolled-up conversation summaries: %w", err)
+		}
 	}
 	return nil
 }
@@ -440,6 +544,9 @@ func parseMemoryCandidates(raw string) ([]MemoryCandidate, error) {
 }
 
 func memoryEventEligible(cfg BotConfig, event MessageEvent, text string) bool {
+	if !boolValue(cfg.LongTermMemoryEnabled, true) {
+		return false
+	}
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return false
 	}

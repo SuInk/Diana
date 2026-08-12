@@ -68,8 +68,11 @@ func TestDianaChatHistoryToolEnforcesBounds(t *testing.T) {
 	if got := chatHistoryBoundedInt(map[string]any{"before": 999}, "before", 4, maximumChatHistoryAroundRadius); got != maximumChatHistoryAroundRadius {
 		t.Fatalf("before = %d", got)
 	}
-	if got := chatHistoryPositiveInt(map[string]any{"hours": 999}, "hours", defaultChatHistorySearchHours, maximumChatHistorySearchHours); got != maximumChatHistorySearchHours {
+	if got := chatHistoryPositiveInt(map[string]any{"hours": 999}, "hours", defaultChatHistorySearchHours, maximumChatHistorySearchHours); got != 999 {
 		t.Fatalf("hours = %d", got)
+	}
+	if !chatHistoryBool(map[string]any{"all_time": "true"}, "all_time") {
+		t.Fatal("all_time string should be accepted")
 	}
 	if got := chatHistoryPositiveInt(map[string]any{"limit": 999}, "limit", defaultChatHistoryRecentLimit, maximumChatHistoryResultLimit); got != maximumChatHistoryResultLimit {
 		t.Fatalf("limit = %d", got)
@@ -91,6 +94,38 @@ func TestDianaChatHistoryToolEnforcesBounds(t *testing.T) {
 	}
 	if !bounded.Limited || len(bounded.Items) >= maximumChatHistoryResultLimit {
 		t.Fatalf("bounded result = %#v", bounded)
+	}
+}
+
+func TestDianaChatHistoryToolCrossGroupSearchRequiresOptInAndKeepsNamespace(t *testing.T) {
+	disabled := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := &capturingHistorySearchStore{}
+	disabled.SetMessageHistoryStore(store)
+	event := MessageEvent{Kind: EventKindGroup, Time: 200, GroupID: "current", UserID: "owner", ContextNamespace: "bot-a"}
+	_, err := newDianaChatHistoryTool(disabled, event).Run(context.Background(), map[string]any{
+		"operation": "search", "query": "长期记忆", "scope": "all_groups", "all_time": true,
+	})
+	if err == nil || store.calls != 0 {
+		t.Fatalf("disabled cross-group search err=%v calls=%d", err, store.calls)
+	}
+
+	enabled := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	enabled.SetMessageHistoryStore(store)
+	raw, err := newDianaChatHistoryTool(enabled, event).Run(context.Background(), map[string]any{
+		"operation": "search", "query": "长期记忆", "scope": "all_groups", "all_time": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.calls != 1 || !store.query.CrossSession || store.query.SessionPrefix != "bot-a:group:" || store.query.FromTime != 0 {
+		t.Fatalf("captured query = %#v calls=%d", store.query, store.calls)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].GroupID != "other" {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -174,4 +209,25 @@ func chatHistoryTextEvent(eventTime int64, userID, sender, messageID, text strin
 		MessageID:  messageID,
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}},
 	}
+}
+
+type capturingHistorySearchStore struct {
+	calls int
+	query MessageHistorySearchQuery
+}
+
+func (s *capturingHistorySearchStore) AppendMessageEvent(context.Context, string, MessageEvent) error {
+	return nil
+}
+
+func (s *capturingHistorySearchStore) ListRecentMessageEvents(context.Context, string, int) ([]MessageEvent, error) {
+	return nil, nil
+}
+
+func (s *capturingHistorySearchStore) SearchMessageEvents(_ context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	s.calls++
+	s.query = query
+	event := chatHistoryTextEvent(100, "alice", "Alice", "old", "长期记忆")
+	event.GroupID = "other"
+	return []MessageEvent{event}, 1, nil
 }

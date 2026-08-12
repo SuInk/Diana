@@ -98,21 +98,24 @@ const (
 	RunPhaseFailed         RunPhase = "failed"
 )
 
-// RunEvent is a privacy-safe lifecycle event emitted by the Agent harness.
-// It intentionally exposes input keys and sizes, never raw prompts or tool data.
+// RunEvent is emitted by the Agent harness. Normal observers should continue to
+// use the summary fields; raw fields are for an explicitly enabled debug sink.
 type RunEvent struct {
-	TraceID      string
-	Phase        RunPhase
-	ModelTurn    int
-	ToolCall     int
-	MaxToolCalls int
-	Tool         string
-	InputKeys    []string
-	OutputChars  int
-	DurationMS   int64
-	Error        string
-	FinishReason string
-	Usage        llm.Usage
+	TraceID        string
+	Phase          RunPhase
+	ModelTurn      int
+	ToolCall       int
+	MaxToolCalls   int
+	Tool           string
+	InputKeys      []string
+	ToolInput      map[string]any
+	ToolOutput     string
+	AvailableTools []ToolCatalogItem
+	OutputChars    int
+	DurationMS     int64
+	Error          string
+	FinishReason   string
+	Usage          llm.Usage
 }
 
 type RunObserver func(context.Context, RunEvent)

@@ -305,13 +305,14 @@ func (p *MessageHistoryPlugin) lookupEvent(groupID, userID, messageID string) (M
 
 func quotedMessageFromHistory(event MessageEvent) *QuotedMessage {
 	return &QuotedMessage{
-		MessageID:               event.MessageID,
-		UserID:                  event.UserID,
-		GroupID:                 event.GroupID,
-		SenderName:              event.SenderName,
-		RawMessage:              event.RawMessage,
-		Segments:                event.Segments,
-		SemanticSourceMessageID: event.SemanticSourceMessageID,
+		MessageID:                event.MessageID,
+		UserID:                   event.UserID,
+		GroupID:                  event.GroupID,
+		SenderName:               event.SenderName,
+		RawMessage:               event.RawMessage,
+		Segments:                 event.Segments,
+		SemanticSourceMessageID:  event.SemanticSourceMessageID,
+		SemanticSourceMessageIDs: append([]string(nil), event.SemanticSourceMessageIDs...),
 	}
 }
 
@@ -345,10 +346,7 @@ func formatRecallRecords(recalls []MessageEvent, referenceTime int64) string {
 		"图片说明=优先使用已缓存的图片内容描述；标记为附件的图片按附件编号与下方多模态图片从1开始一一对应，必须查看对应图片后再描述。",
 	}, "\n"))
 	for i, record := range recalls {
-		text := strings.TrimSpace(PlainText(record.Segments))
-		if text == "" {
-			text = strings.TrimSpace(record.RawMessage)
-		}
+		text := historyPlainText(record)
 		if text == "" {
 			text = "(无纯文本)"
 		}

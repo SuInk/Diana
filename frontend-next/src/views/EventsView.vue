@@ -88,15 +88,15 @@
                 <component :is="decisionIcon(event)" :size="16" aria-hidden="true" />
                 <div>
                   <strong>{{ decisionReasonLabel(event) }}</strong>
-                  <p>{{ event.reason }}</p>
+                  <p>{{ event.reason || fallbackDecisionReason(event) }}</p>
                 </div>
               </div>
 
-              <div v-if="event.reply" class="event-detail-reply">
-                <strong>机器人回复</strong>
-                <p>{{ event.reply }}</p>
+              <div v-if="event.decision === 'replied' || event.handled" class="event-detail-reply">
+                <strong>回复结果</strong>
+                <p>{{ replyResultText(event) }}</p>
               </div>
-              <p v-if="event.error && !event.reason.includes(event.error)" class="event-error">{{ event.error }}</p>
+              <p v-if="event.error && !(event.reason || '').includes(event.error)" class="event-error">{{ event.error }}</p>
 
               <div class="event-technical muted mono">
                 <span v-if="event.message_id">消息 {{ event.message_id }}</span>
@@ -104,6 +104,57 @@
                 <span v-if="event.total_tokens">
                   Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}）
                 </span>
+              </div>
+
+              <div class="event-debug-trace">
+                <button class="btn event-debug-toggle" type="button" :disabled="traceLoading[event.id]" @click="toggleTrace(event)">
+                  <LoaderCircle v-if="traceLoading[event.id]" :size="14" class="spin" aria-hidden="true" />
+                  <Bug v-else :size="14" aria-hidden="true" />
+                  {{ traceOpen[event.id] ? "收起调用链" : "查看模型上下文与调用链" }}
+                  <ChevronDown :size="14" :class="{ 'trace-chevron-open': traceOpen[event.id] }" aria-hidden="true" />
+                </button>
+
+                <div v-if="traceOpen[event.id]" class="debug-trace-panel">
+                  <div v-if="traceLoading[event.id]" class="debug-trace-empty muted">正在读取调试记录</div>
+                  <div v-else-if="(traceSteps[event.id]?.length ?? 0) === 0" class="debug-trace-empty muted">
+                    这条事件没有调试记录。调试模式默认关闭，开启后仅记录新事件。
+                  </div>
+                  <ol v-else class="debug-trace-list">
+                    <li v-for="(step, index) in traceSteps[event.id]" :key="step.id" class="debug-trace-step">
+                      <div class="debug-step-header">
+                        <span class="debug-step-index mono">{{ index + 1 }}</span>
+                        <strong>{{ tracePhaseLabel(step) }}</strong>
+                        <span class="muted mono">{{ formatClock(step.created_at) }}</span>
+                        <span v-if="traceDuration(step)" class="muted">{{ traceDuration(step) }}</span>
+                      </div>
+                      <p v-if="traceSummary(step)" class="debug-step-summary">{{ traceSummary(step) }}</p>
+                      <div v-if="traceJSON(step, 'request')" class="debug-payload">
+                        <span>模型请求上下文</span>
+                        <pre>{{ traceJSON(step, "request") }}</pre>
+                      </div>
+                      <div v-if="traceJSON(step, 'response')" class="debug-payload">
+                        <span>模型响应</span>
+                        <pre>{{ traceJSON(step, "response") }}</pre>
+                      </div>
+                      <div v-if="traceJSON(step, 'available_tools')" class="debug-payload">
+                        <span>可用工具</span>
+                        <pre>{{ traceJSON(step, "available_tools") }}</pre>
+                      </div>
+                      <div v-if="traceJSON(step, 'tool_input')" class="debug-payload">
+                        <span>工具参数</span>
+                        <pre>{{ traceJSON(step, "tool_input") }}</pre>
+                      </div>
+                      <div v-if="traceText(step, 'tool_output')" class="debug-payload">
+                        <span>工具结果</span>
+                        <pre>{{ traceText(step, "tool_output") }}</pre>
+                      </div>
+                      <div v-if="traceText(step, 'error')" class="debug-payload err">
+                        <span>错误</span>
+                        <pre>{{ traceText(step, "error") }}</pre>
+                      </div>
+                    </li>
+                  </ol>
+                </div>
               </div>
             </div>
           </article>
@@ -134,6 +185,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import {
   Activity,
+  Bug,
   CheckCircle2,
   ChevronDown,
   Clock3,
@@ -147,7 +199,9 @@ import {
   TriangleAlert
 } from "@lucide/vue";
 import {
+  getAssistantEventTrace,
   getAssistantEvents,
+  type AppLogEntry,
   type AssistantEventDetail,
   type AssistantEventRange,
   type AssistantEventsResponse
@@ -172,6 +226,10 @@ const response = ref<AssistantEventsResponse | null>(null);
 const page = ref(1);
 const loading = ref(false);
 const loadingMore = ref(false);
+const traceOpen = ref<Record<string, boolean>>({});
+const traceLoading = ref<Record<string, boolean>>({});
+const traceLoaded = ref<Record<string, boolean>>({});
+const traceSteps = ref<Record<string, AppLogEntry[]>>({});
 let refreshTimer: number | null = null;
 
 const summary = computed(() => ({
@@ -265,6 +323,20 @@ function decisionReasonLabel(event: AssistantEventDetail): string {
   return "未回复原因";
 }
 
+function fallbackDecisionReason(event: AssistantEventDetail): string {
+  if (event.decision === "pending") return "消息仍在等待机器人处理";
+  if (event.decision === "error") return event.error?.trim() || "消息处理发生异常，但没有保存更详细的错误";
+  if (event.decision === "replied" || event.handled) return "消息已通过回复路由并完成回答";
+  if (event.outcome) return `消息未回复，处理结果为 ${event.outcome}`;
+  return "消息未命中回复规则，旧记录没有保存更详细的判断原因";
+}
+
+function replyResultText(event: AssistantEventDetail): string {
+  if (event.reply?.trim()) return event.reply;
+  if (event.error?.trim()) return `机器人已发送错误说明：${event.error}`;
+  return "已完成回复，但该历史记录未保存回复正文";
+}
+
 function formatDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
@@ -274,6 +346,77 @@ function formatDate(iso: string): string {
 function formatDuration(durationMS: number): string {
   if (durationMS < 1000) return `${durationMS}ms`;
   return `${(durationMS / 1000).toFixed(1)}s`;
+}
+
+async function toggleTrace(event: AssistantEventDetail): Promise<void> {
+  if (traceOpen.value[event.id]) {
+    traceOpen.value = { ...traceOpen.value, [event.id]: false };
+    return;
+  }
+  traceOpen.value = { ...traceOpen.value, [event.id]: true };
+  if (traceLoaded.value[event.id]) return;
+  traceLoading.value = { ...traceLoading.value, [event.id]: true };
+  try {
+    const result = await getAssistantEventTrace(event.id);
+    traceSteps.value = { ...traceSteps.value, [event.id]: result.steps ?? [] };
+    traceLoaded.value = { ...traceLoaded.value, [event.id]: true };
+  } catch (error) {
+    traceOpen.value = { ...traceOpen.value, [event.id]: false };
+    toastError(error instanceof Error ? error.message : "调试调用链加载失败");
+  } finally {
+    traceLoading.value = { ...traceLoading.value, [event.id]: false };
+  }
+}
+
+function traceMetadata(step: AppLogEntry): Record<string, unknown> {
+  return step.metadata ?? {};
+}
+
+function tracePhaseLabel(step: AppLogEntry): string {
+  const phase = String(traceMetadata(step).phase ?? "");
+  const labels: Record<string, string> = {
+    model_request: "模型请求",
+    agent_started: "Agent 启动",
+    agent_tool_started: "工具调用开始",
+    agent_tool_completed: "工具调用完成",
+    agent_protocol_repair: "Agent 协议修正",
+    agent_completed: "Agent 完成",
+    agent_failed: "Agent 失败"
+  };
+  return labels[phase] ?? step.message;
+}
+
+function traceSummary(step: AppLogEntry): string {
+  const metadata = traceMetadata(step);
+  const parts: string[] = [];
+  if (metadata.purpose) parts.push(`用途：${String(metadata.purpose)}`);
+  if (metadata.provider) parts.push(`Provider：${String(metadata.provider)}`);
+  if (metadata.model) parts.push(`模型：${String(metadata.model)}`);
+  if (metadata.tool) parts.push(`工具：${String(metadata.tool)}`);
+  if (metadata.finish_reason) parts.push(`结束原因：${String(metadata.finish_reason)}`);
+  return parts.join(" · ");
+}
+
+function traceJSON(step: AppLogEntry, key: string): string {
+  const value = traceMetadata(step)[key];
+  if (value === undefined || value === null) return "";
+  if (Array.isArray(value) && value.length === 0) return "";
+  if (typeof value === "object" && !Array.isArray(value) && Object.keys(value as Record<string, unknown>).length === 0) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function traceText(step: AppLogEntry, key: string): string {
+  const value = traceMetadata(step)[key];
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function traceDuration(step: AppLogEntry): string {
+  const value = Number(traceMetadata(step).duration_ms ?? 0);
+  return value > 0 ? formatDuration(value) : "";
 }
 
 watch(
@@ -375,6 +518,104 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
+}
+
+.event-debug-trace {
+  margin-top: 14px;
+}
+
+.event-debug-toggle {
+  min-height: 34px;
+  font-size: 12px;
+}
+
+.event-debug-toggle svg:last-child {
+  transition: transform 160ms ease;
+}
+
+.trace-chevron-open {
+  transform: rotate(180deg);
+}
+
+.debug-trace-panel {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.debug-trace-empty {
+  padding: 18px 0;
+  font-size: 12px;
+}
+
+.debug-trace-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.debug-trace-step {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.debug-trace-step:last-child {
+  border-bottom: 0;
+}
+
+.debug-step-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+}
+
+.debug-step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+.debug-step-summary {
+  margin: 8px 0 0 36px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.debug-payload {
+  margin: 12px 0 0 36px;
+}
+
+.debug-payload > span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.debug-payload pre {
+  max-height: 520px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.debug-payload.err pre {
+  border-color: color-mix(in srgb, var(--err) 36%, var(--border));
 }
 
 .event-detail-message,
@@ -479,6 +720,11 @@ onBeforeUnmount(() => {
   .event-detail-time {
     flex-direction: row;
     align-items: baseline;
+  }
+
+  .debug-step-summary,
+  .debug-payload {
+    margin-left: 0;
   }
 }
 </style>

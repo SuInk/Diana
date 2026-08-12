@@ -11,6 +11,9 @@ type Kind string
 const (
 	KindOperation Kind = "operation"
 	KindError     Kind = "error"
+	// KindDebug stores opt-in diagnostic payloads separately from the normal
+	// operation log because they may contain complete model context.
+	KindDebug Kind = "debug"
 )
 
 type Level string

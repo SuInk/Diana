@@ -226,7 +226,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 			name:        "reliable follow-up",
 			routeReply:  `{"should_reply":true,"confidence":0.96,"category":"bot_related","target_message_id":"reply-1","turn_message_ids":["reply-1"],"directed_at_bot":true,"answerable":true,"reason":"上下文足够可靠回答"}`,
 			wantHandled: true,
-			wantOutcome: "replied",
+			wantOutcome: "replied_passive",
 		},
 		{
 			name:        "missing information",
@@ -285,6 +285,70 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 				t.Fatal("direct bot follow-up was incorrectly queued in the passive batch")
 			}
 		})
+	}
+}
+
+func TestRuntimeJudgesPassiveGroupMessagesImmediately(t *testing.T) {
+	tests := []struct {
+		name        string
+		routeReply  string
+		wantHandled bool
+		wantOutcome string
+	}{
+		{
+			name:        "selected",
+			routeReply:  `{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","turn_message_ids":["message-1"],"directed_at_bot":false,"answerable":true}`,
+			wantHandled: true,
+			wantOutcome: "replied_passive",
+		},
+		{
+			name:        "not selected",
+			routeReply:  `{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":false,"answerable":false,"reason":"普通闲聊无需插话"}`,
+			wantHandled: false,
+			wantOutcome: "ignored",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &sequenceLLMProvider{replies: []string{tt.routeReply}}
+			runtime := NewRuntime(BotConfig{
+				BotQQ: "42", PassiveReplyChance: 1, PassiveReplyThreshold: 0.8,
+			}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+				return provider, nil
+			})
+			event := MessageEvent{
+				Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1",
+				RawMessage: "这个报错应该怎么处理？",
+				Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错应该怎么处理？"}}},
+			}
+
+			_, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), event)
+			if handled != tt.wantHandled || outcome != tt.wantOutcome {
+				t.Fatalf("handled=%v outcome=%q, want handled=%v outcome=%q", handled, outcome, tt.wantHandled, tt.wantOutcome)
+			}
+			if len(provider.requestsSnapshot()) != 1 {
+				t.Fatalf("router calls=%d, want immediate single judgment", len(provider.requestsSnapshot()))
+			}
+			if !tt.wantHandled {
+				recent := runtime.Status().RecentEvents
+				if len(recent) == 0 || !strings.Contains(recent[0].Reason, "普通闲聊无需插话") {
+					t.Fatalf("not-replied reason = %#v", recent)
+				}
+			}
+			runtime.passiveBatchMu.Lock()
+			_, queued := runtime.passiveBatches[sessionKey(event)]
+			runtime.passiveBatchMu.Unlock()
+			if queued {
+				t.Fatal("message was left in the passive batch")
+			}
+		})
+	}
+}
+
+func TestQueuedPassiveLegacyOutcomeIsTerminal(t *testing.T) {
+	decision, reason, handled := DescribeEventOutcome("queued_passive")
+	if decision != "not_replied" || handled || !strings.Contains(reason, "旧版本") {
+		t.Fatalf("decision=%q reason=%q handled=%v", decision, reason, handled)
 	}
 }
 
@@ -455,6 +519,9 @@ func TestDefaultBotConfigKeepsTwentyMessagesAndCompressesAtOneHundred(t *testing
 	cfg := DefaultBotConfig()
 	if cfg.RecentContextLimit != 20 || cfg.ContextSummaryThreshold != 100 {
 		t.Fatalf("context defaults = recent %d threshold %d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
+	}
+	if !boolValue(cfg.LongTermMemoryEnabled, false) || boolValue(cfg.CrossGroupMemoryEnabled, true) {
+		t.Fatalf("memory defaults = long_term %v cross_group %v", cfg.LongTermMemoryEnabled, cfg.CrossGroupMemoryEnabled)
 	}
 	if cfg.PassiveReplyChance != 1 {
 		t.Fatalf("passive reply chance = %v, want 1", cfg.PassiveReplyChance)
@@ -713,7 +780,7 @@ func TestRuntimeEnrichesQuotedForwardMediaAndCachesVideoFrames(t *testing.T) {
 		t.Fatal("quoted forward was lost")
 	}
 	quotedText := PlainText(event.Quoted.Segments)
-	if !strings.Contains(quotedText, "Alice: [视频]") || !strings.Contains(quotedText, "Alice: [图片]") || strings.Contains(quotedText, "map[") {
+	if !strings.Contains(quotedText, "Alice: [视频]") || strings.Contains(quotedText, "[图片]") || strings.Contains(quotedText, "map[") {
 		t.Fatalf("quoted forward text = %q", quotedText)
 	}
 	var video, image MessageSegment
@@ -1020,13 +1087,10 @@ func TestDianaConfigToolReturnsRedactedBotConfigAndSkills(t *testing.T) {
 			t.Fatalf("tool output leaked %q: %s", leaked, got)
 		}
 	}
-	for _, want := range []string{"owner_llm_config_enabled", "api_key_configured", "onebot_access_token_configured", "installed_skills"} {
+	for _, want := range []string{"owner_llm_config_enabled", "api_key_configured", "onebot_access_token_configured", "installed_skills", llmConfigPluginID} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tool output missing %q: %s", want, got)
 		}
-	}
-	if strings.Contains(got, "official.llm-config-skill") {
-		t.Fatalf("legacy LLM config plugin should not be exposed: %s", got)
 	}
 }
 
@@ -1254,8 +1318,8 @@ func TestRuntimeFallsBackToTextRecallForwardWhenMediaForwardFails(t *testing.T) 
 	if !forwardCallContainsSegmentType(forwardCalls[0], "image") || forwardCallContainsSegmentType(forwardCalls[1], "image") {
 		t.Fatalf("media fallback calls = %#v", forwardCalls)
 	}
-	if !forwardCallContainsText(forwardCalls[1], "[图片]") {
-		t.Fatalf("text fallback missing image marker: %#v", forwardCalls[1])
+	if !forwardCallContainsText(forwardCalls[1], "图片转发失败，原图未包含在本条文本回退中。") || forwardCallContainsText(forwardCalls[1], "[图片]") {
+		t.Fatalf("text fallback missing explicit image failure: %#v", forwardCalls[1])
 	}
 }
 
@@ -1559,15 +1623,25 @@ func TestRuntimeOwnerCommandsSwitchProfilesAndClearHistory(t *testing.T) {
 	}
 }
 
-// TestRuntimeLLMConfigCommandRepliesBeforeLLM verifies that the built-in owner
-// command remains available without exposing a separate plugin card.
-func TestRuntimeLLMConfigCommandRepliesBeforeLLM(t *testing.T) {
-	channel := &recordingChannel{}
-	store := &stubLLMProfileStore{
-		set: llm.ProfileSet{
-			ActiveID: "main",
-			Profiles: []llm.Profile{
-				{
+func TestRuntimeModelDiscussionNeverMutatesLLMConfigBeforeReply(t *testing.T) {
+	tests := []struct {
+		name   string
+		userID string
+		text   string
+	}{
+		{name: "member discusses OCR model selector", userID: "20002", text: "我做了一个 OCR 和模型选择页面，用户可以自行选择模型"},
+		{name: "owner natural language is still ordinary chat", userID: "10001", text: "以后用 Anthropic 的 claude-sonnet-4-5 会不会更好？"},
+		{name: "owner compares models", userID: "10001", text: "比较 Gemini 和 Claude 处理长文档的能力"},
+		{name: "owner discusses API gateway", userID: "10001", text: "这个 OpenAI API 中转项目还支持哪些功能？"},
+		{name: "member config-like text reaches main model", userID: "20002", text: "把 Diana 的模型切到 claude-sonnet-4-5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := &recordingChannel{}
+			provider := &capturingLLMProvider{reply: "这是模型相关讨论，不会修改 Diana 配置。"}
+			store := &stubLLMProfileStore{set: llm.ProfileSet{
+				ActiveID: "main",
+				Profiles: []llm.Profile{{
 					ID:   "main",
 					Name: "主配置",
 					Config: llm.ProviderConfig{
@@ -1575,55 +1649,26 @@ func TestRuntimeLLMConfigCommandRepliesBeforeLLM(t *testing.T) {
 						APIKey:   "valid-key",
 						Model:    "example-chat-model",
 					},
-				},
-			},
-		},
-	}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, channel, NewPluginManager(), store, nil, nil, func() (LLMProvider, error) {
-		t.Fatal("llmFactory should not be called for config command")
-		return nil, nil
-	})
+				}},
+			}}
+			runtime := NewRuntime(BotConfig{OwnerID: "10001"}, channel, NewDefaultPluginManager(), store, nil, nil, func() (LLMProvider, error) {
+				return provider, nil
+			})
 
-	reply, err := runtime.replyTo(context.Background(), MessageEvent{Kind: EventKindPrivate, UserID: "10001", RawMessage: "以后用 Anthropic 的 claude-sonnet-4-5"}, "以后用 Anthropic 的 claude-sonnet-4-5")
-	if err != nil {
-		t.Fatalf("replyTo() error = %v", err)
-	}
-	if !strings.Contains(reply, "已更新当前 LLM") || len(channel.sent) != 1 {
-		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
-	}
-	if got := store.Current(); got.Provider != llm.ProviderAnthropic || got.Model != "claude-sonnet-4-5" {
-		t.Fatalf("current = %#v", got)
-	}
-}
-
-func TestRuntimeLLMConfigCommandCanBeDisabledPerBot(t *testing.T) {
-	disabled := false
-	store := &stubLLMProfileStore{
-		set: llm.ProfileSet{
-			ActiveID: "main",
-			Profiles: []llm.Profile{{
-				ID: "main",
-				Config: llm.ProviderConfig{
-					Provider: llm.ProviderOpenAICompatible,
-					APIKey:   "valid-key",
-					Model:    "example-chat-model",
-				},
-			}},
-		},
-	}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", OwnerLLMConfigEnabled: &disabled}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
-
-	reply, handled := runtime.handleLLMConfigCommand(
-		context.Background(),
-		runtime.Config(),
-		MessageEvent{Kind: EventKindPrivate, UserID: "10001"},
-		"把模型换成 gpt-4.1-mini",
-	)
-	if handled || reply != "" {
-		t.Fatalf("reply=%q handled=%v, want command disabled", reply, handled)
-	}
-	if got := store.Current().Model; got != "example-chat-model" {
-		t.Fatalf("model = %q, want unchanged", got)
+			reply, err := runtime.replyTo(context.Background(), MessageEvent{Kind: EventKindPrivate, UserID: tt.userID, RawMessage: tt.text}, tt.text)
+			if err != nil {
+				t.Fatalf("replyTo() error = %v", err)
+			}
+			if reply != provider.reply || len(channel.sentSnapshot()) != 1 {
+				t.Fatalf("reply=%q sent=%#v", reply, channel.sentSnapshot())
+			}
+			if got := provider.requestSnapshot(); len(got.Messages) == 0 {
+				t.Fatal("main LLM did not receive the discussion")
+			}
+			if got := store.Current(); got.Provider != llm.ProviderOpenAICompatible || got.Model != "example-chat-model" {
+				t.Fatalf("current = %#v, want unchanged", got)
+			}
+		})
 	}
 }
 
@@ -1976,6 +2021,66 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 	}
 }
 
+func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"message_ids":["img-3","img-1","img-2"],"confidence":0.98,"reason":"当前问题指向连发的三张图片"}`,
+		`{"action":"none","prompt":""}`,
+		"三张图片都已读取。",
+	}}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	imageURLs := []string{
+		"data:image/png;base64,YQ==",
+		"data:image/png;base64,Yg==",
+		"data:image/png;base64,Yw==",
+	}
+	for index, imageURL := range imageURLs {
+		runtime.remember(MessageEvent{
+			Kind:       EventKindPrivate,
+			Time:       int64(100 + index),
+			UserID:     "10001",
+			MessageID:  "img-" + strconv.Itoa(index+1),
+			RawMessage: "[图片]",
+			Segments:   []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURL}}},
+		})
+	}
+
+	reply, err := runtime.replyTo(context.Background(), MessageEvent{
+		Kind:       EventKindPrivate,
+		Time:       110,
+		UserID:     "10001",
+		MessageID:  "q-multi-image",
+		RawMessage: "读我连发的三张图",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "读我连发的三张图"}}},
+	}, "读我连发的三张图")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply != "三张图片都已读取。" || len(provider.requests) != 3 {
+		t.Fatalf("reply=%q requests=%d", reply, len(provider.requests))
+	}
+	finalRequest := provider.requests[2]
+	var actualImages []string
+	for _, message := range finalRequest.Messages {
+		if strings.Contains(message.Content, "[图片]") {
+			t.Fatalf("image placeholder leaked into final request: %#v", finalRequest.Messages)
+		}
+		for _, part := range message.Parts {
+			if strings.Contains(part.Text, "[图片]") {
+				t.Fatalf("image placeholder leaked into final request: %#v", finalRequest.Messages)
+			}
+			if part.Type == llm.ContentPartImageURL {
+				actualImages = append(actualImages, part.ImageURL)
+			}
+		}
+	}
+	if got := strings.Join(actualImages, ","); got != strings.Join(imageURLs, ",") {
+		t.Fatalf("final request images = %#v", actualImages)
+	}
+}
+
 func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 	channel := &recordingChannel{}
 	imageURL := "data:image/png;base64,aGVsbG8="
@@ -2027,7 +2132,7 @@ func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 }
 
 func TestRuntimePassiveReplyRecordsSemanticDecision(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.82,"category":"bot_related","directed_at_bot":true,"answerable":true}`}
+	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.82,"category":"bot_related","directed_at_bot":true,"answerable":true,"reason":"明确承接了机器人上一条回复且问题可回答"}`}
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(BotConfig{
 		BotQQ:                 "42",
@@ -2045,8 +2150,14 @@ func TestRuntimePassiveReplyRecordsSemanticDecision(t *testing.T) {
 		RawMessage: "如果给你一个 PDF，你会怎么处理",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "如果给你一个 PDF，你会怎么处理"}}},
 	}
-	if !runtime.shouldHandlePassiveReply(context.Background(), event, event.RawMessage) {
+	routed, _, _, allowed := runtime.routePassiveReplyBatch(context.Background(), []passiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+	if !allowed {
 		t.Fatal("qualified bot follow-up should pass the semantic router")
+	}
+	for _, want := range []string{"允许回复", "明确承接了机器人上一条回复", "置信度 82%", "指向机器人 true", "可回答 true"} {
+		if !strings.Contains(routed.routingReason, want) {
+			t.Fatalf("routing reason %q missing %q", routed.routingReason, want)
+		}
 	}
 	if len(provider.request.Messages) == 0 {
 		t.Fatal("passive router did not call the LLM")

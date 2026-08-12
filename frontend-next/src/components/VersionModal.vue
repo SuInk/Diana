@@ -34,7 +34,7 @@
       </div>
 
       <div class="cluster" style="gap: 8px">
-        <button class="btn" type="button" :disabled="checking || updating" @click="check">
+        <button class="btn" type="button" :disabled="checking || updating" @click="check()">
           <RefreshCw :size="14" aria-hidden="true" />
           {{ checking ? "检查中…" : "检查更新" }}
         </button>
@@ -43,7 +43,7 @@
           class="btn primary"
           type="button"
           :disabled="updating"
-          @click="update"
+          @click="confirmUpdate"
         >
           <Download :size="14" aria-hidden="true" />
           {{ updating ? "更新中…" : "立即更新" }}
@@ -83,7 +83,7 @@
         <div class="cluster" style="justify-content: space-between">
           <h3 style="margin: 0; font-size: 14px">最近版本</h3>
           <span class="muted" style="font-size: 12.5px">
-            {{ deploymentMode === "git" ? "回退后自动暂停更新" : releaseSelfUpdate ? "异常时自动回退" : "固定镜像标签后由部署环境重启" }}
+            {{ deploymentMode === "git" ? "支持手动回退" : releaseSelfUpdate ? "异常时自动恢复旧版本" : "固定镜像标签后由部署环境重启" }}
           </span>
         </div>
         <ul class="recent-version-list">
@@ -216,6 +216,7 @@ import {
   type UpdateStatus
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../confirm";
 
 const emit = defineEmits<{ close: []; checked: [available: boolean] }>();
 
@@ -300,17 +301,19 @@ async function load(): Promise<void> {
   }
 }
 
-async function check(): Promise<void> {
+async function check(notify = true): Promise<void> {
   checking.value = true;
   updatedHint.value = "";
   try {
     checkResult.value = await checkForUpdate();
     status.value = checkResult.value.status ?? status.value;
     emit("checked", checkResult.value.update_available);
-    if (checkResult.value.update_available) {
-      toastSuccess(`发现新版本 ${checkResult.value.latest_version || ""}`.trim());
-    } else {
-      toastSuccess("已是最新版本");
+    if (notify) {
+      if (checkResult.value.update_available) {
+        toastSuccess(`发现新版本 ${checkResult.value.latest_version || ""}`.trim());
+      } else {
+        toastSuccess("已是最新版本");
+      }
     }
   } catch (error) {
     toastError(error instanceof Error ? error.message : "检查更新失败");
@@ -339,6 +342,20 @@ async function update(): Promise<void> {
   }
 }
 
+async function confirmUpdate(): Promise<void> {
+  const target = checkResult.value?.latest_version || "最新稳定版本";
+  const confirmed = await askConfirm({
+    title: `更新到 ${target}？`,
+    message: releaseSelfUpdate.value
+      ? "确认后才会下载并校验完整 Release 包、备份数据库和当前版本，再切换版本并执行健康检查。"
+      : "确认后才会同步到最新稳定 Release。更新完成前请勿关闭服务。",
+    confirmLabel: "确认更新"
+  });
+  if (confirmed) {
+    await update();
+  }
+}
+
 async function forceUpdate(): Promise<void> {
   updating.value = true;
   try {
@@ -364,7 +381,7 @@ async function rollback(): Promise<void> {
     const target = rollbackTarget.value.tag;
     const response = await rollbackSystem(target);
     status.value = response.result.status;
-    updatedHint.value = `已回退到 ${target}，自动更新已暂停；重启服务后生效`;
+    updatedHint.value = `已回退到 ${target}，重启服务后生效`;
     rollbackTarget.value = null;
     toastSuccess(`已回退到 ${target}`);
   } catch (error) {
@@ -384,7 +401,10 @@ async function copyImageTag(tag: string): Promise<void> {
   }
 }
 
-onMounted(load);
+onMounted(async () => {
+  await load();
+  await check(false);
+});
 </script>
 
 <style scoped>
