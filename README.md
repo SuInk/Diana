@@ -2,11 +2,11 @@
 
 [English](./README.en.md)
 
-Diana 是一个 Go 语言多平台 AI 助手服务，内置 LLM 兼容层、平台适配层、Gin WebUI 和插件管理。当前自带 QQ 的 NapCat / OneBot v11 适配器；WebUI 可管理多个助手实例、模型、平台连接、触发词和内置插件。
+Diana 是一个 Go 语言多平台 AI 助手服务，内置 LLM 兼容层、平台适配层、Gin WebUI 和插件管理。当前自带 QQ 的 OneBot v11 适配器；WebUI 可管理多个助手实例、模型、平台连接、触发词和内置插件。
 
 ## 安装要求
 
-- 使用 QQ 适配器时需要 NapCat，并开启 OneBot v11 反向 WebSocket
+- 使用 QQ 适配器时需要支持 OneBot v11 反向 WebSocket 的客户端
 - 使用源码安装时需要 Go `1.26.5`、Node.js `22` 和 npm
 - 使用 Docker 部署时需要 Docker 或 Docker Compose
 
@@ -54,13 +54,13 @@ docker compose -f docker-compose.local.yml up -d --build
 http://127.0.0.1:18080
 ```
 
-NapCat 反向 WebSocket 连接宿主机暴露的地址：
+OneBot v11 客户端连接宿主机暴露的反向 WebSocket 地址：
 
 ```text
 ws://127.0.0.1:18080/onebot/v11/ws
 ```
 
-如果 NapCat 和机器人不在同一台机器，`127.0.0.1` 要换成机器人宿主机 IP 或域名。
+如果 OneBot v11 客户端和 Diana 不在同一台机器，`127.0.0.1` 要换成 Diana 宿主机 IP 或域名。
 
 ## 从源码安装
 
@@ -222,7 +222,7 @@ WebUI 从首次启动起强制登录，本机和公网访问使用相同规则�
 
 | 分类 | 平台 | 接入方式 |
 | --- | --- | --- |
-| QQ | NapCat、Lagrange.Core、go-cqhttp | OneBot V11 反向 WebSocket，由接入端连到 Diana |
+| QQ | OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana |
 | Telegram | Telegram | 官方 Bot API 长轮询，由 Diana 主动出站连接 |
 
 Telegram 只需要 BotFather 给的 Bot Token，不需要公网地址，也不用配置 webhook；国内网络通常还要在机器人页填写代理地址。部署了本地 Bot API server 时可填自建地址，绕过 50MB 上传限制。
@@ -244,7 +244,7 @@ GET /api/logs?kind=error&limit=100
 
 这些结构化日志存储在 `APP_DB_PATH` 指向的 SQLite 数据库中；`LOG_PATH` 仍用于普通运行日志文件输出。
 
-## 配置 NapCat
+## 配置 OneBot v11
 
 本项目直接提供 OneBot v11 反向 WebSocket endpoint：
 
@@ -252,7 +252,7 @@ GET /api/logs?kind=error&limit=100
 ws://127.0.0.1:18080/onebot/v11/ws
 ```
 
-在 NapCat 中添加 OneBot v11 反向 WebSocket，连接地址填写上面的地址。如果配置了 access token，NapCat 和本项目必须使用同一个 token。
+在兼容客户端中添加 OneBot v11 反向 WebSocket，连接地址填写上面的地址。如果配置了 access token，客户端和 Diana 必须使用同一个 token。NapCat、Lagrange.Core、go-cqhttp 等实现使用同一平台配置，不再作为不同平台分别创建。
 
 机器人启动示例：
 
@@ -343,7 +343,7 @@ Go 主程序不能直接加载 Python NoneBot 插件。要使用第三方 NoneBo
 ws://127.0.0.1:8080/onebot/v11/ws
 ```
 
-Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方插件调用 `send_msg`、`get_group_info` 等 OneBot API 时，Diana 会再转发给 NapCat。这样第三方插件仍然在原生 NoneBot2 运行环境中工作。
+Diana 会把客户端收到的 OneBot 事件转发给 NoneBot sidecar；第三方插件调用 `send_msg`、`get_group_info` 等 OneBot API 时，Diana 会再转发给当前 OneBot v11 客户端。这样第三方插件仍然在原生 NoneBot2 运行环境中工作。
 
 ## 常用环境变量
 
@@ -359,7 +359,7 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `DIANA_MEDIA_DIR` | `data/media` | 入站图片持久化目录；识图用本地文件的 base64 提交 |
 | `DIANA_MEDIA_MAX_MB` | `10` | 单张入站图片下载上限 |
 | `DIANA_MEDIA_CACHE_MB` | `512` | 图片目录总量上限，超出后按最后使用时间淘汰 |
-| `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | NapCat 可访问的 Diana 媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
+| `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | OneBot v11 客户端可访问的 Diana 媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
 | `DIANA_BILI_SESSDATA` | 空 | B 站登录 Cookie 中的 `SESSDATA`；WebUI 插件设置优先 |
 | `DIANA_DOUYIN_CK` | 空 | 抖音 Cookie；抖音解析必需，WebUI 插件设置优先 |
 | `DIANA_XHS_CK` | 空 | 小红书 Cookie；小红书解析必需，WebUI 插件设置优先 |
@@ -380,7 +380,7 @@ Diana 会把 NapCat 收到的 OneBot 事件转发给 NoneBot sidecar；第三方
 | `LLM_MAX_OUTPUT_TOKENS` | `1024` | Responses API 最大输出 token 数 |
 | `LLM_TIMEOUT_MS` | `30000` | LLM 请求超时，单位毫秒 |
 | `QQBOT_ENABLED` | `false` | 启动时是否自动启用机器人 |
-| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | 给 NapCat 连接的反向 WebSocket 地址 |
+| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | 给 OneBot v11 客户端连接的反向 WebSocket 地址 |
 | `ONEBOT_ACCESS_TOKEN` | 空 | OneBot access token |
 | `NONEBOT_BRIDGE_ENABLED` | `false` | 是否启用第三方 NoneBot 插件桥 |
 | `NONEBOT_BRIDGE_ENDPOINT` | `ws://127.0.0.1:8080/onebot/v11/ws` | NoneBot sidecar 的反向 WebSocket 地址 |

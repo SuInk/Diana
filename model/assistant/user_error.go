@@ -13,7 +13,7 @@ func publicQQErrorMessage(err error) string {
 		return "请求处理失败，请稍后重试。"
 	}
 	if errors.Is(err, errImageMediaUnavailable) {
-		return "图片读取失败：原图片地址不可用，NapCat 回退也没有取得可读取的本地文件或下载地址。请重新发送图片后再试。"
+		return "图片读取失败：原图片地址不可用，OneBot v11 回退也没有取得可读取的本地文件或下载地址。请重新发送图片后再试。"
 	}
 	raw := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(raw)

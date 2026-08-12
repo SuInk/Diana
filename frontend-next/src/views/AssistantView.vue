@@ -769,7 +769,7 @@ const allowlistDraft = ref("");
 const allowedGroupsDraft = ref("");
 const telegramTokenDraft = ref("");
 
-/** OneBot 系平台（NapCat / Lagrange / go-cqhttp）与 Telegram 的接入字段完全不同。 */
+/** OneBot v11 与 Telegram 的接入字段完全不同。 */
 /** 账号字段在不同平台叫法不同，列表卡片的占位文案跟着平台走。 */
 function accountPlaceholder(profile: QQBotConfig): string {
   const def = platforms.value.find((item) => item.id === profile.platform);
@@ -894,7 +894,7 @@ function platformName(id?: string): string {
 
 function platformProtocol(id?: string): string {
   return platformDefinition(id)?.protocol === "onebot-v11-reverse-ws"
-    ? "OneBot V11 反向 WebSocket"
+    ? "OneBot v11 反向 WebSocket"
     : (platformDefinition(id)?.protocol ?? "未识别协议");
 }
 
@@ -1493,7 +1493,7 @@ onMounted(async () => {
     platforms.value = (await getQQBotPlatforms()).platforms;
   } catch {
     platforms.value = [
-      { id: "napcat", name: "NapCat", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ" }
+      { id: "onebot-v11", name: "OneBot v11", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ" }
     ];
   }
   try {

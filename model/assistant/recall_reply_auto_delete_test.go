@@ -100,6 +100,31 @@ func TestRuntimeCollectsSentMessageIDAndDeletesItAfterDelay(t *testing.T) {
 	}
 }
 
+func TestRuntimeDeletesRecallReplyThroughSourceProfile(t *testing.T) {
+	first := newRecallDeleteChannel()
+	second := newRecallDeleteChannel()
+	runtime := NewRuntime(BotConfig{ID: "qq-second", Platform: PlatformOneBotV11}, NewMultiChannel([]ChannelBinding{
+		{ProfileID: "qq-first", Platform: PlatformOneBotV11, Channel: first},
+		{ProfileID: "qq-second", Platform: PlatformOneBotV11, Channel: second},
+	}), NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, ProfileID: "qq-first", Platform: PlatformOneBotV11, GroupID: "123"}
+
+	runtime.scheduleMessageDeletes(event, []string{"101"}, 0)
+	select {
+	case deleted := <-first.deleted:
+		if deleted != int64(101) {
+			t.Fatalf("deleted message id = %#v", deleted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("source profile did not receive delete_msg")
+	}
+	select {
+	case deleted := <-second.deleted:
+		t.Fatalf("other profile received delete_msg: %#v", deleted)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestRuntimeCollectsForwardMessageID(t *testing.T) {
 	channel := newRecallDeleteChannel()
 	runtime := NewRuntime(BotConfig{BotQQ: "42", DirectReplyChunkSize: 10, ForwardReplyThreshold: 5}, channel, NewPluginManager(), nil, nil, nil, nil)
