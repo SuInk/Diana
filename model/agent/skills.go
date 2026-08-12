@@ -27,6 +27,9 @@ type SkillMetadata struct {
 	ShortDescription string `json:"short_description,omitempty"`
 	Source           string `json:"source,omitempty"`
 	Managed          bool   `json:"managed,omitempty"`
+	// Content is populated only for skills embedded in the Diana binary. It is
+	// excluded from catalogs and registry cache keys; skills.read returns it.
+	Content string `json:"-"`
 }
 
 type skillInstallMetadata struct {
@@ -273,7 +276,7 @@ func (t *SkillsListTool) Name() string {
 }
 
 func (t *SkillsListTool) Description() string {
-	return `列出可用本地 SKILL.md skills。input: {}`
+	return `列出可用的内置或本地 SKILL.md skills。input: {}`
 }
 
 func (t *SkillsListTool) Run(context.Context, map[string]any) (string, error) {
@@ -305,14 +308,18 @@ func (t *SkillsReadTool) Run(_ context.Context, input map[string]any) (string, e
 		if skill.Name != name {
 			continue
 		}
-		body, err := os.ReadFile(skill.Path)
-		if err != nil {
-			return "", err
+		content := skill.Content
+		if content == "" {
+			body, err := os.ReadFile(skill.Path)
+			if err != nil {
+				return "", err
+			}
+			content = string(body)
 		}
 		payload := map[string]any{
 			"name":    skill.Name,
 			"path":    skill.Path,
-			"content": string(body),
+			"content": content,
 		}
 		encoded, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {

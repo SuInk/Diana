@@ -183,6 +183,16 @@ func (m *ExtensionManager) installSkill(ctx context.Context, req skillInstallReq
 	if req.Name != "" && req.Name != skill.Name {
 		return SkillMetadata{}, fmt.Errorf("skill name %q does not match requested name %q", skill.Name, req.Name)
 	}
+	for _, builtin := range normalizeBuiltinSkills(m.cfg.BuiltinSkills) {
+		if builtin.Name == skill.Name {
+			return SkillMetadata{}, fmt.Errorf("skill %q is built into Diana and cannot be replaced", skill.Name)
+		}
+	}
+	for _, reserved := range m.cfg.ReservedSkillNames {
+		if reserved == skill.Name {
+			return SkillMetadata{}, fmt.Errorf("skill %q is reserved by Diana and cannot be replaced", skill.Name)
+		}
+	}
 	metadataBody, err := json.MarshalIndent(skillInstallMetadata{
 		Source:      source,
 		InstalledAt: time.Now().UTC().Format(time.RFC3339),

@@ -22,6 +22,36 @@ type resolverSocialResult struct {
 	ForwardMessages []OutgoingMessage
 }
 
+// resolverSocialForwardMessages restores the merged-forward contract for the
+// current media resolver. Older platform adapters built these nodes themselves;
+// newer adapters return normalized context and media, so complete the same
+// structure before the response reaches the runtime sender.
+func resolverSocialForwardMessages(result resolverSocialResult) []OutgoingMessage {
+	if len(result.ForwardMessages) > 0 {
+		return append([]OutgoingMessage(nil), result.ForwardMessages...)
+	}
+	text := strings.TrimSpace(result.Context)
+	images := dedupeMediaURLs(result.ImageURLs)
+	videos := dedupeMediaURLs(result.VideoURLs)
+	nodes := make([]OutgoingMessage, 0, 1+len(images)+len(videos))
+	if len(videos) > 0 {
+		if text != "" || len(images) > 0 {
+			nodes = append(nodes, OutgoingMessage{Text: text, ImageURLs: images, ImagesFirst: true})
+		}
+	} else {
+		if text != "" {
+			nodes = append(nodes, OutgoingMessage{Text: text})
+		}
+		for _, imageURL := range images {
+			nodes = append(nodes, OutgoingMessage{ImageURLs: []string{imageURL}})
+		}
+	}
+	for _, videoURL := range videos {
+		nodes = append(nodes, OutgoingMessage{VideoURLs: []string{videoURL}})
+	}
+	return nodes
+}
+
 func resolverNickname() string {
 	return firstNonEmpty(
 		strings.TrimSpace(os.Getenv("DIANA_RESOLVER_NICKNAME")),

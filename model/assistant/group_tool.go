@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -34,6 +35,12 @@ type dianaQQGroupReplyPolicy struct {
 	ProactiveReplyChance    float64 `json:"proactive_reply_chance"`
 	ProactiveReplyThreshold float64 `json:"proactive_reply_threshold"`
 	MinimumReplyMemberLevel int     `json:"minimum_reply_member_level"`
+	ChatInEnabled           bool    `json:"chat_in_enabled"`
+	ChatInLevel             string  `json:"chat_in_level"`
+	ChatInLevelLabel        string  `json:"chat_in_level_label"`
+	ChatInThreshold         float64 `json:"chat_in_threshold"`
+	ChatInChance            float64 `json:"chat_in_chance"`
+	ChatInCooldownSeconds   int     `json:"chat_in_cooldown_seconds"`
 }
 
 type dianaQQGroupMemberItem struct {
@@ -56,7 +63,7 @@ func (t *dianaQQGroupTool) Name() string {
 }
 
 func (t *dianaQQGroupTool) Description() string {
-	return `读取当前 QQ 群的真实群信息、成员和回复策略。用户要求查群名、成员、群名片、昵称、QQ号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用；不要要求用户先手动 @。operation=info 读取群资料；operation=members 获取或检索成员；operation=reply_policy 读取本群插话概率、判断阈值和最低回复群等级；operation=set_reply_policy 修改这些设置。只有机器人主人、群主或群管理员可读取或修改 reply policy，工具会实时校验权限。set_reply_policy 支持局部更新，proactive_reply_chance 范围 0.05~1，proactive_reply_threshold 范围 0.5~1，minimum_reply_member_level 范围 0~1000；低于最低等级的成员仅在主动 @ 机器人时可回复。members 支持 query 按群名片/昵称/QQ号筛选，exclude_current_sender 排除当前发言者，exclude_user_ids 排除指定 QQ，limit 默认 50、最大 100。结果中的 mention_cq 可直接用于最终回复，提及多人时依次原样输出。input: {"operation":"info|members|reply_policy|set_reply_policy","query":"可选","exclude_current_sender":false,"exclude_user_ids":["QQ号"],"limit":50,"proactive_reply_chance":0.5,"proactive_reply_threshold":0.9,"minimum_reply_member_level":10}`
+	return `读取当前 QQ 群的真实群信息、成员和回复策略。用户要求查群名、成员、群名片、昵称、QQ号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用；不要要求用户先手动 @。operation=info 读取群资料；operation=members 获取或检索成员；operation=reply_policy 读取本群插话概率、判断阈值和最低回复群等级；operation=set_reply_policy 修改这些设置。只有机器人主人、群主或群管理员可读取或修改 reply policy，工具会实时校验权限。set_reply_policy 支持局部更新，proactive_reply_chance 范围 0.05~1，proactive_reply_threshold 范围 0.5~1，minimum_reply_member_level 范围 0~1000；低于最低等级的成员仅在主动 @ 机器人时可回复。闲聊插话（没人 @ 机器人时主动接话）由 chat_in_enabled 开关和 chat_in_level 档位控制，档位可选 off、low、medium、high、max，越高越爱说话；需要精细调节时再用 chat_in_threshold（0.5~1）、chat_in_chance（0.05~1）和 chat_in_cooldown_seconds（0~3600）覆盖档位预设。用户说“多说点话”“别老插嘴”“安静点”“活跃一点”时改档位即可，不要直接改阈值。members 支持 query 按群名片/昵称/QQ号筛选，exclude_current_sender 排除当前发言者，exclude_user_ids 排除指定 QQ，limit 默认 50、最大 100。结果中的 mention_cq 可直接用于最终回复，提及多人时依次原样输出。input: {"operation":"info|members|reply_policy|set_reply_policy","query":"可选","exclude_current_sender":false,"exclude_user_ids":["QQ号"],"limit":50,"proactive_reply_chance":0.5,"proactive_reply_threshold":0.9,"minimum_reply_member_level":10,"chat_in_enabled":true,"chat_in_level":"medium"}`
 }
 
 func (t *dianaQQGroupTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -140,6 +147,44 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 		cfg.MinimumReplyMemberLevel = level
 		changed = true
 	}
+	if _, present := input["chat_in_enabled"]; present {
+		cfg.ChatInEnabled = boolPointer(groupToolBool(input, "chat_in_enabled"))
+		changed = true
+	}
+	if value, present := input["chat_in_level"]; present {
+		level := ChatInLevel(fmt.Sprintf("%v", value)).Normalized()
+		if level == "" {
+			return "", fmt.Errorf("chat_in_level 必须是 off、low、medium、high 或 max 之一")
+		}
+		cfg.ChatInLevel = level
+		changed = true
+	}
+	if threshold, present, err := groupToolFloat(input, "chat_in_threshold"); err != nil {
+		return "", err
+	} else if present {
+		if threshold < 0.5 || threshold > 1 {
+			return "", fmt.Errorf("chat_in_threshold 必须在 0.5 到 1 之间")
+		}
+		cfg.ChatInThreshold = threshold
+		changed = true
+	}
+	if chance, present, err := groupToolFloat(input, "chat_in_chance"); err != nil {
+		return "", err
+	} else if present {
+		if chance < 0.05 || chance > 1 {
+			return "", fmt.Errorf("chat_in_chance 必须在 0.05 到 1 之间")
+		}
+		cfg.ChatInChance = chance
+		changed = true
+	}
+	if value, present := input["chat_in_cooldown_seconds"]; present {
+		seconds, err := groupToolInteger(value)
+		if err != nil || seconds < 0 || seconds > 3600 {
+			return "", fmt.Errorf("chat_in_cooldown_seconds 必须是 0 到 3600 的整数")
+		}
+		cfg.ChatInCooldownSeconds = seconds
+		changed = true
+	}
 	if !changed {
 		return "", fmt.Errorf("至少提供一项要修改的回复策略")
 	}
@@ -161,10 +206,18 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 }
 
 func dianaQQGroupReplyPolicyFromConfig(cfg GroupConfig) dianaQQGroupReplyPolicy {
+	// 报告最终生效值，而不是原始字段：档位预设和自定义覆盖合并后才是机器人真正的行为。
+	chatIn := chatInSettingsFrom(cfg.ChatInEnabled, cfg.ChatInLevel, cfg.ChatInThreshold, cfg.ChatInChance, cfg.ChatInCooldownSeconds)
 	return dianaQQGroupReplyPolicy{
 		ProactiveReplyChance:    cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold: cfg.ProactiveReplyThreshold,
 		MinimumReplyMemberLevel: cfg.MinimumReplyMemberLevel,
+		ChatInEnabled:           chatIn.Enabled,
+		ChatInLevel:             string(chatIn.Level),
+		ChatInLevelLabel:        chatIn.Level.Label(),
+		ChatInThreshold:         chatIn.Threshold,
+		ChatInChance:            chatIn.Chance,
+		ChatInCooldownSeconds:   int(chatIn.Cooldown / time.Second),
 	}
 }
 

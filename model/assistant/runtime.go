@@ -241,6 +241,7 @@ type Runtime struct {
 	relationshipEvalSem   chan struct{}
 	relationshipEvalWG    sync.WaitGroup
 	history               map[string][]MessageEvent
+	chatInLastReplyAt     map[string]time.Time
 	contextSummaries      map[string]string
 	recent                []EventRecord
 	activeMu              sync.Mutex
@@ -399,6 +400,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		proactiveRouteSem:     make(chan struct{}, proactiveReplyRouteConcurrency),
 		relationshipEvalSem:   make(chan struct{}, relationshipEvalConcurrency),
 		history:               map[string][]MessageEvent{},
+		chatInLastReplyAt:     map[string]time.Time{},
 		contextSummaries:      map[string]string{},
 		activeReminders:       map[string]struct{}{},
 		replySuppressByUser:   map[string]ReplySuppression{},
@@ -640,6 +642,31 @@ func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[s
 	r.mu.RUnlock()
 	if channel == nil {
 		return nil, fmt.Errorf("qqbot: channel is not configured")
+	}
+	return channel.CallAPI(ctx, action, params)
+}
+
+// callOneBotAPIForEvent routes a request back to the exact profile that
+// produced the message. This matters when one Runtime serves multiple bots.
+func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent, action string, params map[string]any) (map[string]any, error) {
+	if r == nil {
+		return nil, fmt.Errorf("qqbot: runtime is not configured")
+	}
+	r.mu.RLock()
+	channel := r.channel
+	r.mu.RUnlock()
+	if channel == nil {
+		return nil, fmt.Errorf("qqbot: channel is not configured")
+	}
+	if multi, ok := channel.(*MultiChannel); ok {
+		binding, err := multi.bindingFor(event.ProfileID, event.Platform)
+		if err != nil {
+			return nil, err
+		}
+		if !IsOneBotPlatform(binding.Platform) {
+			return nil, fmt.Errorf("qqbot: profile %q is not a OneBot platform", binding.ProfileID)
+		}
+		return binding.Channel.CallAPI(ctx, action, params)
 	}
 	return channel.CallAPI(ctx, action, params)
 }
@@ -955,6 +982,11 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
 	cfg.ProactiveReplyThreshold = groupCfg.ProactiveReplyThreshold
+	cfg.ChatInEnabled = groupCfg.ChatInEnabled
+	cfg.ChatInLevel = groupCfg.ChatInLevel
+	cfg.ChatInThreshold = groupCfg.ChatInThreshold
+	cfg.ChatInChance = groupCfg.ChatInChance
+	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
 	if groupCfg.ReplyGate != nil {
 		cfg.ReplyGate = groupCfg.ReplyGate.Clone()
 	}
@@ -1519,6 +1551,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		return event, text, nil, false
 	}
 	cfg := r.effectiveConfigForEvent(event)
+	chatIn := cfg.chatInSettings()
 	payload := r.proactiveReplyPayload(event, readableEventText(event, text))
 	for _, candidate := range candidates {
 		payload.Candidates = append(payload.Candidates, proactiveReplyCandidatePayload{
@@ -1546,7 +1579,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterSystemPrompt(cfg.ProactiveReplyRouterPrompt),
+			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn),
 		},
 		routeUserMessage,
 	}
@@ -1565,19 +1598,52 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	decision, parsed := parseProactiveReplyDecision(raw)
 	event, text = selectProactiveReplyCandidate(candidates, decision.TargetMessageID)
 	turn := selectProactiveReplyTurn(candidates, event.MessageID, decision.TurnMessageIDs)
-	decisionAllowed := parsed && decision.allows(cfg.ProactiveReplyThreshold)
-	sampleAllowed := true
-	if decisionAllowed && !decision.qualifiedBotFollowup() {
-		sampleAllowed = proactiveReplySampleAllows(event, text, cfg.ProactiveReplyChance)
+	decisionAllowed := parsed && decision.allows(cfg.ProactiveReplyThreshold, chatIn)
+	cooldownAllowed := true
+	if decisionAllowed && decision.chatIn() {
+		// 冷却只对闲聊插话生效：被直接提问时不该因为刚插过话就装死。
+		cooldownAllowed = r.chatInCooldownAllows(event, chatIn.Cooldown)
 	}
-	allowed := decisionAllowed && sampleAllowed
+	sampleAllowed := true
+	if decisionAllowed && cooldownAllowed && !decision.qualifiedBotFollowup() {
+		chance := cfg.ProactiveReplyChance
+		if decision.chatIn() {
+			chance = chatIn.Chance
+		}
+		sampleAllowed = proactiveReplySampleAllows(event, text, chance)
+	}
+	allowed := decisionAllowed && cooldownAllowed && sampleAllowed
+	if allowed && decision.chatIn() {
+		r.markChatInReplied(event)
+	}
 	event.proactiveReply = allowed
-	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg)
+	event.chatInReply = allowed && decision.chatIn()
+	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed, cfg, chatIn)
 	r.recordProactiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg, raw)
 	return event, text, turn, allowed
 }
 
-func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decisionAllowed, sampleAllowed, allowed bool, cfg BotConfig) string {
+// chatInCooldownAllows 判断本群距上次闲聊插话是否已过冷却。
+func (r *Runtime) chatInCooldownAllows(event MessageEvent, cooldown time.Duration) bool {
+	if cooldown <= 0 {
+		return true
+	}
+	r.mu.RLock()
+	last, ok := r.chatInLastReplyAt[sessionKey(event)]
+	r.mu.RUnlock()
+	return !ok || time.Since(last) >= cooldown
+}
+
+func (r *Runtime) markChatInReplied(event MessageEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.chatInLastReplyAt == nil {
+		r.chatInLastReplyAt = map[string]time.Time{}
+	}
+	r.chatInLastReplyAt[sessionKey(event)] = time.Now()
+}
+
+func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed bool, cfg BotConfig, chatIn chatInSettings) string {
 	if !parsed {
 		return "主动回复判断模型返回了无法解析的结果，已保持沉默"
 	}
@@ -1585,23 +1651,39 @@ func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decis
 	if detail == "" {
 		detail = "模型未提供补充说明"
 	}
-	metrics := fmt.Sprintf("分类 %s，置信度 %.0f%%，阈值 %.0f%%，指向机器人 %t，可回答 %t",
+	threshold := cfg.ProactiveReplyThreshold
+	chance := cfg.ProactiveReplyChance
+	if decision.chatIn() {
+		threshold = chatIn.Threshold
+		chance = chatIn.Chance
+	}
+	metrics := fmt.Sprintf("分类 %s，置信度 %.0f%%，阈值 %.0f%%，指向机器人 %t，可回答 %t，有实质内容 %t",
 		firstNonEmpty(strings.TrimSpace(decision.Category), "unknown"),
 		decision.Confidence*100,
-		cfg.ProactiveReplyThreshold*100,
+		threshold*100,
 		decision.DirectedAtBot,
 		decision.Answerable,
+		decision.Substantive,
 	)
+	if decision.chatIn() {
+		metrics += fmt.Sprintf("，闲聊插话档位 %s", chatIn.Level)
+	}
 	switch {
 	case allowed:
 		return fmt.Sprintf("主动回复判断允许回复：%s（%s）", detail, metrics)
+	case decisionAllowed && !cooldownAllowed:
+		return fmt.Sprintf("主动回复判断允许插话，但本群仍在 %s 的闲聊插话冷却内：%s（%s）", chatIn.Cooldown, detail, metrics)
 	case decisionAllowed && !sampleAllowed:
-		return fmt.Sprintf("主动回复判断允许回复，但未命中 %.0f%% 的主动回复采样率：%s（%s）", cfg.ProactiveReplyChance*100, detail, metrics)
+		return fmt.Sprintf("主动回复判断允许回复，但未命中 %.0f%% 的主动回复采样率：%s（%s）", chance*100, detail, metrics)
 	case !decision.ShouldReply:
 		return fmt.Sprintf("主动回复判断不建议回复：%s（%s）", detail, metrics)
-	case !decision.Answerable:
+	case decision.chatIn() && !chatIn.Enabled:
+		return fmt.Sprintf("闲聊插话当前已关闭：%s（%s）", detail, metrics)
+	case decision.chatIn() && !decision.Substantive:
+		return fmt.Sprintf("主动回复判断认为这句插话没有实质内容：%s（%s）", detail, metrics)
+	case !decision.chatIn() && !decision.Answerable:
 		return fmt.Sprintf("主动回复判断认为现有信息不足以可靠回答：%s（%s）", detail, metrics)
-	case decision.Confidence < cfg.ProactiveReplyThreshold:
+	case decision.Confidence < threshold:
 		return fmt.Sprintf("主动回复判断置信度低于阈值：%s（%s）", detail, metrics)
 	default:
 		return fmt.Sprintf("主动回复判断未通过分类或指向性约束：%s（%s）", detail, metrics)
@@ -1818,6 +1900,7 @@ type proactiveReplyDecision struct {
 	TurnMessageIDs  []string `json:"turn_message_ids,omitempty"`
 	DirectedAtBot   bool     `json:"directed_at_bot"`
 	Answerable      bool     `json:"answerable"`
+	Substantive     bool     `json:"substantive"`
 	Reason          string   `json:"reason,omitempty"`
 }
 
@@ -1825,15 +1908,28 @@ func (decision proactiveReplyDecision) qualifiedBotFollowup() bool {
 	return strings.EqualFold(strings.TrimSpace(decision.Category), "bot_related") && decision.DirectedAtBot
 }
 
-func (decision proactiveReplyDecision) allows(threshold float64) bool {
-	if !decision.ShouldReply || decision.Confidence < threshold || decision.Confidence > 1 {
+func (decision proactiveReplyDecision) normalizedCategory() string {
+	return strings.ToLower(strings.TrimSpace(decision.Category))
+}
+
+func (decision proactiveReplyDecision) chatIn() bool {
+	return decision.normalizedCategory() == "chat_in"
+}
+
+// allows 判定是否放行。闲聊插话走独立阈值，因为它的门槛和“群友直接提问”本质不同：
+// 前者靠回复本身有没有实质内容把关，后者靠信息是否足够回答把关。
+func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSettings) bool {
+	if !decision.ShouldReply || decision.Confidence > 1 {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(decision.Category)) {
+	switch decision.normalizedCategory() {
 	case "needs_response":
-		return decision.Answerable
+		return decision.Confidence >= threshold && decision.Answerable
 	case "bot_related":
-		return decision.DirectedAtBot && decision.Answerable
+		return decision.Confidence >= threshold && decision.DirectedAtBot && decision.Answerable
+	case "chat_in":
+		// substantive 是这条路径唯一的内容闸门：没有它，插话会退化成附和和复读。
+		return chatIn.Enabled && decision.Substantive && decision.Confidence >= chatIn.Threshold
 	default:
 		return false
 	}
@@ -1846,6 +1942,16 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 		return answerabilityGuard
 	}
 	return configured + "\n\n" + answerabilityGuard
+}
+
+// proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
+// 器反复给出一个运行时必然拒绝的结论。
+func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings) string {
+	prompt := proactiveReplyRouterSystemPrompt(configured)
+	if chatIn.Enabled {
+		return prompt + fmt.Sprintf("\n\n当前闲聊插话档位：%s（%s）。档位只影响运行时的放行松紧，不放宽 substantive 的判断标准：任何档位下附和、复读和寒暄都必须 substantive=false。", chatIn.Level, chatIn.Level.Label())
+	}
+	return prompt + "\n\n当前闲聊插话已关闭：禁止使用 category=chat_in，普通闲聊一律 should_reply=false。"
 }
 
 func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
@@ -1863,6 +1969,7 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 		TurnMessageIDs  []string `json:"turn_message_ids"`
 		DirectedAtBot   *bool    `json:"directed_at_bot"`
 		Answerable      *bool    `json:"answerable"`
+		Substantive     *bool    `json:"substantive"`
 		Reason          *string  `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil {
@@ -1889,6 +1996,9 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 	}
 	if payload.Answerable != nil {
 		decision.Answerable = *payload.Answerable
+	}
+	if payload.Substantive != nil {
+		decision.Substantive = *payload.Substantive
 	}
 	if payload.Reason != nil {
 		decision.Reason = strings.TrimSpace(*payload.Reason)
@@ -2133,6 +2243,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				return "", pluginToolsErr
 			}
 		}
+		if r.oneBotV11SkillEnabled(event) {
+			pluginTools = append(pluginTools, newDianaOneBotV11Tool(r, event))
+		}
 		if fullAgentEnabled {
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event),
@@ -2373,6 +2486,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more current images could not be encoded")})
 	}
 	currentMessage.Priority = llm.MessagePriorityCurrent
+	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
+		messages = append(messages, llm.Message{
+			Role:     llm.RoleSystem,
+			Content:  clockPrompt,
+			Priority: llm.MessagePrioritySystem,
+		})
+	}
 	messages = append(messages, currentMessage)
 
 	replyCfg := cfg
@@ -3467,7 +3587,7 @@ func (r *Runtime) agentHistoryImageBatchMessage(ctx context.Context, history []M
 		}
 		line := historyPromptTextAt(item, currentTime)
 		if line == "" {
-			line = agentImageHistoryPromptTextAt(item, currentTime)
+			line = agentImageHistoryPromptTextWithDescriptions(item, currentTime, r.historyImageCachedDescriptions(ctx, item))
 		}
 		if line != "" {
 			lines = append(lines, line)
@@ -4017,6 +4137,24 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 	return r.systemPromptWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, nil)
 }
 
+// runtimeClockPrompt 返回本轮的可信实时时间提示。返回值每次调用都不同，只能作为尾部
+// 独立 system 消息注入；拼进人设提示词会让那段最长的前缀每秒失效一次。
+func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
+	cfg := r.effectiveConfigForEvent(event)
+	if !boolValue(cfg.PromptInjectTime, true) {
+		return ""
+	}
+	now := r.clock()
+	zoneName, zoneOffset := now.Zone()
+	var builder strings.Builder
+	builder.WriteString(renderPromptTemplate(cfg.PromptTimeTemplate, map[string]string{
+		"datetime": now.Format("2006-01-02 15:04:05"),
+		"weekday":  chineseWeekday(now.Weekday()),
+	}))
+	appendPromptSection(&builder, fmt.Sprintf("%s%s（时区 %s，UTC%s）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。", agent.RuntimeClockMarker, now.Format("2006-01-02 15:04:05"), zoneName, formatUTCOffset(zoneOffset)))
+	return strings.TrimSpace(builder.String())
+}
+
 func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) string {
 	cfg := r.effectiveConfigForEvent(event)
 	var builder strings.Builder
@@ -4036,15 +4174,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		return false
 	}
 	builder.WriteString(cfg.SystemPrompt)
-	if boolValue(cfg.PromptInjectTime, true) {
-		now := r.clock()
-		appendPromptSection(&builder, renderPromptTemplate(cfg.PromptTimeTemplate, map[string]string{
-			"datetime": now.Format("2006-01-02 15:04:05"),
-			"weekday":  chineseWeekday(now.Weekday()),
-		}))
-		zoneName, zoneOffset := now.Zone()
-		appendPromptSection(&builder, fmt.Sprintf("当前运行时钟：%s（时区 %s，UTC%s）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。", now.Format("2006-01-02 15:04:05"), zoneName, formatUTCOffset(zoneOffset)))
-	}
+	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
+	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) {
 		appendPromptSection(&builder, cfg.PromptChineseSlangText)
 	}
@@ -4068,6 +4199,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.Owner && hasTool("diana.llm_config") {
 		builder.WriteString("\n只有主人明确要求更改 Diana 自己当前使用的 LLM provider/model 时，才调用 diana.llm_config。讨论模型、比较模型、推荐 API 中转项目、分析他人的 Agent/模型、用户说自己正在用某模型，都不是修改 Diana 配置，严禁调用该工具。")
+	}
+	if agentEnabled && hasTool(dianaOneBotV11ToolName) {
+		builder.WriteString("\n只有用户明确要求读取 OneBot/QQ 实时信息或执行 QQ 协议操作时，才调用 diana.onebot_v11。主人可调用全部动作；普通成员只可调用工具后端固定的标准只读白名单。权限拒绝后不得改用其他工具绕过，也不得在没有成功工具结果时声称操作完成。")
 	}
 	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
 		builder.WriteString("\n当前发言者是主人：如果要求设置或增减其他用户的好感度，必须调用 diana.relationship 的 set/adjust，并正确传入目标用户；不要把目标用户误写成主人自己。")
@@ -4113,6 +4247,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if proactiveTriggered {
 		builder.WriteString("\n")
 		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
+	}
+	if event.chatInReply {
+		builder.WriteString("\n" + chatInReplyPrompt)
 	}
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {
@@ -5026,6 +5163,12 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 }
 
 func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
+	return agentImageHistoryPromptTextWithDescriptions(event, currentTime, nil)
+}
+
+// agentImageHistoryPromptTextWithDescriptions 在图片计数之外附上已缓存的图片描述。
+// 只有计数的占位行会让模型在被追问历史图片时无内容可依，转而编造或退化成寒暄。
+func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime int64, descriptions []string) string {
 	imageCount := imageSegmentCount(event.Segments)
 	if event.Quoted != nil {
 		imageCount += imageSegmentCount(event.Quoted.Segments)
@@ -5033,7 +5176,47 @@ func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string
 	if imageCount == 0 {
 		return ""
 	}
-	return fmt.Sprintf("【历史参考消息，仅用于理解上下文，不要直接回复这条历史消息】%s%s: 此消息包含 %d 张真实图片，请查看随消息附加的图片内容。", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), imageCount)
+	line := fmt.Sprintf("【历史参考消息，仅用于理解上下文，不要直接回复这条历史消息】%s%s: 此消息包含 %d 张真实图片，请查看随消息附加的图片内容。", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), imageCount)
+	if len(descriptions) > 0 {
+		line += "\n" + strings.Join(descriptions, "\n")
+	}
+	return line
+}
+
+// historyImageCachedDescriptions 只读取已有缓存，绝不触发识图调用：这条路径在每一轮
+// 常规回复里都会走到，联网补描述会把延迟和成本压到每条消息上。
+func (r *Runtime) historyImageCachedDescriptions(ctx context.Context, event MessageEvent) []string {
+	segments := append([]MessageSegment(nil), event.Segments...)
+	if event.Quoted != nil {
+		segments = append(segments, event.Quoted.Segments...)
+	}
+	store := r.recallImageDescriptionStore()
+	var lines []string
+	imageIndex := 0
+	for _, segment := range segments {
+		if segment.Type != "image" {
+			continue
+		}
+		imageIndex++
+		if !recallStillImageSegment(segment) {
+			continue
+		}
+		description := strings.TrimSpace(segment.Data[recallImageDescriptionKey])
+		if description == "" && store != nil {
+			if hash, ok := imageSegmentContentSHA256(segment); ok {
+				if record, found, err := store.GetImageDescription(ctx, hash); err == nil && found {
+					description = strings.TrimSpace(record.Description)
+				} else if err != nil {
+					log.Printf("qqbot history image description cache load failed: %v", err)
+				}
+			}
+		}
+		if description == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("图片%d已缓存描述=%s", imageIndex, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
+	}
+	return lines
 }
 
 func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
@@ -5081,9 +5264,24 @@ func contextMessageTiming(eventTime, currentTime int64) string {
 	}
 	timing := "【消息时间：" + time.Unix(eventTime, 0).Local().Format("2006-01-02 15:04:05")
 	if currentTime >= eventTime {
-		timing += fmt.Sprintf("；距当前：%d 秒", currentTime-eventTime)
+		timing += "；距当前：" + coarseRelativeTiming(currentTime-eventTime)
 	}
 	return timing + "】"
+}
+
+// coarseRelativeTiming 把「距当前」压到粗粒度。秒级差值会让每一条历史行在每一轮都
+// 变成新字符串，整段历史因此永远无法复用供应商前缀缓存；模型只需要知道大致新旧。
+func coarseRelativeTiming(delta int64) string {
+	switch {
+	case delta < 60:
+		return "不到 1 分钟"
+	case delta < 3600:
+		return fmt.Sprintf("约 %d 分钟", delta/60)
+	case delta < 86400:
+		return fmt.Sprintf("约 %d 小时", delta/3600)
+	default:
+		return fmt.Sprintf("约 %d 天", delta/86400)
+	}
 }
 
 func quotedPromptText(quoted *QuotedMessage) string {

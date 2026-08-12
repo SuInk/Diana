@@ -1,0 +1,4 @@
+interface:
+  display_name: "OneBot v11"
+  short_description: "安全调用 OneBot v11 标准协议及各实现扩展动作"
+  default_prompt: "使用 $onebot-v11 读取 OneBot 状态或执行主人明确授权的 QQ 操作。"

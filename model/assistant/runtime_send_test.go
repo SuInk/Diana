@@ -251,12 +251,15 @@ func TestSystemPromptInjectsRulesTimeAndSender(t *testing.T) {
 	prompt := runtime.systemPrompt(event, nil)
 	for _, want := range []string{
 		"不渲染 Markdown",
-		"当前时间：" + time.Now().Format("2006-01-02"),
 		"「小明」",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+	// 时间已移出人设提示词，改由尾部独立 system 消息承载。
+	if clock := runtime.runtimeClockPrompt(event); !strings.Contains(clock, "当前时间："+time.Now().Format("2006-01-02")) {
+		t.Fatalf("clock prompt missing rendered time: %q", clock)
 	}
 }
 
@@ -269,20 +272,30 @@ func TestSystemPromptUsesCustomTemplates(t *testing.T) {
 		PromptGroupSenderTemplate: "当前发言者={sender}",
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
-	prompt := runtime.systemPrompt(MessageEvent{
+	event := MessageEvent{
 		Kind:       EventKindGroup,
 		GroupID:    "123",
 		UserID:     "456",
 		SenderName: "小明",
-	}, nil)
+	}
+	prompt := runtime.systemPrompt(event, nil)
 
-	for _, want := range []string{"自定义人设", "自定义中文语境", "自定义输出规则", "时间=", "星期=", "当前发言者=小明"} {
+	for _, want := range []string{"自定义人设", "自定义中文语境", "自定义输出规则", "当前发言者=小明"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
 	}
-	if strings.Contains(prompt, "{datetime}") || strings.Contains(prompt, "{weekday}") || strings.Contains(prompt, "{sender}") {
-		t.Fatalf("prompt contains unresolved known placeholders:\n%s", prompt)
+	// PromptTimeTemplate 仍然生效，只是渲染到尾部时钟消息而不是人设提示词。
+	clock := runtime.runtimeClockPrompt(event)
+	for _, want := range []string{"时间=", "星期="} {
+		if !strings.Contains(clock, want) {
+			t.Fatalf("clock prompt missing %q:\n%s", want, clock)
+		}
+	}
+	for _, text := range []string{prompt, clock} {
+		if strings.Contains(text, "{datetime}") || strings.Contains(text, "{weekday}") || strings.Contains(text, "{sender}") {
+			t.Fatalf("prompt contains unresolved known placeholders:\n%s", text)
+		}
 	}
 }
 

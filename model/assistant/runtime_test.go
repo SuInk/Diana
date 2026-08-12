@@ -1146,14 +1146,19 @@ func TestRuntimeSystemPromptExplainsMatchedAliasRoles(t *testing.T) {
 	}
 }
 
-func TestRuntimeSystemPromptIncludesTrustedRuntimeClock(t *testing.T) {
+func TestRuntimeTrustedRuntimeClockStaysOutOfSystemPrompt(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate}, nil)
-	if !strings.Contains(prompt, "当前运行时钟") || !strings.Contains(prompt, time.Now().Format("2006-01-02")) {
-		t.Fatalf("system prompt missing current date: %q", prompt)
+	event := MessageEvent{Kind: EventKindPrivate}
+	// 时钟每秒都不同，留在人设提示词里会让这段最长的前缀永远无法命中供应商缓存。
+	if prompt := runtime.systemPrompt(event, nil); strings.Contains(prompt, "当前运行时钟") || strings.Contains(prompt, "当前时间：") {
+		t.Fatalf("system prompt must stay clock-free for prefix caching: %q", prompt)
 	}
-	if !strings.Contains(prompt, "UTC") || !strings.Contains(prompt, "不要声称无法访问实时时钟") {
-		t.Fatalf("system prompt missing trusted clock guidance: %q", prompt)
+	clock := runtime.runtimeClockPrompt(event)
+	if !strings.Contains(clock, "当前运行时钟") || !strings.Contains(clock, time.Now().Format("2006-01-02")) {
+		t.Fatalf("clock prompt missing current date: %q", clock)
+	}
+	if !strings.Contains(clock, "UTC") || !strings.Contains(clock, "不要声称无法访问实时时钟") {
+		t.Fatalf("clock prompt missing trusted clock guidance: %q", clock)
 	}
 }
 
@@ -2699,7 +2704,8 @@ func TestProactiveReplyDecisionRequiresStrictThresholdAndCategory(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			decision, ok := parseProactiveReplyDecision(tt.raw)
-			got := ok && decision.allows(tt.threshold)
+			// 这些用例都不是闲聊插话，用关闭态确认它们的判定完全不受新档位影响。
+			got := ok && decision.allows(tt.threshold, chatInSettings{})
 			if got != tt.want {
 				t.Fatalf("decision=%#v ok=%v got=%v want=%v", decision, ok, got, tt.want)
 			}
@@ -2841,12 +2847,19 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 	if len(provider.request.Messages) < 3 {
 		t.Fatalf("messages = %#v", provider.request.Messages)
 	}
-	history := provider.request.Messages[len(provider.request.Messages)-2].Content
+	// 当前消息之前还夹着尾部时钟等 system 消息，历史行必须按内容定位而不是固定下标。
+	history := ""
+	for _, message := range provider.request.Messages {
+		if strings.Contains(message.Content, "【历史参考消息") {
+			history = message.Content
+			break
+		}
+	}
 	current := provider.request.Messages[len(provider.request.Messages)-1].Content
 	if !strings.Contains(history, "【历史参考消息") || !strings.Contains(history, "旧问题是什么") {
 		t.Fatalf("history content = %q", history)
 	}
-	if !strings.Contains(history, "【消息时间：") || !strings.Contains(history, "距当前：120 秒") {
+	if !strings.Contains(history, "【消息时间：") || !strings.Contains(history, "距当前：约 2 分钟") {
 		t.Fatalf("history timing = %q", history)
 	}
 	if strings.Contains(history, "【当前需要回复的消息】") {

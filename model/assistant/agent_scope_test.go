@@ -124,18 +124,7 @@ func TestOwnerAgentRegistryReusesSharedExtensionsAcrossRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := runtime.sharedAgentRegistry(context.Background(), agent.Config{
-		WorkDir:             cfg.AgentWorkDir,
-		MaxSteps:            cfg.AgentMaxSteps,
-		SkillRoots:          cfg.AgentSkillRoots,
-		MCPConfigPath:       cfg.AgentMCPConfigPath,
-		ExtensionManagement: true,
-		BuiltinExtensions:   runtime.agentBuiltinExtensions(event),
-		CommandAllowlist:    cfg.AgentCommandAllowlist,
-		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
-		BrowserCDPURL:       cfg.AgentBrowserCDPURL,
-		BrowserTimeoutMS:    cfg.AgentBrowserTimeoutMS,
-	})
+	base, err := runtime.sharedAgentRegistry(context.Background(), runtime.agentRegistryConfig(cfg, event, true))
 	if err != nil {
 		t.Fatal(err)
 	}
