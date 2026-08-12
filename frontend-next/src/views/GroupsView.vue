@@ -3,7 +3,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>群管理</h1>
-        <p>查看机器人已加入的全部群，并按群配置触发词、专属人设与插件开关</p>
+        <p>查看机器人已加入的全部群，并按群配置回复时间、屏蔽 QQ 号、专属人设与插件开关</p>
       </div>
       <div class="group-manual-add">
         <input
@@ -74,7 +74,11 @@
             <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
-            <span v-if="group.configured && group.reply_gate" class="badge">专属准入</span>
+            <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
+              回复 {{ group.reply_gate.active_start }}–{{ group.reply_gate.active_end }}
+            </span>
+            <span v-if="group.configured && blockedUserCount(group) > 0" class="badge">屏蔽 {{ blockedUserCount(group) }} 人</span>
+            <span v-if="group.configured && hasOtherReplyGateRules(group)" class="badge">专属回复规则</span>
           </div>
           <p class="group-card-desc">
             {{ group.system_prompt ? truncate(group.system_prompt, 68) : group.configured ? "沿用全局人设与默认行为。" : "尚未设置群级覆盖，当前跟随全局配置。" }}
@@ -145,7 +149,7 @@
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
         <div class="field wide">
-          <label>本群准入条件</label>
+          <label>本群回复时间与屏蔽 QQ 号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
         </div>
         <div class="field wide">
@@ -231,6 +235,23 @@ function truncate(text: string, max: number): string {
 
 function overrideCount(group: QQBotGroupConfig): number {
   return Object.keys(group.plugin_overrides ?? {}).length;
+}
+
+function blockedUserCount(group: QQBotGroupConfig): number {
+  return group.reply_gate?.blocked_users?.length ?? 0;
+}
+
+function hasOtherReplyGateRules(group: QQBotGroupConfig): boolean {
+  const gate = group.reply_gate;
+  if (!gate) {
+    return false;
+  }
+  return Boolean(
+    (gate.min_group_level ?? 0) > 0 ||
+      (gate.exempt_users?.length ?? 0) > 0 ||
+      gate.owner_bypass === false ||
+      gate.quiet_reply?.trim()
+  );
 }
 
 async function load(showFeedback = false): Promise<void> {

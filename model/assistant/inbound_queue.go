@@ -63,6 +63,12 @@ type InboundEventStore interface {
 	ListHistorySessions(ctx context.Context) ([]HistorySession, error)
 }
 
+// InboundEventAuditStore lets the runtime persist the human-readable routing
+// decision before the durable worker marks the queue item complete.
+type InboundEventAuditStore interface {
+	RecordInboundEventAudit(ctx context.Context, event EventRecord) error
+}
+
 func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, workers int, releaseStaleLeases bool, done chan struct{}) {
 	defer close(done)
 	r.mu.RLock()
@@ -215,6 +221,7 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	if inboundEventIsStale(item.Event, time.Now()) {
 		return "ignored_stale", nil
 	}
+	ctx = r.withDebugTraceContext(ctx, item.Event)
 	event, text, handled, outcome := r.prepareMessageEvent(ctx, item.Event)
 	if !handled {
 		return outcome, nil

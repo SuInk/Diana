@@ -111,13 +111,17 @@ func filterAgentReplyHistory(history []MessageEvent, event MessageEvent, scope a
 	for _, messageID := range scope.ContextMessageIDs {
 		add(messageID)
 	}
-	add(event.SemanticSourceMessageID)
+	for _, messageID := range eventSemanticSourceMessageIDs(event) {
+		add(messageID)
+	}
 	for _, messageID := range replyReferenceIDs(event.Segments) {
 		add(messageID)
 	}
 	if event.Quoted != nil {
 		add(event.Quoted.MessageID)
-		add(event.Quoted.SemanticSourceMessageID)
+		for _, messageID := range quotedSemanticSourceMessageIDs(event.Quoted) {
+			add(messageID)
+		}
 		for _, messageID := range replyReferenceIDs(event.Quoted.Segments) {
 			add(messageID)
 		}

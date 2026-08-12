@@ -72,16 +72,55 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 	}
 }
 
+func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := DefaultBotConfig()
+	cfg.AgentWorkDir = workDir
+	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
+	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+
+	tests := []struct {
+		name         string
+		event        MessageEvent
+		relationship RelationshipPolicy
+		wantTool     bool
+	}{
+		{name: "owner", event: MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, relationship: RelationshipPolicy{Owner: true}, wantTool: true},
+		{name: "non-owner", event: MessageEvent{Kind: EventKindPrivate, UserID: "member"}, relationship: RelationshipPolicy{Tier: RelationshipFriend}, wantTool: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry, err := runtime.newAgentRegistry(
+				context.Background(),
+				cfg.WithDefaults(),
+				tt.event,
+				tt.relationship,
+				newDianaLLMConfigTool(runtime, tt.event),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer registry.Close()
+			_, gotTool := registry.Get("diana.llm_config")
+			if gotTool != tt.wantTool {
+				t.Fatalf("diana.llm_config visible = %v, want %v", gotTool, tt.wantTool)
+			}
+		})
+	}
+}
+
 func TestFilterAgentReplyHistoryKeepsSelectedReferencesAndNeighbors(t *testing.T) {
 	history := make([]MessageEvent, 0, 10)
 	for index := 1; index <= 10; index++ {
 		history = append(history, MessageEvent{MessageID: "m" + strconv.Itoa(index), RawMessage: "history"})
 	}
 	event := MessageEvent{
-		MessageID:               "current",
-		SemanticSourceMessageID: "m9",
-		Segments:                []MessageSegment{{Type: "reply", Data: map[string]string{"id": "m2"}}},
-		Quoted:                  &QuotedMessage{MessageID: "m2"},
+		MessageID:                "current",
+		SemanticSourceMessageID:  "m7",
+		SemanticSourceMessageIDs: []string{"m7", "m9"},
+		Segments:                 []MessageSegment{{Type: "reply", Data: map[string]string{"id": "m2"}}},
+		Quoted:                   &QuotedMessage{MessageID: "m2"},
 	}
 	scope := agentReplyScope{Routed: true, ContextMessageIDs: []string{"m5"}}
 
@@ -90,7 +129,7 @@ func TestFilterAgentReplyHistoryKeepsSelectedReferencesAndNeighbors(t *testing.T
 	for _, item := range filtered {
 		got = append(got, item.MessageID)
 	}
-	want := "m1,m2,m3,m4,m5,m6,m8,m9,m10"
+	want := "m1,m2,m3,m4,m5,m6,m7,m8,m9,m10"
 	if strings.Join(got, ",") != want {
 		t.Fatalf("filtered IDs = %q, want %q", strings.Join(got, ","), want)
 	}

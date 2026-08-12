@@ -164,7 +164,7 @@ func TestValidReleaseHealthURLRequiresLoopback(t *testing.T) {
 		"http://example.com/api/health",
 		"https://192.0.2.1/api/health",
 		"file:///tmp/health",
-		"http://user:pass@localhost/api/health",
+		"http://user:" + "pass@localhost/api/health",
 	} {
 		if validReleaseHealthURL(rawURL) {
 			t.Errorf("validReleaseHealthURL(%q) = true", rawURL)

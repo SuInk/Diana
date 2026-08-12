@@ -97,6 +97,7 @@ type StructuredMemoryItem struct {
 	CreatedAt       time.Time        `json:"created_at"`
 	UpdatedAt       time.Time        `json:"updated_at"`
 	RetrievalScore  float64          `json:"retrieval_score,omitempty"`
+	RetrievalReason string           `json:"retrieval_reason,omitempty"`
 }
 
 type MemoryWriteRequest struct {
@@ -111,13 +112,17 @@ type MemoryWriteRequest struct {
 }
 
 type StructuredMemoryQuery struct {
-	SubjectUserID string
-	Session       string
-	GroupID       string
-	Text          string
-	Now           time.Time
-	MaxCandidates int
-	Kinds         []MemoryKind
+	SubjectUserID      string
+	Session            string
+	GroupID            string
+	Text               string
+	SearchTerms        []string
+	Now                time.Time
+	MaxCandidates      int
+	Kinds              []MemoryKind
+	CrossGroup         bool
+	GroupSessionPrefix string
+	CurrentSessionOnly bool
 }
 
 type MemoryJobKind string

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,7 +18,7 @@ const (
 	defaultChatHistoryAfter        = 2
 	maximumChatHistoryAroundRadius = 10
 	defaultChatHistorySearchHours  = 24
-	maximumChatHistorySearchHours  = 72
+	maximumChatHistorySearchHours  = 24 * 365 * 100
 	maximumChatHistoryOutputRunes  = 7600
 	chatHistoryLookupTimeout       = 3 * time.Second
 )
@@ -51,6 +52,7 @@ type dianaChatHistoryItem struct {
 	QuotedMessageID string   `json:"quoted_message_id,omitempty"`
 	QuotedSender    string   `json:"quoted_sender,omitempty"`
 	QuotedText      string   `json:"quoted_text,omitempty"`
+	GroupID         string   `json:"group_id,omitempty"`
 }
 
 func newDianaChatHistoryTool(runtime *Runtime, event MessageEvent) *dianaChatHistoryTool {
@@ -62,7 +64,7 @@ func (t *dianaChatHistoryTool) Name() string {
 }
 
 func (t *dianaChatHistoryTool) Description() string {
-	return `按需读取当前 QQ 会话的本地持久化聊天记录。当引用消息里的“这/那个/是的”等指代需要更早上文、当前 20 条上下文不足，或用户明确询问较早消息时，必须先调用，不要直接声称看不到。around 读取某条消息前后记录，message_id 省略时默认使用当前 QQ 引用；recent 读取最近记录；search 按模型给出的 query 检索。严格限定当前群聊或私聊。input: {"operation":"around|recent|search","message_id":"around 可选","before":4,"after":2,"query":"search 必填","hours":24,"limit":20}`
+	return `按需读取本地持久化聊天记录。当引用里的指代需要更早上文、短上下文不足，或用户询问长期历史时，必须先调用，不要直接声称看不到。around 读取当前会话某条消息前后记录；recent 读取当前会话最近记录；search 在 SQLite 中检索，hours、days、from_time 可选，all_time=true 检索全部历史。scope=current 仅当前会话；scope=all_groups 仅在管理员已开启跨群记忆时可用，并严格限定同一机器人命名空间。input: {"operation":"around|recent|search","message_id":"around 可选","query":"search 必填","scope":"current|all_groups","hours":24,"days":0,"all_time":false,"limit":20}`
 }
 
 func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -186,12 +188,65 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		return dianaChatHistoryResult{}, fmt.Errorf("search 的 query 不能为空")
 	}
 	limit := chatHistoryPositiveInt(input, "limit", defaultChatHistoryRecentLimit, maximumChatHistoryResultLimit)
-	hours := chatHistoryPositiveInt(input, "hours", defaultChatHistorySearchHours, maximumChatHistorySearchHours)
 	throughTime := t.event.Time
 	if throughTime <= 0 {
 		throughTime = time.Now().Unix()
 	}
-	timeline, err := t.timeline(ctx, throughTime-int64(time.Duration(hours)*time.Hour/time.Second), throughTime)
+	if raw := intFromAny(input["through_time"]); raw > 0 {
+		throughTime = int64(raw)
+	}
+	fromTime := throughTime - int64(defaultChatHistorySearchHours*time.Hour/time.Second)
+	switch {
+	case chatHistoryBool(input, "all_time"):
+		fromTime = 0
+	case intFromAny(input["from_time"]) > 0:
+		fromTime = int64(intFromAny(input["from_time"]))
+	case intFromAny(input["days"]) > 0:
+		days := chatHistoryPositiveInt(input, "days", 1, maximumChatHistorySearchHours/24)
+		fromTime = throughTime - int64(time.Duration(days)*24*time.Hour/time.Second)
+	default:
+		hours := chatHistoryPositiveInt(input, "hours", defaultChatHistorySearchHours, maximumChatHistorySearchHours)
+		fromTime = throughTime - int64(time.Duration(hours)*time.Hour/time.Second)
+	}
+	scope := strings.ToLower(strings.TrimSpace(configToolString(input, "scope")))
+	crossGroup := scope == "all_groups" || scope == "cross_group" || scope == "groups"
+	cfg := t.runtime.effectiveConfigForEvent(t.event)
+	if crossGroup && !boolValue(cfg.CrossGroupMemoryEnabled, false) {
+		return dianaChatHistoryResult{}, fmt.Errorf("跨群记忆尚未启用，不能检索其他群")
+	}
+
+	t.runtime.mu.RLock()
+	store := t.runtime.messageStore
+	t.runtime.mu.RUnlock()
+	if searchStore, ok := store.(MessageHistorySearchStore); ok {
+		loadCtx, cancel := context.WithTimeout(ctx, chatHistoryLookupTimeout)
+		matched, total, err := searchStore.SearchMessageEvents(loadCtx, MessageHistorySearchQuery{
+			Session:       sessionKey(t.event),
+			SessionPrefix: groupHistorySessionPrefix(t.event),
+			Text:          query,
+			Terms:         structuredMemorySearchTerms(query, 48),
+			FromTime:      fromTime,
+			ThroughTime:   throughTime,
+			Limit:         limit,
+			CrossSession:  crossGroup,
+		})
+		cancel()
+		if err != nil {
+			return dianaChatHistoryResult{}, fmt.Errorf("检索持久化聊天记录失败: %w", err)
+		}
+		label := "当前会话"
+		if crossGroup {
+			label = "同一机器人的所有群"
+		}
+		return dianaChatHistoryResult{
+			OK: true, Action: "search", Message: "已在" + label + "的本地持久化记录中完成检索，结果按时间从新到旧排列。",
+			Query: query, Items: chatHistoryItems(matched), Total: total, Limited: total > len(matched),
+		}, nil
+	}
+	if crossGroup {
+		return dianaChatHistoryResult{}, fmt.Errorf("当前历史存储不支持跨群检索")
+	}
+	timeline, err := t.timeline(ctx, fromTime, throughTime)
 	if err != nil {
 		return dianaChatHistoryResult{}, err
 	}
@@ -275,11 +330,28 @@ func chatHistoryPositiveInt(input map[string]any, key string, fallback, maximum 
 	return value
 }
 
+func chatHistoryBool(input map[string]any, key string) bool {
+	value, ok := input[key]
+	if !ok {
+		return false
+	}
+	switch raw := value.(type) {
+	case bool:
+		return raw
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+		return err == nil && parsed
+	default:
+		return intFromAny(raw) != 0
+	}
+}
+
 func chatHistoryReferenceOutsideContext(event MessageEvent, history []MessageEvent) bool {
 	references := append([]string(nil), replyReferenceIDs(event.Segments)...)
-	references = append(references, event.SemanticSourceMessageID)
+	references = append(references, eventSemanticSourceMessageIDs(event)...)
 	if event.Quoted != nil {
-		references = append(references, event.Quoted.MessageID, event.Quoted.SemanticSourceMessageID)
+		references = append(references, event.Quoted.MessageID)
+		references = append(references, quotedSemanticSourceMessageIDs(event.Quoted)...)
 	}
 	for _, messageID := range dedupeStrings(references) {
 		messageID = strings.TrimSpace(messageID)
@@ -317,6 +389,7 @@ func chatHistoryItem(event MessageEvent) dianaChatHistoryItem {
 		Time:      event.Time,
 		Sender:    event.SenderNameOrID(),
 		Text:      truncateChatHistoryText(historyToolEventText(event), 420),
+		GroupID:   strings.TrimSpace(event.GroupID),
 	}
 	if event.Time > 0 {
 		item.LocalTime = time.Unix(event.Time, 0).Local().Format("2006-01-02 15:04:05 -07:00")
@@ -356,6 +429,14 @@ func chatHistoryItem(event MessageEvent) dianaChatHistoryItem {
 	return item
 }
 
+func groupHistorySessionPrefix(event MessageEvent) string {
+	prefix := strings.TrimSpace(event.ContextNamespace)
+	if prefix != "" {
+		prefix += ":"
+	}
+	return prefix + "group:"
+}
+
 func historyToolEventText(event MessageEvent) string {
 	text := strings.TrimSpace(PlainText(event.Segments))
 	if text != "" {
@@ -364,8 +445,6 @@ func historyToolEventText(event MessageEvent) string {
 	labels := make([]string, 0, 4)
 	for _, segment := range event.Segments {
 		switch segment.Type {
-		case "image":
-			labels = appendUniqueStrings(labels, "[图片]")
 		case "video":
 			labels = appendUniqueStrings(labels, "[视频]")
 		case "file":
@@ -376,6 +455,9 @@ func historyToolEventText(event MessageEvent) string {
 	}
 	if len(labels) > 0 {
 		return strings.Join(labels, " ")
+	}
+	if hasImageSegment(event.Segments) {
+		return ""
 	}
 	return strings.TrimSpace(event.RawMessage)
 }
@@ -390,8 +472,6 @@ func historyToolQuotedText(quoted *QuotedMessage) string {
 	}
 	for _, segment := range quoted.Segments {
 		switch segment.Type {
-		case "image":
-			return "[图片]"
 		case "video":
 			return "[视频]"
 		case "file":
@@ -399,6 +479,9 @@ func historyToolQuotedText(quoted *QuotedMessage) string {
 		case "forward":
 			return "[合并转发]"
 		}
+	}
+	if hasImageSegment(quoted.Segments) {
+		return ""
 	}
 	return strings.TrimSpace(quoted.RawMessage)
 }

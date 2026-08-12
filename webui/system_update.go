@@ -50,7 +50,6 @@ type SystemUpdateHandler struct {
 	updater        SystemUpdater
 	releaseUpdater ReleasePackageUpdater
 	logs           AppLogWriter
-	auto           *AutoUpdater
 	buildVersion   string
 	httpClient     *http.Client
 	githubAPIBase  string
@@ -76,11 +75,6 @@ func (h *SystemUpdateHandler) SetLogStore(store AppLogWriter) {
 	h.logs = store
 }
 
-// SetAutoUpdater 注入自动更新循环，启用相关设置接口。
-func (h *SystemUpdateHandler) SetAutoUpdater(auto *AutoUpdater) {
-	h.auto = auto
-}
-
 // SetBuildVersion 注入编译期版本号，git 不可用（如容器部署）时兜底展示。
 func (h *SystemUpdateHandler) SetBuildVersion(version string) {
 	h.buildVersion = version
@@ -94,8 +88,6 @@ func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 	router.POST("/api/system/update/check", h.check)
 	router.POST("/api/system/update/rollback", h.rollback)
 	router.GET("/api/system/update/changelog", h.changelogList)
-	router.GET("/api/system/update/settings", h.getSettings)
-	router.POST("/api/system/update/settings", h.saveSettings)
 }
 
 // version 返回版本信息；git 状态可选，容器等非 git 部署时只有编译版本。
@@ -219,8 +211,14 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 			return
 		}
 	}
-	if request.Force && request.Confirmation != "force-update" {
-		writeError(c, http.StatusBadRequest, errors.New("强制更新需要明确确认"))
+	wantConfirmation := "apply-update"
+	confirmationError := "更新需要明确确认"
+	if request.Force {
+		wantConfirmation = "force-update"
+		confirmationError = "强制更新需要明确确认"
+	}
+	if request.Confirmation != wantConfirmation {
+		writeError(c, http.StatusBadRequest, errors.New(confirmationError))
 		return
 	}
 
@@ -229,7 +227,7 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 	if request.Force {
 		action = "system.update.force"
 	}
-	result, err := h.UpdateLatest(c.Request.Context(), request.Force)
+	result, err := h.applyLatestUpdate(c.Request.Context(), request.Force)
 	if err != nil {
 		h.writeUpdateError(c, action, err)
 		return
@@ -250,9 +248,9 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// UpdateLatest updates a source checkout to the newest stable Release tag.
-// It is shared by the HTTP endpoint and the automatic updater.
-func (h *SystemUpdateHandler) UpdateLatest(ctx context.Context, force bool) (updater.Result, error) {
+// applyLatestUpdate applies the newest stable Release after the HTTP layer has
+// verified the user's explicit confirmation.
+func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool) (updater.Result, error) {
 	status, err := h.updater.Status(ctx)
 	releaseAvailable := h.releaseUpdater != nil && h.releaseUpdater.Supported()
 	gitAvailable := !releaseAvailable && err == nil && status.RemoteURL != ""
@@ -333,7 +331,7 @@ func (h *SystemUpdateHandler) latestStableRelease(ctx context.Context, remoteURL
 	return latest, nil
 }
 
-// rollback 回退到指定版本；成功后自动关闭自动更新，避免下个周期又被拉回最新。
+// rollback 回退到指定版本。
 func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
 		writeError(c, http.StatusBadRequest, errors.New("Release 包仅在健康检查失败时自动回退；手动回退请重新安装目标完整包"))
@@ -356,20 +354,10 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 		h.writeUpdateError(c, "system.update.rollback", err)
 		return
 	}
-	autoDisabled := false
-	if h.auto != nil && h.auto.Settings().AutoUpdateEnabled {
-		if _, err := h.auto.SaveSettings(c.Request.Context(), updater.Settings{
-			AutoUpdateEnabled: false,
-			IntervalMinutes:   h.auto.Settings().IntervalMinutes,
-		}); err == nil {
-			autoDisabled = true
-		}
-	}
 	recordRequestOperation(c, h.logs, "system.update.rollback", "系统已回退到 "+result.Status.HeadCommit, result.Status.Root, map[string]any{
-		"ref":                payload.Ref,
-		"auto_update_paused": autoDisabled,
+		"ref": payload.Ref,
 	})
-	c.JSON(http.StatusOK, gin.H{"result": result, "auto_update_disabled": autoDisabled})
+	c.JSON(http.StatusOK, gin.H{"result": result})
 }
 
 // changelogList 返回 GitHub 更新日志：源码部署使用 origin，Release/Docker 使用官方仓库。
@@ -422,54 +410,6 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 	c.JSON(http.StatusOK, payload)
 }
 
-// getSettings 返回自动更新设置与最近一次自动更新结果。
-func (h *SystemUpdateHandler) getSettings(c *gin.Context) {
-	if h.auto == nil {
-		writeError(c, http.StatusNotFound, errors.New("自动更新未启用"))
-		return
-	}
-	lastRunAt, lastResult, lastError := h.auto.LastRun()
-	payload := gin.H{
-		"settings":        h.auto.Settings(),
-		"deployment_mode": h.currentDeploymentMode(c.Request.Context()),
-	}
-	if !lastRunAt.IsZero() {
-		payload["last_run_at"] = lastRunAt
-		payload["last_result"] = lastResult
-		payload["last_error"] = lastError
-	}
-	c.JSON(http.StatusOK, payload)
-}
-
-// saveSettings 校验并保存自动更新设置。
-func (h *SystemUpdateHandler) saveSettings(c *gin.Context) {
-	if h.auto == nil {
-		writeError(c, http.StatusNotFound, errors.New("自动更新未启用"))
-		return
-	}
-	var settings updater.Settings
-	if err := c.ShouldBindJSON(&settings); err != nil {
-		writeError(c, http.StatusBadRequest, err)
-		return
-	}
-	saved, err := h.auto.SaveSettings(c.Request.Context(), settings)
-	if err != nil {
-		logAndWriteError(c, h.logs, http.StatusInternalServerError, "system.update.settings", err, "", nil)
-		return
-	}
-	state := "关闭"
-	if saved.AutoUpdateEnabled {
-		state = "开启"
-	}
-	recordRequestOperation(c, h.logs, "system.update.settings", "自动更新已"+state, "", map[string]any{
-		"interval_minutes": saved.IntervalMinutes,
-	})
-	c.JSON(http.StatusOK, gin.H{
-		"settings":        saved,
-		"deployment_mode": h.currentDeploymentMode(c.Request.Context()),
-	})
-}
-
 // writeUpdateError 记录系统更新错误并返回响应。
 func (h *SystemUpdateHandler) writeUpdateError(c *gin.Context, action string, err error) {
 	if errors.Is(err, updater.ErrRemoteNotConfigured) || errors.Is(err, updater.ErrReleaseUpdateUnsupported) {
@@ -477,14 +417,6 @@ func (h *SystemUpdateHandler) writeUpdateError(c *gin.Context, action string, er
 		return
 	}
 	logAndWriteError(c, h.logs, http.StatusBadRequest, action, err, "", nil)
-}
-
-func (h *SystemUpdateHandler) currentDeploymentMode(ctx context.Context) string {
-	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
-		return "release"
-	}
-	status, err := h.updater.Status(ctx)
-	return deploymentMode(err == nil && status.RemoteURL != "")
 }
 
 func deploymentMode(gitAvailable bool) string {

@@ -81,23 +81,28 @@ type MessageEvent struct {
 	SenderTitle      string           `json:"sender_title,omitempty"`
 	ToMe             bool             `json:"to_me,omitempty"`
 	Quoted           *QuotedMessage   `json:"quoted,omitempty"`
-	// SemanticSourceMessageID records the concrete historical message selected
-	// as this event's semantic media/context source.
+	// SemanticSourceMessageID keeps the first selected historical source for
+	// compatibility with persisted events created before multi-source routing.
 	SemanticSourceMessageID string `json:"semantic_source_message_id,omitempty"`
+	// SemanticSourceMessageIDs preserves every historical source selected for a
+	// cross-message reference, in the order the model should consume them.
+	SemanticSourceMessageIDs []string `json:"semantic_source_message_ids,omitempty"`
 	// botReply is an in-memory compatibility marker for assistant history entries.
 	// Persisted outgoing events still use the regular message fields above.
-	botReply string
+	botReply      string
+	routingReason string
 }
 
 type QuotedMessage struct {
-	MessageID               string           `json:"message_id,omitempty"`
-	UserID                  string           `json:"user_id,omitempty"`
-	GroupID                 string           `json:"group_id,omitempty"`
-	SenderName              string           `json:"sender_name,omitempty"`
-	RawMessage              string           `json:"raw_message,omitempty"`
-	Segments                []MessageSegment `json:"segments,omitempty"`
-	Semantic                bool             `json:"semantic,omitempty"`
-	SemanticSourceMessageID string           `json:"semantic_source_message_id,omitempty"`
+	MessageID                string           `json:"message_id,omitempty"`
+	UserID                   string           `json:"user_id,omitempty"`
+	GroupID                  string           `json:"group_id,omitempty"`
+	SenderName               string           `json:"sender_name,omitempty"`
+	RawMessage               string           `json:"raw_message,omitempty"`
+	Segments                 []MessageSegment `json:"segments,omitempty"`
+	Semantic                 bool             `json:"semantic,omitempty"`
+	SemanticSourceMessageID  string           `json:"semantic_source_message_id,omitempty"`
+	SemanticSourceMessageIDs []string         `json:"semantic_source_message_ids,omitempty"`
 }
 
 type OutgoingMessage struct {
@@ -198,6 +203,7 @@ type BotConfig struct {
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
+	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceEnabled        *bool                `json:"reply_reference_enabled,omitempty"`
 	MentionUserEnabled           *bool                `json:"mention_user_enabled,omitempty"`
 	MarkdownToPlain              *bool                `json:"markdown_to_plain,omitempty"`
@@ -228,6 +234,8 @@ type BotConfig struct {
 	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
 	RecentContextLimit           int                  `json:"recent_context_limit,omitempty"`
 	ContextSummaryThreshold      int                  `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled        *bool                `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled      *bool                `json:"cross_group_memory_enabled,omitempty"`
 	PassiveReplyChance           float64              `json:"passive_reply_chance,omitempty"`
 	PassiveReplyThreshold        float64              `json:"passive_reply_threshold,omitempty"`
 	ReplyRules                   []ReplyRule          `json:"reply_rules,omitempty"`
@@ -341,6 +349,7 @@ type ConfigPayload struct {
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
+	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceEnabled        *bool                `json:"reply_reference_enabled,omitempty"`
 	MentionUserEnabled           *bool                `json:"mention_user_enabled,omitempty"`
 	MarkdownToPlain              *bool                `json:"markdown_to_plain,omitempty"`
@@ -371,6 +380,8 @@ type ConfigPayload struct {
 	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
 	RecentContextLimit           int                  `json:"recent_context_limit,omitempty"`
 	ContextSummaryThreshold      int                  `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled        *bool                `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled      *bool                `json:"cross_group_memory_enabled,omitempty"`
 	PassiveReplyChance           float64              `json:"passive_reply_chance,omitempty"`
 	PassiveReplyThreshold        float64              `json:"passive_reply_threshold,omitempty"`
 	ReplyRules                   []ReplyRule          `json:"reply_rules,omitempty"`
@@ -688,6 +699,8 @@ func DefaultBotConfig() BotConfig {
 		BotReplyLoopDetectionEnabled: boolPointer(true),
 		RecentContextLimit:           20,
 		ContextSummaryThreshold:      100,
+		LongTermMemoryEnabled:        boolPointer(true),
+		CrossGroupMemoryEnabled:      boolPointer(false),
 		PassiveReplyChance:           1,
 		PassiveReplyThreshold:        0.8,
 		ReplyRules:                   []ReplyRule{},
@@ -811,6 +824,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ContextSummaryThreshold < cfg.RecentContextLimit {
 		cfg.ContextSummaryThreshold = cfg.RecentContextLimit
 	}
+	if cfg.LongTermMemoryEnabled == nil {
+		cfg.LongTermMemoryEnabled = boolPointer(true)
+	}
+	if cfg.CrossGroupMemoryEnabled == nil {
+		cfg.CrossGroupMemoryEnabled = boolPointer(false)
+	}
 	if cfg.PassiveReplyChance <= 0 {
 		cfg.PassiveReplyChance = defaults.PassiveReplyChance
 	}
@@ -930,6 +949,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WelcomeEnabled:               cfg.WelcomeEnabled,
 		WelcomeMessage:               cfg.WelcomeMessage,
 		SystemPrompt:                 cfg.SystemPrompt,
+		DebugModeEnabled:             cfg.DebugModeEnabled,
 		ReplyReferenceEnabled:        copyBoolPointer(cfg.ReplyReferenceEnabled),
 		MentionUserEnabled:           copyBoolPointer(cfg.MentionUserEnabled),
 		MarkdownToPlain:              copyBoolPointer(cfg.MarkdownToPlain),
@@ -960,6 +980,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		LLMQQIDMaskingEnabled:        copyBoolPointer(cfg.LLMQQIDMaskingEnabled),
 		RecentContextLimit:           cfg.RecentContextLimit,
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
+		LongTermMemoryEnabled:        copyBoolPointer(cfg.LongTermMemoryEnabled),
+		CrossGroupMemoryEnabled:      copyBoolPointer(cfg.CrossGroupMemoryEnabled),
 		PassiveReplyChance:           cfg.PassiveReplyChance,
 		PassiveReplyThreshold:        cfg.PassiveReplyThreshold,
 		ReplyRules:                   append([]ReplyRule(nil), cfg.ReplyRules...),
@@ -1022,6 +1044,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WelcomeEnabled:               payload.WelcomeEnabled,
 		WelcomeMessage:               payload.WelcomeMessage,
 		SystemPrompt:                 payload.SystemPrompt,
+		DebugModeEnabled:             payload.DebugModeEnabled,
 		ReplyReferenceEnabled:        copyBoolPointer(payload.ReplyReferenceEnabled),
 		MentionUserEnabled:           copyBoolPointer(payload.MentionUserEnabled),
 		MarkdownToPlain:              copyBoolPointer(payload.MarkdownToPlain),
@@ -1052,6 +1075,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		LLMQQIDMaskingEnabled:        copyBoolPointer(payload.LLMQQIDMaskingEnabled),
 		RecentContextLimit:           payload.RecentContextLimit,
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
+		LongTermMemoryEnabled:        copyBoolPointer(payload.LongTermMemoryEnabled),
+		CrossGroupMemoryEnabled:      copyBoolPointer(payload.CrossGroupMemoryEnabled),
 		PassiveReplyChance:           payload.PassiveReplyChance,
 		PassiveReplyThreshold:        payload.PassiveReplyThreshold,
 		ReplyRules:                   append([]ReplyRule(nil), payload.ReplyRules...),

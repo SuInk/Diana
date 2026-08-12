@@ -4,9 +4,9 @@
       <label class="switch">
         <input type="checkbox" :checked="custom" @change="toggleCustom" />
         <span class="track" aria-hidden="true"></span>
-        <span class="switch-label">为本群单独设置准入条件</span>
+        <span class="switch-label">为本群单独设置回复规则</span>
       </label>
-      <p class="muted" style="margin-top: 4px">关闭时跟随全局准入设置。</p>
+      <p class="muted" style="margin-top: 4px">关闭时跟随全局回复时间与用户屏蔽设置。</p>
     </div>
 
     <div v-if="!allowInherit || custom" class="form-grid">
@@ -43,7 +43,7 @@
             @change="patch({ active_hours_enabled: checkedOf($event) })"
           />
           <span class="track" aria-hidden="true"></span>
-          <span class="switch-label">限制回复时段</span>
+          <span class="switch-label">{{ allowInherit ? "限制本群回复时间" : "限制回复时间" }}</span>
         </label>
       </div>
 
@@ -117,7 +117,7 @@
       </div>
 
       <div class="field">
-        <label :for="`${idPrefix}-exempt`">豁免用户（逗号分隔{{ accountNoun }}）</label>
+        <label :for="`${idPrefix}-exempt`">{{ allowInherit ? "本群豁免用户" : "豁免用户" }}（逗号分隔{{ accountNoun }}）</label>
         <input
           :id="`${idPrefix}-exempt`"
           class="input"
@@ -128,14 +128,14 @@
       </div>
 
       <div class="field">
-        <label :for="`${idPrefix}-blocked`">屏蔽用户（逗号分隔{{ accountNoun }}）</label>
+        <label :for="`${idPrefix}-blocked`">{{ allowInherit ? "本群屏蔽 QQ 号" : "屏蔽用户" }}（逗号分隔{{ accountNoun }}）</label>
         <input
           :id="`${idPrefix}-blocked`"
           class="input"
           :value="(gate.blocked_users ?? []).join(',')"
           @input="patch({ blocked_users: listOf($event) })"
         />
-        <p class="muted" style="margin-top: 4px">群聊和私聊都不回复。</p>
+        <p class="muted" style="margin-top: 4px">{{ allowInherit ? "仅在当前群不回复这些 QQ 号。" : "群聊和私聊都不回复。" }}</p>
       </div>
     </div>
   </div>

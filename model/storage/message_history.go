@@ -152,6 +152,124 @@ ORDER BY event_time ASC, created_at ASC, id ASC
 	return events, nil
 }
 
+// SearchMessageEvents performs a bounded database-side search over durable
+// history. Cross-session searches are restricted to an explicit session prefix
+// supplied by the runtime, so records from another bot namespace cannot leak in.
+func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.MessageHistorySearchQuery) ([]assistant.MessageEvent, int, error) {
+	if s == nil || s.db == nil {
+		return nil, 0, nil
+	}
+	query.Session = strings.TrimSpace(query.Session)
+	query.SessionPrefix = strings.TrimSpace(query.SessionPrefix)
+	query.Text = strings.TrimSpace(query.Text)
+	if query.Text == "" || (!query.CrossSession && query.Session == "") || (query.CrossSession && query.SessionPrefix == "") {
+		return nil, 0, nil
+	}
+	if query.FromTime < 0 {
+		query.FromTime = 0
+	}
+	if query.ThroughTime <= 0 {
+		query.ThroughTime = time.Now().Unix()
+	}
+	if query.FromTime > query.ThroughTime {
+		query.FromTime, query.ThroughTime = query.ThroughTime, query.FromTime
+	}
+	limit := normalizeMessageHistoryLimit(query.Limit)
+
+	searchable := `LOWER(COALESCE(sender_name, '') || CHAR(10) || COALESCE(user_id, '') || CHAR(10) || COALESCE(message_id, '') || CHAR(10) || COALESCE(group_id, '') || CHAR(10) || COALESCE(text, '') || CHAR(10) || payload)`
+	where := `kind != ? AND event_time BETWEEN ? AND ?`
+	args := []any{string(assistant.EventKindNotice), query.FromTime, query.ThroughTime}
+	if query.CrossSession {
+		where += ` AND session LIKE ? ESCAPE '\'`
+		args = append(args, escapeMessageHistoryLike(query.SessionPrefix)+"%")
+	} else {
+		where += ` AND session = ?`
+		args = append(args, query.Session)
+	}
+	terms := historySearchTerms(query)
+	matchParts := make([]string, 0, len(terms))
+	for _, term := range terms {
+		matchParts = append(matchParts, searchable+` LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeMessageHistoryLike(term)+"%")
+	}
+	where += ` AND (` + strings.Join(matchParts, ` OR `) + `)`
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_events WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	scoreParts := make([]string, 0, len(terms))
+	scoreArgs := make([]any, 0, len(terms))
+	for index, term := range terms {
+		weight := 1
+		if index == 0 {
+			weight = 8
+		}
+		scoreParts = append(scoreParts, fmt.Sprintf(`CASE WHEN %s LIKE ? ESCAPE '\' THEN %d ELSE 0 END`, searchable, weight))
+		scoreArgs = append(scoreArgs, "%"+escapeMessageHistoryLike(term)+"%")
+	}
+	rowArgs := append(append([]any(nil), args...), scoreArgs...)
+	rowArgs = append(rowArgs, limit)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT payload
+FROM message_events
+WHERE `+where+`
+ORDER BY (`+strings.Join(scoreParts, ` + `)+`) DESC, event_time DESC, created_at DESC, id DESC
+LIMIT ?`, rowArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	events := make([]assistant.MessageEvent, 0, min(limit, total))
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, 0, err
+		}
+		var event assistant.MessageEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, 0, fmt.Errorf("decode message event: %w", err)
+		}
+		events = append(events, event)
+	}
+	return events, total, rows.Err()
+}
+
+func historySearchTerms(query assistant.MessageHistorySearchQuery) []string {
+	seen := make(map[string]struct{})
+	terms := make([]string, 0, min(49, len(query.Terms)+1))
+	add := func(term string) {
+		term = strings.TrimSpace(strings.ToLower(term))
+		if len([]rune(term)) < 2 {
+			return
+		}
+		if _, ok := seen[term]; ok {
+			return
+		}
+		seen[term] = struct{}{}
+		terms = append(terms, term)
+	}
+	add(strings.Join(strings.Fields(query.Text), ""))
+	for _, term := range query.Terms {
+		add(term)
+	}
+	for _, term := range strings.Fields(query.Text) {
+		add(term)
+	}
+	if len(terms) == 0 {
+		terms = append(terms, strings.ToLower(strings.TrimSpace(query.Text)))
+	}
+	if len(terms) > 49 {
+		terms = terms[:49]
+	}
+	return terms
+}
+
+func escapeMessageHistoryLike(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
+}
+
 // FindMessageEvent returns the persisted non-notice message with the given OneBot message ID.
 func (s *SQLiteStore) FindMessageEvent(ctx context.Context, session string, messageID string) (assistant.MessageEvent, bool, error) {
 	if s == nil || s.db == nil {

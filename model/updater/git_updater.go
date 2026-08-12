@@ -75,28 +75,6 @@ type Result struct {
 	At              time.Time `json:"at"`
 }
 
-type Settings struct {
-	AutoUpdateEnabled bool `json:"auto_update_enabled"`
-	IntervalMinutes   int  `json:"interval_minutes"`
-}
-
-func DefaultSettings() Settings {
-	return Settings{AutoUpdateEnabled: true, IntervalMinutes: 30}
-}
-
-func (s Settings) WithDefaults() Settings {
-	if s.IntervalMinutes <= 0 {
-		s.IntervalMinutes = 30
-	}
-	if s.IntervalMinutes < 10 {
-		s.IntervalMinutes = 10
-	}
-	if s.IntervalMinutes > 1440 {
-		s.IntervalMinutes = 1440
-	}
-	return s
-}
-
 // Options configures the fixed build/apply command. It is set at process
 // startup and is never accepted from an HTTP request.
 type Options struct {

@@ -307,6 +307,13 @@ func mergeQuotedMessageMedia(live, stored *QuotedMessage) *QuotedMessage {
 	if strings.TrimSpace(merged.SemanticSourceMessageID) == "" {
 		merged.SemanticSourceMessageID = strings.TrimSpace(stored.SemanticSourceMessageID)
 	}
+	merged.SemanticSourceMessageIDs = semanticSourceMessageIDs(
+		merged.SemanticSourceMessageID,
+		append(append([]string(nil), merged.SemanticSourceMessageIDs...), quotedSemanticSourceMessageIDs(stored)...),
+	)
+	if len(merged.SemanticSourceMessageIDs) > 0 {
+		merged.SemanticSourceMessageID = merged.SemanticSourceMessageIDs[0]
+	}
 	return &merged
 }
 

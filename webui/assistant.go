@@ -206,6 +206,7 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/auto-info", h.autoInfo)
 	router.GET(base+"/dashboard-stats", h.dashboardStats)
 	router.GET(base+"/events", h.listEvents)
+	router.GET(base+"/events/:id/trace", h.eventTrace)
 	router.GET(base+"/tasks", h.listTasks)
 	router.POST(base+"/start", h.start)
 	router.POST(base+"/stop", h.stop)

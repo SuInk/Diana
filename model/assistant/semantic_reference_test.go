@@ -97,6 +97,75 @@ func TestSemanticReferenceCanSelectImageFileOrText(t *testing.T) {
 	}
 }
 
+func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
+	provider := &sequenceLLMProvider{replies: []string{`{"message_ids":["image-3","image-1","image-2"],"confidence":0.98,"reason":"用户明确指向连发的三张图"}`}}
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	imageURLs := []string{
+		"data:image/png;base64,YQ==",
+		"data:image/png;base64,Yg==",
+		"data:image/png;base64,Yw==",
+	}
+	for index, imageURL := range imageURLs {
+		runtime.remember(MessageEvent{
+			Kind:       EventKindPrivate,
+			Time:       int64(100 + index),
+			UserID:     "user-1",
+			MessageID:  "image-" + string(rune('1'+index)),
+			RawMessage: "[图片]",
+			Segments:   []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURL}}},
+		})
+	}
+
+	event := runtime.enrichSemanticReference(context.Background(), MessageEvent{
+		Kind:      EventKindPrivate,
+		Time:      110,
+		UserID:    "user-1",
+		MessageID: "question",
+		Segments:  []MessageSegment{{Type: "text", Data: map[string]string{"text": "读我连发的三张图"}}},
+	}, "读我连发的三张图")
+	if got := strings.Join(eventSemanticSourceMessageIDs(event), ","); got != "image-1,image-2,image-3" {
+		t.Fatalf("semantic sources = %q", got)
+	}
+	if event.Quoted == nil || event.Quoted.MessageID != "image-1" || !event.Quoted.Semantic {
+		t.Fatalf("primary semantic quote = %#v", event.Quoted)
+	}
+	if got := runtime.semanticReferenceImageURLs(context.Background(), event); strings.Join(got, ",") != strings.Join(imageURLs, ",") {
+		t.Fatalf("semantic images = %#v", got)
+	}
+
+	prompt := currentPromptText(event, "读我连发的三张图")
+	message := llmMessageFromEventWithImagesForContext(context.Background(), event, prompt, runtime.semanticReferenceImageURLs(context.Background(), event))
+	var actualImages []string
+	for _, part := range message.Parts {
+		if part.Type == llm.ContentPartImageURL {
+			actualImages = append(actualImages, part.ImageURL)
+		}
+		if strings.Contains(part.Text, "[图片]") {
+			t.Fatalf("image placeholder leaked into multimodal message: %#v", message)
+		}
+	}
+	if got := strings.Join(actualImages, ","); got != strings.Join(imageURLs, ",") {
+		t.Fatalf("multimodal images = %#v", actualImages)
+	}
+	if !strings.Contains(prompt, "3 条历史来源") || !strings.Contains(prompt, "逐张查看") || strings.Contains(message.Content, "[图片]") {
+		t.Fatalf("current prompt = %q", prompt)
+	}
+	if text := historyPromptText(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURLs[0]}}}, RawMessage: "[图片]"}); text != "" {
+		t.Fatalf("pure image history must not become a placeholder: %q", text)
+	}
+	if item := chatHistoryItem(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURLs[0]}}}, RawMessage: "[图片]"}); item.Text != "" || item.ImageCount != 1 {
+		t.Fatalf("chat history image metadata = %#v", item)
+	}
+	if sources := runtime.imageEditSourceImages(context.Background(), event, "把这三张拼在一起"); strings.Join(sources, ",") != strings.Join(imageURLs, ",") {
+		t.Fatalf("image edit sources = %#v", sources)
+	}
+	if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].Messages[0].Content, "message_ids") {
+		t.Fatalf("semantic routing requests = %#v", provider.requests)
+	}
+}
+
 func TestSemanticReferenceRejectsUnknownCandidate(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{`{"message_id":"invented","confidence":1,"reason":"bad"}`}}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
@@ -240,7 +309,7 @@ func TestOutgoingHistoryPreservesReplyAndSemanticSource(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	source := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "owner", MessageID: "request"}
 	remembered := source
-	remembered.SemanticSourceMessageID = "target-image"
+	setEventSemanticSourceMessageIDs(&remembered, []string{"target-image", "target-image-2"})
 	runtime.remember(remembered)
 
 	outgoing := runtime.outgoingHistoryEvent(source, OutgoingMessage{
@@ -250,6 +319,9 @@ func TestOutgoingHistoryPreservesReplyAndSemanticSource(t *testing.T) {
 	})
 	if outgoing.SemanticSourceMessageID != "target-image" {
 		t.Fatalf("semantic source = %q", outgoing.SemanticSourceMessageID)
+	}
+	if got := strings.Join(outgoing.SemanticSourceMessageIDs, ","); got != "target-image,target-image-2" {
+		t.Fatalf("semantic sources = %q", got)
 	}
 	if len(outgoing.Segments) < 3 || outgoing.Segments[0].Type != "reply" || outgoing.Segments[0].Data["id"] != "request" || outgoing.Segments[1].Type != "at" {
 		t.Fatalf("outgoing segments = %#v", outgoing.Segments)

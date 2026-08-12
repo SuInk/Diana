@@ -207,6 +207,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewMessageHistoryPlugin(),
 		NewResolverPlugin(nil),
 		NewFileParserPlugin(nil),
+		NewLLMConfigPlugin(),
 		NewSandboxedBrowserRenderPlugin(),
 		NewVoiceTTSPlugin(nil),
 		NewWebSearchPlugin(nil),

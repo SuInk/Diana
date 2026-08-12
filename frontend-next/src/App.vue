@@ -134,7 +134,7 @@ import { currentView, navItems, navigate, type ViewID } from "./router";
 import { startEventStream, stream } from "./stream";
 import { theme } from "./theme";
 import { formatUptime } from "./format";
-import { getAuthStatus, getConfig, getHealth, getSystemVersion, logout, type HealthResponse, type SystemVersion } from "./api";
+import { checkForUpdate, getAuthStatus, getConfig, getHealth, getSystemVersion, logout, type HealthResponse, type SystemVersion } from "./api";
 import ToastHost from "./components/ToastHost.vue";
 import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
@@ -187,6 +187,7 @@ const systemVersion = ref<SystemVersion | null>(null);
 const versionLabel = computed(() => systemVersion.value?.version_label || systemVersion.value?.build_version || "控制台");
 const releaseUpdateAvailable = ref(false);
 const health = ref<HealthResponse | null>(null);
+let updateCheckTimer: number | undefined;
 
 const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
@@ -256,6 +257,15 @@ function go(view: ViewID): void {
   drawerOpen.value = false;
 }
 
+async function refreshUpdateIndicator(): Promise<void> {
+  try {
+    const result = await checkForUpdate();
+    releaseUpdateAvailable.value = result.update_available;
+  } catch {
+    // 静默检查只负责黄色提示点，网络异常不打扰控制台操作。
+  }
+}
+
 // bootApp 在鉴权通过（或未开启鉴权）后加载应用数据。
 async function bootApp(): Promise<void> {
   startEventStream();
@@ -268,6 +278,10 @@ async function bootApp(): Promise<void> {
     systemVersion.value = await getSystemVersion();
   } catch {
     /* 版本信息失败时侧栏只显示占位 */
+  }
+  void refreshUpdateIndicator();
+  if (updateCheckTimer === undefined) {
+    updateCheckTimer = window.setInterval(() => void refreshUpdateIndicator(), 30 * 60 * 1000);
   }
   // 首次访问且 LLM 未配置时自动进入向导；之后只在总览顶部保留一条引导。
   try {
@@ -315,5 +329,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   sidebarMedia.removeEventListener("change", syncSidebarMode);
+  if (updateCheckTimer !== undefined) {
+    window.clearInterval(updateCheckTimer);
+  }
 });
 </script>

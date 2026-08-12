@@ -19,7 +19,7 @@ func TestCQToSegmentsAndPlainText(t *testing.T) {
 	if got[1].Type != "at" || got[1].Data["qq"] != "123" {
 		t.Fatalf("at segment = %#v", got[1])
 	}
-	if text := PlainText(got); text != "hi @123  看图 [图片]" {
+	if text := PlainText(got); text != "hi @123  看图" {
 		t.Fatalf("PlainText = %q", text)
 	}
 }
