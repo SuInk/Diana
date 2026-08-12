@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/netguard"
@@ -16,34 +17,83 @@ import (
 
 const maxLLMImageBytes = 8 << 20
 
+const maxConcurrentLLMImageLoads = 4
+
 func llmReadyImageURLs(ctx context.Context, imageURLs []string) []string {
-	if len(imageURLs) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(imageURLs))
+	ready, _ := loadLLMImageURLs(ctx, imageURLs)
+	out := make([]string, 0, len(ready))
 	seen := map[string]struct{}{}
+	for _, imageURL := range ready {
+		if _, ok := seen[imageURL]; ok {
+			continue
+		}
+		seen[imageURL] = struct{}{}
+		out = append(out, imageURL)
+	}
+	return out
+}
+
+func loadLLMImageURLs(ctx context.Context, imageURLs []string) ([]string, bool) {
+	if len(imageURLs) == 0 {
+		return nil, true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inputs := make([]string, 0, len(imageURLs))
 	for _, imageURL := range imageURLs {
 		imageURL = strings.TrimSpace(imageURL)
 		if imageURL == "" {
 			continue
 		}
-		readyURL := imageURL
-		if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
-			dataURL, err := fetchImageAsDataURL(ctx, imageURL)
-			if err != nil {
-				continue
+		inputs = append(inputs, imageURL)
+	}
+	if len(inputs) == 0 {
+		return nil, true
+	}
+
+	ready := make([]string, len(inputs))
+	workerCount := min(len(inputs), maxConcurrentLLMImageLoads)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func(offset int) {
+			defer workers.Done()
+			for index := offset; index < len(inputs); index += workerCount {
+				imageURL := inputs[index]
+				var readyURL string
+				switch {
+				case strings.HasPrefix(imageURL, "data:image/"):
+					readyURL = imageURL
+				case strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://"):
+					dataURL, err := fetchImageAsDataURL(ctx, imageURL)
+					if err != nil {
+						continue
+					}
+					readyURL = dataURL
+				default:
+					dataURL, err := localImageAsDataURL(imageURL)
+					if err != nil {
+						continue
+					}
+					readyURL = dataURL
+				}
+				ready[index] = readyURL
 			}
-			readyURL = dataURL
-		} else if dataURL, err := localImageAsDataURL(imageURL); err == nil {
-			readyURL = dataURL
-		}
-		if _, ok := seen[readyURL]; ok {
+		}(worker)
+	}
+	workers.Wait()
+
+	out := make([]string, 0, len(ready))
+	complete := true
+	for _, readyURL := range ready {
+		if readyURL == "" {
+			complete = false
 			continue
 		}
-		seen[readyURL] = struct{}{}
 		out = append(out, readyURL)
 	}
-	return out
+	return out, complete
 }
 
 func fetchImageAsDataURL(ctx context.Context, imageURL string) (string, error) {

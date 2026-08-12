@@ -54,9 +54,9 @@ type ExtensionCatalog interface {
 	Extensions() []ExtensionState
 }
 
-// ExtensionManager owns the live skills catalog and MCP sessions for one Agent
-// registry. Install state is filesystem-backed, so the next Agent request sees
-// the same capabilities even though each registry has a request-scoped lifetime.
+// ExtensionManager owns the live skills catalog and MCP sessions for a shared
+// runtime registry. Request-scoped views inherit these capabilities without
+// restarting MCP processes or taking ownership of their lifecycle.
 type ExtensionManager struct {
 	mu sync.RWMutex
 
@@ -92,7 +92,7 @@ func NewExtensionManager(ctx context.Context, cfg Config, registry *ToolRegistry
 	skillTools := newLiveSkillTools(manager.Skills)
 	registry.Register(skillTools.List)
 	registry.Register(skillTools.Read)
-	registry.Register(&ExtensionsListTool{manager: manager})
+	registry.Register(NewExtensionsListTool(manager, cfg.ExtensionManagement))
 	if cfg.ExtensionManagement {
 		registry.Register(&SkillsInstallTool{manager: manager})
 		registry.Register(&SkillsUninstallTool{manager: manager})
@@ -226,7 +226,12 @@ func (m *ExtensionManager) Close() error {
 }
 
 type ExtensionsListTool struct {
-	manager *ExtensionManager
+	catalog           ExtensionCatalog
+	managementEnabled bool
+}
+
+func NewExtensionsListTool(catalog ExtensionCatalog, managementEnabled bool) *ExtensionsListTool {
+	return &ExtensionsListTool{catalog: catalog, managementEnabled: managementEnabled}
 }
 
 func (t *ExtensionsListTool) Name() string { return "extensions.list" }
@@ -236,12 +241,20 @@ func (t *ExtensionsListTool) Description() string {
 }
 
 func (t *ExtensionsListTool) Run(context.Context, map[string]any) (string, error) {
-	payload := map[string]any{
-		"extensions":         t.manager.Extensions(),
-		"management_enabled": t.manager.cfg.ExtensionManagement,
+	var extensions []ExtensionState
+	if t != nil && t.catalog != nil {
+		extensions = t.catalog.Extensions()
 	}
-	if warnings := t.manager.Warnings(); len(warnings) > 0 {
-		payload["warnings"] = warnings
+	payload := map[string]any{
+		"extensions":         extensions,
+		"management_enabled": t != nil && t.managementEnabled,
+	}
+	if t != nil {
+		if manager, ok := t.catalog.(*ExtensionManager); ok {
+			if warnings := manager.Warnings(); len(warnings) > 0 {
+				payload["warnings"] = warnings
+			}
+		}
 	}
 	body, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

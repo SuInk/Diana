@@ -2,6 +2,9 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"log"
 	"strings"
 
 	"github.com/SuInk/diana/model/agent"
@@ -19,22 +22,15 @@ type agentReplyScope struct {
 }
 
 func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, extraTools ...agent.Tool) (*agent.ToolRegistry, error) {
-	agentCfg := agent.Config{
-		WorkDir:             cfg.AgentWorkDir,
-		MaxSteps:            cfg.AgentMaxSteps,
-		SkillRoots:          cfg.AgentSkillRoots,
-		MCPConfigPath:       cfg.AgentMCPConfigPath,
-		ExtensionManagement: relationship.Owner,
-		BuiltinExtensions:   r.agentBuiltinExtensions(event),
-		CommandAllowlist:    cfg.AgentCommandAllowlist,
-		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
-		BrowserCDPURL:       cfg.AgentBrowserCDPURL,
-		BrowserTimeoutMS:    cfg.AgentBrowserTimeoutMS,
-	}
+	agentCfg := r.agentRegistryConfig(cfg, event, relationship.Owner)
 	var registry *agent.ToolRegistry
 	var err error
 	if relationship.Owner {
-		registry, err = agent.NewAgentToolRegistry(ctx, agentCfg)
+		base, baseErr := r.sharedAgentRegistry(ctx, agentCfg)
+		if baseErr != nil {
+			return nil, baseErr
+		}
+		registry, err = base.NewView(agentCfg)
 	} else {
 		registry, err = agent.NewDefaultToolRegistry(agentCfg)
 	}
@@ -49,6 +45,83 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	}
 	registry.Retain(relationship.allowedAgentToolNames())
 	return registry, nil
+}
+
+func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensionManagement bool) agent.Config {
+	return agent.Config{
+		WorkDir:             cfg.AgentWorkDir,
+		MaxSteps:            cfg.AgentMaxSteps,
+		SkillRoots:          cfg.AgentSkillRoots,
+		MCPConfigPath:       cfg.AgentMCPConfigPath,
+		ExtensionManagement: extensionManagement,
+		BuiltinExtensions:   r.agentBuiltinExtensions(event),
+		CommandAllowlist:    cfg.AgentCommandAllowlist,
+		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
+		BrowserCDPURL:       cfg.AgentBrowserCDPURL,
+		BrowserTimeoutMS:    cfg.AgentBrowserTimeoutMS,
+	}
+}
+
+func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*agent.ToolRegistry, error) {
+	cfg = cfg.WithDefaults()
+	// Built-in plugin state can vary per group override, but it does not change
+	// the underlying Skills/MCP processes. Request views overlay that state.
+	baseCfg := cfg
+	baseCfg.BuiltinExtensions = nil
+	keyBody, err := json.Marshal(baseCfg)
+	if err != nil {
+		return nil, err
+	}
+	key := string(keyBody)
+	r.agentRegistryMu.Lock()
+	defer r.agentRegistryMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r.agentRegistryCache == nil {
+		r.agentRegistryCache = map[string]*agent.ToolRegistry{}
+	}
+	if registry := r.agentRegistryCache[key]; registry != nil {
+		return registry, nil
+	}
+	r.mu.RLock()
+	lifecycleCtx := r.runCtx
+	r.mu.RUnlock()
+	if lifecycleCtx == nil {
+		lifecycleCtx = context.WithoutCancel(ctx)
+	}
+	registry, err := agent.NewAgentToolRegistry(lifecycleCtx, baseCfg)
+	if err != nil {
+		return nil, err
+	}
+	r.agentRegistryCache[key] = registry
+	return registry, nil
+}
+
+func (r *Runtime) prewarmAgentRegistries(ctx context.Context, configs []BotConfig) {
+	for _, cfg := range configs {
+		cfg = cfg.WithDefaults()
+		if !cfg.Enabled || !cfg.AgentEnabled || strings.TrimSpace(cfg.OwnerID) == "" {
+			continue
+		}
+		event := MessageEvent{Kind: EventKindPrivate, ProfileID: cfg.ID, UserID: cfg.OwnerID}
+		if _, err := r.sharedAgentRegistry(ctx, r.agentRegistryConfig(cfg, event, true)); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("qqbot agent extension prewarm failed for profile %q: %v", cfg.ID, err)
+		}
+	}
+}
+
+func (r *Runtime) closeAgentRegistryCache() {
+	r.agentRegistryMu.Lock()
+	registries := make([]*agent.ToolRegistry, 0, len(r.agentRegistryCache))
+	for _, registry := range r.agentRegistryCache {
+		registries = append(registries, registry)
+	}
+	r.agentRegistryCache = map[string]*agent.ToolRegistry{}
+	r.agentRegistryMu.Unlock()
+	for _, registry := range registries {
+		_ = registry.Close()
+	}
 }
 
 func (r *Runtime) agentBuiltinExtensions(event MessageEvent) []agent.BuiltinExtension {

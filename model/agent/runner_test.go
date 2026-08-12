@@ -273,23 +273,38 @@ func TestRunnerPromptIncludesSkills(t *testing.T) {
 	registry := NewToolRegistry()
 	registry.SetSkills([]SkillMetadata{{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}})
 	runner := &Runner{cfg: Config{SkillsListBudget: 8000}.WithDefaults(), registry: registry}
-	prompt := runner.systemPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请用 $demo-skill"}}})
-	if !strings.Contains(prompt, "demo-skill") || !strings.Contains(prompt, "Explicitly Mentioned Skills") {
-		t.Fatalf("prompt = %s", prompt)
+	protocol := runner.systemPrompt()
+	hint := runner.explicitSkillPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请用 $demo-skill"}}})
+	if !strings.Contains(protocol, "demo-skill") || strings.Contains(protocol, "Explicitly Mentioned Skills") {
+		t.Fatalf("stable protocol = %s", protocol)
+	}
+	if !strings.Contains(hint, "demo-skill") || !strings.Contains(hint, "Explicitly Mentioned Skills") {
+		t.Fatalf("request hint = %s", hint)
 	}
 }
 
-func TestRunnerPromptIncludesTrustedRuntimeClock(t *testing.T) {
-	runner := &Runner{cfg: Config{}.WithDefaults(), registry: NewToolRegistry()}
-	prompt := runner.systemPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在几点"}}})
-	if !strings.Contains(prompt, "当前运行时钟") || !strings.Contains(prompt, time.Now().Format("2006-01-02")) || !strings.Contains(prompt, "不要声称无法访问实时时钟") {
-		t.Fatalf("prompt lacks runtime clock: %s", prompt)
+func TestRunnerKeepsTrustedRuntimeClockOutsideStableProtocol(t *testing.T) {
+	client := &scriptedClient{}
+	runner := &Runner{client: client, cfg: Config{}.WithDefaults(), registry: NewToolRegistry()}
+	if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在几点"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 1 || len(client.requests[0].Messages) < 3 {
+		t.Fatalf("requests = %#v", client.requests)
+	}
+	protocol := client.requests[0].Messages[0].Content
+	clock := client.requests[0].Messages[1].Content
+	if strings.Contains(protocol, "当前运行时钟") {
+		t.Fatalf("volatile clock leaked into stable protocol: %s", protocol)
+	}
+	if !strings.Contains(clock, "当前运行时钟") || !strings.Contains(clock, time.Now().Format("2006-01-02")) || !strings.Contains(clock, "不要声称无法访问实时时钟") {
+		t.Fatalf("clock message = %q", clock)
 	}
 }
 
 func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
-	prompt := runner.systemPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查询最新 IPO 时间"}}})
+	prompt := runner.systemPrompt()
 	for _, expected := range []string{"可以根据首轮结果改写 query 后继续搜索", "最多调用 3 次", "总计 8 个工具步骤", "不要把完整聊天记录塞进 query", "优先核对官方或法定披露来源"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
@@ -299,7 +314,7 @@ func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 
 func TestRunnerPromptOmitsRulesForUnselectedTools(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
-	prompt := runner.systemPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查询最新 IPO 时间"}}})
+	prompt := runner.systemPrompt()
 	for _, unexpected := range []string{"diana.reminder", "diana.schedule", "diana.image", "browser_open", "skills.read"} {
 		if strings.Contains(prompt, unexpected) {
 			t.Fatalf("prompt unexpectedly contains unselected tool %q: %s", unexpected, prompt)

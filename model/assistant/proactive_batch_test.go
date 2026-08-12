@@ -10,18 +10,18 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestPassiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
+func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","turn_message_ids":["message-1"],"directed_at_bot":false,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.8,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	candidates := []passiveReplyCandidate{
+	candidates := []proactiveReplyCandidate{
 		{
 			Event: MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1", SenderName: "Alice"},
 			Text:  "这个报错应该怎么处理",
@@ -32,7 +32,7 @@ func TestPassiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 		},
 	}
 
-	event, text, turn, allowed := runtime.routePassiveReplyBatch(context.Background(), candidates)
+	event, text, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), candidates)
 	if !allowed {
 		t.Fatal("batch route should allow the selected question")
 	}
@@ -59,53 +59,53 @@ func TestPassiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 	}
 }
 
-func TestPassiveReplyBatchUsesConfiguredRouterPrompt(t *testing.T) {
+func TestProactiveReplyBatchUsesConfiguredRouterPrompt(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","turn_message_ids":["message-1"],"directed_at_bot":false,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                    "42",
-		PassiveReplyChance:       1,
-		PassiveReplyThreshold:    0.8,
-		PassiveReplyRouterPrompt: "custom passive router prompt",
+		BotQQ:                      "42",
+		ProactiveReplyChance:       1,
+		ProactiveReplyThreshold:    0.8,
+		ProactiveReplyRouterPrompt: "custom proactive router prompt",
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	candidate := passiveReplyCandidate{
+	candidate := proactiveReplyCandidate{
 		Event: MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1"},
 		Text:  "这个报错应该怎么处理",
 	}
 
-	_, _, _, allowed := runtime.routePassiveReplyBatch(context.Background(), []passiveReplyCandidate{candidate})
+	_, _, _, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{candidate})
 	if !allowed {
-		t.Fatal("configured passive router should allow the selected question")
+		t.Fatal("configured proactive router should allow the selected question")
 	}
 	if len(provider.requests) != 1 || len(provider.requests[0].Messages) == 0 {
 		t.Fatalf("router requests = %#v", provider.requests)
 	}
-	if got := provider.requests[0].Messages[0].Content; !strings.Contains(got, "custom passive router prompt") {
+	if got := provider.requests[0].Messages[0].Content; !strings.Contains(got, "custom proactive router prompt") {
 		t.Fatalf("router prompt = %q", got)
 	}
 }
 
-func TestPassiveReplyBatchSelectsCompleteSemanticTurn(t *testing.T) {
+func TestProactiveReplyBatchSelectsCompleteSemanticTurn(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":true,"confidence":0.99,"category":"bot_related","target_message_id":"message-3","turn_message_ids":["message-1","message-2","message-3"],"directed_at_bot":true,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.9,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	candidates := []passiveReplyCandidate{
+	candidates := []proactiveReplyCandidate{
 		{Event: MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1"}, Text: "1+1"},
 		{Event: MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-2"}, Text: "5+6"},
 		{Event: MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-3"}, Text: "4+8"},
 	}
 
-	event, text, turn, allowed := runtime.routePassiveReplyBatch(context.Background(), candidates)
+	event, text, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), candidates)
 	if !allowed || event.MessageID != "message-3" || text != "4+8" {
 		t.Fatalf("route = event %q text %q allowed %v", event.MessageID, text, allowed)
 	}
@@ -119,7 +119,7 @@ func TestPassiveReplyBatchSelectsCompleteSemanticTurn(t *testing.T) {
 	}
 }
 
-func TestPassiveReplyTurnCombinesThreeMessagesIntoOneReply(t *testing.T) {
+func TestProactiveReplyTurnCombinesThreeMessagesIntoOneReply(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
 		"1+1=2，5+6=11，4+8=12。",
@@ -136,11 +136,11 @@ func TestPassiveReplyTurnCombinesThreeMessagesIntoOneReply(t *testing.T) {
 		{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-2", Time: 104, SenderName: "Alice", RawMessage: "5+6", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "5+6"}}}},
 		{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-3", Time: 106, SenderName: "Alice", RawMessage: "4+8", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "4+8"}}}},
 	}
-	turn := make([]passiveReplyCandidate, 0, len(events))
+	turn := make([]proactiveReplyCandidate, 0, len(events))
 	for _, event := range events {
-		turn = append(turn, passiveReplyCandidate{Event: event, Text: event.RawMessage})
+		turn = append(turn, proactiveReplyCandidate{Event: event, Text: event.RawMessage})
 	}
-	ctx := withPassiveReplyTurnContext(context.Background(), turn)
+	ctx := withProactiveReplyTurnContext(context.Background(), turn)
 	reply, err := runtime.replyTo(ctx, events[2], events[2].RawMessage)
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
@@ -167,9 +167,9 @@ func TestPassiveReplyTurnCombinesThreeMessagesIntoOneReply(t *testing.T) {
 	}
 }
 
-func TestPassiveReplyDecisionCandidatesUsesBoundedRecentWindow(t *testing.T) {
+func TestProactiveReplyDecisionCandidatesUsesBoundedRecentWindow(t *testing.T) {
 	base := time.Now()
-	items := []passiveReplyCandidate{
+	items := []proactiveReplyCandidate{
 		{Event: MessageEvent{MessageID: "message-1"}, QueuedAt: base.Add(-30 * time.Second)},
 		{Event: MessageEvent{MessageID: "message-2"}, QueuedAt: base.Add(-12 * time.Second)},
 		{Event: MessageEvent{MessageID: "message-3"}, QueuedAt: base.Add(-8 * time.Second)},
@@ -177,7 +177,7 @@ func TestPassiveReplyDecisionCandidatesUsesBoundedRecentWindow(t *testing.T) {
 		{Event: MessageEvent{MessageID: "message-5"}, QueuedAt: base},
 	}
 
-	got := passiveReplyDecisionCandidates(items)
+	got := proactiveReplyDecisionCandidates(items)
 	if len(got) != 3 {
 		t.Fatalf("bounded candidates = %d, want 3: %#v", len(got), got)
 	}
@@ -187,7 +187,7 @@ func TestPassiveReplyDecisionCandidatesUsesBoundedRecentWindow(t *testing.T) {
 		}
 	}
 
-	windowed := passiveReplyDecisionCandidates([]passiveReplyCandidate{
+	windowed := proactiveReplyDecisionCandidates([]proactiveReplyCandidate{
 		{Event: MessageEvent{MessageID: "old"}, QueuedAt: base.Add(-20 * time.Second)},
 		{Event: MessageEvent{MessageID: "recent"}, QueuedAt: base},
 	})
@@ -196,7 +196,7 @@ func TestPassiveReplyDecisionCandidatesUsesBoundedRecentWindow(t *testing.T) {
 	}
 }
 
-func TestPassiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
+func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	channel := &recordingChannel{}
 	first := MessageEvent{
 		Kind:       EventKindGroup,
@@ -218,13 +218,13 @@ func TestPassiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 		RawMessage: "[图片]",
 		Segments:   []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/jpeg;base64,aGVsbG8="}}},
 	}
-	provider := &passiveReplyRerouteProvider{second: second}
+	provider := &proactiveReplyRerouteProvider{second: second}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		OwnerID:               "owner",
-		AgentEnabled:          false,
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.8,
+		BotQQ:                   "42",
+		OwnerID:                 "owner",
+		AgentEnabled:            false,
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -237,8 +237,8 @@ func TestPassiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	runtime.mu.Unlock()
 	runtime.remember(first)
 	key := sessionKey(first)
-	runtime.passiveBatches[key] = &passiveReplyBatch{
-		items: []passiveReplyCandidate{{
+	runtime.proactiveBatches[key] = &proactiveReplyBatch{
+		items: []proactiveReplyCandidate{{
 			Event:      first,
 			Text:       first.RawMessage,
 			QueuedAt:   time.Now(),
@@ -248,7 +248,7 @@ func TestPassiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 		generation: 1,
 	}
 
-	runtime.flushPassiveReplyBatch(context.Background(), key, 1)
+	runtime.flushProactiveReplyBatch(context.Background(), key, 1)
 
 	channel.mu.Lock()
 	sent := append([]OutgoingMessage(nil), channel.sent...)
@@ -267,22 +267,22 @@ func TestPassiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	}
 	var superseded bool
 	for _, entry := range logs.entries {
-		if entry.Action == "qqbot.passive_reply_superseded" && entry.Metadata["stage"] == "before_send" {
+		if entry.Action == "qqbot.proactive_reply_superseded" && entry.Metadata["stage"] == "before_send" {
 			superseded = true
 		}
 	}
 	if !superseded {
 		t.Fatalf("superseded audit log missing: %#v", logs.entries)
 	}
-	runtime.passiveBatchMu.Lock()
-	_, pending := runtime.passiveBatches[key]
-	runtime.passiveBatchMu.Unlock()
+	runtime.proactiveBatchMu.Lock()
+	_, pending := runtime.proactiveBatches[key]
+	runtime.proactiveBatchMu.Unlock()
 	if pending {
-		t.Fatal("merged passive batch was not cleared")
+		t.Fatal("merged proactive batch was not cleared")
 	}
 }
 
-func TestPassiveReplyBatchCollectsPerGroupAndCanBeCancelled(t *testing.T) {
+func TestProactiveReplyBatchCollectsPerGroupAndCanBeCancelled(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &capturingLLMProvider{}, nil
 	})
@@ -295,30 +295,30 @@ func TestPassiveReplyBatchCollectsPerGroupAndCanBeCancelled(t *testing.T) {
 
 	first := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", MessageID: "message-1"}
 	second := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", MessageID: "message-2"}
-	if !runtime.enqueuePassiveReply(first, "第一条") || !runtime.enqueuePassiveReply(second, "第二条") {
-		t.Fatal("running runtime should enqueue passive candidates")
+	if !runtime.enqueueProactiveReply(first, "第一条") || !runtime.enqueueProactiveReply(second, "第二条") {
+		t.Fatal("running runtime should enqueue proactive candidates")
 	}
-	runtime.passiveBatchMu.Lock()
-	batch := runtime.passiveBatches[sessionKey(first)]
+	runtime.proactiveBatchMu.Lock()
+	batch := runtime.proactiveBatches[sessionKey(first)]
 	itemCount := 0
 	if batch != nil {
 		itemCount = len(batch.items)
 	}
-	runtime.passiveBatchMu.Unlock()
+	runtime.proactiveBatchMu.Unlock()
 	if itemCount != 2 {
 		t.Fatalf("batch item count = %d, want 2", itemCount)
 	}
 
-	runtime.cancelPassiveReplyBatch(first)
-	runtime.passiveBatchMu.Lock()
-	_, exists := runtime.passiveBatches[sessionKey(first)]
-	runtime.passiveBatchMu.Unlock()
+	runtime.cancelProactiveReplyBatch(first)
+	runtime.proactiveBatchMu.Lock()
+	_, exists := runtime.proactiveBatches[sessionKey(first)]
+	runtime.proactiveBatchMu.Unlock()
 	if exists {
-		t.Fatal("explicit group trigger should cancel its pending passive batch")
+		t.Fatal("explicit group trigger should cancel its pending proactive batch")
 	}
 }
 
-func TestPassiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *testing.T) {
+func TestProactiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","directed_at_bot":false,"answerable":true}`,
 		`{"action":"none","prompt":""}`,
@@ -327,11 +327,11 @@ func TestPassiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *testi
 	}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		OwnerID:               "owner",
-		AgentEnabled:          false,
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.8,
+		BotQQ:                   "42",
+		OwnerID:                 "owner",
+		AgentEnabled:            false,
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -350,12 +350,17 @@ func TestPassiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *testi
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错应该怎么处理？"}}},
 	}
 	key := sessionKey(event)
-	runtime.passiveBatches[key] = &passiveReplyBatch{
-		items:      []passiveReplyCandidate{{Event: event, Text: event.RawMessage}},
+	runtime.proactiveBatches[key] = &proactiveReplyBatch{
+		items:      []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}},
 		generation: 1,
 	}
 
-	runtime.flushPassiveReplyBatch(context.Background(), key, 1)
+	runtime.flushProactiveReplyBatch(context.Background(), key, 1)
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if !runtime.waitForRelationshipEvaluations(waitCtx) {
+		t.Fatal("relationship evaluation did not finish")
+	}
 
 	profile := memory.profiles[event.UserID]
 	if profile.Favorability != 1 || profile.MessageCount != 1 {
@@ -378,16 +383,16 @@ func TestPassiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *testi
 	}
 }
 
-func TestPassiveReplyBatchDoesNotEvaluateUnselectedMessages(t *testing.T) {
+func TestProactiveReplyBatchDoesNotEvaluateUnselectedMessages(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":false,"confidence":0.99,"category":"no_response","target_message_id":"none"}`,
 	}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		OwnerID:               "owner",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.8,
+		BotQQ:                   "42",
+		OwnerID:                 "owner",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -396,12 +401,12 @@ func TestPassiveReplyBatchDoesNotEvaluateUnselectedMessages(t *testing.T) {
 	runtime.SetUserMemoryStore(memory)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1"}
 	key := sessionKey(event)
-	runtime.passiveBatches[key] = &passiveReplyBatch{
-		items:      []passiveReplyCandidate{{Event: event, Text: "我先去吃饭了"}},
+	runtime.proactiveBatches[key] = &proactiveReplyBatch{
+		items:      []proactiveReplyCandidate{{Event: event, Text: "我先去吃饭了"}},
 		generation: 1,
 	}
 
-	runtime.flushPassiveReplyBatch(context.Background(), key, 1)
+	runtime.flushProactiveReplyBatch(context.Background(), key, 1)
 
 	profile := memory.profiles[event.UserID]
 	if profile.Favorability != 0 || profile.MessageCount != 1 || len(channel.sent) != 0 || len(provider.requests) != 1 {
@@ -409,15 +414,15 @@ func TestPassiveReplyBatchDoesNotEvaluateUnselectedMessages(t *testing.T) {
 	}
 }
 
-func TestPassiveReplyBatchDoesNotAwardFavorabilityWhenReplyFails(t *testing.T) {
-	provider := &passiveBatchReplyFailureProvider{}
+func TestProactiveReplyBatchDoesNotAwardFavorabilityWhenReplyFails(t *testing.T) {
+	provider := &proactiveBatchReplyFailureProvider{}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		OwnerID:               "owner",
-		AgentEnabled:          false,
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.8,
+		BotQQ:                   "42",
+		OwnerID:                 "owner",
+		AgentEnabled:            false,
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -434,12 +439,12 @@ func TestPassiveReplyBatchDoesNotAwardFavorabilityWhenReplyFails(t *testing.T) {
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错应该怎么处理？"}}},
 	}
 	key := sessionKey(event)
-	runtime.passiveBatches[key] = &passiveReplyBatch{
-		items:      []passiveReplyCandidate{{Event: event, Text: event.RawMessage}},
+	runtime.proactiveBatches[key] = &proactiveReplyBatch{
+		items:      []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}},
 		generation: 1,
 	}
 
-	runtime.flushPassiveReplyBatch(context.Background(), key, 1)
+	runtime.flushProactiveReplyBatch(context.Background(), key, 1)
 
 	profile := memory.profiles[event.UserID]
 	if profile.Favorability != 0 || profile.MessageCount != 1 {
@@ -453,14 +458,14 @@ func TestPassiveReplyBatchDoesNotAwardFavorabilityWhenReplyFails(t *testing.T) {
 	}
 }
 
-func TestPassiveReplyBatchRechecksSuppressionAfterRouting(t *testing.T) {
-	provider := &passiveRouteSuppressionProvider{}
+func TestProactiveReplyBatchRechecksSuppressionAfterRouting(t *testing.T) {
+	provider := &proactiveRouteSuppressionProvider{}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		OwnerID:               "owner",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.8,
+		BotQQ:                   "42",
+		OwnerID:                 "owner",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -476,31 +481,31 @@ func TestPassiveReplyBatchRechecksSuppressionAfterRouting(t *testing.T) {
 	provider.runtime = runtime
 	provider.event = event
 	key := sessionKey(event)
-	runtime.passiveBatches[key] = &passiveReplyBatch{
-		items:      []passiveReplyCandidate{{Event: event, Text: event.RawMessage}},
+	runtime.proactiveBatches[key] = &proactiveReplyBatch{
+		items:      []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}},
 		generation: 1,
 	}
 
-	runtime.flushPassiveReplyBatch(context.Background(), key, 1)
+	runtime.flushProactiveReplyBatch(context.Background(), key, 1)
 
 	if provider.calls != 1 {
-		t.Fatalf("provider calls = %d, want only passive routing", provider.calls)
+		t.Fatalf("provider calls = %d, want only proactive routing", provider.calls)
 	}
 	if len(channel.sent) != 0 {
-		t.Fatalf("suppressed passive candidate still replied: %#v", channel.sent)
+		t.Fatalf("suppressed proactive candidate still replied: %#v", channel.sent)
 	}
 	if _, active := runtime.activeReplySuppression(event, time.Now()); !active {
 		t.Fatal("route-time response suppression was not activated")
 	}
 }
 
-type passiveBatchReplyFailureProvider struct {
+type proactiveBatchReplyFailureProvider struct {
 	relationshipCalls int
 }
 
-func (p *passiveBatchReplyFailureProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+func (p *proactiveBatchReplyFailureProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	switch {
-	case requestMessagesContain(req.Messages, "严格被动插话路由器"):
+	case requestMessagesContain(req.Messages, "严格主动回复路由器"):
 		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","directed_at_bot":false,"answerable":true}`}, nil
 	case requestMessagesContain(req.Messages, "功能路由器"):
 		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"action":"none","prompt":""}`}, nil
@@ -512,13 +517,13 @@ func (p *passiveBatchReplyFailureProvider) Generate(_ context.Context, req llm.G
 	}
 }
 
-type passiveRouteSuppressionProvider struct {
+type proactiveRouteSuppressionProvider struct {
 	runtime *Runtime
 	event   MessageEvent
 	calls   int
 }
 
-type passiveReplyRerouteProvider struct {
+type proactiveReplyRerouteProvider struct {
 	runtime          *Runtime
 	second           MessageEvent
 	injected         bool
@@ -527,9 +532,9 @@ type passiveReplyRerouteProvider struct {
 	lastRoutePayload string
 }
 
-func (p *passiveReplyRerouteProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+func (p *proactiveReplyRerouteProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	switch {
-	case requestMessagesContain(req.Messages, "严格被动插话路由器"):
+	case requestMessagesContain(req.Messages, "严格主动回复路由器"):
 		p.routeCalls++
 		p.lastRoutePayload = req.Messages[len(req.Messages)-1].Content
 		target := "message-1"
@@ -548,7 +553,7 @@ func (p *passiveReplyRerouteProvider) Generate(_ context.Context, req llm.Genera
 		if !p.injected {
 			p.injected = true
 			p.runtime.remember(p.second)
-			if !p.runtime.enqueuePassiveReply(p.second, p.second.RawMessage) {
+			if !p.runtime.enqueueProactiveReply(p.second, p.second.RawMessage) {
 				return nil, errors.New("could not enqueue continuation")
 			}
 			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: "这是第一条的旧回复。"}, nil
@@ -557,10 +562,10 @@ func (p *passiveReplyRerouteProvider) Generate(_ context.Context, req llm.Genera
 	}
 }
 
-func (p *passiveRouteSuppressionProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+func (p *proactiveRouteSuppressionProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.calls++
-	if !requestMessagesContain(req.Messages, "严格被动插话路由器") {
-		return nil, errors.New("suppressed passive candidate reached reply generation")
+	if !requestMessagesContain(req.Messages, "严格主动回复路由器") {
+		return nil, errors.New("suppressed proactive candidate reached reply generation")
 	}
 	p.runtime.activateReplySuppression(p.event, "test threshold reached", time.Now())
 	return &llm.GenerateResponse{

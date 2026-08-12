@@ -124,8 +124,8 @@ func debugModelPurpose(req llm.GenerateRequest) string {
 	}
 	prompt := system.String()
 	switch {
-	case strings.Contains(prompt, "被动插话路由器"):
-		return "passive_reply_router"
+	case strings.Contains(prompt, "主动回复路由器"):
+		return "proactive_reply_router"
 	case strings.Contains(prompt, "选择本轮上下文和工具"):
 		return "agent_scope_router"
 	case strings.Contains(prompt, "action") && strings.Contains(prompt, "tool"):

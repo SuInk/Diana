@@ -42,40 +42,40 @@ func TestConfigFromPayloadKeepsNoneBotBridgeToken(t *testing.T) {
 	}
 }
 
-func TestConfigPayloadKeepsPassiveReplyChance(t *testing.T) {
+func TestConfigPayloadKeepsProactiveReplyChance(t *testing.T) {
 	cfg := ConfigFromPayload(ConfigPayload{
-		Enabled:               true,
-		PassiveReplyChance:    0.4,
-		PassiveReplyThreshold: 0.92,
+		Enabled:                 true,
+		ProactiveReplyChance:    0.4,
+		ProactiveReplyThreshold: 0.92,
 	}, BotConfig{})
-	if cfg.PassiveReplyChance != 0.4 {
-		t.Fatalf("PassiveReplyChance = %v", cfg.PassiveReplyChance)
+	if cfg.ProactiveReplyChance != 0.4 {
+		t.Fatalf("ProactiveReplyChance = %v", cfg.ProactiveReplyChance)
 	}
 	payload := PayloadFromConfig(cfg)
-	if payload.PassiveReplyChance != 0.4 {
-		t.Fatalf("payload PassiveReplyChance = %v", payload.PassiveReplyChance)
+	if payload.ProactiveReplyChance != 0.4 {
+		t.Fatalf("payload ProactiveReplyChance = %v", payload.ProactiveReplyChance)
 	}
-	if cfg.PassiveReplyThreshold != 0.92 || payload.PassiveReplyThreshold != 0.92 {
-		t.Fatalf("threshold cfg=%v payload=%v", cfg.PassiveReplyThreshold, payload.PassiveReplyThreshold)
+	if cfg.ProactiveReplyThreshold != 0.92 || payload.ProactiveReplyThreshold != 0.92 {
+		t.Fatalf("threshold cfg=%v payload=%v", cfg.ProactiveReplyThreshold, payload.ProactiveReplyThreshold)
 	}
 }
 
 func TestConfigPayloadKeepsEditablePrompts(t *testing.T) {
 	cfg := ConfigFromPayload(ConfigPayload{
-		Enabled:                  true,
-		SystemPrompt:             "custom system prompt",
-		PassiveReplyRouterPrompt: "custom router prompt",
-		PassiveReplyPrompt:       "custom passive reply prompt",
+		Enabled:                    true,
+		SystemPrompt:               "custom system prompt",
+		ProactiveReplyRouterPrompt: "custom router prompt",
+		ProactiveReplyPrompt:       "custom proactive reply prompt",
 	}, BotConfig{})
 	payload := PayloadFromConfig(cfg)
 
 	if payload.SystemPrompt != "custom system prompt" {
 		t.Fatalf("SystemPrompt = %q", payload.SystemPrompt)
 	}
-	if payload.PassiveReplyRouterPrompt != "custom router prompt" {
-		t.Fatalf("PassiveReplyRouterPrompt = %q", payload.PassiveReplyRouterPrompt)
+	if payload.ProactiveReplyRouterPrompt != "custom router prompt" {
+		t.Fatalf("ProactiveReplyRouterPrompt = %q", payload.ProactiveReplyRouterPrompt)
 	}
-	if payload.PassiveReplyPrompt != "custom passive reply prompt" {
-		t.Fatalf("PassiveReplyPrompt = %q", payload.PassiveReplyPrompt)
+	if payload.ProactiveReplyPrompt != "custom proactive reply prompt" {
+		t.Fatalf("ProactiveReplyPrompt = %q", payload.ProactiveReplyPrompt)
 	}
 }

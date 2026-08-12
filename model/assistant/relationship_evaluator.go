@@ -31,12 +31,12 @@ func (decision relationshipEvaluationDecision) effectiveDelta() int {
 }
 
 type relationshipEvaluationPayload struct {
-	Message                       passiveReplyPayload `json:"message"`
-	CurrentScore                  int                 `json:"current_score"`
-	CurrentTier                   string              `json:"current_tier"`
-	MessageCount                  int                 `json:"message_count"`
-	NaturalInteractionGainEnabled bool                `json:"natural_interaction_gain_enabled"`
-	NaturalInteractionThreshold   int                 `json:"natural_interaction_threshold"`
+	Message                       proactiveReplyPayload `json:"message"`
+	CurrentScore                  int                   `json:"current_score"`
+	CurrentTier                   string                `json:"current_tier"`
+	MessageCount                  int                   `json:"message_count"`
+	NaturalInteractionGainEnabled bool                  `json:"natural_interaction_gain_enabled"`
+	NaturalInteractionThreshold   int                   `json:"natural_interaction_threshold"`
 }
 
 func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageEvent, text string, handled bool) (relationshipEvaluationDecision, UserMemoryProfile, bool) {
@@ -46,7 +46,7 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
 	policy := RelationshipPolicyFor(profile, r.effectiveConfigForEvent(event).OwnerID, event.UserID)
 	payload := relationshipEvaluationPayload{
-		Message:                       r.passiveReplyPayload(event, r.cleanInput(event, text)),
+		Message:                       r.proactiveReplyPayload(event, r.cleanInput(event, text)),
 		CurrentScore:                  profile.Favorability,
 		CurrentTier:                   policy.Name,
 		MessageCount:                  profile.MessageCount,
@@ -107,6 +107,61 @@ func (r *Runtime) relationshipEvaluationAvailable(event MessageEvent) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.userMemory != nil && (r.llmFactory != nil || (r.llmCfgFactory != nil && r.llmStore != nil))
+}
+
+// enqueueRelationshipEvaluation runs low-priority relationship scoring only
+// after a reply was delivered. Saturation skips scoring instead of delaying
+// chat replies or building an unbounded background queue.
+func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string) <-chan struct{} {
+	done := make(chan struct{})
+	if !r.relationshipEvaluationAvailable(event) {
+		close(done)
+		return done
+	}
+	select {
+	case r.relationshipEvalSem <- struct{}{}:
+	default:
+		close(done)
+		return done
+	}
+	r.mu.RLock()
+	runCtx := r.runCtx
+	r.mu.RUnlock()
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+	r.relationshipEvalWG.Add(1)
+	go func() {
+		defer r.relationshipEvalWG.Done()
+		defer close(done)
+		defer func() { <-r.relationshipEvalSem }()
+		evaluation, before, evaluated := r.evaluateRelationshipUpdate(runCtx, event, text, true)
+		if !evaluated {
+			return
+		}
+		after, stored := before, true
+		if delta := evaluation.effectiveDelta(); delta != 0 {
+			after, stored = r.applyUserFavorabilityDelta(event, delta)
+		}
+		if stored {
+			r.recordRelationshipEvaluation(runCtx, event, before, after, evaluation)
+		}
+	}()
+	return done
+}
+
+func (r *Runtime) waitForRelationshipEvaluations(ctx context.Context) bool {
+	done := make(chan struct{})
+	go func() {
+		r.relationshipEvalWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func relationshipEvaluationTimeout(cfg BotConfig) time.Duration {
