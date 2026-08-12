@@ -96,6 +96,65 @@ func TestChatInRouterPromptReflectsSwitch(t *testing.T) {
 	}
 }
 
+func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
+	enabled := chatInSettingsFrom(boolPointer(true), ChatInLevelLow, 0, 0, 0)
+	disabled := chatInSettingsFrom(boolPointer(false), ChatInLevelLow, 0, 0, 0)
+
+	for _, prompt := range []string{
+		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled),
+		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", disabled),
+	} {
+		for _, want := range []string{
+			"没有点名机器人不等于不需要回复",
+			"定义、解释、辨析或求助问题",
+			"不得仅因句子短",
+			"应视为该问题仍在等待回答并使用 needs_response",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("router prompt missing %q: %q", want, prompt)
+			}
+		}
+	}
+
+	onPrompt := proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled)
+	for _, want := range []string{"产品、技术、品牌或设计风格", "按 chat_in 判断 substantive"} {
+		if !strings.Contains(onPrompt, want) {
+			t.Fatalf("enabled router prompt missing topic guidance %q: %q", want, onPrompt)
+		}
+	}
+
+	for _, want := range []string{
+		"面向全群提出的定义、解释、辨析或求助问题",
+		"短语省略问号或谓语本身不能作为 substantive=false 的理由",
+		"应视为该问题仍在等待回答并使用 needs_response",
+	} {
+		if !strings.Contains(defaultProactiveReplyRouterPrompt, want) {
+			t.Fatalf("default router prompt missing %q", want)
+		}
+	}
+}
+
+func TestChatInSurvivesConfigPayloadRoundTrip(t *testing.T) {
+	// WebUI 存一次配置就会走这条来回转换；漏字段会静默把开关和档位重置成默认值。
+	cfg := BotConfig{
+		ChatInEnabled:         boolPointer(false),
+		ChatInLevel:           ChatInLevelHigh,
+		ChatInThreshold:       0.77,
+		ChatInChance:          0.42,
+		ChatInCooldownSeconds: 90,
+	}
+	got := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
+	if got.ChatInEnabled == nil || *got.ChatInEnabled {
+		t.Fatalf("chat-in switch lost in round trip: %#v", got.ChatInEnabled)
+	}
+	if got.ChatInLevel != ChatInLevelHigh {
+		t.Fatalf("chat-in level = %q, want %q", got.ChatInLevel, ChatInLevelHigh)
+	}
+	if got.ChatInThreshold != 0.77 || got.ChatInChance != 0.42 || got.ChatInCooldownSeconds != 90 {
+		t.Fatalf("chat-in overrides lost in round trip: %#v", got)
+	}
+}
+
 func TestChatInCooldownBlocksRepeatedInterjections(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"}
