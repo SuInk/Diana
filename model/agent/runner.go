@@ -86,7 +86,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	protocolRepairs := 0
 	lastToolSignature := ""
 	finishReason := "final"
-	emitRunEvent(ctx, req.Observer, RunEvent{TraceID: traceID, Phase: RunPhaseStarted, MaxToolCalls: r.cfg.MaxSteps})
+	emitRunEvent(ctx, req.Observer, RunEvent{
+		TraceID:        traceID,
+		Phase:          RunPhaseStarted,
+		MaxToolCalls:   r.cfg.MaxSteps,
+		AvailableTools: r.registry.Catalog(0),
+	})
 	finish := func(text, reason string) *Response {
 		duration := time.Since(startedAt)
 		response := &Response{
@@ -273,6 +278,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			MaxToolCalls: r.cfg.MaxSteps,
 			Tool:         action.Tool,
 			InputKeys:    inputKeys,
+			ToolInput:    cloneToolInput(action.Input),
 		})
 		toolCtx, toolCancel := contextWithToolBudget(ctx, time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 		toolStartedAt := time.Now()
@@ -296,6 +302,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			MaxToolCalls: r.cfg.MaxSteps,
 			Tool:         action.Tool,
 			InputKeys:    inputKeys,
+			ToolInput:    cloneToolInput(action.Input),
+			ToolOutput:   record.Output,
 			OutputChars:  len([]rune(record.Output)),
 			DurationMS:   toolDuration.Milliseconds(),
 			Error:        record.Error,
@@ -459,6 +467,17 @@ func sortedInputKeys(input map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func cloneToolInput(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func toolObservationMessage(tool, output string, success bool, remaining int) string {

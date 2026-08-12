@@ -3,21 +3,45 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
 
+const llmConfigPluginID = "official.llm-config-skill"
+
+// LLMConfigPlugin keeps the built-in capability visible without interpreting
+// or intercepting natural-language messages.
 type LLMConfigPlugin struct{}
 
+// NewLLMConfigPlugin creates the built-in LLM configuration capability.
+func NewLLMConfigPlugin() *LLMConfigPlugin {
+	return &LLMConfigPlugin{}
+}
+
+func (p *LLMConfigPlugin) Manifest() PluginManifest {
+	return PluginManifest{
+		ID:          llmConfigPluginID,
+		Name:        "LLM 配置技能",
+		Version:     "0.1.0",
+		Description: "官方内置 LLM 配置能力；自然语言由主 Agent 理解，配置修改仅通过主人专属结构化工具执行。",
+		Official:    true,
+		BuiltIn:     true,
+		Permissions: []string{"message:read", "llm:config:write"},
+	}
+}
+
+// Handle deliberately does nothing: the main Agent decides whether an owner
+// request warrants a structured diana.llm_config tool call.
+func (p *LLMConfigPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
+	return nil, nil
+}
+
 type llmConfigCommand struct {
-	Matched     bool
 	Provider    llm.Provider
 	ProviderSet bool
 	Model       string
-	Err         error
 }
 
 type llmConfigApplyResult struct {
@@ -31,63 +55,7 @@ type llmConfigApplyResult struct {
 	NewModel    string
 }
 
-// NewLLMConfigPlugin 创建官方内置 LLM 配置技能插件。
-func NewLLMConfigPlugin() *LLMConfigPlugin {
-	return &LLMConfigPlugin{}
-}
-
-// Manifest 返回 LLM 配置技能插件清单。
-func (p *LLMConfigPlugin) Manifest() PluginManifest {
-	return PluginManifest{
-		ID:          "official.llm-config-skill",
-		Name:        "LLM 配置技能",
-		Version:     "0.1.0",
-		Description: "官方内置 LLM 配置技能，允许主人在聊天中修改当前使用的模型提供商和模型名称。",
-		Official:    true,
-		BuiltIn:     true,
-		Permissions: []string{"message:read", "llm:config:write"},
-	}
-}
-
-// Handle 处理聊天里的 LLM 配置修改请求。
-func (p *LLMConfigPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
-	// 自然语言配置意图由主 Agent 语义判断，再调用 diana.llm_config。
-	// 插件不再用字符串匹配抢占普通的模型、API 或 Agent 讨论。
-	return nil, nil
-}
-
-// handleLLMConfigRequest implements the per-bot built-in chat command. The
-// legacy plugin type remains for stored-state migration but is not registered.
-func handleLLMConfigRequest(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
-	command := parseLLMConfigIntent(req.Text)
-	if !command.Matched {
-		return nil, nil
-	}
-	if ownerID := strings.TrimSpace(req.OwnerID); ownerID == "" {
-		reply := "未配置主人账号，无法通过聊天修改 LLM 配置。"
-		recordLLMConfigSkillLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
-		return &PluginResponse{Handled: true, Reply: reply}, nil
-	} else if strings.TrimSpace(req.Event.UserID) != ownerID {
-		reply := "只有主人可以修改 LLM 配置。"
-		recordLLMConfigSkillLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
-		return &PluginResponse{Handled: true, Reply: reply}, nil
-	}
-	if command.Err != nil {
-		reply := command.Err.Error() + "\n" + llmConfigUsage()
-		recordLLMConfigSkillLog(ctx, req, llmConfigApplyResult{Reply: reply}, command.Err)
-		return &PluginResponse{Handled: true, Reply: reply}, nil
-	}
-	if req.LLMStore == nil {
-		reply := "当前未接入 LLM 配置集。"
-		recordLLMConfigSkillLog(ctx, req, llmConfigApplyResult{Reply: reply}, nil)
-		return &PluginResponse{Handled: true, Reply: reply}, nil
-	}
-	result := applyLLMConfigCommand(ctx, req.LLMStore, command, req.LLMModelLister)
-	recordLLMConfigSkillLog(ctx, req, result, nil)
-	return &PluginResponse{Handled: true, Reply: result.Reply}, nil
-}
-
-// applyLLMConfigCommand 将自然语言配置意图应用到当前 LLM profile。
+// applyLLMConfigCommand applies validated input from the structured Agent tool.
 func applyLLMConfigCommand(ctx context.Context, store LLMProfileStore, command llmConfigCommand, listModels LLMModelLister) llmConfigApplyResult {
 	set := store.Profiles().WithDefaults()
 	current, ok := set.Current()
@@ -260,17 +228,6 @@ func ensureLLMModelAvailable(ctx context.Context, cfg llm.ProviderConfig, listMo
 	return llm.ModelInfo{}, fmt.Errorf("模型 %s 不在 %s 的模型列表中，未保存。可选：%s", model, cfg.Provider, summarizeModelIDs(models))
 }
 
-// modelInList 判断模型名是否存在于模型列表中。
-func modelInList(model string, models []llm.ModelInfo) bool {
-	model = strings.TrimSpace(model)
-	for _, candidate := range models {
-		if strings.EqualFold(strings.TrimSpace(candidate.ID), model) {
-			return true
-		}
-	}
-	return false
-}
-
 // summarizeModelIDs 摘要展示可选模型 ID。
 func summarizeModelIDs(models []llm.ModelInfo) string {
 	ids := make([]string, 0, len(models))
@@ -294,152 +251,4 @@ func summarizeModelIDs(models []llm.ModelInfo) string {
 		return "暂无可用模型"
 	}
 	return strings.Join(ids, "、")
-}
-
-func parseLLMConfigIntent(text string) llmConfigCommand {
-	command := strings.TrimSpace(text)
-	if command == "" {
-		return llmConfigCommand{}
-	}
-	provider, providerSet := extractLLMProvider(command)
-	model := extractLLMModel(command)
-	if !providerSet && model == "" {
-		return llmConfigCommand{}
-	}
-	if !hasLLMConfigChangeIntent(command) {
-		return llmConfigCommand{}
-	}
-	if !providerSet {
-		if inferred, ok := inferProviderFromModel(model); ok {
-			provider = inferred
-			providerSet = true
-		}
-	}
-	return llmConfigCommand{Matched: true, Provider: provider, ProviderSet: providerSet, Model: model}
-}
-
-func hasLLMConfigChangeIntent(text string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(text))
-	for _, phrase := range []string{
-		"切换", "切到", "切成", "换成", "换到", "换用", "改成", "改为", "改到", "改用",
-		"设为", "设成", "设置为", "设置成", "调整为", "更新为", "指定为",
-		"switch to", "change to", "set to", "use provider", "use model",
-	} {
-		if strings.Contains(normalized, phrase) {
-			return true
-		}
-	}
-	targetMentioned := strings.Contains(normalized, "llm") || strings.Contains(normalized, "provider") ||
-		strings.Contains(normalized, "model") || strings.Contains(normalized, "模型") ||
-		strings.Contains(normalized, "提供商") || strings.Contains(normalized, "供应商")
-	if targetMentioned && strings.ContainsAny(normalized, "切换改设用调更换") {
-		return true
-	}
-	for _, phrase := range []string{"以后用", "之后用", "后面用", "接下来用", "现在用", "当前用", "默认用", "改用", "换用"} {
-		if strings.Contains(normalized, phrase) {
-			return true
-		}
-	}
-	return false
-}
-
-func extractLLMProvider(text string) (llm.Provider, bool) {
-	aliases := []struct {
-		provider llm.Provider
-		terms    []string
-	}{
-		{llm.ProviderOpenAICompatible, []string{"openai compatible", "openai-compatible", "openai_compatible", "openai兼容", "openai"}},
-		{llm.ProviderGemini, []string{"google genai", "google-genai", "google_genai", "gemini", "谷歌"}},
-		{llm.ProviderAnthropic, []string{"anthropic", "claude官方", "claude"}},
-	}
-	lower := strings.ToLower(text)
-	for _, alias := range aliases {
-		for _, term := range alias.terms {
-			if containsAlias(lower, term) {
-				return alias.provider, true
-			}
-		}
-	}
-	return "", false
-}
-
-func containsAlias(text, alias string) bool {
-	alias = strings.ToLower(strings.TrimSpace(alias))
-	if alias == "" {
-		return false
-	}
-	if containsChinese(alias) {
-		return strings.Contains(text, alias)
-	}
-	pattern := `(^|[^a-z0-9])` + regexp.QuoteMeta(alias) + `([^a-z0-9]|$)`
-	return regexp.MustCompile(pattern).FindStringIndex(text) != nil
-}
-
-func containsChinese(text string) bool {
-	for _, value := range text {
-		if value >= '\u4e00' && value <= '\u9fff' {
-			return true
-		}
-	}
-	return false
-}
-
-var llmModelTokenPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9._:/-]*[A-Za-z0-9]`)
-
-func extractLLMModel(text string) string {
-	matches := llmModelTokenPattern.FindAllString(text, -1)
-	for index := len(matches) - 1; index >= 0; index-- {
-		candidate := strings.Trim(matches[index], " \t\r\n，。！？、；;：:,.)]}")
-		if looksLikeLLMModel(candidate) {
-			return candidate
-		}
-	}
-	return ""
-}
-
-func looksLikeLLMModel(candidate string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(candidate))
-	if normalized == "" {
-		return false
-	}
-	switch normalized {
-	case "llm", "model", "provider", "openai", "gemini", "anthropic", "claude", "google", "genai":
-		return false
-	}
-	if strings.ContainsAny(normalized, ".-/_:") || hasDigit(normalized) {
-		return true
-	}
-	for _, prefix := range []string{"gpt", "gp", "o", "deepseek", "qwen", "moonshot", "kimi", "glm", "doubao", "ernie", "hunyuan", "yi", "claude", "gemini", "llama", "mistral", "mixtral", "command"} {
-		if strings.HasPrefix(normalized, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasDigit(text string) bool {
-	for _, value := range text {
-		if value >= '0' && value <= '9' {
-			return true
-		}
-	}
-	return false
-}
-
-func inferProviderFromModel(model string) (llm.Provider, bool) {
-	normalized := strings.ToLower(strings.TrimSpace(model))
-	switch {
-	case strings.HasPrefix(normalized, "gemini"):
-		return llm.ProviderGemini, true
-	case strings.HasPrefix(normalized, "claude"):
-		return llm.ProviderAnthropic, true
-	case strings.HasPrefix(normalized, "gpt"), strings.HasPrefix(normalized, "gp"), regexp.MustCompile(`^o[0-9]`).MatchString(normalized):
-		return llm.ProviderOpenAICompatible, true
-	default:
-		return "", false
-	}
-}
-
-func llmConfigUsage() string {
-	return "可以直接说：把提供商切到 gemini、把模型换成 gemini-2.5-pro、以后用 anthropic 的 claude-sonnet-4-5。模型必须存在于当前 provider 的模型列表里。支持 provider：openai_compatible、gemini、anthropic"
 }

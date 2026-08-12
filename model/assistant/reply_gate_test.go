@@ -191,6 +191,65 @@ func TestShouldHandleBlocksOutsideActiveHours(t *testing.T) {
 	}
 }
 
+func TestGroupReplyGateUsesItsOwnActiveHours(t *testing.T) {
+	base := BotConfig{
+		BotQQ: "42",
+		ReplyGate: &ReplyGate{
+			ActiveHoursEnabled: true,
+			ActiveStart:        "00:00",
+			ActiveEnd:          "23:59",
+		},
+	}
+	rt := gateRuntime(t, base, time.Date(2026, 8, 10, 12, 0, 0, 0, time.Local))
+	store := &testWritableGroupConfigStore{}
+	_, _ = store.SaveGroupConfig(GroupConfig{
+		GroupID:    "100",
+		Enabled:    true,
+		EnabledSet: true,
+		ReplyGate: &ReplyGate{
+			ActiveHoursEnabled: true,
+			ActiveStart:        "18:00",
+			ActiveEnd:          "23:00",
+		},
+	}, base)
+	rt.SetGroupConfigStore(store)
+
+	groupWithOverride := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "7", ToMe: true}
+	if rt.shouldHandle(groupWithOverride, "hi") {
+		t.Fatal("本群自定义回复时间外不应回复")
+	}
+	groupFollowingGlobal := MessageEvent{Kind: EventKindGroup, GroupID: "200", UserID: "7", ToMe: true}
+	if !rt.shouldHandle(groupFollowingGlobal, "hi") {
+		t.Fatal("其他群仍应跟随全局回复时间")
+	}
+}
+
+func TestGroupReplyGateBlocksQQOnlyInConfiguredGroup(t *testing.T) {
+	base := BotConfig{BotQQ: "42"}
+	rt := gateRuntime(t, base, time.Now())
+	store := &testWritableGroupConfigStore{}
+	_, _ = store.SaveGroupConfig(GroupConfig{
+		GroupID:    "100",
+		Enabled:    true,
+		EnabledSet: true,
+		ReplyGate:  &ReplyGate{BlockedUsers: []string{"12345"}},
+	}, base)
+	rt.SetGroupConfigStore(store)
+
+	blockedGroup := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "12345", ToMe: true}
+	if rt.shouldHandle(blockedGroup, "hi") {
+		t.Fatal("被本群屏蔽的 QQ 不应触发回复")
+	}
+	otherGroup := MessageEvent{Kind: EventKindGroup, GroupID: "200", UserID: "12345", ToMe: true}
+	if !rt.shouldHandle(otherGroup, "hi") {
+		t.Fatal("本群屏蔽名单不应影响其他群")
+	}
+	privateChat := MessageEvent{Kind: EventKindPrivate, UserID: "12345"}
+	if !rt.shouldHandle(privateChat, "hi") {
+		t.Fatal("本群屏蔽名单不应影响私聊")
+	}
+}
+
 // 主人不受时段限制，否则配错了就把自己锁在门外。
 func TestOwnerBypassesActiveHours(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{

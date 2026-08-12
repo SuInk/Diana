@@ -14,7 +14,6 @@ import (
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
-	"github.com/SuInk/diana/model/updater"
 
 	_ "modernc.org/sqlite"
 )
@@ -30,7 +29,6 @@ const (
 	pluginStateKey       = "plugin_states"
 	remindersKey         = "reminders"
 	replySuppressionsKey = "qqbot_reply_suppressions"
-	updateSettingsKey    = "system_update_settings"
 	webuiAuthKey         = "webui_auth"
 	webuiSessionsKey     = "webui_sessions"
 )
@@ -213,18 +211,6 @@ func (s *SQLiteStore) SaveWebUISessions(ctx context.Context, set WebUISessionSet
 	return s.saveJSON(ctx, webuiSessionsKey, set)
 }
 
-// LoadUpdateSettings 读取系统自动更新设置。
-func (s *SQLiteStore) LoadUpdateSettings(ctx context.Context) (updater.Settings, bool, error) {
-	var settings updater.Settings
-	ok, err := s.loadJSON(ctx, updateSettingsKey, &settings)
-	return settings, ok, err
-}
-
-// SaveUpdateSettings 保存系统自动更新设置。
-func (s *SQLiteStore) SaveUpdateSettings(ctx context.Context, settings updater.Settings) error {
-	return s.saveJSON(ctx, updateSettingsKey, settings)
-}
-
 // LoadPluginStates 读取插件状态。
 func (s *SQLiteStore) LoadPluginStates(ctx context.Context) (map[string]assistant.PluginState, bool, error) {
 	var states map[string]assistant.PluginState
@@ -274,6 +260,7 @@ CREATE TABLE IF NOT EXISTS app_logs (
 
 CREATE INDEX IF NOT EXISTS idx_app_logs_kind_created_at ON app_logs(kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_logs_created_at ON app_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, target, created_at ASC);
 `)
 	if err != nil {
 		return err

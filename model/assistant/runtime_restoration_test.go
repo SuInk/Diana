@@ -239,7 +239,7 @@ func TestRestoredModelRoleProfileBindingsAndVisionFallback(t *testing.T) {
 	}
 }
 
-func TestRestoredLLMConfigIsPerBotBuiltInCommand(t *testing.T) {
+func TestRestoredLLMConfigUsesStructuredAgentTool(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		ActiveID: "main",
 		Profiles: []llm.Profile{{
@@ -257,17 +257,22 @@ func TestRestoredLLMConfigIsPerBotBuiltInCommand(t *testing.T) {
 		return []llm.ModelInfo{{ID: "old-model"}, {ID: "gpt-4.1-mini"}}, nil
 	})
 
-	reply, handled := runtime.handleLLMConfigCommand(context.Background(), runtime.Config(), MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, "把模型换成 gpt-4.1-mini")
-	if !handled || !strings.Contains(reply, "已更新当前 LLM") || store.Current().Model != "gpt-4.1-mini" {
-		t.Fatalf("reply=%q handled=%v config=%#v", reply, handled, store.Current())
+	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
+	if err != nil || !strings.Contains(output, "已更新当前 LLM") || store.Current().Model != "gpt-4.1-mini" {
+		t.Fatalf("output=%q err=%v config=%#v", output, err, store.Current())
 	}
-
-	disabled := false
-	disabledRuntime := NewRuntime(BotConfig{OwnerID: "owner", OwnerLLMConfigEnabled: &disabled}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
-	if reply, handled := disabledRuntime.handleLLMConfigCommand(context.Background(), disabledRuntime.Config(), MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, "把模型换成 old-model"); handled || reply != "" {
-		t.Fatalf("disabled command reply=%q handled=%v", reply, handled)
+	plugins := NewDefaultPluginManager()
+	state, exposed := plugins.Get(llmConfigPluginID)
+	if !exposed || !state.Installed || !state.Enabled {
+		t.Fatalf("no-op LLM config plugin state=%#v exposed=%v", state, exposed)
 	}
-	if _, exposed := NewDefaultPluginManager().Get("official.llm-config-skill"); exposed {
-		t.Fatal("LLM config command was exposed as a plugin")
+	resp, err := plugins.RunOneWithOverrides(context.Background(), llmConfigPluginID, PluginRequest{
+		Event:    MessageEvent{Kind: EventKindPrivate, UserID: "owner"},
+		OwnerID:  "owner",
+		Text:     "把模型换回 old-model",
+		LLMStore: store,
+	}, nil)
+	if err != nil || resp != nil || store.Current().Model != "gpt-4.1-mini" {
+		t.Fatalf("natural-language plugin run resp=%#v err=%v config=%#v", resp, err, store.Current())
 	}
 }

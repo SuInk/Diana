@@ -10,7 +10,7 @@ import (
 )
 
 // InboundEventDetail is the durable message-processing audit row exposed to
-// the WebUI. Reply text is overlaid from the runtime's recent event buffer.
+// the WebUI.
 type InboundEventDetail struct {
 	ID           string    `json:"id"`
 	At           time.Time `json:"at"`
@@ -24,6 +24,9 @@ type InboundEventDetail struct {
 	Text         string    `json:"text,omitempty"`
 	Status       string    `json:"status"`
 	Outcome      string    `json:"outcome,omitempty"`
+	Decision     string    `json:"decision,omitempty"`
+	Reason       string    `json:"reason,omitempty"`
+	Reply        string    `json:"reply,omitempty"`
 	Error        string    `json:"error,omitempty"`
 	DurationMS   int64     `json:"duration_ms,omitempty"`
 	LLMCalls     int64     `json:"llm_calls,omitempty"`
@@ -72,7 +75,7 @@ SELECT
   COALESCE(SUM(CASE WHEN COALESCE(outcome, '') = 'replied' OR COALESCE(outcome, '') = 'error_replied' OR COALESCE(outcome, '') LIKE 'replied_%' THEN 1 ELSE 0 END), 0),
   COALESCE(SUM(CASE WHEN status = 'done' AND NOT (COALESCE(outcome, '') = 'replied' OR COALESCE(outcome, '') = 'error_replied' OR COALESCE(outcome, '') LIKE 'replied_%') THEN 1 ELSE 0 END), 0),
   COALESCE(SUM(CASE WHEN status != 'done' THEN 1 ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN NULLIF(TRIM(last_error), '') IS NOT NULL OR outcome IN ('error_replied', 'dropped_outbound_delivery') THEN 1 ELSE 0 END), 0)
+  COALESCE(SUM(CASE WHEN NULLIF(TRIM(processing_error), '') IS NOT NULL OR NULLIF(TRIM(last_error), '') IS NOT NULL OR outcome IN ('error_replied', 'dropped_outbound_delivery') THEN 1 ELSE 0 END), 0)
 FROM inbound_events
 WHERE event_time >= ?
 `, sinceUnix).Scan(&page.Total, &page.Replied, &page.NotReplied, &page.Pending, &page.Errors); err != nil {
@@ -83,8 +86,9 @@ WHERE event_time >= ?
 SELECT
   i.id, i.event_time, i.kind, COALESCE(i.group_id, ''), COALESCE(i.user_id, ''),
   COALESCE(m.sender_name, ''), COALESCE(i.message_id, ''), COALESCE(m.text, ''), COALESCE(m.payload, ''),
-  i.status, COALESCE(i.outcome, ''), COALESCE(i.last_error, ''),
-  COALESCE(i.created_at, 0), COALESCE(i.completed_at, 0)
+  i.status, COALESCE(i.outcome, ''), COALESCE(i.decision, ''), COALESCE(i.decision_reason, ''),
+  COALESCE(i.reply_text, ''), COALESCE(NULLIF(TRIM(i.processing_error), ''), i.last_error, ''),
+  COALESCE(i.duration_ms, 0), COALESCE(i.created_at, 0), COALESCE(i.completed_at, 0)
 FROM inbound_events AS i
 LEFT JOIN message_events AS m ON m.id = i.id
 WHERE i.event_time >= ?
@@ -103,13 +107,16 @@ LIMIT ? OFFSET ?
 		if err := rows.Scan(
 			&item.ID, &eventTime, &item.Kind, &item.GroupID, &item.UserID,
 			&item.SenderName, &item.MessageID, &item.Text, &payload, &item.Status,
-			&item.Outcome, &item.Error, &createdAt, &completedAt,
+			&item.Outcome, &item.Decision, &item.Reason, &item.Reply, &item.Error,
+			&item.DurationMS, &createdAt, &completedAt,
 		); err != nil {
 			return InboundEventDetailPage{}, fmt.Errorf("scan inbound event detail: %w", err)
 		}
 		item.At = time.Unix(eventTime, 0)
 		item.Status = strings.TrimSpace(item.Status)
 		item.Outcome = strings.TrimSpace(item.Outcome)
+		item.Decision = strings.TrimSpace(item.Decision)
+		item.Reason = strings.TrimSpace(item.Reason)
 		item.Error = strings.TrimSpace(item.Error)
 		if strings.TrimSpace(payload) != "" {
 			var source struct {
@@ -121,7 +128,7 @@ LIMIT ? OFFSET ?
 				item.ProfileID = strings.TrimSpace(source.ProfileID)
 			}
 		}
-		if completedAt > createdAt && createdAt > 0 {
+		if item.DurationMS <= 0 && completedAt > createdAt && createdAt > 0 {
 			item.DurationMS = (completedAt - createdAt) / int64(time.Millisecond)
 		}
 		page.Events = append(page.Events, item)

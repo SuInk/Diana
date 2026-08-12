@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -197,6 +198,15 @@ func TestStructuredMemoryVisibilityAndExpiry(t *testing.T) {
 	if len(otherSession) != 1 || otherSession[0].Key != "profile.pet.cat" {
 		t.Fatalf("cross-session memories = %#v", otherSession)
 	}
+	isolatedSession, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{
+		SubjectUserID: "user-a", Session: "group:two", Now: now, CurrentSessionOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(isolatedSession) != 0 {
+		t.Fatalf("isolated session memories = %#v", isolatedSession)
+	}
 	sameSession, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{
 		SubjectUserID: "user-a",
 		Session:       "group:one",
@@ -218,6 +228,100 @@ func TestStructuredMemoryVisibilityAndExpiry(t *testing.T) {
 	}
 	if len(expired) != 1 || expired[0].Key != "profile.pet.cat" {
 		t.Fatalf("expired memories = %#v", expired)
+	}
+}
+
+func TestStructuredMemoryCrossGroupOnlyReturnsSafeNamespaceMemories(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "cross-group-memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().UTC()
+	writeSummary := func(session, groupID, key, content string, sensitive bool) {
+		t.Helper()
+		_, err := store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
+			Session: session, EventKind: assistant.EventKindGroup, GroupID: groupID,
+			SourceMessageID: key, SourceEventTime: now,
+			Candidates: []assistant.MemoryCandidate{{
+				Action: assistant.MemoryActionUpsert, Key: key, Kind: assistant.MemoryKindSummary,
+				Topic: "群聊主题", Content: content, SourceType: assistant.MemorySourceSummary,
+				Confidence: 0.96, Importance: 0.8, Visibility: assistant.MemoryVisibilitySession,
+				Sensitive: sensitive, RetentionDays: 365,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSummary("bot-a:group:one", "one", "summary.2026-08-01.public", "公开项目决定", false)
+	writeSummary("bot-a:group:one", "one", "summary.2026-08-01.private", "群内敏感信息", true)
+	writeSummary("bot-b:group:other", "other", "summary.2026-08-01.foreign", "另一个机器人内容", false)
+
+	currentOnly, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{
+		Session: "bot-a:group:two", SubjectUserID: "alice", Now: now, CurrentSessionOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(currentOnly) != 0 {
+		t.Fatalf("current-only memories = %#v", currentOnly)
+	}
+	crossGroup, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{
+		Session: "bot-a:group:two", SubjectUserID: "alice", Now: now,
+		CrossGroup: true, GroupSessionPrefix: "bot-a:group:",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(crossGroup) != 1 || crossGroup[0].Key != "summary.2026.08.01.public" {
+		t.Fatalf("cross-group memories = %#v", crossGroup)
+	}
+}
+
+func TestStructuredMemoryQueryPrioritizesLexicalMatchesBeforeCandidateLimit(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "memory-candidates.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().UTC()
+	_, err = store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
+		Session: "group:one", EventKind: assistant.EventKindGroup, GroupID: "one", SourceMessageID: "cat", SourceEventTime: now.AddDate(-2, 0, 0),
+		Candidates: []assistant.MemoryCandidate{{
+			Action: assistant.MemoryActionUpsert, Key: "pet.cat.food", Kind: assistant.MemoryKindFact,
+			Topic: "猫粮", Entity: "小白", Content: "小白喜欢鸡肉猫粮", SourceType: assistant.MemorySourceExplicit,
+			Confidence: 0.95, Importance: 0.55, Visibility: assistant.MemoryVisibilitySession,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 30; index++ {
+		_, err = store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
+			Session: "group:one", EventKind: assistant.EventKindGroup, GroupID: "one", SourceMessageID: fmt.Sprintf("noise-%d", index), SourceEventTime: now,
+			Candidates: []assistant.MemoryCandidate{{
+				Action: assistant.MemoryActionUpsert, Key: fmt.Sprintf("noise.%d", index), Kind: assistant.MemoryKindFact,
+				Topic: "无关资料", Content: fmt.Sprintf("第%d条高重要度无关信息", index), SourceType: assistant.MemorySourceExplicit,
+				Confidence: 0.99, Importance: 0.99, Visibility: assistant.MemoryVisibilitySession,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{
+		Session: "group:one", Text: "小白的猫粮", SearchTerms: []string{"小白", "猫粮"}, Now: now, MaxCandidates: 5, CurrentSessionOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 5 || items[0].Key != "pet.cat.food" {
+		t.Fatalf("lexical candidate pool = %#v", items)
 	}
 }
 

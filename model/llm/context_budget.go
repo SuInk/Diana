@@ -46,6 +46,7 @@ func fitMessagesToTokenBudget(messages []Message, budget int64) []Message {
 	if len(messages) == 0 || budget <= 0 {
 		return nil
 	}
+	messages = lowerProtectedImageDetailToFit(messages, budget)
 	if estimateMessagesTokens(messages) <= budget {
 		return append([]Message(nil), messages...)
 	}
@@ -102,6 +103,47 @@ func fitMessagesToTokenBudget(messages []Message, budget int64) []Message {
 		}
 	}
 	return out
+}
+
+// Current input and plugin evidence are required context. When their image
+// detail would force the budgeter to discard whole images, request low detail
+// first so a multi-image reference remains complete whenever the window allows.
+func lowerProtectedImageDetailToFit(messages []Message, budget int64) []Message {
+	if estimateRequiredMessagesTokens(messages) <= budget {
+		return messages
+	}
+	out := append([]Message(nil), messages...)
+	lastIndex := len(out) - 1
+	for index := range out {
+		if effectiveMessagePriority(out[index], index == lastIndex) < MessagePriorityPlugin {
+			continue
+		}
+		parts := append([]ContentPart(nil), out[index].Parts...)
+		changed := false
+		for partIndex := range parts {
+			part := &parts[partIndex]
+			if part.Type != ContentPartImageURL || strings.TrimSpace(part.ImageURL) == "" || strings.EqualFold(strings.TrimSpace(part.Detail), "low") {
+				continue
+			}
+			part.Detail = "low"
+			changed = true
+		}
+		if changed {
+			out[index].Parts = parts
+		}
+	}
+	return out
+}
+
+func estimateRequiredMessagesTokens(messages []Message) int64 {
+	lastIndex := len(messages) - 1
+	var total int64
+	for index, message := range messages {
+		if effectiveMessagePriority(message, index == lastIndex) >= MessagePrioritySystem {
+			total += estimateMessageTokens(message)
+		}
+	}
+	return total
 }
 
 // System instructions, plugin evidence, and the current user turn are required.

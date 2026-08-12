@@ -624,7 +624,7 @@ func PlainText(segments []MessageSegment) string {
 				builder.WriteString(" ")
 			}
 		case "image":
-			builder.WriteString("[图片]")
+			// 图片通过多模态 part 传递，不伪装成模型无法读取的文本。
 		case "video":
 			builder.WriteString("[视频]")
 		case "file":
@@ -679,6 +679,15 @@ func ImageURLs(segments []MessageSegment) []string {
 		}
 	}
 	return out
+}
+
+func hasImageSegment(segments []MessageSegment) bool {
+	for _, segment := range segments {
+		if segment.Type == "image" {
+			return true
+		}
+	}
+	return false
 }
 
 // VideoURLs 提取 OneBot 视频段里的远程 URL 或 NapCat 提供的本地绝对路径。

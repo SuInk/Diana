@@ -691,7 +691,7 @@ func TestBotReplyLoopDoesNotCountHumanClassifiedMessages(t *testing.T) {
 	start := time.Now().Add(-20 * time.Minute).Truncate(time.Second)
 	for i := 0; i < botReplyLoopThreshold+2; i++ {
 		handled, outcome := prepareBotReplyLoopRound(t, runtime, "human", "20002", i, start.Add(time.Duration(i)*4*time.Minute), time.Minute, fmt.Sprintf("这是普通真人回复 %d", i))
-		if !handled || outcome != "replied" {
+		if !handled || outcome != "replied_passive" {
 			t.Fatalf("human message %d handled=%v outcome=%q", i, handled, outcome)
 		}
 	}

@@ -39,10 +39,11 @@ type activeSubagentTask struct {
 }
 
 type reservedSubagentTask struct {
-	id    string
-	key   string
-	task  PluginTask
-	event MessageEvent
+	id         string
+	key        string
+	task       PluginTask
+	event      MessageEvent
+	debugTrace *debugTraceState
 }
 
 type pluginTaskReservation struct {
@@ -70,6 +71,9 @@ func (r *Runtime) launchPluginTasks(ctx context.Context, event MessageEvent, tas
 	if err := r.send(ctx, event, reservation.ack); err != nil {
 		r.cancelPluginTaskReservation(reservation)
 		return "", true, err
+	}
+	for index := range reservation.reserved {
+		reservation.reserved[index].debugTrace = debugTraceFromContext(ctx)
 	}
 	r.startPluginTaskReservation(reservation)
 	return reservation.ack, true, nil
@@ -183,6 +187,9 @@ func (r *Runtime) subagentRootContext() context.Context {
 }
 
 func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTask) {
+	if item.debugTrace != nil {
+		rootCtx = context.WithValue(rootCtx, debugTraceContextKey{}, item.debugTrace)
+	}
 	sem := r.subagentSem
 	select {
 	case sem <- struct{}{}:

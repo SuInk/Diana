@@ -633,9 +633,8 @@ func messageTextContent(msg Message) string {
 				parts = append(parts, text)
 			}
 		case ContentPartImageURL:
-			if strings.TrimSpace(part.ImageURL) != "" {
-				parts = append(parts, "[图片]")
-			}
+			// Provider adapters carry image parts separately. A text placeholder
+			// would falsely imply that an image was available in text-only paths.
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))

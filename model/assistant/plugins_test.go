@@ -285,12 +285,24 @@ func TestDefaultPluginManagerIncludesFileParser(t *testing.T) {
 	}
 }
 
-// TestDefaultPluginManagerDoesNotExposeLLMConfigCommand verifies that the
-// per-bot built-in command does not reappear as a plugin card.
-func TestDefaultPluginManagerDoesNotExposeLLMConfigCommand(t *testing.T) {
+func TestDefaultPluginManagerIncludesNoOpLLMConfigPlugin(t *testing.T) {
 	manager := NewDefaultPluginManager()
-	if state, ok := manager.Get("official.llm-config-skill"); ok {
-		t.Fatalf("legacy llm config plugin still exposed: %#v", state)
+	state, ok := manager.Get(llmConfigPluginID)
+	if !ok || !state.Installed || !state.Enabled || !state.Manifest.BuiltIn {
+		t.Fatalf("llm config plugin state = %#v, found = %v", state, ok)
+	}
+
+	tests := []PluginRequest{
+		{Event: MessageEvent{UserID: "20002"}, OwnerID: "10001", Text: "我做了一个 OCR 和模型选择页面"},
+		{Event: MessageEvent{UserID: "10001"}, OwnerID: "10001", Text: "比较 Gemini 和 Claude 的长文能力"},
+		{Event: MessageEvent{UserID: "10001"}, OwnerID: "10001", Text: "这个 OpenAI API 中转项目怎么样？"},
+		{Event: MessageEvent{UserID: "20002"}, OwnerID: "10001", Text: "把 Diana 的模型切到 claude-sonnet-4-5"},
+	}
+	for _, req := range tests {
+		resp, err := manager.RunOneWithOverrides(context.Background(), llmConfigPluginID, req, nil)
+		if err != nil || resp != nil {
+			t.Fatalf("text=%q resp=%#v err=%v", req.Text, resp, err)
+		}
 	}
 }
 
@@ -647,7 +659,7 @@ func (c *fileResolveChannel) CallAPI(_ context.Context, action string, _ map[str
 	return map[string]any{"file": c.filePath}, nil
 }
 
-// TestLLMConfigPluginUpdatesProviderAndModel 验证对应功能场景。
+// TestDianaLLMConfigToolUpdatesProviderAndModel verifies a structured owner update.
 func TestDianaLLMConfigToolUpdatesProviderAndModel(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
@@ -695,7 +707,7 @@ func TestDianaLLMConfigToolUpdatesProviderAndModel(t *testing.T) {
 	}
 }
 
-// TestLLMConfigPluginUpdatesModelOnly 验证对应功能场景。
+// TestDianaLLMConfigToolUpdatesModelOnly verifies a model-only structured update.
 func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
@@ -730,7 +742,7 @@ func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 	}
 }
 
-// TestLLMConfigPluginRejectsModelOutsideList 验证对应功能场景。
+// TestDianaLLMConfigToolRejectsModelOutsideList verifies backend model validation.
 func TestDianaLLMConfigToolRejectsModelOutsideList(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
@@ -761,7 +773,7 @@ func TestDianaLLMConfigToolRejectsModelOutsideList(t *testing.T) {
 	}
 }
 
-// TestLLMConfigPluginRejectsNonOwner 验证对应功能场景。
+// TestDianaLLMConfigToolRejectsNonOwner verifies the owner boundary.
 func TestDianaLLMConfigToolRejectsNonOwner(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
@@ -783,37 +795,6 @@ func TestDianaLLMConfigToolRejectsNonOwner(t *testing.T) {
 	}
 	if len(logs.entries) != 0 {
 		t.Fatalf("logs = %#v", logs.entries)
-	}
-}
-
-// TestLLMConfigPluginIgnoresModelQuestion 验证对应功能场景。
-func TestLLMConfigPluginIgnoresModelQuestion(t *testing.T) {
-	plugin := NewLLMConfigPlugin()
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
-		Event:   MessageEvent{UserID: "10001"},
-		Text:    "怎么用 gpt-4.1-mini 写代码？",
-		OwnerID: "10001",
-	})
-	if err != nil {
-		t.Fatalf("Handle() error = %v", err)
-	}
-	if resp != nil {
-		t.Fatalf("resp = %#v, want nil", resp)
-	}
-}
-
-func TestLLMConfigPluginDoesNotInterceptModelAndAPIDiscussion(t *testing.T) {
-	plugin := NewLLMConfigPlugin()
-	texts := []string{
-		"这个 API 网关还支持哪些功能？",
-		"请比较几个模型处理长文档的能力",
-		"用更强的模型分析这段意图识别结果",
-	}
-	for _, text := range texts {
-		resp, err := plugin.Handle(context.Background(), PluginRequest{Event: MessageEvent{UserID: "20002"}, Text: text, OwnerID: "10001"})
-		if err != nil || resp != nil {
-			t.Fatalf("text=%q resp=%#v err=%v", text, resp, err)
-		}
 	}
 }
 

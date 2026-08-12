@@ -123,10 +123,6 @@ func main() {
 		log.Fatal(err)
 	}
 	systemHandler.SetReleasePackageUpdater(releaseUpdater)
-	// 自动更新循环：按持久化设置周期性安装最新稳定 Release，重启后生效的提示由前端负责。
-	autoUpdater := webui.NewAutoUpdater(systemHandler, sqliteStore, sqliteStore)
-	systemHandler.SetAutoUpdater(autoUpdater)
-	go autoUpdater.Run(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
 	plugins := assistant.NewDefaultPluginManager()
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
@@ -242,6 +238,11 @@ func main() {
 	}
 	eventHub := webui.NewEventHub()
 	botRuntime.SetEventListener(func(event assistant.EventRecord) {
+		auditCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := sqliteStore.RecordInboundEventAudit(auditCtx, event); err != nil {
+			log.Printf("persist assistant event audit failed: %v", err)
+		}
+		cancel()
 		statsCollector.Observe(event)
 		eventHub.PublishBotEvent(event)
 	})
