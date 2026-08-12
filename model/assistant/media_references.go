@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,25 +16,44 @@ var videoMediaExtensions = map[string]struct{}{
 }
 
 func (r *Runtime) enrichMediaReferences(ctx context.Context, event MessageEvent) MessageEvent {
-	if r.channel == nil {
-		return event
-	}
-	event.Segments = r.enrichMediaSegments(ctx, event.GroupID, event.MessageID, event.Segments)
-	if event.Quoted != nil {
-		quoted := *event.Quoted
-		quoted.Segments = r.enrichMediaSegments(ctx, firstNonEmpty(quoted.GroupID, event.GroupID), quoted.MessageID, quoted.Segments)
-		event.Quoted = &quoted
-	}
+	event, _ = r.enrichMediaReferencesDetailed(ctx, event)
 	return event
 }
 
+func (r *Runtime) enrichMediaReferencesDetailed(ctx context.Context, event MessageEvent) (MessageEvent, []error) {
+	if r.channel == nil {
+		return event, nil
+	}
+	var failures []error
+	event.Segments, failures = r.enrichMediaSegmentsDetailed(ctx, event.GroupID, event.MessageID, event.Segments)
+	if event.Quoted != nil {
+		quoted := *event.Quoted
+		var quotedFailures []error
+		quoted.Segments, quotedFailures = r.enrichMediaSegmentsDetailed(ctx, firstNonEmpty(quoted.GroupID, event.GroupID), quoted.MessageID, quoted.Segments)
+		failures = append(failures, quotedFailures...)
+		event.Quoted = &quoted
+	}
+	return event, failures
+}
+
 func (r *Runtime) enrichMediaSegments(ctx context.Context, groupID, messageID string, segments []MessageSegment) []MessageSegment {
+	out, _ := r.enrichMediaSegmentsDetailed(ctx, groupID, messageID, segments)
+	return out
+}
+
+func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, groupID, messageID string, segments []MessageSegment) ([]MessageSegment, []error) {
 	out := append([]MessageSegment(nil), segments...)
+	var failures []error
 	for index, segment := range out {
 		if segment.Type != "image" && !videoFileSegment(segment) {
 			continue
 		}
-		if segmentHasMediaSource(segment) {
+		if segment.Type == "image" {
+			needsFallback := strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true")
+			if !needsFallback && segmentHasMediaSource(segment) {
+				continue
+			}
+		} else if segmentHasMediaSource(segment) {
 			continue
 		}
 		data := cloneSegmentData(segment.Data)
@@ -41,7 +62,7 @@ func (r *Runtime) enrichMediaSegments(ctx context.Context, groupID, messageID st
 		var requests []oneBotFileResolveRequest
 		if segment.Type == "image" {
 			file := firstNonEmpty(data["file"], data["file_id"], data["id"])
-			if file != "" {
+			if file != "" && resolvedImageSourceCount(data) == 0 {
 				requests = append(requests, oneBotFileResolveRequest{action: "get_image", params: map[string]any{"file": file}})
 			}
 			for _, sourceMessageID := range sourceMessageIDs {
@@ -69,6 +90,9 @@ func (r *Runtime) enrichMediaSegments(ctx context.Context, groupID, messageID st
 			}
 		}
 		if len(requests) == 0 {
+			if segment.Type == "image" {
+				failures = append(failures, fmt.Errorf("message %s image %d: NapCat get_image has no file token", firstNonEmpty(messageID, "unknown"), index+1))
+			}
 			continue
 		}
 		timeout := 8 * time.Second
@@ -79,9 +103,36 @@ func (r *Runtime) enrichMediaSegments(ctx context.Context, groupID, messageID st
 			}
 		}
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		var resolutionErrors []error
+		resolvedImageSource := false
+		directImageToken := ""
 		for _, request := range requests {
 			response, err := r.channel.CallAPI(callCtx, request.action, request.params)
 			if err != nil {
+				resolutionErrors = append(resolutionErrors, fmt.Errorf("%s: %w", request.action, err))
+				continue
+			}
+			if segment.Type == "image" {
+				if request.action == "get_image" {
+					directImageToken = strings.TrimSpace(stringFromAny(request.params["file"]))
+				}
+				if request.action == "get_msg" {
+					token := firstNonEmpty(mediaFileTokenFromOneBotData(response, segment), data["file"], data["file_id"], data["id"])
+					if token != "" && (!resolvedImageSource || token != directImageToken) {
+						resolved, resolveErr := r.channel.CallAPI(callCtx, "get_image", map[string]any{"file": token})
+						if resolveErr != nil {
+							resolutionErrors = append(resolutionErrors, fmt.Errorf("get_image after get_msg: %w", resolveErr))
+						} else if source, key := mediaSourceFromOneBotData(resolved, segment); source != "" {
+							resolvedImageSource = appendResolvedImageSource(data, source, key) || resolvedImageSource
+						}
+					}
+				}
+				if source, key := mediaSourceFromOneBotData(response, segment); source != "" {
+					resolvedImageSource = appendResolvedImageSource(data, source, key) || resolvedImageSource
+				}
+				if resolvedImageSource {
+					break
+				}
 				continue
 			}
 			if source, key := mediaSourceFromOneBotData(response, segment); source != "" {
@@ -108,9 +159,47 @@ func (r *Runtime) enrichMediaSegments(ctx context.Context, groupID, messageID st
 			}
 		}
 		cancel()
+		if segment.Type == "image" && !resolvedImageSource {
+			cause := errors.Join(resolutionErrors...)
+			if cause == nil {
+				cause = fmt.Errorf("NapCat get_image returned no readable source")
+			}
+			failures = append(failures, fmt.Errorf("message %s image %d: %w", firstNonEmpty(messageID, "unknown"), index+1, cause))
+		}
 		out[index].Data = data
 	}
-	return out
+	return out, failures
+}
+
+func appendResolvedImageSource(data map[string]string, source, sourceKey string) bool {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return false
+	}
+	if sourceKey == "url" || sourceKey == "path" {
+		data[sourceKey] = source
+	}
+	for index := 1; index <= 8; index++ {
+		key := fmt.Sprintf("%s%d", imageResolvedSourceKey, index)
+		if data[key] == source {
+			return true
+		}
+		if strings.TrimSpace(data[key]) == "" {
+			data[key] = source
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedImageSourceCount(data map[string]string) int {
+	count := 0
+	for index := 1; index <= 8; index++ {
+		if strings.TrimSpace(data[fmt.Sprintf("%s%d", imageResolvedSourceKey, index)]) != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func uniqueNonEmptyStrings(values ...string) []string {
@@ -155,7 +244,7 @@ func mediaFileTokenFromOneBotValue(value any, target MessageSegment) string {
 		}
 	case map[string]any:
 		segmentType := strings.ToLower(strings.TrimSpace(stringFromAny(item["type"])))
-		if segmentType == "video" || segmentType == "file" {
+		if segmentType == "image" || segmentType == "video" || segmentType == "file" {
 			if segmentData, ok := item["data"].(map[string]any); ok && mediaSegmentMatchesAny(target, segmentData) {
 				return firstNonEmpty(
 					stringFromAny(segmentData["file"]),
@@ -173,7 +262,11 @@ func mediaFileTokenFromOneBotValue(value any, target MessageSegment) string {
 }
 
 func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (string, string) {
-	for _, key := range []string{"url", "download_url", "file_url", "video_url", "path", "file_path", "file"} {
+	keys := []string{"url", "download_url", "file_url", "video_url", "path", "file_path", "file"}
+	if target.Type == "image" {
+		keys = []string{"path", "file_path", "file", "url", "download_url", "file_url"}
+	}
+	for _, key := range keys {
 		value := strings.TrimSpace(strings.TrimPrefix(stringFromAny(data[key]), "file://"))
 		if normalizedHTTPURL(value) != "" {
 			return value, "url"
@@ -220,7 +313,13 @@ func mediaSegmentMatchesAny(segment MessageSegment, data map[string]any) bool {
 }
 
 func segmentHasMediaSource(segment MessageSegment) bool {
-	for _, key := range []string{"cached_file", "url", "download_url", "file_url", "video_url", "src", "path", "file_path", "file"} {
+	keys := []string{"cached_file", "url", "download_url", "file_url", "video_url", "src", "path", "file_path", "file"}
+	if segment.Type == "image" {
+		for index := 1; index <= 8; index++ {
+			keys = append(keys, fmt.Sprintf("%s%d", imageResolvedSourceKey, index))
+		}
+	}
+	for _, key := range keys {
 		value := strings.TrimSpace(segment.Data[key])
 		if normalizedHTTPURL(value) != "" {
 			return true
