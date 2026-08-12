@@ -29,9 +29,9 @@ func TestDianaOneBotV11ToolOwnerCanCallEveryAction(t *testing.T) {
 		"get_credentials":         {"token": "owner-secret"},
 	}}
 	logs := &captureAppLogs{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformNapCat}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
-	tool := newDianaOneBotV11Tool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner", Platform: PlatformNapCat})
+	tool := newDianaOneBotV11Tool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner", Platform: PlatformOneBotV11})
 
 	tests := []struct {
 		action string
@@ -75,9 +75,9 @@ func TestDianaOneBotV11ToolMemberCanOnlyCallReadAllowlist(t *testing.T) {
 		"get_group_info_async": {"group_name": "Diana users"},
 	}}
 	logs := &captureAppLogs{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformNapCat}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
-	tool := newDianaOneBotV11Tool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "member", GroupID: "123", Platform: PlatformNapCat})
+	tool := newDianaOneBotV11Tool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "member", GroupID: "123", Platform: PlatformOneBotV11})
 
 	output, err := tool.Run(context.Background(), map[string]any{
 		"action": "get_group_info_async",
@@ -131,14 +131,14 @@ func TestDianaOneBotV11ToolRejectsInvalidInputAndUnavailablePlugin(t *testing.T)
 	}{
 		{
 			name:    "invalid action",
-			config:  BotConfig{Platform: PlatformNapCat},
+			config:  BotConfig{Platform: PlatformOneBotV11},
 			plugins: NewDefaultPluginManager(),
 			input:   map[string]any{"action": "get_status\nset_group_name"},
 			want:    "invalid OneBot v11 action name",
 		},
 		{
 			name:    "invalid params",
-			config:  BotConfig{Platform: PlatformNapCat},
+			config:  BotConfig{Platform: PlatformOneBotV11},
 			plugins: NewDefaultPluginManager(),
 			input:   map[string]any{"action": "get_status", "params": []any{"bad"}},
 			want:    "params must be an object",
@@ -165,8 +165,8 @@ func TestDianaOneBotV11ToolRejectsInvalidInputAndUnavailablePlugin(t *testing.T)
 	if _, err := plugins.SetEnabled(oneBotV11PluginID, false); err != nil {
 		t.Fatal(err)
 	}
-	runtime := NewRuntime(BotConfig{Platform: PlatformNapCat}, &recordingChannel{}, plugins, nil, nil, nil, nil)
-	_, err := newDianaOneBotV11Tool(runtime, MessageEvent{Platform: PlatformNapCat, UserID: "member"}).Run(context.Background(), map[string]any{"action": "get_status"})
+	runtime := NewRuntime(BotConfig{Platform: PlatformOneBotV11}, &recordingChannel{}, plugins, nil, nil, nil, nil)
+	_, err := newDianaOneBotV11Tool(runtime, MessageEvent{Platform: PlatformOneBotV11, UserID: "member"}).Run(context.Background(), map[string]any{"action": "get_status"})
 	if err == nil || !strings.Contains(err.Error(), "未启用") {
 		t.Fatalf("disabled plugin error = %v", err)
 	}
@@ -176,11 +176,11 @@ func TestDianaOneBotV11ToolRoutesToSourceProfile(t *testing.T) {
 	qqChannel := &recordingChannel{apiResponses: map[string]map[string]any{"get_status": {"online": true}}}
 	tgChannel := &recordingChannel{}
 	multi := NewMultiChannel([]ChannelBinding{
-		{ProfileID: "qq-main", Platform: PlatformNapCat, Channel: qqChannel},
+		{ProfileID: "qq-main", Platform: PlatformOneBotV11, Channel: qqChannel},
 		{ProfileID: "tg-main", Platform: PlatformTelegram, Channel: tgChannel},
 	})
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformNapCat}, multi, NewDefaultPluginManager(), nil, nil, nil, nil)
-	tool := newDianaOneBotV11Tool(runtime, MessageEvent{ProfileID: "qq-main", Platform: PlatformNapCat, UserID: "owner"})
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, multi, NewDefaultPluginManager(), nil, nil, nil, nil)
+	tool := newDianaOneBotV11Tool(runtime, MessageEvent{ProfileID: "qq-main", Platform: PlatformOneBotV11, UserID: "owner"})
 	if _, err := tool.Run(context.Background(), map[string]any{"action": "get_status"}); err != nil {
 		t.Fatal(err)
 	}
@@ -191,8 +191,8 @@ func TestDianaOneBotV11ToolRoutesToSourceProfile(t *testing.T) {
 
 func TestOneBotV11BuiltinSkillFollowsPluginAndPlatform(t *testing.T) {
 	plugins := NewDefaultPluginManager()
-	runtime := NewRuntime(BotConfig{Platform: PlatformNapCat}, &recordingChannel{}, plugins, nil, nil, nil, nil)
-	event := MessageEvent{Platform: PlatformNapCat}
+	runtime := NewRuntime(BotConfig{Platform: PlatformOneBotV11}, &recordingChannel{}, plugins, nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformOneBotV11}
 	if skills := runtime.oneBotV11BuiltinSkills(event); len(skills) != 1 || !strings.Contains(skills[0].Content, "Access Boundary") {
 		t.Fatalf("enabled skills = %#v", skills)
 	}
@@ -213,8 +213,8 @@ func TestMemberAgentRegistryRetainsOneBotReadTool(t *testing.T) {
 	cfg.AgentWorkDir = workDir
 	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
 	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
-	event := MessageEvent{Kind: EventKindPrivate, UserID: "member", Platform: PlatformNapCat}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformNapCat}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "member", Platform: PlatformOneBotV11}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	registry, err := runtime.newAgentRegistry(
 		context.Background(),
 		cfg.WithDefaults(),

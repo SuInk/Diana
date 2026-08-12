@@ -103,6 +103,30 @@ func TestMemberCacheFallsBackToAPI(t *testing.T) {
 	t.Fatal("回填后应命中等级 7")
 }
 
+func TestMemberCachePassesSourceEventToFallback(t *testing.T) {
+	received := make(chan MessageEvent, 1)
+	cache := newMemberCacheForEvent(func(_ context.Context, event MessageEvent, action string, _ map[string]any) (map[string]any, error) {
+		if action != "get_group_member_info" {
+			t.Errorf("非预期的 action：%s", action)
+		}
+		received <- event
+		return map[string]any{"level": "7", "role": "member"}, nil
+	})
+	event := groupEvent("100", "42", 0)
+	event.ProfileID = "qq-first"
+	event.Platform = PlatformOneBotV11
+	cache.LevelFor(event)
+
+	select {
+	case got := <-received:
+		if got.ProfileID != event.ProfileID || got.Platform != event.Platform {
+			t.Fatalf("兜底事件=%#v，期望来源=%#v", got, event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("兜底查询未触发")
+	}
+}
+
 // 群里刷屏时同一个人会连续触发查询，必须去重。
 func TestMemberCacheDedupesInflightFetches(t *testing.T) {
 	release := make(chan struct{})

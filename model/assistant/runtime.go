@@ -420,7 +420,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		subagentSem:           make(chan struct{}, defaultSubagentTaskConcurrency),
 		subagentLLMSem:        make(chan struct{}, subagentLLMConcurrency(cfg.MaxBotConcurrency)),
 	}
-	runtime.members = newMemberCache(runtime.CallOneBotAPI)
+	runtime.members = newMemberCacheForEvent(runtime.callOneBotAPIForEvent)
 	return runtime
 }
 
@@ -631,17 +631,21 @@ func (r *Runtime) Config() BotConfig {
 	return r.cfg
 }
 
-// CallOneBotAPI 通过当前 OneBot channel 调用原生 API。
+// CallOneBotAPI 通过当前运行配置对应的 OneBot channel 调用原生 API。
 func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
 	action = strings.TrimSpace(action)
 	if action == "" {
 		return nil, fmt.Errorf("qqbot: onebot action is required")
 	}
 	r.mu.RLock()
+	cfg := r.cfg
 	channel := r.channel
 	r.mu.RUnlock()
 	if channel == nil {
 		return nil, fmt.Errorf("qqbot: channel is not configured")
+	}
+	if _, multi := channel.(*MultiChannel); multi && IsOneBotPlatform(cfg.Platform) {
+		return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, action, params)
 	}
 	return channel.CallAPI(ctx, action, params)
 }
@@ -670,6 +674,8 @@ func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent,
 	}
 	return channel.CallAPI(ctx, action, params)
 }
+
+type oneBotAPICaller func(context.Context, string, map[string]any) (map[string]any, error)
 
 type QQGroupInfo struct {
 	GroupID        string `json:"group_id"`
@@ -715,13 +721,23 @@ func QQMemberAvatarURL(userID string) string {
 }
 
 func (r *Runtime) GetGroupInfo(ctx context.Context, groupID string) (QQGroupInfo, error) {
+	return r.getGroupInfo(ctx, groupID, r.CallOneBotAPI)
+}
+
+func (r *Runtime) getGroupInfoForEvent(ctx context.Context, event MessageEvent, groupID string) (QQGroupInfo, error) {
+	return r.getGroupInfo(ctx, groupID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
+		return r.callOneBotAPIForEvent(callCtx, event, action, params)
+	})
+}
+
+func (r *Runtime) getGroupInfo(ctx context.Context, groupID string, call oneBotAPICaller) (QQGroupInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
 		return QQGroupInfo{}, fmt.Errorf("qqbot: group id is required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	data, err := r.CallOneBotAPI(callCtx, "get_group_info", map[string]any{
+	data, err := call(callCtx, "get_group_info", map[string]any{
 		"group_id": oneBotIDParam(groupID),
 		"no_cache": true,
 	})
@@ -732,6 +748,16 @@ func (r *Runtime) GetGroupInfo(ctx context.Context, groupID string) (QQGroupInfo
 }
 
 func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID string) (QQGroupMemberInfo, error) {
+	return r.getGroupMemberInfo(ctx, groupID, userID, r.CallOneBotAPI)
+}
+
+func (r *Runtime) getGroupMemberInfoForEvent(ctx context.Context, event MessageEvent, groupID string, userID string) (QQGroupMemberInfo, error) {
+	return r.getGroupMemberInfo(ctx, groupID, userID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
+		return r.callOneBotAPIForEvent(callCtx, event, action, params)
+	})
+}
+
+func (r *Runtime) getGroupMemberInfo(ctx context.Context, groupID string, userID string, call oneBotAPICaller) (QQGroupMemberInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	userID = strings.TrimSpace(userID)
 	if groupID == "" || userID == "" {
@@ -739,7 +765,7 @@ func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	data, err := r.CallOneBotAPI(callCtx, "get_group_member_info", map[string]any{
+	data, err := call(callCtx, "get_group_member_info", map[string]any{
 		"group_id": oneBotIDParam(groupID),
 		"user_id":  oneBotIDParam(userID),
 		"no_cache": true,
@@ -751,13 +777,23 @@ func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID
 }
 
 func (r *Runtime) GetGroupMemberList(ctx context.Context, groupID string) ([]QQGroupMemberInfo, error) {
+	return r.getGroupMemberList(ctx, groupID, r.CallOneBotAPI)
+}
+
+func (r *Runtime) getGroupMemberListForEvent(ctx context.Context, event MessageEvent, groupID string) ([]QQGroupMemberInfo, error) {
+	return r.getGroupMemberList(ctx, groupID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
+		return r.callOneBotAPIForEvent(callCtx, event, action, params)
+	})
+}
+
+func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call oneBotAPICaller) ([]QQGroupMemberInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
 		return nil, fmt.Errorf("qqbot: group id is required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	data, err := r.CallOneBotAPI(callCtx, "get_group_member_list", map[string]any{
+	data, err := call(callCtx, "get_group_member_list", map[string]any{
 		"group_id": oneBotIDParam(groupID),
 		"no_cache": false,
 	})
@@ -3434,7 +3470,7 @@ func (r *Runtime) enrichImagePromptWithQQContext(ctx context.Context, event Mess
 		return prompt
 	}
 	var lines []string
-	if group, err := r.GetGroupInfo(ctx, event.GroupID); err == nil {
+	if group, err := r.getGroupInfoForEvent(ctx, event, event.GroupID); err == nil {
 		line := "群聊：" + firstNonEmpty(group.GroupName, group.GroupID)
 		if group.GroupID != "" {
 			line += " (" + group.GroupID + ")"
@@ -3444,7 +3480,7 @@ func (r *Runtime) enrichImagePromptWithQQContext(ctx context.Context, event Mess
 		}
 		lines = append(lines, line)
 	}
-	if sender, err := r.GetGroupMemberInfo(ctx, event.GroupID, event.UserID); err == nil && sender.UserID != "" {
+	if sender, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID); err == nil && sender.UserID != "" {
 		lines = append(lines, "当前发送者："+sender.DisplayName()+" ("+sender.UserID+")，头像："+sender.AvatarURL)
 	}
 	cfg := r.effectiveConfigForEvent(event)
@@ -3458,7 +3494,7 @@ func (r *Runtime) enrichImagePromptWithQQContext(ctx context.Context, event Mess
 		if botIDs[userID] {
 			continue
 		}
-		member, err := r.GetGroupMemberInfo(ctx, event.GroupID, userID)
+		member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
 		if err != nil || member.UserID == "" {
 			lines = append(lines, "被@成员："+userID+"，头像："+QQMemberAvatarURL(userID))
 			continue
@@ -3674,7 +3710,7 @@ func (r *Runtime) qqAvatarTargetUserIDs(ctx context.Context, event MessageEvent,
 	if len(ids) > 0 || !wantsAvatarImage(text) || event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
 		return ids
 	}
-	members, err := r.GetGroupMemberList(ctx, event.GroupID)
+	members, err := r.getGroupMemberListForEvent(ctx, event, event.GroupID)
 	if err != nil {
 		return ids
 	}
@@ -4225,7 +4261,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n如果用户询问你会什么、能否完成某类任务、某功能由哪个插件负责，或质疑你是否具有某项能力，必须先调用 diana.capabilities 从自身能力知识库检索；不要仅凭系统提示词记忆猜测。回答时结合检索结果和当前关系权限，未解锁的能力要如实说明门槛。")
 	}
 	if agentEnabled && hasTool("diana.qq_group") {
-		builder.WriteString("\n如果用户要求读取当前群资料、群成员列表、按昵称查成员，或真正 @ 某位/多位/其余成员，必须调用 diana.qq_group 获取 NapCat 的实时结果；不要声称只能识别用户手动 @ 出来的成员。如果用户要求读取或修改当前群的回复频率、回复阈值、最低回复成员群等级，必须调用 diana.qq_group 的 reply_policy 或 set_reply_policy；不要口头声称已经修改，工具会校验机器人主人、群主或群管理员权限。")
+		builder.WriteString("\n如果用户要求读取当前群资料、群成员列表、按昵称查成员，或真正 @ 某位/多位/其余成员，必须调用 diana.qq_group 获取 OneBot v11 的实时结果；不要声称只能识别用户手动 @ 出来的成员。如果用户要求读取或修改当前群的回复频率、回复阈值、最低回复成员群等级，必须调用 diana.qq_group 的 reply_policy 或 set_reply_policy；不要口头声称已经修改，工具会校验机器人主人、群主或群管理员权限。")
 	}
 	if agentEnabled && hasTool("diana.relationship") {
 		builder.WriteString("\n如果用户询问自己、被 @ 成员、指定 QQ 用户或群内成员的好感度、关系等级、互动次数或权限，必须调用 diana.relationship 获取目标数据；消息中的结构化 @ 会由工具自动识别。最终回复必须同时说明目标的好感度、关系等级、当前权限和提醒/订阅额度，不得省略工具结果中的 permissions。不得拿当前发言者的关系上下文代替目标数据，也不得编造‘隐藏数据无法查询’之类限制。")
@@ -4537,7 +4573,7 @@ func (r *Runtime) enrichReplyReference(ctx context.Context, event MessageEvent) 
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	data, err := r.channel.CallAPI(callCtx, "get_msg", map[string]any{"message_id": oneBotMessageIDParam(ids[0])})
+	data, err := r.callOneBotAPIForEvent(callCtx, event, "get_msg", map[string]any{"message_id": oneBotMessageIDParam(ids[0])})
 	if err != nil {
 		if quoted := r.lookupQuotedMessage(ctx, event, ids[0]); quoted != nil {
 			return r.applyQuotedMessage(event, quoted)
@@ -4642,7 +4678,7 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 			continue
 		}
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		data, err := r.channel.CallAPI(callCtx, "get_forward_msg", map[string]any{"id": id})
+		data, err := r.callOneBotAPIForEvent(callCtx, event, "get_forward_msg", map[string]any{"id": id})
 		cancel()
 		if err != nil {
 			r.recordForwardMessageError(ctx, event, id, err)
@@ -5828,7 +5864,7 @@ func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEven
 		return blockedErr
 	}
 	_, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
-		return r.channel.CallAPI(callCtx, action, params)
+		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 	return err
 }
@@ -6203,7 +6239,7 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 			continue
 		}
 		result, err := r.executeOutboundCall(ctx, event, "send_private_msg", func(callCtx context.Context) (map[string]any, error) {
-			return r.channel.CallAPI(callCtx, "send_private_msg", map[string]any{
+			return r.callOneBotAPIForEvent(callCtx, event, "send_private_msg", map[string]any{
 				"user_id": selfUIN,
 				"message": buildForwardOutgoingSegments(msg),
 			})
@@ -6385,7 +6421,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		params["user_id"] = userID
 	}
 	return r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
-		return r.channel.CallAPI(callCtx, action, params)
+		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 }
 
@@ -6459,7 +6495,7 @@ func (r *Runtime) scheduleMessageDeletes(event MessageEvent, messageIDs []string
 		<-timer.C
 		for _, messageID := range messageIDs {
 			callCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			_, err := r.CallOneBotAPI(callCtx, "delete_msg", map[string]any{"message_id": oneBotIDParam(messageID)})
+			_, err := r.callOneBotAPIForEvent(callCtx, event, "delete_msg", map[string]any{"message_id": oneBotIDParam(messageID)})
 			cancel()
 			r.recordRecallReplyDelete(event, messageID, delay, err)
 		}
@@ -6807,7 +6843,7 @@ func (r *Runtime) enrichRecallNotice(ctx context.Context, event MessageEvent) Me
 	}
 	if !found && r.channel != nil {
 		callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
-		data, callErr := r.channel.CallAPI(callCtx, "get_msg", map[string]any{"message_id": oneBotMessageIDParam(event.MessageID)})
+		data, callErr := r.callOneBotAPIForEvent(callCtx, event, "get_msg", map[string]any{"message_id": oneBotMessageIDParam(event.MessageID)})
 		callCancel()
 		if callErr != nil {
 			log.Printf("qqbot recalled message get_msg failed: message_id=%s: %v", event.MessageID, callErr)

@@ -464,7 +464,7 @@ func TestLevelGateSkippedOnNonOneBotPlatform(t *testing.T) {
 	}
 
 	// OneBot：门槛照常生效，deny 策略下拿不到等级就拦截。
-	if newRT(PlatformNapCat).shouldHandle(event, "hi") {
+	if newRT(PlatformOneBotV11).shouldHandle(event, "hi") {
 		t.Fatal("OneBot 上 deny 策略应拦下未知等级")
 	}
 }

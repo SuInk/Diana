@@ -122,7 +122,7 @@ func verifyOwnerChallenge(router *gin.Engine, challengeToken, code string) *http
 
 func TestOwnerChallengeLoginFullFlow(t *testing.T) {
 	runtime := &fakeOwnerRuntime{cfg: assistant.BotConfig{
-		Platform: assistant.PlatformNapCat, OwnerID: "10001", OwnerLoginEnabled: true, Name: "Diana",
+		Platform: assistant.PlatformOneBotV11, OwnerID: "10001", OwnerLoginEnabled: true, Name: "Diana",
 	}}
 	router, manager, _ := newOwnerLoginTestRouter(t, runtime)
 
@@ -182,7 +182,7 @@ func TestOwnerChallengeDeliverySupportsTelegram(t *testing.T) {
 
 func TestOwnerChallengeExpiresWhenOwnerChanges(t *testing.T) {
 	runtime := &fakeOwnerRuntime{cfg: assistant.BotConfig{
-		Platform: assistant.PlatformNapCat, OwnerID: "10001", OwnerLoginEnabled: true,
+		Platform: assistant.PlatformOneBotV11, OwnerID: "10001", OwnerLoginEnabled: true,
 	}}
 	router, _, _ := newOwnerLoginTestRouter(t, runtime)
 	code, challengeToken := createOwnerChallenge(t, router, runtime)
