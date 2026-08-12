@@ -1972,7 +1972,7 @@ func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSe
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
+	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有 @ 或没有点名对象而归为 none。围绕上下文中可识别的产品、技术、品牌或设计风格出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive，而不是一概当作随口评价；若该短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有无法从上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
 		return answerabilityGuard
