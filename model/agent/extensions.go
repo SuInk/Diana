@@ -164,7 +164,8 @@ func (m *ExtensionManager) Skills() []SkillMetadata {
 }
 
 func (m *ExtensionManager) reloadSkills() error {
-	skills, err := LoadSkills(m.cfg.SkillRoots)
+	localSkills, err := LoadSkills(m.cfg.SkillRoots)
+	skills := mergeBuiltinSkills(m.cfg.BuiltinSkills, localSkills, m.cfg.ReservedSkillNames)
 	m.mu.Lock()
 	m.skills = append([]SkillMetadata(nil), skills...)
 	m.mu.Unlock()
@@ -179,6 +180,50 @@ func (m *ExtensionManager) reloadSkills() error {
 		}
 	}
 	return err
+}
+
+func normalizeBuiltinSkills(values []SkillMetadata) []SkillMetadata {
+	seen := map[string]bool{}
+	out := make([]SkillMetadata, 0, len(values))
+	for _, value := range values {
+		value.Name = strings.TrimSpace(value.Name)
+		value.Description = strings.TrimSpace(value.Description)
+		value.ShortDescription = strings.TrimSpace(value.ShortDescription)
+		value.Path = strings.TrimSpace(value.Path)
+		value.Source = strings.TrimSpace(value.Source)
+		value.Content = strings.TrimSpace(value.Content)
+		if value.Name == "" || value.Description == "" || value.Path == "" || value.Content == "" || seen[value.Name] {
+			continue
+		}
+		seen[value.Name] = true
+		out = append(out, value)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func mergeBuiltinSkills(builtin, local []SkillMetadata, reservedNames []string) []SkillMetadata {
+	out := append([]SkillMetadata(nil), normalizeBuiltinSkills(builtin)...)
+	seen := make(map[string]bool, len(out)+len(reservedNames))
+	for _, name := range reservedNames {
+		seen[strings.TrimSpace(name)] = true
+	}
+	for _, skill := range out {
+		seen[skill.Name] = true
+	}
+	for _, skill := range local {
+		if !seen[skill.Name] {
+			seen[skill.Name] = true
+			out = append(out, skill)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 func (m *ExtensionManager) addWarning(message string) {

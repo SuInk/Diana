@@ -208,6 +208,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewResolverPlugin(nil),
 		NewFileParserPlugin(nil),
 		NewLLMConfigPlugin(),
+		NewOneBotV11SkillPlugin(),
 		NewSandboxedBrowserRenderPlugin(),
 		NewVoiceTTSPlugin(nil),
 		NewWebSearchPlugin(nil),
@@ -1036,6 +1037,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 			if media := p.resolveSocialMedia(mediaCtx, req, raw, maxImages); media.Suppressed {
 				continue
 			} else if media.Handled {
+				media.ForwardMessages = resolverSocialForwardMessages(media)
 				if strings.TrimSpace(media.Context) != "" {
 					parts = append(parts, media.Context)
 					directParts = append(directParts, media.Context)

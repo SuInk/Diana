@@ -17,6 +17,10 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if writer == nil {
 			return
 		}
+		runError := runEvent.Error
+		if runEvent.Tool == dianaOneBotV11ToolName && runError != "" {
+			runError = "[OneBot v11 tool error omitted]"
+		}
 		kind := applog.KindOperation
 		level := applog.LevelInfo
 		action := "qqbot.agent_run"
@@ -36,7 +40,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		case agent.RunPhaseToolCompleted:
 			action = "qqbot.agent_tool"
 			message = "Agent 工具调用完成"
-			if runEvent.Error != "" {
+			if runError != "" {
 				kind = applog.KindError
 				level = applog.LevelError
 				message = "Agent 工具调用失败"
@@ -61,7 +65,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			Level:   level,
 			Action:  action,
 			Message: message,
-			Detail:  runEvent.Error,
+			Detail:  runError,
 			Actor:   qqEventActor(event),
 			Target:  target,
 			Metadata: map[string]any{
@@ -89,8 +93,12 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		})
 		if runEvent.Phase != agent.RunPhaseModelCompleted {
 			toolOutput := runEvent.ToolOutput
-			if runEvent.Error != "" && toolOutput == "" {
-				toolOutput = "ERROR: " + runEvent.Error
+			toolInput := runEvent.ToolInput
+			if runError != "" && toolOutput == "" {
+				toolOutput = "ERROR: " + runError
+			}
+			if runEvent.Tool == dianaOneBotV11ToolName {
+				toolInput, toolOutput = sanitizeOneBotV11DebugToolCall(toolInput, toolOutput)
 			}
 			r.recordDebugTrace(debugTraceFromContext(ctx), "Agent 调用链更新", map[string]any{
 				"phase":           "agent_" + string(runEvent.Phase),
@@ -99,11 +107,11 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				"tool_call":       runEvent.ToolCall,
 				"max_tool_calls":  runEvent.MaxToolCalls,
 				"tool":            runEvent.Tool,
-				"tool_input":      runEvent.ToolInput,
+				"tool_input":      toolInput,
 				"tool_output":     toolOutput,
 				"available_tools": runEvent.AvailableTools,
 				"duration_ms":     runEvent.DurationMS,
-				"error":           runEvent.Error,
+				"error":           runError,
 				"finish_reason":   runEvent.FinishReason,
 				"usage":           runEvent.Usage,
 			})
@@ -111,6 +119,16 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		log.Printf("qqbot agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
 			runEvent.TraceID, progressBar, progressLabel, runEvent.Phase, runEvent.ModelTurn, runEvent.Tool, runEvent.DurationMS)
 	}
+}
+
+func sanitizeOneBotV11DebugToolCall(input map[string]any, output string) (map[string]any, string) {
+	action := strings.TrimSpace(configToolString(input, "action"))
+	params, _ := input["params"].(map[string]any)
+	redactedInput := map[string]any{
+		"action":     action,
+		"param_keys": sortedMapKeys(params),
+	}
+	return redactedInput, "[OneBot v11 tool output omitted]"
 }
 
 func formatAgentProgress(event agent.RunEvent) (bar, label string, current, total, percent int) {

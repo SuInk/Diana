@@ -55,6 +55,8 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		MCPConfigPath:       cfg.AgentMCPConfigPath,
 		ExtensionManagement: extensionManagement,
 		BuiltinExtensions:   r.agentBuiltinExtensions(event),
+		BuiltinSkills:       r.oneBotV11BuiltinSkills(event),
+		ReservedSkillNames:  []string{"onebot-v11"},
 		CommandAllowlist:    cfg.AgentCommandAllowlist,
 		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
 		BrowserCDPURL:       cfg.AgentBrowserCDPURL,

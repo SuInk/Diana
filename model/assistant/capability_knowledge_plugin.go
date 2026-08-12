@@ -193,6 +193,7 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:voice", Title: "配置音色语音回复", Content: "用户明确要求语音回复、朗读或念出文字时，可调用 diana.tts 通过语音合成插件生成已配置音色并直接发送 QQ 语音；普通文字回复不会自动转语音。", Source: "core", Enabled: true},
 	{ID: "core:ocr", Title: "文件与 OCR", Content: "能解析 PDF 和文件；macOS 使用 PDFKit/Vision，本地原生路径不可用时回退 PDFium 与视觉 LLM。", Source: "core", Enabled: true, Required: "熟悉"},
 	{ID: "core:group", Title: "QQ群资料与成员", Content: "通过 diana.qq_group 获取群名、群成员列表、成员昵称、群头像和成员头像，可查找并真实 @ 一名或多名成员。", Source: "core", Enabled: true},
+	{ID: "core:onebot-v11", Title: "OneBot v11 协议技能", Content: "通过 diana.onebot_v11 调用当前 QQ 连接的 OneBot v11 标准动作及实现扩展；主人拥有完整调用权限，普通成员只可调用后端固定的标准只读白名单，凭据、修改和未知动作默认拒绝。", Source: "core", Enabled: true},
 	{ID: "core:relationship", Title: "记忆好感度与权限", Content: "通过 diana.relationship 查询用户长期互动、好感度、关系等级和权限；主人可设置或增减其他人的好感度。", Source: "core", Enabled: true},
 	{ID: "core:tasks", Title: "提醒与周期订阅", Content: "通过 diana.reminder、diana.schedule、diana.tasks 创建、批量查询、修改、取消和删除提醒或周期订阅；主人可管理其他用户任务。", Source: "core", Enabled: true},
 	{ID: "core:history", Title: "聊天历史引用与撤回", Content: "持久保存 QQ 消息、引用、图片和视频关键帧，重启后不丢；可读取合并转发和撤回记录并结合上下文回复。", Source: "core", Enabled: true},
