@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestLLMReadyImageURLsLoadsConcurrentlyAndPreservesOrder(t *testing.T) {
@@ -88,5 +90,32 @@ func TestLoadLLMImageURLsRejectsInvalidSource(t *testing.T) {
 	got, complete := loadLLMImageURLs(context.Background(), []string{"not-an-image-source"})
 	if complete || len(got) != 0 {
 		t.Fatalf("ready images = %#v complete = %v", got, complete)
+	}
+}
+
+func TestLLMMessageDetailedRejectsPartialImageBatch(t *testing.T) {
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "expired", http.StatusBadRequest)
+	}))
+	defer server.Close()
+	message, complete := llmMessageFromEventWithImagesForContextDetailed(context.Background(), MessageEvent{
+		Kind: EventKindPrivate,
+		Segments: []MessageSegment{
+			{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}},
+			{Type: "image", Data: map[string]string{"url": server.URL + "/expired.jpg"}},
+		},
+	}, "逐张读取", nil)
+	if complete {
+		t.Fatal("partial image batch was reported complete")
+	}
+	imageCount := 0
+	for _, part := range message.Parts {
+		if part.Type == llm.ContentPartImageURL {
+			imageCount++
+		}
+	}
+	if imageCount != 1 {
+		t.Fatalf("loaded image count = %d, want diagnostic partial result", imageCount)
 	}
 }

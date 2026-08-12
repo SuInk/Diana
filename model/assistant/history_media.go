@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,14 +19,29 @@ const historyMediaReadyTimeout = 5 * time.Second
 
 const imageContentSHA256Key = "content_sha256"
 
+const imageUnavailableKey = "image_unavailable"
+
+const (
+	imageSourceFailedKey   = "image_source_failed"
+	imageResolvedSourceKey = "resolved_source_"
+)
+
 func cacheMessageEventImages(ctx context.Context, event MessageEvent) MessageEvent {
-	event.Segments = cacheImageSegments(ctx, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
+	event, _ = cacheMessageEventImagesDetailed(ctx, event)
+	return event
+}
+
+func cacheMessageEventImagesDetailed(ctx context.Context, event MessageEvent) (MessageEvent, []error) {
+	var failures []error
+	event.Segments, failures = cacheImageSegmentsDetailed(ctx, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
 	if event.Quoted != nil {
 		quoted := *event.Quoted
-		quoted.Segments = cacheImageSegments(ctx, "quoted", firstNonEmpty(quoted.GroupID, event.GroupID), firstNonEmpty(quoted.UserID, event.UserID), quoted.MessageID, quoted.Segments)
+		var quotedFailures []error
+		quoted.Segments, quotedFailures = cacheImageSegmentsDetailed(ctx, "quoted", firstNonEmpty(quoted.GroupID, event.GroupID), firstNonEmpty(quoted.UserID, event.UserID), quoted.MessageID, quoted.Segments)
+		failures = append(failures, quotedFailures...)
 		event.Quoted = &quoted
 	}
-	return event
+	return event, failures
 }
 
 func cacheMessageEventVideos(ctx context.Context, event MessageEvent) MessageEvent {
@@ -102,42 +118,115 @@ func cachedVideoFrameURLs(segments []MessageSegment) []string {
 }
 
 func cacheImageSegments(ctx context.Context, targetKind, groupID, userID, messageID string, segments []MessageSegment) []MessageSegment {
+	out, _ := cacheImageSegmentsDetailed(ctx, targetKind, groupID, userID, messageID, segments)
+	return out
+}
+
+func cacheImageSegmentsDetailed(ctx context.Context, targetKind, groupID, userID, messageID string, segments []MessageSegment) ([]MessageSegment, []error) {
 	if len(segments) == 0 {
-		return segments
+		return segments, nil
 	}
 	out := make([]MessageSegment, len(segments))
 	copy(out, segments)
+	var failures []error
 	for i, segment := range out {
 		if segment.Type != "image" {
 			continue
 		}
 		data := cloneSegmentData(segment.Data)
 		if cached := normalizedLocalImagePath(segment.Data["cached_file"]); cached != "" {
-			if data[imageContentSHA256Key] == "" {
-				if hash, ok := imageSegmentContentSHA256(segment); ok {
-					data[imageContentSHA256Key] = hash
+			if body, _, err := readHistoryImageSource(ctx, cached, 0); err == nil {
+				delete(data, imageUnavailableKey)
+				delete(data, imageSourceFailedKey)
+				if data[imageContentSHA256Key] == "" {
+					data[imageContentSHA256Key] = imageBytesSHA256(body)
 				}
+				out[i].Data = data
+				continue
 			}
+		}
+		if imageSegmentHasInlineData(segment) {
+			delete(data, imageUnavailableKey)
+			delete(data, imageSourceFailedKey)
 			out[i].Data = data
 			continue
 		}
-		source := firstImageSource(segment)
-		if source == "" {
-			continue
+
+		var sourceErrors []error
+		cached := false
+		for _, source := range imageSourceCandidates(segment) {
+			body, contentType, err := readHistoryImageSource(ctx, source, historyMediaReadyTimeout)
+			if err != nil {
+				sourceErrors = append(sourceErrors, err)
+				continue
+			}
+			path, err := writeHistoryImage(targetKind, groupID, userID, messageID, source, body, contentType)
+			if err != nil {
+				sourceErrors = append(sourceErrors, err)
+				continue
+			}
+			data["cached_file"] = path
+			data["cached_mime"] = contentType
+			data["cached_size"] = fmt.Sprint(len(body))
+			data[imageContentSHA256Key] = imageBytesSHA256(body)
+			delete(data, imageUnavailableKey)
+			delete(data, imageSourceFailedKey)
+			cached = true
+			break
 		}
-		body, contentType, err := readHistoryImageSource(ctx, source, historyMediaReadyTimeout)
-		if err != nil {
-			continue
+		if !cached {
+			data[imageUnavailableKey] = "true"
+			data[imageSourceFailedKey] = "true"
+			cause := errors.Join(sourceErrors...)
+			if cause == nil {
+				cause = fmt.Errorf("image source is unavailable")
+			}
+			failures = append(failures, fmt.Errorf("message %s image %d: %w", firstNonEmpty(messageID, "unknown"), i+1, cause))
 		}
-		path, err := writeHistoryImage(targetKind, groupID, userID, messageID, source, body, contentType)
-		if err != nil {
-			continue
-		}
-		data["cached_file"] = path
-		data["cached_mime"] = contentType
-		data["cached_size"] = fmt.Sprint(len(body))
-		data[imageContentSHA256Key] = imageBytesSHA256(body)
 		out[i].Data = data
+	}
+	return out, failures
+}
+
+func imageSegmentHasInlineData(segment MessageSegment) bool {
+	for _, key := range []string{"cached_file", "url", "image_url", "src", "file", "path"} {
+		value := normalizedImageURL(segment.Data[key])
+		if strings.HasPrefix(value, "data:image/") {
+			return true
+		}
+	}
+	return false
+}
+
+func imageSourceCandidates(segment MessageSegment) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	// Prefer the newest NapCat resolution. An older entry is commonly the same
+	// expired-rkey URL that triggered the fallback and may otherwise cost 8s again.
+	for index := 8; index >= 1; index-- {
+		value := strings.TrimSpace(segment.Data[fmt.Sprintf("%s%d", imageResolvedSourceKey, index)])
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) > 0 || strings.EqualFold(strings.TrimSpace(segment.Data[imageSourceFailedKey]), "true") {
+		return out
+	}
+	for _, key := range []string{"cached_file", "path", "file", "url", "image_url", "src"} {
+		value := strings.TrimSpace(segment.Data[key])
+		if normalizedHTTPURL(value) == "" && rawAbsoluteMediaPath(value) == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
 	return out
 }

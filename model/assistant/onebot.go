@@ -682,12 +682,17 @@ func ImageURLs(segments []MessageSegment) []string {
 }
 
 func hasImageSegment(segments []MessageSegment) bool {
+	return imageSegmentCount(segments) > 0
+}
+
+func imageSegmentCount(segments []MessageSegment) int {
+	count := 0
 	for _, segment := range segments {
 		if segment.Type == "image" {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
 
 // VideoURLs 提取 OneBot 视频段里的远程 URL 或 NapCat 提供的本地绝对路径。

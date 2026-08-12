@@ -48,25 +48,45 @@ func setQuotedSemanticSourceMessageIDs(quoted *QuotedMessage, messageIDs []strin
 }
 
 func (r *Runtime) semanticReferenceImageURLs(ctx context.Context, event MessageEvent) []string {
+	images, _ := r.semanticReferenceImageURLsDetailed(ctx, event)
+	return images
+}
+
+func (r *Runtime) semanticReferenceImageURLsDetailed(ctx context.Context, event MessageEvent) ([]string, error) {
 	messageIDs := eventSemanticSourceMessageIDs(event)
 	if len(messageIDs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	images := make([]string, 0, len(messageIDs))
 	for _, messageID := range messageIDs {
 		if event.Quoted != nil && strings.TrimSpace(event.Quoted.MessageID) == messageID {
-			images = appendUniqueStrings(images, ImageURLs(event.Quoted.Segments)...)
+			quotedEvent := MessageEvent{
+				Kind:      event.Kind,
+				GroupID:   firstNonEmpty(event.Quoted.GroupID, event.GroupID),
+				UserID:    firstNonEmpty(event.Quoted.UserID, event.UserID),
+				MessageID: event.Quoted.MessageID,
+				Segments:  event.Quoted.Segments,
+			}
+			quotedEvent = r.prepareEventImages(ctx, quotedEvent)
+			if quotedEvent.imageLoadErr != nil {
+				return nil, quotedEvent.imageLoadErr
+			}
+			images = appendUniqueStrings(images, ImageURLs(quotedEvent.Segments)...)
 			continue
 		}
 		source, ok := r.findSemanticReferenceEvent(ctx, event, messageID)
 		if !ok {
 			continue
 		}
+		source = r.prepareEventImages(ctx, source)
+		if source.imageLoadErr != nil {
+			return nil, source.imageLoadErr
+		}
 		images = appendUniqueStrings(images, ImageURLs(source.Segments)...)
 		if source.Quoted != nil {
 			images = appendUniqueStrings(images, ImageURLs(source.Quoted.Segments)...)
 		}
 	}
-	return images
+	return images, nil
 }

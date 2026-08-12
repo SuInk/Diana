@@ -2,12 +2,14 @@ package assistant
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,6 +151,227 @@ func TestRuntimeResolvesImageWithoutURLAndCachesIt(t *testing.T) {
 	event = cacheMessageEventImages(context.Background(), event)
 	if event.Segments[0].Data["url"] == "" || event.Segments[0].Data["cached_file"] == "" {
 		t.Fatalf("image source was not resolved and cached: %#v", event.Segments)
+	}
+}
+
+func TestRuntimeRefreshesExpiredImageURLThroughGetImage(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	body := tinyJPEGBytes(t)
+	var expiredRequests, refreshedRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/expired.jpg":
+			expiredRequests++
+			http.Error(w, "expired rkey", http.StatusBadRequest)
+		case "/refreshed.jpg":
+			refreshedRequests++
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write(body)
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer server.Close()
+
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_image": {"file": server.URL + "/refreshed.jpg"},
+	}}
+	provider := &capturingLLMProvider{reply: "图片已读取"}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event, text, handled, outcome := runtime.prepareMessageEvent(context.Background(), MessageEvent{
+		Kind:       EventKindPrivate,
+		UserID:     "user-1",
+		MessageID:  "expired-rkey",
+		RawMessage: "[图片]",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"file": "CEC014F0C4280214A9F672B17116581B.jpg",
+			"url":  server.URL + "/expired.jpg",
+		}}},
+	})
+	if !handled || outcome != "replied" {
+		t.Fatalf("prepare handled=%v outcome=%q", handled, outcome)
+	}
+	if event.imageLoadErr != nil {
+		t.Fatalf("image fallback failed: %v", event.imageLoadErr)
+	}
+	if event.Segments[0].Data["cached_file"] == "" {
+		t.Fatalf("refreshed image was not cached: %#v", event.Segments)
+	}
+	if expiredRequests != 1 || refreshedRequests != 1 {
+		t.Fatalf("image requests expired=%d refreshed=%d", expiredRequests, refreshedRequests)
+	}
+	getImageCalls := recordedCallsByAction(channel.callsSnapshot(), "get_image")
+	if len(getImageCalls) != 1 || getImageCalls[0].params["file"] != "CEC014F0C4280214A9F672B17116581B.jpg" {
+		t.Fatalf("get_image calls = %#v", getImageCalls)
+	}
+	if getMsgCalls := recordedCallsByAction(channel.callsSnapshot(), "get_msg"); len(getMsgCalls) != 0 {
+		t.Fatalf("successful get_image fallback should not refresh the message: %#v", getMsgCalls)
+	}
+	if _, err := runtime.replyTo(context.Background(), event, text); err != nil {
+		t.Fatal(err)
+	}
+	wantImageURL := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(body)
+	request := provider.requestSnapshot()
+	if !requestHasImageURL(request, wantImageURL) || requestHasImageURL(request, server.URL+"/expired.jpg") {
+		t.Fatalf("vision request did not use refreshed bytes: %#v", request.Messages)
+	}
+}
+
+func TestRuntimeRefreshesExpiredImageURLThroughGetImageLocalPath(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	body := tinyJPEGBytes(t)
+	localPath := filepath.Join(t.TempDir(), "napcat-image.jpg")
+	if err := os.WriteFile(localPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "expired rkey", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_image": {"file": localPath},
+	}}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := runtime.prepareEventImages(context.Background(), MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "user-1",
+		MessageID: "expired-rkey-local",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"file": "napcat-image-token",
+			"url":  server.URL + "/expired.jpg",
+		}}},
+	})
+	if event.imageLoadErr != nil {
+		t.Fatal(event.imageLoadErr)
+	}
+	if event.Segments[0].Data["path"] != localPath || event.Segments[0].Data["cached_file"] == "" {
+		t.Fatalf("NapCat local image was not cached: %#v", event.Segments[0].Data)
+	}
+	if calls := recordedCallsByAction(channel.callsSnapshot(), "get_image"); len(calls) != 1 {
+		t.Fatalf("get_image calls = %#v", calls)
+	}
+}
+
+func TestRuntimeRefreshesExpiredGetImageSourceThroughGetMsg(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	body := tinyJPEGBytes(t)
+	expiredServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "expired rkey", http.StatusBadRequest)
+	}))
+	defer expiredServer.Close()
+	refreshedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(body)
+	}))
+	defer refreshedServer.Close()
+
+	channel := &stagedNapCatImageChannel{
+		imageToken:   "original-image-token",
+		expiredURL:   expiredServer.URL + "/expired.jpg",
+		refreshedURL: refreshedServer.URL + "/refreshed.jpg",
+	}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := runtime.prepareEventImages(context.Background(), MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "user-1",
+		MessageID: "refresh-through-get-msg",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"file": channel.imageToken,
+			"url":  expiredServer.URL + "/initial-expired.jpg",
+		}}},
+	})
+	if event.imageLoadErr != nil || event.Segments[0].Data["cached_file"] == "" {
+		t.Fatalf("get_msg fallback failed: error=%v segment=%#v", event.imageLoadErr, event.Segments[0])
+	}
+	if got := strings.Join(channel.calls, ","); got != "get_image:"+channel.imageToken+",get_msg:refresh-through-get-msg,get_image:"+channel.imageToken {
+		t.Fatalf("fallback calls = %q", got)
+	}
+}
+
+type stagedNapCatImageChannel struct {
+	imageToken    string
+	expiredURL    string
+	refreshedURL  string
+	messageLoaded bool
+	calls         []string
+}
+
+func (c *stagedNapCatImageChannel) Connect(context.Context, EventHandler) error { return nil }
+func (c *stagedNapCatImageChannel) Send(context.Context, OutgoingMessage) error { return nil }
+func (c *stagedNapCatImageChannel) Status() ChannelStatus                       { return ChannelStatus{} }
+func (c *stagedNapCatImageChannel) Close() error                                { return nil }
+func (c *stagedNapCatImageChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+	switch action {
+	case "get_image":
+		token := stringFromAny(params["file"])
+		c.calls = append(c.calls, action+":"+token)
+		if c.messageLoaded {
+			return map[string]any{"url": c.refreshedURL}, nil
+		}
+		return map[string]any{"url": c.expiredURL}, nil
+	case "get_msg":
+		messageID := stringFromAny(params["message_id"])
+		c.calls = append(c.calls, action+":"+messageID)
+		c.messageLoaded = true
+		return map[string]any{"message": []any{map[string]any{
+			"type": "image",
+			"data": map[string]any{"file": c.imageToken},
+		}}}, nil
+	default:
+		return map[string]any{}, nil
+	}
+}
+
+func TestRuntimeReportsImageErrorWhenURLAndGetImageFail(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "expired rkey", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_image": {},
+		"get_msg":   {},
+	}}
+	provider := &capturingLLMProvider{reply: "不应调用模型"}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event, text, handled, successOutcome := runtime.prepareMessageEvent(context.Background(), MessageEvent{
+		Kind:       EventKindPrivate,
+		UserID:     "user-1",
+		MessageID:  "broken-image",
+		RawMessage: "[图片]",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"file": "broken.jpg",
+			"url":  server.URL + "/expired.jpg",
+		}}},
+	})
+	if !handled || successOutcome != "replied" {
+		t.Fatalf("prepare handled=%v outcome=%q", handled, successOutcome)
+	}
+	if !errors.Is(event.imageLoadErr, errImageMediaUnavailable) {
+		t.Fatalf("image error = %v", event.imageLoadErr)
+	}
+	outcome, err := runtime.replyAndRecord(context.Background(), event, text, successOutcome)
+	if err != nil || outcome != "error_replied" {
+		t.Fatalf("reply outcome = %q error = %v", outcome, err)
+	}
+	if len(provider.requestSnapshot().Messages) != 0 {
+		t.Fatalf("vision model received an unavailable image: %#v", provider.requestSnapshot())
+	}
+	if len(channel.sent) != 1 || !strings.Contains(channel.sent[0].Text, "图片读取失败") || strings.Contains(channel.sent[0].Text, "[图片]") {
+		t.Fatalf("public error reply = %#v", channel.sent)
+	}
+	if len(recordedCallsByAction(channel.callsSnapshot(), "get_image")) == 0 {
+		t.Fatalf("get_image fallback was not attempted: %#v", channel.callsSnapshot())
 	}
 }
 
