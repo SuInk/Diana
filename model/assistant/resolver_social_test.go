@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,6 +21,71 @@ func TestResolverAttachDownloadedVideoReturnsMedia(t *testing.T) {
 	)
 	if len(result.VideoURLs) != 1 || result.VideoURLs[0] != "/tmp/diana-test-video.mp4" {
 		t.Fatalf("VideoURLs = %#v", result.VideoURLs)
+	}
+}
+
+func TestResolverSocialForwardMessagesBuildsMergedVideoCard(t *testing.T) {
+	nodes := resolverSocialForwardMessages(resolverSocialResult{
+		Handled:   true,
+		Context:   "[Bilibili] 示例视频",
+		ImageURLs: []string{"https://example.com/cover.jpg"},
+		VideoURLs: []string{"/tmp/diana-test-video.mp4"},
+	})
+	if len(nodes) != 2 {
+		t.Fatalf("nodes = %#v", nodes)
+	}
+	if nodes[0].Text != "[Bilibili] 示例视频" || !nodes[0].ImagesFirst || len(nodes[0].ImageURLs) != 1 {
+		t.Fatalf("metadata node = %#v", nodes[0])
+	}
+	if len(nodes[1].VideoURLs) != 1 || nodes[1].VideoURLs[0] != "/tmp/diana-test-video.mp4" {
+		t.Fatalf("video node = %#v", nodes[1])
+	}
+}
+
+func TestResolverSocialForwardMessagesBuildsGalleryAndTextResults(t *testing.T) {
+	gallery := resolverSocialForwardMessages(resolverSocialResult{
+		Handled:   true,
+		Context:   "[小红书] 示例图集",
+		ImageURLs: []string{"https://example.com/1.jpg", "https://example.com/2.jpg"},
+	})
+	if len(gallery) != 3 || gallery[0].Text == "" || len(gallery[1].ImageURLs) != 1 || len(gallery[2].ImageURLs) != 1 {
+		t.Fatalf("gallery nodes = %#v", gallery)
+	}
+	textOnly := resolverSocialForwardMessages(resolverSocialResult{Handled: true, Context: "媒体下载失败"})
+	if len(textOnly) != 1 || textOnly[0].Text != "媒体下载失败" {
+		t.Fatalf("text nodes = %#v", textOnly)
+	}
+}
+
+func TestResolverPluginCurrentMediaPathAlwaysBuildsMergedForward(t *testing.T) {
+	t.Setenv("DIANA_DOUYIN_CK", "")
+	t.Setenv("DOUYIN_CK", "")
+	plugin := NewResolverPlugin(nil)
+	resp, err := plugin.Handle(context.Background(), PluginRequest{
+		Text: "https://www.douyin.com/video/1234567890",
+		Settings: SettingValues{
+			resolverSettingDownloadMedia: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if resp == nil || !resp.Handled || !resp.Forward || len(resp.ForwardMessages) != 1 {
+		t.Fatalf("response = %#v", resp)
+	}
+	if !strings.Contains(resp.ForwardMessages[0].Text, "抖音 Cookie") {
+		t.Fatalf("forward message = %#v", resp.ForwardMessages[0])
+	}
+}
+
+func TestResolverDefaultVideoLimitsAreFifteenMinutesAndTwoHundredMB(t *testing.T) {
+	t.Setenv("DIANA_RESOLVER_VIDEO_MAX_MB", "")
+	t.Setenv("DIANA_RESOLVER_VIDEO_MAX_DURATION", "")
+	if got := resolverVideoMaxMB(context.Background()); got != 200 {
+		t.Fatalf("max MB = %d", got)
+	}
+	if got := resolverVideoMaxDuration(context.Background()); got != 15*60 {
+		t.Fatalf("max duration = %d", got)
 	}
 }
 

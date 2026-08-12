@@ -101,6 +101,79 @@ func TestExtensionManagementCanBeReadOnly(t *testing.T) {
 	}
 }
 
+func TestBuiltinSkillIsReadableAndCannotBeOverridden(t *testing.T) {
+	dir := t.TempDir()
+	builtin := SkillMetadata{
+		Name:        "onebot-v11",
+		Description: "Built-in OneBot instructions.",
+		Path:        "builtin://onebot-v11/SKILL.md",
+		Source:      "builtin:test",
+		Content:     "---\nname: onebot-v11\ndescription: Built-in OneBot instructions.\n---\n\nOWNER_FULL_MEMBER_READ_ONLY",
+	}
+	localDir := filepath.Join(dir, "skills", builtin.Name)
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, skillFileName), []byte("---\nname: onebot-v11\ndescription: Local replacement.\n---\n\nUNSAFE_REPLACEMENT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewAgentToolRegistry(context.Background(), Config{
+		WorkDir:             dir,
+		SkillRoots:          []string{filepath.Join(dir, "skills")},
+		BuiltinSkills:       []SkillMetadata{builtin},
+		ReservedSkillNames:  []string{builtin.Name},
+		ExtensionManagement: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	if skills := registry.Skills(); len(skills) != 1 || skills[0].Source != "builtin:test" {
+		t.Fatalf("skills = %#v", skills)
+	}
+	read, _ := registry.Get("skills.read")
+	output, err := read.Run(context.Background(), map[string]any{"name": builtin.Name})
+	if err != nil || !strings.Contains(output, "OWNER_FULL_MEMBER_READ_ONLY") || strings.Contains(output, "UNSAFE_REPLACEMENT") {
+		t.Fatalf("read output=%q err=%v", output, err)
+	}
+	install, _ := registry.Get("skills.install")
+	_, err = install.Run(context.Background(), map[string]any{
+		"name":    builtin.Name,
+		"replace": true,
+		"content": "---\nname: onebot-v11\ndescription: Attempted replacement.\n---\n\nREPLACED",
+	})
+	if err == nil || !strings.Contains(err.Error(), "built into Diana") {
+		t.Fatalf("replace error = %v", err)
+	}
+	uninstall, _ := registry.Get("skills.uninstall")
+	if _, err := uninstall.Run(context.Background(), map[string]any{"name": builtin.Name}); err == nil || !strings.Contains(err.Error(), "cannot be uninstalled") {
+		t.Fatalf("uninstall error = %v", err)
+	}
+}
+
+func TestReservedSkillStaysHiddenWithoutBuiltinContent(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "skills", "onebot-v11")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, skillFileName), []byte("---\nname: onebot-v11\ndescription: Source copy.\n---\n\nSOURCE_COPY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewAgentToolRegistry(context.Background(), Config{
+		WorkDir:            dir,
+		SkillRoots:         []string{filepath.Join(dir, "skills")},
+		ReservedSkillNames: []string{"onebot-v11"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	if skills := registry.Skills(); len(skills) != 0 {
+		t.Fatalf("reserved source skill was loaded: %#v", skills)
+	}
+}
+
 func TestSkillInstallRestoresReadToolAfterRouting(t *testing.T) {
 	registry, err := NewAgentToolRegistry(context.Background(), Config{
 		WorkDir:             t.TempDir(),

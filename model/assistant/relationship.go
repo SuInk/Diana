@@ -43,7 +43,7 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		Tier:                  RelationshipAcquaintance,
 		Name:                  "初识",
 		Tone:                  "自然、礼貌、简洁，不使用过度亲密的称呼，也不要假装已经很熟。",
-		Permissions:           []string{"基础聊天", "图片/视频/文件理解", "实时网页搜索", "沙盒网页渲染", "个人提醒与订阅（最多 1 个）"},
+		Permissions:           []string{"基础聊天", "图片/视频/文件理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "个人提醒与订阅（最多 1 个）"},
 		Score:                 profile.Favorability,
 		MessageCount:          profile.MessageCount,
 		AllowPersonalSchedule: true,
@@ -53,14 +53,14 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		policy.Tier = RelationshipHostile
 		policy.Name = "冷淡"
 		policy.Tone = "保持礼貌但明显疏离，只回答必要内容；面对辱骂可设边界，不争吵、不讨好。"
-		policy.Permissions = []string{"基础聊天", "图片/视频/文件理解"}
+		policy.Permissions = []string{"基础聊天", "图片/视频/文件理解", "OneBot 信息读取"}
 		policy.AllowImageEditing = false
 		policy.AllowPersonalSchedule = false
 	case profile.Favorability >= 100 && profile.MessageCount >= 80:
 		policy.Tier = RelationshipTrusted
 		policy.Name = "信赖"
 		policy.Tone = "像长期信赖的朋友一样直接、温和、有默契，可以主动结合已知偏好，但不要编造共同经历。"
-		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 10 个）"}
+		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 10 个）"}
 		policy.AllowImageGeneration = true
 		policy.AllowImageEditing = true
 		policy.AllowDocumentOCR = true
@@ -69,7 +69,7 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		policy.Tier = RelationshipFriend
 		policy.Name = "朋友"
 		policy.Tone = "像熟悉的朋友一样温暖、轻松，可以适度接梗和调侃，仍要尊重边界。"
-		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 5 个）"}
+		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 5 个）"}
 		policy.AllowImageGeneration = true
 		policy.AllowImageEditing = true
 		policy.AllowDocumentOCR = true
@@ -78,7 +78,7 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		policy.Tier = RelationshipFamiliar
 		policy.Name = "熟悉"
 		policy.Tone = "语气比初识更放松，可以自然使用对方昵称并结合长期偏好，但不要过分亲密。"
-		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 3 个）"}
+		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 3 个）"}
 		policy.AllowImageGeneration = true
 		policy.AllowImageEditing = true
 		policy.AllowDocumentOCR = true
@@ -92,7 +92,7 @@ func relationshipOwnerPolicy(profile UserMemoryProfile) RelationshipPolicy {
 		Tier:                  RelationshipOwner,
 		Name:                  "主人",
 		Tone:                  "亲近、坦率、执行导向；可以自然接梗，但涉及风险和失败时必须如实说明。",
-		Permissions:           []string{"全部聊天与媒体能力", "网页与浏览器", "图片生成与编辑", "文档 OCR", "定时订阅（最多 20 个）", "机器人配置", "本地工具", "Skills/MCP"},
+		Permissions:           []string{"全部聊天与媒体能力", "网页与浏览器", "图片生成与编辑", "文档 OCR", "定时订阅（最多 20 个）", "OneBot 全协议", "机器人配置", "本地工具", "Skills/MCP"},
 		Score:                 profile.Favorability,
 		MessageCount:          profile.MessageCount,
 		Owner:                 true,
@@ -112,6 +112,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaChatHistoryToolName: true,
 		"diana.relationship":     true,
 		"diana.qq_group":         true,
+		dianaOneBotV11ToolName:   true,
 		"diana.tasks":            true,
 		"diana.tts":              true,
 	}

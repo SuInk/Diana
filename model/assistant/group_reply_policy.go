@@ -233,6 +233,8 @@ func (r *Runtime) recordGroupReplyPolicyChanged(ctx context.Context, event Messa
 			"proactive_reply_chance":     cfg.ProactiveReplyChance,
 			"proactive_reply_threshold":  cfg.ProactiveReplyThreshold,
 			"minimum_reply_member_level": cfg.MinimumReplyMemberLevel,
+			"chat_in_enabled":            boolValue(cfg.ChatInEnabled, true),
+			"chat_in_level":              string(cfg.ChatInLevel),
 		},
 	})
 }
