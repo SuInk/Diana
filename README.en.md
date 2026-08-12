@@ -2,11 +2,11 @@
 
 [中文](./README.md)
 
-Diana is a multi-platform AI assistant service written in Go, with an LLM compatibility layer, platform adapters, a Gin WebUI, and plugin management. It currently ships with a QQ adapter for NapCat / OneBot v11; the WebUI manages multiple assistant profiles, models, platform connections, trigger aliases, and built-in plugins.
+Diana is a multi-platform AI assistant service written in Go, with an LLM compatibility layer, platform adapters, a Gin WebUI, and plugin management. It currently ships with a QQ adapter for OneBot v11; the WebUI manages multiple assistant profiles, models, platform connections, trigger aliases, and built-in plugins.
 
 ## Requirements
 
-- NapCat with OneBot v11 reverse WebSocket enabled when using the QQ adapter
+- A client with OneBot v11 reverse WebSocket support when using the QQ adapter
 - Go `1.26.5`, Node.js `22`, and npm when installing from source
 - Docker or Docker Compose when deploying with Docker
 
@@ -54,13 +54,13 @@ After startup, open:
 http://127.0.0.1:18080
 ```
 
-Configure NapCat reverse WebSocket to the exposed host endpoint:
+Configure the OneBot v11 client to connect to the exposed reverse WebSocket endpoint:
 
 ```text
 ws://127.0.0.1:18080/onebot/v11/ws
 ```
 
-If NapCat and the bot are not on the same machine, replace `127.0.0.1` with the bot host IP or domain.
+If the OneBot v11 client and Diana are not on the same machine, replace `127.0.0.1` with the Diana host IP or domain.
 
 ## Install From Source
 
@@ -225,7 +225,7 @@ GET /api/logs?kind=error&limit=100
 
 These structured logs are stored in the SQLite database pointed to by `APP_DB_PATH`; `LOG_PATH` is still used for plain runtime log file output.
 
-## Configure NapCat
+## Configure OneBot v11
 
 This project directly serves a OneBot v11 reverse WebSocket endpoint:
 
@@ -233,7 +233,7 @@ This project directly serves a OneBot v11 reverse WebSocket endpoint:
 ws://127.0.0.1:18080/onebot/v11/ws
 ```
 
-In NapCat, add a OneBot v11 reverse WebSocket connection and set the endpoint to the address above. If you configure an access token, NapCat and this service must use the same token.
+Add a OneBot v11 reverse WebSocket connection in the compatible client and set its endpoint to the address above. If you configure an access token, the client and Diana must use the same token. Implementations such as NapCat, Lagrange.Core, and go-cqhttp share this platform configuration instead of appearing as separate platforms.
 
 Bot startup example:
 
@@ -274,7 +274,7 @@ The bot page groups profiles by chat platform and lets you filter them with the 
 
 | Category | Platform | How it connects |
 | --- | --- | --- |
-| QQ | NapCat, Lagrange.Core, go-cqhttp | OneBot V11 reverse WebSocket — the client dials into Diana |
+| QQ | OneBot v11 | Reverse WebSocket; the OneBot v11 client dials into Diana |
 | Telegram | Telegram | Official Bot API long polling — Diana dials out |
 
 Telegram only needs the bot token from BotFather. There is no public address to expose and no webhook to configure; on restricted networks you will usually also want the proxy field. Point the custom Bot API field at a local Bot API server to lift the 50MB upload limit.
@@ -340,7 +340,7 @@ The Go process cannot directly load Python NoneBot plugins. To use third-party N
 ws://127.0.0.1:8080/onebot/v11/ws
 ```
 
-Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When third-party plugins call OneBot APIs such as `send_msg` or `get_group_info`, Diana forwards those API calls back to NapCat. This keeps third-party plugins running in their native NoneBot2 environment.
+Diana forwards events received from the OneBot client to the NoneBot sidecar. When third-party plugins call OneBot APIs such as `send_msg` or `get_group_info`, Diana forwards those calls to the current OneBot v11 client. This keeps third-party plugins running in their native NoneBot2 environment.
 
 ## Common Environment Variables
 
@@ -353,7 +353,7 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `DIANA_MEDIA_DIR` | `data/media` | Where inbound images are persisted; vision requests submit the local file as base64 |
 | `DIANA_MEDIA_MAX_MB` | `10` | Per-image download limit |
 | `DIANA_MEDIA_CACHE_MB` | `512` | Total cache size; least recently used files are evicted past this |
-| `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Diana media URL reachable by NapCat; use `http://diana:18080/media/resolver` for separate containers |
+| `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Diana media URL reachable by the OneBot v11 client; use `http://diana:18080/media/resolver` for separate containers |
 | `DIANA_BILI_SESSDATA` | empty | Bilibili `SESSDATA` cookie for protected content; WebUI plugin settings take precedence |
 | `DIANA_DOUYIN_CK` | empty | Douyin cookie; required for Douyin resolution, WebUI plugin settings take precedence |
 | `DIANA_XHS_CK` | empty | Xiaohongshu cookie; required for Xiaohongshu resolution, WebUI plugin settings take precedence |
@@ -374,7 +374,7 @@ Diana forwards OneBot events received from NapCat to the NoneBot sidecar. When t
 | `LLM_MAX_OUTPUT_TOKENS` | `1024` | Responses API maximum output tokens |
 | `LLM_TIMEOUT_MS` | `30000` | LLM request timeout in milliseconds |
 | `QQBOT_ENABLED` | `false` | Enable the bot automatically on startup |
-| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | Reverse WebSocket URL for NapCat |
+| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | Reverse WebSocket URL for the OneBot v11 client |
 | `ONEBOT_ACCESS_TOKEN` | empty | OneBot access token |
 | `NONEBOT_BRIDGE_ENABLED` | `false` | Enable the third-party NoneBot plugin bridge |
 | `NONEBOT_BRIDGE_ENDPOINT` | `ws://127.0.0.1:8080/onebot/v11/ws` | Reverse WebSocket endpoint for the NoneBot sidecar |

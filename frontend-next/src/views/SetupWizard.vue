@@ -3,7 +3,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>配置向导</h1>
-        <p>三步跑通：配置模型 → 接入 NapCat → 启动验证</p>
+        <p>三步跑通：配置模型 → 接入 OneBot v11 → 启动验证</p>
       </div>
     </header>
 
@@ -152,16 +152,16 @@
       </div>
     </section>
 
-    <!-- 第 2 步：NapCat -->
+    <!-- 第 2 步：OneBot v11 -->
     <section v-else-if="step === 1" class="card">
       <div class="card-header">
-        <h2>接入 NapCat</h2>
+        <h2>接入 OneBot v11</h2>
         <span v-if="connected" class="badge ok">已连接</span>
       </div>
       <div class="card-body stack">
         <div class="form-grid">
           <div class="field wide">
-            <label for="wizard-onebot-endpoint">NapCat 回连地址</label>
+            <label for="wizard-onebot-endpoint">OneBot v11 回连地址</label>
             <div class="input-group">
               <input
                 id="wizard-onebot-endpoint"
@@ -174,7 +174,7 @@
                 <Copy :size="14" aria-hidden="true" />
               </button>
             </div>
-            <span class="hint">填写 NapCat 实际能访问的地址；Docker 或局域网部署时请修改主机名。自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
+            <span class="hint">填写 OneBot v11 客户端实际能访问的地址；Docker 或局域网部署时请修改主机名。自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
           </div>
           <div class="field">
             <label for="wizard-owner">主人 QQ 号（可选）</label>
@@ -190,7 +190,7 @@
           <div class="field wide">
             <label for="wizard-token">OneBot Access Token（可选，至少 16 位）</label>
             <input id="wizard-token" v-model="botForm.onebot_access_token" class="input" type="password" autocomplete="off"
-              :placeholder="tokenConfigured ? '留空表示沿用已保存 token' : '与 NapCat 中填写的 token 保持一致'" />
+              :placeholder="tokenConfigured ? '留空表示沿用已保存 token' : '与 OneBot v11 客户端填写的 token 保持一致'" />
           </div>
         </div>
         <div class="cluster">
@@ -200,7 +200,7 @@
           </button>
           <span class="badge" :class="connected ? 'ok' : 'warn'">
             <span class="status-dot" :class="{ pulse: !connected }" aria-hidden="true" />
-            {{ connected ? `NapCat 已连接 ${selfID}` : "等待 NapCat 连入…" }}
+            {{ connected ? `OneBot v11 已连接 ${selfID}` : "等待 OneBot v11 客户端连入…" }}
           </span>
         </div>
         <p v-if="channelError" class="text-err" style="font-size: 12.5px">{{ channelError }}</p>
@@ -220,7 +220,7 @@
           </div>
           <div class="checklist-item" :class="connected ? 'done' : 'todo'">
             <span class="check-icon"><CheckCircle2 :size="15" aria-hidden="true" /></span>
-            <span class="check-main">NapCat 已连接<div class="check-hint">{{ connected ? `账号 ${selfID}` : "尚未连接" }}</div></span>
+            <span class="check-main">OneBot v11 已连接<div class="check-hint">{{ connected ? `账号 ${selfID}` : "尚未连接" }}</div></span>
           </div>
         </div>
         <p class="muted">
@@ -277,7 +277,7 @@ import { detectLLMService, llmServicePresets } from "../llm-presets";
 
 const step = ref(0);
 const busy = ref(false);
-const stepLabels = ["配置 LLM", "接入 NapCat", "启动验证"];
+const stepLabels = ["配置 LLM", "接入 OneBot v11", "启动验证"];
 
 const llmConfigured = ref(false);
 const tokenConfigured = ref(false);
@@ -468,7 +468,7 @@ async function saveBotAndStart(): Promise<void> {
     };
     savedBot.value = await saveQQBotConfig(payload);
     await startQQBot();
-    toastSuccess("配置已保存，等待 NapCat 连接");
+    toastSuccess("配置已保存，等待 OneBot v11 客户端连接");
     botForm.value.onebot_access_token = "";
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");

@@ -577,7 +577,7 @@ func (s GroupConfigSet) Upsert(cfg GroupConfig, base BotConfig) GroupConfigSet {
 
 const (
 	DefaultProfileName = "默认机器人"
-	DefaultPlatform    = PlatformNapCat
+	DefaultPlatform    = PlatformOneBotV11
 )
 
 type ProfileSet struct {

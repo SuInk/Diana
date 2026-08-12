@@ -44,12 +44,23 @@ type memberCache struct {
 	maxEntries int
 
 	// call 为 nil 时只走被动记录，不做兜底查询（测试和未连接场景）。
-	call func(ctx context.Context, action string, params map[string]any) (map[string]any, error)
+	call oneBotEventAPICaller
 	// now 便于测试注入时钟。
 	now func() time.Time
 }
 
-func newMemberCache(call func(ctx context.Context, action string, params map[string]any) (map[string]any, error)) *memberCache {
+type oneBotEventAPICaller func(context.Context, MessageEvent, string, map[string]any) (map[string]any, error)
+
+func newMemberCache(call oneBotAPICaller) *memberCache {
+	if call == nil {
+		return newMemberCacheForEvent(nil)
+	}
+	return newMemberCacheForEvent(func(ctx context.Context, _ MessageEvent, action string, params map[string]any) (map[string]any, error) {
+		return call(ctx, action, params)
+	})
+}
+
+func newMemberCacheForEvent(call oneBotEventAPICaller) *memberCache {
 	return &memberCache{
 		entries:    make(map[string]memberInfo),
 		inflight:   make(map[string]struct{}),
@@ -163,7 +174,7 @@ func (c *memberCache) LevelFor(event MessageEvent) (int, bool) {
 		return info.Level, true
 	}
 	// 异步回填，本条消息不等待。
-	c.refreshAsync(groupID, userID)
+	c.refreshAsync(event)
 	return 0, false
 }
 
@@ -171,10 +182,12 @@ func (c *memberCache) LevelFor(event MessageEvent) (int, bool) {
 //
 // 刻意不复用消息的 ctx：消息处理完 ctx 就被取消了，而这是 fire-and-forget
 // 的回填，必须有自己独立的生命周期和超时。
-func (c *memberCache) refreshAsync(groupID string, userID string) {
+func (c *memberCache) refreshAsync(event MessageEvent) {
 	if c == nil || c.call == nil {
 		return
 	}
+	groupID := strings.TrimSpace(event.GroupID)
+	userID := strings.TrimSpace(event.UserID)
 	key := memberCacheKey(groupID, userID)
 	c.mu.Lock()
 	if _, busy := c.inflight[key]; busy {
@@ -193,7 +206,7 @@ func (c *memberCache) refreshAsync(groupID string, userID string) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), memberFetchTimeout)
 		defer cancel()
-		data, err := c.call(ctx, "get_group_member_info", map[string]any{
+		data, err := c.call(ctx, event, "get_group_member_info", map[string]any{
 			"group_id": groupID,
 			"user_id":  userID,
 			"no_cache": false,

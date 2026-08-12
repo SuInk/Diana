@@ -209,7 +209,7 @@ func (t *dianaRelationshipTool) resolveTargetMember(ctx context.Context, targetI
 			break
 		}
 	}
-	member, err := t.runtime.GetGroupMemberInfo(ctx, t.event.GroupID, targetID)
+	member, err := t.runtime.getGroupMemberInfoForEvent(ctx, t.event, t.event.GroupID, targetID)
 	if err == nil && member.UserID != "" {
 		return member, nil
 	}
@@ -263,7 +263,7 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context, limi
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
 		return nil, fmt.Errorf("关系榜单只能在群聊中查询")
 	}
-	members, err := t.runtime.GetGroupMemberList(ctx, t.event.GroupID)
+	members, err := t.runtime.getGroupMemberListForEvent(ctx, t.event, t.event.GroupID)
 	if err != nil {
 		return nil, fmt.Errorf("读取群成员列表失败: %w", err)
 	}

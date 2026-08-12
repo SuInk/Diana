@@ -9,7 +9,7 @@ Use `diana.onebot_v11` as the only protocol entry point. Do not emulate an actio
 
 ## Access Boundary
 
-- The owner may call every OneBot v11 action, including NapCat, Lagrange, and go-cqhttp extensions.
+- The owner may call every OneBot v11 action, including actions provided as implementation extensions.
 - A non-owner may call only the tool's built-in read-only allowlist. Unknown actions fail closed even when their names start with `get_`.
 - Credential actions such as `get_cookies`, `get_csrf_token`, and `get_credentials` are owner-only.
 - Never bypass a denial with an alias, async suffix, raw WebSocket request, shell command, browser request, or another tool.

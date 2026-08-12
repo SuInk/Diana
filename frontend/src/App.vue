@@ -2417,7 +2417,7 @@ const llmForm = reactive<LLMFormState>({
 const botForm = reactive<BotFormState>({
   id: "",
   name: "默认机器人",
-  platform: "NapCat / OneBot V11",
+  platform: "onebot-v11",
   avatarURL: "",
   enabled: false,
   oneBotEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
@@ -2699,7 +2699,11 @@ function botProfileEndpointLabel(profile?: QQBotConfig | null): string {
   }
 }
 function botProfilePlatformLabel(profile?: QQBotConfig | null): string {
-  return profile?.platform?.trim() || "NapCat / OneBot V11";
+  const platform = profile?.platform?.trim().toLowerCase();
+  if (!platform || ["onebot-v11", "onebot", "napcat", "lagrange", "lagrange.core", "go-cqhttp"].includes(platform)) {
+    return "OneBot v11";
+  }
+  return profile?.platform?.trim() || "OneBot v11";
 }
 function botProfileEndpointDisplay(profile?: QQBotConfig | null): string {
   const raw = (profile?.onebot_reverse_ws_endpoint || "").trim();
@@ -3858,7 +3862,7 @@ function isPresetModel(provider: Provider, model: string): boolean {
 function loadBotFormProfile(config: QQBotConfig) {
   botForm.id = config.id || "";
   botForm.name = config.name || "默认机器人";
-  botForm.platform = config.platform || "NapCat / OneBot V11";
+  botForm.platform = config.platform || "onebot-v11";
   botForm.avatarURL = config.avatar_url || "";
   botForm.enabled = Boolean(config.enabled);
   botForm.oneBotEndpoint = config.onebot_reverse_ws_endpoint || "ws://127.0.0.1:18080/onebot/v11/ws";
@@ -3960,7 +3964,7 @@ function createBotProfile() {
   loadBotFormProfile({
     id: "",
     name: `机器人 ${botProfiles.value.length + 1}`,
-    platform: "NapCat / OneBot V11",
+    platform: "onebot-v11",
     avatar_url: "",
     enabled: false,
     onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",

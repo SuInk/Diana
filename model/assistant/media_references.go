@@ -25,23 +25,21 @@ func (r *Runtime) enrichMediaReferencesDetailed(ctx context.Context, event Messa
 		return event, nil
 	}
 	var failures []error
-	event.Segments, failures = r.enrichMediaSegmentsDetailed(ctx, event.GroupID, event.MessageID, event.Segments)
+	event.Segments, failures = r.enrichMediaSegmentsDetailed(ctx, event, event.Segments)
 	if event.Quoted != nil {
 		quoted := *event.Quoted
+		quotedEvent := event
+		quotedEvent.GroupID = firstNonEmpty(quoted.GroupID, event.GroupID)
+		quotedEvent.MessageID = quoted.MessageID
 		var quotedFailures []error
-		quoted.Segments, quotedFailures = r.enrichMediaSegmentsDetailed(ctx, firstNonEmpty(quoted.GroupID, event.GroupID), quoted.MessageID, quoted.Segments)
+		quoted.Segments, quotedFailures = r.enrichMediaSegmentsDetailed(ctx, quotedEvent, quoted.Segments)
 		failures = append(failures, quotedFailures...)
 		event.Quoted = &quoted
 	}
 	return event, failures
 }
 
-func (r *Runtime) enrichMediaSegments(ctx context.Context, groupID, messageID string, segments []MessageSegment) []MessageSegment {
-	out, _ := r.enrichMediaSegmentsDetailed(ctx, groupID, messageID, segments)
-	return out
-}
-
-func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, groupID, messageID string, segments []MessageSegment) ([]MessageSegment, []error) {
+func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event MessageEvent, segments []MessageSegment) ([]MessageSegment, []error) {
 	out := append([]MessageSegment(nil), segments...)
 	var failures []error
 	for index, segment := range out {
@@ -57,8 +55,8 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, groupID, mess
 			continue
 		}
 		data := cloneSegmentData(segment.Data)
-		sourceGroupID := firstNonEmpty(data["source_group_id"], groupID)
-		sourceMessageIDs := uniqueNonEmptyStrings(data["source_message_id"], messageID)
+		sourceGroupID := firstNonEmpty(data["source_group_id"], event.GroupID)
+		sourceMessageIDs := uniqueNonEmptyStrings(data["source_message_id"], event.MessageID)
 		var requests []oneBotFileResolveRequest
 		if segment.Type == "image" {
 			file := firstNonEmpty(data["file"], data["file_id"], data["id"])
@@ -91,7 +89,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, groupID, mess
 		}
 		if len(requests) == 0 {
 			if segment.Type == "image" {
-				failures = append(failures, fmt.Errorf("message %s image %d: NapCat get_image has no file token", firstNonEmpty(messageID, "unknown"), index+1))
+				failures = append(failures, fmt.Errorf("message %s image %d: OneBot get_image has no file token", firstNonEmpty(event.MessageID, "unknown"), index+1))
 			}
 			continue
 		}
@@ -107,7 +105,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, groupID, mess
 		resolvedImageSource := false
 		directImageToken := ""
 		for _, request := range requests {
-			response, err := r.channel.CallAPI(callCtx, request.action, request.params)
+			response, err := r.callOneBotAPIForEvent(callCtx, event, request.action, request.params)
 			if err != nil {
 				resolutionErrors = append(resolutionErrors, fmt.Errorf("%s: %w", request.action, err))
 				continue
@@ -119,7 +117,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, groupID, mess
 				if request.action == "get_msg" {
 					token := firstNonEmpty(mediaFileTokenFromOneBotData(response, segment), data["file"], data["file_id"], data["id"])
 					if token != "" && (!resolvedImageSource || token != directImageToken) {
-						resolved, resolveErr := r.channel.CallAPI(callCtx, "get_image", map[string]any{"file": token})
+						resolved, resolveErr := r.callOneBotAPIForEvent(callCtx, event, "get_image", map[string]any{"file": token})
 						if resolveErr != nil {
 							resolutionErrors = append(resolutionErrors, fmt.Errorf("get_image after get_msg: %w", resolveErr))
 						} else if source, key := mediaSourceFromOneBotData(resolved, segment); source != "" {
@@ -149,7 +147,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, groupID, mess
 			if token == "" {
 				continue
 			}
-			resolved, resolveErr := r.channel.CallAPI(callCtx, "get_file", map[string]any{"file": token})
+			resolved, resolveErr := r.callOneBotAPIForEvent(callCtx, event, "get_file", map[string]any{"file": token})
 			if resolveErr != nil {
 				continue
 			}
@@ -162,9 +160,9 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, groupID, mess
 		if segment.Type == "image" && !resolvedImageSource {
 			cause := errors.Join(resolutionErrors...)
 			if cause == nil {
-				cause = fmt.Errorf("NapCat get_image returned no readable source")
+				cause = fmt.Errorf("OneBot get_image returned no readable source")
 			}
-			failures = append(failures, fmt.Errorf("message %s image %d: %w", firstNonEmpty(messageID, "unknown"), index+1, cause))
+			failures = append(failures, fmt.Errorf("message %s image %d: %w", firstNonEmpty(event.MessageID, "unknown"), index+1, cause))
 		}
 		out[index].Data = data
 	}
