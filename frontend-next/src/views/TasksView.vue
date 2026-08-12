@@ -233,7 +233,7 @@ function statusTone(value: AssistantTaskStatus): string {
 
 function platformLabel(platform: string): string {
   if (platform === "telegram") return "Telegram";
-  if (platform === "napcat" || platform === "onebot") return "QQ";
+  if (["onebot-v11", "onebot", "napcat", "lagrange", "go-cqhttp"].includes(platform)) return "QQ";
   return platform;
 }
 

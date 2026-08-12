@@ -344,7 +344,7 @@ func (r *Runtime) shareAgentImage(image string) (string, string, error) {
 	r.mu.RUnlock()
 	if sharer == nil {
 		_ = os.Remove(path)
-		return "", "", fmt.Errorf("本地媒体共享未配置，无法把生成图片交给 NapCat")
+		return "", "", fmt.Errorf("本地媒体共享未配置，无法把生成图片交给 OneBot v11 客户端")
 	}
 	shared, ok := sharer.Share(path, dianaImageMediaTTL)
 	if !ok {

@@ -4,10 +4,12 @@ import "testing"
 
 func TestNormalizePlatformIDMigratesLegacyNames(t *testing.T) {
 	cases := map[string]string{
-		"":                    PlatformNapCat,
-		"NapCat / OneBot V11": PlatformNapCat,
-		"Lagrange.Core":       PlatformLagrange,
-		"go-cqhttp":           PlatformGoCQHTTP,
+		"":                    PlatformOneBotV11,
+		"OneBot v11":          PlatformOneBotV11,
+		"onebot-v11":          PlatformOneBotV11,
+		"NapCat / OneBot V11": PlatformOneBotV11,
+		"Lagrange.Core":       PlatformOneBotV11,
+		"go-cqhttp":           PlatformOneBotV11,
 		"Telegram":            PlatformTelegram,
 		"tg":                  PlatformTelegram,
 	}
@@ -18,9 +20,24 @@ func TestNormalizePlatformIDMigratesLegacyNames(t *testing.T) {
 	}
 }
 
+func TestLegacyOneBotPlatformPersistsAsUnifiedID(t *testing.T) {
+	for _, legacyID := range []string{"napcat", "lagrange", "go-cqhttp"} {
+		cfg := BotConfig{Platform: legacyID}.WithDefaults()
+		if cfg.Platform != PlatformOneBotV11 {
+			t.Fatalf("WithDefaults(%q) platform = %q", legacyID, cfg.Platform)
+		}
+		if payload := PayloadFromConfig(BotConfig{Platform: legacyID}); payload.Platform != PlatformOneBotV11 {
+			t.Fatalf("PayloadFromConfig(%q) platform = %q", legacyID, payload.Platform)
+		}
+	}
+}
+
 func TestValidatePlatformRejectsUnknownAdapter(t *testing.T) {
-	if err := ValidatePlatform(PlatformLagrange); err != nil {
-		t.Fatalf("ValidatePlatform(%q) error = %v", PlatformLagrange, err)
+	if err := ValidatePlatform(PlatformOneBotV11); err != nil {
+		t.Fatalf("ValidatePlatform(%q) error = %v", PlatformOneBotV11, err)
+	}
+	if err := ValidatePlatform("lagrange"); err != nil {
+		t.Fatalf("legacy platform should remain valid: %v", err)
 	}
 	if err := ValidatePlatform(PlatformTelegram); err != nil {
 		t.Fatalf("ValidatePlatform(%q) error = %v", PlatformTelegram, err)
@@ -31,16 +48,26 @@ func TestValidatePlatformRejectsUnknownAdapter(t *testing.T) {
 }
 
 func TestPlatformCategories(t *testing.T) {
+	platforms := SupportedPlatforms()
+	if len(platforms) != 2 {
+		t.Fatalf("SupportedPlatforms() len = %d, want OneBot v11 and Telegram", len(platforms))
+	}
 	byID := map[string]PlatformDefinition{}
-	for _, p := range SupportedPlatforms() {
+	for _, p := range platforms {
 		byID[p.ID] = p
 	}
-	for _, id := range []string{PlatformNapCat, PlatformLagrange, PlatformGoCQHTTP} {
-		if byID[id].Category != PlatformCategoryQQ {
-			t.Fatalf("%s 应属于 QQ 分类，实际 %q", id, byID[id].Category)
+	if byID[PlatformOneBotV11].Category != PlatformCategoryQQ {
+		t.Fatalf("%s 应属于 QQ 分类，实际 %q", PlatformOneBotV11, byID[PlatformOneBotV11].Category)
+	}
+	if !IsOneBotPlatform(PlatformOneBotV11) {
+		t.Fatalf("%s 应走 OneBot 适配器", PlatformOneBotV11)
+	}
+	for _, legacyID := range []string{"napcat", "lagrange", "go-cqhttp"} {
+		if _, exposed := byID[legacyID]; exposed {
+			t.Fatalf("旧实现 ID %q 不应继续作为独立平台暴露", legacyID)
 		}
-		if !IsOneBotPlatform(id) {
-			t.Fatalf("%s 应走 OneBot 适配器", id)
+		if !IsOneBotPlatform(legacyID) {
+			t.Fatalf("旧实现 ID %q 应兼容迁移到 OneBot v11", legacyID)
 		}
 	}
 	if byID[PlatformTelegram].Category != PlatformCategoryTelegram {
@@ -70,7 +97,7 @@ func TestValidateTelegramConfig(t *testing.T) {
 	}
 
 	// OneBot 平台的回连地址要求不该被 Telegram 的分支影响。
-	onebot := BotConfig{Platform: PlatformNapCat, Enabled: true}
+	onebot := BotConfig{Platform: PlatformOneBotV11, Enabled: true}
 	if err := onebot.Validate(); err != ErrMissingOneBotEndpoint {
 		t.Fatalf("OneBot 启用时仍需回连地址，实际 %v", err)
 	}
@@ -124,7 +151,7 @@ func TestBotReplyLoopDetectionSettingDefaultsAndRoundTripsThroughPayload(t *test
 }
 
 func TestProfileSetPlatformContextIsolationDefaultsOnAndCanBeDisabled(t *testing.T) {
-	set := ProfileSet{Profiles: []BotConfig{{ID: "qq", Platform: PlatformNapCat}}}.WithDefaults()
+	set := ProfileSet{Profiles: []BotConfig{{ID: "qq", Platform: PlatformOneBotV11}}}.WithDefaults()
 	if !set.PlatformContextsIsolated() {
 		t.Fatal("legacy profile sets must default to isolated contexts")
 	}
@@ -142,7 +169,7 @@ func TestProfileSetRuntimeConfigKeepsOtherEnabledChannelOnline(t *testing.T) {
 	set := ProfileSet{
 		ActiveID: "disabled",
 		Profiles: []BotConfig{
-			{ID: "disabled", Platform: PlatformNapCat, Enabled: false},
+			{ID: "disabled", Platform: PlatformOneBotV11, Enabled: false},
 			{ID: "telegram", Platform: PlatformTelegram, Enabled: true, TelegramBotToken: "token"},
 		},
 	}

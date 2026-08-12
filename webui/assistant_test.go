@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -374,9 +373,21 @@ func TestQQBotPlatforms(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("platforms = %d: %s", rec.Code, rec.Body.String())
 	}
-	for _, id := range []string{assistant.PlatformNapCat, assistant.PlatformLagrange, assistant.PlatformGoCQHTTP} {
-		if !strings.Contains(rec.Body.String(), `"id":"`+id+`"`) {
-			t.Fatalf("platform %q missing: %s", id, rec.Body.String())
+	var body struct {
+		Platforms []assistant.PlatformDefinition `json:"platforms"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode platforms: %v", err)
+	}
+	if len(body.Platforms) != 2 {
+		t.Fatalf("platforms = %#v, want OneBot v11 and Telegram", body.Platforms)
+	}
+	if body.Platforms[0].ID != assistant.PlatformOneBotV11 || body.Platforms[0].Name != "OneBot v11" {
+		t.Fatalf("OneBot platform = %#v", body.Platforms[0])
+	}
+	for _, platform := range body.Platforms {
+		if platform.ID == "napcat" || platform.ID == "lagrange" || platform.ID == "go-cqhttp" {
+			t.Fatalf("legacy implementation exposed as platform: %#v", platform)
 		}
 	}
 }

@@ -79,14 +79,14 @@ func (t *dianaQQGroupTool) Run(ctx context.Context, input map[string]any) (strin
 	}
 	switch operation {
 	case "info", "group":
-		group, err := t.runtime.GetGroupInfo(ctx, t.event.GroupID)
+		group, err := t.runtime.getGroupInfoForEvent(ctx, t.event, t.event.GroupID)
 		if err != nil {
 			return "", fmt.Errorf("读取群信息失败: %w", err)
 		}
 		return marshalDianaQQGroupResult(dianaQQGroupResult{
 			OK:      true,
 			Action:  "info",
-			Message: "已从 NapCat 读取当前群资料。",
+			Message: "已通过 OneBot v11 读取当前群资料。",
 			Group:   &group,
 		})
 	case "members", "list", "search", "resolve":
@@ -222,7 +222,7 @@ func dianaQQGroupReplyPolicyFromConfig(cfg GroupConfig) dianaQQGroupReplyPolicy 
 }
 
 func (t *dianaQQGroupTool) listMembers(ctx context.Context, input map[string]any) (string, error) {
-	members, err := t.runtime.GetGroupMemberList(ctx, t.event.GroupID)
+	members, err := t.runtime.getGroupMemberListForEvent(ctx, t.event, t.event.GroupID)
 	if err != nil {
 		return "", fmt.Errorf("读取群成员列表失败: %w", err)
 	}
@@ -266,7 +266,7 @@ func (t *dianaQQGroupTool) listMembers(ctx context.Context, input map[string]any
 	return marshalDianaQQGroupResult(dianaQQGroupResult{
 		OK:      true,
 		Action:  "members",
-		Message: fmt.Sprintf("已从 NapCat 读取当前群成员，匹配 %d 人，返回 %d 人。", matched, len(items)),
+		Message: fmt.Sprintf("已通过 OneBot v11 读取当前群成员，匹配 %d 人，返回 %d 人。", matched, len(items)),
 		Members: items,
 		Total:   matched,
 		Limited: matched > len(items),

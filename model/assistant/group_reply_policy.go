@@ -109,7 +109,7 @@ func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (st
 	if role := normalizeQQGroupRole(event.SenderRole); qqGroupRoleCanConfigure(role) {
 		return role, nil
 	}
-	member, err := r.GetGroupMemberInfo(ctx, event.GroupID, event.UserID)
+	member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID)
 	if err != nil {
 		return "", fmt.Errorf("无法校验当前群权限: %w", err)
 	}
@@ -148,7 +148,7 @@ func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event
 		return false, decision
 	}
 	if decision.Role == "" || !decision.LevelSet {
-		member, err := r.GetGroupMemberInfo(ctx, event.GroupID, event.UserID)
+		member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID)
 		if err != nil {
 			decision.LookupErr = err
 			decision.Reason = "member_lookup_failed"

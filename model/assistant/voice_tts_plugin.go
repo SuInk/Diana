@@ -246,7 +246,7 @@ func (t *dianaTTSTool) Run(ctx context.Context, input map[string]any) (string, e
 	sharedURL, ok := t.plugin.share(path)
 	if !ok {
 		_ = os.Remove(path)
-		return "", fmt.Errorf("本地媒体共享未配置，无法把语音交给 NapCat")
+		return "", fmt.Errorf("本地媒体共享未配置，无法把语音交给 OneBot v11 客户端")
 	}
 	cleanupLocalMediaFilesLater([]string{path}, defaultVoiceTTSMediaTTL)
 

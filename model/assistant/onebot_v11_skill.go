@@ -85,7 +85,7 @@ func (t *dianaOneBotV11Tool) Name() string {
 }
 
 func (t *dianaOneBotV11Tool) Description() string {
-	return `调用当前 QQ 连接的 OneBot v11 action。仅在用户明确要求读取 OneBot/QQ 信息或执行 QQ 操作时调用。主人可调用全部标准动作及 NapCat、Lagrange、go-cqhttp 扩展；普通成员仅可调用后端固定的标准只读白名单，凭据读取、修改动作和未知扩展一律拒绝。input: {"action":"OneBot action","params":{"协议原始参数":"值"}}`
+	return `调用当前 QQ 连接的 OneBot v11 action。仅在用户明确要求读取 OneBot/QQ 信息或执行 QQ 操作时调用。主人可调用全部标准动作及当前实现提供的扩展；普通成员仅可调用后端固定的标准只读白名单，凭据读取、修改动作和未知扩展一律拒绝。input: {"action":"OneBot action","params":{"协议原始参数":"值"}}`
 }
 
 func (t *dianaOneBotV11Tool) Run(ctx context.Context, input map[string]any) (string, error) {

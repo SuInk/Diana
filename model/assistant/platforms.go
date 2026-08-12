@@ -6,16 +6,19 @@ import (
 )
 
 const (
+	PlatformOneBotV11 = "onebot-v11"
+	PlatformTelegram  = "telegram"
+
+	// Deprecated: implementation names are no longer separate platforms.
+	// Keep the legacy values as migration inputs; all normalized data uses OneBot v11.
 	PlatformNapCat   = "napcat"
 	PlatformLagrange = "lagrange"
 	PlatformGoCQHTTP = "go-cqhttp"
-	PlatformTelegram = "telegram"
 
 	ProtocolOneBotV11   = "onebot-v11-reverse-ws"
 	ProtocolTelegramBot = "telegram-bot-api"
 
-	// PlatformCategory* 用于在 WebUI 里按聊天平台分组，同一分类下
-	// 通常只是不同的协议实现。
+	// PlatformCategory* 用于在 WebUI 里按聊天平台分组。
 	PlatformCategoryQQ       = "qq"
 	PlatformCategoryTelegram = "telegram"
 )
@@ -32,9 +35,7 @@ type PlatformDefinition struct {
 }
 
 var supportedPlatforms = []PlatformDefinition{
-	{ID: PlatformNapCat, Name: "NapCat", Protocol: ProtocolOneBotV11, Category: PlatformCategoryQQ, CategoryLabel: "QQ", Description: "推荐的 QQNT OneBot 实现"},
-	{ID: PlatformLagrange, Name: "Lagrange.Core", Protocol: ProtocolOneBotV11, Category: PlatformCategoryQQ, CategoryLabel: "QQ", Description: "跨平台 OneBot 实现"},
-	{ID: PlatformGoCQHTTP, Name: "go-cqhttp", Protocol: ProtocolOneBotV11, Category: PlatformCategoryQQ, CategoryLabel: "QQ", Description: "兼容既有 go-cqhttp 部署"},
+	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryQQ, CategoryLabel: "QQ", Description: "QQ 的统一 OneBot v11 反向 WebSocket 接入"},
 	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址"},
 }
 
@@ -49,15 +50,12 @@ func SupportedPlatforms() []PlatformDefinition {
 	return append([]PlatformDefinition(nil), supportedPlatforms...)
 }
 
-// NormalizePlatformID 把旧版展示名称迁移为稳定的平台 ID。
+// NormalizePlatformID 把旧版实现名称迁移为统一的平台 ID。
 func NormalizePlatformID(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "napcat", "napcat / onebot v11", "onebot v11":
-		return PlatformNapCat
-	case "lagrange", "lagrange.core", "lagrange core":
-		return PlatformLagrange
-	case "go-cqhttp", "gocqhttp", "go cqhttp":
-		return PlatformGoCQHTTP
+	case "", "onebot", "onebot-v11", "onebot v11", "napcat", "napcat / onebot v11",
+		"lagrange", "lagrange.core", "lagrange core", "go-cqhttp", "gocqhttp", "go cqhttp":
+		return PlatformOneBotV11
 	case "telegram", "tg", "telegram bot":
 		return PlatformTelegram
 	default:

@@ -26,7 +26,7 @@
         <div class="landing-hero-media" aria-hidden="true" />
         <div class="landing-hero-overlay" />
         <div class="landing-hero-content">
-          <p class="landing-eyebrow">NapCat / OneBot v11 + LLM 配置中枢</p>
+          <p class="landing-eyebrow">OneBot v11 + LLM 配置中枢</p>
           <h1 id="landing-title">把 QQ 机器人、模型配置和插件运行统一管起来</h1>
           <p class="landing-hero-copy">
             Diana 面向自托管场景，提供 LLM Provider 管理、模型连通测试、QQ 机器人配置、插件开关、日志追踪和系统更新入口。
@@ -99,7 +99,7 @@
           <article class="landing-command-card">
             <div>
               <h3>源码开发</h3>
-              <p>适合本机调试 WebUI、NapCat 集成和插件开发。</p>
+              <p>适合本机调试 WebUI、OneBot v11 集成和插件开发。</p>
             </div>
             <pre><code>make dev</code></pre>
           </article>
@@ -156,7 +156,7 @@ const features = [
     tone: "green"
   },
   {
-    title: "NapCat / OneBot",
+    title: "OneBot v11",
     copy: "通过 OneBot v11 反向 WebSocket 连接 QQ 机器人，并集中管理身份和群策略。",
     icon: Cable,
     tone: "blue"
