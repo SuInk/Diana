@@ -224,7 +224,7 @@ func semanticReferenceCandidateFromEvent(item, current MessageEvent, botQQ strin
 		Sender:                   strings.TrimSpace(item.SenderNameOrID()),
 		Text:                     truncateRunesFromStart(historyPlainText(item), 280),
 		EventTime:                item.Time,
-		AgeSeconds:               passiveReplyMessageAge(current.Time, item.Time),
+		AgeSeconds:               proactiveReplyMessageAge(current.Time, item.Time),
 		ReplyToMessageIDs:        replyReferenceIDs(item.Segments),
 		SemanticSourceMessageID:  strings.TrimSpace(item.SemanticSourceMessageID),
 		SemanticSourceMessageIDs: eventSemanticSourceMessageIDs(item),
@@ -529,6 +529,7 @@ func (r *Runtime) updateRememberedSemanticReference(event MessageEvent) {
 	if strings.TrimSpace(event.MessageID) == "" || len(eventSemanticSourceMessageIDs(event)) == 0 {
 		return
 	}
+	event = withoutReplyRuntimeState(event)
 	session := sessionKey(event)
 	r.mu.Lock()
 	for index := len(r.history[session]) - 1; index >= 0; index-- {

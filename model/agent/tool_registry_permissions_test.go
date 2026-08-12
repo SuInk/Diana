@@ -86,6 +86,63 @@ func TestToolRegistryRemoveKeepsRemainingToolsAndSkillMetadata(t *testing.T) {
 	}
 }
 
+func TestToolRegistryViewKeepsParentToolsLiveAndIsolated(t *testing.T) {
+	parent := NewToolRegistry(&registryPermissionTool{name: "extensions.list"})
+	parent.SetSkills([]SkillMetadata{{Name: "shared-skill"}})
+	view, err := parent.NewView(Config{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.Register(&registryPermissionTool{name: "request.only"})
+	if _, ok := view.Get("extensions.list"); !ok || len(view.Skills()) != 1 {
+		t.Fatalf("view did not inherit parent state: names=%#v skills=%#v", view.Names(), view.Skills())
+	}
+	parent.Register(&registryPermissionTool{name: "mcp__dynamic__echo"})
+	if _, ok := view.Get("mcp__dynamic__echo"); !ok {
+		t.Fatal("live parent tool was not visible in existing view")
+	}
+	view.Remove("mcp__dynamic__echo")
+	if _, ok := view.Get("mcp__dynamic__echo"); ok {
+		t.Fatal("request view did not hide removed parent tool")
+	}
+	if _, ok := parent.Get("mcp__dynamic__echo"); !ok {
+		t.Fatal("request view mutated parent registry")
+	}
+	if err := view.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := parent.Get("extensions.list"); !ok {
+		t.Fatal("closing request view closed parent registry")
+	}
+}
+
+func TestToolRegistryDefersParentCloseUntilLastViewCloses(t *testing.T) {
+	probe := &registryCloseProbeTool{registryPermissionTool: registryPermissionTool{name: "mcp__shared__probe"}}
+	parent := NewToolRegistry(probe)
+	view, err := parent.NewView(Config{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if probe.closed != 0 {
+		t.Fatal("parent tool closed while a request view was active")
+	}
+	if _, ok := view.Get(probe.Name()); !ok {
+		t.Fatal("active request view lost its parent tool during deferred close")
+	}
+	if _, err := parent.NewView(Config{WorkDir: t.TempDir()}); err == nil {
+		t.Fatal("closing parent accepted a new request view")
+	}
+	if err := view.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if probe.closed != 1 {
+		t.Fatalf("parent tool close count = %d, want 1", probe.closed)
+	}
+}
+
 func containsInputSchema(description string) bool {
 	for _, marker := range []string{"input:", "query\"", "num_results", "delay\""} {
 		if strings.Contains(description, marker) {
@@ -98,6 +155,16 @@ func containsInputSchema(description string) bool {
 type registryPermissionTool struct {
 	name        string
 	description string
+}
+
+type registryCloseProbeTool struct {
+	registryPermissionTool
+	closed int
+}
+
+func (t *registryCloseProbeTool) Close() error {
+	t.closed++
+	return nil
 }
 
 func (t *registryPermissionTool) Name() string { return t.name }

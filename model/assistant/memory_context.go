@@ -27,6 +27,17 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 		}
 	}
 	policy := RelationshipPolicyFor(profile, cfg.OwnerID, event.UserID)
+	return r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
+}
+
+func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEvent, queryText string, profile UserMemoryProfile, policy RelationshipPolicy) string {
+	cfg := r.effectiveConfigForEvent(event)
+	if profile.UserID == "" {
+		profile = UserMemoryProfile{
+			UserID:      strings.TrimSpace(event.UserID),
+			DisplayName: strings.TrimSpace(event.SenderNameOrID()),
+		}
+	}
 	if !boolValue(cfg.LongTermMemoryEnabled, true) {
 		return formatUserMemoryContext(profile, policy)
 	}

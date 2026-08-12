@@ -105,7 +105,7 @@ VALUES (?, ?, ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 	insertInbound("replied", assistant.EventKindGroup, now.Add(-30*time.Minute), inboundStatusDone, "replied", time.Second)
 	insertInbound("error", assistant.EventKindPrivate, now.Add(-90*time.Minute), inboundStatusDone, "error_replied", 3*time.Second)
 	insertInbound("ignored", assistant.EventKindGroup, now.Add(-2*time.Hour), inboundStatusDone, "ignored", 0)
-	insertInbound("old", assistant.EventKindPrivate, now.Add(-72*time.Hour), inboundStatusDone, "replied_passive_batch", 5*time.Second)
+	insertInbound("old", assistant.EventKindPrivate, now.Add(-72*time.Hour), inboundStatusDone, "replied_proactive_batch", 5*time.Second)
 	insertInbound("pending", assistant.EventKindGroup, now.Add(-15*time.Minute), inboundStatusPending, "", 0)
 	insertInbound("stale", assistant.EventKindGroup, now.Add(-10*time.Minute), inboundStatusDone, "ignored_stale", 0)
 

@@ -80,7 +80,7 @@ func (s *PersistentQQBotGroupConfigStore) Groups() assistant.GroupConfigSet {
 func (s *PersistentQQBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfig, base assistant.BotConfig) (assistant.GroupConfig, error) {
 	cfg = cfg.WithDefaults(cfg.GroupID, base)
 	s.mu.Lock()
-	s.data = s.data.Upsert(cfg, base)
+	s.data = s.data.WithDefaults(base).Upsert(cfg, base)
 	set := s.data
 	saved, _ := set.ConfigForGroup(cfg.GroupID)
 	s.mu.Unlock()
