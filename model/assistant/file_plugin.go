@@ -7,21 +7,17 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/netguard"
-
-	"rsc.io/pdf"
 )
 
 const (
@@ -265,8 +261,9 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 			text := formatNativeMacPDFText(nativeResult, maxChars)
 			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：PDF（macOS PDFKit 文本层）\n  内容：\n%s", ref.Name, source, indentText(text, "  "))}
 		}
-		text := sanitizeFileTextString(extractPDFText(data, maxChars), maxChars)
-		if pdfNeedsOCR(data, text) {
+		extracted := extractPDFText(ctx, p.pdfRenderer, data, maxChars)
+		text := sanitizeFileTextString(extracted.Text, maxChars)
+		if extracted.NeedsOCR() {
 			hash := sha256.Sum256(data)
 			return parsedFileRef{ScannedPDF: &scannedPDFDocument{
 				Name:   ref.Name,
@@ -652,127 +649,63 @@ func looksTextual(name string, contentType string, data []byte) bool {
 	return bytes.IndexByte(data, 0) < 0
 }
 
-func extractPDFText(data []byte, maxChars int) string {
-	reader := bytes.NewReader(data)
-	doc, err := pdf.NewReader(reader, int64(len(data)))
-	if err != nil {
-		return ""
+type pdfTextExtraction struct {
+	Text       string
+	PageCount  int
+	Meaningful int
+}
+
+func (e pdfTextExtraction) NeedsOCR() bool {
+	if e.PageCount <= 0 || strings.TrimSpace(e.Text) == "" {
+		return true
 	}
+	threshold := max(e.PageCount*16, 32)
+	return e.Meaningful < threshold
+}
+
+func extractPDFText(ctx context.Context, renderer pdfPageRenderer, data []byte, maxChars int) pdfTextExtraction {
+	if renderer == nil {
+		return pdfTextExtraction{}
+	}
+	session, err := renderer.Open(ctx, data)
+	if err != nil {
+		return pdfTextExtraction{}
+	}
+	defer session.Close()
+	textSession, ok := session.(pdfTextPageSession)
+	if !ok {
+		return pdfTextExtraction{PageCount: session.PageCount()}
+	}
+
+	result := pdfTextExtraction{PageCount: session.PageCount()}
+	threshold := max(result.PageCount*16, 32)
 	var builder strings.Builder
-	for pageNum := 1; pageNum <= doc.NumPage(); pageNum++ {
-		if maxChars > 0 && len([]rune(builder.String())) >= maxChars {
+	for page := 0; page < result.PageCount; page++ {
+		pageText, pageErr := textSession.PageText(ctx, page)
+		if pageErr != nil {
+			continue
+		}
+		for _, r := range pageText {
+			if !unicode.IsSpace(r) {
+				result.Meaningful++
+			}
+		}
+		if maxChars <= 0 || len([]rune(builder.String())) < maxChars {
+			pageText = strings.TrimSpace(pageText)
+			if pageText != "" {
+				if builder.Len() > 0 {
+					builder.WriteString("\n\n")
+				}
+				builder.WriteString(fmt.Sprintf("第 %d 页：\n", page+1))
+				builder.WriteString(pageText)
+			}
+		}
+		if result.Meaningful >= threshold && maxChars > 0 && len([]rune(builder.String())) >= maxChars {
 			break
 		}
-		pageText := pdfPageText(doc.Page(pageNum))
-		if strings.TrimSpace(pageText) == "" {
-			continue
-		}
-		if builder.Len() > 0 {
-			builder.WriteString("\n\n")
-		}
-		builder.WriteString(fmt.Sprintf("第 %d 页：\n", pageNum))
-		builder.WriteString(pageText)
 	}
-	return builder.String()
-}
-
-func pdfNeedsOCR(data []byte, extracted string) bool {
-	if strings.TrimSpace(extracted) == "" {
-		return true
-	}
-	doc, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil || doc.NumPage() <= 0 {
-		return true
-	}
-	threshold := doc.NumPage() * 16
-	if threshold < 32 {
-		threshold = 32
-	}
-	meaningful := 0
-	for pageNum := 1; pageNum <= doc.NumPage() && meaningful < threshold; pageNum++ {
-		for _, r := range pdfPageText(doc.Page(pageNum)) {
-			if !unicode.IsSpace(r) {
-				meaningful++
-			}
-		}
-	}
-	return meaningful < threshold
-}
-
-func pdfPageText(page pdf.Page) string {
-	texts := append([]pdf.Text(nil), page.Content().Text...)
-	if len(texts) == 0 {
-		return ""
-	}
-	sort.Slice(texts, func(i, j int) bool {
-		if texts[i].Y != texts[j].Y {
-			return texts[i].Y > texts[j].Y
-		}
-		return texts[i].X < texts[j].X
-	})
-	type textLine struct {
-		baseline float64
-		items    []pdf.Text
-	}
-	lines := make([]textLine, 0, len(texts))
-	for _, item := range texts {
-		if len(lines) == 0 || math.Abs(item.Y-lines[len(lines)-1].baseline) > 2 {
-			lines = append(lines, textLine{baseline: item.Y})
-		}
-		line := &lines[len(lines)-1]
-		line.items = append(line.items, item)
-	}
-	var builder strings.Builder
-	for _, line := range lines {
-		sort.Slice(line.items, func(i, j int) bool { return line.items[i].X < line.items[j].X })
-		text := joinPDFTextLine(line.items)
-		if text == "" {
-			continue
-		}
-		if builder.Len() > 0 {
-			builder.WriteByte('\n')
-		}
-		builder.WriteString(text)
-	}
-	return strings.TrimSpace(builder.String())
-}
-
-func joinPDFTextLine(items []pdf.Text) string {
-	var builder strings.Builder
-	var previous pdf.Text
-	hasPrevious := false
-	pendingSpace := false
-	for _, item := range items {
-		raw := item.S
-		text := strings.TrimSpace(raw)
-		if text == "" {
-			if strings.IndexFunc(raw, func(r rune) bool { return r == ' ' || r == '\t' }) >= 0 {
-				pendingSpace = hasPrevious
-			}
-			continue
-		}
-		if hasPrevious && (pendingSpace || pdfTextGapNeedsSpace(previous, item)) {
-			builder.WriteByte(' ')
-		}
-		builder.WriteString(text)
-		previous = item
-		hasPrevious = true
-		pendingSpace = false
-	}
-	return strings.TrimSpace(builder.String())
-}
-
-func pdfTextGapNeedsSpace(previous, current pdf.Text) bool {
-	gap := current.X - (previous.X + previous.W)
-	fontSize := previous.FontSize
-	if fontSize <= 0 || (current.FontSize > 0 && current.FontSize < fontSize) {
-		fontSize = current.FontSize
-	}
-	threshold := 0.5
-	if fontSize > 0 && fontSize*0.15 > threshold {
-		threshold = fontSize * 0.15
-	}
-	return gap > threshold
+	result.Text = builder.String()
+	return result
 }
 
 // sanitizeFileText 清理并截断文件文本内容。

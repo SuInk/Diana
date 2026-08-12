@@ -14,8 +14,6 @@ import (
 
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
-
-	"rsc.io/pdf"
 )
 
 func TestResolverPlatformHostMatchingRejectsLookalikes(t *testing.T) {
@@ -429,22 +427,52 @@ func TestFileParserPluginCollectsCurrentAndQuotedFiles(t *testing.T) {
 	}
 }
 
-func TestJoinPDFTextLineUsesGlyphGapsForWordSpacing(t *testing.T) {
-	items := []pdf.Text{
-		{S: "U", X: 0, W: 5, FontSize: 10},
-		{S: "N", X: 5, W: 5, FontSize: 10},
-		{S: "I", X: 13, W: 2, FontSize: 10},
-		{S: "T", X: 15, W: 5, FontSize: 10},
-		{S: "E", X: 20, W: 5, FontSize: 10},
-		{S: "D", X: 25, W: 5, FontSize: 10},
-		{S: ",", X: 30, W: 2, FontSize: 10},
-		{S: " ", X: 32, W: 3, FontSize: 10},
-		{S: "中", X: 35, W: 10, FontSize: 10},
-		{S: "文", X: 45, W: 10, FontSize: 10},
+func TestExtractPDFTextUsesSandboxedRendererText(t *testing.T) {
+	renderer := &fakePDFTextRenderer{texts: []string{
+		"Hello PDF text layer",
+		strings.Repeat("中文", 20),
+	}}
+	extracted := extractPDFText(context.Background(), renderer, []byte("pdf"), 1000)
+	if extracted.NeedsOCR() {
+		t.Fatalf("text extraction was classified as scanned: %#v", extracted)
 	}
-	if got := joinPDFTextLine(items); got != "UN ITED, 中文" {
-		t.Fatalf("joinPDFTextLine() = %q", got)
+	for _, want := range []string{"第 1 页：", "Hello PDF text layer", "第 2 页：", "中文中文"} {
+		if !strings.Contains(extracted.Text, want) {
+			t.Fatalf("extracted text missing %q: %q", want, extracted.Text)
+		}
 	}
+}
+
+func TestExtractPDFTextKeepsOCRFallbackForSparseDocuments(t *testing.T) {
+	renderer := &fakePDFTextRenderer{texts: []string{"tiny", ""}}
+	extracted := extractPDFText(context.Background(), renderer, []byte("pdf"), 1000)
+	if !extracted.NeedsOCR() {
+		t.Fatalf("sparse extraction should require OCR: %#v", extracted)
+	}
+}
+
+type fakePDFTextRenderer struct {
+	texts []string
+}
+
+func (r *fakePDFTextRenderer) Open(context.Context, []byte) (pdfRenderSession, error) {
+	return &fakePDFTextSession{texts: append([]string(nil), r.texts...)}, nil
+}
+
+type fakePDFTextSession struct {
+	texts []string
+}
+
+func (s *fakePDFTextSession) PageCount() int { return len(s.texts) }
+func (s *fakePDFTextSession) Close() error   { return nil }
+func (s *fakePDFTextSession) RenderJPEG(context.Context, int) ([]byte, error) {
+	return []byte{0xff, 0xd8, 0xff, 0xd9}, nil
+}
+func (s *fakePDFTextSession) PageText(_ context.Context, page int) (string, error) {
+	if page < 0 || page >= len(s.texts) {
+		return "", errors.New("page out of range")
+	}
+	return s.texts[page], nil
 }
 
 // TestFileParserPluginResolvesOneBotFileID 验证 QQ 文件段只有 file_id 时会调用 OneBot 获取文件。

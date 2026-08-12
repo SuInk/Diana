@@ -7,7 +7,7 @@ Diana is a multi-platform AI assistant service written in Go, with an LLM compat
 ## Requirements
 
 - NapCat with OneBot v11 reverse WebSocket enabled when using the QQ adapter
-- Go `1.25.8`, Node.js `22`, and npm when installing from source
+- Go `1.26.5`, Node.js `22`, and npm when installing from source
 - Docker or Docker Compose when deploying with Docker
 
 ## Docker Deployment
