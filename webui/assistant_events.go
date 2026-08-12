@@ -14,10 +14,7 @@ import (
 
 type assistantEventDetail struct {
 	storage.InboundEventDetail
-	Reply    string `json:"reply,omitempty"`
-	Handled  bool   `json:"handled"`
-	Decision string `json:"decision"`
-	Reason   string `json:"reason"`
+	Handled bool `json:"handled"`
 }
 
 type assistantEventsResponse struct {
@@ -36,6 +33,34 @@ type assistantEventsResponse struct {
 	Page         int                    `json:"page"`
 	Limit        int                    `json:"limit"`
 	HasMore      bool                   `json:"has_more"`
+}
+
+type assistantEventTraceResponse struct {
+	EventID   string                `json:"event_id"`
+	MessageID string                `json:"message_id,omitempty"`
+	Steps     []storage.AppLogEntry `json:"steps"`
+}
+
+func (h *QQBotHandler) eventTrace(c *gin.Context) {
+	if h.sqlite == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "事件存储未配置"})
+		return
+	}
+	eventID := strings.TrimSpace(c.Param("id"))
+	messageID, steps, found, err := h.sqlite.InboundEventDebugTrace(c.Request.Context(), eventID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "事件不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, assistantEventTraceResponse{
+		EventID:   eventID,
+		MessageID: messageID,
+		Steps:     steps,
+	})
 }
 
 func (h *QQBotHandler) listEvents(c *gin.Context) {
@@ -71,6 +96,13 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 	events := make([]assistantEventDetail, 0, len(stored.Events))
 	for _, item := range stored.Events {
 		decision, reason, handled := assistant.DescribeEventOutcome(item.Outcome)
+		if item.Decision != "" {
+			decision = item.Decision
+			handled = decision == "replied"
+		}
+		if item.Reason != "" {
+			reason = item.Reason
+		}
 		if item.Status != "done" {
 			decision, handled = "pending", false
 			if item.Error != "" {
@@ -79,11 +111,11 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 				reason = "机器人正在处理这条消息"
 			}
 		}
+		item.Decision = decision
+		item.Reason = reason
 		detail := assistantEventDetail{
 			InboundEventDetail: item,
 			Handled:            handled,
-			Decision:           decision,
-			Reason:             reason,
 		}
 		if live, found := recent[assistantEventKey(item.Kind, item.GroupID, item.UserID, item.MessageID)]; found {
 			if detail.Platform == "" {

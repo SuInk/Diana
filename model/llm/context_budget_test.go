@@ -133,8 +133,30 @@ func TestApplyContextBudgetReservesVisionTokens(t *testing.T) {
 			images++
 		}
 	}
-	if images != 1 {
-		t.Fatalf("images = %d, want 1 within budget; message = %#v", images, got.Messages[0])
+	if images != 3 {
+		t.Fatalf("images = %d, want all 3 at low detail; message = %#v", images, got.Messages[0])
+	}
+	for _, part := range got.Messages[0].Parts {
+		if part.Type == ContentPartImageURL && part.Detail != "low" {
+			t.Fatalf("image detail = %q, want low; message = %#v", part.Detail, got.Messages[0])
+		}
+	}
+}
+
+func TestContextBudgetKeepsCurrentImageDetailWhenOnlyHistoryOverflows(t *testing.T) {
+	messages := []Message{
+		{Role: RoleUser, Content: strings.Repeat("旧历史", 3000), Priority: MessagePriorityHistory},
+		{Role: RoleUser, Content: "看图", Priority: MessagePriorityCurrent, Parts: []ContentPart{
+			{Type: ContentPartText, Text: "看图"},
+			{Type: ContentPartImageURL, ImageURL: "https://example.com/current.jpg", Detail: "auto"},
+		}},
+	}
+	got := fitMessagesToTokenBudget(messages, 5000)
+	if len(got) != 1 || len(got[0].Parts) != 2 {
+		t.Fatalf("budgeted messages = %#v", got)
+	}
+	if got[0].Parts[1].Detail != "auto" {
+		t.Fatalf("current image detail = %q, want auto", got[0].Parts[1].Detail)
 	}
 }
 

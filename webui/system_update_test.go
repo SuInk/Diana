@@ -151,7 +151,8 @@ func TestSystemUpdateHandlerRemoteMissing(t *testing.T) {
 	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRemoteNotConfigured})
 	router := systemUpdateTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/system/update", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"confirmation":"apply-update"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -216,7 +217,9 @@ func TestSystemUpdateHandlerInstallsCompleteReleasePackage(t *testing.T) {
 	}
 
 	updateRecorder := httptest.NewRecorder()
-	router.ServeHTTP(updateRecorder, httptest.NewRequest(http.MethodPost, "/api/system/update", nil))
+	updateRequest := httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"confirmation":"apply-update"}`))
+	updateRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(updateRecorder, updateRequest)
 	if updateRecorder.Code != http.StatusOK {
 		t.Fatalf("update status = %d, body = %s", updateRecorder.Code, updateRecorder.Body.String())
 	}
@@ -252,7 +255,7 @@ func TestSystemUpdateHandlerGitCheckUsesLatestReleaseInsteadOfBranchBehind(t *te
 	}
 }
 
-func TestSystemUpdateHandlerForceUpdateRequiresConfirmation(t *testing.T) {
+func TestSystemUpdateHandlerUpdateRequiresConfirmation(t *testing.T) {
 	handler := NewSystemUpdateHandler(fakeSystemUpdater{result: updater.Result{
 		Status: updater.Status{HeadCommit: "abc1234"},
 	}, status: updater.Status{RemoteURL: "https://github.com/SuInk/Diana.git", NearestTag: "v1.2.3"}})
@@ -262,7 +265,15 @@ func TestSystemUpdateHandlerForceUpdateRequiresConfirmation(t *testing.T) {
 	router := systemUpdateTestRouter(handler)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"force":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"force":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unconfirmed update status = %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"force":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -317,7 +328,8 @@ func TestSystemUpdateHandlerUpdate(t *testing.T) {
 	handler.githubAPIBase = github.URL
 	router := systemUpdateTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/system/update", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"confirmation":"apply-update"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 

@@ -89,6 +89,8 @@ export interface QQBotConfig {
   welcome_enabled?: boolean;
   welcome_message?: string;
   system_prompt?: string;
+  /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
+  debug_mode_enabled?: boolean;
   /** 回复行为个性化；后端缺省（字段不存在）等价于开启。 */
   reply_reference_enabled?: boolean;
   mention_user_enabled?: boolean;
@@ -112,11 +114,19 @@ export interface QQBotConfig {
   prompt_group_sender_template?: string;
   prompt_image_only_text?: string;
   prompt_wake_only_text?: string;
+  /** 群聊未显式唤醒机器人时，用于判断是否应主动回复。 */
+  passive_reply_router_prompt?: string;
+  /** 主动回复路由放行后，注入最终回复模型的生成约束。 */
+  passive_reply_prompt?: string;
   max_input_chars?: number;
   max_reply_chars?: number;
   direct_reply_chunk_size?: number;
   forward_reply_threshold?: number;
   recent_context_limit?: number;
+  /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
+  long_term_memory_enabled?: boolean;
+  /** 允许在同一机器人下检索其他群的非敏感记忆和聊天历史；缺省关闭。 */
+  cross_group_memory_enabled?: boolean;
   max_bot_concurrency?: number;
   request_timeout_ms?: number;
   agent_enabled?: boolean;
@@ -197,7 +207,7 @@ export interface QQBotGroupConfig {
   recent_context_limit?: number;
   max_reply_chars?: number;
   plugin_overrides?: Record<string, boolean>;
-  /** 本群专属准入门槛；不设表示跟随全局。 */
+  /** 本群专属回复时间、屏蔽 QQ 号与准入门槛；不设表示跟随全局。 */
   reply_gate?: ReplyGate | null;
   updated_at?: string;
 }
@@ -283,7 +293,7 @@ export interface UpdateResult {
   at: string;
 }
 
-export type AppLogKind = "operation" | "error";
+export type AppLogKind = "operation" | "error" | "debug";
 export type AppLogLevel = "info" | "error";
 
 export interface AppLogEntry {
@@ -693,7 +703,7 @@ export function getUpdateStatus(): Promise<UpdateStatus> {
 export function pullFromGitHub(force = false): Promise<UpdateResult> {
   return requestJSON<UpdateResult>("/api/system/update", {
     method: "POST",
-    body: JSON.stringify(force ? { force: true, confirmation: "force-update" } : { force: false })
+    body: JSON.stringify(force ? { force: true, confirmation: "force-update" } : { force: false, confirmation: "apply-update" })
   });
 }
 
@@ -739,7 +749,6 @@ export interface ChangelogResponse {
 
 export interface RollbackResponse {
   result: UpdateResult;
-  auto_update_disabled: boolean;
 }
 
 export interface ConsoleGroupsResponse {
@@ -767,19 +776,6 @@ export function rollbackSystem(ref: string): Promise<RollbackResponse> {
   });
 }
 
-export interface UpdateSettings {
-  auto_update_enabled: boolean;
-  interval_minutes: number;
-}
-
-export interface UpdateSettingsResponse {
-  settings: UpdateSettings;
-  deployment_mode: "git" | "release";
-  last_run_at?: string;
-  last_result?: string;
-  last_error?: string;
-}
-
 export function getSystemVersion(): Promise<SystemVersion> {
   return requestJSON<SystemVersion>("/api/system/version");
 }
@@ -802,17 +798,6 @@ export function checkForUpdate(): Promise<UpdateCheckResponse> {
 
 export function getChangelog(): Promise<ChangelogResponse> {
   return requestJSON<ChangelogResponse>("/api/system/update/changelog");
-}
-
-export function getUpdateSettings(): Promise<UpdateSettingsResponse> {
-  return requestJSON<UpdateSettingsResponse>("/api/system/update/settings");
-}
-
-export function saveUpdateSettings(settings: UpdateSettings): Promise<UpdateSettingsResponse> {
-  return requestJSON<UpdateSettingsResponse>("/api/system/update/settings", {
-    method: "POST",
-    body: JSON.stringify(settings)
-  });
 }
 
 export function listAppLogs(kind?: AppLogKind, limit = 100): Promise<AppLogsResponse> {
@@ -905,6 +890,16 @@ export interface AssistantEventsResponse {
 export function getAssistantEvents(range: AssistantEventRange, page = 1, limit = 50): Promise<AssistantEventsResponse> {
   const params = new URLSearchParams({ range, page: String(page), limit: String(limit) });
   return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
+}
+
+export interface AssistantEventTraceResponse {
+  event_id: string;
+  message_id?: string;
+  steps: AppLogEntry[];
+}
+
+export function getAssistantEventTrace(eventID: string): Promise<AssistantEventTraceResponse> {
+  return requestJSON<AssistantEventTraceResponse>(`/api/assistant/events/${encodeURIComponent(eventID)}/trace`);
 }
 
 export type AssistantTaskKind = "reminder" | "schedule";

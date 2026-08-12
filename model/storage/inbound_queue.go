@@ -152,11 +152,16 @@ WITH candidate AS (
   LIMIT 1
 )
 UPDATE inbound_events
-SET status = ?,
-    lease_owner = ?,
-    lease_until = ?,
-    attempts = attempts + 1,
-    updated_at = ?
+	SET status = ?,
+	    lease_owner = ?,
+	    lease_until = ?,
+	    attempts = attempts + 1,
+	    decision = NULL,
+	    decision_reason = NULL,
+	    reply_text = NULL,
+	    processing_error = NULL,
+	    duration_ms = NULL,
+	    updated_at = ?
 WHERE id = (SELECT id FROM candidate)
 RETURNING id, session, payload, attempts, priority
 `, inboundStatusPending, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), string(assistant.EventKindGroup), groupLimit,
@@ -230,8 +235,10 @@ func (s *SQLiteStore) RetryInboundEvent(ctx context.Context, id string, leaseOwn
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
-SET status = ?, available_at = ?, last_error = ?, outcome = NULL,
-    lease_owner = NULL, lease_until = NULL, completed_at = NULL, updated_at = ?
+	SET status = ?, available_at = ?, last_error = ?, outcome = NULL,
+	    decision = NULL, decision_reason = NULL, reply_text = NULL,
+	    processing_error = NULL, duration_ms = NULL,
+	    lease_owner = NULL, lease_until = NULL, completed_at = NULL, updated_at = ?
 WHERE id = ? AND status = ? AND lease_owner = ?
 `, inboundStatusPending, availableAt.UTC().UnixNano(), strings.TrimSpace(lastError), now.UnixNano(), id, inboundStatusProcessing, leaseOwner)
 	if err != nil {

@@ -12,7 +12,7 @@ import (
 )
 
 func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
-	return func(_ context.Context, runEvent agent.RunEvent) {
+	return func(ctx context.Context, runEvent agent.RunEvent) {
 		writer := r.appLogWriter()
 		if writer == nil {
 			return
@@ -87,6 +87,27 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				"progress_percent": progressPercent,
 			},
 		})
+		if runEvent.Phase != agent.RunPhaseModelCompleted {
+			toolOutput := runEvent.ToolOutput
+			if runEvent.Error != "" && toolOutput == "" {
+				toolOutput = "ERROR: " + runEvent.Error
+			}
+			r.recordDebugTrace(debugTraceFromContext(ctx), "Agent 调用链更新", map[string]any{
+				"phase":           "agent_" + string(runEvent.Phase),
+				"trace_id":        runEvent.TraceID,
+				"model_turn":      runEvent.ModelTurn,
+				"tool_call":       runEvent.ToolCall,
+				"max_tool_calls":  runEvent.MaxToolCalls,
+				"tool":            runEvent.Tool,
+				"tool_input":      runEvent.ToolInput,
+				"tool_output":     toolOutput,
+				"available_tools": runEvent.AvailableTools,
+				"duration_ms":     runEvent.DurationMS,
+				"error":           runEvent.Error,
+				"finish_reason":   runEvent.FinishReason,
+				"usage":           runEvent.Usage,
+			})
+		}
 		log.Printf("qqbot agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
 			runEvent.TraceID, progressBar, progressLabel, runEvent.Phase, runEvent.ModelTurn, runEvent.Tool, runEvent.DurationMS)
 	}

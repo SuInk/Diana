@@ -391,7 +391,21 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 	if limit > maxStructuredMemoryCandidates {
 		limit = maxStructuredMemoryCandidates
 	}
-	args := []any{now.Unix(), strings.TrimSpace(query.Session), strings.TrimSpace(query.SubjectUserID)}
+	subjectUserID := strings.TrimSpace(query.SubjectUserID)
+	args := []any{now.Unix(), strings.TrimSpace(query.Session)}
+	scopeClause := `scope_key = ?`
+	if !query.CurrentSessionOnly {
+		scopeClause = `(` + scopeClause + ` OR (subject_user_id = ? AND visibility = 'user'))`
+		args = append(args, subjectUserID)
+	}
+	if query.CrossGroup && strings.TrimSpace(query.GroupSessionPrefix) != "" {
+		scopeClause = `(` + scopeClause + ` OR (
+		visibility = 'session' AND sensitive = 0 AND COALESCE(source_group_id, '') != ''
+		AND source_session LIKE ? ESCAPE '\'
+		AND (subject_user_id = '' OR subject_user_id = ?)
+	))`
+		args = append(args, escapeMessageHistoryLike(strings.TrimSpace(query.GroupSessionPrefix))+"%", subjectUserID)
+	}
 	kindClause := ""
 	if len(query.Kinds) > 0 {
 		placeholders := make([]string, 0, len(query.Kinds))
@@ -400,6 +414,32 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 			args = append(args, string(kind))
 		}
 		kindClause = " AND kind IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	searchTerms := query.SearchTerms
+	if len(searchTerms) == 0 && strings.TrimSpace(query.Text) != "" {
+		searchTerms = strings.Fields(strings.ToLower(query.Text))
+		if len(searchTerms) == 0 {
+			searchTerms = []string{strings.ToLower(strings.TrimSpace(query.Text))}
+		}
+	}
+	if len(searchTerms) > 48 {
+		searchTerms = searchTerms[:48]
+	}
+	searchOrder := ""
+	if len(searchTerms) > 0 {
+		searchable := `LOWER(COALESCE(memory_key, '') || CHAR(10) || COALESCE(topic, '') || CHAR(10) || COALESCE(entity, '') || CHAR(10) || COALESCE(content, '') || CHAR(10) || COALESCE(evidence, ''))`
+		scoreParts := make([]string, 0, len(searchTerms))
+		for _, term := range searchTerms {
+			term = strings.TrimSpace(strings.ToLower(term))
+			if term == "" {
+				continue
+			}
+			scoreParts = append(scoreParts, `CASE WHEN `+searchable+` LIKE ? ESCAPE '\' THEN 1 ELSE 0 END`)
+			args = append(args, "%"+escapeMessageHistoryLike(term)+"%")
+		}
+		if len(scoreParts) > 0 {
+			searchOrder = "(" + strings.Join(scoreParts, " + ") + ") DESC, "
+		}
 	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
@@ -410,8 +450,8 @@ SELECT id, scope_key, subject_user_id, subject_name, memory_key, kind, topic, en
 FROM memory_items
 WHERE status = 'active'
   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?)
-  AND (scope_key = ? OR (subject_user_id = ? AND visibility = 'user'))`+kindClause+`
-ORDER BY importance DESC, confidence DESC, last_verified_at DESC, updated_at DESC
+  AND `+scopeClause+kindClause+`
+ORDER BY `+searchOrder+`importance DESC, confidence DESC, last_verified_at DESC, updated_at DESC
 LIMIT ?
 `, args...)
 	if err != nil {

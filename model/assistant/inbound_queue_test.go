@@ -175,11 +175,11 @@ func TestReplyToBotEntersSemanticAnswerabilityGate(t *testing.T) {
 }
 
 func TestPassiveReplyRouterUsesStrictSemanticTimeout(t *testing.T) {
-	if got := passiveReplyRouteTimeout(BotConfig{RequestTimeout: 5 * time.Minute}); got != semanticRouteTimeout {
-		t.Fatalf("route timeout = %s, want %s", got, semanticRouteTimeout)
+	if got := passiveReplyRouteTimeout(BotConfig{RequestTimeout: 5 * time.Minute}); got != 60*time.Second {
+		t.Fatalf("route timeout = %s, want 60s", got)
 	}
-	if got := passiveReplyRouteTimeout(BotConfig{RequestTimeout: 3 * time.Minute}); got != semanticRouteTimeout {
-		t.Fatalf("route timeout = %s, want %s", got, semanticRouteTimeout)
+	if got := passiveReplyRouteTimeout(BotConfig{RequestTimeout: 3 * time.Minute}); got != 60*time.Second {
+		t.Fatalf("route timeout = %s, want 60s", got)
 	}
 	if got := passiveReplyRouteTimeout(BotConfig{RequestTimeout: 8 * time.Second}); got != 8*time.Second {
 		t.Fatalf("short configured timeout = %s, want 8s", got)
@@ -348,6 +348,7 @@ type memoryInboundEventStore struct {
 	records  map[string]*memoryInboundRecord
 	order    []string
 	sessions []HistorySession
+	audits   []EventRecord
 }
 
 func newMemoryInboundEventStore() *memoryInboundEventStore {
@@ -462,6 +463,28 @@ func (s *memoryInboundEventStore) ListHistorySessions(context.Context) ([]Histor
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]HistorySession(nil), s.sessions...), nil
+}
+
+func (s *memoryInboundEventStore) RecordInboundEventAudit(_ context.Context, event EventRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.audits = append(s.audits, event)
+	return nil
+}
+
+func TestRuntimeRecordPersistsInboundReasonSynchronously(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetInboundEventStore(store)
+	runtime.record(EventRecord{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1",
+		Decision: "not_replied", Reason: "主动回复判断不建议回复：普通闲聊无需插话",
+	})
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.audits) != 1 || store.audits[0].Reason != "主动回复判断不建议回复：普通闲聊无需插话" {
+		t.Fatalf("persisted audits = %#v", store.audits)
+	}
 }
 
 func (s *memoryInboundEventStore) hasEvent(id string) bool {

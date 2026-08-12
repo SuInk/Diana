@@ -38,7 +38,7 @@ const (
 	semanticRouteTimeout         = 20 * time.Second
 	llmTransientRetryDelay       = 700 * time.Millisecond
 	llmTransientMaxRetries       = 1
-	passiveReplyRouteBudget      = semanticRouteTimeout
+	passiveReplyRouteBudget      = 60 * time.Second
 	replyRuleRouteBudget         = 15 * time.Second
 )
 
@@ -75,6 +75,21 @@ type MessageEventLookupStore interface {
 
 type MessageTimelineStore interface {
 	ListMessageEventsBetween(ctx context.Context, session string, fromTime, throughTime int64) ([]MessageEvent, error)
+}
+
+type MessageHistorySearchQuery struct {
+	Session       string
+	SessionPrefix string
+	Text          string
+	Terms         []string
+	FromTime      int64
+	ThroughTime   int64
+	Limit         int
+	CrossSession  bool
+}
+
+type MessageHistorySearchStore interface {
+	SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error)
 }
 
 type ImageDescriptionStore interface {
@@ -151,7 +166,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
 	case "queued_passive":
-		return "pending", "已进入群聊主动回复候选队列，等待批量语义判断", false
+		return "not_replied", "旧版本已将消息交给主动回复候选队列，但没有持久化最终判断结果", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
 	case "ignored_member_level":
@@ -1024,6 +1039,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 
+	ctx = r.withDebugTraceContext(ctx, event)
 	prepared, text, handled, outcome := r.prepareMessageEvent(ctx, event)
 	if !handled {
 		return nil
@@ -1108,28 +1124,28 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	// Long-term extraction is durable and asynchronous. It never blocks reply
 	// routing and resolver/video-only messages do not enter the LLM memory gate.
 	r.enqueueEventMemory(event, memoryEventText(event))
-	directBotFollowup := eventRepliesToBot(event, r.effectiveConfigForEvent(event))
 	handled := r.shouldHandle(event, text)
 	successOutcome := "replied"
-	passiveQueued := false
 	if handled {
-		// An explicit keyword, mention, reply, plugin, or resolver request takes
-		// precedence over passive chatter already waiting for this group.
+		// Clear batches left by a runtime started before direct passive routing was enabled.
 		r.cancelPassiveReplyBatch(event)
 	}
-	if !handled && r.shouldConsiderPassiveReply(event, text) {
-		if directBotFollowup {
-			// A direct reply to the bot should be assessed immediately. It still
-			// needs the semantic answerability gate, but must not wait behind
-			// unrelated passive chatter in the group batch.
-			r.cancelPassiveReplyBatch(event)
-			handled = r.shouldHandlePassiveReply(ctx, event, text)
-		} else {
-			passiveQueued = r.enqueuePassiveReply(event, text)
-			if !passiveQueued {
-				handled = r.shouldHandlePassiveReply(ctx, event, text)
-			}
+	considerPassive, passiveSkipReason := false, ""
+	if !handled {
+		considerPassive, passiveSkipReason = r.passiveReplyConsideration(event, text)
+	}
+	if !handled && considerPassive {
+		// Judge each candidate immediately. The semantic router already receives
+		// recent group context, so a debounce batch only adds latency and leaves the
+		// durable inbound outcome unresolved.
+		r.cancelPassiveReplyBatch(event)
+		event, text, _, handled = r.routePassiveReplyBatch(ctx, []passiveReplyCandidate{{Event: event, Text: text}})
+		if handled {
+			successOutcome = "replied_passive"
 		}
+	}
+	if !handled && strings.TrimSpace(event.routingReason) == "" {
+		event.routingReason = passiveSkipReason
 	}
 	evaluation, before, evaluated := r.evaluateRelationshipUpdate(ctx, event, text, handled)
 	after, stored := r.updateUserMemory(event, evaluation.effectiveDelta())
@@ -1137,13 +1153,9 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		r.recordRelationshipEvaluation(ctx, event, before, after, evaluation)
 	}
 	if !handled {
-		if !passiveQueued {
-			r.maybeNotifyQuietHours(ctx, event, text)
-		}
+		r.maybeNotifyQuietHours(ctx, event, text)
 		ignoredOutcome := "ignored"
-		if passiveQueued {
-			ignoredOutcome = "queued_passive"
-		} else if !r.admits(r.effectiveConfigForEvent(event), event) {
+		if !r.admits(r.effectiveConfigForEvent(event), event) {
 			ignoredOutcome = "ignored_policy"
 		}
 		r.record(r.decisionEventRecord(event, text, ignoredOutcome))
@@ -1245,6 +1257,9 @@ func (r *Runtime) decisionEventRecord(event MessageEvent, text string, outcome s
 	decision, reason, handled := DescribeEventOutcome(outcome)
 	if decision == "replied" {
 		reason = r.replyDecisionReason(event, text, outcome)
+	}
+	if strings.TrimSpace(event.routingReason) != "" {
+		reason = strings.TrimSpace(event.routingReason)
 	}
 	return EventRecord{
 		At:        time.Now(),
@@ -1431,19 +1446,27 @@ func quotedPromptItems(items []string) string {
 }
 
 func (r *Runtime) shouldConsiderPassiveReply(event MessageEvent, text string) bool {
+	consider, _ := r.passiveReplyConsideration(event, text)
+	return consider
+}
+
+func (r *Runtime) passiveReplyConsideration(event MessageEvent, text string) (bool, string) {
 	if event.Kind != EventKindGroup {
-		return false
+		return false, "消息不是群聊事件，未进入群聊主动回复判断"
 	}
 	if !r.admits(r.effectiveConfigForEvent(event), event) {
-		return false
+		return false, "当前用户、群聊或回复权限规则不允许处理这条消息"
 	}
 	if passiveReplyTriggerText(event, text) == "" && !hasReplyCandidateImage(event.Segments) {
-		return false
+		return false, "消息没有可供主动回复模型判断的文字或图片内容"
 	}
 	r.mu.RLock()
 	hasRouter := r.llmFactory != nil || (r.llmCfgFactory != nil && r.llmStore != nil)
 	r.mu.RUnlock()
-	return hasRouter
+	if !hasRouter {
+		return false, "未配置可用的主动回复判断模型，消息未进入语义判断"
+	}
+	return true, ""
 }
 
 func (r *Runtime) shouldHandlePassiveReply(ctx context.Context, event MessageEvent, text string) bool {
@@ -1465,6 +1488,7 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 	}
 	if len(eligible) == 0 {
 		latest := candidates[len(candidates)-1]
+		latest.Event.routingReason = "发送者群等级低于该群设置的最低回复等级，主动回复判断未执行"
 		return latest.Event, latest.Text, nil, false
 	}
 	candidates = eligible
@@ -1474,6 +1498,7 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 	case r.passiveRouteSem <- struct{}{}:
 		defer func() { <-r.passiveRouteSem }()
 	case <-ctx.Done():
+		event.routingReason = "主动回复判断在等待并发名额时被取消：" + ctx.Err().Error()
 		return event, text, nil, false
 	}
 	cfg := r.effectiveConfigForEvent(event)
@@ -1490,6 +1515,7 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
+		event.routingReason = "主动回复判断上下文编码失败，已保持沉默：" + err.Error()
 		return event, text, nil, false
 	}
 	routeCtx, cancel := context.WithTimeout(ctx, passiveReplyRouteTimeout(cfg))
@@ -1516,6 +1542,7 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 	})
 	if err != nil {
 		r.recordPassiveReplyRouteError(ctx, event, err)
+		event.routingReason = "主动回复判断失败，已保持沉默：" + err.Error()
 		return event, text, nil, false
 	}
 	decision, parsed := parsePassiveReplyDecision(raw)
@@ -1527,8 +1554,40 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 		sampleAllowed = passiveReplySampleAllows(event, text, cfg.PassiveReplyChance)
 	}
 	allowed := decisionAllowed && sampleAllowed
+	event.routingReason = passiveReplyDecisionReason(decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg)
 	r.recordPassiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg, raw)
 	return event, text, turn, allowed
+}
+
+func passiveReplyDecisionReason(decision passiveReplyDecision, parsed, decisionAllowed, sampleAllowed, allowed bool, cfg BotConfig) string {
+	if !parsed {
+		return "主动回复判断模型返回了无法解析的结果，已保持沉默"
+	}
+	detail := strings.TrimSpace(decision.Reason)
+	if detail == "" {
+		detail = "模型未提供补充说明"
+	}
+	metrics := fmt.Sprintf("分类 %s，置信度 %.0f%%，阈值 %.0f%%，指向机器人 %t，可回答 %t",
+		firstNonEmpty(strings.TrimSpace(decision.Category), "unknown"),
+		decision.Confidence*100,
+		cfg.PassiveReplyThreshold*100,
+		decision.DirectedAtBot,
+		decision.Answerable,
+	)
+	switch {
+	case allowed:
+		return fmt.Sprintf("主动回复判断允许回复：%s（%s）", detail, metrics)
+	case decisionAllowed && !sampleAllowed:
+		return fmt.Sprintf("主动回复判断允许回复，但未命中 %.0f%% 的主动回复采样率：%s（%s）", cfg.PassiveReplyChance*100, detail, metrics)
+	case !decision.ShouldReply:
+		return fmt.Sprintf("主动回复判断不建议回复：%s（%s）", detail, metrics)
+	case !decision.Answerable:
+		return fmt.Sprintf("主动回复判断认为现有信息不足以可靠回答：%s（%s）", detail, metrics)
+	case decision.Confidence < cfg.PassiveReplyThreshold:
+		return fmt.Sprintf("主动回复判断置信度低于阈值：%s（%s）", detail, metrics)
+	default:
+		return fmt.Sprintf("主动回复判断未通过分类或指向性约束：%s（%s）", detail, metrics)
+	}
 }
 
 func selectPassiveReplyCandidate(candidates []passiveReplyCandidate, messageID string) (MessageEvent, string) {
@@ -1960,12 +2019,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		return reply, nil
 	}
-	if reply, handled := r.handleLLMConfigCommand(ctx, cfg, event, cleanText); handled {
-		if err := r.send(ctx, event, reply); err != nil {
-			return "", err
-		}
-		return reply, nil
-	}
 	if resolverTriggered {
 		return r.replyWithResolverOnly(ctx, event, cleanText)
 	}
@@ -2231,7 +2284,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			messages = append(messages, turnMessage)
 		}
 	}
-	currentMessage := llmMessageFromEventWithVideoFrames(ctx, event, currentPromptText(event, cleanText), pluginImageURLs(pluginResponses))
+	contextImageURLs := r.semanticReferenceImageURLs(ctx, event)
+	contextImageURLs = appendUniqueStrings(contextImageURLs, pluginImageURLs(pluginResponses)...)
+	currentMessage := llmMessageFromEventWithVideoFrames(ctx, event, currentPromptText(event, cleanText), contextImageURLs)
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	messages = append(messages, currentMessage)
 
@@ -2341,7 +2396,6 @@ func directPluginReply(resp PluginResponse) string {
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
-	messages = capImageParts(messages, maxImagePartsPerRequest)
 	ctx = r.withQQPrivacyContext(ctx, event, r.contextHistory(event))
 	group := llm.GroupChat
 	if messagesContainImages(messages) {
@@ -2408,7 +2462,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 // tools remain callable even when the full local Agent surface is disabled.
 func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig, messages []llm.Message, extraTools []agent.Tool) (string, error) {
 	cfg = cfg.WithDefaults()
-	messages = capImageParts(messages, maxImagePartsPerRequest)
 	group := llm.GroupChat
 	if messagesContainImages(messages) {
 		group = llm.GroupVision
@@ -2913,7 +2966,7 @@ func quotedPlainText(quoted *QuotedMessage) string {
 		return ""
 	}
 	text := strings.TrimSpace(PlainText(quoted.Segments))
-	if text == "" {
+	if text == "" && !hasImageSegment(quoted.Segments) {
 		text = strings.TrimSpace(quoted.RawMessage)
 	}
 	return text
@@ -2921,7 +2974,7 @@ func quotedPlainText(quoted *QuotedMessage) string {
 
 func historyPlainText(event MessageEvent) string {
 	text := strings.TrimSpace(PlainText(event.Segments))
-	if text == "" {
+	if text == "" && !hasImageSegment(event.Segments) {
 		text = strings.TrimSpace(event.RawMessage)
 	}
 	return text
@@ -3208,7 +3261,7 @@ func (r *Runtime) enrichImagePromptWithQQContext(ctx context.Context, event Mess
 	return prompt + "\n\nQQ上下文（仅供理解群名、成员和头像来源；不要在图片中加入文字，除非用户明确要求）：\n" + strings.Join(lines, "\n")
 }
 
-const maxImageEditSourceImages = 1
+const maxQQAvatarImageSources = 8
 
 func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 	var out []string
@@ -3216,11 +3269,12 @@ func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 	if event.Quoted != nil {
 		out = appendImageEditSourceImages(out, ImageURLs(event.Quoted.Segments)...)
 	}
-	if len(out) >= maxImageEditSourceImages {
-		return out[:maxImageEditSourceImages]
+	out = appendImageEditSourceImages(out, r.semanticReferenceImageURLs(context.Background(), event)...)
+	if len(out) > 0 {
+		return out
 	}
 	history := r.contextHistory(event)
-	for i := len(history) - 1; i >= 0 && len(out) < maxImageEditSourceImages; i-- {
+	for i := len(history) - 1; i >= 0; i-- {
 		historyEvent := history[i]
 		if historyEvent.MessageID == event.MessageID {
 			continue
@@ -3229,9 +3283,9 @@ func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 		if historyEvent.Quoted != nil {
 			out = appendImageEditSourceImages(out, ImageURLs(historyEvent.Quoted.Segments)...)
 		}
-	}
-	if len(out) > maxImageEditSourceImages {
-		out = out[:maxImageEditSourceImages]
+		if len(out) > 0 {
+			break
+		}
 	}
 	return out
 }
@@ -3242,15 +3296,16 @@ func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent,
 	if event.Quoted != nil {
 		out = appendImageEditSourceImages(out, ImageURLs(event.Quoted.Segments)...)
 	}
-	if len(out) >= maxImageEditSourceImages {
-		return out[:maxImageEditSourceImages]
+	out = appendImageEditSourceImages(out, r.semanticReferenceImageURLs(ctx, event)...)
+	if len(out) > 0 {
+		return out
 	}
 	out = appendImageEditSourceImages(out, r.qqImageEditSourceImages(ctx, event, prompt)...)
-	if len(out) >= maxImageEditSourceImages {
-		return out[:maxImageEditSourceImages]
+	if len(out) > 0 {
+		return out
 	}
 	history := r.contextHistory(event)
-	for i := len(history) - 1; i >= 0 && len(out) < maxImageEditSourceImages; i-- {
+	for i := len(history) - 1; i >= 0; i-- {
 		historyEvent := history[i]
 		if historyEvent.MessageID == event.MessageID {
 			continue
@@ -3259,9 +3314,9 @@ func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent,
 		if historyEvent.Quoted != nil {
 			out = appendImageEditSourceImages(out, ImageURLs(historyEvent.Quoted.Segments)...)
 		}
-	}
-	if len(out) > maxImageEditSourceImages {
-		out = out[:maxImageEditSourceImages]
+		if len(out) > 0 {
+			break
+		}
 	}
 	return out
 }
@@ -3335,7 +3390,7 @@ func (r *Runtime) qqAvatarTargetUserIDs(ctx context.Context, event MessageEvent,
 				break
 			}
 		}
-		if len(ids) >= maxImageEditSourceImages {
+		if len(ids) >= maxQQAvatarImageSources {
 			return ids
 		}
 	}
@@ -3410,9 +3465,6 @@ func appendImageEditSourceImages(out []string, images ...string) []string {
 			continue
 		}
 		out = append(out, imageURL)
-		if len(out) >= maxImageEditSourceImages {
-			return out
-		}
 	}
 	return out
 }
@@ -3425,6 +3477,7 @@ func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (s
 
 func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
 	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withDebugTraceRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory
@@ -3620,6 +3673,7 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
 	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withDebugTraceRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory
@@ -4067,6 +4121,12 @@ func readableEventText(event MessageEvent, fallback string) string {
 			if parsed := strings.TrimSpace(PlainText(CQToSegments(text))); parsed != "" {
 				return normalizeChatWhitespace(parsed)
 			}
+			if hasImageSegment(event.Segments) {
+				return ""
+			}
+		}
+		if hasImageSegment(event.Segments) {
+			return ""
 		}
 		return normalizeChatWhitespace(text)
 	}
@@ -4601,7 +4661,7 @@ func forwardLeafLines(value any, depth int) []string {
 	}
 	segments := messageSegmentsFromAny(content)
 	text := PlainText(segments)
-	if text == "" {
+	if text == "" && len(segments) == 0 {
 		text = strings.TrimSpace(stringFromAny(content))
 	}
 	if text == "" {
@@ -4740,11 +4800,8 @@ func mergeContextSummary(existing string, events []MessageEvent) string {
 
 func compactContextEvent(event MessageEvent) string {
 	text := PlainText(event.Segments)
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && !hasImageSegment(event.Segments) {
 		text = strings.TrimSpace(event.RawMessage)
-	}
-	if strings.TrimSpace(text) == "" && len(ImageURLs(event.Segments)) > 0 {
-		text = "[图片]"
 	}
 	if strings.TrimSpace(text) == "" {
 		return ""
@@ -4773,13 +4830,10 @@ func historyPromptText(event MessageEvent) string {
 
 func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 	text := PlainText(event.Segments)
-	if text == "" {
+	if text == "" && !hasImageSegment(event.Segments) {
 		text = event.RawMessage
 	}
 	text = strings.TrimSpace(text)
-	if text == "" && len(ImageURLs(event.Segments)) > 0 {
-		text = "[图片]"
-	}
 	if text == "" {
 		return ""
 	}
@@ -4791,11 +4845,8 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 
 func passiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
 	text := strings.TrimSpace(PlainText(event.Segments))
-	if text == "" {
+	if text == "" && !hasImageSegment(event.Segments) {
 		text = strings.TrimSpace(firstNonEmpty(fallbackText, event.RawMessage))
-	}
-	if text == "" && len(ImageURLs(event.Segments)) > 0 {
-		text = "[图片]"
 	}
 	if text == "" {
 		return ""
@@ -4822,6 +4873,9 @@ func currentPromptText(event MessageEvent, text string) string {
 	if hasReplySegment {
 		text += "\n\n当前消息包含引用/回复标记，引用关系是当前消息的一部分；如果引用内容能从历史参考中看出，可以结合它回复。"
 	}
+	if sourceCount := len(eventSemanticSourceMessageIDs(event)); sourceCount > 1 {
+		text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源；随本条消息附加的来源图片按原消息从旧到新排列。必须逐张查看并综合回答，不得只分析其中一张。", sourceCount)
+	}
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n\n" + quoted
 	}
@@ -4844,11 +4898,8 @@ func quotedPromptText(quoted *QuotedMessage) string {
 		return ""
 	}
 	text := PlainText(quoted.Segments)
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && !hasImageSegment(quoted.Segments) {
 		text = strings.TrimSpace(quoted.RawMessage)
-	}
-	if strings.TrimSpace(text) == "" && len(ImageURLs(quoted.Segments)) > 0 {
-		text = "[图片]"
 	}
 	if strings.TrimSpace(text) == "" {
 		return ""
@@ -4938,60 +4989,6 @@ func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Me
 	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}
 }
 
-const maxImagePartsPerRequest = 4
-
-// capImageParts keeps the most recent images so persisted base64 history cannot
-// grow a request without bound.
-func capImageParts(messages []llm.Message, limit int) []llm.Message {
-	if limit <= 0 {
-		return messages
-	}
-	kept := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if len(msg.Parts) == 0 {
-			continue
-		}
-		parts := make([]llm.ContentPart, 0, len(msg.Parts))
-		dropped := false
-		for j := len(msg.Parts) - 1; j >= 0; j-- {
-			part := msg.Parts[j]
-			if part.Type != llm.ContentPartImageURL {
-				parts = append(parts, part)
-				continue
-			}
-			if kept < limit {
-				kept++
-				parts = append(parts, part)
-				continue
-			}
-			dropped = true
-		}
-		if !dropped {
-			continue
-		}
-		for left, right := 0, len(parts)-1; left < right; left, right = left+1, right-1 {
-			parts[left], parts[right] = parts[right], parts[left]
-		}
-		if !hasImagePart(parts) {
-			msg.Parts = nil
-		} else {
-			msg.Parts = parts
-		}
-		messages[i] = msg
-	}
-	return messages
-}
-
-func hasImagePart(parts []llm.ContentPart) bool {
-	for _, part := range parts {
-		if part.Type == llm.ContentPartImageURL {
-			return true
-		}
-	}
-	return false
-}
-
 func llmMessageFromEventWithVideoFrames(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) llm.Message {
 	videoURLs := videoSourceCandidates(event.Segments)
 	cachedFrames := cachedVideoFrameURLs(event.Segments)
@@ -5059,7 +5056,11 @@ func llmMessageFromEventWithImagesForContext(ctx context.Context, event MessageE
 		return llm.Message{Role: llm.RoleUser, Content: text}
 	}
 	if imageOnlyPrompt(text, event) {
-		text = "用户发送了一张图片，请根据图片内容回答。"
+		if len(imageURLs) == 1 {
+			text = "用户发送了一张图片，请根据图片内容回答。"
+		} else {
+			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", len(imageURLs))
+		}
 	}
 	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
 	if text != "" {
@@ -5084,7 +5085,7 @@ func resolverSourceText(event MessageEvent, text string) string {
 }
 
 func imageOnlyPrompt(text string, event MessageEvent) bool {
-	if len(ImageURLs(event.Segments)) == 0 {
+	if !hasImageSegment(event.Segments) {
 		return false
 	}
 	text = strings.TrimSpace(text)
@@ -5627,33 +5628,31 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 	if raw == "" {
 		raw = PlainText(segments)
 	}
-	if strings.TrimSpace(raw) == "" && len(msg.ImageURLs) > 0 {
-		raw = "[图片]"
-	}
 	if strings.TrimSpace(raw) == "" && len(msg.VideoURLs) > 0 {
 		raw = "[视频]"
 	}
-	if strings.TrimSpace(raw) == "" {
+	if strings.TrimSpace(raw) == "" && !hasImageSegment(segments) {
 		return MessageEvent{}
 	}
 	cfg := r.effectiveConfigForEvent(source)
 	selfID := firstNonEmpty(strings.TrimSpace(source.SelfID), strings.TrimSpace(cfg.BotQQ), "bot")
 	senderName := firstNonEmpty(strings.TrimSpace(cfg.Name), "Diana")
 	event := MessageEvent{
-		Platform:                source.Platform,
-		ProfileID:               source.ProfileID,
-		ContextNamespace:        source.ContextNamespace,
-		Kind:                    source.Kind,
-		Time:                    time.Now().Unix(),
-		SelfID:                  selfID,
-		UserID:                  selfID,
-		GroupID:                 source.GroupID,
-		MessageID:               "local-out-" + uuid.NewString(),
-		MessageType:             "group",
-		RawMessage:              raw,
-		Segments:                segments,
-		SenderName:              senderName,
-		SemanticSourceMessageID: source.SemanticSourceMessageID,
+		Platform:                 source.Platform,
+		ProfileID:                source.ProfileID,
+		ContextNamespace:         source.ContextNamespace,
+		Kind:                     source.Kind,
+		Time:                     time.Now().Unix(),
+		SelfID:                   selfID,
+		UserID:                   selfID,
+		GroupID:                  source.GroupID,
+		MessageID:                "local-out-" + uuid.NewString(),
+		MessageType:              "group",
+		RawMessage:               raw,
+		Segments:                 segments,
+		SenderName:               senderName,
+		SemanticSourceMessageID:  source.SemanticSourceMessageID,
+		SemanticSourceMessageIDs: append([]string(nil), source.SemanticSourceMessageIDs...),
 	}
 	if source.Kind != EventKindGroup {
 		event.Kind = EventKindPrivate
@@ -5859,8 +5858,8 @@ func recallForwardTextFallback(messages []OutgoingMessage) []OutgoingMessage {
 		if text == "" {
 			text = strings.TrimSpace(PlainText(msg.Segments))
 		}
-		if text == "" && len(msg.ImageURLs) > 0 {
-			text = "[图片]"
+		if text == "" && (len(msg.ImageURLs) > 0 || hasReplyCandidateImage(msg.Segments)) {
+			text = "图片转发失败，原图未包含在本条文本回退中。"
 		}
 		if text == "" && len(msg.VideoURLs) > 0 {
 			text = "[视频]"
@@ -6155,7 +6154,7 @@ func (r *Runtime) remember(event MessageEvent) {
 	r.history[session] = history
 	r.mu.Unlock()
 	r.persistMessageEvent(event)
-	if len(compressed) > 0 {
+	if len(compressed) > 0 && boolValue(cfg.LongTermMemoryEnabled, true) {
 		r.enqueueContextSummary(session, compressed)
 	}
 }
@@ -6467,7 +6466,15 @@ func (r *Runtime) record(record EventRecord) {
 	}
 	r.updatedAt = time.Now()
 	listener := r.eventListener
+	inboundStore := r.inboundStore
 	r.mu.Unlock()
+	if auditStore, ok := inboundStore.(InboundEventAuditStore); ok && strings.TrimSpace(record.MessageID) != "" {
+		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := auditStore.RecordInboundEventAudit(auditCtx, record); err != nil {
+			log.Printf("qqbot persist inbound event reason failed: %v", err)
+		}
+		cancel()
+	}
 	if listener != nil {
 		go listener(record)
 	}
@@ -6580,24 +6587,6 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	default:
 		return "", false
 	}
-}
-
-func (r *Runtime) handleLLMConfigCommand(ctx context.Context, cfg BotConfig, event MessageEvent, text string) (string, bool) {
-	if !boolValue(cfg.OwnerLLMConfigEnabled, true) {
-		return "", false
-	}
-	resp, err := handleLLMConfigRequest(ctx, PluginRequest{
-		Event:          event,
-		Text:           text,
-		OwnerID:        cfg.OwnerID,
-		LLMStore:       r.llmStore,
-		LLMModelLister: r.llmModelLister(),
-		AppLogs:        r.appLogWriter(),
-	})
-	if err != nil || resp == nil || !resp.Handled {
-		return "", false
-	}
-	return resp.Reply, true
 }
 
 // renderLLMProfiles 渲染 LLM 配置档列表。

@@ -260,7 +260,7 @@ func (r *Runtime) historicalRecallImageDescriptions(ctx context.Context, event M
 		if description == "" || semanticErrorWrapperText(description) {
 			continue
 		}
-		sourceIDs := append([]string{strings.TrimSpace(item.SemanticSourceMessageID)}, replyReferenceIDs(item.Segments)...)
+		sourceIDs := append(eventSemanticSourceMessageIDs(item), replyReferenceIDs(item.Segments)...)
 		for _, sourceID := range dedupeStrings(sourceIDs) {
 			target := targetByMessageID[sourceID]
 			if target == nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ const (
 )
 
 func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryText string) string {
+	cfg := r.effectiveConfigForEvent(event)
 	profile, ok := r.loadUserMemoryProfile(ctx, event)
 	if !ok {
 		profile = UserMemoryProfile{
@@ -24,7 +26,10 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 			DisplayName: strings.TrimSpace(event.SenderNameOrID()),
 		}
 	}
-	policy := RelationshipPolicyFor(profile, r.effectiveConfigForEvent(event).OwnerID, event.UserID)
+	policy := RelationshipPolicyFor(profile, cfg.OwnerID, event.UserID)
+	if !boolValue(cfg.LongTermMemoryEnabled, true) {
+		return formatUserMemoryContext(profile, policy)
+	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()
@@ -33,14 +38,19 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 	}
 
 	queryText = memoryRetrievalText(event, queryText)
+	crossGroup := boolValue(cfg.CrossGroupMemoryEnabled, false) && event.Kind == EventKindGroup
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	items, err := store.ListStructuredMemories(loadCtx, StructuredMemoryQuery{
-		SubjectUserID: event.UserID,
-		Session:       sessionKey(event),
-		GroupID:       event.GroupID,
-		Text:          queryText,
-		Now:           time.Now(),
-		MaxCandidates: structuredMemoryLoadLimit,
+		SubjectUserID:      event.UserID,
+		Session:            sessionKey(event),
+		GroupID:            event.GroupID,
+		Text:               queryText,
+		SearchTerms:        structuredMemorySearchTerms(queryText, 48),
+		Now:                time.Now(),
+		MaxCandidates:      structuredMemoryLoadLimit,
+		CrossGroup:         crossGroup,
+		GroupSessionPrefix: groupHistorySessionPrefix(event),
+		CurrentSessionOnly: !crossGroup,
 	})
 	cancel()
 	if err != nil {
@@ -59,17 +69,36 @@ func memoryRetrievalText(event MessageEvent, current string) string {
 }
 
 func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, query string, now time.Time) []StructuredMemoryItem {
-	queryTerms := structuredMemoryTerms(query)
-	ranked := make([]StructuredMemoryItem, 0, len(items))
-	for _, item := range items {
-		itemTerms := structuredMemoryTerms(strings.Join([]string{item.Key, item.Topic, item.Entity, item.SubjectName, item.Content}, " "))
-		overlap := structuredMemoryOverlap(queryTerms, itemTerms)
-		// Importance and confidence decide whether a candidate is trustworthy;
-		// semantic/topical overlap remains the main retrieval signal so unrelated
-		// high-quality facts do not flood every reply.
-		score := item.Importance*0.22 + item.Confidence*0.10 + overlap*0.58
+	analysis := analyzeStructuredMemoryQuery(query)
+	documentTerms := make([]map[string]struct{}, len(items))
+	documentFrequency := make(map[string]int)
+	for index, item := range items {
+		documentTerms[index] = structuredMemoryTerms(structuredMemoryDocument(item))
+		for term := range documentTerms[index] {
+			if _, relevant := analysis.terms[term]; relevant {
+				documentFrequency[term]++
+			}
+		}
+	}
+
+	type scoredMemory struct {
+		item  StructuredMemoryItem
+		terms map[string]struct{}
+	}
+	candidates := make([]scoredMemory, 0, len(items))
+	for index, item := range items {
+		lexical, strongestField, exactField := structuredMemoryLexicalScore(item, analysis, documentFrequency, len(items))
+		score := item.Importance*0.18 + item.Confidence*0.09 + lexical*0.58
+		reasons := make([]string, 0, 5)
+		if exactField != "" {
+			score += 0.14
+			reasons = append(reasons, exactField+"精确命中")
+		} else if strongestField != "" && lexical > 0 {
+			reasons = append(reasons, strongestField+"相关")
+		}
 		if item.SubjectUserID != "" && item.SubjectUserID == event.UserID {
 			score += 0.05
+			reasons = append(reasons, "当前用户")
 		}
 		if item.SourceSession == sessionKey(event) {
 			score += 0.02
@@ -77,6 +106,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		switch item.Kind {
 		case MemoryKindInstruction:
 			score += 0.16
+			reasons = append(reasons, "长期要求")
 		case MemoryKindFact:
 			score += 0.03
 		case MemoryKindPreference:
@@ -88,37 +118,66 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		if verifiedAt.IsZero() {
 			verifiedAt = item.SourceEventTime
 		}
-		if !verifiedAt.IsZero() {
+		if !verifiedAt.IsZero() && !analysis.historical {
 			ageDays := now.Sub(verifiedAt).Hours() / 24
 			if ageDays < 0 {
 				ageDays = 0
 			}
-			score += 0.05 / (1 + ageDays/30)
+			if analysis.recent {
+				score += 0.13 / (1 + ageDays/7)
+				if ageDays <= 14 {
+					reasons = append(reasons, "近期记忆")
+				}
+			} else {
+				score += 0.04 / (1 + ageDays/30)
+			}
+		}
+		if analysis.historical && (item.Kind == MemoryKindEpisode || item.Kind == MemoryKindSummary) {
+			score += 0.08
+			reasons = append(reasons, "历史回忆")
 		}
 
 		coreCurrentMemory := item.SubjectUserID == event.UserID && item.Confidence >= 0.9 &&
 			(item.Importance >= 0.9 || (item.Kind == MemoryKindInstruction && item.Importance >= 0.55))
-		relatedEpisode := overlap >= 0.04 || item.Importance >= 0.95
+		relatedEpisode := lexical >= 0.08 || exactField != "" || item.Importance >= 0.95
 		if !coreCurrentMemory {
 			if (item.Kind == MemoryKindEpisode || item.Kind == MemoryKindSummary) && !relatedEpisode {
 				continue
 			}
-			if score < 0.43 {
+			if score < 0.38 {
 				continue
 			}
 		}
 		item.RetrievalScore = score
-		ranked = append(ranked, item)
+		item.RetrievalReason = strings.Join(uniqueMemoryReasons(reasons), "、")
+		candidates = append(candidates, scoredMemory{item: item, terms: documentTerms[index]})
 	}
-	sort.SliceStable(ranked, func(left, right int) bool {
-		if ranked[left].RetrievalScore == ranked[right].RetrievalScore {
-			if ranked[left].Importance == ranked[right].Importance {
-				return ranked[left].LastVerifiedAt.After(ranked[right].LastVerifiedAt)
+
+	// MMR-style selection keeps several useful topics instead of spending the
+	// complete context budget on near-duplicate memories.
+	selected := make([]scoredMemory, 0, min(24, len(candidates)))
+	for len(candidates) > 0 && len(selected) < 24 {
+		bestIndex := 0
+		bestScore := math.Inf(-1)
+		for index, candidate := range candidates {
+			maxSimilarity := 0.0
+			for _, existing := range selected {
+				maxSimilarity = max(maxSimilarity, structuredMemorySimilarity(candidate.terms, existing.terms))
 			}
-			return ranked[left].Importance > ranked[right].Importance
+			adjusted := candidate.item.RetrievalScore - maxSimilarity*0.18
+			if adjusted > bestScore {
+				bestIndex, bestScore = index, adjusted
+			}
 		}
-		return ranked[left].RetrievalScore > ranked[right].RetrievalScore
-	})
+		chosen := candidates[bestIndex]
+		chosen.item.RetrievalScore = bestScore
+		selected = append(selected, chosen)
+		candidates = append(candidates[:bestIndex], candidates[bestIndex+1:]...)
+	}
+	ranked := make([]StructuredMemoryItem, 0, len(selected))
+	for _, candidate := range selected {
+		ranked = append(ranked, candidate.item)
+	}
 	return ranked
 }
 
@@ -201,8 +260,12 @@ func formatStructuredMemoryLine(item StructuredMemoryItem) string {
 	if !verified.IsZero() {
 		timeLabel = verified.Local().Format("2006-01-02")
 	}
-	return fmt.Sprintf("\n- [%s｜%s｜置信 %.2f｜重要 %.2f｜v%d｜%s] %s：%s",
-		memoryKindLabel(item.Kind), item.Topic, item.Confidence, item.Importance, item.Version, timeLabel, subject, item.Content)
+	reason := ""
+	if strings.TrimSpace(item.RetrievalReason) != "" {
+		reason = "｜依据 " + strings.TrimSpace(item.RetrievalReason)
+	}
+	return fmt.Sprintf("\n- [%s｜%s｜置信 %.2f｜重要 %.2f｜v%d｜%s%s] %s：%s",
+		memoryKindLabel(item.Kind), item.Topic, item.Confidence, item.Importance, item.Version, timeLabel, reason, subject, item.Content)
 }
 
 func memoryKindLabel(kind MemoryKind) string {
@@ -223,52 +286,237 @@ func memoryKindLabel(kind MemoryKind) string {
 }
 
 func structuredMemoryTerms(text string) map[string]struct{} {
-	terms := map[string]struct{}{}
+	terms := make(map[string]struct{})
+	for term := range weightedStructuredMemoryTerms(text) {
+		terms[term] = struct{}{}
+	}
+	return terms
+}
+
+type structuredMemoryQueryAnalysis struct {
+	normalized string
+	terms      map[string]float64
+	recent     bool
+	historical bool
+}
+
+var structuredMemoryStopTerms = map[string]struct{}{
+	"这个": {}, "那个": {}, "什么": {}, "怎么": {}, "一下": {}, "来着": {},
+	"关于": {}, "有没有": {}, "是否": {}, "如何": {}, "帮我": {}, "可以": {},
+	"记得": {}, "之前": {}, "以前": {}, "最近": {}, "时候": {}, "我们": {},
+}
+
+func analyzeStructuredMemoryQuery(query string) structuredMemoryQueryAnalysis {
+	analysis := structuredMemoryQueryAnalysis{
+		normalized: normalizeStructuredMemoryText(query),
+		terms:      weightedStructuredMemoryTerms(structuredMemorySemanticText(query)),
+	}
+	lower := strings.ToLower(query)
+	analysis.recent = containsAnyMemoryPhrase(lower, "最近", "刚才", "刚刚", "上次", "今天", "昨天", "latest", "recent")
+	analysis.historical = containsAnyMemoryPhrase(lower, "以前", "之前", "过去", "当时", "很久", "去年", "historical", "previously")
+	for term := range structuredMemoryStopTerms {
+		delete(analysis.terms, term)
+	}
+	if len(analysis.terms) == 0 {
+		analysis.terms = weightedStructuredMemoryTerms(query)
+	}
+	return analysis
+}
+
+func structuredMemoryLexicalScore(item StructuredMemoryItem, query structuredMemoryQueryAnalysis, documentFrequency map[string]int, documentCount int) (float64, string, string) {
+	if len(query.terms) == 0 {
+		return 0, "", ""
+	}
+	fields := []struct {
+		name   string
+		value  string
+		weight float64
+	}{
+		{name: "实体", value: item.Entity, weight: 1.55},
+		{name: "主题", value: item.Topic, weight: 1.45},
+		{name: "键", value: item.Key, weight: 1.3},
+		{name: "正文", value: item.Content, weight: 1},
+		{name: "证据", value: item.Evidence, weight: 0.72},
+		{name: "人物", value: item.SubjectName, weight: 0.8},
+	}
+	fieldTerms := make([]map[string]struct{}, len(fields))
+	strongestField := ""
+	strongestWeight := 0.0
+	exactField := ""
+	for index, field := range fields {
+		fieldTerms[index] = structuredMemoryTerms(field.value)
+		normalized := normalizeStructuredMemoryText(field.value)
+		if exactField == "" && len([]rune(normalized)) >= 2 && strings.Contains(query.normalized, normalized) {
+			exactField = field.name
+		}
+	}
+
+	matchedWeight := 0.0
+	totalWeight := 0.0
+	rawScore := 0.0
+	for term, queryWeight := range query.terms {
+		idf := math.Log(1 + float64(documentCount+1)/float64(documentFrequency[term]+1))
+		weightedQuery := queryWeight * idf
+		totalWeight += weightedQuery
+		bestFieldWeight := 0.0
+		bestField := ""
+		for index, field := range fields {
+			if _, ok := fieldTerms[index][term]; ok && field.weight > bestFieldWeight {
+				bestFieldWeight = field.weight
+				bestField = field.name
+			}
+		}
+		if bestFieldWeight == 0 {
+			continue
+		}
+		matchedWeight += weightedQuery
+		rawScore += weightedQuery * bestFieldWeight
+		if bestFieldWeight > strongestWeight {
+			strongestWeight, strongestField = bestFieldWeight, bestField
+		}
+	}
+	if matchedWeight == 0 || totalWeight == 0 {
+		return 0, "", exactField
+	}
+	coverage := matchedWeight / totalWeight
+	saturation := 1 - math.Exp(-rawScore/2.8)
+	return min(1, saturation*0.7+coverage*0.3), strongestField, exactField
+}
+
+func structuredMemoryDocument(item StructuredMemoryItem) string {
+	return strings.Join([]string{item.Key, item.Topic, item.Entity, item.SubjectName, item.Content, item.Evidence}, " ")
+}
+
+func structuredMemorySimilarity(left, right map[string]struct{}) float64 {
+	if len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+	common := 0
+	for term := range left {
+		if _, ok := right[term]; ok {
+			common++
+		}
+	}
+	union := len(left) + len(right) - common
+	if union == 0 {
+		return 0
+	}
+	return float64(common) / float64(union)
+}
+
+func weightedStructuredMemoryTerms(text string) map[string]float64 {
+	terms := make(map[string]float64)
 	var ascii strings.Builder
-	var previousCJK rune
+	cjk := make([]rune, 0, 16)
 	flushASCII := func() {
 		if ascii.Len() > 1 {
-			terms[strings.ToLower(ascii.String())] = struct{}{}
+			terms[strings.ToLower(ascii.String())] = 1.1
 		}
 		ascii.Reset()
+	}
+	flushCJK := func() {
+		for index, value := range cjk {
+			terms[string(value)] = 0.18
+			if index+2 <= len(cjk) {
+				terms[string(cjk[index:index+2])] = 1
+			}
+			if index+3 <= len(cjk) {
+				terms[string(cjk[index:index+3])] = 1.25
+			}
+		}
+		cjk = cjk[:0]
 	}
 	for _, value := range strings.ToLower(text) {
 		switch {
 		case value <= unicode.MaxASCII && (unicode.IsLetter(value) || unicode.IsDigit(value)):
+			flushCJK()
 			ascii.WriteRune(value)
-			previousCJK = 0
 		case unicode.In(value, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul):
 			flushASCII()
-			terms[string(value)] = struct{}{}
-			if previousCJK != 0 {
-				terms[string([]rune{previousCJK, value})] = struct{}{}
-			}
-			previousCJK = value
+			cjk = append(cjk, value)
 		default:
 			flushASCII()
-			previousCJK = 0
+			flushCJK()
 		}
 	}
 	flushASCII()
+	flushCJK()
 	return terms
 }
 
-func structuredMemoryOverlap(query map[string]struct{}, candidate map[string]struct{}) float64 {
-	if len(query) == 0 || len(candidate) == 0 {
-		return 0
+func structuredMemorySearchTerms(text string, limit int) []string {
+	weighted := weightedStructuredMemoryTerms(structuredMemorySemanticText(text))
+	type termWeight struct {
+		term   string
+		weight float64
 	}
-	common := 0
-	for term := range query {
-		if _, ok := candidate[term]; ok {
-			common++
+	ordered := make([]termWeight, 0, len(weighted))
+	for term, weight := range weighted {
+		if weight < 1 {
+			continue
+		}
+		ordered = append(ordered, termWeight{term: term, weight: weight})
+	}
+	sort.SliceStable(ordered, func(left, right int) bool {
+		if ordered[left].weight == ordered[right].weight {
+			leftLength := len([]rune(ordered[left].term))
+			rightLength := len([]rune(ordered[right].term))
+			if leftLength == rightLength {
+				return ordered[left].term < ordered[right].term
+			}
+			return leftLength > rightLength
+		}
+		return ordered[left].weight > ordered[right].weight
+	})
+	if limit <= 0 || limit > len(ordered) {
+		limit = len(ordered)
+	}
+	terms := make([]string, 0, limit)
+	for _, item := range ordered[:limit] {
+		terms = append(terms, item.term)
+	}
+	return terms
+}
+
+func structuredMemorySemanticText(text string) string {
+	semantic := strings.ToLower(text)
+	for term := range structuredMemoryStopTerms {
+		semantic = strings.ReplaceAll(semantic, term, " ")
+	}
+	return semantic
+}
+
+func normalizeStructuredMemoryText(text string) string {
+	var builder strings.Builder
+	for _, value := range strings.ToLower(text) {
+		if unicode.IsLetter(value) || unicode.IsDigit(value) {
+			builder.WriteRune(value)
 		}
 	}
-	denominator := len(query)
-	if len(candidate) < denominator {
-		denominator = len(candidate)
+	return builder.String()
+}
+
+func containsAnyMemoryPhrase(text string, phrases ...string) bool {
+	for _, phrase := range phrases {
+		if strings.Contains(text, phrase) {
+			return true
+		}
 	}
-	if denominator == 0 {
-		return 0
+	return false
+}
+
+func uniqueMemoryReasons(reasons []string) []string {
+	seen := make(map[string]struct{}, len(reasons))
+	unique := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if reason == "" {
+			continue
+		}
+		if _, ok := seen[reason]; ok {
+			continue
+		}
+		seen[reason] = struct{}{}
+		unique = append(unique, reason)
 	}
-	return float64(common) / float64(denominator)
+	return unique
 }

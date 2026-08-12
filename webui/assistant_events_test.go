@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +42,17 @@ func TestAssistantEventsEndpointReturnsDurableDecisionReasons(t *testing.T) {
 	if err := store.CompleteInboundEvent(ctx, item.ID, "events-test", "ignored_member_level"); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind:      event.Kind,
+		GroupID:   event.GroupID,
+		UserID:    event.UserID,
+		MessageID: event.MessageID,
+		Decision:  "not_replied",
+		Reason:    "发送者群等级为 2，低于本群最低回复等级 5",
+		Duration:  87,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
 		Action:    "qqbot.llm_usage",
 		Target:    event.MessageID,
@@ -72,7 +82,7 @@ func TestAssistantEventsEndpointReturnsDurableDecisionReasons(t *testing.T) {
 		t.Fatalf("response token totals=%+v", response)
 	}
 	detail := response.Events[0]
-	if detail.Decision != "not_replied" || detail.Handled || !strings.Contains(detail.Reason, "最低回复等级") {
+	if detail.Decision != "not_replied" || detail.Handled || detail.Reason != "发送者群等级为 2，低于本群最低回复等级 5" || detail.DurationMS != 87 {
 		t.Fatalf("detail=%+v", detail)
 	}
 	if detail.SenderName != "测试成员" || detail.Text != "为什么不回复" {
@@ -93,5 +103,52 @@ func TestAssistantEventsRangeValidation(t *testing.T) {
 	}
 	if _, ok := assistantEventsSince("90m", now); ok {
 		t.Fatal("unsupported range accepted")
+	}
+}
+
+func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assistant-event-trace.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	event := assistant.MessageEvent{
+		Platform:  "napcat",
+		ProfileID: "qq-main",
+		Kind:      assistant.EventKindGroup,
+		GroupID:   "group-1",
+		UserID:    "user-1",
+		MessageID: "message-1",
+		Time:      time.Now().Unix(),
+	}
+	eventID, inserted, err := store.EnqueueInboundEvent(ctx, "group:group-1", event)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	if err := store.AppendLog(ctx, storage.AppLogEntry{
+		Kind: storage.LogKindDebug, Action: "qqbot.debug_trace", Target: event.MessageID, Message: "模型请求完成",
+		Metadata: map[string]any{
+			"phase": "model_request", "platform": event.Platform, "profile_id": event.ProfileID,
+			"kind": "group", "group_id": event.GroupID, "user_id": event.UserID, "message_id": event.MessageID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := &QQBotHandler{sqlite: store}
+	router.GET("/api/assistant/events/:id/trace", handler.eventTrace)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/trace", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response assistantEventTraceResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.EventID != eventID || response.MessageID != event.MessageID || len(response.Steps) != 1 {
+		t.Fatalf("response=%+v", response)
 	}
 }
