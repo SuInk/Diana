@@ -234,3 +234,24 @@ func TestMemberAgentRegistryRetainsOneBotReadTool(t *testing.T) {
 		t.Fatal("member registry exposed owner-only LLM configuration")
 	}
 }
+
+func TestOneBotV11AuditRedactsFailureDetail(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(logs)
+	runtime.recordOneBotV11Action(
+		MessageEvent{UserID: "owner"},
+		"custom_extension_action",
+		"owner_full",
+		true,
+		[]string{"secret_param"},
+		context.Canceled,
+	)
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 || entries[0].Kind != applog.KindError {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if strings.Contains(entries[0].Detail, context.Canceled.Error()) {
+		t.Fatalf("audit detail leaked adapter error: %#v", entries[0])
+	}
+}
