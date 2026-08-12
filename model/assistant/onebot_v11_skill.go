@@ -241,7 +241,7 @@ func (r *Runtime) recordOneBotV11Action(event MessageEvent, action, access strin
 		kind = applog.KindError
 		level = applog.LevelError
 		message = "OneBot v11 action 调用被拒绝或失败"
-		detail = callErr.Error()
+		detail = "OneBot v11 action failed or was denied"
 		if oneBotV11SensitiveAction(action) {
 			detail = "sensitive OneBot v11 action failed or was denied"
 		}
