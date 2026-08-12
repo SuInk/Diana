@@ -148,7 +148,7 @@ func TestRecordInboundEventAuditPersistsDecisionReasonAndReply(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim ok=%v err=%v", ok, err)
 	}
-	if err := store.CompleteInboundEvent(ctx, item.ID, "audit-test", "replied_passive"); err != nil {
+	if err := store.CompleteInboundEvent(ctx, item.ID, "audit-test", "replied_proactive"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{

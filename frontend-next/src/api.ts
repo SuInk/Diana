@@ -115,9 +115,13 @@ export interface QQBotConfig {
   prompt_image_only_text?: string;
   prompt_wake_only_text?: string;
   /** 群聊未显式唤醒机器人时，用于判断是否应主动回复。 */
-  passive_reply_router_prompt?: string;
+  proactive_reply_router_prompt?: string;
   /** 主动回复路由放行后，注入最终回复模型的生成约束。 */
-  passive_reply_prompt?: string;
+  proactive_reply_prompt?: string;
+  /** 主动回复路由放行后的确定性采样率，范围 0~1。 */
+  proactive_reply_chance?: number;
+  /** 主动回复最低置信度，范围 0~1，默认 0.9。 */
+  proactive_reply_threshold?: number;
   max_input_chars?: number;
   max_reply_chars?: number;
   direct_reply_chunk_size?: number;
@@ -206,6 +210,9 @@ export interface QQBotGroupConfig {
   welcome_message?: string;
   recent_context_limit?: number;
   max_reply_chars?: number;
+  proactive_reply_chance?: number;
+  proactive_reply_threshold?: number;
+  minimum_reply_member_level?: number;
   plugin_overrides?: Record<string, boolean>;
   /** 本群专属回复时间、屏蔽 QQ 号与准入门槛；不设表示跟随全局。 */
   reply_gate?: ReplyGate | null;

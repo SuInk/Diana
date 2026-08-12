@@ -160,6 +160,44 @@ func TestContextBudgetKeepsCurrentImageDetailWhenOnlyHistoryOverflows(t *testing
 	}
 }
 
+func TestContextBudgetDropsHistoricalImageLabelWithImage(t *testing.T) {
+	messages := []Message{
+		{Role: RoleUser, Content: "历史图片", Priority: MessagePriorityMemory, Parts: []ContentPart{
+			{Type: ContentPartText, Text: "此消息包含 1 张真实图片"},
+			{Type: ContentPartImageURL, ImageURL: "https://example.com/history.jpg", Detail: "low"},
+		}},
+		{Role: RoleUser, Content: strings.Repeat("当前问题", 200), Priority: MessagePriorityCurrent},
+	}
+	got := fitMessagesToTokenBudget(messages, 900)
+	joined := messageTextForTest(got)
+	if strings.Contains(joined, "此消息包含 1 张真实图片") {
+		t.Fatalf("historical image label survived without its image: %#v", got)
+	}
+}
+
+func TestContextBudgetKeepsHistoricalImageMessageAtomic(t *testing.T) {
+	messages := []Message{
+		{Role: RoleUser, Content: "两张历史图片", Priority: MessagePriorityPlugin, Parts: []ContentPart{
+			{Type: ContentPartText, Text: "此消息包含 2 张真实图片"},
+			{Type: ContentPartImageURL, ImageURL: "https://example.com/1.jpg", Detail: "low"},
+			{Type: ContentPartImageURL, ImageURL: "https://example.com/2.jpg", Detail: "low"},
+		}},
+		{Role: RoleUser, Content: strings.Repeat("当前问题", 200), Priority: MessagePriorityCurrent},
+	}
+	got := fitMessagesToTokenBudget(messages, 1600)
+	for _, message := range got {
+		images := 0
+		for _, part := range message.Parts {
+			if part.Type == ContentPartImageURL {
+				images++
+			}
+		}
+		if images == 1 {
+			t.Fatalf("historical multi-image message was partially retained: %#v", got)
+		}
+	}
+}
+
 func messageTextForTest(messages []Message) string {
 	var parts []string
 	for _, message := range messages {

@@ -521,8 +521,8 @@ func qqBotConfigFromEnv() assistant.BotConfig {
 	cfg.OwnerID = envOrAny([]string{"DIANA_OWNER_ID", "QQBOT_OWNER_ID"}, "")
 	cfg.GroupTriggers = stringListFromEnv("DIANA_GROUP_TRIGGERS", cfg.GroupTriggers)
 	cfg.SystemPrompt = envOrAny([]string{"DIANA_SYSTEM_PROMPT", "QQBOT_SYSTEM_PROMPT"}, cfg.SystemPrompt)
-	cfg.PassiveReplyRouterPrompt = envOr("DIANA_PASSIVE_REPLY_ROUTER_PROMPT", cfg.PassiveReplyRouterPrompt)
-	cfg.PassiveReplyPrompt = envOr("DIANA_PASSIVE_REPLY_PROMPT", cfg.PassiveReplyPrompt)
+	cfg.ProactiveReplyRouterPrompt = envOrAny([]string{"DIANA_PROACTIVE_REPLY_ROUTER_PROMPT", "DIANA_PASSIVE_REPLY_ROUTER_PROMPT"}, cfg.ProactiveReplyRouterPrompt)
+	cfg.ProactiveReplyPrompt = envOrAny([]string{"DIANA_PROACTIVE_REPLY_PROMPT", "DIANA_PASSIVE_REPLY_PROMPT"}, cfg.ProactiveReplyPrompt)
 	cfg.ErrorReplyPrefix = envOr("DIANA_ERROR_REPLY_PREFIX", cfg.ErrorReplyPrefix)
 	cfg.SendRetryAttempts = intFromEnv("DIANA_SEND_RETRY_ATTEMPTS", cfg.SendRetryAttempts)
 	cfg.SendChunkIntervalMS = intFromEnv("DIANA_SEND_CHUNK_INTERVAL_MS", cfg.SendChunkIntervalMS)
@@ -535,11 +535,16 @@ func qqBotConfigFromEnv() assistant.BotConfig {
 	cfg.LLMQQIDMaskingEnabled = &llmQQIDMaskingEnabled
 	cfg.RecentContextLimit = intFromEnv("DIANA_RECENT_GROUP_CONTEXT_LIMIT", cfg.RecentContextLimit)
 	cfg.ContextSummaryThreshold = intFromEnv("DIANA_CONTEXT_SUMMARY_THRESHOLD", cfg.ContextSummaryThreshold)
-	if chance, ok := floatFromEnv("DIANA_PASSIVE_REPLY_CHANCE"); ok {
-		cfg.PassiveReplyChance = chance
+	if chance, ok := floatFromEnvAny("DIANA_PROACTIVE_REPLY_CHANCE", "DIANA_PASSIVE_REPLY_CHANCE"); ok {
+		cfg.ProactiveReplyChance = chance
 	}
-	if threshold, ok := floatFromEnv("DIANA_PASSIVE_REPLY_THRESHOLD"); ok {
-		cfg.PassiveReplyThreshold = threshold
+	if threshold, ok := floatFromEnv("DIANA_PROACTIVE_REPLY_THRESHOLD"); ok {
+		cfg.ProactiveReplyThreshold = threshold
+	} else if threshold, ok := floatFromEnv("DIANA_PASSIVE_REPLY_THRESHOLD"); ok {
+		if threshold == 0.8 {
+			threshold = 0.9
+		}
+		cfg.ProactiveReplyThreshold = threshold
 	}
 	cfg.MaxBotConcurrency = intFromEnv("DIANA_MAX_BOT_CONCURRENCY", cfg.MaxBotConcurrency)
 	cfg.RequestTimeout = time.Duration(int64FromEnv("DIANA_HTTP_TIMEOUT_SECONDS", int64(cfg.RequestTimeout.Seconds()))) * time.Second
@@ -785,4 +790,13 @@ func floatFromEnv(key string) (float64, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+func floatFromEnvAny(keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if value, ok := floatFromEnv(key); ok {
+			return value, true
+		}
+	}
+	return 0, false
 }

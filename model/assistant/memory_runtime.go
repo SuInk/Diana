@@ -428,6 +428,7 @@ func forgetRolledUpSummaries(ctx context.Context, store StructuredMemoryStore, j
 }
 
 func (r *Runtime) enqueueEventMemory(event MessageEvent, text string) {
+	event = withoutReplyRuntimeState(event)
 	cfg := r.effectiveConfigForEvent(event)
 	if !memoryEventEligible(cfg, event, text) || hasKnownResolverPlatformURL(event, text) {
 		return

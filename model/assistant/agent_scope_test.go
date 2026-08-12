@@ -110,6 +110,55 @@ func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
 	}
 }
 
+func TestOwnerAgentRegistryReusesSharedExtensionsAcrossRequests(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := DefaultBotConfig()
+	cfg.AgentWorkDir = workDir
+	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
+	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner"}
+	policy := RelationshipPolicy{Owner: true}
+
+	first, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := runtime.sharedAgentRegistry(context.Background(), agent.Config{
+		WorkDir:             cfg.AgentWorkDir,
+		MaxSteps:            cfg.AgentMaxSteps,
+		SkillRoots:          cfg.AgentSkillRoots,
+		MCPConfigPath:       cfg.AgentMCPConfigPath,
+		ExtensionManagement: true,
+		BuiltinExtensions:   runtime.agentBuiltinExtensions(event),
+		CommandAllowlist:    cfg.AgentCommandAllowlist,
+		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
+		BrowserCDPURL:       cfg.AgentBrowserCDPURL,
+		BrowserTimeoutMS:    cfg.AgentBrowserTimeoutMS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Register(&scopeTestTool{name: "mcp__shared__probe"})
+	if _, ok := first.Get("mcp__shared__probe"); !ok {
+		t.Fatal("existing request did not see shared extension update")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if _, ok := second.Get("mcp__shared__probe"); !ok {
+		t.Fatal("closing first request closed or discarded the shared registry")
+	}
+	if len(runtime.agentRegistryCache) != 1 {
+		t.Fatalf("shared registry cache entries = %d, want 1", len(runtime.agentRegistryCache))
+	}
+}
+
 func TestFilterAgentReplyHistoryKeepsSelectedReferencesAndNeighbors(t *testing.T) {
 	history := make([]MessageEvent, 0, 10)
 	for index := 1; index <= 10; index++ {
@@ -200,7 +249,7 @@ func TestQQSystemPromptOmitsUnselectedToolRules(t *testing.T) {
 	}
 }
 
-func TestReplyToSkipsAgentProtocolWhenRouterSelectsNoTools(t *testing.T) {
+func TestReplyToUsesSingleAgentDecisionWithoutPreRouter(t *testing.T) {
 	provider := &scopeRouteProvider{response: `{
 		"action":"none",
 		"prompt":"",
@@ -220,23 +269,30 @@ func TestReplyToSkipsAgentProtocolWhenRouterSelectsNoTools(t *testing.T) {
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	provider.reply = "普通自然语言回复"
+	provider.reply = `{"action":"final","content":"普通自然语言回复"}`
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", MessageID: "m1", RawMessage: "你好"}
 
 	reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != provider.reply || provider.replyCalls != 1 {
+	if reply != "普通自然语言回复" || provider.replyCalls != 1 {
 		t.Fatalf("reply = %q reply calls = %d", reply, provider.replyCalls)
 	}
-	if len(channel.sent) != 1 || channel.sent[0].Text != provider.reply {
+	if len(channel.sent) != 1 || channel.sent[0].Text != "普通自然语言回复" {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
+	if len(provider.request.Messages) != 0 {
+		t.Fatalf("legacy pre-router was called: %#v", provider.request.Messages)
+	}
+	foundProtocol := false
 	for _, message := range provider.replyRequest.Messages {
-		if strings.Contains(message.Content, "Diana QQ Bot 的内置 Agent") || strings.Contains(message.Content, `{"action":"tool"`) {
-			t.Fatalf("ordinary reply leaked Agent protocol: %s", message.Content)
+		if strings.Contains(message.Content, "Diana QQ Bot 的内置 Agent") && strings.Contains(message.Content, `{"action":"tool"`) {
+			foundProtocol = true
 		}
+	}
+	if !foundProtocol {
+		t.Fatalf("Agent protocol missing: %#v", provider.replyRequest.Messages)
 	}
 }
 

@@ -119,6 +119,48 @@ func TestMCPRegistryCallsStdioTool(t *testing.T) {
 	}
 }
 
+func TestMCPToolSurvivesRequestViewClose(t *testing.T) {
+	if os.Getenv("DIANA_AGENT_MCP_TEST_SERVER") == "1" {
+		runMCPTestServer()
+		return
+	}
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".mcp.json")
+	body := fmt.Sprintf(`{"mcpServers":{"demo":{"command":%q,"args":["-test.run=TestMCPToolSurvivesRequestViewClose"],"env":{"DIANA_AGENT_MCP_TEST_SERVER":"1"}}}}`, os.Args[0])
+	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{WorkDir: dir, MCPConfigPath: configPath, MCPStartupTimeoutMS: 3000, MCPToolTimeoutMS: 3000}
+	base, err := NewAgentToolRegistry(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Close()
+	first, err := base.NewView(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := first.Get("mcp__demo__echo"); !ok {
+		t.Fatal("first request view is missing MCP tool")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := base.NewView(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	echo, ok := second.Get("mcp__demo__echo")
+	if !ok {
+		t.Fatal("closing first request view closed shared MCP tool")
+	}
+	got, err := echo.Run(context.Background(), map[string]any{"text": "still-live"})
+	if err != nil || got != "echo: still-live" {
+		t.Fatalf("echo output=%q err=%v", got, err)
+	}
+}
+
 func TestMCPInstallToolPersistsAndRefreshesRegistry(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{

@@ -148,6 +148,14 @@
           <label for="group-maxreply">回复上限（字符）</label>
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
+        <div class="field">
+          <label for="group-proactive-chance">主动回复采样率</label>
+          <input id="group-proactive-chance" v-model.number="editing.proactive_reply_chance" class="input" type="number" min="0.05" max="1" step="0.05" />
+        </div>
+        <div class="field">
+          <label for="group-proactive-threshold">主动回复置信度阈值</label>
+          <input id="group-proactive-threshold" v-model.number="editing.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
+        </div>
         <div class="field wide">
           <label>本群回复时间与屏蔽 QQ 号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />

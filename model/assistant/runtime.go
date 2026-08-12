@@ -33,13 +33,14 @@ type LLMProviderConfigFactory func(llm.ProviderConfig) (LLMProvider, error)
 type replyRuleContextKey struct{}
 
 const (
-	passiveReplyMaxRunes         = 180
-	passiveReplyRouteConcurrency = 8
-	semanticRouteTimeout         = 20 * time.Second
-	llmTransientRetryDelay       = 700 * time.Millisecond
-	llmTransientMaxRetries       = 1
-	passiveReplyRouteBudget      = 60 * time.Second
-	replyRuleRouteBudget         = 15 * time.Second
+	proactiveReplyMaxRunes         = 180
+	proactiveReplyRouteConcurrency = 8
+	relationshipEvalConcurrency    = 4
+	semanticRouteTimeout           = 20 * time.Second
+	llmTransientRetryDelay         = 700 * time.Millisecond
+	llmTransientMaxRetries         = 1
+	proactiveReplyRouteBudget      = 60 * time.Second
+	replyRuleRouteBudget           = 15 * time.Second
 )
 
 type LLMProfileStore interface {
@@ -161,7 +162,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "消息命中当前回复触发规则", true
 	case "replied_direct_followup":
 		return "replied", "用户直接回复了机器人，语义路由判断应继续回答", true
-	case "replied_passive", "replied_passive_batch":
+	case "replied_proactive", "replied_proactive_batch", "replied_passive", "replied_passive_batch":
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
@@ -181,7 +182,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "消息已超过离线恢复窗口，为避免补发过期回复而忽略", false
 	case "ignored_policy":
 		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
-	case "superseded_passive":
+	case "superseded_proactive", "superseded_passive":
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
 	case "dropped_outbound_delivery":
 		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
@@ -235,42 +236,46 @@ type Runtime struct {
 	quietNotices              map[string]time.Time
 
 	// sem 控制同时生成回复的 worker 数，history/recent 支撑上下文和状态页展示。
-	sem                 chan struct{}
-	passiveRouteSem     chan struct{}
-	history             map[string][]MessageEvent
-	contextSummaries    map[string]string
-	recent              []EventRecord
-	activeMu            sync.Mutex
-	active              int
-	reminderMu          sync.Mutex
-	activeReminders     map[string]struct{}
-	inboundWake         chan struct{}
-	inboundDone         chan struct{}
-	memoryWake          chan struct{}
-	memoryDone          chan struct{}
-	inboundReadyMu      sync.RWMutex
-	inboundReady        bool
-	inboundInit         bool
-	subagentMu          sync.Mutex
-	subagentTasks       map[string]activeSubagentTask
-	subagentSem         chan struct{}
-	subagentLLMSem      chan struct{}
-	replySuppressMu     sync.Mutex
-	replySuppressByUser map[string]ReplySuppression
-	replyOutboundGateMu sync.Mutex
-	replyOutboundGates  map[string]*replySuppressionOutboundGate
-	replyRefusalMu      sync.Mutex
-	replyRefusalByUser  map[string]replyRefusalState
-	botReplyLoopMu      sync.Mutex
-	botReplyLoopByKey   map[string]botReplyLoopState
-	passiveBatchMu      sync.Mutex
-	passiveBatches      map[string]*passiveReplyBatch
-	passiveBatchWindow  time.Duration
-	passiveBatchMaxWait time.Duration
-	unavailableGroupMu  sync.RWMutex
-	unavailableGroups   map[string]unavailableGroupSend
-	outboundDeliveryMu  sync.Mutex
-	outboundDeliveries  map[string]*groupOutboundDelivery
+	sem                   chan struct{}
+	proactiveRouteSem     chan struct{}
+	relationshipEvalSem   chan struct{}
+	relationshipEvalWG    sync.WaitGroup
+	history               map[string][]MessageEvent
+	contextSummaries      map[string]string
+	recent                []EventRecord
+	activeMu              sync.Mutex
+	active                int
+	reminderMu            sync.Mutex
+	activeReminders       map[string]struct{}
+	inboundWake           chan struct{}
+	inboundDone           chan struct{}
+	memoryWake            chan struct{}
+	memoryDone            chan struct{}
+	inboundReadyMu        sync.RWMutex
+	inboundReady          bool
+	inboundInit           bool
+	subagentMu            sync.Mutex
+	subagentTasks         map[string]activeSubagentTask
+	subagentSem           chan struct{}
+	subagentLLMSem        chan struct{}
+	replySuppressMu       sync.Mutex
+	replySuppressByUser   map[string]ReplySuppression
+	replyOutboundGateMu   sync.Mutex
+	replyOutboundGates    map[string]*replySuppressionOutboundGate
+	replyRefusalMu        sync.Mutex
+	replyRefusalByUser    map[string]replyRefusalState
+	botReplyLoopMu        sync.Mutex
+	botReplyLoopByKey     map[string]botReplyLoopState
+	proactiveBatchMu      sync.Mutex
+	proactiveBatches      map[string]*proactiveReplyBatch
+	proactiveBatchWindow  time.Duration
+	proactiveBatchMaxWait time.Duration
+	unavailableGroupMu    sync.RWMutex
+	unavailableGroups     map[string]unavailableGroupSend
+	outboundDeliveryMu    sync.Mutex
+	outboundDeliveries    map[string]*groupOutboundDelivery
+	agentRegistryMu       sync.Mutex
+	agentRegistryCache    map[string]*agent.ToolRegistry
 }
 
 // SetLLMProviderConfigFactory 注入按 profile 配置创建 LLM provider 的工厂。
@@ -379,37 +384,39 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		plugins = NewDefaultPluginManager()
 	}
 	runtime := &Runtime{
-		cfg:                 cfg,
-		profileConfigs:      map[string]BotConfig{cfg.ID: cfg},
-		channel:             channel,
-		bridge:              NewNoneBotBridge(bridgeConfigFromBotConfig(cfg), channel),
-		plugins:             plugins,
-		llmStore:            llmStore,
-		modelLister:         defaultLLMModelLister,
-		reminders:           reminders,
-		configSaver:         configSaver,
-		llmFactory:          llmFactory,
-		updatedAt:           time.Now(),
-		sem:                 make(chan struct{}, cfg.MaxBotConcurrency),
-		passiveRouteSem:     make(chan struct{}, passiveReplyRouteConcurrency),
-		history:             map[string][]MessageEvent{},
-		contextSummaries:    map[string]string{},
-		activeReminders:     map[string]struct{}{},
-		replySuppressByUser: map[string]ReplySuppression{},
-		replyOutboundGates:  map[string]*replySuppressionOutboundGate{},
-		replyRefusalByUser:  map[string]replyRefusalState{},
-		botReplyLoopByKey:   map[string]botReplyLoopState{},
-		passiveBatches:      map[string]*passiveReplyBatch{},
-		passiveBatchWindow:  defaultPassiveReplyBatchWindow,
-		passiveBatchMaxWait: defaultPassiveReplyBatchMaxWait,
-		unavailableGroups:   map[string]unavailableGroupSend{},
-		outboundDeliveries:  map[string]*groupOutboundDelivery{},
-		quietNotices:        map[string]time.Time{},
-		inboundWake:         make(chan struct{}, 1),
-		memoryWake:          make(chan struct{}, 1),
-		subagentTasks:       map[string]activeSubagentTask{},
-		subagentSem:         make(chan struct{}, defaultSubagentTaskConcurrency),
-		subagentLLMSem:      make(chan struct{}, subagentLLMConcurrency(cfg.MaxBotConcurrency)),
+		cfg:                   cfg,
+		profileConfigs:        map[string]BotConfig{cfg.ID: cfg},
+		channel:               channel,
+		bridge:                NewNoneBotBridge(bridgeConfigFromBotConfig(cfg), channel),
+		plugins:               plugins,
+		llmStore:              llmStore,
+		modelLister:           defaultLLMModelLister,
+		reminders:             reminders,
+		configSaver:           configSaver,
+		llmFactory:            llmFactory,
+		updatedAt:             time.Now(),
+		sem:                   make(chan struct{}, cfg.MaxBotConcurrency),
+		proactiveRouteSem:     make(chan struct{}, proactiveReplyRouteConcurrency),
+		relationshipEvalSem:   make(chan struct{}, relationshipEvalConcurrency),
+		history:               map[string][]MessageEvent{},
+		contextSummaries:      map[string]string{},
+		activeReminders:       map[string]struct{}{},
+		replySuppressByUser:   map[string]ReplySuppression{},
+		replyOutboundGates:    map[string]*replySuppressionOutboundGate{},
+		replyRefusalByUser:    map[string]replyRefusalState{},
+		botReplyLoopByKey:     map[string]botReplyLoopState{},
+		proactiveBatches:      map[string]*proactiveReplyBatch{},
+		proactiveBatchWindow:  defaultProactiveReplyBatchWindow,
+		proactiveBatchMaxWait: defaultProactiveReplyBatchMaxWait,
+		unavailableGroups:     map[string]unavailableGroupSend{},
+		outboundDeliveries:    map[string]*groupOutboundDelivery{},
+		agentRegistryCache:    map[string]*agent.ToolRegistry{},
+		quietNotices:          map[string]time.Time{},
+		inboundWake:           make(chan struct{}, 1),
+		memoryWake:            make(chan struct{}, 1),
+		subagentTasks:         map[string]activeSubagentTask{},
+		subagentSem:           make(chan struct{}, defaultSubagentTaskConcurrency),
+		subagentLLMSem:        make(chan struct{}, subagentLLMConcurrency(cfg.MaxBotConcurrency)),
 	}
 	runtime.members = newMemberCache(runtime.CallOneBotAPI)
 	return runtime
@@ -505,8 +512,13 @@ func (r *Runtime) Start(parent context.Context) error {
 	r.updatedAt = time.Now()
 	// 配置里的最大并发数可能变更，启动时重建 semaphore 才能立即生效。
 	r.sem = make(chan struct{}, cfg.MaxBotConcurrency)
+	prewarmConfigs := make([]BotConfig, 0, len(r.profileConfigs))
+	for _, profile := range r.profileConfigs {
+		prewarmConfigs = append(prewarmConfigs, profile)
+	}
 	r.mu.Unlock()
 	r.setInboundReady(false)
+	go r.prewarmAgentRegistries(ctx, prewarmConfigs)
 
 	go func() {
 		// 提醒循环、NoneBot 桥接和 OneBot 主连接共享同一个启动生命周期。
@@ -543,7 +555,7 @@ func (r *Runtime) Stop() error {
 	if cancel != nil {
 		cancel()
 	}
-	r.clearPassiveReplyBatches()
+	r.clearProactiveReplyBatches()
 	if r.bridge != nil {
 		r.bridge.Stop()
 	}
@@ -563,6 +575,7 @@ func (r *Runtime) Stop() error {
 			log.Printf("qqbot memory workers did not stop within 5s; their leases will expire safely")
 		}
 	}
+	r.closeAgentRegistryCache()
 	return err
 }
 
@@ -586,6 +599,8 @@ func (r *Runtime) UpdateConfig(ctx context.Context, cfg BotConfig, channel Chann
 	if wasRunning {
 		// 运行中修改 WebSocket/token 等连接参数时，先停掉旧连接再替换配置。
 		_ = r.Stop()
+	} else {
+		r.closeAgentRegistryCache()
 	}
 
 	r.mu.Lock()
@@ -938,8 +953,8 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
-	cfg.PassiveReplyChance = groupCfg.PassiveReplyChance
-	cfg.PassiveReplyThreshold = groupCfg.PassiveReplyThreshold
+	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
+	cfg.ProactiveReplyThreshold = groupCfg.ProactiveReplyThreshold
 	if groupCfg.ReplyGate != nil {
 		cfg.ReplyGate = groupCfg.ReplyGate.Clone()
 	}
@@ -1080,6 +1095,8 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	}
 	r.remember(event)
 	history := r.contextHistory(event)
+	event.replyHistory = history
+	event.replyHistoryLoaded = true
 	ctx = r.withQQPrivacyContext(ctx, event, history)
 	if ignored, decision := r.shouldIgnoreGroupReplyByMemberLevel(ctx, event); ignored {
 		r.recordGroupReplyLevelIgnored(ctx, event, decision)
@@ -1127,30 +1144,31 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	handled := r.shouldHandle(event, text)
 	successOutcome := "replied"
 	if handled {
-		// Clear batches left by a runtime started before direct passive routing was enabled.
-		r.cancelPassiveReplyBatch(event)
+		// Clear batches left by a runtime started before immediate proactive routing was enabled.
+		r.cancelProactiveReplyBatch(event)
 	}
-	considerPassive, passiveSkipReason := false, ""
+	considerProactive, proactiveSkipReason := false, ""
 	if !handled {
-		considerPassive, passiveSkipReason = r.passiveReplyConsideration(event, text)
+		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
 	}
-	if !handled && considerPassive {
+	if !handled && considerProactive {
 		// Judge each candidate immediately. The semantic router already receives
 		// recent group context, so a debounce batch only adds latency and leaves the
 		// durable inbound outcome unresolved.
-		r.cancelPassiveReplyBatch(event)
-		event, text, _, handled = r.routePassiveReplyBatch(ctx, []passiveReplyCandidate{{Event: event, Text: text}})
+		r.cancelProactiveReplyBatch(event)
+		event, text, _, handled = r.routeProactiveReplyBatch(ctx, []proactiveReplyCandidate{{Event: event, Text: text}})
 		if handled {
-			successOutcome = "replied_passive"
+			successOutcome = "replied_proactive"
 		}
 	}
 	if !handled && strings.TrimSpace(event.routingReason) == "" {
-		event.routingReason = passiveSkipReason
+		event.routingReason = proactiveSkipReason
 	}
-	evaluation, before, evaluated := r.evaluateRelationshipUpdate(ctx, event, text, handled)
-	after, stored := r.updateUserMemory(event, evaluation.effectiveDelta())
-	if evaluated && stored {
-		r.recordRelationshipEvaluation(ctx, event, before, after, evaluation)
+	// Persist the interaction immediately, but keep the optional semantic
+	// relationship evaluation off the user-visible reply critical path.
+	if profile, stored := r.updateUserMemory(event, 0); stored {
+		event.userProfile = profile
+		event.userProfileLoaded = true
 	}
 	if !handled {
 		r.maybeNotifyQuietHours(ctx, event, text)
@@ -1195,10 +1213,10 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "ignored_response_suppression", nil
 		}
-		if errors.Is(err, errPassiveReplySuperseded) {
-			setEventRecordOutcome(&record, "superseded_passive")
+		if errors.Is(err, errProactiveReplySuperseded) {
+			setEventRecordOutcome(&record, "superseded_proactive")
 			r.record(record)
-			return "superseded_passive", err
+			return "superseded_proactive", err
 		}
 		record.Error = err.Error()
 		r.setError(err.Error())
@@ -1250,6 +1268,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	record.Reply = reply
 	r.setError("")
 	r.record(record)
+	r.enqueueRelationshipEvaluation(event, text)
 	return successOutcome, nil
 }
 
@@ -1445,19 +1464,19 @@ func quotedPromptItems(items []string) string {
 	return strings.Join(quoted, "、")
 }
 
-func (r *Runtime) shouldConsiderPassiveReply(event MessageEvent, text string) bool {
-	consider, _ := r.passiveReplyConsideration(event, text)
+func (r *Runtime) shouldConsiderProactiveReply(event MessageEvent, text string) bool {
+	consider, _ := r.proactiveReplyConsideration(event, text)
 	return consider
 }
 
-func (r *Runtime) passiveReplyConsideration(event MessageEvent, text string) (bool, string) {
+func (r *Runtime) proactiveReplyConsideration(event MessageEvent, text string) (bool, string) {
 	if event.Kind != EventKindGroup {
 		return false, "消息不是群聊事件，未进入群聊主动回复判断"
 	}
 	if !r.admits(r.effectiveConfigForEvent(event), event) {
 		return false, "当前用户、群聊或回复权限规则不允许处理这条消息"
 	}
-	if passiveReplyTriggerText(event, text) == "" && !hasReplyCandidateImage(event.Segments) {
+	if proactiveReplyTriggerText(event, text) == "" && !hasReplyCandidateImage(event.Segments) {
 		return false, "消息没有可供主动回复模型判断的文字或图片内容"
 	}
 	r.mu.RLock()
@@ -1469,16 +1488,16 @@ func (r *Runtime) passiveReplyConsideration(event MessageEvent, text string) (bo
 	return true, ""
 }
 
-func (r *Runtime) shouldHandlePassiveReply(ctx context.Context, event MessageEvent, text string) bool {
-	_, _, _, allowed := r.routePassiveReplyBatch(ctx, []passiveReplyCandidate{{Event: event, Text: text}})
+func (r *Runtime) shouldHandleProactiveReply(ctx context.Context, event MessageEvent, text string) bool {
+	_, _, _, allowed := r.routeProactiveReplyBatch(ctx, []proactiveReplyCandidate{{Event: event, Text: text}})
 	return allowed
 }
 
-func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passiveReplyCandidate) (MessageEvent, string, []passiveReplyCandidate, bool) {
+func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []proactiveReplyCandidate) (MessageEvent, string, []proactiveReplyCandidate, bool) {
 	if len(candidates) == 0 {
 		return MessageEvent{}, "", nil, false
 	}
-	eligible := make([]passiveReplyCandidate, 0, len(candidates))
+	eligible := make([]proactiveReplyCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if ignored, decision := r.shouldIgnoreGroupReplyByMemberLevel(ctx, candidate.Event); ignored {
 			r.recordGroupReplyLevelIgnored(ctx, candidate.Event, decision)
@@ -1495,22 +1514,22 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 	latest := candidates[len(candidates)-1]
 	event, text := latest.Event, latest.Text
 	select {
-	case r.passiveRouteSem <- struct{}{}:
-		defer func() { <-r.passiveRouteSem }()
+	case r.proactiveRouteSem <- struct{}{}:
+		defer func() { <-r.proactiveRouteSem }()
 	case <-ctx.Done():
 		event.routingReason = "主动回复判断在等待并发名额时被取消：" + ctx.Err().Error()
 		return event, text, nil, false
 	}
 	cfg := r.effectiveConfigForEvent(event)
-	payload := r.passiveReplyPayload(event, readableEventText(event, text))
+	payload := r.proactiveReplyPayload(event, readableEventText(event, text))
 	for _, candidate := range candidates {
-		payload.Candidates = append(payload.Candidates, passiveReplyCandidatePayload{
+		payload.Candidates = append(payload.Candidates, proactiveReplyCandidatePayload{
 			MessageID:  strings.TrimSpace(candidate.Event.MessageID),
 			UserID:     strings.TrimSpace(candidate.Event.UserID),
 			Sender:     strings.TrimSpace(candidate.Event.SenderNameOrID()),
 			Text:       truncateRunesFromStart(strings.TrimSpace(readableEventText(candidate.Event, candidate.Text)), 180),
 			Images:     len(ImageURLs(candidate.Event.Segments)),
-			AgeSeconds: passiveReplyMessageAge(latest.Event.Time, candidate.Event.Time),
+			AgeSeconds: proactiveReplyMessageAge(latest.Event.Time, candidate.Event.Time),
 		})
 	}
 	payloadJSON, err := json.Marshal(payload)
@@ -1518,7 +1537,7 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 		event.routingReason = "主动回复判断上下文编码失败，已保持沉默：" + err.Error()
 		return event, text, nil, false
 	}
-	routeCtx, cancel := context.WithTimeout(ctx, passiveReplyRouteTimeout(cfg))
+	routeCtx, cancel := context.WithTimeout(ctx, proactiveReplyRouteTimeout(cfg))
 	defer cancel()
 	routeUserMessage := llmMessageFromEventWithImagesForContext(
 		routeCtx,
@@ -1529,7 +1548,7 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: passiveReplyRouterSystemPrompt(cfg.PassiveReplyRouterPrompt),
+			Content: proactiveReplyRouterSystemPrompt(cfg.ProactiveReplyRouterPrompt),
 		},
 		routeUserMessage,
 	}
@@ -1541,25 +1560,26 @@ func (r *Runtime) routePassiveReplyBatch(ctx context.Context, candidates []passi
 		return resp.Text, nil
 	})
 	if err != nil {
-		r.recordPassiveReplyRouteError(ctx, event, err)
+		r.recordProactiveReplyRouteError(ctx, event, err)
 		event.routingReason = "主动回复判断失败，已保持沉默：" + err.Error()
 		return event, text, nil, false
 	}
-	decision, parsed := parsePassiveReplyDecision(raw)
-	event, text = selectPassiveReplyCandidate(candidates, decision.TargetMessageID)
-	turn := selectPassiveReplyTurn(candidates, event.MessageID, decision.TurnMessageIDs)
-	decisionAllowed := parsed && decision.allows(cfg.PassiveReplyThreshold)
+	decision, parsed := parseProactiveReplyDecision(raw)
+	event, text = selectProactiveReplyCandidate(candidates, decision.TargetMessageID)
+	turn := selectProactiveReplyTurn(candidates, event.MessageID, decision.TurnMessageIDs)
+	decisionAllowed := parsed && decision.allows(cfg.ProactiveReplyThreshold)
 	sampleAllowed := true
 	if decisionAllowed && !decision.qualifiedBotFollowup() {
-		sampleAllowed = passiveReplySampleAllows(event, text, cfg.PassiveReplyChance)
+		sampleAllowed = proactiveReplySampleAllows(event, text, cfg.ProactiveReplyChance)
 	}
 	allowed := decisionAllowed && sampleAllowed
-	event.routingReason = passiveReplyDecisionReason(decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg)
-	r.recordPassiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg, raw)
+	event.proactiveReply = allowed
+	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg)
+	r.recordProactiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg, raw)
 	return event, text, turn, allowed
 }
 
-func passiveReplyDecisionReason(decision passiveReplyDecision, parsed, decisionAllowed, sampleAllowed, allowed bool, cfg BotConfig) string {
+func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decisionAllowed, sampleAllowed, allowed bool, cfg BotConfig) string {
 	if !parsed {
 		return "主动回复判断模型返回了无法解析的结果，已保持沉默"
 	}
@@ -1570,7 +1590,7 @@ func passiveReplyDecisionReason(decision passiveReplyDecision, parsed, decisionA
 	metrics := fmt.Sprintf("分类 %s，置信度 %.0f%%，阈值 %.0f%%，指向机器人 %t，可回答 %t",
 		firstNonEmpty(strings.TrimSpace(decision.Category), "unknown"),
 		decision.Confidence*100,
-		cfg.PassiveReplyThreshold*100,
+		cfg.ProactiveReplyThreshold*100,
 		decision.DirectedAtBot,
 		decision.Answerable,
 	)
@@ -1578,19 +1598,19 @@ func passiveReplyDecisionReason(decision passiveReplyDecision, parsed, decisionA
 	case allowed:
 		return fmt.Sprintf("主动回复判断允许回复：%s（%s）", detail, metrics)
 	case decisionAllowed && !sampleAllowed:
-		return fmt.Sprintf("主动回复判断允许回复，但未命中 %.0f%% 的主动回复采样率：%s（%s）", cfg.PassiveReplyChance*100, detail, metrics)
+		return fmt.Sprintf("主动回复判断允许回复，但未命中 %.0f%% 的主动回复采样率：%s（%s）", cfg.ProactiveReplyChance*100, detail, metrics)
 	case !decision.ShouldReply:
 		return fmt.Sprintf("主动回复判断不建议回复：%s（%s）", detail, metrics)
 	case !decision.Answerable:
 		return fmt.Sprintf("主动回复判断认为现有信息不足以可靠回答：%s（%s）", detail, metrics)
-	case decision.Confidence < cfg.PassiveReplyThreshold:
+	case decision.Confidence < cfg.ProactiveReplyThreshold:
 		return fmt.Sprintf("主动回复判断置信度低于阈值：%s（%s）", detail, metrics)
 	default:
 		return fmt.Sprintf("主动回复判断未通过分类或指向性约束：%s（%s）", detail, metrics)
 	}
 }
 
-func selectPassiveReplyCandidate(candidates []passiveReplyCandidate, messageID string) (MessageEvent, string) {
+func selectProactiveReplyCandidate(candidates []proactiveReplyCandidate, messageID string) (MessageEvent, string) {
 	messageID = strings.TrimSpace(messageID)
 	if messageID != "" {
 		for _, candidate := range candidates {
@@ -1603,7 +1623,7 @@ func selectPassiveReplyCandidate(candidates []passiveReplyCandidate, messageID s
 	return latest.Event, latest.Text
 }
 
-func selectPassiveReplyTurn(candidates []passiveReplyCandidate, targetMessageID string, turnMessageIDs []string) []passiveReplyCandidate {
+func selectProactiveReplyTurn(candidates []proactiveReplyCandidate, targetMessageID string, turnMessageIDs []string) []proactiveReplyCandidate {
 	selected := make(map[string]bool, len(turnMessageIDs)+1)
 	if targetMessageID = strings.TrimSpace(targetMessageID); targetMessageID != "" {
 		selected[targetMessageID] = true
@@ -1613,7 +1633,7 @@ func selectPassiveReplyTurn(candidates []passiveReplyCandidate, targetMessageID 
 			selected[messageID] = true
 		}
 	}
-	turn := make([]passiveReplyCandidate, 0, len(selected))
+	turn := make([]proactiveReplyCandidate, 0, len(selected))
 	for _, candidate := range candidates {
 		messageID := strings.TrimSpace(candidate.Event.MessageID)
 		if selected[messageID] {
@@ -1635,33 +1655,33 @@ func hasReplyCandidateImage(segments []MessageSegment) bool {
 	return false
 }
 
-func passiveReplyRouteTimeout(cfg BotConfig) time.Duration {
-	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < passiveReplyRouteBudget {
+func proactiveReplyRouteTimeout(cfg BotConfig) time.Duration {
+	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < proactiveReplyRouteBudget {
 		return cfg.RequestTimeout
 	}
-	return passiveReplyRouteBudget
+	return proactiveReplyRouteBudget
 }
 
-type passiveReplyPayload struct {
-	CurrentText                   string                         `json:"current_text"`
-	CurrentSender                 string                         `json:"current_sender,omitempty"`
-	CurrentImages                 int                            `json:"current_images"`
-	BotQQ                         string                         `json:"bot_qq,omitempty"`
-	BotAliases                    []string                       `json:"bot_aliases,omitempty"`
-	QuotedText                    string                         `json:"quoted_text,omitempty"`
-	QuotedSender                  string                         `json:"quoted_sender,omitempty"`
-	QuotedImages                  int                            `json:"quoted_images,omitempty"`
-	QuotedIsBot                   bool                           `json:"quoted_is_bot,omitempty"`
-	ContextGapSeconds             *int64                         `json:"context_gap_seconds,omitempty"`
-	LastBotMessage                *passiveReplyHistoryItem       `json:"last_bot_message,omitempty"`
-	LastBotAddressedCurrentSender bool                           `json:"last_bot_addressed_current_sender"`
-	MessagesAfterLastBot          *int                           `json:"messages_after_last_bot,omitempty"`
-	RecentImageCount              int                            `json:"recent_image_count"`
-	RecentMessages                []passiveReplyHistoryItem      `json:"recent_messages,omitempty"`
-	Candidates                    []passiveReplyCandidatePayload `json:"candidates,omitempty"`
+type proactiveReplyPayload struct {
+	CurrentText                   string                           `json:"current_text"`
+	CurrentSender                 string                           `json:"current_sender,omitempty"`
+	CurrentImages                 int                              `json:"current_images"`
+	BotQQ                         string                           `json:"bot_qq,omitempty"`
+	BotAliases                    []string                         `json:"bot_aliases,omitempty"`
+	QuotedText                    string                           `json:"quoted_text,omitempty"`
+	QuotedSender                  string                           `json:"quoted_sender,omitempty"`
+	QuotedImages                  int                              `json:"quoted_images,omitempty"`
+	QuotedIsBot                   bool                             `json:"quoted_is_bot,omitempty"`
+	ContextGapSeconds             *int64                           `json:"context_gap_seconds,omitempty"`
+	LastBotMessage                *proactiveReplyHistoryItem       `json:"last_bot_message,omitempty"`
+	LastBotAddressedCurrentSender bool                             `json:"last_bot_addressed_current_sender"`
+	MessagesAfterLastBot          *int                             `json:"messages_after_last_bot,omitempty"`
+	RecentImageCount              int                              `json:"recent_image_count"`
+	RecentMessages                []proactiveReplyHistoryItem      `json:"recent_messages,omitempty"`
+	Candidates                    []proactiveReplyCandidatePayload `json:"candidates,omitempty"`
 }
 
-type passiveReplyCandidatePayload struct {
+type proactiveReplyCandidatePayload struct {
 	MessageID  string `json:"message_id"`
 	UserID     string `json:"user_id,omitempty"`
 	Sender     string `json:"sender,omitempty"`
@@ -1670,7 +1690,7 @@ type passiveReplyCandidatePayload struct {
 	AgeSeconds *int64 `json:"age_seconds,omitempty"`
 }
 
-type passiveReplyHistoryItem struct {
+type proactiveReplyHistoryItem struct {
 	Sender     string `json:"sender,omitempty"`
 	Text       string `json:"text,omitempty"`
 	Images     int    `json:"images,omitempty"`
@@ -1678,9 +1698,9 @@ type passiveReplyHistoryItem struct {
 	AgeSeconds *int64 `json:"age_seconds,omitempty"`
 }
 
-func (r *Runtime) passiveReplyPayload(event MessageEvent, text string) passiveReplyPayload {
+func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proactiveReplyPayload {
 	cfg := r.effectiveConfigForEvent(event)
-	payload := passiveReplyPayload{
+	payload := proactiveReplyPayload{
 		CurrentText:      strings.TrimSpace(text),
 		CurrentSender:    strings.TrimSpace(event.SenderNameOrID()),
 		CurrentImages:    len(ImageURLs(event.Segments)),
@@ -1708,12 +1728,12 @@ func (r *Runtime) passiveReplyPayload(event MessageEvent, text string) passiveRe
 		if text == "" && imageCount == 0 {
 			continue
 		}
-		ageSeconds := passiveReplyMessageAge(event.Time, item.Time)
+		ageSeconds := proactiveReplyMessageAge(event.Time, item.Time)
 		if ageSeconds != nil && (payload.ContextGapSeconds == nil || *ageSeconds < *payload.ContextGapSeconds) {
 			gap := *ageSeconds
 			payload.ContextGapSeconds = &gap
 		}
-		historyItem := passiveReplyHistoryItem{
+		historyItem := proactiveReplyHistoryItem{
 			Sender:     strings.TrimSpace(item.SenderNameOrID()),
 			Text:       truncateRunesFromStart(text, 180),
 			Images:     imageCount,
@@ -1722,20 +1742,20 @@ func (r *Runtime) passiveReplyPayload(event MessageEvent, text string) passiveRe
 		}
 		if historyItem.IsBot && payload.LastBotMessage == nil {
 			lastBotMessage := historyItem
-			if botText := passiveReplyBotMessageText(item, event.UserID); botText != "" {
+			if botText := proactiveReplyBotMessageText(item, event.UserID); botText != "" {
 				lastBotMessage.Text = truncateRunesFromStart(botText, 180)
 			}
 			payload.LastBotMessage = &lastBotMessage
 			messagesAfterLastBot := len(payload.RecentMessages)
 			payload.MessagesAfterLastBot = &messagesAfterLastBot
-			payload.LastBotAddressedCurrentSender = passiveReplyBotMessageAddressesUser(item, history, event.UserID)
+			payload.LastBotAddressedCurrentSender = proactiveReplyBotMessageAddressesUser(item, history, event.UserID)
 		}
 		payload.RecentMessages = append(payload.RecentMessages, historyItem)
 	}
 	return payload
 }
 
-func passiveReplyBotMessageText(message MessageEvent, currentUserID string) string {
+func proactiveReplyBotMessageText(message MessageEvent, currentUserID string) string {
 	currentUserID = strings.TrimSpace(currentUserID)
 	segments := make([]MessageSegment, 0, len(message.Segments))
 	for _, segment := range message.Segments {
@@ -1753,7 +1773,7 @@ func passiveReplyBotMessageText(message MessageEvent, currentUserID string) stri
 	return strings.TrimSpace(historyPlainText(message))
 }
 
-func passiveReplyBotMessageAddressesUser(message MessageEvent, history []MessageEvent, userID string) bool {
+func proactiveReplyBotMessageAddressesUser(message MessageEvent, history []MessageEvent, userID string) bool {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return false
@@ -1784,7 +1804,7 @@ func passiveReplyBotMessageAddressesUser(message MessageEvent, history []Message
 	return false
 }
 
-func passiveReplyMessageAge(currentTime int64, previousTime int64) *int64 {
+func proactiveReplyMessageAge(currentTime int64, previousTime int64) *int64 {
 	if currentTime <= 0 || previousTime <= 0 || previousTime > currentTime {
 		return nil
 	}
@@ -1792,7 +1812,7 @@ func passiveReplyMessageAge(currentTime int64, previousTime int64) *int64 {
 	return &age
 }
 
-type passiveReplyDecision struct {
+type proactiveReplyDecision struct {
 	ShouldReply     bool     `json:"should_reply"`
 	Confidence      float64  `json:"confidence"`
 	Category        string   `json:"category"`
@@ -1803,11 +1823,11 @@ type passiveReplyDecision struct {
 	Reason          string   `json:"reason,omitempty"`
 }
 
-func (decision passiveReplyDecision) qualifiedBotFollowup() bool {
+func (decision proactiveReplyDecision) qualifiedBotFollowup() bool {
 	return strings.EqualFold(strings.TrimSpace(decision.Category), "bot_related") && decision.DirectedAtBot
 }
 
-func (decision passiveReplyDecision) allows(threshold float64) bool {
+func (decision proactiveReplyDecision) allows(threshold float64) bool {
 	if !decision.ShouldReply || decision.Confidence < threshold || decision.Confidence > 1 {
 		return false
 	}
@@ -1821,7 +1841,7 @@ func (decision passiveReplyDecision) allows(threshold float64) bool {
 	}
 }
 
-func passiveReplyRouterSystemPrompt(configured string) string {
+func proactiveReplyRouterSystemPrompt(configured string) string {
 	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
@@ -1830,12 +1850,12 @@ func passiveReplyRouterSystemPrompt(configured string) string {
 	return configured + "\n\n" + answerabilityGuard
 }
 
-func parsePassiveReplyDecision(raw string) (passiveReplyDecision, bool) {
+func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 	raw = strings.TrimSpace(stripJSONCodeFence(raw))
 	start := strings.Index(raw, "{")
 	end := strings.LastIndex(raw, "}")
 	if start < 0 || end < start {
-		return passiveReplyDecision{}, false
+		return proactiveReplyDecision{}, false
 	}
 	var payload struct {
 		ShouldReply     *bool    `json:"should_reply"`
@@ -1848,12 +1868,12 @@ func parsePassiveReplyDecision(raw string) (passiveReplyDecision, bool) {
 		Reason          *string  `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil {
-		return passiveReplyDecision{}, false
+		return proactiveReplyDecision{}, false
 	}
 	if payload.ShouldReply == nil || payload.Confidence == nil || payload.Category == nil {
-		return passiveReplyDecision{}, false
+		return proactiveReplyDecision{}, false
 	}
-	decision := passiveReplyDecision{
+	decision := proactiveReplyDecision{
 		ShouldReply: *payload.ShouldReply,
 		Confidence:  *payload.Confidence,
 		Category:    *payload.Category,
@@ -1876,12 +1896,12 @@ func parsePassiveReplyDecision(raw string) (passiveReplyDecision, bool) {
 		decision.Reason = strings.TrimSpace(*payload.Reason)
 	}
 	if decision.Confidence < 0 || decision.Confidence > 1 {
-		return passiveReplyDecision{}, false
+		return proactiveReplyDecision{}, false
 	}
 	return decision, true
 }
 
-func passiveReplySampleAllows(event MessageEvent, text string, chance float64) bool {
+func proactiveReplySampleAllows(event MessageEvent, text string, chance float64) bool {
 	if chance <= 0 {
 		return false
 	}
@@ -1898,7 +1918,7 @@ func passiveReplySampleAllows(event MessageEvent, text string, chance float64) b
 	return score < chance
 }
 
-func (r *Runtime) recordPassiveReplyRouteError(ctx context.Context, event MessageEvent, err error) {
+func (r *Runtime) recordProactiveReplyRouteError(ctx context.Context, event MessageEvent, err error) {
 	writer := r.appLogWriter()
 	if writer == nil || err == nil {
 		return
@@ -1906,8 +1926,8 @@ func (r *Runtime) recordPassiveReplyRouteError(ctx context.Context, event Messag
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.passive_reply_route",
-		Message: "被动回复欲望判断失败，已跳过主动插话",
+		Action:  "qqbot.proactive_reply_route",
+		Message: "主动回复判断失败，已保持沉默",
 		Detail:  err.Error(),
 		Actor:   qqEventActor(event),
 		Target:  event.MessageID,
@@ -1918,7 +1938,7 @@ func (r *Runtime) recordPassiveReplyRouteError(ctx context.Context, event Messag
 	})
 }
 
-func (r *Runtime) recordPassiveReplyRouteDecision(ctx context.Context, event MessageEvent, decision passiveReplyDecision, parsed bool, decisionAllowed bool, sampleAllowed bool, allowed bool, cfg BotConfig, raw string) {
+func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event MessageEvent, decision proactiveReplyDecision, parsed bool, decisionAllowed bool, sampleAllowed bool, allowed bool, cfg BotConfig, raw string) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -1926,8 +1946,8 @@ func (r *Runtime) recordPassiveReplyRouteDecision(ctx context.Context, event Mes
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.passive_reply_route",
-		Message: "LLM 已完成被动回复判断",
+		Action:  "qqbot.proactive_reply_route",
+		Message: "LLM 已完成主动回复判断",
 		Actor:   qqEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
@@ -1942,7 +1962,7 @@ func (r *Runtime) recordPassiveReplyRouteDecision(ctx context.Context, event Mes
 			"directed_at_bot":   decision.DirectedAtBot,
 			"answerable":        decision.Answerable,
 			"reason":            truncateRunesFromStart(decision.Reason, 160),
-			"threshold":         cfg.PassiveReplyThreshold,
+			"threshold":         cfg.ProactiveReplyThreshold,
 			"decision_allowed":  decisionAllowed,
 			"sample_allowed":    sampleAllowed,
 			"allowed":           allowed,
@@ -1951,7 +1971,7 @@ func (r *Runtime) recordPassiveReplyRouteDecision(ctx context.Context, event Mes
 	})
 }
 
-func (r *Runtime) recordPassiveReplySuperseded(ctx context.Context, event MessageEvent, newer MessageEvent, stage string) {
+func (r *Runtime) recordProactiveReplySuperseded(ctx context.Context, event MessageEvent, newer MessageEvent, stage string) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -1959,8 +1979,8 @@ func (r *Runtime) recordPassiveReplySuperseded(ctx context.Context, event Messag
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.passive_reply_superseded",
-		Message: "检测到新的候选消息，旧被动回复将交由 LLM 合并重判",
+		Action:  "qqbot.proactive_reply_superseded",
+		Message: "检测到新的候选消息，旧主动回复候选将交由 LLM 合并重判",
 		Actor:   qqEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
@@ -1970,9 +1990,9 @@ func (r *Runtime) recordPassiveReplySuperseded(ctx context.Context, event Messag
 			"new_message_id":          newer.MessageID,
 			"new_message_user_id":     newer.UserID,
 			"stage":                   stage,
-			"max_reroutes":            passiveReplyMaxReroutes,
-			"decision_max_items":      passiveReplyDecisionMaxItems,
-			"decision_window_seconds": int(passiveReplyDecisionWindow / time.Second),
+			"max_reroutes":            proactiveReplyMaxReroutes,
+			"decision_max_items":      proactiveReplyDecisionMaxItems,
+			"decision_window_seconds": int(proactiveReplyDecisionWindow / time.Second),
 		},
 	})
 }
@@ -2000,14 +2020,15 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 // replyTo 执行 owner 命令、插件和 LLM 回复链路。
 func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	ctx = r.withQQPrivacyContext(ctx, event, r.contextHistory(event))
+	replyHistory := r.contextHistory(event)
+	ctx = r.withQQPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
 
 	chatTriggered := r.shouldHandleChat(event, text)
 	resolverTriggered := r.shouldHandleResolver(event, text)
-	passiveTriggered := !chatTriggered && !resolverTriggered
+	proactiveTriggered := event.proactiveReply || len(proactiveReplyTurnFromContext(ctx)) > 0
 	cleanText := r.cleanInput(event, text)
 	if cfg.MaxInputChars > 0 && len([]rune(cleanText)) > cfg.MaxInputChars {
 		cleanText = string([]rune(cleanText)[:cfg.MaxInputChars])
@@ -2022,14 +2043,21 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if resolverTriggered {
 		return r.replyWithResolverOnly(ctx, event, cleanText)
 	}
-	replyHistory := r.contextHistory(event)
-	relationship := r.relationshipPolicy(ctx, event)
+	userProfile := event.userProfile
+	if !event.userProfileLoaded {
+		userProfile, _ = r.loadUserMemoryProfile(ctx, event)
+	}
+	relationship := RelationshipPolicyFor(userProfile, cfg.OwnerID, event.UserID)
 	overrides := r.pluginOverridesForEvent(event)
+	var recallEvents []MessageEvent
+	if recallHistoryQuery(cleanText) {
+		recallEvents = r.recallHistory(event)
+	}
 	pluginRequest := func(current MessageEvent, history []MessageEvent) PluginRequest {
 		return PluginRequest{
 			Event:                   current,
 			RecentEvents:            history,
-			RecallEvents:            r.recallHistory(current),
+			RecallEvents:            recallEvents,
 			Text:                    cleanText,
 			OwnerID:                 cfg.OwnerID,
 			SandboxedBrowserEnabled: r.plugins.EnabledWithOverrides(sandboxedBrowserPluginID, overrides),
@@ -2047,10 +2075,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		refreshRecallPluginResponse(recallResponse, recallsWithDescriptions)
 		pluginResponses = append(pluginResponses, *recallResponse)
 	} else {
-		event = r.enrichSemanticReference(ctx, event, cleanText)
-		replyHistory = r.contextHistory(event)
-		relationship = r.relationshipPolicy(ctx, event)
-		overrides = r.pluginOverridesForEvent(event)
+		// A full Agent already receives recent multimodal history and chooses its
+		// own tools. Keep the legacy semantic pre-router only for non-Agent mode.
+		if !cfg.AgentEnabled {
+			event = r.enrichSemanticReference(ctx, event, cleanText)
+			event.replyHistory = nil
+			event.replyHistoryLoaded = false
+			replyHistory = r.contextHistory(event)
+			event.replyHistory = replyHistory
+			event.replyHistoryLoaded = true
+			overrides = r.pluginOverridesForEvent(event)
+		}
 		pluginResponses = r.plugins.RunWithOverrides(ctx, pluginRequest(event, replyHistory), overrides)
 	}
 	pluginResponses = applyRecallReplyMode(pluginResponses, cfg.RecallReplyMode)
@@ -2119,10 +2154,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if agentRegistry != nil {
 		defer agentRegistry.Close()
 	}
+	directAgentDecision := fullAgentEnabled && agentRegistry != nil
 
 	var agentScope agentReplyScope
 	asyncImageTaskNotice := ""
-	if (chatTriggered || passiveTriggered) && !authoritativePluginContext {
+	if !directAgentDecision && (chatTriggered || proactiveTriggered) && !authoritativePluginContext {
 		routingRegistry := agentRegistry
 		if routingRegistry == nil {
 			routingRegistry = agent.NewToolRegistry()
@@ -2200,7 +2236,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
-	systemPrompt := r.systemPromptWithRelationshipAndAgentTools(event, pluginResponses, passiveTriggered, relationship, agentActive, agentRegistry)
+	systemPrompt := r.systemPromptWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
 	if asyncImageTaskNotice != "" {
 		systemPrompt += "\n" + asyncImageTaskNotice
 	}
@@ -2214,7 +2250,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt, Priority: llm.MessagePrioritySystem}}
 	messages = append(messages, pluginContextMessages(ctx, pluginResponses)...)
 	if !authoritativePluginContext {
-		if memoryContext := r.memoryContext(ctx, event, cleanText); memoryContext != "" {
+		if memoryContext := r.memoryContextWithProfile(ctx, event, cleanText, userProfile, relationship); memoryContext != "" {
 			messages = append(messages, llm.Message{
 				Role:     llm.RoleUser,
 				Content:  memoryContext,
@@ -2228,19 +2264,31 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Priority: llm.MessagePrioritySummary,
 			})
 		}
-		turnCandidates := passiveReplyTurnFromContext(ctx)
+		turnCandidates := proactiveReplyTurnFromContext(ctx)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
 		for _, candidate := range turnCandidates {
 			if messageID := strings.TrimSpace(candidate.Event.MessageID); messageID != "" && messageID != event.MessageID {
 				turnMessageIDs[messageID] = true
 			}
 		}
-		for _, historyEvent := range replyHistory {
+		historyImageIndexes := map[int]bool(nil)
+		historyImageMessage := llm.Message{}
+		if directAgentDecision {
+			historyImageIndexes = recentHistoryImageIndexes(replyHistory, event.MessageID)
+			historyImageMessage = agentHistoryImageBatchMessage(ctx, replyHistory, historyImageIndexes, event.Time)
+		}
+		for historyIndex, historyEvent := range replyHistory {
 			// 上下文只追加同会话的历史用户消息，当前消息本身会在最后单独加入。
 			if historyEvent.MessageID == event.MessageID {
 				continue
 			}
 			if turnMessageIDs[strings.TrimSpace(historyEvent.MessageID)] {
+				continue
+			}
+			// Consecutive image messages are emitted below as one atomic multimodal
+			// block. Keeping them separate could let the token budget retain only a
+			// subset and recreate the "only one of the images was read" failure.
+			if historyImageIndexes[historyIndex] {
 				continue
 			}
 			if strings.TrimSpace(historyEvent.botReply) != "" {
@@ -2261,11 +2309,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				}
 				continue
 			}
-			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyPromptTextAt(historyEvent, event.Time), Priority: llm.MessagePriorityHistory}
+			historyText := historyPromptTextAt(historyEvent, event.Time)
+			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyText, Priority: llm.MessagePriorityHistory}
 			if runtimeLLMMessageEmpty(historyMessage) {
 				continue
 			}
 			messages = append(messages, historyMessage)
+		}
+		if !runtimeLLMMessageEmpty(historyImageMessage) {
+			messages = append(messages, historyImageMessage)
 		}
 		for _, candidate := range turnCandidates {
 			if strings.TrimSpace(candidate.Event.MessageID) == "" || candidate.Event.MessageID == event.MessageID {
@@ -2274,7 +2326,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			turnMessage := llmMessageFromEventWithImagesForContext(
 				ctx,
 				candidate.Event,
-				passiveTurnPromptTextAt(candidate.Event, candidate.Text, event.Time),
+				proactiveTurnPromptTextAt(candidate.Event, candidate.Text, event.Time),
 				nil,
 			)
 			turnMessage.Priority = llm.MessagePriorityCurrent
@@ -2286,14 +2338,18 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	contextImageURLs := r.semanticReferenceImageURLs(ctx, event)
 	contextImageURLs = appendUniqueStrings(contextImageURLs, pluginImageURLs(pluginResponses)...)
+	if directAgentDecision {
+		contextImageURLs = llmReadyImageURLs(ctx, contextImageURLs)
+		contextImageURLs = withoutMessageImageURLs(contextImageURLs, messages)
+	}
 	currentMessage := llmMessageFromEventWithVideoFrames(ctx, event, currentPromptText(event, cleanText), contextImageURLs)
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	messages = append(messages, currentMessage)
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
-	if passiveTriggered && (replyCfg.MaxReplyChars <= 0 || replyCfg.MaxReplyChars > passiveReplyMaxRunes) {
-		replyCfg.MaxReplyChars = passiveReplyMaxRunes
+	if proactiveTriggered && (replyCfg.MaxReplyChars <= 0 || replyCfg.MaxReplyChars > proactiveReplyMaxRunes) {
+		replyCfg.MaxReplyChars = proactiveReplyMaxRunes
 	}
 	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
@@ -2396,7 +2452,9 @@ func directPluginReply(resp PluginResponse) string {
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
-	ctx = r.withQQPrivacyContext(ctx, event, r.contextHistory(event))
+	if _, initialized := qqPrivacyStateFromContext(ctx); !initialized {
+		ctx = r.withQQPrivacyContext(ctx, event, r.contextHistory(event))
+	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) {
 		group = llm.GroupVision
@@ -2480,8 +2538,11 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			}
 			registry := agent.NewToolRegistry()
 			if cfg.AgentEnabled {
-				var err error
-				registry, err = agent.NewAgentToolRegistry(ctx, agentCfg)
+				base, err := r.sharedAgentRegistry(ctx, agentCfg)
+				if err != nil {
+					return "", err
+				}
+				registry, err = base.NewView(agentCfg)
 				if err != nil {
 					return "", err
 				}
@@ -2522,7 +2583,7 @@ type replyRulePayload struct {
 	GroupID        string                          `json:"group_id,omitempty"`
 	UserID         string                          `json:"user_id,omitempty"`
 	QuotedText     string                          `json:"quoted_text,omitempty"`
-	RecentMessages []passiveReplyHistoryItem       `json:"recent_messages,omitempty"`
+	RecentMessages []proactiveReplyHistoryItem     `json:"recent_messages,omitempty"`
 	Rules          []replyRuleCandidateForDecision `json:"rules"`
 }
 
@@ -2558,7 +2619,7 @@ func (r *Runtime) evaluateReplyRules(ctx context.Context, event MessageEvent, te
 		if text == "" && imageCount == 0 {
 			continue
 		}
-		payload.RecentMessages = append(payload.RecentMessages, passiveReplyHistoryItem{
+		payload.RecentMessages = append(payload.RecentMessages, proactiveReplyHistoryItem{
 			Sender: strings.TrimSpace(item.SenderNameOrID()),
 			Text:   truncateRunesFromStart(text, 180),
 			Images: imageCount,
@@ -3274,19 +3335,7 @@ func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 		return out
 	}
 	history := r.contextHistory(event)
-	for i := len(history) - 1; i >= 0; i-- {
-		historyEvent := history[i]
-		if historyEvent.MessageID == event.MessageID {
-			continue
-		}
-		out = appendImageEditSourceImages(out, ImageURLs(historyEvent.Segments)...)
-		if historyEvent.Quoted != nil {
-			out = appendImageEditSourceImages(out, ImageURLs(historyEvent.Quoted.Segments)...)
-		}
-		if len(out) > 0 {
-			break
-		}
-	}
+	out = appendImageEditSourceImages(out, recentHistoryImageBatch(history, event.MessageID)...)
 	return out
 }
 
@@ -3305,20 +3354,122 @@ func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent,
 		return out
 	}
 	history := r.contextHistory(event)
-	for i := len(history) - 1; i >= 0; i-- {
-		historyEvent := history[i]
-		if historyEvent.MessageID == event.MessageID {
+	out = appendImageEditSourceImages(out, recentHistoryImageBatch(history, event.MessageID)...)
+	return out
+}
+
+func recentHistoryImageBatch(history []MessageEvent, currentMessageID string) []string {
+	selected := recentHistoryImageIndexes(history, currentMessageID)
+	var out []string
+	for index, item := range history {
+		if !selected[index] {
 			continue
 		}
-		out = appendImageEditSourceImages(out, ImageURLs(historyEvent.Segments)...)
-		if historyEvent.Quoted != nil {
-			out = appendImageEditSourceImages(out, ImageURLs(historyEvent.Quoted.Segments)...)
+		images := appendUniqueStrings(nil, ImageURLs(item.Segments)...)
+		if item.Quoted != nil {
+			images = appendUniqueStrings(images, ImageURLs(item.Quoted.Segments)...)
 		}
-		if len(out) > 0 {
-			break
-		}
+		out = appendImageEditSourceImages(out, images...)
 	}
 	return out
+}
+
+const (
+	recentImageBatchLeadMessages      = 3
+	recentImageBatchSeparatorMessages = 3
+	recentImageBatchWindow            = 2 * time.Minute
+)
+
+func recentHistoryImageIndexes(history []MessageEvent, currentMessageID string) map[int]bool {
+	selected := map[int]bool{}
+	started := false
+	leadMessages := 0
+	separatorMessages := 0
+	newestImageTime := int64(0)
+	for index := len(history) - 1; index >= 0; index-- {
+		item := history[index]
+		if strings.TrimSpace(currentMessageID) != "" && item.MessageID == currentMessageID {
+			continue
+		}
+		imageCount := len(ImageURLs(item.Segments))
+		if item.Quoted != nil {
+			imageCount += len(ImageURLs(item.Quoted.Segments))
+		}
+		if imageCount == 0 {
+			if started {
+				separatorMessages++
+				if separatorMessages > recentImageBatchSeparatorMessages {
+					break
+				}
+				continue
+			}
+			leadMessages++
+			if leadMessages > recentImageBatchLeadMessages {
+				break
+			}
+			continue
+		}
+		if started && newestImageTime > 0 && item.Time > 0 && newestImageTime-item.Time > int64(recentImageBatchWindow/time.Second) {
+			break
+		}
+		started = true
+		separatorMessages = 0
+		if newestImageTime == 0 {
+			newestImageTime = item.Time
+		}
+		selected[index] = true
+	}
+	return selected
+}
+
+func agentHistoryImageBatchMessage(ctx context.Context, history []MessageEvent, selected map[int]bool, currentTime int64) llm.Message {
+	if len(selected) == 0 {
+		return llm.Message{}
+	}
+	var lines []string
+	var sourceImageURLs []string
+	for index, item := range history {
+		if !selected[index] {
+			continue
+		}
+		line := historyPromptTextAt(item, currentTime)
+		if line == "" {
+			line = agentImageHistoryPromptTextAt(item, currentTime)
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+		itemImages := ImageURLs(item.Segments)
+		if item.Quoted != nil {
+			itemImages = append(itemImages, ImageURLs(item.Quoted.Segments)...)
+		}
+		// Preserve one image part per source message. Re-sending the same bitmap is
+		// still meaningful conversation state and must not silently reduce the count.
+		sourceImageURLs = append(sourceImageURLs, itemImages...)
+	}
+	imageURLs, complete := loadLLMImageURLs(ctx, sourceImageURLs)
+	if !complete {
+		// Never describe a partially available burst as complete. Returning an
+		// empty message also prevents a text-only image placeholder.
+		return llm.Message{}
+	}
+	if len(imageURLs) == 0 {
+		return llm.Message{}
+	}
+	text := strings.Join(lines, "\n")
+	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
+	if text != "" {
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: text})
+	}
+	for _, imageURL := range imageURLs {
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "low"})
+	}
+	return llm.Message{
+		Role:     llm.RoleUser,
+		Content:  text,
+		Parts:    parts,
+		Priority: llm.MessagePriorityPlugin,
+	}
 }
 
 func (r *Runtime) qqImageEditSourceImages(ctx context.Context, event MessageEvent, prompt string) []string {
@@ -3823,19 +3974,19 @@ func (r *Runtime) systemPrompt(event MessageEvent, pluginResponses []PluginRespo
 	return r.systemPromptWithMode(event, pluginResponses, false)
 }
 
-func (r *Runtime) systemPromptWithMode(event MessageEvent, pluginResponses []PluginResponse, passiveTriggered bool) string {
-	return r.systemPromptWithRelationship(event, pluginResponses, passiveTriggered, RelationshipPolicyFor(UserMemoryProfile{}, r.effectiveConfigForEvent(event).OwnerID, event.UserID))
+func (r *Runtime) systemPromptWithMode(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool) string {
+	return r.systemPromptWithRelationship(event, pluginResponses, proactiveTriggered, RelationshipPolicyFor(UserMemoryProfile{}, r.effectiveConfigForEvent(event).OwnerID, event.UserID))
 }
 
-func (r *Runtime) systemPromptWithRelationship(event MessageEvent, pluginResponses []PluginResponse, passiveTriggered bool, relationship RelationshipPolicy) string {
-	return r.systemPromptWithRelationshipAndAgent(event, pluginResponses, passiveTriggered, relationship, r.effectiveConfigForEvent(event).AgentEnabled)
+func (r *Runtime) systemPromptWithRelationship(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy) string {
+	return r.systemPromptWithRelationshipAndAgent(event, pluginResponses, proactiveTriggered, relationship, r.effectiveConfigForEvent(event).AgentEnabled)
 }
 
-func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, pluginResponses []PluginResponse, passiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool) string {
-	return r.systemPromptWithRelationshipAndAgentTools(event, pluginResponses, passiveTriggered, relationship, agentEnabled, nil)
+func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool) string {
+	return r.systemPromptWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, nil)
 }
 
-func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, passiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) string {
+func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) string {
 	cfg := r.effectiveConfigForEvent(event)
 	var builder strings.Builder
 	hasTool := func(name string) bool {
@@ -3928,9 +4079,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if boolValue(cfg.PromptInjectPlaintextRules, true) {
 		appendPromptSection(&builder, cfg.PromptPlaintextRulesText)
 	}
-	if passiveTriggered {
+	if proactiveTriggered {
 		builder.WriteString("\n")
-		builder.WriteString(strings.TrimSpace(cfg.PassiveReplyPrompt))
+		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
 	}
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {
@@ -4133,7 +4284,7 @@ func readableEventText(event MessageEvent, fallback string) string {
 	return normalizeChatWhitespace(fallback)
 }
 
-func passiveReplyTriggerText(event MessageEvent, fallback string) string {
+func proactiveReplyTriggerText(event MessageEvent, fallback string) string {
 	if text := textSegmentsOnly(event.Segments); text != "" {
 		return text
 	}
@@ -4843,7 +4994,18 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 	return fmt.Sprintf("【历史参考消息，仅用于理解上下文，不要直接回复这条历史消息】%s%s: %s", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), text)
 }
 
-func passiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
+func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
+	imageCount := len(ImageURLs(event.Segments))
+	if event.Quoted != nil {
+		imageCount += len(ImageURLs(event.Quoted.Segments))
+	}
+	if imageCount == 0 {
+		return ""
+	}
+	return fmt.Sprintf("【历史参考消息，仅用于理解上下文，不要直接回复这条历史消息】%s%s: 此消息包含 %d 张真实图片，请查看随消息附加的图片内容。", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), imageCount)
+}
+
+func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
 	text := strings.TrimSpace(PlainText(event.Segments))
 	if text == "" && !hasImageSegment(event.Segments) {
 		text = strings.TrimSpace(firstNonEmpty(fallbackText, event.RawMessage))
@@ -5097,6 +5259,24 @@ func runtimeLLMMessageEmpty(msg llm.Message) bool {
 		return false
 	}
 	return len(msg.Parts) == 0
+}
+
+func withoutMessageImageURLs(imageURLs []string, messages []llm.Message) []string {
+	seen := map[string]bool{}
+	for _, message := range messages {
+		for _, part := range message.Parts {
+			if part.Type == llm.ContentPartImageURL && strings.TrimSpace(part.ImageURL) != "" {
+				seen[part.ImageURL] = true
+			}
+		}
+	}
+	filtered := make([]string, 0, len(imageURLs))
+	for _, imageURL := range imageURLs {
+		if imageURL = strings.TrimSpace(imageURL); imageURL != "" && !seen[imageURL] {
+			filtered = append(filtered, imageURL)
+		}
+	}
+	return filtered
 }
 
 const resolverLocalMediaTTL = 10 * time.Minute
@@ -5538,12 +5718,12 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 			return nil, errReplySuppressedBeforeSend
 		}
 	}
-	if run, ok := passiveReplyRunFromContext(ctx); ok && run.allowSuperseding {
-		if changed, newer := r.passiveReplyBatchChanged(run.key, run.generation); changed {
+	if run, ok := proactiveReplyRunFromContext(ctx); ok && run.allowSuperseding {
+		if changed, newer := r.proactiveReplyBatchChanged(run.key, run.generation); changed {
 			if newer != nil {
-				r.recordPassiveReplySuperseded(ctx, event, newer.Event, "before_send")
+				r.recordProactiveReplySuperseded(ctx, event, newer.Event, "before_send")
 			}
-			return nil, errPassiveReplySuperseded
+			return nil, errProactiveReplySuperseded
 		}
 	}
 	action := "send_private_msg"
@@ -6118,6 +6298,7 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 
 // remember 记录当前会话的最近上下文。
 func (r *Runtime) remember(event MessageEvent) {
+	event = withoutReplyRuntimeState(event)
 	session := sessionKey(event)
 	var compressed []MessageEvent
 	r.mu.Lock()
@@ -6174,6 +6355,7 @@ func (r *Runtime) rememberReply(event MessageEvent, reply string) {
 }
 
 func (r *Runtime) persistMessageEvent(event MessageEvent) {
+	event = withoutReplyRuntimeState(event)
 	r.mu.RLock()
 	store := r.messageStore
 	r.mu.RUnlock()
@@ -6185,6 +6367,15 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 	if err := store.AppendMessageEvent(ctx, sessionKey(event), event); err != nil {
 		log.Printf("qqbot message history persist failed: %v", err)
 	}
+}
+
+func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
+	event.proactiveReply = false
+	event.replyHistory = nil
+	event.replyHistoryLoaded = false
+	event.userProfile = UserMemoryProfile{}
+	event.userProfileLoaded = false
+	return event
 }
 
 func (r *Runtime) updateUserMemory(event MessageEvent, favorabilityDelta int) (UserMemoryProfile, bool) {
@@ -6301,6 +6492,9 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 
 // contextHistory 返回当前会话历史副本。
 func (r *Runtime) contextHistory(event MessageEvent) []MessageEvent {
+	if event.replyHistoryLoaded {
+		return append([]MessageEvent(nil), event.replyHistory...)
+	}
 	session := sessionKey(event)
 	r.mu.RLock()
 	// 返回副本，生成回复时遍历历史不会和新消息写入互相影响。

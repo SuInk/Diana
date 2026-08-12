@@ -60,7 +60,7 @@ func TestRunnerPromptRequiresSearchForSpecificProductOpinions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt := runner.systemPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "王小卤虎皮凤爪好吃吗"}}})
+	prompt := runner.systemPrompt()
 	for _, expected := range []string{"具体商品", "口碑", "味道", "先调用 web_search.search 再回答", "不要凭印象编造亲身体验"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("search guidance missing %q: %s", expected, prompt)

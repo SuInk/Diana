@@ -355,6 +355,8 @@ func trimMessageToTokenBudget(message Message, budget int64) (Message, bool) {
 	trimmed.Parts = nil
 	remaining := textBudget
 	hasText := false
+	hadImages := 0
+	keptImages := 0
 	for _, part := range message.Parts {
 		switch part.Type {
 		case ContentPartText:
@@ -377,13 +379,20 @@ func trimMessageToTokenBudget(message Message, budget int64) (Message, bool) {
 			hasText = true
 			remaining -= estimateTextTokens(text) + 2
 		case ContentPartImageURL:
+			hadImages++
 			cost := estimatedImageTokens(part.Detail)
 			if strings.TrimSpace(part.ImageURL) == "" || cost > remaining {
 				continue
 			}
 			trimmed.Parts = append(trimmed.Parts, part)
+			keptImages++
 			remaining -= cost
 		}
+	}
+	// Text that merely labels an attached historical image must not survive
+	// after the image itself is dropped; that recreates a misleading placeholder.
+	if hadImages != keptImages && message.Priority < MessagePriorityCurrent {
+		return Message{}, false
 	}
 	if !hasText && remaining > 0 {
 		text := trimTextToTokenBudget(message.Content, remaining, preserveMessagePrefix(message))

@@ -230,8 +230,8 @@ func (r *Runtime) recordGroupReplyPolicyChanged(ctx context.Context, event Messa
 			"group_id":                   event.GroupID,
 			"user_id":                    event.UserID,
 			"operator_role":              role,
-			"passive_reply_chance":       cfg.PassiveReplyChance,
-			"passive_reply_threshold":    cfg.PassiveReplyThreshold,
+			"proactive_reply_chance":     cfg.ProactiveReplyChance,
+			"proactive_reply_threshold":  cfg.ProactiveReplyThreshold,
 			"minimum_reply_member_level": cfg.MinimumReplyMemberLevel,
 		},
 	})

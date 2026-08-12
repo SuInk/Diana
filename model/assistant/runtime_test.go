@@ -83,7 +83,7 @@ func TestRuntimeRecordLLMUsageCalculatesMissingTotal(t *testing.T) {
 	}
 }
 
-func TestRuntimeDirectTriggersBypassPassiveRouter(t *testing.T) {
+func TestRuntimeDirectTriggersBypassProactiveRouter(t *testing.T) {
 	tests := []struct {
 		name  string
 		event MessageEvent
@@ -165,8 +165,8 @@ func TestRuntimeDirectTriggersBypassPassiveRouter(t *testing.T) {
 				t.Fatalf("requests=%d sent=%#v", len(requests), sent)
 			}
 			for _, request := range requests {
-				if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "严格被动插话路由器") {
-					t.Fatalf("direct trigger unexpectedly entered passive router: %#v", request.Messages)
+				if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "严格主动回复路由器") {
+					t.Fatalf("direct trigger unexpectedly entered proactive router: %#v", request.Messages)
 				}
 			}
 		})
@@ -194,9 +194,9 @@ func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
 	}
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.96,"category":"bot_related","target_message_id":"reply-1","turn_message_ids":["reply-1"],"directed_at_bot":true,"answerable":true,"reason":"用户在追问机器人刚才结论的依据，现有上下文足够回答"}`}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		PassiveReplyChance:    0.000001,
-		PassiveReplyThreshold: 0.9,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    0.000001,
+		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -204,11 +204,11 @@ func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
 	if runtime.shouldHandleChat(event, text) {
 		t.Fatal("replying to the bot must pass the semantic answerability gate")
 	}
-	if passiveReplySampleAllows(event, text, 0.000001) {
-		t.Fatal("test event unexpectedly passed ordinary passive sampling")
+	if proactiveReplySampleAllows(event, text, 0.000001) {
+		t.Fatal("test event unexpectedly passed ordinary proactive sampling")
 	}
-	if !runtime.shouldConsiderPassiveReply(event, text) || !runtime.shouldHandlePassiveReply(context.Background(), event, text) {
-		t.Fatal("reliable direct follow-up should pass semantic routing without passive sampling")
+	if !runtime.shouldConsiderProactiveReply(event, text) || !runtime.shouldHandleProactiveReply(context.Background(), event, text) {
+		t.Fatal("reliable direct follow-up should pass semantic routing without proactive sampling")
 	}
 	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "回答可信度不足时必须 should_reply=false") {
 		t.Fatalf("router prompt missing runtime answerability guard: %#v", provider.request.Messages)
@@ -226,7 +226,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 			name:        "reliable follow-up",
 			routeReply:  `{"should_reply":true,"confidence":0.96,"category":"bot_related","target_message_id":"reply-1","turn_message_ids":["reply-1"],"directed_at_bot":true,"answerable":true,"reason":"上下文足够可靠回答"}`,
 			wantHandled: true,
-			wantOutcome: "replied_passive",
+			wantOutcome: "replied_proactive",
 		},
 		{
 			name:        "missing information",
@@ -242,9 +242,9 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 				tt.routeReply,
 			}}
 			runtime := NewRuntime(BotConfig{
-				BotQQ:                 "42",
-				PassiveReplyChance:    0.000001,
-				PassiveReplyThreshold: 0.9,
+				BotQQ:                   "42",
+				ProactiveReplyChance:    0.000001,
+				ProactiveReplyThreshold: 0.9,
 			}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
 			})
@@ -278,17 +278,17 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 			if len(provider.requestsSnapshot()) != 2 {
 				t.Fatalf("LLM requests=%d, want loop classification plus answerability route", len(provider.requestsSnapshot()))
 			}
-			runtime.passiveBatchMu.Lock()
-			_, queued := runtime.passiveBatches[sessionKey(event)]
-			runtime.passiveBatchMu.Unlock()
+			runtime.proactiveBatchMu.Lock()
+			_, queued := runtime.proactiveBatches[sessionKey(event)]
+			runtime.proactiveBatchMu.Unlock()
 			if queued {
-				t.Fatal("direct bot follow-up was incorrectly queued in the passive batch")
+				t.Fatal("direct bot follow-up was incorrectly queued in the proactive batch")
 			}
 		})
 	}
 }
 
-func TestRuntimeJudgesPassiveGroupMessagesImmediately(t *testing.T) {
+func TestRuntimeJudgesProactiveGroupMessagesImmediately(t *testing.T) {
 	tests := []struct {
 		name        string
 		routeReply  string
@@ -299,7 +299,7 @@ func TestRuntimeJudgesPassiveGroupMessagesImmediately(t *testing.T) {
 			name:        "selected",
 			routeReply:  `{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","turn_message_ids":["message-1"],"directed_at_bot":false,"answerable":true}`,
 			wantHandled: true,
-			wantOutcome: "replied_passive",
+			wantOutcome: "replied_proactive",
 		},
 		{
 			name:        "not selected",
@@ -312,7 +312,7 @@ func TestRuntimeJudgesPassiveGroupMessagesImmediately(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			provider := &sequenceLLMProvider{replies: []string{tt.routeReply}}
 			runtime := NewRuntime(BotConfig{
-				BotQQ: "42", PassiveReplyChance: 1, PassiveReplyThreshold: 0.8,
+				BotQQ: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8,
 			}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
 			})
@@ -335,11 +335,11 @@ func TestRuntimeJudgesPassiveGroupMessagesImmediately(t *testing.T) {
 					t.Fatalf("not-replied reason = %#v", recent)
 				}
 			}
-			runtime.passiveBatchMu.Lock()
-			_, queued := runtime.passiveBatches[sessionKey(event)]
-			runtime.passiveBatchMu.Unlock()
+			runtime.proactiveBatchMu.Lock()
+			_, queued := runtime.proactiveBatches[sessionKey(event)]
+			runtime.proactiveBatchMu.Unlock()
 			if queued {
-				t.Fatal("message was left in the passive batch")
+				t.Fatal("message was left in the proactive batch")
 			}
 		})
 	}
@@ -348,6 +348,17 @@ func TestRuntimeJudgesPassiveGroupMessagesImmediately(t *testing.T) {
 func TestQueuedPassiveLegacyOutcomeIsTerminal(t *testing.T) {
 	decision, reason, handled := DescribeEventOutcome("queued_passive")
 	if decision != "not_replied" || handled || !strings.Contains(reason, "旧版本") {
+		t.Fatalf("decision=%q reason=%q handled=%v", decision, reason, handled)
+	}
+}
+
+func TestLegacyProactiveReplyOutcomesRemainReadable(t *testing.T) {
+	decision, reason, handled := DescribeEventOutcome("replied_passive")
+	if decision != "replied" || !handled || !strings.Contains(reason, "主动回复") {
+		t.Fatalf("decision=%q reason=%q handled=%v", decision, reason, handled)
+	}
+	decision, reason, handled = DescribeEventOutcome("superseded_passive")
+	if decision != "not_replied" || handled || !strings.Contains(reason, "主动回复") {
 		t.Fatalf("decision=%q reason=%q handled=%v", decision, reason, handled)
 	}
 }
@@ -523,18 +534,18 @@ func TestDefaultBotConfigKeepsTwentyMessagesAndCompressesAtOneHundred(t *testing
 	if !boolValue(cfg.LongTermMemoryEnabled, false) || boolValue(cfg.CrossGroupMemoryEnabled, true) {
 		t.Fatalf("memory defaults = long_term %v cross_group %v", cfg.LongTermMemoryEnabled, cfg.CrossGroupMemoryEnabled)
 	}
-	if cfg.PassiveReplyChance != 1 {
-		t.Fatalf("passive reply chance = %v, want 1", cfg.PassiveReplyChance)
+	if cfg.ProactiveReplyChance != 1 {
+		t.Fatalf("proactive reply chance = %v, want 1", cfg.ProactiveReplyChance)
 	}
-	if cfg.PassiveReplyThreshold != 0.8 {
-		t.Fatalf("passive reply threshold = %v, want 0.8", cfg.PassiveReplyThreshold)
+	if cfg.ProactiveReplyThreshold != 0.9 {
+		t.Fatalf("proactive reply threshold = %v, want 0.9", cfg.ProactiveReplyThreshold)
 	}
-	if strings.TrimSpace(cfg.SystemPrompt) == "" || strings.TrimSpace(cfg.PassiveReplyRouterPrompt) == "" || strings.TrimSpace(cfg.PassiveReplyPrompt) == "" {
+	if strings.TrimSpace(cfg.SystemPrompt) == "" || strings.TrimSpace(cfg.ProactiveReplyRouterPrompt) == "" || strings.TrimSpace(cfg.ProactiveReplyPrompt) == "" {
 		t.Fatal("editable prompt defaults must not be empty")
 	}
 }
 
-func TestRuntimeUpdatesUserMemoryForPassiveGroupMessage(t *testing.T) {
+func TestRuntimeUpdatesUserMemoryForProactiveGroupMessage(t *testing.T) {
 	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newMemoryUserMemoryStore()
 	runtime.SetUserMemoryStore(store)
@@ -559,7 +570,7 @@ func TestRuntimeUpdatesUserMemoryForPassiveGroupMessage(t *testing.T) {
 		t.Fatalf("profile = %#v", profile)
 	}
 	if profile.Favorability != 0 {
-		t.Fatalf("passive first message favorability = %d, want 0", profile.Favorability)
+		t.Fatalf("proactive first message favorability = %d, want 0", profile.Favorability)
 	}
 }
 
@@ -1921,7 +1932,7 @@ func TestRuntimeGroupLLMPreservesModelChosenAdditionalMentionPosition(t *testing
 func TestRuntimeMentionOnlyUsesFallbackPrompt(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &capturingLLMProvider{reply: "在"}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", PassiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	_, err := runtime.replyTo(context.Background(), MessageEvent{
@@ -1947,7 +1958,7 @@ func TestRuntimeMentionOnlyUsesFallbackPrompt(t *testing.T) {
 func TestRuntimeKeepsReplyAndMentionInCurrentPrompt(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &capturingLLMProvider{reply: "接住了"}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", PassiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 
@@ -2024,11 +2035,9 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"message_ids":["img-3","img-1","img-2"],"confidence":0.98,"reason":"当前问题指向连发的三张图片"}`,
-		`{"action":"none","prompt":""}`,
 		"三张图片都已读取。",
 	}}
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	imageURLs := []string{
@@ -2058,10 +2067,10 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "三张图片都已读取。" || len(provider.requests) != 3 {
+	if reply != "三张图片都已读取。" || len(provider.requests) != 1 {
 		t.Fatalf("reply=%q requests=%d", reply, len(provider.requests))
 	}
-	finalRequest := provider.requests[2]
+	finalRequest := provider.requests[0]
 	var actualImages []string
 	for _, message := range finalRequest.Messages {
 		if strings.Contains(message.Content, "[图片]") {
@@ -2081,6 +2090,81 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	}
 }
 
+func TestImageEditSourcesKeepRecentCrossMessageBatchOrder(t *testing.T) {
+	runtime := NewRuntime(BotConfig{AgentEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	imageURLs := []string{
+		"data:image/png;base64,YQ==",
+		"data:image/png;base64,Yg==",
+		"data:image/png;base64,Yw==",
+	}
+	for index, imageURL := range imageURLs {
+		runtime.remember(MessageEvent{
+			Kind:      EventKindPrivate,
+			UserID:    "10001",
+			MessageID: "edit-img-" + strconv.Itoa(index+1),
+			Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURL}}},
+		})
+	}
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "edit-request"}
+	if got := runtime.imageEditSourceImages(context.Background(), event, "把刚才三张拼起来"); strings.Join(got, ",") != strings.Join(imageURLs, ",") {
+		t.Fatalf("image edit sources = %#v", got)
+	}
+}
+
+func TestRecentImageBatchAllowsInterleavedReplies(t *testing.T) {
+	history := []MessageEvent{
+		{Kind: EventKindPrivate, Time: 100, UserID: "10001", MessageID: "img-1", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}}}},
+		{Kind: EventKindPrivate, Time: 101, UserID: "10001", MessageID: "reply-1", RawMessage: "收到第一张", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "收到第一张"}}}, botReply: "收到第一张"},
+		{Kind: EventKindPrivate, Time: 102, UserID: "10001", MessageID: "img-2", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,Yg=="}}}},
+		{Kind: EventKindPrivate, Time: 103, UserID: "10001", MessageID: "reply-2", RawMessage: "收到第二张", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "收到第二张"}}}, botReply: "收到第二张"},
+		{Kind: EventKindPrivate, Time: 104, UserID: "10001", MessageID: "img-3", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,Yw=="}}}},
+		{Kind: EventKindPrivate, Time: 110, UserID: "10001", MessageID: "question", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "读我连发的三张图"}}}},
+	}
+	want := []string{
+		"data:image/png;base64,YQ==",
+		"data:image/png;base64,Yg==",
+		"data:image/png;base64,Yw==",
+	}
+	if got := recentHistoryImageBatch(history, "question"); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("image batch = %#v, want %#v", got, want)
+	}
+}
+
+func TestRecentImageBatchStopsAtOldImageBurst(t *testing.T) {
+	history := []MessageEvent{
+		{Kind: EventKindPrivate, Time: 100, UserID: "10001", MessageID: "old", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,b2xk"}}}},
+		{Kind: EventKindPrivate, Time: 400, UserID: "10001", MessageID: "new-1", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,bmV3MQ=="}}}},
+		{Kind: EventKindPrivate, Time: 401, UserID: "10001", MessageID: "new-2", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,bmV3Mg=="}}}},
+		{Kind: EventKindPrivate, Time: 405, UserID: "10001", MessageID: "question", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "看这两张"}}}},
+	}
+	want := []string{"data:image/png;base64,bmV3MQ==", "data:image/png;base64,bmV3Mg=="}
+	if got := recentHistoryImageBatch(history, "question"); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("image batch = %#v, want %#v", got, want)
+	}
+}
+
+func TestRememberStripsReplyRuntimeState(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:               EventKindPrivate,
+		UserID:             "10001",
+		MessageID:          "current",
+		replyHistory:       []MessageEvent{{Kind: EventKindPrivate, UserID: "10001", MessageID: "older"}},
+		replyHistoryLoaded: true,
+		userProfile:        UserMemoryProfile{UserID: "10001", Favorability: 3},
+		userProfileLoaded:  true,
+	}
+	runtime.remember(event)
+	history := runtime.contextHistory(MessageEvent{Kind: EventKindPrivate, UserID: "10001"})
+	if len(history) != 1 {
+		t.Fatalf("history = %#v", history)
+	}
+	stored := history[0]
+	if stored.replyHistoryLoaded || len(stored.replyHistory) != 0 || stored.userProfileLoaded || stored.userProfile.UserID != "" {
+		t.Fatalf("request-only state leaked into history: %#v", stored)
+	}
+}
+
 func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 	channel := &recordingChannel{}
 	imageURL := "data:image/png;base64,aGVsbG8="
@@ -2090,7 +2174,7 @@ func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 		`{"action":"none"}`,
 		"看起来是拍摄角度和光线让表情显得没那么明显。",
 	}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", PassiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.remember(MessageEvent{
@@ -2113,13 +2197,14 @@ func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "为什么会这样"}}},
 		SenderName: "Bob",
 	}
-	if !runtime.shouldConsiderPassiveReply(event, "为什么会这样") {
+	if !runtime.shouldConsiderProactiveReply(event, "为什么会这样") {
 		t.Fatal("image context follow-up should be considered for LLM routing")
 	}
-	if !runtime.shouldHandlePassiveReply(context.Background(), event, "为什么会这样") {
+	routed, routedText, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: "为什么会这样"}})
+	if !allowed {
 		t.Fatal("LLM route should choose to reply")
 	}
-	reply, err := runtime.replyTo(context.Background(), event, "为什么会这样")
+	reply, err := runtime.replyTo(withProactiveReplyTurnContext(context.Background(), turn), routed, routedText)
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
@@ -2131,13 +2216,13 @@ func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 	}
 }
 
-func TestRuntimePassiveReplyRecordsSemanticDecision(t *testing.T) {
+func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.82,"category":"bot_related","directed_at_bot":true,"answerable":true,"reason":"明确承接了机器人上一条回复且问题可回答"}`}
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.8,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -2150,7 +2235,7 @@ func TestRuntimePassiveReplyRecordsSemanticDecision(t *testing.T) {
 		RawMessage: "如果给你一个 PDF，你会怎么处理",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "如果给你一个 PDF，你会怎么处理"}}},
 	}
-	routed, _, _, allowed := runtime.routePassiveReplyBatch(context.Background(), []passiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+	routed, _, _, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
 	if !allowed {
 		t.Fatal("qualified bot follow-up should pass the semantic router")
 	}
@@ -2160,15 +2245,15 @@ func TestRuntimePassiveReplyRecordsSemanticDecision(t *testing.T) {
 		}
 	}
 	if len(provider.request.Messages) == 0 {
-		t.Fatal("passive router did not call the LLM")
+		t.Fatal("proactive router did not call the LLM")
 	}
 	systemPrompt := provider.request.Messages[0].Content
 	for _, want := range []string{"默认保持沉默", "directed_at_bot", "answerable", "不等于在问机器人", "只能是“不知道”", "last_bot_addressed_current_sender", "要求机器人安静或停止回复", "主动介入能提供明显价值", "回答可信度不足"} {
 		if !strings.Contains(systemPrompt, want) {
-			t.Fatalf("passive router prompt missing %q", want)
+			t.Fatalf("proactive router prompt missing %q", want)
 		}
 	}
-	if len(logs.entries) != 1 || logs.entries[0].Action != "qqbot.passive_reply_route" {
+	if len(logs.entries) != 1 || logs.entries[0].Action != "qqbot.proactive_reply_route" {
 		t.Fatalf("route logs = %#v", logs.entries)
 	}
 	metadata := logs.entries[0].Metadata
@@ -2177,7 +2262,7 @@ func TestRuntimePassiveReplyRecordsSemanticDecision(t *testing.T) {
 	}
 }
 
-func TestRuntimePassiveReplyPayloadIncludesMessageAges(t *testing.T) {
+func TestRuntimeProactiveReplyPayloadIncludesMessageAges(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind:       EventKindGroup,
@@ -2197,7 +2282,7 @@ func TestRuntimePassiveReplyPayloadIncludesMessageAges(t *testing.T) {
 		SenderName: "Bob",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "现在的问题"}}},
 	}
-	payload := runtime.passiveReplyPayload(event, "现在的问题")
+	payload := runtime.proactiveReplyPayload(event, "现在的问题")
 	if payload.ContextGapSeconds == nil || *payload.ContextGapSeconds != 1200 {
 		t.Fatalf("context gap = %#v, want 1200", payload.ContextGapSeconds)
 	}
@@ -2206,7 +2291,7 @@ func TestRuntimePassiveReplyPayloadIncludesMessageAges(t *testing.T) {
 	}
 }
 
-func TestRuntimePassiveReplyPayloadIdentifiesCorrectionToRecentBotReply(t *testing.T) {
+func TestRuntimeProactiveReplyPayloadIdentifiesCorrectionToRecentBotReply(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind:       EventKindGroup,
@@ -2241,7 +2326,7 @@ func TestRuntimePassiveReplyPayloadIdentifiesCorrectionToRecentBotReply(t *testi
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "大部分流量是主动刷新元数据 这个是设计如此"}}},
 	}
 
-	payload := runtime.passiveReplyPayload(event, PlainText(event.Segments))
+	payload := runtime.proactiveReplyPayload(event, PlainText(event.Segments))
 	if payload.LastBotMessage == nil || payload.LastBotMessage.Text != "从流量看缓存可能没有完全生效。" {
 		t.Fatalf("last bot message = %#v", payload.LastBotMessage)
 	}
@@ -2256,12 +2341,12 @@ func TestRuntimePassiveReplyPayloadIdentifiesCorrectionToRecentBotReply(t *testi
 	}
 }
 
-func TestRuntimePassiveReplyKeepsBotFollowupAcrossSameSenderImage(t *testing.T) {
+func TestRuntimeProactiveReplyKeepsBotFollowupAcrossSameSenderImage(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.97,"category":"bot_related","directed_at_bot":true,"answerable":true}`}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.9,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -2307,7 +2392,7 @@ func TestRuntimePassiveReplyKeepsBotFollowupAcrossSameSenderImage(t *testing.T) 
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个回答完全没理解问题"}}},
 	}
 
-	payload := runtime.passiveReplyPayload(event, PlainText(event.Segments))
+	payload := runtime.proactiveReplyPayload(event, PlainText(event.Segments))
 	if !payload.LastBotAddressedCurrentSender {
 		t.Fatal("bot reply target should remain the current sender")
 	}
@@ -2317,7 +2402,7 @@ func TestRuntimePassiveReplyKeepsBotFollowupAcrossSameSenderImage(t *testing.T) 
 	if len(payload.RecentMessages) < 2 || payload.RecentMessages[0].Images != 1 {
 		t.Fatalf("recent messages = %#v", payload.RecentMessages)
 	}
-	if !runtime.shouldHandlePassiveReply(context.Background(), event, PlainText(event.Segments)) {
+	if !runtime.shouldHandleProactiveReply(context.Background(), event, PlainText(event.Segments)) {
 		t.Fatal("semantic criticism of the recent bot answer should be routed")
 	}
 	if !strings.Contains(provider.request.Messages[1].Content, `"last_bot_addressed_current_sender":true`) ||
@@ -2326,15 +2411,15 @@ func TestRuntimePassiveReplyKeepsBotFollowupAcrossSameSenderImage(t *testing.T) 
 	}
 }
 
-func TestRuntimePassiveReplyRoutesClearQuestionsAtStrictThreshold(t *testing.T) {
+func TestRuntimeProactiveReplyRoutesClearQuestionsAtStrictThreshold(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":true,"confidence":0.96,"category":"needs_response","directed_at_bot":false,"answerable":true}`,
 		`{"should_reply":true,"confidence":0.96,"category":"needs_response","directed_at_bot":false,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.9,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -2347,10 +2432,10 @@ func TestRuntimePassiveReplyRoutesClearQuestionsAtStrictThreshold(t *testing.T) 
 			SenderName: "Alice",
 			Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}},
 		}
-		if !runtime.shouldConsiderPassiveReply(event, text) {
+		if !runtime.shouldConsiderProactiveReply(event, text) {
 			t.Fatalf("clear question %q should enter semantic routing", text)
 		}
-		if !runtime.shouldHandlePassiveReply(context.Background(), event, text) {
+		if !runtime.shouldHandleProactiveReply(context.Background(), event, text) {
 			t.Fatalf("clear question %q should pass strict routing", text)
 		}
 	}
@@ -2375,10 +2460,10 @@ func TestRuntimeRoutesPureGroupImageButDoesNotReplyWhenUnrelated(t *testing.T) {
 			Data: map[string]string{"file": "data:image/png;base64,aGVsbG8="},
 		}},
 	}
-	if !runtime.shouldConsiderPassiveReply(event, PlainText(event.Segments)) {
-		t.Fatal("pure group image should enter semantic passive routing")
+	if !runtime.shouldConsiderProactiveReply(event, PlainText(event.Segments)) {
+		t.Fatal("pure group image should enter semantic proactive routing")
 	}
-	if runtime.shouldHandlePassiveReply(context.Background(), event, PlainText(event.Segments)) {
+	if runtime.shouldHandleProactiveReply(context.Background(), event, PlainText(event.Segments)) {
 		t.Fatal("unrelated pure image should be rejected by semantic routing")
 	}
 	if len(provider.requests) != 1 || !requestHasAnyImage(provider.requests[0]) {
@@ -2398,9 +2483,9 @@ func TestRuntimeRepliesWhenImageFulfillsRecentBotRequest(t *testing.T) {
 		"看到了，截图里的 QQ 版本是 9.9.31。",
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.8,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -2430,13 +2515,14 @@ func TestRuntimeRepliesWhenImageFulfillsRecentBotRequest(t *testing.T) {
 		}},
 	}
 	text := PlainText(event.Segments)
-	if !runtime.shouldConsiderPassiveReply(event, text) {
-		t.Fatal("image response to bot request should enter passive routing")
+	if !runtime.shouldConsiderProactiveReply(event, text) {
+		t.Fatal("image response to bot request should enter proactive routing")
 	}
-	if !runtime.shouldHandlePassiveReply(context.Background(), event, text) {
-		t.Fatal("image response to bot request should pass passive routing")
+	routed, routedText, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: text}})
+	if !allowed {
+		t.Fatal("image response to bot request should pass proactive routing")
 	}
-	reply, err := runtime.replyTo(context.Background(), event, text)
+	reply, err := runtime.replyTo(withProactiveReplyTurnContext(context.Background(), turn), routed, routedText)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2451,7 +2537,7 @@ func TestRuntimeRepliesWhenImageFulfillsRecentBotRequest(t *testing.T) {
 	}
 }
 
-func TestRuntimeConsidersImageWithCaptionForPassiveReply(t *testing.T) {
+func TestRuntimeConsidersImageWithCaptionForProactiveReply(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &sequenceLLMProvider{}, nil
 	})
@@ -2465,12 +2551,12 @@ func TestRuntimeConsidersImageWithCaptionForPassiveReply(t *testing.T) {
 			{Type: "text", Data: map[string]string{"text": "这是什么"}},
 		},
 	}
-	if !runtime.shouldConsiderPassiveReply(event, PlainText(event.Segments)) {
-		t.Fatal("image with user text should still enter passive reply routing")
+	if !runtime.shouldConsiderProactiveReply(event, PlainText(event.Segments)) {
+		t.Fatal("image with user text should still enter proactive reply routing")
 	}
 }
 
-func TestRuntimePassiveReplyUsesRoutingProfile(t *testing.T) {
+func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	channel := &recordingChannel{}
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
@@ -2483,7 +2569,7 @@ func TestRuntimePassiveReplyUsesRoutingProfile(t *testing.T) {
 	}
 	var attempts []string
 	var attemptsMu sync.Mutex
-	runtime := NewRuntime(BotConfig{BotQQ: "42", PassiveReplyChance: 1}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), store, nil, nil, nil)
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
 		attemptsMu.Lock()
 		defer attemptsMu.Unlock()
@@ -2497,13 +2583,14 @@ func TestRuntimePassiveReplyUsesRoutingProfile(t *testing.T) {
 		return &capturingLLMProvider{reply: "我也插一句。"}, nil
 	})
 	event := MessageEvent{
-		Kind:       EventKindGroup,
-		GroupID:    "123456",
-		UserID:     "10001",
-		MessageID:  "q-1",
-		RawMessage: "这个报错有人知道怎么处理吗",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错有人知道怎么处理吗"}}},
-		SenderName: "Alice",
+		Kind:           EventKindGroup,
+		GroupID:        "123456",
+		UserID:         "10001",
+		MessageID:      "q-1",
+		RawMessage:     "这个报错有人知道怎么处理吗",
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错有人知道怎么处理吗"}}},
+		SenderName:     "Alice",
+		proactiveReply: true,
 	}
 	if err := runtime.HandleEvent(context.Background(), event); err != nil {
 		t.Fatal(err)
@@ -2532,33 +2619,34 @@ func TestRuntimePassiveReplyUsesRoutingProfile(t *testing.T) {
 	}
 }
 
-func TestRuntimePassiveReplyUsesConciseMode(t *testing.T) {
+func TestRuntimeProactiveReplyUsesConciseMode(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &capturingLLMProvider{reply: strings.Repeat("很", 240)}
 	runtime := NewRuntime(BotConfig{
-		AgentEnabled:       false,
-		MaxReplyChars:      3500,
-		PassiveReplyPrompt: "custom concise passive instruction",
+		AgentEnabled:         false,
+		MaxReplyChars:        3500,
+		ProactiveReplyPrompt: "custom concise proactive instruction",
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
-		Kind:       EventKindGroup,
-		GroupID:    "123456",
-		UserID:     "10001",
-		MessageID:  "q-1",
-		RawMessage: "这个报错有人知道怎么处理吗",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错有人知道怎么处理吗"}}},
-		SenderName: "Alice",
+		Kind:           EventKindGroup,
+		GroupID:        "123456",
+		UserID:         "10001",
+		MessageID:      "q-1",
+		RawMessage:     "这个报错有人知道怎么处理吗",
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错有人知道怎么处理吗"}}},
+		SenderName:     "Alice",
+		proactiveReply: true,
 	}
 	reply, err := runtime.replyTo(context.Background(), event, "这个报错有人知道怎么处理吗")
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "custom concise passive instruction") {
+	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "custom concise proactive instruction") {
 		t.Fatalf("system prompt = %#v", provider.request.Messages)
 	}
-	if len([]rune(reply)) > passiveReplyMaxRunes+3 {
+	if len([]rune(reply)) > proactiveReplyMaxRunes+3 {
 		t.Fatalf("reply too long: %d %q", len([]rune(reply)), reply)
 	}
 	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
@@ -2566,28 +2654,28 @@ func TestRuntimePassiveReplyUsesConciseMode(t *testing.T) {
 	}
 }
 
-func TestPassiveReplySampleAllowsRespectsChance(t *testing.T) {
+func TestProactiveReplySampleAllowsRespectsChance(t *testing.T) {
 	event := MessageEvent{
 		Kind:      EventKindGroup,
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "q-1",
 	}
-	if !passiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 1) {
-		t.Fatal("chance=1 should always allow passive replies")
+	if !proactiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 1) {
+		t.Fatal("chance=1 should always allow proactive replies")
 	}
-	if passiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0) {
-		t.Fatal("chance=0 should block passive replies")
+	if proactiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0) {
+		t.Fatal("chance=0 should block proactive replies")
 	}
-	first := passiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0.25)
+	first := proactiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0.25)
 	for i := 0; i < 5; i++ {
-		if got := passiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0.25); got != first {
+		if got := proactiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0.25); got != first {
 			t.Fatal("sampling should be deterministic for the same event")
 		}
 	}
 }
 
-func TestPassiveReplyDecisionRequiresStrictThresholdAndCategory(t *testing.T) {
+func TestProactiveReplyDecisionRequiresStrictThresholdAndCategory(t *testing.T) {
 	tests := []struct {
 		name      string
 		raw       string
@@ -2610,7 +2698,7 @@ func TestPassiveReplyDecisionRequiresStrictThresholdAndCategory(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision, ok := parsePassiveReplyDecision(tt.raw)
+			decision, ok := parseProactiveReplyDecision(tt.raw)
 			got := ok && decision.allows(tt.threshold)
 			if got != tt.want {
 				t.Fatalf("decision=%#v ok=%v got=%v want=%v", decision, ok, got, tt.want)
@@ -2619,15 +2707,15 @@ func TestPassiveReplyDecisionRequiresStrictThresholdAndCategory(t *testing.T) {
 	}
 }
 
-func TestRuntimePassiveReplyDoesNotRateLimitQualifiedMessages(t *testing.T) {
+func TestRuntimeProactiveReplyDoesNotRateLimitQualifiedMessages(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":true,"confidence":0.99,"category":"needs_response","directed_at_bot":false,"answerable":true}`,
 		`{"should_reply":true,"confidence":0.99,"category":"bot_related","directed_at_bot":true,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
-		PassiveReplyChance:    1,
-		PassiveReplyThreshold: 0.9,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -2640,7 +2728,7 @@ func TestRuntimePassiveReplyDoesNotRateLimitQualifiedMessages(t *testing.T) {
 			RawMessage: text,
 			Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}},
 		}
-		if !runtime.shouldHandlePassiveReply(context.Background(), event, text) {
+		if !runtime.shouldHandleProactiveReply(context.Background(), event, text) {
 			t.Fatalf("qualified message %d was suppressed", index)
 		}
 	}
@@ -3382,7 +3470,7 @@ func TestRuntimeImageOperationsRequireFamiliarRelationship(t *testing.T) {
 	}
 }
 
-func TestRuntimePassiveImageGenerationSendsImage(t *testing.T) {
+func TestRuntimeProactiveImageGenerationSendsImage(t *testing.T) {
 	var gotPrompt string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/media" {
@@ -3423,12 +3511,13 @@ func TestRuntimePassiveImageGenerationSendsImage(t *testing.T) {
 	sharer := &recordingLocalMediaSharer{url: server.URL + "/media"}
 	runtime.SetLocalMediaSharer(sharer)
 	event := MessageEvent{
-		Kind:       EventKindGroup,
-		GroupID:    "123456",
-		UserID:     "10001",
-		MessageID:  "passive-img-1",
-		RawMessage: "帮人画一个番茄去街机厅玩 maimaiDX 的图",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "帮人画一个番茄去街机厅玩 maimaiDX 的图"}}},
+		Kind:           EventKindGroup,
+		GroupID:        "123456",
+		UserID:         "10001",
+		MessageID:      "proactive-img-1",
+		RawMessage:     "帮人画一个番茄去街机厅玩 maimaiDX 的图",
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "帮人画一个番茄去街机厅玩 maimaiDX 的图"}}},
+		proactiveReply: true,
 	}
 	if runtime.shouldHandleChat(event, event.RawMessage) {
 		t.Fatal("test message unexpectedly matched a direct chat trigger")
@@ -4087,11 +4176,12 @@ func TestRuntimeReplyRuleConvertsReplyToVoice(t *testing.T) {
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/rule-voice"})
 
 	reply, err := runtime.replyTo(context.Background(), MessageEvent{
-		Kind:      EventKindGroup,
-		GroupID:   "123456",
-		UserID:    "10001",
-		MessageID: "rule-voice",
-		Segments:  []MessageSegment{{Type: "text", Data: map[string]string{"text": "嘉然用语音说晚安"}}},
+		Kind:           EventKindGroup,
+		GroupID:        "123456",
+		UserID:         "10001",
+		MessageID:      "rule-voice",
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "嘉然用语音说晚安"}}},
+		proactiveReply: true,
 	}, "嘉然用语音说晚安")
 	if err != nil {
 		t.Fatal(err)
