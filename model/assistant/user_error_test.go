@@ -44,6 +44,14 @@ func TestPublicQQErrorMessageMapsEmptyModelOutput(t *testing.T) {
 	}
 }
 
+func TestPublicQQErrorMessageMapsUnavailableImage(t *testing.T) {
+	err := newImageMediaUnavailableError([]error{errors.New("image download failed: status=400")})
+	got := publicQQErrorMessage(err)
+	if got != "图片读取失败：原图片地址不可用，NapCat 回退也没有取得可读取的本地文件或下载地址。请重新发送图片后再试。" {
+		t.Fatalf("message = %q", got)
+	}
+}
+
 func TestReplyAndRecordSendsSanitizedErrorButKeepsDiagnostic(t *testing.T) {
 	channel := &recordingChannel{}
 	rawErr := errors.New(`Post "https://relay.private.example/v1/responses": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`)

@@ -1077,8 +1077,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	}
 	event = r.enrichReplyReference(ctx, event)
 	event = r.enrichForwardMessages(ctx, event)
-	event = r.enrichMediaReferences(ctx, event)
-	event = cacheMessageEventImages(ctx, event)
+	event = r.prepareEventImages(ctx, event)
 	event = cacheMessageEventVideos(ctx, event)
 	if r.plugins != nil {
 		event = r.plugins.ObserveEvent(ctx, event)
@@ -1347,8 +1346,7 @@ func (r *Runtime) observeSelfMessage(ctx context.Context, event MessageEvent) {
 	}
 	event = r.enrichReplyReference(ctx, event)
 	event = r.enrichForwardMessages(ctx, event)
-	event = r.enrichMediaReferences(ctx, event)
-	event = cacheMessageEventImages(ctx, event)
+	event = r.prepareEventImages(ctx, event)
 	event = cacheMessageEventVideos(ctx, event)
 	if r.plugins != nil {
 		event = r.plugins.ObserveEvent(ctx, event)
@@ -1528,7 +1526,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			UserID:     strings.TrimSpace(candidate.Event.UserID),
 			Sender:     strings.TrimSpace(candidate.Event.SenderNameOrID()),
 			Text:       truncateRunesFromStart(strings.TrimSpace(readableEventText(candidate.Event, candidate.Text)), 180),
-			Images:     len(ImageURLs(candidate.Event.Segments)),
+			Images:     imageSegmentCount(candidate.Event.Segments),
 			AgeSeconds: proactiveReplyMessageAge(latest.Event.Time, candidate.Event.Time),
 		})
 	}
@@ -1703,7 +1701,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	payload := proactiveReplyPayload{
 		CurrentText:      strings.TrimSpace(text),
 		CurrentSender:    strings.TrimSpace(event.SenderNameOrID()),
-		CurrentImages:    len(ImageURLs(event.Segments)),
+		CurrentImages:    imageSegmentCount(event.Segments),
 		BotQQ:            strings.TrimSpace(cfg.BotQQ),
 		BotAliases:       append([]string(nil), cfg.GroupTriggers...),
 		RecentImageCount: len(r.localImageEditSourceImages(event)),
@@ -1711,7 +1709,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	if event.Quoted != nil {
 		payload.QuotedText = quotedPlainText(event.Quoted)
 		payload.QuotedSender = strings.TrimSpace(firstNonEmpty(event.Quoted.SenderName, event.Quoted.UserID))
-		payload.QuotedImages = len(ImageURLs(event.Quoted.Segments))
+		payload.QuotedImages = imageSegmentCount(event.Quoted.Segments)
 		payload.QuotedIsBot = cfg.BotQQ != "" && event.Quoted.UserID == cfg.BotQQ
 	}
 	history := r.contextHistory(event)
@@ -1721,9 +1719,9 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 			continue
 		}
 		text := strings.TrimSpace(historyPlainText(item))
-		imageCount := len(ImageURLs(item.Segments))
+		imageCount := imageSegmentCount(item.Segments)
 		if item.Quoted != nil {
-			imageCount += len(ImageURLs(item.Quoted.Segments))
+			imageCount += imageSegmentCount(item.Quoted.Segments)
 		}
 		if text == "" && imageCount == 0 {
 			continue
@@ -2019,6 +2017,9 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 
 // replyTo 执行 owner 命令、插件和 LLM 回复链路。
 func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (string, error) {
+	if !event.imageResolutionRun && (hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments))) {
+		event = r.prepareEventImages(ctx, event)
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	replyHistory := r.contextHistory(event)
 	ctx = r.withQQPrivacyContext(ctx, event, replyHistory)
@@ -2039,6 +2040,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			return "", err
 		}
 		return reply, nil
+	}
+	if event.imageLoadErr != nil && (hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments))) {
+		return "", event.imageLoadErr
 	}
 	if resolverTriggered {
 		return r.replyWithResolverOnly(ctx, event, cleanText)
@@ -2079,6 +2083,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// own tools. Keep the legacy semantic pre-router only for non-Agent mode.
 		if !cfg.AgentEnabled {
 			event = r.enrichSemanticReference(ctx, event, cleanText)
+			event = r.prepareEventImages(ctx, event)
+			if event.imageLoadErr != nil && (hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments))) {
+				return "", event.imageLoadErr
+			}
 			event.replyHistory = nil
 			event.replyHistoryLoaded = false
 			replyHistory = r.contextHistory(event)
@@ -2275,7 +2283,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		historyImageMessage := llm.Message{}
 		if directAgentDecision {
 			historyImageIndexes = recentHistoryImageIndexes(replyHistory, event.MessageID)
-			historyImageMessage = agentHistoryImageBatchMessage(ctx, replyHistory, historyImageIndexes, event.Time)
+			var historyImageErr error
+			historyImageMessage, historyImageErr = r.agentHistoryImageBatchMessage(ctx, replyHistory, historyImageIndexes, event.Time)
+			if historyImageErr != nil {
+				return "", historyImageErr
+			}
 		}
 		for historyIndex, historyEvent := range replyHistory {
 			// 上下文只追加同会话的历史用户消息，当前消息本身会在最后单独加入。
@@ -2323,12 +2335,19 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if strings.TrimSpace(candidate.Event.MessageID) == "" || candidate.Event.MessageID == event.MessageID {
 				continue
 			}
-			turnMessage := llmMessageFromEventWithImagesForContext(
+			candidateEvent := r.prepareEventImages(ctx, candidate.Event)
+			if candidateEvent.imageLoadErr != nil {
+				return "", candidateEvent.imageLoadErr
+			}
+			turnMessage, turnImagesComplete := llmMessageFromEventWithImagesForContextDetailed(
 				ctx,
-				candidate.Event,
-				proactiveTurnPromptTextAt(candidate.Event, candidate.Text, event.Time),
+				candidateEvent,
+				proactiveTurnPromptTextAt(candidateEvent, candidate.Text, event.Time),
 				nil,
 			)
+			if !turnImagesComplete {
+				return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more proactive turn images could not be encoded")})
+			}
 			turnMessage.Priority = llm.MessagePriorityCurrent
 			if runtimeLLMMessageEmpty(turnMessage) {
 				continue
@@ -2336,13 +2355,23 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			messages = append(messages, turnMessage)
 		}
 	}
-	contextImageURLs := r.semanticReferenceImageURLs(ctx, event)
+	contextImageURLs, semanticImageErr := r.semanticReferenceImageURLsDetailed(ctx, event)
+	if semanticImageErr != nil {
+		return "", semanticImageErr
+	}
 	contextImageURLs = appendUniqueStrings(contextImageURLs, pluginImageURLs(pluginResponses)...)
 	if directAgentDecision {
-		contextImageURLs = llmReadyImageURLs(ctx, contextImageURLs)
+		var contextImagesComplete bool
+		contextImageURLs, contextImagesComplete = loadLLMImageURLs(ctx, contextImageURLs)
+		if !contextImagesComplete {
+			return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more referenced images could not be encoded")})
+		}
 		contextImageURLs = withoutMessageImageURLs(contextImageURLs, messages)
 	}
-	currentMessage := llmMessageFromEventWithVideoFrames(ctx, event, currentPromptText(event, cleanText), contextImageURLs)
+	currentMessage, currentImagesComplete := llmMessageFromEventWithVideoFramesDetailed(ctx, event, currentPromptText(event, cleanText), contextImageURLs)
+	if !currentImagesComplete {
+		return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more current images could not be encoded")})
+	}
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	messages = append(messages, currentMessage)
 
@@ -2615,7 +2644,7 @@ func (r *Runtime) evaluateReplyRules(ctx context.Context, event MessageEvent, te
 			continue
 		}
 		text := strings.TrimSpace(historyPlainText(item))
-		imageCount := len(ImageURLs(item.Segments))
+		imageCount := imageSegmentCount(item.Segments)
 		if text == "" && imageCount == 0 {
 			continue
 		}
@@ -2947,13 +2976,13 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 func (r *Runtime) visualIntentPayload(event MessageEvent, text string) visualIntentPayload {
 	payload := visualIntentPayload{
 		CurrentText:             strings.TrimSpace(text),
-		CurrentImages:           len(ImageURLs(event.Segments)),
+		CurrentImages:           imageSegmentCount(event.Segments),
 		RecentImageCount:        len(r.localImageEditSourceImages(event)),
 		AvailableIdentityImages: r.visualIntentIdentityImages(event),
 	}
 	if event.Quoted != nil {
 		payload.QuotedText = quotedPlainText(event.Quoted)
-		payload.QuotedImages = len(ImageURLs(event.Quoted.Segments))
+		payload.QuotedImages = imageSegmentCount(event.Quoted.Segments)
 	}
 	history := r.contextHistory(event)
 	for i := len(history) - 1; i >= 0; i-- {
@@ -2989,11 +3018,11 @@ func visualIntentHistoryItemFromEvent(event MessageEvent) visualIntentHistoryIte
 		MessageID: strings.TrimSpace(event.MessageID),
 		Sender:    strings.TrimSpace(event.SenderNameOrID()),
 		Text:      truncateRunesFromStart(strings.TrimSpace(historyPlainText(event)), 480),
-		Images:    len(ImageURLs(event.Segments)),
+		Images:    imageSegmentCount(event.Segments),
 	}
 	if event.Quoted != nil {
 		item.QuotedMessageID = strings.TrimSpace(event.Quoted.MessageID)
-		item.Images += len(ImageURLs(event.Quoted.Segments))
+		item.Images += imageSegmentCount(event.Quoted.Segments)
 	}
 	return item
 }
@@ -3391,9 +3420,9 @@ func recentHistoryImageIndexes(history []MessageEvent, currentMessageID string) 
 		if strings.TrimSpace(currentMessageID) != "" && item.MessageID == currentMessageID {
 			continue
 		}
-		imageCount := len(ImageURLs(item.Segments))
+		imageCount := imageSegmentCount(item.Segments)
 		if item.Quoted != nil {
-			imageCount += len(ImageURLs(item.Quoted.Segments))
+			imageCount += imageSegmentCount(item.Quoted.Segments)
 		}
 		if imageCount == 0 {
 			if started {
@@ -3422,15 +3451,19 @@ func recentHistoryImageIndexes(history []MessageEvent, currentMessageID string) 
 	return selected
 }
 
-func agentHistoryImageBatchMessage(ctx context.Context, history []MessageEvent, selected map[int]bool, currentTime int64) llm.Message {
+func (r *Runtime) agentHistoryImageBatchMessage(ctx context.Context, history []MessageEvent, selected map[int]bool, currentTime int64) (llm.Message, error) {
 	if len(selected) == 0 {
-		return llm.Message{}
+		return llm.Message{}, nil
 	}
 	var lines []string
 	var sourceImageURLs []string
 	for index, item := range history {
 		if !selected[index] {
 			continue
+		}
+		item = r.prepareEventImages(ctx, item)
+		if item.imageLoadErr != nil {
+			return llm.Message{}, item.imageLoadErr
 		}
 		line := historyPromptTextAt(item, currentTime)
 		if line == "" {
@@ -3449,12 +3482,10 @@ func agentHistoryImageBatchMessage(ctx context.Context, history []MessageEvent, 
 	}
 	imageURLs, complete := loadLLMImageURLs(ctx, sourceImageURLs)
 	if !complete {
-		// Never describe a partially available burst as complete. Returning an
-		// empty message also prevents a text-only image placeholder.
-		return llm.Message{}
+		return llm.Message{}, newImageMediaUnavailableError([]error{fmt.Errorf("one or more selected history images could not be encoded")})
 	}
 	if len(imageURLs) == 0 {
-		return llm.Message{}
+		return llm.Message{}, nil
 	}
 	text := strings.Join(lines, "\n")
 	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
@@ -3469,7 +3500,7 @@ func agentHistoryImageBatchMessage(ctx context.Context, history []MessageEvent, 
 		Content:  text,
 		Parts:    parts,
 		Priority: llm.MessagePriorityPlugin,
-	}
+	}, nil
 }
 
 func (r *Runtime) qqImageEditSourceImages(ctx context.Context, event MessageEvent, prompt string) []string {
@@ -4995,9 +5026,9 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 }
 
 func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
-	imageCount := len(ImageURLs(event.Segments))
+	imageCount := imageSegmentCount(event.Segments)
 	if event.Quoted != nil {
-		imageCount += len(ImageURLs(event.Quoted.Segments))
+		imageCount += imageSegmentCount(event.Quoted.Segments)
 	}
 	if imageCount == 0 {
 		return ""
@@ -5152,6 +5183,11 @@ func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Me
 }
 
 func llmMessageFromEventWithVideoFrames(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) llm.Message {
+	message, _ := llmMessageFromEventWithVideoFramesDetailed(ctx, event, text, extraImageURLs)
+	return message
+}
+
+func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
 	videoURLs := videoSourceCandidates(event.Segments)
 	cachedFrames := cachedVideoFrameURLs(event.Segments)
 	quotedVideo := false
@@ -5182,7 +5218,7 @@ func llmMessageFromEventWithVideoFrames(ctx context.Context, event MessageEvent,
 		}
 	}
 	extraImageURLs = append(extraImageURLs, frames...)
-	return llmMessageFromEventWithImagesForContext(ctx, event, text, extraImageURLs)
+	return llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
 }
 
 func hasVideoSegment(segments []MessageSegment) bool {
@@ -5207,15 +5243,22 @@ func llmMessageFromEventWithImages(event MessageEvent, text string, extraImageUR
 }
 
 func llmMessageFromEventWithImagesForContext(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) llm.Message {
+	message, _ := llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
+	return message
+}
+
+func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
 	text = strings.TrimSpace(text)
 	imageURLs := ImageURLs(event.Segments)
 	if event.Quoted != nil {
 		imageURLs = append(imageURLs, ImageURLs(event.Quoted.Segments)...)
 	}
 	imageURLs = append(imageURLs, extraImageURLs...)
-	imageURLs = llmReadyImageURLs(ctx, imageURLs)
+	var complete bool
+	imageURLs, complete = loadLLMImageURLs(ctx, imageURLs)
+	imageURLs = dedupeStrings(imageURLs)
 	if len(imageURLs) == 0 {
-		return llm.Message{Role: llm.RoleUser, Content: text}
+		return llm.Message{Role: llm.RoleUser, Content: text}, complete
 	}
 	if imageOnlyPrompt(text, event) {
 		if len(imageURLs) == 1 {
@@ -5231,7 +5274,7 @@ func llmMessageFromEventWithImagesForContext(ctx context.Context, event MessageE
 	for _, imageURL := range imageURLs {
 		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "auto"})
 	}
-	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}
+	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, complete
 }
 
 func hasKnownResolverPlatformURL(event MessageEvent, text string) bool {
@@ -6371,6 +6414,8 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 
 func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
 	event.proactiveReply = false
+	event.imageResolutionRun = false
+	event.imageLoadErr = nil
 	event.replyHistory = nil
 	event.replyHistoryLoaded = false
 	event.userProfile = UserMemoryProfile{}

@@ -92,6 +92,8 @@ type MessageEvent struct {
 	botReply           string
 	routingReason      string
 	proactiveReply     bool
+	imageResolutionRun bool
+	imageLoadErr       error
 	replyHistory       []MessageEvent
 	replyHistoryLoaded bool
 	userProfile        UserMemoryProfile
