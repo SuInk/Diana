@@ -302,6 +302,52 @@ func TestRunnerKeepsTrustedRuntimeClockOutsideStableProtocol(t *testing.T) {
 	}
 }
 
+func TestRunnerAppendsVolatileClockAfterCallerPrompt(t *testing.T) {
+	client := &scriptedClient{}
+	runner := &Runner{client: client, cfg: Config{}.WithDefaults(), registry: NewToolRegistry()}
+	caller := []llm.Message{
+		{Role: llm.RoleSystem, Content: "人设提示词"},
+		{Role: llm.RoleUser, Content: "【历史参考消息】旧问题"},
+		{Role: llm.RoleUser, Content: "【当前需要回复的消息】现在几点"},
+	}
+	if _, err := runner.Run(context.Background(), Request{Messages: caller}); err != nil {
+		t.Fatal(err)
+	}
+	messages := client.requests[0].Messages
+	// 时钟必须排在调用方的稳定提示词和历史之后，否则前缀缓存从第二条起就断了。
+	if !strings.Contains(messages[1].Content, "人设提示词") || !strings.Contains(messages[2].Content, "【历史参考消息】") {
+		t.Fatalf("caller prompt was displaced: %#v", messages)
+	}
+	if !strings.Contains(messages[3].Content, RuntimeClockMarker) {
+		t.Fatalf("clock is not in the trailing block: %#v", messages)
+	}
+	// 当前消息必须仍是最后一条，下游按最后下标判定当前轮。
+	if !strings.Contains(messages[len(messages)-1].Content, "【当前需要回复的消息】") {
+		t.Fatalf("current turn is no longer last: %#v", messages)
+	}
+}
+
+func TestRunnerSkipsClockWhenCallerAlreadyProvidesOne(t *testing.T) {
+	client := &scriptedClient{}
+	runner := &Runner{client: client, cfg: Config{}.WithDefaults(), registry: NewToolRegistry()}
+	caller := []llm.Message{
+		{Role: llm.RoleSystem, Content: RuntimeClockMarker + "2026-08-12 23:00:00（时区 CST，UTC+08:00）"},
+		{Role: llm.RoleUser, Content: "现在几点"},
+	}
+	if _, err := runner.Run(context.Background(), Request{Messages: caller}); err != nil {
+		t.Fatal(err)
+	}
+	clocks := 0
+	for _, message := range client.requests[0].Messages {
+		if strings.Contains(message.Content, RuntimeClockMarker) {
+			clocks++
+		}
+	}
+	if clocks != 1 {
+		t.Fatalf("clock injected %d times, want 1: %#v", clocks, client.requests[0].Messages)
+	}
+}
+
 func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
 	prompt := runner.systemPrompt()

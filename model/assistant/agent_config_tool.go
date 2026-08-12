@@ -92,6 +92,11 @@ type dianaBotConfigSnapshot struct {
 	CrossGroupMemoryEnabled         bool                     `json:"cross_group_memory_enabled"`
 	ProactiveReplyChance            float64                  `json:"proactive_reply_chance"`
 	ProactiveReplyThreshold         float64                  `json:"proactive_reply_threshold"`
+	ChatInEnabled                   bool                     `json:"chat_in_enabled"`
+	ChatInLevel                     string                   `json:"chat_in_level"`
+	ChatInThreshold                 float64                  `json:"chat_in_threshold"`
+	ChatInChance                    float64                  `json:"chat_in_chance"`
+	ChatInCooldownSeconds           int                      `json:"chat_in_cooldown_seconds"`
 	ReplyRules                      []ReplyRule              `json:"reply_rules,omitempty"`
 	MaxBotConcurrency               int                      `json:"max_bot_concurrency"`
 	RequestTimeoutMS                int64                    `json:"request_timeout_ms"`
@@ -238,6 +243,7 @@ func dianaRuntimeFromStatus(status RuntimeStatus) dianaRuntimeSnapshot {
 }
 
 func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
+	chatIn := cfg.chatInSettings()
 	return dianaBotConfigSnapshot{
 		ID:                              cfg.ID,
 		Name:                            cfg.Name,
@@ -296,6 +302,11 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		CrossGroupMemoryEnabled:         boolValue(cfg.CrossGroupMemoryEnabled, false),
 		ProactiveReplyChance:            cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:         cfg.ProactiveReplyThreshold,
+		ChatInEnabled:                   chatIn.Enabled,
+		ChatInLevel:                     string(chatIn.Level),
+		ChatInThreshold:                 chatIn.Threshold,
+		ChatInChance:                    chatIn.Chance,
+		ChatInCooldownSeconds:           int(chatIn.Cooldown / time.Second),
 		ReplyRules:                      append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:               cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),

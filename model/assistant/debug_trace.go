@@ -60,7 +60,7 @@ func (p *debugTraceLLMProvider) Generate(ctx context.Context, req llm.GenerateRe
 	}
 	message := "模型请求完成"
 	if response != nil {
-		metadata["response"] = response
+		metadata["response"] = sanitizeDebugGenerateResponse(req, response)
 		metadata["provider"] = response.Provider
 		metadata["model"] = response.Model
 		metadata["usage"] = response.Usage
@@ -103,6 +103,9 @@ func sanitizeDebugGenerateRequest(req llm.GenerateRequest) llm.GenerateRequest {
 	cloned.Messages = make([]llm.Message, len(req.Messages))
 	for index, message := range req.Messages {
 		cloned.Messages[index] = message
+		if oneBotV11DebugProtocolMessage(message) {
+			cloned.Messages[index].Content = "[OneBot v11 Agent protocol payload omitted]"
+		}
 		cloned.Messages[index].Parts = append([]llm.ContentPart(nil), message.Parts...)
 		for partIndex := range cloned.Messages[index].Parts {
 			part := &cloned.Messages[index].Parts[partIndex]
@@ -112,6 +115,36 @@ func sanitizeDebugGenerateRequest(req llm.GenerateRequest) llm.GenerateRequest {
 		}
 	}
 	return cloned
+}
+
+func sanitizeDebugGenerateResponse(req llm.GenerateRequest, response *llm.GenerateResponse) *llm.GenerateResponse {
+	if response == nil {
+		return nil
+	}
+	cloned := *response
+	if strings.Contains(cloned.Text, dianaOneBotV11ToolName) || requestContainsOneBotV11DebugProtocol(req) {
+		cloned.Text = "[OneBot v11 model payload omitted]"
+	}
+	return &cloned
+}
+
+func requestContainsOneBotV11DebugProtocol(req llm.GenerateRequest) bool {
+	for _, message := range req.Messages {
+		if oneBotV11DebugProtocolMessage(message) {
+			return true
+		}
+	}
+	return false
+}
+
+func oneBotV11DebugProtocolMessage(message llm.Message) bool {
+	if !strings.Contains(message.Content, dianaOneBotV11ToolName) {
+		return false
+	}
+	if message.Role == llm.RoleAssistant {
+		return true
+	}
+	return message.Role == llm.RoleUser && strings.Contains(message.Content, "工具 "+dianaOneBotV11ToolName+" 执行")
 }
 
 func debugModelPurpose(req llm.GenerateRequest) string {

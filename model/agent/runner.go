@@ -67,26 +67,43 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		traceID = newRunTraceID()
 	}
 	// Keep the long tool protocol stable so providers can cache it. Per-request
-	// clock and explicit-skill hints stay in small trailing system messages.
+	// clock and explicit-skill hints stay in small trailing system messages, so
+	// they must be appended after the caller's own stable prompt and history —
+	// injecting them up front would change the prefix on every request and make
+	// the whole cached span unusable.
 	messages := make([]llm.Message, 0, len(req.Messages)+r.cfg.MaxSteps*2+5)
 	messages = append(messages, llm.Message{
 		Role:     llm.RoleSystem,
 		Content:  r.systemPrompt(),
 		Priority: llm.MessagePrioritySystem,
 	})
-	messages = append(messages, llm.Message{
-		Role:     llm.RoleSystem,
-		Content:  trustedRuntimeClockPrompt(time.Now()),
-		Priority: llm.MessagePrioritySystem,
-	})
+	var volatile []llm.Message
+	// The caller may already carry a trusted clock in its own prompt; a second
+	// one only wastes tokens and risks the two disagreeing.
+	if !messagesCarryRuntimeClock(req.Messages) {
+		volatile = append(volatile, llm.Message{
+			Role:     llm.RoleSystem,
+			Content:  trustedRuntimeClockPrompt(time.Now()),
+			Priority: llm.MessagePrioritySystem,
+		})
+	}
 	if skillHint := r.explicitSkillPrompt(req); skillHint != "" {
-		messages = append(messages, llm.Message{
+		volatile = append(volatile, llm.Message{
 			Role:     llm.RoleSystem,
 			Content:  skillHint,
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
-	messages = append(messages, req.Messages...)
+	// Insert the volatile block just before the final message so the current
+	// turn stays last, which downstream priority handling depends on.
+	if split := len(req.Messages) - 1; split > 0 {
+		messages = append(messages, req.Messages[:split]...)
+		messages = append(messages, volatile...)
+		messages = append(messages, req.Messages[split:]...)
+	} else {
+		messages = append(messages, volatile...)
+		messages = append(messages, req.Messages...)
+	}
 
 	var steps []Step
 	var lastText string
@@ -611,9 +628,22 @@ func (r *Runner) explicitSkillPrompt(req Request) string {
 	return strings.TrimSpace(builder.String())
 }
 
+// RuntimeClockMarker 是可信实时时钟提示的稳定前缀，调用方自带时钟时复用它即可让
+// Runner 跳过重复注入。
+const RuntimeClockMarker = "当前运行时钟："
+
 func trustedRuntimeClockPrompt(now time.Time) string {
 	zoneName, zoneOffset := now.Zone()
-	return fmt.Sprintf("当前运行时钟：%s（时区 %s，UTC%s）。这是可信实时时间；询问当前日期或几点时直接回答，不要声称无法访问实时时钟。", now.Format("2006-01-02 15:04:05"), zoneName, formatAgentUTCOffset(zoneOffset))
+	return fmt.Sprintf("%s%s（时区 %s，UTC%s）。这是可信实时时间；询问当前日期或几点时直接回答，不要声称无法访问实时时钟。", RuntimeClockMarker, now.Format("2006-01-02 15:04:05"), zoneName, formatAgentUTCOffset(zoneOffset))
+}
+
+func messagesCarryRuntimeClock(messages []llm.Message) bool {
+	for _, message := range messages {
+		if message.Role == llm.RoleSystem && strings.Contains(message.Content, RuntimeClockMarker) {
+			return true
+		}
+	}
+	return false
 }
 
 func explicitExtensionMutationRequested(text, kind string) bool {

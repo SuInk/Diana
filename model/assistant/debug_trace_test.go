@@ -61,3 +61,24 @@ func TestDebugTraceRecordsModelContextOnlyWhenEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestDebugTraceRedactsOneBotV11AgentProtocol(t *testing.T) {
+	req := llm.GenerateRequest{Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: "tool available: " + dianaOneBotV11ToolName},
+		{Role: llm.RoleAssistant, Content: `{"action":"tool","tool":"diana.onebot_v11","input":{"action":"get_credentials","params":{"domain":"secret.example"}}}`},
+		{Role: llm.RoleUser, Content: "工具 diana.onebot_v11 执行成功：owner-secret"},
+	}}
+	sanitized := sanitizeDebugGenerateRequest(req)
+	if sanitized.Messages[0].Content != req.Messages[0].Content {
+		t.Fatalf("system prompt was unexpectedly redacted: %q", sanitized.Messages[0].Content)
+	}
+	for _, message := range sanitized.Messages[1:] {
+		if strings.Contains(message.Content, "secret") || !strings.Contains(message.Content, "omitted") {
+			t.Fatalf("protocol message was not redacted: %q", message.Content)
+		}
+	}
+	response := sanitizeDebugGenerateResponse(req, &llm.GenerateResponse{Text: "owner-secret"})
+	if response == nil || strings.Contains(response.Text, "owner-secret") || !strings.Contains(response.Text, "omitted") {
+		t.Fatalf("response was not redacted: %#v", response)
+	}
+}

@@ -49,6 +49,8 @@ type Config struct {
 	MCPToolTimeoutMS      int
 	ExtensionManagement   bool
 	BuiltinExtensions     []BuiltinExtension
+	BuiltinSkills         []SkillMetadata
+	ReservedSkillNames    []string
 	CommandAllowlist      []string
 	CommandTimeoutMS      int
 	BrowserCDPURL         string
@@ -208,6 +210,8 @@ func (cfg Config) WithDefaults() Config {
 		cfg.MCPConfigPath = filepath.Join(workDir, ".mcp.json")
 	}
 	cfg.BuiltinExtensions = normalizeBuiltinExtensions(cfg.BuiltinExtensions)
+	cfg.BuiltinSkills = normalizeBuiltinSkills(cfg.BuiltinSkills)
+	cfg.ReservedSkillNames = cleanStringList(cfg.ReservedSkillNames)
 	return cfg
 }
 

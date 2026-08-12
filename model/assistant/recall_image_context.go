@@ -20,6 +20,8 @@ const (
 	recallImageDescriptionVersion     = "recall-image-v1"
 	recallImageDescriptionMaxRunes    = 1600
 	recallImageDescriptionConcurrency = 3
+	// 历史行里的描述比撤回记录短得多：每轮都要重复发送，超长会把上下文预算吃光。
+	historyImageDescriptionMaxRunes = 400
 )
 
 type recallImagePosition struct {

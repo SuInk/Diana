@@ -35,7 +35,7 @@ func TestRelationshipPolicyTiersRequireScoreAndInteractionCount(t *testing.T) {
 
 func TestRelationshipPolicySeparatesCapabilitiesFromOwnerAdministration(t *testing.T) {
 	initial := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "user")
-	if !initial.allowedAgentToolNames()["web_search.search"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()["diana.relationship"] || !initial.allowedAgentToolNames()["diana.tts"] || initial.allowedAgentToolNames()[dianaImageToolName] || initial.AllowImageGeneration || initial.AllowImageEditing || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
+	if !initial.allowedAgentToolNames()["web_search.search"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()["diana.relationship"] || !initial.allowedAgentToolNames()["diana.tts"] || !initial.allowedAgentToolNames()[dianaOneBotV11ToolName] || initial.allowedAgentToolNames()[dianaImageToolName] || initial.AllowImageGeneration || initial.AllowImageEditing || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
 		t.Fatalf("initial tools = %#v", initial.allowedAgentToolNames())
 	}
 	familiar := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", "user")
