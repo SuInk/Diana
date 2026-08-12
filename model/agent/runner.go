@@ -66,13 +66,26 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	if traceID == "" {
 		traceID = newRunTraceID()
 	}
-	// Agent 协议把系统提示词插到最前面，后续每轮再追加模型动作和工具观察。
-	messages := make([]llm.Message, 0, len(req.Messages)+r.cfg.MaxSteps*2+3)
+	// Keep the long tool protocol stable so providers can cache it. Per-request
+	// clock and explicit-skill hints stay in small trailing system messages.
+	messages := make([]llm.Message, 0, len(req.Messages)+r.cfg.MaxSteps*2+5)
 	messages = append(messages, llm.Message{
 		Role:     llm.RoleSystem,
-		Content:  r.systemPrompt(req),
+		Content:  r.systemPrompt(),
 		Priority: llm.MessagePrioritySystem,
 	})
+	messages = append(messages, llm.Message{
+		Role:     llm.RoleSystem,
+		Content:  trustedRuntimeClockPrompt(time.Now()),
+		Priority: llm.MessagePrioritySystem,
+	})
+	if skillHint := r.explicitSkillPrompt(req); skillHint != "" {
+		messages = append(messages, llm.Message{
+			Role:     llm.RoleSystem,
+			Content:  skillHint,
+			Priority: llm.MessagePrioritySystem,
+		})
+	}
 	messages = append(messages, req.Messages...)
 
 	var steps []Step
@@ -511,24 +524,10 @@ func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
 }
 
 // systemPrompt 构造 Agent JSON 动作协议提示词。
-func (r *Runner) systemPrompt(req Request) string {
+func (r *Runner) systemPrompt() string {
 	skillsPrompt := RenderSkillsPrompt(r.registry.Skills(), r.cfg.SkillsListBudget)
 	extensionsPrompt := RenderExtensionsPrompt(r.registry.Extensions())
-	selected := SelectExplicitSkills(r.registry.Skills(), requestText(req))
-	if len(selected) > 0 {
-		var builder strings.Builder
-		builder.WriteString("\n\n### Explicitly Mentioned Skills\n")
-		for _, skill := range selected {
-			builder.WriteString("- ")
-			builder.WriteString(skill.Name)
-			builder.WriteString(": call `skills.read` before acting.\n")
-		}
-		skillsPrompt += builder.String()
-	}
 	skillsPrompt = strings.TrimSpace(skillsPrompt)
-	now := time.Now()
-	zoneName, zoneOffset := now.Zone()
-	timeContext := fmt.Sprintf("当前运行时钟：%s（时区 %s，UTC%s）。这是可信实时时间；询问当前日期或几点时直接回答，不要声称无法访问实时时钟。", now.Format("2006-01-02 15:04:05"), zoneName, formatAgentUTCOffset(zoneOffset))
 	hasTool := func(name string) bool {
 		_, ok := r.registry.Get(name)
 		return ok
@@ -583,7 +582,6 @@ func (r *Runner) systemPrompt(req Request) string {
 	rules = append(rules, "- 已经足够回答时必须使用 final。")
 	sections := []string{
 		"你是 Diana QQ Bot 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
-		timeContext,
 		"你只能输出一个 JSON 对象，不要输出 Markdown、解释性前缀或额外文本。",
 		"可用动作：\n1. 调用工具：{\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}\n2. 最终回复：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\"}\n3. 兼容 Responses API function call：{\"type\":\"function_call\",\"name\":\"工具名\",\"arguments\":{...}}",
 		"可用工具：\n" + r.registry.Descriptions(),
@@ -596,6 +594,26 @@ func (r *Runner) systemPrompt(req Request) string {
 	}
 	sections = append(sections, "规则：\n"+strings.Join(rules, "\n"))
 	return strings.TrimSpace(strings.Join(sections, "\n\n"))
+}
+
+func (r *Runner) explicitSkillPrompt(req Request) string {
+	selected := SelectExplicitSkills(r.registry.Skills(), requestText(req))
+	if len(selected) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString("### Explicitly Mentioned Skills\n")
+	for _, skill := range selected {
+		builder.WriteString("- ")
+		builder.WriteString(skill.Name)
+		builder.WriteString(": call `skills.read` before acting.\n")
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func trustedRuntimeClockPrompt(now time.Time) string {
+	zoneName, zoneOffset := now.Zone()
+	return fmt.Sprintf("当前运行时钟：%s（时区 %s，UTC%s）。这是可信实时时间；询问当前日期或几点时直接回答，不要声称无法访问实时时钟。", now.Format("2006-01-02 15:04:05"), zoneName, formatAgentUTCOffset(zoneOffset))
 }
 
 func explicitExtensionMutationRequested(text, kind string) bool {

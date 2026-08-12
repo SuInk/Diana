@@ -169,19 +169,19 @@ func TestReplyToBotEntersSemanticAnswerabilityGate(t *testing.T) {
 	if runtime.shouldHandleChat(event, "再说一下") {
 		t.Fatal("replying to the bot must not bypass semantic answerability routing")
 	}
-	if !runtime.shouldConsiderPassiveReply(event, "再说一下") {
+	if !runtime.shouldConsiderProactiveReply(event, "再说一下") {
 		t.Fatal("replying to the bot should enter semantic answerability routing")
 	}
 }
 
-func TestPassiveReplyRouterUsesStrictSemanticTimeout(t *testing.T) {
-	if got := passiveReplyRouteTimeout(BotConfig{RequestTimeout: 5 * time.Minute}); got != 60*time.Second {
+func TestProactiveReplyRouterUsesStrictSemanticTimeout(t *testing.T) {
+	if got := proactiveReplyRouteTimeout(BotConfig{RequestTimeout: 5 * time.Minute}); got != 60*time.Second {
 		t.Fatalf("route timeout = %s, want 60s", got)
 	}
-	if got := passiveReplyRouteTimeout(BotConfig{RequestTimeout: 3 * time.Minute}); got != 60*time.Second {
+	if got := proactiveReplyRouteTimeout(BotConfig{RequestTimeout: 3 * time.Minute}); got != 60*time.Second {
 		t.Fatalf("route timeout = %s, want 60s", got)
 	}
-	if got := passiveReplyRouteTimeout(BotConfig{RequestTimeout: 8 * time.Second}); got != 8*time.Second {
+	if got := proactiveReplyRouteTimeout(BotConfig{RequestTimeout: 8 * time.Second}); got != 8*time.Second {
 		t.Fatalf("short configured timeout = %s, want 8s", got)
 	}
 }
@@ -227,7 +227,7 @@ func TestRuntimeAssignsInboundPriorities(t *testing.T) {
 	}
 }
 
-func TestPassiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
+func TestProactiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		ActiveID: "cheap-primary",
 		Profiles: []llm.Profile{
@@ -235,7 +235,7 @@ func TestPassiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
 		},
 	}}
 	provider := &countingErrorLLMProvider{err: errors.New("502 Bad Gateway")}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", PassiveReplyChance: 1}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	var configuredModels []string
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
 		configuredModels = append(configuredModels, cfg.Model)
@@ -245,12 +245,12 @@ func TestPassiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
 		Kind:       EventKindGroup,
 		GroupID:    "123",
 		UserID:     "1",
-		MessageID:  "passive-1",
+		MessageID:  "proactive-1",
 		RawMessage: "这个问题该怎么处理？",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个问题该怎么处理？"}}},
 	}
-	if runtime.shouldHandlePassiveReply(context.Background(), event, event.RawMessage) {
-		t.Fatal("failed passive route unexpectedly allowed a reply")
+	if runtime.shouldHandleProactiveReply(context.Background(), event, event.RawMessage) {
+		t.Fatal("failed proactive route unexpectedly allowed a reply")
 	}
 	if provider.calls != 2 {
 		t.Fatalf("provider calls=%d, want initial request plus one retry", provider.calls)

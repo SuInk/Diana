@@ -477,14 +477,24 @@
                 <label for="bot-wake-only-prompt">仅唤醒机器人时</label>
                 <textarea id="bot-wake-only-prompt" v-model="form.prompt_wake_only_text" class="textarea" rows="2"></textarea>
               </div>
+              <div class="field">
+                <label for="bot-proactive-chance">主动回复采样率</label>
+                <input id="bot-proactive-chance" v-model.number="form.proactive_reply_chance" class="input" type="number" min="0.05" max="1" step="0.05" />
+                <span class="hint">路由判断放行后实际回复的比例，1 表示全部执行。</span>
+              </div>
+              <div class="field">
+                <label for="bot-proactive-threshold">主动回复置信度阈值</label>
+                <input id="bot-proactive-threshold" v-model.number="form.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
+                <span class="hint">越高越克制；默认 0.9。</span>
+              </div>
               <div class="field wide">
-                <label for="bot-passive-router-prompt">主动回复判断</label>
-                <textarea id="bot-passive-router-prompt" v-model="form.passive_reply_router_prompt" class="textarea" rows="8"></textarea>
+                <label for="bot-proactive-router-prompt">主动回复判断</label>
+                <textarea id="bot-proactive-router-prompt" v-model="form.proactive_reply_router_prompt" class="textarea" rows="8"></textarea>
                 <span class="hint">仅用于群聊未显式唤醒机器人时的语义判断；决定是否回复、目标消息和同轮消息。留空保存会恢复内置规则。</span>
               </div>
               <div class="field wide">
-                <label for="bot-passive-reply-prompt">主动回复生成约束</label>
-                <textarea id="bot-passive-reply-prompt" v-model="form.passive_reply_prompt" class="textarea" rows="3"></textarea>
+                <label for="bot-proactive-reply-prompt">主动回复生成约束</label>
+                <textarea id="bot-proactive-reply-prompt" v-model="form.proactive_reply_prompt" class="textarea" rows="3"></textarea>
                 <span class="hint">仅在主动回复判断放行后注入最终回复模型，不影响显式 @、私聊和插件回复。</span>
               </div>
             </div>
@@ -1287,8 +1297,8 @@ const promptDefaults = {
     "当前是 QQ 群聊，正在和你说话的是「{sender}」；历史消息以“昵称: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。",
   prompt_image_only_text: "请分析这张图片，并直接回答用户关于图片的问题。",
   prompt_wake_only_text: "用户只唤醒了你，请自然回应。",
-  passive_reply_router_prompt: "",
-  passive_reply_prompt:
+  proactive_reply_router_prompt: "",
+  proactive_reply_prompt:
     "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 };
 

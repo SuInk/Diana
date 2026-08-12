@@ -56,7 +56,7 @@ LLM_TIMEOUT_MS=60000</code></pre>
         <p>群管理会通过 OneBot <code>get_group_list</code> 同步机器人加入的全部群，而不仅是已经存在本地配置的群。连接不可用时才回退显示 SQLite 中保存的群配置。</p>
         <div class="policy-list">
           <div><strong>启用状态</strong><span>单独停止某个群，不影响其他群或私聊。</span></div>
-          <div><strong>触发与主动回复</strong><span>显式 @、引用、触发词和被动语义路由分层判断；显式 @ 优先于引用。</span></div>
+          <div><strong>触发与主动回复</strong><span>显式 @、引用、触发词和主动回复语义路由分层判断；显式 @ 优先于引用。</span></div>
           <div><strong>回复时间</strong><span>支持同日、跨夜时间段和 IANA 时区；这属于群策略，不写入模型提示。</span></div>
           <div><strong>屏蔽 QQ 号</strong><span>名单只影响当前群，不影响同一用户在其他群或私聊中的消息。</span></div>
           <div><strong>人设与上下文</strong><span>群级提示、历史条数和回复长度可以覆盖机器人默认值。</span></div>

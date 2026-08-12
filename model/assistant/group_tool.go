@@ -31,8 +31,8 @@ type dianaQQGroupResult struct {
 }
 
 type dianaQQGroupReplyPolicy struct {
-	PassiveReplyChance      float64 `json:"passive_reply_chance"`
-	PassiveReplyThreshold   float64 `json:"passive_reply_threshold"`
+	ProactiveReplyChance    float64 `json:"proactive_reply_chance"`
+	ProactiveReplyThreshold float64 `json:"proactive_reply_threshold"`
 	MinimumReplyMemberLevel int     `json:"minimum_reply_member_level"`
 }
 
@@ -56,7 +56,7 @@ func (t *dianaQQGroupTool) Name() string {
 }
 
 func (t *dianaQQGroupTool) Description() string {
-	return `读取当前 QQ 群的真实群信息、成员和回复策略。用户要求查群名、成员、群名片、昵称、QQ号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用；不要要求用户先手动 @。operation=info 读取群资料；operation=members 获取或检索成员；operation=reply_policy 读取本群插话概率、判断阈值和最低回复群等级；operation=set_reply_policy 修改这些设置。只有机器人主人、群主或群管理员可读取或修改 reply policy，工具会实时校验权限。set_reply_policy 支持局部更新，passive_reply_chance 范围 0.05~1，passive_reply_threshold 范围 0.5~1，minimum_reply_member_level 范围 0~1000；低于最低等级的成员仅在主动 @ 机器人时可回复。members 支持 query 按群名片/昵称/QQ号筛选，exclude_current_sender 排除当前发言者，exclude_user_ids 排除指定 QQ，limit 默认 50、最大 100。结果中的 mention_cq 可直接用于最终回复，提及多人时依次原样输出。input: {"operation":"info|members|reply_policy|set_reply_policy","query":"可选","exclude_current_sender":false,"exclude_user_ids":["QQ号"],"limit":50,"passive_reply_chance":0.5,"passive_reply_threshold":0.9,"minimum_reply_member_level":10}`
+	return `读取当前 QQ 群的真实群信息、成员和回复策略。用户要求查群名、成员、群名片、昵称、QQ号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用；不要要求用户先手动 @。operation=info 读取群资料；operation=members 获取或检索成员；operation=reply_policy 读取本群插话概率、判断阈值和最低回复群等级；operation=set_reply_policy 修改这些设置。只有机器人主人、群主或群管理员可读取或修改 reply policy，工具会实时校验权限。set_reply_policy 支持局部更新，proactive_reply_chance 范围 0.05~1，proactive_reply_threshold 范围 0.5~1，minimum_reply_member_level 范围 0~1000；低于最低等级的成员仅在主动 @ 机器人时可回复。members 支持 query 按群名片/昵称/QQ号筛选，exclude_current_sender 排除当前发言者，exclude_user_ids 排除指定 QQ，limit 默认 50、最大 100。结果中的 mention_cq 可直接用于最终回复，提及多人时依次原样输出。input: {"operation":"info|members|reply_policy|set_reply_policy","query":"可选","exclude_current_sender":false,"exclude_user_ids":["QQ号"],"limit":50,"proactive_reply_chance":0.5,"proactive_reply_threshold":0.9,"minimum_reply_member_level":10}`
 }
 
 func (t *dianaQQGroupTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -114,22 +114,22 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 	}
 
 	changed := false
-	if chance, present, err := groupToolFloat(input, "passive_reply_chance"); err != nil {
+	if chance, present, err := groupToolFloatWithLegacy(input, "proactive_reply_chance", "passive_reply_chance"); err != nil {
 		return "", err
 	} else if present {
 		if chance < 0.05 || chance > 1 {
-			return "", fmt.Errorf("passive_reply_chance 必须在 0.05 到 1 之间")
+			return "", fmt.Errorf("proactive_reply_chance 必须在 0.05 到 1 之间")
 		}
-		cfg.PassiveReplyChance = chance
+		cfg.ProactiveReplyChance = chance
 		changed = true
 	}
-	if threshold, present, err := groupToolFloat(input, "passive_reply_threshold"); err != nil {
+	if threshold, present, err := groupToolFloatWithLegacy(input, "proactive_reply_threshold", "passive_reply_threshold"); err != nil {
 		return "", err
 	} else if present {
 		if threshold < 0.5 || threshold > 1 {
-			return "", fmt.Errorf("passive_reply_threshold 必须在 0.5 到 1 之间")
+			return "", fmt.Errorf("proactive_reply_threshold 必须在 0.5 到 1 之间")
 		}
-		cfg.PassiveReplyThreshold = threshold
+		cfg.ProactiveReplyThreshold = threshold
 		changed = true
 	}
 	if value, present := input["minimum_reply_member_level"]; present {
@@ -147,7 +147,7 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 	if err != nil {
 		return "", err
 	}
-	t.runtime.cancelPassiveReplyBatch(t.event)
+	t.runtime.cancelProactiveReplyBatch(t.event)
 	saved = saved.WithDefaults(t.event.GroupID, t.runtime.effectiveConfigForEvent(t.event))
 	t.runtime.recordGroupReplyPolicyChanged(ctx, t.event, role, saved)
 	policy := dianaQQGroupReplyPolicyFromConfig(saved)
@@ -162,8 +162,8 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 
 func dianaQQGroupReplyPolicyFromConfig(cfg GroupConfig) dianaQQGroupReplyPolicy {
 	return dianaQQGroupReplyPolicy{
-		PassiveReplyChance:      cfg.PassiveReplyChance,
-		PassiveReplyThreshold:   cfg.PassiveReplyThreshold,
+		ProactiveReplyChance:    cfg.ProactiveReplyChance,
+		ProactiveReplyThreshold: cfg.ProactiveReplyThreshold,
 		MinimumReplyMemberLevel: cfg.MinimumReplyMemberLevel,
 	}
 }
@@ -254,6 +254,14 @@ func groupToolFloat(input map[string]any, key string) (float64, bool, error) {
 		return 0, true, fmt.Errorf("%s 必须是数字", key)
 	}
 	return parsed, true, nil
+}
+
+func groupToolFloatWithLegacy(input map[string]any, key string, legacyKey string) (float64, bool, error) {
+	value, present, err := groupToolFloat(input, key)
+	if present {
+		return value, true, err
+	}
+	return groupToolFloat(input, legacyKey)
 }
 
 func groupToolInteger(value any) (int, error) {

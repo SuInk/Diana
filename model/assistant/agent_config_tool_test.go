@@ -33,7 +33,7 @@ func TestDianaBotConfigSnapshotIncludesRestoredBehavior(t *testing.T) {
 	if snapshot.ModelRoles["chat"].Model != "model-a" || len(snapshot.ReplyRules) != 1 {
 		t.Fatalf("model roles or reply rules missing: %#v", snapshot)
 	}
-	if snapshot.PassiveRouterPromptChars == 0 || snapshot.PromptPlaintextRulesChars == 0 {
+	if snapshot.ProactiveReplyRouterPromptChars == 0 || snapshot.PromptPlaintextRulesChars == 0 {
 		t.Fatalf("restored prompt metadata missing: %#v", snapshot)
 	}
 }

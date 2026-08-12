@@ -89,8 +89,13 @@ type MessageEvent struct {
 	SemanticSourceMessageIDs []string `json:"semantic_source_message_ids,omitempty"`
 	// botReply is an in-memory compatibility marker for assistant history entries.
 	// Persisted outgoing events still use the regular message fields above.
-	botReply      string
-	routingReason string
+	botReply           string
+	routingReason      string
+	proactiveReply     bool
+	replyHistory       []MessageEvent
+	replyHistoryLoaded bool
+	userProfile        UserMemoryProfile
+	userProfileLoaded  bool
 }
 
 type QuotedMessage struct {
@@ -223,8 +228,10 @@ type BotConfig struct {
 	PromptGroupSenderTemplate    string               `json:"prompt_group_sender_template,omitempty"`
 	PromptImageOnlyText          string               `json:"prompt_image_only_text,omitempty"`
 	PromptWakeOnlyText           string               `json:"prompt_wake_only_text,omitempty"`
-	PassiveReplyRouterPrompt     string               `json:"passive_reply_router_prompt,omitempty"`
-	PassiveReplyPrompt           string               `json:"passive_reply_prompt,omitempty"`
+	ProactiveReplyRouterPrompt   string               `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyPrompt         string               `json:"proactive_reply_prompt,omitempty"`
+	LegacyPassiveRouterPrompt    *string              `json:"passive_reply_router_prompt,omitempty"`
+	LegacyPassiveReplyPrompt     *string              `json:"passive_reply_prompt,omitempty"`
 	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int                  `json:"max_reply_chars,omitempty"`
 	DirectReplyChunkSize         int                  `json:"direct_reply_chunk_size,omitempty"`
@@ -236,8 +243,10 @@ type BotConfig struct {
 	ContextSummaryThreshold      int                  `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled        *bool                `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled      *bool                `json:"cross_group_memory_enabled,omitempty"`
-	PassiveReplyChance           float64              `json:"passive_reply_chance,omitempty"`
-	PassiveReplyThreshold        float64              `json:"passive_reply_threshold,omitempty"`
+	ProactiveReplyChance         float64              `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold      float64              `json:"proactive_reply_threshold,omitempty"`
+	LegacyPassiveReplyChance     *float64             `json:"passive_reply_chance,omitempty"`
+	LegacyPassiveReplyThreshold  *float64             `json:"passive_reply_threshold,omitempty"`
 	ReplyRules                   []ReplyRule          `json:"reply_rules,omitempty"`
 	MaxBotConcurrency            int                  `json:"max_bot_concurrency,omitempty"`
 	RequestTimeout               time.Duration        `json:"request_timeout,omitempty"`
@@ -296,21 +305,23 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
-	GroupID                 string          `json:"group_id"`
-	Enabled                 bool            `json:"enabled"`
-	EnabledSet              bool            `json:"enabled_set,omitempty"`
-	GroupTriggers           []string        `json:"group_triggers,omitempty"`
-	SystemPrompt            string          `json:"system_prompt,omitempty"`
-	WelcomeEnabled          bool            `json:"welcome_enabled,omitempty"`
-	WelcomeMessage          string          `json:"welcome_message,omitempty"`
-	RecentContextLimit      int             `json:"recent_context_limit,omitempty"`
-	MaxReplyChars           int             `json:"max_reply_chars,omitempty"`
-	PassiveReplyChance      float64         `json:"passive_reply_chance,omitempty"`
-	PassiveReplyThreshold   float64         `json:"passive_reply_threshold,omitempty"`
-	MinimumReplyMemberLevel int             `json:"minimum_reply_member_level,omitempty"`
-	PluginOverrides         map[string]bool `json:"plugin_overrides,omitempty"`
-	ReplyGate               *ReplyGate      `json:"reply_gate,omitempty"`
-	UpdatedAt               time.Time       `json:"updated_at,omitempty"`
+	GroupID                     string          `json:"group_id"`
+	Enabled                     bool            `json:"enabled"`
+	EnabledSet                  bool            `json:"enabled_set,omitempty"`
+	GroupTriggers               []string        `json:"group_triggers,omitempty"`
+	SystemPrompt                string          `json:"system_prompt,omitempty"`
+	WelcomeEnabled              bool            `json:"welcome_enabled,omitempty"`
+	WelcomeMessage              string          `json:"welcome_message,omitempty"`
+	RecentContextLimit          int             `json:"recent_context_limit,omitempty"`
+	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
+	ProactiveReplyChance        float64         `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold     float64         `json:"proactive_reply_threshold,omitempty"`
+	LegacyPassiveReplyChance    *float64        `json:"passive_reply_chance,omitempty"`
+	LegacyPassiveReplyThreshold *float64        `json:"passive_reply_threshold,omitempty"`
+	MinimumReplyMemberLevel     int             `json:"minimum_reply_member_level,omitempty"`
+	PluginOverrides             map[string]bool `json:"plugin_overrides,omitempty"`
+	ReplyGate                   *ReplyGate      `json:"reply_gate,omitempty"`
+	UpdatedAt                   time.Time       `json:"updated_at,omitempty"`
 }
 
 type GroupConfigSet struct {
@@ -369,8 +380,10 @@ type ConfigPayload struct {
 	PromptWakeOnlyText           string               `json:"prompt_wake_only_text,omitempty"`
 	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
 	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	PassiveReplyRouterPrompt     string               `json:"passive_reply_router_prompt,omitempty"`
-	PassiveReplyPrompt           string               `json:"passive_reply_prompt,omitempty"`
+	ProactiveReplyRouterPrompt   string               `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyPrompt         string               `json:"proactive_reply_prompt,omitempty"`
+	LegacyPassiveRouterPrompt    *string              `json:"passive_reply_router_prompt,omitempty"`
+	LegacyPassiveReplyPrompt     *string              `json:"passive_reply_prompt,omitempty"`
 	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int                  `json:"max_reply_chars,omitempty"`
 	DirectReplyChunkSize         int                  `json:"direct_reply_chunk_size,omitempty"`
@@ -382,8 +395,10 @@ type ConfigPayload struct {
 	ContextSummaryThreshold      int                  `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled        *bool                `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled      *bool                `json:"cross_group_memory_enabled,omitempty"`
-	PassiveReplyChance           float64              `json:"passive_reply_chance,omitempty"`
-	PassiveReplyThreshold        float64              `json:"passive_reply_threshold,omitempty"`
+	ProactiveReplyChance         float64              `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold      float64              `json:"proactive_reply_threshold,omitempty"`
+	LegacyPassiveReplyChance     *float64             `json:"passive_reply_chance,omitempty"`
+	LegacyPassiveReplyThreshold  *float64             `json:"passive_reply_threshold,omitempty"`
 	ReplyRules                   []ReplyRule          `json:"reply_rules,omitempty"`
 	MaxBotConcurrency            int                  `json:"max_bot_concurrency,omitempty"`
 	RequestTimeoutMS             int64                `json:"request_timeout_ms,omitempty"`
@@ -410,8 +425,8 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		WelcomeMessage:          base.WelcomeMessage,
 		RecentContextLimit:      base.RecentContextLimit,
 		MaxReplyChars:           base.MaxReplyChars,
-		PassiveReplyChance:      base.PassiveReplyChance,
-		PassiveReplyThreshold:   base.PassiveReplyThreshold,
+		ProactiveReplyChance:    base.ProactiveReplyChance,
+		ProactiveReplyThreshold: base.ProactiveReplyThreshold,
 		MinimumReplyMemberLevel: 0,
 		PluginOverrides:         map[string]bool{},
 	}
@@ -420,6 +435,14 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
 func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig {
 	defaults := DefaultGroupConfig(groupID, base)
+	if cfg.ProactiveReplyChance <= 0 && cfg.LegacyPassiveReplyChance != nil {
+		cfg.ProactiveReplyChance = *cfg.LegacyPassiveReplyChance
+	}
+	if cfg.ProactiveReplyThreshold <= 0 && cfg.LegacyPassiveReplyThreshold != nil {
+		cfg.ProactiveReplyThreshold = migratedProactiveReplyThreshold(*cfg.LegacyPassiveReplyThreshold)
+	}
+	cfg.LegacyPassiveReplyChance = nil
+	cfg.LegacyPassiveReplyThreshold = nil
 	cfg.GroupID = strings.TrimSpace(cfg.GroupID)
 	if cfg.GroupID == "" {
 		cfg.GroupID = defaults.GroupID
@@ -441,17 +464,17 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if cfg.MaxReplyChars <= 0 {
 		cfg.MaxReplyChars = defaults.MaxReplyChars
 	}
-	if cfg.PassiveReplyChance <= 0 {
-		cfg.PassiveReplyChance = defaults.PassiveReplyChance
+	if cfg.ProactiveReplyChance <= 0 {
+		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
 	}
-	if cfg.PassiveReplyChance > 1 {
-		cfg.PassiveReplyChance = 1
+	if cfg.ProactiveReplyChance > 1 {
+		cfg.ProactiveReplyChance = 1
 	}
-	if cfg.PassiveReplyThreshold <= 0 {
-		cfg.PassiveReplyThreshold = defaults.PassiveReplyThreshold
+	if cfg.ProactiveReplyThreshold <= 0 {
+		cfg.ProactiveReplyThreshold = defaults.ProactiveReplyThreshold
 	}
-	if cfg.PassiveReplyThreshold > 1 {
-		cfg.PassiveReplyThreshold = 1
+	if cfg.ProactiveReplyThreshold > 1 {
+		cfg.ProactiveReplyThreshold = 1
 	}
 	if cfg.MinimumReplyMemberLevel < 0 {
 		cfg.MinimumReplyMemberLevel = 0
@@ -481,6 +504,16 @@ func (s GroupConfigSet) ConfigForGroup(groupID string) (GroupConfig, bool) {
 		}
 	}
 	return GroupConfig{}, false
+}
+
+// WithDefaults migrates and normalizes all persisted group policies.
+func (s GroupConfigSet) WithDefaults(base BotConfig) GroupConfigSet {
+	groups := make([]GroupConfig, 0, len(s.Groups))
+	for _, cfg := range s.Groups {
+		groups = append(groups, cfg.WithDefaults(cfg.GroupID, base))
+	}
+	s.Groups = groups
+	return s
 }
 
 // Upsert 写入或替换指定群配置。
@@ -687,8 +720,8 @@ func DefaultBotConfig() BotConfig {
 		ErrorReplyPrefix:             "出错了：",
 		SendRetryAttempts:            3,
 		SendChunkIntervalMS:          300,
-		PassiveReplyRouterPrompt:     defaultPassiveReplyRouterPrompt,
-		PassiveReplyPrompt:           defaultPassiveReplyPrompt,
+		ProactiveReplyRouterPrompt:   defaultProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:         defaultProactiveReplyPrompt,
 		MaxInputChars:                2000,
 		MaxReplyChars:                3500,
 		DirectReplyChunkSize:         900,
@@ -701,8 +734,8 @@ func DefaultBotConfig() BotConfig {
 		ContextSummaryThreshold:      100,
 		LongTermMemoryEnabled:        boolPointer(true),
 		CrossGroupMemoryEnabled:      boolPointer(false),
-		PassiveReplyChance:           1,
-		PassiveReplyThreshold:        0.8,
+		ProactiveReplyChance:         defaultProactiveReplyChance,
+		ProactiveReplyThreshold:      defaultProactiveReplyThreshold,
 		ReplyRules:                   []ReplyRule{},
 		MaxBotConcurrency:            8,
 		RequestTimeout:               180 * time.Second,
@@ -720,6 +753,22 @@ func DefaultBotConfig() BotConfig {
 // WithDefaults 补齐 QQ 机器人配置默认值。
 func (cfg BotConfig) WithDefaults() BotConfig {
 	defaults := DefaultBotConfig()
+	if strings.TrimSpace(cfg.ProactiveReplyRouterPrompt) == "" && cfg.LegacyPassiveRouterPrompt != nil {
+		cfg.ProactiveReplyRouterPrompt = *cfg.LegacyPassiveRouterPrompt
+	}
+	if strings.TrimSpace(cfg.ProactiveReplyPrompt) == "" && cfg.LegacyPassiveReplyPrompt != nil {
+		cfg.ProactiveReplyPrompt = *cfg.LegacyPassiveReplyPrompt
+	}
+	if cfg.ProactiveReplyChance <= 0 && cfg.LegacyPassiveReplyChance != nil {
+		cfg.ProactiveReplyChance = *cfg.LegacyPassiveReplyChance
+	}
+	if cfg.ProactiveReplyThreshold <= 0 && cfg.LegacyPassiveReplyThreshold != nil {
+		cfg.ProactiveReplyThreshold = migratedProactiveReplyThreshold(*cfg.LegacyPassiveReplyThreshold)
+	}
+	cfg.LegacyPassiveRouterPrompt = nil
+	cfg.LegacyPassiveReplyPrompt = nil
+	cfg.LegacyPassiveReplyChance = nil
+	cfg.LegacyPassiveReplyThreshold = nil
 	// WithDefaults 会补齐运行所需的安全默认值，同时清理重复触发词/禁用群。
 	cfg.Name = NormalizeProfileName(cfg.Name)
 	cfg.Platform = NormalizePlatformID(cfg.Platform)
@@ -769,11 +818,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if strings.TrimSpace(cfg.PromptWakeOnlyText) == "" {
 		cfg.PromptWakeOnlyText = defaults.PromptWakeOnlyText
 	}
-	if strings.TrimSpace(cfg.PassiveReplyRouterPrompt) == "" {
-		cfg.PassiveReplyRouterPrompt = defaults.PassiveReplyRouterPrompt
+	if strings.TrimSpace(cfg.ProactiveReplyRouterPrompt) == "" {
+		cfg.ProactiveReplyRouterPrompt = defaults.ProactiveReplyRouterPrompt
 	}
-	if strings.TrimSpace(cfg.PassiveReplyPrompt) == "" {
-		cfg.PassiveReplyPrompt = defaults.PassiveReplyPrompt
+	if strings.TrimSpace(cfg.ProactiveReplyPrompt) == "" {
+		cfg.ProactiveReplyPrompt = defaults.ProactiveReplyPrompt
 	}
 	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
 		cfg.WelcomeMessage = defaults.WelcomeMessage
@@ -830,17 +879,17 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.CrossGroupMemoryEnabled == nil {
 		cfg.CrossGroupMemoryEnabled = boolPointer(false)
 	}
-	if cfg.PassiveReplyChance <= 0 {
-		cfg.PassiveReplyChance = defaults.PassiveReplyChance
+	if cfg.ProactiveReplyChance <= 0 {
+		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
 	}
-	if cfg.PassiveReplyChance > 1 {
-		cfg.PassiveReplyChance = 1
+	if cfg.ProactiveReplyChance > 1 {
+		cfg.ProactiveReplyChance = 1
 	}
-	if cfg.PassiveReplyThreshold <= 0 {
-		cfg.PassiveReplyThreshold = defaults.PassiveReplyThreshold
+	if cfg.ProactiveReplyThreshold <= 0 {
+		cfg.ProactiveReplyThreshold = defaults.ProactiveReplyThreshold
 	}
-	if cfg.PassiveReplyThreshold > 1 {
-		cfg.PassiveReplyThreshold = 1
+	if cfg.ProactiveReplyThreshold > 1 {
+		cfg.ProactiveReplyThreshold = 1
 	}
 	if cfg.MaxBotConcurrency <= 0 {
 		cfg.MaxBotConcurrency = defaults.MaxBotConcurrency
@@ -969,8 +1018,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		PromptWakeOnlyText:           cfg.PromptWakeOnlyText,
 		ModelRoles:                   normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled: copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
-		PassiveReplyRouterPrompt:     cfg.PassiveReplyRouterPrompt,
-		PassiveReplyPrompt:           cfg.PassiveReplyPrompt,
+		ProactiveReplyRouterPrompt:   cfg.ProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:         cfg.ProactiveReplyPrompt,
 		MaxInputChars:                cfg.MaxInputChars,
 		MaxReplyChars:                cfg.MaxReplyChars,
 		DirectReplyChunkSize:         cfg.DirectReplyChunkSize,
@@ -982,8 +1031,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:        copyBoolPointer(cfg.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:      copyBoolPointer(cfg.CrossGroupMemoryEnabled),
-		PassiveReplyChance:           cfg.PassiveReplyChance,
-		PassiveReplyThreshold:        cfg.PassiveReplyThreshold,
+		ProactiveReplyChance:         cfg.ProactiveReplyChance,
+		ProactiveReplyThreshold:      cfg.ProactiveReplyThreshold,
 		ReplyRules:                   append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:            cfg.MaxBotConcurrency,
 		RequestTimeoutMS:             cfg.RequestTimeout.Milliseconds(),
@@ -1018,6 +1067,18 @@ func PayloadFromProfileSet(set ProfileSet) ConfigPayload {
 
 // ConfigFromPayload 把前端 payload 合并旧密钥后转为内部配置。
 func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
+	if strings.TrimSpace(payload.ProactiveReplyRouterPrompt) == "" && payload.LegacyPassiveRouterPrompt != nil {
+		payload.ProactiveReplyRouterPrompt = *payload.LegacyPassiveRouterPrompt
+	}
+	if strings.TrimSpace(payload.ProactiveReplyPrompt) == "" && payload.LegacyPassiveReplyPrompt != nil {
+		payload.ProactiveReplyPrompt = *payload.LegacyPassiveReplyPrompt
+	}
+	if payload.ProactiveReplyChance <= 0 && payload.LegacyPassiveReplyChance != nil {
+		payload.ProactiveReplyChance = *payload.LegacyPassiveReplyChance
+	}
+	if payload.ProactiveReplyThreshold <= 0 && payload.LegacyPassiveReplyThreshold != nil {
+		payload.ProactiveReplyThreshold = migratedProactiveReplyThreshold(*payload.LegacyPassiveReplyThreshold)
+	}
 	cfg := BotConfig{
 		ID:                           strings.TrimSpace(payload.ID),
 		Name:                         payload.Name,
@@ -1064,8 +1125,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		PromptWakeOnlyText:           payload.PromptWakeOnlyText,
 		ModelRoles:                   normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled: copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
-		PassiveReplyRouterPrompt:     payload.PassiveReplyRouterPrompt,
-		PassiveReplyPrompt:           payload.PassiveReplyPrompt,
+		ProactiveReplyRouterPrompt:   payload.ProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:         payload.ProactiveReplyPrompt,
 		MaxInputChars:                payload.MaxInputChars,
 		MaxReplyChars:                payload.MaxReplyChars,
 		DirectReplyChunkSize:         payload.DirectReplyChunkSize,
@@ -1077,8 +1138,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
 		LongTermMemoryEnabled:        copyBoolPointer(payload.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:      copyBoolPointer(payload.CrossGroupMemoryEnabled),
-		PassiveReplyChance:           payload.PassiveReplyChance,
-		PassiveReplyThreshold:        payload.PassiveReplyThreshold,
+		ProactiveReplyChance:         payload.ProactiveReplyChance,
+		ProactiveReplyThreshold:      payload.ProactiveReplyThreshold,
 		ReplyRules:                   append([]ReplyRule(nil), payload.ReplyRules...),
 		MaxBotConcurrency:            payload.MaxBotConcurrency,
 		RequestTimeout:               time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
@@ -1191,9 +1252,22 @@ func removeDeprecatedPoliticalPromptRule(prompt string) string {
 	return strings.TrimSpace(strings.ReplaceAll(prompt, deprecatedPoliticalPromptRule, ""))
 }
 
-const defaultPassiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
+const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 
-const defaultPassiveReplyRouterPrompt = `你是 QQ 群聊机器人 Diana 的严格被动插话路由器，同时负责对直接追问做可回答性检查。判断 candidates 中的群消息是否值得机器人回复；其中既可能有未直接唤醒机器人的消息，也可能有直接引用机器人、但仍需先判断信息是否足够的追问。最多选择一条。默认保持沉默，只有沉默明显不如可靠回复时才放行。
+const (
+	defaultProactiveReplyChance          = 1.0
+	defaultProactiveReplyThreshold       = 0.9
+	legacyDefaultProactiveReplyThreshold = 0.8
+)
+
+func migratedProactiveReplyThreshold(threshold float64) float64 {
+	if threshold == legacyDefaultProactiveReplyThreshold {
+		return defaultProactiveReplyThreshold
+	}
+	return threshold
+}
+
+const defaultProactiveReplyRouterPrompt = `你是 QQ 群聊机器人 Diana 的严格主动回复路由器，同时负责对直接追问做可回答性检查。判断 candidates 中的群消息是否值得机器人主动回复；其中既可能有未显式唤醒机器人的消息，也可能有直接引用机器人、但仍需先判断信息是否足够的追问。最多选择一条。默认保持沉默，只有沉默明显不如可靠回复时才放行。
 
 必须遵守：
 1. 分别判断 directed_at_bot 和 answerable。directed_at_bot 只有在当前消息从语义上明确承接、评价、纠正或继续追问机器人时才为 true；直接引用机器人的消息是强证据，但纯确认、结束语或借引用转向别人仍不是需要回复的追问。仅仅时间相邻、话题相同或机器人之前说过话不算。

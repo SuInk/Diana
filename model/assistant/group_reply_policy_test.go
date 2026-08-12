@@ -21,23 +21,23 @@ func (s *testWritableGroupConfigStore) SaveGroupConfig(cfg GroupConfig, base Bot
 	return saved, nil
 }
 
-func TestGroupConfigOverridesPassivePolicy(t *testing.T) {
-	base := BotConfig{PassiveReplyChance: 0.8, PassiveReplyThreshold: 0.85}
+func TestGroupConfigOverridesProactivePolicy(t *testing.T) {
+	base := BotConfig{ProactiveReplyChance: 0.8, ProactiveReplyThreshold: 0.85}
 	store := &testWritableGroupConfigStore{}
 	_, _ = store.SaveGroupConfig(GroupConfig{
 		GroupID:                 "123",
 		Enabled:                 true,
 		EnabledSet:              true,
-		PassiveReplyChance:      0.35,
-		PassiveReplyThreshold:   0.94,
+		ProactiveReplyChance:    0.35,
+		ProactiveReplyThreshold: 0.94,
 		MinimumReplyMemberLevel: 12,
 	}, base)
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(store)
 
 	effective := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123"})
-	if effective.PassiveReplyChance != 0.35 || effective.PassiveReplyThreshold != 0.94 {
-		t.Fatalf("effective passive policy = chance %v threshold %v", effective.PassiveReplyChance, effective.PassiveReplyThreshold)
+	if effective.ProactiveReplyChance != 0.35 || effective.ProactiveReplyThreshold != 0.94 {
+		t.Fatalf("effective proactive policy = chance %v threshold %v", effective.ProactiveReplyChance, effective.ProactiveReplyThreshold)
 	}
 	group, ok := runtime.groupConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123"})
 	if !ok || group.MinimumReplyMemberLevel != 12 {
@@ -167,15 +167,15 @@ func TestRuntimeFallsBackToNapCatWhenSenderLevelIsMissing(t *testing.T) {
 }
 
 func TestDianaQQGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", PassiveReplyChance: 1, PassiveReplyThreshold: 0.8}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
 	runtime.SetGroupConfigStore(store)
 	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"operation":                  "set_reply_policy",
-		"passive_reply_chance":       0.4,
-		"passive_reply_threshold":    0.93,
+		"proactive_reply_chance":     0.4,
+		"proactive_reply_threshold":  0.93,
 		"minimum_reply_member_level": 15,
 	})
 	if err != nil {
@@ -189,7 +189,49 @@ func TestDianaQQGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	saved, ok := store.ConfigForGroup("123")
-	if !ok || saved.PassiveReplyChance != 0.4 || saved.PassiveReplyThreshold != 0.93 || saved.MinimumReplyMemberLevel != 15 {
+	if !ok || saved.ProactiveReplyChance != 0.4 || saved.ProactiveReplyThreshold != 0.93 || saved.MinimumReplyMemberLevel != 15 {
+		t.Fatalf("saved = %#v, ok = %v", saved, ok)
+	}
+}
+
+func TestDianaQQGroupToolAcceptsLegacyProactivePolicyNames(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := &testWritableGroupConfigStore{}
+	runtime.SetGroupConfigStore(store)
+	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+
+	_, err := tool.Run(context.Background(), map[string]any{
+		"operation":               "set_reply_policy",
+		"passive_reply_chance":    0.45,
+		"passive_reply_threshold": 0.92,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := store.ConfigForGroup("123")
+	if !ok || saved.ProactiveReplyChance != 0.45 || saved.ProactiveReplyThreshold != 0.92 {
+		t.Fatalf("saved = %#v, ok = %v", saved, ok)
+	}
+}
+
+func TestDianaQQGroupToolPrefersProactivePolicyNames(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := &testWritableGroupConfigStore{}
+	runtime.SetGroupConfigStore(store)
+	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+
+	_, err := tool.Run(context.Background(), map[string]any{
+		"operation":                 "set_reply_policy",
+		"proactive_reply_chance":    0.75,
+		"proactive_reply_threshold": 0.96,
+		"passive_reply_chance":      0.25,
+		"passive_reply_threshold":   0.6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := store.ConfigForGroup("123")
+	if !ok || saved.ProactiveReplyChance != 0.75 || saved.ProactiveReplyThreshold != 0.96 {
 		t.Fatalf("saved = %#v, ok = %v", saved, ok)
 	}
 }

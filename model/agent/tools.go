@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,11 +47,19 @@ type closeableTool interface {
 }
 
 type ToolRegistry struct {
-	tools      map[string]Tool
-	order      []string
-	closers    []closeableTool
-	skills     []SkillMetadata
-	extensions ExtensionCatalog
+	mu             sync.RWMutex
+	tools          map[string]Tool
+	order          []string
+	closers        []closeableTool
+	skills         []SkillMetadata
+	skillsSet      bool
+	extensions     ExtensionCatalog
+	parent         *ToolRegistry
+	parentOnly     map[string]bool
+	hidden         map[string]bool
+	activeViews    int
+	closeRequested bool
+	closed         bool
 }
 
 // NewDefaultToolRegistry 创建 Agent 默认工具注册表。
@@ -93,9 +102,80 @@ func NewAgentToolRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error
 	return registry, nil
 }
 
+// NewView creates a request-scoped registry that inherits live extension tools
+// from this registry without owning their MCP sessions. Local tools can still
+// be added, filtered, and closed independently for one Agent run.
+func (r *ToolRegistry) NewView(cfg Config) (*ToolRegistry, error) {
+	cfg = cfg.WithDefaults()
+	registry, err := NewDefaultToolRegistry(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if r == nil {
+		_ = registry.Close()
+		return nil, errors.New("agent: parent tool registry is required")
+	}
+	r.mu.Lock()
+	if r.closeRequested || r.closed {
+		r.mu.Unlock()
+		_ = registry.Close()
+		return nil, errors.New("agent: tool registry is closing")
+	}
+	r.activeViews++
+	r.mu.Unlock()
+	registry.mu.Lock()
+	registry.parent = r
+	registry.extensions = &registryExtensionViewCatalog{
+		parent:  r,
+		builtin: append([]BuiltinExtension(nil), cfg.BuiltinExtensions...),
+	}
+	registry.mu.Unlock()
+	registry.Register(NewExtensionsListTool(registry.extensions, cfg.ExtensionManagement))
+	return registry, nil
+}
+
+type registryExtensionViewCatalog struct {
+	parent  *ToolRegistry
+	builtin []BuiltinExtension
+}
+
+func (c *registryExtensionViewCatalog) Extensions() []ExtensionState {
+	states := c.parent.Extensions()
+	out := make([]ExtensionState, 0, len(states)+len(c.builtin))
+	for _, state := range states {
+		if state.Kind != ExtensionKindBuiltin {
+			out = append(out, state)
+		}
+	}
+	for _, item := range normalizeBuiltinExtensions(c.builtin) {
+		out = append(out, ExtensionState{
+			Kind:        ExtensionKindBuiltin,
+			ID:          item.ID,
+			Name:        item.Name,
+			Version:     item.Version,
+			Description: item.Description,
+			Official:    item.Official,
+			BuiltIn:     item.BuiltIn,
+			Installed:   item.Installed,
+			Enabled:     item.Enabled,
+			Permissions: append([]string(nil), item.Permissions...),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
 // SetSkills 记录可用 skill 元数据，供 Runner 构造 skills 上下文。
 func (r *ToolRegistry) SetSkills(skills []SkillMetadata) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.skills = append([]SkillMetadata(nil), skills...)
+	r.skillsSet = true
 }
 
 // Skills 返回当前注册表关联的 skills。
@@ -103,7 +183,15 @@ func (r *ToolRegistry) Skills() []SkillMetadata {
 	if r == nil {
 		return nil
 	}
-	return append([]SkillMetadata(nil), r.skills...)
+	r.mu.RLock()
+	skills := append([]SkillMetadata(nil), r.skills...)
+	set := r.skillsSet
+	parent := r.parent
+	r.mu.RUnlock()
+	if !set && parent != nil {
+		return parent.Skills()
+	}
+	return skills
 }
 
 // SetExtensionCatalog attaches the live built-in/skill/MCP catalog used by the
@@ -112,16 +200,28 @@ func (r *ToolRegistry) SetExtensionCatalog(catalog ExtensionCatalog) {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.extensions = catalog
 }
 
 // Extensions returns a redacted snapshot of all capabilities visible in this
 // registry. Runtime credentials and MCP environment values are never included.
 func (r *ToolRegistry) Extensions() []ExtensionState {
-	if r == nil || r.extensions == nil {
+	if r == nil {
 		return nil
 	}
-	return r.extensions.Extensions()
+	r.mu.RLock()
+	catalog := r.extensions
+	parent := r.parent
+	r.mu.RUnlock()
+	if catalog != nil {
+		return catalog.Extensions()
+	}
+	if parent != nil {
+		return parent.Extensions()
+	}
+	return nil
 }
 
 // NewToolRegistry 创建工具注册表并登记初始工具。
@@ -138,12 +238,19 @@ func (r *ToolRegistry) RegisterCloser(closer closeableTool) {
 	if closer == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.closers = append(r.closers, closer)
 }
 
 // Register 将工具加入注册表并保持描述顺序稳定。
 func (r *ToolRegistry) Register(tool Tool) {
 	if tool == nil || strings.TrimSpace(tool.Name()) == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closeRequested || r.closed {
 		return
 	}
 	name := tool.Name()
@@ -153,6 +260,7 @@ func (r *ToolRegistry) Register(tool Tool) {
 		sort.Strings(r.order)
 	}
 	r.tools[name] = tool
+	delete(r.hidden, name)
 }
 
 // RegisterBrowserTools 登记基于 Chrome DevTools Protocol 的浏览器工具。
@@ -173,8 +281,22 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 
 // Get 按名称查找工具。
 func (r *ToolRegistry) Get(name string) (Tool, bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.mu.RLock()
 	tool, ok := r.tools[name]
-	return tool, ok
+	parent := r.parent
+	allowed := r.parentOnly
+	hidden := r.hidden[name]
+	r.mu.RUnlock()
+	if ok {
+		return tool, true
+	}
+	if parent == nil || hidden || (allowed != nil && !allowed[name]) {
+		return nil, false
+	}
+	return parent.Get(name)
 }
 
 // Retain removes every tool not present in allowed. A nil allowlist keeps all
@@ -183,6 +305,8 @@ func (r *ToolRegistry) Retain(allowed map[string]bool) {
 	if r == nil || allowed == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	order := make([]string, 0, len(r.order))
 	for _, name := range r.order {
 		if allowed[name] {
@@ -192,8 +316,10 @@ func (r *ToolRegistry) Retain(allowed map[string]bool) {
 		delete(r.tools, name)
 	}
 	r.order = order
+	r.parentOnly = cloneToolAllowlist(allowed)
 	if !allowed["skills.list"] && !allowed["skills.read"] {
 		r.skills = nil
+		r.skillsSet = true
 	}
 }
 
@@ -203,10 +329,13 @@ func (r *ToolRegistry) Remove(name string) {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	name = strings.TrimSpace(name)
-	if _, exists := r.tools[name]; !exists {
-		return
+	if r.hidden == nil {
+		r.hidden = map[string]bool{}
 	}
+	r.hidden[name] = true
 	delete(r.tools, name)
 	order := r.order[:0]
 	for _, current := range r.order {
@@ -216,10 +345,9 @@ func (r *ToolRegistry) Remove(name string) {
 	}
 	r.order = order
 	if name == "skills.list" || name == "skills.read" {
-		if _, hasList := r.tools["skills.list"]; !hasList {
-			if _, hasRead := r.tools["skills.read"]; !hasRead {
-				r.skills = nil
-			}
+		if r.hidden["skills.list"] && r.hidden["skills.read"] {
+			r.skills = nil
+			r.skillsSet = true
 		}
 	}
 }
@@ -228,7 +356,7 @@ func (r *ToolRegistry) Len() int {
 	if r == nil {
 		return 0
 	}
-	return len(r.tools)
+	return len(r.Names())
 }
 
 // Names returns the registered tool names in the same stable order used by the
@@ -237,7 +365,28 @@ func (r *ToolRegistry) Names() []string {
 	if r == nil {
 		return nil
 	}
-	return append([]string(nil), r.order...)
+	r.mu.RLock()
+	local := append([]string(nil), r.order...)
+	parent := r.parent
+	allowed := cloneToolAllowlist(r.parentOnly)
+	hidden := cloneToolAllowlist(r.hidden)
+	r.mu.RUnlock()
+	if parent == nil {
+		return local
+	}
+	seen := make(map[string]bool, len(local))
+	for _, name := range local {
+		seen[name] = true
+	}
+	for _, name := range parent.Names() {
+		if seen[name] || hidden[name] || (allowed != nil && !allowed[name]) {
+			continue
+		}
+		local = append(local, name)
+		seen[name] = true
+	}
+	sort.Strings(local)
+	return local
 }
 
 // Catalog returns a compact semantic routing catalog. Input schemas stay out of
@@ -249,9 +398,14 @@ func (r *ToolRegistry) Catalog(descriptionRunes int) []ToolCatalogItem {
 	if descriptionRunes <= 0 {
 		descriptionRunes = 180
 	}
-	items := make([]ToolCatalogItem, 0, len(r.order))
-	for _, name := range r.order {
-		description := strings.TrimSpace(r.tools[name].Description())
+	names := r.Names()
+	items := make([]ToolCatalogItem, 0, len(names))
+	for _, name := range names {
+		tool, ok := r.Get(name)
+		if !ok {
+			continue
+		}
+		description := strings.TrimSpace(tool.Description())
 		if index := strings.Index(strings.ToLower(description), "input:"); index >= 0 {
 			description = strings.TrimSpace(description[:index])
 		}
@@ -266,12 +420,19 @@ func (r *ToolRegistry) Catalog(descriptionRunes int) []ToolCatalogItem {
 
 // Descriptions 返回给模型看的工具描述列表。
 func (r *ToolRegistry) Descriptions() string {
-	if r == nil || len(r.order) == 0 {
+	if r == nil {
+		return "无可用工具。"
+	}
+	names := r.Names()
+	if len(names) == 0 {
 		return "无可用工具。"
 	}
 	var builder strings.Builder
-	for _, name := range r.order {
-		tool := r.tools[name]
+	for _, name := range names {
+		tool, ok := r.Get(name)
+		if !ok {
+			continue
+		}
 		builder.WriteString("- ")
 		builder.WriteString(tool.Name())
 		builder.WriteString(": ")
@@ -286,9 +447,64 @@ func (r *ToolRegistry) Close() error {
 	if r == nil {
 		return nil
 	}
+	r.mu.Lock()
+	if r.closed || r.closeRequested {
+		r.mu.Unlock()
+		return nil
+	}
+	r.closeRequested = true
+	if r.activeViews > 0 {
+		r.mu.Unlock()
+		return nil
+	}
+	r.closed = true
+	closers := append([]closeableTool(nil), r.closers...)
+	tools := make([]Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		tools = append(tools, tool)
+	}
+	parent := r.parent
+	r.parent = nil
+	r.mu.Unlock()
+	err := closeToolRegistryResources(closers, tools)
+	if parent != nil {
+		err = errors.Join(err, parent.releaseView())
+	}
+	return err
+}
+
+func (r *ToolRegistry) releaseView() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	if r.activeViews > 0 {
+		r.activeViews--
+	}
+	if r.activeViews > 0 || !r.closeRequested || r.closed {
+		r.mu.Unlock()
+		return nil
+	}
+	r.closed = true
+	closers := append([]closeableTool(nil), r.closers...)
+	tools := make([]Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		tools = append(tools, tool)
+	}
+	parent := r.parent
+	r.parent = nil
+	r.mu.Unlock()
+	err := closeToolRegistryResources(closers, tools)
+	if parent != nil {
+		err = errors.Join(err, parent.releaseView())
+	}
+	return err
+}
+
+func closeToolRegistryResources(closers []closeableTool, tools []Tool) error {
 	var parts []string
 	seen := map[closeableTool]bool{}
-	for _, closer := range r.closers {
+	for _, closer := range closers {
 		if seen[closer] {
 			continue
 		}
@@ -297,7 +513,7 @@ func (r *ToolRegistry) Close() error {
 			parts = append(parts, err.Error())
 		}
 	}
-	for _, tool := range r.tools {
+	for _, tool := range tools {
 		closer, ok := tool.(closeableTool)
 		if !ok || seen[closer] {
 			continue
@@ -311,6 +527,17 @@ func (r *ToolRegistry) Close() error {
 		return errors.New(strings.Join(parts, "; "))
 	}
 	return nil
+}
+
+func cloneToolAllowlist(values map[string]bool) map[string]bool {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]bool, len(values))
+	for name, allowed := range values {
+		cloned[name] = allowed
+	}
+	return cloned
 }
 
 type ListFilesTool struct {

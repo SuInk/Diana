@@ -4,7 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -106,10 +108,13 @@ func TestRelationshipEvaluationAllowsNaturalInteractionBeforeThreshold(t *testin
 }
 
 func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
-	provider := &sequenceLLMProvider{replies: []string{`{"should_update":true,"delta":1,"confidence":0.96,"reason":"初识阶段的真实任务互动"}`}}
+	provider := &sequenceLLMProvider{replies: []string{
+		"我来帮你整理。",
+		`{"should_update":true,"delta":1,"confidence":0.96,"reason":"初识阶段的真实任务互动"}`,
+	}}
 	memory := newMemoryUserMemoryStore()
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot", OwnerID: "owner"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotQQ: "bot", OwnerID: "owner", AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetUserMemoryStore(memory)
@@ -124,15 +129,37 @@ func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "帮我整理一下今天的学习计划"}}},
 	}
 
-	_, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), event)
+	prepared, text, handled, outcome := runtime.prepareMessageEvent(context.Background(), event)
 	profile := memory.profiles[event.UserID]
-	if !handled || outcome != "replied" || profile.Favorability != 1 || profile.MessageCount != 1 {
+	if !handled || outcome != "replied" || profile.Favorability != 0 || profile.MessageCount != 1 {
 		t.Fatalf("handled=%v outcome=%q profile=%#v", handled, outcome, profile)
 	}
-	if len(provider.requests) != 1 {
-		t.Fatalf("provider calls = %d, want one relationship evaluation", len(provider.requests))
+	if len(provider.requests) != 0 {
+		t.Fatalf("relationship evaluation blocked message preparation: %d calls", len(provider.requests))
 	}
-	if len(logs.entries) != 1 || logs.entries[0].Action != "qqbot.relationship_evaluation" || logs.entries[0].Metadata["delta"] != 1 {
+	if _, err := runtime.replyAndRecord(context.Background(), prepared, text, outcome); err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if !runtime.waitForRelationshipEvaluations(waitCtx) {
+		t.Fatal("relationship evaluation did not finish")
+	}
+	profile = memory.profiles[event.UserID]
+	if profile.Favorability != 1 || profile.MessageCount != 1 {
+		t.Fatalf("profile after async evaluation = %#v", profile)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider calls = %d, want one reply and one relationship evaluation", len(provider.requests))
+	}
+	var relationshipLog *applog.Entry
+	for index := range logs.entries {
+		if logs.entries[index].Action == "qqbot.relationship_evaluation" {
+			relationshipLog = &logs.entries[index]
+			break
+		}
+	}
+	if relationshipLog == nil || relationshipLog.Metadata["delta"] != 1 {
 		t.Fatalf("logs = %#v", logs.entries)
 	}
 }
