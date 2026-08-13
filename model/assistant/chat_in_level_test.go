@@ -179,7 +179,13 @@ func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
 	}
 
 	onPrompt := proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled)
-	for _, want := range []string{"产品、技术、品牌或设计风格", "按 chat_in 判断 substantive"} {
+	for _, want := range []string{
+		"围绕上下文中可识别的话题",
+		"按 chat_in 判断 substantive",
+		"轻松调侃、反问或接梗",
+		"你不是最喜欢看小说吗",
+		"directed_at_bot=false",
+	} {
 		if !strings.Contains(onPrompt, want) {
 			t.Fatalf("enabled router prompt missing topic guidance %q: %q", want, onPrompt)
 		}
@@ -187,7 +193,11 @@ func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
 
 	for _, want := range []string{
 		"面向全群提出的定义、解释、辨析或求助问题",
+		"不属于 needs_response",
+		"满足第 6.1 至 6.4 条时才可使用 chat_in",
 		"短语省略问号或谓语本身不能作为 substantive=false 的理由",
+		"轻松调侃、反问或接梗",
+		"你不是最喜欢看小说吗",
 		"应视为该问题仍在等待回答并使用 needs_response",
 	} {
 		if !strings.Contains(defaultProactiveReplyRouterPrompt, want) {
@@ -252,7 +262,7 @@ func TestChatInReplyPromptOnlyAppearsForInterjections(t *testing.T) {
 	}
 	event.chatInReply = true
 	prompt := runtime.systemPrompt(event, nil)
-	for _, want := range []string{"本次回复是主动插话", "不要复述别人刚说过的内容", "控制在一到两句"} {
+	for _, want := range []string{"本次回复是主动插话", "贴合上下文的轻松调侃和接梗", "不要复述别人刚说过的内容", "控制在一到两句"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("chat-in prompt missing %q: %q", want, prompt)
 		}
