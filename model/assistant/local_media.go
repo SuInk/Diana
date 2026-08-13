@@ -17,6 +17,10 @@ type LocalMediaSharer interface {
 	Share(path string, ttl time.Duration) (string, bool)
 }
 
+type LocalMediaPathResolver interface {
+	ResolveSharedPath(value string) (string, bool)
+}
+
 type LocalMediaStore struct {
 	mu      sync.RWMutex
 	baseURL string
@@ -66,6 +70,38 @@ func (s *LocalMediaStore) Share(path string, ttl time.Duration) (string, bool) {
 	s.mu.Unlock()
 
 	return s.baseURL + "/" + neturl.PathEscape(token), true
+}
+
+func (s *LocalMediaStore) ResolveSharedPath(value string) (string, bool) {
+	if s == nil || s.baseURL == "" {
+		return "", false
+	}
+	base, err := neturl.Parse(s.baseURL)
+	if err != nil {
+		return "", false
+	}
+	shared, err := neturl.Parse(strings.TrimSpace(value))
+	if err != nil || !strings.EqualFold(shared.Scheme, base.Scheme) || !strings.EqualFold(shared.Host, base.Host) {
+		return "", false
+	}
+	prefix := strings.TrimRight(base.EscapedPath(), "/") + "/"
+	sharedPath := shared.EscapedPath()
+	if !strings.HasPrefix(sharedPath, prefix) {
+		return "", false
+	}
+	escapedToken := strings.TrimPrefix(sharedPath, prefix)
+	if escapedToken == "" || strings.Contains(escapedToken, "/") {
+		return "", false
+	}
+	token, err := neturl.PathUnescape(escapedToken)
+	if err != nil {
+		return "", false
+	}
+	item, ok := s.lookup(token)
+	if !ok {
+		return "", false
+	}
+	return item.Path, true
 }
 
 func (s *LocalMediaStore) ServeToken(w http.ResponseWriter, r *http.Request, token string) {

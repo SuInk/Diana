@@ -41,6 +41,18 @@ type proactiveReplyRunContext struct {
 	allowSuperseding bool
 }
 
+func proactiveReplyBatchKey(event MessageEvent) string {
+	key := sessionKey(event)
+	if event.Kind != EventKindGroup {
+		return key
+	}
+	userID := strings.TrimSpace(event.UserID)
+	if userID == "" {
+		userID = "unknown"
+	}
+	return key + "|sender:" + userID
+}
+
 type proactiveReplyTurnContextKey struct{}
 
 func withProactiveReplyRunContext(ctx context.Context, key string, generation uint64, allowSuperseding bool) context.Context {
@@ -85,7 +97,7 @@ func (r *Runtime) enqueueProactiveReply(event MessageEvent, text string) bool {
 		return false
 	}
 
-	key := sessionKey(event)
+	key := proactiveReplyBatchKey(event)
 	now := time.Now()
 	r.proactiveBatchMu.Lock()
 	batch := r.proactiveBatches[key]
@@ -307,11 +319,30 @@ func (r *Runtime) cancelProactiveReplyBatch(event MessageEvent) {
 		return
 	}
 	r.proactiveBatchMu.Lock()
-	if batch := r.proactiveBatches[sessionKey(event)]; batch != nil {
+	key := proactiveReplyBatchKey(event)
+	if batch := r.proactiveBatches[key]; batch != nil {
 		if batch.timer != nil {
 			batch.timer.Stop()
 		}
-		delete(r.proactiveBatches, sessionKey(event))
+		delete(r.proactiveBatches, key)
+	}
+	r.proactiveBatchMu.Unlock()
+}
+
+func (r *Runtime) cancelProactiveReplyBatchesForGroup(groupID string) {
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		return
+	}
+	r.proactiveBatchMu.Lock()
+	for key, batch := range r.proactiveBatches {
+		if len(batch.items) == 0 || strings.TrimSpace(batch.items[0].Event.GroupID) != groupID {
+			continue
+		}
+		if batch.timer != nil {
+			batch.timer.Stop()
+		}
+		delete(r.proactiveBatches, key)
 	}
 	r.proactiveBatchMu.Unlock()
 }

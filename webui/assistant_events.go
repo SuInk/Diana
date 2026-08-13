@@ -18,21 +18,23 @@ type assistantEventDetail struct {
 }
 
 type assistantEventsResponse struct {
-	Range        string                 `json:"range"`
-	Since        *time.Time             `json:"since,omitempty"`
-	Events       []assistantEventDetail `json:"events"`
-	Total        int64                  `json:"total"`
-	Replied      int64                  `json:"replied"`
-	NotReplied   int64                  `json:"not_replied"`
-	Pending      int64                  `json:"pending"`
-	Errors       int64                  `json:"errors"`
-	LLMCalls     int64                  `json:"llm_calls"`
-	InputTokens  int64                  `json:"input_tokens"`
-	OutputTokens int64                  `json:"output_tokens"`
-	TotalTokens  int64                  `json:"total_tokens"`
-	Page         int                    `json:"page"`
-	Limit        int                    `json:"limit"`
-	HasMore      bool                   `json:"has_more"`
+	Range         string                 `json:"range"`
+	Result        string                 `json:"result"`
+	Since         *time.Time             `json:"since,omitempty"`
+	Events        []assistantEventDetail `json:"events"`
+	Total         int64                  `json:"total"`
+	FilteredTotal int64                  `json:"filtered_total"`
+	Replied       int64                  `json:"replied"`
+	NotReplied    int64                  `json:"not_replied"`
+	Pending       int64                  `json:"pending"`
+	Errors        int64                  `json:"errors"`
+	LLMCalls      int64                  `json:"llm_calls"`
+	InputTokens   int64                  `json:"input_tokens"`
+	OutputTokens  int64                  `json:"output_tokens"`
+	TotalTokens   int64                  `json:"total_tokens"`
+	Page          int                    `json:"page"`
+	Limit         int                    `json:"limit"`
+	HasMore       bool                   `json:"has_more"`
 }
 
 type assistantEventTraceResponse struct {
@@ -63,6 +65,51 @@ func (h *QQBotHandler) eventTrace(c *gin.Context) {
 	})
 }
 
+func (h *QQBotHandler) eventImage(c *gin.Context) {
+	if h.sqlite == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "事件存储未配置"})
+		return
+	}
+	imageIndex, err := strconv.Atoi(strings.TrimSpace(c.Param("index")))
+	if err != nil || imageIndex <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "图片序号无效"})
+		return
+	}
+	segment, found, err := h.sqlite.InboundEventImageSegment(c.Request.Context(), c.Param("id"), imageIndex)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取事件图片失败"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "事件图片不存在"})
+		return
+	}
+	body, contentType, err := assistant.ReadMessageImageSegment(c.Request.Context(), segment)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "图片源已失效或不可读取"})
+		return
+	}
+	contentType, ok := eventRasterImageContentType(contentType)
+	if !ok {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "事件图片不是受支持的栅格格式"})
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=300")
+	c.Header("Content-Disposition", "inline")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Data(http.StatusOK, contentType, body)
+}
+
+func eventRasterImageContentType(contentType string) (string, bool) {
+	contentType = strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	switch contentType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon":
+		return contentType, true
+	default:
+		return "", false
+	}
+}
+
 func (h *QQBotHandler) listEvents(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "事件存储未配置"})
@@ -74,12 +121,17 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "range 仅支持 1h、24h、7d、30d、all"})
 		return
 	}
+	resultFilter, ok := storage.ParseInboundEventResultFilter(c.DefaultQuery("result", string(storage.InboundEventResultAll)))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "result 仅支持 all、replied、not_replied、pending、error"})
+		return
+	}
 	page := queryPositiveInt(c.Query("page"), 1)
 	limit := queryPositiveInt(c.Query("limit"), 50)
 	if limit > 100 {
 		limit = 100
 	}
-	stored, err := h.sqlite.ListInboundEventDetails(c.Request.Context(), since, limit, (page-1)*limit)
+	stored, err := h.sqlite.ListInboundEventDetails(c.Request.Context(), since, limit, (page-1)*limit, resultFilter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -99,9 +151,16 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 		if item.Decision != "" {
 			decision = item.Decision
 			handled = decision == "replied"
+		} else if item.Status == "done" && item.Error != "" && decision != "replied" {
+			// Older rows may have persisted the processing error before durable
+			// decision fields existed. Keep their list badge aligned with the
+			// storage-level error filter.
+			decision, handled = "error", false
 		}
 		if item.Reason != "" {
 			reason = item.Reason
+		} else if decision == "error" && item.Error != "" {
+			reason = "消息处理失败：" + item.Error
 		}
 		if item.Status != "done" {
 			decision, handled = "pending", false
@@ -140,20 +199,22 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 		events = append(events, detail)
 	}
 	response := assistantEventsResponse{
-		Range:        rangeID,
-		Events:       events,
-		Total:        stored.Total,
-		Replied:      stored.Replied,
-		NotReplied:   stored.NotReplied,
-		Pending:      stored.Pending,
-		Errors:       stored.Errors,
-		LLMCalls:     stored.LLMCalls,
-		InputTokens:  stored.InputTokens,
-		OutputTokens: stored.OutputTokens,
-		TotalTokens:  stored.TotalTokens,
-		Page:         page,
-		Limit:        limit,
-		HasMore:      int64(page*limit) < stored.Total,
+		Range:         rangeID,
+		Result:        string(resultFilter),
+		Events:        events,
+		Total:         stored.Total,
+		FilteredTotal: stored.FilteredTotal,
+		Replied:       stored.Replied,
+		NotReplied:    stored.NotReplied,
+		Pending:       stored.Pending,
+		Errors:        stored.Errors,
+		LLMCalls:      stored.LLMCalls,
+		InputTokens:   stored.InputTokens,
+		OutputTokens:  stored.OutputTokens,
+		TotalTokens:   stored.TotalTokens,
+		Page:          page,
+		Limit:         limit,
+		HasMore:       int64(page*limit) < stored.FilteredTotal,
 	}
 	if !since.IsZero() {
 		response.Since = &since

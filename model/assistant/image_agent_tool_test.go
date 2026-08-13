@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,8 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 		},
 	}}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), store, nil, nil, nil)
+	mediaCache := mediaStore(t)
+	runtime.SetMediaStore(mediaCache)
 	sharer := &recordingLocalMediaSharer{url: server.URL + "/media"}
 	runtime.SetLocalMediaSharer(sharer)
 	logs := &captureAppLogs{}
@@ -91,7 +94,9 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	if len(sharedPaths) != 1 {
 		t.Fatalf("shared paths = %#v", sharedPaths)
 	}
-	defer os.Remove(sharedPaths[0])
+	if filepath.Dir(sharedPaths[0]) != mediaCache.Dir() {
+		t.Fatalf("generated image did not use media cache: %q", sharedPaths[0])
+	}
 	data, err := os.ReadFile(sharedPaths[0])
 	if err != nil || string(data) != "search-derived-image" {
 		t.Fatalf("shared image = %q, err = %v", data, err)
@@ -186,6 +191,8 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	}, channel, plugins, store, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
+	mediaCache := mediaStore(t)
+	runtime.SetMediaStore(mediaCache)
 	sharer := &recordingLocalMediaSharer{url: server.URL + "/media"}
 	runtime.SetLocalMediaSharer(sharer)
 	logs := &captureAppLogs{}
@@ -245,7 +252,9 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	if len(sharedPaths) != 1 {
 		t.Fatalf("shared paths = %#v", sharedPaths)
 	}
-	defer os.Remove(sharedPaths[0])
+	if filepath.Dir(sharedPaths[0]) != mediaCache.Dir() {
+		t.Fatalf("generated image did not use media cache: %q", sharedPaths[0])
+	}
 	wantTargets := map[string]bool{"web_search.search": false, dianaImageToolName: false}
 	imageLogFound := false
 	entries := logs.entriesSnapshot()

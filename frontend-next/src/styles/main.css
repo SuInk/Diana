@@ -2306,6 +2306,98 @@ code {
   margin-right: auto;
 }
 
+.plugin-settings-section-head {
+  margin-bottom: 14px;
+}
+
+.plugin-settings-section-head h3,
+.repository-watch-manager-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.plugin-settings-section-head p,
+.repository-watch-manager-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.repository-watch-manager {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.repository-watch-manager-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.repository-watch-editor {
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.repository-watch-editor-actions,
+.repository-watch-manager-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.repository-watch-editor-actions {
+  margin-top: 14px;
+}
+
+.repository-watch-manager-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.repository-watch-manager-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.repository-watch-manager-item:last-child {
+  border-bottom: 0;
+}
+
+.repository-watch-manager-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.repository-watch-manager-main > .cluster {
+  margin-bottom: 7px;
+}
+
+.repository-watch-manager-error {
+  margin: 7px 0 0;
+  color: var(--err);
+  font-size: 12px;
+}
+
+.repository-watch-manager-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 72px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* LLM 模型选择下拉 */
 .model-config-field {
   gap: 12px;
@@ -3062,8 +3154,34 @@ code {
   color: var(--accent);
 }
 
+.task-kind-icon.repository_watch {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
 .task-main {
   min-width: 0;
+}
+
+.repository-watch-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.repository-watch-unit {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.repository-watch-destination {
+  width: fit-content;
+}
+
+.repository-watch-scopes {
+  display: flex;
+  gap: 8px;
 }
 
 .task-meta,
@@ -3267,6 +3385,24 @@ code {
 }
 
 @media (max-width: 520px) {
+  .repository-watch-manager-head,
+  .repository-watch-manager-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .repository-watch-manager-head .btn {
+    width: 100%;
+  }
+
+  .repository-watch-manager-actions {
+    justify-content: flex-start;
+  }
+
+  .repository-watch-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .task-list {
     padding: 0 14px;
   }

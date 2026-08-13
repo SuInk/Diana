@@ -74,6 +74,26 @@ type qqbotTasksResponse struct {
 	Items []qqbotTaskPayload `json:"items"`
 }
 
+type repositoryWatchCreatePayload struct {
+	Repository      string `json:"repository"`
+	Branch          string `json:"branch,omitempty"`
+	IntervalSeconds int64  `json:"interval_seconds"`
+	WatchCommits    bool   `json:"watch_commits"`
+	WatchReleases   bool   `json:"watch_releases"`
+	ProfileID       string `json:"profile_id"`
+	Destination     string `json:"destination"`
+	GroupID         string `json:"group_id,omitempty"`
+	UserID          string `json:"user_id,omitempty"`
+}
+
+type repositoryWatchUpdatePayload struct {
+	Repository      string  `json:"repository,omitempty"`
+	Branch          *string `json:"branch,omitempty"`
+	IntervalSeconds int64   `json:"interval_seconds,omitempty"`
+	WatchCommits    *bool   `json:"watch_commits,omitempty"`
+	WatchReleases   *bool   `json:"watch_releases,omitempty"`
+}
+
 type qqbotTaskPayload struct {
 	ID                  string    `json:"id"`
 	Kind                string    `json:"kind"`
@@ -92,6 +112,12 @@ type qqbotTaskPayload struct {
 	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
 	PendingDelivery     bool      `json:"pending_delivery,omitempty"`
 	PendingSince        time.Time `json:"pending_since,omitempty"`
+	Repository          string    `json:"repository,omitempty"`
+	RepositoryBranch    string    `json:"repository_branch,omitempty"`
+	WatchCommits        bool      `json:"watch_commits,omitempty"`
+	WatchReleases       bool      `json:"watch_releases,omitempty"`
+	LastCommitSHA       string    `json:"last_commit_sha,omitempty"`
+	LastReleaseTag      string    `json:"last_release_tag,omitempty"`
 	CreatedAt           time.Time `json:"created_at"`
 	ConsumesQuota       bool      `json:"consumes_quota"`
 }
@@ -340,6 +366,12 @@ func (h *QQBotHandler) listTasks(c *gin.Context) {
 			ConsecutiveFailures: item.ConsecutiveFailures,
 			PendingDelivery:     strings.TrimSpace(item.PendingDelivery) != "",
 			PendingSince:        item.PendingSince,
+			Repository:          item.Repository,
+			RepositoryBranch:    item.RepositoryBranch,
+			WatchCommits:        item.WatchCommits,
+			WatchReleases:       item.WatchReleases,
+			LastCommitSHA:       item.LastCommitSHA,
+			LastReleaseTag:      item.LastReleaseTag,
 			CreatedAt:           item.CreatedAt,
 			ConsumesQuota:       taskConsumesQuota(item),
 		})
@@ -353,7 +385,191 @@ func (h *QQBotHandler) listTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, qqbotTasksResponse{Items: out})
 }
 
+func (h *QQBotHandler) createRepositoryWatch(c *gin.Context) {
+	manager, ok := h.runtime.(repositoryWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.create", fmt.Errorf("repository watch runtime is unavailable"), "", nil)
+		return
+	}
+	var payload repositoryWatchCreatePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, "", nil)
+		return
+	}
+	profile, set, err := h.repositoryWatchProfile(payload.ProfileID)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, payload.Repository, nil)
+		return
+	}
+	destination := strings.ToLower(strings.TrimSpace(payload.Destination))
+	if destination == "" {
+		destination = "private"
+	}
+	if destination != "private" && destination != "group" {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("destination 必须是 private 或 group"), payload.Repository, nil)
+		return
+	}
+	groupID := ""
+	userID := ""
+	if destination == "group" {
+		groupID = strings.TrimSpace(payload.GroupID)
+		if groupID == "" {
+			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), payload.Repository, nil)
+			return
+		}
+	} else {
+		userID = strings.TrimSpace(payload.UserID)
+		if userID == "" {
+			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("私聊通知必须填写发送对象 ID"), payload.Repository, nil)
+			return
+		}
+	}
+	interval := time.Duration(payload.IntervalSeconds) * time.Second
+	item, err := manager.CreateRepositoryWatch(c.Request.Context(), assistant.RepositoryWatchCreateInput{
+		Repository: payload.Repository, Branch: payload.Branch, Interval: interval,
+		WatchCommits: payload.WatchCommits, WatchReleases: payload.WatchReleases,
+		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
+		ContextNamespace: repositoryWatchContextNamespace(set, profile.ID),
+	})
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, payload.Repository, nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.repository_watch.create", "仓库更新订阅已创建", item.ID, map[string]any{"repository": item.Repository, "profile_id": item.ProfileID, "group_id": item.GroupID})
+	c.JSON(http.StatusCreated, qqbotTaskFromReminder(item))
+}
+
+func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
+	manager, ok := h.runtime.(repositoryWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.update", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	var payload repositoryWatchUpdatePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", err, c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.repositoryWatchOwner(c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.update", err, c.Param("id"), nil)
+		return
+	}
+	var branch *string
+	if payload.Branch != nil {
+		value := strings.TrimSpace(*payload.Branch)
+		branch = &value
+	}
+	item, err := manager.UpdateRepositoryWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RepositoryWatchUpdateInput{
+		Repository: payload.Repository, Branch: branch, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
+		WatchCommits: payload.WatchCommits, WatchReleases: payload.WatchReleases,
+	})
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", err, c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.repository_watch.update", "仓库更新订阅已更新", item.ID, map[string]any{"repository": item.Repository})
+	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+}
+
+func (h *QQBotHandler) cancelRepositoryWatch(c *gin.Context) {
+	manager, ok := h.runtime.(repositoryWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.cancel", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.repositoryWatchOwner(c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.cancel", err, c.Param("id"), nil)
+		return
+	}
+	item, err := manager.CancelRepositoryWatch(ownerID, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.cancel", err, c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.repository_watch.cancel", "仓库更新订阅已取消", item.ID, nil)
+	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+}
+
+func (h *QQBotHandler) deleteRepositoryWatch(c *gin.Context) {
+	manager, ok := h.runtime.(repositoryWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.delete", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.repositoryWatchOwner(c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.delete", err, c.Param("id"), nil)
+		return
+	}
+	removed, err := manager.DeleteRepositoryWatch(ownerID, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.repository_watch.delete", err, c.Param("id"), nil)
+		return
+	}
+	if !removed {
+		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.delete", fmt.Errorf("仓库更新订阅不存在"), c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.repository_watch.delete", "仓库更新订阅已删除", c.Param("id"), nil)
+	c.Status(http.StatusNoContent)
+}
+
+func (h *QQBotHandler) repositoryWatchProfile(profileID string) (assistant.BotConfig, assistant.ProfileSet, error) {
+	set := h.profiles.Profiles().WithDefaults()
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		profileID = set.ActiveID
+	}
+	for _, profile := range set.Profiles {
+		if profile.ID == profileID {
+			return profile.WithDefaults(), set, nil
+		}
+	}
+	return assistant.BotConfig{}, set, fmt.Errorf("机器人配置 %s 不存在", profileID)
+}
+
+func repositoryWatchContextNamespace(set assistant.ProfileSet, profileID string) string {
+	if set.PlatformContextsIsolated() {
+		return strings.TrimSpace(profileID)
+	}
+	return ""
+}
+
+func (h *QQBotHandler) repositoryWatchOwner(id string) (string, error) {
+	if h.sqlite == nil {
+		return "", fmt.Errorf("task store is unavailable")
+	}
+	items, _, err := h.sqlite.LoadReminders(h.ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, item := range items {
+		if item.ID == strings.TrimSpace(id) && item.Kind == assistant.ReminderKindRepositoryWatch {
+			return item.OwnerID, nil
+		}
+	}
+	return "", fmt.Errorf("仓库更新订阅 %s 不存在", id)
+}
+
+func qqbotTaskFromReminder(item assistant.Reminder) qqbotTaskPayload {
+	return qqbotTaskPayload{
+		ID: item.ID, Kind: qqbotTaskKind(item), Platform: item.Platform, ProfileID: item.ProfileID,
+		OwnerID: item.OwnerID, GroupID: item.GroupID, UserID: item.UserID, Message: item.Message,
+		Status: qqbotTaskStatus(item), TriggerAt: item.TriggerAt, IntervalSeconds: item.IntervalSeconds,
+		LastRunAt: item.LastRunAt, CancelledAt: item.CancelledAt, LastError: item.LastError,
+		ConsecutiveFailures: item.ConsecutiveFailures, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != "",
+		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
+		WatchCommits: item.WatchCommits, WatchReleases: item.WatchReleases, LastCommitSHA: item.LastCommitSHA,
+		LastReleaseTag: item.LastReleaseTag, CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
+	}
+}
+
 func qqbotTaskKind(item assistant.Reminder) string {
+	if item.Kind == assistant.ReminderKindRepositoryWatch && item.IntervalSeconds > 0 {
+		return "repository_watch"
+	}
 	if item.Kind == assistant.ReminderKindQuery && item.IntervalSeconds > 0 {
 		return "schedule"
 	}
@@ -367,7 +583,7 @@ func qqbotTaskStatus(item assistant.Reminder) string {
 	if item.ConsecutiveFailures > 0 {
 		return "retrying"
 	}
-	if item.Kind == assistant.ReminderKindQuery && item.IntervalSeconds > 0 {
+	if (item.Kind == assistant.ReminderKindQuery || item.Kind == assistant.ReminderKindRepositoryWatch) && item.IntervalSeconds > 0 {
 		return "active"
 	}
 	if !item.LastRunAt.IsZero() {
@@ -377,6 +593,9 @@ func qqbotTaskStatus(item assistant.Reminder) string {
 }
 
 func taskConsumesQuota(item assistant.Reminder) bool {
+	if item.Kind == assistant.ReminderKindRepositoryWatch {
+		return false
+	}
 	if item.Kind == assistant.ReminderKindQuery && item.IntervalSeconds > 0 {
 		return item.CancelledAt.IsZero()
 	}

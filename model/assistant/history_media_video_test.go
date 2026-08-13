@@ -257,6 +257,255 @@ func TestRuntimeRefreshesExpiredImageURLThroughGetImageLocalPath(t *testing.T) {
 	}
 }
 
+func TestRuntimeUsesStableImageIDAndNapCatSourcePath(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	body := tinyJPEGBytes(t)
+	localPath := filepath.Join(t.TempDir(), "napcat-source.jpg")
+	if err := os.WriteFile(localPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_image": {
+			"data": map[string]any{
+				"picElement": map[string]any{
+					"filePath":   "",
+					"sourcePath": localPath,
+				},
+			},
+		},
+	}}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := runtime.prepareEventImages(context.Background(), MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "user-1",
+		MessageID: "stable-image-id",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"file":    "display-name.jpg",
+			"file_id": "napcat-stable-image-id",
+		}}},
+	})
+	if event.imageLoadErr != nil {
+		t.Fatal(event.imageLoadErr)
+	}
+	if event.Segments[0].Data["path"] != localPath || event.Segments[0].Data["cached_file"] == "" {
+		t.Fatalf("NapCat sourcePath was not cached: %#v", event.Segments[0].Data)
+	}
+	calls := recordedCallsByAction(channel.callsSnapshot(), "get_image")
+	if len(calls) != 1 || calls[0].params["file"] != "napcat-stable-image-id" {
+		t.Fatalf("get_image calls = %#v", calls)
+	}
+}
+
+func TestOneBotImageResolutionMatchesTheRequestedSegment(t *testing.T) {
+	firstPath := filepath.Join(t.TempDir(), "first.jpg")
+	secondPath := filepath.Join(t.TempDir(), "second.jpg")
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.WriteFile(path, tinyJPEGBytes(t), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := map[string]any{
+		"message_id": 42,
+		"message": []any{
+			map[string]any{"type": "image", "data": map[string]any{
+				"file": "first.jpg", "file_id": "first-stable-id", "sourcePath": firstPath,
+			}},
+			map[string]any{"type": "image", "data": map[string]any{
+				"file": "second.jpg", "file_id": "second-stable-id", "sourcePath": secondPath,
+			}},
+		},
+	}
+	target := MessageSegment{Type: "image", Data: map[string]string{"file": "second.jpg"}}
+	if got := mediaFileTokenFromOneBotData(response, target); got != "second-stable-id" {
+		t.Fatalf("media token = %q, want second-stable-id", got)
+	}
+	if got, _ := mediaSourceFromOneBotData(response, target); got != secondPath {
+		t.Fatalf("media source = %q, want %q", got, secondPath)
+	}
+}
+
+func TestRememberOutgoingPersistsSharedImage(t *testing.T) {
+	historyDir := t.TempDir()
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", historyDir)
+	body := tinyJPEGBytes(t)
+	sourcePath := filepath.Join(t.TempDir(), "agent-output.jpg")
+	if err := os.WriteFile(sourcePath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewLocalMediaStore("http://127.0.0.1:18080/api/qqbot/media")
+	sharedURL, ok := store.Share(sourcePath, time.Minute)
+	if !ok {
+		t.Fatal("Share() returned false")
+	}
+	runtime := NewRuntime(BotConfig{BotQQ: "bot-1"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetLocalMediaSharer(store)
+	source := MessageEvent{Kind: EventKindPrivate, UserID: "user-1", MessageID: "edit-request"}
+	runtime.rememberOutgoingWithMessageID(context.Background(), source, OutgoingMessage{
+		Text:      "改好了。",
+		ImageURLs: []string{sharedURL},
+	}, "bot-image-1")
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	history := runtime.contextHistory(source)
+	if len(history) != 1 || history[0].MessageID != "bot-image-1" {
+		t.Fatalf("history = %#v", history)
+	}
+	cachedPath := history[0].Segments[1].Data["cached_file"]
+	if cachedPath == "" || cachedPath == sourcePath {
+		t.Fatalf("outgoing image was not persisted: %#v", history[0].Segments)
+	}
+	if got, err := os.ReadFile(cachedPath); err != nil || string(got) != string(body) {
+		t.Fatalf("cached outgoing image invalid: bytes=%d err=%v", len(got), err)
+	}
+}
+
+func TestRememberOutgoingRecoversSentImageThroughOneBot(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	body := tinyJPEGBytes(t)
+	localPath := filepath.Join(t.TempDir(), "onebot-sent-image.jpg")
+	if err := os.WriteFile(localPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_msg": {
+			"message": []any{map[string]any{
+				"type": "image",
+				"data": map[string]any{"file": "sent-image.jpg", "file_id": "sent-image-stable-id"},
+			}},
+		},
+		"get_image": {"sourcePath": localPath},
+	}}
+	runtime := NewRuntime(BotConfig{BotQQ: "bot-1"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	source := MessageEvent{Kind: EventKindPrivate, UserID: "user-1", MessageID: "edit-request"}
+	runtime.rememberOutgoingWithMessageID(context.Background(), source, OutgoingMessage{
+		Text:      "改好了。",
+		ImageURLs: []string{"https://expired.example.invalid/generated.jpg"},
+	}, "sent-message-1")
+	history := runtime.contextHistory(source)
+	if len(history) != 1 || history[0].Segments[1].Data["cached_file"] == "" {
+		t.Fatalf("sent image was not recovered: %#v", history)
+	}
+	getMsgCalls := recordedCallsByAction(channel.callsSnapshot(), "get_msg")
+	getImageCalls := recordedCallsByAction(channel.callsSnapshot(), "get_image")
+	if len(getMsgCalls) == 0 || len(getImageCalls) == 0 || getImageCalls[len(getImageCalls)-1].params["file"] != "sent-image-stable-id" {
+		t.Fatalf("OneBot recovery calls: get_msg=%#v get_image=%#v", getMsgCalls, getImageCalls)
+	}
+}
+
+func TestAgentHistorySummarizesImagesBeforeLazyToolSkipsBrokenImage(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	body := tinyJPEGBytes(t)
+	goodPath := filepath.Join(t.TempDir(), "new-image.jpg")
+	if err := os.WriteFile(goodPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	history := []MessageEvent{
+		{
+			Kind:      EventKindPrivate,
+			UserID:    "user-1",
+			MessageID: "expired-bot-image",
+			Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+				"file":               "missing-image-id",
+				imageUnavailableKey:  "true",
+				imageSourceFailedKey: "true",
+			}}},
+		},
+		{
+			Kind:      EventKindPrivate,
+			UserID:    "user-1",
+			MessageID: "new-user-image",
+			Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"path": goodPath}}},
+		},
+	}
+	message, err := runtime.agentHistoryImageBatchMessage(context.Background(), history, map[int]bool{0: true, 1: true}, time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(message.Parts) != 0 {
+		t.Fatalf("history summary eagerly attached images: %#v", message.Parts)
+	}
+	for _, want := range []string{"message_id=expired-bot-image", "message_id=new-user-image", "当前未附加原图", dianaHistoryImagesToolName} {
+		if !strings.Contains(message.Content, want) {
+			t.Fatalf("history summary = %q, missing %q", message.Content, want)
+		}
+	}
+	if strings.Contains(message.Content, "[图片]") {
+		t.Fatalf("history media notice = %q", message.Content)
+	}
+	if calls := recordedCallsByAction(channel.callsSnapshot(), "get_image"); len(calls) != 0 {
+		t.Fatalf("history summary loaded media: %#v", calls)
+	}
+	for _, event := range history {
+		runtime.remember(event)
+	}
+	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "user-1"})
+	output, err := tool.Run(context.Background(), map[string]any{
+		"message_ids": []any{"expired-bot-image", "new-user-image"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, `"loaded":1`) || !strings.Contains(output, `"failed":1`) {
+		t.Fatalf("tool output = %s", output)
+	}
+	parts := tool.ToolResultParts(output)
+	want := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(body)
+	if len(parts) != 1 || parts[0].Type != llm.ContentPartImageURL || parts[0].ImageURL != want {
+		t.Fatalf("lazy history image parts = %#v", parts)
+	}
+	if calls := recordedCallsByAction(channel.callsSnapshot(), "get_image"); len(calls) != 0 {
+		t.Fatalf("known broken history image was retried: %#v", calls)
+	}
+}
+
+func TestAgentHistoryPersistsNewImageFailureAndDoesNotRetry(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_image": {},
+		"get_msg":   {},
+	}}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	broken := MessageEvent{
+		Kind:       EventKindPrivate,
+		UserID:     "user-1",
+		MessageID:  "legacy-broken-image",
+		RawMessage: "[图片]",
+		Segments:   []MessageSegment{{Type: "image", Data: map[string]string{"file": "missing-image-id"}}},
+	}
+	runtime.remember(broken)
+	message, err := runtime.agentHistoryImageBatchMessage(context.Background(), []MessageEvent{broken}, map[int]bool{0: true}, time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message.Content, "message_id=legacy-broken-image") || !strings.Contains(message.Content, "当前未附加原图") || strings.Contains(message.Content, "[图片]") {
+		t.Fatalf("history media notice = %q", message.Content)
+	}
+	if got := len(channel.callsSnapshot()); got != 0 {
+		t.Fatalf("summary unexpectedly resolved legacy image: calls=%d", got)
+	}
+	tool := newDianaHistoryImagesTool(runtime, broken)
+	if _, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"legacy-broken-image"}}); err == nil {
+		t.Fatal("broken historical image tool call succeeded")
+	}
+	firstCallCount := len(channel.callsSnapshot())
+	if firstCallCount == 0 {
+		t.Fatal("legacy image was not resolved on first explicit detail request")
+	}
+	stored := runtime.contextHistory(broken)
+	if len(stored) != 1 || stored[0].Segments[0].Data[imageUnavailableKey] != "true" {
+		t.Fatalf("failed history state was not persisted: %#v", stored)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"legacy-broken-image"}}); err == nil {
+		t.Fatal("known failed historical image tool call succeeded")
+	}
+	if got := len(channel.callsSnapshot()); got != firstCallCount {
+		t.Fatalf("known failed image was retried: calls before=%d after=%d", firstCallCount, got)
+	}
+}
+
 func TestRuntimeRefreshesExpiredGetImageSourceThroughGetMsg(t *testing.T) {
 	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
 	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
@@ -549,6 +798,47 @@ func TestLLMMessageUsesPersistedVideoFramesAfterSourceDisappears(t *testing.T) {
 	}, "这是什么", nil)
 	if len(msg.Parts) < 2 || msg.Parts[1].Type != "image_url" {
 		t.Fatalf("persisted frame missing from LLM message: %#v", msg)
+	}
+}
+
+func TestRecentHistoryImageIndexesIgnoreVideoFrames(t *testing.T) {
+	history := []MessageEvent{
+		{
+			Kind:      EventKindPrivate,
+			Time:      100,
+			UserID:    "user-1",
+			MessageID: "video-1",
+			Segments: []MessageSegment{
+				{Type: "video", Data: map[string]string{"file": "video.mp4"}},
+				{Type: "image", Data: map[string]string{"cached_file": "/tmp/frame.jpg", "source_type": "video_frame"}},
+			},
+		},
+		{Kind: EventKindPrivate, Time: 101, UserID: "user-1", MessageID: "question", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "刚才的视频是什么"}}}},
+	}
+	if selected := recentHistoryImageIndexes(history, "question"); len(selected) != 0 {
+		t.Fatalf("video frames selected as historical still images: %#v", selected)
+	}
+}
+
+func TestEventWithoutQuotedImagesKeepsCachedVideoFrames(t *testing.T) {
+	framePath := filepath.Join(t.TempDir(), "frame.jpg")
+	if err := os.WriteFile(framePath, tinyJPEGBytes(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	event := eventWithoutQuotedImages(MessageEvent{
+		RawMessage: "看引用",
+		Quoted: &QuotedMessage{Segments: []MessageSegment{
+			{Type: "video", Data: map[string]string{"file": "expired-video.mp4"}},
+			{Type: "image", Data: map[string]string{"cached_file": framePath, "source_type": "video_frame"}},
+			{Type: "image", Data: map[string]string{"cached_file": filepath.Join(t.TempDir(), "still.jpg")}},
+		}},
+	})
+	if event.Quoted == nil || len(event.Quoted.Segments) != 2 || event.Quoted.Segments[1].Data["source_type"] != "video_frame" {
+		t.Fatalf("quoted video context was stripped with still images: %#v", event.Quoted)
+	}
+	message := llmMessageFromEventWithVideoFrames(context.Background(), event, "看引用", nil)
+	if requestImageCount(llm.GenerateRequest{Messages: []llm.Message{message}}) != 1 {
+		t.Fatalf("cached quoted video frame missing after lazy still-image filtering: %#v", message)
 	}
 }
 

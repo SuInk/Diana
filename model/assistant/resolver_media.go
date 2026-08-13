@@ -381,6 +381,8 @@ func downloadBilibiliVideoFile(ctx context.Context, raw string) string {
 			_ = os.RemoveAll(workDir)
 			return ""
 		}
+		_ = os.Remove(videoPath)
+		_ = os.Remove(audioPath)
 	} else {
 		outputPath = videoPath
 	}
@@ -438,6 +440,8 @@ func downloadBilibiliVideoFileViaAPI(ctx context.Context, raw string) string {
 				_ = os.RemoveAll(workDir)
 				return ""
 			}
+			_ = os.Remove(videoPath)
+			_ = os.Remove(audioPath)
 		} else {
 			outputPath = videoPath
 		}
@@ -1251,7 +1255,8 @@ func redactURLQuery(raw string) string {
 	return parsed.String()
 }
 
-func cleanupLocalMediaFilesLater(paths []string, delay time.Duration) {
+func cleanupLocalMediaFilesLater(paths []string, delay time.Duration) <-chan struct{} {
+	done := make(chan struct{})
 	var local []string
 	for _, path := range paths {
 		path = strings.TrimSpace(strings.TrimPrefix(path, "file://"))
@@ -1260,14 +1265,55 @@ func cleanupLocalMediaFilesLater(paths []string, delay time.Duration) {
 		}
 	}
 	if len(local) == 0 {
-		return
+		close(done)
+		return done
 	}
 	go func() {
+		defer close(done)
 		time.Sleep(delay)
 		for _, path := range local {
-			_ = os.Remove(path)
-			_ = os.Remove(path + ".jpg")
-			_ = os.RemoveAll(filepath.Dir(path))
+			cleanupLocalMediaFile(path)
 		}
 	}()
+	return done
+}
+
+func cleanupLocalMediaFile(path string) {
+	path = filepath.Clean(strings.TrimSpace(strings.TrimPrefix(path, "file://")))
+	if path == "." || !filepath.IsAbs(path) {
+		return
+	}
+	_ = os.Remove(path)
+
+	parent := filepath.Dir(path)
+	if dianaOwnedMediaTempDir(parent) {
+		_ = os.Remove(parent)
+	}
+}
+
+func dianaOwnedMediaTempDir(dir string) bool {
+	dir, err := filepath.Abs(filepath.Clean(dir))
+	if err != nil {
+		return false
+	}
+	tempRoot, err := filepath.Abs(filepath.Clean(os.TempDir()))
+	if err != nil || filepath.Dir(dir) != tempRoot {
+		return false
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	name := filepath.Base(dir)
+	for _, prefix := range []string{
+		"diana-agent-image-",
+		"diana-bili-video-",
+		"diana-resolver-image-",
+		"diana-resolver-video-",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }

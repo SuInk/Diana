@@ -37,6 +37,12 @@ type dianaTask struct {
 	LastError           string    `json:"last_error,omitempty"`
 	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
 	PendingDelivery     bool      `json:"pending_delivery,omitempty"`
+	Repository          string    `json:"repository,omitempty"`
+	RepositoryBranch    string    `json:"repository_branch,omitempty"`
+	WatchCommits        bool      `json:"watch_commits,omitempty"`
+	WatchReleases       bool      `json:"watch_releases,omitempty"`
+	LastCommitSHA       string    `json:"last_commit_sha,omitempty"`
+	LastReleaseTag      string    `json:"last_release_tag,omitempty"`
 	CreatedAt           time.Time `json:"created_at"`
 	ConsumesQuota       bool      `json:"consumes_quota"`
 }
@@ -138,10 +144,15 @@ func taskForTool(item Reminder) dianaTask {
 	status := reminderStatus(item)
 	consumesQuota := item.LastRunAt.IsZero() && item.CancelledAt.IsZero()
 	interval := ""
-	if reminderIsScheduledQuery(item) {
+	if reminderIsRecurring(item) {
 		kind = "schedule"
+		if reminderIsRepositoryWatch(item) {
+			kind = "repository_watch"
+			consumesQuota = false
+		} else {
+			consumesQuota = item.CancelledAt.IsZero()
+		}
 		status = scheduleStatus(item)
-		consumesQuota = item.CancelledAt.IsZero()
 		interval = (time.Duration(item.IntervalSeconds) * time.Second).String()
 	}
 	return dianaTask{
@@ -159,6 +170,12 @@ func taskForTool(item Reminder) dianaTask {
 		LastError:           item.LastError,
 		ConsecutiveFailures: item.ConsecutiveFailures,
 		PendingDelivery:     strings.TrimSpace(item.PendingDelivery) != "",
+		Repository:          item.Repository,
+		RepositoryBranch:    item.RepositoryBranch,
+		WatchCommits:        item.WatchCommits,
+		WatchReleases:       item.WatchReleases,
+		LastCommitSHA:       item.LastCommitSHA,
+		LastReleaseTag:      item.LastReleaseTag,
 		CreatedAt:           item.CreatedAt,
 		ConsumesQuota:       consumesQuota,
 	}

@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -195,6 +196,33 @@ func TestContextBudgetKeepsHistoricalImageMessageAtomic(t *testing.T) {
 		if images == 1 {
 			t.Fatalf("historical multi-image message was partially retained: %#v", got)
 		}
+	}
+}
+
+func TestContextBudgetKeepsEightToolImagesTogetherAtDefaultWindow(t *testing.T) {
+	parts := []ContentPart{{Type: ContentPartText, Text: "历史原图工具返回了 8 张图片"}}
+	for index := 0; index < 8; index++ {
+		parts = append(parts, ContentPart{Type: ContentPartImageURL, ImageURL: fmt.Sprintf("https://example.com/%d.jpg", index), Detail: "auto"})
+	}
+	messages := []Message{
+		{Role: RoleSystem, Content: strings.Repeat("系统说明", 500), Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: "历史原图工具返回了 8 张图片", Priority: MessagePriorityPlugin, Parts: parts},
+		{Role: RoleUser, Content: "比较这些图片", Priority: MessagePriorityCurrent},
+	}
+	got := fitMessagesToTokenBudget(messages, DefaultMaxContextTokens-DefaultMaxOutputTokens-contextBudgetSafetyReserve)
+	images := 0
+	for _, message := range got {
+		for _, part := range message.Parts {
+			if part.Type == ContentPartImageURL {
+				images++
+				if part.Detail != "low" {
+					t.Fatalf("tool image detail = %q, want low after fitting", part.Detail)
+				}
+			}
+		}
+	}
+	if images != 8 {
+		t.Fatalf("budget retained %d of 8 tool images: %#v", images, got)
 	}
 }
 

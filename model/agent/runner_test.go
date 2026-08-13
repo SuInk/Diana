@@ -121,6 +121,39 @@ func TestRunnerCallsToolAndReturnsFinal(t *testing.T) {
 	}
 }
 
+func TestRunnerCarriesRichToolResultPartsIntoNextModelTurn(t *testing.T) {
+	tool := &richResultTestTool{imageURL: "data:image/png;base64,YQ=="}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"history_images","input":{"message_ids":["m1"]}}`,
+		`{"action":"final","content":"看完了"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "看原图"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "看完了" || len(client.requests) != 2 {
+		t.Fatalf("response=%#v requests=%d", resp, len(client.requests))
+	}
+	var found bool
+	for _, message := range client.requests[1].Messages {
+		if !strings.Contains(message.Content, `"loaded":1`) {
+			continue
+		}
+		for _, part := range message.Parts {
+			if part.Type == llm.ContentPartImageURL && part.ImageURL == tool.imageURL {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("second request did not include rich image result: %#v", client.requests[1].Messages)
+	}
+}
+
 func TestRunnerPreservesCompleteToolErrors(t *testing.T) {
 	longError := strings.Repeat("tool-error-segment-", 180) + "tail-marker"
 	tool := &errorTestTool{message: longError}
@@ -538,6 +571,10 @@ type errorTestTool struct {
 	message string
 }
 
+type richResultTestTool struct {
+	imageURL string
+}
+
 func (*countingWebSearchTool) Name() string        { return webSearchToolName }
 func (*countingWebSearchTool) Description() string { return "test web search tool" }
 func (t *countingWebSearchTool) Run(_ context.Context, input map[string]any) (string, error) {
@@ -564,6 +601,15 @@ func (*errorTestTool) Name() string        { return "error" }
 func (*errorTestTool) Description() string { return "returns a test error" }
 func (t *errorTestTool) Run(context.Context, map[string]any) (string, error) {
 	return "", errors.New(t.message)
+}
+
+func (*richResultTestTool) Name() string        { return "history_images" }
+func (*richResultTestTool) Description() string { return "loads historical images" }
+func (*richResultTestTool) Run(context.Context, map[string]any) (string, error) {
+	return `{"loaded":1}`, nil
+}
+func (t *richResultTestTool) ToolResultParts(string) []llm.ContentPart {
+	return []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: t.imageURL, Detail: "auto"}}
 }
 
 func (*terminalTestTool) Name() string        { return "terminal" }

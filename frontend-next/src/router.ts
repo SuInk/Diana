@@ -21,7 +21,7 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
   { id: "events", label: "事件", hint: "消息处理与回复决策" },
-  { id: "tasks", label: "任务", hint: "一次性提醒与周期订阅" },
+  { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅" },
   { id: "llm", label: "LLM 配置", hint: "Provider 与模型管理" },
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为" },
   { id: "plugins", label: "插件", hint: "插件安装与设置" },

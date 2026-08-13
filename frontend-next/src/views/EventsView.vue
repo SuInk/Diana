@@ -14,23 +14,45 @@
     </header>
 
     <div class="stack">
-      <section class="event-filter-band" aria-label="事件时间范围">
-        <div class="event-filter-copy">
-          <Clock3 :size="16" aria-hidden="true" />
-          <span>时间范围</span>
+      <section class="event-filter-band" aria-label="事件筛选">
+        <div class="event-filter-row">
+          <div class="event-filter-copy">
+            <Clock3 :size="16" aria-hidden="true" />
+            <span>时间范围</span>
+          </div>
+          <div class="segmented event-range" role="radiogroup" aria-label="按时间筛选事件">
+            <button
+              v-for="option in rangeOptions"
+              :key="option.value"
+              type="button"
+              :class="{ active: selectedRange === option.value }"
+              :aria-checked="selectedRange === option.value"
+              role="radio"
+              @click="selectRange(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
         </div>
-        <div class="segmented event-range" role="radiogroup" aria-label="按时间筛选事件">
-          <button
-            v-for="option in rangeOptions"
-            :key="option.value"
-            type="button"
-            :class="{ active: selectedRange === option.value }"
-            :aria-checked="selectedRange === option.value"
-            role="radio"
-            @click="selectRange(option.value)"
-          >
-            {{ option.label }}
-          </button>
+        <div class="event-filter-row">
+          <div class="event-filter-copy">
+            <Filter :size="16" aria-hidden="true" />
+            <span>处理结果</span>
+          </div>
+          <div class="segmented event-result-filter" role="radiogroup" aria-label="按处理结果筛选事件">
+            <button
+              v-for="option in resultOptions"
+              :key="option.value"
+              type="button"
+              :class="{ active: selectedResult === option.value }"
+              :aria-checked="selectedResult === option.value"
+              role="radio"
+              @click="selectResult(option.value)"
+            >
+              <span>{{ option.label }}</span>
+              <span class="event-filter-count">{{ formatNumber(resultOptionCount(option.value)) }}</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -44,7 +66,7 @@
         <StatCard label="未回复" :value="formatNumber(summary.not_replied)" :foot="`${formatNumber(summary.pending)} 条等待处理`">
           <template #icon><MessageCircleOff :size="14" aria-hidden="true" /></template>
         </StatCard>
-        <StatCard label="处理异常" :value="formatNumber(summary.errors)" foot="包含重试与投递失败">
+        <StatCard label="处理异常" :value="formatNumber(summary.errors)" foot="包含处理失败与投递失败">
           <template #icon><TriangleAlert :size="14" aria-hidden="true" /></template>
         </StatCard>
         <StatCard label="Token 总量" :value="formatNumber(summary.total_tokens)" :foot="tokenBreakdown">
@@ -61,7 +83,7 @@
               {{ stream.connected ? "实时更新" : "实时连接中断" }}
             </span>
           </div>
-          <span class="muted event-result-count">已显示 {{ formatNumber(events.length) }} / {{ formatNumber(summary.total) }}</span>
+          <span class="muted event-result-count">{{ resultCountText }}</span>
         </div>
 
         <div v-if="events.length > 0" class="event-detail-list">
@@ -82,7 +104,40 @@
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
               </div>
 
-              <p class="event-detail-message">{{ event.text || "[无文本内容]" }}</p>
+              <p v-if="event.text" class="event-detail-message">{{ event.text }}</p>
+              <p v-else-if="!event.images?.length" class="event-detail-message">[无文本内容]</p>
+
+              <div v-if="event.images?.length" class="event-image-grid" aria-label="消息图片">
+                <template v-for="image in event.images" :key="image.index">
+                  <div
+                    v-if="image.unavailable || failedImages[imageKey(event, image.index)]"
+                    class="event-image-preview unavailable"
+                    :aria-label="`${imageAlt(image.index, image.summary)}，图片不可用`"
+                  >
+                    <span class="event-image-unavailable">
+                      <ImageOff :size="22" aria-hidden="true" />
+                      <span>图片不可用</span>
+                    </span>
+                  </div>
+                  <a
+                    v-else
+                    class="event-image-preview"
+                    :href="eventImageURL(event, image.index)"
+                    target="_blank"
+                    rel="noopener"
+                    :aria-label="imageAriaLabel(image.index, image.summary)"
+                    title="查看原图"
+                  >
+                    <img
+                      :src="eventImageURL(event, image.index)"
+                      :alt="imageAlt(image.index, image.summary)"
+                      loading="lazy"
+                      decoding="async"
+                      @error="markImageFailed(event, image.index)"
+                    />
+                  </a>
+                </template>
+              </div>
 
               <div class="event-decision" :class="decisionClass(event)">
                 <component :is="decisionIcon(event)" :size="16" aria-hidden="true" />
@@ -96,11 +151,20 @@
                 <strong>回复结果</strong>
                 <p>{{ replyResultText(event) }}</p>
               </div>
+              <div v-if="event.delivery_stage" class="event-delivery" :class="deliveryClass(event)">
+                <component :is="deliveryIcon(event)" :size="16" aria-hidden="true" />
+                <div>
+                  <strong>{{ deliveryLabel(event.delivery_stage) }}</strong>
+                  <p>{{ deliveryDetail(event) }}</p>
+                </div>
+              </div>
               <p v-if="event.error && !(event.reason || '').includes(event.error)" class="event-error">{{ event.error }}</p>
+              <p v-if="event.delivery_error" class="event-error">{{ event.delivery_error }}</p>
 
               <div class="event-technical muted mono">
                 <span v-if="event.message_id">消息 {{ event.message_id }}</span>
                 <span>结果 {{ event.outcome || event.status }}</span>
+                <span v-if="event.outbound_message_id">出站 {{ event.outbound_message_id }}</span>
                 <span v-if="event.total_tokens">
                   Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}）
                 </span>
@@ -164,7 +228,7 @@
           <LoaderCircle :size="20" class="spin" aria-hidden="true" />
           正在加载事件
         </div>
-        <EmptyState v-else title="当前范围没有事件" hint="切换更长的时间范围，或等待机器人收到新消息">
+        <EmptyState v-else :title="emptyStateTitle" hint="切换处理结果或时间范围，或等待机器人收到新消息">
           <template #icon><Activity :size="20" aria-hidden="true" /></template>
         </EmptyState>
 
@@ -189,12 +253,15 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock3,
+  Filter,
+  ImageOff,
   LoaderCircle,
   MessageCircle,
   MessageCircleOff,
   MessageCircleReply,
   RefreshCw,
   Sigma,
+  Send,
   TimerReset,
   TriangleAlert
 } from "@lucide/vue";
@@ -204,6 +271,7 @@ import {
   type AppLogEntry,
   type AssistantEventDetail,
   type AssistantEventRange,
+  type AssistantEventResultFilter,
   type AssistantEventsResponse
 } from "../api";
 import { formatClock, formatNumber } from "../format";
@@ -220,7 +288,16 @@ const rangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
   { value: "all", label: "更久" }
 ];
 
+const resultOptions: Array<{ value: AssistantEventResultFilter; label: string }> = [
+  { value: "all", label: "全部" },
+  { value: "replied", label: "已回复" },
+  { value: "not_replied", label: "未回复" },
+  { value: "pending", label: "等待处理" },
+  { value: "error", label: "处理异常" }
+];
+
 const selectedRange = ref<AssistantEventRange>("24h");
+const selectedResult = ref<AssistantEventResultFilter>("all");
 const events = ref<AssistantEventDetail[]>([]);
 const response = ref<AssistantEventsResponse | null>(null);
 const page = ref(1);
@@ -230,7 +307,9 @@ const traceOpen = ref<Record<string, boolean>>({});
 const traceLoading = ref<Record<string, boolean>>({});
 const traceLoaded = ref<Record<string, boolean>>({});
 const traceSteps = ref<Record<string, AppLogEntry[]>>({});
+const failedImages = ref<Record<string, boolean>>({});
 let refreshTimer: number | null = null;
+let loadGeneration = 0;
 
 const summary = computed(() => ({
   total: response.value?.total ?? 0,
@@ -244,7 +323,14 @@ const summary = computed(() => ({
   total_tokens: response.value?.total_tokens ?? 0
 }));
 const hasMore = computed(() => response.value?.has_more ?? false);
+const filteredTotal = computed(() => response.value?.filtered_total ?? summary.value.total);
 const rangeDescription = computed(() => rangeOptions.find((item) => item.value === selectedRange.value)?.label ?? "当前范围");
+const selectedResultLabel = computed(() => resultOptions.find((item) => item.value === selectedResult.value)?.label ?? "全部");
+const resultCountText = computed(() => {
+  const prefix = selectedResult.value === "all" ? "已显示" : selectedResultLabel.value;
+  return `${prefix} ${formatNumber(events.value.length)} / ${formatNumber(filteredTotal.value)}`;
+});
+const emptyStateTitle = computed(() => selectedResult.value === "all" ? "当前范围没有事件" : `当前范围没有${selectedResultLabel.value}事件`);
 const replyRate = computed(() => {
   if (summary.value.total <= 0) return "暂无处理记录";
   return `回复率 ${Math.round((summary.value.replied / summary.value.total) * 100)}%`;
@@ -259,7 +345,44 @@ function platformLabel(platform: string): string {
   return platform;
 }
 
+function imageKey(event: AssistantEventDetail, imageIndex: number): string {
+  return `${event.id}:${imageIndex}`;
+}
+
+function eventImageURL(event: AssistantEventDetail, imageIndex: number): string {
+  return `/api/assistant/events/${encodeURIComponent(event.id)}/images/${imageIndex}`;
+}
+
+function imageSummary(summary?: string): string {
+  return (summary ?? "").replace(/^\[|\]$/g, "").trim();
+}
+
+function imageAlt(imageIndex: number, summary?: string): string {
+  const label = imageSummary(summary);
+  return label ? `图片 ${imageIndex}：${label}` : `消息图片 ${imageIndex}`;
+}
+
+function imageAriaLabel(imageIndex: number, summary?: string): string {
+  return `${imageAlt(imageIndex, summary)}，在新窗口查看原图`;
+}
+
+function markImageFailed(event: AssistantEventDetail, imageIndex: number): void {
+  failedImages.value = { ...failedImages.value, [imageKey(event, imageIndex)]: true };
+}
+
+function resultOptionCount(result: AssistantEventResultFilter): number {
+  if (result === "all") return summary.value.total;
+  if (result === "replied") return summary.value.replied;
+  if (result === "not_replied") return summary.value.not_replied;
+  if (result === "pending") return summary.value.pending;
+  return summary.value.errors;
+}
+
 async function load(reset: boolean): Promise<void> {
+  const generation = reset ? ++loadGeneration : loadGeneration;
+  const requestedPage = reset ? 1 : page.value;
+  const requestedRange = selectedRange.value;
+  const requestedResult = selectedResult.value;
   if (reset) {
     loading.value = true;
     page.value = 1;
@@ -267,7 +390,8 @@ async function load(reset: boolean): Promise<void> {
     loadingMore.value = true;
   }
   try {
-    const next = await getAssistantEvents(selectedRange.value, page.value, 50);
+    const next = await getAssistantEvents(requestedRange, requestedResult, requestedPage, 50);
+    if (generation !== loadGeneration) return;
     response.value = next;
     if (reset) {
       events.value = next.events;
@@ -275,18 +399,32 @@ async function load(reset: boolean): Promise<void> {
       const seen = new Set(events.value.map((item) => item.id));
       events.value = [...events.value, ...next.events.filter((item) => !seen.has(item.id))];
     }
-    if (next.has_more) page.value += 1;
+    page.value = next.has_more ? next.page + 1 : next.page;
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "事件加载失败");
+    if (generation === loadGeneration) {
+      toastError(error instanceof Error ? error.message : "事件加载失败");
+    }
   } finally {
-    loading.value = false;
-    loadingMore.value = false;
+    if (generation === loadGeneration) {
+      loading.value = false;
+      loadingMore.value = false;
+    }
   }
 }
 
 function selectRange(value: AssistantEventRange): void {
   if (selectedRange.value === value) return;
   selectedRange.value = value;
+  events.value = [];
+  response.value = null;
+  void load(true);
+}
+
+function selectResult(value: AssistantEventResultFilter): void {
+  if (selectedResult.value === value) return;
+  selectedResult.value = value;
+  events.value = [];
+  response.value = null;
   void load(true);
 }
 
@@ -335,6 +473,37 @@ function replyResultText(event: AssistantEventDetail): string {
   if (event.reply?.trim()) return event.reply;
   if (event.error?.trim()) return `机器人已发送错误说明：${event.error}`;
   return "已完成回复，但该历史记录未保存回复正文";
+}
+
+function deliveryLabel(stage?: string): string {
+  const labels: Record<string, string> = {
+    generated: "回复已生成",
+    send_attempted: "已发起发送，等待确认",
+    acknowledged: "OneBot 已确认接收",
+    echo_persisted: "自回显已落库",
+    failed: "发送失败"
+  };
+  return labels[stage ?? ""] ?? `发送阶段：${stage}`;
+}
+
+function deliveryDetail(event: AssistantEventDetail): string {
+  if (event.delivery_stage === "echo_persisted") return "已收到机器人自身消息回显并完成持久化";
+  if (event.delivery_stage === "acknowledged") return event.outbound_message_id ? `已收到 ACK，消息 ID ${event.outbound_message_id}` : "已收到 OneBot API ACK";
+  if (event.delivery_stage === "send_attempted") return "请求已经写入发送链路，但尚无可核验 ACK";
+  if (event.delivery_stage === "generated") return "模型或插件已生成回复，尚未发起发送";
+  return event.delivery_error?.trim() || "发送链路未完成";
+}
+
+function deliveryClass(event: AssistantEventDetail): string {
+  if (event.delivery_stage === "acknowledged" || event.delivery_stage === "echo_persisted") return "ok";
+  if (event.delivery_stage === "failed") return "err";
+  return "warn";
+}
+
+function deliveryIcon(event: AssistantEventDetail): Component {
+  if (event.delivery_stage === "acknowledged" || event.delivery_stage === "echo_persisted") return CheckCircle2;
+  if (event.delivery_stage === "failed") return TriangleAlert;
+  return Send;
 }
 
 function formatDate(iso: string): string {
@@ -441,9 +610,17 @@ onBeforeUnmount(() => {
 
 .event-filter-band {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.event-filter-row {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -456,7 +633,8 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.event-range {
+.event-range,
+.event-result-filter {
   max-width: 100%;
   overflow-x: auto;
 }
@@ -464,6 +642,23 @@ onBeforeUnmount(() => {
 .event-range button {
   min-width: 74px;
   white-space: nowrap;
+}
+
+.event-result-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.event-filter-count {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.event-result-filter button.active .event-filter-count {
+  color: var(--text-secondary);
 }
 
 .event-detail-card {
@@ -632,6 +827,60 @@ onBeforeUnmount(() => {
   line-height: 1.65;
 }
 
+.event-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 168px));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.event-image-preview {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--muted);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.event-image-preview:hover {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.event-image-preview:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.event-image-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.event-image-preview.unavailable {
+  cursor: default;
+}
+
+.event-image-preview.unavailable:hover {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+
+.event-image-unavailable {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
 .event-decision {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -641,6 +890,23 @@ onBeforeUnmount(() => {
   border-left: 3px solid var(--border-strong);
   background: var(--surface-2);
 }
+
+.event-delivery {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.event-delivery.ok { color: var(--ok); }
+.event-delivery.warn { color: var(--warn); }
+.event-delivery.err { color: var(--err); }
+.event-delivery p { margin: 3px 0 0; color: var(--text-secondary); }
 
 .event-decision.ok {
   border-left-color: var(--ok);
@@ -695,17 +961,36 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 720px) {
-  .event-filter-band {
+  .event-filter-row {
     align-items: flex-start;
     flex-direction: column;
+    gap: 7px;
   }
 
-  .event-range {
+  .event-range,
+  .event-result-filter {
     width: 100%;
   }
 
   .event-range button {
     flex: 1 0 auto;
+  }
+
+  .event-result-filter {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .event-result-filter button {
+    grid-column: span 2;
+    justify-content: center;
+    min-width: 0;
+    padding-inline: 7px;
+  }
+
+  .event-result-filter button:nth-last-child(-n + 2) {
+    grid-column: span 3;
   }
 
   .event-detail-list {
@@ -720,6 +1005,10 @@ onBeforeUnmount(() => {
   .event-detail-time {
     flex-direction: row;
     align-items: baseline;
+  }
+
+  .event-image-grid {
+    grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
   }
 
   .debug-step-summary,

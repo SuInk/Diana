@@ -108,13 +108,14 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		return nil
 	}
 	allowed := map[string]bool{
-		"diana.capabilities":     true,
-		dianaChatHistoryToolName: true,
-		"diana.relationship":     true,
-		"diana.qq_group":         true,
-		dianaOneBotV11ToolName:   true,
-		"diana.tasks":            true,
-		"diana.tts":              true,
+		"diana.capabilities":       true,
+		dianaChatHistoryToolName:   true,
+		dianaHistoryImagesToolName: true,
+		"diana.relationship":       true,
+		"diana.qq_group":           true,
+		dianaOneBotV11ToolName:     true,
+		"diana.tasks":              true,
+		"diana.tts":                true,
 	}
 	if p.Tier != RelationshipHostile {
 		allowed["web_search.search"] = true
