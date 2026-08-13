@@ -96,10 +96,28 @@ func TestDefaultPluginManagerIncludesRepositoryWatch(t *testing.T) {
 	}
 }
 
-func TestRepositoryWatchIntervalDefaultsToThirtySeconds(t *testing.T) {
-	interval, err := parseRepositoryWatchInterval("")
-	if err != nil || interval != 30*time.Second {
-		t.Fatalf("interval=%s err=%v", interval, err)
+func TestRepositoryWatchIntervalPolicyDependsOnToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings SettingValues
+		want     time.Duration
+	}{
+		{name: "anonymous", want: time.Hour},
+		{name: "authenticated", settings: SettingValues{repositoryWatchSettingToken: "secret"}, want: time.Minute},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			interval, err := parseRepositoryWatchInterval("", test.settings)
+			if err != nil || interval != test.want {
+				t.Fatalf("interval=%s err=%v", interval, err)
+			}
+			if interval, err := parseRepositoryWatchInterval("30s", test.settings); err != nil || interval != 30*time.Second {
+				t.Fatalf("custom interval=%s err=%v", interval, err)
+			}
+		})
+	}
+	if _, err := parseRepositoryWatchInterval("8761h", nil); err == nil {
+		t.Fatal("interval above 365 days was accepted")
 	}
 }
 
@@ -209,6 +227,48 @@ func TestRepositoryWatchPluginExplainsPrivateRepositoryAuthentication(t *testing
 	}
 }
 
+func TestRepositoryWatchPluginGuidesRateLimitedRequestsToSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings SettingValues
+		want     []string
+	}{
+		{
+			name: "anonymous public request",
+			want: []string{"公开仓库同样受限", "插件 → 仓库更新订阅 → 设置", "GitHub Token"},
+		},
+		{
+			name:     "authenticated request",
+			settings: SettingValues{repositoryWatchSettingToken: "exhausted-token"},
+			want:     []string{"Token 请求额度已耗尽", "插件 → 仓库更新订阅 → 设置", "更换 Token"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-RateLimit-Remaining", "0")
+				http.Error(w, `{"message":"API rate limit exceeded"}`, http.StatusForbidden)
+			}))
+			defer server.Close()
+			plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+
+			_, err := plugin.snapshot(context.Background(), "acme/public", "", true, false, test.settings)
+			if err == nil {
+				t.Fatal("rate-limited request unexpectedly succeeded")
+			}
+			for _, text := range test.want {
+				if !strings.Contains(err.Error(), text) {
+					t.Fatalf("error %q does not contain %q", err, text)
+				}
+			}
+			if strings.Contains(err.Error(), "exhausted-token") {
+				t.Fatalf("error exposed token: %q", err)
+			}
+		})
+	}
+}
+
 func TestRuntimeCreatesRepositoryWatchForWebUI(t *testing.T) {
 	github := &repositoryWatchTestGitHub{
 		commits:  []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
@@ -233,7 +293,7 @@ func TestRuntimeCreatesRepositoryWatchForWebUI(t *testing.T) {
 	if item.Kind != ReminderKindRepositoryWatch || item.OwnerID != "webui:qq-main" || item.GroupID != "123" || item.UserID != "" || item.ProfileID != "qq-main" || item.LastCommitSHA != "base-sha" || item.LastReleaseTag != "v1.0.0" {
 		t.Fatalf("item=%#v", item)
 	}
-	if remaining := time.Until(item.TriggerAt); remaining < 29*time.Second || remaining > 31*time.Second {
+	if remaining := time.Until(item.TriggerAt); remaining < 59*time.Minute || remaining > 61*time.Minute {
 		t.Fatalf("next run=%s", item.TriggerAt)
 	}
 }

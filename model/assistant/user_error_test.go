@@ -52,6 +52,27 @@ func TestPublicQQErrorMessageMapsUnavailableImage(t *testing.T) {
 	}
 }
 
+func TestPublicQQErrorMessageGuidesGitHubRateLimitConfiguration(t *testing.T) {
+	err := errors.New("读取 SuInk/Diana commits: GitHub API 匿名请求额度已耗尽（公开仓库同样受限）")
+	got := publicQQErrorMessage(err)
+	for _, text := range []string{"GitHub API", "公开仓库", "插件 → 仓库更新订阅 → 设置", "GitHub Token"} {
+		if !strings.Contains(got, text) {
+			t.Fatalf("message %q does not contain %q", got, text)
+		}
+	}
+	if strings.Contains(got, "模型服务") {
+		t.Fatalf("GitHub error was mislabeled as a model error: %q", got)
+	}
+}
+
+func TestPublicQQErrorMessageGuidesInvalidGitHubTokenConfiguration(t *testing.T) {
+	err := errors.New("读取 SuInk/Diana releases: GitHub Token 无效或已过期，请在插件设置中重新配置")
+	got := publicQQErrorMessage(err)
+	if !strings.Contains(got, "GitHub Token 无效或已过期") || !strings.Contains(got, "插件 → 仓库更新订阅 → 设置") {
+		t.Fatalf("message = %q", got)
+	}
+}
+
 func TestReplyAndRecordSendsSanitizedErrorButKeepsDiagnostic(t *testing.T) {
 	channel := &recordingChannel{}
 	rawErr := errors.New(`Post "https://relay.private.example/v1/responses": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`)
