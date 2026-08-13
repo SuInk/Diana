@@ -11,6 +11,7 @@ func TestDianaBotConfigSnapshotIncludesRestoredBehavior(t *testing.T) {
 		ReplyGate:                    &ReplyGate{MinGroupLevel: 12},
 		ReplyReferenceEnabled:        &disabled,
 		RecallReplyAutoDeleteEnabled: &disabled,
+		RecallReplyTTLSeconds:        75,
 		ModelRoles: map[string]ModelRole{
 			"chat": {ProfileID: "profile-a", Model: "model-a"},
 		},
@@ -29,6 +30,9 @@ func TestDianaBotConfigSnapshotIncludesRestoredBehavior(t *testing.T) {
 	}
 	if snapshot.ReplyReferenceEnabled || snapshot.RecallReplyAutoDeleteEnabled || snapshot.BotReplyLoopDetectionEnabled {
 		t.Fatalf("explicitly disabled behavior was not preserved: %#v", snapshot)
+	}
+	if snapshot.RecallReplyTTLSeconds != 75 {
+		t.Fatalf("recall auto-delete delay = %d", snapshot.RecallReplyTTLSeconds)
 	}
 	if snapshot.ModelRoles["chat"].Model != "model-a" || len(snapshot.ReplyRules) != 1 {
 		t.Fatalf("model roles or reply rules missing: %#v", snapshot)
