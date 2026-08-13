@@ -79,6 +79,20 @@ export function formatNumber(value: number | undefined | null): string {
   return value.toLocaleString("zh-CN");
 }
 
+export function formatBytes(value: number | undefined | null): string {
+  if (value === undefined || value === null || !Number.isFinite(value) || value < 0) {
+    return "—";
+  }
+  if (value === 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  const unitIndex = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  const amount = value / 1024 ** unitIndex;
+  const digits = amount >= 100 || unitIndex === 0 ? 0 : amount >= 10 ? 1 : 2;
+  return `${amount.toFixed(digits)} ${units[unitIndex]}`;
+}
+
 export function formatHourLabel(hourUnix: number): string {
   const date = new Date(hourUnix * 1000);
   return `${String(date.getHours()).padStart(2, "0")}:00`;
