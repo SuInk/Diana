@@ -222,7 +222,7 @@ func TestSystemPromptTogglesDisableInjections(t *testing.T) {
 	if !strings.HasPrefix(prompt, "自定义人设") {
 		t.Fatalf("prompt = %q", prompt)
 	}
-	for _, banned := range []string{"当前时间", "Markdown", "小明", "谐音梗"} {
+	for _, banned := range []string{"当前时间", "Markdown", "小明", "谐音梗", "有画面感"} {
 		if strings.Contains(prompt, banned) {
 			t.Fatalf("prompt should omit %q:\n%s", banned, prompt)
 		}
