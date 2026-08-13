@@ -125,6 +125,13 @@ CREATE TABLE IF NOT EXISTS inbound_events (
   reply_text TEXT,
   processing_error TEXT,
   duration_ms INTEGER,
+  delivery_stage TEXT,
+  outbound_message_id TEXT,
+  reply_generated_at INTEGER,
+  send_attempted_at INTEGER,
+  send_acked_at INTEGER,
+  self_echo_at INTEGER,
+  delivery_error TEXT,
   last_error TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -236,6 +243,13 @@ func (s *SQLiteStore) ensureInboundAuditColumns() error {
 		{name: "reply_text", definition: "TEXT"},
 		{name: "processing_error", definition: "TEXT"},
 		{name: "duration_ms", definition: "INTEGER"},
+		{name: "delivery_stage", definition: "TEXT"},
+		{name: "outbound_message_id", definition: "TEXT"},
+		{name: "reply_generated_at", definition: "INTEGER"},
+		{name: "send_attempted_at", definition: "INTEGER"},
+		{name: "send_acked_at", definition: "INTEGER"},
+		{name: "self_echo_at", definition: "INTEGER"},
+		{name: "delivery_error", definition: "TEXT"},
 	}
 	for _, column := range columns {
 		if found[column.name] {
@@ -245,6 +259,9 @@ func (s *SQLiteStore) ensureInboundAuditColumns() error {
 		if _, err := s.db.Exec(query); err != nil {
 			return fmt.Errorf("add inbound audit column %s: %w", column.name, err)
 		}
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_inbound_events_outbound_message ON inbound_events(outbound_message_id) WHERE outbound_message_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("create inbound outbound-message index: %w", err)
 	}
 	return nil
 }

@@ -13,12 +13,22 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 type Tool interface {
 	Name() string
 	Description() string
 	Run(ctx context.Context, input map[string]any) (string, error)
+}
+
+// ToolResultPartsTool lets a tool attach non-text evidence to the observation
+// sent into the next model turn. The regular string result remains the source
+// of truth for logs and models that do not support the extra content part.
+type ToolResultPartsTool interface {
+	Tool
+	ToolResultParts(output string) []llm.ContentPart
 }
 
 type ToolCatalogItem struct {

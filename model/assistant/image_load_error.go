@@ -80,6 +80,51 @@ func (r *Runtime) prepareEventImages(ctx context.Context, event MessageEvent) Me
 	return event
 }
 
+// prepareCurrentEventImages keeps the current upload strict while leaving
+// quoted historical media lazy. Agent mode can then inspect the quoted source
+// through diana.history_images without a stale quote breaking the whole turn.
+func (r *Runtime) prepareCurrentEventImages(ctx context.Context, event MessageEvent) MessageEvent {
+	quoted := event.Quoted
+	event.Quoted = nil
+	event = r.prepareEventImages(ctx, event)
+	event.Quoted = quoted
+	return event
+}
+
+func (r *Runtime) prepareHistoricalEventImages(ctx context.Context, event MessageEvent) MessageEvent {
+	event.imageLoadErr = nil
+	event.Segments = r.prepareHistoricalImageSegments(ctx, event, event.Segments)
+	if event.Quoted != nil {
+		quoted := *event.Quoted
+		quotedEvent := event
+		quotedEvent.GroupID = firstNonEmpty(quoted.GroupID, event.GroupID)
+		quotedEvent.UserID = firstNonEmpty(quoted.UserID, event.UserID)
+		quotedEvent.MessageID = quoted.MessageID
+		quotedEvent.Segments = quoted.Segments
+		quotedEvent.Quoted = nil
+		quoted.Segments = r.prepareHistoricalImageSegments(ctx, quotedEvent, quoted.Segments)
+		event.Quoted = &quoted
+	}
+	return event
+}
+
+func (r *Runtime) prepareHistoricalImageSegments(ctx context.Context, event MessageEvent, segments []MessageSegment) []MessageSegment {
+	out := append([]MessageSegment(nil), segments...)
+	for index, segment := range out {
+		if segment.Type != "image" || strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
+			continue
+		}
+		item := event
+		item.Segments = []MessageSegment{segment}
+		item.Quoted = nil
+		item = r.prepareEventImages(ctx, item)
+		if len(item.Segments) == 1 {
+			out[index] = item.Segments[0]
+		}
+	}
+	return out
+}
+
 func (r *Runtime) recordImageLoadError(ctx context.Context, event MessageEvent, err error) {
 	writer := r.appLogWriter()
 	if writer == nil || err == nil {

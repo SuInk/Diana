@@ -105,8 +105,15 @@ func fetchImageAsDataURL(ctx context.Context, imageURL string) (string, error) {
 }
 
 func downloadImageBytes(ctx context.Context, imageURL string) ([]byte, string, error) {
+	return downloadImageBytesWithLimit(ctx, imageURL, maxLLMImageBytes)
+}
+
+func downloadImageBytesWithLimit(ctx context.Context, imageURL string, maxBytes int64) ([]byte, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if maxBytes <= 0 {
+		maxBytes = maxLLMImageBytes
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -127,14 +134,14 @@ func downloadImageBytes(ctx context.Context, imageURL string) ([]byte, string, e
 		return nil, "", fmt.Errorf("image download failed: status=%d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMImageBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, "", err
 	}
 	if len(body) == 0 {
 		return nil, "", fmt.Errorf("image download returned empty body")
 	}
-	if len(body) > maxLLMImageBytes {
+	if int64(len(body)) > maxBytes {
 		return nil, "", fmt.Errorf("image is too large")
 	}
 

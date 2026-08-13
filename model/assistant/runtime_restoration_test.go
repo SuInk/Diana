@@ -6,12 +6,40 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
 type restoredModelProvider struct {
 	model string
 	err   error
+}
+
+type restoredDynamicAgentProvider struct {
+	model    string
+	used     *[]string
+	requests *[]llm.GenerateRequest
+}
+
+func (p restoredDynamicAgentProvider) Generate(_ context.Context, request llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	*p.used = append(*p.used, p.model)
+	*p.requests = append(*p.requests, request)
+	text := `{"action":"tool","tool":"history_images","input":{}}`
+	if p.model == "vision-model" {
+		text = `{"action":"final","content":"视觉细节已读取"}`
+	}
+	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: p.model, Text: text}, nil
+}
+
+type restoredRichImageTool struct{}
+
+func (*restoredRichImageTool) Name() string        { return "history_images" }
+func (*restoredRichImageTool) Description() string { return "load one historical image" }
+func (*restoredRichImageTool) Run(context.Context, map[string]any) (string, error) {
+	return `{"loaded":1}`, nil
+}
+func (*restoredRichImageTool) ToolResultParts(string) []llm.ContentPart {
+	return []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: "data:image/png;base64,YQ==", Detail: "auto"}}
 }
 
 func (p restoredModelProvider) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
@@ -50,6 +78,41 @@ func TestRestoredGenerateReplyRoutesVisionGroup(t *testing.T) {
 	}
 	if store.set.ActiveID != "chat" {
 		t.Fatalf("vision routing changed active profile to %q", store.set.ActiveID)
+	}
+}
+
+func TestAgentSwitchesFromChatToVisionAfterRichToolResult(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "chat",
+		Profiles: []llm.Profile{
+			{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "chat-key", Model: "chat-model"}},
+			{ID: "vision", Group: llm.GroupVision, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "vision-key", Model: "vision-model"}},
+		},
+	}}
+	cfg := BotConfig{AgentEnabled: true, AgentMaxSteps: 2}
+	var used []string
+	var requests []llm.GenerateRequest
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime.SetLLMProviderConfigFactory(func(providerCfg llm.ProviderConfig) (LLMProvider, error) {
+		return restoredDynamicAgentProvider{model: providerCfg.Model, used: &used, requests: &requests}, nil
+	})
+	registry := agent.NewToolRegistry(&restoredRichImageTool{})
+	reply, err := runtime.generateReply(
+		context.Background(),
+		cfg,
+		MessageEvent{Kind: EventKindPrivate, UserID: "owner", MessageID: "question"},
+		RelationshipPolicy{Owner: true},
+		[]llm.Message{{Role: llm.RoleUser, Content: "需要查看历史图片细节"}},
+		registry,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply != "视觉细节已读取" || strings.Join(used, ",") != "chat-model,vision-model" {
+		t.Fatalf("reply=%q used=%v", reply, used)
+	}
+	if len(requests) != 2 || requestHasAnyImage(requests[0]) || !requestHasAnyImage(requests[1]) {
+		t.Fatalf("dynamic agent requests = %#v", requests)
 	}
 }
 

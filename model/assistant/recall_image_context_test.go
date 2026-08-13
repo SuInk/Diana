@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -192,6 +193,70 @@ func TestRecallImageDescriptionCallsVisionOnceThenReusesCache(t *testing.T) {
 	if record := store.descriptions[hash]; record.Source != "vision" || record.Version != recallImageDescriptionVersion {
 		t.Fatalf("cached record = %#v", record)
 	}
+}
+
+func TestHistoryImageDescriptionRunsInBackgroundAndReusesCache(t *testing.T) {
+	imagePath, hash := writeRecallImageFixture(t)
+	store := newRecallImageTestStore()
+	provider := &recallImageVisionProvider{}
+	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMessageHistoryStore(store)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		GroupID:   "group-1",
+		UserID:    "user-1",
+		MessageID: "ordinary-image",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"cached_file":         imagePath,
+			imageContentSHA256Key: hash,
+		}}},
+	}
+
+	runtime.enqueueHistoryImageDescriptions(event)
+	waitForCondition(t, 2*time.Second, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return strings.Contains(store.descriptions[hash].Description, "命中率为 63%")
+	})
+	runtime.enqueueHistoryImageDescriptions(event)
+	time.Sleep(50 * time.Millisecond)
+	if provider.callCount() != 1 {
+		t.Fatalf("background vision calls = %d, want 1", provider.callCount())
+	}
+	lines := runtime.historyImageCachedDescriptions(context.Background(), event)
+	if len(lines) != 1 || !strings.Contains(lines[0], "命中率为 63%") {
+		t.Fatalf("history summary lines = %#v", lines)
+	}
+}
+
+func TestHistoryImageDescriptionWaitsForVisibleReplyWorker(t *testing.T) {
+	imagePath, hash := writeRecallImageFixture(t)
+	store := newRecallImageTestStore()
+	provider := &recallImageVisionProvider{}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMessageHistoryStore(store)
+	event := MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "user-1",
+		MessageID: "queued-image",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"cached_file":         imagePath,
+			imageContentSHA256Key: hash,
+		}}},
+	}
+
+	runtime.incActive(1)
+	runtime.enqueueHistoryImageDescriptions(event)
+	time.Sleep(350 * time.Millisecond)
+	if provider.callCount() != 0 {
+		t.Fatalf("background description competed with active reply: calls=%d", provider.callCount())
+	}
+	runtime.incActive(-1)
+	waitForCondition(t, 2*time.Second, func() bool { return provider.callCount() == 1 })
 }
 
 func recallImageEvent(messageID, path string) MessageEvent {

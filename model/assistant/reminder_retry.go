@@ -53,7 +53,7 @@ func (r *Runtime) storeScheduledQueryPending(id, message string) error {
 	items := r.reminders.Reminders()
 	for index := range items {
 		item := &items[index]
-		if item.ID != id || !reminderIsScheduledQuery(*item) {
+		if item.ID != id || !reminderIsRecurring(*item) {
 			continue
 		}
 		if !item.CancelledAt.IsZero() {
@@ -76,7 +76,7 @@ func (r *Runtime) rescheduleOneTimeReminder(id string, cause error) (Reminder, e
 	found := false
 	for index := range items {
 		item := &items[index]
-		if item.ID != id || reminderIsScheduledQuery(*item) {
+		if item.ID != id || reminderIsRecurring(*item) {
 			continue
 		}
 		found = true
@@ -127,7 +127,7 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 
 func reminderFailureNotice(item Reminder, cause error) string {
 	nextAttempt := item.TriggerAt.Format("2006-01-02 15:04:05")
-	if reminderIsScheduledQuery(item) {
+	if reminderIsRecurring(item) {
 		if strings.TrimSpace(item.PendingDelivery) != "" {
 			return fmt.Sprintf("定时订阅 %s 的结果发送失败，结果已保留。将在 %s 自动重试发送（连续失败 %d 次）。", item.ID, nextAttempt, item.ConsecutiveFailures)
 		}

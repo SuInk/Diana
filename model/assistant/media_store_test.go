@@ -67,6 +67,40 @@ func TestMediaStorePersistsAndReuses(t *testing.T) {
 	}
 }
 
+func TestMediaStoreStoresGeneratedImageByContent(t *testing.T) {
+	store := mediaStore(t)
+	body := pngBytes(t)
+
+	path, err := store.StoreImage(body, "image/png")
+	if err != nil {
+		t.Fatalf("持久化生成图片失败：%v", err)
+	}
+	again, err := store.StoreImage(body, "image/png")
+	if err != nil {
+		t.Fatalf("复用生成图片失败：%v", err)
+	}
+	if again != path {
+		t.Fatalf("相同内容应复用同一缓存文件，%q vs %q", path, again)
+	}
+	if filepath.Dir(path) != store.Dir() {
+		t.Fatalf("生成图片未写入 MediaStore：%q", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("缓存内容不一致：bytes=%d err=%v", len(got), err)
+	}
+}
+
+func TestMediaStoreRejectsInvalidGeneratedImage(t *testing.T) {
+	store := mediaStore(t)
+	if _, err := store.StoreImage(nil, "image/png"); err == nil {
+		t.Fatal("空图片不应写入缓存")
+	}
+	if _, err := store.StoreImage([]byte("text"), "text/plain"); err == nil {
+		t.Fatal("非图片类型不应写入缓存")
+	}
+}
+
 func TestMediaStoreDataURLIsBase64Image(t *testing.T) {
 	body := pngBytes(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

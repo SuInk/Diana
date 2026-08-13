@@ -69,6 +69,23 @@ type InboundEventAuditStore interface {
 	RecordInboundEventAudit(ctx context.Context, event EventRecord) error
 }
 
+type OutboundDeliveryStage string
+
+const (
+	OutboundDeliveryGenerated     OutboundDeliveryStage = "generated"
+	OutboundDeliverySendAttempted OutboundDeliveryStage = "send_attempted"
+	OutboundDeliveryAcknowledged  OutboundDeliveryStage = "acknowledged"
+	OutboundDeliveryEchoPersisted OutboundDeliveryStage = "echo_persisted"
+	OutboundDeliveryFailed        OutboundDeliveryStage = "failed"
+)
+
+// InboundEventDeliveryAuditStore records transport evidence independently of
+// the model outcome so a generated reply is never confused with a delivered one.
+type InboundEventDeliveryAuditStore interface {
+	RecordInboundEventDelivery(ctx context.Context, event MessageEvent, stage OutboundDeliveryStage, outboundMessageID, detail string) error
+	RecordInboundEventSelfEcho(ctx context.Context, outboundMessageID string, observedAt time.Time) error
+}
+
 func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, workers int, releaseStaleLeases bool, done chan struct{}) {
 	defer close(done)
 	r.mu.RLock()

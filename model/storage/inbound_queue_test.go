@@ -78,6 +78,61 @@ func TestInboundQueuePersistsAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestInboundQueueDeduplicatesAcrossContextNamespaces(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "namespace-dedupe.db"))
+	defer func() { _ = store.Close() }()
+	event := inboundTestEvent("same-onebot-message", "only once", time.Now().Unix())
+	event.Platform = assistant.PlatformOneBotV11
+	event.SelfID = "bot-1"
+	event.GroupID = "group-1"
+	event.UserID = "user-1"
+	event.ContextNamespace = "old-profile"
+	firstID, inserted, err := store.EnqueueInboundEvent(ctx, "old-profile:group:group-1", event)
+	if err != nil || !inserted {
+		t.Fatalf("first enqueue id=%q inserted=%v err=%v", firstID, inserted, err)
+	}
+	event.ContextNamespace = "new-profile"
+	secondID, inserted, err := store.EnqueueInboundEvent(ctx, "new-profile:group:group-1", event)
+	if err != nil || inserted || secondID != firstID {
+		t.Fatalf("namespace duplicate id=%q inserted=%v err=%v, first=%q", secondID, inserted, err, firstID)
+	}
+	var inboundRows, historyRows int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM inbound_events WHERE message_id = ?`, event.MessageID).Scan(&inboundRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM message_events WHERE message_id = ?`, event.MessageID).Scan(&historyRows); err != nil {
+		t.Fatal(err)
+	}
+	if inboundRows != 1 || historyRows != 1 {
+		t.Fatalf("deduplicated rows inbound=%d history=%d", inboundRows, historyRows)
+	}
+}
+
+func TestInboundQueueNamespaceDedupeFindsLegacySessionScopedHistory(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "legacy-namespace-dedupe.db"))
+	defer func() { _ = store.Close() }()
+	event := inboundTestEvent("legacy-scoped-message", "already seen", time.Now().Unix())
+	event.Platform = assistant.PlatformNapCat
+	event.SelfID = "bot-1"
+	event.GroupID = "group-1"
+	event.UserID = "user-1"
+	event.ContextNamespace = "old-profile"
+	if err := store.AppendMessageEvent(ctx, "old-profile:group:group-1", event); err != nil {
+		t.Fatal(err)
+	}
+	event.Platform = assistant.PlatformOneBotV11
+	event.ContextNamespace = "new-profile"
+	id, inserted, err := store.EnqueueInboundEvent(ctx, "new-profile:group:group-1", event)
+	if err != nil || inserted {
+		t.Fatalf("legacy namespace duplicate id=%q inserted=%v err=%v", id, inserted, err)
+	}
+	if count := pendingInboundCount(t, store); count != 0 {
+		t.Fatalf("legacy history was replayed into queue: %d", count)
+	}
+}
+
 func TestInboundQueueMigrationRestoresStaleDrops(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "restore-stale.db")

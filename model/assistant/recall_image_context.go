@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -21,7 +22,12 @@ const (
 	recallImageDescriptionMaxRunes    = 1600
 	recallImageDescriptionConcurrency = 3
 	// 历史行里的描述比撤回记录短得多：每轮都要重复发送，超长会把上下文预算吃光。
-	historyImageDescriptionMaxRunes = 400
+	historyImageDescriptionMaxRunes     = 400
+	historyImageDescriptionQueueLimit   = 32
+	historyImageDescriptionReadyLimit   = 2048
+	historyImageDescriptionTimeout      = 90 * time.Second
+	historyImageDescriptionRetryBackoff = 10 * time.Minute
+	historyImageDescriptionIdlePoll     = 250 * time.Millisecond
 )
 
 type recallImagePosition struct {
@@ -218,6 +224,225 @@ func (r *Runtime) recallImageDescriptionStore() ImageDescriptionStore {
 	defer r.mu.RUnlock()
 	store, _ := r.messageStore.(ImageDescriptionStore)
 	return store
+}
+
+// enqueueHistoryImageDescriptions fills the durable summary layer away from
+// the visible reply path. Content hashes deduplicate identical images across
+// messages and the bounded pending set prevents image bursts from creating an
+// unbounded background workload.
+func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
+	if r == nil || r.recallImageDescriptionStore() == nil {
+		return
+	}
+	for _, sourceEvent := range historyImageDescriptionEvents(event) {
+		for _, segment := range sourceEvent.Segments {
+			if !recallStillImageSegment(segment) || strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
+				continue
+			}
+			if strings.TrimSpace(segment.Data[recallImageDescriptionKey]) != "" {
+				continue
+			}
+			hash, ok := imageSegmentContentSHA256(segment)
+			if !ok {
+				continue
+			}
+			source := firstImageSource(segment)
+			if source == "" || !r.reserveHistoryImageDescription(hash) {
+				continue
+			}
+			jobEvent := sourceEvent
+			jobEvent.Segments = []MessageSegment{segment}
+			jobEvent.Quoted = nil
+			go r.runHistoryImageDescription(jobEvent, hash, source)
+		}
+	}
+}
+
+func historyImageDescriptionEvents(event MessageEvent) []MessageEvent {
+	main := event
+	main.Quoted = nil
+	events := []MessageEvent{main}
+	if event.Quoted == nil {
+		return events
+	}
+	quoted := event.Quoted
+	quotedEvent := event
+	quotedEvent.GroupID = firstNonEmpty(quoted.GroupID, event.GroupID)
+	quotedEvent.UserID = firstNonEmpty(quoted.UserID, event.UserID)
+	quotedEvent.MessageID = quoted.MessageID
+	quotedEvent.RawMessage = quoted.RawMessage
+	quotedEvent.Segments = quoted.Segments
+	quotedEvent.SenderName = quoted.SenderName
+	quotedEvent.Quoted = nil
+	return append(events, quotedEvent)
+}
+
+func (r *Runtime) reserveHistoryImageDescription(hash string) bool {
+	now := time.Now()
+	r.historyImageDescMu.Lock()
+	defer r.historyImageDescMu.Unlock()
+	if r.historyImageDescRun == nil {
+		r.historyImageDescRun = map[string]struct{}{}
+	}
+	if r.historyImageDescReady == nil {
+		r.historyImageDescReady = map[string]struct{}{}
+	}
+	if r.historyImageDescRetry == nil {
+		r.historyImageDescRetry = map[string]time.Time{}
+	}
+	if r.historyImageDescSem == nil {
+		r.historyImageDescSem = make(chan struct{}, 1)
+	}
+	for key, retryAt := range r.historyImageDescRetry {
+		if !retryAt.After(now) {
+			delete(r.historyImageDescRetry, key)
+		}
+	}
+	if _, running := r.historyImageDescRun[hash]; running {
+		return false
+	}
+	if _, ready := r.historyImageDescReady[hash]; ready {
+		return false
+	}
+	if retryAt := r.historyImageDescRetry[hash]; retryAt.After(now) {
+		return false
+	}
+	if len(r.historyImageDescRun) >= historyImageDescriptionQueueLimit {
+		return false
+	}
+	r.historyImageDescRun[hash] = struct{}{}
+	return true
+}
+
+func (r *Runtime) runHistoryImageDescription(event MessageEvent, hash, source string) {
+	ctx := context.Background()
+	r.mu.RLock()
+	runtimeCtx := r.runCtx
+	if runtimeCtx != nil {
+		ctx = runtimeCtx
+	}
+	r.mu.RUnlock()
+	ctx, cancel := context.WithTimeout(ctx, historyImageDescriptionTimeout)
+	defer cancel()
+
+	err := r.waitForHistoryImageDescriptionSlot(ctx, cancel)
+	if err == nil {
+		defer r.releaseHistoryImageDescriptionSlot()
+		store := r.recallImageDescriptionStore()
+		if store == nil {
+			err = fmt.Errorf("image description store is not configured")
+		} else if record, found, loadErr := store.GetImageDescription(ctx, hash); loadErr != nil {
+			err = loadErr
+		} else if found && strings.TrimSpace(record.Description) != "" {
+			r.markHistoryImageDescriptionReady(hash)
+		} else {
+			var description string
+			description, err = r.describeRecallImage(ctx, event, source)
+			if err == nil {
+				err = store.SaveImageDescription(ctx, ImageDescriptionRecord{
+					ContentSHA256:   hash,
+					Description:     compactRecallImageDescription(description),
+					SourceSession:   sessionKey(event),
+					SourceMessageID: event.MessageID,
+					Source:          "vision",
+					Version:         recallImageDescriptionVersion,
+				})
+				if err == nil {
+					r.markHistoryImageDescriptionReady(hash)
+				}
+			}
+		}
+	}
+
+	r.historyImageDescMu.Lock()
+	delete(r.historyImageDescRun, hash)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		r.historyImageDescRetry[hash] = time.Now().Add(historyImageDescriptionRetryBackoff)
+	}
+	r.historyImageDescMu.Unlock()
+	if errors.Is(err, context.Canceled) && (runtimeCtx == nil || runtimeCtx.Err() == nil) {
+		time.AfterFunc(historyImageDescriptionIdlePoll, func() { r.enqueueHistoryImageDescriptions(event) })
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("qqbot history image description failed: message_id=%s err=%v", event.MessageID, err)
+	}
+}
+
+func (r *Runtime) beginHistoryImageDescriptionForeground() {
+	if r == nil {
+		return
+	}
+	r.historyImageDescMu.Lock()
+	r.historyImageDescFront++
+	cancel := r.historyImageDescStop
+	r.historyImageDescStop = nil
+	r.historyImageDescMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (r *Runtime) endHistoryImageDescriptionForeground() {
+	if r == nil {
+		return
+	}
+	r.historyImageDescMu.Lock()
+	if r.historyImageDescFront > 0 {
+		r.historyImageDescFront--
+	}
+	r.historyImageDescMu.Unlock()
+}
+
+func (r *Runtime) markHistoryImageDescriptionReady(hash string) {
+	r.historyImageDescMu.Lock()
+	if r.historyImageDescReady == nil {
+		r.historyImageDescReady = map[string]struct{}{}
+	}
+	if len(r.historyImageDescReady) >= historyImageDescriptionReadyLimit {
+		for existing := range r.historyImageDescReady {
+			delete(r.historyImageDescReady, existing)
+			break
+		}
+	}
+	r.historyImageDescReady[hash] = struct{}{}
+	r.historyImageDescMu.Unlock()
+}
+
+func (r *Runtime) waitForHistoryImageDescriptionSlot(ctx context.Context, cancel context.CancelFunc) error {
+	ticker := time.NewTicker(historyImageDescriptionIdlePoll)
+	defer ticker.Stop()
+	for {
+		r.historyImageDescMu.Lock()
+		foreground := r.historyImageDescFront
+		r.historyImageDescMu.Unlock()
+		if foreground == 0 && r.activeCount() == 0 {
+			select {
+			case r.historyImageDescSem <- struct{}{}:
+				r.historyImageDescMu.Lock()
+				if r.historyImageDescFront == 0 && r.activeCount() == 0 {
+					r.historyImageDescStop = cancel
+					r.historyImageDescMu.Unlock()
+					return nil
+				}
+				r.historyImageDescMu.Unlock()
+				<-r.historyImageDescSem
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *Runtime) releaseHistoryImageDescriptionSlot() {
+	r.historyImageDescMu.Lock()
+	r.historyImageDescStop = nil
+	r.historyImageDescMu.Unlock()
+	<-r.historyImageDescSem
 }
 
 func (r *Runtime) historicalRecallImageDescriptions(ctx context.Context, event MessageEvent, targets []*recallImageTarget) map[string]string {
@@ -423,11 +648,12 @@ func (r *Runtime) describeRecallImage(ctx context.Context, event MessageEvent, s
 		},
 	}
 	callCtx := r.withQQPrivacyContext(ctx, event, nil)
-	return r.runLLMProvider(callCtx, func(client LLMProvider) (string, error) {
+	return r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
 		response, err := client.Generate(callCtx, request)
 		if err != nil {
 			return "", err
 		}
+		r.recordLLMUsage(callCtx, event, response.Provider, response.Model, response.Usage, "image_description_cache")
 		description := compactRecallImageDescription(response.Text)
 		if description == "" {
 			return "", fmt.Errorf("vision model returned an empty description")

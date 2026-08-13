@@ -97,6 +97,37 @@ func TestDianaChatHistoryToolEnforcesBounds(t *testing.T) {
 	}
 }
 
+func TestDianaChatHistoryToolReturnsCachedMainAndQuotedImageDescriptions(t *testing.T) {
+	mainHash := strings.Repeat("a", 64)
+	quotedHash := strings.Repeat("b", 64)
+	store := newRecallImageTestStore()
+	store.descriptions[mainHash] = ImageDescriptionRecord{ContentSHA256: mainHash, Description: "主消息中的仪表盘截图"}
+	store.descriptions[quotedHash] = ImageDescriptionRecord{ContentSHA256: quotedHash, Description: "引用消息中的报错截图"}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		GroupID:   "group-1",
+		UserID:    "user-1",
+		MessageID: "image-history",
+		Segments:  []MessageSegment{{Type: "image", Data: map[string]string{imageContentSHA256Key: mainHash}}},
+		Quoted: &QuotedMessage{
+			MessageID: "quoted-image",
+			Segments:  []MessageSegment{{Type: "image", Data: map[string]string{imageContentSHA256Key: quotedHash}}},
+		},
+	}
+	items := newDianaChatHistoryTool(runtime, event).items(context.Background(), []MessageEvent{event})
+	if len(items) != 1 || items[0].ImageCount != 1 || items[0].QuotedImageCount != 1 {
+		t.Fatalf("history image counts = %#v", items)
+	}
+	if len(items[0].ImageDescriptions) != 1 || !strings.Contains(items[0].ImageDescriptions[0], "仪表盘") {
+		t.Fatalf("main descriptions = %#v", items[0].ImageDescriptions)
+	}
+	if len(items[0].QuotedImageDescriptions) != 1 || !strings.Contains(items[0].QuotedImageDescriptions[0], "报错") {
+		t.Fatalf("quoted descriptions = %#v", items[0].QuotedImageDescriptions)
+	}
+}
+
 func TestDianaChatHistoryToolCrossGroupSearchRequiresOptInAndKeepsNamespace(t *testing.T) {
 	disabled := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &capturingHistorySearchStore{}
