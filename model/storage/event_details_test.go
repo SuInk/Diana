@@ -384,8 +384,15 @@ INSERT INTO inbound_events (
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Replied != 1 || page.NotReplied != 1 || page.Errors != 0 {
+	if page.Replied != 1 || page.NotReplied != 0 || page.Errors != 1 {
 		t.Fatalf("counts = replied=%d not=%d errors=%d", page.Replied, page.NotReplied, page.Errors)
+	}
+	errorPage, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0, InboundEventResultError)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errorPage.Events) != 1 || errorPage.Events[0].ID != "error-0" {
+		t.Fatalf("error events = %#v", errorPage.Events)
 	}
 }
 

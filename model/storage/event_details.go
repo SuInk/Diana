@@ -82,8 +82,8 @@ const (
 )
 
 const (
-	inboundEventRepliedCondition    = `(i.status = 'done' AND (COALESCE(i.decision, '') = 'replied' OR (COALESCE(i.decision, '') = '' AND (COALESCE(i.outcome, '') = 'replied' OR COALESCE(i.outcome, '') LIKE 'replied_%' OR (COALESCE(i.outcome, '') = 'error_replied' AND COALESCE(i.delivery_stage, '') IN ('acknowledged', 'echo_persisted'))))))`
-	inboundEventErrorCondition      = `(i.status = 'done' AND NOT ` + inboundEventRepliedCondition + ` AND (COALESCE(i.decision, '') = 'error' OR COALESCE(i.outcome, '') IN ('error_send_unconfirmed', 'processing_error', 'dropped_outbound_delivery') OR (COALESCE(i.decision, '') = '' AND (NULLIF(TRIM(i.processing_error), '') IS NOT NULL OR NULLIF(TRIM(i.last_error), '') IS NOT NULL))))`
+	inboundEventRepliedCondition    = `(i.status = 'done' AND ((COALESCE(i.outcome, '') = 'error_replied' AND COALESCE(i.delivery_stage, '') IN ('acknowledged', 'echo_persisted')) OR (COALESCE(i.outcome, '') != 'error_replied' AND (COALESCE(i.decision, '') = 'replied' OR (COALESCE(i.decision, '') = '' AND (COALESCE(i.outcome, '') = 'replied' OR COALESCE(i.outcome, '') LIKE 'replied_%'))))))`
+	inboundEventErrorCondition      = `(i.status = 'done' AND NOT ` + inboundEventRepliedCondition + ` AND (COALESCE(i.decision, '') = 'error' OR COALESCE(i.outcome, '') IN ('error_send_unconfirmed', 'processing_error', 'dropped_outbound_delivery') OR (COALESCE(i.outcome, '') = 'error_replied' AND COALESCE(i.delivery_stage, '') NOT IN ('acknowledged', 'echo_persisted')) OR (COALESCE(i.decision, '') = '' AND (NULLIF(TRIM(i.processing_error), '') IS NOT NULL OR NULLIF(TRIM(i.last_error), '') IS NOT NULL))))`
 	inboundEventNotRepliedCondition = `(i.status = 'done' AND NOT ` + inboundEventRepliedCondition + ` AND NOT ` + inboundEventErrorCondition + `)`
 )
 
