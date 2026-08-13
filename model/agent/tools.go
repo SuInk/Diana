@@ -453,10 +453,41 @@ func (r *ToolRegistry) Descriptions() string {
 		builder.WriteString("- ")
 		builder.WriteString(tool.Name())
 		builder.WriteString(": ")
-		builder.WriteString(tool.Description())
+		builder.WriteString(compactToolDescription(tool.Description(), 720))
 		builder.WriteByte('\n')
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func compactToolDescription(description string, maxRunes int) string {
+	description = strings.Join(strings.Fields(description), " ")
+	if maxRunes <= 0 || len([]rune(description)) <= maxRunes {
+		return description
+	}
+	inputIndex := strings.Index(strings.ToLower(description), "input:")
+	if inputIndex < 0 {
+		return truncateToolDescription(description, maxRunes)
+	}
+	purpose := strings.TrimSpace(description[:inputIndex])
+	schema := strings.TrimSpace(description[inputIndex:])
+	schemaRunes := []rune(schema)
+	if len(schemaRunes) >= maxRunes-4 {
+		return truncateToolDescription(schema, maxRunes)
+	}
+	purposeBudget := maxRunes - len(schemaRunes) - 4
+	purpose = truncateToolDescription(purpose, purposeBudget)
+	return strings.TrimSpace(purpose) + " " + schema
+}
+
+func truncateToolDescription(value string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if maxRunes <= 0 || len(runes) <= maxRunes {
+		return string(runes)
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return strings.TrimSpace(string(runes[:maxRunes-3])) + "..."
 }
 
 // Close 释放工具持有的外部资源。
