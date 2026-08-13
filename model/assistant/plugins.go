@@ -214,6 +214,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewVoiceTTSPlugin(nil),
 		NewWebSearchPlugin(nil),
 		NewRepositoryWatchPlugin(nil),
+		NewRSSWatchPlugin(nil),
 		capabilities,
 	)
 	capabilities.setPluginStateProvider(manager.List)

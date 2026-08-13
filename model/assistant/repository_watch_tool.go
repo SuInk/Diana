@@ -356,5 +356,5 @@ func reminderIsRepositoryWatch(item Reminder) bool {
 }
 
 func reminderIsRecurring(item Reminder) bool {
-	return reminderIsScheduledQuery(item) || reminderIsRepositoryWatch(item)
+	return reminderIsScheduledQuery(item) || reminderIsRepositoryWatch(item) || reminderIsRSSWatch(item)
 }

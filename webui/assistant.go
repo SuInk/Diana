@@ -42,6 +42,13 @@ type repositoryWatchRuntime interface {
 	DeleteRepositoryWatch(string, string) (bool, error)
 }
 
+type rssWatchRuntime interface {
+	CreateRSSWatch(context.Context, assistant.RSSWatchCreateInput) (assistant.Reminder, error)
+	UpdateRSSWatch(context.Context, string, string, assistant.RSSWatchUpdateInput) (assistant.Reminder, error)
+	CancelRSSWatch(string, string) (assistant.Reminder, error)
+	DeleteRSSWatch(string, string) (bool, error)
+}
+
 type QQBotHandler struct {
 	runtime                   QQBotRuntime
 	newChannel                QQBotChannelFactory
@@ -220,6 +227,10 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.PUT(base+"/tasks/repository-watches/:id", h.updateRepositoryWatch)
 	router.POST(base+"/tasks/repository-watches/:id/cancel", h.cancelRepositoryWatch)
 	router.DELETE(base+"/tasks/repository-watches/:id", h.deleteRepositoryWatch)
+	router.POST(base+"/tasks/rss-watches", h.createRSSWatch)
+	router.PUT(base+"/tasks/rss-watches/:id", h.updateRSSWatch)
+	router.POST(base+"/tasks/rss-watches/:id/cancel", h.cancelRSSWatch)
+	router.DELETE(base+"/tasks/rss-watches/:id", h.deleteRSSWatch)
 	router.POST(base+"/start", h.start)
 	router.POST(base+"/stop", h.stop)
 	if h.features.GroupTest {

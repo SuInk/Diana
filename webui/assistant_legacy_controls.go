@@ -94,6 +94,24 @@ type repositoryWatchUpdatePayload struct {
 	WatchReleases   *bool   `json:"watch_releases,omitempty"`
 }
 
+type rssWatchCreatePayload struct {
+	FeedURL         string `json:"feed_url,omitempty"`
+	TwitterHandle   string `json:"twitter_handle,omitempty"`
+	JudgePrompt     string `json:"judge_prompt"`
+	IntervalSeconds int64  `json:"interval_seconds"`
+	ProfileID       string `json:"profile_id"`
+	Destination     string `json:"destination"`
+	GroupID         string `json:"group_id,omitempty"`
+	UserID          string `json:"user_id,omitempty"`
+}
+
+type rssWatchUpdatePayload struct {
+	FeedURL         *string `json:"feed_url,omitempty"`
+	TwitterHandle   *string `json:"twitter_handle,omitempty"`
+	JudgePrompt     *string `json:"judge_prompt,omitempty"`
+	IntervalSeconds int64   `json:"interval_seconds,omitempty"`
+}
+
 type qqbotTaskPayload struct {
 	ID                  string    `json:"id"`
 	Kind                string    `json:"kind"`
@@ -118,6 +136,12 @@ type qqbotTaskPayload struct {
 	WatchReleases       bool      `json:"watch_releases,omitempty"`
 	LastCommitSHA       string    `json:"last_commit_sha,omitempty"`
 	LastReleaseTag      string    `json:"last_release_tag,omitempty"`
+	FeedURL             string    `json:"feed_url,omitempty"`
+	FeedSource          string    `json:"feed_source,omitempty"`
+	FeedHandle          string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt time.Time `json:"last_feed_published_at,omitempty"`
 	CreatedAt           time.Time `json:"created_at"`
 	ConsumesQuota       bool      `json:"consumes_quota"`
 }
@@ -372,6 +396,12 @@ func (h *QQBotHandler) listTasks(c *gin.Context) {
 			WatchReleases:       item.WatchReleases,
 			LastCommitSHA:       item.LastCommitSHA,
 			LastReleaseTag:      item.LastReleaseTag,
+			FeedURL:             item.FeedURL,
+			FeedSource:          item.FeedSource,
+			FeedHandle:          item.FeedHandle,
+			FeedJudgePrompt:     item.FeedJudgePrompt,
+			LastFeedItemID:      item.LastFeedItemID,
+			LastFeedPublishedAt: item.LastFeedPublishedAt,
 			CreatedAt:           item.CreatedAt,
 			ConsumesQuota:       taskConsumesQuota(item),
 		})
@@ -516,6 +546,139 @@ func (h *QQBotHandler) deleteRepositoryWatch(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func (h *QQBotHandler) createRSSWatch(c *gin.Context) {
+	manager, ok := h.runtime.(rssWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.create", fmt.Errorf("rss watch runtime is unavailable"), "", nil)
+		return
+	}
+	var payload rssWatchCreatePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, "", nil)
+		return
+	}
+	profile, set, err := h.repositoryWatchProfile(payload.ProfileID)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, payload.FeedURL, nil)
+		return
+	}
+	destination := strings.ToLower(strings.TrimSpace(payload.Destination))
+	if destination == "" {
+		destination = "private"
+	}
+	if destination != "private" && destination != "group" {
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", fmt.Errorf("destination 必须是 private 或 group"), payload.FeedURL, nil)
+		return
+	}
+	groupID, userID := "", ""
+	if destination == "group" {
+		groupID = strings.TrimSpace(payload.GroupID)
+		if groupID == "" {
+			h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), payload.FeedURL, nil)
+			return
+		}
+	} else {
+		userID = strings.TrimSpace(payload.UserID)
+		if userID == "" {
+			h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", fmt.Errorf("私聊通知必须填写发送对象 ID"), payload.FeedURL, nil)
+			return
+		}
+	}
+	item, err := manager.CreateRSSWatch(c.Request.Context(), assistant.RSSWatchCreateInput{
+		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle, JudgePrompt: payload.JudgePrompt,
+		Interval: time.Duration(payload.IntervalSeconds) * time.Second, Platform: profile.Platform, ProfileID: profile.ID,
+		OwnerID: "webui:" + strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID,
+		ContextNamespace: repositoryWatchContextNamespace(set, profile.ID),
+	})
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, firstNonEmptyWeb(payload.TwitterHandle, payload.FeedURL), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.rss_watch.create", "RSS 订阅已创建", item.ID, map[string]any{"feed_url": item.FeedURL, "profile_id": item.ProfileID})
+	c.JSON(http.StatusCreated, qqbotTaskFromReminder(item))
+}
+
+func (h *QQBotHandler) updateRSSWatch(c *gin.Context) {
+	manager, ok := h.runtime.(rssWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.update", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	var payload rssWatchUpdatePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.update", err, c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.taskOwner(c.Param("id"), assistant.ReminderKindRSSWatch, "RSS 订阅")
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.update", err, c.Param("id"), nil)
+		return
+	}
+	item, err := manager.UpdateRSSWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RSSWatchUpdateInput{
+		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle, JudgePrompt: payload.JudgePrompt,
+		Interval: time.Duration(payload.IntervalSeconds) * time.Second,
+	})
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.update", err, c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.rss_watch.update", "RSS 订阅已更新", item.ID, map[string]any{"feed_url": item.FeedURL})
+	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+}
+
+func (h *QQBotHandler) cancelRSSWatch(c *gin.Context) {
+	manager, ok := h.runtime.(rssWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.cancel", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.taskOwner(c.Param("id"), assistant.ReminderKindRSSWatch, "RSS 订阅")
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.cancel", err, c.Param("id"), nil)
+		return
+	}
+	item, err := manager.CancelRSSWatch(ownerID, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.cancel", err, c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.rss_watch.cancel", "RSS 订阅已取消", item.ID, nil)
+	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+}
+
+func (h *QQBotHandler) deleteRSSWatch(c *gin.Context) {
+	manager, ok := h.runtime.(rssWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.delete", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.taskOwner(c.Param("id"), assistant.ReminderKindRSSWatch, "RSS 订阅")
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.delete", err, c.Param("id"), nil)
+		return
+	}
+	removed, err := manager.DeleteRSSWatch(ownerID, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.rss_watch.delete", err, c.Param("id"), nil)
+		return
+	}
+	if !removed {
+		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.delete", fmt.Errorf("RSS 订阅不存在"), c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.rss_watch.delete", "RSS 订阅已删除", c.Param("id"), nil)
+	c.Status(http.StatusNoContent)
+}
+
+func firstNonEmptyWeb(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func (h *QQBotHandler) repositoryWatchProfile(profileID string) (assistant.BotConfig, assistant.ProfileSet, error) {
 	set := h.profiles.Profiles().WithDefaults()
 	profileID = strings.TrimSpace(profileID)
@@ -538,6 +701,10 @@ func repositoryWatchContextNamespace(set assistant.ProfileSet, profileID string)
 }
 
 func (h *QQBotHandler) repositoryWatchOwner(id string) (string, error) {
+	return h.taskOwner(id, assistant.ReminderKindRepositoryWatch, "仓库更新订阅")
+}
+
+func (h *QQBotHandler) taskOwner(id string, kind assistant.ReminderKind, label string) (string, error) {
 	if h.sqlite == nil {
 		return "", fmt.Errorf("task store is unavailable")
 	}
@@ -546,11 +713,11 @@ func (h *QQBotHandler) repositoryWatchOwner(id string) (string, error) {
 		return "", err
 	}
 	for _, item := range items {
-		if item.ID == strings.TrimSpace(id) && item.Kind == assistant.ReminderKindRepositoryWatch {
+		if item.ID == strings.TrimSpace(id) && item.Kind == kind {
 			return item.OwnerID, nil
 		}
 	}
-	return "", fmt.Errorf("仓库更新订阅 %s 不存在", id)
+	return "", fmt.Errorf("%s %s 不存在", label, id)
 }
 
 func qqbotTaskFromReminder(item assistant.Reminder) qqbotTaskPayload {
@@ -563,10 +730,15 @@ func qqbotTaskFromReminder(item assistant.Reminder) qqbotTaskPayload {
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
 		WatchCommits: item.WatchCommits, WatchReleases: item.WatchReleases, LastCommitSHA: item.LastCommitSHA,
 		LastReleaseTag: item.LastReleaseTag, CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
+		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
+		FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
 	}
 }
 
 func qqbotTaskKind(item assistant.Reminder) string {
+	if item.Kind == assistant.ReminderKindRSSWatch && item.IntervalSeconds > 0 {
+		return "rss_watch"
+	}
 	if item.Kind == assistant.ReminderKindRepositoryWatch && item.IntervalSeconds > 0 {
 		return "repository_watch"
 	}
@@ -583,7 +755,7 @@ func qqbotTaskStatus(item assistant.Reminder) string {
 	if item.ConsecutiveFailures > 0 {
 		return "retrying"
 	}
-	if (item.Kind == assistant.ReminderKindQuery || item.Kind == assistant.ReminderKindRepositoryWatch) && item.IntervalSeconds > 0 {
+	if (item.Kind == assistant.ReminderKindQuery || item.Kind == assistant.ReminderKindRepositoryWatch || item.Kind == assistant.ReminderKindRSSWatch) && item.IntervalSeconds > 0 {
 		return "active"
 	}
 	if !item.LastRunAt.IsZero() {
@@ -595,6 +767,9 @@ func qqbotTaskStatus(item assistant.Reminder) string {
 func taskConsumesQuota(item assistant.Reminder) bool {
 	if item.Kind == assistant.ReminderKindRepositoryWatch {
 		return false
+	}
+	if item.Kind == assistant.ReminderKindRSSWatch {
+		return !strings.HasPrefix(item.OwnerID, "webui") && item.CancelledAt.IsZero()
 	}
 	if item.Kind == assistant.ReminderKindQuery && item.IntervalSeconds > 0 {
 		return item.CancelledAt.IsZero()
