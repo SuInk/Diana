@@ -102,18 +102,21 @@ func refreshRecallPluginResponse(resp *PluginResponse, recalls []MessageEvent) {
 }
 
 func applyRecallReplyMode(responses []PluginResponse, mode RecallReplyMode) []PluginResponse {
-	if normalizeRecallReplyMode(mode) == RecallReplyModeOriginalForward {
-		return responses
-	}
 	out := append([]PluginResponse(nil), responses...)
 	for index := range out {
 		if !out[index].RecallDisclosure {
 			continue
 		}
+		// Recall plugin output is factual model context, never user-facing copy.
+		// Even original-forward mode still needs an LLM-authored summary around
+		// the original nodes, including the no-records case.
 		if strings.TrimSpace(out[index].Context) == "" {
 			out[index].Context = strings.TrimSpace(out[index].Reply)
 		}
 		out[index].Reply = ""
+		if normalizeRecallReplyMode(mode) == RecallReplyModeOriginalForward {
+			continue
+		}
 		out[index].Forward = false
 		out[index].NestedForward = false
 		out[index].ForwardMessages = nil
