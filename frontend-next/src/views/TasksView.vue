@@ -15,7 +15,7 @@
 
     <div class="stack">
       <div class="stat-grid task-stats">
-        <StatCard label="全部任务" :value="formatNumber(tasks.length)" :foot="`${reminderCount} 个提醒 / ${scheduleCount} 个周期查询 / ${repositoryWatchCount} 个仓库订阅`">
+        <StatCard label="全部任务" :value="formatNumber(tasks.length)" :foot="`${reminderCount} 个提醒 / ${scheduleCount} 个周期查询 / ${repositoryWatchCount} 个仓库订阅 / ${rssWatchCount} 个 RSS 订阅`">
           <template #icon><ListTodo :size="14" aria-hidden="true" /></template>
         </StatCard>
         <StatCard label="运行中" :value="formatNumber(activeCount)" :foot="`${retryingCount} 个正在重试`">
@@ -65,6 +65,7 @@
           <article v-for="task in filteredTasks" :key="task.id" class="task-row">
             <span class="task-kind-icon" :class="task.kind">
               <GitBranch v-if="task.kind === 'repository_watch'" :size="17" aria-hidden="true" />
+              <Rss v-if="task.kind === 'rss_watch'" :size="17" aria-hidden="true" />
               <Repeat2 v-if="task.kind === 'schedule'" :size="17" aria-hidden="true" />
               <Bell v-if="task.kind === 'reminder'" :size="17" aria-hidden="true" />
             </span>
@@ -99,8 +100,15 @@
                 </span>
               </div>
 
+              <div v-if="task.kind === 'rss_watch'" class="task-facts">
+                <span><Rss :size="13" aria-hidden="true" />来源 <strong>{{ task.feed_source === "twitter" ? `@${task.feed_handle}` : task.message }}</strong></span>
+                <span v-if="task.last_feed_item_id">游标 <strong class="mono">{{ task.last_feed_item_id.slice(0, 28) }}</strong></span>
+                <a v-if="task.feed_url" :href="task.feed_url" target="_blank" rel="noreferrer">打开 Feed</a>
+              </div>
+              <p v-if="task.kind === 'rss_watch' && task.feed_judge_prompt" class="task-message">判断规则：{{ task.feed_judge_prompt }}</p>
+
               <div class="task-facts">
-                <span v-if="task.kind !== 'repository_watch'">
+                <span v-if="task.kind !== 'repository_watch' && task.kind !== 'rss_watch'">
                   <UserRound :size="13" aria-hidden="true" />
                   用户 <strong class="mono">{{ task.owner_id || task.user_id || "—" }}</strong>
                 </span>
@@ -184,6 +192,7 @@ import {
   Plus,
   RefreshCw,
   Repeat2,
+  Rss,
   Search,
   SlidersHorizontal,
   TriangleAlert,
@@ -204,7 +213,8 @@ const kindOptions: Array<{ value: KindFilter; label: string }> = [
   { value: "all", label: "全部" },
   { value: "reminder", label: "一次性提醒" },
   { value: "schedule", label: "周期查询" },
-  { value: "repository_watch", label: "仓库订阅" }
+  { value: "repository_watch", label: "仓库订阅" },
+  { value: "rss_watch", label: "RSS 订阅" }
 ];
 const statusOptions: Array<{ value: StatusFilter; label: string }> = [
   { value: "all", label: "全部" },
@@ -225,6 +235,7 @@ let refreshTimer: number | undefined;
 const reminderCount = computed(() => tasks.value.filter((task) => task.kind === "reminder").length);
 const scheduleCount = computed(() => tasks.value.filter((task) => task.kind === "schedule").length);
 const repositoryWatchCount = computed(() => tasks.value.filter((task) => task.kind === "repository_watch").length);
+const rssWatchCount = computed(() => tasks.value.filter((task) => task.kind === "rss_watch").length);
 const activeCount = computed(() => tasks.value.filter((task) => task.status === "active" || task.status === "retrying").length);
 const retryingCount = computed(() => tasks.value.filter((task) => task.status === "retrying").length);
 const quotaCount = computed(() => tasks.value.filter((task) => task.consumes_quota).length);
@@ -238,7 +249,7 @@ const filteredTasks = computed(() => {
     if (kind.value !== "all" && task.kind !== kind.value) return false;
     if (status.value !== "all" && task.status !== status.value) return false;
     if (!keyword) return true;
-    return [task.id, task.message, task.repository, task.repository_branch, task.owner_id, task.user_id, task.group_id, task.platform, task.profile_id]
+    return [task.id, task.message, task.repository, task.repository_branch, task.feed_url, task.feed_handle, task.feed_judge_prompt, task.owner_id, task.user_id, task.group_id, task.platform, task.profile_id]
       .filter((value): value is string => Boolean(value))
       .some((value) => value.toLowerCase().includes(keyword));
   });
@@ -264,6 +275,7 @@ function statusLabel(value: AssistantTaskStatus): string {
 
 function taskKindLabel(value: AssistantTaskKind): string {
   if (value === "repository_watch") return "仓库更新订阅";
+  if (value === "rss_watch") return "RSS 条件订阅";
   if (value === "schedule") return "周期查询";
   return "一次性提醒";
 }

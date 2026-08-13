@@ -138,7 +138,7 @@
     <Modal
       v-if="settingsTarget"
       :title="`${settingsTarget.manifest.name} · 设置`"
-      :wide="settingsTarget.manifest.id === repositoryWatchPluginID"
+      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === rssWatchPluginID"
       @close="closeSettings"
     >
       <div v-if="settingsTarget.manifest.id === repositoryWatchPluginID" class="plugin-settings-section-head">
@@ -234,6 +234,10 @@
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
       />
+      <RSSWatchManager
+        v-if="settingsTarget.manifest.id === rssWatchPluginID"
+        :prepare-access="saveSettingsForSubscription"
+      />
       <template #footer>
         <button class="btn ghost small plugin-settings-reset" type="button" :disabled="savingSettings" @click="resetSettings">
           恢复默认
@@ -266,6 +270,7 @@ import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
+import RSSWatchManager from "../components/RSSWatchManager.vue";
 import { navigate, viewQuery } from "../router";
 
 const plugins = ref<PluginState[]>([]);
@@ -274,6 +279,7 @@ const busyID = ref("");
 
 const resolverPluginID = "official.nonebot-plugin-resolver-go";
 const repositoryWatchPluginID = "official.repository-watch";
+const rssWatchPluginID = "official.rss-watch";
 const dependencies = ref<ResolverDependency[]>([]);
 const dependenciesLoading = ref(false);
 const busyDependency = ref("");

@@ -195,7 +195,7 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:group", Title: "QQ群资料与成员", Content: "通过 diana.qq_group 获取群名、群成员列表、成员昵称、群头像和成员头像，可查找并真实 @ 一名或多名成员。", Source: "core", Enabled: true},
 	{ID: "core:onebot-v11", Title: "OneBot v11 协议技能", Content: "通过 diana.onebot_v11 调用当前 QQ 连接的 OneBot v11 标准动作及实现扩展；主人拥有完整调用权限，普通成员只可调用后端固定的标准只读白名单，凭据、修改和未知动作默认拒绝。", Source: "core", Enabled: true},
 	{ID: "core:relationship", Title: "记忆好感度与权限", Content: "通过 diana.relationship 查询用户长期互动、好感度、关系等级和权限；主人可设置或增减其他人的好感度。", Source: "core", Enabled: true},
-	{ID: "core:tasks", Title: "提醒与周期订阅", Content: "通过 diana.reminder、diana.schedule 和 diana.tasks 创建、查询、修改、取消和删除聊天提醒或周期查询；GitHub 仓库更新订阅只能在 WebUI 管理，聊天中不能创建。", Source: "core", Enabled: true},
+	{ID: "core:tasks", Title: "提醒与周期订阅", Content: "通过 diana.reminder、diana.schedule、diana.rss 和 diana.tasks 创建、查询、修改、取消和删除提醒、周期查询及 RSS/Twitter 条件订阅；GitHub 仓库更新订阅在 WebUI 管理。", Source: "core", Enabled: true},
 	{ID: "core:history", Title: "聊天历史引用与撤回", Content: "持久保存 QQ 消息、引用、图片和视频关键帧，重启后不丢；可读取合并转发和撤回记录并结合上下文回复。", Source: "core", Enabled: true},
 	{ID: "core:config", Title: "机器人配置与模型配置", Content: "diana.config 可读取脱敏运行配置、LLM、plugins 和 skills；仅主人可用 diana.llm_config 修改 Diana 自己当前的 provider/model。", Source: "core", Enabled: true, Required: "主人"},
 	{ID: "core:llm-qq-privacy", Title: "LLM QQ 标识脱敏", Content: "默认在本地 LLM 边界把 QQ 号和群号替换为带角色语义的稳定别名；模型回复和 Agent 工具参数会在本地执行前还原。真实标识仍保留在本地数据库，不影响 QQ 发送、群工具和长期记忆。", Source: "core", Enabled: true},

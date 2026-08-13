@@ -141,6 +141,7 @@ const (
 	ReminderKindMessage         ReminderKind = "message"
 	ReminderKindQuery           ReminderKind = "query"
 	ReminderKindRepositoryWatch ReminderKind = "repository_watch"
+	ReminderKindRSSWatch        ReminderKind = "rss_watch"
 )
 
 type Reminder struct {
@@ -167,6 +168,12 @@ type Reminder struct {
 	WatchReleases       bool         `json:"watch_releases,omitempty"`
 	LastCommitSHA       string       `json:"last_commit_sha,omitempty"`
 	LastReleaseTag      string       `json:"last_release_tag,omitempty"`
+	FeedURL             string       `json:"feed_url,omitempty"`
+	FeedSource          string       `json:"feed_source,omitempty"`
+	FeedHandle          string       `json:"feed_handle,omitempty"`
+	FeedJudgePrompt     string       `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID      string       `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt time.Time    `json:"last_feed_published_at,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
 }
 
