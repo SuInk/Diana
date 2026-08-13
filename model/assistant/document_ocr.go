@@ -181,7 +181,11 @@ func runDocumentOCRTask(ctx context.Context, services PluginTaskServices, render
 	}
 	callCtx, cancel := context.WithTimeout(ctx, defaultOCRFinalTimeout)
 	defer cancel()
-	reply, err := services.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
+	generateReply := services.GenerateReply
+	if generateReply == nil {
+		generateReply = services.Generate
+	}
+	reply, err := generateReply(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 		{
 			Role: llm.RoleSystem,
 			Content: strings.TrimSpace(`你是 Diana 的文档分析子代理。请根据已经完成的 OCR 结果回答当前 QQ 消息。

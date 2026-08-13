@@ -129,9 +129,9 @@ func reminderFailureNotice(item Reminder, cause error) string {
 	nextAttempt := item.TriggerAt.Format("2006-01-02 15:04:05")
 	if reminderIsRecurring(item) {
 		if strings.TrimSpace(item.PendingDelivery) != "" {
-			return fmt.Sprintf("定时订阅 %s 的结果发送失败，结果已保留。将在 %s 自动重试发送（连续失败 %d 次）。", item.ID, nextAttempt, item.ConsecutiveFailures)
+			return fmt.Sprintf("定时订阅结果发送失败，结果已保留。将在 %s 自动重试发送（连续失败 %d 次）。", nextAttempt, item.ConsecutiveFailures)
 		}
-		return fmt.Sprintf("定时订阅 %s 本次执行失败：%s 将在 %s 自动重试（连续失败 %d 次）。", item.ID, publicQQErrorMessage(cause), nextAttempt, item.ConsecutiveFailures)
+		return fmt.Sprintf("定时订阅本次执行失败：%s 将在 %s 自动重试（连续失败 %d 次）。", publicQQErrorMessage(cause), nextAttempt, item.ConsecutiveFailures)
 	}
 	return fmt.Sprintf("提醒 %s 本次发送失败，将在 %s 自动重试（连续失败 %d 次）。", item.ID, nextAttempt, item.ConsecutiveFailures)
 }

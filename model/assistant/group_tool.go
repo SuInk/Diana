@@ -28,6 +28,7 @@ type dianaQQGroupResult struct {
 	ReplyPolicy  *dianaQQGroupReplyPolicy `json:"reply_policy,omitempty"`
 	OperatorRole string                   `json:"operator_role,omitempty"`
 	Total        int                      `json:"total,omitempty"`
+	GroupTotal   int                      `json:"group_total,omitempty"`
 	Limited      bool                     `json:"limited,omitempty"`
 }
 
@@ -63,7 +64,7 @@ func (t *dianaQQGroupTool) Name() string {
 }
 
 func (t *dianaQQGroupTool) Description() string {
-	return `读取当前 QQ 群的真实群信息、成员和回复策略。用户要求查群名、成员、群名片、昵称、QQ号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用；不要要求用户先手动 @。operation=info 读取群资料；operation=members 获取或检索成员；operation=reply_policy 读取本群插话概率、判断阈值和最低回复群等级；operation=set_reply_policy 修改这些设置。只有机器人主人、群主或群管理员可读取或修改 reply policy，工具会实时校验权限。set_reply_policy 支持局部更新，proactive_reply_chance 范围 0.05~1，proactive_reply_threshold 范围 0.5~1，minimum_reply_member_level 范围 0~1000；低于最低等级的成员仅在主动 @ 机器人时可回复。闲聊插话（没人 @ 机器人时主动接话）由 chat_in_enabled 开关和 chat_in_level 档位控制，档位可选 off、low、medium、high、max，越高越爱说话；需要精细调节时再用 chat_in_threshold（0.5~1）、chat_in_chance（0.05~1）和 chat_in_cooldown_seconds（0~3600）覆盖档位预设。用户说“多说点话”“别老插嘴”“安静点”“活跃一点”时改档位即可，不要直接改阈值。members 支持 query 按群名片/昵称/QQ号筛选，exclude_current_sender 排除当前发言者，exclude_user_ids 排除指定 QQ，limit 默认 50、最大 100。结果中的 mention_cq 可直接用于最终回复，提及多人时依次原样输出。input: {"operation":"info|members|reply_policy|set_reply_policy","query":"可选","exclude_current_sender":false,"exclude_user_ids":["QQ号"],"limit":50,"proactive_reply_chance":0.5,"proactive_reply_threshold":0.9,"minimum_reply_member_level":10,"chat_in_enabled":true,"chat_in_level":"medium"}`
+	return `读取当前 QQ 群的真实群信息、成员和回复策略。用户要求查群人数、群名、成员、群名片、昵称、QQ号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用；不要要求用户先手动 @。operation=info 读取群资料；operation=members 获取或检索成员，结果 group_total 是包含机器人账号的真实群成员总数，total 是按查询和排除条件匹配的人数；operation=reply_policy 读取本群插话概率、判断阈值和最低回复群等级；operation=set_reply_policy 修改这些设置。只有机器人主人、群主或群管理员可读取或修改 reply policy，工具会实时校验权限。set_reply_policy 支持局部更新，proactive_reply_chance 范围 0.05~1，proactive_reply_threshold 范围 0.5~1，minimum_reply_member_level 范围 0~1000；低于最低等级的成员仅在主动 @ 机器人时可回复。闲聊插话（没人 @ 机器人时主动接话）由 chat_in_enabled 开关和 chat_in_level 档位控制，档位可选 off、low、medium、high、max，越高越爱说话；需要精细调节时再用 chat_in_threshold（0.5~1）、chat_in_chance（0.05~1）和 chat_in_cooldown_seconds（0~3600）覆盖档位预设。用户说“多说点话”“别老插嘴”“安静点”“活跃一点”时改档位即可，不要直接改阈值。members 支持 query 按群名片/昵称/QQ号筛选，exclude_current_sender 排除当前发言者，exclude_user_ids 排除指定 QQ，limit 默认 50、最大 100。结果中的 mention_cq 可直接用于最终回复，提及多人时依次原样输出。input: {"operation":"info|members|reply_policy|set_reply_policy","query":"可选","exclude_current_sender":false,"exclude_user_ids":["QQ号"],"limit":50,"proactive_reply_chance":0.5,"proactive_reply_threshold":0.9,"minimum_reply_member_level":10,"chat_in_enabled":true,"chat_in_level":"medium"}`
 }
 
 func (t *dianaQQGroupTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -264,12 +265,13 @@ func (t *dianaQQGroupTool) listMembers(ctx context.Context, input map[string]any
 		})
 	}
 	return marshalDianaQQGroupResult(dianaQQGroupResult{
-		OK:      true,
-		Action:  "members",
-		Message: fmt.Sprintf("已通过 OneBot v11 读取当前群成员，匹配 %d 人，返回 %d 人。", matched, len(items)),
-		Members: items,
-		Total:   matched,
-		Limited: matched > len(items),
+		OK:         true,
+		Action:     "members",
+		Message:    fmt.Sprintf("已通过 OneBot v11 读取当前群成员，匹配 %d 人，返回 %d 人。", matched, len(items)),
+		Members:    items,
+		Total:      matched,
+		GroupTotal: len(members),
+		Limited:    matched > len(items),
 	})
 }
 
