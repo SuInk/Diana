@@ -161,9 +161,9 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 			// storage-level error filter.
 			decision, handled = "error", false
 		}
-		if item.Reason != "" {
+		if item.Reason != "" && !unconfirmedErrorReply {
 			reason = item.Reason
-		} else if decision == "error" && item.Error != "" {
+		} else if decision == "error" && item.Error != "" && !unconfirmedErrorReply {
 			reason = "消息处理失败：" + item.Error
 		}
 		if item.Status != "done" {

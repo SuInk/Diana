@@ -270,6 +270,55 @@ func TestAssistantEventsErrorFilterClassifiesLegacyProcessingError(t *testing.T)
 	}
 }
 
+func TestAssistantEventsDoesNotReportUnconfirmedLegacyErrorReplyAsReplied(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assistant-events-unconfirmed-error.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	event := assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "group-1", UserID: "user-1",
+		MessageID: "legacy-error-reply", Time: time.Now().Unix(), RawMessage: "帮我看图",
+	}
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:group-1", event); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "events-test", time.Now().Add(time.Minute))
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	if err := store.CompleteInboundEvent(ctx, item.ID, "events-test", "error_replied"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind: event.Kind, GroupID: event.GroupID, UserID: event.UserID, MessageID: event.MessageID,
+		Decision: "replied", Reason: "旧版直接记为已回复", Error: "图片读取失败",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := &QQBotHandler{sqlite: store}
+	router.GET("/api/assistant/events", handler.listEvents)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h&result=error", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response assistantEventsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Replied != 0 || response.Errors != 1 || len(response.Events) != 1 || response.Events[0].Handled || response.Events[0].Decision != "error" {
+		t.Fatalf("response=%+v", response)
+	}
+	if !strings.Contains(response.Events[0].Reason, "没有可核验的 ACK") {
+		t.Fatalf("reason=%q", response.Events[0].Reason)
+	}
+}
+
 func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
 	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assistant-event-trace.db"))
 	if err != nil {

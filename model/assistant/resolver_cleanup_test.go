@@ -7,16 +7,29 @@ import (
 )
 
 func TestCleanupLocalMediaFilePreservesSharedTempDirectory(t *testing.T) {
-	tempRoot := t.TempDir()
-	t.Setenv("TMPDIR", tempRoot)
-	target := filepath.Join(tempRoot, "diana-agent-image-test.png")
-	sentinel := filepath.Join(tempRoot, "keep.txt")
-	if err := os.WriteFile(target, []byte("image"), 0o600); err != nil {
+	targetFile, err := os.CreateTemp("", "diana-cleanup-target-*.png")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+	target := targetFile.Name()
+	if _, err := targetFile.Write([]byte("image")); err != nil {
 		t.Fatal(err)
 	}
+	if err := targetFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sentinelFile, err := os.CreateTemp("", "diana-cleanup-sentinel-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := sentinelFile.Name()
+	if _, err := sentinelFile.Write([]byte("keep")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sentinelFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(sentinel) })
 
 	<-cleanupLocalMediaFilesLater([]string{target}, 0)
 
@@ -29,9 +42,7 @@ func TestCleanupLocalMediaFilePreservesSharedTempDirectory(t *testing.T) {
 }
 
 func TestCleanupLocalMediaFileRemovesOnlyOwnedWorkDirectory(t *testing.T) {
-	tempRoot := t.TempDir()
-	t.Setenv("TMPDIR", tempRoot)
-	workDir, err := os.MkdirTemp(tempRoot, "diana-agent-image-")
+	workDir, err := os.MkdirTemp("", "diana-agent-image-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,17 +90,23 @@ func TestCleanupLocalMediaFilePreservesUnownedParent(t *testing.T) {
 }
 
 func TestCleanupLocalMediaFileRejectsOwnedNameSymlink(t *testing.T) {
-	tempRoot := t.TempDir()
-	t.Setenv("TMPDIR", tempRoot)
 	realDir := t.TempDir()
 	sentinel := filepath.Join(realDir, "keep.txt")
 	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(tempRoot, "diana-agent-image-linked")
-	if err := os.Symlink(realDir, link); err != nil {
+	linkDir, err := os.MkdirTemp("", "diana-cleanup-link-")
+	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Remove(linkDir); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(filepath.Dir(linkDir), "diana-agent-image-"+filepath.Base(linkDir))
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(link) })
 
 	cleanupLocalMediaFile(filepath.Join(link, "missing.png"))
 
