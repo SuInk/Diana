@@ -8,26 +8,149 @@ import (
 	"time"
 )
 
-func TestRecallReplyAutoDeleteConfigDefaultsAndCanBeDisabled(t *testing.T) {
+func TestRecallReplyAutoDeleteConfigDefaultsDisabledAndCanBeEnabled(t *testing.T) {
 	defaults := (BotConfig{}).WithDefaults()
 	if defaults.RecallReplyMode != RecallReplyModeLLMSummary {
 		t.Fatalf("default recall reply mode = %q", defaults.RecallReplyMode)
 	}
-	if defaults.RecallReplyAutoDeleteEnabled == nil || !*defaults.RecallReplyAutoDeleteEnabled {
+	if defaults.RecallReplyAutoDeleteEnabled == nil || *defaults.RecallReplyAutoDeleteEnabled {
 		t.Fatalf("default config = %#v", defaults.RecallReplyAutoDeleteEnabled)
 	}
+	if defaults.RecallReplyTTLSeconds != defaultRecallReplyTTLSeconds {
+		t.Fatalf("default delay = %d", defaults.RecallReplyTTLSeconds)
+	}
 
-	disabled := false
+	enabled := true
 	payload := PayloadFromConfig(BotConfig{
 		RecallReplyMode:              RecallReplyModeOriginalForward,
-		RecallReplyAutoDeleteEnabled: &disabled,
+		RecallReplyAutoDeleteEnabled: &enabled,
+		RecallReplyTTLSeconds:        75,
 	})
 	got := ConfigFromPayload(payload, BotConfig{})
 	if got.RecallReplyMode != RecallReplyModeOriginalForward {
 		t.Fatalf("recall reply mode did not round-trip: %q", got.RecallReplyMode)
 	}
-	if got.RecallReplyAutoDeleteEnabled == nil || *got.RecallReplyAutoDeleteEnabled {
-		t.Fatalf("disabled config did not round-trip: %#v", got.RecallReplyAutoDeleteEnabled)
+	if got.RecallReplyAutoDeleteEnabled == nil || !*got.RecallReplyAutoDeleteEnabled {
+		t.Fatalf("enabled config did not round-trip: %#v", got.RecallReplyAutoDeleteEnabled)
+	}
+	if got.RecallReplyTTLSeconds != 75 {
+		t.Fatalf("delay did not round-trip: %d", got.RecallReplyTTLSeconds)
+	}
+	if clamped := (BotConfig{RecallReplyTTLSeconds: maximumRecallReplyTTLSeconds + 1}).WithDefaults(); clamped.RecallReplyTTLSeconds != maximumRecallReplyTTLSeconds {
+		t.Fatalf("clamped delay = %d", clamped.RecallReplyTTLSeconds)
+	}
+}
+
+func TestGroupConfigOverridesRecallReplyAutoDeletePolicy(t *testing.T) {
+	enabled := true
+	disabled := false
+	tests := []struct {
+		name         string
+		baseEnabled  *bool
+		baseDelay    int
+		groupEnabled *bool
+		groupDelay   int
+		wantEnabled  bool
+		wantDelay    int
+	}{
+		{name: "inherits disabled global defaults", baseEnabled: &disabled, baseDelay: 60, wantEnabled: false, wantDelay: 60},
+		{name: "group disables cleanup", baseEnabled: &enabled, baseDelay: 60, groupEnabled: &disabled, groupDelay: 90, wantEnabled: false, wantDelay: 90},
+		{name: "group enables custom cleanup", baseEnabled: &disabled, baseDelay: 60, groupEnabled: &enabled, groupDelay: 120, wantEnabled: true, wantDelay: 120},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := BotConfig{
+				RecallReplyAutoDeleteEnabled: tt.baseEnabled,
+				RecallReplyTTLSeconds:        tt.baseDelay,
+			}
+			store := &testWritableGroupConfigStore{}
+			_, err := store.SaveGroupConfig(GroupConfig{
+				GroupID:                      "123",
+				Enabled:                      true,
+				EnabledSet:                   true,
+				RecallReplyAutoDeleteEnabled: tt.groupEnabled,
+				RecallReplyTTLSeconds:        tt.groupDelay,
+			}, base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			runtime.SetGroupConfigStore(store)
+			effective := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123"})
+			if effective.RecallReplyAutoDeleteEnabled == nil || *effective.RecallReplyAutoDeleteEnabled != tt.wantEnabled {
+				t.Fatalf("effective enabled = %#v", effective.RecallReplyAutoDeleteEnabled)
+			}
+			if effective.RecallReplyTTLSeconds != tt.wantDelay {
+				t.Fatalf("effective delay = %d", effective.RecallReplyTTLSeconds)
+			}
+			responses := []PluginResponse{{RecallDisclosure: true}}
+			if recallReplyShouldAutoDelete(effective, responses) != tt.wantEnabled {
+				t.Fatal("auto-delete decision did not match effective config")
+			}
+			if got := recallReplyAutoDeleteDelay(effective); got != time.Duration(tt.wantDelay)*time.Second {
+				t.Fatalf("auto-delete delay = %s", got)
+			}
+		})
+	}
+}
+
+func TestRecallReplyAutoDeleteHonorsGroupPolicyInDirectPluginReply(t *testing.T) {
+	enabled := true
+	disabled := false
+	tests := []struct {
+		name        string
+		groupPolicy *bool
+		wantDelete  bool
+	}{
+		{name: "enabled", groupPolicy: &enabled, wantDelete: true},
+		{name: "disabled", groupPolicy: &disabled, wantDelete: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := newRecallDeleteChannel()
+			runtime := NewRuntime(BotConfig{
+				RecallReplyMode:              RecallReplyModeOriginalForward,
+				RecallReplyAutoDeleteEnabled: &disabled,
+				RecallReplyTTLSeconds:        60,
+			}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+			store := &testWritableGroupConfigStore{}
+			_, err := store.SaveGroupConfig(GroupConfig{
+				GroupID:                      "123",
+				Enabled:                      true,
+				EnabledSet:                   true,
+				RecallReplyAutoDeleteEnabled: tt.groupPolicy,
+				RecallReplyTTLSeconds:        1,
+			}, runtime.Config())
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime.SetGroupConfigStore(store)
+			event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456", MessageID: "source-1"}
+
+			reply, err := runtime.replyTo(context.Background(), event, "查看撤回记录")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(reply, "没有记录到群消息撤回") {
+				t.Fatalf("reply = %q", reply)
+			}
+			if tt.wantDelete {
+				select {
+				case deleted := <-channel.deleted:
+					if deleted != int64(101) {
+						t.Fatalf("deleted message id = %#v", deleted)
+					}
+				case <-time.After(1500 * time.Millisecond):
+					t.Fatal("delete_msg was not called")
+				}
+				return
+			}
+			select {
+			case deleted := <-channel.deleted:
+				t.Fatalf("unexpected delete_msg for disabled group: %#v", deleted)
+			case <-time.After(100 * time.Millisecond):
+			}
+		})
 	}
 }
 
@@ -63,12 +186,12 @@ func TestMessageHistoryPluginMarksOnlyRecallQueriesForAutoDelete(t *testing.T) {
 	if normal != nil {
 		t.Fatalf("normal response = %#v", normal)
 	}
-	if !recallReplyShouldAutoDelete(BotConfig{}, []PluginResponse{*query}) {
-		t.Fatal("enabled recall disclosure should auto-delete")
+	if recallReplyShouldAutoDelete(BotConfig{}, []PluginResponse{*query}) {
+		t.Fatal("default recall disclosure should not auto-delete")
 	}
-	disabled := false
-	if recallReplyShouldAutoDelete(BotConfig{RecallReplyAutoDeleteEnabled: &disabled}, []PluginResponse{*query}) {
-		t.Fatal("disabled recall disclosure should not auto-delete")
+	enabled := true
+	if !recallReplyShouldAutoDelete(BotConfig{RecallReplyAutoDeleteEnabled: &enabled}, []PluginResponse{*query}) {
+		t.Fatal("explicitly enabled recall disclosure should auto-delete")
 	}
 }
 

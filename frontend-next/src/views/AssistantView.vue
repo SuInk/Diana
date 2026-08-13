@@ -369,6 +369,28 @@
                   <span class="switch-label">出错时在聊天里提示</span>
                 </label>
               </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.recall_reply_auto_delete_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">查看撤回消息后自动撤回回复</span>
+                </label>
+                <span class="hint">默认关闭。开启后，仅查看撤回记录产生的回复会在设定时间后撤回。</span>
+              </div>
+              <div v-if="form.recall_reply_auto_delete_enabled" class="field">
+                <label for="bot-recall-delete-delay">回复保留时间（秒）</label>
+                <input
+                  id="bot-recall-delete-delay"
+                  v-model.number="form.recall_reply_auto_delete_delay_seconds"
+                  class="input"
+                  type="number"
+                  min="1"
+                  :max="maximumRecallReplyAutoDeleteDelaySeconds"
+                  step="1"
+                  inputmode="numeric"
+                />
+                <span class="hint">可设置 1–{{ maximumRecallReplyAutoDeleteDelaySeconds }} 秒。</span>
+              </div>
               <div v-if="form.error_notify_enabled" class="field">
                 <label for="bot-errprefix">错误提示前缀</label>
                 <input id="bot-errprefix" v-model="form.error_reply_prefix" class="input" placeholder="出错了：" />
@@ -835,6 +857,8 @@ const editorTabs = [
 ] as const;
 type EditorTab = (typeof editorTabs)[number]["key"];
 const editorTab = ref<EditorTab>("access");
+const defaultRecallReplyAutoDeleteDelaySeconds = 60;
+const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const platforms = ref<QQBotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
 const platformPickerOpen = ref(false);
@@ -1245,13 +1269,15 @@ function setForm(config: QQBotConfig): void {
     ...config,
     profiles: undefined,
     active_profile_id: undefined,
-    // 可选布尔字段缺省等价于开启，归一化成具体值供开关绑定。
+    // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
     reply_reference_enabled: config.reply_reference_enabled ?? true,
     mention_user_enabled: config.mention_user_enabled ?? true,
     markdown_to_plain: config.markdown_to_plain ?? true,
     error_notify_enabled: config.error_notify_enabled ?? true,
+    recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
+    recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,
     debug_mode_enabled: config.debug_mode_enabled ?? false,
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
@@ -1324,6 +1350,14 @@ async function save(): Promise<void> {
     toastError("请填写有效的 ws:// 或 wss:// 回连地址");
     return;
   }
+  const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);
+  if (
+    current.recall_reply_auto_delete_enabled &&
+    (!Number.isInteger(recallDeleteDelay) || recallDeleteDelay < 1 || recallDeleteDelay > maximumRecallReplyAutoDeleteDelaySeconds)
+  ) {
+    toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
+    return;
+  }
   busy.value = true;
   try {
     const modelRoles: QQBotConfig["model_roles"] = {};
@@ -1339,6 +1373,9 @@ async function save(): Promise<void> {
       onebot_access_token: tokenDraft.value.trim() || undefined,
       nonebot_bridge_token: bridgeTokenDraft.value.trim() || undefined,
       telegram_bot_token: telegramTokenDraft.value.trim() || undefined,
+      recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
+        ? recallDeleteDelay
+        : defaultRecallReplyAutoDeleteDelaySeconds,
       group_admission: {
         mode: admissionMode.value,
         allowed_groups: splitList(allowedGroupsDraft.value)
