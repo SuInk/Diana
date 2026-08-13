@@ -343,7 +343,10 @@ func TestInboundDeliveryAuditTracksAckAndSelfEcho(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.RecordInboundEventSelfEcho(ctx, "outbound-42", time.Now()); err != nil {
+	if err := store.RecordInboundEventDelivery(ctx, event, assistant.OutboundDeliveryAcknowledged, "outbound-43", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventSelfEcho(ctx, "outbound-43", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	page, err := store.ListInboundEventDetails(ctx, time.Now().Add(-time.Hour), 10, 0)
@@ -354,7 +357,7 @@ func TestInboundDeliveryAuditTracksAckAndSelfEcho(t *testing.T) {
 		t.Fatalf("events = %#v", page.Events)
 	}
 	got := page.Events[0]
-	if got.DeliveryStage != string(assistant.OutboundDeliveryEchoPersisted) || got.OutboundMessageID != "outbound-42" ||
+	if got.DeliveryStage != string(assistant.OutboundDeliveryEchoPersisted) || got.OutboundMessageID != "outbound-42,outbound-43" ||
 		got.ReplyGeneratedAt == nil || got.SendAttemptedAt == nil || got.SendAckedAt == nil || got.SelfEchoAt == nil || got.DeliveryError != "" {
 		t.Fatalf("delivery detail = %#v", got)
 	}
@@ -377,6 +380,9 @@ INSERT INTO inbound_events (
 ) VALUES (?, 'group:g', 'group', 'g', 'u', ?, ?, '{}', 0, 'done', 1, ?, 'error_replied', ?, ?, ?, ?)
 `, id, id, now.Unix(), now.UnixNano(), stage, now.UnixNano(), now.UnixNano(), now.UnixNano())
 		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`UPDATE inbound_events SET decision = 'replied' WHERE id = ?`, id); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -2650,6 +2650,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			currentText += "\n\n" + reference
 		}
 	}
+	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
+		currentText += "\n\n【图片上下文提示】" + notice
+	}
 	currentMessage, currentImagesComplete := llmMessageFromEventWithVideoFramesDetailed(ctx, messageEvent, currentText, contextImageURLs)
 	if !currentImagesComplete {
 		return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more current images could not be encoded")})
@@ -5494,6 +5497,9 @@ func mergeContextSummary(existing string, events []MessageEvent) string {
 }
 
 func compactContextEvent(event MessageEvent) string {
+	if semanticErrorWrapperText(firstNonEmpty(strings.TrimSpace(event.botReply), strings.TrimSpace(historyPlainText(event)))) {
+		return ""
+	}
 	text := PlainText(event.Segments)
 	if strings.TrimSpace(text) == "" && !hasImageSegment(event.Segments) {
 		text = strings.TrimSpace(event.RawMessage)
@@ -5529,6 +5535,9 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 		text = event.RawMessage
 	}
 	text = strings.TrimSpace(text)
+	if semanticErrorWrapperText(text) {
+		return ""
+	}
 	if text == "" {
 		return ""
 	}

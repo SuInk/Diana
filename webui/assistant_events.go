@@ -148,7 +148,11 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 	events := make([]assistantEventDetail, 0, len(stored.Events))
 	for _, item := range stored.Events {
 		decision, reason, handled := assistant.DescribeEventOutcome(item.Outcome)
-		if item.Decision != "" {
+		unconfirmedErrorReply := item.Outcome == "error_replied" && item.DeliveryStage != string(assistant.OutboundDeliveryAcknowledged) && item.DeliveryStage != string(assistant.OutboundDeliveryEchoPersisted)
+		if unconfirmedErrorReply {
+			decision, handled = "error", false
+			reason = "错误说明曾发起发送，但历史记录没有可核验的 ACK 或自回显证据"
+		} else if item.Decision != "" {
 			decision = item.Decision
 			handled = decision == "replied"
 		} else if item.Status == "done" && item.Error != "" && decision != "replied" {
@@ -184,7 +188,7 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 				detail.ProfileID = live.ProfileID
 			}
 			detail.Reply = live.Reply
-			if live.Decision != "" {
+			if live.Decision != "" && !unconfirmedErrorReply {
 				detail.Decision = live.Decision
 				detail.Reason = live.Reason
 				detail.Handled = live.Handled
