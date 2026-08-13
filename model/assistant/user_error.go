@@ -17,6 +17,19 @@ func publicQQErrorMessage(err error) string {
 	}
 	raw := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "github") {
+		for _, marker := range []string{"请求额度", "rate limit", "限流", "too many requests"} {
+			if strings.Contains(lower, marker) {
+				return "GitHub API 请求额度已耗尽；公开仓库的匿名访问也受限。请管理员前往「插件 → 仓库更新订阅 → 设置」配置 GitHub Token，或等待额度恢复。"
+			}
+		}
+		if strings.Contains(lower, "token 无效") || strings.Contains(lower, "token 已过期") {
+			return "GitHub Token 无效或已过期，请管理员前往「插件 → 仓库更新订阅 → 设置」重新配置。"
+		}
+		if strings.Contains(lower, "contents: read") || strings.Contains(lower, "token 权限不足") {
+			return "GitHub 仓库不可访问，请管理员检查仓库地址，并在「插件 → 仓库更新订阅 → 设置」确认 Token 已获得目标仓库的 Contents: read 权限。"
+		}
+	}
 	if strings.Contains(lower, "client.timeout exceeded while awaiting headers") ||
 		strings.Contains(lower, "timeout awaiting response headers") {
 		return "模型服务响应超时，请稍后重试。"

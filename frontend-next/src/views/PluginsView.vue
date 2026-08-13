@@ -143,7 +143,23 @@
     >
       <div v-if="settingsTarget.manifest.id === repositoryWatchPluginID" class="plugin-settings-section-head">
         <h3>访问设置</h3>
-        <p>配置私有仓库凭据和单次检查参数。</p>
+        <p>Token 同时用于提高公开仓库 API 额度和访问私有仓库。</p>
+        <div class="repository-watch-token-guide">
+          <KeyRound :size="17" aria-hidden="true" />
+          <div>
+            <strong>公开仓库也有匿名请求额度</strong>
+            <p>匿名模式新订阅默认每 1 小时检查一次；配置 Token 后默认每 60 秒一次。周期仍可自行调整，多个订阅会共享 GitHub API 额度。</p>
+          </div>
+          <a
+            class="btn small"
+            href="https://github.com/settings/personal-access-tokens/new"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ExternalLink :size="14" aria-hidden="true" />
+            创建 Token
+          </a>
+        </div>
       </div>
       <div class="stack plugin-settings-form">
         <div v-for="spec in settingsSpecs" :key="spec.key" class="field">
@@ -216,6 +232,7 @@
       <RepositoryWatchManager
         v-if="settingsTarget.manifest.id === repositoryWatchPluginID"
         :prepare-access="saveSettingsForSubscription"
+        :token-configured="repositoryWatchTokenConfigured"
       />
       <template #footer>
         <button class="btn ghost small plugin-settings-reset" type="button" :disabled="savingSettings" @click="resetSettings">
@@ -230,7 +247,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ChevronDown, Download, LoaderCircle, RefreshCw, SlidersHorizontal } from "@lucide/vue";
+import { ChevronDown, Download, ExternalLink, KeyRound, LoaderCircle, RefreshCw, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installResolverDependency,
@@ -249,6 +266,7 @@ import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
+import { navigate, viewQuery } from "../router";
 
 const plugins = ref<PluginState[]>([]);
 const loading = ref(false);
@@ -268,6 +286,11 @@ const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
+const repositoryWatchTokenConfigured = computed(() => {
+  const key = "github_token";
+  if (clearSecrets.value.includes(key)) return false;
+  return String(settingsForm.value[key] ?? "").trim() !== "" || secretConfigured(key);
+});
 
 function upsert(state: PluginState): void {
   const index = plugins.value.findIndex((plugin) => plugin.manifest.id === state.manifest.id);
@@ -281,6 +304,13 @@ async function reload(): Promise<void> {
   const dependencyRequest = loadDependencies();
   try {
     plugins.value = await listPlugins();
+    const requestedSettings = viewQuery().get("settings");
+    if (!settingsTarget.value && requestedSettings) {
+      const target = plugins.value.find((plugin) => plugin.manifest.id === requestedSettings && plugin.installed);
+      if (target?.manifest.settings?.length) {
+        openSettings(target);
+      }
+    }
   } catch (error) {
     toastError(error instanceof Error ? error.message : "加载插件失败");
   } finally {
@@ -392,6 +422,9 @@ function closeSettings(): void {
   settingsTarget.value = null;
   settingsForm.value = {};
   clearSecrets.value = [];
+  if (viewQuery().has("settings")) {
+    navigate("plugins");
+  }
 }
 
 function resetSettings(): void {

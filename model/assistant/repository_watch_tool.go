@@ -9,8 +9,18 @@ import (
 	"github.com/google/uuid"
 )
 
-const minimumRepositoryWatchInterval = 30 * time.Second
-const defaultRepositoryWatchInterval = 30 * time.Second
+const (
+	minimumRepositoryWatchInterval              = 30 * time.Second
+	authenticatedRepositoryWatchDefaultInterval = time.Minute
+	anonymousRepositoryWatchDefaultInterval     = time.Hour
+)
+
+func defaultRepositoryWatchInterval(settings SettingValues) time.Duration {
+	if strings.TrimSpace(settings.String(repositoryWatchSettingToken, "")) != "" {
+		return authenticatedRepositoryWatchDefaultInterval
+	}
+	return anonymousRepositoryWatchDefaultInterval
+}
 
 type RepositoryWatchCreateInput struct {
 	Repository       string
@@ -46,10 +56,13 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	}
 	interval := input.Interval
 	if interval == 0 {
-		interval = defaultRepositoryWatchInterval
+		interval = defaultRepositoryWatchInterval(settings)
 	}
 	if interval < minimumRepositoryWatchInterval {
 		return Reminder{}, fmt.Errorf("仓库检查周期不能短于 %s", minimumRepositoryWatchInterval)
+	}
+	if interval > maximumScheduleInterval {
+		return Reminder{}, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
 	}
 	if !input.WatchCommits && !input.WatchReleases {
 		return Reminder{}, fmt.Errorf("Commit 和 Release 不能同时关闭")
@@ -100,6 +113,9 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 		if input.Interval < minimumRepositoryWatchInterval {
 			return Reminder{}, fmt.Errorf("仓库检查周期不能短于 %s", minimumRepositoryWatchInterval)
 		}
+		if input.Interval > maximumScheduleInterval {
+			return Reminder{}, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
+		}
 		values["interval"] = input.Interval.String()
 	}
 	if input.WatchCommits != nil {
@@ -119,16 +135,19 @@ func (r *Runtime) DeleteRepositoryWatch(ownerID, id string) (bool, error) {
 	return r.deleteRepositoryWatch(strings.TrimSpace(ownerID), strings.TrimSpace(id))
 }
 
-func parseRepositoryWatchInterval(raw string) (time.Duration, error) {
+func parseRepositoryWatchInterval(raw string, settings SettingValues) (time.Duration, error) {
 	if strings.TrimSpace(raw) == "" {
-		return defaultRepositoryWatchInterval, nil
+		return defaultRepositoryWatchInterval(settings), nil
 	}
-	interval, err := parseScheduleInterval(raw)
+	interval, err := time.ParseDuration(strings.TrimSpace(strings.ToLower(raw)))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("周期格式不正确，请使用 30s、1m、2h 这类格式")
 	}
 	if interval < minimumRepositoryWatchInterval {
 		return 0, fmt.Errorf("仓库检查周期不能短于 %s", minimumRepositoryWatchInterval)
+	}
+	if interval > maximumScheduleInterval {
+		return 0, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
 	}
 	return interval, nil
 }
@@ -198,7 +217,7 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	var interval time.Duration
 	var err error
 	if rawInterval != "" {
-		interval, err = parseRepositoryWatchInterval(rawInterval)
+		interval, err = parseRepositoryWatchInterval(rawInterval, settings)
 		if err != nil {
 			return Reminder{}, err
 		}
