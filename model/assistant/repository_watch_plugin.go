@@ -82,7 +82,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingToken,
 				Label:       "GitHub Token",
-				Description: "私有仓库必填。支持 fine-grained PAT、classic PAT 和 GitHub App token；fine-grained token 需授予目标仓库 Contents: read。保存后不会回显。",
+				Description: "公开仓库高频订阅也建议配置，可将 API 主额度从共享出口 IP 的 60 次/小时提高到通常 5,000 次/小时。私有仓库还需为目标仓库授予 Contents: read；保存后不会回显。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -325,9 +325,15 @@ func (p *RepositoryWatchPlugin) getJSON(ctx context.Context, path string, settin
 				return fmt.Errorf("仓库不存在或为私有仓库；私有仓库请先在插件设置中配置 GitHub Token")
 			}
 			return fmt.Errorf("仓库不存在，或 GitHub Token 未获目标仓库访问权限；fine-grained token 需要目标仓库的 Contents: read 权限")
-		case http.StatusForbidden:
+		case http.StatusForbidden, http.StatusTooManyRequests:
 			if strings.TrimSpace(resp.Header.Get("X-RateLimit-Remaining")) == "0" {
-				return fmt.Errorf("GitHub API 请求额度已耗尽，请配置有效 Token 或等待额度恢复")
+				if token == "" {
+					return fmt.Errorf("GitHub API 匿名请求额度已耗尽（公开仓库同样受限）。请前往「插件 → 仓库更新订阅 → 设置」配置 GitHub Token，或等待额度恢复")
+				}
+				return fmt.Errorf("GitHub API Token 请求额度已耗尽。请等待额度恢复，或前往「插件 → 仓库更新订阅 → 设置」更换 Token")
+			}
+			if resp.StatusCode == http.StatusTooManyRequests || strings.Contains(strings.ToLower(message), "rate limit") {
+				return fmt.Errorf("GitHub API 暂时限流。请稍后重试；未配置 Token 时，可前往「插件 → 仓库更新订阅 → 设置」配置")
 			}
 			if token != "" {
 				return fmt.Errorf("GitHub Token 权限不足；私有仓库需要目标仓库的 Contents: read 权限")

@@ -42,12 +42,19 @@ function parseHash(): ViewID {
 
 export const currentView = ref<ViewID>(parseHash());
 
-export function navigate(view: ViewID): void {
-  if (window.location.hash !== `#/${view}`) {
-    window.location.hash = `#/${view}`;
+export function navigate(view: ViewID, query?: Record<string, string>): void {
+  const params = new URLSearchParams(query);
+  const nextHash = `#/${view}${params.size > 0 ? `?${params.toString()}` : ""}`;
+  if (window.location.hash !== nextHash) {
+    window.location.hash = nextHash;
   } else {
     currentView.value = view;
   }
+}
+
+export function viewQuery(): URLSearchParams {
+  const query = window.location.hash.split("?", 2)[1] ?? "";
+  return new URLSearchParams(query);
 }
 
 export function setupRouter(): void {

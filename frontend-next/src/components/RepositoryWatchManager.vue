@@ -16,19 +16,24 @@
         <div class="field wide">
           <label for="plugin-watch-repository">GitHub 仓库</label>
           <input id="plugin-watch-repository" v-model.trim="form.repository" class="input" type="text" placeholder="owner/repository 或 GitHub 链接" />
-          <span class="hint">私有仓库使用上方配置的 GitHub Token。</span>
+          <span class="hint">公开仓库高频检查也建议配置上方 Token；私有仓库必须配置。</span>
         </div>
         <div class="field">
           <label for="plugin-watch-branch">分支</label>
           <input id="plugin-watch-branch" v-model.trim="form.branch" class="input" type="text" placeholder="留空使用默认分支" />
         </div>
         <div class="field">
-          <label for="plugin-watch-interval">检查周期</label>
+          <div class="repository-watch-interval-label">
+            <label for="plugin-watch-interval">检查周期</label>
+            <span class="badge" :class="props.tokenConfigured ? 'accent' : 'warn'">
+              {{ props.tokenConfigured ? "Token 模式" : "匿名模式" }}
+            </span>
+          </div>
           <div class="input-group">
-            <input id="plugin-watch-interval" v-model.number="form.interval_seconds" class="input" type="number" min="30" step="1" />
+            <input id="plugin-watch-interval" v-model.number="form.interval_seconds" class="input" type="number" :min="minimumIntervalSeconds" :max="maximumIntervalSeconds" step="1" />
             <span class="repository-watch-unit">秒</span>
           </div>
-          <span class="hint">默认 30 秒，不能低于 30 秒。</span>
+          <span class="hint">当前模式默认 {{ formatInterval(defaultIntervalSeconds) }}；可设置 30 秒至 365 天。Commit + Release 每轮会请求两次。</span>
         </div>
         <div v-if="!editingTask" class="field wide">
           <label for="plugin-watch-profile">发送机器人</label>
@@ -80,7 +85,7 @@
           </div>
           <div class="task-facts">
             <span v-if="task.repository_branch">分支 <strong class="mono">{{ task.repository_branch }}</strong></span>
-            <span>每 {{ formatInterval(task.interval_seconds || 30) }}</span>
+            <span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span>
             <span v-if="task.group_id">群 <strong class="mono">{{ task.group_id }}</strong></span>
             <span v-else>私聊 <strong class="mono">{{ task.user_id || "—" }}</strong></span>
             <span>{{ task.watch_commits ? "Commit" : "" }}{{ task.watch_commits && task.watch_releases ? " + " : "" }}{{ task.watch_releases ? "Release" : "" }}</span>
@@ -99,7 +104,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
 import {
   cancelRepositoryWatch,
@@ -118,8 +123,13 @@ import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import AppSelect from "./AppSelect.vue";
 
-const props = defineProps<{ prepareAccess?: () => Promise<void> }>();
-const emptyForm = () => ({ repository: "", branch: "", interval_seconds: 30, watch_commits: true, watch_releases: true, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
+const props = defineProps<{ prepareAccess?: () => Promise<void>; tokenConfigured?: boolean }>();
+const authenticatedIntervalSeconds = 60;
+const anonymousIntervalSeconds = 60 * 60;
+const minimumIntervalSeconds = 30;
+const maximumIntervalSeconds = 365 * 24 * 60 * 60;
+const defaultIntervalSeconds = computed(() => props.tokenConfigured ? authenticatedIntervalSeconds : anonymousIntervalSeconds);
+const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_releases: true, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<QQBotConfig[]>([]);
 const joinedGroups = ref<QQBotGroupSummary[]>([]);
@@ -158,7 +168,7 @@ function startCreate(): void {
 
 function startEdit(task: AssistantTask): void {
   editingTask.value = task;
-  form.value = { repository: task.repository ?? "", branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || 30, watch_commits: task.watch_commits !== false, watch_releases: task.watch_releases !== false, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" };
+  form.value = { repository: task.repository ?? "", branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits !== false, watch_releases: task.watch_releases !== false, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" };
   editing.value = true;
 }
 
@@ -170,7 +180,8 @@ function stopEditing(): void {
 
 async function save(): Promise<void> {
   if (!form.value.repository) return toastError("请填写 GitHub 仓库");
-  if (form.value.interval_seconds < 30) return toastError("检查周期不能低于 30 秒");
+  if (form.value.interval_seconds < minimumIntervalSeconds) return toastError("检查周期不能低于 30 秒");
+  if (form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期不能超过 365 天");
   if (!form.value.watch_commits && !form.value.watch_releases) return toastError("Commit 和 Release 至少选择一项");
   if (!editingTask.value && !form.value.profile_id) return toastError("请选择发送机器人");
   if (!editingTask.value && form.value.destination === "group" && !form.value.group_id) return toastError("请填写群号或 Chat ID");
@@ -211,6 +222,15 @@ async function remove(task: AssistantTask): Promise<void> {
 function statusLabel(value: AssistantTaskStatus): string { return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消" }[value] ?? value; }
 function statusTone(value: AssistantTaskStatus): string { return value === "active" ? "ok" : value === "retrying" ? "warn" : value === "cancelled" ? "err" : ""; }
 function formatInterval(seconds: number): string { return seconds % 86400 === 0 ? `${seconds / 86400} 天` : seconds % 3600 === 0 ? `${seconds / 3600} 小时` : seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`; }
+
+watch(() => props.tokenConfigured, (configured, previous) => {
+  const previousDefault = previous ? authenticatedIntervalSeconds : anonymousIntervalSeconds;
+  const nextDefault = configured ? authenticatedIntervalSeconds : anonymousIntervalSeconds;
+  if (!editingTask.value && form.value.interval_seconds === previousDefault) {
+    form.value.interval_seconds = nextDefault;
+    return;
+  }
+});
 
 onMounted(() => void load());
 </script>
