@@ -140,8 +140,17 @@
               </div>
               <div v-if="task.last_error" class="task-notice err">
                 <TriangleAlert :size="14" aria-hidden="true" />
-                <span>{{ task.last_error }}</span>
+                <span class="task-notice-message">{{ task.last_error }}</span>
                 <span v-if="task.consecutive_failures">连续失败 {{ task.consecutive_failures }} 次</span>
+                <button
+                  v-if="showRepositorySettingsGuide(task)"
+                  class="btn small task-notice-action"
+                  type="button"
+                  @click="openRepositoryWatchSettings"
+                >
+                  <SlidersHorizontal :size="14" aria-hidden="true" />
+                  配置 Token
+                </button>
               </div>
             </div>
           </article>
@@ -176,12 +185,14 @@ import {
   RefreshCw,
   Repeat2,
   Search,
+  SlidersHorizontal,
   TriangleAlert,
   UserRound,
   UsersRound
 } from "@lucide/vue";
 import { getAssistantTasks, type AssistantTask, type AssistantTaskKind, type AssistantTaskStatus } from "../api";
 import { formatClock, formatNumber, formatTime } from "../format";
+import { navigate } from "../router";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import StatCard from "../components/StatCard.vue";
@@ -286,6 +297,14 @@ function formatInterval(seconds: number): string {
   if (seconds % 3600 === 0) return `${seconds / 3600} 小时`;
   if (seconds % 60 === 0) return `${seconds / 60} 分钟`;
   return `${seconds} 秒`;
+}
+
+function showRepositorySettingsGuide(task: AssistantTask): boolean {
+  return task.kind === "repository_watch" && /GitHub|Token|请求额度|限流/i.test(task.last_error ?? "");
+}
+
+function openRepositoryWatchSettings(): void {
+  navigate("plugins", { settings: "official.repository-watch" });
 }
 
 onMounted(() => {

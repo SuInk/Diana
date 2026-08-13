@@ -2324,6 +2324,32 @@ code {
   line-height: 1.45;
 }
 
+.repository-watch-token-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  background: var(--warn-soft);
+  color: var(--text-secondary);
+}
+
+.repository-watch-token-guide > svg {
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+.repository-watch-token-guide strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.repository-watch-token-guide p {
+  margin: 3px 0 0;
+}
+
 .repository-watch-manager {
   margin-top: 22px;
   padding-top: 20px;
@@ -3175,6 +3201,13 @@ code {
   font-size: 12px;
 }
 
+.repository-watch-interval-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .repository-watch-destination {
   width: fit-content;
 }
@@ -3244,6 +3277,17 @@ code {
 .task-notice.err {
   color: var(--err);
   background: var(--err-soft);
+}
+
+.task-notice-message {
+  flex: 1 1 360px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-notice-action {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .task-loading {
@@ -3385,6 +3429,20 @@ code {
 }
 
 @media (max-width: 520px) {
+  .repository-watch-token-guide {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .repository-watch-token-guide .btn {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .task-notice-action {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .repository-watch-manager-head,
   .repository-watch-manager-item {
     align-items: stretch;
