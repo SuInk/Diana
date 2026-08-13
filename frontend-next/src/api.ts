@@ -126,6 +126,8 @@ export interface QQBotConfig {
   max_reply_chars?: number;
   direct_reply_chunk_size?: number;
   forward_reply_threshold?: number;
+  recall_reply_auto_delete_enabled?: boolean;
+  recall_reply_auto_delete_delay_seconds?: number;
   recent_context_limit?: number;
   /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
   long_term_memory_enabled?: boolean;
@@ -213,6 +215,10 @@ export interface QQBotGroupConfig {
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
   minimum_reply_member_level?: number;
+  /** 查看撤回消息后的回复是否自动撤回。 */
+  recall_reply_auto_delete_enabled?: boolean;
+  /** 自动撤回前的保留时间，单位为秒。 */
+  recall_reply_auto_delete_delay_seconds?: number;
   plugin_overrides?: Record<string, boolean>;
   /** 本群专属回复时间、屏蔽 QQ 号与准入门槛；不设表示跟随全局。 */
   reply_gate?: ReplyGate | null;

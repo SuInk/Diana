@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -102,5 +103,36 @@ func TestConsoleGroupsFallsBackToSavedConfigWhenLiveListUnavailable(t *testing.T
 	}
 	if response.LiveAvailable || response.Warning == "" || len(response.Groups) != 1 || response.Groups[0].GroupID != "40004" || !response.Groups[0].Configured {
 		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
+	base := assistant.DefaultBotConfig()
+	runtime := assistant.NewRuntime(base, consoleGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	store := NewMemoryQQBotGroupConfigStore()
+	handler := NewQQBotHandler(context.Background(), runtime)
+	handler.SetGroupConfigStore(store)
+	router := qqBotTestRouter(handler)
+
+	body := `{"config":{"group_id":"50005","enabled":true,"enabled_set":true,"recall_reply_auto_delete_enabled":true,"recall_reply_auto_delete_delay_seconds":90}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Config assistant.GroupConfig `json:"config"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Config.RecallReplyAutoDeleteEnabled == nil || !*response.Config.RecallReplyAutoDeleteEnabled || response.Config.RecallReplyTTLSeconds != 90 {
+		t.Fatalf("response config = %#v", response.Config)
+	}
+	saved, ok := store.ConfigForGroup("50005")
+	if !ok || saved.RecallReplyAutoDeleteEnabled == nil || !*saved.RecallReplyAutoDeleteEnabled || saved.RecallReplyTTLSeconds != 90 {
+		t.Fatalf("saved config = %#v, ok = %v", saved, ok)
 	}
 }

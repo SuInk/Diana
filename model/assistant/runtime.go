@@ -1036,6 +1036,8 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.ChatInThreshold = groupCfg.ChatInThreshold
 	cfg.ChatInChance = groupCfg.ChatInChance
 	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
+	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
+	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
 	if groupCfg.ReplyGate != nil {
 		cfg.ReplyGate = groupCfg.ReplyGate.Clone()
 	}
@@ -2375,8 +2377,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	for _, resp := range pluginResponses {
 		if resp.Reply != "" {
 			// 插件如果直接给出回复，就不再调用 LLM；只给 Context 时继续作为提示词补充。
-			if err := r.send(ctx, event, resp.Reply); err != nil {
+			messageIDs, err := r.sendWithMessageIDs(ctx, event, resp.Reply)
+			if err != nil {
 				return "", err
+			}
+			if recallReplyShouldAutoDelete(cfg, pluginResponses) {
+				r.scheduleMessageDeletes(event, messageIDs, recallReplyAutoDeleteDelay(cfg))
 			}
 			return resp.Reply, nil
 		}
@@ -2699,15 +2705,21 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	if nested := nestedForwardPluginResponse(pluginResponses); nested != nil {
+		var sentMessageIDs []string
 		err := r.withReplySuppressionOutboundGate(sendBaseCtx, event, func(sendCtx context.Context) error {
-			if err := r.sendNestedForwardPluginResponse(sendCtx, event, *nested, reply, cfg); err != nil {
-				return err
+			var sendErr error
+			sentMessageIDs, sendErr = r.sendNestedForwardPluginResponse(sendCtx, event, *nested, reply, cfg)
+			if sendErr != nil {
+				return sendErr
 			}
 			r.applyReplyControlAfterSend(sendCtx, event, reply, controlIntent)
 			return nil
 		})
 		if err != nil {
 			return "", err
+		}
+		if recallReplyShouldAutoDelete(cfg, pluginResponses) {
+			r.scheduleMessageDeletes(event, sentMessageIDs, recallReplyAutoDeleteDelay(cfg))
 		}
 		return reply, nil
 	}
@@ -2725,7 +2737,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return "", err
 	}
 	if recallReplyShouldAutoDelete(cfg, pluginResponses) {
-		r.scheduleMessageDeletes(event, sentMessageIDs, time.Minute)
+		r.scheduleMessageDeletes(event, sentMessageIDs, recallReplyAutoDeleteDelay(cfg))
 	}
 	return reply, nil
 }
@@ -6710,17 +6722,17 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 	return r.sendForwardMessageIDNodes(ctx, event, messageIDs)
 }
 
-func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse, summary string, cfg BotConfig) error {
+func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse, summary string, cfg BotConfig) ([]string, error) {
 	if r.channel == nil {
-		return fmt.Errorf("qqbot: channel is not configured")
+		return nil, fmt.Errorf("qqbot: channel is not configured")
 	}
 	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotQQ), strings.TrimSpace(r.channel.Status().SelfID))
 	if selfID == "" {
-		return fmt.Errorf("qqbot: missing self id for nested forward")
+		return nil, fmt.Errorf("qqbot: missing self id for nested forward")
 	}
 	innerNodes := buildCustomForwardNodes(resp.ForwardMessages, cfg.Name, selfID)
 	if len(innerNodes) == 0 {
-		return fmt.Errorf("qqbot: recall forward has no original message nodes")
+		return nil, fmt.Errorf("qqbot: recall forward has no original message nodes")
 	}
 	summaryNodes := buildCustomForwardNodes([]OutgoingMessage{{
 		Text:        strings.TrimSpace(summary),
@@ -6735,7 +6747,7 @@ func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event Mes
 	outerResult, err := r.sendForwardNodesWithResult(withAlternativeOutboundDelivery(ctx), event, outerNodes)
 	if err != nil {
 		if errors.Is(err, errGroupSendUnavailable) {
-			return err
+			return nil, err
 		}
 		log.Printf("qqbot recall forward with media failed, retrying as text: %v", err)
 		fallbackNodes := append(summaryNodes, buildCustomForwardNodes(recallForwardTextFallback(resp.ForwardMessages), cfg.Name, selfID)...)
@@ -6744,19 +6756,17 @@ func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event Mes
 			log.Printf("qqbot recall text forward failed, sending summary only: %v", err)
 			messageIDs, directErr := r.sendWithMessageIDs(ctx, event, strings.TrimSpace(summary))
 			if directErr != nil {
-				return errors.Join(fmt.Errorf("qqbot: send recall forward: %w", err), directErr)
+				return nil, errors.Join(fmt.Errorf("qqbot: send recall forward: %w", err), directErr)
 			}
-			r.scheduleMessageDeletes(event, messageIDs, time.Minute)
-			return nil
+			return messageIDs, nil
 		}
 	}
-	if messageID := apiMessageID(outerResult); messageID != "" {
-		r.scheduleMessageDeletes(event, []string{messageID}, time.Minute)
-	} else {
+	messageID := apiMessageID(outerResult)
+	if messageID == "" {
 		log.Printf("qqbot recall forward cannot schedule cleanup: missing message_id")
 	}
-	r.rememberOutgoingWithMessageID(ctx, event, OutgoingMessage{Text: strings.TrimSpace(summary)}, apiMessageID(outerResult))
-	return nil
+	r.rememberOutgoingWithMessageID(ctx, event, OutgoingMessage{Text: strings.TrimSpace(summary)}, messageID)
+	return []string{messageID}, nil
 }
 
 func recallForwardTextFallback(messages []OutgoingMessage) []OutgoingMessage {
@@ -6930,6 +6940,11 @@ func recallReplyShouldAutoDelete(cfg BotConfig, responses []PluginResponse) bool
 		}
 	}
 	return false
+}
+
+func recallReplyAutoDeleteDelay(cfg BotConfig) time.Duration {
+	seconds := cfg.WithDefaults().RecallReplyTTLSeconds
+	return time.Duration(seconds) * time.Second
 }
 
 func (r *Runtime) scheduleMessageDeletes(event MessageEvent, messageIDs []string, delay time.Duration) {
