@@ -40,19 +40,22 @@ type dianaChatHistoryResult struct {
 }
 
 type dianaChatHistoryItem struct {
-	MessageID       string   `json:"message_id,omitempty"`
-	Time            int64    `json:"event_time,omitempty"`
-	LocalTime       string   `json:"local_time,omitempty"`
-	Sender          string   `json:"sender"`
-	Text            string   `json:"text,omitempty"`
-	ContentTypes    []string `json:"content_types,omitempty"`
-	ImageCount      int      `json:"image_count,omitempty"`
-	VideoCount      int      `json:"video_count,omitempty"`
-	FileCount       int      `json:"file_count,omitempty"`
-	QuotedMessageID string   `json:"quoted_message_id,omitempty"`
-	QuotedSender    string   `json:"quoted_sender,omitempty"`
-	QuotedText      string   `json:"quoted_text,omitempty"`
-	GroupID         string   `json:"group_id,omitempty"`
+	MessageID               string   `json:"message_id,omitempty"`
+	Time                    int64    `json:"event_time,omitempty"`
+	LocalTime               string   `json:"local_time,omitempty"`
+	Sender                  string   `json:"sender"`
+	Text                    string   `json:"text,omitempty"`
+	ContentTypes            []string `json:"content_types,omitempty"`
+	ImageCount              int      `json:"image_count,omitempty"`
+	ImageDescriptions       []string `json:"image_descriptions,omitempty"`
+	VideoCount              int      `json:"video_count,omitempty"`
+	FileCount               int      `json:"file_count,omitempty"`
+	QuotedMessageID         string   `json:"quoted_message_id,omitempty"`
+	QuotedSender            string   `json:"quoted_sender,omitempty"`
+	QuotedText              string   `json:"quoted_text,omitempty"`
+	QuotedImageCount        int      `json:"quoted_image_count,omitempty"`
+	QuotedImageDescriptions []string `json:"quoted_image_descriptions,omitempty"`
+	GroupID                 string   `json:"group_id,omitempty"`
 }
 
 func newDianaChatHistoryTool(runtime *Runtime, event MessageEvent) *dianaChatHistoryTool {
@@ -142,7 +145,7 @@ func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any)
 	if right > len(timeline) {
 		right = len(timeline)
 	}
-	items := chatHistoryItems(timeline[left:right])
+	items := t.items(ctx, timeline[left:right])
 	return dianaChatHistoryResult{
 		OK:              true,
 		Action:          "around",
@@ -171,7 +174,7 @@ func (t *dianaChatHistoryTool) recent(ctx context.Context, input map[string]any)
 	} else if len(events) > limit {
 		events = events[len(events)-limit:]
 	}
-	items := chatHistoryItems(events)
+	items := t.items(ctx, events)
 	return dianaChatHistoryResult{
 		OK:      true,
 		Action:  "recent",
@@ -240,7 +243,7 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		}
 		return dianaChatHistoryResult{
 			OK: true, Action: "search", Message: "已在" + label + "的本地持久化记录中完成检索，结果按时间从新到旧排列。",
-			Query: query, Items: chatHistoryItems(matched), Total: total, Limited: total > len(matched),
+			Query: query, Items: t.items(ctx, matched), Total: total, Limited: total > len(matched),
 		}, nil
 	}
 	if crossGroup {
@@ -274,7 +277,7 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		Action:  "search",
 		Message: "已在当前会话的本地持久化记录中完成检索，结果按时间从新到旧排列。",
 		Query:   query,
-		Items:   chatHistoryItems(matched),
+		Items:   t.items(ctx, matched),
 		Total:   total,
 		Limited: total > len(matched),
 	}, nil
@@ -383,6 +386,25 @@ func chatHistoryItems(events []MessageEvent) []dianaChatHistoryItem {
 	return items
 }
 
+func (t *dianaChatHistoryTool) items(ctx context.Context, events []MessageEvent) []dianaChatHistoryItem {
+	items := make([]dianaChatHistoryItem, 0, len(events))
+	for _, event := range events {
+		if event.Kind == EventKindNotice {
+			continue
+		}
+		item := chatHistoryItem(event)
+		if item.ImageCount > 0 {
+			item.ImageDescriptions = t.runtime.historyImageCachedSegmentDescriptions(ctx, event.Segments)
+		}
+		if item.QuotedImageCount > 0 && event.Quoted != nil {
+			item.QuotedImageDescriptions = t.runtime.historyImageCachedSegmentDescriptions(ctx, event.Quoted.Segments)
+		}
+		t.runtime.enqueueHistoryImageDescriptions(event)
+		items = append(items, item)
+	}
+	return items
+}
+
 func chatHistoryItem(event MessageEvent) dianaChatHistoryItem {
 	item := dianaChatHistoryItem{
 		MessageID: event.MessageID,
@@ -424,6 +446,11 @@ func chatHistoryItem(event MessageEvent) dianaChatHistoryItem {
 		item.QuotedMessageID = strings.TrimSpace(event.Quoted.MessageID)
 		item.QuotedSender = strings.TrimSpace(firstNonEmpty(event.Quoted.SenderName, event.Quoted.UserID))
 		item.QuotedText = truncateChatHistoryText(historyToolQuotedText(event.Quoted), 280)
+		for _, segment := range event.Quoted.Segments {
+			if recallStillImageSegment(segment) {
+				item.QuotedImageCount++
+			}
+		}
 	}
 	sort.Strings(item.ContentTypes)
 	return item
@@ -439,6 +466,9 @@ func groupHistorySessionPrefix(event MessageEvent) string {
 
 func historyToolEventText(event MessageEvent) string {
 	text := strings.TrimSpace(PlainText(event.Segments))
+	if hasImageSegment(event.Segments) {
+		text = rawMessageWithoutImagePlaceholders(text)
+	}
 	if text != "" {
 		return text
 	}
@@ -467,6 +497,9 @@ func historyToolQuotedText(quoted *QuotedMessage) string {
 		return ""
 	}
 	text := strings.TrimSpace(PlainText(quoted.Segments))
+	if hasImageSegment(quoted.Segments) {
+		text = rawMessageWithoutImagePlaceholders(text)
+	}
 	if text != "" {
 		return text
 	}

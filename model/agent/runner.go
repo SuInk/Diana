@@ -346,9 +346,25 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
+		observationText := toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls)
+		observation := llm.Message{Role: llm.RoleUser, Content: observationText}
+		if err == nil {
+			if rich, ok := tool.(ToolResultPartsTool); ok {
+				for _, part := range rich.ToolResultParts(output) {
+					if part.Type != llm.ContentPartImageURL || strings.TrimSpace(part.ImageURL) == "" {
+						continue
+					}
+					if len(observation.Parts) == 0 {
+						observation.Parts = append(observation.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: observationText})
+						observation.Priority = llm.MessagePriorityPlugin
+					}
+					observation.Parts = append(observation.Parts, part)
+				}
+			}
+		}
 		messages = append(messages,
 			llm.Message{Role: llm.RoleAssistant, Content: lastText},
-			llm.Message{Role: llm.RoleUser, Content: toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls)},
+			observation,
 		)
 	}
 

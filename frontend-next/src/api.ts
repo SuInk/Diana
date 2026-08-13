@@ -862,6 +862,13 @@ export function getStats(): Promise<StatsSnapshot> {
 }
 
 export type AssistantEventRange = "1h" | "24h" | "7d" | "30d" | "all";
+export type AssistantEventResultFilter = "all" | "replied" | "not_replied" | "pending" | "error";
+
+export interface AssistantEventImage {
+  index: number;
+  summary?: string;
+  unavailable?: boolean;
+}
 
 export interface AssistantEventDetail extends QQBotEvent {
   id: string;
@@ -874,13 +881,23 @@ export interface AssistantEventDetail extends QQBotEvent {
   total_tokens?: number;
   decision: "replied" | "not_replied" | "pending" | "error" | string;
   reason: string;
+  delivery_stage?: "generated" | "send_attempted" | "acknowledged" | "echo_persisted" | "failed" | string;
+  outbound_message_id?: string;
+  reply_generated_at?: string;
+  send_attempted_at?: string;
+  send_acked_at?: string;
+  self_echo_at?: string;
+  delivery_error?: string;
+  images?: AssistantEventImage[];
 }
 
 export interface AssistantEventsResponse {
   range: AssistantEventRange;
+  result: AssistantEventResultFilter;
   since?: string;
   events: AssistantEventDetail[];
   total: number;
+  filtered_total: number;
   replied: number;
   not_replied: number;
   pending: number;
@@ -894,8 +911,13 @@ export interface AssistantEventsResponse {
   has_more: boolean;
 }
 
-export function getAssistantEvents(range: AssistantEventRange, page = 1, limit = 50): Promise<AssistantEventsResponse> {
-  const params = new URLSearchParams({ range, page: String(page), limit: String(limit) });
+export function getAssistantEvents(
+  range: AssistantEventRange,
+  result: AssistantEventResultFilter = "all",
+  page = 1,
+  limit = 50
+): Promise<AssistantEventsResponse> {
+  const params = new URLSearchParams({ range, result, page: String(page), limit: String(limit) });
   return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
 }
 
@@ -909,7 +931,7 @@ export function getAssistantEventTrace(eventID: string): Promise<AssistantEventT
   return requestJSON<AssistantEventTraceResponse>(`/api/assistant/events/${encodeURIComponent(eventID)}/trace`);
 }
 
-export type AssistantTaskKind = "reminder" | "schedule";
+export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
 export interface AssistantTask {
@@ -930,6 +952,12 @@ export interface AssistantTask {
   consecutive_failures?: number;
   pending_delivery?: boolean;
   pending_since?: string;
+  repository?: string;
+  repository_branch?: string;
+  watch_commits?: boolean;
+  watch_releases?: boolean;
+  last_commit_sha?: string;
+  last_release_tag?: string;
   created_at: string;
   consumes_quota: boolean;
 }
@@ -938,8 +966,42 @@ export interface AssistantTasksResponse {
   items: AssistantTask[];
 }
 
+export interface RepositoryWatchInput {
+  repository: string;
+  branch?: string;
+  interval_seconds: number;
+  watch_commits: boolean;
+  watch_releases: boolean;
+  profile_id?: string;
+  destination?: "private" | "group";
+  group_id?: string;
+  user_id?: string;
+}
+
 export function getAssistantTasks(): Promise<AssistantTasksResponse> {
   return requestJSON<AssistantTasksResponse>("/api/assistant/tasks");
+}
+
+export function createRepositoryWatch(input: RepositoryWatchInput): Promise<AssistantTask> {
+  return requestJSON<AssistantTask>("/api/assistant/tasks/repository-watches", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateRepositoryWatch(id: string, input: Pick<RepositoryWatchInput, "repository" | "branch" | "interval_seconds" | "watch_commits" | "watch_releases">): Promise<AssistantTask> {
+  return requestJSON<AssistantTask>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(input)
+  });
+}
+
+export function cancelRepositoryWatch(id: string): Promise<AssistantTask> {
+  return requestJSON<AssistantTask>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+}
+
+export function deleteRepositoryWatch(id: string): Promise<void> {
+  return requestJSON<void>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function getHealth(): Promise<HealthResponse> {

@@ -2040,7 +2040,8 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
-		"三张图片都已读取。",
+		`{"action":"tool","tool":"diana.history_images","input":{"message_ids":["img-1","img-2","img-3"]}}`,
+		`{"action":"final","content":"三张图片都已读取。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -2072,10 +2073,20 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "三张图片都已读取。" || len(provider.requests) != 1 {
+	if reply != "三张图片都已读取。" || len(provider.requests) != 2 {
 		t.Fatalf("reply=%q requests=%d", reply, len(provider.requests))
 	}
-	finalRequest := provider.requests[0]
+	firstRequest := provider.requests[0]
+	if requestHasAnyImage(firstRequest) {
+		t.Fatalf("history images were eagerly attached to first request: %#v", firstRequest.Messages)
+	}
+	firstText := requestTextContent(firstRequest)
+	for _, want := range []string{"message_id=img-1", "message_id=img-2", "message_id=img-3", "当前未附加原图"} {
+		if !strings.Contains(firstText, want) {
+			t.Fatalf("first request missing %q: %#v", want, firstRequest.Messages)
+		}
+	}
+	finalRequest := provider.requests[1]
 	var actualImages []string
 	for _, message := range finalRequest.Messages {
 		if strings.Contains(message.Content, "[图片]") {
@@ -2093,6 +2104,19 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	if got := strings.Join(actualImages, ","); got != strings.Join(imageURLs, ",") {
 		t.Fatalf("final request images = %#v", actualImages)
 	}
+}
+
+func requestTextContent(request llm.GenerateRequest) string {
+	var lines []string
+	for _, message := range request.Messages {
+		lines = append(lines, message.Content)
+		for _, part := range message.Parts {
+			if part.Type == llm.ContentPartText {
+				lines = append(lines, part.Text)
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestImageEditSourcesKeepRecentCrossMessageBatchOrder(t *testing.T) {
@@ -3728,8 +3752,8 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 	const (
 		currentImage = "https://example.test/current.jpg"
 		quotedImage  = "https://example.test/quoted.jpg"
-		recentImage  = "https://example.test/recent.jpg"
 	)
+	recentImage := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(tinyJPEGBytes(t))
 	newRuntimeWithRecentImage := func() *Runtime {
 		runtime := NewRuntime(BotConfig{BotQQ: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 		runtime.remember(MessageEvent{
@@ -4434,6 +4458,13 @@ func (c *recordingChannel) Send(ctx context.Context, msg OutgoingMessage) error 
 	}
 	c.sent = append(c.sent, msg)
 	return nil
+}
+
+func (c *recordingChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
+	if err := c.Send(ctx, msg); err != nil {
+		return nil, err
+	}
+	return map[string]any{"message_id": int64(42)}, nil
 }
 
 // CallAPI 封装当前模块的 CallAPI 逻辑。

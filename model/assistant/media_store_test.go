@@ -67,6 +67,72 @@ func TestMediaStorePersistsAndReuses(t *testing.T) {
 	}
 }
 
+func TestMediaStoreStoresGeneratedImageByContent(t *testing.T) {
+	store := mediaStore(t)
+	body := pngBytes(t)
+
+	path, err := store.StoreImage(body, "image/png")
+	if err != nil {
+		t.Fatalf("持久化生成图片失败：%v", err)
+	}
+	again, err := store.StoreImage(body, "image/png")
+	if err != nil {
+		t.Fatalf("复用生成图片失败：%v", err)
+	}
+	if again != path {
+		t.Fatalf("相同内容应复用同一缓存文件，%q vs %q", path, again)
+	}
+	if filepath.Dir(path) != store.Dir() {
+		t.Fatalf("生成图片未写入 MediaStore：%q", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("缓存内容不一致：bytes=%d err=%v", len(got), err)
+	}
+}
+
+func TestMediaStoreRejectsInvalidGeneratedImage(t *testing.T) {
+	store := mediaStore(t)
+	if _, err := store.StoreImage(nil, "image/png"); err == nil {
+		t.Fatal("空图片不应写入缓存")
+	}
+	if _, err := store.StoreImage([]byte("text"), "text/plain"); err == nil {
+		t.Fatal("非图片类型不应写入缓存")
+	}
+}
+
+func TestMediaStoreReturnsAbsoluteGeneratedImagePath(t *testing.T) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(t.TempDir(), "media")
+	relativeCacheDir, err := filepath.Rel(workingDir, cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMediaStore(relativeCacheDir)
+	path, err := store.StoreImage(pngBytes(t), "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("本地媒体共享需要绝对路径，实际 %q", path)
+	}
+	resolvedCacheDir, err := filepath.EvalSymlinks(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(resolvedPath) != resolvedCacheDir {
+		t.Fatalf("缓存路径超出配置目录：%q", path)
+	}
+}
+
 func TestMediaStoreDataURLIsBase64Image(t *testing.T) {
 	body := pngBytes(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

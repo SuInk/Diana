@@ -35,6 +35,13 @@ type profileAwareRuntime interface {
 	SetProfiles(assistant.ProfileSet)
 }
 
+type repositoryWatchRuntime interface {
+	CreateRepositoryWatch(context.Context, assistant.RepositoryWatchCreateInput) (assistant.Reminder, error)
+	UpdateRepositoryWatch(context.Context, string, string, assistant.RepositoryWatchUpdateInput) (assistant.Reminder, error)
+	CancelRepositoryWatch(string, string) (assistant.Reminder, error)
+	DeleteRepositoryWatch(string, string) (bool, error)
+}
+
 type QQBotHandler struct {
 	runtime                   QQBotRuntime
 	newChannel                QQBotChannelFactory
@@ -207,7 +214,12 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/dashboard-stats", h.dashboardStats)
 	router.GET(base+"/events", h.listEvents)
 	router.GET(base+"/events/:id/trace", h.eventTrace)
+	router.GET(base+"/events/:id/images/:index", h.eventImage)
 	router.GET(base+"/tasks", h.listTasks)
+	router.POST(base+"/tasks/repository-watches", h.createRepositoryWatch)
+	router.PUT(base+"/tasks/repository-watches/:id", h.updateRepositoryWatch)
+	router.POST(base+"/tasks/repository-watches/:id/cancel", h.cancelRepositoryWatch)
+	router.DELETE(base+"/tasks/repository-watches/:id", h.deleteRepositoryWatch)
 	router.POST(base+"/start", h.start)
 	router.POST(base+"/stop", h.stop)
 	if h.features.GroupTest {

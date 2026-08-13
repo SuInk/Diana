@@ -35,6 +35,13 @@ func TestDianaTasksToolListsAllKindsForCurrentUser(t *testing.T) {
 	}
 }
 
+func TestRepositoryWatchTaskDoesNotConsumePersonalQuota(t *testing.T) {
+	item := taskForTool(Reminder{Kind: ReminderKindRepositoryWatch, Repository: "acme/demo", IntervalSeconds: 30})
+	if item.Kind != "repository_watch" || item.ConsumesQuota {
+		t.Fatalf("task=%#v", item)
+	}
+}
+
 func TestDianaTasksToolAllScopeRequiresOwner(t *testing.T) {
 	store := &stubReminderStore{items: []Reminder{{ID: "a", OwnerID: "user"}, {ID: "b", OwnerID: "other"}}}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)

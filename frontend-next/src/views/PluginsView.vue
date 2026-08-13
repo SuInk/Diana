@@ -138,8 +138,13 @@
     <Modal
       v-if="settingsTarget"
       :title="`${settingsTarget.manifest.name} · 设置`"
+      :wide="settingsTarget.manifest.id === repositoryWatchPluginID"
       @close="closeSettings"
     >
+      <div v-if="settingsTarget.manifest.id === repositoryWatchPluginID" class="plugin-settings-section-head">
+        <h3>访问设置</h3>
+        <p>配置私有仓库凭据和单次检查参数。</p>
+      </div>
       <div class="stack plugin-settings-form">
         <div v-for="spec in settingsSpecs" :key="spec.key" class="field">
           <template v-if="spec.type === 'bool'">
@@ -208,6 +213,10 @@
           </template>
         </div>
       </div>
+      <RepositoryWatchManager
+        v-if="settingsTarget.manifest.id === repositoryWatchPluginID"
+        :prepare-access="saveSettingsForSubscription"
+      />
       <template #footer>
         <button class="btn ghost small plugin-settings-reset" type="button" :disabled="savingSettings" @click="resetSettings">
           恢复默认
@@ -239,12 +248,14 @@ import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
+import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 
 const plugins = ref<PluginState[]>([]);
 const loading = ref(false);
 const busyID = ref("");
 
 const resolverPluginID = "official.nonebot-plugin-resolver-go";
+const repositoryWatchPluginID = "official.repository-watch";
 const dependencies = ref<ResolverDependency[]>([]);
 const dependenciesLoading = ref(false);
 const busyDependency = ref("");
@@ -422,21 +433,39 @@ function buildSettingsPayload(): Record<string, unknown> {
   return payload;
 }
 
-async function saveSettings(): Promise<void> {
+async function persistSettings(closeAfterSave: boolean): Promise<void> {
   const target = settingsTarget.value;
   if (!target) {
     return;
   }
   savingSettings.value = true;
   try {
-    upsert(await updatePluginSettings(target.manifest.id, buildSettingsPayload(), clearSecrets.value));
-    toastSuccess(`已保存 ${target.manifest.name} 的设置`);
-    closeSettings();
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "保存设置失败");
+    const updated = await updatePluginSettings(target.manifest.id, buildSettingsPayload(), clearSecrets.value);
+    upsert(updated);
+    settingsTarget.value = updated;
+    for (const spec of settingsSpecs.value) {
+      if (spec.secret) settingsForm.value[spec.key] = "";
+    }
+    clearSecrets.value = [];
+    if (closeAfterSave) {
+      toastSuccess(`已保存 ${target.manifest.name} 的设置`);
+      closeSettings();
+    }
   } finally {
     savingSettings.value = false;
   }
+}
+
+async function saveSettings(): Promise<void> {
+  try {
+    await persistSettings(true);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存设置失败");
+  }
+}
+
+async function saveSettingsForSubscription(): Promise<void> {
+  await persistSettings(false);
 }
 
 async function loadDependencies(): Promise<void> {

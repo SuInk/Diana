@@ -25,7 +25,7 @@ const (
 	mediaFetchTimeout      = 20 * time.Second
 )
 
-// MediaStore 把入站图片下载到本地并持久化，后续处理一律读本地文件。
+// MediaStore 把图片持久化到本地，后续处理一律读本地文件。
 //
 // 为什么不直接把图片 URL 透传给 LLM：聊天平台的图片地址通常是短时效的，
 // QQ 的还带 rkey 校验，境外或中转的模型服务多半拉不到，表现就是识图静默
@@ -106,6 +106,74 @@ func (s *MediaStore) Fetch(ctx context.Context, rawURL string) (string, error) {
 		return "", err
 	}
 	s.evictOverCap()
+	return path, nil
+}
+
+// StoreImage 按内容哈希持久化已有图片字节。生图结果与入站图片共用同一个
+// 容量上限和淘汰机制，避免再为 data URL 创建无所有权的系统临时文件。
+func (s *MediaStore) StoreImage(body []byte, contentType string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("assistant: media store is not configured")
+	}
+	if len(body) == 0 {
+		return "", fmt.Errorf("assistant: empty media body")
+	}
+	if int64(len(body)) > s.maxBytes {
+		return "", fmt.Errorf("assistant: 媒体超过 %dMB 上限", s.maxBytes>>20)
+	}
+	contentType = strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	if !strings.HasPrefix(contentType, "image/") {
+		return "", fmt.Errorf("assistant: unsupported image content type %q", contentType)
+	}
+	cacheDir, err := filepath.Abs(s.dir)
+	if err != nil {
+		return "", fmt.Errorf("assistant: resolve media dir: %w", err)
+	}
+
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	path := filepath.Join(cacheDir, "generated-"+digest+imageExtension(contentType, body))
+	cacheKey := "generated:" + filepath.Base(path)
+	wait, leader := s.acquire(cacheKey)
+	if !leader {
+		<-wait
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			return path, nil
+		}
+		return "", fmt.Errorf("assistant: concurrent media store failed")
+	}
+	defer s.release(cacheKey)
+
+	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+		now := time.Now()
+		_ = os.Chtimes(path, now, now)
+		return path, nil
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", fmt.Errorf("assistant: create media dir: %w", err)
+	}
+	tmp, err := os.CreateTemp(cacheDir, ".partial-*")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+	if _, err := tmp.Write(body); err != nil {
+		return "", fmt.Errorf("assistant: save media: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("assistant: save media: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return "", fmt.Errorf("assistant: persist media: %w", err)
+	}
+	s.evictOverCap()
+	if info, err := os.Stat(path); err != nil || info.Size() == 0 {
+		return "", fmt.Errorf("assistant: persisted media was evicted")
+	}
 	return path, nil
 }
 
