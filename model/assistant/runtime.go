@@ -2534,8 +2534,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return ack, nil
 	}
 	for _, resp := range pluginResponses {
-		if resp.Reply != "" {
+		if resp.Reply != "" && !resp.RecallDisclosure {
 			// 插件如果直接给出回复，就不再调用 LLM；只给 Context 时继续作为提示词补充。
+			// 撤回记录属于敏感披露，必须先由 LLM 结合当前请求整理，不能走插件直发。
 			messageIDs, err := r.sendWithMessageIDs(ctx, event, resp.Reply)
 			if err != nil {
 				return "", err

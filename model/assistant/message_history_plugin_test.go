@@ -134,6 +134,21 @@ func TestRecallReplyModeCanKeepOriginalForward(t *testing.T) {
 	if !got[0].Forward || !got[0].NestedForward || len(got[0].ForwardMessages) != 1 {
 		t.Fatalf("original-forward mode changed response: %#v", got[0])
 	}
+	if got[0].Reply != "" || got[0].Context != "完整撤回时间线" {
+		t.Fatalf("original-forward summary bypassed LLM: %#v", got[0])
+	}
+}
+
+func TestRecallOriginalForwardModeStillRoutesNoRecordsThroughLLM(t *testing.T) {
+	responses := applyRecallReplyMode([]PluginResponse{{
+		Handled:          true,
+		Reply:            "最近24小时没有记录到群消息撤回。",
+		RecallDisclosure: true,
+	}}, RecallReplyModeOriginalForward)
+	got := responses[0]
+	if got.Reply != "" || got.Context != "最近24小时没有记录到群消息撤回。" {
+		t.Fatalf("original-forward no-record response bypassed LLM: %#v", got)
+	}
 }
 
 func TestMessageHistoryPluginKeepsRecallOperator(t *testing.T) {
