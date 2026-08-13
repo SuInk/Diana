@@ -132,8 +132,9 @@ type PluginTaskProgress struct {
 }
 
 type PluginTaskServices struct {
-	Generate func(context.Context, llm.GenerateRequest) (string, error)
-	Report   func(PluginTaskProgress)
+	Generate      func(context.Context, llm.GenerateRequest) (string, error)
+	GenerateReply func(context.Context, llm.GenerateRequest) (string, error)
+	Report        func(PluginTaskProgress)
 }
 
 type Plugin interface {

@@ -270,6 +270,7 @@ func TestRuntimeDueScheduledQueryRunsAgentAndReschedules(t *testing.T) {
 		ID:              "task1234",
 		Kind:            ReminderKindQuery,
 		OwnerID:         "10001",
+		GroupID:         "20001",
 		UserID:          "10001",
 		Message:         "查询最新公告并总结变化",
 		TriggerAt:       time.Now().Add(-time.Minute),
@@ -282,6 +283,7 @@ func TestRuntimeDueScheduledQueryRunsAgentAndReschedules(t *testing.T) {
 	}}
 	runtime := NewRuntime(BotConfig{
 		OwnerID:        "10001",
+		SystemPrompt:   "你是说话自然的 Diana。",
 		AgentEnabled:   true,
 		AgentWorkDir:   t.TempDir(),
 		AgentMaxSteps:  3,
@@ -292,7 +294,7 @@ func TestRuntimeDueScheduledQueryRunsAgentAndReschedules(t *testing.T) {
 
 	runtime.fireDueReminders(context.Background())
 
-	if len(channel.sent) != 1 || !strings.Contains(channel.sent[0].Text, "最新公告没有变化") {
+	if len(channel.sent) != 1 || !strings.Contains(channel.sent[0].Text, "最新公告没有变化") || strings.Contains(channel.sent[0].Text, "task1234") {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
 	if len(store.items) != 1 {
@@ -309,13 +311,16 @@ func TestRuntimeDueScheduledQueryRunsAgentAndReschedules(t *testing.T) {
 		t.Fatalf("requests = %d", len(provider.requests))
 	}
 	foundQuery := false
+	foundPersona := false
 	for _, msg := range provider.requests[0].Messages {
 		if strings.Contains(msg.Content, "查询最新公告并总结变化") {
 			foundQuery = true
-			break
+		}
+		if strings.Contains(msg.Content, "你是说话自然的 Diana。") {
+			foundPersona = true
 		}
 	}
-	if !foundQuery {
+	if !foundQuery || !foundPersona || requestMessagesContain(provider.requests[0].Messages, "task1234") {
 		t.Fatalf("scheduled query missing from request: %#v", provider.requests[0].Messages)
 	}
 }

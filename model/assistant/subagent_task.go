@@ -210,6 +210,9 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 
 	services := PluginTaskServices{
 		Generate: r.generateForPluginTask,
+		GenerateReply: func(generateCtx context.Context, req llm.GenerateRequest) (string, error) {
+			return r.generateUserFacingPluginReply(generateCtx, item.event, req)
+		},
 		Report: func(progress PluginTaskProgress) {
 			r.reportSubagentProgress(ctx, item, progress)
 		},
@@ -294,6 +297,11 @@ func (r *Runtime) generateForPluginTask(ctx context.Context, req llm.GenerateReq
 		}
 		return strings.TrimSpace(resp.Text), nil
 	})
+}
+
+func (r *Runtime) generateUserFacingPluginReply(ctx context.Context, event MessageEvent, req llm.GenerateRequest) (string, error) {
+	req.Messages = r.withUserFacingPersona(event, req.Messages)
+	return r.generateForPluginTask(ctx, req)
 }
 
 func (r *Runtime) reportSubagentProgress(ctx context.Context, item reservedSubagentTask, progress PluginTaskProgress) {

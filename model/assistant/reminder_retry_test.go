@@ -39,10 +39,13 @@ func TestScheduledQueryFailureNotifiesAndSchedulesRetry(t *testing.T) {
 	if len(channel.sent) != 1 || channel.sent[0].GroupID != "123456" {
 		t.Fatalf("failure notices = %#v", channel.sent)
 	}
-	for _, want := range []string{"query-fail", "执行失败", "自动重试"} {
+	for _, want := range []string{"执行失败", "自动重试"} {
 		if !strings.Contains(channel.sent[0].Text, want) {
 			t.Fatalf("failure notice missing %q: %q", want, channel.sent[0].Text)
 		}
+	}
+	if strings.Contains(channel.sent[0].Text, "query-fail") {
+		t.Fatalf("failure notice leaked subscription id: %q", channel.sent[0].Text)
 	}
 }
 
@@ -91,6 +94,9 @@ func TestScheduledQuerySendFailurePersistsResultAndRetriesWithoutLLM(t *testing.
 	privateNotices := channel.attemptTexts("")
 	if len(privateNotices) != 1 || !strings.Contains(privateNotices[0], "结果发送失败") || !strings.Contains(privateNotices[0], "结果已保留") {
 		t.Fatalf("private failure notices = %#v", privateNotices)
+	}
+	if strings.Contains(privateNotices[0], "delivery-fail") {
+		t.Fatalf("delivery failure notice leaked subscription id: %q", privateNotices[0])
 	}
 
 	channel.mu.Lock()

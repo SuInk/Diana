@@ -229,10 +229,10 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 			wantOutcome: "replied_proactive",
 		},
 		{
-			name:        "missing information",
+			name:        "router mistakes tool-readable data for missing information",
 			routeReply:  `{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"reason":"缺少所指文件，无法可靠回答"}`,
-			wantHandled: false,
-			wantOutcome: "ignored",
+			wantHandled: true,
+			wantOutcome: "replied_proactive",
 		},
 	}
 	for _, tt := range tests {
@@ -285,6 +285,81 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 				t.Fatal("direct bot follow-up was incorrectly queued in the proactive batch")
 			}
 		})
+	}
+}
+
+func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"should_reply":false,"confidence":0.99,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"reason":"群成员实时人数属于不可访问的群内数据"}`}
+	runtime := NewRuntime(BotConfig{
+		AgentEnabled:            true,
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.9,
+	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{
+		Kind:       EventKindGroup,
+		GroupID:    "20001",
+		UserID:     "10001",
+		SelfID:     "42",
+		MessageID:  "group-count-followup",
+		RawMessage: "群里现在几个人",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "群里现在几个人"}}},
+		Quoted: &QuotedMessage{
+			MessageID: "bot-answer", UserID: "42",
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "我可以读取当前群信息。"}}},
+		},
+	}
+
+	routed, _, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+	if !allowed || !routed.proactiveReply || len(turn) != 1 {
+		t.Fatalf("route event=%#v turn=%#v allowed=%v", routed, turn, allowed)
+	}
+	if !strings.Contains(routed.routingReason, "交由正式回复与可用工具处理") {
+		t.Fatalf("routing reason = %q", routed.routingReason)
+	}
+	if len(provider.request.Messages) < 2 {
+		t.Fatalf("router request = %#v", provider.request.Messages)
+	}
+	prompt := provider.request.Messages[0].Content + "\n" + provider.request.Messages[1].Content
+	for _, want := range []string{"diana.qq_group", "成员总数", "available_reply_tools"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("router prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestRuntimeDoesNotPromoteDirectedAcknowledgement(t *testing.T) {
+	decision := proactiveReplyDecision{
+		Confidence: 0.99, DirectedAtBot: true, Reason: "信息不足，无法可靠回答",
+	}
+	event := MessageEvent{Kind: EventKindGroup, MessageID: "ack"}
+	if promoteDirectedFollowup(&decision, event, "谢谢", 0.9, chatInSettings{}) {
+		t.Fatalf("acknowledgement was promoted: %#v", decision)
+	}
+}
+
+func TestRuntimePromotesClearDirectedQuestionDespiteRouterAnswerabilityMistake(t *testing.T) {
+	decision := proactiveReplyDecision{
+		Confidence: 0.99, DirectedAtBot: true, Reason: "机器人无法直接判断",
+	}
+	event := MessageEvent{Kind: EventKindGroup, MessageID: "clear-question"}
+	if !promoteDirectedFollowup(&decision, event, "那为什么会这样？", 0.9, chatInSettings{}) {
+		t.Fatalf("clear directed question was not promoted: %#v", decision)
+	}
+	if !decision.ShouldReply || !decision.Answerable || decision.Category != "bot_related" {
+		t.Fatalf("promoted decision = %#v", decision)
+	}
+}
+
+func TestRuntimeDoesNotPromoteIntentionalSemanticSilence(t *testing.T) {
+	decision := proactiveReplyDecision{
+		Confidence: 0.99, DirectedAtBot: true, Reason: "只是待命式自动回应，没有需要可靠回答的问题",
+	}
+	event := MessageEvent{Kind: EventKindGroup, MessageID: "auto-reply"}
+	if promoteDirectedFollowup(&decision, event, "有需要随时告诉我", 0.9, chatInSettings{}) {
+		t.Fatalf("intentional silence was promoted: %#v", decision)
 	}
 }
 
