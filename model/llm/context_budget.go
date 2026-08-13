@@ -10,6 +10,10 @@ const (
 	messageTokenOverhead       int64 = 8
 	contextBudgetSafetyReserve int64 = 128
 	minimumRequiredMessageCost int64 = messageTokenOverhead + 8
+	maxMemoryRetentionTokens   int64 = 2048
+	maxHistoryRetentionTokens  int64 = 4096
+	minimumRetentionWindow     int64 = 8192
+	minimumRecentHistoryCount        = 4
 	truncationMarker                 = "\n...[上下文已按 token 预算裁剪]...\n"
 )
 
@@ -66,7 +70,31 @@ func fitMessagesToTokenBudget(messages []Message, budget int64) []Message {
 
 	selected := make(map[int]Message, len(messages))
 	remaining := budget
-	remaining = selectRequiredMessages(messages, candidates, selected, remaining)
+
+	// Current input and plugin evidence are authoritative. Reserve them before
+	// balancing the flexible prompt layers.
+	system := candidatesWithPriority(candidates, MessagePrioritySystem, MessagePrioritySystem)
+	systemReserve := minimumCandidateCost(system)
+	protected := candidatesWithPriority(candidates, MessagePriorityPlugin, MessagePriorityCurrent)
+	protectedBudget := remaining - systemReserve
+	if protectedBudget < 1 {
+		protectedBudget = remaining
+	}
+	protectedRemaining := selectRequiredMessages(messages, protected, selected, protectedBudget)
+	remaining -= protectedBudget - protectedRemaining
+
+	// A large Agent protocol or persona must not silently reduce conversational
+	// context to zero. At the default 16K window these pools retain up to 2K of
+	// structured memory and 4K of the most recent history. Smaller windows scale
+	// the pools down, while always leaving every system message a minimal slot.
+	availableForContext := remaining - systemReserve
+	if budget >= minimumRetentionWindow && availableForContext > 0 {
+		memoryTarget, historyTarget := contextRetentionTargets(messages, budget, availableForContext)
+		remaining -= selectMemoryRetention(messages, candidates, selected, memoryTarget)
+		remaining -= selectHistoryRetention(messages, candidates, selected, historyTarget)
+	}
+
+	remaining = selectRequiredMessages(messages, system, selected, remaining)
 	for _, item := range candidates {
 		if remaining <= 0 {
 			break
@@ -103,6 +131,131 @@ func fitMessagesToTokenBudget(messages []Message, budget int64) []Message {
 		}
 	}
 	return out
+}
+
+func minimumCandidateCost(candidates []tokenBudgetCandidate) int64 {
+	var total int64
+	for _, item := range candidates {
+		total += minimumMessageCost(item.priority)
+	}
+	return total
+}
+
+func minimumMessageCost(priority MessagePriority) int64 {
+	if priority == MessagePrioritySystem {
+		return messageTokenOverhead + 96
+	}
+	return minimumRequiredMessageCost
+}
+
+func candidatesWithPriority(candidates []tokenBudgetCandidate, minimum, maximum MessagePriority) []tokenBudgetCandidate {
+	out := make([]tokenBudgetCandidate, 0, len(candidates))
+	for _, item := range candidates {
+		if item.priority >= minimum && item.priority <= maximum {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func contextRetentionTargets(messages []Message, budget, available int64) (int64, int64) {
+	hasMemory := false
+	hasHistory := false
+	lastIndex := len(messages) - 1
+	for index, message := range messages {
+		switch effectiveMessagePriority(message, index == lastIndex) {
+		case MessagePriorityMemory:
+			hasMemory = true
+		case MessagePriorityHistory:
+			hasHistory = true
+		}
+	}
+	memoryTarget := int64(0)
+	historyTarget := int64(0)
+	if hasMemory {
+		memoryTarget = minInt64(maxMemoryRetentionTokens, budget/6)
+	}
+	if hasHistory {
+		historyTarget = minInt64(maxHistoryRetentionTokens, budget/3)
+	}
+	total := memoryTarget + historyTarget
+	if total <= available || total == 0 {
+		return memoryTarget, historyTarget
+	}
+	memoryTarget = available * memoryTarget / total
+	historyTarget = available - memoryTarget
+	return memoryTarget, historyTarget
+}
+
+func selectMemoryRetention(messages []Message, candidates []tokenBudgetCandidate, selected map[int]Message, budget int64) int64 {
+	if budget <= messageTokenOverhead {
+		return 0
+	}
+	remaining := budget
+	for _, item := range candidatesWithPriority(candidates, MessagePriorityMemory, MessagePriorityMemory) {
+		if _, ok := selected[item.index]; ok {
+			continue
+		}
+		message := messages[item.index]
+		if item.cost <= remaining {
+			selected[item.index] = message
+			remaining -= item.cost
+			continue
+		}
+		trimmed, ok := trimMessageToTokenBudget(message, remaining)
+		if ok {
+			selected[item.index] = trimmed
+			remaining -= estimateMessageTokens(trimmed)
+		}
+		break
+	}
+	return budget - remaining
+}
+
+func selectHistoryRetention(messages []Message, candidates []tokenBudgetCandidate, selected map[int]Message, budget int64) int64 {
+	if budget <= messageTokenOverhead {
+		return 0
+	}
+	history := candidatesWithPriority(candidates, MessagePriorityHistory, MessagePriorityHistory)
+	if len(history) == 0 {
+		return 0
+	}
+	remaining := budget
+	guaranteed := min(len(history), minimumRecentHistoryCount)
+	for index, item := range history {
+		if _, ok := selected[item.index]; ok {
+			continue
+		}
+		message := messages[item.index]
+		if index < guaranteed {
+			slots := int64(guaranteed - index)
+			allocation := remaining / slots
+			if item.cost <= allocation {
+				selected[item.index] = message
+				remaining -= item.cost
+				continue
+			}
+			trimmed, ok := trimMessageToTokenBudget(message, allocation)
+			if ok {
+				selected[item.index] = trimmed
+				remaining -= estimateMessageTokens(trimmed)
+			}
+			continue
+		}
+		if item.cost > remaining {
+			continue
+		}
+		selected[item.index] = message
+		remaining -= item.cost
+	}
+	return budget - remaining
+}
+
+func minInt64(left, right int64) int64 {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 // Current input and plugin evidence are required context. When their image
@@ -157,9 +310,6 @@ func selectRequiredMessages(messages []Message, candidates []tokenBudgetCandidat
 	}, 0, 2)
 	var totalCost int64
 	for _, item := range candidates {
-		if item.priority < MessagePrioritySystem {
-			continue
-		}
 		required = append(required, struct {
 			index    int
 			cost     int64
@@ -193,7 +343,7 @@ func selectRequiredMessages(messages []Message, candidates []tokenBudgetCandidat
 			flexibleCount++
 		}
 	}
-	minimumForFlexible := flexibleCount * minimumRequiredMessageCost
+	minimumForFlexible := flexibleCount * minimumMessageCost(MessagePrioritySystem)
 	if protectedCost+minimumForFlexible <= budget {
 		for _, item := range required {
 			if item.priority < MessagePriorityPlugin {
@@ -234,12 +384,12 @@ func selectRequiredMessagesProportionally(messages []Message, required []struct 
 		if remainingCost > 0 {
 			allocation = budget * item.cost / remainingCost
 		}
-		minimumForOthers := slotsAfter * minimumRequiredMessageCost
+		minimumForOthers := slotsAfter * minimumMessageCost(item.priority)
 		if maximum := budget - minimumForOthers; allocation > maximum {
 			allocation = maximum
 		}
-		if allocation < minimumRequiredMessageCost {
-			allocation = minimumRequiredMessageCost
+		if allocation < minimumMessageCost(item.priority) {
+			allocation = minimumMessageCost(item.priority)
 		}
 		if allocation > budget {
 			allocation = budget
@@ -405,7 +555,10 @@ func trimMessageToTokenBudget(message Message, budget int64) (Message, bool) {
 }
 
 func preserveMessagePrefix(message Message) bool {
-	return message.Priority == MessagePriorityMemory || message.Priority == MessagePrioritySummary
+	if message.Priority == MessagePriorityMemory || message.Priority == MessagePrioritySummary {
+		return true
+	}
+	return message.Role == RoleSystem && estimateTextTokens(message.Content) <= 256
 }
 
 func trimTextToTokenBudget(text string, budget int64, prefixOnly bool) string {
