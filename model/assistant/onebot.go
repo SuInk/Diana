@@ -665,7 +665,7 @@ func ImageURLs(segments []MessageSegment) []string {
 		if segment.Type != "image" {
 			continue
 		}
-		for _, key := range []string{"cached_file", "url", "image_url", "src", "file"} {
+		for _, key := range []string{"cached_file", "sourcePath", "source_path", "filePath", "file_path", "path", "url", "image_url", "src", "file"} {
 			imageURL := normalizedImageURL(segment.Data[key])
 			if imageURL == "" {
 				continue

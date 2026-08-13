@@ -56,6 +56,23 @@ func (s *SQLiteStore) EnqueueInboundEvent(ctx context.Context, session string, e
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if existingID, found, findErr := findDuplicateInboundHistory(ctx, tx, event); findErr != nil {
+		return "", false, findErr
+	} else if found {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE inbound_events
+SET priority = CASE WHEN priority < ? THEN ? ELSE priority END,
+    updated_at = ?
+WHERE id = ? AND status = ?
+		`, priority, priority, now.UnixNano(), existingID, inboundStatusPending); err != nil {
+			return "", false, fmt.Errorf("refresh duplicate inbound priority: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return "", false, fmt.Errorf("commit duplicate inbound event: %w", err)
+		}
+		return existingID, false, nil
+	}
+
 	createdAt := now.Format(time.RFC3339Nano)
 	historyResult, err := tx.ExecContext(ctx, `
 INSERT OR IGNORE INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
@@ -110,6 +127,55 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
 		return "", false, fmt.Errorf("commit inbound enqueue: %w", err)
 	}
 	return id, inserted > 0, nil
+}
+
+func findDuplicateInboundHistory(ctx context.Context, tx *sql.Tx, event assistant.MessageEvent) (string, bool, error) {
+	messageID := strings.TrimSpace(event.MessageID)
+	if messageID == "" {
+		return "", false, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, payload
+FROM message_events
+WHERE message_id = ?
+  AND kind = ?
+  AND COALESCE(group_id, '') = ?
+  AND COALESCE(user_id, '') = ?
+ORDER BY event_time DESC, created_at DESC, id DESC
+`, messageID, string(event.Kind), strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID))
+	if err != nil {
+		return "", false, fmt.Errorf("find duplicate inbound history: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			return "", false, fmt.Errorf("scan duplicate inbound history: %w", err)
+		}
+		var stored assistant.MessageEvent
+		if json.Unmarshal([]byte(payload), &stored) != nil || !sameInboundTransport(event, stored) {
+			continue
+		}
+		return id, true, nil
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, fmt.Errorf("iterate duplicate inbound history: %w", err)
+	}
+	return "", false, nil
+}
+
+func sameInboundTransport(current, stored assistant.MessageEvent) bool {
+	currentSelfID := strings.TrimSpace(current.SelfID)
+	storedSelfID := strings.TrimSpace(stored.SelfID)
+	if currentSelfID != "" && storedSelfID != "" && currentSelfID != storedSelfID {
+		return false
+	}
+	currentPlatform := strings.TrimSpace(current.Platform)
+	storedPlatform := strings.TrimSpace(stored.Platform)
+	if currentPlatform != "" && storedPlatform != "" && assistant.NormalizePlatformID(currentPlatform) != assistant.NormalizePlatformID(storedPlatform) {
+		return false
+	}
+	return true
 }
 
 // ClaimNextInboundEvent atomically leases the highest-priority available event,
@@ -237,7 +303,9 @@ func (s *SQLiteStore) RetryInboundEvent(ctx context.Context, id string, leaseOwn
 UPDATE inbound_events
 	SET status = ?, available_at = ?, last_error = ?, outcome = NULL,
 	    decision = NULL, decision_reason = NULL, reply_text = NULL,
-	    processing_error = NULL, duration_ms = NULL,
+	    processing_error = NULL, duration_ms = NULL, delivery_stage = NULL,
+	    outbound_message_id = NULL, reply_generated_at = NULL, send_attempted_at = NULL,
+	    send_acked_at = NULL, self_echo_at = NULL, delivery_error = NULL,
 	    lease_owner = NULL, lease_until = NULL, completed_at = NULL, updated_at = ?
 WHERE id = ? AND status = ? AND lease_owner = ?
 `, inboundStatusPending, availableAt.UTC().UnixNano(), strings.TrimSpace(lastError), now.UnixNano(), id, inboundStatusProcessing, leaseOwner)

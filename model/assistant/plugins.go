@@ -212,6 +212,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewSandboxedBrowserRenderPlugin(),
 		NewVoiceTTSPlugin(nil),
 		NewWebSearchPlugin(nil),
+		NewRepositoryWatchPlugin(nil),
 		capabilities,
 	)
 	capabilities.setPluginStateProvider(manager.List)
@@ -291,6 +292,27 @@ func (m *PluginManager) EnabledWithOverrides(id string, overrides map[string]boo
 
 func (m *PluginManager) Enabled(id string) bool {
 	return m.EnabledWithOverrides(id, nil)
+}
+
+// PluginWithSettings returns one installed plugin and an immutable snapshot of
+// its effective settings. Event-bound tools use this without exposing secrets
+// to the model or requiring the plugin tool interface to know the chat target.
+func (m *PluginManager) PluginWithSettings(id string, overrides map[string]bool) (Plugin, SettingValues, bool) {
+	if m == nil {
+		return nil, nil, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	plugin, ok := m.catalog[id]
+	state := m.states[id]
+	enabled := state.Enabled
+	if override, present := overrides[id]; present {
+		enabled = override
+	}
+	if !ok || !state.Installed || !enabled {
+		return nil, nil, false
+	}
+	return plugin, effectivePluginSettings(state.Manifest.Settings, state.Settings), true
 }
 
 // Snapshot 返回插件状态快照用于持久化。

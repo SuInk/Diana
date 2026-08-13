@@ -59,7 +59,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 		sourceMessageIDs := uniqueNonEmptyStrings(data["source_message_id"], event.MessageID)
 		var requests []oneBotFileResolveRequest
 		if segment.Type == "image" {
-			file := firstNonEmpty(data["file"], data["file_id"], data["id"])
+			file := imageFileToken(data)
 			if file != "" && resolvedImageSourceCount(data) == 0 {
 				requests = append(requests, oneBotFileResolveRequest{action: "get_image", params: map[string]any{"file": file}})
 			}
@@ -115,7 +115,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 					directImageToken = strings.TrimSpace(stringFromAny(request.params["file"]))
 				}
 				if request.action == "get_msg" {
-					token := firstNonEmpty(mediaFileTokenFromOneBotData(response, segment), data["file"], data["file_id"], data["id"])
+					token := firstNonEmpty(mediaFileTokenFromOneBotData(response, segment), imageFileToken(data))
 					if token != "" && (!resolvedImageSource || token != directImageToken) {
 						resolved, resolveErr := r.callOneBotAPIForEvent(callCtx, event, "get_image", map[string]any{"file": token})
 						if resolveErr != nil {
@@ -218,7 +218,10 @@ func uniqueNonEmptyStrings(values ...string) []string {
 }
 
 func mediaFileTokenFromOneBotData(data map[string]any, target MessageSegment) string {
-	for _, key := range []string{"data", "message", "messages", "segments"} {
+	if token := mediaFileTokenFromOneBotValue(data, target); token != "" {
+		return token
+	}
+	for _, key := range oneBotMediaContainerKeys() {
 		if token := mediaFileTokenFromOneBotValue(data[key], target); token != "" {
 			return token
 		}
@@ -243,14 +246,17 @@ func mediaFileTokenFromOneBotValue(value any, target MessageSegment) string {
 	case map[string]any:
 		segmentType := strings.ToLower(strings.TrimSpace(stringFromAny(item["type"])))
 		if segmentType == "image" || segmentType == "video" || segmentType == "file" {
-			if segmentData, ok := item["data"].(map[string]any); ok && mediaSegmentMatchesAny(target, segmentData) {
-				return firstNonEmpty(
-					stringFromAny(segmentData["file"]),
-					stringFromAny(segmentData["file_id"]),
-				)
+			if segmentData, ok := item["data"].(map[string]any); ok {
+				if mediaSegmentMatchesAny(target, segmentData) {
+					return imageFileTokenAny(segmentData)
+				}
+				return ""
 			}
 		}
-		for _, key := range []string{"data", "message", "messages", "segments"} {
+		if token := stableImageFileTokenAny(item); token != "" && mediaSegmentMatchesAny(target, item) {
+			return token
+		}
+		for _, key := range oneBotMediaContainerKeys() {
 			if token := mediaFileTokenFromOneBotValue(item[key], target); token != "" {
 				return token
 			}
@@ -260,9 +266,17 @@ func mediaFileTokenFromOneBotValue(value any, target MessageSegment) string {
 }
 
 func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (string, string) {
+	if segmentType := strings.ToLower(strings.TrimSpace(stringFromAny(data["type"]))); segmentType == "image" || segmentType == "video" || segmentType == "file" {
+		if segmentData, ok := data["data"].(map[string]any); ok {
+			if !mediaSegmentMatchesAny(target, segmentData) {
+				return "", ""
+			}
+			return mediaSourceFromOneBotData(segmentData, target)
+		}
+	}
 	keys := []string{"url", "download_url", "file_url", "video_url", "path", "file_path", "file"}
 	if target.Type == "image" {
-		keys = []string{"path", "file_path", "file", "url", "download_url", "file_url"}
+		keys = []string{"sourcePath", "source_path", "filePath", "file_path", "localPath", "local_path", "path", "file", "url", "download_url", "file_url"}
 	}
 	for _, key := range keys {
 		value := strings.TrimSpace(strings.TrimPrefix(stringFromAny(data[key]), "file://"))
@@ -273,7 +287,12 @@ func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (stri
 			return value, "path"
 		}
 	}
-	for _, key := range []string{"data", "message", "messages", "segments"} {
+	if target.Type == "image" {
+		if encoded := strings.TrimSpace(stringFromAny(data["base64"])); encoded != "" {
+			return "base64://" + encoded, ""
+		}
+	}
+	for _, key := range oneBotMediaContainerKeys() {
 		switch value := data[key].(type) {
 		case map[string]any:
 			if source, sourceKey := mediaSourceFromOneBotData(value, target); source != "" {
@@ -285,11 +304,6 @@ func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (stri
 				if !ok {
 					continue
 				}
-				if dataMap, ok := segmentMap["data"].(map[string]any); ok && mediaSegmentMatchesAny(target, dataMap) {
-					if source, sourceKey := mediaSourceFromOneBotData(dataMap, target); source != "" {
-						return source, sourceKey
-					}
-				}
 				if source, sourceKey := mediaSourceFromOneBotData(segmentMap, target); source != "" {
 					return source, sourceKey
 				}
@@ -300,18 +314,186 @@ func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (stri
 }
 
 func mediaSegmentMatchesAny(segment MessageSegment, data map[string]any) bool {
-	want := strings.TrimSpace(filepath.Base(mediaSegmentName(segment)))
-	if want == "" || want == "." {
+	wantStable := segmentStableMediaIdentifiers(segment)
+	gotStable := oneBotStableMediaIdentifiers(data)
+	if len(wantStable) > 0 && len(gotStable) > 0 {
+		return mediaIdentifiersIntersect(wantStable, gotStable)
+	}
+	want := segmentMediaIdentifiers(segment)
+	if len(want) == 0 {
 		return true
 	}
-	got := strings.TrimSpace(filepath.Base(firstNonEmpty(
-		stringFromAny(data["name"]), stringFromAny(data["filename"]), stringFromAny(data["file"]),
-	)))
-	return got == "" || strings.EqualFold(got, want)
+	got := oneBotMediaIdentifiers(data)
+	if len(got) == 0 {
+		return true
+	}
+	return mediaIdentifiersIntersect(want, got)
+}
+
+func mediaIdentifiersIntersect(want, got []string) bool {
+	for _, left := range want {
+		for _, right := range got {
+			if strings.EqualFold(left, right) || strings.EqualFold(filepath.Base(left), filepath.Base(right)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func segmentStableMediaIdentifiers(segment MessageSegment) []string {
+	values := make([]string, 0, 4)
+	for _, key := range []string{"file_id", "fileId", "file_uuid", "fileUuid"} {
+		values = append(values, segment.Data[key])
+	}
+	return uniqueNonEmptyStrings(values...)
+}
+
+func oneBotStableMediaIdentifiers(data map[string]any) []string {
+	values := make([]string, 0, 4)
+	for _, key := range []string{"file_id", "fileId", "file_uuid", "fileUuid"} {
+		values = append(values, stringFromAny(data[key]))
+	}
+	return uniqueNonEmptyStrings(values...)
+}
+
+func imageFileToken(data map[string]string) string {
+	for _, key := range []string{"file_id", "fileId", "file_uuid", "fileUuid", "id", "file"} {
+		if value := strings.TrimSpace(data[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func imageFileTokenAny(data map[string]any) string {
+	for _, key := range []string{"file_id", "fileId", "file_uuid", "fileUuid", "id", "file"} {
+		if value := strings.TrimSpace(stringFromAny(data[key])); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func stableImageFileTokenAny(data map[string]any) string {
+	for _, key := range []string{"file_id", "fileId", "file_uuid", "fileUuid"} {
+		if value := strings.TrimSpace(stringFromAny(data[key])); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func segmentMediaIdentifiers(segment MessageSegment) []string {
+	values := make([]string, 0, 10)
+	for _, key := range []string{"file_id", "fileId", "file_uuid", "fileUuid", "id", "file", "name", "filename", "fileName"} {
+		values = append(values, segment.Data[key])
+	}
+	return uniqueNonEmptyStrings(values...)
+}
+
+func oneBotMediaIdentifiers(data map[string]any) []string {
+	values := make([]string, 0, 10)
+	for _, key := range []string{"file_id", "fileId", "file_uuid", "fileUuid", "id", "file", "name", "filename", "fileName"} {
+		values = append(values, stringFromAny(data[key]))
+	}
+	return uniqueNonEmptyStrings(values...)
+}
+
+func oneBotMediaContainerKeys() []string {
+	return []string{"data", "message", "messages", "segments", "element", "elements", "image", "picElement"}
+}
+
+func (r *Runtime) recoverOutgoingImageSegments(ctx context.Context, event MessageEvent) (MessageEvent, []error) {
+	if r.channel == nil || strings.TrimSpace(event.MessageID) == "" {
+		return event, []error{fmt.Errorf("sent image recovery has no OneBot message")}
+	}
+	response, err := r.callOneBotAPIForEvent(ctx, event, "get_msg", map[string]any{
+		"message_id": oneBotMessageIDParam(event.MessageID),
+	})
+	if err != nil {
+		return event, []error{fmt.Errorf("get sent message: %w", err)}
+	}
+	oneBotImages := oneBotImageSegmentData(response)
+	if len(oneBotImages) == 0 {
+		return event, []error{fmt.Errorf("sent OneBot message contains no image segments")}
+	}
+
+	out := append([]MessageSegment(nil), event.Segments...)
+	var failures []error
+	imageOrdinal := 0
+	for index, segment := range out {
+		if segment.Type != "image" {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
+			imageOrdinal++
+			continue
+		}
+		if imageOrdinal >= len(oneBotImages) {
+			failures = append(failures, fmt.Errorf("sent image %d is missing from OneBot message", imageOrdinal+1))
+			imageOrdinal++
+			continue
+		}
+
+		oneBotImage := oneBotImages[imageOrdinal]
+		imageOrdinal++
+		data := cloneSegmentData(segment.Data)
+		token := imageFileTokenAny(oneBotImage)
+		if stableToken := stableImageFileTokenAny(oneBotImage); stableToken != "" {
+			data["file_id"] = stableToken
+		}
+		source, sourceKey := mediaSourceFromOneBotData(oneBotImage, MessageSegment{Type: "image"})
+		if token != "" {
+			resolved, resolveErr := r.callOneBotAPIForEvent(ctx, event, "get_image", map[string]any{"file": token})
+			if resolveErr == nil {
+				if resolvedSource, resolvedKey := mediaSourceFromOneBotData(resolved, MessageSegment{Type: "image"}); resolvedSource != "" {
+					source, sourceKey = resolvedSource, resolvedKey
+				}
+			}
+		}
+		if source == "" {
+			failures = append(failures, fmt.Errorf("sent image %d has no readable OneBot source", imageOrdinal))
+			continue
+		}
+		appendResolvedImageSource(data, source, sourceKey)
+		out[index].Data = data
+	}
+	event.Segments = out
+	return event, failures
+}
+
+func oneBotImageSegmentData(value any) []map[string]any {
+	var out []map[string]any
+	var visit func(any)
+	visit = func(value any) {
+		switch item := value.(type) {
+		case []any:
+			for _, entry := range item {
+				visit(entry)
+			}
+		case []map[string]any:
+			for _, entry := range item {
+				visit(entry)
+			}
+		case map[string]any:
+			if strings.EqualFold(strings.TrimSpace(stringFromAny(item["type"])), "image") {
+				if data, ok := item["data"].(map[string]any); ok {
+					out = append(out, data)
+				}
+				return
+			}
+			for _, key := range []string{"data", "message", "messages", "segments"} {
+				visit(item[key])
+			}
+		}
+	}
+	visit(value)
+	return out
 }
 
 func segmentHasMediaSource(segment MessageSegment) bool {
-	keys := []string{"cached_file", "url", "download_url", "file_url", "video_url", "src", "path", "file_path", "file"}
+	keys := []string{"cached_file", "url", "download_url", "file_url", "video_url", "src", "sourcePath", "source_path", "filePath", "file_path", "localPath", "local_path", "path", "file"}
 	if segment.Type == "image" {
 		for index := 1; index <= 8; index++ {
 			keys = append(keys, fmt.Sprintf("%s%d", imageResolvedSourceKey, index))
@@ -353,7 +535,7 @@ func videoFileSegment(segment MessageSegment) bool {
 }
 
 func mediaSegmentName(segment MessageSegment) string {
-	return firstNonEmpty(segment.Data["name"], segment.Data["filename"], segment.Data["file"])
+	return firstNonEmpty(segment.Data["name"], segment.Data["filename"], segment.Data["fileName"], segment.Data["file"])
 }
 
 func videoSourceCandidates(segments []MessageSegment) []string {

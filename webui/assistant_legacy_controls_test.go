@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -177,6 +178,75 @@ func TestRestoredOneTimeTaskReportsRetryingAndQuota(t *testing.T) {
 	}
 }
 
+func TestRepositoryWatchDoesNotConsumePersonalTaskQuota(t *testing.T) {
+	item := assistant.Reminder{Kind: assistant.ReminderKindRepositoryWatch, IntervalSeconds: 30}
+	if taskConsumesQuota(item) {
+		t.Fatal("WebUI repository watch should not consume personal task quota")
+	}
+}
+
+func TestRepositoryWatchCreateUsesSelectedProfileAndGroupTarget(t *testing.T) {
+	base := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := &capturingRepositoryWatchRuntime{Runtime: base}
+	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	profiles := NewMemoryQQBotProfileStore(assistant.BotConfig{
+		Name: "通知机器人", Platform: assistant.PlatformOneBotV11, Enabled: true,
+	})
+	handler.SetProfileStore(profiles)
+	profileID := profiles.Profiles().ActiveID
+	router := qqBotTestRouter(handler)
+	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
+		"repository":"acme/private","profile_id":%q,"destination":"group","group_id":"123456",
+		"watch_commits":true,"watch_releases":true
+	}`, profileID))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	input := runtime.createInput
+	if input.OwnerID != "webui:"+profileID || input.UserID != "" || input.GroupID != "123456" || input.ProfileID != profileID {
+		t.Fatalf("create input=%#v", input)
+	}
+	if input.Interval != 0 {
+		t.Fatalf("handler should leave omitted interval for runtime default, got %s", input.Interval)
+	}
+}
+
+func TestRepositoryWatchCreateUsesArbitraryPrivateTargetWithoutProfileOwner(t *testing.T) {
+	base := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := &capturingRepositoryWatchRuntime{Runtime: base}
+	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	profiles := NewMemoryQQBotProfileStore(assistant.BotConfig{Platform: assistant.PlatformOneBotV11, Enabled: true})
+	handler.SetProfileStore(profiles)
+	router := qqBotTestRouter(handler)
+	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
+		"repository":"acme/private","profile_id":%q,"destination":"private","user_id":"998877","watch_commits":true
+	}`, profiles.Profiles().ActiveID))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if runtime.createCalls != 1 || runtime.createInput.UserID != "998877" || runtime.createInput.GroupID != "" {
+		t.Fatalf("runtime create calls=%d", runtime.createCalls)
+	}
+}
+
+func TestRepositoryWatchCreateRequiresPrivateTarget(t *testing.T) {
+	base := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := &capturingRepositoryWatchRuntime{Runtime: base}
+	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	profiles := NewMemoryQQBotProfileStore(assistant.BotConfig{Platform: assistant.PlatformOneBotV11, Enabled: true})
+	handler.SetProfileStore(profiles)
+	router := qqBotTestRouter(handler)
+	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
+		"repository":"acme/private","profile_id":%q,"destination":"private","watch_commits":true
+	}`, profiles.Profiles().ActiveID))
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "发送对象") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if runtime.createCalls != 0 {
+		t.Fatalf("runtime create calls=%d", runtime.createCalls)
+	}
+}
+
 func TestRestoredDashboardStatsAvailableWithoutStore(t *testing.T) {
 	router := qqBotTestRouter(restoredControlHandler(&restoredControlChannel{}))
 	recorder := httptest.NewRecorder()
@@ -213,6 +283,36 @@ type restoredControlChannel struct {
 	status    assistant.ChannelStatus
 	responses map[string]map[string]any
 	calls     []apiCall
+}
+
+type capturingRepositoryWatchRuntime struct {
+	*assistant.Runtime
+	createInput assistant.RepositoryWatchCreateInput
+	createCalls int
+}
+
+func (r *capturingRepositoryWatchRuntime) CreateRepositoryWatch(_ context.Context, input assistant.RepositoryWatchCreateInput) (assistant.Reminder, error) {
+	r.createCalls++
+	r.createInput = input
+	now := time.Now()
+	return assistant.Reminder{
+		ID: "watch-web", Kind: assistant.ReminderKindRepositoryWatch, Platform: input.Platform,
+		ProfileID: input.ProfileID, OwnerID: input.OwnerID, UserID: input.UserID, GroupID: input.GroupID,
+		Repository: input.Repository, WatchCommits: input.WatchCommits, WatchReleases: input.WatchReleases,
+		IntervalSeconds: 30, TriggerAt: now.Add(30 * time.Second), CreatedAt: now,
+	}, nil
+}
+
+func (r *capturingRepositoryWatchRuntime) UpdateRepositoryWatch(context.Context, string, string, assistant.RepositoryWatchUpdateInput) (assistant.Reminder, error) {
+	return assistant.Reminder{}, nil
+}
+
+func (r *capturingRepositoryWatchRuntime) CancelRepositoryWatch(string, string) (assistant.Reminder, error) {
+	return assistant.Reminder{}, nil
+}
+
+func (r *capturingRepositoryWatchRuntime) DeleteRepositoryWatch(string, string) (bool, error) {
+	return true, nil
 }
 
 func (c *restoredControlChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {

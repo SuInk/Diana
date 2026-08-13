@@ -433,6 +433,13 @@ func (c *failNthSendChannel) Send(ctx context.Context, msg OutgoingMessage) erro
 	return c.recordingChannel.Send(ctx, msg)
 }
 
+func (c *failNthSendChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
+	if err := c.Send(ctx, msg); err != nil {
+		return nil, err
+	}
+	return map[string]any{"message_id": int64(42)}, nil
+}
+
 func TestReplySuppressionBlocksFollowingMentionAndQuote(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{

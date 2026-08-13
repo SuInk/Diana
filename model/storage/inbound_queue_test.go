@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,102 @@ func TestInboundQueuePersistsAndDeduplicates(t *testing.T) {
 	}
 	if status != inboundStatusDone || outcome != "handled" {
 		t.Fatalf("terminal state status=%q outcome=%q", status, outcome)
+	}
+}
+
+func TestInboundQueueDeduplicatesAcrossContextNamespaces(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "namespace-dedupe.db"))
+	defer func() { _ = store.Close() }()
+	event := inboundTestEvent("same-onebot-message", "only once", time.Now().Unix())
+	event.Platform = assistant.PlatformOneBotV11
+	event.SelfID = "bot-1"
+	event.GroupID = "group-1"
+	event.UserID = "user-1"
+	event.ContextNamespace = "old-profile"
+	firstID, inserted, err := store.EnqueueInboundEvent(ctx, "old-profile:group:group-1", event)
+	if err != nil || !inserted {
+		t.Fatalf("first enqueue id=%q inserted=%v err=%v", firstID, inserted, err)
+	}
+	event.ContextNamespace = "new-profile"
+	secondID, inserted, err := store.EnqueueInboundEvent(ctx, "new-profile:group:group-1", event)
+	if err != nil || inserted || secondID != firstID {
+		t.Fatalf("namespace duplicate id=%q inserted=%v err=%v, first=%q", secondID, inserted, err, firstID)
+	}
+	var inboundRows, historyRows int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM inbound_events WHERE message_id = ?`, event.MessageID).Scan(&inboundRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM message_events WHERE message_id = ?`, event.MessageID).Scan(&historyRows); err != nil {
+		t.Fatal(err)
+	}
+	if inboundRows != 1 || historyRows != 1 {
+		t.Fatalf("deduplicated rows inbound=%d history=%d", inboundRows, historyRows)
+	}
+}
+
+func TestInboundQueueNamespaceDedupeFindsLegacySessionScopedHistory(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "legacy-namespace-dedupe.db"))
+	defer func() { _ = store.Close() }()
+	event := inboundTestEvent("legacy-scoped-message", "already seen", time.Now().Unix())
+	event.Platform = assistant.PlatformNapCat
+	event.SelfID = "bot-1"
+	event.GroupID = "group-1"
+	event.UserID = "user-1"
+	event.ContextNamespace = "old-profile"
+	if err := store.AppendMessageEvent(ctx, "old-profile:group:group-1", event); err != nil {
+		t.Fatal(err)
+	}
+	event.Platform = assistant.PlatformOneBotV11
+	event.ContextNamespace = "new-profile"
+	id, inserted, err := store.EnqueueInboundEvent(ctx, "new-profile:group:group-1", event)
+	if err != nil || inserted {
+		t.Fatalf("legacy namespace duplicate id=%q inserted=%v err=%v", id, inserted, err)
+	}
+	if count := pendingInboundCount(t, store); count != 0 {
+		t.Fatalf("legacy history was replayed into queue: %d", count)
+	}
+}
+
+func TestInboundQueueMarksLegacyNamespaceDuplicatesTerminal(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "legacy-queue-duplicates.db"))
+	defer func() { _ = store.Close() }()
+	event := inboundTestEvent("duplicated-backfill", "process once", time.Now().Unix())
+	event.Platform = assistant.PlatformOneBotV11
+	event.SelfID = "bot-1"
+	event.GroupID = "group-1"
+	event.UserID = "user-1"
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixNano()
+	for index, session := range []string{"old-profile:group:group-1", "new-profile:group:group-1"} {
+		id := fmt.Sprintf("legacy-duplicate-%d", index)
+		if _, err := store.db.Exec(`
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, created_at, updated_at
+) VALUES (?, ?, 'group', 'group-1', 'user-1', ?, ?, ?, 0, 'pending', 0, ?, ?, ?)
+`, id, session, event.MessageID, event.Time, string(payload), now, now+int64(index), now+int64(index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updated, err := store.MarkLegacyInboundNamespaceDuplicates(ctx)
+	if err != nil || updated != 1 {
+		t.Fatalf("cleanup updated=%d err=%v", updated, err)
+	}
+	var pending, ignored int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM inbound_events WHERE status = 'pending'`).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM inbound_events WHERE outcome = 'ignored_duplicate'`).Scan(&ignored); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 1 || ignored != 1 {
+		t.Fatalf("cleanup rows pending=%d ignored=%d", pending, ignored)
 	}
 }
 

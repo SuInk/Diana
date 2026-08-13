@@ -171,6 +171,18 @@ func TestRememberReplyEntersAssistantContext(t *testing.T) {
 	}
 }
 
+func TestErrorWrapperDoesNotEnterModelHistory(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "source"}
+	runtime.rememberReply(event, "出错了：图片读取失败，请重新发送图片后再试。")
+	if got := historyPromptText(runtime.contextHistory(event)[0]); got != "" {
+		t.Fatalf("error wrapper leaked into history prompt: %q", got)
+	}
+	if got := compactContextEvent(runtime.contextHistory(event)[0]); got != "" {
+		t.Fatalf("error wrapper leaked into context summary: %q", got)
+	}
+}
+
 // TestSystemPromptTogglesDisableInjections 验证对应功能场景。
 func TestSystemPromptTogglesDisableInjections(t *testing.T) {
 	off := false

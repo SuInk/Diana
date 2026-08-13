@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,6 +41,26 @@ func TestLocalMediaStoreServesSharedFile(t *testing.T) {
 	}
 	if string(body) != "fake video" {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestLocalMediaStoreResolvesSharedPath(t *testing.T) {
+	tempDir := t.TempDir()
+	imagePath := filepath.Join(tempDir, "generated.jpg")
+	if err := os.WriteFile(imagePath, []byte("image bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewLocalMediaStore("http://127.0.0.1:18080/api/qqbot/media")
+	sharedURL, ok := store.Share(imagePath, time.Minute)
+	if !ok {
+		t.Fatal("Share() returned false")
+	}
+	resolved, ok := store.ResolveSharedPath(sharedURL)
+	if !ok || resolved != imagePath {
+		t.Fatalf("ResolveSharedPath() = %q, %v, want %q, true", resolved, ok, imagePath)
+	}
+	if resolved, ok := store.ResolveSharedPath(strings.Replace(sharedURL, "/media/", "/media-other/", 1)); ok || resolved != "" {
+		t.Fatalf("ResolveSharedPath() accepted unrelated URL: %q, %v", resolved, ok)
 	}
 }
 

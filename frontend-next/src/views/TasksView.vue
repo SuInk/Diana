@@ -3,7 +3,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>提醒与订阅</h1>
-        <p>查看所有一次性提醒和周期订阅的执行状态</p>
+        <p>查看一次性提醒、周期查询和仓库更新订阅的执行状态</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="loading" @click="load">
@@ -15,7 +15,7 @@
 
     <div class="stack">
       <div class="stat-grid task-stats">
-        <StatCard label="全部任务" :value="formatNumber(tasks.length)" :foot="`${reminderCount} 个提醒 / ${scheduleCount} 个订阅`">
+        <StatCard label="全部任务" :value="formatNumber(tasks.length)" :foot="`${reminderCount} 个提醒 / ${scheduleCount} 个周期查询 / ${repositoryWatchCount} 个仓库订阅`">
           <template #icon><ListTodo :size="14" aria-hidden="true" /></template>
         </StatCard>
         <StatCard label="运行中" :value="formatNumber(activeCount)" :foot="`${retryingCount} 个正在重试`">
@@ -64,13 +64,14 @@
         <div v-if="filteredTasks.length > 0" class="task-list">
           <article v-for="task in filteredTasks" :key="task.id" class="task-row">
             <span class="task-kind-icon" :class="task.kind">
+              <GitBranch v-if="task.kind === 'repository_watch'" :size="17" aria-hidden="true" />
               <Repeat2 v-if="task.kind === 'schedule'" :size="17" aria-hidden="true" />
-              <Bell v-else :size="17" aria-hidden="true" />
+              <Bell v-if="task.kind === 'reminder'" :size="17" aria-hidden="true" />
             </span>
 
             <div class="task-main">
               <div class="task-meta">
-                <span class="badge">{{ task.kind === "schedule" ? "周期订阅" : "一次性提醒" }}</span>
+                <span class="badge">{{ taskKindLabel(task.kind) }}</span>
                 <span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span>
                 <span v-if="task.platform" class="badge">{{ platformLabel(task.platform) }}</span>
                 <span v-if="task.consumes_quota" class="badge warn">占用额度</span>
@@ -79,16 +80,39 @@
 
               <p class="task-message">{{ task.message || "[无任务内容]" }}</p>
 
-              <div class="task-facts">
+              <div v-if="task.kind === 'repository_watch' && task.repository" class="task-facts">
                 <span>
+                  <GitBranch :size="13" aria-hidden="true" />
+                  仓库 <strong class="mono">{{ task.repository }}</strong>
+                </span>
+                <span v-if="task.repository_branch">
+                  分支 <strong class="mono">{{ task.repository_branch }}</strong>
+                </span>
+                <span>
+                  监控 {{ [task.watch_commits ? "Commit" : "", task.watch_releases ? "Release" : ""].filter(Boolean).join(" + ") }}
+                </span>
+                <span v-if="task.last_commit_sha">
+                  Commit <strong class="mono">{{ task.last_commit_sha.slice(0, 8) }}</strong>
+                </span>
+                <span v-if="task.last_release_tag && task.last_release_tag !== '__none__'">
+                  Release <strong class="mono">{{ task.last_release_tag }}</strong>
+                </span>
+              </div>
+
+              <div class="task-facts">
+                <span v-if="task.kind !== 'repository_watch'">
                   <UserRound :size="13" aria-hidden="true" />
                   用户 <strong class="mono">{{ task.owner_id || task.user_id || "—" }}</strong>
+                </span>
+                <span v-else-if="task.user_id && !task.group_id">
+                  <UserRound :size="13" aria-hidden="true" />
+                  私聊对象 <strong class="mono">{{ task.user_id }}</strong>
                 </span>
                 <span v-if="task.group_id">
                   <UsersRound :size="13" aria-hidden="true" />
                   群 <strong class="mono">{{ task.group_id }}</strong>
                 </span>
-                <span v-if="task.kind === 'schedule' && task.interval_seconds">
+                <span v-if="task.kind !== 'reminder' && task.interval_seconds">
                   <Repeat2 :size="13" aria-hidden="true" />
                   每 {{ formatInterval(task.interval_seconds) }}
                 </span>
@@ -127,7 +151,7 @@
           <LoaderCircle :size="20" class="spin" aria-hidden="true" />
           正在加载任务
         </div>
-        <EmptyState v-else :title="tasks.length === 0 ? '还没有提醒或订阅' : '没有匹配的任务'" :hint="tasks.length === 0 ? '机器人创建提醒或周期订阅后会显示在这里' : '调整类型、状态或搜索条件'">
+        <EmptyState v-else :title="tasks.length === 0 ? '还没有提醒或订阅' : '没有匹配的任务'" :hint="tasks.length === 0 ? '仓库订阅可在插件设置中创建，聊天中的提醒和周期查询也会显示在这里' : '调整类型、状态或搜索条件'">
           <template #icon><CalendarClock :size="20" aria-hidden="true" /></template>
         </EmptyState>
       </section>
@@ -144,6 +168,7 @@ import {
   CircleX,
   Clock3,
   Gauge,
+  GitBranch,
   History,
   ListTodo,
   LoaderCircle,
@@ -167,7 +192,8 @@ type StatusFilter = "all" | AssistantTaskStatus;
 const kindOptions: Array<{ value: KindFilter; label: string }> = [
   { value: "all", label: "全部" },
   { value: "reminder", label: "一次性提醒" },
-  { value: "schedule", label: "周期订阅" }
+  { value: "schedule", label: "周期查询" },
+  { value: "repository_watch", label: "仓库订阅" }
 ];
 const statusOptions: Array<{ value: StatusFilter; label: string }> = [
   { value: "all", label: "全部" },
@@ -187,6 +213,7 @@ let refreshTimer: number | undefined;
 
 const reminderCount = computed(() => tasks.value.filter((task) => task.kind === "reminder").length);
 const scheduleCount = computed(() => tasks.value.filter((task) => task.kind === "schedule").length);
+const repositoryWatchCount = computed(() => tasks.value.filter((task) => task.kind === "repository_watch").length);
 const activeCount = computed(() => tasks.value.filter((task) => task.status === "active" || task.status === "retrying").length);
 const retryingCount = computed(() => tasks.value.filter((task) => task.status === "retrying").length);
 const quotaCount = computed(() => tasks.value.filter((task) => task.consumes_quota).length);
@@ -200,7 +227,7 @@ const filteredTasks = computed(() => {
     if (kind.value !== "all" && task.kind !== kind.value) return false;
     if (status.value !== "all" && task.status !== status.value) return false;
     if (!keyword) return true;
-    return [task.id, task.message, task.owner_id, task.user_id, task.group_id, task.platform, task.profile_id]
+    return [task.id, task.message, task.repository, task.repository_branch, task.owner_id, task.user_id, task.group_id, task.platform, task.profile_id]
       .filter((value): value is string => Boolean(value))
       .some((value) => value.toLowerCase().includes(keyword));
   });
@@ -222,6 +249,12 @@ async function load(): Promise<void> {
 
 function statusLabel(value: AssistantTaskStatus): string {
   return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消" }[value] ?? value;
+}
+
+function taskKindLabel(value: AssistantTaskKind): string {
+  if (value === "repository_watch") return "仓库更新订阅";
+  if (value === "schedule") return "周期查询";
+  return "一次性提醒";
 }
 
 function statusTone(value: AssistantTaskStatus): string {

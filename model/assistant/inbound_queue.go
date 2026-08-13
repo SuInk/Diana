@@ -69,6 +69,27 @@ type InboundEventAuditStore interface {
 	RecordInboundEventAudit(ctx context.Context, event EventRecord) error
 }
 
+type OutboundDeliveryStage string
+
+const (
+	OutboundDeliveryGenerated     OutboundDeliveryStage = "generated"
+	OutboundDeliverySendAttempted OutboundDeliveryStage = "send_attempted"
+	OutboundDeliveryAcknowledged  OutboundDeliveryStage = "acknowledged"
+	OutboundDeliveryEchoPersisted OutboundDeliveryStage = "echo_persisted"
+	OutboundDeliveryFailed        OutboundDeliveryStage = "failed"
+)
+
+// InboundEventDeliveryAuditStore records transport evidence independently of
+// the model outcome so a generated reply is never confused with a delivered one.
+type InboundEventDeliveryAuditStore interface {
+	RecordInboundEventDelivery(ctx context.Context, event MessageEvent, stage OutboundDeliveryStage, outboundMessageID, detail string) error
+	RecordInboundEventSelfEcho(ctx context.Context, outboundMessageID string, observedAt time.Time) error
+}
+
+type InboundEventDuplicateCleanupStore interface {
+	MarkLegacyInboundNamespaceDuplicates(ctx context.Context) (int64, error)
+}
+
 func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, workers int, releaseStaleLeases bool, done chan struct{}) {
 	defer close(done)
 	r.mu.RLock()
@@ -76,6 +97,16 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	r.mu.RUnlock()
 	if store == nil {
 		return
+	}
+	if cleanupStore, ok := store.(InboundEventDuplicateCleanupStore); ok {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		duplicates, err := cleanupStore.MarkLegacyInboundNamespaceDuplicates(cleanupCtx)
+		cancel()
+		if err != nil {
+			log.Printf("qqbot inbound duplicate cleanup failed: %v", err)
+		} else if duplicates > 0 {
+			log.Printf("qqbot inbound duplicate cleanup ignored %d namespace duplicates", duplicates)
+		}
 	}
 	if releaseStaleLeases {
 		callCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

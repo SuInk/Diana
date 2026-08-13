@@ -48,17 +48,18 @@ func setQuotedSemanticSourceMessageIDs(quoted *QuotedMessage, messageIDs []strin
 }
 
 func (r *Runtime) semanticReferenceImageURLs(ctx context.Context, event MessageEvent) []string {
-	images, _ := r.semanticReferenceImageURLsDetailed(ctx, event)
+	images, _, _ := r.semanticReferenceImageURLsDetailed(ctx, event)
 	return images
 }
 
-func (r *Runtime) semanticReferenceImageURLsDetailed(ctx context.Context, event MessageEvent) ([]string, error) {
+func (r *Runtime) semanticReferenceImageURLsDetailed(ctx context.Context, event MessageEvent) ([]string, int, error) {
 	messageIDs := eventSemanticSourceMessageIDs(event)
 	if len(messageIDs) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	images := make([]string, 0, len(messageIDs))
+	skippedImages := 0
 	for _, messageID := range messageIDs {
 		if event.Quoted != nil && strings.TrimSpace(event.Quoted.MessageID) == messageID {
 			quotedEvent := MessageEvent{
@@ -68,25 +69,37 @@ func (r *Runtime) semanticReferenceImageURLsDetailed(ctx context.Context, event 
 				MessageID: event.Quoted.MessageID,
 				Segments:  event.Quoted.Segments,
 			}
-			quotedEvent = r.prepareEventImages(ctx, quotedEvent)
-			if quotedEvent.imageLoadErr != nil {
-				return nil, quotedEvent.imageLoadErr
+			originalQuotedEvent := quotedEvent
+			quotedEvent = r.prepareHistoricalEventImages(ctx, quotedEvent)
+			if historicalImageStateChanged(originalQuotedEvent, quotedEvent) {
+				if source, ok := r.findSemanticReferenceEvent(ctx, event, messageID); ok {
+					source.Segments = quotedEvent.Segments
+					r.updateHistoricalImageState(source)
+				}
 			}
-			images = appendUniqueStrings(images, ImageURLs(quotedEvent.Segments)...)
+			skippedImages += unavailableImageSegmentCount(quotedEvent.Segments)
+			images = appendUniqueStrings(images, availableImageURLs(quotedEvent.Segments)...)
 			continue
 		}
 		source, ok := r.findSemanticReferenceEvent(ctx, event, messageID)
 		if !ok {
 			continue
 		}
-		source = r.prepareEventImages(ctx, source)
-		if source.imageLoadErr != nil {
-			return nil, source.imageLoadErr
+		prepared := r.prepareHistoricalEventImages(ctx, source)
+		if historicalImageStateChanged(source, prepared) {
+			r.updateHistoricalImageState(prepared)
 		}
-		images = appendUniqueStrings(images, ImageURLs(source.Segments)...)
+		source = prepared
+		skippedImages += unavailableImageSegmentCount(source.Segments)
+		images = appendUniqueStrings(images, availableImageURLs(source.Segments)...)
 		if source.Quoted != nil {
-			images = appendUniqueStrings(images, ImageURLs(source.Quoted.Segments)...)
+			skippedImages += unavailableImageSegmentCount(source.Quoted.Segments)
+			images = appendUniqueStrings(images, availableImageURLs(source.Quoted.Segments)...)
 		}
 	}
-	return images, nil
+	readyImages, complete := loadLLMImageURLs(ctx, images)
+	if !complete {
+		skippedImages += len(images) - len(readyImages)
+	}
+	return readyImages, skippedImages, nil
 }

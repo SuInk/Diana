@@ -88,6 +88,41 @@ func TestProactiveReplyBatchUsesConfiguredRouterPrompt(t *testing.T) {
 	}
 }
 
+func TestProactiveReplyRouterTimeoutFallsBackForExplicitQuestion(t *testing.T) {
+	runtime := NewRuntime(BotConfig{
+		BotQQ:                   "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
+	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return failingLLMProvider{err: context.DeadlineExceeded}, nil
+	})
+	candidate := proactiveReplyCandidate{
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "question-1"},
+		Text:  "这个报错应该怎么处理？",
+	}
+	event, text, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{candidate})
+	if !allowed || !event.proactiveReply || event.MessageID != "question-1" || text != candidate.Text || len(turn) != 1 {
+		t.Fatalf("timeout fallback event=%#v text=%q turn=%#v allowed=%v", event, text, turn, allowed)
+	}
+	if !strings.Contains(event.routingReason, "路由超时") || !strings.Contains(event.routingReason, "明确的公开问题") {
+		t.Fatalf("fallback reason = %q", event.routingReason)
+	}
+}
+
+func TestProactiveReplyRouterTimeoutKeepsStatementSilent(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return failingLLMProvider{err: context.DeadlineExceeded}, nil
+	})
+	candidate := proactiveReplyCandidate{
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "statement-1"},
+		Text:  "我先去吃饭了",
+	}
+	_, _, _, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{candidate})
+	if allowed {
+		t.Fatal("plain statement should not bypass timed-out semantic routing")
+	}
+}
+
 func TestProactiveReplyBatchSelectsCompleteSemanticTurn(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":true,"confidence":0.99,"category":"bot_related","target_message_id":"message-3","turn_message_ids":["message-1","message-2","message-3"],"directed_at_bot":true,"answerable":true}`,
@@ -236,7 +271,7 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	runtime.runCtx = context.Background()
 	runtime.mu.Unlock()
 	runtime.remember(first)
-	key := sessionKey(first)
+	key := proactiveReplyBatchKey(first)
 	runtime.proactiveBatches[key] = &proactiveReplyBatch{
 		items: []proactiveReplyCandidate{{
 			Event:      first,
@@ -282,7 +317,7 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	}
 }
 
-func TestProactiveReplyBatchCollectsPerGroupAndCanBeCancelled(t *testing.T) {
+func TestProactiveReplyBatchCollectsPerSenderAndCanBeCancelled(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &capturingLLMProvider{}, nil
 	})
@@ -293,13 +328,13 @@ func TestProactiveReplyBatchCollectsPerGroupAndCanBeCancelled(t *testing.T) {
 	runtime.runCtx = ctx
 	runtime.mu.Unlock()
 
-	first := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", MessageID: "message-1"}
-	second := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", MessageID: "message-2"}
+	first := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1"}
+	second := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-2"}
 	if !runtime.enqueueProactiveReply(first, "第一条") || !runtime.enqueueProactiveReply(second, "第二条") {
 		t.Fatal("running runtime should enqueue proactive candidates")
 	}
 	runtime.proactiveBatchMu.Lock()
-	batch := runtime.proactiveBatches[sessionKey(first)]
+	batch := runtime.proactiveBatches[proactiveReplyBatchKey(first)]
 	itemCount := 0
 	if batch != nil {
 		itemCount = len(batch.items)
@@ -311,10 +346,47 @@ func TestProactiveReplyBatchCollectsPerGroupAndCanBeCancelled(t *testing.T) {
 
 	runtime.cancelProactiveReplyBatch(first)
 	runtime.proactiveBatchMu.Lock()
-	_, exists := runtime.proactiveBatches[sessionKey(first)]
+	_, exists := runtime.proactiveBatches[proactiveReplyBatchKey(first)]
 	runtime.proactiveBatchMu.Unlock()
 	if exists {
 		t.Fatal("explicit group trigger should cancel its pending proactive batch")
+	}
+}
+
+func TestProactiveReplyBatchDoesNotMixSendersInSameGroup(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return &capturingLLMProvider{}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.mu.Lock()
+	runtime.running = true
+	runtime.runCtx = ctx
+	runtime.mu.Unlock()
+
+	first := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-a", MessageID: "message-a"}
+	second := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-b", MessageID: "message-b"}
+	if !runtime.enqueueProactiveReply(first, "A 的问题") || !runtime.enqueueProactiveReply(second, "B 的消息") {
+		t.Fatal("running runtime should enqueue proactive candidates")
+	}
+	firstKey, secondKey := proactiveReplyBatchKey(first), proactiveReplyBatchKey(second)
+	if firstKey == secondKey {
+		t.Fatalf("different senders shared proactive key %q", firstKey)
+	}
+	runtime.proactiveBatchMu.Lock()
+	firstBatch, secondBatch := runtime.proactiveBatches[firstKey], runtime.proactiveBatches[secondKey]
+	runtime.proactiveBatchMu.Unlock()
+	if firstBatch == nil || len(firstBatch.items) != 1 || secondBatch == nil || len(secondBatch.items) != 1 {
+		t.Fatalf("sender batches first=%#v second=%#v", firstBatch, secondBatch)
+	}
+
+	runtime.cancelProactiveReplyBatch(second)
+	runtime.proactiveBatchMu.Lock()
+	_, firstExists := runtime.proactiveBatches[firstKey]
+	_, secondExists := runtime.proactiveBatches[secondKey]
+	runtime.proactiveBatchMu.Unlock()
+	if !firstExists || secondExists {
+		t.Fatalf("sender cancellation crossed batch boundary: first=%v second=%v", firstExists, secondExists)
 	}
 }
 
@@ -349,7 +421,7 @@ func TestProactiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *tes
 		RawMessage: "这个报错应该怎么处理？",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错应该怎么处理？"}}},
 	}
-	key := sessionKey(event)
+	key := proactiveReplyBatchKey(event)
 	runtime.proactiveBatches[key] = &proactiveReplyBatch{
 		items:      []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}},
 		generation: 1,
@@ -400,7 +472,7 @@ func TestProactiveReplyBatchDoesNotEvaluateUnselectedMessages(t *testing.T) {
 	memory.profiles["user-1"] = UserMemoryProfile{UserID: "user-1", MessageCount: 1}
 	runtime.SetUserMemoryStore(memory)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1"}
-	key := sessionKey(event)
+	key := proactiveReplyBatchKey(event)
 	runtime.proactiveBatches[key] = &proactiveReplyBatch{
 		items:      []proactiveReplyCandidate{{Event: event, Text: "我先去吃饭了"}},
 		generation: 1,
@@ -438,7 +510,7 @@ func TestProactiveReplyBatchDoesNotAwardFavorabilityWhenReplyFails(t *testing.T)
 		RawMessage: "这个报错应该怎么处理？",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错应该怎么处理？"}}},
 	}
-	key := sessionKey(event)
+	key := proactiveReplyBatchKey(event)
 	runtime.proactiveBatches[key] = &proactiveReplyBatch{
 		items:      []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}},
 		generation: 1,
@@ -480,7 +552,7 @@ func TestProactiveReplyBatchRechecksSuppressionAfterRouting(t *testing.T) {
 	}
 	provider.runtime = runtime
 	provider.event = event
-	key := sessionKey(event)
+	key := proactiveReplyBatchKey(event)
 	runtime.proactiveBatches[key] = &proactiveReplyBatch{
 		items:      []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}},
 		generation: 1,

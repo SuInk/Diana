@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"mime"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -291,7 +293,7 @@ func (r *Runtime) shareAgentImages(images []string) ([]string, []string, error) 
 		shared, localPath, err := r.shareAgentImage(image)
 		if err != nil {
 			for _, path := range localPaths {
-				_ = os.Remove(path)
+				cleanupLocalMediaFile(path)
 			}
 			return nil, nil, err
 		}
@@ -325,31 +327,59 @@ func (r *Runtime) shareAgentImage(image string) (string, string, error) {
 	if extensions, err := mime.ExtensionsByType(mediaType); err == nil && len(extensions) > 0 {
 		extension = extensions[0]
 	}
-	file, err := os.CreateTemp("", "diana-agent-image-*"+extension)
+	path, cleanupPath, err := r.cacheAgentImage(data, mediaType, extension)
 	if err != nil {
-		return "", "", err
-	}
-	path := file.Name()
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return "", "", err
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
 		return "", "", err
 	}
 	r.mu.RLock()
 	sharer := r.localMedia
 	r.mu.RUnlock()
 	if sharer == nil {
-		_ = os.Remove(path)
+		if cleanupPath != "" {
+			cleanupLocalMediaFile(cleanupPath)
+		}
 		return "", "", fmt.Errorf("本地媒体共享未配置，无法把生成图片交给 OneBot v11 客户端")
 	}
 	shared, ok := sharer.Share(path, dianaImageMediaTTL)
 	if !ok {
-		_ = os.Remove(path)
+		if cleanupPath != "" {
+			cleanupLocalMediaFile(cleanupPath)
+		}
 		return "", "", fmt.Errorf("生成图片无法通过本地媒体代理共享")
 	}
-	return shared, path, nil
+	return shared, cleanupPath, nil
+}
+
+func (r *Runtime) cacheAgentImage(data []byte, mediaType, extension string) (string, string, error) {
+	r.mu.RLock()
+	store := r.media
+	r.mu.RUnlock()
+	if store != nil {
+		path, err := store.StoreImage(data, mediaType)
+		if err == nil {
+			return path, "", nil
+		}
+		log.Printf("media: cache generated image failed: %v", err)
+	}
+
+	workDir, err := os.MkdirTemp("", "diana-agent-image-")
+	if err != nil {
+		return "", "", err
+	}
+	path := filepath.Join(workDir, "image"+extension)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		_ = os.RemoveAll(workDir)
+		return "", "", err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.RemoveAll(workDir)
+		return "", "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.RemoveAll(workDir)
+		return "", "", err
+	}
+	return path, path, nil
 }

@@ -96,6 +96,7 @@ type MessageEvent struct {
 	chatInReply        bool
 	imageResolutionRun bool
 	imageLoadErr       error
+	imageContextNotice string
 	replyHistory       []MessageEvent
 	replyHistoryLoaded bool
 	userProfile        UserMemoryProfile
@@ -134,8 +135,9 @@ type OutgoingMessage struct {
 type ReminderKind string
 
 const (
-	ReminderKindMessage ReminderKind = "message"
-	ReminderKindQuery   ReminderKind = "query"
+	ReminderKindMessage         ReminderKind = "message"
+	ReminderKindQuery           ReminderKind = "query"
+	ReminderKindRepositoryWatch ReminderKind = "repository_watch"
 )
 
 type Reminder struct {
@@ -156,6 +158,12 @@ type Reminder struct {
 	ConsecutiveFailures int          `json:"consecutive_failures,omitempty"`
 	PendingDelivery     string       `json:"pending_delivery,omitempty"`
 	PendingSince        time.Time    `json:"pending_since,omitempty"`
+	Repository          string       `json:"repository,omitempty"`
+	RepositoryBranch    string       `json:"repository_branch,omitempty"`
+	WatchCommits        bool         `json:"watch_commits,omitempty"`
+	WatchReleases       bool         `json:"watch_releases,omitempty"`
+	LastCommitSHA       string       `json:"last_commit_sha,omitempty"`
+	LastReleaseTag      string       `json:"last_release_tag,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
 }
 
