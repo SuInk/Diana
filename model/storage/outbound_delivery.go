@@ -27,7 +27,12 @@ SET delivery_stage = CASE
       WHEN ? = 'send_attempted' AND COALESCE(delivery_stage, '') IN ('acknowledged', 'echo_persisted') THEN delivery_stage
       ELSE ?
     END,
-    outbound_message_id = CASE WHEN ? != '' THEN ? ELSE outbound_message_id END,
+    outbound_message_id = CASE
+      WHEN ? = '' THEN outbound_message_id
+      WHEN COALESCE(outbound_message_id, '') = '' THEN ?
+      WHEN instr(',' || outbound_message_id || ',', ',' || ? || ',') > 0 THEN outbound_message_id
+      ELSE outbound_message_id || ',' || ?
+    END,
     reply_generated_at = CASE WHEN ? = 'generated' AND reply_generated_at IS NULL THEN ? ELSE reply_generated_at END,
     send_attempted_at = CASE WHEN ? = 'send_attempted' AND send_attempted_at IS NULL THEN ? ELSE send_attempted_at END,
     send_acked_at = CASE WHEN ? = 'acknowledged' THEN ? ELSE send_acked_at END,
@@ -45,7 +50,7 @@ WHERE id = (
 )
 `,
 		string(stage), string(stage), string(stage),
-		outboundMessageID, outboundMessageID,
+		outboundMessageID, outboundMessageID, outboundMessageID, outboundMessageID,
 		string(stage), now,
 		string(stage), now,
 		string(stage), now,
@@ -72,7 +77,7 @@ func (s *SQLiteStore) RecordInboundEventSelfEcho(ctx context.Context, outboundMe
 	_, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
 SET delivery_stage = 'echo_persisted', self_echo_at = ?, delivery_error = NULL, updated_at = ?
-WHERE outbound_message_id = ?
+WHERE ',' || outbound_message_id || ',' LIKE '%,' || ? || ',%'
 `, observedAt.UTC().UnixNano(), now, strings.TrimSpace(outboundMessageID))
 	if err != nil {
 		return fmt.Errorf("record inbound self echo: %w", err)

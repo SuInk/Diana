@@ -102,17 +102,17 @@ func TestMediaStoreRejectsInvalidGeneratedImage(t *testing.T) {
 }
 
 func TestMediaStoreReturnsAbsoluteGeneratedImagePath(t *testing.T) {
-	root := t.TempDir()
-	oldWorkingDir, err := os.Getwd()
+	workingDir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chdir(root); err != nil {
+	cacheDir := filepath.Join(t.TempDir(), "media")
+	relativeCacheDir, err := filepath.Rel(workingDir, cacheDir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chdir(oldWorkingDir) })
 
-	store := NewMediaStore("data/media")
+	store := NewMediaStore(relativeCacheDir)
 	path, err := store.StoreImage(pngBytes(t), "image/png")
 	if err != nil {
 		t.Fatal(err)
@@ -120,11 +120,15 @@ func TestMediaStoreReturnsAbsoluteGeneratedImagePath(t *testing.T) {
 	if !filepath.IsAbs(path) {
 		t.Fatalf("本地媒体共享需要绝对路径，实际 %q", path)
 	}
-	resolvedRoot, err := filepath.EvalSymlinks(root)
+	resolvedCacheDir, err := filepath.EvalSymlinks(cacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(path, filepath.Join(resolvedRoot, "data", "media")+string(filepath.Separator)) {
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(resolvedPath) != resolvedCacheDir {
 		t.Fatalf("缓存路径超出配置目录：%q", path)
 	}
 }
