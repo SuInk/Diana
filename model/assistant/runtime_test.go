@@ -1199,6 +1199,11 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	if !strings.Contains(prompt, "谐音梗") || !strings.Contains(prompt, "能接梗就自然接") {
 		t.Fatalf("system prompt missing homophone guidance: %q", prompt)
 	}
+	for _, want := range []string{"比喻、拟人、意象、节奏感和角色口吻", "有画面感、有辨识度", "新的观察、情绪、观点或笑点", "事实、技术和操作说明仍以清楚准确为先"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing expressive writing guidance %q: %q", want, prompt)
+		}
+	}
 	if !strings.Contains(prompt, "当前需要回复的消息") || !strings.Contains(prompt, "不要主动回复旧消息") {
 		t.Fatalf("system prompt missing current-message guidance: %q", prompt)
 	}
@@ -1210,6 +1215,20 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	}
 	if strings.Contains(prompt, "需要分段时直接使用换行") {
 		t.Fatalf("system prompt still asks the model to split with newlines: %q", prompt)
+	}
+}
+
+func TestPromptChineseSlangDefaultMigrationPreservesCustomText(t *testing.T) {
+	legacy := (BotConfig{PromptChineseSlangText: legacyDefaultPromptChineseSlang}).WithDefaults()
+	for _, want := range []string{"比喻、拟人、意象、节奏感和角色口吻", "不要只堆形容词", "事实、技术和操作说明仍以清楚准确为先"} {
+		if !strings.Contains(legacy.PromptChineseSlangText, want) {
+			t.Fatalf("legacy default was not upgraded with %q: %q", want, legacy.PromptChineseSlangText)
+		}
+	}
+
+	const custom = "保持冷峻克制的侦探口吻，避免比喻。"
+	if got := (BotConfig{PromptChineseSlangText: custom}).WithDefaults().PromptChineseSlangText; got != custom {
+		t.Fatalf("custom Chinese context prompt was overwritten: %q", got)
 	}
 }
 
