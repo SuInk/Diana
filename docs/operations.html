@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Diana 更新、备份、故障排查和开发发布手册。" />
+    <meta name="theme-color" content="#f7f5f6" />
+    <title>Diana 文档 - 运维</title>
+    <link rel="stylesheet" href="./styles.css?v=20260811" />
+  </head>
+  <body data-page="operations">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">运维</p><h1>更新、备份与故障定位</h1><p class="lead">更新提醒与执行更新严格分离，运行状态以健康检查和事件审计为准，恢复操作始终建立在可验证备份上。</p></header>
+
+      <section class="section searchable" id="updates">
+        <div class="section-heading"><p class="eyebrow">更新</p><h2>只提示，不自动更新</h2></div>
+        <p>控制台发现新版本时只显示小黄点。管理员点击、查看更新说明并确认后才执行更新，不再有后台自动下载或自动切换逻辑。</p>
+        <div class="update-paths">
+          <article><h3>一键安装版本</h3><p>重复执行安装命令。脚本下载对应完整包、校验 SHA-256、备份数据库和运行文件、切换、重启并健康检查。</p></article>
+          <article><h3>控制台 Release 更新</h3><p>后端执行完整 Release 流程，探活失败时恢复旧版本。仅显示按钮而无后端更新器的旧版不能自更新。</p></article>
+          <article><h3>Docker / 源码</h3><p>容器由编排系统重建；源码 checkout 重新构建前后端。两者都不在运行进程内替换裸二进制。</p></article>
+        </div>
+        <pre><code># 一键安装的升级命令与首次安装相同
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
+        <div class="callout warn"><strong>更新前</strong><p>确认数据目录和备份目录有足够空间。数据库正在高频写入时，备份需同时保留 WAL/SHM，或先通过应用提供的备份流程生成一致快照。</p></div>
+      </section>
+
+      <section class="section searchable" id="operations">
+        <div class="section-heading"><p class="eyebrow">日常运行</p><h2>健康检查、日志和备份</h2></div>
+        <div class="ops-grid">
+          <div><strong>健康检查</strong><code>GET /api/health</code><span>无需登录，用于进程与编排探活。</span></div>
+          <div><strong>登录状态</strong><code>GET /api/auth/status</code><span>确认管理员会话和首次启动状态。</span></div>
+          <div><strong>实时事件</strong><code>GET /api/events/stream</code><span>SSE 断开时前端应退回轮询。</span></div>
+          <div><strong>安装日志</strong><code>logs/</code><span>包含服务输出与启动失败信息。</span></div>
+          <div><strong>应用日志</strong><code>logs/diana.log</code><span>支持控制台筛选和下载。</span></div>
+          <div><strong>SQLite</strong><code>data/diana.db</code><span>配置、消息、记忆、任务与审计主库。</span></div>
+        </div>
+        <h3>建议备份周期</h3>
+        <div class="table-wrap"><table><thead><tr><th>范围</th><th>周期</th><th>保留</th></tr></thead><tbody>
+          <tr><td>SQLite 一致性快照</td><td>每日，并在每次更新前</td><td>至少 7 个日备份和 4 个周备份</td></tr>
+          <tr><td>运行配置与密钥</td><td>配置变更后</td><td>加密保存，限制读取权限</td></tr>
+          <tr><td>历史媒体</td><td>按业务需求</td><td>结合容量淘汰和隐私期限</td></tr>
+          <tr><td>恢复演练</td><td>每月</td><td>记录恢复耗时和缺失项</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section class="section searchable" id="troubleshooting">
+        <div class="section-heading"><p class="eyebrow">故障排查</p><h2>先看事件原因，再看模型调用链</h2></div>
+        <div class="faq">
+          <details><summary>机器人在线，但群里不回复</summary><p>从事件明细读取确定性原因：群启用、回复时间、屏蔽 QQ、群等级、机器人抑制、显式 @、触发词和主动回复结果。打开调试模式后，再核对模型收到的上下文与结构化判断。</p></details>
+          <details><summary>引用机器人消息并 @，却被忽略</summary><p>运行版本必须包含“显式 @ 优先于引用”的路由逻辑。OneBot 事件中应有 at segment；后端先识别显式 @，只有没有 @ 的引用才进入主动回复语义判断。</p></details>
+          <details><summary>视觉模型看不清截图或小字</summary><p>确认视觉职责绑定了经过真实图片测试的模型、原图未被缩放、图片未被 token 预算裁掉。文本密集图片使用 OCR 与原图双证据。</p></details>
+          <details><summary>群管理显示 not found 或缺少群</summary><p>检查 OneBot 连接与 <code>get_group_list</code> 响应。在线时应显示机器人加入的全部群；只有连接不可用才回退本地配置。</p></details>
+          <details><summary>主动回复候选长期显示等待处理</summary><p>候选应该直接进入语义判断，最长等待 60 秒后写入明确结果。持续卡住通常表示意图模型超时、队列消费者未运行或运行版本未包含新逻辑。</p></details>
+          <details><summary>更新后健康检查失败</summary><p>检查端口冲突、数据库权限、前端目录和二进制架构。安装器备份位于 <code>.installer/backups</code>；控制台更新备份位于 <code>.diana-updates</code>。</p></details>
+        </div>
+      </section>
+
+      <section class="section searchable" id="development">
+        <div class="section-heading"><p class="eyebrow">开发与发布</p><h2>本地验证和 CI 门槛</h2></div>
+        <pre><code># Go 与格式检查
+gofmt -l .
+git diff --check
+go test ./...
+
+# 前端生产构建
+cd frontend-next
+npm ci
+npm run build
+
+# 文档预览
+cd ..
+python3 -m http.server 4173 --directory docs</code></pre>
+        <p>CI 覆盖 Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker。版本发布从已合并的默认分支打标签，Release 同时生成完整包、裸二进制和 <code>SHA256SUMS</code>。Release 说明必须写清更新点、兼容影响、验证方式与升级注意事项。</p>
+        <h3>GitHub Pages</h3>
+        <p>站点位于 <code>docs/</code>，没有构建时依赖。默认分支的文档或一键脚本更新后，GitHub Actions 上传静态 artifact 并部署 Pages。</p>
+      </section>
+
+      <nav class="page-nav" aria-label="文档分页"><a href="./implementation.html"><small>上一页</small><strong>← 实现</strong></a><span></span></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="./app.js?v=20260811" defer></script>
+  </body>
+</html>

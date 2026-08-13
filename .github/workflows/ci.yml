@@ -1,0 +1,275 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26.5"
+  NODE_VERSION: "22"
+
+jobs:
+  build-version:
+    name: Resolve Build Version
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Resolve and validate
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            BUILD_VERSION="${GITHUB_REF#refs/tags/}"
+            if [[ ! "${BUILD_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "Release tag must be a semantic version such as v0.8.7: ${BUILD_VERSION}" >&2
+              exit 1
+            fi
+          else
+            BUILD_VERSION="${GITHUB_SHA:0:7}"
+          fi
+          echo "value=${BUILD_VERSION}" >> "${GITHUB_OUTPUT}"
+
+  backend:
+    name: Go Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Verify gofmt
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Verify modules
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Test
+        run: go test ./...
+
+  frontend-next:
+    name: Vue Next Typecheck Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-next
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend-next/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload frontend-next dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-next-dist
+          path: frontend-next/dist
+          if-no-files-found: error
+
+  build:
+    name: Build WebUI
+    runs-on: ubuntu-latest
+    needs:
+      - build-version
+      - backend
+      - frontend-next
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+          - goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Download frontend-next dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-next-dist
+          path: release/frontend-next-dist
+
+      - name: Build
+        env:
+          BUILD_VERSION: ${{ needs.build-version.outputs.value }}
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist release/package
+          binary_name="diana-webui-${{ matrix.suffix }}"
+          package_suffix="${{ matrix.suffix }}"
+          package_suffix="${package_suffix%.exe}"
+          package_name="diana-webui-${package_suffix}"
+          package_dir="release/package/${package_name}"
+
+          go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "dist/${binary_name}" ./cmd/webui
+
+          # Release 包带齐运行时前端，下载后不需要 Go、Node 或源码。
+          mkdir -p "${package_dir}/frontend-next/dist"
+          cp "dist/${binary_name}" "${package_dir}/${binary_name}"
+          cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
+          printf '%s\n' \
+            "Diana ${BUILD_VERSION}" \
+            '' \
+            'Run ./run.sh on Linux/macOS or run.bat on Windows.' \
+            'Default WebUI port: 18080' \
+            'Set DIANA_ADMIN_PASSWORD before first start to choose the administrator password.' \
+            'The frontend is included under frontend-next/dist.' \
+            'Future stable Releases can be installed from the WebUI with SHA-256 verification, backup, restart, and health-check rollback.' > "${package_dir}/README.txt"
+
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            printf '%s\n' \
+              '@echo off' \
+              'set "FRONTEND_DIST=%~dp0frontend-next\dist"' \
+              'if "%PORT%"=="" set PORT=18080' \
+              "\"%~dp0${binary_name}\" %*" > "${package_dir}/run.bat"
+            (cd release/package && zip -qr "../../dist/${package_name}.zip" "${package_name}")
+          else
+            printf '%s\n' \
+              '#!/usr/bin/env sh' \
+              'set -eu' \
+              'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
+              'export FRONTEND_DIST="${FRONTEND_DIST:-$SCRIPT_DIR/frontend-next/dist}"' \
+              'export PORT="${PORT:-18080}"' \
+              "exec \"\$SCRIPT_DIR/${binary_name}\" \"\$@\"" > "${package_dir}/run.sh"
+            chmod +x "${package_dir}/run.sh"
+            tar -czf "dist/${package_name}.tar.gz" -C release/package "${package_name}"
+          fi
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: diana-webui-${{ matrix.suffix }}
+          path: dist/*
+          if-no-files-found: error
+
+  docker:
+    name: Docker Build and Publish
+    runs-on: ubuntu-latest
+    needs:
+      - build-version
+      - backend
+      - frontend-next
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/suink/diana
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha
+
+      - name: Build and publish Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ needs.build-version.outputs.value }}
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - docker
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: diana-webui-*
+          path: release
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        working-directory: release
+        run: sha256sum diana-* > SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*
