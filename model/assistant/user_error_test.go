@@ -73,3 +73,23 @@ func TestReplyAndRecordSendsSanitizedErrorButKeepsDiagnostic(t *testing.T) {
 		t.Fatalf("diagnostic error was unexpectedly redacted: %q", runtime.Status().LastError)
 	}
 }
+
+func TestReplyAndRecordDoesNotCountUnacknowledgedErrorNoticeAsReplied(t *testing.T) {
+	channel := &scriptedChannel{}
+	rawErr := errors.New("model failed")
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return failingLLMProvider{err: rawErr}, nil
+	})
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "unconfirmed-error"}
+	outcome, err := runtime.replyAndRecord(context.Background(), event, "测试", "replied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "error_send_unconfirmed" || len(channel.sent) != 1 {
+		t.Fatalf("outcome=%q sent=%#v", outcome, channel.sent)
+	}
+	recent := runtime.Status().RecentEvents
+	if len(recent) == 0 || recent[0].Handled || recent[0].Decision != "error" {
+		t.Fatalf("unconfirmed event = %#v", recent)
+	}
+}
