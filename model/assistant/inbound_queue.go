@@ -86,6 +86,10 @@ type InboundEventDeliveryAuditStore interface {
 	RecordInboundEventSelfEcho(ctx context.Context, outboundMessageID string, observedAt time.Time) error
 }
 
+type InboundEventDuplicateCleanupStore interface {
+	MarkLegacyInboundNamespaceDuplicates(ctx context.Context) (int64, error)
+}
+
 func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, workers int, releaseStaleLeases bool, done chan struct{}) {
 	defer close(done)
 	r.mu.RLock()
@@ -93,6 +97,16 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	r.mu.RUnlock()
 	if store == nil {
 		return
+	}
+	if cleanupStore, ok := store.(InboundEventDuplicateCleanupStore); ok {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		duplicates, err := cleanupStore.MarkLegacyInboundNamespaceDuplicates(cleanupCtx)
+		cancel()
+		if err != nil {
+			log.Printf("qqbot inbound duplicate cleanup failed: %v", err)
+		} else if duplicates > 0 {
+			log.Printf("qqbot inbound duplicate cleanup ignored %d namespace duplicates", duplicates)
+		}
 	}
 	if releaseStaleLeases {
 		callCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

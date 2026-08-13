@@ -125,10 +125,14 @@ func (s *MediaStore) StoreImage(body []byte, contentType string) (string, error)
 	if !strings.HasPrefix(contentType, "image/") {
 		return "", fmt.Errorf("assistant: unsupported image content type %q", contentType)
 	}
+	cacheDir, err := filepath.Abs(s.dir)
+	if err != nil {
+		return "", fmt.Errorf("assistant: resolve media dir: %w", err)
+	}
 
 	sum := sha256.Sum256(body)
 	digest := hex.EncodeToString(sum[:])
-	path := filepath.Join(s.dir, "generated-"+digest+imageExtension(contentType, body))
+	path := filepath.Join(cacheDir, "generated-"+digest+imageExtension(contentType, body))
 	cacheKey := "generated:" + filepath.Base(path)
 	wait, leader := s.acquire(cacheKey)
 	if !leader {
@@ -145,10 +149,10 @@ func (s *MediaStore) StoreImage(body []byte, contentType string) (string, error)
 		_ = os.Chtimes(path, now, now)
 		return path, nil
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("assistant: create media dir: %w", err)
 	}
-	tmp, err := os.CreateTemp(s.dir, ".partial-*")
+	tmp, err := os.CreateTemp(cacheDir, ".partial-*")
 	if err != nil {
 		return "", err
 	}

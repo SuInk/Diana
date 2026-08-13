@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,47 @@ func TestInboundQueueNamespaceDedupeFindsLegacySessionScopedHistory(t *testing.T
 	}
 	if count := pendingInboundCount(t, store); count != 0 {
 		t.Fatalf("legacy history was replayed into queue: %d", count)
+	}
+}
+
+func TestInboundQueueMarksLegacyNamespaceDuplicatesTerminal(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "legacy-queue-duplicates.db"))
+	defer func() { _ = store.Close() }()
+	event := inboundTestEvent("duplicated-backfill", "process once", time.Now().Unix())
+	event.Platform = assistant.PlatformOneBotV11
+	event.SelfID = "bot-1"
+	event.GroupID = "group-1"
+	event.UserID = "user-1"
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixNano()
+	for index, session := range []string{"old-profile:group:group-1", "new-profile:group:group-1"} {
+		id := fmt.Sprintf("legacy-duplicate-%d", index)
+		if _, err := store.db.Exec(`
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, created_at, updated_at
+) VALUES (?, ?, 'group', 'group-1', 'user-1', ?, ?, ?, 0, 'pending', 0, ?, ?, ?)
+`, id, session, event.MessageID, event.Time, string(payload), now, now+int64(index), now+int64(index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updated, err := store.MarkLegacyInboundNamespaceDuplicates(ctx)
+	if err != nil || updated != 1 {
+		t.Fatalf("cleanup updated=%d err=%v", updated, err)
+	}
+	var pending, ignored int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM inbound_events WHERE status = 'pending'`).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM inbound_events WHERE outcome = 'ignored_duplicate'`).Scan(&ignored); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 1 || ignored != 1 {
+		t.Fatalf("cleanup rows pending=%d ignored=%d", pending, ignored)
 	}
 }
 

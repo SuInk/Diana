@@ -101,6 +101,34 @@ func TestMediaStoreRejectsInvalidGeneratedImage(t *testing.T) {
 	}
 }
 
+func TestMediaStoreReturnsAbsoluteGeneratedImagePath(t *testing.T) {
+	root := t.TempDir()
+	oldWorkingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWorkingDir) })
+
+	store := NewMediaStore("data/media")
+	path, err := store.StoreImage(pngBytes(t), "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("本地媒体共享需要绝对路径，实际 %q", path)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(path, filepath.Join(resolvedRoot, "data", "media")+string(filepath.Separator)) {
+		t.Fatalf("缓存路径超出配置目录：%q", path)
+	}
+}
+
 func TestMediaStoreDataURLIsBase64Image(t *testing.T) {
 	body := pngBytes(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
