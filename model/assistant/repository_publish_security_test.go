@@ -174,7 +174,7 @@ func TestRepositoryIssueSanitizerRedactsHighRiskIdentifiers(t *testing.T) {
 	openAIToken := "sk-proj-" + strings.Repeat("Z", 24)
 	awsToken := "AKIA" + strings.Repeat("A", 16)
 	slackToken := "xox" + "b-1234567890-abcdefghijklmnop"
-	credentialURL := "https://deploy:supersecret@example.com/private"
+	credentialURL := "https://deploy:" + "supersecret@example.com/private"
 	awsSecret := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 	clientSecret := "supersecretvalue"
 	raw := strings.Join([]string{
