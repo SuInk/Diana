@@ -1103,6 +1103,10 @@ code {
 }
 
 @media (max-width: 700px) {
+  .demo-mode-badge {
+    display: none;
+  }
+
   .topbar-stream-text {
     display: none;
   }
