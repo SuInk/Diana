@@ -18,8 +18,13 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			return
 		}
 		runError := runEvent.Error
-		if runEvent.Tool == dianaOneBotV11ToolName && runError != "" {
-			runError = "[OneBot v11 tool error omitted]"
+		if runError != "" {
+			switch runEvent.Tool {
+			case dianaOneBotV11ToolName:
+				runError = "[OneBot v11 tool error omitted]"
+			case dianaRepositoryIssuesToolName:
+				runError = "[repository issue tool error omitted]"
+			}
 		}
 		kind := applog.KindOperation
 		level := applog.LevelInfo
@@ -99,6 +104,8 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			}
 			if runEvent.Tool == dianaOneBotV11ToolName {
 				toolInput, toolOutput = sanitizeOneBotV11DebugToolCall(toolInput, toolOutput)
+			} else if runEvent.Tool == dianaRepositoryIssuesToolName {
+				toolInput, toolOutput = sanitizeRepositoryIssuesDebugToolCall(toolInput, toolOutput)
 			}
 			r.recordDebugTrace(debugTraceFromContext(ctx), "Agent 调用链更新", map[string]any{
 				"phase":           "agent_" + string(runEvent.Phase),
@@ -129,6 +136,21 @@ func sanitizeOneBotV11DebugToolCall(input map[string]any, output string) (map[st
 		"param_keys": sortedMapKeys(params),
 	}
 	return redactedInput, "[OneBot v11 tool output omitted]"
+}
+
+func sanitizeRepositoryIssuesDebugToolCall(input map[string]any, _ string) (map[string]any, string) {
+	redactedInput := map[string]any{
+		"operation":  strings.TrimSpace(configToolString(input, "operation")),
+		"repository": strings.TrimSpace(configToolString(input, "repository")),
+		"input_keys": sortedMapKeys(input),
+	}
+	if number := repositoryIssueNumber(input); number > 0 {
+		redactedInput["number"] = number
+	}
+	if state := strings.TrimSpace(configToolString(input, "state")); state != "" {
+		redactedInput["state"] = state
+	}
+	return redactedInput, "[repository issue tool output omitted]"
 }
 
 func formatAgentProgress(event agent.RunEvent) (bar, label string, current, total, percent int) {
