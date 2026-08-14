@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Diana WebUI 功能演示，全部机器人和消息数据均为模拟数据。" />
+    <meta name="theme-color" content="#f7f5f6" />
+    <title>Diana WebUI - 模拟演示</title>
+    <link rel="icon" href="https://raw.githubusercontent.com/SuInk/Diana/main/frontend-next/public/favicon.svg" />
+    <link rel="stylesheet" href="./demo.css?v=20260814" />
+  </head>
+  <body>
+    <div class="demo-app">
+      <aside class="demo-sidebar" data-sidebar>
+        <div class="sidebar-brand">
+          <span class="brand-logo" aria-hidden="true">D</span>
+          <span class="brand-copy"><strong>Diana</strong><small>WebUI 演示</small></span>
+          <span class="demo-pill">模拟</span>
+        </div>
+        <nav class="demo-nav" aria-label="演示功能导航" data-nav></nav>
+        <div class="sidebar-foot">
+          <span class="status-line"><i class="status-dot pulse"></i>演示服务在线</span>
+          <a href="./index.html">返回产品文档</a>
+        </div>
+      </aside>
+
+      <div class="sidebar-scrim" data-sidebar-scrim></div>
+
+      <div class="demo-workspace">
+        <header class="demo-topbar">
+          <button class="icon-btn menu-btn" type="button" aria-label="打开导航" title="打开导航" data-menu>☰</button>
+          <div class="topbar-title"><strong data-view-title>总览</strong><span>只读功能演示</span></div>
+          <div class="topbar-status">
+            <span class="connection"><i class="status-dot"></i>QQ 与 Telegram 已连接</span>
+            <span class="demo-notice">所有数据均为模拟</span>
+          </div>
+          <a class="topbar-link" href="https://github.com/SuInk/Diana">GitHub</a>
+          <button class="icon-btn" type="button" aria-label="切换明暗主题" title="切换明暗主题" data-theme-toggle>☾</button>
+        </header>
+
+        <main class="demo-main" id="main" data-view></main>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" data-modal-backdrop hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <header class="modal-head"><div><span class="eyebrow">模拟详情</span><h2 id="modal-title" data-modal-title></h2></div><button class="icon-btn" type="button" aria-label="关闭" data-modal-close>×</button></header>
+        <div class="modal-body" data-modal-body></div>
+      </section>
+    </div>
+
+    <div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+    <script src="./demo.js?v=20260814" defer></script>
+  </body>
+</html>

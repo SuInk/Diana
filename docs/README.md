@@ -9,6 +9,7 @@ Pages:
 - `configuration.html`: channels, models, groups, and Agent tools
 - `implementation.html`: architecture, message flow, memory, media, and storage
 - `operations.html`: updates, backup, troubleshooting, and development
+- `demo.html`: interactive WebUI preview backed entirely by local mock data
 
 Preview locally from the repository root:
 
