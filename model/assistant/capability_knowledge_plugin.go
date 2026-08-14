@@ -186,7 +186,7 @@ func capabilityTerms(text string) map[string]float64 {
 }
 
 var coreCapabilityDocuments = []capabilityDocument{
-	{ID: "core:web-search", Title: "实时联网搜索", Content: "可使用 web_search.search 通过多配置失败回退检索实时新闻、IPO 时间、价格和网页资料，并打开结果继续核验。", Source: "core", Enabled: true},
+	{ID: "core:web-search", Title: "实时联网搜索", Content: "可使用 web_search.search 通过有预算的候选查询探索、多 provider 回退和空结果恢复检索实时新闻、IPO 时间、价格和网页资料；支持别名、语言及宽松查询候选，并会返回来源和证据状态供后续核验。", Source: "core", Enabled: true},
 	{ID: "core:browser", Title: "网页浏览与渲染", Content: "可用沙盒无头浏览器执行 JavaScript、跟随跳转、读取动态网页；主人还可使用浏览器和本地工具。", Source: "core", Enabled: true},
 	{ID: "core:media", Title: "图片视频与链接解析", Content: "能理解 QQ 图片上下文，下载并抽取视频多帧；链接解析插件支持 B站、YouTube、X、小红书、抖音等平台并发送解析结果。", Source: "core", Enabled: true},
 	{ID: "core:image", Title: "图片生成与编辑", Content: "熟悉等级可生成和编辑图片；可结合群成员头像、用户提供的图片以及 Agent 联网搜索或网页核验后的结果。", Source: "core", Enabled: true, Required: "熟悉"},

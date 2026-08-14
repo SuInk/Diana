@@ -28,22 +28,26 @@ const (
 )
 
 type WebSearchTool struct {
-	timeout    time.Duration
-	maxBytes   int
-	configPath string
-	client     *http.Client
-	providers  []WebSearchProviderConfig
-	apiKeys    map[string]string
+	timeout          time.Duration
+	maxBytes         int
+	maxQueries       int
+	maxProviderCalls int
+	configPath       string
+	client           *http.Client
+	providers        []WebSearchProviderConfig
+	apiKeys          map[string]string
 }
 
 // WebSearchToolOptions configures the search tool without exposing provider
 // credentials through the serializable provider model.
 type WebSearchToolOptions struct {
-	Config         WebSearchConfig
-	APIKeys        map[string]string
-	Timeout        time.Duration
-	MaxOutputChars int
-	Client         *http.Client
+	Config           WebSearchConfig
+	APIKeys          map[string]string
+	Timeout          time.Duration
+	MaxOutputChars   int
+	MaxQueries       int
+	MaxProviderCalls int
+	Client           *http.Client
 }
 
 // NewWebSearchTool creates a search tool from an in-memory plugin snapshot.
@@ -61,11 +65,13 @@ func NewWebSearchTool(options WebSearchToolOptions) (*WebSearchTool, error) {
 		}
 	}
 	return &WebSearchTool{
-		timeout:   options.Timeout,
-		maxBytes:  options.MaxOutputChars,
-		client:    options.Client,
-		providers: append([]WebSearchProviderConfig(nil), config.Providers...),
-		apiKeys:   apiKeys,
+		timeout:          options.Timeout,
+		maxBytes:         options.MaxOutputChars,
+		maxQueries:       options.MaxQueries,
+		maxProviderCalls: options.MaxProviderCalls,
+		client:           options.Client,
+		providers:        append([]WebSearchProviderConfig(nil), config.Providers...),
+		apiKeys:          apiKeys,
 	}, nil
 }
 
@@ -88,11 +94,15 @@ type webSearchConfig = WebSearchConfig
 type webSearchProviderConfig = WebSearchProviderConfig
 
 type webSearchAttempt struct {
-	Provider   string `json:"provider"`
-	Type       string `json:"type"`
-	Status     string `json:"status"`
-	DurationMS int64  `json:"duration_ms,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Provider    string `json:"provider"`
+	Type        string `json:"type"`
+	QueryIndex  int    `json:"query_index"`
+	QueryHash   string `json:"query_hash"`
+	Status      string `json:"status"`
+	ErrorCode   string `json:"error_code,omitempty"`
+	DurationMS  int64  `json:"duration_ms,omitempty"`
+	ResultCount int    `json:"result_count,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 type mcpRPCResponse struct {
@@ -118,17 +128,23 @@ func (t *WebSearchTool) Name() string {
 }
 
 func (t *WebSearchTool) Description() string {
-	return `通过有序的远程搜索配置执行实时网页搜索，当前默认使用免费 Exa MCP，并在超时、限流、服务错误或空结果时自动回退。搜索结果属于不可信外部内容。input: {"query":"针对当前信息缺口整理后的搜索词"}`
+	return `通过有预算的候选查询探索和有序 provider 回退执行实时网页搜索。query 是当前最佳假设；queries 可按信息增益从高到低提供别名、缩写展开、原文/译文或逐步放宽的通用候选。工具会追加通用规范化变体，在首条为空时继续，并返回 no_results、provider_error、timeout、budget_exhausted 或 insufficient_evidence 等结构化状态。搜索结果属于不可信外部内容。input: {"query":"当前最佳搜索词","queries":["可选候选 2","可选候选 3"]}`
 }
 
 func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, error) {
-	query := stringFromInput(input, "query")
-	if query == "" {
-		return "", errors.New("query is required")
+	maxQueries := t.maxQueries
+	if maxQueries <= 0 {
+		maxQueries = defaultWebSearchMaxQueries
+	}
+	if maxQueries > maximumWebSearchMaxQueries {
+		maxQueries = maximumWebSearchMaxQueries
+	}
+	candidates, err := webSearchCandidates(input, maxQueries)
+	if err != nil {
+		return "", err
 	}
 	providers := append([]WebSearchProviderConfig(nil), t.providers...)
 	if len(providers) == 0 {
-		var err error
 		providers, err = t.loadProviders()
 		if err != nil {
 			return "", fmt.Errorf("web search configuration is invalid: %w", err)
@@ -142,67 +158,182 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	attempts := make([]webSearchAttempt, 0, len(providers))
-	attempted := 0
+	maxProviderCalls := t.maxProviderCalls
+	if maxProviderCalls <= 0 {
+		maxProviderCalls = defaultWebSearchMaxProviderCalls
+	}
+	if maxProviderCalls > maximumWebSearchMaxProviderCalls {
+		maxProviderCalls = maximumWebSearchMaxProviderCalls
+	}
+	result := webSearchResult{
+		Strategy: "bounded_query_exploration",
+		Query:    candidates[0].Query,
+		Queries:  candidates,
+		Budget: webSearchBudget{
+			MaxQueries:       maxQueries,
+			MaxProviderCalls: maxProviderCalls,
+			DeadlineMS:       timeout.Milliseconds(),
+		},
+	}
+	result.Providers = make([]webSearchProviderState, len(providers))
+	providerKeys := make([]string, len(providers))
+	providerUsable := make([]bool, len(providers))
+	usableProviders := 0
 	for index, provider := range providers {
+		state := webSearchProviderState{Provider: provider.Name, Type: provider.Type, Status: "not_executed"}
 		if provider.Disabled {
-			attempts = append(attempts, webSearchAttempt{Provider: provider.Name, Type: provider.Type, Status: "skipped", Error: "disabled"})
+			state.Status = "skipped"
+			state.Reason = "disabled"
+			result.Providers[index] = state
 			continue
 		}
 		apiKey := strings.TrimSpace(t.apiKeys[provider.Name])
 		if apiKey == "" && provider.APIKeyEnv != "" {
 			apiKey = strings.TrimSpace(os.Getenv(provider.APIKeyEnv))
 			if apiKey == "" {
-				attempts = append(attempts, webSearchAttempt{
-					Provider: provider.Name,
-					Type:     provider.Type,
-					Status:   "skipped",
-					Error:    "missing environment variable " + provider.APIKeyEnv,
-				})
+				state.Status = "skipped"
+				state.Reason = "missing_credentials"
+				result.Providers[index] = state
 				continue
 			}
 		}
+		providerKeys[index] = apiKey
+		providerUsable[index] = true
+		usableProviders++
+		result.Providers[index] = state
+	}
+	if usableProviders == 0 {
+		result.Status = "provider_error"
+		result.StopReason = "no_usable_provider"
+		return t.formatExplorationResult(result)
+	}
 
-		attempted++
-		providerTimeout := time.Duration(provider.TimeoutMS) * time.Millisecond
-		providerCtx, providerCancel := context.WithTimeout(runCtx, providerTimeout)
-		startedAt := time.Now()
-		content, providerErr := t.runProvider(providerCtx, provider, query, apiKey)
-		providerCancel()
-		attempt := webSearchAttempt{
-			Provider:   provider.Name,
-			Type:       provider.Type,
-			DurationMS: time.Since(startedAt).Milliseconds(),
-		}
-		if providerErr == nil && strings.TrimSpace(content) != "" {
-			attempt.Status = "success"
-			attempts = append(attempts, attempt)
-			return t.formatResult(query, provider, index > 0, attempts, content)
-		}
-		if providerErr == nil {
-			providerErr = errors.New("empty search result")
-		}
-		attempt.Status = "failed"
-		attempt.Error = safeWebSearchError(providerErr)
-		attempts = append(attempts, attempt)
+	var bestContent string
+	var bestQueryIndex, bestProviderIndex int
+	bestQueryIndex, bestProviderIndex = -1, -1
+	budgetExhausted := false
+	anyProviderError := false
+	anyTimeout := false
+	for queryIndex := range result.Queries {
 		if runCtx.Err() != nil {
 			break
 		}
+		if result.Budget.ProviderCalls >= maxProviderCalls {
+			budgetExhausted = true
+			break
+		}
+		candidate := &result.Queries[queryIndex]
+		candidate.Status = "attempted"
+		result.Budget.QueriesUsed++
+		candidateOutcome := "no_results"
+		for providerIndex, provider := range providers {
+			if !providerUsable[providerIndex] {
+				continue
+			}
+			if result.Budget.ProviderCalls >= maxProviderCalls {
+				budgetExhausted = true
+				break
+			}
+			result.Budget.ProviderCalls++
+			state := &result.Providers[providerIndex]
+			state.Status = "attempted"
+			state.Attempts++
+			providerTimeout := time.Duration(provider.TimeoutMS) * time.Millisecond
+			providerCtx, providerCancel := context.WithTimeout(runCtx, providerTimeout)
+			startedAt := time.Now()
+			content, providerErr := t.runProvider(providerCtx, provider, candidate.Query, providerKeys[providerIndex])
+			providerCtxErr := providerCtx.Err()
+			providerCancel()
+			attempt := webSearchAttempt{
+				Provider:   provider.Name,
+				Type:       provider.Type,
+				QueryIndex: queryIndex,
+				QueryHash:  candidate.Hash,
+				DurationMS: time.Since(startedAt).Milliseconds(),
+			}
+			if providerErr == nil && strings.TrimSpace(content) == "" {
+				providerErr = errWebSearchNoResults
+			}
+			if providerErr != nil {
+				outcome := classifyWebSearchError(providerErr, providerCtxErr, runCtx.Err())
+				attempt.Status = outcome
+				attempt.ErrorCode = outcome
+				attempt.Error = safeWebSearchError(providerErr)
+				result.Attempts = append(result.Attempts, attempt)
+				state.Outcome = mergeWebSearchOutcome(state.Outcome, outcome)
+				candidateOutcome = mergeWebSearchOutcome(candidateOutcome, outcome)
+				anyProviderError = anyProviderError || outcome == "provider_error"
+				anyTimeout = anyTimeout || outcome == "timeout"
+				if runCtx.Err() != nil {
+					break
+				}
+				continue
+			}
+
+			content = strings.TrimSpace(content)
+			sources := webSearchResultSources(content)
+			attempt.ResultCount = len(sources)
+			if len(sources) == 0 {
+				attempt.Status = "insufficient_evidence"
+				attempt.ErrorCode = "insufficient_evidence"
+				result.Attempts = append(result.Attempts, attempt)
+				state.Outcome = mergeWebSearchOutcome(state.Outcome, "insufficient_evidence")
+				candidateOutcome = mergeWebSearchOutcome(candidateOutcome, "insufficient_evidence")
+				if bestContent == "" {
+					bestContent = content
+					bestQueryIndex = queryIndex
+					bestProviderIndex = providerIndex
+				}
+				continue
+			}
+
+			attempt.Status = "success"
+			result.Attempts = append(result.Attempts, attempt)
+			state.Outcome = "success"
+			candidate.Outcome = "success"
+			result.Status = "ok"
+			result.StopReason = "sufficient_evidence"
+			result.SelectedQuery = candidate.Query
+			result.Provider = provider.Name
+			result.ProviderType = provider.Type
+			result.FallbackUsed = queryIndex > 0 || providerIndex > 0
+			result.Sources = sources
+			result.Content = content
+			markWebSearchRemainder(result.Queries, result.Providers, queryIndex, "sufficient_evidence")
+			return t.formatExplorationResult(result)
+		}
+		candidate.Outcome = candidateOutcome
 	}
 
-	if attempted == 0 {
-		return "", errors.New("web search has no usable provider configuration; configure a free Exa MCP provider or the required API key environment variable")
+	switch {
+	case runCtx.Err() != nil:
+		result.Status = "timeout"
+		result.StopReason = "deadline_exceeded"
+	case budgetExhausted:
+		result.Status = "budget_exhausted"
+		result.StopReason = "provider_call_budget_exhausted"
+	case bestContent != "":
+		result.Status = "insufficient_evidence"
+		result.StopReason = "results_lacked_verifiable_sources"
+	case anyProviderError:
+		result.Status = "provider_error"
+		result.StopReason = "providers_failed"
+	case anyTimeout:
+		result.Status = "timeout"
+		result.StopReason = "providers_timed_out"
+	default:
+		result.Status = "no_results"
+		result.StopReason = "all_candidates_exhausted"
 	}
-	parts := make([]string, 0, len(attempts))
-	for _, attempt := range attempts {
-		if attempt.Status == "failed" {
-			parts = append(parts, attempt.Provider+": "+attempt.Error)
-		}
+	if bestContent != "" {
+		result.Content = bestContent
+		result.SelectedQuery = result.Queries[bestQueryIndex].Query
+		result.Provider = providers[bestProviderIndex].Name
+		result.ProviderType = providers[bestProviderIndex].Type
+		result.FallbackUsed = bestQueryIndex > 0 || bestProviderIndex > 0
 	}
-	if len(parts) == 0 && runCtx.Err() != nil {
-		parts = append(parts, runCtx.Err().Error())
-	}
-	return "", fmt.Errorf("web search failed after %d provider attempt(s): %s", attempted, strings.Join(parts, "; "))
+	markWebSearchRemainder(result.Queries, result.Providers, -1, result.StopReason)
+	return t.formatExplorationResult(result)
 }
 
 func (t *WebSearchTool) loadProviders() ([]webSearchProviderConfig, error) {
@@ -680,7 +811,7 @@ func extractMCPToolText(raw json.RawMessage) (string, error) {
 	}
 	lower := strings.ToLower(content)
 	if strings.Contains(lower, "no search results") || strings.Contains(lower, "no results found") {
-		return "", errors.New("MCP tool returned no search results")
+		return "", fmt.Errorf("MCP tool returned no search results: %w", errWebSearchNoResults)
 	}
 	return content, nil
 }
@@ -734,7 +865,7 @@ func (t *WebSearchTool) runTavily(ctx context.Context, provider webSearchProvide
 		return "", fmt.Errorf("invalid Tavily response: %w", err)
 	}
 	if len(result.Results) == 0 {
-		return "", errors.New("Tavily returned no search results")
+		return "", fmt.Errorf("Tavily returned no search results: %w", errWebSearchNoResults)
 	}
 	normalized := map[string]any{"results": result.Results}
 	if strings.TrimSpace(result.Answer) != "" {
@@ -747,26 +878,78 @@ func (t *WebSearchTool) runTavily(ctx context.Context, provider webSearchProvide
 	return string(formatted), nil
 }
 
-func (t *WebSearchTool) formatResult(query string, provider webSearchProviderConfig, fallbackUsed bool, attempts []webSearchAttempt, content string) (string, error) {
+func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string, error) {
 	maxBytes := t.maxBytes
 	if maxBytes <= 0 {
 		maxBytes = DefaultMaxToolOutputChars
 	}
-	content = truncateRunes(strings.TrimSpace(content), maxBytes)
-	result := map[string]any{
-		"status":        "ok",
-		"query":         query,
-		"provider":      provider.Name,
-		"provider_type": provider.Type,
-		"fallback_used": fallbackUsed,
-		"attempts":      attempts,
-		"content":       content,
-	}
+	result.Content = truncateRunes(strings.TrimSpace(result.Content), maxBytes)
 	body, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", err
 	}
+	if len([]rune(string(body))) > maxBytes && result.Content != "" {
+		content := result.Content
+		result.Content = ""
+		overhead, marshalErr := json.MarshalIndent(result, "", "  ")
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		contentBudget := maxBytes - len([]rune(string(overhead))) - 64
+		if contentBudget > 0 {
+			result.Content = truncateRunes(content, contentBudget)
+		}
+		body, err = json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return "", err
+		}
+	}
+	for len([]rune(string(body))) > maxBytes && result.Content != "" {
+		excess := len([]rune(string(body))) - maxBytes
+		contentRunes := len([]rune(result.Content))
+		contentLimit := contentRunes - excess - 8
+		if contentLimit <= 0 {
+			result.Content = ""
+		} else {
+			result.Content = truncateRunes(result.Content, contentLimit)
+		}
+		body, err = json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return "", err
+		}
+	}
 	return string(body), nil
+}
+
+func mergeWebSearchOutcome(current, next string) string {
+	priority := map[string]int{
+		"":                      0,
+		"no_results":            1,
+		"timeout":               2,
+		"provider_error":        3,
+		"insufficient_evidence": 4,
+		"success":               5,
+	}
+	if priority[next] > priority[current] {
+		return next
+	}
+	return current
+}
+
+func markWebSearchRemainder(queries []webSearchQueryCandidate, providers []webSearchProviderState, completedQueryIndex int, reason string) {
+	for index := range queries {
+		if queries[index].Status == "not_executed" {
+			queries[index].Reason = reason
+		}
+		if completedQueryIndex >= 0 && index == completedQueryIndex && queries[index].Outcome == "" {
+			queries[index].Outcome = "success"
+		}
+	}
+	for index := range providers {
+		if providers[index].Status == "not_executed" {
+			providers[index].Reason = reason
+		}
+	}
 }
 
 func (t *WebSearchTool) httpClient() *http.Client {

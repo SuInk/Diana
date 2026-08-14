@@ -63,38 +63,52 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if strings.TrimSpace(runEvent.Tool) != "" {
 			target = runEvent.Tool
 		}
+		metadata := map[string]any{
+			"trace_id":         runEvent.TraceID,
+			"phase":            runEvent.Phase,
+			"group_id":         event.GroupID,
+			"user_id":          event.UserID,
+			"message_id":       event.MessageID,
+			"model_turn":       runEvent.ModelTurn,
+			"tool_call":        runEvent.ToolCall,
+			"max_tool_calls":   runEvent.MaxToolCalls,
+			"tool":             runEvent.Tool,
+			"input_keys":       runEvent.InputKeys,
+			"output_chars":     runEvent.OutputChars,
+			"duration_ms":      runEvent.DurationMS,
+			"finish_reason":    runEvent.FinishReason,
+			"input_tokens":     runEvent.Usage.InputTokens,
+			"output_tokens":    runEvent.Usage.OutputTokens,
+			"total_tokens":     runEvent.Usage.TotalTokens,
+			"progress_bar":     progressBar,
+			"progress_current": progressCurrent,
+			"progress_total":   progressTotal,
+			"progress_percent": progressPercent,
+		}
+		if len(runEvent.Metadata) > 0 {
+			metadata["tool_metadata"] = runEvent.Metadata
+		}
+		actor := qqEventActor(event)
+		if runEvent.Tool == agent.WebSearchToolName {
+			// Search operation logs remain useful without retaining the person or
+			// conversation that produced a potentially private query. Raw queries
+			// are available only through the explicitly enabled debug trace.
+			actor = ""
+			delete(metadata, "group_id")
+			delete(metadata, "user_id")
+			delete(metadata, "message_id")
+		}
 		logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = writer.AppendLog(logCtx, applog.Entry{
-			Kind:    kind,
-			Level:   level,
-			Action:  action,
-			Message: message,
-			Detail:  runError,
-			Actor:   qqEventActor(event),
-			Target:  target,
-			Metadata: map[string]any{
-				"trace_id":         runEvent.TraceID,
-				"phase":            runEvent.Phase,
-				"group_id":         event.GroupID,
-				"user_id":          event.UserID,
-				"message_id":       event.MessageID,
-				"model_turn":       runEvent.ModelTurn,
-				"tool_call":        runEvent.ToolCall,
-				"max_tool_calls":   runEvent.MaxToolCalls,
-				"tool":             runEvent.Tool,
-				"input_keys":       runEvent.InputKeys,
-				"output_chars":     runEvent.OutputChars,
-				"duration_ms":      runEvent.DurationMS,
-				"finish_reason":    runEvent.FinishReason,
-				"input_tokens":     runEvent.Usage.InputTokens,
-				"output_tokens":    runEvent.Usage.OutputTokens,
-				"total_tokens":     runEvent.Usage.TotalTokens,
-				"progress_bar":     progressBar,
-				"progress_current": progressCurrent,
-				"progress_total":   progressTotal,
-				"progress_percent": progressPercent,
-			},
+			Kind:     kind,
+			Level:    level,
+			Action:   action,
+			Message:  message,
+			Detail:   runError,
+			Actor:    actor,
+			Target:   target,
+			Metadata: metadata,
 		})
 		if runEvent.Phase != agent.RunPhaseModelCompleted {
 			toolOutput := runEvent.ToolOutput
