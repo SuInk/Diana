@@ -3,10 +3,27 @@ package assistant
 import "time"
 
 type UserMemoryUpdate struct {
-	OwnerID           string `json:"owner_id,omitempty"`
-	FavorabilityDelta int    `json:"favorability_delta,omitempty"`
-	SetFavorability   *int   `json:"set_favorability,omitempty"`
-	Administrative    bool   `json:"administrative,omitempty"`
+	OwnerID                    string `json:"owner_id,omitempty"`
+	FavorabilityDelta          int    `json:"favorability_delta,omitempty"`
+	SetFavorability            *int   `json:"set_favorability,omitempty"`
+	FavorabilityChangeSource   string `json:"favorability_change_source,omitempty"`
+	FavorabilityChangeReason   string `json:"favorability_change_reason,omitempty"`
+	FavorabilityChangeOperator string `json:"favorability_change_operator,omitempty"`
+	Administrative             bool   `json:"administrative,omitempty"`
+}
+
+type UserFavorabilityChange struct {
+	ID         int64     `json:"id"`
+	UserID     string    `json:"user_id"`
+	Delta      int       `json:"delta"`
+	Before     int       `json:"before_score"`
+	After      int       `json:"after_score"`
+	Source     string    `json:"source"`
+	Reason     string    `json:"reason,omitempty"`
+	OperatorID string    `json:"operator_id,omitempty"`
+	GroupID    string    `json:"group_id,omitempty"`
+	MessageID  string    `json:"message_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type UserMemoryProfile struct {

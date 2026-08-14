@@ -27,11 +27,12 @@ type recordingSystemUpdater struct {
 }
 
 type recordingReleasePackageUpdater struct {
-	status    updater.Status
-	expected  string
-	release   updater.ReleasePackage
-	force     bool
-	installed bool
+	status     updater.Status
+	expected   string
+	release    updater.ReleasePackage
+	force      bool
+	downloaded bool
+	installed  bool
 }
 
 func (r *recordingReleasePackageUpdater) Supported() bool { return true }
@@ -42,13 +43,27 @@ func (r *recordingReleasePackageUpdater) Status(context.Context) (updater.Status
 	return r.status, nil
 }
 
-func (r *recordingReleasePackageUpdater) Install(_ context.Context, release updater.ReleasePackage, force bool) (updater.Result, error) {
+func (r *recordingReleasePackageUpdater) Download(_ context.Context, release updater.ReleasePackage, force bool) (updater.Result, error) {
 	r.release = release
 	r.force = force
+	r.downloaded = true
+	r.status.DownloadReady = true
+	r.status.DownloadedVersion = release.Tag
+	return updater.Result{Status: r.status, Fetched: true, Downloaded: true, TargetCommit: release.Tag}, nil
+}
+
+func (r *recordingReleasePackageUpdater) InstallDownloaded(context.Context) (updater.Result, error) {
 	r.installed = true
-	status := r.status
-	status.RestartRequired = true
-	return updater.Result{Status: status, Fetched: true, Updated: true, Applied: true, RestartRequired: true, TargetCommit: release.Tag}, nil
+	r.status.DownloadReady = false
+	r.status.RestartRequired = true
+	return updater.Result{Status: r.status, Fetched: true, Updated: true, Downloaded: true, Applied: true, RestartRequired: true, TargetCommit: r.release.Tag}, nil
+}
+
+func (r *recordingReleasePackageUpdater) Install(_ context.Context, release updater.ReleasePackage, force bool) (updater.Result, error) {
+	if _, err := r.Download(context.Background(), release, force); err != nil {
+		return updater.Result{}, err
+	}
+	return r.InstallDownloaded(context.Background())
 }
 
 func (r *recordingSystemUpdater) UpdateToRelease(ctx context.Context, target string) (updater.Result, error) {
@@ -186,7 +201,7 @@ func TestSystemUpdateHandlerReleaseCheckUsesGitHubRelease(t *testing.T) {
 	}
 }
 
-func TestSystemUpdateHandlerInstallsCompleteReleasePackage(t *testing.T) {
+func TestSystemUpdateHandlerDownloadsThenInstallsCompleteReleasePackage(t *testing.T) {
 	const assetName = "diana-webui-darwin-arm64.tar.gz"
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz","size":1234}]}]`))
@@ -216,15 +231,96 @@ func TestSystemUpdateHandlerInstallsCompleteReleasePackage(t *testing.T) {
 		t.Fatalf("check = %#v", check)
 	}
 
-	updateRecorder := httptest.NewRecorder()
-	updateRequest := httptest.NewRequest(http.MethodPost, "/api/system/update", strings.NewReader(`{"confirmation":"apply-update"}`))
-	updateRequest.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(updateRecorder, updateRequest)
-	if updateRecorder.Code != http.StatusOK {
-		t.Fatalf("update status = %d, body = %s", updateRecorder.Code, updateRecorder.Body.String())
+	downloadRecorder := httptest.NewRecorder()
+	downloadRequest := httptest.NewRequest(http.MethodPost, "/api/system/update/download", strings.NewReader(`{"confirmation":"download-update"}`))
+	downloadRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(downloadRecorder, downloadRequest)
+	if downloadRecorder.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body = %s", downloadRecorder.Code, downloadRecorder.Body.String())
 	}
-	if !releaseUpdater.installed || releaseUpdater.force || releaseUpdater.release.Tag != "v1.3.0" || releaseUpdater.release.Archive.Name != assetName || releaseUpdater.release.Checksums.Name != "SHA256SUMS" {
+	if !releaseUpdater.downloaded || releaseUpdater.installed || releaseUpdater.force || releaseUpdater.release.Tag != "v1.3.0" || releaseUpdater.release.Archive.Name != assetName || releaseUpdater.release.Checksums.Name != "SHA256SUMS" {
 		t.Fatalf("release updater = %#v", releaseUpdater)
+	}
+
+	installRecorder := httptest.NewRecorder()
+	installRequest := httptest.NewRequest(http.MethodPost, "/api/system/update/install", strings.NewReader(`{"confirmation":"install-restart"}`))
+	installRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(installRecorder, installRequest)
+	if installRecorder.Code != http.StatusOK {
+		t.Fatalf("install status = %d, body = %s", installRecorder.Code, installRecorder.Body.String())
+	}
+	if !releaseUpdater.installed {
+		t.Fatal("downloaded release was not installed")
+	}
+}
+
+type memoryUpdatePolicyStore struct {
+	policy updater.UpdatePolicy
+	ok     bool
+}
+
+func (s *memoryUpdatePolicyStore) LoadUpdatePolicy(context.Context) (updater.UpdatePolicy, bool, error) {
+	return s.policy, s.ok, nil
+}
+
+func (s *memoryUpdatePolicyStore) SaveUpdatePolicy(_ context.Context, policy updater.UpdatePolicy) error {
+	s.policy = policy
+	s.ok = true
+	return nil
+}
+
+func TestSystemUpdatePolicyDefaultsAndPersists(t *testing.T) {
+	store := &memoryUpdatePolicyStore{}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{})
+	if err := handler.SetUpdatePolicyStore(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	router := systemUpdateTestRouter(handler)
+
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/system/update/policy", nil))
+	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"auto_download":true`) || !strings.Contains(getRecorder.Body.String(), `"auto_install":false`) {
+		t.Fatalf("default policy response = %d %s", getRecorder.Code, getRecorder.Body.String())
+	}
+
+	putRecorder := httptest.NewRecorder()
+	putRequest := httptest.NewRequest(http.MethodPut, "/api/system/update/policy", strings.NewReader(`{"auto_download":false,"auto_install":true}`))
+	putRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(putRecorder, putRequest)
+	if putRecorder.Code != http.StatusOK {
+		t.Fatalf("save policy response = %d %s", putRecorder.Code, putRecorder.Body.String())
+	}
+	if !store.policy.AutoDownload || !store.policy.AutoInstall {
+		t.Fatalf("stored policy = %#v", store.policy)
+	}
+}
+
+func TestAutoUpdateDownloadsByDefaultAndInstallsOnlyWhenEnabled(t *testing.T) {
+	const assetName = "diana-webui-darwin-arm64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]}]`))
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		status:   updater.Status{NearestTag: "v1.2.3", RunningCommit: "v1.2.3", ApplySupported: true},
+		expected: assetName,
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.githubAPIBase = github.URL
+
+	handler.runAutoUpdate(context.Background())
+	if !releaseUpdater.downloaded || releaseUpdater.installed {
+		t.Fatalf("default automatic update = %#v", releaseUpdater)
+	}
+
+	handler.policyMu.Lock()
+	handler.policy = updater.UpdatePolicy{AutoDownload: true, AutoInstall: true}
+	handler.policyMu.Unlock()
+	handler.runAutoUpdate(context.Background())
+	if !releaseUpdater.installed {
+		t.Fatal("automatic install was not started after it was explicitly enabled")
 	}
 }
 

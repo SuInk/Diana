@@ -171,6 +171,29 @@ func TestRememberReplyEntersAssistantContext(t *testing.T) {
 	}
 }
 
+func TestPrivateOutgoingHistoryKeepsPeerSessionAndAssistantRole(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	source := MessageEvent{Kind: EventKindPrivate, SelfID: "42", UserID: "10001", MessageID: "incoming-1"}
+
+	runtime.remember(source)
+	runtime.rememberOutgoingWithMessageID(context.Background(), source, OutgoingMessage{Text: "我刚才说过的话"}, "outgoing-1")
+
+	history := runtime.contextHistory(source)
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, history = %#v", len(history), history)
+	}
+	outgoing := history[1]
+	if outgoing.UserID != "10001" || outgoing.SelfID != "42" || !outgoing.Outbound {
+		t.Fatalf("private outgoing history = %#v", outgoing)
+	}
+	if !assistantHistoryEvent(outgoing, "42") {
+		t.Fatalf("private outgoing history was not recognized as assistant: %#v", outgoing)
+	}
+	if sessionKey(outgoing) != sessionKey(source) {
+		t.Fatalf("private outgoing session = %q, want %q", sessionKey(outgoing), sessionKey(source))
+	}
+}
+
 func TestErrorWrapperDoesNotEnterModelHistory(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "source"}

@@ -4482,11 +4482,15 @@ func (s *memoryMessageHistoryStore) ListRecentMessageEvents(_ context.Context, s
 }
 
 type memoryUserMemoryStore struct {
-	profiles map[string]UserMemoryProfile
+	profiles            map[string]UserMemoryProfile
+	favorabilityChanges map[string][]UserFavorabilityChange
 }
 
 func newMemoryUserMemoryStore() *memoryUserMemoryStore {
-	return &memoryUserMemoryStore{profiles: map[string]UserMemoryProfile{}}
+	return &memoryUserMemoryStore{
+		profiles:            map[string]UserMemoryProfile{},
+		favorabilityChanges: map[string][]UserFavorabilityChange{},
+	}
 }
 
 func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event MessageEvent, update UserMemoryUpdate) (UserMemoryProfile, error) {
@@ -4497,6 +4501,7 @@ func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event Messag
 	if event.SenderName != "" {
 		profile.DisplayName = event.SenderName
 	}
+	before := profile.Favorability
 	if update.SetFavorability != nil {
 		profile.Favorability = *update.SetFavorability
 	} else {
@@ -4508,8 +4513,35 @@ func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event Messag
 			profile.Memories = append(profile.Memories, UserMemoryItem{Text: text})
 		}
 	}
+	if profile.Favorability != before {
+		source := strings.TrimSpace(update.FavorabilityChangeSource)
+		if source == "" {
+			source = "interaction"
+		}
+		s.favorabilityChanges[event.UserID] = append([]UserFavorabilityChange{{
+			ID:         int64(len(s.favorabilityChanges[event.UserID]) + 1),
+			UserID:     event.UserID,
+			Delta:      profile.Favorability - before,
+			Before:     before,
+			After:      profile.Favorability,
+			Source:     source,
+			Reason:     update.FavorabilityChangeReason,
+			OperatorID: update.FavorabilityChangeOperator,
+			GroupID:    event.GroupID,
+			MessageID:  event.MessageID,
+			CreatedAt:  time.Now().UTC(),
+		}}, s.favorabilityChanges[event.UserID]...)
+	}
 	s.profiles[event.UserID] = profile
 	return profile, nil
+}
+
+func (s *memoryUserMemoryStore) ListUserFavorabilityChanges(_ context.Context, userID string, limit int) ([]UserFavorabilityChange, error) {
+	changes := append([]UserFavorabilityChange(nil), s.favorabilityChanges[userID]...)
+	if limit > 0 && len(changes) > limit {
+		changes = changes[:limit]
+	}
+	return changes, nil
 }
 
 func (s *memoryUserMemoryStore) GetUserMemory(_ context.Context, userID string) (UserMemoryProfile, bool, error) {

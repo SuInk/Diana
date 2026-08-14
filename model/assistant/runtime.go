@@ -108,6 +108,10 @@ type UserMemoryStore interface {
 	GetUserMemory(ctx context.Context, userID string) (UserMemoryProfile, bool, error)
 }
 
+type UserFavorabilityHistoryStore interface {
+	ListUserFavorabilityChanges(ctx context.Context, userID string, limit int) ([]UserFavorabilityChange, error)
+}
+
 type ConfigSaver interface {
 	SaveBotConfig(BotConfig)
 }
@@ -2664,7 +2668,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 				continue
 			}
-			if historyEvent.UserID == firstNonEmpty(strings.TrimSpace(cfg.BotQQ), strings.TrimSpace(event.SelfID)) {
+			if assistantHistoryEvent(historyEvent, firstNonEmpty(strings.TrimSpace(cfg.BotQQ), strings.TrimSpace(event.SelfID))) {
 				if botText := strings.TrimSpace(historyPlainText(historyEvent)); botText != "" {
 					if semanticErrorWrapperText(botText) {
 						continue
@@ -4731,7 +4735,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n如果用户要求读取当前群资料、群成员列表、按昵称查成员，或真正 @ 某位/多位/其余成员，必须调用 diana.qq_group 获取 OneBot v11 的实时结果；不要声称只能识别用户手动 @ 出来的成员。如果用户要求读取或修改当前群的回复频率、回复阈值、最低回复成员群等级，必须调用 diana.qq_group 的 reply_policy 或 set_reply_policy；不要口头声称已经修改，工具会校验机器人主人、群主或群管理员权限。")
 	}
 	if agentEnabled && hasTool("diana.relationship") {
-		builder.WriteString("\n如果用户询问自己、被 @ 成员、指定 QQ 用户或群内成员的好感度、关系等级、互动次数或权限，必须调用 diana.relationship 获取目标数据；消息中的结构化 @ 会由工具自动识别。最终回复必须同时说明目标的好感度、关系等级、当前权限和提醒/订阅额度，不得省略工具结果中的 permissions。不得拿当前发言者的关系上下文代替目标数据，也不得编造‘隐藏数据无法查询’之类限制。")
+		builder.WriteString("\n如果用户询问自己、被 @ 成员、指定 QQ 用户或群内成员的好感度、最近增减分、关系等级、互动次数或权限，必须调用 diana.relationship 获取目标数据；消息中的结构化 @ 会由工具自动识别。最终回复必须同时说明目标的好感度、关系等级、当前权限和提醒/订阅额度，不得省略工具结果中的 permissions；recent_changes 非空时还要按新到旧说明最近的增减分、时间和原因。不得拿当前发言者的关系上下文代替目标数据，也不得编造‘隐藏数据无法查询’之类限制。")
 	}
 	if agentEnabled && hasTool(dianaImageToolName) {
 		builder.WriteString("\n调用 diana.image 后图片会在后台生成并自动补发。工具返回 queued=true 后必须立即继续输出本轮 final 文字回复，不要等待图片、不要重复调用图片工具，也不要把生图和文字回复当成二选一。")
@@ -6683,6 +6687,7 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 		RawMessage:               raw,
 		Segments:                 segments,
 		SenderName:               senderName,
+		Outbound:                 true,
 		SemanticSourceMessageID:  source.SemanticSourceMessageID,
 		SemanticSourceMessageIDs: append([]string(nil), source.SemanticSourceMessageIDs...),
 	}
@@ -6693,6 +6698,10 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 		event.MessageType = "private"
 	}
 	return event
+}
+
+func assistantHistoryEvent(event MessageEvent, botID string) bool {
+	return event.Outbound || strings.TrimSpace(botID) != "" && event.UserID == strings.TrimSpace(botID)
 }
 
 func outgoingSegmentsForHistory(msg OutgoingMessage) []MessageSegment {
@@ -7240,10 +7249,12 @@ func (r *Runtime) updateUserMemory(event MessageEvent, favorabilityDelta int) (U
 	return r.writeUserMemory(event, UserMemoryUpdate{FavorabilityDelta: favorabilityDelta})
 }
 
-func (r *Runtime) applyUserFavorabilityDelta(event MessageEvent, favorabilityDelta int) (UserMemoryProfile, bool) {
+func (r *Runtime) applyEvaluatedUserFavorabilityDelta(event MessageEvent, favorabilityDelta int, reason string) (UserMemoryProfile, bool) {
 	return r.writeUserMemory(event, UserMemoryUpdate{
-		FavorabilityDelta: favorabilityDelta,
-		Administrative:    true,
+		FavorabilityDelta:        favorabilityDelta,
+		FavorabilityChangeSource: "interaction",
+		FavorabilityChangeReason: strings.TrimSpace(reason),
+		Administrative:           true,
 	})
 }
 
