@@ -298,6 +298,9 @@ func TestLLMConfigHandlerCloneProfile(t *testing.T) {
 	if current.Name == "默认配置" || current.Config.APIKey != "old-key" {
 		t.Fatalf("current = %#v", current)
 	}
+	if current.Config.APIFormat != llm.APIFormatResponses {
+		t.Fatalf("cloned APIFormat = %q, want %q", current.Config.APIFormat, llm.APIFormatResponses)
+	}
 }
 
 // TestLLMConfigHandlerImportProfiles 验证对应功能场景。
@@ -327,6 +330,19 @@ func TestLLMConfigHandlerImportProfiles(t *testing.T) {
 	current := store.Current()
 	if current.Provider != llm.ProviderAnthropic || current.APIKey != "key-b" {
 		t.Fatalf("current = %#v", current)
+	}
+	profiles := store.Profiles()
+	for _, profile := range profiles.Profiles {
+		switch profile.ID {
+		case "a":
+			if profile.Config.APIFormat != llm.APIFormatResponses {
+				t.Fatalf("imported OpenAI-compatible APIFormat = %q, want %q", profile.Config.APIFormat, llm.APIFormatResponses)
+			}
+		case "b":
+			if profile.Config.APIFormat != "" {
+				t.Fatalf("imported Anthropic APIFormat = %q, want empty", profile.Config.APIFormat)
+			}
+		}
 	}
 }
 
