@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/model/applog"
 )
 
 const (
@@ -125,12 +127,15 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	backfillRunning := false
 	backfillRequested := false
 	nextBackfillAt := time.Time{}
+	var observedConnectionEpoch uint64
+	var observedDuplicateConnections uint64
 	launchBackfill := func() {
 		if backfillRunning {
 			backfillRequested = true
 			return
 		}
 		backfillRunning = true
+		r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_started", "OneBot 断线消息回补已开始", nil)
 		backfillWG.Add(1)
 		go func() {
 			defer backfillWG.Done()
@@ -168,8 +173,10 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			backfillRunning = false
 			if err != nil && ctx.Err() == nil {
 				log.Printf("qqbot inbound history backfill incomplete: %v", err)
+				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_failed", "OneBot 断线消息回补失败", err)
 				nextBackfillAt = time.Now().Add(historyRetryDelay)
 			} else {
+				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_completed", "OneBot 断线消息回补已完成", nil)
 				nextBackfillAt = time.Time{}
 			}
 			if backfillRequested && ctx.Err() == nil && r.channelStatus().Connected {
@@ -178,21 +185,40 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			}
 		case <-ticker.C:
 			status := r.channelStatus()
+			if status.DuplicateConnections > observedDuplicateConnections {
+				r.recordOneBotConnectionLifecycle(ctx, status, "duplicate_client_conflict", "已拒绝重复 OneBot 客户端连接", nil)
+				observedDuplicateConnections = status.DuplicateConnections
+			}
 			if !status.Connected {
+				if connected {
+					r.recordOneBotConnectionLifecycle(ctx, status, "disconnected", "OneBot 客户端已断开", nil)
+				}
 				connected = false
 				r.setInboundReady(false)
 				continue
 			}
-			if connected {
+			epochChanged := status.ConnectionEpoch != 0 && observedConnectionEpoch != 0 && status.ConnectionEpoch != observedConnectionEpoch
+			if connected && !epochChanged {
 				if !nextBackfillAt.IsZero() && !time.Now().Before(nextBackfillAt) {
 					nextBackfillAt = time.Time{}
 					launchBackfill()
 				}
 				continue
 			}
+			wasConnected := connected
 			connected = true
+			if status.ConnectionEpoch != 0 {
+				observedConnectionEpoch = status.ConnectionEpoch
+			}
 			r.setInboundReady(true)
 			r.wakeInboundWorkers()
+			if wasConnected {
+				r.recordOneBotConnectionLifecycle(ctx, status, "reconnected", "OneBot 连接 epoch 已变化，已安排消息回补", nil)
+			} else if status.ConnectionEpoch > 1 {
+				r.recordOneBotConnectionLifecycle(ctx, status, "reconnected", "OneBot 客户端已重新连接", nil)
+			} else {
+				r.recordOneBotConnectionLifecycle(ctx, status, "connection_opened", "OneBot 客户端已连接", nil)
+			}
 			if nextBackfillAt.IsZero() {
 				nextBackfillAt = time.Now().Add(historyInitialDelay)
 			}
@@ -321,11 +347,74 @@ func inboundRetryDelay(attempts int) time.Duration {
 func (r *Runtime) channelStatus() ChannelStatus {
 	r.mu.RLock()
 	channel := r.channel
+	currentProfileID := r.cfg.ID
 	r.mu.RUnlock()
 	if channel == nil {
 		return ChannelStatus{}
 	}
+	if provider, ok := channel.(interface{ ChannelStatuses() []ChannelStatus }); ok {
+		var fallback ChannelStatus
+		for _, status := range provider.ChannelStatuses() {
+			if !IsOneBotPlatform(status.Platform) {
+				continue
+			}
+			if fallback.Platform == "" {
+				fallback = status
+			}
+			if status.ProfileID == currentProfileID {
+				return status
+			}
+		}
+		if fallback.Platform != "" {
+			return fallback
+		}
+	}
 	return channel.Status()
+}
+
+func (r *Runtime) recordOneBotConnectionLifecycle(ctx context.Context, status ChannelStatus, event string, message string, eventErr error) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	kind := applog.KindOperation
+	level := applog.LevelInfo
+	detail := ""
+	if eventErr != nil {
+		kind = applog.KindError
+		level = applog.LevelError
+		detail = eventErr.Error()
+	}
+	if event == "duplicate_client_conflict" {
+		kind = applog.KindError
+		level = applog.LevelError
+	}
+	metadata := map[string]any{
+		"connection_epoch":      status.ConnectionEpoch,
+		"duplicate_connections": status.DuplicateConnections,
+	}
+	if status.ProfileID != "" {
+		metadata["profile_id"] = status.ProfileID
+	}
+	if status.Platform != "" {
+		metadata["platform"] = status.Platform
+	}
+	if status.ConnectionOwner != "" {
+		metadata["connection_owner"] = status.ConnectionOwner
+	}
+	if status.LastRejectedClient != "" {
+		metadata["rejected_client"] = status.LastRejectedClient
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind:      kind,
+		Level:     level,
+		Action:    "qqbot." + event,
+		Message:   message,
+		Detail:    detail,
+		Target:    status.ProfileID,
+		Metadata:  metadata,
+		CreatedAt: time.Now(),
+	})
 }
 
 func (r *Runtime) setInboundReady(ready bool) {

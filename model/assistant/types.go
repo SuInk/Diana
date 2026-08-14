@@ -193,14 +193,20 @@ type ResultChannel interface {
 }
 
 type ChannelStatus struct {
-	ProfileID string    `json:"profile_id,omitempty"`
-	Platform  string    `json:"platform,omitempty"`
-	Name      string    `json:"name,omitempty"`
-	Connected bool      `json:"connected"`
-	Endpoint  string    `json:"endpoint"`
-	SelfID    string    `json:"self_id,omitempty"`
-	LastError string    `json:"last_error,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ProfileID               string     `json:"profile_id,omitempty"`
+	Platform                string     `json:"platform,omitempty"`
+	Name                    string     `json:"name,omitempty"`
+	Connected               bool       `json:"connected"`
+	Endpoint                string     `json:"endpoint"`
+	SelfID                  string     `json:"self_id,omitempty"`
+	LastError               string     `json:"last_error,omitempty"`
+	ConnectionEpoch         uint64     `json:"connection_epoch,omitempty"`
+	ConnectionOwner         string     `json:"connection_owner,omitempty"`
+	DuplicateConnections    uint64     `json:"duplicate_connections,omitempty"`
+	LastRejectedClient      string     `json:"last_rejected_client,omitempty"`
+	LastConnectionEvent     string     `json:"last_connection_event,omitempty"`
+	LastConnectionEventTime *time.Time `json:"last_connection_event_time,omitempty"`
+	UpdatedAt               time.Time  `json:"updated_at"`
 }
 
 type EventHandler func(context.Context, MessageEvent) error

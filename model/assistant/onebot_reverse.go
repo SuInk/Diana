@@ -2,9 +2,11 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -23,12 +25,16 @@ type OneBotReverseServer struct {
 	handler EventHandler
 	ctx     context.Context
 
-	connMu   sync.RWMutex
-	writeMu  sync.Mutex
-	conn     *websocket.Conn
-	status   ChannelStatus
-	pending  sync.Map
-	upgrader websocket.Upgrader
+	connMu    sync.RWMutex
+	writeMu   sync.Mutex
+	conn      *websocket.Conn
+	accepting bool
+	// acceptGeneration invalidates an in-flight WebSocket upgrade when the
+	// server closes before that upgrade has installed its connection.
+	acceptGeneration uint64
+	status           ChannelStatus
+	pending          sync.Map
+	upgrader         websocket.Upgrader
 }
 
 func (s *OneBotReverseServer) OutboundBackoffEnabled() bool { return true }
@@ -79,22 +85,59 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	clientFingerprint := oneBotClientFingerprint(r)
+	selfID := strings.TrimSpace(r.Header.Get("X-Self-ID"))
+
+	s.connMu.Lock()
+	if s.conn != nil || s.accepting {
+		now := time.Now()
+		s.status.DuplicateConnections++
+		s.status.LastRejectedClient = clientFingerprint
+		s.status.LastConnectionEvent = "duplicate_client_conflict"
+		s.status.LastConnectionEventTime = &now
+		s.status.UpdatedAt = now
+		s.connMu.Unlock()
+		http.Error(w, "onebot reverse websocket already has an active client", http.StatusConflict)
+		return
+	}
+	// Reserve the single connection slot across the HTTP upgrade so two
+	// simultaneous clients cannot both pass the empty-slot check.
+	s.accepting = true
+	acceptGeneration := s.acceptGeneration
+	s.connMu.Unlock()
 
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		s.setStatus(false, s.Status().SelfID, err.Error())
+		s.connMu.Lock()
+		if acceptGeneration == s.acceptGeneration {
+			s.accepting = false
+			s.status.Connected = false
+			s.status.LastError = err.Error()
+			s.status.UpdatedAt = time.Now()
+		}
+		s.connMu.Unlock()
 		return
 	}
 	conn.SetReadLimit(maxOneBotWebSocketFrameBytes)
 
 	s.connMu.Lock()
-	if s.conn != nil {
-		// 新 NapCat 连接进来时替换旧连接，避免 API 调用写到过期 socket。
-		_ = s.conn.Close()
+	if acceptGeneration != s.acceptGeneration {
+		s.connMu.Unlock()
+		_ = conn.Close()
+		return
 	}
+	s.accepting = false
 	s.conn = conn
+	now := time.Now()
+	s.status.Connected = true
+	s.status.SelfID = selfID
+	s.status.LastError = ""
+	s.status.ConnectionEpoch++
+	s.status.ConnectionOwner = clientFingerprint
+	s.status.LastConnectionEvent = "connection_opened"
+	s.status.LastConnectionEventTime = &now
+	s.status.UpdatedAt = now
 	s.connMu.Unlock()
-	s.setStatus(true, "", "")
 
 	go s.readLoop(conn)
 }
@@ -175,6 +218,8 @@ func (s *OneBotReverseServer) Status() ChannelStatus {
 func (s *OneBotReverseServer) Close() error {
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
+	s.acceptGeneration++
+	s.accepting = false
 	if s.conn == nil {
 		s.status.Connected = false
 		s.status.UpdatedAt = time.Now()
@@ -182,8 +227,12 @@ func (s *OneBotReverseServer) Close() error {
 	}
 	err := s.conn.Close()
 	s.conn = nil
+	now := time.Now()
 	s.status.Connected = false
-	s.status.UpdatedAt = time.Now()
+	s.status.ConnectionOwner = ""
+	s.status.LastConnectionEvent = "disconnected"
+	s.status.LastConnectionEventTime = &now
+	s.status.UpdatedAt = now
 	return err
 }
 
@@ -208,9 +257,13 @@ func (s *OneBotReverseServer) disconnectIfCurrent(conn *websocket.Conn, lastErro
 		return
 	}
 	s.conn = nil
+	now := time.Now()
 	s.status.Connected = false
 	s.status.LastError = lastError
-	s.status.UpdatedAt = time.Now()
+	s.status.ConnectionOwner = ""
+	s.status.LastConnectionEvent = "disconnected"
+	s.status.LastConnectionEventTime = &now
+	s.status.UpdatedAt = now
 }
 
 // handleFrame 解析反向 OneBot 帧并分发事件。
@@ -286,13 +339,26 @@ func (s *OneBotReverseServer) setStatus(connected bool, selfID string, lastError
 	s.mu.RUnlock()
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
-	s.status = ChannelStatus{
-		Connected: connected,
-		Endpoint:  endpoint,
-		SelfID:    selfID,
-		LastError: lastError,
-		UpdatedAt: time.Now(),
+	s.status.Connected = connected
+	s.status.Endpoint = endpoint
+	if selfID != "" || s.status.SelfID == "" {
+		s.status.SelfID = selfID
 	}
+	s.status.LastError = lastError
+	s.status.UpdatedAt = time.Now()
+}
+
+func oneBotClientFingerprint(r *http.Request) string {
+	if r == nil {
+		return "unknown"
+	}
+	identity := strings.Join([]string{
+		strings.TrimSpace(r.RemoteAddr),
+		strings.TrimSpace(r.Header.Get("X-Self-ID")),
+		strings.TrimSpace(r.Header.Get("User-Agent")),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("client-%x", sum[:8])
 }
 
 // authorized 校验反向 WebSocket 请求鉴权。
