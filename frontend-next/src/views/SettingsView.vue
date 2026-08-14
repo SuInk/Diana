@@ -125,7 +125,7 @@
             <span class="mono">{{ systemVersion?.version_label || systemVersion?.build_version || "—" }}</span>
           </div>
           <p class="muted" style="font-size: 12.5px; margin: 0">
-            {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "发现新版本时仅显示黄色提示点，确认后才会下载、校验、备份并切换完整 Release 包。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
+            {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；安装和重启必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
           </p>
 
           <template v-if="deploymentMode === 'git' && updateStatus">
@@ -137,8 +137,9 @@
             <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
           </template>
           <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="updating" @click="runUpdate">
-            <Download :size="15" aria-hidden="true" />
-            {{ updating ? "更新中…" : deploymentMode === "git" ? "安装最新稳定 Release" : "下载并安装最新 Release" }}
+            <RefreshCw v-if="deploymentMode === 'release' && updateStatus?.download_ready" :size="15" aria-hidden="true" />
+            <Download v-else :size="15" aria-hidden="true" />
+            {{ updating ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : updateStatus?.download_ready ? "安装并重启" : "下载最新 Release" }}
           </button>
           <pre v-if="updateOutput" class="mono" style="margin: 0; font-size: 11.5px; white-space: pre-wrap; color: var(--muted)">{{ updateOutput }}</pre>
           <div v-if="loading" class="skeleton" style="height: 72px"></div>
@@ -178,7 +179,9 @@ import {
   getHealth,
   getSystemVersion,
   getUpdateStatus,
+	installDownloadedSystemUpdate,
   logout,
+	downloadSystemUpdate,
   pullFromGitHub,
   type HealthResponse,
   type SystemVersion,
@@ -259,21 +262,32 @@ async function loadUpdates(): Promise<void> {
 }
 
 async function runUpdate(): Promise<void> {
+	const installingRelease = deploymentMode.value === "release" && updateStatus.value?.download_ready;
   const confirmed = await askConfirm({
-    title: "安装最新稳定版本？",
-    message: deploymentMode.value === "release"
-      ? "确认后才会下载并校验完整 Release 包、备份数据库和当前版本，再切换版本并执行健康检查。"
+		title: installingRelease ? "安装已下载版本并重启？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : "安装最新稳定版本？",
+		message: deploymentMode.value === "release"
+		  ? installingRelease
+			? "将备份数据库和当前版本，安装后自动重启并执行健康检查；失败时自动恢复。"
+			: "只下载、校验并暂存完整 Release 包，不会安装或重启服务。"
       : "确认后才会同步到最新稳定 Release。更新完成前请勿关闭服务。",
-    confirmLabel: "确认更新"
+		confirmLabel: installingRelease ? "安装并重启" : deploymentMode.value === "release" ? "下载更新" : "确认更新"
   });
   if (!confirmed) return;
   updating.value = true;
   updateOutput.value = "";
   try {
-    const result = await pullFromGitHub();
+		const result = deploymentMode.value === "release"
+		  ? installingRelease
+			? await installDownloadedSystemUpdate()
+			: await downloadSystemUpdate()
+		  : await pullFromGitHub();
     updateStatus.value = result.status;
     updateOutput.value = result.output ?? "";
-    toastSuccess(result.updated ? (deploymentMode.value === "release" ? "更新已暂存，服务即将自动重启并探活" : "更新完成，重启服务后生效") : "已是最新，无需更新");
+		toastSuccess(deploymentMode.value === "release"
+		  ? installingRelease
+			? "已开始安装，服务即将重启并探活"
+			: result.downloaded ? "更新已下载并通过校验，等待安装" : "已是最新，无需更新"
+		  : result.updated ? "更新完成，重启服务后生效" : "已是最新，无需更新");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "更新失败");
   } finally {

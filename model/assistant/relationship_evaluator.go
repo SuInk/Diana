@@ -141,7 +141,7 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 		}
 		after, stored := before, true
 		if delta := evaluation.effectiveDelta(); delta != 0 {
-			after, stored = r.applyUserFavorabilityDelta(event, delta)
+			after, stored = r.applyEvaluatedUserFavorabilityDelta(event, delta, evaluation.Reason)
 		}
 		if stored {
 			r.recordRelationshipEvaluation(runCtx, event, before, after, evaluation)

@@ -730,7 +730,7 @@ func formatReplySuppressionRemaining(remaining time.Duration) string {
 }
 
 func (r *Runtime) sendReplySuppressionActivationNotice(ctx context.Context, event MessageEvent, item ReplySuppression) {
-	notice, generationErr := r.generateReplySuppressionActivationNotice(ctx, item)
+	notice, generationErr := r.generateReplySuppressionActivationNotice(ctx, event, item)
 	llmGenerated := generationErr == nil && notice != ""
 	if !llmGenerated {
 		notice = "为避免机器人互相循环，已暂停响应此账号" + formatReplySuppressionRemaining(time.Until(item.Until)) + "，期间不再接续消息。"
@@ -761,8 +761,8 @@ func (r *Runtime) sendReplyRefusalCooldownNotice(ctx context.Context, event Mess
 	return sendErr
 }
 
-func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, item ReplySuppression) (string, error) {
-	messages := []llm.Message{
+func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, event MessageEvent, item ReplySuppression) (string, error) {
+	messages := r.withUserFacingPersona(event, []llm.Message{
 		{
 			Role: llm.RoleSystem,
 			Content: strings.TrimSpace(`你为 QQ 群聊生成一条简短的系统状态提示。
@@ -777,7 +777,7 @@ func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, 
 			Role:    llm.RoleUser,
 			Content: "暂停时长：" + formatReplySuppressionRemaining(time.Until(item.Until)),
 		},
-	}
+	})
 	callCtx, cancel := context.WithTimeout(ctx, replySuppressionNoticeTimeout)
 	defer cancel()
 	raw, err := r.runLLMProvider(callCtx, func(client LLMProvider) (string, error) {

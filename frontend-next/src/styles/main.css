@@ -2413,6 +2413,19 @@ code {
   font-size: 12px;
 }
 
+.rss-watch-rule {
+  min-height: 108px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.rss-watch-rule-summary {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .repository-watch-manager-empty {
   display: flex;
   align-items: center;
@@ -3183,6 +3196,11 @@ code {
 .task-kind-icon.repository_watch {
   background: var(--ok-soft);
   color: var(--ok);
+}
+
+.task-kind-icon.rss_watch {
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 
 .task-main {

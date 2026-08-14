@@ -13,6 +13,7 @@
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">更新状态</span>
           <span v-if="checking" class="muted">检查中…</span>
+          <span v-else-if="status?.download_ready" class="badge warn">已下载，等待安装</span>
           <span v-else-if="checkResult?.update_available" class="badge warn">发现新版本</span>
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
           <span v-else class="muted">尚未检查</span>
@@ -33,21 +34,46 @@
         </div>
       </div>
 
+		<section v-if="releaseSelfUpdate" class="update-policy">
+			<div class="stack" style="gap: 3px">
+				<strong>自动更新</strong>
+				<span class="muted" style="font-size: 12.5px">更新包可自动下载；安装和重启默认需要手动确认。</span>
+			</div>
+			<label class="switch">
+				<input v-model="policy.auto_download" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('download')" />
+				<span class="track"></span>
+				<span class="switch-label">自动下载</span>
+			</label>
+			<label class="switch">
+				<input v-model="policy.auto_install" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('install')" />
+				<span class="track"></span>
+				<span class="switch-label">自动安装并重启</span>
+			</label>
+		</section>
+
       <div class="cluster" style="gap: 8px">
         <button class="btn" type="button" :disabled="checking || updating" @click="check()">
           <RefreshCw :size="14" aria-hidden="true" />
           {{ checking ? "检查中…" : "检查更新" }}
         </button>
         <button
-          v-if="checkResult?.update_supported && checkResult.update_available"
+		  v-if="releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available && !status?.download_ready"
           class="btn primary"
           type="button"
           :disabled="updating"
-          @click="confirmUpdate"
+		  @click="downloadUpdate"
         >
           <Download :size="14" aria-hidden="true" />
-          {{ updating ? "更新中…" : "立即更新" }}
+		  {{ updating ? "下载中…" : "下载更新" }}
         </button>
+		<button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary" type="button" :disabled="updating" @click="confirmInstall">
+			<RefreshCcw :size="14" aria-hidden="true" />
+			{{ updating ? "安装中…" : "安装并重启" }}
+		</button>
+		<button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary" type="button" :disabled="updating" @click="confirmUpdate">
+			<Download :size="14" aria-hidden="true" />
+			{{ updating ? "更新中…" : "立即更新" }}
+		</button>
         <button
           v-if="deploymentMode === 'git'"
           class="btn ghost"
@@ -72,7 +98,7 @@
       </div>
       <p v-if="updatedHint" class="badge ok" style="align-self: flex-start">{{ updatedHint }}</p>
       <p v-if="releaseSelfUpdate" class="muted" style="font-size: 12.5px; margin: 0">
-        完整 Release 包会先校验 SHA-256，再备份数据库与当前版本；切换后自动重启并执行健康检查，失败时自动恢复。
+		完整 Release 包下载后先校验 SHA-256；安装时才备份数据库、切换版本并重启，健康检查失败会自动恢复。
       </p>
       <p v-else-if="deploymentMode === 'release'" class="muted" style="font-size: 12.5px; margin: 0">
         Docker 镜像由 OCI digest 校验并由部署环境安装。
@@ -204,15 +230,19 @@ import { AlertTriangle, Container, Copy, Download, History, RefreshCcw, RefreshC
 import Modal from "./Modal.vue";
 import {
   checkForUpdate,
+	downloadSystemUpdate,
   getChangelog,
   getSystemVersion,
   getUpdateStatus,
+	installDownloadedSystemUpdate,
   pullFromGitHub,
   rollbackSystem,
+	saveUpdatePolicy,
   type ChangelogEntry,
   type ReleaseEntry,
   type SystemVersion,
   type UpdateCheckResponse,
+	type UpdatePolicy,
   type UpdateStatus
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
@@ -231,6 +261,8 @@ const repo = ref("");
 const changelogError = ref("");
 const checking = ref(false);
 const updating = ref(false);
+const savingPolicy = ref(false);
+const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false });
 const updatedHint = ref("");
 const forceConfirming = ref(false);
 const rollbackTarget = ref<ReleaseEntry | null>(null);
@@ -307,6 +339,7 @@ async function check(notify = true): Promise<void> {
   try {
     checkResult.value = await checkForUpdate();
     status.value = checkResult.value.status ?? status.value;
+		policy.value = checkResult.value.policy ?? policy.value;
     emit("checked", checkResult.value.update_available);
     if (notify) {
       if (checkResult.value.update_available) {
@@ -320,6 +353,52 @@ async function check(notify = true): Promise<void> {
   } finally {
     checking.value = false;
   }
+}
+
+async function persistPolicy(changed: "download" | "install"): Promise<void> {
+	if (changed === "install" && policy.value.auto_install) policy.value.auto_download = true;
+	if (changed === "download" && !policy.value.auto_download) policy.value.auto_install = false;
+	savingPolicy.value = true;
+	try {
+		policy.value = await saveUpdatePolicy(policy.value);
+		toastSuccess("自动更新设置已保存");
+	} catch (error) {
+		toastError(error instanceof Error ? error.message : "保存自动更新设置失败");
+		await check(false);
+	} finally {
+		savingPolicy.value = false;
+	}
+}
+
+async function downloadUpdate(): Promise<void> {
+	updating.value = true;
+	try {
+		const result = await downloadSystemUpdate();
+		status.value = result.status;
+		updatedHint.value = result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待安装` : "已是最新稳定版本";
+		toastSuccess(updatedHint.value);
+	} catch (error) {
+		toastError(error instanceof Error ? error.message : "下载更新失败");
+	} finally {
+		updating.value = false;
+	}
+}
+
+async function confirmInstall(): Promise<void> {
+	const target = status.value?.downloaded_version || "已下载版本";
+	const confirmed = await askConfirm({title: `安装 ${target} 并重启？`, message: "安装时会备份当前版本和数据库，切换后自动重启并执行健康检查；失败时自动恢复。", confirmLabel: "安装并重启"});
+	if (!confirmed) return;
+	updating.value = true;
+	try {
+		const result = await installDownloadedSystemUpdate();
+		status.value = result.status;
+		updatedHint.value = `正在安装 ${result.target_commit || target}，服务即将重启`;
+		toastSuccess("已开始安装并重启");
+	} catch (error) {
+		toastError(error instanceof Error ? error.message : "安装更新失败");
+	} finally {
+		updating.value = false;
+	}
 }
 
 async function update(): Promise<void> {
@@ -408,6 +487,23 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.update-policy {
+	display: grid;
+	grid-template-columns: minmax(220px, 1fr) auto auto;
+	align-items: center;
+	gap: 14px;
+	padding: 11px 12px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--surface-2);
+}
+
+@media (max-width: 720px) {
+	.update-policy {
+		grid-template-columns: 1fr;
+	}
+}
+
 .force-update-confirm,
 .rollback-confirm {
   display: flex;

@@ -42,6 +42,14 @@ func TestRepositoryWatchTaskDoesNotConsumePersonalQuota(t *testing.T) {
 	}
 }
 
+func TestRSSWatchTaskQuotaDependsOnOwner(t *testing.T) {
+	personal := taskForTool(Reminder{Kind: ReminderKindRSSWatch, OwnerID: "user", FeedURL: "https://example.com/feed", IntervalSeconds: 900})
+	webui := taskForTool(Reminder{Kind: ReminderKindRSSWatch, OwnerID: "webui:qq", FeedURL: "https://example.com/feed", IntervalSeconds: 900})
+	if personal.Kind != "rss_watch" || !personal.ConsumesQuota || webui.ConsumesQuota {
+		t.Fatalf("personal=%#v webui=%#v", personal, webui)
+	}
+}
+
 func TestDianaTasksToolAllScopeRequiresOwner(t *testing.T) {
 	store := &stubReminderStore{items: []Reminder{{ID: "a", OwnerID: "user"}, {ID: "b", OwnerID: "other"}}}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)

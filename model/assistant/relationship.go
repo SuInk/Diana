@@ -124,6 +124,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 	if p.AllowPersonalSchedule {
 		allowed["diana.reminder"] = true
 		allowed["diana.schedule"] = true
+		allowed["diana.rss"] = true
 	}
 	if p.AllowImageGeneration || p.AllowImageEditing {
 		allowed[dianaImageToolName] = true

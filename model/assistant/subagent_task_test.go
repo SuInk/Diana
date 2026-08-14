@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestSubagentTaskAcknowledgesThenSendsUnquotedFollowup(t *testing.T) {
@@ -51,6 +53,36 @@ func TestRuntimeLaunchesPluginTaskWithoutCallingForegroundLLM(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool { return channel.count() == 2 })
 	if got := channel.messages()[1].Text; got != "插件后台结果" {
 		t.Fatalf("followup = %q", got)
+	}
+}
+
+func TestUserFacingPluginTaskLLMUsesGroupPersona(t *testing.T) {
+	channel := &concurrentRecordingChannel{}
+	provider := &capturingLLMProvider{reply: "带人设的后台回答"}
+	runtime := NewRuntime(BotConfig{SystemPrompt: "全局人设"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"20001": {GroupID: "20001", SystemPrompt: "本群限定的活泼人设"},
+	}})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "message-1"}
+	task := PluginTask{
+		Kind: "test", Name: "生成回答", Key: "persona-task",
+		Run: func(ctx context.Context, services PluginTaskServices) (PluginTaskResult, error) {
+			reply, err := services.GenerateReply(ctx, llm.GenerateRequest{Messages: []llm.Message{
+				{Role: llm.RoleSystem, Content: "请生成最终可见回答"},
+				{Role: llm.RoleUser, Content: "测试"},
+			}})
+			return PluginTaskResult{Reply: reply}, err
+		},
+	}
+
+	if _, handled, err := runtime.launchPluginTasks(context.Background(), event, []PluginTask{task}); err != nil || !handled {
+		t.Fatalf("launchPluginTasks handled=%v err=%v", handled, err)
+	}
+	waitForCondition(t, time.Second, func() bool { return channel.count() == 2 })
+	if !requestMessagesContain(provider.request.Messages, "本群限定的活泼人设") || requestMessagesContain(provider.request.Messages, "全局人设") {
+		t.Fatalf("plugin reply request = %#v", provider.request.Messages)
 	}
 }
 

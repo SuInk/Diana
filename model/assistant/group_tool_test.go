@@ -43,6 +43,9 @@ func TestDianaQQGroupToolListsOtherMembersWithMentions(t *testing.T) {
 	if len(result.Members) != 2 || result.Members[0].UserID != "10002" || result.Members[1].UserID != "20002" {
 		t.Fatalf("members = %#v", result.Members)
 	}
+	if result.Total != 2 || result.GroupTotal != 4 {
+		t.Fatalf("counts = matched %d group %d", result.Total, result.GroupTotal)
+	}
 	if result.Members[0].MentionCQ != "[CQ:at,qq=10002]" || result.Members[0].DisplayName != "Alice Card" {
 		t.Fatalf("Alice = %#v", result.Members[0])
 	}
@@ -122,6 +125,54 @@ func TestRuntimeAgentUsesQQGroupToolToMentionOtherMembers(t *testing.T) {
 	}
 	if atCount != 1 {
 		t.Fatalf("segments = %#v", segments)
+	}
+}
+
+func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithQQGroupTool(t *testing.T) {
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_group_member_list": {
+			"items": []any{
+				map[string]any{"group_id": "20001", "user_id": "10001", "nickname": "Alice"},
+				map[string]any{"group_id": "20001", "user_id": "10002", "nickname": "Bob"},
+				map[string]any{"group_id": "20001", "user_id": "42", "nickname": "Diana"},
+			},
+		},
+	}}
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"action":"tool","tool":"diana.qq_group","input":{"operation":"members"}}`,
+		`{"action":"final","content":"群里现在有 3 个人。"}`,
+	}}
+	runtime := NewRuntime(BotConfig{
+		AgentEnabled:  true,
+		AgentWorkDir:  t.TempDir(),
+		AgentMaxSteps: 3,
+		BotQQ:         "42",
+	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{
+		Kind:           EventKindGroup,
+		SelfID:         "42",
+		GroupID:        "20001",
+		UserID:         "10001",
+		MessageID:      "group-count-followup",
+		SenderName:     "Alice",
+		RawMessage:     "群里现在几个人",
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "群里现在几个人"}}},
+		proactiveReply: true,
+	}
+	reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply != "群里现在有 3 个人。" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
+		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
+	}
+	if calls := channel.callsSnapshot(); len(calls) != 1 || calls[0].action != "get_group_member_list" {
+		t.Fatalf("OneBot calls=%#v", calls)
+	}
+	if len(provider.requests) != 2 || !requestMessagesContain(provider.requests[1].Messages, `"group_total": 3`) {
+		t.Fatalf("provider requests=%#v", provider.requests)
 	}
 }
 

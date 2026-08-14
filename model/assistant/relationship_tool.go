@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	defaultRelationshipListLimit = 20
-	maximumRelationshipListLimit = 50
+	defaultRelationshipListLimit    = 20
+	maximumRelationshipListLimit    = 50
+	defaultRelationshipHistoryLimit = 5
+	maximumRelationshipHistoryLimit = 20
 )
 
 type dianaRelationshipTool struct {
@@ -28,20 +30,21 @@ type dianaRelationshipResult struct {
 }
 
 type dianaRelationshipSnapshot struct {
-	UserID           string           `json:"user_id"`
-	DisplayName      string           `json:"display_name"`
-	MentionCQ        string           `json:"mention_cq"`
-	Favorability     int              `json:"favorability"`
-	MessageCount     int              `json:"message_count"`
-	RelationshipTier RelationshipTier `json:"relationship_tier"`
-	RelationshipName string           `json:"relationship_name"`
-	Permissions      []string         `json:"permissions"`
-	ScheduleLimit    int              `json:"reminder_schedule_limit"`
-	CanGenerateImage bool             `json:"can_generate_image"`
-	CanEditImage     bool             `json:"can_edit_image"`
-	CanDocumentOCR   bool             `json:"can_document_ocr"`
-	Owner            bool             `json:"owner"`
-	HasHistory       bool             `json:"has_history"`
+	UserID           string                   `json:"user_id"`
+	DisplayName      string                   `json:"display_name"`
+	MentionCQ        string                   `json:"mention_cq"`
+	Favorability     int                      `json:"favorability"`
+	MessageCount     int                      `json:"message_count"`
+	RelationshipTier RelationshipTier         `json:"relationship_tier"`
+	RelationshipName string                   `json:"relationship_name"`
+	Permissions      []string                 `json:"permissions"`
+	ScheduleLimit    int                      `json:"reminder_schedule_limit"`
+	CanGenerateImage bool                     `json:"can_generate_image"`
+	CanEditImage     bool                     `json:"can_edit_image"`
+	CanDocumentOCR   bool                     `json:"can_document_ocr"`
+	Owner            bool                     `json:"owner"`
+	HasHistory       bool                     `json:"has_history"`
+	RecentChanges    []UserFavorabilityChange `json:"recent_changes,omitempty"`
 }
 
 func newDianaRelationshipTool(runtime *Runtime, event MessageEvent) *dianaRelationshipTool {
@@ -53,7 +56,7 @@ func (t *dianaRelationshipTool) Name() string {
 }
 
 func (t *dianaRelationshipTool) Description() string {
-	return `查询 Diana 对 QQ 用户的好感度、关系等级、互动次数、当前权限和提醒/订阅额度。用户询问自己、被 @ 成员或指定群成员的好感度/关系/权限时必须调用本工具，不要根据“当前发言者”上下文猜测，也不要声称无法查询隐藏数据。最终回复必须简明列出结果中的 permissions 和 reminder_schedule_limit，不能只报好感度数字。operation=get 时 target_user_id 可省略：消息里有被 @ 成员就自动查询该成员，否则查询当前发言者；operation=list 查询当前群内已有互动记录的成员并按好感度排序，仅主人可用。主人还可使用 set 直接设置或 adjust 增减任意非主人用户的好感度，不增加互动次数：{"operation":"set","target_user_id":"QQ号","value":80} 或 {"operation":"adjust","target_user_id":"QQ号","delta":10}。若最终回复需要真正 @ 目标，请原样使用结果中的 mention_cq，不要写普通文本 @QQ号。`
+	return `查询 Diana 对 QQ 用户的好感度、最近增减分记录、关系等级、互动次数、当前权限和提醒/订阅额度。用户询问自己、被 @ 成员或指定群成员的好感度/关系/权限时必须调用本工具，不要根据“当前发言者”上下文猜测，也不要声称无法查询隐藏数据。最终回复必须简明列出结果中的 permissions 和 reminder_schedule_limit；recent_changes 非空时还要说明最近的增减分、时间和原因，不能只报好感度数字。operation=get 时 target_user_id 可省略：消息里有被 @ 成员就自动查询该成员，否则查询当前发言者；默认返回最近 5 条变化，可用 history_limit 指定 1 到 20 条。operation=list 查询当前群内已有互动记录的成员并按好感度排序，仅主人可用。主人还可使用 set 直接设置或 adjust 增减任意非主人用户的好感度，不增加互动次数，并可提供 reason：{"operation":"set","target_user_id":"QQ号","value":80,"reason":"备注"} 或 {"operation":"adjust","target_user_id":"QQ号","delta":10,"reason":"备注"}。若最终回复需要真正 @ 目标，请原样使用结果中的 mention_cq，不要写普通文本 @QQ号。`
 }
 
 func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -77,7 +80,7 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, member.DisplayName())
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, member.DisplayName(), relationshipHistoryLimit(input))
 		if err != nil {
 			return "", err
 		}
@@ -122,7 +125,7 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, "")
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", relationshipHistoryLimit(input))
 		if err != nil {
 			return "", err
 		}
@@ -167,10 +170,14 @@ func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operati
 		GroupID:    t.event.GroupID,
 		UserID:     targetID,
 		SenderName: profile.DisplayName,
+		MessageID:  t.event.MessageID,
 	}, UserMemoryUpdate{
-		OwnerID:         t.runtime.effectiveConfigForEvent(t.event).OwnerID,
-		SetFavorability: &value,
-		Administrative:  true,
+		OwnerID:                    t.runtime.effectiveConfigForEvent(t.event).OwnerID,
+		SetFavorability:            &value,
+		FavorabilityChangeSource:   "owner_" + operation,
+		FavorabilityChangeReason:   relationshipChangeReason(operation, input),
+		FavorabilityChangeOperator: strings.TrimSpace(t.event.UserID),
+		Administrative:             true,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("保存用户好感度失败: %w", err)
@@ -222,7 +229,7 @@ func (t *dianaRelationshipTool) resolveTargetMember(ctx context.Context, targetI
 	return QQGroupMemberInfo{}, fmt.Errorf("QQ %s 不是当前群成员", targetID)
 }
 
-func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID string, fallbackName string) (dianaRelationshipSnapshot, error) {
+func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID string, fallbackName string, historyLimit int) (dianaRelationshipSnapshot, error) {
 	t.runtime.mu.RLock()
 	store := t.runtime.userMemory
 	t.runtime.mu.RUnlock()
@@ -241,6 +248,15 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 		profile.DisplayName = firstNonEmpty(strings.TrimSpace(fallbackName), relationshipEventDisplayName(t.event, userID), userID)
 	}
 	policy := RelationshipPolicyFor(profile, t.runtime.effectiveConfigForEvent(t.event).OwnerID, userID)
+	var recentChanges []UserFavorabilityChange
+	if historyLimit > 0 {
+		if historyStore, ok := store.(UserFavorabilityHistoryStore); ok {
+			recentChanges, err = historyStore.ListUserFavorabilityChanges(ctx, userID, historyLimit)
+			if err != nil {
+				return dianaRelationshipSnapshot{}, fmt.Errorf("读取好感度变化记录失败: %w", err)
+			}
+		}
+	}
 	return dianaRelationshipSnapshot{
 		UserID:           userID,
 		DisplayName:      profile.DisplayName,
@@ -256,6 +272,7 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 		CanDocumentOCR:   policy.AllowDocumentOCR,
 		Owner:            policy.Owner,
 		HasHistory:       found,
+		RecentChanges:    recentChanges,
 	}, nil
 }
 
@@ -269,7 +286,7 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context, limi
 	}
 	items := make([]dianaRelationshipSnapshot, 0, len(members))
 	for _, member := range members {
-		item, err := t.relationshipSnapshot(ctx, member.UserID, member.DisplayName())
+		item, err := t.relationshipSnapshot(ctx, member.UserID, member.DisplayName(), 0)
 		if err != nil {
 			return nil, err
 		}
@@ -302,6 +319,27 @@ func relationshipListLimit(input map[string]any) int {
 		return maximumRelationshipListLimit
 	}
 	return limit
+}
+
+func relationshipHistoryLimit(input map[string]any) int {
+	limit, err := strconv.Atoi(strings.TrimSpace(configToolString(input, "history_limit")))
+	if err != nil || limit <= 0 {
+		return defaultRelationshipHistoryLimit
+	}
+	if limit > maximumRelationshipHistoryLimit {
+		return maximumRelationshipHistoryLimit
+	}
+	return limit
+}
+
+func relationshipChangeReason(operation string, input map[string]any) string {
+	if reason := strings.TrimSpace(configToolString(input, "reason")); reason != "" {
+		return reason
+	}
+	if operation == "set" {
+		return "主人手动设置好感度"
+	}
+	return "主人手动调整好感度"
 }
 
 func normalizeRelationshipUserID(raw string) string {
