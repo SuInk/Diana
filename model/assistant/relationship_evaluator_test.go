@@ -149,6 +149,10 @@ func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 	if profile.Favorability != 1 || profile.MessageCount != 1 {
 		t.Fatalf("profile after async evaluation = %#v", profile)
 	}
+	changes := memory.favorabilityChanges[event.UserID]
+	if len(changes) != 1 || changes[0].Delta != 1 || changes[0].Source != "interaction" || changes[0].Reason != "初识阶段的真实任务互动" || changes[0].MessageID != "message" {
+		t.Fatalf("favorability changes = %#v", changes)
+	}
 	if len(provider.requests) != 2 {
 		t.Fatalf("provider calls = %d, want one reply and one relationship evaluation", len(provider.requests))
 	}

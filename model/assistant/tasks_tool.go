@@ -43,6 +43,11 @@ type dianaTask struct {
 	WatchReleases       bool      `json:"watch_releases,omitempty"`
 	LastCommitSHA       string    `json:"last_commit_sha,omitempty"`
 	LastReleaseTag      string    `json:"last_release_tag,omitempty"`
+	FeedURL             string    `json:"feed_url,omitempty"`
+	FeedSource          string    `json:"feed_source,omitempty"`
+	FeedHandle          string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
 	CreatedAt           time.Time `json:"created_at"`
 	ConsumesQuota       bool      `json:"consumes_quota"`
 }
@@ -149,6 +154,9 @@ func taskForTool(item Reminder) dianaTask {
 		if reminderIsRepositoryWatch(item) {
 			kind = "repository_watch"
 			consumesQuota = false
+		} else if reminderIsRSSWatch(item) {
+			kind = "rss_watch"
+			consumesQuota = !strings.HasPrefix(item.OwnerID, "webui") && item.CancelledAt.IsZero()
 		} else {
 			consumesQuota = item.CancelledAt.IsZero()
 		}
@@ -176,6 +184,11 @@ func taskForTool(item Reminder) dianaTask {
 		WatchReleases:       item.WatchReleases,
 		LastCommitSHA:       item.LastCommitSHA,
 		LastReleaseTag:      item.LastReleaseTag,
+		FeedURL:             item.FeedURL,
+		FeedSource:          item.FeedSource,
+		FeedHandle:          item.FeedHandle,
+		FeedJudgePrompt:     item.FeedJudgePrompt,
+		LastFeedItemID:      item.LastFeedItemID,
 		CreatedAt:           item.CreatedAt,
 		ConsumesQuota:       consumesQuota,
 	}

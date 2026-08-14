@@ -291,6 +291,11 @@ export interface UpdateStatus {
   last_fetched_at?: string;
   last_update_at?: string;
   last_update_text?: string;
+	update_available?: boolean;
+	restart_required?: boolean;
+	download_ready?: boolean;
+	downloaded_version?: string;
+	downloaded_at?: string;
 }
 
 export interface UpdateResult {
@@ -300,6 +305,7 @@ export interface UpdateResult {
   forced?: boolean;
   applied?: boolean;
   restart_required?: boolean;
+	downloaded?: boolean;
   previous_commit?: string;
   target_commit?: string;
   output?: string;
@@ -720,6 +726,36 @@ export function pullFromGitHub(force = false): Promise<UpdateResult> {
   });
 }
 
+export function downloadSystemUpdate(force = false): Promise<UpdateResult> {
+	return requestJSON<UpdateResult>("/api/system/update/download", {
+		method: "POST",
+		body: JSON.stringify({ force, confirmation: "download-update" })
+	});
+}
+
+export function installDownloadedSystemUpdate(): Promise<UpdateResult> {
+	return requestJSON<UpdateResult>("/api/system/update/install", {
+		method: "POST",
+		body: JSON.stringify({ confirmation: "install-restart" })
+	});
+}
+
+export interface UpdatePolicy {
+	auto_download: boolean;
+	auto_install: boolean;
+}
+
+export function getUpdatePolicy(): Promise<UpdatePolicy> {
+	return requestJSON<UpdatePolicy>("/api/system/update/policy");
+}
+
+export function saveUpdatePolicy(policy: UpdatePolicy): Promise<UpdatePolicy> {
+	return requestJSON<UpdatePolicy>("/api/system/update/policy", {
+		method: "PUT",
+		body: JSON.stringify(policy)
+	});
+}
+
 export interface SystemVersion {
   build_version: string;
   version_label: string;
@@ -803,6 +839,7 @@ export interface UpdateCheckResponse {
   checksum_available: boolean;
   checksum_url?: string;
   status?: UpdateStatus;
+	policy: UpdatePolicy;
 }
 
 export function checkForUpdate(): Promise<UpdateCheckResponse> {
@@ -937,7 +974,7 @@ export function getAssistantEventTrace(eventID: string): Promise<AssistantEventT
   return requestJSON<AssistantEventTraceResponse>(`/api/assistant/events/${encodeURIComponent(eventID)}/trace`);
 }
 
-export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch";
+export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "rss_watch";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
 export interface AssistantTask {
@@ -964,6 +1001,12 @@ export interface AssistantTask {
   watch_releases?: boolean;
   last_commit_sha?: string;
   last_release_tag?: string;
+  feed_url?: string;
+  feed_source?: "rss" | "twitter";
+  feed_handle?: string;
+  feed_judge_prompt?: string;
+  last_feed_item_id?: string;
+  last_feed_published_at?: string;
   created_at: string;
   consumes_quota: boolean;
 }
@@ -978,6 +1021,17 @@ export interface RepositoryWatchInput {
   interval_seconds: number;
   watch_commits: boolean;
   watch_releases: boolean;
+  profile_id?: string;
+  destination?: "private" | "group";
+  group_id?: string;
+  user_id?: string;
+}
+
+export interface RSSWatchInput {
+  feed_url?: string;
+  twitter_handle?: string;
+  judge_prompt: string;
+  interval_seconds: number;
   profile_id?: string;
   destination?: "private" | "group";
   group_id?: string;
@@ -1008,6 +1062,22 @@ export function cancelRepositoryWatch(id: string): Promise<AssistantTask> {
 
 export function deleteRepositoryWatch(id: string): Promise<void> {
   return requestJSON<void>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function createRSSWatch(input: RSSWatchInput): Promise<AssistantTask> {
+  return requestJSON<AssistantTask>("/api/assistant/tasks/rss-watches", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "judge_prompt" | "interval_seconds">>): Promise<AssistantTask> {
+  return requestJSON<AssistantTask>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) });
+}
+
+export function cancelRSSWatch(id: string): Promise<AssistantTask> {
+  return requestJSON<AssistantTask>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+}
+
+export function deleteRSSWatch(id: string): Promise<void> {
+  return requestJSON<void>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function getHealth(): Promise<HealthResponse> {

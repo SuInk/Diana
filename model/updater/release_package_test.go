@@ -48,7 +48,7 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 	writeUpdaterTestFile(t, filepath.Join(frontend, "index.html"), "old-frontend", 0o600)
 	writeUpdaterTestFile(t, database, "database", 0o600)
 	var planPath string
-	u, err := NewReleasePackageUpdater(ReleasePackageOptions{
+	options := ReleasePackageOptions{
 		CurrentVersion: "v0.4.0",
 		Executable:     executable,
 		FrontendDir:    frontend,
@@ -59,14 +59,15 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 			planPath = path
 			return nil
 		},
-	})
+	}
+	u, err := NewReleasePackageUpdater(options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !u.Supported() {
 		t.Fatalf("release updater is unsupported: %s", u.unsupportedWhy)
 	}
-	result, err := u.Install(context.Background(), ReleasePackage{
+	result, err := u.Download(context.Background(), ReleasePackage{
 		Tag:       "v0.5.0",
 		Archive:   ReleaseAsset{Name: assetName, URL: server.URL + "/" + assetName},
 		Checksums: ReleaseAsset{Name: "SHA256SUMS", URL: server.URL + "/SHA256SUMS"},
@@ -74,8 +75,36 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Updated || !result.Fetched || !result.RestartRequired || result.TargetCommit != "v0.5.0" {
-		t.Fatalf("Install() = %#v", result)
+	if result.Updated || !result.Fetched || !result.Downloaded || result.RestartRequired || result.TargetCommit != "v0.5.0" {
+		t.Fatalf("Download() = %#v", result)
+	}
+	if planPath != "" {
+		t.Fatalf("download started install helper with plan %q", planPath)
+	}
+	status, err := u.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.DownloadReady || status.DownloadedVersion != "v0.5.0" {
+		t.Fatalf("Status() after download = %#v", status)
+	}
+	restartedUpdater, err := NewReleasePackageUpdater(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedStatus, err := restartedUpdater.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restartedStatus.DownloadReady || restartedStatus.DownloadedVersion != "v0.5.0" {
+		t.Fatalf("Status() after process restart = %#v", restartedStatus)
+	}
+	result, err = restartedUpdater.InstallDownloaded(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated || !result.RestartRequired || !result.Applied || result.TargetCommit != "v0.5.0" {
+		t.Fatalf("InstallDownloaded() = %#v", result)
 	}
 	plan, err := readReleaseApplyPlan(planPath)
 	if err != nil {

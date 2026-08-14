@@ -81,6 +81,39 @@ func TestSearchMessageEventsRanksExactPhraseThenPartialTerms(t *testing.T) {
 	}
 }
 
+func TestMessageHistoryPersistsOutboundRole(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "outbound-history.db")
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := assistant.MessageEvent{
+		Kind: assistant.EventKindPrivate, Time: 10, SelfID: "42", UserID: "10001",
+		MessageID: "outgoing-1", SenderName: "嘉然", Outbound: true,
+		Segments: []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "我刚才说过的话"}}},
+	}
+	if err := store.AppendMessageEvent(ctx, "private:10001", event); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	history, err := store.ListRecentMessageEvents(ctx, "private:10001", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || !history[0].Outbound || history[0].UserID != "10001" || history[0].SelfID != "42" {
+		t.Fatalf("persisted outbound history = %#v", history)
+	}
+}
+
 func historySearchEvent(at int64, groupID, messageID, sender, text string) assistant.MessageEvent {
 	return assistant.MessageEvent{
 		Kind: assistant.EventKindGroup, Time: at, GroupID: groupID, UserID: sender,

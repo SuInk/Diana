@@ -774,13 +774,13 @@ func TestReplySuppressionNoticeUsesMainModelWithoutMentions(t *testing.T) {
 			{ID: "routing", Name: "快速语义判定", Group: "routing", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "routing-key", Model: "routing-model"}},
 		},
 	}}
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{SystemPrompt: "保持 Diana 的自然人设"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	var usedModel string
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
 		usedModel = cfg.Model
 		return provider, nil
 	})
-	notice, err := runtime.generateReplySuppressionActivationNotice(context.Background(), ReplySuppression{Until: time.Now().Add(30 * time.Minute)})
+	notice, err := runtime.generateReplySuppressionActivationNotice(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "12345"}, ReplySuppression{Until: time.Now().Add(30 * time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -792,6 +792,9 @@ func TestReplySuppressionNoticeUsesMainModelWithoutMentions(t *testing.T) {
 	}
 	if !strings.Contains(notice, "暂停响应此账号") {
 		t.Fatalf("notice = %q", notice)
+	}
+	if !requestMessagesContain(provider.request.Messages, "保持 Diana 的自然人设") {
+		t.Fatalf("notice request missing persona: %#v", provider.request.Messages)
 	}
 	if got := sanitizeReplySuppressionNotice(`@某人 [CQ:at,qq=20002] 暂停响应此账号`); got != "" {
 		t.Fatalf("unsafe notice was not rejected: %q", got)

@@ -45,6 +45,20 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_favorability_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  delta INTEGER NOT NULL,
+  before_score INTEGER NOT NULL,
+  after_score INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  reason TEXT,
+  operator_id TEXT,
+  group_id TEXT,
+  message_id TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS memory_items (
   id TEXT PRIMARY KEY,
   scope_key TEXT NOT NULL,
@@ -144,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_message_events_text ON message_events(text);
 CREATE INDEX IF NOT EXISTS idx_message_events_user_time ON message_events(user_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_image_descriptions_source_message ON image_descriptions(source_session, source_message_id);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_at ON user_profiles(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_favorability_changes_user_id ON user_favorability_changes(user_id, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_items_active_key ON memory_items(scope_key, subject_user_id, memory_key) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_memory_items_subject_active ON memory_items(subject_user_id, status, importance DESC, confidence DESC, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_items_scope_active ON memory_items(scope_key, status, importance DESC, confidence DESC, updated_at DESC);

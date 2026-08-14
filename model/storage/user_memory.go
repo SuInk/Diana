@@ -48,6 +48,7 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if ownerID != "" && ownerID == userID && profile.Favorability < ownerUserFavorability {
 		profile.Favorability = ownerUserFavorability
 	}
+	previousFavorability := profile.Favorability
 	if name := strings.TrimSpace(event.SenderName); name != "" {
 		profile.DisplayName = name
 	}
@@ -73,7 +74,12 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if !profile.LastSeenAt.IsZero() {
 		lastSeen = profile.LastSeenAt.UTC().Format(time.RFC3339Nano)
 	}
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assistant.UserMemoryProfile{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `
 INSERT INTO user_profiles (user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(user_id) DO UPDATE SET
@@ -84,7 +90,82 @@ ON CONFLICT(user_id) DO UPDATE SET
   last_seen_at=excluded.last_seen_at,
   updated_at=excluded.updated_at
 `, profile.UserID, profile.DisplayName, profile.Favorability, profile.MessageCount, string(memories), lastSeen, profile.UpdatedAt.Format(time.RFC3339Nano))
-	return profile, err
+	if err != nil {
+		return assistant.UserMemoryProfile{}, err
+	}
+	if profile.Favorability != previousFavorability && favorabilityChangeRequested(update) {
+		_, err = tx.ExecContext(ctx, `
+INSERT INTO user_favorability_changes (
+  user_id, delta, before_score, after_score, source, reason, operator_id, group_id, message_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, profile.UserID, profile.Favorability-previousFavorability, previousFavorability, profile.Favorability,
+			favorabilityChangeSource(update), strings.TrimSpace(update.FavorabilityChangeReason),
+			strings.TrimSpace(update.FavorabilityChangeOperator), strings.TrimSpace(event.GroupID),
+			strings.TrimSpace(event.MessageID), profile.UpdatedAt.Format(time.RFC3339Nano))
+		if err != nil {
+			return assistant.UserMemoryProfile{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return assistant.UserMemoryProfile{}, err
+	}
+	return profile, nil
+}
+
+// ListUserFavorabilityChanges returns the newest real score changes first.
+func (s *SQLiteStore) ListUserFavorabilityChanges(ctx context.Context, userID string, limit int) ([]assistant.UserFavorabilityChange, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" || limit <= 0 {
+		return []assistant.UserFavorabilityChange{}, nil
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, user_id, delta, before_score, after_score, source, reason, operator_id, group_id, message_id, created_at
+FROM user_favorability_changes
+WHERE user_id = ?
+ORDER BY id DESC
+LIMIT ?
+`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	changes := make([]assistant.UserFavorabilityChange, 0, limit)
+	for rows.Next() {
+		var change assistant.UserFavorabilityChange
+		var reason, operatorID, groupID, messageID sql.NullString
+		var createdAt string
+		if err := rows.Scan(&change.ID, &change.UserID, &change.Delta, &change.Before, &change.After, &change.Source,
+			&reason, &operatorID, &groupID, &messageID, &createdAt); err != nil {
+			return nil, err
+		}
+		change.Reason = reason.String
+		change.OperatorID = operatorID.String
+		change.GroupID = groupID.String
+		change.MessageID = messageID.String
+		change.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		changes = append(changes, change)
+	}
+	return changes, rows.Err()
+}
+
+func favorabilityChangeSource(update assistant.UserMemoryUpdate) string {
+	if source := strings.TrimSpace(update.FavorabilityChangeSource); source != "" {
+		return source
+	}
+	if update.SetFavorability != nil {
+		return "manual"
+	}
+	return "interaction"
+}
+
+func favorabilityChangeRequested(update assistant.UserMemoryUpdate) bool {
+	return update.SetFavorability != nil || update.FavorabilityDelta != 0
 }
 
 // GetUserMemory loads one QQ user's long-term profile.

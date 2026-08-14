@@ -346,16 +346,19 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 	}}}
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{"修复了投递，并发布 v1.1.0。"}}
-	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(plugin), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second, SystemPrompt: "全局普通人设"}, channel, NewPluginManager(plugin), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"123": {GroupID: "123", SystemPrompt: "本群限定的自然人设"},
+	}})
 	runtime.fireDueReminders(context.Background())
-	if len(channel.sent) != 1 || channel.sent[0].GroupID != "123" || !strings.Contains(channel.sent[0].Text, "v1.1.0") {
+	if len(channel.sent) != 1 || channel.sent[0].GroupID != "123" || !strings.Contains(channel.sent[0].Text, "v1.1.0") || strings.Contains(channel.sent[0].Text, "watch-2") {
 		t.Fatalf("sent=%#v", channel.sent)
 	}
 	item := store.items[0]
 	if item.LastCommitSHA != "new-sha" || item.LastReleaseTag != "v1.1.0" || item.PendingDelivery != "" || item.ConsecutiveFailures != 0 {
 		t.Fatalf("item=%#v", item)
 	}
-	if len(provider.requests) != 1 || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") {
+	if len(provider.requests) != 1 || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") || !requestMessagesContain(provider.requests[0].Messages, "本群限定的自然人设") || requestMessagesContain(provider.requests[0].Messages, "watch-2") {
 		t.Fatalf("requests=%#v", provider.requests)
 	}
 }
