@@ -261,3 +261,13 @@ func TestLLMConfigFromEnvRestoresLegacyProviderSettings(t *testing.T) {
 		t.Fatalf("image settings = %#v", cfg)
 	}
 }
+
+func TestLLMConfigFromEnvDefaultsOpenAICompatibleToResponses(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai_compatible")
+	t.Setenv("LLM_API_FORMAT", "")
+
+	cfg := llmConfigFromEnv()
+	if cfg.APIFormat != llm.APIFormatResponses {
+		t.Fatalf("APIFormat = %q, want %q", cfg.APIFormat, llm.APIFormatResponses)
+	}
+}

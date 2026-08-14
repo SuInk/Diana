@@ -960,6 +960,40 @@ func TestOpenAICompatibleResponsesAPIErrorIncludesRootJSONBody(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleResponsesAPIUnsupportedEndpointHasCompatibilityHint(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %q, want /v1/responses", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"unknown endpoint"}}`))
+	}))
+	defer server.Close()
+
+	client := newOpenAICompatibleClient(ProviderConfig{
+		Provider: ProviderOpenAICompatible,
+		APIKey:   "test-key",
+		BaseURL:  server.URL + "/v1",
+		Model:    "gpt-test",
+	}, server.Client())
+	_, err := client.Generate(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "hello"}}})
+	if err == nil {
+		t.Fatal("Generate error = nil, want unsupported endpoint error")
+	}
+	got := err.Error()
+	for _, want := range []string{"404 Not Found", "Responses API", "select Chat Completions", "/chat/completions"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error = %q, want substring %q", got, want)
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("HTTP requests=%d, want exactly 1 without protocol fallback", got)
+	}
+}
+
 func TestOpenAICompatibleResponsesAPIDoesNotRetryInsideSDK(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

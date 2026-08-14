@@ -396,7 +396,7 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 
 	resp, err, capture := c.newResponse(ctx, params)
 	if err != nil {
-		return nil, openAICompatibleError(err, capture)
+		return nil, openAIResponsesError(err, capture)
 	}
 	text := strings.TrimSpace(resp.OutputText())
 	if text == "" {
@@ -1682,6 +1682,21 @@ func openAICompatibleError(err error, capture *openAIErrorCapture) error {
 		return fmt.Errorf("llm: openai-compatible request failed: %s", formatOpenAIStatusError(capture.statusCode, "", "", "", capture.body))
 	}
 	return err
+}
+
+// openAIResponsesError keeps Responses as the selected protocol while making
+// unsupported third-party endpoints actionable for the user.
+func openAIResponsesError(err error, capture *openAIErrorCapture) error {
+	normalized := openAICompatibleError(err, capture)
+	if capture == nil {
+		return normalized
+	}
+	switch capture.statusCode {
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return fmt.Errorf("%w; the endpoint may not support the Responses API; explicitly select Chat Completions for this profile if the provider only supports /chat/completions", normalized)
+	default:
+		return normalized
+	}
 }
 
 // formatOpenAIStatusError 格式化 OpenAI-compatible HTTP 错误。
