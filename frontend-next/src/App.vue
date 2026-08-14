@@ -77,6 +77,7 @@
           <span class="status-dot" :class="{ pulse: botSummary.kind === 'ok' }" aria-hidden="true" />
           {{ botSummary.label }}
         </span>
+        <span v-if="demoMode" class="badge warn demo-mode-badge">演示模式 · 模拟数据</span>
         <span class="topbar-stream" :title="stream.connected ? '事件实时推送中' : '实时通道已断开，页面数据可能不是最新'">
           <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
           <span class="topbar-stream-text">{{ stream.connected ? "实时连接正常" : "实时连接已断开" }}</span>
@@ -152,6 +153,7 @@ import LogsView from "./views/LogsView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
 const drawerOpen = ref(false);
+const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
 const SIDEBAR_DRAWER_QUERY = "(max-width: 960px)";
 const sidebarMedia = window.matchMedia(SIDEBAR_DRAWER_QUERY);
 const narrowSidebar = ref(sidebarMedia.matches);

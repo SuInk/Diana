@@ -73,6 +73,16 @@ export function startEventStream(): void {
     return;
   }
   started = true;
+  if (import.meta.env.VITE_DEMO_MODE === "true") {
+    void import("./demo").then(({ demoEvents, demoStats, demoStatus }) => {
+      state.connected = true;
+      state.status = demoStatus;
+      state.stats = demoStats;
+      state.events = demoEvents;
+      state.lastEventAt = demoEvents[0]?.at ?? null;
+    });
+    return;
+  }
   connect();
   document.addEventListener("visibilitychange", () => {
     // 后台标签页恢复后，若连接已断开则立即重建，避免等待浏览器重连间隔。

@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "docs/**"
+      - "frontend-next/**"
       - "scripts/install.sh"
       - "scripts/install.ps1"
       - ".github/workflows/pages.yml"
@@ -19,6 +20,9 @@ permissions:
 concurrency:
   group: pages
   cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
 
 jobs:
   deploy:
@@ -34,10 +38,32 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend-next/package-lock.json
+
+      - name: Build real WebUI demo
+        working-directory: frontend-next
+        env:
+          VITE_DEMO_MODE: "true"
+          VITE_BASE_PATH: /Diana/demo/
+        run: |
+          npm ci
+          npm run build
+
+      - name: Assemble Pages site
+        run: |
+          mkdir -p _site/demo
+          cp -R docs/. _site/
+          cp -R frontend-next/dist/. _site/demo/
+
       - name: Upload documentation
         uses: actions/upload-pages-artifact@v4
         with:
-          path: docs
+          path: _site
 
       - name: Deploy Pages
         id: deployment

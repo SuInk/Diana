@@ -68,7 +68,7 @@ document.querySelector("[data-docs-header]").innerHTML = `
       ${pages.map((page) => `<a href="./${page.file}"${page === currentPage ? ' aria-current="page"' : ""}>${page.title}</a>`).join("")}
     </nav>
     <nav class="top-links" aria-label="外部链接">
-      <a href="./demo.html">在线演示</a>
+      <a href="./demo/">在线演示</a>
       <a href="https://github.com/SuInk/Diana/releases/latest">下载</a>
       <a href="https://github.com/SuInk/Diana">GitHub</a>
       <button class="icon-button" type="button" aria-label="切换明暗主题" title="切换明暗主题" data-theme-toggle><span data-theme-icon aria-hidden="true">☾</span></button>
@@ -94,7 +94,7 @@ document.querySelector("[data-docs-footer]").innerHTML = `
     <div><strong>Diana</strong><p>多平台 AI 助手服务</p></div>
     <div>
       <a href="https://github.com/SuInk/Diana">源代码</a>
-      <a href="./demo.html">在线演示</a>
+      <a href="./demo/">在线演示</a>
       <a href="https://github.com/SuInk/Diana/releases/latest">最新版本</a>
       <a href="https://github.com/SuInk/Diana/issues">问题反馈</a>
       <a href="https://github.com/SuInk/Diana/blob/main/LICENSE">许可证</a>
