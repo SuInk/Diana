@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -85,6 +86,55 @@ func TestRuntimeBackfillsMissedHistoryIntoDurableQueue(t *testing.T) {
 	if err := runtime.Stop(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestRuntimeObservesConnectionEpochChangesWithoutDisconnectedEdge(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	channel := newQueueTestChannel()
+	logs := &captureAppLogs{}
+	runtime := newQueuedTestRuntime(channel, store, nil)
+	runtime.SetAppLogWriter(logs)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.connection_opened")
+	})
+	channel.bumpConnectionEpoch()
+	waitForCondition(t, 2*time.Second, func() bool {
+		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.reconnected")
+	})
+}
+
+func TestRuntimeInboundStatusUsesOneBotChannelInMultiChannel(t *testing.T) {
+	onebot := &multiChannelProbe{status: ChannelStatus{
+		Connected:       false,
+		ConnectionEpoch: 4,
+	}}
+	telegram := &multiChannelProbe{status: ChannelStatus{Connected: true}}
+	runtime := NewRuntime(BotConfig{ID: "telegram", Platform: PlatformTelegram}, NewMultiChannel([]ChannelBinding{
+		{ProfileID: "qq", Platform: PlatformOneBotV11, Channel: onebot},
+		{ProfileID: "telegram", Platform: PlatformTelegram, Channel: telegram},
+	}), NewPluginManager(), nil, nil, nil, nil)
+
+	status := runtime.channelStatus()
+	if status.Connected {
+		t.Fatal("Telegram connectivity must not mark the OneBot inbound queue ready")
+	}
+	if status.Platform != PlatformOneBotV11 || status.ProfileID != "qq" || status.ConnectionEpoch != 4 {
+		t.Fatalf("inbound status = %#v, want OneBot profile status", status)
+	}
+}
+
+func hasAppLogAction(entries []applog.Entry, action string) bool {
+	for _, entry := range entries {
+		if entry.Action == action {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRuntimeDrainsPendingWhileHistoryBackfillIsSlow(t *testing.T) {
@@ -504,6 +554,7 @@ func (s *memoryInboundEventStore) isDone(id string) bool {
 type queueTestChannel struct {
 	mu        sync.Mutex
 	connected bool
+	epoch     uint64
 	sent      []OutgoingMessage
 	responses map[string]map[string]any
 }
@@ -511,6 +562,7 @@ type queueTestChannel struct {
 func newQueueTestChannel() *queueTestChannel {
 	return &queueTestChannel{
 		connected: true,
+		epoch:     1,
 		responses: map[string]map[string]any{
 			"get_group_list":         {"items": []any{}},
 			"get_recent_contact":     {"items": []any{}},
@@ -544,7 +596,13 @@ func (c *queueTestChannel) CallAPI(_ context.Context, action string, _ map[strin
 func (c *queueTestChannel) Status() ChannelStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return ChannelStatus{Connected: c.connected, SelfID: "42"}
+	return ChannelStatus{Connected: c.connected, SelfID: "42", ConnectionEpoch: c.epoch}
+}
+
+func (c *queueTestChannel) bumpConnectionEpoch() {
+	c.mu.Lock()
+	c.epoch++
+	c.mu.Unlock()
 }
 
 func (c *queueTestChannel) Close() error { return nil }
