@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -85,5 +86,43 @@ func TestAgentRunObserverRedactsOneBotV11DebugPayload(t *testing.T) {
 	}
 	if strings.Contains(debug.Metadata["error"].(string), "owner-secret") || strings.Contains(debug.Metadata["error"].(string), "secret.example") {
 		t.Fatalf("debug payload leaked OneBot error: %#v", debug.Metadata)
+	}
+}
+
+func TestAgentRunObserverRedactsRepositoryIssueDebugPayload(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := NewRuntime(BotConfig{DebugModeEnabled: true}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", MessageID: "message-2"}
+	ctx := runtime.withDebugTraceContext(context.Background(), event)
+	runtime.agentRunObserver(event)(ctx, agent.RunEvent{
+		Phase:      agent.RunPhaseToolCompleted,
+		Tool:       dianaRepositoryIssuesToolName,
+		ToolInput:  map[string]any{"operation": "create", "repository": "acme/demo", "title": "private title", "body": "token=owner-secret"},
+		ToolOutput: `{"ok":true,"issue":{"number":12,"title":"private title"}}`,
+		Error:      "GitHub rejected owner-secret",
+	})
+	entries := logs.entriesSnapshot()
+	if len(entries) != 2 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	operation, debug := entries[0], entries[1]
+	for _, entry := range entries {
+		encoded := fmt.Sprintf("%#v", entry)
+		for _, secret := range []string{"private title", "owner-secret"} {
+			if strings.Contains(encoded, secret) {
+				t.Fatalf("repository issue log leaked %q: %#v", secret, entry)
+			}
+		}
+	}
+	if operation.Detail != "[repository issue tool error omitted]" {
+		t.Fatalf("operation detail = %q", operation.Detail)
+	}
+	input, _ := debug.Metadata["tool_input"].(map[string]any)
+	if input["operation"] != "create" || input["repository"] != "acme/demo" {
+		t.Fatalf("debug input = %#v", input)
+	}
+	if debug.Metadata["tool_output"] != "[repository issue tool output omitted]" || debug.Metadata["error"] != "[repository issue tool error omitted]" {
+		t.Fatalf("debug metadata = %#v", debug.Metadata)
 	}
 }
