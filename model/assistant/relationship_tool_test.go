@@ -97,7 +97,7 @@ func TestDianaRelationshipOwnerCanSetAndAdjustOthersFavorability(t *testing.T) {
 	runtime.SetUserMemoryStore(memory)
 	ownerTool := newDianaRelationshipTool(runtime, MessageEvent{UserID: "10001"})
 
-	raw, err := ownerTool.Run(context.Background(), map[string]any{"operation": "set", "target_user_id": "10002", "value": 80})
+	raw, err := ownerTool.Run(context.Background(), map[string]any{"operation": "set", "target_user_id": "10002", "value": 80, "reason": "补录活动奖励"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +108,9 @@ func TestDianaRelationshipOwnerCanSetAndAdjustOthersFavorability(t *testing.T) {
 	if result.Target == nil || result.Target.Favorability != 80 || result.Target.MessageCount != 18 || memory.profiles["10002"].MessageCount != 18 {
 		t.Fatalf("set result=%#v profile=%#v", result, memory.profiles["10002"])
 	}
+	if len(result.Target.RecentChanges) != 1 || result.Target.RecentChanges[0].Delta != 75 || result.Target.RecentChanges[0].Source != "owner_set" || result.Target.RecentChanges[0].Reason != "补录活动奖励" || result.Target.RecentChanges[0].OperatorID != "10001" {
+		t.Fatalf("set recent changes=%#v", result.Target.RecentChanges)
+	}
 	raw, err = ownerTool.Run(context.Background(), map[string]any{"operation": "adjust", "target_user_id": "10002", "delta": -10})
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +120,9 @@ func TestDianaRelationshipOwnerCanSetAndAdjustOthersFavorability(t *testing.T) {
 	}
 	if result.Target == nil || result.Target.Favorability != 70 || result.Target.MessageCount != 18 {
 		t.Fatalf("adjust result=%#v", result)
+	}
+	if len(result.Target.RecentChanges) != 2 || result.Target.RecentChanges[0].Delta != -10 || result.Target.RecentChanges[0].Before != 80 || result.Target.RecentChanges[0].After != 70 || result.Target.RecentChanges[0].Source != "owner_adjust" {
+		t.Fatalf("adjust recent changes=%#v", result.Target.RecentChanges)
 	}
 
 	_, err = newDianaRelationshipTool(runtime, MessageEvent{UserID: "10002"}).Run(context.Background(), map[string]any{"operation": "set", "target_user_id": "10003", "value": 100})

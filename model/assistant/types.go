@@ -82,6 +82,7 @@ type MessageEvent struct {
 	SenderLevel      int              `json:"sender_level,omitempty"`
 	SenderLevelLabel string           `json:"sender_level_label,omitempty"`
 	SenderTitle      string           `json:"sender_title,omitempty"`
+	Outbound         bool             `json:"outbound,omitempty"`
 	ToMe             bool             `json:"to_me,omitempty"`
 	Quoted           *QuotedMessage   `json:"quoted,omitempty"`
 	// SemanticSourceMessageID keeps the first selected historical source for

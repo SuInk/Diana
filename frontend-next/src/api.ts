@@ -291,6 +291,11 @@ export interface UpdateStatus {
   last_fetched_at?: string;
   last_update_at?: string;
   last_update_text?: string;
+	update_available?: boolean;
+	restart_required?: boolean;
+	download_ready?: boolean;
+	downloaded_version?: string;
+	downloaded_at?: string;
 }
 
 export interface UpdateResult {
@@ -300,6 +305,7 @@ export interface UpdateResult {
   forced?: boolean;
   applied?: boolean;
   restart_required?: boolean;
+	downloaded?: boolean;
   previous_commit?: string;
   target_commit?: string;
   output?: string;
@@ -720,6 +726,36 @@ export function pullFromGitHub(force = false): Promise<UpdateResult> {
   });
 }
 
+export function downloadSystemUpdate(force = false): Promise<UpdateResult> {
+	return requestJSON<UpdateResult>("/api/system/update/download", {
+		method: "POST",
+		body: JSON.stringify({ force, confirmation: "download-update" })
+	});
+}
+
+export function installDownloadedSystemUpdate(): Promise<UpdateResult> {
+	return requestJSON<UpdateResult>("/api/system/update/install", {
+		method: "POST",
+		body: JSON.stringify({ confirmation: "install-restart" })
+	});
+}
+
+export interface UpdatePolicy {
+	auto_download: boolean;
+	auto_install: boolean;
+}
+
+export function getUpdatePolicy(): Promise<UpdatePolicy> {
+	return requestJSON<UpdatePolicy>("/api/system/update/policy");
+}
+
+export function saveUpdatePolicy(policy: UpdatePolicy): Promise<UpdatePolicy> {
+	return requestJSON<UpdatePolicy>("/api/system/update/policy", {
+		method: "PUT",
+		body: JSON.stringify(policy)
+	});
+}
+
 export interface SystemVersion {
   build_version: string;
   version_label: string;
@@ -803,6 +839,7 @@ export interface UpdateCheckResponse {
   checksum_available: boolean;
   checksum_url?: string;
   status?: UpdateStatus;
+	policy: UpdatePolicy;
 }
 
 export function checkForUpdate(): Promise<UpdateCheckResponse> {

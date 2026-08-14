@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/updater"
 
 	"github.com/gin-gonic/gin"
@@ -20,22 +22,30 @@ const (
 )
 
 type systemUpdateCheckResponse struct {
-	DeploymentMode    string          `json:"deployment_mode"`
-	CurrentVersion    string          `json:"current_version"`
-	LatestVersion     string          `json:"latest_version,omitempty"`
-	UpdateAvailable   bool            `json:"update_available"`
-	UpdateSupported   bool            `json:"update_supported"`
-	IntegrityMode     string          `json:"integrity_mode"`
-	ChecksumAvailable bool            `json:"checksum_available"`
-	ChecksumURL       string          `json:"checksum_url,omitempty"`
-	Status            *updater.Status `json:"status,omitempty"`
+	DeploymentMode    string               `json:"deployment_mode"`
+	CurrentVersion    string               `json:"current_version"`
+	LatestVersion     string               `json:"latest_version,omitempty"`
+	UpdateAvailable   bool                 `json:"update_available"`
+	UpdateSupported   bool                 `json:"update_supported"`
+	IntegrityMode     string               `json:"integrity_mode"`
+	ChecksumAvailable bool                 `json:"checksum_available"`
+	ChecksumURL       string               `json:"checksum_url,omitempty"`
+	Status            *updater.Status      `json:"status,omitempty"`
+	Policy            updater.UpdatePolicy `json:"policy"`
 }
 
 type ReleasePackageUpdater interface {
 	Supported() bool
 	ExpectedAssetName() string
 	Status(context.Context) (updater.Status, error)
+	Download(context.Context, updater.ReleasePackage, bool) (updater.Result, error)
+	InstallDownloaded(context.Context) (updater.Result, error)
 	Install(context.Context, updater.ReleasePackage, bool) (updater.Result, error)
+}
+
+type UpdatePolicyStore interface {
+	LoadUpdatePolicy(context.Context) (updater.UpdatePolicy, bool, error)
+	SaveUpdatePolicy(context.Context, updater.UpdatePolicy) error
 }
 
 type SystemUpdater interface {
@@ -54,6 +64,10 @@ type SystemUpdateHandler struct {
 	httpClient     *http.Client
 	githubAPIBase  string
 	changelog      changelogCache
+	policyStore    UpdatePolicyStore
+	policyMu       sync.RWMutex
+	policy         updater.UpdatePolicy
+	autoUpdateMu   sync.Mutex
 }
 
 // SetReleasePackageUpdater enables self-update for complete Release packages.
@@ -63,11 +77,29 @@ func (h *SystemUpdateHandler) SetReleasePackageUpdater(releaseUpdater ReleasePac
 }
 
 // NewSystemUpdateHandler 创建系统更新接口处理器。
-func NewSystemUpdateHandler(updater SystemUpdater) *SystemUpdateHandler {
+func NewSystemUpdateHandler(systemUpdater SystemUpdater) *SystemUpdateHandler {
 	return &SystemUpdateHandler{
-		updater:    updater,
+		updater:    systemUpdater,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
+		policy:     updater.DefaultUpdatePolicy(),
 	}
+}
+
+func (h *SystemUpdateHandler) SetUpdatePolicyStore(ctx context.Context, store UpdatePolicyStore) error {
+	h.policyStore = store
+	if store == nil {
+		return nil
+	}
+	policy, ok, err := store.LoadUpdatePolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if ok {
+		h.policyMu.Lock()
+		h.policy = normalizeUpdatePolicy(policy)
+		h.policyMu.Unlock()
+	}
+	return nil
 }
 
 // SetLogStore 注入系统更新操作日志写入器。
@@ -85,6 +117,10 @@ func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 	router.GET("/api/system/version", h.version)
 	router.GET("/api/system/update", h.status)
 	router.POST("/api/system/update", h.update)
+	router.POST("/api/system/update/download", h.download)
+	router.POST("/api/system/update/install", h.installDownloaded)
+	router.GET("/api/system/update/policy", h.getPolicy)
+	router.PUT("/api/system/update/policy", h.savePolicy)
 	router.POST("/api/system/update/check", h.check)
 	router.POST("/api/system/update/rollback", h.rollback)
 	router.GET("/api/system/update/changelog", h.changelogList)
@@ -196,7 +232,92 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 		ChecksumAvailable: latest.ChecksumAvailable,
 		ChecksumURL:       latest.ChecksumURL,
 		Status:            gitStatus,
+		Policy:            h.currentPolicy(),
 	})
+}
+
+func (h *SystemUpdateHandler) getPolicy(c *gin.Context) {
+	c.JSON(http.StatusOK, h.currentPolicy())
+}
+
+func (h *SystemUpdateHandler) savePolicy(c *gin.Context) {
+	var policy updater.UpdatePolicy
+	if err := c.ShouldBindJSON(&policy); err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	policy = normalizeUpdatePolicy(policy)
+	if h.policyStore != nil {
+		if err := h.policyStore.SaveUpdatePolicy(c.Request.Context(), policy); err != nil {
+			h.writeUpdateError(c, "system.update.policy", err)
+			return
+		}
+	}
+	h.policyMu.Lock()
+	h.policy = policy
+	h.policyMu.Unlock()
+	recordRequestOperation(c, h.logs, "system.update.policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall})
+	c.JSON(http.StatusOK, policy)
+}
+
+func (h *SystemUpdateHandler) currentPolicy() updater.UpdatePolicy {
+	h.policyMu.RLock()
+	defer h.policyMu.RUnlock()
+	return h.policy
+}
+
+func normalizeUpdatePolicy(policy updater.UpdatePolicy) updater.UpdatePolicy {
+	if policy.AutoInstall {
+		policy.AutoDownload = true
+	}
+	return policy
+}
+
+func (h *SystemUpdateHandler) download(c *gin.Context) {
+	var request struct {
+		Force        bool   `json:"force"`
+		Confirmation string `json:"confirmation"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	if request.Confirmation != "download-update" {
+		writeError(c, http.StatusBadRequest, errors.New("下载更新需要明确确认"))
+		return
+	}
+	result, err := h.downloadLatestRelease(c.Request.Context(), request.Force)
+	if err != nil {
+		h.writeUpdateError(c, "system.update.download", err)
+		return
+	}
+	recordRequestOperation(c, h.logs, "system.update.download", "更新包已下载并校验", result.TargetCommit, map[string]any{"forced": request.Force})
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
+	var request struct {
+		Confirmation string `json:"confirmation"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	if request.Confirmation != "install-restart" {
+		writeError(c, http.StatusBadRequest, errors.New("安装并重启需要明确确认"))
+		return
+	}
+	if h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
+		writeError(c, http.StatusBadRequest, updater.ErrReleaseUpdateUnsupported)
+		return
+	}
+	result, err := h.releaseUpdater.InstallDownloaded(c.Request.Context())
+	if err != nil {
+		h.writeUpdateError(c, "system.update.install", err)
+		return
+	}
+	recordRequestOperation(c, h.logs, "system.update.install", "已开始安装更新并重启", result.TargetCommit, nil)
+	c.JSON(http.StatusOK, result)
 }
 
 // update 执行系统更新并记录操作日志。
@@ -287,7 +408,7 @@ func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool)
 		if !ok {
 			return updater.Result{}, updater.ErrChecksumMissing
 		}
-		return h.releaseUpdater.Install(ctx, updater.ReleasePackage{
+		return h.releaseUpdater.Download(ctx, updater.ReleasePackage{
 			Tag:       latest.Tag,
 			Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
 			Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
@@ -297,6 +418,112 @@ func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool)
 		return h.updater.ForceUpdateToRelease(ctx, latest.Tag)
 	}
 	return h.updater.UpdateToRelease(ctx, latest.Tag)
+}
+
+func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force bool) (updater.Result, error) {
+	if h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
+		return updater.Result{}, updater.ErrReleaseUpdateUnsupported
+	}
+	status, err := h.releaseUpdater.Status(ctx)
+	if err != nil {
+		return updater.Result{}, err
+	}
+	latest, err := h.latestStableRelease(ctx, "")
+	if err != nil {
+		return updater.Result{}, err
+	}
+	if !force && status.DownloadReady && status.DownloadedVersion == latest.Tag {
+		return updater.Result{Status: status, Downloaded: true, TargetCommit: latest.Tag, Output: "Release package is already downloaded and verified.", At: time.Now()}, nil
+	}
+	if !force && !isNewerVersion(status.VersionLabel(), latest.Tag) {
+		return updater.Result{Status: status, TargetCommit: status.VersionLabel(), Output: "Already at the latest stable release.", At: time.Now()}, nil
+	}
+	archive, ok := latest.asset(h.releaseUpdater.ExpectedAssetName())
+	if !ok {
+		return updater.Result{}, fmt.Errorf("%w: %s", updater.ErrReleaseAssetMissing, h.releaseUpdater.ExpectedAssetName())
+	}
+	checksums, ok := latest.asset("SHA256SUMS")
+	if !ok {
+		return updater.Result{}, updater.ErrChecksumMissing
+	}
+	return h.releaseUpdater.Download(ctx, updater.ReleasePackage{
+		Tag:       latest.Tag,
+		Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
+		Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
+	}, force)
+}
+
+// StartAutoUpdate periodically downloads verified Release packages. Installing
+// and restarting remains opt-in unless AutoInstall is explicitly enabled.
+func (h *SystemUpdateHandler) StartAutoUpdate(ctx context.Context) {
+	if h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(30 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			h.runAutoUpdate(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func (h *SystemUpdateHandler) runAutoUpdate(ctx context.Context) {
+	if !h.autoUpdateMu.TryLock() {
+		return
+	}
+	defer h.autoUpdateMu.Unlock()
+	policy := h.currentPolicy()
+	if !policy.AutoDownload {
+		return
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+	result, err := h.downloadLatestRelease(runCtx, false)
+	if err != nil {
+		h.recordBackgroundUpdate("system.update.auto_download", "自动下载更新失败", err, nil)
+		return
+	}
+	if !result.Downloaded {
+		return
+	}
+	if result.Fetched {
+		h.recordBackgroundUpdate("system.update.auto_download", "更新包已自动下载并校验", nil, map[string]any{"target": result.TargetCommit})
+	}
+	if !policy.AutoInstall {
+		return
+	}
+	installed, err := h.releaseUpdater.InstallDownloaded(runCtx)
+	if err != nil {
+		h.recordBackgroundUpdate("system.update.auto_install", "自动安装更新失败", err, map[string]any{"target": result.TargetCommit})
+		return
+	}
+	h.recordBackgroundUpdate("system.update.auto_install", "已自动安装更新并开始重启", nil, map[string]any{"target": installed.TargetCommit})
+}
+
+func (h *SystemUpdateHandler) recordBackgroundUpdate(action, message string, err error, metadata map[string]any) {
+	if h.logs == nil {
+		return
+	}
+	entry := applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: action, Message: message, Metadata: metadata, CreatedAt: time.Now()}
+	if err != nil {
+		entry.Kind = applog.KindError
+		entry.Level = applog.LevelError
+		entry.Detail = err.Error()
+	}
+	_ = h.logs.AppendLog(context.Background(), entry)
 }
 
 func releaseApplyPending(status updater.Status, gitAvailable bool) bool {

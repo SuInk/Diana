@@ -53,6 +53,22 @@ type ReleasePackage struct {
 	Checksums ReleaseAsset
 }
 
+type UpdatePolicy struct {
+	AutoDownload bool `json:"auto_download"`
+	AutoInstall  bool `json:"auto_install"`
+}
+
+func DefaultUpdatePolicy() UpdatePolicy {
+	return UpdatePolicy{AutoDownload: true, AutoInstall: false}
+}
+
+type pendingReleaseUpdate struct {
+	Schema        int       `json:"schema"`
+	TargetVersion string    `json:"target_version"`
+	PlanPath      string    `json:"plan_path"`
+	DownloadedAt  time.Time `json:"downloaded_at"`
+}
+
 // ReleasePackageOptions describes the currently running complete Release package.
 type ReleasePackageOptions struct {
 	CurrentVersion string
@@ -251,13 +267,17 @@ func (u *ReleasePackageUpdater) Status(context.Context) (Status, error) {
 			status.LastUpdateText += " (" + state.Error + ")"
 		}
 	}
+	if pending, ok := u.pendingUpdate(); ok {
+		status.DownloadReady = true
+		status.DownloadedVersion = pending.TargetVersion
+		status.DownloadedAt = pending.DownloadedAt
+	}
 	return status, nil
 }
 
-// Install downloads, verifies, extracts, and stages a complete Release package.
-// The returned result means the handoff was accepted; the helper records the
-// final health-check outcome under .diana-updates/last-update.log.
-func (u *ReleasePackageUpdater) Install(ctx context.Context, release ReleasePackage, force bool) (Result, error) {
+// Download downloads, verifies, extracts, and stages a complete Release package
+// without changing the running installation or restarting the service.
+func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePackage, force bool) (Result, error) {
 	status, err := u.Status(ctx)
 	if err != nil {
 		return Result{}, err
@@ -283,6 +303,13 @@ func (u *ReleasePackageUpdater) Install(ctx context.Context, release ReleasePack
 	if !validReleaseDownloadURL(release.Archive.URL) || !validReleaseDownloadURL(release.Checksums.URL) {
 		return Result{}, errors.New("updater: release asset URL must use HTTPS")
 	}
+	if pending, ok := u.pendingUpdate(); ok && pending.TargetVersion == release.Tag && !force {
+		status.DownloadReady = true
+		status.DownloadedVersion = pending.TargetVersion
+		status.DownloadedAt = pending.DownloadedAt
+		return Result{Status: status, Downloaded: true, TargetCommit: release.Tag, Output: "Release package is already downloaded and verified.", At: time.Now()}, nil
+	}
+	u.removePendingUpdate()
 
 	updatesRoot := filepath.Join(u.installRoot, ".diana-updates")
 	if err := os.MkdirAll(updatesRoot, 0o700); err != nil {
@@ -375,28 +402,119 @@ func (u *ReleasePackageUpdater) Install(ctx context.Context, release ReleasePack
 	if err := writePrivateJSON(planPath, plan); err != nil {
 		return Result{}, err
 	}
-	if err := u.startHelper(helperPath, planPath, plan.LogPath); err != nil {
+	downloadedAt := time.Now()
+	pending := pendingReleaseUpdate{Schema: 1, TargetVersion: release.Tag, PlanPath: planPath, DownloadedAt: downloadedAt}
+	if err := writePrivateJSON(u.pendingUpdatePath(), pending); err != nil {
+		return Result{}, fmt.Errorf("record downloaded update: %w", err)
+	}
+	keepWorkRoot = true
+	_ = writeReleaseState(plan, releaseUpdateState{TargetVersion: release.Tag, Previous: u.currentVersion, Status: "downloaded", At: downloadedAt})
+	status.DownloadReady = true
+	status.DownloadedVersion = release.Tag
+	status.DownloadedAt = downloadedAt
+	status.UpdateAvailable = false
+	return Result{
+		Status:         status,
+		Fetched:        true,
+		Updated:        false,
+		Forced:         force,
+		Downloaded:     true,
+		PreviousCommit: u.currentVersion,
+		TargetCommit:   release.Tag,
+		Output:         fmt.Sprintf("Downloaded and verified %s with SHA-256; %s is ready to install.", u.assetName, release.Tag),
+		At:             time.Now(),
+	}, nil
+}
+
+// InstallDownloaded applies a previously downloaded package and schedules the
+// controlled restart with health-check rollback.
+func (u *ReleasePackageUpdater) InstallDownloaded(ctx context.Context) (Result, error) {
+	status, err := u.Status(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if !u.operationMu.TryLock() {
+		return Result{}, ErrUpdateInProgress
+	}
+	defer u.operationMu.Unlock()
+	if u.handoffStarted {
+		return Result{}, ErrUpdateInProgress
+	}
+	pending, ok := u.pendingUpdate()
+	if !ok {
+		return Result{}, errors.New("updater: no downloaded release is ready to install")
+	}
+	plan, err := readReleaseApplyPlan(pending.PlanPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("read downloaded release plan: %w", err)
+	}
+	plan.ParentPID = os.Getpid()
+	if err := validateReleaseApplyPlan(plan); err != nil {
+		return Result{}, err
+	}
+	if !regularFileExists(plan.StagedExecutable) || !regularFileExists(filepath.Join(plan.StagedFrontend, "index.html")) {
+		return Result{}, fmt.Errorf("%w: downloaded package is incomplete", ErrInvalidReleaseArchive)
+	}
+	if err := writePrivateJSON(pending.PlanPath, plan); err != nil {
+		return Result{}, err
+	}
+	helperPath := filepath.Join(plan.WorkRoot, "diana-release-helper")
+	if runtime.GOOS == "windows" {
+		helperPath += ".exe"
+	}
+	if err := u.startHelper(helperPath, pending.PlanPath, plan.LogPath); err != nil {
 		return Result{}, fmt.Errorf("start release update helper: %w", err)
 	}
 	u.handoffStarted = true
-	keepWorkRoot = true
+	_ = os.Remove(u.pendingUpdatePath())
 	if u.shutdown != nil {
 		time.AfterFunc(750*time.Millisecond, u.shutdown)
 	}
+	status.DownloadReady = false
+	status.DownloadedVersion = ""
+	status.DownloadedAt = time.Time{}
 	status.RestartRequired = true
-	status.UpdateAvailable = false
-	return Result{
-		Status:          status,
-		Fetched:         true,
-		Updated:         true,
-		Forced:          force,
-		Applied:         true,
-		RestartRequired: true,
-		PreviousCommit:  u.currentVersion,
-		TargetCommit:    release.Tag,
-		Output:          fmt.Sprintf("Verified %s with SHA-256; staged %s and scheduled an automatic restart with health-check rollback.", u.assetName, release.Tag),
-		At:              time.Now(),
-	}, nil
+	return Result{Status: status, Fetched: true, Updated: true, Downloaded: true, Applied: true, RestartRequired: true, PreviousCommit: u.currentVersion, TargetCommit: plan.TargetVersion, Output: fmt.Sprintf("Scheduled installation of %s with automatic restart and health-check rollback.", plan.TargetVersion), At: time.Now()}, nil
+}
+
+// Install preserves the original one-call behavior for compatibility.
+func (u *ReleasePackageUpdater) Install(ctx context.Context, release ReleasePackage, force bool) (Result, error) {
+	if _, err := u.Download(ctx, release, force); err != nil {
+		return Result{}, err
+	}
+	return u.InstallDownloaded(ctx)
+}
+
+func (u *ReleasePackageUpdater) pendingUpdatePath() string {
+	return filepath.Join(u.installRoot, ".diana-updates", "pending-update.json")
+}
+
+func (u *ReleasePackageUpdater) pendingUpdate() (pendingReleaseUpdate, bool) {
+	var pending pendingReleaseUpdate
+	file, err := os.Open(u.pendingUpdatePath())
+	if err != nil {
+		return pending, false
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, maxChecksumBytes))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&pending) != nil || pending.Schema != 1 || !releaseTagPattern.MatchString(pending.TargetVersion) || !filepath.IsAbs(pending.PlanPath) || !pathWithin(filepath.Join(u.installRoot, ".diana-updates"), pending.PlanPath) {
+		return pendingReleaseUpdate{}, false
+	}
+	if _, err := readReleaseApplyPlan(pending.PlanPath); err != nil {
+		return pendingReleaseUpdate{}, false
+	}
+	return pending, true
+}
+
+func (u *ReleasePackageUpdater) removePendingUpdate() {
+	pending, ok := u.pendingUpdate()
+	if ok {
+		if plan, err := readReleaseApplyPlan(pending.PlanPath); err == nil && pathWithin(filepath.Join(u.installRoot, ".diana-updates"), plan.WorkRoot) {
+			_ = os.RemoveAll(plan.WorkRoot)
+		}
+	}
+	_ = os.Remove(u.pendingUpdatePath())
 }
 
 func startDetachedReleaseHelper(executable, planPath, logPath string) error {
