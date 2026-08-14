@@ -52,6 +52,13 @@ type ExplicitUserRequestTool interface {
 	ExplicitUserRequestKind() string
 }
 
+// ExplicitUserRequestInputTool is the input-aware form used by tools that mix
+// read operations with several independently authorized mutations.
+type ExplicitUserRequestInputTool interface {
+	Tool
+	ExplicitUserRequestKind(input map[string]any) string
+}
+
 type closeableTool interface {
 	Close() error
 }
