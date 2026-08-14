@@ -358,6 +358,12 @@ export interface QQBotChannelStatus {
   endpoint: string;
   self_id?: string;
   last_error?: string;
+  connection_epoch?: number;
+  connection_owner?: string;
+  duplicate_connections?: number;
+  last_rejected_client?: string;
+  last_connection_event?: string;
+  last_connection_event_time?: string;
   updated_at: string;
 }
 

@@ -2,10 +2,14 @@ package assistant
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -268,6 +272,66 @@ func TestReverseServerStaleReadLoopCannotDisconnectReplacement(t *testing.T) {
 	status := server.Status()
 	if server.conn != nil || status.Connected || status.LastError != "current connection closed" {
 		t.Fatalf("current disconnect status = %#v", status)
+	}
+}
+
+func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t *testing.T) {
+	reverse := NewOneBotReverseServer(OneBotConfig{AccessToken: "test-token", Endpoint: "/onebot/v11/ws"})
+	server := httptest.NewServer(reverse)
+	defer server.Close()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	headers := http.Header{
+		"Authorization": []string{"Bearer test-token"},
+		"X-Self-ID":     []string{"42"},
+		"User-Agent":    []string{"napcat-primary"},
+	}
+
+	primary, response, err := websocket.DefaultDialer.Dial(wsURL, headers)
+	if err != nil {
+		t.Fatalf("primary dial error = %v response=%v", err, response)
+	}
+	defer primary.Close()
+	status := reverse.Status()
+	if !status.Connected || status.ConnectionEpoch != 1 || status.ConnectionOwner == "" {
+		t.Fatalf("primary connection status = %#v", status)
+	}
+
+	duplicateHeaders := headers.Clone()
+	duplicateHeaders.Set("User-Agent", "napcat-duplicate")
+	duplicate, response, err := websocket.DefaultDialer.Dial(wsURL, duplicateHeaders)
+	if duplicate != nil {
+		_ = duplicate.Close()
+	}
+	if !errors.Is(err, websocket.ErrBadHandshake) || response == nil || response.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate dial error=%v status=%v", err, response)
+	}
+	_ = response.Body.Close()
+	status = reverse.Status()
+	if !status.Connected || status.ConnectionEpoch != 1 || status.DuplicateConnections != 1 || status.LastRejectedClient == "" || status.LastConnectionEventTime == nil {
+		t.Fatalf("duplicate conflict status = %#v", status)
+	}
+	if status.ConnectionOwner == status.LastRejectedClient {
+		t.Fatal("distinct clients received the same fingerprint")
+	}
+
+	if err := primary.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil := time.Now().Add(2 * time.Second)
+	for reverse.Status().Connected && time.Now().Before(waitUntil) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if reverse.Status().Connected {
+		t.Fatal("primary connection did not transition to disconnected")
+	}
+
+	reconnected, response, err := websocket.DefaultDialer.Dial(wsURL, headers)
+	if err != nil {
+		t.Fatalf("reconnect dial error = %v response=%v", err, response)
+	}
+	defer reconnected.Close()
+	if status = reverse.Status(); !status.Connected || status.ConnectionEpoch != 2 || status.LastRejectedClient == "" {
+		t.Fatalf("reconnected status = %#v", status)
 	}
 }
 
