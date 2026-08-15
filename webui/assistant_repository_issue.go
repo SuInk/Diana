@@ -63,15 +63,15 @@ func (h *QQBotHandler) createRepositoryIssue(c *gin.Context) {
 
 func repositoryIssueCreateFailureStatus(code string) int {
 	switch code {
-	case "repository_not_allowed":
+	case "repository_not_allowed", "permission_denied":
 		return http.StatusForbidden
 	case "rate_limited":
 		return http.StatusTooManyRequests
 	case "timeout":
 		return http.StatusGatewayTimeout
-	case "unauthorized", "permission_denied":
+	case "unauthorized":
 		return http.StatusBadGateway
-	case "network_error", "github_unavailable", "invalid_response", "idempotency_scan_incomplete":
+	case "network_error", "github_unavailable", "gh_unavailable", "gh_auth_required", "invalid_response", "idempotency_scan_incomplete":
 		return http.StatusBadGateway
 	default:
 		return http.StatusBadRequest
