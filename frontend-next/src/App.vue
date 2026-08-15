@@ -186,7 +186,12 @@ function syncSidebarMode(event: MediaQueryListEvent): void {
 const locked = ref(false);
 const versionOpen = ref(false);
 const systemVersion = ref<SystemVersion | null>(null);
-const versionLabel = computed(() => systemVersion.value?.version_label || systemVersion.value?.build_version || "控制台");
+const versionLabel = computed(() => {
+  const raw = systemVersion.value?.version_label || systemVersion.value?.build_version || "";
+  const semantic = raw.match(/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
+  if (!semantic) return raw ? "开发版" : "控制台";
+  return semantic[0].startsWith("v") ? semantic[0] : `v${semantic[0]}`;
+});
 const releaseUpdateAvailable = ref(false);
 const health = ref<HealthResponse | null>(null);
 let updateCheckTimer: number | undefined;

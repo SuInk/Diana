@@ -13,6 +13,7 @@
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">更新状态</span>
           <span v-if="checking" class="muted">检查中…</span>
+          <span v-else-if="checkError" class="badge err">检查失败</span>
           <span v-else-if="status?.download_ready" class="badge warn">已下载，等待安装</span>
           <span v-else-if="checkResult?.update_available" class="badge warn">发现新版本</span>
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
@@ -32,6 +33,7 @@
           </a>
           <span v-else class="badge warn">缺少 SHA-256 清单</span>
         </div>
+		<p v-if="checkError" style="margin: 0; color: var(--err); font-size: 12.5px">{{ checkError }}</p>
       </div>
 
 		<section v-if="releaseSelfUpdate" class="update-policy">
@@ -259,6 +261,7 @@ const releases = ref<ReleaseEntry[]>([]);
 const loaded = ref(false);
 const repo = ref("");
 const changelogError = ref("");
+const checkError = ref("");
 const checking = ref(false);
 const updating = ref(false);
 const savingPolicy = ref(false);
@@ -336,6 +339,7 @@ async function load(): Promise<void> {
 async function check(notify = true): Promise<void> {
   checking.value = true;
   updatedHint.value = "";
+	checkError.value = "";
   try {
     checkResult.value = await checkForUpdate();
     status.value = checkResult.value.status ?? status.value;
@@ -349,7 +353,9 @@ async function check(notify = true): Promise<void> {
       }
     }
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "检查更新失败");
+		checkResult.value = null;
+		checkError.value = error instanceof Error ? error.message : "检查更新失败";
+		toastError(checkError.value);
   } finally {
     checking.value = false;
   }

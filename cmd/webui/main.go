@@ -34,8 +34,8 @@ import (
 )
 
 // main 初始化存储、路由、机器人运行时并启动 WebUI 服务。
-// buildVersion 由构建时 -ldflags "-X main.buildVersion=<sha>" 注入；
-// 源码运行或未注入时展示 dev，git 可用时前端优先展示 git 提交号。
+// buildVersion 由构建时 -ldflags "-X main.buildVersion=<version>" 注入；
+// Release 使用语义化 tag，普通开发构建使用 dev。
 var buildVersion = "dev"
 
 const (
@@ -69,6 +69,9 @@ func main() {
 	sqliteStore, err := storage.NewSQLiteStore(envOr("APP_DB_PATH", ""))
 	if err != nil {
 		log.Fatal(err)
+	}
+	if sqliteStore.Path() != "" {
+		_ = os.Setenv("APP_DB_PATH", sqliteStore.Path())
 	}
 	defer func() {
 		_ = sqliteStore.Close()

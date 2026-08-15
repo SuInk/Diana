@@ -45,7 +45,24 @@ type RepositoryWatchUpdateInput struct {
 }
 
 func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWatchCreateInput) (Reminder, error) {
-	pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, nil)
+	event := MessageEvent{
+		Platform: strings.TrimSpace(input.Platform), ProfileID: strings.TrimSpace(input.ProfileID),
+		ContextNamespace: strings.TrimSpace(input.ContextNamespace), UserID: strings.TrimSpace(input.UserID),
+		GroupID: strings.TrimSpace(input.GroupID),
+	}
+	if event.GroupID != "" {
+		event.Kind = EventKindGroup
+	} else {
+		event.Kind = EventKindPrivate
+		if event.UserID == "" {
+			return Reminder{}, fmt.Errorf("私聊通知必须填写发送对象 ID")
+		}
+	}
+	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(
+		repositoryWatchPluginID,
+		r.pluginOverridesForEvent(event),
+		r.pluginSettingOverridesForEvent(event),
+	)
 	plugin, ok := pluginValue.(*RepositoryWatchPlugin)
 	if !enabled || !ok {
 		return Reminder{}, fmt.Errorf("仓库更新订阅插件未启用")
@@ -71,19 +88,6 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	if err != nil {
 		return Reminder{}, fmt.Errorf("建立仓库基线失败: %w", err)
 	}
-	event := MessageEvent{
-		Platform: strings.TrimSpace(input.Platform), ProfileID: strings.TrimSpace(input.ProfileID),
-		ContextNamespace: strings.TrimSpace(input.ContextNamespace), UserID: strings.TrimSpace(input.UserID),
-		GroupID: strings.TrimSpace(input.GroupID),
-	}
-	if event.GroupID != "" {
-		event.Kind = EventKindGroup
-	} else {
-		event.Kind = EventKindPrivate
-		if event.UserID == "" {
-			return Reminder{}, fmt.Errorf("私聊通知必须填写发送对象 ID")
-		}
-	}
 	ownerID := firstNonEmpty(strings.TrimSpace(input.OwnerID), repositoryWatchWebUIOwner(event.ProfileID))
 	return r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, input.WatchCommits, input.WatchReleases, baseline)
 }
@@ -97,7 +101,16 @@ func repositoryWatchWebUIOwner(profileID string) string {
 }
 
 func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string, input RepositoryWatchUpdateInput) (Reminder, error) {
-	pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, nil)
+	current, err := r.repositoryWatch(strings.TrimSpace(ownerID), strings.TrimSpace(id))
+	if err != nil {
+		return Reminder{}, err
+	}
+	event := reminderSourceEvent(current)
+	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(
+		repositoryWatchPluginID,
+		r.pluginOverridesForEvent(event),
+		r.pluginSettingOverridesForEvent(event),
+	)
 	plugin, ok := pluginValue.(*RepositoryWatchPlugin)
 	if !enabled || !ok {
 		return Reminder{}, fmt.Errorf("仓库更新订阅插件未启用")

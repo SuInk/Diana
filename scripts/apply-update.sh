@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="${DIANA_UPDATE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TARGET_COMMIT="${DIANA_UPDATE_TARGET_COMMIT:-$(git -C "$ROOT" rev-parse HEAD)}"
+BUILD_VERSION="${DIANA_BUILD_VERSION:-}"
 RUNNING_EXECUTABLE="${DIANA_RUNNING_EXECUTABLE:-}"
 FRONTEND_TARGET="${FRONTEND_DIST:-$ROOT/frontend-next/dist}"
 GO_BIN="${GO:-go}"
@@ -14,6 +15,16 @@ if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 if [[ ! -f "$ROOT/frontend-next/package-lock.json" ]]; then
 	echo "frontend-next lockfile is missing from update root." >&2
+	exit 1
+fi
+if [[ -z "$BUILD_VERSION" ]]; then
+	BUILD_VERSION="$(git -C "$ROOT" describe --tags --exact-match "$TARGET_COMMIT" 2>/dev/null || true)"
+fi
+if [[ -z "$BUILD_VERSION" ]]; then
+	BUILD_VERSION="dev"
+fi
+if [[ "$BUILD_VERSION" != "dev" && ! "$BUILD_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+	echo "DIANA_BUILD_VERSION must be dev or a semantic version such as v0.8.7: $BUILD_VERSION" >&2
 	exit 1
 fi
 case "$FRONTEND_TARGET" in
@@ -56,25 +67,25 @@ echo "Installing frontend-next dependencies..."
 	./node_modules/.bin/vite build --outDir "$STAGED_FRONTEND" --emptyOutDir
 )
 
-echo "Building Diana at $TARGET_COMMIT..."
+echo "Building Diana at $TARGET_COMMIT (version $BUILD_VERSION)..."
 if [[ -n "$TARGET_APP" ]]; then
 	APP_PARENT="$(dirname "$TARGET_APP")"
 	APP_NAME="$(basename "$TARGET_APP")"
 	mkdir -p "$APP_PARENT"
 	STAGED_APP="$APP_PARENT/.${APP_NAME%.app}.update.$$.app"
-	DIANA_UPDATE_TARGET_COMMIT="$TARGET_COMMIT" DIANA_BUNDLED_FRONTEND_SOURCE="$STAGED_FRONTEND" GO="$GO_BIN" \
+	DIANA_BUILD_VERSION="$BUILD_VERSION" DIANA_BUNDLED_FRONTEND_SOURCE="$STAGED_FRONTEND" GO="$GO_BIN" \
 		"$ROOT/scripts/build-local-mac.sh" "$STAGED_APP"
 else
 	EXECUTABLE_PARENT="$(dirname "$TARGET_EXECUTABLE")"
 	mkdir -p "$EXECUTABLE_PARENT"
 	STAGED_EXECUTABLE="$EXECUTABLE_PARENT/.$(basename "$TARGET_EXECUTABLE").update.$$"
 	if [[ "$(uname -s)" == "Darwin" ]]; then
-		DIANA_UPDATE_TARGET_COMMIT="$TARGET_COMMIT" GO="$GO_BIN" \
+		DIANA_BUILD_VERSION="$BUILD_VERSION" GO="$GO_BIN" \
 			"$ROOT/scripts/build-local-mac.sh" "$STAGED_EXECUTABLE"
 	else
 		(
 			cd "$ROOT"
-			"$GO_BIN" build -trimpath -ldflags "-X main.buildVersion=$TARGET_COMMIT" -o "$STAGED_EXECUTABLE" ./cmd/webui
+			"$GO_BIN" build -trimpath -ldflags "-X main.buildVersion=$BUILD_VERSION" -o "$STAGED_EXECUTABLE" ./cmd/webui
 		)
 	fi
 fi

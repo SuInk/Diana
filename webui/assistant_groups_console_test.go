@@ -114,7 +114,7 @@ func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
 	handler.SetGroupConfigStore(store)
 	router := qqBotTestRouter(handler)
 
-	body := `{"config":{"group_id":"50005","enabled":true,"enabled_set":true,"recall_reply_auto_delete_enabled":true,"recall_reply_auto_delete_delay_seconds":90}}`
+	body := `{"config":{"group_id":"50005","enabled":true,"enabled_set":true,"natural_interjection_enabled":true,"recall_reply_auto_delete_enabled":true,"recall_reply_auto_delete_delay_seconds":90}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -128,11 +128,77 @@ func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Config.RecallReplyAutoDeleteEnabled == nil || !*response.Config.RecallReplyAutoDeleteEnabled || response.Config.RecallReplyTTLSeconds != 90 {
+	if response.Config.NaturalInterjectionEnabled == nil || !*response.Config.NaturalInterjectionEnabled || response.Config.RecallReplyAutoDeleteEnabled == nil || !*response.Config.RecallReplyAutoDeleteEnabled || response.Config.RecallReplyTTLSeconds != 90 {
 		t.Fatalf("response config = %#v", response.Config)
 	}
 	saved, ok := store.ConfigForGroup("50005")
-	if !ok || saved.RecallReplyAutoDeleteEnabled == nil || !*saved.RecallReplyAutoDeleteEnabled || saved.RecallReplyTTLSeconds != 90 {
+	if !ok || saved.NaturalInterjectionEnabled == nil || !*saved.NaturalInterjectionEnabled || saved.RecallReplyAutoDeleteEnabled == nil || !*saved.RecallReplyAutoDeleteEnabled || saved.RecallReplyTTLSeconds != 90 {
 		t.Fatalf("saved config = %#v, ok = %v", saved, ok)
+	}
+}
+
+func TestConsoleGroupsValidatesPluginSettingOverrides(t *testing.T) {
+	base := assistant.DefaultBotConfig()
+	runtime := assistant.NewRuntime(base, consoleGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	store := NewMemoryQQBotGroupConfigStore()
+	handler := NewQQBotHandler(context.Background(), runtime)
+	handler.SetGroupConfigStore(store)
+	router := qqBotTestRouter(handler)
+
+	body := `{"config":{"group_id":"50006","enabled":true,"enabled_set":true,"plugin_setting_overrides":{"official.nonebot-plugin-resolver-go":{"fetch_title":false,"max_links":8}}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Config assistant.GroupConfig `json:"config"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	settings := response.Config.PluginSettingOverrides["official.nonebot-plugin-resolver-go"]
+	if settings["fetch_title"] != false || settings["max_links"] != float64(8) {
+		t.Fatalf("settings = %#v", settings)
+	}
+
+	// A client predating group plugin settings must not erase the field while
+	// saving an unrelated group option.
+	legacyBody := `{"config":{"group_id":"50006","enabled":false,"enabled_set":true,"system_prompt":"legacy update"}}`
+	req = httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(legacyBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	secretBody := `{"config":{"group_id":"50006","enabled":true,"enabled_set":true,"plugin_setting_overrides":{"official.nonebot-plugin-resolver-go":{"xhs_cookie":"must-not-save"}}}}`
+	req = httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(secretBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "must-not-save") {
+		t.Fatalf("secret status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	saved, ok := store.ConfigForGroup("50006")
+	if !ok || saved.PluginSettingOverrides["official.nonebot-plugin-resolver-go"]["max_links"] != float64(8) {
+		t.Fatalf("saved = %#v, ok = %v", saved, ok)
+	}
+
+	resetBody := `{"config":{"group_id":"50006","enabled":true,"enabled_set":true,"plugin_setting_overrides":{}}}`
+	req = httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(resetBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	saved, ok = store.ConfigForGroup("50006")
+	if !ok || len(saved.PluginSettingOverrides) != 0 {
+		t.Fatalf("reset saved = %#v, ok = %v", saved, ok)
 	}
 }

@@ -2,8 +2,22 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
+
+type semanticReferenceContext struct {
+	Content              string
+	RequestedSourceCount int
+	ResolvedSourceCount  int
+	TextSourceCount      int
+	HistoricalImageCount int
+	AttachedImageCount   int
+	MissingSourceCount   int
+}
 
 func semanticSourceMessageIDs(primary string, additional []string) []string {
 	values := make([]string, 0, len(additional)+1)
@@ -102,4 +116,78 @@ func (r *Runtime) semanticReferenceImageURLsDetailed(ctx context.Context, event 
 		skippedImages += len(images) - len(readyImages)
 	}
 	return readyImages, skippedImages, nil
+}
+
+func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEvent) semanticReferenceContext {
+	messageIDs := eventSemanticSourceMessageIDs(event)
+	result := semanticReferenceContext{RequestedSourceCount: len(messageIDs)}
+	if len(messageIDs) == 0 {
+		return result
+	}
+
+	botID := firstNonEmpty(strings.TrimSpace(r.effectiveConfigForEvent(event).BotQQ), strings.TrimSpace(event.SelfID))
+	lines := []string{"【语义指代选中的历史来源，按下列顺序逐条核对；这些来源不是当前用户的新消息】"}
+	for _, messageID := range messageIDs {
+		source, found := r.findSemanticReferenceEvent(ctx, event, messageID)
+		if !found && event.Quoted != nil && strings.TrimSpace(event.Quoted.MessageID) == messageID {
+			source = MessageEvent{
+				Kind:       event.Kind,
+				GroupID:    firstNonEmpty(event.Quoted.GroupID, event.GroupID),
+				UserID:     event.Quoted.UserID,
+				MessageID:  event.Quoted.MessageID,
+				RawMessage: event.Quoted.RawMessage,
+				Segments:   event.Quoted.Segments,
+				SenderName: event.Quoted.SenderName,
+			}
+			found = true
+		}
+		if !found {
+			result.MissingSourceCount++
+			lines = append(lines, fmt.Sprintf("- message_id=%s；status=未找到持久化历史", messageID))
+			continue
+		}
+
+		result.ResolvedSourceCount++
+		text := strings.TrimSpace(historyPlainText(source))
+		if text != "" {
+			result.TextSourceCount++
+		}
+		imageCount := historicalStillImageCount(source)
+		result.HistoricalImageCount += imageCount
+		role := "user"
+		if assistantHistoryEvent(source, botID) {
+			role = "assistant"
+		}
+		at := "未知"
+		if source.Time > 0 {
+			at = time.Unix(source.Time, 0).Local().Format("2006-01-02 15:04:05")
+		}
+		line := fmt.Sprintf(
+			"- message_id=%s；sender=%s；role=%s；time=%s；image_count=%d",
+			messageID,
+			strings.TrimSpace(source.SenderNameOrID()),
+			role,
+			at,
+			imageCount,
+		)
+		if text != "" {
+			line += "\n  正文：" + text
+		} else if imageCount == 0 {
+			line += "\n  正文：无可用文本或图片"
+		}
+		lines = append(lines, line)
+	}
+	result.Content = strings.Join(lines, "\n")
+	return result
+}
+
+func semanticReferenceContextMessage(context semanticReferenceContext) llm.Message {
+	if strings.TrimSpace(context.Content) == "" {
+		return llm.Message{}
+	}
+	return llm.Message{
+		Role:     llm.RoleUser,
+		Content:  context.Content,
+		Priority: llm.MessagePriorityCurrent,
+	}
 }

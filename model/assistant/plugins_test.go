@@ -890,6 +890,47 @@ func TestPluginManagerRunInjectsEffectiveSettings(t *testing.T) {
 	}
 }
 
+func TestPluginManagerGroupSettingsOverrideGlobalAndInheritSecrets(t *testing.T) {
+	probe := &settingsProbePlugin{}
+	manager := NewPluginManager(probe)
+	if _, err := manager.Install("probe"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.UpdateSettings("probe", map[string]any{"limit": float64(7), "token": "global-secret"}); err != nil {
+		t.Fatal(err)
+	}
+
+	overrides, err := manager.ValidateGroupSettingOverrides(PluginSettingOverrides{
+		"probe": {"limit": float64(9), "verbose": false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.RunWithGroupOverrides(context.Background(), PluginRequest{Text: "hi"}, nil, overrides)
+	if got := probe.seen.Int("limit", -1); got != 9 {
+		t.Fatalf("group limit = %d, want 9", got)
+	}
+	if probe.seen.Bool("verbose", true) {
+		t.Fatal("group boolean override was not injected")
+	}
+	if got := probe.seen.String("token", ""); got != "global-secret" {
+		t.Fatalf("global secret = %q", got)
+	}
+
+	if _, err := manager.ValidateGroupSettingOverrides(PluginSettingOverrides{"probe": {"token": "group-secret"}}); err == nil {
+		t.Fatal("group secret override was accepted")
+	}
+	if _, err := manager.ValidateGroupSettingOverrides(PluginSettingOverrides{"probe": {"unknown": true}}); err == nil {
+		t.Fatal("unknown group setting was accepted")
+	}
+	sanitized := manager.SanitizeGroupSettingOverrides(PluginSettingOverrides{
+		"probe": {"limit": float64(8), "token": "leak", "unknown": true},
+	})
+	if sanitized["probe"]["limit"] != float64(8) || sanitized["probe"]["token"] != nil || sanitized["probe"]["unknown"] != nil {
+		t.Fatalf("sanitized overrides = %#v", sanitized)
+	}
+}
+
 func TestResolverPluginRespectsSettings(t *testing.T) {
 	requests := 0
 	plugin := NewResolverPlugin(&http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
@@ -958,6 +999,7 @@ func (*settingsProbePlugin) Manifest() PluginManifest {
 		Settings: []PluginSettingSpec{
 			{Key: "limit", Label: "Limit", Type: PluginSettingTypeNumber, Default: 3, Min: settingRange(1), Max: settingRange(10)},
 			{Key: "verbose", Label: "Verbose", Type: PluginSettingTypeBool, Default: true},
+			{Key: "token", Label: "Token", Type: PluginSettingTypeString, Default: "", Secret: true},
 		},
 	}
 }

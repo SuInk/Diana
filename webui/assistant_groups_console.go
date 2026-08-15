@@ -57,8 +57,12 @@ func (h *QQBotHandler) listConsoleGroups(c *gin.Context) {
 		liveGroups = autoGroupsFromOneBotData(data)
 		liveAvailable = true
 	}
+	groups := mergeConsoleGroupItems(base, set, liveGroups)
+	for index := range groups {
+		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
+	}
 	c.JSON(http.StatusOK, consoleGroupsResponse{
-		Groups:        mergeConsoleGroupItems(base, set, liveGroups),
+		Groups:        groups,
 		Plugins:       assistant.RedactStates(h.runtime.Plugins().List()),
 		LiveAvailable: liveAvailable,
 		Warning:       warning,
@@ -141,12 +145,16 @@ func (h *QQBotHandler) saveConsoleGroup(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", fmt.Errorf("群号格式不正确"), groupID, nil)
 		return
 	}
-	cfg := sanitizeGroupConfigPayload(payload.Config, groupID)
+	cfg, err := h.sanitizeGroupConfigPayload(payload.Config, groupID)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
+		return
+	}
 	saved, err := h.groupConfigs.SaveGroupConfig(cfg, h.runtime.Config())
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.groups.save", "群配置已保存（控制台）", groupID, map[string]any{"group_id": groupID})
-	c.JSON(http.StatusOK, gin.H{"config": saved.WithDefaults(groupID, h.runtime.Config())})
+	c.JSON(http.StatusOK, gin.H{"config": h.groupConfigForAPI(saved.WithDefaults(groupID, h.runtime.Config()))})
 }
