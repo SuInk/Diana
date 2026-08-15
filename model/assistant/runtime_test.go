@@ -1199,6 +1199,11 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	if !strings.Contains(prompt, "谐音梗") || !strings.Contains(prompt, "能接梗就自然接") {
 		t.Fatalf("system prompt missing homophone guidance: %q", prompt)
 	}
+	for _, want := range []string{"比喻、拟人、意象、节奏感和角色口吻", "有画面感、有辨识度", "新的观察、情绪、观点或笑点", "事实、技术和操作说明仍以清楚准确为先"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing expressive writing guidance %q: %q", want, prompt)
+		}
+	}
 	if !strings.Contains(prompt, "当前需要回复的消息") || !strings.Contains(prompt, "不要主动回复旧消息") {
 		t.Fatalf("system prompt missing current-message guidance: %q", prompt)
 	}
@@ -1210,6 +1215,20 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	}
 	if strings.Contains(prompt, "需要分段时直接使用换行") {
 		t.Fatalf("system prompt still asks the model to split with newlines: %q", prompt)
+	}
+}
+
+func TestPromptChineseSlangDefaultMigrationPreservesCustomText(t *testing.T) {
+	legacy := (BotConfig{PromptChineseSlangText: legacyDefaultPromptChineseSlang}).WithDefaults()
+	for _, want := range []string{"比喻、拟人、意象、节奏感和角色口吻", "不要只堆形容词", "事实、技术和操作说明仍以清楚准确为先"} {
+		if !strings.Contains(legacy.PromptChineseSlangText, want) {
+			t.Fatalf("legacy default was not upgraded with %q: %q", want, legacy.PromptChineseSlangText)
+		}
+	}
+
+	const custom = "保持冷峻克制的侦探口吻，避免比喻。"
+	if got := (BotConfig{PromptChineseSlangText: custom}).WithDefaults().PromptChineseSlangText; got != custom {
+		t.Fatalf("custom Chinese context prompt was overwritten: %q", got)
 	}
 }
 
@@ -2457,6 +2476,75 @@ func TestRuntimeProactiveReplyPayloadIdentifiesCorrectionToRecentBotReply(t *tes
 	}
 }
 
+func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.99,"category":"chat_in","target_message_id":"novel-remark","turn_message_ids":["novel-remark"],"directed_at_bot":false,"answerable":true,"substantive":true,"reason":"群友顺着机器人刚提到的离线小说轻松接话，可以自然回应"}`}
+	runtime := NewRuntime(BotConfig{
+		BotQQ:                 "42",
+		ChatInEnabled:         boolPointer(true),
+		ChatInLevel:           ChatInLevelMax,
+		ChatInChance:          1,
+		ChatInCooldownSeconds: 1,
+	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	for _, historyEvent := range []MessageEvent{
+		{
+			Kind: EventKindGroup, Time: 100, GroupID: "45807", UserID: "10001", MessageID: "low-data",
+			SenderName: "Boredom always ends in desire.",
+			Segments: []MessageSegment{
+				{Type: "at", Data: map[string]string{"qq": "10002"}},
+				{Type: "text", Data: map[string]string{"text": " 流量不够了能玩什么"}},
+			},
+		},
+		{
+			Kind: EventKindGroup, Time: 106, GroupID: "45807", UserID: "10003", MessageID: "image-before",
+			SenderName: "我以小居居形态出击",
+			Segments:   []MessageSegment{{Type: "image", Data: map[string]string{"file": "first.jpg"}}},
+		},
+		{
+			Kind: EventKindGroup, Time: 110, GroupID: "45807", UserID: "42", MessageID: "diana-low-data-answer",
+			SenderName: "Diana",
+			Segments: []MessageSegment{
+				{Type: "at", Data: map[string]string{"qq": "10001"}},
+				{Type: "text", Data: map[string]string{"text": " 省流量模式启动，可以玩单机游戏、纯文字游戏，也可以听下载好的歌、看离线小说/漫画/视频。要不现在跟我玩海龟汤？"}},
+			},
+		},
+		{
+			Kind: EventKindGroup, Time: 117, GroupID: "45807", UserID: "10003", MessageID: "image-after",
+			SenderName: "我以小居居形态出击",
+			Segments:   []MessageSegment{{Type: "image", Data: map[string]string{"file": "second.jpg"}}},
+		},
+	} {
+		runtime.remember(historyEvent)
+	}
+	event := MessageEvent{
+		Kind: EventKindGroup, Time: 135, GroupID: "45807", UserID: "10004", MessageID: "novel-remark",
+		SenderName: "Winter",
+		RawMessage: "你不是最喜欢看小说吗",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "你不是最喜欢看小说吗"}}},
+	}
+
+	routed, _, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+	if !allowed || !routed.proactiveReply || !routed.chatInReply {
+		t.Fatalf("route event=%#v allowed=%v", routed, allowed)
+	}
+	if len(turn) != 1 || turn[0].Event.MessageID != event.MessageID {
+		t.Fatalf("selected turn = %#v", turn)
+	}
+	request := provider.requestSnapshot()
+	if len(request.Messages) < 2 {
+		t.Fatalf("router request = %#v", request.Messages)
+	}
+	if !strings.Contains(request.Messages[0].Content, "不是直接向机器人提问") || !strings.Contains(request.Messages[0].Content, "directed_at_bot=false") {
+		t.Fatalf("router prompt missing contextual chat-in guidance: %q", request.Messages[0].Content)
+	}
+	for _, want := range []string{"流量不够了能玩什么", "离线小说", `"images":1`, "你不是最喜欢看小说吗"} {
+		if !strings.Contains(request.Messages[1].Content, want) {
+			t.Fatalf("router context missing %q: %q", want, request.Messages[1].Content)
+		}
+	}
+}
+
 func TestRuntimeProactiveReplyKeepsBotFollowupAcrossSameSenderImage(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.97,"category":"bot_related","directed_at_bot":true,"answerable":true}`}
 	runtime := NewRuntime(BotConfig{
@@ -2735,9 +2823,10 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	}
 }
 
-func TestRuntimeProactiveReplyUsesConciseMode(t *testing.T) {
+func TestRuntimeProactiveReplyPreservesCompleteAnswer(t *testing.T) {
 	channel := &recordingChannel{}
-	provider := &capturingLLMProvider{reply: strings.Repeat("很", 240)}
+	completeReply := strings.Repeat("很", 240)
+	provider := &capturingLLMProvider{reply: completeReply}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:         false,
 		MaxReplyChars:        3500,
@@ -2762,8 +2851,8 @@ func TestRuntimeProactiveReplyUsesConciseMode(t *testing.T) {
 	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "custom concise proactive instruction") {
 		t.Fatalf("system prompt = %#v", provider.request.Messages)
 	}
-	if len([]rune(reply)) > proactiveReplyMaxRunes+3 {
-		t.Fatalf("reply too long: %d %q", len([]rune(reply)), reply)
+	if reply != completeReply {
+		t.Fatalf("proactive reply was truncated: got %d runes, want %d", len([]rune(reply)), len([]rune(completeReply)))
 	}
 	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
 		t.Fatalf("sent = %#v reply=%q", channel.sent, reply)

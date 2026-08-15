@@ -186,6 +186,11 @@ CREATE INDEX IF NOT EXISTS idx_message_events_text ON message_events(text);
 CREATE INDEX IF NOT EXISTS idx_message_events_user_time ON message_events(user_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_image_descriptions_source_message ON image_descriptions(source_session, source_message_id);
 CREATE INDEX IF NOT EXISTS idx_voice_transcripts_audio ON voice_transcripts(audio_sha256, created_at DESC);
+
+-- Raw inline audio is only a durable queue payload. Once a transcript exists,
+-- history and long-term memory use the text and source reference instead.
+DELETE FROM voice_blobs
+WHERE audio_sha256 IN (SELECT DISTINCT audio_sha256 FROM voice_transcripts);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_at ON user_profiles(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_favorability_changes_user_id ON user_favorability_changes(user_id, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_items_active_key ON memory_items(scope_key, subject_user_id, memory_key) WHERE status = 'active';

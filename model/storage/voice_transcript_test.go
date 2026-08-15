@@ -50,12 +50,18 @@ func TestVoiceTranscriptCacheRoundTrip(t *testing.T) {
 	store := openInboundTestStore(t, t.TempDir()+"/voice-cache.db")
 	defer func() { _ = store.Close() }()
 	want := assistant.VoiceTranscriptRecord{CacheKey: "cache", AudioSHA256: "audio", Backend: "openai_compatible", Model: "whisper-1", Language: "zh", Transcript: "测试语音", DurationMS: 1200, CreatedAt: time.Now().Unix()}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO voice_blobs (audio_sha256, body, created_at) VALUES (?, ?, ?)`, want.AudioSHA256, []byte("temporary-audio"), time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.SaveVoiceTranscript(ctx, want); err != nil {
 		t.Fatal(err)
 	}
 	got, found, err := store.LoadVoiceTranscript(ctx, want.CacheKey)
 	if err != nil || !found || got.Transcript != want.Transcript || got.DurationMS != want.DurationMS {
 		t.Fatalf("cache found=%v got=%#v err=%v", found, got, err)
+	}
+	if _, found, err := store.LoadVoiceBlob(ctx, want.AudioSHA256); err != nil || found {
+		t.Fatalf("transcribed raw audio still persisted: found=%v err=%v", found, err)
 	}
 }
 

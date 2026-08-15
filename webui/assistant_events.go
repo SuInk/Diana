@@ -1,6 +1,11 @@
 package webui
 
 import (
+	"bytes"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"net/http"
 	"strconv"
 	"strings"
@@ -94,10 +99,53 @@ func (h *QQBotHandler) eventImage(c *gin.Context) {
 		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "事件图片不是受支持的栅格格式"})
 		return
 	}
+	if c.Query("thumbnail") == "1" {
+		if thumbnail, thumbnailType, thumbnailErr := eventImageThumbnail(body); thumbnailErr == nil {
+			body = thumbnail
+			contentType = thumbnailType
+		}
+	}
 	c.Header("Cache-Control", "private, max-age=300")
 	c.Header("Content-Disposition", "inline")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Data(http.StatusOK, contentType, body)
+}
+
+const eventImageThumbnailMaxDimension = 192
+
+func eventImageThumbnail(body []byte) ([]byte, string, error) {
+	source, _, err := image.Decode(bytes.NewReader(body))
+	if err != nil {
+		return nil, "", err
+	}
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return nil, "", image.ErrFormat
+	}
+	targetWidth, targetHeight := width, height
+	if width > eventImageThumbnailMaxDimension || height > eventImageThumbnailMaxDimension {
+		if width >= height {
+			targetWidth = eventImageThumbnailMaxDimension
+			targetHeight = max(1, height*eventImageThumbnailMaxDimension/width)
+		} else {
+			targetHeight = eventImageThumbnailMaxDimension
+			targetWidth = max(1, width*eventImageThumbnailMaxDimension/height)
+		}
+	}
+	thumbnail := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	for y := 0; y < targetHeight; y++ {
+		sourceY := bounds.Min.Y + y*height/targetHeight
+		for x := 0; x < targetWidth; x++ {
+			sourceX := bounds.Min.X + x*width/targetWidth
+			thumbnail.Set(x, y, source.At(sourceX, sourceY))
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, thumbnail); err != nil {
+		return nil, "", err
+	}
+	return encoded.Bytes(), "image/png", nil
 }
 
 func eventRasterImageContentType(contentType string) (string, bool) {

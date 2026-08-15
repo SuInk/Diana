@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,9 +38,9 @@ type ReleaseEntry struct {
 // ReleaseAsset is retained internally so the updater can select the exact
 // package for the running OS and architecture without trusting a constructed URL.
 type ReleaseAsset struct {
-	Name string
-	URL  string
-	Size int64
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	Size int64  `json:"size"`
 }
 
 func (r ReleaseEntry) asset(name string) (ReleaseAsset, bool) {
@@ -52,6 +53,31 @@ func (r ReleaseEntry) asset(name string) (ReleaseAsset, bool) {
 }
 
 const releaseNotesMaxRunes = 600
+
+type githubRateLimitError struct {
+	StatusCode int
+	ResetAt    time.Time
+}
+
+func (e *githubRateLimitError) Error() string {
+	if e == nil || e.ResetAt.IsZero() {
+		return "GitHub API 限流，请稍后再试"
+	}
+	return fmt.Sprintf("GitHub API 限流，请在 %s 后重试", e.ResetAt.Local().Format("2006-01-02 15:04:05"))
+}
+
+func githubRateLimitFromResponse(resp *http.Response) error {
+	if resp == nil || (resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests) {
+		return nil
+	}
+	resetAt := time.Time{}
+	if value, err := strconv.ParseInt(strings.TrimSpace(resp.Header.Get("X-RateLimit-Reset")), 10, 64); err == nil && value > 0 {
+		resetAt = time.Unix(value, 0)
+	} else if seconds, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && seconds > 0 {
+		resetAt = time.Now().Add(time.Duration(seconds) * time.Second)
+	}
+	return &githubRateLimitError{StatusCode: resp.StatusCode, ResetAt: resetAt}
+}
 
 // fetchGitHubReleases 拉取仓库最近的 Release 列表；没有 Release 时返回空切片。
 func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owner, repo string, limit int) ([]ReleaseEntry, error) {
@@ -73,8 +99,8 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("GitHub API 限流，请稍后再试")
+	if rateLimitErr := githubRateLimitFromResponse(resp); rateLimitErr != nil {
+		return nil, rateLimitErr
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("GitHub API HTTP %d", resp.StatusCode)
@@ -172,8 +198,8 @@ func fetchGitHubChangelog(ctx context.Context, client *http.Client, apiBase, own
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("GitHub API 限流，请稍后再试")
+	if rateLimitErr := githubRateLimitFromResponse(resp); rateLimitErr != nil {
+		return nil, rateLimitErr
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("GitHub API HTTP %d", resp.StatusCode)

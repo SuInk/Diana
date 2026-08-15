@@ -116,6 +116,9 @@ func main() {
 	if err := systemHandler.SetUpdatePolicyStore(ctx, sqliteStore); err != nil {
 		log.Fatal(err)
 	}
+	if err := systemHandler.SetReleaseCacheStore(ctx, sqliteStore); err != nil {
+		log.Printf("load system release cache: %v", err)
+	}
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
 		CurrentVersion: buildVersion,
 		FrontendDir:    frontendDistDir(),
@@ -288,8 +291,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime)
-	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector)
+	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path())
+	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
 	healthHandler := webui.NewHealthHandler()
 
