@@ -38,8 +38,8 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          webSearchPluginID,
 		Name:        "联网搜索",
-		Version:     "0.2.0",
-		Description: "为对话提供实时网页搜索。优先使用 Exa MCP，失败时自动回退到 Tavily。",
+		Version:     "0.3.0",
+		Description: "为对话提供带候选查询探索和空结果恢复的实时网页搜索。优先使用 Exa MCP，失败时自动回退到 Tavily。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "llm:tool"},

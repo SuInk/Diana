@@ -112,6 +112,7 @@ type RunEvent struct {
 	InputKeys      []string
 	ToolInput      map[string]any
 	ToolOutput     string
+	Metadata       map[string]any
 	AvailableTools []ToolCatalogItem
 	OutputChars    int
 	DurationMS     int64

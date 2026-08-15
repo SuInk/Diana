@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -52,6 +53,50 @@ func TestAgentRunObserverWritesCorrelatedLifecycleLogs(t *testing.T) {
 	completed := logs.entries[1]
 	if completed.Action != "qqbot.agent_run" || completed.Message != "Agent 运行完成 [########] done" || completed.Metadata["finish_reason"] != "final" || completed.Metadata["progress_percent"] != 100 {
 		t.Fatalf("completed log = %#v", completed)
+	}
+}
+
+func TestAgentRunObserverKeepsWebSearchOperationLogsPrivate(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := &Runtime{}
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "private-group", UserID: "private-user", MessageID: "private-message"}
+	runtime.agentRunObserver(event)(context.Background(), agent.RunEvent{
+		TraceID:   "trace-search",
+		Phase:     agent.RunPhaseToolCompleted,
+		Tool:      agent.WebSearchToolName,
+		ToolInput: map[string]any{"query": "private raw query"},
+		Metadata: map[string]any{
+			"status":   "no_results",
+			"strategy": "bounded_query_exploration",
+			"queries":  []map[string]any{{"hash": "abc123", "length": 17, "language": "en"}},
+		},
+	})
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	entry := entries[0]
+	if entry.Actor != "" || entry.Target != agent.WebSearchToolName {
+		t.Fatalf("entry identity = %#v", entry)
+	}
+	for _, key := range []string{"group_id", "user_id", "message_id"} {
+		if _, exists := entry.Metadata[key]; exists {
+			t.Fatalf("metadata retained %s: %#v", key, entry.Metadata)
+		}
+	}
+	body, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, private := range []string{"private-group", "private-user", "private-message", "private raw query"} {
+		if strings.Contains(text, private) {
+			t.Fatalf("operation log leaked %q: %s", private, text)
+		}
+	}
+	if !strings.Contains(text, "abc123") || !strings.Contains(text, "bounded_query_exploration") {
+		t.Fatalf("safe search diagnostics missing: %s", text)
 	}
 }
 
