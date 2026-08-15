@@ -138,7 +138,7 @@
     <Modal
       v-if="settingsTarget"
       :title="`${settingsTarget.manifest.name} · 设置`"
-      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === rssWatchPluginID"
+      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID"
       @close="closeSettings"
     >
       <div v-if="settingsTarget.manifest.id === repositoryWatchPluginID" class="plugin-settings-section-head">
@@ -229,6 +229,10 @@
           </template>
         </div>
       </div>
+      <RepositoryIssueCreator
+        v-if="settingsTarget.manifest.id === repositoryPublishPluginID"
+        :prepare-access="saveSettingsForSubscription"
+      />
       <RepositoryWatchManager
         v-if="settingsTarget.manifest.id === repositoryWatchPluginID"
         :prepare-access="saveSettingsForSubscription"
@@ -269,6 +273,7 @@ import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
+import RepositoryIssueCreator from "../components/RepositoryIssueCreator.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import { navigate, viewQuery } from "../router";
@@ -279,6 +284,7 @@ const busyID = ref("");
 
 const resolverPluginID = "official.nonebot-plugin-resolver-go";
 const repositoryWatchPluginID = "official.repository-watch";
+const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
 const dependencies = ref<ResolverDependency[]>([]);
 const dependenciesLoading = ref(false);
