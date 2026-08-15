@@ -27,6 +27,7 @@ type semanticReferenceCandidate struct {
 	Text                     string   `json:"text,omitempty"`
 	Content                  []string `json:"content_types,omitempty"`
 	ImageCount               int      `json:"image_count,omitempty"`
+	AudioCount               int      `json:"audio_count,omitempty"`
 	VideoCount               int      `json:"video_count,omitempty"`
 	FileCount                int      `json:"file_count,omitempty"`
 	EventTime                int64    `json:"event_time,omitempty"`
@@ -80,7 +81,7 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 规则：
 1. 候选可以来自任何发送者；event_time 和 age_seconds 表示消息时间及距当前消息的秒数。结合时间判断是否仍属于当前话题，间隔过长且当前措辞没有明确指向时选择 none；不要默认只选当前发言者自己的消息。
 2. 综合当前措辞、发送者名称、消息先后顺序和内容类型判断。像“这是什么”“他刚发的图”“上面那个视频”“前面说的方案”都可能指向历史消息。
-3. explicit_quote 是用户在 QQ 中直接引用的消息。通常优先保持它；但 is_error_wrapper=true 表示它只是机器人产生的超时、失败或重试提示，不是原任务内容。此时要结合 semantic_source_message_id、semantic_source_message_ids、reply_to_message_ids、reference_anchor_time、候选时间顺序和 nearby_context，寻找该失败任务实际使用的图片、视频或文件。
+3. explicit_quote 是用户在 QQ 中直接引用的消息。通常优先保持它；但 is_error_wrapper=true 表示它只是机器人产生的超时、失败或重试提示，不是原任务内容。此时要结合 semantic_source_message_id、semantic_source_message_ids、reply_to_message_ids、reference_anchor_time、候选时间顺序和 nearby_context，寻找该失败任务实际使用的图片、语音、视频或文件。
 4. semantic_source_message_id 和 semantic_source_message_ids 是先前处理时持久化的真实来源关系，是强证据；但仍要结合当前措辞判断用户现在是否在指代它们。
 5. candidates 已由长期消息时间线检索并排序，不只包含短期聊天。nearby_context 是媒体前后的原始对话，用于分辨多张图片或多个任务。
 6. 当前措辞明确指向多条消息或多份媒体，例如“这几张图”“刚才连发的三张”“上面那些”，必须把属于同一批次且被共同指代的所有候选都选出，不能只选其中一条。message_ids 按原消息从旧到新排列。
@@ -145,7 +146,7 @@ func quotedMessageHasReferenceContent(quoted *QuotedMessage) bool {
 func segmentsHaveReferenceContent(segments []MessageSegment) bool {
 	for _, segment := range segments {
 		switch segment.Type {
-		case "image", "video", "forward", "json", "xml":
+		case "image", "video", "record", "forward", "json", "xml":
 			return true
 		case "file":
 			return true
@@ -156,7 +157,7 @@ func segmentsHaveReferenceContent(segments []MessageSegment) bool {
 
 func semanticCandidatesHaveMedia(candidates []semanticReferenceCandidate) bool {
 	for _, candidate := range candidates {
-		if candidate.ImageCount > 0 || candidate.VideoCount > 0 || candidate.FileCount > 0 {
+		if candidate.ImageCount > 0 || candidate.AudioCount > 0 || candidate.VideoCount > 0 || candidate.FileCount > 0 {
 			return true
 		}
 	}
@@ -218,6 +219,27 @@ func (r *Runtime) semanticReferenceCandidates(ctx context.Context, event Message
 	return candidates, events, anchorTime
 }
 
+func (r *Runtime) hasDurableMediaBeyondRecentContext(ctx context.Context, event MessageEvent) bool {
+	recent := r.contextHistory(event)
+	recentIDs := make(map[string]bool, len(recent))
+	for _, item := range recent {
+		if id := strings.TrimSpace(item.MessageID); id != "" {
+			recentIDs[id] = true
+		}
+	}
+	history, _ := r.semanticReferenceHistory(ctx, event)
+	for _, item := range history {
+		if !segmentsHaveReferenceContent(item.Segments) && !quotedMessageHasReferenceContent(item.Quoted) {
+			continue
+		}
+		id := strings.TrimSpace(item.MessageID)
+		if id != "" && !recentIDs[id] {
+			return true
+		}
+	}
+	return false
+}
+
 func semanticReferenceCandidateFromEvent(item, current MessageEvent, botQQ string) semanticReferenceCandidate {
 	candidate := semanticReferenceCandidate{
 		MessageID:                strings.TrimSpace(item.MessageID),
@@ -253,6 +275,8 @@ func countSemanticReferenceSegments(candidate *semanticReferenceCandidate, segme
 			if segment.Data["source_type"] != "video_frame" {
 				candidate.ImageCount++
 			}
+		case "record":
+			candidate.AudioCount++
 		case "file":
 			if videoFileSegment(segment) {
 				candidate.VideoCount++
@@ -271,6 +295,9 @@ func finalizeSemanticReferenceCandidate(candidate *semanticReferenceCandidate) {
 	}
 	if candidate.ImageCount > 0 {
 		candidate.Content = appendUniqueStrings(candidate.Content, "image")
+	}
+	if candidate.AudioCount > 0 {
+		candidate.Content = appendUniqueStrings(candidate.Content, "audio")
 	}
 	if candidate.FileCount > 0 {
 		candidate.Content = appendUniqueStrings(candidate.Content, "file")
