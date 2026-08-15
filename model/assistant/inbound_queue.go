@@ -331,6 +331,11 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	if event.voiceSTTTransient && event.voiceSTTErr != nil {
 		return "", event.voiceSTTErr
 	}
+	if eventHasVoiceTranscript(event) {
+		// Enqueue persists the transport event before STT. Upsert the enriched
+		// event so later semantic references can reuse its transcript directly.
+		r.persistMessageEvent(event)
+	}
 	event, text, handled, outcome := r.prepareMessageEvent(ctx, event)
 	if !handled {
 		return outcome, nil
@@ -351,6 +356,24 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 		}
 	}
 	return r.replyAndRecord(ctx, event, text, outcome)
+}
+
+func eventHasVoiceTranscript(event MessageEvent) bool {
+	for _, segment := range event.Segments {
+		if segment.Type == "record" && strings.TrimSpace(segment.Data[voiceSTTTranscriptKey]) != "" {
+			return true
+		}
+	}
+	return event.Quoted != nil && hasVoiceTranscriptSegment(event.Quoted.Segments)
+}
+
+func hasVoiceTranscriptSegment(segments []MessageSegment) bool {
+	for _, segment := range segments {
+		if segment.Type == "record" && strings.TrimSpace(segment.Data[voiceSTTTranscriptKey]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // EventHasDirectMediaReference covers media carried by this message or by an
