@@ -1167,6 +1167,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	}
 	event = r.enrichReplyReference(ctx, event)
 	event = r.enrichForwardMessages(ctx, event)
+	event = r.prepareIncomingVoice(ctx, event)
 	if r.effectiveConfigForEvent(event).AgentEnabled {
 		event = r.prepareCurrentEventImages(ctx, event)
 	} else {
