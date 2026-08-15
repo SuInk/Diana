@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS voice_transcripts (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS semantic_reference_cache (
+  cache_key TEXT PRIMARY KEY,
+  message_ids TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_semantic_reference_cache_expiry
+  ON semantic_reference_cache(expires_at);
+
 CREATE TABLE IF NOT EXISTS user_profiles (
   user_id TEXT PRIMARY KEY,
   display_name TEXT,
