@@ -224,6 +224,13 @@
                 {{ clearSecrets.includes(spec.key) ? "取消清除" : "清除" }}
               </button>
             </div>
+            <textarea
+              v-else-if="isMultilineSetting(spec.key)"
+              :id="`setting-${spec.key}`"
+              v-model="settingsForm[spec.key]"
+              class="textarea plugin-setting-textarea"
+              rows="4"
+            ></textarea>
             <input v-else :id="`setting-${spec.key}`" v-model="settingsForm[spec.key]" class="input" type="text" />
             <span v-if="spec.description" class="hint">{{ spec.description }}</span>
           </template>
@@ -303,6 +310,10 @@ const repositoryWatchTokenConfigured = computed(() => {
   if (clearSecrets.value.includes(key)) return false;
   return String(settingsForm.value[key] ?? "").trim() !== "" || secretConfigured(key);
 });
+
+function isMultilineSetting(key: string): boolean {
+  return key === "allowed_repositories" || key === "user_repository_access";
+}
 
 function upsert(state: PluginState): void {
   const index = plugins.value.findIndex((plugin) => plugin.manifest.id === state.manifest.id);
