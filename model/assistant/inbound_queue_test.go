@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -383,6 +384,68 @@ type memoryInboundRecord struct {
 	leaseOwner string
 }
 
+func TestAttachInboundTurnMediaPreservesSourcesAndRealSegments(t *testing.T) {
+	question := MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "question-1",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "图片里是什么？"}}},
+	}
+	sources := []MessageEvent{
+		{MessageID: "image-1", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"cached_file": "/tmp/image-1.png"}}}},
+		{MessageID: "video-1", Segments: []MessageSegment{{Type: "video", Data: map[string]string{"file": "/tmp/video-1.mp4"}}}},
+	}
+	got := attachInboundTurnMedia(question, sources)
+	if len(got.Segments) != 3 {
+		t.Fatalf("segments=%#v", got.Segments)
+	}
+	if strings.Join(eventSemanticSourceMessageIDs(got), ",") != "image-1,video-1" {
+		t.Fatalf("source ids=%#v", eventSemanticSourceMessageIDs(got))
+	}
+	if got.Segments[1].Data["source_message_id"] != "image-1" || got.Segments[2].Data["source_message_id"] != "video-1" {
+		t.Fatalf("source metadata missing: %#v", got.Segments)
+	}
+	if len(question.Segments) != 1 {
+		t.Fatalf("original event mutated: %#v", question.Segments)
+	}
+}
+
+func TestInboundMediaTurnClassificationIsGeneric(t *testing.T) {
+	for _, text := range []string{"图片里是什么", "看一下 screenshot", "这个视频能识别吗", "check the attachment"} {
+		event := MessageEvent{Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}}
+		if !EventExplicitlyReferencesMedia(event) {
+			t.Fatalf("text %q was not recognized", text)
+		}
+	}
+	if EventExplicitlyReferencesMedia(MessageEvent{RawMessage: "今天天气怎么样"}) {
+		t.Fatal("unrelated text was classified as a media reference")
+	}
+	for _, segmentType := range []string{"image", "video", "file"} {
+		event := MessageEvent{Segments: []MessageSegment{{Type: segmentType, Data: map[string]string{"file": "media.bin"}}}}
+		if !EventIsMergeableMediaOnly(event) {
+			t.Fatalf("%s-only event was not mergeable", segmentType)
+		}
+		event.Segments = append(event.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": "独立说明"}})
+		if EventIsMergeableMediaOnly(event) {
+			t.Fatalf("%s event with text was treated as media-only", segmentType)
+		}
+	}
+}
+
+func TestInboundMediaSupersessionBlocksFinalSend(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	store.superseded["media-1"] = "turn-1"
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetInboundEventStore(store)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "media-1"}
+	_, err := runtime.sendOutgoingWithResult(context.Background(), event, OutgoingMessage{GroupID: "group-1", Text: "stale description"})
+	if !errors.Is(err, errInboundTurnSuperseded) {
+		t.Fatalf("send error=%v", err)
+	}
+	if len(channel.sent) != 0 {
+		t.Fatalf("superseded reply was sent: %#v", channel.sent)
+	}
+}
+
 type countingErrorLLMProvider struct {
 	calls int
 	err   error
@@ -394,15 +457,35 @@ func (p *countingErrorLLMProvider) Generate(context.Context, llm.GenerateRequest
 }
 
 type memoryInboundEventStore struct {
-	mu       sync.Mutex
-	records  map[string]*memoryInboundRecord
-	order    []string
-	sessions []HistorySession
-	audits   []EventRecord
+	mu         sync.Mutex
+	records    map[string]*memoryInboundRecord
+	order      []string
+	sessions   []HistorySession
+	audits     []EventRecord
+	media      []MessageEvent
+	superseded map[string]string
 }
 
 func newMemoryInboundEventStore() *memoryInboundEventStore {
-	return &memoryInboundEventStore{records: map[string]*memoryInboundRecord{}}
+	return &memoryInboundEventStore{records: map[string]*memoryInboundRecord{}, superseded: map[string]string{}}
+}
+
+func (s *memoryInboundEventStore) ClaimInboundMediaForTurn(_ context.Context, currentID, _ string, _ MessageEvent, _ time.Duration) ([]MessageEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	claimed := append([]MessageEvent(nil), s.media...)
+	for _, source := range claimed {
+		s.superseded[source.MessageID] = currentID
+	}
+	s.media = nil
+	return claimed, nil
+}
+
+func (s *memoryInboundEventStore) InboundEventSuperseded(_ context.Context, event MessageEvent) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	turnID := s.superseded[event.MessageID]
+	return turnID, turnID != "", nil
 }
 
 func (s *memoryInboundEventStore) EnqueueInboundEvent(_ context.Context, session string, event MessageEvent, priorities ...int) (string, bool, error) {
