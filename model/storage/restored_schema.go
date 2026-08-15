@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS inbound_events (
   available_at INTEGER NOT NULL,
   lease_owner TEXT,
   lease_until INTEGER,
+  superseded_by TEXT,
   outcome TEXT,
   decision TEXT,
   decision_reason TEXT,
@@ -265,6 +266,7 @@ func (s *SQLiteStore) ensureInboundAuditColumns() error {
 		{name: "send_acked_at", definition: "INTEGER"},
 		{name: "self_echo_at", definition: "INTEGER"},
 		{name: "delivery_error", definition: "TEXT"},
+		{name: "superseded_by", definition: "TEXT"},
 	}
 	for _, column := range columns {
 		if found[column.name] {

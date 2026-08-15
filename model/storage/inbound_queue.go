@@ -109,13 +109,17 @@ WHERE id = ? AND status = ?
 	}
 
 	nowNanos := now.UnixNano()
+	availableAt, err := inboundInitialAvailableAt(ctx, tx, session, event, priority, now)
+	if err != nil {
+		return "", false, err
+	}
 	result, err := tx.ExecContext(ctx, `
 INSERT OR IGNORE INTO inbound_events (
   id, session, kind, group_id, user_id, message_id, event_time, payload,
   priority, status, attempts, available_at, created_at, updated_at
 )
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-`, id, session, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Time, string(payload), priority, inboundStatusPending, nowNanos, nowNanos, nowNanos)
+`, id, session, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Time, string(payload), priority, inboundStatusPending, availableAt.UnixNano(), nowNanos, nowNanos)
 	if err != nil {
 		return "", false, fmt.Errorf("enqueue inbound event: %w", err)
 	}
