@@ -119,23 +119,22 @@
                       <span>图片不可用</span>
                     </span>
                   </div>
-                  <a
+                  <button
                     v-else
                     class="event-image-preview"
-                    :href="eventImageURL(event, image.index)"
-                    target="_blank"
-                    rel="noopener"
+                    type="button"
                     :aria-label="imageAriaLabel(image.index, image.summary)"
                     title="查看原图"
+                    @click="openImage(event, image.index, image.summary)"
                   >
                     <img
-                      :src="eventImageURL(event, image.index)"
+                      :src="eventImageThumbnailURL(event, image.index)"
                       :alt="imageAlt(image.index, image.summary)"
                       loading="lazy"
                       decoding="async"
                       @error="markImageFailed(event, image.index)"
                     />
-                  </a>
+                  </button>
                 </template>
               </div>
 
@@ -241,6 +240,22 @@
         </div>
       </section>
     </div>
+
+    <Teleport to="body">
+      <div v-if="activeImage" class="event-image-lightbox" role="presentation" @click.self="closeImage">
+        <div class="event-image-lightbox-dialog" role="dialog" aria-modal="true" :aria-label="activeImage.alt">
+          <div class="event-image-lightbox-header">
+            <span>{{ activeImage.alt }}</span>
+            <button class="btn ghost icon-only small" type="button" aria-label="关闭原图" title="关闭" @click="closeImage">
+              <X :size="17" aria-hidden="true" />
+            </button>
+          </div>
+          <div class="event-image-lightbox-body">
+            <img :src="activeImage.url" :alt="activeImage.alt" />
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -263,7 +278,8 @@ import {
   Sigma,
   Send,
   TimerReset,
-  TriangleAlert
+  TriangleAlert,
+  X
 } from "@lucide/vue";
 import {
   getAssistantEventTrace,
@@ -308,6 +324,7 @@ const traceLoading = ref<Record<string, boolean>>({});
 const traceLoaded = ref<Record<string, boolean>>({});
 const traceSteps = ref<Record<string, AppLogEntry[]>>({});
 const failedImages = ref<Record<string, boolean>>({});
+const activeImage = ref<{ url: string; alt: string } | null>(null);
 let refreshTimer: number | null = null;
 let loadGeneration = 0;
 
@@ -353,6 +370,10 @@ function eventImageURL(event: AssistantEventDetail, imageIndex: number): string 
   return `/api/assistant/events/${encodeURIComponent(event.id)}/images/${imageIndex}`;
 }
 
+function eventImageThumbnailURL(event: AssistantEventDetail, imageIndex: number): string {
+  return `${eventImageURL(event, imageIndex)}?thumbnail=1`;
+}
+
 function imageSummary(summary?: string): string {
   return (summary ?? "").replace(/^\[|\]$/g, "").trim();
 }
@@ -363,7 +384,19 @@ function imageAlt(imageIndex: number, summary?: string): string {
 }
 
 function imageAriaLabel(imageIndex: number, summary?: string): string {
-  return `${imageAlt(imageIndex, summary)}，在新窗口查看原图`;
+  return `${imageAlt(imageIndex, summary)}，点击查看原图`;
+}
+
+function openImage(event: AssistantEventDetail, imageIndex: number, summary?: string): void {
+  activeImage.value = { url: eventImageURL(event, imageIndex), alt: imageAlt(imageIndex, summary) };
+}
+
+function closeImage(): void {
+  activeImage.value = null;
+}
+
+function onImageKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape" && activeImage.value) closeImage();
 }
 
 function markImageFailed(event: AssistantEventDetail, imageIndex: number): void {
@@ -597,9 +630,13 @@ watch(
   }
 );
 
-onMounted(() => void load(true));
+onMounted(() => {
+  document.addEventListener("keydown", onImageKeydown);
+  void load(true);
+});
 onBeforeUnmount(() => {
   if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+  document.removeEventListener("keydown", onImageKeydown);
 });
 </script>
 
@@ -828,22 +865,25 @@ onBeforeUnmount(() => {
 }
 
 .event-image-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 168px));
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 12px;
 }
 
 .event-image-preview {
   display: grid;
-  width: 100%;
+  width: 96px;
+  flex: 0 0 96px;
   aspect-ratio: 1;
+  padding: 0;
   place-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface-2);
   color: var(--muted);
+  cursor: zoom-in;
   transition: border-color 150ms ease, background 150ms ease;
 }
 
@@ -879,6 +919,64 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   font-size: 12px;
+}
+
+.event-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 8, 11, 0.82);
+  backdrop-filter: blur(4px);
+}
+
+.event-image-lightbox-dialog {
+  display: flex;
+  width: min(1120px, 100%);
+  max-height: calc(100dvh - 40px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.event-image-lightbox-header {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.event-image-lightbox-header > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-image-lightbox-body {
+  display: grid;
+  min-height: 0;
+  place-items: center;
+  overflow: auto;
+  padding: 16px;
+  background: #0b090c;
+}
+
+.event-image-lightbox-body img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100dvh - 120px);
+  object-fit: contain;
 }
 
 .event-decision {
@@ -1008,7 +1106,24 @@ onBeforeUnmount(() => {
   }
 
   .event-image-grid {
-    grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+    gap: 8px;
+  }
+
+  .event-image-preview {
+    width: 84px;
+    flex-basis: 84px;
+  }
+
+  .event-image-lightbox {
+    padding: 10px;
+  }
+
+  .event-image-lightbox-dialog {
+    max-height: calc(100dvh - 20px);
+  }
+
+  .event-image-lightbox-body {
+    padding: 8px;
   }
 
   .debug-step-summary,

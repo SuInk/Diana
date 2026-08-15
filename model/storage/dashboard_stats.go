@@ -45,12 +45,18 @@ type DashboardServerStats struct {
 	MemoryUsedBytes           uint64    `json:"memory_used_bytes,omitempty"`
 	MemoryUsagePercent        float64   `json:"memory_usage_percent,omitempty"`
 	ProcessMemoryBytes        uint64    `json:"process_memory_bytes,omitempty"`
+	StoragePath               string    `json:"storage_path,omitempty"`
+	StorageTotalBytes         uint64    `json:"storage_total_bytes,omitempty"`
+	StorageUsedBytes          uint64    `json:"storage_used_bytes,omitempty"`
+	StorageAvailableBytes     uint64    `json:"storage_available_bytes,omitempty"`
+	StorageUsagePercent       float64   `json:"storage_usage_percent,omitempty"`
 	GoHeapAllocBytes          uint64    `json:"go_heap_alloc_bytes,omitempty"`
 	GoHeapSystemBytes         uint64    `json:"go_heap_system_bytes,omitempty"`
 	GoRoutines                int       `json:"go_routines"`
 	RuntimeVersion            string    `json:"runtime_version,omitempty"`
 	MetricsUnavailableReason  string    `json:"metrics_unavailable_reason,omitempty"`
 	ProcessMetricsUnavailable string    `json:"process_metrics_unavailable,omitempty"`
+	StorageMetricsUnavailable string    `json:"storage_metrics_unavailable,omitempty"`
 }
 
 type DashboardStatsBucket struct {

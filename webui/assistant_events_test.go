@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"image"
@@ -172,6 +173,19 @@ func TestAssistantEventImageEndpointServesCachedImageWithoutLeakingSource(t *tes
 		t.Fatal("event image body differs from cached file")
 	}
 
+	thumbnailRecorder := httptest.NewRecorder()
+	router.ServeHTTP(thumbnailRecorder, httptest.NewRequest(http.MethodGet, imageURL+"?thumbnail=1", nil))
+	if thumbnailRecorder.Code != http.StatusOK || thumbnailRecorder.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("thumbnail status=%d type=%q body=%q", thumbnailRecorder.Code, thumbnailRecorder.Header().Get("Content-Type"), thumbnailRecorder.Body.String())
+	}
+	thumbnail, _, err := image.Decode(bytes.NewReader(thumbnailRecorder.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := thumbnail.Bounds().Size(); got.X != 2 || got.Y != 2 {
+		t.Fatalf("thumbnail size=%v", got)
+	}
+
 	missingRecorder := httptest.NewRecorder()
 	router.ServeHTTP(missingRecorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/images/2", nil))
 	if missingRecorder.Code != http.StatusNotFound {
@@ -189,6 +203,29 @@ func TestEventRasterImageContentTypeRejectsSVG(t *testing.T) {
 		if got, ok := eventRasterImageContentType(contentType); ok || got != "" {
 			t.Fatalf("eventRasterImageContentType(%q) = %q, %v", contentType, got, ok)
 		}
+	}
+}
+
+func TestEventImageThumbnailPreservesAspectRatioAndBounds(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 640, 320))
+	source.Set(0, 0, color.RGBA{R: 220, G: 40, B: 80, A: 255})
+	var original bytes.Buffer
+	if err := png.Encode(&original, source); err != nil {
+		t.Fatal(err)
+	}
+	thumbnail, contentType, err := eventImageThumbnail(original.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentType != "image/png" || len(thumbnail) >= original.Len() {
+		t.Fatalf("contentType=%q thumbnail=%d original=%d", contentType, len(thumbnail), original.Len())
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(thumbnail))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded.Bounds().Size(); got.X != 192 || got.Y != 96 {
+		t.Fatalf("thumbnail size=%v, want 192x96", got)
 	}
 }
 

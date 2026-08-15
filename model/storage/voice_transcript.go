@@ -93,6 +93,13 @@ func (s *SQLiteStore) LoadVoiceBlob(ctx context.Context, audioSHA256 string) ([]
 	return body, true, nil
 }
 
+func (s *SQLiteStore) DeleteVoiceBlob(ctx context.Context, audioSHA256 string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM voice_blobs WHERE audio_sha256 = ?`, strings.TrimSpace(audioSHA256)); err != nil {
+		return fmt.Errorf("delete voice blob: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) LoadVoiceTranscript(ctx context.Context, cacheKey string) (assistant.VoiceTranscriptRecord, bool, error) {
 	var record assistant.VoiceTranscriptRecord
 	err := s.db.QueryRowContext(ctx, `SELECT cache_key, audio_sha256, backend, model, COALESCE(language,''), transcript, COALESCE(duration_ms,0), created_at FROM voice_transcripts WHERE cache_key = ?`, strings.TrimSpace(cacheKey)).Scan(
@@ -108,12 +115,22 @@ func (s *SQLiteStore) LoadVoiceTranscript(ctx context.Context, cacheKey string) 
 }
 
 func (s *SQLiteStore) SaveVoiceTranscript(ctx context.Context, record assistant.VoiceTranscriptRecord) error {
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("save voice transcript: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `
 INSERT INTO voice_transcripts (cache_key, audio_sha256, backend, model, language, transcript, duration_ms, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(cache_key) DO UPDATE SET transcript=excluded.transcript, duration_ms=excluded.duration_ms, created_at=excluded.created_at
-`, record.CacheKey, record.AudioSHA256, record.Backend, record.Model, record.Language, record.Transcript, record.DurationMS, record.CreatedAt)
-	if err != nil {
+`, record.CacheKey, record.AudioSHA256, record.Backend, record.Model, record.Language, record.Transcript, record.DurationMS, record.CreatedAt); err != nil {
+		return fmt.Errorf("save voice transcript: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM voice_blobs WHERE audio_sha256 = ?`, strings.TrimSpace(record.AudioSHA256)); err != nil {
+		return fmt.Errorf("delete transcribed voice blob: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("save voice transcript: %w", err)
 	}
 	return nil

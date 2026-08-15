@@ -6,9 +6,11 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/storage"
@@ -16,10 +18,23 @@ import (
 
 var webuiProcessStartedAt = time.Now()
 
-func collectDashboardServerStats(now time.Time) storage.DashboardServerStats {
+const dashboardServerStatsCacheTTL = 5 * time.Second
+
+type cachedServerStats struct {
+	collectedAt time.Time
+	stats       storage.DashboardServerStats
+}
+
+var dashboardServerStatsCache = struct {
+	sync.Mutex
+	byPath map[string]cachedServerStats
+}{byPath: map[string]cachedServerStats{}}
+
+func collectDashboardServerStats(now time.Time, storagePaths ...string) storage.DashboardServerStats {
 	if now.IsZero() {
 		now = time.Now()
 	}
+	storagePath := dashboardStoragePath(storagePaths...)
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	hostname, _ := os.Hostname()
@@ -57,7 +72,64 @@ func collectDashboardServerStats(now time.Time) storage.DashboardServerStats {
 	} else {
 		stats.ProcessMetricsUnavailable = err.Error()
 	}
+	if total, used, available, err := storageUsage(storagePath); err == nil {
+		stats.StoragePath = storagePath
+		stats.StorageTotalBytes = total
+		stats.StorageUsedBytes = used
+		stats.StorageAvailableBytes = available
+		if total > 0 {
+			stats.StorageUsagePercent = roundPercent((float64(used) / float64(total)) * 100)
+		}
+	} else {
+		stats.StorageMetricsUnavailable = err.Error()
+	}
 	return stats
+}
+
+func cachedDashboardServerStats(now time.Time, storagePaths ...string) storage.DashboardServerStats {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	storagePath := dashboardStoragePath(storagePaths...)
+	dashboardServerStatsCache.Lock()
+	defer dashboardServerStatsCache.Unlock()
+	if cached, ok := dashboardServerStatsCache.byPath[storagePath]; ok && now.Sub(cached.collectedAt) < dashboardServerStatsCacheTTL {
+		return cached.stats
+	}
+	stats := collectDashboardServerStats(now, storagePath)
+	dashboardServerStatsCache.byPath[storagePath] = cachedServerStats{collectedAt: now, stats: stats}
+	return stats
+}
+
+func dashboardStoragePath(storagePaths ...string) string {
+	path := ""
+	if len(storagePaths) > 0 {
+		path = strings.TrimSpace(storagePaths[0])
+	}
+	if path == "" {
+		path = strings.TrimSpace(os.Getenv("APP_DB_PATH"))
+	}
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
+		path = "data/diana.db"
+	}
+	absPath, err := filepath.Abs(path)
+	if err == nil {
+		path = absPath
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return path
+	}
+	directory := filepath.Dir(path)
+	for {
+		if info, err := os.Stat(directory); err == nil && info.IsDir() {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return directory
+		}
+		directory = parent
+	}
 }
 
 func cpuModel() string {
@@ -80,6 +152,9 @@ func cpuModel() string {
 }
 
 func totalCPUUsagePercent(cores int) (float64, error) {
+	if runtime.GOOS == "windows" {
+		return windowsTotalCPUUsagePercent()
+	}
 	if cores <= 0 {
 		cores = 1
 	}
@@ -111,6 +186,8 @@ func memoryUsage() (uint64, uint64, error) {
 		return total, used, nil
 	case "linux":
 		return linuxMemoryUsage()
+	case "windows":
+		return windowsMemoryUsage()
 	default:
 		return 0, 0, fmt.Errorf("memory metrics unsupported on %s", runtime.GOOS)
 	}

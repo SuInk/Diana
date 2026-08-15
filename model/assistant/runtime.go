@@ -34,7 +34,6 @@ type LLMProviderConfigFactory func(llm.ProviderConfig) (LLMProvider, error)
 type replyRuleContextKey struct{}
 
 const (
-	proactiveReplyMaxRunes         = 180
 	proactiveReplyRouteConcurrency = 8
 	relationshipEvalConcurrency    = 4
 	semanticRouteTimeout           = 20 * time.Second
@@ -2214,12 +2213,14 @@ func directedFollowupNeedsResponse(text string) bool {
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有 @ 或没有点名对象而归为 none。围绕上下文中可识别的产品、技术、品牌或设计风格出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive，而不是一概当作随口评价；若该短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有无法从上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段能够调用的工具；其中列出的工具可读取的数据必须计入 answerable，不能因为它不在短上下文里就声称不可访问。若其中列出 diana.qq_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
+	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有 @ 或没有点名对象而归为 none。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 判断 substantive。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有无法从上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段能够调用的工具；其中列出的工具可读取的数据必须计入 answerable，不能因为它不在短上下文里就声称不可访问。若其中列出 diana.qq_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
+	const expressiveChatInGuard = `风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
+	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
-		return answerabilityGuard
+		return runtimeGuard
 	}
-	return configured + "\n\n" + answerabilityGuard
+	return configured + "\n\n" + runtimeGuard
 }
 
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
@@ -2534,8 +2535,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return ack, nil
 	}
 	for _, resp := range pluginResponses {
-		if resp.Reply != "" {
+		if resp.Reply != "" && !resp.RecallDisclosure {
 			// 插件如果直接给出回复，就不再调用 LLM；只给 Context 时继续作为提示词补充。
+			// 撤回记录属于敏感披露，必须先由 LLM 结合当前请求整理，不能走插件直发。
 			messageIDs, err := r.sendWithMessageIDs(ctx, event, resp.Reply)
 			if err != nil {
 				return "", err
@@ -2833,6 +2835,21 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if !currentImagesComplete {
 		return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more current images could not be encoded")})
 	}
+	if r.plugins != nil {
+		_, settings, enabled := r.plugins.PluginWithSettings(voiceSTTPluginID, r.pluginOverridesForEvent(event))
+		if enabled {
+			voiceParts, notice := r.voiceSourceAnalysisParts(ctx, messageEvent, cleanText, voiceSTTConfigFromSettings(settings))
+			if notice != "" {
+				currentMessage = appendLLMMessageText(currentMessage, notice)
+			}
+			if len(voiceParts) > 0 {
+				if len(currentMessage.Parts) == 0 && strings.TrimSpace(currentMessage.Content) != "" {
+					currentMessage.Parts = append(currentMessage.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: currentMessage.Content})
+				}
+				currentMessage.Parts = append(currentMessage.Parts, voiceParts...)
+			}
+		}
+	}
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
 		messages = append(messages, llm.Message{
@@ -2845,9 +2862,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
-	if proactiveTriggered && (replyCfg.MaxReplyChars <= 0 || replyCfg.MaxReplyChars > proactiveReplyMaxRunes) {
-		replyCfg.MaxReplyChars = proactiveReplyMaxRunes
-	}
 	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		return "", err
@@ -3011,7 +3025,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
 	}
 	group := llm.GroupChat
-	if messagesContainImages(messages) {
+	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
 	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
@@ -3040,7 +3054,7 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 		return nil, fmt.Errorf("qqbot: runtime agent llm provider is not configured")
 	}
 	group := llm.GroupChat
-	if messagesContainImages(req.Messages) {
+	if messagesContainImages(req.Messages) || messagesContainAudio(req.Messages) {
 		group = llm.GroupVision
 	}
 	provider, err := p.providerForGroup(group)
@@ -3115,7 +3129,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		return normalizeReply(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
 	group := llm.GroupChat
-	if messagesContainImages(messages) {
+	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
 	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
@@ -4564,6 +4578,39 @@ func messagesContainImages(messages []llm.Message) bool {
 		}
 	}
 	return false
+}
+
+func messagesContainAudio(messages []llm.Message) bool {
+	for _, message := range messages {
+		for _, part := range message.Parts {
+			if part.Type == llm.ContentPartInputAudio && strings.TrimSpace(part.AudioData) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func appendLLMMessageText(message llm.Message, suffix string) llm.Message {
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
+		return message
+	}
+	if strings.TrimSpace(message.Content) == "" {
+		message.Content = suffix
+	} else {
+		message.Content = strings.TrimSpace(message.Content) + "\n\n" + suffix
+	}
+	for index := range message.Parts {
+		if message.Parts[index].Type == llm.ContentPartText {
+			message.Parts[index].Text = message.Content
+			return message
+		}
+	}
+	if len(message.Parts) > 0 {
+		message.Parts = append([]llm.ContentPart{{Type: llm.ContentPartText, Text: message.Content}}, message.Parts...)
+	}
+	return message
 }
 
 func replyRuleLLMProfileID(ctx context.Context) (string, bool) {
@@ -7406,6 +7453,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 }
 
 func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
+	event = voiceTranscriptOnlyHistory(event)
 	event.proactiveReply = false
 	event.imageResolutionRun = false
 	event.imageLoadErr = nil

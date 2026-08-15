@@ -194,7 +194,6 @@ const versionLabel = computed(() => {
 });
 const releaseUpdateAvailable = ref(false);
 const health = ref<HealthResponse | null>(null);
-let updateCheckTimer: number | undefined;
 
 const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
@@ -287,9 +286,6 @@ async function bootApp(): Promise<void> {
     /* 版本信息失败时侧栏只显示占位 */
   }
   void refreshUpdateIndicator();
-  if (updateCheckTimer === undefined) {
-    updateCheckTimer = window.setInterval(() => void refreshUpdateIndicator(), 30 * 60 * 1000);
-  }
   // 首次访问且 LLM 未配置时自动进入向导；之后只在总览顶部保留一条引导。
   try {
     const config = await getConfig();
@@ -336,8 +332,5 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   sidebarMedia.removeEventListener("change", syncSidebarMode);
-  if (updateCheckTimer !== undefined) {
-    window.clearInterval(updateCheckTimer);
-  }
 });
 </script>

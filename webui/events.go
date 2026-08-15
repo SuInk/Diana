@@ -83,14 +83,19 @@ func (h *EventHub) PublishBotEvent(event assistant.EventRecord) {
 
 // EventStreamHandler 通过 SSE 向前端推送状态、统计和实时事件。
 type EventStreamHandler struct {
-	hub       *EventHub
-	runtime   statsStatusProvider
-	collector *StatsCollector
+	hub         *EventHub
+	runtime     statsStatusProvider
+	collector   *StatsCollector
+	storagePath string
 }
 
 // NewEventStreamHandler 创建 EventStreamHandler 实例。
-func NewEventStreamHandler(hub *EventHub, runtime statsStatusProvider, collector *StatsCollector) *EventStreamHandler {
-	return &EventStreamHandler{hub: hub, runtime: runtime, collector: collector}
+func NewEventStreamHandler(hub *EventHub, runtime statsStatusProvider, collector *StatsCollector, storagePaths ...string) *EventStreamHandler {
+	storagePath := ""
+	if len(storagePaths) > 0 {
+		storagePath = storagePaths[0]
+	}
+	return &EventStreamHandler{hub: hub, runtime: runtime, collector: collector, storagePath: storagePath}
 }
 
 // Register 注册当前模块的路由或能力。
@@ -108,6 +113,7 @@ func (h *EventStreamHandler) StartWatcher(ctx context.Context, interval time.Dur
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		var lastSignature string
+		var lastStatsAt time.Time
 		for {
 			select {
 			case <-ctx.Done():
@@ -118,15 +124,17 @@ func (h *EventStreamHandler) StartWatcher(ctx context.Context, interval time.Dur
 				}
 				status := h.runtime.Status()
 				signature := statusSignature(status)
-				if signature == lastSignature {
-					continue
+				statusChanged := signature != lastSignature
+				if statusChanged {
+					lastSignature = signature
+					h.hub.Publish("status", status)
 				}
-				lastSignature = signature
-				h.hub.Publish("status", status)
-				if h.collector != nil {
+				if h.collector != nil && (statusChanged || time.Since(lastStatsAt) >= dashboardServerStatsCacheTTL) {
 					snapshot := h.collector.Snapshot()
 					snapshot.Bot = summarizeBotStatus(status)
+					snapshot.Server = cachedDashboardServerStats(time.Now(), h.storagePath)
 					h.hub.Publish("stats", snapshot)
+					lastStatsAt = time.Now()
 				}
 			}
 		}
@@ -189,6 +197,7 @@ func (h *EventStreamHandler) stream(c *gin.Context) {
 		if h.collector != nil {
 			snapshot := h.collector.Snapshot()
 			snapshot.Bot = summarizeBotStatus(status)
+			snapshot.Server = cachedDashboardServerStats(time.Now(), h.storagePath)
 			writeSSE(c, flusher, "stats", snapshot)
 		}
 	}
