@@ -29,6 +29,7 @@ const defaultChatInLevel = ChatInLevelLow
 // chatInSettings 是某个事件最终生效的插话判定参数。
 type chatInSettings struct {
 	Enabled   bool
+	Natural   bool
 	Level     ChatInLevel
 	Threshold float64
 	Chance    float64
@@ -149,5 +150,13 @@ func clampChatInRatio(value float64) float64 {
 
 // chatInSettings 返回本条配置生效的闲聊插话参数。
 func (cfg BotConfig) chatInSettings() chatInSettings {
-	return chatInSettingsFrom(cfg.ChatInEnabled, cfg.ChatInLevel, cfg.ChatInThreshold, cfg.ChatInChance, cfg.ChatInCooldownSeconds)
+	settings := chatInSettingsFrom(cfg.ChatInEnabled, cfg.ChatInLevel, cfg.ChatInThreshold, cfg.ChatInChance, cfg.ChatInCooldownSeconds)
+	if boolValue(cfg.NaturalInterjectionEnabled, false) {
+		settings.Enabled = true
+		settings.Natural = true
+		settings.Threshold = 0
+		settings.Chance = 1
+		settings.Cooldown = 0
+	}
+	return settings
 }

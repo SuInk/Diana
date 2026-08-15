@@ -5,11 +5,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="${1:-$ROOT/dist/diana-webui}"
 IDENTIFIER="${DIANA_MACOS_CODE_IDENTIFIER:-com.suink.diana}"
 GO_BIN="${GO:-go}"
-BUILD_VERSION="${DIANA_UPDATE_TARGET_COMMIT:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)}"
-BUILD_LDFLAGS=""
-if [[ -n "$BUILD_VERSION" ]]; then
-	BUILD_LDFLAGS="-X main.buildVersion=$BUILD_VERSION"
+BUILD_VERSION="${DIANA_BUILD_VERSION:-}"
+if [[ -z "$BUILD_VERSION" ]]; then
+	BUILD_VERSION="$(git -C "$ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
 fi
+if [[ -z "$BUILD_VERSION" ]]; then
+	BUILD_VERSION="dev"
+fi
+if [[ "$BUILD_VERSION" != "dev" && ! "$BUILD_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+	echo "DIANA_BUILD_VERSION must be dev or a semantic version such as v0.8.7: $BUILD_VERSION" >&2
+	exit 1
+fi
+BUILD_LDFLAGS="-X main.buildVersion=$BUILD_VERSION"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
 	echo "build-local-mac.sh must run on macOS" >&2

@@ -10,6 +10,102 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
+func TestDianaChatHistoryToolRecentKeepsNewestEventsWhenMemoryExceedsLimit(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newSemanticTimelineStore()
+	runtime.SetMessageHistoryStore(store)
+	for index := 1; index <= 6; index++ {
+		runtime.remember(chatHistoryTextEvent(int64(index), "alice", "Alice", fmt.Sprintf("message-%d", index), fmt.Sprintf("消息 %d", index)))
+	}
+
+	raw, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(
+		context.Background(),
+		map[string]any{"operation": "recent", "limit": 3},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if got := historyMessageIDsFromItems(result.Items); strings.Join(got, ",") != "message-4,message-5,message-6" {
+		t.Fatalf("recent message ids = %q", got)
+	}
+}
+
+func TestMergeMessageHistoryKeepsChronologicalNewestWindow(t *testing.T) {
+	event := func(at int64, id string) MessageEvent {
+		return chatHistoryTextEvent(at, "alice", "Alice", id, id)
+	}
+	tests := []struct {
+		name   string
+		memory []MessageEvent
+		stored []MessageEvent
+		limit  int
+		want   string
+	}{
+		{
+			name:   "memory exceeds limit and stored overlaps newest",
+			memory: []MessageEvent{event(1, "m1"), event(2, "m2"), event(3, "m3"), event(4, "m4"), event(5, "m5"), event(6, "m6")},
+			stored: []MessageEvent{event(4, "m4"), event(5, "m5"), event(6, "m6")},
+			limit:  3,
+			want:   "m4,m5,m6",
+		},
+		{
+			name:   "stored only",
+			stored: []MessageEvent{event(1, "s1"), event(2, "s2"), event(3, "s3")},
+			limit:  2,
+			want:   "s2,s3",
+		},
+		{
+			name:   "partial overlap",
+			memory: []MessageEvent{event(2, "shared"), event(4, "memory-new")},
+			stored: []MessageEvent{event(1, "stored-old"), event(2, "shared"), event(3, "stored-new")},
+			limit:  3,
+			want:   "shared,stored-new,memory-new",
+		},
+		{
+			name:   "no overlap",
+			memory: []MessageEvent{event(4, "memory-new")},
+			stored: []MessageEvent{event(1, "stored-old"), event(3, "stored-new")},
+			limit:  2,
+			want:   "stored-new,memory-new",
+		},
+		{
+			name:   "equal timestamps remain stable",
+			memory: []MessageEvent{event(10, "memory-a"), event(10, "memory-b")},
+			stored: []MessageEvent{event(10, "stored-a"), event(10, "stored-b")},
+			limit:  3,
+			want:   "stored-b,memory-a,memory-b",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := mergeMessageHistory(test.memory, test.stored, test.limit)
+			if ids := strings.Join(historyMessageIDs(got), ","); ids != test.want {
+				t.Fatalf("message ids = %q, want %q", ids, test.want)
+			}
+		})
+	}
+}
+
+func historyMessageIDs(events []MessageEvent) []string {
+	ids := make([]string, 0, len(events))
+	for _, event := range events {
+		ids = append(ids, event.MessageID)
+	}
+	return ids
+}
+
+func historyMessageIDsFromItems(items []dianaChatHistoryItem) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.MessageID)
+	}
+	return ids
+}
+
 func TestDianaChatHistoryToolReadsAroundQuotedMessageBeyondShortContext(t *testing.T) {
 	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()

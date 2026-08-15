@@ -38,6 +38,9 @@ func TestRelationshipPolicySeparatesCapabilitiesFromOwnerAdministration(t *testi
 	if !initial.allowedAgentToolNames()["web_search.search"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()[dianaHistoryImagesToolName] || !initial.allowedAgentToolNames()["diana.relationship"] || !initial.allowedAgentToolNames()["diana.tts"] || !initial.allowedAgentToolNames()[dianaOneBotV11ToolName] || initial.allowedAgentToolNames()[dianaImageToolName] || initial.AllowImageGeneration || initial.AllowImageEditing || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
 		t.Fatalf("initial tools = %#v", initial.allowedAgentToolNames())
 	}
+	if initial.allowedAgentToolNames()[dianaRepositoryIssuesToolName] {
+		t.Fatal("non-owner relationship unexpectedly received GitHub Issue write access")
+	}
 	familiar := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", "user")
 	if !familiar.AllowImageGeneration || !familiar.AllowImageEditing || !familiar.AllowDocumentOCR {
 		t.Fatalf("familiar policy = %#v", familiar)

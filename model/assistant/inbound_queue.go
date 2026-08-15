@@ -18,8 +18,11 @@ const (
 	inboundPollInterval     = 500 * time.Millisecond
 	inboundLeaseDuration    = 10 * time.Minute
 	inboundGroupConcurrency = 3
-	historyInitialDelay     = 30 * time.Second
-	historyRetryDelay       = 5 * time.Minute
+	historyInitialDelay     = time.Second
+	historyRetryDelay       = 30 * time.Second
+	historyBaselineOverlap  = 5 * time.Second
+	inboundReplayPadding    = 5 * time.Minute
+	inboundCheckpointPeriod = 30 * time.Second
 	// NapCat history calls can stall when several large responses are requested
 	// concurrently. Serialize the small session set to keep backfill complete.
 	historyFetchWorkers = 1
@@ -37,9 +40,9 @@ const (
 	InboundPriorityMediaTurn = 110
 )
 
-// InboundReplayWindow bounds how long a persisted or backfilled message may
-// still trigger a reply after the bot reconnects.
-const InboundReplayWindow = 2 * time.Hour
+// InboundReplayWindow is the maximum recovery window. Each reconnect normally
+// uses the observed offline duration plus inboundReplayPadding instead.
+const InboundReplayWindow = 12 * time.Hour
 
 // InboundQueueItem is a persisted QQ message waiting to be processed.
 type InboundQueueItem struct {
@@ -93,6 +96,13 @@ func (r *Runtime) inboundTurnSuperseded(ctx context.Context, event MessageEvent)
 		return "", false
 	}
 	return turnID, superseded
+}
+
+// InboundRecoveryCheckpointStore persists the latest instant at which the QQ
+// channel was known to be online, allowing restart recovery to match downtime.
+type InboundRecoveryCheckpointStore interface {
+	LoadInboundRecoveryCheckpoint(ctx context.Context) (time.Time, bool, error)
+	SaveInboundRecoveryCheckpoint(ctx context.Context, connectedAt time.Time) error
 }
 
 // InboundEventAuditStore lets the runtime persist the human-readable routing
@@ -150,10 +160,44 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	if workers <= 0 {
 		workers = 1
 	}
+	baselineCapturedTime := time.Now()
+	baselineCapturedAt := baselineCapturedTime.Unix()
+	backfillBaseline, baselineErr := store.ListHistorySessions(ctx)
+	backfillBaselineReady := baselineErr == nil
+	if baselineErr != nil {
+		log.Printf("qqbot inbound history baseline snapshot failed: %v", baselineErr)
+	}
+	disconnectedAt := inferredInboundDisconnectTime(backfillBaseline, baselineCapturedTime)
+	recoveryStore, recoveryStoreReady := store.(InboundRecoveryCheckpointStore)
+	if recoveryStoreReady {
+		checkpointCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		checkpoint, ok, checkpointErr := recoveryStore.LoadInboundRecoveryCheckpoint(checkpointCtx)
+		cancel()
+		if checkpointErr != nil {
+			log.Printf("qqbot inbound recovery checkpoint load failed: %v", checkpointErr)
+		} else if ok && !checkpoint.IsZero() && !checkpoint.After(baselineCapturedTime) {
+			disconnectedAt = checkpoint
+		}
+	}
+	saveRecoveryCheckpoint := func(at time.Time) {
+		if !recoveryStoreReady || at.IsZero() {
+			return
+		}
+		checkpointCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := recoveryStore.SaveInboundRecoveryCheckpoint(checkpointCtx, at); err != nil {
+			log.Printf("qqbot inbound recovery checkpoint save failed: %v", err)
+		}
+		cancel()
+	}
 
 	var workerWG sync.WaitGroup
 	var backfillWG sync.WaitGroup
-	backfillResult := make(chan error, 1)
+	type historyBackfillResult struct {
+		err       error
+		sessions  []HistorySession
+		checkedAt int64
+	}
+	backfillResult := make(chan historyBackfillResult, 1)
 	backfillRunning := false
 	backfillRequested := false
 	nextBackfillAt := time.Time{}
@@ -166,12 +210,23 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		}
 		backfillRunning = true
 		r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_started", "OneBot 断线消息回补已开始", nil)
+		cutoff := r.inboundReplayCutoffAt(time.Now())
+		baseline := historyBackfillBaselineWithPadding(backfillBaseline, cutoff)
+		baselineReady := backfillBaselineReady
+		fallbackWatermark := historyBackfillWatermarkWithPadding(baselineCapturedAt, cutoff)
+		checkedAt := time.Now().Unix()
 		backfillWG.Add(1)
 		go func() {
 			defer backfillWG.Done()
-			err := r.backfillInboundHistory(ctx, store)
+			var sessions []HistorySession
+			var err error
+			if baselineReady {
+				sessions, err = r.backfillInboundHistoryFromSessions(ctx, store, baseline, fallbackWatermark)
+			} else {
+				err = r.backfillInboundHistory(ctx, store)
+			}
 			select {
-			case backfillResult <- err:
+			case backfillResult <- historyBackfillResult{err: err, sessions: sessions, checkedAt: checkedAt}:
 			case <-ctx.Done():
 			}
 		}()
@@ -187,10 +242,15 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	ticker := time.NewTicker(inboundPollInterval)
 	defer ticker.Stop()
 	connected := false
+	lastConnectedAt := time.Time{}
+	nextCheckpointAt := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
 			r.setInboundReady(false)
+			if connected {
+				saveRecoveryCheckpoint(time.Now())
+			}
 			workerWG.Wait()
 			backfillWG.Wait()
 			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -199,11 +259,11 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			}
 			cancel()
 			return
-		case err := <-backfillResult:
+		case result := <-backfillResult:
 			backfillRunning = false
-			if err != nil && ctx.Err() == nil {
-				log.Printf("qqbot inbound history backfill incomplete: %v", err)
-				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_failed", "OneBot 断线消息回补失败", err)
+			if result.err != nil && ctx.Err() == nil {
+				log.Printf("qqbot inbound history backfill incomplete: %v", result.err)
+				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_failed", "OneBot 断线消息回补失败", result.err)
 				nextBackfillAt = time.Now().Add(historyRetryDelay)
 			} else {
 				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_completed", "OneBot 断线消息回补已完成", nil)
@@ -212,9 +272,15 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			if backfillRequested && ctx.Err() == nil && r.channelStatus().Connected {
 				backfillRequested = false
 				launchBackfill()
+			} else if result.err == nil && len(result.sessions) > 0 {
+				watermark := result.checkedAt - int64(historyBaselineOverlap/time.Second)
+				backfillBaseline = advanceHistoryBackfillBaseline(result.sessions, watermark)
+				backfillBaselineReady = true
+				baselineCapturedAt = result.checkedAt
 			}
 		case <-ticker.C:
 			status := r.channelStatus()
+			now := time.Now()
 			if status.DuplicateConnections > observedDuplicateConnections {
 				r.recordOneBotConnectionLifecycle(ctx, status, "duplicate_client_conflict", "已拒绝重复 OneBot 客户端连接", nil)
 				observedDuplicateConnections = status.DuplicateConnections
@@ -222,6 +288,11 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			if !status.Connected {
 				if connected {
 					r.recordOneBotConnectionLifecycle(ctx, status, "disconnected", "OneBot 客户端已断开", nil)
+					disconnectedAt = lastConnectedAt
+					if disconnectedAt.IsZero() {
+						disconnectedAt = now
+					}
+					saveRecoveryCheckpoint(disconnectedAt)
 				}
 				connected = false
 				r.setInboundReady(false)
@@ -229,14 +300,30 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			}
 			epochChanged := status.ConnectionEpoch != 0 && observedConnectionEpoch != 0 && status.ConnectionEpoch != observedConnectionEpoch
 			if connected && !epochChanged {
-				if !nextBackfillAt.IsZero() && !time.Now().Before(nextBackfillAt) {
+				lastConnectedAt = now
+				if nextCheckpointAt.IsZero() || !now.Before(nextCheckpointAt) {
+					saveRecoveryCheckpoint(now)
+					nextCheckpointAt = now.Add(inboundCheckpointPeriod)
+				}
+				if !nextBackfillAt.IsZero() && !now.Before(nextBackfillAt) {
 					nextBackfillAt = time.Time{}
 					launchBackfill()
 				}
 				continue
 			}
 			wasConnected := connected
+			if epochChanged && connected {
+				disconnectedAt = lastConnectedAt
+				if disconnectedAt.IsZero() {
+					disconnectedAt = now
+				}
+			}
+			r.setInboundReplayCutoff(inboundReplayCutoff(disconnectedAt, now))
 			connected = true
+			lastConnectedAt = now
+			disconnectedAt = now
+			saveRecoveryCheckpoint(now)
+			nextCheckpointAt = now.Add(inboundCheckpointPeriod)
 			if status.ConnectionEpoch != 0 {
 				observedConnectionEpoch = status.ConnectionEpoch
 			}
@@ -250,7 +337,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 				r.recordOneBotConnectionLifecycle(ctx, status, "connection_opened", "OneBot 客户端已连接", nil)
 			}
 			if nextBackfillAt.IsZero() {
-				nextBackfillAt = time.Now().Add(historyInitialDelay)
+				nextBackfillAt = now.Add(historyInitialDelay)
 			}
 		}
 	}
@@ -305,7 +392,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 }
 
 func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueueItem) (string, error) {
-	if inboundEventIsStale(item.Event, time.Now()) {
+	if r.inboundEventIsStale(item.Event, time.Now()) {
 		return "ignored_stale", nil
 	}
 	ctx = r.withDebugTraceContext(ctx, item.Event)
@@ -511,11 +598,60 @@ func (r *Runtime) inboundPriority(event MessageEvent) int {
 	return InboundPriorityNormal
 }
 
-func inboundEventIsStale(event MessageEvent, now time.Time) bool {
+func (r *Runtime) inboundEventIsStale(event MessageEvent, now time.Time) bool {
 	if event.Time <= 0 || now.IsZero() {
 		return false
 	}
-	return now.Sub(time.Unix(event.Time, 0)) > InboundReplayWindow
+	return time.Unix(event.Time, 0).Before(r.inboundReplayCutoffAt(now))
+}
+
+func inboundReplayCutoff(disconnectedAt, reconnectedAt time.Time) time.Time {
+	if reconnectedAt.IsZero() {
+		reconnectedAt = time.Now()
+	}
+	if disconnectedAt.IsZero() || disconnectedAt.After(reconnectedAt) {
+		disconnectedAt = reconnectedAt
+	}
+	cutoff := disconnectedAt.Add(-inboundReplayPadding)
+	earliest := reconnectedAt.Add(-InboundReplayWindow)
+	if cutoff.Before(earliest) {
+		return earliest
+	}
+	return cutoff
+}
+
+func inferredInboundDisconnectTime(sessions []HistorySession, now time.Time) time.Time {
+	latest := time.Time{}
+	for _, session := range sessions {
+		if session.LastEventTime <= 0 {
+			continue
+		}
+		candidate := time.Unix(session.LastEventTime, 0)
+		if candidate.After(now) || !candidate.After(latest) {
+			continue
+		}
+		latest = candidate
+	}
+	if latest.IsZero() {
+		return now
+	}
+	return latest
+}
+
+func historyBackfillBaselineWithPadding(sessions []HistorySession, cutoff time.Time) []HistorySession {
+	out := append([]HistorySession(nil), sessions...)
+	for index := range out {
+		out[index].LastEventTime = historyBackfillWatermarkWithPadding(out[index].LastEventTime, cutoff)
+	}
+	return out
+}
+
+func historyBackfillWatermarkWithPadding(watermark int64, cutoff time.Time) int64 {
+	padded := watermark - int64(inboundReplayPadding/time.Second)
+	if !cutoff.IsZero() && padded < cutoff.Unix() {
+		return cutoff.Unix()
+	}
+	return padded
 }
 
 func inboundRetryDelay(attempts int) time.Duration {
@@ -605,10 +741,36 @@ func (r *Runtime) recordOneBotConnectionLifecycle(ctx context.Context, status Ch
 	})
 }
 
+func advanceHistoryBackfillBaseline(sessions []HistorySession, watermark int64) []HistorySession {
+	out := append([]HistorySession(nil), sessions...)
+	for index := range out {
+		if out[index].LastEventTime < watermark {
+			out[index].LastEventTime = watermark
+		}
+	}
+	return out
+}
+
 func (r *Runtime) setInboundReady(ready bool) {
 	r.inboundReadyMu.Lock()
 	r.inboundReady = ready
 	r.inboundReadyMu.Unlock()
+}
+
+func (r *Runtime) setInboundReplayCutoff(cutoff time.Time) {
+	r.inboundReadyMu.Lock()
+	r.inboundReplayCutoff = cutoff
+	r.inboundReadyMu.Unlock()
+}
+
+func (r *Runtime) inboundReplayCutoffAt(now time.Time) time.Time {
+	r.inboundReadyMu.RLock()
+	cutoff := r.inboundReplayCutoff
+	r.inboundReadyMu.RUnlock()
+	if cutoff.IsZero() {
+		return now.Add(-InboundReplayWindow)
+	}
+	return cutoff
 }
 
 func (r *Runtime) inboundProcessingReady() bool {
@@ -646,6 +808,11 @@ func (r *Runtime) backfillInboundHistory(ctx context.Context, store InboundEvent
 	if err != nil {
 		return fmt.Errorf("list history sessions: %w", err)
 	}
+	_, err = r.backfillInboundHistoryFromSessions(ctx, store, sessions, time.Now().Unix())
+	return err
+}
+
+func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store InboundEventStore, sessions []HistorySession, fallbackWatermark int64) ([]HistorySession, error) {
 	byKey := make(map[string]HistorySession, len(sessions))
 	globalWatermark := int64(0)
 	for _, session := range sessions {
@@ -658,7 +825,10 @@ func (r *Runtime) backfillInboundHistory(ctx context.Context, store InboundEvent
 		}
 	}
 	if globalWatermark <= 0 {
-		globalWatermark = time.Now().Unix()
+		globalWatermark = fallbackWatermark
+		if globalWatermark <= 0 {
+			globalWatermark = time.Now().Unix()
+		}
 	}
 
 	var backfillErrors []error
@@ -754,7 +924,7 @@ func (r *Runtime) backfillInboundHistory(ctx context.Context, store InboundEvent
 			}
 		}
 	}
-	return errors.Join(backfillErrors...)
+	return ordered, errors.Join(backfillErrors...)
 }
 
 func (r *Runtime) callBackfillAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {

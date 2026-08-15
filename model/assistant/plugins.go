@@ -302,6 +302,12 @@ func (m *PluginManager) Enabled(id string) bool {
 // its effective settings. Event-bound tools use this without exposing secrets
 // to the model or requiring the plugin tool interface to know the chat target.
 func (m *PluginManager) PluginWithSettings(id string, overrides map[string]bool) (Plugin, SettingValues, bool) {
+	return m.PluginWithSettingsForGroup(id, overrides, nil)
+}
+
+// PluginWithSettingsForGroup returns one plugin with settings resolved in the
+// order defaults -> global overrides -> group overrides.
+func (m *PluginManager) PluginWithSettingsForGroup(id string, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) (Plugin, SettingValues, bool) {
 	if m == nil {
 		return nil, nil, false
 	}
@@ -310,13 +316,75 @@ func (m *PluginManager) PluginWithSettings(id string, overrides map[string]bool)
 	plugin, ok := m.catalog[id]
 	state := m.states[id]
 	enabled := state.Enabled
-	if override, present := overrides[id]; present {
+	if override, present := enabledOverrides[id]; present {
 		enabled = override
 	}
 	if !ok || !state.Installed || !enabled {
 		return nil, nil, false
 	}
-	return plugin, effectivePluginSettings(state.Manifest.Settings, state.Settings), true
+	return plugin, effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id]), true
+}
+
+// ValidateGroupSettingOverrides validates and normalizes explicit per-group
+// values. Secret fields are intentionally rejected and continue to inherit
+// the global plugin configuration.
+func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOverrides) (PluginSettingOverrides, error) {
+	if len(overrides) == 0 {
+		return nil, nil
+	}
+	if m == nil {
+		return nil, fmt.Errorf("qqbot: plugin manager is not configured")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := PluginSettingOverrides{}
+	for id, values := range overrides {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil, fmt.Errorf("qqbot: plugin ID cannot be empty")
+		}
+		plugin, ok := m.catalog[id]
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", ErrPluginNotFound, id)
+		}
+		normalized, err := normalizeGroupPluginSettings(plugin.Manifest().Settings, values)
+		if err != nil {
+			return nil, fmt.Errorf("qqbot: plugin %q group settings: %w", id, err)
+		}
+		if len(normalized) > 0 {
+			out[id] = normalized
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// SanitizeGroupSettingOverrides returns a safe snapshot for runtime use or API
+// responses. Unknown plugins, stale keys, invalid values, and secrets vanish.
+func (m *PluginManager) SanitizeGroupSettingOverrides(overrides PluginSettingOverrides) PluginSettingOverrides {
+	if m == nil || len(overrides) == 0 {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := PluginSettingOverrides{}
+	for id, values := range overrides {
+		id = strings.TrimSpace(id)
+		plugin, ok := m.catalog[id]
+		if !ok {
+			continue
+		}
+		sanitized := sanitizeGroupPluginSettings(plugin.Manifest().Settings, values)
+		if len(sanitized) > 0 {
+			out[id] = sanitized
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Snapshot 返回插件状态快照用于持久化。
@@ -473,6 +541,12 @@ func (m *PluginManager) Run(ctx context.Context, req PluginRequest) []PluginResp
 
 // RunWithOverrides 依次执行插件，并允许调用方按会话覆盖已安装插件的启用状态。
 func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest, overrides map[string]bool) []PluginResponse {
+	return m.RunWithGroupOverrides(ctx, req, overrides, nil)
+}
+
+// RunWithGroupOverrides runs plugins with per-conversation enable and setting
+// overrides.
+func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginRequest, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) []PluginResponse {
 	type runnable struct {
 		id       string
 		plugin   Plugin
@@ -483,7 +557,7 @@ func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest,
 	for id, plugin := range m.catalog {
 		state := m.states[id]
 		enabled := state.Enabled
-		if override, ok := overrides[id]; ok {
+		if override, ok := enabledOverrides[id]; ok {
 			enabled = override
 		}
 		if state.Installed && enabled {
@@ -491,7 +565,7 @@ func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest,
 				id:     id,
 				plugin: plugin,
 				// 生效设置在锁内合并成快照，插件执行期间的设置变更不影响本次请求。
-				settings: effectivePluginSettings(state.Manifest.Settings, state.Settings),
+				settings: effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id]),
 			})
 		}
 	}
@@ -516,6 +590,10 @@ func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest,
 }
 
 func (m *PluginManager) RunOneWithOverrides(ctx context.Context, id string, req PluginRequest, overrides map[string]bool) (*PluginResponse, error) {
+	return m.RunOneWithGroupOverrides(ctx, id, req, overrides, nil)
+}
+
+func (m *PluginManager) RunOneWithGroupOverrides(ctx context.Context, id string, req PluginRequest, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) (*PluginResponse, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -523,10 +601,10 @@ func (m *PluginManager) RunOneWithOverrides(ctx context.Context, id string, req 
 	plugin, ok := m.catalog[id]
 	state := m.states[id]
 	enabled := state.Enabled
-	if override, overridden := overrides[id]; overridden {
+	if override, overridden := enabledOverrides[id]; overridden {
 		enabled = override
 	}
-	settings := effectivePluginSettings(state.Manifest.Settings, state.Settings)
+	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id])
 	m.mu.RUnlock()
 	if !ok || !state.Installed || !enabled {
 		return nil, nil
@@ -538,6 +616,12 @@ func (m *PluginManager) RunOneWithOverrides(ctx context.Context, id string, req 
 // AgentToolsWithOverrides returns a stable snapshot of tools contributed by
 // installed and enabled plugins for one conversation.
 func (m *PluginManager) AgentToolsWithOverrides(overrides map[string]bool) ([]agent.Tool, error) {
+	return m.AgentToolsWithGroupOverrides(overrides, nil)
+}
+
+// AgentToolsWithGroupOverrides resolves plugin settings for the current
+// conversation before constructing event-bound tools.
+func (m *PluginManager) AgentToolsWithGroupOverrides(enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) ([]agent.Tool, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -556,7 +640,7 @@ func (m *PluginManager) AgentToolsWithOverrides(overrides map[string]bool) ([]ag
 		}
 		state := m.states[id]
 		enabled := state.Enabled
-		if override, ok := overrides[id]; ok {
+		if override, ok := enabledOverrides[id]; ok {
 			enabled = override
 		}
 		if !state.Installed || !enabled {
@@ -565,7 +649,7 @@ func (m *PluginManager) AgentToolsWithOverrides(overrides map[string]bool) ([]ag
 		providers = append(providers, provider{
 			id:       id,
 			plugin:   toolPlugin,
-			settings: effectivePluginSettings(state.Manifest.Settings, state.Settings),
+			settings: effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id]),
 		})
 	}
 	m.mu.RUnlock()
@@ -589,7 +673,7 @@ func (m *PluginManager) AgentToolsWithOverrides(overrides map[string]bool) ([]ag
 		}
 		state := m.states[id]
 		enabled := state.Enabled
-		if override, overridden := overrides[id]; overridden {
+		if override, overridden := enabledOverrides[id]; overridden {
 			enabled = override
 		}
 		if state.Installed && enabled {

@@ -189,7 +189,7 @@ func TestInboundQueueMigrationRestoresStaleDrops(t *testing.T) {
 	if err := store.CompleteInboundEvent(ctx, id, "old-worker", "ignored_stale"); err != nil {
 		t.Fatal(err)
 	}
-	oldID, inserted, err := store.EnqueueInboundEvent(ctx, "group:100", inboundTestEvent("too-old", "leave terminal", time.Now().Add(-3*time.Hour).Unix()))
+	oldID, inserted, err := store.EnqueueInboundEvent(ctx, "group:100", inboundTestEvent("too-old", "leave terminal", time.Now().Add(-13*time.Hour).Unix()))
 	if err != nil || !inserted {
 		t.Fatalf("enqueue old inserted=%v err=%v", inserted, err)
 	}
@@ -218,6 +218,24 @@ func TestInboundQueueMigrationRestoresStaleDrops(t *testing.T) {
 	}
 	if oldStatus != inboundStatusDone || oldOutcome != "ignored_stale" {
 		t.Fatalf("old stale row status=%q outcome=%q", oldStatus, oldOutcome)
+	}
+}
+
+func TestInboundRecoveryCheckpointPersists(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "recovery-checkpoint.db"))
+	defer func() { _ = store.Close() }()
+
+	if _, ok, err := store.LoadInboundRecoveryCheckpoint(ctx); err != nil || ok {
+		t.Fatalf("empty checkpoint ok=%v err=%v", ok, err)
+	}
+	want := time.Date(2026, time.August, 15, 12, 34, 56, 789, time.UTC)
+	if err := store.SaveInboundRecoveryCheckpoint(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.LoadInboundRecoveryCheckpoint(ctx)
+	if err != nil || !ok || !got.Equal(want) {
+		t.Fatalf("checkpoint=%s ok=%v err=%v, want %s", got, ok, err, want)
 	}
 }
 

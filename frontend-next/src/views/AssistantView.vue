@@ -510,6 +510,14 @@
                 <span class="hint">越高越克制；默认 0.9。</span>
               </div>
               <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.natural_interjection_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自然插话模式</span>
+                </label>
+                <span class="hint">开启后，普通群聊只要模型能生成具体、可靠且有实质内容的回复就可以插话；仍遵守群禁用、成员门槛和响应限制。</span>
+              </div>
+              <div class="field wide">
                 <label for="bot-proactive-router-prompt">主动回复判断</label>
                 <textarea id="bot-proactive-router-prompt" v-model="form.proactive_reply_router_prompt" class="textarea" rows="8"></textarea>
                 <span class="hint">仅用于群聊未显式唤醒机器人时的语义判断；决定是否回复、目标消息和同轮消息。留空保存会恢复内置规则。</span>
@@ -1145,7 +1153,7 @@ function modelOptionsFor(role: RoleKey): AppSelectOption[] {
   if (profiles.length === 0) {
     return crossProviderModelOptions(role);
   }
-  const models = new Map<string, { model: LLMModelInfo; count: number; compatibility: ModelCompatibility }>();
+  const models = new Map<string, { model: LLMModelInfo; compatibility: ModelCompatibility }>();
   for (const profile of profiles) {
     const seen = new Set<string>();
     for (const { model, compatibility } of modelsForRole(profile, role)) {
@@ -1154,7 +1162,6 @@ function modelOptionsFor(role: RoleKey): AppSelectOption[] {
       const current = models.get(model.id);
       models.set(model.id, {
         model: current ? mergeModelInfo(current.model, model) : model,
-        count: (current?.count ?? 0) + 1,
         compatibility:
           current && compatibilityRank(current.compatibility) < compatibilityRank(compatibility)
             ? current.compatibility
@@ -1166,14 +1173,20 @@ function modelOptionsFor(role: RoleKey): AppSelectOption[] {
   const candidates = [...models.values()].sort(
     (a, b) => compatibilityRank(a.compatibility) - compatibilityRank(b.compatibility)
   );
-  for (const { model, count, compatibility } of candidates) {
+  for (const { model, compatibility } of candidates) {
+    const providers = profiles
+      .filter((profile) => profileCanRouteRoleModel(profile, role, model.id))
+      .map((profile) => profile.name || llmProviderLabel(profile.provider));
+    if (providers.length === 0) continue;
     options.push({
       value: model.id,
       label: model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id,
       hint: modelHint(
         model,
         compatibility,
-        profiles.length > 1 ? `${count}/${profiles.length} 个 Provider 可用` : (model.owned_by || undefined)
+        profiles.length > 1
+          ? `${providers.length}/${profiles.length} 个 Provider 将参与路由：${providers.join("、")}`
+          : (model.owned_by || undefined)
       )
     });
   }
@@ -1239,10 +1252,15 @@ function setRoleChannel(role: RoleKey, value: string): void {
 
 function roleModelIsSelectable(role: RoleKey, modelID: string): boolean {
   if (!modelID) return false;
-  return selectedRoleProfiles(role).some((profile) =>
-    profileModels(profile).some(
-      (model) => model.id === modelID && modelCompatibility(model, role) !== "incompatible"
-    )
+  return selectedRoleProfiles(role).some((profile) => profileCanRouteRoleModel(profile, role, modelID));
+}
+
+function profileCanRouteRoleModel(profile: LLMConfig, role: RoleKey, modelID: string): boolean {
+  const catalog = profile.models ?? [];
+  // 没有同步到模型目录的 Provider 能力未知，运行时仍可尝试。
+  if (catalog.length === 0) return true;
+  return catalog.some(
+    (model) => model.id === modelID && modelCompatibility(model, role) !== "incompatible"
   );
 }
 
@@ -1281,6 +1299,7 @@ function setForm(config: QQBotConfig): void {
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,
     debug_mode_enabled: config.debug_mode_enabled ?? false,
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
+    natural_interjection_enabled: config.natural_interjection_enabled ?? false,
     prompt_inject_time: config.prompt_inject_time ?? true,
     prompt_inject_plaintext_rules: config.prompt_inject_plaintext_rules ?? true,
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,
@@ -1357,6 +1376,18 @@ async function save(): Promise<void> {
   ) {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
+  }
+  for (const row of modelRoleRows) {
+    const role = roleForm.value[row.key];
+    if (!role || (!role.profile_id && !role.group)) continue;
+    if (!role.model.trim()) {
+      toastError(`${row.label}模型尚未选择`);
+      return;
+    }
+    if (!roleModelIsSelectable(row.key, role.model.trim())) {
+      toastError(`${row.label}模型 ${role.model.trim()} 与当前 Provider 配置不兼容，请重新选择`);
+      return;
+    }
   }
   busy.value = true;
   try {
