@@ -2447,10 +2447,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		refreshRecallPluginResponse(recallResponse, recallsWithDescriptions)
 		pluginResponses = append(pluginResponses, *recallResponse)
 	} else {
-		// A full Agent already receives recent multimodal history and chooses its
-		// own tools. Keep the legacy semantic pre-router only for non-Agent mode.
-		if !cfg.AgentEnabled {
+		// Agent already receives recent multimodal history. Invoke the semantic
+		// router only when durable media has fallen outside that bounded window.
+		if !cfg.AgentEnabled || r.hasDurableMediaBeyondRecentContext(ctx, event) {
 			event = r.enrichSemanticReference(ctx, event, cleanText)
+		}
+		event = r.prepareIncomingVoice(ctx, event)
+		if !cfg.AgentEnabled {
 			event = r.prepareEventImages(ctx, event)
 			if event.imageLoadErr != nil && (hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments))) {
 				return "", event.imageLoadErr

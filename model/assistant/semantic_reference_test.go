@@ -97,6 +97,31 @@ func TestSemanticReferenceCanSelectImageFileOrText(t *testing.T) {
 	}
 }
 
+func TestSemanticReferenceTreatsVoiceAsDurableMedia(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 2}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newSemanticTimelineStore()
+	runtime.SetMessageHistoryStore(store)
+	runtime.remember(MessageEvent{Kind: EventKindGroup, Time: 100, GroupID: "group-1", UserID: "user-1", MessageID: "voice-old", Segments: []MessageSegment{{Type: "record", Data: map[string]string{"transcript": "持久语音内容"}}}})
+	for index := 0; index < 3; index++ {
+		runtime.remember(MessageEvent{Kind: EventKindGroup, Time: int64(101 + index), GroupID: "group-1", UserID: "other", MessageID: "filler-" + string(rune('a'+index)), Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "中间消息"}}}})
+	}
+	current := MessageEvent{Kind: EventKindGroup, Time: 110, GroupID: "group-1", UserID: "user-1", MessageID: "current"}
+	if !runtime.hasDurableMediaBeyondRecentContext(context.Background(), current) {
+		t.Fatal("voice outside recent context did not enable durable semantic routing")
+	}
+	candidates, _, _ := runtime.semanticReferenceCandidates(context.Background(), current)
+	for _, candidate := range candidates {
+		if candidate.MessageID != "voice-old" {
+			continue
+		}
+		if candidate.AudioCount != 1 || !containsSemanticString(candidate.Content, "audio") || !strings.Contains(candidate.Text, "持久语音内容") {
+			t.Fatalf("voice candidate=%#v", candidate)
+		}
+		return
+	}
+	t.Fatalf("voice candidate missing: %#v", candidates)
+}
+
 func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{`{"message_ids":["image-3","image-1","image-2"],"confidence":0.98,"reason":"用户明确指向连发的三张图"}`}}
 	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
