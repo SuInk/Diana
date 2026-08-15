@@ -1032,9 +1032,16 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		return cfg
 	}
 	groupCfg = groupCfg.WithDefaults(event.GroupID, cfg)
+	groupResponseModeOverridden := groupCfg.ResponseMode != ""
 	cfg.GroupTriggers = append([]string(nil), groupCfg.GroupTriggers...)
 	if strings.TrimSpace(groupCfg.SystemPrompt) != "" {
 		cfg.SystemPrompt = groupCfg.SystemPrompt
+	}
+	if groupCfg.ResponseMode != "" {
+		cfg.ResponseMode = groupCfg.ResponseMode.Normalized()
+	}
+	if groupCfg.ReplyStyle != "" {
+		cfg.ReplyStyle = groupCfg.ReplyStyle.Normalized()
 	}
 	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
@@ -1048,6 +1055,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.ChatInChance = groupCfg.ChatInChance
 	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
 	cfg.NaturalInterjectionEnabled = copyBoolPointer(groupCfg.NaturalInterjectionEnabled)
+	if groupResponseModeOverridden {
+		cfg.ResponseMode.apply(&cfg)
+	}
 	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
 	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
 	if groupCfg.ReplyGate != nil {
@@ -4810,7 +4820,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 }
 
 func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Message) []llm.Message {
-	persona := strings.TrimSpace(r.effectiveConfigForEvent(event).SystemPrompt)
+	cfg := r.effectiveConfigForEvent(event)
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt())
 	if persona == "" {
 		return messages
 	}
@@ -4862,6 +4873,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		return false
 	}
 	builder.WriteString(cfg.SystemPrompt)
+	appendPromptSection(&builder, cfg.ReplyStyle.prompt())
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) {
