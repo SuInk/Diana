@@ -113,10 +113,7 @@ WHERE id = ? AND status = ?
 	}
 
 	nowNanos := now.UnixNano()
-	availableAt, err := inboundInitialAvailableAt(ctx, tx, session, event, priority, now)
-	if err != nil {
-		return "", false, err
-	}
+	availableAt := inboundInitialAvailableAt(event, now)
 	result, err := tx.ExecContext(ctx, `
 INSERT OR IGNORE INTO inbound_events (
   id, session, kind, group_id, user_id, message_id, event_time, payload,
