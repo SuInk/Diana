@@ -137,6 +137,10 @@ func reminderFailureNotice(item Reminder, cause error) string {
 }
 
 func (r *Runtime) recordReminderRetry(item Reminder, cause error, noticeErr error) {
+	r.recordReminderRetryAttempt(item, cause, noticeErr, true)
+}
+
+func (r *Runtime) recordReminderRetryAttempt(item Reminder, cause error, noticeErr error, noticeAttempted bool) {
 	detail := cause.Error()
 	if noticeErr != nil {
 		detail += "\n失败通知发送失败：" + noticeErr.Error()
@@ -165,7 +169,10 @@ func (r *Runtime) recordReminderRetry(item Reminder, cause error, noticeErr erro
 			"next_retry_at":        item.TriggerAt,
 			"consecutive_failures": item.ConsecutiveFailures,
 			"pending_delivery":     strings.TrimSpace(item.PendingDelivery) != "",
-			"notice_delivered":     noticeErr == nil,
+			"notice_attempted":     noticeAttempted,
+			"notice_delivered":     noticeAttempted && noticeErr == nil,
+			"failure_stage":        item.LastFailureStage,
+			"error_fingerprint":    item.LastErrorFingerprint,
 		},
 	})
 }

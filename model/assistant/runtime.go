@@ -8012,10 +8012,23 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		}
 		if err != nil && finishErr == nil {
 			var noticeErr error
-			if ctx.Err() == nil {
-				noticeErr = r.notifyReminderFailure(ctx, updated, err)
+			noticeAttempted := false
+			if ctx.Err() == nil && repositoryWatchFailureShouldAlert(updated) {
+				noticeAttempted = true
+				noticeErr = r.notifyRepositoryWatchFailure(ctx, updated, err)
+				if noticeErr == nil {
+					updated, noticeErr = r.acknowledgeRepositoryWatchFailureAlert(updated.ID, updated.LastErrorFingerprint, time.Now())
+				}
 			}
-			r.recordReminderRetry(updated, err, noticeErr)
+			r.recordReminderRetryAttempt(updated, err, noticeErr, noticeAttempted)
+			return
+		}
+		if err == nil && finishErr == nil && updated.RecoveryNoticePending && ctx.Err() == nil {
+			if recoveryErr := r.notifyRepositoryWatchRecovery(ctx, updated); recoveryErr != nil {
+				r.setError(recoveryErr.Error())
+			} else if clearErr := r.clearRepositoryWatchRecoveryNotice(updated.ID); clearErr != nil {
+				r.setError(clearErr.Error())
+			}
 		}
 		return
 	}
@@ -8248,12 +8261,12 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
-		return startedAt, r.send(ctx, source, pending)
+		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, r.send(ctx, source, pending))
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, r.pluginOverridesForEvent(source))
 	plugin, ok := pluginValue.(*RepositoryWatchPlugin)
 	if !enabled || !ok {
-		return startedAt, fmt.Errorf("仓库更新订阅插件已停用，无法检查 %s", item.Repository)
+		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStagePolling, fmt.Errorf("仓库更新订阅插件已停用，无法检查 %s", item.Repository))
 	}
 	change, err := plugin.check(
 		ctx,
@@ -8266,19 +8279,19 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		settings,
 	)
 	if err != nil {
-		return startedAt, err
+		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStagePolling, err)
 	}
 	if len(change.Commits) == 0 && len(change.Releases) == 0 {
-		return startedAt, r.storeRepositoryWatchProgress(item.ID, change.Snapshot, "")
+		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, r.storeRepositoryWatchProgress(item.ID, change.Snapshot, ""))
 	}
 	message, err := r.generateRepositoryWatchMessage(ctx, item, change)
 	if err != nil {
-		return startedAt, err
+		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageSummary, err)
 	}
 	if err := r.storeRepositoryWatchProgress(item.ID, change.Snapshot, message); err != nil {
-		return startedAt, err
+		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, err)
 	}
-	return startedAt, r.send(ctx, source, message)
+	return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, r.send(ctx, source, message))
 }
 
 func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Reminder, change repositoryWatchChange) (string, error) {
@@ -8366,12 +8379,19 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 		found = true
 		items[index].LastRunAt = startedAt
 		if runErr != nil {
-			items[index].LastError = runErr.Error()
-			items[index].ConsecutiveFailures++
+			if reminderIsRepositoryWatch(items[index]) {
+				updateRepositoryWatchFailureState(&items[index], runErr)
+			} else {
+				items[index].LastError = runErr.Error()
+				items[index].ConsecutiveFailures++
+			}
 			items[index].TriggerAt = time.Now().Add(durableReminderRetryDelay(items[index], runErr, items[index].ConsecutiveFailures))
 		} else {
 			items[index].LastError = ""
 			items[index].ConsecutiveFailures = 0
+			if reminderIsRepositoryWatch(items[index]) {
+				resetRepositoryWatchFailureStateAfterSuccess(&items[index])
+			}
 			items[index].PendingDelivery = ""
 			items[index].PendingSince = time.Time{}
 			items[index].TriggerAt = nextScheduledTrigger(startedAt, time.Duration(items[index].IntervalSeconds)*time.Second, time.Now())
