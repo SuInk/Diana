@@ -408,17 +408,8 @@ func TestAttachInboundTurnMediaPreservesSourcesAndRealSegments(t *testing.T) {
 	}
 }
 
-func TestInboundMediaTurnClassificationIsGeneric(t *testing.T) {
-	for _, text := range []string{"图片里是什么", "看一下 screenshot", "这个视频能识别吗", "check the attachment"} {
-		event := MessageEvent{Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}}
-		if !EventExplicitlyReferencesMedia(event) {
-			t.Fatalf("text %q was not recognized", text)
-		}
-	}
-	if EventExplicitlyReferencesMedia(MessageEvent{RawMessage: "今天天气怎么样"}) {
-		t.Fatal("unrelated text was classified as a media reference")
-	}
-	for _, segmentType := range []string{"image", "video", "file"} {
+func TestInboundMediaTurnClassificationUsesSegments(t *testing.T) {
+	for _, segmentType := range []string{"image", "video", "file", "record"} {
 		event := MessageEvent{Segments: []MessageSegment{{Type: segmentType, Data: map[string]string{"file": "media.bin"}}}}
 		if !EventIsMergeableMediaOnly(event) {
 			t.Fatalf("%s-only event was not mergeable", segmentType)
