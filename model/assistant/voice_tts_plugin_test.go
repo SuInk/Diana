@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func TestVoiceTTSPluginSupportsAgentToolAndIsEnabledByDefault(t *testing.T) {
@@ -29,10 +31,11 @@ func TestVoiceTTSPluginSupportsAgentToolAndIsEnabledByDefault(t *testing.T) {
 	if err != nil || resp != nil {
 		t.Fatalf("Handle() resp=%#v err=%v", resp, err)
 	}
-	if got := plugin.AgentTools()[0].Name(); got != voiceTTSToolName {
+	tool := mustVoiceTTSTool(t, plugin, nil)
+	if got := tool.Name(); got != voiceTTSToolName {
 		t.Fatalf("tool name=%q", got)
 	}
-	if description := plugin.AgentTools()[0].Description(); !strings.Contains(description, "测试音色") {
+	if description := tool.Description(); !strings.Contains(description, "测试音色") {
 		t.Fatalf("tool description=%q", description)
 	}
 }
@@ -117,7 +120,7 @@ func TestDianaTTSToolSynthesizesAndReturnsTerminalRecord(t *testing.T) {
 	plugin := NewVoiceTTSPlugin(server.Client())
 	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/voice-token"}
 	plugin.SetLocalMediaSharer(sharer)
-	tool := plugin.AgentTools()[0]
+	tool := mustVoiceTTSTool(t, plugin, nil)
 
 	raw, err := tool.Run(context.Background(), map[string]any{"text": "大家晚上好，我是语音助手。"})
 	if err != nil {
@@ -186,7 +189,7 @@ func TestDianaTTSToolPreEncodesTencentSilkForNapCat(t *testing.T) {
 	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/silk-token"}
 	plugin.SetLocalMediaSharer(sharer)
 
-	if _, err := plugin.AgentTools()[0].Run(context.Background(), map[string]any{"text": "用语音说晚安"}); err != nil {
+	if _, err := mustVoiceTTSTool(t, plugin, nil).Run(context.Background(), map[string]any{"text": "用语音说晚安"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(commands) != 2 || !strings.Contains(commands[0], "-ar 24000 -ac 1 -f s16le") || !strings.Contains(commands[1], "-rate 24000") {
@@ -217,10 +220,22 @@ func TestDianaTTSToolRejectsNonAudioResponse(t *testing.T) {
 	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 	plugin := NewVoiceTTSPlugin(server.Client())
 	plugin.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1/audio"})
-	_, err := plugin.AgentTools()[0].Run(context.Background(), map[string]any{"text": "测试"})
+	_, err := mustVoiceTTSTool(t, plugin, nil).Run(context.Background(), map[string]any{"text": "测试"})
 	if err == nil || !strings.Contains(err.Error(), "有效 WAV") {
 		t.Fatalf("err=%v", err)
 	}
+}
+
+func mustVoiceTTSTool(t *testing.T, plugin *VoiceTTSPlugin, settings SettingValues) agent.Tool {
+	t.Helper()
+	tools, err := plugin.AgentTools(settings)
+	if err != nil {
+		t.Fatalf("AgentTools() error = %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("AgentTools() = %#v", tools)
+	}
+	return tools[0]
 }
 
 func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
@@ -266,12 +281,16 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 }
 
 func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Error(err)
+		}
 		w.Header().Set("Content-Type", "audio/wav")
 		_, _ = w.Write(testWAVBytes())
 	}))
 	defer server.Close()
-	t.Setenv("DIANA_TTS_ENDPOINT", server.URL)
+	t.Setenv("DIANA_TTS_ENDPOINT", "http://127.0.0.1:1/tts")
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
 	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 
@@ -283,6 +302,18 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentWorkDir: t.TempDir(), AgentMaxSteps: 3}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"123456": {
+			GroupID: "123456",
+			PluginSettingOverrides: PluginSettingOverrides{
+				voiceTTSPluginID: {
+					voiceTTSSettingPreset:   voiceTTSPresetCustom,
+					voiceTTSSettingEndpoint: server.URL,
+					voiceTTSSettingSpeed:    float64(1.25),
+				},
+			},
+		},
+	}})
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/group-voice-token"})
 	event := MessageEvent{
 		Kind:      EventKindGroup,
@@ -305,6 +336,9 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 	segments := buildOutgoingSegments(message)
 	if len(segments) != 1 || segments[0]["type"] != "record" {
 		t.Fatalf("segments=%#v", segments)
+	}
+	if requestBody["speed_factor"] != float64(1.25) {
+		t.Fatalf("request=%#v", requestBody)
 	}
 }
 

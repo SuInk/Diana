@@ -74,6 +74,7 @@
             <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
+            <span v-if="group.configured && group.natural_interjection_enabled" class="badge accent">自然插话</span>
             <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
               回复 {{ group.reply_gate.active_start }}–{{ group.reply_gate.active_end }}
             </span>
@@ -161,6 +162,14 @@
         </div>
         <div class="field wide">
           <label class="switch">
+            <input v-model="editing.natural_interjection_enabled" type="checkbox" />
+            <span class="track" aria-hidden="true"></span>
+            <span class="switch-label">本群开启自然插话模式</span>
+          </label>
+          <span class="hint">普通群聊只要模型能生成具体、可靠且有实质内容的回复就可以插话；关闭时使用现有置信度、概率和冷却规则。</span>
+        </div>
+        <div class="field wide">
+          <label class="switch">
             <input v-model="editing.recall_reply_auto_delete_enabled" type="checkbox" />
             <span class="track" aria-hidden="true"></span>
             <span class="switch-label">本群查看撤回消息后自动撤回回复</span>
@@ -185,24 +194,32 @@
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
         </div>
         <div class="field wide">
-          <label>本群插件开关（未设置跟随全局）</label>
+          <label>本群插件</label>
           <div class="row-list" style="margin-top: 6px">
-            <div v-for="plugin in plugins" :key="plugin.manifest.id" class="row-item">
-              <div class="row-main">
-                <div class="row-title">{{ plugin.manifest.name }}</div>
-                <div class="row-sub">全局：{{ plugin.enabled ? "已启用" : "已停用" }}</div>
+            <div v-for="plugin in plugins" :key="plugin.manifest.id" class="row-item group-plugin-row">
+              <div class="group-plugin-row-head">
+                <div class="row-main">
+                  <div class="row-title">{{ plugin.manifest.name }}</div>
+                  <div class="row-sub">全局：{{ plugin.enabled ? "已启用" : "已停用" }}</div>
+                </div>
+                <div class="segmented">
+                  <button type="button" :class="{ active: overrideOf(plugin.manifest.id) === undefined }" @click="setOverride(plugin.manifest.id, undefined)">
+                    跟随
+                  </button>
+                  <button type="button" :class="{ active: overrideOf(plugin.manifest.id) === true }" @click="setOverride(plugin.manifest.id, true)">
+                    开
+                  </button>
+                  <button type="button" :class="{ active: overrideOf(plugin.manifest.id) === false }" @click="setOverride(plugin.manifest.id, false)">
+                    关
+                  </button>
+                </div>
               </div>
-              <div class="segmented">
-                <button type="button" :class="{ active: overrideOf(plugin.manifest.id) === undefined }" @click="setOverride(plugin.manifest.id, undefined)">
-                  跟随
-                </button>
-                <button type="button" :class="{ active: overrideOf(plugin.manifest.id) === true }" @click="setOverride(plugin.manifest.id, true)">
-                  开
-                </button>
-                <button type="button" :class="{ active: overrideOf(plugin.manifest.id) === false }" @click="setOverride(plugin.manifest.id, false)">
-                  关
-                </button>
-              </div>
+              <GroupPluginSettings
+                v-if="plugin.installed && plugin.manifest.settings?.length"
+                :plugin="plugin"
+                :model-value="settingOverridesOf(plugin.manifest.id)"
+                @update:model-value="setPluginSettingOverrides(plugin.manifest.id, $event)"
+              />
             </div>
           </div>
         </div>
@@ -231,6 +248,7 @@ import {
   type QQBotGroupSummary
 } from "../api";
 import EmptyState from "../components/EmptyState.vue";
+import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { toastError, toastSuccess } from "../toast";
@@ -251,6 +269,7 @@ const triggersDraft = ref("");
 const saving = ref(false);
 const togglingGroupID = ref("");
 const defaultRecallReplyAutoDeleteEnabled = ref(false);
+const defaultNaturalInterjectionEnabled = ref(false);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
@@ -270,7 +289,10 @@ function truncate(text: string, max: number): string {
 }
 
 function overrideCount(group: QQBotGroupConfig): number {
-  return Object.keys(group.plugin_overrides ?? {}).length;
+  return new Set([
+    ...Object.keys(group.plugin_overrides ?? {}),
+    ...Object.keys(group.plugin_setting_overrides ?? {})
+  ]).size;
 }
 
 function blockedUserCount(group: QQBotGroupConfig): number {
@@ -310,6 +332,7 @@ async function load(showFeedback = false): Promise<void> {
       const active = config.profiles?.find((item) => item.id === config.active_profile_id) ?? config.profiles?.[0];
       const current = active ?? config;
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
+      defaultNaturalInterjectionEnabled.value = current.natural_interjection_enabled ?? false;
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
@@ -337,9 +360,11 @@ function addGroup(): void {
       group_id: groupID,
       enabled: true,
       group_triggers: [],
+      natural_interjection_enabled: defaultNaturalInterjectionEnabled.value,
       recall_reply_auto_delete_enabled: defaultRecallReplyAutoDeleteEnabled.value,
       recall_reply_auto_delete_delay_seconds: defaultRecallReplyAutoDeleteDelay.value,
-      plugin_overrides: {}
+      plugin_overrides: {},
+      plugin_setting_overrides: {}
     },
     existing?.group_name
   );
@@ -350,6 +375,8 @@ function openEditor(group: QQBotGroupConfig, groupName = ""): void {
   // 深拷贝编辑，取消时不污染列表数据。
   const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as QQBotGroupConfig;
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
+  config.natural_interjection_enabled ??= defaultNaturalInterjectionEnabled.value;
+  config.plugin_setting_overrides ??= {};
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
@@ -387,6 +414,23 @@ function setOverride(pluginID: string, value: boolean | undefined): void {
     overrides[pluginID] = value;
   }
   editing.value.plugin_overrides = overrides;
+}
+
+function settingOverridesOf(pluginID: string): Record<string, unknown> {
+  return editing.value?.plugin_setting_overrides?.[pluginID] ?? {};
+}
+
+function setPluginSettingOverrides(pluginID: string, values: Record<string, unknown>): void {
+  if (!editing.value) {
+    return;
+  }
+  const overrides = { ...(editing.value.plugin_setting_overrides ?? {}) };
+  if (Object.keys(values).length === 0) {
+    delete overrides[pluginID];
+  } else {
+    overrides[pluginID] = values;
+  }
+  editing.value.plugin_setting_overrides = overrides;
 }
 
 async function toggleGroup(group: QQBotGroupSummary, event: Event): Promise<void> {

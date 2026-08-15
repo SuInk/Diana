@@ -335,6 +335,16 @@ func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t 
 	}
 }
 
+func TestReverseServerStatusUpdatesPreserveConnectionEpoch(t *testing.T) {
+	server := NewOneBotReverseServer(OneBotConfig{Endpoint: "/onebot/v11/ws"})
+	server.status.ConnectionEpoch = 3
+	server.setStatus(true, "42", "")
+	server.setStatus(true, "42", "temporary parse error")
+	if status := server.Status(); status.ConnectionEpoch != 3 || !status.Connected || status.SelfID != "42" {
+		t.Fatalf("status update lost connection identity: %#v", status)
+	}
+}
+
 func TestReverseServerRequiresAccessToken(t *testing.T) {
 	server := NewOneBotReverseServer(OneBotConfig{})
 	request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)

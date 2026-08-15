@@ -288,6 +288,7 @@ type BotConfig struct {
 	ChatInThreshold              float64              `json:"chat_in_threshold,omitempty"`
 	ChatInChance                 float64              `json:"chat_in_chance,omitempty"`
 	ChatInCooldownSeconds        int                  `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled   *bool                `json:"natural_interjection_enabled,omitempty"`
 	LegacyPassiveReplyChance     *float64             `json:"passive_reply_chance,omitempty"`
 	LegacyPassiveReplyThreshold  *float64             `json:"passive_reply_threshold,omitempty"`
 	ReplyRules                   []ReplyRule          `json:"reply_rules,omitempty"`
@@ -348,30 +349,32 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
-	GroupID                      string          `json:"group_id"`
-	Enabled                      bool            `json:"enabled"`
-	EnabledSet                   bool            `json:"enabled_set,omitempty"`
-	GroupTriggers                []string        `json:"group_triggers,omitempty"`
-	SystemPrompt                 string          `json:"system_prompt,omitempty"`
-	WelcomeEnabled               bool            `json:"welcome_enabled,omitempty"`
-	WelcomeMessage               string          `json:"welcome_message,omitempty"`
-	RecentContextLimit           int             `json:"recent_context_limit,omitempty"`
-	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
-	ProactiveReplyChance         float64         `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold      float64         `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled                *bool           `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                  ChatInLevel     `json:"chat_in_level,omitempty"`
-	ChatInThreshold              float64         `json:"chat_in_threshold,omitempty"`
-	ChatInChance                 float64         `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds        int             `json:"chat_in_cooldown_seconds,omitempty"`
-	LegacyPassiveReplyChance     *float64        `json:"passive_reply_chance,omitempty"`
-	LegacyPassiveReplyThreshold  *float64        `json:"passive_reply_threshold,omitempty"`
-	MinimumReplyMemberLevel      int             `json:"minimum_reply_member_level,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	PluginOverrides              map[string]bool `json:"plugin_overrides,omitempty"`
-	ReplyGate                    *ReplyGate      `json:"reply_gate,omitempty"`
-	UpdatedAt                    time.Time       `json:"updated_at,omitempty"`
+	GroupID                      string                 `json:"group_id"`
+	Enabled                      bool                   `json:"enabled"`
+	EnabledSet                   bool                   `json:"enabled_set,omitempty"`
+	GroupTriggers                []string               `json:"group_triggers,omitempty"`
+	SystemPrompt                 string                 `json:"system_prompt,omitempty"`
+	WelcomeEnabled               bool                   `json:"welcome_enabled,omitempty"`
+	WelcomeMessage               string                 `json:"welcome_message,omitempty"`
+	RecentContextLimit           int                    `json:"recent_context_limit,omitempty"`
+	MaxReplyChars                int                    `json:"max_reply_chars,omitempty"`
+	ProactiveReplyChance         float64                `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold      float64                `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled                *bool                  `json:"chat_in_enabled,omitempty"`
+	ChatInLevel                  ChatInLevel            `json:"chat_in_level,omitempty"`
+	ChatInThreshold              float64                `json:"chat_in_threshold,omitempty"`
+	ChatInChance                 float64                `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds        int                    `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled   *bool                  `json:"natural_interjection_enabled,omitempty"`
+	LegacyPassiveReplyChance     *float64               `json:"passive_reply_chance,omitempty"`
+	LegacyPassiveReplyThreshold  *float64               `json:"passive_reply_threshold,omitempty"`
+	MinimumReplyMemberLevel      int                    `json:"minimum_reply_member_level,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool                  `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int                    `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	PluginOverrides              map[string]bool        `json:"plugin_overrides,omitempty"`
+	PluginSettingOverrides       PluginSettingOverrides `json:"plugin_setting_overrides,omitempty"`
+	ReplyGate                    *ReplyGate             `json:"reply_gate,omitempty"`
+	UpdatedAt                    time.Time              `json:"updated_at,omitempty"`
 }
 
 type GroupConfigSet struct {
@@ -453,6 +456,7 @@ type ConfigPayload struct {
 	ChatInThreshold              float64              `json:"chat_in_threshold,omitempty"`
 	ChatInChance                 float64              `json:"chat_in_chance,omitempty"`
 	ChatInCooldownSeconds        int                  `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled   *bool                `json:"natural_interjection_enabled,omitempty"`
 	LegacyPassiveReplyChance     *float64             `json:"passive_reply_chance,omitempty"`
 	LegacyPassiveReplyThreshold  *float64             `json:"passive_reply_threshold,omitempty"`
 	ReplyRules                   []ReplyRule          `json:"reply_rules,omitempty"`
@@ -488,10 +492,12 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		ChatInThreshold:              base.ChatInThreshold,
 		ChatInChance:                 base.ChatInChance,
 		ChatInCooldownSeconds:        base.ChatInCooldownSeconds,
+		NaturalInterjectionEnabled:   copyBoolPointer(base.NaturalInterjectionEnabled),
 		MinimumReplyMemberLevel:      0,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(base.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        base.RecallReplyTTLSeconds,
 		PluginOverrides:              map[string]bool{},
+		PluginSettingOverrides:       PluginSettingOverrides{},
 	}
 }
 
@@ -552,6 +558,9 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if cfg.ChatInCooldownSeconds < 0 {
 		cfg.ChatInCooldownSeconds = 0
 	}
+	if cfg.NaturalInterjectionEnabled == nil {
+		cfg.NaturalInterjectionEnabled = copyBoolPointer(defaults.NaturalInterjectionEnabled)
+	}
 	if cfg.MinimumReplyMemberLevel < 0 {
 		cfg.MinimumReplyMemberLevel = 0
 	} else if cfg.MinimumReplyMemberLevel > maximumReplyMemberLevel {
@@ -567,6 +576,9 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	}
 	if cfg.PluginOverrides == nil {
 		cfg.PluginOverrides = map[string]bool{}
+	}
+	if cfg.PluginSettingOverrides == nil {
+		cfg.PluginSettingOverrides = PluginSettingOverrides{}
 	}
 	if cfg.ReplyGate != nil {
 		normalized := cfg.ReplyGate.WithDefaults()
@@ -808,6 +820,7 @@ func DefaultBotConfig() BotConfig {
 		ProactiveReplyPrompt:         defaultProactiveReplyPrompt,
 		ChatInEnabled:                boolPointer(true),
 		ChatInLevel:                  defaultChatInLevel,
+		NaturalInterjectionEnabled:   boolPointer(false),
 		MaxInputChars:                2000,
 		MaxReplyChars:                3500,
 		DirectReplyChunkSize:         900,
@@ -923,6 +936,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.ChatInChance = clampChatInRatio(cfg.ChatInChance)
 	if cfg.ChatInCooldownSeconds < 0 {
 		cfg.ChatInCooldownSeconds = 0
+	}
+	if cfg.NaturalInterjectionEnabled == nil {
+		cfg.NaturalInterjectionEnabled = copyBoolPointer(defaults.NaturalInterjectionEnabled)
 	}
 	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
 		cfg.WelcomeMessage = defaults.WelcomeMessage
@@ -1144,6 +1160,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ChatInThreshold:              cfg.ChatInThreshold,
 		ChatInChance:                 cfg.ChatInChance,
 		ChatInCooldownSeconds:        cfg.ChatInCooldownSeconds,
+		NaturalInterjectionEnabled:   copyBoolPointer(cfg.NaturalInterjectionEnabled),
 		ReplyRules:                   append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:            cfg.MaxBotConcurrency,
 		RequestTimeoutMS:             cfg.RequestTimeout.Milliseconds(),
@@ -1257,6 +1274,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ChatInThreshold:              payload.ChatInThreshold,
 		ChatInChance:                 payload.ChatInChance,
 		ChatInCooldownSeconds:        payload.ChatInCooldownSeconds,
+		NaturalInterjectionEnabled:   copyBoolPointer(payload.NaturalInterjectionEnabled),
 		ReplyRules:                   append([]ReplyRule(nil), payload.ReplyRules...),
 		MaxBotConcurrency:            payload.MaxBotConcurrency,
 		RequestTimeout:               time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
