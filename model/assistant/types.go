@@ -101,6 +101,8 @@ type MessageEvent struct {
 	imageResolutionRun  bool
 	imageLoadErr        error
 	imageContextNotice  string
+	voiceSTTErr         error
+	voiceSTTTransient   bool
 	recentTextReference *recentTextReference
 	replyHistory        []MessageEvent
 	replyHistoryLoaded  bool

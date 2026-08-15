@@ -186,7 +186,7 @@ func semanticQuotedCandidate(quoted *QuotedMessage, botQQ string) any {
 func eventHasDirectReferenceContent(event MessageEvent) bool {
 	for _, segment := range event.Segments {
 		switch segment.Type {
-		case "image", "video", "file", "forward", "json", "xml":
+		case "image", "video", "file", "record", "forward", "json", "xml":
 			return true
 		}
 	}
