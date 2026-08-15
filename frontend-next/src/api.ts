@@ -185,6 +185,40 @@ export interface PluginState {
   secrets_configured?: Record<string, boolean>;
 }
 
+export interface RepositoryIssueCreateInput {
+  repository: string;
+  title: string;
+  body?: string;
+  labels?: string[];
+  allow_duplicate?: boolean;
+  confirmation_token?: string;
+  candidate_number?: number;
+}
+
+export interface RepositoryIssueSummary {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  labels?: string[];
+  updated_at?: string;
+}
+
+export interface RepositoryIssueCreateResult {
+  ok: boolean;
+  outcome?: string;
+  repository?: string;
+  failure_code?: string;
+  message: string;
+  issue?: RepositoryIssueSummary;
+  candidates?: RepositoryIssueSummary[];
+  requires_confirmation?: boolean;
+  confirmation_token?: string;
+  idempotent?: boolean;
+  reconciled?: boolean;
+  redactions?: number;
+}
+
 export interface ResolverDependency {
   name: string;
   purpose: string;
@@ -679,6 +713,13 @@ export function updatePluginSettings(
   return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/settings`, {
     method: "POST",
     body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+  });
+}
+
+export function createRepositoryIssue(input: RepositoryIssueCreateInput): Promise<RepositoryIssueCreateResult> {
+  return requestJSON<RepositoryIssueCreateResult>("/api/assistant/plugins/repository-publish/issues", {
+    method: "POST",
+    body: JSON.stringify(input)
   });
 }
 

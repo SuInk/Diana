@@ -3,7 +3,10 @@ package assistant
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -11,15 +14,27 @@ import (
 
 const (
 	repositoryPublishPluginID = "official.repository-publish"
+	// RepositoryPublishPluginID is shared with authenticated WebUI actions.
+	RepositoryPublishPluginID = repositoryPublishPluginID
 
 	repositoryPublishSettingToken       = "github_token"
+	repositoryPublishSettingAuthMode    = "github_auth_mode"
 	repositoryPublishSettingAllowlist   = "allowed_repositories"
+	repositoryPublishSettingUserAccess  = "user_repository_access"
 	repositoryPublishSettingTimeout     = "timeout_seconds"
 	defaultRepositoryPublishTimeoutSecs = 20
+	repositoryPublishAuthToken          = "token"
+	repositoryPublishAuthGH             = "gh"
+	repositoryPublishAuthAuto           = "auto"
 )
 
-// RepositoryPublishPlugin owns a GitHub credential that is intentionally
-// separate from repository watches, git remotes, and command-line login state.
+var (
+	errRepositoryPublishGHUnavailable = errors.New("gh executable unavailable")
+	errRepositoryPublishGHAuth        = errors.New("gh authentication unavailable")
+)
+
+// RepositoryPublishPlugin keeps Issue publishing isolated from repository
+// watches and git remotes. It may use either its own token or an explicit gh mode.
 type RepositoryPublishPlugin struct {
 	client          *http.Client
 	baseURL         string
@@ -29,6 +44,7 @@ type RepositoryPublishPlugin struct {
 	locks           map[string]*repositoryPublishOperationLock
 	uncertainMu     sync.Mutex
 	uncertain       map[string]time.Time
+	ghAuthToken     func(context.Context) (string, error)
 }
 
 type repositoryPublishOperationLock struct {
@@ -49,10 +65,11 @@ func newRepositoryPublishPlugin(client *http.Client, baseURL string) *Repository
 		return http.ErrUseLastResponse
 	}
 	plugin := &RepositoryPublishPlugin{
-		client:    &clientCopy,
-		baseURL:   strings.TrimRight(strings.TrimSpace(baseURL), "/"),
-		locks:     map[string]*repositoryPublishOperationLock{},
-		uncertain: map[string]time.Time{},
+		client:      &clientCopy,
+		baseURL:     strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		locks:       map[string]*repositoryPublishOperationLock{},
+		uncertain:   map[string]time.Time{},
+		ghAuthToken: repositoryPublishGHAuthToken,
 	}
 	if count, err := rand.Read(plugin.confirmationKey[:]); err == nil && count == len(plugin.confirmationKey) {
 		plugin.confirmationOK = true
@@ -89,16 +106,28 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "仓库 Issue 发布",
-		Version:     "0.1.0",
-		Description: "在主人明确要求时搜索或写入白名单 GitHub 仓库的 Issues；写权限与 Git push、仓库订阅完全隔离。",
+		Version:     "0.2.0",
+		Description: "允许主人及指定用户搜索或写入各自获授权的 GitHub 仓库 Issues；支持独立 Token 与 GitHub CLI 认证。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"},
 		Settings: []PluginSettingSpec{
 			{
+				Key:         repositoryPublishSettingAuthMode,
+				Label:       "GitHub 认证方式",
+				Description: "Token 使用下方独立凭据；gh 使用当前系统的 GitHub CLI 登录，可访问已授权给该账号的协作仓库；自动优先使用 Token，未配置时再使用 gh。",
+				Type:        PluginSettingTypeSelect,
+				Default:     repositoryPublishAuthToken,
+				Options: []PluginSettingOption{
+					{Value: repositoryPublishAuthToken, Label: "独立 Token"},
+					{Value: repositoryPublishAuthGH, Label: "GitHub CLI (gh)"},
+					{Value: repositoryPublishAuthAuto, Label: "自动选择"},
+				},
+			},
+			{
 				Key:         repositoryPublishSettingToken,
 				Label:       "GitHub Issues Token",
-				Description: "独立用于 Issue 读写；fine-grained token 仅授予白名单仓库的 Issues: read and write。不会复用 git 或仓库订阅凭据，保存后不回显。",
+				Description: "在“独立 Token”或“自动选择”模式下用于 Issue 读写；fine-grained token 仅授予白名单仓库的 Issues: read and write，保存后不回显。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -107,6 +136,13 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Key:         repositoryPublishSettingAllowlist,
 				Label:       "允许写入的仓库",
 				Description: "精确填写 owner/repo；多个仓库用逗号或换行分隔。留空时拒绝所有写操作。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
+			{
+				Key:         repositoryPublishSettingUserAccess,
+				Label:       "用户仓库授权",
+				Description: "允许特定用户操作特定仓库。每行填写：用户ID = owner/repo, owner/repo。仓库还必须存在于上方全局白名单；留空时仍仅主人可用。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
@@ -123,6 +159,39 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 		},
 	}
+}
+
+func repositoryPublishGHAuthToken(ctx context.Context) (string, error) {
+	path, err := exec.LookPath("gh")
+	if err != nil {
+		return "", errRepositoryPublishGHUnavailable
+	}
+	cmd := exec.CommandContext(ctx, path, "auth", "token", "--hostname", "github.com")
+	cmd.Env = repositoryPublishGHEnvironment(os.Environ())
+	output, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", errRepositoryPublishGHAuth
+	}
+	token := strings.TrimSpace(string(output))
+	if token == "" {
+		return "", errRepositoryPublishGHAuth
+	}
+	return token, nil
+}
+
+func repositoryPublishGHEnvironment(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(key, "GH_TOKEN") || strings.EqualFold(key, "GITHUB_TOKEN") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func (*RepositoryPublishPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
