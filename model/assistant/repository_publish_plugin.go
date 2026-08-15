@@ -21,6 +21,7 @@ const (
 	repositoryPublishSettingAuthMode    = "github_auth_mode"
 	repositoryPublishSettingAllowlist   = "allowed_repositories"
 	repositoryPublishSettingUserAccess  = "user_repository_access"
+	repositoryPublishSettingGroupAccess = "group_repository_access"
 	repositoryPublishSettingTimeout     = "timeout_seconds"
 	defaultRepositoryPublishTimeoutSecs = 20
 	repositoryPublishAuthToken          = "token"
@@ -106,8 +107,8 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "仓库 Issue 发布",
-		Version:     "0.2.0",
-		Description: "允许主人及指定用户搜索或写入各自获授权的 GitHub 仓库 Issues；支持独立 Token 与 GitHub CLI 认证。",
+		Version:     "0.3.0",
+		Description: "允许 LLM 为主人、白名单用户或指定群聊管理各自获授权的 GitHub 仓库 Issues；支持独立 Token 与 GitHub CLI 认证。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"},
@@ -143,6 +144,13 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Key:         repositoryPublishSettingUserAccess,
 				Label:       "用户仓库授权",
 				Description: "允许特定用户操作特定仓库。每行填写：用户ID = owner/repo, owner/repo。仓库还必须存在于上方全局白名单；留空时仍仅主人可用。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
+			{
+				Key:         repositoryPublishSettingGroupAccess,
+				Label:       "群聊仓库授权",
+				Description: "按群聊划分可操作仓库。每行填写：群ID = owner/repo, owner/repo。群内成员只能操作该群绑定且位于全局白名单中的仓库。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
