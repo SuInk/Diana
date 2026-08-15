@@ -2589,7 +2589,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaRSSWatchTool(r, event),
 			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
-				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishUserHasAccess(event.UserID, settings)) {
+				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
 				}
 			}
