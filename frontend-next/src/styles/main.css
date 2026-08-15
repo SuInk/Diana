@@ -2386,19 +2386,10 @@ code {
 }
 
 /* 权限展开与运行依赖体积大，独占下一行，只撑高自己这条 */
-.plugin-rows .plugin-perms[open],
-.plugin-rows .plugin-dependencies {
+.plugin-rows .plugin-perms[open] {
   flex: 1 0 100%;
   order: 5;
   margin-left: 0;
-}
-
-/* 卡片里标签列吃掉 1fr 是为了把状态推到卡片右缘；横排整行有 1200px+，
-   同样的规则会在「运行依赖」和「3/3 已就绪」之间拉出一大段空白。
-   这里改成紧凑排列，和「N 项权限」的视觉一致。 */
-.plugin-rows .plugin-dependencies-head {
-  grid-template-columns: auto auto auto;
-  justify-content: start;
 }
 
 @media (max-width: 860px) {
@@ -2425,8 +2416,41 @@ code {
   }
 }
 
-.plugin-layout-switch {
+.plugin-layout-switch,
+.plugin-status-filter {
   flex: none;
+}
+
+.plugin-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 200px;
+  min-width: 160px;
+  max-width: 280px;
+}
+
+.plugin-search > svg {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.plugin-search .input {
+  padding-left: 30px;
+}
+
+.plugin-filter-count {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.segmented button.active .plugin-filter-count {
+  color: inherit;
+  opacity: 0.7;
 }
 
 .plugins-page-grid {
