@@ -1,6 +1,6 @@
 <template>
-  <div>
-    <header class="view-header">
+  <div class="plugins-view">
+    <header class="view-header plugins-view-header">
       <div class="view-title">
         <h1>插件</h1>
         <p>管理内置能力的启停与详细设置</p>
@@ -32,25 +32,30 @@
             type="button"
             :class="{ active: layout === 'masonry' }"
             title="瀑布流：卡片按高度紧密咬合"
+            aria-label="瀑布流排列"
             @click="setLayout('masonry')"
           >
             <LayoutGrid :size="14" aria-hidden="true" />
-            瀑布
           </button>
           <button
             type="button"
             :class="{ active: layout === 'rows' }"
             title="横排：一行一个插件，信息更紧凑"
+            aria-label="横排排列"
             @click="setLayout('rows')"
           >
             <Rows3 :size="14" aria-hidden="true" />
-            横排
+          </button>
+          <button
+            type="button"
+            :disabled="loading"
+            title="刷新插件列表"
+            aria-label="刷新插件列表"
+            @click="reload"
+          >
+            <RefreshCw :size="14" :class="{ spin: loading }" aria-hidden="true" />
           </button>
         </div>
-        <button class="btn" type="button" :disabled="loading" @click="reload">
-          <RefreshCw :size="15" aria-hidden="true" />
-          刷新
-        </button>
       </div>
     </header>
 
@@ -88,51 +93,95 @@
 
         <p class="plugin-card-desc" :title="plugin.manifest.description">{{ plugin.manifest.description }}</p>
 
-        <!-- 权限一张卡有 2~6 条，全部铺开会占两三行，是整页最抢眼的噪音；
-             默认折叠成一行，需要审查时再展开。 -->
-        <details v-if="plugin.manifest.permissions?.length" class="plugin-perms">
-          <summary class="plugin-perms-head">
-            <span>{{ plugin.manifest.permissions.length }} 项权限</span>
-            <ChevronDown class="plugin-perms-chevron" :size="14" aria-hidden="true" />
-          </summary>
-          <div class="cluster plugin-card-perms">
-            <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
+        <div v-if="plugin.manifest.permissions?.length || showFooter(plugin)" class="plugin-card-bottom">
+          <!-- 权限在左，设置等操作在右；有无设置都不再改变卡片的基础高度。 -->
+          <div class="plugin-card-meta">
+            <details v-if="plugin.manifest.permissions?.length" class="plugin-perms">
+              <summary class="plugin-perms-head">
+                <span>{{ plugin.manifest.permissions.length }} 项权限</span>
+                <ChevronDown class="plugin-perms-chevron" :size="14" aria-hidden="true" />
+              </summary>
+              <div class="cluster plugin-card-perms">
+                <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
+              </div>
+            </details>
+
+            <details v-if="plugin.manifest.id === resolverPluginID" class="plugin-dependencies plugin-card-dependencies">
+              <summary class="plugin-dependencies-head">
+                <span>运行依赖</span>
+                <span v-if="dependencies.length" class="plugin-dependency-count">
+                  {{ readyDependencyCount }}/{{ dependencies.length }}
+                </span>
+                <ChevronDown class="plugin-dependencies-chevron" :size="14" aria-hidden="true" />
+              </summary>
+              <div class="plugin-dependencies-body">
+                <p v-if="dependenciesLoading && dependencies.length === 0" class="plugin-dependencies-empty">正在检测依赖...</p>
+                <p v-else-if="dependencies.length === 0" class="plugin-dependencies-empty">暂时无法读取依赖状态</p>
+                <div v-else class="plugin-dependency-list">
+                  <div v-for="dep in dependencies" :key="dep.name" class="plugin-dependency-row">
+                    <div class="plugin-dependency-main">
+                      <strong class="mono">{{ dep.name }}</strong>
+                      <span>{{ dep.purpose }}</span>
+                    </div>
+                    <span
+                      v-if="dep.available"
+                      class="badge accent plugin-dependency-status"
+                      :title="[dep.version, dep.path].filter(Boolean).join(' · ')"
+                    >
+                      {{ dep.version || "已安装" }}
+                    </span>
+                    <button
+                      v-else-if="dep.installable"
+                      class="btn small"
+                      type="button"
+                      :disabled="busyDependency !== ''"
+                      :title="`使用 ${dep.installer || '系统包管理器'} 安装 ${dep.name}`"
+                      @click="installDependency(dep)"
+                    >
+                      <LoaderCircle v-if="busyDependency === dep.name" class="spin" :size="14" aria-hidden="true" />
+                      <Download v-else :size="14" aria-hidden="true" />
+                      {{ busyDependency === dep.name ? "安装中" : "安装" }}
+                    </button>
+                    <span v-else class="badge warn">需手动安装</span>
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
-        </details>
 
-
-        <footer v-if="showFooter(plugin)" class="plugin-card-foot">
-          <template v-if="plugin.installed">
+          <footer v-if="showFooter(plugin)" class="plugin-card-foot">
+            <template v-if="plugin.installed">
+              <button
+                v-if="plugin.manifest.settings?.length"
+                class="btn small"
+                type="button"
+                :disabled="busyID === plugin.manifest.id"
+                @click="openSettings(plugin)"
+              >
+                <SlidersHorizontal :size="14" aria-hidden="true" />
+                设置
+              </button>
+              <button
+                v-if="!plugin.manifest.built_in"
+                class="btn small ghost danger"
+                type="button"
+                :disabled="busyID === plugin.manifest.id"
+                @click="uninstall(plugin)"
+              >
+                卸载
+              </button>
+            </template>
             <button
-              v-if="plugin.manifest.settings?.length"
-              class="btn small"
+              v-else
+              class="btn small primary"
               type="button"
               :disabled="busyID === plugin.manifest.id"
-              @click="openSettings(plugin)"
+              @click="install(plugin)"
             >
-              <SlidersHorizontal :size="14" aria-hidden="true" />
-              设置
+              安装
             </button>
-            <button
-              v-if="!plugin.manifest.built_in"
-              class="btn small ghost danger"
-              type="button"
-              :disabled="busyID === plugin.manifest.id"
-              @click="uninstall(plugin)"
-            >
-              卸载
-            </button>
-          </template>
-          <button
-            v-else
-            class="btn small primary"
-            type="button"
-            :disabled="busyID === plugin.manifest.id"
-            @click="install(plugin)"
-          >
-            安装
-          </button>
-        </footer>
+          </footer>
+        </div>
       </article>
     </div>
     <EmptyState

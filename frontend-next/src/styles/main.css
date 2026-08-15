@@ -2363,32 +2363,20 @@ code {
   order: 2;
 }
 
-.plugin-rows .plugin-perms {
+.plugin-rows .plugin-card-bottom {
   flex: none;
   order: 3;
   margin-left: auto;
 }
 
-/* 11 个插件里有 5 个确实没有可配置项。少一个「设置」按钮会让这几行的
-   权限标签整体右移 86px，右缘参差，看着像没对齐。这里把按钮的位置留出来，
-   而不是塞一句「无可配置项」当占位。 */
-.plugin-rows > .plugin-card:not(:has(.plugin-card-foot)) .plugin-perms {
-  margin-right: 86px;
-}
-
 .plugin-rows .plugin-card-foot {
   flex: none;
-  /* DOM 里 footer 排在运行依赖之后，不调 order 的话会被挤到第三行；
-     这里让它跟在权限后面，和名称、描述同处第一行。 */
-  order: 4;
   padding-top: 0;
   border-top: 0;
 }
 
 /* 权限展开与运行依赖体积大，独占下一行，只撑高自己这条 */
 .plugin-rows .plugin-perms[open] {
-  flex: 1 0 100%;
-  order: 5;
   margin-left: 0;
 }
 
@@ -2411,7 +2399,8 @@ code {
     -webkit-line-clamp: 3;
   }
 
-  .plugin-rows .plugin-perms {
+  .plugin-rows .plugin-card-bottom {
+    width: 100%;
     margin-left: 0;
   }
 }
@@ -2419,6 +2408,28 @@ code {
 .plugin-layout-switch,
 .plugin-status-filter {
   flex: none;
+}
+
+.plugins-view-header .view-actions {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.plugins-view-header .plugin-search {
+  width: 240px;
+  flex: 0 1 240px;
+}
+
+.plugins-view-header .plugin-status-filter button {
+  padding-inline: 10px;
+}
+
+.plugin-layout-switch button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
 }
 
 .plugin-search {
@@ -2439,6 +2450,18 @@ code {
 
 .plugin-search .input {
   padding-left: 30px;
+}
+
+@media (max-width: 860px) {
+  .plugins-view-header .view-actions {
+    flex-wrap: wrap;
+  }
+
+  .plugins-view-header .plugin-search {
+    width: auto;
+    flex: 1 1 100%;
+    max-width: none;
+  }
 }
 
 .plugin-filter-count {
@@ -2551,13 +2574,31 @@ code {
   margin-top: 8px;
 }
 
+.plugin-card-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.plugin-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-width: 0;
+}
+
+.plugin-card-meta > details[open] {
+  flex: 1 0 100%;
+}
+
 .plugin-card-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
 }
 
 .plugin-card-hint {
@@ -2647,6 +2688,25 @@ code {
   font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+/* 卡片里的依赖入口和权限共用同一条底栏，不使用弹窗区块的分隔线与高度。 */
+.plugin-card-dependencies {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.plugin-card-dependencies .plugin-dependencies-head {
+  display: flex;
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.plugin-dependency-count {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .plugin-dependency-status {
