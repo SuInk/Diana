@@ -134,12 +134,16 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 
 	reminders := []assistant.Reminder{
 		{
-			ID:        "r1",
-			OwnerID:   "10001",
-			UserID:    "10001",
-			Message:   "记得喝水",
-			TriggerAt: time.Now().Add(5 * time.Minute),
-			CreatedAt: time.Now(),
+			ID:                    "r1",
+			OwnerID:               "10001",
+			UserID:                "10001",
+			Message:               "记得喝水",
+			TriggerAt:             time.Now().Add(5 * time.Minute),
+			LastFailureStage:      "polling",
+			LastErrorFingerprint:  "fingerprint-1",
+			FailureAlertedAt:      time.Now().Add(-time.Minute),
+			RecoveryNoticePending: true,
+			CreatedAt:             time.Now(),
 		},
 	}
 	if err := store.SaveReminders(ctx, reminders); err != nil {
@@ -149,7 +153,7 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("LoadReminders() ok=%v err=%v", ok, err)
 	}
-	if len(gotReminders) != 1 || gotReminders[0].Message != "记得喝水" {
+	if len(gotReminders) != 1 || gotReminders[0].Message != "记得喝水" || gotReminders[0].LastFailureStage != "polling" || gotReminders[0].LastErrorFingerprint != "fingerprint-1" || gotReminders[0].FailureAlertedAt.IsZero() || !gotReminders[0].RecoveryNoticePending {
 		t.Fatalf("gotReminders = %#v", gotReminders)
 	}
 }
