@@ -6,6 +6,26 @@
         <p>管理内置能力的启停与详细设置</p>
       </div>
       <div class="view-actions">
+        <div class="segmented plugin-layout-switch" role="group" aria-label="插件排列方式">
+          <button
+            type="button"
+            :class="{ active: layout === 'masonry' }"
+            title="瀑布流：卡片按高度紧密咬合"
+            @click="setLayout('masonry')"
+          >
+            <LayoutGrid :size="14" aria-hidden="true" />
+            瀑布
+          </button>
+          <button
+            type="button"
+            :class="{ active: layout === 'rows' }"
+            title="横排：一行一个插件，信息更紧凑"
+            @click="setLayout('rows')"
+          >
+            <Rows3 :size="14" aria-hidden="true" />
+            横排
+          </button>
+        </div>
         <button class="btn" type="button" :disabled="loading" @click="reload">
           <RefreshCw :size="15" aria-hidden="true" />
           刷新
@@ -13,7 +33,7 @@
       </div>
     </header>
 
-    <div v-if="plugins.length > 0" class="plugin-grid plugins-page-grid">
+    <div v-if="plugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-masonry'">
       <article
         v-for="plugin in plugins"
         :key="plugin.manifest.id"
@@ -271,7 +291,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ChevronDown, Download, ExternalLink, KeyRound, LoaderCircle, RefreshCw, SlidersHorizontal } from "@lucide/vue";
+import { ChevronDown, Download, ExternalLink, KeyRound, LayoutGrid, LoaderCircle, RefreshCw, Rows3, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installResolverDependency,
@@ -407,6 +427,19 @@ function openSettings(plugin: PluginState): void {
   settingsForm.value = form;
   clearSecrets.value = [];
   settingsTarget.value = plugin;
+}
+
+// 排列方式记在 localStorage：插件多起来之后，横排更利于扫读，
+// 但这属于个人偏好，不该每次进页面都重选。
+type PluginLayout = "masonry" | "rows";
+const LAYOUT_KEY = "dqb-next:plugin-layout";
+const layout = ref<PluginLayout>(
+  window.localStorage.getItem(LAYOUT_KEY) === "rows" ? "rows" : "masonry"
+);
+
+function setLayout(next: PluginLayout): void {
+  layout.value = next;
+  window.localStorage.setItem(LAYOUT_KEY, next);
 }
 
 // 没有任何可点的动作时不渲染 footer，省掉一整行「无可配置项」。
