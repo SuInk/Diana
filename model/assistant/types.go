@@ -106,6 +106,7 @@ type MessageEvent struct {
 	recentTextReference *recentTextReference
 	replyHistory        []MessageEvent
 	replyHistoryLoaded  bool
+	crossGroupContext   bool
 	userProfile         UserMemoryProfile
 	userProfileLoaded   bool
 }
