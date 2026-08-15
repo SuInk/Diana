@@ -130,6 +130,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	protocolRepairs := 0
 	lastToolSignature := ""
 	finishReason := "final"
+	claimLedger := newClaimEvidenceLedger()
 	emitRunEvent(ctx, req.Observer, RunEvent{
 		TraceID:        traceID,
 		Phase:          RunPhaseStarted,
@@ -148,6 +149,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			ModelTurns:   modelTurns,
 			FinishReason: reason,
 			DurationMS:   duration.Milliseconds(),
+			Claims:       claimLedger.traces(),
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
@@ -226,9 +228,36 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				continue
 			}
+			if claimLedger.active {
+				protocolRepairs++
+				reason := "联网研究已启用逐主张证据账本，最终答复必须使用带 claims 的 final JSON"
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				messages = append(messages,
+					llm.Message{Role: llm.RoleAssistant, Content: lastText},
+					llm.Message{Role: llm.RoleUser, Content: reason + "。\n" + claimLedger.prompt()},
+				)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
+			if reason, valid := claimLedger.validateFinal(action.Claims); !valid {
+				protocolRepairs++
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				messages = append(messages,
+					llm.Message{Role: llm.RoleAssistant, Content: lastText},
+					llm.Message{Role: llm.RoleUser, Content: reason + "。请按证据账本修正，只输出带完整 claims 的 final JSON。\n" + claimLedger.prompt()},
+				)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
 			return finish(action.Content, "final"), nil
 		}
 		if action.Action != "tool" {
@@ -277,6 +306,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			continue
 		}
+		searchProtocolInput := action.Input
+		claimMetadata := map[string]any(nil)
+		if action.Tool == webSearchToolName {
+			claimMetadata = claimLedger.prepareSearch(searchProtocolInput)
+		}
 		action.Input = minimalToolInput(action.Tool, action.Input)
 		signature := toolCallSignature(action.Tool, action.Input)
 		if signature != "" && signature == lastToolSignature {
@@ -296,13 +330,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		if action.Tool == webSearchToolName {
 			if webSearchCalls >= maxWebSearchCallsPerAgentRun {
+				claimLedger.recordRejectedSearch(searchProtocolInput, "search_call_limit")
 				limitErr := fmt.Sprintf("每次回复最多执行 %d 次联网搜索；请使用已有搜索结果继续分析或直接给出最终回复", maxWebSearchCallsPerAgentRun)
 				protocolRepairs++
 				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
 				messages = append(messages,
 					llm.Message{Role: llm.RoleAssistant, Content: lastText},
-					llm.Message{Role: llm.RoleUser, Content: "联网搜索次数已达上限：" + limitErr + "。不要再次调用联网搜索。"},
+					llm.Message{Role: llm.RoleUser, Content: "联网搜索次数已达上限：" + limitErr + "。不要再次调用联网搜索。\n" + claimLedger.prompt()},
 				)
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
@@ -315,7 +350,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		toolCalls++
 		lastToolSignature = signature
 		inputKeys := sortedInputKeys(action.Input)
-		toolMetadata := webSearchRunMetadataFromInput(action.Tool, action.Input)
+		toolMetadata := mergeRunMetadata(webSearchRunMetadataFromInput(action.Tool, action.Input), claimMetadata)
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
 			Phase:        RunPhaseToolStarted,
@@ -342,6 +377,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		steps = append(steps, record)
 		toolMetadata = mergeRunMetadata(toolMetadata, webSearchRunMetadataFromOutput(action.Tool, output, err))
+		if action.Tool == webSearchToolName {
+			toolMetadata = mergeRunMetadata(toolMetadata, claimLedger.observeSearch(output, err))
+		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
 			Phase:        RunPhaseToolCompleted,
@@ -366,6 +404,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
 		observationText := toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls)
+		if action.Tool == webSearchToolName && claimLedger.active {
+			observationText += "\n\n" + claimLedger.prompt()
+		}
 		observation := llm.Message{Role: llm.RoleUser, Content: observationText}
 		if err == nil {
 			if rich, ok := tool.(ToolResultPartsTool); ok {
@@ -394,7 +435,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	messages = append(messages, llm.Message{
 		Role:    llm.RoleUser,
-		Content: finalizationInstruction(finishReason),
+		Content: finalizationInstruction(finishReason) + "\n" + claimLedger.prompt(),
 	})
 	modelStartedAt := time.Now()
 	resp, err := r.client.Generate(ctx, llm.GenerateRequest{Messages: messages})
@@ -417,6 +458,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		Usage:        usage,
 	})
 	if action, ok := parseAction(finalText); ok && action.Action == "final" {
+		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
+			return finish(claimLedger.groundedFallback(), finishReason), nil
+		}
 		return finish(action.Content, finishReason), nil
 	}
 	if !looksLikeAgentAction(finalText) {
@@ -607,8 +651,11 @@ func (r *Runner) systemPrompt() string {
 			"- 遇到需要外部事实、可能随时间变化、自己不能可靠确认或适合参考公开评价的问题，先调用 web_search.search 再回答。典型场景包括新闻、价格、规则、日程、人物或机构现状，以及具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议；不要凭印象编造亲身体验或把不确定判断说成事实。纯闲聊、创作请求以及完全可由当前上下文回答的问题不需要搜索。",
 			"- 搜索词是可迭代假设，不是必须一次猜对的最终关键词。web_search.search 的 query 传当前最佳假设；存在拼写、别名、缩写、音译、语言或限定条件不确定性时，用 queries 追加 1–3 个有覆盖差异的候选，按信息增益从高到低排序。不要把完整聊天记录、用户身份或无关字段塞进搜索词。",
 			"- web_search.search 会在统一 deadline 和调用预算内自动规范化查询、逐步放宽引号/标点/括号约束并回退 provider。一次回复最多调用 "+fmt.Sprintf("%d", maxWebSearchCallsPerAgentRun)+" 次，并与总计 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 个工具步骤共享预算；不要重复相同 query 或只机械替换一个词。",
+			"- 多部分检索必须先拆成可独立验证的通用 claims。首次搜索在 input.claims 声明每个 id/statement，并用 claim_ids 标明本次查询覆盖项；后续搜索先用 claim_updates 结算已有证据，再优先覆盖 insufficient 或 not_searched。不得按品牌、站点或垂直领域硬编码 claim。",
+			"- claim 状态只允许 supported、conflicting、insufficient、not_searched。supported/conflicting 必须绑定工具真实返回的 URL，并记录 relation、source_type、published_at、distance 和 strength；标题、摘要、正文冲突时不得标 supported。第一方来源只能支持它直接覆盖的条件，不能外推未覆盖的地点、时间或渠道。",
 			"- 工具返回 no_results、provider_error、timeout、budget_exhausted 或 insufficient_evidence 时，不要立即断言资料不存在。仍有工具预算时，根据已尝试的 query hash、结果中的新实体和未覆盖的信息缺口生成下一轮候选；结果已经有权威来源直接支持答案时立即停止搜索。",
-			"- 最终回答要附来源，并明确区分来源直接支持的事实、多来源推导的结论和仍未验证的假设。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分申购日、发行日和上市交易日等不同概念。",
+			"- 最终 final JSON 必须额外携带完整 claims 数组，并按 claim 分别表达已确认、冲突和未确认内容。一个 claim 缺证据不得否定其他 claim；没有检索到只能标 insufficient，除非权威来源提供直接否定证据。不得生成搜索未验证的候选渠道、组织、价格或其他事实。",
+			"- 最终回答要附来源，并明确区分来源直接支持的事实、多来源推导的结论和仍未验证的假设。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分不同事件日期。",
 			"- 如果 web_search.search 报告没有可用配置，最终回复要说明当前搜索提供商均不可用，不要改用其他方式爬取搜索引擎。",
 		)
 	}
@@ -637,7 +684,7 @@ func (r *Runner) systemPrompt() string {
 	sections := []string{
 		"你是 Diana QQ Bot 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
 		"你只能输出一个 JSON 对象，不要输出 Markdown、解释性前缀或额外文本。",
-		"可用动作：\n1. 调用工具：{\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}\n2. 最终回复：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\"}\n3. 兼容 Responses API function call：{\"type\":\"function_call\",\"name\":\"工具名\",\"arguments\":{...}}",
+		"可用动作：\n1. 调用工具：{\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}\n2. 最终回复：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\",\"claims\":[...]}（执行联网研究时 claims 必填）\n3. 兼容 Responses API function call：{\"type\":\"function_call\",\"name\":\"工具名\",\"arguments\":{...}}",
 		"可用工具：\n" + r.registry.Descriptions(),
 	}
 	if skillsPrompt != "" {
@@ -1075,6 +1122,7 @@ type llmAction struct {
 	Input     map[string]any `json:"input,omitempty"`
 	Arguments any            `json:"arguments,omitempty"`
 	Content   string         `json:"content,omitempty"`
+	Claims    []ClaimUpdate  `json:"claims,omitempty"`
 }
 
 // parseAction 解析模型输出的 Agent JSON 动作。
