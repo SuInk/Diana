@@ -13,11 +13,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 type voiceTestStore struct {
 	mu          sync.Mutex
 	transcripts map[string]VoiceTranscriptRecord
+	blobLoads   int
+	deleted     []string
 }
 
 func (s *voiceTestStore) AppendMessageEvent(context.Context, string, MessageEvent) error { return nil }
@@ -25,7 +30,16 @@ func (s *voiceTestStore) ListRecentMessageEvents(context.Context, string, int) (
 	return nil, nil
 }
 func (s *voiceTestStore) LoadVoiceBlob(context.Context, string) ([]byte, bool, error) {
+	s.mu.Lock()
+	s.blobLoads++
+	s.mu.Unlock()
 	return nil, false, nil
+}
+func (s *voiceTestStore) DeleteVoiceBlob(_ context.Context, hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleted = append(s.deleted, hash)
+	return nil
 }
 func (s *voiceTestStore) LoadVoiceTranscript(_ context.Context, key string) (VoiceTranscriptRecord, bool, error) {
 	s.mu.Lock()
@@ -101,6 +115,66 @@ func TestVoiceSTTTranscribesOnceAndReusesCache(t *testing.T) {
 	quoted := runtime.prepareIncomingVoice(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "1", Quoted: &QuotedMessage{MessageID: "voice-1", Segments: event.Segments}})
 	if quoted.Quoted == nil || quoted.Quoted.Segments[0].Data[voiceSTTTranscriptKey] != "这是缓存后的语音内容" || calls.Load() != 1 {
 		t.Fatalf("quoted cache result=%#v provider calls=%d", quoted.Quoted, calls.Load())
+	}
+}
+
+func TestVoiceSTTUsesPersistedTranscriptBeforeLoadingRawAudio(t *testing.T) {
+	cfg := voiceSTTConfig{Backend: voiceSTTBackendOpenAI, Model: "whisper-test", Language: "zh", Concurrency: 1}
+	hash := strings.Repeat("a", 64)
+	key := voiceSTTCacheKey(hash, cfg)
+	store := &voiceTestStore{transcripts: map[string]VoiceTranscriptRecord{key: {CacheKey: key, AudioSHA256: hash, Transcript: "只读取持久化文字", DurationMS: 500}}}
+	runtime := NewRuntime(BotConfig{}, nil, nil, nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	transcript, gotHash, _, cacheHit, code, err := NewVoiceSTTPlugin(nil).transcribeSegment(context.Background(), runtime, MessageEvent{}, MessageSegment{Type: "record", Data: map[string]string{voiceSTTBlobHashKey: hash}}, cfg)
+	if err != nil || code != "" || !cacheHit || transcript != "只读取持久化文字" || gotHash != hash {
+		t.Fatalf("transcript=%q hash=%q cacheHit=%v code=%q err=%v", transcript, gotHash, cacheHit, code, err)
+	}
+	if store.blobLoads != 0 || len(store.deleted) != 1 || store.deleted[0] != hash {
+		t.Fatalf("blob loads=%d deleted=%v", store.blobLoads, store.deleted)
+	}
+}
+
+func TestVoiceSourceIsLoadedOnlyForVoiceCharacteristicQuestions(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is unavailable")
+	}
+	wav := filepath.Join(t.TempDir(), "source.wav")
+	writeSilentWAV(t, wav, 1600)
+	runtime := NewRuntime(BotConfig{}, nil, nil, nil, nil, nil, nil)
+	event := MessageEvent{Quoted: &QuotedMessage{MessageID: "voice-1", Segments: []MessageSegment{{Type: "record", Data: map[string]string{"file": wav, voiceSTTTranscriptKey: "你好"}}}}}
+	cfg := voiceSTTConfig{MaxBytes: 1 << 20, MaxDuration: time.Minute}
+	if parts, notice := runtime.voiceSourceAnalysisParts(context.Background(), event, "这段语音说了什么", cfg); len(parts) != 0 || notice != "" {
+		t.Fatalf("ordinary transcript lookup loaded source audio: parts=%d notice=%q", len(parts), notice)
+	}
+	parts, notice := runtime.voiceSourceAnalysisParts(context.Background(), event, "他的语气和音色怎么样", cfg)
+	if len(parts) != 1 || parts[0].Type != llm.ContentPartInputAudio || parts[0].AudioFormat != "wav" || parts[0].AudioData == "" {
+		t.Fatalf("voice analysis parts=%#v", parts)
+	}
+	if !strings.Contains(notice, "按需重新读取") {
+		t.Fatalf("notice=%q", notice)
+	}
+}
+
+func TestVoiceHistoryPersistsTranscriptAndOpaqueSourceReferenceOnly(t *testing.T) {
+	event := MessageEvent{
+		Segments: []MessageSegment{{Type: "record", Data: map[string]string{
+			voiceSTTTranscriptKey: "持久化的转写", voiceSTTAudioHashKey: strings.Repeat("b", 64),
+			"file": "/tmp/ephemeral.wav", "url": "https://media.example/voice.wav", "cached_file": "/tmp/cache.wav",
+		}}},
+		Quoted: &QuotedMessage{Segments: []MessageSegment{{Type: "record", Data: map[string]string{
+			voiceSTTTranscriptKey: "引用转写", "file": "onebot-record-token",
+		}}}},
+	}
+	persisted := voiceTranscriptOnlyHistory(event)
+	data := persisted.Segments[0].Data
+	if data[voiceSTTTranscriptKey] != "持久化的转写" || data[voiceSTTAudioHashKey] == "" || data["file"] != "" || data["url"] != "" || data["cached_file"] != "" {
+		t.Fatalf("persisted voice data=%#v", data)
+	}
+	if persisted.Quoted == nil || persisted.Quoted.Segments[0].Data["file"] != "onebot-record-token" {
+		t.Fatalf("opaque OneBot source reference was not retained: %#v", persisted.Quoted)
+	}
+	if event.Segments[0].Data["file"] != "/tmp/ephemeral.wav" {
+		t.Fatal("history sanitization mutated the live event")
 	}
 }
 

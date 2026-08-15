@@ -443,6 +443,10 @@ func estimateMessageTokens(message Message) int64 {
 			if strings.TrimSpace(part.ImageURL) != "" {
 				total += estimatedImageTokens(part.Detail)
 			}
+		case ContentPartInputAudio:
+			if strings.TrimSpace(part.AudioData) != "" {
+				total += estimatedAudioTokens(part.AudioData)
+			}
 		}
 	}
 	if !hasText {
@@ -491,6 +495,19 @@ func estimatedImageTokens(detail string) int64 {
 	}
 }
 
+func estimatedAudioTokens(encoded string) int64 {
+	// Speech audio is normalized to mono WAV before it reaches this layer.
+	// Estimate from decoded bytes without counting the base64 payload as text.
+	value := int64(len(strings.TrimSpace(encoded))) * 3 / 4 / 1500
+	if value < 512 {
+		return 512
+	}
+	if value > 8192 {
+		return 8192
+	}
+	return value
+}
+
 func trimMessageToTokenBudget(message Message, budget int64) (Message, bool) {
 	if budget <= messageTokenOverhead {
 		return Message{}, false
@@ -507,6 +524,8 @@ func trimMessageToTokenBudget(message Message, budget int64) (Message, bool) {
 	hasText := false
 	hadImages := 0
 	keptImages := 0
+	hadAudio := 0
+	keptAudio := 0
 	for _, part := range message.Parts {
 		switch part.Type {
 		case ContentPartText:
@@ -537,11 +556,23 @@ func trimMessageToTokenBudget(message Message, budget int64) (Message, bool) {
 			trimmed.Parts = append(trimmed.Parts, part)
 			keptImages++
 			remaining -= cost
+		case ContentPartInputAudio:
+			hadAudio++
+			cost := estimatedAudioTokens(part.AudioData)
+			if strings.TrimSpace(part.AudioData) == "" || cost > remaining {
+				continue
+			}
+			trimmed.Parts = append(trimmed.Parts, part)
+			keptAudio++
+			remaining -= cost
 		}
 	}
 	// Text that merely labels an attached historical image must not survive
 	// after the image itself is dropped; that recreates a misleading placeholder.
 	if hadImages != keptImages && message.Priority < MessagePriorityCurrent {
+		return Message{}, false
+	}
+	if hadAudio != keptAudio {
 		return Message{}, false
 	}
 	if !hasText && remaining > 0 {
