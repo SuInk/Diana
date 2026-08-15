@@ -817,6 +817,7 @@ type llmAction struct {
 	Input     map[string]any `json:"input,omitempty"`
 	Arguments any            `json:"arguments,omitempty"`
 	Content   string         `json:"content,omitempty"`
+	Reply     *string        `json:"reply,omitempty"`
 	Claims    []ClaimUpdate  `json:"claims,omitempty"`
 }
 
@@ -850,6 +851,13 @@ func parseAction(text string) (llmAction, bool) {
 	// {"tool":"...","arguments":{...}} shape even when asked for action=tool.
 	if action.Action == "" && action.Tool != "" {
 		action.Action = "tool"
+	}
+	// Some chat-oriented models retain their usual {"reply":"..."} response
+	// shape after a tool call. Treat it as a final action instead of leaking the
+	// JSON envelope to the chat.
+	if action.Action == "" && action.Reply != nil {
+		action.Action = "final"
+		action.Content = *action.Reply
 	}
 	if action.Action == "" {
 		return llmAction{Action: "final", Content: strings.TrimSpace(text)}, false

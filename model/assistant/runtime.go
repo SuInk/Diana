@@ -34,7 +34,6 @@ type LLMProviderConfigFactory func(llm.ProviderConfig) (LLMProvider, error)
 type replyRuleContextKey struct{}
 
 const (
-	proactiveReplyMaxRunes         = 180
 	proactiveReplyRouteConcurrency = 8
 	relationshipEvalConcurrency    = 4
 	semanticRouteTimeout           = 20 * time.Second
@@ -2863,9 +2862,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
-	if proactiveTriggered && (replyCfg.MaxReplyChars <= 0 || replyCfg.MaxReplyChars > proactiveReplyMaxRunes) {
-		replyCfg.MaxReplyChars = proactiveReplyMaxRunes
-	}
 	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		return "", err

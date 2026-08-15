@@ -2823,9 +2823,10 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	}
 }
 
-func TestRuntimeProactiveReplyUsesConciseMode(t *testing.T) {
+func TestRuntimeProactiveReplyPreservesCompleteAnswer(t *testing.T) {
 	channel := &recordingChannel{}
-	provider := &capturingLLMProvider{reply: strings.Repeat("很", 240)}
+	completeReply := strings.Repeat("很", 240)
+	provider := &capturingLLMProvider{reply: completeReply}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:         false,
 		MaxReplyChars:        3500,
@@ -2850,8 +2851,8 @@ func TestRuntimeProactiveReplyUsesConciseMode(t *testing.T) {
 	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "custom concise proactive instruction") {
 		t.Fatalf("system prompt = %#v", provider.request.Messages)
 	}
-	if len([]rune(reply)) > proactiveReplyMaxRunes+3 {
-		t.Fatalf("reply too long: %d %q", len([]rune(reply)), reply)
+	if reply != completeReply {
+		t.Fatalf("proactive reply was truncated: got %d runes, want %d", len([]rune(reply)), len([]rune(completeReply)))
 	}
 	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
 		t.Fatalf("sent = %#v reply=%q", channel.sent, reply)
