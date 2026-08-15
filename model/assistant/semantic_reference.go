@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -19,7 +21,21 @@ const (
 	semanticReferenceRecentCandidateLimit = 20
 	semanticReferenceQuoteContextRadius   = 8
 	semanticReferenceNearbyContextRadius  = 3
+	semanticReferenceCacheTTL             = 10 * time.Minute
 )
+
+type SemanticReferenceCacheRecord struct {
+	CacheKey   string   `json:"cache_key"`
+	MessageIDs []string `json:"message_ids,omitempty"`
+	Confidence float64  `json:"confidence"`
+	ExpiresAt  int64    `json:"expires_at"`
+	CreatedAt  int64    `json:"created_at"`
+}
+
+type SemanticReferenceCacheStore interface {
+	LoadSemanticReferenceCache(context.Context, string) (SemanticReferenceCacheRecord, bool, error)
+	SaveSemanticReferenceCache(context.Context, SemanticReferenceCacheRecord) error
+}
 
 type semanticReferenceCandidate struct {
 	MessageID                string   `json:"message_id"`
@@ -70,13 +86,20 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 	if err != nil {
 		return event
 	}
-	callCtx, cancel := context.WithTimeout(ctx, semanticRouteTimeout)
-	defer cancel()
-	raw, err := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
-			{
-				Role: llm.RoleSystem,
-				Content: strings.TrimSpace(`你是 QQ 对话的上下文指代判断器。判断当前消息具体在询问、评价、修改或接续哪一条或哪些历史消息。
+	cacheKey := ""
+	decision, cacheHit := semanticReferenceDecision{}, false
+	if semanticCandidatesHaveMedia(candidates) {
+		cacheKey = semanticReferenceDecisionCacheKey(event, text, candidates)
+		decision, cacheHit = r.loadSemanticReferenceDecision(ctx, cacheKey)
+	}
+	if !cacheHit {
+		callCtx, cancel := context.WithTimeout(ctx, semanticRouteTimeout)
+		defer cancel()
+		raw, routeErr := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
+			resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
+				{
+					Role: llm.RoleSystem,
+					Content: strings.TrimSpace(`你是 QQ 对话的上下文指代判断器。判断当前消息具体在询问、评价、修改或接续哪一条或哪些历史消息。
 
 规则：
 1. 候选可以来自任何发送者；event_time 和 age_seconds 表示消息时间及距当前消息的秒数。结合时间判断是否仍属于当前话题，间隔过长且当前措辞没有明确指向时选择 none；不要默认只选当前发言者自己的消息。
@@ -89,20 +112,31 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 8. 只输出 JSON，不要输出 Markdown 或解释。为兼容旧调用，单条也必须放进 message_ids。
 
 输出格式：{"message_ids":["候选ID1","候选ID2"],"confidence":0到1,"reason":"简短理由"}`),
-			},
-			{Role: llm.RoleUser, Content: "请判断当前消息指向哪个历史候选：\n" + string(payload)},
-		}})
-		if err != nil {
-			return "", err
+				},
+				{Role: llm.RoleUser, Content: "请判断当前消息指向哪个历史候选：\n" + string(payload)},
+			}})
+			if err != nil {
+				return "", err
+			}
+			return resp.Text, nil
+		})
+		if routeErr != nil {
+			r.recordSemanticReference(ctx, event, nil, 0, false, routeErr)
+			return event
 		}
-		return resp.Text, nil
-	})
-	if err != nil {
-		r.recordSemanticReference(ctx, event, nil, 0, err)
-		return event
+		var ok bool
+		decision, ok = parseSemanticReferenceDecision(raw)
+		if !ok {
+			return event
+		}
+		if cacheKey != "" {
+			r.saveSemanticReferenceDecision(ctx, cacheKey, decision)
+		}
 	}
-	decision, ok := parseSemanticReferenceDecision(raw)
-	if !ok || len(decision.MessageIDs) == 0 || decision.Confidence < 0.55 {
+	if len(decision.MessageIDs) == 0 || decision.Confidence < 0.55 {
+		if cacheHit {
+			r.recordSemanticReference(ctx, event, nil, decision.Confidence, true, nil)
+		}
 		return event
 	}
 	selectedCandidates := make(map[string]bool, len(decision.MessageIDs))
@@ -135,8 +169,90 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 	event.Quoted = primaryQuoted
 	setEventSemanticSourceMessageIDs(&event, selectedSourceIDs)
 	r.updateRememberedSemanticReference(event)
-	r.recordSemanticReference(ctx, event, selectedSourceIDs, decision.Confidence, nil)
+	r.recordSemanticReference(ctx, event, selectedSourceIDs, decision.Confidence, cacheHit, nil)
 	return event
+}
+
+func semanticReferenceDecisionCacheKey(event MessageEvent, text string, candidates []semanticReferenceCandidate) string {
+	type mediaSignature struct {
+		MessageID                string   `json:"message_id"`
+		Content                  []string `json:"content,omitempty"`
+		Text                     string   `json:"text,omitempty"`
+		SemanticSourceMessageIDs []string `json:"semantic_source_message_ids,omitempty"`
+		NearbyContext            []string `json:"nearby_context,omitempty"`
+	}
+	media := make([]mediaSignature, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.ImageCount == 0 && candidate.AudioCount == 0 && candidate.VideoCount == 0 && candidate.FileCount == 0 && len(candidate.SemanticSourceMessageIDs) == 0 && candidate.SemanticSourceMessageID == "" {
+			continue
+		}
+		sourceIDs := append([]string(nil), candidate.SemanticSourceMessageIDs...)
+		if candidate.SemanticSourceMessageID != "" {
+			sourceIDs = appendUniqueStrings(sourceIDs, candidate.SemanticSourceMessageID)
+		}
+		media = append(media, mediaSignature{MessageID: candidate.MessageID, Content: candidate.Content, Text: candidate.Text, SemanticSourceMessageIDs: sourceIDs, NearbyContext: candidate.NearbyContext})
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"version":                 "v1",
+		"session":                 sessionKey(event),
+		"text":                    strings.ToLower(strings.Join(strings.Fields(text), " ")),
+		"quoted_message_id":       quotedMessageID(event.Quoted),
+		"quoted_semantic_sources": quotedSemanticSourceMessageIDs(event.Quoted),
+		"media":                   media,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func quotedMessageID(quoted *QuotedMessage) string {
+	if quoted == nil {
+		return ""
+	}
+	return strings.TrimSpace(quoted.MessageID)
+}
+
+func (r *Runtime) loadSemanticReferenceDecision(ctx context.Context, cacheKey string) (semanticReferenceDecision, bool) {
+	now := r.clock().Unix()
+	r.mu.RLock()
+	record, found := r.semanticRefCache[cacheKey]
+	store, _ := r.messageStore.(SemanticReferenceCacheStore)
+	r.mu.RUnlock()
+	if found && record.ExpiresAt > now {
+		return semanticReferenceDecision{MessageIDs: append([]string(nil), record.MessageIDs...), Confidence: record.Confidence}, true
+	}
+	if store == nil {
+		return semanticReferenceDecision{}, false
+	}
+	loadCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	record, found, err := store.LoadSemanticReferenceCache(loadCtx, cacheKey)
+	if err != nil || !found || record.ExpiresAt <= now {
+		return semanticReferenceDecision{}, false
+	}
+	r.mu.Lock()
+	r.semanticRefCache[cacheKey] = record
+	r.mu.Unlock()
+	return semanticReferenceDecision{MessageIDs: append([]string(nil), record.MessageIDs...), Confidence: record.Confidence}, true
+}
+
+func (r *Runtime) saveSemanticReferenceDecision(ctx context.Context, cacheKey string, decision semanticReferenceDecision) {
+	now := r.clock()
+	record := SemanticReferenceCacheRecord{CacheKey: cacheKey, MessageIDs: append([]string(nil), decision.MessageIDs...), Confidence: decision.Confidence, CreatedAt: now.Unix(), ExpiresAt: now.Add(semanticReferenceCacheTTL).Unix()}
+	r.mu.Lock()
+	for key, cached := range r.semanticRefCache {
+		if cached.ExpiresAt <= now.Unix() {
+			delete(r.semanticRefCache, key)
+		}
+	}
+	r.semanticRefCache[cacheKey] = record
+	store, _ := r.messageStore.(SemanticReferenceCacheStore)
+	r.mu.Unlock()
+	if store == nil {
+		return
+	}
+	saveCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	_ = store.SaveSemanticReferenceCache(saveCtx, record)
 }
 
 func quotedMessageHasReferenceContent(quoted *QuotedMessage) bool {
@@ -619,7 +735,7 @@ func parseSemanticReferenceDecision(raw string) (semanticReferenceDecision, bool
 	return decision, true
 }
 
-func (r *Runtime) recordSemanticReference(ctx context.Context, event MessageEvent, messageIDs []string, confidence float64, routeErr error) {
+func (r *Runtime) recordSemanticReference(ctx context.Context, event MessageEvent, messageIDs []string, confidence float64, cacheHit bool, routeErr error) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -642,6 +758,7 @@ func (r *Runtime) recordSemanticReference(ctx context.Context, event MessageEven
 			"message_id":  messageID,
 			"message_ids": append([]string(nil), messageIDs...),
 			"confidence":  confidence,
+			"cache_hit":   cacheHit,
 		},
 	}
 	if routeErr != nil {
