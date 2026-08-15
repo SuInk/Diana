@@ -2157,6 +2157,44 @@ code {
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--text-secondary);
+  /* 描述长度 41~82 字不等，截断到三行让同一行卡片的内部节奏一致；
+     完整文案挂在 title 上。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 权限折叠 */
+.plugin-perms > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.plugin-perms > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-perms > summary:hover {
+  color: var(--text-secondary);
+}
+
+.plugin-perms-chevron {
+  transition: transform 0.15s ease;
+}
+
+.plugin-perms[open] .plugin-perms-chevron {
+  transform: rotate(180deg);
+}
+
+.plugin-perms .plugin-card-perms {
+  margin-top: 8px;
 }
 
 .plugin-card-foot {
