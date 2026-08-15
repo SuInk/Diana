@@ -2489,7 +2489,7 @@ func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 	})
 	for _, historyEvent := range []MessageEvent{
 		{
-			Kind: EventKindGroup, Time: 100, GroupID: "458074166", UserID: "10001", MessageID: "low-data",
+			Kind: EventKindGroup, Time: 100, GroupID: "45807", UserID: "10001", MessageID: "low-data",
 			SenderName: "Boredom always ends in desire.",
 			Segments: []MessageSegment{
 				{Type: "at", Data: map[string]string{"qq": "10002"}},
@@ -2497,12 +2497,12 @@ func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 			},
 		},
 		{
-			Kind: EventKindGroup, Time: 106, GroupID: "458074166", UserID: "10003", MessageID: "image-before",
+			Kind: EventKindGroup, Time: 106, GroupID: "45807", UserID: "10003", MessageID: "image-before",
 			SenderName: "我以小居居形态出击",
 			Segments:   []MessageSegment{{Type: "image", Data: map[string]string{"file": "first.jpg"}}},
 		},
 		{
-			Kind: EventKindGroup, Time: 110, GroupID: "458074166", UserID: "42", MessageID: "diana-low-data-answer",
+			Kind: EventKindGroup, Time: 110, GroupID: "45807", UserID: "42", MessageID: "diana-low-data-answer",
 			SenderName: "Diana",
 			Segments: []MessageSegment{
 				{Type: "at", Data: map[string]string{"qq": "10001"}},
@@ -2510,7 +2510,7 @@ func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 			},
 		},
 		{
-			Kind: EventKindGroup, Time: 117, GroupID: "458074166", UserID: "10003", MessageID: "image-after",
+			Kind: EventKindGroup, Time: 117, GroupID: "45807", UserID: "10003", MessageID: "image-after",
 			SenderName: "我以小居居形态出击",
 			Segments:   []MessageSegment{{Type: "image", Data: map[string]string{"file": "second.jpg"}}},
 		},
@@ -2518,7 +2518,7 @@ func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 		runtime.remember(historyEvent)
 	}
 	event := MessageEvent{
-		Kind: EventKindGroup, Time: 135, GroupID: "458074166", UserID: "10004", MessageID: "novel-remark",
+		Kind: EventKindGroup, Time: 135, GroupID: "45807", UserID: "10004", MessageID: "novel-remark",
 		SenderName: "Winter",
 		RawMessage: "你不是最喜欢看小说吗",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "你不是最喜欢看小说吗"}}},
