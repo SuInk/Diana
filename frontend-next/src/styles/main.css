@@ -2417,6 +2417,78 @@ code {
   font-size: 12px;
 }
 
+.repository-issue-body {
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.plugin-setting-textarea {
+  min-height: 104px;
+  resize: vertical;
+}
+
+.repository-issue-result,
+.repository-issue-duplicate {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
+  background: var(--ok-soft);
+}
+
+.repository-issue-duplicate {
+  align-items: flex-start;
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  background: var(--warn-soft);
+}
+
+.repository-issue-result > svg {
+  color: var(--ok);
+}
+
+.repository-issue-duplicate > svg {
+  color: var(--warn);
+}
+
+.repository-issue-result strong,
+.repository-issue-duplicate strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.repository-issue-result p,
+.repository-issue-duplicate p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.repository-issue-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.repository-issue-candidates li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.repository-issue-candidates a {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .rss-watch-rule {
   min-height: 108px;
   resize: vertical;
@@ -3477,6 +3549,17 @@ code {
 
   .repository-watch-manager-actions {
     justify-content: flex-start;
+  }
+
+  .repository-issue-result,
+  .repository-issue-duplicate {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .repository-issue-result .btn,
+  .repository-issue-duplicate > .btn {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .repository-watch-form {
