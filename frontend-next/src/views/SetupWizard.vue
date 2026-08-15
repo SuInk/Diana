@@ -228,7 +228,7 @@
           <code>嘉然</code>、<code>然然</code>、<code>Diana</code>。
         </p>
         <div class="cluster">
-          <button class="btn primary" type="button" @click="navigate('dashboard')">
+          <button class="btn primary" type="button" @click="finishSetup">
             <LayoutGrid :size="15" aria-hidden="true" />
             进入总览
           </button>
@@ -278,6 +278,12 @@ import { detectLLMService, llmServicePresets } from "../llm-presets";
 const step = ref(0);
 const busy = ref(false);
 const stepLabels = ["配置 LLM", "接入 OneBot v11", "启动验证"];
+const SETUP_COMPLETE_KEY = "dqb-next:setup-completed";
+
+function finishSetup(): void {
+  window.localStorage.setItem(SETUP_COMPLETE_KEY, "1");
+  navigate("dashboard");
+}
 
 const llmConfigured = ref(false);
 const tokenConfigured = ref(false);
