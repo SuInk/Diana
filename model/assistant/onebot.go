@@ -627,6 +627,13 @@ func PlainText(segments []MessageSegment) string {
 			// 图片通过多模态 part 传递，不伪装成模型无法读取的文本。
 		case "video":
 			builder.WriteString("[视频]")
+		case "record":
+			if transcript := strings.TrimSpace(segment.Data[voiceSTTTranscriptKey]); transcript != "" {
+				builder.WriteString("[语音转写] ")
+				builder.WriteString(transcript)
+			} else {
+				builder.WriteString("[语音]")
+			}
 		case "file":
 			// 文件段只放摘要文本，真正文件读取交给文件解析插件处理。
 			name := firstNonEmpty(segment.Data["name"], segment.Data["file"], segment.Data["filename"])
