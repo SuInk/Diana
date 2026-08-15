@@ -384,10 +384,32 @@ func TestRunnerSkipsClockWhenCallerAlreadyProvidesOne(t *testing.T) {
 func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"可以根据首轮结果改写 query 后继续搜索", "最多调用 3 次", "总计 8 个工具步骤", "不要把完整聊天记录塞进 query", "优先核对官方或法定披露来源"} {
+	for _, expected := range []string{"搜索词是可迭代假设", "queries 追加 1–3 个", "最多调用 3 次", "总计 8 个工具步骤", "不要把完整聊天记录", "insufficient_evidence", "优先核对官方或法定披露来源"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}
+	}
+}
+
+func TestRunnerPreservesWebSearchCandidatesAndDropsUnrelatedInput(t *testing.T) {
+	tool := &countingWebSearchTool{}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"web_search.search","input":{"query":"precise","queries":["alias","translated"],"chat_history":"private"}}`,
+		`{"action":"final","content":"done"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查一下"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tool.lastInput) != 2 || tool.lastInput["query"] != "precise" {
+		t.Fatalf("input = %#v", tool.lastInput)
+	}
+	queries, ok := tool.lastInput["queries"].([]any)
+	if !ok || len(queries) != 2 || queries[0] != "alias" || queries[1] != "translated" {
+		t.Fatalf("queries = %#v", tool.lastInput["queries"])
 	}
 }
 

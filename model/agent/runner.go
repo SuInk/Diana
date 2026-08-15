@@ -315,6 +315,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		toolCalls++
 		lastToolSignature = signature
 		inputKeys := sortedInputKeys(action.Input)
+		toolMetadata := webSearchRunMetadataFromInput(action.Tool, action.Input)
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
 			Phase:        RunPhaseToolStarted,
@@ -324,6 +325,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Tool:         action.Tool,
 			InputKeys:    inputKeys,
 			ToolInput:    cloneToolInput(action.Input),
+			Metadata:     toolMetadata,
 		})
 		toolCtx, toolCancel := contextWithToolBudget(ctx, time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 		toolStartedAt := time.Now()
@@ -339,6 +341,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			output = record.Output
 		}
 		steps = append(steps, record)
+		toolMetadata = mergeRunMetadata(toolMetadata, webSearchRunMetadataFromOutput(action.Tool, output, err))
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
 			Phase:        RunPhaseToolCompleted,
@@ -349,6 +352,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			InputKeys:    inputKeys,
 			ToolInput:    cloneToolInput(action.Input),
 			ToolOutput:   record.Output,
+			Metadata:     toolMetadata,
 			OutputChars:  len([]rune(record.Output)),
 			DurationMS:   toolDuration.Milliseconds(),
 			Error:        record.Error,
@@ -601,8 +605,10 @@ func (r *Runner) systemPrompt() string {
 	if hasTool(webSearchToolName) {
 		rules = append(rules,
 			"- 遇到需要外部事实、可能随时间变化、自己不能可靠确认或适合参考公开评价的问题，先调用 web_search.search 再回答。典型场景包括新闻、价格、规则、日程、人物或机构现状，以及具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议；不要凭印象编造亲身体验或把不确定判断说成事实。纯闲聊、创作请求以及完全可由当前上下文回答的问题不需要搜索。",
-			"- web_search.search 内部会按配置顺序自动回退，一次回复中可以根据首轮结果改写 query 后继续搜索，但最多调用 "+fmt.Sprintf("%d", maxWebSearchCallsPerAgentRun)+" 次，并与总计 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 个工具步骤共享预算。每次 input 只传针对当前信息缺口整理后的 query，不要传入其他字段，不要把完整聊天记录塞进 query，也不要重复相同 query。",
-			"- 首轮搜索结果缺失、陈旧、含义不明确或只有概览时，不要立即假定信息不存在；应在次数上限内改用实体全名、日期、官网、公告等更精确的搜索词。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分申购日、发行日和上市交易日等不同概念。",
+			"- 搜索词是可迭代假设，不是必须一次猜对的最终关键词。web_search.search 的 query 传当前最佳假设；存在拼写、别名、缩写、音译、语言或限定条件不确定性时，用 queries 追加 1–3 个有覆盖差异的候选，按信息增益从高到低排序。不要把完整聊天记录、用户身份或无关字段塞进搜索词。",
+			"- web_search.search 会在统一 deadline 和调用预算内自动规范化查询、逐步放宽引号/标点/括号约束并回退 provider。一次回复最多调用 "+fmt.Sprintf("%d", maxWebSearchCallsPerAgentRun)+" 次，并与总计 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 个工具步骤共享预算；不要重复相同 query 或只机械替换一个词。",
+			"- 工具返回 no_results、provider_error、timeout、budget_exhausted 或 insufficient_evidence 时，不要立即断言资料不存在。仍有工具预算时，根据已尝试的 query hash、结果中的新实体和未覆盖的信息缺口生成下一轮候选；结果已经有权威来源直接支持答案时立即停止搜索。",
+			"- 最终回答要附来源，并明确区分来源直接支持的事实、多来源推导的结论和仍未验证的假设。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分申购日、发行日和上市交易日等不同概念。",
 			"- 如果 web_search.search 报告没有可用配置，最终回复要说明当前搜索提供商均不可用，不要改用其他方式爬取搜索引擎。",
 		)
 	}
@@ -1045,6 +1051,9 @@ func minimalToolInput(toolName string, input map[string]any) map[string]any {
 	minimal := map[string]any{}
 	if query, ok := input["query"]; ok {
 		minimal["query"] = query
+	}
+	if queries, ok := input["queries"]; ok {
+		minimal["queries"] = queries
 	}
 	return minimal
 }
