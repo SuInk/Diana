@@ -14,11 +14,14 @@ import (
 	"github.com/SuInk/diana/model/updater"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
 	defaultReleaseOwner = "SuInk"
 	defaultReleaseRepo  = "Diana"
+	updateCheckInterval = 30 * time.Minute
+	updateCheckDelay    = 30 * time.Second
 )
 
 var errInvalidUpdateVersion = errors.New("更新版本号无效")
@@ -59,17 +62,24 @@ type SystemUpdater interface {
 }
 
 type SystemUpdateHandler struct {
-	updater        SystemUpdater
-	releaseUpdater ReleasePackageUpdater
-	logs           AppLogWriter
-	buildVersion   string
-	httpClient     *http.Client
-	githubAPIBase  string
-	changelog      changelogCache
-	policyStore    UpdatePolicyStore
-	policyMu       sync.RWMutex
-	policy         updater.UpdatePolicy
-	autoUpdateMu   sync.Mutex
+	updater               SystemUpdater
+	releaseUpdater        ReleasePackageUpdater
+	logs                  AppLogWriter
+	buildVersion          string
+	httpClient            *http.Client
+	githubAPIBase         string
+	changelog             changelogCache
+	policyStore           UpdatePolicyStore
+	policyMu              sync.RWMutex
+	policy                updater.UpdatePolicy
+	autoUpdateMu          sync.Mutex
+	updateSchedulerOnce   sync.Once
+	releaseCacheStore     ReleaseCacheStore
+	releaseCacheMu        sync.RWMutex
+	releaseCachePersistMu sync.Mutex
+	releaseCache          persistedReleaseCache
+	releaseFetch          singleflight.Group
+	now                   func() time.Time
 }
 
 // SetReleasePackageUpdater enables self-update for complete Release packages.
@@ -472,31 +482,48 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 	}, force)
 }
 
-// StartAutoUpdate periodically downloads verified Release packages. Installing
-// and restarting remains opt-in unless AutoInstall is explicitly enabled.
+// StartAutoUpdate owns the process-wide Release check schedule. Browsers only
+// read the shared cache; verified package download/install still follows policy.
 func (h *SystemUpdateHandler) StartAutoUpdate(ctx context.Context) {
-	if h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
-		return
-	}
-	go func() {
-		timer := time.NewTimer(30 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
-		ticker := time.NewTicker(6 * time.Hour)
-		defer ticker.Stop()
-		for {
-			h.runAutoUpdate(ctx)
+	h.updateSchedulerOnce.Do(func() {
+		go func() {
+			timer := time.NewTimer(updateCheckDelay)
+			defer timer.Stop()
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-timer.C:
 			}
+			ticker := time.NewTicker(updateCheckInterval)
+			defer ticker.Stop()
+			for {
+				h.runScheduledUpdate(ctx)
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+	})
+}
+
+func (h *SystemUpdateHandler) runScheduledUpdate(ctx context.Context) {
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	remoteURL := ""
+	if h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
+		if status, err := h.updater.Status(checkCtx); err == nil {
+			remoteURL = status.RemoteURL
 		}
-	}()
+	}
+	if _, err := h.latestStableRelease(checkCtx, remoteURL); err != nil {
+		h.recordBackgroundUpdate("system.update.background_check", "后台检查更新失败", err, nil)
+		return
+	}
+	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
+		h.runAutoUpdate(ctx)
+	}
 }
 
 func (h *SystemUpdateHandler) runAutoUpdate(ctx context.Context) {
@@ -566,7 +593,7 @@ func (h *SystemUpdateHandler) latestStableRelease(ctx context.Context, remoteURL
 	if !ok {
 		owner, repo = defaultReleaseOwner, defaultReleaseRepo
 	}
-	releases, err := fetchGitHubReleases(ctx, h.httpClient, h.githubAPIBase, owner, repo, 10)
+	releases, err := h.githubReleases(ctx, owner, repo, 10)
 	if err != nil {
 		return ReleaseEntry{}, err
 	}
@@ -634,14 +661,26 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 	h.changelog.mu.Unlock()
 
 	payload := gin.H{"repo": owner + "/" + repo}
-	releases, err := fetchGitHubReleases(c.Request.Context(), h.httpClient, h.githubAPIBase, owner, repo, 10)
+	releases, err := h.githubReleases(c.Request.Context(), owner, repo, 10)
 	if err == nil && len(releases) > 0 {
 		payload["kind"] = "releases"
 		payload["releases"] = releases
 	} else {
+		var rateLimitErr *githubRateLimitError
+		if errors.As(err, &rateLimitErr) {
+			writeError(c, http.StatusBadGateway, rateLimitErr)
+			return
+		}
+		if resetAt, limited := h.activeGitHubRateLimit(h.currentTime()); limited {
+			writeError(c, http.StatusBadGateway, &githubRateLimitError{StatusCode: http.StatusForbidden, ResetAt: resetAt})
+			return
+		}
 		// 没有正式 Release（或列表拉取失败）时退回提交记录，前端会标注来源。
 		entries, commitErr := fetchGitHubChangelog(c.Request.Context(), h.httpClient, h.githubAPIBase, owner, repo, branch, 20)
 		if commitErr != nil {
+			if errors.As(commitErr, &rateLimitErr) {
+				h.rememberGitHubRateLimit(c.Request.Context(), rateLimitErr.ResetAt)
+			}
 			writeError(c, http.StatusBadGateway, commitErr)
 			return
 		}

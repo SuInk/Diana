@@ -6,7 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -304,6 +307,36 @@ type memoryUpdatePolicyStore struct {
 	ok     bool
 }
 
+type memoryReleaseCacheStore struct {
+	mu      sync.Mutex
+	payload []byte
+}
+
+func TestUpdateCheckAndCacheCadence(t *testing.T) {
+	if updateCheckInterval != 30*time.Minute {
+		t.Fatalf("update check interval = %s", updateCheckInterval)
+	}
+	if releaseCacheTTL != 30*time.Minute {
+		t.Fatalf("release cache TTL = %s", releaseCacheTTL)
+	}
+}
+
+func (s *memoryReleaseCacheStore) LoadReleaseCache(context.Context) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.payload) == 0 {
+		return nil, false, nil
+	}
+	return append([]byte(nil), s.payload...), true, nil
+}
+
+func (s *memoryReleaseCacheStore) SaveReleaseCache(_ context.Context, payload []byte) error {
+	s.mu.Lock()
+	s.payload = append([]byte(nil), payload...)
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *memoryUpdatePolicyStore) LoadUpdatePolicy(context.Context) (updater.UpdatePolicy, bool, error) {
 	return s.policy, s.ok, nil
 }
@@ -366,6 +399,160 @@ func TestAutoUpdateDownloadsByDefaultAndInstallsOnlyWhenEnabled(t *testing.T) {
 	handler.runAutoUpdate(context.Background())
 	if !releaseUpdater.installed {
 		t.Fatal("automatic install was not started after it was explicitly enabled")
+	}
+}
+
+func TestReleaseCachePersistsAcrossHandlerRestart(t *testing.T) {
+	var calls atomic.Int32
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"}]}]`))
+	}))
+	store := &memoryReleaseCacheStore{}
+
+	first := NewSystemUpdateHandler(fakeSystemUpdater{})
+	first.githubAPIBase = github.URL
+	if err := first.SetReleaseCacheStore(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	release, err := first.latestStableRelease(context.Background(), "")
+	if err != nil || release.Tag != "v1.3.0" {
+		t.Fatalf("first release = %#v, err = %v", release, err)
+	}
+	github.Close()
+
+	second := NewSystemUpdateHandler(fakeSystemUpdater{})
+	second.githubAPIBase = github.URL
+	if err := second.SetReleaseCacheStore(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	release, err = second.latestStableRelease(context.Background(), "")
+	if err != nil || release.Tag != "v1.3.0" || !release.ChecksumAvailable {
+		t.Fatalf("persisted release = %#v, err = %v", release, err)
+	}
+	if _, ok := release.asset("SHA256SUMS"); !ok {
+		t.Fatalf("persisted release lost assets: %#v", release)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("GitHub calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestReleaseCacheSingleflightCoalescesConcurrentChecks(t *testing.T) {
+	var calls atomic.Int32
+	requestStarted := make(chan struct{}, 1)
+	releaseResponse := make(chan struct{})
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		requestStarted <- struct{}{}
+		<-releaseResponse
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z"}]`))
+	}))
+	defer github.Close()
+
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{})
+	handler.githubAPIBase = github.URL
+	const callers = 8
+	start := make(chan struct{})
+	errCh := make(chan error, callers)
+	var ready sync.WaitGroup
+	var done sync.WaitGroup
+	ready.Add(callers)
+	done.Add(callers)
+	for range callers {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-start
+			release, err := handler.latestStableRelease(context.Background(), "")
+			if err == nil && release.Tag != "v1.3.0" {
+				err = errors.New("unexpected release tag " + release.Tag)
+			}
+			errCh <- err
+		}()
+	}
+	ready.Wait()
+	close(start)
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("GitHub request did not start")
+	}
+	time.Sleep(25 * time.Millisecond)
+	close(releaseResponse)
+	done.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("GitHub calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestReleaseCacheHonorsRateLimitResetAndReturnsStaleData(t *testing.T) {
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	var resetUnix atomic.Int64
+	var calls atomic.Int32
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch calls.Add(1) {
+		case 1:
+			_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z"}]`))
+		case 2:
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetUnix.Load(), 10))
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			_, _ = w.Write([]byte(`[{"tag_name":"v1.4.0","published_at":"2026-08-15T10:00:00Z"}]`))
+		}
+	}))
+	defer github.Close()
+
+	store := &memoryReleaseCacheStore{}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{})
+	handler.githubAPIBase = github.URL
+	handler.now = func() time.Time { return now }
+	if err := handler.SetReleaseCacheStore(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	if release, err := handler.latestStableRelease(context.Background(), ""); err != nil || release.Tag != "v1.3.0" {
+		t.Fatalf("initial release = %#v, err = %v", release, err)
+	}
+
+	now = now.Add(releaseCacheTTL + time.Minute)
+	resetAt := now.Add(20 * time.Minute)
+	resetUnix.Store(resetAt.Unix())
+	if release, err := handler.latestStableRelease(context.Background(), ""); err != nil || release.Tag != "v1.3.0" {
+		t.Fatalf("stale release after limit = %#v, err = %v", release, err)
+	}
+	if release, err := handler.latestStableRelease(context.Background(), ""); err != nil || release.Tag != "v1.3.0" {
+		t.Fatalf("stale release during cooldown = %#v, err = %v", release, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("GitHub calls during cooldown = %d, want 2", calls.Load())
+	}
+
+	restarted := NewSystemUpdateHandler(fakeSystemUpdater{})
+	restarted.githubAPIBase = github.URL
+	restarted.now = func() time.Time { return now }
+	if err := restarted.SetReleaseCacheStore(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	if release, err := restarted.latestStableRelease(context.Background(), ""); err != nil || release.Tag != "v1.3.0" {
+		t.Fatalf("persisted cooldown release = %#v, err = %v", release, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("GitHub calls after restart during cooldown = %d, want 2", calls.Load())
+	}
+
+	now = resetAt.Add(time.Second)
+	if release, err := restarted.latestStableRelease(context.Background(), ""); err != nil || release.Tag != "v1.4.0" {
+		t.Fatalf("release after reset = %#v, err = %v", release, err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("GitHub calls after reset = %d, want 3", calls.Load())
 	}
 }
 

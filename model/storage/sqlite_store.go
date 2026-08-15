@@ -33,6 +33,7 @@ const (
 	webuiAuthKey         = "webui_auth"
 	webuiSessionsKey     = "webui_sessions"
 	updatePolicyKey      = "system_update_policy"
+	releaseCacheKey      = "system_release_cache"
 	inboundRecoveryKey   = "qqbot_inbound_recovery_checkpoint"
 )
 
@@ -391,6 +392,21 @@ func (s *SQLiteStore) LoadUpdatePolicy(ctx context.Context) (updater.UpdatePolic
 // SaveUpdatePolicy persists the OTA automation policy across restarts.
 func (s *SQLiteStore) SaveUpdatePolicy(ctx context.Context, policy updater.UpdatePolicy) error {
 	return s.saveJSON(ctx, updatePolicyKey, policy)
+}
+
+// LoadReleaseCache loads the persisted GitHub Release metadata cache.
+func (s *SQLiteStore) LoadReleaseCache(ctx context.Context) ([]byte, bool, error) {
+	var payload json.RawMessage
+	ok, err := s.loadJSON(ctx, releaseCacheKey, &payload)
+	return append([]byte(nil), payload...), ok, err
+}
+
+// SaveReleaseCache persists GitHub Release metadata and rate-limit reset state.
+func (s *SQLiteStore) SaveReleaseCache(ctx context.Context, payload []byte) error {
+	if !json.Valid(payload) {
+		return errors.New("invalid system release cache JSON")
+	}
+	return s.saveJSON(ctx, releaseCacheKey, json.RawMessage(payload))
 }
 
 // LoadInboundRecoveryCheckpoint returns the latest instant when the QQ channel

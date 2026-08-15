@@ -102,6 +102,72 @@
         </StatCard>
       </div>
 
+      <section class="card resource-monitor">
+        <div class="card-header">
+          <div>
+            <h2>系统资源</h2>
+            <div class="card-sub">{{ resourceHostLabel }}</div>
+          </div>
+          <span v-if="stats?.server?.collected_at" class="badge">更新于 {{ formatClock(stats.server.collected_at) }}</span>
+        </div>
+        <div class="resource-grid">
+          <article class="resource-item">
+            <div class="resource-heading">
+              <span class="resource-icon"><Cpu :size="17" aria-hidden="true" /></span>
+              <div>
+                <div class="resource-label">CPU</div>
+                <div class="resource-value">{{ formatPercent(stats?.server?.cpu_usage_percent) }}</div>
+              </div>
+            </div>
+            <div class="resource-track" role="progressbar" aria-label="CPU 占用" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="resourcePercent(stats?.server?.cpu_usage_percent)">
+              <span :class="usageClass(stats?.server?.cpu_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.cpu_usage_percent)}%` }" />
+            </div>
+            <div class="resource-detail">
+              <span>{{ stats?.server ? `${stats.server.cpu_cores} 核` : "等待采样" }}</span>
+              <span v-if="stats?.server?.process_cpu_percent !== undefined">Diana {{ formatPercent(stats.server.process_cpu_percent) }}</span>
+            </div>
+          </article>
+
+          <article class="resource-item">
+            <div class="resource-heading">
+              <span class="resource-icon"><MemoryStick :size="17" aria-hidden="true" /></span>
+              <div>
+                <div class="resource-label">内存</div>
+                <div class="resource-value">{{ formatPercent(stats?.server?.memory_usage_percent) }}</div>
+              </div>
+            </div>
+            <div class="resource-track" role="progressbar" aria-label="内存占用" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="resourcePercent(stats?.server?.memory_usage_percent)">
+              <span :class="usageClass(stats?.server?.memory_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.memory_usage_percent)}%` }" />
+            </div>
+            <div class="resource-detail">
+              <span>{{ memoryUsageLabel }}</span>
+              <span v-if="stats?.server?.process_memory_bytes !== undefined">Diana {{ formatBytes(stats.server.process_memory_bytes) }}</span>
+            </div>
+          </article>
+
+          <article class="resource-item">
+            <div class="resource-heading">
+              <span class="resource-icon"><HardDrive :size="17" aria-hidden="true" /></span>
+              <div>
+                <div class="resource-label">存储空间</div>
+                <div class="resource-value">{{ formatPercent(stats?.server?.storage_usage_percent) }}</div>
+              </div>
+            </div>
+            <div class="resource-track" role="progressbar" aria-label="存储空间占用" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="resourcePercent(stats?.server?.storage_usage_percent)">
+              <span :class="usageClass(stats?.server?.storage_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.storage_usage_percent)}%` }" />
+            </div>
+            <div class="resource-detail">
+              <span>{{ storageUsageLabel }}</span>
+              <span v-if="stats?.server?.storage_available_bytes !== undefined">可用 {{ formatBytes(stats.server.storage_available_bytes) }}</span>
+            </div>
+          </article>
+        </div>
+        <div v-if="resourceUnavailableReason" class="resource-unavailable">
+          <TriangleAlert :size="14" aria-hidden="true" />
+          {{ resourceUnavailableReason }}
+        </div>
+      </section>
+
       <div class="grid-main-side dashboard-insights">
         <!-- 24h 消息量 -->
         <section class="card">
@@ -192,6 +258,9 @@ import {
   ArrowRight,
   Cable,
   CheckCircle2,
+  Cpu,
+  HardDrive,
+  MemoryStick,
   MessageCircle,
   Power,
   PowerOff,
@@ -204,7 +273,7 @@ import {
 import { getConfig, getQQBotStatus, getStats, startQQBot, stopQQBot, type StatsHourBucket } from "../api";
 import { pushStatsSnapshot, pushStatusSnapshot, stream, type BotEvent } from "../stream";
 import { navigate } from "../router";
-import { formatClock, formatNumber, formatRelative, formatUptime, truncate } from "../format";
+import { formatBytes, formatClock, formatNumber, formatRelative, formatUptime, truncate } from "../format";
 import { toastError, toastSuccess } from "../toast";
 import StatCard from "../components/StatCard.vue";
 import HourlyBars from "../components/HourlyBars.vue";
@@ -223,6 +292,26 @@ const channelSummary = computed(() => {
   return channels.map((channel) => `${channel.name || channel.platform || "通道"} · ${channel.connected ? "在线" : "离线"}`).join("  /  ");
 });
 const hourlyBuckets = computed<StatsHourBucket[]>(() => (stream.stats ? [...stream.stats.hourly] : []));
+const resourceHostLabel = computed(() => {
+  const server = stats.value?.server;
+  if (!server) return "等待服务器资源采样";
+  const platform = [server.os, server.arch].filter(Boolean).join(" / ");
+  return [server.hostname, platform].filter(Boolean).join(" · ");
+});
+const memoryUsageLabel = computed(() => {
+  const server = stats.value?.server;
+  if (!server?.memory_total_bytes) return "暂不可用";
+  return `${formatBytes(server.memory_used_bytes)} / ${formatBytes(server.memory_total_bytes)}`;
+});
+const storageUsageLabel = computed(() => {
+  const server = stats.value?.server;
+  if (!server?.storage_total_bytes) return "暂不可用";
+  return `${formatBytes(server.storage_used_bytes)} / ${formatBytes(server.storage_total_bytes)}`;
+});
+const resourceUnavailableReason = computed(() => {
+  const server = stats.value?.server;
+  return server?.metrics_unavailable_reason || server?.storage_metrics_unavailable || "";
+});
 
 const feed = computed<BotEvent[]>(() => {
   if (stream.events.length > 0) {
@@ -264,6 +353,23 @@ function eventDecisionClass(event: BotEvent): string {
   if (event.decision === "pending") return "warn";
   if (event.decision === "error" || event.error) return "err";
   return "";
+}
+
+function resourcePercent(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, value));
+}
+
+function formatPercent(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "—";
+  return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
+}
+
+function usageClass(value: number | undefined): string {
+  const percent = resourcePercent(value);
+  if (percent >= 90) return "critical";
+  if (percent >= 75) return "warning";
+  return "normal";
 }
 
 async function refresh(): Promise<void> {

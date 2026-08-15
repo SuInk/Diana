@@ -42,6 +42,16 @@ func TestParseActionAcceptsBareToolJSON(t *testing.T) {
 	}
 }
 
+func TestParseActionAcceptsReplyCompatibilityJSON(t *testing.T) {
+	action, ok := parseAction(`{"reply":"简单说：湖南米粉重汤和码子，江西米粉重粉和拌炒风味。\n1. 湖南常见汤粉。\n2. 江西常见拌粉。"}`)
+	if !ok {
+		t.Fatal("expected reply compatibility JSON")
+	}
+	if action.Action != "final" || action.Content != "简单说：湖南米粉重汤和码子，江西米粉重粉和拌炒风味。\n1. 湖南常见汤粉。\n2. 江西常见拌粉。" {
+		t.Fatalf("action = %#v", action)
+	}
+}
+
 func TestParseActionAcceptsFinalWithRawNewlines(t *testing.T) {
 	action, ok := parseAction("{\"action\":\"final\",\"content\":\"第一行\n第二行\"}")
 	if !ok {
@@ -316,6 +326,21 @@ func TestRunnerPromptIncludesSkills(t *testing.T) {
 	}
 }
 
+func TestToolDescriptionsAreCompactedForAgentProtocol(t *testing.T) {
+	description := strings.Repeat("very long tool guidance ", 100) + "input: {\"query\":\"string\"}"
+	registry := NewToolRegistry(&longDescriptionTestTool{description: description})
+	compact := registry.Descriptions()
+	if !strings.Contains(compact, `input: {"query":"string"}`) {
+		t.Fatalf("compact description lost its input schema: %q", compact)
+	}
+	if len([]rune(compact)) > 760 {
+		t.Fatalf("compact description is still too large: %d runes", len([]rune(compact)))
+	}
+	if !strings.Contains(compact, "... input:") {
+		t.Fatalf("purpose was not compacted ahead of the complete input schema: %q", compact)
+	}
+}
+
 func TestRunnerKeepsTrustedRuntimeClockOutsideStableProtocol(t *testing.T) {
 	client := &scriptedClient{}
 	runner := &Runner{client: client, cfg: Config{}.WithDefaults(), registry: NewToolRegistry()}
@@ -576,6 +601,16 @@ type scriptedClient struct {
 }
 
 type terminalTestTool struct{}
+
+type longDescriptionTestTool struct {
+	description string
+}
+
+func (*longDescriptionTestTool) Name() string          { return "long_description" }
+func (t *longDescriptionTestTool) Description() string { return t.description }
+func (*longDescriptionTestTool) Run(context.Context, map[string]any) (string, error) {
+	return "ok", nil
+}
 
 type countingWebSearchTool struct {
 	calls     int
