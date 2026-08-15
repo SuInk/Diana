@@ -305,7 +305,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">跨群记忆</span>
                 </label>
-                <span class="hint">允许检索同一机器人在其他群的非敏感记忆与历史；敏感内容始终留在原群。</span>
+                <span class="hint">话题重合且原发言者也在当前群时，允许衔接其他共同群的相关信息；敏感内容始终留在原群。</span>
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
