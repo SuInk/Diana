@@ -21,45 +21,14 @@ type inboundMediaCandidate struct {
 	event     assistant.MessageEvent
 }
 
-func inboundInitialAvailableAt(ctx context.Context, tx *sql.Tx, session string, event assistant.MessageEvent, priority int, now time.Time) (time.Time, error) {
+func inboundInitialAvailableAt(event assistant.MessageEvent, now time.Time) time.Time {
 	if assistant.EventHasDirectMediaReference(event) && !assistant.EventIsMergeableMediaOnly(event) {
-		return now, nil
+		return now
 	}
-	if !assistant.EventIsMergeableMediaOnly(event) && !assistant.EventExplicitlyReferencesMedia(event) {
-		return now, nil
+	if !assistant.EventIsMergeableMediaOnly(event) {
+		return now
 	}
-	if !assistant.EventIsMergeableMediaOnly(event) && priority != assistant.InboundPriorityMediaTurn {
-		return now, nil
-	}
-	if assistant.EventExplicitlyReferencesMedia(event) && !assistant.EventIsMergeableMediaOnly(event) {
-		from := event.Time - int64(assistant.InboundMediaMergeWindow/time.Second)
-		rows, err := tx.QueryContext(ctx, `
-SELECT payload
-FROM inbound_events
-WHERE session = ? AND COALESCE(user_id, '') = ?
-  AND status IN (?, ?)
-  AND event_time BETWEEN ? AND ?
-ORDER BY event_time DESC, created_at DESC
-`, session, strings.TrimSpace(event.UserID), inboundStatusPending, inboundStatusProcessing, from, event.Time)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("inspect recent inbound media: %w", err)
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var payload string
-			if err := rows.Scan(&payload); err != nil {
-				return time.Time{}, fmt.Errorf("scan recent inbound media: %w", err)
-			}
-			var candidate assistant.MessageEvent
-			if json.Unmarshal([]byte(payload), &candidate) == nil && assistant.EventIsMergeableMediaOnly(candidate) {
-				return now, nil
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return time.Time{}, fmt.Errorf("iterate recent inbound media: %w", err)
-		}
-	}
-	return now.Add(assistant.InboundMediaMergeWindow), nil
+	return now.Add(assistant.InboundMediaMergeWindow)
 }
 
 // ClaimInboundMediaForTurn atomically marks adjacent media as consumed by the
