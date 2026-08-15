@@ -80,6 +80,9 @@ func TestMessageHistoryPluginUsesRecent24HoursOldestFirst(t *testing.T) {
 			t.Fatalf("context missing %q: %s", want, resp.Context)
 		}
 	}
+	if strings.Contains(resp.Context, "必须按以下旧到新顺序逐条说明") || strings.Contains(resp.Context, "用户只要求概括时才可以精简") {
+		t.Fatalf("context still forces a detailed recall reply: %s", resp.Context)
+	}
 	if !resp.Forward || !resp.NestedForward || len(resp.ForwardMessages) != 2 {
 		t.Fatalf("nested recall forwarding is not configured: %#v", resp)
 	}
