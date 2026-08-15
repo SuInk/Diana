@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -202,7 +203,9 @@ func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
 		t.Fatalf("semantic images = %#v", got)
 	}
 
-	prompt := currentPromptText(event, "读我连发的三张图")
+	sourceContext := runtime.semanticReferenceContext(context.Background(), event)
+	sourceContext.AttachedImageCount = len(imageURLs)
+	prompt := currentPromptTextWithSemanticContext(event, "读我连发的三张图", sourceContext)
 	message := llmMessageFromEventWithImagesForContext(context.Background(), event, prompt, runtime.semanticReferenceImageURLs(context.Background(), event))
 	var actualImages []string
 	for _, part := range message.Parts {
@@ -230,6 +233,112 @@ func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
 	}
 	if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].Messages[0].Content, "message_ids") {
 		t.Fatalf("semantic routing requests = %#v", provider.requests)
+	}
+}
+
+func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	messageIDs := make([]string, 0, 6)
+	for index := 1; index <= 6; index++ {
+		messageID := fmt.Sprintf("bot-reply-%d", index)
+		messageIDs = append(messageIDs, messageID)
+		runtime.remember(MessageEvent{
+			Kind:       EventKindGroup,
+			Time:       int64(100 + index),
+			GroupID:    "group-1",
+			UserID:     "42",
+			SenderName: "嘉然",
+			MessageID:  messageID,
+			Outbound:   true,
+			Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": fmt.Sprintf("第 %d 条完整回复正文", index)}}},
+		})
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "owner", MessageID: "current"}
+	setEventSemanticSourceMessageIDs(&event, messageIDs)
+
+	sourceContext := runtime.semanticReferenceContext(context.Background(), event)
+	if sourceContext.RequestedSourceCount != 6 || sourceContext.ResolvedSourceCount != 6 || sourceContext.TextSourceCount != 6 || sourceContext.HistoricalImageCount != 0 || sourceContext.MissingSourceCount != 0 {
+		t.Fatalf("source context counts = %#v", sourceContext)
+	}
+	for index, messageID := range messageIDs {
+		for _, want := range []string{messageID, fmt.Sprintf("第 %d 条完整回复正文", index+1)} {
+			if !strings.Contains(sourceContext.Content, want) {
+				t.Fatalf("source context missing %q: %s", want, sourceContext.Content)
+			}
+		}
+	}
+	prompt := currentPromptTextWithSemanticContext(event, "总结嘉然之前哪些回复有误", sourceContext)
+	if !strings.Contains(prompt, "6 条包含文字") || !strings.Contains(prompt, "逐条核对") || strings.Contains(prompt, "逐张查看") || strings.Contains(prompt, "6 张") {
+		t.Fatalf("text source prompt = %q", prompt)
+	}
+	message := semanticReferenceContextMessage(sourceContext)
+	if message.Priority != llm.MessagePriorityCurrent || !strings.Contains(message.Content, "bot-reply-6") {
+		t.Fatalf("protected source message = %#v", message)
+	}
+}
+
+func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
+	provider := &capturingLLMProvider{reply: "已逐条核对"}
+	runtime := NewRuntime(BotConfig{BotQQ: "42", RecentContextLimit: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	messageIDs := make([]string, 0, 6)
+	for index := 1; index <= 6; index++ {
+		messageID := fmt.Sprintf("historical-reply-%d", index)
+		messageIDs = append(messageIDs, messageID)
+		runtime.remember(MessageEvent{
+			Kind:       EventKindGroup,
+			Time:       int64(100 + index),
+			SelfID:     "42",
+			GroupID:    "group-1",
+			UserID:     "42",
+			SenderName: "嘉然",
+			MessageID:  messageID,
+			Outbound:   true,
+			Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": fmt.Sprintf("历史回复正文 %d", index)}}},
+		})
+	}
+	event := MessageEvent{
+		Kind:       EventKindGroup,
+		Time:       200,
+		SelfID:     "42",
+		GroupID:    "group-1",
+		UserID:     "owner",
+		SenderName: "主人",
+		MessageID:  "current-question",
+		RawMessage: "总结嘉然此前哪些回复有误",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "总结嘉然此前哪些回复有误"}}},
+		ToMe:       true,
+	}
+	setEventSemanticSourceMessageIDs(&event, messageIDs)
+	reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
+	if err != nil || reply != "已逐条核对" {
+		t.Fatalf("reply = %q, err = %v", reply, err)
+	}
+	request := provider.requestSnapshot()
+	for index, messageID := range messageIDs {
+		for _, want := range []string{messageID, fmt.Sprintf("历史回复正文 %d", index+1)} {
+			if !requestMessagesContain(request.Messages, want) {
+				t.Fatalf("final request missing %q: %#v", want, request.Messages)
+			}
+		}
+	}
+	if !requestMessagesContain(request.Messages, "6 条包含文字") || requestMessagesContain(request.Messages, "6 张原图") {
+		t.Fatalf("final request source instructions = %#v", request.Messages)
+	}
+}
+
+func TestSemanticReferencePromptCountsMixedTextAndAttachedImages(t *testing.T) {
+	event := MessageEvent{SemanticSourceMessageIDs: []string{"text-1", "image-1", "image-2"}}
+	prompt := currentPromptTextWithSemanticContext(event, "一起分析", semanticReferenceContext{
+		RequestedSourceCount: 3,
+		TextSourceCount:      1,
+		AttachedImageCount:   2,
+	})
+	for _, want := range []string{"1 条文字来源", "实际附加 2 张", "逐条核对", "逐张查看"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("mixed source prompt missing %q: %s", want, prompt)
+		}
 	}
 }
 

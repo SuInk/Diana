@@ -512,6 +512,18 @@ func TestLLMGatewayErrorCanRetryAndFailover(t *testing.T) {
 	}
 }
 
+func TestLLMModelUnavailableCanFailoverButGeneric404Cannot(t *testing.T) {
+	if !shouldFailoverLLMError(errors.New(`status 404: {"type":"model_not_found","message":"model is unavailable"}`)) {
+		t.Fatal("model_not_found should fail over within the configured group")
+	}
+	if shouldRetryTransientLLMError(errors.New(`status 404: {"type":"model_not_found"}`)) {
+		t.Fatal("model_not_found should not retry the same provider")
+	}
+	if shouldFailoverLLMError(errors.New("404 repository record not found")) {
+		t.Fatal("generic business 404 must not trigger provider failover")
+	}
+}
+
 func TestLLMNoTextErrorRetryAndFailoverMatrix(t *testing.T) {
 	tests := []struct {
 		name         string
