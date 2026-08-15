@@ -265,6 +265,29 @@ func TestSQLiteStoreUpdatePolicyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreReleaseCacheRoundTrip(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "release-cache.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if payload, ok, err := store.LoadReleaseCache(context.Background()); err != nil || ok || len(payload) != 0 {
+		t.Fatalf("LoadReleaseCache() before save = %q, %v, %v", payload, ok, err)
+	}
+	want := []byte(`{"key":"SuInk/Diana?per_page=10","fetched_at":"2026-08-15T12:00:00Z"}`)
+	if err := store.SaveReleaseCache(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.LoadReleaseCache(context.Background())
+	if err != nil || !ok || string(got) != string(want) {
+		t.Fatalf("LoadReleaseCache() = %q, %v, %v; want %q", got, ok, err, want)
+	}
+	if err := store.SaveReleaseCache(context.Background(), []byte(`{"broken"`)); err == nil {
+		t.Fatal("SaveReleaseCache() accepted invalid JSON")
+	}
+}
+
 // TestSQLiteStorePersistsAppLogs 验证对应功能场景。
 func TestSQLiteStorePersistsAppLogs(t *testing.T) {
 	ctx := context.Background()
