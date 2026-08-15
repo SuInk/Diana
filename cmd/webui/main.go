@@ -116,6 +116,9 @@ func main() {
 	if err := systemHandler.SetUpdatePolicyStore(ctx, sqliteStore); err != nil {
 		log.Fatal(err)
 	}
+	if err := systemHandler.SetReleaseCacheStore(ctx, sqliteStore); err != nil {
+		log.Printf("load system release cache: %v", err)
+	}
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
 		CurrentVersion: buildVersion,
 		FrontendDir:    frontendDistDir(),

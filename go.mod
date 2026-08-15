@@ -19,6 +19,7 @@ require (
 	github.com/tetratelabs/wazero v1.12.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.2
 	golang.org/x/net v0.55.0
+	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.45.0
 	google.golang.org/genai v1.61.0
 	modernc.org/sqlite v1.53.0
@@ -80,7 +81,6 @@ require (
 	golang.org/x/arch v0.22.0 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
