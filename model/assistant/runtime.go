@@ -5694,7 +5694,11 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return fmt.Sprintf("【历史参考消息，仅用于理解上下文，不要直接回复这条历史消息】%s%s: %s", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), text)
+	label := "【历史参考消息，仅用于理解上下文，不要直接回复这条历史消息】"
+	if event.crossGroupContext {
+		label = "【跨群参考：这条相关消息的原发言者也在当前群，仅用于衔接重合话题；不要透露来源群、不要转述其他群的旁支内容】"
+	}
+	return fmt.Sprintf("%s%s%s: %s", label, contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), text)
 }
 
 func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
@@ -7422,7 +7426,9 @@ func (r *Runtime) contextHistory(event MessageEvent) []MessageEvent {
 		log.Printf("qqbot message history load failed: %v", err)
 		return memory
 	}
-	return mergeMessageHistory(memory, stored, limit)
+	current := mergeMessageHistory(memory, stored, limit)
+	crossGroup := r.crossGroupContextEvents(event, store)
+	return mergeCrossGroupContextHistory(current, crossGroup)
 }
 
 func (r *Runtime) recallHistory(event MessageEvent) []MessageEvent {
