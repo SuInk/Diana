@@ -214,7 +214,11 @@ func (h *QQBotHandler) saveGroupAdminConfig(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, nil)
 		return
 	}
-	cfg := sanitizeGroupConfigPayload(payload.Config, session.groupID)
+	cfg, err := h.sanitizeGroupConfigPayload(payload.Config, session.groupID)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, map[string]any{"group_id": session.groupID})
+		return
+	}
 	saved, err := h.groupConfigs.SaveGroupConfig(cfg, h.runtime.Config())
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, map[string]any{"group_id": session.groupID})
@@ -225,7 +229,7 @@ func (h *QQBotHandler) saveGroupAdminConfig(c *gin.Context) {
 		GroupID:   session.groupID,
 		UserID:    session.userID,
 		ExpiresAt: session.expiresAt,
-		Config:    saved.WithDefaults(session.groupID, h.runtime.Config()),
+		Config:    h.groupConfigForAPI(saved.WithDefaults(session.groupID, h.runtime.Config())),
 		Plugins:   assistant.RedactStates(h.runtime.Plugins().List()),
 	})
 }
@@ -240,9 +244,18 @@ func (h *QQBotHandler) groupAdminSessionFromRequest(c *gin.Context) (groupAdminS
 
 func (h *QQBotHandler) groupConfigForResponse(groupID string) assistant.GroupConfig {
 	if cfg, ok := h.groupConfigs.ConfigForGroup(groupID); ok {
-		return cfg.WithDefaults(groupID, h.runtime.Config())
+		return h.groupConfigForAPI(cfg.WithDefaults(groupID, h.runtime.Config()))
 	}
-	return assistant.DefaultGroupConfig(groupID, h.runtime.Config())
+	return h.groupConfigForAPI(assistant.DefaultGroupConfig(groupID, h.runtime.Config()))
+}
+
+func (h *QQBotHandler) groupConfigForAPI(cfg assistant.GroupConfig) assistant.GroupConfig {
+	if plugins := h.runtime.Plugins(); plugins != nil {
+		cfg.PluginSettingOverrides = plugins.SanitizeGroupSettingOverrides(cfg.PluginSettingOverrides)
+	} else {
+		cfg.PluginSettingOverrides = nil
+	}
+	return cfg
 }
 
 func (h *QQBotHandler) requireGroupAdmin(ctx context.Context, groupID string, userID string) error {
@@ -301,7 +314,14 @@ func normalizeGroupAdminIdentity(groupID string, userID string) (string, string,
 	return groupID, userID, nil
 }
 
-func sanitizeGroupConfigPayload(cfg assistant.GroupConfig, groupID string) assistant.GroupConfig {
+func (h *QQBotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, groupID string) (assistant.GroupConfig, error) {
+	// Older clients do not know this field. Omission preserves existing values;
+	// an explicit empty object from a current client resets all group overrides.
+	if cfg.PluginSettingOverrides == nil {
+		if existing, ok := h.groupConfigs.ConfigForGroup(groupID); ok {
+			cfg.PluginSettingOverrides = existing.PluginSettingOverrides
+		}
+	}
 	cfg.GroupID = strings.TrimSpace(groupID)
 	cfg.GroupTriggers = trimStringSlice(cfg.GroupTriggers)
 	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)
@@ -313,7 +333,13 @@ func sanitizeGroupConfigPayload(cfg assistant.GroupConfig, groupID string) assis
 			delete(cfg.PluginOverrides, id)
 		}
 	}
-	return cfg
+	plugins := h.runtime.Plugins()
+	normalized, err := plugins.ValidateGroupSettingOverrides(cfg.PluginSettingOverrides)
+	if err != nil {
+		return assistant.GroupConfig{}, err
+	}
+	cfg.PluginSettingOverrides = normalized
+	return cfg, nil
 }
 
 func trimStringSlice(values []string) []string {

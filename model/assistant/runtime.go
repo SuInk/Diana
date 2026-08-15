@@ -171,6 +171,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
+	case "error_replied_content_policy":
+		return "replied", "上游模型拒绝了高风险内容，机器人已发送安全错误说明", true
 	case "error_send_unconfirmed":
 		return "error", "回复生成失败；错误说明已发起发送，但没有收到可核验的发送 ACK", false
 	case "queued_passive":
@@ -183,10 +185,12 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "该用户处于临时响应限制期，消息被回复抑制规则拦截", false
 	case "ignored_ai_reply_loop":
 		return "not_replied", "识别到其他机器人的自动回复，为避免循环接续而停止回答", false
+	case "ignored_no_natural_reply":
+		return "not_replied", "自然插话的最终生成没有得到有效回复，已保持静默", false
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
 	case "ignored_stale":
-		return "not_replied", "消息已超过离线恢复窗口，为避免补发过期回复而忽略", false
+		return "not_replied", "消息早于本次离线恢复窗口（按离线时长并额外覆盖 5 分钟，最长 12 小时），为避免补发过期回复而忽略", false
 	case "ignored_policy":
 		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
 	case "superseded_proactive", "superseded_passive":
@@ -262,6 +266,7 @@ type Runtime struct {
 	memoryDone            chan struct{}
 	inboundReadyMu        sync.RWMutex
 	inboundReady          bool
+	inboundReplayCutoff   time.Time
 	inboundInit           bool
 	subagentMu            sync.Mutex
 	subagentTasks         map[string]activeSubagentTask
@@ -1043,6 +1048,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.ChatInThreshold = groupCfg.ChatInThreshold
 	cfg.ChatInChance = groupCfg.ChatInChance
 	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
+	cfg.NaturalInterjectionEnabled = copyBoolPointer(groupCfg.NaturalInterjectionEnabled)
 	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
 	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
 	if groupCfg.ReplyGate != nil {
@@ -1081,6 +1087,29 @@ func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 			continue
 		}
 		out[id] = enabled
+	}
+	return out
+}
+
+func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSettingOverrides {
+	groupCfg, ok := r.groupConfigForEvent(event)
+	if !ok || len(groupCfg.PluginSettingOverrides) == 0 {
+		return nil
+	}
+	out := make(PluginSettingOverrides, len(groupCfg.PluginSettingOverrides))
+	for id, values := range groupCfg.PluginSettingOverrides {
+		id = strings.TrimSpace(id)
+		if id == "" || len(values) == 0 {
+			continue
+		}
+		copied := make(map[string]any, len(values))
+		for key, value := range values {
+			copied[strings.TrimSpace(key)] = value
+		}
+		out[id] = copied
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -1309,6 +1338,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	reply, err := r.replyTo(replyCtx, event, text)
 	record.Duration = time.Since(start).Milliseconds()
 	if err != nil {
+		if errors.Is(err, errChatInReplyDeclined) {
+			setEventRecordOutcome(&record, "ignored_no_natural_reply")
+			r.record(record)
+			return "ignored_no_natural_reply", nil
+		}
 		if errors.Is(err, errReplySuppressedBeforeSend) {
 			setEventRecordOutcome(&record, "ignored_response_suppression")
 			r.record(record)
@@ -1374,9 +1408,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "error_send_unconfirmed", nil
 		}
-		setEventRecordOutcome(&record, "error_replied")
+		outcome := "error_replied"
+		if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
+			outcome = "error_replied_content_policy"
+		}
+		setEventRecordOutcome(&record, outcome)
 		r.record(record)
-		return "error_replied", nil
+		return outcome, nil
 	}
 	record.Reply = reply
 	r.setError("")
@@ -1781,7 +1819,11 @@ func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decis
 		decision.Substantive,
 	)
 	if decision.chatIn() {
-		metrics += fmt.Sprintf("，闲聊插话档位 %s", chatIn.Level)
+		if chatIn.Natural {
+			metrics += "，自然插话模式已开启"
+		} else {
+			metrics += fmt.Sprintf("，闲聊插话档位 %s", chatIn.Level)
+		}
 	}
 	switch {
 	case allowed && directedFollowupPromoted:
@@ -2078,7 +2120,11 @@ func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSe
 	case "bot_related":
 		return decision.Confidence >= threshold && decision.DirectedAtBot && decision.Answerable
 	case "chat_in":
-		// substantive 是这条路径唯一的内容闸门：没有它，插话会退化成附和和复读。
+		// substantive 始终是内容闸门；自然模式还要求 answerable，避免把“能接一句”
+		// 误解成可以猜测或追问。
+		if chatIn.Natural {
+			return chatIn.Enabled && decision.Answerable && decision.Substantive
+		}
 		return chatIn.Enabled && decision.Substantive && decision.Confidence >= chatIn.Threshold
 	default:
 		return false
@@ -2180,6 +2226,9 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 // 器反复给出一个运行时必然拒绝的结论。
 func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings) string {
 	prompt := proactiveReplyRouterSystemPrompt(configured)
+	if chatIn.Natural {
+		return prompt + "\n\n当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
+	}
 	if chatIn.Enabled {
 		return prompt + fmt.Sprintf("\n\n当前闲聊插话档位：%s（%s）。档位只影响运行时的放行松紧，不放宽 substantive 的判断标准：任何档位下附和、复读和寒暄都必须 substantive=false。", chatIn.Level, chatIn.Level.Label())
 	}
@@ -2423,6 +2472,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	relationship := RelationshipPolicyFor(userProfile, cfg.OwnerID, event.UserID)
 	event = r.enrichRecentTextReference(ctx, event, cleanText, replyHistory)
 	overrides := r.pluginOverridesForEvent(event)
+	settingOverrides := r.pluginSettingOverridesForEvent(event)
 	var recallEvents []MessageEvent
 	if recallHistoryQuery(cleanText) {
 		recallEvents = r.recallHistory(event)
@@ -2442,7 +2492,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	var pluginResponses []PluginResponse
-	if recallResponse, _ := r.plugins.RunOneWithOverrides(ctx, messageHistoryPluginID, pluginRequest(event, replyHistory), overrides); recallResponse != nil && recallResponse.RecallDisclosure {
+	if recallResponse, _ := r.plugins.RunOneWithGroupOverrides(ctx, messageHistoryPluginID, pluginRequest(event, replyHistory), overrides, settingOverrides); recallResponse != nil && recallResponse.RecallDisclosure {
 		// Recall facts are already complete and deterministic. Do not spend a large
 		// semantic-reference request before handing them to the answering model.
 		recallsWithDescriptions := r.enrichRecallImageDescriptions(ctx, event, recallResponse.RecallEvents)
@@ -2466,8 +2516,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			event.replyHistory = replyHistory
 			event.replyHistoryLoaded = true
 			overrides = r.pluginOverridesForEvent(event)
+			settingOverrides = r.pluginSettingOverridesForEvent(event)
 		}
-		pluginResponses = r.plugins.RunWithOverrides(ctx, pluginRequest(event, replyHistory), overrides)
+		pluginResponses = r.plugins.RunWithGroupOverrides(ctx, pluginRequest(event, replyHistory), overrides, settingOverrides)
 	}
 	pluginResponses = applyRecallReplyMode(pluginResponses, cfg.RecallReplyMode)
 	pluginResponses = applyRelationshipTaskPermissions(pluginResponses, relationship)
@@ -2505,7 +2556,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		var pluginTools []agent.Tool
 		if r.plugins != nil {
 			var pluginToolsErr error
-			pluginTools, pluginToolsErr = r.plugins.AgentToolsWithOverrides(r.pluginOverridesForEvent(event))
+			pluginTools, pluginToolsErr = r.plugins.AgentToolsWithGroupOverrides(overrides, settingOverrides)
 			if pluginToolsErr != nil {
 				return "", pluginToolsErr
 			}
@@ -2543,7 +2594,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// Plugin-contributed model tools stay usable without granting the local
 			// filesystem, shell, browser, skills, or MCP surface behind AgentEnabled.
 			agentRegistry = agent.NewToolRegistry(pluginTools...)
-			agentRegistry.Retain(relationship.allowedAgentToolNames())
+			agentRegistry.Retain(r.allowedAgentToolNamesForEvent(event, relationship))
 		}
 	}
 	if agentRegistry != nil {
@@ -2742,6 +2793,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			messages = append(messages, turnMessage)
 		}
 	}
+	semanticContext := r.semanticReferenceContext(ctx, event)
+	if sourceMessage := semanticReferenceContextMessage(semanticContext); !runtimeLLMMessageEmpty(sourceMessage) {
+		messages = append(messages, sourceMessage)
+	}
 	var contextImageURLs []string
 	if !directAgentDecision {
 		semanticImages, skippedSemanticImages, semanticImageErr := r.semanticReferenceImageURLsDetailed(ctx, event)
@@ -2749,6 +2804,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			return "", semanticImageErr
 		}
 		contextImageURLs = semanticImages
+		semanticContext.AttachedImageCount = len(semanticImages)
 		if skippedSemanticImages > 0 {
 			event.imageContextNotice = fmt.Sprintf("有 %d 张历史来源图片已失效并被跳过；不要推测这些图片的内容。", skippedSemanticImages)
 		}
@@ -2763,7 +2819,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		contextImageURLs = withoutMessageImageURLs(contextImageURLs, messages)
 	}
 	messageEvent := event
-	currentText := currentPromptText(event, cleanText)
+	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext)
 	if directAgentDecision {
 		messageEvent = eventWithoutQuotedImages(messageEvent)
 		if reference := r.agentCurrentHistoricalImageReference(ctx, event); reference != "" {
@@ -2797,6 +2853,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return "", err
 	}
 	reply, controlIntent := consumeReplyControlIntent(reply)
+	if event.chatInReply && (reply == "" || controlIntent.RefuseCurrent || controlIntent.SuppressCurrentUser) {
+		return "", errChatInReplyDeclined
+	}
 	sendBaseCtx := ctx
 	if controlIntent.RefuseCurrent || controlIntent.SuppressCurrentUser {
 		sendBaseCtx = withReplySuppressionSendGuard(ctx)
@@ -2811,7 +2870,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
-		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, ruleDecision.Rule, reply)
+		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)
 		if voiceErr != nil {
 			r.recordReplyRuleError(ctx, event, ruleDecision, voiceErr)
 		} else if strings.TrimSpace(voiceReply) != "" {
@@ -2860,7 +2919,7 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	if r.plugins == nil {
 		return "", nil
 	}
-	resp, err := r.plugins.RunOneWithOverrides(ctx, resolverPluginID, PluginRequest{
+	resp, err := r.plugins.RunOneWithGroupOverrides(ctx, resolverPluginID, PluginRequest{
 		Event:          event,
 		Text:           text,
 		OwnerID:        r.effectiveConfigForEvent(event).OwnerID,
@@ -2868,7 +2927,7 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 		LLMStore:       r.llmStore,
 		LLMModelLister: r.llmModelLister(),
 		AppLogs:        r.appLogWriter(),
-	}, r.pluginOverridesForEvent(event))
+	}, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
 	if err != nil {
 		return "", err
 	}
@@ -3220,19 +3279,33 @@ func parseReplyRuleRouteDecision(raw string, rules []ReplyRule) (replyRuleDecisi
 	return replyRuleDecision{Confidence: payload.Confidence, Reason: strings.TrimSpace(payload.Reason)}, false
 }
 
-func (r *Runtime) replyRuleVoiceCQ(ctx context.Context, rule ReplyRule, reply string) (string, error) {
+func (r *Runtime) replyRuleVoiceCQ(ctx context.Context, event MessageEvent, rule ReplyRule, reply string) (string, error) {
 	if strings.TrimSpace(reply) == "" || isStandaloneRecordReply(reply) {
 		return reply, nil
-	}
-	if r.plugins != nil && !r.plugins.EnabledWithOverrides(voiceTTSPluginID, nil) {
-		return "", fmt.Errorf("语音回复规则 %s 命中，但语音插件未启用", firstNonEmpty(rule.Name, rule.ID))
 	}
 	r.mu.RLock()
 	localMedia := r.localMedia
 	r.mu.RUnlock()
-	plugin := NewVoiceTTSPlugin(nil)
+	var plugin *VoiceTTSPlugin
+	var settings SettingValues
+	if r.plugins != nil {
+		pluginValue, effectiveSettings, enabled := r.plugins.PluginWithSettingsForGroup(
+			voiceTTSPluginID,
+			r.pluginOverridesForEvent(event),
+			r.pluginSettingOverridesForEvent(event),
+		)
+		var ok bool
+		plugin, ok = pluginValue.(*VoiceTTSPlugin)
+		if !enabled || !ok {
+			return "", fmt.Errorf("语音回复规则 %s 命中，但语音插件未启用", firstNonEmpty(rule.Name, rule.ID))
+		}
+		settings = effectiveSettings
+	}
+	if plugin == nil {
+		plugin = NewVoiceTTSPlugin(nil)
+	}
 	plugin.SetLocalMediaSharer(localMedia)
-	tool := &dianaTTSTool{plugin: plugin}
+	tool := &dianaTTSTool{plugin: plugin, settings: settings}
 	output, err := tool.Run(ctx, map[string]any{"text": reply})
 	if err != nil {
 		return "", err
@@ -4298,7 +4371,11 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return "", fmt.Errorf("qqbot: reply rule llm profile %q not found", profileID)
 		}
-		if profiles := r.roleBoundProfiles(set, group); len(profiles) > 0 {
+		profiles, roleErr := r.roleBoundProfiles(set, group)
+		if roleErr != nil {
+			return "", roleErr
+		}
+		if len(profiles) > 0 {
 			provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
 			if err != nil {
 				return "", err
@@ -4326,12 +4403,12 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 	return run(withTransientLLMRetry(client, true))
 }
 
-func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) []llm.Profile {
+func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Profile, error) {
 	r.mu.RLock()
 	roles := normalizeModelRoles(r.cfg.ModelRoles)
 	r.mu.RUnlock()
 	if len(roles) == 0 {
-		return nil
+		return nil, nil
 	}
 	key := llm.NormalizeProfileGroup(group)
 	if key == llm.GroupChat {
@@ -4342,25 +4419,58 @@ func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) []llm.Prof
 		role, ok = roles["chat"]
 	}
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if role.Group != "" {
 		profiles := set.GroupProfiles(role.Group)
-		for index := range profiles {
-			profiles[index].Config = profiles[index].Config.WithDefaults()
-			profiles[index].Config.Model = role.Model
+		if len(profiles) == 0 {
+			return nil, fmt.Errorf("qqbot: model role group %q has no configured provider", role.Group)
 		}
-		return profiles
+		candidates := make([]llm.Profile, 0, len(profiles))
+		skipped := make([]string, 0, len(profiles))
+		for _, profile := range profiles {
+			profile.Config = profile.Config.WithDefaults()
+			if supported, known := profileSupportsRoleModel(profile, role.Model); known && !supported {
+				skipped = append(skipped, profile.ID)
+				log.Printf("qqbot model role skipped incompatible profile: group=%q profile=%q model=%q", role.Group, profile.ID, role.Model)
+				continue
+			}
+			profile.Config.Model = role.Model
+			candidates = append(candidates, profile)
+		}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("qqbot: model role group %q has no provider supporting model %q (incompatible profiles: %s)", role.Group, role.Model, strings.Join(skipped, ", "))
+		}
+		return candidates, nil
 	}
 	for _, profile := range set.Profiles {
 		if profile.ID != role.ProfileID {
 			continue
 		}
 		profile.Config = profile.Config.WithDefaults()
+		if supported, known := profileSupportsRoleModel(profile, role.Model); known && !supported {
+			return nil, fmt.Errorf("qqbot: model role profile %q does not support model %q", role.ProfileID, role.Model)
+		}
 		profile.Config.Model = role.Model
-		return []llm.Profile{profile}
+		return []llm.Profile{profile}, nil
 	}
-	return nil
+	return nil, fmt.Errorf("qqbot: model role profile %q was not found", role.ProfileID)
+}
+
+func profileSupportsRoleModel(profile llm.Profile, modelID string) (supported bool, known bool) {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return true, false
+	}
+	if len(profile.Config.Models) == 0 {
+		return true, false
+	}
+	for _, model := range profile.Config.Models {
+		if strings.TrimSpace(model.ID) == modelID {
+			return true, true
+		}
+	}
+	return false, true
 }
 
 func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
@@ -4486,7 +4596,11 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		if profiles := r.roleBoundProfiles(set, llm.GroupIntent); len(profiles) > 0 {
+		profiles, roleErr := r.roleBoundProfiles(set, llm.GroupIntent)
+		if roleErr != nil {
+			return "", roleErr
+		}
+		if len(profiles) > 0 {
 			if !retryTransient && len(profiles) > 1 {
 				profiles = profiles[:1]
 			}
@@ -4564,6 +4678,12 @@ func shouldFailoverLLMError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
+		return false
+	}
+	if isModelUnavailableLLMError(err) {
+		return true
+	}
 	if errors.Is(err, llm.ErrCompletionHasNoText) {
 		return false
 	}
@@ -4595,6 +4715,9 @@ func shouldFailoverLLMError(err error) bool {
 
 func shouldRetryTransientLLMError(err error) bool {
 	if err == nil {
+		return false
+	}
+	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
 		return false
 	}
 	if errors.Is(err, llm.ErrCompletionHasNoText) || errors.Is(err, llm.ErrCompletionTruncatedNoText) {
@@ -4752,7 +4875,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n如果用户询问你会什么、能否完成某类任务、某功能由哪个插件负责，或质疑你是否具有某项能力，必须先调用 diana.capabilities 从自身能力知识库检索；不要仅凭系统提示词记忆猜测。回答时结合检索结果和当前关系权限，未解锁的能力要如实说明门槛。")
 	}
 	if agentEnabled && hasTool("diana.qq_group") {
-		builder.WriteString("\n如果用户要求读取当前群资料、群成员列表、按昵称查成员，或真正 @ 某位/多位/其余成员，必须调用 diana.qq_group 获取 OneBot v11 的实时结果；不要声称只能识别用户手动 @ 出来的成员。如果用户要求读取或修改当前群的回复频率、回复阈值、最低回复成员群等级，必须调用 diana.qq_group 的 reply_policy 或 set_reply_policy；不要口头声称已经修改，工具会校验机器人主人、群主或群管理员权限。")
+		builder.WriteString("\n如果用户要求读取当前群资料、群成员列表、按昵称查成员，或真正 @ 某位/多位/其余成员，必须调用 diana.qq_group 获取 OneBot v11 的实时结果；不要声称只能识别用户手动 @ 出来的成员。如果用户要求读取或修改当前群的回复频率、回复阈值、自然插话模式或最低回复成员群等级，必须调用 diana.qq_group 的 reply_policy 或 set_reply_policy；不要口头声称已经修改，工具会校验机器人主人、群主或群管理员权限。")
 	}
 	if agentEnabled && hasTool("diana.relationship") {
 		builder.WriteString("\n如果用户询问自己、被 @ 成员、指定 QQ 用户或群内成员的好感度、最近增减分、关系等级、互动次数或权限，必须调用 diana.relationship 获取目标数据；消息中的结构化 @ 会由工具自动识别。最终回复必须同时说明目标的好感度、关系等级、当前权限和提醒/订阅额度，不得省略工具结果中的 permissions；recent_changes 非空时还要按新到旧说明最近的增减分、时间和原因。不得拿当前发言者的关系上下文代替目标数据，也不得编造‘隐藏数据无法查询’之类限制。")
@@ -5794,6 +5917,12 @@ func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentT
 }
 
 func currentPromptText(event MessageEvent, text string) string {
+	return currentPromptTextWithSemanticContext(event, text, semanticReferenceContext{
+		RequestedSourceCount: len(eventSemanticSourceMessageIDs(event)),
+	})
+}
+
+func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourceContext semanticReferenceContext) string {
 	text = strings.TrimSpace(text)
 	hasAtSegment := eventHasSegmentType(event, "at")
 	hasReplySegment := eventHasSegmentType(event, "reply")
@@ -5809,11 +5938,19 @@ func currentPromptText(event MessageEvent, text string) string {
 	if hasReplySegment {
 		text += "\n\n当前消息包含引用/回复标记，引用关系是当前消息的一部分；如果引用内容能从历史参考中看出，可以结合它回复。"
 	}
-	if sourceCount := len(eventSemanticSourceMessageIDs(event)); sourceCount > 1 {
-		if strings.TrimSpace(event.imageContextNotice) == "" {
-			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源；随本条消息附加的来源图片按原消息从旧到新排列。必须逐张查看并综合回答，不得只分析其中一张。", sourceCount)
-		} else {
-			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源；只分析本条消息实际附加的可读取图片，并按原消息从旧到新综合回答。", sourceCount)
+	if sourceContext.RequestedSourceCount > 1 {
+		switch {
+		case sourceContext.TextSourceCount > 0 && sourceContext.AttachedImageCount > 0:
+			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，其中有 %d 条文字来源、实际附加 %d 张可读取图片；必须逐条核对文字并逐张查看图片后综合回答。", sourceContext.RequestedSourceCount, sourceContext.TextSourceCount, sourceContext.AttachedImageCount)
+		case sourceContext.AttachedImageCount > 0:
+			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，实际附加 %d 张可读取图片；图片按原消息从旧到新排列，必须逐张查看并综合回答。", sourceContext.RequestedSourceCount, sourceContext.AttachedImageCount)
+		case sourceContext.TextSourceCount > 0:
+			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，其中 %d 条包含文字；完整来源已按顺序列出，必须逐条核对并综合回答。", sourceContext.RequestedSourceCount, sourceContext.TextSourceCount)
+		default:
+			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源；必须按已提供的来源记录逐条核对，不要假定存在未附加的图片。", sourceContext.RequestedSourceCount)
+		}
+		if sourceContext.MissingSourceCount > 0 {
+			text += fmt.Sprintf("其中 %d 条来源未能从持久化历史解析，必须明确说明缺失范围，不要编造其内容。", sourceContext.MissingSourceCount)
 		}
 	}
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
@@ -7540,6 +7677,12 @@ func mergeMessageHistory(memory []MessageEvent, stored []MessageEvent, limit int
 	for _, event := range memory {
 		appendOne(event)
 	}
+	// Persisted recent history and the in-memory window can overlap in different
+	// positions. Sort the deduplicated union before trimming so old memory-only
+	// entries cannot displace newer persisted events at the tail of the slice.
+	sort.SliceStable(merged, func(left, right int) bool {
+		return merged[left].Time < merged[right].Time
+	})
 	if len(merged) > limit {
 		merged = merged[len(merged)-limit:]
 	}
@@ -8105,7 +8248,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
 		return startedAt, r.send(ctx, source, pending)
 	}
-	pluginValue, settings, enabled := r.plugins.PluginWithSettings(rssWatchPluginID, r.pluginOverridesForEvent(source))
+	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(rssWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
 	plugin, ok := pluginValue.(*RSSWatchPlugin)
 	if !enabled || !ok {
 		return startedAt, fmt.Errorf("RSS 与社交订阅插件已停用，无法检查 %s", item.FeedURL)
@@ -8291,7 +8434,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, r.send(ctx, source, pending))
 	}
-	pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, r.pluginOverridesForEvent(source))
+	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
 	plugin, ok := pluginValue.(*RepositoryWatchPlugin)
 	if !enabled || !ok {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStagePolling, fmt.Errorf("仓库更新订阅插件已停用，无法检查 %s", item.Repository))

@@ -33,6 +33,7 @@ const (
 	webuiAuthKey         = "webui_auth"
 	webuiSessionsKey     = "webui_sessions"
 	updatePolicyKey      = "system_update_policy"
+	inboundRecoveryKey   = "qqbot_inbound_recovery_checkpoint"
 )
 
 type SQLiteStore struct {
@@ -45,11 +46,6 @@ type SQLiteStore struct {
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	if path == "" {
 		path = defaultDatabasePath
-		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			if _, legacyErr := os.Stat(legacyDatabasePath); legacyErr == nil {
-				path = legacyDatabasePath
-			}
-		}
 	}
 	resolvedPath := ""
 	if path != ":memory:" && !strings.HasPrefix(path, "file:") {
@@ -57,8 +53,11 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve sqlite path: %w", err)
 		}
-		path = absPath
-		resolvedPath = absPath
+		path, err = migrateLegacyDatabasePath(absPath)
+		if err != nil {
+			return nil, err
+		}
+		resolvedPath = path
 	}
 	// 数据库目录可能不存在，先创建目录再打开 SQLite 文件。
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -84,6 +83,151 @@ PRAGMA foreign_keys = ON;
 		return nil, err
 	}
 	return store, nil
+}
+
+func migrateLegacyDatabasePath(requestedPath string) (string, error) {
+	base := filepath.Base(requestedPath)
+	canonicalName := filepath.Base(defaultDatabasePath)
+	legacyName := filepath.Base(legacyDatabasePath)
+	if base != canonicalName && base != legacyName {
+		return requestedPath, nil
+	}
+
+	directory := filepath.Dir(requestedPath)
+	canonicalPath := filepath.Join(directory, canonicalName)
+	legacyPath := filepath.Join(directory, legacyName)
+	legacyExists, err := regularPathExists(legacyPath)
+	if err != nil {
+		return "", fmt.Errorf("inspect legacy SQLite database: %w", err)
+	}
+	canonicalExists, err := regularPathExists(canonicalPath)
+	if err != nil {
+		return "", fmt.Errorf("inspect canonical SQLite database: %w", err)
+	}
+	if !legacyExists {
+		return canonicalPath, nil
+	}
+	if canonicalExists {
+		legacyHasData, err := sqliteFamilyHasData(legacyPath)
+		if err != nil {
+			return "", err
+		}
+		canonicalHasData, err := sqliteFamilyHasData(canonicalPath)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case !canonicalHasData:
+			if err := removeEmptySQLiteFamily(canonicalPath); err != nil {
+				return "", err
+			}
+		case !legacyHasData:
+			if err := removeEmptySQLiteFamily(legacyPath); err != nil {
+				return "", err
+			}
+			return canonicalPath, nil
+		default:
+			return "", fmt.Errorf("both legacy SQLite database %q and canonical database %q contain data; archive the obsolete copy before starting Diana", legacyPath, canonicalPath)
+		}
+	}
+	if err := renameSQLiteFamily(legacyPath, canonicalPath); err != nil {
+		return "", fmt.Errorf("rename legacy SQLite database to %s: %w", canonicalName, err)
+	}
+	return canonicalPath, nil
+}
+
+func sqliteFamilyHasData(databasePath string) (bool, error) {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(databasePath + suffix)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return false, err
+		}
+		if !info.Mode().IsRegular() {
+			return false, fmt.Errorf("%s is not a regular file", databasePath+suffix)
+		}
+		if info.Size() > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func removeEmptySQLiteFamily(databasePath string) error {
+	hasData, err := sqliteFamilyHasData(databasePath)
+	if err != nil {
+		return err
+	}
+	if hasData {
+		return fmt.Errorf("refusing to remove non-empty SQLite database family %s", databasePath)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(databasePath + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+func renameSQLiteFamily(sourcePath, targetPath string) error {
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	type renamedFile struct {
+		source string
+		target string
+	}
+	renamed := make([]renamedFile, 0, 3)
+	rollback := func() {
+		for index := len(renamed) - 1; index >= 0; index-- {
+			_ = os.Rename(renamed[index].target, renamed[index].source)
+		}
+	}
+	// Move the main database last so an interrupted migration never exposes a
+	// canonical main file without its existing WAL sidecars.
+	for _, suffix := range []string{"-wal", "-shm", ""} {
+		source := sourcePath + suffix
+		exists, err := regularPathExists(source)
+		if err != nil {
+			rollback()
+			return err
+		}
+		if !exists {
+			continue
+		}
+		target := targetPath + suffix
+		targetExists, err := regularPathExists(target)
+		if err != nil {
+			rollback()
+			return err
+		}
+		if targetExists {
+			rollback()
+			return fmt.Errorf("target file already exists: %s", target)
+		}
+		if err := os.Rename(source, target); err != nil {
+			rollback()
+			return err
+		}
+		renamed = append(renamed, renamedFile{source: source, target: target})
+	}
+	return nil
+}
+
+func regularPathExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("%s is not a regular file", path)
+	}
+	return true, nil
 }
 
 // Path returns the absolute path of the SQLite database opened by this store.
@@ -247,6 +391,19 @@ func (s *SQLiteStore) LoadUpdatePolicy(ctx context.Context) (updater.UpdatePolic
 // SaveUpdatePolicy persists the OTA automation policy across restarts.
 func (s *SQLiteStore) SaveUpdatePolicy(ctx context.Context, policy updater.UpdatePolicy) error {
 	return s.saveJSON(ctx, updatePolicyKey, policy)
+}
+
+// LoadInboundRecoveryCheckpoint returns the latest instant when the QQ channel
+// was known to be online. The coordinator uses it to size reconnect backfill.
+func (s *SQLiteStore) LoadInboundRecoveryCheckpoint(ctx context.Context) (time.Time, bool, error) {
+	var checkpoint time.Time
+	ok, err := s.loadJSON(ctx, inboundRecoveryKey, &checkpoint)
+	return checkpoint, ok, err
+}
+
+// SaveInboundRecoveryCheckpoint persists the online boundary across restarts.
+func (s *SQLiteStore) SaveInboundRecoveryCheckpoint(ctx context.Context, connectedAt time.Time) error {
+	return s.saveJSON(ctx, inboundRecoveryKey, connectedAt.UTC())
 }
 
 // migrate 创建或升级 SQLite 表结构。

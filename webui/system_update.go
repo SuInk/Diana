@@ -21,6 +21,8 @@ const (
 	defaultReleaseRepo  = "Diana"
 )
 
+var errInvalidUpdateVersion = errors.New("更新版本号无效")
+
 type systemUpdateCheckResponse struct {
 	DeploymentMode    string               `json:"deployment_mode"`
 	CurrentVersion    string               `json:"current_version"`
@@ -222,11 +224,16 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 	if releaseAvailable && latest.ChecksumAvailable {
 		_, packageReady = latest.asset(h.releaseUpdater.ExpectedAssetName())
 	}
+	updateAvailable, versionErr := isNewerVersion(current, latest.Tag)
+	if versionErr != nil {
+		writeError(c, http.StatusInternalServerError, versionErr)
+		return
+	}
 	c.JSON(http.StatusOK, systemUpdateCheckResponse{
 		DeploymentMode:    mode,
 		CurrentVersion:    current,
 		LatestVersion:     latest.Tag,
-		UpdateAvailable:   isNewerVersion(current, latest.Tag) || releaseApplyPending(status, gitAvailable),
+		UpdateAvailable:   updateAvailable || releaseApplyPending(status, gitAvailable),
 		UpdateSupported:   gitAvailable || packageReady,
 		IntegrityMode:     integrity,
 		ChecksumAvailable: latest.ChecksumAvailable,
@@ -391,13 +398,19 @@ func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool)
 	if err != nil {
 		return updater.Result{}, err
 	}
-	if !force && !isNewerVersion(status.VersionLabel(), latest.Tag) && !releaseApplyPending(status, gitAvailable) {
-		return updater.Result{
-			Status:       status,
-			TargetCommit: status.HeadCommit,
-			Output:       "Already at the latest stable release.",
-			At:           time.Now(),
-		}, nil
+	if !force {
+		updateAvailable, versionErr := isNewerVersion(status.VersionLabel(), latest.Tag)
+		if versionErr != nil {
+			return updater.Result{}, versionErr
+		}
+		if !updateAvailable && !releaseApplyPending(status, gitAvailable) {
+			return updater.Result{
+				Status:       status,
+				TargetCommit: status.HeadCommit,
+				Output:       "Already at the latest stable release.",
+				At:           time.Now(),
+			}, nil
+		}
 	}
 	if releaseAvailable {
 		archive, ok := latest.asset(h.releaseUpdater.ExpectedAssetName())
@@ -435,8 +448,14 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 	if !force && status.DownloadReady && status.DownloadedVersion == latest.Tag {
 		return updater.Result{Status: status, Downloaded: true, TargetCommit: latest.Tag, Output: "Release package is already downloaded and verified.", At: time.Now()}, nil
 	}
-	if !force && !isNewerVersion(status.VersionLabel(), latest.Tag) {
-		return updater.Result{Status: status, TargetCommit: status.VersionLabel(), Output: "Already at the latest stable release.", At: time.Now()}, nil
+	if !force {
+		updateAvailable, versionErr := isNewerVersion(status.VersionLabel(), latest.Tag)
+		if versionErr != nil {
+			return updater.Result{}, versionErr
+		}
+		if !updateAvailable {
+			return updater.Result{Status: status, TargetCommit: status.VersionLabel(), Output: "Already at the latest stable release.", At: time.Now()}, nil
+		}
 	}
 	archive, ok := latest.asset(h.releaseUpdater.ExpectedAssetName())
 	if !ok {
@@ -643,6 +662,10 @@ func (h *SystemUpdateHandler) writeUpdateError(c *gin.Context, action string, er
 		writeError(c, http.StatusBadRequest, errors.New("当前为 Release/Docker 部署，更新由部署环境的镜像更新器管理"))
 		return
 	}
+	if errors.Is(err, errInvalidUpdateVersion) {
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, action, err, "", nil)
+		return
+	}
 	logAndWriteError(c, h.logs, http.StatusBadRequest, action, err, "", nil)
 }
 
@@ -662,18 +685,21 @@ func latestStableRelease(releases []ReleaseEntry) ReleaseEntry {
 	return ReleaseEntry{}
 }
 
-func isNewerVersion(current, latest string) bool {
+func isNewerVersion(current, latest string) (bool, error) {
 	currentParts, currentOK := versionParts(current)
+	if !currentOK {
+		return false, fmt.Errorf("%w：当前版本 %q 无法解析，要求格式为 vX.Y.Z", errInvalidUpdateVersion, current)
+	}
 	latestParts, latestOK := versionParts(latest)
-	if !currentOK || !latestOK {
-		return false
+	if !latestOK {
+		return false, fmt.Errorf("%w：最新版本 %q 无法解析，要求格式为 vX.Y.Z", errInvalidUpdateVersion, latest)
 	}
 	for i := range currentParts {
 		if latestParts[i] != currentParts[i] {
-			return latestParts[i] > currentParts[i]
+			return latestParts[i] > currentParts[i], nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func versionParts(value string) ([3]int, bool) {

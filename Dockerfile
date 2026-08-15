@@ -8,12 +8,12 @@ COPY frontend-next/ ./
 RUN npm run build
 
 FROM golang:1.26.5-alpine AS backend
-ARG GIT_SHA=dev
+ARG BUILD_VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.buildVersion=${GIT_SHA}" -o /out/diana-webui ./cmd/webui
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o /out/diana-webui ./cmd/webui
 
 FROM alpine:3.22
 WORKDIR /app

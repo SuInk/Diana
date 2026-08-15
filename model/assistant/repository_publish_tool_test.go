@@ -200,6 +200,9 @@ func repositoryPublishTestTool(server *httptest.Server, rawMessage string, logs 
 
 func runRepositoryPublishTestTool(t *testing.T, tool *dianaRepositoryIssuesTool, input map[string]any) repositoryIssueResult {
 	t.Helper()
+	if _, present := input["user_confirmed_write"]; !present && normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state")) != "search" {
+		input["user_confirmed_write"] = true
+	}
 	raw, err := tool.Run(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
@@ -420,7 +423,7 @@ func TestRepositoryIssueCloseReopenRequireMatchingExplicitRequest(t *testing.T) 
 	defer server.Close()
 
 	closeTool := repositoryPublishTestTool(server, "请关闭 acme/demo 的 GitHub Issue #3", nil)
-	if result := runRepositoryPublishTestTool(t, closeTool, map[string]any{"operation": "reopen", "repository": "acme/demo", "number": 3}); result.FailureCode != "explicit_request_required" {
+	if result := runRepositoryPublishTestTool(t, closeTool, map[string]any{"operation": "reopen", "repository": "acme/demo", "number": 3, "user_confirmed_write": false}); result.FailureCode != "explicit_request_required" {
 		t.Fatalf("reopen under close request result=%#v", result)
 	}
 	closed := runRepositoryPublishTestTool(t, closeTool, map[string]any{"operation": "close", "repository": "acme/demo", "number": 3})
