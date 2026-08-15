@@ -11,6 +11,8 @@ import (
 
 const (
 	repositoryPublishPluginID = "official.repository-publish"
+	// RepositoryPublishPluginID is shared with authenticated WebUI actions.
+	RepositoryPublishPluginID = repositoryPublishPluginID
 
 	repositoryPublishSettingToken       = "github_token"
 	repositoryPublishSettingAllowlist   = "allowed_repositories"
