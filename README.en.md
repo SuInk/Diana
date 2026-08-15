@@ -7,8 +7,54 @@ Diana is a multi-platform AI assistant service written in Go, with an LLM compat
 ## Requirements
 
 - A client with OneBot v11 reverse WebSocket support when using the QQ adapter
-- Go `1.26.5`, Node.js `22`, and npm when installing from source
+- The one-click installer supports Linux and macOS on amd64/arm64, plus 64-bit Windows; Go, Node.js, npm, and the source tree are not required
 - Docker or Docker Compose when deploying with Docker
+- Go `1.26.5`, Node.js `22`, and npm are required only for manual source builds
+
+## One-Click Installation (Recommended)
+
+The installer detects the operating system and architecture, downloads the latest stable complete package, verifies `SHA256SUMS`, generates local administrator credentials, and starts Diana. Run the same command again to upgrade safely; the installer backs up the database and current runtime and restores them automatically if the health check fails.
+
+Linux / macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
+```
+
+After installation, open:
+
+```text
+http://127.0.0.1:18080
+```
+
+The default install directory is `~/.local/share/diana` on Linux and macOS, and `%LOCALAPPDATA%\Diana` on Windows. Generated administrator credentials are printed in the terminal and stored in `runtime.env` under the install directory. Keep this file private.
+
+Environment variables can select a version, install directory, port, or disable automatic startup. For example:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  DIANA_VERSION=v0.8.9 DIANA_INSTALL_DIR=/opt/diana DIANA_PORT=18081 sh
+```
+
+### Complete Release Packages
+
+If you do not want to use the installer, download a complete package from [GitHub Releases](https://github.com/SuInk/Diana/releases). Linux and macOS use `.tar.gz`; Windows uses `.zip`. Each package contains the backend binary, `frontend-next/dist`, and a launch script, so no separate build is required. Run `run.sh` on Unix platforms or `run.bat` on Windows.
+
+Every Release also includes `SHA256SUMS`. Verify the downloaded file before extracting or replacing Diana; forced updates never bypass this check:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+On macOS, compare `shasum -a 256 <file>` with `SHA256SUMS`. On Windows, use `Get-FileHash <file> -Algorithm SHA256`.
+
+When Diana runs from a complete Release package, the WebUI can install later stable releases directly. The backend downloads the package for the current OS and architecture, verifies it, backs up the current installation, and switches versions. A failed health check restores both the database and the old runtime. Backups and the latest result are kept under `.diana-updates` in the installation directory. Containers remain managed by their image updater, while source checkouts continue to use the Git update path.
 
 ## Docker Deployment
 
@@ -62,7 +108,9 @@ ws://127.0.0.1:18080/onebot/v11/ws
 
 If the OneBot v11 client and Diana are not on the same machine, replace `127.0.0.1` with the Diana host IP or domain.
 
-## Install From Source
+## Manual Source Build
+
+Source builds are intended for development, debugging, and custom deployments. Regular users should prefer the one-click installer or a complete Release package above.
 
 ```sh
 git clone <your-repo-url> diana
@@ -139,20 +187,6 @@ go build -o dist\diana-webui-windows-amd64.exe .\cmd\webui
 ```
 
 You can also download the `windows-amd64.exe` binary from GitHub Releases. Standalone binaries do not include frontend assets; regular users should download the matching complete release package.
-
-### Complete Release Packages
-
-Each platform also has a complete release package (`.tar.gz` for Linux/macOS and `.zip` for Windows). It contains the backend binary, the `frontend-next/dist` build, and a launch script. Extracting the package is enough to run Diana without Go, Node.js, npm, or the source tree. Run `run.sh` on Unix platforms or `run.bat` on Windows.
-
-Every Release also includes `SHA256SUMS`. Verify the downloaded file before extracting or replacing Diana; forced updates never bypass this check:
-
-```sh
-sha256sum -c SHA256SUMS --ignore-missing
-```
-
-On macOS, compare `shasum -a 256 <file>` with `SHA256SUMS`. On Windows, use `Get-FileHash <file> -Algorithm SHA256`.
-
-When Diana is running from a complete Release package, the WebUI can install later stable releases directly. The backend downloads the package for the current OS and architecture together with `SHA256SUMS`, verifies it, and extracts it into a staging directory. After the old process exits, a detached update helper backs up the SQLite database and current binary/frontend, switches the files, starts the new version, and probes `/api/health`. A failed probe restores both the database and the old version automatically. Backups and the latest result are kept under `.diana-updates` in the installation directory. Containers remain managed by their image updater, while source checkouts continue to use the Git update path.
 
 ## Quick Run
 
