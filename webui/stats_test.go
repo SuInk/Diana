@@ -186,4 +186,10 @@ func TestStatsHandlerReturnsSnapshotWithBotSummary(t *testing.T) {
 	if snapshot.Bot.PluginsEnabled != 1 || snapshot.Bot.PluginsTotal != 2 {
 		t.Fatalf("Bot plugins = %+v", snapshot.Bot)
 	}
+	if snapshot.Server.OS == "" || snapshot.Server.CPUCores < 1 {
+		t.Fatalf("Server summary = %+v", snapshot.Server)
+	}
+	if snapshot.Server.StorageTotalBytes == 0 || snapshot.Server.StorageAvailableBytes == 0 {
+		t.Fatalf("Server storage summary = %+v", snapshot.Server)
+	}
 }

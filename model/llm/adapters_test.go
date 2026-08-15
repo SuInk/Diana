@@ -85,6 +85,32 @@ func TestOpenAIResponsesInputMapsImageParts(t *testing.T) {
 	}
 }
 
+func TestAudioPartsReachMultimodalProviderPayloads(t *testing.T) {
+	message := Message{Role: RoleUser, Content: "判断语气", Parts: []ContentPart{
+		{Type: ContentPartText, Text: "判断语气"},
+		{Type: ContentPartInputAudio, AudioData: "YXVkaW8=", AudioFormat: "wav"},
+	}}
+
+	responsesInput := openAIResponsesInput([]Message{message})
+	if len(responsesInput) != 2 {
+		t.Fatalf("responses input len=%d, want text message plus audio item", len(responsesInput))
+	}
+	responseAudio, err := json.Marshal(responsesInput[1])
+	if err != nil || !strings.Contains(string(responseAudio), `"type":"input_audio"`) || !strings.Contains(string(responseAudio), `"data":"YXVkaW8="`) {
+		t.Fatalf("responses audio=%s err=%v", responseAudio, err)
+	}
+
+	chatContent, ok := openAIChatCompletionContent(message).([]openAIChatCompletionContentPart)
+	if !ok || len(chatContent) != 2 || chatContent[1].Type != "input_audio" || chatContent[1].InputAudio == nil || chatContent[1].InputAudio.Data != "YXVkaW8=" {
+		t.Fatalf("chat content=%#v", chatContent)
+	}
+
+	gemini := geminiContents([]Message{message})
+	if len(gemini) != 1 || len(gemini[0].Parts) != 2 || gemini[0].Parts[1].InlineData == nil || gemini[0].Parts[1].InlineData.MIMEType != "audio/wav" || string(gemini[0].Parts[1].InlineData.Data) != "audio" {
+		t.Fatalf("gemini audio=%#v", gemini)
+	}
+}
+
 func TestOpenAICompatibleGenerateImageUsesImageModel(t *testing.T) {
 	var gotRequest struct {
 		Model  string `json:"model"`

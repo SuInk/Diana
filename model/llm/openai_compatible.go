@@ -430,14 +430,20 @@ type openAIChatCompletionMessage struct {
 }
 
 type openAIChatCompletionContentPart struct {
-	Type     string                               `json:"type"`
-	Text     string                               `json:"text,omitempty"`
-	ImageURL *openAIChatCompletionImageURLContent `json:"image_url,omitempty"`
+	Type       string                               `json:"type"`
+	Text       string                               `json:"text,omitempty"`
+	ImageURL   *openAIChatCompletionImageURLContent `json:"image_url,omitempty"`
+	InputAudio *openAIChatCompletionInputAudio      `json:"input_audio,omitempty"`
 }
 
 type openAIChatCompletionImageURLContent struct {
 	URL    string `json:"url"`
 	Detail string `json:"detail,omitempty"`
+}
+
+type openAIChatCompletionInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
 }
 
 // generateChatCompletion 使用 Chat Completions API 生成回复。
@@ -598,6 +604,13 @@ func openAIChatCompletionContent(message Message) any {
 				parts = append(parts, openAIChatCompletionContentPart{
 					Type:     "image_url",
 					ImageURL: &openAIChatCompletionImageURLContent{URL: imageURL, Detail: detail},
+				})
+			}
+		case ContentPartInputAudio:
+			if data := strings.TrimSpace(part.AudioData); data != "" {
+				parts = append(parts, openAIChatCompletionContentPart{
+					Type:       "input_audio",
+					InputAudio: &openAIChatCompletionInputAudio{Data: data, Format: normalizedInputAudioFormat(part.AudioFormat)},
 				})
 			}
 		}
@@ -1559,11 +1572,33 @@ func openAIResponsesInput(messages []Message) responses.ResponseInputParam {
 		content := openAIResponseContent(msg)
 		if len(content) == 0 {
 			out = append(out, responses.ResponseInputItemParamOfMessage(msg.Content, openAIResponseRole(msg.Role)))
-			continue
+		} else {
+			out = append(out, responses.ResponseInputItemParamOfMessage(content, openAIResponseRole(msg.Role)))
 		}
-		out = append(out, responses.ResponseInputItemParamOfMessage(content, openAIResponseRole(msg.Role)))
+		for _, part := range msg.Parts {
+			if part.Type != ContentPartInputAudio || strings.TrimSpace(part.AudioData) == "" {
+				continue
+			}
+			raw, err := json.Marshal(map[string]any{
+				"type": "input_audio",
+				"input_audio": map[string]string{
+					"data":   strings.TrimSpace(part.AudioData),
+					"format": normalizedInputAudioFormat(part.AudioFormat),
+				},
+			})
+			if err == nil {
+				out = append(out, param.Override[responses.ResponseInputItemUnionParam](json.RawMessage(raw)))
+			}
+		}
 	}
 	return out
+}
+
+func normalizedInputAudioFormat(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "mp3") {
+		return "mp3"
+	}
+	return "wav"
 }
 
 // openAIResponseContent 将多模态消息转换为 Responses API content list。

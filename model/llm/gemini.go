@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
@@ -138,6 +139,12 @@ func geminiContent(msg Message, role genai.Role) *genai.Content {
 				continue
 			}
 			parts = append(parts, genai.NewPartFromURI(input.URL, input.MediaType))
+		case ContentPartInputAudio:
+			data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(part.AudioData))
+			if err != nil || len(data) == 0 {
+				continue
+			}
+			parts = append(parts, genai.NewPartFromBytes(data, "audio/"+normalizedInputAudioFormat(part.AudioFormat)))
 		}
 	}
 	if !hasText {

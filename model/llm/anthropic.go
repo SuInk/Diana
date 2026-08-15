@@ -42,6 +42,9 @@ func newAnthropicClient(cfg ProviderConfig, httpClient *http.Client) *anthropicC
 // Generate 调用 Anthropic 模型生成回复。
 func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
 	req = req.withDefaults(c.cfg)
+	if messagesHaveInputAudio(req.Messages) {
+		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
+	}
 	if req.MaxOutputTokens == 0 {
 		// Anthropic messages API 要求 MaxTokens，未配置时给一个保守默认值。
 		req.MaxOutputTokens = defaultAnthropicMaxTokens
@@ -85,6 +88,17 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 			TotalTokens:  resp.Usage.InputTokens + resp.Usage.OutputTokens,
 		},
 	}, nil
+}
+
+func messagesHaveInputAudio(messages []Message) bool {
+	for _, message := range messages {
+		for _, part := range message.Parts {
+			if part.Type == ContentPartInputAudio && strings.TrimSpace(part.AudioData) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // anthropicMessages 将通用消息转换为 Anthropic messages。

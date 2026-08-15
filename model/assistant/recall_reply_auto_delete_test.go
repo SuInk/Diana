@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestRecallReplyAutoDeleteConfigDefaultsDisabledAndCanBeEnabled(t *testing.T) {
@@ -94,7 +96,7 @@ func TestGroupConfigOverridesRecallReplyAutoDeletePolicy(t *testing.T) {
 	}
 }
 
-func TestRecallReplyAutoDeleteHonorsGroupPolicyInDirectPluginReply(t *testing.T) {
+func TestRecallReplyAutoDeleteHonorsGroupPolicyAfterLLMProcessing(t *testing.T) {
 	enabled := true
 	disabled := false
 	tests := []struct {
@@ -108,11 +110,14 @@ func TestRecallReplyAutoDeleteHonorsGroupPolicyInDirectPluginReply(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			channel := newRecallDeleteChannel()
+			provider := &capturingLLMProvider{reply: "LLM 已确认最近没有撤回记录。"}
 			runtime := NewRuntime(BotConfig{
 				RecallReplyMode:              RecallReplyModeOriginalForward,
 				RecallReplyAutoDeleteEnabled: &disabled,
 				RecallReplyTTLSeconds:        60,
-			}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+			}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+				return provider, nil
+			})
 			store := &testWritableGroupConfigStore{}
 			_, err := store.SaveGroupConfig(GroupConfig{
 				GroupID:                      "123",
@@ -131,8 +136,23 @@ func TestRecallReplyAutoDeleteHonorsGroupPolicyInDirectPluginReply(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(reply, "没有记录到群消息撤回") {
+			if reply != provider.reply {
 				t.Fatalf("reply = %q", reply)
+			}
+			request := provider.requestSnapshot()
+			if len(request.Messages) == 0 {
+				t.Fatal("recall response bypassed LLM")
+			}
+			var sawRecallContext bool
+			for _, message := range request.Messages {
+				if strings.Contains(message.Content, "【插件事实结果，必须完整使用】") &&
+					strings.Contains(message.Content, "记录总数=0") &&
+					message.Priority == llm.MessagePriorityPlugin {
+					sawRecallContext = true
+				}
+			}
+			if !sawRecallContext {
+				t.Fatalf("LLM request missing recall plugin context: %#v", request.Messages)
 			}
 			if tt.wantDelete {
 				select {

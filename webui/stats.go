@@ -135,19 +135,20 @@ type StatsBotSummary struct {
 
 // StatsSnapshot 是 GET /api/stats 的响应结构。
 type StatsSnapshot struct {
-	StartedAt     time.Time        `json:"started_at"`
-	UptimeSeconds int64            `json:"uptime_seconds"`
-	TotalEvents   int64            `json:"total_events"`
-	HandledEvents int64            `json:"handled_events"`
-	ErrorEvents   int64            `json:"error_events"`
-	TodayEvents   int64            `json:"today_events"`
-	TodayHandled  int64            `json:"today_handled"`
-	TodayErrors   int64            `json:"today_errors"`
-	ByKind        map[string]int64 `json:"by_kind"`
-	Hourly        []hourBucket     `json:"hourly"`
-	AvgReplyMS    int64            `json:"avg_reply_ms"`
-	LastEventAt   *time.Time       `json:"last_event_at,omitempty"`
-	Bot           StatsBotSummary  `json:"bot"`
+	StartedAt     time.Time                    `json:"started_at"`
+	UptimeSeconds int64                        `json:"uptime_seconds"`
+	TotalEvents   int64                        `json:"total_events"`
+	HandledEvents int64                        `json:"handled_events"`
+	ErrorEvents   int64                        `json:"error_events"`
+	TodayEvents   int64                        `json:"today_events"`
+	TodayHandled  int64                        `json:"today_handled"`
+	TodayErrors   int64                        `json:"today_errors"`
+	ByKind        map[string]int64             `json:"by_kind"`
+	Hourly        []hourBucket                 `json:"hourly"`
+	AvgReplyMS    int64                        `json:"avg_reply_ms"`
+	LastEventAt   *time.Time                   `json:"last_event_at,omitempty"`
+	Bot           StatsBotSummary              `json:"bot"`
+	Server        storage.DashboardServerStats `json:"server"`
 }
 
 // Snapshot 汇总当前统计数据；hourly 覆盖最近 24 小时并按时间升序补零。
@@ -200,13 +201,18 @@ func (s *StatsCollector) Snapshot() StatsSnapshot {
 
 // StatsHandler 提供 Dashboard 用的聚合统计接口。
 type StatsHandler struct {
-	collector *StatsCollector
-	runtime   statsStatusProvider
+	collector   *StatsCollector
+	runtime     statsStatusProvider
+	storagePath string
 }
 
 // NewStatsHandler 创建 StatsHandler 实例。
-func NewStatsHandler(collector *StatsCollector, runtime statsStatusProvider) *StatsHandler {
-	return &StatsHandler{collector: collector, runtime: runtime}
+func NewStatsHandler(collector *StatsCollector, runtime statsStatusProvider, storagePaths ...string) *StatsHandler {
+	storagePath := ""
+	if len(storagePaths) > 0 {
+		storagePath = storagePaths[0]
+	}
+	return &StatsHandler{collector: collector, runtime: runtime, storagePath: storagePath}
 }
 
 // Register 注册当前模块的路由或能力。
@@ -217,6 +223,7 @@ func (h *StatsHandler) Register(router gin.IRouter) {
 // stats 返回运行统计和机器人状态摘要。
 func (h *StatsHandler) stats(c *gin.Context) {
 	snapshot := h.collector.Snapshot()
+	snapshot.Server = cachedDashboardServerStats(time.Now(), h.storagePath)
 	if h.runtime != nil {
 		snapshot.Bot = summarizeBotStatus(h.runtime.Status())
 	}

@@ -35,6 +35,57 @@ func TestApplyContextBudgetPreservesLayeredPriorities(t *testing.T) {
 	}
 }
 
+func TestContextBudgetRetainsRecentHistoryAndMemoryUnderOversizedAgentPrompts(t *testing.T) {
+	messages := []Message{
+		{Role: RoleSystem, Content: "Agent 协议\n" + strings.Repeat("工具定义与执行规则。", 1800), Priority: MessagePrioritySystem},
+		{Role: RoleSystem, Content: "Diana 系统提示\n" + strings.Repeat("人格与群聊规则。", 1400), Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: "【当前发言者长期记忆】\n喜欢测试上下文保留。" + strings.Repeat("长期事实。", 500), Priority: MessagePriorityMemory},
+	}
+	for index := 1; index <= 19; index++ {
+		messages = append(messages, Message{
+			Role:     RoleUser,
+			Content:  fmt.Sprintf("【历史参考消息 %02d】用户在讨论连续话题。%s", index, strings.Repeat("上下文。", 45)),
+			Priority: MessagePriorityHistory,
+		})
+	}
+	messages = append(messages,
+		Message{Role: RoleSystem, Content: "当前运行时钟：2026-08-14 00:30:00", Priority: MessagePrioritySystem},
+		Message{Role: RoleUser, Content: "【当前需要回复的消息】继续刚才的话题。", Priority: MessagePriorityCurrent},
+	)
+
+	req := GenerateRequest{Messages: messages, MaxOutputTokens: 1024}
+	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: 16384, MaxContextTokens: 16384}
+	got := applyContextBudget(req, cfg)
+	budget := int64(16384 - 1024 - contextBudgetSafetyReserve)
+	joined := messageTextForTest(got.Messages)
+	if !strings.Contains(joined, "【当前发言者长期记忆】") {
+		t.Fatalf("structured memory was completely discarded: %s", joined)
+	}
+	historyCount := 0
+	for _, message := range got.Messages {
+		if strings.Contains(message.Content, "【历史参考消息") {
+			historyCount++
+		}
+	}
+	if historyCount < minimumRecentHistoryCount {
+		t.Fatalf("retained history = %d, want at least %d; messages = %#v", historyCount, minimumRecentHistoryCount, got.Messages)
+	}
+	if !strings.Contains(joined, "【历史参考消息 19】") {
+		t.Fatalf("most recent history was not retained: %s", joined)
+	}
+	if strings.Contains(joined, "【历史参考消息 01】") {
+		t.Fatalf("oldest history displaced newer context: %s", joined)
+	}
+	for _, want := range []string{"Agent 协议", "Diana 系统提示", "当前运行时钟", "【当前需要回复的消息】"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("budgeted messages missing %q: %s", want, joined)
+		}
+	}
+	if tokens := estimateMessagesTokens(got.Messages); tokens > budget {
+		t.Fatalf("estimated tokens = %d, budget = %d", tokens, budget)
+	}
+}
+
 func TestApplyContextBudgetCannotExceedModelWindow(t *testing.T) {
 	req := GenerateRequest{
 		MaxOutputTokens: 256,

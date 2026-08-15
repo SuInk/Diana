@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/netguard"
 )
 
@@ -32,6 +33,8 @@ const (
 	voiceSTTTranscriptKey   = "transcript"
 	voiceSTTAudioHashKey    = "audio_sha256"
 	voiceSTTBlobHashKey     = "cached_blob_sha256"
+	voiceSourceMaxParts     = 2
+	voiceSourceMaxDuration  = 60 * time.Second
 )
 
 type VoiceTranscriptRecord struct {
@@ -47,6 +50,7 @@ type VoiceTranscriptRecord struct {
 
 type VoiceTranscriptStore interface {
 	LoadVoiceBlob(context.Context, string) ([]byte, bool, error)
+	DeleteVoiceBlob(context.Context, string) error
 	LoadVoiceTranscript(context.Context, string) (VoiceTranscriptRecord, bool, error)
 	SaveVoiceTranscript(context.Context, VoiceTranscriptRecord) error
 }
@@ -147,6 +151,7 @@ func (r *Runtime) prepareIncomingVoice(ctx context.Context, event MessageEvent) 
 		segment.Data[voiceSTTAudioHashKey] = audioHash
 		segment.Data["stt_backend"] = cfg.Backend
 		segment.Data["stt_model"] = cfg.Model
+		delete(segment.Data, voiceSTTBlobHashKey)
 		r.recordVoiceSTT(ctx, event, *segment, cfg, duration, time.Since(started), cacheHit, "")
 	}
 	if event.Quoted != nil && hasRecordSegment(event.Quoted.Segments) {
@@ -170,16 +175,29 @@ func (p *VoiceSTTPlugin) transcribeSegment(ctx context.Context, r *Runtime, even
 		return "", "", 0, false, "cancelled", err
 	}
 	defer func() { <-sem }()
+	store := r.voiceTranscriptStore()
+	audioHash := firstNonEmpty(strings.TrimSpace(segment.Data[voiceSTTAudioHashKey]), strings.TrimSpace(segment.Data[voiceSTTBlobHashKey]))
+	if audioHash != "" && store != nil {
+		cacheKey := voiceSTTCacheKey(audioHash, cfg)
+		if record, found, loadErr := store.LoadVoiceTranscript(ctx, cacheKey); loadErr == nil && found {
+			if err := store.DeleteVoiceBlob(ctx, audioHash); err != nil {
+				return "", audioHash, 0, false, "cache_cleanup_failed", err
+			}
+			return record.Transcript, audioHash, time.Duration(record.DurationMS) * time.Millisecond, true, "", nil
+		}
+	}
 	body, format, err := materializeVoiceBytes(ctx, r, event, segment, cfg.MaxBytes)
 	if err != nil {
-		return "", "", 0, false, "retrieval_failed", err
+		return "", audioHash, 0, false, "retrieval_failed", err
 	}
 	hash := sha256.Sum256(body)
-	audioHash := hex.EncodeToString(hash[:])
+	audioHash = hex.EncodeToString(hash[:])
 	cacheKey := voiceSTTCacheKey(audioHash, cfg)
-	store := r.voiceTranscriptStore()
 	if store != nil {
 		if record, found, loadErr := store.LoadVoiceTranscript(ctx, cacheKey); loadErr == nil && found {
+			if err := store.DeleteVoiceBlob(ctx, audioHash); err != nil {
+				return "", audioHash, 0, false, "cache_cleanup_failed", err
+			}
 			return record.Transcript, audioHash, time.Duration(record.DurationMS) * time.Millisecond, true, "", nil
 		}
 	}
@@ -223,7 +241,9 @@ func (p *VoiceSTTPlugin) transcribeSegment(ctx context.Context, r *Runtime, even
 		return "", audioHash, duration, false, "empty_transcript", errors.New("empty transcript")
 	}
 	if store != nil {
-		_ = store.SaveVoiceTranscript(ctx, VoiceTranscriptRecord{CacheKey: cacheKey, AudioSHA256: audioHash, Backend: cfg.Backend, Model: cfg.Model, Language: cfg.Language, Transcript: transcript, DurationMS: duration.Milliseconds(), CreatedAt: time.Now().Unix()})
+		if err := store.SaveVoiceTranscript(ctx, VoiceTranscriptRecord{CacheKey: cacheKey, AudioSHA256: audioHash, Backend: cfg.Backend, Model: cfg.Model, Language: cfg.Language, Transcript: transcript, DurationMS: duration.Milliseconds(), CreatedAt: time.Now().Unix()}); err != nil {
+			return "", audioHash, duration, false, "cache_save_failed", err
+		}
 	}
 	return transcript, audioHash, duration, false, "", nil
 }
@@ -271,6 +291,131 @@ func materializeVoiceBytes(ctx context.Context, r *Runtime, event MessageEvent, 
 	}
 	body, err := downloadVoiceBytes(ctx, source, maxBytes)
 	return body, filepath.Ext(strings.Split(source, "?")[0]), err
+}
+
+func voiceCharacteristicQuestion(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"音色", "语气", "语调", "声线", "口音", "语速", "音高", "音调", "情绪", "腔调", "咬字", "发音", "停顿", "气息", "哭腔", "颤音", "声纹",
+		"声音特征", "声音听起来", "说话方式", "说话快", "说话慢", "男声", "女声", "谁说的", "谁的声音", "是不是本人",
+		"timbre", "tone of voice", "prosody", "accent", "pitch", "speaking rate", "vocal emotion", "speaker identity",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func voiceTranscriptOnlyHistory(event MessageEvent) MessageEvent {
+	event.Segments = voiceTranscriptOnlySegments(event.Segments)
+	if event.Quoted != nil {
+		quoted := *event.Quoted
+		quoted.Segments = voiceTranscriptOnlySegments(quoted.Segments)
+		event.Quoted = &quoted
+	}
+	return event
+}
+
+func voiceTranscriptOnlySegments(segments []MessageSegment) []MessageSegment {
+	out := append([]MessageSegment(nil), segments...)
+	for index := range out {
+		if out[index].Type != "record" || strings.TrimSpace(out[index].Data[voiceSTTTranscriptKey]) == "" {
+			continue
+		}
+		data := cloneSegmentData(out[index].Data)
+		for _, key := range []string{voiceSTTBlobHashKey, "cached_file", "sourcePath", "path", "url", "base64"} {
+			delete(data, key)
+		}
+		if source := strings.TrimSpace(data["file"]); strings.HasPrefix(source, "base64://") || strings.HasPrefix(source, "data:audio/") || normalizedHTTPURL(source) != "" || rawAbsoluteMediaPath(source) != "" {
+			delete(data, "file")
+		}
+		out[index].Data = data
+	}
+	return out
+}
+
+func (r *Runtime) voiceSourceAnalysisParts(ctx context.Context, event MessageEvent, text string, cfg voiceSTTConfig) ([]llm.ContentPart, string) {
+	if !voiceCharacteristicQuestion(text) {
+		return nil, ""
+	}
+	segments := append([]MessageSegment(nil), event.Segments...)
+	if event.Quoted != nil {
+		segments = append(segments, event.Quoted.Segments...)
+	}
+	voiceSegments := make([]MessageSegment, 0, voiceSourceMaxParts)
+	seen := map[string]bool{}
+	for _, segment := range segments {
+		if segment.Type != "record" {
+			continue
+		}
+		key := firstNonEmpty(segment.Data[voiceSTTAudioHashKey], segment.Data[voiceSTTBlobHashKey], segment.Data["file"], segment.Data["url"], segment.Data["path"])
+		if key != "" && seen[key] {
+			continue
+		}
+		seen[key] = true
+		voiceSegments = append(voiceSegments, segment)
+		if len(voiceSegments) == voiceSourceMaxParts {
+			break
+		}
+	}
+	if len(voiceSegments) == 0 {
+		return nil, ""
+	}
+	parts := make([]llm.ContentPart, 0, len(voiceSegments))
+	failed := 0
+	for _, segment := range voiceSegments {
+		data, err := r.voiceSourceAnalysisWAV(ctx, event, segment, cfg)
+		if err != nil {
+			failed++
+			continue
+		}
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartInputAudio, AudioData: base64.StdEncoding.EncodeToString(data), AudioFormat: "wav"})
+	}
+	if len(parts) == 0 {
+		return nil, "【语音源文件提示】当前问题涉及音色、语气等声音特征，但引用语音的源文件已不可读取。本轮只能使用持久化转写文字；不得根据文字猜测声音特征，应如实说明无法判断。"
+	}
+	notice := fmt.Sprintf("【语音源文件提示】当前问题涉及音色、语气等声音特征，已按需重新读取 %d 段源语音作为真实音频附件。必须直接听取附件后回答，不得只根据转写文字推测。", len(parts))
+	if failed > 0 {
+		notice += fmt.Sprintf("另有 %d 段源语音已失效并被跳过。", failed)
+	}
+	return parts, notice
+}
+
+func (r *Runtime) voiceSourceAnalysisWAV(ctx context.Context, event MessageEvent, segment MessageSegment, cfg voiceSTTConfig) ([]byte, error) {
+	body, format, err := materializeVoiceBytes(ctx, r, event, segment, cfg.MaxBytes)
+	if err != nil {
+		return nil, err
+	}
+	workDir, err := os.MkdirTemp("", "diana-voice-source-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(workDir)
+	if format == "" {
+		format = ".audio"
+	}
+	source := filepath.Join(workDir, "source"+format)
+	if err := os.WriteFile(source, body, 0o600); err != nil {
+		return nil, err
+	}
+	durationLimit := voiceSourceMaxDuration
+	if cfg.MaxDuration > 0 && cfg.MaxDuration < durationLimit {
+		durationLimit = cfg.MaxDuration
+	}
+	wav := filepath.Join(workDir, "analysis.wav")
+	out, err := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-t", strconv.Itoa(int(durationLimit.Seconds())), "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", wav).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg prepare voice source: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	data, err := os.ReadFile(wav)
+	if err != nil || len(data) == 0 {
+		return nil, errors.New("voice source conversion returned no audio")
+	}
+	return data, nil
 }
 
 func downloadVoiceBytes(ctx context.Context, source string, maxBytes int64) ([]byte, error) {
@@ -397,7 +542,7 @@ func (e voiceSTTProviderError) Error() string {
 }
 
 func voiceSTTErrorIsTransient(code string, err error) bool {
-	if code == "timeout" || errors.Is(err, context.DeadlineExceeded) {
+	if code == "timeout" || code == "cache_save_failed" || code == "cache_cleanup_failed" || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	var providerErr voiceSTTProviderError

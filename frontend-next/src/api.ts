@@ -930,6 +930,30 @@ export interface StatsBotSummary {
   bridge_connected: boolean;
 }
 
+export interface StatsServerSummary {
+  collected_at: string;
+  hostname?: string;
+  os: string;
+  arch: string;
+  process_id: number;
+  cpu_model?: string;
+  cpu_cores: number;
+  cpu_usage_percent?: number;
+  process_cpu_percent?: number;
+  memory_total_bytes?: number;
+  memory_used_bytes?: number;
+  memory_usage_percent?: number;
+  process_memory_bytes?: number;
+  storage_path?: string;
+  storage_total_bytes?: number;
+  storage_used_bytes?: number;
+  storage_available_bytes?: number;
+  storage_usage_percent?: number;
+  metrics_unavailable_reason?: string;
+  process_metrics_unavailable?: string;
+  storage_metrics_unavailable?: string;
+}
+
 export interface StatsSnapshot {
   started_at: string;
   uptime_seconds: number;
@@ -944,6 +968,7 @@ export interface StatsSnapshot {
   avg_reply_ms: number;
   last_event_at?: string;
   bot: StatsBotSummary;
+  server?: StatsServerSummary;
 }
 
 export interface HealthResponse {
