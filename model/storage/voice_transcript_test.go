@@ -58,3 +58,23 @@ func TestVoiceTranscriptCacheRoundTrip(t *testing.T) {
 		t.Fatalf("cache found=%v got=%#v err=%v", found, got, err)
 	}
 }
+
+func TestTranscribedVoiceEventUpsertReplacesTransportHistory(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, t.TempDir()+"/voice-history.db")
+	defer func() { _ = store.Close() }()
+	event := inboundTestEvent("voice-history", "", time.Now().Unix())
+	event.Segments = []assistant.MessageSegment{{Type: "record", Data: map[string]string{"file": "voice.amr"}}}
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", event); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	enriched := event
+	enriched.Segments = []assistant.MessageSegment{{Type: "record", Data: map[string]string{"file": "voice.amr", "transcript": "稍后仍可引用"}}}
+	if err := store.AppendMessageEvent(ctx, "group:1", enriched); err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.ListRecentMessageEvents(ctx, "group:1", 10)
+	if err != nil || len(history) != 1 || history[0].Segments[0].Data["transcript"] != "稍后仍可引用" {
+		t.Fatalf("history=%#v err=%v", history, err)
+	}
+}
