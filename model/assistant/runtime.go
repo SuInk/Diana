@@ -2413,6 +2413,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		userProfile, _ = r.loadUserMemoryProfile(ctx, event)
 	}
 	relationship := RelationshipPolicyFor(userProfile, cfg.OwnerID, event.UserID)
+	event = r.enrichRecentTextReference(ctx, event, cleanText, replyHistory)
 	overrides := r.pluginOverridesForEvent(event)
 	var recallEvents []MessageEvent
 	if recallHistoryQuery(cleanText) {
@@ -5808,6 +5809,9 @@ func currentPromptText(event MessageEvent, text string) string {
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n\n" + quoted
 	}
+	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
+		text += "\n\n" + reference
+	}
 	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0) + text
 }
 
@@ -7248,6 +7252,7 @@ func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
 	event.imageResolutionRun = false
 	event.imageLoadErr = nil
 	event.imageContextNotice = ""
+	event.recentTextReference = nil
 	event.replyHistory = nil
 	event.replyHistoryLoaded = false
 	event.userProfile = UserMemoryProfile{}
