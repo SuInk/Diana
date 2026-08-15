@@ -2393,6 +2393,14 @@ code {
   margin-left: 0;
 }
 
+/* 卡片里标签列吃掉 1fr 是为了把状态推到卡片右缘；横排整行有 1200px+，
+   同样的规则会在「运行依赖」和「3/3 已就绪」之间拉出一大段空白。
+   这里改成紧凑排列，和「N 项权限」的视觉一致。 */
+.plugin-rows .plugin-dependencies-head {
+  grid-template-columns: auto auto auto;
+  justify-content: start;
+}
+
 @media (max-width: 860px) {
   /* 窄屏横排会挤成一团，退回竖向卡片 */
   .plugin-rows > .plugin-card {
