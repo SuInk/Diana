@@ -469,3 +469,104 @@ func TestRepositoryIssueRejectsNonOwnerBeforeGitHub(t *testing.T) {
 		t.Fatalf("non-owner request reached GitHub: %#v", github.requests)
 	}
 }
+
+func TestRepositoryIssueAllowsConfiguredUserOnlyForMappedRepository(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	settings := SettingValues{
+		repositoryPublishSettingToken:      repositoryPublishTestToken,
+		repositoryPublishSettingAllowlist:  "acme/demo,acme/other",
+		repositoryPublishSettingUserAccess: "member = acme/demo\nother = acme/other",
+	}
+	tool := newDianaRepositoryIssuesTool(
+		runtime,
+		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "请在 acme/demo 创建 GitHub Issue，标题为 Delegated write"},
+		newRepositoryPublishPlugin(server.Client(), server.URL),
+		settings,
+	)
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "Delegated write",
+	})
+	if !result.OK || result.Outcome != "created" {
+		t.Fatalf("delegated result=%#v", result)
+	}
+
+	tool.event.RawMessage = "请在 acme/other 创建 GitHub Issue，标题为 Forbidden delegated write"
+	result = runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "create", "repository": "acme/other", "title": "Forbidden delegated write",
+	})
+	if result.OK || result.FailureCode != "permission_denied" {
+		t.Fatalf("cross-repository result=%#v", result)
+	}
+	if github.count(http.MethodPost) != 1 {
+		t.Fatalf("unauthorized delegated request reached GitHub: %#v", github.requests)
+	}
+}
+
+func TestRepositoryIssueDelegatedAccessAlsoRequiresGlobalAllowlist(t *testing.T) {
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:  "acme/other",
+		repositoryPublishSettingUserAccess: "member = acme/demo",
+	}
+	if code, _ := repositoryPublishValidateUserAccess("member", "acme/demo", false, settings); code != "repository_not_allowed" {
+		t.Fatalf("access code=%q, want repository_not_allowed", code)
+	}
+	if !repositoryPublishUserHasAccess("member", settings) || repositoryPublishUserHasAccess("stranger", settings) {
+		t.Fatalf("unexpected mapped access")
+	}
+}
+
+func TestRepositoryPublishUserAccessRejectsMalformedRules(t *testing.T) {
+	for _, raw := range []string{"member", "= acme/demo", "member =", "member = acme/demo="} {
+		if _, err := repositoryPublishUserAccess(raw); err == nil {
+			t.Fatalf("rule %q accepted", raw)
+		}
+	}
+}
+
+func TestRepositoryIssueGHAuthenticationModeUsesCLIcredential(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "请在 acme/demo 创建 GitHub Issue，标题为 GH auth", nil)
+	tool.settings[repositoryPublishSettingAuthMode] = repositoryPublishAuthGH
+	tool.settings[repositoryPublishSettingToken] = "wrong-token"
+	calls := 0
+	tool.plugin.ghAuthToken = func(context.Context) (string, error) {
+		calls++
+		return repositoryPublishTestToken, nil
+	}
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "GH auth",
+	})
+	if !result.OK || calls == 0 {
+		t.Fatalf("result=%#v gh calls=%d", result, calls)
+	}
+}
+
+func TestRepositoryIssueAutoAuthenticationPrefersConfiguredToken(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "请在 acme/demo 创建 GitHub Issue，标题为 Auto auth", nil)
+	tool.settings[repositoryPublishSettingAuthMode] = repositoryPublishAuthAuto
+	tool.plugin.ghAuthToken = func(context.Context) (string, error) {
+		t.Fatal("gh credential called despite configured token")
+		return "", nil
+	}
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "Auto auth",
+	})
+	if !result.OK {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestRepositoryPublishGHEnvironmentIgnoresTokenOverrides(t *testing.T) {
+	filtered := repositoryPublishGHEnvironment([]string{"PATH=/usr/bin", "GH_TOKEN=wrong", "github_token=wrong-too", "OTHER=value"})
+	if strings.Join(filtered, ",") != "PATH=/usr/bin,OTHER=value" {
+		t.Fatalf("filtered environment=%#v", filtered)
+	}
+}

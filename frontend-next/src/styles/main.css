@@ -2423,6 +2423,11 @@ code {
   line-height: 1.55;
 }
 
+.plugin-setting-textarea {
+  min-height: 104px;
+  resize: vertical;
+}
+
 .repository-issue-result,
 .repository-issue-duplicate {
   display: grid;
