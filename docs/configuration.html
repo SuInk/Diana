@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Diana 通道、模型、群聊与 Agent 配置指南。" />
+    <meta name="theme-color" content="#f7f5f6" />
+    <title>Diana 文档 - 配置</title>
+    <link rel="stylesheet" href="./styles.css?v=20260811" />
+  </head>
+  <body data-page="configuration">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">配置</p><h1>通道、模型与群聊策略</h1><p class="lead">先建立稳定的模型连接，再分配模型职责和平台通道，最后按群收敛触发、时间、用户与工具边界。</p></header>
+
+      <section class="section searchable" id="channels">
+        <div class="section-heading"><p class="eyebrow">平台接入</p><h2>QQ 与 Telegram 可以同时在线</h2></div>
+        <div class="comparison">
+          <article><h3>QQ / OneBot V11</h3><dl>
+            <div><dt>适配器</dt><dd>NapCat、Lagrange.Core、go-cqhttp</dd></div>
+            <div><dt>连接</dt><dd>适配器主动连接 Diana 的反向 WebSocket</dd></div>
+            <div><dt>地址</dt><dd><code>ws://HOST:18080/onebot/v11/ws</code></dd></div>
+            <div><dt>能力</dt><dd>群列表、CQ 码、引用、群文件、本地媒体</dd></div>
+          </dl></article>
+          <article><h3>Telegram</h3><dl>
+            <div><dt>凭据</dt><dd>BotFather 生成的 Bot Token</dd></div>
+            <div><dt>连接</dt><dd>通过 Bot API 长轮询主动出站</dd></div>
+            <div><dt>公网</dt><dd>不需要 webhook 或公网入口</dd></div>
+            <div><dt>网络</dt><dd>支持代理和自建 Bot API 地址</dd></div>
+          </dl></article>
+        </div>
+        <h3>多通道上下文</h3>
+        <p>每个机器人保存独立的平台、账号、主人、人设和模型分配。QQ 与 Telegram 同时运行时，回复始终回到来源通道。默认隔离会话与记忆；关闭隔离后可共享允许跨通道使用的长期事实，但不会改变发送路由。</p>
+      </section>
+
+      <section class="section searchable" id="models">
+        <div class="section-heading"><p class="eyebrow">模型配置</p><h2>先同步模型列表，再填写默认模型</h2></div>
+        <p>Provider 管理 Base URL、API Key 和协议。页面上方从服务端同步模型目录，下方填写或选择默认模型；机器人配置再将不同职责绑定到具体模型。</p>
+        <div class="table-wrap"><table><thead><tr><th>角色</th><th>用途</th><th>测试要求</th></tr></thead><tbody>
+          <tr><td>对话</td><td>最终回复、Agent 推理</td><td>验证中文表达、工具调用和长上下文。</td></tr>
+          <tr><td>视觉</td><td>普通图片、截图、历史图片</td><td>发送真实图片，验证小字 OCR、界面结构和多图关系。</td></tr>
+          <tr><td>意图识别</td><td>主动回复、回复抑制、关系判断</td><td>验证低延迟、稳定结构化输出和边界案例。</td></tr>
+          <tr><td>图片生成</td><td>文生图与图片编辑</td><td>必须实际生成并返回图片，不能只测文本连通性。</td></tr>
+        </tbody></table></div>
+        <div class="callout recommended"><strong>默认启用</strong><p>“识别机器人并自动不回复”默认打开，用于避免机器人之间循环对话；有明确业务需要时再关闭。</p></div>
+        <h3>上下文与超时</h3>
+        <pre><code>LLM_CONTEXT_WINDOW_TOKENS=65536
+LLM_MAX_CONTEXT_TOKENS=65536
+LLM_MAX_OUTPUT_TOKENS=2048
+LLM_TIMEOUT_MS=60000</code></pre>
+        <p>图片同样占用视觉 token。视觉质量差时，优先检查模型职责是否真的绑定了视觉模型、原图是否进入请求、图片是否因数量或 token 预算被裁剪，再考虑提高细节等级和上下文上限。</p>
+      </section>
+
+      <section class="section searchable" id="groups">
+        <div class="section-heading"><p class="eyebrow">群聊策略</p><h2>按实际加入的群逐个配置</h2></div>
+        <p>群管理会通过 OneBot <code>get_group_list</code> 同步机器人加入的全部群，而不仅是已经存在本地配置的群。连接不可用时才回退显示 SQLite 中保存的群配置。</p>
+        <div class="policy-list">
+          <div><strong>启用状态</strong><span>单独停止某个群，不影响其他群或私聊。</span></div>
+          <div><strong>触发与主动回复</strong><span>显式 @、引用、触发词和主动回复语义路由分层判断；显式 @ 优先于引用。</span></div>
+          <div><strong>回复时间</strong><span>支持同日、跨夜时间段和 IANA 时区；这属于群策略，不写入模型提示。</span></div>
+          <div><strong>屏蔽 QQ 号</strong><span>名单只影响当前群，不影响同一用户在其他群或私聊中的消息。</span></div>
+          <div><strong>人设与上下文</strong><span>群级提示、历史条数和回复长度可以覆盖机器人默认值。</span></div>
+          <div><strong>工具覆盖</strong><span>每个群可跟随全局、强制开启或强制关闭具体工具和插件。</span></div>
+        </div>
+      </section>
+
+      <section class="section searchable" id="agent">
+        <div class="section-heading"><p class="eyebrow">Agent 与工具</p><h2>模型只看到当前场景允许的能力</h2></div>
+        <p>Agent 运行器将结构化工具结果送回模型，直到得到最终回复或达到步数上限。工具注册表根据平台、关系权限、群配置和功能状态收敛。</p>
+        <div class="tool-grid">
+          <article><h3>内置联网搜索</h3><p>联网搜索自带且不可安装/卸载。提示模型在时效性、事实核验、陌生实体和推荐类问题上优先检索。</p></article>
+          <article><h3>提醒与订阅</h3><p>一次性和周期任务统一持久化，控制台展示周期、下一次执行时间、来源和状态。</p></article>
+          <article><h3>MCP 与 Skills</h3><p>按配置发现外部扩展，受工作目录、允许列表、权限和超时限制。</p></article>
+          <article><h3>图片工具</h3><p>识别、生成和编辑分别授权；图片生成使用真实生图请求做健康测试。</p></article>
+        </div>
+      </section>
+
+      <section class="section searchable" id="security">
+        <div class="section-heading"><p class="eyebrow">安全边界</p><h2>公网部署必须增加 HTTPS 和来源限制</h2></div>
+        <ul class="check-list">
+          <li>WebUI 使用登录会话保护 API，并立即更换首次管理员密码。</li>
+          <li>OneBot 单独配置 access token，反向 WebSocket 两端保持一致。</li>
+          <li><code>runtime.env</code>、模型 API Key、Bot Token 和平台 Cookie 不进入 Git。</li>
+          <li>调试模式会记录完整上下文和工具参数，只在可信环境短期开启。</li>
+          <li>公网入口放在 HTTPS 反向代理后，并限制管理端来源。</li>
+        </ul>
+      </section>
+
+      <nav class="page-nav" aria-label="文档分页"><a href="./deploy.html"><small>上一页</small><strong>← 部署</strong></a><a href="./implementation.html"><small>下一页</small><strong>实现 →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="./app.js?v=20260811" defer></script>
+  </body>
+</html>

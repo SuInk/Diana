@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Diana 一键部署、Release、Docker 与源码部署指南。" />
+    <meta name="theme-color" content="#f7f5f6" />
+    <title>Diana 文档 - 部署</title>
+    <link rel="stylesheet" href="./styles.css?v=20260811" />
+  </head>
+  <body data-page="deploy">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">部署</p><h1>把可运行服务交给安装器</h1><p class="lead">普通部署不需要自己去 Release 页面挑文件。一键脚本完成平台检测、完整包下载、SHA-256 校验、数据备份、服务安装与健康检查。</p></header>
+
+      <section class="section searchable" id="one-click">
+        <div class="section-heading"><p class="eyebrow">推荐</p><h2>一条命令安装或升级</h2></div>
+        <div class="tabs install-tabs" data-tabs-root role="tablist" aria-label="操作系统">
+          <button type="button" role="tab" aria-selected="true" data-tab="unix">Linux / macOS</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="windows">Windows</button>
+        </div>
+        <div class="tab-panel" role="tabpanel" data-panel="unix">
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
+          <p>支持 Linux amd64/arm64、macOS Intel/Apple Silicon。Linux 优先安装为 <code>systemd --user</code> 服务，macOS 安装为 LaunchAgent；环境不支持服务管理器时退回后台进程。</p>
+        </div>
+        <div class="tab-panel" role="tabpanel" data-panel="windows" hidden>
+          <pre><code>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code></pre>
+          <p>支持 Windows amd64。脚本用 PowerShell 下载 zip、校验 SHA-256、备份旧版本并在后台启动。</p>
+        </div>
+        <ol class="steps compact">
+          <li><span>1</span><div><h3>识别平台</h3><p>根据 OS 和 CPU 选择正确的完整归档，拒绝不受支持的平台。</p></div></li>
+          <li><span>2</span><div><h3>下载并校验</h3><p>同时下载 Release 的 <code>SHA256SUMS</code>，校验成功后才解压。</p></div></li>
+          <li><span>3</span><div><h3>备份再切换</h3><p>备份数据库、WAL/SHM、前端、旧二进制和启动脚本；保留已有 <code>runtime.env</code>。</p></div></li>
+          <li><span>4</span><div><h3>启动并探活</h3><p>最多等待 45 秒访问 <code>/api/health</code>。Unix 更新失败时恢复上一套运行文件。</p></div></li>
+        </ol>
+      </section>
+
+      <section class="section searchable" id="installer-options">
+        <div class="section-heading"><p class="eyebrow">参数</p><h2>通过环境变量控制安装</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>变量</th><th>默认值</th><th>用途</th></tr></thead><tbody>
+          <tr><td><code>DIANA_INSTALL_DIR</code></td><td>Unix: <code>~/.local/share/diana</code><br />Windows: <code>%LOCALAPPDATA%\Diana</code></td><td>程序、数据、日志和备份目录。</td></tr>
+          <tr><td><code>DIANA_VERSION</code></td><td><code>latest</code></td><td>指定 <code>v0.4.2</code> 形式的版本；默认解析最新稳定版。</td></tr>
+          <tr><td><code>DIANA_PORT</code></td><td><code>18080</code></td><td>首次安装写入 <code>runtime.env</code> 的 WebUI 端口。</td></tr>
+          <tr><td><code>DIANA_ADMIN_USERNAME</code></td><td><code>diana#admin</code></td><td>首次安装的管理员用户名。</td></tr>
+          <tr><td><code>DIANA_ADMIN_PASSWORD</code></td><td>随机 32 位十六进制</td><td>首次安装的管理员密码。</td></tr>
+          <tr><td><code>DIANA_START_AFTER_INSTALL</code></td><td><code>true</code></td><td>设为 <code>false</code> 时只安装和校验，不启动。</td></tr>
+        </tbody></table></div>
+        <pre><code># 安装固定版本到自定义目录
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  DIANA_VERSION=v0.4.2 \
+  DIANA_INSTALL_DIR=/opt/diana-user \
+  DIANA_PORT=18081 \
+  sh</code></pre>
+        <div class="callout warn"><strong>关于管道变量</strong><p>用 <code>curl | sh</code> 时，变量要放在 <code>sh</code> 一侧：<code>curl ... | DIANA_VERSION=v0.4.2 sh</code>。也可以先下载脚本再带变量执行。</p></div>
+      </section>
+
+      <section class="section searchable" id="manual-release">
+        <div class="section-heading"><p class="eyebrow">备用方式</p><h2>手工安装完整 Release 包</h2></div>
+        <p>离线环境或需要人工变更审批时，可手动下载匹配平台的 <code>.tar.gz</code>/<code>.zip</code> 和同一 Release 的 <code>SHA256SUMS</code>。普通运行不要只下载裸二进制，因为裸二进制不包含 WebUI。</p>
+        <pre><code># macOS Apple Silicon 示例
+shasum -a 256 diana-webui-darwin-arm64.tar.gz
+tar -xzf diana-webui-darwin-arm64.tar.gz
+cd diana-webui-darwin-arm64
+./run.sh</code></pre>
+      </section>
+
+      <section class="section searchable" id="docker">
+        <div class="section-heading"><p class="eyebrow">Docker</p><h2>容器部署</h2></div>
+        <div class="callout"><strong>持久化</strong><p>必须挂载 <code>/app/data</code> 和 <code>/app/logs</code>，否则重建容器会丢失 SQLite 配置与凭据。</p></div>
+        <pre><code>git clone https://github.com/SuInk/Diana.git
+cd Diana
+docker compose up -d --build
+docker compose logs -f diana</code></pre>
+        <p>NapCat 与 Diana 分容器时，反向 WebSocket 使用容器服务名，例如 <code>ws://diana:18080/onebot/v11/ws</code>，不能写只指向 NapCat 容器自身的 <code>127.0.0.1</code>。</p>
+      </section>
+
+      <section class="section searchable" id="source">
+        <div class="section-heading"><p class="eyebrow">开发部署</p><h2>从源码构建</h2></div>
+        <div class="requirements"><span>Go 1.26.5</span><span>Node.js 22</span><span>npm</span><span>Git</span></div>
+        <pre><code>git clone https://github.com/SuInk/Diana.git
+cd Diana
+go mod download
+cd frontend-next && npm ci && npm run build && cd ..
+mkdir -p dist
+go build -trimpath -o dist/diana-webui ./cmd/webui
+FRONTEND_DIST=frontend-next/dist ./dist/diana-webui</code></pre>
+      </section>
+
+      <section class="section searchable" id="first-run">
+        <div class="section-heading"><p class="eyebrow">首次登录</p><h2>先验证模型，再连接通道</h2></div>
+        <ol class="steps compact">
+          <li><span>1</span><div><h3>登录控制台</h3><p>打开 <code>http://127.0.0.1:18080</code>，一键安装凭据位于终端输出和权限为 600 的 <code>runtime.env</code>。</p></div></li>
+          <li><span>2</span><div><h3>配置模型</h3><p>先同步模型列表，再填写默认模型；对话、视觉、意图识别和生图分别测试。</p></div></li>
+          <li><span>3</span><div><h3>连接机器人</h3><p>配置 QQ OneBot 或 Telegram，可同时启用，并选择通道间上下文是否隔离。</p></div></li>
+          <li><span>4</span><div><h3>检查事件</h3><p>发送测试消息，在事件明细确认决策原因、调用结果与 token 统计。</p></div></li>
+        </ol>
+      </section>
+
+      <nav class="page-nav" aria-label="文档分页"><a href="./index.html"><small>上一页</small><strong>← 概览</strong></a><a href="./configuration.html"><small>下一页</small><strong>配置 →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="./app.js?v=20260811" defer></script>
+  </body>
+</html>
