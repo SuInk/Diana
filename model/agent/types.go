@@ -76,6 +76,7 @@ type Response struct {
 	ModelTurns   int          `json:"model_turns,omitempty"`
 	FinishReason string       `json:"finish_reason,omitempty"`
 	DurationMS   int64        `json:"duration_ms,omitempty"`
+	Claims       []ClaimTrace `json:"claims,omitempty"`
 }
 
 type Step struct {
