@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -395,5 +396,204 @@ func TestRuntimeRepositoryWatchRetriesStoredSummaryWithoutCallingLLMAgain(t *tes
 	defer github.mu.Unlock()
 	if github.commitCalls != 1 {
 		t.Fatalf("commit checks=%d, want 1", github.commitCalls)
+	}
+}
+
+func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		commits:     []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
+		failCommits: true,
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	store := &stubReminderStore{items: []Reminder{{
+		ID: "watch-threshold", Kind: ReminderKindRepositoryWatch, OwnerID: "owner", GroupID: "123", UserID: "owner",
+		Repository: "acme/demo", WatchCommits: true, LastCommitSHA: "base-sha",
+		TriggerAt: time.Now().Add(-time.Minute), IntervalSeconds: 1800, CreatedAt: time.Now().Add(-time.Hour),
+	}}}
+	channel := &recordingChannel{}
+	newRuntime := func() *Runtime {
+		return NewRuntime(BotConfig{}, channel, NewPluginManager(plugin), nil, store, nil, nil)
+	}
+	runtime := newRuntime()
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		store.items[0].TriggerAt = time.Now().Add(-time.Second)
+		runtime.fireDueReminders(context.Background())
+		if got := store.items[0].ConsecutiveFailures; got != attempt {
+			t.Fatalf("attempt %d failures=%d item=%#v", attempt, got, store.items[0])
+		}
+		channel.mu.Lock()
+		sent := append([]OutgoingMessage(nil), channel.sent...)
+		channel.mu.Unlock()
+		wantNotices := 0
+		if attempt == repositoryWatchFailureAlertThreshold {
+			wantNotices = 1
+		}
+		if len(sent) != wantNotices {
+			t.Fatalf("attempt %d notices=%#v", attempt, sent)
+		}
+	}
+	alerted := store.items[0]
+	if alerted.FailureAlertedAt.IsZero() || alerted.LastFailureStage != repositoryWatchFailureStagePolling || alerted.LastErrorFingerprint == "" {
+		t.Fatalf("alert state=%#v", alerted)
+	}
+	channel.mu.Lock()
+	alertText := channel.sent[0].Text
+	channel.mu.Unlock()
+	for _, want := range []string{"acme/demo", "连续 3 次", "仓库更新检查", "自动重试"} {
+		if !strings.Contains(alertText, want) {
+			t.Fatalf("alert %q missing %q", alertText, want)
+		}
+	}
+	if strings.Contains(alertText, "commit endpoint unavailable") {
+		t.Fatalf("alert leaked upstream detail: %q", alertText)
+	}
+
+	// Simulate a process restart with the same persisted reminder state.
+	runtime = newRuntime()
+	store.items[0].TriggerAt = time.Now().Add(-time.Second)
+	runtime.fireDueReminders(context.Background())
+	channel.mu.Lock()
+	noticesAfterRestart := len(channel.sent)
+	channel.mu.Unlock()
+	if noticesAfterRestart != 1 || store.items[0].ConsecutiveFailures != 4 {
+		t.Fatalf("restart duplicated alert: notices=%d item=%#v", noticesAfterRestart, store.items[0])
+	}
+
+	github.mu.Lock()
+	github.failCommits = false
+	github.mu.Unlock()
+	store.items[0].TriggerAt = time.Now().Add(-time.Second)
+	runtime.fireDueReminders(context.Background())
+	recovered := store.items[0]
+	channel.mu.Lock()
+	recoveryMessages := append([]OutgoingMessage(nil), channel.sent...)
+	channel.mu.Unlock()
+	if len(recoveryMessages) != 2 || !strings.Contains(recoveryMessages[1].Text, "已恢复") {
+		t.Fatalf("recovery messages=%#v", recoveryMessages)
+	}
+	if recovered.ConsecutiveFailures != 0 || recovered.LastError != "" || recovered.LastFailureStage != "" || recovered.LastErrorFingerprint != "" || !recovered.FailureAlertedAt.IsZero() || recovered.RecoveryNoticePending {
+		t.Fatalf("recovered state=%#v", recovered)
+	}
+
+	github.mu.Lock()
+	github.failCommits = true
+	github.mu.Unlock()
+	store.items[0].TriggerAt = time.Now().Add(-time.Second)
+	runtime.fireDueReminders(context.Background())
+	if store.items[0].ConsecutiveFailures != 1 {
+		t.Fatalf("new failure sequence=%#v", store.items[0])
+	}
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.sent) != 2 {
+		t.Fatalf("first failure after recovery sent alert: %#v", channel.sent)
+	}
+}
+
+func TestRepositoryWatchFailureStateIsIsolatedAndFingerprintAware(t *testing.T) {
+	now := time.Now()
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "watch-a", Kind: ReminderKindRepositoryWatch, Repository: "acme/a", GroupID: "1", IntervalSeconds: 60},
+		{ID: "watch-b", Kind: ReminderKindRepositoryWatch, Repository: "acme/b", GroupID: "2", IntervalSeconds: 60},
+	}}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, store, nil, nil)
+	pollFailure := repositoryWatchStageFailure(repositoryWatchFailureStagePolling, errors.New("GitHub API 503"))
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, err := runtime.finishRecurringReminder("watch-a", now, pollFailure); err != nil {
+			t.Fatal(err)
+		}
+		if attempt < 2 {
+			if _, err := runtime.finishRecurringReminder("watch-b", now, pollFailure); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if store.items[0].ConsecutiveFailures != 3 || store.items[1].ConsecutiveFailures != 2 {
+		t.Fatalf("subscription counters leaked: %#v", store.items)
+	}
+	if !repositoryWatchFailureShouldAlert(store.items[0]) || repositoryWatchFailureShouldAlert(store.items[1]) {
+		t.Fatalf("threshold state=%#v", store.items)
+	}
+	acknowledged, err := runtime.acknowledgeRepositoryWatchFailureAlert("watch-a", store.items[0].LastErrorFingerprint, now)
+	if err != nil || acknowledged.FailureAlertedAt.IsZero() {
+		t.Fatalf("acknowledge=%#v err=%v", acknowledged, err)
+	}
+
+	summaryFailure := repositoryWatchStageFailure(repositoryWatchFailureStageSummary, errors.New("GitHub API 503"))
+	changed, err := runtime.finishRecurringReminder("watch-a", now, summaryFailure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.ConsecutiveFailures != 1 || changed.LastFailureStage != repositoryWatchFailureStageSummary || !changed.FailureAlertedAt.IsZero() || repositoryWatchFailureShouldAlert(changed) {
+		t.Fatalf("changed fingerprint did not start a new sequence: %#v", changed)
+	}
+}
+
+func TestRepositoryWatchFailureAlertRequiresAcknowledgementAndRedactsGroupMessage(t *testing.T) {
+	now := time.Now()
+	store := &stubReminderStore{items: []Reminder{{
+		ID: "watch-redaction", Kind: ReminderKindRepositoryWatch, OwnerID: "owner", GroupID: "123", UserID: "owner",
+		Repository: "acme/private", IntervalSeconds: 60,
+	}}}
+	channel := &scriptedChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, store, nil, nil)
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+	raw := `request https://private.example/repo?signature=secret Authorization: Bearer owner-token`
+	failure := repositoryWatchStageFailure(repositoryWatchFailureStagePolling, errors.New(raw))
+	for attempt := 0; attempt < repositoryWatchFailureAlertThreshold; attempt++ {
+		if _, err := runtime.finishRecurringReminder("watch-redaction", now, failure); err != nil {
+			t.Fatal(err)
+		}
+	}
+	item := store.items[0]
+	if err := runtime.notifyRepositoryWatchFailure(context.Background(), item, failure); err == nil {
+		t.Fatal("unacknowledged channel unexpectedly acknowledged alert")
+	}
+	if !store.items[0].FailureAlertedAt.IsZero() {
+		t.Fatalf("unacknowledged alert persisted: %#v", store.items[0])
+	}
+	channel.mu.Lock()
+	if len(channel.sent) != 1 {
+		channel.mu.Unlock()
+		t.Fatalf("alert attempts=%#v", channel.sent)
+	}
+	groupText := channel.sent[0].Text
+	channel.mu.Unlock()
+	for _, secret := range []string{"private.example", "signature=secret", "owner-token", "Authorization"} {
+		if strings.Contains(groupText, secret) {
+			t.Fatalf("group alert leaked %q: %q", secret, groupText)
+		}
+	}
+	runtime.recordReminderRetryAttempt(item, failure, errors.New("alert unacknowledged"), true)
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 || !strings.Contains(entries[0].Detail, "owner-token") {
+		t.Fatalf("restricted log did not retain diagnostic: %#v", entries)
+	}
+}
+
+func TestRepositoryWatchRecoveryNoticeStaysPendingUntilAcknowledged(t *testing.T) {
+	now := time.Now()
+	store := &stubReminderStore{items: []Reminder{{
+		ID: "watch-recovery-pending", Kind: ReminderKindRepositoryWatch, Repository: "acme/demo",
+		IntervalSeconds: 60, FailureAlertedAt: now.Add(-time.Minute),
+	}}}
+	runtime := NewRuntime(BotConfig{}, &scriptedChannel{}, NewPluginManager(), nil, store, nil, nil)
+	first, err := runtime.finishRecurringReminder("watch-recovery-pending", now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.RecoveryNoticePending || !first.FailureAlertedAt.IsZero() {
+		t.Fatalf("first recovery state=%#v", first)
+	}
+	second, err := runtime.finishRecurringReminder("watch-recovery-pending", now.Add(time.Minute), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.RecoveryNoticePending {
+		t.Fatalf("pending recovery notice was lost before acknowledgement: %#v", second)
 	}
 }
