@@ -19,7 +19,7 @@ func TestInboundMediaTurnMediaFirstClaimsOnceAndSupersedes(t *testing.T) {
 	if err != nil || !inserted {
 		t.Fatalf("enqueue media id=%q inserted=%v err=%v", mediaID, inserted, err)
 	}
-	question := inboundQuestionEvent("question-1", "user-1", now.Add(5*time.Second).Unix(), "图片里的设备是什么？")
+	question := inboundQuestionEvent("question-1", "user-1", now.Add(5*time.Second).Unix(), "这是什么？")
 	questionID, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", question, assistant.InboundPriorityTriggered)
 	if err != nil || !inserted {
 		t.Fatalf("enqueue question id=%q inserted=%v err=%v", questionID, inserted, err)
@@ -45,6 +45,31 @@ func TestInboundMediaTurnMediaFirstClaimsOnceAndSupersedes(t *testing.T) {
 	}
 	if status != inboundStatusDone || outcome != "superseded_media_turn" {
 		t.Fatalf("media status=%q outcome=%q", status, outcome)
+	}
+}
+
+func TestInboundMediaTurnFollowupNeedsNoMediaKeyword(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "structural-trigger.db"))
+	defer func() { _ = store.Close() }()
+	now := time.Now()
+	media := inboundMediaEvent("voice-1", "user-1", now.Unix())
+	media.Segments = []assistant.MessageSegment{{Type: "record", Data: map[string]string{"file": "voice.amr"}}}
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", media); err != nil || !inserted {
+		t.Fatalf("enqueue voice inserted=%v err=%v", inserted, err)
+	}
+	followup := inboundQuestionEvent("followup-1", "user-1", now.Add(time.Second).Unix(), "帮我看看")
+	followupID, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", followup)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue followup inserted=%v err=%v", inserted, err)
+	}
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker", time.Now().Add(time.Minute))
+	if err != nil || !ok || item.ID != followupID {
+		t.Fatalf("claim item=%#v ok=%v err=%v", item, ok, err)
+	}
+	sources, err := store.ClaimInboundMediaForTurn(ctx, followupID, "group:1", followup, assistant.InboundMediaMergeWindow)
+	if err != nil || len(sources) != 1 || sources[0].Segments[0].Type != "record" {
+		t.Fatalf("sources=%#v err=%v", sources, err)
 	}
 }
 
