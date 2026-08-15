@@ -146,7 +146,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	return `搜索和管理显式选定 GitHub 仓库的 Issues，仅主人可用。operation=search 是只读操作：{"operation":"search","repository":"owner/repo","query":"关键词","state":"open|closed|all"}。写操作的当前用户消息必须明确写出同一个 owner/repo；update/comment/close/reopen 还必须点名同一 Issue 编号。create 传 title/body 及用户明确要求的 labels/assignees/milestone/operation_id；update 只传当前消息点名且包含新值的 title/body/labels/assignees/milestone；comment 的 body 必须来自当前消息；close 或 reopen 传 number。create 会查找 open 和近期 closed Issue；发现候选时返回 requires_confirmation、候选和 confirmation_token。先向用户展示候选，只有下一条用户消息点名候选编号并明确坚持另行新建时，才把原 token 连同 allow_duplicate=true 传回。不要把完整聊天记录、运行时 ID、凭据或私密原文放进 title/body/comment。写入只允许插件设置白名单中的精确 owner/repo，并返回结构化结果。`
+	return `搜索和管理显式选定 GitHub 仓库的 Issues，仅主人或插件设置中获授权的用户可用。operation=search 是只读操作：{"operation":"search","repository":"owner/repo","query":"关键词","state":"open|closed|all"}。写操作的当前用户消息必须明确写出同一个 owner/repo；update/comment/close/reopen 还必须点名同一 Issue 编号。create 传 title/body 及用户明确要求的 labels/assignees/milestone/operation_id；update 只传当前消息点名且包含新值的 title/body/labels/assignees/milestone；comment 的 body 必须来自当前消息；close 或 reopen 传 number。create 会查找 open 和近期 closed Issue；发现候选时返回 requires_confirmation、候选和 confirmation_token。先向用户展示候选，只有下一条用户消息点名候选编号并明确坚持另行新建时，才把原 token 连同 allow_duplicate=true 传回。不要把完整聊天记录、运行时 ID、凭据或私密原文放进 title/body/comment。写入只允许插件设置白名单及用户授权范围内的精确 owner/repo，并返回结构化结果。`
 }
 
 func (t *dianaRepositoryIssuesTool) ExplicitUserRequestKind(input map[string]any) string {
@@ -178,14 +178,15 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	if t == nil || t.runtime == nil || t.plugin == nil || t.plugin.client == nil {
 		return t.finish(ctx, result.fail("plugin_unavailable", "仓库 Issue 发布插件未正确配置。"))
 	}
-	if !t.runtime.relationshipPolicy(ctx, t.event).Owner {
-		return t.finish(ctx, result.fail("permission_denied", "只有主人可以搜索或写入仓库 Issue。"))
-	}
 	repository, err := normalizeGitHubRepository(configToolString(input, "repository"))
 	if err != nil {
 		return t.finish(ctx, result.fail("invalid_repository", err.Error()))
 	}
 	result.Repository = repository
+	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
+	if code, message := repositoryPublishValidateUserAccess(t.event.UserID, repository, owner, t.settings); code != "" {
+		return t.finish(ctx, result.fail(code, message))
+	}
 	if operation != "create" && operation != "search" {
 		result.RequestedNumber = repositoryIssueNumber(input)
 	}
@@ -751,8 +752,9 @@ func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositor
 }
 
 func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string) (string, string) {
-	if strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")) == "" {
-		return "token_required", "写入 Issue 前必须在“仓库 Issue 发布”插件中配置独立 GitHub Issues Token。"
+	mode := repositoryPublishAuthMode(t.settings)
+	if mode == repositoryPublishAuthToken && strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")) == "" {
+		return "token_required", "当前认证方式要求配置独立 GitHub Issues Token。"
 	}
 	allowed, err := repositoryPublishAllowlist(t.settings.String(repositoryPublishSettingAllowlist, ""))
 	if err != nil {
@@ -762,6 +764,65 @@ func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string) (stri
 		return "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的精确写入白名单中。"
 	}
 	return "", ""
+}
+
+func repositoryPublishAuthMode(settings SettingValues) string {
+	switch strings.ToLower(strings.TrimSpace(settings.String(repositoryPublishSettingAuthMode, repositoryPublishAuthToken))) {
+	case repositoryPublishAuthGH:
+		return repositoryPublishAuthGH
+	case repositoryPublishAuthAuto:
+		return repositoryPublishAuthAuto
+	default:
+		return repositoryPublishAuthToken
+	}
+}
+
+func repositoryPublishValidateUserAccess(userID, repository string, owner bool, settings SettingValues) (string, string) {
+	if owner {
+		return "", ""
+	}
+	access, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	if err != nil {
+		return "invalid_user_repository_access", "用户仓库授权配置无效，请按每行“用户ID = owner/repo, owner/repo”填写。"
+	}
+	if !access[strings.TrimSpace(userID)][strings.ToLower(repository)] {
+		return "permission_denied", "当前用户未获授权操作该 GitHub 仓库。"
+	}
+	allowed, err := repositoryPublishAllowlist(settings.String(repositoryPublishSettingAllowlist, ""))
+	if err != nil {
+		return "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
+	}
+	if !allowed[strings.ToLower(repository)] {
+		return "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的全局白名单中。"
+	}
+	return "", ""
+}
+
+func repositoryPublishUserHasAccess(userID string, settings SettingValues) bool {
+	access, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	return err == nil && len(access[strings.TrimSpace(userID)]) > 0
+}
+
+func repositoryPublishUserAccess(raw string) (map[string]map[string]bool, error) {
+	access := map[string]map[string]bool{}
+	for _, line := range strings.FieldsFunc(raw, func(char rune) bool { return char == '\n' || char == '\r' || char == ';' || char == '；' }) {
+		userID, repositories, ok := strings.Cut(line, "=")
+		userID = strings.TrimSpace(userID)
+		if !ok || userID == "" || strings.Contains(repositories, "=") {
+			return nil, fmt.Errorf("invalid user repository rule")
+		}
+		if access[userID] == nil {
+			access[userID] = map[string]bool{}
+		}
+		for _, item := range strings.Split(repositories, ",") {
+			repository, err := normalizeGitHubRepository(item)
+			if err != nil {
+				return nil, err
+			}
+			access[userID][strings.ToLower(repository)] = true
+		}
+	}
+	return access, nil
 }
 
 func repositoryPublishAllowlist(raw string) (map[string]bool, error) {
@@ -1670,7 +1731,11 @@ func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, metho
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")); token != "" {
+	token, credentialErr := t.repositoryPublishCredential(requestCtx)
+	if credentialErr != nil {
+		return nil, credentialErr
+	}
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := t.plugin.client.Do(req)
@@ -1739,6 +1804,34 @@ func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, metho
 		return headers, &repositoryIssueAPIError{Code: "invalid_response", Status: resp.StatusCode, Uncertain: method == http.MethodPost}
 	}
 	return headers, nil
+}
+
+func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Context) (string, *repositoryIssueAPIError) {
+	token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, ""))
+	mode := repositoryPublishAuthMode(t.settings)
+	if mode == repositoryPublishAuthToken || mode == repositoryPublishAuthAuto && token != "" {
+		if token == "" {
+			return "", &repositoryIssueAPIError{Code: "token_required"}
+		}
+		return token, nil
+	}
+	if t.plugin == nil || t.plugin.ghAuthToken == nil {
+		return "", &repositoryIssueAPIError{Code: "gh_unavailable"}
+	}
+	token, err := t.plugin.ghAuthToken(ctx)
+	if err == nil && strings.TrimSpace(token) != "" {
+		return strings.TrimSpace(token), nil
+	}
+	if errors.Is(err, errRepositoryPublishGHUnavailable) {
+		return "", &repositoryIssueAPIError{Code: "gh_unavailable"}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "", &repositoryIssueAPIError{Code: "timeout"}
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return "", &repositoryIssueAPIError{Code: "cancelled"}
+	}
+	return "", &repositoryIssueAPIError{Code: "gh_auth_required"}
 }
 
 func repositoryIssueTransportError(ctx context.Context, err error, uncertain bool) *repositoryIssueAPIError {
@@ -1810,13 +1903,19 @@ func validRepositoryIssueCanonicalURL(raw, repository, resource string, number i
 func repositoryIssueFailureMessage(code string) string {
 	switch code {
 	case "unauthorized":
-		return "GitHub Issues Token 无效或已过期。"
+		return "当前 GitHub 凭据无效或已过期。"
 	case "permission_denied":
-		return "GitHub 拒绝了操作；请确认 Token 对目标仓库具有 Issues 所需权限。"
+		return "GitHub 拒绝了操作；请确认当前凭据对目标仓库具有 Issues 所需权限。"
+	case "token_required":
+		return "当前认证方式要求配置独立 GitHub Issues Token。"
+	case "gh_unavailable":
+		return "当前系统未安装 gh，无法使用 GitHub CLI 认证。"
+	case "gh_auth_required":
+		return "gh 尚未登录 github.com 或登录凭据不可用，请先执行 gh auth login。"
 	case "rate_limited":
 		return "GitHub API 已限流，请稍后再试。"
 	case "not_found":
-		return "仓库或 Issue 不存在，或 Token 无权访问。"
+		return "仓库或 Issue 不存在，或当前凭据无权访问。"
 	case "not_an_issue":
 		return "目标编号属于 Pull Request；本工具只允许修改 Issue。"
 	case "gone":

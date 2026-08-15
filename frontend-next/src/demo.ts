@@ -69,6 +69,19 @@ let plugins: PluginState[] = [
   { manifest: { id: "official.onebot-v11", name: "OneBot v11 协议技能", version: "0.1.0", description: "提供 QQ 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {
     manifest: {
+      id: "official.repository-publish", name: "仓库 Issue 发布", version: "0.2.0", description: "允许主人及指定用户搜索或写入各自获授权的 GitHub 仓库 Issues；支持独立 Token 与 GitHub CLI 认证。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
+      settings: [
+        { key: "github_auth_mode", label: "GitHub 认证方式", description: "可使用独立 Token 或当前系统的 gh 登录。", type: "select", default: "token", options: [{ value: "token", label: "独立 Token" }, { value: "gh", label: "GitHub CLI (gh)" }, { value: "auto", label: "自动选择" }] },
+        { key: "github_token", label: "GitHub Issues Token", description: "在 Token 或自动模式下使用，保存后不回显。", type: "string", default: "", secret: true },
+        { key: "allowed_repositories", label: "允许写入的仓库", description: "精确填写 owner/repo，多个仓库用逗号或换行分隔。", type: "string", default: "" },
+        { key: "user_repository_access", label: "用户仓库授权", description: "每行填写：用户ID = owner/repo, owner/repo。", type: "string", default: "" },
+        { key: "timeout_seconds", label: "GitHub 请求超时", type: "number", default: 20, min: 5, max: 60, unit: "秒" }
+      ]
+    },
+    installed: true, enabled: true, settings: { allowed_repositories: "SuInk/Diana" }, secrets_configured: { github_token: true }
+  },
+  {
+    manifest: {
       id: "official.repository-watch", name: "仓库更新订阅", version: "0.1.0", description: "监控公开或私有 GitHub 仓库的 Commit 与 Release，经 LLM 总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
       settings: [
         { key: "github_token", label: "GitHub Token", description: "用于私有仓库和提高 API 额度。", type: "string", default: "", secret: true },
@@ -244,6 +257,22 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/plugins/dependencies") return json({ resolver: dependencies });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
   if (path === "/api/assistant/plugins") return json(plugins);
+  if (path === "/api/assistant/plugins/repository-publish/issues" && method === "POST") {
+    const repository = String(body.repository ?? "SuInk/Diana");
+    const title = String(body.title ?? "演示 Issue");
+    if (!body.allow_duplicate && title.includes("重复")) {
+      return json({
+        ok: false, outcome: "duplicate_candidate", repository, failure_code: "duplicate_candidate",
+        message: "发现标题相似的现有 Issue，请确认是否仍要新建。", requires_confirmation: true,
+        confirmation_token: "demo-confirmation-token",
+        candidates: [{ number: 24, title: "修复重复消息处理", state: "open", url: "https://github.com/SuInk/Diana/issues/24" }]
+      });
+    }
+    return json({
+      ok: true, outcome: "created", repository, message: "GitHub 已创建 Issue。",
+      issue: { number: 49, title, state: "open", url: "https://github.com/SuInk/Diana/issues/49" }
+    }, 201);
+  }
   const pluginMatch = path.match(/^\/api\/assistant\/plugins\/([^/]+)\/(install|uninstall|enabled|settings)$/);
   if (pluginMatch) {
     const plugin = plugins.find((item) => item.manifest.id === decodeURIComponent(pluginMatch[1]));

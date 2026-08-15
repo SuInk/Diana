@@ -138,7 +138,7 @@
     <Modal
       v-if="settingsTarget"
       :title="`${settingsTarget.manifest.name} · 设置`"
-      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === rssWatchPluginID"
+      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID"
       @close="closeSettings"
     >
       <div v-if="settingsTarget.manifest.id === repositoryWatchPluginID" class="plugin-settings-section-head">
@@ -224,11 +224,22 @@
                 {{ clearSecrets.includes(spec.key) ? "取消清除" : "清除" }}
               </button>
             </div>
+            <textarea
+              v-else-if="isMultilineSetting(spec.key)"
+              :id="`setting-${spec.key}`"
+              v-model="settingsForm[spec.key]"
+              class="textarea plugin-setting-textarea"
+              rows="4"
+            ></textarea>
             <input v-else :id="`setting-${spec.key}`" v-model="settingsForm[spec.key]" class="input" type="text" />
             <span v-if="spec.description" class="hint">{{ spec.description }}</span>
           </template>
         </div>
       </div>
+      <RepositoryIssueCreator
+        v-if="settingsTarget.manifest.id === repositoryPublishPluginID"
+        :prepare-access="saveSettingsForSubscription"
+      />
       <RepositoryWatchManager
         v-if="settingsTarget.manifest.id === repositoryWatchPluginID"
         :prepare-access="saveSettingsForSubscription"
@@ -269,6 +280,7 @@ import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
+import RepositoryIssueCreator from "../components/RepositoryIssueCreator.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import { navigate, viewQuery } from "../router";
@@ -279,6 +291,7 @@ const busyID = ref("");
 
 const resolverPluginID = "official.nonebot-plugin-resolver-go";
 const repositoryWatchPluginID = "official.repository-watch";
+const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
 const dependencies = ref<ResolverDependency[]>([]);
 const dependenciesLoading = ref(false);
@@ -297,6 +310,10 @@ const repositoryWatchTokenConfigured = computed(() => {
   if (clearSecrets.value.includes(key)) return false;
   return String(settingsForm.value[key] ?? "").trim() !== "" || secretConfigured(key);
 });
+
+function isMultilineSetting(key: string): boolean {
+  return key === "allowed_repositories" || key === "user_repository_access";
+}
 
 function upsert(state: PluginState): void {
   const index = plugins.value.findIndex((plugin) => plugin.manifest.id === state.manifest.id);
