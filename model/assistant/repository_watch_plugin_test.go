@@ -359,7 +359,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 	if item.LastCommitSHA != "new-sha" || item.LastReleaseTag != "v1.1.0" || item.PendingDelivery != "" || item.ConsecutiveFailures != 0 {
 		t.Fatalf("item=%#v", item)
 	}
-	if len(provider.requests) != 1 || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") || !requestMessagesContain(provider.requests[0].Messages, "本群限定的自然人设") || requestMessagesContain(provider.requests[0].Messages, "watch-2") {
+	if len(provider.requests) != 1 || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") || !requestMessagesContain(provider.requests[0].Messages, "本群限定的自然人设") || !requestMessagesContain(provider.requests[0].Messages, "自然反应或评价") || !requestMessagesContain(provider.requests[0].Messages, "不要无依据吹捧") || requestMessagesContain(provider.requests[0].Messages, "watch-2") {
 		t.Fatalf("requests=%#v", provider.requests)
 	}
 }
