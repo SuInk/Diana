@@ -24,6 +24,9 @@ const (
 	// concurrently. Serialize the small session set to keep backfill complete.
 	historyFetchWorkers = 1
 	historyPageSize     = 100
+	// InboundMediaMergeWindow gives adjacent media and an explicit textual
+	// follow-up enough time to become one durable turn before either can reply.
+	InboundMediaMergeWindow = 15 * time.Second
 )
 
 const (
@@ -31,6 +34,7 @@ const (
 	InboundPriorityResolver  = 60
 	InboundPriorityReply     = 80
 	InboundPriorityTriggered = 100
+	InboundPriorityMediaTurn = 110
 )
 
 // InboundReplayWindow bounds how long a persisted or backfilled message may
@@ -63,6 +67,32 @@ type InboundEventStore interface {
 	PendingInboundCount(ctx context.Context) (int, error)
 	GroupHistoryWatermark(ctx context.Context, groupID string) (int64, bool, error)
 	ListHistorySessions(ctx context.Context) ([]HistorySession, error)
+}
+
+// InboundMediaTurnStore atomically assigns adjacent media to a textual turn
+// and exposes the supersession marker to the final outbound send guard.
+type InboundMediaTurnStore interface {
+	ClaimInboundMediaForTurn(ctx context.Context, currentID, session string, event MessageEvent, window time.Duration) ([]MessageEvent, error)
+	InboundEventSuperseded(ctx context.Context, event MessageEvent) (string, bool, error)
+}
+
+var errInboundTurnSuperseded = errors.New("qqbot: inbound turn superseded by correlated follow-up")
+
+func (r *Runtime) inboundTurnSuperseded(ctx context.Context, event MessageEvent) (string, bool) {
+	r.mu.RLock()
+	store, _ := r.inboundStore.(InboundMediaTurnStore)
+	r.mu.RUnlock()
+	if store == nil {
+		return "", false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	turnID, superseded, err := store.InboundEventSuperseded(checkCtx, event)
+	if err != nil {
+		log.Printf("qqbot inbound supersession check failed: %v", err)
+		return "", false
+	}
+	return turnID, superseded
 }
 
 // InboundEventAuditStore lets the runtime persist the human-readable routing
@@ -279,7 +309,23 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 		return "ignored_stale", nil
 	}
 	ctx = r.withDebugTraceContext(ctx, item.Event)
-	event, text, handled, outcome := r.prepareMessageEvent(ctx, item.Event)
+	event := item.Event
+	r.mu.RLock()
+	mediaTurnStore, _ := r.inboundStore.(InboundMediaTurnStore)
+	r.mu.RUnlock()
+	if mediaTurnStore != nil && EventExplicitlyReferencesMedia(event) && !EventHasDirectMediaReference(event) {
+		claimCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		sources, err := mediaTurnStore.ClaimInboundMediaForTurn(claimCtx, item.ID, item.Session, event, InboundMediaMergeWindow)
+		cancel()
+		if err != nil {
+			return "", fmt.Errorf("claim inbound media turn: %w", err)
+		}
+		if len(sources) > 0 {
+			event = attachInboundTurnMedia(event, sources)
+			r.recordInboundMediaTurn(ctx, item.ID, event, sources)
+		}
+	}
+	event, text, handled, outcome := r.prepareMessageEvent(ctx, event)
 	if !handled {
 		return outcome, nil
 	}
@@ -301,10 +347,144 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	return r.replyAndRecord(ctx, event, text, outcome)
 }
 
+// EventExplicitlyReferencesMedia is intentionally content-generic. It only
+// detects references to media types and never carries product/domain aliases.
+func EventExplicitlyReferencesMedia(event MessageEvent) bool {
+	text := strings.ToLower(strings.TrimSpace(firstNonEmpty(PlainText(event.Segments), event.RawMessage)))
+	if text == "" {
+		return false
+	}
+	for _, token := range []string{
+		"图片", "图里", "图中", "这张图", "那张图", "截图", "照片", "相片", "视频", "录像", "文件", "附件",
+		"image", "photo", "picture", "screenshot", "video", "recording", "file", "attachment",
+	} {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// EventHasDirectMediaReference covers media carried by this message or by an
+// explicit quote. These events do not need the merge-window delay.
+func EventHasDirectMediaReference(event MessageEvent) bool {
+	return eventHasDirectReferenceContent(event) || quotedMessageHasReferenceContent(event.Quoted)
+}
+
+// EventIsMergeableMediaOnly reports media messages that have no independent
+// textual intent and therefore benefit from the short turn-assembly hold.
+func EventIsMergeableMediaOnly(event MessageEvent) bool {
+	hasMedia := false
+	for _, segment := range event.Segments {
+		switch segment.Type {
+		case "image", "video", "file":
+			hasMedia = true
+		case "text":
+			if strings.TrimSpace(segment.Data["text"]) != "" {
+				return false
+			}
+		}
+	}
+	return hasMedia
+}
+
+func attachInboundTurnMedia(event MessageEvent, sources []MessageEvent) MessageEvent {
+	sourceIDs := eventSemanticSourceMessageIDs(event)
+	seen := make(map[string]bool)
+	for _, segment := range event.Segments {
+		seen[segmentMediaTurnKey(segment)] = true
+	}
+	for _, source := range sources {
+		sourceID := strings.TrimSpace(source.MessageID)
+		if sourceID != "" {
+			sourceIDs = appendUniqueStrings(sourceIDs, sourceID)
+		}
+		for _, segment := range source.Segments {
+			switch segment.Type {
+			case "image", "video", "file":
+			default:
+				continue
+			}
+			segment.Data = cloneSegmentData(segment.Data)
+			if sourceID != "" {
+				segment.Data["source_message_id"] = sourceID
+			}
+			key := segmentMediaTurnKey(segment)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			event.Segments = append(event.Segments, segment)
+		}
+	}
+	setEventSemanticSourceMessageIDs(&event, sourceIDs)
+	return event
+}
+
+func segmentMediaTurnKey(segment MessageSegment) string {
+	return segment.Type + "|" + firstNonEmpty(
+		strings.TrimSpace(segment.Data["cached_file"]),
+		strings.TrimSpace(segment.Data["url"]),
+		strings.TrimSpace(segment.Data["file"]),
+		strings.TrimSpace(segment.Data["path"]),
+		strings.TrimSpace(segment.Data["source_message_id"]),
+	)
+}
+
+func (r *Runtime) recordInboundMediaTurn(ctx context.Context, turnID string, event MessageEvent, sources []MessageEvent) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	mediaIDs := make([]string, 0, len(sources))
+	for _, source := range sources {
+		mediaIDs = appendUniqueStrings(mediaIDs, strings.TrimSpace(source.MessageID))
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind:    applog.KindOperation,
+		Level:   applog.LevelInfo,
+		Action:  "qqbot.inbound.media_turn_assembled",
+		Message: "已合并相邻媒体与后续问题",
+		Actor:   qqEventActor(event),
+		Target:  strings.TrimSpace(event.MessageID),
+		Metadata: map[string]any{
+			"turn_id":              turnID,
+			"trigger_message_id":   event.MessageID,
+			"media_message_ids":    mediaIDs,
+			"association_method":   "nearest_unconsumed_same_sender",
+			"superseded_media_job": true,
+		},
+	})
+}
+
+func (r *Runtime) recordInboundMediaSupersededBeforeSend(ctx context.Context, event MessageEvent, turnID string) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind:    applog.KindOperation,
+		Level:   applog.LevelInfo,
+		Action:  "qqbot.inbound.media_turn_superseded",
+		Message: "媒体任务已由关联问题接管，取消独立发送",
+		Actor:   qqEventActor(event),
+		Target:  strings.TrimSpace(event.MessageID),
+		Metadata: map[string]any{
+			"turn_id":               turnID,
+			"media_message_id":      event.MessageID,
+			"superseded_state":      "before_send",
+			"outbound_acknowledged": false,
+		},
+	})
+}
+
 func (r *Runtime) inboundPriority(event MessageEvent) int {
 	text := PlainText(event.Segments)
 	if text == "" {
 		text = event.RawMessage
+	}
+	if EventExplicitlyReferencesMedia(event) && !EventHasDirectMediaReference(event) && !r.shouldHandleResolver(event, text) {
+		return InboundPriorityMediaTurn
 	}
 	if r.shouldHandleChat(event, text) {
 		return InboundPriorityTriggered
