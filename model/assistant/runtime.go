@@ -248,6 +248,7 @@ type Runtime struct {
 	relationshipEvalSem   chan struct{}
 	relationshipEvalWG    sync.WaitGroup
 	history               map[string][]MessageEvent
+	semanticRefCache      map[string]SemanticReferenceCacheRecord
 	chatInLastReplyAt     map[string]time.Time
 	contextSummaries      map[string]string
 	recent                []EventRecord
@@ -414,6 +415,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		proactiveRouteSem:     make(chan struct{}, proactiveReplyRouteConcurrency),
 		relationshipEvalSem:   make(chan struct{}, relationshipEvalConcurrency),
 		history:               map[string][]MessageEvent{},
+		semanticRefCache:      map[string]SemanticReferenceCacheRecord{},
 		chatInLastReplyAt:     map[string]time.Time{},
 		contextSummaries:      map[string]string{},
 		activeReminders:       map[string]struct{}{},
