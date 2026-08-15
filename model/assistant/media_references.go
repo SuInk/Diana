@@ -43,7 +43,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 	out := append([]MessageSegment(nil), segments...)
 	var failures []error
 	for index, segment := range out {
-		if segment.Type != "image" && !videoFileSegment(segment) {
+		if segment.Type != "image" && segment.Type != "record" && !videoFileSegment(segment) {
 			continue
 		}
 		if segment.Type == "image" {
@@ -62,6 +62,14 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 			file := imageFileToken(data)
 			if file != "" && resolvedImageSourceCount(data) == 0 {
 				requests = append(requests, oneBotFileResolveRequest{action: "get_image", params: map[string]any{"file": file}})
+			}
+			for _, sourceMessageID := range sourceMessageIDs {
+				requests = append(requests, oneBotFileResolveRequest{action: "get_msg", params: map[string]any{"message_id": oneBotMessageIDParam(sourceMessageID)}})
+			}
+		} else if segment.Type == "record" {
+			token := firstNonEmpty(data["file"], data["file_id"], data["id"])
+			if token != "" {
+				requests = append(requests, oneBotFileResolveRequest{action: "get_record", params: map[string]any{"file": token, "out_format": "wav"}})
 			}
 			for _, sourceMessageID := range sourceMessageIDs {
 				requests = append(requests, oneBotFileResolveRequest{action: "get_msg", params: map[string]any{"message_id": oneBotMessageIDParam(sourceMessageID)}})
@@ -147,7 +155,13 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 			if token == "" {
 				continue
 			}
-			resolved, resolveErr := r.callOneBotAPIForEvent(callCtx, event, "get_file", map[string]any{"file": token})
+			action := "get_file"
+			params := map[string]any{"file": token}
+			if segment.Type == "record" {
+				action = "get_record"
+				params["out_format"] = "wav"
+			}
+			resolved, resolveErr := r.callOneBotAPIForEvent(callCtx, event, action, params)
 			if resolveErr != nil {
 				continue
 			}
@@ -245,7 +259,7 @@ func mediaFileTokenFromOneBotValue(value any, target MessageSegment) string {
 		}
 	case map[string]any:
 		segmentType := strings.ToLower(strings.TrimSpace(stringFromAny(item["type"])))
-		if segmentType == "image" || segmentType == "video" || segmentType == "file" {
+		if segmentType == "image" || segmentType == "video" || segmentType == "file" || segmentType == "record" {
 			if segmentData, ok := item["data"].(map[string]any); ok {
 				if mediaSegmentMatchesAny(target, segmentData) {
 					return imageFileTokenAny(segmentData)
@@ -266,7 +280,7 @@ func mediaFileTokenFromOneBotValue(value any, target MessageSegment) string {
 }
 
 func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (string, string) {
-	if segmentType := strings.ToLower(strings.TrimSpace(stringFromAny(data["type"]))); segmentType == "image" || segmentType == "video" || segmentType == "file" {
+	if segmentType := strings.ToLower(strings.TrimSpace(stringFromAny(data["type"]))); segmentType == "image" || segmentType == "video" || segmentType == "file" || segmentType == "record" {
 		if segmentData, ok := data["data"].(map[string]any); ok {
 			if !mediaSegmentMatchesAny(target, segmentData) {
 				return "", ""
@@ -278,6 +292,9 @@ func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (stri
 	if target.Type == "image" {
 		keys = []string{"sourcePath", "source_path", "filePath", "file_path", "localPath", "local_path", "path", "file", "url", "download_url", "file_url"}
 	}
+	if target.Type == "record" {
+		keys = []string{"path", "file_path", "file", "url", "download_url", "file_url"}
+	}
 	for _, key := range keys {
 		value := strings.TrimSpace(strings.TrimPrefix(stringFromAny(data[key]), "file://"))
 		if normalizedHTTPURL(value) != "" {
@@ -287,7 +304,7 @@ func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (stri
 			return value, "path"
 		}
 	}
-	if target.Type == "image" {
+	if target.Type == "image" || target.Type == "record" {
 		if encoded := strings.TrimSpace(stringFromAny(data["base64"])); encoded != "" {
 			return "base64://" + encoded, ""
 		}

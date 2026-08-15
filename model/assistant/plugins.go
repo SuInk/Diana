@@ -212,6 +212,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewOneBotV11SkillPlugin(),
 		NewSandboxedBrowserRenderPlugin(),
 		NewVoiceTTSPlugin(nil),
+		NewVoiceSTTPlugin(nil),
 		NewWebSearchPlugin(nil),
 		NewRepositoryWatchPlugin(nil),
 		NewRepositoryPublishPlugin(nil),
