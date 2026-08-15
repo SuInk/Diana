@@ -325,6 +325,12 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 			r.recordInboundMediaTurn(ctx, item.ID, event, sources)
 		}
 	}
+	// Transcription happens in the durable worker, never on the OneBot ingest
+	// goroutine. Only explicitly transient failures requeue this same event.
+	event = r.prepareIncomingVoice(ctx, event)
+	if event.voiceSTTTransient && event.voiceSTTErr != nil {
+		return "", event.voiceSTTErr
+	}
 	event, text, handled, outcome := r.prepareMessageEvent(ctx, event)
 	if !handled {
 		return outcome, nil
@@ -355,8 +361,8 @@ func EventExplicitlyReferencesMedia(event MessageEvent) bool {
 		return false
 	}
 	for _, token := range []string{
-		"图片", "图里", "图中", "这张图", "那张图", "截图", "照片", "相片", "视频", "录像", "文件", "附件",
-		"image", "photo", "picture", "screenshot", "video", "recording", "file", "attachment",
+		"图片", "图里", "图中", "这张图", "那张图", "截图", "照片", "相片", "视频", "录像", "语音", "音频", "文件", "附件",
+		"image", "photo", "picture", "screenshot", "video", "recording", "voice", "audio", "file", "attachment",
 	} {
 		if strings.Contains(text, token) {
 			return true
@@ -377,7 +383,7 @@ func EventIsMergeableMediaOnly(event MessageEvent) bool {
 	hasMedia := false
 	for _, segment := range event.Segments {
 		switch segment.Type {
-		case "image", "video", "file":
+		case "image", "video", "file", "record":
 			hasMedia = true
 		case "text":
 			if strings.TrimSpace(segment.Data["text"]) != "" {
@@ -401,7 +407,7 @@ func attachInboundTurnMedia(event MessageEvent, sources []MessageEvent) MessageE
 		}
 		for _, segment := range source.Segments {
 			switch segment.Type {
-			case "image", "video", "file":
+			case "image", "video", "file", "record":
 			default:
 				continue
 			}

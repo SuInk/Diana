@@ -41,6 +41,10 @@ func (s *SQLiteStore) EnqueueInboundEvent(ctx context.Context, session string, e
 	if event.Time <= 0 {
 		event.Time = now.Unix()
 	}
+	event, err = s.persistInboundVoiceBlobs(ctx, event)
+	if err != nil {
+		return "", false, err
+	}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return "", false, fmt.Errorf("encode inbound event: %w", err)
