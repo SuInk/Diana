@@ -38,16 +38,26 @@
         </div>
 
         <div class="cluster plugin-card-badges">
-          <span v-if="plugin.manifest.official" class="badge accent">官方</span>
-          <span v-if="plugin.manifest.built_in" class="badge">内置</span>
+          <!-- 官方 + 内置目前是全部插件的共同属性，逐张重复没有信息量；
+               只在例外时标注，第三方插件出现后这里才会有内容。 -->
+          <span v-if="!plugin.manifest.official" class="badge warn">第三方</span>
+          <span v-if="!plugin.manifest.built_in" class="badge">可卸载</span>
           <span class="badge mono">v{{ plugin.manifest.version }}</span>
         </div>
 
-        <p class="plugin-card-desc">{{ plugin.manifest.description }}</p>
+        <p class="plugin-card-desc" :title="plugin.manifest.description">{{ plugin.manifest.description }}</p>
 
-        <div v-if="plugin.manifest.permissions?.length" class="cluster plugin-card-perms">
-          <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
-        </div>
+        <!-- 权限一张卡有 2~6 条，全部铺开会占两三行，是整页最抢眼的噪音；
+             默认折叠成一行，需要审查时再展开。 -->
+        <details v-if="plugin.manifest.permissions?.length" class="plugin-perms">
+          <summary class="plugin-perms-head">
+            <span>{{ plugin.manifest.permissions.length }} 项权限</span>
+            <ChevronDown class="plugin-perms-chevron" :size="14" aria-hidden="true" />
+          </summary>
+          <div class="cluster plugin-card-perms">
+            <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
+          </div>
+        </details>
 
         <details v-if="plugin.manifest.id === resolverPluginID" class="plugin-dependencies">
           <summary class="plugin-dependencies-head">
@@ -95,7 +105,7 @@
           </div>
         </details>
 
-        <footer class="plugin-card-foot">
+        <footer v-if="showFooter(plugin)" class="plugin-card-foot">
           <template v-if="plugin.installed">
             <button
               v-if="plugin.manifest.settings?.length"
@@ -107,7 +117,6 @@
               <SlidersHorizontal :size="14" aria-hidden="true" />
               设置
             </button>
-            <span v-else class="plugin-card-hint">无可配置项</span>
             <button
               v-if="!plugin.manifest.built_in"
               class="btn small ghost danger"
@@ -398,6 +407,15 @@ function openSettings(plugin: PluginState): void {
   settingsForm.value = form;
   clearSecrets.value = [];
   settingsTarget.value = plugin;
+}
+
+// 没有任何可点的动作时不渲染 footer，省掉一整行「无可配置项」。
+// 内置插件卸载不了，没有设置项就真的没事可做。
+function showFooter(plugin: PluginState): boolean {
+  if (!plugin.installed) {
+    return true;
+  }
+  return (plugin.manifest.settings?.length ?? 0) > 0 || !plugin.manifest.built_in;
 }
 
 function secretConfigured(key: string): boolean {

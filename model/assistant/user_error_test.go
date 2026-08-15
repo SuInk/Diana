@@ -23,10 +23,27 @@ func TestPublicQQErrorMessageHidesRelayURL(t *testing.T) {
 func TestPublicQQErrorMessageDoesNotExposeUnknownProviderError(t *testing.T) {
 	err := errors.New(`request to https://relay.private.example/v1 failed: Authorization: Bearer example-secret-token`)
 	got := publicQQErrorMessage(err)
-	if got != "请求处理失败，请稍后重试。" {
-		t.Fatalf("message = %q", got)
+	for _, useful := range []string{"request to", "failed", "[REDACTED_URL]", "[REDACTED]"} {
+		if !strings.Contains(got, useful) {
+			t.Fatalf("message %q does not contain diagnostic %q", got, useful)
+		}
 	}
-	for _, leaked := range []string{"relay.private.example", "/v1", "example-secret-token", "Authorization", "request to"} {
+	for _, leaked := range []string{"relay.private.example", "/v1", "example-secret-token"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("message leaked %q: %q", leaked, got)
+		}
+	}
+}
+
+func TestPublicQQErrorMessageRedactsBareHostCredentialsAndLocalPath(t *testing.T) {
+	raw := `provider relay.private.example failed: api_key=test-value file=/private/config.json`
+	got := publicQQErrorMessage(errors.New(raw))
+	for _, useful := range []string{"provider", "failed", "[REDACTED_HOST]", "api_key=[REDACTED]", "[REDACTED_PATH]"} {
+		if !strings.Contains(got, useful) {
+			t.Fatalf("message %q does not contain %q", got, useful)
+		}
+	}
+	for _, leaked := range []string{"relay.private.example", "test-value", "/private/config.json"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("message leaked %q: %q", leaked, got)
 		}
@@ -92,6 +109,30 @@ func TestReplyAndRecordSendsSanitizedErrorButKeepsDiagnostic(t *testing.T) {
 	}
 	if !strings.Contains(runtime.Status().LastError, "relay.private.example") {
 		t.Fatalf("diagnostic error was unexpectedly redacted: %q", runtime.Status().LastError)
+	}
+}
+
+func TestReplyAndRecordClassifiesContentPolicyAndSanitizesDiagnostic(t *testing.T) {
+	channel := &recordingChannel{}
+	rawErr := errors.New(`content_policy_violation from https://relay.private.example/v1: Authorization: Bearer owner-token`)
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return failingLLMProvider{err: rawErr}, nil
+	})
+	outcome, err := runtime.replyAndRecord(context.Background(), MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "policy-error"}, "测试", "replied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "error_replied_content_policy" || len(channel.sent) != 1 {
+		t.Fatalf("outcome=%q sent=%#v", outcome, channel.sent)
+	}
+	message := channel.sent[0].Text
+	if !strings.Contains(message, "content_policy_violation") || !strings.Contains(message, "[REDACTED_URL]") {
+		t.Fatalf("message lost useful diagnostic: %q", message)
+	}
+	for _, leaked := range []string{"relay.private.example", "owner-token"} {
+		if strings.Contains(message, leaked) {
+			t.Fatalf("message leaked %q: %q", leaked, message)
+		}
 	}
 }
 

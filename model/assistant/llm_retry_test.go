@@ -179,6 +179,50 @@ func TestRoutingEmptyOutputRetriesThenFailsOverWithinGroup(t *testing.T) {
 	}
 }
 
+func TestContentPolicyRejectionKeepsOriginalErrorAndStopsRetry(t *testing.T) {
+	raw := "Request was rejected because it was considered high risk by the content policy"
+	provider := &fixedRetryErrorProvider{err: errors.New(raw)}
+	_, err := generateWithTransientRetryPolicy(context.Background(), provider, llm.GenerateRequest{}, true, time.Second, 3, 0)
+	if err == nil || err.Error() != raw {
+		t.Fatalf("err=%v, want original error %q", err, raw)
+	}
+	if !errors.Is(err, errContentPolicyRejection) {
+		t.Fatalf("err=%v is not classified as a content policy rejection", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("calls=%d, want one request without retry", provider.calls)
+	}
+	if shouldFailoverLLMError(err) {
+		t.Fatal("content policy rejection must not fail over to another provider")
+	}
+}
+
+func TestContentPolicyRejectionStopsProfileFailover(t *testing.T) {
+	first := &fixedRetryErrorProvider{err: errors.New("content_policy_violation: blocked")}
+	second := &capturingLLMProvider{reply: "unexpected"}
+	secondFactoryCalls := 0
+	provider, err := newProfileFailoverLLMProvider([]llm.Profile{
+		{ID: "first", Group: "default", Config: llm.ProviderConfig{Model: "model-a"}},
+		{ID: "second", Group: "default", Config: llm.ProviderConfig{Model: "model-a"}},
+	}, func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		if cfg.Model == "model-a" && first.calls == 0 {
+			return first, nil
+		}
+		secondFactoryCalls++
+		return second, nil
+	}, true, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Generate(context.Background(), llm.GenerateRequest{})
+	if !errors.Is(err, errContentPolicyRejection) {
+		t.Fatalf("err=%v, want content policy rejection", err)
+	}
+	if first.calls != 1 || secondFactoryCalls != 0 {
+		t.Fatalf("first calls=%d second factory calls=%d", first.calls, secondFactoryCalls)
+	}
+}
+
 func TestManagedAttemptTimeoutDoesNotReceiveWholeRequestDeadline(t *testing.T) {
 	provider := &managedTimeoutProvider{}
 	_, err := generateWithTransientRetryPolicy(context.Background(), provider, llm.GenerateRequest{}, false, 8*time.Second, 3, 0)

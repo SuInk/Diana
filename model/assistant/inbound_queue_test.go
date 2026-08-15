@@ -109,6 +109,64 @@ func TestRuntimeObservesConnectionEpochChangesWithoutDisconnectedEdge(t *testing
 	})
 }
 
+func TestRuntimeBackfillKeepsPreReconnectWatermarkWhenLiveMessageArrivesFirst(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	watermark := time.Now().Add(-10 * time.Minute).Unix()
+	baseline := []HistorySession{{Kind: EventKindGroup, ID: "123", LastEventTime: watermark}}
+	// This live event arrives immediately after reconnect. A fresh database
+	// watermark would now sit after the missed event and incorrectly skip it.
+	live := queuedDirectTestEvent("902", watermark+20)
+	live.GroupID = "123"
+	if _, inserted, err := store.EnqueueInboundEvent(context.Background(), sessionKey(live), live); err != nil || !inserted {
+		t.Fatalf("enqueue live event inserted=%v err=%v", inserted, err)
+	}
+	store.sessions = []HistorySession{{Kind: EventKindGroup, ID: "123", LastEventTime: watermark + 20}}
+
+	channel := newQueueTestChannel()
+	channel.responses["get_group_msg_history"] = map[string]any{"messages": []any{
+		historyTestMessage(901, watermark+10, "Diana 断线时漏掉的消息"),
+		historyTestMessage(902, watermark+20, "Diana 重连后实时收到的消息"),
+	}}
+	runtime := newQueuedTestRuntime(channel, store, nil)
+	if _, err := runtime.backfillInboundHistoryFromSessions(context.Background(), store, baseline, watermark); err != nil {
+		t.Fatal(err)
+	}
+	if !store.hasEvent("group:123:901") {
+		t.Fatal("missed message was skipped after a newer live event advanced the database watermark")
+	}
+}
+
+func TestRuntimeBackfillsAgainWhenConnectionEpochChangesWithoutDisconnectEdge(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	watermark := time.Now().Add(-10 * time.Minute).Unix()
+	store.sessions = []HistorySession{{Kind: EventKindGroup, ID: "123", LastEventTime: watermark}}
+	channel := newQueueTestChannel()
+	channel.responses["get_group_msg_history"] = map[string]any{"messages": []any{
+		historyTestMessage(910, watermark+1, "Diana 第一次连接漏掉的消息"),
+	}}
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"action":"none","prompt":""}`, "第一次补回成功",
+		`{"action":"none","prompt":""}`, "第二次补回成功",
+	}}
+	runtime := newQueuedTestRuntime(channel, store, provider)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+	waitForCondition(t, 4*time.Second, func() bool { return channel.sentCount() == 1 })
+
+	secondTime := time.Now().Unix()
+	channel.setResponse("get_group_msg_history", map[string]any{"messages": []any{
+		historyTestMessage(910, watermark+1, "Diana 第一次连接漏掉的消息"),
+		historyTestMessage(911, secondTime, "Diana 连接替换时漏掉的消息"),
+	}})
+	channel.bumpConnectionEpoch()
+	waitForCondition(t, 4*time.Second, func() bool { return channel.sentCount() == 2 })
+	if !store.hasEvent("group:123:911") {
+		t.Fatal("connection replacement did not schedule a second history backfill")
+	}
+}
+
 func TestRuntimeInboundStatusUsesOneBotChannelInMultiChannel(t *testing.T) {
 	onebot := &multiChannelProbe{status: ChannelStatus{
 		Connected:       false,
@@ -163,6 +221,7 @@ func TestRuntimeDrainsPendingWhileHistoryBackfillIsSlow(t *testing.T) {
 func TestRuntimeRecoversProcessingMessageWithinReplayWindowAfterRestart(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	event := queuedDirectTestEvent("old-processing", time.Now().Add(-90*time.Minute).Unix())
+	store.sessions = []HistorySession{{Kind: EventKindGroup, ID: "123", LastEventTime: event.Time}}
 	if _, inserted, err := store.EnqueueInboundEvent(context.Background(), sessionKey(event), event); err != nil || !inserted {
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
@@ -198,6 +257,50 @@ func TestRuntimeDoesNotReplyBeyondInboundReplayWindow(t *testing.T) {
 	}
 	if channel.sentCount() != 0 {
 		t.Fatal("message older than the replay window triggered a reply")
+	}
+}
+
+func TestInboundReplayCutoffFollowsOfflineDurationWithPaddingAndCap(t *testing.T) {
+	reconnectedAt := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+
+	if got, want := inboundReplayCutoff(reconnectedAt.Add(-3*time.Hour), reconnectedAt), reconnectedAt.Add(-3*time.Hour-inboundReplayPadding); !got.Equal(want) {
+		t.Fatalf("three-hour cutoff=%s, want %s", got, want)
+	}
+	if got, want := inboundReplayCutoff(reconnectedAt.Add(-13*time.Hour), reconnectedAt), reconnectedAt.Add(-InboundReplayWindow); !got.Equal(want) {
+		t.Fatalf("capped cutoff=%s, want %s", got, want)
+	}
+}
+
+func TestRuntimeInboundReplayUsesStableReconnectCutoff(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	cutoff := time.Date(2026, time.August, 15, 8, 0, 0, 0, time.UTC)
+	runtime.setInboundReplayCutoff(cutoff)
+
+	withinWindow := queuedDirectTestEvent("within", cutoff.Add(time.Second).Unix())
+	if runtime.inboundEventIsStale(withinWindow, cutoff.Add(11*time.Hour)) {
+		t.Fatal("message after the reconnect cutoff became stale while waiting in the queue")
+	}
+	beforeWindow := queuedDirectTestEvent("before", cutoff.Add(-time.Second).Unix())
+	if !runtime.inboundEventIsStale(beforeWindow, cutoff.Add(time.Minute)) {
+		t.Fatal("message before the reconnect cutoff was accepted")
+	}
+}
+
+func TestHistoryBackfillPaddingDoesNotExceedReplayCutoff(t *testing.T) {
+	cutoff := time.Unix(1_000, 0)
+	sessions := []HistorySession{
+		{Kind: EventKindGroup, ID: "near", LastEventTime: 1_100},
+		{Kind: EventKindGroup, ID: "far", LastEventTime: 2_000},
+	}
+	padded := historyBackfillBaselineWithPadding(sessions, cutoff)
+	if padded[0].LastEventTime != cutoff.Unix() {
+		t.Fatalf("near watermark=%d, want cutoff %d", padded[0].LastEventTime, cutoff.Unix())
+	}
+	if padded[1].LastEventTime != 2_000-int64(inboundReplayPadding/time.Second) {
+		t.Fatalf("far watermark=%d", padded[1].LastEventTime)
+	}
+	if sessions[0].LastEventTime != 1_100 {
+		t.Fatal("padding mutated the coordinator baseline")
 	}
 }
 
@@ -676,6 +779,12 @@ func (c *queueTestChannel) Status() ChannelStatus {
 func (c *queueTestChannel) bumpConnectionEpoch() {
 	c.mu.Lock()
 	c.epoch++
+	c.mu.Unlock()
+}
+
+func (c *queueTestChannel) setResponse(action string, response map[string]any) {
+	c.mu.Lock()
+	c.responses[action] = response
 	c.mu.Unlock()
 }
 

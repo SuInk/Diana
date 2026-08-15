@@ -20,7 +20,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
 )
 
@@ -146,27 +145,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	return `搜索和管理显式选定 GitHub 仓库的 Issues，仅主人或插件设置中获授权的用户可用。operation=search 是只读操作：{"operation":"search","repository":"owner/repo","query":"关键词","state":"open|closed|all"}。写操作的当前用户消息必须明确写出同一个 owner/repo；update/comment/close/reopen 还必须点名同一 Issue 编号。create 传 title/body 及用户明确要求的 labels/assignees/milestone/operation_id；update 只传当前消息点名且包含新值的 title/body/labels/assignees/milestone；comment 的 body 必须来自当前消息；close 或 reopen 传 number。create 会查找 open 和近期 closed Issue；发现候选时返回 requires_confirmation、候选和 confirmation_token。先向用户展示候选，只有下一条用户消息点名候选编号并明确坚持另行新建时，才把原 token 连同 allow_duplicate=true 传回。不要把完整聊天记录、运行时 ID、凭据或私密原文放进 title/body/comment。写入只允许插件设置白名单及用户授权范围内的精确 owner/repo，并返回结构化结果。`
-}
-
-func (t *dianaRepositoryIssuesTool) ExplicitUserRequestKind(input map[string]any) string {
-	switch normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state")) {
-	case "create":
-		if boolInput(input, "allow_duplicate") {
-			return "repository_issue_create_duplicate"
-		}
-		return "repository_issue_create"
-	case "update":
-		return "repository_issue_update"
-	case "comment":
-		return "repository_issue_comment"
-	case "close":
-		return "repository_issue_close"
-	case "reopen":
-		return "repository_issue_reopen"
-	default:
-		return ""
-	}
+	return `搜索和管理显式选定 GitHub 仓库的 Issues，仅主人或插件设置中获授权的用户可用。operation=search 是只读操作：{"operation":"search","repository":"owner/repo","query":"关键词","state":"open|closed|all"}。请根据当前消息的完整语义判断用户是否正在要求机器人立即执行写操作；讨论功能、描述他人行为、引用消息、假设、教程询问和仅要求草稿都不是执行授权，此时不要调用写操作。确认是立即执行的写请求时必须传 user_confirmed_write=true；不能确认时不要传，也不要执行。写操作的当前用户消息必须明确写出同一个 owner/repo；update/comment/close/reopen 还必须点名同一 Issue 编号。create 传 title/body 及用户明确要求的 labels/assignees/milestone/operation_id；update 只传当前消息点名且包含新值的 title/body/labels/assignees/milestone；comment 的 body 必须来自当前消息；close 或 reopen 传 number。create 会查找 open 和近期 closed Issue；发现候选时返回 requires_confirmation、候选和 confirmation_token。先向用户展示候选，只有下一条用户消息点名候选编号并明确坚持另行新建时，才把原 token 连同 allow_duplicate=true 传回。不要把完整聊天记录、运行时 ID、凭据或私密原文放进 title/body/comment。写入只允许插件设置白名单及用户授权范围内的精确 owner/repo，并返回结构化结果。`
 }
 
 func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -193,11 +172,10 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	if operation == "search" {
 		return t.finish(ctx, t.search(ctx, repository, input))
 	}
-	requestText := repositoryIssueCurrentRequestText(t.event)
-	requestKind := t.ExplicitUserRequestKind(input)
-	if !agent.ExplicitUserMutationRequested(requestText, requestKind) {
-		return t.finish(ctx, result.fail("explicit_request_required", "当前用户消息没有明确要求执行这项 Issue 写操作。"))
+	if !boolInput(input, "user_confirmed_write") {
+		return t.finish(ctx, result.fail("explicit_request_required", "模型未确认当前消息要求立即执行这项 Issue 写操作。"))
 	}
+	requestText := repositoryIssueCurrentRequestText(t.event)
 	if code, message := validateRepositoryIssueWriteRequest(requestText, operation, repository, input); code != "" {
 		return t.finish(ctx, result.fail(code, message))
 	}
@@ -947,7 +925,6 @@ func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository strin
 	if len(candidates) > 0 {
 		confirmation := strings.TrimSpace(configToolString(input, "confirmation_token"))
 		confirmed := boolInput(input, "allow_duplicate") &&
-			agent.ExplicitUserMutationRequested(repositoryIssueCurrentRequestText(t.event), "repository_issue_create_duplicate") &&
 			repositoryIssueRequestMentionsCandidate(repositoryIssueCurrentRequestText(t.event), candidates) &&
 			t.verifyDuplicateConfirmation(confirmation, repository, fingerprint, candidates)
 		if !confirmed {

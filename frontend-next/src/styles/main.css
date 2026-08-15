@@ -254,6 +254,7 @@ code {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--muted);
+  white-space: nowrap;
   cursor: pointer;
   transition:
     color 0.15s ease,
@@ -1545,6 +1546,111 @@ code {
   flex-shrink: 0;
 }
 
+.group-plugin-row {
+  display: block;
+}
+
+.group-plugin-row-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.group-plugin-settings {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+
+.group-plugin-settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.group-plugin-settings-toggle:hover {
+  color: var(--text);
+}
+
+.group-plugin-settings-chevron {
+  transition: transform 0.15s ease;
+}
+
+.group-plugin-settings-chevron.open {
+  transform: rotate(180deg);
+}
+
+.group-plugin-settings-panel {
+  padding: 10px 0 2px;
+}
+
+.group-plugin-setting-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 16px 20px;
+}
+
+.group-plugin-setting {
+  min-width: 0;
+}
+
+.group-plugin-setting-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.group-plugin-setting-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.group-plugin-setting-head label {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.group-plugin-setting-mode {
+  flex-shrink: 0;
+}
+
+.group-plugin-setting-mode button {
+  padding: 4px 8px;
+  font-size: 11.5px;
+}
+
+.group-plugin-setting-control,
+.group-plugin-setting-inherited {
+  display: block;
+  margin-top: 8px;
+}
+
+.group-plugin-setting-inherited {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.group-plugin-secret-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* 机器人实例切换器 */
 /* 平台筛选标签 */
 .platform-filters {
@@ -2157,6 +2263,44 @@ code {
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--text-secondary);
+  /* 描述长度 41~82 字不等，截断到三行让同一行卡片的内部节奏一致；
+     完整文案挂在 title 上。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 权限折叠 */
+.plugin-perms > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.plugin-perms > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-perms > summary:hover {
+  color: var(--text-secondary);
+}
+
+.plugin-perms-chevron {
+  transition: transform 0.15s ease;
+}
+
+.plugin-perms[open] .plugin-perms-chevron {
+  transform: rotate(180deg);
+}
+
+.plugin-perms .plugin-card-perms {
+  margin-top: 8px;
 }
 
 .plugin-card-foot {
@@ -2445,7 +2589,6 @@ code {
   border-color: color-mix(in srgb, var(--warn) 35%, transparent);
   background: var(--warn-soft);
 }
-
 .repository-issue-result > svg {
   color: var(--ok);
 }
@@ -2488,7 +2631,6 @@ code {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-
 .rss-watch-rule {
   min-height: 108px;
   resize: vertical;

@@ -108,6 +108,7 @@ export interface QQBotGroupConfig {
   recent_context_limit?: number;
   max_reply_chars?: number;
   plugin_overrides?: Record<string, boolean>;
+  plugin_setting_overrides?: Record<string, Record<string, unknown>>;
   updated_at?: string;
 }
 

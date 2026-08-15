@@ -122,6 +122,8 @@ export interface QQBotConfig {
   proactive_reply_chance?: number;
   /** 主动回复最低置信度，范围 0~1，默认 0.9。 */
   proactive_reply_threshold?: number;
+  /** 普通群聊只要能生成有效内容就允许自然插话。 */
+  natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
   direct_reply_chunk_size?: number;
@@ -248,12 +250,16 @@ export interface QQBotGroupConfig {
   max_reply_chars?: number;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
+  /** 本群是否开启自然插话模式。 */
+  natural_interjection_enabled?: boolean;
   minimum_reply_member_level?: number;
   /** 查看撤回消息后的回复是否自动撤回。 */
   recall_reply_auto_delete_enabled?: boolean;
   /** 自动撤回前的保留时间，单位为秒。 */
   recall_reply_auto_delete_delay_seconds?: number;
   plugin_overrides?: Record<string, boolean>;
+  /** 按插件、按字段保存的群级非密钥设置覆盖；缺失字段沿用全局。 */
+  plugin_setting_overrides?: Record<string, Record<string, unknown>>;
   /** 本群专属回复时间、屏蔽 QQ 号与准入门槛；不设表示跟随全局。 */
   reply_gate?: ReplyGate | null;
   updated_at?: string;
