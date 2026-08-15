@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -73,6 +74,47 @@ func TestSemanticReferenceUsesRoutingProfile(t *testing.T) {
 	}
 	if len(usedModels) != 1 || usedModels[0] != "routing-model" {
 		t.Fatalf("used models = %#v, want routing-model", usedModels)
+	}
+}
+
+func TestSemanticReferenceDecisionCacheSkipsRepeatedRouterTokens(t *testing.T) {
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"message_ids":["image-1"],"confidence":0.98,"reason":"同一张图片"}`,
+		`{"message_ids":["image-2"],"confidence":0.98,"reason":"媒体集合已变化"}`,
+	}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime.remember(MessageEvent{Kind: EventKindPrivate, Time: 100, UserID: "user-1", MessageID: "image-1", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "https://example.com/1.jpg"}}}})
+	question := func(messageID string) MessageEvent {
+		return MessageEvent{Kind: EventKindPrivate, Time: 110, UserID: "user-1", MessageID: messageID, Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "帮我再看一下"}}}}
+	}
+	first := runtime.enrichSemanticReference(context.Background(), question("question-1"), "帮我再看一下")
+	second := runtime.enrichSemanticReference(context.Background(), question("question-2"), "帮我再看一下")
+	if first.Quoted == nil || second.Quoted == nil || first.Quoted.MessageID != "image-1" || second.Quoted.MessageID != "image-1" {
+		t.Fatalf("cached selections first=%#v second=%#v", first.Quoted, second.Quoted)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("router requests=%d, cache hit should avoid token usage", len(provider.requests))
+	}
+
+	runtime.remember(MessageEvent{Kind: EventKindPrivate, Time: 105, UserID: "user-1", MessageID: "image-2", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "https://example.com/2.jpg"}}}})
+	third := runtime.enrichSemanticReference(context.Background(), question("question-3"), "帮我再看一下")
+	if third.Quoted == nil || third.Quoted.MessageID != "image-2" || len(provider.requests) != 2 {
+		t.Fatalf("changed media did not invalidate cache: quoted=%#v requests=%d", third.Quoted, len(provider.requests))
+	}
+}
+
+func TestSemanticReferenceDecisionCacheExpires(t *testing.T) {
+	now := time.Unix(1000, 0)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.now = func() time.Time { return now }
+	decision := semanticReferenceDecision{MessageIDs: []string{"image-1"}, Confidence: 0.9}
+	runtime.saveSemanticReferenceDecision(context.Background(), "key", decision)
+	if _, found := runtime.loadSemanticReferenceDecision(context.Background(), "key"); !found {
+		t.Fatal("fresh semantic cache entry missed")
+	}
+	now = now.Add(semanticReferenceCacheTTL + time.Second)
+	if _, found := runtime.loadSemanticReferenceDecision(context.Background(), "key"); found {
+		t.Fatal("expired semantic cache entry was used")
 	}
 }
 
