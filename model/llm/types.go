@@ -73,15 +73,18 @@ const (
 type ContentPartType string
 
 const (
-	ContentPartText     ContentPartType = "text"
-	ContentPartImageURL ContentPartType = "image_url"
+	ContentPartText       ContentPartType = "text"
+	ContentPartImageURL   ContentPartType = "image_url"
+	ContentPartInputAudio ContentPartType = "input_audio"
 )
 
 type ContentPart struct {
-	Type     ContentPartType `json:"type"`
-	Text     string          `json:"text,omitempty"`
-	ImageURL string          `json:"image_url,omitempty"`
-	Detail   string          `json:"detail,omitempty"`
+	Type        ContentPartType `json:"type"`
+	Text        string          `json:"text,omitempty"`
+	ImageURL    string          `json:"image_url,omitempty"`
+	Detail      string          `json:"detail,omitempty"`
+	AudioData   string          `json:"audio_data,omitempty"`
+	AudioFormat string          `json:"audio_format,omitempty"`
 }
 
 type GenerateRequest struct {
@@ -616,6 +619,10 @@ func messageHasContent(msg Message) bool {
 			if strings.TrimSpace(part.ImageURL) != "" {
 				return true
 			}
+		case ContentPartInputAudio:
+			if strings.TrimSpace(part.AudioData) != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -635,6 +642,9 @@ func messageTextContent(msg Message) string {
 		case ContentPartImageURL:
 			// Provider adapters carry image parts separately. A text placeholder
 			// would falsely imply that an image was available in text-only paths.
+		case ContentPartInputAudio:
+			// Audio is carried as a real multimodal part. Never replace it with a
+			// text placeholder that could invite the model to guess voice traits.
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
