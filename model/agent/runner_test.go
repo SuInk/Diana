@@ -42,6 +42,16 @@ func TestParseActionAcceptsBareToolJSON(t *testing.T) {
 	}
 }
 
+func TestParseActionAcceptsReplyCompatibilityJSON(t *testing.T) {
+	action, ok := parseAction(`{"reply":"简单说：湖南米粉重汤和码子，江西米粉重粉和拌炒风味。\n1. 湖南常见汤粉。\n2. 江西常见拌粉。"}`)
+	if !ok {
+		t.Fatal("expected reply compatibility JSON")
+	}
+	if action.Action != "final" || action.Content != "简单说：湖南米粉重汤和码子，江西米粉重粉和拌炒风味。\n1. 湖南常见汤粉。\n2. 江西常见拌粉。" {
+		t.Fatalf("action = %#v", action)
+	}
+}
+
 func TestParseActionAcceptsFinalWithRawNewlines(t *testing.T) {
 	action, ok := parseAction("{\"action\":\"final\",\"content\":\"第一行\n第二行\"}")
 	if !ok {
