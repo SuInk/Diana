@@ -3,8 +3,11 @@ package webui
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/updater"
 
@@ -145,6 +148,46 @@ func TestChangelogEndpointFetchesGitHub(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/system/update/changelog", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"cached":true`) {
 		t.Fatalf("cached changelog = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChangelogRateLimitCooldownBlocksCommitFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetAt := time.Now().Add(20 * time.Minute)
+	var calls atomic.Int32
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if strings.HasPrefix(r.URL.Path, "/repos/SuInk/diana/releases") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/repos/SuInk/diana/commits") {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer github.Close()
+
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{status: updater.Status{
+		RemoteURL: "git@github.com:SuInk/diana.git",
+		Branch:    "main",
+	}})
+	handler.githubAPIBase = github.URL
+	router := gin.New()
+	handler.Register(router)
+
+	for range 2 {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/system/update/changelog", nil))
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("changelog = %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("GitHub calls during cooldown = %d, want releases+commits once", calls.Load())
 	}
 }
 
