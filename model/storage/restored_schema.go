@@ -35,6 +35,23 @@ CREATE TABLE IF NOT EXISTS image_descriptions (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS voice_blobs (
+  audio_sha256 TEXT PRIMARY KEY,
+  body BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS voice_transcripts (
+  cache_key TEXT PRIMARY KEY,
+  audio_sha256 TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  model TEXT NOT NULL,
+  language TEXT,
+  transcript TEXT NOT NULL,
+  duration_ms INTEGER,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS user_profiles (
   user_id TEXT PRIMARY KEY,
   display_name TEXT,
@@ -158,6 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_message_events_kind_group_time ON message_events(
 CREATE INDEX IF NOT EXISTS idx_message_events_text ON message_events(text);
 CREATE INDEX IF NOT EXISTS idx_message_events_user_time ON message_events(user_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_image_descriptions_source_message ON image_descriptions(source_session, source_message_id);
+CREATE INDEX IF NOT EXISTS idx_voice_transcripts_audio ON voice_transcripts(audio_sha256, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_at ON user_profiles(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_favorability_changes_user_id ON user_favorability_changes(user_id, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_items_active_key ON memory_items(scope_key, subject_user_id, memory_key) WHERE status = 'active';
