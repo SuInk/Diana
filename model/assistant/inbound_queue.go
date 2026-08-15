@@ -313,7 +313,7 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	r.mu.RLock()
 	mediaTurnStore, _ := r.inboundStore.(InboundMediaTurnStore)
 	r.mu.RUnlock()
-	if mediaTurnStore != nil && EventExplicitlyReferencesMedia(event) && !EventHasDirectMediaReference(event) {
+	if mediaTurnStore != nil && !EventHasDirectMediaReference(event) {
 		claimCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		sources, err := mediaTurnStore.ClaimInboundMediaForTurn(claimCtx, item.ID, item.Session, event, InboundMediaMergeWindow)
 		cancel()
@@ -351,24 +351,6 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 		}
 	}
 	return r.replyAndRecord(ctx, event, text, outcome)
-}
-
-// EventExplicitlyReferencesMedia is intentionally content-generic. It only
-// detects references to media types and never carries product/domain aliases.
-func EventExplicitlyReferencesMedia(event MessageEvent) bool {
-	text := strings.ToLower(strings.TrimSpace(firstNonEmpty(PlainText(event.Segments), event.RawMessage)))
-	if text == "" {
-		return false
-	}
-	for _, token := range []string{
-		"图片", "图里", "图中", "这张图", "那张图", "截图", "照片", "相片", "视频", "录像", "语音", "音频", "文件", "附件",
-		"image", "photo", "picture", "screenshot", "video", "recording", "voice", "audio", "file", "attachment",
-	} {
-		if strings.Contains(text, token) {
-			return true
-		}
-	}
-	return false
 }
 
 // EventHasDirectMediaReference covers media carried by this message or by an
@@ -488,9 +470,6 @@ func (r *Runtime) inboundPriority(event MessageEvent) int {
 	text := PlainText(event.Segments)
 	if text == "" {
 		text = event.RawMessage
-	}
-	if EventExplicitlyReferencesMedia(event) && !EventHasDirectMediaReference(event) && !r.shouldHandleResolver(event, text) {
-		return InboundPriorityMediaTurn
 	}
 	if r.shouldHandleChat(event, text) {
 		return InboundPriorityTriggered
