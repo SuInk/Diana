@@ -6,6 +6,27 @@
         <p>管理内置能力的启停与详细设置</p>
       </div>
       <div class="view-actions">
+        <div class="plugin-search">
+          <Search :size="14" aria-hidden="true" />
+          <input
+            v-model="query"
+            class="input"
+            type="search"
+            placeholder="搜索插件名称或说明"
+            aria-label="搜索插件"
+          />
+        </div>
+        <div class="segmented plugin-status-filter" role="group" aria-label="按状态筛选">
+          <button type="button" :class="{ active: status === 'all' }" @click="status = 'all'">
+            全部 <span class="plugin-filter-count">{{ plugins.length }}</span>
+          </button>
+          <button type="button" :class="{ active: status === 'on' }" @click="status = 'on'">
+            已启用 <span class="plugin-filter-count">{{ enabledCount }}</span>
+          </button>
+          <button type="button" :class="{ active: status === 'off' }" @click="status = 'off'">
+            已停用 <span class="plugin-filter-count">{{ plugins.length - enabledCount }}</span>
+          </button>
+        </div>
         <div class="segmented plugin-layout-switch" role="group" aria-label="插件排列方式">
           <button
             type="button"
@@ -33,9 +54,9 @@
       </div>
     </header>
 
-    <div v-if="plugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-masonry'">
+    <div v-if="visiblePlugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-masonry'">
       <article
-        v-for="plugin in plugins"
+        v-for="plugin in visiblePlugins"
         :key="plugin.manifest.id"
         class="plugin-card"
         :class="{ off: plugin.installed && !plugin.enabled, uninstalled: !plugin.installed }"
@@ -79,51 +100,6 @@
           </div>
         </details>
 
-        <details v-if="plugin.manifest.id === resolverPluginID" class="plugin-dependencies">
-          <summary class="plugin-dependencies-head">
-            <span>运行依赖</span>
-            <span
-              v-if="dependencies.length > 0"
-              class="badge"
-              :class="readyDependencyCount === dependencies.length ? 'accent' : 'warn'"
-            >
-              {{ readyDependencyCount }}/{{ dependencies.length }} 已就绪
-            </span>
-            <ChevronDown class="plugin-dependencies-chevron" :size="15" aria-hidden="true" />
-          </summary>
-          <div class="plugin-dependencies-body">
-            <p v-if="dependenciesLoading && dependencies.length === 0" class="plugin-dependencies-empty">正在检测依赖...</p>
-            <p v-else-if="dependencies.length === 0" class="plugin-dependencies-empty">暂时无法读取依赖状态</p>
-            <div v-else class="plugin-dependency-list">
-              <div v-for="dep in dependencies" :key="dep.name" class="plugin-dependency-row">
-                <div class="plugin-dependency-main">
-                  <strong class="mono">{{ dep.name }}</strong>
-                  <span>{{ dep.purpose }}</span>
-                </div>
-                <span
-                  v-if="dep.available"
-                  class="badge accent plugin-dependency-status"
-                  :title="[dep.version, dep.path].filter(Boolean).join(' · ')"
-                >
-                  {{ dep.version || "已安装" }}
-                </span>
-                <button
-                  v-else-if="dep.installable"
-                  class="btn small"
-                  type="button"
-                  :disabled="busyDependency !== ''"
-                  :title="`使用 ${dep.installer || '系统包管理器'} 安装 ${dep.name}`"
-                  @click="installDependency(dep)"
-                >
-                  <LoaderCircle v-if="busyDependency === dep.name" class="spin" :size="14" aria-hidden="true" />
-                  <Download v-else :size="14" aria-hidden="true" />
-                  {{ busyDependency === dep.name ? "安装中" : "安装" }}
-                </button>
-                <span v-else class="badge warn">需手动安装</span>
-              </div>
-            </div>
-          </div>
-        </details>
 
         <footer v-if="showFooter(plugin)" class="plugin-card-foot">
           <template v-if="plugin.installed">
@@ -159,6 +135,11 @@
         </footer>
       </article>
     </div>
+    <EmptyState
+      v-else-if="!loading && plugins.length > 0"
+      title="没有匹配的插件"
+      hint="换个关键词，或把筛选切回「全部」。"
+    />
     <EmptyState v-else-if="!loading" title="没有可用插件" />
     <div v-else class="plugin-grid">
       <div v-for="n in 3" :key="n" class="skeleton" style="height: 190px; border-radius: var(--radius-lg)"></div>
@@ -170,6 +151,43 @@
       :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID"
       @close="closeSettings"
     >
+      <div v-if="settingsTarget.manifest.id === resolverPluginID" class="plugin-settings-section-head">
+        <h3>运行依赖</h3>
+        <p>缺少这些命令时，对应平台的解析会失败；可直接在这里安装。</p>
+        <div class="plugin-dependencies-body">
+          <p v-if="dependenciesLoading && dependencies.length === 0" class="plugin-dependencies-empty">正在检测依赖...</p>
+          <p v-else-if="dependencies.length === 0" class="plugin-dependencies-empty">暂时无法读取依赖状态</p>
+          <div v-else class="plugin-dependency-list">
+            <div v-for="dep in dependencies" :key="dep.name" class="plugin-dependency-row">
+              <div class="plugin-dependency-main">
+                <strong class="mono">{{ dep.name }}</strong>
+                <span>{{ dep.purpose }}</span>
+              </div>
+              <span
+                v-if="dep.available"
+                class="badge accent plugin-dependency-status"
+                :title="[dep.version, dep.path].filter(Boolean).join(' · ')"
+              >
+                {{ dep.version || "已安装" }}
+              </span>
+              <button
+                v-else-if="dep.installable"
+                class="btn small"
+                type="button"
+                :disabled="busyDependency !== ''"
+                :title="`使用 ${dep.installer || '系统包管理器'} 安装 ${dep.name}`"
+                @click="installDependency(dep)"
+              >
+                <LoaderCircle v-if="busyDependency === dep.name" class="spin" :size="14" aria-hidden="true" />
+                <Download v-else :size="14" aria-hidden="true" />
+                {{ busyDependency === dep.name ? "安装中" : "安装" }}
+              </button>
+              <span v-else class="badge warn">需手动安装</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div v-if="settingsTarget.manifest.id === repositoryWatchPluginID" class="plugin-settings-section-head">
         <h3>访问设置</h3>
         <p>Token 同时用于提高公开仓库 API 额度和访问私有仓库。</p>
@@ -291,7 +309,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ChevronDown, Download, ExternalLink, KeyRound, LayoutGrid, LoaderCircle, RefreshCw, Rows3, SlidersHorizontal } from "@lucide/vue";
+import { ChevronDown, Download, ExternalLink, KeyRound, LayoutGrid, LoaderCircle, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installResolverDependency,
@@ -431,6 +449,25 @@ function openSettings(plugin: PluginState): void {
 
 // 排列方式记在 localStorage：插件多起来之后，横排更利于扫读，
 // 但这属于个人偏好，不该每次进页面都重选。
+const query = ref("");
+const status = ref<"all" | "on" | "off">("all");
+
+const enabledCount = computed(() => plugins.value.filter((p) => p.installed && p.enabled).length);
+
+// 搜索同时匹配名称、说明和权限：想找「哪个插件能读消息」时按权限搜得到。
+const visiblePlugins = computed(() => {
+  const keyword = query.value.trim().toLowerCase();
+  return plugins.value.filter((plugin) => {
+    const on = plugin.installed && plugin.enabled;
+    if (status.value === "on" && !on) return false;
+    if (status.value === "off" && on) return false;
+    if (keyword === "") return true;
+    const m = plugin.manifest;
+    const haystack = [m.name, m.description, ...(m.permissions ?? [])].join(" ").toLowerCase();
+    return haystack.includes(keyword);
+  });
+});
+
 type PluginLayout = "masonry" | "rows";
 const LAYOUT_KEY = "dqb-next:plugin-layout";
 const layout = ref<PluginLayout>(
