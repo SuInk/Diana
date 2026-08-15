@@ -1316,6 +1316,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "superseded_proactive", err
 		}
+		if errors.Is(err, errInboundTurnSuperseded) {
+			setEventRecordOutcome(&record, "superseded_media_turn")
+			r.record(record)
+			return "superseded_media_turn", nil
+		}
 		record.Error = err.Error()
 		r.setError(err.Error())
 		if errors.Is(err, errOutboundSend) {
@@ -6530,6 +6535,10 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 			return nil, errReplySuppressedBeforeSend
 		}
 	}
+	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded {
+		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
+		return nil, errInboundTurnSuperseded
+	}
 	if run, ok := proactiveReplyRunFromContext(ctx); ok && run.allowSuperseding {
 		if changed, newer := r.proactiveReplyBatchChanged(run.key, run.generation); changed {
 			if newer != nil {
@@ -6999,6 +7008,10 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 			r.recordReplySuppressionBlocked(event, restriction)
 			return nil, errReplySuppressedBeforeSend
 		}
+	}
+	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded {
+		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
+		return nil, errInboundTurnSuperseded
 	}
 	params := map[string]any{"messages": nodes}
 	action := "send_private_forward_msg"
