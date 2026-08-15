@@ -2836,6 +2836,21 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if !currentImagesComplete {
 		return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more current images could not be encoded")})
 	}
+	if r.plugins != nil {
+		_, settings, enabled := r.plugins.PluginWithSettings(voiceSTTPluginID, r.pluginOverridesForEvent(event))
+		if enabled {
+			voiceParts, notice := r.voiceSourceAnalysisParts(ctx, messageEvent, cleanText, voiceSTTConfigFromSettings(settings))
+			if notice != "" {
+				currentMessage = appendLLMMessageText(currentMessage, notice)
+			}
+			if len(voiceParts) > 0 {
+				if len(currentMessage.Parts) == 0 && strings.TrimSpace(currentMessage.Content) != "" {
+					currentMessage.Parts = append(currentMessage.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: currentMessage.Content})
+				}
+				currentMessage.Parts = append(currentMessage.Parts, voiceParts...)
+			}
+		}
+	}
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
 		messages = append(messages, llm.Message{
@@ -3014,7 +3029,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
 	}
 	group := llm.GroupChat
-	if messagesContainImages(messages) {
+	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
 	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
@@ -3043,7 +3058,7 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 		return nil, fmt.Errorf("qqbot: runtime agent llm provider is not configured")
 	}
 	group := llm.GroupChat
-	if messagesContainImages(req.Messages) {
+	if messagesContainImages(req.Messages) || messagesContainAudio(req.Messages) {
 		group = llm.GroupVision
 	}
 	provider, err := p.providerForGroup(group)
@@ -3118,7 +3133,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		return normalizeReply(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
 	group := llm.GroupChat
-	if messagesContainImages(messages) {
+	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
 	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
@@ -4567,6 +4582,39 @@ func messagesContainImages(messages []llm.Message) bool {
 		}
 	}
 	return false
+}
+
+func messagesContainAudio(messages []llm.Message) bool {
+	for _, message := range messages {
+		for _, part := range message.Parts {
+			if part.Type == llm.ContentPartInputAudio && strings.TrimSpace(part.AudioData) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func appendLLMMessageText(message llm.Message, suffix string) llm.Message {
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
+		return message
+	}
+	if strings.TrimSpace(message.Content) == "" {
+		message.Content = suffix
+	} else {
+		message.Content = strings.TrimSpace(message.Content) + "\n\n" + suffix
+	}
+	for index := range message.Parts {
+		if message.Parts[index].Type == llm.ContentPartText {
+			message.Parts[index].Text = message.Content
+			return message
+		}
+	}
+	if len(message.Parts) > 0 {
+		message.Parts = append([]llm.ContentPart{{Type: llm.ContentPartText, Text: message.Content}}, message.Parts...)
+	}
+	return message
 }
 
 func replyRuleLLMProfileID(ctx context.Context) (string, bool) {
@@ -7409,6 +7457,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 }
 
 func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
+	event = voiceTranscriptOnlyHistory(event)
 	event.proactiveReply = false
 	event.imageResolutionRun = false
 	event.imageLoadErr = nil
