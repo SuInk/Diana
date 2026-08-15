@@ -57,7 +57,8 @@ type VoiceTTSPlugin struct {
 }
 
 type dianaTTSTool struct {
-	plugin *VoiceTTSPlugin
+	plugin   *VoiceTTSPlugin
+	settings SettingValues
 }
 
 type voiceTTSConfig struct {
@@ -176,6 +177,9 @@ func (p *VoiceTTSPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	if err != nil {
 		return nil, err
 	}
+	// The direct command embeds WAV as base64 and does not need a
+	// platform-specific Silk encoder.
+	cfg.SilkEncoder = ""
 	text = sanitizeVoiceTTSText(text, cfg.MaxChars)
 	path, err := p.synthesize(ctx, cfg, text)
 	if err != nil {
@@ -201,8 +205,8 @@ func voiceTTSCommandText(text string) (string, bool) {
 	return "", false
 }
 
-func (p *VoiceTTSPlugin) AgentTools() []agent.Tool {
-	return []agent.Tool{&dianaTTSTool{plugin: p}}
+func (p *VoiceTTSPlugin) AgentTools(settings SettingValues) ([]agent.Tool, error) {
+	return []agent.Tool{&dianaTTSTool{plugin: p, settings: settings}}, nil
 }
 
 func (p *VoiceTTSPlugin) SetLocalMediaSharer(sharer LocalMediaSharer) {
@@ -234,6 +238,13 @@ func (t *dianaTTSTool) Run(ctx context.Context, input map[string]any) (string, e
 		return "", fmt.Errorf("语音合成插件未配置")
 	}
 	cfg := voiceTTSConfigFromEnv()
+	if t.settings != nil {
+		var err error
+		cfg, err = voiceTTSConfigFromSettings(t.settings)
+		if err != nil {
+			return "", err
+		}
+	}
 	text := sanitizeVoiceTTSText(configToolString(input, "text"), cfg.MaxChars)
 	if text == "" {
 		return "", fmt.Errorf("text 不能为空")
@@ -487,20 +498,17 @@ func voiceTTSConfigFromSettings(settings SettingValues) (voiceTTSConfig, error) 
 		case voiceTTSPresetCustom:
 			return voiceTTSConfig{}, fmt.Errorf("语音合成自定义预设需要填写 API 地址")
 		default:
-			endpoint = defaultVoiceTTSEndpoint
+			endpoint = firstNonEmpty(cfg.Endpoint, defaultVoiceTTSEndpoint)
 		}
 	}
 	cfg.Endpoint = endpoint
-	cfg.RefAudioPath = settings.String(voiceTTSSettingRefAudioPath, "")
-	cfg.PromptText = settings.String(voiceTTSSettingPromptText, "")
-	cfg.TextLang = settings.String(voiceTTSSettingTextLang, "zh")
-	cfg.PromptLang = settings.String(voiceTTSSettingPromptLang, "zh")
-	cfg.SpeedFactor = settingFloat(settings, voiceTTSSettingSpeed, 1)
-	cfg.MaxChars = settings.Int(voiceTTSSettingMaxChars, defaultVoiceTTSMaxChars)
-	cfg.Timeout = time.Duration(settings.Int(voiceTTSSettingTimeout, 40)) * time.Second
-	// The direct command returns a base64 record and does not require a local
-	// media server or a platform-specific Silk encoder.
-	cfg.SilkEncoder = ""
+	cfg.RefAudioPath = settings.String(voiceTTSSettingRefAudioPath, cfg.RefAudioPath)
+	cfg.PromptText = settings.String(voiceTTSSettingPromptText, cfg.PromptText)
+	cfg.TextLang = settings.String(voiceTTSSettingTextLang, cfg.TextLang)
+	cfg.PromptLang = settings.String(voiceTTSSettingPromptLang, cfg.PromptLang)
+	cfg.SpeedFactor = settingFloat(settings, voiceTTSSettingSpeed, cfg.SpeedFactor)
+	cfg.MaxChars = settings.Int(voiceTTSSettingMaxChars, cfg.MaxChars)
+	cfg.Timeout = time.Duration(settings.Int(voiceTTSSettingTimeout, int(cfg.Timeout/time.Second))) * time.Second
 	return cfg, nil
 }
 

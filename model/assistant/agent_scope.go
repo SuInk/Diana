@@ -43,8 +43,24 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	for _, tool := range extraTools {
 		registry.Register(tool)
 	}
-	registry.Retain(relationship.allowedAgentToolNames())
+	registry.Retain(r.allowedAgentToolNamesForEvent(event, relationship))
 	return registry, nil
+}
+
+func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship RelationshipPolicy) map[string]bool {
+	allowed := relationship.allowedAgentToolNames()
+	if allowed == nil || r == nil || r.plugins == nil {
+		return allowed
+	}
+	_, settings, enabled := r.plugins.PluginWithSettingsForGroup(
+		repositoryPublishPluginID,
+		r.pluginOverridesForEvent(event),
+		r.pluginSettingOverridesForEvent(event),
+	)
+	if enabled && repositoryPublishUserHasAccess(event.UserID, settings) {
+		allowed[dianaRepositoryIssuesToolName] = true
+	}
+	return allowed
 }
 
 func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensionManagement bool) agent.Config {

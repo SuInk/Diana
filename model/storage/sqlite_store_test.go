@@ -2,7 +2,11 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +14,84 @@ import (
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/updater"
 )
+
+func TestSQLiteStoreMigratesLegacyDatabaseFilename(t *testing.T) {
+	directory := t.TempDir()
+	legacyPath := filepath.Join(directory, "diana-qq-bot.db")
+	canonicalPath := filepath.Join(directory, "diana.db")
+	db, err := sql.Open("sqlite", legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE legacy_marker (value TEXT); INSERT INTO legacy_marker(value) VALUES ('preserved')`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonicalPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewSQLiteStore(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	wantPath, err := filepath.Abs(canonicalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Path() != wantPath {
+		t.Fatalf("store path=%q, want %q", store.Path(), wantPath)
+	}
+	var value string
+	if err := store.db.QueryRow(`SELECT value FROM legacy_marker`).Scan(&value); err != nil || value != "preserved" {
+		t.Fatalf("migrated value=%q err=%v", value, err)
+	}
+	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy database still exists: %v", err)
+	}
+}
+
+func TestSQLiteStoreRejectsTwoPopulatedDatabaseNames(t *testing.T) {
+	directory := t.TempDir()
+	legacyPath := filepath.Join(directory, "diana-qq-bot.db")
+	canonicalPath := filepath.Join(directory, "diana.db")
+	if err := os.WriteFile(legacyPath, []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonicalPath, []byte("canonical"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSQLiteStore(legacyPath); err == nil || !strings.Contains(err.Error(), "both legacy SQLite database") {
+		t.Fatalf("conflict error=%v", err)
+	}
+}
+
+func TestRenameSQLiteFamilyMovesWALSidecars(t *testing.T) {
+	directory := t.TempDir()
+	source := filepath.Join(directory, "diana-qq-bot.db")
+	target := filepath.Join(directory, "diana.db")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.WriteFile(source+suffix, []byte("content"+suffix), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := renameSQLiteFamily(source, target); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(source + suffix); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("source sidecar %q still exists: %v", suffix, err)
+		}
+		content, err := os.ReadFile(target + suffix)
+		if err != nil || string(content) != "content"+suffix {
+			t.Fatalf("target sidecar %q content=%q err=%v", suffix, content, err)
+		}
+	}
+}
 
 // TestSQLiteStorePersistsConfigsAndPluginStates 验证对应功能场景。
 func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
@@ -60,17 +142,22 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		t.Fatalf("gotBot = %#v", gotBot)
 	}
 
+	naturalInterjectionEnabled := true
 	groupConfigs := assistant.GroupConfigSet{
 		Groups: []assistant.GroupConfig{
 			{
-				GroupID:            "123456",
-				Enabled:            true,
-				GroupTriggers:      []string{"Diana"},
-				WelcomeEnabled:     true,
-				WelcomeMessage:     "欢迎 {user_id}",
-				RecentContextLimit: 8,
-				MaxReplyChars:      1200,
-				PluginOverrides:    map[string]bool{"official.file-parser-go": true},
+				GroupID:                    "123456",
+				Enabled:                    true,
+				GroupTriggers:              []string{"Diana"},
+				WelcomeEnabled:             true,
+				WelcomeMessage:             "欢迎 {user_id}",
+				RecentContextLimit:         8,
+				MaxReplyChars:              1200,
+				NaturalInterjectionEnabled: &naturalInterjectionEnabled,
+				PluginOverrides:            map[string]bool{"official.file-parser-go": true},
+				PluginSettingOverrides: assistant.PluginSettingOverrides{
+					"official.file-parser-go": {"max_file_kb": float64(512)},
+				},
 			},
 		},
 	}
@@ -82,7 +169,7 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		t.Fatalf("LoadQQBotGroupConfigs() ok=%v err=%v", ok, err)
 	}
 	gotGroup, ok := gotGroupConfigs.ConfigForGroup("123456")
-	if !ok || !gotGroup.PluginOverrides["official.file-parser-go"] || gotGroup.RecentContextLimit != 8 {
+	if !ok || !gotGroup.PluginOverrides["official.file-parser-go"] || gotGroup.PluginSettingOverrides["official.file-parser-go"]["max_file_kb"] != float64(512) || gotGroup.RecentContextLimit != 8 || gotGroup.NaturalInterjectionEnabled == nil || !*gotGroup.NaturalInterjectionEnabled {
 		t.Fatalf("gotGroupConfigs = %#v", gotGroupConfigs)
 	}
 
