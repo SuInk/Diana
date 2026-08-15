@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -201,6 +202,50 @@ func TestSystemUpdateHandlerReleaseCheckUsesGitHubRelease(t *testing.T) {
 	}
 }
 
+func TestSystemUpdateHandlerReleaseCheckRejectsInvalidCurrentVersion(t *testing.T) {
+	github := releaseTestServer(t, "v0.8.7")
+	defer github.Close()
+
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetBuildVersion("a620040-reply-hotfix")
+	handler.githubAPIBase = github.URL
+	router := systemUpdateTestRouter(handler)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/system/update/check", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"error"`) || !strings.Contains(body, "当前版本") || !strings.Contains(body, "a620040-reply-hotfix") {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestSystemUpdateHandlerReleaseDownloadRejectsInvalidCurrentVersion(t *testing.T) {
+	github := releaseTestServer(t, "v0.8.7")
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		status: updater.Status{NearestTag: "a620040-reply-hotfix", RunningCommit: "a620040-reply-hotfix", ApplySupported: true},
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.githubAPIBase = github.URL
+	router := systemUpdateTestRouter(handler)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/system/update/download", strings.NewReader(`{"confirmation":"download-update"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if releaseUpdater.downloaded || !strings.Contains(rec.Body.String(), "当前版本") {
+		t.Fatalf("downloaded = %v, body = %s", releaseUpdater.downloaded, rec.Body.String())
+	}
+}
+
 func TestSystemUpdateHandlerDownloadsThenInstallsCompleteReleasePackage(t *testing.T) {
 	const assetName = "diana-webui-darwin-arm64.tar.gz"
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -386,14 +431,23 @@ func TestSystemUpdateHandlerUpdateRequiresConfirmation(t *testing.T) {
 }
 
 func TestVersionComparison(t *testing.T) {
-	if !isNewerVersion("v1.2.3", "v1.3.0") {
+	newer, err := isNewerVersion("v1.2.3", "v1.3.0")
+	if err != nil || !newer {
 		t.Fatal("newer minor version not detected")
 	}
-	if !isNewerVersion("v0.3.4+11", "v0.4.0") {
+	newer, err = isNewerVersion("v0.3.4+11", "v0.4.0")
+	if err != nil || !newer {
 		t.Fatal("development commit count should not hide a newer release")
 	}
-	if isNewerVersion("v1.3.0", "v1.2.9") || isNewerVersion("dev", "v1.3.0") {
-		t.Fatal("older or invalid version detected as newer")
+	newer, err = isNewerVersion("v1.3.0", "v1.2.9")
+	if err != nil || newer {
+		t.Fatal("older version detected as newer")
+	}
+	if _, err = isNewerVersion("dev", "v1.3.0"); !errors.Is(err, errInvalidUpdateVersion) {
+		t.Fatalf("invalid current version error = %v", err)
+	}
+	if _, err = isNewerVersion("v1.3.0", "latest"); !errors.Is(err, errInvalidUpdateVersion) {
+		t.Fatalf("invalid latest version error = %v", err)
 	}
 }
 

@@ -1,6 +1,8 @@
 package assistant
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +84,66 @@ func TestChatInDecisionRequiresSubstantiveContent(t *testing.T) {
 	}
 }
 
+func TestNaturalInterjectionAllowsEveryValidReply(t *testing.T) {
+	cfg := DefaultBotConfig()
+	cfg.ChatInEnabled = boolPointer(false)
+	cfg.NaturalInterjectionEnabled = boolPointer(true)
+	settings := cfg.chatInSettings()
+	if !settings.Enabled || !settings.Natural || settings.Threshold != 0 || settings.Chance != 1 || settings.Cooldown != 0 {
+		t.Fatalf("natural interjection settings = %#v", settings)
+	}
+
+	valid, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":0.01,"category":"chat_in","answerable":true,"substantive":true}`)
+	if !valid.allows(0.99, settings) {
+		t.Fatal("natural mode should allow a valid substantive reply without confidence gating")
+	}
+	notAnswerable, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":1,"category":"chat_in","answerable":false,"substantive":true}`)
+	if notAnswerable.allows(0.1, settings) {
+		t.Fatal("natural mode must not answer when the router cannot support a reliable reply")
+	}
+	filler, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":1,"category":"chat_in","answerable":true,"substantive":false}`)
+	if filler.allows(0.1, settings) {
+		t.Fatal("natural mode must not send filler")
+	}
+	if prompt := proactiveReplyRouterPromptForChatIn("路由器提示词", settings); !strings.Contains(prompt, "自然插话模式") || !strings.Contains(prompt, "有实质内容") {
+		t.Fatalf("natural router prompt = %q", prompt)
+	}
+}
+
+func TestNaturalInterjectionCanBeConfiguredPerGroup(t *testing.T) {
+	runtime := NewRuntime(BotConfig{NaturalInterjectionEnabled: boolPointer(false)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"natural": {GroupID: "natural", NaturalInterjectionEnabled: boolPointer(true)},
+		"quiet":   {GroupID: "quiet", NaturalInterjectionEnabled: boolPointer(false)},
+	}})
+	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "natural"}).chatInSettings(); !settings.Natural {
+		t.Fatalf("natural group settings = %#v", settings)
+	}
+	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "quiet"}).chatInSettings(); settings.Natural {
+		t.Fatalf("quiet group settings = %#v", settings)
+	}
+}
+
+func TestChatInGenerationDeclineStaysSilent(t *testing.T) {
+	provider := &refusalLLMProvider{replies: []string{"这句没有实质内容。" + replyRefusalMarker}}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "10001", UserID: "20002", RawMessage: "普通群聊", chatInReply: true}
+
+	reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
+	if !errors.Is(err, errChatInReplyDeclined) || reply != "" {
+		t.Fatalf("reply=%q err=%v", reply, err)
+	}
+	if len(channel.sent) != 0 {
+		t.Fatalf("declined chat-in sent messages: %#v", channel.sent)
+	}
+	if _, active := runtime.activeReplySuppression(event, time.Now()); active {
+		t.Fatal("a silent chat-in decline must not activate user suppression")
+	}
+}
+
 func TestChatInRouterPromptReflectsSwitch(t *testing.T) {
 	enabled := chatInSettingsFrom(boolPointer(true), ChatInLevelHigh, 0, 0, 0)
 	disabled := chatInSettingsFrom(boolPointer(false), ChatInLevelHigh, 0, 0, 0)
@@ -137,11 +199,12 @@ func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
 func TestChatInSurvivesConfigPayloadRoundTrip(t *testing.T) {
 	// WebUI 存一次配置就会走这条来回转换；漏字段会静默把开关和档位重置成默认值。
 	cfg := BotConfig{
-		ChatInEnabled:         boolPointer(false),
-		ChatInLevel:           ChatInLevelHigh,
-		ChatInThreshold:       0.77,
-		ChatInChance:          0.42,
-		ChatInCooldownSeconds: 90,
+		ChatInEnabled:              boolPointer(false),
+		ChatInLevel:                ChatInLevelHigh,
+		ChatInThreshold:            0.77,
+		ChatInChance:               0.42,
+		ChatInCooldownSeconds:      90,
+		NaturalInterjectionEnabled: boolPointer(true),
 	}
 	got := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
 	if got.ChatInEnabled == nil || *got.ChatInEnabled {
@@ -152,6 +215,9 @@ func TestChatInSurvivesConfigPayloadRoundTrip(t *testing.T) {
 	}
 	if got.ChatInThreshold != 0.77 || got.ChatInChance != 0.42 || got.ChatInCooldownSeconds != 90 {
 		t.Fatalf("chat-in overrides lost in round trip: %#v", got)
+	}
+	if got.NaturalInterjectionEnabled == nil || !*got.NaturalInterjectionEnabled {
+		t.Fatalf("natural interjection switch lost in round trip: %#v", got.NaturalInterjectionEnabled)
 	}
 }
 

@@ -50,6 +50,11 @@ func secretSettingKeys(specs []PluginSettingSpec) map[string]bool {
 // SettingValues 是运行时注入插件请求的生效设置，读取方法在键缺失或类型不符时返回兜底值。
 type SettingValues map[string]any
 
+// PluginSettingOverrides stores explicit non-secret setting overrides by
+// plugin ID for one conversation scope. Missing plugins and keys inherit the
+// global plugin state.
+type PluginSettingOverrides map[string]map[string]any
+
 // Bool 读取布尔设置。
 func (v SettingValues) Bool(key string, fallback bool) bool {
 	if value, ok := v[key].(bool); ok {
@@ -139,6 +144,38 @@ func sanitizePluginSettings(specs []PluginSettingSpec, values map[string]any) ma
 	return out
 }
 
+// normalizeGroupPluginSettings validates one plugin's group-level overrides.
+// Credentials stay global so group configuration responses can never expose
+// plugin secrets.
+func normalizeGroupPluginSettings(specs []PluginSettingSpec, values map[string]any) (map[string]any, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	secrets := secretSettingKeys(specs)
+	for key := range values {
+		if secrets[key] {
+			return nil, fmt.Errorf("qqbot: secret plugin setting %q cannot be overridden per group", key)
+		}
+	}
+	return normalizePluginSettings(nonSecretPluginSettingSpecs(specs), values)
+}
+
+// sanitizeGroupPluginSettings tolerates stale persisted data while excluding
+// unknown and secret fields from both runtime use and API responses.
+func sanitizeGroupPluginSettings(specs []PluginSettingSpec, values map[string]any) map[string]any {
+	return sanitizePluginSettings(nonSecretPluginSettingSpecs(specs), values)
+}
+
+func nonSecretPluginSettingSpecs(specs []PluginSettingSpec) []PluginSettingSpec {
+	out := make([]PluginSettingSpec, 0, len(specs))
+	for _, spec := range specs {
+		if !spec.Secret {
+			out = append(out, spec)
+		}
+	}
+	return out
+}
+
 // normalizeSettingValue 按设置项类型校验并收敛单个值，数字会被夹到 Min/Max 范围内。
 func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 	switch spec.Type {
@@ -214,6 +251,17 @@ func effectivePluginSettings(specs []PluginSettingSpec, overrides map[string]any
 		if value, ok := overrides[spec.Key]; ok {
 			out[spec.Key] = value
 		}
+	}
+	return out
+}
+
+// effectivePluginSettingsForGroup applies group overrides after global
+// overrides. Group values are sanitized defensively because old persisted
+// configurations may predate the current manifest.
+func effectivePluginSettingsForGroup(specs []PluginSettingSpec, global, group map[string]any) SettingValues {
+	out := effectivePluginSettings(specs, global)
+	for key, value := range sanitizeGroupPluginSettings(specs, group) {
+		out[key] = value
 	}
 	return out
 }

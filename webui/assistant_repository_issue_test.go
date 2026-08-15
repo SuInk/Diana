@@ -56,7 +56,7 @@ func TestQQBotHandlerCreatesRepositoryIssueThroughPublishingPlugin(t *testing.T)
 	client := &http.Client{Transport: repositoryIssueTestTransport{base: github.Client().Transport, target: target}}
 	manager := assistant.NewPluginManager(assistant.NewRepositoryPublishPlugin(client))
 	if _, err := manager.UpdateSettings(assistant.RepositoryPublishPluginID, map[string]any{
-		"github_token":         "ghp_abcdefghijklmnopqrstuvwxyz123456",
+		"github_token":         "test-issue-token",
 		"allowed_repositories": "acme/demo",
 	}); err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestQQBotHandlerCreatesRepositoryIssueThroughPublishingPlugin(t *testing.T)
 		t.Fatalf("GitHub methods=%v", methods)
 	}
 	for _, authorization := range authorizations {
-		if authorization != "Bearer ghp_abcdefghijklmnopqrstuvwxyz123456" {
+		if authorization != "Bearer test-issue-token" {
 			t.Fatalf("authorization=%q", authorization)
 		}
 	}

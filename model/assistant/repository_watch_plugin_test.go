@@ -447,8 +447,10 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 			t.Fatalf("alert %q missing %q", alertText, want)
 		}
 	}
-	if strings.Contains(alertText, "commit endpoint unavailable") {
-		t.Fatalf("alert leaked upstream detail: %q", alertText)
+	for _, diagnostic := range []string{"commits", "503", "commit endpoint unavailable"} {
+		if !strings.Contains(alertText, diagnostic) {
+			t.Fatalf("alert %q lost diagnostic %q", alertText, diagnostic)
+		}
 	}
 
 	// Simulate a process restart with the same persisted reminder state.
@@ -563,10 +565,13 @@ func TestRepositoryWatchFailureAlertRequiresAcknowledgementAndRedactsGroupMessag
 	}
 	groupText := channel.sent[0].Text
 	channel.mu.Unlock()
-	for _, secret := range []string{"private.example", "signature=secret", "owner-token", "Authorization"} {
+	for _, secret := range []string{"private.example", "signature=secret", "owner-token"} {
 		if strings.Contains(groupText, secret) {
 			t.Fatalf("group alert leaked %q: %q", secret, groupText)
 		}
+	}
+	if !strings.Contains(groupText, "Authorization=[REDACTED]") {
+		t.Fatalf("group alert lost redacted credential context: %q", groupText)
 	}
 	runtime.recordReminderRetryAttempt(item, failure, errors.New("alert unacknowledged"), true)
 	entries := logs.entriesSnapshot()

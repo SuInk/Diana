@@ -16,7 +16,10 @@ const (
 	proactiveReplyMaxReroutes         = 1
 )
 
-var errProactiveReplySuperseded = errors.New("qqbot: proactive reply superseded by newer candidates")
+var (
+	errProactiveReplySuperseded = errors.New("qqbot: proactive reply superseded by newer candidates")
+	errChatInReplyDeclined      = errors.New("qqbot: chat-in generation declined to produce a substantive reply")
+)
 
 type proactiveReplyCandidate struct {
 	Event      MessageEvent

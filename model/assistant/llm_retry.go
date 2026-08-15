@@ -62,6 +62,7 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 		}
 		resp, err := provider.Generate(attemptCtx, req)
 		cancel()
+		err = classifyLLMError(err)
 		if err == nil || !enabled || !shouldRetryTransientLLMError(err) {
 			return resp, err
 		}

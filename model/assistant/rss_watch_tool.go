@@ -187,7 +187,20 @@ func parseRSSWatchInterval(raw string) (time.Duration, error) {
 }
 
 func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput) (Reminder, error) {
-	pluginValue, settings, enabled := r.plugins.PluginWithSettings(rssWatchPluginID, nil)
+	event := MessageEvent{Platform: strings.TrimSpace(input.Platform), ProfileID: strings.TrimSpace(input.ProfileID), ContextNamespace: strings.TrimSpace(input.ContextNamespace), GroupID: strings.TrimSpace(input.GroupID), UserID: strings.TrimSpace(input.UserID)}
+	if event.GroupID != "" {
+		event.Kind = EventKindGroup
+	} else {
+		event.Kind = EventKindPrivate
+		if event.UserID == "" {
+			return Reminder{}, fmt.Errorf("私聊通知必须填写发送对象 ID")
+		}
+	}
+	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(
+		rssWatchPluginID,
+		r.pluginOverridesForEvent(event),
+		r.pluginSettingOverridesForEvent(event),
+	)
 	plugin, ok := pluginValue.(*RSSWatchPlugin)
 	if !enabled || !ok {
 		return Reminder{}, fmt.Errorf("RSS 与社交订阅插件未启用")
@@ -213,15 +226,6 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 	baseline, feedName, err := plugin.snapshot(ctx, feedURL, settings)
 	if err != nil {
 		return Reminder{}, fmt.Errorf("建立 Feed 基线失败: %w", err)
-	}
-	event := MessageEvent{Platform: strings.TrimSpace(input.Platform), ProfileID: strings.TrimSpace(input.ProfileID), ContextNamespace: strings.TrimSpace(input.ContextNamespace), GroupID: strings.TrimSpace(input.GroupID), UserID: strings.TrimSpace(input.UserID)}
-	if event.GroupID != "" {
-		event.Kind = EventKindGroup
-	} else {
-		event.Kind = EventKindPrivate
-		if event.UserID == "" {
-			return Reminder{}, fmt.Errorf("私聊通知必须填写发送对象 ID")
-		}
 	}
 	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), feedURL, source, handle, judge, feedName, interval, baseline)
 }
@@ -270,14 +274,19 @@ func (r *Runtime) addRSSWatch(event MessageEvent, owner, feedURL, source, handle
 }
 
 func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RSSWatchUpdateInput) (Reminder, error) {
-	pluginValue, settings, enabled := r.plugins.PluginWithSettings(rssWatchPluginID, nil)
-	plugin, ok := pluginValue.(*RSSWatchPlugin)
-	if !enabled || !ok {
-		return Reminder{}, fmt.Errorf("RSS 与社交订阅插件未启用")
-	}
 	current, err := r.rssWatch(owner, id)
 	if err != nil {
 		return Reminder{}, err
+	}
+	event := reminderSourceEvent(current)
+	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(
+		rssWatchPluginID,
+		r.pluginOverridesForEvent(event),
+		r.pluginSettingOverridesForEvent(event),
+	)
+	plugin, ok := pluginValue.(*RSSWatchPlugin)
+	if !enabled || !ok {
+		return Reminder{}, fmt.Errorf("RSS 与社交订阅插件未启用")
 	}
 	if !current.CancelledAt.IsZero() {
 		return Reminder{}, fmt.Errorf("RSS 订阅 %s 已取消，不能修改", id)

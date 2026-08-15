@@ -558,7 +558,7 @@ func TestRepositoryIssueConcurrentCreatePostsExactlyOnce(t *testing.T) {
 		SettingValues{repositoryPublishSettingToken: repositoryPublishTestToken, repositoryPublishSettingAllowlist: "acme/demo", repositoryPublishSettingTimeout: 5},
 	)
 	input := map[string]any{
-		"operation": "create", "repository": "acme/demo", "operation_id": "concurrent-create", "title": "Created once",
+		"operation": "create", "repository": "acme/demo", "operation_id": "concurrent-create", "title": "Created once", "user_confirmed_write": true,
 	}
 	const workers = 16
 	start := make(chan struct{})
@@ -641,7 +641,7 @@ func TestRepositoryIssueForwardedTextCannotAuthorizeWrite(t *testing.T) {
 		newRepositoryPublishPlugin(server.Client(), server.URL),
 		SettingValues{repositoryPublishSettingToken: repositoryPublishTestToken, repositoryPublishSettingAllowlist: "acme/demo"},
 	)
-	result := runRepositoryPublishTestTool(t, tool, map[string]any{"operation": "close", "repository": "acme/demo", "number": 12})
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{"operation": "close", "repository": "acme/demo", "number": 12, "user_confirmed_write": false})
 	if result.OK || result.FailureCode != "explicit_request_required" {
 		t.Fatalf("result=%#v", result)
 	}
@@ -668,7 +668,7 @@ func TestRepositoryIssueForwardedTextWithoutMarkerCannotAuthorizeWrite(t *testin
 		newRepositoryPublishPlugin(server.Client(), server.URL),
 		SettingValues{repositoryPublishSettingToken: repositoryPublishTestToken, repositoryPublishSettingAllowlist: "acme/demo"},
 	)
-	result := runRepositoryPublishTestTool(t, tool, map[string]any{"operation": "close", "repository": "acme/demo", "number": 12})
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{"operation": "close", "repository": "acme/demo", "number": 12, "user_confirmed_write": false})
 	if result.OK || result.FailureCode != "explicit_request_required" {
 		t.Fatalf("result=%#v", result)
 	}
@@ -704,6 +704,7 @@ func TestRepositoryIssueHypotheticalQuestionsCannotAuthorizeWrite(t *testing.T) 
 			github := newRepositoryPublishTestGitHub()
 			server := httptest.NewServer(http.HandlerFunc(github.handler))
 			defer server.Close()
+			test.input["user_confirmed_write"] = false
 			result := runRepositoryPublishTestTool(t, repositoryPublishTestTool(server, test.message, nil), test.input)
 			if result.OK || result.FailureCode != "explicit_request_required" {
 				t.Fatalf("result=%#v", result)
@@ -758,6 +759,9 @@ func TestRepositoryIssueAdversarialRequestsNeverReachGitHub(t *testing.T) {
 			github := newRepositoryPublishTestGitHub()
 			server := httptest.NewServer(http.HandlerFunc(github.handler))
 			defer server.Close()
+			if test.failureCode == "explicit_request_required" {
+				test.input["user_confirmed_write"] = false
+			}
 			result := runRepositoryPublishTestTool(t, repositoryPublishTestTool(server, test.message, nil), test.input)
 			if result.OK || result.FailureCode != test.failureCode {
 				t.Fatalf("result=%#v, want failure_code=%q", result, test.failureCode)

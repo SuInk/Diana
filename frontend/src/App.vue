@@ -4019,6 +4019,7 @@ function normalizeGroupAdminConfig(config?: QQBotGroupConfig): QQBotGroupConfig 
     recent_context_limit: current.recent_context_limit || 20,
     max_reply_chars: current.max_reply_chars || 3500,
     plugin_overrides: { ...(current.plugin_overrides || {}) },
+    plugin_setting_overrides: { ...(current.plugin_setting_overrides || {}) },
     updated_at: current.updated_at
   };
 }
@@ -4045,7 +4046,8 @@ function groupAdminPayload(): QQBotGroupConfig {
     group_triggers: splitCommaList(groupAdmin.form.triggers),
     recent_context_limit: Number(groupAdmin.config.recent_context_limit) || 20,
     max_reply_chars: Number(groupAdmin.config.max_reply_chars) || 3500,
-    plugin_overrides: { ...(groupAdmin.config.plugin_overrides || {}) }
+    plugin_overrides: { ...(groupAdmin.config.plugin_overrides || {}) },
+    plugin_setting_overrides: { ...(groupAdmin.config.plugin_setting_overrides || {}) }
   };
 }
 

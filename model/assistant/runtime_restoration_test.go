@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -144,6 +145,94 @@ func TestRestoredModelRoleGroupBindingFailsOver(t *testing.T) {
 	}
 	if store.set.ActiveID != "primary-a" {
 		t.Fatalf("role routing changed active profile to %q", store.set.ActiveID)
+	}
+}
+
+func TestModelRoleGroupFiltersKnownIncompatibleProviders(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "incompatible", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "skip", Model: "old", Models: []llm.ModelInfo{{ID: "other-model"}}}},
+		{ID: "compatible", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "use", APIStyle: llm.APIStyleResponses, Model: "old", Models: []llm.ModelInfo{{ID: "target-model"}}}},
+		{ID: "also-incompatible", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "skip-too", Model: "old", Models: []llm.ModelInfo{{ID: "third-model"}}}},
+	}}}
+	cfg := BotConfig{ModelRoles: map[string]ModelRole{"chat": {Group: "primary", Model: "target-model"}}}
+	var attempts []string
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime.SetLLMProviderConfigFactory(func(providerCfg llm.ProviderConfig) (LLMProvider, error) {
+		attempts = append(attempts, providerCfg.APIKey+"/"+string(providerCfg.APIStyle)+"/"+providerCfg.Model)
+		return restoredModelProvider{model: providerCfg.Model}, nil
+	})
+	reply, err := runtime.generateReply(context.Background(), cfg, MessageEvent{}, RelationshipPolicy{}, []llm.Message{{Role: llm.RoleUser, Content: "hello"}}, nil)
+	if err != nil || reply != "ok from target-model" {
+		t.Fatalf("reply=%q err=%v", reply, err)
+	}
+	if got := strings.Join(attempts, ","); got != "use/responses/target-model" {
+		t.Fatalf("attempts=%q", got)
+	}
+}
+
+func TestModelRoleGroupFailsOverOnModelNotFoundAndPreservesAPIStyle(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "unknown-a", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "a", APIStyle: llm.APIStyleResponses, Model: "old-a"}},
+		{ID: "unknown-b", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "b", APIStyle: llm.APIStyleChatCompletions, Model: "old-b"}},
+	}}}
+	cfg := BotConfig{ModelRoles: map[string]ModelRole{"chat": {Group: "primary", Model: "target-model"}}}
+	var attempts []string
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime.SetLLMProviderConfigFactory(func(providerCfg llm.ProviderConfig) (LLMProvider, error) {
+		attempts = append(attempts, providerCfg.APIKey+"/"+string(providerCfg.APIStyle))
+		if providerCfg.APIKey == "a" {
+			return restoredModelProvider{err: errors.New(`status 404: {"type":"model_not_found"}`)}, nil
+		}
+		return restoredModelProvider{model: providerCfg.Model}, nil
+	})
+	reply, err := runtime.generateReply(context.Background(), cfg, MessageEvent{}, RelationshipPolicy{}, []llm.Message{{Role: llm.RoleUser, Content: "hello"}}, nil)
+	if err != nil || reply != "ok from target-model" {
+		t.Fatalf("reply=%q err=%v", reply, err)
+	}
+	if got := strings.Join(attempts, ","); got != "a/responses,b/chat_completions" {
+		t.Fatalf("attempts=%q", got)
+	}
+}
+
+func TestModelRoleGroupRejectsModelUnsupportedByEveryKnownProvider(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "a", Group: "primary", Config: llm.ProviderConfig{Models: []llm.ModelInfo{{ID: "model-a"}}}},
+		{ID: "b", Group: "primary", Config: llm.ProviderConfig{Models: []llm.ModelInfo{{ID: "model-b"}}}},
+	}}}
+	cfg := BotConfig{ModelRoles: map[string]ModelRole{"chat": {Group: "primary", Model: "target-model"}}}
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	factoryCalls := 0
+	runtime.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) {
+		factoryCalls++
+		return restoredModelProvider{}, nil
+	})
+	_, err := runtime.generateReply(context.Background(), cfg, MessageEvent{}, RelationshipPolicy{}, []llm.Message{{Role: llm.RoleUser, Content: "hello"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), `has no provider supporting model "target-model"`) {
+		t.Fatalf("err=%v", err)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("factory calls=%d, want 0", factoryCalls)
+	}
+}
+
+func TestSingleProfileModelRoleDoesNotFailOverOnModelNotFound(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "bound", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "bound", Model: "old"}},
+		{ID: "other", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "other", Model: "target-model"}},
+	}}}
+	cfg := BotConfig{ModelRoles: map[string]ModelRole{"chat": {ProfileID: "bound", Model: "target-model"}}}
+	var attempts []string
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime.SetLLMProviderConfigFactory(func(providerCfg llm.ProviderConfig) (LLMProvider, error) {
+		attempts = append(attempts, providerCfg.APIKey)
+		return restoredModelProvider{err: errors.New(`status 404: {"type":"model_not_found"}`)}, nil
+	})
+	_, err := runtime.generateReply(context.Background(), cfg, MessageEvent{}, RelationshipPolicy{}, []llm.Message{{Role: llm.RoleUser, Content: "hello"}}, nil)
+	if err == nil || !isModelUnavailableLLMError(err) {
+		t.Fatalf("err=%v", err)
+	}
+	if got := strings.Join(attempts, ","); got != "bound" {
+		t.Fatalf("attempts=%q, single-profile role must remain strict", got)
 	}
 }
 
