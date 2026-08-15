@@ -250,6 +250,7 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
 	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
 	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
+	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
 	router.POST(base+"/group-admin/challenge", h.startGroupAdminChallenge)
 	router.POST(base+"/group-admin/verify", h.verifyGroupAdminChallenge)
 	router.GET(base+"/group-admin/config", h.getGroupAdminConfig)
