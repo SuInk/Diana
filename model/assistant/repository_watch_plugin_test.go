@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -154,6 +155,78 @@ func TestRepositoryWatchPluginBuildsBaselineAndChanges(t *testing.T) {
 	}
 	if change.Snapshot.CommitSHA != "new-sha" || change.Snapshot.ReleaseTag != "v1.1.0" || len(change.Commits) != 1 || len(change.Releases) != 1 {
 		t.Fatalf("change=%#v", change)
+	}
+}
+
+func TestRepositoryWatchCommitLimitOnlyMarksActualOverflow(t *testing.T) {
+	github := &repositoryWatchTestGitHub{}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	settings := SettingValues{repositoryWatchSettingLimit: 12}
+
+	commits := make([]map[string]any, 0, 14)
+	for index := 12; index >= 1; index-- {
+		sha := fmt.Sprintf("new-%02d", index)
+		commits = append(commits, repositoryWatchCommitPayload(sha, sha))
+	}
+	commits = append(commits, repositoryWatchCommitPayload("cursor", "previous checkpoint"))
+	github.commits = commits
+
+	change, err := plugin.check(context.Background(), "acme/demo", "main", "cursor", "", true, false, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Commits) != 12 || change.Truncated {
+		t.Fatalf("exact-limit change=%#v", change)
+	}
+
+	github.mu.Lock()
+	github.commits = append([]map[string]any{repositoryWatchCommitPayload("new-13", "new-13")}, commits...)
+	github.mu.Unlock()
+	change, err = plugin.check(context.Background(), "acme/demo", "main", "cursor", "", true, false, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Commits) != 12 || !change.Truncated || change.Snapshot.CommitSHA != "new-13" {
+		t.Fatalf("overflow change=%#v", change)
+	}
+}
+
+func TestRepositoryWatchMissingCursorDoesNotMarkShortResultTruncated(t *testing.T) {
+	github := &repositoryWatchTestGitHub{commits: []map[string]any{
+		repositoryWatchCommitPayload("new-03", "third"),
+		repositoryWatchCommitPayload("new-02", "second"),
+		repositoryWatchCommitPayload("new-01", "first"),
+	}}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+
+	change, err := plugin.check(context.Background(), "acme/demo", "main", "rewritten-cursor", "", true, false, SettingValues{repositoryWatchSettingLimit: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Commits) != 3 || change.Truncated || change.Snapshot.CommitSHA != "new-03" {
+		t.Fatalf("missing-cursor short change=%#v", change)
+	}
+}
+
+func TestRenderRepositoryWatchChangesAlwaysIncludesEveryFetchedCommit(t *testing.T) {
+	change := repositoryWatchChange{
+		Commits: []repositoryWatchCommit{
+			{SHA: "1111111aaaa", Title: "first", URL: "https://example.test/1"},
+			{SHA: "2222222bbbb", Title: "second", URL: "https://example.test/2"},
+			{SHA: "3333333cccc", Title: "third", URL: "https://example.test/3"},
+		},
+		Releases:  []repositoryWatchRelease{{Tag: "v1.2.3", Name: "Stable", URL: "https://example.test/release"}},
+		Truncated: true,
+	}
+	result := renderRepositoryWatchChanges(change)
+	for _, want := range []string{"1111111: first", "2222222: second", "3333333: third", "v1.2.3: Stable", "本次只展示了部分最新提交。"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("rendered changes missing %q: %s", want, result)
+		}
 	}
 }
 
@@ -352,7 +425,15 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		"123": {GroupID: "123", SystemPrompt: "本群限定的自然人设"},
 	}})
 	runtime.fireDueReminders(context.Background())
-	if len(channel.sent) != 1 || channel.sent[0].GroupID != "123" || !strings.Contains(channel.sent[0].Text, "v1.1.0") || strings.Contains(channel.sent[0].Text, "watch-2") {
+	var sentParts []string
+	for _, sent := range channel.sent {
+		if sent.GroupID != "123" {
+			t.Fatalf("sent to unexpected group: %#v", channel.sent)
+		}
+		sentParts = append(sentParts, sent.Text)
+	}
+	sentText := strings.Join(sentParts, "\n")
+	if len(channel.sent) == 0 || !strings.Contains(sentText, "new-sha: fix delivery") || !strings.Contains(sentText, "v1.1.0") || strings.Contains(sentText, "watch-2") {
 		t.Fatalf("sent=%#v", channel.sent)
 	}
 	item := store.items[0]
