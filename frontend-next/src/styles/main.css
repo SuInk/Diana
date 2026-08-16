@@ -2932,30 +2932,31 @@ code {
   line-height: 1.45;
 }
 
-.repository-watch-token-guide {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
+.token-type-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 12px;
-  padding: 11px 12px;
-  border: 1px solid var(--border);
-  background: var(--warn-soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.token-type-guide p {
+  margin: 0;
+}
+
+.token-type-guide strong {
   color: var(--text-secondary);
 }
 
-.repository-watch-token-guide > svg {
-  margin-top: 1px;
-  color: var(--warn);
-}
-
-.repository-watch-token-guide strong {
-  color: var(--text);
-  font-size: 12.5px;
-}
-
-.repository-watch-token-guide p {
-  margin: 3px 0 0;
+.token-create-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  color: var(--accent);
+  white-space: nowrap;
 }
 
 .repository-watch-manager {
@@ -4138,15 +4139,6 @@ code {
 }
 
 @media (max-width: 520px) {
-  .repository-watch-token-guide {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .repository-watch-token-guide .btn {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-
   .task-notice-action {
     width: 100%;
     margin-left: 0;

@@ -550,7 +550,7 @@ func (h *QQBotHandler) sendGroupTest(c *gin.Context) {
 
 // listPlugins 返回机器人插件列表。
 func (h *QQBotHandler) listPlugins(c *gin.Context) {
-	c.JSON(http.StatusOK, assistant.RedactStates(h.runtime.Plugins().List()))
+	c.JSON(http.StatusOK, assistant.RedactStates(h.runtime.Plugins().ListVisible()))
 }
 
 // pluginDependencies 返回解析器外部依赖的探测结果，让控制台能直接看出
