@@ -62,11 +62,10 @@
             <h2>系统资源</h2>
             <div class="card-sub">{{ resourceHostLabel }}</div>
           </div>
-          <span v-if="stats?.server?.collected_at" class="badge">更新于 {{ formatClock(stats.server.collected_at) }}</span>
         </div>
-        <!-- 三项统一成同一套结构：归属 · 名称 / 大字读数 / 占整机的比例条 /
-             一行补充。CPU 和内存报 Diana 自己的用量，存储没有「Diana 的份额」
-             这种东西，就照实标成整机，不硬凑一个数。 -->
+        <!-- 三项统一成同一套结构：归属 · 名称 / 读数 / 一行补充。只报事实，
+             不画进度条。CPU 和内存是 Diana 自己的用量，存储没有「Diana 的
+             份额」这种东西，就照实标成整机，不硬凑一个数。 -->
         <div class="resource-grid">
           <article class="resource-item">
             <div class="resource-heading">
@@ -75,16 +74,6 @@
                 <div class="resource-label">{{ processMetricsReady ? "CPU · Diana" : "CPU · 整机" }}</div>
                 <div class="resource-value">{{ formatPercent(processMetricsReady ? stats?.server?.process_cpu_percent : stats?.server?.cpu_usage_percent) }}</div>
               </div>
-            </div>
-            <div
-              class="resource-track"
-              role="progressbar"
-              aria-label="CPU 占用"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              :aria-valuenow="cpuBarPercent"
-            >
-              <span :class="usageClass(cpuBarPercent)" :style="{ width: `${cpuBarPercent}%` }" />
             </div>
             <div class="resource-detail">
               <span>{{ stats?.server ? `${stats.server.cpu_cores} 核` : "等待采样" }}</span>
@@ -101,16 +90,6 @@
                 </div>
               </div>
             </div>
-            <div
-              class="resource-track"
-              role="progressbar"
-              aria-label="内存占用"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              :aria-valuenow="memoryBarPercent"
-            >
-              <span :class="usageClass(memoryBarPercent)" :style="{ width: `${memoryBarPercent}%` }" />
-            </div>
             <div class="resource-detail">
               <span>{{ memoryUsageLabel }}</span>
             </div>
@@ -123,16 +102,6 @@
                 <div class="resource-label">存储空间 · 整机</div>
                 <div class="resource-value">{{ formatPercent(stats?.server?.storage_usage_percent) }}</div>
               </div>
-            </div>
-            <div
-              class="resource-track"
-              role="progressbar"
-              aria-label="存储空间占用"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              :aria-valuenow="resourcePercent(stats?.server?.storage_usage_percent)"
-            >
-              <span :class="usageClass(stats?.server?.storage_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.storage_usage_percent)}%` }" />
             </div>
             <div class="resource-detail">
               <span>{{ storageUsageLabel }}</span>
@@ -278,18 +247,6 @@ const processMetricsReady = computed(() => {
   const server = stats.value?.server;
   return !!server && !server.process_metrics_unavailable && server.process_cpu_percent !== undefined;
 });
-// 三条比例条统一表示「占这台机器的多少」，Diana 的内存要先换算成整机占比。
-const processMemoryPercent = computed(() => {
-  const server = stats.value?.server;
-  if (!server?.memory_total_bytes || server.process_memory_bytes === undefined) return 0;
-  return Math.min(100, (server.process_memory_bytes / server.memory_total_bytes) * 100);
-});
-const cpuBarPercent = computed(() =>
-  resourcePercent(processMetricsReady.value ? stats.value?.server?.process_cpu_percent : stats.value?.server?.cpu_usage_percent)
-);
-const memoryBarPercent = computed(() =>
-  processMetricsReady.value ? processMemoryPercent.value : resourcePercent(stats.value?.server?.memory_usage_percent)
-);
 const storageUsageLabel = computed(() => {
   const server = stats.value?.server;
   if (!server?.storage_total_bytes) return "暂不可用";
@@ -344,21 +301,9 @@ function eventDecisionClass(event: BotEvent): string {
   return "";
 }
 
-function resourcePercent(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) return 0;
-  return Math.min(100, Math.max(0, value));
-}
-
 function formatPercent(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return "—";
   return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
-}
-
-function usageClass(value: number | undefined): string {
-  const percent = resourcePercent(value);
-  if (percent >= 90) return "critical";
-  if (percent >= 75) return "warning";
-  return "normal";
 }
 
 async function refresh(): Promise<void> {
