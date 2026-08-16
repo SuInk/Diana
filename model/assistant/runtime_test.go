@@ -1958,8 +1958,8 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 	if len(channel.sent) != 1 {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
-	if channel.sent[0].MentionUserID != "" || channel.sent[0].ReplyMessageID != event.MessageID {
-		t.Fatalf("LLM reply should keep reply metadata without forced current mention: %#v", channel.sent[0])
+	if channel.sent[0].MentionUserID != "" || channel.sent[0].ReplyMessageID != "" {
+		t.Fatalf("LLM reply targeting other members should not quote or force-mention the trigger sender: %#v", channel.sent[0])
 	}
 	segments := buildOutgoingSegments(channel.sent[0])
 	var mentioned []string
@@ -1979,7 +1979,7 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 			systemPrompt.WriteByte('\n')
 		}
 	}
-	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "发送层固定在第一条回复开头引用当前消息并 @ 当前发言者", "你只决定是否还要提及其他成员", "原样保留额外 CQ at 的对象和相对位置"} {
+	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "当前发言者是在直接询问你时", "可以直接回答", "原样保留额外 CQ at 的对象和相对位置"} {
 		if !strings.Contains(systemPrompt.String(), want) {
 			t.Fatalf("system prompt missing %q: %s", want, systemPrompt.String())
 		}
@@ -2030,7 +2030,7 @@ func TestRuntimeGroupLLMDefaultsMentionToCurrentSender(t *testing.T) {
 	}
 }
 
-func TestRuntimeGroupLLMStillMentionsCurrentSenderWithSemanticReference(t *testing.T) {
+func TestRuntimeGroupLLMDoesNotMentionTriggerSenderWithSemanticReference(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
@@ -2039,6 +2039,7 @@ func TestRuntimeGroupLLMStillMentionsCurrentSenderWithSemanticReference(t *testi
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "current-1",
+		ToMe:      true,
 		Quoted: &QuotedMessage{
 			MessageID:  "milk-message",
 			UserID:     "10002",
@@ -2049,8 +2050,8 @@ func TestRuntimeGroupLLMStillMentionsCurrentSenderWithSemanticReference(t *testi
 	if _, err := runtime.sendGeneratedReplyWithMessageIDs(context.Background(), event, "请先检查证书配置。"); err != nil {
 		t.Fatal(err)
 	}
-	if channel.sent[0].ReplyMessageID != event.MessageID {
-		t.Fatalf("reply message id = %q, want %q", channel.sent[0].ReplyMessageID, event.MessageID)
+	if channel.sent[0].ReplyMessageID != "" {
+		t.Fatalf("reply message id = %q, want no trigger-message quote", channel.sent[0].ReplyMessageID)
 	}
 	segments := buildOutgoingSegments(channel.sent[0])
 	var mentioned []string
@@ -2059,12 +2060,12 @@ func TestRuntimeGroupLLMStillMentionsCurrentSenderWithSemanticReference(t *testi
 			mentioned = append(mentioned, segment["data"].(map[string]string)["qq"])
 		}
 	}
-	if len(mentioned) != 1 || mentioned[0] != event.UserID {
-		t.Fatalf("mentioned = %#v, want current sender %q; segments = %#v", mentioned, event.UserID, segments)
+	if len(mentioned) != 0 {
+		t.Fatalf("mentioned = %#v, want no trigger-sender mention; segments = %#v", mentioned, segments)
 	}
 }
 
-func TestRuntimeGroupLLMAddsExplicitMentionsAfterCurrentSender(t *testing.T) {
+func TestRuntimeGroupLLMUsesExplicitOtherMentionWithoutTriggerSender(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
@@ -2084,9 +2085,12 @@ func TestRuntimeGroupLLMAddsExplicitMentionsAfterCurrentSender(t *testing.T) {
 			mentioned = append(mentioned, segment["data"].(map[string]string)["qq"])
 		}
 	}
-	want := []string{"10001", "10002"}
-	if len(mentioned) != len(want) || mentioned[0] != want[0] || mentioned[1] != want[1] {
+	want := []string{"10002"}
+	if len(mentioned) != len(want) || mentioned[0] != want[0] {
 		t.Fatalf("mentioned = %#v, want %#v; segments = %#v", mentioned, want, segments)
+	}
+	if channel.sent[0].ReplyMessageID != "" || channel.sent[0].MentionUserID != "" {
+		t.Fatalf("trigger sender metadata should be empty: %#v", channel.sent[0])
 	}
 }
 
@@ -2103,8 +2107,8 @@ func TestRuntimeGroupLLMPreservesModelChosenAdditionalMentionPosition(t *testing
 	if _, err := runtime.sendGeneratedReplyWithMessageIDs(context.Background(), event, "这件事请 [CQ:at,qq=10002] 明天确认。"); err != nil {
 		t.Fatal(err)
 	}
-	if channel.sent[0].MentionUserID != event.UserID {
-		t.Fatalf("current sender mention = %q, want %q", channel.sent[0].MentionUserID, event.UserID)
+	if channel.sent[0].ReplyMessageID != "" || channel.sent[0].MentionUserID != "" {
+		t.Fatalf("trigger sender metadata should be empty: %#v", channel.sent[0])
 	}
 	segments := buildOutgoingSegments(channel.sent[0])
 	var mentionIndexes []int
@@ -2115,10 +2119,10 @@ func TestRuntimeGroupLLMPreservesModelChosenAdditionalMentionPosition(t *testing
 			mentioned = append(mentioned, segment["data"].(map[string]string)["qq"])
 		}
 	}
-	if len(mentioned) != 2 || mentioned[0] != event.UserID || mentioned[1] != "10002" {
-		t.Fatalf("mentioned = %#v, want current sender then additional target; segments = %#v", mentioned, segments)
+	if len(mentioned) != 1 || mentioned[0] != "10002" {
+		t.Fatalf("mentioned = %#v, want only additional target; segments = %#v", mentioned, segments)
 	}
-	extraIndex := mentionIndexes[1]
+	extraIndex := mentionIndexes[0]
 	if extraIndex == 0 || segments[extraIndex-1]["type"] != "text" || !strings.Contains(segments[extraIndex-1]["data"].(map[string]string)["text"], "这件事请") {
 		t.Fatalf("additional mention position was not preserved: %#v", segments)
 	}

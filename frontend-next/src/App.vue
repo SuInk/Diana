@@ -73,7 +73,7 @@
         </button>
         <span class="topbar-title">{{ viewTitle }}</span>
         <span class="topbar-spacer" />
-        <span v-if="botSummary" class="badge" :class="botSummary.kind">
+        <span v-if="botSummary" class="badge" :class="botSummary.kind" :title="botSummary.hint">
           <span class="status-dot" :class="{ pulse: botSummary.kind === 'ok' }" aria-hidden="true" />
           {{ botSummary.label }}
         </span>
@@ -139,6 +139,7 @@ import { checkForUpdate, getAuthStatus, getConfig, getHealth, getSystemVersion, 
 import ToastHost from "./components/ToastHost.vue";
 import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
+import { channelAccountUnhealthy } from "./channel-status";
 import VersionModal from "./components/VersionModal.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
@@ -222,11 +223,18 @@ const botSummary = computed(() => {
     return { kind: "warn", label: "机器人未启动" };
   }
   const channels = status.channels ?? [status.channel];
+  const unhealthy = channels.filter(channelAccountUnhealthy);
+  if (unhealthy.length > 0) {
+    const first = unhealthy[0];
+    const message = first?.account_status_message || "QQ 账号状态异常，请在 NapCat 中检查登录状态";
+    const label = first?.account_status_known && !first.account_online ? "QQ 账号离线" : "QQ 状态异常";
+    return { kind: "err", label, hint: `${message}；WebSocket 仍已连接。` };
+  }
   const connected = channels.filter((channel) => channel.connected).length;
   if (connected === 0) {
-    return { kind: "err", label: "等待通道连接" };
+    return { kind: "err", label: "等待通道连接", hint: "请确认 NapCat 已启动，并检查反向 WebSocket 地址与 Token。" };
   }
-  return { kind: connected === channels.length ? "ok" : "warn", label: `已连接 ${connected}/${channels.length}` };
+  return { kind: connected === channels.length ? "ok" : "warn", label: `已连接 ${connected}/${channels.length}`, hint: "机器人通道与账号状态正常。" };
 });
 
 const themeModeLabels: Record<string, string> = { auto: "跟随系统", light: "浅色", dark: "深色" };
