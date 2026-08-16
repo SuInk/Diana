@@ -134,15 +134,18 @@
 
           <footer v-if="showFooter(plugin)" class="plugin-card-foot">
             <template v-if="plugin.installed">
+              <!-- 只留图标：这一列每行都要预留，带文字要占 59px，一屏里
+                   多数插件没有设置项，那就是一列 59px 宽的空洞。 -->
               <button
                 v-if="plugin.manifest.settings?.length"
-                class="btn small"
+                class="btn small icon-only"
                 type="button"
+                title="设置"
+                aria-label="设置"
                 :disabled="busyID === plugin.manifest.id"
                 @click="openSettings(plugin)"
               >
-                <SlidersHorizontal :size="14" aria-hidden="true" />
-                设置
+                <SlidersHorizontal :size="15" aria-hidden="true" />
               </button>
               <button
                 v-if="!plugin.manifest.built_in"
