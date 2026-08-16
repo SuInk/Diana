@@ -111,6 +111,20 @@ type ReleasePackageUpdater struct {
 
 	operationMu    sync.Mutex
 	handoffStarted bool
+	progressMu     sync.RWMutex
+	progress       releaseDownloadProgress
+}
+
+type releaseDownloadProgress struct {
+	phase string
+	done  int64
+	total int64
+}
+
+func (u *ReleasePackageUpdater) setProgress(phase string, done, total int64) {
+	u.progressMu.Lock()
+	u.progress = releaseDownloadProgress{phase: phase, done: done, total: total}
+	u.progressMu.Unlock()
 }
 
 // ExpectedReleaseAssetName returns the complete-package asset for a platform.
@@ -257,6 +271,18 @@ func (u *ReleasePackageUpdater) Status(context.Context) (Status, error) {
 		ApplySupported:  true,
 		UpdateAvailable: false,
 	}
+	u.progressMu.RLock()
+	progress := u.progress
+	u.progressMu.RUnlock()
+	status.UpdatePhase = progress.phase
+	status.DownloadedBytes = progress.done
+	status.DownloadTotal = progress.total
+	if progress.total > 0 {
+		status.DownloadPercent = int(progress.done * 100 / progress.total)
+		if status.DownloadPercent > 100 {
+			status.DownloadPercent = 100
+		}
+	}
 	if state, ok := readReleaseState(u.installRoot); ok {
 		status.LastUpdateAt = state.At
 		status.LastUpdateText = state.Status
@@ -286,6 +312,20 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		return Result{}, ErrUpdateInProgress
 	}
 	defer u.operationMu.Unlock()
+	u.setProgress("preparing", 0, release.Archive.Size)
+	defer func() {
+		if _, ok := u.pendingUpdate(); ok {
+			u.progressMu.RLock()
+			total := u.progress.total
+			u.progressMu.RUnlock()
+			if total <= 0 {
+				total = release.Archive.Size
+			}
+			u.setProgress("ready", total, total)
+			return
+		}
+		u.setProgress("", 0, 0)
+	}()
 	if u.handoffStarted {
 		return Result{}, ErrUpdateInProgress
 	}
@@ -327,7 +367,8 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	}()
 
 	checksumPath := filepath.Join(workRoot, "SHA256SUMS")
-	if _, err := downloadReleaseFile(ctx, u.httpClient, release.Checksums.URL, checksumPath, maxChecksumBytes); err != nil {
+	u.setProgress("checksum", 0, release.Archive.Size)
+	if _, err := downloadReleaseFile(ctx, u.httpClient, release.Checksums.URL, checksumPath, maxChecksumBytes, nil); err != nil {
 		return Result{}, fmt.Errorf("download SHA256SUMS: %w", err)
 	}
 	manifest, err := os.ReadFile(checksumPath)
@@ -339,13 +380,21 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		return Result{}, err
 	}
 	archivePath := filepath.Join(workRoot, u.assetName)
-	gotDigest, err := downloadReleaseFile(ctx, u.httpClient, release.Archive.URL, archivePath, maxReleasePackageBytes)
+	u.setProgress("downloading", 0, release.Archive.Size)
+	gotDigest, err := downloadReleaseFile(ctx, u.httpClient, release.Archive.URL, archivePath, maxReleasePackageBytes, func(done, total int64) {
+		u.setProgress("downloading", done, total)
+	})
 	if err != nil {
 		return Result{}, fmt.Errorf("download %s: %w", u.assetName, err)
 	}
 	if !strings.EqualFold(gotDigest, wantDigest) {
 		return Result{}, fmt.Errorf("%w: %s expected %s, got %s", ErrChecksumMismatch, u.assetName, wantDigest, gotDigest)
 	}
+	archiveSize := release.Archive.Size
+	if info, statErr := os.Stat(archivePath); statErr == nil && archiveSize <= 0 {
+		archiveSize = info.Size()
+	}
+	u.setProgress("extracting", archiveSize, archiveSize)
 
 	extractRoot := filepath.Join(workRoot, "extracted")
 	if err := os.Mkdir(extractRoot, 0o700); err != nil {
@@ -538,7 +587,7 @@ func startDetachedReleaseHelper(executable, planPath, logPath string) error {
 	return cmd.Process.Release()
 }
 
-func downloadReleaseFile(ctx context.Context, client *http.Client, rawURL, target string, maxBytes int64) (string, error) {
+func downloadReleaseFile(ctx context.Context, client *http.Client, rawURL, target string, maxBytes int64, progress func(int64, int64)) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", err
@@ -564,7 +613,11 @@ func downloadReleaseFile(ctx context.Context, client *http.Client, rawURL, targe
 		return "", err
 	}
 	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(resp.Body, maxBytes+1))
+	total := resp.ContentLength
+	if total <= 0 {
+		total = maxBytes
+	}
+	written, copyErr := io.Copy(io.MultiWriter(file, hash, &progressWriter{total: total, report: progress}), io.LimitReader(resp.Body, maxBytes+1))
 	closeErr := file.Close()
 	if copyErr != nil {
 		return "", copyErr
@@ -576,6 +629,20 @@ func downloadReleaseFile(ctx context.Context, client *http.Client, rawURL, targe
 		return "", fmt.Errorf("asset exceeds %d bytes", maxBytes)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type progressWriter struct {
+	written int64
+	total   int64
+	report  func(int64, int64)
+}
+
+func (w *progressWriter) Write(p []byte) (int, error) {
+	if w.report != nil {
+		w.written += int64(len(p))
+		w.report(w.written, w.total)
+	}
+	return len(p), nil
 }
 
 func checksumForAsset(manifest []byte, assetName string) (string, error) {

@@ -342,6 +342,10 @@ export interface UpdateStatus {
 	download_ready?: boolean;
 	downloaded_version?: string;
 	downloaded_at?: string;
+	update_phase?: "preparing" | "checksum" | "downloading" | "extracting" | "ready";
+	download_percent?: number;
+	downloaded_bytes?: number;
+	download_total?: number;
 }
 
 export interface UpdateResult {
