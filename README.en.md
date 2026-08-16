@@ -2,6 +2,8 @@
 
 [中文](./README.md)
 
+[Website and Docs](https://suink.github.io/Diana/) · [Live Demo](https://suink.github.io/Diana/demo/) · [Latest Release](https://github.com/SuInk/Diana/releases/latest)
+
 Diana is a multi-platform AI assistant service written in Go, with an LLM compatibility layer, platform adapters, a Gin WebUI, and plugin management. It currently ships with a QQ adapter for OneBot v11; the WebUI manages multiple assistant profiles, models, platform connections, trigger aliases, and built-in plugins.
 
 ## Requirements
