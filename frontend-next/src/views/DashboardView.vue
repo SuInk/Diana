@@ -66,46 +66,37 @@
         <!-- 三项统一成同一套结构：归属 · 名称 / 读数 / 一行补充。只报事实，
              不画进度条。CPU 和内存是 Diana 自己的用量，存储没有「Diana 的
              份额」这种东西，就照实标成整机，不硬凑一个数。 -->
+        <!-- 和上面的统计卡片共用同一套指标排版：内联图标 + 标签 / 读数 / 补充行。
+             CPU 和内存报 Diana 自己的用量；存储没有「Diana 的份额」这种东西，
+             就照实标成整机，不硬凑一个数。 -->
         <div class="resource-grid">
           <article class="resource-item">
-            <div class="resource-heading">
-              <span class="resource-icon"><Cpu :size="17" aria-hidden="true" /></span>
-              <div>
-                <div class="resource-label">{{ processMetricsReady ? "CPU · Diana" : "CPU · 整机" }}</div>
-                <div class="resource-value">{{ formatPercent(processMetricsReady ? stats?.server?.process_cpu_percent : stats?.server?.cpu_usage_percent) }}</div>
-              </div>
-            </div>
-            <div class="resource-detail">
-              <span>{{ stats?.server ? `${stats.server.cpu_cores} 核` : "等待采样" }}</span>
-            </div>
+            <span class="stat-label">
+              <Cpu :size="14" aria-hidden="true" />
+              {{ processMetricsReady ? "CPU · Diana" : "CPU · 整机" }}
+            </span>
+            <span class="stat-value">{{ formatPercent(processMetricsReady ? stats?.server?.process_cpu_percent : stats?.server?.cpu_usage_percent) }}</span>
+            <span class="stat-foot">{{ stats?.server ? `${stats.server.cpu_cores} 核` : "等待采样" }}</span>
           </article>
 
           <article class="resource-item">
-            <div class="resource-heading">
-              <span class="resource-icon"><MemoryStick :size="17" aria-hidden="true" /></span>
-              <div>
-                <div class="resource-label">{{ processMetricsReady ? "内存 · Diana" : "内存 · 整机" }}</div>
-                <div class="resource-value">
-                  {{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : formatPercent(stats?.server?.memory_usage_percent) }}
-                </div>
-              </div>
-            </div>
-            <div class="resource-detail">
-              <span>{{ memoryUsageLabel }}</span>
-            </div>
+            <span class="stat-label">
+              <MemoryStick :size="14" aria-hidden="true" />
+              {{ processMetricsReady ? "内存 · Diana" : "内存 · 整机" }}
+            </span>
+            <span class="stat-value">
+              {{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : formatPercent(stats?.server?.memory_usage_percent) }}
+            </span>
+            <span class="stat-foot">{{ memoryUsageLabel }}</span>
           </article>
 
           <article class="resource-item">
-            <div class="resource-heading">
-              <span class="resource-icon"><HardDrive :size="17" aria-hidden="true" /></span>
-              <div>
-                <div class="resource-label">存储空间 · 整机</div>
-                <div class="resource-value">{{ formatPercent(stats?.server?.storage_usage_percent) }}</div>
-              </div>
-            </div>
-            <div class="resource-detail">
-              <span>{{ storageUsageLabel }}</span>
-            </div>
+            <span class="stat-label">
+              <HardDrive :size="14" aria-hidden="true" />
+              存储空间 · 整机
+            </span>
+            <span class="stat-value">{{ formatPercent(stats?.server?.storage_usage_percent) }}</span>
+            <span class="stat-foot">{{ storageUsageLabel }}</span>
           </article>
         </div>
         <div v-if="resourceUnavailableReason" class="resource-unavailable">
