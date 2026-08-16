@@ -64,29 +64,30 @@
           </div>
           <span v-if="stats?.server?.collected_at" class="badge">更新于 {{ formatClock(stats.server.collected_at) }}</span>
         </div>
+        <!-- 三项统一成同一套结构：归属 · 名称 / 大字读数 / 占整机的比例条 /
+             一行补充。CPU 和内存报 Diana 自己的用量，存储没有「Diana 的份额」
+             这种东西，就照实标成整机，不硬凑一个数。 -->
         <div class="resource-grid">
           <article class="resource-item">
             <div class="resource-heading">
               <span class="resource-icon"><Cpu :size="17" aria-hidden="true" /></span>
               <div>
-                <!-- 这是 Diana 的控制台，先回答「它自己吃了多少」；整机占用退到
-                     下面一行做背景信息。进程指标缺失时才退回整机数字。 -->
-                <div class="resource-label">{{ stats?.server?.process_cpu_percent !== undefined ? "CPU · Diana" : "CPU" }}</div>
-                <div class="resource-value">{{ formatPercent(stats?.server?.process_cpu_percent ?? stats?.server?.cpu_usage_percent) }}</div>
+                <div class="resource-label">{{ processMetricsReady ? "CPU · Diana" : "CPU · 整机" }}</div>
+                <div class="resource-value">{{ formatPercent(processMetricsReady ? stats?.server?.process_cpu_percent : stats?.server?.cpu_usage_percent) }}</div>
               </div>
             </div>
-            <div class="resource-track" role="progressbar" aria-label="CPU 占用" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="resourcePercent(stats?.server?.cpu_usage_percent)">
-              <span :class="usageClass(stats?.server?.cpu_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.cpu_usage_percent)}%` }" />
-              <!-- 整条是整机占用，实心的一小段是 Diana 在其中的份额 -->
-              <span
-                v-if="stats?.server?.process_cpu_percent !== undefined"
-                class="resource-track-own"
-                :style="{ width: `${resourcePercent(stats.server.process_cpu_percent)}%` }"
-              />
+            <div
+              class="resource-track"
+              role="progressbar"
+              aria-label="CPU 占用"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="cpuBarPercent"
+            >
+              <span :class="usageClass(cpuBarPercent)" :style="{ width: `${cpuBarPercent}%` }" />
             </div>
             <div class="resource-detail">
-              <span>{{ stats?.server ? `整机 ${formatPercent(stats.server.cpu_usage_percent)}` : "等待采样" }}</span>
-              <span v-if="stats?.server">{{ stats.server.cpu_cores }} 核</span>
+              <span>{{ stats?.server ? `${stats.server.cpu_cores} 核` : "等待采样" }}</span>
             </div>
           </article>
 
@@ -94,22 +95,23 @@
             <div class="resource-heading">
               <span class="resource-icon"><MemoryStick :size="17" aria-hidden="true" /></span>
               <div>
-                <div class="resource-label">{{ stats?.server?.process_memory_bytes !== undefined ? "内存 · Diana" : "内存" }}</div>
+                <div class="resource-label">{{ processMetricsReady ? "内存 · Diana" : "内存 · 整机" }}</div>
                 <div class="resource-value">
-                  {{ stats?.server?.process_memory_bytes !== undefined ? formatBytes(stats.server.process_memory_bytes) : formatPercent(stats?.server?.memory_usage_percent) }}
+                  {{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : formatPercent(stats?.server?.memory_usage_percent) }}
                 </div>
               </div>
             </div>
-            <div class="resource-track" role="progressbar" aria-label="内存占用" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="resourcePercent(stats?.server?.memory_usage_percent)">
-              <span :class="usageClass(stats?.server?.memory_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.memory_usage_percent)}%` }" />
-              <span
-                v-if="stats?.server?.process_memory_bytes !== undefined"
-                class="resource-track-own"
-                :style="{ width: `${processMemoryPercent}%` }"
-              />
+            <div
+              class="resource-track"
+              role="progressbar"
+              aria-label="内存占用"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="memoryBarPercent"
+            >
+              <span :class="usageClass(memoryBarPercent)" :style="{ width: `${memoryBarPercent}%` }" />
             </div>
             <div class="resource-detail">
-              <span>{{ stats?.server ? `整机 ${formatPercent(stats.server.memory_usage_percent)}` : "等待采样" }}</span>
               <span>{{ memoryUsageLabel }}</span>
             </div>
           </article>
@@ -118,16 +120,22 @@
             <div class="resource-heading">
               <span class="resource-icon"><HardDrive :size="17" aria-hidden="true" /></span>
               <div>
-                <div class="resource-label">存储空间</div>
+                <div class="resource-label">存储空间 · 整机</div>
                 <div class="resource-value">{{ formatPercent(stats?.server?.storage_usage_percent) }}</div>
               </div>
             </div>
-            <div class="resource-track" role="progressbar" aria-label="存储空间占用" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="resourcePercent(stats?.server?.storage_usage_percent)">
+            <div
+              class="resource-track"
+              role="progressbar"
+              aria-label="存储空间占用"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="resourcePercent(stats?.server?.storage_usage_percent)"
+            >
               <span :class="usageClass(stats?.server?.storage_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.storage_usage_percent)}%` }" />
             </div>
             <div class="resource-detail">
               <span>{{ storageUsageLabel }}</span>
-              <span v-if="stats?.server?.storage_available_bytes !== undefined">可用 {{ formatBytes(stats.server.storage_available_bytes) }}</span>
             </div>
           </article>
         </div>
@@ -258,21 +266,36 @@ const resourceHostLabel = computed(() => {
   const platform = [server.os, server.arch].filter(Boolean).join(" / ");
   return [server.hostname, platform].filter(Boolean).join(" · ");
 });
+// 补充行统一放「这台机器有多少」，和 CPU 的「10 核」同一性质，
+// 而不是再报一遍别人的用量。
 const memoryUsageLabel = computed(() => {
   const server = stats.value?.server;
   if (!server?.memory_total_bytes) return "暂不可用";
-  return `${formatBytes(server.memory_used_bytes)} / ${formatBytes(server.memory_total_bytes)}`;
+  return `共 ${formatBytes(server.memory_total_bytes)}`;
 });
-// Diana 的常驻内存换算成整机占比，用来在进度条上标出自己的那一段。
+// 进程指标可能因为权限或平台限制采集不到，那时整张卡片退回整机读数。
+const processMetricsReady = computed(() => {
+  const server = stats.value?.server;
+  return !!server && !server.process_metrics_unavailable && server.process_cpu_percent !== undefined;
+});
+// 三条比例条统一表示「占这台机器的多少」，Diana 的内存要先换算成整机占比。
 const processMemoryPercent = computed(() => {
   const server = stats.value?.server;
   if (!server?.memory_total_bytes || server.process_memory_bytes === undefined) return 0;
   return Math.min(100, (server.process_memory_bytes / server.memory_total_bytes) * 100);
 });
+const cpuBarPercent = computed(() =>
+  resourcePercent(processMetricsReady.value ? stats.value?.server?.process_cpu_percent : stats.value?.server?.cpu_usage_percent)
+);
+const memoryBarPercent = computed(() =>
+  processMetricsReady.value ? processMemoryPercent.value : resourcePercent(stats.value?.server?.memory_usage_percent)
+);
 const storageUsageLabel = computed(() => {
   const server = stats.value?.server;
   if (!server?.storage_total_bytes) return "暂不可用";
-  return `${formatBytes(server.storage_used_bytes)} / ${formatBytes(server.storage_total_bytes)}`;
+  const total = `共 ${formatBytes(server.storage_total_bytes)}`;
+  if (server.storage_available_bytes === undefined) return total;
+  return `${total} · 可用 ${formatBytes(server.storage_available_bytes)}`;
 });
 const resourceUnavailableReason = computed(() => {
   const server = stats.value?.server;
