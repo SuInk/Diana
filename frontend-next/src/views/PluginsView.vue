@@ -214,22 +214,11 @@
 
       <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="plugin-settings-section-head">
         <h3>GitHub 认证</h3>
-        <p>公共 Token 同时用于仓库更新检查和 Issue 创建；用户仍可在“提 Issue”中配置自己的独立 Token。</p>
-        <div class="repository-watch-token-guide">
-          <KeyRound :size="17" aria-hidden="true" />
-          <div>
-            <strong>公开仓库也有匿名请求额度</strong>
-            <p>匿名模式新订阅默认每 1 小时检查一次；配置 Token 后默认每 60 秒一次。周期仍可自行调整，多个订阅会共享 GitHub API 额度。</p>
-          </div>
-          <a
-            class="btn small"
-            href="https://github.com/settings/personal-access-tokens/new"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <ExternalLink :size="14" aria-hidden="true" />
-            创建 Token
-          </a>
+        <p>公共 Token 同时用于仓库更新检查和 Issue 创建；具体仓库是否允许 Issue 操作，在“仓库管理”中配置。</p>
+        <div class="token-type-guide">
+          <p><strong>Fine-grained token</strong>：只授权选定的仓库和具体权限，适合只管理自己明确配置的仓库，权限更小、更安全。</p>
+          <p><strong>Classic token</strong>：权限范围更大；需要查看未加入白名单的仓库、跨账号或组织访问，或调用更多旧版 GitHub API 能力时使用。</p>
+          <p>公开仓库也可以匿名读取，但请求额度较低；配置 Token 后可提高额度。无论哪种 Token，都必须拥有目标仓库本身的访问权限。<a class="token-create-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer"><ExternalLink :size="13" aria-hidden="true" />创建 Token</a></p>
         </div>
       </div>
       <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="stack plugin-settings-form github-publish-global-settings">
@@ -322,6 +311,16 @@
         :issue-enabled-repositories="issueEnabledRepositories"
         @update:issue-enabled-repositories="repositoryPublishForm.allowed_repositories = $event.join('\n')"
       />
+      <div v-if="isGitHubSettings && githubSettingsTab === 'repositories'" class="repository-records-hint">
+        <div>
+          <strong>运行记录</strong>
+          <span>Issue 草稿在“任务”页查看，仓库检查和创建记录在“日志”页查看。</span>
+        </div>
+        <div class="cluster">
+          <button class="btn small ghost" type="button" @click="navigate('tasks')">查看草稿</button>
+          <button class="btn small ghost" type="button" @click="navigate('logs')">查看日志</button>
+        </div>
+      </div>
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
         :prepare-access="saveSettingsForSubscription"
@@ -367,7 +366,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ChevronDown, ExternalLink, KeyRound, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
+import { ChevronDown, ExternalLink, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installResolverDependency,
@@ -566,7 +565,7 @@ function pluginDisplayName(plugin: PluginState): string {
 
 function pluginDisplayDescription(plugin: PluginState): string {
   if (plugin.manifest.id !== repositoryWatchPluginID) return plugin.manifest.description;
-  return "统一管理 GitHub Token、仓库更新订阅，以及群聊中的 Issue 草稿、授权审批与正式创建。";
+  return "统一管理 GitHub Token、仓库更新订阅和按仓库的 Issue 能力；草稿与运行记录分别在任务、日志页查看。";
 }
 
 type PluginLayout = "masonry" | "rows";

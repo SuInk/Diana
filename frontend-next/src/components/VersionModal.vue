@@ -120,7 +120,7 @@
         <div class="cluster" style="justify-content: space-between">
           <h3 style="margin: 0; font-size: 14px">最近版本</h3>
           <span class="muted" style="font-size: 12.5px">
-            {{ deploymentMode === "git" ? "支持手动回退" : releaseSelfUpdate ? "异常时自动恢复旧版本" : "固定镜像标签后由部署环境重启" }}
+            {{ deploymentMode === "git" || releaseSelfUpdate ? "可回退最近 5 个稳定版本" : "固定镜像标签后由部署环境重启" }}
           </span>
         </div>
         <ul class="recent-version-list">
@@ -145,7 +145,7 @@
               </a>
               <span v-else-if="deploymentMode === 'release' && !releaseSelfUpdate" class="badge ok" title="容器镜像由 OCI digest 校验">OCI digest</span>
               <button
-                v-if="deploymentMode === 'git' && isOlderRelease(release.tag)"
+                v-if="(deploymentMode === 'git' || releaseSelfUpdate) && isOlderRelease(release.tag)"
                 class="btn danger small"
                 type="button"
                 :disabled="operationRunning"
@@ -169,7 +169,7 @@
         </ul>
         <div v-if="deploymentMode === 'release' && !releaseSelfUpdate" class="release-rollback-note">
           <Container :size="16" aria-hidden="true" />
-          <span>回退时将部署镜像固定为 <code>ghcr.io/suink/diana:&lt;版本&gt;</code>，并暂停 Watchtower 等自动更新器；镜像拉取会校验 OCI digest。</span>
+          <span>回退时将部署镜像固定为 <code>ghcr.io/suink/diana:&lt;版本&gt;</code>，并暂停 Watchtower 等自动更新器；镜像拉取会校验 OCI digest。WebUI 不能直接重建宿主机容器。</span>
         </div>
       </section>
 
@@ -177,7 +177,7 @@
         <AlertTriangle :size="17" aria-hidden="true" />
         <div class="stack" style="gap: 8px; flex: 1">
           <strong>回退到 {{ rollbackTarget.tag }}？</strong>
-          <span class="muted" style="font-size: 12.5px">这会把已跟踪代码重置到该版本，工作区有未提交修改时服务端会拒绝执行。回退后需重启服务。</span>
+          <span class="muted" style="font-size: 12.5px">{{ releaseSelfUpdate ? "会重新下载并校验目标完整 Release 包，安装后重启并执行健康检查；失败会自动恢复。" : "会把已跟踪代码重置到该版本，工作区有未提交修改时服务端会拒绝执行；回退后需重启服务。" }}</span>
           <div class="cluster" style="gap: 8px">
             <button class="btn danger small" type="button" :disabled="operationRunning" @click="rollback">确认回退</button>
             <button class="btn ghost small" type="button" :disabled="operationRunning" @click="rollbackTarget = null">取消</button>
@@ -313,7 +313,7 @@ const currentTag = computed(() => {
   return raw.split("+")[0].split("（")[0].trim();
 });
 
-const recentReleases = computed(() => releases.value.filter((release) => !release.prerelease).slice(0, 5));
+const recentReleases = computed(() => releases.value.filter((release) => !release.prerelease).slice(0, 6));
 
 function formatDate(value?: string): string {
   if (!value) return "";
@@ -552,9 +552,16 @@ async function rollback(): Promise<void> {
     const target = rollbackTarget.value.tag;
     const response = await rollbackSystem(target);
     status.value = response.result.status;
-    updatedHint.value = `已回退到 ${target}，重启服务后生效`;
+    if (releaseSelfUpdate.value && response.result.restart_required) {
+      installTarget = response.result.target_commit || target;
+      installStartedAt = Date.now();
+      installTracking.value = true;
+      updatedHint.value = `正在回退到 ${installTarget}，服务即将重启并执行健康检查`;
+    } else {
+      updatedHint.value = `已回退到 ${target}，重启服务后生效`;
+    }
     rollbackTarget.value = null;
-    toastSuccess(`已回退到 ${target}`);
+    toastSuccess(releaseSelfUpdate.value && response.result.restart_required ? `已开始回退到 ${target}` : `已回退到 ${target}`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "版本回退失败");
   } finally {
