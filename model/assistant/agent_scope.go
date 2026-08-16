@@ -254,8 +254,8 @@ func (r *Runtime) recordAgentScope(ctx context.Context, event MessageEvent, scop
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.agent_scope",
-		Message: "LLM 已选择本轮上下文和工具",
+		Action:  "qqbot.planner",
+		Message: "planner 已完成回复判断，工具和上下文建议仅供 Agent 参考",
 		Actor:   qqEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
@@ -263,7 +263,7 @@ func (r *Runtime) recordAgentScope(ctx context.Context, event MessageEvent, scop
 			"user_id":            event.UserID,
 			"selected_tools":     append([]string(nil), scope.ToolNames...),
 			"tools_before":       toolsBefore,
-			"tools_after":        len(scope.ToolNames),
+			"tools_after":        toolsBefore,
 			"context_before":     contextBefore,
 			"context_after":      contextAfter,
 			"keep_older_summary": scope.KeepContextSummary,

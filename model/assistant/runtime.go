@@ -1785,7 +1785,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	routeUserMessage := llmMessageFromEventWithImagesForContext(
 		routeCtx,
 		event,
-		"请从本批群消息中判断机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。消息上下文 JSON：\n"+string(payloadJSON),
+		"请从本批群消息中判断机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 planner，只负责回复判断，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"+string(payloadJSON),
 		nil,
 	)
 	messages := []llm.Message{
@@ -2695,11 +2695,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		intent, scope, routed := r.routeReplyIntent(ctx, event, cleanText, routingRegistry, strings.TrimSpace(olderSummary) != "")
 		if routed {
 			agentScope = scope
-			if agentRegistry != nil && chatHistoryReferenceOutsideContext(event, replyHistory) {
-				if _, available := agentRegistry.Get(dianaChatHistoryToolName); available {
-					agentScope.ToolNames = appendUniqueStrings(agentScope.ToolNames, dianaChatHistoryToolName)
-				}
-			}
 		}
 		if routed && intent.Action != visualIntentNone {
 			switch intent.Action {
@@ -2723,7 +2718,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return "", err
 				}
 				asyncImageTaskNotice = asyncImageReplyInstruction(queued)
-				agentScope.ToolNames = withoutAgentTool(agentScope.ToolNames, dianaImageToolName)
 			case visualIntentEditImage:
 				if !relationship.AllowImageEditing {
 					reply := relationshipPermissionDenied(relationship, "图片编辑", relationshipImageTierName)
@@ -2744,7 +2738,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return "", err
 				}
 				asyncImageTaskNotice = asyncImageReplyInstruction(queued)
-				agentScope.ToolNames = withoutAgentTool(agentScope.ToolNames, dianaImageToolName)
 			}
 		}
 	}
@@ -2758,7 +2751,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	if agentScope.Routed {
-		replyHistory = filterAgentReplyHistory(replyHistory, event, agentScope)
+		// Planner output is advisory only. The Agent owns context selection and
+		// tool planning; planner suggestions are retained for observability.
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
@@ -2783,7 +2777,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Priority: llm.MessagePriorityMemory,
 			})
 		}
-		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" && (!agentScope.Routed || agentScope.KeepContextSummary) {
+		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			messages = append(messages, llm.Message{
 				Role:     llm.RoleUser,
 				Content:  "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n" + summary,
