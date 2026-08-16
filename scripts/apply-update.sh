@@ -38,8 +38,6 @@ TARGET_APP=""
 TARGET_EXECUTABLE="${DIANA_APP_EXECUTABLE:-$RUNNING_EXECUTABLE}"
 if [[ "$TARGET_EXECUTABLE" == */Contents/MacOS/diana-webui ]]; then
 	TARGET_APP="${TARGET_EXECUTABLE%/Contents/MacOS/diana-webui}"
-elif [[ "$TARGET_EXECUTABLE" == */Contents/MacOS/diana-qq-bot-webui ]]; then
-	TARGET_APP="${TARGET_EXECUTABLE%/Contents/MacOS/diana-qq-bot-webui}"
 fi
 if [[ -z "$TARGET_EXECUTABLE" || "$TARGET_EXECUTABLE" == *"/go-build"* ]]; then
 	TARGET_EXECUTABLE="$ROOT/dist/diana-webui"

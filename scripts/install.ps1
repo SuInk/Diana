@@ -143,7 +143,7 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
     if ($startAfterInstall) {
         Write-Host "==> Start -> enforcing one Diana instance"
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -eq $binaryName -or $_.Name -eq "$packageName.exe" -or $_.Name -eq "diana-qq-bot.exe" -or $_.Name -like "diana-webui-*.exe" } |
+            Where-Object { $_.Name -eq $binaryName -or $_.Name -eq "$packageName.exe" -or $_.Name -like "diana-webui-*.exe" } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
         $occupied = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
@@ -184,7 +184,11 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
                     $backup = Join-Path $dataBackup "diana.db$suffix"
                     if (Test-Path $backup) { Copy-Item -Force $backup "$dbPath$suffix" }
                 }
-                $restored = Start-Process -FilePath (Join-Path $installDir $binaryName) -WorkingDirectory $installDir -WindowStyle Hidden -PassThru
+                $restoredExecutable = Join-Path $installDir $binaryName
+                if (-not (Test-Path $restoredExecutable)) {
+                    $restoredExecutable = Join-Path $installDir "$packageName.exe"
+                }
+                $restored = Start-Process -FilePath $restoredExecutable -WorkingDirectory $installDir -WindowStyle Hidden -PassThru
                 Set-Content -Encoding ASCII -Path (Join-Path $installDir ".diana.pid") -Value $restored.Id
             }
             $logFiles = @((Join-Path $installDir "logs\diana.log"), (Join-Path $installDir "logs\installer-service.log"))

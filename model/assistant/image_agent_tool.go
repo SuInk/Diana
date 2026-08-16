@@ -70,7 +70,7 @@ func (t *dianaImageTool) Description() string {
 	if len(operations) == 0 {
 		operations = append(operations, "无")
 	}
-	return `异步生成或编辑图片。工具会立即返回已受理的任务编号，图片在后台完成后自动发送；调用后必须继续输出 final 文字回复，不要等待图片，也不要再次调用本工具。当前允许操作：` + strings.Join(operations, "、") + `。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索/浏览器调用；prompt 必须包含已确认的具体事实、外观和约束，不能虚构未查到的内容。input: {"operation":"generate 或 edit","prompt":"交给图片模型的完整、自包含最终提示词","caption":"图片完成后随图发送的短文字，可选"}`
+	return `异步生成或编辑图片。工具会立即返回已受理的任务编号，图片在后台完成后自动发送；调用后必须继续输出 final 文字回复，不要等待图片，也不要再次调用本工具。当前允许操作：` + strings.Join(operations, "、") + `。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索/浏览器调用；prompt 必须包含已确认的具体事实、外观和约束，不能虚构未查到的内容。input: {"operation":"generate 或 edit，可选；省略时默认 generate","prompt":"交给图片模型的完整、自包含最终提示词","caption":"图片完成后随图发送的短文字，可选"}`
 }
 
 func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -106,9 +106,9 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	}
 	if operation == "" {
 		switch {
-		case t.relationship.AllowImageGeneration && !t.relationship.AllowImageEditing:
+		case t.relationship.AllowImageGeneration:
 			operation = "generate"
-		case !t.relationship.AllowImageGeneration && t.relationship.AllowImageEditing:
+		case t.relationship.AllowImageEditing:
 			operation = "edit"
 		default:
 			return dianaImageToolRequest{}, fmt.Errorf("operation 必须是 generate 或 edit")

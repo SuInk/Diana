@@ -180,6 +180,15 @@ CREATE TABLE IF NOT EXISTS inbound_events (
   completed_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS repository_issue_drafts (
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'created', 'cancelled')),
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_message_events_session_time ON message_events(session, event_time DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_message_events_kind_group_time ON message_events(kind, group_id, event_time DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_message_events_text ON message_events(text);
@@ -204,6 +213,7 @@ CREATE INDEX IF NOT EXISTS idx_inbound_events_lease ON inbound_events(status, le
 CREATE INDEX IF NOT EXISTS idx_inbound_events_session_lease ON inbound_events(status, session, lease_until);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_session_time ON inbound_events(session, event_time, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_group_time ON inbound_events(group_id, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repository_issue_drafts(group_id, status, created_at DESC);
 `)
 	if err != nil {
 		return err
