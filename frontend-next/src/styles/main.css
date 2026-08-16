@@ -1374,38 +1374,6 @@ code {
   color: var(--muted);
 }
 
-.resource-monitor .card-header {
-  border-bottom: 1px solid var(--border);
-}
-
-.resource-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.resource-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  /* 和 .stat-card 同一套内边距，两块区域并排时行高对得上 */
-  padding: 16px 18px;
-}
-
-.resource-item + .resource-item {
-  border-left: 1px solid var(--border);
-}
-
-
-.resource-unavailable {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 20px;
-  border-top: 1px solid var(--border);
-  color: var(--warn);
-  font-size: 12px;
-}
 
 /* 柱状 sparkline */
 .spark-bars {
@@ -3989,15 +3957,6 @@ code {
   .grid-2,
   .grid-main-side {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .resource-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .resource-item + .resource-item {
-    border-top: 1px solid var(--border);
-    border-left: 0;
   }
 
   .app-content {

@@ -2,13 +2,13 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <section class="issue-access-editor">
+  <section class="issue-access-editor" :class="{ scoped: isScoped }">
     <header class="section-heading">
       <div>
-        <h3>授权用户</h3>
-        <p>只有群内且对目标仓库有授权的用户，才能批准并创建 Issue。</p>
+        <h3>{{ isScoped ? "Issue 授权方式" : "指定用户" }}</h3>
+        <p>{{ isScoped ? `仅配置 ${repositoryKeyValue} 的授权；可同时指定群内用户和群聊，其他仓库互不影响。` : "只有群内且对目标仓库有授权的用户，才能批准并创建 Issue。" }}</p>
       </div>
-      <span class="badge accent">{{ users.length }} 个用户</span>
+      <span class="badge accent">{{ users.length }} 个指定用户</span>
     </header>
 
     <div class="rule-list">
@@ -40,25 +40,25 @@
             </div>
           </label>
         </div>
-        <RepositoryListEditor :repositories="user.repositories" placeholder="owner/repo 或 GitHub 仓库链接" @update="updateUserRepositories(index, $event)" />
+        <RepositoryListEditor v-if="!isScoped" :repositories="user.repositories" placeholder="owner/repo 或 GitHub 仓库链接" @update="updateUserRepositories(index, $event)" />
       </article>
     </div>
     <button class="btn small ghost add-rule" type="button" @click="addUser">
       <UserPlus :size="15" aria-hidden="true" />
-      添加授权用户
+      添加指定用户
     </button>
 
     <div class="section-divider"></div>
 
     <header class="section-heading">
       <div>
-        <h3>群聊草稿范围</h3>
-        <p>群内所有成员都能提交需求并生成草稿，但不能直接写入 GitHub。</p>
+        <h3>指定群聊（可提交草稿）</h3>
+        <p>指定群聊内的成员都能提交需求并生成草稿，但不能直接写入 GitHub；仍需指定用户确认。</p>
       </div>
-      <span class="badge">{{ groups.length }} 个群聊</span>
+      <span class="badge">{{ groups.length }} 个指定群聊</span>
     </header>
     <div class="approval-flow">
-      <span>成员提出需求</span><ArrowRight :size="14" /><span>机器人复述草稿</span><ArrowRight :size="14" /><span>授权成员确认</span><ArrowRight :size="14" /><span>创建 Issue</span>
+      <span>成员提出需求</span><ArrowRight :size="14" /><span>机器人复述草稿</span><ArrowRight :size="14" /><span>指定用户确认</span><ArrowRight :size="14" /><span>创建 Issue</span>
     </div>
     <div class="rule-list">
       <article v-for="(group, index) in groups" :key="`group-${index}`" class="access-rule group-rule">
@@ -71,12 +71,12 @@
             <Trash2 :size="15" aria-hidden="true" />
           </button>
         </div>
-        <RepositoryListEditor :repositories="group.repositories" placeholder="owner/repo 或 GitHub 仓库链接" @update="updateGroupRepositories(index, $event)" />
+        <RepositoryListEditor v-if="!isScoped" :repositories="group.repositories" placeholder="owner/repo 或 GitHub 仓库链接" @update="updateGroupRepositories(index, $event)" />
       </article>
     </div>
     <button class="btn small ghost add-rule" type="button" @click="showGroupPicker = !showGroupPicker">
       <MessageSquarePlus :size="15" aria-hidden="true" />
-      添加群聊
+      添加指定群聊
     </button>
     <div v-if="showGroupPicker" class="group-picker">
       <input v-model="groupQuery" class="input" type="search" placeholder="搜索已加入的群名称或群号" />
@@ -100,7 +100,7 @@ import AppSelect, { type AppSelectOption } from "./AppSelect.vue";
 type AccessRule = { id: string; repositories: string[] };
 type UserRule = AccessRule & { tokenConfigured: boolean; authMode: "inherit" | "gh" | "token" };
 
-const props = defineProps<{ userAccess: string; groupAccess: string; tokenUsers: string; userAuthModes: string; joinedGroups: QQBotGroupSummary[]; groupsLoading?: boolean; groupsWarning?: string }>();
+const props = defineProps<{ userAccess: string; groupAccess: string; tokenUsers: string; userAuthModes: string; repository?: string; joinedGroups: QQBotGroupSummary[]; groupsLoading?: boolean; groupsWarning?: string }>();
 const emit = defineEmits<{
   "update:userAccess": [string];
   "update:groupAccess": [string];
@@ -112,8 +112,10 @@ const emit = defineEmits<{
 
 const configuredTokenUsers = ref(parseIDs(props.tokenUsers));
 const initialAuthModes = parseAuthModes(props.userAuthModes);
-const users = ref<UserRule[]>(parseRules(props.userAccess).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: initialAuthModes[rule.id] || "token" })));
-const groups = ref<AccessRule[]>(parseRules(props.groupAccess));
+const isScoped = computed(() => Boolean(normalizeRepository(props.repository ?? "")));
+const repositoryKeyValue = computed(() => normalizeRepository(props.repository ?? ""));
+const users = ref<UserRule[]>(rulesForDisplay(props.userAccess, isScoped.value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: initialAuthModes[rule.id] || "token" })));
+const groups = ref<AccessRule[]>(rulesForDisplay(props.groupAccess, isScoped.value));
 const tokenChanges = ref<Record<string, string | null>>({});
 const showGroupPicker = ref(false);
 const groupQuery = ref("");
@@ -128,11 +130,13 @@ const availableGroups = computed(() => {
   return props.joinedGroups.filter((group) => group.joined && !selected.has(group.group_id) && (!query || `${group.group_name ?? ""} ${group.group_id}`.toLowerCase().includes(query)));
 });
 
-watch(() => props.userAccess, (value) => {
-  if (value !== serializeRules(users.value)) users.value = parseRules(value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: parseAuthModes(props.userAuthModes)[rule.id] || "token" }));
+watch(() => [props.userAccess, props.repository], ([value]) => {
+  const nextValue = value ?? "";
+  if (nextValue !== serializeEditorRules(users.value, props.userAccess)) users.value = rulesForDisplay(nextValue, isScoped.value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: parseAuthModes(props.userAuthModes)[rule.id] || "token" }));
 });
-watch(() => props.groupAccess, (value) => {
-  if (value !== serializeRules(groups.value)) groups.value = parseRules(value);
+watch(() => [props.groupAccess, props.repository], ([value]) => {
+  const nextValue = value ?? "";
+  if (nextValue !== serializeEditorRules(groups.value, props.groupAccess)) groups.value = rulesForDisplay(nextValue, isScoped.value);
 });
 watch(() => props.tokenUsers, (value) => {
   configuredTokenUsers.value = parseIDs(value);
@@ -147,6 +151,12 @@ function parseRules(value: string): AccessRule[] {
     const separator = line.indexOf("=");
     return { id: (separator >= 0 ? line.slice(0, separator) : line).trim(), repositories: parseRepositories(separator >= 0 ? line.slice(separator + 1) : "") };
   });
+}
+function rulesForDisplay(value: string, scoped: boolean): AccessRule[] {
+  const rules = parseRules(value);
+  if (!scoped) return rules;
+  const repository = repositoryKeyValue.value.toLowerCase();
+  return rules.map((rule) => ({ ...rule, repositories: rule.repositories.filter((item) => normalizeRepository(item).toLowerCase() === repository) })).filter((rule) => rule.repositories.length > 0);
 }
 function parseIDs(value: string): Set<string> {
   return new Set(String(value ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
@@ -164,25 +174,57 @@ function groupSummary(groupID: string): QQBotGroupSummary | undefined { return p
 function serializeRules(value: AccessRule[]): string {
   return value.filter((rule) => rule.id.trim()).map((rule) => `${rule.id.trim()} = ${rule.repositories.join(", ")}`).join("\n");
 }
+function serializeEditorRules(value: AccessRule[], original: string): string {
+  if (!isScoped.value) return serializeRules(value);
+  const repository = repositoryKeyValue.value.toLowerCase();
+  const merged = new Map<string, string[]>();
+  for (const rule of parseRules(original)) {
+    const id = rule.id.trim();
+    if (!id) continue;
+    const repositories = (merged.get(id) ?? []).filter((item) => normalizeRepository(item).toLowerCase() !== repository);
+    merged.set(id, repositories);
+  }
+  for (const rule of value) {
+    const id = rule.id.trim();
+    if (!id || (!isScoped.value && !rule.repositories.length)) continue;
+    const repositories = merged.get(id) ?? [];
+    if (!repositories.some((item) => normalizeRepository(item).toLowerCase() === repository)) repositories.push(repositoryKeyValue.value);
+    merged.set(id, repositories);
+  }
+  return [...merged.entries()].filter(([, repositories]) => repositories.length).map(([id, repositories]) => `${id} = ${repositories.join(", ")}`).join("\n");
+}
+function serializeAuthModes(userAccess: string): string {
+  const modes = parseAuthModes(props.userAuthModes);
+  const configuredUsers = new Set(parseRules(userAccess).map((rule) => rule.id.trim()).filter(Boolean));
+  for (const user of users.value) {
+    const id = user.id.trim();
+    if (id) modes[id] = user.authMode;
+  }
+  for (const id of Object.keys(modes)) if (!configuredUsers.has(id)) delete modes[id];
+  return JSON.stringify(modes);
+}
 function emitAll(): void {
-  emit("update:userAccess", serializeRules(users.value));
-  emit("update:groupAccess", serializeRules(groups.value));
+  const userAccess = serializeEditorRules(users.value, props.userAccess);
+  emit("update:userAccess", userAccess);
+  emit("update:groupAccess", serializeEditorRules(groups.value, props.groupAccess));
   emit("update:userTokens", Object.keys(tokenChanges.value).length ? JSON.stringify(tokenChanges.value) : "");
   emit("update:tokenUsers", [...configuredTokenUsers.value].join("\n"));
-  emit("update:userAuthModes", JSON.stringify(Object.fromEntries(users.value.filter((user) => user.id.trim()).map((user) => [user.id.trim(), user.authMode]))));
-  const repositories = new Set([...users.value, ...groups.value].flatMap((rule) => rule.repositories));
-  emit("update:allowedRepositories", [...repositories].join("\n"));
+  emit("update:userAuthModes", serializeAuthModes(userAccess));
+  if (!isScoped.value) {
+    const repositories = new Set([...users.value, ...groups.value].flatMap((rule) => rule.repositories));
+    emit("update:allowedRepositories", [...repositories].join("\n"));
+  }
 }
 function addUser(): void { users.value.push({ id: "", repositories: [], tokenConfigured: false, authMode: "inherit" }); }
 function removeUser(index: number): void {
   const id = users.value[index]?.id.trim();
-  if (id) { tokenChanges.value[id] = null; configuredTokenUsers.value.delete(id); }
+  if (id && !isScoped.value) { tokenChanges.value[id] = null; configuredTokenUsers.value.delete(id); }
   users.value.splice(index, 1); emitAll();
 }
 function updateUserID(index: number, event: Event): void {
   const previous = users.value[index].id.trim();
   const next = (event.target as HTMLInputElement).value.trim();
-  if (previous && previous !== next && users.value[index].tokenConfigured) {
+  if (previous && previous !== next && users.value[index].tokenConfigured && !isScoped.value) {
     tokenChanges.value[previous] = null;
     configuredTokenUsers.value.delete(previous);
     users.value[index].tokenConfigured = false;
