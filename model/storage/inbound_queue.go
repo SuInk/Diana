@@ -134,6 +134,50 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
 	return id, inserted > 0, nil
 }
 
+// RecordNoticeEvent adds a terminal audit row for a notice that must be visible
+// in the event timeline without sending it through the reply worker queue.
+func (s *SQLiteStore) RecordNoticeEvent(ctx context.Context, session string, event assistant.MessageEvent) error {
+	if s == nil || s.db == nil {
+		return errors.New("record notice event: sqlite store is not configured")
+	}
+	session = strings.TrimSpace(session)
+	if session == "" || event.Kind != assistant.EventKindNotice {
+		return errors.New("record notice event: notice session is required")
+	}
+	id, err := stableInboundEventID(session, event)
+	if err != nil {
+		return err
+	}
+	if event.Time <= 0 {
+		event.Time = time.Now().Unix()
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode notice event: %w", err)
+	}
+	now := time.Now().UTC().UnixNano()
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload,
+  priority, status, attempts, available_at, outcome, decision, decision_reason,
+  created_at, updated_at, completed_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  payload = excluded.payload,
+  outcome = excluded.outcome,
+  decision = excluded.decision,
+  decision_reason = excluded.decision_reason,
+  updated_at = excluded.updated_at,
+  completed_at = excluded.completed_at
+`, id, session, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Time, string(payload),
+		inboundStatusDone, now, "notice_"+strings.TrimSpace(event.SubType), "notice", "已记录平台通知", now, now, now)
+	if err != nil {
+		return fmt.Errorf("record notice event: %w", err)
+	}
+	return nil
+}
+
 func findDuplicateInboundHistory(ctx context.Context, tx *sql.Tx, event assistant.MessageEvent) (string, bool, error) {
 	messageID := strings.TrimSpace(event.MessageID)
 	if messageID == "" {
