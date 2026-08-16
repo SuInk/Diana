@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
@@ -56,6 +58,23 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 	}
 	if result.Target.MentionCQ != "[CQ:at,qq=10005]" || !result.Target.HasHistory {
 		t.Fatalf("mention/history = %#v", result.Target)
+	}
+}
+
+func TestRelationshipDataRequestRequiresRelationshipTool(t *testing.T) {
+	registry := agent.NewToolRegistry(newDianaRelationshipTool(&Runtime{}, MessageEvent{}))
+	event := MessageEvent{
+		RawMessage: "[CQ:at,qq=3129583166] 查一下和我的好感度",
+		Segments: []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "text", Data: map[string]string{"text": "查一下和我的好感度"}},
+		},
+	}
+	if got := requiredAgentToolsForEvent(event, registry); len(got) != 1 || got[0] != "diana.relationship" {
+		t.Fatalf("required tools = %#v", got)
+	}
+	if relationshipDataRequest(MessageEvent{Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "好感度是怎么计算的"}}}}) {
+		t.Fatal("general relationship explanation should not require a personal data lookup")
 	}
 }
 
@@ -188,7 +207,7 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[2].Messages, `"favorability": 5`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
-	if !requestMessagesContain(provider.requests[1].Messages, "必须调用 diana.relationship") || !requestMessagesContain(provider.requests[1].Messages, "最终回复必须同时说明") {
+	if !requestMessagesContain(provider.requests[1].Messages, "必须调用 diana.relationship") || !requestMessagesContain(provider.requests[1].Messages, "最终回复必须同时说明") || !requestMessagesContain(provider.requests[1].Messages, "operation=list") || !requestMessagesContain(provider.requests[1].Messages, "不得自行以隐私") {
 		t.Fatalf("relationship guidance missing: %#v", provider.requests[1].Messages)
 	}
 }
