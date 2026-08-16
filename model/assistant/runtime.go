@@ -2892,6 +2892,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
+	if proactiveTriggered {
+		// Proactive routing decides whether the bot should speak, not how much of
+		// an otherwise complete answer may be delivered. The send layer already
+		// handles long QQ replies with chunks or merged forwards.
+		replyCfg.MaxReplyChars = 0
+	}
 	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		return "", err
