@@ -2,6 +2,8 @@
 
 [English](./README.en.md)
 
+[官网与文档](https://suink.github.io/Diana/) · [在线演示](https://suink.github.io/Diana/demo/) · [下载最新版本](https://github.com/SuInk/Diana/releases/latest)
+
 Diana 是一个 Go 语言多平台 AI 助手服务，内置 LLM 兼容层、平台适配层、Gin WebUI 和插件管理。当前自带 QQ 的 OneBot v11 适配器；WebUI 可管理多个助手实例、模型、平台连接、触发词和内置插件。
 
 ## 安装要求
