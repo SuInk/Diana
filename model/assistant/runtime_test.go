@@ -818,6 +818,72 @@ func TestRuntimeEnrichesForwardMessageFromOneBot(t *testing.T) {
 	}
 }
 
+func TestForwardedAliasDoesNotTriggerGroupReply(t *testing.T) {
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:       EventKindGroup,
+		GroupID:    "123",
+		UserID:     "10001",
+		RawMessage: "[合并转发:forward-1]\n\n【合并转发 forward-1】\nAlice: Diana 在吗",
+		Segments: []MessageSegment{
+			{Type: "forward", Data: map[string]string{"id": "forward-1", "expanded": "true"}},
+			{Type: "text", Data: map[string]string{"text": "\n\n【合并转发 forward-1】\nAlice: Diana 在吗", "source_type": "forward"}},
+		},
+	}
+	cfg := runtime.effectiveConfigForEvent(event)
+	if got := directEventText(event, event.RawMessage); got != "" {
+		t.Fatalf("direct event text = %q, want empty", got)
+	}
+	if matches := matchedGroupAliases(event, cfg.GroupTriggers); len(matches) != 0 {
+		t.Fatalf("forwarded aliases matched direct triggers: %#v", matches)
+	}
+	if eventDirectlyMentionsBot(event, cfg) {
+		t.Fatal("merged-forward event was classified as directly mentioning the bot")
+	}
+	if runtime.shouldHandleChatTrigger(event, PlainText(event.Segments)) {
+		t.Fatal("alias inside merged-forward content triggered a direct group reply")
+	}
+	event.Segments = append([]MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 看看这个"}}}, event.Segments...)
+	if !runtime.shouldHandleChatTrigger(event, PlainText(event.Segments)) {
+		t.Fatal("alias authored in the current message did not trigger a group reply")
+	}
+}
+
+func TestRuntimePreservesTopLevelForwardNodeImageSource(t *testing.T) {
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_forward_msg": {
+			"messages": []any{map[string]any{
+				"type":       "node",
+				"message_id": 30002,
+				"group_id":   20004,
+				"user_id":    10006,
+				"data": map[string]any{
+					"nickname": "Alice",
+					"content": []any{map[string]any{
+						"type": "image",
+						"data": map[string]any{"file": "forward-image.jpg"},
+					}},
+				},
+			}},
+		},
+	}}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := runtime.enrichForwardMessages(context.Background(), MessageEvent{
+		Kind: EventKindGroup, GroupID: "20003", UserID: "10001", MessageID: "question-1",
+		Segments: []MessageSegment{{Type: "forward", Data: map[string]string{"id": "forward-1"}}},
+	})
+	var image MessageSegment
+	for _, segment := range event.Segments {
+		if segment.Type == "image" {
+			image = segment
+			break
+		}
+	}
+	if image.Data["source_message_id"] != "30002" || image.Data["source_group_id"] != "20004" || image.Data["source_user_id"] != "10006" {
+		t.Fatalf("forward image source metadata = %#v", image.Data)
+	}
+}
+
 func TestRuntimeEnrichesQuotedForwardMediaAndCachesVideoFrames(t *testing.T) {
 	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
 	videoPath := createTimelineVideo(t)
