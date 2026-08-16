@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+
 <template>
   <div class="toast-host" aria-live="polite">
     <div v-for="toast in toastState.toasts" :key="toast.id" class="toast" :class="toast.kind">
