@@ -896,6 +896,20 @@ code {
   color: var(--muted);
 }
 
+/* 数字输入框去掉浏览器自带的上下箭头：它按系统配色渲染，在深色主题里是一块
+   跟着走的浅灰，且不跟随字号和圆角。数值都是手输的，单位另有标签。 */
+.input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.input[type="number"]::-webkit-outer-spin-button,
+.input[type="number"]::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 .textarea {
   resize: vertical;
   min-height: 88px;

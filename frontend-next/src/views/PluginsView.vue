@@ -49,16 +49,12 @@
           >
             <Rows3 :size="14" aria-hidden="true" />
           </button>
-          <button
-            type="button"
-            :disabled="loading"
-            title="刷新插件列表"
-            aria-label="刷新插件列表"
-            @click="reload"
-          >
-            <RefreshCw :size="14" :class="{ spin: loading }" aria-hidden="true" />
-          </button>
         </div>
+        <!-- 刷新不是第三种排列方式，从分段控件里拿出来，和其它页面写法一致 -->
+        <button class="btn" type="button" :disabled="loading" @click="reload">
+          <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
+          刷新
+        </button>
       </div>
     </header>
 
