@@ -56,6 +56,15 @@ type ReleasePackage struct {
 	Checksums ReleaseAsset
 }
 
+type UpdatePolicy struct {
+	AutoDownload bool `json:"auto_download"`
+	AutoInstall  bool `json:"auto_install"`
+}
+
+func DefaultUpdatePolicy() UpdatePolicy {
+	return UpdatePolicy{AutoDownload: true, AutoInstall: false}
+}
+
 type pendingReleaseUpdate struct {
 	Schema        int       `json:"schema"`
 	TargetVersion string    `json:"target_version"`

@@ -26,25 +26,29 @@ func defaultRepositoryWatchInterval(settings SettingValues) time.Duration {
 }
 
 type RepositoryWatchCreateInput struct {
-	Repository       string
-	Branch           string
-	Interval         time.Duration
-	WatchCommits     bool
-	WatchReleases    bool
-	Platform         string
-	ProfileID        string
-	ContextNamespace string
-	OwnerID          string
-	GroupID          string
-	UserID           string
+	Repository        string
+	Branch            string
+	Interval          time.Duration
+	WatchCommits      bool
+	WatchPullRequests bool
+	WatchReleases     bool
+	WatchStars        bool
+	Platform          string
+	ProfileID         string
+	ContextNamespace  string
+	OwnerID           string
+	GroupID           string
+	UserID            string
 }
 
 type RepositoryWatchUpdateInput struct {
-	Repository    string
-	Branch        *string
-	Interval      time.Duration
-	WatchCommits  *bool
-	WatchReleases *bool
+	Repository        string
+	Branch            *string
+	Interval          time.Duration
+	WatchCommits      *bool
+	WatchPullRequests *bool
+	WatchReleases     *bool
+	WatchStars        *bool
 }
 
 func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWatchCreateInput) (Reminder, error) {
@@ -84,15 +88,16 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	if interval > maximumScheduleInterval {
 		return Reminder{}, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
 	}
-	if !input.WatchCommits && !input.WatchReleases {
-		return Reminder{}, fmt.Errorf("Commit 和 Release 不能同时关闭")
+	selection := repositoryWatchSelection{Commits: input.WatchCommits, PullRequests: input.WatchPullRequests, Releases: input.WatchReleases, Stars: input.WatchStars}
+	if !selection.Commits && !selection.PullRequests && !selection.Releases && !selection.Stars {
+		return Reminder{}, fmt.Errorf("Commit、PR、Release 和 Star 至少启用一项")
 	}
-	baseline, err := plugin.snapshot(ctx, repository, strings.TrimSpace(input.Branch), input.WatchCommits, input.WatchReleases, settings)
+	baseline, err := plugin.snapshotSelected(ctx, repository, strings.TrimSpace(input.Branch), selection, settings)
 	if err != nil {
 		return Reminder{}, fmt.Errorf("建立仓库基线失败: %w", err)
 	}
 	ownerID := firstNonEmpty(strings.TrimSpace(input.OwnerID), repositoryWatchWebUIOwner(event.ProfileID))
-	return r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, input.WatchCommits, input.WatchReleases, baseline)
+	return r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, selection, baseline)
 }
 
 func repositoryWatchWebUIOwner(profileID string) string {
@@ -137,8 +142,14 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	if input.WatchCommits != nil {
 		values["watch_commits"] = *input.WatchCommits
 	}
+	if input.WatchPullRequests != nil {
+		values["watch_pull_requests"] = *input.WatchPullRequests
+	}
 	if input.WatchReleases != nil {
 		values["watch_releases"] = *input.WatchReleases
+	}
+	if input.WatchStars != nil {
+		values["watch_stars"] = *input.WatchStars
 	}
 	return r.updateRepositoryWatch(strings.TrimSpace(ownerID), strings.TrimSpace(id), values, plugin, settings, ctx)
 }
@@ -168,36 +179,40 @@ func parseRepositoryWatchInterval(raw string, settings SettingValues) (time.Dura
 	return interval, nil
 }
 
-func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, branch string, interval time.Duration, commits, releases bool, baseline repositoryWatchSnapshot) (Reminder, error) {
+func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, branch string, interval time.Duration, selection repositoryWatchSelection, baseline repositoryWatchSnapshot) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
 	}
-	if !commits && !releases {
-		return Reminder{}, fmt.Errorf("watch_commits 和 watch_releases 不能同时关闭")
+	if !selection.Commits && !selection.PullRequests && !selection.Releases && !selection.Stars {
+		return Reminder{}, fmt.Errorf("仓库动态监控类型不能全部关闭")
 	}
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
 	now := time.Now()
 	item := Reminder{
-		ID:               uuid.NewString()[:8],
-		Kind:             ReminderKindRepositoryWatch,
-		Platform:         event.Platform,
-		ProfileID:        event.ProfileID,
-		ContextNamespace: event.ContextNamespace,
-		OwnerID:          strings.TrimSpace(ownerID),
-		GroupID:          event.GroupID,
-		UserID:           event.UserID,
-		Message:          "监控 " + repository + " 的仓库动态",
-		Repository:       repository,
-		RepositoryBranch: branch,
-		WatchCommits:     commits,
-		WatchReleases:    releases,
-		LastCommitSHA:    baseline.CommitSHA,
-		LastReleaseTag:   baseline.ReleaseTag,
-		TriggerAt:        now.Add(interval),
-		IntervalSeconds:  int64(interval / time.Second),
-		CreatedAt:        now,
+		ID:                    uuid.NewString()[:8],
+		Kind:                  ReminderKindRepositoryWatch,
+		Platform:              event.Platform,
+		ProfileID:             event.ProfileID,
+		ContextNamespace:      event.ContextNamespace,
+		OwnerID:               strings.TrimSpace(ownerID),
+		GroupID:               event.GroupID,
+		UserID:                event.UserID,
+		Message:               "监控 " + repository + " 的仓库动态",
+		Repository:            repository,
+		RepositoryBranch:      branch,
+		WatchCommits:          selection.Commits,
+		WatchPullRequests:     selection.PullRequests,
+		WatchReleases:         selection.Releases,
+		WatchStars:            selection.Stars,
+		LastCommitSHA:         baseline.CommitSHA,
+		LastPullRequestCursor: baseline.PullRequestCursor,
+		LastReleaseTag:        baseline.ReleaseTag,
+		LastStarCount:         baseline.StarCount,
+		TriggerAt:             now.Add(interval),
+		IntervalSeconds:       int64(interval / time.Second),
+		CreatedAt:             now,
 	}
 	if err := r.reminders.SaveReminders(append(items, item)); err != nil {
 		return Reminder{}, fmt.Errorf("保存仓库更新订阅失败: %w", err)
@@ -254,22 +269,35 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	if replacementRepository != "" {
 		repository = replacementRepository
 	}
-	commits, releases := current.WatchCommits, current.WatchReleases
+	selection := repositoryWatchSelection{
+		Commits: current.WatchCommits, PullRequests: current.WatchPullRequests,
+		Releases: current.WatchReleases, Stars: current.WatchStars,
+	}
 	if value, present := input["watch_commits"].(bool); present {
-		commits = value
+		selection.Commits = value
+	}
+	if value, present := input["watch_pull_requests"].(bool); present {
+		selection.PullRequests = value
 	}
 	if value, present := input["watch_releases"].(bool); present {
-		releases = value
+		selection.Releases = value
 	}
-	if !commits && !releases {
-		return Reminder{}, fmt.Errorf("watch_commits 和 watch_releases 不能同时关闭")
+	if value, present := input["watch_stars"].(bool); present {
+		selection.Stars = value
+	}
+	if !selection.Commits && !selection.PullRequests && !selection.Releases && !selection.Stars {
+		return Reminder{}, fmt.Errorf("仓库动态监控类型不能全部关闭")
 	}
 	repositoryChanged := repository != current.Repository || branch != current.RepositoryBranch
-	baselineCommits := repositoryChanged && commits || commits && !current.WatchCommits
-	baselineReleases := repositoryChanged && releases || releases && !current.WatchReleases
+	baselineSelection := repositoryWatchSelection{
+		Commits:      repositoryChanged && selection.Commits || selection.Commits && !current.WatchCommits,
+		PullRequests: repositoryChanged && selection.PullRequests || selection.PullRequests && !current.WatchPullRequests,
+		Releases:     repositoryChanged && selection.Releases || selection.Releases && !current.WatchReleases,
+		Stars:        repositoryChanged && selection.Stars || selection.Stars && !current.WatchStars,
+	}
 	var baseline repositoryWatchSnapshot
-	if baselineCommits || baselineReleases {
-		baseline, err = plugin.snapshot(ctx, repository, branch, baselineCommits, baselineReleases, settings)
+	if baselineSelection.Commits || baselineSelection.PullRequests || baselineSelection.Releases || baselineSelection.Stars {
+		baseline, err = plugin.snapshotSelected(ctx, repository, branch, baselineSelection, settings)
 		if err != nil {
 			return Reminder{}, fmt.Errorf("更新仓库基线失败: %w", err)
 		}
@@ -278,16 +306,24 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		if !item.CancelledAt.IsZero() {
 			return fmt.Errorf("仓库更新订阅 %s 已取消，不能修改", id)
 		}
-		if baselineCommits {
+		if baselineSelection.Commits {
 			item.LastCommitSHA = baseline.CommitSHA
 		}
-		if baselineReleases {
+		if baselineSelection.PullRequests {
+			item.LastPullRequestCursor = baseline.PullRequestCursor
+		}
+		if baselineSelection.Releases {
 			item.LastReleaseTag = baseline.ReleaseTag
+		}
+		if baselineSelection.Stars {
+			item.LastStarCount = baseline.StarCount
 		}
 		item.Repository = repository
 		item.RepositoryBranch = branch
-		item.WatchCommits = commits
-		item.WatchReleases = releases
+		item.WatchCommits = selection.Commits
+		item.WatchPullRequests = selection.PullRequests
+		item.WatchReleases = selection.Releases
+		item.WatchStars = selection.Stars
 		item.Message = "监控 " + repository + " 的仓库动态"
 		if rawInterval != "" {
 			item.IntervalSeconds = int64(interval / time.Second)

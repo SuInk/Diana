@@ -45,6 +45,23 @@
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
 
+		<section v-if="releaseSelfUpdate" class="update-policy">
+			<div class="stack" style="gap: 3px">
+				<strong>自动更新</strong>
+				<span class="muted" style="font-size: 12.5px">自动下载会校验并暂存更新包；自动安装会在下载完成后备份、切换、重启并执行健康检查。</span>
+			</div>
+			<label class="switch">
+				<input v-model="policy.auto_download" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('download')" />
+				<span class="track"></span>
+				<span class="switch-label">自动下载</span>
+			</label>
+			<label class="switch">
+				<input v-model="policy.auto_install" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('install')" />
+				<span class="track"></span>
+				<span class="switch-label">自动安装并重启</span>
+			</label>
+		</section>
+
       <div class="cluster" style="gap: 8px">
         <button class="btn" type="button" :disabled="checking || operationRunning" @click="check()">
           <RefreshCw :size="14" aria-hidden="true" />
@@ -231,10 +248,12 @@ import {
 	installDownloadedSystemUpdate,
   pullFromGitHub,
   rollbackSystem,
+	saveUpdatePolicy,
 	type ChangelogEntry,
   type ReleaseEntry,
   type SystemVersion,
-  type UpdateCheckResponse,
+	type UpdateCheckResponse,
+	type UpdatePolicy,
 	type UpdateStatus
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
@@ -254,6 +273,8 @@ const changelogError = ref("");
 const checkError = ref("");
 const checking = ref(false);
 const updating = ref(false);
+const savingPolicy = ref(false);
+const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false });
 const updatedHint = ref("");
 const operationError = ref("");
 const forceConfirming = ref(false);
@@ -349,6 +370,7 @@ async function check(notify = true): Promise<void> {
   try {
     checkResult.value = await checkForUpdate();
     status.value = checkResult.value.status ?? status.value;
+		policy.value = checkResult.value.policy ?? policy.value;
     emit("checked", checkResult.value.update_available);
     if (notify) {
       if (checkResult.value.update_available) {
@@ -364,6 +386,21 @@ async function check(notify = true): Promise<void> {
   } finally {
     checking.value = false;
   }
+}
+
+async function persistPolicy(changed: "download" | "install"): Promise<void> {
+	if (changed === "install" && policy.value.auto_install) policy.value.auto_download = true;
+	if (changed === "download" && !policy.value.auto_download) policy.value.auto_install = false;
+	savingPolicy.value = true;
+	try {
+		policy.value = await saveUpdatePolicy(policy.value);
+		toastSuccess("自动更新设置已保存");
+	} catch (error) {
+		toastError(error instanceof Error ? error.message : "保存自动更新设置失败");
+		await check(false);
+	} finally {
+		savingPolicy.value = false;
+	}
 }
 
 async function downloadUpdate(): Promise<void> {
@@ -554,11 +591,28 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.update-policy {
+	display: grid;
+	grid-template-columns: minmax(220px, 1fr) auto auto;
+	align-items: center;
+	gap: 14px;
+	padding: 11px 12px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--surface-2);
+}
+
 .release-progress { display: grid; gap: 7px; }
 .release-progress-label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
 .release-progress-track { height: 7px; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); }
 .release-progress-track span { display: block; height: 100%; min-width: 2px; background: var(--accent); transition: width 180ms ease; }
 .operation-error { margin: 0; padding: 10px; white-space: pre-wrap; color: var(--err); border: 1px solid var(--err); background: var(--err-soft); font-size: 11.5px; }
+
+@media (max-width: 720px) {
+	.update-policy {
+		grid-template-columns: 1fr;
+	}
+}
 
 .force-update-confirm,
 .rollback-confirm {

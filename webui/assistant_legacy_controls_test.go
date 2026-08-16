@@ -200,7 +200,7 @@ func TestRepositoryWatchCreateUsesSelectedProfileAndGroupTarget(t *testing.T) {
 	router := qqBotTestRouter(handler)
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
 		"repository":"acme/private","profile_id":%q,"destination":"group","group_id":"123456",
-		"watch_commits":true,"watch_releases":true
+		"watch_commits":true,"watch_pull_requests":true,"watch_releases":true,"watch_stars":true
 	}`, profileID))
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -211,6 +211,9 @@ func TestRepositoryWatchCreateUsesSelectedProfileAndGroupTarget(t *testing.T) {
 	}
 	if input.Interval != 0 {
 		t.Fatalf("handler should leave omitted interval for runtime default, got %s", input.Interval)
+	}
+	if !input.WatchCommits || !input.WatchPullRequests || !input.WatchReleases || !input.WatchStars {
+		t.Fatalf("watch types were not forwarded: %#v", input)
 	}
 }
 
@@ -301,7 +304,8 @@ func (r *capturingRepositoryWatchRuntime) CreateRepositoryWatch(_ context.Contex
 	return assistant.Reminder{
 		ID: "watch-web", Kind: assistant.ReminderKindRepositoryWatch, Platform: input.Platform,
 		ProfileID: input.ProfileID, OwnerID: input.OwnerID, UserID: input.UserID, GroupID: input.GroupID,
-		Repository: input.Repository, WatchCommits: input.WatchCommits, WatchReleases: input.WatchReleases,
+		Repository: input.Repository, WatchCommits: input.WatchCommits, WatchPullRequests: input.WatchPullRequests,
+		WatchReleases: input.WatchReleases, WatchStars: input.WatchStars,
 		IntervalSeconds: 30, TriggerAt: now.Add(30 * time.Second), CreatedAt: now,
 	}, nil
 }
