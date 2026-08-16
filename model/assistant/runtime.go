@@ -1785,7 +1785,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	routeUserMessage := llmMessageFromEventWithImagesForContext(
 		routeCtx,
 		event,
-		"请从本批群消息中判断机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。消息上下文 JSON：\n"+string(payloadJSON),
+		"请从本批群消息中判断机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 planner，只负责回复判断，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"+string(payloadJSON),
 		nil,
 	)
 	messages := []llm.Message{
@@ -2695,11 +2695,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		intent, scope, routed := r.routeReplyIntent(ctx, event, cleanText, routingRegistry, strings.TrimSpace(olderSummary) != "")
 		if routed {
 			agentScope = scope
-			if agentRegistry != nil && chatHistoryReferenceOutsideContext(event, replyHistory) {
-				if _, available := agentRegistry.Get(dianaChatHistoryToolName); available {
-					agentScope.ToolNames = appendUniqueStrings(agentScope.ToolNames, dianaChatHistoryToolName)
-				}
-			}
 		}
 		if routed && intent.Action != visualIntentNone {
 			switch intent.Action {
@@ -2723,7 +2718,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return "", err
 				}
 				asyncImageTaskNotice = asyncImageReplyInstruction(queued)
-				agentScope.ToolNames = withoutAgentTool(agentScope.ToolNames, dianaImageToolName)
 			case visualIntentEditImage:
 				if !relationship.AllowImageEditing {
 					reply := relationshipPermissionDenied(relationship, "图片编辑", relationshipImageTierName)
@@ -2744,7 +2738,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return "", err
 				}
 				asyncImageTaskNotice = asyncImageReplyInstruction(queued)
-				agentScope.ToolNames = withoutAgentTool(agentScope.ToolNames, dianaImageToolName)
 			}
 		}
 	}
@@ -2758,7 +2751,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	if agentScope.Routed {
-		replyHistory = filterAgentReplyHistory(replyHistory, event, agentScope)
+		// Planner output is advisory only. The Agent owns context selection and
+		// tool planning; planner suggestions are retained for observability.
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
@@ -2783,7 +2777,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Priority: llm.MessagePriorityMemory,
 			})
 		}
-		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" && (!agentScope.Routed || agentScope.KeepContextSummary) {
+		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			messages = append(messages, llm.Message{
 				Role:     llm.RoleUser,
 				Content:  "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n" + summary,
@@ -3098,10 +3092,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			traceID = "qq-" + traceID
 		}
 		resp, err := agentRunner.Run(ctx, agent.Request{
-			Messages:      messages,
-			TraceID:       traceID,
-			Observer:      r.agentRunObserver(event),
-			RequiredTools: requiredAgentToolsForEvent(event, registry),
+			Messages: messages,
+			TraceID:  traceID,
+			Observer: r.agentRunObserver(event),
 		})
 		if err != nil {
 			return "", err
@@ -3121,37 +3114,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "reply")
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
 	})
-}
-
-func requiredAgentToolsForEvent(event MessageEvent, registry *agent.ToolRegistry) []string {
-	if registry == nil {
-		return nil
-	}
-	if _, ok := registry.Get("diana.relationship"); ok && relationshipDataRequest(event) {
-		return []string{"diana.relationship"}
-	}
-	return nil
-}
-
-func relationshipDataRequest(event MessageEvent) bool {
-	text := strings.Join([]string{PlainText(event.Segments), event.RawMessage}, " ")
-	text = strings.ToLower(strings.TrimSpace(text))
-	if text == "" {
-		return false
-	}
-	topic := strings.Contains(text, "好感") || strings.Contains(text, "关系等级") || strings.Contains(text, "互动次数") || strings.Contains(text, "提醒额度") || strings.Contains(text, "订阅额度")
-	if !topic && strings.Contains(text, "权限") {
-		topic = strings.Contains(text, "我的") || strings.Contains(text, "他的") || strings.Contains(text, "她的") || strings.Contains(text, "对方") || eventHasSegmentType(event, "at")
-	}
-	if !topic {
-		return false
-	}
-	for _, cue := range []string{"查", "看", "多少", "几", "当前", "我的", "他的", "她的", "对方", "排行", "排名", "设置", "增加", "减少", "调整", "修改", "改成"} {
-		if strings.Contains(text, cue) {
-			return true
-		}
-	}
-	return false
 }
 
 type runtimeAgentLLMProvider struct {

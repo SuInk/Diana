@@ -2344,8 +2344,9 @@ code {
 }
 
 .plugin-rows .plugin-card-name {
-  /* 190px 装不下「Diana 能力知识库 RAG」这类名字，放宽到 250px */
-  flex: 0 0 250px;
+  /* 名字精简后最长的是「自定义语音合成」102px，留出余量即可；
+     语音合成的名字带用户自定义前缀，超长时按省略号截断。 */
+  flex: 0 0 160px;
   order: 1;
   min-width: 0;
   overflow: hidden;
@@ -2370,24 +2371,27 @@ code {
 }
 
 .plugin-rows .plugin-card-desc {
-  flex: 1 1 220px;
+  /* 基准必须是 0：flex 换行是按基准宽度分行的，分完行才轮到收缩。基准写
+     220px 时这一行的基准之和会超出卡片，开关被挤到第二行（「链接解析」多
+     一个运行依赖，最先撞上），描述再能收缩也救不回来。基准 0 + grow 1 让
+     描述只吃剩余空间，其余元素永远排得下。 */
+  flex: 1 1 0;
+  order: 2;
+  min-width: 0;
   /* 放到两行：多数插件的描述能完整显示，不用悬停看 title */
   -webkit-line-clamp: 2;
   margin: 0;
-}
-
-.plugin-rows .plugin-card-desc {
-  order: 2;
 }
 
 .plugin-rows .plugin-card-bottom {
   flex: none;
   order: 3;
   margin-left: auto;
-  /* 第二列固定留给操作按钮：网格列不依赖内容存在，没有「设置」的插件
-     也照样占位。否则权限会滑进按钮的位置，一列权限左右横跳。
-     59px 是「设置」按钮的自然宽度；出现更宽的按钮（如卸载）时按内容撑开。 */
-  grid-template-columns: auto minmax(59px, auto);
+  /* 横排下改用 flex 按内容排：网格的空列会给没有「设置」的插件留出空位，
+     右侧出现一个洞。代价是权限不再逐行对齐，换来的是紧贴开关。 */
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .plugin-rows .plugin-card-foot {
@@ -2433,8 +2437,8 @@ code {
   .plugin-rows .plugin-card-bottom {
     width: 100%;
     margin-left: 0;
-    /* 竖排下这一行独占整宽，按钮靠 1fr 推到右端，不需要预留列 */
-    grid-template-columns: minmax(0, 1fr) auto;
+    /* 竖排下这一行独占整宽，权限留在左端、按钮推到右端 */
+    justify-content: space-between;
   }
 }
 
@@ -2674,40 +2678,29 @@ code {
   color: var(--muted);
 }
 
-.plugin-dependencies {
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
+/* 卡片上的依赖入口：和「N 项权限」同一套调性，点开是弹窗而不是行内展开 */
 .plugin-dependencies-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  list-style: none;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
+  gap: 6px;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
   cursor: pointer;
   user-select: none;
 }
 
-.plugin-dependencies-head::-webkit-details-marker {
-  display: none;
-}
-
 .plugin-dependencies-head:hover {
-  color: var(--text);
+  color: var(--text-secondary);
 }
 
-.plugin-dependencies-chevron {
+.plugin-dependencies-hint {
+  margin: 0 0 4px;
   color: var(--muted);
-  transition: transform 0.15s ease;
-}
-
-.plugin-dependencies[open] .plugin-dependencies-chevron {
-  transform: rotate(180deg);
+  font-size: 12px;
 }
 
 .plugin-dependencies-body {
@@ -2758,23 +2751,18 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* 卡片里的依赖入口和权限共用同一条底栏，不使用弹窗区块的分隔线与高度。 */
-.plugin-card-dependencies {
-  padding-top: 0;
-  border-top: 0;
-}
-
-.plugin-card-dependencies .plugin-dependencies-head {
-  display: flex;
-  min-height: 20px;
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 400;
-}
-
 .plugin-dependency-count {
   color: var(--muted);
   font-size: 11px;
+}
+
+/* 缺依赖 = 对应平台解析必然失败，用告警色从一片灰字里跳出来 */
+.plugin-dependency-count.warn {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-weight: 600;
 }
 
 .plugin-dependency-status {
@@ -2786,6 +2774,16 @@ code {
 }
 
 /* 插件设置弹窗 */
+.github-settings-tabs {
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+.github-settings-tabs > button {
+  flex: 1;
+  min-height: 36px;
+}
+
 .plugin-settings-form {
   gap: 16px;
 }
@@ -2832,6 +2830,35 @@ code {
 
 .plugin-settings-section-head {
   margin-bottom: 14px;
+}
+
+/* 可折叠的设置区块：标题行本身就是开关 */
+.plugin-settings-collapsible > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.plugin-settings-collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-settings-collapsible > summary:hover .plugin-settings-chevron {
+  color: var(--text-secondary);
+}
+
+.plugin-settings-chevron {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.plugin-settings-collapsible[open] > summary .plugin-settings-chevron {
+  transform: rotate(180deg);
 }
 
 .plugin-settings-section-head h3,

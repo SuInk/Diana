@@ -236,7 +236,7 @@ func (p *RepositoryPublishPlugin) listDrafts(ctx context.Context, groupID, statu
 func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
-		Name:        "仓库 Issue 发布",
+		Name:        "Issue 发布",
 		Version:     "0.5.0",
 		Description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。",
 		Official:    true,

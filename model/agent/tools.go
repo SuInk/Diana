@@ -26,6 +26,14 @@ type Tool interface {
 	Run(ctx context.Context, input map[string]any) (string, error)
 }
 
+// ToolInputSchema optionally exposes the tool's JSON Schema to providers with
+// native function calling. Existing tools remain compatible with a permissive
+// object schema until they provide a strict schema.
+type ToolInputSchema interface {
+	Tool
+	InputSchema() map[string]any
+}
+
 // ToolResultPartsTool lets a tool attach non-text evidence to the observation
 // sent into the next model turn. The regular string result remains the source
 // of truth for logs and models that do not support the extra content part.
@@ -460,6 +468,33 @@ func (r *ToolRegistry) Descriptions() string {
 		builder.WriteByte('\n')
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// Definitions returns the native function declarations sent on every model
+// turn. The order matches Names so requests remain deterministic.
+func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
+	if r == nil {
+		return nil
+	}
+	definitions := make([]llm.ToolDefinition, 0, r.Len())
+	for _, name := range r.Names() {
+		tool, ok := r.Get(name)
+		if !ok {
+			continue
+		}
+		schema := map[string]any{"type": "object", "additionalProperties": true}
+		strict := false
+		if typed, ok := tool.(ToolInputSchema); ok {
+			if provided := typed.InputSchema(); provided != nil {
+				schema = provided
+				strict = true
+			}
+		}
+		definitions = append(definitions, llm.ToolDefinition{
+			Name: tool.Name(), Description: tool.Description(), Parameters: schema, Strict: strict,
+		})
+	}
+	return definitions
 }
 
 func compactToolDescription(description string, maxRunes int) string {
