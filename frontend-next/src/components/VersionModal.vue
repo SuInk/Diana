@@ -13,6 +13,14 @@
           <span class="muted">最新版本</span>
           <span class="mono">{{ checkResult.latest_version }}</span>
         </div>
+        <div v-if="checkResult?.latest_published_at" class="cluster" style="justify-content: space-between">
+          <span class="muted">更新时间</span>
+          <span class="muted">{{ formatDateTime(checkResult.latest_published_at) }}</span>
+        </div>
+        <div v-if="checkResult?.checked_at" class="cluster" style="justify-content: space-between">
+          <span class="muted">检查时间</span>
+          <span class="muted">{{ formatDateTime(checkResult.checked_at) }}</span>
+        </div>
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">更新状态</span>
           <span v-if="checking" class="muted">检查中…</span>
@@ -130,7 +138,7 @@
                 <a class="mono changelog-sha" :href="release.url" target="_blank" rel="noreferrer">{{ release.tag }}</a>
                 <span v-if="release.tag === currentTag" class="badge ok">当前</span>
               </span>
-              <span class="muted changelog-date">{{ formatDate(release.date) }}</span>
+              <span class="muted changelog-date">{{ formatDateTime(release.date) }}</span>
             </div>
             <div class="cluster" style="gap: 6px">
               <a
@@ -319,6 +327,19 @@ function formatDate(value?: string): string {
   if (!value) return "";
   const date = new Date(value);
   return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function comparableVersion(value: string): number[] | null {
