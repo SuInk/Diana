@@ -24,6 +24,7 @@ type Runner struct {
 const (
 	webSearchToolName            = "web_search.search"
 	dianaImageToolName           = "diana.image"
+	imageTaskPendingState        = "pending"
 	maxWebSearchCallsPerAgentRun = 3
 )
 
@@ -205,6 +206,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Usage:        usage,
 		})
 		action, ok := parseAction(lastText)
+		if imageTaskQueued && ((!ok && !looksLikeAgentAction(lastText)) || (ok && action.Action == "final" && !imageTaskFinalIsPending(action))) {
+			protocolRepairs++
+			reason := "图片工具返回 queued=true 后，final.task_state 必须是 pending"
+			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+			messages = append(messages,
+				llm.Message{Role: llm.RoleAssistant, Content: lastText},
+				llm.Message{Role: llm.RoleUser, Content: reason + "。图片仍由后台处理，请输出结构化 final，并在 content 中自然说明任务已开始、完成后会自动发送。"},
+			)
+			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+				finishReason = "protocol_repair_exhausted"
+				break
+			}
+			continue
+		}
 		if !ok {
 			if looksLikeAgentAction(lastText) {
 				protocolRepairs++
@@ -236,20 +251,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
-			if imageTaskQueued && imageFinalClaimsCompletion(action.Content) {
-				protocolRepairs++
-				reason := "图片工具只返回了 queued=true，任务仍在后台处理中，不能声称图片已经生成完成或已经发出"
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = append(messages,
-					llm.Message{Role: llm.RoleAssistant, Content: lastText},
-					llm.Message{Role: llm.RoleUser, Content: reason + "。请改为符合人设的简短回复，只能说明已经开始生成、完成后会自动发送。"},
-				)
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
 			if missing := missingRequiredTools(req.RequiredTools, attemptedTools, r.registry); len(missing) > 0 && toolCalls < r.cfg.MaxSteps {
 				protocolRepairs++
 				reason := "当前请求必须先调用工具：" + strings.Join(missing, "、")
@@ -498,10 +499,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
 			return finish(claimLedger.groundedFallback(), finishReason), nil
 		}
-		if imageTaskQueued && imageFinalClaimsCompletion(action.Content) {
+		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}
 		return finish(action.Content, finishReason), nil
+	}
+	if imageTaskQueued {
+		return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 	}
 	if !looksLikeAgentAction(finalText) {
 		return finish(finalText, finishReason), nil
@@ -709,7 +713,7 @@ func (r *Runner) systemPrompt() string {
 		rules = append(rules, "- 用户明确要求先搜索、核验网页或读取外部资料再生成/编辑图片时，必须先完成搜索和必要的网页核验，再把已确认结果整理为完整、自包含 prompt 调用 diana.image。")
 	}
 	if hasTool("diana.image") {
-		rules = append(rules, "- diana.image 返回 queued=true 只表示任务已受理、正在后台生成，不表示图片已经完成或发送；最终文字只能说明已开始生成，完成后由运行时自动补发。")
+		rules = append(rules, "- diana.image 返回 queued=true 只表示任务已受理、正在后台生成，不表示图片已经完成或发送；此后的 final 必须携带 task_state=\"pending\"，content 说明已开始生成，完成后由运行时自动补发。")
 	}
 	if hasAnyTool("diana.reminder", "diana.schedule") {
 		rules = append(rules, "- 禁止使用命令、sleep、脚本或后台进程实现计时、提醒和周期任务；必须调用当前已提供的持久化任务工具。")
@@ -729,7 +733,7 @@ func (r *Runner) systemPrompt() string {
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
 		"你只能输出一个 JSON 对象，不要输出 Markdown、解释性前缀或额外文本。",
-		"可用动作：\n1. 调用工具：{\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}\n2. 最终回复：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\",\"claims\":[...]}（执行联网研究时 claims 必填）\n3. 兼容 Responses API function call：{\"type\":\"function_call\",\"name\":\"工具名\",\"arguments\":{...}}",
+		"可用动作：\n1. 调用工具：{\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}\n2. 最终回复：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\",\"task_state\":\"pending\",\"claims\":[...]}（仅有异步任务仍在处理时填写 task_state；执行联网研究时 claims 必填）\n3. 兼容 Responses API function call：{\"type\":\"function_call\",\"name\":\"工具名\",\"arguments\":{...}}",
 		"可用工具：\n" + r.registry.Descriptions(),
 	}
 	if skillsPrompt != "" {
@@ -754,21 +758,8 @@ func imageToolResultQueued(output string) bool {
 	return json.Unmarshal([]byte(output), &result) == nil && result.Queued
 }
 
-func imageFinalClaimsCompletion(content string) bool {
-	for _, clause := range strings.FieldsFunc(content, func(r rune) bool {
-		return strings.ContainsRune("。！？!?；;\n", r)
-	}) {
-		clause = strings.TrimSpace(clause)
-		if clause == "" || strings.Contains(clause, "完成后") || strings.Contains(clause, "生成好后") || strings.Contains(clause, "做好后") || strings.Contains(clause, "画好后") || strings.Contains(clause, "出图后") {
-			continue
-		}
-		for _, claim := range []string{"画好", "做好", "生成完", "编辑完", "已生成", "已经生成", "已画", "已经画", "已完成", "已经完成", "出炉", "发出来了", "发送完成"} {
-			if strings.Contains(clause, claim) {
-				return true
-			}
-		}
-	}
-	return false
+func imageTaskFinalIsPending(action llmAction) bool {
+	return action.Action == "final" && strings.EqualFold(strings.TrimSpace(action.TaskState), imageTaskPendingState)
 }
 
 func missingRequiredTools(required []string, attempted map[string]bool, registry *ToolRegistry) []string {
@@ -932,6 +923,7 @@ type llmAction struct {
 	Input     map[string]any `json:"input,omitempty"`
 	Arguments any            `json:"arguments,omitempty"`
 	Content   string         `json:"content,omitempty"`
+	TaskState string         `json:"task_state,omitempty"`
 	Reply     *string        `json:"reply,omitempty"`
 	Claims    []ClaimUpdate  `json:"claims,omitempty"`
 }

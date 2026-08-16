@@ -118,6 +118,35 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 	}
 }
 
+func TestReleasePackageUpdaterReportsActiveOperation(t *testing.T) {
+	u := &ReleasePackageUpdater{
+		currentVersion: "v0.8.16",
+		installRoot:    t.TempDir(),
+		supported:      true,
+	}
+	if !u.beginOperation() {
+		t.Fatal("beginOperation() = false")
+	}
+	status, err := u.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Updating {
+		t.Fatalf("Status().Updating = false while operation is active: %#v", status)
+	}
+	if u.beginOperation() {
+		t.Fatal("second beginOperation() unexpectedly succeeded")
+	}
+	u.endOperation()
+	status, err = u.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Updating {
+		t.Fatalf("Status().Updating = true after operation ended: %#v", status)
+	}
+}
+
 func TestReleasePackageUpdaterContinuesLegacyExecutableName(t *testing.T) {
 	installRoot := t.TempDir()
 	legacyExecutable := filepath.Join(installRoot, legacyReleaseBinaryName(runtime.GOOS, runtime.GOARCH))
