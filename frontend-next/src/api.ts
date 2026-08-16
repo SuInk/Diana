@@ -929,6 +929,8 @@ export interface UpdateCheckResponse {
   deployment_mode: "git" | "release";
   current_version: string;
   latest_version?: string;
+  latest_published_at?: string;
+  checked_at: string;
   update_available: boolean;
   update_supported: boolean;
   integrity_mode: "git-object-hash" | "sha256";
