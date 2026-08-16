@@ -1421,11 +1421,22 @@ code {
 }
 
 .resource-track {
+  position: relative;
   height: 7px;
   margin-top: 14px;
   overflow: hidden;
   border-radius: 4px;
   background: var(--surface-2);
+}
+
+/* Diana 自己占掉的那一段，叠在整机占用之上，用强调色区分。
+   选择器要带上 .resource-track >，否则被同层的 `.resource-track > span`
+   （0,1,1）压过，颜色会退回整机那条的绿色。 */
+.resource-track > span.resource-track-own {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 2px;
+  background: var(--accent);
 }
 
 .resource-track > span {
