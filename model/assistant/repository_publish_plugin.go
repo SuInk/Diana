@@ -265,8 +265,8 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key:         repositoryPublishSettingAllowlist,
-				Label:       "允许写入的仓库",
-				Description: "精确填写 owner/repo；多个仓库用逗号或换行分隔。留空时拒绝所有写操作。",
+				Label:       "允许操作的仓库",
+				Description: "Issue 的读写操作白名单，精确填写 owner/repo；多个仓库用逗号或换行分隔。留空时拒绝所有 Issue 操作。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},

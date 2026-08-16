@@ -74,7 +74,7 @@ let plugins: PluginState[] = [
       settings: [
         { key: "github_auth_mode", label: "GitHub 认证方式", description: "可使用独立 Token 或当前系统的 gh 登录。", type: "select", default: "token", options: [{ value: "token", label: "独立 Token" }, { value: "gh", label: "GitHub CLI (gh)" }, { value: "auto", label: "自动选择" }] },
         { key: "github_token", label: "GitHub Issues Token", description: "在 Token 或自动模式下使用，保存后不回显。", type: "string", default: "", secret: true },
-        { key: "allowed_repositories", label: "允许写入的仓库", description: "精确填写 owner/repo，多个仓库用逗号或换行分隔。", type: "string", default: "" },
+        { key: "allowed_repositories", label: "允许操作的仓库", description: "Issue 的读写操作白名单；精确填写 owner/repo，多个仓库用逗号或换行分隔。", type: "string", default: "" },
         { key: "user_repository_access", label: "用户仓库授权", description: "每行填写：用户ID = owner/repo, owner/repo。", type: "string", default: "" },
         { key: "group_repository_access", label: "群聊仓库授权", description: "每行填写：群ID = owner/repo, owner/repo。群内成员只能操作绑定仓库。", type: "string", default: "" },
         { key: "user_github_tokens", label: "用户 GitHub Token", description: "每个授权用户独立保存。", type: "string", default: "", secret: true },
