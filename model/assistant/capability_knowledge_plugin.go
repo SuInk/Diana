@@ -54,6 +54,10 @@ func (p *CapabilityKnowledgePlugin) Manifest() PluginManifest {
 		Description: "索引 Diana 核心能力和实时插件清单，通过本地稀疏检索向 Agent 提供与问题相关的能力说明。",
 		Official:    true,
 		BuiltIn:     true,
+		// 只对外提供一个 Agent 工具，Handle 不做事：它是否起作用完全由机器人
+		// 配置里的「智能体」开关决定，再单独摆一个插件开关只是第二个语义相同
+		// 的按钮。
+		Internal:    true,
 		Permissions: []string{"agent:tool", "knowledge:read", "plugin:list"},
 	}
 }

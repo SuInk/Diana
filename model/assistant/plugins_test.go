@@ -1096,7 +1096,7 @@ func (panicObserverPlugin) Observe(context.Context, MessageEvent) MessageEvent {
 // 内化的能力：插件页看不到，也没有任何路径能把它们关掉。
 func TestInternalPluginIsAlwaysOnAndHidden(t *testing.T) {
 	manager := NewDefaultPluginManager()
-	internal := []string{messageHistoryPluginID, llmConfigPluginID}
+	internal := []string{messageHistoryPluginID, llmConfigPluginID, capabilityKnowledgePluginID}
 
 	visible := map[string]bool{}
 	for _, state := range manager.ListVisible() {
