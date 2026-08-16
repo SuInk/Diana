@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -278,8 +279,21 @@ func probeCommandVersion(name string, args []string) string {
 		return ""
 	}
 	line := strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)[0])
+	line = shortVersion(name, line)
 	if len(line) > 120 {
 		line = line[:120]
+	}
+	return line
+}
+
+// shortVersion 从版本首行里挑出版本号本身。yt-dlp 和 node 直接就打印版本号，
+// 但 ffmpeg 打的是「ffmpeg version 8.1.2 Copyright (c) 2000-2026 ...」，整行
+// 交给界面只会被截断成「ffmpeg versio...」，版本号反而一个字都看不见。
+func shortVersion(name, line string) string {
+	fields := strings.Fields(line)
+	if len(fields) >= 3 && strings.EqualFold(fields[1], "version") &&
+		(strings.EqualFold(fields[0], name) || strings.EqualFold(fields[0], filepath.Base(name))) {
+		return fields[2]
 	}
 	return line
 }
