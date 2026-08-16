@@ -13,7 +13,7 @@ import (
 func TestPublicQQErrorMessageHidesRelayURL(t *testing.T) {
 	err := errors.New(`Post "https://relay.private.example/v1/responses": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`)
 	got := publicQQErrorMessage(err)
-	if got != "模型服务响应超时，请稍后重试。" {
+	if got != "上游模型服务响应超时，请稍后重试。" {
 		t.Fatalf("message = %q", got)
 	}
 	for _, leaked := range []string{"relay.private.example", "/v1/responses", "https://"} {
@@ -56,7 +56,7 @@ func TestPublicQQErrorMessageRedactsBareHostCredentialsAndLocalPath(t *testing.T
 func TestPublicQQErrorMessageMapsEmptyModelOutput(t *testing.T) {
 	err := errors.New("llm: openai-compatible chat completions output is empty")
 	got := publicQQErrorMessage(err)
-	if got != "模型服务暂时没有返回有效内容，请稍后重试。" {
+	if got != "上游模型服务暂时没有返回有效内容，请稍后重试。" {
 		t.Fatalf("message = %q", got)
 	}
 	if strings.Contains(strings.ToLower(got), "openai") || strings.Contains(strings.ToLower(got), "output is empty") {
@@ -107,7 +107,7 @@ func TestReplyAndRecordSendsSanitizedErrorButKeepsDiagnostic(t *testing.T) {
 	if outcome != "error_replied" || len(channel.sent) != 1 {
 		t.Fatalf("outcome=%q sent=%#v", outcome, channel.sent)
 	}
-	if got := channel.sent[0].Text; got != "出错了：模型服务响应超时，请稍后重试。" {
+	if got := channel.sent[0].Text; got != "出错了：上游模型服务响应超时，请稍后重试。" {
 		t.Fatalf("sent text = %q", got)
 	}
 	if !strings.Contains(runtime.Status().LastError, "relay.private.example") {

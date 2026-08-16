@@ -1353,7 +1353,8 @@ code {
   gap: 4px;
 }
 
-.stat-card .stat-label {
+/* 指标瓦片的统一排版：总览的统计卡片和系统资源共用同一套。 */
+.stat-label {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1361,116 +1362,18 @@ code {
   color: var(--muted);
 }
 
-.stat-card .stat-value {
+.stat-value {
   font-size: 24px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }
 
-.stat-card .stat-foot {
+.stat-foot {
   font-size: 12px;
   color: var(--muted);
 }
 
-.resource-monitor .card-header {
-  border-bottom: 1px solid var(--border);
-}
-
-.resource-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.resource-item {
-  min-width: 0;
-  padding: 18px 20px;
-}
-
-.resource-item + .resource-item {
-  border-left: 1px solid var(--border);
-}
-
-.resource-heading {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-}
-
-.resource-icon {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
-  border-radius: 7px;
-  background: var(--surface-2);
-  color: var(--text-secondary);
-}
-
-.resource-label {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.resource-value {
-  min-height: 26px;
-  font-size: 20px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.resource-track {
-  height: 7px;
-  margin-top: 14px;
-  overflow: hidden;
-  border-radius: 4px;
-  background: var(--surface-2);
-}
-
-.resource-track > span {
-  display: block;
-  height: 100%;
-  min-width: 0;
-  border-radius: inherit;
-  background: var(--ok);
-  transition: width 0.3s ease, background 0.2s ease;
-}
-
-.resource-track > span.warning {
-  background: var(--warn);
-}
-
-.resource-track > span.critical {
-  background: var(--err);
-}
-
-.resource-detail {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.resource-detail span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.resource-unavailable {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 20px;
-  border-top: 1px solid var(--border);
-  color: var(--warn);
-  font-size: 12px;
-}
 
 /* 柱状 sparkline */
 .spark-bars {
@@ -1984,8 +1887,10 @@ code {
   background: var(--bg-raised);
 }
 
-.bot-profile-actions-spacer {
+/* 配置占满剩余宽度，删除被推到最右，两者之间隔着整个按钮，不容易误点。 */
+.bot-profile-configure {
   flex: 1;
+  justify-content: center;
 }
 
 /* 新增入口和机器人卡片同一网格，不额外套一层容器。 */
@@ -2806,37 +2711,16 @@ code {
   border-bottom: 1px solid var(--border);
 }
 
-.repository-records-hint {
+.github-run-records {
+  margin-top: 8px;
+}
+
+.github-run-records-actions {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 18px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.repository-records-hint > div:first-child {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.repository-records-hint strong {
-  color: var(--text-secondary);
-  font-size: 12.5px;
-}
-
-@media (max-width: 640px) {
-  .repository-records-hint {
-    align-items: flex-start;
-    flex-direction: column;
-  }
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
 
 .github-issue-repository-settings {
@@ -3845,10 +3729,6 @@ code {
   min-height: 52px;
 }
 
-.issue-drafts-card .card-body {
-  padding-top: 0;
-}
-
 .task-list {
   padding: 0 20px;
 }
@@ -4077,15 +3957,6 @@ code {
   .grid-2,
   .grid-main-side {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .resource-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .resource-item + .resource-item {
-    border-top: 1px solid var(--border);
-    border-left: 0;
   }
 
   .app-content {

@@ -210,6 +210,7 @@
       <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'token'" :class="{ active: githubSettingsTab === 'token' }" @click="githubSettingsTab = 'token'">Token</button>
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'repositories'" :class="{ active: githubSettingsTab === 'repositories' }" @click="githubSettingsTab = 'repositories'">仓库管理</button>
+        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'records'" :class="{ active: githubSettingsTab === 'records' }" @click="githubSettingsTab = 'records'">运行记录</button>
       </div>
 
       <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="plugin-settings-section-head">
@@ -236,7 +237,7 @@
           <span v-if="repositoryPublishTimeoutSpec.description" class="hint">{{ repositoryPublishTimeoutSpec.description }}</span>
         </div>
       </div>
-      <div class="stack plugin-settings-form">
+      <div v-if="!isGitHubSettings || githubSettingsTab !== 'records'" class="stack plugin-settings-form">
         <div v-for="spec in visibleSettingsSpecs" :key="spec.key" class="field">
           <template v-if="spec.type === 'bool'">
             <div class="plugin-setting-switch">
@@ -309,16 +310,28 @@
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
         :issue-enabled-repositories="issueEnabledRepositories"
+        :user-access="String(repositoryPublishForm.user_repository_access ?? '')"
+        :group-access="String(repositoryPublishForm.group_repository_access ?? '')"
+        :token-users="String(repositoryPublishForm.user_github_token_users ?? '')"
+        :user-auth-modes="String(repositoryPublishForm.user_github_auth_modes ?? '')"
+        :joined-groups="joinedGroups"
+        :groups-loading="groupsLoading"
+        :groups-warning="groupsWarning"
         @update:issue-enabled-repositories="repositoryPublishForm.allowed_repositories = $event.join('\n')"
+        @update:user-access="repositoryPublishForm.user_repository_access = $event"
+        @update:group-access="repositoryPublishForm.group_repository_access = $event"
+        @update:user-tokens="repositoryPublishForm.user_github_tokens = $event"
+        @update:token-users="repositoryPublishForm.user_github_token_users = $event"
+        @update:user-auth-modes="repositoryPublishForm.user_github_auth_modes = $event"
       />
-      <div v-if="isGitHubSettings && githubSettingsTab === 'repositories'" class="repository-records-hint">
-        <div>
-          <strong>运行记录</strong>
-          <span>Issue 草稿在“任务”页查看，仓库检查和创建记录在“日志”页查看。</span>
+      <div v-if="isGitHubSettings && githubSettingsTab === 'records'" class="github-run-records">
+        <div class="plugin-settings-section-head">
+          <h3>运行记录</h3>
+          <p>Issue 草稿、提出人、日期和详细内容在这里查看；仓库检查和 Issue 创建的操作审计在日志页查看。</p>
         </div>
-        <div class="cluster">
-          <button class="btn small ghost" type="button" @click="navigate('tasks')">查看草稿</button>
-          <button class="btn small ghost" type="button" @click="navigate('logs')">查看日志</button>
+        <RepositoryIssueDraftList />
+        <div class="github-run-records-actions">
+          <button class="btn small ghost" type="button" @click="navigate('logs')">查看执行日志</button>
         </div>
       </div>
       <RSSWatchManager
@@ -375,15 +388,18 @@ import {
   uninstallPlugin,
   updatePluginSettings,
   listResolverDependencies,
+  listQQBotGroups,
   type PluginSettingSpec,
   type PluginState,
-  type ResolverDependency
+  type ResolverDependency,
+  type QQBotGroupSummary
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
+import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -411,7 +427,10 @@ const settingsForm = ref<Record<string, any>>({});
 const repositoryPublishForm = ref<Record<string, any>>({});
 const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
-const githubSettingsTab = ref<"token" | "repositories">("token");
+const githubSettingsTab = ref<"token" | "repositories" | "records">("token");
+const joinedGroups = ref<QQBotGroupSummary[]>([]);
+const groupsLoading = ref(false);
+const groupsWarning = ref("");
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
 const repositoryPublishTarget = computed(() => plugins.value.find((plugin) => plugin.manifest.id === repositoryPublishPluginID) ?? null);
@@ -423,6 +442,7 @@ const issueEnabledRepositories = computed(() => String(repositoryPublishForm.val
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
   if (!isGitHubSettings.value) return settingsSpecs.value;
   if (githubSettingsTab.value === "token") return settingsSpecs.value.filter((spec) => spec.key === "github_token");
+  if (githubSettingsTab.value === "records") return [];
   return settingsSpecs.value.filter((spec) => spec.key !== "github_token");
 });
 const activeSettingsForm = computed(() => settingsForm.value);
@@ -530,6 +550,20 @@ function openSettings(plugin: PluginState): void {
   clearSecrets.value = [];
   settingsTarget.value = plugin;
   githubSettingsTab.value = "token";
+  if (isGitHubSettings.value) void loadJoinedGroups();
+}
+
+async function loadJoinedGroups(): Promise<void> {
+  groupsLoading.value = true;
+  groupsWarning.value = "";
+  try {
+    joinedGroups.value = (await listQQBotGroups()).groups ?? [];
+  } catch (error) {
+    joinedGroups.value = [];
+    groupsWarning.value = error instanceof Error ? error.message : "群列表暂不可用，可手动填写群号";
+  } finally {
+    groupsLoading.value = false;
+  }
 }
 
 // 排列方式记在 localStorage：插件多起来之后，横排更利于扫读，
@@ -565,7 +599,7 @@ function pluginDisplayName(plugin: PluginState): string {
 
 function pluginDisplayDescription(plugin: PluginState): string {
   if (plugin.manifest.id !== repositoryWatchPluginID) return plugin.manifest.description;
-  return "统一管理 GitHub Token、仓库更新订阅和按仓库的 Issue 能力；草稿与运行记录分别在任务、日志页查看。";
+  return "统一管理 GitHub Token、仓库更新订阅和按仓库的 Issue 能力；草稿与运行记录在设置中的“运行记录”页查看。";
 }
 
 type PluginLayout = "masonry" | "rows";
