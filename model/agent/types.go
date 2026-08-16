@@ -61,9 +61,10 @@ type Config struct {
 }
 
 type Request struct {
-	Messages []llm.Message
-	TraceID  string
-	Observer RunObserver
+	Messages      []llm.Message
+	TraceID       string
+	Observer      RunObserver
+	RequiredTools []string
 }
 
 type Response struct {

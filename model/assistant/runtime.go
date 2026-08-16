@@ -3076,9 +3076,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			traceID = "qq-" + traceID
 		}
 		resp, err := agentRunner.Run(ctx, agent.Request{
-			Messages: messages,
-			TraceID:  traceID,
-			Observer: r.agentRunObserver(event),
+			Messages:      messages,
+			TraceID:       traceID,
+			Observer:      r.agentRunObserver(event),
+			RequiredTools: requiredAgentToolsForEvent(event, registry),
 		})
 		if err != nil {
 			return "", err
@@ -3098,6 +3099,37 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "reply")
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
 	})
+}
+
+func requiredAgentToolsForEvent(event MessageEvent, registry *agent.ToolRegistry) []string {
+	if registry == nil {
+		return nil
+	}
+	if _, ok := registry.Get("diana.relationship"); ok && relationshipDataRequest(event) {
+		return []string{"diana.relationship"}
+	}
+	return nil
+}
+
+func relationshipDataRequest(event MessageEvent) bool {
+	text := strings.Join([]string{PlainText(event.Segments), event.RawMessage}, " ")
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	topic := strings.Contains(text, "好感") || strings.Contains(text, "关系等级") || strings.Contains(text, "互动次数") || strings.Contains(text, "提醒额度") || strings.Contains(text, "订阅额度")
+	if !topic && strings.Contains(text, "权限") {
+		topic = strings.Contains(text, "我的") || strings.Contains(text, "他的") || strings.Contains(text, "她的") || strings.Contains(text, "对方") || eventHasSegmentType(event, "at")
+	}
+	if !topic {
+		return false
+	}
+	for _, cue := range []string{"查", "看", "多少", "几", "当前", "我的", "他的", "她的", "对方", "排行", "排名", "设置", "增加", "减少", "调整", "修改", "改成"} {
+		if strings.Contains(text, cue) {
+			return true
+		}
+	}
+	return false
 }
 
 type runtimeAgentLLMProvider struct {
@@ -4962,7 +4994,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n历史图片默认只提供文字摘要、数量、message_id 和图片序号，不代表模型已查看原图。摘要足够回答时不要加载原图；需要辨认小字、核对视觉细节或比较多张图片时，必须调用 diana.history_images。每批最多 8 张，同一批应一次传入所有相关 message_id；更多图片按批次继续读取。工具会把可读取原图作为真实多模态附件加入下一轮；单张失败时只跳过该张，禁止用摘要推测失败图片的细节。")
 	}
 	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
-		builder.WriteString("\n当前发言者是主人：如果要求设置或增减其他用户的好感度，必须调用 diana.relationship 的 set/adjust，并正确传入目标用户；不要把目标用户误写成主人自己。")
+		builder.WriteString("\n当前发言者是主人：如果要求查询当前群全部成员的好感度、关系或权限汇总，必须调用 diana.relationship 并传 operation=list；工具后端会限定查询范围并完成授权校验，这是明确允许的主人操作，不得自行以隐私、公开范围或管理员权限为由拒绝。如果要求设置或增减其他用户的好感度，必须调用 diana.relationship 的 set/adjust，并正确传入目标用户；不要把目标用户误写成主人自己。")
 	}
 	if agentEnabled && relationship.Owner && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		builder.WriteString("\n当前发言者是主人：如果要求查看、创建、修改、取消或删除其他用户的提醒与订阅，必须在已提供的任务工具中传入 target_user_id；不要把目标用户误写成主人自己。")
