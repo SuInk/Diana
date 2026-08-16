@@ -353,6 +353,30 @@ func TestOpenAICompatibleResponsesNativeToolCall(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleChatToolCallMessageIncludesEmptyContent(t *testing.T) {
+	messages := openAIChatCompletionMessages([]Message{{
+		Role: RoleAssistant,
+		ToolCalls: []ToolCall{{
+			ID: "call-1", Name: "web_search.search", Arguments: map[string]any{"query": "Diana"},
+		}},
+	}}, nil)
+	if len(messages) != 1 || len(messages[0].ToolCalls) != 1 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	body, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	content, exists := wire["content"]
+	if !exists || content != "" {
+		t.Fatalf("tool-call assistant message must contain empty content: %s", body)
+	}
+}
+
 func TestNativeToolMappingsForAnthropicAndGemini(t *testing.T) {
 	definition := ToolDefinition{
 		Name: "diana.relationship", Description: "query relationship", Strict: true,
