@@ -73,6 +73,17 @@ func TestStatusSignatureIncludesPerChannelState(t *testing.T) {
 	}
 }
 
+func TestStatusSignatureIncludesQQAccountHealth(t *testing.T) {
+	base := assistant.RuntimeStatus{Channels: []assistant.ChannelStatus{{ProfileID: "qq", Connected: true}}}
+	offline := base
+	offline.Channels = append([]assistant.ChannelStatus(nil), base.Channels...)
+	offline.Channels[0].AccountStatusKnown = true
+	offline.Channels[0].AccountStatusMessage = "QQ 账号已离线"
+	if statusSignature(base) == statusSignature(offline) {
+		t.Fatal("QQ account health change did not affect status signature")
+	}
+}
+
 // TestEventStreamSendsInitialSnapshot 验证对应功能场景。
 func TestEventStreamSendsInitialSnapshot(t *testing.T) {
 	hub := NewEventHub()
