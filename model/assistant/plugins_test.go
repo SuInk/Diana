@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package assistant
 
 import (
@@ -32,6 +35,27 @@ func TestResolverPlatformHostMatchingRejectsLookalikes(t *testing.T) {
 		if !isKnownResolverPlatformHost(host) {
 			t.Fatalf("real platform host %q was rejected", host)
 		}
+	}
+}
+
+func TestExtractURLsNormalizesCopiedXiaohongshuText(t *testing.T) {
+	text := "打开小红书查看【测试笔记】 xhslink.com/o/20YWuppICeI 复制本条信息"
+	urls := knownResolverPlatformURLs(text)
+	want := "https://xhslink.com/o/20YWuppICeI"
+	if len(urls) != 1 || urls[0] != want {
+		t.Fatalf("urls = %#v, want %#v", urls, []string{want})
+	}
+}
+
+func TestExtractURLsNormalizesStandaloneBilibiliVideoID(t *testing.T) {
+	text := "帮我解析 BV1Gc7K6UEgz 的内容"
+	urls := knownResolverPlatformURLs(text)
+	want := "https://www.bilibili.com/video/BV1Gc7K6UEgz"
+	if len(urls) != 1 || urls[0] != want {
+		t.Fatalf("urls = %#v, want %#v", urls, []string{want})
+	}
+	if urls := knownResolverPlatformURLs("普通单词 abbreviation 不应触发"); len(urls) != 0 {
+		t.Fatalf("ordinary text produced urls: %#v", urls)
 	}
 }
 
