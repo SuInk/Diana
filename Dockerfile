@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
 
+# Copyright (c) 2025-now SuInk.
+# Licensed under the Limited Redistribution License in the repository root.
+
 FROM node:22-alpine AS frontend-next
 WORKDIR /src/frontend-next
 COPY frontend-next/package*.json ./

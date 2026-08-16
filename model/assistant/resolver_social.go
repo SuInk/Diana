@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package assistant
 
 import (
@@ -243,12 +246,7 @@ func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req Plugin
 		recordResolverMediaLog(ctx, req, raw, "xiaohongshu", false, status)
 		return result
 	}
-	user, _ := note["user"].(map[string]any)
-	result.Context = fmt.Sprintf("[小红书] %s\n作者：%s\n%s",
-		strings.TrimSpace(anyString(note["title"])),
-		strings.TrimSpace(anyString(user["nickname"])),
-		truncateRunes(strings.TrimSpace(anyString(note["desc"])), 240),
-	)
+	result.Context = xiaohongshuSocialContext(note)
 	if strings.TrimSpace(anyString(note["type"])) == "normal" {
 		result.ImageURLs = limitStrings(xiaohongshuMediaImageURLs(note), maxImages)
 		recordResolverMediaLog(ctx, req, raw, "xiaohongshu", len(result.ImageURLs) > 0, "")
@@ -256,6 +254,15 @@ func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req Plugin
 	}
 	result.ImageURLs = singleURL(firstNonEmptyString(xiaohongshuMediaImageURLs(note)))
 	return p.attachDownloadedVideo(ctx, req, raw, "xiaohongshu", result)
+}
+
+func xiaohongshuSocialContext(note map[string]any) string {
+	user, _ := note["user"].(map[string]any)
+	return fmt.Sprintf("[小红书] %s\n作者：%s\n%s",
+		strings.TrimSpace(anyString(note["title"])),
+		strings.TrimSpace(anyString(user["nickname"])),
+		strings.TrimSpace(anyString(note["desc"])),
+	)
 }
 
 func (p *ResolverPlugin) resolveYTDLPMedia(ctx context.Context, req PluginRequest, raw, platform string) resolverSocialResult {

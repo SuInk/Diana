@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+
 <template>
   <div ref="rootRef" class="app-select" :class="{ open }">
     <button :id="id" type="button" class="app-select-trigger" :disabled="disabled" @click="toggle" @keydown="onKeydown">
