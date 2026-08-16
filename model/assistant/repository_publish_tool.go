@@ -69,22 +69,65 @@ type dianaRepositoryIssuesTool struct {
 }
 
 type repositoryIssueResult struct {
-	OK                   bool                     `json:"ok"`
-	Operation            string                   `json:"operation"`
-	Outcome              string                   `json:"outcome,omitempty"`
-	Repository           string                   `json:"repository,omitempty"`
-	RequestedNumber      int                      `json:"requested_number,omitempty"`
-	FailureCode          string                   `json:"failure_code,omitempty"`
-	Message              string                   `json:"message"`
-	Issue                *repositoryIssueSummary  `json:"issue,omitempty"`
-	Items                []repositoryIssueSummary `json:"items,omitempty"`
-	CommentURL           string                   `json:"comment_url,omitempty"`
-	Fingerprint          string                   `json:"fingerprint,omitempty"`
-	Idempotent           bool                     `json:"idempotent,omitempty"`
-	Reconciled           bool                     `json:"reconciled,omitempty"`
-	RequiresConfirmation bool                     `json:"requires_confirmation,omitempty"`
-	ConfirmationToken    string                   `json:"confirmation_token,omitempty"`
-	Redactions           int                      `json:"redactions,omitempty"`
+	OK                   bool                       `json:"ok"`
+	Operation            string                     `json:"operation"`
+	Outcome              string                     `json:"outcome,omitempty"`
+	Repository           string                     `json:"repository,omitempty"`
+	RequestedNumber      int                        `json:"requested_number,omitempty"`
+	FailureCode          string                     `json:"failure_code,omitempty"`
+	Message              string                     `json:"message"`
+	Issue                *repositoryIssueSummary    `json:"issue,omitempty"`
+	Items                []repositoryIssueSummary   `json:"items,omitempty"`
+	CommentURL           string                     `json:"comment_url,omitempty"`
+	Fingerprint          string                     `json:"fingerprint,omitempty"`
+	Idempotent           bool                       `json:"idempotent,omitempty"`
+	Reconciled           bool                       `json:"reconciled,omitempty"`
+	RequiresConfirmation bool                       `json:"requires_confirmation,omitempty"`
+	ConfirmationToken    string                     `json:"confirmation_token,omitempty"`
+	RequiresApproval     bool                       `json:"requires_approval,omitempty"`
+	Draft                *repositoryIssueDraftView  `json:"draft,omitempty"`
+	Drafts               []repositoryIssueDraftView `json:"drafts,omitempty"`
+	Redactions           int                        `json:"redactions,omitempty"`
+}
+
+type RepositoryIssueDraft struct {
+	ID            string         `json:"id"`
+	Platform      string         `json:"platform,omitempty"`
+	ProfileID     string         `json:"profile_id,omitempty"`
+	GroupID       string         `json:"group_id"`
+	Repository    string         `json:"repository"`
+	RequesterID   string         `json:"requester_id"`
+	RequesterName string         `json:"requester_name,omitempty"`
+	Input         map[string]any `json:"input"`
+	Status        string         `json:"status"`
+	IssueNumber   int            `json:"issue_number,omitempty"`
+	IssueURL      string         `json:"issue_url,omitempty"`
+	ResolvedBy    string         `json:"resolved_by,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
+type repositoryIssueDraft = RepositoryIssueDraft
+
+type RepositoryIssueDraftStore interface {
+	SaveRepositoryIssueDraft(context.Context, RepositoryIssueDraft) error
+	RepositoryIssueDraft(context.Context, string) (RepositoryIssueDraft, bool, error)
+	ListRepositoryIssueDrafts(context.Context, string, string) ([]RepositoryIssueDraft, error)
+}
+
+type repositoryIssueDraftView struct {
+	ID            string    `json:"id"`
+	GroupID       string    `json:"group_id"`
+	Repository    string    `json:"repository"`
+	Title         string    `json:"title"`
+	Body          string    `json:"body,omitempty"`
+	Labels        []string  `json:"labels,omitempty"`
+	RequesterID   string    `json:"requester_id"`
+	RequesterName string    `json:"requester_name,omitempty"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	IssueNumber   int       `json:"issue_number,omitempty"`
+	IssueURL      string    `json:"issue_url,omitempty"`
 }
 
 type repositoryIssueSummary struct {
@@ -145,17 +188,26 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	return `搜索和管理显式选定 GitHub 仓库的 Issues，仅主人或插件设置中获授权的用户可用。operation=search 是只读操作：{"operation":"search","repository":"owner/repo","query":"关键词","state":"open|closed|all"}。请根据当前消息的完整语义判断用户是否正在要求机器人立即执行写操作；讨论功能、描述他人行为、引用消息、假设、教程询问和仅要求草稿都不是执行授权，此时不要调用写操作。确认是立即执行的写请求时必须传 user_confirmed_write=true；不能确认时不要传，也不要执行。写操作的当前用户消息必须明确写出同一个 owner/repo；update/comment/close/reopen 还必须点名同一 Issue 编号。create 传 title/body 及用户明确要求的 labels/assignees/milestone/operation_id；update 只传当前消息点名且包含新值的 title/body/labels/assignees/milestone；comment 的 body 必须来自当前消息；close 或 reopen 传 number。create 会查找 open 和近期 closed Issue；发现候选时返回 requires_confirmation、候选和 confirmation_token。先向用户展示候选，只有下一条用户消息点名候选编号并明确坚持另行新建时，才把原 token 连同 allow_duplicate=true 传回。不要把完整聊天记录、运行时 ID、凭据或私密原文放进 title/body/comment。写入只允许插件设置白名单及用户授权范围内的精确 owner/repo，并返回结构化结果。`
+	return `搜索和管理 GitHub Issues。群成员可调用 list_drafts 查看本群草稿，status 支持 pending、created、cancelled、all，结果包含提出人、日期和完整内容。群聊普通成员可对该群配置的仓库调用 create，机器人应根据当前需求整理 title/body；后端只保存并复述草稿，不会写入 GitHub。群内对目标仓库有授权的用户明确回复同意后调用 approve，明确拒绝时调用 cancel_draft；两者可传 draft_id，省略时处理本群最新草稿。后端只使用确认者自己的 Token 创建 Issue。授权用户也可直接执行 search/create/update/comment/close/reopen；直接写入必须传 user_confirmed_write=true，并遵守明确目标与字段校验。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 }
 
 func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}
 	if operation == "" {
-		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 search、create、update、comment、close 或 reopen。"))
+		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 search、create、update、comment、close、reopen、approve、cancel_draft 或 list_drafts。"))
 	}
 	if t == nil || t.runtime == nil || t.plugin == nil || t.plugin.client == nil {
 		return t.finish(ctx, result.fail("plugin_unavailable", "仓库 Issue 发布插件未正确配置。"))
+	}
+	if operation == "approve" {
+		return t.finish(ctx, t.approveDraft(ctx, input))
+	}
+	if operation == "list_drafts" {
+		return t.finish(ctx, t.listDrafts(ctx, input))
+	}
+	if operation == "cancel_draft" {
+		return t.finish(ctx, t.cancelDraft(ctx, input))
 	}
 	repository, err := normalizeGitHubRepository(configToolString(input, "repository"))
 	if err != nil {
@@ -163,13 +215,25 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	}
 	result.Repository = repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	if code, message := repositoryPublishValidateEventAccess(t.event, repository, owner, t.settings); code != "" {
+	userAllowed, groupAllowed, code, message := repositoryPublishAccessForEvent(t.event, repository, owner, t.settings)
+	if code != "" {
 		return t.finish(ctx, result.fail(code, message))
+	}
+	if operation == "create" && !userAllowed && groupAllowed {
+		return t.finish(ctx, t.createDraft(ctx, repository, input))
+	}
+	if !userAllowed {
+		return t.finish(ctx, result.fail("permission_denied", "当前用户没有该仓库的审批或写入权限。"))
 	}
 	if operation != "create" && operation != "search" {
 		result.RequestedNumber = repositoryIssueNumber(input)
 	}
 	if operation == "search" {
+		if !owner {
+			if code, message := t.validateWriteAccess(repository, false); code != "" {
+				return t.finish(ctx, result.fail(code, message))
+			}
+		}
 		return t.finish(ctx, t.search(ctx, repository, input))
 	}
 	if !boolInput(input, "user_confirmed_write") {
@@ -179,7 +243,7 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	if code, message := validateRepositoryIssueWriteRequest(requestText, operation, repository, input); code != "" {
 		return t.finish(ctx, result.fail(code, message))
 	}
-	if code, message := t.validateWriteAccess(repository); code != "" {
+	if code, message := t.validateWriteAccess(repository, owner); code != "" {
 		return t.finish(ctx, result.fail(code, message))
 	}
 
@@ -210,6 +274,12 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 		return "close"
 	case "reopen":
 		return "reopen"
+	case "approve", "approve_draft":
+		return "approve"
+	case "list_drafts", "drafts", "list_draft":
+		return "list_drafts"
+	case "cancel_draft", "cancel_draft_issue":
+		return "cancel_draft"
 	case "set_state":
 		switch strings.ToLower(strings.TrimSpace(state)) {
 		case "closed", "close":
@@ -219,6 +289,34 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 		}
 	}
 	return ""
+}
+
+func repositoryPublishAccessForEvent(event MessageEvent, repository string, owner bool, settings SettingValues) (bool, bool, string, string) {
+	if owner {
+		return true, event.Kind == EventKindGroup, "", ""
+	}
+	users, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	if err != nil {
+		return false, false, "invalid_user_repository_access", "用户仓库授权配置无效。"
+	}
+	groups, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
+	if err != nil {
+		return false, false, "invalid_group_repository_access", "群聊草稿范围配置无效。"
+	}
+	key := strings.ToLower(repository)
+	userAllowed := users[strings.TrimSpace(event.UserID)][key]
+	groupAllowed := event.Kind == EventKindGroup && groups[strings.TrimSpace(event.GroupID)][key]
+	if !userAllowed && !groupAllowed {
+		return false, false, "permission_denied", "当前群聊不能为该仓库发起草稿，当前用户也没有该仓库权限。"
+	}
+	allowed, err := repositoryPublishAllowlist(settings.String(repositoryPublishSettingAllowlist, ""))
+	if err != nil {
+		return false, false, "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
+	}
+	if !allowed[key] {
+		return false, false, "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的全局白名单中。"
+	}
+	return userAllowed, groupAllowed, "", ""
 }
 
 func repositoryIssueCurrentRequestText(event MessageEvent) string {
@@ -729,17 +827,35 @@ func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositor
 	return string(body), nil
 }
 
-func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string) (string, string) {
-	mode := repositoryPublishAuthMode(t.settings)
-	if mode == repositoryPublishAuthToken && strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")) == "" {
-		return "token_required", "当前认证方式要求配置独立 GitHub Issues Token。"
-	}
+func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner bool) (string, string) {
 	allowed, err := repositoryPublishAllowlist(t.settings.String(repositoryPublishSettingAllowlist, ""))
 	if err != nil {
 		return "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
 	}
 	if !allowed[strings.ToLower(repository)] {
 		return "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的精确写入白名单中。"
+	}
+	if !owner {
+		users, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
+		if err != nil {
+			return "invalid_user_repository_access", "用户仓库授权配置无效。"
+		}
+		userID := strings.TrimSpace(t.event.UserID)
+		if !users[userID][strings.ToLower(repository)] {
+			return "permission_denied", "当前用户没有该仓库的写入权限。"
+		}
+		tokens, err := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
+		if err != nil {
+			return "invalid_user_tokens", "用户 GitHub Token 配置无效。"
+		}
+		if strings.TrimSpace(tokens[userID]) == "" {
+			return "user_token_required", "当前授权用户尚未配置自己的 GitHub Token。"
+		}
+		return "", ""
+	}
+	mode := repositoryPublishAuthMode(t.settings)
+	if mode == repositoryPublishAuthToken && strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")) == "" {
+		return "token_required", "当前认证方式要求配置独立 GitHub Issues Token。"
 	}
 	return "", ""
 }
@@ -887,6 +1003,199 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 	result.Items = items
 	result.Message = fmt.Sprintf("已在 %s 中找到 %d 个匹配 Issue。", repository, len(items))
 	return result
+}
+
+func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: "create", Repository: repository}
+	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+		return result.fail("permission_denied", "Issue 草稿只能在已配置的群聊中发起。")
+	}
+	title, redactions := sanitizeRepositoryIssueText(configToolString(input, "title"), repositoryIssueTitleLimit, true)
+	body, bodyRedactions := sanitizeRepositoryIssueText(configToolString(input, "body"), repositoryIssueBodyLimit, false)
+	result.Redactions = redactions + bodyRedactions
+	if title == "" {
+		return result.fail("invalid_input", "生成 Issue 草稿必须提供标题。")
+	}
+	labels, _, code, message := repositoryIssueStringList(input, "labels", 20)
+	if code != "" {
+		return result.fail(code, message)
+	}
+	draftInput := map[string]any{"title": title, "body": body, "user_confirmed_write": true}
+	if len(labels) > 0 {
+		draftInput["labels"] = labels
+	}
+	if assignees, present, code, message := repositoryIssueStringList(input, "assignees", 10); code != "" {
+		return result.fail(code, message)
+	} else if present {
+		draftInput["assignees"] = assignees
+	}
+	if milestone, present, code, message := repositoryIssueMilestone(input, false); code != "" {
+		return result.fail(code, message)
+	} else if present {
+		draftInput["milestone"] = milestone
+	}
+	draft, err := t.plugin.saveDraft(ctx, repositoryIssueDraft{
+		Platform: t.event.Platform, ProfileID: t.event.ProfileID,
+		GroupID: strings.TrimSpace(t.event.GroupID), Repository: repository,
+		RequesterID: strings.TrimSpace(t.event.UserID), RequesterName: strings.TrimSpace(t.event.SenderName), Input: draftInput,
+	})
+	if err != nil {
+		return result.fail("draft_store_failed", "Issue 草稿保存失败。")
+	}
+	result.OK = true
+	result.Outcome = "draft_pending"
+	result.Message = "Issue 草稿已生成，尚未写入 GitHub；需要本群内对该仓库有权限的用户明确同意。"
+	result.RequiresApproval = true
+	result.Draft = repositoryIssueDraftViewFromDraft(draft)
+	return result
+}
+
+func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: "approve", Message: "Issue 草稿未提交。"}
+	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+		return result.fail("permission_denied", "只能在草稿所属群聊中审批。")
+	}
+	draft, ok, err := t.plugin.findDraft(ctx, t.event.GroupID, configToolString(input, "draft_id"))
+	if err != nil {
+		return result.fail("draft_store_failed", "读取 Issue 草稿失败。")
+	}
+	if !ok {
+		return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
+	}
+	result.Repository = draft.Repository
+	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
+	userAllowed, _, code, message := repositoryPublishAccessForEvent(t.event, draft.Repository, owner, t.settings)
+	if code != "" || !userAllowed {
+		if code == "" {
+			code, message = "permission_denied", "当前用户没有该仓库的审批权限。"
+		}
+		return result.fail(code, message)
+	}
+	request := strings.ToLower(repositoryIssueCurrentRequestText(t.event))
+	approved := false
+	for _, marker := range []string{"同意", "批准", "确认创建", "提交", "approve", "confirm", "create it"} {
+		if strings.Contains(request, marker) {
+			approved = true
+			break
+		}
+	}
+	for _, marker := range []string{"不同意", "不批准", "取消", "拒绝", "do not", "don't", "reject", "cancel"} {
+		if strings.Contains(request, marker) {
+			approved = false
+			break
+		}
+	}
+	if !approved {
+		return result.fail("explicit_approval_required", "当前消息必须明确表示同意创建该 Issue。")
+	}
+	if code, message := t.validateWriteAccess(draft.Repository, owner); code != "" {
+		return result.fail(code, message)
+	}
+	createInput := make(map[string]any, len(draft.Input)+2)
+	for key, value := range draft.Input {
+		createInput[key] = value
+	}
+	for _, key := range []string{"allow_duplicate", "confirmation_token"} {
+		if value, ok := input[key]; ok {
+			createInput[key] = value
+		}
+	}
+	created := t.create(ctx, draft.Repository, createInput)
+	created.Operation = "approve"
+	created.Draft = repositoryIssueDraftViewFromDraft(draft)
+	if created.OK {
+		draft.Status = "created"
+		draft.ResolvedBy = strings.TrimSpace(t.event.UserID)
+		if created.Issue != nil {
+			draft.IssueNumber = created.Issue.Number
+			draft.IssueURL = created.Issue.URL
+		}
+		if err := t.plugin.updateDraft(ctx, draft); err != nil {
+			created.Message += " Issue 已创建，但草稿状态保存失败。"
+		}
+	}
+	return created
+}
+
+func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[string]any) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: "list_drafts", Message: "没有找到 Issue 草稿。"}
+	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+		return result.fail("permission_denied", "只能在群聊中列出该群的 Issue 草稿。")
+	}
+	groups, err := repositoryPublishGroupAccess(t.settings.String(repositoryPublishSettingGroupAccess, ""))
+	if err != nil || len(groups[strings.TrimSpace(t.event.GroupID)]) == 0 {
+		return result.fail("permission_denied", "当前群聊未配置 Issue 草稿仓库。")
+	}
+	status := strings.ToLower(strings.TrimSpace(configToolString(input, "status")))
+	if status == "" {
+		status = "pending"
+	}
+	if status != "pending" && status != "created" && status != "cancelled" && status != "all" {
+		return result.fail("invalid_input", "status 必须是 pending、created、cancelled 或 all。")
+	}
+	drafts, err := t.plugin.listDrafts(ctx, t.event.GroupID, status)
+	if err != nil {
+		return result.fail("draft_store_failed", "读取 Issue 草稿列表失败。")
+	}
+	result.OK = true
+	result.Outcome = "listed"
+	result.Message = fmt.Sprintf("共找到 %d 条 Issue 草稿。", len(drafts))
+	result.Drafts = make([]repositoryIssueDraftView, 0, len(drafts))
+	for _, draft := range drafts {
+		result.Drafts = append(result.Drafts, *repositoryIssueDraftViewFromDraft(draft))
+	}
+	return result
+}
+
+func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: "cancel_draft", Message: "Issue 草稿未取消。"}
+	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+		return result.fail("permission_denied", "只能在草稿所属群聊中取消。")
+	}
+	draft, ok, err := t.plugin.findDraft(ctx, t.event.GroupID, configToolString(input, "draft_id"))
+	if err != nil {
+		return result.fail("draft_store_failed", "读取 Issue 草稿失败。")
+	}
+	if !ok {
+		return result.fail("draft_not_found", "本群没有可取消的待审批草稿。")
+	}
+	result.Repository = draft.Repository
+	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
+	userAllowed, _, code, _ := repositoryPublishAccessForEvent(t.event, draft.Repository, owner, t.settings)
+	if code != "" || !userAllowed {
+		return result.fail("permission_denied", "当前用户没有该仓库的草稿管理权限。")
+	}
+	request := strings.ToLower(repositoryIssueCurrentRequestText(t.event))
+	explicit := false
+	for _, marker := range []string{"取消", "拒绝", "作废", "cancel", "reject"} {
+		if strings.Contains(request, marker) {
+			explicit = true
+			break
+		}
+	}
+	if !explicit {
+		return result.fail("explicit_cancellation_required", "当前消息必须明确表示取消该草稿。")
+	}
+	draft.Status = "cancelled"
+	draft.ResolvedBy = strings.TrimSpace(t.event.UserID)
+	if err := t.plugin.updateDraft(ctx, draft); err != nil {
+		return result.fail("draft_store_failed", "取消草稿时保存状态失败。")
+	}
+	result.OK = true
+	result.Outcome = "cancelled"
+	result.Message = "Issue 草稿已取消，不会写入 GitHub。"
+	result.Draft = repositoryIssueDraftViewFromDraft(draft)
+	return result
+}
+
+func repositoryIssueDraftViewFromDraft(draft repositoryIssueDraft) *repositoryIssueDraftView {
+	labels, _, _, _ := repositoryIssueStringList(draft.Input, "labels", 20)
+	return &repositoryIssueDraftView{
+		ID: draft.ID, GroupID: draft.GroupID, Repository: draft.Repository, Title: configToolString(draft.Input, "title"),
+		Body: configToolString(draft.Input, "body"), Labels: labels,
+		RequesterID: draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
+		IssueNumber: draft.IssueNumber, IssueURL: draft.IssueURL,
+	}
 }
 
 func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
@@ -1810,6 +2119,11 @@ func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, metho
 }
 
 func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Context) (string, *repositoryIssueAPIError) {
+	if tokens, err := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, "")); err == nil {
+		if token := strings.TrimSpace(tokens[strings.TrimSpace(t.event.UserID)]); token != "" {
+			return token, nil
+		}
+	}
 	token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, ""))
 	mode := repositoryPublishAuthMode(t.settings)
 	if mode == repositoryPublishAuthToken || mode == repositoryPublishAuthAuto && token != "" {

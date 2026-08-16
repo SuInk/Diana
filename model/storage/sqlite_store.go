@@ -14,7 +14,6 @@ import (
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
-	"github.com/SuInk/diana/model/updater"
 
 	_ "modernc.org/sqlite"
 )
@@ -32,7 +31,6 @@ const (
 	replySuppressionsKey = "qqbot_reply_suppressions"
 	webuiAuthKey         = "webui_auth"
 	webuiSessionsKey     = "webui_sessions"
-	updatePolicyKey      = "system_update_policy"
 	releaseCacheKey      = "system_release_cache"
 	inboundRecoveryKey   = "qqbot_inbound_recovery_checkpoint"
 )
@@ -380,18 +378,6 @@ func (s *SQLiteStore) LoadReminders(ctx context.Context) ([]assistant.Reminder, 
 // SaveReminders 保存提醒列表。
 func (s *SQLiteStore) SaveReminders(ctx context.Context, reminders []assistant.Reminder) error {
 	return s.saveJSON(ctx, remindersKey, reminders)
-}
-
-// LoadUpdatePolicy loads the persistent OTA automation policy.
-func (s *SQLiteStore) LoadUpdatePolicy(ctx context.Context) (updater.UpdatePolicy, bool, error) {
-	var policy updater.UpdatePolicy
-	ok, err := s.loadJSON(ctx, updatePolicyKey, &policy)
-	return policy, ok, err
-}
-
-// SaveUpdatePolicy persists the OTA automation policy across restarts.
-func (s *SQLiteStore) SaveUpdatePolicy(ctx context.Context, policy updater.UpdatePolicy) error {
-	return s.saveJSON(ctx, updatePolicyKey, policy)
 }
 
 // LoadReleaseCache loads the persisted GitHub Release metadata cache.

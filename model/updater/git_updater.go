@@ -49,6 +49,10 @@ type Status struct {
 	DownloadReady     bool      `json:"download_ready"`
 	DownloadedVersion string    `json:"downloaded_version,omitempty"`
 	DownloadedAt      time.Time `json:"downloaded_at,omitempty"`
+	UpdatePhase       string    `json:"update_phase,omitempty"`
+	DownloadPercent   int       `json:"download_percent,omitempty"`
+	DownloadedBytes   int64     `json:"downloaded_bytes,omitempty"`
+	DownloadTotal     int64     `json:"download_total,omitempty"`
 	LastFetchedAt     time.Time `json:"last_fetched_at,omitempty"`
 	LastUpdateAt      time.Time `json:"last_update_at,omitempty"`
 	LastUpdateText    string    `json:"last_update_text,omitempty"`
