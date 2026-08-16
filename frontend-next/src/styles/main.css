@@ -2388,9 +2388,9 @@ code {
   order: 3;
   margin-left: auto;
   /* 第二列固定留给操作按钮：网格列不依赖内容存在，没有「设置」的插件也照样
-     占位，权限就不会滑进按钮的位置、逐行左右横跳。59px 是「设置」按钮的自然
-     宽度，出现更宽的按钮（如卸载）时按内容撑开。 */
-  grid-template-columns: auto minmax(59px, auto);
+     占位，权限就不会滑进按钮的位置、逐行左右横跳。27px 是纯图标「设置」按钮
+     的宽度，出现更宽的按钮（如卸载）时按内容撑开。 */
+  grid-template-columns: auto minmax(27px, auto);
 }
 
 .plugin-rows .plugin-card-foot {
@@ -2631,6 +2631,16 @@ code {
   /* 跟着字号收一档，14px 的图标配 11.5px 的字会显得头重脚轻 */
   width: 13px;
   height: 13px;
+}
+
+/* 纯图标按钮没有文字撑高，靠内边距保住可点面积 */
+.plugin-card-foot .btn.small.icon-only {
+  padding: 5px;
+}
+
+.plugin-card-foot .btn.small.icon-only svg {
+  width: 15px;
+  height: 15px;
 }
 
 .plugin-card-foot .btn.small:hover:not(:disabled) {
