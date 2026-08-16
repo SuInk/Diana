@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+
 <template>
   <div class="card stat-card">
     <span class="stat-label">

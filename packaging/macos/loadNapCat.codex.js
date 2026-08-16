@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 const fs = require("fs");
 const os = require("os");
 const path = require("path");

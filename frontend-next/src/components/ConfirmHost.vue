@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+
 <template>
   <Modal v-if="confirmState.open" :title="confirmState.title" @close="settleConfirm(false)">
     <p class="confirm-message">{{ confirmState.message }}</p>
