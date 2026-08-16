@@ -39,6 +39,7 @@ type llmConfigPayload struct {
 	APIFormat           llm.APIFormat      `json:"api_format,omitempty"`
 	APIKey              string             `json:"api_key,omitempty"`
 	APIKeyConfigured    bool               `json:"api_key_configured,omitempty"`
+	APIKeyPreview       string             `json:"api_key_preview,omitempty"`
 	BaseURL             string             `json:"base_url,omitempty"`
 	Models              []llm.ModelInfo    `json:"models,omitempty"`
 	Model               string             `json:"model"`
@@ -449,6 +450,7 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 		APIStyle:            cfg.APIStyle,
 		APIFormat:           cfg.APIFormatWithDefault(),
 		APIKeyConfigured:    cfg.APIKey != "",
+		APIKeyPreview:       maskLLMAPIKey(cfg.APIKey),
 		BaseURL:             cfg.BaseURL,
 		Models:              cfg.Models,
 		Model:               cfg.Model,
@@ -466,6 +468,23 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 		TimeoutMS:           cfg.Timeout.Milliseconds(),
 	}
 	return payload
+}
+
+func maskLLMAPIKey(value string) string {
+	key := []rune(strings.TrimSpace(value))
+	if len(key) == 0 {
+		return ""
+	}
+	if len(key) < 3 {
+		return "••••"
+	}
+	prefix, suffix := 1, 1
+	if len(key) >= 13 {
+		prefix, suffix = 5, 4
+	} else if len(key) >= 8 {
+		prefix, suffix = 3, 3
+	}
+	return string(key[:prefix]) + "…" + string(key[len(key)-suffix:])
 }
 
 // payloadFromConfigWithSecrets 把 LLM 配置转换为包含密钥的 payload。
