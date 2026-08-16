@@ -1,7 +1,11 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"image"
+	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,6 +52,80 @@ func TestHistoryImagesToolSelectsExactIndexesInSourceOrder(t *testing.T) {
 	}
 	if !strings.Contains(output, `"image_index":1`) || !strings.Contains(output, `"image_index":3`) || !strings.Contains(output, `"loaded":2`) {
 		t.Fatalf("output = %s", output)
+	}
+}
+
+func TestHistoryImagesToolAddsOverlappingCropsForLargeHighDetailImage(t *testing.T) {
+	large := image.NewRGBA(image.Rect(0, 0, 3000, 1600))
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, large, &jpeg.Options{Quality: 80}); err != nil {
+		t.Fatal(err)
+	}
+	imageURL := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes())
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "user-1",
+		MessageID: "large-image",
+		Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURL}}},
+	})
+	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "user-1"})
+	output, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"large-image"}, "detail": "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := tool.ToolResultParts(output)
+	if len(parts) != 3 {
+		t.Fatalf("parts = %d, want original plus two crops", len(parts))
+	}
+	if parts[0].ImageURL != imageURL || !strings.Contains(output, `"focus_crops":2`) {
+		t.Fatalf("output=%s parts=%#v", output, parts)
+	}
+	for index, part := range parts {
+		if part.Detail != "high" {
+			t.Fatalf("part %d detail = %q", index, part.Detail)
+		}
+	}
+	crop, err := decodeDataURLImage(parts[1].ImageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if crop.Bounds().Dx() != 1800 || crop.Bounds().Dy() != 1600 {
+		t.Fatalf("first crop bounds=%v", crop.Bounds())
+	}
+}
+
+func TestHistoryImagesToolUsesThreeReadableCropsForLongScreenshot(t *testing.T) {
+	large := image.NewRGBA(image.Rect(0, 0, 1200, 4500))
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, large, &jpeg.Options{Quality: 80}); err != nil {
+		t.Fatal(err)
+	}
+	imageURL := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes())
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "user-1",
+		MessageID: "long-screenshot",
+		Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURL}}},
+	})
+	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "user-1"})
+	output, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"long-screenshot"}, "detail": "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := tool.ToolResultParts(output)
+	if len(parts) != 4 || !strings.Contains(output, `"focus_crops":3`) {
+		t.Fatalf("output=%s parts=%d, want original plus three crops", output, len(parts))
+	}
+	for index, part := range parts[1:] {
+		crop, err := decodeDataURLImage(part.ImageURL)
+		if err != nil {
+			t.Fatalf("decode crop %d: %v", index, err)
+		}
+		if crop.Bounds().Dx() != 1200 || crop.Bounds().Dy() != 1800 {
+			t.Fatalf("crop %d bounds=%v", index, crop.Bounds())
+		}
 	}
 }
 
