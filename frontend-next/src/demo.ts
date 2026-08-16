@@ -69,12 +69,13 @@ let plugins: PluginState[] = [
   { manifest: { id: "official.onebot-v11", name: "OneBot v11 协议技能", version: "0.1.0", description: "提供 QQ 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {
     manifest: {
-      id: "official.repository-publish", name: "仓库 Issue 发布", version: "0.2.0", description: "允许主人及指定用户搜索或写入各自获授权的 GitHub 仓库 Issues；支持独立 Token 与 GitHub CLI 认证。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
+      id: "official.repository-publish", name: "仓库 Issue 发布", version: "0.3.0", description: "允许 LLM 为主人、白名单用户或指定群聊管理各自获授权的 GitHub 仓库 Issues；支持独立 Token 与 GitHub CLI 认证。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
       settings: [
         { key: "github_auth_mode", label: "GitHub 认证方式", description: "可使用独立 Token 或当前系统的 gh 登录。", type: "select", default: "token", options: [{ value: "token", label: "独立 Token" }, { value: "gh", label: "GitHub CLI (gh)" }, { value: "auto", label: "自动选择" }] },
         { key: "github_token", label: "GitHub Issues Token", description: "在 Token 或自动模式下使用，保存后不回显。", type: "string", default: "", secret: true },
         { key: "allowed_repositories", label: "允许写入的仓库", description: "精确填写 owner/repo，多个仓库用逗号或换行分隔。", type: "string", default: "" },
         { key: "user_repository_access", label: "用户仓库授权", description: "每行填写：用户ID = owner/repo, owner/repo。", type: "string", default: "" },
+        { key: "group_repository_access", label: "群聊仓库授权", description: "每行填写：群ID = owner/repo, owner/repo。群内成员只能操作绑定仓库。", type: "string", default: "" },
         { key: "timeout_seconds", label: "GitHub 请求超时", type: "number", default: 20, min: 5, max: 60, unit: "秒" }
       ]
     },

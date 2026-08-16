@@ -3,6 +3,7 @@ frontend-next/node_modules/
 frontend-next/node_modules/
 .DS_Store
 .tmp-dev/
+.claude/
 .env
 .env.*
 !.env.example

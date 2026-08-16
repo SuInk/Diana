@@ -1488,7 +1488,7 @@ func (r *Runtime) replyDecisionReason(event MessageEvent, text string, outcome s
 	if eventDirectlyMentionsBot(event, cfg) {
 		return "群消息直接提及了机器人"
 	}
-	trimmed := strings.TrimSpace(readableEventText(event, text))
+	trimmed := strings.TrimSpace(directEventText(event, text))
 	for _, trigger := range cfg.GroupTriggers {
 		trigger = strings.TrimSpace(trigger)
 		if trigger != "" && strings.Contains(trimmed, trigger) {
@@ -1613,7 +1613,7 @@ func (r *Runtime) shouldHandleChatTrigger(event MessageEvent, text string) bool 
 	if eventDirectlyMentionsBot(event, cfg) {
 		return true
 	}
-	trimmed := strings.TrimSpace(readableEventText(event, text))
+	trimmed := strings.TrimSpace(directEventText(event, text))
 	for _, trigger := range cfg.GroupTriggers {
 		if strings.TrimSpace(trigger) != "" && strings.Contains(trimmed, strings.TrimSpace(trigger)) {
 			return true
@@ -1623,7 +1623,7 @@ func (r *Runtime) shouldHandleChatTrigger(event MessageEvent, text string) bool 
 }
 
 func matchedGroupAliases(event MessageEvent, aliases []string) []string {
-	text := strings.TrimSpace(readableEventText(event, event.RawMessage))
+	text := strings.TrimSpace(directEventText(event, event.RawMessage))
 	if text == "" {
 		return nil
 	}
@@ -1635,6 +1635,26 @@ func matchedGroupAliases(event MessageEvent, aliases []string) []string {
 		}
 	}
 	return matched
+}
+
+// directEventText returns only text authored in the current message. Expanded
+// merged-forward text is context for the model, not an explicit invocation of
+// the bot by the sender.
+func directEventText(event MessageEvent, fallback string) string {
+	segments := make([]MessageSegment, 0, len(event.Segments))
+	for _, segment := range event.Segments {
+		if segment.Type == "forward" || segment.Data["source_type"] == "forward" {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	if text := strings.TrimSpace(PlainText(segments)); text != "" {
+		return normalizeChatWhitespace(text)
+	}
+	if len(event.Segments) > 0 {
+		return ""
+	}
+	return normalizeChatWhitespace(strings.TrimSpace(fallback))
 }
 
 func quotedPromptItems(items []string) string {
@@ -2589,7 +2609,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaRSSWatchTool(r, event),
 			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
-				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishUserHasAccess(event.UserID, settings)) {
+				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
 				}
 			}
@@ -2872,6 +2892,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
+	if proactiveTriggered {
+		// Proactive routing decides whether the bot should speak, not how much of
+		// an otherwise complete answer may be delivered. The send layer already
+		// handles long QQ replies with chunks or merged forwards.
+		replyCfg.MaxReplyChars = 0
+	}
 	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		return "", err
@@ -5580,6 +5606,7 @@ func collectForwardMediaMap(node map[string]any, source forwardMediaSource, dept
 		return
 	}
 	if typeName == "node" {
+		source = forwardMediaSourceFromMap(source, node)
 		source = forwardMediaSourceFromMap(source, data)
 		content := firstNonNil(data["content"], data["message"], node["message"])
 		collectForwardMediaSegments(content, source, depth+1, out)

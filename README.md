@@ -2,13 +2,61 @@
 
 [English](./README.en.md)
 
+[官网与文档](https://suink.github.io/Diana/) · [在线演示](https://suink.github.io/Diana/demo/) · [下载最新版本](https://github.com/SuInk/Diana/releases/latest)
+
 Diana 是一个 Go 语言多平台 AI 助手服务，内置 LLM 兼容层、平台适配层、Gin WebUI 和插件管理。当前自带 QQ 的 OneBot v11 适配器；WebUI 可管理多个助手实例、模型、平台连接、触发词和内置插件。
 
 ## 安装要求
 
 - 使用 QQ 适配器时需要支持 OneBot v11 反向 WebSocket 的客户端
-- 使用源码安装时需要 Go `1.26.5`、Node.js `22` 和 npm
+- 一键安装支持 Linux、macOS 的 amd64/arm64，以及 64 位 Windows；无需 Go、Node.js、npm 或源码
 - 使用 Docker 部署时需要 Docker 或 Docker Compose
+- 只有手动从源码构建时才需要 Go `1.26.5`、Node.js `22` 和 npm
+
+## 一键安装（推荐）
+
+安装脚本会自动识别系统与架构，下载最新稳定版完整包，核对 `SHA256SUMS`，生成本地管理凭据并启动 Diana。重复执行同一命令即可安全升级；升级前会备份数据库和当前运行文件，健康检查失败时自动恢复。
+
+Linux / macOS：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
+```
+
+安装完成后访问：
+
+```text
+http://127.0.0.1:18080
+```
+
+Linux 和 macOS 默认安装到 `~/.local/share/diana`，Windows 默认安装到 `%LOCALAPPDATA%\Diana`。首次生成的管理员账号和密码会显示在终端，并保存在安装目录的 `runtime.env`；请妥善保存，不要公开该文件。
+
+可以通过环境变量选择版本、安装目录、端口或仅安装不启动。例如：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  DIANA_VERSION=v0.8.9 DIANA_INSTALL_DIR=/opt/diana DIANA_PORT=18081 sh
+```
+
+### Release 完整包
+
+不使用安装脚本时，也可以从 [GitHub Releases](https://github.com/SuInk/Diana/releases) 下载完整包。Linux/macOS 使用 `.tar.gz`，Windows 使用 `.zip`；包内包含后端二进制、`frontend-next/dist` 和启动脚本，无需额外构建。Unix 平台运行 `run.sh`，Windows 平台运行 `run.bat`。
+
+Release 同时提供 `SHA256SUMS`。下载后应先校验再解压或替换程序；强制更新也不会绕过该校验：
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+macOS 可使用 `shasum -a 256 <文件名>` 与 `SHA256SUMS` 对照；Windows 可使用 `Get-FileHash <文件名> -Algorithm SHA256`。
+
+从完整 Release 包运行时，WebUI 可直接安装后续稳定版本：后端会下载当前系统和架构对应的完整包，校验、备份并切换版本；探活失败会自动恢复数据库与旧版本。备份和最近一次结果保存在安装目录的 `.diana-updates` 下。容器部署仍由镜像更新器负责，源码 checkout 仍使用 Git 更新流程。
 
 ## Docker 部署
 
@@ -62,7 +110,9 @@ ws://127.0.0.1:18080/onebot/v11/ws
 
 如果 OneBot v11 客户端和 Diana 不在同一台机器，`127.0.0.1` 要换成 Diana 宿主机 IP 或域名。
 
-## 从源码安装
+## 手动从源码构建
+
+源码构建主要面向开发、调试和自定义部署。普通用户优先使用上面的一键安装脚本或 Release 完整包。
 
 ```sh
 git clone <your-repo-url> diana
@@ -139,20 +189,6 @@ go build -o dist\diana-webui-windows-amd64.exe .\cmd\webui
 ```
 
 Windows 下也可以直接下载 GitHub Release 中的 `windows-amd64.exe`。裸二进制不包含前端资源，普通用户请下载对应平台的 Release 完整包。
-
-### Release 完整包
-
-每个平台的 GitHub Release 同时提供完整包（Linux/macOS 为 `.tar.gz`，Windows 为 `.zip`）。完整包包含后端二进制、`frontend-next/dist` 和启动脚本；解压后无需安装 Go、Node.js、npm 或源码即可运行。Unix 平台运行 `run.sh`，Windows 平台运行 `run.bat`。
-
-Release 同时提供 `SHA256SUMS`。下载后应先校验再解压或替换程序；强制更新也不会绕过该校验：
-
-```sh
-sha256sum -c SHA256SUMS --ignore-missing
-```
-
-macOS 可使用 `shasum -a 256 <文件名>` 与 `SHA256SUMS` 对照；Windows 可使用 `Get-FileHash <文件名> -Algorithm SHA256`。
-
-从完整 Release 包运行时，WebUI 可直接安装后续稳定版本：后端按当前系统和架构下载对应完整包及 `SHA256SUMS`，校验后安全解压到暂存目录。旧进程退出后，独立更新 helper 会先备份 SQLite 数据库和当前二进制/前端，再切换文件、启动新版本并请求 `/api/health`；探活失败会自动恢复数据库与旧版本。备份和最近一次结果保存在安装目录的 `.diana-updates` 下。容器部署仍由镜像更新器负责，源码 checkout 仍使用 Git 更新流程。
 
 ## 快速运行
 

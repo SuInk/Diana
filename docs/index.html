@@ -3,65 +3,68 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Diana 多平台 AI 助手的产品介绍与快速开始。" />
-    <meta name="theme-color" content="#f7f5f6" />
-    <title>Diana 文档 - 概览</title>
+    <meta name="description" content="Diana 是可自托管的多平台 AI 助手，支持 QQ、Telegram、长期记忆、联网搜索、视觉理解和完整事件审计。" />
+    <meta name="theme-color" content="#171418" />
+    <meta property="og:title" content="Diana - 多平台 AI 助手" />
+    <meta property="og:description" content="一条命令完成安装，在线体验完整 WebUI。" />
+    <meta property="og:image" content="https://suink.github.io/Diana/assets/diana-webui-overview.png" />
+    <title>Diana - 多平台 AI 助手</title>
     <link rel="icon" href="https://raw.githubusercontent.com/SuInk/Diana/main/frontend-next/public/favicon.svg" />
-    <link rel="stylesheet" href="./styles.css?v=20260811" />
+    <link rel="stylesheet" href="./styles.css?v=20260816" />
   </head>
-  <body data-page="overview">
+  <body class="landing-page" data-page="overview">
     <div data-docs-header></div>
     <div class="docs-shell">
       <div data-docs-sidebar></div>
       <main id="main" class="content">
-        <section class="hero searchable" id="overview">
-          <div class="hero-copy">
-            <p class="eyebrow">多平台 · 多模型 · 可观测</p>
-            <h1>Diana 多平台 AI 助手</h1>
-            <p class="lead">连接 QQ 与 Telegram，把对话、视觉、生图、长期记忆、联网搜索和提醒任务组合成一套可以长期运行、可以解释决策的助手服务。</p>
+        <section class="landing-hero searchable" id="overview" aria-labelledby="landing-title">
+          <img class="landing-hero-media" src="./assets/diana-webui-overview.png" alt="Diana WebUI 总览，显示通道状态、消息统计、系统资源和实时事件" width="1600" height="1000" />
+          <div class="landing-hero-shade" aria-hidden="true"></div>
+          <div class="landing-hero-copy">
+            <p class="eyebrow">自托管 · QQ 与 Telegram · 完整可观测</p>
+            <h1 id="landing-title">Diana</h1>
+            <p class="landing-lead">把对话、视觉、生图、长期记忆、联网搜索和提醒任务，组合成一套可以长期运行、能够解释每次决策的多平台 AI 助手。</p>
             <div class="hero-actions">
-              <a class="button primary" href="./deploy.html#one-click">一键部署</a>
-              <a class="button secondary" href="./demo/">在线演示</a>
-              <a class="button secondary" href="./implementation.html#architecture">查看实现</a>
+              <a class="button primary" href="#quickstart">一键安装</a>
+              <a class="button hero-secondary" href="./demo/">在线演示</a>
             </div>
-            <dl class="hero-facts">
-              <div><dt>后端</dt><dd>Go + Gin</dd></div>
-              <div><dt>控制台</dt><dd>Vue 3 + TypeScript</dd></div>
-              <div><dt>存储</dt><dd>SQLite + 本地媒体</dd></div>
-              <div><dt>稳定版</dt><dd><a href="https://github.com/SuInk/Diana/releases/latest">查看最新 Release</a></dd></div>
-            </dl>
-          </div>
-          <figure class="product-preview">
-            <img src="https://raw.githubusercontent.com/SuInk/Diana/main/frontend/public/landing-console-preview.png" alt="Diana Web 控制台总览界面" width="1440" height="1000" />
-            <figcaption>控制台统一呈现连接状态、消息统计、事件处理和运行信息。</figcaption>
-          </figure>
-        </section>
-
-        <section class="section searchable" id="capabilities">
-          <div class="section-heading"><p class="eyebrow">核心能力</p><h2>从消息接入到运维都能看见</h2></div>
-          <div class="feature-grid">
-            <article><h3>QQ 与 Telegram 同时在线</h3><p>两个通道并行运行，回复始终回到来源通道；会话和记忆可选择隔离或共享。</p></article>
-            <article><h3>模型职责拆分</h3><p>对话、识图、意图识别和图片生成可分别绑定 Provider 与模型，并提供对应的真实测试。</p></article>
-            <article><h3>内置联网搜索</h3><p>联网属于内置工具，不需要安装插件。时效性和陌生事实问题可先检索再回答。</p></article>
-            <article><h3>群级策略</h3><p>每个群独立配置回复时间、屏蔽 QQ、触发词、人设、等级限制和工具权限。</p></article>
-            <article><h3>长期记忆</h3><p>近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，避免无限堆积 token。</p></article>
-            <article><h3>完整事件审计</h3><p>显示为什么回复、为什么不回复、最终结果与 token；调试模式呈现模型上下文和工具调用链。</p></article>
+            <p class="landing-demo-note">在线演示使用模拟数据，不连接真实机器人。</p>
           </div>
         </section>
 
-        <section class="section searchable" id="quickstart">
-          <div class="section-heading"><p class="eyebrow">快速开始</p><h2>不再手工挑选和下载 Release 包</h2></div>
-          <p>安装器自动识别操作系统与 CPU 架构，下载完整包和 <code>SHA256SUMS</code>，校验后安装为用户服务，并等待健康检查通过。以后重复执行同一条命令即可升级，数据库和旧运行文件会先备份。</p>
-          <div class="install-command">
-            <span>Linux / macOS</span>
-            <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
+        <section class="section landing-install searchable" id="quickstart">
+          <div class="landing-section-heading">
+            <div><p class="eyebrow">一键安装</p><h2>一条命令，启动 Diana</h2></div>
+            <p>安装器自动识别系统与 CPU 架构，下载完整 Release 包并校验 SHA-256。安装前备份已有数据，切换版本后完成健康检查。</p>
           </div>
-          <div class="install-command">
-            <span>Windows PowerShell</span>
-            <pre><code>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code></pre>
+          <div class="landing-install-body" data-tabs-root>
+            <div class="tabs install-tabs" role="tablist" aria-label="安装平台">
+              <button type="button" role="tab" aria-selected="true" data-tab="unix">Linux / macOS</button>
+              <button type="button" role="tab" aria-selected="false" data-tab="windows">Windows</button>
+            </div>
+            <div class="tab-panel" role="tabpanel" data-panel="unix">
+              <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
+            </div>
+            <div class="tab-panel" role="tabpanel" data-panel="windows" hidden>
+              <pre><code>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code></pre>
+            </div>
           </div>
-          <div class="callout recommended"><strong>安装完成</strong><p>终端会打印控制台地址和首次登录凭据。默认地址是 <code>http://127.0.0.1:18080</code>。</p></div>
-          <a class="button primary" href="./deploy.html#one-click">查看部署参数与其他方式</a>
+          <div class="landing-install-footer">
+            <p>完成后打开 <code>http://127.0.0.1:18080</code>，使用终端显示的首次登录凭据进入控制台。</p>
+            <a class="button secondary" href="./deploy.html#one-click">部署参数与其他方式</a>
+          </div>
+        </section>
+
+        <section class="section landing-capabilities searchable" id="capabilities">
+          <div class="landing-section-heading"><div><p class="eyebrow">核心能力</p><h2>消息接入、模型决策和运维状态都能看见</h2></div></div>
+          <div class="feature-grid landing-feature-grid">
+            <article><h3>多通道同时在线</h3><p>QQ 与 Telegram 并行运行，回复回到来源通道；会话和记忆可按需隔离或共享。</p></article>
+            <article><h3>模型职责拆分</h3><p>对话、识图、意图识别和图片生成分别绑定 Provider 与模型，并提供对应的真实测试。</p></article>
+            <article><h3>内置联网搜索</h3><p>联网搜索无需安装插件，面对时效性内容和陌生事实时可以先检索再回答。</p></article>
+            <article><h3>群级回复策略</h3><p>为每个群独立设置回复时间、屏蔽 QQ、触发词、人设、等级限制和工具权限。</p></article>
+            <article><h3>长期记忆与检索</h3><p>近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，控制 token 消耗。</p></article>
+            <article><h3>完整事件审计</h3><p>记录为什么回复、为什么不回复、最终结果与 token；调试模式还原模型上下文和工具调用链。</p></article>
+          </div>
         </section>
 
         <nav class="page-nav" aria-label="文档分页">
@@ -71,6 +74,6 @@
         <div data-docs-footer></div>
       </main>
     </div>
-    <script src="./app.js?v=20260811" defer></script>
+    <script src="./app.js?v=20260816" defer></script>
   </body>
 </html>
