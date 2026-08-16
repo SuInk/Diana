@@ -360,6 +360,44 @@ func TestRememberOutgoingPersistsSharedImage(t *testing.T) {
 	}
 }
 
+func TestRememberOutgoingCachesSharedVideoBeforeTemporarySourceExpires(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	videoPath := filepath.Join(t.TempDir(), "agent-output.mp4")
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=1", "-pix_fmt", "yuv420p", videoPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create sample video: %v: %s", err, output)
+	}
+	store := NewLocalMediaStore("http://127.0.0.1:18080/media/resolver")
+	sharedURL, ok := store.Share(videoPath, time.Minute)
+	if !ok {
+		t.Fatal("Share() returned false")
+	}
+	runtime := NewRuntime(BotConfig{BotQQ: "bot-1"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetLocalMediaSharer(store)
+	source := MessageEvent{Kind: EventKindPrivate, UserID: "user-1", MessageID: "video-request"}
+	runtime.rememberOutgoingWithMessageID(context.Background(), source, OutgoingMessage{
+		Text:      "视频好了。",
+		VideoURLs: []string{sharedURL},
+	}, "bot-video-1")
+	if err := os.Remove(videoPath); err != nil {
+		t.Fatal(err)
+	}
+	history := runtime.contextHistory(source)
+	if len(history) != 1 || history[0].MessageID != "bot-video-1" {
+		t.Fatalf("history = %#v", history)
+	}
+	if frames := cachedVideoFrameURLs(history[0].Segments); len(frames) == 0 {
+		t.Fatalf("outgoing video frames were not persisted: %#v", history[0].Segments)
+	}
+	videoSegments := videoSourceCandidates(history[0].Segments)
+	if len(videoSegments) != 1 || videoSegments[0] != videoPath {
+		t.Fatalf("shared video was not resolved locally: %#v", history[0].Segments)
+	}
+}
+
 func TestRememberOutgoingRecoversSentImageThroughOneBot(t *testing.T) {
 	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
 	body := tinyJPEGBytes(t)

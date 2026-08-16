@@ -46,7 +46,7 @@ const pages = [
     title: "运维",
     file: "operations.html",
     sections: [
-      ["updates", "更新与回滚", "小黄点 Release 自动更新 备份 健康检查"],
+      ["updates", "更新与回滚", "小黄点 Release 手动更新 备份 健康检查"],
       ["operations", "运行与备份", "日志 SSE SQLite systemd launchd"],
       ["troubleshooting", "故障排查", "不回复 视觉 群管理 队列 超时"],
       ["development", "开发与发布", "CI GitHub Pages 测试 Release"],

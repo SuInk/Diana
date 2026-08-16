@@ -276,7 +276,7 @@ func TestReplyToUsesSingleAgentDecisionWithoutPreRouter(t *testing.T) {
 	}
 	foundProtocol := false
 	for _, message := range provider.replyRequest.Messages {
-		if strings.Contains(message.Content, "Diana QQ Bot 的内置 Agent") && strings.Contains(message.Content, `{"action":"tool"`) {
+		if strings.Contains(message.Content, "Diana 的内置 Agent") && strings.Contains(message.Content, `{"action":"tool"`) {
 			foundProtocol = true
 		}
 	}

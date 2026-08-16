@@ -219,7 +219,6 @@ stop_service() {
   fi
   if [ "$os" = "darwin" ] && command -v launchctl >/dev/null 2>&1; then
     launchctl bootout "gui/$(id -u)/com.suink.diana" >/dev/null 2>&1 || true
-    launchctl bootout "gui/$(id -u)/com.diana.diana-qq-bot" >/dev/null 2>&1 || true
   fi
   if [ -f "$install_dir/.diana.pid" ]; then
     old_pid=$(cat "$install_dir/.diana.pid" 2>/dev/null || true)
@@ -233,7 +232,7 @@ stop_service() {
 stop_other_diana_instances() {
   stop_service
   if command -v pgrep >/dev/null 2>&1; then
-    for existing_pid in $(pgrep -f '(^|/)(diana-webui|diana-qq-bot)(-[A-Za-z0-9_-]+)?([[:space:]]|$)' 2>/dev/null || true); do
+    for existing_pid in $(pgrep -f '(^|/)diana-webui(-[A-Za-z0-9_-]+)?([[:space:]]|$)' 2>/dev/null || true); do
       [ "$existing_pid" = "$$" ] && continue
       info "Single instance → stopping existing Diana PID $existing_pid"
       kill "$existing_pid" 2>/dev/null || true
@@ -245,7 +244,7 @@ stop_other_diana_instances() {
   for listener_pid in $listeners; do
     listener_command=$(ps -p "$listener_pid" -o command= 2>/dev/null || true)
     case "$listener_command" in
-      *diana-webui*|*diana-qq-bot*)
+      *diana-webui*)
         info "Single instance → stopping existing Diana PID $listener_pid"
         kill "$listener_pid" 2>/dev/null || true
         ;;

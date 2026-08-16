@@ -7,15 +7,44 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/storage"
+	"github.com/gin-gonic/gin"
 )
 
 type repositoryIssueTestTransport struct {
 	base   http.RoundTripper
 	target *url.URL
+}
+
+func TestQQBotHandlerListsPersistentRepositoryIssueDrafts(t *testing.T) {
+	store, err := storage.NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	if err := store.SaveRepositoryIssueDraft(context.Background(), assistant.RepositoryIssueDraft{
+		ID: "draft-web-1", GroupID: "group-1", Repository: "acme/demo",
+		RequesterID: "member", RequesterName: "Alice", Status: "pending",
+		Input:     map[string]any{"title": "Login fails", "body": "Detailed steps"},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := &QQBotHandler{sqlite: store}
+	router := gin.New()
+	router.GET("/api/assistant/plugins/repository-publish/drafts", handler.listRepositoryIssueDrafts)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/plugins/repository-publish/drafts?status=all", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Detailed steps") || !strings.Contains(recorder.Body.String(), "Alice") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
 }
 
 func (t repositoryIssueTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
