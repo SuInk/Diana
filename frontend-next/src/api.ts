@@ -351,7 +351,8 @@ export interface UpdateStatus {
   ahead?: number;
   behind?: number;
   upstream?: string;
-  last_fetched_at?: string;
+	updating?: boolean;
+	last_fetched_at?: string;
   last_update_at?: string;
   last_update_text?: string;
 	update_available?: boolean;

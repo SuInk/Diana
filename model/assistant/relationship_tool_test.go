@@ -64,9 +64,9 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 func TestRelationshipDataRequestRequiresRelationshipTool(t *testing.T) {
 	registry := agent.NewToolRegistry(newDianaRelationshipTool(&Runtime{}, MessageEvent{}))
 	event := MessageEvent{
-		RawMessage: "[CQ:at,qq=3129583166] 查一下和我的好感度",
+		RawMessage: "[CQ:at,qq=10006] 查一下和我的好感度",
 		Segments: []MessageSegment{
-			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "at", Data: map[string]string{"qq": "10006"}},
 			{Type: "text", Data: map[string]string{"text": "查一下和我的好感度"}},
 		},
 	}
