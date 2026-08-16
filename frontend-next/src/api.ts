@@ -355,6 +355,9 @@ export interface UpdateStatus {
 	last_fetched_at?: string;
   last_update_at?: string;
   last_update_text?: string;
+	last_update_status?: "downloaded" | "healthy" | "rolled_back" | "failed" | string;
+	last_update_version?: string;
+	last_update_error?: string;
 	update_available?: boolean;
 	restart_required?: boolean;
 	download_ready?: boolean;
@@ -1002,7 +1005,7 @@ export function getStats(): Promise<StatsSnapshot> {
 }
 
 export type AssistantEventRange = "1h" | "24h" | "7d" | "30d" | "all";
-export type AssistantEventResultFilter = "all" | "replied" | "not_replied" | "pending" | "error";
+export type AssistantEventResultFilter = "all" | "replied" | "not_replied" | "pending" | "error" | "notice";
 
 export interface AssistantEventImage {
   index: number;
@@ -1013,6 +1016,11 @@ export interface AssistantEventImage {
 export interface AssistantEventDetail extends QQBotEvent {
   id: string;
   sender_name?: string;
+  sub_type?: string;
+  original_time?: string;
+  operator_id?: string;
+  operator_name?: string;
+  operator_role?: string;
   status: string;
   outcome?: string;
   llm_calls?: number;
@@ -1042,6 +1050,7 @@ export interface AssistantEventsResponse {
   not_replied: number;
   pending: number;
   errors: number;
+  notices: number;
   llm_calls: number;
   input_tokens: number;
   output_tokens: number;
