@@ -513,7 +513,7 @@ func TestRepositoryIssueDelegatedAccessAlsoRequiresGlobalAllowlist(t *testing.T)
 		repositoryPublishSettingAllowlist:  "acme/other",
 		repositoryPublishSettingUserAccess: "member = acme/demo",
 	}
-	if code, _ := repositoryPublishValidateUserAccess("member", "acme/demo", false, settings); code != "repository_not_allowed" {
+	if code, _ := repositoryPublishValidateEventAccess(MessageEvent{Kind: EventKindPrivate, UserID: "member"}, "acme/demo", false, settings); code != "repository_not_allowed" {
 		t.Fatalf("access code=%q, want repository_not_allowed", code)
 	}
 	if !repositoryPublishUserHasAccess("member", settings) || repositoryPublishUserHasAccess("stranger", settings) {
@@ -526,6 +526,81 @@ func TestRepositoryPublishUserAccessRejectsMalformedRules(t *testing.T) {
 		if _, err := repositoryPublishUserAccess(raw); err == nil {
 			t.Fatalf("rule %q accepted", raw)
 		}
+	}
+}
+
+func TestRepositoryIssueAllowsMappedGroupOnlyForMappedRepository(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	settings := SettingValues{
+		repositoryPublishSettingToken:       repositoryPublishTestToken,
+		repositoryPublishSettingAllowlist:   "acme/demo,acme/other",
+		repositoryPublishSettingGroupAccess: "group-1 = acme/demo",
+	}
+	tool := newDianaRepositoryIssuesTool(
+		runtime,
+		MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "请在 acme/demo 创建 GitHub Issue，标题为 Group write"},
+		newRepositoryPublishPlugin(server.Client(), server.URL),
+		settings,
+	)
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "Group write",
+	})
+	if !result.OK || result.Outcome != "created" {
+		t.Fatalf("group result=%#v", result)
+	}
+
+	tool.event.RawMessage = "请在 acme/other 创建 GitHub Issue，标题为 Cross repository"
+	result = runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "create", "repository": "acme/other", "title": "Cross repository",
+	})
+	if result.OK || result.FailureCode != "permission_denied" {
+		t.Fatalf("cross-repository result=%#v", result)
+	}
+
+	tool.event = MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "请在 acme/demo 创建 GitHub Issue，标题为 Private write"}
+	result = runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "Private write",
+	})
+	if result.OK || result.FailureCode != "permission_denied" {
+		t.Fatalf("private result=%#v", result)
+	}
+	if github.count(http.MethodPost) != 1 {
+		t.Fatalf("unauthorized group requests reached GitHub: %#v", github.requests)
+	}
+}
+
+func TestRepositoryPublishGroupAccessRejectsMalformedRules(t *testing.T) {
+	for _, raw := range []string{"group-1", "= acme/demo", "group-1 =", "group-1 = acme/demo="} {
+		if _, err := repositoryPublishGroupAccess(raw); err == nil {
+			t.Fatalf("rule %q accepted", raw)
+		}
+	}
+}
+
+func TestRepositoryPublishEventHasAccessUsesCurrentGroup(t *testing.T) {
+	settings := SettingValues{repositoryPublishSettingGroupAccess: "group-1 = acme/demo"}
+	if !repositoryPublishEventHasAccess(MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "member"}, settings) {
+		t.Fatal("mapped group did not receive Issue tool access")
+	}
+	if repositoryPublishEventHasAccess(MessageEvent{Kind: EventKindGroup, GroupID: "group-2", UserID: "member"}, settings) {
+		t.Fatal("unmapped group received Issue tool access")
+	}
+	if repositoryPublishEventHasAccess(MessageEvent{Kind: EventKindPrivate, UserID: "member"}, settings) {
+		t.Fatal("private chat inherited group Issue tool access")
+	}
+}
+
+func TestRepositoryIssueGroupAccessAlsoRequiresGlobalAllowlist(t *testing.T) {
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:   "acme/other",
+		repositoryPublishSettingGroupAccess: "group-1 = acme/demo",
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "member"}
+	if code, _ := repositoryPublishValidateEventAccess(event, "acme/demo", false, settings); code != "repository_not_allowed" {
+		t.Fatalf("access code=%q, want repository_not_allowed", code)
 	}
 }
 

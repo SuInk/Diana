@@ -36,8 +36,8 @@
         </button>
       </section>
 
-      <!-- 连接链路 -->
-      <section class="card">
+      <!-- 首次配置期间展示连接检查；完成向导后让总览聚焦日常指标。 -->
+      <section v-if="!setupCompleted" class="card">
         <div class="card-body">
           <div class="checklist">
             <div class="checklist-item" :class="status?.running ? 'done' : 'todo'">
@@ -281,6 +281,7 @@ import EmptyState from "../components/EmptyState.vue";
 
 const busy = ref(false);
 const setupNeeded = ref(false);
+const setupCompleted = ref(window.localStorage.getItem("dqb-next:setup-completed") === "1");
 
 const status = computed(() => stream.status);
 const stats = computed(() => stream.stats);
