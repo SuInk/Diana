@@ -19,15 +19,19 @@
             aria-label="搜索插件"
           />
         </div>
-        <div class="segmented plugin-status-filter" role="group" aria-label="按状态筛选">
-          <button type="button" :class="{ active: status === 'all' }" @click="status = 'all'">
-            全部 <span class="plugin-filter-count">{{ displayPlugins.length }}</span>
+        <!-- 语义和计数样式对齐事件页的同类筛选器：单选组 + 等宽数字 -->
+        <div class="segmented plugin-status-filter" role="radiogroup" aria-label="按状态筛选">
+          <button type="button" role="radio" :aria-checked="status === 'all'" :class="{ active: status === 'all' }" @click="status = 'all'">
+            <span>全部</span>
+            <span class="plugin-filter-count">{{ displayPlugins.length }}</span>
           </button>
-          <button type="button" :class="{ active: status === 'on' }" @click="status = 'on'">
-            已启用 <span class="plugin-filter-count">{{ enabledCount }}</span>
+          <button type="button" role="radio" :aria-checked="status === 'on'" :class="{ active: status === 'on' }" @click="status = 'on'">
+            <span>已启用</span>
+            <span class="plugin-filter-count">{{ enabledCount }}</span>
           </button>
-          <button type="button" :class="{ active: status === 'off' }" @click="status = 'off'">
-            已停用 <span class="plugin-filter-count">{{ displayPlugins.length - enabledCount }}</span>
+          <button type="button" role="radio" :aria-checked="status === 'off'" :class="{ active: status === 'off' }" @click="status = 'off'">
+            <span>已停用</span>
+            <span class="plugin-filter-count">{{ displayPlugins.length - enabledCount }}</span>
           </button>
         </div>
         <div class="segmented plugin-layout-switch" role="group" aria-label="插件排列方式">
@@ -49,16 +53,12 @@
           >
             <Rows3 :size="14" aria-hidden="true" />
           </button>
-          <button
-            type="button"
-            :disabled="loading"
-            title="刷新插件列表"
-            aria-label="刷新插件列表"
-            @click="reload"
-          >
-            <RefreshCw :size="14" :class="{ spin: loading }" aria-hidden="true" />
-          </button>
         </div>
+        <!-- 刷新不是第三种排列方式，从分段控件里拿出来，和其它页面写法一致 -->
+        <button class="btn" type="button" :disabled="loading" @click="reload">
+          <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
+          刷新
+        </button>
       </div>
     </header>
 
@@ -99,18 +99,9 @@
         <div v-if="plugin.manifest.permissions?.length || showFooter(plugin)" class="plugin-card-bottom">
           <!-- 权限在左，设置等操作在右；有无设置都不再改变卡片的基础高度。 -->
           <div class="plugin-card-meta">
-            <details v-if="plugin.manifest.permissions?.length" class="plugin-perms">
-              <summary class="plugin-perms-head">
-                <span>{{ plugin.manifest.permissions.length }} 项权限</span>
-                <ChevronDown class="plugin-perms-chevron" :size="14" aria-hidden="true" />
-              </summary>
-              <div class="cluster plugin-card-perms">
-                <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
-              </div>
-            </details>
-
             <!-- 依赖列表展开后比整张卡片还高，行内展开会把这一条撑得和邻居完全
-                 不是一个量级；改成弹窗，卡片上只留状态。 -->
+                 不是一个量级；改成弹窗，卡片上只留状态。
+                 排在权限前面：依赖缺了插件直接不工作，比权限更需要先被看到。 -->
             <button
               v-if="plugin.manifest.id === resolverPluginID"
               class="plugin-dependencies-head"
@@ -127,6 +118,18 @@
               >
                 {{ readyDependencyCount }}/{{ dependencies.length }}
               </span>
+            </button>
+
+            <!-- 和运行依赖一样走弹窗：权限标签展开后会把这一行顶高一截，
+                 一列卡片的高度就不齐了。 -->
+            <button
+              v-if="plugin.manifest.permissions?.length"
+              class="plugin-perms-head"
+              type="button"
+              title="查看权限"
+              @click="permissionsTarget = plugin"
+            >
+              {{ plugin.manifest.permissions.length }} 项权限
             </button>
           </div>
 
@@ -206,8 +209,7 @@
 
       <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'token'" :class="{ active: githubSettingsTab === 'token' }" @click="githubSettingsTab = 'token'">Token</button>
-        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'updates'" :class="{ active: githubSettingsTab === 'updates' }" @click="githubSettingsTab = 'updates'">仓库更新</button>
-        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'issues'" :class="{ active: githubSettingsTab === 'issues' }" @click="githubSettingsTab = 'issues'">提 Issue</button>
+        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'repositories'" :class="{ active: githubSettingsTab === 'repositories' }" @click="githubSettingsTab = 'repositories'">仓库管理</button>
       </div>
 
       <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="plugin-settings-section-head">
@@ -230,23 +232,21 @@
           </a>
         </div>
       </div>
-      <RepositoryAccessEditor
-        v-if="isGitHubSettings && githubSettingsTab === 'issues'"
-        :user-access="String(repositoryPublishForm.user_repository_access ?? '')"
-        :group-access="String(repositoryPublishForm.group_repository_access ?? '')"
-        :token-users="String(repositoryPublishForm.user_github_token_users ?? '')"
-        :user-auth-modes="String(repositoryPublishForm.user_github_auth_modes ?? '')"
-        :joined-groups="repositoryGroups"
-        :groups-loading="repositoryGroupsLoading"
-        :groups-warning="repositoryGroupsWarning"
-        @update:allowed-repositories="repositoryPublishForm.allowed_repositories = $event"
-        @update:user-access="repositoryPublishForm.user_repository_access = $event"
-        @update:group-access="repositoryPublishForm.group_repository_access = $event"
-        @update:user-tokens="repositoryPublishForm.user_github_tokens = $event"
-        @update:token-users="repositoryPublishForm.user_github_token_users = $event"
-        @update:user-auth-modes="repositoryPublishForm.user_github_auth_modes = $event"
-      />
-      <RepositoryIssueDraftList v-if="isGitHubSettings && githubSettingsTab === 'issues'" />
+      <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="stack plugin-settings-form github-publish-global-settings">
+        <div v-if="repositoryPublishAuthSpec" class="field">
+          <label for="setting-github_auth_mode">{{ repositoryPublishAuthSpec.label }}</label>
+          <AppSelect id="setting-github_auth_mode" v-model="repositoryPublishForm.github_auth_mode" :options="repositoryPublishAuthSpec.options ?? []" />
+          <span v-if="repositoryPublishAuthSpec.description" class="hint">{{ repositoryPublishAuthSpec.description }}</span>
+        </div>
+        <div v-if="repositoryPublishTimeoutSpec" class="field">
+          <label for="setting-publish-timeout">{{ repositoryPublishTimeoutSpec.label }}</label>
+          <div class="plugin-setting-number">
+            <input id="setting-publish-timeout" v-model.number="repositoryPublishForm.timeout_seconds" class="input" type="number" :min="repositoryPublishTimeoutSpec.min" :max="repositoryPublishTimeoutSpec.max" :step="repositoryPublishTimeoutSpec.step || 1" />
+            <span v-if="repositoryPublishTimeoutSpec.unit" class="plugin-setting-unit">{{ repositoryPublishTimeoutSpec.unit }}</span>
+          </div>
+          <span v-if="repositoryPublishTimeoutSpec.description" class="hint">{{ repositoryPublishTimeoutSpec.description }}</span>
+        </div>
+      </div>
       <div class="stack plugin-settings-form">
         <div v-for="spec in visibleSettingsSpecs" :key="spec.key" class="field">
           <template v-if="spec.type === 'bool'">
@@ -316,9 +316,11 @@
         </div>
       </div>
       <RepositoryWatchManager
-        v-if="isGitHubSettings && githubSettingsTab === 'updates'"
+        v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
+        :issue-enabled-repositories="issueEnabledRepositories"
+        @update:issue-enabled-repositories="repositoryPublishForm.allowed_repositories = $event.join('\n')"
       />
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
@@ -330,6 +332,20 @@
         </button>
         <button class="btn" type="button" :disabled="savingSettings" @click="closeSettings">取消</button>
         <button class="btn primary" type="button" :disabled="savingSettings" @click="saveSettings">保存</button>
+      </template>
+    </Modal>
+
+    <Modal
+      v-if="permissionsTarget"
+      :title="`${permissionsTarget.manifest.name} · 权限`"
+      @close="permissionsTarget = null"
+    >
+      <p class="plugin-dependencies-hint">插件运行时会用到下列能力。</p>
+      <div class="cluster plugin-card-perms">
+        <span v-for="permission in permissionsTarget.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
+      </div>
+      <template #footer>
+        <button class="btn primary" type="button" @click="permissionsTarget = null">完成</button>
       </template>
     </Modal>
 
@@ -356,14 +372,12 @@ import {
   installPlugin,
   installResolverDependency,
   listPlugins,
-  listQQBotGroups,
   setPluginEnabled,
   uninstallPlugin,
   updatePluginSettings,
   listResolverDependencies,
   type PluginSettingSpec,
   type PluginState,
-  type QQBotGroupSummary,
   type ResolverDependency
 } from "../api";
 import { askConfirm } from "../confirm";
@@ -371,8 +385,6 @@ import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
-import RepositoryAccessEditor from "../components/RepositoryAccessEditor.vue";
-import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -390,6 +402,7 @@ const dependencies = ref<ResolverDependency[]>([]);
 const dependenciesLoading = ref(false);
 const busyDependency = ref("");
 const dependenciesOpen = ref(false);
+const permissionsTarget = ref<PluginState | null>(null);
 const readyDependencyCount = computed(() => dependencies.value.filter((dep) => dep.available).length);
 const missingDependencyCount = computed(() => dependencies.value.length - readyDependencyCount.value);
 
@@ -399,30 +412,21 @@ const settingsForm = ref<Record<string, any>>({});
 const repositoryPublishForm = ref<Record<string, any>>({});
 const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
-const repositoryGroups = ref<QQBotGroupSummary[]>([]);
-const repositoryGroupsLoading = ref(false);
-const repositoryGroupsWarning = ref("");
-const githubSettingsTab = ref<"token" | "updates" | "issues">("token");
+const githubSettingsTab = ref<"token" | "repositories">("token");
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
 const repositoryPublishTarget = computed(() => plugins.value.find((plugin) => plugin.manifest.id === repositoryPublishPluginID) ?? null);
 const repositoryPublishSpecs = computed<PluginSettingSpec[]>(() => repositoryPublishTarget.value?.manifest.settings ?? []);
 const isGitHubSettings = computed(() => settingsTarget.value?.manifest.id === repositoryWatchPluginID);
-const repositoryAccessSettingKeys = new Set([
-  "allowed_repositories",
-  "user_repository_access",
-  "group_repository_access",
-  "user_github_tokens",
-  "user_github_token_users",
-  "user_github_auth_modes"
-]);
+const repositoryPublishAuthSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_auth_mode"));
+const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
+const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
   if (!isGitHubSettings.value) return settingsSpecs.value;
   if (githubSettingsTab.value === "token") return settingsSpecs.value.filter((spec) => spec.key === "github_token");
-  if (githubSettingsTab.value === "updates") return settingsSpecs.value.filter((spec) => spec.key !== "github_token");
-  return repositoryPublishSpecs.value.filter((spec) => !repositoryAccessSettingKeys.has(spec.key) && spec.key !== "github_token");
+  return settingsSpecs.value.filter((spec) => spec.key !== "github_token");
 });
-const activeSettingsForm = computed(() => isGitHubSettings.value && githubSettingsTab.value === "issues" ? repositoryPublishForm.value : settingsForm.value);
+const activeSettingsForm = computed(() => settingsForm.value);
 const repositoryWatchTokenConfigured = computed(() => {
   const key = "github_token";
   if (clearSecrets.value.includes(key)) return false;
@@ -527,21 +531,6 @@ function openSettings(plugin: PluginState): void {
   clearSecrets.value = [];
   settingsTarget.value = plugin;
   githubSettingsTab.value = "token";
-  if (plugin.manifest.id === repositoryWatchPluginID) void loadRepositoryGroups();
-}
-
-async function loadRepositoryGroups(): Promise<void> {
-  repositoryGroupsLoading.value = true;
-  repositoryGroupsWarning.value = "";
-  try {
-    const response = await listQQBotGroups();
-    repositoryGroups.value = response.groups;
-    repositoryGroupsWarning.value = response.warning ?? "";
-  } catch (error) {
-    repositoryGroupsWarning.value = error instanceof Error ? error.message : "群列表加载失败";
-  } finally {
-    repositoryGroupsLoading.value = false;
-  }
 }
 
 // 排列方式记在 localStorage：插件多起来之后，横排更利于扫读，
@@ -603,9 +592,6 @@ function showFooter(plugin: PluginState): boolean {
 function secretConfigured(key: string): boolean {
   if (isGitHubSettings.value && key === "github_token") {
     return settingsTarget.value?.secrets_configured?.[key] === true || repositoryPublishTarget.value?.secrets_configured?.[key] === true;
-  }
-  if (isGitHubSettings.value && githubSettingsTab.value === "issues") {
-    return repositoryPublishTarget.value?.secrets_configured?.[key] === true;
   }
   return settingsTarget.value?.secrets_configured?.[key] === true;
 }
