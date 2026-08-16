@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+
 <template>
   <div>
     <div class="spark-bars" role="img" :aria-label="`最近 24 小时消息量，共 ${total} 条`">

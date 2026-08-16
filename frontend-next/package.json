@@ -1,6 +1,7 @@
 {
   "name": "diana-webui-next",
   "private": true,
+  "author": "SuInk",
   "license": "SEE LICENSE IN ../LICENSE",
   "type": "module",
   "scripts": {
