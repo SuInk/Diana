@@ -2756,6 +2756,15 @@ code {
   font-size: 11px;
 }
 
+/* 缺依赖 = 对应平台解析必然失败，用告警色从一片灰字里跳出来 */
+.plugin-dependency-count.warn {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-weight: 600;
+}
+
 .plugin-dependency-status {
   display: block;
   max-width: 112px;
@@ -2821,6 +2830,35 @@ code {
 
 .plugin-settings-section-head {
   margin-bottom: 14px;
+}
+
+/* 可折叠的设置区块：标题行本身就是开关 */
+.plugin-settings-collapsible > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.plugin-settings-collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-settings-collapsible > summary:hover .plugin-settings-chevron {
+  color: var(--text-secondary);
+}
+
+.plugin-settings-chevron {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.plugin-settings-collapsible[open] > summary .plugin-settings-chevron {
+  transform: rotate(180deg);
 }
 
 .plugin-settings-section-head h3,
