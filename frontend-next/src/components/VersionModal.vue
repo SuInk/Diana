@@ -13,6 +13,7 @@
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">更新状态</span>
           <span v-if="checking" class="muted">检查中…</span>
+          <span v-else-if="installTracking" class="badge warn">升级并验证中</span>
           <span v-else-if="checkError" class="badge err">检查失败</span>
           <span v-else-if="status?.download_ready" class="badge warn">已下载，等待安装</span>
           <span v-else-if="checkResult?.update_available" class="badge warn">发现新版本</span>
@@ -47,18 +48,18 @@
           {{ checking ? "检查中…" : "检查更新" }}
         </button>
         <button
-		  v-if="releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available && !status?.download_ready"
+		  v-if="canDownloadUpdate"
           class="btn primary"
           type="button"
           :disabled="operationRunning"
 		  @click="downloadUpdate"
         >
           <Download :size="14" aria-hidden="true" />
-		  {{ operationRunning ? "下载中…" : "下载更新" }}
+		  {{ operationRunning ? "下载并校验中…" : "下载并校验" }}
         </button>
 		<button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary" type="button" :disabled="operationRunning" @click="confirmInstall">
 			<RefreshCcw :size="14" aria-hidden="true" />
-			{{ operationRunning ? "安装中…" : "安装并重启" }}
+			{{ operationRunning ? "升级中…" : "升级并重启" }}
 		</button>
 		<button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary" type="button" :disabled="operationRunning" @click="confirmUpdate">
 			<Download :size="14" aria-hidden="true" />
@@ -236,7 +237,7 @@ import {
 import { toastError, toastSuccess } from "../toast";
 import { askConfirm } from "../confirm";
 
-const emit = defineEmits<{ close: []; checked: [available: boolean] }>();
+const emit = defineEmits<{ close: []; checked: [available: boolean]; versionChanged: [version: SystemVersion] }>();
 
 const version = ref<SystemVersion | null>(null);
 const status = ref<UpdateStatus | null>(null);
@@ -255,10 +256,20 @@ const operationError = ref("");
 const forceConfirming = ref(false);
 const rollbackTarget = ref<ReleaseEntry | null>(null);
 let statusPollTimer: number | undefined;
+const installTracking = ref(false);
+let installTarget = "";
+let installStartedAt = 0;
 
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 const releaseSelfUpdate = computed(() => deploymentMode.value === "release" && version.value?.update_supported === true);
-const operationRunning = computed(() => updating.value || status.value?.updating === true);
+const operationRunning = computed(() => updating.value || installTracking.value || status.value?.updating === true);
+const canDownloadUpdate = computed(() => releaseSelfUpdate.value
+	&& !checking.value
+	&& !checkError.value
+	&& checkResult.value?.update_supported === true
+	&& checkResult.value.update_available
+	&& checkResult.value.checksum_available
+	&& !status.value?.download_ready);
 const downloadPercent = computed(() => Math.max(0, Math.min(100, Math.round(status.value?.download_percent ?? 0))));
 const downloadPhaseLabel = computed(() => status.value?.update_phase === "extracting"
 	? "准备 → 下载 100% → 校验 → 解压"
@@ -310,6 +321,7 @@ async function load(): Promise<void> {
   if (deploymentMode.value === "git" || version.value?.update_supported) {
     try {
       status.value = await getUpdateStatus();
+		applyPersistedUpdateResult(status.value);
     } catch {
       status.value = null;
     }
@@ -380,15 +392,64 @@ async function confirmInstall(): Promise<void> {
 	const confirmed = await askConfirm({title: `安装 ${target} 并重启？`, message: "安装时会备份当前版本和数据库，切换后自动重启并执行健康检查；失败时自动恢复。", confirmLabel: "安装并重启"});
 	if (!confirmed) return;
 	updating.value = true;
+	operationError.value = "";
 	try {
 		const result = await installDownloadedSystemUpdate();
 		status.value = result.status;
+		installTarget = result.target_commit || target;
+		installStartedAt = Date.now();
+		installTracking.value = true;
 		updatedHint.value = `正在安装 ${result.target_commit || target}，服务即将重启`;
 		toastSuccess("已开始安装并重启");
 	} catch (error) {
-		toastError(error instanceof Error ? error.message : "安装更新失败");
+		operationError.value = error instanceof Error ? error.message : "安装更新失败";
+		toastError(operationError.value);
 	} finally {
 		updating.value = false;
+	}
+}
+
+function applyPersistedUpdateResult(value: UpdateStatus): void {
+	const target = value.last_update_version || installTarget || "目标版本";
+	if (value.last_update_status === "healthy") {
+		updatedHint.value = `${target} 已升级成功并通过健康检查`;
+		operationError.value = "";
+		return;
+	}
+	if (value.last_update_status === "rolled_back") {
+		operationError.value = `升级 ${target} 失败，已自动恢复旧版本${value.last_update_error ? `：${value.last_update_error}` : ""}`;
+		return;
+	}
+	if (value.last_update_status === "failed") {
+		operationError.value = `升级 ${target} 失败${value.last_update_error ? `：${value.last_update_error}` : ""}`;
+	}
+}
+
+async function pollInstallResult(): Promise<void> {
+	try {
+		const nextStatus = await getUpdateStatus();
+		status.value = nextStatus;
+		applyPersistedUpdateResult(nextStatus);
+		if (nextStatus.last_update_status === "healthy") {
+			version.value = await getSystemVersion();
+			emit("versionChanged", version.value);
+			checkResult.value = await checkForUpdate();
+			status.value = checkResult.value.status ?? nextStatus;
+			installTracking.value = false;
+			emit("checked", checkResult.value.update_available);
+			toastSuccess(`${nextStatus.last_update_version || installTarget || "新版本"} 升级成功`);
+		} else if (nextStatus.last_update_status === "rolled_back" || nextStatus.last_update_status === "failed") {
+			installTracking.value = false;
+			version.value = await getSystemVersion().catch(() => version.value);
+			toastError(operationError.value);
+		}
+	} catch {
+		// 服务切换期间请求会短暂失败，保留升级中状态并继续等待新进程。
+		if (installStartedAt > 0 && Date.now() - installStartedAt > 150_000) {
+			installTracking.value = false;
+			operationError.value = `升级 ${installTarget || "目标版本"} 后服务超过 150 秒仍未恢复，请检查 .diana-updates/last-update.log`;
+			toastError(operationError.value);
+		}
 	}
 }
 
@@ -475,6 +536,10 @@ onMounted(async () => {
   await load();
   await check(false);
 	statusPollTimer = window.setInterval(() => {
+		if (installTracking.value) {
+			void pollInstallResult();
+			return;
+		}
 		if (!operationRunning.value || !releaseSelfUpdate.value) return;
 		void getUpdateStatus().then((value) => { status.value = value; }).catch(() => undefined);
 	}, 1000);

@@ -224,6 +224,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.ensureInboundAuditColumns(); err != nil {
 		return err
 	}
+	if err := s.backfillRecallNoticeAudits(); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_inbound_events_priority_claim ON inbound_events(status, available_at, priority DESC, event_time, created_at, id)`); err != nil {
 		return err
 	}
@@ -242,6 +245,28 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 WHERE status = 'done' AND outcome = 'ignored_stale' AND event_time >= ?
 `, now, now, cutoff)
 	return err
+}
+
+func (s *SQLiteStore) backfillRecallNoticeAudits() error {
+	_, err := s.db.Exec(`
+INSERT OR IGNORE INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload,
+  priority, status, attempts, available_at, outcome, decision, decision_reason,
+  created_at, updated_at, completed_at
+)
+SELECT
+  id, session, kind, group_id, user_id, message_id, event_time, payload,
+  0, 'done', 0, event_time * 1000000000,
+  'notice_' || json_extract(payload, '$.sub_type'), 'notice', '已记录平台通知',
+  event_time * 1000000000, event_time * 1000000000, event_time * 1000000000
+FROM message_events
+WHERE kind = 'notice'
+  AND json_extract(payload, '$.sub_type') IN ('group_recall', 'friend_recall')
+`)
+	if err != nil {
+		return fmt.Errorf("backfill recall notice audits: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) ensureInboundPriorityColumn() error {

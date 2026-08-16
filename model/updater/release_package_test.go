@@ -102,6 +102,9 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 	if !restartedStatus.DownloadReady || restartedStatus.DownloadedVersion != "v0.5.0" {
 		t.Fatalf("Status() after process restart = %#v", restartedStatus)
 	}
+	if restartedStatus.LastUpdateStatus != "downloaded" || restartedStatus.LastUpdateVersion != "v0.5.0" || restartedStatus.LastUpdateError != "" {
+		t.Fatalf("Status() persisted update result = %#v", restartedStatus)
+	}
 	result, err = restartedUpdater.InstallDownloaded(context.Background())
 	if err != nil {
 		t.Fatal(err)
