@@ -1984,8 +1984,10 @@ code {
   background: var(--bg-raised);
 }
 
-.bot-profile-actions-spacer {
+/* 配置占满剩余宽度，删除被推到最右，两者之间隔着整个按钮，不容易误点。 */
+.bot-profile-configure {
   flex: 1;
+  justify-content: center;
 }
 
 /* 新增入口和机器人卡片同一网格，不额外套一层容器。 */
@@ -2806,37 +2808,16 @@ code {
   border-bottom: 1px solid var(--border);
 }
 
-.repository-records-hint {
+.github-run-records {
+  margin-top: 8px;
+}
+
+.github-run-records-actions {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 18px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.repository-records-hint > div:first-child {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.repository-records-hint strong {
-  color: var(--text-secondary);
-  font-size: 12.5px;
-}
-
-@media (max-width: 640px) {
-  .repository-records-hint {
-    align-items: flex-start;
-    flex-direction: column;
-  }
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
 
 .github-issue-repository-settings {
@@ -3843,10 +3824,6 @@ code {
 
 .task-list-card .card-header {
   min-height: 52px;
-}
-
-.issue-drafts-card .card-body {
-  padding-top: 0;
 }
 
 .task-list {
