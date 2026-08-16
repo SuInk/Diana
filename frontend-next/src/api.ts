@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 export type Provider = "openai_compatible" | "gemini" | "anthropic";
 
 export interface LLMConfig {
@@ -832,6 +835,22 @@ export function installDownloadedSystemUpdate(): Promise<UpdateResult> {
 	});
 }
 
+export interface UpdatePolicy {
+	auto_download: boolean;
+	auto_install: boolean;
+}
+
+export function getUpdatePolicy(): Promise<UpdatePolicy> {
+	return requestJSON<UpdatePolicy>("/api/system/update/policy");
+}
+
+export function saveUpdatePolicy(policy: UpdatePolicy): Promise<UpdatePolicy> {
+	return requestJSON<UpdatePolicy>("/api/system/update/policy", {
+		method: "PUT",
+		body: JSON.stringify(policy)
+	});
+}
+
 export interface SystemVersion {
   build_version: string;
   version_label: string;
@@ -915,6 +934,7 @@ export interface UpdateCheckResponse {
   checksum_available: boolean;
   checksum_url?: string;
   status?: UpdateStatus;
+	policy: UpdatePolicy;
 }
 
 export function checkForUpdate(): Promise<UpdateCheckResponse> {
@@ -1104,9 +1124,13 @@ export interface AssistantTask {
   repository?: string;
   repository_branch?: string;
   watch_commits?: boolean;
+  watch_pull_requests?: boolean;
   watch_releases?: boolean;
+  watch_stars?: boolean;
   last_commit_sha?: string;
+  last_pull_request_cursor?: string;
   last_release_tag?: string;
+  last_star_count?: number;
   feed_url?: string;
   feed_source?: "rss" | "twitter";
   feed_handle?: string;
@@ -1126,7 +1150,9 @@ export interface RepositoryWatchInput {
   branch?: string;
   interval_seconds: number;
   watch_commits: boolean;
+  watch_pull_requests: boolean;
   watch_releases: boolean;
+  watch_stars: boolean;
   profile_id?: string;
   destination?: "private" | "group";
   group_id?: string;
@@ -1155,7 +1181,7 @@ export function createRepositoryWatch(input: RepositoryWatchInput): Promise<Assi
   });
 }
 
-export function updateRepositoryWatch(id: string, input: Pick<RepositoryWatchInput, "repository" | "branch" | "interval_seconds" | "watch_commits" | "watch_releases">): Promise<AssistantTask> {
+export function updateRepositoryWatch(id: string, input: Pick<RepositoryWatchInput, "repository" | "branch" | "interval_seconds" | "watch_commits" | "watch_pull_requests" | "watch_releases" | "watch_stars">): Promise<AssistantTask> {
   return requestJSON<AssistantTask>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}`, {
     method: "PUT",
     body: JSON.stringify(input)
