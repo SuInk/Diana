@@ -49,6 +49,13 @@ type RepositoryWatchUpdateInput struct {
 	WatchPullRequests *bool
 	WatchReleases     *bool
 	WatchStars        *bool
+	Delivery          bool
+	Platform          string
+	ProfileID         string
+	ContextNamespace  string
+	OwnerID           string
+	GroupID           string
+	UserID            string
 }
 
 func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWatchCreateInput) (Reminder, error) {
@@ -114,6 +121,22 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 		return Reminder{}, err
 	}
 	event := reminderSourceEvent(current)
+	if input.Delivery {
+		event.Platform = strings.TrimSpace(input.Platform)
+		event.ProfileID = strings.TrimSpace(input.ProfileID)
+		event.ContextNamespace = strings.TrimSpace(input.ContextNamespace)
+		event.GroupID = strings.TrimSpace(input.GroupID)
+		event.UserID = strings.TrimSpace(input.UserID)
+		if event.GroupID != "" {
+			event.Kind = EventKindGroup
+			event.UserID = ""
+		} else {
+			event.Kind = EventKindPrivate
+			if event.UserID == "" {
+				return Reminder{}, fmt.Errorf("私聊通知必须填写发送对象 ID")
+			}
+		}
+	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(
 		repositoryWatchPluginID,
 		r.pluginOverridesForEvent(event),
@@ -150,6 +173,15 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	}
 	if input.WatchStars != nil {
 		values["watch_stars"] = *input.WatchStars
+	}
+	if input.Delivery {
+		values["delivery"] = true
+		values["platform"] = event.Platform
+		values["profile_id"] = event.ProfileID
+		values["context_namespace"] = event.ContextNamespace
+		values["owner_id"] = strings.TrimSpace(input.OwnerID)
+		values["group_id"] = event.GroupID
+		values["user_id"] = event.UserID
 	}
 	return r.updateRepositoryWatch(strings.TrimSpace(ownerID), strings.TrimSpace(id), values, plugin, settings, ctx)
 }
@@ -324,6 +356,14 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		item.WatchPullRequests = selection.PullRequests
 		item.WatchReleases = selection.Releases
 		item.WatchStars = selection.Stars
+		if delivery, _ := input["delivery"].(bool); delivery {
+			item.Platform = strings.TrimSpace(configToolString(input, "platform"))
+			item.ProfileID = strings.TrimSpace(configToolString(input, "profile_id"))
+			item.ContextNamespace = strings.TrimSpace(configToolString(input, "context_namespace"))
+			item.OwnerID = strings.TrimSpace(configToolString(input, "owner_id"))
+			item.GroupID = strings.TrimSpace(configToolString(input, "group_id"))
+			item.UserID = strings.TrimSpace(configToolString(input, "user_id"))
+		}
 		item.Message = "监控 " + repository + " 的仓库动态"
 		if rawInterval != "" {
 			item.IntervalSeconds = int64(interval / time.Second)

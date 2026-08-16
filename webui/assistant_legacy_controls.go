@@ -99,6 +99,10 @@ type repositoryWatchUpdatePayload struct {
 	WatchPullRequests *bool   `json:"watch_pull_requests,omitempty"`
 	WatchReleases     *bool   `json:"watch_releases,omitempty"`
 	WatchStars        *bool   `json:"watch_stars,omitempty"`
+	ProfileID         string  `json:"profile_id"`
+	Destination       string  `json:"destination"`
+	GroupID           string  `json:"group_id,omitempty"`
+	UserID            string  `json:"user_id,omitempty"`
 }
 
 type rssWatchCreatePayload struct {
@@ -497,16 +501,52 @@ func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.update", err, c.Param("id"), nil)
 		return
 	}
+	destination := strings.ToLower(strings.TrimSpace(payload.Destination))
+	deliveryRequested := strings.TrimSpace(payload.ProfileID) != "" || destination != "" || strings.TrimSpace(payload.GroupID) != "" || strings.TrimSpace(payload.UserID) != ""
+	updateInput := assistant.RepositoryWatchUpdateInput{
+		Repository: payload.Repository, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
+		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
+		WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+	}
+	if deliveryRequested {
+		profile, set, profileErr := h.repositoryWatchProfile(payload.ProfileID)
+		if profileErr != nil {
+			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", profileErr, c.Param("id"), nil)
+			return
+		}
+		if destination != "private" && destination != "group" {
+			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("destination 必须是 private 或 group"), c.Param("id"), nil)
+			return
+		}
+		groupID, userID := "", ""
+		if destination == "group" {
+			groupID = strings.TrimSpace(payload.GroupID)
+			if groupID == "" {
+				h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), c.Param("id"), nil)
+				return
+			}
+		} else {
+			userID = strings.TrimSpace(payload.UserID)
+			if userID == "" {
+				h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("私聊通知必须填写发送对象 ID"), c.Param("id"), nil)
+				return
+			}
+		}
+		updateInput.Delivery = true
+		updateInput.Platform = profile.Platform
+		updateInput.ProfileID = profile.ID
+		updateInput.ContextNamespace = repositoryWatchContextNamespace(set, profile.ID)
+		updateInput.OwnerID = "webui:" + strings.TrimSpace(profile.ID)
+		updateInput.GroupID = groupID
+		updateInput.UserID = userID
+	}
 	var branch *string
 	if payload.Branch != nil {
 		value := strings.TrimSpace(*payload.Branch)
 		branch = &value
 	}
-	item, err := manager.UpdateRepositoryWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RepositoryWatchUpdateInput{
-		Repository: payload.Repository, Branch: branch, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
-		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
-		WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
-	})
+	updateInput.Branch = branch
+	item, err := manager.UpdateRepositoryWatch(c.Request.Context(), ownerID, c.Param("id"), updateInput)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", err, c.Param("id"), nil)
 		return

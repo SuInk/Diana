@@ -258,7 +258,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryPublishSettingToken,
 				Label:       "GitHub Issues Token",
-				Description: "在“独立 Token”或“自动选择”模式下用于 Issue 读写；fine-grained token 仅授予白名单仓库的 Issues: read and write，保存后不回显。",
+				Description: "在“独立 Token”或“自动选择”模式下用于 Issue 读写；Fine-grained token 只授予白名单仓库的 Issues: read and write，Classic token 适合需要跨仓库或更多 GitHub API 权限的场景，保存后不回显。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,

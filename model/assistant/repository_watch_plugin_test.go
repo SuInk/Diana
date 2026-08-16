@@ -491,6 +491,29 @@ func TestRuntimeCreatesRepositoryWatchForWebUI(t *testing.T) {
 	}
 }
 
+func TestRuntimeUpdatesRepositoryWatchDelivery(t *testing.T) {
+	store := &stubReminderStore{items: []Reminder{{
+		ID: "watch-delivery", Kind: ReminderKindRepositoryWatch,
+		Platform: PlatformOneBotV11, ProfileID: "old-bot", ContextNamespace: "old-bot",
+		OwnerID: "webui:old-bot", UserID: "10001", Repository: "acme/demo",
+		WatchCommits: true, IntervalSeconds: 60, TriggerAt: time.Now().Add(time.Minute),
+	}}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(NewRepositoryWatchPlugin(nil)), nil, store, nil, nil)
+	item, err := runtime.UpdateRepositoryWatch(context.Background(), "webui:old-bot", "watch-delivery", RepositoryWatchUpdateInput{
+		Delivery: true, Platform: PlatformOneBotV11, ProfileID: "new-bot", ContextNamespace: "new-bot",
+		OwnerID: "webui:new-bot", GroupID: "123456",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.ProfileID != "new-bot" || item.ContextNamespace != "new-bot" || item.OwnerID != "webui:new-bot" || item.GroupID != "123456" || item.UserID != "" {
+		t.Fatalf("updated delivery=%#v", item)
+	}
+	if len(store.items) != 1 || store.items[0] != item {
+		t.Fatalf("stored=%#v updated=%#v", store.items, item)
+	}
+}
+
 func TestRuntimeRepositoryWatchStaysSilentWithoutChanges(t *testing.T) {
 	github := &repositoryWatchTestGitHub{
 		commits:  []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
