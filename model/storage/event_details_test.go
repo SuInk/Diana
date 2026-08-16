@@ -221,6 +221,85 @@ func TestListInboundEventDetailsRendersStructuredImagesInsteadOfCQText(t *testin
 	}
 }
 
+func TestListInboundEventDetailsIncludesRecallNoticeAndOperator(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-recall.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	recall := assistant.MessageEvent{
+		Platform:     assistant.PlatformOneBotV11,
+		Kind:         assistant.EventKindNotice,
+		SubType:      "group_recall",
+		Time:         now.Unix(),
+		OriginalTime: now.Add(-time.Minute).Unix(),
+		GroupID:      "group-1",
+		UserID:       "user-1",
+		SenderName:   "Alice",
+		OperatorID:   "admin-1",
+		OperatorName: "Carol",
+		OperatorRole: "admin",
+		MessageID:    "recalled-message",
+		RawMessage:   "被撤回的正文",
+	}
+	if err := store.AppendMessageEvent(ctx, "group:group-1", recall); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordNoticeEvent(ctx, "group:group-1", recall); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0, InboundEventResultNotice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || page.Notices != 1 || page.NotReplied != 0 || page.FilteredTotal != 1 || len(page.Events) != 1 {
+		t.Fatalf("recall page = %+v", page)
+	}
+	got := page.Events[0]
+	if got.Kind != "notice" || got.SubType != "group_recall" || got.Text != "被撤回的正文" || got.SenderName != "Alice" ||
+		got.OperatorID != "admin-1" || got.OperatorName != "Carol" || got.OperatorRole != "admin" || got.OriginalTime == nil {
+		t.Fatalf("recall event = %#v", got)
+	}
+}
+
+func TestRestoredSchemaBackfillsPersistedRecallNotices(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "event-recall-backfill.db")
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+	recall := assistant.MessageEvent{
+		Kind: assistant.EventKindNotice, SubType: "group_recall", Time: now.Unix(),
+		GroupID: "group-1", UserID: "user-1", OperatorID: "user-1", MessageID: "old-recall",
+		RawMessage: "升级前保存的撤回消息",
+	}
+	if err := store.AppendMessageEvent(ctx, "group:group-1", recall); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0, InboundEventResultNotice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Notices != 1 || len(page.Events) != 1 || page.Events[0].Text != "升级前保存的撤回消息" {
+		t.Fatalf("backfilled recalls = %+v", page)
+	}
+}
+
 func TestListInboundEventDetailsParsesLegacyCQOnlyImage(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "legacy-event-image.db"))

@@ -33,6 +33,7 @@ type assistantEventsResponse struct {
 	NotReplied    int64                  `json:"not_replied"`
 	Pending       int64                  `json:"pending"`
 	Errors        int64                  `json:"errors"`
+	Notices       int64                  `json:"notices"`
 	LLMCalls      int64                  `json:"llm_calls"`
 	InputTokens   int64                  `json:"input_tokens"`
 	OutputTokens  int64                  `json:"output_tokens"`
@@ -171,7 +172,7 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 	}
 	resultFilter, ok := storage.ParseInboundEventResultFilter(c.DefaultQuery("result", string(storage.InboundEventResultAll)))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "result 仅支持 all、replied、not_replied、pending、error"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "result 仅支持 all、replied、not_replied、pending、error、notice"})
 		return
 	}
 	page := queryPositiveInt(c.Query("page"), 1)
@@ -260,6 +261,7 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 		NotReplied:    stored.NotReplied,
 		Pending:       stored.Pending,
 		Errors:        stored.Errors,
+		Notices:       stored.Notices,
 		LLMCalls:      stored.LLMCalls,
 		InputTokens:   stored.InputTokens,
 		OutputTokens:  stored.OutputTokens,

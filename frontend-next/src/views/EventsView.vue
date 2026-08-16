@@ -3,7 +3,7 @@
     <header class="view-header event-view-header">
       <div class="view-title">
         <h1>事件明细</h1>
-        <p>查看每条消息的处理结果和回复决策</p>
+        <p>查看消息处理结果、回复决策与平台通知</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="loading" @click="load(true)">
@@ -57,7 +57,7 @@
       </section>
 
       <div class="stat-grid event-stats">
-        <StatCard label="范围内消息" :value="formatNumber(summary.total)" :foot="rangeDescription">
+        <StatCard label="范围内事件" :value="formatNumber(summary.total)" :foot="rangeDescription">
           <template #icon><MessageCircle :size="14" aria-hidden="true" /></template>
         </StatCard>
         <StatCard label="已回复" :value="formatNumber(summary.replied)" :foot="replyRate">
@@ -69,6 +69,9 @@
         <StatCard label="处理异常" :value="formatNumber(summary.errors)" foot="包含处理失败与投递失败">
           <template #icon><TriangleAlert :size="14" aria-hidden="true" /></template>
         </StatCard>
+        <StatCard label="通知事件" :value="formatNumber(summary.notices)" foot="包含群聊与私聊撤回">
+          <template #icon><Bell :size="14" aria-hidden="true" /></template>
+        </StatCard>
         <StatCard label="Token 总量" :value="formatNumber(summary.total_tokens)" :foot="tokenBreakdown">
           <template #icon><Sigma :size="14" aria-hidden="true" /></template>
         </StatCard>
@@ -77,7 +80,7 @@
       <section class="card event-detail-card">
         <div class="card-header">
           <div class="cluster">
-            <h2>消息处理记录</h2>
+            <h2>事件记录</h2>
             <span class="badge" :class="stream.connected ? 'ok' : 'warn'">
               <span class="status-dot" :class="{ pulse: stream.connected }" aria-hidden="true" />
               {{ stream.connected ? "实时更新" : "实时连接中断" }}
@@ -102,6 +105,12 @@
                 <span v-if="event.sender_name" class="muted">{{ event.sender_name }}</span>
                 <span v-if="event.user_id" class="mono muted">{{ event.user_id }}</span>
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
+              </div>
+
+              <div v-if="isRecallEvent(event)" class="event-recall-summary">
+                <strong>撤回记录</strong>
+                <p>{{ recallActorText(event) }}</p>
+                <span v-if="event.original_time" class="muted">原消息发送于 {{ formatClock(event.original_time) }}</span>
               </div>
 
               <p v-if="event.text" class="event-detail-message">{{ event.text }}</p>
@@ -138,7 +147,7 @@
                 </template>
               </div>
 
-              <div class="event-decision" :class="decisionClass(event)">
+              <div v-if="!isNoticeEvent(event)" class="event-decision" :class="decisionClass(event)">
                 <component :is="decisionIcon(event)" :size="16" aria-hidden="true" />
                 <div>
                   <strong>{{ decisionReasonLabel(event) }}</strong>
@@ -169,7 +178,7 @@
                 </span>
               </div>
 
-              <div class="event-debug-trace">
+              <div v-if="!isNoticeEvent(event)" class="event-debug-trace">
                 <button class="btn event-debug-toggle" type="button" :disabled="traceLoading[event.id]" @click="toggleTrace(event)">
                   <LoaderCircle v-if="traceLoading[event.id]" :size="14" class="spin" aria-hidden="true" />
                   <Bug v-else :size="14" aria-hidden="true" />
@@ -264,6 +273,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import {
   Activity,
+  Bell,
   Bug,
   CheckCircle2,
   ChevronDown,
@@ -309,7 +319,8 @@ const resultOptions: Array<{ value: AssistantEventResultFilter; label: string }>
   { value: "replied", label: "已回复" },
   { value: "not_replied", label: "未回复" },
   { value: "pending", label: "等待处理" },
-  { value: "error", label: "处理异常" }
+  { value: "error", label: "处理异常" },
+  { value: "notice", label: "通知" }
 ];
 
 const selectedRange = ref<AssistantEventRange>("24h");
@@ -334,6 +345,7 @@ const summary = computed(() => ({
   not_replied: response.value?.not_replied ?? 0,
   pending: response.value?.pending ?? 0,
   errors: response.value?.errors ?? 0,
+  notices: response.value?.notices ?? 0,
   llm_calls: response.value?.llm_calls ?? 0,
   input_tokens: response.value?.input_tokens ?? 0,
   output_tokens: response.value?.output_tokens ?? 0,
@@ -349,8 +361,9 @@ const resultCountText = computed(() => {
 });
 const emptyStateTitle = computed(() => selectedResult.value === "all" ? "当前范围没有事件" : `当前范围没有${selectedResultLabel.value}事件`);
 const replyRate = computed(() => {
-  if (summary.value.total <= 0) return "暂无处理记录";
-  return `回复率 ${Math.round((summary.value.replied / summary.value.total) * 100)}%`;
+  const messageTotal = summary.value.total - summary.value.notices;
+  if (messageTotal <= 0) return "暂无处理记录";
+  return `回复率 ${Math.round((summary.value.replied / messageTotal) * 100)}%`;
 });
 const tokenBreakdown = computed(() =>
   `输入 ${formatNumber(summary.value.input_tokens)} / 输出 ${formatNumber(summary.value.output_tokens)} · ${formatNumber(summary.value.llm_calls)} 次调用`
@@ -408,7 +421,37 @@ function resultOptionCount(result: AssistantEventResultFilter): number {
   if (result === "replied") return summary.value.replied;
   if (result === "not_replied") return summary.value.not_replied;
   if (result === "pending") return summary.value.pending;
+  if (result === "notice") return summary.value.notices;
   return summary.value.errors;
+}
+
+function isNoticeEvent(event: AssistantEventDetail): boolean {
+  return event.decision === "notice" || event.kind === "notice";
+}
+
+function isRecallEvent(event: AssistantEventDetail): boolean {
+  return event.sub_type === "group_recall" || event.sub_type === "friend_recall";
+}
+
+function recallRoleLabel(role?: string): string {
+  const labels: Record<string, string> = {
+    owner: "群主",
+    admin: "管理员",
+    member: "群成员",
+    bot: "机器人",
+    history_backfill: "断线回补"
+  };
+  return labels[(role ?? "").trim()] ?? (role ?? "").trim();
+}
+
+function recallActorText(event: AssistantEventDetail): string {
+  if (event.operator_role === "history_backfill") return "断线回补确认消息已撤回，平台历史接口未提供实际操作者";
+  const selfRecall = event.operator_id && event.operator_id === event.user_id;
+  const name = event.operator_name?.trim() || (selfRecall ? event.sender_name?.trim() : "");
+  const identity = [name, event.operator_id].filter(Boolean).join(" · ") || "未知操作者";
+  const role = recallRoleLabel(event.operator_role);
+  if (selfRecall) return `${identity} 撤回了自己的消息`;
+  return `${identity}${role ? `（${role}）` : ""} 撤回了 ${event.sender_name?.trim() || event.user_id || "一名成员"} 的消息`;
 }
 
 async function load(reset: boolean): Promise<void> {
@@ -467,6 +510,7 @@ function eventKindLabel(kind: string): string {
 }
 
 function decisionLabel(event: AssistantEventDetail): string {
+  if (isNoticeEvent(event)) return "已记录";
   if (event.decision === "replied" || event.handled) return "已回复";
   if (event.decision === "pending") return "等待处理";
   if (event.decision === "error") return "处理异常";
@@ -474,6 +518,7 @@ function decisionLabel(event: AssistantEventDetail): string {
 }
 
 function decisionClass(event: AssistantEventDetail): string {
+  if (isNoticeEvent(event)) return "quiet";
   if (event.decision === "replied" || event.handled) return "ok";
   if (event.decision === "pending") return "warn";
   if (event.decision === "error") return "err";
@@ -862,6 +907,25 @@ onBeforeUnmount(() => {
   margin-top: 12px;
   color: var(--text);
   line-height: 1.65;
+}
+
+.event-recall-summary {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--warn);
+  background: var(--surface-2);
+}
+
+.event-recall-summary strong,
+.event-recall-summary span {
+  display: block;
+  font-size: 12px;
+}
+
+.event-recall-summary p {
+  margin: 4px 0;
+  color: var(--text);
+  line-height: 1.55;
 }
 
 .event-image-grid {
