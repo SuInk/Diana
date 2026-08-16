@@ -634,9 +634,6 @@ func validateGenerateRequest(req GenerateRequest) error {
 		if msg.Role == "" {
 			return fmt.Errorf("llm: messages[%d].role is required", i)
 		}
-		if !messageHasContent(msg) {
-			return fmt.Errorf("llm: messages[%d].content is required", i)
-		}
 	}
 	return nil
 }
@@ -652,29 +649,6 @@ func validateReasoningEffort(value string) error {
 	default:
 		return fmt.Errorf("llm: unsupported reasoning_effort %q", value)
 	}
-}
-
-func messageHasContent(msg Message) bool {
-	if strings.TrimSpace(msg.Content) != "" {
-		return true
-	}
-	for _, part := range msg.Parts {
-		switch part.Type {
-		case ContentPartText:
-			if strings.TrimSpace(part.Text) != "" {
-				return true
-			}
-		case ContentPartImageURL:
-			if strings.TrimSpace(part.ImageURL) != "" {
-				return true
-			}
-		case ContentPartInputAudio:
-			if strings.TrimSpace(part.AudioData) != "" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func messageTextContent(msg Message) string {
