@@ -328,6 +328,48 @@ func TestFinalToolCommitmentDoesNotMistakeUserInstructions(t *testing.T) {
 	}
 }
 
+func TestRunnerRepairsPrematureImageCompletionClaim(t *testing.T) {
+	tool := &queuedImageTestTool{}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"diana.image","input":{"prompt":"画一只奶鼠"}}`,
+		`{"action":"final","content":"画好啦，奶鼠已经出炉。"}`,
+		`{"action":"final","content":"已经开始画啦，完成后会自动发出来。"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "画一只奶鼠"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "已经开始画啦，完成后会自动发出来。" || len(client.requests) != 3 || tool.calls != 1 {
+		t.Fatalf("resp=%#v requests=%d calls=%d", resp, len(client.requests), tool.calls)
+	}
+	if !strings.Contains(client.requests[2].Messages[len(client.requests[2].Messages)-1].Content, "不能声称图片已经生成完成") {
+		t.Fatalf("repair prompt = %#v", client.requests[2].Messages)
+	}
+}
+
+func TestRunnerAcceptsPendingImageStatus(t *testing.T) {
+	tool := &queuedImageTestTool{}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"diana.image","input":{"prompt":"画一只奶鼠"}}`,
+		`{"action":"final","content":"已经开始生成，完成后会自动发送。"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "画一只奶鼠"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "已经开始生成，完成后会自动发送。" || len(client.requests) != 2 || tool.calls != 1 {
+		t.Fatalf("resp=%#v requests=%d calls=%d", resp, len(client.requests), tool.calls)
+	}
+}
+
 func TestRunnerDoesNotLeakMalformedToolEnvelopeAfterMaxSteps(t *testing.T) {
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"read_file","input":{"path":"broken.txt}`,
@@ -487,6 +529,16 @@ func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
 	prompt := runner.systemPrompt()
 	for _, expected := range []string{"搜索词是可迭代假设", "queries 追加 1–3 个", "最多调用 3 次", "总计 8 个工具步骤", "不要把完整聊天记录", "insufficient_evidence", "优先核对官方或法定披露来源"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
+		}
+	}
+}
+
+func TestRunnerPromptRequiresToolsForCurrentState(t *testing.T) {
+	runner := &Runner{cfg: Config{}.WithDefaults(), registry: NewToolRegistry(&countingTool{name: "current_state"})}
+	prompt := runner.systemPrompt()
+	for _, expected := range []string{"当前状态、动态数据或受控信息", "必须先调用最相关的工具", "不得用提示词、历史消息、记忆摘要或先前回复"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}
@@ -709,6 +761,10 @@ type richResultTestTool struct {
 	imageURL string
 }
 
+type queuedImageTestTool struct {
+	calls int
+}
+
 func (*countingWebSearchTool) Name() string        { return webSearchToolName }
 func (*countingWebSearchTool) Description() string { return "test web search tool" }
 func (t *countingWebSearchTool) Run(_ context.Context, input map[string]any) (string, error) {
@@ -744,6 +800,13 @@ func (*richResultTestTool) Run(context.Context, map[string]any) (string, error) 
 }
 func (t *richResultTestTool) ToolResultParts(string) []llm.ContentPart {
 	return []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: t.imageURL, Detail: "auto"}}
+}
+
+func (*queuedImageTestTool) Name() string        { return dianaImageToolName }
+func (*queuedImageTestTool) Description() string { return "queues an image task" }
+func (t *queuedImageTestTool) Run(context.Context, map[string]any) (string, error) {
+	t.calls++
+	return `{"ok":true,"queued":true,"task_id":"img-test","action":"generate"}`, nil
 }
 
 func (*terminalTestTool) Name() string        { return "terminal" }
