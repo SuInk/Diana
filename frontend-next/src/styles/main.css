@@ -1420,32 +1420,6 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
-.resource-track {
-  position: relative;
-  height: 7px;
-  margin-top: 14px;
-  overflow: hidden;
-  border-radius: 4px;
-  background: var(--surface-2);
-}
-
-
-.resource-track > span {
-  display: block;
-  height: 100%;
-  min-width: 0;
-  border-radius: inherit;
-  background: var(--ok);
-  transition: width 0.3s ease, background 0.2s ease;
-}
-
-.resource-track > span.warning {
-  background: var(--warn);
-}
-
-.resource-track > span.critical {
-  background: var(--err);
-}
 
 .resource-detail {
   display: flex;
