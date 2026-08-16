@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 /** 常用展示格式化工具。 */
 
 export function formatTime(iso: string | undefined | null): string {
