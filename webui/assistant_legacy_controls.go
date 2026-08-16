@@ -78,23 +78,27 @@ type qqbotTasksResponse struct {
 }
 
 type repositoryWatchCreatePayload struct {
-	Repository      string `json:"repository"`
-	Branch          string `json:"branch,omitempty"`
-	IntervalSeconds int64  `json:"interval_seconds"`
-	WatchCommits    bool   `json:"watch_commits"`
-	WatchReleases   bool   `json:"watch_releases"`
-	ProfileID       string `json:"profile_id"`
-	Destination     string `json:"destination"`
-	GroupID         string `json:"group_id,omitempty"`
-	UserID          string `json:"user_id,omitempty"`
+	Repository        string `json:"repository"`
+	Branch            string `json:"branch,omitempty"`
+	IntervalSeconds   int64  `json:"interval_seconds"`
+	WatchCommits      bool   `json:"watch_commits"`
+	WatchPullRequests bool   `json:"watch_pull_requests"`
+	WatchReleases     bool   `json:"watch_releases"`
+	WatchStars        bool   `json:"watch_stars"`
+	ProfileID         string `json:"profile_id"`
+	Destination       string `json:"destination"`
+	GroupID           string `json:"group_id,omitempty"`
+	UserID            string `json:"user_id,omitempty"`
 }
 
 type repositoryWatchUpdatePayload struct {
-	Repository      string  `json:"repository,omitempty"`
-	Branch          *string `json:"branch,omitempty"`
-	IntervalSeconds int64   `json:"interval_seconds,omitempty"`
-	WatchCommits    *bool   `json:"watch_commits,omitempty"`
-	WatchReleases   *bool   `json:"watch_releases,omitempty"`
+	Repository        string  `json:"repository,omitempty"`
+	Branch            *string `json:"branch,omitempty"`
+	IntervalSeconds   int64   `json:"interval_seconds,omitempty"`
+	WatchCommits      *bool   `json:"watch_commits,omitempty"`
+	WatchPullRequests *bool   `json:"watch_pull_requests,omitempty"`
+	WatchReleases     *bool   `json:"watch_releases,omitempty"`
+	WatchStars        *bool   `json:"watch_stars,omitempty"`
 }
 
 type rssWatchCreatePayload struct {
@@ -116,37 +120,41 @@ type rssWatchUpdatePayload struct {
 }
 
 type qqbotTaskPayload struct {
-	ID                  string    `json:"id"`
-	Kind                string    `json:"kind"`
-	Platform            string    `json:"platform,omitempty"`
-	ProfileID           string    `json:"profile_id,omitempty"`
-	OwnerID             string    `json:"owner_id"`
-	GroupID             string    `json:"group_id,omitempty"`
-	UserID              string    `json:"user_id,omitempty"`
-	Message             string    `json:"message"`
-	Status              string    `json:"status"`
-	TriggerAt           time.Time `json:"trigger_at"`
-	IntervalSeconds     int64     `json:"interval_seconds,omitempty"`
-	LastRunAt           time.Time `json:"last_run_at,omitempty"`
-	CancelledAt         time.Time `json:"cancelled_at,omitempty"`
-	LastError           string    `json:"last_error,omitempty"`
-	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
-	PendingDelivery     bool      `json:"pending_delivery,omitempty"`
-	PendingSince        time.Time `json:"pending_since,omitempty"`
-	Repository          string    `json:"repository,omitempty"`
-	RepositoryBranch    string    `json:"repository_branch,omitempty"`
-	WatchCommits        bool      `json:"watch_commits,omitempty"`
-	WatchReleases       bool      `json:"watch_releases,omitempty"`
-	LastCommitSHA       string    `json:"last_commit_sha,omitempty"`
-	LastReleaseTag      string    `json:"last_release_tag,omitempty"`
-	FeedURL             string    `json:"feed_url,omitempty"`
-	FeedSource          string    `json:"feed_source,omitempty"`
-	FeedHandle          string    `json:"feed_handle,omitempty"`
-	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
-	LastFeedPublishedAt time.Time `json:"last_feed_published_at,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	ConsumesQuota       bool      `json:"consumes_quota"`
+	ID                    string    `json:"id"`
+	Kind                  string    `json:"kind"`
+	Platform              string    `json:"platform,omitempty"`
+	ProfileID             string    `json:"profile_id,omitempty"`
+	OwnerID               string    `json:"owner_id"`
+	GroupID               string    `json:"group_id,omitempty"`
+	UserID                string    `json:"user_id,omitempty"`
+	Message               string    `json:"message"`
+	Status                string    `json:"status"`
+	TriggerAt             time.Time `json:"trigger_at"`
+	IntervalSeconds       int64     `json:"interval_seconds,omitempty"`
+	LastRunAt             time.Time `json:"last_run_at,omitempty"`
+	CancelledAt           time.Time `json:"cancelled_at,omitempty"`
+	LastError             string    `json:"last_error,omitempty"`
+	ConsecutiveFailures   int       `json:"consecutive_failures,omitempty"`
+	PendingDelivery       bool      `json:"pending_delivery,omitempty"`
+	PendingSince          time.Time `json:"pending_since,omitempty"`
+	Repository            string    `json:"repository,omitempty"`
+	RepositoryBranch      string    `json:"repository_branch,omitempty"`
+	WatchCommits          bool      `json:"watch_commits,omitempty"`
+	WatchPullRequests     bool      `json:"watch_pull_requests,omitempty"`
+	WatchReleases         bool      `json:"watch_releases,omitempty"`
+	WatchStars            bool      `json:"watch_stars,omitempty"`
+	LastCommitSHA         string    `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor string    `json:"last_pull_request_cursor,omitempty"`
+	LastReleaseTag        string    `json:"last_release_tag,omitempty"`
+	LastStarCount         int       `json:"last_star_count,omitempty"`
+	FeedURL               string    `json:"feed_url,omitempty"`
+	FeedSource            string    `json:"feed_source,omitempty"`
+	FeedHandle            string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt       string    `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID        string    `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt   time.Time `json:"last_feed_published_at,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	ConsumesQuota         bool      `json:"consumes_quota"`
 }
 
 type pluginTaskRunner interface {
@@ -460,7 +468,8 @@ func (h *QQBotHandler) createRepositoryWatch(c *gin.Context) {
 	interval := time.Duration(payload.IntervalSeconds) * time.Second
 	item, err := manager.CreateRepositoryWatch(c.Request.Context(), assistant.RepositoryWatchCreateInput{
 		Repository: payload.Repository, Branch: payload.Branch, Interval: interval,
-		WatchCommits: payload.WatchCommits, WatchReleases: payload.WatchReleases,
+		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
+		WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
 		ContextNamespace: repositoryWatchContextNamespace(set, profile.ID),
 	})
@@ -495,7 +504,8 @@ func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
 	}
 	item, err := manager.UpdateRepositoryWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RepositoryWatchUpdateInput{
 		Repository: payload.Repository, Branch: branch, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
-		WatchCommits: payload.WatchCommits, WatchReleases: payload.WatchReleases,
+		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
+		WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 	})
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", err, c.Param("id"), nil)
@@ -731,8 +741,11 @@ func qqbotTaskFromReminder(item assistant.Reminder) qqbotTaskPayload {
 		LastRunAt: item.LastRunAt, CancelledAt: item.CancelledAt, LastError: item.LastError,
 		ConsecutiveFailures: item.ConsecutiveFailures, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != "",
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
-		WatchCommits: item.WatchCommits, WatchReleases: item.WatchReleases, LastCommitSHA: item.LastCommitSHA,
-		LastReleaseTag: item.LastReleaseTag, CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
+		WatchCommits: item.WatchCommits, WatchPullRequests: item.WatchPullRequests,
+		WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
+		LastCommitSHA: item.LastCommitSHA, LastPullRequestCursor: item.LastPullRequestCursor,
+		LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount,
+		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
 		FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
 	}

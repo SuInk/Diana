@@ -26,33 +26,37 @@ type dianaTasksResult struct {
 }
 
 type dianaTask struct {
-	ID                  string    `json:"id"`
-	Kind                string    `json:"kind"`
-	OwnerID             string    `json:"owner_id"`
-	GroupID             string    `json:"group_id,omitempty"`
-	UserID              string    `json:"user_id,omitempty"`
-	Message             string    `json:"message"`
-	Status              string    `json:"status"`
-	TriggerAt           time.Time `json:"trigger_at"`
-	Interval            string    `json:"interval,omitempty"`
-	LastRunAt           time.Time `json:"last_run_at,omitempty"`
-	CancelledAt         time.Time `json:"cancelled_at,omitempty"`
-	LastError           string    `json:"last_error,omitempty"`
-	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
-	PendingDelivery     bool      `json:"pending_delivery,omitempty"`
-	Repository          string    `json:"repository,omitempty"`
-	RepositoryBranch    string    `json:"repository_branch,omitempty"`
-	WatchCommits        bool      `json:"watch_commits,omitempty"`
-	WatchReleases       bool      `json:"watch_releases,omitempty"`
-	LastCommitSHA       string    `json:"last_commit_sha,omitempty"`
-	LastReleaseTag      string    `json:"last_release_tag,omitempty"`
-	FeedURL             string    `json:"feed_url,omitempty"`
-	FeedSource          string    `json:"feed_source,omitempty"`
-	FeedHandle          string    `json:"feed_handle,omitempty"`
-	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	ConsumesQuota       bool      `json:"consumes_quota"`
+	ID                    string    `json:"id"`
+	Kind                  string    `json:"kind"`
+	OwnerID               string    `json:"owner_id"`
+	GroupID               string    `json:"group_id,omitempty"`
+	UserID                string    `json:"user_id,omitempty"`
+	Message               string    `json:"message"`
+	Status                string    `json:"status"`
+	TriggerAt             time.Time `json:"trigger_at"`
+	Interval              string    `json:"interval,omitempty"`
+	LastRunAt             time.Time `json:"last_run_at,omitempty"`
+	CancelledAt           time.Time `json:"cancelled_at,omitempty"`
+	LastError             string    `json:"last_error,omitempty"`
+	ConsecutiveFailures   int       `json:"consecutive_failures,omitempty"`
+	PendingDelivery       bool      `json:"pending_delivery,omitempty"`
+	Repository            string    `json:"repository,omitempty"`
+	RepositoryBranch      string    `json:"repository_branch,omitempty"`
+	WatchCommits          bool      `json:"watch_commits,omitempty"`
+	WatchPullRequests     bool      `json:"watch_pull_requests,omitempty"`
+	WatchReleases         bool      `json:"watch_releases,omitempty"`
+	WatchStars            bool      `json:"watch_stars,omitempty"`
+	LastCommitSHA         string    `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor string    `json:"last_pull_request_cursor,omitempty"`
+	LastReleaseTag        string    `json:"last_release_tag,omitempty"`
+	LastStarCount         int       `json:"last_star_count,omitempty"`
+	FeedURL               string    `json:"feed_url,omitempty"`
+	FeedSource            string    `json:"feed_source,omitempty"`
+	FeedHandle            string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt       string    `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID        string    `json:"last_feed_item_id,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	ConsumesQuota         bool      `json:"consumes_quota"`
 }
 
 func newDianaTasksTool(runtime *Runtime, event MessageEvent) *dianaTasksTool {
@@ -167,32 +171,36 @@ func taskForTool(item Reminder) dianaTask {
 		interval = (time.Duration(item.IntervalSeconds) * time.Second).String()
 	}
 	return dianaTask{
-		ID:                  item.ID,
-		Kind:                kind,
-		OwnerID:             item.OwnerID,
-		GroupID:             item.GroupID,
-		UserID:              item.UserID,
-		Message:             item.Message,
-		Status:              status,
-		TriggerAt:           item.TriggerAt,
-		Interval:            interval,
-		LastRunAt:           item.LastRunAt,
-		CancelledAt:         item.CancelledAt,
-		LastError:           item.LastError,
-		ConsecutiveFailures: item.ConsecutiveFailures,
-		PendingDelivery:     strings.TrimSpace(item.PendingDelivery) != "",
-		Repository:          item.Repository,
-		RepositoryBranch:    item.RepositoryBranch,
-		WatchCommits:        item.WatchCommits,
-		WatchReleases:       item.WatchReleases,
-		LastCommitSHA:       item.LastCommitSHA,
-		LastReleaseTag:      item.LastReleaseTag,
-		FeedURL:             item.FeedURL,
-		FeedSource:          item.FeedSource,
-		FeedHandle:          item.FeedHandle,
-		FeedJudgePrompt:     item.FeedJudgePrompt,
-		LastFeedItemID:      item.LastFeedItemID,
-		CreatedAt:           item.CreatedAt,
-		ConsumesQuota:       consumesQuota,
+		ID:                    item.ID,
+		Kind:                  kind,
+		OwnerID:               item.OwnerID,
+		GroupID:               item.GroupID,
+		UserID:                item.UserID,
+		Message:               item.Message,
+		Status:                status,
+		TriggerAt:             item.TriggerAt,
+		Interval:              interval,
+		LastRunAt:             item.LastRunAt,
+		CancelledAt:           item.CancelledAt,
+		LastError:             item.LastError,
+		ConsecutiveFailures:   item.ConsecutiveFailures,
+		PendingDelivery:       strings.TrimSpace(item.PendingDelivery) != "",
+		Repository:            item.Repository,
+		RepositoryBranch:      item.RepositoryBranch,
+		WatchCommits:          item.WatchCommits,
+		WatchPullRequests:     item.WatchPullRequests,
+		WatchReleases:         item.WatchReleases,
+		WatchStars:            item.WatchStars,
+		LastCommitSHA:         item.LastCommitSHA,
+		LastPullRequestCursor: item.LastPullRequestCursor,
+		LastReleaseTag:        item.LastReleaseTag,
+		LastStarCount:         item.LastStarCount,
+		FeedURL:               item.FeedURL,
+		FeedSource:            item.FeedSource,
+		FeedHandle:            item.FeedHandle,
+		FeedJudgePrompt:       item.FeedJudgePrompt,
+		LastFeedItemID:        item.LastFeedItemID,
+		CreatedAt:             item.CreatedAt,
+		ConsumesQuota:         consumesQuota,
 	}
 }
