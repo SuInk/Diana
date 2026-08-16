@@ -2387,11 +2387,10 @@ code {
   flex: none;
   order: 3;
   margin-left: auto;
-  /* 横排下改用 flex 按内容排：网格的空列会给没有「设置」的插件留出空位，
-     右侧出现一个洞。代价是权限不再逐行对齐，换来的是紧贴开关。 */
-  display: flex;
-  align-items: center;
-  gap: 16px;
+  /* 第二列固定留给操作按钮：网格列不依赖内容存在，没有「设置」的插件也照样
+     占位，权限就不会滑进按钮的位置、逐行左右横跳。59px 是「设置」按钮的自然
+     宽度，出现更宽的按钮（如卸载）时按内容撑开。 */
+  grid-template-columns: auto minmax(59px, auto);
 }
 
 .plugin-rows .plugin-card-foot {
@@ -2437,8 +2436,8 @@ code {
   .plugin-rows .plugin-card-bottom {
     width: 100%;
     margin-left: 0;
-    /* 竖排下这一行独占整宽，权限留在左端、按钮推到右端 */
-    justify-content: space-between;
+    /* 竖排下这一行独占整宽，按钮靠 1fr 推到右端，不需要预留列 */
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
 
