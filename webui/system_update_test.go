@@ -31,12 +31,13 @@ type recordingSystemUpdater struct {
 }
 
 type recordingReleasePackageUpdater struct {
-	status     updater.Status
-	expected   string
-	release    updater.ReleasePackage
-	force      bool
-	downloaded bool
-	installed  bool
+	status      updater.Status
+	expected    string
+	release     updater.ReleasePackage
+	force       bool
+	downloaded  bool
+	installed   bool
+	downloadErr error
 }
 
 func (r *recordingReleasePackageUpdater) Supported() bool { return true }
@@ -50,6 +51,10 @@ func (r *recordingReleasePackageUpdater) Status(context.Context) (updater.Status
 func (r *recordingReleasePackageUpdater) Download(_ context.Context, release updater.ReleasePackage, force bool) (updater.Result, error) {
 	r.release = release
 	r.force = force
+	if r.downloadErr != nil {
+		r.status.Updating = true
+		return updater.Result{}, r.downloadErr
+	}
 	r.downloaded = true
 	r.status.DownloadReady = true
 	r.status.DownloadedVersion = release.Tag
@@ -299,6 +304,39 @@ func TestSystemUpdateHandlerDownloadsThenInstallsCompleteReleasePackage(t *testi
 	}
 	if !releaseUpdater.installed {
 		t.Fatal("downloaded release was not installed")
+	}
+}
+
+func TestSystemUpdateHandlerJoinsConcurrentReleaseDownload(t *testing.T) {
+	const assetName = "diana-webui-darwin-arm64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz","size":1234}]}]`))
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		status:      updater.Status{Root: "/Applications/Diana", NearestTag: "v1.2.3", RunningCommit: "v1.2.3", ApplySupported: true},
+		expected:    assetName,
+		downloadErr: updater.ErrUpdateInProgress,
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.githubAPIBase = github.URL
+	router := systemUpdateTestRouter(handler)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/system/update/download", strings.NewReader(`{"confirmation":"download-update"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var result updater.Result
+	if err := json.NewDecoder(recorder.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Status.Updating || result.TargetCommit != "v1.3.0" || !strings.Contains(result.Output, "already in progress") {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

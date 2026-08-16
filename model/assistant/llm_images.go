@@ -1,9 +1,14 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/draw"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"mime"
 	"net/http"
@@ -12,12 +17,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/netguard"
 )
 
 const maxLLMImageBytes = 8 << 20
 
 const maxConcurrentLLMImageLoads = 4
+
+const (
+	highDetailCropMinimumLongSide  = 2400
+	highDetailCropMinimumShortSide = 1200
+	highDetailCropLongSidePercent  = 60
+)
 
 func llmReadyImageURLs(ctx context.Context, imageURLs []string) []string {
 	ready, _ := loadLLMImageURLs(ctx, imageURLs)
@@ -180,6 +192,70 @@ func localImageAsDataURL(path string) (string, error) {
 
 func imageBytesAsDataURL(data []byte, contentType string) string {
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+// highDetailImageParts keeps the complete frame and adds two overlapping crops
+// along its long edge. Some OpenAI-compatible providers accept detail=high but
+// still downscale the full frame enough to lose small faces and text.
+func highDetailImageParts(imageURL, detail string) []llm.ContentPart {
+	original := llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: detail}
+	if !strings.EqualFold(strings.TrimSpace(detail), "high") {
+		return []llm.ContentPart{original}
+	}
+	decoded, err := decodeDataURLImage(imageURL)
+	if err != nil {
+		return []llm.ContentPart{original}
+	}
+	bounds := decoded.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	longSide, shortSide := max(width, height), min(width, height)
+	if longSide < highDetailCropMinimumLongSide || shortSide < highDetailCropMinimumShortSide {
+		return []llm.ContentPart{original}
+	}
+
+	cropLongSide := longSide * highDetailCropLongSidePercent / 100
+	starts := []int{0, longSide - cropLongSide}
+	// Very tall screenshots need smaller windows than a simple top/bottom split;
+	// otherwise each crop is still downscaled enough to make chat text unreadable.
+	if readableLongSide := shortSide * 3 / 2; cropLongSide > readableLongSide {
+		cropLongSide = readableLongSide
+		starts = []int{0, (longSide - cropLongSide) / 2, longSide - cropLongSide}
+	}
+	parts := make([]llm.ContentPart, 0, 1+len(starts))
+	parts = append(parts, original)
+	for _, start := range starts {
+		cropBounds := image.Rect(0, 0, width, height)
+		if width >= height {
+			cropBounds = image.Rect(bounds.Min.X+start, bounds.Min.Y, bounds.Min.X+start+cropLongSide, bounds.Max.Y)
+		} else {
+			cropBounds = image.Rect(bounds.Min.X, bounds.Min.Y+start, bounds.Max.X, bounds.Min.Y+start+cropLongSide)
+		}
+		crop := image.NewRGBA(image.Rect(0, 0, cropBounds.Dx(), cropBounds.Dy()))
+		draw.Draw(crop, crop.Bounds(), decoded, cropBounds.Min, draw.Src)
+		var encoded bytes.Buffer
+		if err := jpeg.Encode(&encoded, crop, &jpeg.Options{Quality: 90}); err != nil {
+			continue
+		}
+		parts = append(parts, llm.ContentPart{
+			Type:     llm.ContentPartImageURL,
+			ImageURL: imageBytesAsDataURL(encoded.Bytes(), "image/jpeg"),
+			Detail:   "high",
+		})
+	}
+	return parts
+}
+
+func decodeDataURLImage(imageURL string) (image.Image, error) {
+	prefix, encoded, ok := strings.Cut(strings.TrimSpace(imageURL), ",")
+	if !ok || !strings.HasPrefix(strings.ToLower(prefix), "data:image/") || !strings.Contains(strings.ToLower(prefix), ";base64") {
+		return nil, fmt.Errorf("image is not a base64 data URL")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	return decoded, err
 }
 
 func imageContentType(header string, body []byte) string {
