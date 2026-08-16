@@ -353,6 +353,14 @@ func TestOpenAICompatibleResponsesNativeToolCall(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleGenerateLabelsLocalValidationErrors(t *testing.T) {
+	client := newOpenAICompatibleClient(ProviderConfig{Provider: ProviderOpenAICompatible}, http.DefaultClient)
+	_, err := client.Generate(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "hello"}}})
+	if err == nil || !strings.Contains(err.Error(), "llm: local request validation failed: llm: missing model") {
+		t.Fatalf("error = %v, want local validation label", err)
+	}
+}
+
 func TestOpenAIResponsesInputPreservesNativeOutputItems(t *testing.T) {
 	input := openAIResponsesInput([]Message{
 		{
@@ -379,6 +387,51 @@ func TestOpenAIResponsesInputPreservesNativeOutputItems(t *testing.T) {
 	}
 	if !strings.Contains(string(functionOutput), `"type":"function_call_output"`) || !strings.Contains(string(functionOutput), `"call_id":"call_1"`) {
 		t.Fatalf("function output item was not appended: %s", functionOutput)
+	}
+}
+
+func TestOpenAICompatibleResponsesContinuesAfterTextlessToolCall(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_final","object":"response","created_at":1,"model":"gpt-test","output":[{"type":"message","id":"msg_final","status":"completed","role":"assistant","content":[{"type":"output_text","text":"能力查询完成","annotations":[]}]}],"status":"completed"}`))
+	}))
+	defer server.Close()
+
+	client := newOpenAICompatibleClient(ProviderConfig{
+		Provider: ProviderOpenAICompatible,
+		APIKey:   "test",
+		BaseURL:  server.URL + "/v1",
+		Model:    "gpt-test",
+	}, server.Client())
+	resp, err := client.Generate(context.Background(), GenerateRequest{Messages: []Message{
+		{Role: RoleUser, Content: "群聊 Agent 有哪些能力"},
+		{
+			Role:      RoleAssistant,
+			ToolCalls: []ToolCall{{ID: "call_1", Name: "diana.capabilities", Arguments: map[string]any{"query": "群聊 Agent"}}},
+			ResponsesOutput: []json.RawMessage{
+				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"diana.capabilities","arguments":"{\"query\":\"群聊 Agent\"}","status":"completed"}`),
+			},
+		},
+		{Role: RoleTool, ToolCallID: "call_1", ToolName: "diana.capabilities", Content: `{"results":[]}`},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "能力查询完成" {
+		t.Fatalf("response = %#v", resp)
+	}
+	input, ok := gotBody["input"].([]any)
+	if !ok || len(input) != 3 {
+		t.Fatalf("input = %#v", gotBody["input"])
+	}
+	functionCall, _ := input[1].(map[string]any)
+	functionOutput, _ := input[2].(map[string]any)
+	if functionCall["type"] != "function_call" || functionOutput["type"] != "function_call_output" {
+		t.Fatalf("continuation input = %#v", input)
 	}
 }
 
@@ -1061,7 +1114,7 @@ func TestOpenAICompatibleResponsesAPIErrorIncludesRootJSONBody(t *testing.T) {
 		t.Fatal("Generate error = nil, want forbidden error")
 	}
 	got := err.Error()
-	for _, want := range []string{"403 Forbidden", "MODEL_DENIED", "permission_error", "model is not enabled"} {
+	for _, want := range []string{"llm: provider request failed", "403 Forbidden", "MODEL_DENIED", "permission_error", "model is not enabled"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("error = %q, want substring %q", got, want)
 		}

@@ -5,8 +5,8 @@
   <section class="repository-watch-manager">
     <div class="repository-watch-manager-head">
       <div>
-        <h3>订阅与通知</h3>
-        <p>选择发送机器人，并将 Commit、PR、Release 或 Star 变化发送到指定群聊或私聊对象。</p>
+        <h3>仓库管理</h3>
+        <p>每个仓库单独配置通知、Issue 能力，以及指定用户和指定群聊；点击仓库右侧编辑按钮即可管理。</p>
       </div>
       <button class="btn small primary" type="button" @click="startCreate">
         <Plus :size="14" aria-hidden="true" />
@@ -19,7 +19,7 @@
         <div class="field wide">
           <label for="plugin-watch-repository">GitHub 仓库</label>
           <input id="plugin-watch-repository" v-model.trim="form.repository" class="input" type="text" placeholder="owner/repository 或 GitHub 链接" />
-          <span class="hint">公开仓库高频检查也建议配置上方 Token；私有仓库必须配置。</span>
+          <span class="hint">填写仓库后，下方会出现该仓库独立的“指定用户 / 指定群聊”配置；公开仓库高频检查也建议配置上方 Token。</span>
         </div>
         <div class="field">
           <label for="plugin-watch-branch">分支</label>
@@ -72,7 +72,24 @@
             <input v-model="form.issue_enabled" type="checkbox" />
             <span>允许 LLM 操作这个仓库的 Issue</span>
           </label>
-          <span class="hint">启用后，机器人可按当前 Issue 权限生成草稿并在授权成员确认后创建或更新 Issue。</span>
+          <span class="hint">启用后，此仓库进入 Issue 操作白名单：授权用户可搜索、创建、更新、评论、关闭或重新打开 Issue；群内其他成员仍只能生成草稿，由授权成员确认写入。</span>
+        </div>
+        <div v-if="form.repository.trim()" class="wide repository-issue-access">
+          <RepositoryAccessEditor
+            :repository="form.repository"
+            :user-access="props.userAccess ?? ''"
+            :group-access="props.groupAccess ?? ''"
+            :token-users="props.tokenUsers ?? ''"
+            :user-auth-modes="props.userAuthModes ?? ''"
+            :joined-groups="props.joinedGroups ?? []"
+            :groups-loading="props.groupsLoading"
+            :groups-warning="props.groupsWarning"
+            @update:user-access="emit('update:user-access', $event)"
+            @update:group-access="emit('update:group-access', $event)"
+            @update:user-tokens="emit('update:user-tokens', $event)"
+            @update:token-users="emit('update:token-users', $event)"
+            @update:user-auth-modes="emit('update:user-auth-modes', $event)"
+          />
         </div>
       </div>
       <div class="repository-watch-editor-actions">
@@ -101,11 +118,13 @@
             <span v-if="task.group_id">群 <strong class="mono">{{ task.group_id }}</strong></span>
             <span v-else>私聊 <strong class="mono">{{ task.user_id || "—" }}</strong></span>
             <span>{{ watchScopeLabel(task) }}</span>
+            <span class="repository-access-fact">指定用户 <strong>{{ repositoryAccessCount(props.userAccess, task.repository) }}</strong></span>
+            <span class="repository-access-fact">指定群聊 <strong>{{ repositoryAccessCount(props.groupAccess, task.repository) }}</strong></span>
           </div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
         <div class="repository-watch-manager-actions">
-          <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="编辑订阅" aria-label="编辑订阅" @click="startEdit(task)"><Pencil :size="14" aria-hidden="true" /></button>
+          <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="编辑仓库和授权" aria-label="编辑仓库和授权" @click="startEdit(task)"><Pencil :size="14" aria-hidden="true" /></button>
           <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="取消订阅" aria-label="取消订阅" :disabled="busyID === task.id" @click="cancel(task)"><CircleX :size="14" aria-hidden="true" /></button>
           <button class="btn small ghost danger icon-only" type="button" title="删除订阅" aria-label="删除订阅" :disabled="busyID === task.id" @click="remove(task)"><Trash2 :size="14" aria-hidden="true" /></button>
         </div>
@@ -134,9 +153,28 @@ import {
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import AppSelect from "./AppSelect.vue";
+import RepositoryAccessEditor from "./RepositoryAccessEditor.vue";
 
-const props = defineProps<{ prepareAccess?: () => Promise<void>; tokenConfigured?: boolean; issueEnabledRepositories?: string[] }>();
-const emit = defineEmits<{ "update:issue-enabled-repositories": [string[]] }>();
+const props = defineProps<{
+  prepareAccess?: () => Promise<void>;
+  tokenConfigured?: boolean;
+  issueEnabledRepositories?: string[];
+  userAccess?: string;
+  groupAccess?: string;
+  tokenUsers?: string;
+  userAuthModes?: string;
+  joinedGroups?: QQBotGroupSummary[];
+  groupsLoading?: boolean;
+  groupsWarning?: string;
+}>();
+const emit = defineEmits<{
+  "update:issue-enabled-repositories": [string[]];
+  "update:user-access": [string];
+  "update:group-access": [string];
+  "update:user-tokens": [string];
+  "update:token-users": [string];
+  "update:user-auth-modes": [string];
+}>();
 const authenticatedIntervalSeconds = 60;
 const anonymousIntervalSeconds = 60 * 60;
 const minimumIntervalSeconds = 30;
@@ -181,6 +219,21 @@ function startCreate(): void {
 
 function repositoryKey(value: string): string {
   return value.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, "").replace(/\.git\/?$/i, "").replace(/\/$/, "");
+}
+
+function repositoryAccessCount(value: string | undefined, repository: string | undefined): number {
+  const target = repositoryKey(repository ?? "").toLowerCase();
+  if (!target) return 0;
+  const ids = new Set<string>();
+  for (const line of String(value ?? "").split(/[;；\n\r]/)) {
+    const entry = line.trim();
+    if (!entry) continue;
+    const separator = entry.indexOf("=");
+    const id = (separator >= 0 ? entry.slice(0, separator) : entry).trim();
+    const repositories = separator >= 0 ? entry.slice(separator + 1) : "";
+    if (id && repositories.split(/[,，]/).some((item) => repositoryKey(item).toLowerCase() === target)) ids.add(id);
+  }
+  return ids.size;
 }
 
 function startEdit(task: AssistantTask): void {

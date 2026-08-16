@@ -47,13 +47,13 @@ func publicQQErrorMessage(err error) string {
 	}
 	if strings.Contains(lower, "client.timeout exceeded while awaiting headers") ||
 		strings.Contains(lower, "timeout awaiting response headers") {
-		return "模型服务响应超时，请稍后重试。"
+		return "上游模型服务响应超时，请稍后重试。"
 	}
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(lower, "context deadline exceeded") {
-		return "请求处理超时，请稍后重试。"
+		return "上游模型服务请求超时，请稍后重试。"
 	}
 	if strings.Contains(lower, "output is empty") {
-		return "模型服务暂时没有返回有效内容，请稍后重试。"
+		return "上游模型服务暂时没有返回有效内容，请稍后重试。"
 	}
 	return sanitizePublicErrorDetail(raw)
 }

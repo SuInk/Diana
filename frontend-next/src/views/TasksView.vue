@@ -9,10 +9,6 @@
         <p>查看一次性提醒、周期查询和仓库更新订阅的执行状态</p>
       </div>
       <div class="view-actions">
-        <button class="btn ghost" type="button" @click="navigate('logs')">
-          <FileClock :size="15" aria-hidden="true" />
-          执行日志
-        </button>
         <button class="btn" type="button" :disabled="loading" @click="load">
           <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
           刷新
@@ -183,11 +179,6 @@
         </EmptyState>
       </section>
 
-      <section class="card issue-drafts-card">
-        <div class="card-body">
-          <RepositoryIssueDraftList />
-        </div>
-      </section>
     </div>
   </div>
 </template>
@@ -200,7 +191,6 @@ import {
   CircleCheck,
   CircleX,
   Clock3,
-  FileClock,
   Gauge,
   GitBranch,
   History,
@@ -221,7 +211,6 @@ import { formatClock, formatNumber, formatTime } from "../format";
 import { navigate } from "../router";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
-import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import StatCard from "../components/StatCard.vue";
 
 type KindFilter = "all" | AssistantTaskKind;

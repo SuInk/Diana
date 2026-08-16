@@ -75,6 +75,7 @@ func collectDashboardServerStats(now time.Time, storagePaths ...string) storage.
 	} else {
 		stats.ProcessMetricsUnavailable = err.Error()
 	}
+	stats.ProcessStorageBytes = dataDirectorySize(storagePath)
 	if total, used, available, err := storageUsage(storagePath); err == nil {
 		stats.StoragePath = storagePath
 		stats.StorageTotalBytes = total
@@ -315,4 +316,68 @@ func clampPercent(value float64) float64 {
 		return 100
 	}
 	return value
+}
+
+const dashboardDataSizeCacheTTL = time.Minute
+
+type cachedDataSize struct {
+	measuredAt time.Time
+	bytes      uint64
+	measuring  bool
+}
+
+var dashboardDataSizeCache = struct {
+	sync.Mutex
+	byPath map[string]*cachedDataSize
+}{byPath: map[string]*cachedDataSize{}}
+
+// dataDirectorySize 返回 Diana 数据目录的体积，也就是它自己占掉的磁盘。
+//
+// 媒体缓存可能有几十万个文件，遍历一次并不便宜，所以永远返回上一次的结果，
+// 过期后在后台协程里重算。总览接口因此不会被一次慢遍历拖住，代价是刚启动的
+// 第一次调用返回 0，下一次采样就有值了。
+func dataDirectorySize(dir string) uint64 {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return 0
+	}
+	now := time.Now()
+	dashboardDataSizeCache.Lock()
+	entry := dashboardDataSizeCache.byPath[dir]
+	if entry == nil {
+		entry = &cachedDataSize{}
+		dashboardDataSizeCache.byPath[dir] = entry
+	}
+	size := entry.bytes
+	stale := now.Sub(entry.measuredAt) >= dashboardDataSizeCacheTTL
+	if stale && !entry.measuring {
+		entry.measuring = true
+		go func() {
+			measured := walkDirectorySize(dir)
+			dashboardDataSizeCache.Lock()
+			entry.bytes = measured
+			entry.measuredAt = time.Now()
+			entry.measuring = false
+			dashboardDataSizeCache.Unlock()
+		}()
+	}
+	dashboardDataSizeCache.Unlock()
+	return size
+}
+
+func walkDirectorySize(dir string) uint64 {
+	var total uint64
+	_ = filepath.WalkDir(dir, func(_ string, entry os.DirEntry, err error) error {
+		// 权限不足或文件正好被删掉都不该让整次统计失败，跳过继续走。
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		total += uint64(info.Size())
+		return nil
+	})
+	return total
 }

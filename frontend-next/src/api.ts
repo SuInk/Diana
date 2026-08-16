@@ -989,6 +989,8 @@ export interface StatsServerSummary {
   memory_used_bytes?: number;
   memory_usage_percent?: number;
   process_memory_bytes?: number;
+  /** Diana 数据目录体积；首次采样跑完前是 0 */
+  process_storage_bytes?: number;
   storage_path?: string;
   storage_total_bytes?: number;
   storage_used_bytes?: number;

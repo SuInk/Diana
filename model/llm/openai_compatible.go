@@ -72,14 +72,20 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 	req = req.withDefaults(c.cfg)
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
+	var response *GenerateResponse
+	var err error
 	switch c.cfg.APIFormatWithDefault() {
 	case APIFormatChatCompletions:
-		return c.generateChatCompletion(ctx, req)
+		response, err = c.generateChatCompletion(ctx, req)
 	default:
-		return c.generateResponse(ctx, req)
+		response, err = c.generateResponse(ctx, req)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("llm: provider request failed: %w", err)
+	}
+	return response, nil
 }
 
 // ManagesAttemptTimeout reports that Chat Completions uses separate response
