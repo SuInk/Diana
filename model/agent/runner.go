@@ -115,6 +115,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	webSearchCalls := 0
 	modelTurns := 0
 	toolCalls := 0
+	attemptedTools := make(map[string]bool)
 	protocolRepairs := 0
 	lastToolSignature := ""
 	finishReason := "final"
@@ -233,6 +234,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
+			if missing := missingRequiredTools(req.RequiredTools, attemptedTools, r.registry); len(missing) > 0 && toolCalls < r.cfg.MaxSteps {
+				protocolRepairs++
+				reason := "当前请求必须先调用工具：" + strings.Join(missing, "、")
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				messages = append(messages,
+					llm.Message{Role: llm.RoleAssistant, Content: lastText},
+					llm.Message{Role: llm.RoleUser, Content: reason + "。不得根据提示词、历史回复或记忆摘要猜测实时结果；现在调用该工具，观察真实返回后再回答。"},
+				)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
 			if toolCalls < r.cfg.MaxSteps && len(r.registry.Names()) > 0 && finalDefersAvailableTool(action.Content) {
 				protocolRepairs++
 				reason := "最终答复仍在承诺下一步调用工具，但本轮尚未执行该操作"
@@ -350,6 +365,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			webSearchCalls++
 		}
 		toolCalls++
+		attemptedTools[action.Tool] = true
 		lastToolSignature = signature
 		inputKeys := sortedInputKeys(action.Input)
 		toolMetadata := mergeRunMetadata(webSearchRunMetadataFromInput(action.Tool, action.Input), claimMetadata)
@@ -706,6 +722,25 @@ func (r *Runner) systemPrompt() string {
 func finalDefersAvailableTool(content string) bool {
 	content = strings.TrimSpace(content)
 	return content != "" && (pendingToolCommitmentZH.MatchString(content) || pendingToolCommitmentEN.MatchString(content))
+}
+
+func missingRequiredTools(required []string, attempted map[string]bool, registry *ToolRegistry) []string {
+	missing := make([]string, 0, len(required))
+	seen := make(map[string]bool, len(required))
+	for _, name := range required {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] || attempted[name] {
+			continue
+		}
+		seen[name] = true
+		if registry != nil {
+			if _, ok := registry.Get(name); !ok {
+				continue
+			}
+		}
+		missing = append(missing, name)
+	}
+	return missing
 }
 
 func toolExecutionErrorForModel(toolName, message string) string {
