@@ -156,15 +156,23 @@ jobs:
         run: |
           mkdir -p dist release/package
           binary_name="diana-webui-${{ matrix.suffix }}"
+          runtime_name="diana-webui"
           package_suffix="${{ matrix.suffix }}"
           package_suffix="${package_suffix%.exe}"
           package_name="diana-webui-${package_suffix}"
           package_dir="release/package/${package_name}"
 
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            runtime_name="diana-webui.exe"
+          fi
+
           go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "dist/${binary_name}" ./cmd/webui
 
           # Release 包带齐运行时前端，下载后不需要 Go、Node 或源码。
           mkdir -p "${package_dir}/frontend-next/dist"
+          cp "dist/${binary_name}" "${package_dir}/${runtime_name}"
+          # Keep one compatibility copy so pre-migration updaters can install
+          # the first package that introduces the stable runtime name.
           cp "dist/${binary_name}" "${package_dir}/${binary_name}"
           cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
           printf '%s\n' \
@@ -181,7 +189,7 @@ jobs:
               '@echo off' \
               'set "FRONTEND_DIST=%~dp0frontend-next\dist"' \
               'if "%PORT%"=="" set PORT=18080' \
-              "\"%~dp0${binary_name}\" %*" > "${package_dir}/run.bat"
+              '"%~dp0diana-webui.exe" %*' > "${package_dir}/run.bat"
             (cd release/package && zip -qr "../../dist/${package_name}.zip" "${package_name}")
           else
             printf '%s\n' \
@@ -190,7 +198,7 @@ jobs:
               'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
               'export FRONTEND_DIST="${FRONTEND_DIST:-$SCRIPT_DIR/frontend-next/dist}"' \
               'export PORT="${PORT:-18080}"' \
-              "exec \"\$SCRIPT_DIR/${binary_name}\" \"\$@\"" > "${package_dir}/run.sh"
+              'exec "$SCRIPT_DIR/diana-webui" "$@"' > "${package_dir}/run.sh"
             chmod +x "${package_dir}/run.sh"
             tar -czf "dist/${package_name}.tar.gz" -C release/package "${package_name}"
           fi

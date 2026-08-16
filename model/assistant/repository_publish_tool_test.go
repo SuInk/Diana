@@ -250,6 +250,157 @@ func TestRepositoryPublishDefaultPluginAndSecretSettings(t *testing.T) {
 	}
 }
 
+func TestRepositoryIssueGroupDraftRequiresAuthorizedMemberApproval(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	tokens, err := json.Marshal(map[string]string{"approver": repositoryPublishTestToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:   "acme/demo",
+		repositoryPublishSettingUserAccess:  "approver = acme/demo",
+		repositoryPublishSettingGroupAccess: "group-1 = acme/demo",
+		repositoryPublishSettingUserTokens:  string(tokens),
+		repositoryPublishSettingTimeout:     5,
+	}
+	requester := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "登录失败，请帮我提 Issue",
+	}, plugin, settings)
+	draft := runRepositoryPublishTestTool(t, requester, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "登录失败", "body": "重置密码后无法登录。",
+	})
+	if !draft.OK || !draft.RequiresApproval || draft.Outcome != "draft_pending" || draft.Draft == nil {
+		t.Fatalf("draft result=%#v", draft)
+	}
+	if github.count(http.MethodPost) != 0 {
+		t.Fatal("ordinary group member wrote to GitHub before approval")
+	}
+	listed := runRepositoryPublishTestTool(t, requester, map[string]any{"operation": "list_drafts", "status": "all"})
+	if !listed.OK || len(listed.Drafts) != 1 || listed.Drafts[0].RequesterID != "member" || listed.Drafts[0].CreatedAt.IsZero() || listed.Drafts[0].Body != "重置密码后无法登录。" {
+		t.Fatalf("listed drafts=%#v", listed)
+	}
+
+	unauthorized := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "other", RawMessage: "同意创建",
+	}, plugin, settings)
+	denied := runRepositoryPublishTestTool(t, unauthorized, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
+	if denied.FailureCode != "permission_denied" || github.count(http.MethodPost) != 0 {
+		t.Fatalf("unauthorized approval=%#v", denied)
+	}
+
+	approver := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver", RawMessage: "同意创建这个 Issue",
+	}, plugin, settings)
+	approved := runRepositoryPublishTestTool(t, approver, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
+	if !approved.OK || approved.Outcome != "created" || approved.Issue == nil {
+		t.Fatalf("approved result=%#v", approved)
+	}
+	if github.count(http.MethodPost) != 1 {
+		t.Fatalf("GitHub create count=%d, want 1", github.count(http.MethodPost))
+	}
+	listed = runRepositoryPublishTestTool(t, requester, map[string]any{"operation": "list_drafts", "status": "all"})
+	if len(listed.Drafts) != 1 || listed.Drafts[0].Status != "created" || listed.Drafts[0].IssueNumber != approved.Issue.Number {
+		t.Fatalf("resolved draft list=%#v", listed)
+	}
+	requester.event.RawMessage = "搜索结果排序不对，请帮我提 Issue"
+	second := runRepositoryPublishTestTool(t, requester, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "搜索结果排序不对", "body": "希望按更新时间倒序。",
+	})
+	approver.event.RawMessage = "取消这个草稿"
+	cancelled := runRepositoryPublishTestTool(t, approver, map[string]any{"operation": "cancel_draft", "draft_id": second.Draft.ID})
+	if !cancelled.OK || cancelled.Outcome != "cancelled" || cancelled.Draft == nil || cancelled.Draft.Status != "cancelled" || github.count(http.MethodPost) != 1 {
+		t.Fatalf("cancelled draft=%#v posts=%d", cancelled, github.count(http.MethodPost))
+	}
+}
+
+func TestRepositoryIssueApprovalRequiresApproverToken(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:   "acme/demo",
+		repositoryPublishSettingUserAccess:  "approver = acme/demo",
+		repositoryPublishSettingGroupAccess: "group-1 = acme/demo",
+		repositoryPublishSettingToken:       repositoryPublishTestToken,
+	}
+	requester := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "登录失败，请帮我提 Issue",
+	}, plugin, settings)
+	draft := runRepositoryPublishTestTool(t, requester, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "登录失败",
+	})
+	approver := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver", RawMessage: "同意创建",
+	}, plugin, settings)
+	result := runRepositoryPublishTestTool(t, approver, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
+	if result.OK || result.FailureCode != "user_token_required" {
+		t.Fatalf("approval without personal token=%#v", result)
+	}
+	if github.count(http.MethodPost) != 0 {
+		t.Fatalf("approval without personal token reached GitHub: %#v", github.requests)
+	}
+}
+
+func TestRepositoryIssueSearchRequiresAuthorizedUsersOwnToken(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	tool := newDianaRepositoryIssuesTool(
+		runtime,
+		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "搜索 acme/demo 的登录问题"},
+		newRepositoryPublishPlugin(server.Client(), server.URL),
+		SettingValues{
+			repositoryPublishSettingAllowlist:  "acme/demo",
+			repositoryPublishSettingUserAccess: "member = acme/demo",
+			repositoryPublishSettingToken:      repositoryPublishTestToken,
+		},
+	)
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "search", "repository": "acme/demo", "query": "login",
+	})
+	if result.OK || result.FailureCode != "user_token_required" {
+		t.Fatalf("search without personal token=%#v", result)
+	}
+	if github.count(http.MethodGet) != 0 {
+		t.Fatalf("search without personal token reached GitHub: %#v", github.requests)
+	}
+}
+
+func TestRepositoryIssueUserTokenCannotBypassGlobalAllowlist(t *testing.T) {
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:  "acme/other",
+		repositoryPublishSettingUserAccess: "member = acme/demo",
+		repositoryPublishSettingUserTokens: `{"member":"member-token"}`,
+	}
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "member"}
+	if _, _, code, _ := repositoryPublishAccessForEvent(event, "acme/demo", false, settings); code != "repository_not_allowed" {
+		t.Fatalf("access code=%q, want repository_not_allowed", code)
+	}
+}
+
+func TestRepositoryPublishMergesPerUserTokenUpdates(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	first := `{"user-a":"token-a","user-b":"token-b"}`
+	if _, err := manager.UpdateSettings(repositoryPublishPluginID, map[string]any{repositoryPublishSettingUserTokens: first}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.UpdateSettings(repositoryPublishPluginID, map[string]any{repositoryPublishSettingUserTokens: `{"user-a":"token-a2","user-b":null}`}); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := manager.Get(repositoryPublishPluginID)
+	tokens, err := repositoryPublishUserTokens(state.Settings[repositoryPublishSettingUserTokens].(string))
+	if err != nil || tokens["user-a"] != "token-a2" || tokens["user-b"] != "" || len(tokens) != 1 {
+		t.Fatalf("merged tokens=%#v err=%v", tokens, err)
+	}
+}
+
 func TestRepositoryIssueCreateSanitizesAndSendsOptionalFields(t *testing.T) {
 	github := newRepositoryPublishTestGitHub()
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
@@ -482,6 +633,7 @@ func TestRepositoryIssueAllowsConfiguredUserOnlyForMappedRepository(t *testing.T
 		repositoryPublishSettingToken:      repositoryPublishTestToken,
 		repositoryPublishSettingAllowlist:  "acme/demo,acme/other",
 		repositoryPublishSettingUserAccess: "member = acme/demo\nother = acme/other",
+		repositoryPublishSettingUserTokens: `{"member":"` + repositoryPublishTestToken + `"}`,
 	}
 	tool := newDianaRepositoryIssuesTool(
 		runtime,
@@ -529,7 +681,7 @@ func TestRepositoryPublishUserAccessRejectsMalformedRules(t *testing.T) {
 	}
 }
 
-func TestRepositoryIssueAllowsMappedGroupOnlyForMappedRepository(t *testing.T) {
+func TestRepositoryIssueMappedGroupOnlyDraftsForMappedRepository(t *testing.T) {
 	github := newRepositoryPublishTestGitHub()
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
@@ -548,7 +700,7 @@ func TestRepositoryIssueAllowsMappedGroupOnlyForMappedRepository(t *testing.T) {
 	result := runRepositoryPublishTestTool(t, tool, map[string]any{
 		"operation": "create", "repository": "acme/demo", "title": "Group write",
 	})
-	if !result.OK || result.Outcome != "created" {
+	if !result.OK || result.Outcome != "draft_pending" || !result.RequiresApproval {
 		t.Fatalf("group result=%#v", result)
 	}
 
@@ -567,7 +719,7 @@ func TestRepositoryIssueAllowsMappedGroupOnlyForMappedRepository(t *testing.T) {
 	if result.OK || result.FailureCode != "permission_denied" {
 		t.Fatalf("private result=%#v", result)
 	}
-	if github.count(http.MethodPost) != 1 {
+	if github.count(http.MethodPost) != 0 {
 		t.Fatalf("unauthorized group requests reached GitHub: %#v", github.requests)
 	}
 }

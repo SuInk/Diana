@@ -145,15 +145,15 @@ http://127.0.0.1:18080
 Apple Silicon：
 
 ```sh
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui-darwin-arm64 ./cmd/webui
-./dist/diana-webui-darwin-arm64
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+./dist/diana-webui
 ```
 
 Intel Mac：
 
 ```sh
-GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui-darwin-amd64 ./cmd/webui
-./dist/diana-webui-darwin-amd64
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+./dist/diana-webui
 ```
 
 也可以直接下载 GitHub Release 中的 `darwin-arm64` 或 `darwin-amd64` 二进制。裸二进制不包含前端资源，普通用户请下载对应平台的 Release 完整包。
@@ -163,15 +163,15 @@ GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui-darwin-amd64
 amd64：
 
 ```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui-linux-amd64 ./cmd/webui
-./dist/diana-webui-linux-amd64
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+./dist/diana-webui
 ```
 
 arm64：
 
 ```sh
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui-linux-arm64 ./cmd/webui
-./dist/diana-webui-linux-arm64
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+./dist/diana-webui
 ```
 
 后台运行建议使用下面的 systemd 示例。
@@ -184,8 +184,8 @@ PowerShell：
 $env:GOOS="windows"
 $env:GOARCH="amd64"
 $env:CGO_ENABLED="0"
-go build -o dist\diana-webui-windows-amd64.exe .\cmd\webui
-.\dist\diana-webui-windows-amd64.exe
+go build -o dist\diana-webui.exe .\cmd\webui
+.\dist\diana-webui.exe
 ```
 
 Windows 下也可以直接下载 GitHub Release 中的 `windows-amd64.exe`。裸二进制不包含前端资源，普通用户请下载对应平台的 Release 完整包。
@@ -524,8 +524,7 @@ GET /api/health   # 版本与运行时长
 ```text
 .
 ├── cmd/webui/              # Gin WebUI 和 OneBot endpoint 入口
-├── frontend/               # Vue + TypeScript 前端
-├── frontend-next/          # 新版组件化前端（Dashboard / SSE / 配置向导）
+├── frontend-next/          # Vue + TypeScript WebUI（Dashboard / SSE / 配置向导）
 ├── model/llm/              # LLM 统一接口和 provider adapters
 ├── model/assistant/            # QQ 机器人运行时、OneBot 通道、插件系统
 ├── webui/                  # WebUI API handler
