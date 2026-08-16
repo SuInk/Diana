@@ -1093,34 +1093,37 @@ func (panicObserverPlugin) Observe(context.Context, MessageEvent) MessageEvent {
 	panic("observe boom")
 }
 
-// 消息历史已经内化成产品能力：插件页看不到它，也没有任何路径能把它关掉。
+// 内化的能力：插件页看不到，也没有任何路径能把它们关掉。
 func TestInternalPluginIsAlwaysOnAndHidden(t *testing.T) {
 	manager := NewDefaultPluginManager()
+	internal := []string{messageHistoryPluginID, llmConfigPluginID}
 
+	visible := map[string]bool{}
 	for _, state := range manager.ListVisible() {
-		if state.Manifest.ID == messageHistoryPluginID {
-			t.Fatal("内化能力不该出现在面向用户的插件列表里")
-		}
+		visible[state.Manifest.ID] = true
 	}
-	// 内部消费方（能力索引、Agent 能力清单）仍然要看得到。
-	found := false
+	listed := map[string]bool{}
 	for _, state := range manager.List() {
-		if state.Manifest.ID == messageHistoryPluginID {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("List 仍应包含内化能力，否则能力索引会漏掉它")
+		listed[state.Manifest.ID] = true
 	}
 
-	if _, err := manager.SetEnabled(messageHistoryPluginID, false); !errors.Is(err, ErrInternalPluginDisable) {
-		t.Fatalf("停用内化能力应被拒绝，实际错误：%v", err)
-	}
-	if !manager.Enabled(messageHistoryPluginID) {
-		t.Fatal("停用失败后应保持启用")
-	}
-	// 群级覆盖也不能关掉它。
-	if !manager.EnabledWithOverrides(messageHistoryPluginID, map[string]bool{messageHistoryPluginID: false}) {
-		t.Fatal("群级覆盖不该关掉内化能力")
+	for _, id := range internal {
+		if visible[id] {
+			t.Errorf("%s 不该出现在面向用户的插件列表里", id)
+		}
+		// 内部消费方（能力索引、Agent 能力清单）仍然要看得到。
+		if !listed[id] {
+			t.Errorf("List 仍应包含 %s，否则能力索引会漏掉它", id)
+		}
+		if _, err := manager.SetEnabled(id, false); !errors.Is(err, ErrInternalPluginDisable) {
+			t.Errorf("停用 %s 应被拒绝，实际错误：%v", id, err)
+		}
+		if !manager.Enabled(id) {
+			t.Errorf("%s 停用失败后应保持启用", id)
+		}
+		// 群级覆盖也不能关掉它。
+		if !manager.EnabledWithOverrides(id, map[string]bool{id: false}) {
+			t.Errorf("群级覆盖不该关掉 %s", id)
+		}
 	}
 }
