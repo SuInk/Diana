@@ -131,18 +131,15 @@
 
           <footer v-if="showFooter(plugin)" class="plugin-card-foot">
             <template v-if="plugin.installed">
-              <!-- 只留图标：这一列每行都要预留，带文字要占 59px，一屏里
-                   多数插件没有设置项，那就是一列 59px 宽的空洞。 -->
               <button
                 v-if="plugin.manifest.settings?.length"
-                class="btn small icon-only"
+                class="btn small"
                 type="button"
-                title="设置"
-                aria-label="设置"
                 :disabled="busyID === plugin.manifest.id"
                 @click="openSettings(plugin)"
               >
-                <SlidersHorizontal :size="15" aria-hidden="true" />
+                <SlidersHorizontal :size="14" aria-hidden="true" />
+                设置
               </button>
               <button
                 v-if="!plugin.manifest.built_in"
@@ -208,8 +205,7 @@
 
       <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'token'" :class="{ active: githubSettingsTab === 'token' }" @click="githubSettingsTab = 'token'">Token</button>
-        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'updates'" :class="{ active: githubSettingsTab === 'updates' }" @click="githubSettingsTab = 'updates'">仓库更新</button>
-        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'issues'" :class="{ active: githubSettingsTab === 'issues' }" @click="githubSettingsTab = 'issues'">提 Issue</button>
+        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'repositories'" :class="{ active: githubSettingsTab === 'repositories' }" @click="githubSettingsTab = 'repositories'">仓库管理</button>
       </div>
 
       <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="plugin-settings-section-head">
@@ -232,23 +228,21 @@
           </a>
         </div>
       </div>
-      <RepositoryAccessEditor
-        v-if="isGitHubSettings && githubSettingsTab === 'issues'"
-        :user-access="String(repositoryPublishForm.user_repository_access ?? '')"
-        :group-access="String(repositoryPublishForm.group_repository_access ?? '')"
-        :token-users="String(repositoryPublishForm.user_github_token_users ?? '')"
-        :user-auth-modes="String(repositoryPublishForm.user_github_auth_modes ?? '')"
-        :joined-groups="repositoryGroups"
-        :groups-loading="repositoryGroupsLoading"
-        :groups-warning="repositoryGroupsWarning"
-        @update:allowed-repositories="repositoryPublishForm.allowed_repositories = $event"
-        @update:user-access="repositoryPublishForm.user_repository_access = $event"
-        @update:group-access="repositoryPublishForm.group_repository_access = $event"
-        @update:user-tokens="repositoryPublishForm.user_github_tokens = $event"
-        @update:token-users="repositoryPublishForm.user_github_token_users = $event"
-        @update:user-auth-modes="repositoryPublishForm.user_github_auth_modes = $event"
-      />
-      <RepositoryIssueDraftList v-if="isGitHubSettings && githubSettingsTab === 'issues'" />
+      <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="stack plugin-settings-form github-publish-global-settings">
+        <div v-if="repositoryPublishAuthSpec" class="field">
+          <label for="setting-github_auth_mode">{{ repositoryPublishAuthSpec.label }}</label>
+          <AppSelect id="setting-github_auth_mode" v-model="repositoryPublishForm.github_auth_mode" :options="repositoryPublishAuthSpec.options ?? []" />
+          <span v-if="repositoryPublishAuthSpec.description" class="hint">{{ repositoryPublishAuthSpec.description }}</span>
+        </div>
+        <div v-if="repositoryPublishTimeoutSpec" class="field">
+          <label for="setting-publish-timeout">{{ repositoryPublishTimeoutSpec.label }}</label>
+          <div class="plugin-setting-number">
+            <input id="setting-publish-timeout" v-model.number="repositoryPublishForm.timeout_seconds" class="input" type="number" :min="repositoryPublishTimeoutSpec.min" :max="repositoryPublishTimeoutSpec.max" :step="repositoryPublishTimeoutSpec.step || 1" />
+            <span v-if="repositoryPublishTimeoutSpec.unit" class="plugin-setting-unit">{{ repositoryPublishTimeoutSpec.unit }}</span>
+          </div>
+          <span v-if="repositoryPublishTimeoutSpec.description" class="hint">{{ repositoryPublishTimeoutSpec.description }}</span>
+        </div>
+      </div>
       <div class="stack plugin-settings-form">
         <div v-for="spec in visibleSettingsSpecs" :key="spec.key" class="field">
           <template v-if="spec.type === 'bool'">
@@ -318,10 +312,28 @@
         </div>
       </div>
       <RepositoryWatchManager
-        v-if="isGitHubSettings && githubSettingsTab === 'updates'"
+        v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
       />
+      <div v-if="isGitHubSettings && githubSettingsTab === 'repositories'" class="github-issue-repository-settings">
+        <RepositoryAccessEditor
+          :user-access="String(repositoryPublishForm.user_repository_access ?? '')"
+          :group-access="String(repositoryPublishForm.group_repository_access ?? '')"
+          :token-users="String(repositoryPublishForm.user_github_token_users ?? '')"
+          :user-auth-modes="String(repositoryPublishForm.user_github_auth_modes ?? '')"
+          :joined-groups="repositoryGroups"
+          :groups-loading="repositoryGroupsLoading"
+          :groups-warning="repositoryGroupsWarning"
+          @update:allowed-repositories="repositoryPublishForm.allowed_repositories = $event"
+          @update:user-access="repositoryPublishForm.user_repository_access = $event"
+          @update:group-access="repositoryPublishForm.group_repository_access = $event"
+          @update:user-tokens="repositoryPublishForm.user_github_tokens = $event"
+          @update:token-users="repositoryPublishForm.user_github_token_users = $event"
+          @update:user-auth-modes="repositoryPublishForm.user_github_auth_modes = $event"
+        />
+        <RepositoryIssueDraftList />
+      </div>
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
         :prepare-access="saveSettingsForSubscription"
@@ -419,27 +431,20 @@ const savingSettings = ref(false);
 const repositoryGroups = ref<QQBotGroupSummary[]>([]);
 const repositoryGroupsLoading = ref(false);
 const repositoryGroupsWarning = ref("");
-const githubSettingsTab = ref<"token" | "updates" | "issues">("token");
+const githubSettingsTab = ref<"token" | "repositories">("token");
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
 const repositoryPublishTarget = computed(() => plugins.value.find((plugin) => plugin.manifest.id === repositoryPublishPluginID) ?? null);
 const repositoryPublishSpecs = computed<PluginSettingSpec[]>(() => repositoryPublishTarget.value?.manifest.settings ?? []);
 const isGitHubSettings = computed(() => settingsTarget.value?.manifest.id === repositoryWatchPluginID);
-const repositoryAccessSettingKeys = new Set([
-  "allowed_repositories",
-  "user_repository_access",
-  "group_repository_access",
-  "user_github_tokens",
-  "user_github_token_users",
-  "user_github_auth_modes"
-]);
+const repositoryPublishAuthSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_auth_mode"));
+const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
   if (!isGitHubSettings.value) return settingsSpecs.value;
   if (githubSettingsTab.value === "token") return settingsSpecs.value.filter((spec) => spec.key === "github_token");
-  if (githubSettingsTab.value === "updates") return settingsSpecs.value.filter((spec) => spec.key !== "github_token");
-  return repositoryPublishSpecs.value.filter((spec) => !repositoryAccessSettingKeys.has(spec.key) && spec.key !== "github_token");
+  return settingsSpecs.value.filter((spec) => spec.key !== "github_token");
 });
-const activeSettingsForm = computed(() => isGitHubSettings.value && githubSettingsTab.value === "issues" ? repositoryPublishForm.value : settingsForm.value);
+const activeSettingsForm = computed(() => settingsForm.value);
 const repositoryWatchTokenConfigured = computed(() => {
   const key = "github_token";
   if (clearSecrets.value.includes(key)) return false;
@@ -620,9 +625,6 @@ function showFooter(plugin: PluginState): boolean {
 function secretConfigured(key: string): boolean {
   if (isGitHubSettings.value && key === "github_token") {
     return settingsTarget.value?.secrets_configured?.[key] === true || repositoryPublishTarget.value?.secrets_configured?.[key] === true;
-  }
-  if (isGitHubSettings.value && githubSettingsTab.value === "issues") {
-    return repositoryPublishTarget.value?.secrets_configured?.[key] === true;
   }
   return settingsTarget.value?.secrets_configured?.[key] === true;
 }
