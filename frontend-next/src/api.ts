@@ -15,6 +15,7 @@ export interface LLMConfig {
   api_style?: "responses" | "chat_completions";
   api_key?: string;
   api_key_configured?: boolean;
+  api_key_preview?: string;
   base_url?: string;
   models?: LLMModelInfo[];
   model: string;

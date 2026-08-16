@@ -45,7 +45,7 @@ func NewMessageHistoryPlugin() *MessageHistoryPlugin {
 func (p *MessageHistoryPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          messageHistoryPluginID,
-		Name:        "Diana message history",
+		Name:        "消息历史",
 		Version:     "0.1.0",
 		Description: "缓存最近群聊/私聊消息、引用消息和撤回消息，并把图片与视频关键帧保存到本地历史目录。",
 		Official:    true,

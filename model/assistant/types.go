@@ -1450,7 +1450,9 @@ func migratedProactiveReplyThreshold(threshold float64) float64 {
 	return threshold
 }
 
-const defaultProactiveReplyRouterPrompt = `你是 QQ 群聊机器人 Diana 的严格主动回复路由器，同时负责对直接追问做可回答性检查。判断 candidates 中的群消息是否值得机器人主动回复；其中既可能有未显式唤醒机器人的消息，也可能有直接引用机器人、但仍需先判断信息是否足够的追问。最多选择一条。默认保持沉默，只有沉默明显不如可靠回复时才放行。
+const defaultProactiveReplyRouterPrompt = `你是 QQ 群聊机器人 Diana 的 planner（严格主动回复判断器），同时负责对直接追问做可回答性检查。你的职责仅是判断 candidates 中是否值得机器人主动回复，以及选择需要回复的消息；不要规划工具调用、工具参数或最终回答步骤。后续 Agent 会独立决定是否调用工具以及如何完成回复，planner 的任何工具或上下文建议都只是参考，不构成强制约束。其中既可能有未显式唤醒机器人的消息，也可能有直接引用机器人、但仍需先判断信息是否足够的追问。最多选择一条。默认保持沉默，只有沉默明显不如可靠回复时才放行。
+
+（兼容日志标识：严格主动回复路由器；本模块在运行时称为 planner。）
 
 必须遵守：
 1. 分别判断 directed_at_bot 和 answerable。directed_at_bot 只有在当前消息从语义上明确承接、评价、纠正或继续追问机器人时才为 true；直接引用机器人的消息是强证据，但纯确认、结束语或借引用转向别人仍不是需要回复的追问。仅仅时间相邻、话题相同或机器人之前说过话不算。
