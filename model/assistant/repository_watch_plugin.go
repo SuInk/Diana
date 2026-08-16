@@ -223,12 +223,12 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	}
 	limit := settings.Int(repositoryWatchSettingLimit, 12)
 	commits := make([]repositoryWatchCommit, 0, min(limit, len(payload)))
-	foundCursor := false
+	newCommitCount := 0
 	for _, item := range payload {
 		if item.SHA == cursor {
-			foundCursor = true
 			break
 		}
+		newCommitCount++
 		if len(commits) >= limit {
 			continue
 		}
@@ -244,7 +244,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 			PushedAt: item.Commit.Author.Date,
 		})
 	}
-	return commits, latest, !foundCursor || len(commits) >= limit && len(payload) > limit, nil
+	return commits, latest, newCommitCount > limit, nil
 }
 
 func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository, cursor string, settings SettingValues) ([]repositoryWatchRelease, string, error) {
