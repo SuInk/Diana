@@ -294,7 +294,7 @@ func main() {
 	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path())
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
-	healthHandler := webui.NewHealthHandler()
+	healthHandler := webui.NewHealthHandlerWithVersion(buildVersion)
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
