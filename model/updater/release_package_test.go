@@ -88,6 +88,9 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 	if !status.DownloadReady || status.DownloadedVersion != "v0.5.0" {
 		t.Fatalf("Status() after download = %#v", status)
 	}
+	if status.UpdatePhase != "ready" || status.DownloadPercent != 100 || status.DownloadedBytes != int64(len(archive)) || status.DownloadTotal != int64(len(archive)) {
+		t.Fatalf("Status() download progress = %#v", status)
+	}
 	restartedUpdater, err := NewReleasePackageUpdater(options)
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +115,33 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 	}
 	if plan.TargetVersion != "v0.5.0" || plan.ExecutablePath != executable || !regularFileExists(plan.StagedExecutable) {
 		t.Fatalf("apply plan = %#v", plan)
+	}
+}
+
+func TestReleasePackageUpdaterContinuesLegacyExecutableName(t *testing.T) {
+	installRoot := t.TempDir()
+	legacyExecutable := filepath.Join(installRoot, legacyReleaseBinaryName(runtime.GOOS, runtime.GOARCH))
+	frontend := filepath.Join(installRoot, "frontend-next", "dist")
+	database := filepath.Join(installRoot, "data", "diana.db")
+	writeUpdaterTestFile(t, legacyExecutable, "old-binary", 0o700)
+	writeUpdaterTestFile(t, filepath.Join(frontend, "index.html"), "old-frontend", 0o600)
+	writeUpdaterTestFile(t, database, "database", 0o600)
+
+	u, err := NewReleasePackageUpdater(ReleasePackageOptions{
+		CurrentVersion: "v0.8.13",
+		Executable:     legacyExecutable,
+		FrontendDir:    frontend,
+		DatabasePath:   database,
+		HealthURL:      "http://127.0.0.1:18080/api/health",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !u.Supported() {
+		t.Fatalf("legacy release updater is unsupported: %s", u.unsupportedWhy)
+	}
+	if u.executable != legacyExecutable || u.binaryName != filepath.Base(legacyExecutable) {
+		t.Fatalf("legacy executable=%q binary=%q", u.executable, u.binaryName)
 	}
 }
 
@@ -157,7 +187,39 @@ func TestReleasePackageUpdaterRejectsChecksumMismatch(t *testing.T) {
 	if !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("Install() error = %v, want ErrChecksumMismatch", err)
 	}
+	status, statusErr := u.Status(context.Background())
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.UpdatePhase != "" || status.DownloadPercent != 0 || status.DownloadedBytes != 0 || status.DownloadTotal != 0 {
+		t.Fatalf("failed download retained stale progress: %#v", status)
+	}
 	assertUpdaterTestContent(t, executable, "old")
+}
+
+func TestProgressWriterReportsCumulativeBytes(t *testing.T) {
+	var reports [][2]int64
+	writer := &progressWriter{
+		total: 10,
+		report: func(downloaded, total int64) {
+			reports = append(reports, [2]int64{downloaded, total})
+		},
+	}
+	if _, err := writer.Write([]byte("abcd")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("efghij")); err != nil {
+		t.Fatal(err)
+	}
+	want := [][2]int64{{4, 10}, {10, 10}}
+	if len(reports) != len(want) {
+		t.Fatalf("reports = %#v, want %#v", reports, want)
+	}
+	for index := range want {
+		if reports[index] != want[index] {
+			t.Fatalf("reports = %#v, want %#v", reports, want)
+		}
+	}
 }
 
 func TestExtractReleaseArchiveRejectsTraversal(t *testing.T) {

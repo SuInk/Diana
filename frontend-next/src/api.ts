@@ -223,6 +223,23 @@ export interface RepositoryIssueCreateResult {
   redactions?: number;
 }
 
+export interface RepositoryIssueDraft {
+  id: string;
+  platform?: string;
+  profile_id?: string;
+  group_id: string;
+  repository: string;
+  requester_id: string;
+  requester_name?: string;
+  input: { title?: string; body?: string; labels?: string[] };
+  status: "pending" | "created" | "cancelled";
+  issue_number?: number;
+  issue_url?: string;
+  resolved_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ResolverDependency {
   name: string;
   purpose: string;
@@ -342,6 +359,10 @@ export interface UpdateStatus {
 	download_ready?: boolean;
 	downloaded_version?: string;
 	downloaded_at?: string;
+	update_phase?: "preparing" | "checksum" | "downloading" | "extracting" | "ready";
+	download_percent?: number;
+	downloaded_bytes?: number;
+	download_total?: number;
 }
 
 export interface UpdateResult {
@@ -735,6 +756,10 @@ export function createRepositoryIssue(input: RepositoryIssueCreateInput): Promis
   });
 }
 
+export function listRepositoryIssueDrafts(status = "all"): Promise<{ drafts: RepositoryIssueDraft[] }> {
+  return requestJSON<{ drafts: RepositoryIssueDraft[] }>(`/api/assistant/plugins/repository-publish/drafts?status=${encodeURIComponent(status)}`);
+}
+
 export function listResolverDependencies(): Promise<{ resolver: ResolverDependency[] }> {
   return requestJSON<{ resolver: ResolverDependency[] }>("/api/assistant/plugins/dependencies");
 }
@@ -796,22 +821,6 @@ export function installDownloadedSystemUpdate(): Promise<UpdateResult> {
 	return requestJSON<UpdateResult>("/api/system/update/install", {
 		method: "POST",
 		body: JSON.stringify({ confirmation: "install-restart" })
-	});
-}
-
-export interface UpdatePolicy {
-	auto_download: boolean;
-	auto_install: boolean;
-}
-
-export function getUpdatePolicy(): Promise<UpdatePolicy> {
-	return requestJSON<UpdatePolicy>("/api/system/update/policy");
-}
-
-export function saveUpdatePolicy(policy: UpdatePolicy): Promise<UpdatePolicy> {
-	return requestJSON<UpdatePolicy>("/api/system/update/policy", {
-		method: "PUT",
-		body: JSON.stringify(policy)
 	});
 }
 
@@ -898,7 +907,6 @@ export interface UpdateCheckResponse {
   checksum_available: boolean;
   checksum_url?: string;
   status?: UpdateStatus;
-	policy: UpdatePolicy;
 }
 
 export function checkForUpdate(): Promise<UpdateCheckResponse> {

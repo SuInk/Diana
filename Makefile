@@ -34,7 +34,7 @@ export VITE_BACKEND_TARGET
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev backend frontend frontend-next frontend-legacy deps deps-next fmt audit-public test test-go test-web build build-go build-local-mac install-local-mac-app start-local-mac start-napcat-mac build-web build-web-next build-web-legacy run run-next preview preview-legacy clean docker-build docker-up docker-down
+.PHONY: help dev backend frontend frontend-next deps deps-next fmt audit-public test test-go test-web build build-go build-local-mac install-local-mac-app start-local-mac start-napcat-mac build-web build-web-next run run-next preview clean docker-build docker-up docker-down
 
 help:
 	@$(NODE) -e "console.log(['Diana Makefile','', 'Usage:', '  make dev                         Start Go backend and frontend-next', '  make dev BACKEND_PORT=18081      Start with custom backend port', '  make backend                     Start Go backend only', '  make frontend                    Start frontend-next only', '  make deps                        Install Go and frontend-next dependencies', '  make fmt                         Format Go code', '  make audit-public                Scan tracked files for private data and secrets', '  make test                        Run public audit, Go tests, and frontend-next build', '  make build                       Build frontend-next and backend binary', '  make build-local-mac             Build a stable macOS-signed binary', '  make install-local-mac-app       Install the Diana macOS app', '  make start-local-mac             Start the installed/local macOS build', '  make start-napcat-mac            Start QQ with NapCat on macOS', '  make run                         Build frontend-next, then run backend', '  make clean                       Remove build artifacts', '  make docker-build                Build Docker image', '  make docker-up                   Start Docker Compose stack', '  make docker-down                 Stop Docker Compose stack'].join('\n'))"
@@ -49,10 +49,6 @@ frontend:
 	cd frontend-next && $(NPM) run dev -- --host $(FRONTEND_HOST) --port $(FRONTEND_PORT) --strictPort
 
 frontend-next: frontend
-
-# 旧版界面仅保留显式兼容入口，不参与默认开发、测试或发布。
-frontend-legacy:
-	cd frontend && $(NPM) run dev -- --host $(FRONTEND_HOST) --port $(FRONTEND_PORT) --strictPort
 
 deps:
 	$(GO) mod download
@@ -99,9 +95,6 @@ build-web:
 
 build-web-next: build-web
 
-build-web-legacy:
-	cd frontend && $(NPM) run build
-
 run: build-web
 	FRONTEND_DIST=frontend-next/dist $(GO) run ./cmd/webui
 
@@ -110,11 +103,8 @@ run-next: run
 preview:
 	cd frontend-next && $(NPM) run preview -- --host $(FRONTEND_HOST)
 
-preview-legacy:
-	cd frontend && $(NPM) run preview -- --host $(FRONTEND_HOST)
-
 clean:
-	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend-next/dist','frontend/dist']) fs.rmSync(p,{recursive:true,force:true})"
+	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend-next/dist']) fs.rmSync(p,{recursive:true,force:true})"
 
 docker-build:
 	$(DOCKER) build -t diana:latest .

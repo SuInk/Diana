@@ -531,7 +531,7 @@ func (p *FileParserPlugin) readURLWithClient(ctx context.Context, client *http.C
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("User-Agent", "DianaQQBot/0.1")
+	req.Header.Set("User-Agent", "Diana/0.1")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err

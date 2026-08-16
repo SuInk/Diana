@@ -69,13 +69,15 @@ let plugins: PluginState[] = [
   { manifest: { id: "official.onebot-v11", name: "OneBot v11 协议技能", version: "0.1.0", description: "提供 QQ 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {
     manifest: {
-      id: "official.repository-publish", name: "仓库 Issue 发布", version: "0.3.0", description: "允许 LLM 为主人、白名单用户或指定群聊管理各自获授权的 GitHub 仓库 Issues；支持独立 Token 与 GitHub CLI 认证。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
+      id: "official.repository-publish", name: "仓库 Issue 发布", version: "0.4.0", description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
       settings: [
         { key: "github_auth_mode", label: "GitHub 认证方式", description: "可使用独立 Token 或当前系统的 gh 登录。", type: "select", default: "token", options: [{ value: "token", label: "独立 Token" }, { value: "gh", label: "GitHub CLI (gh)" }, { value: "auto", label: "自动选择" }] },
         { key: "github_token", label: "GitHub Issues Token", description: "在 Token 或自动模式下使用，保存后不回显。", type: "string", default: "", secret: true },
         { key: "allowed_repositories", label: "允许写入的仓库", description: "精确填写 owner/repo，多个仓库用逗号或换行分隔。", type: "string", default: "" },
         { key: "user_repository_access", label: "用户仓库授权", description: "每行填写：用户ID = owner/repo, owner/repo。", type: "string", default: "" },
         { key: "group_repository_access", label: "群聊仓库授权", description: "每行填写：群ID = owner/repo, owner/repo。群内成员只能操作绑定仓库。", type: "string", default: "" },
+        { key: "user_github_tokens", label: "用户 GitHub Token", description: "每个授权用户独立保存。", type: "string", default: "", secret: true },
+        { key: "user_github_token_users", label: "已配置 Token 的用户", description: "由授权编辑器维护。", type: "string", default: "" },
         { key: "timeout_seconds", label: "GitHub 请求超时", type: "number", default: 20, min: 5, max: 60, unit: "秒" }
       ]
     },
@@ -258,6 +260,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/plugins/dependencies") return json({ resolver: dependencies });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
   if (path === "/api/assistant/plugins") return json(plugins);
+  if (path === "/api/assistant/plugins/repository-publish/drafts") {
+    const drafts = [{
+      id: "draft-demo-01", platform: "onebot-v11", profile_id: "bot-main", group_id: "100200301",
+      repository: "SuInk/Diana", requester_id: "100200711", requester_name: "青禾",
+      input: { title: "事件图片改为页面内放大", body: "点击事件中的图片时，在当前页面打开查看器，不再跳转到新标签页。", labels: ["enhancement", "webui"] },
+      status: "pending", created_at: before(16), updated_at: before(16)
+    }];
+    const status = url.searchParams.get("status") ?? "all";
+    return json({ drafts: status === "all" ? drafts : drafts.filter((draft) => draft.status === status) });
+  }
   if (path === "/api/assistant/plugins/repository-publish/issues" && method === "POST") {
     const repository = String(body.repository ?? "SuInk/Diana");
     const title = String(body.title ?? "演示 Issue");
@@ -324,9 +336,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === "/api/system/version") return json({ build_version: "v0.8.6-demo", version_label: "v0.8.6 · Pages 演示", git_available: false, deployment_mode: "release", update_supported: true, head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示" });
   if (path === "/api/system/update" && method === "GET") return json(updateStatus);
-  if (path === "/api/system/update/check") return json({ deployment_mode: "release", current_version: "v0.8.6", latest_version: "v0.8.7", update_available: true, update_supported: true, integrity_mode: "sha256", checksum_available: true, checksum_url: "https://github.com/SuInk/Diana/releases", status: updateStatus, policy: { auto_download: false, auto_install: false } });
-  if (path === "/api/system/update/policy" && method === "GET") return json({ auto_download: false, auto_install: false });
-  if (path === "/api/system/update/policy" && method === "PUT") return json(body);
+  if (path === "/api/system/update/check") return json({ deployment_mode: "release", current_version: "v0.8.6", latest_version: "v0.8.7", update_available: true, update_supported: true, integrity_mode: "sha256", checksum_available: true, checksum_url: "https://github.com/SuInk/Diana/releases", status: updateStatus });
   if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [{ tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }] });
   if (path.startsWith("/api/system/update") && method === "POST") return json({ status: { ...updateStatus, download_ready: true, downloaded_version: "v0.8.7", downloaded_at: new Date().toISOString() }, fetched: true, updated: false, downloaded: true, output: "演示模式：已模拟完成下载与 SHA-256 校验，未写入任何文件。", at: new Date().toISOString() });
 
