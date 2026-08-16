@@ -69,16 +69,24 @@
             <div class="resource-heading">
               <span class="resource-icon"><Cpu :size="17" aria-hidden="true" /></span>
               <div>
-                <div class="resource-label">CPU</div>
-                <div class="resource-value">{{ formatPercent(stats?.server?.cpu_usage_percent) }}</div>
+                <!-- 这是 Diana 的控制台，先回答「它自己吃了多少」；整机占用退到
+                     下面一行做背景信息。进程指标缺失时才退回整机数字。 -->
+                <div class="resource-label">{{ stats?.server?.process_cpu_percent !== undefined ? "CPU · Diana" : "CPU" }}</div>
+                <div class="resource-value">{{ formatPercent(stats?.server?.process_cpu_percent ?? stats?.server?.cpu_usage_percent) }}</div>
               </div>
             </div>
             <div class="resource-track" role="progressbar" aria-label="CPU 占用" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="resourcePercent(stats?.server?.cpu_usage_percent)">
               <span :class="usageClass(stats?.server?.cpu_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.cpu_usage_percent)}%` }" />
+              <!-- 整条是整机占用，实心的一小段是 Diana 在其中的份额 -->
+              <span
+                v-if="stats?.server?.process_cpu_percent !== undefined"
+                class="resource-track-own"
+                :style="{ width: `${resourcePercent(stats.server.process_cpu_percent)}%` }"
+              />
             </div>
             <div class="resource-detail">
-              <span>{{ stats?.server ? `${stats.server.cpu_cores} 核` : "等待采样" }}</span>
-              <span v-if="stats?.server?.process_cpu_percent !== undefined">Diana {{ formatPercent(stats.server.process_cpu_percent) }}</span>
+              <span>{{ stats?.server ? `整机 ${formatPercent(stats.server.cpu_usage_percent)}` : "等待采样" }}</span>
+              <span v-if="stats?.server">{{ stats.server.cpu_cores }} 核</span>
             </div>
           </article>
 
@@ -86,16 +94,23 @@
             <div class="resource-heading">
               <span class="resource-icon"><MemoryStick :size="17" aria-hidden="true" /></span>
               <div>
-                <div class="resource-label">内存</div>
-                <div class="resource-value">{{ formatPercent(stats?.server?.memory_usage_percent) }}</div>
+                <div class="resource-label">{{ stats?.server?.process_memory_bytes !== undefined ? "内存 · Diana" : "内存" }}</div>
+                <div class="resource-value">
+                  {{ stats?.server?.process_memory_bytes !== undefined ? formatBytes(stats.server.process_memory_bytes) : formatPercent(stats?.server?.memory_usage_percent) }}
+                </div>
               </div>
             </div>
             <div class="resource-track" role="progressbar" aria-label="内存占用" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="resourcePercent(stats?.server?.memory_usage_percent)">
               <span :class="usageClass(stats?.server?.memory_usage_percent)" :style="{ width: `${resourcePercent(stats?.server?.memory_usage_percent)}%` }" />
+              <span
+                v-if="stats?.server?.process_memory_bytes !== undefined"
+                class="resource-track-own"
+                :style="{ width: `${processMemoryPercent}%` }"
+              />
             </div>
             <div class="resource-detail">
+              <span>{{ stats?.server ? `整机 ${formatPercent(stats.server.memory_usage_percent)}` : "等待采样" }}</span>
               <span>{{ memoryUsageLabel }}</span>
-              <span v-if="stats?.server?.process_memory_bytes !== undefined">Diana {{ formatBytes(stats.server.process_memory_bytes) }}</span>
             </div>
           </article>
 
@@ -247,6 +262,12 @@ const memoryUsageLabel = computed(() => {
   const server = stats.value?.server;
   if (!server?.memory_total_bytes) return "暂不可用";
   return `${formatBytes(server.memory_used_bytes)} / ${formatBytes(server.memory_total_bytes)}`;
+});
+// Diana 的常驻内存换算成整机占比，用来在进度条上标出自己的那一段。
+const processMemoryPercent = computed(() => {
+  const server = stats.value?.server;
+  if (!server?.memory_total_bytes || server.process_memory_bytes === undefined) return 0;
+  return Math.min(100, (server.process_memory_bytes / server.memory_total_bytes) * 100);
 });
 const storageUsageLabel = computed(() => {
   const server = stats.value?.server;
