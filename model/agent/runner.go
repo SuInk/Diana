@@ -473,7 +473,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	messages = append(messages, llm.Message{
 		Role:    llm.RoleUser,
-		Content: finalizationInstruction(finishReason) + "\n" + claimLedger.prompt(),
+		Content: finalizationInstruction(finishReason, claimLedger.active) + "\n" + claimLedger.prompt(),
 	})
 	modelStartedAt := time.Now()
 	resp, err := r.client.Generate(ctx, llm.GenerateRequest{Messages: messages})
@@ -643,7 +643,7 @@ func toolObservationMessage(tool, output string, success bool, remaining int) st
 	return fmt.Sprintf("工具 %s 执行%s（剩余工具预算 %d）：\n%s\n\n%s", tool, status, max(remaining, 0), output, guidance)
 }
 
-func finalizationInstruction(reason string) string {
+func finalizationInstruction(reason string, claimsActive bool) string {
 	prefix := "当前阶段需要结束工具循环。"
 	switch reason {
 	case "tool_budget_exhausted":
@@ -653,7 +653,11 @@ func finalizationInstruction(reason string) string {
 	case "finalization_reserved":
 		prefix = "剩余请求时间已保留给最终答复。"
 	}
-	return prefix + "现在禁止再调用任何工具；请仅根据已有工具结果直接输出 final JSON：{\"action\":\"final\",\"content\":\"给用户的最终答复\"}。即使信息不完整，也要说明已确认的结果和限制，不要输出 tool 动作。"
+	schema := `{"action":"final","content":"给用户的最终答复"}`
+	if claimsActive {
+		schema = `{"action":"final","content":"给用户的最终答复","claims":[...]}`
+	}
+	return prefix + "现在禁止再调用任何工具；请仅根据已有工具结果直接输出 final JSON：" + schema + "。即使信息不完整，也要说明已确认的结果和限制，不要输出 tool 动作。content 只写面向用户的自然回答，不得暴露 claim ID、证据账本、协议字段、元数据或内部校验过程；用户询问观点是否正确时，应区分可直接判断的逻辑或措辞与需要外部证据的事实，不要因为部分事实未核实而拒绝回答整个问题。"
 }
 
 func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
@@ -699,6 +703,7 @@ func (r *Runner) systemPrompt() string {
 			"- claim 状态只允许 supported、conflicting、insufficient、not_searched。supported/conflicting 必须绑定工具真实返回的 URL，并记录 relation、source_type、published_at、distance 和 strength；标题、摘要、正文冲突时不得标 supported。第一方来源只能支持它直接覆盖的条件，不能外推未覆盖的地点、时间或渠道。",
 			"- 工具返回 no_results、provider_error、timeout、budget_exhausted 或 insufficient_evidence 时，不要立即断言资料不存在。仍有工具预算时，根据已尝试的 query hash、结果中的新实体和未覆盖的信息缺口生成下一轮候选；结果已经有权威来源直接支持答案时立即停止搜索。",
 			"- 最终 final JSON 必须额外携带完整 claims 数组，并按 claim 分别表达已确认、冲突和未确认内容。一个 claim 缺证据不得否定其他 claim；没有检索到只能标 insufficient，除非权威来源提供直接否定证据。不得生成搜索未验证的候选渠道、组织、价格或其他事实。",
+			"- claims、claim ID、证据账本、协议字段和校验过程只用于内部结构化校验，绝不能出现在 content。content 必须像普通对话一样直接回答用户；事实证据不足时只限定对应事实，逻辑关系、措辞是否严谨和基于已知前提的推理仍应正常回答。",
 			"- 最终回答要附来源，并明确区分来源直接支持的事实、多来源推导的结论和仍未验证的假设。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分不同事件日期。",
 			"- 如果 web_search.search 报告没有可用配置，最终回复要说明当前搜索提供商均不可用，不要改用其他方式爬取搜索引擎。",
 		)
