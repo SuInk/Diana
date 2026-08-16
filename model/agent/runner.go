@@ -456,8 +456,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		if nativeToolCall {
+			assistantMessage := llm.Message{
+				Role:            llm.RoleAssistant,
+				Content:         lastText,
+				ToolCalls:       []llm.ToolCall{nativeCall},
+				ResponsesOutput: resp.ResponsesOutput,
+			}
 			messages = append(messages,
-				llm.Message{Role: llm.RoleAssistant, Content: lastText, ToolCalls: []llm.ToolCall{nativeCall}},
+				assistantMessage,
 				llm.Message{Role: llm.RoleTool, Content: observationText, ToolCallID: nativeCall.ID, ToolName: nativeCall.Name, Priority: observation.Priority},
 			)
 			if len(observation.Parts) > 0 {

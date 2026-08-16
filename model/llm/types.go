@@ -5,6 +5,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -77,13 +78,16 @@ const (
 )
 
 type Message struct {
-	Role       Role            `json:"role"`
-	Content    string          `json:"content"`
-	Parts      []ContentPart   `json:"parts,omitempty"`
-	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	ToolName   string          `json:"tool_name,omitempty"`
-	Priority   MessagePriority `json:"-"`
+	Role       Role          `json:"role"`
+	Content    string        `json:"content"`
+	Parts      []ContentPart `json:"parts,omitempty"`
+	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
+	ToolName   string        `json:"tool_name,omitempty"`
+	// ResponsesOutput preserves original Responses API output items, including
+	// reasoning and encrypted continuation state required by the next request.
+	ResponsesOutput []json.RawMessage `json:"-"`
+	Priority        MessagePriority   `json:"-"`
 }
 
 type ToolDefinition struct {
@@ -149,6 +153,8 @@ type GenerateResponse struct {
 	Text      string     `json:"text"`
 	Usage     Usage      `json:"usage,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ResponsesOutput is internal continuation state and must not enter logs.
+	ResponsesOutput []json.RawMessage `json:"-"`
 }
 
 type ImageGenerateRequest struct {
