@@ -89,6 +89,8 @@ export interface QQBotConfig {
   welcome_enabled?: boolean;
   welcome_message?: string;
   system_prompt?: string;
+  response_mode?: "quiet" | "standard" | "active" | "custom";
+  reply_style?: "assistant" | "gentle" | "lively" | "concise";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
   /** 回复行为个性化；后端缺省（字段不存在）等价于开启。 */
@@ -244,6 +246,10 @@ export interface QQBotGroupConfig {
   group_triggers?: string[];
   /** 群专属人设；留空沿用全局系统提示词。 */
   system_prompt?: string;
+  /** 留空时跟随机器人全局回复模式。 */
+  response_mode?: "" | "quiet" | "standard" | "active" | "custom";
+  /** 留空时跟随机器人全局表达风格。 */
+  reply_style?: "" | "assistant" | "gentle" | "lively" | "concise";
   welcome_enabled?: boolean;
   welcome_message?: string;
   recent_context_limit?: number;

@@ -270,6 +270,26 @@
               <h2>触发与回复</h2>
             </div>
             <div class="card-body form-grid">
+              <div class="field">
+                <label for="bot-response-mode">回复模式</label>
+                <select id="bot-response-mode" v-model="form.response_mode" class="input">
+                  <option value="quiet">安静模式</option>
+                  <option value="standard">标准模式</option>
+                  <option value="active">活跃模式</option>
+                  <option value="custom">自定义</option>
+                </select>
+                <span class="hint">控制机器人在没人点名时主动参与群聊的欲望。</span>
+              </div>
+              <div class="field">
+                <label for="bot-reply-style">表达风格</label>
+                <select id="bot-reply-style" v-model="form.reply_style" class="input">
+                  <option value="assistant">助手</option>
+                  <option value="gentle">温柔</option>
+                  <option value="lively">活泼</option>
+                  <option value="concise">简洁</option>
+                </select>
+                <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
+              </div>
               <div class="field wide">
                 <label for="bot-triggers">群聊触发词（逗号分隔）</label>
                 <input id="bot-triggers" v-model="triggersDraft" class="input" placeholder="嘉然,然然,Diana,diana" />
@@ -499,17 +519,17 @@
                 <label for="bot-wake-only-prompt">仅唤醒机器人时</label>
                 <textarea id="bot-wake-only-prompt" v-model="form.prompt_wake_only_text" class="textarea" rows="2"></textarea>
               </div>
-              <div class="field">
+              <div v-if="form.response_mode === 'custom'" class="field">
                 <label for="bot-proactive-chance">主动回复采样率</label>
                 <input id="bot-proactive-chance" v-model.number="form.proactive_reply_chance" class="input" type="number" min="0.05" max="1" step="0.05" />
                 <span class="hint">路由判断放行后实际回复的比例，1 表示全部执行。</span>
               </div>
-              <div class="field">
+              <div v-if="form.response_mode === 'custom'" class="field">
                 <label for="bot-proactive-threshold">主动回复置信度阈值</label>
                 <input id="bot-proactive-threshold" v-model.number="form.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
                 <span class="hint">越高越克制；默认 0.9。</span>
               </div>
-              <div class="field wide">
+              <div v-if="form.response_mode === 'custom'" class="field wide">
                 <label class="switch">
                   <input v-model="form.natural_interjection_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
@@ -1300,6 +1320,8 @@ function setForm(config: QQBotConfig): void {
     debug_mode_enabled: config.debug_mode_enabled ?? false,
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
     natural_interjection_enabled: config.natural_interjection_enabled ?? false,
+    response_mode: config.response_mode ?? "custom",
+    reply_style: config.reply_style ?? "assistant",
     prompt_inject_time: config.prompt_inject_time ?? true,
     prompt_inject_plaintext_rules: config.prompt_inject_plaintext_rules ?? true,
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,
