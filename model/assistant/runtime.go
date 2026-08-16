@@ -5113,10 +5113,10 @@ func (r *Runtime) replyMentionPrompt(event MessageEvent, history []MessageEvent)
 	【群聊真实提及规则】
 	发送层支持真正的 QQ @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。
 	可提及成员候选 JSON：%s
-	1. 发送层固定在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at，也不需要你判断。
-	2. 你只决定是否还要提及其他成员；需要时使用 [CQ:at,qq=成员QQ号]，并根据语义决定它在句首、句中或句尾的位置，不要求固定放在开头。
+	1. 当前发言者是在直接询问你时，发送层会在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at。
+	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，使用 [CQ:at,qq=成员QQ号] 提及实际对象。发送层看到你明确提及其他成员，或识别到当前消息正在承接其他成员时，会取消对触发者的自动引用和 @。
 	3. 可以同时提及多人，也可以把多个额外 CQ at 放在不同位置。不要重复提及同一成员；CQ at 前后按正常中文语句保留必要空格。
-	4. 发送层会原样保留额外 CQ at 的对象和相对位置，并自动对当前发言者去重。
+	4. 发送层会原样保留额外 CQ at 的对象和相对位置，并自动避免把触发者误当成回应对象。
 	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜 QQ 号；不要把 CQ 码放进 Markdown 代码块。
 	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`, string(payload)))
 }
@@ -6691,7 +6691,7 @@ func (r *Runtime) send(ctx context.Context, event MessageEvent, reply string) er
 }
 
 func (r *Runtime) sendWithMessageIDs(ctx context.Context, event MessageEvent, reply string) ([]string, error) {
-	return r.sendWithMessageIDsMode(ctx, event, reply, event.UserID)
+	return r.sendWithMessageIDsMode(ctx, event, reply, event.UserID, true)
 }
 
 func (r *Runtime) sendWithDeliveryEvidence(ctx context.Context, event MessageEvent, reply string) ([]string, bool, error) {
@@ -6707,7 +6707,11 @@ func (r *Runtime) sendWithDeliveryEvidence(ctx context.Context, event MessageEve
 
 func (r *Runtime) sendGeneratedReplyWithMessageIDs(ctx context.Context, event MessageEvent, reply string) ([]string, error) {
 	mentionUserID := generatedReplyFallbackMentionUserID(event, reply)
-	return r.sendWithMessageIDsMode(ctx, event, reply, mentionUserID)
+	replyToCurrent := !generatedReplyTargetsOtherParticipant(event, reply)
+	if !replyToCurrent {
+		mentionUserID = ""
+	}
+	return r.sendWithMessageIDsMode(ctx, event, reply, mentionUserID, replyToCurrent)
 }
 
 func generatedReplyFallbackMentionUserID(event MessageEvent, reply string) string {
@@ -6723,7 +6727,35 @@ func generatedReplyFallbackMentionUserID(event MessageEvent, reply string) strin
 	return currentUserID
 }
 
-func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent, reply string, mentionUserID string) ([]string, error) {
+func generatedReplyTargetsOtherParticipant(event MessageEvent, reply string) bool {
+	if event.Kind != EventKindGroup {
+		return false
+	}
+	currentUserID := strings.TrimSpace(event.UserID)
+	botID := strings.TrimSpace(event.SelfID)
+	for _, userID := range mentionedUserIDs(TextToOneBotSegments(reply)) {
+		userID = strings.TrimSpace(userID)
+		if userID != "" && userID != currentUserID && userID != botID {
+			return true
+		}
+	}
+	if !event.ToMe {
+		return false
+	}
+	for _, userID := range mentionedUserIDs(event.Segments) {
+		userID = strings.TrimSpace(userID)
+		if userID != "" && userID != currentUserID && userID != botID {
+			return true
+		}
+	}
+	if event.Quoted != nil {
+		quotedUserID := strings.TrimSpace(event.Quoted.UserID)
+		return quotedUserID != "" && quotedUserID != currentUserID && quotedUserID != botID
+	}
+	return false
+}
+
+func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent, reply string, mentionUserID string, replyToCurrent bool) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
 	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
@@ -6751,7 +6783,7 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 			msg.GroupID = event.GroupID
 			// QQ 语音必须保持为独立 record 段；普通回复仍让第一条带 reply 元数据。
 			if sentChunks == 0 && !isStandaloneRecordReply(chunk) {
-				if boolValue(cfg.ReplyReferenceEnabled, true) {
+				if replyToCurrent && boolValue(cfg.ReplyReferenceEnabled, true) {
 					msg.ReplyMessageID = event.MessageID
 				}
 				if boolValue(cfg.MentionUserEnabled, true) {

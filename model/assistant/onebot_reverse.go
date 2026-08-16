@@ -130,6 +130,10 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	s.conn = conn
 	now := time.Now()
 	s.status.Connected = true
+	s.status.AccountStatusKnown = false
+	s.status.AccountOnline = false
+	s.status.AccountGood = false
+	s.status.AccountStatusMessage = ""
 	s.status.SelfID = selfID
 	s.status.LastError = ""
 	s.status.ConnectionEpoch++
@@ -281,6 +285,7 @@ func (s *OneBotReverseServer) handleFrame(data []byte) error {
 		if selfID := stringifyID(envelope.SelfID); selfID != "" {
 			s.setStatus(true, selfID, "")
 		}
+		s.updateAccountStatus(envelope.Status)
 		return nil
 	}
 	if envelope.PostType != "message" && envelope.PostType != "notice" {
@@ -313,6 +318,37 @@ func (s *OneBotReverseServer) handleFrame(data []byte) error {
 		}
 	}()
 	return nil
+}
+
+func (s *OneBotReverseServer) updateAccountStatus(raw any) {
+	status, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	online, hasOnline := status["online"].(bool)
+	good, hasGood := status["good"].(bool)
+	if !hasOnline && !hasGood {
+		return
+	}
+	if !hasOnline {
+		online = true
+	}
+	if !hasGood {
+		good = online
+	}
+	message := ""
+	if !online {
+		message = "QQ 账号已离线，请在 NapCat 中检查 QQ 登录状态并重新登录"
+	} else if !good {
+		message = "NapCat 报告 QQ 账号状态异常，请检查账号风控、网络或登录状态"
+	}
+	s.connMu.Lock()
+	s.status.AccountStatusKnown = true
+	s.status.AccountOnline = online
+	s.status.AccountGood = good
+	s.status.AccountStatusMessage = message
+	s.status.UpdatedAt = time.Now()
+	s.connMu.Unlock()
 }
 
 // resolveCall 根据 echo 处理反向 API 调用结果。

@@ -719,8 +719,8 @@
             </div>
             <div v-for="channel in visibleChannels" :key="channel.profile_id || channel.platform" class="cluster" style="justify-content: space-between">
               <span class="muted">{{ channel.name || platformName(channel.platform) }}</span>
-              <span class="badge" :class="channel.connected ? 'ok' : channel.last_error ? 'err' : 'warn'">
-                {{ channel.connected ? `已连接 ${channel.self_id || ""}` : channel.last_error ? "连接失败" : "等待连接" }}
+              <span class="badge" :class="channelOperational(channel) ? 'ok' : channel.connected || channel.last_error ? 'err' : 'warn'" :title="channelStatusHint(channel)">
+                {{ channelStatusLabel(channel) }}
               </span>
             </div>
             <div v-if="status?.nonebot_bridge.enabled" class="cluster" style="justify-content: space-between">
@@ -734,7 +734,7 @@
               <span>{{ status?.active_workers ?? 0 }}</span>
             </div>
             <p v-for="channel in failedChannels" :key="`error-${channel.profile_id || channel.platform}`" class="text-err" style="font-size: 12px">
-              {{ channel.name || platformName(channel.platform) }}：{{ channel.last_error }}
+              {{ channel.name || platformName(channel.platform) }}：{{ channelStatusHint(channel) }}
             </p>
             <p v-if="status?.last_error" class="text-err" style="font-size: 12px">{{ status.last_error }}</p>
           </div>
@@ -808,6 +808,7 @@ import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { pushStatusSnapshot, stream } from "../stream";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
+import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
 
 const form = ref<QQBotConfig | null>(null);
 const profileSet = ref<QQBotConfig | null>(null);
@@ -927,7 +928,7 @@ const visibleChannels = computed(() => {
   if (!profileID) return channelStatuses.value;
   return channelStatuses.value.filter((channel) => channel.profile_id === profileID);
 });
-const failedChannels = computed(() => visibleChannels.value.filter((channel) => Boolean(channel.last_error)));
+const failedChannels = computed(() => visibleChannels.value.filter((channel) => Boolean(channel.last_error) || channelAccountUnhealthy(channel)));
 const platformOptions = computed<AppSelectOption[]>(() =>
   platforms.value.map((platform) => ({
     value: platform.id,
@@ -957,6 +958,7 @@ function platformDescription(id?: string): string {
 function profileState(profile: QQBotConfig): { label: string; tone: string } {
   if (!profile.enabled) return { label: "未启用", tone: "idle" };
   const channel = channelStatuses.value.find((item) => item.profile_id === profile.id);
+  if (channel && channelAccountUnhealthy(channel)) return { label: channelStatusLabel(channel), tone: "error" };
   if (channel?.connected) return { label: "已连接", tone: "online" };
   if (channel?.last_error) return { label: "连接失败", tone: "error" };
   if (status.value?.running) return { label: "连接中", tone: "pending" };
