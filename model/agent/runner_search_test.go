@@ -100,6 +100,28 @@ func TestRunnerRepairsFinalThatClaimsUnsupportedFact(t *testing.T) {
 	}
 }
 
+func TestRunnerAcceptsSearchedURLWhenEvidenceMetadataNeedsNormalization(t *testing.T) {
+	searchResult, _ := json.Marshal(webSearchResult{
+		Status: "ok", StopReason: "sufficient_evidence", Sources: []string{"https://official.example/record"}, Content: "official record",
+	})
+	tool := &recordingSearchTool{output: string(searchResult)}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"web_search.search","input":{"query":"verify statement","claims":[{"id":"c1","statement":"该表述是否成立"}],"claim_ids":["c1"]}}`,
+		`{"action":"final","content":"对，这个表述有官方记录支持。","claims":[{"id":"c1","status":"supported","summary":"官方记录支持该表述","evidence":[{"url":"https://official.example/record","relation":"direct","source_type":"官方记录","distance":"primary","strength":"strong"}]}]}`,
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "这个说法对吗"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "对，这个表述有官方记录支持。" || len(client.requests) != 2 || len(resp.Claims) != 1 || resp.Claims[0].Status != ClaimStatusSupported {
+		t.Fatalf("response=%#v requests=%d", resp, len(client.requests))
+	}
+}
+
 func TestRunnerFinalizesFromClaimLedgerAfterToolBudget(t *testing.T) {
 	searchResult, _ := json.Marshal(webSearchResult{
 		Status: "budget_exhausted", StopReason: "provider_call_budget_exhausted", Sources: []string{"https://evidence.example/item"}, Content: "partial evidence",
@@ -121,7 +143,7 @@ func TestRunnerFinalizesFromClaimLedgerAfterToolBudget(t *testing.T) {
 		t.Fatalf("response=%#v calls=%d", resp, tool.calls)
 	}
 	finalPrompt := client.requests[1].Messages[len(client.requests[1].Messages)-1].Content
-	if !strings.Contains(finalPrompt, "禁止再调用任何工具") || !strings.Contains(finalPrompt, "逐主张证据账本") {
+	if !strings.Contains(finalPrompt, "禁止再调用任何工具") || !strings.Contains(finalPrompt, "逐主张证据账本") || !strings.Contains(finalPrompt, "不得暴露 claim ID") {
 		t.Fatalf("finalization prompt=%q", finalPrompt)
 	}
 }
