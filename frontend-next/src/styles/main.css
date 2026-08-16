@@ -2382,8 +2382,9 @@ code {
   order: 3;
   margin-left: auto;
   /* 第二列固定留给操作按钮：网格列不依赖内容存在，没有「设置」的插件
-     也照样占位。否则权限会滑进按钮的位置，一列权限左右横跳。 */
-  grid-template-columns: auto minmax(68px, auto);
+     也照样占位。否则权限会滑进按钮的位置，一列权限左右横跳。
+     59px 是「设置」按钮的自然宽度；出现更宽的按钮（如卸载）时按内容撑开。 */
+  grid-template-columns: auto minmax(59px, auto);
 }
 
 .plugin-rows .plugin-card-foot {
@@ -2628,6 +2629,41 @@ code {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* 卡片里其它可点的东西都是 11.5px 浅色文字加一个 chevron（权限、运行依赖），
+   实心描边按钮在这套语言里过重，视觉上比开关还抢眼。这里对齐同一套调性，
+   只在 hover 时才浮出按钮的底色和描边。 */
+.plugin-card-foot .btn.small {
+  gap: 5px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.plugin-card-foot .btn.small svg {
+  /* 跟着字号收一档，14px 的图标配 11.5px 的字会显得头重脚轻 */
+  width: 13px;
+  height: 13px;
+}
+
+.plugin-card-foot .btn.small:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.plugin-card-foot .btn.small.danger {
+  color: color-mix(in srgb, var(--err) 75%, var(--muted));
+}
+
+.plugin-card-foot .btn.small.danger:hover:not(:disabled) {
+  color: var(--err);
+  background: var(--err-soft);
+  border-color: color-mix(in srgb, var(--err) 45%, transparent);
 }
 
 .plugin-card-hint {
