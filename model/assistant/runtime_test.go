@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package assistant
 
 import (
@@ -494,6 +497,12 @@ func TestRuntimeShouldHandleKnownPlatformURLWhenResolverEnabled(t *testing.T) {
 	}
 	if !runtime.shouldHandleResolver(MessageEvent{Kind: EventKindPrivate}, "避雷立充 http://xhslink.com/o/20YWuppICeI 留住这段口令") {
 		t.Fatal("private xiaohongshu short link should trigger resolver")
+	}
+	if !runtime.shouldHandleResolver(MessageEvent{Kind: EventKindPrivate}, "打开小红书查看 xhslink.com/o/20YWuppICeI 复制本条信息") {
+		t.Fatal("copied xiaohongshu text without a URL scheme should trigger resolver")
+	}
+	if !runtime.shouldHandleResolver(MessageEvent{Kind: EventKindGroup}, "看看 BV1Gc7K6UEgz 讲了什么") {
+		t.Fatal("standalone bilibili BV id should trigger resolver")
 	}
 	if runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "看这个 https://example.com/video.mp4") {
 		t.Fatal("generic url should not trigger resolver")

@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 import type { QQBotChannelStatus } from "./api";
 
 export function channelAccountUnhealthy(channel: QQBotChannelStatus): boolean {
