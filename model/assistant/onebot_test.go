@@ -345,6 +345,25 @@ func TestReverseServerStatusUpdatesPreserveConnectionEpoch(t *testing.T) {
 	}
 }
 
+func TestReverseServerHeartbeatTracksQQAccountHealth(t *testing.T) {
+	server := NewOneBotReverseServer(OneBotConfig{Endpoint: "/onebot/v11/ws"})
+	if err := server.handleFrame([]byte(`{"post_type":"meta_event","meta_event_type":"heartbeat","self_id":42,"status":{"online":false,"good":false}}`)); err != nil {
+		t.Fatal(err)
+	}
+	status := server.Status()
+	if !status.Connected || !status.AccountStatusKnown || status.AccountOnline || status.AccountGood || !strings.Contains(status.AccountStatusMessage, "重新登录") {
+		t.Fatalf("offline heartbeat status = %#v", status)
+	}
+
+	if err := server.handleFrame([]byte(`{"post_type":"meta_event","meta_event_type":"heartbeat","self_id":42,"status":{"online":true,"good":true}}`)); err != nil {
+		t.Fatal(err)
+	}
+	status = server.Status()
+	if !status.AccountStatusKnown || !status.AccountOnline || !status.AccountGood || status.AccountStatusMessage != "" {
+		t.Fatalf("healthy heartbeat status = %#v", status)
+	}
+}
+
 func TestReverseServerRequiresAccessToken(t *testing.T) {
 	server := NewOneBotReverseServer(OneBotConfig{})
 	request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)

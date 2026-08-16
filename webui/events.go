@@ -149,12 +149,16 @@ func statusSignature(status assistant.RuntimeStatus) string {
 	}
 	var channels strings.Builder
 	for _, channel := range status.Channels {
-		fmt.Fprintf(&channels, "%s:%s:%t:%s:%s:%s|",
+		fmt.Fprintf(&channels, "%s:%s:%t:%t:%t:%t:%s:%s:%s:%s|",
 			channel.ProfileID,
 			channel.Platform,
 			channel.Connected,
+			channel.AccountStatusKnown,
+			channel.AccountOnline,
+			channel.AccountGood,
 			channel.SelfID,
 			channel.LastError,
+			channel.AccountStatusMessage,
 			channel.UpdatedAt.Format(time.RFC3339Nano),
 		)
 	}
