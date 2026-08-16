@@ -67,7 +67,6 @@ let assistantConfig: QQBotConfig = { ...qqProfile, active_profile_id: "bot-qq", 
 let plugins: PluginState[] = [
   { manifest: { id: "official.capability-rag", name: "能力知识库", version: "0.1.0", description: "索引 Diana 核心能力和插件清单，为 Agent 提供相关能力说明。", official: true, built_in: true, permissions: ["知识读取", "智能体工具"] }, installed: true, enabled: true },
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
-  { manifest: { id: "official.message-history", name: "消息历史", version: "0.2.0", description: "检索近期消息、压缩摘要、长期事实和跨群历史。", official: true, built_in: true, permissions: ["消息读取", "长期记忆"] }, installed: true, enabled: true },
   { manifest: { id: "official.link-resolver", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 QQ 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {

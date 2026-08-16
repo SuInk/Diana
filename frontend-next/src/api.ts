@@ -1182,7 +1182,7 @@ export function createRepositoryWatch(input: RepositoryWatchInput): Promise<Assi
   });
 }
 
-export function updateRepositoryWatch(id: string, input: Pick<RepositoryWatchInput, "repository" | "branch" | "interval_seconds" | "watch_commits" | "watch_pull_requests" | "watch_releases" | "watch_stars">): Promise<AssistantTask> {
+export function updateRepositoryWatch(id: string, input: RepositoryWatchInput): Promise<AssistantTask> {
   return requestJSON<AssistantTask>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}`, {
     method: "PUT",
     body: JSON.stringify(input)
