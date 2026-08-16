@@ -353,27 +353,32 @@ func TestOpenAICompatibleResponsesNativeToolCall(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleChatToolCallMessageIncludesEmptyContent(t *testing.T) {
-	messages := openAIChatCompletionMessages([]Message{{
-		Role: RoleAssistant,
-		ToolCalls: []ToolCall{{
-			ID: "call-1", Name: "web_search.search", Arguments: map[string]any{"query": "Diana"},
-		}},
-	}}, nil)
-	if len(messages) != 1 || len(messages[0].ToolCalls) != 1 {
-		t.Fatalf("messages = %#v", messages)
+func TestOpenAIResponsesInputPreservesNativeOutputItems(t *testing.T) {
+	input := openAIResponsesInput([]Message{
+		{
+			Role:      RoleAssistant,
+			ToolCalls: []ToolCall{{ID: "call_1", Name: "web_search.search", Arguments: map[string]any{"query": "Diana"}}},
+			ResponsesOutput: []json.RawMessage{
+				json.RawMessage(`{"type":"reasoning","id":"rs_1","encrypted_content":"opaque-state","summary":[]}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search.search","arguments":"{\"query\":\"Diana\"}","status":"completed"}`),
+			},
+		},
+		{Role: RoleTool, ToolCallID: "call_1", Content: `{"results":[]}`},
+	}, nil)
+	if len(input) != 3 {
+		t.Fatalf("input len=%d, want reasoning + function_call + function_call_output", len(input))
 	}
-	body, err := json.Marshal(messages[0])
-	if err != nil {
-		t.Fatal(err)
+	reasoning, _ := json.Marshal(input[0])
+	functionCall, _ := json.Marshal(input[1])
+	functionOutput, _ := json.Marshal(input[2])
+	if !strings.Contains(string(reasoning), `"type":"reasoning"`) || !strings.Contains(string(reasoning), `"encrypted_content":"opaque-state"`) {
+		t.Fatalf("reasoning item was not preserved: %s", reasoning)
 	}
-	var wire map[string]any
-	if err := json.Unmarshal(body, &wire); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(string(functionCall), `"call_id":"call_1"`) || !strings.Contains(string(functionCall), `"name":"web_search.search"`) {
+		t.Fatalf("function call item was not preserved: %s", functionCall)
 	}
-	content, exists := wire["content"]
-	if !exists || content != "" {
-		t.Fatalf("tool-call assistant message must contain empty content: %s", body)
+	if !strings.Contains(string(functionOutput), `"type":"function_call_output"`) || !strings.Contains(string(functionOutput), `"call_id":"call_1"`) {
+		t.Fatalf("function output item was not appended: %s", functionOutput)
 	}
 }
 

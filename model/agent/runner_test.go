@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -814,7 +815,13 @@ type nativeToolClient struct {
 func (c *nativeToolClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	c.requests = append(c.requests, req)
 	if len(c.requests) == 1 {
-		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "lookup", Arguments: map[string]any{"query": "Diana"}}}}, nil
+		return &llm.GenerateResponse{
+			ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "lookup", Arguments: map[string]any{"query": "Diana"}}},
+			ResponsesOutput: []json.RawMessage{
+				json.RawMessage(`{"type":"reasoning","id":"rs_1","encrypted_content":"opaque-state","summary":[]}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call-1","name":"lookup","arguments":"{\"query\":\"Diana\"}","status":"completed"}`),
+			},
+		}, nil
 	}
 	return &llm.GenerateResponse{Text: `{"action":"final","content":"native done"}`}, nil
 }
@@ -839,5 +846,8 @@ func TestRunnerUsesNativeToolCallsAndReturnsToolResult(t *testing.T) {
 	messages := client.requests[1].Messages
 	if len(messages) < 2 || messages[len(messages)-2].ToolCalls[0].ID != "call-1" || messages[len(messages)-1].Role != llm.RoleTool || messages[len(messages)-1].ToolCallID != "call-1" {
 		t.Fatalf("native tool history=%#v", messages)
+	}
+	if len(messages[len(messages)-2].ResponsesOutput) != 2 {
+		t.Fatalf("native Responses output history=%#v", messages[len(messages)-2].ResponsesOutput)
 	}
 }

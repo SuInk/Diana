@@ -412,10 +412,11 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 	}
 
 	return &GenerateResponse{
-		Provider:  ProviderOpenAICompatible,
-		Model:     string(resp.Model),
-		Text:      text,
-		ToolCalls: toolCalls,
+		Provider:        ProviderOpenAICompatible,
+		Model:           string(resp.Model),
+		Text:            text,
+		ToolCalls:       toolCalls,
+		ResponsesOutput: openAIResponsesOutputItems(resp.Output),
 		Usage: Usage{
 			InputTokens:  resp.Usage.InputTokens,
 			OutputTokens: resp.Usage.OutputTokens,
@@ -449,7 +450,7 @@ type openAIChatToolFunction struct {
 
 type openAIChatCompletionMessage struct {
 	Role       string               `json:"role"`
-	Content    any                  `json:"content"`
+	Content    any                  `json:"content,omitempty"`
 	ToolCalls  []openAIChatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string               `json:"tool_call_id,omitempty"`
 }
@@ -1622,6 +1623,15 @@ func formatOpenAIChatCompletionDiagnostics(diagnostics openAIChatCompletionDiagn
 func openAIResponsesInput(messages []Message, definitions []ToolDefinition) responses.ResponseInputParam {
 	out := make(responses.ResponseInputParam, 0, len(messages))
 	for _, msg := range messages {
+		if msg.Role == RoleAssistant && len(msg.ResponsesOutput) > 0 {
+			for _, raw := range msg.ResponsesOutput {
+				if len(bytes.TrimSpace(raw)) == 0 {
+					continue
+				}
+				out = append(out, param.Override[responses.ResponseInputItemUnionParam](json.RawMessage(raw)))
+			}
+			continue
+		}
 		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
 			for _, call := range msg.ToolCalls {
 				arguments, _ := json.Marshal(call.Arguments)
@@ -1656,6 +1666,18 @@ func openAIResponsesInput(messages []Message, definitions []ToolDefinition) resp
 		}
 	}
 	return out
+}
+
+func openAIResponsesOutputItems(output []responses.ResponseOutputItemUnion) []json.RawMessage {
+	items := make([]json.RawMessage, 0, len(output))
+	for _, item := range output {
+		raw := strings.TrimSpace(item.RawJSON())
+		if raw == "" {
+			continue
+		}
+		items = append(items, json.RawMessage(raw))
+	}
+	return items
 }
 
 func openAIResponseTools(definitions []ToolDefinition) []responses.ToolUnionParam {
