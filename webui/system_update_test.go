@@ -200,6 +200,7 @@ func TestSystemUpdateHandlerReleaseCheckUsesGitHubRelease(t *testing.T) {
 
 	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRemoteNotConfigured})
 	handler.SetBuildVersion("v1.2.3")
+	handler.now = func() time.Time { return time.Date(2026, 8, 16, 12, 34, 56, 0, time.FixedZone("CST", 8*60*60)) }
 	handler.githubAPIBase = github.URL
 	router := systemUpdateTestRouter(handler)
 
@@ -208,7 +209,7 @@ func TestSystemUpdateHandlerReleaseCheckUsesGitHubRelease(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, `"deployment_mode":"release"`) || !strings.Contains(body, `"latest_version":"v1.3.0"`) || !strings.Contains(body, `"update_available":true`) || !strings.Contains(body, `"checksum_available":true`) {
+	if body := rec.Body.String(); !strings.Contains(body, `"deployment_mode":"release"`) || !strings.Contains(body, `"latest_version":"v1.3.0"`) || !strings.Contains(body, `"latest_published_at":"2026-08-03T10:00:00Z"`) || !strings.Contains(body, `"checked_at":"2026-08-16T04:34:56Z"`) || !strings.Contains(body, `"update_available":true`) || !strings.Contains(body, `"checksum_available":true`) {
 		t.Fatalf("body = %s", body)
 	}
 }
