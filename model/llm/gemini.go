@@ -52,7 +52,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 	req = req.withDefaults(c.cfg)
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
 
 	system, messages := splitSystemPrompt(req.Messages)
@@ -76,7 +76,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 
 	resp, err := c.client.Models.GenerateContent(ctx, req.Model, geminiContents(messages, req.Tools), config)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
 
 	text := strings.TrimSpace(resp.Text())
