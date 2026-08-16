@@ -205,6 +205,10 @@ type ChannelStatus struct {
 	Platform                string     `json:"platform,omitempty"`
 	Name                    string     `json:"name,omitempty"`
 	Connected               bool       `json:"connected"`
+	AccountStatusKnown      bool       `json:"account_status_known,omitempty"`
+	AccountOnline           bool       `json:"account_online"`
+	AccountGood             bool       `json:"account_good"`
+	AccountStatusMessage    string     `json:"account_status_message,omitempty"`
 	Endpoint                string     `json:"endpoint"`
 	SelfID                  string     `json:"self_id,omitempty"`
 	LastError               string     `json:"last_error,omitempty"`
