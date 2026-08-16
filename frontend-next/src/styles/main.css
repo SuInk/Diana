@@ -896,6 +896,20 @@ code {
   color: var(--muted);
 }
 
+/* 数字输入框去掉浏览器自带的上下箭头：它按系统配色渲染，在深色主题里是一块
+   跟着走的浅灰，且不跟随字号和圆角。数值都是手输的，单位另有标签。 */
+.input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.input[type="number"]::-webkit-outer-spin-button,
+.input[type="number"]::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 .textarea {
   resize: vertical;
   min-height: 88px;
@@ -2332,9 +2346,10 @@ code {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px 18px;
-  /* 一行一个插件不等于压成一条线：留出可点区域和呼吸感 */
-  min-height: 78px;
-  padding: 16px 18px;
+  /* 描述截断在两行（约 39px），上下各留 12px 就够撑开可点区域，
+     再高就是纯空白，一屏能看到的插件反而变少。 */
+  min-height: 64px;
+  padding: 12px 18px;
 }
 
 /* 让名称和开关直接成为行的 flex 项，才能把开关排到行尾；
@@ -2378,8 +2393,6 @@ code {
   flex: 1 1 0;
   order: 2;
   min-width: 0;
-  /* 放到两行：多数插件的描述能完整显示，不用悬停看 title */
-  -webkit-line-clamp: 2;
   margin: 0;
 }
 
@@ -2387,22 +2400,16 @@ code {
   flex: none;
   order: 3;
   margin-left: auto;
-  /* 横排下改用 flex 按内容排：网格的空列会给没有「设置」的插件留出空位，
-     右侧出现一个洞。代价是权限不再逐行对齐，换来的是紧贴开关。 */
-  display: flex;
-  align-items: center;
-  gap: 16px;
+  /* 第二列固定留给操作按钮：网格列不依赖内容存在，没有「设置」的插件也照样
+     占位，权限就不会滑进按钮的位置、逐行左右横跳。59px 是「设置」按钮的自然
+     宽度，出现更宽的按钮（如卸载）时按内容撑开。 */
+  grid-template-columns: auto minmax(59px, auto);
 }
 
 .plugin-rows .plugin-card-foot {
   flex: none;
   padding-top: 0;
   border-top: 0;
-}
-
-/* 权限展开与运行依赖体积大，独占下一行，只撑高自己这条 */
-.plugin-rows .plugin-perms[open] {
-  margin-left: 0;
 }
 
 @media (max-width: 860px) {
@@ -2437,8 +2444,8 @@ code {
   .plugin-rows .plugin-card-bottom {
     width: 100%;
     margin-left: 0;
-    /* 竖排下这一行独占整宽，权限留在左端、按钮推到右端 */
-    justify-content: space-between;
+    /* 竖排下这一行独占整宽，按钮靠 1fr 推到右端，不需要预留列 */
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
 
@@ -2450,6 +2457,23 @@ code {
 .plugins-view-header .view-actions {
   align-items: center;
   flex-wrap: nowrap;
+}
+
+/* 工具条上四个控件原本是 34 / 35 / 39 / 39 三种高度，并排时明显不齐。
+   统一到 36px，各自靠内边距把内容居中。 */
+.plugins-view-header .plugin-search,
+.plugins-view-header .plugin-search .input,
+.plugins-view-header .segmented,
+.plugins-view-header .view-actions > .btn {
+  height: 36px;
+}
+
+.plugins-view-header .segmented {
+  align-items: center;
+}
+
+.plugins-view-header .view-actions > .btn {
+  padding-block: 0;
 }
 
 .plugins-view-header .plugin-search {
@@ -2501,16 +2525,22 @@ code {
   }
 }
 
-.plugin-filter-count {
-  margin-left: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
+/* 与事件页的结果筛选计数保持一致：等宽字体，选中时提亮而不是调透明度 */
+.plugin-status-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
 }
 
-.segmented button.active .plugin-filter-count {
-  color: inherit;
-  opacity: 0.7;
+.plugin-filter-count {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.plugin-status-filter button.active .plugin-filter-count {
+  color: var(--text-secondary);
 }
 
 .plugins-page-grid {
@@ -2571,44 +2601,30 @@ code {
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--text-secondary);
-  /* 描述长度 41~82 字不等，截断到三行让同一行卡片的内部节奏一致；
-     完整文案挂在 title 上。 */
+  /* 描述长度 41~82 字不等，统一截断到两行：三行时短描述占两行、长描述占三行，
+     瀑布流里相邻卡片就会差出一整行的高度。完整文案挂在 title 上。 */
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-/* 权限折叠 */
-.plugin-perms > summary {
+/* 卡片上的权限入口：点开是弹窗，和运行依赖同一套 */
+.plugin-perms-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  list-style: none;
-  cursor: pointer;
-  font-size: 11.5px;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
   user-select: none;
 }
 
-.plugin-perms > summary::-webkit-details-marker {
-  display: none;
-}
-
-.plugin-perms > summary:hover {
+.plugin-perms-head:hover {
   color: var(--text-secondary);
-}
-
-.plugin-perms-chevron {
-  transition: transform 0.15s ease;
-}
-
-.plugin-perms[open] .plugin-perms-chevron {
-  transform: rotate(180deg);
-}
-
-.plugin-perms .plugin-card-perms {
-  margin-top: 8px;
 }
 
 .plugin-card-bottom {
@@ -2625,10 +2641,6 @@ code {
   flex-wrap: wrap;
   gap: 8px 16px;
   min-width: 0;
-}
-
-.plugin-card-meta > details[open] {
-  flex: 1 0 100%;
 }
 
 .plugin-card-foot {
@@ -2782,6 +2794,51 @@ code {
 .github-settings-tabs > button {
   flex: 1;
   min-height: 36px;
+}
+
+.github-publish-global-settings {
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.repository-records-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.repository-records-hint > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.repository-records-hint strong {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+@media (max-width: 640px) {
+  .repository-records-hint {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+.github-issue-repository-settings {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
 }
 
 .plugin-settings-form {
@@ -3781,6 +3838,10 @@ code {
 
 .task-list-card .card-header {
   min-height: 52px;
+}
+
+.issue-drafts-card .card-body {
+  padding-top: 0;
 }
 
 .task-list {
