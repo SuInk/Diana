@@ -310,6 +310,51 @@ func TestSystemUpdateHandlerDownloadsThenInstallsCompleteReleasePackage(t *testi
 	}
 }
 
+func TestSystemUpdateHandlerRollsBackCompleteReleasePackageWithinRecentFive(t *testing.T) {
+	const assetName = "diana-webui-darwin-arm64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/repos/SuInk/Diana/releases") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`[
+            {"tag_name":"v1.3.0","published_at":"2026-08-09T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
+            {"tag_name":"v1.2.0","published_at":"2026-08-08T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
+            {"tag_name":"v1.1.0","published_at":"2026-08-07T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
+            {"tag_name":"v1.0.0","published_at":"2026-08-06T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
+            {"tag_name":"v0.9.0","published_at":"2026-08-05T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
+            {"tag_name":"v0.8.0","published_at":"2026-08-04T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
+            {"tag_name":"v0.7.0","published_at":"2026-08-03T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]}
+        ]`))
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		status:   updater.Status{Root: "/Applications/Diana", NearestTag: "v1.3.0", RunningCommit: "v1.3.0", ApplySupported: true},
+		expected: assetName,
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.githubAPIBase = github.URL
+	router := systemUpdateTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":"v1.0.0","confirmation":"rollback-version"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !releaseUpdater.installed || releaseUpdater.release.Tag != "v1.0.0" {
+		t.Fatalf("rollback status = %d, body = %s, updater = %#v", rec.Code, rec.Body.String(), releaseUpdater)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":"v0.7.0","confirmation":"rollback-version"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "最近 5 个稳定版本") {
+		t.Fatalf("old rollback status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSystemUpdateHandlerJoinsConcurrentReleaseDownload(t *testing.T) {
 	const assetName = "diana-webui-darwin-arm64.tar.gz"
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
