@@ -67,9 +67,9 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	tool := newDianaImageTool(runtime, event, policy)
 
 	raw, err := tool.Run(context.Background(), map[string]any{
-		"operation": "generate",
-		"prompt":    "官方检索结果确认主色为靛蓝 #4B0082 与金色 #FFD700；据此创作一张平面海报。",
-		"caption":   "按检索结果画好了。",
+		"prompt":  "官方检索结果确认主色为靛蓝 #4B0082 与金色 #FFD700；据此创作一张平面海报。",
+		"caption": "按检索结果画好了。",
+		"size":    "1024x1024",
 	})
 	if err != nil {
 		t.Fatal(err)

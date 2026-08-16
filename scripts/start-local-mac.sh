@@ -94,9 +94,7 @@ if [[ -n "${DIANA_APP_EXECUTABLE:-}" ]]; then
 fi
 executables+=(
 	"$HOME/Applications/Diana.app/Contents/MacOS/diana-webui"
-	"$HOME/Applications/Diana QQ Bot.app/Contents/MacOS/diana-qq-bot-webui"
 	"$ROOT/dist/diana-webui"
-	"$ROOT/dist/diana-qq-bot-webui"
 )
 for executable in "${executables[@]}"; do
 	if [[ -x "$executable" ]]; then

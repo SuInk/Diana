@@ -70,7 +70,7 @@ func (p *RepositoryPublishPlugin) CreateIssueFromWeb(ctx context.Context, settin
 			MessageID: repositoryIssueWebMessageID(),
 		},
 	}
-	if code, message := tool.validateWriteAccess(repository); code != "" {
+	if code, message := tool.validateWriteAccess(repository, true); code != "" {
 		result := repositoryIssueResult{Operation: "create", Repository: repository}.fail(code, message)
 		return repositoryIssueCreateResultFromInternal(result)
 	}

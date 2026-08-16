@@ -259,13 +259,16 @@
       </div>
       <RepositoryAccessEditor
         v-if="settingsTarget.manifest.id === repositoryPublishPluginID"
-        :allowed-repositories="String(settingsForm.allowed_repositories ?? '')"
         :user-access="String(settingsForm.user_repository_access ?? '')"
         :group-access="String(settingsForm.group_repository_access ?? '')"
+        :token-users="String(settingsForm.user_github_token_users ?? '')"
         @update:allowed-repositories="settingsForm.allowed_repositories = $event"
         @update:user-access="settingsForm.user_repository_access = $event"
         @update:group-access="settingsForm.group_repository_access = $event"
+        @update:user-tokens="settingsForm.user_github_tokens = $event"
+        @update:token-users="settingsForm.user_github_token_users = $event"
       />
+      <RepositoryIssueDraftList v-if="settingsTarget.manifest.id === repositoryPublishPluginID" />
       <div class="stack plugin-settings-form">
         <div v-for="spec in visibleSettingsSpecs" :key="spec.key" class="field">
           <template v-if="spec.type === 'bool'">
@@ -334,10 +337,6 @@
           </template>
         </div>
       </div>
-      <RepositoryIssueCreator
-        v-if="settingsTarget.manifest.id === repositoryPublishPluginID"
-        :prepare-access="saveSettingsForSubscription"
-      />
       <RepositoryWatchManager
         v-if="settingsTarget.manifest.id === repositoryWatchPluginID"
         :prepare-access="saveSettingsForSubscription"
@@ -379,7 +378,7 @@ import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryAccessEditor from "../components/RepositoryAccessEditor.vue";
-import RepositoryIssueCreator from "../components/RepositoryIssueCreator.vue";
+import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import { navigate, viewQuery } from "../router";
@@ -404,7 +403,13 @@ const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
-const repositoryAccessSettingKeys = new Set(["allowed_repositories", "user_repository_access", "group_repository_access"]);
+const repositoryAccessSettingKeys = new Set([
+  "allowed_repositories",
+  "user_repository_access",
+  "group_repository_access",
+  "user_github_tokens",
+  "user_github_token_users"
+]);
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
   if (settingsTarget.value?.manifest.id !== repositoryPublishPluginID) return settingsSpecs.value;
   return settingsSpecs.value.filter((spec) => !repositoryAccessSettingKeys.has(spec.key));

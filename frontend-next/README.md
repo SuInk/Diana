@@ -1,6 +1,6 @@
 # frontend-next — 新版 WebUI
 
-Diana 控制台的组件化重构版本，与 `frontend/` 并存，可随时切换。
+Diana 当前唯一受支持的 Vue + TypeScript 控制台。
 
 ## 相比旧版的变化
 
@@ -40,7 +40,7 @@ FRONTEND_DIST=frontend-next/dist ./dist/diana-webui
 make run-next
 ```
 
-不设置 `FRONTEND_DIST` 时后端仍伺服旧版 `frontend/dist`，两版互不影响。
+不设置 `FRONTEND_DIST` 时，后端会自动使用 `frontend-next/dist`。
 
 ## 依赖的新后端接口
 

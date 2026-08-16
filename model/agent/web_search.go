@@ -601,7 +601,7 @@ func (t *WebSearchTool) runExaMCP(ctx context.Context, provider webSearchProvide
 			"protocolVersion": mcpProtocolVersion,
 			"capabilities":    map[string]any{},
 			"clientInfo": map[string]any{
-				"name":    "diana-qq-bot",
+				"name":    "diana",
 				"version": "0.1.0",
 			},
 		},

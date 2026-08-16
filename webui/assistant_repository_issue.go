@@ -3,11 +3,30 @@ package webui
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/SuInk/diana/model/assistant"
 
 	"github.com/gin-gonic/gin"
 )
+
+func (h *QQBotHandler) listRepositoryIssueDrafts(c *gin.Context) {
+	if h.sqlite == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_issue.drafts", fmt.Errorf("草稿存储不可用"), "", nil)
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(c.DefaultQuery("status", "all")))
+	if status != "all" && status != "pending" && status != "created" && status != "cancelled" {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_issue.drafts", fmt.Errorf("无效的草稿状态"), status, nil)
+		return
+	}
+	items, err := h.sqlite.ListRepositoryIssueDrafts(c.Request.Context(), "", status)
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.repository_issue.drafts", err, status, nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"drafts": items})
+}
 
 func (h *QQBotHandler) createRepositoryIssue(c *gin.Context) {
 	var payload assistant.RepositoryIssueCreateInput

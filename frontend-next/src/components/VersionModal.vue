@@ -35,23 +35,11 @@
         </div>
 		<p v-if="checkError" style="margin: 0; color: var(--err); font-size: 12.5px">{{ checkError }}</p>
       </div>
-
-		<section v-if="releaseSelfUpdate" class="update-policy">
-			<div class="stack" style="gap: 3px">
-				<strong>自动更新</strong>
-				<span class="muted" style="font-size: 12.5px">更新包可自动下载；安装和重启默认需要手动确认。</span>
-			</div>
-			<label class="switch">
-				<input v-model="policy.auto_download" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('download')" />
-				<span class="track"></span>
-				<span class="switch-label">自动下载</span>
-			</label>
-			<label class="switch">
-				<input v-model="policy.auto_install" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('install')" />
-				<span class="track"></span>
-				<span class="switch-label">自动安装并重启</span>
-			</label>
-		</section>
+      <div v-if="updating && releaseSelfUpdate && !status?.download_ready" class="release-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="downloadPercent">
+        <div class="release-progress-label"><span>{{ downloadPhaseLabel }}</span><strong class="mono">{{ downloadPercent }}%</strong></div>
+        <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
+      </div>
+      <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
 
       <div class="cluster" style="gap: 8px">
         <button class="btn" type="button" :disabled="checking || updating" @click="check()">
@@ -239,13 +227,11 @@ import {
 	installDownloadedSystemUpdate,
   pullFromGitHub,
   rollbackSystem,
-	saveUpdatePolicy,
-  type ChangelogEntry,
+	type ChangelogEntry,
   type ReleaseEntry,
   type SystemVersion,
   type UpdateCheckResponse,
-	type UpdatePolicy,
-  type UpdateStatus
+	type UpdateStatus
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 import { askConfirm } from "../confirm";
@@ -264,14 +250,17 @@ const changelogError = ref("");
 const checkError = ref("");
 const checking = ref(false);
 const updating = ref(false);
-const savingPolicy = ref(false);
-const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false });
 const updatedHint = ref("");
+const operationError = ref("");
 const forceConfirming = ref(false);
 const rollbackTarget = ref<ReleaseEntry | null>(null);
 
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 const releaseSelfUpdate = computed(() => deploymentMode.value === "release" && version.value?.update_supported === true);
+const downloadPercent = computed(() => Math.max(0, Math.min(100, Math.round(status.value?.download_percent ?? 0))));
+const downloadPhaseLabel = computed(() => status.value?.update_phase === "extracting"
+	? "准备 → 下载 100% → 校验 → 解压"
+	: `准备 → 下载 ${downloadPercent.value}%`);
 
 const versionLabel = computed(() => {
   const label = version.value?.version_label;
@@ -343,7 +332,6 @@ async function check(notify = true): Promise<void> {
   try {
     checkResult.value = await checkForUpdate();
     status.value = checkResult.value.status ?? status.value;
-		policy.value = checkResult.value.policy ?? policy.value;
     emit("checked", checkResult.value.update_available);
     if (notify) {
       if (checkResult.value.update_available) {
@@ -361,32 +349,24 @@ async function check(notify = true): Promise<void> {
   }
 }
 
-async function persistPolicy(changed: "download" | "install"): Promise<void> {
-	if (changed === "install" && policy.value.auto_install) policy.value.auto_download = true;
-	if (changed === "download" && !policy.value.auto_download) policy.value.auto_install = false;
-	savingPolicy.value = true;
-	try {
-		policy.value = await saveUpdatePolicy(policy.value);
-		toastSuccess("自动更新设置已保存");
-	} catch (error) {
-		toastError(error instanceof Error ? error.message : "保存自动更新设置失败");
-		await check(false);
-	} finally {
-		savingPolicy.value = false;
-	}
-}
-
 async function downloadUpdate(): Promise<void> {
 	updating.value = true;
+	operationError.value = "";
+	const progressTimer = window.setInterval(() => {
+		void getUpdateStatus().then((value) => { status.value = value; }).catch(() => undefined);
+	}, 500);
 	try {
 		const result = await downloadSystemUpdate();
 		status.value = result.status;
 		updatedHint.value = result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待安装` : "已是最新稳定版本";
 		toastSuccess(updatedHint.value);
 	} catch (error) {
-		toastError(error instanceof Error ? error.message : "下载更新失败");
+		operationError.value = error instanceof Error ? error.message : "下载更新失败";
+		toastError(operationError.value);
 	} finally {
+		window.clearInterval(progressTimer);
 		updating.value = false;
+		await getUpdateStatus().then((value) => { status.value = value; }).catch(() => undefined);
 	}
 }
 
@@ -493,22 +473,11 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.update-policy {
-	display: grid;
-	grid-template-columns: minmax(220px, 1fr) auto auto;
-	align-items: center;
-	gap: 14px;
-	padding: 11px 12px;
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	background: var(--surface-2);
-}
-
-@media (max-width: 720px) {
-	.update-policy {
-		grid-template-columns: 1fr;
-	}
-}
+.release-progress { display: grid; gap: 7px; }
+.release-progress-label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+.release-progress-track { height: 7px; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); }
+.release-progress-track span { display: block; height: 100%; min-width: 2px; background: var(--accent); transition: width 180ms ease; }
+.operation-error { margin: 0; padding: 10px; white-space: pre-wrap; color: var(--err); border: 1px solid var(--err); background: var(--err-soft); font-size: 11.5px; }
 
 .force-update-confirm,
 .rollback-confirm {
