@@ -181,8 +181,20 @@
       :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID"
       @close="closeSettings"
     >
-      <div v-if="settingsTarget.manifest.id === resolverPluginID" class="plugin-settings-section-head">
-        <h3>运行依赖</h3>
+      <!-- 依赖多数时候是齐的，默认折叠把弹窗顶部让给真正要改的设置项；
+           缺依赖时自动展开，那才是需要立刻处理的状态。 -->
+      <details
+        v-if="settingsTarget.manifest.id === resolverPluginID"
+        class="plugin-settings-section-head plugin-settings-collapsible"
+        :open="missingDependencyCount > 0"
+      >
+        <summary>
+          <h3>运行依赖</h3>
+          <span v-if="dependencies.length" class="badge" :class="missingDependencyCount > 0 ? 'warn' : 'accent'">
+            {{ readyDependencyCount }}/{{ dependencies.length }}
+          </span>
+          <ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" />
+        </summary>
         <p>缺少这些命令时，对应平台的解析会失败；可直接在这里安装。</p>
         <PluginDependencyList
           :dependencies="dependencies"
@@ -190,7 +202,7 @@
           :busy="busyDependency"
           @install="installDependency"
         />
-      </div>
+      </details>
 
       <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'token'" :class="{ active: githubSettingsTab === 'token' }" @click="githubSettingsTab = 'token'">Token</button>
