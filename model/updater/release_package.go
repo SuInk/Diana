@@ -53,15 +53,6 @@ type ReleasePackage struct {
 	Checksums ReleaseAsset
 }
 
-type UpdatePolicy struct {
-	AutoDownload bool `json:"auto_download"`
-	AutoInstall  bool `json:"auto_install"`
-}
-
-func DefaultUpdatePolicy() UpdatePolicy {
-	return UpdatePolicy{AutoDownload: true, AutoInstall: false}
-}
-
 type pendingReleaseUpdate struct {
 	Schema        int       `json:"schema"`
 	TargetVersion string    `json:"target_version"`
@@ -136,7 +127,15 @@ func ExpectedReleaseAssetName(goos, goarch string) string {
 	return base + ".tar.gz"
 }
 
-func expectedReleaseBinaryName(goos, goarch string) string {
+func expectedReleaseBinaryName(goos, _ string) string {
+	name := "diana-webui"
+	if goos == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
+func legacyReleaseBinaryName(goos, goarch string) string {
 	name := "diana-webui-" + strings.TrimSpace(goos) + "-" + strings.TrimSpace(goarch)
 	if goos == "windows" {
 		name += ".exe"
@@ -170,6 +169,11 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 		return nil, err
 	}
 	installRoot := filepath.Dir(absExecutable)
+	binaryName := expectedReleaseBinaryName(goos, goarch)
+	legacyBinaryName := legacyReleaseBinaryName(goos, goarch)
+	if filepath.Base(absExecutable) == legacyBinaryName {
+		binaryName = legacyBinaryName
+	}
 	frontendDir := strings.TrimSpace(options.FrontendDir)
 	if frontendDir == "" {
 		frontendDir = filepath.Join(installRoot, "frontend-next", "dist")
@@ -214,7 +218,7 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 		arguments:      append([]string(nil), options.Arguments...),
 		installRoot:    installRoot,
 		assetName:      ExpectedReleaseAssetName(goos, goarch),
-		binaryName:     expectedReleaseBinaryName(goos, goarch),
+		binaryName:     binaryName,
 		httpClient:     client,
 		shutdown:       options.Shutdown,
 		startHelper:    starter,

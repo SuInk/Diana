@@ -542,9 +542,9 @@ func voiceTTSOutputDir() string {
 		}
 	}
 	if cacheDir, err := os.UserCacheDir(); err == nil && cacheDir != "" {
-		return filepath.Join(cacheDir, "diana-qq-bot", "tts-cache")
+		return filepath.Join(cacheDir, "diana", "tts-cache")
 	}
-	return filepath.Join(os.TempDir(), "diana-qq-bot-tts")
+	return filepath.Join(os.TempDir(), "diana-tts")
 }
 
 func sanitizeVoiceTTSText(text string, maxRunes int) string {

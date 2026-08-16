@@ -668,7 +668,7 @@ func (r *Runner) systemPrompt() string {
 	}
 	rules = append(rules, "- 已经足够回答时必须使用 final。")
 	sections := []string{
-		"你是 Diana QQ Bot 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
+		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
 		"你只能输出一个 JSON 对象，不要输出 Markdown、解释性前缀或额外文本。",
 		"可用动作：\n1. 调用工具：{\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}\n2. 最终回复：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\",\"claims\":[...]}（执行联网研究时 claims 必填）\n3. 兼容 Responses API function call：{\"type\":\"function_call\",\"name\":\"工具名\",\"arguments\":{...}}",
 		"可用工具：\n" + r.registry.Descriptions(),

@@ -113,9 +113,6 @@ func main() {
 	systemHandler := webui.NewSystemUpdateHandler(systemUpdater)
 	systemHandler.SetLogStore(sqliteStore)
 	systemHandler.SetBuildVersion(buildVersion)
-	if err := systemHandler.SetUpdatePolicyStore(ctx, sqliteStore); err != nil {
-		log.Fatal(err)
-	}
 	if err := systemHandler.SetReleaseCacheStore(ctx, sqliteStore); err != nil {
 		log.Printf("load system release cache: %v", err)
 	}
@@ -132,7 +129,6 @@ func main() {
 		log.Fatal(err)
 	}
 	systemHandler.SetReleasePackageUpdater(releaseUpdater)
-	systemHandler.StartAutoUpdate(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
 	plugins := assistant.NewDefaultPluginManager()
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
@@ -219,6 +215,7 @@ func main() {
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
+	botRuntime.SetRepositoryIssueDraftStore(sqliteStore)
 	if err := botRuntime.SetReplySuppressionStore(ctx, sqliteStore); err != nil {
 		log.Printf("assistant reply suppression load failed: %v", err)
 	}

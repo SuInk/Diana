@@ -145,15 +145,15 @@ http://127.0.0.1:18080
 Apple Silicon:
 
 ```sh
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui-darwin-arm64 ./cmd/webui
-./dist/diana-webui-darwin-arm64
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+./dist/diana-webui
 ```
 
 Intel Mac:
 
 ```sh
-GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui-darwin-amd64 ./cmd/webui
-./dist/diana-webui-darwin-amd64
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+./dist/diana-webui
 ```
 
 You can also download the `darwin-arm64` or `darwin-amd64` binary from GitHub Releases. Standalone binaries do not include frontend assets; regular users should download the matching complete release package.
@@ -163,15 +163,15 @@ You can also download the `darwin-arm64` or `darwin-amd64` binary from GitHub Re
 amd64:
 
 ```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui-linux-amd64 ./cmd/webui
-./dist/diana-webui-linux-amd64
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+./dist/diana-webui
 ```
 
 arm64:
 
 ```sh
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui-linux-arm64 ./cmd/webui
-./dist/diana-webui-linux-arm64
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+./dist/diana-webui
 ```
 
 For background operation, use the systemd example below.
@@ -184,8 +184,8 @@ PowerShell:
 $env:GOOS="windows"
 $env:GOARCH="amd64"
 $env:CGO_ENABLED="0"
-go build -o dist\diana-webui-windows-amd64.exe .\cmd\webui
-.\dist\diana-webui-windows-amd64.exe
+go build -o dist\diana-webui.exe .\cmd\webui
+.\dist\diana-webui.exe
 ```
 
 You can also download the `windows-amd64.exe` binary from GitHub Releases. Standalone binaries do not include frontend assets; regular users should download the matching complete release package.
