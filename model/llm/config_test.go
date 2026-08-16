@@ -212,6 +212,39 @@ func TestGenerateRequestDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateGenerateRequestAcceptsNativeToolCallWithoutText(t *testing.T) {
+	req := GenerateRequest{
+		Model: "test-model",
+		Messages: []Message{
+			{Role: RoleUser, Content: "有哪些能力"},
+			{
+				Role: RoleAssistant,
+				ToolCalls: []ToolCall{{
+					ID:        "call-1",
+					Name:      "diana.capabilities",
+					Arguments: map[string]any{"query": "群聊 Agent 有哪些能力"},
+				}},
+			},
+			{Role: RoleTool, ToolCallID: "call-1", ToolName: "diana.capabilities", Content: `{"results":[]}`},
+		},
+	}
+
+	if err := validateGenerateRequest(req); err != nil {
+		t.Fatalf("validateGenerateRequest() error = %v", err)
+	}
+}
+
+func TestValidateGenerateRequestLeavesEmptyContentToProvider(t *testing.T) {
+	req := GenerateRequest{
+		Model:    "test-model",
+		Messages: []Message{{Role: RoleAssistant}},
+	}
+
+	if err := validateGenerateRequest(req); err != nil {
+		t.Fatalf("validateGenerateRequest() error = %v", err)
+	}
+}
+
 // TestProviderConfigImageModelWithDefault 验证对应功能场景。
 func TestProviderConfigImageModelWithDefault(t *testing.T) {
 	tests := []struct {

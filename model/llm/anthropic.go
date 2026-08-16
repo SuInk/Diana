@@ -55,7 +55,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 	}
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
 
 	system, messages := splitSystemPrompt(req.Messages)
@@ -78,7 +78,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 
 	resp, err := c.client.Messages.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
 
 	text := strings.TrimSpace(anthropicText(resp.Content))
