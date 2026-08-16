@@ -49,7 +49,7 @@ func NewCapabilityKnowledgePlugin() *CapabilityKnowledgePlugin {
 func (p *CapabilityKnowledgePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          capabilityKnowledgePluginID,
-		Name:        "Diana 能力知识库 RAG",
+		Name:        "能力知识库",
 		Version:     "0.1.0",
 		Description: "索引 Diana 核心能力和实时插件清单，通过本地稀疏检索向 Agent 提供与问题相关的能力说明。",
 		Official:    true,
