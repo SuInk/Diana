@@ -2678,40 +2678,29 @@ code {
   color: var(--muted);
 }
 
-.plugin-dependencies {
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
+/* 卡片上的依赖入口：和「N 项权限」同一套调性，点开是弹窗而不是行内展开 */
 .plugin-dependencies-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  list-style: none;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
+  gap: 6px;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
   cursor: pointer;
   user-select: none;
 }
 
-.plugin-dependencies-head::-webkit-details-marker {
-  display: none;
-}
-
 .plugin-dependencies-head:hover {
-  color: var(--text);
+  color: var(--text-secondary);
 }
 
-.plugin-dependencies-chevron {
+.plugin-dependencies-hint {
+  margin: 0 0 4px;
   color: var(--muted);
-  transition: transform 0.15s ease;
-}
-
-.plugin-dependencies[open] .plugin-dependencies-chevron {
-  transform: rotate(180deg);
+  font-size: 12px;
 }
 
 .plugin-dependencies-body {
@@ -2760,20 +2749,6 @@ code {
   font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
-}
-
-/* 卡片里的依赖入口和权限共用同一条底栏，不使用弹窗区块的分隔线与高度。 */
-.plugin-card-dependencies {
-  padding-top: 0;
-  border-top: 0;
-}
-
-.plugin-card-dependencies .plugin-dependencies-head {
-  display: flex;
-  min-height: 20px;
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 400;
 }
 
 .plugin-dependency-count {
