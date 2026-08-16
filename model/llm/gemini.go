@@ -72,21 +72,24 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 		}
 		config.MaxOutputTokens = maxOutputTokens
 	}
+	config.Tools = geminiTools(req.Tools)
 
-	resp, err := c.client.Models.GenerateContent(ctx, req.Model, geminiContents(messages), config)
+	resp, err := c.client.Models.GenerateContent(ctx, req.Model, geminiContents(messages, req.Tools), config)
 	if err != nil {
 		return nil, err
 	}
 
 	text := strings.TrimSpace(resp.Text())
-	if text == "" {
+	toolCalls := geminiToolCalls(resp, req.Tools)
+	if text == "" && len(toolCalls) == 0 {
 		return nil, fmt.Errorf("llm: gemini response has no text")
 	}
 
 	return &GenerateResponse{
-		Provider: ProviderGemini,
-		Model:    req.Model,
-		Text:     text,
+		Provider:  ProviderGemini,
+		Model:     req.Model,
+		Text:      text,
+		ToolCalls: toolCalls,
 		Usage: Usage{
 			InputTokens:  int64(resp.UsageMetadata.PromptTokenCount),
 			OutputTokens: int64(resp.UsageMetadata.CandidatesTokenCount),
@@ -103,9 +106,25 @@ func geminiOutputTokenLimit(value int64) (int32, error) {
 }
 
 // geminiContents 将通用消息转换为 Gemini content。
-func geminiContents(messages []Message) []*genai.Content {
+func geminiContents(messages []Message, definitions []ToolDefinition) []*genai.Content {
 	out := make([]*genai.Content, 0, len(messages))
 	for _, msg := range messages {
+		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
+			parts := make([]*genai.Part, 0, len(msg.ToolCalls))
+			for _, call := range msg.ToolCalls {
+				part := genai.NewPartFromFunctionCall(wireToolName(call.Name), call.Arguments)
+				part.FunctionCall.ID = call.ID
+				parts = append(parts, part)
+			}
+			out = append(out, &genai.Content{Role: genai.RoleModel, Parts: parts})
+			continue
+		}
+		if msg.Role == RoleTool {
+			part := genai.NewPartFromFunctionResponse(wireToolName(msg.ToolName), map[string]any{"output": msg.Content})
+			part.FunctionResponse.ID = msg.ToolCallID
+			out = append(out, &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{part}})
+			continue
+		}
 		var role genai.Role = genai.RoleUser
 		if msg.Role == RoleAssistant {
 			// Gemini SDK 用 model 表示 assistant 历史消息。
@@ -114,6 +133,31 @@ func geminiContents(messages []Message) []*genai.Content {
 		out = append(out, geminiContent(msg, role))
 	}
 	return out
+}
+
+func geminiTools(definitions []ToolDefinition) []*genai.Tool {
+	if len(definitions) == 0 {
+		return nil
+	}
+	declarations := make([]*genai.FunctionDeclaration, 0, len(definitions))
+	for _, definition := range definitions {
+		declarations = append(declarations, &genai.FunctionDeclaration{
+			Name: wireToolName(definition.Name), Description: definition.Description, ParametersJsonSchema: definition.Parameters,
+		})
+	}
+	return []*genai.Tool{{FunctionDeclarations: declarations}}
+}
+
+func geminiToolCalls(response *genai.GenerateContentResponse, definitions []ToolDefinition) []ToolCall {
+	raw := response.FunctionCalls()
+	calls := make([]ToolCall, 0, len(raw))
+	for _, call := range raw {
+		if call == nil || strings.TrimSpace(call.Name) == "" {
+			continue
+		}
+		calls = append(calls, ToolCall{ID: call.ID, Name: nativeToolName(call.Name, definitions), Arguments: call.Args})
+	}
+	return calls
 }
 
 func geminiContent(msg Message, role genai.Role) *genai.Content {
