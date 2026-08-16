@@ -99,15 +99,17 @@
         <div v-if="plugin.manifest.permissions?.length || showFooter(plugin)" class="plugin-card-bottom">
           <!-- 权限在左，设置等操作在右；有无设置都不再改变卡片的基础高度。 -->
           <div class="plugin-card-meta">
-            <details v-if="plugin.manifest.permissions?.length" class="plugin-perms">
-              <summary class="plugin-perms-head">
-                <span>{{ plugin.manifest.permissions.length }} 项权限</span>
-                <ChevronDown class="plugin-perms-chevron" :size="14" aria-hidden="true" />
-              </summary>
-              <div class="cluster plugin-card-perms">
-                <span v-for="permission in plugin.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
-              </div>
-            </details>
+            <!-- 和运行依赖一样走弹窗：权限标签展开后会把这一行顶高一截，
+                 一列卡片的高度就不齐了。 -->
+            <button
+              v-if="plugin.manifest.permissions?.length"
+              class="plugin-perms-head"
+              type="button"
+              title="查看权限"
+              @click="permissionsTarget = plugin"
+            >
+              {{ plugin.manifest.permissions.length }} 项权限
+            </button>
 
             <!-- 依赖列表展开后比整张卡片还高，行内展开会把这一条撑得和邻居完全
                  不是一个量级；改成弹窗，卡片上只留状态。 -->
@@ -333,6 +335,20 @@
       </template>
     </Modal>
 
+    <Modal
+      v-if="permissionsTarget"
+      :title="`${permissionsTarget.manifest.name} · 权限`"
+      @close="permissionsTarget = null"
+    >
+      <p class="plugin-dependencies-hint">插件运行时会用到下列能力。</p>
+      <div class="cluster plugin-card-perms">
+        <span v-for="permission in permissionsTarget.manifest.permissions" :key="permission" class="badge warn">{{ permission }}</span>
+      </div>
+      <template #footer>
+        <button class="btn primary" type="button" @click="permissionsTarget = null">完成</button>
+      </template>
+    </Modal>
+
     <Modal v-if="dependenciesOpen" title="运行依赖" @close="dependenciesOpen = false">
       <p class="plugin-dependencies-hint">缺少这些命令时，对应平台的解析会失败；可直接在这里安装。</p>
       <PluginDependencyList
@@ -390,6 +406,7 @@ const dependencies = ref<ResolverDependency[]>([]);
 const dependenciesLoading = ref(false);
 const busyDependency = ref("");
 const dependenciesOpen = ref(false);
+const permissionsTarget = ref<PluginState | null>(null);
 const readyDependencyCount = computed(() => dependencies.value.filter((dep) => dep.available).length);
 const missingDependencyCount = computed(() => dependencies.value.length - readyDependencyCount.value);
 
