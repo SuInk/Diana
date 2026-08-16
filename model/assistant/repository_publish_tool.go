@@ -851,8 +851,17 @@ func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner
 		if err != nil {
 			return "invalid_user_tokens", "用户 GitHub Token 配置无效。"
 		}
-		if strings.TrimSpace(tokens[userID]) == "" {
+		modes, err := repositoryPublishUserAuthModes(t.settings.String(repositoryPublishSettingUserAuth, ""))
+		if err != nil {
+			return "invalid_user_auth_modes", "用户 GitHub 认证来源配置无效。"
+		}
+		mode := modes[userID]
+		// 未配置来源的旧规则继续要求个人 Token，避免升级后悄然扩大凭据权限。
+		if (mode == "" || mode == repositoryPublishAuthToken) && strings.TrimSpace(tokens[userID]) == "" {
 			return "user_token_required", "当前授权用户尚未配置自己的 GitHub Token。"
+		}
+		if mode == repositoryPublishUserAuthInherit && repositoryPublishAuthMode(t.settings) == repositoryPublishAuthToken && strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")) == "" {
+			return "token_required", "当前用户沿用的全局认证方式要求配置独立 GitHub Issues Token。"
 		}
 		return "", ""
 	}
@@ -2122,10 +2131,17 @@ func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, metho
 }
 
 func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Context) (string, *repositoryIssueAPIError) {
-	if tokens, err := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, "")); err == nil {
-		if token := strings.TrimSpace(tokens[strings.TrimSpace(t.event.UserID)]); token != "" {
+	userID := strings.TrimSpace(t.event.UserID)
+	tokens, _ := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
+	modes, _ := repositoryPublishUserAuthModes(t.settings.String(repositoryPublishSettingUserAuth, ""))
+	userMode := modes[userID]
+	if userMode == "" || userMode == repositoryPublishAuthToken {
+		if token := strings.TrimSpace(tokens[userID]); token != "" {
 			return token, nil
 		}
+	}
+	if userMode == repositoryPublishAuthGH {
+		return t.repositoryPublishGHCredential(ctx)
 	}
 	token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, ""))
 	mode := repositoryPublishAuthMode(t.settings)
@@ -2135,6 +2151,10 @@ func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Cont
 		}
 		return token, nil
 	}
+	return t.repositoryPublishGHCredential(ctx)
+}
+
+func (t *dianaRepositoryIssuesTool) repositoryPublishGHCredential(ctx context.Context) (string, *repositoryIssueAPIError) {
 	if t.plugin == nil || t.plugin.ghAuthToken == nil {
 		return "", &repositoryIssueAPIError{Code: "gh_unavailable"}
 	}

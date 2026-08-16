@@ -31,11 +31,13 @@ const (
 	repositoryPublishSettingGroupAccess = "group_repository_access"
 	repositoryPublishSettingUserTokens  = "user_github_tokens"
 	repositoryPublishSettingTokenUsers  = "user_github_token_users"
+	repositoryPublishSettingUserAuth    = "user_github_auth_modes"
 	repositoryPublishSettingTimeout     = "timeout_seconds"
 	defaultRepositoryPublishTimeoutSecs = 20
 	repositoryPublishAuthToken          = "token"
 	repositoryPublishAuthGH             = "gh"
 	repositoryPublishAuthAuto           = "auto"
+	repositoryPublishUserAuthInherit    = "inherit"
 )
 
 var (
@@ -235,7 +237,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "仓库 Issue 发布",
-		Version:     "0.4.0",
+		Version:     "0.5.0",
 		Description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。",
 		Official:    true,
 		BuiltIn:     true,
@@ -294,6 +296,13 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Key:         repositoryPublishSettingTokenUsers,
 				Label:       "已配置 Token 的用户",
 				Description: "由用户授权编辑器维护。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
+			{
+				Key:         repositoryPublishSettingUserAuth,
+				Label:       "用户 GitHub 认证来源",
+				Description: "由用户授权编辑器维护；可为每个用户选择独立 Token、服务器 gh 或沿用插件全局认证。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
@@ -365,6 +374,31 @@ func repositoryPublishUserTokens(raw string) (map[string]string, error) {
 		}
 	}
 	return tokens, nil
+}
+
+func repositoryPublishUserAuthModes(raw string) (map[string]string, error) {
+	modes := map[string]string{}
+	if strings.TrimSpace(raw) == "" {
+		return modes, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &modes); err != nil {
+		return nil, fmt.Errorf("qqbot: invalid stored user auth modes")
+	}
+	for rawUserID, rawMode := range modes {
+		userID := strings.TrimSpace(rawUserID)
+		mode := strings.ToLower(strings.TrimSpace(rawMode))
+		delete(modes, rawUserID)
+		if userID == "" {
+			continue
+		}
+		switch mode {
+		case repositoryPublishUserAuthInherit, repositoryPublishAuthGH, repositoryPublishAuthToken:
+			modes[userID] = mode
+		default:
+			return nil, fmt.Errorf("qqbot: invalid stored user auth mode")
+		}
+	}
+	return modes, nil
 }
 
 func repositoryPublishGHAuthToken(ctx context.Context) (string, error) {
