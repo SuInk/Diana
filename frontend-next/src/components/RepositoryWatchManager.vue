@@ -6,7 +6,7 @@
     <div class="repository-watch-manager-head">
       <div>
         <h3>订阅与通知</h3>
-        <p>选择发送机器人，并将 Commit 或 Release 更新发送到指定群聊或私聊对象。</p>
+        <p>选择发送机器人，并将 Commit、PR、Release 或 Star 变化发送到指定群聊或私聊对象。</p>
       </div>
       <button class="btn small primary" type="button" @click="startCreate">
         <Plus :size="14" aria-hidden="true" />
@@ -36,7 +36,7 @@
             <input id="plugin-watch-interval" v-model.number="form.interval_seconds" class="input" type="number" :min="minimumIntervalSeconds" :max="maximumIntervalSeconds" step="1" />
             <span class="repository-watch-unit">秒</span>
           </div>
-          <span class="hint">当前模式默认 {{ formatInterval(defaultIntervalSeconds) }}；可设置 30 秒至 365 天。Commit + Release 每轮会请求两次。</span>
+          <span class="hint">当前模式默认 {{ formatInterval(defaultIntervalSeconds) }}；可设置 30 秒至 365 天。启用类型越多，每轮 GitHub API 请求越多。</span>
         </div>
         <div v-if="!editingTask" class="field wide">
           <label for="plugin-watch-profile">发送机器人</label>
@@ -62,7 +62,9 @@
           <label>监控内容</label>
           <div class="repository-watch-scopes">
             <label class="check-item"><input v-model="form.watch_commits" type="checkbox" />Commit</label>
+            <label class="check-item"><input v-model="form.watch_pull_requests" type="checkbox" />PR</label>
             <label class="check-item"><input v-model="form.watch_releases" type="checkbox" />Release</label>
+            <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
           </div>
         </div>
       </div>
@@ -91,7 +93,7 @@
             <span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span>
             <span v-if="task.group_id">群 <strong class="mono">{{ task.group_id }}</strong></span>
             <span v-else>私聊 <strong class="mono">{{ task.user_id || "—" }}</strong></span>
-            <span>{{ task.watch_commits ? "Commit" : "" }}{{ task.watch_commits && task.watch_releases ? " + " : "" }}{{ task.watch_releases ? "Release" : "" }}</span>
+            <span>{{ watchScopeLabel(task) }}</span>
           </div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
@@ -132,7 +134,7 @@ const anonymousIntervalSeconds = 60 * 60;
 const minimumIntervalSeconds = 30;
 const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = computed(() => props.tokenConfigured ? authenticatedIntervalSeconds : anonymousIntervalSeconds);
-const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_releases: true, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
+const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<QQBotConfig[]>([]);
 const joinedGroups = ref<QQBotGroupSummary[]>([]);
@@ -171,7 +173,7 @@ function startCreate(): void {
 
 function startEdit(task: AssistantTask): void {
   editingTask.value = task;
-  form.value = { repository: task.repository ?? "", branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits !== false, watch_releases: task.watch_releases !== false, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" };
+  form.value = { repository: task.repository ?? "", branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" };
   editing.value = true;
 }
 
@@ -185,14 +187,14 @@ async function save(): Promise<void> {
   if (!form.value.repository) return toastError("请填写 GitHub 仓库");
   if (form.value.interval_seconds < minimumIntervalSeconds) return toastError("检查周期不能低于 30 秒");
   if (form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期不能超过 365 天");
-  if (!form.value.watch_commits && !form.value.watch_releases) return toastError("Commit 和 Release 至少选择一项");
+  if (!form.value.watch_commits && !form.value.watch_pull_requests && !form.value.watch_releases && !form.value.watch_stars) return toastError("Commit、PR、Release 和 Star 至少选择一项");
   if (!editingTask.value && !form.value.profile_id) return toastError("请选择发送机器人");
   if (!editingTask.value && form.value.destination === "group" && !form.value.group_id) return toastError("请填写群号或 Chat ID");
   if (!editingTask.value && form.value.destination === "private" && !form.value.user_id) return toastError("请填写私聊对象 ID");
   saving.value = true;
   try {
     await props.prepareAccess?.();
-    const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_releases: form.value.watch_releases };
+    const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars };
     if (editingTask.value) await updateRepositoryWatch(editingTask.value.id, common);
     else await createRepositoryWatch({ ...common, profile_id: form.value.profile_id, destination: form.value.destination, group_id: form.value.destination === "group" ? form.value.group_id : undefined, user_id: form.value.destination === "private" ? form.value.user_id : undefined });
     toastSuccess(editingTask.value ? "仓库订阅已更新" : "仓库订阅已创建，当前状态已作为基线");
@@ -224,6 +226,7 @@ async function remove(task: AssistantTask): Promise<void> {
 
 function statusLabel(value: AssistantTaskStatus): string { return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消" }[value] ?? value; }
 function statusTone(value: AssistantTaskStatus): string { return value === "active" ? "ok" : value === "retrying" ? "warn" : value === "cancelled" ? "err" : ""; }
+function watchScopeLabel(task: AssistantTask): string { return [task.watch_commits ? "Commit" : "", task.watch_pull_requests ? "PR" : "", task.watch_releases ? "Release" : "", task.watch_stars ? "Star" : ""].filter(Boolean).join(" + "); }
 function formatInterval(seconds: number): string { return seconds % 86400 === 0 ? `${seconds / 86400} 天` : seconds % 3600 === 0 ? `${seconds / 3600} 小时` : seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`; }
 
 watch(() => props.tokenConfigured, (configured, previous) => {
