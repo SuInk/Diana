@@ -2334,17 +2334,31 @@ code {
   padding: 16px 18px;
 }
 
+/* 让名称和开关直接成为行的 flex 项，才能把开关排到行尾；
+   开关夹在名称和描述之间时横坐标跟着名字长短浮动，一列开关参差不齐。 */
 .plugin-rows .plugin-card-head {
-  /* 190px 装不下「Diana 能力知识库 RAG」这类名字，放宽到 250px */
-  flex: 0 0 250px;
-  min-width: 0;
-  gap: 10px;
+  display: contents;
 }
 
 .plugin-rows .plugin-card-name {
+  /* 190px 装不下「Diana 能力知识库 RAG」这类名字，放宽到 250px */
+  flex: 0 0 250px;
+  order: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.plugin-rows .plugin-card-head .switch {
+  order: 4;
+  flex: none;
+}
+
+/* 既无权限也无操作按钮的卡片没有 .plugin-card-bottom，
+   借不到它的 margin-left: auto，开关得自己顶到行尾。 */
+.plugin-rows > .plugin-card:not(:has(.plugin-card-bottom)) .plugin-card-head .switch {
+  margin-left: auto;
 }
 
 /* 版本徽章在横排里价值不高，让位给描述 */
@@ -2388,8 +2402,18 @@ code {
     padding: 16px;
   }
 
+  /* 竖排下名称和开关回到同一行的两端，开关不再独占行尾 */
   .plugin-rows .plugin-card-head {
+    display: flex;
     flex: none;
+  }
+
+  .plugin-rows .plugin-card-name {
+    flex: 1 1 auto;
+  }
+
+  .plugin-rows > .plugin-card:not(:has(.plugin-card-bottom)) .plugin-card-head .switch {
+    margin-left: 0;
   }
 
   .plugin-rows .plugin-card-desc {
