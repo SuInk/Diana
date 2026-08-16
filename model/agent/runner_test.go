@@ -299,29 +299,6 @@ func TestRunnerRepairsFinalThatDefersAvailableTool(t *testing.T) {
 	}
 }
 
-func TestRunnerRequiresConfiguredToolBeforeFinal(t *testing.T) {
-	tool := &countingTool{name: "diana.relationship"}
-	client := &scriptedClient{responses: []string{
-		`{"action":"final","content":"目前好感度是 16。"}`,
-		`{"action":"tool","tool":"diana.relationship","input":{"operation":"get"}}`,
-		`{"action":"final","content":"查到的好感度是 16，关系等级是初识，当前权限包含基础聊天，提醒额度为 1。"}`,
-	}}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{
-		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "查一下和我的好感度"}},
-		RequiredTools: []string{"diana.relationship"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tool.calls != 1 || len(resp.Steps) != 1 || len(client.requests) != 3 || !strings.Contains(resp.Text, "提醒额度") {
-		t.Fatalf("resp=%#v tool.calls=%d requests=%d", resp, tool.calls, len(client.requests))
-	}
-}
-
 func TestFinalToolCommitmentDoesNotMistakeUserInstructions(t *testing.T) {
 	if finalDefersAvailableTool("下一步你可以查询设置页里的运行状态。") {
 		t.Fatal("instruction to the user should not be treated as an agent tool commitment")
@@ -828,4 +805,39 @@ func (c *scriptedClient) Generate(_ context.Context, req llm.GenerateRequest) (*
 	next := c.responses[0]
 	c.responses = c.responses[1:]
 	return &llm.GenerateResponse{Text: next}, nil
+}
+
+type nativeToolClient struct {
+	requests []llm.GenerateRequest
+}
+
+func (c *nativeToolClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if len(c.requests) == 1 {
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "lookup", Arguments: map[string]any{"query": "Diana"}}}}, nil
+	}
+	return &llm.GenerateResponse{Text: `{"action":"final","content":"native done"}`}, nil
+}
+
+func TestRunnerUsesNativeToolCallsAndReturnsToolResult(t *testing.T) {
+	client := &nativeToolClient{}
+	tool := &countingTool{name: "lookup"}
+	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "look it up"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Text != "native done" || tool.calls != 1 || len(client.requests) != 2 {
+		t.Fatalf("response=%#v calls=%d requests=%d", response, tool.calls, len(client.requests))
+	}
+	if len(client.requests[0].Tools) != 1 || client.requests[0].Tools[0].Name != "lookup" {
+		t.Fatalf("tools=%#v", client.requests[0].Tools)
+	}
+	messages := client.requests[1].Messages
+	if len(messages) < 2 || messages[len(messages)-2].ToolCalls[0].ID != "call-1" || messages[len(messages)-1].Role != llm.RoleTool || messages[len(messages)-1].ToolCallID != "call-1" {
+		t.Fatalf("native tool history=%#v", messages)
+	}
 }

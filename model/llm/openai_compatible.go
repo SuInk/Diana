@@ -379,7 +379,7 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: openAIResponsesInput(messages),
+			OfInputItemList: openAIResponsesInput(messages, req.Tools),
 		},
 	}
 	if system != "" {
@@ -396,20 +396,26 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 	if req.MaxOutputTokens > 0 {
 		params.MaxOutputTokens = param.NewOpt(req.MaxOutputTokens)
 	}
+	params.Tools = openAIResponseTools(req.Tools)
+	if len(req.Tools) > 0 {
+		params.ParallelToolCalls = param.NewOpt(false)
+	}
 
 	resp, err, capture := c.newResponse(ctx, params)
 	if err != nil {
 		return nil, openAIResponsesError(err, capture)
 	}
 	text := strings.TrimSpace(resp.OutputText())
-	if text == "" {
+	toolCalls := openAIResponseToolCalls(resp.Output, req.Tools)
+	if text == "" && len(toolCalls) == 0 {
 		return nil, fmt.Errorf("llm: openai-compatible responses output is empty")
 	}
 
 	return &GenerateResponse{
-		Provider: ProviderOpenAICompatible,
-		Model:    string(resp.Model),
-		Text:     text,
+		Provider:  ProviderOpenAICompatible,
+		Model:     string(resp.Model),
+		Text:      text,
+		ToolCalls: toolCalls,
 		Usage: Usage{
 			InputTokens:  resp.Usage.InputTokens,
 			OutputTokens: resp.Usage.OutputTokens,
@@ -419,17 +425,44 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 }
 
 type openAIChatCompletionRequest struct {
-	Model           string                        `json:"model"`
-	Messages        []openAIChatCompletionMessage `json:"messages"`
-	Temperature     *float64                      `json:"temperature,omitempty"`
-	ReasoningEffort string                        `json:"reasoning_effort,omitempty"`
-	MaxTokens       int64                         `json:"max_tokens,omitempty"`
-	Stream          bool                          `json:"stream"`
+	Model             string                        `json:"model"`
+	Messages          []openAIChatCompletionMessage `json:"messages"`
+	Temperature       *float64                      `json:"temperature,omitempty"`
+	ReasoningEffort   string                        `json:"reasoning_effort,omitempty"`
+	MaxTokens         int64                         `json:"max_tokens,omitempty"`
+	Stream            bool                          `json:"stream"`
+	Tools             []openAIChatTool              `json:"tools,omitempty"`
+	ParallelToolCalls *bool                         `json:"parallel_tool_calls,omitempty"`
+}
+
+type openAIChatTool struct {
+	Type     string                 `json:"type"`
+	Function openAIChatToolFunction `json:"function"`
+}
+
+type openAIChatToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters"`
+	Strict      bool           `json:"strict,omitempty"`
 }
 
 type openAIChatCompletionMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role       string               `json:"role"`
+	Content    any                  `json:"content,omitempty"`
+	ToolCalls  []openAIChatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
+}
+
+type openAIChatToolCall struct {
+	ID       string                     `json:"id"`
+	Type     string                     `json:"type"`
+	Function openAIChatToolCallFunction `json:"function"`
+}
+
+type openAIChatToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type openAIChatCompletionContentPart struct {
@@ -453,11 +486,16 @@ type openAIChatCompletionInputAudio struct {
 func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
 	params := openAIChatCompletionRequest{
 		Model:           req.Model,
-		Messages:        openAIChatCompletionMessages(req.Messages),
+		Messages:        openAIChatCompletionMessages(req.Messages, req.Tools),
 		Temperature:     req.Temperature,
 		ReasoningEffort: req.ReasoningEffort,
 		MaxTokens:       req.MaxOutputTokens,
-		Stream:          true,
+		Stream:          len(req.Tools) == 0,
+		Tools:           openAIChatTools(req.Tools),
+	}
+	if len(req.Tools) > 0 {
+		parallel := false
+		params.ParallelToolCalls = &parallel
 	}
 	body, err := json.Marshal(params)
 	if err != nil {
@@ -490,7 +528,7 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 		capture.body = string(errBody)
 		return nil, openAICompatibleError(fmt.Errorf("openai-compatible chat completions failed"), capture)
 	}
-	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+	if params.Stream && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		result, err := decodeOpenAITextEventStreamWithIdleTimeout(ctx, resp.Body, c.cfg.Timeout)
 		if err != nil {
 			return nil, err
@@ -512,7 +550,8 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 	}
 	result := chatCompletionResultFromPayload(payload)
 	text := strings.TrimSpace(result.Text())
-	if text == "" {
+	toolCalls := openAIChatToolCallsFromPayload(payload, req.Tools)
+	if text == "" && len(toolCalls) == 0 {
 		return nil, openAIChatCompletionTextError(openAIChatCompletionDiagnostics{
 			FinishReasons: result.FinishReasons,
 			ReasoningSeen: result.ReasoningSeen,
@@ -523,10 +562,11 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 		})
 	}
 	return &GenerateResponse{
-		Provider: ProviderOpenAICompatible,
-		Model:    firstNonEmptyString(stringField(payload, "model"), req.Model),
-		Text:     text,
-		Usage:    usageFromPayload(payload["usage"]),
+		Provider:  ProviderOpenAICompatible,
+		Model:     firstNonEmptyString(stringField(payload, "model"), req.Model),
+		Text:      text,
+		ToolCalls: toolCalls,
+		Usage:     usageFromPayload(payload["usage"]),
 	}, nil
 }
 
@@ -574,13 +614,21 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-func openAIChatCompletionMessages(messages []Message) []openAIChatCompletionMessage {
+func openAIChatCompletionMessages(messages []Message, definitions []ToolDefinition) []openAIChatCompletionMessage {
 	out := make([]openAIChatCompletionMessage, 0, len(messages))
 	for _, message := range messages {
-		out = append(out, openAIChatCompletionMessage{
-			Role:    openAIChatCompletionRole(message.Role),
-			Content: openAIChatCompletionContent(message),
-		})
+		converted := openAIChatCompletionMessage{
+			Role:       openAIChatCompletionRole(message.Role),
+			Content:    openAIChatCompletionContent(message),
+			ToolCallID: message.ToolCallID,
+		}
+		for _, call := range message.ToolCalls {
+			arguments, _ := json.Marshal(call.Arguments)
+			converted.ToolCalls = append(converted.ToolCalls, openAIChatToolCall{
+				ID: call.ID, Type: "function", Function: openAIChatToolCallFunction{Name: wireToolName(call.Name), Arguments: string(arguments)},
+			})
+		}
+		out = append(out, converted)
 	}
 	return out
 }
@@ -635,6 +683,8 @@ func openAIChatCompletionRole(role Role) string {
 		return "system"
 	case RoleAssistant:
 		return "assistant"
+	case RoleTool:
+		return "tool"
 	default:
 		return "user"
 	}
@@ -1569,9 +1619,20 @@ func formatOpenAIChatCompletionDiagnostics(diagnostics openAIChatCompletionDiagn
 }
 
 // openAIResponsesInput 将通用消息转换为 Responses API 输入。
-func openAIResponsesInput(messages []Message) responses.ResponseInputParam {
+func openAIResponsesInput(messages []Message, definitions []ToolDefinition) responses.ResponseInputParam {
 	out := make(responses.ResponseInputParam, 0, len(messages))
 	for _, msg := range messages {
+		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
+			for _, call := range msg.ToolCalls {
+				arguments, _ := json.Marshal(call.Arguments)
+				out = append(out, responses.ResponseInputItemParamOfFunctionCall(string(arguments), call.ID, wireToolName(call.Name)))
+			}
+			continue
+		}
+		if msg.Role == RoleTool {
+			out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(msg.ToolCallID, msg.Content))
+			continue
+		}
 		content := openAIResponseContent(msg)
 		if len(content) == 0 {
 			out = append(out, responses.ResponseInputItemParamOfMessage(msg.Content, openAIResponseRole(msg.Role)))
@@ -1595,6 +1656,65 @@ func openAIResponsesInput(messages []Message) responses.ResponseInputParam {
 		}
 	}
 	return out
+}
+
+func openAIResponseTools(definitions []ToolDefinition) []responses.ToolUnionParam {
+	tools := make([]responses.ToolUnionParam, 0, len(definitions))
+	for _, definition := range definitions {
+		tools = append(tools, responses.ToolUnionParam{OfFunction: &responses.FunctionToolParam{
+			Name: wireToolName(definition.Name), Description: param.NewOpt(definition.Description), Parameters: definition.Parameters, Strict: param.NewOpt(definition.Strict),
+		}})
+	}
+	return tools
+}
+
+func openAIResponseToolCalls(output []responses.ResponseOutputItemUnion, definitions []ToolDefinition) []ToolCall {
+	calls := make([]ToolCall, 0)
+	for _, item := range output {
+		call := item.AsFunctionCall()
+		if strings.TrimSpace(call.Name) == "" {
+			continue
+		}
+		arguments := map[string]any{}
+		_ = json.Unmarshal([]byte(call.Arguments), &arguments)
+		calls = append(calls, ToolCall{ID: firstNonEmptyString(call.CallID, call.ID), Name: nativeToolName(call.Name, definitions), Arguments: arguments})
+	}
+	return calls
+}
+
+func openAIChatTools(definitions []ToolDefinition) []openAIChatTool {
+	tools := make([]openAIChatTool, 0, len(definitions))
+	for _, definition := range definitions {
+		tools = append(tools, openAIChatTool{Type: "function", Function: openAIChatToolFunction{
+			Name: wireToolName(definition.Name), Description: definition.Description, Parameters: definition.Parameters, Strict: definition.Strict,
+		}})
+	}
+	return tools
+}
+
+func openAIChatToolCallsFromPayload(payload map[string]any, definitions []ToolDefinition) []ToolCall {
+	choices, _ := payload["choices"].([]any)
+	var calls []ToolCall
+	for _, choice := range choices {
+		choiceMap, _ := choice.(map[string]any)
+		message, _ := choiceMap["message"].(map[string]any)
+		rawCalls, _ := message["tool_calls"].([]any)
+		for _, rawCall := range rawCalls {
+			callMap, _ := rawCall.(map[string]any)
+			function, _ := callMap["function"].(map[string]any)
+			name, _ := function["name"].(string)
+			if strings.TrimSpace(name) == "" {
+				continue
+			}
+			arguments := map[string]any{}
+			if encoded, _ := function["arguments"].(string); encoded != "" {
+				_ = json.Unmarshal([]byte(encoded), &arguments)
+			}
+			id, _ := callMap["id"].(string)
+			calls = append(calls, ToolCall{ID: id, Name: nativeToolName(name, definitions), Arguments: arguments})
+		}
+	}
+	return calls
 }
 
 func normalizedInputAudioFormat(value string) string {
