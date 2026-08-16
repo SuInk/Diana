@@ -26,7 +26,7 @@ func NewLLMConfigPlugin() *LLMConfigPlugin {
 func (p *LLMConfigPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          llmConfigPluginID,
-		Name:        "LLM 配置技能",
+		Name:        "LLM 配置",
 		Version:     "0.1.0",
 		Description: "官方内置 LLM 配置能力；自然语言由主 Agent 理解，配置修改仅通过主人专属结构化工具执行。",
 		Official:    true,
