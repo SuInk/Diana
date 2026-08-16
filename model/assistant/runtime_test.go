@@ -4110,6 +4110,24 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 	}
 }
 
+func TestRuntimeVisualIntentPromptPreservesConfirmedImageOperation(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"none","prompt":""}`}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	_, _ = runtime.classifyVisualIntent(context.Background(), MessageEvent{Kind: EventKindGroup}, "确认")
+	request := provider.requestSnapshot()
+	if len(request.Messages) == 0 {
+		t.Fatalf("request = %#v", request)
+	}
+	prompt := request.Messages[0].Content
+	for _, expected := range []string{"对机器人上一轮澄清、确认或选项提问的简短回答", "必须继承该待确认操作及其图片上下文", "不能把短回答孤立地降级为闲聊"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("visual intent prompt does not contain %q: %s", expected, prompt)
+		}
+	}
+}
+
 func TestRuntimeVisualIntentRoutesExternalImageLookupToAgent(t *testing.T) {
 	provider := &privacyAwareTestProvider{}
 	provider.generate = func(call int, req llm.GenerateRequest) (string, error) {

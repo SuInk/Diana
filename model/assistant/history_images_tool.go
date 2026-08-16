@@ -30,13 +30,14 @@ type historyImageSelector struct {
 }
 
 type dianaHistoryImagesResult struct {
-	OK        bool                      `json:"ok"`
-	Requested int                       `json:"requested"`
-	Loaded    int                       `json:"loaded"`
-	Failed    int                       `json:"failed"`
-	Limited   bool                      `json:"limited,omitempty"`
-	Images    []dianaHistoryImageStatus `json:"images"`
-	Message   string                    `json:"message"`
+	OK         bool                      `json:"ok"`
+	Requested  int                       `json:"requested"`
+	Loaded     int                       `json:"loaded"`
+	FocusCrops int                       `json:"focus_crops,omitempty"`
+	Failed     int                       `json:"failed"`
+	Limited    bool                      `json:"limited,omitempty"`
+	Images     []dianaHistoryImageStatus `json:"images"`
+	Message    string                    `json:"message"`
 }
 
 type dianaHistoryImageStatus struct {
@@ -158,7 +159,9 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 				})
 				continue
 			}
-			parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: ready[0], Detail: detail})
+			imageParts := highDetailImageParts(ready[0], detail)
+			parts = append(parts, imageParts...)
+			result.FocusCrops += len(imageParts) - 1
 			result.Loaded++
 			result.Images = append(result.Images, dianaHistoryImageStatus{
 				MessageID:  selector.MessageID,
@@ -177,6 +180,9 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 	result.OK = true
 	result.Message = fmt.Sprintf("已把 %d 张历史原图附加到本次工具观察，请逐张查看后再回答；不要把摘要当成原图细节。", result.Loaded)
+	if result.FocusCrops > 0 {
+		result.Message += fmt.Sprintf(" 为了保留小人像和小字细节，已另附加 %d 张原图局部裁剪。", result.FocusCrops)
+	}
 	if result.Failed > 0 {
 		result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
 	}

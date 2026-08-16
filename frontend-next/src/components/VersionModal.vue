@@ -35,14 +35,14 @@
         </div>
 		<p v-if="checkError" style="margin: 0; color: var(--err); font-size: 12.5px">{{ checkError }}</p>
       </div>
-      <div v-if="updating && releaseSelfUpdate && !status?.download_ready" class="release-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="downloadPercent">
+      <div v-if="operationRunning && releaseSelfUpdate && !status?.download_ready" class="release-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="downloadPercent">
         <div class="release-progress-label"><span>{{ downloadPhaseLabel }}</span><strong class="mono">{{ downloadPercent }}%</strong></div>
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
 
       <div class="cluster" style="gap: 8px">
-        <button class="btn" type="button" :disabled="checking || updating" @click="check()">
+        <button class="btn" type="button" :disabled="checking || operationRunning" @click="check()">
           <RefreshCw :size="14" aria-hidden="true" />
           {{ checking ? "检查中…" : "检查更新" }}
         </button>
@@ -50,25 +50,25 @@
 		  v-if="releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available && !status?.download_ready"
           class="btn primary"
           type="button"
-          :disabled="updating"
+          :disabled="operationRunning"
 		  @click="downloadUpdate"
         >
           <Download :size="14" aria-hidden="true" />
-		  {{ updating ? "下载中…" : "下载更新" }}
+		  {{ operationRunning ? "下载中…" : "下载更新" }}
         </button>
-		<button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary" type="button" :disabled="updating" @click="confirmInstall">
+		<button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary" type="button" :disabled="operationRunning" @click="confirmInstall">
 			<RefreshCcw :size="14" aria-hidden="true" />
-			{{ updating ? "安装中…" : "安装并重启" }}
+			{{ operationRunning ? "安装中…" : "安装并重启" }}
 		</button>
-		<button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary" type="button" :disabled="updating" @click="confirmUpdate">
+		<button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary" type="button" :disabled="operationRunning" @click="confirmUpdate">
 			<Download :size="14" aria-hidden="true" />
-			{{ updating ? "更新中…" : "立即更新" }}
+			{{ operationRunning ? "更新中…" : "立即更新" }}
 		</button>
         <button
           v-if="deploymentMode === 'git'"
           class="btn ghost"
           type="button"
-          :disabled="checking || updating"
+          :disabled="checking || operationRunning"
           @click="forceConfirming = true"
         >
           <RefreshCcw :size="14" aria-hidden="true" />
@@ -81,8 +81,8 @@
           <strong>强制同步最新稳定 Release？</strong>
           <span class="muted" style="font-size: 12.5px">这会丢弃已跟踪文件的本地修改，并重置到最新稳定 Release tag；不会绕过 Git 对象哈希校验。</span>
           <div class="cluster" style="gap: 8px">
-            <button class="btn danger small" type="button" :disabled="updating" @click="forceUpdate">确认强制同步</button>
-            <button class="btn ghost small" type="button" :disabled="updating" @click="forceConfirming = false">取消</button>
+            <button class="btn danger small" type="button" :disabled="operationRunning" @click="forceUpdate">确认强制同步</button>
+            <button class="btn ghost small" type="button" :disabled="operationRunning" @click="forceConfirming = false">取消</button>
           </div>
         </div>
       </div>
@@ -127,7 +127,7 @@
                 v-if="deploymentMode === 'git' && isOlderRelease(release.tag)"
                 class="btn danger small"
                 type="button"
-                :disabled="updating"
+                :disabled="operationRunning"
                 @click="rollbackTarget = release"
               >
                 <History :size="13" aria-hidden="true" />
@@ -158,8 +158,8 @@
           <strong>回退到 {{ rollbackTarget.tag }}？</strong>
           <span class="muted" style="font-size: 12.5px">这会把已跟踪代码重置到该版本，工作区有未提交修改时服务端会拒绝执行。回退后需重启服务。</span>
           <div class="cluster" style="gap: 8px">
-            <button class="btn danger small" type="button" :disabled="updating" @click="rollback">确认回退</button>
-            <button class="btn ghost small" type="button" :disabled="updating" @click="rollbackTarget = null">取消</button>
+            <button class="btn danger small" type="button" :disabled="operationRunning" @click="rollback">确认回退</button>
+            <button class="btn ghost small" type="button" :disabled="operationRunning" @click="rollbackTarget = null">取消</button>
           </div>
         </div>
       </div>
@@ -215,7 +215,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { AlertTriangle, Container, Copy, Download, History, RefreshCcw, RefreshCw } from "@lucide/vue";
 import Modal from "./Modal.vue";
 import {
@@ -254,9 +254,11 @@ const updatedHint = ref("");
 const operationError = ref("");
 const forceConfirming = ref(false);
 const rollbackTarget = ref<ReleaseEntry | null>(null);
+let statusPollTimer: number | undefined;
 
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 const releaseSelfUpdate = computed(() => deploymentMode.value === "release" && version.value?.update_supported === true);
+const operationRunning = computed(() => updating.value || status.value?.updating === true);
 const downloadPercent = computed(() => Math.max(0, Math.min(100, Math.round(status.value?.download_percent ?? 0))));
 const downloadPhaseLabel = computed(() => status.value?.update_phase === "extracting"
 	? "准备 → 下载 100% → 校验 → 解压"
@@ -350,6 +352,7 @@ async function check(notify = true): Promise<void> {
 }
 
 async function downloadUpdate(): Promise<void> {
+	if (operationRunning.value) return;
 	updating.value = true;
 	operationError.value = "";
 	const progressTimer = window.setInterval(() => {
@@ -358,7 +361,9 @@ async function downloadUpdate(): Promise<void> {
 	try {
 		const result = await downloadSystemUpdate();
 		status.value = result.status;
-		updatedHint.value = result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待安装` : "已是最新稳定版本";
+		updatedHint.value = result.status.updating
+			? "更新包正在下载或处理中"
+			: result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待安装` : "已是最新稳定版本";
 		toastSuccess(updatedHint.value);
 	} catch (error) {
 		operationError.value = error instanceof Error ? error.message : "下载更新失败";
@@ -469,6 +474,14 @@ async function copyImageTag(tag: string): Promise<void> {
 onMounted(async () => {
   await load();
   await check(false);
+	statusPollTimer = window.setInterval(() => {
+		if (!operationRunning.value || !releaseSelfUpdate.value) return;
+		void getUpdateStatus().then((value) => { status.value = value; }).catch(() => undefined);
+	}, 1000);
+});
+
+onBeforeUnmount(() => {
+	if (statusPollTimer !== undefined) window.clearInterval(statusPollTimer);
 });
 </script>
 

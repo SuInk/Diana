@@ -100,10 +100,11 @@ type ReleasePackageUpdater struct {
 	supported      bool
 	unsupportedWhy string
 
-	operationMu    sync.Mutex
-	handoffStarted bool
-	progressMu     sync.RWMutex
-	progress       releaseDownloadProgress
+	operationMu     sync.Mutex
+	handoffStarted  bool
+	progressMu      sync.RWMutex
+	operationActive bool
+	progress        releaseDownloadProgress
 }
 
 type releaseDownloadProgress struct {
@@ -116,6 +117,23 @@ func (u *ReleasePackageUpdater) setProgress(phase string, done, total int64) {
 	u.progressMu.Lock()
 	u.progress = releaseDownloadProgress{phase: phase, done: done, total: total}
 	u.progressMu.Unlock()
+}
+
+func (u *ReleasePackageUpdater) beginOperation() bool {
+	if !u.operationMu.TryLock() {
+		return false
+	}
+	u.progressMu.Lock()
+	u.operationActive = true
+	u.progressMu.Unlock()
+	return true
+}
+
+func (u *ReleasePackageUpdater) endOperation() {
+	u.progressMu.Lock()
+	u.operationActive = false
+	u.progressMu.Unlock()
+	u.operationMu.Unlock()
 }
 
 // ExpectedReleaseAssetName returns the complete-package asset for a platform.
@@ -277,6 +295,7 @@ func (u *ReleasePackageUpdater) Status(context.Context) (Status, error) {
 	}
 	u.progressMu.RLock()
 	progress := u.progress
+	status.Updating = u.operationActive
 	u.progressMu.RUnlock()
 	status.UpdatePhase = progress.phase
 	status.DownloadedBytes = progress.done
@@ -312,10 +331,10 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if err != nil {
 		return Result{}, err
 	}
-	if !u.operationMu.TryLock() {
+	if !u.beginOperation() {
 		return Result{}, ErrUpdateInProgress
 	}
-	defer u.operationMu.Unlock()
+	defer u.endOperation()
 	u.setProgress("preparing", 0, release.Archive.Size)
 	defer func() {
 		if _, ok := u.pendingUpdate(); ok {
@@ -486,10 +505,10 @@ func (u *ReleasePackageUpdater) InstallDownloaded(ctx context.Context) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
-	if !u.operationMu.TryLock() {
+	if !u.beginOperation() {
 		return Result{}, ErrUpdateInProgress
 	}
-	defer u.operationMu.Unlock()
+	defer u.endOperation()
 	if u.handoffStarted {
 		return Result{}, ErrUpdateInProgress
 	}
