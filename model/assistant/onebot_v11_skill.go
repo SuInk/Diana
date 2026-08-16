@@ -61,7 +61,7 @@ func NewOneBotV11SkillPlugin() *OneBotV11SkillPlugin {
 func (p *OneBotV11SkillPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          oneBotV11PluginID,
-		Name:        "OneBot v11 协议技能",
+		Name:        "OneBot 协议",
 		Version:     "0.1.0",
 		Description: "官方内置 OneBot v11 结构化调用能力；主人可调用全部标准及实现扩展动作，普通成员仅可调用明确的标准只读动作。",
 		Official:    true,

@@ -70,7 +70,7 @@ func NewFileParserPlugin(client *http.Client) *FileParserPlugin {
 func (p *FileParserPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          fileParserPluginID,
-		Name:        "文件解析 Go",
+		Name:        "文件解析",
 		Version:     "0.3.0",
 		Description: "官方内置文件解析插件；macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
 		Official:    true,
