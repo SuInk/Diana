@@ -323,7 +323,7 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 		t.Fatalf("router request = %#v", provider.request.Messages)
 	}
 	prompt := provider.request.Messages[0].Content + "\n" + provider.request.Messages[1].Content
-	for _, want := range []string{"diana.qq_group", "成员总数", "diana.image", "系统没有绘图工具", "available_reply_tools"} {
+	for _, want := range []string{"web_search.search", "始终注册", "diana.qq_group", "成员总数", "diana.image", "系统没有绘图工具", "available_reply_tools"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("router prompt missing %q: %s", want, prompt)
 		}
@@ -1972,10 +1972,16 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 	if len(mentioned) != len(wantMentioned) || mentioned[0] != wantMentioned[0] || mentioned[1] != wantMentioned[1] {
 		t.Fatalf("mentioned = %#v, want %#v; segments = %#v", mentioned, wantMentioned, segments)
 	}
-	systemPrompt := provider.requests[2].Messages[0].Content
+	var systemPrompt strings.Builder
+	for _, message := range provider.requests[2].Messages {
+		if message.Role == llm.RoleSystem {
+			systemPrompt.WriteString(message.Content)
+			systemPrompt.WriteByte('\n')
+		}
+	}
 	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "发送层固定在第一条回复开头引用当前消息并 @ 当前发言者", "你只决定是否还要提及其他成员", "原样保留额外 CQ at 的对象和相对位置"} {
-		if !strings.Contains(systemPrompt, want) {
-			t.Fatalf("system prompt missing %q: %s", want, systemPrompt)
+		if !strings.Contains(systemPrompt.String(), want) {
+			t.Fatalf("system prompt missing %q: %s", want, systemPrompt.String())
 		}
 	}
 	for _, req := range provider.requests {
@@ -2497,6 +2503,9 @@ func TestRuntimeProactiveReplyPayloadIncludesMessageAges(t *testing.T) {
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "现在的问题"}}},
 	}
 	payload := runtime.proactiveReplyPayload(event, "现在的问题")
+	if len(payload.AvailableReplyTools) != 1 || !strings.Contains(payload.AvailableReplyTools[0], "web_search.search") {
+		t.Fatalf("mandatory router tools = %#v", payload.AvailableReplyTools)
+	}
 	if payload.ContextGapSeconds == nil || *payload.ContextGapSeconds != 1200 {
 		t.Fatalf("context gap = %#v, want 1200", payload.ContextGapSeconds)
 	}
@@ -2927,7 +2936,8 @@ func TestRuntimeProactiveReplyPreservesCompleteAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "custom concise proactive instruction") {
+	allPrompts := requestTextForPrivacyTest(provider.request)
+	if len(provider.request.Messages) == 0 || !strings.Contains(allPrompts, "custom concise proactive instruction") {
 		t.Fatalf("system prompt = %#v", provider.request.Messages)
 	}
 	if reply != completeReply {

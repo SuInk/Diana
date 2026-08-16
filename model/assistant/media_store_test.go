@@ -331,6 +331,9 @@ func TestLLMMessageUsesPersistedImage(t *testing.T) {
 			continue
 		}
 		imageParts++
+		if part.Detail != "high" {
+			t.Fatalf("当前图片 detail = %q，期望 high", part.Detail)
+		}
 		if part.ImageURL == remote {
 			t.Fatal("图片仍是原始地址，没有走本地持久化")
 		}

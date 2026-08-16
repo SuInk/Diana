@@ -206,6 +206,31 @@ func TestRunnerPreservesCompleteToolErrors(t *testing.T) {
 	if !foundCompleteError {
 		t.Fatal("the next model turn did not receive the complete tool error")
 	}
+	var diagnostic string
+	for _, message := range client.requests[1].Messages {
+		if strings.Contains(message.Content, "TOOL_EXECUTION_ERROR") && strings.Contains(message.Content, "registered: true") {
+			diagnostic = message.Content
+			break
+		}
+	}
+	for _, want := range []string{"tool: error", "registered: true", "不得声称工具不存在"} {
+		if !strings.Contains(diagnostic, want) {
+			t.Fatalf("tool diagnostic missing %q: %q", want, diagnostic)
+		}
+	}
+}
+
+func TestRunnerPromptDistinguishesQueuedImageTaskFromCompletion(t *testing.T) {
+	runner, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, NewToolRegistry(&countingTool{name: "diana.image"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := runner.systemPrompt()
+	for _, want := range []string{"queued=true", "不表示图片已经完成", "TOOL_EXECUTION_ERROR", "工具不存在"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("runner prompt missing %q: %s", want, prompt)
+		}
+	}
 }
 
 // TestRunnerFinalizesAfterToolBudgetExhausted 验证最后一次工具结果始终有额外收尾机会。
@@ -248,6 +273,35 @@ func TestRunnerDoesNotLeakEmptyFinalEnvelope(t *testing.T) {
 	}
 	if resp.Text != "" {
 		t.Fatalf("Text = %q", resp.Text)
+	}
+}
+
+func TestRunnerRepairsFinalThatDefersAvailableTool(t *testing.T) {
+	tool := &countingTool{name: "lookup"}
+	client := &scriptedClient{responses: []string{
+		`{"action":"final","content":"我已经接上上下文了；下一步应直接联网查询，不该再把问题踢回给你。"}`,
+		`{"action":"tool","tool":"lookup","input":{"query":"当前版本"}}`,
+		`{"action":"final","content":"查到了：这是当前结果。"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "那你再来一次"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "查到了：这是当前结果。" || tool.calls != 1 || len(resp.Steps) != 1 || len(client.requests) != 3 {
+		t.Fatalf("resp=%#v tool.calls=%d requests=%d", resp, tool.calls, len(client.requests))
+	}
+}
+
+func TestFinalToolCommitmentDoesNotMistakeUserInstructions(t *testing.T) {
+	if finalDefersAvailableTool("下一步你可以查询设置页里的运行状态。") {
+		t.Fatal("instruction to the user should not be treated as an agent tool commitment")
+	}
+	if !finalDefersAvailableTool("接下来我会调用搜索工具核对。") {
+		t.Fatal("agent tool commitment was not detected")
 	}
 }
 
