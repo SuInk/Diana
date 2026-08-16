@@ -64,6 +64,44 @@ func TestClaimEvidenceLedgerRejectsUnsupportedAndUnknownSources(t *testing.T) {
 	}
 }
 
+func TestClaimEvidenceLedgerKeepsAllowedSourceWithConservativeMetadata(t *testing.T) {
+	ledger := newClaimEvidenceLedger()
+	ledger.prepareSearch(map[string]any{
+		"claims":    []any{map[string]any{"id": "c1", "statement": "待验证事实"}},
+		"claim_ids": []any{"c1"},
+	})
+	result := webSearchResult{Status: "ok", StopReason: "sufficient_evidence", Sources: []string{"https://official.example/record"}}
+	raw, _ := json.Marshal(result)
+	ledger.observeSearch(string(raw), nil)
+	updates := []ClaimUpdate{{
+		ID: "c1", Status: ClaimStatusSupported, Summary: "官方记录支持该事实",
+		Evidence: []ClaimEvidence{{
+			URL: "https://official.example/record", Relation: "direct", SourceType: "官方原始资料", Distance: "primary", Strength: "strong",
+		}},
+	}}
+	if reason, ok := ledger.validateFinal(updates); !ok {
+		t.Fatalf("allowed source rejected: %s", reason)
+	}
+	evidence := ledger.traces()[0].Evidence[0]
+	if evidence.Relation != "supports" || evidence.SourceType != "unknown" || evidence.Distance != "secondary" || evidence.Strength != "low" {
+		t.Fatalf("evidence was not conservatively normalized: %#v", evidence)
+	}
+}
+
+func TestClaimEvidencePromptKeepsProtocolOutOfUserContent(t *testing.T) {
+	ledger := newClaimEvidenceLedger()
+	ledger.prepareSearch(map[string]any{
+		"claims":    []any{map[string]any{"id": "c1", "statement": "待验证事实"}},
+		"claim_ids": []any{"c1"},
+	})
+	prompt := ledger.prompt()
+	for _, expected := range []string{"仅供内部校验", "URL 必须原样取自 candidate_sources", "content 必须直接回答用户", "不得提及 claim ID"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q: %s", expected, prompt)
+		}
+	}
+}
+
 func TestClaimEvidenceLedgerIsDomainNeutral(t *testing.T) {
 	statements := []string{
 		"一则事件报道是否准确",
