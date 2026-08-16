@@ -909,6 +909,16 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 			continue
 		}
 		for _, event := range result.events {
+			if event.historyRecallCandidate {
+				recovered, recoverErr := r.recoverGroupRecallFromHistory(ctx, event)
+				if recoverErr != nil {
+					backfillErrors = append(backfillErrors, fmt.Errorf("recover backfilled recall %s: %w", event.MessageID, recoverErr))
+					continue
+				}
+				if recovered {
+					continue
+				}
+			}
 			if r.isSelfMessage(event) {
 				continue
 			}
@@ -1106,5 +1116,98 @@ func (r *Runtime) historyEventFromData(session HistorySession, data map[string]a
 	if event.Kind == EventKindPrivate && event.UserID == "" {
 		event.UserID = session.ID
 	}
+	event.historyRecallCandidate = session.Kind == EventKindGroup && historyMessageIsEmpty(data, event)
 	return event, true
+}
+
+func historyMessageIsEmpty(data map[string]any, event MessageEvent) bool {
+	if strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(event.RawMessage) != "" || len(event.Segments) != 0 {
+		return false
+	}
+	value, exists := data["message"]
+	if !exists {
+		return false
+	}
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []any:
+		return len(typed) == 0
+	case []map[string]any:
+		return len(typed) == 0
+	default:
+		return false
+	}
+}
+
+const historyBackfillOperatorRole = "history_backfill"
+
+func (r *Runtime) recoverGroupRecallFromHistory(ctx context.Context, candidate MessageEvent) (bool, error) {
+	if candidate.Kind != EventKindGroup || strings.TrimSpace(candidate.GroupID) == "" || strings.TrimSpace(candidate.MessageID) == "" {
+		return false, nil
+	}
+	r.mu.RLock()
+	store := r.messageStore
+	r.mu.RUnlock()
+	lookup, ok := store.(MessageEventLookupStore)
+	if !ok {
+		return false, nil
+	}
+
+	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	original, found, err := lookup.FindMessageEvent(loadCtx, sessionKey(candidate), candidate.MessageID)
+	cancel()
+	if err != nil {
+		return false, err
+	}
+	if !found || original.Kind != EventKindGroup || !recallEventHasContent(original) {
+		return false, nil
+	}
+	if candidate.UserID != "" && original.UserID != "" && candidate.UserID != original.UserID {
+		return false, nil
+	}
+	if recallStore, ok := store.(GroupRecallHistoryStore); ok {
+		listCtx, listCancel := context.WithTimeout(ctx, 2*time.Second)
+		recalls, listErr := recallStore.ListGroupRecallEvents(listCtx, candidate.GroupID)
+		listCancel()
+		if listErr != nil {
+			return false, listErr
+		}
+		for _, recall := range recalls {
+			if recall.MessageID == candidate.MessageID {
+				return true, nil
+			}
+		}
+	}
+
+	recall := MessageEvent{
+		Platform:         firstNonEmpty(candidate.Platform, original.Platform),
+		ProfileID:        firstNonEmpty(candidate.ProfileID, original.ProfileID),
+		ContextNamespace: firstNonEmpty(candidate.ContextNamespace, original.ContextNamespace),
+		Kind:             EventKindNotice,
+		SubType:          "group_recall",
+		Time:             time.Now().Unix(),
+		OriginalTime:     original.Time,
+		SelfID:           firstNonEmpty(candidate.SelfID, original.SelfID),
+		UserID:           firstNonEmpty(original.UserID, candidate.UserID),
+		OperatorRole:     historyBackfillOperatorRole,
+		GroupID:          original.GroupID,
+		MessageID:        original.MessageID,
+		MessageSeq:       firstNonEmpty(original.MessageSeq, candidate.MessageSeq),
+		MessageType:      original.MessageType,
+		RawMessage:       original.RawMessage,
+		Segments:         append([]MessageSegment(nil), original.Segments...),
+		SenderName:       original.SenderName,
+		SenderRole:       original.SenderRole,
+		SenderLevel:      original.SenderLevel,
+		SenderLevelLabel: original.SenderLevelLabel,
+		SenderTitle:      original.SenderTitle,
+		Quoted:           original.Quoted,
+	}
+	if err := r.HandleEvent(ctx, recall); err != nil {
+		return false, err
+	}
+	return true, nil
 }
