@@ -50,6 +50,9 @@ func (p *MessageHistoryPlugin) Manifest() PluginManifest {
 		Description: "缓存最近群聊/私聊消息、引用消息和撤回消息，并把图片与视频关键帧保存到本地历史目录。",
 		Official:    true,
 		BuiltIn:     true,
+		// 上下文、引用消息、撤回记录、识图都建立在这份缓存上，已经是产品的
+		// 一部分而不是可选插件：始终启用，也不出现在插件页。
+		Internal:    true,
 		Permissions: []string{"message:read", "notice:read", "file:write"},
 	}
 }

@@ -24,12 +24,16 @@ import (
 )
 
 type PluginManifest struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Version     string              `json:"version"`
-	Description string              `json:"description"`
-	Official    bool                `json:"official"`
-	BuiltIn     bool                `json:"built_in"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+	Official    bool   `json:"official"`
+	BuiltIn     bool   `json:"built_in"`
+	// Internal 标记已经内化为产品能力的插件：始终启用，且不出现在插件页。
+	// 这类能力是其它功能的前提，暴露成一个可关的开关只会制造「别的插件莫名
+	// 其妙不工作」的排查成本。
+	Internal    bool                `json:"internal,omitempty"`
 	Permissions []string            `json:"permissions,omitempty"`
 	Settings    []PluginSettingSpec `json:"settings,omitempty"`
 }
@@ -181,8 +185,9 @@ type PluginManager struct {
 }
 
 var (
-	ErrPluginNotFound      = errors.New("qqbot: plugin not found")
-	ErrBuiltInPluginAction = errors.New("qqbot: built-in plugins do not support install or uninstall")
+	ErrPluginNotFound        = errors.New("qqbot: plugin not found")
+	ErrBuiltInPluginAction   = errors.New("qqbot: built-in plugins do not support install or uninstall")
+	ErrInternalPluginDisable = errors.New("qqbot: 该能力已内置，无法停用")
 )
 
 const (
@@ -278,6 +283,21 @@ func (m *PluginManager) List() []PluginState {
 	return out
 }
 
+// ListVisible 返回面向用户的插件列表，跳过已内化为产品能力的插件。
+// 它们始终启用、没有可调的开关，摆在插件页上只会让人以为可以关掉。
+// 内部消费方（能力索引、Agent 能力清单）仍然用 List 看到全部。
+func (m *PluginManager) ListVisible() []PluginState {
+	states := m.List()
+	out := make([]PluginState, 0, len(states))
+	for _, state := range states {
+		if state.Manifest.Internal {
+			continue
+		}
+		out = append(out, state)
+	}
+	return out
+}
+
 // Get 按 ID 返回单个插件状态。
 func (m *PluginManager) Get(id string) (PluginState, bool) {
 	m.mu.RLock()
@@ -296,6 +316,10 @@ func (m *PluginManager) EnabledWithOverrides(id string, overrides map[string]boo
 	state, ok := m.states[id]
 	if !ok || !state.Installed {
 		return false
+	}
+	// 已内化的能力不接受任何层级的关闭，群级覆盖也一样。
+	if state.Manifest.Internal {
+		return true
 	}
 	if enabled, overridden := overrides[id]; overridden {
 		return enabled
@@ -545,6 +569,9 @@ func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error)
 	state.Manifest = plugin.Manifest()
 	if !state.Installed {
 		return state, fmt.Errorf("qqbot: plugin %q is not installed", id)
+	}
+	if state.Manifest.Internal && !enabled {
+		return state, ErrInternalPluginDisable
 	}
 	state.Enabled = enabled
 	m.states[id] = state
