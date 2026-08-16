@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+
 <template>
   <div v-if="settings.length > 0 || hasSecrets" class="group-plugin-settings">
     <button class="group-plugin-settings-toggle" type="button" :aria-expanded="expanded" @click="expanded = !expanded">
