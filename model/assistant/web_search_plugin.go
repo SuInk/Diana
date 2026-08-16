@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -28,6 +29,25 @@ const (
 
 type WebSearchPlugin struct {
 	client *http.Client
+}
+
+type unavailableWebSearchTool struct{}
+
+func (*unavailableWebSearchTool) Name() string { return agent.WebSearchToolName }
+func (*unavailableWebSearchTool) Description() string {
+	return `实时联网搜索。当前没有启用的搜索 Provider；调用后会返回明确配置诊断。input: {"query":"搜索内容"}`
+}
+func (*unavailableWebSearchTool) Run(context.Context, map[string]any) (string, error) {
+	return "", fmt.Errorf("联网搜索工具已注册，但搜索插件或全部搜索 Provider 当前已停用或未配置")
+}
+
+func ensureWebSearchAgentTool(tools []agent.Tool) []agent.Tool {
+	for _, tool := range tools {
+		if tool != nil && tool.Name() == agent.WebSearchToolName {
+			return tools
+		}
+	}
+	return append(tools, &unavailableWebSearchTool{})
 }
 
 func NewWebSearchPlugin(client *http.Client) *WebSearchPlugin {

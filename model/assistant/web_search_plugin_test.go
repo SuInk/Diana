@@ -1,7 +1,9 @@
 package assistant
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
@@ -72,5 +74,22 @@ func TestWebSearchPluginCanDisableAllProviders(t *testing.T) {
 	})
 	if err != nil || len(tools) != 0 {
 		t.Fatalf("tools=%#v err=%v", tools, err)
+	}
+}
+
+func TestEnsureWebSearchAgentToolAlwaysKeepsSearchVisible(t *testing.T) {
+	fallback := ensureWebSearchAgentTool(nil)
+	if len(fallback) != 1 || fallback[0].Name() != agent.WebSearchToolName {
+		t.Fatalf("fallback tools = %#v", fallback)
+	}
+	_, err := fallback[0].Run(context.Background(), map[string]any{"query": "Diana"})
+	if err == nil || !strings.Contains(err.Error(), "工具已注册") || !strings.Contains(err.Error(), "Provider") {
+		t.Fatalf("fallback error = %v", err)
+	}
+
+	configured := &scopeTestTool{name: agent.WebSearchToolName}
+	tools := ensureWebSearchAgentTool([]agent.Tool{configured})
+	if len(tools) != 1 || tools[0] != configured {
+		t.Fatalf("configured search tool was replaced: %#v", tools)
 	}
 }

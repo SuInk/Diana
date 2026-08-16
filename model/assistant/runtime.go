@@ -2024,6 +2024,11 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		BotAliases:       append([]string(nil), cfg.GroupTriggers...),
 		RecentImageCount: len(r.localImageEditSourceImages(event)),
 	}
+	if event.Kind == EventKindGroup {
+		payload.AvailableReplyTools = append(payload.AvailableReplyTools,
+			"web_search.search：始终注册的实时联网搜索；Provider 不可用时会返回明确配置或上游错误",
+		)
+	}
 	if cfg.AgentEnabled && event.Kind == EventKindGroup {
 		payload.AvailableReplyTools = append(payload.AvailableReplyTools,
 			"diana.qq_group：可实时读取当前群资料、完整成员列表和成员总数",
@@ -2616,6 +2621,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				return "", pluginToolsErr
 			}
 		}
+		pluginTools = ensureWebSearchAgentTool(pluginTools)
 		if r.oneBotV11SkillEnabled(event) {
 			pluginTools = append(pluginTools, newDianaOneBotV11Tool(r, event))
 		}
@@ -2725,9 +2731,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	contextBefore := len(replyHistory)
 	if agentRegistry != nil {
 		toolsBefore = agentRegistry.Len()
-		if agentScope.Routed {
-			agentRegistry.Retain(agentScope.toolSet())
-		}
 		if asyncImageTaskNotice != "" {
 			agentRegistry.Remove(dianaImageToolName)
 		}
@@ -5037,7 +5040,7 @@ func pluginContextMessages(ctx context.Context, responses []PluginResponse) []ll
 			message.Parts = make([]llm.ContentPart, 0, len(imageURLs)+1)
 			message.Parts = append(message.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: content})
 			for _, imageURL := range imageURLs {
-				message.Parts = append(message.Parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "auto"})
+				message.Parts = append(message.Parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
 			}
 		}
 		messages = append(messages, message)
@@ -6194,7 +6197,7 @@ func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Me
 		if resolveImage != nil {
 			imageURL = resolveImage(imageURL)
 		}
-		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "auto"})
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
 	}
 	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}
 }
@@ -6289,7 +6292,7 @@ func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event 
 		parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: text})
 	}
 	for _, imageURL := range imageURLs {
-		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "auto"})
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
 	}
 	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, complete
 }
