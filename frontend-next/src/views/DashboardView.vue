@@ -56,55 +56,6 @@
         </StatCard>
       </div>
 
-      <section class="card resource-monitor">
-        <div class="card-header">
-          <div>
-            <h2>系统资源</h2>
-            <div class="card-sub">{{ resourceHostLabel }}</div>
-          </div>
-        </div>
-        <!-- 三项统一成同一套结构：归属 · 名称 / 读数 / 一行补充。只报事实，
-             不画进度条。CPU 和内存是 Diana 自己的用量，存储没有「Diana 的
-             份额」这种东西，就照实标成整机，不硬凑一个数。 -->
-        <!-- 和上面的统计卡片共用同一套指标排版：内联图标 + 标签 / 读数 / 补充行。
-             CPU 和内存报 Diana 自己的用量；存储没有「Diana 的份额」这种东西，
-             就照实标成整机，不硬凑一个数。 -->
-        <div class="resource-grid">
-          <article class="resource-item">
-            <span class="stat-label">
-              <Cpu :size="14" aria-hidden="true" />
-              {{ processMetricsReady ? "CPU · Diana" : "CPU · 整机" }}
-            </span>
-            <span class="stat-value">{{ formatPercent(processMetricsReady ? stats?.server?.process_cpu_percent : stats?.server?.cpu_usage_percent) }}</span>
-            <span class="stat-foot">{{ stats?.server ? `${stats.server.cpu_cores} 核` : "等待采样" }}</span>
-          </article>
-
-          <article class="resource-item">
-            <span class="stat-label">
-              <MemoryStick :size="14" aria-hidden="true" />
-              {{ processMetricsReady ? "内存 · Diana" : "内存 · 整机" }}
-            </span>
-            <span class="stat-value">
-              {{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : formatPercent(stats?.server?.memory_usage_percent) }}
-            </span>
-            <span class="stat-foot">{{ memoryUsageLabel }}</span>
-          </article>
-
-          <article class="resource-item">
-            <span class="stat-label">
-              <HardDrive :size="14" aria-hidden="true" />
-              存储空间 · 整机
-            </span>
-            <span class="stat-value">{{ formatPercent(stats?.server?.storage_usage_percent) }}</span>
-            <span class="stat-foot">{{ storageUsageLabel }}</span>
-          </article>
-        </div>
-        <div v-if="resourceUnavailableReason" class="resource-unavailable">
-          <TriangleAlert :size="14" aria-hidden="true" />
-          {{ resourceUnavailableReason }}
-        </div>
-      </section>
-
       <div class="grid-main-side dashboard-insights">
         <!-- 24h 消息量 -->
         <section class="card">
@@ -124,6 +75,20 @@
             <h2>运行信息</h2>
           </div>
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
+            <!-- 资源占用并进这里：只报 Diana 自己吃掉的，整机容量不是这张卡片
+                 要回答的问题。存储读的是数据目录体积。 -->
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">CPU 占用</span>
+              <span>{{ processMetricsReady ? formatPercent(stats?.server?.process_cpu_percent) : "—" }}</span>
+            </div>
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">内存占用</span>
+              <span>{{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : "—" }}</span>
+            </div>
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">存储占用</span>
+              <span>{{ stats?.server?.process_storage_bytes ? formatBytes(stats.server.process_storage_bytes) : "统计中…" }}</span>
+            </div>
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">服务运行时长</span>
               <span>{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
@@ -194,9 +159,6 @@ import {
   Activity,
   ArrowRight,
   CheckCircle2,
-  Cpu,
-  HardDrive,
-  MemoryStick,
   MessageCircle,
   Power,
   PowerOff,
@@ -220,34 +182,10 @@ const setupNeeded = ref(false);
 const status = computed(() => stream.status);
 const stats = computed(() => stream.stats);
 const hourlyBuckets = computed<StatsHourBucket[]>(() => (stream.stats ? [...stream.stats.hourly] : []));
-const resourceHostLabel = computed(() => {
-  const server = stats.value?.server;
-  if (!server) return "等待服务器资源采样";
-  const platform = [server.os, server.arch].filter(Boolean).join(" / ");
-  return [server.hostname, platform].filter(Boolean).join(" · ");
-});
-// 补充行统一放「这台机器有多少」，和 CPU 的「10 核」同一性质，
-// 而不是再报一遍别人的用量。
-const memoryUsageLabel = computed(() => {
-  const server = stats.value?.server;
-  if (!server?.memory_total_bytes) return "暂不可用";
-  return `共 ${formatBytes(server.memory_total_bytes)}`;
-});
 // 进程指标可能因为权限或平台限制采集不到，那时整张卡片退回整机读数。
 const processMetricsReady = computed(() => {
   const server = stats.value?.server;
   return !!server && !server.process_metrics_unavailable && server.process_cpu_percent !== undefined;
-});
-const storageUsageLabel = computed(() => {
-  const server = stats.value?.server;
-  if (!server?.storage_total_bytes) return "暂不可用";
-  const total = `共 ${formatBytes(server.storage_total_bytes)}`;
-  if (server.storage_available_bytes === undefined) return total;
-  return `${total} · 可用 ${formatBytes(server.storage_available_bytes)}`;
-});
-const resourceUnavailableReason = computed(() => {
-  const server = stats.value?.server;
-  return server?.metrics_unavailable_reason || server?.storage_metrics_unavailable || "";
 });
 
 const feed = computed<BotEvent[]>(() => {
