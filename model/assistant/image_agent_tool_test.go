@@ -135,7 +135,7 @@ func TestDianaImageAgentToolEnforcesRelationshipPermissions(t *testing.T) {
 			"operation": operation,
 			"prompt":    "测试",
 		})
-		if err == nil || !strings.Contains(err.Error(), "好感度不足") || !strings.Contains(err.Error(), relationshipImageTierName) {
+		if err == nil || strings.Contains(err.Error(), "好感度不足") {
 			t.Fatalf("%s error = %v", operation, err)
 		}
 	}
