@@ -89,6 +89,78 @@ func TestRuntimeBackfillsMissedHistoryIntoDurableQueue(t *testing.T) {
 	}
 }
 
+func TestRuntimeBackfillsGroupRecallForLocallyStoredMessage(t *testing.T) {
+	inboundStore := newMemoryInboundEventStore()
+	watermark := time.Now().Add(-10 * time.Minute).Unix()
+	inboundStore.sessions = []HistorySession{{Kind: EventKindGroup, ID: "123", LastEventTime: watermark}}
+	historyStore := newRecallPersistenceStore()
+	original := MessageEvent{
+		Kind:       EventKindGroup,
+		Time:       watermark + 1,
+		SelfID:     "42",
+		GroupID:    "123",
+		UserID:     "10001",
+		MessageID:  "901",
+		MessageSeq: "901",
+		RawMessage: "断线期间被撤回的原文",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "断线期间被撤回的原文"}}},
+		SenderName: "Alice",
+	}
+	if err := historyStore.AppendMessageEvent(context.Background(), "group:123", original); err != nil {
+		t.Fatal(err)
+	}
+
+	channel := newQueueTestChannel()
+	channel.responses["get_group_msg_history"] = map[string]any{"messages": []any{
+		map[string]any{
+			"time": watermark + 1, "self_id": int64(42), "message_type": "group",
+			"group_id": int64(123), "user_id": int64(10001), "message_id": int64(901),
+			"message_seq": int64(901), "raw_message": "", "message": []any{},
+		},
+	}}
+	runtime := newQueuedTestRuntime(channel, inboundStore, nil)
+	runtime.SetMessageHistoryStore(historyStore)
+
+	if err := runtime.backfillInboundHistory(context.Background(), inboundStore); err != nil {
+		t.Fatal(err)
+	}
+	recalls, err := historyStore.ListGroupRecallEvents(context.Background(), "123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recalls) != 1 {
+		t.Fatalf("recovered recalls=%#v, want one", recalls)
+	}
+	if recalls[0].RawMessage != original.RawMessage || recalls[0].OperatorRole != historyBackfillOperatorRole {
+		t.Fatalf("recovered recall=%#v", recalls[0])
+	}
+	if inboundStore.hasEvent("group:123:901") {
+		t.Fatal("empty recall marker was queued as an ordinary message")
+	}
+
+	if err := runtime.backfillInboundHistory(context.Background(), inboundStore); err != nil {
+		t.Fatal(err)
+	}
+	recalls, err = historyStore.ListGroupRecallEvents(context.Background(), "123")
+	if err != nil || len(recalls) != 1 {
+		t.Fatalf("duplicate recovery recalls=%#v err=%v", recalls, err)
+	}
+}
+
+func TestHistoryMessageIsEmptyRequiresAnExplicitEmptyMessage(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, MessageID: "901"}
+	if !historyMessageIsEmpty(map[string]any{"message": []any{}}, event) {
+		t.Fatal("explicit empty history message was not recognized")
+	}
+	if historyMessageIsEmpty(map[string]any{}, event) {
+		t.Fatal("missing message field was treated as an empty history message")
+	}
+	event.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "正文"}}}
+	if historyMessageIsEmpty(map[string]any{"message": []any{}}, event) {
+		t.Fatal("message with parsed content was treated as empty")
+	}
+}
+
 func TestRuntimeObservesConnectionEpochChangesWithoutDisconnectedEdge(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	channel := newQueueTestChannel()

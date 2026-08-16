@@ -459,6 +459,9 @@ func formatRecallIdentity(name, id string) string {
 }
 
 func recallConclusionText(record MessageEvent) string {
+	if strings.EqualFold(strings.TrimSpace(record.OperatorRole), historyBackfillOperatorRole) {
+		return "断线回补确认消息已撤回；实际撤回时间和操作者无法从历史接口恢复"
+	}
 	operatorID := strings.TrimSpace(record.OperatorID)
 	if operatorID == "" {
 		return "撤回通知未提供操作者，无法判断是自行撤回还是管理员撤回"
@@ -479,6 +482,8 @@ func recallConclusionText(record MessageEvent) string {
 
 func recallOperatorRoleText(record MessageEvent) string {
 	switch strings.ToLower(strings.TrimSpace(record.OperatorRole)) {
+	case historyBackfillOperatorRole:
+		return "断线回补（操作者未知）"
 	case "owner":
 		return "群主"
 	case "admin":
