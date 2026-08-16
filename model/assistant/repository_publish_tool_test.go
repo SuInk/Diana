@@ -376,6 +376,55 @@ func TestRepositoryIssueSearchRequiresAuthorizedUsersOwnToken(t *testing.T) {
 	}
 }
 
+func TestRepositoryIssueAuthorizedUserCanInheritGlobalToken(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := newDianaRepositoryIssuesTool(
+		NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "搜索 acme/demo"},
+		newRepositoryPublishPlugin(server.Client(), server.URL),
+		SettingValues{
+			repositoryPublishSettingAllowlist:  "acme/demo",
+			repositoryPublishSettingUserAccess: "member = acme/demo",
+			repositoryPublishSettingToken:      repositoryPublishTestToken,
+			repositoryPublishSettingUserAuth:   `{"member":"inherit"}`,
+		},
+	)
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{"operation": "search", "repository": "acme/demo", "query": "login"})
+	if result.FailureCode == "user_token_required" || github.count(http.MethodGet) == 0 {
+		t.Fatalf("inherited token result=%#v requests=%#v", result, github.requests)
+	}
+}
+
+func TestRepositoryIssueAuthorizedUserCanSelectGH(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
+	plugin.ghAuthToken = func(context.Context) (string, error) { return repositoryPublishTestToken, nil }
+	tool := newDianaRepositoryIssuesTool(
+		NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "搜索 acme/demo"},
+		plugin,
+		SettingValues{
+			repositoryPublishSettingAllowlist:  "acme/demo",
+			repositoryPublishSettingUserAccess: "member = acme/demo",
+			repositoryPublishSettingUserAuth:   `{"member":"gh"}`,
+		},
+	)
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{"operation": "search", "repository": "acme/demo", "query": "login"})
+	if result.FailureCode == "user_token_required" || github.count(http.MethodGet) == 0 {
+		t.Fatalf("gh user result=%#v requests=%#v", result, github.requests)
+	}
+}
+
+func TestRepositoryPublishUserAuthModesRejectInvalidMode(t *testing.T) {
+	if _, err := repositoryPublishUserAuthModes(`{"member":"unknown"}`); err == nil {
+		t.Fatal("invalid user auth mode accepted")
+	}
+}
+
 func TestRepositoryIssueUserTokenCannotBypassGlobalAllowlist(t *testing.T) {
 	settings := SettingValues{
 		repositoryPublishSettingAllowlist:  "acme/other",
