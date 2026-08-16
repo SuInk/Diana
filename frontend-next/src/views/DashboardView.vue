@@ -54,9 +54,9 @@
               </span>
             </div>
 
-            <div class="checklist-item" :class="connectedChannelCount > 0 ? 'done' : 'todo'">
+            <div class="checklist-item" :class="operationalChannelCount > 0 ? 'done' : 'todo'">
               <span class="check-icon">
-                <CheckCircle2 v-if="connectedChannelCount > 0" :size="15" aria-hidden="true" />
+                <CheckCircle2 v-if="operationalChannelCount > 0" :size="15" aria-hidden="true" />
                 <Cable v-else :size="14" aria-hidden="true" />
               </span>
               <span class="check-main">
@@ -64,8 +64,8 @@
                 <div class="check-hint">{{ channelSummary }}</div>
                 <div v-if="status?.channel.last_error" class="check-hint text-err">{{ status.channel.last_error }}</div>
               </span>
-              <span v-if="status" class="badge" :class="connectedChannelCount > 0 ? 'ok' : 'err'">
-                {{ connectedChannelCount > 0 ? `已连接 ${connectedChannelCount} / ${channelCount}` : "未连接" }}
+              <span v-if="status" class="badge" :class="operationalChannelCount > 0 ? 'ok' : 'err'" :title="channelProblemHint">
+                {{ unhealthyChannelCount > 0 ? `QQ 异常 ${unhealthyChannelCount} / ${channelCount}` : operationalChannelCount > 0 ? `正常 ${operationalChannelCount} / ${channelCount}` : "未连接" }}
               </span>
             </div>
 
@@ -278,6 +278,7 @@ import { toastError, toastSuccess } from "../toast";
 import StatCard from "../components/StatCard.vue";
 import HourlyBars from "../components/HourlyBars.vue";
 import EmptyState from "../components/EmptyState.vue";
+import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
 
 const busy = ref(false);
 const setupNeeded = ref(false);
@@ -286,11 +287,17 @@ const setupCompleted = ref(window.localStorage.getItem("dqb-next:setup-completed
 const status = computed(() => stream.status);
 const stats = computed(() => stream.stats);
 const channelCount = computed(() => status.value?.channels?.length ?? (status.value?.channel ? 1 : 0));
-const connectedChannelCount = computed(() => status.value?.channels?.filter((channel) => channel.connected).length ?? (status.value?.channel?.connected ? 1 : 0));
+const currentChannels = computed(() => status.value?.channels ?? (status.value?.channel ? [status.value.channel] : []));
+const operationalChannelCount = computed(() => currentChannels.value.filter(channelOperational).length);
+const unhealthyChannelCount = computed(() => currentChannels.value.filter(channelAccountUnhealthy).length);
+const channelProblemHint = computed(() => {
+  const problem = currentChannels.value.find((channel) => channelAccountUnhealthy(channel) || !channel.connected);
+  return problem ? channelStatusHint(problem) : "机器人通道与账号状态正常。";
+});
 const channelSummary = computed(() => {
   const channels = status.value?.channels ?? [];
   if (channels.length === 0) return status.value?.channel?.endpoint || "—";
-  return channels.map((channel) => `${channel.name || channel.platform || "通道"} · ${channel.connected ? "在线" : "离线"}`).join("  /  ");
+  return channels.map((channel) => `${channel.name || channel.platform || "通道"} · ${channelStatusLabel(channel)}`).join("  /  ");
 });
 const hourlyBuckets = computed<StatsHourBucket[]>(() => (stream.stats ? [...stream.stats.hourly] : []));
 const resourceHostLabel = computed(() => {

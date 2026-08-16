@@ -422,6 +422,10 @@ export interface QQBotChannelStatus {
   platform?: string;
   name?: string;
   connected: boolean;
+  account_status_known?: boolean;
+  account_online?: boolean;
+  account_good?: boolean;
+  account_status_message?: string;
   endpoint: string;
   self_id?: string;
   last_error?: string;
