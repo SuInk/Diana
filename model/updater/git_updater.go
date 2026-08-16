@@ -56,6 +56,9 @@ type Status struct {
 	LastFetchedAt     time.Time `json:"last_fetched_at,omitempty"`
 	LastUpdateAt      time.Time `json:"last_update_at,omitempty"`
 	LastUpdateText    string    `json:"last_update_text,omitempty"`
+	LastUpdateStatus  string    `json:"last_update_status,omitempty"`
+	LastUpdateVersion string    `json:"last_update_version,omitempty"`
+	LastUpdateError   string    `json:"last_update_error,omitempty"`
 }
 
 func (s Status) VersionLabel() string {

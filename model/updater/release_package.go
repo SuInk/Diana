@@ -308,6 +308,9 @@ func (u *ReleasePackageUpdater) Status(context.Context) (Status, error) {
 	}
 	if state, ok := readReleaseState(u.installRoot); ok {
 		status.LastUpdateAt = state.At
+		status.LastUpdateStatus = state.Status
+		status.LastUpdateVersion = state.TargetVersion
+		status.LastUpdateError = state.Error
 		status.LastUpdateText = state.Status
 		if state.TargetVersion != "" {
 			status.LastUpdateText += ": " + state.TargetVersion
