@@ -265,11 +265,16 @@
         :user-access="String(settingsForm.user_repository_access ?? '')"
         :group-access="String(settingsForm.group_repository_access ?? '')"
         :token-users="String(settingsForm.user_github_token_users ?? '')"
+        :user-auth-modes="String(settingsForm.user_github_auth_modes ?? '')"
+        :joined-groups="repositoryGroups"
+        :groups-loading="repositoryGroupsLoading"
+        :groups-warning="repositoryGroupsWarning"
         @update:allowed-repositories="settingsForm.allowed_repositories = $event"
         @update:user-access="settingsForm.user_repository_access = $event"
         @update:group-access="settingsForm.group_repository_access = $event"
         @update:user-tokens="settingsForm.user_github_tokens = $event"
         @update:token-users="settingsForm.user_github_token_users = $event"
+        @update:user-auth-modes="settingsForm.user_github_auth_modes = $event"
       />
       <RepositoryIssueDraftList v-if="settingsTarget.manifest.id === repositoryPublishPluginID" />
       <div class="stack plugin-settings-form">
@@ -367,12 +372,14 @@ import {
   installPlugin,
   installResolverDependency,
   listPlugins,
+  listQQBotGroups,
   setPluginEnabled,
   uninstallPlugin,
   updatePluginSettings,
   listResolverDependencies,
   type PluginSettingSpec,
   type PluginState,
+  type QQBotGroupSummary,
   type ResolverDependency
 } from "../api";
 import { askConfirm } from "../confirm";
@@ -404,6 +411,9 @@ const settingsTarget = ref<PluginState | null>(null);
 const settingsForm = ref<Record<string, any>>({});
 const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
+const repositoryGroups = ref<QQBotGroupSummary[]>([]);
+const repositoryGroupsLoading = ref(false);
+const repositoryGroupsWarning = ref("");
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
 const repositoryAccessSettingKeys = new Set([
@@ -411,7 +421,8 @@ const repositoryAccessSettingKeys = new Set([
   "user_repository_access",
   "group_repository_access",
   "user_github_tokens",
-  "user_github_token_users"
+  "user_github_token_users",
+  "user_github_auth_modes"
 ]);
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
   if (settingsTarget.value?.manifest.id !== repositoryPublishPluginID) return settingsSpecs.value;
@@ -506,6 +517,21 @@ function openSettings(plugin: PluginState): void {
   settingsForm.value = form;
   clearSecrets.value = [];
   settingsTarget.value = plugin;
+  if (plugin.manifest.id === repositoryPublishPluginID) void loadRepositoryGroups();
+}
+
+async function loadRepositoryGroups(): Promise<void> {
+  repositoryGroupsLoading.value = true;
+  repositoryGroupsWarning.value = "";
+  try {
+    const response = await listQQBotGroups();
+    repositoryGroups.value = response.groups;
+    repositoryGroupsWarning.value = response.warning ?? "";
+  } catch (error) {
+    repositoryGroupsWarning.value = error instanceof Error ? error.message : "群列表加载失败";
+  } finally {
+    repositoryGroupsLoading.value = false;
+  }
 }
 
 // 排列方式记在 localStorage：插件多起来之后，横排更利于扫读，

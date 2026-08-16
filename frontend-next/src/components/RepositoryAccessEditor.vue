@@ -14,7 +14,10 @@
     <div class="rule-list">
       <article v-for="(user, index) in users" :key="`user-${index}`" class="access-rule">
         <div class="rule-header">
-          <strong>{{ user.id || "新授权用户" }}</strong>
+          <div class="identity">
+            <img v-if="qqAvatarURL(user.id)" class="avatar" :src="qqAvatarURL(user.id)" alt="" />
+            <strong>{{ user.id || "新授权用户" }}</strong>
+          </div>
           <button class="btn small ghost danger icon-only" type="button" title="删除用户" aria-label="删除用户" @click="removeUser(index)">
             <Trash2 :size="15" aria-hidden="true" />
           </button>
@@ -25,7 +28,11 @@
             <input class="input mono" type="text" inputmode="numeric" :value="user.id" placeholder="QQ 用户 ID" @input="updateUserID(index, $event)" />
           </label>
           <label>
-            <span>GitHub Token</span>
+            <span>认证来源</span>
+            <AppSelect v-model="user.authMode" :options="authModeOptions" @update:model-value="emitAll" />
+          </label>
+          <label v-if="user.authMode === 'token'" class="token-field">
+            <span>独立 GitHub Token</span>
             <div class="token-input">
               <input class="input mono" type="password" autocomplete="new-password" :placeholder="user.tokenConfigured ? '已配置，留空则保持不变' : 'github_pat_…'" @input="updateToken(index, $event)" />
               <span class="token-state" :class="{ configured: user.tokenConfigured }">{{ user.tokenConfigured ? "已配置" : "未配置" }}</span>
@@ -33,7 +40,7 @@
             </div>
           </label>
         </div>
-        <RepositoryListEditor :repositories="user.repositories" placeholder="owner/repo" @update="updateUserRepositories(index, $event)" />
+        <RepositoryListEditor :repositories="user.repositories" placeholder="owner/repo 或 GitHub 仓库链接" @update="updateUserRepositories(index, $event)" />
       </article>
     </div>
     <button class="btn small ghost add-rule" type="button" @click="addUser">
@@ -56,44 +63,73 @@
     <div class="rule-list">
       <article v-for="(group, index) in groups" :key="`group-${index}`" class="access-rule group-rule">
         <div class="rule-header">
-          <input class="input mono group-id" type="text" inputmode="numeric" :value="group.id" placeholder="群 ID" aria-label="群 ID" @input="updateGroupID(index, $event)" />
+          <div class="identity">
+            <img v-if="groupSummary(group.id)?.avatar_url" class="avatar" :src="groupSummary(group.id)?.avatar_url" alt="" />
+            <div><strong>{{ groupSummary(group.id)?.group_name || group.id }}</strong><small class="mono">{{ group.id }}</small></div>
+          </div>
           <button class="btn small ghost danger icon-only" type="button" title="删除群聊" aria-label="删除群聊" @click="removeGroup(index)">
             <Trash2 :size="15" aria-hidden="true" />
           </button>
         </div>
-        <RepositoryListEditor :repositories="group.repositories" placeholder="允许发起草稿的 owner/repo" @update="updateGroupRepositories(index, $event)" />
+        <RepositoryListEditor :repositories="group.repositories" placeholder="owner/repo 或 GitHub 仓库链接" @update="updateGroupRepositories(index, $event)" />
       </article>
     </div>
-    <button class="btn small ghost add-rule" type="button" @click="addGroup">
+    <button class="btn small ghost add-rule" type="button" @click="showGroupPicker = !showGroupPicker">
       <MessageSquarePlus :size="15" aria-hidden="true" />
       添加群聊
     </button>
+    <div v-if="showGroupPicker" class="group-picker">
+      <input v-model="groupQuery" class="input" type="search" placeholder="搜索已加入的群名称或群号" />
+      <p v-if="groupsLoading" class="picker-state">正在读取群列表…</p>
+      <p v-else-if="groupsWarning" class="picker-state">{{ groupsWarning }}</p>
+      <button v-for="group in availableGroups" :key="group.group_id" class="group-option" type="button" @click="addGroup(group.group_id)">
+        <img v-if="group.avatar_url" class="avatar" :src="group.avatar_url" alt="" />
+        <span><strong>{{ group.group_name || group.group_id }}</strong><small class="mono">{{ group.group_id }}</small></span>
+      </button>
+      <p v-if="!groupsLoading && !availableGroups.length" class="picker-state">没有匹配的可选群聊</p>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { defineComponent, h, ref, watch } from "vue";
+import { computed, defineComponent, h, ref, watch } from "vue";
 import { ArrowRight, MessageSquarePlus, Trash2, UserPlus, X } from "@lucide/vue";
+import type { QQBotGroupSummary } from "../api";
+import AppSelect, { type AppSelectOption } from "./AppSelect.vue";
 
 type AccessRule = { id: string; repositories: string[] };
-type UserRule = AccessRule & { tokenConfigured: boolean };
+type UserRule = AccessRule & { tokenConfigured: boolean; authMode: "inherit" | "gh" | "token" };
 
-const props = defineProps<{ userAccess: string; groupAccess: string; tokenUsers: string }>();
+const props = defineProps<{ userAccess: string; groupAccess: string; tokenUsers: string; userAuthModes: string; joinedGroups: QQBotGroupSummary[]; groupsLoading?: boolean; groupsWarning?: string }>();
 const emit = defineEmits<{
   "update:userAccess": [string];
   "update:groupAccess": [string];
   "update:userTokens": [string];
   "update:tokenUsers": [string];
+  "update:userAuthModes": [string];
   "update:allowedRepositories": [string];
 }>();
 
 const configuredTokenUsers = ref(parseIDs(props.tokenUsers));
-const users = ref<UserRule[]>(parseRules(props.userAccess).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id) })));
+const initialAuthModes = parseAuthModes(props.userAuthModes);
+const users = ref<UserRule[]>(parseRules(props.userAccess).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: initialAuthModes[rule.id] || "token" })));
 const groups = ref<AccessRule[]>(parseRules(props.groupAccess));
 const tokenChanges = ref<Record<string, string | null>>({});
+const showGroupPicker = ref(false);
+const groupQuery = ref("");
+const authModeOptions: AppSelectOption[] = [
+  { value: "inherit", label: "沿用插件全局认证" },
+  { value: "gh", label: "服务器 GitHub CLI (gh)" },
+  { value: "token", label: "独立 Token" }
+];
+const availableGroups = computed(() => {
+  const selected = new Set(groups.value.map((group) => group.id));
+  const query = groupQuery.value.trim().toLowerCase();
+  return props.joinedGroups.filter((group) => group.joined && !selected.has(group.group_id) && (!query || `${group.group_name ?? ""} ${group.group_id}`.toLowerCase().includes(query)));
+});
 
 watch(() => props.userAccess, (value) => {
-  if (value !== serializeRules(users.value)) users.value = parseRules(value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id) }));
+  if (value !== serializeRules(users.value)) users.value = parseRules(value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: parseAuthModes(props.userAuthModes)[rule.id] || "token" }));
 });
 watch(() => props.groupAccess, (value) => {
   if (value !== serializeRules(groups.value)) groups.value = parseRules(value);
@@ -115,6 +151,16 @@ function parseRules(value: string): AccessRule[] {
 function parseIDs(value: string): Set<string> {
   return new Set(String(value ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
 }
+function parseAuthModes(value: string): Record<string, UserRule["authMode"]> {
+  try {
+    const parsed = JSON.parse(value || "{}") as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, UserRule["authMode"]] => ["inherit", "gh", "token"].includes(String(entry[1]))));
+  } catch { return {}; }
+}
+function qqAvatarURL(userID: string): string {
+  return /^\d{5,12}$/.test(userID.trim()) ? `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(userID.trim())}&s=100` : "";
+}
+function groupSummary(groupID: string): QQBotGroupSummary | undefined { return props.joinedGroups.find((group) => group.group_id === groupID); }
 function serializeRules(value: AccessRule[]): string {
   return value.filter((rule) => rule.id.trim()).map((rule) => `${rule.id.trim()} = ${rule.repositories.join(", ")}`).join("\n");
 }
@@ -123,10 +169,11 @@ function emitAll(): void {
   emit("update:groupAccess", serializeRules(groups.value));
   emit("update:userTokens", Object.keys(tokenChanges.value).length ? JSON.stringify(tokenChanges.value) : "");
   emit("update:tokenUsers", [...configuredTokenUsers.value].join("\n"));
+  emit("update:userAuthModes", JSON.stringify(Object.fromEntries(users.value.filter((user) => user.id.trim()).map((user) => [user.id.trim(), user.authMode]))));
   const repositories = new Set([...users.value, ...groups.value].flatMap((rule) => rule.repositories));
   emit("update:allowedRepositories", [...repositories].join("\n"));
 }
-function addUser(): void { users.value.push({ id: "", repositories: [], tokenConfigured: false }); }
+function addUser(): void { users.value.push({ id: "", repositories: [], tokenConfigured: false, authMode: "inherit" }); }
 function removeUser(index: number): void {
   const id = users.value[index]?.id.trim();
   if (id) { tokenChanges.value[id] = null; configuredTokenUsers.value.delete(id); }
@@ -154,9 +201,8 @@ function clearToken(index: number): void {
   tokenChanges.value[id] = null; configuredTokenUsers.value.delete(id); users.value[index].tokenConfigured = false; emitAll();
 }
 function updateUserRepositories(index: number, value: string[]): void { users.value[index].repositories = value; emitAll(); }
-function addGroup(): void { groups.value.push({ id: "", repositories: [] }); }
+function addGroup(groupID: string): void { groups.value.push({ id: groupID, repositories: [] }); showGroupPicker.value = false; groupQuery.value = ""; emitAll(); }
 function removeGroup(index: number): void { groups.value.splice(index, 1); emitAll(); }
-function updateGroupID(index: number, event: Event): void { groups.value[index].id = (event.target as HTMLInputElement).value.trim(); emitAll(); }
 function updateGroupRepositories(index: number, value: string[]): void { groups.value[index].repositories = value; emitAll(); }
 
 const RepositoryListEditor = defineComponent({
@@ -166,7 +212,7 @@ const RepositoryListEditor = defineComponent({
     const draft = ref("");
     const error = ref("");
     const add = () => {
-      const repository = draft.value.trim().replace(/\.git$/i, "");
+      const repository = normalizeRepository(draft.value);
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) { error.value = "请填写 owner/repo"; return; }
       error.value = "";
       if (!editorProps.repositories.some((item) => item.toLowerCase() === repository.toLowerCase())) editorEmit("update", [...editorProps.repositories, repository]);
@@ -185,6 +231,15 @@ const RepositoryListEditor = defineComponent({
     ]);
   }
 });
+
+function normalizeRepository(value: string): string {
+  let repository = value.trim();
+  try {
+    const url = new URL(repository.includes("://") ? repository : `https://${repository}`);
+    if (/^(www\.)?github\.com$/i.test(url.hostname)) repository = url.pathname.split("/").filter(Boolean).slice(0, 2).join("/");
+  } catch { /* Let the owner/repo validator report malformed input. */ }
+  return repository.replace(/^github\.com\//i, "").replace(/\.git\/?$/i, "").replace(/\/$/, "");
+}
 </script>
 
 <style scoped>
@@ -195,12 +250,20 @@ const RepositoryListEditor = defineComponent({
 .rule-list { display: flex; flex-direction: column; gap: 10px; }
 .access-rule { padding: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); }
 .rule-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.user-fields { display: grid; grid-template-columns: minmax(150px, .42fr) minmax(280px, 1fr); gap: 10px; margin-bottom: 12px; }
+.user-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.token-field { grid-column: auto; }
 .user-fields label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; }
 .token-input { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
 .token-state { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .token-state.configured { color: var(--ok); }
-.group-id { width: min(320px, 100%); }
+.identity { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.identity div, .group-option span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.identity small, .group-option small { color: var(--muted); font-size: 11px; }
+.avatar { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; object-fit: cover; background: var(--surface); }
+.group-picker { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--border); background: var(--surface-2); }
+.group-option { display: flex; align-items: center; gap: 9px; padding: 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.group-option:hover { background: var(--surface); }
+.picker-state { margin: 4px; color: var(--muted); font-size: 12px; }
 .section-divider { height: 1px; margin: 4px 0; background: var(--border); }
 .approval-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: var(--muted); font-size: 12px; }
 .add-rule { align-self: flex-start; }
