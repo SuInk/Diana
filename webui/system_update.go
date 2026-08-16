@@ -34,6 +34,8 @@ type systemUpdateCheckResponse struct {
 	DeploymentMode    string               `json:"deployment_mode"`
 	CurrentVersion    string               `json:"current_version"`
 	LatestVersion     string               `json:"latest_version,omitempty"`
+	LatestPublishedAt string               `json:"latest_published_at,omitempty"`
+	CheckedAt         string               `json:"checked_at"`
 	UpdateAvailable   bool                 `json:"update_available"`
 	UpdateSupported   bool                 `json:"update_supported"`
 	IntegrityMode     string               `json:"integrity_mode"`
@@ -243,10 +245,17 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, versionErr)
 		return
 	}
+	checkedAt := h.currentTime().UTC()
+	latestPublishedAt := ""
+	if !latest.Date.IsZero() {
+		latestPublishedAt = latest.Date.UTC().Format(time.RFC3339)
+	}
 	c.JSON(http.StatusOK, systemUpdateCheckResponse{
 		DeploymentMode:    mode,
 		CurrentVersion:    current,
 		LatestVersion:     latest.Tag,
+		LatestPublishedAt: latestPublishedAt,
+		CheckedAt:         checkedAt.Format(time.RFC3339),
 		UpdateAvailable:   updateAvailable || releaseApplyPending(status, gitAvailable),
 		UpdateSupported:   gitAvailable || packageReady,
 		IntegrityMode:     integrity,
