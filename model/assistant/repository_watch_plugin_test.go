@@ -19,10 +19,16 @@ import (
 type repositoryWatchTestGitHub struct {
 	mu           sync.Mutex
 	commits      []map[string]any
+	pullRequests []map[string]any
+	pullFiles    map[int][]map[string]any
 	releases     []map[string]any
+	starCount    int
 	token        string
 	commitCalls  int
+	pullCalls    int
 	releaseCalls int
+	starCalls    int
+	diffCalls    int
 	failCommits  bool
 	failReleases bool
 }
@@ -44,6 +50,30 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		_ = json.NewEncoder(w).Encode(s.commits)
 		return
 	}
+	if strings.Contains(r.URL.Path, "/compare/") {
+		s.diffCalls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"total_commits": 1,
+			"ahead_by":      1,
+			"files": []map[string]any{{
+				"filename": "model/assistant/runtime.go", "status": "modified",
+				"additions": 4, "deletions": 1, "changes": 5,
+				"patch": "@@ -1 +1 @@\n-old\n+new",
+			}},
+		})
+		return
+	}
+	if strings.Contains(r.URL.Path, "/pulls/") && strings.HasSuffix(r.URL.Path, "/files") {
+		var number int
+		_, _ = fmt.Sscanf(r.URL.Path, "/repos/acme/demo/pulls/%d/files", &number)
+		_ = json.NewEncoder(w).Encode(s.pullFiles[number])
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/pulls") {
+		s.pullCalls++
+		_ = json.NewEncoder(w).Encode(s.pullRequests)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/releases") {
 		s.releaseCalls++
 		if s.failReleases {
@@ -51,6 +81,11 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		_ = json.NewEncoder(w).Encode(s.releases)
+		return
+	}
+	if r.URL.Path == "/repos/acme/demo" {
+		s.starCalls++
+		_ = json.NewEncoder(w).Encode(map[string]any{"stargazers_count": s.starCount, "html_url": "https://github.com/acme/demo"})
 		return
 	}
 	http.NotFound(w, r)
@@ -72,6 +107,21 @@ func repositoryWatchReleasePayload(tag, name string) map[string]any {
 		"tag_name": tag, "name": name, "body": "完整更新说明",
 		"html_url":     "https://github.com/acme/demo/releases/tag/" + tag,
 		"published_at": "2026-08-13T00:00:00Z", "draft": false,
+	}
+}
+
+func repositoryWatchPullPayload(number int, title, state, mergeSHA, updatedAt string) map[string]any {
+	var mergedAt any
+	if state == "merged" {
+		mergedAt = updatedAt
+		state = "closed"
+	}
+	return map[string]any{
+		"number": number, "title": title, "state": state,
+		"html_url":   "https://github.com/acme/demo/pull/" + fmt.Sprint(number),
+		"created_at": "2026-08-13T00:00:00Z", "updated_at": updatedAt, "merged_at": mergedAt,
+		"merge_commit_sha": mergeSHA, "user": map[string]any{"login": "diana"},
+		"base": map[string]any{"ref": "main"}, "head": map[string]any{"ref": "feature"},
 	}
 }
 
@@ -161,6 +211,72 @@ func TestRepositoryWatchPluginBuildsBaselineAndChanges(t *testing.T) {
 	}
 }
 
+func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		commits:      []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
+		pullRequests: []map[string]any{repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z")},
+		releases:     []map[string]any{repositoryWatchReleasePayload("v1.0.0", "First")},
+		starCount:    10,
+		pullFiles:    map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Commits: true, PullRequests: true, Releases: true, Stars: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil || baseline.CommitSHA != "base-sha" || baseline.PullRequestCursor == "" || baseline.ReleaseTag != "v1.0.0" || baseline.StarCount != 10 || !baseline.HasStarCount {
+		t.Fatalf("baseline=%#v err=%v", baseline, err)
+	}
+
+	github.mu.Lock()
+	github.commits = []map[string]any{
+		repositoryWatchCommitPayload("direct-sha", "improve watcher"),
+		repositoryWatchCommitPayload("merge-sha", "merge pull request"),
+		repositoryWatchCommitPayload("base-sha", "initial"),
+	}
+	github.pullRequests = []map[string]any{
+		repositoryWatchPullPayload(2, "add PR classification", "merged", "merge-sha", "2026-08-14T00:00:00Z"),
+		repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z"),
+	}
+	github.pullFiles[2] = []map[string]any{{
+		"filename": "model/assistant/repository_watch_plugin.go", "status": "modified",
+		"additions": 20, "deletions": 2, "changes": 22, "patch": "@@ -1 +1 @@\n-old\n+new PR support",
+	}}
+	github.releases = []map[string]any{
+		repositoryWatchReleasePayload("v1.1.0", "Second"),
+		repositoryWatchReleasePayload("v1.0.0", "First"),
+	}
+	github.starCount = 13
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Commits) != 1 || change.Commits[0].SHA != "direct-sha" {
+		t.Fatalf("commits were not classified: %#v", change.Commits)
+	}
+	if change.CommitDiff == nil || len(change.CommitDiff.Files) != 1 || !strings.Contains(change.CommitDiff.Files[0].Patch, "+new") {
+		t.Fatalf("commit diff=%#v", change.CommitDiff)
+	}
+	if len(change.PullRequests) != 1 || change.PullRequests[0].Status != "merged" || len(change.PullRequests[0].Files) != 1 {
+		t.Fatalf("pull requests=%#v", change.PullRequests)
+	}
+	if change.Stars == nil || change.Stars.Previous != 10 || change.Stars.Current != 13 || change.Stars.Delta != 3 {
+		t.Fatalf("stars=%#v", change.Stars)
+	}
+	if change.Snapshot.StarCount != 13 || change.Snapshot.PullRequestCursor == baseline.PullRequestCursor {
+		t.Fatalf("snapshot=%#v", change.Snapshot)
+	}
+	rendered := renderRepositoryWatchChanges(change)
+	for _, want := range []string{"Commit · 1", "PR · 1", "#2 [已合并]", "Release · 1", "Star", "10 → 13（+3）"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered changes missing %q: %s", want, rendered)
+		}
+	}
+}
+
 func TestRepositoryWatchCommitLimitOnlyMarksActualOverflow(t *testing.T) {
 	github := &repositoryWatchTestGitHub{}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
@@ -226,7 +342,7 @@ func TestRenderRepositoryWatchChangesAlwaysIncludesEveryFetchedCommit(t *testing
 		Truncated: true,
 	}
 	result := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"1111111: first", "2222222: second", "3333333: third", "v1.2.3: Stable", "本次只展示了部分最新提交。"} {
+	for _, want := range []string{"Commit · 3", "1111111 first", "2222222 second", "3333333 third", "Release · 1", "v1.2.3: Stable", "本次只展示了部分最新提交。"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, result)
 		}
@@ -407,26 +523,33 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 			repositoryWatchCommitPayload("new-sha", "fix delivery"),
 			repositoryWatchCommitPayload("base-sha", "initial"),
 		},
+		pullRequests: []map[string]any{
+			repositoryWatchPullPayload(2, "add classified notifications", "open", "", "2026-08-14T00:00:00Z"),
+			repositoryWatchPullPayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z"),
+		},
+		pullFiles: map[int][]map[string]any{2: {{
+			"filename": "model/assistant/repository_watch_plugin.go", "status": "modified",
+			"additions": 12, "deletions": 1, "changes": 13, "patch": "@@ -1 +1 @@\n-old\n+classified",
+		}}},
 		releases: []map[string]any{
 			repositoryWatchReleasePayload("v1.1.0", "Second"),
 			repositoryWatchReleasePayload("v1.0.0", "First"),
 		},
+		starCount: 8,
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
 	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
 	store := &stubReminderStore{items: []Reminder{{
 		ID: "watch-2", Kind: ReminderKindRepositoryWatch, OwnerID: "owner", GroupID: "123", UserID: "owner",
-		Repository: "acme/demo", WatchCommits: true, WatchReleases: true,
-		LastCommitSHA: "base-sha", LastReleaseTag: "v1.0.0",
+		Repository: "acme/demo", WatchCommits: true, WatchPullRequests: true, WatchReleases: true, WatchStars: true,
+		LastCommitSHA: "base-sha", LastPullRequestCursor: repositoryWatchPullCursor(time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC), 1),
+		LastReleaseTag: "v1.0.0", LastStarCount: 7,
 		TriggerAt: time.Now().Add(-time.Minute), IntervalSeconds: 1800, CreatedAt: time.Now().Add(-time.Hour),
 	}}}
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{"修复了投递，并发布 v1.1.0。"}}
-	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second, SystemPrompt: "全局普通人设"}, channel, NewPluginManager(plugin), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
-	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"123": {GroupID: "123", SystemPrompt: "本群限定的自然人设"},
-	}})
+	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second, SystemPrompt: "本群限定的自然人设", DirectReplyChunkSize: 5000, ForwardReplyThreshold: 5000}, channel, NewPluginManager(plugin), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
 	runtime.fireDueReminders(context.Background())
 	var sentParts []string
 	for _, sent := range channel.sent {
@@ -436,14 +559,18 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		sentParts = append(sentParts, sent.Text)
 	}
 	sentText := strings.Join(sentParts, "\n")
-	if len(channel.sent) == 0 || !strings.Contains(sentText, "new-sha: fix delivery") || !strings.Contains(sentText, "v1.1.0") || strings.Contains(sentText, "watch-2") {
-		t.Fatalf("sent=%#v", channel.sent)
+	if sentText == "" {
+		sentText = fmt.Sprint(channel.calls)
+	}
+	delivered := len(channel.sent) > 0 || len(channel.calls) > 0 && channel.calls[0].action == "send_group_forward_msg"
+	if !delivered || !strings.Contains(sentText, "Commit · 1") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR · 1") || !strings.Contains(sentText, "Release · 1") || !strings.Contains(sentText, "Star") || !strings.Contains(sentText, "v1.1.0") || strings.Contains(sentText, "watch-2") {
+		t.Fatalf("sent=%#v calls=%#v item=%#v requests=%#v", channel.sent, channel.calls, store.items[0], provider.requests)
 	}
 	item := store.items[0]
-	if item.LastCommitSHA != "new-sha" || item.LastReleaseTag != "v1.1.0" || item.PendingDelivery != "" || item.ConsecutiveFailures != 0 {
+	if item.LastCommitSHA != "new-sha" || item.LastPullRequestCursor == "" || item.LastReleaseTag != "v1.1.0" || item.LastStarCount != 8 || item.PendingDelivery != "" || item.ConsecutiveFailures != 0 {
 		t.Fatalf("item=%#v", item)
 	}
-	if len(provider.requests) != 1 || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") || !requestMessagesContain(provider.requests[0].Messages, "本群限定的自然人设") || !requestMessagesContain(provider.requests[0].Messages, "自然反应或评价") || !requestMessagesContain(provider.requests[0].Messages, "不要无依据吹捧") || requestMessagesContain(provider.requests[0].Messages, "watch-2") {
+	if len(provider.requests) != 1 || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "classified notifications") || !requestMessagesContain(provider.requests[0].Messages, "repository_watch_plugin.go") || !requestMessagesContain(provider.requests[0].Messages, "+classified") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") || !requestMessagesContain(provider.requests[0].Messages, "本群限定的自然人设") || !requestMessagesContain(provider.requests[0].Messages, "自然反应或评价") || !requestMessagesContain(provider.requests[0].Messages, "不要无依据吹捧") || requestMessagesContain(provider.requests[0].Messages, "watch-2") {
 		t.Fatalf("requests=%#v", provider.requests)
 	}
 }

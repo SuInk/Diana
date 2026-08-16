@@ -178,9 +178,13 @@ type Reminder struct {
 	Repository            string       `json:"repository,omitempty"`
 	RepositoryBranch      string       `json:"repository_branch,omitempty"`
 	WatchCommits          bool         `json:"watch_commits,omitempty"`
+	WatchPullRequests     bool         `json:"watch_pull_requests,omitempty"`
 	WatchReleases         bool         `json:"watch_releases,omitempty"`
+	WatchStars            bool         `json:"watch_stars,omitempty"`
 	LastCommitSHA         string       `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor string       `json:"last_pull_request_cursor,omitempty"`
 	LastReleaseTag        string       `json:"last_release_tag,omitempty"`
+	LastStarCount         int          `json:"last_star_count,omitempty"`
 	FeedURL               string       `json:"feed_url,omitempty"`
 	FeedSource            string       `json:"feed_source,omitempty"`
 	FeedHandle            string       `json:"feed_handle,omitempty"`
