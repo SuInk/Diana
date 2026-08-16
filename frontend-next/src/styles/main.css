@@ -2344,8 +2344,9 @@ code {
 }
 
 .plugin-rows .plugin-card-name {
-  /* 190px 装不下「Diana 能力知识库 RAG」这类名字，放宽到 250px */
-  flex: 0 0 250px;
+  /* 名字精简后最长的是「自定义语音合成」102px，留出余量即可；
+     语音合成的名字带用户自定义前缀，超长时按省略号截断。 */
+  flex: 0 0 160px;
   order: 1;
   min-width: 0;
   overflow: hidden;
@@ -2370,14 +2371,16 @@ code {
 }
 
 .plugin-rows .plugin-card-desc {
-  flex: 1 1 220px;
+  /* 基准必须是 0：flex 换行是按基准宽度分行的，分完行才轮到收缩。基准写
+     220px 时这一行的基准之和会超出卡片，开关被挤到第二行（「链接解析」多
+     一个运行依赖，最先撞上），描述再能收缩也救不回来。基准 0 + grow 1 让
+     描述只吃剩余空间，其余元素永远排得下。 */
+  flex: 1 1 0;
+  order: 2;
+  min-width: 0;
   /* 放到两行：多数插件的描述能完整显示，不用悬停看 title */
   -webkit-line-clamp: 2;
   margin: 0;
-}
-
-.plugin-rows .plugin-card-desc {
-  order: 2;
 }
 
 .plugin-rows .plugin-card-bottom {

@@ -65,14 +65,14 @@ const telegramProfile: QQBotConfig = {
 let assistantConfig: QQBotConfig = { ...qqProfile, active_profile_id: "bot-qq", profiles: [qqProfile, telegramProfile] };
 
 let plugins: PluginState[] = [
-  { manifest: { id: "official.capability-rag", name: "Diana 能力知识库 RAG", version: "0.1.0", description: "索引 Diana 核心能力和插件清单，为 Agent 提供相关能力说明。", official: true, built_in: true, permissions: ["知识读取", "智能体工具"] }, installed: true, enabled: true },
-  { manifest: { id: "official.file-parser", name: "文件解析 Go", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
-  { manifest: { id: "official.message-history", name: "Diana message history", version: "0.2.0", description: "检索近期消息、压缩摘要、长期事实和跨群历史。", official: true, built_in: true, permissions: ["消息读取", "长期记忆"] }, installed: true, enabled: true },
+  { manifest: { id: "official.capability-rag", name: "能力知识库", version: "0.1.0", description: "索引 Diana 核心能力和插件清单，为 Agent 提供相关能力说明。", official: true, built_in: true, permissions: ["知识读取", "智能体工具"] }, installed: true, enabled: true },
+  { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
+  { manifest: { id: "official.message-history", name: "消息历史", version: "0.2.0", description: "检索近期消息、压缩摘要、长期事实和跨群历史。", official: true, built_in: true, permissions: ["消息读取", "长期记忆"] }, installed: true, enabled: true },
   { manifest: { id: "official.link-resolver", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
-  { manifest: { id: "official.onebot-v11", name: "OneBot v11 协议技能", version: "0.1.0", description: "提供 QQ 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
+  { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 QQ 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {
     manifest: {
-      id: "official.repository-publish", name: "仓库 Issue 发布", version: "0.4.0", description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
+      id: "official.repository-publish", name: "Issue 发布", version: "0.4.0", description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
       settings: [
         { key: "github_auth_mode", label: "GitHub 认证方式", description: "可使用独立 Token 或当前系统的 gh 登录。", type: "select", default: "token", options: [{ value: "token", label: "独立 Token" }, { value: "gh", label: "GitHub CLI (gh)" }, { value: "auto", label: "自动选择" }] },
         { key: "github_token", label: "GitHub Issues Token", description: "在 Token 或自动模式下使用，保存后不回显。", type: "string", default: "", secret: true },
@@ -88,7 +88,7 @@ let plugins: PluginState[] = [
   },
   {
     manifest: {
-      id: "official.repository-watch", name: "仓库更新订阅", version: "0.2.0", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
+      id: "official.repository-watch", name: "仓库订阅", version: "0.2.0", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
       settings: [
         { key: "github_token", label: "GitHub Token", description: "用于私有仓库和提高 API 额度。", type: "string", default: "", secret: true },
         { key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 60, min: 30, max: 86400, unit: "秒" }
@@ -97,10 +97,10 @@ let plugins: PluginState[] = [
     installed: true, enabled: true, settings: { default_interval_seconds: 60 }, secrets_configured: { github_token: true }
   },
   {
-    manifest: { id: "official.rss-watch", name: "RSS 与动态订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
+    manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
-  { manifest: { id: "official.browser-render", name: "沙盒无头浏览器网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: false }
+  { manifest: { id: "official.browser-render", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: false }
 ];
 
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
