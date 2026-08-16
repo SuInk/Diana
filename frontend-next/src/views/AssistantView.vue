@@ -95,14 +95,12 @@
               <span class="bot-profile-qq">{{ profile.bot_qq || accountPlaceholder(profile) }}</span>
             </span>
           </button>
+          <!-- 配置是这张卡片唯一的日常操作，占满整行；删除留在最右做安静的
+               图标，和主操作之间隔着整个按钮宽度，不容易误点。 -->
           <div class="bot-profile-actions">
-            <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
+            <button class="btn small bot-profile-configure" type="button" :disabled="busy" @click="editProfile(profile)">
               <Settings2 :size="13" aria-hidden="true" />
               配置
-            </button>
-            <span class="bot-profile-actions-spacer"></span>
-            <button class="btn ghost icon-only small" type="button" :disabled="busy" title="复制机器人" @click="cloneProfile(profile)">
-              <Copy :size="14" aria-hidden="true" />
             </button>
             <button
               class="btn ghost icon-only small danger"
@@ -789,7 +787,6 @@ import { computed, onMounted, ref } from "vue";
 import { ArrowLeft, Bot, ChevronRight, Copy, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Trash2, X } from "@lucide/vue";
 import {
   activateQQBotProfile,
-  cloneQQBotProfile,
   deleteQQBotProfile,
   getConfig,
   getQQBotConfig,
@@ -1509,23 +1506,6 @@ function leaveEditor(): void {
   }
   creating.value = false;
   page.value = "list";
-}
-
-async function cloneProfile(profile: QQBotConfig): Promise<void> {
-  if (!profile.id) {
-    return;
-  }
-  busy.value = true;
-  try {
-    applyConfig(await cloneQQBotProfile(profile.id));
-    editorTab.value = "access";
-  page.value = "edit";
-    toastSuccess("已克隆配置档");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "克隆失败");
-  } finally {
-    busy.value = false;
-  }
 }
 
 function beginCreate(platform: QQBotPlatform): void {
