@@ -72,6 +72,8 @@
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
             </span>
             <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
+            <span v-if="group.configured && group.response_mode" class="badge accent">{{ responseModeLabel(group.response_mode) }}</span>
+            <span v-if="group.configured && group.reply_style" class="badge">{{ replyStyleLabel(group.reply_style) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
             <span v-if="group.configured && group.natural_interjection_enabled" class="badge accent">自然插话</span>
@@ -133,6 +135,27 @@
             placeholder="同一个机器人可以在不同群扮演不同角色"
           ></textarea>
         </div>
+        <div class="field">
+          <label for="group-response-mode">回复模式</label>
+          <select id="group-response-mode" v-model="editing.response_mode" class="input">
+            <option value="">跟随全局</option>
+            <option value="quiet">安静模式</option>
+            <option value="standard">标准模式</option>
+            <option value="active">活跃模式</option>
+            <option value="custom">自定义</option>
+          </select>
+          <span class="hint">控制本群中机器人主动接话的频率。</span>
+        </div>
+        <div class="field">
+          <label for="group-reply-style">表达风格</label>
+          <select id="group-reply-style" v-model="editing.reply_style" class="input">
+            <option value="">跟随全局</option>
+            <option value="assistant">助手</option>
+            <option value="gentle">温柔</option>
+            <option value="lively">活泼</option>
+            <option value="concise">简洁</option>
+          </select>
+        </div>
         <div class="field wide">
           <label class="switch">
             <input v-model="editing.welcome_enabled" type="checkbox" />
@@ -152,15 +175,15 @@
           <label for="group-maxreply">回复上限（字符）</label>
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
-        <div class="field">
+        <div v-if="editing.response_mode === 'custom'" class="field">
           <label for="group-proactive-chance">主动回复采样率</label>
           <input id="group-proactive-chance" v-model.number="editing.proactive_reply_chance" class="input" type="number" min="0.05" max="1" step="0.05" />
         </div>
-        <div class="field">
+        <div v-if="editing.response_mode === 'custom'" class="field">
           <label for="group-proactive-threshold">主动回复置信度阈值</label>
           <input id="group-proactive-threshold" v-model.number="editing.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
         </div>
-        <div class="field wide">
+        <div v-if="editing.response_mode === 'custom'" class="field wide">
           <label class="switch">
             <input v-model="editing.natural_interjection_enabled" type="checkbox" />
             <span class="track" aria-hidden="true"></span>
@@ -288,6 +311,14 @@ function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + "…" : text;
 }
 
+function responseModeLabel(mode: QQBotGroupConfig["response_mode"]): string {
+  return ({ quiet: "安静模式", standard: "标准模式", active: "活跃模式", custom: "自定义回复" } as const)[mode as "quiet" | "standard" | "active" | "custom"] ?? "";
+}
+
+function replyStyleLabel(style: QQBotGroupConfig["reply_style"]): string {
+  return ({ assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格" } as const)[style as "assistant" | "gentle" | "lively" | "concise"] ?? "";
+}
+
 function overrideCount(group: QQBotGroupConfig): number {
   return new Set([
     ...Object.keys(group.plugin_overrides ?? {}),
@@ -377,6 +408,8 @@ function openEditor(group: QQBotGroupConfig, groupName = ""): void {
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
   config.natural_interjection_enabled ??= defaultNaturalInterjectionEnabled.value;
   config.plugin_setting_overrides ??= {};
+  config.response_mode ??= "";
+  config.reply_style ??= "";
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;

@@ -245,6 +245,8 @@ type BotConfig struct {
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
+	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceEnabled        *bool                `json:"reply_reference_enabled,omitempty"`
 	MentionUserEnabled           *bool                `json:"mention_user_enabled,omitempty"`
@@ -354,6 +356,8 @@ type GroupConfig struct {
 	EnabledSet                   bool                   `json:"enabled_set,omitempty"`
 	GroupTriggers                []string               `json:"group_triggers,omitempty"`
 	SystemPrompt                 string                 `json:"system_prompt,omitempty"`
+	ResponseMode                 ResponseMode           `json:"response_mode,omitempty"`
+	ReplyStyle                   ReplyStyle             `json:"reply_style,omitempty"`
 	WelcomeEnabled               bool                   `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string                 `json:"welcome_message,omitempty"`
 	RecentContextLimit           int                    `json:"recent_context_limit,omitempty"`
@@ -413,6 +417,8 @@ type ConfigPayload struct {
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
+	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceEnabled        *bool                `json:"reply_reference_enabled,omitempty"`
 	MentionUserEnabled           *bool                `json:"mention_user_enabled,omitempty"`
@@ -517,6 +523,12 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		cfg.GroupID = defaults.GroupID
 	}
 	cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt)
+	if strings.TrimSpace(string(cfg.ResponseMode)) != "" {
+		cfg.ResponseMode = cfg.ResponseMode.Normalized()
+	}
+	if strings.TrimSpace(string(cfg.ReplyStyle)) != "" {
+		cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
+	}
 	if !cfg.EnabledSet {
 		cfg.Enabled = true
 		cfg.EnabledSet = true
@@ -807,6 +819,8 @@ func DefaultBotConfig() BotConfig {
 		WelcomeEnabled:               false,
 		WelcomeMessage:               "欢迎加入本群，可以直接 @我 开始聊天。",
 		SystemPrompt:                 defaultSystemPrompt,
+		ResponseMode:                 ResponseModeStandard,
+		ReplyStyle:                   ReplyStyleAssistant,
 		PromptChineseSlangText:       defaultPromptChineseSlang,
 		PromptPlaintextRulesText:     defaultPromptPlaintextRules,
 		PromptTimeTemplate:           defaultPromptTimeTemplate,
@@ -853,6 +867,7 @@ func DefaultBotConfig() BotConfig {
 // WithDefaults 补齐 QQ 机器人配置默认值。
 func (cfg BotConfig) WithDefaults() BotConfig {
 	defaults := DefaultBotConfig()
+	hasResponseMode := strings.TrimSpace(string(cfg.ResponseMode)) != ""
 	if strings.TrimSpace(cfg.ProactiveReplyRouterPrompt) == "" && cfg.LegacyPassiveRouterPrompt != nil {
 		cfg.ProactiveReplyRouterPrompt = *cfg.LegacyPassiveRouterPrompt
 	}
@@ -900,6 +915,13 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 			cfg.SystemPrompt = defaults.SystemPrompt
 		}
 	}
+	if hasResponseMode {
+		cfg.ResponseMode = cfg.ResponseMode.Normalized()
+	} else {
+		// Existing installations may already have hand-tuned chat-in values.
+		cfg.ResponseMode = ResponseModeCustom
+	}
+	cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
 	cfg.PromptChineseSlangText = migratedPromptChineseSlangText(cfg.PromptChineseSlangText)
 	if strings.TrimSpace(cfg.PromptPlaintextRulesText) == "" {
 		cfg.PromptPlaintextRulesText = defaults.PromptPlaintextRulesText
@@ -937,6 +959,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.NaturalInterjectionEnabled == nil {
 		cfg.NaturalInterjectionEnabled = copyBoolPointer(defaults.NaturalInterjectionEnabled)
+	}
+	if hasResponseMode {
+		cfg.ResponseMode.apply(&cfg)
 	}
 	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
 		cfg.WelcomeMessage = defaults.WelcomeMessage
@@ -1117,6 +1142,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WelcomeEnabled:               cfg.WelcomeEnabled,
 		WelcomeMessage:               cfg.WelcomeMessage,
 		SystemPrompt:                 cfg.SystemPrompt,
+		ResponseMode:                 cfg.ResponseMode,
+		ReplyStyle:                   cfg.ReplyStyle,
 		DebugModeEnabled:             cfg.DebugModeEnabled,
 		ReplyReferenceEnabled:        copyBoolPointer(cfg.ReplyReferenceEnabled),
 		MentionUserEnabled:           copyBoolPointer(cfg.MentionUserEnabled),
@@ -1231,6 +1258,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WelcomeEnabled:               payload.WelcomeEnabled,
 		WelcomeMessage:               payload.WelcomeMessage,
 		SystemPrompt:                 payload.SystemPrompt,
+		ResponseMode:                 payload.ResponseMode,
+		ReplyStyle:                   payload.ReplyStyle,
 		DebugModeEnabled:             payload.DebugModeEnabled,
 		ReplyReferenceEnabled:        copyBoolPointer(payload.ReplyReferenceEnabled),
 		MentionUserEnabled:           copyBoolPointer(payload.MentionUserEnabled),
