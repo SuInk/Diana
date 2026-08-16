@@ -73,7 +73,10 @@ func TestChangelogPrefersReleases(t *testing.T) {
 // TestRollbackEndpointRequiresConfirmation 验证版本回退只能由用户明确确认触发。
 func TestRollbackEndpointRequiresConfirmation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	github := releaseTestServer(t, "de9c9be")
+	defer github.Close()
 	handler := NewSystemUpdateHandler(fakeSystemUpdater{result: updater.Result{Status: updater.Status{HeadCommit: "de9c9be"}}})
+	handler.githubAPIBase = github.URL
 	router := gin.New()
 	handler.Register(router)
 
