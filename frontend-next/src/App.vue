@@ -105,7 +105,12 @@
 
     <ToastHost />
     <ConfirmHost />
-    <VersionModal v-if="versionOpen" @close="versionOpen = false" @checked="releaseUpdateAvailable = $event" />
+    <VersionModal
+      v-if="versionOpen"
+      @close="versionOpen = false"
+      @checked="releaseUpdateAvailable = $event"
+      @version-changed="systemVersion = $event"
+    />
   </div>
 </template>
 

@@ -23,6 +23,11 @@ type InboundEventDetail struct {
 	GroupID           string              `json:"group_id,omitempty"`
 	UserID            string              `json:"user_id,omitempty"`
 	SenderName        string              `json:"sender_name,omitempty"`
+	SubType           string              `json:"sub_type,omitempty"`
+	OriginalTime      *time.Time          `json:"original_time,omitempty"`
+	OperatorID        string              `json:"operator_id,omitempty"`
+	OperatorName      string              `json:"operator_name,omitempty"`
+	OperatorRole      string              `json:"operator_role,omitempty"`
 	MessageID         string              `json:"message_id,omitempty"`
 	Text              string              `json:"text,omitempty"`
 	Status            string              `json:"status"`
@@ -63,6 +68,7 @@ type InboundEventDetailPage struct {
 	NotReplied    int64
 	Pending       int64
 	Errors        int64
+	Notices       int64
 	LLMCalls      int64
 	InputTokens   int64
 	OutputTokens  int64
@@ -79,12 +85,14 @@ const (
 	InboundEventResultNotReplied InboundEventResultFilter = "not_replied"
 	InboundEventResultPending    InboundEventResultFilter = "pending"
 	InboundEventResultError      InboundEventResultFilter = "error"
+	InboundEventResultNotice     InboundEventResultFilter = "notice"
 )
 
 const (
 	inboundEventRepliedCondition    = `(i.status = 'done' AND ((COALESCE(i.outcome, '') = 'error_replied' AND COALESCE(i.delivery_stage, '') IN ('acknowledged', 'echo_persisted')) OR (COALESCE(i.outcome, '') != 'error_replied' AND (COALESCE(i.decision, '') = 'replied' OR (COALESCE(i.decision, '') = '' AND (COALESCE(i.outcome, '') = 'replied' OR COALESCE(i.outcome, '') LIKE 'replied_%'))))))`
 	inboundEventErrorCondition      = `(i.status = 'done' AND NOT ` + inboundEventRepliedCondition + ` AND (COALESCE(i.decision, '') = 'error' OR COALESCE(i.outcome, '') IN ('error_send_unconfirmed', 'processing_error', 'dropped_outbound_delivery') OR (COALESCE(i.outcome, '') = 'error_replied' AND COALESCE(i.delivery_stage, '') NOT IN ('acknowledged', 'echo_persisted')) OR (COALESCE(i.decision, '') = '' AND (NULLIF(TRIM(i.processing_error), '') IS NOT NULL OR NULLIF(TRIM(i.last_error), '') IS NOT NULL))))`
-	inboundEventNotRepliedCondition = `(i.status = 'done' AND NOT ` + inboundEventRepliedCondition + ` AND NOT ` + inboundEventErrorCondition + `)`
+	inboundEventNoticeCondition     = `(i.status = 'done' AND COALESCE(i.decision, '') = 'notice')`
+	inboundEventNotRepliedCondition = `(i.status = 'done' AND NOT ` + inboundEventRepliedCondition + ` AND NOT ` + inboundEventErrorCondition + ` AND NOT ` + inboundEventNoticeCondition + `)`
 )
 
 // ParseInboundEventResultFilter accepts only the stable result categories
@@ -95,7 +103,7 @@ func ParseInboundEventResultFilter(raw string) (InboundEventResultFilter, bool) 
 		filter = InboundEventResultAll
 	}
 	switch filter {
-	case InboundEventResultAll, InboundEventResultReplied, InboundEventResultNotReplied, InboundEventResultPending, InboundEventResultError:
+	case InboundEventResultAll, InboundEventResultReplied, InboundEventResultNotReplied, InboundEventResultPending, InboundEventResultError, InboundEventResultNotice:
 		return filter, true
 	default:
 		return "", false
@@ -114,6 +122,8 @@ func inboundEventResultCondition(filter InboundEventResultFilter) (string, bool)
 		return `i.status != 'done'`, true
 	case InboundEventResultError:
 		return inboundEventErrorCondition, true
+	case InboundEventResultNotice:
+		return inboundEventNoticeCondition, true
 	default:
 		return "", false
 	}
@@ -154,10 +164,11 @@ SELECT
 	COALESCE(SUM(CASE WHEN `+inboundEventRepliedCondition+` THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN `+inboundEventNotRepliedCondition+` THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN i.status != 'done' THEN 1 ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN `+inboundEventErrorCondition+` THEN 1 ELSE 0 END), 0)
+	COALESCE(SUM(CASE WHEN `+inboundEventErrorCondition+` THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN `+inboundEventNoticeCondition+` THEN 1 ELSE 0 END), 0)
 FROM inbound_events AS i
 WHERE i.event_time >= ?
-`, sinceUnix).Scan(&page.Total, &page.Replied, &page.NotReplied, &page.Pending, &page.Errors); err != nil {
+`, sinceUnix).Scan(&page.Total, &page.Replied, &page.NotReplied, &page.Pending, &page.Errors, &page.Notices); err != nil {
 		return InboundEventDetailPage{}, fmt.Errorf("count inbound event details: %w", err)
 	}
 	page.FilteredTotal = page.Total
@@ -222,6 +233,14 @@ LIMIT ? OFFSET ?
 		if source, ok := decodeInboundEventMessage(payload, item.Text); ok {
 			item.Platform = strings.TrimSpace(source.Platform)
 			item.ProfileID = strings.TrimSpace(source.ProfileID)
+			item.SubType = strings.TrimSpace(source.SubType)
+			item.OperatorID = strings.TrimSpace(source.OperatorID)
+			item.OperatorName = strings.TrimSpace(source.OperatorName)
+			item.OperatorRole = strings.TrimSpace(source.OperatorRole)
+			if source.OriginalTime > 0 {
+				originalAt := time.Unix(source.OriginalTime, 0).UTC()
+				item.OriginalTime = &originalAt
+			}
 			segments := inboundEventDisplaySegments(source, item.Text)
 			item.Images = inboundEventImages(segments)
 			if displayText := strings.TrimSpace(assistant.PlainText(segments)); displayText != "" || len(item.Images) > 0 {

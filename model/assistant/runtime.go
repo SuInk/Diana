@@ -70,6 +70,10 @@ type MessageHistoryStore interface {
 	ListRecentMessageEvents(ctx context.Context, session string, limit int) ([]MessageEvent, error)
 }
 
+type NoticeAuditStore interface {
+	RecordNoticeEvent(ctx context.Context, session string, event MessageEvent) error
+}
+
 type MessageEventLookupStore interface {
 	FindMessageEvent(ctx context.Context, session string, messageID string) (MessageEvent, bool, error)
 }
@@ -1154,6 +1158,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		}
 		if isRecallNotice(event) {
 			r.persistMessageEvent(event)
+			r.recordNoticeEvent(event)
 		}
 		return r.handleNotice(ctx, event)
 	}
@@ -1201,6 +1206,20 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	return r.startReplyWorker(ctx, prepared, text, outcome)
+}
+
+func (r *Runtime) recordNoticeEvent(event MessageEvent) {
+	r.mu.RLock()
+	store, ok := r.messageStore.(NoticeAuditStore)
+	r.mu.RUnlock()
+	if !ok || store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := store.RecordNoticeEvent(ctx, sessionKey(event), withoutReplyRuntimeState(event)); err != nil {
+		log.Printf("qqbot notice audit persist failed: %v", err)
+	}
 }
 
 func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
