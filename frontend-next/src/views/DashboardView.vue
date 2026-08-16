@@ -39,55 +39,6 @@
         </button>
       </section>
 
-      <!-- 首次配置期间展示连接检查；完成向导后让总览聚焦日常指标。 -->
-      <section v-if="!setupCompleted" class="card">
-        <div class="card-body">
-          <div class="checklist">
-            <div class="checklist-item" :class="status?.running ? 'done' : 'todo'">
-              <span class="check-icon">
-                <CheckCircle2 v-if="status?.running" :size="15" aria-hidden="true" />
-                <Power v-else :size="14" aria-hidden="true" />
-              </span>
-              <span class="check-main">
-                机器人运行时
-                <div class="check-hint">{{ status?.running ? "运行中" : "未启动 — 点击右上角「启动机器人」" }}</div>
-              </span>
-              <span v-if="status" class="badge" :class="status.running ? 'ok' : 'warn'">
-                {{ status.running ? "运行中" : "已停止" }}
-              </span>
-            </div>
-
-            <div class="checklist-item" :class="operationalChannelCount > 0 ? 'done' : 'todo'">
-              <span class="check-icon">
-                <CheckCircle2 v-if="operationalChannelCount > 0" :size="15" aria-hidden="true" />
-                <Cable v-else :size="14" aria-hidden="true" />
-              </span>
-              <span class="check-main">
-                机器人通道
-                <div class="check-hint">{{ channelSummary }}</div>
-                <div v-if="status?.channel.last_error" class="check-hint text-err">{{ status.channel.last_error }}</div>
-              </span>
-              <span v-if="status" class="badge" :class="operationalChannelCount > 0 ? 'ok' : 'err'" :title="channelProblemHint">
-                {{ unhealthyChannelCount > 0 ? `QQ 异常 ${unhealthyChannelCount} / ${channelCount}` : operationalChannelCount > 0 ? `正常 ${operationalChannelCount} / ${channelCount}` : "未连接" }}
-              </span>
-            </div>
-
-            <div v-if="status?.nonebot_bridge.enabled" class="checklist-item" :class="status.nonebot_bridge.connected ? 'done' : 'todo'">
-              <span class="check-icon">
-                <CheckCircle2 v-if="status.nonebot_bridge.connected" :size="15" aria-hidden="true" />
-                <SplitSquareHorizontal v-else :size="14" aria-hidden="true" />
-              </span>
-              <span class="check-main">
-                NoneBot 插件桥
-                <div class="check-hint mono">{{ status.nonebot_bridge.endpoint || "—" }}</div>
-              </span>
-              <span class="badge" :class="status.nonebot_bridge.connected ? 'ok' : 'warn'">
-                {{ status.nonebot_bridge.connected ? "已连接" : "等待连接" }}
-              </span>
-            </div>
-          </div>
-        </div>
-      </section>
 
       <!-- 统计卡片 -->
       <div class="stat-grid">
@@ -259,7 +210,6 @@ import { computed, onMounted, ref } from "vue";
 import {
   Activity,
   ArrowRight,
-  Cable,
   CheckCircle2,
   Cpu,
   HardDrive,
@@ -269,7 +219,6 @@ import {
   PowerOff,
   RefreshCw,
   Sparkles,
-  SplitSquareHorizontal,
   TriangleAlert,
   Zap
 } from "@lucide/vue";
@@ -281,27 +230,12 @@ import { toastError, toastSuccess } from "../toast";
 import StatCard from "../components/StatCard.vue";
 import HourlyBars from "../components/HourlyBars.vue";
 import EmptyState from "../components/EmptyState.vue";
-import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
 
 const busy = ref(false);
 const setupNeeded = ref(false);
-const setupCompleted = ref(window.localStorage.getItem("dqb-next:setup-completed") === "1");
 
 const status = computed(() => stream.status);
 const stats = computed(() => stream.stats);
-const channelCount = computed(() => status.value?.channels?.length ?? (status.value?.channel ? 1 : 0));
-const currentChannels = computed(() => status.value?.channels ?? (status.value?.channel ? [status.value.channel] : []));
-const operationalChannelCount = computed(() => currentChannels.value.filter(channelOperational).length);
-const unhealthyChannelCount = computed(() => currentChannels.value.filter(channelAccountUnhealthy).length);
-const channelProblemHint = computed(() => {
-  const problem = currentChannels.value.find((channel) => channelAccountUnhealthy(channel) || !channel.connected);
-  return problem ? channelStatusHint(problem) : "机器人通道与账号状态正常。";
-});
-const channelSummary = computed(() => {
-  const channels = status.value?.channels ?? [];
-  if (channels.length === 0) return status.value?.channel?.endpoint || "—";
-  return channels.map((channel) => `${channel.name || channel.platform || "通道"} · ${channelStatusLabel(channel)}`).join("  /  ");
-});
 const hourlyBuckets = computed<StatsHourBucket[]>(() => (stream.stats ? [...stream.stats.hourly] : []));
 const resourceHostLabel = computed(() => {
   const server = stats.value?.server;
