@@ -295,7 +295,7 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 		BotQQ:                   "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.9,
-	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{}, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
@@ -323,10 +323,23 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 		t.Fatalf("router request = %#v", provider.request.Messages)
 	}
 	prompt := provider.request.Messages[0].Content + "\n" + provider.request.Messages[1].Content
-	for _, want := range []string{"diana.qq_group", "成员总数", "available_reply_tools"} {
+	for _, want := range []string{"diana.qq_group", "成员总数", "diana.image", "系统没有绘图工具", "available_reply_tools"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("router prompt missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestRuntimePromotesDirectedImageRequestDespiteRouterToolMistake(t *testing.T) {
+	decision := proactiveReplyDecision{
+		Confidence: 0.97, DirectedAtBot: true, Reason: "当前没有可用的绘图工具，无法实际完成请求",
+	}
+	event := MessageEvent{Kind: EventKindGroup, MessageID: "draw-request"}
+	if !promoteDirectedFollowup(&decision, event, "那你画一只奶鼠", 0.9, chatInSettings{}) {
+		t.Fatalf("image request was not promoted: %#v", decision)
+	}
+	if !decision.ShouldReply || decision.Category != "bot_related" || !decision.Answerable {
+		t.Fatalf("promoted image decision = %#v", decision)
 	}
 }
 

@@ -3,10 +3,14 @@ package assistant
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +26,8 @@ const (
 	repositoryPublishSettingAllowlist   = "allowed_repositories"
 	repositoryPublishSettingUserAccess  = "user_repository_access"
 	repositoryPublishSettingGroupAccess = "group_repository_access"
+	repositoryPublishSettingUserTokens  = "user_github_tokens"
+	repositoryPublishSettingTokenUsers  = "user_github_token_users"
 	repositoryPublishSettingTimeout     = "timeout_seconds"
 	defaultRepositoryPublishTimeoutSecs = 20
 	repositoryPublishAuthToken          = "token"
@@ -45,6 +51,9 @@ type RepositoryPublishPlugin struct {
 	locks           map[string]*repositoryPublishOperationLock
 	uncertainMu     sync.Mutex
 	uncertain       map[string]time.Time
+	draftsMu        sync.Mutex
+	drafts          map[string]repositoryIssueDraft
+	draftStore      RepositoryIssueDraftStore
 	ghAuthToken     func(context.Context) (string, error)
 }
 
@@ -70,6 +79,7 @@ func newRepositoryPublishPlugin(client *http.Client, baseURL string) *Repository
 		baseURL:     strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		locks:       map[string]*repositoryPublishOperationLock{},
 		uncertain:   map[string]time.Time{},
+		drafts:      map[string]repositoryIssueDraft{},
 		ghAuthToken: repositoryPublishGHAuthToken,
 	}
 	if count, err := rand.Read(plugin.confirmationKey[:]); err == nil && count == len(plugin.confirmationKey) {
@@ -103,12 +113,127 @@ func (p *RepositoryPublishPlugin) operationUncertain(key string) bool {
 	return ok
 }
 
+func (p *RepositoryPublishPlugin) setDraftStore(store RepositoryIssueDraftStore) {
+	p.draftsMu.Lock()
+	p.draftStore = store
+	p.draftsMu.Unlock()
+}
+
+func (p *RepositoryPublishPlugin) saveDraft(ctx context.Context, draft repositoryIssueDraft) (repositoryIssueDraft, error) {
+	var idBytes [12]byte
+	if _, err := rand.Read(idBytes[:]); err == nil {
+		draft.ID = hex.EncodeToString(idBytes[:])
+	} else {
+		draft.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	if draft.Input != nil {
+		draft.Input["operation_id"] = "draft-" + draft.ID
+	}
+	now := time.Now()
+	draft.CreatedAt = now
+	draft.UpdatedAt = now
+	draft.Status = "pending"
+	p.draftsMu.Lock()
+	p.drafts[draft.ID] = draft
+	store := p.draftStore
+	p.draftsMu.Unlock()
+	if store != nil {
+		if err := store.SaveRepositoryIssueDraft(ctx, draft); err != nil {
+			p.draftsMu.Lock()
+			delete(p.drafts, draft.ID)
+			p.draftsMu.Unlock()
+			return repositoryIssueDraft{}, err
+		}
+	}
+	return draft, nil
+}
+
+func (p *RepositoryPublishPlugin) findDraft(ctx context.Context, groupID, draftID string) (repositoryIssueDraft, bool, error) {
+	if p == nil {
+		return repositoryIssueDraft{}, false, nil
+	}
+	groupID, draftID = strings.TrimSpace(groupID), strings.TrimSpace(draftID)
+	p.draftsMu.Lock()
+	store := p.draftStore
+	p.draftsMu.Unlock()
+	if store != nil {
+		if draftID != "" {
+			draft, ok, err := store.RepositoryIssueDraft(ctx, draftID)
+			if err != nil || !ok || draft.GroupID != groupID || draft.Status != "pending" {
+				return repositoryIssueDraft{}, false, err
+			}
+			return draft, true, nil
+		}
+		items, err := store.ListRepositoryIssueDrafts(ctx, groupID, "pending")
+		if err != nil || len(items) == 0 {
+			return repositoryIssueDraft{}, false, err
+		}
+		return items[0], true, nil
+	}
+	p.draftsMu.Lock()
+	defer p.draftsMu.Unlock()
+	var latest repositoryIssueDraft
+	for id, draft := range p.drafts {
+		if draft.GroupID != groupID || draft.Status != "pending" {
+			continue
+		}
+		if draftID != "" {
+			if id == draftID {
+				return draft, true, nil
+			}
+			continue
+		}
+		if latest.ID == "" || draft.CreatedAt.After(latest.CreatedAt) {
+			latest = draft
+		}
+	}
+	return latest, latest.ID != "", nil
+}
+
+func (p *RepositoryPublishPlugin) updateDraft(ctx context.Context, draft repositoryIssueDraft) error {
+	if p == nil {
+		return nil
+	}
+	draft.UpdatedAt = time.Now()
+	p.draftsMu.Lock()
+	p.drafts[draft.ID] = draft
+	store := p.draftStore
+	p.draftsMu.Unlock()
+	if store != nil {
+		return store.SaveRepositoryIssueDraft(ctx, draft)
+	}
+	return nil
+}
+
+func (p *RepositoryPublishPlugin) listDrafts(ctx context.Context, groupID, status string) ([]repositoryIssueDraft, error) {
+	if p == nil {
+		return nil, nil
+	}
+	p.draftsMu.Lock()
+	store := p.draftStore
+	p.draftsMu.Unlock()
+	if store != nil {
+		return store.ListRepositoryIssueDrafts(ctx, strings.TrimSpace(groupID), strings.TrimSpace(status))
+	}
+	p.draftsMu.Lock()
+	defer p.draftsMu.Unlock()
+	out := make([]repositoryIssueDraft, 0, len(p.drafts))
+	for _, draft := range p.drafts {
+		if groupID != "" && draft.GroupID != groupID || status != "" && status != "all" && draft.Status != status {
+			continue
+		}
+		out = append(out, draft)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
 func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "仓库 Issue 发布",
-		Version:     "0.3.0",
-		Description: "允许 LLM 为主人、白名单用户或指定群聊管理各自获授权的 GitHub 仓库 Issues；支持独立 Token 与 GitHub CLI 认证。",
+		Version:     "0.4.0",
+		Description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"},
@@ -143,14 +268,29 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryPublishSettingUserAccess,
 				Label:       "用户仓库授权",
-				Description: "允许特定用户操作特定仓库。每行填写：用户ID = owner/repo, owner/repo。仓库还必须存在于上方全局白名单；留空时仍仅主人可用。",
+				Description: "允许特定用户审批和操作特定仓库；每个用户使用自己的 GitHub Token。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
 			{
 				Key:         repositoryPublishSettingGroupAccess,
-				Label:       "群聊仓库授权",
-				Description: "按群聊划分可操作仓库。每行填写：群ID = owner/repo, owner/repo。群内成员只能操作该群绑定且位于全局白名单中的仓库。",
+				Label:       "群聊草稿范围",
+				Description: "群内所有成员可为这些仓库生成 Issue 草稿；只有群内授权用户确认后才会创建。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
+			{
+				Key:         repositoryPublishSettingUserTokens,
+				Label:       "用户 GitHub Token",
+				Description: "由用户授权编辑器维护；每个用户的 Token 独立保存且不会回显。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+			},
+			{
+				Key:         repositoryPublishSettingTokenUsers,
+				Label:       "已配置 Token 的用户",
+				Description: "由用户授权编辑器维护。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
@@ -167,6 +307,61 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 		},
 	}
+}
+
+func (p *RepositoryPublishPlugin) MergeSecretSetting(key, previous, submitted string) (string, error) {
+	if key != repositoryPublishSettingUserTokens {
+		return submitted, nil
+	}
+	current, err := repositoryPublishUserTokens(previous)
+	if err != nil {
+		return "", err
+	}
+	var updates map[string]*string
+	if err := json.Unmarshal([]byte(submitted), &updates); err != nil {
+		return "", fmt.Errorf("qqbot: invalid user token update")
+	}
+	for rawUserID, token := range updates {
+		userID := strings.TrimSpace(rawUserID)
+		if userID == "" {
+			return "", fmt.Errorf("qqbot: invalid user token update")
+		}
+		if token == nil || strings.TrimSpace(*token) == "" {
+			delete(current, userID)
+			continue
+		}
+		current[userID] = strings.TrimSpace(*token)
+	}
+	if len(current) == 0 {
+		return "", nil
+	}
+	body, err := json.Marshal(current)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func repositoryPublishUserTokens(raw string) (map[string]string, error) {
+	tokens := map[string]string{}
+	if strings.TrimSpace(raw) == "" {
+		return tokens, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &tokens); err != nil {
+		return nil, fmt.Errorf("qqbot: invalid stored user tokens")
+	}
+	for userID, token := range tokens {
+		trimmedID, trimmedToken := strings.TrimSpace(userID), strings.TrimSpace(token)
+		if trimmedID == "" || trimmedToken == "" {
+			delete(tokens, userID)
+			continue
+		}
+		if trimmedID != userID {
+			delete(tokens, userID)
+			tokens[trimmedID] = trimmedToken
+		}
+	}
+	return tokens, nil
 }
 
 func repositoryPublishGHAuthToken(ctx context.Context) (string, error) {

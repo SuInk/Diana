@@ -587,7 +587,7 @@ func documentOCRCacheDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cacheDir, "diana-qq-bot", "ocr-cache"), nil
+	return filepath.Join(cacheDir, "diana", "ocr-cache"), nil
 }
 
 func documentOCRCacheVersion() string {

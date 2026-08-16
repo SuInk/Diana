@@ -165,6 +165,12 @@ type LocalMediaSharerAwarePlugin interface {
 	SetLocalMediaSharer(LocalMediaSharer)
 }
 
+// SecretSettingMerger lets a plugin update one entry inside a structured
+// secret without requiring the WebUI to read the other secret values back.
+type SecretSettingMerger interface {
+	MergeSecretSetting(key, previous, submitted string) (string, error)
+}
+
 type PluginManager struct {
 	mu      sync.RWMutex
 	catalog map[string]Plugin
@@ -500,6 +506,14 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 		}
 		// 空串和「整个键没提交」都表示没改动，沿用已存的值。
 		if text, _ := normalized[key].(string); strings.TrimSpace(text) != "" {
+			if merger, ok := plugin.(SecretSettingMerger); ok {
+				previous, _ := state.Settings[key].(string)
+				merged, err := merger.MergeSecretSetting(key, previous, text)
+				if err != nil {
+					return PluginState{}, err
+				}
+				normalized[key] = merged
+			}
 			continue
 		}
 		if previous, ok := state.Settings[key]; ok {

@@ -305,6 +305,31 @@ func resolveSharedImagePaths(segments []MessageSegment, resolver LocalMediaPathR
 	return out
 }
 
+func resolveSharedVideoPaths(segments []MessageSegment, resolver LocalMediaPathResolver) ([]MessageSegment, bool) {
+	if resolver == nil || len(segments) == 0 {
+		return segments, false
+	}
+	out := append([]MessageSegment(nil), segments...)
+	resolved := false
+	for index, segment := range out {
+		if segment.Type != "video" {
+			continue
+		}
+		data := cloneSegmentData(segment.Data)
+		for _, key := range []string{"file", "url", "video_url", "src"} {
+			path, ok := resolver.ResolveSharedPath(data[key])
+			if !ok {
+				continue
+			}
+			data[key] = path
+			resolved = true
+			break
+		}
+		out[index].Data = data
+	}
+	return out, resolved
+}
+
 func imageBytesSHA256(body []byte) string {
 	hash := sha256.Sum256(body)
 	return hex.EncodeToString(hash[:])
@@ -494,7 +519,7 @@ func historyMediaDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cacheDir, "diana-qq-bot", "history-media"), nil
+	return filepath.Join(cacheDir, "diana", "history-media"), nil
 }
 
 func historyMediaSession(targetKind, groupID, userID string) string {

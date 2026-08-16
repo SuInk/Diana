@@ -48,7 +48,7 @@ func videoContextPathAllowed(path string) bool {
 	roots := []string{
 		filepath.Join(home, "Library", "Containers", "com.tencent.qq"),
 		filepath.Join(home, "Library", "Application Support", "QQ"),
-		filepath.Join(home, "Library", "Application Support", "diana-qq-bot"),
+		filepath.Join(home, "Library", "Application Support", "diana"),
 		os.TempDir(),
 	}
 	clean := filepath.Clean(path)
@@ -127,7 +127,7 @@ func downloadVideoContextSource(ctx context.Context, source string) (string, str
 	if err != nil {
 		return cleanup(err)
 	}
-	req.Header.Set("User-Agent", "DianaQQBot/0.1")
+	req.Header.Set("User-Agent", "Diana/0.1")
 	resp, err := netguard.NewPublicHTTPClient(30 * time.Second).Do(req)
 	if err != nil {
 		return cleanup(err)
