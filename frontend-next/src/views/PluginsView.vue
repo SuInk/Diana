@@ -95,20 +95,9 @@
         <div v-if="plugin.manifest.permissions?.length || showFooter(plugin)" class="plugin-card-bottom">
           <!-- 权限在左，设置等操作在右；有无设置都不再改变卡片的基础高度。 -->
           <div class="plugin-card-meta">
-            <!-- 和运行依赖一样走弹窗：权限标签展开后会把这一行顶高一截，
-                 一列卡片的高度就不齐了。 -->
-            <button
-              v-if="plugin.manifest.permissions?.length"
-              class="plugin-perms-head"
-              type="button"
-              title="查看权限"
-              @click="permissionsTarget = plugin"
-            >
-              {{ plugin.manifest.permissions.length }} 项权限
-            </button>
-
             <!-- 依赖列表展开后比整张卡片还高，行内展开会把这一条撑得和邻居完全
-                 不是一个量级；改成弹窗，卡片上只留状态。 -->
+                 不是一个量级；改成弹窗，卡片上只留状态。
+                 排在权限前面：依赖缺了插件直接不工作，比权限更需要先被看到。 -->
             <button
               v-if="plugin.manifest.id === resolverPluginID"
               class="plugin-dependencies-head"
@@ -125,6 +114,18 @@
               >
                 {{ readyDependencyCount }}/{{ dependencies.length }}
               </span>
+            </button>
+
+            <!-- 和运行依赖一样走弹窗：权限标签展开后会把这一行顶高一截，
+                 一列卡片的高度就不齐了。 -->
+            <button
+              v-if="plugin.manifest.permissions?.length"
+              class="plugin-perms-head"
+              type="button"
+              title="查看权限"
+              @click="permissionsTarget = plugin"
+            >
+              {{ plugin.manifest.permissions.length }} 项权限
             </button>
           </div>
 
