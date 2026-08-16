@@ -3098,10 +3098,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			traceID = "qq-" + traceID
 		}
 		resp, err := agentRunner.Run(ctx, agent.Request{
-			Messages:      messages,
-			TraceID:       traceID,
-			Observer:      r.agentRunObserver(event),
-			RequiredTools: requiredAgentToolsForEvent(event, registry),
+			Messages: messages,
+			TraceID:  traceID,
+			Observer: r.agentRunObserver(event),
 		})
 		if err != nil {
 			return "", err
@@ -3121,37 +3120,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "reply")
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
 	})
-}
-
-func requiredAgentToolsForEvent(event MessageEvent, registry *agent.ToolRegistry) []string {
-	if registry == nil {
-		return nil
-	}
-	if _, ok := registry.Get("diana.relationship"); ok && relationshipDataRequest(event) {
-		return []string{"diana.relationship"}
-	}
-	return nil
-}
-
-func relationshipDataRequest(event MessageEvent) bool {
-	text := strings.Join([]string{PlainText(event.Segments), event.RawMessage}, " ")
-	text = strings.ToLower(strings.TrimSpace(text))
-	if text == "" {
-		return false
-	}
-	topic := strings.Contains(text, "好感") || strings.Contains(text, "关系等级") || strings.Contains(text, "互动次数") || strings.Contains(text, "提醒额度") || strings.Contains(text, "订阅额度")
-	if !topic && strings.Contains(text, "权限") {
-		topic = strings.Contains(text, "我的") || strings.Contains(text, "他的") || strings.Contains(text, "她的") || strings.Contains(text, "对方") || eventHasSegmentType(event, "at")
-	}
-	if !topic {
-		return false
-	}
-	for _, cue := range []string{"查", "看", "多少", "几", "当前", "我的", "他的", "她的", "对方", "排行", "排名", "设置", "增加", "减少", "调整", "修改", "改成"} {
-		if strings.Contains(text, cue) {
-			return true
-		}
-	}
-	return false
 }
 
 type runtimeAgentLLMProvider struct {
