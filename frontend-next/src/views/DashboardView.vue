@@ -75,20 +75,6 @@
             <h2>运行信息</h2>
           </div>
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
-            <!-- 资源占用并进这里：只报 Diana 自己吃掉的，整机容量不是这张卡片
-                 要回答的问题。存储读的是数据目录体积。 -->
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">CPU 占用</span>
-              <span>{{ processMetricsReady ? formatPercent(stats?.server?.process_cpu_percent) : "—" }}</span>
-            </div>
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">内存占用</span>
-              <span>{{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : "—" }}</span>
-            </div>
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">存储占用</span>
-              <span>{{ stats?.server?.process_storage_bytes ? formatBytes(stats.server.process_storage_bytes) : "统计中…" }}</span>
-            </div>
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">服务运行时长</span>
               <span>{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
@@ -104,6 +90,28 @@
             <div v-if="status?.last_error" class="cluster" style="justify-content: space-between">
               <span class="muted">最近错误</span>
               <span class="text-err" style="max-width: 60%; overflow-wrap: anywhere">{{ status.last_error }}</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 资源占用和服务状态是两件事，各占一张卡片。这里只报 Diana 自己吃掉
+             的，整机容量不是这张卡片要回答的问题；存储读的是数据目录体积。 -->
+        <section class="card">
+          <div class="card-header">
+            <h2>资源占用</h2>
+          </div>
+          <div class="card-body stack" style="gap: 10px; font-size: 13px">
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">CPU</span>
+              <span>{{ processMetricsReady ? formatPercent(stats?.server?.process_cpu_percent) : "—" }}</span>
+            </div>
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">内存</span>
+              <span>{{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : "—" }}</span>
+            </div>
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">存储</span>
+              <span>{{ stats?.server?.process_storage_bytes ? formatBytes(stats.server.process_storage_bytes) : "统计中…" }}</span>
             </div>
           </div>
         </section>
