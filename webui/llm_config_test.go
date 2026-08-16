@@ -56,11 +56,26 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 	if payload.Name != "主配置" || payload.Group != "chat" || payload.Description != "主力 OpenAI 配置" || payload.UpdatedAt == "" || len(payload.Models) != 2 || payload.Models[1].ID != "gpt-vision" || payload.TimeoutMS != 5000 || payload.ImageModel != "gpt-image-1-mini" || payload.UserAgent != "codex-test/1.0" || payload.Headers["X-Relay"] != "earlyso" || payload.MaxOutputTokens != 128 {
 		t.Fatalf("payload = %#v", payload)
 	}
-	if payload.APIKey != "" || !payload.APIKeyConfigured {
+	if payload.APIKey != "" || !payload.APIKeyConfigured || payload.APIKeyPreview != "new…123" {
 		t.Fatalf("api key leaked or configured flag wrong: %#v", payload)
 	}
 	if len(payload.Profiles) != 1 {
 		t.Fatalf("profiles = %#v", payload.Profiles)
+	}
+}
+
+func TestMaskLLMAPIKeyKeepsMiddleHidden(t *testing.T) {
+	tests := map[string]string{
+		"sk-1234567890abcdef": "sk-12…cdef",
+		"12345678":            "123…678",
+		"短密钥":                 "短…钥",
+		"x":                   "••••",
+		"":                    "",
+	}
+	for input, want := range tests {
+		if got := maskLLMAPIKey(input); got != want {
+			t.Fatalf("maskLLMAPIKey(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
