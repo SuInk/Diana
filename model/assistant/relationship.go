@@ -45,9 +45,12 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		Tier:                  RelationshipAcquaintance,
 		Name:                  "初识",
 		Tone:                  "自然、礼貌、简洁，不使用过度亲密的称呼，也不要假装已经很熟。",
-		Permissions:           []string{"基础聊天", "图片/视频/文件理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "个人提醒与订阅（最多 1 个）"},
+		Permissions:           []string{"基础聊天", "图片/视频/文件理解", "图片生成", "图片编辑", "文档 OCR", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "个人提醒与订阅（最多 3 个）"},
 		Score:                 profile.Favorability,
 		MessageCount:          profile.MessageCount,
+		AllowImageGeneration:  true,
+		AllowImageEditing:     true,
+		AllowDocumentOCR:      true,
 		AllowPersonalSchedule: true,
 	}
 	switch {
@@ -55,14 +58,16 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		policy.Tier = RelationshipHostile
 		policy.Name = "冷淡"
 		policy.Tone = "保持礼貌但明显疏离，只回答必要内容；面对辱骂可设边界，不争吵、不讨好。"
-		policy.Permissions = []string{"基础聊天", "图片/视频/文件理解", "实时网页搜索", "OneBot 信息读取"}
-		policy.AllowImageEditing = false
-		policy.AllowPersonalSchedule = false
+		policy.Permissions = []string{"基础聊天", "图片/视频/文件理解", "图片生成", "图片编辑", "文档 OCR", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "个人提醒与订阅（最多 1 个）"}
+		policy.AllowImageGeneration = true
+		policy.AllowImageEditing = true
+		policy.AllowDocumentOCR = true
+		policy.AllowPersonalSchedule = true
 	case profile.Favorability >= 100 && profile.MessageCount >= 80:
 		policy.Tier = RelationshipTrusted
 		policy.Name = "信赖"
 		policy.Tone = "像长期信赖的朋友一样直接、温和、有默契，可以主动结合已知偏好，但不要编造共同经历。"
-		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 10 个）"}
+		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 20 个）"}
 		policy.AllowImageGeneration = true
 		policy.AllowImageEditing = true
 		policy.AllowDocumentOCR = true
@@ -71,7 +76,7 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		policy.Tier = RelationshipFriend
 		policy.Name = "朋友"
 		policy.Tone = "像熟悉的朋友一样温暖、轻松，可以适度接梗和调侃，仍要尊重边界。"
-		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 5 个）"}
+		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 15 个）"}
 		policy.AllowImageGeneration = true
 		policy.AllowImageEditing = true
 		policy.AllowDocumentOCR = true
@@ -80,7 +85,7 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		policy.Tier = RelationshipFamiliar
 		policy.Name = "熟悉"
 		policy.Tone = "语气比初识更放松，可以自然使用对方昵称并结合长期偏好，但不要过分亲密。"
-		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 3 个）"}
+		policy.Permissions = []string{"基础聊天", "媒体理解", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "图片生成", "图片编辑", "文档 OCR", "个人提醒与订阅（最多 10 个）"}
 		policy.AllowImageGeneration = true
 		policy.AllowImageEditing = true
 		policy.AllowDocumentOCR = true
@@ -94,7 +99,7 @@ func relationshipOwnerPolicy(profile UserMemoryProfile) RelationshipPolicy {
 		Tier:                  RelationshipOwner,
 		Name:                  "主人",
 		Tone:                  "亲近、坦率、执行导向；可以自然接梗，但涉及风险和失败时必须如实说明。",
-		Permissions:           []string{"全部聊天与媒体能力", "网页与浏览器", "图片生成与编辑", "文档 OCR", "定时订阅（最多 20 个）", "OneBot 全协议", "机器人配置", "本地工具", "Skills/MCP"},
+		Permissions:           []string{"全部聊天与媒体能力", "网页与浏览器", "图片生成与编辑", "文档 OCR", "定时订阅（最多 50 个）", "OneBot 全协议", "机器人配置", "本地工具", "Skills/MCP"},
 		Score:                 profile.Favorability,
 		MessageCount:          profile.MessageCount,
 		Owner:                 true,
@@ -124,9 +129,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		"diana.tts":                true,
 		agent.WebSearchToolName:    true,
 	}
-	if p.Tier != RelationshipHostile {
-		allowed["browser_render"] = true
-	}
+	allowed["browser_render"] = true
 	return allowed
 }
 
@@ -136,16 +139,18 @@ func (p RelationshipPolicy) allowsAgentTools() bool {
 
 func (p RelationshipPolicy) personalScheduleLimit() int {
 	if p.Owner {
-		return 20
+		return 50
 	}
 	switch p.Tier {
 	case RelationshipTrusted:
-		return 10
+		return 20
 	case RelationshipFriend:
-		return 5
+		return 15
 	case RelationshipFamiliar:
-		return 3
+		return 10
 	case RelationshipAcquaintance:
+		return 3
+	case RelationshipHostile:
 		return 1
 	}
 	return 0
@@ -162,8 +167,8 @@ func relationshipPermissionContext(policy RelationshipPolicy) string {
 		"\n语气要求：" + policy.Tone +
 		"\n当前授权能力：" + strings.Join(policy.Permissions, "、") +
 		"\n当前提醒与订阅额度：" + fmt.Sprintf("%d", policy.personalScheduleLimit()) +
-		"\n权限等级门槛：初识可创建 1 个提醒或订阅；熟悉可创建 3 个并解锁图片生成、图片编辑和文档 OCR；朋友可创建 5 个；信赖可创建 10 个；主人可创建 20 个并使用机器人配置、本地工具、Skills/MCP。" +
-		"\n权限规则：严格按当前授权能力行动；如果用户要求系统具有但当前等级尚未授权的能力，必须明确回复“好感度不足”，说明当前等级和所需等级，不得谎称工具不存在、临时不可用或调用失败。好感度永远不能授予主人专属的配置修改、本地命令、MCP 或管理权限。"
+		"\n权限等级规则：所有用户均可使用普通聊天、媒体、网页和工具能力；好感度只影响个人提醒与订阅额度：冷淡 1 个、初识 3 个、熟悉 10 个、朋友 15 个、信赖 20 个。主人可创建 50 个，并额外拥有机器人配置、本地工具、Skills/MCP 等管理能力。" +
+		"\n权限规则：关系等级只改变语气和个人提醒与订阅额度，不得以好感度不足为由拒绝其他普通能力。主人专属的配置修改、本地命令、MCP 和管理权限按身份控制，不能通过好感度获得。"
 }
 
 func applyRelationshipTaskPermissions(responses []PluginResponse, policy RelationshipPolicy) []PluginResponse {

@@ -3711,67 +3711,6 @@ func TestRuntimeImageGenerationRepliesWhileImageRunsInBackground(t *testing.T) {
 	}
 }
 
-func TestRuntimeImageOperationsRequireFamiliarRelationship(t *testing.T) {
-	tests := []struct {
-		name     string
-		decision string
-		event    MessageEvent
-	}{
-		{
-			name:     "generate",
-			decision: `{"action":"generate_image","prompt":"一只猫"}`,
-			event: MessageEvent{
-				Kind:       EventKindPrivate,
-				UserID:     "user",
-				MessageID:  "restricted-generate",
-				RawMessage: "生成一张猫的图片",
-				Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "生成一张猫的图片"}}},
-			},
-		},
-		{
-			name:     "edit",
-			decision: `{"action":"edit_image","prompt":"把图片改成黑白"}`,
-			event: MessageEvent{
-				Kind:       EventKindPrivate,
-				UserID:     "user",
-				MessageID:  "restricted-edit",
-				RawMessage: "把这张图片改成黑白",
-				Segments: []MessageSegment{
-					{Type: "text", Data: map[string]string{"text": "把这张图片改成黑白"}},
-					{Type: "image", Data: map[string]string{"file": "data:image/png;base64,aGVsbG8="}},
-				},
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			channel := &recordingChannel{}
-			store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
-				Provider: llm.ProviderOpenAICompatible,
-				APIKey:   "secret",
-				BaseURL:  "https://example.test/v1",
-				Model:    "gpt-test",
-			})}
-			runtime := NewRuntime(BotConfig{OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
-			runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
-				return &capturingLLMProvider{reply: test.decision}, nil
-			})
-
-			reply, err := runtime.replyTo(context.Background(), test.event, test.event.RawMessage)
-			if err != nil {
-				t.Fatalf("replyTo() error = %v", err)
-			}
-			if !strings.Contains(reply, "好感度不足") || !strings.Contains(reply, relationshipImageTierName) {
-				t.Fatalf("reply = %q", reply)
-			}
-			if len(channel.sent) != 1 || channel.sent[0].Text != reply || len(channel.sent[0].ImageURLs) != 0 {
-				t.Fatalf("sent = %#v", channel.sent)
-			}
-		})
-	}
-}
-
 func TestRuntimeProactiveImageGenerationSendsImage(t *testing.T) {
 	var gotPrompt string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
