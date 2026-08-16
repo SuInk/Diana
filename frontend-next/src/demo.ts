@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 import type {
   AppLogEntry,
   AssistantEventDetail,
@@ -85,7 +88,7 @@ let plugins: PluginState[] = [
   },
   {
     manifest: {
-      id: "official.repository-watch", name: "仓库更新订阅", version: "0.1.0", description: "监控公开或私有 GitHub 仓库的 Commit 与 Release，经 LLM 总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
+      id: "official.repository-watch", name: "仓库更新订阅", version: "0.2.0", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
       settings: [
         { key: "github_token", label: "GitHub Token", description: "用于私有仓库和提高 API 额度。", type: "string", default: "", secret: true },
         { key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 60, min: 30, max: 86400, unit: "秒" }
@@ -152,7 +155,7 @@ export const demoStatus: QQBotStatus = {
 let tasks: AssistantTask[] = [
   { id: "task-reminder-01", kind: "reminder", platform: "onebot-v11", owner_id: "100200301", user_id: "100200301", message: "15:30 提醒提交周报", status: "active", trigger_at: after(70), created_at: before(20), consumes_quota: true },
   { id: "task-schedule-02", kind: "schedule", platform: "telegram", owner_id: "880024", user_id: "880024", message: "每天整理 AI 行业资讯并附来源", status: "active", trigger_at: after(180), interval_seconds: 86400, last_run_at: before(1260), created_at: before(4800), consumes_quota: true },
-  { id: "task-repo-03", kind: "repository_watch", platform: "onebot-v11", owner_id: "", group_id: "100200301", message: "Diana 仓库动态", status: "active", trigger_at: after(1), interval_seconds: 60, last_run_at: before(1), repository: "SuInk/Diana", repository_branch: "main", watch_commits: true, watch_releases: true, last_commit_sha: "26ebc1bed07e9e5b", last_release_tag: "v0.8.6", created_at: before(3800), consumes_quota: true },
+  { id: "task-repo-03", kind: "repository_watch", platform: "onebot-v11", owner_id: "", group_id: "100200301", message: "Diana 仓库动态", status: "active", trigger_at: after(1), interval_seconds: 60, last_run_at: before(1), repository: "SuInk/Diana", repository_branch: "main", watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, last_commit_sha: "26ebc1bed07e9e5b", last_release_tag: "v0.8.6", last_star_count: 128, created_at: before(3800), consumes_quota: true },
   { id: "task-rss-04", kind: "rss_watch", platform: "telegram", owner_id: "", user_id: "880024", message: "Diana Release Feed", status: "active", trigger_at: after(4), interval_seconds: 300, last_run_at: before(4), feed_url: "https://github.com/SuInk/Diana/releases.atom", feed_source: "rss", feed_judge_prompt: "仅在稳定版发布时提醒并总结更新点", last_feed_item_id: "tag:github.com,2008:Repository/", created_at: before(2200), consumes_quota: true }
 ];
 
@@ -168,6 +171,7 @@ const dependencies: ResolverDependency[] = [
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
+let updatePolicy = { auto_download: true, auto_install: false };
 
 const logs: AppLogEntry[] = [
   { id: "log-1", kind: "operation", level: "info", action: "message.reply", message: "群聊消息已回复并收到发送回显", actor: "bot-qq", target: "group:100200301", created_at: before(2) },
@@ -316,7 +320,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/tasks") return json({ items: tasks });
   if ((path.endsWith("/repository-watches") || path.endsWith("/rss-watches")) && method === "POST") {
     const repository = path.endsWith("/repository-watches");
-    const task: AssistantTask = { id: `task-${Date.now()}`, kind: repository ? "repository_watch" : "rss_watch", platform: "onebot-v11", owner_id: "", group_id: String(body.group_id ?? ""), user_id: String(body.user_id ?? ""), message: String(body.repository ?? body.feed_url ?? body.twitter_handle ?? "演示订阅"), status: "active", trigger_at: after(1), interval_seconds: Number(body.interval_seconds ?? 60), repository: repository ? String(body.repository ?? "") : undefined, repository_branch: repository ? String(body.branch ?? "main") : undefined, watch_commits: repository ? Boolean(body.watch_commits) : undefined, watch_releases: repository ? Boolean(body.watch_releases) : undefined, feed_url: repository ? undefined : String(body.feed_url ?? ""), feed_handle: repository ? undefined : String(body.twitter_handle ?? ""), feed_source: repository ? undefined : body.twitter_handle ? "twitter" : "rss", feed_judge_prompt: repository ? undefined : String(body.judge_prompt ?? ""), created_at: new Date().toISOString(), consumes_quota: true };
+    const task: AssistantTask = { id: `task-${Date.now()}`, kind: repository ? "repository_watch" : "rss_watch", platform: "onebot-v11", owner_id: "", group_id: String(body.group_id ?? ""), user_id: String(body.user_id ?? ""), message: String(body.repository ?? body.feed_url ?? body.twitter_handle ?? "演示订阅"), status: "active", trigger_at: after(1), interval_seconds: Number(body.interval_seconds ?? 60), repository: repository ? String(body.repository ?? "") : undefined, repository_branch: repository ? String(body.branch ?? "main") : undefined, watch_commits: repository ? Boolean(body.watch_commits) : undefined, watch_pull_requests: repository ? Boolean(body.watch_pull_requests) : undefined, watch_releases: repository ? Boolean(body.watch_releases) : undefined, watch_stars: repository ? Boolean(body.watch_stars) : undefined, last_star_count: repository ? 128 : undefined, feed_url: repository ? undefined : String(body.feed_url ?? ""), feed_handle: repository ? undefined : String(body.twitter_handle ?? ""), feed_source: repository ? undefined : body.twitter_handle ? "twitter" : "rss", feed_judge_prompt: repository ? undefined : String(body.judge_prompt ?? ""), created_at: new Date().toISOString(), consumes_quota: true };
     tasks = [task, ...tasks]; return json(task);
   }
   if (path.includes("/repository-watches/") || path.includes("/rss-watches/")) {
@@ -336,7 +340,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === "/api/system/version") return json({ build_version: "v0.8.6-demo", version_label: "v0.8.6 · Pages 演示", git_available: false, deployment_mode: "release", update_supported: true, head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示" });
   if (path === "/api/system/update" && method === "GET") return json(updateStatus);
-  if (path === "/api/system/update/check") return json({ deployment_mode: "release", current_version: "v0.8.6", latest_version: "v0.8.7", update_available: true, update_supported: true, integrity_mode: "sha256", checksum_available: true, checksum_url: "https://github.com/SuInk/Diana/releases", status: updateStatus });
+  if (path === "/api/system/update/check") return json({ deployment_mode: "release", current_version: "v0.8.6", latest_version: "v0.8.7", update_available: true, update_supported: true, integrity_mode: "sha256", checksum_available: true, checksum_url: "https://github.com/SuInk/Diana/releases", status: updateStatus, policy: updatePolicy });
+  if (path === "/api/system/update/policy" && method === "GET") return json(updatePolicy);
+  if (path === "/api/system/update/policy" && method === "PUT") {
+    const next = JSON.parse(String(init?.body ?? "{}")) as { auto_download?: boolean; auto_install?: boolean };
+    updatePolicy = { auto_download: Boolean(next.auto_download || next.auto_install), auto_install: Boolean(next.auto_install) };
+    return json(updatePolicy);
+  }
   if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [{ tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }] });
   if (path.startsWith("/api/system/update") && method === "POST") return json({ status: { ...updateStatus, download_ready: true, downloaded_version: "v0.8.7", downloaded_at: new Date().toISOString() }, fetched: true, updated: false, downloaded: true, output: "演示模式：已模拟完成下载与 SHA-256 校验，未写入任何文件。", at: new Date().toISOString() });
 

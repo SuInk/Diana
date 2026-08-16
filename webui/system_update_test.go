@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package webui
 
 import (
@@ -345,18 +348,87 @@ type memoryReleaseCacheStore struct {
 	payload []byte
 }
 
+type memoryUpdatePolicyStore struct {
+	policy updater.UpdatePolicy
+	ok     bool
+}
+
 func TestReleaseCacheCadence(t *testing.T) {
 	if releaseCacheTTL != 30*time.Minute {
 		t.Fatalf("release cache TTL = %s", releaseCacheTTL)
 	}
 }
 
-func TestSystemUpdateHasNoAutomaticPolicyEndpoint(t *testing.T) {
-	router := systemUpdateTestRouter(NewSystemUpdateHandler(fakeSystemUpdater{}))
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/system/update/policy", nil))
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("automatic update policy endpoint status = %d, want 404", recorder.Code)
+func (s *memoryUpdatePolicyStore) LoadUpdatePolicy(context.Context) (updater.UpdatePolicy, bool, error) {
+	return s.policy, s.ok, nil
+}
+
+func (s *memoryUpdatePolicyStore) SaveUpdatePolicy(_ context.Context, policy updater.UpdatePolicy) error {
+	s.policy = policy
+	s.ok = true
+	return nil
+}
+
+func TestSystemUpdatePolicyDefaultsAndPersists(t *testing.T) {
+	store := &memoryUpdatePolicyStore{}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{})
+	if err := handler.SetUpdatePolicyStore(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	router := systemUpdateTestRouter(handler)
+
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/system/update/policy", nil))
+	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"auto_download":true`) || !strings.Contains(getRecorder.Body.String(), `"auto_install":false`) {
+		t.Fatalf("default policy response = %d %s", getRecorder.Code, getRecorder.Body.String())
+	}
+
+	putRecorder := httptest.NewRecorder()
+	putRequest := httptest.NewRequest(http.MethodPut, "/api/system/update/policy", strings.NewReader(`{"auto_download":false,"auto_install":true}`))
+	putRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(putRecorder, putRequest)
+	if putRecorder.Code != http.StatusOK {
+		t.Fatalf("save policy response = %d %s", putRecorder.Code, putRecorder.Body.String())
+	}
+	if !store.policy.AutoDownload || !store.policy.AutoInstall {
+		t.Fatalf("stored policy = %#v", store.policy)
+	}
+
+	restarted := NewSystemUpdateHandler(fakeSystemUpdater{})
+	if err := restarted.SetUpdatePolicyStore(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	if got := restarted.currentPolicy(); !got.AutoDownload || !got.AutoInstall {
+		t.Fatalf("policy after restart = %#v", got)
+	}
+}
+
+func TestAutoUpdateDownloadsByDefaultAndInstallsOnlyWhenEnabled(t *testing.T) {
+	const assetName = "diana-webui-darwin-arm64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]}]`))
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		status:   updater.Status{NearestTag: "v1.2.3", RunningCommit: "v1.2.3", ApplySupported: true},
+		expected: assetName,
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.githubAPIBase = github.URL
+
+	handler.runAutoUpdate(context.Background())
+	if !releaseUpdater.downloaded || releaseUpdater.installed {
+		t.Fatalf("default automatic update = %#v", releaseUpdater)
+	}
+
+	handler.policyMu.Lock()
+	handler.policy = updater.UpdatePolicy{AutoDownload: true, AutoInstall: true}
+	handler.policyMu.Unlock()
+	handler.runAutoUpdate(context.Background())
+	if !releaseUpdater.installed {
+		t.Fatal("automatic install was not started after it was explicitly enabled")
 	}
 }
 
