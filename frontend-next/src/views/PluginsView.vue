@@ -19,15 +19,19 @@
             aria-label="搜索插件"
           />
         </div>
-        <div class="segmented plugin-status-filter" role="group" aria-label="按状态筛选">
-          <button type="button" :class="{ active: status === 'all' }" @click="status = 'all'">
-            全部 <span class="plugin-filter-count">{{ displayPlugins.length }}</span>
+        <!-- 语义和计数样式对齐事件页的同类筛选器：单选组 + 等宽数字 -->
+        <div class="segmented plugin-status-filter" role="radiogroup" aria-label="按状态筛选">
+          <button type="button" role="radio" :aria-checked="status === 'all'" :class="{ active: status === 'all' }" @click="status = 'all'">
+            <span>全部</span>
+            <span class="plugin-filter-count">{{ displayPlugins.length }}</span>
           </button>
-          <button type="button" :class="{ active: status === 'on' }" @click="status = 'on'">
-            已启用 <span class="plugin-filter-count">{{ enabledCount }}</span>
+          <button type="button" role="radio" :aria-checked="status === 'on'" :class="{ active: status === 'on' }" @click="status = 'on'">
+            <span>已启用</span>
+            <span class="plugin-filter-count">{{ enabledCount }}</span>
           </button>
-          <button type="button" :class="{ active: status === 'off' }" @click="status = 'off'">
-            已停用 <span class="plugin-filter-count">{{ displayPlugins.length - enabledCount }}</span>
+          <button type="button" role="radio" :aria-checked="status === 'off'" :class="{ active: status === 'off' }" @click="status = 'off'">
+            <span>已停用</span>
+            <span class="plugin-filter-count">{{ displayPlugins.length - enabledCount }}</span>
           </button>
         </div>
         <div class="segmented plugin-layout-switch" role="group" aria-label="插件排列方式">
@@ -315,25 +319,9 @@
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
+        :issue-enabled-repositories="issueEnabledRepositories"
+        @update:issue-enabled-repositories="repositoryPublishForm.allowed_repositories = $event.join('\n')"
       />
-      <div v-if="isGitHubSettings && githubSettingsTab === 'repositories'" class="github-issue-repository-settings">
-        <RepositoryAccessEditor
-          :user-access="String(repositoryPublishForm.user_repository_access ?? '')"
-          :group-access="String(repositoryPublishForm.group_repository_access ?? '')"
-          :token-users="String(repositoryPublishForm.user_github_token_users ?? '')"
-          :user-auth-modes="String(repositoryPublishForm.user_github_auth_modes ?? '')"
-          :joined-groups="repositoryGroups"
-          :groups-loading="repositoryGroupsLoading"
-          :groups-warning="repositoryGroupsWarning"
-          @update:allowed-repositories="repositoryPublishForm.allowed_repositories = $event"
-          @update:user-access="repositoryPublishForm.user_repository_access = $event"
-          @update:group-access="repositoryPublishForm.group_repository_access = $event"
-          @update:user-tokens="repositoryPublishForm.user_github_tokens = $event"
-          @update:token-users="repositoryPublishForm.user_github_token_users = $event"
-          @update:user-auth-modes="repositoryPublishForm.user_github_auth_modes = $event"
-        />
-        <RepositoryIssueDraftList />
-      </div>
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
         :prepare-access="saveSettingsForSubscription"
@@ -384,14 +372,12 @@ import {
   installPlugin,
   installResolverDependency,
   listPlugins,
-  listQQBotGroups,
   setPluginEnabled,
   uninstallPlugin,
   updatePluginSettings,
   listResolverDependencies,
   type PluginSettingSpec,
   type PluginState,
-  type QQBotGroupSummary,
   type ResolverDependency
 } from "../api";
 import { askConfirm } from "../confirm";
@@ -399,8 +385,6 @@ import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
-import RepositoryAccessEditor from "../components/RepositoryAccessEditor.vue";
-import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -428,9 +412,6 @@ const settingsForm = ref<Record<string, any>>({});
 const repositoryPublishForm = ref<Record<string, any>>({});
 const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
-const repositoryGroups = ref<QQBotGroupSummary[]>([]);
-const repositoryGroupsLoading = ref(false);
-const repositoryGroupsWarning = ref("");
 const githubSettingsTab = ref<"token" | "repositories">("token");
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
@@ -439,6 +420,7 @@ const repositoryPublishSpecs = computed<PluginSettingSpec[]>(() => repositoryPub
 const isGitHubSettings = computed(() => settingsTarget.value?.manifest.id === repositoryWatchPluginID);
 const repositoryPublishAuthSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_auth_mode"));
 const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
+const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
   if (!isGitHubSettings.value) return settingsSpecs.value;
   if (githubSettingsTab.value === "token") return settingsSpecs.value.filter((spec) => spec.key === "github_token");
@@ -549,21 +531,6 @@ function openSettings(plugin: PluginState): void {
   clearSecrets.value = [];
   settingsTarget.value = plugin;
   githubSettingsTab.value = "token";
-  if (plugin.manifest.id === repositoryWatchPluginID) void loadRepositoryGroups();
-}
-
-async function loadRepositoryGroups(): Promise<void> {
-  repositoryGroupsLoading.value = true;
-  repositoryGroupsWarning.value = "";
-  try {
-    const response = await listQQBotGroups();
-    repositoryGroups.value = response.groups;
-    repositoryGroupsWarning.value = response.warning ?? "";
-  } catch (error) {
-    repositoryGroupsWarning.value = error instanceof Error ? error.message : "群列表加载失败";
-  } finally {
-    repositoryGroupsLoading.value = false;
-  }
 }
 
 // 排列方式记在 localStorage：插件多起来之后，横排更利于扫读，

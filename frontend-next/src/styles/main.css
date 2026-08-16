@@ -2346,9 +2346,10 @@ code {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px 18px;
-  /* 一行一个插件不等于压成一条线：留出可点区域和呼吸感 */
-  min-height: 78px;
-  padding: 16px 18px;
+  /* 描述截断在两行（约 39px），上下各留 12px 就够撑开可点区域，
+     再高就是纯空白，一屏能看到的插件反而变少。 */
+  min-height: 64px;
+  padding: 12px 18px;
 }
 
 /* 让名称和开关直接成为行的 flex 项，才能把开关排到行尾；
@@ -2460,6 +2461,23 @@ code {
   flex-wrap: nowrap;
 }
 
+/* 工具条上四个控件原本是 34 / 35 / 39 / 39 三种高度，并排时明显不齐。
+   统一到 36px，各自靠内边距把内容居中。 */
+.plugins-view-header .plugin-search,
+.plugins-view-header .plugin-search .input,
+.plugins-view-header .segmented,
+.plugins-view-header .view-actions > .btn {
+  height: 36px;
+}
+
+.plugins-view-header .segmented {
+  align-items: center;
+}
+
+.plugins-view-header .view-actions > .btn {
+  padding-block: 0;
+}
+
 .plugins-view-header .plugin-search {
   width: 240px;
   flex: 0 1 240px;
@@ -2509,16 +2527,22 @@ code {
   }
 }
 
-.plugin-filter-count {
-  margin-left: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
+/* 与事件页的结果筛选计数保持一致：等宽字体，选中时提亮而不是调透明度 */
+.plugin-status-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
 }
 
-.segmented button.active .plugin-filter-count {
-  color: inherit;
-  opacity: 0.7;
+.plugin-filter-count {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.plugin-status-filter button.active .plugin-filter-count {
+  color: var(--text-secondary);
 }
 
 .plugins-page-grid {
