@@ -97,18 +97,19 @@ type MessageEvent struct {
 	routingReason  string
 	proactiveReply bool
 	// chatInReply 表示本次主动回复来自闲聊插话路径，回复阶段据此收敛语气和长度。
-	chatInReply         bool
-	imageResolutionRun  bool
-	imageLoadErr        error
-	imageContextNotice  string
-	voiceSTTErr         error
-	voiceSTTTransient   bool
-	recentTextReference *recentTextReference
-	replyHistory        []MessageEvent
-	replyHistoryLoaded  bool
-	crossGroupContext   bool
-	userProfile         UserMemoryProfile
-	userProfileLoaded   bool
+	chatInReply            bool
+	imageResolutionRun     bool
+	imageLoadErr           error
+	imageContextNotice     string
+	voiceSTTErr            error
+	voiceSTTTransient      bool
+	recentTextReference    *recentTextReference
+	replyHistory           []MessageEvent
+	replyHistoryLoaded     bool
+	crossGroupContext      bool
+	historyRecallCandidate bool
+	userProfile            UserMemoryProfile
+	userProfileLoaded      bool
 }
 
 type QuotedMessage struct {
