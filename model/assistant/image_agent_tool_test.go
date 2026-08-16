@@ -125,8 +125,8 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 
 func TestDianaImageAgentToolEnforcesRelationshipPermissions(t *testing.T) {
 	initial := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "user")
-	if initial.allowedAgentToolNames()[dianaImageToolName] {
-		t.Fatalf("initial allowlist = %#v", initial.allowedAgentToolNames())
+	if !initial.allowedAgentToolNames()[dianaImageToolName] {
+		t.Fatalf("initial allowlist hid permission-checked image tool: %#v", initial.allowedAgentToolNames())
 	}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	tool := newDianaImageTool(runtime, MessageEvent{UserID: "user"}, initial)
@@ -140,8 +140,8 @@ func TestDianaImageAgentToolEnforcesRelationshipPermissions(t *testing.T) {
 		}
 	}
 	hostile := RelationshipPolicyFor(UserMemoryProfile{Favorability: -20}, "owner", "user")
-	if hostile.allowedAgentToolNames()[dianaImageToolName] {
-		t.Fatalf("hostile allowlist = %#v", hostile.allowedAgentToolNames())
+	if !hostile.allowedAgentToolNames()[dianaImageToolName] {
+		t.Fatalf("hostile allowlist hid permission-checked image tool: %#v", hostile.allowedAgentToolNames())
 	}
 }
 

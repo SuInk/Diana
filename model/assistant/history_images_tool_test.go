@@ -111,6 +111,9 @@ func TestHistoryImagesToolUsesCurrentQuotedPayloadWithoutStoredEvent(t *testing.
 	if len(parts) != 1 || parts[0].ImageURL != "data:image/png;base64,cXVvdGVk" {
 		t.Fatalf("quoted-only parts = %#v", parts)
 	}
+	if parts[0].Detail != "auto" {
+		t.Fatalf("historical quoted image detail = %q, want auto", parts[0].Detail)
+	}
 }
 
 func TestHistoryImagesToolPrefersFreshCurrentQuoteOverBrokenStoredCopy(t *testing.T) {
