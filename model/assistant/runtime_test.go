@@ -2895,7 +2895,7 @@ func TestRuntimeProactiveReplyPreservesCompleteAnswer(t *testing.T) {
 	provider := &capturingLLMProvider{reply: completeReply}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:         false,
-		MaxReplyChars:        3500,
+		MaxReplyChars:        120,
 		ProactiveReplyPrompt: "custom concise proactive instruction",
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
