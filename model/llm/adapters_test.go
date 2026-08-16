@@ -21,7 +21,7 @@ func TestOpenAIResponsesInputMapsRoles(t *testing.T) {
 	got := openAIResponsesInput([]Message{
 		{Role: RoleUser, Content: "user"},
 		{Role: RoleAssistant, Content: "assistant"},
-	})
+	}, nil)
 
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
@@ -56,7 +56,7 @@ func TestOpenAIResponsesInputMapsImageParts(t *testing.T) {
 				{Type: ContentPartImageURL, ImageURL: "https://example.com/image.jpg", Detail: "auto"},
 			},
 		},
-	})
+	}, nil)
 
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
@@ -94,7 +94,7 @@ func TestAudioPartsReachMultimodalProviderPayloads(t *testing.T) {
 		{Type: ContentPartInputAudio, AudioData: "YXVkaW8=", AudioFormat: "wav"},
 	}}
 
-	responsesInput := openAIResponsesInput([]Message{message})
+	responsesInput := openAIResponsesInput([]Message{message}, nil)
 	if len(responsesInput) != 2 {
 		t.Fatalf("responses input len=%d, want text message plus audio item", len(responsesInput))
 	}
@@ -108,7 +108,7 @@ func TestAudioPartsReachMultimodalProviderPayloads(t *testing.T) {
 		t.Fatalf("chat content=%#v", chatContent)
 	}
 
-	gemini := geminiContents([]Message{message})
+	gemini := geminiContents([]Message{message}, nil)
 	if len(gemini) != 1 || len(gemini[0].Parts) != 2 || gemini[0].Parts[1].InlineData == nil || gemini[0].Parts[1].InlineData.MIMEType != "audio/wav" || string(gemini[0].Parts[1].InlineData.Data) != "audio" {
 		t.Fatalf("gemini audio=%#v", gemini)
 	}
@@ -212,7 +212,7 @@ func TestGeminiContentsMapsImageParts(t *testing.T) {
 				{Type: ContentPartImageURL, ImageURL: "data:image/webp;base64,aGVsbG8="},
 			},
 		},
-	})
+	}, nil)
 
 	if len(got) != 1 || len(got[0].Parts) != 3 {
 		t.Fatalf("contents = %#v", got)
@@ -240,7 +240,7 @@ func TestAnthropicMessagesMapsImageParts(t *testing.T) {
 				{Type: ContentPartImageURL, ImageURL: "data:image/png;base64,aGk="},
 			},
 		},
-	})
+	}, nil)
 
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
@@ -323,6 +323,56 @@ func TestOpenAICompatibleDefaultsToResponsesAPI(t *testing.T) {
 	}
 	if resp.Text != "hello from responses" || resp.Usage.TotalTokens != 7 {
 		t.Fatalf("response = %#v", resp)
+	}
+}
+
+func TestOpenAICompatibleResponsesNativeToolCall(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_test","object":"response","created_at":1,"model":"gpt-test","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search.search","arguments":"{\"query\":\"Diana\"}","status":"completed"}],"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7},"status":"completed"}`))
+	}))
+	defer server.Close()
+	client := newOpenAICompatibleClient(ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "test", BaseURL: server.URL + "/v1", Model: "gpt-test"}, server.Client())
+	resp, err := client.Generate(context.Background(), GenerateRequest{
+		Messages: []Message{{Role: RoleUser, Content: "search"}},
+		Tools:    []ToolDefinition{{Name: "web_search.search", Parameters: map[string]any{"type": "object"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Arguments["query"] != "Diana" {
+		t.Fatalf("response=%#v", resp)
+	}
+	tools, _ := gotBody["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools=%#v body=%#v", tools, gotBody)
+	}
+}
+
+func TestNativeToolMappingsForAnthropicAndGemini(t *testing.T) {
+	definition := ToolDefinition{
+		Name: "diana.relationship", Description: "query relationship", Strict: true,
+		Parameters: map[string]any{"type": "object", "properties": map[string]any{"operation": map[string]any{"type": "string"}}},
+	}
+	if tools := anthropicTools([]ToolDefinition{definition}); len(tools) != 1 || tools[0].OfTool == nil || tools[0].OfTool.Name != wireToolName(definition.Name) {
+		t.Fatalf("anthropic tools=%#v", tools)
+	}
+	if tools := geminiTools([]ToolDefinition{definition}); len(tools) != 1 || len(tools[0].FunctionDeclarations) != 1 || tools[0].FunctionDeclarations[0].Name != wireToolName(definition.Name) {
+		t.Fatalf("gemini tools=%#v", tools)
+	}
+	messages := []Message{
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-1", Name: definition.Name, Arguments: map[string]any{"operation": "get"}}}},
+		{Role: RoleTool, ToolCallID: "call-1", ToolName: definition.Name, Content: `{"favorability":10}`},
+	}
+	if converted := anthropicMessages(messages, []ToolDefinition{definition}); len(converted) != 2 {
+		t.Fatalf("anthropic messages=%#v", converted)
+	}
+	if converted := geminiContents(messages, []ToolDefinition{definition}); len(converted) != 2 || converted[0].Parts[0].FunctionCall.ID != "call-1" || converted[1].Parts[0].FunctionResponse.ID != "call-1" {
+		t.Fatalf("gemini messages=%#v", converted)
 	}
 }
 
@@ -1127,7 +1177,7 @@ func TestGeminiContentsMapsAssistantToModel(t *testing.T) {
 	got := geminiContents([]Message{
 		{Role: RoleUser, Content: "hello"},
 		{Role: RoleAssistant, Content: "hi"},
-	})
+	}, nil)
 
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
@@ -1146,7 +1196,7 @@ func TestAnthropicMessagesMapsRoles(t *testing.T) {
 		{Role: RoleSystem, Content: "system"},
 		{Role: RoleUser, Content: "hello"},
 		{Role: RoleAssistant, Content: "hi"},
-	})
+	}, nil)
 
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3", len(got))

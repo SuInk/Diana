@@ -15,6 +15,27 @@ import (
 	"time"
 )
 
+func wireToolName(name string) string {
+	var builder strings.Builder
+	for _, char := range name {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' || char == '-' {
+			builder.WriteRune(char)
+			continue
+		}
+		fmt.Fprintf(&builder, "_x%x_", char)
+	}
+	return builder.String()
+}
+
+func nativeToolName(name string, definitions []ToolDefinition) string {
+	for _, definition := range definitions {
+		if wireToolName(definition.Name) == name {
+			return definition.Name
+		}
+	}
+	return name
+}
+
 type Provider string
 
 const (
@@ -52,13 +73,30 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 )
 
 type Message struct {
-	Role     Role            `json:"role"`
-	Content  string          `json:"content"`
-	Parts    []ContentPart   `json:"parts,omitempty"`
-	Priority MessagePriority `json:"-"`
+	Role       Role            `json:"role"`
+	Content    string          `json:"content"`
+	Parts      []ContentPart   `json:"parts,omitempty"`
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolName   string          `json:"tool_name,omitempty"`
+	Priority   MessagePriority `json:"-"`
+}
+
+type ToolDefinition struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters"`
+	Strict      bool           `json:"strict,omitempty"`
+}
+
+type ToolCall struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments,omitempty"`
 }
 
 type MessagePriority int
@@ -91,11 +129,12 @@ type ContentPart struct {
 }
 
 type GenerateRequest struct {
-	Model           string    `json:"model,omitempty"`
-	Messages        []Message `json:"messages"`
-	Temperature     *float64  `json:"temperature,omitempty"`
-	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
-	MaxOutputTokens int64     `json:"max_output_tokens,omitempty"`
+	Model           string           `json:"model,omitempty"`
+	Messages        []Message        `json:"messages"`
+	Temperature     *float64         `json:"temperature,omitempty"`
+	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
+	MaxOutputTokens int64            `json:"max_output_tokens,omitempty"`
+	Tools           []ToolDefinition `json:"tools,omitempty"`
 }
 
 type Usage struct {
@@ -105,10 +144,11 @@ type Usage struct {
 }
 
 type GenerateResponse struct {
-	Provider Provider `json:"provider"`
-	Model    string   `json:"model,omitempty"`
-	Text     string   `json:"text"`
-	Usage    Usage    `json:"usage,omitempty"`
+	Provider  Provider   `json:"provider"`
+	Model     string     `json:"model,omitempty"`
+	Text      string     `json:"text"`
+	Usage     Usage      `json:"usage,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 type ImageGenerateRequest struct {

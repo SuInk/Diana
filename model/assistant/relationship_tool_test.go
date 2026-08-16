@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/SuInk/diana/model/agent"
 )
 
 func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
@@ -61,23 +59,6 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 	}
 	if result.Target.MentionCQ != "[CQ:at,qq=10005]" || !result.Target.HasHistory {
 		t.Fatalf("mention/history = %#v", result.Target)
-	}
-}
-
-func TestRelationshipDataRequestRequiresRelationshipTool(t *testing.T) {
-	registry := agent.NewToolRegistry(newDianaRelationshipTool(&Runtime{}, MessageEvent{}))
-	event := MessageEvent{
-		RawMessage: "[CQ:at,qq=10006] 查一下和我的好感度",
-		Segments: []MessageSegment{
-			{Type: "at", Data: map[string]string{"qq": "10006"}},
-			{Type: "text", Data: map[string]string{"text": "查一下和我的好感度"}},
-		},
-	}
-	if got := requiredAgentToolsForEvent(event, registry); len(got) != 1 || got[0] != "diana.relationship" {
-		t.Fatalf("required tools = %#v", got)
-	}
-	if relationshipDataRequest(MessageEvent{Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "好感度是怎么计算的"}}}}) {
-		t.Fatal("general relationship explanation should not require a personal data lookup")
 	}
 }
 
