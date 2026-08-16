@@ -109,47 +109,20 @@
               </div>
             </details>
 
-            <details v-if="plugin.manifest.id === resolverPluginID" class="plugin-dependencies plugin-card-dependencies">
-              <summary class="plugin-dependencies-head">
-                <span>运行依赖</span>
-                <span v-if="dependencies.length" class="plugin-dependency-count">
-                  {{ readyDependencyCount }}/{{ dependencies.length }}
-                </span>
-                <ChevronDown class="plugin-dependencies-chevron" :size="14" aria-hidden="true" />
-              </summary>
-              <div class="plugin-dependencies-body">
-                <p v-if="dependenciesLoading && dependencies.length === 0" class="plugin-dependencies-empty">正在检测依赖...</p>
-                <p v-else-if="dependencies.length === 0" class="plugin-dependencies-empty">暂时无法读取依赖状态</p>
-                <div v-else class="plugin-dependency-list">
-                  <div v-for="dep in dependencies" :key="dep.name" class="plugin-dependency-row">
-                    <div class="plugin-dependency-main">
-                      <strong class="mono">{{ dep.name }}</strong>
-                      <span>{{ dep.purpose }}</span>
-                    </div>
-                    <span
-                      v-if="dep.available"
-                      class="badge accent plugin-dependency-status"
-                      :title="[dep.version, dep.path].filter(Boolean).join(' · ')"
-                    >
-                      {{ dep.version || "已安装" }}
-                    </span>
-                    <button
-                      v-else-if="dep.installable"
-                      class="btn small"
-                      type="button"
-                      :disabled="busyDependency !== ''"
-                      :title="`使用 ${dep.installer || '系统包管理器'} 安装 ${dep.name}`"
-                      @click="installDependency(dep)"
-                    >
-                      <LoaderCircle v-if="busyDependency === dep.name" class="spin" :size="14" aria-hidden="true" />
-                      <Download v-else :size="14" aria-hidden="true" />
-                      {{ busyDependency === dep.name ? "安装中" : "安装" }}
-                    </button>
-                    <span v-else class="badge warn">需手动安装</span>
-                  </div>
-                </div>
-              </div>
-            </details>
+            <!-- 依赖列表展开后比整张卡片还高，行内展开会把这一条撑得和邻居完全
+                 不是一个量级；改成弹窗，卡片上只留状态。 -->
+            <button
+              v-if="plugin.manifest.id === resolverPluginID"
+              class="plugin-dependencies-head"
+              type="button"
+              title="查看运行依赖"
+              @click="openDependencies"
+            >
+              <span>运行依赖</span>
+              <span v-if="dependencies.length" class="plugin-dependency-count">
+                {{ readyDependencyCount }}/{{ dependencies.length }}
+              </span>
+            </button>
           </div>
 
           <footer v-if="showFooter(plugin)" class="plugin-card-foot">
@@ -206,38 +179,12 @@
       <div v-if="settingsTarget.manifest.id === resolverPluginID" class="plugin-settings-section-head">
         <h3>运行依赖</h3>
         <p>缺少这些命令时，对应平台的解析会失败；可直接在这里安装。</p>
-        <div class="plugin-dependencies-body">
-          <p v-if="dependenciesLoading && dependencies.length === 0" class="plugin-dependencies-empty">正在检测依赖...</p>
-          <p v-else-if="dependencies.length === 0" class="plugin-dependencies-empty">暂时无法读取依赖状态</p>
-          <div v-else class="plugin-dependency-list">
-            <div v-for="dep in dependencies" :key="dep.name" class="plugin-dependency-row">
-              <div class="plugin-dependency-main">
-                <strong class="mono">{{ dep.name }}</strong>
-                <span>{{ dep.purpose }}</span>
-              </div>
-              <span
-                v-if="dep.available"
-                class="badge accent plugin-dependency-status"
-                :title="[dep.version, dep.path].filter(Boolean).join(' · ')"
-              >
-                {{ dep.version || "已安装" }}
-              </span>
-              <button
-                v-else-if="dep.installable"
-                class="btn small"
-                type="button"
-                :disabled="busyDependency !== ''"
-                :title="`使用 ${dep.installer || '系统包管理器'} 安装 ${dep.name}`"
-                @click="installDependency(dep)"
-              >
-                <LoaderCircle v-if="busyDependency === dep.name" class="spin" :size="14" aria-hidden="true" />
-                <Download v-else :size="14" aria-hidden="true" />
-                {{ busyDependency === dep.name ? "安装中" : "安装" }}
-              </button>
-              <span v-else class="badge warn">需手动安装</span>
-            </div>
-          </div>
-        </div>
+        <PluginDependencyList
+          :dependencies="dependencies"
+          :loading="dependenciesLoading"
+          :busy="busyDependency"
+          @install="installDependency"
+        />
       </div>
 
       <div v-if="settingsTarget.manifest.id === repositoryWatchPluginID" class="plugin-settings-section-head">
@@ -362,12 +309,26 @@
         <button class="btn primary" type="button" :disabled="savingSettings" @click="saveSettings">保存</button>
       </template>
     </Modal>
+
+    <Modal v-if="dependenciesOpen" title="运行依赖" @close="dependenciesOpen = false">
+      <p class="plugin-dependencies-hint">缺少这些命令时，对应平台的解析会失败；可直接在这里安装。</p>
+      <PluginDependencyList
+        :dependencies="dependencies"
+        :loading="dependenciesLoading"
+        :busy="busyDependency"
+        @install="installDependency"
+      />
+      <template #footer>
+        <button class="btn" type="button" @click="refreshDependencies">重新检测</button>
+        <button class="btn primary" type="button" @click="dependenciesOpen = false">完成</button>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ChevronDown, Download, ExternalLink, KeyRound, LayoutGrid, LoaderCircle, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
+import { ChevronDown, ExternalLink, KeyRound, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installResolverDependency,
@@ -391,6 +352,7 @@ import RepositoryAccessEditor from "../components/RepositoryAccessEditor.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
+import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
 
 const plugins = ref<PluginState[]>([]);
@@ -404,6 +366,7 @@ const rssWatchPluginID = "official.rss-watch";
 const dependencies = ref<ResolverDependency[]>([]);
 const dependenciesLoading = ref(false);
 const busyDependency = ref("");
+const dependenciesOpen = ref(false);
 const readyDependencyCount = computed(() => dependencies.value.filter((dep) => dep.available).length);
 
 const settingsTarget = ref<PluginState | null>(null);
@@ -709,6 +672,16 @@ async function loadDependencies(): Promise<void> {
   } finally {
     dependenciesLoading.value = false;
   }
+}
+
+function openDependencies(): void {
+  dependenciesOpen.value = true;
+  // 卡片上的比分可能是进页面时探测的，打开时顺手刷新一次。
+  void loadDependencies();
+}
+
+async function refreshDependencies(): Promise<void> {
+  await loadDependencies();
 }
 
 async function installDependency(dependency: ResolverDependency): Promise<void> {
