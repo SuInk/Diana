@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+
 <template>
   <Modal title="版本与更新" wide @close="emit('close')">
     <div class="stack" style="gap: 14px">

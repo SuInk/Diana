@@ -1,3 +1,6 @@
+# Copyright (c) 2025-now SuInk.
+# Licensed under the Limited Redistribution License in the repository root.
+
 interface:
   display_name: "OneBot v11"
   short_description: "安全调用 OneBot v11 标准协议及各实现扩展动作"
