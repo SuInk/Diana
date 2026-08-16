@@ -166,11 +166,23 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 				evidence.Domain = strings.ToLower(parsed.Hostname())
 			}
 			evidence.Relation = normalizeEnum(evidence.Relation, "supports", "refutes")
+			if evidence.Relation == "" {
+				if update.Status != ClaimStatusSupported {
+					continue
+				}
+				evidence.Relation = "supports"
+			}
 			evidence.SourceType = normalizeEnum(evidence.SourceType, "first_party", "official_record", "primary_reporting", "secondary", "unknown")
+			if evidence.SourceType == "" {
+				evidence.SourceType = "unknown"
+			}
 			evidence.Distance = normalizeEnum(evidence.Distance, "direct", "near", "secondary")
+			if evidence.Distance == "" {
+				evidence.Distance = "secondary"
+			}
 			evidence.Strength = normalizeEnum(evidence.Strength, "high", "medium", "low")
-			if evidence.Relation == "" || evidence.SourceType == "" || evidence.Distance == "" || evidence.Strength == "" {
-				continue
+			if evidence.Strength == "" {
+				evidence.Strength = "low"
 			}
 			validEvidence = append(validEvidence, evidence)
 		}
@@ -240,7 +252,7 @@ func (l *claimEvidenceLedger) prompt() string {
 		payload["last_rejected_query_hash"] = l.lastRejectedHash
 	}
 	raw, _ := json.Marshal(payload)
-	return "【逐主张证据账本】\n" + string(raw) + "\n仅候选来源不等于事实已获支持。下一次搜索用 claim_updates 结算已有证据，并优先覆盖 insufficient/not_searched；最终 final 动作必须携带完整 claims。"
+	return "【逐主张证据账本，仅供内部校验】\n" + string(raw) + "\n仅候选来源不等于事实已获支持。下一次搜索用 claim_updates 结算已有证据，并优先覆盖 insufficient/not_searched；最终 final 动作必须携带完整 claims。证据 URL 必须原样取自 candidate_sources；relation 仅用 supports/refutes，source_type 仅用 first_party/official_record/primary_reporting/secondary/unknown，distance 仅用 direct/near/secondary，strength 仅用 high/medium/low。content 必须直接回答用户，不得提及 claim ID、证据账本、协议、字段、元数据或内部校验过程；外部事实证据不足时用自然语言限定该事实，对问题本身的逻辑、措辞和推理仍应直接作答。"
 }
 
 func (l *claimEvidenceLedger) metadata() map[string]any {
