@@ -23,6 +23,7 @@ import (
 const (
 	defaultReleaseOwner = "SuInk"
 	defaultReleaseRepo  = "Diana"
+	maxRollbackReleases = 5
 	updateCheckInterval = 30 * time.Minute
 	updateCheckDelay    = 30 * time.Second
 )
@@ -612,27 +613,40 @@ func sameCommitID(left, right string) bool {
 }
 
 func (h *SystemUpdateHandler) latestStableRelease(ctx context.Context, remoteURL string) (ReleaseEntry, error) {
+	releases, err := h.recentStableReleases(ctx, remoteURL)
+	if err != nil {
+		return ReleaseEntry{}, err
+	}
+	if len(releases) == 0 {
+		return ReleaseEntry{}, errors.New("没有可用的稳定 Release")
+	}
+	return releases[0], nil
+}
+
+// recentStableReleases returns the newest stable releases. Rollback applies
+// the five-version, older-than-current allowlist after this fetch so a current
+// version or a newer release cannot consume one of the rollback slots.
+func (h *SystemUpdateHandler) recentStableReleases(ctx context.Context, remoteURL string) ([]ReleaseEntry, error) {
 	owner, repo, ok := githubRepoFromRemote(remoteURL)
 	if !ok {
 		owner, repo = defaultReleaseOwner, defaultReleaseRepo
 	}
-	releases, err := h.githubReleases(ctx, owner, repo, 10)
+	releases, err := h.githubReleases(ctx, owner, repo, 30)
 	if err != nil {
-		return ReleaseEntry{}, err
+		return nil, err
 	}
-	latest := latestStableRelease(releases)
-	if strings.TrimSpace(latest.Tag) == "" {
-		return ReleaseEntry{}, errors.New("没有可用的稳定 Release")
+	stable := make([]ReleaseEntry, 0, len(releases))
+	for _, release := range releases {
+		if release.Prerelease || strings.TrimSpace(release.Tag) == "" {
+			continue
+		}
+		stable = append(stable, release)
 	}
-	return latest, nil
+	return stable, nil
 }
 
 // rollback 回退到指定版本。
 func (h *SystemUpdateHandler) rollback(c *gin.Context) {
-	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
-		writeError(c, http.StatusBadRequest, errors.New("Release 包仅在健康检查失败时自动回退；手动回退请重新安装目标完整包"))
-		return
-	}
 	var payload struct {
 		Ref          string `json:"ref"`
 		Confirmation string `json:"confirmation"`
@@ -645,6 +659,89 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, errors.New("版本回退需要明确确认"))
 		return
 	}
+	payload.Ref = strings.TrimSpace(payload.Ref)
+	if payload.Ref == "" {
+		writeError(c, http.StatusBadRequest, errors.New("版本回退目标不能为空"))
+		return
+	}
+
+	releaseAvailable := h.releaseUpdater != nil && h.releaseUpdater.Supported()
+	remoteURL := ""
+	currentVersion := strings.TrimSpace(h.buildVersion)
+	if !releaseAvailable {
+		status, err := h.updater.Status(c.Request.Context())
+		if err != nil {
+			h.writeUpdateError(c, "system.update.rollback", err)
+			return
+		}
+		remoteURL = status.RemoteURL
+		currentVersion = status.VersionLabel()
+	} else if status, err := h.releaseUpdater.Status(c.Request.Context()); err == nil {
+		currentVersion = status.VersionLabel()
+	}
+	releases, err := h.recentStableReleases(c.Request.Context(), remoteURL)
+	if err != nil {
+		h.writeUpdateError(c, "system.update.rollback", err)
+		return
+	}
+	var target ReleaseEntry
+	rollbackSlots := 0
+	_, currentSemver := versionParts(currentVersion)
+	for _, release := range releases {
+		if currentSemver {
+			older, versionErr := isNewerVersion(release.Tag, currentVersion)
+			if versionErr != nil || !older {
+				continue
+			}
+		} else if release.Tag == currentVersion {
+			continue
+		}
+		if rollbackSlots == maxRollbackReleases {
+			break
+		}
+		rollbackSlots++
+		if release.Tag == payload.Ref {
+			target = release
+			break
+		}
+	}
+	if strings.TrimSpace(target.Tag) == "" {
+		writeError(c, http.StatusBadRequest, fmt.Errorf("只能回退最近 %d 个稳定版本", maxRollbackReleases))
+		return
+	}
+
+	if releaseAvailable {
+		archive, ok := target.asset(h.releaseUpdater.ExpectedAssetName())
+		if !ok {
+			writeError(c, http.StatusBadRequest, fmt.Errorf("目标版本缺少完整 Release 包：%s", h.releaseUpdater.ExpectedAssetName()))
+			return
+		}
+		checksums, ok := target.asset("SHA256SUMS")
+		if !ok {
+			writeError(c, http.StatusBadRequest, updater.ErrChecksumMissing)
+			return
+		}
+		if _, err := h.releaseUpdater.Download(c.Request.Context(), updater.ReleasePackage{
+			Tag:       target.Tag,
+			Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
+			Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
+		}, true); err != nil {
+			h.writeUpdateError(c, "system.update.rollback", err)
+			return
+		}
+		result, err := h.releaseUpdater.InstallDownloaded(c.Request.Context())
+		if err != nil {
+			h.writeUpdateError(c, "system.update.rollback", err)
+			return
+		}
+		recordRequestOperation(c, h.logs, "system.update.rollback", "已开始回退到 "+target.Tag+" 并重启", target.Tag, map[string]any{
+			"ref":             payload.Ref,
+			"deployment_mode": "release",
+		})
+		c.JSON(http.StatusOK, gin.H{"result": result})
+		return
+	}
+
 	result, err := h.updater.Rollback(c.Request.Context(), payload.Ref)
 	if err != nil {
 		h.writeUpdateError(c, "system.update.rollback", err)

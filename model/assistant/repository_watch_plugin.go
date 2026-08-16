@@ -147,7 +147,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingToken,
 				Label:       "GitHub Token",
-				Description: "公开仓库高频订阅也建议配置，可将 API 主额度从共享出口 IP 的 60 次/小时提高到通常 5,000 次/小时。私有仓库需授予 Contents: read；启用 PR 时还需 Pull requests: read。保存后不会回显。",
+				Description: "Fine-grained token 只访问选定仓库和明确权限，适合按仓库最小授权；Classic token 权限范围更大，适合查看未加入白名单的仓库、跨账号或组织访问及更多旧版 API。公开仓库也可匿名读取，但配置 Token 后请求额度更高。保存后不会回显。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,

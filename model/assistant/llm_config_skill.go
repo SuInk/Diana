@@ -31,6 +31,8 @@ func (p *LLMConfigPlugin) Manifest() PluginManifest {
 		Description: "官方内置 LLM 配置能力；自然语言由主 Agent 理解，配置修改仅通过主人专属结构化工具执行。",
 		Official:    true,
 		BuiltIn:     true,
+		// 没有可调项，写操作本身已经被主人身份挡住，摆成开关只是噪音。
+		Internal:    true,
 		Permissions: []string{"message:read", "llm:config:write"},
 	}
 }
