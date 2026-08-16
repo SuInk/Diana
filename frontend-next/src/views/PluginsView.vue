@@ -257,8 +257,17 @@
           </a>
         </div>
       </div>
+      <RepositoryAccessEditor
+        v-if="settingsTarget.manifest.id === repositoryPublishPluginID"
+        :allowed-repositories="String(settingsForm.allowed_repositories ?? '')"
+        :user-access="String(settingsForm.user_repository_access ?? '')"
+        :group-access="String(settingsForm.group_repository_access ?? '')"
+        @update:allowed-repositories="settingsForm.allowed_repositories = $event"
+        @update:user-access="settingsForm.user_repository_access = $event"
+        @update:group-access="settingsForm.group_repository_access = $event"
+      />
       <div class="stack plugin-settings-form">
-        <div v-for="spec in settingsSpecs" :key="spec.key" class="field">
+        <div v-for="spec in visibleSettingsSpecs" :key="spec.key" class="field">
           <template v-if="spec.type === 'bool'">
             <div class="plugin-setting-switch">
               <div class="plugin-setting-switch-text">
@@ -320,13 +329,6 @@
                 {{ clearSecrets.includes(spec.key) ? "取消清除" : "清除" }}
               </button>
             </div>
-            <textarea
-              v-else-if="isMultilineSetting(spec.key)"
-              :id="`setting-${spec.key}`"
-              v-model="settingsForm[spec.key]"
-              class="textarea plugin-setting-textarea"
-              rows="4"
-            ></textarea>
             <input v-else :id="`setting-${spec.key}`" v-model="settingsForm[spec.key]" class="input" type="text" />
             <span v-if="spec.description" class="hint">{{ spec.description }}</span>
           </template>
@@ -376,6 +378,7 @@ import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
+import RepositoryAccessEditor from "../components/RepositoryAccessEditor.vue";
 import RepositoryIssueCreator from "../components/RepositoryIssueCreator.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
@@ -401,15 +404,16 @@ const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
+const repositoryAccessSettingKeys = new Set(["allowed_repositories", "user_repository_access", "group_repository_access"]);
+const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
+  if (settingsTarget.value?.manifest.id !== repositoryPublishPluginID) return settingsSpecs.value;
+  return settingsSpecs.value.filter((spec) => !repositoryAccessSettingKeys.has(spec.key));
+});
 const repositoryWatchTokenConfigured = computed(() => {
   const key = "github_token";
   if (clearSecrets.value.includes(key)) return false;
   return String(settingsForm.value[key] ?? "").trim() !== "" || secretConfigured(key);
 });
-
-function isMultilineSetting(key: string): boolean {
-  return key === "allowed_repositories" || key === "user_repository_access";
-}
 
 function upsert(state: PluginState): void {
   const index = plugins.value.findIndex((plugin) => plugin.manifest.id === state.manifest.id);

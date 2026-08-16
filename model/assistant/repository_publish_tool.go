@@ -163,7 +163,7 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	}
 	result.Repository = repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	if code, message := repositoryPublishValidateUserAccess(t.event.UserID, repository, owner, t.settings); code != "" {
+	if code, message := repositoryPublishValidateEventAccess(t.event, repository, owner, t.settings); code != "" {
 		return t.finish(ctx, result.fail(code, message))
 	}
 	if operation != "create" && operation != "search" {
@@ -755,16 +755,23 @@ func repositoryPublishAuthMode(settings SettingValues) string {
 	}
 }
 
-func repositoryPublishValidateUserAccess(userID, repository string, owner bool, settings SettingValues) (string, string) {
+func repositoryPublishValidateEventAccess(event MessageEvent, repository string, owner bool, settings SettingValues) (string, string) {
 	if owner {
 		return "", ""
 	}
-	access, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	userAccess, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
 	if err != nil {
 		return "invalid_user_repository_access", "用户仓库授权配置无效，请按每行“用户ID = owner/repo, owner/repo”填写。"
 	}
-	if !access[strings.TrimSpace(userID)][strings.ToLower(repository)] {
-		return "permission_denied", "当前用户未获授权操作该 GitHub 仓库。"
+	groupAccess, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
+	if err != nil {
+		return "invalid_group_repository_access", "群聊仓库授权配置无效，请按每行“群ID = owner/repo, owner/repo”填写。"
+	}
+	repositoryKey := strings.ToLower(repository)
+	userAllowed := userAccess[strings.TrimSpace(event.UserID)][repositoryKey]
+	groupAllowed := event.Kind == EventKindGroup && groupAccess[strings.TrimSpace(event.GroupID)][repositoryKey]
+	if !userAllowed && !groupAllowed {
+		return "permission_denied", "当前用户或所在群聊未获授权操作该 GitHub 仓库。"
 	}
 	allowed, err := repositoryPublishAllowlist(settings.String(repositoryPublishSettingAllowlist, ""))
 	if err != nil {
@@ -781,23 +788,42 @@ func repositoryPublishUserHasAccess(userID string, settings SettingValues) bool 
 	return err == nil && len(access[strings.TrimSpace(userID)]) > 0
 }
 
+func repositoryPublishEventHasAccess(event MessageEvent, settings SettingValues) bool {
+	if repositoryPublishUserHasAccess(event.UserID, settings) {
+		return true
+	}
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
+		return false
+	}
+	access, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
+	return err == nil && len(access[strings.TrimSpace(event.GroupID)]) > 0
+}
+
 func repositoryPublishUserAccess(raw string) (map[string]map[string]bool, error) {
+	return repositoryPublishScopedAccess(raw, "user")
+}
+
+func repositoryPublishGroupAccess(raw string) (map[string]map[string]bool, error) {
+	return repositoryPublishScopedAccess(raw, "group")
+}
+
+func repositoryPublishScopedAccess(raw, scope string) (map[string]map[string]bool, error) {
 	access := map[string]map[string]bool{}
 	for _, line := range strings.FieldsFunc(raw, func(char rune) bool { return char == '\n' || char == '\r' || char == ';' || char == '；' }) {
-		userID, repositories, ok := strings.Cut(line, "=")
-		userID = strings.TrimSpace(userID)
-		if !ok || userID == "" || strings.Contains(repositories, "=") {
-			return nil, fmt.Errorf("invalid user repository rule")
+		scopeID, repositories, ok := strings.Cut(line, "=")
+		scopeID = strings.TrimSpace(scopeID)
+		if !ok || scopeID == "" || strings.Contains(repositories, "=") {
+			return nil, fmt.Errorf("invalid %s repository rule", scope)
 		}
-		if access[userID] == nil {
-			access[userID] = map[string]bool{}
+		if access[scopeID] == nil {
+			access[scopeID] = map[string]bool{}
 		}
 		for _, item := range strings.Split(repositories, ",") {
 			repository, err := normalizeGitHubRepository(item)
 			if err != nil {
 				return nil, err
 			}
-			access[userID][strings.ToLower(repository)] = true
+			access[scopeID][strings.ToLower(repository)] = true
 		}
 	}
 	return access, nil
