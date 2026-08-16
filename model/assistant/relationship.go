@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 type RelationshipTier string
@@ -53,7 +55,7 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		policy.Tier = RelationshipHostile
 		policy.Name = "冷淡"
 		policy.Tone = "保持礼貌但明显疏离，只回答必要内容；面对辱骂可设边界，不争吵、不讨好。"
-		policy.Permissions = []string{"基础聊天", "图片/视频/文件理解", "OneBot 信息读取"}
+		policy.Permissions = []string{"基础聊天", "图片/视频/文件理解", "实时网页搜索", "OneBot 信息读取"}
 		policy.AllowImageEditing = false
 		policy.AllowPersonalSchedule = false
 	case profile.Favorability >= 100 && profile.MessageCount >= 80:
@@ -114,20 +116,16 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		"diana.relationship":       true,
 		"diana.qq_group":           true,
 		dianaOneBotV11ToolName:     true,
+		dianaImageToolName:         true,
+		"diana.reminder":           true,
+		"diana.schedule":           true,
+		"diana.rss":                true,
 		"diana.tasks":              true,
 		"diana.tts":                true,
+		agent.WebSearchToolName:    true,
 	}
 	if p.Tier != RelationshipHostile {
-		allowed["web_search.search"] = true
 		allowed["browser_render"] = true
-	}
-	if p.AllowPersonalSchedule {
-		allowed["diana.reminder"] = true
-		allowed["diana.schedule"] = true
-		allowed["diana.rss"] = true
-	}
-	if p.AllowImageGeneration || p.AllowImageEditing {
-		allowed[dianaImageToolName] = true
 	}
 	return allowed
 }
