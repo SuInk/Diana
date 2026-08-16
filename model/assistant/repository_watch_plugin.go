@@ -137,7 +137,7 @@ func newRepositoryWatchPlugin(client *http.Client, baseURL string) *RepositoryWa
 func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryWatchPluginID,
-		Name:        "仓库更新订阅",
+		Name:        "仓库订阅",
 		Version:     "0.2.0",
 		Description: "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star；检测到动态后由 LLM 汇总并通知指定群聊或私聊对象。",
 		Official:    true,

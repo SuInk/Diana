@@ -120,7 +120,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	webSearchCalls := 0
 	modelTurns := 0
 	toolCalls := 0
-	attemptedTools := make(map[string]bool)
 	protocolRepairs := 0
 	lastToolSignature := ""
 	imageTaskQueued := false
@@ -177,9 +176,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			finishReason = "finalization_reserved"
 			break
 		}
-		// 每一轮模型只能输出一个 JSON 动作：调用工具或给最终回复。
+		// Native tool definitions are attached to every planning turn. Providers
+		// that do not support them can still use the legacy JSON action protocol.
 		modelStartedAt := time.Now()
-		resp, err := r.client.Generate(planningCtx, llm.GenerateRequest{Messages: messages})
+		resp, err := r.client.Generate(planningCtx, llm.GenerateRequest{Messages: messages, Tools: r.registry.Definitions()})
 		cancel()
 		modelTurns++
 		modelDuration := time.Since(modelStartedAt)
@@ -209,6 +209,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Usage:        usage,
 		})
 		action, ok := parseAction(lastText)
+		nativeToolCall := len(resp.ToolCalls) > 0
+		var nativeCall llm.ToolCall
+		if nativeToolCall {
+			nativeCall = resp.ToolCalls[0]
+			action = llmAction{Action: "tool", Tool: nativeCall.Name, Input: nativeCall.Arguments}
+			ok = true
+		}
 		if imageTaskQueued && ((!ok && !looksLikeAgentAction(lastText)) || (ok && action.Action == "final" && !imageTaskFinalIsPending(action))) {
 			protocolRepairs++
 			reason := "图片工具返回 queued=true 后，final.task_state 必须是 pending"
@@ -254,20 +261,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
-			if missing := missingRequiredTools(req.RequiredTools, attemptedTools, r.registry); len(missing) > 0 && toolCalls < r.cfg.MaxSteps {
-				protocolRepairs++
-				reason := "当前请求必须先调用工具：" + strings.Join(missing, "、")
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = append(messages,
-					llm.Message{Role: llm.RoleAssistant, Content: lastText},
-					llm.Message{Role: llm.RoleUser, Content: reason + "。不得根据提示词、历史回复或记忆摘要猜测实时结果；现在调用该工具，观察真实返回后再回答。"},
-				)
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
 			if toolCalls < r.cfg.MaxSteps && len(r.registry.Names()) > 0 && finalDefersAvailableTool(action.Content) {
 				protocolRepairs++
 				reason := "最终答复仍在承诺下一步调用工具，但本轮尚未执行该操作"
@@ -385,7 +378,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			webSearchCalls++
 		}
 		toolCalls++
-		attemptedTools[action.Tool] = true
 		lastToolSignature = signature
 		inputKeys := sortedInputKeys(action.Input)
 		toolMetadata := mergeRunMetadata(webSearchRunMetadataFromInput(action.Tool, action.Input), claimMetadata)
@@ -463,10 +455,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 			}
 		}
-		messages = append(messages,
-			llm.Message{Role: llm.RoleAssistant, Content: lastText},
-			observation,
-		)
+		if nativeToolCall {
+			messages = append(messages,
+				llm.Message{Role: llm.RoleAssistant, Content: lastText, ToolCalls: []llm.ToolCall{nativeCall}},
+				llm.Message{Role: llm.RoleTool, Content: observationText, ToolCallID: nativeCall.ID, ToolName: nativeCall.Name, Priority: observation.Priority},
+			)
+			if len(observation.Parts) > 0 {
+				messages = append(messages, observation)
+			}
+		} else {
+			messages = append(messages,
+				llm.Message{Role: llm.RoleAssistant, Content: lastText},
+				observation,
+			)
+		}
 	}
 
 	// MaxSteps 限制工具推理轮数，不应吞掉最后一个工具结果。预算耗尽后额外
@@ -740,8 +742,8 @@ func (r *Runner) systemPrompt() string {
 	rules = append(rules, "- 已经足够回答时必须使用 final。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
-		"你只能输出一个 JSON 对象，不要输出 Markdown、解释性前缀或额外文本。",
-		"可用动作：\n1. 调用工具：{\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}\n2. 最终回复：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\",\"task_state\":\"pending\",\"claims\":[...]}（仅有异步任务仍在处理时填写 task_state；执行联网研究时 claims 必填）\n3. 兼容 Responses API function call：{\"type\":\"function_call\",\"name\":\"工具名\",\"arguments\":{...}}",
+		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每轮最多选择一个工具。",
+		"最终回复使用 JSON：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\",\"task_state\":\"pending\",\"claims\":[...]}（仅有异步任务仍在处理时填写 task_state；执行联网研究时 claims 必填）。若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 		"可用工具：\n" + r.registry.Descriptions(),
 	}
 	if skillsPrompt != "" {
@@ -768,25 +770,6 @@ func imageToolResultQueued(output string) bool {
 
 func imageTaskFinalIsPending(action llmAction) bool {
 	return action.Action == "final" && strings.EqualFold(strings.TrimSpace(action.TaskState), imageTaskPendingState)
-}
-
-func missingRequiredTools(required []string, attempted map[string]bool, registry *ToolRegistry) []string {
-	missing := make([]string, 0, len(required))
-	seen := make(map[string]bool, len(required))
-	for _, name := range required {
-		name = strings.TrimSpace(name)
-		if name == "" || seen[name] || attempted[name] {
-			continue
-		}
-		seen[name] = true
-		if registry != nil {
-			if _, ok := registry.Get(name); !ok {
-				continue
-			}
-		}
-		missing = append(missing, name)
-	}
-	return missing
 }
 
 func toolExecutionErrorForModel(toolName, message string) string {

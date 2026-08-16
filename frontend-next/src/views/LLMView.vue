@@ -170,7 +170,7 @@
               class="input"
               :type="showKey ? 'text' : 'password'"
               autocomplete="off"
-              :placeholder="editingConfigured ? '留空表示沿用已保存的 Key' : '粘贴 API Key'"
+              :placeholder="apiKeyPlaceholder"
             />
             <button class="btn icon-only" type="button" :aria-label="showKey ? '隐藏 Key' : '显示 Key'" @click="showKey = !showKey">
               <EyeOff v-if="showKey" :size="14" aria-hidden="true" />
@@ -350,6 +350,7 @@ const busy = ref(false);
 const editorOpen = ref(false);
 const editingID = ref<string | undefined>(undefined);
 const editingConfigured = ref(false);
+const editingKeyPreview = ref("");
 const showKey = ref(false);
 const form = ref<LLMFormState>({ ...emptyForm });
 const selectedService = ref("openai");
@@ -392,6 +393,10 @@ const serviceOptions = llmServicePresets.map((preset) => ({
   hint: preset.hint
 }));
 const selectedPreset = computed(() => llmServicePresets.find((preset) => preset.id === selectedService.value));
+const apiKeyPlaceholder = computed(() => {
+  if (!editingConfigured.value) return "粘贴 API Key";
+  return editingKeyPreview.value ? `已保存 ${editingKeyPreview.value}，留空则沿用` : "留空表示沿用已保存的 Key";
+});
 
 function applyServicePreset(id: string): void {
   const preset = llmServicePresets.find((item) => item.id === id);
@@ -424,6 +429,7 @@ async function reload(): Promise<void> {
 function startCreate(): void {
   editingID.value = undefined;
   editingConfigured.value = false;
+  editingKeyPreview.value = "";
   form.value = { ...emptyForm };
   selectedService.value = "openai";
   applyServicePreset("openai");
@@ -521,6 +527,7 @@ async function move(profile: LLMConfig, delta: number): Promise<void> {
 function startEdit(profile: LLMConfig): void {
   editingID.value = profile.id;
   editingConfigured.value = Boolean(profile.api_key_configured);
+  editingKeyPreview.value = profile.api_key_preview ?? "";
   form.value = {
     name: profile.name ?? "",
     provider: profile.provider,

@@ -76,7 +76,7 @@ func NewRSSWatchPlugin(client *http.Client) *RSSWatchPlugin {
 func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          rssWatchPluginID,
-		Name:        "RSS 与社交订阅",
+		Name:        "RSS 订阅",
 		Version:     "0.1.0",
 		Description: "订阅 RSS/Atom 或指定 X (Twitter) 用户；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
 		Official:    true,
