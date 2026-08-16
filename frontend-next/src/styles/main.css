@@ -2765,6 +2765,16 @@ code {
 }
 
 /* 插件设置弹窗 */
+.github-settings-tabs {
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+.github-settings-tabs > button {
+  flex: 1;
+  min-height: 36px;
+}
+
 .plugin-settings-form {
   gap: 16px;
 }

@@ -21,13 +21,13 @@
         </div>
         <div class="segmented plugin-status-filter" role="group" aria-label="按状态筛选">
           <button type="button" :class="{ active: status === 'all' }" @click="status = 'all'">
-            全部 <span class="plugin-filter-count">{{ plugins.length }}</span>
+            全部 <span class="plugin-filter-count">{{ displayPlugins.length }}</span>
           </button>
           <button type="button" :class="{ active: status === 'on' }" @click="status = 'on'">
             已启用 <span class="plugin-filter-count">{{ enabledCount }}</span>
           </button>
           <button type="button" :class="{ active: status === 'off' }" @click="status = 'off'">
-            已停用 <span class="plugin-filter-count">{{ plugins.length - enabledCount }}</span>
+            已停用 <span class="plugin-filter-count">{{ displayPlugins.length - enabledCount }}</span>
           </button>
         </div>
         <div class="segmented plugin-layout-switch" role="group" aria-label="插件排列方式">
@@ -67,18 +67,18 @@
         v-for="plugin in visiblePlugins"
         :key="plugin.manifest.id"
         class="plugin-card"
-        :class="{ off: plugin.installed && !plugin.enabled, uninstalled: !plugin.installed }"
+        :class="{ off: plugin.installed && !pluginEnabled(plugin), uninstalled: !plugin.installed }"
       >
         <div class="plugin-card-head">
-          <h2 class="plugin-card-name">{{ plugin.manifest.name }}</h2>
+          <h2 class="plugin-card-name">{{ pluginDisplayName(plugin) }}</h2>
           <label
             v-if="plugin.installed"
             class="switch"
-            :title="plugin.enabled ? '点击停用' : '点击启用'"
+            :title="pluginEnabled(plugin) ? '点击停用' : '点击启用'"
           >
             <input
               type="checkbox"
-              :checked="plugin.enabled"
+              :checked="pluginEnabled(plugin)"
               :disabled="busyID === plugin.manifest.id"
               @change="toggleEnabled(plugin)"
             />
@@ -94,7 +94,7 @@
           <span class="badge mono">v{{ plugin.manifest.version }}</span>
         </div>
 
-        <p class="plugin-card-desc" :title="plugin.manifest.description">{{ plugin.manifest.description }}</p>
+        <p class="plugin-card-desc" :title="pluginDisplayDescription(plugin)">{{ pluginDisplayDescription(plugin) }}</p>
 
         <div v-if="plugin.manifest.permissions?.length || showFooter(plugin)" class="plugin-card-bottom">
           <!-- 权限在左，设置等操作在右；有无设置都不再改变卡片的基础高度。 -->
@@ -119,7 +119,12 @@
               @click="openDependencies"
             >
               <span>运行依赖</span>
-              <span v-if="dependencies.length" class="plugin-dependency-count">
+              <!-- 缺依赖等于对应平台直接解析失败，这条得能在一屏插件里被一眼扫到 -->
+              <span
+                v-if="dependencies.length"
+                class="plugin-dependency-count"
+                :class="{ warn: missingDependencyCount > 0 }"
+              >
                 {{ readyDependencyCount }}/{{ dependencies.length }}
               </span>
             </button>
@@ -161,7 +166,7 @@
       </article>
     </div>
     <EmptyState
-      v-else-if="!loading && plugins.length > 0"
+      v-else-if="!loading && displayPlugins.length > 0"
       title="没有匹配的插件"
       hint="换个关键词，或把筛选切回「全部」。"
     />
@@ -172,7 +177,7 @@
 
     <Modal
       v-if="settingsTarget"
-      :title="`${settingsTarget.manifest.name} · 设置`"
+      :title="isGitHubSettings ? 'GitHub 仓库 · 设置' : `${settingsTarget.manifest.name} · 设置`"
       :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID"
       @close="closeSettings"
     >
@@ -187,9 +192,15 @@
         />
       </div>
 
-      <div v-if="settingsTarget.manifest.id === repositoryWatchPluginID" class="plugin-settings-section-head">
-        <h3>访问设置</h3>
-        <p>Token 同时用于提高公开仓库 API 额度和访问私有仓库。</p>
+      <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
+        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'token'" :class="{ active: githubSettingsTab === 'token' }" @click="githubSettingsTab = 'token'">Token</button>
+        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'updates'" :class="{ active: githubSettingsTab === 'updates' }" @click="githubSettingsTab = 'updates'">仓库更新</button>
+        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'issues'" :class="{ active: githubSettingsTab === 'issues' }" @click="githubSettingsTab = 'issues'">提 Issue</button>
+      </div>
+
+      <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="plugin-settings-section-head">
+        <h3>GitHub 认证</h3>
+        <p>公共 Token 同时用于仓库更新检查和 Issue 创建；用户仍可在“提 Issue”中配置自己的独立 Token。</p>
         <div class="repository-watch-token-guide">
           <KeyRound :size="17" aria-hidden="true" />
           <div>
@@ -208,22 +219,22 @@
         </div>
       </div>
       <RepositoryAccessEditor
-        v-if="settingsTarget.manifest.id === repositoryPublishPluginID"
-        :user-access="String(settingsForm.user_repository_access ?? '')"
-        :group-access="String(settingsForm.group_repository_access ?? '')"
-        :token-users="String(settingsForm.user_github_token_users ?? '')"
-        :user-auth-modes="String(settingsForm.user_github_auth_modes ?? '')"
+        v-if="isGitHubSettings && githubSettingsTab === 'issues'"
+        :user-access="String(repositoryPublishForm.user_repository_access ?? '')"
+        :group-access="String(repositoryPublishForm.group_repository_access ?? '')"
+        :token-users="String(repositoryPublishForm.user_github_token_users ?? '')"
+        :user-auth-modes="String(repositoryPublishForm.user_github_auth_modes ?? '')"
         :joined-groups="repositoryGroups"
         :groups-loading="repositoryGroupsLoading"
         :groups-warning="repositoryGroupsWarning"
-        @update:allowed-repositories="settingsForm.allowed_repositories = $event"
-        @update:user-access="settingsForm.user_repository_access = $event"
-        @update:group-access="settingsForm.group_repository_access = $event"
-        @update:user-tokens="settingsForm.user_github_tokens = $event"
-        @update:token-users="settingsForm.user_github_token_users = $event"
-        @update:user-auth-modes="settingsForm.user_github_auth_modes = $event"
+        @update:allowed-repositories="repositoryPublishForm.allowed_repositories = $event"
+        @update:user-access="repositoryPublishForm.user_repository_access = $event"
+        @update:group-access="repositoryPublishForm.group_repository_access = $event"
+        @update:user-tokens="repositoryPublishForm.user_github_tokens = $event"
+        @update:token-users="repositoryPublishForm.user_github_token_users = $event"
+        @update:user-auth-modes="repositoryPublishForm.user_github_auth_modes = $event"
       />
-      <RepositoryIssueDraftList v-if="settingsTarget.manifest.id === repositoryPublishPluginID" />
+      <RepositoryIssueDraftList v-if="isGitHubSettings && githubSettingsTab === 'issues'" />
       <div class="stack plugin-settings-form">
         <div v-for="spec in visibleSettingsSpecs" :key="spec.key" class="field">
           <template v-if="spec.type === 'bool'">
@@ -233,7 +244,7 @@
                 <span v-if="spec.description" class="hint">{{ spec.description }}</span>
               </div>
               <label class="switch">
-                <input :id="`setting-${spec.key}`" v-model="settingsForm[spec.key]" type="checkbox" />
+                <input :id="`setting-${spec.key}`" v-model="activeSettingsForm[spec.key]" type="checkbox" />
                 <span class="track" aria-hidden="true"></span>
               </label>
             </div>
@@ -243,7 +254,7 @@
             <div v-if="spec.type === 'number'" class="plugin-setting-number">
               <input
                 :id="`setting-${spec.key}`"
-                v-model.number="settingsForm[spec.key]"
+                v-model.number="activeSettingsForm[spec.key]"
                 class="input"
                 type="number"
                 :min="spec.min"
@@ -255,7 +266,7 @@
             <AppSelect
               v-else-if="spec.type === 'select'"
               :id="`setting-${spec.key}`"
-              v-model="settingsForm[spec.key]"
+              v-model="activeSettingsForm[spec.key]"
               :options="spec.options ?? []"
             />
             <div v-else-if="spec.type === 'multi_select'" class="plugin-setting-checks">
@@ -271,7 +282,7 @@
             <div v-else-if="spec.secret" class="input-group">
               <input
                 :id="`setting-${spec.key}`"
-                v-model="settingsForm[spec.key]"
+                v-model="activeSettingsForm[spec.key]"
                 class="input"
                 type="password"
                 autocomplete="off"
@@ -287,13 +298,13 @@
                 {{ clearSecrets.includes(spec.key) ? "取消清除" : "清除" }}
               </button>
             </div>
-            <input v-else :id="`setting-${spec.key}`" v-model="settingsForm[spec.key]" class="input" type="text" />
+            <input v-else :id="`setting-${spec.key}`" v-model="activeSettingsForm[spec.key]" class="input" type="text" />
             <span v-if="spec.description" class="hint">{{ spec.description }}</span>
           </template>
         </div>
       </div>
       <RepositoryWatchManager
-        v-if="settingsTarget.manifest.id === repositoryWatchPluginID"
+        v-if="isGitHubSettings && githubSettingsTab === 'updates'"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
       />
@@ -368,17 +379,23 @@ const dependenciesLoading = ref(false);
 const busyDependency = ref("");
 const dependenciesOpen = ref(false);
 const readyDependencyCount = computed(() => dependencies.value.filter((dep) => dep.available).length);
+const missingDependencyCount = computed(() => dependencies.value.length - readyDependencyCount.value);
 
 const settingsTarget = ref<PluginState | null>(null);
 // 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
 const settingsForm = ref<Record<string, any>>({});
+const repositoryPublishForm = ref<Record<string, any>>({});
 const clearSecrets = ref<string[]>([]);
 const savingSettings = ref(false);
 const repositoryGroups = ref<QQBotGroupSummary[]>([]);
 const repositoryGroupsLoading = ref(false);
 const repositoryGroupsWarning = ref("");
+const githubSettingsTab = ref<"token" | "updates" | "issues">("token");
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
+const repositoryPublishTarget = computed(() => plugins.value.find((plugin) => plugin.manifest.id === repositoryPublishPluginID) ?? null);
+const repositoryPublishSpecs = computed<PluginSettingSpec[]>(() => repositoryPublishTarget.value?.manifest.settings ?? []);
+const isGitHubSettings = computed(() => settingsTarget.value?.manifest.id === repositoryWatchPluginID);
 const repositoryAccessSettingKeys = new Set([
   "allowed_repositories",
   "user_repository_access",
@@ -388,9 +405,12 @@ const repositoryAccessSettingKeys = new Set([
   "user_github_auth_modes"
 ]);
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
-  if (settingsTarget.value?.manifest.id !== repositoryPublishPluginID) return settingsSpecs.value;
-  return settingsSpecs.value.filter((spec) => !repositoryAccessSettingKeys.has(spec.key));
+  if (!isGitHubSettings.value) return settingsSpecs.value;
+  if (githubSettingsTab.value === "token") return settingsSpecs.value.filter((spec) => spec.key === "github_token");
+  if (githubSettingsTab.value === "updates") return settingsSpecs.value.filter((spec) => spec.key !== "github_token");
+  return repositoryPublishSpecs.value.filter((spec) => !repositoryAccessSettingKeys.has(spec.key) && spec.key !== "github_token");
 });
+const activeSettingsForm = computed(() => isGitHubSettings.value && githubSettingsTab.value === "issues" ? repositoryPublishForm.value : settingsForm.value);
 const repositoryWatchTokenConfigured = computed(() => {
   const key = "github_token";
   if (clearSecrets.value.includes(key)) return false;
@@ -426,9 +446,13 @@ async function reload(): Promise<void> {
 
 async function toggleEnabled(plugin: PluginState): Promise<void> {
   busyID.value = plugin.manifest.id;
+  const nextEnabled = !pluginEnabled(plugin);
   try {
-    upsert(await setPluginEnabled(plugin.manifest.id, !plugin.enabled));
-    toastSuccess(plugin.enabled ? `已停用 ${plugin.manifest.name}` : `已启用 ${plugin.manifest.name}`);
+    upsert(await setPluginEnabled(plugin.manifest.id, nextEnabled));
+    if (plugin.manifest.id === repositoryWatchPluginID && repositoryPublishTarget.value?.installed) {
+      upsert(await setPluginEnabled(repositoryPublishPluginID, nextEnabled));
+    }
+    toastSuccess(nextEnabled ? `已启用 ${pluginDisplayName(plugin)}` : `已停用 ${pluginDisplayName(plugin)}`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "操作失败");
     await reload();
@@ -471,6 +495,9 @@ async function uninstall(plugin: PluginState): Promise<void> {
 }
 
 function openSettings(plugin: PluginState): void {
+  if (plugin.manifest.id === repositoryPublishPluginID) {
+    plugin = plugins.value.find((candidate) => candidate.manifest.id === repositoryWatchPluginID) ?? plugin;
+  }
   const form: Record<string, any> = {};
   for (const spec of plugin.manifest.settings ?? []) {
     const value = plugin.settings?.[spec.key] ?? spec.default;
@@ -478,9 +505,17 @@ function openSettings(plugin: PluginState): void {
     form[spec.key] = Array.isArray(value) ? [...value] : value;
   }
   settingsForm.value = form;
+  const publishForm: Record<string, any> = {};
+  const publish = plugins.value.find((candidate) => candidate.manifest.id === repositoryPublishPluginID);
+  for (const spec of publish?.manifest.settings ?? []) {
+    const value = publish?.settings?.[spec.key] ?? spec.default;
+    publishForm[spec.key] = Array.isArray(value) ? [...value] : value;
+  }
+  repositoryPublishForm.value = publishForm;
   clearSecrets.value = [];
   settingsTarget.value = plugin;
-  if (plugin.manifest.id === repositoryPublishPluginID) void loadRepositoryGroups();
+  githubSettingsTab.value = "token";
+  if (plugin.manifest.id === repositoryWatchPluginID) void loadRepositoryGroups();
 }
 
 async function loadRepositoryGroups(): Promise<void> {
@@ -502,21 +537,36 @@ async function loadRepositoryGroups(): Promise<void> {
 const query = ref("");
 const status = ref<"all" | "on" | "off">("all");
 
-const enabledCount = computed(() => plugins.value.filter((p) => p.installed && p.enabled).length);
+const displayPlugins = computed(() => plugins.value.filter((plugin) => plugin.manifest.id !== repositoryPublishPluginID));
+const enabledCount = computed(() => displayPlugins.value.filter((plugin) => plugin.installed && pluginEnabled(plugin)).length);
 
 // 搜索同时匹配名称、说明和权限：想找「哪个插件能读消息」时按权限搜得到。
 const visiblePlugins = computed(() => {
   const keyword = query.value.trim().toLowerCase();
-  return plugins.value.filter((plugin) => {
-    const on = plugin.installed && plugin.enabled;
+  return displayPlugins.value.filter((plugin) => {
+    const on = plugin.installed && pluginEnabled(plugin);
     if (status.value === "on" && !on) return false;
     if (status.value === "off" && on) return false;
     if (keyword === "") return true;
     const m = plugin.manifest;
-    const haystack = [m.name, m.description, ...(m.permissions ?? [])].join(" ").toLowerCase();
+    const haystack = [pluginDisplayName(plugin), pluginDisplayDescription(plugin), m.name, m.description, ...(m.permissions ?? [])].join(" ").toLowerCase();
     return haystack.includes(keyword);
   });
 });
+
+function pluginEnabled(plugin: PluginState): boolean {
+  if (plugin.manifest.id !== repositoryWatchPluginID) return plugin.enabled;
+  return plugin.enabled || repositoryPublishTarget.value?.enabled === true;
+}
+
+function pluginDisplayName(plugin: PluginState): string {
+  return plugin.manifest.id === repositoryWatchPluginID ? "GitHub 仓库" : plugin.manifest.name;
+}
+
+function pluginDisplayDescription(plugin: PluginState): string {
+  if (plugin.manifest.id !== repositoryWatchPluginID) return plugin.manifest.description;
+  return "统一管理 GitHub Token、仓库更新订阅，以及群聊中的 Issue 草稿、授权审批与正式创建。";
+}
 
 type PluginLayout = "masonry" | "rows";
 const LAYOUT_KEY = "dqb-next:plugin-layout";
@@ -539,6 +589,12 @@ function showFooter(plugin: PluginState): boolean {
 }
 
 function secretConfigured(key: string): boolean {
+  if (isGitHubSettings.value && key === "github_token") {
+    return settingsTarget.value?.secrets_configured?.[key] === true || repositoryPublishTarget.value?.secrets_configured?.[key] === true;
+  }
+  if (isGitHubSettings.value && githubSettingsTab.value === "issues") {
+    return repositoryPublishTarget.value?.secrets_configured?.[key] === true;
+  }
   return settingsTarget.value?.secrets_configured?.[key] === true;
 }
 
@@ -556,17 +612,17 @@ function toggleClearSecret(key: string): void {
     return;
   }
   clearSecrets.value.push(key);
-  settingsForm.value[key] = "";
+  activeSettingsForm.value[key] = "";
 }
 
 function multiSelected(key: string, option: string): boolean {
-  const value = settingsForm.value[key];
+  const value = activeSettingsForm.value[key];
   return Array.isArray(value) && value.includes(option);
 }
 
 function toggleMultiSelect(key: string, option: string, event: Event): void {
   const checked = (event.target as HTMLInputElement).checked;
-  const current: string[] = Array.isArray(settingsForm.value[key]) ? [...settingsForm.value[key]] : [];
+  const current: string[] = Array.isArray(activeSettingsForm.value[key]) ? [...activeSettingsForm.value[key]] : [];
   if (checked && !current.includes(option)) {
     current.push(option);
   }
@@ -576,12 +632,13 @@ function toggleMultiSelect(key: string, option: string, event: Event): void {
       current.splice(index, 1);
     }
   }
-  settingsForm.value[key] = current;
+  activeSettingsForm.value[key] = current;
 }
 
 function closeSettings(): void {
   settingsTarget.value = null;
   settingsForm.value = {};
+  repositoryPublishForm.value = {};
   clearSecrets.value = [];
   if (viewQuery().has("settings")) {
     navigate("plugins");
@@ -594,13 +651,18 @@ function resetSettings(): void {
     form[spec.key] = spec.default;
   }
   settingsForm.value = form;
+  if (isGitHubSettings.value) {
+    const publishForm: Record<string, any> = {};
+    for (const spec of repositoryPublishSpecs.value) publishForm[spec.key] = spec.default;
+    repositoryPublishForm.value = publishForm;
+  }
 }
 
 // 只提交与默认值不同的键：等于默认值的键不落库，插件默认值升级后能自动跟随。
-function buildSettingsPayload(): Record<string, unknown> {
+function buildSettingsPayload(specs = settingsSpecs.value, form = settingsForm.value): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
-  for (const spec of settingsSpecs.value) {
-    const value = settingsForm.value[spec.key];
+  for (const spec of specs) {
+    const value = form[spec.key];
     if (spec.type === "number") {
       // 数字输入被清空时视为使用默认值。
       if (value === "" || value === null || Number.isNaN(Number(value))) {
@@ -637,6 +699,17 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
     const updated = await updatePluginSettings(target.manifest.id, buildSettingsPayload(), clearSecrets.value);
     upsert(updated);
     settingsTarget.value = updated;
+    if (isGitHubSettings.value && repositoryPublishTarget.value) {
+      const publishPayload = buildSettingsPayload(repositoryPublishSpecs.value, repositoryPublishForm.value);
+      const sharedToken = String(settingsForm.value.github_token ?? "").trim();
+      if (sharedToken) publishPayload.github_token = sharedToken;
+      const publishClears = clearSecrets.value.includes("github_token") ? ["github_token"] : [];
+      const publishUpdated = await updatePluginSettings(repositoryPublishPluginID, publishPayload, publishClears);
+      upsert(publishUpdated);
+      for (const spec of repositoryPublishSpecs.value) {
+        if (spec.secret) repositoryPublishForm.value[spec.key] = "";
+      }
+    }
     for (const spec of settingsSpecs.value) {
       if (spec.secret) settingsForm.value[spec.key] = "";
     }

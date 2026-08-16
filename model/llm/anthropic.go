@@ -5,6 +5,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -61,7 +62,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(req.Model),
 		MaxTokens: req.MaxOutputTokens,
-		Messages:  anthropicMessages(messages),
+		Messages:  anthropicMessages(messages, req.Tools),
 	}
 	if system != "" {
 		// Anthropic 的 system prompt 单独放在 System 字段，不能混进 Messages。
@@ -70,6 +71,10 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
 	}
+	params.Tools = anthropicTools(req.Tools)
+	if len(req.Tools) > 0 {
+		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{DisableParallelToolUse: param.NewOpt(true)}}
+	}
 
 	resp, err := c.client.Messages.New(ctx, params)
 	if err != nil {
@@ -77,14 +82,16 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 	}
 
 	text := strings.TrimSpace(anthropicText(resp.Content))
-	if text == "" {
+	toolCalls := anthropicToolCalls(resp.Content, req.Tools)
+	if text == "" && len(toolCalls) == 0 {
 		return nil, fmt.Errorf("llm: anthropic response has no text")
 	}
 
 	return &GenerateResponse{
-		Provider: ProviderAnthropic,
-		Model:    string(resp.Model),
-		Text:     text,
+		Provider:  ProviderAnthropic,
+		Model:     string(resp.Model),
+		Text:      text,
+		ToolCalls: toolCalls,
 		Usage: Usage{
 			InputTokens:  resp.Usage.InputTokens,
 			OutputTokens: resp.Usage.OutputTokens,
@@ -105,10 +112,19 @@ func messagesHaveInputAudio(messages []Message) bool {
 }
 
 // anthropicMessages 将通用消息转换为 Anthropic messages。
-func anthropicMessages(messages []Message) []anthropic.MessageParam {
+func anthropicMessages(messages []Message, definitions []ToolDefinition) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(messages))
 	for _, msg := range messages {
 		blocks := anthropicContentBlocks(msg)
+		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
+			blocks = blocks[:0]
+			for _, call := range msg.ToolCalls {
+				blocks = append(blocks, anthropic.NewToolUseBlock(call.ID, call.Arguments, wireToolName(call.Name)))
+			}
+		}
+		if msg.Role == RoleTool {
+			blocks = []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)}
+		}
 		if msg.Role == RoleAssistant {
 			out = append(out, anthropic.NewAssistantMessage(blocks...))
 			continue
@@ -116,6 +132,31 @@ func anthropicMessages(messages []Message) []anthropic.MessageParam {
 		out = append(out, anthropic.NewUserMessage(blocks...))
 	}
 	return out
+}
+
+func anthropicTools(definitions []ToolDefinition) []anthropic.ToolUnionParam {
+	tools := make([]anthropic.ToolUnionParam, 0, len(definitions))
+	for _, definition := range definitions {
+		schema := anthropic.ToolInputSchemaParam{ExtraFields: definition.Parameters}
+		tool := anthropic.ToolUnionParamOfTool(schema, wireToolName(definition.Name))
+		tool.OfTool.Description = param.NewOpt(definition.Description)
+		tool.OfTool.Strict = param.NewOpt(definition.Strict)
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+func anthropicToolCalls(content []anthropic.ContentBlockUnion, definitions []ToolDefinition) []ToolCall {
+	var calls []ToolCall
+	for _, block := range content {
+		if block.Type != "tool_use" || strings.TrimSpace(block.Name) == "" {
+			continue
+		}
+		arguments := map[string]any{}
+		_ = json.Unmarshal(block.Input, &arguments)
+		calls = append(calls, ToolCall{ID: block.ID, Name: nativeToolName(block.Name, definitions), Arguments: arguments})
+	}
+	return calls
 }
 
 func anthropicContentBlocks(msg Message) []anthropic.ContentBlockParamUnion {
