@@ -72,3 +72,26 @@ func TestResolverDependencyInstallPlanRejectsUnknownName(t *testing.T) {
 		t.Fatalf("error = %v, want ErrUnknownResolverDependency", err)
 	}
 }
+
+func TestShortVersionKeepsOnlyTheVersionToken(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want string
+	}{
+		// ffmpeg 把版权信息塞在同一行，整行进徽章会被截成「ffmpeg versio...」。
+		{"ffmpeg", "ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers", "8.1.2"},
+		{"ffmpeg", "ffmpeg version n7.1-4-gd8f7a0f Copyright (c) 2000-2024", "n7.1-4-gd8f7a0f"},
+		// yt-dlp 和 node 本来就只打印版本号，不该被动到。
+		{"yt-dlp", "2026.07.04", "2026.07.04"},
+		{"node", "v26.3.1", "v26.3.1"},
+		// 认不出的格式保持原样，宁可显示得长一点也不要猜错。
+		{"ffmpeg", "some unexpected banner text", "some unexpected banner text"},
+		{"ffmpeg", "", ""},
+	}
+	for _, tc := range cases {
+		if got := shortVersion(tc.name, tc.line); got != tc.want {
+			t.Errorf("shortVersion(%q, %q) = %q，期望 %q", tc.name, tc.line, got, tc.want)
+		}
+	}
+}
