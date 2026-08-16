@@ -173,7 +173,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 		`{"action":"none","prompt":""}`,
 		`{"action":"tool","tool":"web_search.search","input":{"query":"官方主题配色"}}`,
 		`{"action":"tool","tool":"diana.image","input":{"operation":"generate","prompt":"根据已核验的官方资料创作平面海报，主色严格使用靛蓝 #4B0082 与金色 #FFD700，简洁几何构图，不添加文字。","caption":"按查到的官方配色画好了。"}}`,
-		`{"action":"final","content":"文字说明先发给你，图片完成后会自动补上。"}`,
+		`{"action":"final","task_state":"pending","content":"文字说明先发给你，图片完成后会自动补上。"}`,
 	}}
 	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
 		Provider:   llm.ProviderOpenAICompatible,

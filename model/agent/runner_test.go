@@ -328,12 +328,12 @@ func TestFinalToolCommitmentDoesNotMistakeUserInstructions(t *testing.T) {
 	}
 }
 
-func TestRunnerRepairsPrematureImageCompletionClaim(t *testing.T) {
+func TestRunnerRequiresPendingStateAfterQueuedImage(t *testing.T) {
 	tool := &queuedImageTestTool{}
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"diana.image","input":{"prompt":"画一只奶鼠"}}`,
-		`{"action":"final","content":"画好啦，奶鼠已经出炉。"}`,
-		`{"action":"final","content":"已经开始画啦，完成后会自动发出来。"}`,
+		`{"action":"final","content":"任意未声明任务状态的回复。"}`,
+		`{"action":"final","task_state":"pending","content":"已经开始画啦，完成后会自动发出来。"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(tool))
 	if err != nil {
@@ -346,7 +346,7 @@ func TestRunnerRepairsPrematureImageCompletionClaim(t *testing.T) {
 	if resp.Text != "已经开始画啦，完成后会自动发出来。" || len(client.requests) != 3 || tool.calls != 1 {
 		t.Fatalf("resp=%#v requests=%d calls=%d", resp, len(client.requests), tool.calls)
 	}
-	if !strings.Contains(client.requests[2].Messages[len(client.requests[2].Messages)-1].Content, "不能声称图片已经生成完成") {
+	if !strings.Contains(client.requests[2].Messages[len(client.requests[2].Messages)-1].Content, "final.task_state 必须是 pending") {
 		t.Fatalf("repair prompt = %#v", client.requests[2].Messages)
 	}
 }
@@ -355,7 +355,7 @@ func TestRunnerAcceptsPendingImageStatus(t *testing.T) {
 	tool := &queuedImageTestTool{}
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"diana.image","input":{"prompt":"画一只奶鼠"}}`,
-		`{"action":"final","content":"已经开始生成，完成后会自动发送。"}`,
+		`{"action":"final","task_state":"pending","content":"已经开始生成，完成后会自动发送。"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(tool))
 	if err != nil {

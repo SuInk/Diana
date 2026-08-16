@@ -236,7 +236,11 @@ func (h *SystemUpdateHandler) download(c *gin.Context) {
 		h.writeUpdateError(c, "system.update.download", err)
 		return
 	}
-	recordRequestOperation(c, h.logs, "system.update.download", "更新包已下载并校验", result.TargetCommit, map[string]any{"forced": request.Force})
+	message := "更新包已下载并校验"
+	if result.Status.Updating {
+		message = "更新包下载任务正在进行"
+	}
+	recordRequestOperation(c, h.logs, "system.update.download", message, result.TargetCommit, map[string]any{"forced": request.Force})
 	c.JSON(http.StatusOK, result)
 }
 
@@ -379,6 +383,9 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 	if err != nil {
 		return updater.Result{}, err
 	}
+	if status.Updating {
+		return releaseOperationInProgressResult(status, status.DownloadedVersion), nil
+	}
 	latest, err := h.latestStableRelease(ctx, "")
 	if err != nil {
 		return updater.Result{}, err
@@ -403,11 +410,27 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 	if !ok {
 		return updater.Result{}, updater.ErrChecksumMissing
 	}
-	return h.releaseUpdater.Download(ctx, updater.ReleasePackage{
+	result, err := h.releaseUpdater.Download(ctx, updater.ReleasePackage{
 		Tag:       latest.Tag,
 		Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
 		Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
 	}, force)
+	if errors.Is(err, updater.ErrUpdateInProgress) {
+		current, statusErr := h.releaseUpdater.Status(ctx)
+		if statusErr == nil && current.Updating {
+			return releaseOperationInProgressResult(current, latest.Tag), nil
+		}
+	}
+	return result, err
+}
+
+func releaseOperationInProgressResult(status updater.Status, target string) updater.Result {
+	return updater.Result{
+		Status:       status,
+		TargetCommit: strings.TrimSpace(target),
+		Output:       "Release update operation is already in progress.",
+		At:           time.Now(),
+	}
 }
 
 func releaseApplyPending(status updater.Status, gitAvailable bool) bool {

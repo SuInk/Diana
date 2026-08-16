@@ -136,12 +136,12 @@
             </div>
             <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
           </template>
-          <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="updating" @click="runUpdate">
+          <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
             <RefreshCw v-if="deploymentMode === 'release' && updateStatus?.download_ready" :size="15" aria-hidden="true" />
             <Download v-else :size="15" aria-hidden="true" />
-            {{ updating ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : updateStatus?.download_ready ? "安装并重启" : "下载最新 Release" }}
+            {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : updateStatus?.download_ready ? "安装并重启" : "下载最新 Release" }}
           </button>
-          <div v-if="updating && deploymentMode === 'release'" class="update-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="updatePercent">
+          <div v-if="operationRunning && deploymentMode === 'release'" class="update-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="updatePercent">
             <div class="update-progress-label">
               <span>{{ updatePhaseLabel }}</span>
               <strong class="mono">{{ updatePercent }}%</strong>
@@ -178,7 +178,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw } from "@lucide/vue";
 import {
   changeCredentials,
@@ -214,6 +214,8 @@ const showCurrentPassword = ref(false);
 const showNewPassword = ref(false);
 const savingPassword = ref(false);
 const deploymentMode = ref<"git" | "release">("release");
+const operationRunning = computed(() => updating.value || updateStatus.value?.updating === true);
+let updateStatusPollTimer: number | undefined;
 
 async function loadAuthStatus(): Promise<void> {
   try {
@@ -270,6 +272,7 @@ async function loadUpdates(): Promise<void> {
 }
 
 async function runUpdate(): Promise<void> {
+	if (operationRunning.value) return;
 	const installingRelease = deploymentMode.value === "release" && updateStatus.value?.download_ready;
   const confirmed = await askConfirm({
 		title: installingRelease ? "安装已下载版本并重启？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : "安装最新稳定版本？",
@@ -337,6 +340,14 @@ onMounted(() => {
     .catch(() => {
       health.value = null;
     });
+	updateStatusPollTimer = window.setInterval(() => {
+		if (!operationRunning.value || deploymentMode.value !== "release") return;
+		void getUpdateStatus().then((status) => { updateStatus.value = status; }).catch(() => undefined);
+	}, 1000);
+});
+
+onBeforeUnmount(() => {
+	if (updateStatusPollTimer !== undefined) window.clearInterval(updateStatusPollTimer);
 });
 </script>
 
