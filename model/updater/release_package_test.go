@@ -88,6 +88,9 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 	if !status.DownloadReady || status.DownloadedVersion != "v0.5.0" {
 		t.Fatalf("Status() after download = %#v", status)
 	}
+	if status.UpdatePhase != "ready" || status.DownloadPercent != 100 || status.DownloadedBytes != int64(len(archive)) || status.DownloadTotal != int64(len(archive)) {
+		t.Fatalf("Status() download progress = %#v", status)
+	}
 	restartedUpdater, err := NewReleasePackageUpdater(options)
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +160,39 @@ func TestReleasePackageUpdaterRejectsChecksumMismatch(t *testing.T) {
 	if !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("Install() error = %v, want ErrChecksumMismatch", err)
 	}
+	status, statusErr := u.Status(context.Background())
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.UpdatePhase != "" || status.DownloadPercent != 0 || status.DownloadedBytes != 0 || status.DownloadTotal != 0 {
+		t.Fatalf("failed download retained stale progress: %#v", status)
+	}
 	assertUpdaterTestContent(t, executable, "old")
+}
+
+func TestProgressWriterReportsCumulativeBytes(t *testing.T) {
+	var reports [][2]int64
+	writer := &progressWriter{
+		total: 10,
+		report: func(downloaded, total int64) {
+			reports = append(reports, [2]int64{downloaded, total})
+		},
+	}
+	if _, err := writer.Write([]byte("abcd")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("efghij")); err != nil {
+		t.Fatal(err)
+	}
+	want := [][2]int64{{4, 10}, {10, 10}}
+	if len(reports) != len(want) {
+		t.Fatalf("reports = %#v, want %#v", reports, want)
+	}
+	for index := range want {
+		if reports[index] != want[index] {
+			t.Fatalf("reports = %#v, want %#v", reports, want)
+		}
+	}
 }
 
 func TestExtractReleaseArchiveRejectsTraversal(t *testing.T) {
