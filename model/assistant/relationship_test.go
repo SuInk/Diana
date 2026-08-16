@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func TestRelationshipPolicyTiersRequireScoreAndInteractionCount(t *testing.T) {
@@ -35,7 +37,7 @@ func TestRelationshipPolicyTiersRequireScoreAndInteractionCount(t *testing.T) {
 
 func TestRelationshipPolicySeparatesCapabilitiesFromOwnerAdministration(t *testing.T) {
 	initial := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "user")
-	if !initial.allowedAgentToolNames()["web_search.search"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()[dianaHistoryImagesToolName] || !initial.allowedAgentToolNames()["diana.relationship"] || !initial.allowedAgentToolNames()["diana.tts"] || !initial.allowedAgentToolNames()[dianaOneBotV11ToolName] || initial.allowedAgentToolNames()[dianaImageToolName] || initial.AllowImageGeneration || initial.AllowImageEditing || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
+	if !initial.allowedAgentToolNames()["web_search.search"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()[dianaHistoryImagesToolName] || !initial.allowedAgentToolNames()["diana.relationship"] || !initial.allowedAgentToolNames()["diana.tts"] || !initial.allowedAgentToolNames()[dianaOneBotV11ToolName] || !initial.allowedAgentToolNames()[dianaImageToolName] || !initial.allowedAgentToolNames()["diana.reminder"] || initial.AllowImageGeneration || initial.AllowImageEditing || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
 		t.Fatalf("initial tools = %#v", initial.allowedAgentToolNames())
 	}
 	if initial.allowedAgentToolNames()[dianaRepositoryIssuesToolName] {
@@ -48,6 +50,9 @@ func TestRelationshipPolicySeparatesCapabilitiesFromOwnerAdministration(t *testi
 	hostile := RelationshipPolicyFor(UserMemoryProfile{Favorability: -20, MessageCount: 10}, "owner", "user")
 	if hostile.AllowImageEditing {
 		t.Fatalf("hostile policy = %#v", hostile)
+	}
+	if !hostile.allowedAgentToolNames()[agent.WebSearchToolName] {
+		t.Fatalf("hostile relationship lost mandatory web search tool: %#v", hostile.allowedAgentToolNames())
 	}
 	friend := RelationshipPolicyFor(UserMemoryProfile{Favorability: 60, MessageCount: 30}, "owner", "user")
 	if !friend.AllowImageEditing || !friend.AllowPersonalSchedule || friend.allowedAgentToolNames()["diana.config"] {
