@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+
 <template>
   <LoginView v-if="locked" @success="onLoginSuccess" />
   <div v-else class="app-shell">

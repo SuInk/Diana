@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package assistant
 
 import (
@@ -113,6 +116,21 @@ func TestXiaohongshuMediaImagesAreDeduplicated(t *testing.T) {
 	got := xiaohongshuMediaImageURLs(note)
 	if len(got) != 2 {
 		t.Fatalf("images = %#v", got)
+	}
+}
+
+func TestXiaohongshuSocialContextPreservesFullDescription(t *testing.T) {
+	description := strings.Repeat("完整正文", 100)
+	contextText := xiaohongshuSocialContext(map[string]any{
+		"title": "测试标题",
+		"desc":  description,
+		"user":  map[string]any{"nickname": "测试作者"},
+	})
+	if !strings.Contains(contextText, description) {
+		t.Fatalf("full description was truncated: %q", contextText)
+	}
+	if strings.HasSuffix(contextText, "...") {
+		t.Fatalf("context has a truncation marker: %q", contextText)
 	}
 }
 

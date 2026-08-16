@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 import { reactive, readonly } from "vue";
 import type { QQBotStatus, StatsSnapshot } from "./api";
 
