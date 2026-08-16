@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2025-now SuInk.
+# Licensed under the Limited Redistribution License in the repository root.
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

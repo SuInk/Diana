@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package assistant
 
 import (
@@ -1201,7 +1204,11 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	return response, nil
 }
 
-var urlPattern = regexp.MustCompile(`https?://[^\s<>"'，。！？、]+`)
+var (
+	urlPattern                = regexp.MustCompile(`https?://[^\s<>"'，。！？、]+`)
+	bareXiaohongshuURLPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9._@-])((?:www\.)?(?:xhslink\.com|xiaohongshu\.com)/[^\s<>"'，。！？、]+)`)
+	bilibiliVideoIDPattern    = regexp.MustCompile(`(?i)\b(BV[a-z0-9]{10})\b`)
+)
 
 func extractResolverRequestURLs(req PluginRequest) []string {
 	return dedupeURLs(append(append(
@@ -1219,6 +1226,22 @@ func extractURLs(text string) []string {
 			if match != "" {
 				out = append(out, match)
 			}
+		}
+		withoutURLs := urlPattern.ReplaceAllString(candidate, " ")
+		for _, match := range bareXiaohongshuURLPattern.FindAllStringSubmatch(withoutURLs, -1) {
+			if len(match) < 3 {
+				continue
+			}
+			if normalized := normalizeResolverURL("https://" + match[2]); normalized != "" {
+				out = append(out, normalized)
+			}
+		}
+		for _, match := range bilibiliVideoIDPattern.FindAllStringSubmatch(withoutURLs, -1) {
+			if len(match) < 2 {
+				continue
+			}
+			bvid := "BV" + match[1][2:]
+			out = append(out, "https://www.bilibili.com/video/"+bvid)
 		}
 	}
 	return dedupeURLs(out)
