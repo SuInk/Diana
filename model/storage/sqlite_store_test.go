@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package storage
 
 import (
@@ -12,6 +15,7 @@ import (
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/model/updater"
 )
 
 func TestSQLiteStoreMigratesLegacyDatabaseFilename(t *testing.T) {
@@ -264,6 +268,26 @@ func TestSQLiteStoreReleaseCacheRoundTrip(t *testing.T) {
 	}
 	if err := store.SaveReleaseCache(context.Background(), []byte(`{"broken"`)); err == nil {
 		t.Fatal("SaveReleaseCache() accepted invalid JSON")
+	}
+}
+
+func TestSQLiteStoreUpdatePolicyRoundTrip(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "update-policy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if policy, ok, err := store.LoadUpdatePolicy(context.Background()); err != nil || ok || policy != (updater.UpdatePolicy{}) {
+		t.Fatalf("LoadUpdatePolicy() before save = %#v, %v, %v", policy, ok, err)
+	}
+	want := updater.UpdatePolicy{AutoDownload: true, AutoInstall: true}
+	if err := store.SaveUpdatePolicy(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.LoadUpdatePolicy(context.Background())
+	if err != nil || !ok || got != want {
+		t.Fatalf("LoadUpdatePolicy() = %#v, %v, %v; want %#v", got, ok, err, want)
 	}
 }
 

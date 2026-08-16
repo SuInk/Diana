@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package main
 
 import (
@@ -113,6 +116,9 @@ func main() {
 	systemHandler := webui.NewSystemUpdateHandler(systemUpdater)
 	systemHandler.SetLogStore(sqliteStore)
 	systemHandler.SetBuildVersion(buildVersion)
+	if err := systemHandler.SetUpdatePolicyStore(ctx, sqliteStore); err != nil {
+		log.Fatal(err)
+	}
 	if err := systemHandler.SetReleaseCacheStore(ctx, sqliteStore); err != nil {
 		log.Printf("load system release cache: %v", err)
 	}
@@ -129,6 +135,7 @@ func main() {
 		log.Fatal(err)
 	}
 	systemHandler.SetReleasePackageUpdater(releaseUpdater)
+	systemHandler.StartAutoUpdate(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
 	plugins := assistant.NewDefaultPluginManager()
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {

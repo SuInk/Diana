@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package updater
 
 import (
@@ -51,6 +54,15 @@ type ReleasePackage struct {
 	Tag       string
 	Archive   ReleaseAsset
 	Checksums ReleaseAsset
+}
+
+type UpdatePolicy struct {
+	AutoDownload bool `json:"auto_download"`
+	AutoInstall  bool `json:"auto_install"`
+}
+
+func DefaultUpdatePolicy() UpdatePolicy {
+	return UpdatePolicy{AutoDownload: true, AutoInstall: false}
 }
 
 type pendingReleaseUpdate struct {
