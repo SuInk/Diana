@@ -141,7 +141,14 @@
             <Download v-else :size="15" aria-hidden="true" />
             {{ updating ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : updateStatus?.download_ready ? "安装并重启" : "下载最新 Release" }}
           </button>
-          <pre v-if="updateOutput" class="mono" style="margin: 0; font-size: 11.5px; white-space: pre-wrap; color: var(--muted)">{{ updateOutput }}</pre>
+          <div v-if="updating && deploymentMode === 'release'" class="update-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="updatePercent">
+            <div class="update-progress-label">
+              <span>{{ updatePhaseLabel }}</span>
+              <strong class="mono">{{ updatePercent }}%</strong>
+            </div>
+            <div class="update-progress-track"><span :style="{ width: `${updatePercent}%` }"></span></div>
+          </div>
+          <pre v-if="updateOutput" class="mono update-output" :class="{ error: updateFailed }">{{ updateOutput }}</pre>
           <div v-if="loading" class="skeleton" style="height: 72px"></div>
         </div>
       </section>
@@ -197,6 +204,7 @@ const systemVersion = ref<SystemVersion | null>(null);
 const health = ref<HealthResponse | null>(null);
 const loading = ref(false);
 const updating = ref(false);
+const updateFailed = ref(false);
 const updateOutput = ref("");
 const authRequired = ref(false);
 const username = ref("");
@@ -274,7 +282,13 @@ async function runUpdate(): Promise<void> {
   });
   if (!confirmed) return;
   updating.value = true;
+  updateFailed.value = false;
   updateOutput.value = "";
+  const progressTimer = deploymentMode.value === "release" && !installingRelease
+    ? window.setInterval(() => {
+        void getUpdateStatus().then((status) => { updateStatus.value = status; }).catch(() => undefined);
+      }, 500)
+    : undefined;
   try {
 		const result = deploymentMode.value === "release"
 		  ? installingRelease
@@ -289,11 +303,29 @@ async function runUpdate(): Promise<void> {
 			: result.downloaded ? "更新已下载并通过校验，等待安装" : "已是最新，无需更新"
 		  : result.updated ? "更新完成，重启服务后生效" : "已是最新，无需更新");
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "更新失败");
+    const message = error instanceof Error ? error.message : "更新失败";
+    updateFailed.value = true;
+    updateOutput.value = message;
+    toastError(message);
   } finally {
+    if (progressTimer !== undefined) window.clearInterval(progressTimer);
     updating.value = false;
+    if (deploymentMode.value === "release") {
+      await getUpdateStatus().then((status) => { updateStatus.value = status; }).catch(() => undefined);
+    }
   }
 }
+
+const updatePercent = computed(() => Math.max(0, Math.min(100, Math.round(updateStatus.value?.download_percent ?? 0))));
+const updatePhaseLabel = computed(() => {
+  switch (updateStatus.value?.update_phase) {
+    case "checksum": return "准备 → 下载校验清单";
+    case "downloading": return `准备 → 下载 ${updatePercent.value}%`;
+    case "extracting": return "准备 → 下载 100% → 校验 → 解压";
+    case "ready": return "准备 → 下载 100% → 校验 → 解压 → 完成";
+    default: return "准备更新";
+  }
+});
 
 onMounted(() => {
   void loadUpdates();
@@ -307,3 +339,12 @@ onMounted(() => {
     });
 });
 </script>
+
+<style scoped>
+.update-progress { display: grid; gap: 7px; }
+.update-progress-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); }
+.update-progress-track { height: 7px; overflow: hidden; background: var(--surface-muted); border: 1px solid var(--border); border-radius: 4px; }
+.update-progress-track span { display: block; height: 100%; min-width: 2px; background: var(--accent); transition: width 180ms ease; }
+.update-output { margin: 0; padding: 10px; font-size: 11.5px; white-space: pre-wrap; color: var(--muted); border: 1px solid var(--border); background: var(--surface-muted); }
+.update-output.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+</style>
