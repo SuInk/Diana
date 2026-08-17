@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -350,6 +351,16 @@ func main() {
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
 	napCatLoginHandler.Register(router)
+	// 重启复用 SIGTERM 的优雅关停链路：取消根 ctx 让 Serve 返回，再由
+	// main 收尾时判断 restartRequested 原地重启。
+	var restartRequested atomic.Bool
+	restartHandler := webui.NewRestartHandler(func() {
+		if restartRequested.CompareAndSwap(false, true) {
+			cancel()
+		}
+	})
+	restartHandler.SetLogStore(sqliteStore)
+	restartHandler.Register(router)
 	logHandler.Register(router)
 	statsHandler.Register(router)
 	eventStreamHandler.Register(router)
@@ -393,6 +404,12 @@ func main() {
 	}()
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
+	}
+	if restartRequested.Load() {
+		log.Printf("webui restarting")
+		if err := relaunchSelf(closeLog); err != nil {
+			log.Fatalf("webui restart failed: %v", err)
+		}
 	}
 }
 
