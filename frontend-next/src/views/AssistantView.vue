@@ -1596,25 +1596,24 @@ async function copyEndpoint(): Promise<void> {
 }
 
 onMounted(async () => {
-  try {
-    platforms.value = (await getQQBotPlatforms()).platforms;
-  } catch {
-    platforms.value = [
-      { id: "onebot-v11", name: "OneBot v11", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ" }
-    ];
+  const [platformResult, botConfig, llmConfig] = await Promise.all([
+    getQQBotPlatforms().catch(() => ({ platforms: [] as QQBotPlatform[] })),
+    getQQBotConfig().catch((error: unknown) => {
+      toastError(error instanceof Error ? error.message : "加载配置失败");
+      return null;
+    }),
+    getConfig().catch(() => null)
+  ]);
+  platforms.value = platformResult.platforms.length
+    ? platformResult.platforms
+    : [{ id: "onebot-v11", name: "OneBot v11", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ" }];
+  if (botConfig) {
+    applyConfig(botConfig);
   }
-  try {
-    applyConfig(await getQQBotConfig());
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "加载配置失败");
-  }
-  try {
-    // 渠道下拉用 LLM 配置页的配置集。
-    const channels = (await getConfig()).profiles ?? [];
-    llmChannels.value = channels;
-    await refreshLLMChannelCapabilities(channels);
-  } catch {
-    llmChannels.value = [];
+  const channels = llmConfig?.profiles ?? [];
+  llmChannels.value = channels;
+  if (channels.length > 0) {
+    void refreshLLMChannelCapabilities(channels);
   }
 });
 </script>
