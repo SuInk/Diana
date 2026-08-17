@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -154,44 +155,77 @@ const (
 )
 
 type Reminder struct {
-	ID                    string       `json:"id"`
-	Kind                  ReminderKind `json:"kind,omitempty"`
-	Platform              string       `json:"platform,omitempty"`
-	ProfileID             string       `json:"profile_id,omitempty"`
-	ContextNamespace      string       `json:"context_namespace,omitempty"`
-	OwnerID               string       `json:"owner_id"`
-	GroupID               string       `json:"group_id,omitempty"`
-	UserID                string       `json:"user_id,omitempty"`
-	Message               string       `json:"message"`
-	TriggerAt             time.Time    `json:"trigger_at"`
-	IntervalSeconds       int64        `json:"interval_seconds,omitempty"`
-	LastRunAt             time.Time    `json:"last_run_at,omitempty"`
-	CancelledAt           time.Time    `json:"cancelled_at,omitempty"`
-	LastError             string       `json:"last_error,omitempty"`
-	ConsecutiveFailures   int          `json:"consecutive_failures,omitempty"`
-	LastFailureStage      string       `json:"last_failure_stage,omitempty"`
-	LastErrorFingerprint  string       `json:"last_error_fingerprint,omitempty"`
-	FailureAlertedAt      time.Time    `json:"failure_alerted_at,omitempty"`
-	RecoveryNoticePending bool         `json:"recovery_notice_pending,omitempty"`
-	PendingDelivery       string       `json:"pending_delivery,omitempty"`
-	PendingSince          time.Time    `json:"pending_since,omitempty"`
-	Repository            string       `json:"repository,omitempty"`
-	RepositoryBranch      string       `json:"repository_branch,omitempty"`
-	WatchCommits          bool         `json:"watch_commits,omitempty"`
-	WatchPullRequests     bool         `json:"watch_pull_requests,omitempty"`
-	WatchReleases         bool         `json:"watch_releases,omitempty"`
-	WatchStars            bool         `json:"watch_stars,omitempty"`
-	LastCommitSHA         string       `json:"last_commit_sha,omitempty"`
-	LastPullRequestCursor string       `json:"last_pull_request_cursor,omitempty"`
-	LastReleaseTag        string       `json:"last_release_tag,omitempty"`
-	LastStarCount         int          `json:"last_star_count,omitempty"`
-	FeedURL               string       `json:"feed_url,omitempty"`
-	FeedSource            string       `json:"feed_source,omitempty"`
-	FeedHandle            string       `json:"feed_handle,omitempty"`
-	FeedJudgePrompt       string       `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID        string       `json:"last_feed_item_id,omitempty"`
-	LastFeedPublishedAt   time.Time    `json:"last_feed_published_at,omitempty"`
-	CreatedAt             time.Time    `json:"created_at"`
+	ID                      string       `json:"id"`
+	Kind                    ReminderKind `json:"kind,omitempty"`
+	Platform                string       `json:"platform,omitempty"`
+	ProfileID               string       `json:"profile_id,omitempty"`
+	ContextNamespace        string       `json:"context_namespace,omitempty"`
+	OwnerID                 string       `json:"owner_id"`
+	GroupID                 string       `json:"group_id,omitempty"`
+	UserID                  string       `json:"user_id,omitempty"`
+	NotificationEnabled     bool         `json:"notification_enabled,omitempty"`
+	NotificationTargetsJSON string       `json:"notification_targets,omitempty"`
+	Message                 string       `json:"message"`
+	TriggerAt               time.Time    `json:"trigger_at"`
+	IntervalSeconds         int64        `json:"interval_seconds,omitempty"`
+	LastRunAt               time.Time    `json:"last_run_at,omitempty"`
+	CancelledAt             time.Time    `json:"cancelled_at,omitempty"`
+	LastError               string       `json:"last_error,omitempty"`
+	ConsecutiveFailures     int          `json:"consecutive_failures,omitempty"`
+	LastFailureStage        string       `json:"last_failure_stage,omitempty"`
+	LastErrorFingerprint    string       `json:"last_error_fingerprint,omitempty"`
+	FailureAlertedAt        time.Time    `json:"failure_alerted_at,omitempty"`
+	RecoveryNoticePending   bool         `json:"recovery_notice_pending,omitempty"`
+	PendingDelivery         string       `json:"pending_delivery,omitempty"`
+	PendingSince            time.Time    `json:"pending_since,omitempty"`
+	Repository              string       `json:"repository,omitempty"`
+	RepositoryBranch        string       `json:"repository_branch,omitempty"`
+	WatchCommits            bool         `json:"watch_commits,omitempty"`
+	WatchPullRequests       bool         `json:"watch_pull_requests,omitempty"`
+	WatchReleases           bool         `json:"watch_releases,omitempty"`
+	WatchStars              bool         `json:"watch_stars,omitempty"`
+	LastCommitSHA           string       `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor   string       `json:"last_pull_request_cursor,omitempty"`
+	LastReleaseTag          string       `json:"last_release_tag,omitempty"`
+	LastStarCount           int          `json:"last_star_count,omitempty"`
+	FeedURL                 string       `json:"feed_url,omitempty"`
+	FeedSource              string       `json:"feed_source,omitempty"`
+	FeedHandle              string       `json:"feed_handle,omitempty"`
+	FeedJudgePrompt         string       `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID          string       `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt     time.Time    `json:"last_feed_published_at,omitempty"`
+	CreatedAt               time.Time    `json:"created_at"`
+}
+
+// ReminderDeliveryTarget is an additional destination for recurring watch
+// notifications. The legacy GroupID/UserID fields remain the primary target
+// for old persisted reminders and are used as a fallback when this list is empty.
+type ReminderDeliveryTarget struct {
+	Platform         string `json:"platform,omitempty"`
+	ProfileID        string `json:"profile_id,omitempty"`
+	ContextNamespace string `json:"context_namespace,omitempty"`
+	GroupID          string `json:"group_id,omitempty"`
+	UserID           string `json:"user_id,omitempty"`
+}
+
+func encodeReminderDeliveryTargets(targets []ReminderDeliveryTarget) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	body, _ := json.Marshal(targets)
+	return string(body)
+}
+
+func decodeReminderDeliveryTargets(raw string) []ReminderDeliveryTarget {
+	var targets []ReminderDeliveryTarget
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &targets) != nil {
+		return nil
+	}
+	return targets
+}
+
+func ReminderDeliveryTargets(raw string) []ReminderDeliveryTarget {
+	return decodeReminderDeliveryTargets(raw)
 }
 
 type Channel interface {
@@ -320,9 +354,11 @@ type BotConfig struct {
 }
 
 type ModelRole struct {
-	ProfileID string `json:"profile_id,omitempty"`
-	Group     string `json:"group,omitempty"`
-	Model     string `json:"model"`
+	ProfileID  string `json:"profile_id,omitempty"`
+	Group      string `json:"group,omitempty"`
+	Model      string `json:"model"`
+	ProviderID string `json:"provider_id,omitempty"`
+	ModelID    string `json:"model_id,omitempty"`
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
@@ -333,10 +369,19 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 		role.ProfileID = strings.TrimSpace(role.ProfileID)
 		role.Group = strings.TrimSpace(role.Group)
 		role.Model = strings.TrimSpace(role.Model)
+		role.ProviderID = strings.TrimSpace(role.ProviderID)
+		role.ModelID = strings.TrimSpace(role.ModelID)
+		if role.ProviderID != "" || role.ModelID != "" {
+			role.ProfileID = ""
+			role.Group = ""
+			if role.Model == "" {
+				role.Model = role.ModelID
+			}
+		}
 		if role.Group != "" {
 			role.ProfileID = ""
 		}
-		if allowed[key] && (role.ProfileID != "" || role.Group != "") && role.Model != "" {
+		if allowed[key] && ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != "" {
 			out[key] = role
 		}
 	}

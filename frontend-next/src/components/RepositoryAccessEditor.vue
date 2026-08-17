@@ -5,10 +5,10 @@
   <section class="issue-access-editor" :class="{ scoped: isScoped }">
     <header class="section-heading">
       <div>
-        <h3>{{ isScoped ? "Issue 授权方式" : "指定用户" }}</h3>
-        <p>{{ isScoped ? `仅配置 ${repositoryKeyValue} 的授权；可同时指定群内用户和群聊，其他仓库互不影响。` : "只有群内且对目标仓库有授权的用户，才能批准并创建 Issue。" }}</p>
+        <h3>Issue 管理人员（私聊）</h3>
+        <p>{{ isScoped ? `仅配置 ${repositoryKeyValue} 的管理人员；可直接创建和管理 Issue。` : "这些私聊用户可以直接创建和管理 Issue。" }}</p>
       </div>
-      <span class="badge accent">{{ users.length }} 个指定用户</span>
+      <span class="badge accent">{{ users.length }} 个用户</span>
     </header>
 
     <div class="rule-list">
@@ -45,17 +45,28 @@
     </div>
     <button class="btn small ghost add-rule" type="button" @click="addUser">
       <UserPlus :size="15" aria-hidden="true" />
-      添加指定用户
+      添加私聊管理员
     </button>
+
+    <div class="section-divider"></div>
+
+    <header class="section-heading"><div><h3>Issue 管理人员（群聊）</h3><p>该群成员可以直接创建和管理 Issue，请只添加可信群聊。</p></div><span class="badge">{{ managerGroups.length }} 个群聊</span></header>
+    <div class="rule-list"><article v-for="(group, index) in managerGroups" :key="`manager-group-${index}`" class="access-rule group-rule"><div class="rule-header"><div class="identity"><img v-if="groupSummary(group.id)?.avatar_url" class="avatar" :src="groupSummary(group.id)?.avatar_url" alt="" /><div><strong>{{ groupSummary(group.id)?.group_name || group.id || "新群聊" }}</strong><small class="mono">{{ group.id }}</small></div></div><button class="btn small ghost danger icon-only" type="button" title="删除群聊" aria-label="删除群聊" @click="removeManagerGroup(index)"><Trash2 :size="15" aria-hidden="true" /></button></div><input v-model.trim="group.id" class="input mono" type="text" placeholder="群号或 Chat ID" @input="emitAll" /><RepositoryListEditor v-if="!isScoped" :repositories="group.repositories" placeholder="owner/repo" @update="updateManagerGroupRepositories(index, $event)" /></article></div>
+    <button class="btn small ghost add-rule" type="button" @click="addManagerGroup"><MessageSquarePlus :size="15" aria-hidden="true" />添加群聊管理员</button>
+
+    <div class="section-divider"></div>
+    <header class="section-heading"><div><h3>Issue 草稿提交者（私聊）</h3><p>这些私聊用户可以提交 Issue 草稿，但不能直接写入 GitHub。</p></div><span class="badge">{{ draftUsers.length }} 个用户</span></header>
+    <div class="rule-list"><article v-for="(user, index) in draftUsers" :key="`draft-user-${index}`" class="access-rule"><div class="rule-header"><strong>{{ user.id || "新草稿提交者" }}</strong><button class="btn small ghost danger icon-only" type="button" title="删除用户" aria-label="删除用户" @click="removeDraftUser(index)"><Trash2 :size="15" aria-hidden="true" /></button></div><input v-model.trim="user.id" class="input mono" type="text" placeholder="QQ 用户 ID 或 Chat ID" @input="emitAll" /><RepositoryListEditor v-if="!isScoped" :repositories="user.repositories" placeholder="owner/repo" @update="updateDraftUserRepositories(index, $event)" /></article></div>
+    <button class="btn small ghost add-rule" type="button" @click="addDraftUser"><UserPlus :size="15" aria-hidden="true" />添加私聊提交者</button>
 
     <div class="section-divider"></div>
 
     <header class="section-heading">
       <div>
-        <h3>指定群聊（可提交草稿）</h3>
+        <h3>Issue 草稿提交者（群聊）</h3>
         <p>指定群聊内的成员都能提交需求并生成草稿，但不能直接写入 GitHub；仍需指定用户确认。</p>
       </div>
-      <span class="badge">{{ groups.length }} 个指定群聊</span>
+      <span class="badge">{{ groups.length }} 个群聊</span>
     </header>
     <div class="approval-flow">
       <span>成员提出需求</span><ArrowRight :size="14" /><span>机器人复述草稿</span><ArrowRight :size="14" /><span>指定用户确认</span><ArrowRight :size="14" /><span>创建 Issue</span>
@@ -100,7 +111,7 @@ import AppSelect, { type AppSelectOption } from "./AppSelect.vue";
 type AccessRule = { id: string; repositories: string[] };
 type UserRule = AccessRule & { tokenConfigured: boolean; authMode: "inherit" | "gh" | "token" };
 
-const props = defineProps<{ userAccess: string; groupAccess: string; tokenUsers: string; userAuthModes: string; repository?: string; joinedGroups: QQBotGroupSummary[]; groupsLoading?: boolean; groupsWarning?: string }>();
+const props = defineProps<{ userAccess: string; groupAccess: string; draftUserAccess?: string; draftGroupAccess?: string; managerUserAccess?: string; managerGroupAccess?: string; tokenUsers: string; userAuthModes: string; repository?: string; joinedGroups: QQBotGroupSummary[]; groupsLoading?: boolean; groupsWarning?: string }>();
 const emit = defineEmits<{
   "update:userAccess": [string];
   "update:groupAccess": [string];
@@ -108,14 +119,22 @@ const emit = defineEmits<{
   "update:tokenUsers": [string];
   "update:userAuthModes": [string];
   "update:allowedRepositories": [string];
+  "update:draft-user-access": [string];
+  "update:draft-group-access": [string];
+  "update:manager-user-access": [string];
+  "update:manager-group-access": [string];
 }>();
 
 const configuredTokenUsers = ref(parseIDs(props.tokenUsers));
 const initialAuthModes = parseAuthModes(props.userAuthModes);
 const isScoped = computed(() => Boolean(normalizeRepository(props.repository ?? "")));
 const repositoryKeyValue = computed(() => normalizeRepository(props.repository ?? ""));
-const users = ref<UserRule[]>(rulesForDisplay(props.userAccess, isScoped.value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: initialAuthModes[rule.id] || "token" })));
-const groups = ref<AccessRule[]>(rulesForDisplay(props.groupAccess, isScoped.value));
+const managerUserSource = props.managerUserAccess || props.userAccess;
+const draftGroupSource = props.draftGroupAccess || props.groupAccess;
+const users = ref<UserRule[]>(rulesForDisplay(managerUserSource, isScoped.value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: initialAuthModes[rule.id] || "token" })));
+const groups = ref<AccessRule[]>(rulesForDisplay(draftGroupSource, isScoped.value));
+const draftUsers = ref<AccessRule[]>(rulesForDisplay(props.draftUserAccess ?? "", isScoped.value));
+const managerGroups = ref<AccessRule[]>(rulesForDisplay(props.managerGroupAccess ?? "", isScoped.value));
 const tokenChanges = ref<Record<string, string | null>>({});
 const showGroupPicker = ref(false);
 const groupQuery = ref("");
@@ -131,13 +150,15 @@ const availableGroups = computed(() => {
 });
 
 watch(() => [props.userAccess, props.repository], ([value]) => {
-  const nextValue = value ?? "";
-  if (nextValue !== serializeEditorRules(users.value, props.userAccess)) users.value = rulesForDisplay(nextValue, isScoped.value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: parseAuthModes(props.userAuthModes)[rule.id] || "token" }));
+  const nextValue = props.managerUserAccess || value || "";
+  if (nextValue !== serializeEditorRules(users.value, props.managerUserAccess || props.userAccess)) users.value = rulesForDisplay(nextValue, isScoped.value).map((rule) => ({ ...rule, tokenConfigured: configuredTokenUsers.value.has(rule.id), authMode: parseAuthModes(props.userAuthModes)[rule.id] || "token" }));
 });
 watch(() => [props.groupAccess, props.repository], ([value]) => {
-  const nextValue = value ?? "";
-  if (nextValue !== serializeEditorRules(groups.value, props.groupAccess)) groups.value = rulesForDisplay(nextValue, isScoped.value);
+  const nextValue = props.draftGroupAccess || value || "";
+  if (nextValue !== serializeEditorRules(groups.value, props.draftGroupAccess || props.groupAccess)) groups.value = rulesForDisplay(nextValue, isScoped.value);
 });
+watch(() => [props.draftUserAccess, props.repository], ([value]) => { const nextValue = value ?? ""; if (nextValue !== serializeEditorRules(draftUsers.value, props.draftUserAccess ?? "")) draftUsers.value = rulesForDisplay(nextValue, isScoped.value); });
+watch(() => [props.managerGroupAccess, props.repository], ([value]) => { const nextValue = value ?? ""; if (nextValue !== serializeEditorRules(managerGroups.value, props.managerGroupAccess ?? "")) managerGroups.value = rulesForDisplay(nextValue, isScoped.value); });
 watch(() => props.tokenUsers, (value) => {
   configuredTokenUsers.value = parseIDs(value);
   for (const user of users.value) user.tokenConfigured = configuredTokenUsers.value.has(user.id);
@@ -207,6 +228,10 @@ function emitAll(): void {
   const userAccess = serializeEditorRules(users.value, props.userAccess);
   emit("update:userAccess", userAccess);
   emit("update:groupAccess", serializeEditorRules(groups.value, props.groupAccess));
+  emit("update:draft-user-access", serializeEditorRules(draftUsers.value, props.draftUserAccess ?? ""));
+  emit("update:draft-group-access", serializeEditorRules(groups.value, props.draftGroupAccess ?? props.groupAccess));
+  emit("update:manager-user-access", userAccess);
+  emit("update:manager-group-access", serializeEditorRules(managerGroups.value, props.managerGroupAccess ?? ""));
   emit("update:userTokens", Object.keys(tokenChanges.value).length ? JSON.stringify(tokenChanges.value) : "");
   emit("update:tokenUsers", [...configuredTokenUsers.value].join("\n"));
   emit("update:userAuthModes", serializeAuthModes(userAccess));
@@ -246,6 +271,12 @@ function updateUserRepositories(index: number, value: string[]): void { users.va
 function addGroup(groupID: string): void { groups.value.push({ id: groupID, repositories: [] }); showGroupPicker.value = false; groupQuery.value = ""; emitAll(); }
 function removeGroup(index: number): void { groups.value.splice(index, 1); emitAll(); }
 function updateGroupRepositories(index: number, value: string[]): void { groups.value[index].repositories = value; emitAll(); }
+function updateDraftUserRepositories(index: number, value: string[]): void { draftUsers.value[index].repositories = value; emitAll(); }
+function updateManagerGroupRepositories(index: number, value: string[]): void { managerGroups.value[index].repositories = value; emitAll(); }
+function addManagerGroup(): void { managerGroups.value.push({ id: "", repositories: [] }); emitAll(); }
+function removeManagerGroup(index: number): void { managerGroups.value.splice(index, 1); emitAll(); }
+function addDraftUser(): void { draftUsers.value.push({ id: "", repositories: [] }); emitAll(); }
+function removeDraftUser(index: number): void { draftUsers.value.splice(index, 1); emitAll(); }
 
 const RepositoryListEditor = defineComponent({
   props: { repositories: { type: Array as () => string[], required: true }, placeholder: { type: String, required: true } },
