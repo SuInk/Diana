@@ -64,6 +64,16 @@ func TestPublicQQErrorMessageMapsEmptyModelOutput(t *testing.T) {
 	}
 }
 
+func TestPublicQQErrorMessageMapsContentPolicyRejection(t *testing.T) {
+	err := classifyLLMError(errors.New("400 Bad Request: request was rejected because it was considered high risk"))
+	got := publicQQErrorMessage(err)
+	for _, want := range []string{"上游模型因内容安全策略拒绝了这次请求", "上游说明：", "high risk"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("message = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestPublicQQErrorMessageMapsUnavailableImage(t *testing.T) {
 	err := newImageMediaUnavailableError([]error{errors.New("image download failed: status=400")})
 	got := publicQQErrorMessage(err)
