@@ -93,16 +93,9 @@
       </header>
 
       <main class="app-content">
-        <DashboardView v-if="currentView === 'dashboard'" />
-        <EventsView v-else-if="currentView === 'events'" />
-        <TasksView v-else-if="currentView === 'tasks'" />
-        <SetupWizard v-else-if="currentView === 'setup'" />
-        <LLMView v-else-if="currentView === 'llm'" />
-        <AssistantView v-else-if="currentView === 'bot'" />
-        <PluginsView v-else-if="currentView === 'plugins'" />
-        <GroupsView v-else-if="currentView === 'groups'" />
-        <LogsView v-else-if="currentView === 'logs'" />
-        <SettingsView v-else />
+        <KeepAlive :max="8">
+          <component :is="activeView" :key="currentView" />
+        </KeepAlive>
       </main>
     </div>
 
@@ -118,7 +111,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, KeepAlive, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Component } from "vue";
 import {
   Bot,
@@ -160,6 +153,19 @@ import PluginsView from "./views/PluginsView.vue";
 import GroupsView from "./views/GroupsView.vue";
 import LogsView from "./views/LogsView.vue";
 import SettingsView from "./views/SettingsView.vue";
+
+const viewComponents: Record<ViewID, Component> = {
+  dashboard: DashboardView,
+  events: EventsView,
+  tasks: TasksView,
+  setup: SetupWizard,
+  llm: LLMView,
+  bot: AssistantView,
+  plugins: PluginsView,
+  groups: GroupsView,
+  logs: LogsView,
+  settings: SettingsView
+};
 
 const drawerOpen = ref(false);
 const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
@@ -221,6 +227,7 @@ const viewTitles: Record<ViewID, string> = {
 };
 
 const viewTitle = computed(() => viewTitles[currentView.value]);
+const activeView = computed(() => viewComponents[currentView.value] ?? DashboardView);
 
 const botSummary = computed(() => {
   const status = stream.status;
@@ -291,26 +298,20 @@ async function refreshUpdateIndicator(): Promise<void> {
 // bootApp 在鉴权通过（或未开启鉴权）后加载应用数据。
 async function bootApp(): Promise<void> {
   startEventStream();
-  try {
-    health.value = await getHealth();
-  } catch {
-    /* 健康接口失败不影响使用 */
-  }
-  try {
-    systemVersion.value = await getSystemVersion();
-  } catch {
-    /* 版本信息失败时侧栏只显示占位 */
-  }
-  void refreshUpdateIndicator();
+  const [healthResult, versionResult, config] = await Promise.all([
+    getHealth().catch(() => null),
+    getSystemVersion().catch(() => null),
+    getConfig().catch(() => null)
+  ]);
+  health.value = healthResult;
+  systemVersion.value = versionResult;
+  window.setTimeout(() => {
+    void refreshUpdateIndicator();
+  }, 2500);
   // 首次访问且 LLM 未配置时自动进入向导；之后只在总览顶部保留一条引导。
-  try {
-    const config = await getConfig();
-    if (!config.api_key_configured && !window.localStorage.getItem(SETUP_DISMISS_KEY)) {
-      navigate("setup");
-      window.localStorage.setItem(SETUP_DISMISS_KEY, "1");
-    }
-  } catch {
-    /* 配置读取失败时停留在总览 */
+  if (config && !config.api_key_configured && !window.localStorage.getItem(SETUP_DISMISS_KEY)) {
+    navigate("setup");
+    window.localStorage.setItem(SETUP_DISMISS_KEY, "1");
   }
 }
 

@@ -673,8 +673,12 @@ watch(
   () => stream.lastEventAt,
   (value) => {
     if (!value) return;
+    if (events.value.length > 50) return;
     if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-    refreshTimer = window.setTimeout(() => void load(true), 1200);
+    refreshTimer = window.setTimeout(() => {
+      if (loading.value || loadingMore.value) return;
+      void load(true);
+    }, 2500);
   }
 );
 

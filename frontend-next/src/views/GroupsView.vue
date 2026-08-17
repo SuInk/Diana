@@ -349,7 +349,10 @@ function hasOtherReplyGateRules(group: QQBotGroupConfig): boolean {
 async function load(showFeedback = false): Promise<void> {
   refreshing.value = true;
   try {
-    const response = await listQQBotGroups();
+    const [response, configAndPlatforms] = await Promise.all([
+      listQQBotGroups(showFeedback),
+      Promise.all([getQQBotConfig(), getQQBotPlatforms()]).catch(() => null)
+    ]);
     groups.value = response.groups;
     plugins.value = response.plugins;
     liveAvailable.value = response.live_available;
@@ -361,8 +364,8 @@ async function load(showFeedback = false): Promise<void> {
         toastError(response.warning ?? "暂时无法同步群列表");
       }
     }
-    try {
-      const [config, platformList] = await Promise.all([getQQBotConfig(), getQQBotPlatforms()]);
+    if (configAndPlatforms) {
+      const [config, platformList] = configAndPlatforms;
       const active = config.profiles?.find((item) => item.id === config.active_profile_id) ?? config.profiles?.[0];
       const current = active ?? config;
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
@@ -370,7 +373,7 @@ async function load(showFeedback = false): Promise<void> {
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
-    } catch {
+    } else {
       // 拿不到平台信息时保守地把等级门槛显示出来。
       supportsGroupLevel.value = true;
     }
