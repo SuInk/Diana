@@ -23,6 +23,17 @@
           <PowerOff :size="15" aria-hidden="true" />
           停止
         </button>
+        <button
+          v-if="status && status.running && isOneBotPlatform"
+          class="btn ghost"
+          type="button"
+          :disabled="busy"
+          title="重新拉取最近 24 小时的会话历史，补入错过的消息（已处理过的消息会自动去重）"
+          @click="triggerBackfill"
+        >
+          <History :size="15" aria-hidden="true" />
+          回补消息
+        </button>
         <button class="btn primary" type="button" :disabled="busy || !form" @click="save">
           <Save :size="15" aria-hidden="true" />
           保存配置
@@ -784,7 +795,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ArrowLeft, Bot, ChevronRight, Copy, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Trash2, X } from "@lucide/vue";
+import { ArrowLeft, Bot, ChevronRight, Copy, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Trash2, X } from "@lucide/vue";
 import {
   activateQQBotProfile,
   deleteQQBotProfile,
@@ -792,6 +803,7 @@ import {
   getQQBotConfig,
   getQQBotPlatforms,
   listLLMModels,
+  requestQQBotBackfill,
   saveQQBotConfig,
   setQQBotContextIsolation,
   startQQBot,
@@ -1465,6 +1477,26 @@ async function toggle(start: boolean): Promise<void> {
     toastSuccess(start ? "机器人已启动" : "机器人已停止");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "操作失败");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function triggerBackfill(): Promise<void> {
+  const ok = await askConfirm({
+    title: "回补最近 24 小时消息",
+    message: "将重新拉取各会话最近 24 小时的历史并补入错过的消息。已处理过的消息会自动去重，但从未处理过的旧消息可能触发回复。",
+    confirmLabel: "开始回补"
+  });
+  if (!ok) {
+    return;
+  }
+  busy.value = true;
+  try {
+    await requestQQBotBackfill();
+    toastSuccess("回补已触发，进度见系统日志（backfill_completed 表示完成）");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "回补触发失败");
   } finally {
     busy.value = false;
   }
