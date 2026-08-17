@@ -131,6 +131,7 @@
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
         <div class="repository-watch-manager-actions">
+          <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="立即检查" aria-label="立即检查" :disabled="busyID === task.id" @click="runNow(task)"><Play :size="14" aria-hidden="true" /></button>
           <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="编辑仓库和授权" aria-label="编辑仓库和授权" @click="startEdit(task)"><Pencil :size="14" aria-hidden="true" /></button>
           <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="取消订阅" aria-label="取消订阅" :disabled="busyID === task.id" @click="cancel(task)"><CircleX :size="14" aria-hidden="true" /></button>
           <button class="btn small ghost danger icon-only" type="button" title="删除订阅" aria-label="删除订阅" :disabled="busyID === task.id" @click="remove(task)"><Trash2 :size="14" aria-hidden="true" /></button>
@@ -150,7 +151,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
+import { CircleX, LoaderCircle, Pencil, Play, Plus, Trash2 } from "@lucide/vue";
 import {
   cancelRepositoryWatch,
   createRepositoryWatch,
@@ -158,6 +159,7 @@ import {
   getAssistantTasks,
   getQQBotConfig,
   listQQBotGroups,
+  runRepositoryWatch,
   updateRepositoryWatch,
   type AssistantTask,
   type AssistantTaskStatus,
@@ -364,6 +366,13 @@ async function save(): Promise<void> {
 
 function addTarget(): void { form.value.notification_targets.push({ destination: "private", user_id: "" }); }
 function removeTarget(index: number): void { form.value.notification_targets.splice(index, 1); }
+
+async function runNow(task: AssistantTask): Promise<void> {
+  busyID.value = task.id;
+  try { await runRepositoryWatch(task.id); toastSuccess("已安排立即检查，几秒后刷新可见结果"); await load(); }
+  catch (error) { toastError(error instanceof Error ? error.message : "立即检查失败"); }
+  finally { busyID.value = ""; }
+}
 
 async function cancel(task: AssistantTask): Promise<void> {
   if (!await askConfirm({ title: "取消仓库订阅", message: `停止监控 ${task.repository || task.id}？`, confirmLabel: "取消订阅", danger: true })) return;
