@@ -83,6 +83,7 @@ type repositoryWatchCreatePayload struct {
 	IntervalSeconds     int64                          `json:"interval_seconds"`
 	WatchCommits        bool                           `json:"watch_commits"`
 	WatchPullRequests   bool                           `json:"watch_pull_requests"`
+	WatchIssues         bool                           `json:"watch_issues"`
 	WatchReleases       bool                           `json:"watch_releases"`
 	WatchStars          bool                           `json:"watch_stars"`
 	ProfileID           string                         `json:"profile_id"`
@@ -105,6 +106,7 @@ type repositoryWatchUpdatePayload struct {
 	IntervalSeconds     int64                          `json:"interval_seconds,omitempty"`
 	WatchCommits        *bool                          `json:"watch_commits,omitempty"`
 	WatchPullRequests   *bool                          `json:"watch_pull_requests,omitempty"`
+	WatchIssues         *bool                          `json:"watch_issues,omitempty"`
 	WatchReleases       *bool                          `json:"watch_releases,omitempty"`
 	WatchStars          *bool                          `json:"watch_stars,omitempty"`
 	ProfileID           string                         `json:"profile_id"`
@@ -155,10 +157,12 @@ type qqbotTaskPayload struct {
 	RepositoryBranch      string                             `json:"repository_branch,omitempty"`
 	WatchCommits          bool                               `json:"watch_commits,omitempty"`
 	WatchPullRequests     bool                               `json:"watch_pull_requests,omitempty"`
+	WatchIssues           bool                               `json:"watch_issues,omitempty"`
 	WatchReleases         bool                               `json:"watch_releases,omitempty"`
 	WatchStars            bool                               `json:"watch_stars,omitempty"`
 	LastCommitSHA         string                             `json:"last_commit_sha,omitempty"`
 	LastPullRequestCursor string                             `json:"last_pull_request_cursor,omitempty"`
+	LastIssueCursor       string                             `json:"last_issue_cursor,omitempty"`
 	LastReleaseTag        string                             `json:"last_release_tag,omitempty"`
 	LastStarCount         int                                `json:"last_star_count,omitempty"`
 	FeedURL               string                             `json:"feed_url,omitempty"`
@@ -400,37 +404,43 @@ func (h *QQBotHandler) listTasks(c *gin.Context) {
 	out := make([]qqbotTaskPayload, 0, len(items))
 	for _, item := range items {
 		out = append(out, qqbotTaskPayload{
-			ID:                  item.ID,
-			Kind:                qqbotTaskKind(item),
-			Platform:            item.Platform,
-			ProfileID:           item.ProfileID,
-			OwnerID:             item.OwnerID,
-			GroupID:             item.GroupID,
-			UserID:              item.UserID,
-			Message:             item.Message,
-			Status:              qqbotTaskStatus(item),
-			TriggerAt:           item.TriggerAt,
-			IntervalSeconds:     item.IntervalSeconds,
-			LastRunAt:           item.LastRunAt,
-			CancelledAt:         item.CancelledAt,
-			LastError:           item.LastError,
-			ConsecutiveFailures: item.ConsecutiveFailures,
-			PendingDelivery:     strings.TrimSpace(item.PendingDelivery) != "",
-			PendingSince:        item.PendingSince,
-			Repository:          item.Repository,
-			RepositoryBranch:    item.RepositoryBranch,
-			WatchCommits:        item.WatchCommits,
-			WatchReleases:       item.WatchReleases,
-			LastCommitSHA:       item.LastCommitSHA,
-			LastReleaseTag:      item.LastReleaseTag,
-			FeedURL:             item.FeedURL,
-			FeedSource:          item.FeedSource,
-			FeedHandle:          item.FeedHandle,
-			FeedJudgePrompt:     item.FeedJudgePrompt,
-			LastFeedItemID:      item.LastFeedItemID,
-			LastFeedPublishedAt: item.LastFeedPublishedAt,
-			CreatedAt:           item.CreatedAt,
-			ConsumesQuota:       taskConsumesQuota(item),
+			ID:                    item.ID,
+			Kind:                  qqbotTaskKind(item),
+			Platform:              item.Platform,
+			ProfileID:             item.ProfileID,
+			OwnerID:               item.OwnerID,
+			GroupID:               item.GroupID,
+			UserID:                item.UserID,
+			Message:               item.Message,
+			Status:                qqbotTaskStatus(item),
+			TriggerAt:             item.TriggerAt,
+			IntervalSeconds:       item.IntervalSeconds,
+			LastRunAt:             item.LastRunAt,
+			CancelledAt:           item.CancelledAt,
+			LastError:             item.LastError,
+			ConsecutiveFailures:   item.ConsecutiveFailures,
+			PendingDelivery:       strings.TrimSpace(item.PendingDelivery) != "",
+			PendingSince:          item.PendingSince,
+			Repository:            item.Repository,
+			RepositoryBranch:      item.RepositoryBranch,
+			WatchCommits:          item.WatchCommits,
+			WatchPullRequests:     item.WatchPullRequests,
+			WatchIssues:           item.WatchIssues,
+			WatchReleases:         item.WatchReleases,
+			WatchStars:            item.WatchStars,
+			LastCommitSHA:         item.LastCommitSHA,
+			LastPullRequestCursor: item.LastPullRequestCursor,
+			LastIssueCursor:       item.LastIssueCursor,
+			LastReleaseTag:        item.LastReleaseTag,
+			LastStarCount:         item.LastStarCount,
+			FeedURL:               item.FeedURL,
+			FeedSource:            item.FeedSource,
+			FeedHandle:            item.FeedHandle,
+			FeedJudgePrompt:       item.FeedJudgePrompt,
+			LastFeedItemID:        item.LastFeedItemID,
+			LastFeedPublishedAt:   item.LastFeedPublishedAt,
+			CreatedAt:             item.CreatedAt,
+			ConsumesQuota:         taskConsumesQuota(item),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -489,7 +499,7 @@ func (h *QQBotHandler) createRepositoryWatch(c *gin.Context) {
 	item, err := manager.CreateRepositoryWatch(c.Request.Context(), assistant.RepositoryWatchCreateInput{
 		Repository: payload.Repository, Branch: payload.Branch, Interval: interval,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
-		WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
 		ContextNamespace:    repositoryWatchContextNamespace(set, profile.ID),
 		NotificationEnabled: notificationEnabled, NotificationTargets: targets,
@@ -523,7 +533,7 @@ func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
 	updateInput := assistant.RepositoryWatchUpdateInput{
 		Repository: payload.Repository, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
-		WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 	}
 	if deliveryRequested {
 		profile, set, profileErr := h.repositoryWatchProfile(payload.ProfileID)

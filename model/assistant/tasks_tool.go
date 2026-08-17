@@ -44,6 +44,7 @@ type dianaTask struct {
 	RepositoryBranch      string    `json:"repository_branch,omitempty"`
 	WatchCommits          bool      `json:"watch_commits,omitempty"`
 	WatchPullRequests     bool      `json:"watch_pull_requests,omitempty"`
+	WatchIssues           bool      `json:"watch_issues,omitempty"`
 	WatchReleases         bool      `json:"watch_releases,omitempty"`
 	WatchStars            bool      `json:"watch_stars,omitempty"`
 	LastCommitSHA         string    `json:"last_commit_sha,omitempty"`
@@ -189,6 +190,7 @@ func taskForTool(item Reminder) dianaTask {
 		RepositoryBranch:      item.RepositoryBranch,
 		WatchCommits:          item.WatchCommits,
 		WatchPullRequests:     item.WatchPullRequests,
+		WatchIssues:           item.WatchIssues,
 		WatchReleases:         item.WatchReleases,
 		WatchStars:            item.WatchStars,
 		LastCommitSHA:         item.LastCommitSHA,
