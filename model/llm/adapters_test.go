@@ -390,6 +390,80 @@ func TestOpenAIResponsesInputPreservesNativeOutputItems(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesInputRewritesItemIDOutputsToCallID(t *testing.T) {
+	// 复现 miku 上的 400：结果引用了 item id（fc_…），而 function_call 的配对键是 call_id。
+	input := openAIResponsesInput([]Message{
+		{
+			Role:      RoleAssistant,
+			ToolCalls: []ToolCall{{ID: "fc_1", Name: "web_search.search", Arguments: map[string]any{"query": "Diana"}}},
+			ResponsesOutput: []json.RawMessage{
+				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search.search","arguments":"{}","status":"completed"}`),
+			},
+		},
+		{Role: RoleTool, ToolCallID: "fc_1", Content: `{"results":[]}`},
+	}, nil)
+	if len(input) != 2 {
+		t.Fatalf("input len=%d, want function_call + function_call_output", len(input))
+	}
+	functionOutput, _ := json.Marshal(input[1])
+	if !strings.Contains(string(functionOutput), `"call_id":"call_1"`) {
+		t.Fatalf("output call_id was not rewritten to the function call id: %s", functionOutput)
+	}
+}
+
+func TestOpenAIResponsesInputPatchesMissingCallID(t *testing.T) {
+	// 部分上游的 function_call 只有 id 没有 call_id；补上 call_id 才能和结果配对。
+	input := openAIResponsesInput([]Message{
+		{
+			Role:      RoleAssistant,
+			ToolCalls: []ToolCall{{ID: "fc_1", Name: "web_search.search", Arguments: map[string]any{}}},
+			ResponsesOutput: []json.RawMessage{
+				json.RawMessage(`{"type":"function_call","id":"fc_1","name":"web_search.search","arguments":"{}","status":"completed"}`),
+			},
+		},
+		{Role: RoleTool, ToolCallID: "fc_1", Content: `{"results":[]}`},
+	}, nil)
+	if len(input) != 2 {
+		t.Fatalf("input len=%d, want function_call + function_call_output", len(input))
+	}
+	functionCall, _ := json.Marshal(input[0])
+	functionOutput, _ := json.Marshal(input[1])
+	if !strings.Contains(string(functionCall), `"call_id":"fc_1"`) {
+		t.Fatalf("function call was not patched with call_id: %s", functionCall)
+	}
+	if !strings.Contains(string(functionOutput), `"call_id":"fc_1"`) {
+		t.Fatalf("output call_id changed unexpectedly: %s", functionOutput)
+	}
+}
+
+func TestOpenAIResponsesInputDropsUnpairedFunctionItems(t *testing.T) {
+	// 上下文裁剪可能剪掉配对的一半：孤儿结果和无结果的调用都不能进请求。
+	input := openAIResponsesInput([]Message{
+		{Role: RoleUser, Content: "hi"},
+		{
+			Role:      RoleAssistant,
+			Content:   "先搜一下",
+			ToolCalls: []ToolCall{{ID: "call_kept", Name: "web_search.search", Arguments: map[string]any{}}},
+			ResponsesOutput: []json.RawMessage{
+				json.RawMessage(`{"type":"function_call","id":"fc_kept","call_id":"call_kept","name":"web_search.search","arguments":"{}","status":"completed"}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_dropped","call_id":"call_dropped","name":"web_search.search","arguments":"{}","status":"completed"}`),
+			},
+		},
+		{Role: RoleTool, ToolCallID: "call_kept", Content: `{"results":[]}`},
+		{Role: RoleTool, ToolCallID: "call_orphan", Content: `{"results":[]}`},
+	}, nil)
+	encoded, _ := json.Marshal(input)
+	if strings.Contains(string(encoded), "call_dropped") {
+		t.Fatalf("function call without output was not dropped: %s", encoded)
+	}
+	if strings.Contains(string(encoded), "call_orphan") {
+		t.Fatalf("orphan function output was not dropped: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "call_kept") {
+		t.Fatalf("paired function call should be kept: %s", encoded)
+	}
+}
+
 func TestOpenAICompatibleResponsesContinuesAfterTextlessToolCall(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1791,7 +1791,106 @@ func formatOpenAIChatCompletionDiagnostics(diagnostics openAIChatCompletionDiagn
 }
 
 // openAIResponsesInput 将通用消息转换为 Responses API 输入。
+// repairResponsesFunctionPairs 保证回放历史里 function_call 与
+// function_call_output 严格成对：部分上游不给 function_call 带 call_id、
+// 工具结果可能引用 item id（fc_…）而非 call_id，上下文裁剪也可能剪掉配对的
+// 一半，这些都会让服务端整轮拒绝（400 invalid_request_error）。
+func repairResponsesFunctionPairs(messages []Message) []Message {
+	outputIDs := map[string]bool{}
+	for _, msg := range messages {
+		if msg.Role == RoleTool && strings.TrimSpace(msg.ToolCallID) != "" {
+			outputIDs[strings.TrimSpace(msg.ToolCallID)] = true
+		}
+	}
+	callIDs := map[string]bool{}
+	itemToCall := map[string]string{}
+	repaired := make([]Message, 0, len(messages))
+	for _, msg := range messages {
+		switch {
+		case msg.Role == RoleAssistant && len(msg.ResponsesOutput) > 0:
+			items := make([]json.RawMessage, 0, len(msg.ResponsesOutput))
+			for _, raw := range msg.ResponsesOutput {
+				var head struct {
+					Type   string `json:"type"`
+					ID     string `json:"id"`
+					CallID string `json:"call_id"`
+				}
+				if err := json.Unmarshal(raw, &head); err != nil || head.Type != "function_call" {
+					items = append(items, raw)
+					continue
+				}
+				callID := strings.TrimSpace(head.CallID)
+				itemID := strings.TrimSpace(head.ID)
+				if callID == "" && itemID != "" && outputIDs[itemID] {
+					callID = itemID
+					var decoded map[string]any
+					if json.Unmarshal(raw, &decoded) == nil {
+						decoded["call_id"] = callID
+						if encoded, err := json.Marshal(decoded); err == nil {
+							raw = encoded
+						}
+					}
+				}
+				if callID == "" || (!outputIDs[callID] && !outputIDs[itemID]) {
+					continue
+				}
+				callIDs[callID] = true
+				if itemID != "" {
+					itemToCall[itemID] = callID
+				}
+				items = append(items, raw)
+			}
+			msg.ResponsesOutput = items
+			if len(items) == 0 {
+				// 原始条目全被丢弃后不能回退到 ToolCalls 路径重新引入孤儿调用。
+				msg.ToolCalls = nil
+				if strings.TrimSpace(msg.Content) == "" {
+					continue
+				}
+			}
+			repaired = append(repaired, msg)
+		case msg.Role == RoleAssistant && len(msg.ToolCalls) > 0:
+			kept := make([]ToolCall, 0, len(msg.ToolCalls))
+			for _, call := range msg.ToolCalls {
+				id := strings.TrimSpace(call.ID)
+				if id == "" || !outputIDs[id] {
+					continue
+				}
+				callIDs[id] = true
+				kept = append(kept, call)
+			}
+			msg.ToolCalls = kept
+			if len(kept) == 0 && strings.TrimSpace(msg.Content) == "" {
+				continue
+			}
+			repaired = append(repaired, msg)
+		default:
+			repaired = append(repaired, msg)
+		}
+	}
+	out := make([]Message, 0, len(repaired))
+	for _, msg := range repaired {
+		if msg.Role != RoleTool {
+			out = append(out, msg)
+			continue
+		}
+		id := strings.TrimSpace(msg.ToolCallID)
+		if callIDs[id] {
+			out = append(out, msg)
+			continue
+		}
+		if mapped := itemToCall[id]; mapped != "" {
+			msg.ToolCallID = mapped
+			out = append(out, msg)
+			continue
+		}
+		// 找不到调用方的结果只能丢弃：单条结果缺失模型可以恢复，整轮 400 恢复不了。
+	}
+	return out
+}
+
 func openAIResponsesInput(messages []Message, definitions []ToolDefinition) responses.ResponseInputParam {
+	messages = repairResponsesFunctionPairs(messages)
 	out := make(responses.ResponseInputParam, 0, len(messages))
 	for _, msg := range messages {
 		if msg.Role == RoleAssistant && len(msg.ResponsesOutput) > 0 {
