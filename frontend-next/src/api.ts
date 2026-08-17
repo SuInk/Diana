@@ -513,23 +513,114 @@ export interface QQBotPlatform {
   description?: string;
 }
 
-async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  const data = (await response.json().catch(() => ({}))) as T & { error?: string; auth_required?: boolean };
-  if (!response.ok) {
-    // 会话过期或未登录：广播事件让 App 切到登录界面，而不是每个视图各自报错。
-    if (response.status === 401 && data.auth_required && !url.startsWith("/api/auth/")) {
-      window.dispatchEvent(new CustomEvent("diana:unauthorized"));
-    }
-    throw new Error(data.error || `HTTP ${response.status}`);
+const inflightRequests = new Map<string, Promise<unknown>>();
+const responseCache = new Map<string, { at: number; data: unknown }>();
+
+function requestPath(url: string): string {
+  const [path] = url.split("?");
+  return path || url;
+}
+
+function requestSearch(url: string): string {
+  return url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+}
+
+function isCacheableRead(method: string, path: string): boolean {
+  return method === "GET" || path === "/api/llm/models";
+}
+
+function isMutatingRequest(method: string, path: string): boolean {
+  return method !== "GET" && method !== "HEAD" && path !== "/api/llm/models";
+}
+
+function cacheTTL(method: string, url: string): number {
+  const path = requestPath(url);
+  const search = requestSearch(url);
+  if (search.includes("refresh=1") || search.includes("include_secrets=true")) return 0;
+  if (method === "POST" && path === "/api/llm/models") return 30_000;
+  if (method !== "GET") return 0;
+  switch (path) {
+    case "/api/auth/status":
+    case "/api/health":
+      return 5_000;
+    case "/api/system/version":
+    case "/api/assistant/platforms":
+    case "/api/assistant/features":
+      return 60_000;
+    case "/api/llm/config":
+    case "/api/assistant/config":
+    case "/api/assistant/plugins":
+      return 4_000;
+    case "/api/assistant/plugins/dependencies":
+      return 15_000;
+    case "/api/assistant/groups":
+      return 8_000;
+    case "/api/assistant/tasks":
+      return 3_000;
+    case "/api/assistant/status":
+    case "/api/stats":
+      return 2_000;
+    default:
+      return 0;
   }
-  return data;
+}
+
+function requestCacheKey(method: string, url: string, body?: BodyInit | null): string {
+  return `${method} ${url} ${typeof body === "string" ? body : ""}`;
+}
+
+function invalidateAPICache(): void {
+  responseCache.clear();
+}
+
+async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const path = requestPath(url);
+  const key = requestCacheKey(method, url, init?.body);
+  const ttl = cacheTTL(method, url);
+  if (isCacheableRead(method, path)) {
+    const cached = responseCache.get(key);
+    if (cached && ttl > 0 && Date.now() - cached.at < ttl) {
+      return cached.data as T;
+    }
+    const pending = inflightRequests.get(key);
+    if (pending) {
+      return pending as Promise<T>;
+    }
+  }
+
+  const pending = (async () => {
+    const response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {})
+      },
+      ...init
+    });
+    const data = (await response.json().catch(() => ({}))) as T & { error?: string; auth_required?: boolean };
+    if (!response.ok) {
+      // 会话过期或未登录：广播事件让 App 切到登录界面，而不是每个视图各自报错。
+      if (response.status === 401 && data.auth_required && !url.startsWith("/api/auth/")) {
+        window.dispatchEvent(new CustomEvent("diana:unauthorized"));
+      }
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    if (isMutatingRequest(method, path)) {
+      invalidateAPICache();
+    } else if (ttl > 0) {
+      responseCache.set(key, { at: Date.now(), data });
+    }
+    return data;
+  })();
+
+  if (isCacheableRead(method, path)) {
+    inflightRequests.set(key, pending);
+  }
+  try {
+    return (await pending) as T;
+  } finally {
+    inflightRequests.delete(key);
+  }
 }
 
 export interface AuthStatus {
@@ -677,10 +768,13 @@ export function testLLMImage(prompt: string, config?: LLMConfig): Promise<ImageG
 }
 
 export function listLLMModels(config: LLMConfig): Promise<LLMModelsResponse> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 8_000);
   return requestJSON<LLMModelsResponse>("/api/llm/models", {
     method: "POST",
-    body: JSON.stringify(config)
-  });
+    body: JSON.stringify(config),
+    signal: controller.signal
+  }).finally(() => window.clearTimeout(timer));
 }
 
 export function getLLMProviderCatalog(): Promise<LLMProviderCatalog> {
@@ -820,8 +914,9 @@ export function listRepositoryIssueDrafts(status = "all"): Promise<{ drafts: Rep
   return requestJSON<{ drafts: RepositoryIssueDraft[] }>(`/api/assistant/plugins/repository-publish/drafts?status=${encodeURIComponent(status)}`);
 }
 
-export function listResolverDependencies(): Promise<{ resolver: ResolverDependency[] }> {
-  return requestJSON<{ resolver: ResolverDependency[] }>("/api/assistant/plugins/dependencies");
+export function listResolverDependencies(refresh = false): Promise<{ resolver: ResolverDependency[] }> {
+  const suffix = refresh ? "?refresh=1" : "";
+  return requestJSON<{ resolver: ResolverDependency[] }>(`/api/assistant/plugins/dependencies${suffix}`);
 }
 
 export function installResolverDependency(name: string): Promise<ResolverDependencyInstallResponse> {
@@ -958,8 +1053,9 @@ export interface ConsoleGroupsResponse {
   warning?: string;
 }
 
-export function listQQBotGroups(): Promise<ConsoleGroupsResponse> {
-  return requestJSON<ConsoleGroupsResponse>("/api/assistant/groups");
+export function listQQBotGroups(refresh = false): Promise<ConsoleGroupsResponse> {
+  const suffix = refresh ? "?refresh=1" : "";
+  return requestJSON<ConsoleGroupsResponse>(`/api/assistant/groups${suffix}`);
 }
 
 export function saveQQBotGroup(config: QQBotGroupConfig): Promise<{ config: QQBotGroupConfig }> {

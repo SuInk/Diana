@@ -469,7 +469,7 @@ function upsert(state: PluginState): void {
 
 async function reload(): Promise<void> {
   loading.value = true;
-  const dependencyRequest = loadDependencies();
+  void loadDependencies();
   try {
     plugins.value = await listPlugins();
     const requestedSettings = viewQuery().get("settings");
@@ -482,7 +482,6 @@ async function reload(): Promise<void> {
   } catch (error) {
     toastError(error instanceof Error ? error.message : "加载插件失败");
   } finally {
-    await dependencyRequest;
     loading.value = false;
   }
 }
@@ -774,10 +773,10 @@ async function saveSettingsForSubscription(): Promise<void> {
   await persistSettings(false);
 }
 
-async function loadDependencies(): Promise<void> {
+async function loadDependencies(refresh = false): Promise<void> {
   dependenciesLoading.value = true;
   try {
-    dependencies.value = (await listResolverDependencies()).resolver;
+    dependencies.value = (await listResolverDependencies(refresh)).resolver;
   } catch {
     // 依赖探测只是辅助信息，失败不该打断插件页。
     dependencies.value = [];
@@ -789,11 +788,11 @@ async function loadDependencies(): Promise<void> {
 function openDependencies(): void {
   dependenciesOpen.value = true;
   // 卡片上的比分可能是进页面时探测的，打开时顺手刷新一次。
-  void loadDependencies();
+  void loadDependencies(true);
 }
 
 async function refreshDependencies(): Promise<void> {
-  await loadDependencies();
+  await loadDependencies(true);
 }
 
 async function installDependency(dependency: ResolverDependency): Promise<void> {
@@ -804,7 +803,7 @@ async function installDependency(dependency: ResolverDependency): Promise<void> 
     toastSuccess(`已安装 ${dependency.name}`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : `安装 ${dependency.name} 失败`);
-    await loadDependencies();
+    await loadDependencies(true);
   } finally {
     busyDependency.value = "";
   }

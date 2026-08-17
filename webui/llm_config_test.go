@@ -579,6 +579,35 @@ func TestLLMConfigHandlerModelsEndpointKeepsExistingAPIKey(t *testing.T) {
 	}
 }
 
+func TestLLMConfigHandlerModelsTimesOutSlowProvider(t *testing.T) {
+	originalTimeout := llmModelListTimeout
+	llmModelListTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { llmModelListTimeout = originalTimeout })
+
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible,
+		APIKey:   "existing-key",
+		Model:    "saved-model",
+	})
+	handler := NewLLMConfigHandler(store)
+	handler.SetModelListFactory(func(ctx context.Context, _ llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	router := testRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/llm/models", bytes.NewReader([]byte(`{"provider":"openai_compatible","model":"saved-model"}`)))
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("model list timeout took %s", elapsed)
+	}
+}
+
 func TestLLMConfigHandlerNewDraftDoesNotReuseActiveAPIKey(t *testing.T) {
 	store := NewMemoryLLMProfileStore(llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible,
