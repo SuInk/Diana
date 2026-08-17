@@ -986,7 +986,7 @@ const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
   { key: "image", label: "图片生成", fallbackHint: "跟随对话 Provider 的生图模型" }
 ];
 const llmChannels = ref<LLMConfig[]>([]);
-const roleForm = ref<Partial<Record<RoleKey, { profile_id?: string; group?: string; model: string }>>>({});
+const roleForm = ref<Partial<Record<RoleKey, { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>>>({});
 
 // 下拉里分组选项用 group: 前缀编码，与单渠道的 profile id 区分。
 const GROUP_PREFIX = "group:";
@@ -1337,7 +1337,7 @@ function setForm(config: QQBotConfig): void {
   bridgeTokenDraft.value = "";
   const roles: typeof roleForm.value = {};
   for (const [key, role] of Object.entries(config.model_roles ?? {})) {
-    roles[key as RoleKey] = { profile_id: role.profile_id, group: role.group, model: role.model };
+		roles[key as RoleKey] = { profile_id: role.profile_id, group: role.group, model: role.model, provider_id: role.provider_id, model_id: role.model_id };
   }
   roleForm.value = roles;
 }
@@ -1403,12 +1403,12 @@ async function save(): Promise<void> {
   }
   for (const row of modelRoleRows) {
     const role = roleForm.value[row.key];
-    if (!role || (!role.profile_id && !role.group)) continue;
+		if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) continue;
     if (!role.model.trim()) {
       toastError(`${row.label}模型尚未选择`);
       return;
     }
-    if (!roleModelIsSelectable(row.key, role.model.trim())) {
+		if (!role.provider_id && !role.model_id && !roleModelIsSelectable(row.key, role.model.trim())) {
       toastError(`${row.label}模型 ${role.model.trim()} 与当前 Provider 配置不兼容，请重新选择`);
       return;
     }
@@ -1417,8 +1417,8 @@ async function save(): Promise<void> {
   try {
     const modelRoles: QQBotConfig["model_roles"] = {};
     for (const [key, role] of Object.entries(roleForm.value)) {
-      if (role && (role.profile_id || role.group) && role.model.trim()) {
-        modelRoles[key] = { profile_id: role.profile_id, group: role.group, model: role.model.trim() };
+		if (role && (role.profile_id || role.group || (role.provider_id && role.model_id)) && role.model.trim()) {
+			modelRoles[key] = { profile_id: role.profile_id, group: role.group, model: role.model.trim(), provider_id: role.provider_id, model_id: role.model_id };
       }
     }
     const payload: QQBotConfig = {
