@@ -269,6 +269,14 @@ async function toggleBot(start: boolean): Promise<void> {
 
 onMounted(() => {
   // SSE 建连有初始快照；这里再兜底拉一次，保证直接打开页面就有数据。
+  if (stream.status && stream.stats) {
+    void getConfig()
+      .then((llmConfig) => {
+        setupNeeded.value = !llmConfig.model || !llmConfig.api_key_configured;
+      })
+      .catch(() => undefined);
+    return;
+  }
   void refresh();
 });
 </script>
