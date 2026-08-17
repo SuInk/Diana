@@ -363,24 +363,26 @@ async function load(): Promise<void> {
   } catch {
     version.value = null;
   }
-  if (deploymentMode.value === "git" || version.value?.update_supported) {
-    try {
-      status.value = await getUpdateStatus();
-		applyPersistedUpdateResult(status.value);
-    } catch {
-      status.value = null;
-    }
+  const [statusResult, changelogResult] = await Promise.allSettled([
+    deploymentMode.value === "git" || version.value?.update_supported ? getUpdateStatus() : Promise.resolve(null),
+    getChangelog()
+  ]);
+  if (statusResult.status === "fulfilled") {
+    status.value = statusResult.value;
+    if (status.value) applyPersistedUpdateResult(status.value);
+  } else {
+    status.value = null;
   }
-  try {
-    const changelog = await getChangelog();
+  if (changelogResult.status === "fulfilled") {
+    const changelog = changelogResult.value;
     kind.value = changelog.kind;
     entries.value = changelog.entries ?? [];
     releases.value = changelog.releases ?? [];
     repo.value = changelog.repo;
     changelogError.value = "";
     loaded.value = true;
-  } catch (error) {
-    changelogError.value = error instanceof Error ? error.message : "更新日志暂不可用";
+  } else {
+    changelogError.value = changelogResult.reason instanceof Error ? changelogResult.reason.message : "更新日志暂不可用";
   }
 }
 
@@ -600,9 +602,9 @@ async function copyImageTag(tag: string): Promise<void> {
   }
 }
 
-onMounted(async () => {
-  await load();
-  await check(false);
+onMounted(() => {
+  void load();
+  void check(false);
 	statusPollTimer = window.setInterval(() => {
 		if (installTracking.value) {
 			void pollInstallResult();

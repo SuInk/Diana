@@ -9,7 +9,7 @@
         <p>查看一次性提醒、周期查询和仓库更新订阅的执行状态</p>
       </div>
       <div class="view-actions">
-        <button class="btn" type="button" :disabled="loading" @click="load">
+        <button class="btn" type="button" :disabled="loading" @click="load()">
           <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
           刷新
         </button>
@@ -184,7 +184,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import {
   Bell,
   CalendarClock,
@@ -262,17 +262,32 @@ const filteredTasks = computed(() => {
   });
 });
 
-async function load(): Promise<void> {
+async function load(opts?: { silent?: boolean }): Promise<void> {
+  const silent = Boolean(opts?.silent);
   if (loading.value) return;
-  loading.value = true;
+  if (!silent) loading.value = true;
   try {
     const response = await getAssistantTasks();
     tasks.value = response.items;
     lastLoadedAt.value = new Date().toISOString();
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "任务加载失败");
+    if (!silent) {
+      toastError(error instanceof Error ? error.message : "任务加载失败");
+    }
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
+  }
+}
+
+function startPolling(): void {
+  stopPolling();
+  refreshTimer = window.setInterval(() => void load({ silent: true }), 15_000);
+}
+
+function stopPolling(): void {
+  if (refreshTimer !== undefined) {
+    window.clearInterval(refreshTimer);
+    refreshTimer = undefined;
   }
 }
 
@@ -328,10 +343,18 @@ function openRepositoryWatchSettings(): void {
 
 onMounted(() => {
   void load();
-  refreshTimer = window.setInterval(() => void load(), 15_000);
+  startPolling();
+});
+
+onActivated(() => {
+  startPolling();
+});
+
+onDeactivated(() => {
+  stopPolling();
 });
 
 onBeforeUnmount(() => {
-  if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
+  stopPolling();
 });
 </script>
