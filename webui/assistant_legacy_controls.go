@@ -78,31 +78,41 @@ type qqbotTasksResponse struct {
 }
 
 type repositoryWatchCreatePayload struct {
-	Repository        string `json:"repository"`
-	Branch            string `json:"branch,omitempty"`
-	IntervalSeconds   int64  `json:"interval_seconds"`
-	WatchCommits      bool   `json:"watch_commits"`
-	WatchPullRequests bool   `json:"watch_pull_requests"`
-	WatchReleases     bool   `json:"watch_releases"`
-	WatchStars        bool   `json:"watch_stars"`
-	ProfileID         string `json:"profile_id"`
-	Destination       string `json:"destination"`
-	GroupID           string `json:"group_id,omitempty"`
-	UserID            string `json:"user_id,omitempty"`
+	Repository          string                         `json:"repository"`
+	Branch              string                         `json:"branch,omitempty"`
+	IntervalSeconds     int64                          `json:"interval_seconds"`
+	WatchCommits        bool                           `json:"watch_commits"`
+	WatchPullRequests   bool                           `json:"watch_pull_requests"`
+	WatchReleases       bool                           `json:"watch_releases"`
+	WatchStars          bool                           `json:"watch_stars"`
+	ProfileID           string                         `json:"profile_id"`
+	Destination         string                         `json:"destination"`
+	GroupID             string                         `json:"group_id,omitempty"`
+	UserID              string                         `json:"user_id,omitempty"`
+	NotificationEnabled *bool                          `json:"notification_enabled,omitempty"`
+	NotificationTargets []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
+}
+
+type repositoryWatchTargetPayload struct {
+	Destination string `json:"destination"`
+	GroupID     string `json:"group_id,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
 }
 
 type repositoryWatchUpdatePayload struct {
-	Repository        string  `json:"repository,omitempty"`
-	Branch            *string `json:"branch,omitempty"`
-	IntervalSeconds   int64   `json:"interval_seconds,omitempty"`
-	WatchCommits      *bool   `json:"watch_commits,omitempty"`
-	WatchPullRequests *bool   `json:"watch_pull_requests,omitempty"`
-	WatchReleases     *bool   `json:"watch_releases,omitempty"`
-	WatchStars        *bool   `json:"watch_stars,omitempty"`
-	ProfileID         string  `json:"profile_id"`
-	Destination       string  `json:"destination"`
-	GroupID           string  `json:"group_id,omitempty"`
-	UserID            string  `json:"user_id,omitempty"`
+	Repository          string                         `json:"repository,omitempty"`
+	Branch              *string                        `json:"branch,omitempty"`
+	IntervalSeconds     int64                          `json:"interval_seconds,omitempty"`
+	WatchCommits        *bool                          `json:"watch_commits,omitempty"`
+	WatchPullRequests   *bool                          `json:"watch_pull_requests,omitempty"`
+	WatchReleases       *bool                          `json:"watch_releases,omitempty"`
+	WatchStars          *bool                          `json:"watch_stars,omitempty"`
+	ProfileID           string                         `json:"profile_id"`
+	Destination         string                         `json:"destination"`
+	GroupID             string                         `json:"group_id,omitempty"`
+	UserID              string                         `json:"user_id,omitempty"`
+	NotificationEnabled *bool                          `json:"notification_enabled,omitempty"`
+	NotificationTargets []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
 }
 
 type rssWatchCreatePayload struct {
@@ -124,41 +134,43 @@ type rssWatchUpdatePayload struct {
 }
 
 type qqbotTaskPayload struct {
-	ID                    string    `json:"id"`
-	Kind                  string    `json:"kind"`
-	Platform              string    `json:"platform,omitempty"`
-	ProfileID             string    `json:"profile_id,omitempty"`
-	OwnerID               string    `json:"owner_id"`
-	GroupID               string    `json:"group_id,omitempty"`
-	UserID                string    `json:"user_id,omitempty"`
-	Message               string    `json:"message"`
-	Status                string    `json:"status"`
-	TriggerAt             time.Time `json:"trigger_at"`
-	IntervalSeconds       int64     `json:"interval_seconds,omitempty"`
-	LastRunAt             time.Time `json:"last_run_at,omitempty"`
-	CancelledAt           time.Time `json:"cancelled_at,omitempty"`
-	LastError             string    `json:"last_error,omitempty"`
-	ConsecutiveFailures   int       `json:"consecutive_failures,omitempty"`
-	PendingDelivery       bool      `json:"pending_delivery,omitempty"`
-	PendingSince          time.Time `json:"pending_since,omitempty"`
-	Repository            string    `json:"repository,omitempty"`
-	RepositoryBranch      string    `json:"repository_branch,omitempty"`
-	WatchCommits          bool      `json:"watch_commits,omitempty"`
-	WatchPullRequests     bool      `json:"watch_pull_requests,omitempty"`
-	WatchReleases         bool      `json:"watch_releases,omitempty"`
-	WatchStars            bool      `json:"watch_stars,omitempty"`
-	LastCommitSHA         string    `json:"last_commit_sha,omitempty"`
-	LastPullRequestCursor string    `json:"last_pull_request_cursor,omitempty"`
-	LastReleaseTag        string    `json:"last_release_tag,omitempty"`
-	LastStarCount         int       `json:"last_star_count,omitempty"`
-	FeedURL               string    `json:"feed_url,omitempty"`
-	FeedSource            string    `json:"feed_source,omitempty"`
-	FeedHandle            string    `json:"feed_handle,omitempty"`
-	FeedJudgePrompt       string    `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID        string    `json:"last_feed_item_id,omitempty"`
-	LastFeedPublishedAt   time.Time `json:"last_feed_published_at,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	ConsumesQuota         bool      `json:"consumes_quota"`
+	ID                    string                             `json:"id"`
+	Kind                  string                             `json:"kind"`
+	Platform              string                             `json:"platform,omitempty"`
+	ProfileID             string                             `json:"profile_id,omitempty"`
+	OwnerID               string                             `json:"owner_id"`
+	GroupID               string                             `json:"group_id,omitempty"`
+	UserID                string                             `json:"user_id,omitempty"`
+	Message               string                             `json:"message"`
+	Status                string                             `json:"status"`
+	TriggerAt             time.Time                          `json:"trigger_at"`
+	IntervalSeconds       int64                              `json:"interval_seconds,omitempty"`
+	LastRunAt             time.Time                          `json:"last_run_at,omitempty"`
+	CancelledAt           time.Time                          `json:"cancelled_at,omitempty"`
+	LastError             string                             `json:"last_error,omitempty"`
+	ConsecutiveFailures   int                                `json:"consecutive_failures,omitempty"`
+	PendingDelivery       bool                               `json:"pending_delivery,omitempty"`
+	PendingSince          time.Time                          `json:"pending_since,omitempty"`
+	Repository            string                             `json:"repository,omitempty"`
+	RepositoryBranch      string                             `json:"repository_branch,omitempty"`
+	WatchCommits          bool                               `json:"watch_commits,omitempty"`
+	WatchPullRequests     bool                               `json:"watch_pull_requests,omitempty"`
+	WatchReleases         bool                               `json:"watch_releases,omitempty"`
+	WatchStars            bool                               `json:"watch_stars,omitempty"`
+	LastCommitSHA         string                             `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor string                             `json:"last_pull_request_cursor,omitempty"`
+	LastReleaseTag        string                             `json:"last_release_tag,omitempty"`
+	LastStarCount         int                                `json:"last_star_count,omitempty"`
+	FeedURL               string                             `json:"feed_url,omitempty"`
+	FeedSource            string                             `json:"feed_source,omitempty"`
+	FeedHandle            string                             `json:"feed_handle,omitempty"`
+	FeedJudgePrompt       string                             `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID        string                             `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt   time.Time                          `json:"last_feed_published_at,omitempty"`
+	CreatedAt             time.Time                          `json:"created_at"`
+	ConsumesQuota         bool                               `json:"consumes_quota"`
+	NotificationEnabled   bool                               `json:"notification_enabled,omitempty"`
+	NotificationTargets   []assistant.ReminderDeliveryTarget `json:"notification_targets,omitempty"`
 }
 
 type pluginTaskRunner interface {
@@ -454,20 +466,24 @@ func (h *QQBotHandler) createRepositoryWatch(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("destination 必须是 private 或 group"), payload.Repository, nil)
 		return
 	}
-	groupID := ""
-	userID := ""
-	if destination == "group" {
-		groupID = strings.TrimSpace(payload.GroupID)
-		if groupID == "" {
-			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), payload.Repository, nil)
+	targets := repositoryWatchTargetsFromPayload(payload.NotificationTargets, profile, set)
+	notificationEnabled := payload.NotificationEnabled == nil || *payload.NotificationEnabled
+	if len(targets) == 0 && (notificationEnabled || strings.TrimSpace(payload.GroupID) != "" || strings.TrimSpace(payload.UserID) != "") {
+		groupID, userID := "", ""
+		if destination == "group" {
+			groupID = strings.TrimSpace(payload.GroupID)
+		} else {
+			userID = strings.TrimSpace(payload.UserID)
+		}
+		if groupID == "" && userID == "" {
+			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("启用通知时至少填写一个群聊或私聊发送对象"), payload.Repository, nil)
 			return
 		}
-	} else {
-		userID = strings.TrimSpace(payload.UserID)
-		if userID == "" {
-			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("私聊通知必须填写发送对象 ID"), payload.Repository, nil)
-			return
-		}
+		targets = []assistant.ReminderDeliveryTarget{{Platform: profile.Platform, ProfileID: profile.ID, ContextNamespace: repositoryWatchContextNamespace(set, profile.ID), GroupID: groupID, UserID: userID}}
+	}
+	groupID, userID := "", ""
+	if len(targets) > 0 {
+		groupID, userID = targets[0].GroupID, targets[0].UserID
 	}
 	interval := time.Duration(payload.IntervalSeconds) * time.Second
 	item, err := manager.CreateRepositoryWatch(c.Request.Context(), assistant.RepositoryWatchCreateInput{
@@ -475,7 +491,8 @@ func (h *QQBotHandler) createRepositoryWatch(c *gin.Context) {
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
-		ContextNamespace: repositoryWatchContextNamespace(set, profile.ID),
+		ContextNamespace:    repositoryWatchContextNamespace(set, profile.ID),
+		NotificationEnabled: notificationEnabled, NotificationTargets: targets,
 	})
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, payload.Repository, nil)
@@ -502,7 +519,7 @@ func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
 		return
 	}
 	destination := strings.ToLower(strings.TrimSpace(payload.Destination))
-	deliveryRequested := strings.TrimSpace(payload.ProfileID) != "" || destination != "" || strings.TrimSpace(payload.GroupID) != "" || strings.TrimSpace(payload.UserID) != ""
+	deliveryRequested := strings.TrimSpace(payload.ProfileID) != "" || destination != "" || strings.TrimSpace(payload.GroupID) != "" || strings.TrimSpace(payload.UserID) != "" || payload.NotificationEnabled != nil || payload.NotificationTargets != nil
 	updateInput := assistant.RepositoryWatchUpdateInput{
 		Repository: payload.Repository, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
@@ -514,12 +531,27 @@ func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
 			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", profileErr, c.Param("id"), nil)
 			return
 		}
-		if destination != "private" && destination != "group" {
+		targets := repositoryWatchTargetsFromPayload(payload.NotificationTargets, profile, set)
+		if len(targets) == 0 && payload.NotificationEnabled != nil && *payload.NotificationEnabled {
+			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("启用通知时至少填写一个群聊或私聊对象"), c.Param("id"), nil)
+			return
+		}
+		if len(targets) > 0 {
+			destination = "targets"
+		}
+		if payload.NotificationEnabled != nil && !*payload.NotificationEnabled && len(targets) == 0 {
+			destination = "none"
+		}
+		if destination != "private" && destination != "group" && destination != "targets" && destination != "none" {
 			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("destination 必须是 private 或 group"), c.Param("id"), nil)
 			return
 		}
 		groupID, userID := "", ""
-		if destination == "group" {
+		if destination == "none" {
+			// Notification is intentionally disabled; retain no primary target.
+		} else if destination == "targets" {
+			groupID, userID = targets[0].GroupID, targets[0].UserID
+		} else if destination == "group" {
 			groupID = strings.TrimSpace(payload.GroupID)
 			if groupID == "" {
 				h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), c.Param("id"), nil)
@@ -539,6 +571,8 @@ func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
 		updateInput.OwnerID = "webui:" + strings.TrimSpace(profile.ID)
 		updateInput.GroupID = groupID
 		updateInput.UserID = userID
+		updateInput.NotificationEnabled = payload.NotificationEnabled
+		updateInput.NotificationTargets = targets
 	}
 	var branch *string
 	if payload.Branch != nil {
@@ -788,7 +822,29 @@ func qqbotTaskFromReminder(item assistant.Reminder) qqbotTaskPayload {
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
 		FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
+		NotificationEnabled: item.NotificationEnabled, NotificationTargets: reminderDeliveryTargetsForWeb(item),
 	}
+}
+
+func reminderDeliveryTargetsForWeb(item assistant.Reminder) []assistant.ReminderDeliveryTarget {
+	return assistant.ReminderDeliveryTargets(item.NotificationTargetsJSON)
+}
+
+func repositoryWatchTargetsFromPayload(values []repositoryWatchTargetPayload, profile assistant.BotConfig, set assistant.ProfileSet) []assistant.ReminderDeliveryTarget {
+	targets := make([]assistant.ReminderDeliveryTarget, 0, len(values))
+	for _, value := range values {
+		destination := strings.ToLower(strings.TrimSpace(value.Destination))
+		target := assistant.ReminderDeliveryTarget{Platform: profile.Platform, ProfileID: profile.ID, ContextNamespace: repositoryWatchContextNamespace(set, profile.ID)}
+		if destination == "group" {
+			target.GroupID = strings.TrimSpace(value.GroupID)
+		} else {
+			target.UserID = strings.TrimSpace(value.UserID)
+		}
+		if target.GroupID != "" || target.UserID != "" {
+			targets = append(targets, target)
+		}
+	}
+	return targets
 }
 
 func qqbotTaskKind(item assistant.Reminder) string {

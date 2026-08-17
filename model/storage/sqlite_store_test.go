@@ -221,6 +221,14 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	if gotProfiles.Profiles[0].Config.Headers["X-Relay"] != "earlyso" || gotProfiles.Profiles[1].Description != "备用配置" || gotProfiles.Profiles[1].UpdatedAt.IsZero() {
 		t.Fatalf("gotProfiles metadata = %#v", gotProfiles.Profiles[1])
 	}
+	document := llm.ProviderRegistryDocument{Version: 1, Providers: []llm.ProviderDefinition{{ID: "provider-1", Name: "测试", Protocol: llm.ProtocolOpenAICompletions, APIKey: "secret", Enabled: true}}, Models: []llm.ModelDefinition{{ID: "provider-1:model", ProviderID: "provider-1", ModelID: "model", Name: "model"}}}
+	if err := store.SaveLLMProviderRegistry(ctx, document); err != nil {
+		t.Fatal(err)
+	}
+	gotDocument, ok, err := store.LoadLLMProviderRegistry(ctx)
+	if err != nil || !ok || gotDocument.Version != 1 || gotDocument.Providers[0].APIKey != "secret" || gotDocument.Models[0].ProviderID != "provider-1" {
+		t.Fatalf("provider registry ok=%v err=%v document=%#v", ok, err, gotDocument)
+	}
 
 	reminders := []assistant.Reminder{
 		{
