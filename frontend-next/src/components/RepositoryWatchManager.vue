@@ -130,7 +130,14 @@
         </div>
       </article>
     </div>
-    <p v-else class="repository-watch-manager-empty">还没有仓库订阅</p>
+    <div v-else class="repository-watch-manager-empty repository-watch-manager-empty-guide">
+      <strong>还没有仓库配置</strong>
+      <span>点击“添加仓库”，填写仓库后即可配置该仓库的指定用户和指定群聊；不同仓库互不影响。</span>
+      <button class="btn small ghost" type="button" @click="startCreate">
+        <Plus :size="14" aria-hidden="true" />
+        添加仓库并配置权限
+      </button>
+    </div>
   </section>
 </template>
 

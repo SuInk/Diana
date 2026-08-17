@@ -221,6 +221,10 @@
           <p><strong>Classic token</strong>：权限范围更大；需要查看未加入白名单的仓库、跨账号或组织访问，或调用更多旧版 GitHub API 能力时使用。</p>
           <p>公开仓库也可以匿名读取，但请求额度较低；配置 Token 后可提高额度。无论哪种 Token，都必须拥有目标仓库本身的访问权限。<a class="token-create-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer"><ExternalLink :size="13" aria-hidden="true" />创建 Token</a></p>
         </div>
+        <button class="btn small ghost github-settings-link" type="button" @click="githubSettingsTab = 'repositories'">
+          去仓库管理配置用户和群聊
+          <ArrowRight :size="14" aria-hidden="true" />
+        </button>
       </div>
       <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="stack plugin-settings-form github-publish-global-settings">
         <div v-if="repositoryPublishAuthSpec" class="field">
@@ -379,7 +383,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ChevronDown, ExternalLink, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
+import { ArrowRight, ChevronDown, ExternalLink, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installResolverDependency,
