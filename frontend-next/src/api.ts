@@ -1187,10 +1187,12 @@ export interface AssistantTask {
   repository_branch?: string;
   watch_commits?: boolean;
   watch_pull_requests?: boolean;
+  watch_issues?: boolean;
   watch_releases?: boolean;
   watch_stars?: boolean;
   last_commit_sha?: string;
   last_pull_request_cursor?: string;
+  last_issue_cursor?: string;
   last_release_tag?: string;
   last_star_count?: number;
   feed_url?: string;
@@ -1219,6 +1221,7 @@ export interface RepositoryWatchInput {
   interval_seconds: number;
   watch_commits: boolean;
   watch_pull_requests: boolean;
+  watch_issues: boolean;
   watch_releases: boolean;
   watch_stars: boolean;
   profile_id?: string;

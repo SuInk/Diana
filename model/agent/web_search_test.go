@@ -355,6 +355,41 @@ func TestWebSearchToolKeepsStructuredOutputWithinLimit(t *testing.T) {
 	}
 }
 
+func TestWebSearchToolBoundsEscapedContentWithoutLooping(t *testing.T) {
+	tool := &WebSearchTool{maxBytes: 2_000}
+	result := webSearchResult{
+		Status:  "ok",
+		Content: strings.Repeat("<script>&", 2_000),
+		Sources: []string{"https://example.com/result"},
+	}
+
+	done := make(chan struct{})
+	var output string
+	var err error
+	go func() {
+		output, err = tool.formatExplorationResult(result)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("formatting escaped search content did not terminate")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len([]rune(output)) > tool.maxBytes {
+		t.Fatalf("output runes = %d, want <= %d", len([]rune(output)), tool.maxBytes)
+	}
+	var decoded webSearchResult
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
+		t.Fatalf("bounded output is not valid JSON: %v\n%s", err, output)
+	}
+	if decoded.Content == "" || !strings.Contains(decoded.Content, "...truncated...") {
+		t.Fatalf("content was not preserved and truncated: %q", decoded.Content)
+	}
+}
+
 func TestWebSearchMetadataDoesNotContainRawPrivateQuery(t *testing.T) {
 	input := map[string]any{"query": "person@example.com token=secret-value private question"}
 	metadata := webSearchRunMetadataFromInput(WebSearchToolName, input)

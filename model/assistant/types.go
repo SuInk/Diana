@@ -89,6 +89,7 @@ type MessageEvent struct {
 	Outbound         bool             `json:"outbound,omitempty"`
 	ToMe             bool             `json:"to_me,omitempty"`
 	Quoted           *QuotedMessage   `json:"quoted,omitempty"`
+	ExternalEvent    *ExternalEvent   `json:"external_event,omitempty"`
 	// SemanticSourceMessageID keeps the first selected historical source for
 	// compatibility with persisted events created before multi-source routing.
 	SemanticSourceMessageID string `json:"semantic_source_message_id,omitempty"`
@@ -114,6 +115,15 @@ type MessageEvent struct {
 	historyRecallCandidate bool
 	userProfile            UserMemoryProfile
 	userProfileLoaded      bool
+}
+
+// ExternalEvent is trusted host-generated context. It is persisted in the
+// target conversation, but must never be interpreted as a user instruction.
+type ExternalEvent struct {
+	Source  string          `json:"source"`
+	Trust   string          `json:"trust"`
+	Intent  string          `json:"intent,omitempty"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 type QuotedMessage struct {
@@ -182,12 +192,15 @@ type Reminder struct {
 	RepositoryBranch        string       `json:"repository_branch,omitempty"`
 	WatchCommits            bool         `json:"watch_commits,omitempty"`
 	WatchPullRequests       bool         `json:"watch_pull_requests,omitempty"`
+	WatchIssues             bool         `json:"watch_issues,omitempty"`
 	WatchReleases           bool         `json:"watch_releases,omitempty"`
 	WatchStars              bool         `json:"watch_stars,omitempty"`
 	LastCommitSHA           string       `json:"last_commit_sha,omitempty"`
 	LastPullRequestCursor   string       `json:"last_pull_request_cursor,omitempty"`
+	LastIssueCursor         string       `json:"last_issue_cursor,omitempty"`
 	LastReleaseTag          string       `json:"last_release_tag,omitempty"`
 	LastStarCount           int          `json:"last_star_count,omitempty"`
+	LastStarCheckedAt       time.Time    `json:"last_star_checked_at,omitempty"`
 	FeedURL                 string       `json:"feed_url,omitempty"`
 	FeedSource              string       `json:"feed_source,omitempty"`
 	FeedHandle              string       `json:"feed_handle,omitempty"`
