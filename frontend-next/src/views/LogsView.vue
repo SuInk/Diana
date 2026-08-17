@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { RefreshCw } from "@lucide/vue";
 import { listAppLogs, type AppLogEntry, type AppLogKind } from "../api";
 import { formatTime } from "../format";
@@ -121,6 +121,17 @@ watch(autoRefresh, applyAutoRefresh);
 
 onMounted(() => {
   void reload();
+});
+
+onActivated(() => {
+  applyAutoRefresh();
+});
+
+onDeactivated(() => {
+  if (timer !== undefined) {
+    window.clearInterval(timer);
+    timer = undefined;
+  }
 });
 
 onBeforeUnmount(() => {

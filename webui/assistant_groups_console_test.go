@@ -10,7 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 )
@@ -105,6 +108,116 @@ func TestConsoleGroupsFallsBackToSavedConfigWhenLiveListUnavailable(t *testing.T
 		t.Fatalf("Decode() error = %v", err)
 	}
 	if response.LiveAvailable || response.Warning == "" || len(response.Groups) != 1 || response.Groups[0].GroupID != "40004" || !response.Groups[0].Configured {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+type countingGroupListChannel struct {
+	calls  atomic.Int32
+	result map[string]any
+	params []map[string]any
+	mu     sync.Mutex
+}
+
+func (countingGroupListChannel) Connect(context.Context, assistant.EventHandler) error { return nil }
+func (countingGroupListChannel) Send(context.Context, assistant.OutgoingMessage) error { return nil }
+func (countingGroupListChannel) Status() assistant.ChannelStatus                       { return assistant.ChannelStatus{} }
+func (countingGroupListChannel) Close() error                                          { return nil }
+
+func (c *countingGroupListChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+	if action != "get_group_list" {
+		return nil, errors.New("unexpected OneBot action")
+	}
+	c.calls.Add(1)
+	c.mu.Lock()
+	c.params = append(c.params, params)
+	c.mu.Unlock()
+	return c.result, nil
+}
+
+func TestConsoleGroupsCachesLiveListUntilRefresh(t *testing.T) {
+	base := assistant.DefaultBotConfig()
+	channel := &countingGroupListChannel{result: map[string]any{
+		"items": []any{
+			map[string]any{"group_id": "10001", "group_name": "Cached 群"},
+		},
+	}}
+	runtime := assistant.NewRuntime(base, channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewQQBotHandler(context.Background(), runtime)
+	router := qqBotTestRouter(handler)
+
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
+	if first.Code != http.StatusOK || second.Code != http.StatusOK {
+		t.Fatalf("status first=%d second=%d", first.Code, second.Code)
+	}
+	if channel.calls.Load() != 1 {
+		t.Fatalf("live group list calls = %d, want 1", channel.calls.Load())
+	}
+
+	refresh := httptest.NewRecorder()
+	router.ServeHTTP(refresh, httptest.NewRequest(http.MethodGet, "/api/assistant/groups?refresh=1", nil))
+	if refresh.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d, body = %s", refresh.Code, refresh.Body.String())
+	}
+	if channel.calls.Load() != 2 {
+		t.Fatalf("live group list calls after refresh = %d, want 2", channel.calls.Load())
+	}
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.params) != 2 {
+		t.Fatalf("params = %#v", channel.params)
+	}
+	if _, cachedCallHasNoCache := channel.params[0]["no_cache"]; cachedCallHasNoCache {
+		t.Fatalf("cached list should not force no_cache: %#v", channel.params[0])
+	}
+	if channel.params[1]["no_cache"] != true {
+		t.Fatalf("refresh list should force no_cache: %#v", channel.params[1])
+	}
+}
+
+type blockingGroupListChannel struct{}
+
+func (blockingGroupListChannel) Connect(context.Context, assistant.EventHandler) error { return nil }
+func (blockingGroupListChannel) Send(context.Context, assistant.OutgoingMessage) error { return nil }
+func (blockingGroupListChannel) Status() assistant.ChannelStatus                       { return assistant.ChannelStatus{} }
+func (blockingGroupListChannel) Close() error                                          { return nil }
+
+func (blockingGroupListChannel) CallAPI(ctx context.Context, action string, _ map[string]any) (map[string]any, error) {
+	if action != "get_group_list" {
+		return nil, errors.New("unexpected OneBot action")
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestConsoleGroupsTimesOutSlowLiveList(t *testing.T) {
+	originalTimeout := consoleLiveGroupTimeout
+	consoleLiveGroupTimeout = 40 * time.Millisecond
+	t.Cleanup(func() { consoleLiveGroupTimeout = originalTimeout })
+
+	base := assistant.DefaultBotConfig()
+	runtime := assistant.NewRuntime(base, blockingGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	store := NewMemoryQQBotGroupConfigStore()
+	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "50005", Enabled: true, EnabledSet: true}, base); err != nil {
+		t.Fatalf("SaveGroupConfig() error = %v", err)
+	}
+	handler := NewQQBotHandler(context.Background(), runtime)
+	handler.SetGroupConfigStore(store)
+	router := qqBotTestRouter(handler)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response consoleGroupsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if response.LiveAvailable || !strings.Contains(response.Warning, "超时") || len(response.Groups) != 1 || response.Groups[0].GroupID != "50005" {
 		t.Fatalf("response = %#v", response)
 	}
 }
