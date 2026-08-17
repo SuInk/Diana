@@ -25,10 +25,12 @@ type LocalMediaPathResolver interface {
 }
 
 type LocalMediaStore struct {
-	mu      sync.RWMutex
-	baseURL string
-	items   map[string]localMediaItem
-	now     func() time.Time
+	mu             sync.RWMutex
+	baseURL        string
+	basePath       string
+	originProvider func() string
+	items          map[string]localMediaItem
+	now            func() time.Time
 }
 
 type localMediaItem struct {
@@ -38,15 +40,48 @@ type localMediaItem struct {
 }
 
 func NewLocalMediaStore(baseURL string) *LocalMediaStore {
-	return &LocalMediaStore{
+	store := &LocalMediaStore{
 		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		items:   map[string]localMediaItem{},
 		now:     time.Now,
 	}
+	if parsed, err := neturl.Parse(store.baseURL); err == nil {
+		store.basePath = strings.TrimRight(parsed.EscapedPath(), "/")
+	}
+	return store
+}
+
+// SetOriginProvider 注册“当前应使用的服务地址”回调。桥端（可能在容器或
+// 另一台机器上）能用某个地址完成反向 ws 握手，就一定也能用同一地址回源
+// 取媒体，所以按连接握手 Host 动态拼 URL 可以让用户只配置 ws 地址。
+// 回调返回空串时退回构造时的静态基址。
+func (s *LocalMediaStore) SetOriginProvider(provider func() string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.originProvider = provider
+	s.mu.Unlock()
+}
+
+func (s *LocalMediaStore) shareBaseURL() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	provider := s.originProvider
+	s.mu.RUnlock()
+	if provider != nil {
+		if origin := strings.TrimRight(strings.TrimSpace(provider()), "/"); origin != "" {
+			return origin + s.basePath
+		}
+	}
+	return s.baseURL
 }
 
 func (s *LocalMediaStore) Share(path string, ttl time.Duration) (string, bool) {
-	if s == nil || s.baseURL == "" {
+	baseURL := s.shareBaseURL()
+	if baseURL == "" {
 		return "", false
 	}
 	path = strings.TrimSpace(strings.TrimPrefix(path, "file://"))
@@ -72,22 +107,20 @@ func (s *LocalMediaStore) Share(path string, ttl time.Duration) (string, bool) {
 	}
 	s.mu.Unlock()
 
-	return s.baseURL + "/" + neturl.PathEscape(token), true
+	return baseURL + "/" + neturl.PathEscape(token), true
 }
 
 func (s *LocalMediaStore) ResolveSharedPath(value string) (string, bool) {
 	if s == nil || s.baseURL == "" {
 		return "", false
 	}
-	base, err := neturl.Parse(s.baseURL)
-	if err != nil {
-		return "", false
-	}
 	shared, err := neturl.Parse(strings.TrimSpace(value))
-	if err != nil || !strings.EqualFold(shared.Scheme, base.Scheme) || !strings.EqualFold(shared.Host, base.Host) {
+	// 分享 URL 的主机名会随桥的握手地址变化（见 SetOriginProvider），这里
+	// 只按路径前缀 + token 匹配；token 是一次性的 UUID，本身就是凭据。
+	if err != nil || (shared.Scheme != "" && !strings.EqualFold(shared.Scheme, "http") && !strings.EqualFold(shared.Scheme, "https")) {
 		return "", false
 	}
-	prefix := strings.TrimRight(base.EscapedPath(), "/") + "/"
+	prefix := s.basePath + "/"
 	sharedPath := shared.EscapedPath()
 	if !strings.HasPrefix(sharedPath, prefix) {
 		return "", false
