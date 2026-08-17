@@ -88,6 +88,171 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 	return response, nil
 }
 
+// Stream exposes native Chat Completions SSE deltas. Responses and tool-call
+// requests continue through Generate until their event schema is normalized.
+func (c *openAICompatibleClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
+	if c.cfg.APIFormatWithDefault() == APIFormatResponses {
+		return c.streamResponses(ctx, req)
+	}
+	if len(req.Tools) > 0 {
+		out := make(chan ChatEvent, 2)
+		go func() {
+			defer close(out)
+			response, err := c.Generate(ctx, req)
+			if err != nil {
+				out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+				return
+			}
+			if response.Text != "" {
+				out <- ChatEvent{Type: ChatEventTextDelta, Text: response.Text}
+			}
+			usage := response.Usage
+			out <- ChatEvent{Type: ChatEventUsage, Usage: &usage}
+			out <- ChatEvent{Type: ChatEventDone}
+		}()
+		return out, nil
+	}
+	req = req.withDefaults(c.cfg)
+	body, err := json.Marshal(openAIChatCompletionRequest{Model: req.Model, Messages: openAIChatCompletionMessages(req.Messages, req.Tools), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Stream: true})
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := c.newOpenAIRequest(ctx, "chat/completions", body)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	resp, cancel, err := c.doChatCompletionRequest(ctx, httpReq)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		cancel()
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("llm: stream request returned HTTP %d", resp.StatusCode)
+	}
+	out := make(chan ChatEvent, 8)
+	go func() {
+		defer close(out)
+		defer cancel()
+		defer resp.Body.Close()
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 4096), 1<<20)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				break
+			}
+			var payload map[string]any
+			if json.Unmarshal([]byte(data), &payload) != nil {
+				continue
+			}
+			if message := streamErrorMessage(payload); message != "" {
+				out <- ChatEvent{Type: ChatEventError, Error: message}
+				return
+			}
+			choices, _ := payload["choices"].([]any)
+			if len(choices) == 0 {
+				continue
+			}
+			choice, _ := choices[0].(map[string]any)
+			delta, _ := choice["delta"].(map[string]any)
+			text, _ := delta["content"].(string)
+			if text != "" {
+				out <- ChatEvent{Type: ChatEventTextDelta, Text: text}
+			}
+			if usage, ok := payload["usage"].(map[string]any); ok {
+				value := usageFromPayload(usage)
+				out <- ChatEvent{Type: ChatEventUsage, Usage: &value}
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+			return
+		}
+		out <- ChatEvent{Type: ChatEventDone}
+	}()
+	return out, nil
+}
+
+func (c *openAICompatibleClient) streamResponses(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
+	req = req.withDefaults(c.cfg)
+	req = applyContextBudget(req, c.cfg)
+	if err := validateGenerateRequest(req); err != nil {
+		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
+	}
+	system, messages := splitSystemPrompt(req.Messages)
+	params := responses.ResponseNewParams{
+		Model: shared.ResponsesModel(req.Model),
+		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: openAIResponsesInput(messages, req.Tools)},
+	}
+	if system != "" {
+		params.Instructions = param.NewOpt(system)
+	}
+	if req.Temperature != nil {
+		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+	if req.ReasoningEffort != "" {
+		params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(req.ReasoningEffort)}
+	}
+	if req.MaxOutputTokens > 0 {
+		params.MaxOutputTokens = param.NewOpt(req.MaxOutputTokens)
+	}
+	params.Tools = openAIResponseTools(req.Tools)
+	if len(req.Tools) > 0 {
+		params.ParallelToolCalls = param.NewOpt(false)
+	}
+	stream := c.client.Responses.NewStreaming(ctx, params)
+	out := make(chan ChatEvent, 8)
+	go func() {
+		defer close(out)
+		for stream.Next() {
+			event := stream.Current()
+			switch event.Type {
+			case "response.output_text.delta":
+				if event.Delta != "" {
+					out <- ChatEvent{Type: ChatEventTextDelta, Text: event.Delta}
+				}
+			case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+				if event.Delta != "" {
+					out <- ChatEvent{Type: ChatEventReasoning, Reasoning: event.Delta}
+				}
+			case "response.function_call_arguments.done":
+				arguments := map[string]any{}
+				if strings.TrimSpace(event.Arguments) != "" {
+					if err := json.Unmarshal([]byte(event.Arguments), &arguments); err != nil {
+						out <- ChatEvent{Type: ChatEventError, Error: fmt.Sprintf("llm: invalid tool arguments: %v", err)}
+						return
+					}
+				}
+				call := ToolCall{ID: event.ItemID, Name: nativeToolName(event.Name, req.Tools), Arguments: arguments}
+				out <- ChatEvent{Type: ChatEventToolCall, ToolCall: &call}
+			case "error", "response.failed", "response.incomplete":
+				message := event.Message
+				if message == "" {
+					message = event.Code
+				}
+				out <- ChatEvent{Type: ChatEventError, Error: message}
+				return
+			case "response.completed":
+				usage := Usage{InputTokens: event.Response.Usage.InputTokens, OutputTokens: event.Response.Usage.OutputTokens, TotalTokens: event.Response.Usage.TotalTokens}
+				out <- ChatEvent{Type: ChatEventUsage, Usage: &usage}
+			}
+		}
+		if err := stream.Err(); err != nil {
+			out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+			return
+		}
+		out <- ChatEvent{Type: ChatEventDone}
+	}()
+	return out, nil
+}
+
 // ManagesAttemptTimeout reports that Chat Completions uses separate response
 // header and stream-idle timeouts instead of one deadline for the whole reply.
 func (c *openAICompatibleClient) ManagesAttemptTimeout() bool {

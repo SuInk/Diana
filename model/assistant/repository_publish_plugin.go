@@ -24,20 +24,24 @@ const (
 	// RepositoryPublishPluginID is shared with authenticated WebUI actions.
 	RepositoryPublishPluginID = repositoryPublishPluginID
 
-	repositoryPublishSettingToken       = "github_token"
-	repositoryPublishSettingAuthMode    = "github_auth_mode"
-	repositoryPublishSettingAllowlist   = "allowed_repositories"
-	repositoryPublishSettingUserAccess  = "user_repository_access"
-	repositoryPublishSettingGroupAccess = "group_repository_access"
-	repositoryPublishSettingUserTokens  = "user_github_tokens"
-	repositoryPublishSettingTokenUsers  = "user_github_token_users"
-	repositoryPublishSettingUserAuth    = "user_github_auth_modes"
-	repositoryPublishSettingTimeout     = "timeout_seconds"
-	defaultRepositoryPublishTimeoutSecs = 20
-	repositoryPublishAuthToken          = "token"
-	repositoryPublishAuthGH             = "gh"
-	repositoryPublishAuthAuto           = "auto"
-	repositoryPublishUserAuthInherit    = "inherit"
+	repositoryPublishSettingToken         = "github_token"
+	repositoryPublishSettingAuthMode      = "github_auth_mode"
+	repositoryPublishSettingAllowlist     = "allowed_repositories"
+	repositoryPublishSettingUserAccess    = "user_repository_access"
+	repositoryPublishSettingGroupAccess   = "group_repository_access"
+	repositoryPublishSettingDraftUsers    = "issue_draft_user_access"
+	repositoryPublishSettingDraftGroups   = "issue_draft_group_access"
+	repositoryPublishSettingManagerUsers  = "issue_manager_user_access"
+	repositoryPublishSettingManagerGroups = "issue_manager_group_access"
+	repositoryPublishSettingUserTokens    = "user_github_tokens"
+	repositoryPublishSettingTokenUsers    = "user_github_token_users"
+	repositoryPublishSettingUserAuth      = "user_github_auth_modes"
+	repositoryPublishSettingTimeout       = "timeout_seconds"
+	defaultRepositoryPublishTimeoutSecs   = 20
+	repositoryPublishAuthToken            = "token"
+	repositoryPublishAuthGH               = "gh"
+	repositoryPublishAuthAuto             = "auto"
+	repositoryPublishUserAuthInherit      = "inherit"
 )
 
 var (
@@ -164,7 +168,8 @@ func (p *RepositoryPublishPlugin) findDraft(ctx context.Context, groupID, draftI
 	if store != nil {
 		if draftID != "" {
 			draft, ok, err := store.RepositoryIssueDraft(ctx, draftID)
-			if err != nil || !ok || draft.GroupID != groupID || draft.Status != "pending" {
+			privateApproval := strings.HasPrefix(groupID, "private:")
+			if err != nil || !ok || (!privateApproval && draft.GroupID != groupID) || draft.Status != "pending" {
 				return repositoryIssueDraft{}, false, err
 			}
 			return draft, true, nil
@@ -179,7 +184,8 @@ func (p *RepositoryPublishPlugin) findDraft(ctx context.Context, groupID, draftI
 	defer p.draftsMu.Unlock()
 	var latest repositoryIssueDraft
 	for id, draft := range p.drafts {
-		if draft.GroupID != groupID || draft.Status != "pending" {
+		privateApproval := strings.HasPrefix(groupID, "private:")
+		if (!privateApproval && draft.GroupID != groupID) || draft.Status != "pending" {
 			continue
 		}
 		if draftID != "" {
@@ -283,6 +289,26 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Description: "群内所有成员可为这些仓库生成 Issue 草稿；只有群内授权用户确认后才会创建。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
+			},
+			{
+				Key: repositoryPublishSettingDraftUsers, Label: "Issue 草稿提交者（私聊）",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以提交草稿，但不能直接写入 Issue。",
+				Type:        PluginSettingTypeString, Default: "",
+			},
+			{
+				Key: repositoryPublishSettingDraftGroups, Label: "Issue 草稿提交者（群聊）",
+				Description: "按“群 ID = owner/repo, owner/repo”填写；群成员可以提交草稿，但不能直接写入 Issue。",
+				Type:        PluginSettingTypeString, Default: "",
+			},
+			{
+				Key: repositoryPublishSettingManagerUsers, Label: "Issue 管理人员（私聊）",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以直接创建和管理 Issue。",
+				Type:        PluginSettingTypeString, Default: "",
+			},
+			{
+				Key: repositoryPublishSettingManagerGroups, Label: "Issue 管理人员（群聊）",
+				Description: "按“群 ID = owner/repo, owner/repo”填写；该群成员可直接创建和管理 Issue，请谨慎授予。",
+				Type:        PluginSettingTypeString, Default: "",
 			},
 			{
 				Key:         repositoryPublishSettingUserTokens,

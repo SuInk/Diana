@@ -100,6 +100,68 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 	}, nil
 }
 
+func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
+	req = req.withDefaults(c.cfg)
+	if req.MaxOutputTokens == 0 {
+		req.MaxOutputTokens = defaultAnthropicMaxTokens
+	}
+	system, messages := splitSystemPrompt(req.Messages)
+	params := anthropic.MessageNewParams{Model: anthropic.Model(req.Model), MaxTokens: req.MaxOutputTokens, Messages: anthropicMessages(messages, req.Tools), Tools: anthropicTools(req.Tools)}
+	if system != "" {
+		params.System = []anthropic.TextBlockParam{{Text: system}}
+	}
+	if req.Temperature != nil {
+		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+	stream := c.client.Messages.NewStreaming(ctx, params)
+	out := make(chan ChatEvent, 4)
+	go func() {
+		defer close(out)
+		var usage Usage
+		var activeTools = map[int64]*ToolCall{}
+		var toolArguments = map[int64]string{}
+		for stream.Next() {
+			event := stream.Current()
+			switch event.Type {
+			case "content_block_start":
+				if event.ContentBlock.Type == "tool_use" {
+					call := ToolCall{ID: event.ContentBlock.ID, Name: nativeToolName(event.ContentBlock.Name, req.Tools), Arguments: map[string]any{}}
+					activeTools[event.Index] = &call
+				}
+			case "content_block_delta":
+				if event.Delta.Text != "" {
+					out <- ChatEvent{Type: ChatEventTextDelta, Text: event.Delta.Text}
+				}
+				if event.Delta.Thinking != "" {
+					out <- ChatEvent{Type: ChatEventReasoning, Reasoning: event.Delta.Thinking}
+				}
+				if event.Delta.PartialJSON != "" {
+					toolArguments[event.Index] += event.Delta.PartialJSON
+				}
+			case "content_block_stop":
+				if call := activeTools[event.Index]; call != nil {
+					if raw := strings.TrimSpace(toolArguments[event.Index]); raw != "" {
+						if err := json.Unmarshal([]byte(raw), &call.Arguments); err != nil {
+							out <- ChatEvent{Type: ChatEventError, Error: fmt.Sprintf("llm: invalid tool arguments: %v", err)}
+							return
+						}
+					}
+					out <- ChatEvent{Type: ChatEventToolCall, ToolCall: call}
+				}
+			case "message_delta":
+				usage.OutputTokens = event.Usage.OutputTokens
+			}
+		}
+		if err := stream.Err(); err != nil {
+			out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+			return
+		}
+		out <- ChatEvent{Type: ChatEventUsage, Usage: &usage}
+		out <- ChatEvent{Type: ChatEventDone}
+	}()
+	return out, nil
+}
+
 func messagesHaveInputAudio(messages []Message) bool {
 	for _, message := range messages {
 		for _, part := range message.Parts {

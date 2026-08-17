@@ -58,6 +58,29 @@ export interface LLMModelsResponse {
   models: LLMModelInfo[];
 }
 
+export interface LLMProviderDefinition {
+  id: string;
+  name: string;
+  protocol: "openai-completions" | "openai-responses" | "anthropic-messages" | "gemini" | string;
+  baseUrl?: string;
+  enabled: boolean;
+}
+
+export interface LLMModelDefinition {
+  id: string;
+  providerId: string;
+  modelId: string;
+  name: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  capabilities?: Record<string, boolean>;
+}
+
+export interface LLMProviderCatalog {
+  providers: LLMProviderDefinition[];
+  models: LLMModelDefinition[];
+}
+
 export interface QQBotConfig {
   id?: string;
   name?: string;
@@ -106,7 +129,7 @@ export interface QQBotConfig {
   send_retry_attempts?: number;
   send_chunk_interval_ms?: number;
   /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
-  model_roles?: Record<string, { profile_id?: string; group?: string; model: string }>;
+  model_roles?: Record<string, { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>;
   /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
@@ -660,6 +683,24 @@ export function listLLMModels(config: LLMConfig): Promise<LLMModelsResponse> {
   });
 }
 
+export function getLLMProviderCatalog(): Promise<LLMProviderCatalog> {
+  return requestJSON<LLMProviderCatalog>("/api/llm/providers");
+}
+
+export function listProviderModels(providerId: string): Promise<LLMModelsResponse> {
+  return requestJSON<LLMModelsResponse>("/api/llm/providers/models", {
+    method: "POST",
+    body: JSON.stringify({ providerId })
+  });
+}
+
+export function testProviderModel(providerId: string, modelId: string, message: string): Promise<GenerateResponse> {
+  return requestJSON<GenerateResponse>("/api/llm/providers/test", {
+    method: "POST",
+    body: JSON.stringify({ providerId, modelId, message })
+  });
+}
+
 export function getQQBotConfig(): Promise<QQBotConfig> {
   return requestJSON<QQBotConfig>("/api/assistant/config");
 }
@@ -1116,6 +1157,8 @@ export interface AssistantTask {
   owner_id: string;
   group_id?: string;
   user_id?: string;
+  notification_enabled?: boolean;
+  notification_targets?: RepositoryWatchTarget[];
   message: string;
   status: AssistantTaskStatus;
   trigger_at: string;
@@ -1146,6 +1189,12 @@ export interface AssistantTask {
   consumes_quota: boolean;
 }
 
+export interface RepositoryWatchTarget {
+  destination: "private" | "group";
+  group_id?: string;
+  user_id?: string;
+}
+
 export interface AssistantTasksResponse {
   items: AssistantTask[];
 }
@@ -1162,6 +1211,8 @@ export interface RepositoryWatchInput {
   destination?: "private" | "group";
   group_id?: string;
   user_id?: string;
+  notification_enabled?: boolean;
+  notification_targets?: RepositoryWatchTarget[];
 }
 
 export interface RSSWatchInput {
