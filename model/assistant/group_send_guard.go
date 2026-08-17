@@ -19,6 +19,7 @@ var (
 	errOutboundSend            = errors.New("qqbot: outbound send failed")
 	errGroupSendUnavailable    = errors.New("qqbot: group send target is unavailable")
 	errOutboundDeliveryDropped = errors.New("qqbot: outbound delivery dropped after backoff")
+	errOutboundChannelOffline  = errors.New("qqbot: outbound send deferred while the channel is offline")
 )
 
 const (
@@ -62,6 +63,7 @@ type outboundSendError struct {
 	Cause            error
 	GroupUnavailable bool
 	DeliveryDropped  bool
+	ChannelOffline   bool
 }
 
 func (e *outboundSendError) Error() string {
@@ -86,7 +88,8 @@ func (e *outboundSendError) Is(target error) bool {
 		return false
 	}
 	return (e.GroupUnavailable && target == errGroupSendUnavailable) ||
-		(e.DeliveryDropped && target == errOutboundDeliveryDropped)
+		(e.DeliveryDropped && target == errOutboundDeliveryDropped) ||
+		(e.ChannelOffline && target == errOutboundChannelOffline)
 }
 
 func defaultOutboundDeliveryPolicy() outboundDeliveryPolicy {
@@ -193,6 +196,12 @@ func (r *Runtime) executeOutboundCall(
 			}
 			r.enterOutboundDropCooldown(event, action, gate, policy, time.Now())
 			return nil, droppedOutboundSendError(groupID, gate.lastError)
+		}
+		// An offline transport or QQ account cannot deliver anything. Fail fast
+		// without consuming the failure window or blocking the worker's lease;
+		// the durable queue retries the whole reply after the channel recovers.
+		if !channelEffectivelyOnline(r.channelStatus()) {
+			return nil, offlineOutboundSendError(groupID)
 		}
 		now := time.Now()
 		if !gate.dropUntil.IsZero() {
@@ -307,6 +316,14 @@ func outboundBackoffDelay(event MessageEvent, action string, failures int, polic
 		return policy.MaximumDelay
 	}
 	return jittered
+}
+
+func offlineOutboundSendError(groupID string) error {
+	return &outboundSendError{
+		GroupID:        groupID,
+		Cause:          fmt.Errorf("qqbot: channel offline while sending to group %s; delivery deferred for durable retry", groupID),
+		ChannelOffline: true,
+	}
 }
 
 func droppedOutboundSendError(groupID, cause string) error {
@@ -424,6 +441,10 @@ func (r *Runtime) groupMissingFromOneBot(groupID string) (missing bool, verified
 	if groupID == "" {
 		return false, false
 	}
+	// 断连或账号风控期间 NapCat 的群列表不可信，不能据此判定退群。
+	if !channelEffectivelyOnline(r.channelStatus()) {
+		return false, false
+	}
 	r.mu.RLock()
 	channel := r.channel
 	r.mu.RUnlock()
@@ -438,6 +459,11 @@ func (r *Runtime) groupMissingFromOneBot(groupID string) (missing bool, verified
 	}
 	items, recognized := structuredGroupListItems(data)
 	if !recognized {
+		return false, false
+	}
+	// 空列表更可能是账号异常的产物：一个刚收到该群消息的账号不会一个群都
+	// 没有。空列表按不可信证据处理，宁可多退避也不误判退群。
+	if len(items) == 0 {
 		return false, false
 	}
 	for _, raw := range items {

@@ -242,6 +242,127 @@ func TestRuntimeBackfillsAgainWhenConnectionEpochChangesWithoutDisconnectEdge(t 
 	}
 }
 
+func TestRuntimeBackfillsWhenAccountRecoversWithoutWSReconnect(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	watermark := time.Now().Add(-10 * time.Minute).Unix()
+	store.sessions = []HistorySession{{Kind: EventKindGroup, ID: "123", LastEventTime: watermark}}
+	channel := newQueueTestChannel()
+	logs := &captureAppLogs{}
+	runtime := newQueuedTestRuntime(channel, store, nil)
+	runtime.SetAppLogWriter(logs)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+
+	waitForCondition(t, 4*time.Second, func() bool {
+		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.backfill_completed")
+	})
+
+	// QQ 被风控：WS 连接保持，心跳报告账号离线。
+	channel.setAccountStatus(true, false, false)
+	waitForCondition(t, 2*time.Second, func() bool {
+		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.account_offline")
+	})
+	if runtime.inboundProcessingReady() {
+		t.Fatal("inbound processing stayed ready while the account was offline")
+	}
+
+	// 封控期间漏掉的消息只能通过解封后的历史回补拿到。
+	channel.setResponse("get_group_msg_history", map[string]any{"messages": []any{
+		historyTestMessage(950, time.Now().Unix(), "封控期间漏掉的消息"),
+	}})
+
+	// 解封：账号恢复在线，epoch 与连接状态均未变化。
+	channel.setAccountStatus(true, true, true)
+	waitForCondition(t, 4*time.Second, func() bool {
+		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.account_recovered")
+	})
+	waitForCondition(t, 4*time.Second, func() bool {
+		return store.hasEvent("group:123:950")
+	})
+}
+
+func TestRuntimeManualBackfillRewindsWatermarkWithinWindow(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	now := time.Now().Unix()
+	store.sessions = []HistorySession{{Kind: EventKindGroup, ID: "123", LastEventTime: now}}
+	channel := newQueueTestChannel()
+	logs := &captureAppLogs{}
+	runtime := newQueuedTestRuntime(channel, store, nil)
+	runtime.SetAppLogWriter(logs)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+	waitForCondition(t, 4*time.Second, func() bool {
+		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.backfill_completed")
+	})
+
+	// 这条消息早于当前水位，常规回补不会再看它，只有手动回退水位才能找回。
+	channel.setResponse("get_group_msg_history", map[string]any{"messages": []any{
+		historyTestMessage(960, now-1800, "手动回补找回的消息"),
+	}})
+	if err := runtime.RequestHistoryBackfill(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, 4*time.Second, func() bool {
+		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.backfill_manual_requested")
+	})
+	waitForCondition(t, 4*time.Second, func() bool {
+		return store.hasEvent("group:123:960")
+	})
+}
+
+func TestRuntimeManualBackfillDoesNotReplyToDuplicates(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	watermark := time.Now().Add(-10 * time.Minute).Unix()
+	store.sessions = []HistorySession{{Kind: EventKindGroup, ID: "123", LastEventTime: watermark}}
+	channel := newQueueTestChannel()
+	channel.responses["get_group_msg_history"] = map[string]any{"messages": []any{
+		historyTestMessage(920, watermark+1, "Diana 只应回复一次的消息"),
+	}}
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"action":"none","prompt":""}`, "第一次回复",
+		`{"action":"none","prompt":""}`, "不应出现的第二次回复",
+	}}
+	logs := &captureAppLogs{}
+	runtime := newQueuedTestRuntime(channel, store, provider)
+	runtime.SetAppLogWriter(logs)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+	waitForCondition(t, 4*time.Second, func() bool { return channel.sentCount() == 1 })
+
+	// 手动回补会把水位回退，再次拉到同一条消息，但入队去重必须挡住二次回复。
+	if err := runtime.RequestHistoryBackfill(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, 4*time.Second, func() bool {
+		return countAppLogAction(logs.entriesSnapshot(), "qqbot.backfill_completed") >= 2
+	})
+	time.Sleep(500 * time.Millisecond)
+	if got := channel.sentCount(); got != 1 {
+		t.Fatalf("duplicate backfilled message produced %d replies, want 1", got)
+	}
+}
+
+func TestChannelEffectivelyOnlineRequiresHealthyAccount(t *testing.T) {
+	if channelEffectivelyOnline(ChannelStatus{Connected: true, AccountStatusKnown: true, AccountOnline: false}) {
+		t.Fatal("offline account must not count as online")
+	}
+	if channelEffectivelyOnline(ChannelStatus{Connected: true, AccountStatusKnown: true, AccountOnline: true, AccountGood: false}) {
+		t.Fatal("degraded account must not count as online")
+	}
+	if !channelEffectivelyOnline(ChannelStatus{Connected: true}) {
+		t.Fatal("unknown account state must fall back to transport connectivity")
+	}
+	if channelEffectivelyOnline(ChannelStatus{Connected: false, AccountStatusKnown: true, AccountOnline: true, AccountGood: true}) {
+		t.Fatal("healthy account cannot compensate for a dropped transport")
+	}
+}
+
 func TestRuntimeInboundStatusUsesOneBotChannelInMultiChannel(t *testing.T) {
 	onebot := &multiChannelProbe{status: ChannelStatus{
 		Connected:       false,
@@ -263,12 +384,17 @@ func TestRuntimeInboundStatusUsesOneBotChannelInMultiChannel(t *testing.T) {
 }
 
 func hasAppLogAction(entries []applog.Entry, action string) bool {
+	return countAppLogAction(entries, action) > 0
+}
+
+func countAppLogAction(entries []applog.Entry, action string) int {
+	count := 0
 	for _, entry := range entries {
 		if entry.Action == action {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
 
 func TestRuntimeDrainsPendingWhileHistoryBackfillIsSlow(t *testing.T) {
@@ -341,7 +467,7 @@ func TestInboundReplayCutoffFollowsOfflineDurationWithPaddingAndCap(t *testing.T
 	if got, want := inboundReplayCutoff(reconnectedAt.Add(-3*time.Hour), reconnectedAt), reconnectedAt.Add(-3*time.Hour-inboundReplayPadding); !got.Equal(want) {
 		t.Fatalf("three-hour cutoff=%s, want %s", got, want)
 	}
-	if got, want := inboundReplayCutoff(reconnectedAt.Add(-13*time.Hour), reconnectedAt), reconnectedAt.Add(-InboundReplayWindow); !got.Equal(want) {
+	if got, want := inboundReplayCutoff(reconnectedAt.Add(-25*time.Hour), reconnectedAt), reconnectedAt.Add(-InboundReplayWindow); !got.Equal(want) {
 		t.Fatalf("capped cutoff=%s, want %s", got, want)
 	}
 }
@@ -365,13 +491,13 @@ func TestHistoryBackfillPaddingDoesNotExceedReplayCutoff(t *testing.T) {
 	cutoff := time.Unix(1_000, 0)
 	sessions := []HistorySession{
 		{Kind: EventKindGroup, ID: "near", LastEventTime: 1_100},
-		{Kind: EventKindGroup, ID: "far", LastEventTime: 2_000},
+		{Kind: EventKindGroup, ID: "far", LastEventTime: 3_000},
 	}
 	padded := historyBackfillBaselineWithPadding(sessions, cutoff)
 	if padded[0].LastEventTime != cutoff.Unix() {
 		t.Fatalf("near watermark=%d, want cutoff %d", padded[0].LastEventTime, cutoff.Unix())
 	}
-	if padded[1].LastEventTime != 2_000-int64(inboundReplayPadding/time.Second) {
+	if padded[1].LastEventTime != 3_000-int64(inboundReplayPadding/time.Second) {
 		t.Fatalf("far watermark=%d", padded[1].LastEventTime)
 	}
 	if sessions[0].LastEventTime != 1_100 {
@@ -804,11 +930,14 @@ func (s *memoryInboundEventStore) isDone(id string) bool {
 }
 
 type queueTestChannel struct {
-	mu        sync.Mutex
-	connected bool
-	epoch     uint64
-	sent      []OutgoingMessage
-	responses map[string]map[string]any
+	mu            sync.Mutex
+	connected     bool
+	epoch         uint64
+	accountKnown  bool
+	accountOnline bool
+	accountGood   bool
+	sent          []OutgoingMessage
+	responses     map[string]map[string]any
 }
 
 func newQueueTestChannel() *queueTestChannel {
@@ -848,7 +977,22 @@ func (c *queueTestChannel) CallAPI(_ context.Context, action string, _ map[strin
 func (c *queueTestChannel) Status() ChannelStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return ChannelStatus{Connected: c.connected, SelfID: "42", ConnectionEpoch: c.epoch}
+	return ChannelStatus{
+		Connected:          c.connected,
+		SelfID:             "42",
+		ConnectionEpoch:    c.epoch,
+		AccountStatusKnown: c.accountKnown,
+		AccountOnline:      c.accountOnline,
+		AccountGood:        c.accountGood,
+	}
+}
+
+func (c *queueTestChannel) setAccountStatus(known, online, good bool) {
+	c.mu.Lock()
+	c.accountKnown = known
+	c.accountOnline = online
+	c.accountGood = good
+	c.mu.Unlock()
 }
 
 func (c *queueTestChannel) bumpConnectionEpoch() {
