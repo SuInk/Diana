@@ -192,7 +192,7 @@ func TestInboundQueueMigrationRestoresStaleDrops(t *testing.T) {
 	if err := store.CompleteInboundEvent(ctx, id, "old-worker", "ignored_stale"); err != nil {
 		t.Fatal(err)
 	}
-	oldID, inserted, err := store.EnqueueInboundEvent(ctx, "group:100", inboundTestEvent("too-old", "leave terminal", time.Now().Add(-13*time.Hour).Unix()))
+	oldID, inserted, err := store.EnqueueInboundEvent(ctx, "group:100", inboundTestEvent("too-old", "leave terminal", time.Now().Add(-25*time.Hour).Unix()))
 	if err != nil || !inserted {
 		t.Fatalf("enqueue old inserted=%v err=%v", inserted, err)
 	}

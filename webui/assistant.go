@@ -46,6 +46,10 @@ type repositoryWatchRuntime interface {
 	RunRepositoryWatchNow(string, string) (assistant.Reminder, error)
 }
 
+type historyBackfillRuntime interface {
+	RequestHistoryBackfill(time.Duration) error
+}
+
 type rssWatchRuntime interface {
 	CreateRSSWatch(context.Context, assistant.RSSWatchCreateInput) (assistant.Reminder, error)
 	UpdateRSSWatch(context.Context, string, string, assistant.RSSWatchUpdateInput) (assistant.Reminder, error)
@@ -238,6 +242,7 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.DELETE(base+"/tasks/rss-watches/:id", h.deleteRSSWatch)
 	router.POST(base+"/start", h.start)
 	router.POST(base+"/stop", h.stop)
+	router.POST(base+"/backfill", h.requestBackfill)
 	if h.features.GroupTest {
 		router.GET(base+"/group-test", h.getGroupTest)
 		router.GET(base+"/group-test/files", h.listGroupTestFiles)
@@ -492,6 +497,30 @@ func (h *QQBotHandler) stop(c *gin.Context) {
 	}
 	recordRequestOperation(c, h.logs, "assistant.stop", "QQ 机器人已停止", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
 	c.JSON(http.StatusOK, h.runtime.Status())
+}
+
+// requestBackfill 手动触发一次历史消息回补，用于实测回补效果。
+func (h *QQBotHandler) requestBackfill(c *gin.Context) {
+	runtime, ok := h.runtime.(historyBackfillRuntime)
+	if !ok {
+		h.writeError(c, http.StatusNotImplemented, "assistant.backfill", fmt.Errorf("runtime does not support manual history backfill"), qqbotLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		return
+	}
+	var payload struct {
+		Hours float64 `json:"hours"`
+	}
+	// body 可省略，默认回补允许的最大窗口。
+	_ = c.ShouldBindJSON(&payload)
+	window := time.Duration(payload.Hours * float64(time.Hour))
+	if window <= 0 || window > assistant.InboundReplayWindow {
+		window = assistant.InboundReplayWindow
+	}
+	if err := runtime.RequestHistoryBackfill(window); err != nil {
+		h.writeError(c, http.StatusConflict, "assistant.backfill", err, qqbotLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.backfill", fmt.Sprintf("已触发手动回补，窗口 %s", window), h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
+	c.JSON(http.StatusOK, gin.H{"requested": true, "window_hours": window.Hours()})
 }
 
 // getGroupTest 返回指定群最近收发事件，辅助真实 QQ 群联调。
