@@ -152,6 +152,12 @@
             <div class="update-progress-track"><span :style="{ width: `${updatePercent}%` }"></span></div>
           </div>
           <pre v-if="updateOutput" class="mono update-output" :class="{ error: updateFailed }">{{ updateOutput }}</pre>
+          <hr class="divider" style="margin: 4px 0" />
+          <button class="btn" type="button" :disabled="restarting" @click="doRestart">
+            <RotateCw :size="15" aria-hidden="true" />
+            {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
+          </button>
+          <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
           <div v-if="loading" class="skeleton" style="height: 72px"></div>
         </div>
       </section>
@@ -182,7 +188,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw } from "@lucide/vue";
+import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw, RotateCw } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -193,14 +199,15 @@ import {
   logout,
 	downloadSystemUpdate,
   pullFromGitHub,
+  restartSystem,
   type HealthResponse,
   type SystemVersion,
   type UpdateStatus
 } from "../api";
+import { askConfirm } from "../confirm";
 import { accentOptions, theme } from "../theme";
 import { formatTime, formatUptime } from "../format";
 import { toastError, toastSuccess } from "../toast";
-import { askConfirm } from "../confirm";
 
 const updateStatus = ref<UpdateStatus | null>(null);
 const systemVersion = ref<SystemVersion | null>(null);
@@ -208,6 +215,7 @@ const health = ref<HealthResponse | null>(null);
 const loading = ref(false);
 const updating = ref(false);
 const updateFailed = ref(false);
+const restarting = ref(false);
 const updateOutput = ref("");
 const authRequired = ref(false);
 const username = ref("");
@@ -332,6 +340,44 @@ const updatePhaseLabel = computed(() => {
     default: return "准备更新";
   }
 });
+
+async function doRestart(): Promise<void> {
+  const ok = await askConfirm({
+    title: "重启服务",
+    message: "服务会中断几秒，进行中的消息处理会被打断。确定重启吗？",
+    confirmLabel: "重启",
+    danger: true
+  });
+  if (!ok) {
+    return;
+  }
+  restarting.value = true;
+  const previousStart = health.value?.started_at ?? "";
+  try {
+    await restartSystem();
+  } catch (error) {
+    restarting.value = false;
+    toastError(error instanceof Error ? error.message : "触发重启失败");
+    return;
+  }
+  // 轮询健康检查，started_at 变化说明新进程已就绪；恢复后整页刷新。
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      const current = await getHealth();
+      if (current.started_at !== previousStart) {
+        toastSuccess("服务已恢复");
+        window.location.reload();
+        return;
+      }
+    } catch {
+      /* 服务重启期间健康检查失败属预期，继续等待 */
+    }
+  }
+  restarting.value = false;
+  toastError("等待服务恢复超时，请手动刷新页面确认状态");
+}
 
 onMounted(() => {
   void loadUpdates();

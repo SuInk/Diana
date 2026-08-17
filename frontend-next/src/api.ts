@@ -893,6 +893,13 @@ export function saveUpdatePolicy(policy: UpdatePolicy): Promise<UpdatePolicy> {
 	});
 }
 
+export function restartSystem(): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>("/api/system/restart", {
+    method: "POST",
+    body: JSON.stringify({ confirmation: "restart-service" })
+  });
+}
+
 export interface SystemVersion {
   build_version: string;
   version_label: string;
