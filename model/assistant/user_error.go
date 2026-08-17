@@ -32,6 +32,9 @@ func publicQQErrorMessage(err error) string {
 	}
 	raw := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(raw)
+	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
+		return "上游模型因内容安全策略拒绝了这次请求；这不表示连接或配置故障，请调整问题表述后再试。上游说明：" + sanitizePublicErrorDetail(raw)
+	}
 	if strings.Contains(lower, "github") {
 		for _, marker := range []string{"请求额度", "rate limit", "限流", "too many requests"} {
 			if strings.Contains(lower, marker) {
