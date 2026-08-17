@@ -401,3 +401,78 @@ func TestReverseServerRejectsCrossOriginBrowser(t *testing.T) {
 		t.Fatal("same-origin browser WebSocket was rejected")
 	}
 }
+
+func TestReverseServerConnectionOriginFollowsHandshake(t *testing.T) {
+	reverse := NewOneBotReverseServer(OneBotConfig{AccessToken: "test-token", Endpoint: "/onebot/v11/ws"})
+	server := httptest.NewServer(reverse)
+	defer server.Close()
+	if origin := reverse.ConnectionOrigin(); origin != "" {
+		t.Fatalf("ConnectionOrigin() = %q before any connection", origin)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	headers := http.Header{
+		"Authorization": []string{"Bearer test-token"},
+		"X-Self-ID":     []string{"42"},
+	}
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, headers)
+	if err != nil {
+		t.Fatalf("dial error = %v response=%v", err, response)
+	}
+	defer conn.Close()
+
+	want := server.URL // httptest 的 URL 就是客户端握手用的 http://host:port
+	if origin := reverse.ConnectionOrigin(); origin != want {
+		t.Fatalf("ConnectionOrigin() = %q, want %q", origin, want)
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil := time.Now().Add(2 * time.Second)
+	for reverse.ConnectionOrigin() != "" && time.Now().Before(waitUntil) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if origin := reverse.ConnectionOrigin(); origin != "" {
+		t.Fatalf("ConnectionOrigin() = %q after disconnect", origin)
+	}
+}
+
+func TestOneBotRequestOriginRespectsForwardedProto(t *testing.T) {
+	request := httptest.NewRequest("GET", "http://bridge.example:18080/", nil)
+	if origin := oneBotRequestOrigin(request); origin != "http://bridge.example:18080" {
+		t.Fatalf("oneBotRequestOrigin() = %q", origin)
+	}
+	request.Header.Set("X-Forwarded-Proto", "https")
+	if origin := oneBotRequestOrigin(request); origin != "https://bridge.example:18080" {
+		t.Fatalf("oneBotRequestOrigin() with X-Forwarded-Proto = %q", origin)
+	}
+}
+
+func TestIsOneBotReverseHandshake(t *testing.T) {
+	tests := []struct {
+		name    string
+		upgrade string
+		headers map[string]string
+		want    bool
+	}{
+		{"bare path with self id", "websocket", map[string]string{"X-Self-ID": "42"}, true},
+		{"client role only", "websocket", map[string]string{"X-Client-Role": "Universal"}, true},
+		{"browser websocket without onebot headers", "websocket", nil, false},
+		{"plain http with self id", "", map[string]string{"X-Self-ID": "42"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "http://bot.example/", nil)
+			if tt.upgrade != "" {
+				request.Header.Set("Upgrade", tt.upgrade)
+			}
+			for key, value := range tt.headers {
+				request.Header.Set(key, value)
+			}
+			if got := IsOneBotReverseHandshake(request); got != tt.want {
+				t.Fatalf("IsOneBotReverseHandshake() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
