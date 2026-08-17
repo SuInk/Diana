@@ -166,9 +166,9 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingLimit,
 				Label:       "摘要动态上限",
-				Description: "单次提醒交给 LLM 总结的最新 Commit 或 PR 数量；游标仍会推进到最新动态。",
+				Description: "兼容历史积压设置；通知默认只展示每类最新一条动态，游标仍会推进到最新动态。",
 				Type:        PluginSettingTypeNumber,
-				Default:     12,
+				Default:     1,
 				Min:         settingRange(1),
 				Max:         settingRange(30),
 				Step:        1,
@@ -326,7 +326,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	if strings.TrimSpace(cursor) == "" {
 		return nil, latest, false, nil
 	}
-	limit := settings.Int(repositoryWatchSettingLimit, 12)
+	limit := settings.Int(repositoryWatchSettingLimit, 1)
 	commits := make([]repositoryWatchCommit, 0, min(limit, len(payload)))
 	newCommitCount := 0
 	for _, item := range payload {
