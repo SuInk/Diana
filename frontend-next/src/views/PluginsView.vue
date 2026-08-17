@@ -316,6 +316,10 @@
         :issue-enabled-repositories="issueEnabledRepositories"
         :user-access="String(repositoryPublishForm.user_repository_access ?? '')"
         :group-access="String(repositoryPublishForm.group_repository_access ?? '')"
+        :draft-user-access="String(repositoryPublishForm.issue_draft_user_access ?? '')"
+        :draft-group-access="String(repositoryPublishForm.issue_draft_group_access ?? '')"
+        :manager-user-access="String(repositoryPublishForm.issue_manager_user_access ?? '')"
+        :manager-group-access="String(repositoryPublishForm.issue_manager_group_access ?? '')"
         :token-users="String(repositoryPublishForm.user_github_token_users ?? '')"
         :user-auth-modes="String(repositoryPublishForm.user_github_auth_modes ?? '')"
         :joined-groups="joinedGroups"
@@ -324,6 +328,10 @@
         @update:issue-enabled-repositories="repositoryPublishForm.allowed_repositories = $event.join('\n')"
         @update:user-access="repositoryPublishForm.user_repository_access = $event"
         @update:group-access="repositoryPublishForm.group_repository_access = $event"
+        @update:draft-user-access="repositoryPublishForm.issue_draft_user_access = $event"
+        @update:draft-group-access="repositoryPublishForm.issue_draft_group_access = $event"
+        @update:manager-user-access="repositoryPublishForm.issue_manager_user_access = $event"
+        @update:manager-group-access="repositoryPublishForm.issue_manager_group_access = $event"
         @update:user-tokens="repositoryPublishForm.user_github_tokens = $event"
         @update:token-users="repositoryPublishForm.user_github_token_users = $event"
         @update:user-auth-modes="repositoryPublishForm.user_github_auth_modes = $event"
@@ -447,7 +455,8 @@ const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
   if (!isGitHubSettings.value) return settingsSpecs.value;
   if (githubSettingsTab.value === "token") return settingsSpecs.value.filter((spec) => spec.key === "github_token");
   if (githubSettingsTab.value === "records") return [];
-  return settingsSpecs.value.filter((spec) => spec.key !== "github_token");
+  const repositoryManagedKeys = new Set(["github_token", "allowed_repositories", "user_repository_access", "group_repository_access", "issue_draft_user_access", "issue_draft_group_access", "issue_manager_user_access", "issue_manager_group_access", "user_github_tokens", "user_github_token_users", "user_github_auth_modes"]);
+  return settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key));
 });
 const activeSettingsForm = computed(() => settingsForm.value);
 const repositoryWatchTokenConfigured = computed(() => {

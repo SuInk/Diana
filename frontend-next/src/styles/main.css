@@ -2882,6 +2882,38 @@ code {
   margin-top: 14px;
 }
 
+.repository-notification-settings {
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.repository-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.target-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 620px) {
+  .target-row { grid-template-columns: 1fr auto; }
+  .target-row > :nth-child(2) { grid-column: 1 / -1; }
+}
+
 .repository-watch-manager-list {
   display: flex;
   flex-direction: column;

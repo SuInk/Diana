@@ -191,7 +191,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	return `搜索和管理 GitHub Issues。群成员可调用 list_drafts 查看本群草稿，status 支持 pending、created、cancelled、all，结果包含提出人、日期和完整内容。群聊普通成员可对该群配置的仓库调用 create，机器人应根据当前需求整理 title/body；后端只保存并复述草稿，不会写入 GitHub。群内对目标仓库有授权的用户明确回复同意后调用 approve，明确拒绝时调用 cancel_draft；两者可传 draft_id，省略时处理本群最新草稿。后端只使用确认者自己的 Token 创建 Issue。授权用户也可直接执行 search/create/update/comment/close/reopen；直接写入必须传 user_confirmed_write=true，并遵守明确目标与字段校验。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	return `搜索和管理 GitHub Issues。已配置的群聊或私聊草稿提交者可调用 create，机器人应根据当前需求整理 title/body；后端只保存并复述草稿，不会写入 GitHub。群聊草稿需要对应仓库的管理人员明确回复同意后调用 approve，私聊草稿也可传 draft_id 由管理人员审批；明确拒绝时调用 cancel_draft。list_drafts 的结果包含提出人、日期和完整内容。管理人员可直接执行 search/create/update/comment/close/reopen；直接写入必须传 user_confirmed_write=true，并遵守明确目标与字段校验。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 }
 
 func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -298,18 +298,22 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 	if owner {
 		return true, event.Kind == EventKindGroup, "", ""
 	}
-	users, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	legacyUsers, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
 	if err != nil {
 		return false, false, "invalid_user_repository_access", "用户仓库授权配置无效。"
 	}
-	groups, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
+	legacyGroups, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
 	if err != nil {
 		return false, false, "invalid_group_repository_access", "群聊草稿范围配置无效。"
 	}
 	key := strings.ToLower(repository)
-	userAllowed := users[strings.TrimSpace(event.UserID)][key]
-	groupAllowed := event.Kind == EventKindGroup && groups[strings.TrimSpace(event.GroupID)][key]
-	if !userAllowed && !groupAllowed {
+	managerUsers, managerGroups, draftUsers, draftGroups, err := repositoryPublishEffectiveAccess(settings, legacyUsers, legacyGroups)
+	if err != nil {
+		return false, false, "invalid_repository_access", "Issue 授权配置无效。"
+	}
+	directAllowed := managerUsers[strings.TrimSpace(event.UserID)][key] || event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(event.GroupID)][key]
+	draftAllowed := draftUsers[strings.TrimSpace(event.UserID)][key] || event.Kind == EventKindGroup && draftGroups[strings.TrimSpace(event.GroupID)][key]
+	if !directAllowed && !draftAllowed {
 		return false, false, "permission_denied", "当前群聊不能为该仓库发起草稿，当前用户也没有该仓库权限。"
 	}
 	allowed, err := repositoryPublishAllowlist(settings.String(repositoryPublishSettingAllowlist, ""))
@@ -319,7 +323,50 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 	if !allowed[key] {
 		return false, false, "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的全局白名单中。"
 	}
-	return userAllowed, groupAllowed, "", ""
+	return directAllowed, draftAllowed, "", ""
+}
+
+func repositoryPublishEffectiveAccess(settings SettingValues, legacyUsers, legacyGroups map[string]map[string]bool) (map[string]map[string]bool, map[string]map[string]bool, map[string]map[string]bool, map[string]map[string]bool, error) {
+	managerUsers, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingManagerUsers, ""))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	managerGroups, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingManagerGroups, ""))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	draftUsers, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingDraftUsers, ""))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	draftGroups, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingDraftGroups, ""))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if len(managerUsers) == 0 {
+		managerUsers = legacyUsers
+	}
+	if len(draftGroups) == 0 {
+		draftGroups = legacyGroups
+	}
+	// Managers can always submit a draft as well.
+	for id, repos := range managerUsers {
+		if draftUsers[id] == nil {
+			draftUsers[id] = map[string]bool{}
+		}
+		for repo := range repos {
+			draftUsers[id][repo] = true
+		}
+	}
+	for id, repos := range managerGroups {
+		if draftGroups[id] == nil {
+			draftGroups[id] = map[string]bool{}
+		}
+		for repo := range repos {
+			draftGroups[id][repo] = true
+		}
+	}
+	return managerUsers, managerGroups, draftUsers, draftGroups, nil
 }
 
 func repositoryIssueCurrentRequestText(event MessageEvent) string {
@@ -839,13 +886,26 @@ func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner
 		return "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的精确写入白名单中。"
 	}
 	if !owner {
-		users, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
+		legacyUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
 		if err != nil {
 			return "invalid_user_repository_access", "用户仓库授权配置无效。"
 		}
+		legacyGroups, err := repositoryPublishGroupAccess(t.settings.String(repositoryPublishSettingGroupAccess, ""))
+		if err != nil {
+			return "invalid_group_repository_access", "群聊仓库授权配置无效。"
+		}
+		managerUsers, managerGroups, _, _, err := repositoryPublishEffectiveAccess(t.settings, legacyUsers, legacyGroups)
+		if err != nil {
+			return "invalid_repository_access", "Issue 授权配置无效。"
+		}
 		userID := strings.TrimSpace(t.event.UserID)
-		if !users[userID][strings.ToLower(repository)] {
+		key := strings.ToLower(repository)
+		groupDirect := t.event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(t.event.GroupID)][key]
+		if !managerUsers[userID][key] && !groupDirect {
 			return "permission_denied", "当前用户没有该仓库的写入权限。"
+		}
+		if groupDirect {
+			return "", ""
 		}
 		tokens, err := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
 		if err != nil {
@@ -896,8 +956,12 @@ func repositoryPublishValidateEventAccess(event MessageEvent, repository string,
 		return "invalid_group_repository_access", "群聊仓库授权配置无效，请按每行“群ID = owner/repo, owner/repo”填写。"
 	}
 	repositoryKey := strings.ToLower(repository)
-	userAllowed := userAccess[strings.TrimSpace(event.UserID)][repositoryKey]
-	groupAllowed := event.Kind == EventKindGroup && groupAccess[strings.TrimSpace(event.GroupID)][repositoryKey]
+	_, _, draftUsers, draftGroups, effectiveErr := repositoryPublishEffectiveAccess(settings, userAccess, groupAccess)
+	if effectiveErr != nil {
+		return "invalid_repository_access", "Issue 授权配置无效。"
+	}
+	userAllowed := draftUsers[strings.TrimSpace(event.UserID)][repositoryKey]
+	groupAllowed := event.Kind == EventKindGroup && draftGroups[strings.TrimSpace(event.GroupID)][repositoryKey]
 	if !userAllowed && !groupAllowed {
 		return "permission_denied", "当前用户或所在群聊未获授权操作该 GitHub 仓库。"
 	}
@@ -912,8 +976,12 @@ func repositoryPublishValidateEventAccess(event MessageEvent, repository string,
 }
 
 func repositoryPublishUserHasAccess(userID string, settings SettingValues) bool {
-	access, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
-	return err == nil && len(access[strings.TrimSpace(userID)]) > 0
+	legacy, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	if err != nil {
+		return false
+	}
+	managers, _, drafts, _, err := repositoryPublishEffectiveAccess(settings, legacy, map[string]map[string]bool{})
+	return err == nil && (len(managers[strings.TrimSpace(userID)]) > 0 || len(drafts[strings.TrimSpace(userID)]) > 0)
 }
 
 func repositoryPublishEventHasAccess(event MessageEvent, settings SettingValues) bool {
@@ -923,8 +991,12 @@ func repositoryPublishEventHasAccess(event MessageEvent, settings SettingValues)
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
 		return false
 	}
-	access, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
-	return err == nil && len(access[strings.TrimSpace(event.GroupID)]) > 0
+	legacy, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
+	if err != nil {
+		return false
+	}
+	_, managers, _, drafts, err := repositoryPublishEffectiveAccess(settings, map[string]map[string]bool{}, legacy)
+	return err == nil && (len(managers[strings.TrimSpace(event.GroupID)]) > 0 || len(drafts[strings.TrimSpace(event.GroupID)]) > 0)
 }
 
 func repositoryPublishUserAccess(raw string) (map[string]map[string]bool, error) {
@@ -1019,8 +1091,12 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 
 func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "create", Repository: repository}
-	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
-		return result.fail("permission_denied", "Issue 草稿只能在已配置的群聊中发起。")
+	draftScope := strings.TrimSpace(t.event.GroupID)
+	if t.event.Kind != EventKindGroup {
+		if strings.TrimSpace(t.event.UserID) == "" {
+			return result.fail("permission_denied", "Issue 草稿需要明确的私聊对象。")
+		}
+		draftScope = "private:" + strings.TrimSpace(t.event.UserID)
 	}
 	title, redactions := sanitizeRepositoryIssueText(configToolString(input, "title"), repositoryIssueTitleLimit, true)
 	body, bodyRedactions := sanitizeRepositoryIssueText(configToolString(input, "body"), repositoryIssueBodyLimit, false)
@@ -1048,7 +1124,7 @@ func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository 
 	}
 	draft, err := t.plugin.saveDraft(ctx, repositoryIssueDraft{
 		Platform: t.event.Platform, ProfileID: t.event.ProfileID,
-		GroupID: strings.TrimSpace(t.event.GroupID), Repository: repository,
+		GroupID: draftScope, Repository: repository,
 		RequesterID: strings.TrimSpace(t.event.UserID), RequesterName: strings.TrimSpace(t.event.SenderName), Input: draftInput,
 	})
 	if err != nil {
@@ -1056,7 +1132,7 @@ func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository 
 	}
 	result.OK = true
 	result.Outcome = "draft_pending"
-	result.Message = "Issue 草稿已生成，尚未写入 GitHub；需要本群内对该仓库有权限的用户明确同意。"
+	result.Message = "Issue 草稿已生成，尚未写入 GitHub；需要对应仓库的管理人员明确同意。"
 	result.RequiresApproval = true
 	result.Draft = repositoryIssueDraftViewFromDraft(draft)
 	return result
@@ -1064,10 +1140,11 @@ func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository 
 
 func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "approve", Message: "Issue 草稿未提交。"}
-	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
-		return result.fail("permission_denied", "只能在草稿所属群聊中审批。")
+	scope := strings.TrimSpace(t.event.GroupID)
+	if t.event.Kind != EventKindGroup {
+		scope = "private:" + strings.TrimSpace(t.event.UserID)
 	}
-	draft, ok, err := t.plugin.findDraft(ctx, t.event.GroupID, configToolString(input, "draft_id"))
+	draft, ok, err := t.plugin.findDraft(ctx, scope, configToolString(input, "draft_id"))
 	if err != nil {
 		return result.fail("draft_store_failed", "读取 Issue 草稿失败。")
 	}
@@ -1131,11 +1208,19 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 
 func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "list_drafts", Message: "没有找到 Issue 草稿。"}
-	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
-		return result.fail("permission_denied", "只能在群聊中列出该群的 Issue 草稿。")
+	if t.event.Kind != EventKindGroup && strings.TrimSpace(t.event.UserID) == "" {
+		return result.fail("permission_denied", "只能在有明确对象的会话中列出 Issue 草稿。")
+	}
+	scope := strings.TrimSpace(t.event.GroupID)
+	if t.event.Kind != EventKindGroup {
+		scope = "private:" + strings.TrimSpace(t.event.UserID)
 	}
 	groups, err := repositoryPublishGroupAccess(t.settings.String(repositoryPublishSettingGroupAccess, ""))
-	if err != nil || len(groups[strings.TrimSpace(t.event.GroupID)]) == 0 {
+	managerUsers, managerGroups, draftUsers, draftGroups, effectiveErr := repositoryPublishEffectiveAccess(t.settings, func() map[string]map[string]bool {
+		v, _ := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
+		return v
+	}(), groups)
+	if err != nil || effectiveErr != nil || (t.event.Kind == EventKindGroup && len(draftGroups[strings.TrimSpace(t.event.GroupID)]) == 0 && len(managerGroups[strings.TrimSpace(t.event.GroupID)]) == 0) || (t.event.Kind != EventKindGroup && len(draftUsers[strings.TrimSpace(t.event.UserID)]) == 0 && len(managerUsers[strings.TrimSpace(t.event.UserID)]) == 0) {
 		return result.fail("permission_denied", "当前群聊未配置 Issue 草稿仓库。")
 	}
 	status := strings.ToLower(strings.TrimSpace(configToolString(input, "status")))
@@ -1145,7 +1230,7 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 	if status != "pending" && status != "created" && status != "cancelled" && status != "all" {
 		return result.fail("invalid_input", "status 必须是 pending、created、cancelled 或 all。")
 	}
-	drafts, err := t.plugin.listDrafts(ctx, t.event.GroupID, status)
+	drafts, err := t.plugin.listDrafts(ctx, scope, status)
 	if err != nil {
 		return result.fail("draft_store_failed", "读取 Issue 草稿列表失败。")
 	}
@@ -1161,10 +1246,11 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 
 func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "cancel_draft", Message: "Issue 草稿未取消。"}
-	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
-		return result.fail("permission_denied", "只能在草稿所属群聊中取消。")
+	scope := strings.TrimSpace(t.event.GroupID)
+	if t.event.Kind != EventKindGroup {
+		scope = "private:" + strings.TrimSpace(t.event.UserID)
 	}
-	draft, ok, err := t.plugin.findDraft(ctx, t.event.GroupID, configToolString(input, "draft_id"))
+	draft, ok, err := t.plugin.findDraft(ctx, scope, configToolString(input, "draft_id"))
 	if err != nil {
 		return result.fail("draft_store_failed", "读取 Issue 草稿失败。")
 	}
