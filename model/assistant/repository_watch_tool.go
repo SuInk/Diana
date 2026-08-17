@@ -56,6 +56,7 @@ type RepositoryWatchCreateInput struct {
 	Interval            time.Duration
 	WatchCommits        bool
 	WatchPullRequests   bool
+	WatchIssues         bool
 	WatchReleases       bool
 	WatchStars          bool
 	Platform            string
@@ -74,6 +75,7 @@ type RepositoryWatchUpdateInput struct {
 	Interval            time.Duration
 	WatchCommits        *bool
 	WatchPullRequests   *bool
+	WatchIssues         *bool
 	WatchReleases       *bool
 	WatchStars          *bool
 	Delivery            bool
@@ -142,9 +144,9 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	if interval > maximumScheduleInterval {
 		return Reminder{}, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
 	}
-	selection := repositoryWatchSelection{Commits: input.WatchCommits, PullRequests: input.WatchPullRequests, Releases: input.WatchReleases, Stars: input.WatchStars}
-	if !selection.Commits && !selection.PullRequests && !selection.Releases && !selection.Stars {
-		return Reminder{}, fmt.Errorf("Commit、PR、Release 和 Star 至少启用一项")
+	selection := repositoryWatchSelection{Commits: input.WatchCommits, PullRequests: input.WatchPullRequests, Issues: input.WatchIssues, Releases: input.WatchReleases, Stars: input.WatchStars}
+	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
+		return Reminder{}, fmt.Errorf("Commit、PR、Issue、Release 和 Star 至少启用一项")
 	}
 	baseline, err := plugin.snapshotSelected(ctx, repository, strings.TrimSpace(input.Branch), selection, settings)
 	if err != nil {
@@ -220,6 +222,9 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	if input.WatchPullRequests != nil {
 		values["watch_pull_requests"] = *input.WatchPullRequests
 	}
+	if input.WatchIssues != nil {
+		values["watch_issues"] = *input.WatchIssues
+	}
 	if input.WatchReleases != nil {
 		values["watch_releases"] = *input.WatchReleases
 	}
@@ -285,7 +290,7 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
 	}
-	if !selection.Commits && !selection.PullRequests && !selection.Releases && !selection.Stars {
+	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
 		return Reminder{}, fmt.Errorf("仓库动态监控类型不能全部关闭")
 	}
 	r.reminderMu.Lock()
@@ -308,12 +313,15 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		RepositoryBranch:        branch,
 		WatchCommits:            selection.Commits,
 		WatchPullRequests:       selection.PullRequests,
+		WatchIssues:             selection.Issues,
 		WatchReleases:           selection.Releases,
 		WatchStars:              selection.Stars,
 		LastCommitSHA:           baseline.CommitSHA,
 		LastPullRequestCursor:   baseline.PullRequestCursor,
+		LastIssueCursor:         baseline.IssueCursor,
 		LastReleaseTag:          baseline.ReleaseTag,
 		LastStarCount:           baseline.StarCount,
+		LastStarCheckedAt:       baseline.StarCheckedAt,
 		TriggerAt:               now.Add(interval),
 		IntervalSeconds:         int64(interval / time.Second),
 		CreatedAt:               now,
@@ -375,7 +383,7 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	}
 	selection := repositoryWatchSelection{
 		Commits: current.WatchCommits, PullRequests: current.WatchPullRequests,
-		Releases: current.WatchReleases, Stars: current.WatchStars,
+		Issues: current.WatchIssues, Releases: current.WatchReleases, Stars: current.WatchStars,
 	}
 	if value, present := input["watch_commits"].(bool); present {
 		selection.Commits = value
@@ -383,24 +391,28 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	if value, present := input["watch_pull_requests"].(bool); present {
 		selection.PullRequests = value
 	}
+	if value, present := input["watch_issues"].(bool); present {
+		selection.Issues = value
+	}
 	if value, present := input["watch_releases"].(bool); present {
 		selection.Releases = value
 	}
 	if value, present := input["watch_stars"].(bool); present {
 		selection.Stars = value
 	}
-	if !selection.Commits && !selection.PullRequests && !selection.Releases && !selection.Stars {
+	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
 		return Reminder{}, fmt.Errorf("仓库动态监控类型不能全部关闭")
 	}
 	repositoryChanged := repository != current.Repository || branch != current.RepositoryBranch
 	baselineSelection := repositoryWatchSelection{
 		Commits:      repositoryChanged && selection.Commits || selection.Commits && !current.WatchCommits,
 		PullRequests: repositoryChanged && selection.PullRequests || selection.PullRequests && !current.WatchPullRequests,
+		Issues:       repositoryChanged && selection.Issues || selection.Issues && !current.WatchIssues,
 		Releases:     repositoryChanged && selection.Releases || selection.Releases && !current.WatchReleases,
 		Stars:        repositoryChanged && selection.Stars || selection.Stars && !current.WatchStars,
 	}
 	var baseline repositoryWatchSnapshot
-	if baselineSelection.Commits || baselineSelection.PullRequests || baselineSelection.Releases || baselineSelection.Stars {
+	if baselineSelection.Commits || baselineSelection.PullRequests || baselineSelection.Issues || baselineSelection.Releases || baselineSelection.Stars {
 		baseline, err = plugin.snapshotSelected(ctx, repository, branch, baselineSelection, settings)
 		if err != nil {
 			return Reminder{}, fmt.Errorf("更新仓库基线失败: %w", err)
@@ -416,16 +428,21 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		if baselineSelection.PullRequests {
 			item.LastPullRequestCursor = baseline.PullRequestCursor
 		}
+		if baselineSelection.Issues {
+			item.LastIssueCursor = baseline.IssueCursor
+		}
 		if baselineSelection.Releases {
 			item.LastReleaseTag = baseline.ReleaseTag
 		}
 		if baselineSelection.Stars {
 			item.LastStarCount = baseline.StarCount
+			item.LastStarCheckedAt = baseline.StarCheckedAt
 		}
 		item.Repository = repository
 		item.RepositoryBranch = branch
 		item.WatchCommits = selection.Commits
 		item.WatchPullRequests = selection.PullRequests
+		item.WatchIssues = selection.Issues
 		item.WatchReleases = selection.Releases
 		item.WatchStars = selection.Stars
 		if delivery, _ := input["delivery"].(bool); delivery {
