@@ -349,6 +349,31 @@ func TestRenderRepositoryWatchChangesAlwaysIncludesEveryFetchedCommit(t *testing
 	}
 }
 
+func TestLatestRepositoryWatchChangeKeepsOnlyNewestNotificationItems(t *testing.T) {
+	change := repositoryWatchChange{
+		Commits: []repositoryWatchCommit{
+			{SHA: "new-sha", Title: "newest", PushedAt: time.Date(2026, 8, 17, 12, 34, 56, 0, time.UTC)},
+			{SHA: "old-sha", Title: "older"},
+		},
+		PullRequests: []repositoryWatchPullRequest{{Number: 2}, {Number: 1}},
+		Releases:     []repositoryWatchRelease{{Tag: "v2.0.0"}, {Tag: "v1.0.0"}},
+	}
+
+	latest := latestRepositoryWatchChange(change)
+	if len(latest.Commits) != 1 || latest.Commits[0].SHA != "new-sha" || !latest.Truncated {
+		t.Fatalf("latest commits=%#v", latest.Commits)
+	}
+	if len(latest.PullRequests) != 1 || latest.PullRequests[0].Number != 2 {
+		t.Fatalf("latest pull requests=%#v", latest.PullRequests)
+	}
+	if len(latest.Releases) != 1 || latest.Releases[0].Tag != "v2.0.0" {
+		t.Fatalf("latest releases=%#v", latest.Releases)
+	}
+	if rendered := renderRepositoryWatchChanges(latest); !strings.Contains(rendered, formatRepositoryWatchTime(latest.Commits[0].PushedAt)) {
+		t.Fatalf("rendered timestamp missing: %s", rendered)
+	}
+}
+
 func TestRepositoryWatchPluginDetectsFirstReleaseAfterEmptyBaseline(t *testing.T) {
 	github := &repositoryWatchTestGitHub{
 		commits: []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},

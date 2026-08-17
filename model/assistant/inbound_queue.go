@@ -24,7 +24,7 @@ const (
 	historyInitialDelay     = time.Second
 	historyRetryDelay       = 30 * time.Second
 	historyBaselineOverlap  = 5 * time.Second
-	inboundReplayPadding    = 5 * time.Minute
+	inboundReplayPadding    = 30 * time.Minute
 	inboundCheckpointPeriod = 30 * time.Second
 	// NapCat history calls can stall when several large responses are requested
 	// concurrently. Serialize the small session set to keep backfill complete.
@@ -45,7 +45,7 @@ const (
 
 // InboundReplayWindow is the maximum recovery window. Each reconnect normally
 // uses the observed offline duration plus inboundReplayPadding instead.
-const InboundReplayWindow = 12 * time.Hour
+const InboundReplayWindow = 24 * time.Hour
 
 // InboundQueueItem is a persisted QQ message waiting to be processed.
 type InboundQueueItem struct {
@@ -203,6 +203,10 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	backfillResult := make(chan historyBackfillResult, 1)
 	backfillRunning := false
 	backfillRequested := false
+	// pendingManualFloor keeps a manual rewind alive when it arrives while a
+	// backfill is already running: the completion handler re-applies it after
+	// advancing the baseline, so the queued rerun still covers the window.
+	pendingManualFloor := int64(0)
 	nextBackfillAt := time.Time{}
 	var observedConnectionEpoch uint64
 	var observedDuplicateConnections uint64
@@ -245,13 +249,16 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	ticker := time.NewTicker(inboundPollInterval)
 	defer ticker.Stop()
 	connected := false
+	offlineWasAccountOnly := false
 	lastConnectedAt := time.Time{}
 	nextCheckpointAt := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
 			r.setInboundReady(false)
-			if connected {
+			// A pending or running backfill means the missed window has not been
+			// persisted yet; advancing the checkpoint now would erase it on restart.
+			if connected && !backfillRunning && !backfillRequested && nextBackfillAt.IsZero() {
 				saveRecoveryCheckpoint(time.Now())
 			}
 			workerWG.Wait()
@@ -262,6 +269,28 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			}
 			cancel()
 			return
+		case window := <-r.inboundManualBackfill:
+			status := r.channelStatus()
+			if !channelEffectivelyOnline(status) {
+				r.recordOneBotConnectionLifecycle(ctx, status, "backfill_manual_rejected", "手动回补已跳过：OneBot 连接或 QQ 账号当前不在线", nil)
+				continue
+			}
+			if window <= 0 || window > InboundReplayWindow {
+				window = InboundReplayWindow
+			}
+			now := time.Now()
+			manualCutoff := now.Add(-window)
+			// Only ever lower the replay cutoff: raising it would mark messages a
+			// pending reconnect backfill still owes as stale.
+			if manualCutoff.Before(r.inboundReplayCutoffAt(now)) {
+				r.setInboundReplayCutoff(manualCutoff)
+			}
+			backfillBaseline = rewindHistoryBackfillBaseline(backfillBaseline, manualCutoff.Unix())
+			if backfillRunning && (pendingManualFloor == 0 || manualCutoff.Unix() < pendingManualFloor) {
+				pendingManualFloor = manualCutoff.Unix()
+			}
+			r.recordOneBotConnectionLifecycle(ctx, status, "backfill_manual_requested", fmt.Sprintf("手动回补已触发，覆盖最近 %s 的消息", window), nil)
+			launchBackfill()
 		case result := <-backfillResult:
 			backfillRunning = false
 			if result.err != nil && ctx.Err() == nil {
@@ -272,14 +301,19 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_completed", "OneBot 断线消息回补已完成", nil)
 				nextBackfillAt = time.Time{}
 			}
-			if backfillRequested && ctx.Err() == nil && r.channelStatus().Connected {
-				backfillRequested = false
-				launchBackfill()
-			} else if result.err == nil && len(result.sessions) > 0 {
+			if result.err == nil && len(result.sessions) > 0 {
 				watermark := result.checkedAt - int64(historyBaselineOverlap/time.Second)
 				backfillBaseline = advanceHistoryBackfillBaseline(result.sessions, watermark)
 				backfillBaselineReady = true
 				baselineCapturedAt = result.checkedAt
+			}
+			if pendingManualFloor > 0 {
+				backfillBaseline = rewindHistoryBackfillBaseline(backfillBaseline, pendingManualFloor)
+				pendingManualFloor = 0
+			}
+			if backfillRequested && ctx.Err() == nil && channelEffectivelyOnline(r.channelStatus()) {
+				backfillRequested = false
+				launchBackfill()
 			}
 		case <-ticker.C:
 			status := r.channelStatus()
@@ -288,15 +322,23 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 				r.recordOneBotConnectionLifecycle(ctx, status, "duplicate_client_conflict", "已拒绝重复 OneBot 客户端连接", nil)
 				observedDuplicateConnections = status.DuplicateConnections
 			}
-			if !status.Connected {
+			// A banned or logged-out QQ account misses messages exactly like a
+			// dropped WebSocket, so heartbeat-reported account state shares the
+			// disconnect/reconnect path instead of only reaching the status page.
+			if !channelEffectivelyOnline(status) {
 				if connected {
-					r.recordOneBotConnectionLifecycle(ctx, status, "disconnected", "OneBot 客户端已断开", nil)
+					event, message := "disconnected", "OneBot 客户端已断开"
+					if status.Connected {
+						event, message = "account_offline", "QQ 账号已离线或状态异常（连接仍在），恢复后将回补此期间消息"
+					}
+					r.recordOneBotConnectionLifecycle(ctx, status, event, message, nil)
 					disconnectedAt = lastConnectedAt
 					if disconnectedAt.IsZero() {
 						disconnectedAt = now
 					}
 					saveRecoveryCheckpoint(disconnectedAt)
 				}
+				offlineWasAccountOnly = status.Connected
 				connected = false
 				r.setInboundReady(false)
 				continue
@@ -304,7 +346,8 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			epochChanged := status.ConnectionEpoch != 0 && observedConnectionEpoch != 0 && status.ConnectionEpoch != observedConnectionEpoch
 			if connected && !epochChanged {
 				lastConnectedAt = now
-				if nextCheckpointAt.IsZero() || !now.Before(nextCheckpointAt) {
+				recoveryDebt := backfillRunning || backfillRequested || !nextBackfillAt.IsZero()
+				if !recoveryDebt && (nextCheckpointAt.IsZero() || !now.Before(nextCheckpointAt)) {
 					saveRecoveryCheckpoint(now)
 					nextCheckpointAt = now.Add(inboundCheckpointPeriod)
 				}
@@ -325,8 +368,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			connected = true
 			lastConnectedAt = now
 			disconnectedAt = now
-			saveRecoveryCheckpoint(now)
-			nextCheckpointAt = now.Add(inboundCheckpointPeriod)
+			previousEpoch := observedConnectionEpoch
 			if status.ConnectionEpoch != 0 {
 				observedConnectionEpoch = status.ConnectionEpoch
 			}
@@ -334,11 +376,14 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			r.wakeInboundWorkers()
 			if wasConnected {
 				r.recordOneBotConnectionLifecycle(ctx, status, "reconnected", "OneBot 连接 epoch 已变化，已安排消息回补", nil)
+			} else if offlineWasAccountOnly && status.ConnectionEpoch == previousEpoch {
+				r.recordOneBotConnectionLifecycle(ctx, status, "account_recovered", "QQ 账号已恢复在线，已安排消息回补", nil)
 			} else if status.ConnectionEpoch > 1 {
 				r.recordOneBotConnectionLifecycle(ctx, status, "reconnected", "OneBot 客户端已重新连接", nil)
 			} else {
 				r.recordOneBotConnectionLifecycle(ctx, status, "connection_opened", "OneBot 客户端已连接", nil)
 			}
+			offlineWasAccountOnly = false
 			if nextBackfillAt.IsZero() {
 				nextBackfillAt = now.Add(historyInitialDelay)
 			}
@@ -699,6 +744,46 @@ func (r *Runtime) channelStatus() ChannelStatus {
 	return channel.Status()
 }
 
+// RequestHistoryBackfill schedules a manual history backfill covering the given
+// window, capped at InboundReplayWindow. It returns once the request is queued;
+// progress and outcome surface as qqbot.backfill_* application log entries.
+func (r *Runtime) RequestHistoryBackfill(window time.Duration) error {
+	r.mu.RLock()
+	store := r.inboundStore
+	running := r.running
+	r.mu.RUnlock()
+	if store == nil {
+		return errors.New("qqbot: durable inbound store is not configured")
+	}
+	if !running {
+		return errors.New("qqbot: runtime is not running")
+	}
+	if !channelEffectivelyOnline(r.channelStatus()) {
+		return errors.New("qqbot: onebot connection or QQ account is offline")
+	}
+	if window <= 0 || window > InboundReplayWindow {
+		window = InboundReplayWindow
+	}
+	select {
+	case r.inboundManualBackfill <- window:
+		return nil
+	default:
+		return errors.New("qqbot: a manual backfill request is already pending")
+	}
+}
+
+// channelAccountDown reports a heartbeat-confirmed unhealthy QQ account: the
+// transport may be fine while NapCat cannot receive messages for the account.
+func channelAccountDown(status ChannelStatus) bool {
+	return status.AccountStatusKnown && (!status.AccountOnline || !status.AccountGood)
+}
+
+// channelEffectivelyOnline requires both a live transport and a healthy account
+// before inbound processing or history backfill may run.
+func channelEffectivelyOnline(status ChannelStatus) bool {
+	return status.Connected && !channelAccountDown(status)
+}
+
 func (r *Runtime) recordOneBotConnectionLifecycle(ctx context.Context, status ChannelStatus, event string, message string, eventErr error) {
 	writer := r.appLogWriter()
 	if writer == nil {
@@ -744,6 +829,18 @@ func (r *Runtime) recordOneBotConnectionLifecycle(ctx context.Context, status Ch
 	})
 }
 
+// rewindHistoryBackfillBaseline 把每个会话的水位下调到 floor，让下一次回补重新
+// 覆盖该时间段；已入库的消息由入站去重挡住，不会重复处理。
+func rewindHistoryBackfillBaseline(sessions []HistorySession, floor int64) []HistorySession {
+	out := append([]HistorySession(nil), sessions...)
+	for index := range out {
+		if out[index].LastEventTime > floor {
+			out[index].LastEventTime = floor
+		}
+	}
+	return out
+}
+
 func advanceHistoryBackfillBaseline(sessions []HistorySession, watermark int64) []HistorySession {
 	out := append([]HistorySession(nil), sessions...)
 	for index := range out {
@@ -780,7 +877,7 @@ func (r *Runtime) inboundProcessingReady() bool {
 	r.inboundReadyMu.RLock()
 	ready := r.inboundReady
 	r.inboundReadyMu.RUnlock()
-	return ready && r.channelStatus().Connected
+	return ready && channelEffectivelyOnline(r.channelStatus())
 }
 
 func (r *Runtime) wakeInboundWorkers() {
