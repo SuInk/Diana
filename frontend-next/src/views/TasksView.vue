@@ -93,7 +93,7 @@
                   分支 <strong class="mono">{{ task.repository_branch }}</strong>
                 </span>
                 <span>
-                  监控 {{ [task.watch_commits ? "Commit" : "", task.watch_pull_requests ? "PR" : "", task.watch_releases ? "Release" : "", task.watch_stars ? "Star" : ""].filter(Boolean).join(" + ") }}
+                  监控 {{ [task.watch_commits ? "Commit" : "", task.watch_pull_requests ? "PR" : "", task.watch_issues ? "Issue" : "", task.watch_releases ? "Release" : "", task.watch_stars ? "Star" : ""].filter(Boolean).join(" + ") }}
                 </span>
                 <span v-if="task.last_commit_sha">
                   Commit <strong class="mono">{{ task.last_commit_sha.slice(0, 8) }}</strong>
