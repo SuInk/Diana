@@ -272,9 +272,13 @@ const shortCommit = computed(() => {
 async function loadUpdates(): Promise<void> {
   loading.value = true;
   try {
-    systemVersion.value = await getSystemVersion();
-    deploymentMode.value = systemVersion.value.deployment_mode;
-    updateStatus.value = systemVersion.value.update_supported ? await getUpdateStatus() : null;
+    const [versionResult, statusResult] = await Promise.all([
+      getSystemVersion(),
+      getUpdateStatus().catch(() => null)
+    ]);
+    systemVersion.value = versionResult;
+    deploymentMode.value = versionResult.deployment_mode;
+    updateStatus.value = versionResult.update_supported ? statusResult : null;
   } catch {
     updateStatus.value = null;
   } finally {

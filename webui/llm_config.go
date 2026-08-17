@@ -68,6 +68,8 @@ type llmModelsPayload struct {
 
 const minLLMAPIKeyChars = 8
 
+var llmModelListTimeout = 8 * time.Second
+
 // NewLLMConfigHandler 创建 LLMConfigHandler 实例。
 func NewLLMConfigHandler(store LLMProfileStore) *LLMConfigHandler {
 	return NewLLMConfigHandlerWithFactory(store, func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
@@ -418,7 +420,9 @@ func (h *LLMConfigHandler) models(c *gin.Context) {
 		}
 	}
 
-	models, err := h.listModels(c.Request.Context(), cfg)
+	listCtx, cancel := context.WithTimeout(c.Request.Context(), llmModelListTimeout)
+	defer cancel()
+	models, err := h.listModels(listCtx, cfg)
 	if err != nil {
 		h.writeError(c, 502, "llm.models.list", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
