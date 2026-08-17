@@ -28,10 +28,11 @@ type OneBotReverseServer struct {
 	handler EventHandler
 	ctx     context.Context
 
-	connMu    sync.RWMutex
-	writeMu   sync.Mutex
-	conn      *websocket.Conn
-	accepting bool
+	connMu     sync.RWMutex
+	writeMu    sync.Mutex
+	conn       *websocket.Conn
+	connOrigin string
+	accepting  bool
 	// acceptGeneration invalidates an in-flight WebSocket upgrade when the
 	// server closes before that upgrade has installed its connection.
 	acceptGeneration uint64
@@ -131,6 +132,7 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 	s.accepting = false
 	s.conn = conn
+	s.connOrigin = oneBotRequestOrigin(r)
 	now := time.Now()
 	s.status.Connected = true
 	s.status.AccountStatusKnown = false
@@ -214,6 +216,45 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 	}
 }
 
+// ConnectionOrigin 返回当前反向连接握手时客户端使用的服务地址，例如
+// "http://host.docker.internal:18080"。桥能用这个地址完成 ws 握手，就一定
+// 也能用它回源拉取本服务的媒体 URL；没有活跃连接时返回空串。
+func (s *OneBotReverseServer) ConnectionOrigin() string {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	if s.conn == nil {
+		return ""
+	}
+	return s.connOrigin
+}
+
+func oneBotRequestOrigin(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		return ""
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + host
+}
+
+// IsOneBotReverseHandshake 判断请求是否为 OneBot 反向 WebSocket 握手。
+// NapCat 系客户端握手时会带 X-Self-ID / X-Client-Role 头，据此可以在任意
+// 路径上识别（包括用户只填 ws://host:port 裸地址时打到 "/" 的情况），
+// 不依赖固定的 /onebot/v11/ws 后缀。鉴权仍由 server 自身的 token 校验负责。
+func IsOneBotReverseHandshake(r *http.Request) bool {
+	if r == nil || !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return false
+	}
+	return strings.TrimSpace(r.Header.Get("X-Self-ID")) != "" ||
+		strings.TrimSpace(r.Header.Get("X-Client-Role")) != ""
+}
+
 // Status 返回反向 OneBot server 状态。
 func (s *OneBotReverseServer) Status() ChannelStatus {
 	s.connMu.RLock()
@@ -234,6 +275,7 @@ func (s *OneBotReverseServer) Close() error {
 	}
 	err := s.conn.Close()
 	s.conn = nil
+	s.connOrigin = ""
 	now := time.Now()
 	s.status.Connected = false
 	s.status.ConnectionOwner = ""
@@ -264,6 +306,7 @@ func (s *OneBotReverseServer) disconnectIfCurrent(conn *websocket.Conn, lastErro
 		return
 	}
 	s.conn = nil
+	s.connOrigin = ""
 	now := time.Now()
 	s.status.Connected = false
 	s.status.LastError = lastError

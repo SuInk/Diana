@@ -233,6 +233,12 @@ func main() {
 		"http://"+net.JoinHostPort(displayHost(host), port)+"/media/resolver",
 	)
 	localMediaStore := assistant.NewLocalMediaStore(localMediaBaseURL)
+	if strings.TrimSpace(os.Getenv("DIANA_LOCAL_MEDIA_BASE_URL")) == "" {
+		// 未显式配置媒体基址时，按反向 ws 握手时客户端使用的地址动态拼
+		// 媒体 URL：桥在容器或别的机器上时（如 host.docker.internal），
+		// 能连上 ws 的地址一定也能回源取媒体，用户只需配置 ws 地址。
+		localMediaStore.SetOriginProvider(oneBotServer.ConnectionOrigin)
+	}
 	botRuntime.SetLocalMediaSharer(localMediaStore)
 	// 入站图片下载后持久化，识图一律用本地文件的 base64，不依赖模型服务商
 	// 能否访问聊天平台那些短时效地址。
@@ -317,6 +323,17 @@ func main() {
 		}
 		_, _ = fmt.Fprintln(os.Stderr)
 	}
+	// 反向 ws 客户端可能只填裸地址（如 ws://host:18080，没有 /onebot/v11/ws
+	// 后缀）。带 OneBot 握手特征的升级请求不论路径都直接交给 oneBotServer，
+	// 它自带 access token 鉴权；必须放在 WebUI 鉴权中间件之前。
+	router.Use(func(c *gin.Context) {
+		if assistant.IsOneBotReverseHandshake(c.Request) {
+			oneBotServer.ServeHTTP(c.Writer, c.Request)
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
 	router.Use(authManager.Middleware())
 	authHandler := webui.NewAuthHandler(authManager)
 	authHandler.SetLogStore(sqliteStore)

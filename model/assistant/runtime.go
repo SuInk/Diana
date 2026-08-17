@@ -6753,8 +6753,14 @@ func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEven
 	if r.channel == nil {
 		return fmt.Errorf("qqbot: channel is not configured")
 	}
+	file := upload.Path
+	// 桥可能运行在容器或另一台机器上，宿主机路径对它不可见；能生成共享
+	// URL 时优先传 URL，桥端会自行下载后再上传。
+	if sharedURL, ok := r.shareLocalMedia(upload.Path); ok {
+		file = sharedURL
+	}
 	params := map[string]any{
-		"file": upload.Path,
+		"file": file,
 		"name": upload.Name,
 	}
 	action := "upload_private_file"
