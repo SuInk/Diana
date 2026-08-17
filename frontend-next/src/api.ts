@@ -756,6 +756,13 @@ export function stopQQBot(): Promise<QQBotStatus> {
   return requestJSON<QQBotStatus>("/api/assistant/stop", { method: "POST" });
 }
 
+export function requestQQBotBackfill(hours?: number): Promise<{ requested: boolean; window_hours: number }> {
+  return requestJSON<{ requested: boolean; window_hours: number }>("/api/assistant/backfill", {
+    method: "POST",
+    body: JSON.stringify(hours && hours > 0 ? { hours } : {})
+  });
+}
+
 export function getQQBotFeatures(): Promise<QQBotFeatureFlags> {
   return requestJSON<QQBotFeatureFlags>("/api/assistant/features");
 }

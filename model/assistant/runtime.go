@@ -200,7 +200,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
 	case "ignored_stale":
-		return "not_replied", "消息早于本次离线恢复窗口（按离线时长并额外覆盖 5 分钟，最长 12 小时），为避免补发过期回复而忽略", false
+		return "not_replied", "消息早于本次离线恢复窗口（按离线时长并额外覆盖 30 分钟，最长 24 小时），为避免补发过期回复而忽略", false
 	case "ignored_policy":
 		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
 	case "superseded_proactive", "superseded_passive":
@@ -272,6 +272,7 @@ type Runtime struct {
 	reminderMu            sync.Mutex
 	activeReminders       map[string]struct{}
 	inboundWake           chan struct{}
+	inboundManualBackfill chan time.Duration
 	inboundDone           chan struct{}
 	memoryWake            chan struct{}
 	memoryDone            chan struct{}
@@ -472,6 +473,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		agentRegistryCache:    map[string]*agent.ToolRegistry{},
 		quietNotices:          map[string]time.Time{},
 		inboundWake:           make(chan struct{}, 1),
+		inboundManualBackfill: make(chan time.Duration, 1),
 		memoryWake:            make(chan struct{}, 1),
 		subagentTasks:         map[string]activeSubagentTask{},
 		subagentSem:           make(chan struct{}, defaultSubagentTaskConcurrency),
@@ -1419,11 +1421,23 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		r.setError(err.Error())
 		if errors.Is(err, errOutboundSend) {
 			switch {
+			case errors.Is(err, errOutboundChannelOffline):
+				// 通道离线导致的发送失败交回队列，恢复后重新生成并发送。
+				setEventRecordOutcome(&record, "processing_error")
+				r.record(record)
+				return "", err
 			case errors.Is(err, errGroupSendUnavailable):
 				setEventRecordOutcome(&record, "ignored_unavailable_group")
 				r.record(record)
 				return "ignored_unavailable_group", nil
 			case errors.Is(err, errOutboundDeliveryDropped):
+				// 只有通道在线时仍持续失败才是终态；离线期间的丢弃说明失败
+				// 窗口是被断连耗尽的，恢复后必须把这条回复补出去。
+				if !channelEffectivelyOnline(r.channelStatus()) {
+					setEventRecordOutcome(&record, "processing_error")
+					r.record(record)
+					return "", err
+				}
 				setEventRecordOutcome(&record, "dropped_outbound_delivery")
 				r.record(record)
 				return "dropped_outbound_delivery", nil
@@ -8784,6 +8798,9 @@ func (r *Runtime) sendRepositoryWatch(ctx context.Context, item Reminder, messag
 }
 
 func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Reminder, change repositoryWatchChange) (string, error) {
+	// A polling interval can contain several commits/releases. Keep the cursor
+	// moving to the newest state, but make the user-facing notification concise.
+	change = latestRepositoryWatchChange(change)
 	source := reminderSourceEvent(item)
 	cfg := r.effectiveConfigForEvent(source)
 	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
@@ -8833,6 +8850,9 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 			if author := strings.TrimSpace(commit.Author); author != "" {
 				line += " · " + author
 			}
+			if pushedAt := formatRepositoryWatchTime(commit.PushedAt); pushedAt != "" {
+				line += " · " + pushedAt
+			}
 			if url := strings.TrimSpace(commit.URL); url != "" {
 				line += "\n" + url
 			}
@@ -8850,6 +8870,9 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 			if author := strings.TrimSpace(pullRequest.Author); author != "" {
 				line += " · " + author
 			}
+			if updatedAt := formatRepositoryWatchTime(pullRequest.UpdatedAt); updatedAt != "" {
+				line += " · " + updatedAt
+			}
 			if url := strings.TrimSpace(pullRequest.URL); url != "" {
 				line += "\n" + url
 			}
@@ -8865,6 +8888,9 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 				label += ": " + name
 			}
 			line := "- " + label
+			if publishedAt := formatRepositoryWatchTime(release.PublishedAt); publishedAt != "" {
+				line += " · " + publishedAt
+			}
 			if url := strings.TrimSpace(release.URL); url != "" {
 				line += "\n" + url
 			}
@@ -8881,6 +8907,28 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+func latestRepositoryWatchChange(change repositoryWatchChange) repositoryWatchChange {
+	latest := change
+	if len(change.Commits) > 1 {
+		latest.Commits = append([]repositoryWatchCommit(nil), change.Commits[0])
+		latest.Truncated = true
+	}
+	if len(change.PullRequests) > 1 {
+		latest.PullRequests = append([]repositoryWatchPullRequest(nil), change.PullRequests[0])
+	}
+	if len(change.Releases) > 1 {
+		latest.Releases = append([]repositoryWatchRelease(nil), change.Releases[0])
+	}
+	return latest
+}
+
+func formatRepositoryWatchTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Local().Format("2006-01-02 15:04:05")
 }
 
 func repositoryWatchPullStatusLabel(status string) string {
