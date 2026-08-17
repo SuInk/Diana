@@ -4,11 +4,13 @@
 package webui
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 
@@ -51,15 +53,8 @@ func (h *QQBotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 func (h *QQBotHandler) listConsoleGroups(c *gin.Context) {
 	base := h.runtime.Config()
 	set := h.groupConfigs.Groups()
-	liveGroups := []qqbotAutoGroupInfo{}
-	liveAvailable := false
-	warning := ""
-	if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_group_list", map[string]any{"no_cache": true}); err != nil {
-		warning = "机器人尚未连接，暂时只显示已保存的群配置"
-	} else {
-		liveGroups = autoGroupsFromOneBotData(data)
-		liveAvailable = true
-	}
+	refresh := queryBool(c.Query("refresh"))
+	liveGroups, liveAvailable, warning := h.liveConsoleGroups(c.Request.Context(), refresh)
 	groups := mergeConsoleGroupItems(base, set, liveGroups)
 	for index := range groups {
 		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
@@ -70,6 +65,69 @@ func (h *QQBotHandler) listConsoleGroups(c *gin.Context) {
 		LiveAvailable: liveAvailable,
 		Warning:       warning,
 	})
+}
+
+var (
+	consoleLiveGroupTimeout  = 2500 * time.Millisecond
+	consoleLiveGroupCacheTTL = 20 * time.Second
+)
+
+type liveGroupListCache struct {
+	groups    []qqbotAutoGroupInfo
+	available bool
+	warning   string
+	fetchedAt time.Time
+}
+
+func cloneLiveGroups(groups []qqbotAutoGroupInfo) []qqbotAutoGroupInfo {
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make([]qqbotAutoGroupInfo, len(groups))
+	copy(out, groups)
+	return out
+}
+
+func (h *QQBotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]qqbotAutoGroupInfo, bool, string) {
+	if h == nil {
+		return nil, false, "机器人尚未连接，暂时只显示已保存的群配置"
+	}
+	if !refresh {
+		h.liveGroupMu.Lock()
+		cached := h.liveGroupCache
+		h.liveGroupMu.Unlock()
+		if !cached.fetchedAt.IsZero() && time.Since(cached.fetchedAt) < consoleLiveGroupCacheTTL {
+			return cloneLiveGroups(cached.groups), cached.available, cached.warning
+		}
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	callCtx, cancel := context.WithTimeout(ctx, consoleLiveGroupTimeout)
+	defer cancel()
+	params := map[string]any{}
+	if refresh {
+		params["no_cache"] = true
+	}
+	data, err := h.runtime.CallOneBotAPI(callCtx, "get_group_list", params)
+	if err != nil {
+		warning := "机器人尚未连接，暂时只显示已保存的群配置"
+		if callCtx.Err() != nil {
+			warning = "同步群列表超时，暂时只显示已保存的群配置"
+		}
+		return nil, false, warning
+	}
+	liveGroups := autoGroupsFromOneBotData(data)
+	h.liveGroupMu.Lock()
+	h.liveGroupCache = liveGroupListCache{
+		groups:    cloneLiveGroups(liveGroups),
+		available: true,
+		warning:   "",
+		fetchedAt: time.Now(),
+	}
+	h.liveGroupMu.Unlock()
+	return liveGroups, true, ""
 }
 
 func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []qqbotAutoGroupInfo) []consoleGroupItem {

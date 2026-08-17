@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -70,6 +71,8 @@ type QQBotHandler struct {
 	logs                      AppLogWriter
 	features                  QQBotFeatureFlags
 	installResolverDependency func(context.Context, string) (assistant.ResolverDependencyInstallResult, error)
+	liveGroupMu               sync.Mutex
+	liveGroupCache            liveGroupListCache
 }
 
 type QQBotFeatureFlags struct {
@@ -587,7 +590,11 @@ func (h *QQBotHandler) listPlugins(c *gin.Context) {
 // pluginDependencies 返回解析器外部依赖的探测结果，让控制台能直接看出
 // yt-dlp / ffmpeg / node 是否齐全，而不是等用户发链接后才报错。
 func (h *QQBotHandler) pluginDependencies(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"resolver": assistant.RefreshResolverDependencies()})
+	deps := assistant.ResolverDependencies()
+	if queryBool(c.Query("refresh")) {
+		deps = assistant.RefreshResolverDependencies()
+	}
+	c.JSON(http.StatusOK, gin.H{"resolver": deps})
 }
 
 // installPluginDependency 安装链接解析插件白名单中的外部命令。
