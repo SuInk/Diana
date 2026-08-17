@@ -882,46 +882,43 @@ func (t *WebSearchTool) runTavily(ctx context.Context, provider webSearchProvide
 }
 
 func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string, error) {
-	maxBytes := t.maxBytes
-	if maxBytes <= 0 {
-		maxBytes = DefaultMaxToolOutputChars
+	maxChars := t.maxBytes
+	if maxChars <= 0 {
+		maxChars = DefaultMaxToolOutputChars
 	}
-	result.Content = truncateRunes(strings.TrimSpace(result.Content), maxBytes)
-	body, err := json.MarshalIndent(result, "", "  ")
+
+	contentRunes := []rune(strings.TrimSpace(result.Content))
+	result.Content = ""
+	best, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	if len([]rune(string(body))) > maxBytes && result.Content != "" {
-		content := result.Content
-		result.Content = ""
-		overhead, marshalErr := json.MarshalIndent(result, "", "  ")
+	if len(contentRunes) == 0 || len([]rune(string(best))) >= maxChars {
+		return string(best), nil
+	}
+
+	// JSON escaping can expand characters such as '<' to six bytes. Find the
+	// largest content prefix that fits the final serialized output instead of
+	// repeatedly estimating how much text to remove.
+	low, high := 1, min(len(contentRunes), maxChars)
+	for low <= high {
+		mid := low + (high-low)/2
+		result.Content = string(contentRunes[:mid])
+		if mid < len(contentRunes) {
+			result.Content += "\n...truncated..."
+		}
+		candidate, marshalErr := json.MarshalIndent(result, "", "  ")
 		if marshalErr != nil {
 			return "", marshalErr
 		}
-		contentBudget := maxBytes - len([]rune(string(overhead))) - 64
-		if contentBudget > 0 {
-			result.Content = truncateRunes(content, contentBudget)
-		}
-		body, err = json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return "", err
-		}
-	}
-	for len([]rune(string(body))) > maxBytes && result.Content != "" {
-		excess := len([]rune(string(body))) - maxBytes
-		contentRunes := len([]rune(result.Content))
-		contentLimit := contentRunes - excess - 8
-		if contentLimit <= 0 {
-			result.Content = ""
+		if len([]rune(string(candidate))) <= maxChars {
+			best = candidate
+			low = mid + 1
 		} else {
-			result.Content = truncateRunes(result.Content, contentLimit)
-		}
-		body, err = json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return "", err
+			high = mid - 1
 		}
 	}
-	return string(body), nil
+	return string(best), nil
 }
 
 func mergeWebSearchOutcome(current, next string) string {

@@ -30,6 +30,10 @@ type PluginManifest struct {
 	Description string `json:"description"`
 	Official    bool   `json:"official"`
 	BuiltIn     bool   `json:"built_in"`
+	// CanAskAgent allows plugin-originated events or context to start a formal
+	// Agent reply turn. It is opt-in so ordinary plugins cannot make the bot
+	// speak merely by returning context.
+	CanAskAgent bool `json:"can_ask_agent,omitempty"`
 	// Internal 标记已经内化为产品能力的插件：始终启用，且不出现在插件页。
 	// 这类能力是其它功能的前提，暴露成一个可关的开关只会制造「别的插件莫名
 	// 其妙不工作」的排查成本。
@@ -194,6 +198,7 @@ const (
 	resolverPluginID         = "official.nonebot-plugin-resolver-go"
 	messageHistoryPluginID   = "official.message-history"
 	sandboxedBrowserPluginID = "official.sandboxed-browser-renderer"
+	pluginSettingAskAgent    = "ask_agent"
 )
 
 // NewPluginManager 创建插件管理器并登记插件目录。
@@ -578,6 +583,28 @@ func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error)
 	return state, nil
 }
 
+// CanAskAgent reports whether an installed, enabled plugin may turn a
+// plugin-originated background event into a formal Agent reply turn.
+func (m *PluginManager) CanAskAgent(id string, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	plugin, ok := m.catalog[id]
+	if !ok {
+		return false
+	}
+	state := m.states[id]
+	enabled := state.Enabled
+	if override, overridden := enabledOverrides[id]; overridden {
+		enabled = override
+	}
+	manifest := plugin.Manifest()
+	settings := effectivePluginSettingsForGroup(manifest.Settings, state.Settings, settingOverrides[id])
+	return state.Installed && enabled && manifest.CanAskAgent && settings.Bool(pluginSettingAskAgent, true)
+}
+
 // Run 依次执行已安装且启用的插件。
 func (m *PluginManager) Run(ctx context.Context, req PluginRequest) []PluginResponse {
 	return m.RunWithOverrides(ctx, req, nil)
@@ -894,8 +921,16 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频。",
 		Official:    true,
 		BuiltIn:     true,
+		CanAskAgent: true,
 		Permissions: []string{"network:http", "message:read", "message:write", "filesystem:temp", "process:media"},
 		Settings: []PluginSettingSpec{
+			{
+				Key:         pluginSettingAskAgent,
+				Label:       "允许 Agent 回复",
+				Description: "允许链接解析结果主动进入正式 Agent 回复流程；关闭后仍会解析和发送确定性结果。",
+				Type:        PluginSettingTypeBool,
+				Default:     true,
+			},
 			{
 				Key:         resolverSettingDownloadMedia,
 				Label:       "下载并发送媒体",

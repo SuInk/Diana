@@ -149,6 +149,18 @@ func TestDefaultPluginManagerIncludesRepositoryWatch(t *testing.T) {
 	if !enabled || plugin == nil || settings.Int(repositoryWatchSettingTimeout, 0) != 20 {
 		t.Fatalf("plugin=%T settings=%#v enabled=%v", plugin, settings, enabled)
 	}
+	if !manager.CanAskAgent(repositoryWatchPluginID, nil, nil) || !manager.CanAskAgent(resolverPluginID, nil, nil) {
+		t.Fatal("repository watch and resolver must opt into Agent replies")
+	}
+	if manager.CanAskAgent(messageHistoryPluginID, nil, nil) {
+		t.Fatal("plugins without the capability must not expose Agent replies")
+	}
+	if _, err := manager.UpdateSettings(repositoryWatchPluginID, map[string]any{pluginSettingAskAgent: false}); err != nil {
+		t.Fatal(err)
+	}
+	if manager.CanAskAgent(repositoryWatchPluginID, nil, nil) {
+		t.Fatal("disabled repository Agent reply setting was ignored")
+	}
 }
 
 func TestRepositoryWatchIntervalPolicyDependsOnToken(t *testing.T) {
@@ -270,7 +282,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		t.Fatalf("snapshot=%#v", change.Snapshot)
 	}
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"Commit · 1", "PR · 1", "#2 [已合并]", "Release · 1", "Star", "10 → 13（+3）"} {
+	for _, want := range []string{"Commit（main）", "PR #2（已合并）", "Release v1.1.0", "Star +3", "10 → 13"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -342,9 +354,37 @@ func TestRenderRepositoryWatchChangesAlwaysIncludesEveryFetchedCommit(t *testing
 		Truncated: true,
 	}
 	result := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"Commit · 3", "1111111 first", "2222222 second", "3333333 third", "Release · 1", "v1.2.3: Stable", "本次只展示了部分最新提交。"} {
+	for _, want := range []string{"Commit（默认分支）", "1111111 first", "2222222 second", "3333333 third", "Release v1.2.3", "Stable", "本次只展示了部分最新提交。"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, result)
+		}
+	}
+}
+
+func TestRenderRepositoryWatchChangesUsesQQFriendlyIssueAndStarFormat(t *testing.T) {
+	change := repositoryWatchChange{
+		Issues: []repositoryWatchIssue{{
+			Number: 128, Title: "修复通知格式", Author: "alice", Status: "opened",
+			URL: "https://github.com/acme/demo/issues/128", CreatedAt: time.Date(2026, 8, 18, 0, 16, 29, 0, time.UTC),
+		}},
+		Stars: &repositoryWatchStarChange{
+			Previous: 128, Current: 135, Delta: 7,
+			AddedUsers: []repositoryWatchStargazer{
+				{Login: "alice"}, {Login: "bob"}, {Login: "carol"}, {Login: "dave"}, {Login: "eve"}, {Login: "frank"}, {Login: "grace"},
+			},
+			DetectedAt: time.Date(2026, 8, 18, 0, 30, 0, 0, time.UTC), URL: "https://github.com/acme/demo",
+		},
+	}
+
+	rendered := renderRepositoryWatchChanges(change)
+	for _, want := range []string{"Issue #128（新建）", "创建于", "Star +7", "@alice、@bob、@carol、@dave、@eve 等 2 人", "128 → 135"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered changes missing %q: %s", want, rendered)
+		}
+	}
+	for _, unwanted := range []string{"###", "**", "`"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("rendered changes contain markdown %q: %s", unwanted, rendered)
 		}
 	}
 }
@@ -611,15 +651,26 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		sentText = fmt.Sprint(channel.calls)
 	}
 	delivered := len(channel.sent) > 0 || len(channel.calls) > 0 && channel.calls[0].action == "send_group_forward_msg"
-	if !delivered || !strings.Contains(sentText, "Commit · 1") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR · 1") || !strings.Contains(sentText, "Release · 1") || !strings.Contains(sentText, "Star") || !strings.Contains(sentText, "v1.1.0") || strings.Contains(sentText, "watch-2") {
+	if !delivered || !strings.Contains(sentText, "Commit（默认分支）") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
 		t.Fatalf("sent=%#v calls=%#v item=%#v requests=%#v", channel.sent, channel.calls, store.items[0], provider.requests)
 	}
 	item := store.items[0]
 	if item.LastCommitSHA != "new-sha" || item.LastPullRequestCursor == "" || item.LastReleaseTag != "v1.1.0" || item.LastStarCount != 8 || item.PendingDelivery != "" || item.ConsecutiveFailures != 0 {
 		t.Fatalf("item=%#v", item)
 	}
-	if len(provider.requests) != 1 || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "classified notifications") || !requestMessagesContain(provider.requests[0].Messages, "repository_watch_plugin.go") || !requestMessagesContain(provider.requests[0].Messages, "+classified") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") || !requestMessagesContain(provider.requests[0].Messages, "本群限定的自然人设") || !requestMessagesContain(provider.requests[0].Messages, "自然反应或评价") || !requestMessagesContain(provider.requests[0].Messages, "不要无依据吹捧") || requestMessagesContain(provider.requests[0].Messages, "watch-2") {
+	if len(provider.requests) != 1 || len(provider.requests[0].Tools) == 0 || !requestMessagesContain(provider.requests[0].Messages, "【external_event】") || !requestMessagesContain(provider.requests[0].Messages, "source: github.repository_watch") || !requestMessagesContain(provider.requests[0].Messages, "trust: trusted_service_data") || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "classified notifications") || !requestMessagesContain(provider.requests[0].Messages, "repository_watch_plugin.go") || !requestMessagesContain(provider.requests[0].Messages, "+classified") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") || !requestMessagesContain(provider.requests[0].Messages, "本群限定的自然人设") || !requestMessagesContain(provider.requests[0].Messages, "不得评价好坏") || requestMessagesContain(provider.requests[0].Messages, "自然反应或评价") || requestMessagesContain(provider.requests[0].Messages, "watch-2") {
 		t.Fatalf("requests=%#v", provider.requests)
+	}
+	history := runtime.contextHistory(MessageEvent{Kind: EventKindGroup, GroupID: "123"})
+	foundExternalEvent := false
+	for _, event := range history {
+		if event.ExternalEvent != nil && event.ExternalEvent.Source == "github.repository_watch" && event.ExternalEvent.Trust == "trusted_service_data" {
+			foundExternalEvent = true
+			break
+		}
+	}
+	if !foundExternalEvent {
+		t.Fatalf("repository external event was not persisted in conversation history: %#v", history)
 	}
 }
 
