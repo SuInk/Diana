@@ -114,6 +114,79 @@ func TestGroupSendFailureRequiresVerifiedGroupList(t *testing.T) {
 	}
 }
 
+func TestGroupOutboundGateDefersWhileChannelOffline(t *testing.T) {
+	scripted := newScriptedBackoffChannel("123456")
+	channel := &statusOverrideChannel{Channel: scripted}
+	channel.setStatus(ChannelStatus{Connected: false})
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	ctx := withOutboundDeliveryPolicy(context.Background(), fastOutboundDeliveryPolicy())
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "offline-1"}
+
+	err := runtime.send(ctx, event, "断连期间生成的回复")
+	if !errors.Is(err, errOutboundChannelOffline) {
+		t.Fatalf("offline send error = %v", err)
+	}
+	if errors.Is(err, errOutboundDeliveryDropped) || errors.Is(err, errGroupSendUnavailable) {
+		t.Fatalf("offline send used a terminal classification: %v", err)
+	}
+	if got := len(scripted.attemptTexts("123456")); got != 0 {
+		t.Fatalf("offline send reached NapCat %d times", got)
+	}
+
+	// 账号风控（WS 正常但账号异常）同样延后发送而不是消耗失败窗口。
+	channel.setStatus(ChannelStatus{Connected: true, AccountStatusKnown: true, AccountOnline: false})
+	if err := runtime.send(ctx, event, "封控期间生成的回复"); !errors.Is(err, errOutboundChannelOffline) {
+		t.Fatalf("account-down send error = %v", err)
+	}
+	if got := len(scripted.attemptTexts("123456")); got != 0 {
+		t.Fatalf("account-down send reached NapCat %d times", got)
+	}
+
+	channel.setStatus(ChannelStatus{Connected: true})
+	if err := runtime.send(ctx, event, "恢复后的回复"); err != nil {
+		t.Fatalf("recovered send error = %v", err)
+	}
+	if got := scripted.attemptTexts("123456"); len(got) != 1 || got[0] != "恢复后的回复" {
+		t.Fatalf("recovered attempts = %#v", got)
+	}
+}
+
+func TestGroupSendFailureNotMarkedUnavailableWhileOffline(t *testing.T) {
+	failing := &failingOutboundChannel{
+		err:      errors.New("opaque NapCat send failure"),
+		groupIDs: []string{"123456"},
+	}
+	channel := &statusOverrideChannel{Channel: failing}
+	channel.setStatus(ChannelStatus{Connected: true, AccountStatusKnown: true, AccountOnline: false})
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20006", UserID: "10001"}
+
+	err := runtime.send(context.Background(), event, "test")
+	if !errors.Is(err, errOutboundSend) || errors.Is(err, errGroupSendUnavailable) {
+		t.Fatalf("offline send error = %v", err)
+	}
+	if blockedErr := runtime.blockedGroupSendError(event); blockedErr != nil {
+		t.Fatalf("offline verification blocked group: %v", blockedErr)
+	}
+	if got := failing.groupListAttempts(); got != 0 {
+		t.Fatalf("group list consulted while account was down: %d", got)
+	}
+}
+
+func TestGroupSendFailureEmptyGroupListIsUnverified(t *testing.T) {
+	channel := &failingOutboundChannel{err: errors.New("opaque send failure")}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20006", UserID: "10001"}
+
+	err := runtime.send(context.Background(), event, "test")
+	if !errors.Is(err, errOutboundSend) || errors.Is(err, errGroupSendUnavailable) {
+		t.Fatalf("empty-list send error = %v", err)
+	}
+	if blockedErr := runtime.blockedGroupSendError(event); blockedErr != nil {
+		t.Fatalf("empty group list blocked group: %v", blockedErr)
+	}
+}
+
 func TestDefaultOutboundBackoffUsesLongIntervals(t *testing.T) {
 	policy := defaultOutboundDeliveryPolicy()
 	if policy.InitialDelay != time.Minute || policy.MaximumDelay != 15*time.Minute {
@@ -257,6 +330,30 @@ func fastOutboundDeliveryPolicy() outboundDeliveryPolicy {
 		FailureWindow: 8 * time.Millisecond,
 		DropCooldown:  50 * time.Millisecond,
 	}
+}
+
+// statusOverrideChannel 包装任意测试通道并允许用例中途切换连接/账号状态。
+type statusOverrideChannel struct {
+	Channel
+	mu     sync.Mutex
+	status ChannelStatus
+}
+
+func (c *statusOverrideChannel) Status() ChannelStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.status
+}
+
+func (c *statusOverrideChannel) setStatus(status ChannelStatus) {
+	c.mu.Lock()
+	c.status = status
+	c.mu.Unlock()
+}
+
+func (c *statusOverrideChannel) OutboundBackoffEnabled() bool {
+	capable, ok := c.Channel.(outboundBackoffChannel)
+	return ok && capable.OutboundBackoffEnabled()
 }
 
 type failingOutboundChannel struct {
