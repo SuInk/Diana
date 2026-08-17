@@ -109,6 +109,74 @@ func (h *LLMConfigHandler) Register(router gin.IRouter) {
 	router.GET("/api/llm/models", h.models)
 	router.POST("/api/llm/models", h.models)
 	router.POST("/api/llm/test", h.test)
+	router.GET("/api/llm/providers", h.providers)
+	router.POST("/api/llm/providers/models", h.providerModels)
+	router.POST("/api/llm/providers/test", h.providerTest)
+}
+
+// providers exposes the provider/model view used by the new management UI.
+// It is derived from legacy profiles during the compatibility period and never
+// serializes API keys.
+func (h *LLMConfigHandler) providers(c *gin.Context) {
+	registry, _, err := llm.NewProviderRegistryFromProfiles(h.store.Profiles())
+	if err != nil {
+		h.writeError(c, http.StatusUnprocessableEntity, "llm.providers", err, "", nil)
+		return
+	}
+	providers := make([]llm.ProviderDefinition, 0)
+	for _, profile := range h.store.Profiles().Profiles {
+		if provider, ok := registry.PublicProvider(profile.ID); ok {
+			providers = append(providers, provider)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"providers": providers, "models": registry.Models()})
+}
+
+type providerSelectionPayload struct {
+	ProviderID string `json:"providerId"`
+	ModelID    string `json:"modelId,omitempty"`
+	Message    string `json:"message,omitempty"`
+}
+
+func (h *LLMConfigHandler) providerModels(c *gin.Context) {
+	var payload providerSelectionPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, 400, "llm.providers.models", err, "", nil)
+		return
+	}
+	registry, _, err := llm.NewProviderRegistryFromProfiles(h.store.Profiles())
+	if err != nil {
+		h.writeError(c, 422, "llm.providers.models", err, payload.ProviderID, nil)
+		return
+	}
+	models, err := registry.ListModels(c.Request.Context(), payload.ProviderID)
+	if err != nil {
+		h.writeError(c, 502, "llm.providers.models", err, payload.ProviderID, nil)
+		return
+	}
+	c.JSON(http.StatusOK, llmModelsPayload{Models: models})
+}
+
+func (h *LLMConfigHandler) providerTest(c *gin.Context) {
+	var payload providerSelectionPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, 400, "llm.providers.test", err, "", nil)
+		return
+	}
+	registry, _, err := llm.NewProviderRegistryFromProfiles(h.store.Profiles())
+	if err != nil {
+		h.writeError(c, 422, "llm.providers.test", err, payload.ProviderID, nil)
+		return
+	}
+	if strings.TrimSpace(payload.Message) == "" {
+		payload.Message = "ping"
+	}
+	response, err := registry.Generate(c.Request.Context(), llm.AgentModelConfig{ProviderID: payload.ProviderID, ModelID: payload.ModelID}, llm.ChatRequest{Messages: []llm.ChatMessage{{Role: llm.RoleUser, Content: payload.Message}}})
+	if err != nil {
+		h.writeError(c, 502, "llm.providers.test", err, payload.ModelID, nil)
+		return
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // getConfig 处理 LLM 配置读取请求。

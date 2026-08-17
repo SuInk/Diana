@@ -26,6 +26,33 @@
     </header>
 
     <div class="stack">
+      <section class="card">
+        <div class="card-header">
+          <h2>Provider 与模型</h2>
+          <div class="cluster">
+            <span v-if="providerCatalog" class="badge">{{ providerCatalog.providers.length }} 个 Provider · {{ providerCatalog.models.length }} 个模型</span>
+            <button class="btn small ghost" type="button" :disabled="catalogLoading" @click="reloadCatalog">
+              <RefreshCw :size="13" aria-hidden="true" />
+              {{ catalogLoading ? "刷新中…" : "刷新目录" }}
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div v-if="providerCatalog" class="row-list">
+            <div v-for="provider in providerCatalog.providers" :key="provider.id" class="row-item">
+              <div class="row-main">
+                <div class="row-title">{{ provider.name || provider.id }}</div>
+                <div class="row-sub">{{ provider.protocol }} · {{ provider.baseUrl || "默认地址" }} · {{ provider.enabled ? "已启用" : "已停用" }}</div>
+              </div>
+              <div class="row-actions">
+                <span class="muted">{{ providerCatalog.models.filter((model) => model.providerId === provider.id).length }} 个模型</span>
+                <button class="btn small ghost" type="button" @click="startCreateFromProvider(provider.id)">编辑 Provider</button>
+              </div>
+            </div>
+          </div>
+          <EmptyState v-else title="尚未加载 Provider 目录" hint="点击刷新目录查看迁移后的 Provider 与模型" />
+        </div>
+      </section>
       <!-- 配置列表 -->
       <section class="card">
         <div class="card-header">
@@ -301,6 +328,7 @@ import {
   exportConfig,
   reorderConfigProfiles,
   getConfig,
+  getLLMProviderCatalog,
   importConfigProfiles,
   listLLMModels,
   saveConfig,
@@ -308,6 +336,7 @@ import {
   testLLMImage,
   type LLMConfig,
   type LLMModelInfo,
+  type LLMProviderCatalog,
   type Provider
 } from "../api";
 import { askConfirm } from "../confirm";
@@ -361,6 +390,8 @@ const modelsError = ref("");
 const modelPickerOpen = ref(false);
 const modelFieldRef = ref<HTMLElement | null>(null);
 const importInput = ref<HTMLInputElement | null>(null);
+const providerCatalog = ref<LLMProviderCatalog | null>(null);
+const catalogLoading = ref(false);
 
 // 按子串（而不是浏览器 datalist 的前缀规则）筛选模型，输入任意片段都能命中。
 const filteredModels = computed<LLMModelInfo[]>(() => {
@@ -424,6 +455,23 @@ function providerLabel(provider: Provider): string {
 
 async function reload(): Promise<void> {
   profileSet.value = await getConfig();
+  await reloadCatalog();
+}
+
+async function reloadCatalog(): Promise<void> {
+  catalogLoading.value = true;
+  try {
+    providerCatalog.value = await getLLMProviderCatalog();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "Provider 目录加载失败");
+  } finally {
+    catalogLoading.value = false;
+  }
+}
+
+function startCreateFromProvider(providerID: string): void {
+  const profile = profiles.value.find((item) => item.id === providerID);
+  if (profile) startEdit(profile);
 }
 
 function startCreate(): void {
