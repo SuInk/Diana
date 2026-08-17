@@ -320,8 +320,6 @@
         :draft-group-access="String(repositoryPublishForm.issue_draft_group_access ?? '')"
         :manager-user-access="String(repositoryPublishForm.issue_manager_user_access ?? '')"
         :manager-group-access="String(repositoryPublishForm.issue_manager_group_access ?? '')"
-        :token-users="String(repositoryPublishForm.user_github_token_users ?? '')"
-        :user-auth-modes="String(repositoryPublishForm.user_github_auth_modes ?? '')"
         :joined-groups="joinedGroups"
         :groups-loading="groupsLoading"
         :groups-warning="groupsWarning"
@@ -332,9 +330,6 @@
         @update:draft-group-access="repositoryPublishForm.issue_draft_group_access = $event"
         @update:manager-user-access="repositoryPublishForm.issue_manager_user_access = $event"
         @update:manager-group-access="repositoryPublishForm.issue_manager_group_access = $event"
-        @update:user-tokens="repositoryPublishForm.user_github_tokens = $event"
-        @update:token-users="repositoryPublishForm.user_github_token_users = $event"
-        @update:user-auth-modes="repositoryPublishForm.user_github_auth_modes = $event"
       />
       <div v-if="isGitHubSettings && githubSettingsTab === 'records'" class="github-run-records">
         <div class="plugin-settings-section-head">
