@@ -2885,6 +2885,7 @@ code {
 .repository-notification-settings {
   padding: 12px;
   border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   background: var(--surface-2);
 }
 
@@ -2900,6 +2901,19 @@ code {
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
+}
+
+.issue-role-block {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.issue-role-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .target-row {

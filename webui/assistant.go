@@ -43,6 +43,7 @@ type repositoryWatchRuntime interface {
 	UpdateRepositoryWatch(context.Context, string, string, assistant.RepositoryWatchUpdateInput) (assistant.Reminder, error)
 	CancelRepositoryWatch(string, string) (assistant.Reminder, error)
 	DeleteRepositoryWatch(string, string) (bool, error)
+	RunRepositoryWatchNow(string, string) (assistant.Reminder, error)
 }
 
 type rssWatchRuntime interface {
@@ -229,6 +230,7 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/tasks/repository-watches", h.createRepositoryWatch)
 	router.PUT(base+"/tasks/repository-watches/:id", h.updateRepositoryWatch)
 	router.POST(base+"/tasks/repository-watches/:id/cancel", h.cancelRepositoryWatch)
+	router.POST(base+"/tasks/repository-watches/:id/run", h.runRepositoryWatch)
 	router.DELETE(base+"/tasks/repository-watches/:id", h.deleteRepositoryWatch)
 	router.POST(base+"/tasks/rss-watches", h.createRSSWatch)
 	router.PUT(base+"/tasks/rss-watches/:id", h.updateRSSWatch)

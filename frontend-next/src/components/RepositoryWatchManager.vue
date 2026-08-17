@@ -6,7 +6,7 @@
     <div class="repository-watch-manager-head">
       <div>
         <h3>仓库管理</h3>
-        <p>每个仓库单独配置通知、Issue 能力，以及指定用户和指定群聊；点击仓库右侧编辑按钮即可管理。</p>
+        <p>每个仓库单独配置通知对象和 Issue 管理人员、草稿人；点击仓库右侧编辑按钮即可管理。</p>
       </div>
       <button class="btn small primary" type="button" @click="startCreate">
         <Plus :size="14" aria-hidden="true" />
@@ -19,7 +19,7 @@
         <div class="field wide">
           <label for="plugin-watch-repository">GitHub 仓库</label>
           <input id="plugin-watch-repository" v-model.trim="form.repository" class="input" type="text" placeholder="owner/repository 或 GitHub 链接" />
-          <span class="hint">填写仓库后，下方会出现该仓库独立的“指定用户 / 指定群聊”配置；公开仓库高频检查也建议配置上方 Token。</span>
+          <span class="hint">下方的通知与 Issue 配置只作用于这一个仓库；公开仓库高频检查也建议配置上方 Token。</span>
         </div>
         <div class="field">
           <label for="plugin-watch-branch">分支</label>
@@ -43,8 +43,18 @@
           <AppSelect id="plugin-watch-profile" v-model="form.profile_id" :options="profileOptions" />
         </div>
         <div class="field wide repository-notification-settings">
+          <div class="repository-section-title"><label>监控内容</label></div>
+          <span class="hint">选择要检查的更新类型；启用类型越多，每轮 GitHub API 请求越多。</span>
+          <div class="repository-watch-scopes">
+            <label class="check-item"><input v-model="form.watch_commits" type="checkbox" />Commit</label>
+            <label class="check-item"><input v-model="form.watch_pull_requests" type="checkbox" />PR</label>
+            <label class="check-item"><input v-model="form.watch_releases" type="checkbox" />Release</label>
+            <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
+          </div>
+        </div>
+        <div class="field wide repository-notification-settings">
           <div class="repository-section-title"><label>仓库通知</label><label class="switch"><input v-model="form.notification_enabled" type="checkbox" /><span class="track" aria-hidden="true"></span></label></div>
-          <span class="hint">开启后把 Commit、PR、Release 和 Star 摘要发送到下面选中的多个私聊或群聊；关闭后仍保留仓库检查状态。</span>
+          <span class="hint">开启后把上面选中类型的更新摘要发送到这里配置的私聊或群聊；关闭后仍保留仓库检查状态。</span>
           <div v-if="form.notification_enabled" class="target-list">
             <div v-for="(target, index) in form.notification_targets" :key="`target-${index}`" class="target-row">
               <AppSelect v-model="target.destination" :options="destinationOptions" />
@@ -57,46 +67,38 @@
             <p v-if="!form.notification_targets.length" class="hint">至少添加一个通知对象。</p>
           </div>
         </div>
-        <div class="field wide">
-          <label>监控内容</label>
-          <div class="repository-watch-scopes">
-            <label class="check-item"><input v-model="form.watch_commits" type="checkbox" />Commit</label>
-            <label class="check-item"><input v-model="form.watch_pull_requests" type="checkbox" />PR</label>
-            <label class="check-item"><input v-model="form.watch_releases" type="checkbox" />Release</label>
-            <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
-          </div>
-        </div>
-        <div class="field wide repository-watch-capability">
-          <label class="check-item">
-            <input v-model="form.issue_enabled" type="checkbox" />
-            <span>允许 LLM 操作这个仓库的 Issue</span>
-          </label>
-          <span class="hint">启用后，此仓库进入 Issue 操作白名单：授权用户可搜索、创建、更新、评论、关闭或重新打开 Issue；群内其他成员仍只能生成草稿，由授权成员确认写入。</span>
-        </div>
-        <div v-if="form.repository.trim()" class="wide repository-issue-access">
-          <RepositoryAccessEditor
-            :repository="form.repository"
-            :user-access="props.userAccess ?? ''"
-            :group-access="props.groupAccess ?? ''"
-            :token-users="props.tokenUsers ?? ''"
-            :user-auth-modes="props.userAuthModes ?? ''"
-            :draft-user-access="props.draftUserAccess ?? ''"
-            :draft-group-access="props.draftGroupAccess ?? ''"
-            :manager-user-access="props.managerUserAccess ?? ''"
-            :manager-group-access="props.managerGroupAccess ?? ''"
-            :joined-groups="props.joinedGroups ?? []"
-            :groups-loading="props.groupsLoading"
-            :groups-warning="props.groupsWarning"
-            @update:user-access="emit('update:user-access', $event)"
-            @update:group-access="emit('update:group-access', $event)"
-            @update:user-tokens="emit('update:user-tokens', $event)"
-            @update:token-users="emit('update:token-users', $event)"
-            @update:user-auth-modes="emit('update:user-auth-modes', $event)"
-            @update:draft-user-access="emit('update:draft-user-access', $event)"
-            @update:draft-group-access="emit('update:draft-group-access', $event)"
-            @update:manager-user-access="emit('update:manager-user-access', $event)"
-            @update:manager-group-access="emit('update:manager-group-access', $event)"
-          />
+        <div class="field wide repository-notification-settings">
+          <div class="repository-section-title"><label>Issue 管理</label><label class="switch"><input v-model="form.issue_enabled" type="checkbox" /><span class="track" aria-hidden="true"></span></label></div>
+          <span class="hint">开启后，此仓库允许通过机器人操作 Issue：管理人员可直接创建和管理，草稿人只能提交草稿、由管理人员确认写入。</span>
+          <template v-if="form.issue_enabled">
+            <div class="issue-role-block">
+              <div class="issue-role-head"><label>管理人员</label><span class="hint">可直接创建、更新、评论、关闭 Issue，也负责确认草稿。</span></div>
+              <div class="target-list">
+                <div v-for="(member, index) in form.issue_managers" :key="`manager-${index}`" class="target-row">
+                  <AppSelect v-model="member.destination" :options="destinationOptions" />
+                  <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" @update:model-value="member.group_id = String($event ?? '')" />
+                  <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" />
+                  <input v-else v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" />
+                  <button class="btn small ghost danger icon-only" type="button" title="移除管理人员" aria-label="移除管理人员" @click="form.issue_managers.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
+                </div>
+                <button class="btn small ghost" type="button" @click="form.issue_managers.push({ destination: 'private', user_id: '' })"><Plus :size="14" aria-hidden="true" />添加管理人员</button>
+                <p v-if="!form.issue_managers.length" class="hint">至少添加一名管理人员，草稿才有人确认。</p>
+              </div>
+            </div>
+            <div class="issue-role-block">
+              <div class="issue-role-head"><label>草稿人</label><span class="hint">可以提出需求并生成 Issue 草稿，不能直接写入 GitHub。</span></div>
+              <div class="target-list">
+                <div v-for="(member, index) in form.issue_drafters" :key="`drafter-${index}`" class="target-row">
+                  <AppSelect v-model="member.destination" :options="destinationOptions" />
+                  <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" @update:model-value="member.group_id = String($event ?? '')" />
+                  <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" />
+                  <input v-else v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" />
+                  <button class="btn small ghost danger icon-only" type="button" title="移除草稿人" aria-label="移除草稿人" @click="form.issue_drafters.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
+                </div>
+                <button class="btn small ghost" type="button" @click="form.issue_drafters.push({ destination: 'group', group_id: '' })"><Plus :size="14" aria-hidden="true" />添加草稿人</button>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
       <div class="repository-watch-editor-actions">
@@ -124,12 +126,12 @@
             <span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span>
             <span>通知 <strong>{{ task.notification_enabled === false ? "已关闭" : (task.notification_targets?.length || (task.group_id || task.user_id ? 1 : 0)) + " 个对象" }}</strong></span>
             <span>{{ watchScopeLabel(task) }}</span>
-            <span class="repository-access-fact">指定用户 <strong>{{ repositoryAccessCount(props.userAccess, task.repository) }}</strong></span>
-            <span class="repository-access-fact">指定群聊 <strong>{{ repositoryAccessCount(props.groupAccess, task.repository) }}</strong></span>
+            <span class="repository-access-fact">{{ issueFactLabel(task) }}</span>
           </div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
         <div class="repository-watch-manager-actions">
+          <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="立即检查" aria-label="立即检查" :disabled="busyID === task.id" @click="runNow(task)"><Play :size="14" aria-hidden="true" /></button>
           <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="编辑仓库和授权" aria-label="编辑仓库和授权" @click="startEdit(task)"><Pencil :size="14" aria-hidden="true" /></button>
           <button v-if="task.status !== 'cancelled'" class="btn small icon-only" type="button" title="取消订阅" aria-label="取消订阅" :disabled="busyID === task.id" @click="cancel(task)"><CircleX :size="14" aria-hidden="true" /></button>
           <button class="btn small ghost danger icon-only" type="button" title="删除订阅" aria-label="删除订阅" :disabled="busyID === task.id" @click="remove(task)"><Trash2 :size="14" aria-hidden="true" /></button>
@@ -138,7 +140,7 @@
     </div>
     <div v-else class="repository-watch-manager-empty repository-watch-manager-empty-guide">
       <strong>还没有仓库配置</strong>
-      <span>点击“添加仓库”，填写仓库后即可配置该仓库的指定用户和指定群聊；不同仓库互不影响。</span>
+      <span>点击“添加仓库”，填写仓库后即可配置该仓库的通知对象与 Issue 管理人员、草稿人；不同仓库互不影响。</span>
       <button class="btn small ghost" type="button" @click="startCreate">
         <Plus :size="14" aria-hidden="true" />
         添加仓库并配置权限
@@ -149,7 +151,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
+import { CircleX, LoaderCircle, Pencil, Play, Plus, Trash2 } from "@lucide/vue";
 import {
   cancelRepositoryWatch,
   createRepositoryWatch,
@@ -157,6 +159,7 @@ import {
   getAssistantTasks,
   getQQBotConfig,
   listQQBotGroups,
+  runRepositoryWatch,
   updateRepositoryWatch,
   type AssistantTask,
   type AssistantTaskStatus,
@@ -166,7 +169,6 @@ import {
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import AppSelect from "./AppSelect.vue";
-import RepositoryAccessEditor from "./RepositoryAccessEditor.vue";
 
 const props = defineProps<{
   prepareAccess?: () => Promise<void>;
@@ -174,8 +176,6 @@ const props = defineProps<{
   issueEnabledRepositories?: string[];
   userAccess?: string;
   groupAccess?: string;
-  tokenUsers?: string;
-  userAuthModes?: string;
   draftUserAccess?: string;
   draftGroupAccess?: string;
   managerUserAccess?: string;
@@ -188,20 +188,19 @@ const emit = defineEmits<{
   "update:issue-enabled-repositories": [string[]];
   "update:user-access": [string];
   "update:group-access": [string];
-  "update:user-tokens": [string];
-  "update:token-users": [string];
-  "update:user-auth-modes": [string];
   "update:draft-user-access": [string];
   "update:draft-group-access": [string];
   "update:manager-user-access": [string];
   "update:manager-group-access": [string];
 }>();
+
+type IssueMember = { destination: "private" | "group"; group_id?: string; user_id?: string };
 const authenticatedIntervalSeconds = 60;
 const anonymousIntervalSeconds = 60 * 60;
 const minimumIntervalSeconds = 30;
 const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = computed(() => props.tokenConfigured ? authenticatedIntervalSeconds : anonymousIntervalSeconds);
-const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as Array<{ destination: "private" | "group"; group_id?: string; user_id?: string }> });
+const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<QQBotConfig[]>([]);
 const joinedGroups = ref<QQBotGroupSummary[]>([]);
@@ -243,26 +242,71 @@ function repositoryKey(value: string): string {
   return value.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, "").replace(/\.git\/?$/i, "").replace(/\/$/, "");
 }
 
-function repositoryAccessCount(value: string | undefined, repository: string | undefined): number {
-  const target = repositoryKey(repository ?? "").toLowerCase();
-  if (!target) return 0;
+function parseAccessRules(value: string | undefined): Array<{ id: string; repositories: string[] }> {
+  return String(value ?? "").split(/[;；\n\r]/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const separator = line.indexOf("=");
+    return {
+      id: (separator >= 0 ? line.slice(0, separator) : line).trim(),
+      repositories: (separator >= 0 ? line.slice(separator + 1) : "").split(/[,，]/).map((item) => item.trim()).filter(Boolean)
+    };
+  }).filter((rule) => rule.id);
+}
+
+function accessIDsFor(value: string | undefined, repository: string): string[] {
+  const target = repositoryKey(repository).toLowerCase();
+  if (!target) return [];
   const ids = new Set<string>();
-  for (const line of String(value ?? "").split(/[;；\n\r]/)) {
-    const entry = line.trim();
-    if (!entry) continue;
-    const separator = entry.indexOf("=");
-    const id = (separator >= 0 ? entry.slice(0, separator) : entry).trim();
-    const repositories = separator >= 0 ? entry.slice(separator + 1) : "";
-    if (id && repositories.split(/[,，]/).some((item) => repositoryKey(item).toLowerCase() === target)) ids.add(id);
+  for (const rule of parseAccessRules(value)) {
+    if (rule.repositories.some((item) => repositoryKey(item).toLowerCase() === target)) ids.add(rule.id);
   }
-  return ids.size;
+  return [...ids];
+}
+
+function mergeRepositoryAccess(original: string | undefined, repository: string, ids: string[]): string {
+  const target = repositoryKey(repository);
+  const targetLower = target.toLowerCase();
+  const merged = new Map<string, string[]>();
+  for (const rule of parseAccessRules(original)) {
+    const kept = (merged.get(rule.id) ?? []).concat(rule.repositories.filter((item) => repositoryKey(item).toLowerCase() !== targetLower));
+    merged.set(rule.id, [...new Set(kept)]);
+  }
+  for (const id of ids) {
+    const repositories = merged.get(id) ?? [];
+    if (!repositories.some((item) => repositoryKey(item).toLowerCase() === targetLower)) repositories.push(target);
+    merged.set(id, repositories);
+  }
+  return [...merged.entries()].filter(([, repositories]) => repositories.length).map(([id, repositories]) => `${id} = ${repositories.join(", ")}`).join("\n");
+}
+
+function issueMemberIDs(members: IssueMember[], destination: "private" | "group"): string[] {
+  return [...new Set(members.filter((member) => member.destination === destination).map((member) => (destination === "group" ? member.group_id : member.user_id)?.trim() ?? "").filter(Boolean))];
+}
+
+function issueMembersFrom(userValue: string | undefined, groupValue: string | undefined, repository: string): IssueMember[] {
+  return [
+    ...accessIDsFor(userValue, repository).map((id) => ({ destination: "private" as const, user_id: id })),
+    ...accessIDsFor(groupValue, repository).map((id) => ({ destination: "group" as const, group_id: id }))
+  ];
+}
+
+function repositoryIssueEnabled(repository: string | undefined): boolean {
+  const target = repositoryKey(repository ?? "").toLowerCase();
+  return Boolean(target) && props.issueEnabledRepositories?.some((item) => repositoryKey(item).toLowerCase() === target) === true;
+}
+
+function issueFactLabel(task: AssistantTask): string {
+  const repository = task.repository ?? "";
+  if (!repositoryIssueEnabled(repository)) return "Issue 关闭";
+  const managers = issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository).length;
+  const drafters = issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository).length;
+  return `Issue 管理 ${managers} · 草稿 ${drafters}`;
 }
 
 function startEdit(task: AssistantTask): void {
   editingTask.value = task;
   const repository = task.repository ?? "";
   const legacyTarget = task.group_id ? [{ destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ destination: "private" as const, user_id: task.user_id }] : [];
-  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, issue_enabled: props.issueEnabledRepositories?.some((item) => repositoryKey(item).toLowerCase() === repositoryKey(repository).toLowerCase()) === true, profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget) };
+  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
   editing.value = true;
 }
 
@@ -279,15 +323,34 @@ async function save(): Promise<void> {
   if (!form.value.watch_commits && !form.value.watch_pull_requests && !form.value.watch_releases && !form.value.watch_stars) return toastError("Commit、PR、Release 和 Star 至少选择一项");
   if (!form.value.profile_id) return toastError("请选择发送机器人");
   if (form.value.notification_enabled && !form.value.notification_targets.some((target) => target.destination === "group" ? target.group_id : target.user_id)) return toastError("请至少添加一个通知对象");
+  const managerUserIDs = issueMemberIDs(form.value.issue_managers, "private");
+  const managerGroupIDs = issueMemberIDs(form.value.issue_managers, "group");
+  const drafterUserIDs = issueMemberIDs(form.value.issue_drafters, "private");
+  const drafterGroupIDs = issueMemberIDs(form.value.issue_drafters, "group");
+  if (form.value.issue_enabled && !managerUserIDs.length && !managerGroupIDs.length) return toastError("开启 Issue 管理后，请至少添加一名管理人员");
   saving.value = true;
   try {
-    await props.prepareAccess?.();
     const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars };
     const delivery = { profile_id: form.value.profile_id, notification_enabled: form.value.notification_enabled, notification_targets: form.value.notification_enabled ? form.value.notification_targets : [] };
     const repository = repositoryKey(form.value.repository);
     const enabledRepositories = [...(props.issueEnabledRepositories ?? [])].filter((item) => repositoryKey(item).toLowerCase() !== repository.toLowerCase());
     if (form.value.issue_enabled && repository) enabledRepositories.push(repository);
+    // 所有授权字段先 emit 回父组件表单，再由 prepareAccess 一并落库。
     emit("update:issue-enabled-repositories", enabledRepositories);
+    const scopedManagerUsers = form.value.issue_enabled ? managerUserIDs : [];
+    const scopedManagerGroups = form.value.issue_enabled ? managerGroupIDs : [];
+    const scopedDrafterUsers = form.value.issue_enabled ? drafterUserIDs : [];
+    const scopedDrafterGroups = form.value.issue_enabled ? drafterGroupIDs : [];
+    const managerUserAccess = mergeRepositoryAccess(props.managerUserAccess || props.userAccess, repository, scopedManagerUsers);
+    const draftGroupAccess = mergeRepositoryAccess(props.draftGroupAccess || props.groupAccess, repository, scopedDrafterGroups);
+    emit("update:manager-user-access", managerUserAccess);
+    emit("update:manager-group-access", mergeRepositoryAccess(props.managerGroupAccess, repository, scopedManagerGroups));
+    emit("update:draft-user-access", mergeRepositoryAccess(props.draftUserAccess, repository, scopedDrafterUsers));
+    emit("update:draft-group-access", draftGroupAccess);
+    // 旧字段与新字段保持同一份内容，后端在新字段为空时才回退旧字段。
+    emit("update:user-access", managerUserAccess);
+    emit("update:group-access", draftGroupAccess);
+    await props.prepareAccess?.();
     if (editingTask.value) await updateRepositoryWatch(editingTask.value.id, { ...common, ...delivery });
     else await createRepositoryWatch({ ...common, ...delivery });
     toastSuccess(editingTask.value ? "仓库订阅已更新" : "仓库订阅已创建，当前状态已作为基线");
@@ -303,6 +366,13 @@ async function save(): Promise<void> {
 
 function addTarget(): void { form.value.notification_targets.push({ destination: "private", user_id: "" }); }
 function removeTarget(index: number): void { form.value.notification_targets.splice(index, 1); }
+
+async function runNow(task: AssistantTask): Promise<void> {
+  busyID.value = task.id;
+  try { await runRepositoryWatch(task.id); toastSuccess("已安排立即检查，几秒后刷新可见结果"); await load(); }
+  catch (error) { toastError(error instanceof Error ? error.message : "立即检查失败"); }
+  finally { busyID.value = ""; }
+}
 
 async function cancel(task: AssistantTask): Promise<void> {
   if (!await askConfirm({ title: "取消仓库订阅", message: `停止监控 ${task.repository || task.id}？`, confirmLabel: "取消订阅", danger: true })) return;

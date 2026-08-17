@@ -248,6 +248,18 @@ func (r *Runtime) CancelRepositoryWatch(ownerID, id string) (Reminder, error) {
 	return r.cancelRepositoryWatch(strings.TrimSpace(ownerID), strings.TrimSpace(id))
 }
 
+// RunRepositoryWatchNow 把下一次触发时间提前到现在；调度循环每秒扫一次，
+// 会立即执行检查，退避等待中的积压通知也会先补发。
+func (r *Runtime) RunRepositoryWatchNow(ownerID, id string) (Reminder, error) {
+	return r.mutateRepositoryWatch(strings.TrimSpace(ownerID), strings.TrimSpace(id), func(item *Reminder) error {
+		if !item.CancelledAt.IsZero() {
+			return fmt.Errorf("仓库更新订阅 %s 已取消，无法立即检查", id)
+		}
+		item.TriggerAt = time.Now()
+		return nil
+	})
+}
+
 func (r *Runtime) DeleteRepositoryWatch(ownerID, id string) (bool, error) {
 	return r.deleteRepositoryWatch(strings.TrimSpace(ownerID), strings.TrimSpace(id))
 }

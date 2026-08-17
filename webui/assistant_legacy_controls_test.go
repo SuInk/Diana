@@ -322,6 +322,10 @@ func (r *capturingRepositoryWatchRuntime) DeleteRepositoryWatch(string, string) 
 	return true, nil
 }
 
+func (r *capturingRepositoryWatchRuntime) RunRepositoryWatchNow(string, string) (assistant.Reminder, error) {
+	return assistant.Reminder{}, nil
+}
+
 func (c *restoredControlChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
 	c.calls = append(c.calls, apiCall{action: action, params: params})
 	if response, ok := c.responses[action]; ok {

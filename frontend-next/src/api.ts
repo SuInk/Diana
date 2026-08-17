@@ -1248,6 +1248,10 @@ export function cancelRepositoryWatch(id: string): Promise<AssistantTask> {
   return requestJSON<AssistantTask>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 }
 
+export function runRepositoryWatch(id: string): Promise<AssistantTask> {
+  return requestJSON<AssistantTask>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}/run`, { method: "POST" });
+}
+
 export function deleteRepositoryWatch(id: string): Promise<void> {
   return requestJSON<void>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

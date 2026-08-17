@@ -609,6 +609,26 @@ func (h *QQBotHandler) cancelRepositoryWatch(c *gin.Context) {
 	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
 }
 
+func (h *QQBotHandler) runRepositoryWatch(c *gin.Context) {
+	manager, ok := h.runtime.(repositoryWatchRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.run", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.repositoryWatchOwner(c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.run", err, c.Param("id"), nil)
+		return
+	}
+	item, err := manager.RunRepositoryWatchNow(ownerID, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.run", err, c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.repository_watch.run", "仓库更新订阅已安排立即检查", item.ID, map[string]any{"repository": item.Repository})
+	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+}
+
 func (h *QQBotHandler) deleteRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
