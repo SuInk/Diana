@@ -18,6 +18,31 @@ const (
 	anonymousRepositoryWatchDefaultInterval     = time.Hour
 )
 
+func normalizeReminderDeliveryTargets(targets []ReminderDeliveryTarget) []ReminderDeliveryTarget {
+	out := make([]ReminderDeliveryTarget, 0, len(targets))
+	seen := map[string]struct{}{}
+	for _, target := range targets {
+		target.Platform = strings.TrimSpace(target.Platform)
+		target.ProfileID = strings.TrimSpace(target.ProfileID)
+		target.ContextNamespace = strings.TrimSpace(target.ContextNamespace)
+		target.GroupID = strings.TrimSpace(target.GroupID)
+		target.UserID = strings.TrimSpace(target.UserID)
+		if target.GroupID == "" && target.UserID == "" {
+			continue
+		}
+		if target.GroupID != "" {
+			target.UserID = ""
+		}
+		key := target.Platform + "|" + target.ProfileID + "|" + target.GroupID + "|" + target.UserID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, target)
+	}
+	return out
+}
+
 func defaultRepositoryWatchInterval(settings SettingValues) time.Duration {
 	if strings.TrimSpace(settings.String(repositoryWatchSettingToken, "")) != "" {
 		return authenticatedRepositoryWatchDefaultInterval
@@ -26,39 +51,60 @@ func defaultRepositoryWatchInterval(settings SettingValues) time.Duration {
 }
 
 type RepositoryWatchCreateInput struct {
-	Repository        string
-	Branch            string
-	Interval          time.Duration
-	WatchCommits      bool
-	WatchPullRequests bool
-	WatchReleases     bool
-	WatchStars        bool
-	Platform          string
-	ProfileID         string
-	ContextNamespace  string
-	OwnerID           string
-	GroupID           string
-	UserID            string
+	Repository          string
+	Branch              string
+	Interval            time.Duration
+	WatchCommits        bool
+	WatchPullRequests   bool
+	WatchReleases       bool
+	WatchStars          bool
+	Platform            string
+	ProfileID           string
+	ContextNamespace    string
+	OwnerID             string
+	GroupID             string
+	UserID              string
+	NotificationEnabled bool
+	NotificationTargets []ReminderDeliveryTarget
 }
 
 type RepositoryWatchUpdateInput struct {
-	Repository        string
-	Branch            *string
-	Interval          time.Duration
-	WatchCommits      *bool
-	WatchPullRequests *bool
-	WatchReleases     *bool
-	WatchStars        *bool
-	Delivery          bool
-	Platform          string
-	ProfileID         string
-	ContextNamespace  string
-	OwnerID           string
-	GroupID           string
-	UserID            string
+	Repository          string
+	Branch              *string
+	Interval            time.Duration
+	WatchCommits        *bool
+	WatchPullRequests   *bool
+	WatchReleases       *bool
+	WatchStars          *bool
+	Delivery            bool
+	Platform            string
+	ProfileID           string
+	ContextNamespace    string
+	OwnerID             string
+	GroupID             string
+	UserID              string
+	NotificationEnabled *bool
+	NotificationTargets []ReminderDeliveryTarget
 }
 
 func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWatchCreateInput) (Reminder, error) {
+	if len(input.NotificationTargets) > 0 {
+		input.NotificationTargets = normalizeReminderDeliveryTargets(input.NotificationTargets)
+		if len(input.NotificationTargets) == 0 {
+			return Reminder{}, fmt.Errorf("通知目标不能为空")
+		}
+		first := input.NotificationTargets[0]
+		input.Platform, input.ProfileID, input.ContextNamespace = first.Platform, first.ProfileID, first.ContextNamespace
+		input.GroupID, input.UserID = first.GroupID, first.UserID
+	} else if !input.NotificationEnabled {
+		// Old API callers did not send NotificationEnabled; an existing legacy
+		// destination means notifications are enabled for compatibility.
+		if strings.TrimSpace(input.GroupID) != "" || strings.TrimSpace(input.UserID) != "" {
+			input.NotificationEnabled = true
+		} else {
+			input.GroupID, input.UserID = "", ""
+		}
+	}
 	event := MessageEvent{
 		Platform: strings.TrimSpace(input.Platform), ProfileID: strings.TrimSpace(input.ProfileID),
 		ContextNamespace: strings.TrimSpace(input.ContextNamespace), UserID: strings.TrimSpace(input.UserID),
@@ -66,11 +112,12 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	}
 	if event.GroupID != "" {
 		event.Kind = EventKindGroup
+	} else if event.UserID != "" {
+		event.Kind = EventKindPrivate
+	} else if input.NotificationEnabled {
+		return Reminder{}, fmt.Errorf("启用通知时至少填写一个群聊或私聊对象")
 	} else {
 		event.Kind = EventKindPrivate
-		if event.UserID == "" {
-			return Reminder{}, fmt.Errorf("私聊通知必须填写发送对象 ID")
-		}
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(
 		repositoryWatchPluginID,
@@ -104,7 +151,7 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 		return Reminder{}, fmt.Errorf("建立仓库基线失败: %w", err)
 	}
 	ownerID := firstNonEmpty(strings.TrimSpace(input.OwnerID), repositoryWatchWebUIOwner(event.ProfileID))
-	return r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, selection, baseline)
+	return r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, selection, baseline, input.NotificationEnabled, input.NotificationTargets)
 }
 
 func repositoryWatchWebUIOwner(profileID string) string {
@@ -130,12 +177,17 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 		if event.GroupID != "" {
 			event.Kind = EventKindGroup
 			event.UserID = ""
-		} else {
+		} else if event.UserID != "" {
 			event.Kind = EventKindPrivate
-			if event.UserID == "" {
-				return Reminder{}, fmt.Errorf("私聊通知必须填写发送对象 ID")
-			}
+		} else if input.NotificationEnabled != nil && !*input.NotificationEnabled {
+			event.Kind = EventKindPrivate
+		} else {
+			return Reminder{}, fmt.Errorf("启用通知时至少填写一个群聊或私聊对象")
 		}
+	}
+	if input.NotificationEnabled != nil {
+		// The legacy Delivery flag still updates the primary target; the new
+		// target list is applied below by the web handler when present.
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(
 		repositoryWatchPluginID,
@@ -183,6 +235,12 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 		values["group_id"] = event.GroupID
 		values["user_id"] = event.UserID
 	}
+	if input.NotificationEnabled != nil {
+		values["notification_enabled"] = *input.NotificationEnabled
+	}
+	if input.NotificationTargets != nil {
+		values["notification_targets"] = normalizeReminderDeliveryTargets(input.NotificationTargets)
+	}
 	return r.updateRepositoryWatch(strings.TrimSpace(ownerID), strings.TrimSpace(id), values, plugin, settings, ctx)
 }
 
@@ -211,7 +269,7 @@ func parseRepositoryWatchInterval(raw string, settings SettingValues) (time.Dura
 	return interval, nil
 }
 
-func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, branch string, interval time.Duration, selection repositoryWatchSelection, baseline repositoryWatchSnapshot) (Reminder, error) {
+func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, branch string, interval time.Duration, selection repositoryWatchSelection, baseline repositoryWatchSnapshot, notificationEnabled bool, targets []ReminderDeliveryTarget) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -223,28 +281,30 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 	items := r.reminders.Reminders()
 	now := time.Now()
 	item := Reminder{
-		ID:                    uuid.NewString()[:8],
-		Kind:                  ReminderKindRepositoryWatch,
-		Platform:              event.Platform,
-		ProfileID:             event.ProfileID,
-		ContextNamespace:      event.ContextNamespace,
-		OwnerID:               strings.TrimSpace(ownerID),
-		GroupID:               event.GroupID,
-		UserID:                event.UserID,
-		Message:               "监控 " + repository + " 的仓库动态",
-		Repository:            repository,
-		RepositoryBranch:      branch,
-		WatchCommits:          selection.Commits,
-		WatchPullRequests:     selection.PullRequests,
-		WatchReleases:         selection.Releases,
-		WatchStars:            selection.Stars,
-		LastCommitSHA:         baseline.CommitSHA,
-		LastPullRequestCursor: baseline.PullRequestCursor,
-		LastReleaseTag:        baseline.ReleaseTag,
-		LastStarCount:         baseline.StarCount,
-		TriggerAt:             now.Add(interval),
-		IntervalSeconds:       int64(interval / time.Second),
-		CreatedAt:             now,
+		ID:                      uuid.NewString()[:8],
+		Kind:                    ReminderKindRepositoryWatch,
+		Platform:                event.Platform,
+		ProfileID:               event.ProfileID,
+		ContextNamespace:        event.ContextNamespace,
+		OwnerID:                 strings.TrimSpace(ownerID),
+		GroupID:                 event.GroupID,
+		UserID:                  event.UserID,
+		NotificationEnabled:     notificationEnabled,
+		NotificationTargetsJSON: encodeReminderDeliveryTargets(normalizeReminderDeliveryTargets(targets)),
+		Message:                 "监控 " + repository + " 的仓库动态",
+		Repository:              repository,
+		RepositoryBranch:        branch,
+		WatchCommits:            selection.Commits,
+		WatchPullRequests:       selection.PullRequests,
+		WatchReleases:           selection.Releases,
+		WatchStars:              selection.Stars,
+		LastCommitSHA:           baseline.CommitSHA,
+		LastPullRequestCursor:   baseline.PullRequestCursor,
+		LastReleaseTag:          baseline.ReleaseTag,
+		LastStarCount:           baseline.StarCount,
+		TriggerAt:               now.Add(interval),
+		IntervalSeconds:         int64(interval / time.Second),
+		CreatedAt:               now,
 	}
 	if err := r.reminders.SaveReminders(append(items, item)); err != nil {
 		return Reminder{}, fmt.Errorf("保存仓库更新订阅失败: %w", err)
@@ -363,6 +423,20 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 			item.OwnerID = strings.TrimSpace(configToolString(input, "owner_id"))
 			item.GroupID = strings.TrimSpace(configToolString(input, "group_id"))
 			item.UserID = strings.TrimSpace(configToolString(input, "user_id"))
+		}
+		if enabled, ok := input["notification_enabled"].(bool); ok {
+			item.NotificationEnabled = enabled
+		}
+		if targets, ok := input["notification_targets"].([]ReminderDeliveryTarget); ok {
+			normalizedTargets := normalizeReminderDeliveryTargets(targets)
+			item.NotificationTargetsJSON = encodeReminderDeliveryTargets(normalizedTargets)
+			if len(normalizedTargets) > 0 {
+				first := normalizedTargets[0]
+				item.Platform, item.ProfileID, item.ContextNamespace = first.Platform, first.ProfileID, first.ContextNamespace
+				item.GroupID, item.UserID = first.GroupID, first.UserID
+			} else if !item.NotificationEnabled {
+				item.GroupID, item.UserID = "", ""
+			}
 		}
 		item.Message = "监控 " + repository + " 的仓库动态"
 		if rawInterval != "" {

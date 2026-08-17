@@ -120,9 +120,19 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 		repositoryWatchFailureStageLabel(stage),
 		reason,
 	)
-	_, acknowledged, err := r.sendWithDeliveryEvidence(ctx, reminderSourceEvent(item), notice)
-	if err != nil {
-		return err
+	acknowledged := false
+	var firstErr error
+	for _, target := range repositoryWatchDeliveryTargets(item) {
+		_, delivered, err := r.sendWithDeliveryEvidence(ctx, target, notice)
+		if delivered {
+			acknowledged = true
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return firstErr
 	}
 	if !acknowledged {
 		return fmt.Errorf("仓库订阅失败告警未取得发送确认")
@@ -158,12 +168,8 @@ func (r *Runtime) notifyRepositoryWatchRecovery(ctx context.Context, item Remind
 		return ctx.Err()
 	}
 	notice := fmt.Sprintf("仓库订阅 %s 已恢复，后续更新将继续正常推送。", item.Repository)
-	_, acknowledged, err := r.sendWithDeliveryEvidence(ctx, reminderSourceEvent(item), notice)
-	if err != nil {
+	if err := r.sendRepositoryWatch(ctx, item, notice); err != nil {
 		return err
-	}
-	if !acknowledged {
-		return fmt.Errorf("仓库订阅恢复通知未取得发送确认")
 	}
 	return nil
 }

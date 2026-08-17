@@ -27,6 +27,7 @@ const (
 	legacyDatabasePath   = "data/diana-qq-bot.db"
 	llmConfigKey         = "llm_config"
 	llmProfilesKey       = "llm_profiles"
+	llmRegistryKey       = "llm_provider_registry"
 	qqbotConfigKey       = "qqbot_config"
 	qqbotProfilesKey     = "qqbot_profiles"
 	qqbotGroupConfigKey  = "qqbot_group_configs"
@@ -273,6 +274,19 @@ func (s *SQLiteStore) LoadLLMProfiles(ctx context.Context) (llm.ProfileSet, bool
 // SaveLLMProfiles 保存 LLM 配置集。
 func (s *SQLiteStore) SaveLLMProfiles(ctx context.Context, set llm.ProfileSet) error {
 	return s.saveJSON(ctx, llmProfilesKey, set)
+}
+
+// LoadLLMProviderRegistry reads the versioned provider/model document.
+func (s *SQLiteStore) LoadLLMProviderRegistry(ctx context.Context) (llm.ProviderRegistryDocument, bool, error) {
+	var document llm.ProviderRegistryDocument
+	ok, err := s.loadJSON(ctx, llmRegistryKey, &document)
+	return document, ok, err
+}
+
+// SaveLLMProviderRegistry persists the provider/model document alongside the
+// legacy profile set during the migration window.
+func (s *SQLiteStore) SaveLLMProviderRegistry(ctx context.Context, document llm.ProviderRegistryDocument) error {
+	return s.saveJSON(ctx, llmRegistryKey, document)
 }
 
 // LoadQQBotConfig 读取 QQ 机器人配置。

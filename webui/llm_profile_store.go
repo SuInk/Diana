@@ -52,10 +52,11 @@ func (s *MemoryLLMProfileStore) SaveProfiles(set llm.ProfileSet) {
 }
 
 type PersistentLLMProfileStore struct {
-	mu    sync.RWMutex
-	data  llm.ProfileSet
-	store *storage.SQLiteStore
-	ctx   context.Context
+	mu       sync.RWMutex
+	data     llm.ProfileSet
+	registry llm.ProviderRegistryDocument
+	store    *storage.SQLiteStore
+	ctx      context.Context
 }
 
 // NewPersistentLLMProfileStore 创建 SQLite 持久化版 LLM 配置集存储。
@@ -71,11 +72,33 @@ func NewPersistentLLMProfileStore(ctx context.Context, store *storage.SQLiteStor
 		// 兼容旧版本只有单个 llm_config 的数据库，首次启动时自动升级为配置集。
 		data = llm.NewProfileSet(savedCfg)
 	}
+	registry, registryOK, err := store.LoadLLMProviderRegistry(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !registryOK || registry.Version == 0 {
+		migrated, _, migrationErr := llm.NewProviderRegistryFromProfiles(data)
+		if migrationErr != nil {
+			return nil, migrationErr
+		}
+		registry = migrated.Document()
+		if err := store.SaveLLMProviderRegistry(ctx, registry); err != nil {
+			return nil, err
+		}
+	}
 	return &PersistentLLMProfileStore{
-		data:  data,
-		store: store,
-		ctx:   ctx,
+		data:     data,
+		registry: registry,
+		store:    store,
+		ctx:      ctx,
 	}, nil
+}
+
+func (s *PersistentLLMProfileStore) ProviderRegistry() (*llm.ProviderRegistry, error) {
+	s.mu.RLock()
+	document := s.registry
+	s.mu.RUnlock()
+	return llm.RegistryFromDocument(document)
 }
 
 // Current 返回持久化存储中的当前 LLM 配置。
@@ -106,6 +129,13 @@ func (s *PersistentLLMProfileStore) SaveProfiles(set llm.ProfileSet) {
 		_ = s.store.SaveLLMProfiles(s.ctx, set)
 		if profile, ok := set.Current(); ok {
 			_ = s.store.SaveLLMConfig(s.ctx, profile.Config)
+		}
+		if registry, _, err := llm.NewProviderRegistryFromProfiles(set); err == nil {
+			document := registry
+			_ = s.store.SaveLLMProviderRegistry(s.ctx, document.Document())
+			s.mu.Lock()
+			s.registry = document.Document()
+			s.mu.Unlock()
 		}
 	}
 }

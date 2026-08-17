@@ -42,21 +42,20 @@
           <label for="plugin-watch-profile">发送机器人</label>
           <AppSelect id="plugin-watch-profile" v-model="form.profile_id" :options="profileOptions" />
         </div>
-        <div class="field wide">
-          <label>通知位置</label>
-          <div class="segmented repository-watch-destination" role="radiogroup" aria-label="通知位置">
-            <button type="button" role="radio" :aria-checked="form.destination === 'private'" :class="{ active: form.destination === 'private' }" @click="form.destination = 'private'">私聊对象</button>
-            <button type="button" role="radio" :aria-checked="form.destination === 'group'" :class="{ active: form.destination === 'group' }" @click="form.destination = 'group'">群聊</button>
+        <div class="field wide repository-notification-settings">
+          <div class="repository-section-title"><label>仓库通知</label><label class="switch"><input v-model="form.notification_enabled" type="checkbox" /><span class="track" aria-hidden="true"></span></label></div>
+          <span class="hint">开启后把 Commit、PR、Release 和 Star 摘要发送到下面选中的多个私聊或群聊；关闭后仍保留仓库检查状态。</span>
+          <div v-if="form.notification_enabled" class="target-list">
+            <div v-for="(target, index) in form.notification_targets" :key="`target-${index}`" class="target-row">
+              <AppSelect v-model="target.destination" :options="destinationOptions" />
+              <AppSelect v-if="target.destination === 'group' && groupOptions.length" :model-value="target.group_id ?? ''" :options="groupOptions" @update:model-value="target.group_id = String($event ?? '')" />
+              <input v-else-if="target.destination === 'group'" v-model.trim="target.group_id" class="input" type="text" placeholder="群号或 Chat ID" />
+              <input v-else v-model.trim="target.user_id" class="input" type="text" placeholder="私聊对象 ID" />
+              <button class="btn small ghost danger icon-only" type="button" title="移除通知对象" aria-label="移除通知对象" @click="removeTarget(index)"><Trash2 :size="14" aria-hidden="true" /></button>
+            </div>
+            <button class="btn small ghost" type="button" @click="addTarget"><Plus :size="14" aria-hidden="true" />添加通知对象</button>
+            <p v-if="!form.notification_targets.length" class="hint">至少添加一个通知对象。</p>
           </div>
-        </div>
-        <div v-if="form.destination === 'group'" class="field wide">
-          <label for="plugin-watch-group">群号 / Chat ID</label>
-          <AppSelect v-if="groupOptions.length" id="plugin-watch-group" v-model="form.group_id" :options="groupOptions" />
-          <input v-else id="plugin-watch-group" v-model.trim="form.group_id" class="input" type="text" placeholder="QQ 群号或 Telegram 群 Chat ID" />
-        </div>
-        <div v-if="form.destination === 'private'" class="field wide">
-          <label for="plugin-watch-user">私聊对象 ID</label>
-          <input id="plugin-watch-user" v-model.trim="form.user_id" class="input" type="text" placeholder="QQ 号或 Telegram Chat ID" />
         </div>
         <div class="field wide">
           <label>监控内容</label>
@@ -81,6 +80,10 @@
             :group-access="props.groupAccess ?? ''"
             :token-users="props.tokenUsers ?? ''"
             :user-auth-modes="props.userAuthModes ?? ''"
+            :draft-user-access="props.draftUserAccess ?? ''"
+            :draft-group-access="props.draftGroupAccess ?? ''"
+            :manager-user-access="props.managerUserAccess ?? ''"
+            :manager-group-access="props.managerGroupAccess ?? ''"
             :joined-groups="props.joinedGroups ?? []"
             :groups-loading="props.groupsLoading"
             :groups-warning="props.groupsWarning"
@@ -89,6 +92,10 @@
             @update:user-tokens="emit('update:user-tokens', $event)"
             @update:token-users="emit('update:token-users', $event)"
             @update:user-auth-modes="emit('update:user-auth-modes', $event)"
+            @update:draft-user-access="emit('update:draft-user-access', $event)"
+            @update:draft-group-access="emit('update:draft-group-access', $event)"
+            @update:manager-user-access="emit('update:manager-user-access', $event)"
+            @update:manager-group-access="emit('update:manager-group-access', $event)"
           />
         </div>
       </div>
@@ -115,8 +122,7 @@
           <div class="task-facts">
             <span v-if="task.repository_branch">分支 <strong class="mono">{{ task.repository_branch }}</strong></span>
             <span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span>
-            <span v-if="task.group_id">群 <strong class="mono">{{ task.group_id }}</strong></span>
-            <span v-else>私聊 <strong class="mono">{{ task.user_id || "—" }}</strong></span>
+            <span>通知 <strong>{{ task.notification_enabled === false ? "已关闭" : (task.notification_targets?.length || (task.group_id || task.user_id ? 1 : 0)) + " 个对象" }}</strong></span>
             <span>{{ watchScopeLabel(task) }}</span>
             <span class="repository-access-fact">指定用户 <strong>{{ repositoryAccessCount(props.userAccess, task.repository) }}</strong></span>
             <span class="repository-access-fact">指定群聊 <strong>{{ repositoryAccessCount(props.groupAccess, task.repository) }}</strong></span>
@@ -170,6 +176,10 @@ const props = defineProps<{
   groupAccess?: string;
   tokenUsers?: string;
   userAuthModes?: string;
+  draftUserAccess?: string;
+  draftGroupAccess?: string;
+  managerUserAccess?: string;
+  managerGroupAccess?: string;
   joinedGroups?: QQBotGroupSummary[];
   groupsLoading?: boolean;
   groupsWarning?: string;
@@ -181,13 +191,17 @@ const emit = defineEmits<{
   "update:user-tokens": [string];
   "update:token-users": [string];
   "update:user-auth-modes": [string];
+  "update:draft-user-access": [string];
+  "update:draft-group-access": [string];
+  "update:manager-user-access": [string];
+  "update:manager-group-access": [string];
 }>();
 const authenticatedIntervalSeconds = 60;
 const anonymousIntervalSeconds = 60 * 60;
 const minimumIntervalSeconds = 30;
 const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = computed(() => props.tokenConfigured ? authenticatedIntervalSeconds : anonymousIntervalSeconds);
-const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, issue_enabled: false, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
+const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as Array<{ destination: "private" | "group"; group_id?: string; user_id?: string }> });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<QQBotConfig[]>([]);
 const joinedGroups = ref<QQBotGroupSummary[]>([]);
@@ -201,6 +215,7 @@ const form = ref(emptyForm());
 const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
 const selectedProfile = computed(() => profiles.value.find((profile) => profile.id === form.value.profile_id));
 const groupOptions = computed(() => selectedProfile.value?.platform === "telegram" ? [] : joinedGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || `群 ${group.group_id}`, hint: group.group_name ? group.group_id : undefined })));
+const destinationOptions = [{ value: "private", label: "私聊" }, { value: "group", label: "群聊" }];
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -246,7 +261,8 @@ function repositoryAccessCount(value: string | undefined, repository: string | u
 function startEdit(task: AssistantTask): void {
   editingTask.value = task;
   const repository = task.repository ?? "";
-  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, issue_enabled: props.issueEnabledRepositories?.some((item) => repositoryKey(item).toLowerCase() === repositoryKey(repository).toLowerCase()) === true, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" };
+  const legacyTarget = task.group_id ? [{ destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ destination: "private" as const, user_id: task.user_id }] : [];
+  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, issue_enabled: props.issueEnabledRepositories?.some((item) => repositoryKey(item).toLowerCase() === repositoryKey(repository).toLowerCase()) === true, profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget) };
   editing.value = true;
 }
 
@@ -262,13 +278,12 @@ async function save(): Promise<void> {
   if (form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期不能超过 365 天");
   if (!form.value.watch_commits && !form.value.watch_pull_requests && !form.value.watch_releases && !form.value.watch_stars) return toastError("Commit、PR、Release 和 Star 至少选择一项");
   if (!form.value.profile_id) return toastError("请选择发送机器人");
-  if (form.value.destination === "group" && !form.value.group_id) return toastError("请填写群号或 Chat ID");
-  if (form.value.destination === "private" && !form.value.user_id) return toastError("请填写私聊对象 ID");
+  if (form.value.notification_enabled && !form.value.notification_targets.some((target) => target.destination === "group" ? target.group_id : target.user_id)) return toastError("请至少添加一个通知对象");
   saving.value = true;
   try {
     await props.prepareAccess?.();
     const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars };
-    const delivery = { profile_id: form.value.profile_id, destination: form.value.destination, group_id: form.value.destination === "group" ? form.value.group_id : undefined, user_id: form.value.destination === "private" ? form.value.user_id : undefined };
+    const delivery = { profile_id: form.value.profile_id, notification_enabled: form.value.notification_enabled, notification_targets: form.value.notification_enabled ? form.value.notification_targets : [] };
     const repository = repositoryKey(form.value.repository);
     const enabledRepositories = [...(props.issueEnabledRepositories ?? [])].filter((item) => repositoryKey(item).toLowerCase() !== repository.toLowerCase());
     if (form.value.issue_enabled && repository) enabledRepositories.push(repository);
@@ -285,6 +300,9 @@ async function save(): Promise<void> {
     saving.value = false;
   }
 }
+
+function addTarget(): void { form.value.notification_targets.push({ destination: "private", user_id: "" }); }
+function removeTarget(index: number): void { form.value.notification_targets.splice(index, 1); }
 
 async function cancel(task: AssistantTask): Promise<void> {
   if (!await askConfirm({ title: "取消仓库订阅", message: `停止监控 ${task.repository || task.id}？`, confirmLabel: "取消订阅", danger: true })) return;

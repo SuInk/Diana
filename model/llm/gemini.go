@@ -98,6 +98,57 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 	}, nil
 }
 
+func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
+	req = req.withDefaults(c.cfg)
+	if err := validateGenerateRequest(req); err != nil {
+		return nil, err
+	}
+	system, messages := splitSystemPrompt(req.Messages)
+	config := &genai.GenerateContentConfig{}
+	if system != "" {
+		config.SystemInstruction = genai.NewContentFromText(system, genai.RoleUser)
+	}
+	if req.Temperature != nil {
+		value := float32(*req.Temperature)
+		config.Temperature = &value
+	}
+	if req.MaxOutputTokens > 0 {
+		value, err := geminiOutputTokenLimit(req.MaxOutputTokens)
+		if err != nil {
+			return nil, err
+		}
+		config.MaxOutputTokens = value
+	}
+	config.Tools = geminiTools(req.Tools)
+	iterator := c.client.Models.GenerateContentStream(ctx, req.Model, geminiContents(messages, req.Tools), config)
+	out := make(chan ChatEvent, 4)
+	go func() {
+		defer close(out)
+		var last Usage
+		for response, err := range iterator {
+			if err != nil {
+				out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+				return
+			}
+			text := response.Text()
+			if text != "" {
+				out <- ChatEvent{Type: ChatEventTextDelta, Text: text}
+			}
+			for _, functionCall := range response.FunctionCalls() {
+				if functionCall == nil {
+					continue
+				}
+				call := ToolCall{ID: functionCall.ID, Name: nativeToolName(functionCall.Name, req.Tools), Arguments: functionCall.Args}
+				out <- ChatEvent{Type: ChatEventToolCall, ToolCall: &call}
+			}
+			last = Usage{InputTokens: int64(response.UsageMetadata.PromptTokenCount), OutputTokens: int64(response.UsageMetadata.CandidatesTokenCount), TotalTokens: int64(response.UsageMetadata.TotalTokenCount)}
+		}
+		out <- ChatEvent{Type: ChatEventUsage, Usage: &last}
+		out <- ChatEvent{Type: ChatEventDone}
+	}()
+	return out, nil
+}
+
 func geminiOutputTokenLimit(value int64) (int32, error) {
 	if value < 0 || value > maxGeminiOutputTokens {
 		return 0, fmt.Errorf("llm: Gemini max_output_tokens must be between 0 and %d", maxGeminiOutputTokens)
