@@ -13,7 +13,9 @@ import type {
   QQBotStatus,
   ResolverDependency,
   StatsSnapshot,
-  UpdateStatus
+  UpdateStatus,
+  UserFavorabilityChange,
+  UserMemoryProfile
 } from "./api";
 
 export const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
@@ -116,6 +118,43 @@ const groups: QQBotGroupSummary[] = [
   { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, plugin_overrides: { "official.browser-render": false }, updated_at: before(45) },
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
+
+const demoUsers: UserMemoryProfile[] = [
+  {
+    user_id: "100200711", display_name: "青禾", favorability: 62, message_count: 1843, last_seen_at: before(2), updated_at: before(2),
+    memories: [
+      { text: "在做 Diana 的发布流程改造，经常问仓库最近的变更", source: "group", group_id: "100200301", at: before(2) },
+      { text: "习惯下午提交周报，让机器人 15:30 提醒", source: "group", group_id: "100200301", at: before(1400) },
+      { text: "喜欢喝手冲咖啡，不加糖", source: "group", group_id: "100200418", at: before(4300) }
+    ]
+  },
+  {
+    user_id: "100200913", display_name: "星野", favorability: 35, message_count: 622, last_seen_at: before(31), updated_at: before(31),
+    memories: [
+      { text: "经常在设计群让机器人画复古电车和雨夜街景", source: "group", group_id: "100200519", at: before(31) },
+      { text: "偏好冷色调和胶片质感的画面", source: "group", group_id: "100200519", at: before(2100) }
+    ]
+  },
+  {
+    user_id: "100201014", display_name: "白榆", favorability: 12, message_count: 208, last_seen_at: before(47), updated_at: before(47),
+    memories: [{ text: "对产品界面的开发者工具风格很感兴趣", source: "group", group_id: "100200301", at: before(47) }]
+  },
+  {
+    user_id: "100200888", display_name: "路人甲", favorability: -8, message_count: 96, last_seen_at: before(3000), updated_at: before(3000),
+    memories: [{ text: "多次刷屏广告链接，已被设计群屏蔽", source: "group", group_id: "100200519", at: before(3000) }]
+  }
+];
+
+const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
+  "100200711": [
+    { id: 3, user_id: "100200711", delta: 2, before_score: 60, after_score: 62, source: "interaction", reason: "耐心帮群友排查了部署问题", group_id: "100200301", created_at: before(300) },
+    { id: 2, user_id: "100200711", delta: 10, before_score: 50, after_score: 60, source: "owner_set", reason: "活动奖励", operator_id: "100200001", created_at: before(4300) },
+    { id: 1, user_id: "100200711", delta: 1, before_score: 49, after_score: 50, source: "interaction", reason: "明确表达感谢", group_id: "100200418", created_at: before(6000) }
+  ],
+  "100200888": [
+    { id: 4, user_id: "100200888", delta: -3, before_score: -5, after_score: -8, source: "interaction", reason: "重复发送广告内容", group_id: "100200519", created_at: before(3000) }
+  ]
+};
 
 export const demoEvents: AssistantEventDetail[] = [
   { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
@@ -305,6 +344,19 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const index = groups.findIndex((group) => group.group_id === config.group_id);
     if (index >= 0) groups[index] = { ...groups[index], ...config, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
     return json({ config });
+  }
+
+  if (path === "/api/assistant/users") {
+    const keyword = (url.searchParams.get("q") ?? "").trim();
+    const matched = demoUsers.filter((user) => !keyword || user.user_id.includes(keyword) || (user.display_name ?? "").includes(keyword));
+    const users = matched.map((user) => ({ ...user, memories: undefined, memory_count: user.memories?.length ?? 0 }));
+    return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
+  }
+  const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
+  if (userMatch) {
+    const user = demoUsers.find((item) => item.user_id === decodeURIComponent(userMatch[1]));
+    if (!user) return json({ error: "人员不存在或还没有画像记录" }, 404);
+    return json({ profile: user, favorability_changes: demoFavorabilityChanges[user.user_id] ?? [] });
   }
 
   if (path === "/api/assistant/events") {
