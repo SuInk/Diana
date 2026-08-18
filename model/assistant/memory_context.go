@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 const (
@@ -35,6 +37,7 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 
 func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEvent, queryText string, profile UserMemoryProfile, policy RelationshipPolicy) string {
 	cfg := r.effectiveConfigForEvent(event)
+	memoryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), longTermMemoryTokenShare)
 	if profile.UserID == "" {
 		profile = UserMemoryProfile{
 			UserID:      strings.TrimSpace(event.UserID),
@@ -42,13 +45,13 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 		}
 	}
 	if !boolValue(cfg.LongTermMemoryEnabled, true) {
-		return formatUserMemoryContext(profile, policy)
+		return fitUserMemoryCoreToTokenBudget(profile, policy, memoryBudget)
 	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()
 	if store == nil {
-		return formatUserMemoryContext(profile, policy)
+		return fitUserMemoryCoreToTokenBudget(profile, policy, memoryBudget)
 	}
 
 	queryText = memoryRetrievalText(event, queryText)
@@ -69,9 +72,9 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	cancel()
 	if err != nil {
 		log.Printf("qqbot structured memory load failed: %v", err)
-		return formatStructuredMemoryContext(profile, policy, nil)
+		return formatStructuredMemoryContextWithTokenBudget(profile, policy, nil, memoryBudget)
 	}
-	return formatStructuredMemoryContext(profile, policy, rankStructuredMemories(items, event, queryText, time.Now()))
+	return formatStructuredMemoryContextWithTokenBudget(profile, policy, rankStructuredMemories(items, event, queryText, time.Now()), memoryBudget)
 }
 
 func memoryRetrievalText(event MessageEvent, current string) string {
@@ -151,13 +154,14 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 			reasons = append(reasons, "历史回忆")
 		}
 
+		relatedEpisode := lexical >= 0.08 || exactField != "" || (item.Importance >= 0.95 && structuredMemoryQueryIsSafetyRelated(analysis.normalized))
+		if (item.Kind == MemoryKindEpisode || item.Kind == MemoryKindSummary) && !relatedEpisode {
+			continue
+		}
 		coreCurrentMemory := item.SubjectUserID == event.UserID && item.Confidence >= 0.9 &&
-			(item.Importance >= 0.9 || (item.Kind == MemoryKindInstruction && item.Importance >= 0.55))
-		relatedEpisode := lexical >= 0.08 || exactField != "" || item.Importance >= 0.95
+			((item.Kind != MemoryKindEpisode && item.Kind != MemoryKindSummary && item.Importance >= 0.9) ||
+				(item.Kind == MemoryKindInstruction && item.Importance >= 0.55))
 		if !coreCurrentMemory {
-			if (item.Kind == MemoryKindEpisode || item.Kind == MemoryKindSummary) && !relatedEpisode {
-				continue
-			}
 			if score < 0.38 {
 				continue
 			}
@@ -196,6 +200,12 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 }
 
 func formatStructuredMemoryContext(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem) string {
+	// Preserve the legacy helper for focused tests and callers outside prompt
+	// orchestration. Runtime prompts use the model-derived token budget below.
+	return formatStructuredMemoryContextWithTokenBudget(profile, policy, items, int64(structuredMemoryContextBudget)*2)
+}
+
+func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) string {
 	var builder strings.Builder
 	displayName := strings.TrimSpace(profile.DisplayName)
 	if displayName == "" {
@@ -241,24 +251,59 @@ func formatStructuredMemoryContext(profile UserMemoryProfile, policy Relationshi
 		}
 		sections[index].items = append(sections[index].items, item)
 	}
+sectionsLoop:
 	for _, section := range sections {
 		if len(section.items) == 0 {
 			continue
 		}
 		header := "\n" + section.title + "："
-		if len([]rune(builder.String()+header)) >= structuredMemoryContextBudget {
+		if llm.EstimateTextTokens(builder.String()+header) > tokenBudget {
 			break
 		}
 		builder.WriteString(header)
 		for _, item := range section.items {
 			line := formatStructuredMemoryLine(item)
-			if len([]rune(builder.String()))+len([]rune(line)) > structuredMemoryContextBudget {
-				break
+			if llm.EstimateTextTokens(builder.String()+line) > tokenBudget {
+				break sectionsLoop
 			}
 			builder.WriteString(line)
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, tokenBudget int64) string {
+	core := profile
+	memories := core.Memories
+	if len(memories) > 8 {
+		memories = memories[len(memories)-8:]
+	}
+	for drop := 0; drop <= len(memories); drop++ {
+		core.Memories = memories[drop:]
+		text := formatUserMemoryContext(core, policy)
+		if llm.EstimateTextTokens(text) <= tokenBudget {
+			return text
+		}
+	}
+	core.Memories = nil
+	text := formatUserMemoryContext(core, policy)
+	if llm.EstimateTextTokens(text) <= tokenBudget {
+		return text
+	}
+	// Relationship, favorability, permissions and interaction count are the
+	// fixed core. A very small configured window may still require omitting the
+	// verbose tone and permission descriptions as a dedicated degradation.
+	compactPolicy := policy
+	compactPolicy.Tone = ""
+	compactPolicy.Permissions = nil
+	return formatUserMemoryContext(core, compactPolicy)
+}
+
+func structuredMemoryQueryIsSafetyRelated(query string) bool {
+	return containsAnyMemoryPhrase(query,
+		"自杀", "自残", "不想活", "去死", "结束生命", "伤害自己",
+		"suicide", "self-harm", "kill myself",
+	)
 }
 
 func formatStructuredMemoryLine(item StructuredMemoryItem) string {

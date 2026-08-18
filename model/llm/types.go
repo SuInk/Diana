@@ -84,10 +84,14 @@ type Message struct {
 	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 	ToolName   string        `json:"tool_name,omitempty"`
+	ToolError  bool          `json:"tool_error,omitempty"`
 	// ResponsesOutput preserves original Responses API output items, including
 	// reasoning and encrypted continuation state required by the next request.
 	ResponsesOutput []json.RawMessage `json:"-"`
 	Priority        MessagePriority   `json:"-"`
+	// ContextGroup keeps related optional messages atomic during token fitting.
+	// It is local orchestration metadata and is never sent to providers.
+	ContextGroup string `json:"-"`
 }
 
 type ToolDefinition struct {
@@ -110,9 +114,12 @@ const (
 	MessagePriorityHistory MessagePriority = 20
 	MessagePrioritySummary MessagePriority = 60
 	MessagePriorityMemory  MessagePriority = 80
-	MessagePrioritySystem  MessagePriority = 120
-	MessagePriorityPlugin  MessagePriority = 130
-	MessagePriorityCurrent MessagePriority = 140
+	// Recent history is more useful for conversational continuity than recalled
+	// memory or an older summary, but remains expendable before system context.
+	MessagePriorityRecentHistory MessagePriority = 100
+	MessagePrioritySystem        MessagePriority = 120
+	MessagePriorityPlugin        MessagePriority = 130
+	MessagePriorityCurrent       MessagePriority = 140
 )
 
 type ContentPartType string
