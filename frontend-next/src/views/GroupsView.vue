@@ -157,6 +157,7 @@
             <option value="gentle">温柔</option>
             <option value="lively">活泼</option>
             <option value="concise">简洁</option>
+            <option value="member">群友</option>
           </select>
         </div>
         <div class="field wide">
@@ -319,7 +320,7 @@ function responseModeLabel(mode: QQBotGroupConfig["response_mode"]): string {
 }
 
 function replyStyleLabel(style: QQBotGroupConfig["reply_style"]): string {
-  return ({ assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格" } as const)[style as "assistant" | "gentle" | "lively" | "concise"] ?? "";
+  return ({ assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格", member: "群友风格" } as const)[style as "assistant" | "gentle" | "lively" | "concise" | "member"] ?? "";
 }
 
 function overrideCount(group: QQBotGroupConfig): number {

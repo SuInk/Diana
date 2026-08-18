@@ -106,8 +106,7 @@
               <span class="bot-profile-qq">{{ profile.bot_qq || accountPlaceholder(profile) }}</span>
             </span>
           </button>
-          <!-- 配置是这张卡片唯一的日常操作，占满整行；删除留在最右做安静的
-               图标，和主操作之间隔着整个按钮宽度，不容易误点。 -->
+          <!-- 卡片主体已经能点进编辑；底部只放紧凑的配置和删除，避免大按钮抢视觉。 -->
           <div class="bot-profile-actions">
             <button class="btn small bot-profile-configure" type="button" :disabled="busy" @click="editProfile(profile)">
               <Settings2 :size="13" aria-hidden="true" />
@@ -299,6 +298,7 @@
                   <option value="gentle">温柔</option>
                   <option value="lively">活泼</option>
                   <option value="concise">简洁</option>
+                  <option value="member">群友</option>
                 </select>
                 <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
               </div>
