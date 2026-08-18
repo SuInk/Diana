@@ -248,7 +248,7 @@ The WebUI requires authentication from the first startup, with identical rules f
 - You may provide `DIANA_ADMIN_USERNAME=diana#yourname` and `DIANA_ADMIN_PASSWORD` on first startup instead. They never overwrite credentials already stored in SQLite.
 - After login, the username and password can be updated under Settings > Access Security. Usernames must start with `diana#`; passwords must contain at least 8 characters.
 
-**Administrator quick login:** enable it on the Assistant page and configure the owner account to expose two one-time login methods. Code login sends a six-digit code to the owner's QQ or Telegram account and also requires the browser-bound challenge token. Private-message confirmation displays a code in the browser which the owner sends privately to the bot. Codes expire after five minutes, are attempt-limited and single-use, while delivery has a 60-second cooldown. The active bot must be online for either method.
+**Administrator quick login:** enable it on the Assistant page and configure the owner account to expose one-time private-message confirmation: the browser displays a six-digit code which the owner sends privately to the bot. Codes expire after five minutes and are single-use, and creation is rate-limited per IP. The active bot must be online. The former server-pushed code login was removed — that endpoint needed no credentials, so anonymous requests could use it to spam the owner's account or hold the cooldown window and lock the owner out.
 
 ## WebUI Log Center
 
