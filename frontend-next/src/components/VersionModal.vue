@@ -143,47 +143,49 @@
 
         <template v-else-if="kind === 'releases'">
           <p v-if="!releases.length" class="muted" style="font-size: 12.5px; margin: 0">暂无 Release 记录。</p>
-          <ul v-else class="changelog-list release-list version-history-list">
+          <ul v-else class="changelog-list release-list version-history-list" :class="{ 'with-rollback': deploymentMode === 'git' || releaseSelfUpdate }">
             <li v-for="release in releases" :key="release.tag" class="release-item">
-              <div class="cluster" style="justify-content: space-between; gap: 8px">
+              <div class="release-row">
                 <span class="cluster" style="gap: 7px">
                   <a class="mono changelog-sha" :href="release.url" target="_blank" rel="noreferrer">{{ release.tag }}</a>
                   <span v-if="release.tag === currentTag" class="badge ok">当前</span>
                   <span v-if="release.prerelease" class="badge warn">预发布</span>
                 </span>
-                <span class="cluster" style="gap: 4px">
+                <span class="release-side">
                   <span class="muted changelog-date">{{ formatDateTime(release.date) }}</span>
-                  <a
-                    v-if="release.checksum_available && release.checksum_url"
-                    class="integrity-link"
-                    :href="release.checksum_url"
-                    target="_blank"
-                    rel="noreferrer"
-                    :title="`查看 ${release.tag} 的 SHA-256 清单`"
-                    :aria-label="`查看 ${release.tag} 的 SHA-256 清单`"
-                  >
-                    <ShieldCheck :size="15" aria-hidden="true" />
-                  </a>
-                  <button
-                    v-if="canRollbackTo(release)"
-                    class="btn ghost small rollback-btn"
-                    type="button"
-                    :disabled="operationRunning"
-                    @click="confirmRollback(release)"
-                  >
-                    <History :size="13" aria-hidden="true" />
-                    回退
-                  </button>
-                  <button
-                    v-else-if="deploymentMode === 'release' && !releaseSelfUpdate && !release.prerelease && release.tag !== currentTag"
-                    class="btn ghost icon-only small"
-                    type="button"
-                    :title="`复制固定镜像标签 ${release.tag}`"
-                    :aria-label="`复制固定镜像标签 ${release.tag}`"
-                    @click="copyImageTag(release.tag)"
-                  >
-                    <Copy :size="14" aria-hidden="true" />
-                  </button>
+                  <span class="release-actions">
+                    <button
+                      v-if="canRollbackTo(release)"
+                      class="btn ghost small rollback-btn"
+                      type="button"
+                      :disabled="operationRunning"
+                      @click="confirmRollback(release)"
+                    >
+                      <History :size="13" aria-hidden="true" />
+                      回退
+                    </button>
+                    <button
+                      v-else-if="deploymentMode === 'release' && !releaseSelfUpdate && !release.prerelease && release.tag !== currentTag"
+                      class="btn ghost icon-only small"
+                      type="button"
+                      :title="`复制固定镜像标签 ${release.tag}`"
+                      :aria-label="`复制固定镜像标签 ${release.tag}`"
+                      @click="copyImageTag(release.tag)"
+                    >
+                      <Copy :size="14" aria-hidden="true" />
+                    </button>
+                    <a
+                      v-if="release.checksum_available && release.checksum_url"
+                      class="integrity-link"
+                      :href="release.checksum_url"
+                      target="_blank"
+                      rel="noreferrer"
+                      :title="`查看 ${release.tag} 的 SHA-256 清单`"
+                      :aria-label="`查看 ${release.tag} 的 SHA-256 清单`"
+                    >
+                      <ShieldCheck :size="15" aria-hidden="true" />
+                    </a>
+                  </span>
                 </span>
               </div>
               <p v-if="release.notes" class="muted release-notes">{{ release.notes }}</p>
@@ -783,6 +785,34 @@ a.version-hero-integrity:hover {
 
 .version-history-list .release-item {
   gap: 2px;
+}
+
+.release-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.release-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+/* 固定操作列宽度，让各行日期对齐成一列。 */
+.release-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 60px;
+}
+
+.version-history-list.with-rollback .release-actions {
+  min-width: 98px;
 }
 
 .integrity-link {
