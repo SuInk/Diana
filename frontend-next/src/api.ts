@@ -651,31 +651,37 @@ export function changeCredentials(currentPassword: string, newUsername: string, 
   });
 }
 
+export interface AuthSession {
+  id: string;
+  device_name: string;
+  user_agent?: string;
+  ip_address?: string;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  current: boolean;
+}
+
+export function listAuthSessions(): Promise<{ sessions: AuthSession[] }> {
+  return requestJSON<{ sessions: AuthSession[] }>("/api/auth/sessions");
+}
+
+export function revokeAuthSession(id: string): Promise<{ revoked: boolean; current: boolean }> {
+  return requestJSON<{ revoked: boolean; current: boolean }>(`/api/auth/sessions/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+export function revokeOtherAuthSessions(): Promise<{ revoked: number }> {
+  return requestJSON<{ revoked: number }>("/api/auth/sessions/revoke-others", { method: "POST" });
+}
+
 export interface OwnerLoginStatus {
   available: boolean;
-  code_delivery_available: boolean;
 }
 
 export function getOwnerLoginStatus(): Promise<OwnerLoginStatus> {
   return requestJSON<OwnerLoginStatus>("/api/auth/owner/status");
-}
-
-export interface OwnerLoginChallenge {
-  ok: boolean;
-  challenge_token: string;
-  expires_in_seconds: number;
-  cooldown_seconds: number;
-}
-
-export function requestOwnerLoginCode(): Promise<OwnerLoginChallenge> {
-  return requestJSON<OwnerLoginChallenge>("/api/auth/owner/challenge", { method: "POST" });
-}
-
-export function verifyOwnerLoginCode(challengeToken: string, code: string): Promise<{ ok: boolean }> {
-  return requestJSON<{ ok: boolean }>("/api/auth/owner/verify", {
-    method: "POST",
-    body: JSON.stringify({ challenge_token: challengeToken, code })
-  });
 }
 
 export interface OwnerLoginPairing {
@@ -693,6 +699,13 @@ export interface OwnerLoginPairingStatus {
 
 export function createOwnerLoginPairing(): Promise<OwnerLoginPairing> {
   return requestJSON<OwnerLoginPairing>("/api/auth/owner/pair", { method: "POST" });
+}
+
+export function claimOwnerLoginPairing(code: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>("/api/auth/owner/pair/claim", {
+    method: "POST",
+    body: JSON.stringify({ code })
+  });
 }
 
 export function pollOwnerLoginPairing(pollToken: string): Promise<OwnerLoginPairingStatus> {

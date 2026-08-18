@@ -249,7 +249,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">允许管理员快速登录控制台</span>
                   </label>
-                  <span class="hint">登录页可向主人账号发送一次性验证码，也可由主人私聊机器人确认；需当前机器人在线。</span>
+                  <span class="hint">开启后登录页可显示一次性验证码，主人私聊发给机器人即可登录；需当前机器人在线。</span>
                 </div>
                 <div v-if="isOneBotPlatform" class="field wide">
                   <label for="bot-token">OneBot Access Token</label>

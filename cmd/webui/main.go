@@ -347,8 +347,17 @@ func main() {
 	authHandler.SetLogStore(sqliteStore)
 	authHandler.Register(router)
 	// ownerLoginHandler 在 botRuntime 创建后注册（见下方）。
-	if err := router.SetTrustedProxies(nil); err != nil {
-		log.Fatal(err)
+	// 默认谁都不信：ClientIP() 直接取 TCP 对端地址，伪造 X-Forwarded-For 无效。
+	// 但套上反向代理之后所有请求的对端地址都是代理自己，按来源计数的限流会退化
+	// 成全局限流，真管理员会被攻击者的失败次数连坐。部署在反代后面时用
+	// DIANA_TRUSTED_PROXIES 声明代理地址（逗号分隔的 IP 或 CIDR），声明之后才
+	// 会解析 X-Forwarded-For。
+	trustedProxies := stringListFromEnv("DIANA_TRUSTED_PROXIES", nil)
+	if err := router.SetTrustedProxies(trustedProxies); err != nil {
+		log.Fatalf("DIANA_TRUSTED_PROXIES 配置无效：%v", err)
+	}
+	if len(trustedProxies) > 0 {
+		log.Printf("已信任反向代理 %s，客户端 IP 取自 X-Forwarded-For", strings.Join(trustedProxies, ", "))
 	}
 	handler.Register(router)
 	systemHandler.Register(router)
