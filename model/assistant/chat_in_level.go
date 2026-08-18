@@ -155,6 +155,11 @@ func clampChatInRatio(value float64) float64 {
 // chatInSettings 返回本条配置生效的闲聊插话参数。
 func (cfg BotConfig) chatInSettings() chatInSettings {
 	settings := chatInSettingsFrom(cfg.ChatInEnabled, cfg.ChatInLevel, cfg.ChatInThreshold, cfg.ChatInChance, cfg.ChatInCooldownSeconds)
+	// 「关闭」是硬开关：自然插话模式不能把它重新打开，否则档位说明里的
+	// 「从不主动插话」会变成比最高档还激进。
+	if settings.Level == ChatInLevelOff {
+		return settings
+	}
 	if boolValue(cfg.NaturalInterjectionEnabled, false) {
 		settings.Enabled = true
 		settings.Natural = true

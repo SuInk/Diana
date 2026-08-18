@@ -152,13 +152,14 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 		cfg.MinimumReplyMemberLevel = level
 		changed = true
 	}
+	chatInChanged := false
 	if _, present := input["chat_in_enabled"]; present {
 		cfg.ChatInEnabled = boolPointer(groupToolBool(input, "chat_in_enabled"))
-		changed = true
+		changed, chatInChanged = true, true
 	}
 	if _, present := input["natural_interjection_enabled"]; present {
 		cfg.NaturalInterjectionEnabled = boolPointer(groupToolBool(input, "natural_interjection_enabled"))
-		changed = true
+		changed, chatInChanged = true, true
 	}
 	if value, present := input["chat_in_level"]; present {
 		level := ChatInLevel(fmt.Sprintf("%v", value)).Normalized()
@@ -166,7 +167,7 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 			return "", fmt.Errorf("chat_in_level 必须是 off、low、medium、high 或 max 之一")
 		}
 		cfg.ChatInLevel = level
-		changed = true
+		changed, chatInChanged = true, true
 	}
 	if threshold, present, err := groupToolFloat(input, "chat_in_threshold"); err != nil {
 		return "", err
@@ -175,7 +176,7 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 			return "", fmt.Errorf("chat_in_threshold 必须在 0.5 到 1 之间")
 		}
 		cfg.ChatInThreshold = threshold
-		changed = true
+		changed, chatInChanged = true, true
 	}
 	if chance, present, err := groupToolFloat(input, "chat_in_chance"); err != nil {
 		return "", err
@@ -184,7 +185,7 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 			return "", fmt.Errorf("chat_in_chance 必须在 0.05 到 1 之间")
 		}
 		cfg.ChatInChance = chance
-		changed = true
+		changed, chatInChanged = true, true
 	}
 	if value, present := input["chat_in_cooldown_seconds"]; present {
 		seconds, err := groupToolInteger(value)
@@ -192,10 +193,17 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 			return "", fmt.Errorf("chat_in_cooldown_seconds 必须是 0 到 3600 的整数")
 		}
 		cfg.ChatInCooldownSeconds = seconds
-		changed = true
+		changed, chatInChanged = true, true
 	}
 	if !changed {
 		return "", fmt.Errorf("至少提供一项要修改的回复策略")
+	}
+	message := "已更新本群回复策略。"
+	// 预设回复模式会在运行时重新套用自己的插话档位，把这里刚写进去的值覆盖掉。
+	// 既然调用方明确要求改插话，就把本群切到自定义，让修改真正生效。
+	if chatInChanged && cfg.ResponseMode.Normalized() != ResponseModeCustom && strings.TrimSpace(string(cfg.ResponseMode)) != "" {
+		cfg.ResponseMode = ResponseModeCustom
+		message = "已更新本群回复策略，并把本群回复模式切换为自定义，否则预设模式会覆盖插话设置。"
 	}
 	saved, err := t.runtime.saveGroupConfig(cfg)
 	if err != nil {
@@ -208,19 +216,24 @@ func (t *dianaQQGroupTool) replyPolicy(ctx context.Context, input map[string]any
 	return marshalDianaQQGroupResult(dianaQQGroupResult{
 		OK:           true,
 		Action:       "set_reply_policy",
-		Message:      "已更新本群回复策略。",
+		Message:      message,
 		ReplyPolicy:  &policy,
 		OperatorRole: role,
 	})
 }
 
 func dianaQQGroupReplyPolicyFromConfig(cfg GroupConfig) dianaQQGroupReplyPolicy {
-	// 报告最终生效值，而不是原始字段：档位预设和自定义覆盖合并后才是机器人真正的行为。
-	chatIn := (BotConfig{
+	// 报告最终生效值，而不是原始字段：预设回复模式、档位预设和自定义覆盖依次合并
+	// 之后才是机器人真正的行为。少算预设那一层会把「已改成 max」这类假象报给用户。
+	resolved := BotConfig{
 		ChatInEnabled: cfg.ChatInEnabled, ChatInLevel: cfg.ChatInLevel, ChatInThreshold: cfg.ChatInThreshold,
 		ChatInChance: cfg.ChatInChance, ChatInCooldownSeconds: cfg.ChatInCooldownSeconds,
 		NaturalInterjectionEnabled: cfg.NaturalInterjectionEnabled,
-	}).chatInSettings()
+	}
+	if strings.TrimSpace(string(cfg.ResponseMode)) != "" {
+		cfg.ResponseMode.Normalized().apply(&resolved)
+	}
+	chatIn := resolved.chatInSettings()
 	return dianaQQGroupReplyPolicy{
 		ProactiveReplyChance:       cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:    cfg.ProactiveReplyThreshold,

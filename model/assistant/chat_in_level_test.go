@@ -288,3 +288,70 @@ func TestChatInReplyPromptOnlyAppearsForInterjections(t *testing.T) {
 		}
 	}
 }
+
+func TestChatInOffIsNotResurrectedByNaturalInterjection(t *testing.T) {
+	settings := BotConfig{
+		ResponseMode:               ResponseModeCustom,
+		ChatInLevel:                ChatInLevelOff,
+		NaturalInterjectionEnabled: boolPointer(true),
+	}.chatInSettings()
+	if settings.Enabled || settings.Natural {
+		t.Fatalf("chat-in off was reopened by natural mode: %#v", settings)
+	}
+	// 其余档位仍然可以切到自然插话。
+	on := BotConfig{
+		ResponseMode:               ResponseModeCustom,
+		ChatInLevel:                ChatInLevelLow,
+		NaturalInterjectionEnabled: boolPointer(true),
+	}.chatInSettings()
+	if !on.Enabled || !on.Natural || on.Cooldown != 0 {
+		t.Fatalf("natural mode did not apply on an open level: %#v", on)
+	}
+}
+
+func TestResponseModePresetClearsChatInFineTuning(t *testing.T) {
+	preset := BotConfig{
+		ResponseMode:          ResponseModeStandard,
+		ChatInThreshold:       0.6,
+		ChatInChance:          0.9,
+		ChatInCooldownSeconds: 5,
+	}.WithDefaults()
+	if preset.ChatInLevel != ChatInLevelLow {
+		t.Fatalf("preset level = %q", preset.ChatInLevel)
+	}
+	if preset.ChatInThreshold != 0 || preset.ChatInChance != 0 || preset.ChatInCooldownSeconds != 0 {
+		t.Fatalf("preset kept stale fine-tuning: %#v", preset)
+	}
+	if settings := preset.chatInSettings(); settings.Threshold != chatInLevelPresets[ChatInLevelLow].Threshold {
+		t.Fatalf("effective threshold = %v, want the level preset", settings.Threshold)
+	}
+	// 自定义模式下这三项仍然是用户说了算。
+	custom := BotConfig{
+		ResponseMode:          ResponseModeCustom,
+		ChatInLevel:           ChatInLevelLow,
+		ChatInThreshold:       0.6,
+		ChatInChance:          0.9,
+		ChatInCooldownSeconds: 5,
+	}.WithDefaults()
+	if custom.ChatInThreshold != 0.6 || custom.ChatInChance != 0.9 || custom.ChatInCooldownSeconds != 5 {
+		t.Fatalf("custom mode lost fine-tuning: %#v", custom)
+	}
+}
+
+func TestChatInCooldownIsNotConsumedByRoutingAlone(t *testing.T) {
+	provider := &refusalLLMProvider{replies: []string{"端口被占了。"}}
+	runtime := NewRuntime(BotConfig{BotQQ: "42"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m-1", RawMessage: "这个报错什么意思", chatInReply: true}
+	// 路由放行之后回复仍可能被质量审核或发送失败挡下来，那时冷却不该被吃掉。
+	if !runtime.chatInCooldownAllows(event, time.Minute) {
+		t.Fatal("cooldown was already consumed before any reply was sent")
+	}
+	if _, err := runtime.replyAndRecord(context.Background(), event, event.RawMessage, "replied_proactive"); err != nil {
+		t.Fatalf("replyAndRecord: %v", err)
+	}
+	if runtime.chatInCooldownAllows(event, time.Minute) {
+		t.Fatal("cooldown was not started after the interjection was delivered")
+	}
+}
