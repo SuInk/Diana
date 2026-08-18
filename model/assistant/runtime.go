@@ -5070,7 +5070,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 
 func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Message) []llm.Message {
 	cfg := r.effectiveConfigForEvent(event)
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt())
+	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt() + "\n" + cfg.ReplyStyle.closingAnchor())
 	if persona == "" {
 		return messages
 	}
