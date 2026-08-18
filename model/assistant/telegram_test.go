@@ -472,3 +472,37 @@ func TestTelegramDisplayNameFallsBackToUsername(t *testing.T) {
 		t.Fatalf("nil 用户应返回空串，实际 %q", got)
 	}
 }
+
+func TestTelegramMessageToEventMapsReplyToNeutralSegment(t *testing.T) {
+	// Telegram 的 reply_to_message 要落成与 OneBot 同一种 reply 段，
+	// 模型才能在两个平台看到同样的引用标记，并用同样的写法引用回去。
+	event := telegramMessageToEvent(&telegramMessage{
+		MessageID: 200,
+		Chat:      &telegramChat{ID: -100200300, Type: "supergroup"},
+		From:      &telegramUser{ID: 42},
+		Text:      "就是这张",
+		ReplyTo:   &telegramMessage{MessageID: 199},
+	}, "7", "diana_bot")
+
+	if len(event.Segments) != 2 || event.Segments[0].Type != "reply" {
+		t.Fatalf("segments = %#v, want a leading reply segment", event.Segments)
+	}
+	if event.Segments[0].Data["id"] != "199" {
+		t.Fatalf("reply segment = %#v", event.Segments[0])
+	}
+	if got := PlainText(event.Segments); got != "[diana-reply:199]就是这张" {
+		t.Fatalf("PlainText = %q", got)
+	}
+}
+
+func TestTelegramMessageToEventWithoutReplyKeepsTextOnly(t *testing.T) {
+	event := telegramMessageToEvent(&telegramMessage{
+		MessageID: 201,
+		Chat:      &telegramChat{ID: -100200300, Type: "supergroup"},
+		From:      &telegramUser{ID: 42},
+		Text:      "普通消息",
+	}, "7", "diana_bot")
+	if len(event.Segments) != 1 || event.Segments[0].Type != "text" {
+		t.Fatalf("segments = %#v, want text only", event.Segments)
+	}
+}

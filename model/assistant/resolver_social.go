@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 
@@ -387,11 +386,11 @@ func xiaohongshuMediaImageURLs(note map[string]any) []string {
 // 而 Cookie 过期恰恰是最高频的故障，用户从那句话里根本排查不出来。
 // 这里按「缺依赖 → 缺凭据 → 超限 → 兜底」的顺序逐层缩小范围。
 func resolverDownloadFailureHint(ctx context.Context, raw string) string {
-	if _, err := exec.LookPath("yt-dlp"); err != nil {
+	if _, err := lookResolverCommand("yt-dlp"); err != nil {
 		return "运行环境未安装 yt-dlp"
 	}
 	if isBilibiliURL(raw) {
-		if _, err := exec.LookPath("ffmpeg"); err != nil {
+		if _, err := lookResolverCommand("ffmpeg"); err != nil {
 			return "运行环境未安装 ffmpeg（B 站音视频需要合流）"
 		}
 	}
@@ -413,7 +412,7 @@ func resolverCredentialFailureHint(ctx context.Context, raw string) string {
 		}
 		return "小红书 Cookie 可能已失效，或视频超过大小/时长上限"
 	case isBilibiliURL(raw):
-		if _, err := exec.LookPath("node"); err != nil && bilibiliSessdata(ctx) == "" {
+		if _, err := lookResolverCommand("node"); err != nil && bilibiliSessdata(ctx) == "" {
 			return "B 站未配置 SESSDATA，大会员或需登录内容无法下载"
 		}
 		return "B 站限流、SESSDATA 失效，或视频超过大小/时长上限"
