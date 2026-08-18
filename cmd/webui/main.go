@@ -32,6 +32,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/storage"
 	"github.com/SuInk/diana/model/updater"
+	"github.com/SuInk/diana/model/version"
 	"github.com/SuInk/diana/webui"
 
 	"github.com/gin-gonic/gin"
@@ -41,6 +42,11 @@ import (
 // buildVersion 由构建时 -ldflags "-X main.buildVersion=<version>" 注入；
 // Release 使用语义化 tag，普通开发构建使用 dev。
 var buildVersion = "dev"
+
+// runtimeVersion 是对外展示、并参与 Release 更新比较的版本号。
+// 没有注入正式 tag 时回落到源码基线（如 v0.8.36-dev），
+// 保证本地构建也能和最新 Release 做语义化比较。
+var runtimeVersion = version.Resolve(buildVersion)
 
 const (
 	legacyLLMConfigPluginID = "official.llm-config-skill"
@@ -116,7 +122,7 @@ func main() {
 	}
 	systemHandler := webui.NewSystemUpdateHandler(systemUpdater)
 	systemHandler.SetLogStore(sqliteStore)
-	systemHandler.SetBuildVersion(buildVersion)
+	systemHandler.SetBuildVersion(runtimeVersion)
 	if err := systemHandler.SetUpdatePolicyStore(ctx, sqliteStore); err != nil {
 		log.Fatal(err)
 	}
@@ -124,7 +130,7 @@ func main() {
 		log.Printf("load system release cache: %v", err)
 	}
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
-		CurrentVersion: buildVersion,
+		CurrentVersion: runtimeVersion,
 		FrontendDir:    frontendDistDir(),
 		DatabasePath:   sqliteStore.Path(),
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
@@ -305,7 +311,7 @@ func main() {
 	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path())
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
-	healthHandler := webui.NewHealthHandlerWithVersion(buildVersion)
+	healthHandler := webui.NewHealthHandlerWithVersion(runtimeVersion)
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()

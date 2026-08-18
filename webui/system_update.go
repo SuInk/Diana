@@ -240,7 +240,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 	if releaseAvailable && latest.ChecksumAvailable {
 		_, packageReady = latest.asset(h.releaseUpdater.ExpectedAssetName())
 	}
-	updateAvailable, versionErr := isNewerVersion(current, latest.Tag)
+	updateAvailable, versionErr := updateAvailableAgainst(current, latest.Tag)
 	if versionErr != nil {
 		writeError(c, http.StatusInternalServerError, versionErr)
 		return
@@ -426,7 +426,7 @@ func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool)
 		return updater.Result{}, err
 	}
 	if !force {
-		updateAvailable, versionErr := isNewerVersion(status.VersionLabel(), latest.Tag)
+		updateAvailable, versionErr := updateAvailableAgainst(status.VersionLabel(), latest.Tag)
 		if versionErr != nil {
 			return updater.Result{}, versionErr
 		}
@@ -479,7 +479,7 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 		return updater.Result{Status: status, Downloaded: true, TargetCommit: latest.Tag, Output: "Release package is already downloaded and verified.", At: time.Now()}, nil
 	}
 	if !force {
-		updateAvailable, versionErr := isNewerVersion(status.VersionLabel(), latest.Tag)
+		updateAvailable, versionErr := updateAvailableAgainst(status.VersionLabel(), latest.Tag)
 		if versionErr != nil {
 			return updater.Result{}, versionErr
 		}
@@ -851,6 +851,27 @@ func latestStableRelease(releases []ReleaseEntry) ReleaseEntry {
 		}
 	}
 	return ReleaseEntry{}
+}
+
+// updateAvailableAgainst 判断当前运行版本是否落后于目标 Release。
+// 当前版本无法解析成语义化版本时（例如没有注入版本号的本地构建），
+// 视为落后于任何正式 Release，让用户可以直接装回正式版本，
+// 而不是因为版本号不可比较就报错或永远不提示更新。
+func updateAvailableAgainst(current, latest string) (bool, error) {
+	latestParts, latestOK := versionParts(latest)
+	if !latestOK {
+		return false, fmt.Errorf("%w：最新版本 %q 无法解析，要求格式为 vX.Y.Z", errInvalidUpdateVersion, latest)
+	}
+	currentParts, currentOK := versionParts(current)
+	if !currentOK {
+		return true, nil
+	}
+	for i := range currentParts {
+		if latestParts[i] != currentParts[i] {
+			return latestParts[i] > currentParts[i], nil
+		}
+	}
+	return false, nil
 }
 
 func isNewerVersion(current, latest string) (bool, error) {
