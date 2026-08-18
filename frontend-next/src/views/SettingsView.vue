@@ -79,6 +79,51 @@
       </div>
     </section>
 
+    <!-- 登录会话 -->
+    <section v-if="authRequired" class="card" style="margin-bottom: 16px">
+      <div class="card-header">
+        <h2>登录会话</h2>
+        <span class="card-sub">机器人发来异常登录提醒时，在这里把对应设备踢下线</span>
+      </div>
+      <div class="card-body stack">
+        <p v-if="sessionsLoading && sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">加载中…</p>
+        <p v-else-if="sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">当前没有活跃会话。</p>
+        <ul v-else class="session-list">
+          <li v-for="session in sessions" :key="session.id" class="session-item">
+            <div class="session-main">
+              <span class="session-name">
+                {{ session.device_name || "未知设备" }}
+                <span v-if="session.current" class="badge ok">当前设备</span>
+              </span>
+              <span class="session-meta">
+                {{ session.ip_address || "IP 未知" }} · 最后活跃 {{ formatTime(session.last_seen_at) }}
+              </span>
+              <span v-if="session.user_agent" class="session-agent">{{ session.user_agent }}</span>
+            </div>
+            <button
+              class="btn small danger"
+              type="button"
+              :disabled="revokingID !== ''"
+              @click="revokeSession(session)"
+            >
+              <LogOut :size="14" aria-hidden="true" />
+              {{ revokingID === session.id ? "处理中…" : session.current ? "退出本机" : "踢下线" }}
+            </button>
+          </li>
+        </ul>
+        <div class="cluster" style="gap: 8px">
+          <button class="btn" type="button" :disabled="sessionsLoading" @click="loadSessions">
+            <RefreshCw :size="14" aria-hidden="true" />
+            刷新
+          </button>
+          <button class="btn danger" type="button" :disabled="revokingID !== '' || otherSessionCount === 0" @click="revokeOthers">
+            <LogOut :size="14" aria-hidden="true" />
+            登出其他 {{ otherSessionCount }} 个设备
+          </button>
+        </div>
+      </div>
+    </section>
+
     <div class="grid-2">
       <!-- 主题 -->
       <section class="card">
@@ -192,6 +237,9 @@ import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw, RotateCw } from "@l
 import {
   changeCredentials,
   getAuthStatus,
+  listAuthSessions,
+  revokeAuthSession,
+  revokeOtherAuthSessions,
   getHealth,
   getSystemVersion,
   getUpdateStatus,
@@ -200,6 +248,7 @@ import {
 	downloadSystemUpdate,
   pullFromGitHub,
   restartSystem,
+  type AuthSession,
   type HealthResponse,
   type SystemVersion,
   type UpdateStatus
@@ -225,6 +274,10 @@ const showCurrentPassword = ref(false);
 const showNewPassword = ref(false);
 const savingPassword = ref(false);
 const deploymentMode = ref<"git" | "release">("release");
+const sessions = ref<AuthSession[]>([]);
+const sessionsLoading = ref(false);
+const revokingID = ref("");
+const otherSessionCount = computed(() => sessions.value.filter((item) => !item.current).length);
 const operationRunning = computed(() => updating.value || updateStatus.value?.updating === true);
 let updateStatusPollTimer: number | undefined;
 
@@ -243,6 +296,8 @@ async function saveCredentials(): Promise<void> {
   try {
     const result = await changeCredentials(currentPassword.value, username.value, newPassword.value);
     username.value = result.username;
+    // 改密会清空所有旧会话，列表要跟着刷新。
+    void loadSessions();
     toastSuccess(authRequired.value ? "账号与密码已更新" : "密码保护已开启");
     authRequired.value = true;
     currentPassword.value = "";
@@ -261,6 +316,62 @@ async function doLogout(): Promise<void> {
     await logout();
   } finally {
     window.location.reload();
+  }
+}
+
+async function loadSessions(): Promise<void> {
+  if (!authRequired.value) {
+    sessions.value = [];
+    return;
+  }
+  sessionsLoading.value = true;
+  try {
+    sessions.value = (await listAuthSessions()).sessions;
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "读取登录会话失败");
+  } finally {
+    sessionsLoading.value = false;
+  }
+}
+
+async function revokeSession(session: AuthSession): Promise<void> {
+  const label = session.current ? "退出当前设备？" : `踢下线「${session.device_name || "未知设备"}」？`;
+  if (!(await askConfirm({ title: "撤销登录会话", message: label, confirmLabel: "撤销", danger: true }))) return;
+  revokingID.value = session.id;
+  try {
+    const result = await revokeAuthSession(session.id);
+    if (result.current) {
+      // 撤销的是自己，cookie 已被清掉，重载回登录页。
+      window.location.reload();
+      return;
+    }
+    toastSuccess("该设备已登出");
+    await loadSessions();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "撤销会话失败");
+  } finally {
+    revokingID.value = "";
+  }
+}
+
+async function revokeOthers(): Promise<void> {
+  if (!(await askConfirm({
+    title: "登出其他设备",
+    message: `除当前设备外的 ${otherSessionCount.value} 个会话都会立即失效。`,
+    confirmLabel: "全部登出",
+    danger: true
+  }))) {
+    return;
+  }
+  revokingID.value = "others";
+  try {
+    const result = await revokeOtherAuthSessions();
+    toastSuccess(`已登出 ${result.revoked} 个设备`);
+    await loadSessions();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "登出其他设备失败");
+  } finally {
+    revokingID.value = "";
   }
 }
 
@@ -385,7 +496,7 @@ async function doRestart(): Promise<void> {
 
 onMounted(() => {
   void loadUpdates();
-  void loadAuthStatus();
+  void loadAuthStatus().then(() => loadSessions());
   void getHealth()
     .then((result) => {
       health.value = result;
