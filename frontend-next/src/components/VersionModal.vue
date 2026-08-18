@@ -181,17 +181,6 @@
                     >
                       <Copy :size="14" aria-hidden="true" />
                     </button>
-                    <a
-                      v-if="release.checksum_available && release.checksum_url"
-                      class="integrity-link"
-                      :href="release.checksum_url"
-                      target="_blank"
-                      rel="noreferrer"
-                      :title="`查看 ${release.tag} 的 SHA-256 清单`"
-                      :aria-label="`查看 ${release.tag} 的 SHA-256 清单`"
-                    >
-                      <ShieldCheck :size="15" aria-hidden="true" />
-                    </a>
                   </span>
                 </span>
               </div>
@@ -495,10 +484,27 @@ async function confirmInstall(): Promise<void> {
   }
 }
 
+// 服务端持久化的升级结果是一条历史记录，不等于「刚刚升级成功」。回退、重装
+// 旧版本、或者之后又发现了更新的版本之后，它描述的版本就不是当前跑着的这个
+// 了；这时再挂一条绿色成功横幅，会和旁边的「发现新版本」「正在下载」同时出现。
+function persistedSuccessDescribesRunning(value: UpdateStatus): boolean {
+  const recorded = normalizeVersionTag(value.last_update_version);
+  const running = normalizeVersionTag(version.value?.build_version || version.value?.version_label);
+  // 有一边拿不到就沿用原来的行为，宁可多显示也不要把真的成功提示吞掉。
+  if (!recorded || !running) return true;
+  return recorded === running;
+}
+
+function normalizeVersionTag(value?: string): string {
+  return (value ?? "").trim().replace(/^v/i, "").toLowerCase();
+}
+
 function applyPersistedUpdateResult(value: UpdateStatus): void {
   const target = value.last_update_version || installTarget || "目标版本";
   if (value.last_update_status === "healthy") {
-    updatedHint.value = `${target} 已升级成功并通过健康检查`;
+    updatedHint.value = persistedSuccessDescribesRunning(value)
+      ? `${target} 已升级成功并通过健康检查`
+      : "";
     operationError.value = "";
     return;
   }
@@ -824,20 +830,6 @@ a.version-hero-integrity:hover {
   min-width: 98px;
 }
 
-.integrity-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-}
-
-.integrity-link:hover {
-  color: var(--ok);
-  background: var(--ok-soft);
-}
 
 .rollback-btn:hover:not(:disabled) {
   color: var(--err);
