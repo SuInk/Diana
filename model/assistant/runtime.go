@@ -9032,14 +9032,16 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 		lines := make([]string, 0, len(change.PullRequests)*2)
 		for _, pullRequest := range change.PullRequests {
 			line := fmt.Sprintf("PR #%d（%s）\n%s", pullRequest.Number, repositoryWatchPullStatusLabel(pullRequest.Status), strings.TrimSpace(pullRequest.Title))
+			// 时间紧跟标题：它是「这条动态什么时候发生」的关键信息，排在作者和分支
+			// 后面容易被链接挤到看不见的位置。
+			if occurredAt := formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)); occurredAt != "" {
+				line += "\n" + repositoryWatchPullTimeLabel(pullRequest.Status) + " " + occurredAt
+			}
 			if author := strings.TrimSpace(pullRequest.Author); author != "" {
 				line += "\n作者：" + author
 			}
 			if pullRequest.BaseBranch != "" || pullRequest.HeadBranch != "" {
 				line += "\n" + firstNonEmpty(pullRequest.BaseBranch, "默认分支") + " ← " + firstNonEmpty(pullRequest.HeadBranch, "未知分支")
-			}
-			if occurredAt := formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)); occurredAt != "" {
-				line += "\n" + repositoryWatchPullTimeLabel(pullRequest.Status) + " " + occurredAt
 			}
 			if url := strings.TrimSpace(pullRequest.URL); url != "" {
 				line += "\n" + url
@@ -9052,11 +9054,11 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 		lines := make([]string, 0, len(change.Issues))
 		for _, issue := range change.Issues {
 			line := fmt.Sprintf("Issue #%d（%s）\n%s", issue.Number, repositoryWatchIssueStatusLabel(issue.Status), strings.TrimSpace(issue.Title))
-			if author := strings.TrimSpace(issue.Author); author != "" {
-				line += "\n作者：" + author
-			}
 			if eventTime := formatRepositoryWatchTime(repositoryWatchIssueTime(issue)); eventTime != "" {
 				line += "\n" + repositoryWatchIssueTimeLabel(issue.Status) + " " + eventTime
+			}
+			if author := strings.TrimSpace(issue.Author); author != "" {
+				line += "\n作者：" + author
 			}
 			if issue.URL != "" {
 				line += "\n" + issue.URL
@@ -9100,7 +9102,6 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 			}
 			lines = append(lines, line)
 		}
-		lines = append(lines, fmt.Sprintf("%d → %d", change.Stars.Previous, change.Stars.Current))
 		if change.Stars.Delta > 0 {
 			latestStar := time.Time{}
 			for _, user := range change.Stars.AddedUsers {
@@ -9116,6 +9117,7 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 		} else if value := formatRepositoryWatchTime(change.Stars.DetectedAt); value != "" {
 			lines = append(lines, "检测于 "+value)
 		}
+		lines = append(lines, fmt.Sprintf("%d → %d", change.Stars.Previous, change.Stars.Current))
 		if url := strings.TrimSpace(change.Stars.URL); url != "" {
 			lines = append(lines, url)
 		}
