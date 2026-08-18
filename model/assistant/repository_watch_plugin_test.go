@@ -988,3 +988,29 @@ func TestRenderRepositoryWatchChangesPutsTimeRightUnderTheNumberLine(t *testing.
 		}
 	}
 }
+
+func TestRenderRepositoryWatchChangesDoesNotRepeatTheReleaseTag(t *testing.T) {
+	result := renderRepositoryWatchChanges(repositoryWatchChange{
+		Releases: []repositoryWatchRelease{{Tag: "v0.8.36", Name: "Diana v0.8.36"}},
+	})
+	if !strings.Contains(result, "Release v0.8.36") || strings.Contains(result, "Diana v0.8.36") {
+		t.Fatalf("release label repeats the tag: %s", result)
+	}
+	named := renderRepositoryWatchChanges(repositoryWatchChange{
+		Releases: []repositoryWatchRelease{{Tag: "v0.8.36", Name: "语气与截断修复"}},
+	})
+	if !strings.Contains(named, "Release v0.8.36（语气与截断修复）") {
+		t.Fatalf("release label dropped a distinct name: %s", named)
+	}
+}
+
+func TestComposeRepositoryWatchMessageSendsTheSummaryAsItsOwnMessage(t *testing.T) {
+	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
+	chunks := splitReply(message, 900)
+	if len(chunks) == 0 || chunks[len(chunks)-1] != "刚更新了回复风格与语气控制。" {
+		t.Fatalf("summary is not delivered on its own: %#v", chunks)
+	}
+	if strings.Contains(chunks[len(chunks)-2], "刚更新了") {
+		t.Fatalf("summary leaked into the change details: %#v", chunks)
+	}
+}
