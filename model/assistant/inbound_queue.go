@@ -43,6 +43,14 @@ const (
 	InboundPriorityMediaTurn = 110
 )
 
+const (
+	// inboundMaxAttempts 是同一条入站事件的最大处理次数。超过后落终态，避免
+	// 一条永远失败的消息按退避节奏无限重跑。
+	inboundMaxAttempts = 5
+	// inboundOutcomeRetriesExhausted 标记因重试次数用尽而停止的事件。
+	inboundOutcomeRetriesExhausted = "dropped_retries_exhausted"
+)
+
 // InboundReplayWindow is the maximum recovery window. Each reconnect normally
 // uses the observed offline duration plus inboundReplayPadding instead.
 const InboundReplayWindow = 24 * time.Hour
@@ -419,9 +427,18 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			}
 			outcome, processErr := r.processInboundQueueItem(ctx, item)
 			commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if processErr == nil {
+			switch {
+			case processErr == nil:
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, outcome)
-			} else {
+				r.clearOutboundSteps(item.ID)
+			case ctx.Err() == nil && inboundRetriesExhausted(item.Attempts):
+				// 无限重试只会让同一条消息反复重发。到达上限后落终态，并把最后
+				// 一次失败原因写进事件明细，等人处理而不是继续骚扰群里。
+				log.Printf("qqbot inbound event %s dropped after %d attempts: %v", item.ID, item.Attempts, processErr)
+				r.recordInboundDeliveryExhausted(item, processErr)
+				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, inboundOutcomeRetriesExhausted)
+				r.clearOutboundSteps(item.ID)
+			default:
 				nextAttempt := time.Now()
 				if ctx.Err() == nil {
 					nextAttempt = nextAttempt.Add(inboundRetryDelay(item.Attempts))
@@ -444,6 +461,8 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 		return "ignored_stale", nil
 	}
 	ctx = r.withDebugTraceContext(ctx, item.Event)
+	// 出站幂等账本按入站事件 ID 记账：失败重跑时已经送达的分片和媒体会被跳过。
+	ctx = withOutboundTurn(ctx, item.ID)
 	event := item.Event
 	r.mu.RLock()
 	mediaTurnStore, _ := r.inboundStore.(InboundMediaTurnStore)
@@ -700,6 +719,21 @@ func historyBackfillWatermarkWithPadding(watermark int64, cutoff time.Time) int6
 		return cutoff.Unix()
 	}
 	return padded
+}
+
+// inboundRetriesExhausted 判断这条事件是否已经用尽重试次数。
+func inboundRetriesExhausted(attempts int) bool {
+	return attempts >= inboundMaxAttempts
+}
+
+// recordInboundDeliveryExhausted 把「重试次数用尽」写进这条事件的投递审计，
+// WebUI 的事件明细据此显示为终态失败而不是仍在排队。
+func (r *Runtime) recordInboundDeliveryExhausted(item InboundQueueItem, processErr error) {
+	detail := fmt.Sprintf("连续 %d 次处理失败，已停止重试", item.Attempts)
+	if processErr != nil {
+		detail += "：" + processErr.Error()
+	}
+	r.recordInboundDelivery(item.Event, OutboundDeliveryFailed, "", detail)
 }
 
 func inboundRetryDelay(attempts int) time.Duration {
