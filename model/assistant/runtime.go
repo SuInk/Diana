@@ -9033,18 +9033,16 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 	if len(change.PullRequests) > 0 {
 		lines := make([]string, 0, len(change.PullRequests)*2)
 		for _, pullRequest := range change.PullRequests {
-			// 时间紧跟编号行：它是「这条动态什么时候发生」的关键信息，排在作者和
-			// 分支后面容易被链接挤到看不见的位置。
-			line := fmt.Sprintf("PR #%d（%s）", pullRequest.Number, repositoryWatchPullStatusLabel(pullRequest.Status))
-			if occurredAt := formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)); occurredAt != "" {
-				line += "\n" + repositoryWatchPullTimeLabel(pullRequest.Status) + " " + occurredAt
-			}
-			line += "\n" + strings.TrimSpace(pullRequest.Title)
+			line := fmt.Sprintf("PR #%d（%s）\n%s", pullRequest.Number, repositoryWatchPullStatusLabel(pullRequest.Status), strings.TrimSpace(pullRequest.Title))
 			if author := strings.TrimSpace(pullRequest.Author); author != "" {
 				line += "\n作者：" + author
 			}
 			if pullRequest.BaseBranch != "" || pullRequest.HeadBranch != "" {
 				line += "\n" + firstNonEmpty(pullRequest.BaseBranch, "默认分支") + " ← " + firstNonEmpty(pullRequest.HeadBranch, "未知分支")
+			}
+			// 时间统一压在链接正上方，五种事件保持同一个位置。
+			if occurredAt := formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)); occurredAt != "" {
+				line += "\n" + repositoryWatchPullTimeLabel(pullRequest.Status) + " " + occurredAt
 			}
 			if url := strings.TrimSpace(pullRequest.URL); url != "" {
 				line += "\n" + url
@@ -9056,13 +9054,12 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 	if len(change.Issues) > 0 {
 		lines := make([]string, 0, len(change.Issues))
 		for _, issue := range change.Issues {
-			line := fmt.Sprintf("Issue #%d（%s）", issue.Number, repositoryWatchIssueStatusLabel(issue.Status))
-			if eventTime := formatRepositoryWatchTime(repositoryWatchIssueTime(issue)); eventTime != "" {
-				line += "\n" + repositoryWatchIssueTimeLabel(issue.Status) + " " + eventTime
-			}
-			line += "\n" + strings.TrimSpace(issue.Title)
+			line := fmt.Sprintf("Issue #%d（%s）\n%s", issue.Number, repositoryWatchIssueStatusLabel(issue.Status), strings.TrimSpace(issue.Title))
 			if author := strings.TrimSpace(issue.Author); author != "" {
 				line += "\n作者：" + author
+			}
+			if eventTime := formatRepositoryWatchTime(repositoryWatchIssueTime(issue)); eventTime != "" {
+				line += "\n" + repositoryWatchIssueTimeLabel(issue.Status) + " " + eventTime
 			}
 			if issue.URL != "" {
 				line += "\n" + issue.URL
@@ -9096,21 +9093,6 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 	if change.Stars != nil {
 		delta := fmt.Sprintf("%+d", change.Stars.Delta)
 		lines := []string{"Star " + delta}
-		if change.Stars.Delta > 0 {
-			latestStar := time.Time{}
-			for _, user := range change.Stars.AddedUsers {
-				if user.StarredAt.After(latestStar) {
-					latestStar = user.StarredAt
-				}
-			}
-			if value := formatRepositoryWatchTime(latestStar); value != "" {
-				lines = append(lines, "最新 Star 于 "+value)
-			} else if value := formatRepositoryWatchTime(change.Stars.DetectedAt); value != "" {
-				lines = append(lines, "检测于 "+value)
-			}
-		} else if value := formatRepositoryWatchTime(change.Stars.DetectedAt); value != "" {
-			lines = append(lines, "检测于 "+value)
-		}
 		if change.Stars.Delta > 0 && len(change.Stars.AddedUsers) > 0 {
 			names := make([]string, 0, min(5, len(change.Stars.AddedUsers)))
 			for _, user := range change.Stars.AddedUsers {
@@ -9126,6 +9108,21 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 			lines = append(lines, line)
 		}
 		lines = append(lines, fmt.Sprintf("%d → %d", change.Stars.Previous, change.Stars.Current))
+		if change.Stars.Delta > 0 {
+			latestStar := time.Time{}
+			for _, user := range change.Stars.AddedUsers {
+				if user.StarredAt.After(latestStar) {
+					latestStar = user.StarredAt
+				}
+			}
+			if value := formatRepositoryWatchTime(latestStar); value != "" {
+				lines = append(lines, "最新 Star 于 "+value)
+			} else if value := formatRepositoryWatchTime(change.Stars.DetectedAt); value != "" {
+				lines = append(lines, "检测于 "+value)
+			}
+		} else if value := formatRepositoryWatchTime(change.Stars.DetectedAt); value != "" {
+			lines = append(lines, "检测于 "+value)
+		}
 		if url := strings.TrimSpace(change.Stars.URL); url != "" {
 			lines = append(lines, url)
 		}
