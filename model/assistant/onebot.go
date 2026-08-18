@@ -648,7 +648,7 @@ func PlainText(segments []MessageSegment) string {
 			builder.WriteString("]")
 		case "reply":
 			if id := segment.Data["id"]; id != "" {
-				builder.WriteString("[回复:")
+				builder.WriteString(replyMarkerPrefix)
 				builder.WriteString(id)
 				builder.WriteString("]")
 			}
@@ -665,6 +665,55 @@ func PlainText(segments []MessageSegment) string {
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// replyMarkerPrefix 是 Diana 自己的引用标记，与具体平台无关：入站把各平台的
+// 回复关系渲染成它交给模型，出站再解析回 OutgoingMessage.ReplyMessageID，由各
+// 平台适配器落成自己的形式（OneBot 的 reply 段、Telegram 的 reply_to_message_id）。
+// 用带前缀的自有词而不是平台原生说法，既跨平台统一，也不会和正文里的自然表达撞车。
+const replyMarkerPrefix = "[diana-reply:"
+
+// legacyReplyMarkerPrefix 是早期只服务 QQ 时的写法。历史消息和摘要里仍存着这种
+// 文本，模型可能照抄，因此出站继续认它，但入站不再生成。
+const legacyReplyMarkerPrefix = "[回复:"
+
+// extractOutgoingReplyMarker 解析模型写在正文开头的引用标记。
+// 出站若不解析回来，标记就会作为纯文本发出去。只认开头、且 ID 形如可选负号加
+// 数字的写法，避免把正文里提到的字样当成指令。
+func extractOutgoingReplyMarker(text string) (string, string, bool) {
+	prefix := ""
+	switch {
+	case strings.HasPrefix(text, replyMarkerPrefix):
+		prefix = replyMarkerPrefix
+	case strings.HasPrefix(text, legacyReplyMarkerPrefix):
+		prefix = legacyReplyMarkerPrefix
+	default:
+		return "", text, false
+	}
+	end := strings.Index(text, "]")
+	if end < 0 {
+		return "", text, false
+	}
+	id := text[len(prefix):end]
+	if !validOutgoingReplyMessageID(id) {
+		return "", text, false
+	}
+	return id, strings.TrimLeft(text[end+1:], " \t\r\n"), true
+}
+
+func validOutgoingReplyMessageID(id string) bool {
+	if strings.HasPrefix(id, "-") {
+		id = id[1:]
+	}
+	if id == "" || len(id) > 20 {
+		return false
+	}
+	for index := 0; index < len(id); index++ {
+		if id[index] < '0' || id[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ImageURLs 提取 OneBot 图片段里可被远端多模态模型读取的图片 URL。

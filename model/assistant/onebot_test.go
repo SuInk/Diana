@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -474,5 +475,109 @@ func TestIsOneBotReverseHandshake(t *testing.T) {
 				t.Fatalf("IsOneBotReverseHandshake() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExtractOutgoingReplyMarkerParsesLeadingMarker(t *testing.T) {
+	// 入站 reply 段渲染成引用标记给模型看，模型照抄后必须还原成 reply 段。
+	for _, tc := range []struct {
+		name     string
+		input    string
+		wantID   string
+		wantRest string
+	}{
+		{name: "negative id", input: "[diana-reply:-797497448]就是这张，我喜欢的第 3 个房间。", wantID: "-797497448", wantRest: "就是这张，我喜欢的第 3 个房间。"},
+		{name: "positive id", input: "[diana-reply:30006]收到", wantID: "30006", wantRest: "收到"},
+		{name: "space after marker", input: "[diana-reply:30006]  收到", wantID: "30006", wantRest: "收到"},
+		{name: "marker only", input: "[diana-reply:30006]", wantID: "30006", wantRest: ""},
+		{name: "legacy qq marker", input: "[回复:30006]收到", wantID: "30006", wantRest: "收到"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, rest, ok := extractOutgoingReplyMarker(tc.input)
+			if !ok || id != tc.wantID || rest != tc.wantRest {
+				t.Fatalf("extractOutgoingReplyMarker(%q) = (%q, %q, %t)", tc.input, id, rest, ok)
+			}
+		})
+	}
+}
+
+func TestExtractOutgoingReplyMarkerKeepsNonMarkerText(t *testing.T) {
+	// 只认开头且 ID 是数字的写法，正文里提到的字样必须原样留在文本里。
+	for _, input := range []string{
+		"我刚才[diana-reply:30006]过了",
+		"[diana-reply:谁]",
+		"[diana-reply:]",
+		"[diana-reply:30006",
+		"[diana-reply:12ab]",
+		"[回复:12ab]",
+		"没有标记",
+	} {
+		id, rest, ok := extractOutgoingReplyMarker(input)
+		if ok || id != "" || rest != input {
+			t.Fatalf("extractOutgoingReplyMarker(%q) = (%q, %q, %t), want untouched", input, id, rest, ok)
+		}
+	}
+}
+
+func TestApplyOutgoingReplyMarkerOverridesDefaultTarget(t *testing.T) {
+	// 用户要求引用旧消息时，模型指定的目标要盖过默认的“回复当前消息”。
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "current-message"}
+	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "-797497448", RawMessage: "第 3 个房间"})
+
+	msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{
+		Text:           "[diana-reply:-797497448]就是这张。",
+		ReplyMessageID: "current-message",
+	})
+	if msg.ReplyMessageID != "-797497448" {
+		t.Fatalf("ReplyMessageID = %q, want the id the model asked for", msg.ReplyMessageID)
+	}
+	if msg.Text != "就是这张。" {
+		t.Fatalf("Text = %q, want the marker stripped", msg.Text)
+	}
+	segments := buildOutgoingSegments(msg)
+	if len(segments) == 0 || segments[0]["type"] != "reply" {
+		t.Fatalf("segments = %#v, want a leading reply segment", segments)
+	}
+	if data, _ := segments[0]["data"].(map[string]string); data["id"] != "-797497448" {
+		t.Fatalf("reply segment = %#v", segments[0])
+	}
+}
+
+func TestApplyOutgoingReplyMarkerIgnoresUnknownMessageID(t *testing.T) {
+	// 标记与入站渲染同形，模型可能是在照抄用户原话或编了个 ID：本会话查不到这条
+	// 消息时只去掉标记，不生成指向空消息的 reply 段。
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "current-message"}
+
+	msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{
+		Text:           "[diana-reply:123456]原样发这句",
+		ReplyMessageID: "current-message",
+	})
+	if msg.ReplyMessageID != "current-message" {
+		t.Fatalf("ReplyMessageID = %q, want the default target kept", msg.ReplyMessageID)
+	}
+	if msg.Text != "原样发这句" {
+		t.Fatalf("Text = %q, want the marker stripped from the text", msg.Text)
+	}
+}
+
+func TestApplyOutgoingReplyMarkerLeavesOtherMessagesAlone(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "current-message"}
+	msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{Text: "普通回复", ReplyMessageID: "current-message"})
+	if msg.Text != "普通回复" || msg.ReplyMessageID != "current-message" {
+		t.Fatalf("msg = %#v, want untouched", msg)
+	}
+}
+
+func TestPlainTextRendersNeutralReplyMarker(t *testing.T) {
+	// 入站渲染用自有标记而不是某个平台的说法，模型在各平台看到的写法一致。
+	got := PlainText([]MessageSegment{
+		{Type: "reply", Data: map[string]string{"id": "-797497448"}},
+		{Type: "text", Data: map[string]string{"text": "这张不错"}},
+	})
+	if got != "[diana-reply:-797497448]这张不错" {
+		t.Fatalf("PlainText = %q", got)
 	}
 }

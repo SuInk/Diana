@@ -119,10 +119,11 @@ type countingGroupListChannel struct {
 	mu     sync.Mutex
 }
 
-func (countingGroupListChannel) Connect(context.Context, assistant.EventHandler) error { return nil }
-func (countingGroupListChannel) Send(context.Context, assistant.OutgoingMessage) error { return nil }
-func (countingGroupListChannel) Status() assistant.ChannelStatus                       { return assistant.ChannelStatus{} }
-func (countingGroupListChannel) Close() error                                          { return nil }
+// 结构体里有 atomic.Int32 和 sync.Mutex，接收者必须取指针，否则每次调用都复制一份锁。
+func (*countingGroupListChannel) Connect(context.Context, assistant.EventHandler) error { return nil }
+func (*countingGroupListChannel) Send(context.Context, assistant.OutgoingMessage) error { return nil }
+func (*countingGroupListChannel) Status() assistant.ChannelStatus                       { return assistant.ChannelStatus{} }
+func (*countingGroupListChannel) Close() error                                          { return nil }
 
 func (c *countingGroupListChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
 	if action != "get_group_list" {
