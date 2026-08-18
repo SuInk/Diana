@@ -171,7 +171,7 @@
           <textarea id="group-welcome" v-model="editing.welcome_message" class="textarea" rows="2"></textarea>
         </div>
         <div class="field">
-          <label for="group-context">上下文条数</label>
+          <label for="group-context">历史查询条数上限</label>
           <input id="group-context" v-model.number="editing.recent_context_limit" class="input" inputmode="numeric" />
         </div>
         <div class="field">
