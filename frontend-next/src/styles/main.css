@@ -529,6 +529,33 @@ code {
   margin: 0 !important;
 }
 
+.owner-login-methods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
+.owner-login-methods button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.owner-code-input .input {
+  min-width: 0;
+  text-align: center;
+  letter-spacing: 0.35em;
+  text-indent: 0.35em;
+  font-size: 15px;
+}
+
+.owner-code-input .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .owner-pair-code {
   display: flex;
   align-items: center;
