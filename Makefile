@@ -29,6 +29,11 @@ endif
 
 DIST_BIN := dist/diana-webui$(BIN_EXT)
 
+# 本地构建默认注入当前提交对应的 tag；没有 tag 时留空，
+# 由 model/version 回落到 VERSION 声明的源码基线。
+BUILD_VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null)
+GO_LDFLAGS := $(if $(BUILD_VERSION),-X main.buildVersion=$(BUILD_VERSION),)
+
 export BACKEND_HOST
 export BACKEND_PORT
 export FRONTEND_HOST
@@ -78,7 +83,7 @@ build: build-web build-go
 
 build-go:
 	$(NODE) -e "require('fs').mkdirSync('dist', { recursive: true })"
-	$(GO) build -o $(DIST_BIN) ./cmd/webui
+	$(GO) build -ldflags "$(GO_LDFLAGS)" -o $(DIST_BIN) ./cmd/webui
 
 build-local-mac:
 	GO="$(GO)" ./scripts/build-local-mac.sh "$(CURDIR)/dist/diana-webui"
