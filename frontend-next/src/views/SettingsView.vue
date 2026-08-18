@@ -10,8 +10,10 @@
       </div>
     </header>
 
-    <!-- 访问安全 -->
-    <section class="card" style="margin-bottom: 16px">
+    <div class="settings-grid">
+      <div class="settings-grid-column">
+      <!-- 访问安全 -->
+      <section class="card">
       <div class="card-header">
         <h2>访问安全</h2>
         <span class="badge" :class="authRequired ? 'ok' : 'warn'">{{ authRequired ? "已开启密码保护" : "未设置密码" }}</span>
@@ -71,16 +73,12 @@
             <KeyRound :size="15" aria-hidden="true" />
             {{ savingPassword ? "保存中…" : authRequired ? "更新账号与密码" : "开启密码保护" }}
           </button>
-          <button v-if="authRequired" class="btn ghost" type="button" @click="doLogout">
-            <LogOut :size="15" aria-hidden="true" />
-            退出登录
-          </button>
         </div>
       </div>
     </section>
 
-    <!-- 登录会话 -->
-    <section v-if="authRequired" class="card" style="margin-bottom: 16px">
+      <!-- 登录会话 -->
+      <section v-if="authRequired" class="card">
       <div class="card-header">
         <h2>登录会话</h2>
         <span class="card-sub">机器人发来异常登录提醒时，在这里把对应设备踢下线</span>
@@ -124,7 +122,6 @@
       </div>
     </section>
 
-    <div class="grid-2">
       <!-- 主题 -->
       <section class="card">
         <div class="card-header">
@@ -157,7 +154,9 @@
           </div>
         </div>
       </section>
+      </div>
 
+      <div class="settings-grid-column">
       <!-- 系统更新 -->
       <section class="card">
         <div class="card-header">
@@ -209,28 +208,25 @@
           <div v-if="loading" class="skeleton" style="height: 72px"></div>
         </div>
       </section>
-    </div>
 
-    <!-- 关于 -->
-    <section class="card" style="margin-top: 16px">
-      <div class="card-header">
-        <h2>关于</h2>
+      <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
+      <section class="card">
+        <div class="card-header">
+          <h2>运行状态</h2>
+        </div>
+        <div class="card-body stack" style="gap: 8px; font-size: 13px">
+          <div class="cluster" style="justify-content: space-between">
+            <span class="muted">运行时长</span>
+            <span>{{ health ? formatUptime(health.uptime_seconds) : "—" }}</span>
+          </div>
+          <div class="cluster" style="justify-content: space-between">
+            <span class="muted">启动时间</span>
+            <span class="mono">{{ health ? formatTime(health.started_at) : "—" }}</span>
+          </div>
+        </div>
+      </section>
       </div>
-      <div class="card-body stack" style="gap: 8px; font-size: 13px">
-        <div class="cluster" style="justify-content: space-between">
-          <span class="muted">后端版本</span>
-          <span v-if="backendVersionLabel" class="mono">{{ backendVersionLabel }}</span>
-        </div>
-        <div class="cluster" style="justify-content: space-between">
-          <span class="muted">运行时长</span>
-          <span>{{ health ? formatUptime(health.uptime_seconds) : "—" }}</span>
-        </div>
-        <div class="cluster" style="justify-content: space-between">
-          <span class="muted">启动时间</span>
-          <span>{{ health ? formatTime(health.started_at) : "—" }}</span>
-        </div>
-      </div>
-    </section>
+    </div>
   </div>
 </template>
 
@@ -247,7 +243,6 @@ import {
   getSystemVersion,
   getUpdateStatus,
 	installDownloadedSystemUpdate,
-  logout,
 	downloadSystemUpdate,
   pullFromGitHub,
   restartSystem,
@@ -316,14 +311,6 @@ async function saveCredentials(): Promise<void> {
     toastError(error instanceof Error ? error.message : "保存密码失败");
   } finally {
     savingPassword.value = false;
-  }
-}
-
-async function doLogout(): Promise<void> {
-  try {
-    await logout();
-  } finally {
-    window.location.reload();
   }
 }
 
@@ -524,6 +511,25 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 两列对称：左列是账号与外观，右列是版本与运行信息，避免整行卡片右侧留白。 */
+.settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-grid-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (max-width: 960px) {
+  .settings-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 .update-progress { display: grid; gap: 7px; }
 .update-progress-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); }
 .update-progress-track { height: 7px; overflow: hidden; background: var(--surface-muted); border: 1px solid var(--border); border-radius: 4px; }
