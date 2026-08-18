@@ -32,7 +32,7 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 }
 
 func TestReplyStylePromptIsSpecificAndBounded(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise} {
+	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate} {
 		prompt := style.prompt()
 		if prompt == "" || !strings.Contains(prompt, "默认表达风格") {
 			t.Fatalf("style %q prompt = %q", style, prompt)
@@ -72,5 +72,45 @@ func TestBehaviorPresetsSurviveConfigPayloadRoundTrip(t *testing.T) {
 	restored := ConfigFromPayload(payload, BotConfig{})
 	if restored.ResponseMode != ResponseModeActive || restored.ChatInLevel != ChatInLevelHigh || restored.ReplyStyle != ReplyStyleLively {
 		t.Fatalf("round trip config = %#v", restored)
+	}
+}
+
+func TestReplyStyleNormalizedHandlesGroupmateAndUnknown(t *testing.T) {
+	for _, raw := range []string{"groupmate", "Groupmate", " groupmate "} {
+		if got := ReplyStyle(raw).Normalized(); got != ReplyStyleGroupmate {
+			t.Fatalf("Normalized(%q) = %q", raw, got)
+		}
+	}
+	for _, raw := range []string{"", "  ", "unknown-style"} {
+		if got := ReplyStyle(raw).Normalized(); got != ReplyStyleAssistant {
+			t.Fatalf("Normalized(%q) = %q", raw, got)
+		}
+	}
+}
+
+func TestReplyStyleClosingAnchorIsAlwaysPresent(t *testing.T) {
+	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate} {
+		if anchor := strings.TrimSpace(style.closingAnchor()); anchor == "" {
+			t.Fatalf("style %q has an empty closing anchor", style)
+		}
+	}
+}
+
+func TestGroupmateReplyStylePromptCarriesExamples(t *testing.T) {
+	prompt := ReplyStyleGroupmate.prompt()
+	if !strings.Contains(prompt, "示例") || !strings.Contains(prompt, "用户：") {
+		t.Fatalf("groupmate prompt is missing examples: %q", prompt)
+	}
+}
+
+func TestSystemPromptEndsWithReplyStyleClosingAnchor(t *testing.T) {
+	base := BotConfig{ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
+	relationship := RelationshipPolicyFor(UserMemoryProfile{}, base.OwnerID, event.UserID)
+	prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, true, relationship, true, nil)
+	anchor := ReplyStyleGroupmate.closingAnchor()
+	if !strings.HasSuffix(prompt, anchor) {
+		t.Fatalf("system prompt does not end with the closing anchor: %q", prompt)
 	}
 }
