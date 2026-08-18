@@ -139,6 +139,64 @@ let pairingCountdownTimer: ReturnType<typeof setInterval> | null = null;
 let challengeCooldownTimer: ReturnType<typeof setInterval> | null = null;
 let challengeExpiryTimer: ReturnType<typeof setInterval> | null = null;
 
+// 验证码下发是给「只有一台设备」的场景用的：点发送、切到聊天软件看码、再切
+// 回来填。切走的这段时间手机浏览器很可能把页面丢掉，token 只存在内存里的话
+// 回来就作废了，而重新发送要等 60 秒冷却、拿到的还是另一个码——之前收到的那
+// 条就白发了。存一份到 sessionStorage，按绝对时间恢复倒计时。
+const OWNER_CHALLENGE_KEY = "diana:owner-login-challenge";
+
+interface StoredChallenge {
+  token: string;
+  expiresAt: number;
+  cooldownUntil: number;
+}
+
+function saveChallenge(token: string, expiresInSeconds: number, cooldownSeconds: number): void {
+  const now = Date.now();
+  const payload: StoredChallenge = {
+    token,
+    expiresAt: now + expiresInSeconds * 1000,
+    cooldownUntil: now + cooldownSeconds * 1000
+  };
+  try {
+    window.sessionStorage.setItem(OWNER_CHALLENGE_KEY, JSON.stringify(payload));
+  } catch {
+    /* 无痕模式等场景写不了，降级成仅内存保存 */
+  }
+}
+
+function clearStoredChallenge(): void {
+  try {
+    window.sessionStorage.removeItem(OWNER_CHALLENGE_KEY);
+  } catch {
+    /* 同上 */
+  }
+}
+
+function restoreChallenge(): boolean {
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(OWNER_CHALLENGE_KEY);
+  } catch {
+    return false;
+  }
+  if (!raw) return false;
+  try {
+    const stored = JSON.parse(raw) as StoredChallenge;
+    const remaining = Math.floor((stored.expiresAt - Date.now()) / 1000);
+    if (!stored.token || remaining <= 0) {
+      clearStoredChallenge();
+      return false;
+    }
+    challengeToken.value = stored.token;
+    startChallengeTimers(Math.max(0, Math.ceil((stored.cooldownUntil - Date.now()) / 1000)), remaining);
+    return true;
+  } catch {
+    clearStoredChallenge();
+    return false;
+  }
+}
+
 async function submit(): Promise<void> {
   busy.value = true;
   error.value = "";
@@ -172,6 +230,7 @@ function clearChallengeTimers(): void {
 
 function clearOwnerChallenge(): void {
   clearChallengeTimers();
+  clearStoredChallenge();
   ownerCode.value = "";
   challengeToken.value = "";
   challengeCooldown.value = 0;
@@ -202,10 +261,10 @@ function normalizeOwnerCode(): void {
 }
 
 function selectOwnerMethod(method: "code" | "pair"): void {
+  // 切到私聊确认时不清验证码：那个码已经发出去了，冷却也已经烧掉，丢了就得
+  // 再等一轮。私聊配对反过来随时可以重开，切走时收掉轮询更省事。
   if (method === "code") {
     clearOwnerPairing();
-  } else {
-    clearOwnerChallenge();
   }
   ownerMethod.value = method;
 }
@@ -217,6 +276,7 @@ async function sendOwnerCode(): Promise<void> {
     ownerCode.value = "";
     challengeToken.value = challenge.challenge_token;
     startChallengeTimers(challenge.cooldown_seconds, challenge.expires_in_seconds);
+    saveChallenge(challenge.challenge_token, challenge.expires_in_seconds, challenge.cooldown_seconds);
     await nextTick();
     ownerCodeInput.value?.focus();
     toastSuccess("验证码已发送到管理员账号");
@@ -309,6 +369,10 @@ onMounted(async () => {
     pairAvailable.value = status.pair_available;
     codeAvailable.value = status.code_available;
     ownerMethod.value = status.pair_available ? "pair" : "code";
+    if (status.code_available && restoreChallenge()) {
+      // 有还没用掉的验证码，直接停在这一栏，省得用户以为要重新发一次。
+      ownerMethod.value = "code";
+    }
   } catch {
     ownerAvailable.value = false;
     pairAvailable.value = false;
