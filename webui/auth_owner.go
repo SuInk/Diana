@@ -489,7 +489,7 @@ func (h *OwnerLoginHandler) challengePairing(ctx context.Context, cfg assistant.
 	// 消息里不回带验证码：主人刚把它发过来，网页上也一直显示着，再原样发回去
 	// 只是让这串数字多在聊天记录里躺一份。
 	message := fmt.Sprintf(
-		"检测到控制台登录请求\n来源 IP：%s\n设备：%s\n\n确认登录请回复「确认」加上网页上显示的验证码，不是你本人请回复「取消」或直接忽略。",
+		"检测到控制台登录请求\n来源 IP：%s\n设备：%s\n\n确认登录请回复「确认」，不是你本人请回复「取消」或直接忽略。",
 		requestIP, deviceName)
 	if err := h.notifyOwner(ctx, cfg, message); err != nil {
 		h.mu.Lock()
@@ -516,19 +516,18 @@ func (h *OwnerLoginHandler) confirmPairing(ctx context.Context, cfg assistant.Bo
 		return false
 	}
 	var target *ownerPairing
-	// 必须带验证码：「确认」是日常高频词，只凭它放行的话，主人在别的对话里随口
-	// 一句就可能把停在等待确认的那个请求批掉。码就显示在网页上、刚也打过一遍，
-	// 带一次的代价基本为零，还顺带消掉了多个请求并存时的歧义。
 	if code != "" {
 		if candidate := h.pairings[h.codeIndex[hashOwnerCode(code)]]; candidate != nil && candidate.state == ownerPairingAwaitingConfirm {
 			target = candidate
 		}
+	} else if len(pending) == 1 {
+		target = pending[0]
 	}
 	if target == nil {
 		h.mu.Unlock()
 		hint := "没有找到这个验证码对应的登录请求，可能已经过期了。"
 		if code == "" {
-			hint = "确认登录请带上网页上显示的验证码，例如「确认 123456」。"
+			hint = fmt.Sprintf("当前有 %d 个待确认的登录请求，请带上网页上显示的验证码回复，例如「确认 123456」。", len(pending))
 		}
 		if err := h.notifyOwner(ctx, cfg, hint); err != nil {
 			recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录确认提示发送失败："+err.Error(), event.UserID, nil)
