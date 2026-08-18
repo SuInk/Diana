@@ -282,7 +282,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		t.Fatalf("snapshot=%#v", change.Snapshot)
 	}
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"Commit（main）", "PR #2（已合并）", "Release v1.1.0", "Star +3", "10 → 13"} {
+	for _, want := range []string{"Commit（main，作者 diana）", "PR #2（已合并）", "Release v1.1.0", "Star +3", "10 → 13"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -651,7 +651,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		sentText = fmt.Sprint(channel.calls)
 	}
 	delivered := len(channel.sent) > 0 || len(channel.calls) > 0 && channel.calls[0].action == "send_group_forward_msg"
-	if !delivered || !strings.Contains(sentText, "Commit（默认分支）") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
+	if !delivered || !strings.Contains(sentText, "Commit（默认分支，作者 diana）") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
 		t.Fatalf("sent=%#v calls=%#v item=%#v requests=%#v", channel.sent, channel.calls, store.items[0], provider.requests)
 	}
 	item := store.items[0]
@@ -910,5 +910,109 @@ func TestRepositoryWatchRecoveryNoticeStaysPendingUntilAcknowledged(t *testing.T
 	}
 	if !second.RecoveryNoticePending {
 		t.Fatalf("pending recovery notice was lost before acknowledgement: %#v", second)
+	}
+}
+
+func TestRenderRepositoryWatchChangesGroupsASingleCommitAuthor(t *testing.T) {
+	pushedAt := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	change := repositoryWatchChange{
+		Commits: []repositoryWatchCommit{
+			{SHA: "3e3f03f834c", Title: "合并 PR #85", Author: "SuInk", URL: "https://example.test/1", PushedAt: pushedAt},
+			{SHA: "230a9ca81b8", Title: "回复截断改为在句尾收束", Author: "SuInk", URL: "https://example.test/2", PushedAt: pushedAt},
+		},
+	}
+	result := renderRepositoryWatchChanges(change)
+	if !strings.Contains(result, "Commit（默认分支，作者 SuInk）") {
+		t.Fatalf("shared author missing from the section header: %s", result)
+	}
+	if strings.Contains(result, "作者：SuInk") {
+		t.Fatalf("shared author should not repeat per commit: %s", result)
+	}
+	if !strings.Contains(result, "提交于 "+formatRepositoryWatchTime(pushedAt)) {
+		t.Fatalf("commit time missing: %s", result)
+	}
+}
+
+func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *testing.T) {
+	pushedAt := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	change := repositoryWatchChange{
+		Commits: []repositoryWatchCommit{
+			{SHA: "1111111aaaa", Title: "first", Author: "alice", PushedAt: pushedAt},
+			{SHA: "2222222bbbb", Title: "second", Author: "bob", PushedAt: pushedAt},
+		},
+	}
+	result := renderRepositoryWatchChanges(change)
+	if strings.Contains(result, "作者 ") {
+		t.Fatalf("mixed authors should not be hoisted into the header: %s", result)
+	}
+	for _, want := range []string{"alice 提交于 ", "bob 提交于 "} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("rendered changes missing %q: %s", want, result)
+		}
+	}
+}
+
+func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
+	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
+	wantPrefix := "GitHub 动态：SuInk/Diana\n\nCommit（默认分支）"
+	if !strings.HasPrefix(message, wantPrefix) {
+		t.Fatalf("message = %q, want prefix %q", message, wantPrefix)
+	}
+	if !strings.HasSuffix(message, "刚更新了回复风格与语气控制。") {
+		t.Fatalf("summary is not last: %q", message)
+	}
+	if got := composeRepositoryWatchMessage("SuInk/Diana", "", ""); got != "GitHub 动态：SuInk/Diana" {
+		t.Fatalf("empty change message = %q", got)
+	}
+}
+
+func TestRenderRepositoryWatchChangesPutsTimeRightAboveTheLink(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	change := repositoryWatchChange{
+		PullRequests: []repositoryWatchPullRequest{{
+			Number: 85, Title: "新增群友回复风格", Author: "SuInk", Status: "merged",
+			BaseBranch: "main", HeadBranch: "claude/hello", OccurredAt: at,
+			URL: "https://github.com/SuInk/Diana/pull/85",
+		}},
+		Issues: []repositoryWatchIssue{{
+			Number: 128, Title: "修复通知格式", Author: "alice", Status: "opened", CreatedAt: at,
+			URL: "https://github.com/SuInk/Diana/issues/128",
+		}},
+	}
+	result := renderRepositoryWatchChanges(change)
+	stamp := formatRepositoryWatchTime(at)
+	for _, want := range []string{
+		"合并于 " + stamp + "\nhttps://github.com/SuInk/Diana/pull/85",
+		"创建于 " + stamp + "\nhttps://github.com/SuInk/Diana/issues/128",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("rendered changes missing %q: %s", want, result)
+		}
+	}
+}
+
+func TestRenderRepositoryWatchChangesDoesNotRepeatTheReleaseTag(t *testing.T) {
+	result := renderRepositoryWatchChanges(repositoryWatchChange{
+		Releases: []repositoryWatchRelease{{Tag: "v0.8.36", Name: "Diana v0.8.36"}},
+	})
+	if !strings.Contains(result, "Release v0.8.36") || strings.Contains(result, "Diana v0.8.36") {
+		t.Fatalf("release label repeats the tag: %s", result)
+	}
+	named := renderRepositoryWatchChanges(repositoryWatchChange{
+		Releases: []repositoryWatchRelease{{Tag: "v0.8.36", Name: "语气与截断修复"}},
+	})
+	if !strings.Contains(named, "Release v0.8.36（语气与截断修复）") {
+		t.Fatalf("release label dropped a distinct name: %s", named)
+	}
+}
+
+func TestComposeRepositoryWatchMessageSendsTheSummaryAsItsOwnMessage(t *testing.T) {
+	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
+	chunks := splitReply(message, 900)
+	if len(chunks) == 0 || chunks[len(chunks)-1] != "刚更新了回复风格与语气控制。" {
+		t.Fatalf("summary is not delivered on its own: %#v", chunks)
+	}
+	if strings.Contains(chunks[len(chunks)-2], "刚更新了") {
+		t.Fatalf("summary leaked into the change details: %#v", chunks)
 	}
 }
