@@ -965,3 +965,23 @@ func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
 		t.Fatalf("empty change message = %q", got)
 	}
 }
+
+func TestRenderRepositoryWatchChangesPutsTimeBeforeAuthor(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	change := repositoryWatchChange{
+		PullRequests: []repositoryWatchPullRequest{{
+			Number: 85, Title: "新增群友回复风格", Author: "SuInk", Status: "merged",
+			BaseBranch: "main", HeadBranch: "claude/hello", OccurredAt: at,
+		}},
+		Issues: []repositoryWatchIssue{{
+			Number: 128, Title: "修复通知格式", Author: "alice", Status: "opened", CreatedAt: at,
+		}},
+	}
+	result := renderRepositoryWatchChanges(change)
+	stamp := formatRepositoryWatchTime(at)
+	for _, want := range []string{"合并于 " + stamp + "\n作者：SuInk", "创建于 " + stamp + "\n作者：alice"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("rendered changes missing %q: %s", want, result)
+		}
+	}
+}
