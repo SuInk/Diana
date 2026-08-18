@@ -6,8 +6,8 @@
     <div class="stack" style="gap: 14px">
       <header class="version-hero">
         <div class="version-hero-main">
-          <span class="mono version-current">{{ versionLabel }}</span>
-          <template v-if="!checking && !checkError && checkResult?.update_available && checkResult.latest_version">
+          <span v-if="versionLabel" class="mono version-current">{{ versionLabel }}</span>
+          <template v-if="!checking && !checkError && (checkResult?.update_available || switchToRelease) && checkResult?.latest_version">
             <ArrowRight class="version-arrow" :size="16" aria-hidden="true" />
             <span class="mono version-latest">{{ checkResult.latest_version }}</span>
           </template>
@@ -16,12 +16,14 @@
           <span v-else-if="checkError" class="badge err">检查失败</span>
           <span v-else-if="status?.download_ready" class="badge warn">已下载，待安装</span>
           <span v-else-if="checkResult?.update_available" class="badge accent">发现新版本</span>
+          <span v-else-if="switchToRelease" class="badge accent">可切换到正式版</span>
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
           <span v-else class="muted" style="font-size: 12.5px">尚未检查</span>
+          <span v-if="sourceBuild" class="badge warn">源码构建</span>
         </div>
         <div class="version-hero-meta">
           <span v-if="checkResult?.latest_published_at">
-            {{ checkResult.update_available ? "新版本" : "" }}发布于 {{ formatDateTime(checkResult.latest_published_at) }}
+            {{ checkResult.update_available || switchToRelease ? "新版本" : "" }}发布于 {{ formatDateTime(checkResult.latest_published_at) }}
           </span>
           <span v-if="checkResult?.checked_at" :title="formatDateTime(checkResult.checked_at)">
             {{ formatRelativeTime(checkResult.checked_at) }}检查过
@@ -56,7 +58,7 @@
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
       <p v-if="updatedHint" class="update-hint"><CheckCircle2 :size="15" aria-hidden="true" />{{ updatedHint }}</p>
 
-      <section v-if="releaseSelfUpdate" class="update-policy">
+      <section v-if="releaseSelfUpdate && !sourceBuild" class="update-policy">
         <label class="policy-row">
           <span class="policy-copy">
             <strong>自动下载</strong>
@@ -85,7 +87,7 @@
           class="btn primary"
           type="button"
           :disabled="operationRunning"
-          @click="downloadUpdate"
+          @click="downloadUpdate()"
         >
           <Download :size="14" aria-hidden="true" />
           {{ operationRunning ? "下载并校验中…" : "下载并校验" }}
@@ -93,6 +95,10 @@
         <button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary" type="button" :disabled="operationRunning" @click="confirmInstall">
           <RefreshCcw :size="14" aria-hidden="true" />
           {{ operationRunning ? "升级中…" : "升级并重启" }}
+        </button>
+        <button v-if="switchToRelease && !status?.download_ready" class="btn primary" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
+          <Download :size="14" aria-hidden="true" />
+          {{ operationRunning ? "下载并校验中…" : `切换到正式 ${checkResult?.latest_version || "版本"}` }}
         </button>
         <button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary" type="button" :disabled="operationRunning" @click="confirmUpdate">
           <Download :size="14" aria-hidden="true" />
@@ -114,7 +120,10 @@
           强制同步 Release
         </button>
       </div>
-      <p v-if="deploymentMode === 'release' && !releaseSelfUpdate" class="muted" style="font-size: 12.5px; margin: 0">
+      <p v-if="sourceBuild" class="muted" style="font-size: 12.5px; margin: 0">
+        当前二进制由源码构建，没有注入正式版本号，因此不会提示更新，也不会自动下载或安装。切换到正式版会下载完整 Release 包并校验 SHA-256，再备份数据库、替换当前二进制并重启。
+      </p>
+      <p v-else-if="deploymentMode === 'release' && !releaseSelfUpdate" class="muted" style="font-size: 12.5px; margin: 0">
         Docker 镜像由 OCI digest 校验并由部署环境安装。
       </p>
 
@@ -265,7 +274,14 @@ let installStartedAt = 0;
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 const releaseSelfUpdate = computed(() => deploymentMode.value === "release" && version.value?.update_supported === true);
 const operationRunning = computed(() => updating.value || installTracking.value || status.value?.updating === true);
+const sourceBuild = computed(() => deploymentMode.value === "release"
+  && (checkResult.value?.build_type ?? version.value?.build_type) === "source");
+const switchToRelease = computed(() => sourceBuild.value
+  && !checking.value
+  && !checkError.value
+  && checkResult.value?.switch_to_release_available === true);
 const canDownloadUpdate = computed(() => releaseSelfUpdate.value
+  && !sourceBuild.value
   && !checking.value
   && !checkError.value
   && checkResult.value?.update_supported === true
@@ -277,13 +293,14 @@ const downloadPhaseLabel = computed(() => status.value?.update_phase === "extrac
   ? "下载完成，正在校验并解压"
   : "正在下载更新包");
 
+// 版本号还没加载出来时返回空串，模板不渲染占位符。
 const versionLabel = computed(() => {
   const label = version.value?.version_label;
   const commit = status.value?.head_commit;
   if (deploymentMode.value === "git" && label && commit && label !== commit) {
     return `${label}（${commit}）`;
   }
-  return label || commit || version.value?.build_version || "—";
+  return label || commit || version.value?.build_version || "";
 });
 
 const currentTag = computed(() => {
@@ -394,6 +411,8 @@ async function check(notify = true): Promise<void> {
     if (notify) {
       if (checkResult.value.update_available) {
         toastSuccess(`发现新版本 ${checkResult.value.latest_version || ""}`.trim());
+      } else if (switchToRelease.value) {
+        toastSuccess(`当前为源码构建，可切换到正式 ${checkResult.value.latest_version || "版本"}`);
       } else {
         toastSuccess("已是最新版本");
       }
@@ -422,7 +441,17 @@ async function persistPolicy(changed: "download" | "install"): Promise<void> {
   }
 }
 
-async function downloadUpdate(): Promise<void> {
+async function confirmSwitchToRelease(): Promise<void> {
+  const target = checkResult.value?.latest_version || "最新稳定版本";
+  const confirmed = await askConfirm({
+    title: `切换到正式 ${target}？`,
+    message: "当前运行的是源码构建。切换会下载完整 Release 包并校验 SHA-256，安装时备份数据库和当前二进制，再重启并执行健康检查。",
+    confirmLabel: "下载并校验"
+  });
+  if (confirmed) await downloadUpdate(true);
+}
+
+async function downloadUpdate(force = false): Promise<void> {
   if (operationRunning.value) return;
   updating.value = true;
   operationError.value = "";
@@ -430,7 +459,7 @@ async function downloadUpdate(): Promise<void> {
     void getUpdateStatus().then((value) => { status.value = value; }).catch(() => undefined);
   }, 500);
   try {
-    const result = await downloadSystemUpdate();
+    const result = await downloadSystemUpdate(force);
     status.value = result.status;
     updatedHint.value = result.status.updating
       ? "更新包正在下载或处理中"

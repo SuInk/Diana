@@ -26,23 +26,31 @@ const (
 	maxRollbackReleases = 5
 	updateCheckInterval = 30 * time.Minute
 	updateCheckDelay    = 30 * time.Second
+
+	// buildTypeRelease/buildTypeSource 区分正式构建和源码构建。
+	// 源码构建不参与更新提示和自动更新，只能显式切换到正式 Release 包。
+	buildTypeRelease = "release"
+	buildTypeSource  = "source"
 )
 
 var errInvalidUpdateVersion = errors.New("更新版本号无效")
 
 type systemUpdateCheckResponse struct {
-	DeploymentMode    string               `json:"deployment_mode"`
-	CurrentVersion    string               `json:"current_version"`
-	LatestVersion     string               `json:"latest_version,omitempty"`
-	LatestPublishedAt string               `json:"latest_published_at,omitempty"`
-	CheckedAt         string               `json:"checked_at"`
-	UpdateAvailable   bool                 `json:"update_available"`
-	UpdateSupported   bool                 `json:"update_supported"`
-	IntegrityMode     string               `json:"integrity_mode"`
-	ChecksumAvailable bool                 `json:"checksum_available"`
-	ChecksumURL       string               `json:"checksum_url,omitempty"`
-	Status            *updater.Status      `json:"status,omitempty"`
-	Policy            updater.UpdatePolicy `json:"policy"`
+	DeploymentMode    string `json:"deployment_mode"`
+	CurrentVersion    string `json:"current_version"`
+	LatestVersion     string `json:"latest_version,omitempty"`
+	LatestPublishedAt string `json:"latest_published_at,omitempty"`
+	CheckedAt         string `json:"checked_at"`
+	UpdateAvailable   bool   `json:"update_available"`
+	UpdateSupported   bool   `json:"update_supported"`
+	BuildType         string `json:"build_type"`
+	// SwitchToReleaseAvailable 表示当前是源码构建，可以显式切换到正式 Release 包。
+	SwitchToReleaseAvailable bool                 `json:"switch_to_release_available"`
+	IntegrityMode            string               `json:"integrity_mode"`
+	ChecksumAvailable        bool                 `json:"checksum_available"`
+	ChecksumURL              string               `json:"checksum_url,omitempty"`
+	Status                   *updater.Status      `json:"status,omitempty"`
+	Policy                   updater.UpdatePolicy `json:"policy"`
 }
 
 type ReleasePackageUpdater interface {
@@ -72,6 +80,7 @@ type SystemUpdateHandler struct {
 	releaseUpdater        ReleasePackageUpdater
 	logs                  AppLogWriter
 	buildVersion          string
+	buildType             string
 	httpClient            *http.Client
 	githubAPIBase         string
 	changelog             changelogCache
@@ -98,6 +107,7 @@ func (h *SystemUpdateHandler) SetReleasePackageUpdater(releaseUpdater ReleasePac
 func NewSystemUpdateHandler(systemUpdater SystemUpdater) *SystemUpdateHandler {
 	return &SystemUpdateHandler{
 		updater:    systemUpdater,
+		buildType:  buildTypeRelease,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		policy:     updater.DefaultUpdatePolicy(),
 	}
@@ -130,6 +140,21 @@ func (h *SystemUpdateHandler) SetBuildVersion(version string) {
 	h.buildVersion = version
 }
 
+// SetBuildType 注入构建类型；只有构建期注入了正式版本号才算 Release 构建。
+func (h *SystemUpdateHandler) SetBuildType(buildType string) {
+	if strings.EqualFold(strings.TrimSpace(buildType), buildTypeSource) {
+		h.buildType = buildTypeSource
+		return
+	}
+	h.buildType = buildTypeRelease
+}
+
+// sourceBuild 判断当前是否是运行在 Release 包目录下的源码构建。
+// Git 部署本身就靠重新构建来更新，不受这个判断影响。
+func (h *SystemUpdateHandler) sourceBuild(gitAvailable bool) bool {
+	return !gitAvailable && h.buildType == buildTypeSource
+}
+
 // Register 注册系统更新状态和执行接口。
 func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 	router.GET("/api/system/version", h.version)
@@ -146,7 +171,7 @@ func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 
 // version 返回版本信息；git 状态可选，容器等非 git 部署时只有编译版本。
 func (h *SystemUpdateHandler) version(c *gin.Context) {
-	payload := gin.H{"build_version": h.buildVersion, "update_supported": false}
+	payload := gin.H{"build_version": h.buildVersion, "build_type": h.buildType, "update_supported": false}
 	label := h.buildVersion
 	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
 		payload["git_available"] = false
@@ -240,10 +265,17 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 	if releaseAvailable && latest.ChecksumAvailable {
 		_, packageReady = latest.asset(h.releaseUpdater.ExpectedAssetName())
 	}
-	updateAvailable, versionErr := isNewerVersion(current, latest.Tag)
+	updateAvailable, versionErr := updateAvailableAgainst(current, latest.Tag)
 	if versionErr != nil {
 		writeError(c, http.StatusInternalServerError, versionErr)
 		return
+	}
+	// 源码构建不提示更新，避免把用户自己编译的版本当成落后版本自动换掉；
+	// 改为提供一个显式的“切换到正式 Release”入口。
+	switchToRelease := false
+	if h.sourceBuild(gitAvailable) {
+		switchToRelease = packageReady
+		updateAvailable = false
 	}
 	checkedAt := h.currentTime().UTC()
 	latestPublishedAt := ""
@@ -258,6 +290,10 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 		CheckedAt:         checkedAt.Format(time.RFC3339),
 		UpdateAvailable:   updateAvailable || releaseApplyPending(status, gitAvailable),
 		UpdateSupported:   gitAvailable || packageReady,
+		BuildType:         h.buildType,
+
+		SwitchToReleaseAvailable: switchToRelease,
+
 		IntegrityMode:     integrity,
 		ChecksumAvailable: latest.ChecksumAvailable,
 		ChecksumURL:       latest.ChecksumURL,
@@ -426,7 +462,7 @@ func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool)
 		return updater.Result{}, err
 	}
 	if !force {
-		updateAvailable, versionErr := isNewerVersion(status.VersionLabel(), latest.Tag)
+		updateAvailable, versionErr := updateAvailableAgainst(status.VersionLabel(), latest.Tag)
 		if versionErr != nil {
 			return updater.Result{}, versionErr
 		}
@@ -479,7 +515,7 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 		return updater.Result{Status: status, Downloaded: true, TargetCommit: latest.Tag, Output: "Release package is already downloaded and verified.", At: time.Now()}, nil
 	}
 	if !force {
-		updateAvailable, versionErr := isNewerVersion(status.VersionLabel(), latest.Tag)
+		updateAvailable, versionErr := updateAvailableAgainst(status.VersionLabel(), latest.Tag)
 		if versionErr != nil {
 			return updater.Result{}, versionErr
 		}
@@ -558,6 +594,10 @@ func (h *SystemUpdateHandler) runAutoUpdate(ctx context.Context) {
 		return
 	}
 	defer h.autoUpdateMu.Unlock()
+	// 源码构建只能由用户显式切换到正式版本，后台不会自动替换正在运行的二进制。
+	if h.buildType == buildTypeSource {
+		return
+	}
 	policy := h.currentPolicy()
 	if !policy.AutoDownload {
 		return
@@ -851,6 +891,27 @@ func latestStableRelease(releases []ReleaseEntry) ReleaseEntry {
 		}
 	}
 	return ReleaseEntry{}
+}
+
+// updateAvailableAgainst 判断当前运行版本是否落后于目标 Release。
+// 当前版本无法解析成语义化版本时（例如没有注入版本号的本地构建），
+// 视为落后于任何正式 Release，让用户可以直接装回正式版本，
+// 而不是因为版本号不可比较就报错或永远不提示更新。
+func updateAvailableAgainst(current, latest string) (bool, error) {
+	latestParts, latestOK := versionParts(latest)
+	if !latestOK {
+		return false, fmt.Errorf("%w：最新版本 %q 无法解析，要求格式为 vX.Y.Z", errInvalidUpdateVersion, latest)
+	}
+	currentParts, currentOK := versionParts(current)
+	if !currentOK {
+		return true, nil
+	}
+	for i := range currentParts {
+		if latestParts[i] != currentParts[i] {
+			return latestParts[i] > currentParts[i], nil
+		}
+	}
+	return false, nil
 }
 
 func isNewerVersion(current, latest string) (bool, error) {

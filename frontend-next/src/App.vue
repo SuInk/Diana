@@ -21,7 +21,7 @@
           </span>
           <span class="brand-name">
             <strong>Diana</strong>
-            <button class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
+            <button v-if="versionLabel" class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
               {{ versionLabel }}
               <span v-if="releaseUpdateAvailable" class="version-dot" aria-label="有新版本"></span>
             </button>
@@ -201,10 +201,12 @@ function syncSidebarMode(event: MediaQueryListEvent): void {
 const locked = ref(false);
 const versionOpen = ref(false);
 const systemVersion = ref<SystemVersion | null>(null);
+// 版本号还没加载出来时返回空串，由模板隐藏入口，不显示占位文案。
 const versionLabel = computed(() => {
   const raw = systemVersion.value?.version_label || systemVersion.value?.build_version || "";
+  if (!raw) return "";
   const semantic = raw.match(/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
-  if (!semantic) return raw ? "开发版" : "控制台";
+  if (!semantic) return "开发版";
   return semantic[0].startsWith("v") ? semantic[0] : `v${semantic[0]}`;
 });
 const releaseUpdateAvailable = ref(false);
