@@ -347,6 +347,9 @@ onMounted(async () => {
   window.addEventListener("diana:unauthorized", () => {
     locked.value = true;
   });
+  window.addEventListener("diana:open-version", () => {
+    versionOpen.value = true;
+  });
   try {
     const auth = await getAuthStatus();
     if (auth.auth_required && !auth.authenticated) {
