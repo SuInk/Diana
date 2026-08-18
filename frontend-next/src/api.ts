@@ -691,7 +691,6 @@ export interface OwnerLoginPairing {
 export interface OwnerLoginPairingStatus {
   approved: boolean;
   expired?: boolean;
-  awaiting_confirm?: boolean;
   expires_in_seconds?: number;
 }
 
