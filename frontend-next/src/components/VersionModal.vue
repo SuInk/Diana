@@ -119,95 +119,82 @@
       </p>
 
       <hr class="divider" style="margin: 0" />
-      <section v-if="recentReleases.length" class="stack" style="gap: 8px">
+      <section class="stack" style="gap: 8px">
         <div class="cluster" style="justify-content: space-between">
-          <h3 style="margin: 0; font-size: 14px">最近版本</h3>
-          <span class="muted" style="font-size: 12.5px">
-            {{ deploymentMode === "git" || releaseSelfUpdate ? "可回退最近 5 个稳定版本" : "固定镜像标签后由部署环境重启" }}
+          <h3 style="margin: 0; font-size: 14px">版本历史</h3>
+          <span class="cluster" style="gap: 12px">
+            <span v-if="loaded && kind === 'releases' && releases.length" class="muted" style="font-size: 12.5px">
+              {{ deploymentMode === "git" || releaseSelfUpdate ? "可回退最近 5 个稳定版本" : "固定镜像标签后由部署环境重启" }}
+            </span>
+            <a
+              v-if="repo"
+              class="muted"
+              style="font-size: 12.5px"
+              :href="`https://github.com/${repo}/${kind === 'releases' ? 'releases' : 'commits'}`"
+              target="_blank"
+              rel="noreferrer"
+            >
+              在 GitHub 查看全部
+            </a>
           </span>
-        </div>
-        <ul class="recent-version-list">
-          <li v-for="release in recentReleases" :key="release.tag" class="recent-version-item">
-            <div class="recent-version-meta">
-              <span class="cluster" style="gap: 7px">
-                <a class="mono changelog-sha" :href="release.url" target="_blank" rel="noreferrer">{{ release.tag }}</a>
-                <span v-if="release.tag === currentTag" class="badge ok">当前</span>
-              </span>
-              <span class="muted changelog-date">{{ formatDateTime(release.date) }}</span>
-            </div>
-            <div class="cluster" style="gap: 4px">
-              <a
-                v-if="release.checksum_available && release.checksum_url"
-                class="integrity-link"
-                :href="release.checksum_url"
-                target="_blank"
-                rel="noreferrer"
-                :title="`查看 ${release.tag} 的 SHA-256 清单`"
-                :aria-label="`查看 ${release.tag} 的 SHA-256 清单`"
-              >
-                <ShieldCheck :size="15" aria-hidden="true" />
-              </a>
-              <span v-else-if="deploymentMode === 'release' && !releaseSelfUpdate" class="badge ok" title="容器镜像由 OCI digest 校验">OCI digest</span>
-              <button
-                v-if="(deploymentMode === 'git' || releaseSelfUpdate) && isOlderRelease(release.tag)"
-                class="btn ghost small rollback-btn"
-                type="button"
-                :disabled="operationRunning"
-                @click="confirmRollback(release)"
-              >
-                <History :size="13" aria-hidden="true" />
-                回退
-              </button>
-              <button
-                v-else-if="deploymentMode === 'release' && !releaseSelfUpdate && release.tag !== currentTag"
-                class="btn ghost icon-only small"
-                type="button"
-                :title="`复制固定镜像标签 ${release.tag}`"
-                :aria-label="`复制固定镜像标签 ${release.tag}`"
-                @click="copyImageTag(release.tag)"
-              >
-                <Copy :size="14" aria-hidden="true" />
-              </button>
-            </div>
-          </li>
-        </ul>
-        <div v-if="deploymentMode === 'release' && !releaseSelfUpdate" class="release-rollback-note">
-          <Container :size="16" aria-hidden="true" />
-          <span>回退时将部署镜像固定为 <code>ghcr.io/suink/diana:&lt;版本&gt;</code>，并暂停 Watchtower 等自动更新器；镜像拉取会校验 OCI digest。WebUI 不能直接重建宿主机容器。</span>
-        </div>
-      </section>
-
-      <hr v-if="recentReleases.length" class="divider" style="margin: 0" />
-      <div class="stack" style="gap: 8px">
-        <div class="cluster" style="justify-content: space-between">
-          <h3 style="margin: 0; font-size: 14px">更新日志</h3>
-          <a
-            v-if="repo"
-            class="muted"
-            style="font-size: 12.5px"
-            :href="`https://github.com/${repo}/${kind === 'releases' ? 'releases' : 'commits'}`"
-            target="_blank"
-            rel="noreferrer"
-          >
-            在 GitHub 查看全部
-          </a>
         </div>
         <p v-if="changelogError" class="muted" style="font-size: 13px; margin: 0">{{ changelogError }}</p>
         <div v-else-if="!loaded" class="skeleton" style="height: 80px"></div>
 
-        <ul v-else-if="kind === 'releases'" class="changelog-list release-list">
-          <li v-for="release in releases" :key="release.tag" class="release-item">
-            <div class="cluster" style="justify-content: space-between; gap: 8px">
-              <span class="cluster" style="gap: 8px">
-                <a class="mono changelog-sha" :href="release.url" target="_blank" rel="noreferrer">{{ release.tag }}</a>
-                <strong v-if="release.name" style="font-size: 13px">{{ release.name }}</strong>
-                <span v-if="release.prerelease" class="badge warn">预发布</span>
-              </span>
-              <span class="muted changelog-date">{{ formatDate(release.date) }}</span>
-            </div>
-            <p v-if="release.notes" class="muted release-notes">{{ release.notes }}</p>
-          </li>
-        </ul>
+        <template v-else-if="kind === 'releases'">
+          <p v-if="!releases.length" class="muted" style="font-size: 12.5px; margin: 0">暂无 Release 记录。</p>
+          <ul v-else class="changelog-list release-list version-history-list">
+            <li v-for="release in releases" :key="release.tag" class="release-item">
+              <div class="cluster" style="justify-content: space-between; gap: 8px">
+                <span class="cluster" style="gap: 7px">
+                  <a class="mono changelog-sha" :href="release.url" target="_blank" rel="noreferrer">{{ release.tag }}</a>
+                  <strong v-if="release.name && release.name !== release.tag" style="font-size: 13px">{{ release.name }}</strong>
+                  <span v-if="release.tag === currentTag" class="badge ok">当前</span>
+                  <span v-if="release.prerelease" class="badge warn">预发布</span>
+                </span>
+                <span class="cluster" style="gap: 4px">
+                  <span class="muted changelog-date">{{ formatDateTime(release.date) }}</span>
+                  <a
+                    v-if="release.checksum_available && release.checksum_url"
+                    class="integrity-link"
+                    :href="release.checksum_url"
+                    target="_blank"
+                    rel="noreferrer"
+                    :title="`查看 ${release.tag} 的 SHA-256 清单`"
+                    :aria-label="`查看 ${release.tag} 的 SHA-256 清单`"
+                  >
+                    <ShieldCheck :size="15" aria-hidden="true" />
+                  </a>
+                  <button
+                    v-if="canRollbackTo(release)"
+                    class="btn ghost small rollback-btn"
+                    type="button"
+                    :disabled="operationRunning"
+                    @click="confirmRollback(release)"
+                  >
+                    <History :size="13" aria-hidden="true" />
+                    回退
+                  </button>
+                  <button
+                    v-else-if="deploymentMode === 'release' && !releaseSelfUpdate && !release.prerelease && release.tag !== currentTag"
+                    class="btn ghost icon-only small"
+                    type="button"
+                    :title="`复制固定镜像标签 ${release.tag}`"
+                    :aria-label="`复制固定镜像标签 ${release.tag}`"
+                    @click="copyImageTag(release.tag)"
+                  >
+                    <Copy :size="14" aria-hidden="true" />
+                  </button>
+                </span>
+              </div>
+              <p v-if="release.notes" class="muted release-notes">{{ release.notes }}</p>
+            </li>
+          </ul>
+          <div v-if="releases.length && deploymentMode === 'release' && !releaseSelfUpdate" class="release-rollback-note">
+            <Container :size="16" aria-hidden="true" />
+            <span>回退时将部署镜像固定为 <code>ghcr.io/suink/diana:&lt;版本&gt;</code>，并暂停 Watchtower 等自动更新器；镜像拉取会校验 OCI digest。WebUI 不能直接重建宿主机容器。</span>
+          </div>
+        </template>
 
         <template v-else>
           <p class="muted" style="font-size: 12px; margin: 0">仓库尚未发布正式 Release，暂以提交记录代替。</p>
@@ -222,7 +209,7 @@
             </li>
           </ul>
         </template>
-      </div>
+      </section>
     </div>
   </Modal>
 </template>
@@ -303,7 +290,22 @@ const currentTag = computed(() => {
   return raw.split("+")[0].split("（")[0].trim();
 });
 
-const recentReleases = computed(() => releases.value.filter((release) => !release.prerelease).slice(0, 6));
+// 与服务端回退白名单保持一致：比当前版本旧的最近 5 个稳定 Release。
+const rollbackTags = computed(() => {
+  const tags = new Set<string>();
+  for (const release of releases.value) {
+    if (release.prerelease || !release.tag) continue;
+    if (!isOlderRelease(release.tag)) continue;
+    tags.add(release.tag);
+    if (tags.size === 5) break;
+  }
+  return tags;
+});
+
+function canRollbackTo(release: ReleaseEntry): boolean {
+  if (deploymentMode.value !== "git" && !releaseSelfUpdate.value) return false;
+  return rollbackTags.value.has(release.tag);
+}
 
 function formatDate(value?: string): string {
   if (!value) return "";
@@ -776,32 +778,12 @@ a.version-hero-integrity:hover {
   line-height: 1.5;
 }
 
-.recent-version-list {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.version-history-list {
+  max-height: 380px;
 }
 
-.recent-version-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 42px;
-  padding: 7px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.recent-version-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex: 1;
-  min-width: 0;
+.version-history-list .release-item {
+  gap: 2px;
 }
 
 .integrity-link {
@@ -843,12 +825,6 @@ a.version-hero-integrity:hover {
 }
 
 @media (max-width: 640px) {
-  .recent-version-meta {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
-  }
-
   .policy-row {
     align-items: flex-start;
   }
