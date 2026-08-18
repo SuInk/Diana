@@ -1165,6 +1165,7 @@ func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSetti
 
 // HandleEvent 处理 OneBot 消息或通知事件。
 func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
+	event = r.bindInboundEventIdentity(event)
 	if isRecallNotice(event) && r.isBotOwnRecall(event) {
 		return nil
 	}
@@ -1229,6 +1230,27 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	return r.startReplyWorker(ctx, prepared, text, outcome)
+}
+
+// bindInboundEventIdentity restores Diana's internal routing identity when a
+// transport event does not carry it. OneBot history responses never contain
+// ProfileID, so reconnect backfill must use the active binding instead of
+// falling back to the legacy unnamespaced conversation.
+func (r *Runtime) bindInboundEventIdentity(event MessageEvent) MessageEvent {
+	r.mu.RLock()
+	cfg := r.cfg
+	channel := r.channel
+	r.mu.RUnlock()
+	if strings.TrimSpace(event.ProfileID) == "" {
+		event.ProfileID = strings.TrimSpace(cfg.ID)
+	}
+	if strings.TrimSpace(event.Platform) == "" {
+		event.Platform = NormalizePlatformID(cfg.Platform)
+	}
+	if multi, ok := channel.(*MultiChannel); ok && multi.isolate && strings.TrimSpace(event.ContextNamespace) == "" {
+		event.ContextNamespace = event.ProfileID
+	}
+	return event
 }
 
 func (r *Runtime) recordNoticeEvent(event MessageEvent) {
@@ -3172,7 +3194,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 			return "", llmErr
 		}
 		r.recordLLMUsage(ctx, source, llmResp.Provider, llmResp.Model, llmResp.Usage, "plugin_follow_up")
-		return normalizeReply(llmResp.Text, pluginFollowUpMaxChars), nil
+		return normalizeReply(llmResp.Text, pluginFollowUpMaxChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 	if err != nil {
 		log.Printf("qqbot plugin follow-up generation failed: %v", err)
@@ -3247,7 +3269,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "agent_reply")
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -3259,7 +3281,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "reply")
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 }
 
