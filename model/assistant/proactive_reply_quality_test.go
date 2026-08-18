@@ -64,3 +64,29 @@ func (p *qualityTestProvider) Generate(_ context.Context, req llm.GenerateReques
 	p.requests = append(p.requests, req)
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.reply}, nil
 }
+
+func TestNormalizeReplyTruncatesAtSentenceBoundary(t *testing.T) {
+	first := strings.Repeat("甲", 19) + "。"
+	reply := first + strings.Repeat("乙", 30) + "。"
+	got := normalizeReply(reply, 30)
+	if got != first {
+		t.Fatalf("reply = %q, want %q", got, first)
+	}
+	if strings.HasSuffix(got, "...") {
+		t.Fatalf("boundary truncation should not append an ellipsis: %q", got)
+	}
+	if !strings.HasSuffix(got, "。") {
+		t.Fatalf("reply was cut mid-sentence: %q", got)
+	}
+	if len([]rune(got)) > 30 {
+		t.Fatalf("reply exceeds the limit: %q", got)
+	}
+}
+
+func TestNormalizeReplyFallsBackToHardTruncation(t *testing.T) {
+	reply := strings.Repeat("字", 100)
+	got := normalizeReply(reply, 20)
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("reply without any sentence boundary should keep the ellipsis: %q", got)
+	}
+}

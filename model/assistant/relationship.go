@@ -47,7 +47,7 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 	policy := RelationshipPolicy{
 		Tier:                  RelationshipAcquaintance,
 		Name:                  "初识",
-		Tone:                  "自然、礼貌、简洁，不使用过度亲密的称呼，也不要假装已经很熟。",
+		Tone:                  "自然随和，像刚认识但好相处的群友；不用敬语和客服腔，也不要假装已经很熟或用过度亲密的称呼。",
 		Permissions:           []string{"基础聊天", "图片/视频/文件理解", "图片生成", "图片编辑", "文档 OCR", "实时网页搜索", "沙盒网页渲染", "OneBot 信息读取", "个人提醒与订阅（最多 3 个）"},
 		Score:                 profile.Favorability,
 		MessageCount:          profile.MessageCount,
