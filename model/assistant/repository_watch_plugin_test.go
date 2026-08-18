@@ -966,7 +966,7 @@ func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
 	}
 }
 
-func TestRenderRepositoryWatchChangesPutsTimeBeforeAuthor(t *testing.T) {
+func TestRenderRepositoryWatchChangesPutsTimeRightUnderTheNumberLine(t *testing.T) {
 	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
 	change := repositoryWatchChange{
 		PullRequests: []repositoryWatchPullRequest{{
@@ -979,7 +979,10 @@ func TestRenderRepositoryWatchChangesPutsTimeBeforeAuthor(t *testing.T) {
 	}
 	result := renderRepositoryWatchChanges(change)
 	stamp := formatRepositoryWatchTime(at)
-	for _, want := range []string{"合并于 " + stamp + "\n作者：SuInk", "创建于 " + stamp + "\n作者：alice"} {
+	for _, want := range []string{
+		"PR #85（已合并）\n合并于 " + stamp + "\n新增群友回复风格",
+		"Issue #128（新建）\n创建于 " + stamp + "\n修复通知格式",
+	} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, result)
 		}
