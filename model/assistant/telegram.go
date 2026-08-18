@@ -472,14 +472,14 @@ type telegramUpdate struct {
 }
 
 type telegramMessage struct {
-	MessageID      int64          `json:"message_id"`
-	Date           int64          `json:"date"`
-	Text           string         `json:"text"`
-	Caption        string         `json:"caption"`
-	From           *telegramUser  `json:"from"`
-	Chat           *telegramChat  `json:"chat"`
-	NewChatMembers []telegramUser `json:"new_chat_members,omitempty"`
-	ReplyTo        *telegramMessage
+	MessageID      int64            `json:"message_id"`
+	Date           int64            `json:"date"`
+	Text           string           `json:"text"`
+	Caption        string           `json:"caption"`
+	From           *telegramUser    `json:"from"`
+	Chat           *telegramChat    `json:"chat"`
+	NewChatMembers []telegramUser   `json:"new_chat_members,omitempty"`
+	ReplyTo        *telegramMessage `json:"reply_to_message"`
 	Entities       []telegramEntity `json:"entities"`
 	Photo          []telegramPhoto  `json:"photo"`
 }
@@ -542,12 +542,22 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		text = msg.Caption
 	}
 
+	// 回复关系落成与 OneBot 同一种 reply 段，模型看到的引用标记因此跨平台一致。
+	segments := make([]MessageSegment, 0, 2)
+	if msg.ReplyTo != nil && msg.ReplyTo.MessageID != 0 {
+		segments = append(segments, MessageSegment{
+			Type: "reply",
+			Data: map[string]string{"id": strconv.FormatInt(msg.ReplyTo.MessageID, 10)},
+		})
+	}
+	segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": text}})
+
 	event := MessageEvent{
 		Time:       msg.Date,
 		SelfID:     selfID,
 		MessageID:  strconv.FormatInt(msg.MessageID, 10),
 		RawMessage: text,
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}},
+		Segments:   segments,
 	}
 
 	switch msg.Chat.Type {
