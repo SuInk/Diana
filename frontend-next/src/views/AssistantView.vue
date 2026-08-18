@@ -249,7 +249,23 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">允许管理员快速登录控制台</span>
                   </label>
-                  <span class="hint">登录页可向主人账号发送一次性验证码，也可由主人私聊机器人确认；需当前机器人在线。</span>
+                  <span class="hint">总开关，关闭后下面两种方式都不可用；需当前机器人在线。</span>
+                </div>
+                <div v-if="form.owner_login_enabled" class="field wide">
+                  <label class="switch">
+                    <input v-model="ownerLoginPairEnabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">私聊确认登录</span>
+                  </label>
+                  <span class="hint">登录页显示验证码，主人私聊发给机器人后，机器人会告知登录来源并请主人回复「确认」。服务端不会主动发消息。</span>
+                </div>
+                <div v-if="form.owner_login_enabled" class="field wide">
+                  <label class="switch">
+                    <input v-model="ownerLoginCodeEnabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">验证码下发登录</span>
+                  </label>
+                  <span class="hint">由服务端把验证码推送到主人账号。该端点无需凭证即可触发，暴露在公网时会被匿名请求用来骚扰主人或抢占冷却窗口，默认关闭。</span>
                 </div>
                 <div v-if="isOneBotPlatform" class="field wide">
                   <label for="bot-token">OneBot Access Token</label>
@@ -886,6 +902,22 @@ const isOneBotPlatform = computed(() => {
   const id = form.value?.platform ?? "";
   const def = platforms.value.find((item) => item.id === id);
   return def ? def.protocol.startsWith("onebot") : true;
+});
+
+// 两种快速登录方式在后端是可空布尔：留空即取默认值（私聊确认开、验证码下发
+// 关），所以这里也只在用户真的拨动开关时才写入具体值。
+const ownerLoginPairEnabled = computed({
+  get: () => form.value?.owner_login_pair_enabled ?? true,
+  set: (value: boolean) => {
+    if (form.value) form.value.owner_login_pair_enabled = value;
+  }
+});
+
+const ownerLoginCodeEnabled = computed({
+  get: () => form.value?.owner_login_code_enabled ?? false,
+  set: (value: boolean) => {
+    if (form.value) form.value.owner_login_code_enabled = value;
+  }
 });
 
 // 机器人配置项太多（41 个字段），平铺成一列要滚 6 屏。按「配一次就不动」

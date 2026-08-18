@@ -295,6 +295,8 @@ type BotConfig struct {
 	BotQQ                        string               `json:"bot_qq,omitempty"`
 	OwnerID                      string               `json:"owner_id,omitempty"`
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
+	OwnerLoginPairEnabled        *bool                `json:"owner_login_pair_enabled,omitempty"`
+	OwnerLoginCodeEnabled        *bool                `json:"owner_login_code_enabled,omitempty"`
 	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
@@ -478,6 +480,8 @@ type ConfigPayload struct {
 	BotQQ                        string               `json:"bot_qq,omitempty"`
 	OwnerID                      string               `json:"owner_id,omitempty"`
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
+	OwnerLoginPairEnabled        *bool                `json:"owner_login_pair_enabled,omitempty"`
+	OwnerLoginCodeEnabled        *bool                `json:"owner_login_code_enabled,omitempty"`
 	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
@@ -1153,6 +1157,18 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 }
 
 // Validate 校验 QQ 机器人配置是否可运行。
+// OwnerLoginPairAllowed 判断是否允许主人私聊确认登录。默认开启：它不会让服务端
+// 主动发出任何消息，主人不主动私聊就什么都不会发生。
+func (cfg BotConfig) OwnerLoginPairAllowed() bool {
+	return cfg.OwnerLoginEnabled && boolValue(cfg.OwnerLoginPairEnabled, true)
+}
+
+// OwnerLoginCodeAllowed 判断是否允许服务端下发验证码登录。默认关闭：该端点无需
+// 凭证即可触发，会被匿名请求用来骚扰主人账号或抢占冷却窗口。
+func (cfg BotConfig) OwnerLoginCodeAllowed() bool {
+	return cfg.OwnerLoginEnabled && boolValue(cfg.OwnerLoginCodeEnabled, false)
+}
+
 func (cfg BotConfig) Validate() error {
 	if err := ValidatePlatform(cfg.Platform); err != nil {
 		return err
@@ -1203,6 +1219,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		BotQQ:                        cfg.BotQQ,
 		OwnerID:                      cfg.OwnerID,
 		OwnerLoginEnabled:            cfg.OwnerLoginEnabled,
+		OwnerLoginPairEnabled:        copyBoolPointer(cfg.OwnerLoginPairEnabled),
+		OwnerLoginCodeEnabled:        copyBoolPointer(cfg.OwnerLoginCodeEnabled),
 		OwnerLLMConfigEnabled:        copyBoolPointer(cfg.OwnerLLMConfigEnabled),
 		GroupTriggers:                append([]string(nil), cfg.GroupTriggers...),
 		DisabledGroups:               append([]string(nil), cfg.DisabledGroups...),
@@ -1319,6 +1337,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		BotQQ:                        payload.BotQQ,
 		OwnerID:                      payload.OwnerID,
 		OwnerLoginEnabled:            payload.OwnerLoginEnabled,
+		OwnerLoginPairEnabled:        copyBoolPointer(payload.OwnerLoginPairEnabled),
+		OwnerLoginCodeEnabled:        copyBoolPointer(payload.OwnerLoginCodeEnabled),
 		OwnerLLMConfigEnabled:        copyBoolPointer(payload.OwnerLLMConfigEnabled),
 		GroupTriggers:                payload.GroupTriggers,
 		DisabledGroups:               payload.DisabledGroups,
