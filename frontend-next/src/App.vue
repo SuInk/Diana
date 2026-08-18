@@ -2,8 +2,11 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <LoginView v-if="locked" @success="onLoginSuccess" />
-  <div v-else class="app-shell">
+  <!-- ToastHost 放在分支外：登录页也会 toast（验证码发送失败、配对过期等），
+       挂在 app-shell 里的话锁定状态下根本没挂载，那些提示会全部石沉大海。 -->
+  <ToastHost />
+  <LoginView v-if="!booting && locked" @success="onLoginSuccess" />
+  <div v-else-if="!booting" class="app-shell">
     <transition name="none">
       <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false" />
     </transition>
@@ -99,7 +102,6 @@
       </main>
     </div>
 
-    <ToastHost />
     <ConfirmHost />
     <VersionModal
       v-if="versionOpen"
@@ -199,6 +201,9 @@ function syncSidebarMode(event: MediaQueryListEvent): void {
   drawerOpen.value = false;
 }
 const locked = ref(false);
+// 鉴权状态未知时两边都不渲染：抢先把主界面铺出来会让它的接口拿一串 401，
+// 那些报错会以 toast 的形式留在随后切出来的登录页上。
+const booting = ref(true);
 const versionOpen = ref(false);
 const systemVersion = ref<SystemVersion | null>(null);
 const versionLabel = computed(() => {
@@ -339,11 +344,13 @@ onMounted(async () => {
     const auth = await getAuthStatus();
     if (auth.auth_required && !auth.authenticated) {
       locked.value = true;
+      booting.value = false;
       return;
     }
   } catch {
     /* 状态接口失败按未开启鉴权处理，避免把用户锁在门外 */
   }
+  booting.value = false;
   await bootApp();
 });
 

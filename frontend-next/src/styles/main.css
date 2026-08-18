@@ -551,6 +551,12 @@ code {
   font-size: 15px;
 }
 
+/* 字距是给六位数字用的，套到占位文案上会把「6 位验证码」拉成一串散字。 */
+.owner-code-input .input::placeholder {
+  letter-spacing: normal;
+  text-indent: 0;
+}
+
 .owner-code-input .btn {
   flex: 0 0 auto;
   white-space: nowrap;
