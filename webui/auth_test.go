@@ -247,9 +247,28 @@ func TestAuthBootstrapGeneratesInitialCredentials(t *testing.T) {
 }
 
 func TestAuthRejectsInvalidUsername(t *testing.T) {
-	manager := NewAuthManager(&memoryAuthStore{})
-	if _, err := manager.Bootstrap("admin@example.com", "bootstrap-pass"); !errors.Is(err, ErrUsernameInvalid) {
-		t.Fatalf("Bootstrap() error = %v, want ErrUsernameInvalid", err)
+	for _, name := range []string{"a", "有 空格", "带\t制表符", strings.Repeat("x", authMaxUsernameLen+1)} {
+		manager := NewAuthManager(&memoryAuthStore{})
+		if _, err := manager.Bootstrap(name, "bootstrap-pass"); !errors.Is(err, ErrUsernameInvalid) {
+			t.Fatalf("Bootstrap(%q) error = %v, want ErrUsernameInvalid", name, err)
+		}
+	}
+}
+
+// diana# 只是自动生成时的写法，不是格式要求：换成自己顺手的名字应当被接受。
+func TestAuthAcceptsCustomUsername(t *testing.T) {
+	for _, name := range []string{"admin@example.com", "小林", "suink"} {
+		manager := NewAuthManager(&memoryAuthStore{})
+		result, err := manager.Bootstrap(name, "bootstrap-pass")
+		if err != nil {
+			t.Fatalf("Bootstrap(%q) error = %v", name, err)
+		}
+		if result.Username != name {
+			t.Fatalf("Bootstrap(%q) username = %q", name, result.Username)
+		}
+		if _, err := manager.Login(name, "bootstrap-pass"); err != nil {
+			t.Fatalf("Login(%q) error = %v", name, err)
+		}
 	}
 }
 

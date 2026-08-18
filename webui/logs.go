@@ -5,6 +5,7 @@ package webui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -141,6 +142,25 @@ func logAndWriteError(c *gin.Context, logger AppLogWriter, status int, action st
 		})
 	}
 	writeError(c, status, err)
+}
+
+// logAndWriteMaskedError 把完整错误写进日志，只把 public 这句回给调用方。
+// 用于未鉴权就能打到的端点：内部标识（profile ID、平台名、下游报文）不该
+// 出现在任何人都能触发的响应里，但排查时又不能丢。
+func logAndWriteMaskedError(c *gin.Context, logger AppLogWriter, status int, action string, err error, public string, target string, metadata map[string]any) {
+	if err != nil {
+		recordAppLog(c.Request.Context(), logger, storage.AppLogEntry{
+			Kind:     storage.LogKindError,
+			Level:    storage.LogLevelError,
+			Action:   action,
+			Message:  public,
+			Detail:   err.Error(),
+			Actor:    requestActor(c),
+			Target:   target,
+			Metadata: metadata,
+		})
+	}
+	writeError(c, status, errors.New(public))
 }
 
 // 日志写入失败不能影响原始业务请求，失败时只写普通运行日志便于排查。
