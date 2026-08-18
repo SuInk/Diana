@@ -39,7 +39,7 @@
             title="查看 SHA-256 清单"
           >
             <ShieldCheck :size="13" aria-hidden="true" />
-            SHA-256 校验
+            校验通过
           </a>
           <span v-else-if="checkResult" class="version-hero-integrity warn">
             <ShieldAlert :size="13" aria-hidden="true" />
