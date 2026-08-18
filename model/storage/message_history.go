@@ -19,7 +19,10 @@ import (
 
 const (
 	defaultMessageHistoryLimit = 20
-	maxMessageHistoryLimit     = 200
+	// Prompt history candidates are loaded from a token-derived limit. Keep this
+	// ceiling high enough for large windows containing many short QQ messages;
+	// the assistant still applies its token budget before constructing a prompt.
+	maxMessageHistoryLimit = 4096
 )
 
 // AppendMessageEvent persists a QQ message event for later context recovery.

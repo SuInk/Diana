@@ -144,6 +144,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithQQGroupTool(t *testing
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"tool","tool":"diana.qq_group","input":{"operation":"members"}}`,
 		`{"action":"final","content":"群里现在有 3 个人。"}`,
+		`{"should_send":true,"confidence":0.99,"reason":"准确回答群成员数量"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:  true,
@@ -174,7 +175,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithQQGroupTool(t *testing
 	if calls := channel.callsSnapshot(); len(calls) != 1 || calls[0].action != "get_group_member_list" {
 		t.Fatalf("OneBot calls=%#v", calls)
 	}
-	if len(provider.requests) != 2 || !requestMessagesContain(provider.requests[1].Messages, `"group_total": 3`) {
+	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, `"group_total": 3`) {
 		t.Fatalf("provider requests=%#v", provider.requests)
 	}
 }

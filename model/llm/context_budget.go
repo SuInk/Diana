@@ -105,12 +105,48 @@ func fitMessagesToTokenBudget(messages []Message, budget int64) []Message {
 		if _, ok := selected[item.index]; ok || item.priority >= MessagePrioritySystem {
 			continue
 		}
-		message := messages[item.index]
-		if item.cost <= remaining {
-			selected[item.index] = message
-			remaining -= item.cost
+		group := contextBudgetGroupIndexes(messages, item.index)
+		groupCost := int64(0)
+		for _, index := range group {
+			if _, ok := selected[index]; !ok {
+				groupCost += estimateMessageTokens(messages[index])
+			}
+		}
+		if groupCost <= remaining {
+			for _, index := range group {
+				if _, ok := selected[index]; ok {
+					continue
+				}
+				selected[index] = messages[index]
+				remaining -= estimateMessageTokens(messages[index])
+			}
 			continue
 		}
+		if item.priority == MessagePriorityHistory {
+			// History is ordered newest to oldest. If the next complete turn does
+			// not fit, do not skip it to collect disconnected older fragments.
+			break
+		}
+		if item.priority == MessagePriorityRecentHistory && len(group) > 1 {
+			groupItems := make([]struct {
+				index    int
+				cost     int64
+				priority MessagePriority
+			}, 0, len(group))
+			for _, index := range group {
+				if _, ok := selected[index]; ok {
+					continue
+				}
+				groupItems = append(groupItems, struct {
+					index    int
+					cost     int64
+					priority MessagePriority
+				}{index: index, cost: estimateMessageTokens(messages[index]), priority: item.priority})
+			}
+			remaining = selectRequiredMessagesProportionally(messages, groupItems, selected, remaining)
+			continue
+		}
+		message := messages[item.index]
 		if item.priority < MessagePrioritySummary {
 			continue
 		}
@@ -259,6 +295,20 @@ func minInt64(left, right int64) int64 {
 		return left
 	}
 	return right
+}
+
+func contextBudgetGroupIndexes(messages []Message, index int) []int {
+	if index < 0 || index >= len(messages) || strings.TrimSpace(messages[index].ContextGroup) == "" {
+		return []int{index}
+	}
+	groupID := messages[index].ContextGroup
+	indexes := make([]int, 0, 2)
+	for candidateIndex, message := range messages {
+		if message.ContextGroup == groupID {
+			indexes = append(indexes, candidateIndex)
+		}
+	}
+	return indexes
 }
 
 // Current input and plugin evidence are required context. When their image
@@ -483,6 +533,33 @@ func estimateTextTokens(text string) int64 {
 	}
 	flushASCII()
 	return total
+}
+
+// EstimateTextTokens returns the conservative cross-provider token estimate
+// used by the request context budgeter. Callers that assemble layered context
+// should use the same estimate instead of maintaining a second heuristic.
+func EstimateTextTokens(text string) int64 {
+	return estimateTextTokens(text)
+}
+
+// EstimateMessageTokens includes role framing, tool calls and media reserves.
+func EstimateMessageTokens(message Message) int64 {
+	return estimateMessageTokens(message)
+}
+
+// InputTokenBudget applies the same output and safety reserves as requests.
+func InputTokenBudget(contextLimit, maxOutputTokens int64) int64 {
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = DefaultMaxOutputTokens
+	}
+	budget := contextLimit - maxOutputTokens
+	if budget > contextBudgetSafetyReserve {
+		budget -= contextBudgetSafetyReserve
+	}
+	if budget < 1 {
+		return 1
+	}
+	return budget
 }
 
 func estimatedImageTokens(detail string) int64 {
