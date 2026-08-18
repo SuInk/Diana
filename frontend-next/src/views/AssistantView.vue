@@ -320,7 +320,7 @@
                 <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" />
               </div>
               <div class="field">
-                <label for="bot-context">群聊上下文条数</label>
+                <label for="bot-context">历史查询条数上限</label>
                 <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
               </div>
               <div class="field wide memory-settings">

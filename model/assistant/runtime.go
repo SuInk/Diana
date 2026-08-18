@@ -197,6 +197,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "识别到其他机器人的自动回复，为避免循环接续而停止回答", false
 	case "ignored_no_natural_reply":
 		return "not_replied", "自然插话的最终生成没有得到有效回复，已保持静默", false
+	case "ignored_proactive_reply_quality":
+		return "not_replied", "主动回复生成后未通过准确度审核，已保持沉默", false
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
 	case "ignored_stale":
@@ -1407,6 +1409,16 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "ignored_response_suppression", nil
 		}
+		var qualityErr *proactiveReplyQualityRejectedError
+		if errors.As(err, &qualityErr) {
+			setEventRecordOutcome(&record, "ignored_proactive_reply_quality")
+			if reason := strings.TrimSpace(qualityErr.reason); reason != "" {
+				record.Reason = reason
+			}
+			record.Error = ""
+			r.record(record)
+			return "ignored_proactive_reply_quality", nil
+		}
 		if errors.Is(err, errProactiveReplySuperseded) {
 			setEventRecordOutcome(&record, "superseded_proactive")
 			r.record(record)
@@ -2547,7 +2559,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			event = r.prepareEventImages(ctx, event)
 		}
 	}
-	replyHistory := r.contextHistory(event)
+	replyHistory := r.promptContextHistory(event, cfg)
 	ctx = r.withQQPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
@@ -2620,7 +2632,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			event.replyHistory = nil
 			event.replyHistoryLoaded = false
-			replyHistory = r.contextHistory(event)
+			replyHistory = r.promptContextHistory(event, cfg)
 			event.replyHistory = replyHistory
 			event.replyHistoryLoaded = true
 			overrides = r.pluginOverridesForEvent(event)
@@ -2645,6 +2657,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if resp.Reply != "" && !resp.RecallDisclosure {
 			// 插件如果直接给出回复，就不再调用 LLM；只给 Context 时继续作为提示词补充。
 			// 撤回记录属于敏感披露，必须先由 LLM 结合当前请求整理，不能走插件直发。
+			if proactiveTriggered {
+				if err := r.judgeProactiveReplyQuality(ctx, event, cleanText, resp.Reply, cfg); err != nil {
+					return "", err
+				}
+			}
 			messageIDs, err := r.sendWithMessageIDs(ctx, event, resp.Reply)
 			if err != nil {
 				return "", err
@@ -2796,6 +2813,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt, Priority: llm.MessagePrioritySystem}}
 	messages = append(messages, pluginContextMessages(ctx, pluginResponses)...)
+	semanticReferenceContext := r.semanticReferenceContextBlock(ctx, event)
+	if semanticReferenceContext.Block != "" {
+		messages = append(messages, llm.Message{
+			Role:     llm.RoleUser,
+			Content:  semanticReferenceContext.Block,
+			Priority: llm.MessagePriorityPlugin,
+		})
+	}
 	if !authoritativePluginContext {
 		if memoryContext := r.memoryContextWithProfile(ctx, event, cleanText, userProfile, relationship); memoryContext != "" {
 			messages = append(messages, llm.Message{
@@ -2818,7 +2843,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				turnMessageIDs[messageID] = true
 			}
 		}
+		historyGroups, recentHistory := historyContextMetadata(replyHistory, event.Time, cfg.BotQQ)
 		for _, historyEvent := range replyHistory {
+			historyKey := messageHistoryDedupeKey(historyEvent)
+			historyGroup := historyGroups[historyKey]
+			historyPriority := llm.MessagePriorityHistory
+			if recentHistory[historyKey] {
+				historyPriority = llm.MessagePriorityRecentHistory
+			}
 			// 上下文只追加同会话的历史用户消息，当前消息本身会在最后单独加入。
 			if historyEvent.MessageID == event.MessageID {
 				continue
@@ -2831,9 +2863,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					continue
 				}
 				messages = append(messages, llm.Message{
-					Role:     llm.RoleAssistant,
-					Content:  historyEvent.botReply,
-					Priority: llm.MessagePriorityHistory,
+					Role:         llm.RoleAssistant,
+					Content:      historyEvent.botReply,
+					Priority:     historyPriority,
+					ContextGroup: historyGroup,
 				})
 				continue
 			}
@@ -2843,16 +2876,18 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 						continue
 					}
 					messages = append(messages, llm.Message{
-						Role:     llm.RoleAssistant,
-						Content:  botText,
-						Priority: llm.MessagePriorityHistory,
+						Role:         llm.RoleAssistant,
+						Content:      botText,
+						Priority:     historyPriority,
+						ContextGroup: historyGroup,
 					})
 				}
 				if directAgentDecision && historicalStillImageCount(historyEvent) > 0 {
 					messages = append(messages, llm.Message{
-						Role:     llm.RoleUser,
-						Content:  agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent)),
-						Priority: llm.MessagePriorityHistory,
+						Role:         llm.RoleUser,
+						Content:      agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent)),
+						Priority:     historyPriority,
+						ContextGroup: historyGroup,
 					})
 				}
 				continue
@@ -2861,7 +2896,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if directAgentDecision && historicalStillImageCount(historyEvent) > 0 {
 				historyText = agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent))
 			}
-			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyText, Priority: llm.MessagePriorityHistory}
+			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyText, Priority: historyPriority, ContextGroup: historyGroup}
 			if runtimeLLMMessageEmpty(historyMessage) {
 				continue
 			}
@@ -2958,6 +2993,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 	}
 	messages = append(messages, currentMessage)
+	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext)
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
@@ -2986,6 +3022,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			reply = "这条消息我暂时不想回答，我们换个话题吧。"
 		} else {
 			reply = "我这边没有生成有效回复。"
+		}
+	}
+	if proactiveTriggered {
+		if err := r.judgeProactiveReplyQuality(ctx, event, cleanText, reply, cfg); err != nil {
+			return "", err
 		}
 	}
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
@@ -6216,7 +6257,8 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
 		text += "\n\n【媒体状态】" + notice
 	}
-	if quoted := quotedPromptText(event.Quoted); quoted != "" {
+	quotedCoveredBySemanticBlock := event.Quoted != nil && event.Quoted.Semantic && len(eventSemanticSourceMessageIDs(event)) > 0
+	if quoted := quotedPromptText(event.Quoted); quoted != "" && !quotedCoveredBySemanticBlock {
 		text += "\n\n" + quoted
 	}
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
@@ -6620,19 +6662,13 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			if errors.Is(err, errGroupSendUnavailable) {
 				return err
 			}
-			if len(sharedUploads) == 0 {
-				return err
+			// Some OneBot implementations (notably SnowLuma) can send the
+			// staged media directly but cannot reconstruct image elements inside
+			// a merged-forward node. Fall back to ordinary media messages so a
+			// resolver result is still delivered instead of losing the whole turn.
+			if directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages); directErr != nil {
+				return errors.Join(err, directErr)
 			}
-			fallbackMessages, fallbackUploads := splitForwardResolverVideoUploads(messages)
-			if len(fallbackMessages) > 0 {
-				fallbackMessageID, fallbackErr := r.sendRealForwardMessages(ctx, event, fallbackMessages, cfg)
-				if fallbackErr != nil {
-					return errors.Join(err, fallbackErr)
-				}
-				r.rememberForwardOutgoing(ctx, event, fallbackMessages, fallbackMessageID)
-			}
-			uploadVideos = append(fallbackUploads, uploadVideos...)
-			uploadVideos = dedupeResolverVideoUploads(uploadVideos)
 			forwardMessages = nil
 		}
 	}
@@ -6649,6 +6685,18 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 		}
 	}
 	cleanupLocalMediaFilesLater(resolverPluginResponseVideoURLs(resp, messages), resolverLocalMediaTTL)
+	return nil
+}
+
+func (r *Runtime) sendResolverMessagesDirect(ctx context.Context, event MessageEvent, messages []OutgoingMessage) error {
+	for _, message := range messages {
+		if outgoingMessageEmpty(message) {
+			continue
+		}
+		if err := r.sendOutgoing(ctx, event, routeOutgoingToEvent(event, message)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
