@@ -131,6 +131,7 @@ import {
   Moon,
   Sun,
   SunMoon,
+  UserRound,
   Users,
   Wrench
 } from "@lucide/vue";
@@ -153,6 +154,7 @@ import LLMView from "./views/LLMView.vue";
 import AssistantView from "./views/AssistantView.vue";
 import PluginsView from "./views/PluginsView.vue";
 import GroupsView from "./views/GroupsView.vue";
+import UsersView from "./views/UsersView.vue";
 import LogsView from "./views/LogsView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
@@ -165,6 +167,7 @@ const viewComponents: Record<ViewID, Component> = {
   bot: AssistantView,
   plugins: PluginsView,
   groups: GroupsView,
+  users: UsersView,
   logs: LogsView,
   settings: SettingsView
 };
@@ -229,6 +232,7 @@ const viewTitles: Record<ViewID, string> = {
   bot: "机器人",
   plugins: "插件",
   groups: "群管理",
+  users: "人员",
   logs: "日志",
   settings: "设置"
 };
@@ -282,6 +286,7 @@ function navIcon(id: ViewID): Component {
     bot: Bot,
     plugins: PlugZap,
     groups: Users,
+    users: UserRound,
     logs: FileClock,
     settings: Wrench
   };
