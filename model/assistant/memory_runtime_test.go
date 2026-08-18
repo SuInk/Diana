@@ -111,6 +111,35 @@ func TestStructuredMemoryRankingExcludesUnrelatedFacts(t *testing.T) {
 	}
 }
 
+func TestStructuredMemoryRankingDoesNotInjectUnrelatedSafetyEpisode(t *testing.T) {
+	now := time.Now()
+	items := []StructuredMemoryItem{
+		{
+			ID: "risk", SubjectUserID: "user", Kind: MemoryKindEpisode,
+			Topic: "安全风险", Content: "用户过去表达过自伤想法", Confidence: 1, Importance: 1,
+			SourceSession: "group:123", LastVerifiedAt: now.Add(-24 * time.Hour),
+		},
+		{
+			ID: "game", SubjectUserID: "user", Kind: MemoryKindFact,
+			Topic: "游戏进度", Content: "用户正在玩Melvor Idle", Confidence: .98, Importance: .7,
+			SourceSession: "group:123", LastVerifiedAt: now,
+		},
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "user"}
+	ranked := rankStructuredMemories(items, event, "Melvor Idle 的深渊入口在哪", now)
+	if len(ranked) != 1 || ranked[0].ID != "game" {
+		t.Fatalf("game query received unrelated safety context: %#v", ranked)
+	}
+	ranked = rankStructuredMemories(items, event, "我又想自杀了", now)
+	foundRisk := false
+	for _, item := range ranked {
+		foundRisk = foundRisk || item.ID == "risk"
+	}
+	if !foundRisk {
+		t.Fatalf("safety query lost relevant safety episode: %#v", ranked)
+	}
+}
+
 func TestStructuredMemoryRankingUnderstandsTimeIntent(t *testing.T) {
 	now := time.Now()
 	items := []StructuredMemoryItem{

@@ -32,6 +32,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/storage"
 	"github.com/SuInk/diana/model/updater"
+	"github.com/SuInk/diana/model/version"
 	"github.com/SuInk/diana/webui"
 
 	"github.com/gin-gonic/gin"
@@ -41,6 +42,11 @@ import (
 // buildVersion 由构建时 -ldflags "-X main.buildVersion=<version>" 注入；
 // Release 使用语义化 tag，普通开发构建使用 dev。
 var buildVersion = "dev"
+
+// runtimeVersion 是对外展示、并参与 Release 更新比较的版本号。
+// 没有注入正式 tag 时回落到源码基线（如 v0.8.36-dev），
+// 保证本地构建也能和最新 Release 做语义化比较。
+var runtimeVersion = version.Resolve(buildVersion)
 
 const (
 	legacyLLMConfigPluginID = "official.llm-config-skill"
@@ -116,7 +122,8 @@ func main() {
 	}
 	systemHandler := webui.NewSystemUpdateHandler(systemUpdater)
 	systemHandler.SetLogStore(sqliteStore)
-	systemHandler.SetBuildVersion(buildVersion)
+	systemHandler.SetBuildVersion(runtimeVersion)
+	systemHandler.SetBuildType(version.BuildType(buildVersion))
 	if err := systemHandler.SetUpdatePolicyStore(ctx, sqliteStore); err != nil {
 		log.Fatal(err)
 	}
@@ -124,7 +131,7 @@ func main() {
 		log.Printf("load system release cache: %v", err)
 	}
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
-		CurrentVersion: buildVersion,
+		CurrentVersion: runtimeVersion,
 		FrontendDir:    frontendDistDir(),
 		DatabasePath:   sqliteStore.Path(),
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
@@ -305,7 +312,7 @@ func main() {
 	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path())
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
-	healthHandler := webui.NewHealthHandlerWithVersion(buildVersion)
+	healthHandler := webui.NewHealthHandlerWithVersion(runtimeVersion)
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
@@ -340,8 +347,17 @@ func main() {
 	authHandler.SetLogStore(sqliteStore)
 	authHandler.Register(router)
 	// ownerLoginHandler 在 botRuntime 创建后注册（见下方）。
-	if err := router.SetTrustedProxies(nil); err != nil {
-		log.Fatal(err)
+	// 默认谁都不信：ClientIP() 直接取 TCP 对端地址，伪造 X-Forwarded-For 无效。
+	// 但套上反向代理之后所有请求的对端地址都是代理自己，按来源计数的限流会退化
+	// 成全局限流，真管理员会被攻击者的失败次数连坐。部署在反代后面时用
+	// DIANA_TRUSTED_PROXIES 声明代理地址（逗号分隔的 IP 或 CIDR），声明之后才
+	// 会解析 X-Forwarded-For。
+	trustedProxies := stringListFromEnv("DIANA_TRUSTED_PROXIES", nil)
+	if err := router.SetTrustedProxies(trustedProxies); err != nil {
+		log.Fatalf("DIANA_TRUSTED_PROXIES 配置无效：%v", err)
+	}
+	if len(trustedProxies) > 0 {
+		log.Printf("已信任反向代理 %s，客户端 IP 取自 X-Forwarded-For", strings.Join(trustedProxies, ", "))
 	}
 	handler.Register(router)
 	systemHandler.Register(router)

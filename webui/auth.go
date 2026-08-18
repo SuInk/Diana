@@ -13,11 +13,15 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/SuInk/diana/model/storage"
 
@@ -29,6 +33,8 @@ const (
 	legacyAdminUser         = "admin@diana.local"
 	adminUsernamePrefix     = "diana#"
 	authRandomUsernameBytes = 8
+	authMinUsernameLen      = 2
+	authMaxUsernameLen      = 64
 	authSessionTTL          = 30 * 24 * time.Hour
 	authPBKDF2Iters         = 210_000
 	authMinPasswordLen      = 8
@@ -37,7 +43,7 @@ const (
 var (
 	ErrWrongPassword    = errors.New("账号或密码不正确")
 	ErrPasswordTooShort = errors.New("密码至少 8 位")
-	ErrUsernameInvalid  = errors.New("账号必须以 diana# 开头，后面至少包含 8 位字母或数字")
+	ErrUsernameInvalid  = errors.New("账号需为 2-64 个字符，且不能包含空格或控制字符")
 )
 
 // AuthBootstrapResult 描述首次启动创建的管理员凭据。
@@ -177,16 +183,15 @@ func randomAdminUsername() (string, error) {
 	return adminUsernamePrefix + hex.EncodeToString(raw), nil
 }
 
+// validateAdminUsername 只拦明显不可用的账号名。diana# 前缀是自动生成时的
+// 写法，不是格式要求——改成自己顺手的名字应当被允许。
 func validateAdminUsername(username string) error {
-	if !strings.HasPrefix(username, adminUsernamePrefix) {
+	length := len([]rune(username))
+	if length < authMinUsernameLen || length > authMaxUsernameLen {
 		return ErrUsernameInvalid
 	}
-	suffix := strings.TrimPrefix(username, adminUsernamePrefix)
-	if len(suffix) < 8 {
-		return ErrUsernameInvalid
-	}
-	for _, char := range suffix {
-		if !(char >= 'a' && char <= 'z') && !(char >= 'A' && char <= 'Z') && !(char >= '0' && char <= '9') {
+	for _, char := range username {
+		if unicode.IsSpace(char) || unicode.IsControl(char) {
 			return ErrUsernameInvalid
 		}
 	}
@@ -516,10 +521,9 @@ func authExemptPath(path string) bool {
 	case path == "/api/auth/status",
 		path == "/api/auth/login",
 		path == "/api/auth/owner/status",
-		path == "/api/auth/owner/challenge",
-		path == "/api/auth/owner/verify",
 		path == "/api/auth/owner/pair",
-		path == "/api/auth/owner/pair/status":
+		path == "/api/auth/owner/pair/status",
+		path == "/api/auth/owner/pair/claim":
 		return true
 	case path == "/api/health":
 		// 健康检查供监控探活。
@@ -562,13 +566,14 @@ func (m *AuthManager) Middleware() gin.HandlerFunc {
 
 // AuthHandler 暴露登录、登出、状态和改密接口。
 type AuthHandler struct {
-	manager *AuthManager
-	logs    AppLogWriter
+	manager  *AuthManager
+	logs     AppLogWriter
+	throttle *authThrottle
 }
 
 // NewAuthHandler 创建鉴权接口处理器。
 func NewAuthHandler(manager *AuthManager) *AuthHandler {
-	return &AuthHandler{manager: manager}
+	return &AuthHandler{manager: manager, throttle: newAuthThrottle()}
 }
 
 // SetLogStore 注入操作日志写入器。
@@ -611,13 +616,19 @@ func (h *AuthHandler) login(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
+	throttleKey := c.ClientIP()
+	if !h.allowCredentialAttempt(c, "auth.login", throttleKey) {
+		return
+	}
 	token, err := h.manager.LoginWithMetadata(payload.Username, payload.Password, authSessionMetadata(c))
 	if err != nil {
 		// 失败固定延迟，抬高在线爆破成本。
 		time.Sleep(400 * time.Millisecond)
+		h.recordCredentialFailure(c, "auth.login", throttleKey)
 		logAndWriteError(c, h.logs, http.StatusUnauthorized, "auth.login", err, "", nil)
 		return
 	}
+	h.throttle.Reset(throttleKey)
 	h.setSessionCookie(c, token, int(authSessionTTL/time.Second))
 	recordRequestOperation(c, h.logs, "auth.login", "WebUI 登录成功", "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -677,16 +688,24 @@ func (h *AuthHandler) setPassword(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
+	// 改密同样要校验旧密码，因此跟登录共用一份失败预算，免得攻击者换个端点
+	// 就能把次数重新攒满。
+	throttleKey := c.ClientIP()
+	if !h.allowCredentialAttempt(c, "auth.password", throttleKey) {
+		return
+	}
 	username, err := h.manager.SetCredentials(payload.CurrentPassword, payload.NewUsername, payload.NewPassword)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, ErrWrongPassword) {
 			status = http.StatusUnauthorized
 			time.Sleep(400 * time.Millisecond)
+			h.recordCredentialFailure(c, "auth.password", throttleKey)
 		}
 		logAndWriteError(c, h.logs, status, "auth.password", err, "", nil)
 		return
 	}
+	h.throttle.Reset(throttleKey)
 	// 改密清空了所有会话，立刻给当前端签发新会话，避免自己被登出。
 	token, err := h.manager.LoginWithMetadata(username, payload.NewPassword, authSessionMetadata(c))
 	if err == nil {
@@ -694,6 +713,27 @@ func (h *AuthHandler) setPassword(c *gin.Context) {
 	}
 	recordRequestOperation(c, h.logs, "auth.password", "WebUI 管理凭据已更新", "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "username": username})
+}
+
+// allowCredentialAttempt 在退避期内直接回绝，返回 false 表示已经写过响应。
+func (h *AuthHandler) allowCredentialAttempt(c *gin.Context, action, key string) bool {
+	wait := h.throttle.RetryAfter(key, time.Now())
+	if wait <= 0 {
+		return true
+	}
+	c.Header("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+	logAndWriteError(c, h.logs, http.StatusTooManyRequests, action,
+		fmt.Errorf("失败次数过多，请 %s 后再试", formatRetryAfter(wait)), "", nil)
+	return false
+}
+
+// recordCredentialFailure 记一次失败；触发锁定时单独写一条操作日志，方便主人
+// 在面板上看见有人在爆破。
+func (h *AuthHandler) recordCredentialFailure(c *gin.Context, action, key string) {
+	if lock := h.throttle.Fail(key, time.Now()); lock > 0 {
+		recordRequestOperation(c, h.logs, action+".throttled",
+			fmt.Sprintf("连续失败过多，该来源已锁定 %s", formatRetryAfter(lock)), "", nil)
+	}
 }
 
 func authSessionMetadata(c *gin.Context) AuthSessionMetadata {
@@ -728,7 +768,7 @@ func (h *AuthHandler) setSessionCookie(c *gin.Context, token string, maxAge int)
 	authSetSessionCookie(c, token, maxAge)
 }
 
-// authSetSessionCookie 是会话 cookie 的统一写入口，密码登录与主人验证码登录共用。
+// authSetSessionCookie 是会话 cookie 的统一写入口，密码登录与主人私聊确认登录共用。
 func authSetSessionCookie(c *gin.Context, token string, maxAge int) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(authCookieName, token, maxAge, "/", "", false, true)

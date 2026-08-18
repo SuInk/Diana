@@ -2444,7 +2444,7 @@ func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 	if reply != "看起来是拍摄角度和光线让表情显得没那么明显。" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
-	if len(provider.requests) != 4 || !requestHasImageURL(provider.requests[3], imageURL) {
+	if len(provider.requests) != 5 || !requestHasImageURL(provider.requests[3], imageURL) {
 		t.Fatalf("requests missing image context: %#v", provider.requests)
 	}
 }
@@ -2834,7 +2834,7 @@ func TestRuntimeRepliesWhenImageFulfillsRecentBotRequest(t *testing.T) {
 	if reply != "看到了，截图里的 QQ 版本是 9.9.31。" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
-	if len(provider.requests) != 3 || !requestHasAnyImage(provider.requests[0]) || !strings.Contains(provider.requests[1].Messages[1].Content, `"current_images":1`) || !requestHasAnyImage(provider.requests[2]) {
+	if len(provider.requests) != 4 || !requestHasAnyImage(provider.requests[0]) || !strings.Contains(provider.requests[1].Messages[1].Content, `"current_images":1`) || !requestHasAnyImage(provider.requests[2]) {
 		t.Fatalf("routing, tool intent, and reply models should receive image context: %#v", provider.requests)
 	}
 	if strings.Contains(provider.requests[0].Messages[1].Content, "请分析这张图片") {
@@ -2910,7 +2910,7 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	attemptsMu.Lock()
 	attemptsSnapshot := append([]string(nil), attempts...)
 	attemptsMu.Unlock()
-	wantAttempts := []string{"routing-model", "routing-model", "main-model"}
+	wantAttempts := []string{"routing-model", "routing-model", "main-model", "routing-model"}
 	if len(attemptsSnapshot) != len(wantAttempts) {
 		t.Fatalf("attempts = %#v, want %#v", attemptsSnapshot, wantAttempts)
 	}
@@ -4773,6 +4773,11 @@ type capturingLLMProvider struct {
 
 // Generate 记录请求并返回固定回复。
 func (p *capturingLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	for _, message := range req.Messages {
+		if strings.Contains(message.Content, "主动回复答案质量审核器") {
+			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
+		}
+	}
 	p.mu.Lock()
 	p.request = cloneGenerateRequestForTest(req)
 	p.mu.Unlock()
@@ -4809,8 +4814,13 @@ func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)
+	for _, message := range req.Messages {
+		if strings.Contains(message.Content, "主动回复答案质量审核器") {
+			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
+		}
+	}
 	if len(p.replies) == 0 {
-		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test"}, nil
+		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 	}
 	reply := p.replies[0]
 	p.replies = p.replies[1:]

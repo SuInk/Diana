@@ -148,6 +148,14 @@ CREATE TABLE IF NOT EXISTS memory_jobs (
   completed_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS outbound_delivery_steps (
+  turn_id TEXT NOT NULL,
+  step_key TEXT NOT NULL,
+  message_id TEXT,
+  delivered_at INTEGER NOT NULL,
+  PRIMARY KEY (turn_id, step_key)
+);
+
 CREATE TABLE IF NOT EXISTS inbound_events (
   id TEXT PRIMARY KEY,
   session TEXT NOT NULL,

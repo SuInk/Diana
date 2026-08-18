@@ -270,3 +270,51 @@ func TestMessageEventFromEnvelopeKeepsSenderRoleAndLevel(t *testing.T) {
 		t.Fatalf("parsed level = %d, ok = %v", level, ok)
 	}
 }
+
+func TestDianaQQGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := &testWritableGroupConfigStore{}
+	_, _ = store.SaveGroupConfig(GroupConfig{GroupID: "123", Enabled: true, EnabledSet: true, ResponseMode: ResponseModeStandard}, runtime.Config())
+	runtime.SetGroupConfigStore(store)
+	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+
+	raw, err := tool.Run(context.Background(), map[string]any{
+		"operation":     "set_reply_policy",
+		"chat_in_level": "max",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaQQGroupResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	// 预设模式会在运行时套回自己的档位，所以必须同时切成自定义，改动才真的生效。
+	saved, ok := store.ConfigForGroup("123")
+	if !ok || saved.ResponseMode != ResponseModeCustom || saved.ChatInLevel != ChatInLevelMax {
+		t.Fatalf("saved = %#v, ok = %v", saved, ok)
+	}
+	if result.ReplyPolicy == nil || result.ReplyPolicy.ChatInLevel != string(ChatInLevelMax) {
+		t.Fatalf("reported policy = %#v", result.ReplyPolicy)
+	}
+	effective := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123"})
+	if effective.ChatInLevel != ChatInLevelMax {
+		t.Fatalf("effective level = %q, want max", effective.ChatInLevel)
+	}
+}
+
+func TestDianaQQGroupReplyPolicyReportsThePresetInsteadOfTheRawLevel(t *testing.T) {
+	// 群仍是标准模式时，运行时用的是预设档位，报告也必须说预设值。
+	policy := dianaQQGroupReplyPolicyFromConfig(GroupConfig{
+		GroupID: "123", ResponseMode: ResponseModeStandard, ChatInLevel: ChatInLevelMax,
+	})
+	if policy.ChatInLevel != string(ChatInLevelLow) {
+		t.Fatalf("reported level = %q, want the standard preset", policy.ChatInLevel)
+	}
+	custom := dianaQQGroupReplyPolicyFromConfig(GroupConfig{
+		GroupID: "123", ResponseMode: ResponseModeCustom, ChatInLevel: ChatInLevelMax,
+	})
+	if custom.ChatInLevel != string(ChatInLevelMax) {
+		t.Fatalf("custom reported level = %q, want max", custom.ChatInLevel)
+	}
+}

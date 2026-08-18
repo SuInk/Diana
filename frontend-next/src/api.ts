@@ -117,7 +117,7 @@ export interface QQBotConfig {
   welcome_message?: string;
   system_prompt?: string;
   response_mode?: "quiet" | "standard" | "active" | "custom";
-  reply_style?: "assistant" | "gentle" | "lively" | "concise" | "member";
+  reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
   /** 回复行为个性化；后端缺省（字段不存在）等价于开启。 */
@@ -293,7 +293,7 @@ export interface QQBotGroupConfig {
   /** 留空时跟随机器人全局回复模式。 */
   response_mode?: "" | "quiet" | "standard" | "active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
-  reply_style?: "" | "assistant" | "gentle" | "lively" | "concise" | "member";
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise";
   welcome_enabled?: boolean;
   welcome_message?: string;
   recent_context_limit?: number;
@@ -651,31 +651,37 @@ export function changeCredentials(currentPassword: string, newUsername: string, 
   });
 }
 
+export interface AuthSession {
+  id: string;
+  device_name: string;
+  user_agent?: string;
+  ip_address?: string;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  current: boolean;
+}
+
+export function listAuthSessions(): Promise<{ sessions: AuthSession[] }> {
+  return requestJSON<{ sessions: AuthSession[] }>("/api/auth/sessions");
+}
+
+export function revokeAuthSession(id: string): Promise<{ revoked: boolean; current: boolean }> {
+  return requestJSON<{ revoked: boolean; current: boolean }>(`/api/auth/sessions/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+export function revokeOtherAuthSessions(): Promise<{ revoked: number }> {
+  return requestJSON<{ revoked: number }>("/api/auth/sessions/revoke-others", { method: "POST" });
+}
+
 export interface OwnerLoginStatus {
   available: boolean;
-  code_delivery_available: boolean;
 }
 
 export function getOwnerLoginStatus(): Promise<OwnerLoginStatus> {
   return requestJSON<OwnerLoginStatus>("/api/auth/owner/status");
-}
-
-export interface OwnerLoginChallenge {
-  ok: boolean;
-  challenge_token: string;
-  expires_in_seconds: number;
-  cooldown_seconds: number;
-}
-
-export function requestOwnerLoginCode(): Promise<OwnerLoginChallenge> {
-  return requestJSON<OwnerLoginChallenge>("/api/auth/owner/challenge", { method: "POST" });
-}
-
-export function verifyOwnerLoginCode(challengeToken: string, code: string): Promise<{ ok: boolean }> {
-  return requestJSON<{ ok: boolean }>("/api/auth/owner/verify", {
-    method: "POST",
-    body: JSON.stringify({ challenge_token: challengeToken, code })
-  });
 }
 
 export interface OwnerLoginPairing {
@@ -693,6 +699,13 @@ export interface OwnerLoginPairingStatus {
 
 export function createOwnerLoginPairing(): Promise<OwnerLoginPairing> {
   return requestJSON<OwnerLoginPairing>("/api/auth/owner/pair", { method: "POST" });
+}
+
+export function claimOwnerLoginPairing(code: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>("/api/auth/owner/pair/claim", {
+    method: "POST",
+    body: JSON.stringify({ code })
+  });
 }
 
 export function pollOwnerLoginPairing(pollToken: string): Promise<OwnerLoginPairingStatus> {
@@ -1004,6 +1017,7 @@ export function restartSystem(): Promise<{ ok: boolean }> {
 
 export interface SystemVersion {
   build_version: string;
+  build_type?: BuildType;
   version_label: string;
   git_available: boolean;
   deployment_mode: "git" | "release";
@@ -1076,6 +1090,8 @@ export function getSystemVersion(): Promise<SystemVersion> {
   return requestJSON<SystemVersion>("/api/system/version");
 }
 
+export type BuildType = "release" | "source";
+
 export interface UpdateCheckResponse {
   deployment_mode: "git" | "release";
   current_version: string;
@@ -1084,6 +1100,8 @@ export interface UpdateCheckResponse {
   checked_at: string;
   update_available: boolean;
   update_supported: boolean;
+  build_type: BuildType;
+  switch_to_release_available: boolean;
   integrity_mode: "git-object-hash" | "sha256";
   checksum_available: boolean;
   checksum_url?: string;

@@ -5,7 +5,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -191,4 +193,63 @@ func inboundTransportKey(event assistant.MessageEvent) string {
 		strings.TrimSpace(string(event.Kind)), strings.TrimSpace(event.GroupID),
 		strings.TrimSpace(event.UserID), messageID,
 	}, "\x00")
+}
+
+// OutboundStepDelivered 查询这条入站事件的某个出站步骤是否已经成功送达。
+// 入站队列失败重跑时据此跳过已经发出去的分片和媒体。
+func (s *SQLiteStore) OutboundStepDelivered(ctx context.Context, turnID, stepKey string) (string, bool, error) {
+	if s == nil || s.db == nil {
+		return "", false, nil
+	}
+	turnID, stepKey = strings.TrimSpace(turnID), strings.TrimSpace(stepKey)
+	if turnID == "" || stepKey == "" {
+		return "", false, nil
+	}
+	var messageID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+SELECT message_id FROM outbound_delivery_steps WHERE turn_id = ? AND step_key = ?
+`, turnID, stepKey).Scan(&messageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("load outbound step %q: %w", stepKey, err)
+	}
+	return strings.TrimSpace(messageID.String), true, nil
+}
+
+// RecordOutboundStep 登记一个已经送达的出站步骤。
+func (s *SQLiteStore) RecordOutboundStep(ctx context.Context, turnID, stepKey, messageID string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	turnID, stepKey = strings.TrimSpace(turnID), strings.TrimSpace(stepKey)
+	if turnID == "" || stepKey == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO outbound_delivery_steps (turn_id, step_key, message_id, delivered_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(turn_id, step_key) DO UPDATE SET
+  message_id = CASE WHEN excluded.message_id = '' THEN outbound_delivery_steps.message_id ELSE excluded.message_id END
+`, turnID, stepKey, strings.TrimSpace(messageID), time.Now().UTC().UnixNano())
+	if err != nil {
+		return fmt.Errorf("record outbound step %q: %w", stepKey, err)
+	}
+	return nil
+}
+
+// ClearOutboundSteps 在入站事件走到终态后清理账本。
+func (s *SQLiteStore) ClearOutboundSteps(ctx context.Context, turnID string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM outbound_delivery_steps WHERE turn_id = ?`, turnID); err != nil {
+		return fmt.Errorf("clear outbound steps for %q: %w", turnID, err)
+	}
+	return nil
 }
