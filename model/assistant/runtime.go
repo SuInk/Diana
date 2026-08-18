@@ -8633,7 +8633,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if label == "" {
 		label = item.FeedURL
 	}
-	message = fmt.Sprintf("RSS 订阅 %s · %s：\n%s", item.ID, label, message)
+	message = fmt.Sprintf("RSS 订阅 %s：%s<botbr>%s", item.ID, label, message)
 	if err := r.storeRSSWatchProgress(item.ID, change.Snapshot, message); err != nil {
 		return startedAt, err
 	}
@@ -8879,14 +8879,16 @@ func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Remin
 // composeRepositoryWatchMessage 把标题、变更明细和模型概括拼成一条通知。概括排在
 // 明细之后：先给确定性的事实清单，再给那句自然语言总结。
 func composeRepositoryWatchMessage(repository, body, summary string) string {
-	parts := []string{"GitHub 动态：" + repository}
+	message := "GitHub 动态：" + repository
 	if strings.TrimSpace(body) != "" {
-		parts = append(parts, body)
+		message += "\n\n" + body
 	}
+	// 模型写的那句概括是一次独立发言，用 <botbr> 让它单独成条，不要和变更明细挤在
+	// 同一条消息里。
 	if strings.TrimSpace(summary) != "" {
-		parts = append(parts, summary)
+		message += "<botbr>" + strings.TrimSpace(summary)
 	}
-	return strings.Join(parts, "\n\n")
+	return message
 }
 
 func (r *Runtime) runRepositoryWatchExternalEventAgent(ctx context.Context, source MessageEvent, payload json.RawMessage) (string, error) {
@@ -9073,8 +9075,12 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 		lines := make([]string, 0, len(change.Releases))
 		for _, release := range change.Releases {
 			label := strings.TrimSpace(release.Tag)
-			if name := strings.TrimSpace(release.Name); name != "" && name != label {
-				label += ": " + name
+			// Release 名字通常写成「Diana v0.8.36」，已经带上了 tag；再拼一次就成了
+			// 「Release v0.8.36: Diana v0.8.36」。只有名字确实补充了新信息才附加。
+			if name := strings.TrimSpace(release.Name); name != "" && label != "" && !strings.Contains(name, label) {
+				label += "（" + name + "）"
+			} else if label == "" {
+				label = strings.TrimSpace(release.Name)
 			}
 			line := "Release " + label
 			if publishedAt := formatRepositoryWatchTime(release.PublishedAt); publishedAt != "" {
