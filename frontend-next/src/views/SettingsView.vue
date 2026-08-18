@@ -22,7 +22,7 @@
         </p>
         <div class="field">
           <label for="sec-username">管理账号</label>
-          <input id="sec-username" v-model="username" class="input" placeholder="diana#账号" autocomplete="username" />
+          <input id="sec-username" v-model="username" class="input" placeholder="留空则沿用当前账号" autocomplete="username" />
         </div>
         <div v-if="authRequired" class="field">
           <label for="sec-current">当前密码</label>
