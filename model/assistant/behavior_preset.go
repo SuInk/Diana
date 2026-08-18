@@ -36,17 +36,29 @@ func (mode ResponseMode) apply(cfg *BotConfig) {
 		cfg.ChatInEnabled = boolPointer(false)
 		cfg.ChatInLevel = ChatInLevelOff
 		cfg.NaturalInterjectionEnabled = boolPointer(false)
+		clearChatInFineTuning(cfg)
 	case ResponseModeActive:
 		cfg.ChatInEnabled = boolPointer(true)
 		cfg.ChatInLevel = ChatInLevelHigh
 		cfg.NaturalInterjectionEnabled = boolPointer(false)
+		clearChatInFineTuning(cfg)
 	case ResponseModeStandard:
 		cfg.ChatInEnabled = boolPointer(true)
 		cfg.ChatInLevel = ChatInLevelLow
 		cfg.NaturalInterjectionEnabled = boolPointer(false)
+		clearChatInFineTuning(cfg)
 	case ResponseModeCustom:
 		// Keep the detailed chat-in controls untouched.
 	}
+}
+
+// clearChatInFineTuning 丢弃阈值、采样率和冷却的自定义覆盖。预设档位在 WebUI 里
+// 会隐藏这三个输入框，留着旧值会得到「档位是预设的、阈值却是手改的」这种既看不见
+// 又在生效的混合状态。
+func clearChatInFineTuning(cfg *BotConfig) {
+	cfg.ChatInThreshold = 0
+	cfg.ChatInChance = 0
+	cfg.ChatInCooldownSeconds = 0
 }
 
 // ReplyStyle controls presentation without replacing the user's custom persona.
