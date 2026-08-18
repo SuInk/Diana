@@ -32,17 +32,14 @@
             <ShieldCheck :size="13" aria-hidden="true" />
             Git 对象哈希校验
           </span>
-          <a
-            v-else-if="checkResult?.checksum_available && checkResult.checksum_url"
+          <span
+            v-else-if="checkResult?.checksum_available"
             class="version-hero-integrity ok"
-            :href="checkResult.checksum_url"
-            target="_blank"
-            rel="noreferrer"
-            title="查看 SHA-256 清单"
+            title="该 Release 带 SHA-256 清单，安装流程会在解包前逐一校验"
           >
             <ShieldCheck :size="13" aria-hidden="true" />
             校验通过
-          </a>
+          </span>
           <span v-else-if="checkResult" class="version-hero-integrity warn">
             <ShieldAlert :size="13" aria-hidden="true" />
             缺少 SHA-256 清单
@@ -388,11 +385,14 @@ async function load(): Promise<void> {
 
 async function check(notify = true): Promise<void> {
   checking.value = true;
-  updatedHint.value = "";
   checkError.value = "";
   try {
     checkResult.value = await checkForUpdate();
     status.value = checkResult.value.status ?? status.value;
+    // 按刚拿到的状态重新判定成功横幅，而不是在开头先粗暴清空：那样会把一条
+    // 仍然成立的提示也一起抹掉（升级完点一下「检查更新」横幅就没了）。
+    if (status.value?.last_update_status) applyPersistedUpdateResult(status.value);
+    else updatedHint.value = "";
     policy.value = checkResult.value.policy ?? policy.value;
     emit("checked", checkResult.value.update_available);
     if (notify) {
