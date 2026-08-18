@@ -105,19 +105,22 @@ type PluginRequest struct {
 }
 
 type PluginResponse struct {
-	Handled             bool              `json:"handled"`
-	Context             string            `json:"context,omitempty"`
-	Reply               string            `json:"reply,omitempty"`
-	ImageURLs           []string          `json:"image_urls,omitempty"`
-	ContextImageURLs    []string          `json:"-"`
-	VideoURLs           []string          `json:"video_urls,omitempty"`
-	Forward             bool              `json:"forward,omitempty"`
-	NestedForward       bool              `json:"-"`
-	ForwardMessages     []OutgoingMessage `json:"-"`
-	Tasks               []PluginTask      `json:"-"`
-	RecallDisclosure    bool              `json:"-"`
-	RecallEvents        []MessageEvent    `json:"-"`
-	RecallReferenceTime int64             `json:"-"`
+	Handled          bool              `json:"handled"`
+	Context          string            `json:"context,omitempty"`
+	Reply            string            `json:"reply,omitempty"`
+	ImageURLs        []string          `json:"image_urls,omitempty"`
+	ContextImageURLs []string          `json:"-"`
+	VideoURLs        []string          `json:"video_urls,omitempty"`
+	Forward          bool              `json:"forward,omitempty"`
+	NestedForward    bool              `json:"-"`
+	ForwardMessages  []OutgoingMessage `json:"-"`
+	Tasks            []PluginTask      `json:"-"`
+	// FollowUp 让插件在内容发出后，请机器人像真人那样再自然接一句。
+	// 只是一个开关：刚发出的内容已经写进历史，模型从历史里就能看到自己发了什么。
+	FollowUp            bool           `json:"-"`
+	RecallDisclosure    bool           `json:"-"`
+	RecallEvents        []MessageEvent `json:"-"`
+	RecallReferenceTime int64          `json:"-"`
 }
 
 // PluginTask describes work that should outlive the incoming message request.
@@ -862,6 +865,7 @@ const (
 	resolverSettingMaxVideoMB       = "max_video_mb"
 	resolverSettingMaxDuration      = "max_video_duration_seconds"
 	resolverSettingMaxImages        = "max_images"
+	resolverSettingFollowUpComment  = "follow_up_comment"
 	resolverSettingMaxVideoHeight   = "max_video_height"
 	// 凭据类设置。这些值最容易过期、最需要频繁更换，只靠环境变量意味着
 	// Docker 用户改一次 Cookie 就得重启容器。
@@ -930,6 +934,13 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 				Description: "允许链接解析结果主动进入正式 Agent 回复流程；关闭后仍会解析和发送确定性结果。",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
+			},
+			{
+				Key:         resolverSettingFollowUpComment,
+				Label:       "发送后自然点评",
+				Description: "解析结果发出后，让机器人再用一句话说说自己的反应，像群友那样；关闭后只发解析结果。",
+				Type:        PluginSettingTypeBool,
+				Default:     false,
 			},
 			{
 				Key:         resolverSettingDownloadMedia,
@@ -1262,7 +1273,11 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	}
 	if len(directParts) > 0 {
 		response.Reply = strings.Join(directParts, "\n\n")
+	} else {
+		// Context 前缀是给模型的来源标签，发到群里不该出现「链接解析结果：」这种机器腔。
+		response.Reply = strings.Join(parts, "\n")
 	}
+	response.FollowUp = req.Settings.Bool(resolverSettingFollowUpComment, false)
 	return response, nil
 }
 
