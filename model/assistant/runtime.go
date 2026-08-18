@@ -1504,6 +1504,10 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	record.Reply = reply
 	r.setError("")
 	r.record(record)
+	if event.chatInReply {
+		// 这条闲聊插话确实发出去了，现在才开始算本群的插话冷却。
+		r.markChatInReplied(event)
+	}
 	r.enqueueRelationshipEvaluation(event, text)
 	return successOutcome, nil
 }
@@ -1875,9 +1879,8 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		sampleAllowed = proactiveReplySampleAllows(event, text, chance)
 	}
 	allowed := decisionAllowed && cooldownAllowed && sampleAllowed
-	if allowed && decision.chatIn() {
-		r.markChatInReplied(event)
-	}
+	// 冷却在真正发出去之后才记（见 replyAndRecord）：路由放行之后，回复仍可能被
+	// 质量审核、回复抑制或发送失败挡下来，那种情况不该白白吃掉一个冷却窗口。
 	event.proactiveReply = allowed
 	event.chatInReply = allowed && decision.chatIn()
 	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed, directedFollowupPromoted, cfg, chatIn)
@@ -5067,7 +5070,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 
 func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Message) []llm.Message {
 	cfg := r.effectiveConfigForEvent(event)
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt())
+	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt() + "\n" + cfg.ReplyStyle.closingAnchor())
 	if persona == "" {
 		return messages
 	}
