@@ -241,6 +241,15 @@ func TestOwnerPairingRequiresSecondConfirmation(t *testing.T) {
 		t.Fatalf("confirmation prompt echoed the code back: %q", sent[0])
 	}
 
+	// 光说「确认」不放行：这是日常高频词，误发的代价是整个控制台。
+	if !ownerPrivateMessage(handler, "确认") {
+		t.Fatal("bare confirmation should still be answered with a hint")
+	}
+	rec = pollOwnerPairing(t, router, pollToken)
+	if strings.Contains(rec.Body.String(), `"approved":true`) {
+		t.Fatalf("bare confirmation approved the login: %s", rec.Body.String())
+	}
+
 	if !ownerPrivateMessage(handler, "确认 "+code) {
 		t.Fatal("confirmation was not consumed")
 	}

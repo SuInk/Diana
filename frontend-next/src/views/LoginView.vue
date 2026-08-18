@@ -85,8 +85,8 @@
             </button>
             <p class="muted owner-pair-hint">
               {{ pairingAwaitingConfirm
-                ? "机器人已发来本次登录的来源信息，核对无误后在私聊里回复「确认」"
-                : "将上面的验证码私聊发送给机器人，机器人会告知登录来源并请你回复「确认」" }}
+                ? "机器人已发来本次登录的来源信息，核对无误后在私聊里回复「确认」加上面的验证码"
+                : "将上面的验证码私聊发送给机器人，机器人会告知登录来源并请你回复确认" }}
             </p>
             <p class="owner-pair-status">
               <LoaderCircle class="spin" :size="14" aria-hidden="true" />
