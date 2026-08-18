@@ -8879,7 +8879,7 @@ func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Remin
 // composeRepositoryWatchMessage 把标题、变更明细和模型概括拼成一条通知。概括排在
 // 明细之后：先给确定性的事实清单，再给那句自然语言总结。
 func composeRepositoryWatchMessage(repository, body, summary string) string {
-	parts := []string{"GitHub 动态 · " + repository}
+	parts := []string{"GitHub 动态：" + repository}
 	if strings.TrimSpace(body) != "" {
 		parts = append(parts, body)
 	}
@@ -8995,10 +8995,10 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 		if branch == "" {
 			branch = "默认分支"
 		}
-		header := "Commit（" + branch + "）"
 		sharedAuthor := repositoryWatchSharedCommitAuthor(change.Commits)
+		header := "Commit（" + branch + "）"
 		if sharedAuthor != "" {
-			header += " · 作者 " + sharedAuthor
+			header = "Commit（" + branch + "，作者 " + sharedAuthor + "）"
 		}
 		lines := []string{header}
 		for _, commit := range change.Commits {
@@ -9016,7 +9016,7 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 				meta = append(meta, "提交于 "+pushedAt)
 			}
 			if len(meta) > 0 {
-				line += "\n" + strings.Join(meta, " · ")
+				line += "\n" + strings.Join(meta, " ")
 			}
 			if url := strings.TrimSpace(commit.URL); url != "" {
 				line += "\n" + url
