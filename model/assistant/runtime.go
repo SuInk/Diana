@@ -5208,6 +5208,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n收到独立的【插件事实结果】消息时，必须以其完整内容作为当前问题的权威事实依据；不要声称插件内容缺失，也不要用无关历史覆盖它。")
 		break
 	}
+	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
+	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
+	appendPromptSection(&builder, cfg.ReplyStyle.closingAnchor())
 	return builder.String()
 }
 
