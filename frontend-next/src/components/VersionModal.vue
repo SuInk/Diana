@@ -7,7 +7,7 @@
       <div class="version-summary">
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">当前版本</span>
-          <span class="mono">{{ versionLabel }}</span>
+          <span v-if="versionLabel" class="mono">{{ versionLabel }}</span>
         </div>
         <div v-if="checkResult?.latest_version" class="cluster" style="justify-content: space-between">
           <span class="muted">最新版本</span>
@@ -326,13 +326,14 @@ const downloadPhaseLabel = computed(() => status.value?.update_phase === "extrac
 	? "准备 → 下载 100% → 校验 → 解压"
 	: `准备 → 下载 ${downloadPercent.value}%`);
 
+// 版本号还没加载出来时返回空串，模板不渲染占位符。
 const versionLabel = computed(() => {
   const label = version.value?.version_label;
   const commit = status.value?.head_commit;
   if (deploymentMode.value === "git" && label && commit && label !== commit) {
     return `${label}（${commit}）`;
   }
-  return label || commit || version.value?.build_version || "—";
+  return label || commit || version.value?.build_version || "";
 });
 
 const currentTag = computed(() => {
