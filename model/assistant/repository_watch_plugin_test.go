@@ -952,14 +952,11 @@ func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *test
 	}
 }
 
-func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
+func TestComposeRepositoryWatchMessagePutsTheSummaryAfterTheTitle(t *testing.T) {
 	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
-	wantPrefix := "GitHub 动态：SuInk/Diana\n\nCommit（默认分支）"
-	if !strings.HasPrefix(message, wantPrefix) {
-		t.Fatalf("message = %q, want prefix %q", message, wantPrefix)
-	}
-	if !strings.HasSuffix(message, "刚更新了回复风格与语气控制。") {
-		t.Fatalf("summary is not last: %q", message)
+	want := "GitHub 动态：SuInk/Diana\n刚更新了回复风格与语气控制。\nCommit（默认分支）\n3e3f03f 合并 PR #85"
+	if message != want {
+		t.Fatalf("message = %q, want %q", message, want)
 	}
 	if got := composeRepositoryWatchMessage("SuInk/Diana", "", ""); got != "GitHub 动态：SuInk/Diana" {
 		t.Fatalf("empty change message = %q", got)
@@ -1006,13 +1003,38 @@ func TestRenderRepositoryWatchChangesDoesNotRepeatTheReleaseTag(t *testing.T) {
 	}
 }
 
-func TestComposeRepositoryWatchMessageSendsTheSummaryAsItsOwnMessage(t *testing.T) {
+func TestComposeRepositoryWatchMessageIsExactlyOneMessage(t *testing.T) {
 	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
 	chunks := splitReply(message, 900)
-	if len(chunks) == 0 || chunks[len(chunks)-1] != "刚更新了回复风格与语气控制。" {
-		t.Fatalf("summary is not delivered on its own: %#v", chunks)
+	// 标题、概括和明细必须留在同一条里，否则群里一次动态会刷出好几条。
+	if len(chunks) != 1 {
+		t.Fatalf("notification should be exactly one message, got %#v", chunks)
 	}
-	if strings.Contains(chunks[len(chunks)-2], "刚更新了") {
-		t.Fatalf("summary leaked into the change details: %#v", chunks)
+	if !strings.Contains(chunks[0], "刚更新了回复风格与语气控制。") {
+		t.Fatalf("summary missing from the message: %q", chunks[0])
+	}
+}
+
+// 一次轮询里同时出现多类事件时，事实清单仍然只发一条消息。
+func TestComposeRepositoryWatchMessageKeepsEveryChangeInOneMessage(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	change := repositoryWatchChange{
+		Branch:  "main",
+		Commits: []repositoryWatchCommit{{SHA: "ee5a54bdd57", Title: "bump version", Author: "SuInk", PushedAt: at, URL: "https://example.com/c"}},
+		Issues: []repositoryWatchIssue{
+			{Number: 128, Title: "修复通知格式", Author: "alice", Status: "opened", CreatedAt: at, URL: "https://example.com/i128"},
+			{Number: 129, Title: "补充文档", Author: "bob", Status: "opened", CreatedAt: at, URL: "https://example.com/i129"},
+		},
+		Releases: []repositoryWatchRelease{{Tag: "v0.8.36", PublishedAt: at, URL: "https://example.com/r"}},
+	}
+	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change), "发布了新版本。")
+	chunks := splitReply(message, 900)
+	if len(chunks) != 1 {
+		t.Fatalf("notification should be exactly one message, got %#v", chunks)
+	}
+	for _, want := range []string{"GitHub 动态：SuInk/Diana", "Commit（main", "Issue #128", "Issue #129", "Release v0.8.36"} {
+		if !strings.Contains(chunks[0], want) {
+			t.Fatalf("fact block missing %q: %q", want, chunks[0])
+		}
 	}
 }

@@ -1017,6 +1017,7 @@ export function restartSystem(): Promise<{ ok: boolean }> {
 
 export interface SystemVersion {
   build_version: string;
+  build_type?: BuildType;
   version_label: string;
   git_available: boolean;
   deployment_mode: "git" | "release";
@@ -1089,6 +1090,8 @@ export function getSystemVersion(): Promise<SystemVersion> {
   return requestJSON<SystemVersion>("/api/system/version");
 }
 
+export type BuildType = "release" | "source";
+
 export interface UpdateCheckResponse {
   deployment_mode: "git" | "release";
   current_version: string;
@@ -1097,6 +1100,8 @@ export interface UpdateCheckResponse {
   checked_at: string;
   update_available: boolean;
   update_supported: boolean;
+  build_type: BuildType;
+  switch_to_release_available: boolean;
   integrity_mode: "git-object-hash" | "sha256";
   checksum_available: boolean;
   checksum_url?: string;
