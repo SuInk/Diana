@@ -358,6 +358,7 @@ type testStructuredMemoryStore struct {
 	items    []StructuredMemoryItem
 	applied  []MemoryWriteRequest
 	enqueued []MemoryJobPayload
+	queries  []StructuredMemoryQuery
 }
 
 func (s *testStructuredMemoryStore) EnqueueMemoryJob(_ context.Context, payload MemoryJobPayload) (string, bool, error) {
@@ -400,6 +401,7 @@ func (s *testStructuredMemoryStore) ApplyMemoryCandidates(_ context.Context, req
 func (s *testStructuredMemoryStore) ListStructuredMemories(_ context.Context, query StructuredMemoryQuery) ([]StructuredMemoryItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.queries = append(s.queries, query)
 	items := make([]StructuredMemoryItem, 0, len(s.items))
 	for _, item := range s.items {
 		if len(query.Kinds) > 0 {
@@ -417,4 +419,32 @@ func (s *testStructuredMemoryStore) ListStructuredMemories(_ context.Context, qu
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+func TestMemoryContextKeepsUserScopedMemoriesWhenCrossGroupIsOff(t *testing.T) {
+	memory := &testStructuredMemoryStore{items: []StructuredMemoryItem{{
+		Key: "instruction.persona.catgirl", Kind: MemoryKindInstruction,
+		Topic: "猫娘设定", Entity: "Diana", Content: "猫娘模式下句尾说老吴，炸毛时说哈",
+		Visibility: MemoryVisibilityUser, Confidence: 0.98, Importance: 0.8,
+	}}}
+	runtime := NewRuntime(BotConfig{BotQQ: "42", CrossGroupMemoryEnabled: boolPointer(false)}.WithDefaults(),
+		nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetStructuredMemoryStore(memory)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m-1", RawMessage: "继续扮猫娘"}
+
+	context := runtime.memoryContext(context.Background(), event, event.RawMessage)
+	if !strings.Contains(context, "老吴") {
+		t.Fatalf("user-scoped memory was dropped from the reply prompt: %q", context)
+	}
+	if len(memory.queries) == 0 {
+		t.Fatal("no memory query was issued")
+	}
+	// 跨群开关只该管别的群的会话记忆，不该把当前发言者自己的跨会话记忆一起关掉。
+	query := memory.queries[len(memory.queries)-1]
+	if query.CurrentSessionOnly {
+		t.Fatalf("reply prompt query still restricts to the current session: %#v", query)
+	}
+	if query.CrossGroup {
+		t.Fatalf("cross-group retrieval should stay off: %#v", query)
+	}
 }
