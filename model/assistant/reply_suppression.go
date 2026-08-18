@@ -116,9 +116,11 @@ func consumeReplyControlIntent(reply string) (string, replyControlIntent) {
 	return reply, intent
 }
 
-func normalizeReplyPreservingControlIntent(reply string, maxRunes int) string {
+// markdownPlain 必须一路传到 normalizeReply：QQ 不渲染 Markdown，标志断在这里
+// 会让 cfg.MarkdownToPlain 形同虚设，** 之类的标记直接漏进聊天窗口。
+func normalizeReplyPreservingControlIntent(reply string, maxRunes int, markdownPlain ...bool) string {
 	reply, intent := consumeReplyControlIntent(reply)
-	reply = normalizeReply(reply, maxRunes)
+	reply = normalizeReply(reply, maxRunes, markdownPlain...)
 	if intent.RefuseCurrent {
 		reply += replyRefusalMarker
 	}
