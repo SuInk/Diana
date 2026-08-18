@@ -56,35 +56,33 @@
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
-      <p v-if="updatedHint" class="update-hint"><CheckCircle2 :size="15" aria-hidden="true" />{{ updatedHint }}</p>
+      <!-- 稳态下这块原本是四条独立的横带（升级回执、两个开关、检查更新），
+           信息量却很小。压成一行：开关在左，操作按钮靠右，窄屏自动换行。 -->
+      <div class="update-bar">
+        <p v-if="updatedHint" class="update-hint"><CheckCircle2 :size="14" aria-hidden="true" />{{ updatedHint }}</p>
 
-      <section v-if="releaseSelfUpdate && !sourceBuild" class="update-policy">
-        <label class="policy-row">
-          <span class="policy-copy">
-            <strong>自动下载</strong>
-            <span class="muted">发现新版本后自动下载完整 Release 包，校验 SHA-256 后暂存</span>
-          </span>
-          <span class="switch">
-            <input v-model="policy.auto_download" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('download')" />
-            <span class="track"></span>
-          </span>
-        </label>
-        <label class="policy-row">
-          <span class="policy-copy">
-            <strong>自动安装并重启</strong>
-            <span class="muted">下载完成后自动备份、切换版本并重启，健康检查失败会自动恢复；开启时会一并开启自动下载</span>
-          </span>
-          <span class="switch">
-            <input v-model="policy.auto_install" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('install')" />
-            <span class="track"></span>
-          </span>
-        </label>
-      </section>
+        <template v-if="releaseSelfUpdate && !sourceBuild">
+          <label class="policy-toggle" title="发现新版本后自动下载完整 Release 包，校验 SHA-256 后暂存">
+            <span>自动下载</span>
+            <span class="switch">
+              <input v-model="policy.auto_download" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('download')" />
+              <span class="track"></span>
+            </span>
+          </label>
+          <label class="policy-toggle" title="下载完成后自动备份、切换版本并重启，健康检查失败会自动恢复；开启时会一并开启自动下载">
+            <span>自动安装并重启</span>
+            <span class="switch">
+              <input v-model="policy.auto_install" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('install')" />
+              <span class="track"></span>
+            </span>
+          </label>
+        </template>
 
-      <div class="cluster" style="gap: 8px">
+        <span class="update-bar-gap"></span>
+
         <button
           v-if="canDownloadUpdate"
-          class="btn primary"
+          class="btn primary small"
           type="button"
           :disabled="operationRunning"
           @click="downloadUpdate()"
@@ -92,26 +90,26 @@
           <Download :size="14" aria-hidden="true" />
           {{ operationRunning ? "下载并校验中…" : "下载并校验" }}
         </button>
-        <button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary" type="button" :disabled="operationRunning" @click="confirmInstall">
+        <button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmInstall">
           <RefreshCcw :size="14" aria-hidden="true" />
           {{ operationRunning ? "升级中…" : "升级并重启" }}
         </button>
-        <button v-if="switchToRelease && !status?.download_ready" class="btn primary" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
+        <button v-if="switchToRelease && !status?.download_ready" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
           <Download :size="14" aria-hidden="true" />
           {{ operationRunning ? "下载并校验中…" : `切换到正式 ${checkResult?.latest_version || "版本"}` }}
         </button>
-        <button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary" type="button" :disabled="operationRunning" @click="confirmUpdate">
+        <button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmUpdate">
           <Download :size="14" aria-hidden="true" />
           {{ operationRunning ? "更新中…" : "立即更新" }}
         </button>
-        <button class="btn" type="button" :disabled="checking || operationRunning" @click="check()">
+        <button class="btn small" type="button" :disabled="checking || operationRunning" @click="check()">
           <LoaderCircle v-if="checking" class="spin" :size="14" aria-hidden="true" />
           <RefreshCw v-else :size="14" aria-hidden="true" />
           {{ checking ? "检查中…" : "检查更新" }}
         </button>
         <button
           v-if="deploymentMode === 'git'"
-          class="btn ghost"
+          class="btn ghost small"
           type="button"
           :disabled="checking || operationRunning"
           @click="confirmForceSync"
@@ -752,60 +750,42 @@ a.version-hero-integrity:hover {
 .release-progress-track span { display: block; height: 100%; min-width: 2px; background: var(--accent); transition: width 180ms ease; }
 .operation-error { margin: 0; padding: 10px; white-space: pre-wrap; color: var(--err); border: 1px solid var(--err); background: var(--err-soft); font-size: 11.5px; }
 
-.update-hint {
+.update-bar {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+/* 把按钮推到行尾；窄屏换行后这个占位符不占高度。 */
+.update-bar-gap {
+  flex: 1 1 auto;
+}
+
+.update-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
-  padding: 9px 11px;
+  padding: 4px 9px;
   border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--ok-soft);
   color: var(--ok);
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: 12px;
 }
 
 .update-hint svg {
   flex: 0 0 auto;
-  margin-top: 1px;
 }
 
-.update-policy {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.policy-row {
-  display: flex;
+.policy-toggle {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 11px 13px;
+  gap: 8px;
+  font-size: 13px;
   cursor: pointer;
-}
-
-.policy-row + .policy-row {
-  border-top: 1px solid var(--border);
-}
-
-.policy-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.policy-copy strong {
-  font-size: 13.5px;
-}
-
-.policy-copy .muted {
-  font-size: 12.5px;
-  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .version-history-list {
@@ -883,12 +863,9 @@ a.version-hero-integrity:hover {
 }
 
 @media (max-width: 640px) {
-  .policy-row {
-    align-items: flex-start;
-  }
-
-  .policy-row .switch {
-    margin-top: 2px;
+  /* 换行之后按钮另起一行，占满宽度更好按。 */
+  .update-bar-gap {
+    flex-basis: 100%;
   }
 }
 </style>
