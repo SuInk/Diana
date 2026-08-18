@@ -189,10 +189,10 @@ func TestProactiveReplyTurnCombinesThreeMessagesIntoOneReply(t *testing.T) {
 	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
 		t.Fatalf("sent = %#v, want one combined QQ message", channel.sent)
 	}
-	if len(provider.requests) != 2 {
-		t.Fatalf("provider calls = %d, want intent route and final reply", len(provider.requests))
+	if len(provider.requests) != 3 {
+		t.Fatalf("provider calls = %d, want intent route, final reply, and quality review", len(provider.requests))
 	}
-	finalRequest := provider.requests[len(provider.requests)-1]
+	finalRequest := provider.requests[len(provider.requests)-2]
 	joined := make([]string, 0, len(finalRequest.Messages))
 	for _, message := range finalRequest.Messages {
 		joined = append(joined, message.Content)
@@ -444,8 +444,8 @@ func TestProactiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *tes
 	if len(channel.sent) != 1 || channel.sent[0].Text != "可以先检查错误日志里的第一条异常。" {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
-	if len(provider.requests) != 4 {
-		t.Fatalf("provider calls = %d, want route, visual intent, reply, and relationship", len(provider.requests))
+	if len(provider.requests) != 5 {
+		t.Fatalf("provider calls = %d, want route, visual intent, reply, quality review, and relationship", len(provider.requests))
 	}
 	var relationshipLogFound bool
 	for _, entry := range logs.entries {
@@ -609,6 +609,8 @@ type proactiveReplyRerouteProvider struct {
 
 func (p *proactiveReplyRerouteProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	switch {
+	case requestMessagesContain(req.Messages, "主动回复答案质量审核器"):
+		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 	case requestMessagesContain(req.Messages, "严格主动回复路由器"):
 		p.routeCalls++
 		p.lastRoutePayload = req.Messages[len(req.Messages)-1].Content
