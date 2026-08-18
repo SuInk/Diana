@@ -9417,9 +9417,38 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 	}
 	reply = strings.TrimSpace(reply)
 	if maxRunes > 0 && len([]rune(reply)) > maxRunes {
-		reply = string([]rune(reply)[:maxRunes]) + "..."
+		reply = truncateReplyAtBoundary(reply, maxRunes)
 	}
 	return reply
+}
+
+// replyBoundaryRunes 是可以安全断句的位置：在这些字符之后收尾，读起来仍然是一句
+// 说完的话，而不是被切到一半。
+const replyBoundaryRunes = "。！？!?…；;\n"
+
+// truncateReplyMinBoundaryRatio 决定断句点最少要保留多少内容；低于这个比例说明
+// 长度预算内没有合适的句尾，只能退回硬截断。
+const truncateReplyMinBoundaryRatio = 0.6
+
+// truncateReplyAtBoundary 在长度上限内尽量按句尾收束回复。直接从第 maxRunes 个字
+// 硬切会把答案断在半句上；这种残句既不可读，也会被主动回复质量审核判定为「明显
+// 截断」而整条丢弃，最终表现为机器人完全不出声。
+func truncateReplyAtBoundary(reply string, maxRunes int) string {
+	runes := []rune(reply)
+	if maxRunes <= 0 || len(runes) <= maxRunes {
+		return reply
+	}
+	head := runes[:maxRunes]
+	minKeep := int(float64(maxRunes) * truncateReplyMinBoundaryRatio)
+	for i := len(head) - 1; i >= minKeep; i-- {
+		if !strings.ContainsRune(replyBoundaryRunes, head[i]) {
+			continue
+		}
+		if trimmed := strings.TrimSpace(string(head[:i+1])); trimmed != "" {
+			return trimmed
+		}
+	}
+	return string(head) + "..."
 }
 
 const quietNoticeInterval = time.Hour
