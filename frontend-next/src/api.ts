@@ -653,29 +653,10 @@ export function changeCredentials(currentPassword: string, newUsername: string, 
 
 export interface OwnerLoginStatus {
   available: boolean;
-  code_delivery_available: boolean;
 }
 
 export function getOwnerLoginStatus(): Promise<OwnerLoginStatus> {
   return requestJSON<OwnerLoginStatus>("/api/auth/owner/status");
-}
-
-export interface OwnerLoginChallenge {
-  ok: boolean;
-  challenge_token: string;
-  expires_in_seconds: number;
-  cooldown_seconds: number;
-}
-
-export function requestOwnerLoginCode(): Promise<OwnerLoginChallenge> {
-  return requestJSON<OwnerLoginChallenge>("/api/auth/owner/challenge", { method: "POST" });
-}
-
-export function verifyOwnerLoginCode(challengeToken: string, code: string): Promise<{ ok: boolean }> {
-  return requestJSON<{ ok: boolean }>("/api/auth/owner/verify", {
-    method: "POST",
-    body: JSON.stringify({ challenge_token: challengeToken, code })
-  });
 }
 
 export interface OwnerLoginPairing {
