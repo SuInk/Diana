@@ -127,7 +127,7 @@
             <span class="muted">当前版本</span>
             <span class="cluster" style="gap: 6px">
               <span v-if="sourceBuild" class="badge warn">源码构建</span>
-              <span class="mono">{{ systemVersion?.version_label || systemVersion?.build_version || "—" }}</span>
+              <span v-if="currentVersionLabel" class="mono">{{ currentVersionLabel }}</span>
             </span>
           </div>
           <p class="muted" style="font-size: 12.5px; margin: 0">
@@ -174,7 +174,7 @@
       <div class="card-body stack" style="gap: 8px; font-size: 13px">
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">后端版本</span>
-          <span class="mono">{{ systemVersion?.version_label || systemVersion?.build_version || health?.version || "—" }}</span>
+          <span v-if="backendVersionLabel" class="mono">{{ backendVersionLabel }}</span>
         </div>
         <div class="cluster" style="justify-content: space-between">
           <span class="muted">运行时长</span>
@@ -229,6 +229,9 @@ const showNewPassword = ref(false);
 const savingPassword = ref(false);
 const deploymentMode = ref<"git" | "release">("release");
 const operationRunning = computed(() => updating.value || updateStatus.value?.updating === true);
+// 版本号还没加载出来时留空，不显示占位符。
+const currentVersionLabel = computed(() => systemVersion.value?.version_label || systemVersion.value?.build_version || "");
+const backendVersionLabel = computed(() => currentVersionLabel.value || health.value?.version || "");
 // 源码构建不参与自动更新，只能在版本弹窗里显式切换到正式 Release。
 const sourceBuild = computed(() => deploymentMode.value === "release" && systemVersion.value?.build_type === "source");
 let updateStatusPollTimer: number | undefined;
