@@ -1241,6 +1241,7 @@ func (r *Runtime) historyEventFromData(session HistorySession, data map[string]a
 	if event.Kind == "" {
 		return MessageEvent{}, false
 	}
+	event = r.bindInboundEventIdentity(event)
 	if event.MessageSeq == "" {
 		event.MessageSeq = firstNonEmpty(stringFromAny(data["message_seq"]), stringFromAny(data["real_id"]))
 	}
