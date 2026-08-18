@@ -125,7 +125,10 @@
         <div class="card-body stack" style="gap: 10px; font-size: 13px">
           <div class="cluster" style="justify-content: space-between">
             <span class="muted">当前版本</span>
-            <span class="mono">{{ systemVersion?.version_label || systemVersion?.build_version || "—" }}</span>
+            <span class="cluster" style="gap: 6px">
+              <span v-if="sourceBuild" class="badge warn">源码构建</span>
+              <span class="mono">{{ systemVersion?.version_label || systemVersion?.build_version || "—" }}</span>
+            </span>
           </div>
           <p class="muted" style="font-size: 12.5px; margin: 0">
             {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；安装和重启必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
@@ -226,6 +229,8 @@ const showNewPassword = ref(false);
 const savingPassword = ref(false);
 const deploymentMode = ref<"git" | "release">("release");
 const operationRunning = computed(() => updating.value || updateStatus.value?.updating === true);
+// 源码构建不参与自动更新，只能在版本弹窗里显式切换到正式 Release。
+const sourceBuild = computed(() => deploymentMode.value === "release" && systemVersion.value?.build_type === "source");
 let updateStatusPollTimer: number | undefined;
 
 async function loadAuthStatus(): Promise<void> {
