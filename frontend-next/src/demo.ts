@@ -336,7 +336,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ logs: url.searchParams.get("kind") === "error" ? errorLogs : logs });
   }
 
-  if (path === "/api/system/version") return json({ build_version: "v0.8.6-demo", version_label: "v0.8.6 · Pages 演示", git_available: false, deployment_mode: "release", update_supported: true, head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示" });
+  if (path === "/api/system/version") return json({ build_version: "v0.8.6-demo", build_type: "release", version_label: "v0.8.6 · Pages 演示", git_available: false, deployment_mode: "release", update_supported: true, head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示" });
   if (path === "/api/system/update" && method === "GET") return json(updateStatus);
   if (path === "/api/system/update/check") return json({ deployment_mode: "release", current_version: "v0.8.6", latest_version: "v0.8.7", latest_published_at: before(30), checked_at: new Date(now).toISOString(), update_available: true, update_supported: true, integrity_mode: "sha256", checksum_available: true, checksum_url: "https://github.com/SuInk/Diana/releases", status: updateStatus, policy: updatePolicy });
   if (path === "/api/system/update/policy" && method === "GET") return json(updatePolicy);
