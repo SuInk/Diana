@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/SuInk/diana/model/storage"
 
@@ -32,6 +33,8 @@ const (
 	legacyAdminUser         = "admin@diana.local"
 	adminUsernamePrefix     = "diana#"
 	authRandomUsernameBytes = 8
+	authMinUsernameLen      = 2
+	authMaxUsernameLen      = 64
 	authSessionTTL          = 30 * 24 * time.Hour
 	authPBKDF2Iters         = 210_000
 	authMinPasswordLen      = 8
@@ -40,7 +43,7 @@ const (
 var (
 	ErrWrongPassword    = errors.New("账号或密码不正确")
 	ErrPasswordTooShort = errors.New("密码至少 8 位")
-	ErrUsernameInvalid  = errors.New("账号必须以 diana# 开头，后面至少包含 8 位字母或数字")
+	ErrUsernameInvalid  = errors.New("账号需为 2-64 个字符，且不能包含空格或控制字符")
 )
 
 // AuthBootstrapResult 描述首次启动创建的管理员凭据。
@@ -180,16 +183,15 @@ func randomAdminUsername() (string, error) {
 	return adminUsernamePrefix + hex.EncodeToString(raw), nil
 }
 
+// validateAdminUsername 只拦明显不可用的账号名。diana# 前缀是自动生成时的
+// 写法，不是格式要求——改成自己顺手的名字应当被允许。
 func validateAdminUsername(username string) error {
-	if !strings.HasPrefix(username, adminUsernamePrefix) {
+	length := len([]rune(username))
+	if length < authMinUsernameLen || length > authMaxUsernameLen {
 		return ErrUsernameInvalid
 	}
-	suffix := strings.TrimPrefix(username, adminUsernamePrefix)
-	if len(suffix) < 8 {
-		return ErrUsernameInvalid
-	}
-	for _, char := range suffix {
-		if !(char >= 'a' && char <= 'z') && !(char >= 'A' && char <= 'Z') && !(char >= '0' && char <= '9') {
+	for _, char := range username {
+		if unicode.IsSpace(char) || unicode.IsControl(char) {
 			return ErrUsernameInvalid
 		}
 	}

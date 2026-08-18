@@ -12,7 +12,7 @@
       <input
         v-model="username"
         class="input"
-        placeholder="diana#账号"
+        placeholder="管理员账号"
         autocomplete="username"
       />
       <div class="password-field">
