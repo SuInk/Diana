@@ -7,12 +7,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,29 +26,63 @@ import (
 
 const (
 	ownerPairingTTL            = 5 * time.Minute
+	ownerPairingConfirmGrace   = 2 * time.Minute
 	ownerPairingCreateDelay    = 3 * time.Second
 	ownerPairingMaxActive      = 32
 	ownerPairingMaxActivePerIP = 3
+	ownerChallengeTTL          = 5 * time.Minute
+	ownerChallengeCooldown     = 60 * time.Second
+	ownerChallengeMaxAttempts  = 5
+	ownerMessageSendTimeout    = 10 * time.Second
 )
 
 var (
-	ownerPairingCodePattern = regexp.MustCompile(`^(?:登录(?:控制台)?\s*)?(\d{6})$`)
+	ownerPairingCodePattern   = regexp.MustCompile(`^(?:登录(?:控制台)?\s*)?(\d{6})$`)
+	ownerPairingConfirmMatch  = regexp.MustCompile(`^(?:确认|同意)\s*(\d{6})?$`)
+	ownerPairingCancelMatch   = regexp.MustCompile(`^(?:取消|拒绝|不是我)\s*(\d{6})?$`)
+	ownerChallengeCodePattern = regexp.MustCompile(`^\d{6}$`)
 )
 
-// OwnerLoginRuntime 是管理员私聊确认登录依赖的机器人运行时能力。
+// OwnerLoginRuntime 是管理员快速登录依赖的机器人运行时能力。
 type OwnerLoginRuntime interface {
 	Config() assistant.BotConfig
+	CallOneBotAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error)
 }
 
+// ownerPairingState 描述一次私聊确认登录所处的阶段。
+type ownerPairingState int
+
+const (
+	// ownerPairingPending 表示网页已显示验证码，等待主人私聊发回。
+	ownerPairingPending ownerPairingState = iota
+	// ownerPairingAwaitingConfirm 表示主人已发回验证码，机器人已告知来源信息，
+	// 正在等待主人二次确认。停在这一步是为了让主人看见「是谁在登录」——
+	// 只凭一串数字批准，等于让主人盲签。
+	ownerPairingAwaitingConfirm
+	ownerPairingApproved
+)
+
 type ownerPairing struct {
+	tokenHash  string
+	codeHash   string
+	requestIP  string
+	deviceName string
+	createdAt  time.Time
+	expiresAt  time.Time
+	state      ownerPairingState
+}
+
+type ownerChallenge struct {
 	tokenHash string
 	codeHash  string
 	requestIP string
+	ownerKey  string
 	expiresAt time.Time
-	approved  bool
+	attempts  int
 }
 
-// OwnerLoginHandler 提供主人私聊确认的一次性登录方式。
+// OwnerLoginHandler 提供主人私聊确认与服务端下发验证码两种一次性登录方式，
+// 两者各自独立开关：私聊确认默认开启，验证码下发默认关闭。
 type OwnerLoginHandler struct {
 	auth    *AuthManager
 	runtime OwnerLoginRuntime
@@ -56,6 +92,10 @@ type OwnerLoginHandler struct {
 	pairings    map[string]*ownerPairing
 	codeIndex   map[string]string
 	lastCreated map[string]time.Time
+
+	challenges          map[string]*ownerChallenge
+	lastChallengeSentAt time.Time
+	challengeSending    bool
 }
 
 // NewOwnerLoginHandler 创建管理员快速登录处理器。
@@ -66,6 +106,7 @@ func NewOwnerLoginHandler(auth *AuthManager, runtime OwnerLoginRuntime) *OwnerLo
 		pairings:    make(map[string]*ownerPairing),
 		codeIndex:   make(map[string]string),
 		lastCreated: make(map[string]time.Time),
+		challenges:  make(map[string]*ownerChallenge),
 	}
 }
 
@@ -77,30 +118,212 @@ func (h *OwnerLoginHandler) SetLogStore(store AppLogWriter) {
 // Register 注册管理员快速登录路由。
 func (h *OwnerLoginHandler) Register(router gin.IRouter) {
 	router.GET("/api/auth/owner/status", h.status)
+	router.POST("/api/auth/owner/challenge", h.createChallenge)
+	router.POST("/api/auth/owner/verify", h.verifyChallenge)
 	router.POST("/api/auth/owner/pair", h.createPairing)
 	router.POST("/api/auth/owner/pair/status", h.pollPairing)
 }
 
-func (h *OwnerLoginHandler) availability() error {
+// baseAvailability 校验两种方式共同的前提：开启了密码保护、配置了主人账号、
+// 且当前平台能把消息投递给主人。
+func (h *OwnerLoginHandler) baseAvailability() (assistant.BotConfig, error) {
 	if h.auth == nil || h.runtime == nil || !h.auth.Required() {
-		return errors.New("未开启密码保护，无需管理员快速登录")
+		return assistant.BotConfig{}, errors.New("未开启密码保护，无需管理员快速登录")
 	}
 	cfg := h.runtime.Config()
 	if !cfg.OwnerLoginEnabled {
-		return errors.New("管理员快速登录未开启")
+		return cfg, errors.New("管理员快速登录未开启")
 	}
 	if strings.TrimSpace(cfg.OwnerID) == "" {
-		return errors.New("未配置主人账号")
+		return cfg, errors.New("未配置主人账号")
 	}
-	return nil
+	if _, _, err := ownerMessageDelivery(cfg, ""); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func (h *OwnerLoginHandler) pairAvailability() (assistant.BotConfig, error) {
+	cfg, err := h.baseAvailability()
+	if err != nil {
+		return cfg, err
+	}
+	if !cfg.OwnerLoginPairAllowed() {
+		return cfg, errors.New("主人私聊确认登录未开启")
+	}
+	return cfg, nil
+}
+
+func (h *OwnerLoginHandler) codeAvailability() (assistant.BotConfig, error) {
+	cfg, err := h.baseAvailability()
+	if err != nil {
+		return cfg, err
+	}
+	if !cfg.OwnerLoginCodeAllowed() {
+		return cfg, errors.New("验证码下发登录未开启")
+	}
+	return cfg, nil
 }
 
 func (h *OwnerLoginHandler) status(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"available": h.availability() == nil})
+	_, pairErr := h.pairAvailability()
+	_, codeErr := h.codeAvailability()
+	c.JSON(http.StatusOK, gin.H{
+		"available":      pairErr == nil || codeErr == nil,
+		"pair_available": pairErr == nil,
+		"code_available": codeErr == nil,
+	})
+}
+
+// createChallenge sends a one-time code to the configured administrator. The
+// browser receives only a high-entropy token that binds verification to this
+// login attempt; the six-digit code is delivered through the chat platform.
+//
+// 这个端点无需任何凭证即可触发服务端主动发消息，因此默认关闭：开启后任何匿名
+// 请求都能让主人收到私聊，并且能靠占满冷却窗口把主人本人挡在门外。
+func (h *OwnerLoginHandler) createChallenge(c *gin.Context) {
+	cfg, err := h.codeAvailability()
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	code, err := randomOwnerCode()
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err)
+		return
+	}
+	token, err := randomOwnerPairingToken()
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err)
+		return
+	}
+	name := firstNonEmptyWebUI(cfg.Name, "Diana")
+	message := fmt.Sprintf("%s 管理员登录验证码：%s，%d 分钟内有效。若非本人操作请忽略。", name, code, int(ownerChallengeTTL.Minutes()))
+	action, params, err := ownerMessageDelivery(cfg, message)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+
+	now := time.Now()
+	requestIP := c.ClientIP()
+	h.mu.Lock()
+	h.cleanupLocked(now)
+	if h.challengeSending {
+		h.mu.Unlock()
+		writeError(c, http.StatusTooManyRequests, errors.New("验证码正在发送，请稍后再试"))
+		return
+	}
+	if since := now.Sub(h.lastChallengeSentAt); since < ownerChallengeCooldown {
+		wait := int((ownerChallengeCooldown - since).Seconds()) + 1
+		h.mu.Unlock()
+		c.Header("Retry-After", strconv.Itoa(wait))
+		writeError(c, http.StatusTooManyRequests, fmt.Errorf("发送过于频繁，请 %d 秒后再试", wait))
+		return
+	}
+	previousSentAt := h.lastChallengeSentAt
+	h.challengeSending = true
+	h.lastChallengeSentAt = now
+	h.mu.Unlock()
+
+	sendCtx, sendCancel := context.WithTimeout(c.Request.Context(), ownerMessageSendTimeout)
+	_, sendErr := h.runtime.CallOneBotAPI(sendCtx, action, params)
+	sendCancel()
+	h.mu.Lock()
+	h.challengeSending = false
+	if sendErr != nil {
+		// 没发出去就不该占用冷却窗口，否则机器人离线期间的失败请求会一路把
+		// 主人自己的重试挡在 429 上。
+		h.lastChallengeSentAt = previousSentAt
+	} else {
+		for tokenHash, challenge := range h.challenges {
+			if challenge.requestIP == requestIP {
+				delete(h.challenges, tokenHash)
+			}
+		}
+		tokenHash := hashOwnerPairingToken(token)
+		h.challenges[tokenHash] = &ownerChallenge{
+			tokenHash: tokenHash,
+			codeHash:  hashOwnerCode(code),
+			requestIP: requestIP,
+			ownerKey:  ownerChallengeKey(cfg),
+			expiresAt: now.Add(ownerChallengeTTL),
+		}
+	}
+	h.mu.Unlock()
+	if sendErr != nil {
+		logAndWriteError(c, h.logs, http.StatusBadGateway, "auth.owner.challenge",
+			fmt.Errorf("验证码发送失败（机器人是否在线？）：%w", sendErr), cfg.OwnerID, nil)
+		return
+	}
+
+	recordRequestOperation(c, h.logs, "auth.owner.challenge", "管理员登录验证码已发送", cfg.OwnerID, nil)
+	c.JSON(http.StatusOK, gin.H{
+		"ok":                 true,
+		"challenge_token":    token,
+		"expires_in_seconds": int(ownerChallengeTTL.Seconds()),
+		"cooldown_seconds":   int(ownerChallengeCooldown.Seconds()),
+	})
+}
+
+func (h *OwnerLoginHandler) verifyChallenge(c *gin.Context) {
+	cfg, err := h.codeAvailability()
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	var payload struct {
+		ChallengeToken string `json:"challenge_token"`
+		Code           string `json:"code"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	code := strings.TrimSpace(payload.Code)
+	tokenHash := hashOwnerPairingToken(strings.TrimSpace(payload.ChallengeToken))
+	now := time.Now()
+	currentOwnerKey := ownerChallengeKey(cfg)
+
+	h.mu.Lock()
+	h.cleanupLocked(now)
+	challenge := h.challenges[tokenHash]
+	valid := challenge != nil &&
+		challenge.attempts < ownerChallengeMaxAttempts &&
+		challenge.ownerKey == currentOwnerKey &&
+		ownerChallengeCodePattern.MatchString(code)
+	match := valid && subtle.ConstantTimeCompare([]byte(hashOwnerCode(code)), []byte(challenge.codeHash)) == 1
+	if challenge != nil {
+		if match {
+			delete(h.challenges, tokenHash)
+		} else {
+			challenge.attempts++
+			if challenge.attempts >= ownerChallengeMaxAttempts {
+				delete(h.challenges, tokenHash)
+			}
+		}
+	}
+	h.mu.Unlock()
+
+	if !match {
+		time.Sleep(400 * time.Millisecond)
+		logAndWriteError(c, h.logs, http.StatusUnauthorized, "auth.owner.verify", errors.New("验证码错误或已失效"), "", nil)
+		return
+	}
+	metadata := authSessionMetadata(c)
+	metadata.DeviceName = "管理员验证码"
+	token, err := h.auth.IssueSessionWithMetadata(metadata)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err)
+		return
+	}
+	authSetSessionCookie(c, token, int(authSessionTTL/time.Second))
+	recordRequestOperation(c, h.logs, "auth.owner.verify", "管理员验证码登录成功", "", nil)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
-	if err := h.availability(); err != nil {
+	if _, err := h.pairAvailability(); err != nil {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
@@ -117,7 +340,8 @@ func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
 	}
 
 	now := time.Now()
-	requestIP := c.ClientIP()
+	metadata := authSessionMetadata(c)
+	requestIP := metadata.IPAddress
 	tokenHash := hashOwnerPairingToken(token)
 	codeHash := hashOwnerCode(code)
 
@@ -144,16 +368,19 @@ func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
 		codeHash = hashOwnerCode(code)
 	}
 	h.pairings[tokenHash] = &ownerPairing{
-		tokenHash: tokenHash,
-		codeHash:  codeHash,
-		requestIP: requestIP,
-		expiresAt: now.Add(ownerPairingTTL),
+		tokenHash:  tokenHash,
+		codeHash:   codeHash,
+		requestIP:  requestIP,
+		deviceName: metadata.DeviceName,
+		createdAt:  now,
+		expiresAt:  now.Add(ownerPairingTTL),
+		state:      ownerPairingPending,
 	}
 	h.codeIndex[codeHash] = tokenHash
 	h.lastCreated[requestIP] = now
 	h.mu.Unlock()
 
-	recordRequestOperation(c, h.logs, "auth.owner.pair.create", "已创建主人 QQ 登录配对", "", nil)
+	recordRequestOperation(c, h.logs, "auth.owner.pair.create", "已创建主人私聊登录配对", "", nil)
 	c.JSON(http.StatusOK, gin.H{
 		"ok":                 true,
 		"code":               code,
@@ -163,7 +390,7 @@ func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
 }
 
 func (h *OwnerLoginHandler) pollPairing(c *gin.Context) {
-	if err := h.availability(); err != nil {
+	if _, err := h.pairAvailability(); err != nil {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
@@ -185,11 +412,13 @@ func (h *OwnerLoginHandler) pollPairing(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"approved": false, "expired": true})
 		return
 	}
-	if !pairing.approved {
+	if pairing.state != ownerPairingApproved {
 		remaining := max(0, int(time.Until(pairing.expiresAt).Seconds()))
+		awaiting := pairing.state == ownerPairingAwaitingConfirm
 		h.mu.Unlock()
 		c.JSON(http.StatusOK, gin.H{
 			"approved":           false,
+			"awaiting_confirm":   awaiting,
 			"expires_in_seconds": remaining,
 		})
 		return
@@ -205,41 +434,179 @@ func (h *OwnerLoginHandler) pollPairing(c *gin.Context) {
 		return
 	}
 	authSetSessionCookie(c, token, int(authSessionTTL/time.Second))
-	recordRequestOperation(c, h.logs, "auth.owner.pair.login", "主人 QQ 配对登录成功", "", nil)
+	recordRequestOperation(c, h.logs, "auth.owner.pair.login", "主人私聊确认登录成功", "", nil)
 	c.JSON(http.StatusOK, gin.H{"approved": true})
 }
 
-// ConsumePrivateMessage 仅消费主人私聊发送的、仍在有效期内的登录验证码。
+// ConsumePrivateMessage 处理主人私聊里的登录配对流程：先是网页上的 6 位验证码，
+// 机器人回问来源信息，主人再回「确认」才真正放行。返回 true 表示这条消息属于
+// 登录流程、不应再交给对话逻辑。
 func (h *OwnerLoginHandler) ConsumePrivateMessage(ctx context.Context, event assistant.MessageEvent, text string) bool {
-	if event.Kind != assistant.EventKindPrivate || h.availability() != nil {
+	if event.Kind != assistant.EventKindPrivate {
 		return false
 	}
-	cfg := h.runtime.Config()
+	cfg, err := h.pairAvailability()
+	if err != nil {
+		return false
+	}
 	if strings.TrimSpace(event.UserID) != strings.TrimSpace(cfg.OwnerID) {
 		return false
 	}
-	match := ownerPairingCodePattern.FindStringSubmatch(strings.TrimSpace(text))
-	if len(match) != 2 {
-		return false
-	}
+	trimmed := strings.TrimSpace(text)
 
+	if match := ownerPairingCancelMatch.FindStringSubmatch(trimmed); len(match) == 2 {
+		return h.cancelPairing(ctx, cfg, event, match[1])
+	}
+	if match := ownerPairingConfirmMatch.FindStringSubmatch(trimmed); len(match) == 2 {
+		return h.confirmPairing(ctx, cfg, event, match[1])
+	}
+	if match := ownerPairingCodePattern.FindStringSubmatch(trimmed); len(match) == 2 {
+		return h.challengePairing(ctx, cfg, event, match[1])
+	}
+	return false
+}
+
+// challengePairing 收下主人发回的验证码，转入等待确认并告知来源信息。
+func (h *OwnerLoginHandler) challengePairing(ctx context.Context, cfg assistant.BotConfig, event assistant.MessageEvent, code string) bool {
 	now := time.Now()
-	codeHash := hashOwnerCode(match[1])
+	codeHash := hashOwnerCode(code)
+
 	h.mu.Lock()
 	h.cleanupLocked(now)
-	tokenHash := h.codeIndex[codeHash]
-	pairing := h.pairings[tokenHash]
-	if pairing == nil || pairing.approved {
+	pairing := h.pairings[h.codeIndex[codeHash]]
+	if pairing == nil || pairing.state != ownerPairingPending {
+		h.mu.Unlock()
+		// 不是登录码就交回对话逻辑，免得把主人正常聊天里的数字吞掉。
+		return false
+	}
+	pairing.state = ownerPairingAwaitingConfirm
+	if deadline := now.Add(ownerPairingConfirmGrace); pairing.expiresAt.Before(deadline) {
+		// 主人已经动作了，别让原本剩几秒的有效期把确认这一步卡死。
+		pairing.expiresAt = deadline
+	}
+	requestIP := firstNonEmptyWebUI(pairing.requestIP, "未知")
+	deviceName := firstNonEmptyWebUI(pairing.deviceName, "未知设备")
+	age := int(now.Sub(pairing.createdAt).Seconds())
+	h.mu.Unlock()
+
+	message := fmt.Sprintf(
+		"检测到控制台登录请求\n来源 IP：%s\n设备：%s\n发起于 %d 秒前\n\n确认登录请回复「确认 %s」，不是你本人请回复「取消 %s」或直接忽略。",
+		requestIP, deviceName, age, code, code)
+	if err := h.notifyOwner(ctx, cfg, message); err != nil {
+		h.mu.Lock()
+		if current := h.pairings[h.codeIndex[codeHash]]; current != nil && current.state == ownerPairingAwaitingConfirm {
+			current.state = ownerPairingPending
+		}
+		h.mu.Unlock()
+		recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录确认询问发送失败："+err.Error(), event.UserID, nil)
+		return true
+	}
+	recordOperation(ctx, h.logs, "auth.owner.pair.challenge", "已向主人询问控制台登录确认", event.UserID, nil)
+	return true
+}
+
+// confirmPairing 处理主人的「确认」。没有待确认的登录时返回 false，让「确认」
+// 这种日常用词照常走对话逻辑。
+func (h *OwnerLoginHandler) confirmPairing(ctx context.Context, cfg assistant.BotConfig, event assistant.MessageEvent, code string) bool {
+	now := time.Now()
+	h.mu.Lock()
+	h.cleanupLocked(now)
+	pending := h.awaitingPairingsLocked()
+	if len(pending) == 0 {
 		h.mu.Unlock()
 		return false
 	}
-	pairing.approved = true
-	delete(h.codeIndex, codeHash)
-	pairing.codeHash = ""
+	var target *ownerPairing
+	if code != "" {
+		if candidate := h.pairings[h.codeIndex[hashOwnerCode(code)]]; candidate != nil && candidate.state == ownerPairingAwaitingConfirm {
+			target = candidate
+		}
+	} else if len(pending) == 1 {
+		target = pending[0]
+	}
+	if target == nil {
+		h.mu.Unlock()
+		hint := "没有找到这个验证码对应的登录请求，可能已经过期了。"
+		if code == "" {
+			hint = fmt.Sprintf("当前有 %d 个待确认的登录请求，请带上验证码回复，例如「确认 123456」。", len(pending))
+		}
+		if err := h.notifyOwner(ctx, cfg, hint); err != nil {
+			recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录确认提示发送失败："+err.Error(), event.UserID, nil)
+		}
+		return true
+	}
+	target.state = ownerPairingApproved
+	delete(h.codeIndex, target.codeHash)
+	target.codeHash = ""
+	requestIP := firstNonEmptyWebUI(target.requestIP, "未知")
 	h.mu.Unlock()
 
-	recordOperation(ctx, h.logs, "auth.owner.pair.approve", "主人已通过 QQ 私聊确认登录", event.UserID, nil)
+	if err := h.notifyOwner(ctx, cfg, "已确认，来自 "+requestIP+" 的浏览器正在登录控制台。"); err != nil {
+		recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录确认回执发送失败："+err.Error(), event.UserID, nil)
+	}
+	recordOperation(ctx, h.logs, "auth.owner.pair.approve", "主人已确认控制台登录", event.UserID, nil)
 	return true
+}
+
+// cancelPairing 处理主人的「取消」，让主人在发现不是本人操作时能主动拒绝，
+// 而不是干等验证码过期。
+func (h *OwnerLoginHandler) cancelPairing(ctx context.Context, cfg assistant.BotConfig, event assistant.MessageEvent, code string) bool {
+	now := time.Now()
+	h.mu.Lock()
+	h.cleanupLocked(now)
+	pending := h.awaitingPairingsLocked()
+	if len(pending) == 0 {
+		h.mu.Unlock()
+		return false
+	}
+	cancelled := 0
+	if code != "" {
+		if target := h.pairings[h.codeIndex[hashOwnerCode(code)]]; target != nil && target.state == ownerPairingAwaitingConfirm {
+			h.deletePairingLocked(target)
+			cancelled = 1
+		}
+	} else {
+		for _, target := range pending {
+			h.deletePairingLocked(target)
+			cancelled++
+		}
+	}
+	h.mu.Unlock()
+
+	message := "已取消该登录请求。"
+	if cancelled == 0 {
+		message = "没有找到这个验证码对应的登录请求，可能已经过期了。"
+	}
+	if err := h.notifyOwner(ctx, cfg, message); err != nil {
+		recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录取消回执发送失败："+err.Error(), event.UserID, nil)
+	}
+	if cancelled > 0 {
+		recordOperation(ctx, h.logs, "auth.owner.pair.cancel", "主人已取消控制台登录请求", event.UserID, nil)
+	}
+	return true
+}
+
+// notifyOwner 只在主人自己先私聊过来之后才会被调用，因此不存在匿名请求触发
+// 消息推送的路径。
+func (h *OwnerLoginHandler) notifyOwner(ctx context.Context, cfg assistant.BotConfig, message string) error {
+	action, params, err := ownerMessageDelivery(cfg, message)
+	if err != nil {
+		return err
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, ownerMessageSendTimeout)
+	defer cancel()
+	_, err = h.runtime.CallOneBotAPI(sendCtx, action, params)
+	return err
+}
+
+func (h *OwnerLoginHandler) awaitingPairingsLocked() []*ownerPairing {
+	var pending []*ownerPairing
+	for _, pairing := range h.pairings {
+		if pairing.state == ownerPairingAwaitingConfirm {
+			pending = append(pending, pairing)
+		}
+	}
+	return pending
 }
 
 func (h *OwnerLoginHandler) cleanupLocked(now time.Time) {
@@ -251,6 +618,11 @@ func (h *OwnerLoginHandler) cleanupLocked(now time.Time) {
 	for ip, createdAt := range h.lastCreated {
 		if now.Sub(createdAt) >= ownerPairingTTL {
 			delete(h.lastCreated, ip)
+		}
+	}
+	for tokenHash, challenge := range h.challenges {
+		if !now.Before(challenge.expiresAt) || challenge.attempts >= ownerChallengeMaxAttempts {
+			delete(h.challenges, tokenHash)
 		}
 	}
 }
@@ -296,4 +668,34 @@ func hashOwnerCode(code string) string {
 func hashOwnerPairingToken(token string) string {
 	sum := sha256.Sum256([]byte("owner-login-token:" + token))
 	return hex.EncodeToString(sum[:])
+}
+
+// ownerMessageDelivery 把一条发给主人的私聊消息翻译成当前平台的 API 调用。
+// 传空消息可用于探测当前配置是否具备投递能力。
+func ownerMessageDelivery(cfg assistant.BotConfig, message string) (string, map[string]any, error) {
+	ownerID := strings.TrimSpace(cfg.OwnerID)
+	parsedOwnerID, err := strconv.ParseInt(ownerID, 10, 64)
+	if err != nil {
+		return "", nil, errors.New("管理员账号格式不正确")
+	}
+	platform := assistant.NormalizePlatformID(cfg.Platform)
+	if platform == assistant.PlatformTelegram {
+		return "sendMessage", map[string]any{
+			"chat_id": parsedOwnerID,
+			"text":    message,
+		}, nil
+	}
+	if assistant.IsOneBotPlatform(platform) {
+		return "send_private_msg", map[string]any{
+			"user_id": parsedOwnerID,
+			"message": []map[string]any{
+				{"type": "text", "data": map[string]string{"text": message}},
+			},
+		}, nil
+	}
+	return "", nil, fmt.Errorf("当前平台 %q 不支持向主人投递消息", platform)
+}
+
+func ownerChallengeKey(cfg assistant.BotConfig) string {
+	return assistant.NormalizePlatformID(cfg.Platform) + ":" + strings.TrimSpace(cfg.OwnerID)
 }
