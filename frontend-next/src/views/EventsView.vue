@@ -88,6 +88,9 @@
               <span class="status-dot" :class="{ pulse: stream.connected }" aria-hidden="true" />
               {{ stream.connected ? "实时更新" : "实时连接中断" }}
             </span>
+            <button v-if="pendingLiveEvents" class="btn small" type="button" @click="showLatestEvents">
+              有新事件
+            </button>
           </div>
           <span class="muted event-result-count">{{ resultCountText }}</span>
         </div>
@@ -162,11 +165,11 @@
                 <strong>回复结果</strong>
                 <p>{{ replyResultText(event) }}</p>
               </div>
-              <div v-if="event.delivery_stage" class="event-delivery" :class="deliveryClass(event)">
-                <component :is="deliveryIcon(event)" :size="16" aria-hidden="true" />
+              <div v-if="event.delivery_stage" class="event-delivery" :class="[deliveryClass(event), { quiet: deliverySettled(event) }]">
+                <component :is="deliveryIcon(event)" :size="deliverySettled(event) ? 14 : 16" aria-hidden="true" />
                 <div>
                   <strong>{{ deliveryLabel(event.delivery_stage) }}</strong>
-                  <p>{{ deliveryDetail(event) }}</p>
+                  <p v-if="!deliverySettled(event)">{{ deliveryDetail(event) }}</p>
                 </div>
               </div>
               <p v-if="event.error && !(event.reason || '').includes(event.error)" class="event-error">{{ event.error }}</p>
@@ -304,6 +307,7 @@ import {
   type AssistantEventsResponse
 } from "../api";
 import { formatClock, formatNumber } from "../format";
+import { currentView } from "../router";
 import { stream } from "../stream";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
@@ -339,8 +343,18 @@ const traceLoaded = ref<Record<string, boolean>>({});
 const traceSteps = ref<Record<string, AppLogEntry[]>>({});
 const failedImages = ref<Record<string, boolean>>({});
 const activeImage = ref<{ url: string; alt: string } | null>(null);
+const pendingLiveEvents = ref(false);
 let refreshTimer: number | null = null;
 let loadGeneration = 0;
+const LIVE_SYNC_TOP_PX = 96;
+
+function pageScrollTop(): number {
+  return window.scrollY || document.documentElement.scrollTop || 0;
+}
+
+function isReadingBelowTop(): boolean {
+  return pageScrollTop() > LIVE_SYNC_TOP_PX;
+}
 
 const summary = computed(() => ({
   total: response.value?.total ?? 0,
@@ -465,6 +479,7 @@ async function load(reset: boolean): Promise<void> {
   if (reset) {
     loading.value = true;
     page.value = 1;
+    pendingLiveEvents.value = false;
   } else {
     loadingMore.value = true;
   }
@@ -575,6 +590,12 @@ function deliveryDetail(event: AssistantEventDetail): string {
   return event.delivery_error?.trim() || "发送链路未完成";
 }
 
+// 送达成功是常态：只留一行浅色说明。它的补充文案没有额外信息，出站消息 ID
+// 下方的技术信息里已经有了；未完成和失败才值得占一整块卡片提醒。
+function deliverySettled(event: AssistantEventDetail): boolean {
+  return event.delivery_stage === "acknowledged" || event.delivery_stage === "echo_persisted";
+}
+
 function deliveryClass(event: AssistantEventDetail): string {
   if (event.delivery_stage === "acknowledged" || event.delivery_stage === "echo_persisted") return "ok";
   if (event.delivery_stage === "failed") return "err";
@@ -669,15 +690,58 @@ function traceDuration(step: AppLogEntry): string {
   return value > 0 ? formatDuration(value) : "";
 }
 
+function mergeLiveEvents(incoming: AssistantEventDetail[]): void {
+  if (events.value.length === 0) {
+    events.value = incoming;
+    return;
+  }
+  const existingIndex = new Map(events.value.map((item, index) => [item.id, index]));
+  const next = [...events.value];
+  const prepend: AssistantEventDetail[] = [];
+  for (const item of incoming) {
+    const index = existingIndex.get(item.id);
+    if (index === undefined) {
+      prepend.push(item);
+      continue;
+    }
+    next[index] = item;
+  }
+  events.value = prepend.length > 0 ? [...prepend, ...next] : next;
+}
+
+async function syncLiveEvents(): Promise<void> {
+  if (loading.value || loadingMore.value) return;
+  if (currentView.value !== "events" || isReadingBelowTop()) {
+    pendingLiveEvents.value = true;
+    return;
+  }
+  try {
+    const next = await getAssistantEvents(selectedRange.value, selectedResult.value, 1, 50);
+    if (currentView.value !== "events" || isReadingBelowTop()) {
+      pendingLiveEvents.value = true;
+      return;
+    }
+    response.value = next;
+    mergeLiveEvents(next.events);
+    pendingLiveEvents.value = false;
+  } catch {
+    /* 实时同步失败时不打断正在阅读的列表 */
+  }
+}
+
+function showLatestEvents(): void {
+  pendingLiveEvents.value = false;
+  window.scrollTo(0, 0);
+  void load(true);
+}
+
 watch(
   () => stream.lastEventAt,
   (value) => {
     if (!value) return;
-    if (events.value.length > 50) return;
     if (refreshTimer !== null) window.clearTimeout(refreshTimer);
     refreshTimer = window.setTimeout(() => {
-      if (loading.value || loadingMore.value) return;
-      void load(true);
+      void syncLiveEvents();
     }, 2500);
   }
 );
@@ -751,7 +815,17 @@ onBeforeUnmount(() => {
 }
 
 .event-detail-card {
-  overflow: hidden;
+  overflow: visible;
+}
+
+.event-detail-card > .card-header {
+  position: sticky;
+  top: var(--topbar-height);
+  z-index: 8;
+  margin: 0;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .event-result-count {
@@ -1070,6 +1144,21 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--muted);
+}
+
+.event-delivery.quiet {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.event-delivery.quiet strong {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .event-delivery.ok { color: var(--ok); }
