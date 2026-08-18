@@ -28,8 +28,13 @@
           <span v-else-if="checkError" class="badge err">检查失败</span>
           <span v-else-if="status?.download_ready" class="badge warn">已下载，等待安装</span>
           <span v-else-if="checkResult?.update_available" class="badge warn">发现新版本</span>
+          <span v-else-if="switchToRelease" class="badge warn">可切换到正式版</span>
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
           <span v-else class="muted">尚未检查</span>
+        </div>
+        <div v-if="sourceBuild" class="cluster" style="justify-content: space-between">
+          <span class="muted">构建类型</span>
+          <span class="badge warn">源码构建</span>
         </div>
         <div v-if="checkResult" class="cluster" style="justify-content: space-between">
           <span class="muted">完整性校验</span>
@@ -53,7 +58,7 @@
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
 
-		<section v-if="releaseSelfUpdate" class="update-policy">
+		<section v-if="releaseSelfUpdate && !sourceBuild" class="update-policy">
 			<div class="stack" style="gap: 3px">
 				<strong>自动更新</strong>
 				<span class="muted" style="font-size: 12.5px">自动下载会校验并暂存更新包；自动安装会在下载完成后备份、切换、重启并执行健康检查。</span>
@@ -80,7 +85,7 @@
           class="btn primary"
           type="button"
           :disabled="operationRunning"
-		  @click="downloadUpdate"
+		  @click="downloadUpdate()"
         >
           <Download :size="14" aria-hidden="true" />
 		  {{ operationRunning ? "下载并校验中…" : "下载并校验" }}
@@ -88,6 +93,10 @@
 		<button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary" type="button" :disabled="operationRunning" @click="confirmInstall">
 			<RefreshCcw :size="14" aria-hidden="true" />
 			{{ operationRunning ? "升级中…" : "升级并重启" }}
+		</button>
+		<button v-if="switchToRelease && !status?.download_ready" class="btn primary" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
+			<Download :size="14" aria-hidden="true" />
+			{{ operationRunning ? "下载并校验中…" : `切换到正式 ${checkResult?.latest_version || "版本"}` }}
 		</button>
 		<button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary" type="button" :disabled="operationRunning" @click="confirmUpdate">
 			<Download :size="14" aria-hidden="true" />
@@ -116,7 +125,10 @@
         </div>
       </div>
       <p v-if="updatedHint" class="badge ok" style="align-self: flex-start">{{ updatedHint }}</p>
-      <p v-if="releaseSelfUpdate" class="muted" style="font-size: 12.5px; margin: 0">
+      <p v-if="sourceBuild" class="muted" style="font-size: 12.5px; margin: 0">
+        当前二进制由源码构建，没有注入正式版本号，因此不会提示更新，也不会自动下载或安装。切换到正式版会下载完整 Release 包并校验 SHA-256，再备份数据库、替换当前二进制并重启。
+      </p>
+      <p v-else-if="releaseSelfUpdate" class="muted" style="font-size: 12.5px; margin: 0">
 		完整 Release 包下载后先校验 SHA-256；安装时才备份数据库、切换版本并重启，健康检查失败会自动恢复。
       </p>
       <p v-else-if="deploymentMode === 'release'" class="muted" style="font-size: 12.5px; margin: 0">
@@ -295,7 +307,14 @@ let installStartedAt = 0;
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 const releaseSelfUpdate = computed(() => deploymentMode.value === "release" && version.value?.update_supported === true);
 const operationRunning = computed(() => updating.value || installTracking.value || status.value?.updating === true);
+const sourceBuild = computed(() => deploymentMode.value === "release"
+	&& (checkResult.value?.build_type ?? version.value?.build_type) === "source");
+const switchToRelease = computed(() => sourceBuild.value
+	&& !checking.value
+	&& !checkError.value
+	&& checkResult.value?.switch_to_release_available === true);
 const canDownloadUpdate = computed(() => releaseSelfUpdate.value
+	&& !sourceBuild.value
 	&& !checking.value
 	&& !checkError.value
 	&& checkResult.value?.update_supported === true
@@ -398,6 +417,8 @@ async function check(notify = true): Promise<void> {
     if (notify) {
       if (checkResult.value.update_available) {
         toastSuccess(`发现新版本 ${checkResult.value.latest_version || ""}`.trim());
+      } else if (switchToRelease.value) {
+        toastSuccess(`当前为源码构建，可切换到正式 ${checkResult.value.latest_version || "版本"}`);
       } else {
         toastSuccess("已是最新版本");
       }
@@ -426,7 +447,17 @@ async function persistPolicy(changed: "download" | "install"): Promise<void> {
 	}
 }
 
-async function downloadUpdate(): Promise<void> {
+async function confirmSwitchToRelease(): Promise<void> {
+	const target = checkResult.value?.latest_version || "最新稳定版本";
+	const confirmed = await askConfirm({
+		title: `切换到正式 ${target}？`,
+		message: "当前运行的是源码构建。切换会下载完整 Release 包并校验 SHA-256，安装时备份数据库和当前二进制，再重启并执行健康检查。",
+		confirmLabel: "下载并校验"
+	});
+	if (confirmed) await downloadUpdate(true);
+}
+
+async function downloadUpdate(force = false): Promise<void> {
 	if (operationRunning.value) return;
 	updating.value = true;
 	operationError.value = "";
@@ -434,7 +465,7 @@ async function downloadUpdate(): Promise<void> {
 		void getUpdateStatus().then((value) => { status.value = value; }).catch(() => undefined);
 	}, 500);
 	try {
-		const result = await downloadSystemUpdate();
+		const result = await downloadSystemUpdate(force);
 		status.value = result.status;
 		updatedHint.value = result.status.updating
 			? "更新包正在下载或处理中"
