@@ -215,36 +215,19 @@ func TestOwnerLoginPairCanBeDisabled(t *testing.T) {
 	}
 }
 
-// 主人发回验证码只是让机器人回问来源，必须再回一次「确认」才真正放行。
-func TestOwnerPairingRequiresSecondConfirmation(t *testing.T) {
+// 主人发回验证码即完成登录，并且会收到一条带来源信息的回执。
+func TestOwnerPairingApprovesOnCode(t *testing.T) {
 	runtime := &fakeOwnerRuntime{cfg: assistant.BotConfig{
 		Platform: assistant.PlatformOneBotV11, OwnerID: "10001", OwnerLoginEnabled: true,
 	}}
 	router, manager, handler := newOwnerLoginTestRouter(t, runtime)
 
 	code, pollToken := createOwnerPairing(t, router)
-	if !ownerPrivateMessage(handler, code) {
+	if !ownerPrivateMessage(handler, "登录控制台 "+code) {
 		t.Fatal("owner code was not consumed")
 	}
 
 	rec := pollOwnerPairing(t, router, pollToken)
-	if !strings.Contains(rec.Body.String(), `"approved":false`) ||
-		!strings.Contains(rec.Body.String(), `"awaiting_confirm":true`) {
-		t.Fatalf("pairing approved without confirmation: %s", rec.Body.String())
-	}
-	sent := runtime.sentTexts()
-	if len(sent) != 1 || !strings.Contains(sent[0], "192.0.2.1") || !strings.Contains(sent[0], "确认") {
-		t.Fatalf("owner was not told who is logging in: %+v", sent)
-	}
-	// 验证码只在网页上显示，机器人不把它回声一遍。
-	if strings.Contains(sent[0], code) {
-		t.Fatalf("confirmation prompt echoed the code back: %q", sent[0])
-	}
-
-	if !ownerPrivateMessage(handler, "确认 "+code) {
-		t.Fatal("confirmation was not consumed")
-	}
-	rec = pollOwnerPairing(t, router, pollToken)
 	if !strings.Contains(rec.Body.String(), `"approved":true`) {
 		t.Fatalf("approved poll = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -253,39 +236,39 @@ func TestOwnerPairingRequiresSecondConfirmation(t *testing.T) {
 	if !manager.Authenticate(token) {
 		t.Fatal("issued session invalid")
 	}
-}
 
-// 主人主动拒绝时配对立刻作废，不用干等过期。
-func TestOwnerPairingCanBeCancelled(t *testing.T) {
-	runtime := &fakeOwnerRuntime{cfg: assistant.BotConfig{
-		Platform: assistant.PlatformOneBotV11, OwnerID: "10001", OwnerLoginEnabled: true,
-	}}
-	router, _, handler := newOwnerLoginTestRouter(t, runtime)
+	// 回执让主人知道刚刚发生了什么，而不是消息被静默吞掉。
+	sent := runtime.sentTexts()
+	if len(sent) != 1 || !strings.Contains(sent[0], "192.0.2.1") {
+		t.Fatalf("owner was not told about the login: %+v", sent)
+	}
+	if strings.Contains(sent[0], code) {
+		t.Fatalf("receipt echoed the code back: %q", sent[0])
+	}
 
-	code, pollToken := createOwnerPairing(t, router)
-	if !ownerPrivateMessage(handler, code) {
-		t.Fatal("owner code was not consumed")
+	// 一次性使用。
+	if ownerPrivateMessage(handler, code) {
+		t.Fatal("single-use code was accepted twice")
 	}
-	if !ownerPrivateMessage(handler, "取消 "+code) {
-		t.Fatal("cancellation was not consumed")
-	}
-	rec := pollOwnerPairing(t, router, pollToken)
+	rec = pollOwnerPairing(t, router, pollToken)
 	if !strings.Contains(rec.Body.String(), `"expired":true`) {
-		t.Fatalf("cancelled pairing still alive: %s", rec.Body.String())
-	}
-	if ownerPrivateMessage(handler, "确认 "+code) {
-		t.Fatal("cancelled pairing accepted a confirmation")
+		t.Fatalf("poll token reuse = %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
-// 没有待确认的登录时，「确认」这类日常用词不能被登录流程吞掉。
+// 对不上任何配对的消息要交回对话逻辑，别把主人正常聊天里的数字吞掉。
 func TestOwnerPairingLeavesOrdinaryMessagesAlone(t *testing.T) {
 	runtime := &fakeOwnerRuntime{cfg: assistant.BotConfig{
 		Platform: assistant.PlatformOneBotV11, OwnerID: "10001", OwnerLoginEnabled: true,
 	}}
-	_, _, handler := newOwnerLoginTestRouter(t, runtime)
+	router, _, handler := newOwnerLoginTestRouter(t, runtime)
+	code, _ := createOwnerPairing(t, router)
 
-	for _, text := range []string{"确认", "取消", "123456", "今天天气怎么样"} {
+	other := "000000"
+	if code == other {
+		other = "999999"
+	}
+	for _, text := range []string{other, "今天天气怎么样", "12345", "1234567"} {
 		if ownerPrivateMessage(handler, text) {
 			t.Fatalf("swallowed ordinary message %q", text)
 		}
