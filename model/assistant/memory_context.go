@@ -67,7 +67,9 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 		MaxCandidates:      structuredMemoryLoadLimit,
 		CrossGroup:         crossGroup,
 		GroupSessionPrefix: groupHistorySessionPrefix(event),
-		CurrentSessionOnly: !crossGroup,
+		// 跨群记忆开关管的是「别的群的会话记忆」。当前发言者自己的 visibility=user
+		// 记忆本来就是跨会话的稳定事实，不该被这个开关连坐——否则它们写得进库、
+		// 门控器也查得到，却永远进不了回复提示词。
 	})
 	cancel()
 	if err != nil {

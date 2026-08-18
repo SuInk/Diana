@@ -125,6 +125,9 @@ type StructuredMemoryQuery struct {
 	Kinds              []MemoryKind
 	CrossGroup         bool
 	GroupSessionPrefix string
+	// CurrentSessionOnly 只保留当前会话作用域的记忆，连当前发言者自己的
+	// visibility=user 记忆也一并排除。它与 CrossGroup 是两件事：后者控制的是
+	// 其他群的会话记忆。回复提示词不要设这一项，否则长期记忆会整类失效。
 	CurrentSessionOnly bool
 }
 

@@ -1384,17 +1384,40 @@ code {
 
 
 /* 柱状 sparkline */
+.spark-plot {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0 8px;
+  align-items: start;
+}
+
+.spark-y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 56px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.spark-plot-main {
+  min-width: 0;
+}
+
 .spark-bars {
   display: flex;
   align-items: flex-end;
-  gap: 3px;
-  height: 96px;
-  padding-top: 8px;
+  gap: 2px;
+  height: 56px;
 }
 
 .spark-bars .bar {
   flex: 1;
   min-width: 3px;
+  height: 100%;
   border-radius: 3px 3px 0 0;
   background: var(--accent-soft);
   position: relative;
@@ -1429,7 +1452,7 @@ code {
   justify-content: space-between;
   font-size: 11px;
   color: var(--muted);
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 /* 事件流 */
@@ -1889,16 +1912,16 @@ code {
 .bot-profile-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-raised);
 }
 
-/* 配置占满剩余宽度，删除被推到最右，两者之间隔着整个按钮，不容易误点。 */
 .bot-profile-configure {
-  flex: 1;
-  justify-content: center;
+  flex: none;
+  width: auto;
 }
 
 /* 新增入口和机器人卡片同一网格，不额外套一层容器。 */
@@ -2306,6 +2329,7 @@ code {
   flex: 1 1 0;
   order: 2;
   min-width: 0;
+  min-height: 0;
   margin: 0;
 }
 
@@ -2518,12 +2542,14 @@ code {
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--text-secondary);
-  /* 描述长度 41~82 字不等，统一截断到两行：三行时短描述占两行、长描述占三行，
-     瀑布流里相邻卡片就会差出一整行的高度。完整文案挂在 title 上。 */
+  /* 描述长度 41~82 字不等。高度按两行留：一行的卡片也会垫到两行，
+     同一行里权限/设置才和长描述卡片对齐。完整文案挂在 title 上。 */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  min-height: calc(1.55em * 2);
+  min-height: 2lh;
 }
 
 /* 卡片上的权限入口：点开是弹窗，和运行依赖同一套 */
@@ -3699,12 +3725,20 @@ code {
   align-items: start;
 }
 
+.dashboard-stats,
 .dashboard-insights {
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
 }
 
 .dashboard-insights > .card {
-  height: 100%;
+  min-width: 0;
+}
+
+.dashboard-chart {
+  grid-column: span 2;
 }
 
 .setup-callout {
@@ -3931,7 +3965,9 @@ code {
 
 .repository-watch-scopes {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  margin-top: 10px;
 }
 
 .task-meta,
@@ -4248,7 +4284,8 @@ code {
     flex-basis: 100%;
   }
 
-  .stat-grid {
+  .stat-grid,
+  .dashboard-insights {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

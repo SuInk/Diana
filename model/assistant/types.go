@@ -1045,6 +1045,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SendRetryAttempts > 5 {
 		cfg.SendRetryAttempts = 5
 	}
+	// 风格的投递策略要在数值默认之前套用，否则分不清「用户填的 900」和「默认 900」。
+	cfg.ReplyStyle.apply(&cfg)
 	if cfg.SendChunkIntervalMS <= 0 {
 		cfg.SendChunkIntervalMS = defaults.SendChunkIntervalMS
 	}
