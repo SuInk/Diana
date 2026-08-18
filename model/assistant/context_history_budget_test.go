@@ -1,0 +1,150 @@
+package assistant
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+func TestRecentHistoryUsesTokenWindowInsteadOfTwentyMessages(t *testing.T) {
+	history := make([]MessageEvent, 0, 160)
+	for index := 0; index < 80; index++ {
+		history = append(history, MessageEvent{
+			Kind:       EventKindGroup,
+			Time:       int64(1000 + index*2),
+			UserID:     "user-1",
+			MessageID:  fmt.Sprintf("u-%d", index),
+			SenderName: "Alice",
+			RawMessage: fmt.Sprintf("第%d个很短的问题", index),
+		})
+		history = append(history, MessageEvent{
+			Kind:      EventKindGroup,
+			Time:      int64(1001 + index*2),
+			MessageID: fmt.Sprintf("a-%d", index),
+			botReply:  fmt.Sprintf("第%d个简短回答", index),
+		})
+	}
+
+	windows := []int64{4096, 8192, 16384, 32768}
+	previous := 0
+	for _, window := range windows {
+		budget := contextShareBudget(window, recentHistoryTokenShare)
+		selected := selectRecentHistoryTurns(history, MessageEvent{Time: 2000}, "bot", budget)
+		if len(selected) < previous {
+			t.Fatalf("window %d selected %d messages after %d", window, len(selected), previous)
+		}
+		previous = len(selected)
+		if len(selected)%2 != 0 {
+			t.Fatalf("window %d split a user/assistant turn: %d messages", window, len(selected))
+		}
+	}
+	selected16K := selectRecentHistoryTurns(history, MessageEvent{Time: 2000}, "bot", contextShareBudget(16384, recentHistoryTokenShare))
+	if len(selected16K) <= 20 {
+		t.Fatalf("16K short-message history still behaves like a 20-message cap: %d", len(selected16K))
+	}
+}
+
+func TestRecentHistoryStopsBeforeOversizedOlderTurn(t *testing.T) {
+	history := []MessageEvent{
+		{Kind: EventKindPrivate, Time: 1, UserID: "u", MessageID: "old-u", RawMessage: strings.Repeat("很长的旧问题", 500)},
+		{Kind: EventKindPrivate, Time: 2, MessageID: "old-a", botReply: strings.Repeat("很长的旧回答", 500)},
+		{Kind: EventKindPrivate, Time: 3, UserID: "u", MessageID: "new-u", RawMessage: "最近问题"},
+		{Kind: EventKindPrivate, Time: 4, MessageID: "new-a", botReply: "最近回答"},
+	}
+	selected := selectRecentHistoryTurns(history, MessageEvent{Time: 5}, "bot", 256)
+	if len(selected) != 2 || selected[0].MessageID != "new-u" || selected[1].MessageID != "new-a" {
+		t.Fatalf("selected turns = %#v", selected)
+	}
+}
+
+func TestRecentHistoryKeepsOversizedNewestTurnForFinalCompaction(t *testing.T) {
+	history := []MessageEvent{
+		{Kind: EventKindPrivate, Time: 1, UserID: "u", MessageID: "old-u", RawMessage: "旧问题"},
+		{Kind: EventKindPrivate, Time: 2, MessageID: "old-a", botReply: "旧回答"},
+		{Kind: EventKindPrivate, Time: 3, UserID: "u", MessageID: "new-u", RawMessage: strings.Repeat("刚发的长问题", 500)},
+		{Kind: EventKindPrivate, Time: 4, MessageID: "new-a", botReply: strings.Repeat("刚给的长回答", 500)},
+	}
+	selected := selectRecentHistoryTurns(history, MessageEvent{Time: 5}, "bot", 128)
+	if len(selected) != 2 || selected[0].MessageID != "new-u" || selected[1].MessageID != "new-a" {
+		t.Fatalf("oversized newest turn was forgotten: %#v", selected)
+	}
+}
+
+func TestSemanticReferenceContextIncludesAllTextSources(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	ids := make([]string, 0, 6)
+	for index := 1; index <= 6; index++ {
+		id := fmt.Sprintf("source-%d", index)
+		ids = append(ids, id)
+		runtime.remember(MessageEvent{
+			Kind:       EventKindGroup,
+			GroupID:    "group-1",
+			Time:       int64(100 + index),
+			UserID:     "bot",
+			MessageID:  id,
+			SenderName: "Diana",
+			RawMessage: fmt.Sprintf("第%d条原始回复", index),
+		})
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", Time: 200, UserID: "owner", MessageID: "current"}
+	setEventSemanticSourceMessageIDs(&event, ids)
+	got := runtime.semanticReferenceContextBlock(context.Background(), event)
+	if got.Requested != 6 || got.Resolved != 6 || got.TextSources != 6 || got.ExpectedImages != 0 {
+		t.Fatalf("semantic context counts = %#v", got)
+	}
+	for index, id := range ids {
+		if !strings.Contains(got.Block, "message_id="+id) || !strings.Contains(got.Block, fmt.Sprintf("第%d条原始回复", index+1)) {
+			t.Fatalf("semantic block missing %s: %s", id, got.Block)
+		}
+	}
+	notice := semanticReferenceAttachmentNotice(got, 0)
+	if !strings.Contains(notice, "6 条文字来源") || !strings.Contains(notice, "逐条核对") {
+		t.Fatalf("semantic notice = %q", notice)
+	}
+	for _, unwanted := range []string{"6 张", "逐张查看", "原图"} {
+		if strings.Contains(notice, unwanted) {
+			t.Fatalf("text-only semantic notice contains %q: %q", unwanted, notice)
+		}
+	}
+}
+
+func TestPromptHistoryCandidateLimitIsDerivedFromTokens(t *testing.T) {
+	low := historyCandidateLimitForBudget(contextShareBudget(4096, recentHistoryTokenShare))
+	high := historyCandidateLimitForBudget(contextShareBudget(32768, recentHistoryTokenShare))
+	if low == 20 || high == 20 || high <= low {
+		t.Fatalf("candidate limits low=%d high=%d", low, high)
+	}
+}
+
+func TestTokenHistoryMergeKeepsTrueNewestTimeline(t *testing.T) {
+	stored := []MessageEvent{
+		{Kind: EventKindPrivate, Time: 10, MessageID: "old", RawMessage: "旧消息"},
+		{Kind: EventKindPrivate, Time: 20, MessageID: "middle", RawMessage: "中间消息"},
+	}
+	memory := []MessageEvent{{Kind: EventKindPrivate, Time: 30, MessageID: "new", RawMessage: "最新消息"}}
+	got := mergeMessageHistory(memory, stored, 2)
+	if len(got) != 2 || got[0].MessageID != "middle" || got[1].MessageID != "new" {
+		t.Fatalf("merged timeline = %#v", got)
+	}
+}
+
+func TestSemanticReferenceNoticeSeparatesTextAndImages(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{
+		Kind: EventKindPrivate, Time: 1, UserID: "user", MessageID: "text", SenderName: "Diana", botReply: "文字结论",
+	})
+	runtime.remember(MessageEvent{
+		Kind: EventKindPrivate, Time: 2, UserID: "user", MessageID: "image", SenderName: "Alice", RawMessage: "[图片]",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "https://example.com/a.png"}}},
+	})
+	event := MessageEvent{Kind: EventKindPrivate, Time: 3, UserID: "user", MessageID: "current"}
+	setEventSemanticSourceMessageIDs(&event, []string{"text", "image"})
+	contextBlock := runtime.semanticReferenceContextBlock(context.Background(), event)
+	notice := semanticReferenceAttachmentNotice(contextBlock, 1)
+	if contextBlock.TextSources != 1 || contextBlock.ExpectedImages != 1 ||
+		!strings.Contains(notice, "1 条文字来源") || !strings.Contains(notice, "1 张来源图片") ||
+		!strings.Contains(notice, "逐条核对") || !strings.Contains(notice, "逐张查看") {
+		t.Fatalf("mixed semantic context=%#v notice=%q", contextBlock, notice)
+	}
+}
