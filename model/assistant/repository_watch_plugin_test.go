@@ -282,7 +282,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		t.Fatalf("snapshot=%#v", change.Snapshot)
 	}
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"Commit（main）", "PR #2（已合并）", "Release v1.1.0", "Star +3", "10 → 13"} {
+	for _, want := range []string{"Commit（main，作者 diana）", "PR #2（已合并）", "Release v1.1.0", "Star +3", "10 → 13"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -651,7 +651,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		sentText = fmt.Sprint(channel.calls)
 	}
 	delivered := len(channel.sent) > 0 || len(channel.calls) > 0 && channel.calls[0].action == "send_group_forward_msg"
-	if !delivered || !strings.Contains(sentText, "Commit（默认分支）") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
+	if !delivered || !strings.Contains(sentText, "Commit（默认分支，作者 diana）") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
 		t.Fatalf("sent=%#v calls=%#v item=%#v requests=%#v", channel.sent, channel.calls, store.items[0], provider.requests)
 	}
 	item := store.items[0]
@@ -922,7 +922,7 @@ func TestRenderRepositoryWatchChangesGroupsASingleCommitAuthor(t *testing.T) {
 		},
 	}
 	result := renderRepositoryWatchChanges(change)
-	if !strings.Contains(result, "Commit（默认分支） · 作者 SuInk") {
+	if !strings.Contains(result, "Commit（默认分支，作者 SuInk）") {
 		t.Fatalf("shared author missing from the section header: %s", result)
 	}
 	if strings.Contains(result, "作者：SuInk") {
@@ -942,10 +942,10 @@ func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *test
 		},
 	}
 	result := renderRepositoryWatchChanges(change)
-	if strings.Contains(result, "· 作者 ") {
+	if strings.Contains(result, "作者 ") {
 		t.Fatalf("mixed authors should not be hoisted into the header: %s", result)
 	}
-	for _, want := range []string{"alice · 提交于 ", "bob · 提交于 "} {
+	for _, want := range []string{"alice 提交于 ", "bob 提交于 "} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, result)
 		}
@@ -954,14 +954,14 @@ func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *test
 
 func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
 	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
-	wantPrefix := "GitHub 动态 · SuInk/Diana\n\nCommit（默认分支）"
+	wantPrefix := "GitHub 动态：SuInk/Diana\n\nCommit（默认分支）"
 	if !strings.HasPrefix(message, wantPrefix) {
 		t.Fatalf("message = %q, want prefix %q", message, wantPrefix)
 	}
 	if !strings.HasSuffix(message, "刚更新了回复风格与语气控制。") {
 		t.Fatalf("summary is not last: %q", message)
 	}
-	if got := composeRepositoryWatchMessage("SuInk/Diana", "", ""); got != "GitHub 动态 · SuInk/Diana" {
+	if got := composeRepositoryWatchMessage("SuInk/Diana", "", ""); got != "GitHub 动态：SuInk/Diana" {
 		t.Fatalf("empty change message = %q", got)
 	}
 }
