@@ -123,6 +123,7 @@ func main() {
 	systemHandler := webui.NewSystemUpdateHandler(systemUpdater)
 	systemHandler.SetLogStore(sqliteStore)
 	systemHandler.SetBuildVersion(runtimeVersion)
+	systemHandler.SetBuildType(version.BuildType(buildVersion))
 	if err := systemHandler.SetUpdatePolicyStore(ctx, sqliteStore); err != nil {
 		log.Fatal(err)
 	}
