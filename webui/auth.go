@@ -516,8 +516,6 @@ func authExemptPath(path string) bool {
 	case path == "/api/auth/status",
 		path == "/api/auth/login",
 		path == "/api/auth/owner/status",
-		path == "/api/auth/owner/challenge",
-		path == "/api/auth/owner/verify",
 		path == "/api/auth/owner/pair",
 		path == "/api/auth/owner/pair/status":
 		return true
@@ -728,7 +726,7 @@ func (h *AuthHandler) setSessionCookie(c *gin.Context, token string, maxAge int)
 	authSetSessionCookie(c, token, maxAge)
 }
 
-// authSetSessionCookie 是会话 cookie 的统一写入口，密码登录与主人验证码登录共用。
+// authSetSessionCookie 是会话 cookie 的统一写入口，密码登录与主人私聊确认登录共用。
 func authSetSessionCookie(c *gin.Context, token string, maxAge int) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(authCookieName, token, maxAge, "/", "", false, true)
