@@ -9031,12 +9031,13 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 	if len(change.PullRequests) > 0 {
 		lines := make([]string, 0, len(change.PullRequests)*2)
 		for _, pullRequest := range change.PullRequests {
-			line := fmt.Sprintf("PR #%d（%s）\n%s", pullRequest.Number, repositoryWatchPullStatusLabel(pullRequest.Status), strings.TrimSpace(pullRequest.Title))
-			// 时间紧跟标题：它是「这条动态什么时候发生」的关键信息，排在作者和分支
-			// 后面容易被链接挤到看不见的位置。
+			// 时间紧跟编号行：它是「这条动态什么时候发生」的关键信息，排在作者和
+			// 分支后面容易被链接挤到看不见的位置。
+			line := fmt.Sprintf("PR #%d（%s）", pullRequest.Number, repositoryWatchPullStatusLabel(pullRequest.Status))
 			if occurredAt := formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)); occurredAt != "" {
 				line += "\n" + repositoryWatchPullTimeLabel(pullRequest.Status) + " " + occurredAt
 			}
+			line += "\n" + strings.TrimSpace(pullRequest.Title)
 			if author := strings.TrimSpace(pullRequest.Author); author != "" {
 				line += "\n作者：" + author
 			}
@@ -9053,10 +9054,11 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 	if len(change.Issues) > 0 {
 		lines := make([]string, 0, len(change.Issues))
 		for _, issue := range change.Issues {
-			line := fmt.Sprintf("Issue #%d（%s）\n%s", issue.Number, repositoryWatchIssueStatusLabel(issue.Status), strings.TrimSpace(issue.Title))
+			line := fmt.Sprintf("Issue #%d（%s）", issue.Number, repositoryWatchIssueStatusLabel(issue.Status))
 			if eventTime := formatRepositoryWatchTime(repositoryWatchIssueTime(issue)); eventTime != "" {
 				line += "\n" + repositoryWatchIssueTimeLabel(issue.Status) + " " + eventTime
 			}
+			line += "\n" + strings.TrimSpace(issue.Title)
 			if author := strings.TrimSpace(issue.Author); author != "" {
 				line += "\n作者：" + author
 			}
@@ -9088,20 +9090,6 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 	if change.Stars != nil {
 		delta := fmt.Sprintf("%+d", change.Stars.Delta)
 		lines := []string{"Star " + delta}
-		if change.Stars.Delta > 0 && len(change.Stars.AddedUsers) > 0 {
-			names := make([]string, 0, min(5, len(change.Stars.AddedUsers)))
-			for _, user := range change.Stars.AddedUsers {
-				if len(names) >= 5 {
-					break
-				}
-				names = append(names, "@"+strings.TrimSpace(user.Login))
-			}
-			line := strings.Join(names, "、")
-			if len(change.Stars.AddedUsers) > len(names) {
-				line += fmt.Sprintf(" 等 %d 人", len(change.Stars.AddedUsers)-len(names))
-			}
-			lines = append(lines, line)
-		}
 		if change.Stars.Delta > 0 {
 			latestStar := time.Time{}
 			for _, user := range change.Stars.AddedUsers {
@@ -9116,6 +9104,20 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 			}
 		} else if value := formatRepositoryWatchTime(change.Stars.DetectedAt); value != "" {
 			lines = append(lines, "检测于 "+value)
+		}
+		if change.Stars.Delta > 0 && len(change.Stars.AddedUsers) > 0 {
+			names := make([]string, 0, min(5, len(change.Stars.AddedUsers)))
+			for _, user := range change.Stars.AddedUsers {
+				if len(names) >= 5 {
+					break
+				}
+				names = append(names, "@"+strings.TrimSpace(user.Login))
+			}
+			line := strings.Join(names, "、")
+			if len(change.Stars.AddedUsers) > len(names) {
+				line += fmt.Sprintf(" 等 %d 人", len(change.Stars.AddedUsers)-len(names))
+			}
+			lines = append(lines, line)
 		}
 		lines = append(lines, fmt.Sprintf("%d → %d", change.Stars.Previous, change.Stars.Current))
 		if url := strings.TrimSpace(change.Stars.URL); url != "" {
