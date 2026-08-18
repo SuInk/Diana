@@ -235,8 +235,8 @@ func (h *OwnerLoginHandler) createChallenge(c *gin.Context) {
 	}
 	h.mu.Unlock()
 	if sendErr != nil {
-		logAndWriteError(c, h.logs, http.StatusBadGateway, "auth.owner.challenge",
-			fmt.Errorf("验证码发送失败（机器人是否在线？）：%w", sendErr), cfg.OwnerID, nil)
+		logAndWriteMaskedError(c, h.logs, http.StatusBadGateway, "auth.owner.challenge",
+			sendErr, "验证码发送失败，请确认机器人在线后重试", cfg.OwnerID, nil)
 		return
 	}
 
