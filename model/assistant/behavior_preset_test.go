@@ -6,6 +6,8 @@ package assistant
 import (
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
@@ -112,5 +114,26 @@ func TestSystemPromptEndsWithReplyStyleClosingAnchor(t *testing.T) {
 	anchor := ReplyStyleGroupmate.closingAnchor()
 	if !strings.HasSuffix(prompt, anchor) {
 		t.Fatalf("system prompt does not end with the closing anchor: %q", prompt)
+	}
+}
+
+func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
+	base := BotConfig{BotQQ: "42", ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9"}
+
+	messages := runtime.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: "在吗"}})
+	if len(messages) != 2 || messages[0].Role != llm.RoleSystem {
+		t.Fatalf("persona was not prepended: %#v", messages)
+	}
+	persona := messages[0].Content
+	for _, want := range []string{ReplyStyleGroupmate.prompt(), ReplyStyleGroupmate.closingAnchor()} {
+		if !strings.Contains(persona, want) {
+			t.Fatalf("persona missing %q: %q", want, persona)
+		}
+	}
+	// 已经带过人设的消息列表不应该再插一遍。
+	if again := runtime.withUserFacingPersona(event, messages); len(again) != len(messages) {
+		t.Fatalf("persona was injected twice: %#v", again)
 	}
 }
