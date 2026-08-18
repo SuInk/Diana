@@ -83,14 +83,10 @@
               <span>{{ pairingCode }}</span>
               <Copy :size="15" aria-hidden="true" />
             </button>
-            <p class="muted owner-pair-hint">
-              {{ pairingAwaitingConfirm
-                ? "机器人已发来本次登录的来源信息，核对无误后在私聊里回复「确认」"
-                : "将上面的验证码私聊发送给机器人，机器人会告知登录来源并请你回复「确认」" }}
-            </p>
+            <p class="muted owner-pair-hint">将验证码私聊发送给机器人，保持此页面开启</p>
             <p class="owner-pair-status">
               <LoaderCircle class="spin" :size="14" aria-hidden="true" />
-              {{ pairingAwaitingConfirm ? "等待主人回复确认" : "等待主人确认" }} · {{ pairingRemaining }}s
+              等待主人确认 · {{ pairingRemaining }}s
             </p>
           </template>
           <button v-else class="btn" type="button" :disabled="busy || ownerBusy || challengeAction !== null" @click="startOwnerPairing">
@@ -138,7 +134,6 @@ const ownerBusy = ref(false);
 const pairingCode = ref("");
 const pairingToken = ref("");
 const pairingRemaining = ref(0);
-const pairingAwaitingConfirm = ref(false);
 let pairingPollTimer: ReturnType<typeof setInterval> | null = null;
 let pairingCountdownTimer: ReturnType<typeof setInterval> | null = null;
 let challengeCooldownTimer: ReturnType<typeof setInterval> | null = null;
@@ -166,7 +161,6 @@ function clearOwnerPairing(): void {
   pairingCode.value = "";
   pairingToken.value = "";
   pairingRemaining.value = 0;
-  pairingAwaitingConfirm.value = false;
 }
 
 function clearChallengeTimers(): void {
@@ -267,8 +261,6 @@ async function pollPairing(): Promise<void> {
       toastError("验证码已失效，请重新获取");
       return;
     }
-    pairingAwaitingConfirm.value = status.awaiting_confirm === true;
-    // 主人发回验证码后服务端会顺延有效期，倒计时跟着服务端走才不会对不上。
     if (typeof status.expires_in_seconds === "number") {
       pairingRemaining.value = status.expires_in_seconds;
     }
@@ -285,7 +277,6 @@ async function startOwnerPairing(): Promise<void> {
     pairingCode.value = pairing.code;
     pairingToken.value = pairing.poll_token;
     pairingRemaining.value = pairing.expires_in_seconds;
-    pairingAwaitingConfirm.value = false;
     pairingPollTimer = setInterval(() => void pollPairing(), 1500);
     pairingCountdownTimer = setInterval(() => {
       pairingRemaining.value = Math.max(0, pairingRemaining.value - 1);

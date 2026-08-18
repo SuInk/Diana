@@ -26,7 +26,6 @@ import (
 
 const (
 	ownerPairingTTL            = 5 * time.Minute
-	ownerPairingConfirmGrace   = 2 * time.Minute
 	ownerPairingCreateDelay    = 3 * time.Second
 	ownerPairingMaxActive      = 32
 	ownerPairingMaxActivePerIP = 3
@@ -38,8 +37,6 @@ const (
 
 var (
 	ownerPairingCodePattern   = regexp.MustCompile(`^(?:登录(?:控制台)?\s*)?(\d{6})$`)
-	ownerPairingConfirmMatch  = regexp.MustCompile(`^(?:确认|同意)\s*(\d{6})?$`)
-	ownerPairingCancelMatch   = regexp.MustCompile(`^(?:取消|拒绝|不是我)\s*(\d{6})?$`)
 	ownerChallengeCodePattern = regexp.MustCompile(`^\d{6}$`)
 )
 
@@ -49,26 +46,13 @@ type OwnerLoginRuntime interface {
 	CallOneBotAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error)
 }
 
-// ownerPairingState 描述一次私聊确认登录所处的阶段。
-type ownerPairingState int
-
-const (
-	// ownerPairingPending 表示网页已显示验证码，等待主人私聊发回。
-	ownerPairingPending ownerPairingState = iota
-	// ownerPairingAwaitingConfirm 表示主人已发回验证码，机器人已告知来源信息，
-	// 正在等待主人二次确认。停在这一步是为了让主人看见「是谁在登录」——
-	// 只凭一串数字批准，等于让主人盲签。
-	ownerPairingAwaitingConfirm
-	ownerPairingApproved
-)
-
 type ownerPairing struct {
 	tokenHash  string
 	codeHash   string
 	requestIP  string
 	deviceName string
 	expiresAt  time.Time
-	state      ownerPairingState
+	approved   bool
 }
 
 type ownerChallenge struct {
@@ -372,7 +356,6 @@ func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
 		requestIP:  requestIP,
 		deviceName: metadata.DeviceName,
 		expiresAt:  now.Add(ownerPairingTTL),
-		state:      ownerPairingPending,
 	}
 	h.codeIndex[codeHash] = tokenHash
 	h.lastCreated[requestIP] = now
@@ -410,13 +393,11 @@ func (h *OwnerLoginHandler) pollPairing(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"approved": false, "expired": true})
 		return
 	}
-	if pairing.state != ownerPairingApproved {
+	if !pairing.approved {
 		remaining := max(0, int(time.Until(pairing.expiresAt).Seconds()))
-		awaiting := pairing.state == ownerPairingAwaitingConfirm
 		h.mu.Unlock()
 		c.JSON(http.StatusOK, gin.H{
 			"approved":           false,
-			"awaiting_confirm":   awaiting,
 			"expires_in_seconds": remaining,
 		})
 		return
@@ -436,9 +417,8 @@ func (h *OwnerLoginHandler) pollPairing(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"approved": true})
 }
 
-// ConsumePrivateMessage 处理主人私聊里的登录配对流程：先是网页上的 6 位验证码，
-// 机器人回问来源信息，主人再回「确认」才真正放行。返回 true 表示这条消息属于
-// 登录流程、不应再交给对话逻辑。
+// ConsumePrivateMessage 消费主人私聊发来的登录验证码：验证码一到就放行，并回一条
+// 带来源信息的回执。返回 true 表示这条消息属于登录流程、不应再交给对话逻辑。
 func (h *OwnerLoginHandler) ConsumePrivateMessage(ctx context.Context, event assistant.MessageEvent, text string) bool {
 	if event.Kind != assistant.EventKindPrivate {
 		return false
@@ -450,138 +430,34 @@ func (h *OwnerLoginHandler) ConsumePrivateMessage(ctx context.Context, event ass
 	if strings.TrimSpace(event.UserID) != strings.TrimSpace(cfg.OwnerID) {
 		return false
 	}
-	trimmed := strings.TrimSpace(text)
+	match := ownerPairingCodePattern.FindStringSubmatch(strings.TrimSpace(text))
+	if len(match) != 2 {
+		return false
+	}
 
-	if match := ownerPairingCancelMatch.FindStringSubmatch(trimmed); len(match) == 2 {
-		return h.cancelPairing(ctx, cfg, event, match[1])
-	}
-	if match := ownerPairingConfirmMatch.FindStringSubmatch(trimmed); len(match) == 2 {
-		return h.confirmPairing(ctx, cfg, event, match[1])
-	}
-	if match := ownerPairingCodePattern.FindStringSubmatch(trimmed); len(match) == 2 {
-		return h.challengePairing(ctx, cfg, event, match[1])
-	}
-	return false
-}
-
-// challengePairing 收下主人发回的验证码，转入等待确认并告知来源信息。
-func (h *OwnerLoginHandler) challengePairing(ctx context.Context, cfg assistant.BotConfig, event assistant.MessageEvent, code string) bool {
 	now := time.Now()
-	codeHash := hashOwnerCode(code)
-
 	h.mu.Lock()
 	h.cleanupLocked(now)
-	pairing := h.pairings[h.codeIndex[codeHash]]
-	if pairing == nil || pairing.state != ownerPairingPending {
+	pairing := h.pairings[h.codeIndex[hashOwnerCode(match[1])]]
+	if pairing == nil || pairing.approved {
 		h.mu.Unlock()
 		// 不是登录码就交回对话逻辑，免得把主人正常聊天里的数字吞掉。
 		return false
 	}
-	pairing.state = ownerPairingAwaitingConfirm
-	if deadline := now.Add(ownerPairingConfirmGrace); pairing.expiresAt.Before(deadline) {
-		// 主人已经动作了，别让原本剩几秒的有效期把确认这一步卡死。
-		pairing.expiresAt = deadline
-	}
+	pairing.approved = true
+	delete(h.codeIndex, pairing.codeHash)
+	pairing.codeHash = ""
 	requestIP := firstNonEmptyWebUI(pairing.requestIP, "未知")
 	deviceName := firstNonEmptyWebUI(pairing.deviceName, "未知设备")
 	h.mu.Unlock()
 
-	// 消息里不回带验证码：主人刚把它发过来，网页上也一直显示着，再原样发回去
-	// 只是让这串数字多在聊天记录里躺一份。
-	message := fmt.Sprintf(
-		"检测到控制台登录请求\n来源 IP：%s\n设备：%s\n\n确认登录请回复「确认」，不是你本人请回复「取消」或直接忽略。",
-		requestIP, deviceName)
-	if err := h.notifyOwner(ctx, cfg, message); err != nil {
-		h.mu.Lock()
-		if current := h.pairings[h.codeIndex[codeHash]]; current != nil && current.state == ownerPairingAwaitingConfirm {
-			current.state = ownerPairingPending
-		}
-		h.mu.Unlock()
-		recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录确认询问发送失败："+err.Error(), event.UserID, nil)
-		return true
+	// 回执不是确认环节，主人不用做任何动作。它存在只是为了别让这条消息被静默
+	// 吞掉——万一验证码是被诱导转发的，主人当场就能发现并去踢掉会话。
+	receipt := fmt.Sprintf("已登录控制台\n来源 IP：%s\n设备：%s\n\n若非本人操作，请立刻在控制台踢掉该会话并修改密码。", requestIP, deviceName)
+	if err := h.notifyOwner(ctx, cfg, receipt); err != nil {
+		recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录回执发送失败："+err.Error(), event.UserID, nil)
 	}
-	recordOperation(ctx, h.logs, "auth.owner.pair.challenge", "已向主人询问控制台登录确认", event.UserID, nil)
-	return true
-}
-
-// confirmPairing 处理主人的「确认」。没有待确认的登录时返回 false，让「确认」
-// 这种日常用词照常走对话逻辑。
-func (h *OwnerLoginHandler) confirmPairing(ctx context.Context, cfg assistant.BotConfig, event assistant.MessageEvent, code string) bool {
-	now := time.Now()
-	h.mu.Lock()
-	h.cleanupLocked(now)
-	pending := h.awaitingPairingsLocked()
-	if len(pending) == 0 {
-		h.mu.Unlock()
-		return false
-	}
-	var target *ownerPairing
-	if code != "" {
-		if candidate := h.pairings[h.codeIndex[hashOwnerCode(code)]]; candidate != nil && candidate.state == ownerPairingAwaitingConfirm {
-			target = candidate
-		}
-	} else if len(pending) == 1 {
-		target = pending[0]
-	}
-	if target == nil {
-		h.mu.Unlock()
-		hint := "没有找到这个验证码对应的登录请求，可能已经过期了。"
-		if code == "" {
-			hint = fmt.Sprintf("当前有 %d 个待确认的登录请求，请带上网页上显示的验证码回复，例如「确认 123456」。", len(pending))
-		}
-		if err := h.notifyOwner(ctx, cfg, hint); err != nil {
-			recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录确认提示发送失败："+err.Error(), event.UserID, nil)
-		}
-		return true
-	}
-	target.state = ownerPairingApproved
-	delete(h.codeIndex, target.codeHash)
-	target.codeHash = ""
-	requestIP := firstNonEmptyWebUI(target.requestIP, "未知")
-	h.mu.Unlock()
-
-	if err := h.notifyOwner(ctx, cfg, "已确认，来自 "+requestIP+" 的浏览器正在登录控制台。"); err != nil {
-		recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录确认回执发送失败："+err.Error(), event.UserID, nil)
-	}
-	recordOperation(ctx, h.logs, "auth.owner.pair.approve", "主人已确认控制台登录", event.UserID, nil)
-	return true
-}
-
-// cancelPairing 处理主人的「取消」，让主人在发现不是本人操作时能主动拒绝，
-// 而不是干等验证码过期。
-func (h *OwnerLoginHandler) cancelPairing(ctx context.Context, cfg assistant.BotConfig, event assistant.MessageEvent, code string) bool {
-	now := time.Now()
-	h.mu.Lock()
-	h.cleanupLocked(now)
-	pending := h.awaitingPairingsLocked()
-	if len(pending) == 0 {
-		h.mu.Unlock()
-		return false
-	}
-	cancelled := 0
-	if code != "" {
-		if target := h.pairings[h.codeIndex[hashOwnerCode(code)]]; target != nil && target.state == ownerPairingAwaitingConfirm {
-			h.deletePairingLocked(target)
-			cancelled = 1
-		}
-	} else {
-		for _, target := range pending {
-			h.deletePairingLocked(target)
-			cancelled++
-		}
-	}
-	h.mu.Unlock()
-
-	message := "已取消该登录请求。"
-	if cancelled == 0 {
-		message = "没有找到这个验证码对应的登录请求，可能已经过期了。"
-	}
-	if err := h.notifyOwner(ctx, cfg, message); err != nil {
-		recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录取消回执发送失败："+err.Error(), event.UserID, nil)
-	}
-	if cancelled > 0 {
-		recordOperation(ctx, h.logs, "auth.owner.pair.cancel", "主人已取消控制台登录请求", event.UserID, nil)
-	}
+	recordOperation(ctx, h.logs, "auth.owner.pair.approve", "主人已通过私聊确认控制台登录", event.UserID, nil)
 	return true
 }
 
@@ -596,16 +472,6 @@ func (h *OwnerLoginHandler) notifyOwner(ctx context.Context, cfg assistant.BotCo
 	defer cancel()
 	_, err = h.runtime.CallOneBotAPI(sendCtx, action, params)
 	return err
-}
-
-func (h *OwnerLoginHandler) awaitingPairingsLocked() []*ownerPairing {
-	var pending []*ownerPairing
-	for _, pairing := range h.pairings {
-		if pairing.state == ownerPairingAwaitingConfirm {
-			pending = append(pending, pairing)
-		}
-	}
-	return pending
 }
 
 func (h *OwnerLoginHandler) cleanupLocked(now time.Time) {
