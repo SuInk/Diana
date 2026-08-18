@@ -153,6 +153,7 @@
           <label for="group-reply-style">表达风格</label>
           <select id="group-reply-style" v-model="editing.reply_style" class="input">
             <option value="">跟随全局</option>
+            <option value="groupmate">群友</option>
             <option value="assistant">助手</option>
             <option value="gentle">温柔</option>
             <option value="lively">活泼</option>
@@ -319,7 +320,7 @@ function responseModeLabel(mode: QQBotGroupConfig["response_mode"]): string {
 }
 
 function replyStyleLabel(style: QQBotGroupConfig["reply_style"]): string {
-  return ({ assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格" } as const)[style as "assistant" | "gentle" | "lively" | "concise"] ?? "";
+  return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格" } as const)[style as "groupmate" | "assistant" | "gentle" | "lively" | "concise"] ?? "";
 }
 
 function overrideCount(group: QQBotGroupConfig): number {
