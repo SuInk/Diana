@@ -8896,10 +8896,13 @@ func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Remin
 
 // composeRepositoryWatchMessage 把标题、变更明细和模型概括拼成一条通知。概括排在
 // 明细之后：先给确定性的事实清单，再给那句自然语言总结。
+//
+// 标题和明细之间只能用单换行：splitReply 会把空行当成分条符，用空行会让标题单独
+// 变成一条只有「GitHub 动态：仓库名」的消息。
 func composeRepositoryWatchMessage(repository, body, summary string) string {
 	message := "GitHub 动态：" + repository
 	if strings.TrimSpace(body) != "" {
-		message += "\n\n" + body
+		message += "\n" + body
 	}
 	// 模型写的那句概括是一次独立发言，用 <botbr> 让它单独成条，不要和变更明细挤在
 	// 同一条消息里。
@@ -9084,7 +9087,7 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 			}
 			lines = append(lines, line)
 		}
-		sections = append(sections, strings.Join(lines, "\n\n"))
+		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	if len(change.Releases) > 0 {
 		lines := make([]string, 0, len(change.Releases))
@@ -9146,7 +9149,9 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 		}
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
-	return strings.Join(sections, "\n\n")
+	// 同上：段落之间也只能用单换行，否则一次推送里的 Commit、PR、Release 会被拆成
+	// 好几条消息。
+	return strings.Join(sections, "\n")
 }
 
 func latestRepositoryWatchChange(change repositoryWatchChange) repositoryWatchChange {
