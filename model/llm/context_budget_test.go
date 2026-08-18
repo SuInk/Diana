@@ -280,6 +280,48 @@ func TestContextBudgetKeepsEightToolImagesTogetherAtDefaultWindow(t *testing.T) 
 	}
 }
 
+func TestContextBudgetKeepsHistoryTurnAtomic(t *testing.T) {
+	messages := []Message{
+		{Role: RoleSystem, Content: strings.Repeat("系统", 80), Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: strings.Repeat("过大的旧问题", 300), Priority: MessagePriorityHistory, ContextGroup: "old"},
+		{Role: RoleAssistant, Content: strings.Repeat("过大的旧回答", 300), Priority: MessagePriorityHistory, ContextGroup: "old"},
+		{Role: RoleUser, Content: "Melvor Idle 的深渊在哪", Priority: MessagePriorityHistory, ContextGroup: "recent"},
+		{Role: RoleAssistant, Content: "先查看地下城列表", Priority: MessagePriorityHistory, ContextGroup: "recent"},
+		{Role: RoleUser, Content: "具体入口在哪", Priority: MessagePriorityCurrent},
+	}
+	got := fitMessagesToTokenBudget(messages, 700)
+	joined := messageTextForTest(got)
+	for _, want := range []string{"Melvor Idle 的深渊在哪", "先查看地下城列表", "具体入口在哪"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("atomic recent turn missing %q: %#v", want, got)
+		}
+	}
+	if strings.Contains(joined, "过大的旧问题") || strings.Contains(joined, "过大的旧回答") {
+		t.Fatalf("oversized old turn leaked partially: %#v", got)
+	}
+}
+
+func TestContextBudgetPrefersRecentHistoryOverMemoryAndSummary(t *testing.T) {
+	messages := []Message{
+		{Role: RoleSystem, Content: strings.Repeat("系统", 60), Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: strings.Repeat("长期记忆", 100), Priority: MessagePriorityMemory},
+		{Role: RoleUser, Content: strings.Repeat("旧摘要", 100), Priority: MessagePrioritySummary},
+		{Role: RoleUser, Content: "刚才用户说密码是 2468", Priority: MessagePriorityRecentHistory, ContextGroup: "recent"},
+		{Role: RoleAssistant, Content: "我记住了密码 2468", Priority: MessagePriorityRecentHistory, ContextGroup: "recent"},
+		{Role: RoleUser, Content: "我刚说的密码是什么", Priority: MessagePriorityCurrent},
+	}
+	got := fitMessagesToTokenBudget(messages, 360)
+	joined := messageTextForTest(got)
+	for _, want := range []string{"刚才用户说密码是 2468", "我记住了密码 2468", "我刚说的密码是什么"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("recent context lost %q: %#v", want, got)
+		}
+	}
+	if strings.Count(joined, "长期记忆") >= 100 || strings.Contains(joined, "旧摘要") {
+		t.Fatalf("lower-priority context was not trimmed after recent history: %#v", got)
+	}
+}
+
 func messageTextForTest(messages []Message) string {
 	var parts []string
 	for _, message := range messages {

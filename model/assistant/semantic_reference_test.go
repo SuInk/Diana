@@ -222,7 +222,7 @@ func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
 	if got := strings.Join(actualImages, ","); got != strings.Join(imageURLs, ",") {
 		t.Fatalf("multimodal images = %#v", actualImages)
 	}
-	if !strings.Contains(prompt, "3 条历史来源") || !strings.Contains(prompt, "逐张查看") || strings.Contains(message.Content, "[图片]") {
+	if (!strings.Contains(prompt, "3 张来源图片") && !strings.Contains(prompt, "实际附加 3 张可读取图片")) || !strings.Contains(prompt, "逐张查看") || strings.Contains(prompt, "3 条文字来源") || strings.Contains(message.Content, "[图片]") {
 		t.Fatalf("current prompt = %q", prompt)
 	}
 	if text := historyPromptText(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURLs[0]}}}, RawMessage: "[图片]"}); text != "" {
