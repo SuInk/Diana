@@ -148,7 +148,6 @@
               <div class="cluster" style="justify-content: space-between; gap: 8px">
                 <span class="cluster" style="gap: 7px">
                   <a class="mono changelog-sha" :href="release.url" target="_blank" rel="noreferrer">{{ release.tag }}</a>
-                  <strong v-if="release.name && release.name !== release.tag" style="font-size: 13px">{{ release.name }}</strong>
                   <span v-if="release.tag === currentTag" class="badge ok">当前</span>
                   <span v-if="release.prerelease" class="badge warn">预发布</span>
                 </span>
