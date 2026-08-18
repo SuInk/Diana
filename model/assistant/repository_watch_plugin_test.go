@@ -912,3 +912,56 @@ func TestRepositoryWatchRecoveryNoticeStaysPendingUntilAcknowledged(t *testing.T
 		t.Fatalf("pending recovery notice was lost before acknowledgement: %#v", second)
 	}
 }
+
+func TestRenderRepositoryWatchChangesGroupsASingleCommitAuthor(t *testing.T) {
+	pushedAt := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	change := repositoryWatchChange{
+		Commits: []repositoryWatchCommit{
+			{SHA: "3e3f03f834c", Title: "合并 PR #85", Author: "SuInk", URL: "https://example.test/1", PushedAt: pushedAt},
+			{SHA: "230a9ca81b8", Title: "回复截断改为在句尾收束", Author: "SuInk", URL: "https://example.test/2", PushedAt: pushedAt},
+		},
+	}
+	result := renderRepositoryWatchChanges(change)
+	if !strings.Contains(result, "Commit（默认分支） · 作者 SuInk") {
+		t.Fatalf("shared author missing from the section header: %s", result)
+	}
+	if strings.Contains(result, "作者：SuInk") {
+		t.Fatalf("shared author should not repeat per commit: %s", result)
+	}
+	if !strings.Contains(result, "提交于 "+formatRepositoryWatchTime(pushedAt)) {
+		t.Fatalf("commit time missing: %s", result)
+	}
+}
+
+func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *testing.T) {
+	pushedAt := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	change := repositoryWatchChange{
+		Commits: []repositoryWatchCommit{
+			{SHA: "1111111aaaa", Title: "first", Author: "alice", PushedAt: pushedAt},
+			{SHA: "2222222bbbb", Title: "second", Author: "bob", PushedAt: pushedAt},
+		},
+	}
+	result := renderRepositoryWatchChanges(change)
+	if strings.Contains(result, "· 作者 ") {
+		t.Fatalf("mixed authors should not be hoisted into the header: %s", result)
+	}
+	for _, want := range []string{"alice · 提交于 ", "bob · 提交于 "} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("rendered changes missing %q: %s", want, result)
+		}
+	}
+}
+
+func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
+	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
+	wantPrefix := "GitHub 动态 · SuInk/Diana\n\nCommit（默认分支）"
+	if !strings.HasPrefix(message, wantPrefix) {
+		t.Fatalf("message = %q, want prefix %q", message, wantPrefix)
+	}
+	if !strings.HasSuffix(message, "刚更新了回复风格与语气控制。") {
+		t.Fatalf("summary is not last: %q", message)
+	}
+	if got := composeRepositoryWatchMessage("SuInk/Diana", "", ""); got != "GitHub 动态 · SuInk/Diana" {
+		t.Fatalf("empty change message = %q", got)
+	}
+}

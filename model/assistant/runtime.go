@@ -8873,15 +8873,20 @@ func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Remin
 			summary = strings.TrimSpace(reply)
 		}
 	}
-	body := renderRepositoryWatchChanges(change)
-	parts := []string{"GitHub 动态 · " + item.Repository}
-	if summary != "" {
-		parts = append(parts, summary)
-	}
-	if body != "" {
+	return composeRepositoryWatchMessage(item.Repository, renderRepositoryWatchChanges(change), summary), nil
+}
+
+// composeRepositoryWatchMessage 把标题、变更明细和模型概括拼成一条通知。概括排在
+// 明细之后：先给确定性的事实清单，再给那句自然语言总结。
+func composeRepositoryWatchMessage(repository, body, summary string) string {
+	parts := []string{"GitHub 动态 · " + repository}
+	if strings.TrimSpace(body) != "" {
 		parts = append(parts, body)
 	}
-	return strings.Join(parts, "\n\n"), nil
+	if strings.TrimSpace(summary) != "" {
+		parts = append(parts, summary)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func (r *Runtime) runRepositoryWatchExternalEventAgent(ctx context.Context, source MessageEvent, payload json.RawMessage) (string, error) {
@@ -8990,18 +8995,28 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 		if branch == "" {
 			branch = "默认分支"
 		}
-		lines := []string{"Commit（" + branch + "）"}
+		header := "Commit（" + branch + "）"
+		sharedAuthor := repositoryWatchSharedCommitAuthor(change.Commits)
+		if sharedAuthor != "" {
+			header += " · 作者 " + sharedAuthor
+		}
+		lines := []string{header}
 		for _, commit := range change.Commits {
 			sha := strings.TrimSpace(commit.SHA)
 			if len(sha) > 7 {
 				sha = sha[:7]
 			}
 			line := sha + " " + strings.TrimSpace(commit.Title)
-			if author := strings.TrimSpace(commit.Author); author != "" {
-				line += "\n作者：" + author
+			// 作者只在本批提交来自不同人时逐条标注；全部同一个人时已经写进标题行。
+			meta := make([]string, 0, 2)
+			if author := strings.TrimSpace(commit.Author); author != "" && sharedAuthor == "" {
+				meta = append(meta, author)
 			}
 			if pushedAt := formatRepositoryWatchTime(commit.PushedAt); pushedAt != "" {
-				line += "\n提交于 " + pushedAt
+				meta = append(meta, "提交于 "+pushedAt)
+			}
+			if len(meta) > 0 {
+				line += "\n" + strings.Join(meta, " · ")
 			}
 			if url := strings.TrimSpace(commit.URL); url != "" {
 				line += "\n" + url
@@ -9125,6 +9140,26 @@ func latestRepositoryWatchChange(change repositoryWatchChange) repositoryWatchCh
 		latest.Releases = append([]repositoryWatchRelease(nil), change.Releases[0])
 	}
 	return latest
+}
+
+// repositoryWatchSharedCommitAuthor 返回本批提交共同的作者；提交者不一致或存在
+// 缺失作者时返回空字符串，交由每条提交单独标注。
+func repositoryWatchSharedCommitAuthor(commits []repositoryWatchCommit) string {
+	shared := ""
+	for _, commit := range commits {
+		author := strings.TrimSpace(commit.Author)
+		if author == "" {
+			return ""
+		}
+		if shared == "" {
+			shared = author
+			continue
+		}
+		if author != shared {
+			return ""
+		}
+	}
+	return shared
 }
 
 func formatRepositoryWatchTime(value time.Time) string {
