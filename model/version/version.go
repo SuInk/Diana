@@ -18,6 +18,23 @@ var sourceVersion string
 // devSuffix 标记版本号来自源码基线而不是正式 Release 构建。
 const devSuffix = "-dev"
 
+const (
+	// BuildTypeRelease 表示构建期注入了正式版本号的 Release 产物。
+	BuildTypeRelease = "release"
+	// BuildTypeSource 表示没有注入正式版本号的源码构建。
+	BuildTypeSource = "source"
+)
+
+// BuildType 判断当前二进制是正式 Release 构建还是源码构建。
+// 只有构建期注入了语义化版本号才算 Release 构建；
+// 源码构建不参与自动更新，只能由用户显式切换到正式版本。
+func BuildType(injected string) string {
+	if IsSemantic(injected) {
+		return BuildTypeRelease
+	}
+	return BuildTypeSource
+}
+
 // Source 返回源码树声明的版本基线。
 func Source() string {
 	return strings.TrimSpace(sourceVersion)

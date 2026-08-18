@@ -266,6 +266,76 @@ func TestSystemUpdateHandlerReleaseDownloadAllowsUnknownCurrentVersion(t *testin
 	}
 }
 
+// TestSystemUpdateHandlerSourceBuildOffersReleaseSwitch 验证 Release 目录下的源码构建
+// 不提示更新，而是给出显式切换到正式 Release 的入口。
+func TestSystemUpdateHandlerSourceBuildOffersReleaseSwitch(t *testing.T) {
+	const assetName = "diana-webui-darwin-arm64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v0.8.7","published_at":"2026-08-09T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz","size":1234}]}]`))
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		expected: assetName,
+		status:   updater.Status{NearestTag: "v0.8.7-dev", RunningCommit: "v0.8.7-dev", ApplySupported: true},
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.SetBuildVersion("v0.8.7-dev")
+	handler.SetBuildType("source")
+	handler.githubAPIBase = github.URL
+	router := systemUpdateTestRouter(handler)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/system/update/check", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"build_type":"source"`) || !strings.Contains(body, `"switch_to_release_available":true`) || !strings.Contains(body, `"update_available":false`) {
+		t.Fatalf("body = %s", body)
+	}
+
+	// 落后于正式 Release 的源码构建同样走显式切换，不会被当成普通更新。
+	handler.SetBuildVersion("v0.8.6-dev")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/system/update/check", nil))
+	if body = rec.Body.String(); !strings.Contains(body, `"update_available":false`) || !strings.Contains(body, `"switch_to_release_available":true`) {
+		t.Fatalf("outdated source build body = %s", body)
+	}
+}
+
+// TestSystemUpdateHandlerSourceBuildSkipsAutoUpdate 验证源码构建不会被后台自动替换。
+func TestSystemUpdateHandlerSourceBuildSkipsAutoUpdate(t *testing.T) {
+	const assetName = "diana-webui-darwin-arm64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v0.8.7","published_at":"2026-08-09T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz","size":1234}]}]`))
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		expected: assetName,
+		status:   updater.Status{NearestTag: "v0.8.6-dev", RunningCommit: "v0.8.6-dev", ApplySupported: true},
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.SetBuildVersion("v0.8.6-dev")
+	handler.SetBuildType("source")
+	handler.githubAPIBase = github.URL
+
+	handler.runAutoUpdate(context.Background())
+	if releaseUpdater.downloaded {
+		t.Fatal("source build must not auto download a release package")
+	}
+
+	// 正式构建保持原有的自动下载行为。
+	handler.SetBuildType("release")
+	handler.runAutoUpdate(context.Background())
+	if !releaseUpdater.downloaded {
+		t.Fatal("release build should still auto download")
+	}
+}
+
 func TestSystemUpdateHandlerDownloadsThenInstallsCompleteReleasePackage(t *testing.T) {
 	const assetName = "diana-webui-darwin-arm64.tar.gz"
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
