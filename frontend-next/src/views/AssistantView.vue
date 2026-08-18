@@ -295,6 +295,7 @@
               <div class="field">
                 <label for="bot-reply-style">表达风格</label>
                 <select id="bot-reply-style" v-model="form.reply_style" class="input">
+                  <option value="groupmate">群友</option>
                   <option value="assistant">助手</option>
                   <option value="gentle">温柔</option>
                   <option value="lively">活泼</option>
