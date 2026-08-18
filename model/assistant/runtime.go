@@ -209,6 +209,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
 	case "dropped_outbound_delivery":
 		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
+	case inboundOutcomeRetriesExhausted:
+		return "error", "这条消息连续处理失败并已达到重试上限，队列已停止重试；已成功发出的分片不会重复发送", false
 	case "processing_error":
 		return "error", "消息处理失败，运行时将按队列策略重试", false
 	case "ignored":
@@ -7045,6 +7047,11 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	if event.Kind == EventKindGroup {
 		action = "send_group_msg"
 	}
+	// 同一条入站事件重跑时，已经成功送达的这一步不再发第二遍。
+	stepKey, replayedMessageID, alreadyDelivered := r.claimOutboundStep(ctx, outgoingMessageFingerprint(msg))
+	if alreadyDelivered {
+		return replayedOutboundResult(replayedMessageID), nil
+	}
 	r.recordInboundDelivery(event, OutboundDeliveryGenerated, "", "")
 	r.recordInboundDelivery(event, OutboundDeliverySendAttempted, "", "")
 	result, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
@@ -7062,6 +7069,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	if r.outboundResultAcknowledged(event, result) {
 		r.recordInboundDelivery(event, OutboundDeliveryAcknowledged, messageID, "")
 	}
+	r.recordOutboundStep(ctx, stepKey, messageID)
 	r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)
 	return result, nil
 }
@@ -7567,11 +7575,17 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 		senderName = "Diana"
 	}
 	senderUIN := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotQQ), "0")
+	stepKey, replayedMessageID, alreadyDelivered := r.claimOutboundStep(ctx, fingerprintOf(
+		"forward", string(event.Kind), event.GroupID, event.UserID, senderName, senderUIN, strings.Join(chunks, "\x00")))
+	if alreadyDelivered {
+		return replayedMessageID, nil
+	}
 	result, err := r.sendForwardNodesWithResult(ctx, event, buildForwardNodes(chunks, senderName, senderUIN))
 	if err != nil {
 		return "", err
 	}
 	messageID := apiMessageID(result)
+	r.recordOutboundStep(ctx, stepKey, messageID)
 	r.rememberOutgoingWithMessageID(ctx, event, OutgoingMessage{Text: strings.Join(chunks, "\n")}, messageID)
 	return messageID, nil
 }
