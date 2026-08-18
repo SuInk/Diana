@@ -685,6 +685,7 @@ func historyTestMessage(messageID int64, eventTime int64, text string) map[strin
 type memoryInboundRecord struct {
 	item       InboundQueueItem
 	state      string
+	outcome    string
 	leaseOwner string
 }
 
@@ -759,10 +760,11 @@ type memoryInboundEventStore struct {
 	audits     []EventRecord
 	media      []MessageEvent
 	superseded map[string]string
+	steps      map[string]string
 }
 
 func newMemoryInboundEventStore() *memoryInboundEventStore {
-	return &memoryInboundEventStore{records: map[string]*memoryInboundRecord{}, superseded: map[string]string{}}
+	return &memoryInboundEventStore{records: map[string]*memoryInboundRecord{}, superseded: map[string]string{}, steps: map[string]string{}}
 }
 
 func (s *memoryInboundEventStore) ClaimInboundMediaForTurn(_ context.Context, currentID, _ string, _ MessageEvent, _ time.Duration) ([]MessageEvent, error) {
@@ -839,12 +841,41 @@ func (s *memoryInboundEventStore) ClaimNextInboundEvent(_ context.Context, lease
 	return record.item, true, nil
 }
 
-func (s *memoryInboundEventStore) CompleteInboundEvent(_ context.Context, id string, leaseOwner string, _ string) error {
+func (s *memoryInboundEventStore) CompleteInboundEvent(_ context.Context, id string, leaseOwner string, outcome string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if record := s.records[id]; record != nil && record.state == "processing" && record.leaseOwner == leaseOwner {
 		record.state = "done"
+		record.outcome = outcome
 		record.leaseOwner = ""
+	}
+	return nil
+}
+
+func (s *memoryInboundEventStore) OutboundStepDelivered(_ context.Context, turnID, stepKey string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	messageID, ok := s.steps[turnID+"\x00"+stepKey]
+	return messageID, ok, nil
+}
+
+func (s *memoryInboundEventStore) RecordOutboundStep(_ context.Context, turnID, stepKey, messageID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.steps == nil {
+		s.steps = map[string]string{}
+	}
+	s.steps[turnID+"\x00"+stepKey] = messageID
+	return nil
+}
+
+func (s *memoryInboundEventStore) ClearOutboundSteps(_ context.Context, turnID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.steps {
+		if strings.HasPrefix(key, turnID+"\x00") {
+			delete(s.steps, key)
+		}
 	}
 	return nil
 }
