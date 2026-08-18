@@ -236,6 +236,10 @@ func TestOwnerPairingRequiresSecondConfirmation(t *testing.T) {
 	if len(sent) != 1 || !strings.Contains(sent[0], "192.0.2.1") || !strings.Contains(sent[0], "确认") {
 		t.Fatalf("owner was not told who is logging in: %+v", sent)
 	}
+	// 验证码只在网页上显示，机器人不把它回声一遍。
+	if strings.Contains(sent[0], code) {
+		t.Fatalf("confirmation prompt echoed the code back: %q", sent[0])
+	}
 
 	if !ownerPrivateMessage(handler, "确认 "+code) {
 		t.Fatal("confirmation was not consumed")
