@@ -178,7 +178,7 @@ func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
 	semantic := semanticReferencePromptContext{Requested: 6, Resolved: 6, TextSources: 6}
 	sources := semanticReferenceContext{RequestedSourceCount: 6, ResolvedSourceCount: 6, TextSourceCount: 6, AttachedImageCount: 0, MissingSourceCount: 0}
 
-	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, semantic, sources)
+	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, semantic, sources, false)
 
 	entries := logs.entriesSnapshot()
 	if len(entries) != 1 || entries[0].Action != "qqbot.context_budget" {
@@ -251,6 +251,7 @@ func TestRecordPromptContextBudgetStaysSilentWithoutDebugMode(t *testing.T) {
 		nil,
 		semanticReferencePromptContext{},
 		semanticReferenceContext{},
+		false,
 	)
 	if entries := logs.entriesSnapshot(); len(entries) != 0 {
 		t.Fatalf("debug mode is off, expected no trace, got %+v", entries)
