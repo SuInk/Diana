@@ -954,7 +954,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingMergedForward,
 				Label:       "合并转发发送",
-				Description: "解析出的图集和多段内容打包成一条合并转发，避免刷屏；关闭后逐条直接发送。",
+				Description: "开启后把图集和多段内容打包成合并转发；关闭后按原来的普通消息发送，不生成转发卡片。",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
 			},

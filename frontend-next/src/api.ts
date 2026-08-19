@@ -438,6 +438,7 @@ export interface QQBotEvent {
   platform?: string;
   profile_id?: string;
   user_id?: string;
+  sender_name?: string;
   group_id?: string;
   message_id?: string;
   text?: string;

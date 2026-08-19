@@ -81,6 +81,25 @@ func TestResolverPluginCurrentMediaPathAlwaysBuildsMergedForward(t *testing.T) {
 	}
 }
 
+func TestResolverPluginMergedForwardSettingControlsDelivery(t *testing.T) {
+	t.Setenv("DIANA_DOUYIN_CK", "")
+	t.Setenv("DOUYIN_CK", "")
+	plugin := NewResolverPlugin(nil)
+	resp, err := plugin.Handle(context.Background(), PluginRequest{
+		Text: "https://www.douyin.com/video/1234567890",
+		Settings: SettingValues{
+			resolverSettingDownloadMedia: true,
+			resolverSettingMergedForward: false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if resp == nil || !resp.Handled || resp.Forward || len(resp.ForwardMessages) != 1 {
+		t.Fatalf("response = %#v", resp)
+	}
+}
+
 func TestResolverDefaultVideoLimitsAreFifteenMinutesAndTwoHundredMB(t *testing.T) {
 	t.Setenv("DIANA_RESOLVER_VIDEO_MAX_MB", "")
 	t.Setenv("DIANA_RESOLVER_VIDEO_MAX_DURATION", "")
