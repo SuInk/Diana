@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
@@ -9838,15 +9839,35 @@ func splitReply(reply string, chunkSize int) []string {
 		for _, part := range splitReplyParagraphs(botPart) {
 			runes := []rune(strings.TrimSpace(part))
 			for len(runes) > chunkSize {
-				out = append(out, strings.TrimSpace(string(runes[:chunkSize])))
-				runes = runes[chunkSize:]
+				cut := replyChunkCut(runes, chunkSize)
+				out = append(out, strings.TrimSpace(string(runes[:cut])))
+				runes = runes[cut:]
 			}
-			if len(runes) > 0 {
-				out = append(out, strings.TrimSpace(string(runes)))
+			if trimmed := strings.TrimSpace(string(runes)); trimmed != "" {
+				out = append(out, trimmed)
 			}
 		}
 	}
 	return out
+}
+
+// replyChunkCut 给超长段落找一个体面的切分点：优先窗口内最后一个换行，退而
+// 求其次找空白，都没有才按字数硬切。硬切会把排行榜这类逐行列表从人名中间
+// 劈开，拆成「9. t」和「：0（初识）」两条消息。只在窗口后 2/3 内回退，免得
+// 某行特别长时切出一堆碎条。
+func replyChunkCut(runes []rune, chunkSize int) int {
+	floor := chunkSize / 3
+	for i := chunkSize; i > floor; i-- {
+		if runes[i-1] == '\n' {
+			return i
+		}
+	}
+	for i := chunkSize; i > floor; i-- {
+		if unicode.IsSpace(runes[i-1]) {
+			return i
+		}
+	}
+	return chunkSize
 }
 
 func splitReplyParagraphs(reply string) []string {
