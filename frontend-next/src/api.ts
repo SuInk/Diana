@@ -1223,6 +1223,7 @@ export interface AssistantEventDetail extends QQBotEvent {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  cached_input_tokens?: number;
   decision: "replied" | "not_replied" | "pending" | "error" | string;
   reason: string;
   delivery_stage?: "generated" | "send_attempted" | "acknowledged" | "echo_persisted" | "failed" | string;
@@ -1251,6 +1252,7 @@ export interface AssistantEventsResponse {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cached_input_tokens: number;
   page: number;
   limit: number;
   has_more: boolean;
