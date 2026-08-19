@@ -3167,9 +3167,9 @@ func (r *Runtime) deliverResolverResponse(ctx context.Context, event MessageEven
 			return "", err
 		}
 	case len(resp.ForwardMessages) > 0:
-		// 合并转发被关掉时逐条直发原有节点：节点里除了正文和媒体还有下载失败
-		// 提示等补充内容，退回 Reply/ImageURLs 字段会把这些弄丢。
-		if err := r.sendResolverMessagesDirect(ctx, event, resp.ForwardMessages); err != nil {
+		// 关闭合并转发时恢复原来的普通消息投递：正文和图集作为一条消息发送，
+		// 不继续逐条发送转发节点，否则开关前后的视觉差异很小且仍会刷屏。
+		if err := r.sendDirectPluginResponse(ctx, event, reply, resp.ImageURLs, resp.VideoURLs); err != nil {
 			return "", err
 		}
 	default:
