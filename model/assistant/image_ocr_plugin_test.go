@@ -20,17 +20,22 @@ import (
 )
 
 type imageOCRFakeProvider struct {
-	calls    atomic.Int32
-	lastReq  llm.GenerateRequest
-	response string
-	err      error
+	calls   atomic.Int32
+	lastReq llm.GenerateRequest
+	// responses 按调用顺序逐个返回（仅文字模式下先描述后转写）；耗尽后回落到 response。
+	responses []string
+	response  string
+	err       error
 }
 
 func (p *imageOCRFakeProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	p.calls.Add(1)
+	n := int(p.calls.Add(1))
 	p.lastReq = req
 	if p.err != nil {
 		return nil, p.err
+	}
+	if n <= len(p.responses) {
+		return &llm.GenerateResponse{Text: p.responses[n-1]}, nil
 	}
 	return &llm.GenerateResponse{Text: p.response}, nil
 }
@@ -258,6 +263,153 @@ func TestImageOCRHTTPBackendParsesRecTxtFields(t *testing.T) {
 	notice := runtime.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage(imageURL))
 	if !strings.Contains(notice, "识别行A\n识别行B") {
 		t.Fatalf("notice = %q", notice)
+	}
+}
+
+func llmMessageHasImages(message llm.Message) bool {
+	for _, part := range message.Parts {
+		if part.Type == llm.ContentPartImageURL {
+			return true
+		}
+	}
+	return false
+}
+
+// 仅文字模式（LLM 描述 + OCR 组合）：图片从消息里摘掉，换成画面描述加转写文
+// 本，消息不再含图片，也就不会再路由到 vision 分组。
+func TestImageOCRTextOnlyCombinesDescriptionAndTranscript(t *testing.T) {
+	provider := &imageOCRFakeProvider{responses: []string{"一张对话截图", "你好，在吗？"}}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{
+		"backend": imageOCRBackendLLM, "delivery": imageOCRDeliveryText,
+	})
+	message := imageOCRTestMessage("data:image/png;base64,AAA")
+
+	adjusted := runtime.imageOCRAdjustMessage(context.Background(), MessageEvent{Kind: EventKindGroup}, message)
+	if llmMessageHasImages(adjusted) {
+		t.Fatalf("text-only message still carries images: %#v", adjusted.Parts)
+	}
+	if messagesContainImages([]llm.Message{adjusted}) {
+		t.Fatal("adjusted message would still route to vision group")
+	}
+	content := adjusted.Content
+	if !strings.Contains(content, "画面描述：一张对话截图") || !strings.Contains(content, "图中文字：\n你好，在吗？") {
+		t.Fatalf("content = %q", content)
+	}
+	if !strings.Contains(content, "【图片消息】") {
+		t.Fatalf("missing text-only header: %q", content)
+	}
+	if provider.calls.Load() != 2 {
+		t.Fatalf("provider calls = %d, want 2 (describe + transcribe)", provider.calls.Load())
+	}
+	// 原始文本要保留在替换后的消息里。
+	if !strings.Contains(content, "看看这张图") {
+		t.Fatalf("original text lost: %q", content)
+	}
+}
+
+// 仅文字模式 + 关闭画面描述 = 纯 OCR：只烧一次转写调用。
+func TestImageOCRTextOnlyOCROnly(t *testing.T) {
+	provider := &imageOCRFakeProvider{response: "只有转写文字"}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{
+		"backend": imageOCRBackendLLM, "delivery": imageOCRDeliveryText, "describe_enabled": false,
+	})
+
+	adjusted := runtime.imageOCRAdjustMessage(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage("data:image/png;base64,BBB"))
+	if llmMessageHasImages(adjusted) {
+		t.Fatal("images not stripped")
+	}
+	if !strings.Contains(adjusted.Content, "图中文字：\n只有转写文字") || strings.Contains(adjusted.Content, "画面描述") {
+		t.Fatalf("content = %q", adjusted.Content)
+	}
+	if provider.calls.Load() != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls.Load())
+	}
+}
+
+// 仅文字模式 + 关闭 OCR 后端 = 纯 LLM 描述：不支持看图的主模型只拿画面描述。
+func TestImageOCRTextOnlyDescriptionOnly(t *testing.T) {
+	provider := &imageOCRFakeProvider{response: "夕阳下的海边照片"}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{
+		"backend": imageOCRBackendDisabled, "delivery": imageOCRDeliveryText,
+	})
+
+	adjusted := runtime.imageOCRAdjustMessage(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage("data:image/png;base64,CCC"))
+	if llmMessageHasImages(adjusted) {
+		t.Fatal("images not stripped")
+	}
+	if !strings.Contains(adjusted.Content, "画面描述：夕阳下的海边照片") || strings.Contains(adjusted.Content, "图中文字") {
+		t.Fatalf("content = %q", adjusted.Content)
+	}
+	if provider.calls.Load() != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls.Load())
+	}
+}
+
+// 仅文字模式下描述和 OCR 都关掉等于没配置，插件不动消息。
+func TestImageOCRTextOnlyInactiveWithoutAnyRecognizer(t *testing.T) {
+	provider := &imageOCRFakeProvider{response: "不该被调用"}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{
+		"backend": imageOCRBackendDisabled, "delivery": imageOCRDeliveryText, "describe_enabled": false,
+	})
+	message := imageOCRTestMessage("data:image/png;base64,DDD")
+
+	adjusted := runtime.imageOCRAdjustMessage(context.Background(), MessageEvent{Kind: EventKindGroup}, message)
+	if !llmMessageHasImages(adjusted) || provider.calls.Load() != 0 {
+		t.Fatalf("message was touched: %#v, calls = %d", adjusted.Parts, provider.calls.Load())
+	}
+}
+
+// 识别全挂时也要把图摘掉并留占位说明——不支持看图的模型不能收到图片，
+// 也不该对着凭空消失的图片瞎猜。
+func TestImageOCRTextOnlyKeepsPlaceholderOnFailure(t *testing.T) {
+	provider := &imageOCRFakeProvider{err: errors.New("vision down")}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{
+		"backend": imageOCRBackendLLM, "delivery": imageOCRDeliveryText,
+	})
+
+	adjusted := runtime.imageOCRAdjustMessage(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage("data:image/png;base64,EEE"))
+	if llmMessageHasImages(adjusted) {
+		t.Fatal("images not stripped on failure")
+	}
+	if !strings.Contains(adjusted.Content, "未能识别出这张图的内容") {
+		t.Fatalf("content = %q", adjusted.Content)
+	}
+}
+
+// 仅文字模式下多图逐张编号，超出上限的图要交代数量。
+func TestImageOCRTextOnlyNumbersImagesAndReportsOverflow(t *testing.T) {
+	provider := &imageOCRFakeProvider{response: "内容"}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{
+		"backend": imageOCRBackendLLM, "delivery": imageOCRDeliveryText, "describe_enabled": false, "max_images": 2,
+	})
+
+	adjusted := runtime.imageOCRAdjustMessage(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage("data:a", "data:b", "data:c"))
+	content := adjusted.Content
+	if !strings.Contains(content, "第 1 张图") || !strings.Contains(content, "第 2 张图") {
+		t.Fatalf("content = %q", content)
+	}
+	if !strings.Contains(content, "另有 1 张图") {
+		t.Fatalf("overflow note missing: %q", content)
+	}
+	if llmMessageHasImages(adjusted) {
+		t.Fatal("overflow images must be stripped too")
+	}
+}
+
+// 默认交付方式（图片+文字）不受画面描述开关影响，仍是原来的随图附带转写。
+func TestImageOCRAttachModeKeepsImages(t *testing.T) {
+	provider := &imageOCRFakeProvider{response: "随图文字"}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{"backend": imageOCRBackendLLM})
+
+	adjusted := runtime.imageOCRAdjustMessage(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage("data:image/png;base64,FFF"))
+	if !llmMessageHasImages(adjusted) {
+		t.Fatal("attach mode must keep images")
+	}
+	if !strings.Contains(adjusted.Content, "图片文字转写") || !strings.Contains(adjusted.Content, "随图文字") {
+		t.Fatalf("content = %q", adjusted.Content)
+	}
+	if provider.calls.Load() != 1 {
+		t.Fatalf("provider calls = %d, want 1 (no describe call in attach mode)", provider.calls.Load())
 	}
 }
 

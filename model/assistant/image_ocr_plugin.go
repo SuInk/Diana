@@ -34,9 +34,14 @@ const (
 	imageOCRBackendLLM      = "llm"
 	imageOCRBackendLocal    = "local"
 	imageOCRBackendHTTP     = "http"
-	imageOCRNoTextMarker    = "[无可辨文字]"
-	imageOCRCacheCap        = 128
-	imageOCRPerImageMax     = 2000
+	// 交付方式：默认图片和识别文字一起给对话模型；「仅文字」把图片从消息里
+	// 摘掉、换成识别文本，让不支持看图的对话模型也能处理图片消息（消息里没
+	// 有图片后也不会再切到 vision 分组）。
+	imageOCRDeliveryAttach = "attach"
+	imageOCRDeliveryText   = "text"
+	imageOCRNoTextMarker   = "[无可辨文字]"
+	imageOCRCacheCap       = 128
+	imageOCRPerImageMax    = 2000
 )
 
 type ImageOCRPlugin struct {
@@ -56,16 +61,21 @@ func NewImageOCRPlugin(client *http.Client) *ImageOCRPlugin {
 func (p *ImageOCRPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.0",
-		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型。对话模型读图上文字能力弱时可作补充；可走 LLM 配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。",
+		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型；对话模型读图上文字能力弱时可作补充。转写可走 LLM 配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。对话模型不支持看图时，可把交付方式改为「仅识别文字」：图片不再交给对话模型，改为 vision 分组的画面描述加 OCR 文字（两者可各自开关，组合或单用）。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "llm:generate"},
 		Settings: []PluginSettingSpec{
-			{Key: "backend", Label: "转写方式", Type: PluginSettingTypeSelect, Default: imageOCRBackendDisabled, Options: []PluginSettingOption{
+			{Key: "backend", Label: "文字转写方式", Type: PluginSettingTypeSelect, Default: imageOCRBackendDisabled, Options: []PluginSettingOption{
 				{Value: imageOCRBackendDisabled, Label: "关闭"},
 				{Value: imageOCRBackendLLM, Label: "LLM 视觉转写（vision 分组）"},
 				{Value: imageOCRBackendHTTP, Label: "OCR 服务接口（PaddleOCR/RapidOCR 等，离线）"},
 				{Value: imageOCRBackendLocal, Label: "本地命令（tesseract 等，离线）"},
 			}},
+			{Key: "delivery", Label: "图片交付方式", Type: PluginSettingTypeSelect, Default: imageOCRDeliveryAttach, Options: []PluginSettingOption{
+				{Value: imageOCRDeliveryAttach, Label: "图片和识别文字一起给对话模型（需支持看图）"},
+				{Value: imageOCRDeliveryText, Label: "仅识别文字：不把图片给对话模型（对话模型不支持看图）"},
+			}},
+			{Key: "describe_enabled", Label: "仅文字模式下补充画面描述（vision 分组模型）", Type: PluginSettingTypeBool, Default: true},
 			{Key: "model", Label: "指定模型", Type: PluginSettingTypeString, Default: ""},
 			{Key: "http_endpoint", Label: "OCR 服务地址", Type: PluginSettingTypeString, Default: ""},
 			{Key: "http_api_key", Label: "OCR 服务 API Key", Type: PluginSettingTypeString, Default: "", Secret: true},
@@ -83,28 +93,46 @@ func (p *ImageOCRPlugin) Handle(context.Context, PluginRequest) (*PluginResponse
 }
 
 type imageOCRConfig struct {
-	Backend        string
-	Model          string
-	HTTPEndpoint   string
-	HTTPAPIKey     string
-	LocalCommand   string
-	LocalLanguages string
-	MaxImages      int
-	Timeout        time.Duration
-	PrivateEnabled bool
+	Backend         string
+	Delivery        string
+	DescribeEnabled bool
+	Model           string
+	HTTPEndpoint    string
+	HTTPAPIKey      string
+	LocalCommand    string
+	LocalLanguages  string
+	MaxImages       int
+	Timeout         time.Duration
+	PrivateEnabled  bool
+}
+
+// ocrEnabled 表示配置了可用的文字转写后端。
+func (cfg imageOCRConfig) ocrEnabled() bool {
+	return cfg.Backend == imageOCRBackendLLM || cfg.Backend == imageOCRBackendLocal || cfg.Backend == imageOCRBackendHTTP
+}
+
+func (cfg imageOCRConfig) textOnly() bool {
+	return cfg.Delivery == imageOCRDeliveryText
+}
+
+// active 表示插件对图片有事可做：有 OCR 后端，或仅文字模式下开了画面描述。
+func (cfg imageOCRConfig) active() bool {
+	return cfg.ocrEnabled() || (cfg.textOnly() && cfg.DescribeEnabled)
 }
 
 func imageOCRConfigFromSettings(v SettingValues) imageOCRConfig {
 	return imageOCRConfig{
-		Backend:        v.String("backend", imageOCRBackendDisabled),
-		Model:          strings.TrimSpace(v.String("model", "")),
-		HTTPEndpoint:   strings.TrimSpace(v.String("http_endpoint", "")),
-		HTTPAPIKey:     strings.TrimSpace(v.String("http_api_key", "")),
-		LocalCommand:   strings.TrimSpace(v.String("local_command", "tesseract")),
-		LocalLanguages: strings.TrimSpace(v.String("local_languages", "chi_sim+eng")),
-		MaxImages:      v.Int("max_images", 3),
-		Timeout:        time.Duration(v.Int("timeout_seconds", 45)) * time.Second,
-		PrivateEnabled: v.Bool("private_enabled", true),
+		Backend:         v.String("backend", imageOCRBackendDisabled),
+		Delivery:        v.String("delivery", imageOCRDeliveryAttach),
+		DescribeEnabled: v.Bool("describe_enabled", true),
+		Model:           strings.TrimSpace(v.String("model", "")),
+		HTTPEndpoint:    strings.TrimSpace(v.String("http_endpoint", "")),
+		HTTPAPIKey:      strings.TrimSpace(v.String("http_api_key", "")),
+		LocalCommand:    strings.TrimSpace(v.String("local_command", "tesseract")),
+		LocalLanguages:  strings.TrimSpace(v.String("local_languages", "chi_sim+eng")),
+		MaxImages:       v.Int("max_images", 3),
+		Timeout:         time.Duration(v.Int("timeout_seconds", 45)) * time.Second,
+		PrivateEnabled:  v.Bool("private_enabled", true),
 	}
 }
 
@@ -135,38 +163,123 @@ func imageOCRCacheKey(imageURL string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// imageOCRContextText 为当前消息里的图片生成转写文本；未启用、没有图片或全部
-// 无可辨文字时返回空串。转写失败只跳过对应图片，绝不阻断回复。
-func (r *Runtime) imageOCRContextText(ctx context.Context, event MessageEvent, message llm.Message) string {
+// imageOCRActiveConfig 取插件实例和已生效的配置；未启用、无事可做或该场景被
+// 关掉时 ok 为 false。
+func (r *Runtime) imageOCRActiveConfig(event MessageEvent) (*ImageOCRPlugin, imageOCRConfig, bool) {
 	if r.plugins == nil {
-		return ""
+		return nil, imageOCRConfig{}, false
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettings(imageOCRPluginID, r.pluginOverridesForEvent(event))
 	plugin, ok := pluginValue.(*ImageOCRPlugin)
 	if !enabled || !ok {
-		return ""
+		return nil, imageOCRConfig{}, false
 	}
 	cfg := imageOCRConfigFromSettings(settings)
-	if cfg.Backend != imageOCRBackendLLM && cfg.Backend != imageOCRBackendLocal && cfg.Backend != imageOCRBackendHTTP {
-		return ""
+	if !cfg.active() {
+		return nil, imageOCRConfig{}, false
 	}
 	if event.Kind == EventKindPrivate && !cfg.PrivateEnabled {
-		return ""
+		return nil, imageOCRConfig{}, false
 	}
+	return plugin, cfg, true
+}
 
-	var imageURLs []string
+// imageOCRMessageImageURLs 收集消息里的图片，按配置截断到单条上限。
+func imageOCRMessageImageURLs(cfg imageOCRConfig, message llm.Message) (urls []string, total int) {
 	for _, part := range message.Parts {
 		if part.Type == llm.ContentPartImageURL && strings.TrimSpace(part.ImageURL) != "" {
-			imageURLs = append(imageURLs, part.ImageURL)
+			urls = append(urls, part.ImageURL)
 		}
 	}
-	if len(imageURLs) == 0 {
-		return ""
+	total = len(urls)
+	if cfg.MaxImages > 0 && len(urls) > cfg.MaxImages {
+		urls = urls[:cfg.MaxImages]
 	}
-	if cfg.MaxImages > 0 && len(imageURLs) > cfg.MaxImages {
-		imageURLs = imageURLs[:cfg.MaxImages]
+	return urls, total
+}
+
+// imageOCRAdjustMessage 按插件配置处理当前消息里的图片：默认在图片之外附加
+// 文字转写；「仅文字」模式把图片从消息里摘掉，换成画面描述与转写文本，让不
+// 支持看图的对话模型也能处理图片消息。识别失败只影响对应图片，绝不阻断回复。
+func (r *Runtime) imageOCRAdjustMessage(ctx context.Context, event MessageEvent, message llm.Message) llm.Message {
+	plugin, cfg, ok := r.imageOCRActiveConfig(event)
+	if !ok {
+		return message
+	}
+	if !cfg.textOnly() {
+		if notice := r.imageOCRAttachNotice(ctx, event, plugin, cfg, message); notice != "" {
+			message = appendLLMMessageText(message, notice)
+		}
+		return message
 	}
 
+	imageURLs, total := imageOCRMessageImageURLs(cfg, message)
+	if total == 0 {
+		return message
+	}
+	var lines []string
+	for index, imageURL := range imageURLs {
+		var segments []string
+		if cfg.DescribeEnabled {
+			if description := r.describeContextImage(ctx, event, plugin, cfg, imageURL); description != "" {
+				segments = append(segments, "画面描述："+description)
+			}
+		}
+		if cfg.ocrEnabled() {
+			if text := r.transcribeContextImage(ctx, event, plugin, cfg, imageURL); text != "" && text != imageOCRNoTextMarker {
+				segments = append(segments, "图中文字：\n"+text)
+			}
+		}
+		entry := strings.Join(segments, "\n")
+		if entry == "" {
+			// 识别不出来也要占位：模型至少要知道这里有一张图，别凭空脑补。
+			entry = "（未能识别出这张图的内容）"
+		}
+		if total == 1 {
+			lines = append(lines, entry)
+		} else {
+			lines = append(lines, fmt.Sprintf("第 %d 张图：\n%s", index+1, entry))
+		}
+	}
+	if total > len(imageURLs) {
+		lines = append(lines, fmt.Sprintf("（另有 %d 张图超出单条识别上限，未识别）", total-len(imageURLs)))
+	}
+	block := "【图片消息】对话模型未直接查看图片，以下为机器识别内容（可能有误）：\n" + strings.Join(lines, "\n\n")
+	message = stripLLMImageParts(message)
+	return appendLLMMessageText(message, block)
+}
+
+// stripLLMImageParts 把消息里的图片段全部去掉（含视频抽帧），文本等其他段保留。
+func stripLLMImageParts(message llm.Message) llm.Message {
+	parts := make([]llm.ContentPart, 0, len(message.Parts))
+	for _, part := range message.Parts {
+		if part.Type == llm.ContentPartImageURL {
+			continue
+		}
+		parts = append(parts, part)
+	}
+	message.Parts = parts
+	return message
+}
+
+// imageOCRContextText 为当前消息里的图片生成随图附带的转写文本；没有可用后端、
+// 没有图片或全部无可辨文字时返回空串。
+func (r *Runtime) imageOCRContextText(ctx context.Context, event MessageEvent, message llm.Message) string {
+	plugin, cfg, ok := r.imageOCRActiveConfig(event)
+	if !ok {
+		return ""
+	}
+	return r.imageOCRAttachNotice(ctx, event, plugin, cfg, message)
+}
+
+func (r *Runtime) imageOCRAttachNotice(ctx context.Context, event MessageEvent, plugin *ImageOCRPlugin, cfg imageOCRConfig, message llm.Message) string {
+	if !cfg.ocrEnabled() {
+		return ""
+	}
+	imageURLs, total := imageOCRMessageImageURLs(cfg, message)
+	if total == 0 {
+		return ""
+	}
 	var lines []string
 	for index, imageURL := range imageURLs {
 		text := r.transcribeContextImage(ctx, event, plugin, cfg, imageURL)
@@ -217,6 +330,65 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	}
 	plugin.storeTranscript(cacheKey, text)
 	return text
+}
+
+// describeContextImage 在仅文字模式下用 vision 分组模型生成画面描述。与转写
+// 共用一套缓存（前缀区分），失败同样不缓存、不阻断回复。
+func (r *Runtime) describeContextImage(ctx context.Context, event MessageEvent, plugin *ImageOCRPlugin, cfg imageOCRConfig, imageURL string) string {
+	cacheKey := "describe:" + imageOCRCacheKey(imageURL)
+	if text, ok := plugin.cachedTranscript(cacheKey); ok {
+		return text
+	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 45 * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	text, err := r.llmImageDescription(callCtx, event, cfg, imageURL)
+	if err != nil {
+		return ""
+	}
+	text = sanitizeFileTextString(text, imageOCRPerImageMax)
+	plugin.storeTranscript(cacheKey, text)
+	return text
+}
+
+func (r *Runtime) llmImageDescription(callCtx context.Context, event MessageEvent, cfg imageOCRConfig, imageURL string) (string, error) {
+	systemPrompt := `你是图片理解子代理。对话主模型无法直接查看图片，请客观描述这张图片，让只读文字的人能明白图里是什么。
+
+要求：
+- 描述画面主体、场景、动作与显著细节，聊天截图说明谁在说什么，表情包说明表达的情绪。
+- 不要臆测图片外的信息，不确定就说不确定。
+- 用中文陈述，控制在 200 字以内，不使用 Markdown 代码块。`
+	if cfg.ocrEnabled() {
+		systemPrompt += "\n- 图中文字另有 OCR 转写，不必逐字抄录，点到关键文字即可。"
+	} else {
+		systemPrompt += "\n- 图中若有关键文字，请一并转述出来。"
+	}
+	prompt := "请描述这张图片的内容。"
+	return r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
+		resp, err := client.Generate(callCtx, llm.GenerateRequest{
+			Model: cfg.Model,
+			Messages: []llm.Message{
+				{Role: llm.RoleSystem, Content: strings.TrimSpace(systemPrompt)},
+				{
+					Role:    llm.RoleUser,
+					Content: prompt,
+					Parts: []llm.ContentPart{
+						{Type: llm.ContentPartText, Text: prompt},
+						{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"},
+					},
+				},
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+		r.recordLLMUsage(callCtx, event, resp.Provider, resp.Model, resp.Usage, "image_describe")
+		return resp.Text, nil
+	})
 }
 
 // localImageOCRTranscription 用本地 OCR 命令完全离线转写。命令按 tesseract 的
