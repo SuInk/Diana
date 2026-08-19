@@ -223,3 +223,88 @@ func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
 		t.Fatalf("group-level groupmate style did not drop delivery flags: %#v", casual)
 	}
 }
+
+func sharedPromptPrefixRatio(left, right string) float64 {
+	runesLeft, runesRight := []rune(left), []rune(right)
+	shared := 0
+	for shared < len(runesLeft) && shared < len(runesRight) && runesLeft[shared] == runesRight[shared] {
+		shared++
+	}
+	return float64(shared) / float64(len(runesLeft))
+}
+
+// promptLineDiff 统计两段提示词按行拆开后的多重集差异：left 独有的行计 +1，right
+// 独有的行计 -1，两边都有的行相互抵消为 0。
+func promptLineDiff(left, right string) map[string]int {
+	diff := map[string]int{}
+	for _, line := range strings.Split(left, "\n") {
+		diff[line]++
+	}
+	for _, line := range strings.Split(right, "\n") {
+		diff[line]--
+	}
+	return diff
+}
+
+func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T) {
+	base := BotConfig{GroupTriggers: []string{"Diana", "diana"}, OwnerID: "9001"}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	prompt := func(userID, sender, text string) string {
+		event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: userID, SenderName: sender, RawMessage: text}
+		return runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false,
+			RelationshipPolicyFor(UserMemoryProfile{}, base.OwnerID, userID), true, nil)
+	}
+
+	alice := prompt("1", "Alice", "diana 在吗")
+	aliceAgain := prompt("1", "Alice", "随便说点什么")
+	bob := prompt("2", "Bob", "随便说点什么")
+	owner := prompt("9001", "SuInk", "随便说点什么")
+
+	// 群里两个普通成员之间，只有尾部的发送者与命中别名不同；前面几千 token 的规则
+	// 必须逐字相同，否则供应商的前缀缓存对这段最长的 system 提示词永远失效。
+	if ratio := sharedPromptPrefixRatio(alice, bob); ratio < 0.85 {
+		t.Fatalf("two ordinary members share only %.0f%% of the prompt prefix", ratio*100)
+	}
+	// 主人多出若干工具规则，但这些差异同样必须落在尾部而不是中段。
+	if ratio := sharedPromptPrefixRatio(alice, owner); ratio < 0.75 {
+		t.Fatalf("owner and member diverge after only %.0f%% of the prompt", ratio*100)
+	}
+	// 同一发言者连续发言时，权限档位段落和昵称也稳定，前缀应一路延伸到命中别名之前。
+	if ratio := sharedPromptPrefixRatio(alice, aliceAgain); ratio < 0.95 {
+		t.Fatalf("consecutive messages from the same member share only %.0f%% of the prompt prefix", ratio*100)
+	}
+
+	// 两个同档位成员的提示词按行拆开比较，差异只允许出现在发送者昵称和命中别名上，
+	// 以此保证挪动位置没有丢段、也没有串档。
+	for line, count := range promptLineDiff(alice, bob) {
+		if count != 0 && !strings.Contains(line, "Alice") && !strings.Contains(line, "Bob") &&
+			!strings.Contains(line, "当前消息命中的配置别名") {
+			t.Fatalf("unexpected line-level difference between two same-tier members: %q", line)
+		}
+	}
+
+	// 内容不能因为挪位置而丢失或串档。
+	if !strings.Contains(alice, "Alice") || !strings.Contains(bob, "Bob") {
+		t.Fatal("sender name missing from the prompt")
+	}
+	if !strings.Contains(alice, "当前消息命中的配置别名") {
+		t.Fatal("matched alias notice missing from the prompt")
+	}
+	if strings.Contains(bob, "当前消息命中的配置别名") {
+		t.Fatal("a message without an alias hit must not carry the notice")
+	}
+	if !strings.Contains(owner, "diana.llm_config") {
+		t.Fatal("owner-only tool rules missing after the move")
+	}
+	if strings.Contains(alice, "diana.llm_config") {
+		t.Fatal("owner-only tool rules leaked to an ordinary member")
+	}
+	for _, item := range []string{alice, bob, owner} {
+		if !strings.Contains(item, "权限等级规则") {
+			t.Fatal("relationship permission context missing from the prompt")
+		}
+		if !strings.HasSuffix(item, base.ReplyStyle.closingAnchor()) {
+			t.Fatal("closing anchor must stay last")
+		}
+	}
+}
