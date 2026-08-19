@@ -224,6 +224,47 @@ func TestListInboundEventDetailsRendersStructuredImagesInsteadOfCQText(t *testin
 	}
 }
 
+func TestListInboundEventDetailsFallsBackToProfileDisplayName(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-sender-name.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO user_profiles (user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES ('10001', '嘉然', 0, 0, '[]', ?)
+`, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
+VALUES ('profile-name', 'group:20001', 'group', '20001', '10001', 'message-1', '', ?, '测试', '{}', ?)
+`, now.Unix(), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES ('profile-name', 'group:20001', 'group', '20001', '10001', 'message-1', ?, '{}', 0,
+  'done', 0, ?, 'ignored', ?, ?, ?)
+`, now.Unix(), now.UnixNano(), now.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Minute), 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || page.Events[0].SenderName != "嘉然" {
+		t.Fatalf("events = %#v, want profile display name fallback", page.Events)
+	}
+}
+
 func TestListInboundEventDetailsIncludesRecallNoticeAndOperator(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-recall.db"))
