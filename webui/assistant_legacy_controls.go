@@ -975,13 +975,18 @@ func (h *QQBotHandler) parseGroupTestFile(c *gin.Context) {
 	if logTarget == "" {
 		logTarget = name
 	}
+	testCfg := h.runtime.Config()
 	plugin := assistant.NewFileParserPlugin(nil)
 	resp, err := plugin.Handle(c.Request.Context(), assistant.PluginRequest{
 		Channel: runtimeAPICallChannel{runtime: h.runtime},
+		// 带上当前 profile 身份：MultiChannel 只有在单 binding 时才会兜底，
+		// 多机器人下裸事件会因为找不到通道而直接失败。
 		Event: assistant.MessageEvent{
-			Kind:     assistant.EventKindGroup,
-			GroupID:  groupID,
-			Segments: []assistant.MessageSegment{{Type: "file", Data: segmentData}},
+			Kind:      assistant.EventKindGroup,
+			GroupID:   groupID,
+			Platform:  testCfg.Platform,
+			ProfileID: testCfg.ID,
+			Segments:  []assistant.MessageSegment{{Type: "file", Data: segmentData}},
 		},
 		Text: "QQ群文件解析测试",
 	})
