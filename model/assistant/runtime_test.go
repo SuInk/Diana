@@ -2181,12 +2181,12 @@ func TestRuntimeKeepsReplyAndMentionInCurrentPrompt(t *testing.T) {
 			{Type: "reply", Data: map[string]string{"id": "abc"}},
 			{Type: "at", Data: map[string]string{"qq": "42"}},
 		},
-	}, "[回复:abc]@42")
+	}, "[diana-reply:abc]@42")
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
 	got := provider.request.Messages[len(provider.request.Messages)-1].Content
-	for _, want := range []string{"【当前需要回复的消息】", "[回复:abc]", "@42", "当前消息包含 @ 标记", "当前消息包含引用/回复标记"} {
+	for _, want := range []string{"【当前需要回复的消息】", "[diana-reply:abc]", "@42", "当前消息包含 @ 标记", "当前消息包含引用/回复标记"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("last message content = %q, missing %q", got, want)
 		}

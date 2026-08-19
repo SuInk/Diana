@@ -41,7 +41,7 @@
 
 
       <!-- 统计卡片 -->
-      <div class="stat-grid">
+      <div class="stat-grid dashboard-stats">
         <StatCard label="今日消息" :value="formatNumber(stats?.today_events ?? 0)" :foot="`累计 ${formatNumber(stats?.total_events ?? 0)}`">
           <template #icon><MessageCircle :size="14" aria-hidden="true" /></template>
         </StatCard>
@@ -56,9 +56,9 @@
         </StatCard>
       </div>
 
-      <div class="grid-main-side dashboard-insights">
-        <!-- 24h 消息量 -->
-        <section class="card">
+      <div class="dashboard-insights">
+        <!-- 24h 消息量：与第一行统计卡同一四列网格，占左两格。 -->
+        <section class="card dashboard-chart">
           <div class="card-header">
             <h2>最近 24 小时消息量</h2>
             <span v-if="stats?.last_event_at" class="badge">最近事件 {{ formatRelative(stats.last_event_at) }}</span>
@@ -69,7 +69,6 @@
           </div>
         </section>
 
-        <!-- 运行信息 -->
         <section class="card">
           <div class="card-header">
             <h2>运行信息</h2>

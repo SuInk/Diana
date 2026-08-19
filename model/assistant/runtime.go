@@ -1097,6 +1097,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupResponseModeOverridden {
 		cfg.ResponseMode.apply(&cfg)
 	}
+	cfg.ReplyStyle.apply(&cfg)
 	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
 	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
 	if groupCfg.ReplyGate != nil {
@@ -1164,6 +1165,7 @@ func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSetti
 
 // HandleEvent 处理 OneBot 消息或通知事件。
 func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
+	event = r.bindInboundEventIdentity(event)
 	if isRecallNotice(event) && r.isBotOwnRecall(event) {
 		return nil
 	}
@@ -1228,6 +1230,27 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	return r.startReplyWorker(ctx, prepared, text, outcome)
+}
+
+// bindInboundEventIdentity restores Diana's internal routing identity when a
+// transport event does not carry it. OneBot history responses never contain
+// ProfileID, so reconnect backfill must use the active binding instead of
+// falling back to the legacy unnamespaced conversation.
+func (r *Runtime) bindInboundEventIdentity(event MessageEvent) MessageEvent {
+	r.mu.RLock()
+	cfg := r.cfg
+	channel := r.channel
+	r.mu.RUnlock()
+	if strings.TrimSpace(event.ProfileID) == "" {
+		event.ProfileID = strings.TrimSpace(cfg.ID)
+	}
+	if strings.TrimSpace(event.Platform) == "" {
+		event.Platform = NormalizePlatformID(cfg.Platform)
+	}
+	if multi, ok := channel.(*MultiChannel); ok && multi.isolate && strings.TrimSpace(event.ContextNamespace) == "" {
+		event.ContextNamespace = event.ProfileID
+	}
+	return event
 }
 
 func (r *Runtime) recordNoticeEvent(event MessageEvent) {
@@ -3100,8 +3123,11 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 		return "", nil
 	}
 	reply := directPluginReply(*resp)
-	if reply == "" {
-		reply = "链接解析插件已触发，但没有提取到可发送内容。"
+	hasMedia := len(resp.ImageURLs) > 0 || len(resp.VideoURLs) > 0 || len(resp.ForwardMessages) > 0
+	if reply == "" && !hasMedia {
+		// 插件触发了却什么都没提取到，这是诊断信息，不该当成发言播报到群里。
+		log.Printf("qqbot resolver produced no sendable content: message_id=%s", event.MessageID)
+		return "", nil
 	}
 	if resp.Forward && len(resp.ForwardMessages) > 0 {
 		if err := r.sendForwardPluginResponse(ctx, event, *resp, r.effectiveConfigForEvent(event)); err != nil {
@@ -3112,7 +3138,75 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 			return "", err
 		}
 	}
+	r.maybeSendPluginFollowUp(ctx, event, *resp)
 	return reply, nil
+}
+
+// pluginFollowUpMaxChars 把跟评压在聊天体量：它是对刚发出内容的一句感想，
+// 不是第二次回答。
+const pluginFollowUpMaxChars = 60
+
+// maybeSendPluginFollowUp 让插件发完内容后，机器人像真人那样再接一句。
+// 插件只发链接解析结果就没下文，真人会顺口评价一句；开关由插件自己声明。
+// 刚发出的内容此时已经写进历史（见 rememberOutgoingWithMessageID），模型从
+// 历史里就能看到自己发了什么，不需要额外把内容再传一份。
+// 跟评失败一律静默跳过：它是锦上添花，不该让已经成功的插件回复变成报错。
+func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEvent, resp PluginResponse) {
+	if !resp.FollowUp || ctx.Err() != nil {
+		return
+	}
+	// 历史可能在发送之前就缓存过，这里强制重读，否则看不到自己刚发的那条。
+	source := event
+	source.replyHistoryLoaded = false
+	source.replyHistory = nil
+
+	cfg := r.effectiveConfigForEvent(source)
+	messages := []llm.Message{{
+		Role:     llm.RoleSystem,
+		Content:  r.systemPrompt(source, nil),
+		Priority: llm.MessagePrioritySystem,
+	}}
+	botID := firstNonEmpty(cfg.BotQQ, source.SelfID)
+	for _, historyEvent := range r.contextHistory(source) {
+		content := strings.TrimSpace(historyPlainText(historyEvent))
+		if content == "" {
+			continue
+		}
+		role := llm.RoleUser
+		if strings.TrimSpace(historyEvent.botReply) != "" || assistantHistoryEvent(historyEvent, botID) {
+			role = llm.RoleAssistant
+		}
+		messages = append(messages, llm.Message{Role: role, Content: content, Priority: llm.MessagePriorityHistory})
+	}
+	messages = append(messages, llm.Message{
+		Role:     llm.RoleUser,
+		Priority: llm.MessagePriorityCurrent,
+		Content:  "你刚刚把上面最后那条内容发到了这个会话里。像群里的普通成员那样，就这条内容自然地说一句你的反应或看法，一句话就够。不要复述内容、不要总结、不要提问、不要提到自己是发送方，也不要重复历史里已经说过的话。实在没什么可说就只回 SKIP。",
+	})
+
+	group := llm.GroupChat
+	if messagesContainImages(messages) {
+		group = llm.GroupVision
+	}
+	comment, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
+		llmResp, llmErr := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
+		if llmErr != nil {
+			return "", llmErr
+		}
+		r.recordLLMUsage(ctx, source, llmResp.Provider, llmResp.Model, llmResp.Usage, "plugin_follow_up")
+		return normalizeReply(llmResp.Text, pluginFollowUpMaxChars, boolValue(cfg.MarkdownToPlain, true)), nil
+	})
+	if err != nil {
+		log.Printf("qqbot plugin follow-up generation failed: %v", err)
+		return
+	}
+	comment = strings.TrimSpace(comment)
+	if comment == "" || strings.EqualFold(strings.Trim(comment, "。.！!"), "SKIP") {
+		return
+	}
+	if err := r.send(ctx, event, comment); err != nil {
+		log.Printf("qqbot plugin follow-up send failed: %v", err)
+	}
 }
 
 func directPluginReply(resp PluginResponse) string {
@@ -3175,7 +3269,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "agent_reply")
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -3187,7 +3281,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "reply")
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 }
 
@@ -6817,6 +6911,23 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
+// applyOutgoingReplyMarker 把模型写在正文开头的 [回复:ID] 变成真正的 reply 段。
+// 模型指定的目标优先于默认的“回复当前消息”：用户要求引用旧图时，指的就是那条。
+// 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
+// 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
+func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	id, rest, ok := extractOutgoingReplyMarker(msg.Text)
+	if !ok {
+		return msg
+	}
+	msg.Text = rest
+	if r.lookupQuotedMessage(ctx, event, id) == nil {
+		return msg
+	}
+	msg.ReplyMessageID = id
+	return msg
+}
+
 func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
 	msg.Platform = event.Platform
 	msg.ProfileID = event.ProfileID
@@ -6940,7 +7051,7 @@ func generatedReplyTargetsOtherParticipant(event MessageEvent, reply string) boo
 func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent, reply string, mentionUserID string, replyToCurrent bool) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
-	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
+	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -6953,6 +7064,10 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 		}
 		// Some OneBot implementations do not support merged forwards. Continue
 		// through the normal chunk path so long replies are still delivered.
+	}
+	// 开口前先停一下：秒回比措辞更容易暴露。风格不需要时 typingDelay 返回 0。
+	if delay := cfg.ReplyStyle.typingDelay(reply); delay > 0 && !sleepContext(ctx, delay) {
+		return nil, ctx.Err()
 	}
 	sentChunks := 0
 	messageIDs := make([]string, 0, len(chunks))
@@ -7014,6 +7129,7 @@ func (r *Runtime) sendOutgoing(ctx context.Context, event MessageEvent, msg Outg
 
 func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent, msg OutgoingMessage) (map[string]any, error) {
 	msg = routeOutgoingToEvent(event, msg)
+	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
@@ -7570,6 +7686,10 @@ func (r *Runtime) sendForwardReply(ctx context.Context, event MessageEvent, repl
 }
 
 func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageEvent, reply string, cfg BotConfig) (string, error) {
+	// 合并转发的节点承载不了 reply 段，标记只能剥掉，免得作为文本进转发卡片。
+	if _, rest, ok := extractOutgoingReplyMarker(reply); ok {
+		reply = rest
+	}
 	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
 	if len(chunks) == 0 {
 		return "", nil

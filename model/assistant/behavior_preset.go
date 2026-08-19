@@ -3,7 +3,10 @@
 
 package assistant
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // ResponseMode controls how readily the bot joins an unaddressed group chat.
 type ResponseMode string
@@ -113,6 +116,61 @@ func (style ReplyStyle) prompt() string {
 	default:
 		return "默认表达风格为助手：清楚、可靠、自然，优先解决问题；不刻意卖萌、表演角色或使用过度情绪化的措辞。"
 	}
+}
+
+// 群友风格的投递参数：真人发的是聊天体量的短消息，不是几百字一坨；连发之间
+// 有打字间隔；开口前也要有想和打的时间。
+const (
+	groupmateReplyChunkSize     = 160
+	groupmateSendChunkIntervalM = 1200
+	groupmateTypingBaseDelay    = 900 * time.Millisecond
+	groupmateTypingPerRune      = 55 * time.Millisecond
+	groupmateTypingMaxDelay     = 5 * time.Second
+)
+
+// apply 让风格能改动真正决定「机器人味」的投递方式，而不只是措辞。
+// 每条都自带引用和 @、几百字一条、秒回——这些 prompt 再怎么写都管不到。
+// 两个开关只填未显式设置的项（用户手动开过就尊重用户）；长度和间隔则是这个
+// 风格的硬策略：900 字一条、300ms 连发怎么写都不像真人，但比它更克制的设置保留。
+func (style ReplyStyle) apply(cfg *BotConfig) {
+	if style.Normalized() != ReplyStyleGroupmate {
+		return
+	}
+	if cfg.ReplyReferenceEnabled == nil {
+		cfg.ReplyReferenceEnabled = boolPointer(false)
+	}
+	if cfg.MentionUserEnabled == nil {
+		cfg.MentionUserEnabled = boolPointer(false)
+	}
+	if cfg.DirectReplyChunkSize <= 0 || cfg.DirectReplyChunkSize > groupmateReplyChunkSize {
+		cfg.DirectReplyChunkSize = groupmateReplyChunkSize
+	}
+	if cfg.SendChunkIntervalMS < groupmateSendChunkIntervalM {
+		cfg.SendChunkIntervalMS = groupmateSendChunkIntervalM
+	}
+}
+
+// allowsForwardReply 报告这个风格能否把长回复折成合并转发卡片。
+// 转发卡片是机器人专属控件，真人不会这么发言，所以群友风格永远走普通消息。
+func (style ReplyStyle) allowsForwardReply() bool {
+	return style.Normalized() != ReplyStyleGroupmate
+}
+
+// typingDelay 返回开口前的拟真停顿：秒回是最容易暴露的一点。
+// 按字数线性增长并封顶，避免长回复把人晾太久。
+func (style ReplyStyle) typingDelay(text string) time.Duration {
+	if style.Normalized() != ReplyStyleGroupmate {
+		return 0
+	}
+	runes := len([]rune(strings.TrimSpace(text)))
+	if runes == 0 {
+		return 0
+	}
+	delay := groupmateTypingBaseDelay + time.Duration(runes)*groupmateTypingPerRune
+	if delay > groupmateTypingMaxDelay {
+		return groupmateTypingMaxDelay
+	}
+	return delay
 }
 
 // closingAnchor 是拼在整条 system prompt 末尾的语气锚点。前面几千字工具规则、权限

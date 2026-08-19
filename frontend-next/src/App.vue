@@ -131,6 +131,7 @@ import {
   Moon,
   Sun,
   SunMoon,
+  UserRound,
   Users,
   Wrench
 } from "@lucide/vue";
@@ -153,6 +154,7 @@ import LLMView from "./views/LLMView.vue";
 import AssistantView from "./views/AssistantView.vue";
 import PluginsView from "./views/PluginsView.vue";
 import GroupsView from "./views/GroupsView.vue";
+import UsersView from "./views/UsersView.vue";
 import LogsView from "./views/LogsView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
@@ -165,6 +167,7 @@ const viewComponents: Record<ViewID, Component> = {
   bot: AssistantView,
   plugins: PluginsView,
   groups: GroupsView,
+  users: UsersView,
   logs: LogsView,
   settings: SettingsView
 };
@@ -229,6 +232,7 @@ const viewTitles: Record<ViewID, string> = {
   bot: "机器人",
   plugins: "插件",
   groups: "群管理",
+  users: "人员",
   logs: "日志",
   settings: "设置"
 };
@@ -282,6 +286,7 @@ function navIcon(id: ViewID): Component {
     bot: Bot,
     plugins: PlugZap,
     groups: Users,
+    users: UserRound,
     logs: FileClock,
     settings: Wrench
   };
@@ -341,6 +346,9 @@ onMounted(async () => {
   // 会话失效时任意接口的 401 会广播这个事件，统一切回登录界面。
   window.addEventListener("diana:unauthorized", () => {
     locked.value = true;
+  });
+  window.addEventListener("diana:open-version", () => {
+    versionOpen.value = true;
   });
   try {
     const auth = await getAuthStatus();
