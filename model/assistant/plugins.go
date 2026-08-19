@@ -866,6 +866,7 @@ const (
 	resolverSettingMaxDuration      = "max_video_duration_seconds"
 	resolverSettingMaxImages        = "max_images"
 	resolverSettingFollowUpComment  = "follow_up_comment"
+	resolverSettingMergedForward    = "merged_forward"
 	resolverSettingMaxVideoHeight   = "max_video_height"
 	// 凭据类设置。这些值最容易过期、最需要频繁更换，只靠环境变量意味着
 	// Docker 用户改一次 Cookie 就得重启容器。
@@ -946,6 +947,13 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 				Key:         resolverSettingDownloadMedia,
 				Label:       "下载并发送媒体",
 				Description: "识别支持的平台后下载视频或提取图集，并通过当前机器人发送；关闭后只提供网页上下文。",
+				Type:        PluginSettingTypeBool,
+				Default:     true,
+			},
+			{
+				Key:         resolverSettingMergedForward,
+				Label:       "合并转发发送",
+				Description: "解析出的图集和多段内容打包成一条合并转发，避免刷屏；关闭后逐条直接发送。",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
 			},
@@ -1260,12 +1268,14 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 		}
 		return nil, nil
 	}
+	// 直接单元调用没有注入设置时保持既有的合并转发行为，与 downloadMedia 同理。
+	mergedForward := len(req.Settings) == 0 || req.Settings.Bool(resolverSettingMergedForward, true)
 	response := &PluginResponse{
 		Handled:         true,
 		Context:         "链接解析结果：\n" + strings.Join(parts, "\n"),
 		ImageURLs:       dedupeMediaURLs(imageURLs),
 		VideoURLs:       dedupeMediaURLs(videoURLs),
-		Forward:         len(forwardMessages) > 0,
+		Forward:         len(forwardMessages) > 0 && mergedForward,
 		ForwardMessages: forwardMessages,
 	}
 	if len(forwardMessages) > 0 && len(parts) == 1 {
