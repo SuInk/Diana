@@ -1745,23 +1745,28 @@ func matchedGroupAliases(event MessageEvent, aliases []string) []string {
 }
 
 // directEventText returns only text authored in the current message. Expanded
-// merged-forward text is context for the model, not an explicit invocation of
-// the bot by the sender.
+// merged-forward text and Diana's own reply markers are context for the model,
+// not an explicit invocation of the bot by the sender.
 func directEventText(event MessageEvent, fallback string) string {
 	segments := make([]MessageSegment, 0, len(event.Segments))
 	for _, segment := range event.Segments {
 		if segment.Type == "forward" || segment.Data["source_type"] == "forward" {
 			continue
 		}
+		// 回复段渲染出来的是 Diana 自己的引用标记，同样属于给模型看的上下文，
+		// 不是发送者的直接称呼。
+		if segment.Type == "reply" {
+			continue
+		}
 		segments = append(segments, segment)
 	}
-	if text := strings.TrimSpace(PlainText(segments)); text != "" {
+	if text := strings.TrimSpace(stripReplyMarkers(PlainText(segments))); text != "" {
 		return normalizeChatWhitespace(text)
 	}
 	if len(event.Segments) > 0 {
 		return ""
 	}
-	return normalizeChatWhitespace(strings.TrimSpace(fallback))
+	return normalizeChatWhitespace(strings.TrimSpace(stripReplyMarkers(fallback)))
 }
 
 func quotedPromptItems(items []string) string {
