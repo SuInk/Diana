@@ -16,6 +16,8 @@ const (
 	PluginSettingTypeString      = "string"
 	PluginSettingTypeSelect      = "select"
 	PluginSettingTypeMultiSelect = "multi_select"
+	// PluginSettingTypeText 渲染为多行文本框，用于模板这类带换行的配置。
+	PluginSettingTypeText = "text"
 )
 
 type PluginSettingOption struct {

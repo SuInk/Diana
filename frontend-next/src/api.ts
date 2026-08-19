@@ -186,7 +186,7 @@ export interface PluginSettingSpec {
   key: string;
   label: string;
   description?: string;
-  type: "bool" | "number" | "string" | "select" | "multi_select";
+  type: "bool" | "number" | "string" | "select" | "multi_select" | "text";
   default: unknown;
   min?: number;
   max?: number;
