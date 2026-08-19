@@ -240,7 +240,7 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 				out <- ChatEvent{Type: ChatEventError, Error: message}
 				return
 			case "response.completed":
-				usage := Usage{InputTokens: event.Response.Usage.InputTokens, OutputTokens: event.Response.Usage.OutputTokens, TotalTokens: event.Response.Usage.TotalTokens}
+				usage := Usage{InputTokens: event.Response.Usage.InputTokens, OutputTokens: event.Response.Usage.OutputTokens, TotalTokens: event.Response.Usage.TotalTokens, CachedInputTokens: event.Response.Usage.InputTokensDetails.CachedTokens}
 				out <- ChatEvent{Type: ChatEventUsage, Usage: &usage}
 			}
 		}
@@ -589,9 +589,10 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 		ToolCalls:       toolCalls,
 		ResponsesOutput: openAIResponsesOutputItems(resp.Output),
 		Usage: Usage{
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			TotalTokens:  resp.Usage.TotalTokens,
+			InputTokens:       resp.Usage.InputTokens,
+			OutputTokens:      resp.Usage.OutputTokens,
+			TotalTokens:       resp.Usage.TotalTokens,
+			CachedInputTokens: resp.Usage.InputTokensDetails.CachedTokens,
 		},
 	}, nil
 }
@@ -1425,11 +1426,22 @@ func usageFromPayload(payload any) Usage {
 	if !ok {
 		return Usage{}
 	}
-	return Usage{
+	usage := Usage{
 		InputTokens:  int64Field(values, "input_tokens", "prompt_tokens"),
 		OutputTokens: int64Field(values, "output_tokens", "completion_tokens"),
 		TotalTokens:  int64Field(values, "total_tokens"),
 	}
+	// chat completions 把缓存命中放在 prompt_tokens_details 里，responses 格式
+	// 则叫 input_tokens_details；两种都认，取到哪个算哪个。
+	for _, key := range []string{"prompt_tokens_details", "input_tokens_details"} {
+		if details, ok := values[key].(map[string]any); ok {
+			if cached := int64Field(details, "cached_tokens"); cached > 0 {
+				usage.CachedInputTokens = cached
+				break
+			}
+		}
+	}
+	return usage
 }
 
 type openAIChatCompletionResult struct {
