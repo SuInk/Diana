@@ -208,6 +208,41 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 				Step:        1,
 				Unit:        "条",
 			},
+			{
+				Key:         repositoryWatchSettingTemplateHeader,
+				Label:       "推送模板：整体",
+				Description: "整条通知的组装格式，可用 {repository} {summary} {body}。留空使用默认格式；占位符所在行替换后为空会整行删除。",
+				Type:        PluginSettingTypeText,
+				Default:     "",
+			},
+			{
+				Key:         repositoryWatchSettingTemplateCommit,
+				Label:       "推送模板：Commit",
+				Description: "每条提交的格式，可用 {sha} {title} {author} {time} {branch} {url}。作者与所有提交相同时会写进节标题、条目内 {author} 为空。",
+				Type:        PluginSettingTypeText,
+				Default:     "",
+			},
+			{
+				Key:         repositoryWatchSettingTemplatePull,
+				Label:       "推送模板：PR",
+				Description: "每条 PR 的格式，可用 {number} {status} {title} {author} {branches} {time_label} {time} {url}。",
+				Type:        PluginSettingTypeText,
+				Default:     "",
+			},
+			{
+				Key:         repositoryWatchSettingTemplateIssue,
+				Label:       "推送模板：Issue",
+				Description: "每条 Issue 的格式，可用 {number} {status} {title} {author} {time_label} {time} {url}。",
+				Type:        PluginSettingTypeText,
+				Default:     "",
+			},
+			{
+				Key:         repositoryWatchSettingTemplateRelease,
+				Label:       "推送模板：Release",
+				Description: "每条 Release 的格式，可用 {label} {tag} {name} {time} {url}。",
+				Type:        PluginSettingTypeText,
+				Default:     "",
+			},
 		},
 	}
 }

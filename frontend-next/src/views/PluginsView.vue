@@ -304,6 +304,7 @@
                 {{ clearSecrets.includes(spec.key) ? "取消清除" : "清除" }}
               </button>
             </div>
+            <textarea v-else-if="spec.type === 'text'" :id="`setting-${spec.key}`" v-model="activeSettingsForm[spec.key]" class="input plugin-setting-textarea" rows="4"></textarea>
             <input v-else :id="`setting-${spec.key}`" v-model="activeSettingsForm[spec.key]" class="input" type="text" />
             <span v-if="spec.description" class="hint">{{ spec.description }}</span>
           </template>

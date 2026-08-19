@@ -1,0 +1,65 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
+package assistant
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRenderRepositoryWatchTemplateDropsLinesWithOnlyEmptyPlaceholders(t *testing.T) {
+	template := "PR #{number}（{status}）\n{title}\n作者：{author}\n{url}\n静态提示行"
+	rendered := renderRepositoryWatchTemplate(template, map[string]string{
+		"number": "7",
+		"status": "已合并",
+		"title":  "修复触发别名",
+		"author": "",
+		"url":    "https://example.com/pr/7",
+	})
+	want := "PR #7（已合并）\n修复触发别名\nhttps://example.com/pr/7\n静态提示行"
+	if rendered != want {
+		t.Fatalf("rendered = %q, want %q", rendered, want)
+	}
+}
+
+func TestRepositoryWatchCustomTemplatesChangeTheLayout(t *testing.T) {
+	settings := SettingValues{
+		repositoryWatchSettingTemplateHeader:  "【{repository}】\n{body}\n{summary}",
+		repositoryWatchSettingTemplateRelease: "🎉 {tag} {name}（{time}）{url}",
+	}
+	templates := repositoryWatchTemplatesFromSettings(settings)
+	change := repositoryWatchChange{
+		Repository: "SuInk/Diana",
+		Releases: []repositoryWatchRelease{{
+			Tag:         "v0.9.0",
+			Name:        "Diana v0.9.0",
+			URL:         "https://github.com/SuInk/Diana/releases/tag/v0.9.0",
+			PublishedAt: time.Date(2026, 8, 19, 10, 0, 0, 0, time.Local),
+		}},
+	}
+
+	body := renderRepositoryWatchChangesWithTemplates(change, templates)
+	if !strings.HasPrefix(body, "🎉 v0.9.0") || !strings.Contains(body, "https://github.com/SuInk/Diana/releases/tag/v0.9.0") {
+		t.Fatalf("custom release template ignored: %q", body)
+	}
+	message := composeRepositoryWatchMessageWithTemplate(templates.Header, "SuInk/Diana", body, "发布了新版本。")
+	if !strings.HasPrefix(message, "【SuInk/Diana】") || !strings.HasSuffix(message, "发布了新版本。") {
+		t.Fatalf("custom header template ignored: %q", message)
+	}
+
+	// 未覆盖的类别继续用默认模板。
+	if templates.Commit != repositoryWatchDefaultCommitTemplate {
+		t.Fatalf("commit template should fall back to default, got %q", templates.Commit)
+	}
+}
+
+func TestRepositoryWatchTemplatesFallBackToDefaultsWhenBlank(t *testing.T) {
+	templates := repositoryWatchTemplatesFromSettings(SettingValues{
+		repositoryWatchSettingTemplateHeader: "   ",
+	})
+	if templates != defaultRepositoryWatchTemplates() {
+		t.Fatalf("blank settings must resolve to defaults: %+v", templates)
+	}
+}
