@@ -91,6 +91,20 @@ func TestDianaRelationshipToolListsCurrentGroupForOwner(t *testing.T) {
 	if len(result.Items) != 2 || result.Items[0].UserID != "10002" || result.Items[1].UserID != "10001" {
 		t.Fatalf("items = %#v", result.Items)
 	}
+
+	// 榜单是群内公开互动的统计，普通成员同样可以查询。
+	memberTool := newDianaRelationshipTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10003"})
+	raw, err = memberTool.Run(context.Background(), map[string]any{"operation": "list", "limit": 3})
+	if err != nil {
+		t.Fatalf("ordinary member should be able to list: %v", err)
+	}
+	var memberResult dianaRelationshipResult
+	if err := json.Unmarshal([]byte(raw), &memberResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(memberResult.Items) != 3 || memberResult.Items[0].UserID != "10002" {
+		t.Fatalf("member items = %#v", memberResult.Items)
+	}
 }
 
 func TestDianaRelationshipOwnerCanSetAndAdjustOthersFavorability(t *testing.T) {
