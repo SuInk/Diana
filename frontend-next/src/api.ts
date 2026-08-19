@@ -23,6 +23,8 @@ export interface LLMConfig {
   user_agent?: string;
   headers?: Record<string, string>;
   temperature?: number | null;
+  context_window_tokens?: number;
+  max_context_tokens?: number;
   max_output_tokens?: number;
   timeout_ms?: number;
 }
