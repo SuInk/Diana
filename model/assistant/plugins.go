@@ -418,6 +418,9 @@ func (m *PluginManager) SanitizeGroupSettingOverrides(overrides PluginSettingOve
 		if !ok {
 			continue
 		}
+		if id == resolverPluginID {
+			values = migrateResolverPlatformSettings(values)
+		}
 		sanitized := sanitizeGroupPluginSettings(plugin.Manifest().Settings, values)
 		if len(sanitized) > 0 {
 			out[id] = sanitized
@@ -452,7 +455,11 @@ func (m *PluginManager) Restore(states map[string]PluginState) {
 			current.Installed = saved.Installed
 			current.Enabled = saved.Enabled
 			// 历史数据可能包含已下线的设置键或非法值，恢复时按当前声明清洗。
-			current.Settings = sanitizePluginSettings(current.Manifest.Settings, saved.Settings)
+			savedSettings := saved.Settings
+			if id == resolverPluginID {
+				savedSettings = migrateResolverPlatformSettings(savedSettings)
+			}
+			current.Settings = sanitizePluginSettings(current.Manifest.Settings, savedSettings)
 		}
 		if current.Manifest.BuiltIn {
 			// 内置插件不能被彻底卸载，但允许用户在 WebUI 里关闭启用状态。
@@ -858,7 +865,8 @@ const (
 	resolverSettingTimeoutSeconds   = "timeout_seconds"
 	resolverSettingBrowserRender    = "browser_render"
 	resolverSettingBrowserCDPURL    = "browser_cdp_url"
-	resolverSettingExcludePlatforms = "exclude_platforms"
+	resolverSettingEnabledPlatforms = "enabled_platforms"
+	resolverSettingExcludePlatforms = "exclude_platforms" // v0.8.41 及更早版本的迁移键。
 	resolverSettingSummaryMaxRunes  = "summary_max_runes"
 	resolverSettingCacheTTLMinutes  = "cache_ttl_minutes"
 	resolverSettingUserAgent        = "user_agent"
@@ -1050,11 +1058,11 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 				Default:     defaultResolverBrowserCDPURL,
 			},
 			{
-				Key:         resolverSettingExcludePlatforms,
-				Label:       "排除平台",
-				Description: "勾选的平台不解析链接，也不进入模型上下文。",
+				Key:         resolverSettingEnabledPlatforms,
+				Label:       "启用平台",
+				Description: "勾选的平台会解析链接并进入模型上下文；默认全部启用。",
 				Type:        PluginSettingTypeMultiSelect,
-				Default:     []string{},
+				Default:     resolverPlatformKeys(),
 				Options:     resolverPlatformOptions(),
 			},
 			{
@@ -1168,7 +1176,7 @@ type resolveOptions struct {
 	httpTimeout      time.Duration
 	browserRender    bool
 	browserCDPURL    string
-	excludePlatforms []string
+	enabledPlatforms []string
 	summaryMaxRunes  int
 	cacheTTL         time.Duration
 	userAgent        string
@@ -1183,12 +1191,16 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	if maxLinks := req.Settings.Int(resolverSettingMaxLinks, defaultResolverMaxLinks); len(urls) > maxLinks {
 		urls = urls[:maxLinks]
 	}
+	enabledPlatforms := req.Settings.StringSlice(resolverSettingEnabledPlatforms)
+	if _, configured := req.Settings[resolverSettingEnabledPlatforms]; !configured {
+		enabledPlatforms = resolverPlatformKeys()
+	}
 	opts := resolveOptions{
 		fetchTitle:       req.Settings.Bool(resolverSettingFetchTitle, true),
 		httpTimeout:      time.Duration(req.Settings.Int(resolverSettingTimeoutSeconds, defaultResolverTimeoutSeconds)) * time.Second,
 		browserRender:    req.Settings.Bool(resolverSettingBrowserRender, false),
 		browserCDPURL:    req.Settings.String(resolverSettingBrowserCDPURL, defaultResolverBrowserCDPURL),
-		excludePlatforms: req.Settings.StringSlice(resolverSettingExcludePlatforms),
+		enabledPlatforms: enabledPlatforms,
 		summaryMaxRunes:  req.Settings.Int(resolverSettingSummaryMaxRunes, defaultResolverSummaryMaxRunes),
 		cacheTTL:         time.Duration(req.Settings.Int(resolverSettingCacheTTLMinutes, defaultResolverCacheTTLMinutes)) * time.Minute,
 		userAgent:        strings.TrimSpace(req.Settings.String(resolverSettingUserAgent, "")),
@@ -1219,13 +1231,11 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	maxImages := req.Settings.Int(resolverSettingMaxImages, 9)
 	legacyResolver := p.videoDownloader != nil || p.twitterPostFetcher != nil || p.twitterMediaDownloader != nil
 	for _, raw := range urls {
-		if len(opts.excludePlatforms) > 0 {
-			if parsed, err := url.Parse(raw); err == nil {
-				key, _ := platformKeyAndLabel(parsed.Hostname())
-				if key != "" && slices.Contains(opts.excludePlatforms, key) {
-					// 勾选排除的平台整条跳过，不进上下文。
-					continue
-				}
+		if parsed, err := url.Parse(raw); err == nil {
+			key, _ := platformKeyAndLabel(parsed.Hostname())
+			if key != "" && !slices.Contains(opts.enabledPlatforms, key) {
+				// 未启用的平台整条跳过，不进上下文。
+				continue
 			}
 		}
 		if legacyResolver && isKnownResolverPlatformURL(raw) {
@@ -1498,7 +1508,7 @@ func (p *ResolverPlugin) resolveURL(ctx context.Context, raw string, opts resolv
 }
 
 // platformName 根据域名识别常见平台名称。
-// resolverPlatforms 是链接解析认识的平台清单；排除平台勾选项与平台识别共用同一张表。
+// resolverPlatforms 是链接解析认识的平台清单；启用平台勾选项与平台识别共用同一张表。
 //
 // media 表示这个平台有真正的图片/视频提取分支（见 resolveSocialMedia 的分发）。
 // 为 false 的平台只能抓标题和描述——界面上必须区分标注，否则用户看到「微博」
@@ -1520,7 +1530,7 @@ var resolverPlatforms = []struct {
 }
 
 // platformSupportsMedia 判断平台是否有真正的媒体提取分支。
-// resolveSocialMedia 的分发和排除平台的标注都以这里为准，避免三处清单各自漂移。
+// resolveSocialMedia 的分发和启用平台的标注都以这里为准，避免三处清单各自漂移。
 func platformSupportsMedia(key string) bool {
 	for _, platform := range resolverPlatforms {
 		if platform.key == key {
@@ -1549,7 +1559,45 @@ func platformName(host string) string {
 	return label
 }
 
-// resolverPlatformOptions 生成排除平台设置的勾选项。
+func resolverPlatformKeys() []string {
+	keys := make([]string, 0, len(resolverPlatforms))
+	for _, platform := range resolverPlatforms {
+		keys = append(keys, platform.key)
+	}
+	return keys
+}
+
+// migrateResolverPlatformSettings converts the former exclusion list into the
+// enabled-platform allowlist. A copied map keeps persisted snapshots immutable.
+func migrateResolverPlatformSettings(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		if key != resolverSettingExcludePlatforms {
+			out[key] = value
+		}
+	}
+	if _, configured := out[resolverSettingEnabledPlatforms]; configured {
+		return out
+	}
+	rawExcluded, legacy := values[resolverSettingExcludePlatforms]
+	if !legacy {
+		return out
+	}
+	excluded := SettingValues{resolverSettingExcludePlatforms: rawExcluded}.StringSlice(resolverSettingExcludePlatforms)
+	enabled := make([]string, 0, len(resolverPlatforms))
+	for _, key := range resolverPlatformKeys() {
+		if !slices.Contains(excluded, key) {
+			enabled = append(enabled, key)
+		}
+	}
+	out[resolverSettingEnabledPlatforms] = enabled
+	return out
+}
+
+// resolverPlatformOptions 生成启用平台设置的勾选项。
 func resolverPlatformOptions() []PluginSettingOption {
 	options := make([]PluginSettingOption, 0, len(resolverPlatforms))
 	for _, platform := range resolverPlatforms {
