@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -844,12 +845,12 @@ func TestPluginManagerUpdateSettingsValidatesAndClamps(t *testing.T) {
 	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{"fetch_title": "yes"}); err == nil {
 		t.Fatal("wrong type accepted")
 	}
-	if state, err := manager.UpdateSettings(resolverPluginID, map[string]any{"exclude_platforms": []any{"weibo", "douyin", "weibo"}}); err != nil {
+	if state, err := manager.UpdateSettings(resolverPluginID, map[string]any{"enabled_platforms": []any{"weibo", "douyin", "weibo"}}); err != nil {
 		t.Fatalf("multi_select UpdateSettings() error = %v", err)
-	} else if got, ok := state.Settings["exclude_platforms"].([]string); !ok || len(got) != 2 {
-		t.Fatalf("exclude_platforms = %#v", state.Settings["exclude_platforms"])
+	} else if got, ok := state.Settings["enabled_platforms"].([]string); !ok || len(got) != 2 {
+		t.Fatalf("enabled_platforms = %#v", state.Settings["enabled_platforms"])
 	}
-	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{"exclude_platforms": []any{"douyin", "netflix"}}); err == nil {
+	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{"enabled_platforms": []any{"douyin", "netflix"}}); err == nil {
 		t.Fatal("unknown platform option accepted")
 	}
 	if _, err := manager.UpdateSettings("missing", map[string]any{"a": 1}); err == nil {
@@ -871,10 +872,11 @@ func TestPluginManagerRestoreSanitizesSettings(t *testing.T) {
 			Installed: true,
 			Enabled:   true,
 			Settings: map[string]any{
-				"fetch_title":     false,
-				"max_links":       float64(99),
-				"removed_key":     "stale",
-				"timeout_seconds": "slow",
+				"fetch_title":       false,
+				"max_links":         float64(99),
+				"exclude_platforms": []any{"weibo", "github"},
+				"removed_key":       "stale",
+				"timeout_seconds":   "slow",
 			},
 		},
 	})
@@ -888,11 +890,29 @@ func TestPluginManagerRestoreSanitizesSettings(t *testing.T) {
 	if got := state.Settings["max_links"]; got != float64(20) {
 		t.Fatalf("max_links = %#v, want 20", got)
 	}
+	enabled := SettingValues(state.Settings).StringSlice(resolverSettingEnabledPlatforms)
+	if slices.Contains(enabled, "weibo") || slices.Contains(enabled, "github") || len(enabled) != len(resolverPlatforms)-2 {
+		t.Fatalf("migrated enabled platforms = %#v", enabled)
+	}
+	if _, ok := state.Settings[resolverSettingExcludePlatforms]; ok {
+		t.Fatalf("legacy exclude_platforms survived: %#v", state.Settings)
+	}
 	if _, ok := state.Settings["removed_key"]; ok {
 		t.Fatalf("removed_key survived: %#v", state.Settings)
 	}
 	if _, ok := state.Settings["timeout_seconds"]; ok {
 		t.Fatalf("invalid timeout survived: %#v", state.Settings)
+	}
+}
+
+func TestPluginManagerSanitizeGroupSettingsMigratesExcludedPlatforms(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	overrides := manager.SanitizeGroupSettingOverrides(PluginSettingOverrides{
+		resolverPluginID: {resolverSettingExcludePlatforms: []any{"x", "zhihu"}},
+	})
+	enabled := SettingValues(overrides[resolverPluginID]).StringSlice(resolverSettingEnabledPlatforms)
+	if slices.Contains(enabled, "x") || slices.Contains(enabled, "zhihu") || len(enabled) != len(resolverPlatforms)-2 {
+		t.Fatalf("migrated group enabled platforms = %#v", enabled)
 	}
 }
 

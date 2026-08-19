@@ -179,14 +179,13 @@ func TestResolverBrowserFallbackDisabledByDefault(t *testing.T) {
 	}
 }
 
-// TestResolverExcludesConfiguredPlatforms 验证对应功能场景。
-func TestResolverExcludesConfiguredPlatforms(t *testing.T) {
+func TestResolverOnlyHandlesEnabledPlatforms(t *testing.T) {
 	plugin := NewResolverPlugin(&http.Client{})
 	resp, err := plugin.Handle(context.Background(), PluginRequest{
 		Text: "看 https://www.bilibili.com/video/BV1 和 https://weibo.com/123 和 https://www.xiaohongshu.com/1",
 		Settings: SettingValues{
 			"fetch_title":       false,
-			"exclude_platforms": []any{"weibo", "x"},
+			"enabled_platforms": []any{"bilibili", "xiaohongshu"},
 		},
 	})
 	if err != nil {
@@ -195,24 +194,24 @@ func TestResolverExcludesConfiguredPlatforms(t *testing.T) {
 	if !strings.Contains(resp.Context, "Bilibili") {
 		t.Fatalf("bilibili missing: %q", resp.Context)
 	}
-	// 勾选 x 不应误伤 xiaohongshu（平台键精确匹配而不是子串）。
+	// 平台键精确匹配，启用 xiaohongshu 不会同时启用 x。
 	if !strings.Contains(resp.Context, "小红书") {
 		t.Fatalf("xiaohongshu should stay: %q", resp.Context)
 	}
 	if strings.Contains(resp.Context, "weibo") {
-		t.Fatalf("weibo should be excluded: %q", resp.Context)
+		t.Fatalf("weibo should be disabled: %q", resp.Context)
 	}
 
-	// 全部命中排除时整体不产出上下文。
+	// 空列表表示所有已知平台均停用。
 	resp, err = plugin.Handle(context.Background(), PluginRequest{
 		Text:     "https://weibo.com/456",
-		Settings: SettingValues{"fetch_title": false, "exclude_platforms": []string{"weibo"}},
+		Settings: SettingValues{"fetch_title": false, "enabled_platforms": []string{}},
 	})
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)
 	}
 	if resp != nil {
-		t.Fatalf("all-excluded should return nil, got %q", resp.Context)
+		t.Fatalf("all-disabled should return nil, got %q", resp.Context)
 	}
 }
 
