@@ -5,7 +5,10 @@ package assistant
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -160,5 +163,42 @@ func TestImageOCRRespectsPrivateToggle(t *testing.T) {
 	notice := runtime.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindPrivate, UserID: "1"}, imageOCRTestMessage("data:z"))
 	if notice != "" || provider.calls.Load() != 0 {
 		t.Fatalf("notice = %q calls = %d", notice, provider.calls.Load())
+	}
+}
+
+// 本地后端完全离线：不碰任何 LLM provider，把图片写成临时文件交给本地命令。
+func TestImageOCRLocalBackendRunsCommandOffline(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "fake-tesseract")
+	// 桩脚本按 tesseract 约定收 <file> stdout -l <langs>，校验文件真实存在。
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntest -s \"$1\" || exit 3\ntest \"$2\" = stdout || exit 4\necho \"本地识别的文字\"\necho \"警告信息\" >&2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	provider := &imageOCRFakeProvider{response: "不该被调用"}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{"backend": imageOCRBackendLocal, "local_command": script, "local_languages": "chi_sim+eng"})
+
+	imageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("fake-png-bytes"))
+	notice := runtime.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage(imageURL))
+	if !strings.Contains(notice, "本地识别的文字") {
+		t.Fatalf("notice = %q", notice)
+	}
+	// stderr 的警告不能混进转写文本。
+	if strings.Contains(notice, "警告信息") {
+		t.Fatalf("stderr leaked into transcript: %q", notice)
+	}
+	if provider.calls.Load() != 0 {
+		t.Fatalf("llm provider calls = %d, want 0 (offline)", provider.calls.Load())
+	}
+	// 缓存同样生效。
+	_ = runtime.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage(imageURL))
+}
+
+// 不是 data URL 的图片本地后端解不出字节，跳过且不影响其他图。
+func TestImageOCRLocalBackendSkipsNonDataURL(t *testing.T) {
+	provider := &imageOCRFakeProvider{}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{"backend": imageOCRBackendLocal, "local_command": "/nonexistent-ocr"})
+
+	notice := runtime.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage("https://example.com/a.png"))
+	if notice != "" {
+		t.Fatalf("notice = %q, want empty", notice)
 	}
 }
