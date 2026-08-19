@@ -171,6 +171,71 @@ func favorabilityChangeRequested(update assistant.UserMemoryUpdate) bool {
 	return update.SetFavorability != nil || update.FavorabilityDelta != 0
 }
 
+// ListUserMemories returns long-term user profiles ordered by most recently
+// updated. query filters by user ID or display name; the second return value
+// is the total row count matching the same filter.
+func (s *SQLiteStore) ListUserMemories(ctx context.Context, query string, limit int, offset int) ([]assistant.UserMemoryProfile, int, error) {
+	if s == nil || s.db == nil {
+		return []assistant.UserMemoryProfile{}, 0, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	where := ""
+	args := []any{}
+	query = strings.TrimSpace(query)
+	if query != "" {
+		where = ` WHERE user_id LIKE ? ESCAPE '\' OR display_name LIKE ? ESCAPE '\'`
+		pattern := "%" + escapeUserMemoryLike(query) + "%"
+		args = append(args, pattern, pattern)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM user_profiles"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at
+FROM user_profiles`+where+`
+ORDER BY updated_at DESC
+LIMIT ? OFFSET ?
+`, append(args, limit, offset)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	profiles := make([]assistant.UserMemoryProfile, 0, limit)
+	for rows.Next() {
+		var profile assistant.UserMemoryProfile
+		var displayName sql.NullString
+		var memoriesRaw string
+		var lastSeenRaw, updatedRaw sql.NullString
+		if err := rows.Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &lastSeenRaw, &updatedRaw); err != nil {
+			return nil, 0, err
+		}
+		profile.DisplayName = displayName.String
+		if strings.TrimSpace(memoriesRaw) != "" {
+			if err := json.Unmarshal([]byte(memoriesRaw), &profile.Memories); err != nil {
+				return nil, 0, err
+			}
+		}
+		profile.LastSeenAt = parseUserProfileTime(lastSeenRaw)
+		profile.UpdatedAt = parseUserProfileTime(updatedRaw)
+		profiles = append(profiles, profile)
+	}
+	return profiles, total, rows.Err()
+}
+
+func escapeUserMemoryLike(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
+}
+
 // GetUserMemory loads one QQ user's long-term profile.
 func (s *SQLiteStore) GetUserMemory(ctx context.Context, userID string) (assistant.UserMemoryProfile, bool, error) {
 	var profile assistant.UserMemoryProfile

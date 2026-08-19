@@ -43,19 +43,21 @@
           <AppSelect id="plugin-watch-profile" v-model="form.profile_id" :options="profileOptions" />
         </div>
         <div class="field wide repository-notification-settings">
-          <div class="repository-section-title"><label>监控内容</label></div>
-          <span class="hint">选择要检查的更新类型；启用类型越多，每轮 GitHub API 请求越多。</span>
-          <div class="repository-watch-scopes">
-            <label class="check-item"><input v-model="form.watch_commits" type="checkbox" />Commit</label>
-            <label class="check-item"><input v-model="form.watch_pull_requests" type="checkbox" />PR</label>
-            <label class="check-item"><input v-model="form.watch_issues" type="checkbox" />Issue</label>
-            <label class="check-item"><input v-model="form.watch_releases" type="checkbox" />Release</label>
-            <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
-          </div>
-        </div>
-        <div class="field wide repository-notification-settings">
           <div class="repository-section-title"><label>仓库通知</label><label class="switch"><input v-model="form.notification_enabled" type="checkbox" /><span class="track" aria-hidden="true"></span></label></div>
-          <span class="hint">开启后把上面选中类型的更新摘要发送到这里配置的私聊或群聊；关闭后仍保留仓库检查状态。</span>
+          <span class="hint">开启后把选中类型的更新摘要发送到这里配置的私聊或群聊；关闭后仍保留仓库检查状态。</span>
+          <div class="issue-role-block">
+            <div class="issue-role-head">
+              <label>监控内容</label>
+              <span class="hint">选择要检查的更新类型；启用类型越多，每轮 GitHub API 请求越多。</span>
+            </div>
+            <div class="repository-watch-scopes">
+              <label class="check-item"><input v-model="form.watch_commits" type="checkbox" />Commit</label>
+              <label class="check-item"><input v-model="form.watch_pull_requests" type="checkbox" />PR</label>
+              <label class="check-item"><input v-model="form.watch_issues" type="checkbox" />Issue</label>
+              <label class="check-item"><input v-model="form.watch_releases" type="checkbox" />Release</label>
+              <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
+            </div>
+          </div>
           <div v-if="form.notification_enabled" class="target-list">
             <div v-for="(target, index) in form.notification_targets" :key="`target-${index}`" class="target-row">
               <AppSelect v-model="target.destination" :options="destinationOptions" />

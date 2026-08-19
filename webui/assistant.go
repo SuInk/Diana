@@ -233,6 +233,8 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/events", h.listEvents)
 	router.GET(base+"/events/:id/trace", h.eventTrace)
 	router.GET(base+"/events/:id/images/:index", h.eventImage)
+	router.GET(base+"/users", h.listAssistantUsers)
+	router.GET(base+"/users/:id", h.getAssistantUser)
 	router.GET(base+"/tasks", h.listTasks)
 	router.POST(base+"/tasks/repository-watches", h.createRepositoryWatch)
 	router.PUT(base+"/tasks/repository-watches/:id", h.updateRepositoryWatch)
