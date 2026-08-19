@@ -701,6 +701,35 @@ func extractOutgoingReplyMarker(text string) (string, string, bool) {
 	return id, strings.TrimLeft(text[end+1:], " \t\r\n"), true
 }
 
+// stripReplyMarkers 去掉正文里 Diana 自己渲染的引用标记。标记表达的是回复关系，
+// 不是发送者写下的字：拿它做触发称呼匹配，等于任何人回复任何一条消息都会因为
+// 标记里的 "diana" 命中称呼，从而被当成在叫机器人。
+func stripReplyMarkers(text string) string {
+	for _, prefix := range []string{replyMarkerPrefix, legacyReplyMarkerPrefix} {
+		offset := 0
+		for {
+			relative := strings.Index(text[offset:], prefix)
+			if relative < 0 {
+				break
+			}
+			start := offset + relative
+			relativeEnd := strings.Index(text[start:], "]")
+			if relativeEnd < 0 {
+				break
+			}
+			end := start + relativeEnd
+			if !validOutgoingReplyMessageID(text[start+len(prefix) : end]) {
+				// 不是真的标记，跳过这次命中继续往后找，别漏掉后面的真标记。
+				offset = start + len(prefix)
+				continue
+			}
+			text = text[:start] + text[end+1:]
+			offset = start
+		}
+	}
+	return text
+}
+
 func validOutgoingReplyMessageID(id string) bool {
 	if strings.HasPrefix(id, "-") {
 		id = id[1:]
