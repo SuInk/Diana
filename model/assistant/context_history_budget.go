@@ -41,6 +41,7 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 	r.mu.RLock()
 	memory := append([]MessageEvent(nil), r.history[session]...)
 	store := r.messageStore
+	summaryWatermark := r.contextSummaryWatermarkLocked(session)
 	r.mu.RUnlock()
 
 	stored := []MessageEvent(nil)
@@ -53,7 +54,7 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 			log.Printf("qqbot token-budget history load failed: %v", err)
 		}
 	}
-	history := mergeMessageHistory(memory, stored, candidateLimit)
+	history := dropSummarizedHistory(mergeMessageHistory(memory, stored, candidateLimit), memory, summaryWatermark)
 	if strings.TrimSpace(event.MessageID) != "" {
 		filtered := history[:0]
 		for _, item := range history {
@@ -358,4 +359,29 @@ func contextBudgetSummaryTrace(breakdown llm.ContextBudgetBreakdown, target int6
 		trace["reason_text"] = contextBudgetReasonText(category.Reason)
 	}
 	return trace
+}
+
+// dropSummarizedHistory 去掉已经被折进压缩摘要、却仍留在存储层的原文。
+// 摘要与原文同时进入一个请求，既浪费预算，也让模型看到同一段对话的两个版本。
+// 仍在内存历史里的事件一律保留：内存历史就是「还没被压缩」的定义，即使它与最后
+// 一条被压缩的消息同秒，也属于原始窗口。
+func dropSummarizedHistory(history, memory []MessageEvent, watermark int64) []MessageEvent {
+	if watermark <= 0 || len(history) == 0 {
+		return history
+	}
+	retained := make(map[string]bool, len(memory))
+	for _, event := range memory {
+		if key := messageHistoryDedupeKey(event); key != "" {
+			retained[key] = true
+		}
+	}
+	filtered := make([]MessageEvent, 0, len(history))
+	for _, event := range history {
+		// 时间未知的事件无法与水位比较，保留它比丢掉它安全。
+		if event.Time > 0 && event.Time <= watermark && !retained[messageHistoryDedupeKey(event)] {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	return filtered
 }

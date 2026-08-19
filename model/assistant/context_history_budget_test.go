@@ -257,3 +257,102 @@ func TestRecordPromptContextBudgetStaysSilentWithoutDebugMode(t *testing.T) {
 		t.Fatalf("debug mode is off, expected no trace, got %+v", entries)
 	}
 }
+
+func TestPromptContextHistoryDropsHistoryAlreadyCoveredBySummary(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 4, ContextSummaryThreshold: 6}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newMemoryMessageHistoryStore()
+	runtime.SetMessageHistoryStore(store)
+
+	base := int64(1700000000)
+	newEvent := func(index int) MessageEvent {
+		return MessageEvent{
+			Kind:       EventKindGroup,
+			GroupID:    "20001",
+			UserID:     "10001",
+			SenderName: "Alice",
+			MessageID:  fmt.Sprintf("msg-%02d", index),
+			Time:       base + int64(index)*60,
+			RawMessage: fmt.Sprintf("第 %d 句历史", index),
+		}
+	}
+	// remember 会在超过阈值时把最旧的一批压进摘要，同时把它们从内存历史移走，
+	// 但存储层仍然保留全部原文。
+	for index := 0; index < 10; index++ {
+		runtime.remember(newEvent(index))
+	}
+
+	session := sessionKey(newEvent(0))
+	runtime.mu.RLock()
+	summary := strings.TrimSpace(runtime.contextSummaries[session])
+	watermark := runtime.contextSummaryMarks[session]
+	memoryDepth := len(runtime.history[session])
+	runtime.mu.RUnlock()
+	if summary == "" || watermark <= 0 {
+		t.Fatalf("expected a summary with a watermark, got %q / %d", summary, watermark)
+	}
+	if stored, _ := store.ListRecentMessageEvents(context.Background(), session, 0); len(stored) != 10 {
+		t.Fatalf("store should still hold every raw event, got %d", len(stored))
+	}
+
+	current := newEvent(10)
+	history := runtime.promptContextHistory(current, runtime.effectiveConfigForEvent(current))
+
+	if len(history) != memoryDepth {
+		t.Fatalf("prompt history = %d events, want the %d still-raw ones", len(history), memoryDepth)
+	}
+	for _, event := range history {
+		if event.Time <= watermark {
+			t.Fatalf("event %q at %d is already covered by the summary (watermark %d)", event.MessageID, event.Time, watermark)
+		}
+	}
+}
+
+func TestPromptContextHistoryKeepsStoredHistoryWithoutSummary(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 20, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newMemoryMessageHistoryStore()
+	runtime.SetMessageHistoryStore(store)
+
+	base := int64(1700000000)
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20002", UserID: "10001", MessageID: "current", Time: base + 600}
+	session := sessionKey(current)
+	for index := 0; index < 5; index++ {
+		_ = store.AppendMessageEvent(context.Background(), session, MessageEvent{
+			Kind:       EventKindGroup,
+			GroupID:    "20002",
+			UserID:     "10001",
+			SenderName: "Alice",
+			MessageID:  fmt.Sprintf("stored-%02d", index),
+			Time:       base + int64(index)*60,
+			RawMessage: fmt.Sprintf("第 %d 句历史", index),
+		})
+	}
+
+	history := runtime.promptContextHistory(current, runtime.effectiveConfigForEvent(current))
+
+	if len(history) != 5 {
+		t.Fatalf("without a summary every stored event must stay available, got %d", len(history))
+	}
+}
+
+func TestDropSummarizedHistoryKeepsEventsStillInMemory(t *testing.T) {
+	base := int64(1700000000)
+	event := func(id string, offset int64) MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "20003", UserID: "1", MessageID: id, Time: base + offset}
+	}
+	// 与水位同秒、但仍留在内存历史里的事件属于原始窗口，不能被当成已摘要。
+	memory := []MessageEvent{event("keep-same-second", 120)}
+	history := []MessageEvent{event("old", 60), event("keep-same-second", 120), event("new", 180)}
+
+	filtered := dropSummarizedHistory(history, memory, base+120)
+
+	if len(filtered) != 2 || filtered[0].MessageID != "keep-same-second" || filtered[1].MessageID != "new" {
+		t.Fatalf("filtered = %#v", filtered)
+	}
+	if same := dropSummarizedHistory(history, memory, 0); len(same) != 3 {
+		t.Fatalf("no watermark must be a no-op, got %d", len(same))
+	}
+	unknownTime := []MessageEvent{{Kind: EventKindGroup, MessageID: "no-time"}}
+	if kept := dropSummarizedHistory(unknownTime, nil, base+120); len(kept) != 1 {
+		t.Fatal("events without a timestamp must be kept")
+	}
+}
