@@ -90,3 +90,50 @@ func TestPlanContextBudgetReportsFitsWhenNothingIsDropped(t *testing.T) {
 		}
 	}
 }
+
+func TestAtomicTextMessageIsDroppedWholeInsteadOfTruncated(t *testing.T) {
+	summary := "【较早上下文摘要范围：2026-08-18 09:00 ~ 2026-08-19 08:40，共 120 条】\n" + strings.Repeat("周五上线由 Alice 负责，Bob 做回归。", 200)
+	messages := []Message{
+		{Role: RoleSystem, Content: "人设与安全规则", Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: summary, Priority: MessagePrioritySummary, AtomicText: true},
+		{Role: RoleUser, Content: "现在的问题是什么", Priority: MessagePriorityCurrent},
+	}
+	fitted := fitMessagesToTokenBudget(messages, 512)
+
+	for _, message := range fitted {
+		if message.Priority != MessagePrioritySummary {
+			continue
+		}
+		t.Fatalf("atomic summary survived in shortened form: %q", message.Content)
+	}
+	if len(fitted) == 0 {
+		t.Fatal("dropping the summary must not drop the whole request")
+	}
+	last := fitted[len(fitted)-1]
+	if last.Content != "现在的问题是什么" {
+		t.Fatalf("current message did not survive: %q", last.Content)
+	}
+}
+
+func TestAtomicTextMessageSurvivesWholeWhenItFits(t *testing.T) {
+	summary := "【较早上下文摘要范围：2026-08-18 09:00 ~ 2026-08-19 08:40，共 12 条】\nAlice 和 Bob 敲定了周五上线。"
+	messages := []Message{
+		{Role: RoleSystem, Content: "人设", Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: summary, Priority: MessagePrioritySummary, AtomicText: true},
+		{Role: RoleUser, Content: "现在的问题", Priority: MessagePriorityCurrent},
+	}
+	fitted := fitMessagesToTokenBudget(messages, 16384)
+
+	found := false
+	for _, message := range fitted {
+		if message.Priority == MessagePrioritySummary {
+			found = true
+			if message.Content != summary {
+				t.Fatalf("summary was rewritten: %q", message.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("summary that fits was dropped")
+	}
+}

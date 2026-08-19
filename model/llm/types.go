@@ -92,6 +92,12 @@ type Message struct {
 	// ContextGroup keeps related optional messages atomic during token fitting.
 	// It is local orchestration metadata and is never sent to providers.
 	ContextGroup string `json:"-"`
+	// AtomicText marks a message whose text is a single semantic unit. A
+	// compressed summary cut in the middle still reads as complete while having
+	// lost its conclusions, entity relations or time bounds, so the budgeter
+	// keeps such a message whole or drops it whole instead of trimming it. The
+	// producer is responsible for shrinking it to fit beforehand.
+	AtomicText bool `json:"-"`
 }
 
 type ToolDefinition struct {

@@ -212,7 +212,7 @@ func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, as
 	return cost
 }
 
-func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext, sources semanticReferenceContext) {
+func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext, sources semanticReferenceContext, summaryRecompressed bool) {
 	if !cfg.DebugModeEnabled {
 		return
 	}
@@ -273,7 +273,7 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		"history_selected_turns":    len(groupHistoryContextTurns(history, event.Time, cfg.BotQQ)),
 		"history_earliest_time":     earliest,
 		"history_latest_time":       latest,
-		"summary":                   contextBudgetSummaryTrace(breakdown, contextShareBudget(window, compressedSummaryTokenShare)),
+		"summary":                   contextBudgetSummaryTrace(breakdown, contextShareBudget(window, compressedSummaryTokenShare), summaryRecompressed),
 		"semantic_requested":        semantic.Requested,
 		"semantic_resolved":         semantic.Resolved,
 		"semantic_text_sources":     semantic.TextSources,
@@ -335,13 +335,13 @@ func contextBudgetCategoryTrace(breakdown llm.ContextBudgetBreakdown) []map[stri
 // contextBudgetSummaryTrace reports the compressed-summary block separately,
 // because a silently shortened summary loses entity relations and time bounds
 // in a way a plain token count does not make obvious.
-func contextBudgetSummaryTrace(breakdown llm.ContextBudgetBreakdown, target int64) map[string]any {
+func contextBudgetSummaryTrace(breakdown llm.ContextBudgetBreakdown, target int64, recompressed bool) map[string]any {
 	trace := map[string]any{
 		"present":          false,
 		"target_tokens":    target,
 		"requested_tokens": int64(0),
 		"selected_tokens":  int64(0),
-		"recompressed":     false,
+		"recompressed":     recompressed,
 		"dropped":          false,
 	}
 	for _, category := range breakdown.Categories {
@@ -351,7 +351,8 @@ func contextBudgetSummaryTrace(breakdown llm.ContextBudgetBreakdown, target int6
 		trace["present"] = category.RequestedMessages > 0
 		trace["requested_tokens"] = category.RequestedTokens
 		trace["selected_tokens"] = category.SelectedTokens
-		trace["recompressed"] = category.TrimmedMessages > 0
+		// 注入前已经重新压缩过，或请求预算层又裁了一刀，都算摘要被缩短。
+		trace["recompressed"] = recompressed || category.TrimmedMessages > 0
 		trace["dropped"] = category.DroppedMessages > 0
 		trace["reason"] = category.Reason
 		trace["reason_text"] = contextBudgetReasonText(category.Reason)
