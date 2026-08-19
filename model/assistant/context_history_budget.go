@@ -212,7 +212,7 @@ func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, as
 	return cost
 }
 
-func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext) {
+func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext, sources semanticReferenceContext) {
 	if !cfg.DebugModeEnabled {
 		return
 	}
@@ -254,10 +254,17 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 			latest = item.Time
 		}
 	}
+	breakdown := llm.PlanContextBudget(messages, window, llm.DefaultMaxOutputTokens)
 	metadata := map[string]any{
-		"effective_context_window":  window,
-		"output_reserve":            llm.DefaultMaxOutputTokens,
-		"input_budget":              llm.InputTokenBudget(window, llm.DefaultMaxOutputTokens),
+		"effective_context_window":  breakdown.ContextWindow,
+		"output_reserve":            breakdown.OutputReserve,
+		"safety_reserve":            breakdown.SafetyReserve,
+		"input_budget":              breakdown.InputBudget,
+		"requested_tokens":          breakdown.RequestedTokens,
+		"selected_tokens":           breakdown.SelectedTokens,
+		"dropped_tokens":            breakdown.DroppedTokens,
+		"over_budget":               breakdown.OverBudget,
+		"categories":                contextBudgetCategoryTrace(breakdown),
 		"category_tokens":           categoryTokens,
 		"history_token_budget":      contextShareBudget(window, recentHistoryTokenShare),
 		"summary_token_budget":      contextShareBudget(window, compressedSummaryTokenShare),
@@ -266,10 +273,13 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		"history_selected_turns":    len(groupHistoryContextTurns(history, event.Time, cfg.BotQQ)),
 		"history_earliest_time":     earliest,
 		"history_latest_time":       latest,
+		"summary":                   contextBudgetSummaryTrace(breakdown, contextShareBudget(window, compressedSummaryTokenShare)),
 		"semantic_requested":        semantic.Requested,
 		"semantic_resolved":         semantic.Resolved,
 		"semantic_text_sources":     semantic.TextSources,
 		"semantic_expected_images":  semantic.ExpectedImages,
+		"semantic_attached_images":  sources.AttachedImageCount,
+		"semantic_missing_sources":  sources.MissingSourceCount,
 		"message_id":                event.MessageID,
 	}
 	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -283,4 +293,68 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		Target:   strings.TrimSpace(event.MessageID),
 		Metadata: metadata,
 	})
+}
+
+// contextBudgetReasonText keeps the debug trace readable in the WebUI without
+// forcing the log reader to memorize the machine-readable slugs.
+func contextBudgetReasonText(reason string) string {
+	switch reason {
+	case llm.ContextBudgetReasonFits:
+		return "完整保留"
+	case llm.ContextBudgetReasonTrimmed:
+		return "超出可用额度，内容已按预算裁剪"
+	case llm.ContextBudgetReasonOldestTurnCut:
+		return "输入预算不足，最旧的完整轮次未装入"
+	case llm.ContextBudgetReasonBudgetExceeded:
+		return "输入预算已用尽，本类内容被丢弃"
+	default:
+		return reason
+	}
+}
+
+func contextBudgetCategoryTrace(breakdown llm.ContextBudgetBreakdown) []map[string]any {
+	categories := make([]map[string]any, 0, len(breakdown.Categories))
+	for _, category := range breakdown.Categories {
+		categories = append(categories, map[string]any{
+			"category":           category.Category,
+			"priority":           category.Priority,
+			"requested_messages": category.RequestedMessages,
+			"selected_messages":  category.SelectedMessages,
+			"dropped_messages":   category.DroppedMessages,
+			"trimmed_messages":   category.TrimmedMessages,
+			"requested_tokens":   category.RequestedTokens,
+			"selected_tokens":    category.SelectedTokens,
+			"dropped_tokens":     category.DroppedTokens,
+			"reason":             category.Reason,
+			"reason_text":        contextBudgetReasonText(category.Reason),
+		})
+	}
+	return categories
+}
+
+// contextBudgetSummaryTrace reports the compressed-summary block separately,
+// because a silently shortened summary loses entity relations and time bounds
+// in a way a plain token count does not make obvious.
+func contextBudgetSummaryTrace(breakdown llm.ContextBudgetBreakdown, target int64) map[string]any {
+	trace := map[string]any{
+		"present":          false,
+		"target_tokens":    target,
+		"requested_tokens": int64(0),
+		"selected_tokens":  int64(0),
+		"recompressed":     false,
+		"dropped":          false,
+	}
+	for _, category := range breakdown.Categories {
+		if category.Category != llm.ContextBudgetCategoryName(llm.MessagePrioritySummary) {
+			continue
+		}
+		trace["present"] = category.RequestedMessages > 0
+		trace["requested_tokens"] = category.RequestedTokens
+		trace["selected_tokens"] = category.SelectedTokens
+		trace["recompressed"] = category.TrimmedMessages > 0
+		trace["dropped"] = category.DroppedMessages > 0
+		trace["reason"] = category.Reason
+		trace["reason_text"] = contextBudgetReasonText(category.Reason)
+	}
+	return trace
 }
