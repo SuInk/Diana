@@ -26,24 +26,25 @@ type assistantEventDetail struct {
 }
 
 type assistantEventsResponse struct {
-	Range         string                 `json:"range"`
-	Result        string                 `json:"result"`
-	Since         *time.Time             `json:"since,omitempty"`
-	Events        []assistantEventDetail `json:"events"`
-	Total         int64                  `json:"total"`
-	FilteredTotal int64                  `json:"filtered_total"`
-	Replied       int64                  `json:"replied"`
-	NotReplied    int64                  `json:"not_replied"`
-	Pending       int64                  `json:"pending"`
-	Errors        int64                  `json:"errors"`
-	Notices       int64                  `json:"notices"`
-	LLMCalls      int64                  `json:"llm_calls"`
-	InputTokens   int64                  `json:"input_tokens"`
-	OutputTokens  int64                  `json:"output_tokens"`
-	TotalTokens   int64                  `json:"total_tokens"`
-	Page          int                    `json:"page"`
-	Limit         int                    `json:"limit"`
-	HasMore       bool                   `json:"has_more"`
+	Range             string                 `json:"range"`
+	Result            string                 `json:"result"`
+	Since             *time.Time             `json:"since,omitempty"`
+	Events            []assistantEventDetail `json:"events"`
+	Total             int64                  `json:"total"`
+	FilteredTotal     int64                  `json:"filtered_total"`
+	Replied           int64                  `json:"replied"`
+	NotReplied        int64                  `json:"not_replied"`
+	Pending           int64                  `json:"pending"`
+	Errors            int64                  `json:"errors"`
+	Notices           int64                  `json:"notices"`
+	LLMCalls          int64                  `json:"llm_calls"`
+	InputTokens       int64                  `json:"input_tokens"`
+	OutputTokens      int64                  `json:"output_tokens"`
+	TotalTokens       int64                  `json:"total_tokens"`
+	CachedInputTokens int64                  `json:"cached_input_tokens"`
+	Page              int                    `json:"page"`
+	Limit             int                    `json:"limit"`
+	HasMore           bool                   `json:"has_more"`
 }
 
 type assistantEventTraceResponse struct {
@@ -255,23 +256,24 @@ func (h *QQBotHandler) listEvents(c *gin.Context) {
 		events = append(events, detail)
 	}
 	response := assistantEventsResponse{
-		Range:         rangeID,
-		Result:        string(resultFilter),
-		Events:        events,
-		Total:         stored.Total,
-		FilteredTotal: stored.FilteredTotal,
-		Replied:       stored.Replied,
-		NotReplied:    stored.NotReplied,
-		Pending:       stored.Pending,
-		Errors:        stored.Errors,
-		Notices:       stored.Notices,
-		LLMCalls:      stored.LLMCalls,
-		InputTokens:   stored.InputTokens,
-		OutputTokens:  stored.OutputTokens,
-		TotalTokens:   stored.TotalTokens,
-		Page:          page,
-		Limit:         limit,
-		HasMore:       int64(page*limit) < stored.FilteredTotal,
+		Range:             rangeID,
+		Result:            string(resultFilter),
+		Events:            events,
+		Total:             stored.Total,
+		FilteredTotal:     stored.FilteredTotal,
+		Replied:           stored.Replied,
+		NotReplied:        stored.NotReplied,
+		Pending:           stored.Pending,
+		Errors:            stored.Errors,
+		Notices:           stored.Notices,
+		LLMCalls:          stored.LLMCalls,
+		InputTokens:       stored.InputTokens,
+		OutputTokens:      stored.OutputTokens,
+		TotalTokens:       stored.TotalTokens,
+		CachedInputTokens: stored.CachedInputTokens,
+		Page:              page,
+		Limit:             limit,
+		HasMore:           int64(page*limit) < stored.FilteredTotal,
 	}
 	if !since.IsZero() {
 		response.Since = &since
