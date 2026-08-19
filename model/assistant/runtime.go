@@ -5283,7 +5283,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n历史图片默认只提供文字摘要、数量、message_id 和图片序号，不代表模型已查看原图。摘要足够回答时不要加载原图；需要辨认小字、核对视觉细节或比较多张图片时，必须调用 diana.history_images。每批最多 8 张，同一批应一次传入所有相关 message_id；更多图片按批次继续读取。工具会把可读取原图作为真实多模态附件加入下一轮；单张失败时只跳过该张，禁止用摘要推测失败图片的细节。")
 	}
 	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
-		tail.WriteString("\n当前发言者是主人：如果要求查询当前群全部成员的好感度、关系或权限汇总，必须调用 diana.relationship 并传 operation=list；工具后端会限定查询范围并完成授权校验，这是明确允许的主人操作，不得自行以隐私、公开范围或管理员权限为由拒绝。如果要求设置或增减其他用户的好感度，必须调用 diana.relationship 的 set/adjust，并正确传入目标用户；不要把目标用户误写成主人自己。")
+		tail.WriteString("\n当前发言者是主人：如果要求设置或增减其他用户的好感度，必须调用 diana.relationship 的 set/adjust，并正确传入目标用户；不要把目标用户误写成主人自己。")
 	}
 	if agentEnabled && relationship.Owner && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n当前发言者是主人：如果要求查看、创建、修改、取消或删除其他用户的提醒与订阅，必须在已提供的任务工具中传入 target_user_id；不要把目标用户误写成主人自己。")
@@ -5310,6 +5310,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n如果用户要求读取当前群资料、群成员列表、按昵称查成员，或真正 @ 某位/多位/其余成员，必须调用 diana.qq_group 获取 OneBot v11 的实时结果；不要声称只能识别用户手动 @ 出来的成员。如果用户要求读取或修改当前群的回复频率、回复阈值、自然插话模式或最低回复成员群等级，必须调用 diana.qq_group 的 reply_policy 或 set_reply_policy；不要口头声称已经修改，工具会校验机器人主人、群主或群管理员权限。")
 	}
 	if agentEnabled && hasTool("diana.relationship") {
+		builder.WriteString("\n如果用户要求查询当前群的互动次数或好感度排行、全体成员的关系汇总，必须调用 diana.relationship 并传 operation=list；榜单对群内成员开放，不得自行以隐私、公开范围或权限为由拒绝。")
 		builder.WriteString("\n如果用户询问自己、被 @ 成员、指定 QQ 用户或群内成员的好感度、最近增减分、关系等级、互动次数或权限，必须调用 diana.relationship 获取目标数据；消息中的结构化 @ 会由工具自动识别。最终回复必须同时说明目标的好感度、关系等级、当前权限和提醒/订阅额度，不得省略工具结果中的 permissions；recent_changes 非空时还要按新到旧说明最近的增减分、时间和原因。不得拿当前发言者的关系上下文代替目标数据，也不得编造‘隐藏数据无法查询’之类限制。")
 	}
 	if agentEnabled && hasTool(dianaImageToolName) {
