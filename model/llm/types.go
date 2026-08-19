@@ -457,9 +457,13 @@ func (cfg ProviderConfig) WithDefaults() ProviderConfig {
 		cfg.ContextWindowTokens = DefaultContextWindowTokens
 	}
 	if cfg.MaxContextTokens == 0 {
-		cfg.MaxContextTokens = DefaultMaxContextTokens
-		if cfg.ContextWindowTokens > 0 && cfg.MaxContextTokens > cfg.ContextWindowTokens {
-			cfg.MaxContextTokens = cfg.ContextWindowTokens
+		// MaxContextTokens 表示「这次请求最多用掉多少上下文」，未设置时就该等于模型
+		// 自己的窗口。以前它回落到 DefaultMaxContextTokens，而那个常量本来只是窗口
+		// 未知时的兜底值：结果换上 128K/200K 的模型后预算仍被钉在 16K，而且整条
+		// 预算链（近期历史 55%、记忆 10% 等）都是按它算的。
+		cfg.MaxContextTokens = cfg.ContextWindowTokens
+		if cfg.MaxContextTokens <= 0 {
+			cfg.MaxContextTokens = DefaultMaxContextTokens
 		}
 	}
 	return cfg

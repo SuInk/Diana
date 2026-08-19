@@ -137,3 +137,44 @@ func TestAtomicTextMessageSurvivesWholeWhenItFits(t *testing.T) {
 		t.Fatal("summary that fits was dropped")
 	}
 }
+
+func TestMaxContextTokensFollowsTheModelWindow(t *testing.T) {
+	cases := []struct {
+		name        string
+		window      int64
+		maxContext  int64
+		wantContext int64
+	}{
+		{name: "large window is not clamped to the 16K fallback", window: 200000, wantContext: 200000},
+		{name: "unknown window falls back", window: 0, wantContext: DefaultContextWindowTokens},
+		{name: "small model window wins", window: 8192, wantContext: 8192},
+		{name: "explicit cap is preserved", window: 200000, maxContext: 32768, wantContext: 32768},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			cfg := ProviderConfig{
+				Provider:            ProviderOpenAICompatible,
+				Model:               "test-model",
+				ContextWindowTokens: item.window,
+				MaxContextTokens:    item.maxContext,
+			}.WithDefaults()
+			if cfg.MaxContextTokens != item.wantContext {
+				t.Fatalf("MaxContextTokens = %d, want %d", cfg.MaxContextTokens, item.wantContext)
+			}
+			if got := cfg.MaxContextTokensWithDefault(); got != item.wantContext {
+				t.Fatalf("MaxContextTokensWithDefault = %d, want %d", got, item.wantContext)
+			}
+		})
+	}
+}
+
+func TestLargeWindowGrowsTheInputBudget(t *testing.T) {
+	small := ProviderConfig{Provider: ProviderOpenAICompatible, Model: "m", ContextWindowTokens: 16384}.WithDefaults()
+	large := ProviderConfig{Provider: ProviderOpenAICompatible, Model: "m", ContextWindowTokens: 200000}.WithDefaults()
+
+	smallBudget := InputTokenBudget(small.MaxContextTokensWithDefault(), DefaultMaxOutputTokens)
+	largeBudget := InputTokenBudget(large.MaxContextTokensWithDefault(), DefaultMaxOutputTokens)
+	if largeBudget <= smallBudget {
+		t.Fatalf("a 200K model must get more input budget than a 16K one: %d vs %d", largeBudget, smallBudget)
+	}
+}
