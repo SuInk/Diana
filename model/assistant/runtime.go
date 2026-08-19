@@ -262,14 +262,18 @@ type Runtime struct {
 	quietNotices              map[string]time.Time
 
 	// sem 控制同时生成回复的 worker 数，history/recent 支撑上下文和状态页展示。
-	sem                   chan struct{}
-	proactiveRouteSem     chan struct{}
-	relationshipEvalSem   chan struct{}
-	relationshipEvalWG    sync.WaitGroup
-	history               map[string][]MessageEvent
-	semanticRefCache      map[string]SemanticReferenceCacheRecord
-	chatInLastReplyAt     map[string]time.Time
-	contextSummaries      map[string]string
+	sem                 chan struct{}
+	proactiveRouteSem   chan struct{}
+	relationshipEvalSem chan struct{}
+	relationshipEvalWG  sync.WaitGroup
+	history             map[string][]MessageEvent
+	semanticRefCache    map[string]SemanticReferenceCacheRecord
+	chatInLastReplyAt   map[string]time.Time
+	contextSummaries    map[string]string
+	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
+	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
+	// 摘要、又以完整原文进入同一个请求。
+	contextSummaryMarks   map[string]int64
 	recent                []EventRecord
 	activeMu              sync.Mutex
 	active                int
@@ -460,6 +464,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		semanticRefCache:      map[string]SemanticReferenceCacheRecord{},
 		chatInLastReplyAt:     map[string]time.Time{},
 		contextSummaries:      map[string]string{},
+		contextSummaryMarks:   map[string]int64{},
 		activeReminders:       map[string]struct{}{},
 		replySuppressByUser:   map[string]ReplySuppression{},
 		replyOutboundGates:    map[string]*replySuppressionOutboundGate{},
@@ -7887,6 +7892,11 @@ func (r *Runtime) remember(event MessageEvent) {
 		if compressCount > 0 {
 			compressed = append([]MessageEvent(nil), history[:compressCount]...)
 			r.contextSummaries[session] = mergeContextSummary(r.contextSummaries[session], compressed)
+			for _, item := range compressed {
+				if item.Time > r.contextSummaryMarks[session] {
+					r.contextSummaryMarks[session] = item.Time
+				}
+			}
 			history = history[compressCount:]
 		}
 	}
@@ -8178,6 +8188,19 @@ func (r *Runtime) contextSummary(event MessageEvent) string {
 	return strings.TrimSpace(r.contextSummaries[session])
 }
 
+// contextSummaryWatermarkLocked 返回本会话摘要已经覆盖到的最后一条历史时间。
+// 它与 contextSummary 用同一个开关：结构化记忆接管摘要时不注入摘要，也就没有
+// 重复注入的问题，此时不应该反过来把存储层的历史裁掉。
+func (r *Runtime) contextSummaryWatermarkLocked(session string) int64 {
+	if r.structuredMemory != nil {
+		return 0
+	}
+	if strings.TrimSpace(r.contextSummaries[session]) == "" {
+		return 0
+	}
+	return r.contextSummaryMarks[session]
+}
+
 func mergeMessageHistory(memory []MessageEvent, stored []MessageEvent, limit int) []MessageEvent {
 	if limit <= 0 {
 		limit = 20
@@ -8417,6 +8440,7 @@ func (r *Runtime) clearSessionHistory(event MessageEvent) {
 	defer r.mu.Unlock()
 	delete(r.history, session)
 	delete(r.contextSummaries, session)
+	delete(r.contextSummaryMarks, session)
 }
 
 // renderDisabledGroups 渲染禁用群列表。
