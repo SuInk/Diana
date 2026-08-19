@@ -1604,6 +1604,36 @@ func TestSplitReplyHonorsChunkSize(t *testing.T) {
 	}
 }
 
+// 超长的逐行列表（排行榜这类）必须在行边界分段，不能按字数把某一行从
+// 人名中间劈开，拆成「9. t」和「：0（初识）」两条消息。
+func TestSplitReplyPrefersLineBoundaries(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, fmt.Sprintf("%d. 群友昵称示例%d：%d（熟悉）", i, i, 30-i))
+	}
+	reply := "当前完整排行：\n" + strings.Join(lines, "\n")
+
+	got := splitReply(reply, 80)
+	if len(got) < 2 {
+		t.Fatalf("expected multiple chunks, got %#v", got)
+	}
+	for _, line := range lines {
+		found := false
+		for _, chunk := range got {
+			if strings.Contains(chunk, line) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("line %q was split across chunks: %#v", line, got)
+		}
+	}
+	if strings.Join(got, "\n") != reply {
+		t.Fatalf("chunks lost content:\n%#v", got)
+	}
+}
+
 func TestSplitReplySplitsBlankLineParagraphs(t *testing.T) {
 	got := splitReply("第一段\n仍是第一段\n\n第二段", 100)
 	want := []string{"第一段\n仍是第一段", "第二段"}
