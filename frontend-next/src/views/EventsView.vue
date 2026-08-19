@@ -180,7 +180,7 @@
                 <span>结果 {{ event.outcome || event.status }}</span>
                 <span v-if="event.outbound_message_id">出站 {{ event.outbound_message_id }}</span>
                 <span v-if="event.total_tokens">
-                  Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}）
+                  Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="event.cached_input_tokens"> / 缓存命中 {{ formatNumber(event.cached_input_tokens) }}</template>）
                 </span>
               </div>
 

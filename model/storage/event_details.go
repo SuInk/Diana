@@ -51,6 +51,7 @@ type InboundEventDetail struct {
 	InputTokens       int64               `json:"input_tokens,omitempty"`
 	OutputTokens      int64               `json:"output_tokens,omitempty"`
 	TotalTokens       int64               `json:"total_tokens,omitempty"`
+	CachedInputTokens int64               `json:"cached_input_tokens,omitempty"`
 	Images            []InboundEventImage `json:"images,omitempty"`
 }
 
@@ -64,18 +65,19 @@ type InboundEventImage struct {
 }
 
 type InboundEventDetailPage struct {
-	Events        []InboundEventDetail
-	Total         int64
-	FilteredTotal int64
-	Replied       int64
-	NotReplied    int64
-	Pending       int64
-	Errors        int64
-	Notices       int64
-	LLMCalls      int64
-	InputTokens   int64
-	OutputTokens  int64
-	TotalTokens   int64
+	Events            []InboundEventDetail
+	Total             int64
+	FilteredTotal     int64
+	Replied           int64
+	NotReplied        int64
+	Pending           int64
+	Errors            int64
+	Notices           int64
+	LLMCalls          int64
+	InputTokens       int64
+	OutputTokens      int64
+	TotalTokens       int64
+	CachedInputTokens int64
 }
 
 // InboundEventResultFilter limits event detail rows without changing the
@@ -268,12 +270,14 @@ LIMIT ? OFFSET ?
 	page.InputTokens = usage.InputTokens
 	page.OutputTokens = usage.OutputTokens
 	page.TotalTokens = usage.TotalTokens
+	page.CachedInputTokens = usage.CachedInputTokens
 	for index := range page.Events {
 		if eventUsage, found := usageByMessage[strings.TrimSpace(page.Events[index].MessageID)]; found {
 			page.Events[index].LLMCalls = eventUsage.LLMCalls
 			page.Events[index].InputTokens = eventUsage.InputTokens
 			page.Events[index].OutputTokens = eventUsage.OutputTokens
 			page.Events[index].TotalTokens = eventUsage.TotalTokens
+			page.Events[index].CachedInputTokens = eventUsage.CachedInputTokens
 		}
 	}
 	return page, nil
@@ -374,10 +378,11 @@ func inboundEventStillImage(segment assistant.MessageSegment) bool {
 }
 
 type inboundEventTokenTotals struct {
-	LLMCalls     int64
-	InputTokens  int64
-	OutputTokens int64
-	TotalTokens  int64
+	LLMCalls          int64
+	InputTokens       int64
+	OutputTokens      int64
+	TotalTokens       int64
+	CachedInputTokens int64
 }
 
 func (s *SQLiteStore) inboundEventTokenUsage(ctx context.Context, since time.Time) (map[string]inboundEventTokenTotals, inboundEventTokenTotals, error) {
@@ -413,10 +418,11 @@ WHERE created_at >= ? AND action IN ('qqbot.llm_usage', 'assistant.llm_usage')
 			totalTokens = inputTokens + outputTokens
 		}
 		current := inboundEventTokenTotals{
-			LLMCalls:     1,
-			InputTokens:  inputTokens,
-			OutputTokens: outputTokens,
-			TotalTokens:  totalTokens,
+			LLMCalls:          1,
+			InputTokens:       inputTokens,
+			OutputTokens:      outputTokens,
+			TotalTokens:       totalTokens,
+			CachedInputTokens: int64FromAny(meta["cached_input_tokens"]),
 		}
 		total.add(current)
 		messageID := strings.TrimSpace(target.String)
@@ -444,4 +450,5 @@ func (t *inboundEventTokenTotals) add(other inboundEventTokenTotals) {
 	t.InputTokens += other.InputTokens
 	t.OutputTokens += other.OutputTokens
 	t.TotalTokens += other.TotalTokens
+	t.CachedInputTokens += other.CachedInputTokens
 }

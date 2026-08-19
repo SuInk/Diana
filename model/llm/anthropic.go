@@ -93,9 +93,10 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 		Text:      text,
 		ToolCalls: toolCalls,
 		Usage: Usage{
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			TotalTokens:  resp.Usage.InputTokens + resp.Usage.OutputTokens,
+			InputTokens:       resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens,
+			OutputTokens:      resp.Usage.OutputTokens,
+			TotalTokens:       resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.OutputTokens,
+			CachedInputTokens: resp.Usage.CacheReadInputTokens,
 		},
 	}, nil
 }

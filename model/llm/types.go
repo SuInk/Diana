@@ -158,6 +158,11 @@ type Usage struct {
 	InputTokens  int64 `json:"input_tokens,omitempty"`
 	OutputTokens int64 `json:"output_tokens,omitempty"`
 	TotalTokens  int64 `json:"total_tokens,omitempty"`
+	// CachedInputTokens 是 InputTokens 里命中供应商前缀缓存的部分（OpenAI 的
+	// cached_tokens、Anthropic 的 cache_read_input_tokens、Gemini 的
+	// cachedContentTokenCount）。系统提示词的稳定前缀是否真的被缓存，靠这个
+	// 字段观察，而不是靠离线的字符串比较。
+	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
 }
 
 type GenerateResponse struct {
