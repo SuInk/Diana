@@ -437,7 +437,14 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 			if term == "" {
 				continue
 			}
-			scoreParts = append(scoreParts, `CASE WHEN `+searchable+` LIKE ? ESCAPE '\' THEN 1 ELSE 0 END`)
+			// 长词命中比短词值钱：检索词生成端用三字/双字 n-gram 的权重挑词，
+			// 打分端如果每个命中都记 1 分，一个三字词的精确命中就会被两个
+			// 撞上的双字噪声压过去。按词长加权（封顶 4）恢复这层区分度。
+			weight := len([]rune(term))
+			if weight > 4 {
+				weight = 4
+			}
+			scoreParts = append(scoreParts, fmt.Sprintf(`CASE WHEN `+searchable+` LIKE ? ESCAPE '\' THEN %d ELSE 0 END`, weight))
 			args = append(args, "%"+escapeMessageHistoryLike(term)+"%")
 		}
 		if len(scoreParts) > 0 {
