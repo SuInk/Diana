@@ -152,7 +152,8 @@ func downloadPlatformVideoFile(ctx context.Context, raw string) string {
 }
 
 func downloadYTDLPVideoFile(ctx context.Context, raw string) string {
-	if _, err := exec.LookPath("yt-dlp"); err != nil {
+	ytDLPPath, err := lookResolverCommand("yt-dlp")
+	if err != nil {
 		return ""
 	}
 	workDir, err := os.MkdirTemp("", "diana-resolver-video-*")
@@ -162,7 +163,9 @@ func downloadYTDLPVideoFile(ctx context.Context, raw string) string {
 	outputPattern := filepath.Join(workDir, "video.%(ext)s")
 	cmdCtx, cancel := context.WithTimeout(ctx, defaultPlatformTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, "yt-dlp", ytDLPFullVideoDownloadArgs(ctx, outputPattern, raw)...)
+	cmd := exec.CommandContext(cmdCtx, ytDLPPath, ytDLPFullVideoDownloadArgs(ctx, outputPattern, raw)...)
+	// yt-dlp 会自己去调 ffmpeg，子进程也得能找到这些目录。
+	cmd.Env = resolverCommandEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("resolver yt-dlp video download failed for %s: %v: %s", raw, err, strings.TrimSpace(string(output)))
 		_ = os.RemoveAll(workDir)
@@ -308,7 +311,8 @@ func downloadDouyinVideoFile(ctx context.Context, raw string) string {
 }
 
 func generateDouyinABogus(ctx context.Context, raw string, userAgent string) string {
-	if _, err := exec.LookPath("node"); err != nil {
+	nodePath, err := lookResolverCommand("node")
+	if err != nil {
 		return ""
 	}
 	parsed, err := url.Parse(raw)
@@ -318,7 +322,9 @@ func generateDouyinABogus(ctx context.Context, raw string, userAgent string) str
 	cmdCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	script := douyinABogusJS + "\nconsole.log(generate_a_bogus(process.argv[1], process.argv[2]));\n"
-	output, err := exec.CommandContext(cmdCtx, "node", "-e", script, parsed.RawQuery, userAgent).Output()
+	nodeCmd := exec.CommandContext(cmdCtx, nodePath, "-e", script, parsed.RawQuery, userAgent)
+	nodeCmd.Env = resolverCommandEnv()
+	output, err := nodeCmd.Output()
 	if err != nil {
 		return ""
 	}
@@ -638,7 +644,8 @@ func downloadBilibiliCandidateURLs(ctx context.Context, urls []string, path stri
 }
 
 func ytdlpDumpInfo(ctx context.Context, raw string) (ytdlpInfo, bool) {
-	if _, err := exec.LookPath("yt-dlp"); err != nil {
+	ytDLPPath, err := lookResolverCommand("yt-dlp")
+	if err != nil {
 		return ytdlpInfo{}, false
 	}
 	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -646,7 +653,8 @@ func ytdlpDumpInfo(ctx context.Context, raw string) (ytdlpInfo, bool) {
 	args := []string{"--simulate", "--dump-json", "--no-warnings"}
 	args = appendYTDLPResolverArgs(ctx, args, raw)
 	args = append(args, raw)
-	cmd := exec.CommandContext(cmdCtx, "yt-dlp", args...)
+	cmd := exec.CommandContext(cmdCtx, ytDLPPath, args...)
+	cmd.Env = resolverCommandEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -1050,12 +1058,14 @@ func downloadURLToFile(ctx context.Context, raw string, path string, headers map
 }
 
 func mergeMediaToMP4(ctx context.Context, videoPath string, audioPath string, outputPath string) bool {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
+	ffmpegPath, err := lookResolverCommand("ffmpeg")
+	if err != nil {
 		return false
 	}
 	cmdCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", videoPath, "-i", audioPath, "-c", "copy", outputPath)
+	cmd := exec.CommandContext(cmdCtx, ffmpegPath, "-hide_banner", "-loglevel", "error", "-y", "-i", videoPath, "-i", audioPath, "-c", "copy", outputPath)
+	cmd.Env = resolverCommandEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("resolver ffmpeg merge failed: %v: %s", err, strings.TrimSpace(string(output)))
 		return false

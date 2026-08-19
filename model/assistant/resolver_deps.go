@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -27,6 +28,68 @@ var (
 	resolverDepsMu                  sync.RWMutex
 	resolverDepsCache               []ResolverDependency
 )
+
+// resolverCommandSearchDirs 是当前 PATH 之外还要搜的常见安装目录。
+// launchd 和 systemd 启动的服务进程通常只继承 /usr/bin:/bin:/usr/sbin:/sbin，
+// 而 Homebrew 装在 /opt/homebrew/bin（Apple Silicon）或 /usr/local/bin（Intel），
+// pipx 装在 ~/.local/bin。少了这些目录，明明装好的 yt-dlp/ffmpeg/node 在服务
+// 里会全部「找不到」，连包管理器都探测不到，界面上只剩「需手动安装」。
+func resolverCommandSearchDirs() []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dirs := []string{"/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"}
+	if runtime.GOOS == "linux" {
+		dirs = append(dirs, "/snap/bin", "/home/linuxbrew/.linuxbrew/bin")
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		dirs = append(dirs, filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin"))
+	}
+	return dirs
+}
+
+// lookResolverCommand 先按 PATH 查，再退回常见安装目录，返回可直接执行的绝对路径。
+func lookResolverCommand(name string) (string, error) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	for _, dir := range resolverCommandSearchDirs() {
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+// resolverCommandEnv 把上面这些目录补进子进程的 PATH。
+// 只给出绝对路径不够：yt-dlp 会自己去调 ffmpeg，子进程照样得找得到。
+func resolverCommandEnv() []string {
+	dirs := resolverCommandSearchDirs()
+	if len(dirs) == 0 {
+		return nil
+	}
+	env := os.Environ()
+	for index, entry := range env {
+		if !strings.HasPrefix(entry, "PATH=") {
+			continue
+		}
+		existing := strings.Split(strings.TrimPrefix(entry, "PATH="), string(os.PathListSeparator))
+		seen := make(map[string]bool, len(existing))
+		for _, item := range existing {
+			seen[item] = true
+		}
+		merged := existing
+		for _, dir := range dirs {
+			if !seen[dir] {
+				merged = append(merged, dir)
+			}
+		}
+		env[index] = "PATH=" + strings.Join(merged, string(os.PathListSeparator))
+		return env
+	}
+	return append(env, "PATH="+strings.Join(dirs, string(os.PathListSeparator)))
+}
 
 // ResolverDependency 描述解析器依赖的一个外部命令。
 type ResolverDependency struct {
@@ -110,7 +173,7 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 		return ResolverDependencyInstallResult{Dependency: dep, Resolver: deps}, nil
 	}
 
-	plan, err := resolverDependencyInstallPlan(name, runtime.GOOS, exec.LookPath)
+	plan, err := resolverDependencyInstallPlan(name, runtime.GOOS, lookResolverCommand)
 	if err != nil {
 		return ResolverDependencyInstallResult{}, err
 	}
@@ -120,6 +183,7 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 	for _, command := range plan.commands {
 		output := &limitedCommandOutput{remaining: resolverInstallerOutputLimit}
 		cmd := exec.CommandContext(installCtx, command.path, command.args...)
+		cmd.Env = resolverCommandEnv()
 		cmd.Stdout = output
 		cmd.Stderr = output
 		if err := cmd.Run(); err != nil {
@@ -146,12 +210,13 @@ func probeResolverDependencies() []ResolverDependency {
 	out := make([]ResolverDependency, 0, len(resolverDependencySpecs))
 	for _, spec := range resolverDependencySpecs {
 		dep := ResolverDependency{Name: spec.name, Purpose: spec.purpose}
-		path, err := exec.LookPath(spec.name)
-		if err == nil {
+		// 可用性以「版本命令真的跑通」为准，而不是文件存在：架构不匹配、
+		// 符号链接悬空、缺动态库的命令都能骗过存在性检查，却一执行就失败。
+		if path, version, ok := probeResolverCommand(spec.name, spec.versionArgs); ok {
 			dep.Available = true
 			dep.Path = path
-			dep.Version = probeCommandVersion(spec.name, spec.versionArgs)
-		} else if plan, planErr := resolverDependencyInstallPlan(spec.name, runtime.GOOS, exec.LookPath); planErr == nil {
+			dep.Version = version
+		} else if plan, planErr := resolverDependencyInstallPlan(spec.name, runtime.GOOS, lookResolverCommand); planErr == nil {
 			dep.Installable = true
 			dep.Installer = plan.installer
 		}
@@ -270,20 +335,47 @@ func cloneResolverDependencies(deps []ResolverDependency) []ResolverDependency {
 	return out
 }
 
+// probeResolverCommand 定位命令并执行它的版本参数：跑通才算可用。
+// 顺带把绝对路径和版本一起带回来，省掉「先 LookPath 再执行」的重复查找。
+func probeResolverCommand(name string, versionArgs []string) (string, string, bool) {
+	path, err := lookResolverCommand(name)
+	if err != nil {
+		return "", "", false
+	}
+	version, ok := runCommandVersion(path, name, versionArgs)
+	if !ok {
+		return "", "", false
+	}
+	return path, version, true
+}
+
 // probeCommandVersion 取版本号首行，拿不到就留空；版本只用于展示。
 func probeCommandVersion(name string, args []string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, name, args...).Output()
+	path, err := lookResolverCommand(name)
 	if err != nil {
 		return ""
+	}
+	version, _ := runCommandVersion(path, name, args)
+	return version
+}
+
+// runCommandVersion 执行版本参数。第二个返回值区分「跑通了但没打印版本」和
+// 「根本跑不起来」：前者仍算可用，后者不算。
+func runCommandVersion(path, name string, args []string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Env = resolverCommandEnv()
+	output, err := cmd.Output()
+	if err != nil {
+		return "", false
 	}
 	line := strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)[0])
 	line = shortVersion(name, line)
 	if len(line) > 120 {
 		line = line[:120]
 	}
-	return line
+	return line, true
 }
 
 // shortVersion 从版本首行里挑出版本号本身。yt-dlp 和 node 直接就打印版本号，

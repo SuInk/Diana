@@ -1274,6 +1274,65 @@ export function getAssistantEventTrace(eventID: string): Promise<AssistantEventT
   return requestJSON<AssistantEventTraceResponse>(`/api/assistant/events/${encodeURIComponent(eventID)}/trace`);
 }
 
+export interface UserMemoryItem {
+  text: string;
+  source?: string;
+  group_id?: string;
+  message_id?: string;
+  at?: string;
+}
+
+export interface UserMemoryProfile {
+  user_id: string;
+  display_name?: string;
+  favorability: number;
+  message_count: number;
+  memories?: UserMemoryItem[];
+  /** 列表接口不带记忆正文，只带条数；详情接口带完整 memories。 */
+  memory_count?: number;
+  last_seen_at?: string;
+  updated_at?: string;
+}
+
+export interface UserFavorabilityChange {
+  id: number;
+  user_id: string;
+  delta: number;
+  before_score: number;
+  after_score: number;
+  source: string;
+  reason?: string;
+  operator_id?: string;
+  group_id?: string;
+  message_id?: string;
+  created_at: string;
+}
+
+export interface AssistantUsersResponse {
+  users: UserMemoryProfile[];
+  total: number;
+  query?: string;
+  limit: number;
+  offset: number;
+}
+
+export interface AssistantUserDetailResponse {
+  profile: UserMemoryProfile;
+  favorability_changes: UserFavorabilityChange[];
+}
+
+export function listAssistantUsers(query = "", limit = 50, offset = 0): Promise<AssistantUsersResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (query) {
+    params.set("q", query);
+  }
+  return requestJSON<AssistantUsersResponse>(`/api/assistant/users?${params.toString()}`);
+}
+
+export function getAssistantUser(userID: string): Promise<AssistantUserDetailResponse> {
+  return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}`);
+}
+
 export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "rss_watch";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
