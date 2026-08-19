@@ -32,6 +32,7 @@ func resolverForwardTestResponse() PluginResponse {
 			{ImageURLs: []string{"https://example.com/1.jpg"}},
 			{ImageURLs: []string{"https://example.com/2.jpg"}},
 		},
+		ImageURLs: []string{"https://example.com/1.jpg", "https://example.com/2.jpg"},
 	}
 }
 
@@ -110,8 +111,8 @@ func countRecordingCalls(channel *recordingChannel, action string) int {
 	return count
 }
 
-// WebUI 关闭「合并转发发送」后，解析结果逐条直发，节点内容一条不丢。
-func TestResolverMergedForwardToggleSendsNodesDirectly(t *testing.T) {
+// WebUI 关闭「合并转发发送」后恢复普通消息投递，不生成转发卡片。
+func TestResolverMergedForwardToggleUsesOriginalDirectDelivery(t *testing.T) {
 	channel := resolverForwardChannel()
 	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
@@ -125,10 +126,10 @@ func TestResolverMergedForwardToggleSendsNodesDirectly(t *testing.T) {
 		t.Fatalf("toggle off still sent a merged forward: %d calls", got)
 	}
 	sent := channel.sentSnapshot()
-	if len(sent) != len(resp.ForwardMessages) {
-		t.Fatalf("sent %d direct messages, want %d", len(sent), len(resp.ForwardMessages))
+	if len(sent) != 1 {
+		t.Fatalf("sent %d direct messages, want 1", len(sent))
 	}
-	if sent[0].Text != "某站图集 · 标题" || len(sent[1].ImageURLs) != 1 || len(sent[2].ImageURLs) != 1 {
-		t.Fatalf("node content lost in direct delivery: %#v", sent)
+	if sent[0].Text != "某站图集 · 标题" || len(sent[0].ImageURLs) != 2 {
+		t.Fatalf("original direct delivery was not restored: %#v", sent)
 	}
 }
