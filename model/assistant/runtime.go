@@ -3148,16 +3148,32 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 		log.Printf("qqbot resolver produced no sendable content: message_id=%s", event.MessageID)
 		return "", nil
 	}
-	if resp.Forward && len(resp.ForwardMessages) > 0 {
-		if err := r.sendForwardPluginResponse(ctx, event, *resp, r.effectiveConfigForEvent(event)); err != nil {
+	if _, err := r.deliverResolverResponse(ctx, event, *resp); err != nil {
+		return "", err
+	}
+	r.maybeSendPluginFollowUp(ctx, event, *resp)
+	return reply, nil
+}
+
+// deliverResolverResponse 按插件声明的形式投递解析结果。
+func (r *Runtime) deliverResolverResponse(ctx context.Context, event MessageEvent, resp PluginResponse) (string, error) {
+	reply := directPluginReply(resp)
+	switch {
+	case resp.Forward && len(resp.ForwardMessages) > 0:
+		if err := r.sendForwardPluginResponse(ctx, event, resp, r.effectiveConfigForEvent(event)); err != nil {
 			return "", err
 		}
-	} else {
+	case len(resp.ForwardMessages) > 0:
+		// 合并转发被关掉时逐条直发原有节点：节点里除了正文和媒体还有下载失败
+		// 提示等补充内容，退回 Reply/ImageURLs 字段会把这些弄丢。
+		if err := r.sendResolverMessagesDirect(ctx, event, resp.ForwardMessages); err != nil {
+			return "", err
+		}
+	default:
 		if err := r.sendDirectPluginResponse(ctx, event, reply, resp.ImageURLs, resp.VideoURLs); err != nil {
 			return "", err
 		}
 	}
-	r.maybeSendPluginFollowUp(ctx, event, *resp)
 	return reply, nil
 }
 
@@ -6804,6 +6820,18 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 	forwardMessages, uploadVideos, sharedUploads := r.prepareForwardResolverVideoDelivery(messages)
 	forwardMessageID := ""
 	if len(forwardMessages) > 0 {
+		// 合并转发要先逐条暂存再打包，一次成功要花掉多个请求；入站事件因为后续
+		// 任何一步失败而整条重跑时，没有账本就会把同一份图集再发一遍。
+		fingerprintParts := make([]string, 0, len(forwardMessages)+1)
+		fingerprintParts = append(fingerprintParts, "resolver-forward")
+		for _, forwardMessage := range forwardMessages {
+			fingerprintParts = append(fingerprintParts, outgoingMessageFingerprint(forwardMessage))
+		}
+		stepKey, replayedMessageID, alreadyDelivered := r.claimOutboundStep(ctx, fingerprintOf(fingerprintParts...))
+		if alreadyDelivered {
+			r.rememberForwardOutgoing(ctx, event, forwardMessages, replayedMessageID)
+			return nil
+		}
 		var err error
 		forwardCtx := ctx
 		if len(sharedUploads) > 0 {
@@ -6814,6 +6842,12 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			if errors.Is(err, errGroupSendUnavailable) {
 				return err
 			}
+			// 超时或取消时打包请求可能已经被 QQ 投递，只是回执没等到；此时再
+			// 直发一遍就是用户看到的「同一个图集来了两份」。交给入站队列按
+			// 账本重跑，而不是立刻盲发。
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				return err
+			}
 			// Some OneBot implementations (notably SnowLuma) can send the
 			// staged media directly but cannot reconstruct image elements inside
 			// a merged-forward node. Fall back to ordinary media messages so a
@@ -6821,7 +6855,12 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			if directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages); directErr != nil {
 				return errors.Join(err, directErr)
 			}
+			// 散装兜底送达后同样记账：重跑时若不记，这里会再试一次合并转发，
+			// 群里就是兜底一份加转发一份。
+			r.recordOutboundStep(ctx, stepKey, "")
 			forwardMessages = nil
+		} else {
+			r.recordOutboundStep(ctx, stepKey, forwardMessageID)
 		}
 	}
 	if len(forwardMessages) > 0 {
