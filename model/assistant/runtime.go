@@ -2707,6 +2707,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	fullAgentEnabled := cfg.AgentEnabled && !authoritativePluginContext
 	olderSummary := ""
+	summaryRecompressed := false
 	if !authoritativePluginContext {
 		olderSummary = r.contextSummary(event)
 	}
@@ -2863,11 +2864,18 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			})
 		}
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
-			messages = append(messages, llm.Message{
-				Role:     llm.RoleUser,
-				Content:  "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n" + summary,
-				Priority: llm.MessagePrioritySummary,
-			})
+			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
+			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
+			summary, summaryRecompressed = r.fitOlderSummaryToBudget(ctx, summary, summaryBudget, cfg)
+			if summary != "" {
+				messages = append(messages, llm.Message{
+					Role:    llm.RoleUser,
+					Content: summaryPrefix + summary,
+					// 摘要已经压到目标配额，请求预算层不要再从中间截断它。
+					Priority:   llm.MessagePrioritySummary,
+					AtomicText: true,
+				})
+			}
 		}
 		turnCandidates := proactiveReplyTurnFromContext(ctx)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
@@ -3026,7 +3034,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 	}
 	messages = append(messages, currentMessage)
-	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext)
+	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed)
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
@@ -6163,17 +6171,34 @@ func stringFromAny(value any) string {
 	return strings.TrimSpace(stringifyID(value))
 }
 
+// mergeContextSummary 把新压缩掉的历史并进已有摘要，并维护摘要的水位标识。
+// 超出上限时按整行丢弃最旧的记录：按字符截断会把某一条记录切成半句，让模型
+// 读到一个没有主语或没有结论的片段。
 func mergeContextSummary(existing string, events []MessageEvent) string {
-	var lines []string
-	if existing = strings.TrimSpace(existing); existing != "" {
-		lines = append(lines, existing)
-	}
+	header, lines := splitContextSummary(existing)
+	start, count := parseContextSummaryHeader(header)
+	end := ""
 	for _, event := range events {
-		if line := compactContextEvent(event); line != "" {
-			lines = append(lines, line)
+		line := compactContextEvent(event)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+		count++
+		label := contextSummaryTimeLabel(event.Time)
+		if start == "" {
+			start = label
+		}
+		end = label
+	}
+	if end == "" {
+		_, endFromHeader, found := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(header, contextSummaryHeaderPrefix), "】"), " ~ ")
+		if found {
+			end, _, _ = strings.Cut(endFromHeader, "，共 ")
 		}
 	}
-	return truncateRunesFromStart(strings.Join(lines, "\n"), 4000)
+	rebuilt := contextSummaryHeader(start, end, count)
+	return joinContextSummary(rebuilt, dropOldestContextSummaryLines(rebuilt, lines, contextSummaryMaxRunes))
 }
 
 func compactContextEvent(event MessageEvent) string {
