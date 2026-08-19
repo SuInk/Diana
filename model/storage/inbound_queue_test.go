@@ -343,14 +343,16 @@ func TestInboundQueueFIFOLeaseRecoveryRetryAndRelease(t *testing.T) {
 	if err != nil || !ok || recovered.ID != firstID || recovered.Attempts != 2 {
 		t.Fatalf("recovered item=%#v ok=%v err=%v", recovered, ok, err)
 	}
-	if err := store.RetryInboundEvent(ctx, recovered.ID, "worker-b", time.Now().Add(25*time.Millisecond), "temporary failure"); err != nil {
+	// 重试窗口给足余量：设 25ms 的话，Retry 与下一行 Claim 之间只要被调度器
+	// 或 GC 卡一下就会越过重试时间，事件变得可领取，断言在慢 CI 上偶发炸掉。
+	if err := store.RetryInboundEvent(ctx, recovered.ID, "worker-b", time.Now().Add(300*time.Millisecond), "temporary failure"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker-c", time.Now().Add(time.Minute)); err != nil || ok {
 		t.Fatalf("future retry was claimable ok=%v err=%v", ok, err)
 	}
 
-	time.Sleep(35 * time.Millisecond)
+	time.Sleep(320 * time.Millisecond)
 	retried, ok, err := store.ClaimNextInboundEvent(ctx, "worker-c", time.Now().Add(time.Minute))
 	if err != nil || !ok || retried.ID != firstID || retried.Attempts != 3 {
 		t.Fatalf("retried item=%#v ok=%v err=%v", retried, ok, err)
