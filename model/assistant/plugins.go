@@ -235,7 +235,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewSandboxedBrowserRenderPlugin(),
 		NewVoiceTTSPlugin(nil),
 		NewVoiceSTTPlugin(nil),
-		NewImageOCRPlugin(),
+		NewImageOCRPlugin(nil),
 		NewWebSearchPlugin(nil),
 		NewRepositoryWatchPlugin(nil),
 		NewRepositoryPublishPlugin(nil),

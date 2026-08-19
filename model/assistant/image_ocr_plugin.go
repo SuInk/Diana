@@ -4,12 +4,16 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,34 +33,42 @@ const (
 	imageOCRBackendDisabled = "disabled"
 	imageOCRBackendLLM      = "llm"
 	imageOCRBackendLocal    = "local"
+	imageOCRBackendHTTP     = "http"
 	imageOCRNoTextMarker    = "[无可辨文字]"
 	imageOCRCacheCap        = 128
 	imageOCRPerImageMax     = 2000
 )
 
 type ImageOCRPlugin struct {
-	mu    sync.Mutex
-	cache map[string]string
-	order []string
+	client *http.Client
+	mu     sync.Mutex
+	cache  map[string]string
+	order  []string
 }
 
-func NewImageOCRPlugin() *ImageOCRPlugin {
-	return &ImageOCRPlugin{cache: make(map[string]string)}
+func NewImageOCRPlugin(client *http.Client) *ImageOCRPlugin {
+	if client == nil {
+		client = &http.Client{}
+	}
+	return &ImageOCRPlugin{client: client, cache: make(map[string]string)}
 }
 
 func (p *ImageOCRPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.0",
-		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型。对话模型读图上文字能力弱时可作补充；可走 LLM 配置里的 vision 分组，也可用本地 tesseract 等命令完全离线转写。",
+		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型。对话模型读图上文字能力弱时可作补充；可走 LLM 配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "llm:generate"},
 		Settings: []PluginSettingSpec{
 			{Key: "backend", Label: "转写方式", Type: PluginSettingTypeSelect, Default: imageOCRBackendDisabled, Options: []PluginSettingOption{
 				{Value: imageOCRBackendDisabled, Label: "关闭"},
 				{Value: imageOCRBackendLLM, Label: "LLM 视觉转写（vision 分组）"},
+				{Value: imageOCRBackendHTTP, Label: "OCR 服务接口（PaddleOCR/RapidOCR 等，离线）"},
 				{Value: imageOCRBackendLocal, Label: "本地命令（tesseract 等，离线）"},
 			}},
 			{Key: "model", Label: "指定模型", Type: PluginSettingTypeString, Default: ""},
+			{Key: "http_endpoint", Label: "OCR 服务地址", Type: PluginSettingTypeString, Default: ""},
+			{Key: "http_api_key", Label: "OCR 服务 API Key", Type: PluginSettingTypeString, Default: "", Secret: true},
 			{Key: "local_command", Label: "本地命令", Type: PluginSettingTypeString, Default: "tesseract"},
 			{Key: "local_languages", Label: "本地识别语言", Type: PluginSettingTypeString, Default: "chi_sim+eng"},
 			{Key: "max_images", Label: "单条消息转写图片数上限", Type: PluginSettingTypeNumber, Default: 3, Min: settingRange(1), Max: settingRange(6), Step: 1},
@@ -73,6 +85,8 @@ func (p *ImageOCRPlugin) Handle(context.Context, PluginRequest) (*PluginResponse
 type imageOCRConfig struct {
 	Backend        string
 	Model          string
+	HTTPEndpoint   string
+	HTTPAPIKey     string
 	LocalCommand   string
 	LocalLanguages string
 	MaxImages      int
@@ -84,6 +98,8 @@ func imageOCRConfigFromSettings(v SettingValues) imageOCRConfig {
 	return imageOCRConfig{
 		Backend:        v.String("backend", imageOCRBackendDisabled),
 		Model:          strings.TrimSpace(v.String("model", "")),
+		HTTPEndpoint:   strings.TrimSpace(v.String("http_endpoint", "")),
+		HTTPAPIKey:     strings.TrimSpace(v.String("http_api_key", "")),
 		LocalCommand:   strings.TrimSpace(v.String("local_command", "tesseract")),
 		LocalLanguages: strings.TrimSpace(v.String("local_languages", "chi_sim+eng")),
 		MaxImages:      v.Int("max_images", 3),
@@ -131,7 +147,7 @@ func (r *Runtime) imageOCRContextText(ctx context.Context, event MessageEvent, m
 		return ""
 	}
 	cfg := imageOCRConfigFromSettings(settings)
-	if cfg.Backend != imageOCRBackendLLM && cfg.Backend != imageOCRBackendLocal {
+	if cfg.Backend != imageOCRBackendLLM && cfg.Backend != imageOCRBackendLocal && cfg.Backend != imageOCRBackendHTTP {
 		return ""
 	}
 	if event.Kind == EventKindPrivate && !cfg.PrivateEnabled {
@@ -183,9 +199,12 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 
 	var text string
 	var err error
-	if cfg.Backend == imageOCRBackendLocal {
+	switch cfg.Backend {
+	case imageOCRBackendLocal:
 		text, err = localImageOCRTranscription(callCtx, cfg, imageURL)
-	} else {
+	case imageOCRBackendHTTP:
+		text, err = plugin.httpImageOCRTranscription(callCtx, cfg, imageURL)
+	default:
 		text, err = r.llmImageOCRTranscription(callCtx, event, cfg, imageURL)
 	}
 	if err != nil {
@@ -235,6 +254,77 @@ func localImageOCRTranscription(ctx context.Context, cfg imageOCRConfig, imageUR
 		return "", fmt.Errorf("image ocr: local command: %w%s", err, detail)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// httpImageOCRTranscription 调自托管的传统 OCR 模型服务（PaddleOCR hub
+// serving、RapidOCR api 等）。请求统一为 JSON {"images": ["<base64>"]}；响应
+// 结构各家不一，按通用方式递归收集 text / rec_txt / transcription / words
+// 字段拼成行——足够覆盖 Paddle 系服务的返回格式。
+func (p *ImageOCRPlugin) httpImageOCRTranscription(ctx context.Context, cfg imageOCRConfig, imageURL string) (string, error) {
+	if cfg.HTTPEndpoint == "" {
+		return "", errors.New("image ocr: http endpoint is empty")
+	}
+	data, _, err := imageOCRDataURLBytes(imageURL)
+	if err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(map[string]any{"images": []string{base64.StdEncoding.EncodeToString(data)}})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.HTTPEndpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.HTTPAPIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.HTTPAPIKey)
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("image ocr: http service status %d", resp.StatusCode)
+	}
+	var parsed any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("image ocr: http service returned non-JSON: %w", err)
+	}
+	var texts []string
+	collectOCRTexts(parsed, &texts)
+	// 收不到任何文字字段按「无可辨文字」处理：不少服务对空图就是返回空结果。
+	return strings.Join(texts, "\n"), nil
+}
+
+// collectOCRTexts 递归收集常见 OCR 响应里的文字字段。同一个对象里最多命中
+// 一个字段；数组保持原顺序，对象键的遍历顺序不保证——实际服务的文字都挂在
+// 同一个数组下，够用。
+func collectOCRTexts(node any, out *[]string) {
+	switch value := node.(type) {
+	case map[string]any:
+		for _, key := range []string{"text", "rec_txt", "transcription", "words"} {
+			if s, ok := value[key].(string); ok && strings.TrimSpace(s) != "" {
+				*out = append(*out, strings.TrimSpace(s))
+				break
+			}
+		}
+		for _, child := range value {
+			if _, isString := child.(string); isString {
+				continue
+			}
+			collectOCRTexts(child, out)
+		}
+	case []any:
+		for _, child := range value {
+			collectOCRTexts(child, out)
+		}
+	}
 }
 
 // imageOCRDataURLBytes 解出 base64 data URL 的原始图片字节和扩展名。上下文里的
