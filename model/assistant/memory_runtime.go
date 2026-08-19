@@ -164,7 +164,22 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 	if !memoryEventEligible(r.effectiveConfigForEvent(event), event, text) {
 		return nil
 	}
-	existing, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
+	// 门控要求模型「更新已有记忆时复用原 key」，前提是相关的旧记忆真的出现在
+	// existing_memories 里。只按 importance 取前 40 条时，记忆一多，与当前消息
+	// 相关但权重不高的旧 key 就会掉出窗口，模型只能另立新 key——改口后的偏好
+	// 与旧偏好并存。先按当前消息的相关性取一批，再用 importance 批兜底合并。
+	relevant, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
+		SubjectUserID: event.UserID,
+		Session:       payload.Session,
+		GroupID:       event.GroupID,
+		SearchTerms:   structuredMemorySearchTerms(text, 32),
+		Now:           time.Now(),
+		MaxCandidates: 24,
+	})
+	if err != nil {
+		return fmt.Errorf("load relevant memories: %w", err)
+	}
+	important, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
 		SubjectUserID: event.UserID,
 		Session:       payload.Session,
 		GroupID:       event.GroupID,
@@ -174,6 +189,7 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 	if err != nil {
 		return fmt.Errorf("load existing memories: %w", err)
 	}
+	existing := mergeStructuredMemories(relevant, important, 40)
 	gatePayload := memoryGatePayload{
 		Current:          memoryGateEventFromMessage(event, text),
 		RecentMessages:   r.memoryGateRecentEvents(event),
@@ -349,6 +365,26 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 		}
 	}
 	return nil
+}
+
+// mergeStructuredMemories 按顺序合并两批记忆并按 ID 去重：前一批（相关性）整体
+// 排在兜底批（重要度）之前，总数不超过 limit。
+func mergeStructuredMemories(primary, fallback []StructuredMemoryItem, limit int) []StructuredMemoryItem {
+	merged := make([]StructuredMemoryItem, 0, limit)
+	seen := make(map[string]bool, limit)
+	for _, batch := range [][]StructuredMemoryItem{primary, fallback} {
+		for _, item := range batch {
+			if len(merged) >= limit {
+				return merged
+			}
+			if item.ID == "" || seen[item.ID] {
+				continue
+			}
+			seen[item.ID] = true
+			merged = append(merged, item)
+		}
+	}
+	return merged
 }
 
 func selectMemorySummaryRollup(existing []StructuredMemoryItem) *memorySummaryRollup {

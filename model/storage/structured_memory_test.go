@@ -436,3 +436,42 @@ func TestStructuredMemoryBackfillsLegacyProfileAsUncertainEpisode(t *testing.T) 
 		t.Fatalf("legacy item was promoted too strongly: %#v", item)
 	}
 }
+
+func TestStructuredMemoryLexicalScoreWeighsLongTermsOverShortNoise(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "memory-weight.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().UTC()
+	write := func(key, topic, content string, importance float64) {
+		t.Helper()
+		_, err := store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
+			Session: "group:one", EventKind: assistant.EventKindGroup, GroupID: "one", SourceMessageID: key, SourceEventTime: now,
+			Candidates: []assistant.MemoryCandidate{{
+				Action: assistant.MemoryActionUpsert, Key: key, Kind: assistant.MemoryKindPreference,
+				Topic: topic, Content: content, SourceType: assistant.MemorySourceExplicit,
+				Confidence: 0.95, Importance: importance, Visibility: assistant.MemoryVisibilitySession,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 目标记忆只命中一个三字词；噪声记忆重要度更高、只撞上一个双字词。
+	// 命中一律计 1 分的旧打分下两者同分，importance 决出噪声在前。
+	write("preference.food.spicy", "饮食偏好", "用户爱吃麻辣烫", 0.5)
+	write("noise.chat", "闲聊记录", "今天喜欢出门散步", 0.99)
+
+	items, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{
+		Session: "group:one", SearchTerms: []string{"麻辣烫", "喜欢"}, Now: now, MaxCandidates: 2, CurrentSessionOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].Key != "preference.food.spicy" {
+		t.Fatalf("long-term match must outrank short noise: %#v", items)
+	}
+}
