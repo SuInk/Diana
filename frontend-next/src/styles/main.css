@@ -3472,7 +3472,10 @@ code {
   flex-direction: column;
   gap: 2px;
   flex: 1;
+  /* UA 行是 nowrap + 省略号，必须有宽度约束才会截断；失去约束它会按完整
+     UA 的宽度撑开整页，手机上整个页面被缩小挤到左边。 */
   min-width: 0;
+  max-width: 100%;
 }
 
 .session-name {
@@ -3499,8 +3502,13 @@ code {
 
 @media (max-width: 520px) {
   .session-item {
-    align-items: flex-start;
+    /* 保持 stretch：flex-start 会让 session-main 收缩成内容宽度，
+       nowrap 的 UA 行随之失去截断依据，把页面横向撑爆。 */
     flex-direction: column;
+  }
+
+  .session-main {
+    width: 100%;
   }
 }
 
