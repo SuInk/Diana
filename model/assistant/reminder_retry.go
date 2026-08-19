@@ -103,6 +103,18 @@ func (r *Runtime) rescheduleOneTimeReminder(id string, cause error) (Reminder, e
 	return updated, nil
 }
 
+// reminderPrivateFallbackTarget 把提醒目标降级成私聊，但保留 Platform、ProfileID
+// 和 ContextNamespace。这些字段决定消息发往哪个机器人：MultiChannel 只有在单
+// binding 时才会兜底，多 profile 下裸造事件会让「提醒失败」的兜底通知自己也发
+// 不出去，故障就此静默。
+func reminderPrivateFallbackTarget(item Reminder) MessageEvent {
+	target := reminderSourceEvent(item)
+	target.Kind = EventKindPrivate
+	target.GroupID = ""
+	target.UserID = strings.TrimSpace(item.UserID)
+	return target
+}
+
 func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, cause error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -110,7 +122,7 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 	notice := reminderFailureNotice(item, cause)
 	target := reminderSourceEvent(item)
 	if target.Kind == EventKindGroup && errors.Is(cause, errOutboundSend) {
-		target = MessageEvent{Kind: EventKindPrivate, UserID: item.UserID}
+		target = reminderPrivateFallbackTarget(item)
 	}
 	if strings.TrimSpace(target.UserID) == "" && target.Kind == EventKindPrivate {
 		return fmt.Errorf("提醒失败通知缺少订阅者 QQ 号")
@@ -120,7 +132,7 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 	} else if target.Kind != EventKindGroup || strings.TrimSpace(item.UserID) == "" {
 		return err
 	} else {
-		privateTarget := MessageEvent{Kind: EventKindPrivate, UserID: item.UserID}
+		privateTarget := reminderPrivateFallbackTarget(item)
 		if privateErr := r.send(ctx, privateTarget, notice); privateErr != nil {
 			return errors.Join(err, privateErr)
 		}
