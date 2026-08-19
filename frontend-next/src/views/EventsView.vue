@@ -108,8 +108,7 @@
                 <span class="badge">{{ eventKindLabel(event.kind) }}</span>
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
                 <span v-if="event.group_id" class="mono muted">群 {{ event.group_id }}</span>
-                <span v-if="event.sender_name" class="muted">{{ event.sender_name }}</span>
-                <span v-if="event.user_id" class="mono muted">{{ event.user_id }}</span>
+                <span v-if="displayQQIdentity(event.sender_name, event.user_id)" class="muted">{{ displayQQIdentity(event.sender_name, event.user_id) }}</span>
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
               </div>
 
@@ -119,7 +118,7 @@
                 <span v-if="event.original_time" class="muted">原消息发送于 {{ formatClock(event.original_time) }}</span>
               </div>
 
-              <p v-if="event.text" class="event-detail-message">{{ event.text }}</p>
+              <p v-if="displayMessageText(event.text)" class="event-detail-message">{{ displayMessageText(event.text) }}</p>
               <p v-else-if="!event.images?.length" class="event-detail-message">[无文本内容]</p>
 
               <div v-if="event.images?.length" class="event-image-grid" aria-label="消息图片">
@@ -307,6 +306,7 @@ import {
   type AssistantEventsResponse
 } from "../api";
 import { formatClock, formatNumber } from "../format";
+import { displayMessageText, displayQQIdentity } from "../message-display";
 import { currentView } from "../router";
 import { stream } from "../stream";
 import { toastError } from "../toast";
@@ -566,8 +566,8 @@ function fallbackDecisionReason(event: AssistantEventDetail): string {
 }
 
 function replyResultText(event: AssistantEventDetail): string {
-  if (event.reply?.trim()) return event.reply;
-  if (event.error?.trim()) return `机器人已发送错误说明：${event.error}`;
+  if (event.reply?.trim()) return displayMessageText(event.reply);
+  if (event.error?.trim()) return `机器人已发送错误说明：${displayMessageText(event.error)}`;
   return "已完成回复，但该历史记录未保存回复正文";
 }
 
