@@ -190,7 +190,8 @@ WHERE i.event_time >= ? AND (`+resultCondition+`)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   i.id, i.event_time, i.kind, COALESCE(i.group_id, ''), COALESCE(i.user_id, ''),
-  COALESCE(m.sender_name, ''), COALESCE(i.message_id, ''), COALESCE(m.text, ''), COALESCE(m.payload, ''),
+  COALESCE(NULLIF(TRIM(m.sender_name), ''), NULLIF(TRIM(u.display_name), ''), ''),
+  COALESCE(i.message_id, ''), COALESCE(m.text, ''), COALESCE(m.payload, ''),
   i.status, COALESCE(i.outcome, ''), COALESCE(i.decision, ''), COALESCE(i.decision_reason, ''),
   COALESCE(i.reply_text, ''), COALESCE(NULLIF(TRIM(i.processing_error), ''), i.last_error, ''),
   COALESCE(i.duration_ms, 0), COALESCE(i.delivery_stage, ''), COALESCE(i.outbound_message_id, ''),
@@ -199,6 +200,7 @@ SELECT
   COALESCE(i.created_at, 0), COALESCE(i.completed_at, 0)
 FROM inbound_events AS i
 LEFT JOIN message_events AS m ON m.id = i.id
+LEFT JOIN user_profiles AS u ON u.user_id = i.user_id
 WHERE i.event_time >= ? AND (`+resultCondition+`)
 ORDER BY i.event_time DESC, i.created_at DESC, i.id DESC
 LIMIT ? OFFSET ?
