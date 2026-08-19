@@ -162,6 +162,11 @@ func fitMessagesToTokenBudgetDetailed(messages []Message, budget int64) ([]Messa
 		if item.priority < MessagePrioritySummary {
 			continue
 		}
+		if message.AtomicText {
+			// Producer-owned semantic unit: it was already shrunk to its target,
+			// and a mid-string cut here would silently destroy what it means.
+			continue
+		}
 		trimmed, ok := trimMessageToTokenBudget(message, remaining)
 		if !ok {
 			continue
