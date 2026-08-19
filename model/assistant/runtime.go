@@ -3021,7 +3021,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 	}
 	messages = append(messages, currentMessage)
-	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext)
+	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext)
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive

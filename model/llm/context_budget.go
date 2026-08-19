@@ -50,12 +50,24 @@ func applyContextBudget(req GenerateRequest, cfg ProviderConfig) GenerateRequest
 }
 
 func fitMessagesToTokenBudget(messages []Message, budget int64) []Message {
+	fitted, _ := fitMessagesToTokenBudgetDetailed(messages, budget)
+	return fitted
+}
+
+// fitMessagesToTokenBudgetDetailed also returns the surviving messages keyed by
+// their index in the input slice, so callers can report which prompt layers were
+// kept, trimmed or dropped without re-running the selection heuristics.
+func fitMessagesToTokenBudgetDetailed(messages []Message, budget int64) ([]Message, map[int]Message) {
 	if len(messages) == 0 || budget <= 0 {
-		return nil
+		return nil, map[int]Message{}
 	}
 	messages = lowerProtectedImageDetailToFit(messages, budget)
 	if estimateMessagesTokens(messages) <= budget {
-		return append([]Message(nil), messages...)
+		kept := make(map[int]Message, len(messages))
+		for index, message := range messages {
+			kept[index] = message
+		}
+		return append([]Message(nil), messages...), kept
 	}
 
 	candidates := make([]tokenBudgetCandidate, 0, len(messages))
@@ -169,7 +181,7 @@ func fitMessagesToTokenBudget(messages []Message, budget int64) []Message {
 			out = append(out, message)
 		}
 	}
-	return out
+	return out, selected
 }
 
 func minimumCandidateCost(candidates []tokenBudgetCandidate) int64 {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestRecentHistoryUsesTokenWindowInsteadOfTwentyMessages(t *testing.T) {
@@ -146,5 +148,111 @@ func TestSemanticReferenceNoticeSeparatesTextAndImages(t *testing.T) {
 		!strings.Contains(notice, "1 条文字来源") || !strings.Contains(notice, "1 张来源图片") ||
 		!strings.Contains(notice, "逐条核对") || !strings.Contains(notice, "逐张查看") {
 		t.Fatalf("mixed semantic context=%#v notice=%q", contextBlock, notice)
+	}
+}
+
+func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := &Runtime{}
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		GroupID:   "20001",
+		UserID:    "10001",
+		MessageID: "30001",
+		Time:      1700000200,
+	}
+	cfg := BotConfig{DebugModeEnabled: true, BotQQ: "90001"}
+	messages := []llm.Message{
+		{Role: llm.RoleSystem, Content: "人设与规则", Priority: llm.MessagePrioritySystem},
+		{Role: llm.RoleUser, Content: "【较早上下文压缩摘要】" + strings.Repeat("旧事", 50), Priority: llm.MessagePrioritySummary},
+		{Role: llm.RoleUser, Content: "【长期记忆】关系等级：熟人", Priority: llm.MessagePriorityMemory},
+		{Role: llm.RoleUser, Content: "更早的一句话", Priority: llm.MessagePriorityHistory},
+		{Role: llm.RoleUser, Content: "刚刚说的话", Priority: llm.MessagePriorityRecentHistory},
+		{Role: llm.RoleUser, Content: "现在的问题", Priority: llm.MessagePriorityCurrent},
+	}
+	history := []MessageEvent{
+		{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "29998", Time: 1700000100, RawMessage: "更早的一句话"},
+		{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "29999", Time: 1700000180, RawMessage: "刚刚说的话"},
+	}
+	semantic := semanticReferencePromptContext{Requested: 6, Resolved: 6, TextSources: 6}
+	sources := semanticReferenceContext{RequestedSourceCount: 6, ResolvedSourceCount: 6, TextSourceCount: 6, AttachedImageCount: 0, MissingSourceCount: 0}
+
+	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, semantic, sources)
+
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 || entries[0].Action != "qqbot.context_budget" {
+		t.Fatalf("unexpected debug entries: %+v", entries)
+	}
+	metadata := entries[0].Metadata
+	for _, key := range []string{
+		"effective_context_window", "output_reserve", "safety_reserve", "input_budget",
+		"requested_tokens", "selected_tokens", "dropped_tokens", "over_budget",
+		"categories", "summary", "history_selected_turns", "history_earliest_time",
+		"history_latest_time", "semantic_attached_images", "semantic_missing_sources",
+	} {
+		if _, ok := metadata[key]; !ok {
+			t.Fatalf("budget breakdown missing %q: %+v", key, metadata)
+		}
+	}
+
+	categories, ok := metadata["categories"].([]map[string]any)
+	if !ok || len(categories) == 0 {
+		t.Fatalf("categories not reported: %+v", metadata["categories"])
+	}
+	selected := int64(0)
+	names := map[string]bool{}
+	for _, category := range categories {
+		name, _ := category["category"].(string)
+		names[name] = true
+		if _, ok := category["reason_text"].(string); !ok {
+			t.Fatalf("%s missing reason_text: %+v", name, category)
+		}
+		for _, key := range []string{"requested_tokens", "selected_tokens", "dropped_tokens"} {
+			if _, ok := category[key].(int64); !ok {
+				t.Fatalf("%s missing %s: %+v", name, key, category)
+			}
+		}
+		selected += category["selected_tokens"].(int64)
+	}
+	for _, want := range []string{"system", "summary", "memory", "history", "recent_history", "current"} {
+		if !names[want] {
+			t.Fatalf("category %q missing from trace: %+v", want, names)
+		}
+	}
+	if budget, _ := metadata["input_budget"].(int64); selected > budget {
+		t.Fatalf("categories selected %d tokens over input budget %d", selected, budget)
+	}
+
+	summary, ok := metadata["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary trace missing: %+v", metadata["summary"])
+	}
+	if present, _ := summary["present"].(bool); !present {
+		t.Fatalf("summary should be reported as present: %+v", summary)
+	}
+	if recompressed, _ := summary["recompressed"].(bool); recompressed {
+		t.Fatalf("summary fits the window and must not be reported as recompressed: %+v", summary)
+	}
+	if attached, _ := metadata["semantic_attached_images"].(int); attached != 0 {
+		t.Fatalf("semantic_attached_images = %v", metadata["semantic_attached_images"])
+	}
+}
+
+func TestRecordPromptContextBudgetStaysSilentWithoutDebugMode(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := &Runtime{}
+	runtime.SetAppLogWriter(logs)
+	runtime.recordPromptContextBudget(
+		context.Background(),
+		MessageEvent{Kind: EventKindGroup, MessageID: "30002"},
+		BotConfig{},
+		[]llm.Message{{Role: llm.RoleUser, Content: "在吗", Priority: llm.MessagePriorityCurrent}},
+		nil,
+		semanticReferencePromptContext{},
+		semanticReferenceContext{},
+	)
+	if entries := logs.entriesSnapshot(); len(entries) != 0 {
+		t.Fatalf("debug mode is off, expected no trace, got %+v", entries)
 	}
 }
