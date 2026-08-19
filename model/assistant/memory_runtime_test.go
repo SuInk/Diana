@@ -448,3 +448,59 @@ func TestMemoryContextKeepsUserScopedMemoriesWhenCrossGroupIsOff(t *testing.T) {
 		t.Fatalf("cross-group retrieval should stay off: %#v", query)
 	}
 }
+
+func TestMemoryGateFetchesRelevantMemoriesBeforeImportantOnes(t *testing.T) {
+	profiles := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "default",
+		Profiles: []llm.Profile{{ID: "default", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "m"}}},
+	}}
+	memory := &testStructuredMemoryStore{}
+	provider := &capturingLLMProvider{reply: `{"memories":[]}`}
+	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), profiles, nil, nil, nil)
+	runtime.SetStructuredMemoryStore(memory)
+	runtime.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) { return provider, nil })
+
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "123", UserID: "user", SenderName: "Alice", MessageID: "m9", Time: 300,
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "我现在改吃甜的了，不爱麻辣烫了"}}},
+	}
+	if err := runtime.processEventMemoryJob(context.Background(), memory, MemoryJobPayload{Kind: MemoryJobEvent, Session: "group:123", Event: event}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 门控必须先按当前消息的相关性取一批（带检索词），再用重要度批兜底：只按
+	// 重要度取前 40 条时，与本次改口相关的旧 key 会掉出窗口，模型无从复用。
+	memory.mu.Lock()
+	queries := append([]StructuredMemoryQuery(nil), memory.queries...)
+	memory.mu.Unlock()
+	if len(queries) < 2 {
+		t.Fatalf("expected a relevance query plus an importance fallback, got %d", len(queries))
+	}
+	if len(queries[0].SearchTerms) == 0 {
+		t.Fatalf("first query must carry search terms from the message: %#v", queries[0])
+	}
+	found := false
+	for _, term := range queries[0].SearchTerms {
+		if strings.Contains(term, "麻辣烫") || strings.Contains(term, "麻辣") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("search terms do not reflect the message: %#v", queries[0].SearchTerms)
+	}
+	if len(queries[1].SearchTerms) != 0 {
+		t.Fatalf("fallback query must stay importance-ordered: %#v", queries[1])
+	}
+}
+
+func TestMergeStructuredMemoriesDedupesAndKeepsRelevantFirst(t *testing.T) {
+	item := func(id string) StructuredMemoryItem { return StructuredMemoryItem{ID: id} }
+	merged := mergeStructuredMemories(
+		[]StructuredMemoryItem{item("a"), item("b")},
+		[]StructuredMemoryItem{item("b"), item("c"), item("d")},
+		3,
+	)
+	if len(merged) != 3 || merged[0].ID != "a" || merged[1].ID != "b" || merged[2].ID != "c" {
+		t.Fatalf("merged = %#v", merged)
+	}
+}
