@@ -2787,6 +2787,13 @@ code {
   color: var(--text-secondary);
 }
 
+.plugin-setting-textarea {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  resize: vertical;
+  min-height: 88px;
+  white-space: pre;
+}
+
 .plugin-setting-number {
   display: flex;
   align-items: center;

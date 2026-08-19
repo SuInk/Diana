@@ -9119,7 +9119,10 @@ func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Remin
 			summary = strings.TrimSpace(reply)
 		}
 	}
-	return composeRepositoryWatchMessage(item.Repository, renderRepositoryWatchChanges(change), summary), nil
+	source := reminderSourceEvent(item)
+	_, settings, _ := r.plugins.PluginWithSettingsForGroup(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
+	templates := repositoryWatchTemplatesFromSettings(settings)
+	return composeRepositoryWatchMessageWithTemplate(templates.Header, item.Repository, renderRepositoryWatchChangesWithTemplates(change, templates), summary), nil
 }
 
 // composeRepositoryWatchMessage 把标题、模型概括和变更明细拼成一条通知。概括紧跟
@@ -9128,14 +9131,15 @@ func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Remin
 // 全文只用单换行，也不用 <botbr>：splitReply 把空行和 <botbr> 都当成分条符，任何
 // 一处都会让这条通知在群里被拆成多条消息。
 func composeRepositoryWatchMessage(repository, body, summary string) string {
-	message := "GitHub 动态：" + repository
-	if summary = strings.TrimSpace(summary); summary != "" {
-		message += "\n" + summary
-	}
-	if strings.TrimSpace(body) != "" {
-		message += "\n" + body
-	}
-	return message
+	return composeRepositoryWatchMessageWithTemplate(repositoryWatchDefaultHeaderTemplate, repository, body, summary)
+}
+
+func composeRepositoryWatchMessageWithTemplate(template, repository, body, summary string) string {
+	return renderRepositoryWatchTemplate(template, map[string]string{
+		"repository": repository,
+		"summary":    strings.TrimSpace(summary),
+		"body":       strings.TrimSpace(body),
+	})
 }
 
 func (r *Runtime) runRepositoryWatchExternalEventAgent(ctx context.Context, source MessageEvent, payload json.RawMessage) (string, error) {
@@ -9238,6 +9242,10 @@ func repositoryWatchRecentContext(history []MessageEvent, limit int) string {
 }
 
 func renderRepositoryWatchChanges(change repositoryWatchChange) string {
+	return renderRepositoryWatchChangesWithTemplates(change, defaultRepositoryWatchTemplates())
+}
+
+func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, templates repositoryWatchTemplates) string {
 	sections := make([]string, 0, 5)
 	if len(change.Commits) > 0 {
 		branch := strings.TrimSpace(change.Branch)
@@ -9255,22 +9263,19 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 			if len(sha) > 7 {
 				sha = sha[:7]
 			}
-			line := sha + " " + strings.TrimSpace(commit.Title)
 			// 作者只在本批提交来自不同人时逐条标注；全部同一个人时已经写进标题行。
-			meta := make([]string, 0, 2)
-			if author := strings.TrimSpace(commit.Author); author != "" && sharedAuthor == "" {
-				meta = append(meta, author)
+			author := ""
+			if value := strings.TrimSpace(commit.Author); value != "" && sharedAuthor == "" {
+				author = value
 			}
-			if pushedAt := formatRepositoryWatchTime(commit.PushedAt); pushedAt != "" {
-				meta = append(meta, "提交于 "+pushedAt)
-			}
-			if len(meta) > 0 {
-				line += "\n" + strings.Join(meta, " ")
-			}
-			if url := strings.TrimSpace(commit.URL); url != "" {
-				line += "\n" + url
-			}
-			lines = append(lines, line)
+			lines = append(lines, renderRepositoryWatchTemplate(templates.Commit, map[string]string{
+				"sha":    sha,
+				"title":  strings.TrimSpace(commit.Title),
+				"author": author,
+				"time":   formatRepositoryWatchTime(commit.PushedAt),
+				"branch": firstNonEmpty(strings.TrimSpace(change.Branch), "默认分支"),
+				"url":    strings.TrimSpace(commit.URL),
+			}))
 		}
 		if change.Truncated {
 			lines = append(lines, "本次只展示了部分最新提交。")
@@ -9280,38 +9285,36 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 	if len(change.PullRequests) > 0 {
 		lines := make([]string, 0, len(change.PullRequests)*2)
 		for _, pullRequest := range change.PullRequests {
-			line := fmt.Sprintf("PR #%d（%s）\n%s", pullRequest.Number, repositoryWatchPullStatusLabel(pullRequest.Status), strings.TrimSpace(pullRequest.Title))
-			if author := strings.TrimSpace(pullRequest.Author); author != "" {
-				line += "\n作者：" + author
-			}
+			branches := ""
 			if pullRequest.BaseBranch != "" || pullRequest.HeadBranch != "" {
-				line += "\n" + firstNonEmpty(pullRequest.BaseBranch, "默认分支") + " ← " + firstNonEmpty(pullRequest.HeadBranch, "未知分支")
+				branches = firstNonEmpty(pullRequest.BaseBranch, "默认分支") + " ← " + firstNonEmpty(pullRequest.HeadBranch, "未知分支")
 			}
 			// 时间统一压在链接正上方，五种事件保持同一个位置。
-			if occurredAt := formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)); occurredAt != "" {
-				line += "\n" + repositoryWatchPullTimeLabel(pullRequest.Status) + " " + occurredAt
-			}
-			if url := strings.TrimSpace(pullRequest.URL); url != "" {
-				line += "\n" + url
-			}
-			lines = append(lines, line)
+			lines = append(lines, renderRepositoryWatchTemplate(templates.Pull, map[string]string{
+				"number":     fmt.Sprint(pullRequest.Number),
+				"status":     repositoryWatchPullStatusLabel(pullRequest.Status),
+				"title":      strings.TrimSpace(pullRequest.Title),
+				"author":     strings.TrimSpace(pullRequest.Author),
+				"branches":   branches,
+				"time_label": repositoryWatchPullTimeLabel(pullRequest.Status),
+				"time":       formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)),
+				"url":        strings.TrimSpace(pullRequest.URL),
+			}))
 		}
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	if len(change.Issues) > 0 {
 		lines := make([]string, 0, len(change.Issues))
 		for _, issue := range change.Issues {
-			line := fmt.Sprintf("Issue #%d（%s）\n%s", issue.Number, repositoryWatchIssueStatusLabel(issue.Status), strings.TrimSpace(issue.Title))
-			if author := strings.TrimSpace(issue.Author); author != "" {
-				line += "\n作者：" + author
-			}
-			if eventTime := formatRepositoryWatchTime(repositoryWatchIssueTime(issue)); eventTime != "" {
-				line += "\n" + repositoryWatchIssueTimeLabel(issue.Status) + " " + eventTime
-			}
-			if issue.URL != "" {
-				line += "\n" + issue.URL
-			}
-			lines = append(lines, line)
+			lines = append(lines, renderRepositoryWatchTemplate(templates.Issue, map[string]string{
+				"number":     fmt.Sprint(issue.Number),
+				"status":     repositoryWatchIssueStatusLabel(issue.Status),
+				"title":      strings.TrimSpace(issue.Title),
+				"author":     strings.TrimSpace(issue.Author),
+				"time_label": repositoryWatchIssueTimeLabel(issue.Status),
+				"time":       formatRepositoryWatchTime(repositoryWatchIssueTime(issue)),
+				"url":        strings.TrimSpace(issue.URL),
+			}))
 		}
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
@@ -9326,14 +9329,13 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 			} else if label == "" {
 				label = strings.TrimSpace(release.Name)
 			}
-			line := "Release " + label
-			if publishedAt := formatRepositoryWatchTime(release.PublishedAt); publishedAt != "" {
-				line += "\n发布于 " + publishedAt
-			}
-			if url := strings.TrimSpace(release.URL); url != "" {
-				line += "\n" + url
-			}
-			lines = append(lines, line)
+			lines = append(lines, renderRepositoryWatchTemplate(templates.Release, map[string]string{
+				"label": label,
+				"tag":   strings.TrimSpace(release.Tag),
+				"name":  strings.TrimSpace(release.Name),
+				"time":  formatRepositoryWatchTime(release.PublishedAt),
+				"url":   strings.TrimSpace(release.URL),
+			}))
 		}
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
