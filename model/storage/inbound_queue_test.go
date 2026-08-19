@@ -316,6 +316,14 @@ func TestInboundQueueFIFOLeaseRecoveryRetryAndRelease(t *testing.T) {
 	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "leases.db"))
 	defer func() { _ = store.Close() }()
 
+	// 租约和重试窗口给足余量：CI 上几十毫秒的抖动很常见，窗口太窄会让这条用例
+	// 随机失败，进而挡住构建和发版。
+	const (
+		leaseWindow = 300 * time.Millisecond
+		retryWindow = 300 * time.Millisecond
+		timingSlack = 150 * time.Millisecond
+	)
+
 	firstID, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", inboundTestEvent("first", "first", 200))
 	if err != nil || !inserted {
 		t.Fatalf("enqueue first inserted=%v err=%v", inserted, err)
@@ -333,24 +341,29 @@ func TestInboundQueueFIFOLeaseRecoveryRetryAndRelease(t *testing.T) {
 	if err := store.CompleteInboundEvent(ctx, first.ID, "worker-a", "ignored"); err != nil {
 		t.Fatal(err)
 	}
-	second, ok, err := store.ClaimNextInboundEvent(ctx, "worker-a", time.Now().Add(20*time.Millisecond))
+	second, ok, err := store.ClaimNextInboundEvent(ctx, "worker-a", time.Now().Add(leaseWindow))
 	if err != nil || !ok || second.ID != firstID {
 		t.Fatalf("second claim item=%#v ok=%v err=%v", second, ok, err)
 	}
 
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(leaseWindow + timingSlack)
 	recovered, ok, err := store.ClaimNextInboundEvent(ctx, "worker-b", time.Now().Add(time.Minute))
 	if err != nil || !ok || recovered.ID != firstID || recovered.Attempts != 2 {
 		t.Fatalf("recovered item=%#v ok=%v err=%v", recovered, ok, err)
 	}
-	if err := store.RetryInboundEvent(ctx, recovered.ID, "worker-b", time.Now().Add(25*time.Millisecond), "temporary failure"); err != nil {
+	retryAt := time.Now().Add(retryWindow)
+	if err := store.RetryInboundEvent(ctx, recovered.ID, "worker-b", retryAt, "temporary failure"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker-c", time.Now().Add(time.Minute)); err != nil || ok {
-		t.Fatalf("future retry was claimable ok=%v err=%v", ok, err)
+	// 只有在重试时间确实还没到时，这条断言才成立。CI 机器卡顿时这中间可能已经
+	// 过了几十毫秒，断言就会假失败，所以先确认前提再断言。
+	if time.Now().Before(retryAt) {
+		if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker-c", time.Now().Add(time.Minute)); err != nil || ok {
+			t.Fatalf("future retry was claimable ok=%v err=%v", ok, err)
+		}
 	}
 
-	time.Sleep(35 * time.Millisecond)
+	time.Sleep(time.Until(retryAt) + timingSlack)
 	retried, ok, err := store.ClaimNextInboundEvent(ctx, "worker-c", time.Now().Add(time.Minute))
 	if err != nil || !ok || retried.ID != firstID || retried.Attempts != 3 {
 		t.Fatalf("retried item=%#v ok=%v err=%v", retried, ok, err)
