@@ -234,3 +234,51 @@ func TestReminderRetriesPreserveCompleteErrors(t *testing.T) {
 		t.Fatalf("errors were truncated: query=%d message=%d want=%d", len(store.items[0].LastError), len(store.items[1].LastError), len(longError))
 	}
 }
+
+func TestReminderPrivateFallbackKeepsProfileIdentity(t *testing.T) {
+	// 群发失败后降级到私聊时，Platform/ProfileID/ContextNamespace 不能丢：
+	// 它们决定发往哪个机器人。MultiChannel 只有单 binding 时才兜底，多 profile
+	// 下裸造事件会让「提醒失败」的兜底通知自己也发不出去，故障就此静默。
+	item := Reminder{
+		Platform:         PlatformOneBotV11,
+		ProfileID:        "qq-main",
+		ContextNamespace: "qq-main",
+		GroupID:          "123456",
+		UserID:           "10001",
+	}
+	target := reminderPrivateFallbackTarget(item)
+	if target.Kind != EventKindPrivate || target.GroupID != "" || target.UserID != "10001" {
+		t.Fatalf("fallback target = %#v, want a private target for the subscriber", target)
+	}
+	if target.Platform != PlatformOneBotV11 || target.ProfileID != "qq-main" || target.ContextNamespace != "qq-main" {
+		t.Fatalf("fallback dropped routing identity: %#v", target)
+	}
+}
+
+func TestReminderPrivateFallbackRoutesUnderMultipleProfiles(t *testing.T) {
+	// 端到端确认：两个 binding 时，降级通知仍要能落到正确的机器人。
+	target := newQueueTestChannel()
+	other := newQueueTestChannel()
+	channel := NewMultiChannel([]ChannelBinding{
+		{ProfileID: "qq-other", Platform: PlatformOneBotV11, Channel: other},
+		{ProfileID: "qq-main", Platform: PlatformOneBotV11, Channel: target},
+	})
+	runtime := NewRuntime(BotConfig{ID: "qq-main", Platform: PlatformOneBotV11, BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+
+	item := Reminder{
+		Platform:         PlatformOneBotV11,
+		ProfileID:        "qq-main",
+		ContextNamespace: "qq-main",
+		GroupID:          "123456",
+		UserID:           "10001",
+	}
+	if err := runtime.notifyReminderFailure(context.Background(), item, errOutboundSend); err != nil {
+		t.Fatalf("notifyReminderFailure() error = %v", err)
+	}
+	if target.sentCount() == 0 {
+		t.Fatal("failure notice never reached the reminder's own profile")
+	}
+	if leaked := other.sentCount(); leaked != 0 {
+		t.Fatalf("failure notice leaked to another profile: %d message(s)", leaked)
+	}
+}
