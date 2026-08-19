@@ -6,8 +6,13 @@ package assistant
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +28,7 @@ const (
 	imageOCRPluginID        = "official.image-ocr"
 	imageOCRBackendDisabled = "disabled"
 	imageOCRBackendLLM      = "llm"
+	imageOCRBackendLocal    = "local"
 	imageOCRNoTextMarker    = "[无可辨文字]"
 	imageOCRCacheCap        = 128
 	imageOCRPerImageMax     = 2000
@@ -41,15 +47,18 @@ func NewImageOCRPlugin() *ImageOCRPlugin {
 func (p *ImageOCRPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.0",
-		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型。对话模型读图上文字能力弱时可作补充；转写调用走 LLM 配置里的 vision 分组，可在下方指定专用模型。",
+		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型。对话模型读图上文字能力弱时可作补充；可走 LLM 配置里的 vision 分组，也可用本地 tesseract 等命令完全离线转写。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "llm:generate"},
 		Settings: []PluginSettingSpec{
 			{Key: "backend", Label: "转写方式", Type: PluginSettingTypeSelect, Default: imageOCRBackendDisabled, Options: []PluginSettingOption{
 				{Value: imageOCRBackendDisabled, Label: "关闭"},
 				{Value: imageOCRBackendLLM, Label: "LLM 视觉转写（vision 分组）"},
+				{Value: imageOCRBackendLocal, Label: "本地命令（tesseract 等，离线）"},
 			}},
 			{Key: "model", Label: "指定模型", Type: PluginSettingTypeString, Default: ""},
+			{Key: "local_command", Label: "本地命令", Type: PluginSettingTypeString, Default: "tesseract"},
+			{Key: "local_languages", Label: "本地识别语言", Type: PluginSettingTypeString, Default: "chi_sim+eng"},
 			{Key: "max_images", Label: "单条消息转写图片数上限", Type: PluginSettingTypeNumber, Default: 3, Min: settingRange(1), Max: settingRange(6), Step: 1},
 			{Key: "timeout_seconds", Label: "单图转写超时", Type: PluginSettingTypeNumber, Default: 45, Min: settingRange(5), Max: settingRange(180), Step: 5, Unit: "秒"},
 			{Key: "private_enabled", Label: "私聊图片也转写", Type: PluginSettingTypeBool, Default: true},
@@ -64,6 +73,8 @@ func (p *ImageOCRPlugin) Handle(context.Context, PluginRequest) (*PluginResponse
 type imageOCRConfig struct {
 	Backend        string
 	Model          string
+	LocalCommand   string
+	LocalLanguages string
 	MaxImages      int
 	Timeout        time.Duration
 	PrivateEnabled bool
@@ -73,6 +84,8 @@ func imageOCRConfigFromSettings(v SettingValues) imageOCRConfig {
 	return imageOCRConfig{
 		Backend:        v.String("backend", imageOCRBackendDisabled),
 		Model:          strings.TrimSpace(v.String("model", "")),
+		LocalCommand:   strings.TrimSpace(v.String("local_command", "tesseract")),
+		LocalLanguages: strings.TrimSpace(v.String("local_languages", "chi_sim+eng")),
 		MaxImages:      v.Int("max_images", 3),
 		Timeout:        time.Duration(v.Int("timeout_seconds", 45)) * time.Second,
 		PrivateEnabled: v.Bool("private_enabled", true),
@@ -118,7 +131,7 @@ func (r *Runtime) imageOCRContextText(ctx context.Context, event MessageEvent, m
 		return ""
 	}
 	cfg := imageOCRConfigFromSettings(settings)
-	if cfg.Backend != imageOCRBackendLLM {
+	if cfg.Backend != imageOCRBackendLLM && cfg.Backend != imageOCRBackendLocal {
 		return ""
 	}
 	if event.Kind == EventKindPrivate && !cfg.PrivateEnabled {
@@ -168,8 +181,89 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	var text string
+	var err error
+	if cfg.Backend == imageOCRBackendLocal {
+		text, err = localImageOCRTranscription(callCtx, cfg, imageURL)
+	} else {
+		text, err = r.llmImageOCRTranscription(callCtx, event, cfg, imageURL)
+	}
+	if err != nil {
+		// 转写只是辅助信息，失败不值得打断回复，也不缓存失败结果。
+		return ""
+	}
+	text = sanitizeFileTextString(text, imageOCRPerImageMax)
+	if text == "" {
+		text = imageOCRNoTextMarker
+	}
+	plugin.storeTranscript(cacheKey, text)
+	return text
+}
+
+// localImageOCRTranscription 用本地 OCR 命令完全离线转写。命令按 tesseract 的
+// 约定调用：`<command> <图片文件> stdout -l <languages>`；其他 OCR 工具做一层
+// 同参数的包装脚本即可接入。
+func localImageOCRTranscription(ctx context.Context, cfg imageOCRConfig, imageURL string) (string, error) {
+	if cfg.LocalCommand == "" {
+		return "", errors.New("image ocr: local command is empty")
+	}
+	data, ext, err := imageOCRDataURLBytes(imageURL)
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp("", "diana-image-ocr-*")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	path := filepath.Join(dir, "image"+ext)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", err
+	}
+	args := []string{path, "stdout"}
+	if cfg.LocalLanguages != "" {
+		args = append(args, "-l", cfg.LocalLanguages)
+	}
+	// tesseract 会把警告写到 stderr，只取 stdout 免得混进转写文本。
+	out, err := exec.CommandContext(ctx, cfg.LocalCommand, args...).Output()
+	if err != nil {
+		detail := ""
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			detail = ": " + strings.TrimSpace(string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("image ocr: local command: %w%s", err, detail)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// imageOCRDataURLBytes 解出 base64 data URL 的原始图片字节和扩展名。上下文里的
+// 图片在 loadLLMImageURLs 之后都是 data URL；不是的直接跳过。
+func imageOCRDataURLBytes(imageURL string) ([]byte, string, error) {
+	prefix, encoded, ok := strings.Cut(strings.TrimSpace(imageURL), ",")
+	lower := strings.ToLower(prefix)
+	if !ok || !strings.HasPrefix(lower, "data:image/") || !strings.Contains(lower, ";base64") {
+		return nil, "", errors.New("image ocr: image is not a base64 data URL")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, "", err
+	}
+	ext := ".png"
+	switch {
+	case strings.HasPrefix(lower, "data:image/jpeg"), strings.HasPrefix(lower, "data:image/jpg"):
+		ext = ".jpg"
+	case strings.HasPrefix(lower, "data:image/webp"):
+		ext = ".webp"
+	case strings.HasPrefix(lower, "data:image/gif"):
+		ext = ".gif"
+	}
+	return data, ext, nil
+}
+
+func (r *Runtime) llmImageOCRTranscription(callCtx context.Context, event MessageEvent, cfg imageOCRConfig, imageURL string) (string, error) {
 	prompt := "请完整转写这张图片里的文字。"
-	text, err := r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
+	return r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{
 			Model: cfg.Model,
 			Messages: []llm.Message{
@@ -195,17 +289,7 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 		if err != nil {
 			return "", err
 		}
-		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "image_ocr")
+		r.recordLLMUsage(callCtx, event, resp.Provider, resp.Model, resp.Usage, "image_ocr")
 		return resp.Text, nil
 	})
-	if err != nil {
-		// 转写只是辅助信息，失败不值得打断回复，也不缓存失败结果。
-		return ""
-	}
-	text = sanitizeFileTextString(text, imageOCRPerImageMax)
-	if text == "" {
-		text = imageOCRNoTextMarker
-	}
-	plugin.storeTranscript(cacheKey, text)
-	return text
 }
