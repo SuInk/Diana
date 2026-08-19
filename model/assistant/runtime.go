@@ -3031,9 +3031,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 		}
 	}
-	if ocrNotice := r.imageOCRContextText(ctx, event, currentMessage); ocrNotice != "" {
-		currentMessage = appendLLMMessageText(currentMessage, ocrNotice)
-	}
+	currentMessage = r.imageOCRAdjustMessage(ctx, event, currentMessage)
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
 		messages = append(messages, llm.Message{
