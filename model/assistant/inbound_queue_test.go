@@ -92,6 +92,35 @@ func TestRuntimeBackfillsMissedHistoryIntoDurableQueue(t *testing.T) {
 	}
 }
 
+func TestHistoryBackfillBindsActiveProfileContext(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	channel := NewMultiChannel([]ChannelBinding{{
+		ProfileID: "qq-main",
+		Platform:  PlatformOneBotV11,
+		Channel:   newQueueTestChannel(),
+	}})
+	runtime := NewRuntime(BotConfig{
+		ID:       "qq-main",
+		Platform: PlatformOneBotV11,
+		BotQQ:    "42",
+	}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetInboundEventStore(store)
+
+	event, ok := runtime.historyEventFromData(HistorySession{Kind: EventKindGroup, ID: "123"}, historyTestMessage(901, time.Now().Unix(), "Diana 看看"))
+	if !ok {
+		t.Fatal("history event was not parsed")
+	}
+	if event.ProfileID != "qq-main" || event.Platform != PlatformOneBotV11 || event.ContextNamespace != "qq-main" {
+		t.Fatalf("backfilled identity = profile:%q platform:%q namespace:%q", event.ProfileID, event.Platform, event.ContextNamespace)
+	}
+	if _, inserted, err := store.EnqueueInboundEvent(context.Background(), sessionKey(event), event); err != nil || !inserted {
+		t.Fatalf("enqueue backfilled event inserted=%v err=%v", inserted, err)
+	}
+	if !store.hasEvent("qq-main:group:123:901") {
+		t.Fatal("backfilled event entered the legacy unnamespaced session")
+	}
+}
+
 func TestRuntimeBackfillsGroupRecallForLocallyStoredMessage(t *testing.T) {
 	inboundStore := newMemoryInboundEventStore()
 	watermark := time.Now().Add(-10 * time.Minute).Unix()
