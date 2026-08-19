@@ -356,3 +356,40 @@ func TestDropSummarizedHistoryKeepsEventsStillInMemory(t *testing.T) {
 		t.Fatal("events without a timestamp must be kept")
 	}
 }
+
+func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20004", UserID: "1", MessageID: "1"}
+	cfg := runtime.effectiveConfigForEvent(event)
+
+	// 没有配置档时按兜底窗口走。
+	if got := runtime.promptContextWindowTokens(event, cfg); got != llm.DefaultContextWindowTokens {
+		t.Fatalf("fallback window = %d, want %d", got, llm.DefaultContextWindowTokens)
+	}
+
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "p1",
+		Profiles: []llm.Profile{{
+			ID:    "p1",
+			Name:  "chat",
+			Group: llm.GroupChat,
+			Config: llm.ProviderConfig{
+				Provider:            llm.ProviderOpenAICompatible,
+				Model:               "big-window-model",
+				APIKey:              "k",
+				ContextWindowTokens: 200000,
+			},
+		}},
+	}}
+	runtime.mu.Lock()
+	runtime.llmStore = store
+	runtime.mu.Unlock()
+
+	window := runtime.promptContextWindowTokens(event, cfg)
+	if window != 200000 {
+		t.Fatalf("window = %d, want the model's 200000", window)
+	}
+	if history := contextShareBudget(window, recentHistoryTokenShare); history <= contextShareBudget(llm.DefaultContextWindowTokens, recentHistoryTokenShare) {
+		t.Fatalf("recent history budget did not grow with the window: %d", history)
+	}
+}
