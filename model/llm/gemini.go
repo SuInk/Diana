@@ -91,9 +91,10 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 		Text:      text,
 		ToolCalls: toolCalls,
 		Usage: Usage{
-			InputTokens:  int64(resp.UsageMetadata.PromptTokenCount),
-			OutputTokens: int64(resp.UsageMetadata.CandidatesTokenCount),
-			TotalTokens:  int64(resp.UsageMetadata.TotalTokenCount),
+			InputTokens:       int64(resp.UsageMetadata.PromptTokenCount),
+			OutputTokens:      int64(resp.UsageMetadata.CandidatesTokenCount),
+			TotalTokens:       int64(resp.UsageMetadata.TotalTokenCount),
+			CachedInputTokens: int64(resp.UsageMetadata.CachedContentTokenCount),
 		},
 	}, nil
 }
@@ -141,7 +142,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan 
 				call := ToolCall{ID: functionCall.ID, Name: nativeToolName(functionCall.Name, req.Tools), Arguments: functionCall.Args}
 				out <- ChatEvent{Type: ChatEventToolCall, ToolCall: &call}
 			}
-			last = Usage{InputTokens: int64(response.UsageMetadata.PromptTokenCount), OutputTokens: int64(response.UsageMetadata.CandidatesTokenCount), TotalTokens: int64(response.UsageMetadata.TotalTokenCount)}
+			last = Usage{InputTokens: int64(response.UsageMetadata.PromptTokenCount), OutputTokens: int64(response.UsageMetadata.CandidatesTokenCount), TotalTokens: int64(response.UsageMetadata.TotalTokenCount), CachedInputTokens: int64(response.UsageMetadata.CachedContentTokenCount)}
 		}
 		out <- ChatEvent{Type: ChatEventUsage, Usage: &last}
 		out <- ChatEvent{Type: ChatEventDone}
