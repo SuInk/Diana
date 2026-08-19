@@ -4935,3 +4935,58 @@ func waitForCondition(t *testing.T, timeout time.Duration, ok func() bool) {
 		t.Fatal("condition was not met before timeout")
 	}
 }
+
+func TestReplyMarkerDoesNotTriggerGroupAlias(t *testing.T) {
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana", "diana"}, BotQQ: "3083158904"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	// 用户回复的是别人的消息、@ 的也是别人，正文里没有提到机器人。
+	event := MessageEvent{
+		Kind:       EventKindGroup,
+		GroupID:    "765205730",
+		UserID:     "10001",
+		MessageID:  "1244802512",
+		RawMessage: "[CQ:reply,id=1244393238][CQ:at,qq=1907257915] 必然不可能",
+		Segments: []MessageSegment{
+			{Type: "reply", Data: map[string]string{"id": "1244393238"}},
+			{Type: "at", Data: map[string]string{"qq": "1907257915"}},
+			{Type: "text", Data: map[string]string{"text": " 必然不可能"}},
+		},
+	}
+	cfg := runtime.effectiveConfigForEvent(event)
+
+	if got := directEventText(event, event.RawMessage); strings.Contains(got, "diana") {
+		t.Fatalf("direct event text still carries the reply marker: %q", got)
+	}
+	if matches := matchedGroupAliases(event, cfg.GroupTriggers); len(matches) != 0 {
+		t.Fatalf("reply marker matched a trigger alias: %#v", matches)
+	}
+	if runtime.shouldHandleChatTrigger(event, PlainText(event.Segments)) {
+		t.Fatal("replying to another member triggered a direct group reply")
+	}
+	if reason := runtime.replyDecisionReason(event, PlainText(event.Segments), "replied"); strings.Contains(reason, "触发称呼") {
+		t.Fatalf("reply decision reason blamed a trigger alias: %q", reason)
+	}
+
+	// 正文里真的写了称呼时仍要触发。
+	event.Segments = append(event.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": "，diana 你说呢"}})
+	if !runtime.shouldHandleChatTrigger(event, PlainText(event.Segments)) {
+		t.Fatal("alias authored by the sender no longer triggers a group reply")
+	}
+}
+
+func TestStripReplyMarkersKeepsSenderText(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"[diana-reply:1244393238]@1907257915 必然不可能", "@1907257915 必然不可能"},
+		{"[diana-reply:-797497448]就是这张", "就是这张"},
+		{"[回复:30006]收到", "收到"},
+		{"[diana-reply:谁]还在吗", "[diana-reply:谁]还在吗"},
+		{"[diana-reply:30006", "[diana-reply:30006"},
+		{"我刚才[diana-reply:30006]过了", "我刚才过了"},
+		{"[diana-reply:谁][diana-reply:30006]收到", "[diana-reply:谁]收到"},
+		{"没有标记", "没有标记"},
+	}
+	for _, item := range cases {
+		if got := stripReplyMarkers(item.in); got != item.want {
+			t.Fatalf("stripReplyMarkers(%q) = %q, want %q", item.in, got, item.want)
+		}
+	}
+}
