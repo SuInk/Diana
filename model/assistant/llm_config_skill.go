@@ -103,8 +103,10 @@ func applyLLMConfigCommand(ctx context.Context, store LLMProfileStore, command l
 	} else if oldProvider != nextCfg.Provider || oldModel != nextCfg.Model {
 		nextCfg.ContextWindowTokens = llm.DefaultContextWindowTokens
 	}
+	// 只在没设过或超出新模型窗口时才重算：用户手动设的上限要留住，换模型时也不能
+	// 反过来把预算压回 16K 的兜底值。
 	if nextCfg.MaxContextTokens <= 0 || nextCfg.MaxContextTokens > nextCfg.ContextWindowTokens {
-		nextCfg.MaxContextTokens = min(nextCfg.ContextWindowTokens, llm.DefaultMaxContextTokens)
+		nextCfg.MaxContextTokens = nextCfg.ContextWindowTokens
 	}
 	if modelInfo.MaxOutputTokens > 0 && nextCfg.MaxOutputTokens > modelInfo.MaxOutputTokens {
 		nextCfg.MaxOutputTokens = modelInfo.MaxOutputTokens

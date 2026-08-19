@@ -272,6 +272,16 @@
           <label for="llm-maxtokens">最大输出 Token</label>
           <input id="llm-maxtokens" v-model="form.max_output_tokens" class="input" inputmode="numeric" placeholder="1024" />
         </div>
+        <div class="field">
+          <label for="llm-window">模型上下文窗口</label>
+          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="16384" />
+          <span class="hint">模型自身的硬上限，同步模型列表时会自动填。留空按 16384 兜底。</span>
+        </div>
+        <div class="field">
+          <label for="llm-maxcontext">单次请求上下文上限</label>
+          <input id="llm-maxcontext" v-model="form.max_context_tokens" class="input" inputmode="numeric" placeholder="跟随窗口" />
+          <span class="hint">留空即用满窗口。近期历史、长期记忆等预算都按它按比例分配，调小可以省钱，调大能记住更多对话。</span>
+        </div>
         <div v-if="form.provider === 'openai_compatible'" class="field">
           <label for="llm-ua">User-Agent（可选）</label>
           <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="codex-cli/0.142.0" />
@@ -328,6 +338,8 @@ interface LLMFormState {
   user_agent: string;
   description: string;
   temperature: string;
+  context_window_tokens: string;
+  max_context_tokens: string;
   max_output_tokens: string;
 }
 
@@ -342,6 +354,8 @@ const emptyForm: LLMFormState = {
   user_agent: "",
   description: "",
   temperature: "",
+  context_window_tokens: "",
+  max_context_tokens: "",
   max_output_tokens: ""
 };
 
@@ -539,6 +553,8 @@ function startEdit(profile: LLMConfig): void {
     user_agent: profile.user_agent ?? "",
     description: profile.description ?? "",
     temperature: profile.temperature === null || profile.temperature === undefined ? "" : String(profile.temperature),
+    context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
+    max_context_tokens: profile.max_context_tokens ? String(profile.max_context_tokens) : "",
     max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : ""
   };
   selectedService.value = detectLLMService(profile.base_url);
@@ -568,6 +584,14 @@ function formToPayload(): LLMConfig {
   const maxTokens = form.value.max_output_tokens.trim();
   if (maxTokens !== "" && !Number.isNaN(Number(maxTokens))) {
     payload.max_output_tokens = Number(maxTokens);
+  }
+  const contextWindow = form.value.context_window_tokens.trim();
+  if (contextWindow !== "" && !Number.isNaN(Number(contextWindow))) {
+    payload.context_window_tokens = Number(contextWindow);
+  }
+  const maxContext = form.value.max_context_tokens.trim();
+  if (maxContext !== "" && !Number.isNaN(Number(maxContext))) {
+    payload.max_context_tokens = Number(maxContext);
   }
   return payload;
 }
