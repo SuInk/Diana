@@ -226,6 +226,16 @@
           <ArrowRight :size="14" aria-hidden="true" />
         </button>
       </div>
+      <RepositoryCredentialEditor
+        v-if="isGitHubSettings && githubSettingsTab === 'token'"
+        ref="credentialEditor"
+        :credentials="credentialList"
+        :configured-ids="configuredCredentialIDs"
+        :repository-credentials="repositoryCredentialMap"
+        @update:credentials="onCredentialsChanged"
+        @update:tokens="credentialTokenDrafts = $event"
+        @update:repository-credentials="onRepositoryCredentialsChanged"
+      />
       <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="stack plugin-settings-form github-publish-global-settings">
         <div v-if="repositoryPublishAuthSpec" class="field">
           <label for="setting-github_auth_mode">{{ repositoryPublishAuthSpec.label }}</label>
@@ -324,6 +334,9 @@
         :joined-groups="joinedGroups"
         :groups-loading="groupsLoading"
         :groups-warning="groupsWarning"
+        :credentials="credentialList"
+        :repository-credentials="repositoryCredentialMap"
+        @update:repository-credentials="onRepositoryCredentialsChanged"
         @update:issue-enabled-repositories="repositoryPublishForm.allowed_repositories = $event.join('\n')"
         @update:user-access="repositoryPublishForm.user_repository_access = $event"
         @update:group-access="repositoryPublishForm.group_repository_access = $event"
@@ -408,6 +421,7 @@ import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
+import RepositoryCredentialEditor from "../components/RepositoryCredentialEditor.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -434,6 +448,42 @@ const settingsTarget = ref<PluginState | null>(null);
 const settingsForm = ref<Record<string, any>>({});
 const repositoryPublishForm = ref<Record<string, any>>({});
 const clearSecrets = ref<string[]>([]);
+// 凭据列表存在订阅插件的设置里：列表和仓库绑定是明文，Token 单独走密钥项、不回显。
+const credentialTokenDrafts = ref<Record<string, string>>({});
+const credentialEditor = ref<InstanceType<typeof RepositoryCredentialEditor> | null>(null);
+const credentialList = computed<Array<{ id: string; name: string; auth: string }>>(() => {
+  try {
+    const parsed = JSON.parse(String(settingsForm.value.github_credentials ?? "") || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+});
+const repositoryCredentialMap = computed<Record<string, string>>(() => {
+  try {
+    const parsed = JSON.parse(String(settingsForm.value.repository_credentials ?? "") || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+});
+// 已存过 Token 的凭据 ID，用来在输入框显示「已配置 — 留空沿用」。
+const configuredCredentialIDs = computed<string[]>(() => {
+  try {
+    const parsed = JSON.parse(String(settingsForm.value.github_credential_ids ?? "") || "[]");
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+});
+
+function onCredentialsChanged(value: Array<{ id: string; name: string; auth: string }>): void {
+  settingsForm.value.github_credentials = JSON.stringify(value);
+}
+
+function onRepositoryCredentialsChanged(value: Record<string, string>): void {
+  settingsForm.value.repository_credentials = JSON.stringify(value);
+}
 const savingSettings = ref(false);
 const githubSettingsTab = ref<"token" | "repositories" | "records">("token");
 const joinedGroups = ref<QQBotGroupSummary[]>([]);
@@ -451,7 +501,9 @@ const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
   if (!isGitHubSettings.value) return settingsSpecs.value;
   if (githubSettingsTab.value === "token") return settingsSpecs.value.filter((spec) => spec.key === "github_token");
   if (githubSettingsTab.value === "records") return [];
-  const repositoryManagedKeys = new Set(["github_token", "allowed_repositories", "user_repository_access", "group_repository_access", "issue_draft_user_access", "issue_draft_group_access", "issue_manager_user_access", "issue_manager_group_access", "user_github_tokens", "user_github_token_users", "user_github_auth_modes"]);
+  const repositoryManagedKeys = new Set(["github_token", "allowed_repositories", "user_repository_access", "group_repository_access", "issue_draft_user_access", "issue_draft_group_access", "issue_manager_user_access", "issue_manager_group_access", "user_github_tokens", "user_github_token_users", "user_github_auth_modes",
+    // 凭据由 Token 标签页的编辑器和仓库管理维护，不再渲染成裸的文本框。
+    "github_credentials", "github_credential_tokens", "github_credential_ids", "repository_credentials"]);
   return settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key));
 });
 const activeSettingsForm = computed(() => settingsForm.value);
@@ -678,6 +730,7 @@ function closeSettings(): void {
   settingsTarget.value = null;
   settingsForm.value = {};
   repositoryPublishForm.value = {};
+  credentialTokenDrafts.value = {};
   clearSecrets.value = [];
   if (viewQuery().has("settings")) {
     navigate("plugins");
@@ -735,7 +788,20 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
   }
   savingSettings.value = true;
   try {
-    const updated = await updatePluginSettings(target.manifest.id, buildSettingsPayload(), clearSecrets.value);
+    const payload = buildSettingsPayload();
+    if (isGitHubSettings.value) {
+      // 只提交本次真的输入了的 Token；后端按凭据 ID 合并，没提交的沿用已存值。
+      const drafts = credentialTokenDrafts.value;
+      payload.github_credential_tokens = Object.keys(drafts).length ? JSON.stringify(drafts) : "";
+      // 密钥项不回显，界面靠这份纯 ID 列表判断哪条凭据已经填过 Token。
+      const liveIDs = new Set(credentialList.value.map((item) => item.id));
+      const configured = new Set(configuredCredentialIDs.value.filter((id) => liveIDs.has(id)));
+      for (const id of Object.keys(drafts)) {
+        if (liveIDs.has(id)) configured.add(id);
+      }
+      payload.github_credential_ids = configured.size ? JSON.stringify([...configured]) : "";
+    }
+    const updated = await updatePluginSettings(target.manifest.id, payload, clearSecrets.value);
     upsert(updated);
     settingsTarget.value = updated;
     if (isGitHubSettings.value && repositoryPublishTarget.value) {
@@ -752,6 +818,8 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
     for (const spec of settingsSpecs.value) {
       if (spec.secret) settingsForm.value[spec.key] = "";
     }
+    credentialTokenDrafts.value = {};
+    credentialEditor.value?.clearDrafts();
     clearSecrets.value = [];
     if (closeAfterSave) {
       toastSuccess(`已保存 ${target.manifest.name} 的设置`);
