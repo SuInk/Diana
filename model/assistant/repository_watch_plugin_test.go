@@ -973,14 +973,23 @@ func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *test
 	}
 }
 
-func TestComposeRepositoryWatchMessagePutsTheSummaryAfterTheTitle(t *testing.T) {
+// 概括排在事实清单之后，并且单独分成一条消息。
+func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
 	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
-	want := "GitHub 动态：SuInk/Diana\n刚更新了回复风格与语气控制。\nCommit（默认分支）\n3e3f03f 合并 PR #85"
+	want := "GitHub 动态：SuInk/Diana\nCommit（默认分支）\n3e3f03f 合并 PR #85\n<botbr>\n刚更新了回复风格与语气控制。"
 	if message != want {
 		t.Fatalf("message = %q, want %q", message, want)
 	}
 	if got := composeRepositoryWatchMessage("SuInk/Diana", "", ""); got != "GitHub 动态：SuInk/Diana" {
 		t.Fatalf("empty change message = %q", got)
+	}
+	// 概括缺失（模型没跑或失败）时不能留下一个孤零零的分条符。
+	got := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "")
+	if strings.Contains(got, notificationSplitMarker) {
+		t.Fatalf("dangling split marker without a summary: %q", got)
+	}
+	if chunks := splitNotification(got, notificationChunkSize); len(chunks) != 1 {
+		t.Fatalf("summaryless notification should stay in one message, got %#v", chunks)
 	}
 }
 
@@ -1036,8 +1045,16 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 	if len([]rune(message)) <= groupmateReplyChunkSize {
 		t.Fatalf("sample notification is too short to cover the regression: %d runes", len([]rune(message)))
 	}
-	if chunks := splitNotification(message, notificationChunkSize); len(chunks) != 1 {
-		t.Fatalf("notification should stay in one message, got %#v", chunks)
+	// 事实清单一条、概括一条；长度限制不该再往下切。
+	chunks := splitNotification(message, notificationChunkSize)
+	if len(chunks) != 2 {
+		t.Fatalf("notification should be the fact block plus the summary, got %#v", chunks)
+	}
+	if !strings.Contains(chunks[0], "https://github.com/SuInk/Diana/commit/fd1a279") {
+		t.Fatalf("fact block lost the commit link: %q", chunks[0])
+	}
+	if chunks[1] != "版本号由 v0.8.43 升至 v0.8.44。" {
+		t.Fatalf("summary chunk = %q", chunks[1])
 	}
 	// 对照：聊天切分会在 160 字处把链接甩到下一条，这正是通知不能复用它的原因。
 	if chunks := splitReply(message, groupmateReplyChunkSize); len(chunks) < 2 {
@@ -1066,15 +1083,18 @@ func TestRepositoryWatchCommitBylineAndShortURL(t *testing.T) {
 	}
 }
 
-func TestComposeRepositoryWatchMessageIsExactlyOneMessage(t *testing.T) {
+// 标题和事实清单留在同一条里，只有概括单独成条：一次动态最多刷两条。
+func TestComposeRepositoryWatchMessageSplitsOnlyBeforeTheSummary(t *testing.T) {
 	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
-	chunks := splitReply(message, 900)
-	// 标题、概括和明细必须留在同一条里，否则群里一次动态会刷出好几条。
-	if len(chunks) != 1 {
-		t.Fatalf("notification should be exactly one message, got %#v", chunks)
+	chunks := splitNotification(message, notificationChunkSize)
+	if len(chunks) != 2 {
+		t.Fatalf("notification should be exactly two messages, got %#v", chunks)
 	}
-	if !strings.Contains(chunks[0], "刚更新了回复风格与语气控制。") {
-		t.Fatalf("summary missing from the message: %q", chunks[0])
+	if chunks[0] != "GitHub 动态：SuInk/Diana\nCommit（默认分支）\n3e3f03f 合并 PR #85" {
+		t.Fatalf("fact block = %q", chunks[0])
+	}
+	if chunks[1] != "刚更新了回复风格与语气控制。" {
+		t.Fatalf("summary chunk = %q", chunks[1])
 	}
 }
 
@@ -1091,9 +1111,9 @@ func TestComposeRepositoryWatchMessageKeepsEveryChangeInOneMessage(t *testing.T)
 		Releases: []repositoryWatchRelease{{Tag: "v0.8.36", PublishedAt: at, URL: "https://example.com/r"}},
 	}
 	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change), "发布了新版本。")
-	chunks := splitReply(message, 900)
-	if len(chunks) != 1 {
-		t.Fatalf("notification should be exactly one message, got %#v", chunks)
+	chunks := splitNotification(message, notificationChunkSize)
+	if len(chunks) != 2 {
+		t.Fatalf("fact block should stay in one message plus the summary, got %#v", chunks)
 	}
 	for _, want := range []string{"GitHub 动态：SuInk/Diana", "ee5a54b bump version", "Issue #128", "Issue #129", "Release v0.8.36"} {
 		if !strings.Contains(chunks[0], want) {
