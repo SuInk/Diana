@@ -377,7 +377,7 @@ func TestRenderRepositoryWatchChangesUsesQQFriendlyIssueAndStarFormat(t *testing
 	}
 
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"Issue #128（新建）", "创建于", "Star +7", "@alice、@bob、@carol、@dave、@eve 等 2 人", "128 → 135"} {
+	for _, want := range []string{"Issue #128（新建）", "alice 于 ", " 创建 · ", "Star +7（128 → 135）", "@alice、@bob、@carol、@dave、@eve 等 2 人"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -993,9 +993,13 @@ func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
 	}
 }
 
-func TestRenderRepositoryWatchChangesPutsTimeRightAboveTheLink(t *testing.T) {
+// 五类动态排版必须一致：第一行「类型 + 标识 + 标题」，第二行「谁于何时做了什么
+// · 链接」。此前每类各写各的，同一条通知里时间格式、作者写法和链接位置都不同。
+func TestRenderRepositoryWatchChangesKeepsOneShapeForEveryKind(t *testing.T) {
 	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
 	change := repositoryWatchChange{
+		Branch:  "main",
+		Commits: []repositoryWatchCommit{{SHA: "ee5a54bdd5712ab", Title: "bump version", Author: "SuInk", PushedAt: at, URL: "https://github.com/SuInk/Diana/commit/ee5a54bdd5712ab"}},
 		PullRequests: []repositoryWatchPullRequest{{
 			Number: 85, Title: "新增群友回复风格", Author: "SuInk", Status: "merged",
 			BaseBranch: "main", HeadBranch: "claude/hello", OccurredAt: at,
@@ -1005,16 +1009,44 @@ func TestRenderRepositoryWatchChangesPutsTimeRightAboveTheLink(t *testing.T) {
 			Number: 128, Title: "修复通知格式", Author: "alice", Status: "opened", CreatedAt: at,
 			URL: "https://github.com/SuInk/Diana/issues/128",
 		}},
+		Releases: []repositoryWatchRelease{{Tag: "v0.8.46", PublishedAt: at, URL: "https://github.com/SuInk/Diana/releases/tag/v0.8.46"}},
 	}
 	result := renderRepositoryWatchChanges(change)
-	stamp := formatRepositoryWatchTime(at)
+	stamp := formatRepositoryWatchShortTime(at)
 	for _, want := range []string{
-		"合并于 " + stamp + "\nhttps://github.com/SuInk/Diana/pull/85",
-		"创建于 " + stamp + "\nhttps://github.com/SuInk/Diana/issues/128",
+		"Commit ee5a54b bump version\nSuInk 于 " + stamp + " 提交 · https://github.com/SuInk/Diana/commit/ee5a54b",
+		"PR #85（已合并）新增群友回复风格\nSuInk 于 " + stamp + " 合并 · main ← claude/hello · https://github.com/SuInk/Diana/pull/85",
+		"Issue #128（新建）修复通知格式\nalice 于 " + stamp + " 创建 · https://github.com/SuInk/Diana/issues/128",
+		"Release v0.8.46\n发布于 " + stamp + " · https://github.com/SuInk/Diana/releases/tag/v0.8.46",
 	} {
 		if !strings.Contains(result, want) {
-			t.Fatalf("rendered changes missing %q: %s", want, result)
+			t.Fatalf("rendered changes missing %q:\n%s", want, result)
 		}
+	}
+	// 完整时间戳只在自定义模板里出现，默认排版一律用紧凑时间。
+	if strings.Contains(result, formatRepositoryWatchTime(at)) {
+		t.Fatalf("default layout leaked a full timestamp:\n%s", result)
+	}
+	// 每条动态都是两行，不多不少。
+	if lines := strings.Count(result, "\n") + 1; lines != 8 {
+		t.Fatalf("expected 4 entries × 2 lines, got %d lines:\n%s", lines, result)
+	}
+}
+
+// 分支信息缺失时，第二行不能留下两个挨着的分隔符。
+func TestRenderRepositoryWatchChangesCollapsesEmptySeparators(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	result := renderRepositoryWatchChanges(repositoryWatchChange{
+		PullRequests: []repositoryWatchPullRequest{{
+			Number: 85, Title: "无分支信息", Author: "SuInk", Status: "opened", OccurredAt: at,
+			URL: "https://github.com/SuInk/Diana/pull/85",
+		}},
+	})
+	if strings.Contains(result, "·  ·") || strings.Contains(result, " · ·") {
+		t.Fatalf("dangling separator left behind: %q", result)
+	}
+	if !strings.Contains(result, "SuInk 于 "+formatRepositoryWatchShortTime(at)+" 创建 · https://github.com/SuInk/Diana/pull/85") {
+		t.Fatalf("result = %q", result)
 	}
 }
 
