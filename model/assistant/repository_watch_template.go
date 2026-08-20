@@ -16,16 +16,18 @@ const (
 	repositoryWatchSettingTemplateRelease = "template_release"
 )
 
-// 默认模板：每条提交压成两行，第一行是短 SHA 加标题，第二行是署名和链接。留空即
-// 使用这里的默认值。
+// 默认模板：五类动态统一压成两行——第一行「类型 + 标识 + 标题」，第二行「谁于何时
+// 做了什么 · 链接」。每条都以类型词开头，扫一眼就知道这条是提交还是 PR。此前 Commit 是紧凑两行，PR/Issue/Release 还留着四到六行的老排版，
+// 同一条通知里时间格式、作者写法和链接位置各不相同，读起来像是三个人拼的。留空
+// 即使用这里的默认值。
 const (
 	// 概括排在事实清单后面，并用 <botbr> 单独发一条：黏在最后一行链接后面既难读，
 	// 也分不清哪些是确定的事实、哪句是模型写的。
 	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{body}\n<botbr>\n{summary}"
-	repositoryWatchDefaultCommitTemplate  = "{sha} {title}\n{byline} · {short_url}"
-	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{time_label} {time}\n{url}"
-	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）\n{title}\n作者：{author}\n{time_label} {time}\n{url}"
-	repositoryWatchDefaultReleaseTemplate = "Release {label}\n发布于 {time}\n{url}"
+	repositoryWatchDefaultCommitTemplate  = "Commit {sha} {title}\n{byline} · {short_url}"
+	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）{title}\n{byline} · {branches} · {url}"
+	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）{title}\n{byline} · {url}"
+	repositoryWatchDefaultReleaseTemplate = "Release {label}\n{byline} · {url}"
 )
 
 // renderRepositoryWatchTemplate 逐行替换占位符。某一行里出现过占位符、而全部占位
@@ -56,6 +58,10 @@ func renderRepositoryWatchTemplate(template string, values map[string]string) st
 		// {short_url}」缺链接就会留下一个孤零零的「·」。把两端的分隔符连同空白一起
 		// 剪掉。
 		if sawPlaceholder {
+			// 中间的占位符为空时会留下两个挨着的分隔符（「A ·  · B」），并回一个。
+			for strings.Contains(replaced, " ·  · ") {
+				replaced = strings.ReplaceAll(replaced, " ·  · ", " · ")
+			}
 			replaced = strings.Trim(replaced, " \t·|-—、,，")
 		}
 		if replaced = strings.TrimSpace(replaced); replaced == "" && sawPlaceholder {
