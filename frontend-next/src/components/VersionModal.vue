@@ -7,7 +7,9 @@
       <header class="version-hero">
         <div class="version-hero-main">
           <span v-if="versionLabel" class="mono version-current">{{ versionLabel }}</span>
-          <template v-if="!checking && !checkError && (checkResult?.update_available || switchToRelease) && checkResult?.latest_version">
+          <!-- 检查中不清空已知的目标版本：抹掉再显示回来只会让这一行闪一下，
+               上一次的结论在新结果回来之前仍然成立。 -->
+          <template v-if="!checkError && (checkResult?.update_available || switchToRelease) && checkResult?.latest_version">
             <ArrowRight class="version-arrow" :size="16" aria-hidden="true" />
             <span class="mono version-latest">{{ checkResult.latest_version }}</span>
           </template>
@@ -15,6 +17,7 @@
           <span v-else-if="installTracking" class="badge warn">升级并验证中</span>
           <span v-else-if="checkError" class="badge err">检查失败</span>
           <span v-else-if="status?.download_ready" class="badge warn">已下载，待安装</span>
+          <span v-else-if="operationRunning" class="badge warn">正在下载并校验</span>
           <span v-else-if="checkResult?.update_available" class="badge accent">发现新版本</span>
           <span v-else-if="switchToRelease" class="badge accent">可切换到正式版</span>
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
@@ -25,7 +28,7 @@
           <span v-if="checkResult?.latest_published_at">
             {{ checkResult.update_available || switchToRelease ? "新版本" : "" }}发布于 {{ formatDateTime(checkResult.latest_published_at) }}
           </span>
-          <span v-if="checkResult?.checked_at" :title="formatDateTime(checkResult.checked_at)">
+          <span v-if="checkResult?.checked_at && !checking" :title="formatDateTime(checkResult.checked_at)">
             {{ formatRelativeTime(checkResult.checked_at) }}检查过
           </span>
           <span v-if="checkResult && deploymentMode === 'git'" class="version-hero-integrity ok">
@@ -78,7 +81,7 @@
           v-if="canDownloadUpdate"
           class="btn primary small"
           type="button"
-          :disabled="operationRunning"
+          :disabled="operationRunning || checking"
           @click="downloadUpdate()"
         >
           <Download :size="14" aria-hidden="true" />
@@ -282,7 +285,6 @@ const switchToRelease = computed(() => sourceBuild.value
   && checkResult.value?.switch_to_release_available === true);
 const canDownloadUpdate = computed(() => releaseSelfUpdate.value
   && !sourceBuild.value
-  && !checking.value
   && !checkError.value
   && checkResult.value?.update_supported === true
   && checkResult.value.update_available
