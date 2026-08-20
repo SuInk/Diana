@@ -291,23 +291,23 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Default:     "",
 			},
 			{
-				Key: repositoryPublishSettingDraftUsers, Label: "Issue 草稿提交者（私聊）",
-				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以提交草稿，但不能直接写入 Issue。",
+				Key: repositoryPublishSettingDraftUsers, Label: "Issue 草稿提交者（按用户）",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以提交草稿，但不能直接写入 Issue。授权跟着人走，私聊和群聊都生效。",
 				Type:        PluginSettingTypeString, Default: "",
 			},
 			{
-				Key: repositoryPublishSettingDraftGroups, Label: "Issue 草稿提交者（群聊）",
-				Description: "按“群 ID = owner/repo, owner/repo”填写；群成员可以提交草稿，但不能直接写入 Issue。",
+				Key: repositoryPublishSettingDraftGroups, Label: "Issue 草稿提交者（按群）",
+				Description: "按“群 ID = owner/repo, owner/repo”填写；该群的所有成员都可以提交草稿，但不能直接写入 Issue。只想放开个别人时改用“按用户”那项。",
 				Type:        PluginSettingTypeString, Default: "",
 			},
 			{
-				Key: repositoryPublishSettingManagerUsers, Label: "Issue 管理人员（私聊）",
-				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以直接创建和管理 Issue。",
+				Key: repositoryPublishSettingManagerUsers, Label: "Issue 管理人员（按用户）",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以直接创建和管理 Issue。授权跟着人走，私聊和群聊都生效——想让某个群友当管理员，填他的用户 ID 即可，不必放开整个群。",
 				Type:        PluginSettingTypeString, Default: "",
 			},
 			{
-				Key: repositoryPublishSettingManagerGroups, Label: "Issue 管理人员（群聊）",
-				Description: "按“群 ID = owner/repo, owner/repo”填写；该群成员可直接创建和管理 Issue，请谨慎授予。",
+				Key: repositoryPublishSettingManagerGroups, Label: "Issue 管理人员（按群）",
+				Description: "按“群 ID = owner/repo, owner/repo”填写；该群的所有成员都能直接创建和管理 Issue，请谨慎授予。只想授权个别人时改用“按用户”那项。",
 				Type:        PluginSettingTypeString, Default: "",
 			},
 			{
