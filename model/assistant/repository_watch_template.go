@@ -5,24 +5,21 @@ package assistant
 
 import "strings"
 
-// 仓库订阅的推送格式此前是硬编码的，每次调排版都要改代码发版。这里把每类动态的
-// 条目排版开放成插件设置里的模板；聚合行为（共同作者去重、截断、Star 名单）仍在
-// 代码里，模板只负责一条动态长什么样。
-const (
-	repositoryWatchSettingTemplateHeader  = "template_header"
-	repositoryWatchSettingTemplateCommit  = "template_commit"
-	repositoryWatchSettingTemplatePull    = "template_pull"
-	repositoryWatchSettingTemplateIssue   = "template_issue"
-	repositoryWatchSettingTemplateRelease = "template_release"
-)
+// 仓库订阅只开放一个模板：整条通知怎么组装。五类动态的条目排版已经统一成同一个
+// 形状，再给每类各开一个模板，只会让设置页排出五个大文本框、还容易被改回互不一致
+// 的样子——那正是这次要修掉的问题。条目排版和聚合行为（共同作者去重、截断、Star
+// 名单）都留在代码里。
+const repositoryWatchSettingTemplateHeader = "template_header"
 
-// 默认模板：每条提交压成两行，第一行是短 SHA 加标题，第二行是署名和链接。留空即
-// 使用这里的默认值。
+// 默认模板：五类动态统一成同一个形状——每行一件事，从上到下是「类型 + 标识（状态）」
+// 「标题」「作者」「附加信息」「动作 + 时间」「链接」。没有的字段整行删掉。
+//
+// 排版本身也可以压成两行（标识标题一行、署名链接一行），更省屏；这里选详细版是
+// 因为它每行只承载一件事，扫读时不用在一行里找分隔符。代价是一次推送里提交多时
+// 会比较长——需要时用「每类动态展示条数」压条数。
 const (
-	// 概括排在事实清单后面，并用 <botbr> 单独发一条：黏在最后一行链接后面既难读，
-	// 也分不清哪些是确定的事实、哪句是模型写的。
-	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{body}\n<botbr>\n{summary}"
-	repositoryWatchDefaultCommitTemplate  = "{sha} {title}\n{byline} · {short_url}"
+	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{body}"
+	repositoryWatchDefaultCommitTemplate  = "Commit {sha}\n{title}\n作者：{author}\n提交于 {time}\n{short_url}"
 	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）\n{title}\n作者：{author}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultReleaseTemplate = "Release {label}\n发布于 {time}\n{url}"
@@ -56,6 +53,10 @@ func renderRepositoryWatchTemplate(template string, values map[string]string) st
 		// {short_url}」缺链接就会留下一个孤零零的「·」。把两端的分隔符连同空白一起
 		// 剪掉。
 		if sawPlaceholder {
+			// 中间的占位符为空时会留下两个挨着的分隔符（「A ·  · B」），并回一个。
+			for strings.Contains(replaced, " ·  · ") {
+				replaced = strings.ReplaceAll(replaced, " ·  · ", " · ")
+			}
 			replaced = strings.Trim(replaced, " \t·|-—、,，")
 		}
 		if replaced = strings.TrimSpace(replaced); replaced == "" && sawPlaceholder {
@@ -76,18 +77,16 @@ type repositoryWatchTemplates struct {
 }
 
 func repositoryWatchTemplatesFromSettings(settings SettingValues) repositoryWatchTemplates {
-	pick := func(key, fallback string) string {
-		if value := strings.TrimSpace(settings.String(key, "")); value != "" {
-			return value
-		}
-		return fallback
+	header := strings.TrimSpace(settings.String(repositoryWatchSettingTemplateHeader, ""))
+	if header == "" {
+		header = repositoryWatchDefaultHeaderTemplate
 	}
 	return repositoryWatchTemplates{
-		Header:  pick(repositoryWatchSettingTemplateHeader, repositoryWatchDefaultHeaderTemplate),
-		Commit:  pick(repositoryWatchSettingTemplateCommit, repositoryWatchDefaultCommitTemplate),
-		Pull:    pick(repositoryWatchSettingTemplatePull, repositoryWatchDefaultPullTemplate),
-		Issue:   pick(repositoryWatchSettingTemplateIssue, repositoryWatchDefaultIssueTemplate),
-		Release: pick(repositoryWatchSettingTemplateRelease, repositoryWatchDefaultReleaseTemplate),
+		Header:  header,
+		Commit:  repositoryWatchDefaultCommitTemplate,
+		Pull:    repositoryWatchDefaultPullTemplate,
+		Issue:   repositoryWatchDefaultIssueTemplate,
+		Release: repositoryWatchDefaultReleaseTemplate,
 	}
 }
 
