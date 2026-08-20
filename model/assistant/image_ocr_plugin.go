@@ -42,7 +42,27 @@ const (
 	imageOCRNoTextMarker   = "[无可辨文字]"
 	imageOCRCacheCap       = 128
 	imageOCRPerImageMax    = 2000
+	// 识别结果按图片内容哈希落库，同一张表情包在不同人、不同群、重启之后
+	// 都只识别一次。kind 区分「文字转写」和「画面描述」。
+	imageRecognitionKindOCR      = "ocr"
+	imageRecognitionKindDescribe = "describe"
 )
+
+// ImageRecognitionRecord 是一张图在某套识别配置下的结果。
+type ImageRecognitionRecord struct {
+	CacheKey      string `json:"cache_key"`
+	ContentSHA256 string `json:"content_sha256"`
+	Kind          string `json:"kind"`
+	Backend       string `json:"backend"`
+	Model         string `json:"model,omitempty"`
+	Text          string `json:"text"`
+	CreatedAt     int64  `json:"created_at"`
+}
+
+type ImageRecognitionStore interface {
+	LoadImageRecognition(context.Context, string) (ImageRecognitionRecord, bool, error)
+	SaveImageRecognition(context.Context, ImageRecognitionRecord) error
+}
 
 type ImageOCRPlugin struct {
 	client *http.Client
@@ -61,7 +81,7 @@ func NewImageOCRPlugin(client *http.Client) *ImageOCRPlugin {
 func (p *ImageOCRPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.0",
-		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型；对话模型读图上文字能力弱时可作补充。转写可走 LLM 配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。对话模型不支持看图时，可把交付方式改为「仅识别文字」：图片不再交给对话模型，改为 vision 分组的画面描述加 OCR 文字（两者可各自开关，组合或单用）。",
+		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型；对话模型读图上文字能力弱时可作补充。转写可走 LLM 配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。对话模型不支持看图时，可把交付方式改为「仅识别文字」：图片不再交给对话模型，改为 vision 分组的画面描述加 OCR 文字（两者可各自开关，组合或单用）。识别结果按图片内容哈希缓存并落库，同一张图或表情包在不同人、不同群、重启之后都只识别一次。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "llm:generate"},
 		Settings: []PluginSettingSpec{
@@ -158,9 +178,76 @@ func (p *ImageOCRPlugin) storeTranscript(key, text string) {
 	p.cache[key] = text
 }
 
-func imageOCRCacheKey(imageURL string) string {
-	sum := sha256.Sum256([]byte(imageURL))
+// imageOCRContentDigest 取图片的内容哈希。上下文里的图片在 loadLLMImageURLs
+// 之后都是 data URL，解出字节再哈希，得到的值和入库时的 content_sha256 一致；
+// 拿不到字节的（远程 URL）退回按地址哈希，只是复用范围窄一些。
+func imageOCRContentDigest(imageURL string) string {
+	if data, _, err := imageOCRDataURLBytes(imageURL); err == nil {
+		sum := sha256.Sum256(data)
+		return hex.EncodeToString(sum[:])
+	}
+	sum := sha256.Sum256([]byte("url:" + strings.TrimSpace(imageURL)))
 	return hex.EncodeToString(sum[:])
+}
+
+// imageOCRCacheKey 把识别配置也算进键里：换了后端、模型或识别语言，结果就
+// 该重算，不能拿上一套引擎的输出顶上。
+func imageOCRCacheKey(kind, contentDigest string, cfg imageOCRConfig) string {
+	parts := []string{kind, contentDigest, cfg.Model}
+	if kind == imageRecognitionKindOCR {
+		parts = append(parts, cfg.Backend, cfg.LocalCommand, cfg.LocalLanguages, cfg.HTTPEndpoint)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])
+}
+
+func (r *Runtime) imageRecognitionStore() ImageRecognitionStore {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	store, _ := r.messageStore.(ImageRecognitionStore)
+	return store
+}
+
+// cachedRecognition 先查进程内缓存，再查持久化记录；命中持久化时回填内存。
+func (r *Runtime) cachedRecognition(ctx context.Context, plugin *ImageOCRPlugin, cacheKey string) (string, bool) {
+	if text, ok := plugin.cachedTranscript(cacheKey); ok {
+		return text, true
+	}
+	store := r.imageRecognitionStore()
+	if store == nil {
+		return "", false
+	}
+	record, found, err := store.LoadImageRecognition(ctx, cacheKey)
+	if err != nil || !found {
+		return "", false
+	}
+	plugin.storeTranscript(cacheKey, record.Text)
+	return record.Text, true
+}
+
+func (r *Runtime) storeRecognition(ctx context.Context, plugin *ImageOCRPlugin, cacheKey, kind, digest, text string, cfg imageOCRConfig) {
+	plugin.storeTranscript(cacheKey, text)
+	store := r.imageRecognitionStore()
+	if store == nil || text == "" {
+		return
+	}
+	backend := cfg.Backend
+	if kind == imageRecognitionKindDescribe {
+		backend = imageOCRBackendLLM
+	}
+	// 缓存写失败不该影响这次回复，识别结果已经拿到了。
+	_ = store.SaveImageRecognition(ctx, ImageRecognitionRecord{
+		CacheKey:      cacheKey,
+		ContentSHA256: digest,
+		Kind:          kind,
+		Backend:       backend,
+		Model:         cfg.Model,
+		Text:          text,
+		CreatedAt:     time.Now().Unix(),
+	})
 }
 
 // imageOCRActiveConfig 取插件实例和已生效的配置；未启用、无事可做或该场景被
@@ -299,8 +386,9 @@ func (r *Runtime) imageOCRAttachNotice(ctx context.Context, event MessageEvent, 
 }
 
 func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent, plugin *ImageOCRPlugin, cfg imageOCRConfig, imageURL string) string {
-	cacheKey := imageOCRCacheKey(imageURL)
-	if text, ok := plugin.cachedTranscript(cacheKey); ok {
+	digest := imageOCRContentDigest(imageURL)
+	cacheKey := imageOCRCacheKey(imageRecognitionKindOCR, digest, cfg)
+	if text, ok := r.cachedRecognition(ctx, plugin, cacheKey); ok {
 		return text
 	}
 	timeout := cfg.Timeout
@@ -328,15 +416,16 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	if text == "" {
 		text = imageOCRNoTextMarker
 	}
-	plugin.storeTranscript(cacheKey, text)
+	r.storeRecognition(ctx, plugin, cacheKey, imageRecognitionKindOCR, digest, text, cfg)
 	return text
 }
 
 // describeContextImage 在仅文字模式下用 vision 分组模型生成画面描述。与转写
 // 共用一套缓存（前缀区分），失败同样不缓存、不阻断回复。
 func (r *Runtime) describeContextImage(ctx context.Context, event MessageEvent, plugin *ImageOCRPlugin, cfg imageOCRConfig, imageURL string) string {
-	cacheKey := "describe:" + imageOCRCacheKey(imageURL)
-	if text, ok := plugin.cachedTranscript(cacheKey); ok {
+	digest := imageOCRContentDigest(imageURL)
+	cacheKey := imageOCRCacheKey(imageRecognitionKindDescribe, digest, cfg)
+	if text, ok := r.cachedRecognition(ctx, plugin, cacheKey); ok {
 		return text
 	}
 	timeout := cfg.Timeout
@@ -351,7 +440,7 @@ func (r *Runtime) describeContextImage(ctx context.Context, event MessageEvent, 
 		return ""
 	}
 	text = sanitizeFileTextString(text, imageOCRPerImageMax)
-	plugin.storeTranscript(cacheKey, text)
+	r.storeRecognition(ctx, plugin, cacheKey, imageRecognitionKindDescribe, digest, text, cfg)
 	return text
 }
 
