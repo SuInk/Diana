@@ -5,16 +5,11 @@ package assistant
 
 import "strings"
 
-// 仓库订阅的推送格式此前是硬编码的，每次调排版都要改代码发版。这里把每类动态的
-// 条目排版开放成插件设置里的模板；聚合行为（共同作者去重、截断、Star 名单）仍在
-// 代码里，模板只负责一条动态长什么样。
-const (
-	repositoryWatchSettingTemplateHeader  = "template_header"
-	repositoryWatchSettingTemplateCommit  = "template_commit"
-	repositoryWatchSettingTemplatePull    = "template_pull"
-	repositoryWatchSettingTemplateIssue   = "template_issue"
-	repositoryWatchSettingTemplateRelease = "template_release"
-)
+// 仓库订阅只开放一个模板：整条通知怎么组装。五类动态的条目排版已经统一成同一个
+// 形状，再给每类各开一个模板，只会让设置页排出五个大文本框、还容易被改回互不一致
+// 的样子——那正是这次要修掉的问题。条目排版和聚合行为（共同作者去重、截断、Star
+// 名单）都留在代码里。
+const repositoryWatchSettingTemplateHeader = "template_header"
 
 // 默认模板：五类动态统一压成两行——第一行「类型 + 标识 + 标题」，第二行「谁于何时
 // 做了什么 · 链接」。每条都以类型词开头，扫一眼就知道这条是提交还是 PR。此前 Commit 是紧凑两行，PR/Issue/Release 还留着四到六行的老排版，
@@ -82,18 +77,16 @@ type repositoryWatchTemplates struct {
 }
 
 func repositoryWatchTemplatesFromSettings(settings SettingValues) repositoryWatchTemplates {
-	pick := func(key, fallback string) string {
-		if value := strings.TrimSpace(settings.String(key, "")); value != "" {
-			return value
-		}
-		return fallback
+	header := strings.TrimSpace(settings.String(repositoryWatchSettingTemplateHeader, ""))
+	if header == "" {
+		header = repositoryWatchDefaultHeaderTemplate
 	}
 	return repositoryWatchTemplates{
-		Header:  pick(repositoryWatchSettingTemplateHeader, repositoryWatchDefaultHeaderTemplate),
-		Commit:  pick(repositoryWatchSettingTemplateCommit, repositoryWatchDefaultCommitTemplate),
-		Pull:    pick(repositoryWatchSettingTemplatePull, repositoryWatchDefaultPullTemplate),
-		Issue:   pick(repositoryWatchSettingTemplateIssue, repositoryWatchDefaultIssueTemplate),
-		Release: pick(repositoryWatchSettingTemplateRelease, repositoryWatchDefaultReleaseTemplate),
+		Header:  header,
+		Commit:  repositoryWatchDefaultCommitTemplate,
+		Pull:    repositoryWatchDefaultPullTemplate,
+		Issue:   repositoryWatchDefaultIssueTemplate,
+		Release: repositoryWatchDefaultReleaseTemplate,
 	}
 }
 

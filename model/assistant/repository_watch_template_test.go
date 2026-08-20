@@ -24,12 +24,11 @@ func TestRenderRepositoryWatchTemplateDropsLinesWithOnlyEmptyPlaceholders(t *tes
 	}
 }
 
-func TestRepositoryWatchCustomTemplatesChangeTheLayout(t *testing.T) {
-	settings := SettingValues{
-		repositoryWatchSettingTemplateHeader:  "【{repository}】\n{body}\n{summary}",
-		repositoryWatchSettingTemplateRelease: "🎉 {tag} {name}（{time}）{url}",
-	}
-	templates := repositoryWatchTemplatesFromSettings(settings)
+// 只开放整体模板：自定义能改标题行、概括位置和是否分条，条目排版固定不动。
+func TestRepositoryWatchCustomTemplateChangesTheLayout(t *testing.T) {
+	templates := repositoryWatchTemplatesFromSettings(SettingValues{
+		repositoryWatchSettingTemplateHeader: "【{repository}】\n{body}\n{summary}",
+	})
 	change := repositoryWatchChange{
 		Repository: "SuInk/Diana",
 		Releases: []repositoryWatchRelease{{
@@ -41,17 +40,29 @@ func TestRepositoryWatchCustomTemplatesChangeTheLayout(t *testing.T) {
 	}
 
 	body := renderRepositoryWatchChangesWithTemplates(change, templates)
-	if !strings.HasPrefix(body, "🎉 v0.9.0") || !strings.Contains(body, "https://github.com/SuInk/Diana/releases/tag/v0.9.0") {
-		t.Fatalf("custom release template ignored: %q", body)
+	// 条目排版不受设置影响，始终是统一的两行。
+	if !strings.HasPrefix(body, "Release v0.9.0\n发布于 ") || !strings.HasSuffix(body, "https://github.com/SuInk/Diana/releases/tag/v0.9.0") {
+		t.Fatalf("entry layout should stay fixed: %q", body)
 	}
 	message := composeRepositoryWatchMessageWithTemplate(templates.Header, "SuInk/Diana", body, "发布了新版本。")
 	if !strings.HasPrefix(message, "【SuInk/Diana】") || !strings.HasSuffix(message, "发布了新版本。") {
 		t.Fatalf("custom header template ignored: %q", message)
 	}
+	// 自定义模板里去掉 <botbr>，概括就跟在正文后面不再分条。
+	if chunks := splitNotification(message, notificationChunkSize); len(chunks) != 1 {
+		t.Fatalf("template without a split marker should stay in one message: %#v", chunks)
+	}
+}
 
-	// 未覆盖的类别继续用默认模板。
-	if templates.Commit != repositoryWatchDefaultCommitTemplate {
-		t.Fatalf("commit template should fall back to default, got %q", templates.Commit)
+// 条目排版不再是设置项：只留一个模板，五类动态的形状由代码保证一致。
+func TestRepositoryWatchEntryTemplatesAreNotConfigurable(t *testing.T) {
+	templates := repositoryWatchTemplatesFromSettings(SettingValues{
+		repositoryWatchSettingTemplateHeader: "【{repository}】\n{body}",
+		"template_release":                   "🎉 {tag} {name}（{time}）{url}",
+		"template_commit":                    "{sha}",
+	})
+	if templates.Release != repositoryWatchDefaultReleaseTemplate || templates.Commit != repositoryWatchDefaultCommitTemplate {
+		t.Fatalf("entry templates must ignore settings: %+v", templates)
 	}
 }
 
