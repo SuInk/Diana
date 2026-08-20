@@ -379,3 +379,89 @@ func TestAgentTransientRetryPreservesCompletedToolResults(t *testing.T) {
 		t.Fatalf("runCalls=%d toolCalls=%d providerCalls=%d sawEvidence=%v", runCalls, tool.calls, provider.calls, provider.sawEvidence)
 	}
 }
+
+// 窗口按模型名推断有可能偏大；被供应商判为超限时必须收缩重试，而不是让这一轮
+// 回复直接失败。
+type contextOverflowProvider struct {
+	limit    int64
+	requests []llm.GenerateRequest
+}
+
+func (p *contextOverflowProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.requests = append(p.requests, req)
+	budget := req.MaxContextTokens
+	if budget <= 0 {
+		budget = llm.DefaultMaxContextTokens
+	}
+	if budget > p.limit {
+		return nil, fmt.Errorf("this model's maximum context length is %d tokens", p.limit)
+	}
+	return &llm.GenerateResponse{Text: "ok"}, nil
+}
+
+func TestContextOverflowShrinksBudgetAndRetries(t *testing.T) {
+	provider := &contextOverflowProvider{limit: 32000}
+	resp, err := generateWithTransientRetryPolicy(context.Background(), provider,
+		llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}},
+		true, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("overflow was not recovered: %v", err)
+	}
+	if resp == nil || resp.Text != "ok" {
+		t.Fatalf("resp = %#v", resp)
+	}
+	if len(provider.requests) < 2 {
+		t.Fatalf("expected at least one retry, got %d attempts", len(provider.requests))
+	}
+	if first := provider.requests[0].MaxContextTokens; first != 0 {
+		t.Fatalf("first attempt must use the profile budget, got %d", first)
+	}
+	last := provider.requests[len(provider.requests)-1].MaxContextTokens
+	if last <= 0 || last > provider.limit {
+		t.Fatalf("final attempt budget = %d, want a positive value within %d", last, provider.limit)
+	}
+}
+
+func TestContextOverflowStopsAtTheFloorInsteadOfLooping(t *testing.T) {
+	// 供应商窗口小到收缩也救不回来时，如实报错而不是无限重试。
+	provider := &contextOverflowProvider{limit: 512}
+	_, err := generateWithTransientRetryPolicy(context.Background(), provider,
+		llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}},
+		true, 0, 0, 0)
+	if err == nil {
+		t.Fatal("expected the unrecoverable overflow to surface")
+	}
+	if !llm.IsContextOverflowError(err) {
+		t.Fatalf("error lost its context-overflow identity: %v", err)
+	}
+	if len(provider.requests) > maxContextShrinkRetries+1 {
+		t.Fatalf("shrink retries were not bounded: %d attempts", len(provider.requests))
+	}
+}
+
+func TestShrinkContextForRetryHalvesDownToTheFloor(t *testing.T) {
+	req := llm.GenerateRequest{}
+	seen := []int64{}
+	for {
+		next, ok := shrinkContextForRetry(req)
+		if !ok {
+			break
+		}
+		req = next
+		seen = append(seen, req.MaxContextTokens)
+		if len(seen) > 10 {
+			t.Fatalf("shrink did not terminate: %v", seen)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("shrink never produced a smaller budget")
+	}
+	for index := 1; index < len(seen); index++ {
+		if seen[index] >= seen[index-1] {
+			t.Fatalf("budget did not shrink monotonically: %v", seen)
+		}
+	}
+	if last := seen[len(seen)-1]; last != contextOverflowFloorTokens {
+		t.Fatalf("final budget = %d, want the floor %d", last, contextOverflowFloorTokens)
+	}
+}
