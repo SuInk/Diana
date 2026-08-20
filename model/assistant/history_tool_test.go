@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -360,4 +361,175 @@ func (s *capturingHistorySearchStore) SearchMessageEvents(_ context.Context, que
 	event := chatHistoryTextEvent(100, "alice", "Alice", "old", "长期记忆")
 	event.GroupID = "other"
 	return []MessageEvent{event}, 1, nil
+}
+
+// 「总结昨天 12 点到 17 点」这类请求没有关键词可检索，需要按时间段整段列出。
+func TestDianaChatHistoryToolRangeListsWholeWindow(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newSemanticTimelineStore()
+	runtime.SetMessageHistoryStore(store)
+	noon := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local).Unix()
+	runtime.remember(chatHistoryTextEvent(noon-3600, "alice", "Alice", "before", "窗口之前"))
+	runtime.remember(chatHistoryTextEvent(noon+600, "alice", "Alice", "inside-1", "窗口内第一条"))
+	runtime.remember(chatHistoryTextEvent(noon+7200, "bob", "Bob", "inside-2", "窗口内第二条"))
+	runtime.remember(chatHistoryTextEvent(noon+7*3600, "bob", "Bob", "after", "窗口之后"))
+
+	raw, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(
+		context.Background(),
+		map[string]any{"operation": "range", "from_time": "2026-08-19 12:00", "through_time": "2026-08-19 17:00"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(historyMessageIDsFromItems(result.Items), ","); got != "inside-1,inside-2" {
+		t.Fatalf("range message ids = %q", got)
+	}
+	if result.Total != 2 || result.Limited {
+		t.Fatalf("total = %d limited = %v", result.Total, result.Limited)
+	}
+	if !strings.Contains(result.Window, "2026-08-19 12:00:00") || !strings.Contains(result.Window, "2026-08-19 17:00:00") {
+		t.Fatalf("window = %q", result.Window)
+	}
+}
+
+// 时间段没读完时要给出续读起点，别让模型只拿前一批就下结论。
+func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newSemanticTimelineStore()
+	runtime.SetMessageHistoryStore(store)
+	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local).Unix()
+	for index := 1; index <= 5; index++ {
+		runtime.remember(chatHistoryTextEvent(base+int64(index)*60, "alice", "Alice", fmt.Sprintf("m%d", index), fmt.Sprintf("消息 %d", index)))
+	}
+
+	tool := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"})
+	raw, err := tool.Run(context.Background(), map[string]any{
+		"operation": "range", "from_time": base, "through_time": base + 3600, "limit": 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &first); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(historyMessageIDsFromItems(first.Items), ","); got != "m1,m2" {
+		t.Fatalf("first page = %q", got)
+	}
+	if !first.Limited || first.Total != 5 || first.NextFromTime != base+120+1 {
+		t.Fatalf("paging info = %+v", first)
+	}
+
+	raw, err = tool.Run(context.Background(), map[string]any{
+		"operation": "range", "from_time": first.NextFromTime, "through_time": base + 3600, "limit": 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var second dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &second); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(historyMessageIDsFromItems(second.Items), ","); got != "m3,m4" {
+		t.Fatalf("second page = %q", got)
+	}
+}
+
+// 时间段真的没消息时要说清是「没记录」，而不是让模型以为工具坏了或去编内容。
+func TestDianaChatHistoryToolRangeReportsEmptyWindow(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
+	runtime.remember(chatHistoryTextEvent(time.Date(2026, 8, 19, 20, 0, 0, 0, time.Local).Unix(), "alice", "Alice", "night", "晚上的消息"))
+
+	raw, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(
+		context.Background(),
+		map[string]any{"operation": "range", "from_time": "2026-08-19 12:00", "through_time": "2026-08-19 17:00"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || result.Total != 0 || len(result.Items) != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	if !strings.Contains(result.Message, "没有消息") {
+		t.Fatalf("message = %q", result.Message)
+	}
+}
+
+// 没有 query 的 search 不该报错让模型以为记录是空的，直接按时间段列出来。
+func TestDianaChatHistoryToolSearchWithoutQueryFallsBackToRange(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
+	noon := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local).Unix()
+	runtime.remember(chatHistoryTextEvent(noon+600, "alice", "Alice", "inside", "窗口内"))
+
+	raw, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(
+		context.Background(),
+		map[string]any{"operation": "search", "from_time": "2026-08-19 12:00", "through_time": "2026-08-19 17:00"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != "range" || len(result.Items) != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestChatHistoryTimeValueParsesLocalStringsAndUnixSeconds(t *testing.T) {
+	wantNoon := time.Date(2026, 8, 19, 12, 30, 0, 0, time.Local).Unix()
+	tests := []struct {
+		raw      any
+		want     int64
+		dateOnly bool
+	}{
+		{"2026-08-19 12:30", wantNoon, false},
+		{"2026-08-19T12:30", wantNoon, false},
+		{"2026-08-19 12:30:00", wantNoon, false},
+		{"2026-08-19", time.Date(2026, 8, 19, 0, 0, 0, 0, time.Local).Unix(), true},
+		{float64(1755600000), 1755600000, false},
+		{"1755600000", 1755600000, false},
+	}
+	for _, test := range tests {
+		value, dateOnly, ok := chatHistoryTimeValue(map[string]any{"from_time": test.raw}, "from_time")
+		if !ok || value != test.want || dateOnly != test.dateOnly {
+			t.Fatalf("%v -> (%d, %v, %v), want (%d, %v, true)", test.raw, value, dateOnly, ok, test.want, test.dateOnly)
+		}
+	}
+	if _, _, ok := chatHistoryTimeValue(map[string]any{"from_time": "昨天"}, "from_time"); ok {
+		t.Fatal("unparsable time should not be accepted")
+	}
+}
+
+// 只给日期的 through_time 要覆盖整天，否则「到昨天」会被截在零点。
+func TestDianaChatHistoryToolRangeTreatsDateOnlyThroughAsWholeDay(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
+	runtime.remember(chatHistoryTextEvent(time.Date(2026, 8, 19, 22, 0, 0, 0, time.Local).Unix(), "alice", "Alice", "late", "深夜消息"))
+
+	raw, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(
+		context.Background(),
+		map[string]any{"operation": "range", "from_time": "2026-08-19", "through_time": "2026-08-19"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("date-only window missed the message: %+v", result)
+	}
 }
