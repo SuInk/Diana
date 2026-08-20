@@ -22,8 +22,13 @@ const (
 	maximumChatHistoryAroundRadius = 10
 	defaultChatHistorySearchHours  = 24
 	maximumChatHistorySearchHours  = 24 * 365 * 100
-	maximumChatHistoryOutputRunes  = 7600
-	chatHistoryLookupTimeout       = 3 * time.Second
+	defaultChatHistoryRangeLimit   = 60
+	maximumChatHistoryRangeLimit   = 200
+	// range 自己先按预算裁剪，好把「还没读完、从哪接着读」写进结果里；留一点
+	// 余量给这两个字段本身。
+	chatHistoryRangeReserveRunes  = 320
+	maximumChatHistoryOutputRunes = 7600
+	chatHistoryLookupTimeout      = 3 * time.Second
 )
 
 type dianaChatHistoryTool struct {
@@ -37,9 +42,12 @@ type dianaChatHistoryResult struct {
 	Message         string                 `json:"message"`
 	AnchorMessageID string                 `json:"anchor_message_id,omitempty"`
 	Query           string                 `json:"query,omitempty"`
+	Window          string                 `json:"window,omitempty"`
 	Items           []dianaChatHistoryItem `json:"items"`
 	Total           int                    `json:"total"`
 	Limited         bool                   `json:"limited,omitempty"`
+	// NextFromTime 在时间段没读完时给出续读起点，让模型能一段段读完再总结。
+	NextFromTime int64 `json:"next_from_time,omitempty"`
 }
 
 type dianaChatHistoryItem struct {
@@ -70,7 +78,7 @@ func (t *dianaChatHistoryTool) Name() string {
 }
 
 func (t *dianaChatHistoryTool) Description() string {
-	return `按需读取本地持久化聊天记录。当引用里的指代需要更早上文、短上下文不足，或用户询问长期历史时，必须先调用，不要直接声称看不到。around 读取当前会话某条消息前后记录；recent 读取当前会话最近记录；search 在 SQLite 中检索，hours、days、from_time 可选，all_time=true 检索全部历史。scope=current 仅当前会话；scope=all_groups 仅在管理员已开启跨群记忆时可用，并严格限定同一机器人命名空间。input: {"operation":"around|recent|search","message_id":"around 可选","query":"search 必填","scope":"current|all_groups","hours":24,"days":0,"all_time":false,"limit":20}`
+	return `按需读取本地持久化聊天记录。当引用里的指代需要更早上文、短上下文不足，或用户询问长期历史时，必须先调用，不要直接声称看不到。around 读取当前会话某条消息前后记录；recent 读取当前会话最近记录；range 按时间段完整列出当前会话的消息，用户要求总结/回顾某个时间段（如「昨天 12 点到 17 点」）时用它，不要用 search 去猜关键词；search 在 SQLite 中按关键词检索，hours、days、from_time 可选，all_time=true 检索全部历史。range 与 search 的 from_time、through_time 既接受 Unix 秒，也接受本地时间字符串（"2006-01-02 15:04" 或 "2006-01-02"）。range 结果按时间从旧到新排列；一次读不完时会给出 next_from_time，用它继续读完整个时间段再总结。scope=current 仅当前会话；scope=all_groups 仅在管理员已开启跨群记忆时可用（仅 search 支持），并严格限定同一机器人命名空间。input: {"operation":"around|recent|range|search","message_id":"around 可选","query":"search 必填","from_time":"2026-08-19 12:00","through_time":"2026-08-19 17:00","scope":"current|all_groups","hours":24,"days":0,"all_time":false,"limit":20}`
 }
 
 func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -93,10 +101,12 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		result, err = t.around(ctx, input)
 	case "recent", "list":
 		result, err = t.recent(ctx, input)
+	case "range", "timeline", "between", "window":
+		result, err = t.window(ctx, input)
 	case "search", "find":
 		result, err = t.search(ctx, input)
 	default:
-		return "", fmt.Errorf("operation 必须是 around、recent 或 search")
+		return "", fmt.Errorf("operation 必须是 around、recent、range 或 search")
 	}
 	if err != nil {
 		return "", err
@@ -191,29 +201,12 @@ func (t *dianaChatHistoryTool) recent(ctx context.Context, input map[string]any)
 func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
 	query := strings.TrimSpace(configToolString(input, "query"))
 	if query == "" {
-		return dianaChatHistoryResult{}, fmt.Errorf("search 的 query 不能为空")
+		// 「总结某个时间段」这类请求没有关键词可检索。与其报错让模型以为
+		// 记录是空的，不如直接按时间段列出来。
+		return t.window(ctx, input)
 	}
 	limit := chatHistoryPositiveInt(input, "limit", defaultChatHistoryRecentLimit, maximumChatHistoryResultLimit)
-	throughTime := t.event.Time
-	if throughTime <= 0 {
-		throughTime = time.Now().Unix()
-	}
-	if raw := intFromAny(input["through_time"]); raw > 0 {
-		throughTime = int64(raw)
-	}
-	fromTime := throughTime - int64(defaultChatHistorySearchHours*time.Hour/time.Second)
-	switch {
-	case chatHistoryBool(input, "all_time"):
-		fromTime = 0
-	case intFromAny(input["from_time"]) > 0:
-		fromTime = int64(intFromAny(input["from_time"]))
-	case intFromAny(input["days"]) > 0:
-		days := chatHistoryPositiveInt(input, "days", 1, maximumChatHistorySearchHours/24)
-		fromTime = throughTime - int64(time.Duration(days)*24*time.Hour/time.Second)
-	default:
-		hours := chatHistoryPositiveInt(input, "hours", defaultChatHistorySearchHours, maximumChatHistorySearchHours)
-		fromTime = throughTime - int64(time.Duration(hours)*time.Hour/time.Second)
-	}
+	fromTime, throughTime := t.resolveWindow(input)
 	scope := strings.ToLower(strings.TrimSpace(configToolString(input, "scope")))
 	crossGroup := scope == "all_groups" || scope == "cross_group" || scope == "groups"
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
@@ -284,6 +277,155 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		Total:   total,
 		Limited: total > len(matched),
 	}, nil
+}
+
+// window 按时间段完整列出当前会话的消息。search 只能按关键词命中，回答
+// 「总结昨天 12 点到 17 点」这类请求时没有关键词可用，需要的是整段记录。
+func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
+	fromTime, throughTime := t.resolveWindow(input)
+	if fromTime > throughTime {
+		fromTime, throughTime = throughTime, fromTime
+	}
+	limit := chatHistoryPositiveInt(input, "limit", defaultChatHistoryRangeLimit, maximumChatHistoryRangeLimit)
+	timeline, err := t.timeline(ctx, fromTime, throughTime)
+	if err != nil {
+		return dianaChatHistoryResult{}, err
+	}
+	items := t.items(ctx, timeline)
+	total := len(items)
+	// 从旧到新截断：配合 next_from_time 就能一段段往后读完整个时间段。
+	truncated := false
+	if len(items) > limit {
+		items = items[:limit]
+		truncated = true
+	}
+	items, budgetTruncated := fitChatHistoryItems(items, maximumChatHistoryOutputRunes-chatHistoryRangeReserveRunes)
+	truncated = truncated || budgetTruncated
+
+	result := dianaChatHistoryResult{
+		OK:     true,
+		Action: "range",
+		Window: chatHistoryWindowLabel(fromTime, throughTime),
+		Items:  items,
+		Total:  total,
+	}
+	switch {
+	case total == 0:
+		result.Message = "这个时间段在本地记录里没有消息，可能当时没人说话，或机器人那会儿不在这个会话里；不要凭空编造内容。"
+	case truncated:
+		result.Limited = true
+		if last := items[len(items)-1]; last.Time > 0 {
+			result.NextFromTime = last.Time + 1
+		}
+		result.Message = fmt.Sprintf("已按时间从旧到新读取该时间段的前 %d 条（共 %d 条）。用 next_from_time 作为 from_time 继续读完剩下的再总结，不要只凭这一批下结论。", len(items), total)
+	default:
+		result.Message = "已按时间从旧到新读取该时间段的全部本地记录。"
+	}
+	return result, nil
+}
+
+// resolveWindow 解析检索时间窗。from_time、through_time 既收 Unix 秒也收本地
+// 时间字符串——让模型把「昨天 12 点」直接写成字面时间，比让它算时间戳稳。
+func (t *dianaChatHistoryTool) resolveWindow(input map[string]any) (fromTime, throughTime int64) {
+	throughTime = t.event.Time
+	if throughTime <= 0 {
+		throughTime = time.Now().Unix()
+	}
+	if value, dateOnly, ok := chatHistoryTimeValue(input, "through_time"); ok {
+		throughTime = value
+		if dateOnly {
+			// 只给日期时按整天算，否则「through=昨天」会截在零点。
+			throughTime += int64(24*time.Hour/time.Second) - 1
+		}
+	}
+	switch {
+	case chatHistoryBool(input, "all_time"):
+		fromTime = 0
+	case hasChatHistoryTimeValue(input, "from_time"):
+		value, _, _ := chatHistoryTimeValue(input, "from_time")
+		fromTime = value
+	case intFromAny(input["days"]) > 0:
+		days := chatHistoryPositiveInt(input, "days", 1, maximumChatHistorySearchHours/24)
+		fromTime = throughTime - int64(time.Duration(days)*24*time.Hour/time.Second)
+	default:
+		hours := chatHistoryPositiveInt(input, "hours", defaultChatHistorySearchHours, maximumChatHistorySearchHours)
+		fromTime = throughTime - int64(time.Duration(hours)*time.Hour/time.Second)
+	}
+	if fromTime < 0 {
+		fromTime = 0
+	}
+	return fromTime, throughTime
+}
+
+var chatHistoryTimeLayouts = []struct {
+	layout   string
+	dateOnly bool
+}{
+	{"2006-01-02 15:04:05", false},
+	{"2006-01-02T15:04:05", false},
+	{"2006-01-02 15:04", false},
+	{"2006-01-02T15:04", false},
+	{"2006/01/02 15:04", false},
+	{"2006-01-02", true},
+	{"2006/01/02", true},
+}
+
+func hasChatHistoryTimeValue(input map[string]any, key string) bool {
+	_, _, ok := chatHistoryTimeValue(input, key)
+	return ok
+}
+
+// chatHistoryTimeValue 把 Unix 秒或本地时间字符串解析成时间戳。
+func chatHistoryTimeValue(input map[string]any, key string) (value int64, dateOnly, ok bool) {
+	raw, exists := input[key]
+	if !exists || raw == nil {
+		return 0, false, false
+	}
+	if text, isText := raw.(string); isText {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return 0, false, false
+		}
+		if seconds, err := strconv.ParseInt(text, 10, 64); err == nil && seconds > 0 {
+			return seconds, false, true
+		}
+		if parsed, err := time.Parse(time.RFC3339, text); err == nil {
+			return parsed.Unix(), false, true
+		}
+		for _, candidate := range chatHistoryTimeLayouts {
+			if parsed, err := time.ParseInLocation(candidate.layout, text, time.Local); err == nil {
+				return parsed.Unix(), candidate.dateOnly, true
+			}
+		}
+		return 0, false, false
+	}
+	if seconds := intFromAny(raw); seconds > 0 {
+		return int64(seconds), false, true
+	}
+	return 0, false, false
+}
+
+func chatHistoryWindowLabel(fromTime, throughTime int64) string {
+	layout := "2006-01-02 15:04:05"
+	from := "最早"
+	if fromTime > 0 {
+		from = time.Unix(fromTime, 0).Local().Format(layout)
+	}
+	return from + " ~ " + time.Unix(throughTime, 0).Local().Format(layout)
+}
+
+// fitChatHistoryItems 按输出预算保留靠前（时间靠旧）的条目，丢弃放不下的尾部。
+func fitChatHistoryItems(items []dianaChatHistoryItem, budget int) ([]dianaChatHistoryItem, bool) {
+	truncated := false
+	for len(items) > 0 {
+		body, err := json.MarshalIndent(items, "", "  ")
+		if err != nil || len([]rune(string(body))) <= budget {
+			return items, truncated
+		}
+		items = items[:len(items)-1]
+		truncated = true
+	}
+	return items, truncated
 }
 
 func (t *dianaChatHistoryTool) timeline(ctx context.Context, fromTime, throughTime int64) ([]MessageEvent, error) {
