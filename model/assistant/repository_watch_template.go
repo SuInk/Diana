@@ -18,9 +18,7 @@ const repositoryWatchSettingTemplateHeader = "template_header"
 // 因为它每行只承载一件事，扫读时不用在一行里找分隔符。代价是一次推送里提交多时
 // 会比较长——需要时用「每类动态展示条数」压条数。
 const (
-	// 概括排在事实清单后面，并用 <botbr> 单独发一条：黏在最后一行链接后面既难读，
-	// 也分不清哪些是确定的事实、哪句是模型写的。
-	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{body}\n<botbr>\n{summary}"
+	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{body}"
 	repositoryWatchDefaultCommitTemplate  = "Commit {sha}\n{title}\n作者：{author}\n提交于 {time}\n{short_url}"
 	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）\n{title}\n作者：{author}\n{time_label} {time}\n{url}"
