@@ -31,6 +31,10 @@ type tokenBudgetCandidate struct {
 // non-ASCII text cost more than ASCII, and image parts reserve vision tokens.
 func applyContextBudget(req GenerateRequest, cfg ProviderConfig) GenerateRequest {
 	limit := cfg.MaxContextTokensWithDefault()
+	// 超限重试会带上更小的上限；只接受比配置档更保守的值，避免调用方反向放大。
+	if req.MaxContextTokens > 0 && (limit <= 0 || req.MaxContextTokens < limit) {
+		limit = req.MaxContextTokens
+	}
 	if limit <= 0 || len(req.Messages) == 0 {
 		return req
 	}
