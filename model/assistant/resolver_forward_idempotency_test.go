@@ -73,8 +73,60 @@ func TestResolverForwardIsNotResentOnInboundReplay(t *testing.T) {
 	if got := countRecordingCalls(channel, "send_group_forward_msg"); got != firstForwardCalls {
 		t.Fatalf("replay sent the forward again: %d -> %d calls", firstForwardCalls, got)
 	}
-	if got := countRecordingCalls(channel, "send_private_msg"); got != len(resp.ForwardMessages) {
-		t.Fatalf("replay re-staged forward nodes: %d staging calls, want %d", got, len(resp.ForwardMessages))
+	if got := countRecordingCalls(channel, "send_private_msg"); got != 0 {
+		t.Fatalf("resolver forward staged %d private messages", got)
+	}
+}
+
+func TestResolverForwardUsesCustomNodesWithoutPrivateStaging(t *testing.T) {
+	channel := resolverForwardChannel()
+	runtime := NewRuntime(BotConfig{BotQQ: "42", Name: "Diana"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
+
+	if err := runtime.sendForwardPluginResponse(context.Background(), event, resolverForwardTestResponse(), runtime.effectiveConfigForEvent(event)); err != nil {
+		t.Fatalf("send forward: %v", err)
+	}
+	if got := countRecordingCalls(channel, "send_private_msg"); got != 0 {
+		t.Fatalf("private staging calls = %d, want 0", got)
+	}
+	calls := recordedCallsByAction(channel.callsSnapshot(), "send_group_forward_msg")
+	if len(calls) != 1 {
+		t.Fatalf("group forward calls = %d, want 1", len(calls))
+	}
+	nodes, ok := calls[0].params["messages"].([]map[string]any)
+	if !ok || len(nodes) != 3 {
+		t.Fatalf("forward nodes = %#v", calls[0].params["messages"])
+	}
+	firstData, _ := nodes[0]["data"].(map[string]any)
+	firstContent, _ := firstData["content"].([]map[string]any)
+	if len(firstContent) != 1 || firstContent[0]["type"] != "text" {
+		t.Fatalf("text node = %#v", nodes[0])
+	}
+	imageData, _ := nodes[1]["data"].(map[string]any)
+	imageContent, _ := imageData["content"].([]map[string]any)
+	if len(imageContent) != 1 || imageContent[0]["type"] != "image" {
+		t.Fatalf("image node = %#v", nodes[1])
+	}
+}
+
+func TestResolverForwardFallbackIsRecorded(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := NewRuntime(BotConfig{BotQQ: "42"}, resolverForwardChannel(), NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
+
+	runtime.recordResolverForwardFallback(context.Background(), event, errors.New("forward unsupported"))
+
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 {
+		t.Fatalf("fallback log entries = %d, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != "qqbot.resolver_forward_fallback" || entry.Detail != "forward unsupported" {
+		t.Fatalf("fallback log = %#v", entry)
+	}
+	if entry.Metadata["group_id"] != "20001" || entry.Metadata["message_id"] != "m1" {
+		t.Fatalf("fallback metadata = %#v", entry.Metadata)
 	}
 }
 

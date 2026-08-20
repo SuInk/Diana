@@ -6855,10 +6855,10 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				return err
 			}
-			// Some OneBot implementations (notably SnowLuma) can send the
-			// staged media directly but cannot reconstruct image elements inside
-			// a merged-forward node. Fall back to ordinary media messages so a
-			// resolver result is still delivered instead of losing the whole turn.
+			r.recordResolverForwardFallback(ctx, event, err)
+			// Some OneBot implementations cannot reconstruct media elements in
+			// custom merged-forward nodes. Fall back to ordinary media messages
+			// so a resolver result is still delivered instead of losing the turn.
 			if directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages); directErr != nil {
 				return errors.Join(err, directErr)
 			}
@@ -7558,34 +7558,39 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 	if selfID == "" {
 		return "", fmt.Errorf("qqbot: missing self id for resolver forward")
 	}
-	selfUIN, err := strconv.ParseInt(selfID, 10, 64)
-	if err != nil {
+	if _, err := strconv.ParseInt(selfID, 10, 64); err != nil {
 		return "", fmt.Errorf("qqbot: invalid self id %q", selfID)
 	}
-	messageIDs := make([]string, 0, len(messages))
-	for _, msg := range messages {
-		if outgoingMessageEmpty(msg) {
-			continue
-		}
-		result, err := r.executeOutboundCall(ctx, event, "send_private_msg", func(callCtx context.Context) (map[string]any, error) {
-			return r.callOneBotAPIForEvent(callCtx, event, "send_private_msg", map[string]any{
-				"user_id": selfUIN,
-				"message": buildForwardOutgoingSegments(msg),
-			})
-		})
-		if err != nil {
-			return "", err
-		}
-		messageID := apiMessageID(result)
-		if messageID == "" {
-			return "", fmt.Errorf("qqbot: forward staging did not return message_id: %#v", result)
-		}
-		messageIDs = append(messageIDs, messageID)
-	}
-	if len(messageIDs) == 0 {
+	nodes := buildCustomForwardNodes(messages, cfg.Name, selfID)
+	if len(nodes) == 0 {
 		return "", nil
 	}
-	return r.sendForwardMessageIDNodes(ctx, event, messageIDs)
+	result, err := r.sendForwardNodesWithResult(ctx, event, nodes)
+	if err != nil {
+		return "", err
+	}
+	return apiMessageID(result), nil
+}
+
+func (r *Runtime) recordResolverForwardFallback(ctx context.Context, event MessageEvent, cause error) {
+	writer := r.appLogWriter()
+	if writer == nil || cause == nil {
+		return
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind:    applog.KindOperation,
+		Level:   applog.LevelInfo,
+		Action:  "qqbot.resolver_forward_fallback",
+		Message: "链接解析合并转发失败，已降级为普通消息",
+		Detail:  cause.Error(),
+		Actor:   qqEventActor(event),
+		Target:  event.MessageID,
+		Metadata: map[string]any{
+			"group_id":   event.GroupID,
+			"user_id":    event.UserID,
+			"message_id": event.MessageID,
+		},
+	})
 }
 
 func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse, summary string, cfg BotConfig) ([]string, error) {
@@ -7683,28 +7688,6 @@ func buildCustomForwardNodes(messages []OutgoingMessage, fallbackName, fallbackU
 		nodes = append(nodes, map[string]any{"type": "node", "data": data})
 	}
 	return nodes
-}
-
-func (r *Runtime) sendForwardMessageIDNodes(ctx context.Context, event MessageEvent, messageIDs []string) (string, error) {
-	nodes := make([]map[string]any, 0, len(messageIDs))
-	for _, messageID := range messageIDs {
-		messageID = strings.TrimSpace(messageID)
-		if messageID == "" {
-			continue
-		}
-		nodes = append(nodes, map[string]any{
-			"type": "node",
-			"data": map[string]any{"id": messageID},
-		})
-	}
-	if len(nodes) == 0 {
-		return "", nil
-	}
-	result, err := r.sendForwardNodesWithResult(ctx, event, nodes)
-	if err != nil {
-		return "", err
-	}
-	return apiMessageID(result), nil
 }
 
 func (r *Runtime) sendForwardNodes(ctx context.Context, event MessageEvent, nodes []map[string]any) error {

@@ -3334,7 +3334,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, time.Second, func() bool {
-		return len(channel.callsSnapshot()) == 3
+		return len(channel.callsSnapshot()) == 1
 	})
 	if got := llmCalls.Load(); got != 0 {
 		t.Fatalf("llm calls = %d, want 0", got)
@@ -3344,23 +3344,22 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		t.Fatalf("sent = %#v", sent)
 	}
 	calls := channel.callsSnapshot()
-	if calls[0].action != "send_private_msg" || calls[1].action != "send_private_msg" || calls[2].action != "send_group_forward_msg" {
+	if calls[0].action != "send_group_forward_msg" {
 		t.Fatalf("calls = %#v", calls)
 	}
-	if calls[0].params["user_id"] != int64(42) || calls[1].params["user_id"] != int64(42) {
-		t.Fatalf("staging params = %#v %#v", calls[0].params, calls[1].params)
-	}
-	firstMessage, _ := calls[0].params["message"].([]map[string]any)
-	if !messageSegmentsContainText(firstMessage, "识别：小蓝鸟学习版") {
-		t.Fatalf("first forward message = %#v", calls[0].params["message"])
-	}
-	secondMessage, _ := calls[1].params["message"].([]map[string]any)
-	if !messageSegmentsContainType(secondMessage, "video") {
-		t.Fatalf("second forward message = %#v", calls[1].params["message"])
-	}
-	nodes, _ := calls[2].params["messages"].([]map[string]any)
+	nodes, _ := calls[0].params["messages"].([]map[string]any)
 	if len(nodes) != 2 {
-		t.Fatalf("forward nodes = %#v", calls[2].params["messages"])
+		t.Fatalf("forward nodes = %#v", calls[0].params["messages"])
+	}
+	firstData, _ := nodes[0]["data"].(map[string]any)
+	firstMessage, _ := firstData["content"].([]map[string]any)
+	if !messageSegmentsContainText(firstMessage, "识别：小蓝鸟学习版") {
+		t.Fatalf("first forward message = %#v", firstMessage)
+	}
+	secondData, _ := nodes[1]["data"].(map[string]any)
+	secondMessage, _ := secondData["content"].([]map[string]any)
+	if !messageSegmentsContainType(secondMessage, "video") {
+		t.Fatalf("second forward message = %#v", secondMessage)
 	}
 	history := runtime.contextHistory(event)
 	if len(history) < 1 {
@@ -3417,13 +3416,13 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, time.Second, func() bool {
-		return len(channel.callsSnapshot()) == 3
+		return len(channel.callsSnapshot()) == 1
 	})
 	if got := llmCalls.Load(); got != 0 {
 		t.Fatalf("llm calls = %d, want 0", got)
 	}
 	calls := channel.callsSnapshot()
-	if calls[0].action != "send_private_msg" || calls[1].action != "send_private_msg" || calls[2].action != "send_private_forward_msg" {
+	if calls[0].action != "send_private_forward_msg" {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
@@ -3468,13 +3467,13 @@ func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, time.Second, func() bool {
-		return len(channel.callsSnapshot()) == 3
+		return len(channel.callsSnapshot()) == 1
 	})
 	if got := llmCalls.Load(); got != 0 {
 		t.Fatalf("llm calls = %d, want 0", got)
 	}
 	calls := channel.callsSnapshot()
-	if calls[0].action != "send_private_msg" || calls[1].action != "send_private_msg" || calls[2].action != "send_group_forward_msg" {
+	if calls[0].action != "send_group_forward_msg" {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
