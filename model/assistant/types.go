@@ -308,7 +308,9 @@ type BotConfig struct {
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceEnabled        *bool                `json:"reply_reference_enabled,omitempty"`
+	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	MentionUserEnabled           *bool                `json:"mention_user_enabled,omitempty"`
+	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain              *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled           *bool                `json:"error_notify_enabled,omitempty"`
 	ErrorReplyPrefix             string               `json:"error_reply_prefix,omitempty"`
@@ -496,7 +498,9 @@ type ConfigPayload struct {
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceEnabled        *bool                `json:"reply_reference_enabled,omitempty"`
+	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	MentionUserEnabled           *bool                `json:"mention_user_enabled,omitempty"`
+	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain              *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled           *bool                `json:"error_notify_enabled,omitempty"`
 	ErrorReplyPrefix             string               `json:"error_reply_prefix,omitempty"`
@@ -1234,7 +1238,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplyStyle:                   cfg.ReplyStyle,
 		DebugModeEnabled:             cfg.DebugModeEnabled,
 		ReplyReferenceEnabled:        copyBoolPointer(cfg.ReplyReferenceEnabled),
+		ReplyReferenceMode:           cfg.ReplyReferenceMode,
 		MentionUserEnabled:           copyBoolPointer(cfg.MentionUserEnabled),
+		MentionUserMode:              cfg.MentionUserMode,
 		MarkdownToPlain:              copyBoolPointer(cfg.MarkdownToPlain),
 		ErrorNotifyEnabled:           copyBoolPointer(cfg.ErrorNotifyEnabled),
 		ErrorReplyPrefix:             cfg.ErrorReplyPrefix,
@@ -1351,7 +1357,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplyStyle:                   payload.ReplyStyle,
 		DebugModeEnabled:             payload.DebugModeEnabled,
 		ReplyReferenceEnabled:        copyBoolPointer(payload.ReplyReferenceEnabled),
+		ReplyReferenceMode:           payload.ReplyReferenceMode,
 		MentionUserEnabled:           copyBoolPointer(payload.MentionUserEnabled),
+		MentionUserMode:              payload.MentionUserMode,
 		MarkdownToPlain:              copyBoolPointer(payload.MarkdownToPlain),
 		ErrorNotifyEnabled:           copyBoolPointer(payload.ErrorNotifyEnabled),
 		ErrorReplyPrefix:             payload.ErrorReplyPrefix,
