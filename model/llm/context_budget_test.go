@@ -263,20 +263,39 @@ func TestContextBudgetKeepsEightToolImagesTogetherAtDefaultWindow(t *testing.T) 
 		{Role: RoleUser, Content: "历史原图工具返回了 8 张图片", Priority: MessagePriorityPlugin, Parts: parts},
 		{Role: RoleUser, Content: "比较这些图片", Priority: MessagePriorityCurrent},
 	}
+	// 默认窗口下 8 张 auto 图（各 4096）总计约 32K，128K 的预算放得下，
+	// 不需要牺牲清晰度。
 	got := fitMessagesToTokenBudget(messages, DefaultMaxContextTokens-DefaultMaxOutputTokens-contextBudgetSafetyReserve)
 	images := 0
 	for _, message := range got {
 		for _, part := range message.Parts {
 			if part.Type == ContentPartImageURL {
 				images++
-				if part.Detail != "low" {
-					t.Fatalf("tool image detail = %q, want low after fitting", part.Detail)
+				if part.Detail != "auto" {
+					t.Fatalf("tool image detail = %q, want auto to be preserved at the default window", part.Detail)
 				}
 			}
 		}
 	}
 	if images != 8 {
 		t.Fatalf("budget retained %d of 8 tool images: %#v", images, got)
+	}
+
+	// 窗口真的紧张时（小窗口本地模型）仍然整批降级保留，而不是丢图。
+	tight := fitMessagesToTokenBudget(messages, 15232)
+	images = 0
+	for _, message := range tight {
+		for _, part := range message.Parts {
+			if part.Type == ContentPartImageURL {
+				images++
+				if part.Detail != "low" {
+					t.Fatalf("tight budget must lower detail, got %q", part.Detail)
+				}
+			}
+		}
+	}
+	if images != 8 {
+		t.Fatalf("tight budget retained %d of 8 tool images: %#v", images, tight)
 	}
 }
 
