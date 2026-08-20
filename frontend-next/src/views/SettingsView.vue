@@ -215,13 +215,13 @@
           <h2>运行状态</h2>
         </div>
         <div class="card-body stack" style="gap: 8px; font-size: 13px">
-          <div class="cluster" style="justify-content: space-between">
-            <span class="muted">运行时长</span>
-            <span>{{ health ? formatUptime(health.uptime_seconds) : "—" }}</span>
+          <div class="info-row">
+            <span class="muted info-label">运行时长</span>
+            <span class="info-value">{{ health ? formatUptime(health.uptime_seconds) : "—" }}</span>
           </div>
-          <div class="cluster" style="justify-content: space-between">
-            <span class="muted">启动时间</span>
-            <span class="mono">{{ health ? formatTime(health.started_at) : "—" }}</span>
+          <div class="info-row">
+            <span class="muted info-label">启动时间</span>
+            <span class="mono info-value">{{ health ? formatTime(health.started_at) : "—" }}</span>
           </div>
         </div>
       </section>
