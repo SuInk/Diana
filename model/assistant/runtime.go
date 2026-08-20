@@ -7167,6 +7167,19 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 	if delay := cfg.ReplyStyle.typingDelay(reply); delay > 0 && !sleepContext(ctx, delay) {
 		return nil, ctx.Err()
 	}
+	return r.deliverChunks(ctx, event, chunks, cfg, mentionUserID, replyToCurrent)
+}
+
+// sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行
+// 与 <botbr> 在这里只是排版，不是分条信号；人格预设的短句切分（群友风格把每条压到
+// 160 字）会把一张卡片拦腰截断，把链接甩到下一条里。所以这里只按平台长度兜底。
+func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text string) error {
+	cfg := r.effectiveConfigForEvent(event)
+	_, err := r.deliverChunks(ctx, event, splitNotification(text, notificationChunkSize), cfg, "", false)
+	return err
+}
+
+func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks []string, cfg BotConfig, mentionUserID string, replyToCurrent bool) ([]string, error) {
 	sentChunks := 0
 	messageIDs := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -9087,7 +9100,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	if len(change.Commits) == 0 && len(change.PullRequests) == 0 && len(change.Issues) == 0 && len(change.Releases) == 0 && change.Stars == nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, r.storeRepositoryWatchProgress(item.ID, change.Snapshot, ""))
 	}
-	message, err := r.generateRepositoryWatchMessage(ctx, item, change)
+	message, err := r.generateRepositoryWatchMessage(ctx, item, change, settings)
 	if err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageSummary, err)
 	}
@@ -9122,17 +9135,17 @@ func (r *Runtime) sendRepositoryWatch(ctx context.Context, item Reminder, messag
 	}
 	var firstErr error
 	for _, target := range repositoryWatchDeliveryTargets(item) {
-		if err := r.send(ctx, target, message); err != nil && firstErr == nil {
+		if err := r.sendNotification(ctx, target, message); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 	return firstErr
 }
 
-func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Reminder, change repositoryWatchChange) (string, error) {
-	// A polling interval can contain several commits/releases. Keep the cursor
-	// moving to the newest state, but make the user-facing notification concise.
-	change = latestRepositoryWatchChange(change)
+func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Reminder, change repositoryWatchChange, settings SettingValues) (string, error) {
+	// 一个轮询区间里可能攒了好几条动态。游标照常推进到最新状态，通知则按「摘要动态
+	// 上限」列出最近若干条，超出部分只标一句还剩多少。
+	change = limitRepositoryWatchChange(change, settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit))
 	summary := ""
 	if len(change.Commits) > 0 || len(change.PullRequests) > 0 || len(change.Issues) > 0 || len(change.Releases) > 0 {
 		source := reminderSourceEvent(item)
@@ -9145,8 +9158,6 @@ func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Remin
 			summary = strings.TrimSpace(reply)
 		}
 	}
-	source := reminderSourceEvent(item)
-	_, settings, _ := r.plugins.PluginWithSettingsForGroup(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
 	templates := repositoryWatchTemplatesFromSettings(settings)
 	return composeRepositoryWatchMessageWithTemplate(templates.Header, item.Repository, renderRepositoryWatchChangesWithTemplates(change, templates), summary), nil
 }
@@ -9274,36 +9285,32 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, templates repositoryWatchTemplates) string {
 	sections := make([]string, 0, 5)
 	if len(change.Commits) > 0 {
-		branch := strings.TrimSpace(change.Branch)
-		if branch == "" {
-			branch = "默认分支"
-		}
-		sharedAuthor := repositoryWatchSharedCommitAuthor(change.Commits)
-		header := "Commit（" + branch + "）"
-		if sharedAuthor != "" {
-			header = "Commit（" + branch + "，作者 " + sharedAuthor + "）"
-		}
-		lines := []string{header}
+		// 不再给提交加「Commit（分支，作者 X）」节标题：一次推送通常只有一两条提交，
+		// 标题行占掉的位置比它给的信息多。分支和作者留在占位符里，需要的人可以在
+		// 模板里加回去。
+		lines := make([]string, 0, len(change.Commits)+1)
 		for _, commit := range change.Commits {
 			sha := strings.TrimSpace(commit.SHA)
 			if len(sha) > 7 {
 				sha = sha[:7]
 			}
-			// 作者只在本批提交来自不同人时逐条标注；全部同一个人时已经写进标题行。
-			author := ""
-			if value := strings.TrimSpace(commit.Author); value != "" && sharedAuthor == "" {
-				author = value
-			}
+			author := strings.TrimSpace(commit.Author)
+			shortTime := formatRepositoryWatchShortTime(commit.PushedAt)
 			lines = append(lines, renderRepositoryWatchTemplate(templates.Commit, map[string]string{
-				"sha":    sha,
-				"title":  strings.TrimSpace(commit.Title),
-				"author": author,
-				"time":   formatRepositoryWatchTime(commit.PushedAt),
-				"branch": firstNonEmpty(strings.TrimSpace(change.Branch), "默认分支"),
-				"url":    strings.TrimSpace(commit.URL),
+				"sha":        sha,
+				"title":      strings.TrimSpace(commit.Title),
+				"author":     author,
+				"time":       formatRepositoryWatchTime(commit.PushedAt),
+				"time_short": shortTime,
+				"byline":     repositoryWatchCommitByline(author, shortTime),
+				"branch":     firstNonEmpty(strings.TrimSpace(change.Branch), "默认分支"),
+				"url":        strings.TrimSpace(commit.URL),
+				"short_url":  repositoryWatchShortCommitURL(commit.URL, sha),
 			}))
 		}
-		if change.Truncated {
+		if change.OmittedCommits > 0 {
+			lines = append(lines, fmt.Sprintf("还有 %d 个提交未列出。", change.OmittedCommits))
+		} else if change.Truncated {
 			lines = append(lines, "本次只展示了部分最新提交。")
 		}
 		sections = append(sections, strings.Join(lines, "\n"))
@@ -9408,42 +9415,28 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 	return strings.Join(sections, "\n")
 }
 
-func latestRepositoryWatchChange(change repositoryWatchChange) repositoryWatchChange {
+// limitRepositoryWatchChange 把每类动态裁到 limit 条。提交按时间倒序返回，所以保留
+// 的是最新的那几条；被裁掉时记下 OmittedCommits，通知里注明还剩多少条没列。
+func limitRepositoryWatchChange(change repositoryWatchChange, limit int) repositoryWatchChange {
+	if limit <= 0 {
+		limit = repositoryWatchDefaultLimit
+	}
 	latest := change
-	if len(change.Commits) > 1 {
-		latest.Commits = append([]repositoryWatchCommit(nil), change.Commits[0])
+	if len(change.Commits) > limit {
+		latest.Commits = append([]repositoryWatchCommit(nil), change.Commits[:limit]...)
 		latest.Truncated = true
+		latest.OmittedCommits = len(change.Commits) - limit
 	}
-	if len(change.PullRequests) > 1 {
-		latest.PullRequests = append([]repositoryWatchPullRequest(nil), change.PullRequests[0])
+	if len(change.PullRequests) > limit {
+		latest.PullRequests = append([]repositoryWatchPullRequest(nil), change.PullRequests[:limit]...)
 	}
-	if len(change.Issues) > 1 {
-		latest.Issues = append([]repositoryWatchIssue(nil), change.Issues[0])
+	if len(change.Issues) > limit {
+		latest.Issues = append([]repositoryWatchIssue(nil), change.Issues[:limit]...)
 	}
-	if len(change.Releases) > 1 {
-		latest.Releases = append([]repositoryWatchRelease(nil), change.Releases[0])
+	if len(change.Releases) > limit {
+		latest.Releases = append([]repositoryWatchRelease(nil), change.Releases[:limit]...)
 	}
 	return latest
-}
-
-// repositoryWatchSharedCommitAuthor 返回本批提交共同的作者；提交者不一致或存在
-// 缺失作者时返回空字符串，交由每条提交单独标注。
-func repositoryWatchSharedCommitAuthor(commits []repositoryWatchCommit) string {
-	shared := ""
-	for _, commit := range commits {
-		author := strings.TrimSpace(commit.Author)
-		if author == "" {
-			return ""
-		}
-		if shared == "" {
-			shared = author
-			continue
-		}
-		if author != shared {
-			return ""
-		}
-	}
-	return shared
 }
 
 func formatRepositoryWatchTime(value time.Time) string {
@@ -9451,6 +9444,49 @@ func formatRepositoryWatchTime(value time.Time) string {
 		return ""
 	}
 	return value.Local().Format("2006-01-02 15:04:05")
+}
+
+// formatRepositoryWatchShortTime 给紧凑排版用：一律不带秒，当年的动态连年份也省掉。
+func formatRepositoryWatchShortTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	local := value.Local()
+	if local.Year() == time.Now().Year() {
+		return local.Format("01-02 15:04")
+	}
+	return local.Format("2006-01-02 15:04")
+}
+
+// repositoryWatchShortCommitURL 把 commit 链接里的 40 位 SHA 换成 7 位短 SHA。
+// GitHub 认短 SHA，链接照样能打开，手机上少占两行。
+func repositoryWatchShortCommitURL(rawURL, shortSHA string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	shortSHA = strings.TrimSpace(shortSHA)
+	if rawURL == "" || shortSHA == "" {
+		return rawURL
+	}
+	index := strings.LastIndex(rawURL, "/")
+	if index < 0 || len(rawURL[index+1:]) <= len(shortSHA) {
+		return rawURL
+	}
+	return rawURL[:index+1] + shortSHA
+}
+
+// repositoryWatchCommitByline 组出「作者 于 时间 提交」这句署名。作者缺失时退成
+// 「提交于 时间」，不会留下一个光秃秃的「于」。
+func repositoryWatchCommitByline(author, shortTime string) string {
+	author = strings.TrimSpace(author)
+	shortTime = strings.TrimSpace(shortTime)
+	switch {
+	case author != "" && shortTime != "":
+		return author + " 于 " + shortTime + " 提交"
+	case author != "":
+		return author + " 提交"
+	case shortTime != "":
+		return "提交于 " + shortTime
+	}
+	return ""
 }
 
 func repositoryWatchPullStatusLabel(status string) string {
@@ -9904,6 +9940,31 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 		}
 	}
 	return false
+}
+
+// notificationChunkSize 是通知的兜底长度，取自 Config 的出厂默认值；人格预设可以
+// 把聊天回复压得更短，但不该压通知。
+const notificationChunkSize = 900
+
+// splitNotification 只按长度切分通知，不理会空行和 <botbr>。
+func splitNotification(text string, chunkSize int) []string {
+	if chunkSize <= 0 {
+		chunkSize = notificationChunkSize
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	var out []string
+	runes := []rune(text)
+	for len(runes) > chunkSize {
+		out = append(out, strings.TrimSpace(string(runes[:chunkSize])))
+		runes = runes[chunkSize:]
+	}
+	if len(runes) > 0 {
+		out = append(out, strings.TrimSpace(string(runes)))
+	}
+	return out
 }
 
 // splitReply 将长回复按模型分隔符、空行和长度切分。
