@@ -581,3 +581,36 @@ func TestPlainTextRendersNeutralReplyMarker(t *testing.T) {
 		t.Fatalf("PlainText = %q", got)
 	}
 }
+
+// at 段带昵称时渲染成「@昵称（QQ）」，只有号码时退回「@QQ」。
+func TestPlainTextRendersAtMentionsWithNicknames(t *testing.T) {
+	segments := []MessageSegment{
+		{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "向晚"}},
+		{Type: "at", Data: map[string]string{"qq": "4200000001", "card": "群名片"}},
+		{Type: "at", Data: map[string]string{"qq": "9999999999"}},
+		{Type: "at", Data: map[string]string{"qq": "all"}},
+		{Type: "text", Data: map[string]string{"text": "少回复点"}},
+	}
+	got := PlainText(segments)
+	for _, want := range []string{"@向晚（3129583166）", "@群名片（4200000001）", "@9999999999", "少回复点"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("plain text missing %q: %q", want, got)
+		}
+	}
+	// @全体成员没有具体对象，仍旧不渲染出来。
+	if strings.Contains(got, "@all") {
+		t.Fatalf("at-all should not render as a raw id: %q", got)
+	}
+}
+
+func TestAtMentionTextHandlesMissingPieces(t *testing.T) {
+	if got := AtMentionText("123", ""); got != "@123" {
+		t.Fatalf("id-only mention = %q", got)
+	}
+	if got := AtMentionText("", "向晚"); got != "@向晚" {
+		t.Fatalf("name-only mention = %q", got)
+	}
+	if got := AtMentionText("123", "  向晚  "); got != "@向晚（123）" {
+		t.Fatalf("trimmed mention = %q", got)
+	}
+}

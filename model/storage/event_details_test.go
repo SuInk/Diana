@@ -591,3 +591,86 @@ CREATE TABLE inbound_events (
 		}
 	}
 }
+
+// 事件列表里的 @ 只有一串 QQ 号看不出提到了谁。昵称按「最近一次发言的群名片 →
+// 全局资料显示名」解析后补进正文。
+func TestListInboundEventDetailsResolvesMentionNicknames(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-mentions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	stamp := now.Format(time.RFC3339Nano)
+
+	// 3129583166 只有全局资料名；4200000001 还发过言，群名片应当优先。
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO user_profiles (user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES ('3129583166', '向晚', 0, 0, '[]', ?), ('4200000001', '全局名', 0, 0, '[]', ?)
+`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
+VALUES ('older-card', 'group:104970', 'group', '104970', '4200000001', 'm-old', '旧名片', ?, '早些时候', '{}', ?),
+       ('latest-card', 'group:104970', 'group', '104970', '4200000001', 'm-new', '群名片', ?, '刚刚', '{}', ?)
+`, now.Add(-time.Hour).Unix(), stamp, now.Unix(), stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := json.Marshal(assistant.MessageEvent{
+		Kind: "group", GroupID: "104970", UserID: "10001",
+		Segments: []assistant.MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "at", Data: map[string]string{"qq": "4200000001"}},
+			{Type: "at", Data: map[string]string{"qq": "9999999999"}},
+			{Type: "text", Data: map[string]string{"text": "少回复点"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
+VALUES ('mention', 'group:104970', 'group', '104970', '10001', 'message-1', '发起人', ?, '', ?, ?)
+`, now.Unix(), string(payload), stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES ('mention', 'group:104970', 'group', '104970', '10001', 'message-1', ?, '{}', 0,
+  'done', 0, ?, 'replied', ?, ?, ?)
+`, now.Unix(), now.UnixNano(), now.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Minute), 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	for _, event := range page.Events {
+		if event.ID == "mention" {
+			text = event.Text
+		}
+	}
+	if !strings.Contains(text, "@向晚（3129583166）") {
+		t.Fatalf("profile display name not applied: %q", text)
+	}
+	// 群名片比全局资料名更贴近群里看到的称呼，而且要取最近一次的。
+	if !strings.Contains(text, "@群名片（4200000001）") {
+		t.Fatalf("latest sender card not preferred: %q", text)
+	}
+	// 查不到昵称时仍退回纯号码，不能把提及整个吞掉。
+	if !strings.Contains(text, "@9999999999") {
+		t.Fatalf("unknown mention should keep the bare id: %q", text)
+	}
+	if !strings.Contains(text, "少回复点") {
+		t.Fatalf("message body missing: %q", text)
+	}
+}
