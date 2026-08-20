@@ -917,3 +917,68 @@ func TestRepositoryPublishUserScopedManagerWorksInsideGroups(t *testing.T) {
 		t.Fatalf("unauthorized group member should stay denied")
 	}
 }
+
+// 「GitHub 仓库 · 设置」把两个插件呈现成同一个公共 Token，前端却只在本次重新输入
+// 时才把它镜像给发布插件。发布插件这边为空时必须回落到订阅插件，否则界面显示「已
+// 配置」而 Issue 仍然用不了。
+func TestRepositoryPublishCredentialFallsBackToWatchToken(t *testing.T) {
+	manager := NewPluginManager(NewRepositoryWatchPlugin(nil))
+	if _, err := manager.UpdateSettings(repositoryWatchPluginID, map[string]any{repositoryWatchSettingToken: "watch-token"}); err != nil {
+		t.Fatalf("seed watch token: %v", err)
+	}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, manager, nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner"}
+
+	// 发布插件自己的 Token 为空：回落到订阅插件那份。
+	tool := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{})
+	token, apiErr := tool.repositoryPublishCredential(context.Background())
+	if apiErr != nil || token != "watch-token" {
+		t.Fatalf("token=%q err=%#v", token, apiErr)
+	}
+	if !strings.Contains(tool.credentialSource, "仓库订阅") {
+		t.Fatalf("credential source should name the fallback: %q", tool.credentialSource)
+	}
+	// 回落能取到凭据时，写入预检查不能抢先报 token_required。
+	gated := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{},
+		SettingValues{repositoryPublishSettingAllowlist: "acme/demo"})
+	if code, message := gated.validateWriteAccess("acme/demo", true); code != "" {
+		t.Fatalf("precheck rejected a usable fallback token: %s %s", code, message)
+	}
+
+	// 发布插件自己配了就用自己的，不被订阅插件覆盖。
+	own := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{repositoryPublishSettingToken: "publish-token"})
+	token, apiErr = own.repositoryPublishCredential(context.Background())
+	if apiErr != nil || token != "publish-token" {
+		t.Fatalf("own token=%q err=%#v", token, apiErr)
+	}
+	if strings.Contains(own.credentialSource, "仓库订阅") {
+		t.Fatalf("own token should not be reported as the fallback: %q", own.credentialSource)
+	}
+}
+
+// 两边都没有 Token 时仍要明确要求配置，而不是发一个匿名请求出去。
+func TestRepositoryPublishCredentialRequiresATokenWhenBothAreEmpty(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	tool := newDianaRepositoryIssuesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, &RepositoryPublishPlugin{}, SettingValues{})
+	if _, apiErr := tool.repositoryPublishCredential(context.Background()); apiErr == nil || apiErr.Code != "token_required" {
+		t.Fatalf("expected token_required, got %#v", apiErr)
+	}
+}
+
+// 404 要带上凭据来源，否则「配了 Token 却 404」无从下手。
+func TestRepositoryIssueFailureMessageNamesTheCredential(t *testing.T) {
+	tool := &dianaRepositoryIssuesTool{credentialSource: "公共 GitHub Token（来自仓库订阅插件）"}
+	message := tool.failureMessage("not_found")
+	if !strings.Contains(message, "404") || !strings.Contains(message, "来自仓库订阅插件") {
+		t.Fatalf("not_found message = %q", message)
+	}
+	// 与凭据无关的报错不该被硬塞一句来源。
+	if got := tool.failureMessage("rate_limited"); strings.Contains(got, "本次凭据") {
+		t.Fatalf("rate_limited message should stay clean: %q", got)
+	}
+	// 没记录来源时不留下空括号。
+	empty := &dianaRepositoryIssuesTool{}
+	if got := empty.failureMessage("not_found"); strings.Contains(got, "本次凭据") {
+		t.Fatalf("message should omit an unknown source: %q", got)
+	}
+}
