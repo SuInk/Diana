@@ -27,6 +27,7 @@ type repositoryWatchTestGitHub struct {
 	commitCalls  int
 	pullCalls    int
 	releaseCalls int
+	pullCommits  map[int][]map[string]any
 	starCalls    int
 	diffCalls    int
 	failCommits  bool
@@ -41,6 +42,13 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	// PR 的 commits 必须排在仓库 commits 前面：两者路径都以 /commits 结尾。
+	if strings.Contains(r.URL.Path, "/pulls/") && strings.HasSuffix(r.URL.Path, "/commits") {
+		var number int
+		_, _ = fmt.Sscanf(r.URL.Path, "/repos/acme/demo/pulls/%d/commits", &number)
+		_ = json.NewEncoder(w).Encode(s.pullCommits[number])
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/commits") {
 		s.commitCalls++
 		if s.failCommits {
@@ -230,6 +238,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		releases:     []map[string]any{repositoryWatchReleasePayload("v1.0.0", "First")},
 		starCount:    10,
 		pullFiles:    map[int][]map[string]any{},
+		pullCommits:  map[int][]map[string]any{},
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
@@ -629,6 +638,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 			repositoryWatchPullPayload(2, "add classified notifications", "open", "", "2026-08-14T00:00:00Z"),
 			repositoryWatchPullPayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z"),
 		},
+		pullCommits: map[int][]map[string]any{},
 		pullFiles: map[int][]map[string]any{2: {{
 			"filename": "model/assistant/repository_watch_plugin.go", "status": "modified",
 			"additions": 12, "deletions": 1, "changes": 13, "patch": "@@ -1 +1 @@\n-old\n+classified",
@@ -665,7 +675,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		sentText = fmt.Sprint(channel.calls)
 	}
 	delivered := len(channel.sent) > 0 || len(channel.calls) > 0 && channel.calls[0].action == "send_group_forward_msg"
-	if !delivered || !strings.Contains(sentText, "作者：diana") || !strings.Contains(sentText, "Commit new-sha\nfix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
+	if !delivered || !strings.Contains(sentText, "作者：diana") || !strings.Contains(sentText, "Commit new-sha\nfix delivery") || !strings.Contains(sentText, "PR #2（更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1（7 → 8）") || strings.Contains(sentText, "watch-2") {
 		t.Fatalf("sent=%#v calls=%#v item=%#v requests=%#v", channel.sent, channel.calls, store.items[0], provider.requests)
 	}
 	item := store.items[0]
@@ -1188,5 +1198,97 @@ func TestRenderRepositoryWatchChangesDoesNotNumberTrailingNotes(t *testing.T) {
 	}
 	if !strings.HasSuffix(result, "还有 3 个提交未列出。") || strings.Contains(result, "3. 还有") {
 		t.Fatalf("trailing note should stay unnumbered:\n%s", result)
+	}
+}
+
+// PR 合并后它的提交才落到被监控分支上，于是同一份工作会报两次：PR 条目一次，
+// 它带上来的每个提交再各一次。已合并 PR 覆盖到的提交要折叠掉，与 PR 无关的
+// 提交照常保留。
+func TestRepositoryWatchFoldsCommitsCoveredByMergedPullRequests(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		commits:      []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
+		pullRequests: []map[string]any{repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z")},
+		pullFiles:    map[int][]map[string]any{},
+		pullCommits:  map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Commits: true, PullRequests: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	github.mu.Lock()
+	github.commits = []map[string]any{
+		repositoryWatchCommitPayload("merge-sha", "Merge pull request #2 from acme/feature"),
+		repositoryWatchCommitPayload("pr-commit-b", "second PR commit"),
+		repositoryWatchCommitPayload("pr-commit-a", "first PR commit"),
+		repositoryWatchCommitPayload("direct-sha", "直接推到 main 的提交"),
+		repositoryWatchCommitPayload("base-sha", "initial"),
+	}
+	github.pullRequests = []map[string]any{
+		repositoryWatchPullPayload(2, "统一通知排版", "merged", "merge-sha", "2026-08-14T00:00:00Z"),
+	}
+	github.pullCommits[2] = []map[string]any{{"sha": "pr-commit-a"}, {"sha": "pr-commit-b"}}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Commits) != 1 || change.Commits[0].SHA != "direct-sha" {
+		t.Fatalf("merged PR commits were not folded: %#v", change.Commits)
+	}
+	if len(change.PullRequests) != 1 || change.PullRequests[0].Number != 2 {
+		t.Fatalf("pull requests = %#v", change.PullRequests)
+	}
+	// 游标仍要推进到最新提交，折叠只影响展示。
+	if change.Snapshot.CommitSHA != "merge-sha" {
+		t.Fatalf("cursor must still advance past folded commits: %q", change.Snapshot.CommitSHA)
+	}
+	rendered := renderRepositoryWatchChanges(change)
+	for _, unwanted := range []string{"pr-commit-a", "pr-commit-b", "Merge pull request #2"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("folded commit leaked into the notification %q:\n%s", unwanted, rendered)
+		}
+	}
+}
+
+// 拿不到 PR 的提交列表时保留原样：一次 API 失败不能把提交吞掉。
+func TestRepositoryWatchKeepsCommitsWhenPullRequestCommitsAreUnavailable(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		commits:      []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
+		pullRequests: []map[string]any{repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z")},
+		pullFiles:    map[int][]map[string]any{},
+		pullCommits:  map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Commits: true, PullRequests: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	github.mu.Lock()
+	github.commits = []map[string]any{
+		repositoryWatchCommitPayload("pr-commit-a", "first PR commit"),
+		repositoryWatchCommitPayload("base-sha", "initial"),
+	}
+	// merge_commit_sha 留空，pullCommits 也没有这个 PR：等价于列表拿不到。
+	github.pullRequests = []map[string]any{repositoryWatchPullPayload(2, "无法读取提交", "merged", "", "2026-08-14T00:00:00Z")}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Commits) != 1 || change.Commits[0].SHA != "pr-commit-a" {
+		t.Fatalf("commits should survive an unusable PR commit list: %#v", change.Commits)
 	}
 }

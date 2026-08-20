@@ -304,6 +304,9 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 			change.Snapshot.PullRequestCursor = snapshot
 		}
 	}
+	if selection.Commits && selection.PullRequests && len(change.Commits) > 0 && len(change.PullRequests) > 0 {
+		change.Commits = p.foldMergedPullRequestCommits(ctx, repository, change.Commits, change.PullRequests, settings)
+	}
 	if selection.Issues {
 		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, settings)
 		if err != nil {
@@ -519,6 +522,60 @@ func (p *RepositoryWatchPlugin) fetchSingleCommitDiff(ctx context.Context, repos
 	}
 	files, truncated := repositoryWatchDiffFiles(payload.Files, 30)
 	return &repositoryWatchDiff{Head: strings.TrimSpace(sha), TotalCommits: 1, AheadBy: 1, Files: files, FilesTruncated: truncated}, nil
+}
+
+// foldMergedPullRequestCommits 去掉那些已经被同一条通知里的「已合并 PR」代表了的
+// 提交。PR 合并后它的提交才会落到被监控分支上，于是同一份工作报两次：一次是 PR
+// 条目，一次是它带上来的每个提交，外加一条「Merge pull request #N」。PR 条目已经
+// 给了标题、作者、分支和链接，逐个提交只是重复。
+//
+// 拿不到某个 PR 的提交列表时保留原样：宁可多报，不能因为一次 API 失败就把提交吞掉。
+func (p *RepositoryWatchPlugin) foldMergedPullRequestCommits(ctx context.Context, repository string, commits []repositoryWatchCommit, pullRequests []repositoryWatchPullRequest, settings SettingValues) []repositoryWatchCommit {
+	covered := make(map[string]bool)
+	for _, pullRequest := range pullRequests {
+		if !strings.EqualFold(strings.TrimSpace(pullRequest.Status), "merged") {
+			continue
+		}
+		// 合并提交本身（squash 时就是那条压缩提交）与 PR 条目完全重复。
+		if sha := strings.ToLower(strings.TrimSpace(pullRequest.MergeCommitSHA)); sha != "" {
+			covered[sha] = true
+		}
+		shas, err := p.fetchPullRequestCommitSHAs(ctx, repository, pullRequest.Number, settings)
+		if err != nil {
+			continue
+		}
+		for sha := range shas {
+			covered[sha] = true
+		}
+	}
+	if len(covered) == 0 {
+		return commits
+	}
+	kept := make([]repositoryWatchCommit, 0, len(commits))
+	for _, commit := range commits {
+		if covered[strings.ToLower(strings.TrimSpace(commit.SHA))] {
+			continue
+		}
+		kept = append(kept, commit)
+	}
+	return kept
+}
+
+func (p *RepositoryWatchPlugin) fetchPullRequestCommitSHAs(ctx context.Context, repository string, number int, settings SettingValues) (map[string]bool, error) {
+	var payload []struct {
+		SHA string `json:"sha"`
+	}
+	path := fmt.Sprintf("/repos/%s/pulls/%d/commits?per_page=100", repository, number)
+	if err := p.getJSON(ctx, path, settings, &payload); err != nil {
+		return nil, fmt.Errorf("读取 %s PR #%d commits: %w", repository, number, err)
+	}
+	shas := make(map[string]bool, len(payload))
+	for _, item := range payload {
+		if sha := strings.ToLower(strings.TrimSpace(item.SHA)); sha != "" {
+			shas[sha] = true
+		}
+	}
+	return shas, nil
 }
 
 func (p *RepositoryWatchPlugin) fetchPullRequestFiles(ctx context.Context, repository string, number int, settings SettingValues) ([]repositoryWatchDiffFile, bool, error) {
