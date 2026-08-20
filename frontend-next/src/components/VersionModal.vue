@@ -7,7 +7,9 @@
       <header class="version-hero">
         <div class="version-hero-main">
           <span v-if="versionLabel" class="mono version-current">{{ versionLabel }}</span>
-          <template v-if="!checking && !checkError && (checkResult?.update_available || switchToRelease) && checkResult?.latest_version">
+          <!-- 检查中不清空已知的目标版本：抹掉再显示回来只会让这一行闪一下，
+               上一次的结论在新结果回来之前仍然成立。 -->
+          <template v-if="!checkError && (checkResult?.update_available || switchToRelease) && checkResult?.latest_version">
             <ArrowRight class="version-arrow" :size="16" aria-hidden="true" />
             <span class="mono version-latest">{{ checkResult.latest_version }}</span>
           </template>
@@ -15,6 +17,7 @@
           <span v-else-if="installTracking" class="badge warn">升级并验证中</span>
           <span v-else-if="checkError" class="badge err">检查失败</span>
           <span v-else-if="status?.download_ready" class="badge warn">已下载，待安装</span>
+          <span v-else-if="operationRunning" class="badge warn">正在下载并校验</span>
           <span v-else-if="checkResult?.update_available" class="badge accent">发现新版本</span>
           <span v-else-if="switchToRelease" class="badge accent">可切换到正式版</span>
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
@@ -25,7 +28,7 @@
           <span v-if="checkResult?.latest_published_at">
             {{ checkResult.update_available || switchToRelease ? "新版本" : "" }}发布于 {{ formatDateTime(checkResult.latest_published_at) }}
           </span>
-          <span v-if="checkResult?.checked_at" :title="formatDateTime(checkResult.checked_at)">
+          <span v-if="checkResult?.checked_at && !checking" :title="formatDateTime(checkResult.checked_at)">
             {{ formatRelativeTime(checkResult.checked_at) }}检查过
           </span>
           <span v-if="checkResult && deploymentMode === 'git'" class="version-hero-integrity ok">
@@ -53,11 +56,8 @@
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
-      <!-- 稳态下这块原本是四条独立的横带（升级回执、两个开关、检查更新），
-           信息量却很小。压成一行：开关在左，操作按钮靠右，窄屏自动换行。 -->
+      <!-- 开关在左，操作按钮靠右，窄屏自动换行。 -->
       <div class="update-bar">
-        <p v-if="updatedHint" class="update-hint"><CheckCircle2 :size="14" aria-hidden="true" />{{ updatedHint }}</p>
-
         <template v-if="releaseSelfUpdate && !sourceBuild">
           <label class="policy-toggle" title="发现新版本后自动下载完整 Release 包，校验 SHA-256 后暂存">
             <span>自动下载</span>
@@ -81,7 +81,7 @@
           v-if="canDownloadUpdate"
           class="btn primary small"
           type="button"
-          :disabled="operationRunning"
+          :disabled="operationRunning || checking"
           @click="downloadUpdate()"
         >
           <Download :size="14" aria-hidden="true" />
@@ -181,7 +181,27 @@
                   </span>
                 </span>
               </div>
-              <p v-if="release.notes" class="muted release-notes">{{ release.notes }}</p>
+              <template v-if="releaseNoteLines(release).length">
+                <p
+                  :ref="(el) => registerNoteElement(release.tag, el as HTMLElement | null)"
+                  class="muted release-notes"
+                  :class="{ expanded: expandedNotes.has(release.tag) }"
+                >
+                  <template v-for="(line, index) in releaseNoteLines(release)" :key="index">
+                    <span :class="line.heading ? 'release-notes-heading' : undefined">{{ line.text }}</span>
+                    <br v-if="index < releaseNoteLines(release).length - 1" />
+                  </template>
+                </p>
+                <button
+                  v-if="overflowingNotes.has(release.tag)"
+                  class="release-notes-toggle"
+                  type="button"
+                  @click="toggleNotes(release.tag)"
+                >
+                  <ChevronDown :size="13" :class="{ flipped: expandedNotes.has(release.tag) }" aria-hidden="true" />
+                  {{ expandedNotes.has(release.tag) ? "收起" : "展开更新说明" }}
+                </button>
+              </template>
             </li>
           </ul>
           <div v-if="releases.length && deploymentMode === 'release' && !releaseSelfUpdate" class="release-rollback-note">
@@ -209,8 +229,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ArrowRight, CheckCircle2, Container, Copy, Download, History, LoaderCircle, RefreshCcw, RefreshCw, ShieldAlert, ShieldCheck } from "@lucide/vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { ArrowRight, ChevronDown, Container, Copy, Download, History, LoaderCircle, RefreshCcw, RefreshCw, ShieldAlert, ShieldCheck } from "@lucide/vue";
 import Modal from "./Modal.vue";
 import {
   checkForUpdate,
@@ -248,7 +268,6 @@ const checking = ref(false);
 const updating = ref(false);
 const savingPolicy = ref(false);
 const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false });
-const updatedHint = ref("");
 const operationError = ref("");
 let statusPollTimer: number | undefined;
 const installTracking = ref(false);
@@ -266,7 +285,6 @@ const switchToRelease = computed(() => sourceBuild.value
   && checkResult.value?.switch_to_release_available === true);
 const canDownloadUpdate = computed(() => releaseSelfUpdate.value
   && !sourceBuild.value
-  && !checking.value
   && !checkError.value
   && checkResult.value?.update_supported === true
   && checkResult.value.update_available
@@ -389,10 +407,7 @@ async function check(notify = true): Promise<void> {
   try {
     checkResult.value = await checkForUpdate();
     status.value = checkResult.value.status ?? status.value;
-    // 按刚拿到的状态重新判定成功横幅，而不是在开头先粗暴清空：那样会把一条
-    // 仍然成立的提示也一起抹掉（升级完点一下「检查更新」横幅就没了）。
     if (status.value?.last_update_status) applyPersistedUpdateResult(status.value);
-    else updatedHint.value = "";
     policy.value = checkResult.value.policy ?? policy.value;
     emit("checked", checkResult.value.update_available);
     if (notify) {
@@ -448,10 +463,9 @@ async function downloadUpdate(force = false): Promise<void> {
   try {
     const result = await downloadSystemUpdate(force);
     status.value = result.status;
-    updatedHint.value = result.status.updating
+    toastSuccess(result.status.updating
       ? "更新包正在下载或处理中"
-      : result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待安装` : "已是最新稳定版本";
-    toastSuccess(updatedHint.value);
+      : result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待安装` : "已是最新稳定版本");
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : "下载更新失败";
     toastError(operationError.value);
@@ -474,8 +488,7 @@ async function confirmInstall(): Promise<void> {
     installTarget = result.target_commit || target;
     installStartedAt = Date.now();
     installTracking.value = true;
-    updatedHint.value = `正在安装 ${result.target_commit || target}，服务即将重启`;
-    toastSuccess("已开始安装并重启");
+    toastSuccess(`已开始安装 ${result.target_commit || target} 并重启`);
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : "安装更新失败";
     toastError(operationError.value);
@@ -484,27 +497,68 @@ async function confirmInstall(): Promise<void> {
   }
 }
 
-// 服务端持久化的升级结果是一条历史记录，不等于「刚刚升级成功」。回退、重装
-// 旧版本、或者之后又发现了更新的版本之后，它描述的版本就不是当前跑着的这个
-// 了；这时再挂一条绿色成功横幅，会和旁边的「发现新版本」「正在下载」同时出现。
-function persistedSuccessDescribesRunning(value: UpdateStatus): boolean {
-  const recorded = normalizeVersionTag(value.last_update_version);
-  const running = normalizeVersionTag(version.value?.build_version || version.value?.version_label);
-  // 有一边拿不到就沿用原来的行为，宁可多显示也不要把真的成功提示吞掉。
-  if (!recorded || !running) return true;
-  return recorded === running;
+// GitHub 的 Release 正文是 Markdown。之前直接当纯文本渲染，再按像素高度硬裁，
+// 结果是「## 新增功能」这种裸标记露在外面，而且经常正好裁在标题那一行——标题
+// 留着，它底下的内容全被切掉，等于什么都没说。这里先把标记洗掉，再按行数截断。
+type ReleaseNoteLine = { text: string; heading: boolean };
+
+const notesCache = new Map<string, ReleaseNoteLine[]>();
+const expandedNotes = ref<Set<string>>(new Set());
+
+function releaseNoteLines(release: ReleaseEntry): ReleaseNoteLine[] {
+  const cached = notesCache.get(release.tag);
+  if (cached) return cached;
+  const raw = (release.notes ?? "").trim();
+  const lines: ReleaseNoteLine[] = [];
+  for (const rawLine of raw.replace(/<!--[\s\S]*?-->/g, "").split("\n")) {
+    const heading = /^\s*#{1,6}\s+/.test(rawLine);
+    const text = rawLine
+      .replace(/^\s*#{1,6}\s+/, "")
+      .replace(/^\s*[-*+]\s+/, "· ")
+      .replace(/^\s*\d+\.\s+/, "· ")
+      .replace(/^\s*>\s?/, "")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .trim();
+    if (text) lines.push({ text, heading });
+  }
+  notesCache.set(release.tag, lines);
+  return lines;
 }
 
-function normalizeVersionTag(value?: string): string {
-  return (value ?? "").trim().replace(/^v/i, "").toLowerCase();
+// 是否需要「展开」按钮必须按渲染后的真实高度判断，不能数逻辑行数：窄屏下一
+// 条要点会折成两三行，三条逻辑行照样被截断，按行数判断就永远不给展开入口，
+// 内容直接看不到了。
+const noteElements = new Map<string, HTMLElement>();
+const overflowingNotes = ref<Set<string>>(new Set());
+
+function registerNoteElement(tag: string, el: HTMLElement | null): void {
+  if (el) noteElements.set(tag, el);
+  else noteElements.delete(tag);
 }
 
+function measureNoteOverflow(): void {
+  const next = new Set<string>();
+  noteElements.forEach((el, tag) => {
+    // 展开状态下高度已经撑满，测不出溢出；保留原判定，免得按钮闪一下就没了。
+    if (expandedNotes.value.has(tag) || el.scrollHeight - el.clientHeight > 2) next.add(tag);
+  });
+  overflowingNotes.value = next;
+}
+
+function toggleNotes(tag: string): void {
+  const next = new Set(expandedNotes.value);
+  if (!next.delete(tag)) next.add(tag);
+  expandedNotes.value = next;
+}
+
+// 服务端持久化的升级结果是一条历史记录，不等于「刚刚升级成功」。成功那条没有
+// 阅读价值——版本号就写在上面，升级完还挂一条绿横幅只是占地方，所以只在失败和
+// 回退时留下痕迹。
 function applyPersistedUpdateResult(value: UpdateStatus): void {
   const target = value.last_update_version || installTarget || "目标版本";
   if (value.last_update_status === "healthy") {
-    updatedHint.value = persistedSuccessDescribesRunning(value)
-      ? `${target} 已升级成功并通过健康检查`
-      : "";
     operationError.value = "";
     return;
   }
@@ -551,11 +605,11 @@ async function update(): Promise<void> {
     const result = await pullFromGitHub();
     status.value = result.status;
     const target = checkResult.value?.latest_version || result.target_commit || result.status.head_commit;
-    updatedHint.value = result.updated
+    toastSuccess(result.updated
       ? releaseSelfUpdate.value
         ? `已校验并暂存 ${target}，服务将自动重启并执行健康检查`
         : `已更新到 ${target}，重启服务后生效`
-      : "已是最新稳定版本";
+      : "已是最新稳定版本");
     if (checkResult.value) checkResult.value.update_available = false;
     emit("checked", false);
   } catch (error) {
@@ -597,10 +651,9 @@ async function forceUpdate(): Promise<void> {
     const result = await pullFromGitHub(true);
     status.value = result.status;
     const target = checkResult.value?.latest_version || result.status.head_commit;
-    updatedHint.value = `已强制同步到 ${target}，重启服务后生效`;
     if (checkResult.value) checkResult.value.update_available = false;
     emit("checked", false);
-    toastSuccess("强制更新完成");
+    toastSuccess(`已强制同步到 ${target}，重启服务后生效`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "强制更新失败");
   } finally {
@@ -631,9 +684,6 @@ async function rollback(target: string): Promise<void> {
       installTarget = response.result.target_commit || target;
       installStartedAt = Date.now();
       installTracking.value = true;
-      updatedHint.value = `正在回退到 ${installTarget}，服务即将重启并执行健康检查`;
-    } else {
-      updatedHint.value = `已回退到 ${target}，重启服务后生效`;
     }
     toastSuccess(releaseSelfUpdate.value && response.result.restart_required ? `已开始回退到 ${target}` : `已回退到 ${target}`);
   } catch (error) {
@@ -656,6 +706,7 @@ async function copyImageTag(tag: string): Promise<void> {
 onMounted(() => {
   void load();
   void check(false);
+  window.addEventListener("resize", measureNoteOverflow);
   statusPollTimer = window.setInterval(() => {
     if (installTracking.value) {
       void pollInstallResult();
@@ -668,7 +719,13 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (statusPollTimer !== undefined) window.clearInterval(statusPollTimer);
+  window.removeEventListener("resize", measureNoteOverflow);
 });
+
+// 列表渲染完再量一次；展开/收起之后也要重量，否则收起时按钮会消失。
+watch([releases, expandedNotes], () => {
+  void nextTick(measureNoteOverflow);
+}, { deep: false });
 </script>
 
 <style scoped>
@@ -768,18 +825,6 @@ a.version-hero-integrity:hover {
   flex: 1 1 auto;
 }
 
-.update-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 4px 9px;
-  border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
-  border-radius: 999px;
-  background: var(--ok-soft);
-  color: var(--ok);
-  font-size: 12px;
-}
 
 .update-hint svg {
   flex: 0 0 auto;
@@ -815,6 +860,16 @@ a.version-hero-integrity:hover {
   align-items: center;
   gap: 10px;
   margin-left: auto;
+}
+
+/* 窄屏放不下 tag + 徽章 + 日期时，让日期落到下一行的左边而不是右边——
+   space-between 会把它甩到最右侧，看着像另一条记录的开头。 */
+@media (max-width: 560px) {
+  .release-side {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
 }
 
 /* 固定操作列宽度，让各行日期对齐成一列。 */
