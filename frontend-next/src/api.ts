@@ -1197,6 +1197,8 @@ export interface HealthResponse {
   started_at: string;
   uptime_seconds: number;
   version: string;
+  repository?: string;
+  repository_url?: string;
 }
 
 export function getStats(): Promise<StatsSnapshot> {
