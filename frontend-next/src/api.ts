@@ -1091,8 +1091,10 @@ export function rollbackSystem(ref: string): Promise<RollbackResponse> {
   });
 }
 
-export function getSystemVersion(): Promise<SystemVersion> {
-  return requestJSON<SystemVersion>("/api/system/version");
+// 版本号缓存 60 秒是给频繁读用的；重启之后、升级之后必须拿真值，这两处传
+// refresh 绕过缓存（约定见 cacheTTL：带 refresh=1 的请求 TTL 为 0）。
+export function getSystemVersion(refresh = false): Promise<SystemVersion> {
+  return requestJSON<SystemVersion>(`/api/system/version${refresh ? "?refresh=1" : ""}`);
 }
 
 export type BuildType = "release" | "source";
