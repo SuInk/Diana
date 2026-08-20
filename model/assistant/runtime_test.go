@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -5028,6 +5029,75 @@ func TestStripReplyMarkersKeepsSenderText(t *testing.T) {
 	for _, item := range cases {
 		if got := stripReplyMarkers(item.in); got != item.want {
 			t.Fatalf("stripReplyMarkers(%q) = %q, want %q", item.in, got, item.want)
+		}
+	}
+}
+
+// 发言和通知共用一份长度切分：修好一边不该漏掉另一边。
+func TestChunkTextByLengthPrefersLineBoundaries(t *testing.T) {
+	lines := make([]string, 0, 40)
+	for index := 1; index <= 40; index++ {
+		lines = append(lines, fmt.Sprintf("%d. 参赛选手编号 %04d", index, index))
+	}
+	text := strings.Join(lines, "\n")
+
+	chunks := chunkTextByLength(text, 120)
+	if len(chunks) < 2 {
+		t.Fatalf("sample is too short to cover the case: %#v", chunks)
+	}
+	for _, chunk := range chunks {
+		if strings.TrimSpace(chunk) == "" {
+			t.Fatal("empty chunk emitted")
+		}
+		for _, line := range strings.Split(chunk, "\n") {
+			// 每一行都必须是完整的一条，不能被从编号中间劈开。
+			if !strings.HasSuffix(line, fmt.Sprintf("%04d", parseTrailingNumber(t, line))) {
+				t.Fatalf("line was cut in half: %q", line)
+			}
+		}
+	}
+	if rejoined := strings.Join(chunks, "\n"); rejoined != text {
+		t.Fatalf("chunking lost or reordered content:\n%s", rejoined)
+	}
+}
+
+func parseTrailingNumber(t *testing.T, line string) int {
+	t.Helper()
+	fields := strings.Fields(line)
+	value, err := strconv.Atoi(fields[len(fields)-1])
+	if err != nil {
+		t.Fatalf("line %q does not end with a number: %v", line, err)
+	}
+	return value
+}
+
+// 两条投递路径对同一段超长文本的长度切分必须一致。
+func TestNotificationAndReplyShareTheSameLengthChunking(t *testing.T) {
+	text := strings.Repeat("确定性的事实清单需要完整保留 ", 200)
+	reply := splitReply(text, 300)
+	notification := splitNotification(text, 300)
+	if len(reply) != len(notification) {
+		t.Fatalf("chunk counts differ: reply=%d notification=%d", len(reply), len(notification))
+	}
+	for index := range reply {
+		if reply[index] != notification[index] {
+			t.Fatalf("chunk %d differs:\nreply=%q\nnotification=%q", index, reply[index], notification[index])
+		}
+	}
+}
+
+// 通知长度上限必须留在 Telegram 的硬限制（4096 个 UTF-16 码元）之内，
+// 哪怕整条消息都是占两个码元的 emoji。
+func TestNotificationChunkFitsTelegramLimit(t *testing.T) {
+	const telegramUTF16Limit = 4096
+	worstCase := strings.Repeat("🐕", notificationChunkSize)
+	chunks := splitNotification(worstCase, notificationChunkSize)
+	if len(chunks) != 1 {
+		t.Fatalf("worst case should stay in one message, got %d chunks", len(chunks))
+	}
+	for _, chunk := range chunks {
+		if units := len(utf16.Encode([]rune(chunk))); units > telegramUTF16Limit {
+			t.Fatalf("chunk uses %d UTF-16 units, over the %d limit", units, telegramUTF16Limit)
 		}
 	}
 }
