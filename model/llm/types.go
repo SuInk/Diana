@@ -62,8 +62,13 @@ const (
 )
 
 const (
-	DefaultContextWindowTokens int64 = 16384
-	DefaultMaxContextTokens    int64 = 16384
+	// DefaultContextWindowTokens 是模型名和目录都推断不出窗口时的兜底值。
+	// 128K 是当前主流模型的下限（GPT-4o、DeepSeek、Qwen、GLM、Llama 3.1 起皆
+	// 如此），按 16K 兜底等于把现代模型当成 2023 年的模型用。真的跑小窗口本地
+	// 模型时，请求超限会被 ErrContextOverflow 识别并自动收缩重试，同时可以在
+	// WebUI 的「模型上下文窗口」里填写实际值一劳永逸。
+	DefaultContextWindowTokens int64 = 128000
+	DefaultMaxContextTokens    int64 = 128000
 	DefaultMaxOutputTokens     int64 = 1024
 	minContextWindowTokens     int64 = 1024
 )
@@ -152,6 +157,10 @@ type GenerateRequest struct {
 	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
 	MaxOutputTokens int64            `json:"max_output_tokens,omitempty"`
 	Tools           []ToolDefinition `json:"tools,omitempty"`
+	// MaxContextTokens 覆盖配置档的请求上下文上限。上游只在「上一次请求被供应商
+	// 判为超出上下文」后重试时设置它，用来把请求收缩到更保守的预算；为 0 时按
+	// 配置档取值。
+	MaxContextTokens int64 `json:"-"`
 }
 
 type Usage struct {
@@ -459,7 +468,11 @@ func (cfg ProviderConfig) WithDefaults() ProviderConfig {
 		cfg.UserAgent = DefaultUserAgent(cfg.Provider)
 	}
 	if cfg.ContextWindowTokens == 0 {
-		cfg.ContextWindowTokens = DefaultContextWindowTokens
+		// 目录没给窗口时先按模型名推断，推断不出再用兜底值。
+		cfg.ContextWindowTokens = KnownContextWindowTokens(cfg.Model)
+		if cfg.ContextWindowTokens <= 0 {
+			cfg.ContextWindowTokens = DefaultContextWindowTokens
+		}
 	}
 	if cfg.MaxContextTokens == 0 {
 		// MaxContextTokens 表示「这次请求最多用掉多少上下文」，未设置时就该等于模型
