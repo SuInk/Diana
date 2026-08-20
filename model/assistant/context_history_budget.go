@@ -106,7 +106,12 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 		}
 	}
 	if window <= 0 {
-		return llm.DefaultContextWindowTokens
+		window = llm.DefaultContextWindowTokens
+	}
+	// 机器人/群配置的上限只能收紧：模型窗口是能力上限，这里是这个机器人愿意
+	// 在单次请求上花多少。
+	if cfg.MaxContextTokens > 0 && cfg.MaxContextTokens < window {
+		window = cfg.MaxContextTokens
 	}
 	return window
 }
