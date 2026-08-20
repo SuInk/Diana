@@ -191,7 +191,22 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	return `搜索和管理 GitHub Issues。已配置的群聊或私聊草稿提交者可调用 create，机器人应根据当前需求整理 title/body；后端只保存并复述草稿，不会写入 GitHub。群聊草稿需要对应仓库的管理人员明确回复同意后调用 approve，私聊草稿也可传 draft_id 由管理人员审批；明确拒绝时调用 cancel_draft。list_drafts 的结果包含提出人、日期和完整内容。管理人员可直接执行 search/create/update/comment/close/reopen；直接写入必须传 user_confirmed_write=true，并遵守明确目标与字段校验。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `搜索和管理 GitHub Issues。已配置的群聊或私聊草稿提交者可调用 create，机器人应根据当前需求整理 title/body；后端只保存并复述草稿，不会写入 GitHub。群聊草稿需要对应仓库的管理人员明确回复同意后调用 approve，私聊草稿也可传 draft_id 由管理人员审批；明确拒绝时调用 cancel_draft。list_drafts 的结果包含提出人、日期和完整内容。管理人员可直接执行 search/create/update/comment/close/reopen；直接写入必须传 user_confirmed_write=true，并遵守明确目标与字段校验。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	if t == nil || t.runtime == nil {
+		return description
+	}
+	// 把当前会话能操作的仓库直接写进描述：用户往往只说简称（「给 milksu 提个
+	// issue」），模型手里没有清单就只能反问一句完整的 owner/repo，白白多一轮。
+	// 这里只需要「是不是主人」，用配置里的 OwnerID 直接比即可；relationshipPolicy
+	// 还会去读用户记忆档案，构造工具描述时不值得为此多打一次库。
+	ownerID := strings.TrimSpace(t.runtime.effectiveConfigForEvent(t.event).OwnerID)
+	isOwner := ownerID != "" && ownerID == strings.TrimSpace(t.event.UserID)
+	repositories := repositoryPublishEventRepositories(t.event, isOwner, t.settings)
+	if len(repositories) == 0 {
+		return description + "\n当前会话没有任何已授权仓库，任何 repository 都会被拒绝；应说明尚未授权，不要让用户改用别的写法重试。"
+	}
+	return description + "\n当前会话可操作的仓库：" + strings.Join(repositories, "、") +
+		"。用户只给出仓库简称、别名或链接时，按这份清单匹配后直接填 repository，不要反问完整的 owner/repo；只有确实对不上时才追问。"
 }
 
 func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -1042,6 +1057,65 @@ func repositoryPublishAllowlist(raw string) (map[string]bool, error) {
 		allowed[strings.ToLower(repository)] = true
 	}
 	return allowed, nil
+}
+
+// repositoryPublishAllowlistNames 按配置顺序返回白名单里的仓库，保留原始大小写。
+// repositoryPublishAllowlist 为了比对把键统一小写了，展示给人看时得用原始写法。
+func repositoryPublishAllowlistNames(raw string) []string {
+	items := strings.FieldsFunc(raw, func(char rune) bool {
+		return char == ',' || char == ';' || char == '\n' || char == '\r'
+	})
+	names := make([]string, 0, len(items))
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		repository, err := normalizeGitHubRepository(item)
+		if err != nil {
+			continue
+		}
+		key := strings.ToLower(repository)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		names = append(names, repository)
+	}
+	return names
+}
+
+// repositoryPublishEventRepositories 列出当前会话实际能操作的仓库。Owner 拿到整份
+// 白名单；其他人只拿到自己或本群被授权、且仍在白名单里的那些。模型有了这份清单，
+// 用户说「给 milksu 提个 issue」时就能直接对上号，不用再反问完整的 owner/repo。
+func repositoryPublishEventRepositories(event MessageEvent, owner bool, settings SettingValues) []string {
+	names := repositoryPublishAllowlistNames(settings.String(repositoryPublishSettingAllowlist, ""))
+	if len(names) == 0 || owner {
+		return names
+	}
+	legacyUsers, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	if err != nil {
+		return nil
+	}
+	legacyGroups, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
+	if err != nil {
+		return nil
+	}
+	managerUsers, managerGroups, draftUsers, draftGroups, err := repositoryPublishEffectiveAccess(settings, legacyUsers, legacyGroups)
+	if err != nil {
+		return nil
+	}
+	userID := strings.TrimSpace(event.UserID)
+	groupID := strings.TrimSpace(event.GroupID)
+	granted := make([]string, 0, len(names))
+	for _, repository := range names {
+		key := strings.ToLower(repository)
+		reachable := managerUsers[userID][key] || draftUsers[userID][key]
+		if !reachable && event.Kind == EventKindGroup {
+			reachable = managerGroups[groupID][key] || draftGroups[groupID][key]
+		}
+		if reachable {
+			granted = append(granted, repository)
+		}
+	}
+	return granted
 }
 
 func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
@@ -2341,7 +2415,10 @@ func repositoryIssueFailureMessage(code string) string {
 	case "rate_limited":
 		return "GitHub API 已限流，请稍后再试。"
 	case "not_found":
-		return "仓库或 Issue 不存在，或当前凭据无权访问。"
+		// GitHub 对「看不到的私有仓库」和「不存在的仓库」都回 404，不区分二者是它
+		// 的防探测设计。仓库能走到这一步说明已经过了白名单，所以凭据看不到的可能性
+		// 通常更大，别让人以为是自己链接写错了。
+		return "GitHub 返回 404：仓库或 Issue 不存在，或当前 GitHub 凭据看不到它。私有仓库没有授权给该 Token 时同样是 404，请先确认 Token 覆盖了这个仓库。"
 	case "not_an_issue":
 		return "目标编号属于 Pull Request；本工具只允许修改 Issue。"
 	case "gone":
