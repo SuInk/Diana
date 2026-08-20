@@ -3042,6 +3042,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
+	if decorationPrompt := replyDecorationPrompt(cfg, event); decorationPrompt != "" {
+		messages = append(messages, llm.Message{
+			Role:     llm.RoleSystem,
+			Content:  decorationPrompt,
+			Priority: llm.MessagePrioritySystem,
+		})
+	}
 	messages = append(messages, currentMessage)
 	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed)
 
@@ -6797,10 +6804,10 @@ func (r *Runtime) sendPluginResponse(ctx context.Context, event MessageEvent, re
 	})
 	cfg := r.effectiveConfigForEvent(event)
 	if event.Kind == EventKindGroup {
-		if boolValue(cfg.ReplyReferenceEnabled, true) {
+		if replyReferenceMode(cfg) == ReplyDecorationOn {
 			msg.ReplyMessageID = event.MessageID
 		}
-		if boolValue(cfg.MentionUserEnabled, true) {
+		if mentionUserMode(cfg) == ReplyDecorationOn {
 			msg.MentionUserID = event.UserID
 		}
 	}
@@ -7019,7 +7026,9 @@ func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEve
 		return msg
 	}
 	msg.Text = rest
-	if r.lookupQuotedMessage(ctx, event, id) == nil {
+	// 指向当前这条消息时不必再查一次：它一定存在，而历史查询可能因为存储未接入或
+	// 消息尚未落库而落空，auto 档下会让模型自己写的引用悄悄失效。
+	if id != strings.TrimSpace(event.MessageID) && r.lookupQuotedMessage(ctx, event, id) == nil {
 		return msg
 	}
 	msg.ReplyMessageID = id
@@ -7178,10 +7187,12 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 			msg.GroupID = event.GroupID
 			// QQ 语音必须保持为独立 record 段；普通回复仍让第一条带 reply 元数据。
 			if sentChunks == 0 && !isStandaloneRecordReply(chunk) {
-				if replyToCurrent && boolValue(cfg.ReplyReferenceEnabled, true) {
+				// auto 档不在这里补装饰件：模型已经在正文里自行写出引用标记和 @，
+				// 运行时再补一遍就又变成每条都带。
+				if replyToCurrent && replyReferenceMode(cfg) == ReplyDecorationOn {
 					msg.ReplyMessageID = event.MessageID
 				}
-				if boolValue(cfg.MentionUserEnabled, true) {
+				if mentionUserMode(cfg) == ReplyDecorationOn {
 					msg.MentionUserID = mentionUserID
 				}
 			}
