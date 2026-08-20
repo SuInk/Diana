@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -42,15 +43,54 @@ func (p *imageOCRFakeProvider) Generate(_ context.Context, req llm.GenerateReque
 
 func newImageOCRTestRuntime(t *testing.T, provider LLMProvider, settings map[string]any) *Runtime {
 	t.Helper()
+	return newImageOCRTestRuntimeWithStore(t, provider, settings, nil)
+}
+
+func newImageOCRTestRuntimeWithStore(t *testing.T, provider LLMProvider, settings map[string]any, store MessageHistoryStore) *Runtime {
+	t.Helper()
 	manager := NewPluginManager(NewImageOCRPlugin(nil))
 	if settings != nil {
 		if _, err := manager.UpdateSettings(imageOCRPluginID, settings); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return NewRuntime(BotConfig{}, nil, manager, nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{}, nil, manager, nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
+	if store != nil {
+		runtime.SetMessageHistoryStore(store)
+	}
+	return runtime
+}
+
+// 按内容哈希缓存识别结果的最小存储，模拟 SQLite 那层。
+type fakeImageRecognitionStore struct {
+	semanticTimelineStore
+	mu      sync.Mutex
+	records map[string]ImageRecognitionRecord
+	loads   int
+}
+
+func newFakeImageRecognitionStore() *fakeImageRecognitionStore {
+	return &fakeImageRecognitionStore{
+		semanticTimelineStore: semanticTimelineStore{events: map[string][]MessageEvent{}},
+		records:               map[string]ImageRecognitionRecord{},
+	}
+}
+
+func (s *fakeImageRecognitionStore) LoadImageRecognition(_ context.Context, cacheKey string) (ImageRecognitionRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loads++
+	record, ok := s.records[cacheKey]
+	return record, ok, nil
+}
+
+func (s *fakeImageRecognitionStore) SaveImageRecognition(_ context.Context, record ImageRecognitionRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records[record.CacheKey] = record
+	return nil
 }
 
 func imageOCRTestMessage(imageURLs ...string) llm.Message {
@@ -434,5 +474,110 @@ func TestImageOCRHTTPBackendEmptyResultMeansNoText(t *testing.T) {
 	_ = runtime.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup}, message)
 	if calls.Load() != 1 {
 		t.Fatalf("service calls = %d, want 1 (cached)", calls.Load())
+	}
+}
+
+func imageOCRDataURL(payload string) string {
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte(payload))
+}
+
+// 同一张表情包被不同的人再发一次，甚至重启换了个进程，都不该重新识别一遍。
+func TestImageOCRReusesRecognitionAcrossRuntimesByContentHash(t *testing.T) {
+	store := newFakeImageRecognitionStore()
+	settings := map[string]any{"backend": imageOCRBackendLLM, "model": "vl"}
+	sticker := imageOCRDataURL("same-sticker-bytes")
+
+	first := &imageOCRFakeProvider{response: "狗狗大喊"}
+	runtimeA := newImageOCRTestRuntimeWithStore(t, first, settings, store)
+	noticeA := runtimeA.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "1"}, imageOCRTestMessage(sticker))
+	if !strings.Contains(noticeA, "狗狗大喊") || first.calls.Load() != 1 {
+		t.Fatalf("first notice = %q calls = %d", noticeA, first.calls.Load())
+	}
+
+	// 换一个 Runtime（等价于重启，进程内缓存是空的），但共用同一份持久化记录。
+	second := &imageOCRFakeProvider{response: "不该被调用"}
+	runtimeB := newImageOCRTestRuntimeWithStore(t, second, settings, store)
+	noticeB := runtimeB.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "2"}, imageOCRTestMessage(sticker))
+	if noticeB != noticeA {
+		t.Fatalf("cached notice = %q, want %q", noticeB, noticeA)
+	}
+	if second.calls.Load() != 0 {
+		t.Fatalf("second runtime called the model %d times, want 0", second.calls.Load())
+	}
+}
+
+// 「这张图没字」同样要落库：表情包大多没字，反复确认最浪费。
+func TestImageOCRPersistsNoTextResult(t *testing.T) {
+	store := newFakeImageRecognitionStore()
+	settings := map[string]any{"backend": imageOCRBackendLLM}
+	sticker := imageOCRDataURL("blank-sticker")
+
+	first := &imageOCRFakeProvider{response: imageOCRNoTextMarker}
+	runtimeA := newImageOCRTestRuntimeWithStore(t, first, settings, store)
+	_ = runtimeA.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage(sticker))
+
+	second := &imageOCRFakeProvider{response: "不该被调用"}
+	runtimeB := newImageOCRTestRuntimeWithStore(t, second, settings, store)
+	if notice := runtimeB.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage(sticker)); notice != "" {
+		t.Fatalf("notice = %q, want empty", notice)
+	}
+	if second.calls.Load() != 0 {
+		t.Fatalf("no-text conclusion was not reused: calls = %d", second.calls.Load())
+	}
+}
+
+// 换了识别后端或模型就得重算，不能拿上一套引擎的输出顶上。
+func TestImageOCRCacheKeySplitsByBackendAndModel(t *testing.T) {
+	sticker := imageOCRDataURL("cfg-sensitive")
+	digest := imageOCRContentDigest(sticker)
+	llm := imageOCRConfig{Backend: imageOCRBackendLLM, Model: "vl-a"}
+	llmOtherModel := imageOCRConfig{Backend: imageOCRBackendLLM, Model: "vl-b"}
+	local := imageOCRConfig{Backend: imageOCRBackendLocal, LocalCommand: "tesseract", LocalLanguages: "chi_sim"}
+	localOtherLang := imageOCRConfig{Backend: imageOCRBackendLocal, LocalCommand: "tesseract", LocalLanguages: "eng"}
+
+	keys := map[string]string{
+		"llm":        imageOCRCacheKey(imageRecognitionKindOCR, digest, llm),
+		"llm-model":  imageOCRCacheKey(imageRecognitionKindOCR, digest, llmOtherModel),
+		"local":      imageOCRCacheKey(imageRecognitionKindOCR, digest, local),
+		"local-lang": imageOCRCacheKey(imageRecognitionKindOCR, digest, localOtherLang),
+		"describe":   imageOCRCacheKey(imageRecognitionKindDescribe, digest, llm),
+		"describe-b": imageOCRCacheKey(imageRecognitionKindDescribe, digest, llmOtherModel),
+	}
+	seen := map[string]string{}
+	for name, key := range keys {
+		if other, clash := seen[key]; clash {
+			t.Fatalf("%s and %s share a cache key", name, other)
+		}
+		seen[key] = name
+	}
+	// 同一套配置必须稳定命中同一个键。
+	if imageOCRCacheKey(imageRecognitionKindOCR, digest, llm) != keys["llm"] {
+		t.Fatal("cache key is not stable for the same config")
+	}
+	// 描述不受 OCR 后端设置影响：它只走 vision 分组。
+	describeWithLocalOCR := imageOCRCacheKey(imageRecognitionKindDescribe, digest, imageOCRConfig{Backend: imageOCRBackendLocal, Model: "vl-a"})
+	if describeWithLocalOCR != keys["describe"] {
+		t.Fatal("describe cache key should not depend on the OCR backend")
+	}
+}
+
+// 内容哈希只看图片字节：同一张图换个 data URL 写法也要命中同一条缓存，
+// 不同图片则必须分开。
+func TestImageOCRContentDigestFollowsBytes(t *testing.T) {
+	same := imageOCRDataURL("identical-bytes")
+	if imageOCRContentDigest(same) != imageOCRContentDigest(same) {
+		t.Fatal("digest is not stable")
+	}
+	if imageOCRContentDigest(same) == imageOCRContentDigest(imageOCRDataURL("other-bytes")) {
+		t.Fatal("different images share a digest")
+	}
+	// 同样的字节配不同 MIME 前缀仍是同一张图。
+	jpeg := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString([]byte("identical-bytes"))
+	if imageOCRContentDigest(same) != imageOCRContentDigest(jpeg) {
+		t.Fatal("same bytes should hash the same regardless of the mime prefix")
+	}
+	// 拿不到字节的远程地址退回按地址哈希，仍然可用且互不串味。
+	if imageOCRContentDigest("https://example.com/a.png") == imageOCRContentDigest("https://example.com/b.png") {
+		t.Fatal("different remote URLs share a digest")
 	}
 }
