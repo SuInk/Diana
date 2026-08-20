@@ -9298,18 +9298,19 @@ func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 }
 
 func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, templates repositoryWatchTemplates) string {
-	sections := make([]string, 0, 5)
+	// 详细排版下每条动态占五六行，条与条之间没有空行（空行会被当成排版而不是分条，
+	// 但连着排也看不出边界）。给每条编号，既划出边界，也方便在群里指认「第 3 条」。
+	entries := newRepositoryWatchEntries()
 	if len(change.Commits) > 0 {
 		// 不再给提交加「Commit（分支，作者 X）」节标题：一次推送通常只有一两条提交，
 		// 标题行占掉的位置比它给的信息多。分支和作者留在占位符里，需要的人可以在
 		// 模板里加回去。
-		lines := make([]string, 0, len(change.Commits)+1)
 		for _, commit := range change.Commits {
 			sha := strings.TrimSpace(commit.SHA)
 			if len(sha) > 7 {
 				sha = sha[:7]
 			}
-			lines = append(lines, renderRepositoryWatchTemplate(templates.Commit, map[string]string{
+			entries.add(renderRepositoryWatchTemplate(templates.Commit, map[string]string{
 				"sha":       sha,
 				"title":     strings.TrimSpace(commit.Title),
 				"author":    strings.TrimSpace(commit.Author),
@@ -9320,21 +9321,18 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 			}))
 		}
 		if change.OmittedCommits > 0 {
-			lines = append(lines, fmt.Sprintf("还有 %d 个提交未列出。", change.OmittedCommits))
+			entries.note(fmt.Sprintf("还有 %d 个提交未列出。", change.OmittedCommits))
 		} else if change.Truncated {
-			lines = append(lines, "本次只展示了部分最新提交。")
+			entries.note("本次只展示了部分最新提交。")
 		}
-		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	if len(change.PullRequests) > 0 {
-		lines := make([]string, 0, len(change.PullRequests)*2)
 		for _, pullRequest := range change.PullRequests {
 			branches := ""
 			if pullRequest.BaseBranch != "" || pullRequest.HeadBranch != "" {
 				branches = firstNonEmpty(pullRequest.BaseBranch, "默认分支") + " ← " + firstNonEmpty(pullRequest.HeadBranch, "未知分支")
 			}
-			// 时间统一压在链接正上方，五种事件保持同一个位置。
-			lines = append(lines, renderRepositoryWatchTemplate(templates.Pull, map[string]string{
+			entries.add(renderRepositoryWatchTemplate(templates.Pull, map[string]string{
 				"number":     fmt.Sprint(pullRequest.Number),
 				"status":     repositoryWatchPullStatusLabel(pullRequest.Status),
 				"title":      strings.TrimSpace(pullRequest.Title),
@@ -9345,12 +9343,10 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				"url":        strings.TrimSpace(pullRequest.URL),
 			}))
 		}
-		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	if len(change.Issues) > 0 {
-		lines := make([]string, 0, len(change.Issues))
 		for _, issue := range change.Issues {
-			lines = append(lines, renderRepositoryWatchTemplate(templates.Issue, map[string]string{
+			entries.add(renderRepositoryWatchTemplate(templates.Issue, map[string]string{
 				"number":     fmt.Sprint(issue.Number),
 				"status":     repositoryWatchIssueStatusLabel(issue.Status),
 				"title":      strings.TrimSpace(issue.Title),
@@ -9360,10 +9356,8 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				"url":        strings.TrimSpace(issue.URL),
 			}))
 		}
-		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	if len(change.Releases) > 0 {
-		lines := make([]string, 0, len(change.Releases))
 		for _, release := range change.Releases {
 			label := strings.TrimSpace(release.Tag)
 			// Release 名字通常写成「Diana v0.8.36」，已经带上了 tag；再拼一次就成了
@@ -9373,7 +9367,7 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 			} else if label == "" {
 				label = strings.TrimSpace(release.Name)
 			}
-			lines = append(lines, renderRepositoryWatchTemplate(templates.Release, map[string]string{
+			entries.add(renderRepositoryWatchTemplate(templates.Release, map[string]string{
 				"label": label,
 				"tag":   strings.TrimSpace(release.Tag),
 				"name":  strings.TrimSpace(release.Name),
@@ -9381,7 +9375,6 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				"url":   strings.TrimSpace(release.URL),
 			}))
 		}
-		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	if change.Stars != nil {
 		// 和其它四类一样每行一件事：标识（含增减与前后数）、名单、时间、链接。
@@ -9416,11 +9409,47 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 		if url := strings.TrimSpace(change.Stars.URL); url != "" {
 			lines = append(lines, url)
 		}
-		sections = append(sections, strings.Join(lines, "\n"))
+		entries.add(strings.Join(lines, "\n"))
 	}
-	// 同上：段落之间也只能用单换行，否则一次推送里的 Commit、PR、Release 会被拆成
-	// 好几条消息。
-	return strings.Join(sections, "\n")
+	// 段落之间也只能用单换行，否则一次推送里的 Commit、PR、Release 会被拆成好几条
+	// 消息。
+	return entries.render()
+}
+
+// repositoryWatchEntries 收集一次推送里的所有条目。只有两条以上时才编号：一条动态
+// 加个「1.」纯属噪音，多条时才需要划边界。
+type repositoryWatchEntries struct {
+	items []string
+	notes []string
+}
+
+func newRepositoryWatchEntries() *repositoryWatchEntries {
+	return &repositoryWatchEntries{}
+}
+
+func (e *repositoryWatchEntries) add(entry string) {
+	if entry = strings.TrimSpace(entry); entry != "" {
+		e.items = append(e.items, entry)
+	}
+}
+
+// note 记录「还有 N 个提交未列出」这类说明，它们不是动态本身，不参与编号。
+func (e *repositoryWatchEntries) note(text string) {
+	if text = strings.TrimSpace(text); text != "" {
+		e.notes = append(e.notes, text)
+	}
+}
+
+func (e *repositoryWatchEntries) render() string {
+	blocks := make([]string, 0, len(e.items)+len(e.notes))
+	for index, item := range e.items {
+		if len(e.items) > 1 {
+			item = fmt.Sprintf("%d. %s", index+1, item)
+		}
+		blocks = append(blocks, item)
+	}
+	blocks = append(blocks, e.notes...)
+	return strings.Join(blocks, "\n")
 }
 
 // limitRepositoryWatchChange 把每类动态裁到 limit 条。提交按时间倒序返回，所以保留

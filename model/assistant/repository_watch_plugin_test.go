@@ -1145,3 +1145,48 @@ func TestComposeRepositoryWatchMessageKeepsEveryChangeInOneMessage(t *testing.T)
 		}
 	}
 }
+
+// 详细排版下条与条之间没有分隔，靠编号划边界；只有一条时不编号，免得多余。
+func TestRenderRepositoryWatchChangesNumbersEntriesOnlyWhenThereAreSeveral(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	commit := repositoryWatchCommit{SHA: "1111111aaa", Title: "first", Author: "alice", PushedAt: at, URL: "https://example.test/1"}
+
+	single := renderRepositoryWatchChanges(repositoryWatchChange{Commits: []repositoryWatchCommit{commit}})
+	if !strings.HasPrefix(single, "Commit 1111111") {
+		t.Fatalf("a lone entry should not be numbered: %q", single)
+	}
+
+	many := renderRepositoryWatchChanges(repositoryWatchChange{
+		Commits:      []repositoryWatchCommit{commit},
+		PullRequests: []repositoryWatchPullRequest{{Number: 85, Title: "second", Author: "bob", Status: "opened", OccurredAt: at, URL: "https://example.test/2"}},
+		Issues:       []repositoryWatchIssue{{Number: 128, Title: "third", Author: "carol", Status: "opened", CreatedAt: at, URL: "https://example.test/3"}},
+	})
+	// 编号跨类别连续，方便在群里指认「第 3 条」。
+	for _, want := range []string{"1. Commit 1111111", "2. PR #85（新建）", "3. Issue #128（新建）"} {
+		if !strings.Contains(many, want) {
+			t.Fatalf("missing %q:\n%s", want, many)
+		}
+	}
+	// 只有每条的首行带编号，正文行不受影响。
+	if strings.Contains(many, "1. 作者") || strings.Contains(many, "2. 作者") {
+		t.Fatalf("numbering leaked into the body lines:\n%s", many)
+	}
+}
+
+// 「还有 N 个提交未列出」是说明，不是动态，不占编号。
+func TestRenderRepositoryWatchChangesDoesNotNumberTrailingNotes(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	result := renderRepositoryWatchChanges(repositoryWatchChange{
+		Commits: []repositoryWatchCommit{
+			{SHA: "1111111aaa", Title: "first", Author: "alice", PushedAt: at, URL: "https://example.test/1"},
+			{SHA: "2222222bbb", Title: "second", Author: "alice", PushedAt: at, URL: "https://example.test/2"},
+		},
+		OmittedCommits: 3,
+	})
+	if !strings.Contains(result, "1. Commit 1111111") || !strings.Contains(result, "2. Commit 2222222") {
+		t.Fatalf("entries were not numbered:\n%s", result)
+	}
+	if !strings.HasSuffix(result, "还有 3 个提交未列出。") || strings.Contains(result, "3. 还有") {
+		t.Fatalf("trailing note should stay unnumbered:\n%s", result)
+	}
+}
