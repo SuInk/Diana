@@ -69,6 +69,9 @@ type dianaRepositoryIssuesTool struct {
 	event    MessageEvent
 	plugin   *RepositoryPublishPlugin
 	settings SettingValues
+	// credentialSource 记下本次请求实际用了哪种凭据，只用于把 404 之类的报错说清楚，
+	// 不含 Token 本身。
+	credentialSource string
 }
 
 type repositoryIssueResult struct {
@@ -935,16 +938,25 @@ func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner
 		if (mode == "" || mode == repositoryPublishAuthToken) && strings.TrimSpace(tokens[userID]) == "" {
 			return "user_token_required", "当前授权用户尚未配置自己的 GitHub Token。"
 		}
-		if mode == repositoryPublishUserAuthInherit && repositoryPublishAuthMode(t.settings) == repositoryPublishAuthToken && strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")) == "" {
-			return "token_required", "当前用户沿用的全局认证方式要求配置独立 GitHub Issues Token。"
+		if mode == repositoryPublishUserAuthInherit && repositoryPublishAuthMode(t.settings) == repositoryPublishAuthToken && t.effectiveGlobalToken() == "" {
+			return "token_required", "当前用户沿用的全局认证方式要求配置 GitHub Token，请在「GitHub 仓库 · 设置」里填写。"
 		}
 		return "", ""
 	}
 	mode := repositoryPublishAuthMode(t.settings)
-	if mode == repositoryPublishAuthToken && strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")) == "" {
-		return "token_required", "当前认证方式要求配置独立 GitHub Issues Token。"
+	if mode == repositoryPublishAuthToken && t.effectiveGlobalToken() == "" {
+		return "token_required", "当前认证方式要求配置 GitHub Token，请在「GitHub 仓库 · 设置」里填写。"
 	}
 	return "", ""
+}
+
+// effectiveGlobalToken 返回实际会用到的公共 Token：优先发布插件自己的那份，为空时
+// 回落到订阅插件，与 repositoryPublishCredential 的取值口径保持一致。
+func (t *dianaRepositoryIssuesTool) effectiveGlobalToken() string {
+	if token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")); token != "" {
+		return token
+	}
+	return t.sharedGitHubToken()
 }
 
 func repositoryPublishAuthMode(settings SettingValues) string {
@@ -1144,7 +1156,7 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 		Items []githubRepositoryIssue `json:"items"`
 	}
 	if apiErr := t.doJSON(ctx, http.MethodGet, "/search/issues?"+values.Encode(), nil, &payload); apiErr != nil {
-		return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
 	items := make([]repositoryIssueSummary, 0, len(payload.Items))
 	for _, item := range payload.Items {
@@ -1418,7 +1430,7 @@ func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository strin
 
 	issues, apiErr := t.listRecentIssues(ctx, repository)
 	if apiErr != nil {
-		return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
 	if existing, ok := repositoryIssueWithAnyMarker(issues, marker, legacyMarker); ok {
 		t.plugin.clearOperationUncertain(operationKey)
@@ -1490,7 +1502,7 @@ func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository strin
 			return result
 		}
 	}
-	return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+	return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 }
 
 func (t *dianaRepositoryIssuesTool) update(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
@@ -1501,7 +1513,7 @@ func (t *dianaRepositoryIssuesTool) update(ctx context.Context, repository strin
 	}
 	current, apiErr := t.getIssue(ctx, repository, number)
 	if apiErr != nil {
-		return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
 	payload := map[string]any{}
 	redactions := 0
@@ -1548,7 +1560,7 @@ func (t *dianaRepositoryIssuesTool) update(ctx context.Context, repository strin
 	}
 	var updated githubRepositoryIssue
 	if apiErr := t.doJSON(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/issues/%d", repository, number), payload, &updated); apiErr != nil {
-		return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
 	result.OK = true
 	result.Outcome = "updated"
@@ -1570,7 +1582,7 @@ func (t *dianaRepositoryIssuesTool) comment(ctx context.Context, repository stri
 	}
 	issue, apiErr := t.getIssue(ctx, repository, number)
 	if apiErr != nil {
-		return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
 	operationID := strings.TrimSpace(configToolString(input, "operation_id"))
 	fingerprint, payloadHash, code, message := repositoryIssueFingerprint(repository, "comment:"+strconv.Itoa(number), operationID, map[string]any{
@@ -1587,7 +1599,7 @@ func (t *dianaRepositoryIssuesTool) comment(ctx context.Context, repository stri
 	unlock := t.plugin.operationLock(operationKey)
 	defer unlock()
 	if existing, match, apiErr := t.findCommentMarker(ctx, repository, number, marker, legacyMarker, markerPrefix); apiErr != nil {
-		return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	} else if match == repositoryIssueMarkerExact {
 		t.plugin.clearOperationUncertain(operationKey)
 		result.OK = true
@@ -1629,7 +1641,7 @@ func (t *dianaRepositoryIssuesTool) comment(ctx context.Context, repository stri
 			return result
 		}
 	}
-	return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+	return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 }
 
 func (t *dianaRepositoryIssuesTool) setState(ctx context.Context, repository string, input map[string]any, operation string) repositoryIssueResult {
@@ -1644,7 +1656,7 @@ func (t *dianaRepositoryIssuesTool) setState(ctx context.Context, repository str
 	}
 	current, apiErr := t.getIssue(ctx, repository, number)
 	if apiErr != nil {
-		return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
 	if current.State == targetState {
 		result.OK = true
@@ -1656,7 +1668,7 @@ func (t *dianaRepositoryIssuesTool) setState(ctx context.Context, repository str
 	}
 	var updated githubRepositoryIssue
 	if apiErr := t.doJSON(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/issues/%d", repository, number), map[string]any{"state": targetState}, &updated); apiErr != nil {
-		return result.fail(apiErr.Code, repositoryIssueFailureMessage(apiErr.Code))
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
 	if !strings.EqualFold(updated.State, targetState) {
 		return result.fail("invalid_response", repositoryIssueFailureMessage("invalid_response"))
@@ -2306,13 +2318,21 @@ func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Cont
 	userMode := modes[userID]
 	if userMode == "" || userMode == repositoryPublishAuthToken {
 		if token := strings.TrimSpace(tokens[userID]); token != "" {
+			t.credentialSource = "用户 " + userID + " 的 Token"
 			return token, nil
 		}
 	}
 	if userMode == repositoryPublishAuthGH {
+		t.credentialSource = "gh CLI"
 		return t.repositoryPublishGHCredential(ctx)
 	}
 	token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, ""))
+	t.credentialSource = "公共 GitHub Token"
+	if token == "" {
+		if token = t.sharedGitHubToken(); token != "" {
+			t.credentialSource = "公共 GitHub Token（来自仓库订阅插件）"
+		}
+	}
 	mode := repositoryPublishAuthMode(t.settings)
 	if mode == repositoryPublishAuthToken || mode == repositoryPublishAuthAuto && token != "" {
 		if token == "" {
@@ -2320,7 +2340,27 @@ func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Cont
 		}
 		return token, nil
 	}
+	t.credentialSource = "gh CLI"
 	return t.repositoryPublishGHCredential(ctx)
+}
+
+// sharedGitHubToken 回落到「仓库订阅」插件里的 Token。
+//
+// 「GitHub 仓库 · 设置」把两个插件呈现成同一个「公共 Token」，界面上明写它同时用于
+// 仓库更新检查和 Issue 创建。但两个插件各存各的：前端只在本次真的重新输入了 Token
+// 时，才顺手往发布插件也写一份，而那个输入框每次保存后都会清空、显示成「已配置 —
+// 留空沿用」。于是先配好 Token、之后再改别的设置并保存，发布插件这边始终是空的；
+// 「已配置」的提示又是「两个插件任一有就算」，结果就是界面说配好了、Issue 却用不了。
+// 与其指望前端每次都能镜像过去，不如让读取侧兑现界面的承诺。
+func (t *dianaRepositoryIssuesTool) sharedGitHubToken() string {
+	if t == nil || t.runtime == nil || t.runtime.plugins == nil {
+		return ""
+	}
+	_, settings, enabled := t.runtime.plugins.PluginWithSettings(repositoryWatchPluginID, t.runtime.pluginOverridesForEvent(t.event))
+	if !enabled {
+		return ""
+	}
+	return strings.TrimSpace(settings.String(repositoryWatchSettingToken, ""))
 }
 
 func (t *dianaRepositoryIssuesTool) repositoryPublishGHCredential(ctx context.Context) (string, *repositoryIssueAPIError) {
@@ -2409,6 +2449,23 @@ func validRepositoryIssueCanonicalURL(raw, repository, resource string, number i
 	return strings.EqualFold(strings.TrimRight(parsed.Path, "/"), "/"+repository+"/"+resource+"/"+strconv.Itoa(number))
 }
 
+// failureMessage 在凭据相关的报错后面补一句「本次用的是哪种凭据」。配了 Token 却
+// 报 404 时，这句话直接指出该去查哪一份配置；只报来源，不含 Token 本身。
+func (t *dianaRepositoryIssuesTool) failureMessage(code string) string {
+	message := repositoryIssueFailureMessage(code)
+	source := ""
+	if t != nil {
+		source = strings.TrimSpace(t.credentialSource)
+	}
+	switch code {
+	case "not_found", "unauthorized", "permission_denied":
+		if source != "" {
+			return message + "（本次凭据：" + source + "）"
+		}
+	}
+	return message
+}
+
 func repositoryIssueFailureMessage(code string) string {
 	switch code {
 	case "unauthorized":
@@ -2416,7 +2473,7 @@ func repositoryIssueFailureMessage(code string) string {
 	case "permission_denied":
 		return "GitHub 拒绝了操作；请确认当前凭据对目标仓库具有 Issues 所需权限。"
 	case "token_required":
-		return "当前认证方式要求配置独立 GitHub Issues Token。"
+		return "当前认证方式要求配置 GitHub Token，请在「GitHub 仓库 · 设置」里填写。"
 	case "gh_unavailable":
 		return "当前系统未安装 gh，无法使用 GitHub CLI 认证。"
 	case "gh_auth_required":
