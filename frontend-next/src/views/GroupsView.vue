@@ -176,6 +176,10 @@
           <input id="group-context" v-model.number="editing.recent_context_limit" class="input" inputmode="numeric" />
         </div>
         <div class="field">
+          <label for="group-maxcontext">单次请求上下文上限</label>
+          <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+        </div>
+        <div class="field">
           <label for="group-maxreply">回复上限（字符）</label>
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
