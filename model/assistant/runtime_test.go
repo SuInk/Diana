@@ -3333,8 +3333,9 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	if err := runtime.HandleEvent(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}
+	// 合并转发用自定义节点，一个请求发完，不再给机器人自己发私聊暂存。
 	waitForCondition(t, time.Second, func() bool {
-		return len(channel.callsSnapshot()) == 3
+		return len(channel.callsSnapshot()) == 1
 	})
 	if got := llmCalls.Load(); got != 0 {
 		t.Fatalf("llm calls = %d, want 0", got)
@@ -3344,23 +3345,19 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		t.Fatalf("sent = %#v", sent)
 	}
 	calls := channel.callsSnapshot()
-	if calls[0].action != "send_private_msg" || calls[1].action != "send_private_msg" || calls[2].action != "send_group_forward_msg" {
+	if calls[0].action != "send_group_forward_msg" {
 		t.Fatalf("calls = %#v", calls)
 	}
-	if calls[0].params["user_id"] != int64(42) || calls[1].params["user_id"] != int64(42) {
-		t.Fatalf("staging params = %#v %#v", calls[0].params, calls[1].params)
-	}
-	firstMessage, _ := calls[0].params["message"].([]map[string]any)
-	if !messageSegmentsContainText(firstMessage, "识别：小蓝鸟学习版") {
-		t.Fatalf("first forward message = %#v", calls[0].params["message"])
-	}
-	secondMessage, _ := calls[1].params["message"].([]map[string]any)
-	if !messageSegmentsContainType(secondMessage, "video") {
-		t.Fatalf("second forward message = %#v", calls[1].params["message"])
-	}
-	nodes, _ := calls[2].params["messages"].([]map[string]any)
+	nodes, _ := calls[0].params["messages"].([]map[string]any)
 	if len(nodes) != 2 {
-		t.Fatalf("forward nodes = %#v", calls[2].params["messages"])
+		t.Fatalf("forward nodes = %#v", calls[0].params["messages"])
+	}
+	firstContent := forwardNodeContent(t, nodes[0])
+	if !messageSegmentsContainText(firstContent, "识别：小蓝鸟学习版") {
+		t.Fatalf("first forward node = %#v", nodes[0])
+	}
+	if !messageSegmentsContainType(forwardNodeContent(t, nodes[1]), "video") {
+		t.Fatalf("second forward node = %#v", nodes[1])
 	}
 	history := runtime.contextHistory(event)
 	if len(history) < 1 {
@@ -3417,15 +3414,29 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, time.Second, func() bool {
-		return len(channel.callsSnapshot()) == 3
+		return len(channel.callsSnapshot()) == 1
 	})
 	if got := llmCalls.Load(); got != 0 {
 		t.Fatalf("llm calls = %d, want 0", got)
 	}
 	calls := channel.callsSnapshot()
-	if calls[0].action != "send_private_msg" || calls[1].action != "send_private_msg" || calls[2].action != "send_private_forward_msg" {
+	if calls[0].action != "send_private_forward_msg" {
 		t.Fatalf("calls = %#v", calls)
 	}
+}
+
+// forwardNodeContent 取出自定义转发节点里的内联消息段。
+func forwardNodeContent(t *testing.T, node map[string]any) []map[string]any {
+	t.Helper()
+	data, ok := node["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("forward node has no data: %#v", node)
+	}
+	content, ok := data["content"].([]map[string]any)
+	if !ok {
+		t.Fatalf("forward node has no inline content: %#v", node)
+	}
+	return content
 }
 
 func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
@@ -3468,13 +3479,13 @@ func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, time.Second, func() bool {
-		return len(channel.callsSnapshot()) == 3
+		return len(channel.callsSnapshot()) == 1
 	})
 	if got := llmCalls.Load(); got != 0 {
 		t.Fatalf("llm calls = %d, want 0", got)
 	}
 	calls := channel.callsSnapshot()
-	if calls[0].action != "send_private_msg" || calls[1].action != "send_private_msg" || calls[2].action != "send_group_forward_msg" {
+	if calls[0].action != "send_group_forward_msg" {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
