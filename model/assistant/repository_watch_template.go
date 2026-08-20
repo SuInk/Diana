@@ -19,7 +19,9 @@ const (
 // 默认模板：每条提交压成两行，第一行是短 SHA 加标题，第二行是署名和链接。留空即
 // 使用这里的默认值。
 const (
-	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{summary}\n{body}"
+	// 概括排在事实清单后面，并用 <botbr> 单独发一条：黏在最后一行链接后面既难读，
+	// 也分不清哪些是确定的事实、哪句是模型写的。
+	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{body}\n<botbr>\n{summary}"
 	repositoryWatchDefaultCommitTemplate  = "{sha} {title}\n{byline} · {short_url}"
 	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）\n{title}\n作者：{author}\n{time_label} {time}\n{url}"
