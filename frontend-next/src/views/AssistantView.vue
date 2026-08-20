@@ -378,18 +378,22 @@
             </div>
             <div class="card-body form-grid">
               <div class="field">
-                <label class="switch">
-                  <input v-model="form.reply_reference_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">群聊引用原消息</span>
-                </label>
+                <label for="bot-reply-reference-mode">群聊引用原消息</label>
+                <select id="bot-reply-reference-mode" v-model="form.reply_reference_mode">
+                  <option value="on">总是引用</option>
+                  <option value="off">从不引用</option>
+                  <option value="auto">让模型自己决定</option>
+                </select>
+                <span class="hint">选「让模型自己决定」后，只有话题跳转或隔轮回应时它才会引用。</span>
               </div>
               <div class="field">
-                <label class="switch">
-                  <input v-model="form.mention_user_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">群聊 @ 发送者</span>
-                </label>
+                <label for="bot-mention-user-mode">群聊 @ 发送者</label>
+                <select id="bot-mention-user-mode" v-model="form.mention_user_mode">
+                  <option value="on">总是 @</option>
+                  <option value="off">从不 @</option>
+                  <option value="auto">让模型自己决定</option>
+                </select>
+                <span class="hint">选「让模型自己决定」后，只有需要点名时它才会 @，不会每句都带。</span>
               </div>
               <div class="field">
                 <label class="switch">
@@ -1331,6 +1335,9 @@ function setForm(config: QQBotConfig): void {
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
     reply_reference_enabled: config.reply_reference_enabled ?? true,
     mention_user_enabled: config.mention_user_enabled ?? true,
+    // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
+    reply_reference_mode: config.reply_reference_mode ?? ((config.reply_reference_enabled ?? true) ? "on" : "off"),
+    mention_user_mode: config.mention_user_mode ?? ((config.mention_user_enabled ?? true) ? "on" : "off"),
     markdown_to_plain: config.markdown_to_plain ?? true,
     error_notify_enabled: config.error_notify_enabled ?? true,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,

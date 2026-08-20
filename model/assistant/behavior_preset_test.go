@@ -141,12 +141,12 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 func TestReplyStyleGroupmateDropsReplyReferenceAndMention(t *testing.T) {
 	// 每条群回复都带引用和 @ 是最硬的机器人痕迹，prompt 管不到，得由风格关掉。
 	cfg := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
-	if boolValue(cfg.ReplyReferenceEnabled, true) || boolValue(cfg.MentionUserEnabled, true) {
+	if replyReferenceMode(cfg) != ReplyDecorationOff || mentionUserMode(cfg) != ReplyDecorationOff {
 		t.Fatalf("groupmate style kept the bot-looking delivery flags: %#v", cfg)
 	}
 
 	assistant := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleAssistant}.WithDefaults()
-	if !boolValue(assistant.ReplyReferenceEnabled, true) || !boolValue(assistant.MentionUserEnabled, true) {
+	if replyReferenceMode(assistant) != ReplyDecorationOn || mentionUserMode(assistant) != ReplyDecorationOn {
 		t.Fatalf("assistant style should keep default delivery: %#v", assistant)
 	}
 }
@@ -159,7 +159,7 @@ func TestReplyStyleGroupmateRespectsExplicitDeliverySettings(t *testing.T) {
 		ReplyReferenceEnabled: boolPointer(true),
 		MentionUserEnabled:    boolPointer(true),
 	}.WithDefaults()
-	if !boolValue(cfg.ReplyReferenceEnabled, false) || !boolValue(cfg.MentionUserEnabled, false) {
+	if replyReferenceMode(cfg) != ReplyDecorationOn || mentionUserMode(cfg) != ReplyDecorationOn {
 		t.Fatalf("explicit delivery settings were overwritten: %#v", cfg)
 	}
 }
@@ -219,7 +219,7 @@ func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
 		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleGroupmate},
 	}})
 	casual := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "casual"})
-	if boolValue(casual.ReplyReferenceEnabled, true) || boolValue(casual.MentionUserEnabled, true) {
+	if replyReferenceMode(casual) != ReplyDecorationOff || mentionUserMode(casual) != ReplyDecorationOff {
 		t.Fatalf("group-level groupmate style did not drop delivery flags: %#v", casual)
 	}
 }
