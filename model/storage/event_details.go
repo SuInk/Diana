@@ -210,6 +210,8 @@ LIMIT ? OFFSET ?
 	}
 	defer func() { _ = rows.Close() }()
 
+	mentionIDs := make(map[string]struct{})
+	var pending []pendingMentionText
 	for rows.Next() {
 		var item InboundEventDetail
 		var payload string
@@ -250,11 +252,9 @@ LIMIT ? OFFSET ?
 			}
 			segments := inboundEventDisplaySegments(source, item.Text)
 			item.Images = inboundEventImages(segments)
-			if displayText := strings.TrimSpace(assistant.PlainText(segments)); displayText != "" || len(item.Images) > 0 {
-				// A CQ-only image message has no textual body. Clearing the raw CQ
-				// code lets the WebUI render the structured image instead.
-				item.Text = displayText
-			}
+			// 正文留到补齐 @ 昵称之后再渲染：昵称要查库，攒成一批比逐行查快得多。
+			collectMentionIDs(segments, mentionIDs)
+			pending = append(pending, pendingMentionText{index: len(page.Events), segments: segments})
 		}
 		if item.DurationMS <= 0 && completedAt > createdAt && createdAt > 0 {
 			item.DurationMS = (completedAt - createdAt) / int64(time.Millisecond)
@@ -263,6 +263,18 @@ LIMIT ? OFFSET ?
 	}
 	if err := rows.Err(); err != nil {
 		return InboundEventDetailPage{}, fmt.Errorf("iterate inbound event details: %w", err)
+	}
+	mentionNames, err := s.resolveMentionNames(ctx, mentionIDs)
+	if err != nil {
+		return InboundEventDetailPage{}, err
+	}
+	for _, item := range pending {
+		applyMentionNames(item.segments, mentionNames)
+		if displayText := strings.TrimSpace(assistant.PlainText(item.segments)); displayText != "" || len(page.Events[item.index].Images) > 0 {
+			// A CQ-only image message has no textual body. Clearing the raw CQ
+			// code lets the WebUI render the structured image instead.
+			page.Events[item.index].Text = displayText
+		}
 	}
 	usageByMessage, usage, err := s.inboundEventTokenUsage(ctx, since)
 	if err != nil {
@@ -354,6 +366,101 @@ func inboundEventDisplaySegments(event assistant.MessageEvent, fallbackText stri
 		return nil
 	}
 	return assistant.CQToSegments(raw)
+}
+
+// pendingMentionText 记住一条事件的 segment，等昵称查回来后再渲染正文。
+type pendingMentionText struct {
+	index    int
+	segments []assistant.MessageSegment
+}
+
+// collectMentionIDs 收出 at 段里还没有昵称的 QQ 号。已经带昵称的（部分 OneBot 实现
+// 会附上）不必再查库。
+func collectMentionIDs(segments []assistant.MessageSegment, into map[string]struct{}) {
+	for _, segment := range segments {
+		if segment.Type != "at" {
+			continue
+		}
+		qq := strings.TrimSpace(segment.Data["qq"])
+		if qq == "" || qq == "all" || assistant.AtMentionName(segment) != "" {
+			continue
+		}
+		into[qq] = struct{}{}
+	}
+}
+
+// applyMentionNames 把查到的昵称写回 at 段，PlainText 随后就能渲染成「@昵称（QQ）」。
+func applyMentionNames(segments []assistant.MessageSegment, names map[string]string) {
+	for _, segment := range segments {
+		if segment.Type != "at" || segment.Data == nil {
+			continue
+		}
+		qq := strings.TrimSpace(segment.Data["qq"])
+		if qq == "" || qq == "all" || assistant.AtMentionName(segment) != "" {
+			continue
+		}
+		if name := strings.TrimSpace(names[qq]); name != "" {
+			segment.Data["name"] = name
+		}
+	}
+}
+
+// resolveMentionNames 批量解析被提及者的昵称。优先用最近一次发言时的群名片——那是
+// 群里其他人当时看到的称呼；没有发过言就退回全局资料里的显示名。
+func (s *SQLiteStore) resolveMentionNames(ctx context.Context, ids map[string]struct{}) (map[string]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	list := make([]any, 0, len(ids))
+	for id := range ids {
+		list = append(list, id)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(list)), ",")
+	names := make(map[string]string, len(list))
+
+	profiles, err := s.db.QueryContext(ctx, `
+SELECT user_id, COALESCE(TRIM(display_name), '')
+FROM user_profiles
+WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(display_name, '')) <> ''
+`, list...)
+	if err != nil {
+		return nil, fmt.Errorf("resolve mention display names: %w", err)
+	}
+	if err := scanMentionNames(profiles, names); err != nil {
+		return nil, err
+	}
+
+	cards, err := s.db.QueryContext(ctx, `
+SELECT user_id, sender_name
+FROM message_events
+WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(sender_name, '')) <> ''
+GROUP BY user_id
+HAVING event_time = MAX(event_time)
+`, list...)
+	if err != nil {
+		return nil, fmt.Errorf("resolve mention sender names: %w", err)
+	}
+	if err := scanMentionNames(cards, names); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
+func scanMentionNames(rows *sql.Rows, into map[string]string) error {
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var userID, name string
+		if err := rows.Scan(&userID, &name); err != nil {
+			return fmt.Errorf("scan mention name: %w", err)
+		}
+		if userID = strings.TrimSpace(userID); userID == "" {
+			continue
+		}
+		if name = strings.TrimSpace(name); name != "" {
+			into[userID] = name
+		}
+	}
+	return rows.Err()
 }
 
 func inboundEventImages(segments []assistant.MessageSegment) []InboundEventImage {
