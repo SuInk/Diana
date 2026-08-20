@@ -313,6 +313,10 @@ func main() {
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
 	healthHandler := webui.NewHealthHandlerWithVersion(runtimeVersion)
+	// 源码部署用 git remote 覆盖仓库标识，Fork 后后台展示的是自己的仓库地址。
+	if status, err := systemUpdater.Status(ctx); err == nil {
+		healthHandler.SetRepositoryRemote(status.RemoteURL)
+	}
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
