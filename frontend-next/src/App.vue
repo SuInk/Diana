@@ -128,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, KeepAlive, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, KeepAlive, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import {
   Bot,
@@ -318,6 +318,21 @@ function go(view: ViewID): void {
   drawerOpen.value = false;
 }
 
+// 版本号只在进程重启时会变，而 SSE 断开重连正是那个信号：升级完成、手动重启、
+// 容器换镜像都会走到这里。之前版本只在 bootApp 里取一次，重启后页面上还挂着旧
+// 版本号，除非手动刷新。
+const UPDATE_INDICATOR_INTERVAL_MS = 30 * 60 * 1000;
+let updateIndicatorTimer = 0;
+
+async function refreshRuntimeVersion(): Promise<void> {
+  const [healthResult, versionResult] = await Promise.all([
+    getHealth().catch(() => null),
+    getSystemVersion(true).catch(() => null)
+  ]);
+  if (healthResult) health.value = healthResult;
+  if (versionResult) systemVersion.value = versionResult;
+}
+
 async function refreshUpdateIndicator(): Promise<void> {
   try {
     const result = await checkForUpdate();
@@ -340,6 +355,12 @@ async function bootApp(): Promise<void> {
   window.setTimeout(() => {
     void refreshUpdateIndicator();
   }, 2500);
+  // 小黄点原来只在启动后查一次：页面挂一天，期间发了新版本也不会亮。
+  // 30 分钟对齐后端 updateCheckInterval 与 Release 缓存，不会额外打 GitHub。
+  window.clearInterval(updateIndicatorTimer);
+  updateIndicatorTimer = window.setInterval(() => {
+    void refreshUpdateIndicator();
+  }, UPDATE_INDICATOR_INTERVAL_MS);
   // 首次访问且 LLM 未配置时自动进入向导；之后只在总览顶部保留一条引导。
   if (config && !config.api_key_configured && !window.localStorage.getItem(SETUP_DISMISS_KEY)) {
     navigate("setup");
@@ -360,6 +381,14 @@ function onLoginSuccess(): void {
   locked.value = false;
   void bootApp();
 }
+
+// 重连即重启：连上之后把版本、运行时长和更新提示一起对齐。
+watch(() => stream.connected, (connected, previous) => {
+  if (connected && previous === false && !locked.value && !booting.value) {
+    void refreshRuntimeVersion();
+    void refreshUpdateIndicator();
+  }
+});
 
 onMounted(async () => {
   sidebarMedia.addEventListener("change", syncSidebarMode);
@@ -386,5 +415,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   sidebarMedia.removeEventListener("change", syncSidebarMode);
+  window.clearInterval(updateIndicatorTimer);
 });
 </script>
