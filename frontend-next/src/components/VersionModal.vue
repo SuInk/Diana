@@ -16,6 +16,7 @@
           <span v-if="checking" class="version-checking"><LoaderCircle class="spin" :size="13" aria-hidden="true" />检查中…</span>
           <span v-else-if="installTracking" class="badge warn">升级并验证中</span>
           <span v-else-if="checkError" class="badge err">检查失败</span>
+          <span v-else-if="status?.restart_required" class="badge warn">等待重启</span>
           <span v-else-if="status?.download_ready" class="badge warn">已下载，待安装</span>
           <span v-else-if="operationRunning" class="badge warn">正在下载并校验</span>
           <span v-else-if="checkResult?.update_available" class="badge accent">发现新版本</span>
@@ -87,9 +88,15 @@
           <Download :size="14" aria-hidden="true" />
           {{ operationRunning ? "下载并校验中…" : "下载并校验" }}
         </button>
-        <button v-if="releaseSelfUpdate && status?.download_ready" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmInstall">
+        <button
+          v-if="releaseSelfUpdate && (status?.download_ready || installTracking || status?.restart_required)"
+          class="btn primary small"
+          type="button"
+          :disabled="operationRunning"
+          @click="confirmInstall"
+        >
           <RefreshCcw :size="14" aria-hidden="true" />
-          {{ operationRunning ? "升级中…" : "升级并重启" }}
+          {{ installTracking ? "升级并重启中…" : operationRunning ? "升级中…" : "升级并重启" }}
         </button>
         <button v-if="switchToRelease && !status?.download_ready" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
           <Download :size="14" aria-hidden="true" />
@@ -289,7 +296,12 @@ const canDownloadUpdate = computed(() => releaseSelfUpdate.value
   && checkResult.value?.update_supported === true
   && checkResult.value.update_available
   && checkResult.value.checksum_available
-  && !status.value?.download_ready);
+  && !status.value?.download_ready
+  // 安装一开始后端就把 download_ready 清掉了（包已交给 helper），但新版本还没起来，
+  // update_available 仍是 true。不排除 installTracking 的话，用户刚点完「升级并重启」，
+  // 按钮就当场变回「下载并校验」，等超时解锁后还能真的再下一遍。
+  && !installTracking.value
+  && !status.value?.restart_required);
 const downloadPercent = computed(() => Math.max(0, Math.min(100, Math.round(status.value?.download_percent ?? 0))));
 const downloadPhaseLabel = computed(() => status.value?.update_phase === "extracting"
   ? "下载完成，正在校验并解压"
