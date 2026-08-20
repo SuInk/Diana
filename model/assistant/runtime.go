@@ -9162,21 +9162,36 @@ func (r *Runtime) generateRepositoryWatchMessage(ctx context.Context, item Remin
 	return composeRepositoryWatchMessageWithTemplate(templates.Header, item.Repository, renderRepositoryWatchChangesWithTemplates(change, templates), summary), nil
 }
 
-// composeRepositoryWatchMessage 把标题、模型概括和变更明细拼成一条通知。概括紧跟
-// 标题：先一句人话说清这次改了什么，再给确定性的事实清单。
+// composeRepositoryWatchMessage 把标题、变更明细和模型概括拼成一条通知。事实清单
+// 在前、概括在后：清单是确定的，概括是模型写的，读完事实再看一句人话更顺。
 //
-// 全文只用单换行，也不用 <botbr>：splitReply 把空行和 <botbr> 都当成分条符，任何
-// 一处都会让这条通知在群里被拆成多条消息。
+// 默认模板用 <botbr> 把概括单独分成一条消息，免得它黏在最后一行链接后面。不想分
+// 条的话，把插件设置里的整体模板改成单换行即可。
 func composeRepositoryWatchMessage(repository, body, summary string) string {
 	return composeRepositoryWatchMessageWithTemplate(repositoryWatchDefaultHeaderTemplate, repository, body, summary)
 }
 
 func composeRepositoryWatchMessageWithTemplate(template, repository, body, summary string) string {
-	return renderRepositoryWatchTemplate(template, map[string]string{
+	rendered := renderRepositoryWatchTemplate(template, map[string]string{
 		"repository": repository,
 		"summary":    strings.TrimSpace(summary),
 		"body":       strings.TrimSpace(body),
 	})
+	return trimNotificationSplitMarkers(rendered)
+}
+
+// trimNotificationSplitMarkers 去掉空段留下的分条符。概括缺失时模板里那一行
+// <botbr> 会孤零零地留在末尾，分条后变成一条空消息。
+func trimNotificationSplitMarkers(text string) string {
+	parts := strings.Split(text, notificationSplitMarker)
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		kept = append(kept, strings.Trim(part, "\n"))
+	}
+	return strings.Join(kept, "\n"+notificationSplitMarker+"\n")
 }
 
 func (r *Runtime) runRepositoryWatchExternalEventAgent(ctx context.Context, source MessageEvent, payload json.RawMessage) (string, error) {
@@ -9946,7 +9961,11 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 // 把聊天回复压得更短，但不该压通知。
 const notificationChunkSize = 900
 
-// splitNotification 只按长度切分通知，不理会空行和 <botbr>。
+// notificationSplitMarker 是通知里的显式分条符，与回复用的是同一个记号。
+const notificationSplitMarker = "<botbr>"
+
+// splitNotification 按 <botbr> 分条，再按长度兜底切分。空行不分条：通知正文里
+// 的空行是排版，不该让一条通知碎成好几条；要分条就显式写 <botbr>。
 func splitNotification(text string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = notificationChunkSize
@@ -9956,13 +9975,17 @@ func splitNotification(text string, chunkSize int) []string {
 		return nil
 	}
 	var out []string
-	runes := []rune(text)
-	for len(runes) > chunkSize {
-		out = append(out, strings.TrimSpace(string(runes[:chunkSize])))
-		runes = runes[chunkSize:]
-	}
-	if len(runes) > 0 {
-		out = append(out, strings.TrimSpace(string(runes)))
+	for _, part := range strings.Split(text, notificationSplitMarker) {
+		runes := []rune(strings.TrimSpace(part))
+		for len(runes) > chunkSize {
+			// 和回复一样按行、按空白切，别把链接或人名从中间劈开。
+			cut := replyChunkCut(runes, chunkSize)
+			out = append(out, strings.TrimSpace(string(runes[:cut])))
+			runes = runes[cut:]
+		}
+		if trimmed := strings.TrimSpace(string(runes)); trimmed != "" {
+			out = append(out, trimmed)
+		}
 	}
 	return out
 }

@@ -63,3 +63,23 @@ func TestRepositoryWatchTemplatesFallBackToDefaultsWhenBlank(t *testing.T) {
 		t.Fatalf("blank settings must resolve to defaults: %+v", templates)
 	}
 }
+
+// 分条符是模板里的普通静态行：概括有内容时保留，没内容时随空段一起清掉。
+func TestRepositoryWatchTemplateKeepsExplicitSplitMarker(t *testing.T) {
+	message := composeRepositoryWatchMessageWithTemplate(
+		"【{repository}】\n{body}\n<botbr>\n{summary}", "SuInk/Diana", "明细", "概括")
+	if message != "【SuInk/Diana】\n明细\n<botbr>\n概括" {
+		t.Fatalf("message = %q", message)
+	}
+	chunks := splitNotification(message, notificationChunkSize)
+	if len(chunks) != 2 || chunks[1] != "概括" {
+		t.Fatalf("chunks = %#v", chunks)
+	}
+
+	// 想让概括跟在正文后面而不分条时，去掉那一行就行。
+	inline := composeRepositoryWatchMessageWithTemplate(
+		"【{repository}】\n{body}\n{summary}", "SuInk/Diana", "明细", "概括")
+	if chunks := splitNotification(inline, notificationChunkSize); len(chunks) != 1 {
+		t.Fatalf("inline template should stay in one message, got %#v", chunks)
+	}
+}
