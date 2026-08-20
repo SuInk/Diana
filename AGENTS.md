@@ -1,5 +1,11 @@
 # Diana Agent Instructions
 
+## 提交要求
+
+- 提交作者固定使用 `SuInk <36656552+SuInk@users.noreply.github.com>`，不得使用 `Claude` 或其他代理身份。
+- 提交消息正文不得包含 `Co-Authored-By`、`Claude-Session` 等任何代理署名尾注。
+- 同样适用于 PR 标题与正文：描述改动本身，不署代理名。
+
 ## 版本发布要求
 
 用户要求“发版本”“发布版本”或更新 GitHub Release 时，必须完成下面的发布流程，不能只创建标签或沿用 GitHub 自动生成的 `What's Changed`。
