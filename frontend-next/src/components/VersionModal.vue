@@ -589,7 +589,8 @@ async function pollInstallResult(): Promise<void> {
     status.value = nextStatus;
     applyPersistedUpdateResult(nextStatus);
     if (nextStatus.last_update_status === "healthy") {
-      version.value = await getSystemVersion();
+      // 装完必须拿真版本号：缓存里那个还是升级前的。
+      version.value = await getSystemVersion(true);
       emit("versionChanged", version.value);
       checkResult.value = await checkForUpdate();
       status.value = checkResult.value.status ?? nextStatus;
@@ -598,7 +599,7 @@ async function pollInstallResult(): Promise<void> {
       toastSuccess(`${nextStatus.last_update_version || installTarget || "新版本"} 升级成功`);
     } else if (nextStatus.last_update_status === "rolled_back" || nextStatus.last_update_status === "failed") {
       installTracking.value = false;
-      version.value = await getSystemVersion().catch(() => version.value);
+      version.value = await getSystemVersion(true).catch(() => version.value);
       toastError(operationError.value);
     }
   } catch {
