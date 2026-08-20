@@ -177,8 +177,8 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 		Settings: []PluginSettingSpec{
 			{
 				Key:         pluginSettingAskAgent,
-				Label:       "允许 Agent 回复",
-				Description: "允许仓库更新事件进入正式 Agent 回复流程并生成自然概括；关闭后只发送确定性的变更明细。",
+				Label:       "允许机器人跟评",
+				Description: "事实清单发出去之后，让机器人像群成员那样再顺口说一句反应。它只是感想，不承载「改了什么」——那些以清单为准。关闭后只发送确定性的变更明细。",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
 			},
