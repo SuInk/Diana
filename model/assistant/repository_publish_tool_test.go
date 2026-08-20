@@ -931,7 +931,7 @@ func TestRepositoryPublishCredentialFallsBackToWatchToken(t *testing.T) {
 
 	// 发布插件自己的 Token 为空：回落到订阅插件那份。
 	tool := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{})
-	token, apiErr := tool.repositoryPublishCredential(context.Background())
+	token, apiErr := tool.repositoryPublishCredential(context.Background(), "acme/demo")
 	if apiErr != nil || token != "watch-token" {
 		t.Fatalf("token=%q err=%#v", token, apiErr)
 	}
@@ -947,7 +947,7 @@ func TestRepositoryPublishCredentialFallsBackToWatchToken(t *testing.T) {
 
 	// 发布插件自己配了就用自己的，不被订阅插件覆盖。
 	own := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{repositoryPublishSettingToken: "publish-token"})
-	token, apiErr = own.repositoryPublishCredential(context.Background())
+	token, apiErr = own.repositoryPublishCredential(context.Background(), "acme/demo")
 	if apiErr != nil || token != "publish-token" {
 		t.Fatalf("own token=%q err=%#v", token, apiErr)
 	}
@@ -960,7 +960,7 @@ func TestRepositoryPublishCredentialFallsBackToWatchToken(t *testing.T) {
 func TestRepositoryPublishCredentialRequiresATokenWhenBothAreEmpty(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	tool := newDianaRepositoryIssuesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, &RepositoryPublishPlugin{}, SettingValues{})
-	if _, apiErr := tool.repositoryPublishCredential(context.Background()); apiErr == nil || apiErr.Code != "token_required" {
+	if _, apiErr := tool.repositoryPublishCredential(context.Background(), "acme/demo"); apiErr == nil || apiErr.Code != "token_required" {
 		t.Fatalf("expected token_required, got %#v", apiErr)
 	}
 }
