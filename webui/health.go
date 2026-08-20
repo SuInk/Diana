@@ -14,8 +14,9 @@ import (
 
 // HealthHandler 提供轻量健康检查接口，供 Dashboard 和探活使用。
 type HealthHandler struct {
-	startedAt time.Time
-	version   string
+	startedAt  time.Time
+	version    string
+	repository string
 }
 
 // NewHealthHandler 创建 HealthHandler；开发构建从 Go 构建信息读取 VCS revision。
@@ -30,9 +31,25 @@ func NewHealthHandlerWithVersion(version string) *HealthHandler {
 		version = buildVersion()
 	}
 	return &HealthHandler{
-		startedAt: time.Now(),
-		version:   version,
+		startedAt:  time.Now(),
+		version:    version,
+		repository: defaultReleaseOwner + "/" + defaultReleaseRepo,
 	}
+}
+
+// SetRepositoryRemote 用 git remote 覆盖仓库标识，让 Fork 部署展示自己的仓库地址；
+// 解析失败（Release/Docker 部署没有 git 目录）时保留官方仓库兜底。
+func (h *HealthHandler) SetRepositoryRemote(remoteURL string) {
+	owner, repo, ok := githubRepoFromRemote(remoteURL)
+	if !ok {
+		return
+	}
+	h.repository = owner + "/" + repo
+}
+
+// Repository 返回当前展示的 GitHub 仓库标识（owner/repo）。
+func (h *HealthHandler) Repository() string {
+	return h.repository
 }
 
 // Register 注册当前模块的路由或能力。
@@ -47,6 +64,8 @@ func (h *HealthHandler) health(c *gin.Context) {
 		"started_at":     h.startedAt,
 		"uptime_seconds": int64(time.Since(h.startedAt).Seconds()),
 		"version":        h.version,
+		"repository":     h.repository,
+		"repository_url": "https://github.com/" + h.repository,
 	})
 }
 
