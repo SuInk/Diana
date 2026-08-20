@@ -46,7 +46,7 @@ Configuration, memory, and logs live in a local SQLite database — no hosted se
 | **Channels in parallel** | QQ and Telegram run side by side; replies, images, and reminders always return to the originating channel, and session context can be isolated or shared per profile |
 | **Split model duties** | Chat, vision, intent detection, and image generation each bind their own provider and model, validated with a real request before saving |
 | **Built-in web search** | No plugin to install; the model can search before answering time-sensitive questions. Exa MCP first, Tavily as fallback |
-| **Image text recognition** | Images can go through a vision model and OCR at once (LLM transcription, self-hosted OCR service, or local tesseract). When the chat model has no vision support, it can receive the recognized text only |
+| **Image text recognition** | Images can go through a vision model and OCR at once (LLM transcription, self-hosted OCR service, or local tesseract). When the chat model has no vision support, it can receive the recognized text only. Results are cached in the database by image content hash, so a repeated image or sticker is only recognized once |
 | **Per-group policies** | Reply windows, allow/deny lists, trigger words, persona, QQ group level thresholds, and tool permissions per group |
 | **Layered long-term memory** | Recent context, compressed summaries, structured facts, and on-demand history search work in layers to keep token usage down |
 | **Built-in Agent** | A minimal Pi-style tool loop with file, command, and browser tools, loading Skills and MCP servers on demand |
