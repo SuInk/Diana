@@ -852,3 +852,44 @@ func TestRepositoryPublishGHEnvironmentIgnoresTokenOverrides(t *testing.T) {
 		t.Fatalf("filtered environment=%#v", filtered)
 	}
 }
+
+// 用户常常只说仓库简称，模型得先知道当前会话能碰哪些仓库才不会反问一句 owner/repo。
+func TestRepositoryPublishEventRepositoriesListsOnlyGrantedRepositories(t *testing.T) {
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:    "MilkSU-Official/milksu, SuInk/Diana\nacme/private",
+		repositoryPublishSettingManagerUsers: "owner-user = SuInk/Diana",
+		repositoryPublishSettingDraftGroups:  "10497 = MilkSU-Official/milksu",
+	}
+	group := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "someone"}
+
+	// 群里被授权草稿的那一个仓库，白名单里的其他仓库不该露出来。
+	if got := repositoryPublishEventRepositories(group, false, settings); len(got) != 1 || got[0] != "MilkSU-Official/milksu" {
+		t.Fatalf("group repositories = %#v", got)
+	}
+	// 大小写按配置原样保留，方便直接填进 repository。
+	direct := MessageEvent{Kind: EventKindPrivate, UserID: "owner-user"}
+	if got := repositoryPublishEventRepositories(direct, false, settings); len(got) != 1 || got[0] != "SuInk/Diana" {
+		t.Fatalf("user repositories = %#v", got)
+	}
+	// 主人看到整份白名单。
+	if got := repositoryPublishEventRepositories(direct, true, settings); len(got) != 3 {
+		t.Fatalf("owner repositories = %#v", got)
+	}
+	// 没有任何授权时返回空，描述里会据此说明尚未授权。
+	stranger := MessageEvent{Kind: EventKindPrivate, UserID: "nobody"}
+	if got := repositoryPublishEventRepositories(stranger, false, settings); len(got) != 0 {
+		t.Fatalf("stranger repositories = %#v", got)
+	}
+}
+
+// 白名单没配时不能凭空给出仓库。
+func TestRepositoryPublishEventRepositoriesEmptyWithoutAllowlist(t *testing.T) {
+	settings := SettingValues{repositoryPublishSettingManagerUsers: "owner-user = SuInk/Diana"}
+	direct := MessageEvent{Kind: EventKindPrivate, UserID: "owner-user"}
+	if got := repositoryPublishEventRepositories(direct, false, settings); len(got) != 0 {
+		t.Fatalf("repositories without an allowlist = %#v", got)
+	}
+	if got := repositoryPublishEventRepositories(direct, true, settings); len(got) != 0 {
+		t.Fatalf("owner repositories without an allowlist = %#v", got)
+	}
+}
