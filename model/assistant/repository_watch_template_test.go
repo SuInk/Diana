@@ -24,12 +24,11 @@ func TestRenderRepositoryWatchTemplateDropsLinesWithOnlyEmptyPlaceholders(t *tes
 	}
 }
 
-func TestRepositoryWatchCustomTemplatesChangeTheLayout(t *testing.T) {
-	settings := SettingValues{
-		repositoryWatchSettingTemplateHeader:  "【{repository}】\n{body}\n{summary}",
-		repositoryWatchSettingTemplateRelease: "🎉 {tag} {name}（{time}）{url}",
-	}
-	templates := repositoryWatchTemplatesFromSettings(settings)
+// 只开放整体模板：自定义能改标题行、概括位置和是否分条，条目排版固定不动。
+func TestRepositoryWatchCustomTemplateChangesTheLayout(t *testing.T) {
+	templates := repositoryWatchTemplatesFromSettings(SettingValues{
+		repositoryWatchSettingTemplateHeader: "【{repository}】\n{body}\n{summary}",
+	})
 	change := repositoryWatchChange{
 		Repository: "SuInk/Diana",
 		Releases: []repositoryWatchRelease{{
@@ -41,17 +40,28 @@ func TestRepositoryWatchCustomTemplatesChangeTheLayout(t *testing.T) {
 	}
 
 	body := renderRepositoryWatchChangesWithTemplates(change, templates)
-	if !strings.HasPrefix(body, "🎉 v0.9.0") || !strings.Contains(body, "https://github.com/SuInk/Diana/releases/tag/v0.9.0") {
-		t.Fatalf("custom release template ignored: %q", body)
+	// 条目排版不受设置影响，始终是统一的两行。
+	if !strings.HasPrefix(body, "Release v0.9.0\n发布于 ") || !strings.HasSuffix(body, "https://github.com/SuInk/Diana/releases/tag/v0.9.0") {
+		t.Fatalf("entry layout should stay fixed: %q", body)
 	}
-	message := composeRepositoryWatchMessageWithTemplate(templates.Header, "SuInk/Diana", body, "发布了新版本。")
-	if !strings.HasPrefix(message, "【SuInk/Diana】") || !strings.HasSuffix(message, "发布了新版本。") {
+	message := composeRepositoryWatchMessageWithTemplate(templates.Header, "SuInk/Diana", body)
+	if !strings.HasPrefix(message, "【SuInk/Diana】") || !strings.Contains(message, "Release v0.9.0") {
 		t.Fatalf("custom header template ignored: %q", message)
 	}
+	if chunks := splitNotification(message, notificationChunkSize); len(chunks) != 1 {
+		t.Fatalf("template without a split marker should stay in one message: %#v", chunks)
+	}
+}
 
-	// 未覆盖的类别继续用默认模板。
-	if templates.Commit != repositoryWatchDefaultCommitTemplate {
-		t.Fatalf("commit template should fall back to default, got %q", templates.Commit)
+// 条目排版不再是设置项：只留一个模板，五类动态的形状由代码保证一致。
+func TestRepositoryWatchEntryTemplatesAreNotConfigurable(t *testing.T) {
+	templates := repositoryWatchTemplatesFromSettings(SettingValues{
+		repositoryWatchSettingTemplateHeader: "【{repository}】\n{body}",
+		"template_release":                   "🎉 {tag} {name}（{time}）{url}",
+		"template_commit":                    "{sha}",
+	})
+	if templates.Release != repositoryWatchDefaultReleaseTemplate || templates.Commit != repositoryWatchDefaultCommitTemplate {
+		t.Fatalf("entry templates must ignore settings: %+v", templates)
 	}
 }
 
@@ -64,22 +74,22 @@ func TestRepositoryWatchTemplatesFallBackToDefaultsWhenBlank(t *testing.T) {
 	}
 }
 
-// 分条符是模板里的普通静态行：概括有内容时保留，没内容时随空段一起清掉。
+// 分条符仍然可用：自定义模板里写一行 <botbr> 就从那里分成下一条消息。
 func TestRepositoryWatchTemplateKeepsExplicitSplitMarker(t *testing.T) {
 	message := composeRepositoryWatchMessageWithTemplate(
-		"【{repository}】\n{body}\n<botbr>\n{summary}", "SuInk/Diana", "明细", "概括")
-	if message != "【SuInk/Diana】\n明细\n<botbr>\n概括" {
+		"【{repository}】\n<botbr>\n{body}", "SuInk/Diana", "明细")
+	if message != "【SuInk/Diana】\n<botbr>\n明细" {
 		t.Fatalf("message = %q", message)
 	}
 	chunks := splitNotification(message, notificationChunkSize)
-	if len(chunks) != 2 || chunks[1] != "概括" {
+	if len(chunks) != 2 || chunks[1] != "明细" {
 		t.Fatalf("chunks = %#v", chunks)
 	}
 
-	// 想让概括跟在正文后面而不分条时，去掉那一行就行。
-	inline := composeRepositoryWatchMessageWithTemplate(
-		"【{repository}】\n{body}\n{summary}", "SuInk/Diana", "明细", "概括")
-	if chunks := splitNotification(inline, notificationChunkSize); len(chunks) != 1 {
-		t.Fatalf("inline template should stay in one message, got %#v", chunks)
+	// 正文为空时不能留下孤立的分条符，否则会多发一条空消息。
+	empty := composeRepositoryWatchMessageWithTemplate(
+		"【{repository}】\n<botbr>\n{body}", "SuInk/Diana", "")
+	if strings.Contains(empty, notificationSplitMarker) {
+		t.Fatalf("dangling split marker: %q", empty)
 	}
 }
