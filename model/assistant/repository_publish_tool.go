@@ -1294,8 +1294,17 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 		v, _ := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
 		return v
 	}(), groups)
-	if err != nil || effectiveErr != nil || (t.event.Kind == EventKindGroup && len(draftGroups[strings.TrimSpace(t.event.GroupID)]) == 0 && len(managerGroups[strings.TrimSpace(t.event.GroupID)]) == 0) || (t.event.Kind != EventKindGroup && len(draftUsers[strings.TrimSpace(t.event.UserID)]) == 0 && len(managerUsers[strings.TrimSpace(t.event.UserID)]) == 0) {
-		return result.fail("permission_denied", "当前群聊未配置 Issue 草稿仓库。")
+	// 按用户授权的人在群里同样有权限：create 和 approve 都只看 managerUsers/draftUsers，
+	// 不限会话类型。这里以前在群聊里只查群维度配置，于是「群友甲是管理员、但整个群
+	// 没放开」时他能建能批，却列不出草稿。
+	userID := strings.TrimSpace(t.event.UserID)
+	groupID := strings.TrimSpace(t.event.GroupID)
+	reachable := len(draftUsers[userID]) > 0 || len(managerUsers[userID]) > 0
+	if !reachable && t.event.Kind == EventKindGroup {
+		reachable = len(draftGroups[groupID]) > 0 || len(managerGroups[groupID]) > 0
+	}
+	if err != nil || effectiveErr != nil || !reachable {
+		return result.fail("permission_denied", "当前会话没有任何已授权的 Issue 草稿仓库。")
 	}
 	status := strings.ToLower(strings.TrimSpace(configToolString(input, "status")))
 	if status == "" {

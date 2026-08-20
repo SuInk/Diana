@@ -893,3 +893,27 @@ func TestRepositoryPublishEventRepositoriesEmptyWithoutAllowlist(t *testing.T) {
 		t.Fatalf("owner repositories without an allowlist = %#v", got)
 	}
 }
+
+// 「群友甲是管理员，但整个群没放开」：他在群里能建能批，也必须能列出草稿。
+func TestRepositoryPublishUserScopedManagerWorksInsideGroups(t *testing.T) {
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:    "SuInk/Diana",
+		repositoryPublishSettingManagerUsers: "manager-user = SuInk/Diana",
+	}
+	group := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "manager-user"}
+
+	// 群里未授权，但这个人是按用户授权的管理员，直接写入应当放行。
+	direct, _, code, message := repositoryPublishAccessForEvent(group, "SuInk/Diana", false, settings)
+	if code != "" || !direct {
+		t.Fatalf("user-scoped manager denied inside a group: direct=%v code=%q message=%q", direct, code, message)
+	}
+	// 同一个人也应当出现在可操作仓库清单里。
+	if got := repositoryPublishEventRepositories(group, false, settings); len(got) != 1 || got[0] != "SuInk/Diana" {
+		t.Fatalf("group repositories for a user-scoped manager = %#v", got)
+	}
+	// 同群里没有任何授权的其他人仍然被拒。
+	stranger := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "someone-else"}
+	if _, _, code, _ := repositoryPublishAccessForEvent(stranger, "SuInk/Diana", false, settings); code == "" {
+		t.Fatalf("unauthorized group member should stay denied")
+	}
+}
