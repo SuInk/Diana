@@ -11,18 +11,20 @@ import "strings"
 // 名单）都留在代码里。
 const repositoryWatchSettingTemplateHeader = "template_header"
 
-// 默认模板：五类动态统一压成两行——第一行「类型 + 标识 + 标题」，第二行「谁于何时
-// 做了什么 · 链接」。每条都以类型词开头，扫一眼就知道这条是提交还是 PR。此前 Commit 是紧凑两行，PR/Issue/Release 还留着四到六行的老排版，
-// 同一条通知里时间格式、作者写法和链接位置各不相同，读起来像是三个人拼的。留空
-// 即使用这里的默认值。
+// 默认模板：五类动态统一成同一个形状——每行一件事，从上到下是「类型 + 标识（状态）」
+// 「标题」「作者」「附加信息」「动作 + 时间」「链接」。没有的字段整行删掉。
+//
+// 排版本身也可以压成两行（标识标题一行、署名链接一行），更省屏；这里选详细版是
+// 因为它每行只承载一件事，扫读时不用在一行里找分隔符。代价是一次推送里提交多时
+// 会比较长——需要时用「每类动态展示条数」压条数。
 const (
 	// 概括排在事实清单后面，并用 <botbr> 单独发一条：黏在最后一行链接后面既难读，
 	// 也分不清哪些是确定的事实、哪句是模型写的。
 	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{body}\n<botbr>\n{summary}"
-	repositoryWatchDefaultCommitTemplate  = "Commit {sha} {title}\n{byline} · {short_url}"
-	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）{title}\n{byline} · {branches} · {url}"
-	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）{title}\n{byline} · {url}"
-	repositoryWatchDefaultReleaseTemplate = "Release {label}\n{byline} · {url}"
+	repositoryWatchDefaultCommitTemplate  = "Commit {sha}\n{title}\n作者：{author}\n提交于 {time}\n{short_url}"
+	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{time_label} {time}\n{url}"
+	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）\n{title}\n作者：{author}\n{time_label} {time}\n{url}"
+	repositoryWatchDefaultReleaseTemplate = "Release {label}\n发布于 {time}\n{url}"
 )
 
 // renderRepositoryWatchTemplate 逐行替换占位符。某一行里出现过占位符、而全部占位

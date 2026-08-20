@@ -9309,18 +9309,14 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 			if len(sha) > 7 {
 				sha = sha[:7]
 			}
-			author := strings.TrimSpace(commit.Author)
-			shortTime := formatRepositoryWatchShortTime(commit.PushedAt)
 			lines = append(lines, renderRepositoryWatchTemplate(templates.Commit, map[string]string{
-				"sha":        sha,
-				"title":      strings.TrimSpace(commit.Title),
-				"author":     author,
-				"time":       formatRepositoryWatchTime(commit.PushedAt),
-				"time_short": shortTime,
-				"byline":     repositoryWatchCommitByline(author, shortTime),
-				"branch":     firstNonEmpty(strings.TrimSpace(change.Branch), "默认分支"),
-				"url":        strings.TrimSpace(commit.URL),
-				"short_url":  repositoryWatchShortCommitURL(commit.URL, sha),
+				"sha":       sha,
+				"title":     strings.TrimSpace(commit.Title),
+				"author":    strings.TrimSpace(commit.Author),
+				"time":      formatRepositoryWatchTime(commit.PushedAt),
+				"branch":    firstNonEmpty(strings.TrimSpace(change.Branch), "默认分支"),
+				"url":       strings.TrimSpace(commit.URL),
+				"short_url": repositoryWatchShortCommitURL(commit.URL, sha),
 			}))
 		}
 		if change.OmittedCommits > 0 {
@@ -9338,19 +9334,14 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				branches = firstNonEmpty(pullRequest.BaseBranch, "默认分支") + " ← " + firstNonEmpty(pullRequest.HeadBranch, "未知分支")
 			}
 			// 时间统一压在链接正上方，五种事件保持同一个位置。
-			at := firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)
-			shortTime := formatRepositoryWatchShortTime(at)
-			timeLabel := repositoryWatchPullTimeLabel(pullRequest.Status)
 			lines = append(lines, renderRepositoryWatchTemplate(templates.Pull, map[string]string{
 				"number":     fmt.Sprint(pullRequest.Number),
 				"status":     repositoryWatchPullStatusLabel(pullRequest.Status),
 				"title":      strings.TrimSpace(pullRequest.Title),
 				"author":     strings.TrimSpace(pullRequest.Author),
 				"branches":   branches,
-				"time_label": timeLabel,
-				"time":       formatRepositoryWatchTime(at),
-				"time_short": shortTime,
-				"byline":     repositoryWatchByline(pullRequest.Author, shortTime, repositoryWatchVerb(timeLabel)),
+				"time_label": repositoryWatchPullTimeLabel(pullRequest.Status),
+				"time":       formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)),
 				"url":        strings.TrimSpace(pullRequest.URL),
 			}))
 		}
@@ -9359,18 +9350,13 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 	if len(change.Issues) > 0 {
 		lines := make([]string, 0, len(change.Issues))
 		for _, issue := range change.Issues {
-			at := repositoryWatchIssueTime(issue)
-			shortTime := formatRepositoryWatchShortTime(at)
-			timeLabel := repositoryWatchIssueTimeLabel(issue.Status)
 			lines = append(lines, renderRepositoryWatchTemplate(templates.Issue, map[string]string{
 				"number":     fmt.Sprint(issue.Number),
 				"status":     repositoryWatchIssueStatusLabel(issue.Status),
 				"title":      strings.TrimSpace(issue.Title),
 				"author":     strings.TrimSpace(issue.Author),
-				"time_label": timeLabel,
-				"time":       formatRepositoryWatchTime(at),
-				"time_short": shortTime,
-				"byline":     repositoryWatchByline(issue.Author, shortTime, repositoryWatchVerb(timeLabel)),
+				"time_label": repositoryWatchIssueTimeLabel(issue.Status),
+				"time":       formatRepositoryWatchTime(repositoryWatchIssueTime(issue)),
 				"url":        strings.TrimSpace(issue.URL),
 			}))
 		}
@@ -9387,24 +9373,19 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 			} else if label == "" {
 				label = strings.TrimSpace(release.Name)
 			}
-			shortTime := formatRepositoryWatchShortTime(release.PublishedAt)
 			lines = append(lines, renderRepositoryWatchTemplate(templates.Release, map[string]string{
-				"label":      label,
-				"tag":        strings.TrimSpace(release.Tag),
-				"name":       strings.TrimSpace(release.Name),
-				"time":       formatRepositoryWatchTime(release.PublishedAt),
-				"time_short": shortTime,
-				"byline":     repositoryWatchByline("", shortTime, "发布"),
-				"url":        strings.TrimSpace(release.URL),
+				"label": label,
+				"tag":   strings.TrimSpace(release.Tag),
+				"name":  strings.TrimSpace(release.Name),
+				"time":  formatRepositoryWatchTime(release.PublishedAt),
+				"url":   strings.TrimSpace(release.URL),
 			}))
 		}
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	if change.Stars != nil {
-		// 和其它四类一样压成两行：第一行「Star 变化（旧 → 新）」，第二行「名单 ·
-		// 时间 · 链接」。
-		head := fmt.Sprintf("Star %+d（%d → %d）", change.Stars.Delta, change.Stars.Previous, change.Stars.Current)
-		var details []string
+		// 和其它四类一样每行一件事：标识（含增减与前后数）、名单、时间、链接。
+		lines := []string{fmt.Sprintf("Star %+d（%d → %d）", change.Stars.Delta, change.Stars.Previous, change.Stars.Current)}
 		if change.Stars.Delta > 0 && len(change.Stars.AddedUsers) > 0 {
 			names := make([]string, 0, min(5, len(change.Stars.AddedUsers)))
 			for _, user := range change.Stars.AddedUsers {
@@ -9417,7 +9398,7 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 			if len(change.Stars.AddedUsers) > len(names) {
 				line += fmt.Sprintf(" 等 %d 人", len(change.Stars.AddedUsers)-len(names))
 			}
-			details = append(details, line)
+			lines = append(lines, line)
 		}
 		latestStar := time.Time{}
 		if change.Stars.Delta > 0 {
@@ -9427,17 +9408,13 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				}
 			}
 		}
-		if value := formatRepositoryWatchShortTime(latestStar); value != "" {
-			details = append(details, "最新 Star 于 "+value)
-		} else if value := formatRepositoryWatchShortTime(change.Stars.DetectedAt); value != "" {
-			details = append(details, "检测于 "+value)
+		if value := formatRepositoryWatchTime(latestStar); value != "" {
+			lines = append(lines, "最新 Star 于 "+value)
+		} else if value := formatRepositoryWatchTime(change.Stars.DetectedAt); value != "" {
+			lines = append(lines, "检测于 "+value)
 		}
 		if url := strings.TrimSpace(change.Stars.URL); url != "" {
-			details = append(details, url)
-		}
-		lines := []string{head}
-		if len(details) > 0 {
-			lines = append(lines, strings.Join(details, " · "))
+			lines = append(lines, url)
 		}
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
@@ -9477,18 +9454,6 @@ func formatRepositoryWatchTime(value time.Time) string {
 	return value.Local().Format("2006-01-02 15:04:05")
 }
 
-// formatRepositoryWatchShortTime 给紧凑排版用：一律不带秒，当年的动态连年份也省掉。
-func formatRepositoryWatchShortTime(value time.Time) string {
-	if value.IsZero() {
-		return ""
-	}
-	local := value.Local()
-	if local.Year() == time.Now().Year() {
-		return local.Format("01-02 15:04")
-	}
-	return local.Format("2006-01-02 15:04")
-}
-
 // repositoryWatchShortCommitURL 把 commit 链接里的 40 位 SHA 换成 7 位短 SHA。
 // GitHub 认短 SHA，链接照样能打开，手机上少占两行。
 func repositoryWatchShortCommitURL(rawURL, shortSHA string) string {
@@ -9502,38 +9467,6 @@ func repositoryWatchShortCommitURL(rawURL, shortSHA string) string {
 		return rawURL
 	}
 	return rawURL[:index+1] + shortSHA
-}
-
-// repositoryWatchCommitByline 组出「作者 于 时间 提交」这句署名。作者缺失时退成
-// 「提交于 时间」，不会留下一个光秃秃的「于」。
-func repositoryWatchCommitByline(author, shortTime string) string {
-	return repositoryWatchByline(author, shortTime, "提交")
-}
-
-// repositoryWatchByline 拼「谁 于 什么时候 做了什么」。五类动态共用一套署名，
-// 缺作者或缺时间时各退一步，不留下「 于  提交」这种半截话。
-func repositoryWatchByline(author, shortTime, verb string) string {
-	author = strings.TrimSpace(author)
-	shortTime = strings.TrimSpace(shortTime)
-	verb = strings.TrimSpace(verb)
-	if verb == "" {
-		verb = "更新"
-	}
-	switch {
-	case author != "" && shortTime != "":
-		return author + " 于 " + shortTime + " " + verb
-	case author != "":
-		return author + " " + verb
-	case shortTime != "":
-		return verb + "于 " + shortTime
-	}
-	return ""
-}
-
-// repositoryWatchVerb 把「合并于」这类标签退回动词，供署名复用，免得同一份
-// 措辞维护两处。
-func repositoryWatchVerb(timeLabel string) string {
-	return strings.TrimSuffix(strings.TrimSpace(timeLabel), "于")
 }
 
 func repositoryWatchPullStatusLabel(status string) string {
