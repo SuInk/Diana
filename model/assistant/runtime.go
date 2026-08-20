@@ -9507,7 +9507,7 @@ func repositoryWatchPullStatusLabel(status string) string {
 	case "closed":
 		return "已关闭"
 	default:
-		return "有更新"
+		return "更新"
 	}
 }
 
@@ -9533,7 +9533,7 @@ func repositoryWatchIssueStatusLabel(status string) string {
 	case "closed":
 		return "已关闭"
 	default:
-		return "有更新"
+		return "更新"
 	}
 }
 
