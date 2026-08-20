@@ -1,74 +1,100 @@
+<div align="center">
+
 # Diana
 
-[中文](./README.md)
+**A self-hosted multi-platform AI assistant — QQ and Telegram online at the same time, with your data staying on your own machine.**
 
-[Website and Docs](https://suink.github.io/Diana/) · [Live Demo](https://suink.github.io/Diana/demo/) · [Latest Release](https://github.com/SuInk/Diana/releases/latest)
+[![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
+[![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-Limited%20Redistribution-informational)](./LICENSE)
 
-Diana is a multi-platform AI assistant service written in Go, with an LLM compatibility layer, platform adapters, a Gin WebUI, and plugin management. It currently ships with a QQ adapter for OneBot v11; the WebUI manages multiple assistant profiles, models, platform connections, trigger aliases, and built-in plugins.
+[Website and Docs](https://suink.github.io/Diana/) · [Live Demo](https://suink.github.io/Diana/demo/) · [Latest Release](https://github.com/SuInk/Diana/releases/latest) · [中文](./README.md)
 
-## Requirements
+</div>
 
-- A client with OneBot v11 reverse WebSocket support when using the QQ adapter
-- The one-click installer supports Linux and macOS on amd64/arm64, plus 64-bit Windows; Go, Node.js, npm, and the source tree are not required
-- Docker or Docker Compose when deploying with Docker
-- Go `1.26.5`, Node.js `22`, and npm are required only for manual source builds
+<br />
 
-## One-Click Installation (Recommended)
+<img src="./docs/assets/diana-webui-overview.png" alt="Diana console overview: channel status, message statistics, system resources, and the live event stream" width="100%" />
 
-The installer detects the operating system and architecture, downloads the latest stable complete package, verifies `SHA256SUMS`, generates local administrator credentials, and starts Diana. Run the same command again to upgrade safely; the installer backs up the database and current runtime and restores them automatically if the health check fails.
+## Contents
 
-Linux / macOS:
+- [What Is Diana](#what-is-diana)
+- [Features](#features)
+- [Getting Started](#getting-started)
+- [First-Run Setup](#first-run-setup)
+- [Supported Channels](#supported-channels)
+- [Access Security](#access-security)
+- [Capabilities and Extensions](#capabilities-and-extensions)
+- [Environment Variables](#environment-variables)
+- [Deployment Recipes](#deployment-recipes)
+- [Development](#development)
+- [Project Layout](#project-layout)
+- [Documentation](#documentation)
+- [License](#license)
+
+## What Is Diana
+
+Diana is a multi-platform AI assistant service written in Go: an LLM compatibility layer, platform adapters, a Gin WebUI, and a plugin system, all compiled into a single binary. It ships with QQ (OneBot v11) and Telegram channels; the WebUI manages multiple bot profiles, model assignments, per-group policies, plugins, and the built-in Agent.
+
+Configuration, memory, and logs live in a local SQLite database — no hosted service required. For every message you can look up why it was answered, why it was skipped, which tools ran, and how many tokens it cost.
+
+## Features
+
+| | |
+| --- | --- |
+| **Channels in parallel** | QQ and Telegram run side by side; replies, images, and reminders always return to the originating channel, and session context can be isolated or shared per profile |
+| **Split model duties** | Chat, vision, intent detection, and image generation each bind their own provider and model, validated with a real request before saving |
+| **Built-in web search** | No plugin to install; the model can search before answering time-sensitive questions. Exa MCP first, Tavily as fallback |
+| **Image text recognition** | Images can go through a vision model and OCR at once (LLM transcription, self-hosted OCR service, or local tesseract). When the chat model has no vision support, it can receive the recognized text only |
+| **Per-group policies** | Reply windows, allow/deny lists, trigger words, persona, QQ group level thresholds, and tool permissions per group |
+| **Layered long-term memory** | Recent context, compressed summaries, structured facts, and on-demand history search work in layers to keep token usage down |
+| **Built-in Agent** | A minimal Pi-style tool loop with file, command, and browser tools, loading Skills and MCP servers on demand |
+| **Full event auditing** | Reply reasons, model call chains, tokens, and errors are recorded; operation logs carry the acting operator |
+| **One-click install and self-update** | The installer verifies SHA-256, backs up data, and rolls back automatically when the health check fails; the console can upgrade in place |
+
+## Getting Started
+
+### One-Click Installation (Recommended)
+
+The installer detects the OS and architecture, downloads the latest stable complete package, verifies `SHA256SUMS`, generates local admin credentials, and starts Diana. **Running the same command again upgrades safely**: it backs up the database and current runtime first, and restores them if the health check fails.
 
 ```sh
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
 
-Windows PowerShell:
-
 ```powershell
+# Windows PowerShell
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 ```
 
-After installation, open:
+Then open `http://127.0.0.1:18080`. The generated administrator account and password are printed to the terminal once and stored in `runtime.env` inside the install directory — keep that file private.
 
-```text
-http://127.0.0.1:18080
-```
+Default install directory: `~/.local/share/diana` on Linux/macOS, `%LOCALAPPDATA%\Diana` on Windows.
 
-The default install directory is `~/.local/share/diana` on Linux and macOS, and `%LOCALAPPDATA%\Diana` on Windows. Generated administrator credentials are printed in the terminal and stored in `runtime.env` under the install directory. Keep this file private.
-
-Environment variables can select a version, install directory, port, or disable automatic startup. For example:
+Environment variables pick the version, directory, port, or install-without-start behaviour:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
   DIANA_VERSION=v0.8.9 DIANA_INSTALL_DIR=/opt/diana DIANA_PORT=18081 sh
 ```
 
-### Complete Release Packages
-
-If you do not want to use the installer, download a complete package from [GitHub Releases](https://github.com/SuInk/Diana/releases). Linux and macOS use `.tar.gz`; Windows uses `.zip`. Each package contains the backend binary, `frontend-next/dist`, and a launch script, so no separate build is required. Run `run.sh` on Unix platforms or `run.bat` on Windows.
-
-Every Release also includes `SHA256SUMS`. Verify the downloaded file before extracting or replacing Diana; forced updates never bypass this check:
+### Docker
 
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing
+git clone https://github.com/SuInk/Diana.git && cd Diana
+cp docker-compose.yml docker-compose.local.yml
+# Edit the token, QQ number, and LLM settings in docker-compose.local.yml
+docker compose -f docker-compose.local.yml up -d --build
 ```
 
-On macOS, compare `shasum -a 256 <file>` with `SHA256SUMS`. On Windows, use `Get-FileHash <file> -Algorithm SHA256`.
-
-When Diana runs from a complete Release package, the WebUI can install later stable releases directly. The backend downloads the package for the current OS and architecture, verifies it, backs up the current installation, and switches versions. A failed health check restores both the database and the old runtime. Backups and the latest result are kept under `.diana-updates` in the installation directory. Containers remain managed by their image updater, while source checkouts continue to use the Git update path.
-
-## Docker Deployment
-
-Build the image:
+<details>
+<summary>Using <code>docker run</code></summary>
 
 ```sh
 docker build -t diana:latest .
-```
 
-Run the container:
-
-```sh
 docker run -d \
   --name diana \
   --restart unless-stopped \
@@ -84,196 +110,69 @@ docker run -d \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
-  -e LLM_USER_AGENT=codex-cli/0.142.0 \
   diana:latest
 ```
 
-Docker Compose:
+</details>
+
+The container serves the same `http://127.0.0.1:18080`, and OneBot v11 clients connect to `ws://127.0.0.1:18080/onebot/v11/ws`. When the client runs on a different host, replace `127.0.0.1` with Diana's address.
+
+### Complete Release Package
+
+Without the installer, download a complete package from [GitHub Releases](https://github.com/SuInk/Diana/releases) (`.tar.gz` for Linux/macOS, `.zip` for Windows). It contains the backend binary, `frontend-next/dist`, and start scripts — no build required: run `run.sh` on Unix or `run.bat` on Windows.
+
+Verify before replacing anything; forced updates never skip this check either:
 
 ```sh
-cp docker-compose.yml docker-compose.local.yml
-# Edit token, QQ number, and LLM settings in docker-compose.local.yml.
-docker compose -f docker-compose.local.yml up -d --build
+sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-After startup, open:
+> On macOS use `shasum -a 256 <file>`, on Windows `Get-FileHash <file> -Algorithm SHA256`.
 
-```text
-http://127.0.0.1:18080
-```
+When running from a complete package, the WebUI can install later stable versions itself: it downloads the package for the current platform, verifies it, backs up, and switches, restoring the database and previous version if the health probe fails. Backups live under `.diana-updates` in the install directory. Container deployments rely on the image updater, and source checkouts use the Git update flow.
 
-Configure the OneBot v11 client to connect to the exposed reverse WebSocket endpoint:
+### Building from Source
 
-```text
-ws://127.0.0.1:18080/onebot/v11/ws
-```
-
-If the OneBot v11 client and Diana are not on the same machine, replace `127.0.0.1` with the Diana host IP or domain.
-
-## Manual Source Build
-
-Source builds are intended for development, debugging, and custom deployments. Regular users should prefer the one-click installer or a complete Release package above.
+Aimed at development and custom deployments. Requires Go `1.26.5`, Node.js `22`, and npm.
 
 ```sh
-git clone <your-repo-url> diana
-cd diana
-
+git clone https://github.com/SuInk/Diana.git && cd Diana
 go mod download
 
-cd frontend-next
-npm ci
-npm run build
-cd ..
-
+cd frontend-next && npm ci && npm run build && cd ..
 go build -o dist/diana-webui ./cmd/webui
-```
 
-Start the service:
-
-```sh
 ./dist/diana-webui
 ```
 
-Default WebUI:
-
-```text
-http://127.0.0.1:18080
-```
-
-## macOS Deployment
-
-Apple Silicon:
+For local development, one command starts both the backend and the Vite dev server:
 
 ```sh
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-Intel Mac:
-
-```sh
-GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-You can also download the `darwin-arm64` or `darwin-amd64` binary from GitHub Releases. Standalone binaries do not include frontend assets; regular users should download the matching complete release package.
-
-## Linux Deployment
-
-amd64:
-
-```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-arm64:
-
-```sh
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-For background operation, use the systemd example below.
-
-## Windows Deployment
-
-PowerShell:
-
-```powershell
-$env:GOOS="windows"
-$env:GOARCH="amd64"
-$env:CGO_ENABLED="0"
-go build -o dist\diana-webui.exe .\cmd\webui
-.\dist\diana-webui.exe
-```
-
-You can also download the `windows-amd64.exe` binary from GitHub Releases. Standalone binaries do not include frontend assets; regular users should download the matching complete release package.
-
-## Quick Run
-
-For local development or testing, start the Go backend and Vite frontend together:
-
-```sh
-make dev
-```
-
-By default the backend runs at `http://127.0.0.1:18080` and the frontend runs at `http://127.0.0.1:5173`; Vite proxies `/api` and `/onebot` to the backend. You can change ports with environment variables:
-
-```sh
+make dev                                   # backend 18080, frontend 5173
 make dev BACKEND_PORT=18081 FRONTEND_PORT=5174
+node scripts/dev.mjs                       # when make is unavailable
 ```
 
-If `make` is not installed, use the cross-platform Node script directly:
+## First-Run Setup
 
-```sh
-node scripts/dev.mjs
-```
+1. **Sign in** — open `http://127.0.0.1:18080` and use the credentials printed in the terminal.
+2. **Configure models** — on the LLM page, enter the provider and API key, sync the model list, then pick the default model. Environment variables can seed this too:
 
-For backend-only or production builds:
+   ```sh
+   LLM_PROVIDER=openai_compatible \
+   LLM_API_KEY=your-key \
+   LLM_BASE_URL=https://example.com/v1 \
+   LLM_MODEL=gpt-4o-mini \
+   LLM_IMAGE_MODEL=gpt-image-1 \
+   ./dist/diana-webui
+   ```
 
-```sh
-make backend
-make build
-```
+   Supported providers: `openai_compatible`, `gemini`, `anthropic`. Multiple named configurations can be saved and switched.
+3. **Connect a bot** — create a profile on the Bots page with the platform account, owner ID, and trigger words.
+4. **Check the events** — send a message and confirm the reply reason and model call chain in the event centre.
 
-## Configure LLM
-
-You can configure LLM settings in the WebUI or through environment variables:
-
-```sh
-LLM_PROVIDER=openai_compatible \
-LLM_API_KEY=your-key \
-LLM_BASE_URL=https://example.com/v1 \
-LLM_MODEL=gpt-4o-mini \
-LLM_USER_AGENT=codex-cli/0.142.0 \
-LLM_IMAGE_MODEL=gpt-image-1 \
-LLM_MAX_OUTPUT_TOKENS=1024 \
-./dist/diana-webui
-```
-
-Supported providers:
-
-- `openai_compatible`
-- `gemini`
-- `anthropic`
-
-The WebUI LLM configuration page directly displays the saved API key for local copy/edit workflows. Plain `GET /api/llm/config` still omits secrets by default; the frontend explicitly uses `include_secrets=true` when it needs the full configuration.
-
-## WebUI Access Security
-
-The WebUI requires authentication from the first startup, with identical rules for local and public access. The default administrator username is generated securely as `diana#` followed by 16 random characters and persisted in SQLite.
-
-- If `DIANA_ADMIN_PASSWORD` is not provided on first startup, Diana generates a cryptographically secure random password. The generated username and password are printed once to standard error.
-- You may provide `DIANA_ADMIN_USERNAME=diana#yourname` and `DIANA_ADMIN_PASSWORD` on first startup instead. They never overwrite credentials already stored in SQLite.
-- After login, the username and password can be updated under Settings > Access Security. Usernames must start with `diana#`; passwords must contain at least 8 characters.
-
-**Administrator quick login:** enable it on the Assistant page and configure the owner account; the login page can then show a six-digit one-time code. Sending that code to the bot privately logs the browser in, and the bot replies with a receipt naming the source IP and device. The receipt needs no action; it exists so the message is not swallowed silently — if the code was relayed under false pretenses, the owner sees it immediately and can revoke the session and change the password. When the page cannot pick the approval up on its own (polling cut off, the tab reclaimed by a mobile browser, a different tab reopened), type that same code into the login page's input to sign in directly — it is right there in the message the owner sent. That exchange endpoint is rate-limited per source so an approved pairing cannot be stolen by guessing. Codes expire after five minutes, are single-use, and require the active bot to be online. The server never sends a code on its own, so there is no anonymous request that can be used to spam the owner.
-
-**Login brute-force protection:** password login and password changes share one failure budget, counted per source. After five consecutive failures a lockout kicks in, backing off from 30 seconds and doubling up to a 30-minute cap, answering `429` with `Retry-After`; any success clears it, and a global ceiling covers distributed attempts. Lockouts are written to the operation log. Per-source counting needs the real client IP: no reverse proxy is trusted by default, and behind one every request appears to come from the proxy itself, so declare trusted proxies with `DIANA_TRUSTED_PROXIES` (comma-separated IPs or CIDRs) to have `X-Forwarded-For` parsed.
-
-## WebUI Log Center
-
-The WebUI `Log Center` page shows persistent operation logs and error logs. Operation logs cover actions such as saving or switching LLM profiles, starting or stopping the bot, managing plugins, and running system updates. Error logs record failed API operations. Logs include an `actor`: WebUI operations default to `web:<client IP>` and can be overridden by a gateway with headers such as `X-Diana-Actor`, `X-Operator`, or `X-Forwarded-User`; the QQ built-in LLM config skill records `qq:<user QQ>`.
-
-```text
-GET /api/logs?kind=operation&limit=100
-GET /api/logs?kind=error&limit=100
-```
-
-These structured logs are stored in the SQLite database pointed to by `APP_DB_PATH`; `LOG_PATH` is still used for plain runtime log file output.
-
-## Configure OneBot v11
-
-This project directly serves a OneBot v11 reverse WebSocket endpoint:
-
-```text
-ws://127.0.0.1:18080/onebot/v11/ws
-```
-
-Add a OneBot v11 reverse WebSocket connection in the compatible client and set its endpoint to the address above. If you configure an access token, the client and Diana must use the same token. Implementations such as NapCat, Lagrange.Core, and go-cqhttp share this platform configuration instead of appearing as separate platforms.
-
-Bot startup example:
+<details>
+<summary>Starting a QQ bot purely from environment variables</summary>
 
 ```sh
 QQBOT_ENABLED=true \
@@ -284,162 +183,169 @@ DIANA_GROUP_TRIGGERS=嘉然,然然,Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
 LLM_MODEL=gpt-4o-mini \
-LLM_USER_AGENT=codex-cli/0.142.0 \
 ./dist/diana-webui
 ```
 
-After startup, private messages trigger directly. In group chats, mentioning the bot or starting a message with a configured alias triggers the bot.
+Private messages always trigger a reply; group messages need an `@mention` or a trigger word prefix.
 
-## Reply Admission
+</details>
 
-The "Reply admission" panel on the bot page and each group on the "Groups" page control the conditions under which the bot replies. The global settings act as defaults, and a group's settings replace the global ones as a whole (not merged field by field).
+## Supported Channels
 
-- **Group admission mode**: defaults to blacklist, which works in every group except disabled ones and matches the previous behavior. Switching to whitelist restricts the bot to the listed groups, so it stays silent when added to any other group. The disabled-group list still applies in whitelist mode.
-- **QQ group level threshold**: this is the in-group activity level (Lv.1–6), not the QQ account level (the sun/moon/star rank, which the OneBot protocol does not expose). Levels accumulate per group, so the same person can have different levels in different groups.
-- **Active hours**: an end time earlier than the start time means the window crosses midnight, for example `22:00-06:00`; identical values mean always open. Set the time zone to an IANA name such as `Asia/Shanghai`, or leave it empty to use the server's local zone. You can configure a quiet-hours notice, which is sent at most once per hour per conversation.
-- **Exempt / blocked users**: exempt users bypass the level and time checks; blocked users get no reply in either group or private chats.
-- **Owner bypass**: enabled by default, and worth keeping. Otherwise a wrong time or level setting locks you out too, with no way to recover from QQ.
-
-Two notes about group levels:
-
-Some OneBot implementations omit `level` from message events. Diana fills the gap through `get_group_member_info` when needed and caches the result in memory, keyed by group ID plus user ID, valid for 10 minutes and rebuilt from ordinary chat traffic after a restart.
-
-When the level cannot be read, the bot **allows the message through** by default. Implementations vary widely in what they return for `level`, and treating "unknown" as level 0 would silence an entire group. Switch "when the level is unknown" to "block" if you need strict enforcement, but understand the tradeoff.
-
-## Platforms
-
-The bot page groups profiles by chat platform and lets you filter them with the tabs at the top. All enabled QQ and Telegram profiles run concurrently, while replies, media, and reminders are routed back through the source channel. Cross-platform conversation context is isolated per profile by default and can be shared by disabling isolation at the top of the bot list.
-
-| Category | Platform | How it connects |
+| Category | Platform | Transport |
 | --- | --- | --- |
-| QQ | OneBot v11 | Reverse WebSocket; the OneBot v11 client dials into Diana |
-| Telegram | Telegram | Official Bot API long polling — Diana dials out |
+| QQ | OneBot v11 | Reverse WebSocket; the OneBot v11 client connects to Diana (NapCat, Lagrange.Core, go-cqhttp all belong here) |
+| Telegram | Telegram Bot API | Official long polling, outbound from Diana — no public address or webhook needed |
 
-Telegram only needs the bot token from BotFather. There is no public address to expose and no webhook to configure; on restricted networks you will usually also want the proxy field. Point the custom Bot API field at a local Bot API server to lift the 50MB upload limit.
+Every enabled profile stays online simultaneously. Telegram only needs the bot token from BotFather; a proxy address is usually required from mainland China, and a self-hosted Bot API server can be configured to bypass the 50 MB upload limit.
 
-Capability differences between the two:
+Platform differences:
 
-- **The group level threshold only applies to QQ.** Telegram has no group level, so the field is hidden for Telegram profiles and the backend never queries member info for them.
-- **Voice messages and @-mentions** ride on OneBot CQ codes and degrade gracefully on Telegram: a welcome message still sends, it just does not ping the member.
-- **Local media**: OneBot clients fetch Diana's `/media/resolver` URL, while Telegram cannot reach a local address and receives a direct multipart upload instead.
+- **Group level thresholds are QQ-only.** Telegram has no such concept, so the option is hidden for Telegram bots.
+- **Voice messages and mentions** rely on OneBot CQ codes and degrade gracefully on Telegram: the text is still sent, but nobody gets mentioned.
+- **Local media**: OneBot clients fetch Diana's `/media/resolver` URL, while Telegram cannot reach local addresses and receives a direct multipart upload instead.
 
-## Built-In Agent
+## Access Security
 
-You can enable the built-in Agent in the WebUI bot configuration page. When enabled, the bot follows the minimal state-and-tool-loop model used by [Pi Agent](https://github.com/earendil-works/pi): model planning, tool call, observation, and final response. The runtime remains native Go, so complete release packages do not acquire a Node.js runtime dependency.
+The WebUI requires a login from the very first start, with the same rules for local and public access. The default administrator account is generated securely (`diana#` plus 16 random characters) and persisted in SQLite.
 
-Built-in tools:
+- Without `DIANA_ADMIN_PASSWORD` on first start, a random password is generated; the credentials appear once in that run's stderr log.
+- `DIANA_ADMIN_USERNAME` and `DIANA_ADMIN_PASSWORD` can seed the first initialization; existing credentials are never overwritten.
+- After signing in, the account and password can be changed under Settings → Access Security. Usernames are 2–64 characters without spaces or control characters (`diana#` is just the shape of generated names, not a required prefix), and passwords need at least 8 characters.
+- Every `/api` endpoint requires a session, valid for 30 days; changing the password invalidates all existing sessions. The settings page lists signed-in devices and can revoke them individually.
 
-- `list_files`: list files under the Agent working directory.
-- `read_file`: read text files under the Agent working directory.
-- `run_command`: execute allowlisted local commands inside the Agent working directory, without a shell, with timeout and output limits.
-- `browser_open` / `browser_text` / `browser_click` / `browser_type` / `browser_screenshot`: control a browser through Chrome DevTools Protocol.
+**Owner quick login**: once the owner account is configured on the Bots page, the login page can request a single-use 6-digit code. The owner sends that code to the bot in a private message and the session is issued, after which the bot replies with a receipt showing the source IP and device. The receipt needs no action from the owner — it exists so the message is never silently swallowed: if the code was socially engineered out of them, they see it immediately and can revoke the session and change the password. When the page fails to redirect on its own (polling dropped, the tab was reclaimed by a mobile browser, a different tab was used), typing that same already-sent code into the login page exchanges it directly. That endpoint is rate limited per source so a confirmed pairing cannot be brute-forced away. Codes last 5 minutes, are single-use, and need the bot online. **The server never sends a code on its own**, so there is no anonymous request that can be used to harass the owner.
 
-The Agent exposes one extension catalog across three capability types:
+**Brute-force protection**: password login and password changes share one failure budget per source — after 5 consecutive failures a lockout begins, backing off from 30 seconds up to 30 minutes, returning `429` with `Retry-After`; any success clears it. A global ceiling covers distributed credential stuffing, and lockouts are written to the operation log.
 
-- **Built-in plugins**: every existing official WebUI plugin is present in `extensions.list` by default. Its existing enablement, configuration, and permission behavior remains unchanged.
-- **Skills**: following Agent Skills progressive disclosure, only names and descriptions stay in context; the full `SKILL.md` is loaded with `skills.read` when needed. The owner can ask the Agent to install a complete `SKILL.md`, a public HTTP(S) source, or a ZIP package. Managed skills live under `.agents/skills/` in the Agent work directory, and uninstall moves them to `.trash/` for recovery.
-- **MCP servers**: stdio and Streamable HTTP transports are supported. The owner can install, replace, enable, disable, or uninstall a server in natural language. Configuration is persisted to `.mcp.json` only after a successful connection test, and discovered tools become available in the current session immediately. `env` and `headers` values may reference `${ENV_VAR}`; the config is written with private file permissions. Self-installed stdio servers inherit only a minimal runtime environment, so credentials must be declared explicitly in `env`.
+> [!IMPORTANT]
+> Per-source counting depends on the real client IP. Diana trusts no reverse proxy by default, so behind one every request appears to come from the proxy itself. **Set `DIANA_TRUSTED_PROXIES`** (comma-separated IPs or CIDRs) for public deployments; only then is `X-Forwarded-For` parsed. Session cookies are not marked Secure so plain HTTP works on a LAN — put an HTTPS reverse proxy in front for public deployments.
 
-Mutation tools are exposed only to the owner and run only when the current user message explicitly asks for the change. Instructions from web pages, tool results, Skills, or MCP responses never count as user authorization. Other users can only use already-enabled capabilities within their existing permission scope.
+Exempt paths: the login and quick-login endpoints, `/api/health` (monitoring probes), `/onebot/*` (authenticated by the OneBot access token), and the group management page (its own code flow).
 
-Browser tools require Chrome/Chromium with a remote debugging port, for example:
+## Capabilities and Extensions
 
-```sh
-chrome --remote-debugging-port=9222
-```
+### Admission Control
 
-Set `Agent work dir` to a dedicated reference directory. Avoid pointing it at directories that contain secrets or production data. Command execution is powerful; in production, set `DIANA_AGENT_COMMAND_ALLOWLIST` to only the commands you need.
+Both the Bots page ("admission control") and each group on the Groups page can restrict when the bot replies. Global settings act as defaults, and group settings replace them wholesale rather than merging field by field.
 
-## Manage Plugins In WebUI
+- **Group admission mode**: "deny list" by default — active everywhere except disabled groups. Switching to "allow list" means the bot only works in listed groups and stays silent when pulled into others; the disabled list still applies.
+- **QQ group level threshold**: this is the in-group activity level (Lv.1–6), not the QQ account level (suns/moons/stars, which the OneBot protocol cannot read). Levels accumulate per group.
+- **Reply windows**: an end time earlier than the start means overnight (e.g. `22:00-06:00`); identical values mean always open. Time zones use IANA names such as `Asia/Shanghai`. A quiet-hours notice can be configured and is sent at most once per hour per session.
+- **Exempt / blocked users**: exempt users ignore level and time restrictions; blocked users get no reply anywhere.
+- **Owner bypass**: on by default and best left that way — otherwise a misconfigured window or threshold locks you out too, with no way to recover from the QQ side.
 
-Open the WebUI and go to the bot plugins section:
+Some OneBot implementations omit `level` in message events, so Diana fills it in through `get_group_member_info` when needed and caches it for 10 minutes. **When the level cannot be read, the message is allowed through**: implementations vary wildly, and treating "unknown" as "level 0" would silence an entire group. Strict blocking is available, but know the trade-off.
 
-1. View official built-in plugins.
-2. Built-in capabilities require no installation or removal; enable, disable, and configure them directly.
-3. The built-in Go social media resolver extracts and sends images or videos from Bilibili, YouTube, X, Xiaohongshu, and Douyin. Size, duration, resolution, and gallery limits are configurable in the plugin settings. Zhihu, Weibo, and GitHub links only yield a title and description with no media download; the exclude-platform list labels each entry as either downloadable media or title only.
+### Plugins
 
-   Per-platform cookies, the yt-dlp cookie file, and the proxy address can all be filled in directly from the plugin settings, so there is no need to edit environment variables and restart the container. Values set here take precedence over the matching environment variables. Once saved, read endpoints only return a "configured" flag rather than the plaintext; submitting an empty value keeps the stored credential, and clearing one requires the "Clear" button next to the field.
+The bot plugins area enables, disables, and configures the official built-in plugins; built-in capabilities are never installed or uninstalled.
 
-   The top of the plugins page reports whether `yt-dlp`, `ffmpeg`, and `node` are present. Downloads for the affected platforms fail when one is missing.
-4. The default built-in Go file parser handles QQ file segments and text file links, extracting file text as LLM context.
-5. `Web search` is installed and enabled as a built-in capability. The model can call `web_search.search` directly, using the free Exa MCP endpoint first and an API-key-configured Tavily provider as fallback. It can be disabled or configured, but not installed or removed, and it remains independent of the local Agent switch.
-6. The default built-in `LLM config skill` lets the owner change the active provider and model with natural language in chat, for example: `把提供商切到 gemini`, `把模型换成 gemini-2.5-pro`, or `以后用 anthropic 的 claude-sonnet-4-5`; requested models are validated against the backend model list before they are saved.
+- **Link resolution**: resolves and sends images or video from Bilibili, YouTube, X, Xiaohongshu, and Douyin; Zhihu, Weibo, and GitHub only yield title and description. Size, duration, quality, and gallery limits are adjustable. Per-platform cookies, the yt-dlp cookie file, and proxy addresses can be set in the plugin settings and take precedence over the matching environment variables; once saved, read endpoints only report that a credential is configured. The card also probes `yt-dlp`, `ffmpeg`, and `node`, and can install what is missing through a controlled package manager.
+- **File parsing**: handles QQ file segments and links to text-like files, feeding the content to the LLM as context.
+- **Image text recognition**: runs OCR before images enter the context, using LLM vision transcription, a self-hosted OCR service (PaddleOCR / RapidOCR), or local `tesseract` — the latter two fully offline. Delivery is either "image plus text" or "text only", the latter letting a chat model without vision support handle image messages.
+- **Web search**: installed and enabled by default; it can be disabled and configured but never uninstalled. It is independent of the Agent switch, so local file, command, and browser tools stay closed when the Agent is off.
 
-## Use Third-Party NoneBot Plugins
+### Built-in Agent
 
-The Go process cannot directly load Python NoneBot plugins. To use third-party NoneBot2 plugins, run a separate NoneBot sidecar:
+Once enabled, the bot handles messages with a minimal [Pi Agent](https://github.com/earendil-works/pi)-style state and tool loop: plan, call tools, observe, answer. The runtime is native Go, so complete release packages need no extra Node install.
 
-1. Install third-party plugins in your NoneBot2 project.
-2. Configure the OneBot v11 reverse WebSocket driver in NoneBot.
-3. Enable `NoneBot plugin bridge` in the Diana WebUI bot page.
-4. The default `NoneBot reverse WebSocket` endpoint is:
+Built-in tools: `list_files`, `read_file`, `run_command` (allow-listed commands inside the work directory, no shell, with timeout and output truncation), and `browser_open` / `browser_text` / `browser_click` / `browser_type` / `browser_screenshot` over the Chrome DevTools Protocol.
+
+The Agent manages three kinds of capability from one extension directory: **built-in plugins** (existing enable/disable and permission rules apply), **Skills** (progressive disclosure — only names and descriptions enter the context, with `skills.read` pulling the full `SKILL.md` on demand; installable from a file, an HTTP(S) URL, or a ZIP, and moved to `.trash/` on uninstall so they can be recovered), and **MCP servers** (stdio and Streamable HTTP, written to `.mcp.json` only after a successful connection test, with `${ENV_VAR}` supported in `env` and `headers`).
+
+> [!WARNING]
+> Extension management tools are owner-only and run only when the current user message explicitly asks for the change — web pages, tool results, Skills, and MCP responses can never stand in for user authorization. Point the Agent work directory at a dedicated data directory rather than one holding secrets or production data, and use `DIANA_AGENT_COMMAND_ALLOWLIST` in production to permit only the commands you need.
+
+Browser tools need Chrome/Chromium with remote debugging enabled: `chrome --remote-debugging-port=9222`.
+
+### Third-Party NoneBot Plugins
+
+The Go binary cannot load Python NoneBot plugins directly, so run a NoneBot sidecar: install the plugins in a NoneBot2 project, give it an OneBot v11 reverse WebSocket driver, then enable the `NoneBot plugin bridge` on Diana's QQ bot page (default `ws://127.0.0.1:8080/onebot/v11/ws`). Diana forwards OneBot events to the sidecar, and forwards the plugins' `send_msg`, `get_group_info`, and other API calls back to the active OneBot client.
+
+### Log Centre
+
+The Log Centre page shows persisted operation and error logs: saving or switching LLM configurations, starting and stopping bots, plugin management, and system updates are all recorded with an `actor` (the WebUI defaults to `web:<client IP>`; a gateway can pass `X-Diana-Actor`, `X-Operator`, or `X-Forwarded-User`; in-chat model commands record `qq:<user id>`).
 
 ```text
-ws://127.0.0.1:8080/onebot/v11/ws
+GET /api/logs?kind=operation&limit=100
+GET /api/logs?kind=error&limit=100
 ```
 
-Diana forwards events received from the OneBot client to the NoneBot sidecar. When third-party plugins call OneBot APIs such as `send_msg` or `get_group_info`, Diana forwards those calls to the current OneBot v11 client. This keeps third-party plugins running in their native NoneBot2 environment.
+These structured logs live in the SQLite database at `APP_DB_PATH`; `LOG_PATH` still controls the plain runtime log file.
 
-## Common Environment Variables
+## Environment Variables
+
+Anything configurable in the WebUI needs no environment variable. The common ones are below; see [`.env.example`](./.env.example) and the [configuration docs](https://suink.github.io/Diana/configuration.html) for the rest.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PORT` | `18080` | WebUI and OneBot endpoint listen port |
-| `FRONTEND_DIST` | auto-detected | Frontend build output directory; defaults to `frontend-next/dist` |
-| `LOG_PATH` | empty | Log file path; when set, logs are written to both stdout and the file |
-| `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
-| `DIANA_MEDIA_DIR` | `data/media` | Where inbound images are persisted; vision requests submit the local file as base64 |
-| `DIANA_MEDIA_MAX_MB` | `10` | Per-image download limit |
-| `DIANA_MEDIA_CACHE_MB` | `512` | Total cache size; least recently used files are evicted past this |
-| `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Diana media URL reachable by the OneBot v11 client; use `http://diana:18080/media/resolver` for separate containers |
-| `DIANA_BILI_SESSDATA` | empty | Bilibili `SESSDATA` cookie for protected content; WebUI plugin settings take precedence |
-| `DIANA_DOUYIN_CK` | empty | Douyin cookie; required for Douyin resolution, WebUI plugin settings take precedence |
-| `DIANA_XHS_CK` | empty | Xiaohongshu cookie; required for Xiaohongshu resolution, WebUI plugin settings take precedence |
-| `DIANA_YTDLP_COOKIES` | empty | Path to a Netscape cookie file for yt-dlp; WebUI plugin settings take precedence |
-| `DIANA_RESOLVER_PROXY` | empty | Proxy used by the social resolver and yt-dlp; WebUI plugin settings take precedence |
-| `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database path |
-| `DIANA_RELEASE_UPDATE_ENABLED` | `true` | Allow complete Release packages to download, verify, back up, and self-update; source and container deployments do not enable package replacement |
-| `DIANA_ADMIN_USERNAME` | securely generated | Initial administrator username; defaults to `diana#` followed by 16 random characters, then SQLite credentials take precedence |
-| `DIANA_ADMIN_PASSWORD` | securely generated | Initial administrator password; then SQLite credentials take precedence |
-| `LLM_PROVIDER` | `openai_compatible` | LLM provider |
+| `PORT` | `18080` | Port for the WebUI and the OneBot endpoint |
+| `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database |
+| `LOG_PATH` | empty | Log file path; when set, output goes to both stdout and the file |
+| `DIANA_TRUSTED_PROXIES` | empty | Trusted reverse proxy IPs or CIDRs, comma separated; `X-Forwarded-For` is parsed only when set |
+| `DIANA_ADMIN_USERNAME` | random | Administrator account for the first initialization only |
+| `DIANA_ADMIN_PASSWORD` | random | Administrator password for the first initialization only |
+| `LLM_PROVIDER` | `openai_compatible` | `openai_compatible` / `gemini` / `anthropic` |
 | `LLM_API_KEY` | empty | LLM API key |
-| `LLM_BASE_URL` | empty | Custom OpenAI-compatible base URL |
-| `LLM_MODEL` | empty | Model ID (no default for openai_compatible; pick in WebUI or set here) |
-| WebUI LLM profiles | multi-profile | Supports named LLM configuration profiles and switching the active one |
-| `LLM_USER_AGENT` | `codex-cli/0.142.0` | OpenAI-compatible User-Agent; can be used to mimic Codex CLI |
-| `LLM_IMAGE_MODEL` | provider default | Image generation model; defaults to `gpt-image-1` for OpenAI-compatible and `imagen-4.0-generate-001` for Gemini |
-| `LLM_TEMPERATURE` | empty | temperature |
-| `LLM_MAX_OUTPUT_TOKENS` | `1024` | Responses API maximum output tokens |
-| `LLM_TIMEOUT_MS` | `30000` | LLM request timeout in milliseconds |
-| `QQBOT_ENABLED` | `false` | Enable the bot automatically on startup |
-| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | Reverse WebSocket URL for the OneBot v11 client |
+| `LLM_BASE_URL` | empty | Custom base URL for OpenAI-compatible endpoints |
+| `LLM_MODEL` | empty | Model ID (no default for `openai_compatible`) |
+| `QQBOT_ENABLED` | `false` | Start the bot automatically on launch |
+| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | Reverse WebSocket address for OneBot v11 clients |
 | `ONEBOT_ACCESS_TOKEN` | empty | OneBot access token |
-| `NONEBOT_BRIDGE_ENABLED` | `false` | Enable the third-party NoneBot plugin bridge |
-| `NONEBOT_BRIDGE_ENDPOINT` | `ws://127.0.0.1:8080/onebot/v11/ws` | Reverse WebSocket endpoint for the NoneBot sidecar |
-| `NONEBOT_BRIDGE_TOKEN` | empty | NoneBot bridge access token |
-| `QQBOT_QQ` | empty | Bot QQ number |
-| `DIANA_OWNER_ID` | empty | Owner QQ number |
-| `DIANA_GROUP_TRIGGERS` | `嘉然,然然,Diana,diana` | Group chat trigger aliases |
-| `DIANA_SYSTEM_PROMPT` | built-in prompt | Bot system prompt |
-| `DIANA_MAX_INPUT_CHARS` | `2000` | Max input characters per request |
-| `DIANA_MAX_REPLY_CHARS` | `3500` | Max reply characters per request |
-| `DIANA_DIRECT_REPLY_CHUNK_SIZE` | `500` | Text chunk size for direct sends |
-| `DIANA_MAX_BOT_CONCURRENCY` | `5` | Global concurrency |
+| `QQBOT_QQ` | empty | The bot's QQ number |
+| `DIANA_OWNER_ID` | empty | Owner QQ number (numeric user ID on Telegram) |
+| `DIANA_GROUP_TRIGGERS` | `嘉然,然然,Diana,diana` | Group chat trigger words |
 | `DIANA_AGENT_ENABLED` | `false` | Enable the built-in Agent |
-| `DIANA_AGENT_WORK_DIR` | `.` | Working directory available to Agent tools |
-| `AGENT_WORK_DIR` | `.` | Compatibility alias for `DIANA_AGENT_WORK_DIR` |
-| `DIANA_AGENT_MAX_STEPS` | `4` | Max Agent tool-loop steps per reply, capped at `8` |
-| `DIANA_AGENT_COMMAND_ALLOWLIST` | common dev commands | Commands available to Agent `run_command`, comma-separated; `*` allows all commands |
-| `DIANA_AGENT_COMMAND_TIMEOUT_MS` | `10000` | Local command timeout, capped at `60000` |
-| `DIANA_AGENT_SKILL_ROOTS` | `.agents/skills,skills` | Comma-separated Skill search roots; self-installed packages always go to `.agents/skills` under the Agent work directory |
-| `DIANA_AGENT_MCP_CONFIG` | `.mcp.json` | MCP server config path; relative paths resolve from the Agent work directory |
-| `DIANA_AGENT_BROWSER_CDP_URL` | `http://127.0.0.1:9222` | Chrome DevTools URL for browser tools |
-| `AGENT_BROWSER_CDP_URL` | same | Compatibility alias for `DIANA_AGENT_BROWSER_CDP_URL` |
-| `DIANA_AGENT_BROWSER_TIMEOUT_MS` | `15000` | Browser tool timeout, capped at `60000` |
 
-## systemd Example
+<details>
+<summary>All environment variables</summary>
 
-Create the log directory first:
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FRONTEND_DIST` | auto-detected | Frontend build output directory; falls back to `frontend-next/dist` |
+| `DIANA_SEND_RETRY_ATTEMPTS` | `3` | Send retries per message (1–5) |
+| `DIANA_SEND_CHUNK_INTERVAL_MS` | `300` | Delay between chunks of a split reply, in milliseconds |
+| `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | Prefix for in-chat error notices |
+| `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
+| `DIANA_MEDIA_DIR` | `data/media` | Inbound image storage; vision submits base64 from these local files |
+| `DIANA_MEDIA_MAX_MB` | `10` | Download limit per inbound image |
+| `DIANA_MEDIA_CACHE_MB` | `512` | Total image directory budget; least recently used files are evicted |
+| `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Media address reachable by OneBot clients; set to `http://diana:18080/media/resolver` for split containers |
+| `DIANA_BILI_SESSDATA` | empty | `SESSDATA` from Bilibili login cookies; WebUI plugin settings win |
+| `DIANA_DOUYIN_CK` | empty | Douyin cookie, required for Douyin parsing; WebUI plugin settings win |
+| `DIANA_XHS_CK` | empty | Xiaohongshu cookie, required for its parsing; WebUI plugin settings win |
+| `DIANA_YTDLP_COOKIES` | empty | Path to a yt-dlp Netscape cookie file; WebUI plugin settings win |
+| `DIANA_RESOLVER_PROXY` | empty | Proxy for social media parsing and yt-dlp; WebUI plugin settings win |
+| `DIANA_RELEASE_UPDATE_ENABLED` | `true` | Allow downloading, verifying, backing up, and self-updating from complete release packages; never enabled for source or container deployments |
+| `LLM_USER_AGENT` | `codex-cli/0.142.0` | User-Agent for OpenAI-compatible endpoints |
+| `LLM_IMAGE_MODEL` | provider default | Image generation model; `gpt-image-1` for OpenAI-compatible, `imagen-4.0-generate-001` for Gemini |
+| `LLM_TEMPERATURE` | empty | Temperature |
+| `LLM_MAX_OUTPUT_TOKENS` | `1024` | Max output tokens for the Responses API |
+| `LLM_TIMEOUT_MS` | `30000` | LLM request timeout in milliseconds |
+| `NONEBOT_BRIDGE_ENABLED` | `false` | Enable the third-party NoneBot plugin bridge |
+| `NONEBOT_BRIDGE_ENDPOINT` | `ws://127.0.0.1:8080/onebot/v11/ws` | Reverse WebSocket address of the NoneBot sidecar |
+| `NONEBOT_BRIDGE_TOKEN` | empty | Access token for the NoneBot bridge |
+| `DIANA_SYSTEM_PROMPT` | built-in prompt | Bot system prompt |
+| `DIANA_MAX_INPUT_CHARS` | `2000` | Max characters per input |
+| `DIANA_MAX_REPLY_CHARS` | `3500` | Max characters per reply |
+| `DIANA_DIRECT_REPLY_CHUNK_SIZE` | `500` | Characters per chunk when splitting text replies |
+| `DIANA_MAX_BOT_CONCURRENCY` | `5` | Global concurrency limit |
+| `DIANA_AGENT_WORK_DIR` / `AGENT_WORK_DIR` | `.` | Work directory the Agent may access |
+| `DIANA_AGENT_MAX_STEPS` | `4` | Max tool loop steps per reply, up to `8` |
+| `DIANA_AGENT_COMMAND_ALLOWLIST` | common dev commands | Commands `run_command` may execute, comma separated; `*` allows everything |
+| `DIANA_AGENT_COMMAND_TIMEOUT_MS` | `10000` | Local command timeout, up to `60000` |
+| `DIANA_AGENT_SKILL_ROOTS` | `.agents/skills,skills` | Skill search directories, comma separated; self-installed Skills always land in `.agents/skills` under the work directory |
+| `DIANA_AGENT_MCP_CONFIG` | `.mcp.json` | MCP server config file; relative paths resolve against the Agent work directory |
+| `DIANA_AGENT_BROWSER_CDP_URL` / `AGENT_BROWSER_CDP_URL` | `http://127.0.0.1:9222` | Chrome DevTools address for the browser tools |
+| `DIANA_AGENT_BROWSER_TIMEOUT_MS` | `15000` | Browser tool timeout, up to `60000` |
+
+</details>
+
+## Deployment Recipes
+
+<details>
+<summary>systemd</summary>
 
 ```sh
 sudo mkdir -p /var/log/diana
@@ -463,7 +369,6 @@ Environment=QQBOT_QQ=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini
-Environment=LLM_USER_AGENT=codex-cli/0.142.0
 ExecStart=/opt/diana/diana-webui
 Restart=always
 RestartSec=3
@@ -472,44 +377,78 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-## Development Commands
+</details>
 
-Backend tests:
-
-```sh
-go test ./...
-```
-
-Frontend development:
+<details>
+<summary>Cross-compiling</summary>
 
 ```sh
-cd frontend-next
-npm run dev
+# macOS
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+
+# Linux
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
 ```
 
-Production build:
+```powershell
+# Windows
+$env:GOOS="windows"; $env:GOARCH="amd64"; $env:CGO_ENABLED="0"
+go build -o dist\diana-webui.exe .\cmd\webui
+```
+
+Releases also ship bare binaries per platform, but **a bare binary contains no frontend assets** — most users want the complete package instead.
+
+</details>
+
+## Development
 
 ```sh
-cd frontend-next
-npm run build
-cd ..
-go build -o dist/diana-webui ./cmd/webui
+go test ./...                 # backend tests
+make dev                      # backend plus the Vite dev server
+make deps                     # install frontend dependencies
+make run                      # build the frontend and run the backend against it
+make build                    # production build
 ```
+
+The frontend lives in `frontend-next/` (Vue + TypeScript) and is the only supported console: dashboard overview (connection checklist, today/24h message statistics, live event stream), SSE push, a three-step setup wizard, and a mobile layout. See [frontend-next/README.md](./frontend-next/README.md).
+
+Supporting backend endpoints:
+
+```text
+GET /api/stats    # dashboard statistics (in-process counters, reset on restart)
+GET /api/events   # SSE stream: status / stats / bot_event
+GET /api/health   # version and uptime
+```
+
+Before submitting, make sure `gofmt` is clean, `go mod tidy` produces no diff, and both `go test ./...` and the frontend `vue-tsc` pass — CI gates on all of them. Conventions are documented in [AGENTS.md](./AGENTS.md).
 
 ## Project Layout
 
 ```text
 .
-├── cmd/webui/              # Gin WebUI and OneBot endpoint entrypoint
-├── frontend-next/          # Supported Vue + TypeScript WebUI
-├── model/llm/              # Unified LLM interface and provider adapters
-├── model/assistant/            # QQ bot runtime, OneBot channel, and plugin system
-├── webui/                  # WebUI API handlers
-├── .github/workflows/      # GitHub Actions CI/CD
-├── LICENSE
-└── go.mod
+├── cmd/webui/          # Gin WebUI and OneBot endpoint entry point
+├── model/assistant/    # Bot runtime, channel adapters, plugins, and Agent
+├── model/llm/          # Unified LLM interface and provider adapters
+├── model/storage/      # SQLite storage and message history
+├── webui/              # WebUI API handlers and authentication
+├── frontend-next/      # Vue + TypeScript console
+├── docs/               # GitHub Pages documentation site
+├── scripts/            # Installer and development scripts
+└── .github/workflows/  # CI and Pages deployment
 ```
+
+## Documentation
+
+| Page | Contents |
+| --- | --- |
+| [Deploy](https://suink.github.io/Diana/deploy.html) | One-click install, complete packages, Docker, source builds, first login |
+| [Configuration](https://suink.github.io/Diana/configuration.html) | Channels, model assignment, group policies, Agent tools, security boundaries |
+| [Implementation](https://suink.github.io/Diana/implementation.html) | Architecture, the message decision chain, memory layers, media and storage |
+| [Operations](https://suink.github.io/Diana/operations.html) | Updates and rollback, logs and backups, troubleshooting, release flow |
+| [Live demo](https://suink.github.io/Diana/demo/) | The real console with mock data, not connected to a live bot |
 
 ## License
 
-This project uses the `Limited Redistribution License (SuInk)`. See [LICENSE](./LICENSE).
+This project uses the `Limited Redistribution License (SuInk)`; see [LICENSE](./LICENSE).

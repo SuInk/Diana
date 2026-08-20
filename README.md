@@ -1,74 +1,100 @@
+<div align="center">
+
 # Diana
 
-[English](./README.en.md)
+**可自托管的多平台 AI 助手 —— QQ 与 Telegram 同时在线，数据留在自己的机器上。**
 
-[官网与文档](https://suink.github.io/Diana/) · [在线演示](https://suink.github.io/Diana/demo/) · [下载最新版本](https://github.com/SuInk/Diana/releases/latest)
+[![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
+[![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-Limited%20Redistribution-informational)](./LICENSE)
 
-Diana 是一个 Go 语言多平台 AI 助手服务，内置 LLM 兼容层、平台适配层、Gin WebUI 和插件管理。当前自带 QQ 的 OneBot v11 适配器；WebUI 可管理多个助手实例、模型、平台连接、触发词和内置插件。
+[官网与文档](https://suink.github.io/Diana/) · [在线演示](https://suink.github.io/Diana/demo/) · [下载最新版本](https://github.com/SuInk/Diana/releases/latest) · [English](./README.en.md)
 
-## 安装要求
+</div>
 
-- 使用 QQ 适配器时需要支持 OneBot v11 反向 WebSocket 的客户端
-- 一键安装支持 Linux、macOS 的 amd64/arm64，以及 64 位 Windows；无需 Go、Node.js、npm 或源码
-- 使用 Docker 部署时需要 Docker 或 Docker Compose
-- 只有手动从源码构建时才需要 Go `1.26.5`、Node.js `22` 和 npm
+<br />
 
-## 一键安装（推荐）
+<img src="./docs/assets/diana-webui-overview.png" alt="Diana 控制台总览：通道状态、消息统计、系统资源与实时事件流" width="100%" />
 
-安装脚本会自动识别系统与架构，下载最新稳定版完整包，核对 `SHA256SUMS`，生成本地管理凭据并启动 Diana。重复执行同一命令即可安全升级；升级前会备份数据库和当前运行文件，健康检查失败时自动恢复。
+## 目录
 
-Linux / macOS：
+- [这是什么](#这是什么)
+- [特性](#特性)
+- [快速开始](#快速开始)
+- [首次配置](#首次配置)
+- [通道支持](#通道支持)
+- [访问安全](#访问安全)
+- [能力与扩展](#能力与扩展)
+- [环境变量](#环境变量)
+- [部署形态](#部署形态)
+- [开发](#开发)
+- [项目结构](#项目结构)
+- [文档](#文档)
+- [许可证](#许可证)
+
+## 这是什么
+
+Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、平台适配层、Gin WebUI 和插件系统，编译成单个二进制运行。当前自带 QQ（OneBot v11）和 Telegram 两类通道，WebUI 可以管理多个机器人配置、模型分配、群聊策略、插件与内置 Agent。
+
+配置、记忆、日志都存在本机的 SQLite 里，不依赖任何托管服务；每条消息为什么回复、为什么不回复、用了哪些工具、花了多少 token，都能在事件中心查到。
+
+## 特性
+
+| | |
+| --- | --- |
+| **多通道同时在线** | QQ 与 Telegram 并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享 |
+| **模型职责拆分** | 对话、识图、意图识别、图片生成分别绑定 Provider 与模型，保存前用真实请求验证 |
+| **内置联网搜索** | 无需安装插件，面对时效性内容可以先检索再回答；Exa MCP 优先，Tavily 兜底 |
+| **图片文字识别** | 图片可同时走视觉模型与 OCR（LLM 转写 / 自托管 OCR 服务 / 本地 tesseract）；对话模型不支持看图时也能只收识别后的文字 |
+| **群级回复策略** | 每个群独立设置回复时段、黑白名单、触发词、人设、QQ 群等级门槛和工具权限 |
+| **长期记忆与检索** | 近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，控制 token 消耗 |
+| **内置 Agent** | Pi 风格的最小工具循环，可调用文件、命令、浏览器工具，并按需装载 Skills 与 MCP 服务 |
+| **完整事件审计** | 记录回复原因、模型调用链、token 与错误；操作日志区分操作人 |
+| **一键安装与自更新** | 安装器校验 SHA-256、备份数据、健康检查失败自动回滚；控制台可直接升级 |
+
+## 快速开始
+
+### 一键安装（推荐）
+
+安装脚本自动识别系统与架构，下载最新稳定版完整包，核对 `SHA256SUMS`，生成本地管理凭据并启动。**重复执行同一条命令即可安全升级**：升级前备份数据库和当前运行文件，健康检查失败时自动恢复。
 
 ```sh
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
 
-Windows PowerShell：
-
 ```powershell
+# Windows PowerShell
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 ```
 
-安装完成后访问：
+完成后打开 `http://127.0.0.1:18080`。首次生成的管理员账号和密码会显示在终端，并保存在安装目录的 `runtime.env`——请妥善保存，不要公开该文件。
 
-```text
-http://127.0.0.1:18080
-```
+默认安装目录：Linux / macOS 为 `~/.local/share/diana`，Windows 为 `%LOCALAPPDATA%\Diana`。
 
-Linux 和 macOS 默认安装到 `~/.local/share/diana`，Windows 默认安装到 `%LOCALAPPDATA%\Diana`。首次生成的管理员账号和密码会显示在终端，并保存在安装目录的 `runtime.env`；请妥善保存，不要公开该文件。
-
-可以通过环境变量选择版本、安装目录、端口或仅安装不启动。例如：
+可以用环境变量选择版本、目录、端口或仅安装不启动：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
   DIANA_VERSION=v0.8.9 DIANA_INSTALL_DIR=/opt/diana DIANA_PORT=18081 sh
 ```
 
-### Release 完整包
-
-不使用安装脚本时，也可以从 [GitHub Releases](https://github.com/SuInk/Diana/releases) 下载完整包。Linux/macOS 使用 `.tar.gz`，Windows 使用 `.zip`；包内包含后端二进制、`frontend-next/dist` 和启动脚本，无需额外构建。Unix 平台运行 `run.sh`，Windows 平台运行 `run.bat`。
-
-Release 同时提供 `SHA256SUMS`。下载后应先校验再解压或替换程序；强制更新也不会绕过该校验：
+### Docker
 
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing
+git clone https://github.com/SuInk/Diana.git && cd Diana
+cp docker-compose.yml docker-compose.local.yml
+# 修改 docker-compose.local.yml 中的 token、QQ 号和 LLM 配置
+docker compose -f docker-compose.local.yml up -d --build
 ```
 
-macOS 可使用 `shasum -a 256 <文件名>` 与 `SHA256SUMS` 对照；Windows 可使用 `Get-FileHash <文件名> -Algorithm SHA256`。
-
-从完整 Release 包运行时，WebUI 可直接安装后续稳定版本：后端会下载当前系统和架构对应的完整包，校验、备份并切换版本；探活失败会自动恢复数据库与旧版本。备份和最近一次结果保存在安装目录的 `.diana-updates` 下。容器部署仍由镜像更新器负责，源码 checkout 仍使用 Git 更新流程。
-
-## Docker 部署
-
-构建镜像：
+<details>
+<summary><code>docker run</code> 方式</summary>
 
 ```sh
 docker build -t diana:latest .
-```
 
-运行容器：
-
-```sh
 docker run -d \
   --name diana \
   --restart unless-stopped \
@@ -84,217 +110,69 @@ docker run -d \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
-  -e LLM_USER_AGENT=codex-cli/0.142.0 \
   diana:latest
 ```
 
-Docker Compose：
+</details>
+
+容器启动后同样访问 `http://127.0.0.1:18080`；OneBot v11 客户端连接 `ws://127.0.0.1:18080/onebot/v11/ws`。客户端与 Diana 不在同一台机器时，把 `127.0.0.1` 换成 Diana 宿主机的 IP 或域名。
+
+### Release 完整包
+
+不使用安装脚本时，可从 [GitHub Releases](https://github.com/SuInk/Diana/releases) 下载完整包（Linux/macOS 用 `.tar.gz`，Windows 用 `.zip`）。包内含后端二进制、`frontend-next/dist` 和启动脚本，无需额外构建：Unix 运行 `run.sh`，Windows 运行 `run.bat`。
+
+下载后先校验再替换程序，强制更新也不会绕过校验：
 
 ```sh
-cp docker-compose.yml docker-compose.local.yml
-# 修改 docker-compose.local.yml 中的 token、QQ 号和 LLM 配置
-docker compose -f docker-compose.local.yml up -d --build
+sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-容器启动后访问：
+> macOS 用 `shasum -a 256 <文件名>`，Windows 用 `Get-FileHash <文件名> -Algorithm SHA256`。
 
-```text
-http://127.0.0.1:18080
-```
+从完整 Release 包运行时，WebUI 可直接安装后续稳定版：下载对应平台的完整包，校验、备份并切换，探活失败自动恢复数据库与旧版本。备份保存在安装目录的 `.diana-updates` 下。容器部署由镜像更新器负责，源码 checkout 走 Git 更新流程。
 
-OneBot v11 客户端连接宿主机暴露的反向 WebSocket 地址：
+### 从源码构建
 
-```text
-ws://127.0.0.1:18080/onebot/v11/ws
-```
-
-如果 OneBot v11 客户端和 Diana 不在同一台机器，`127.0.0.1` 要换成 Diana 宿主机 IP 或域名。
-
-## 手动从源码构建
-
-源码构建主要面向开发、调试和自定义部署。普通用户优先使用上面的一键安装脚本或 Release 完整包。
+面向开发和自定义部署。需要 Go `1.26.5`、Node.js `22` 和 npm。
 
 ```sh
-git clone <your-repo-url> diana
-cd diana
-
+git clone https://github.com/SuInk/Diana.git && cd Diana
 go mod download
 
-cd frontend-next
-npm ci
-npm run build
-cd ..
-
+cd frontend-next && npm ci && npm run build && cd ..
 go build -o dist/diana-webui ./cmd/webui
-```
 
-启动：
-
-```sh
 ./dist/diana-webui
 ```
 
-默认 WebUI：
-
-```text
-http://127.0.0.1:18080
-```
-
-## macOS 部署
-
-Apple Silicon：
+本机开发可以一条命令同时起后端和 Vite 前端：
 
 ```sh
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-Intel Mac：
-
-```sh
-GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-也可以直接下载 GitHub Release 中的 `darwin-arm64` 或 `darwin-amd64` 二进制。裸二进制不包含前端资源，普通用户请下载对应平台的 Release 完整包。
-
-## Linux 部署
-
-amd64：
-
-```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-arm64：
-
-```sh
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-后台运行建议使用下面的 systemd 示例。
-
-## Windows 部署
-
-PowerShell：
-
-```powershell
-$env:GOOS="windows"
-$env:GOARCH="amd64"
-$env:CGO_ENABLED="0"
-go build -o dist\diana-webui.exe .\cmd\webui
-.\dist\diana-webui.exe
-```
-
-Windows 下也可以直接下载 GitHub Release 中的 `windows-amd64.exe`。裸二进制不包含前端资源，普通用户请下载对应平台的 Release 完整包。
-
-## 快速运行
-
-开发或本机测试可以一键同时启动 Go 后端和 Vite 前端：
-
-```sh
-make dev
-```
-
-默认后端是 `http://127.0.0.1:18080`，前端是 `http://127.0.0.1:5173`；Vite 会代理 `/api` 和 `/onebot` 到后端。端口可用环境变量调整：
-
-```sh
+make dev                                   # 后端 18080，前端 5173
 make dev BACKEND_PORT=18081 FRONTEND_PORT=5174
+node scripts/dev.mjs                       # 没装 make 时
 ```
 
-没有安装 `make` 时，也可以直接使用跨平台 Node 脚本：
+## 首次配置
 
-```sh
-node scripts/dev.mjs
-```
+1. **登录控制台** —— 打开 `http://127.0.0.1:18080`，用终端给出的账号密码登录。
+2. **配置模型** —— 在「LLM 配置」页填 Provider 与 API Key，同步模型列表后再选默认模型。也可以用环境变量预置：
 
-只运行后端或生产构建时：
+   ```sh
+   LLM_PROVIDER=openai_compatible \
+   LLM_API_KEY=your-key \
+   LLM_BASE_URL=https://example.com/v1 \
+   LLM_MODEL=gpt-4o-mini \
+   LLM_IMAGE_MODEL=gpt-image-1 \
+   ./dist/diana-webui
+   ```
 
-```sh
-make backend
-make build
-```
+   支持的 provider：`openai_compatible`、`gemini`、`anthropic`。支持命名保存多套配置并切换激活项。
+3. **连接机器人** —— 在「机器人」页创建配置，填平台账号、主人 ID 和触发词。
+4. **检查事件** —— 发一条消息，在事件中心确认回复原因与模型调用链。
 
-## 配置 LLM
-
-可以在 WebUI 中配置，也可以使用环境变量：
-
-```sh
-LLM_PROVIDER=openai_compatible \
-LLM_API_KEY=your-key \
-LLM_BASE_URL=https://example.com/v1 \
-LLM_MODEL=gpt-4o-mini \
-LLM_USER_AGENT=codex-cli/0.142.0 \
-LLM_IMAGE_MODEL=gpt-image-1 \
-LLM_MAX_OUTPUT_TOKENS=1024 \
-./dist/diana-webui
-```
-
-支持的 provider：
-
-- `openai_compatible`
-- `gemini`
-- `anthropic`
-
-WebUI 的 LLM 配置页会直接显示当前保存的 API Key，方便本地控制台复制和修改；普通 `GET /api/llm/config` 默认仍不返回密钥，前端会用 `include_secrets=true` 显式读取完整配置。
-
-## WebUI 访问安全
-
-WebUI 从首次启动起强制登录，本机和公网访问使用相同规则。默认管理员账号会安全随机生成，格式为 `diana#` 加 16 位随机字符串，并持久化到 SQLite。
-
-- 首次启动未提供 `DIANA_ADMIN_PASSWORD` 时，Diana 会生成安全随机密码；随机账号和密码仅在该次启动的标准错误日志中显示一次。
-- 也可在首次启动时注入 `DIANA_ADMIN_USERNAME=diana#你的账号` 和 `DIANA_ADMIN_PASSWORD=你的密码`；已有凭据时不会覆盖数据库中的账号或密码。
-- 登录后可在设置页的「访问安全」中修改账号和密码（账号须以 `diana#` 开头，密码至少 8 位）。
-
-开启后所有 `/api` 接口需要登录，会话有效期 30 天；改密会使全部已登录会话失效。
-
-**管理员快速登录**：在「机器人」页开启并配置主人账号后，登录页可获取一个 6 位一次性验证码，主人私聊发给机器人即完成登录，随后机器人回一条带来源 IP 与设备的回执。回执不需要主人做任何动作，作用是别让这条消息被静默吞掉——万一验证码是被诱导转发的，主人当场就能发现并去踢掉会话、改密码。网页没能自动跳转时（轮询被网络掐断、页面被手机浏览器回收、换了个标签页打开），把已经私聊发出的那个验证码填进登录页的输入框即可直接登录，验证码就在主人自己发出去的那条消息里。该兑换接口按来源限流，防止靠穷举抢走已确认的配对。验证码 5 分钟有效、一次性使用，需要当前机器人在线。服务端不会主动发出验证码，因此没有匿名请求能触发的骚扰面。
-
-**登录爆破防护**：密码登录与改密共用一份失败预算，按来源计数：连续失败 5 次后开始锁定，退避从 30 秒逐级翻倍到 30 分钟封顶，返回 `429` 并带 `Retry-After`，任意一次成功即清零；另有一层全局兜底挡分布式撞库。锁定会写入操作日志。注意按来源计数依赖真实客户端 IP：默认不信任任何反向代理，套了反代之后所有请求的来源地址都是反代自己，需用 `DIANA_TRUSTED_PROXIES`（逗号分隔的 IP 或 CIDR）声明可信代理，声明后才会解析 `X-Forwarded-For`。
-
-豁免路径：登录及管理员快速登录端点、`/api/health`（监控探活）、`/onebot/*`（由 OneBot access token 单独鉴权）、群管理页（自有群验证码流程）。会话 cookie 未设 Secure 以兼容内网 HTTP，公网部署请套 HTTPS 反向代理。
-
-**多机器人与平台**：机器人页可创建、复制和切换多个机器人配置，每个配置独立保存平台、账号、主人、人设、触发规则及模型分配；列表按聊天平台分类，可用顶部标签筛选。所有启用的 QQ 与 Telegram 配置会同时在线，回复、图片和提醒始终路由回消息来源通道。跨平台会话上下文默认按配置隔离，也可在机器人列表顶部关闭隔离。
-
-当前支持两类平台：
-
-| 分类 | 平台 | 接入方式 |
-| --- | --- | --- |
-| QQ | OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana |
-| Telegram | Telegram | 官方 Bot API 长轮询，由 Diana 主动出站连接 |
-
-Telegram 只需要 BotFather 给的 Bot Token，不需要公网地址，也不用配置 webhook；国内网络通常还要在机器人页填写代理地址。部署了本地 Bot API server 时可填自建地址，绕过 50MB 上传限制。
-
-两个平台的能力差异：
-
-- **群等级门槛只对 QQ 生效**。Telegram 没有群等级这个概念，准入设置里的等级门槛在 Telegram 机器人上不显示，后台也不会去查群成员信息。
-- **语音消息、@某人** 依赖 OneBot 的 CQ 码，在 Telegram 上会自然降级：欢迎语正文照发，但不会 @ 到人。
-- **本地媒体**：OneBot 侧由接入端来拉 Diana 的 `/media/resolver` 地址；Telegram 拉不到本机地址，改为直接 multipart 上传。
-
-## WebUI 日志中心
-
-WebUI 的“日志中心”页可查看持久化的操作日志和错误日志。操作日志会记录 LLM 配置保存/切换、机器人启停、插件管理、系统更新等动作；错误日志会记录这些接口返回失败时的错误信息。日志会带 `actor` 操作人：WebUI 默认记录 `web:<客户端 IP>`，也可由网关通过 `X-Diana-Actor`、`X-Operator`、`X-Forwarded-User` 等请求头传入；机器人内置的聊天模型配置命令记录 `qq:<用户 QQ>`。
-
-```text
-GET /api/logs?kind=operation&limit=100
-GET /api/logs?kind=error&limit=100
-```
-
-这些结构化日志存储在 `APP_DB_PATH` 指向的 SQLite 数据库中；`LOG_PATH` 仍用于普通运行日志文件输出。
-
-## 配置 OneBot v11
-
-本项目直接提供 OneBot v11 反向 WebSocket endpoint：
-
-```text
-ws://127.0.0.1:18080/onebot/v11/ws
-```
-
-在兼容客户端中添加 OneBot v11 反向 WebSocket，连接地址填写上面的地址。如果配置了 access token，客户端和 Diana 必须使用同一个 token。NapCat、Lagrange.Core、go-cqhttp 等实现使用同一平台配置，不再作为不同平台分别创建。
-
-机器人启动示例：
+<details>
+<summary>用环境变量直接拉起一个 QQ 机器人</summary>
 
 ```sh
 QQBOT_ENABLED=true \
@@ -305,149 +183,169 @@ DIANA_GROUP_TRIGGERS=嘉然,然然,Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
 LLM_MODEL=gpt-4o-mini \
-LLM_USER_AGENT=codex-cli/0.142.0 \
 ./dist/diana-webui
 ```
 
-启动后，私聊会直接触发；群聊中 `@机器人` 或以触发词开头会触发。
+启动后私聊直接触发；群聊中 `@机器人` 或以触发词开头才触发。
 
-## 准入控制
+</details>
 
-「机器人」页的「准入控制」和「群管理」页的每个群，都可以限制机器人在什么条件下才回复。全局设置为默认值，群级设置整体覆盖全局（不是逐字段合并）。
+## 通道支持
 
-- **群准入模式**：默认「黑名单」，除禁用群外都工作，与旧版行为一致；切到「白名单」后只在列出的群工作，被拉进其它群不会回话。白名单模式下禁用群列表仍然生效。
-- **QQ 群等级门槛**：指群内活跃度等级（Lv.1~6），不是 QQ 账号等级（太阳月亮星星，OneBot 协议拿不到）。等级按群独立累积，同一个人在不同群的等级不同。
-- **回复时段**：结束时间早于开始时间表示跨夜，例如 `22:00-06:00`；两者相同视为全天开放。时区填 IANA 名称（如 `Asia/Shanghai`），留空用服务器本地时区。静默期可以配一句提示语，同一会话每小时最多提示一次。
-- **豁免 / 屏蔽用户**：豁免用户无视等级与时段；屏蔽用户在群聊和私聊都不回。
-- **主人绕过**：默认开启，建议保持——否则时段或等级配错时，你自己也会被挡在门外，QQ 侧没有补救手段。
+| 分类 | 平台 | 接入方式 |
+| --- | --- | --- |
+| QQ | OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana（NapCat、Lagrange.Core、go-cqhttp 等同属这一类） |
+| Telegram | Telegram Bot API | 官方长轮询，由 Diana 主动出站连接，不需要公网地址和 webhook |
 
-关于群等级的两点说明：
+所有启用的配置会同时在线。Telegram 只需要 BotFather 给的 Bot Token；国内网络通常还要在机器人页填代理地址，部署了本地 Bot API server 可填自建地址绕过 50MB 上传限制。
 
-部分 OneBot 实现不会在消息事件里带 `level`，Diana 会在需要时通过 `get_group_member_info` 补齐，结果缓存在内存里（按「群号+QQ号」区分，10 分钟有效，重启后靠日常聊天自动重建）。
+两个平台的能力差异：
 
-拿不到等级时**默认放行**。各实现返回的 `level` 差异很大，把「读不到」当成「等级 0」去拒绝会让整个群失联。需要严格拦截时可以把「等级读不到时」改成「拦截」，但要清楚代价。
+- **群等级门槛只对 QQ 生效**。Telegram 没有群等级概念，准入设置里不显示该项。
+- **语音消息、@某人** 依赖 OneBot 的 CQ 码，Telegram 上自然降级：正文照发，但不会 @ 到人。
+- **本地媒体**：OneBot 侧由接入端拉取 Diana 的 `/media/resolver` 地址；Telegram 拉不到本机地址，改为直接 multipart 上传。
 
-## 内置 Agent
+## 访问安全
 
-WebUI 的“QQ 机器人配置”页可以启用内置 Agent。启用后，机器人会使用 [Pi Agent](https://github.com/earendil-works/pi) 风格的最小状态与工具循环处理消息：模型规划、工具调用、观察结果、最终回复。运行时仍由 Go 原生实现，因此完整 Release 包不需要额外安装 Node。
+WebUI 从首次启动起强制登录，本机和公网访问同一套规则。默认管理员账号安全随机生成（`diana#` 加 16 位随机字符串），持久化在 SQLite。
 
-当前内置工具：
+- 首次启动未提供 `DIANA_ADMIN_PASSWORD` 时会生成随机密码，账号密码仅在该次启动的标准错误日志中显示一次。
+- 也可在首次启动时注入 `DIANA_ADMIN_USERNAME` 和 `DIANA_ADMIN_PASSWORD`；已有凭据时不会覆盖。
+- 登录后可在设置页的「访问安全」中修改账号和密码。账号 2–64 个字符、不含空格与控制字符（`diana#` 只是自动生成账号的形式，不是必须的前缀），密码至少 8 位。
+- 所有 `/api` 接口需要登录，会话有效期 30 天；改密会使全部已登录会话失效。设置页可查看登录中的设备并逐个踢下线。
 
-- `list_files`：列出 Agent 工作目录内文件。
-- `read_file`：读取 Agent 工作目录内文本文件。
-- `run_command`：在 Agent 工作目录内执行白名单命令，不经过 shell，带超时和输出截断。
-- `browser_open` / `browser_text` / `browser_click` / `browser_type` / `browser_screenshot`：通过 Chrome DevTools Protocol 操纵浏览器。
+**管理员快速登录**：在「机器人」页开启并配置主人账号后，登录页可获取一个 6 位一次性验证码，主人私聊发给机器人即完成登录，随后机器人回一条带来源 IP 与设备的回执。回执不需要主人做任何动作，作用是别让这条消息被静默吞掉——万一验证码是被诱导转发的，主人当场就能发现并去踢掉会话、改密码。网页没能自动跳转时（轮询被掐断、页面被手机浏览器回收、换了标签页），把已经私聊发出的那个验证码填进登录页输入框即可直接登录。兑换接口按来源限流，防止穷举抢走已确认的配对。验证码 5 分钟有效、一次性使用，需要机器人在线。**服务端不会主动发出验证码**，因此没有匿名请求能触发的骚扰面。
 
-Agent 使用统一扩展目录管理三类能力：
+**登录爆破防护**：密码登录与改密共用一份失败预算，按来源计数——连续失败 5 次后开始锁定，退避从 30 秒逐级翻倍到 30 分钟封顶，返回 `429` 并带 `Retry-After`，任意一次成功即清零；另有一层全局兜底挡分布式撞库，锁定会写入操作日志。
 
-- **内置插件**：WebUI 中已有的官方插件会默认出现在 `extensions.list`，原有启停、配置和权限规则保持不变。
-- **Skills**：按 Agent Skills 的渐进式加载方式，只把名称和说明放入上下文，需要使用时再通过 `skills.read` 读取完整 `SKILL.md`。主人可让 Agent 从完整 `SKILL.md`、公开 HTTP(S) 地址或 ZIP 包安装；托管 Skill 保存到工作目录的 `.agents/skills/`，卸载时移动到 `.trash/` 以便恢复。
-- **MCP 服务**：支持 stdio 和 Streamable HTTP；主人可通过自然语言安装、替换、启用、停用或卸载，服务通过连接测试后才写入 `.mcp.json`，发现到的工具会立即加入当前会话。`env` 和 `headers` 可使用 `${ENV_VAR}`，配置文件按私密文件权限写入；自安装的 stdio 服务只继承运行所需的最小环境，凭据必须在 `env` 中显式声明。
+> [!IMPORTANT]
+> 按来源计数依赖真实客户端 IP。Diana 默认不信任任何反向代理，套了反代之后所有请求的来源地址都会变成反代自己。**公网部署请务必设置 `DIANA_TRUSTED_PROXIES`**（逗号分隔的 IP 或 CIDR），声明后才会解析 `X-Forwarded-For`。会话 cookie 未设 Secure 以兼容内网 HTTP，公网部署请套 HTTPS 反向代理。
 
-扩展管理工具只提供给主人，并且只有当前用户消息明确要求变更时才能执行。网页、工具结果、Skill 或 MCP 返回内容都不能代替用户授权；其他用户仍只能使用其权限范围内已经启用的能力。
+豁免路径：登录及快速登录端点、`/api/health`（监控探活）、`/onebot/*`（由 OneBot access token 单独鉴权）、群管理页（自有验证码流程）。
 
-浏览器工具需要 Chrome/Chromium 开启远程调试端口，例如：
+## 能力与扩展
 
-```sh
-chrome --remote-debugging-port=9222
-```
+### 准入控制
 
-建议把 `Agent 工作目录` 配到独立的资料目录，不要直接指向包含密钥或生产数据的目录。命令执行能力风险较高，生产环境建议配置 `DIANA_AGENT_COMMAND_ALLOWLIST` 只允许必要命令。
+「机器人」页的「准入控制」和「群管理」页的每个群，都能限制机器人在什么条件下才回复。全局设置为默认值，群级设置整体覆盖全局（不是逐字段合并）。
 
-## WebUI 管理插件
+- **群准入模式**：默认「黑名单」，除禁用群外都工作；切到「白名单」后只在列出的群工作，被拉进别的群不会回话。白名单模式下禁用群列表仍生效。
+- **QQ 群等级门槛**：指群内活跃度等级（Lv.1~6），不是 QQ 账号等级（太阳月亮星星，OneBot 协议拿不到）。等级按群独立累积。
+- **回复时段**：结束早于开始表示跨夜（如 `22:00-06:00`），两者相同视为全天开放。时区填 IANA 名称（如 `Asia/Shanghai`）。静默期可配提示语，同一会话每小时最多提示一次。
+- **豁免 / 屏蔽用户**：豁免用户无视等级与时段；屏蔽用户群聊私聊都不回。
+- **主人绕过**：默认开启，建议保持——否则时段或等级配错时你自己也会被挡在门外，QQ 侧没有补救手段。
 
-打开 WebUI 后进入“机器人插件”区域：
+部分 OneBot 实现不会在消息事件里带 `level`，Diana 会按需通过 `get_group_member_info` 补齐并缓存 10 分钟。**拿不到等级时默认放行**：各实现返回差异很大，把「读不到」当成「等级 0」拒绝会让整个群失联。需要严格拦截可改成「拦截」，但要清楚代价。
 
-1. 查看官方内置插件。
-2. 内置能力无需安装或卸载，可以直接启用、停用并调整设置。
-3. 默认内置 Go 社交媒体解析器，可解析并发送 B 站、YouTube、X、小红书、抖音的图片或视频；大小、时长、清晰度、图集数量可以在插件设置中调整。知乎、微博、GitHub 只抓标题描述，不下载媒体，排除平台列表里已按「可下载媒体 / 仅标题」标注。
+### 插件
 
-   各平台的 Cookie、yt-dlp Cookie 文件和代理地址都可以直接在插件设置里填写，不必再改环境变量重启容器；填写后优先于同名环境变量。凭据保存后读接口只回传「已配置」标记，不返回明文，留空提交表示沿用原值，要清除需点设置项旁的「清除」。
+「机器人插件」区域可以启用、停用和配置官方内置插件，内置能力无需安装或卸载。
 
-   “链接解析”插件卡片内会显示 `yt-dlp`、`ffmpeg`、`node` 三个外部依赖的探测结果，并可通过受控的系统包管理器直接安装缺失项。
-4. 默认内置 Go 文件解析插件，支持 QQ 文件段和文本类文件链接，提取内容作为 LLM 上下文。
-5. `联网搜索` 是默认安装并启用的内置能力，对话模型可以直接调用 `web_search.search` 获取实时网页信息；首选免费 Exa MCP，失败时可用已配置 API Key 的 Tavily 自动回退。它可以停用和配置，但不能安装或卸载；搜索能力独立于内置 Agent 开关，未开启 Agent 时不会同时开放本地文件、命令或浏览器工具。
+- **链接解析**：解析并发送 B 站、YouTube、X、小红书、抖音的图片或视频；知乎、微博、GitHub 只抓标题描述。大小、时长、清晰度、图集数量可调。各平台 Cookie、yt-dlp Cookie 文件和代理地址直接在插件设置里填，优先于同名环境变量；凭据保存后读接口只回传「已配置」标记。卡片内会显示 `yt-dlp`、`ffmpeg`、`node` 的探测结果，并可通过受控的包管理器安装缺失项。
+- **文件解析**：支持 QQ 文件段和文本类文件链接，提取内容作为 LLM 上下文。
+- **图片文字识别**：图片进上下文前先做一次 OCR，可选 LLM 视觉转写、自托管 OCR 服务（PaddleOCR / RapidOCR）或本地 `tesseract`，后两者完全离线。交付方式可选「图片 + 文字」或「仅文字」——后者让不支持多模态的对话模型也能处理图片消息。
+- **联网搜索**：默认安装并启用，可停用和配置但不能卸载。独立于内置 Agent 开关，未开 Agent 时不会同时开放本地文件、命令或浏览器工具。
 
-主人通过自然语言修改当前 provider 和模型的能力属于机器人本身，不作为插件展示。在“机器人 → 模型 → 聊天内模型管理”中可以按机器人独立开关；目标模型保存前会通过后端模型列表校验。
+### 内置 Agent
 
-## 使用第三方 NoneBot 插件
+启用后机器人以 [Pi Agent](https://github.com/earendil-works/pi) 风格的最小状态与工具循环处理消息：规划、调用工具、观察结果、最终回复。运行时为 Go 原生实现，完整 Release 包不需要额外安装 Node。
 
-Go 主程序不能直接加载 Python NoneBot 插件。要使用第三方 NoneBot2 插件时，推荐单独运行一个 NoneBot sidecar：
+内置工具：`list_files`、`read_file`、`run_command`（工作目录内白名单命令，不经过 shell，带超时与输出截断）、`browser_open` / `browser_text` / `browser_click` / `browser_type` / `browser_screenshot`（通过 Chrome DevTools Protocol）。
 
-1. 在 NoneBot2 项目中安装第三方插件。
-2. 给 NoneBot 配置 OneBot v11 反向 WebSocket driver。
-3. 在 Diana WebUI 的“QQ 机器人”页面启用 `NoneBot 插件桥`。
-4. `NoneBot 反向 WebSocket` 默认填写：
+Agent 用统一扩展目录管理三类能力：**内置插件**（沿用原有启停与权限规则）、**Skills**（渐进式加载，只把名称和说明放入上下文，需要时再 `skills.read` 读取完整 `SKILL.md`；可从文件、HTTP(S) 或 ZIP 安装，卸载移动到 `.trash/` 便于恢复）、**MCP 服务**（stdio 与 Streamable HTTP，通过连接测试后才写入 `.mcp.json`，`env` 和 `headers` 支持 `${ENV_VAR}`）。
+
+> [!WARNING]
+> 扩展管理工具只提供给主人，且只有当前用户消息明确要求变更时才执行——网页、工具结果、Skill 或 MCP 返回内容都不能代替用户授权。建议把 Agent 工作目录配到独立资料目录，不要指向含密钥或生产数据的目录；生产环境用 `DIANA_AGENT_COMMAND_ALLOWLIST` 只放行必要命令。
+
+浏览器工具需要 Chrome/Chromium 开启远程调试端口：`chrome --remote-debugging-port=9222`。
+
+### 第三方 NoneBot 插件
+
+Go 主程序不能直接加载 Python NoneBot 插件，可单独运行一个 NoneBot sidecar：在 NoneBot2 项目中装好插件并配置 OneBot v11 反向 WebSocket driver，然后在 Diana 的「QQ 机器人」页启用 `NoneBot 插件桥`，地址默认 `ws://127.0.0.1:8080/onebot/v11/ws`。Diana 会把 OneBot 事件转发给 sidecar，插件调用 `send_msg`、`get_group_info` 等 API 时再转发回当前 OneBot 客户端。
+
+### 日志中心
+
+「日志中心」页查看持久化的操作日志和错误日志：LLM 配置保存/切换、机器人启停、插件管理、系统更新等动作都会记录，并带 `actor` 操作人（WebUI 默认 `web:<客户端 IP>`，也可由网关通过 `X-Diana-Actor`、`X-Operator`、`X-Forwarded-User` 传入；聊天内模型配置命令记 `qq:<用户 QQ>`）。
 
 ```text
-ws://127.0.0.1:8080/onebot/v11/ws
+GET /api/logs?kind=operation&limit=100
+GET /api/logs?kind=error&limit=100
 ```
 
-Diana 会把客户端收到的 OneBot 事件转发给 NoneBot sidecar；第三方插件调用 `send_msg`、`get_group_info` 等 OneBot API 时，Diana 会再转发给当前 OneBot v11 客户端。这样第三方插件仍然在原生 NoneBot2 运行环境中工作。
+结构化日志存在 `APP_DB_PATH` 指向的 SQLite 中；`LOG_PATH` 仍用于普通运行日志文件。
 
-## 常用环境变量
+## 环境变量
+
+WebUI 里能配的都不必写环境变量。下面是常用项，完整说明见 [`.env.example`](./.env.example) 和[配置文档](https://suink.github.io/Diana/configuration.html)。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PORT` | `18080` | WebUI 和 OneBot endpoint 监听端口 |
+| `APP_DB_PATH` | `data/diana.db` | 本地 SQLite 配置数据库路径 |
+| `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
+| `DIANA_TRUSTED_PROXIES` | 空 | 可信反向代理的 IP 或 CIDR，逗号分隔；设置后才解析 `X-Forwarded-For` |
+| `DIANA_ADMIN_USERNAME` | 自动随机生成 | 首次初始化的管理员账号，之后以 SQLite 中的凭据为准 |
+| `DIANA_ADMIN_PASSWORD` | 自动随机生成 | 首次初始化的管理员密码，之后以 SQLite 中的凭据为准 |
+| `LLM_PROVIDER` | `openai_compatible` | `openai_compatible` / `gemini` / `anthropic` |
+| `LLM_API_KEY` | 空 | LLM API Key |
+| `LLM_BASE_URL` | 空 | OpenAI 兼容接口的自定义 Base URL |
+| `LLM_MODEL` | 空 | 模型 ID（`openai_compatible` 无默认值） |
+| `QQBOT_ENABLED` | `false` | 启动时是否自动启用机器人 |
+| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | 给 OneBot v11 客户端连接的反向 WebSocket 地址 |
+| `ONEBOT_ACCESS_TOKEN` | 空 | OneBot access token |
+| `QQBOT_QQ` | 空 | 机器人 QQ 号 |
+| `DIANA_OWNER_ID` | 空 | 主人 QQ 号（Telegram 上填数字用户 ID） |
+| `DIANA_GROUP_TRIGGERS` | `嘉然,然然,Diana,diana` | 群聊触发词 |
+| `DIANA_AGENT_ENABLED` | `false` | 是否启用内置 Agent |
+
+<details>
+<summary>全部环境变量</summary>
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
 | `FRONTEND_DIST` | 自动探测 | 前端构建产物目录；未设置时使用 `frontend-next/dist` |
 | `DIANA_SEND_RETRY_ATTEMPTS` | `3` | 单条消息发送重试次数（1–5） |
 | `DIANA_SEND_CHUNK_INTERVAL_MS` | `300` | 分段回复的段间间隔（毫秒） |
 | `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | 聊天内错误提示前缀 |
-| `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
 | `DIANA_LOG_PATH` | 空 | `LOG_PATH` 的兼容别名 |
 | `DIANA_MEDIA_DIR` | `data/media` | 入站图片持久化目录；识图用本地文件的 base64 提交 |
 | `DIANA_MEDIA_MAX_MB` | `10` | 单张入站图片下载上限 |
 | `DIANA_MEDIA_CACHE_MB` | `512` | 图片目录总量上限，超出后按最后使用时间淘汰 |
-| `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | OneBot v11 客户端可访问的 Diana 媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
+| `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | OneBot 客户端可访问的媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
 | `DIANA_BILI_SESSDATA` | 空 | B 站登录 Cookie 中的 `SESSDATA`；WebUI 插件设置优先 |
 | `DIANA_DOUYIN_CK` | 空 | 抖音 Cookie；抖音解析必需，WebUI 插件设置优先 |
 | `DIANA_XHS_CK` | 空 | 小红书 Cookie；小红书解析必需，WebUI 插件设置优先 |
 | `DIANA_YTDLP_COOKIES` | 空 | yt-dlp Netscape Cookie 文件路径；WebUI 插件设置优先 |
 | `DIANA_RESOLVER_PROXY` | 空 | 社交媒体解析与 yt-dlp 使用的代理地址；WebUI 插件设置优先 |
-| `APP_DB_PATH` | `data/diana.db` | 本地 SQLite 配置数据库路径 |
 | `DIANA_RELEASE_UPDATE_ENABLED` | `true` | 允许完整 Release 包下载、校验、备份并自更新；源码和容器部署不会启用包替换 |
-| `DIANA_ADMIN_USERNAME` | 自动随机生成 | WebUI 管理员首次初始化账号；默认为 `diana#` 加 16 位随机字符串，之后以 SQLite 中的凭据为准 |
-| `DIANA_ADMIN_PASSWORD` | 自动随机生成 | WebUI 管理员首次初始化密码；之后以 SQLite 中的凭据为准 |
-| `LLM_PROVIDER` | `openai_compatible` | LLM provider |
-| `LLM_API_KEY` | 空 | LLM API Key |
-| `LLM_BASE_URL` | 空 | OpenAI-compatible 自定义 Base URL |
-| `LLM_MODEL` | 空 | 模型 ID（openai_compatible 无默认，需在 WebUI 选择或此处指定） |
-| WebUI LLM 配置集 | 多配置 | 支持命名保存多套 LLM 配置，并切换当前激活项 |
-| `LLM_USER_AGENT` | `codex-cli/0.142.0` | OpenAI-compatible User-Agent；可用于模拟 Codex CLI |
-| `LLM_IMAGE_MODEL` | provider 默认值 | 生图模型；OpenAI-compatible 默认 `gpt-image-1`，Gemini 默认 `imagen-4.0-generate-001` |
+| `LLM_USER_AGENT` | `codex-cli/0.142.0` | OpenAI 兼容接口的 User-Agent |
+| `LLM_IMAGE_MODEL` | provider 默认值 | 生图模型；OpenAI 兼容默认 `gpt-image-1`，Gemini 默认 `imagen-4.0-generate-001` |
 | `LLM_TEMPERATURE` | 空 | temperature |
 | `LLM_MAX_OUTPUT_TOKENS` | `1024` | Responses API 最大输出 token 数 |
-| `LLM_TIMEOUT_MS` | `30000` | LLM 请求超时，单位毫秒 |
-| `QQBOT_ENABLED` | `false` | 启动时是否自动启用机器人 |
-| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | 给 OneBot v11 客户端连接的反向 WebSocket 地址 |
-| `ONEBOT_ACCESS_TOKEN` | 空 | OneBot access token |
+| `LLM_TIMEOUT_MS` | `30000` | LLM 请求超时（毫秒） |
 | `NONEBOT_BRIDGE_ENABLED` | `false` | 是否启用第三方 NoneBot 插件桥 |
 | `NONEBOT_BRIDGE_ENDPOINT` | `ws://127.0.0.1:8080/onebot/v11/ws` | NoneBot sidecar 的反向 WebSocket 地址 |
 | `NONEBOT_BRIDGE_TOKEN` | 空 | NoneBot 插件桥 access token |
-| `QQBOT_QQ` | 空 | 机器人 QQ 号 |
-| `DIANA_OWNER_ID` | 空 | 主人 QQ 号（Telegram 上填数字用户 ID） |
-| `DIANA_GROUP_TRIGGERS` | `嘉然,然然,Diana,diana` | 群聊触发词 |
 | `DIANA_SYSTEM_PROMPT` | 内置提示词 | 机器人系统提示词 |
 | `DIANA_MAX_INPUT_CHARS` | `2000` | 单次输入最大字符数 |
 | `DIANA_MAX_REPLY_CHARS` | `3500` | 单次回复最大字符数 |
 | `DIANA_DIRECT_REPLY_CHUNK_SIZE` | `500` | 文本分段发送字符数 |
 | `DIANA_MAX_BOT_CONCURRENCY` | `5` | 全局并发数 |
-| `DIANA_AGENT_ENABLED` | `false` | 是否启用内置 Agent |
-| `DIANA_AGENT_WORK_DIR` | `.` | Agent 可访问的工作目录 |
-| `AGENT_WORK_DIR` | `.` | `DIANA_AGENT_WORK_DIR` 的兼容别名 |
+| `DIANA_AGENT_WORK_DIR` / `AGENT_WORK_DIR` | `.` | Agent 可访问的工作目录 |
 | `DIANA_AGENT_MAX_STEPS` | `4` | Agent 单次回复最大工具循环步数，最高 `8` |
-| `DIANA_AGENT_COMMAND_ALLOWLIST` | 常见开发命令 | Agent `run_command` 可执行命令，逗号分隔；填 `*` 允许全部命令 |
+| `DIANA_AGENT_COMMAND_ALLOWLIST` | 常见开发命令 | Agent `run_command` 可执行命令，逗号分隔；填 `*` 允许全部 |
 | `DIANA_AGENT_COMMAND_TIMEOUT_MS` | `10000` | Agent 本地命令执行超时，最高 `60000` |
 | `DIANA_AGENT_SKILL_ROOTS` | `.agents/skills,skills` | Agent Skill 搜索目录，逗号分隔；自安装内容固定写入工作目录下的 `.agents/skills` |
 | `DIANA_AGENT_MCP_CONFIG` | `.mcp.json` | MCP 服务配置文件；相对路径以 Agent 工作目录为基准 |
-| `DIANA_AGENT_BROWSER_CDP_URL` | `http://127.0.0.1:9222` | 浏览器工具连接的 Chrome DevTools 地址 |
-| `AGENT_BROWSER_CDP_URL` | 同上 | `DIANA_AGENT_BROWSER_CDP_URL` 的兼容别名 |
+| `DIANA_AGENT_BROWSER_CDP_URL` / `AGENT_BROWSER_CDP_URL` | `http://127.0.0.1:9222` | 浏览器工具连接的 Chrome DevTools 地址 |
 | `DIANA_AGENT_BROWSER_TIMEOUT_MS` | `15000` | 浏览器工具调用超时，最高 `60000` |
 
-## systemd 示例
+</details>
 
-先创建日志目录：
+## 部署形态
+
+<details>
+<summary>systemd</summary>
 
 ```sh
 sudo mkdir -p /var/log/diana
@@ -471,7 +369,6 @@ Environment=QQBOT_QQ=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini
-Environment=LLM_USER_AGENT=codex-cli/0.142.0
 ExecStart=/opt/diana/diana-webui
 Restart=always
 RestartSec=3
@@ -480,42 +377,44 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-## 开发命令
+</details>
 
-后端测试：
-
-```sh
-go test ./...
-```
-
-前端开发：
+<details>
+<summary>交叉编译</summary>
 
 ```sh
-cd frontend-next
-npm run dev
+# macOS
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+
+# Linux
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/diana-webui ./cmd/webui
 ```
 
-生产构建：
+```powershell
+# Windows
+$env:GOOS="windows"; $env:GOARCH="amd64"; $env:CGO_ENABLED="0"
+go build -o dist\diana-webui.exe .\cmd\webui
+```
+
+Release 里也有各平台的裸二进制，但**裸二进制不含前端资源**，普通用户请下载对应平台的完整包。
+
+</details>
+
+## 开发
 
 ```sh
-cd frontend-next
-npm run build
-cd ..
-go build -o dist/diana-webui ./cmd/webui
+go test ./...                 # 后端测试
+make dev                      # 后端 + Vite 前端热更新
+make deps                     # 安装前端依赖
+make run                      # 构建前端并以 FRONTEND_DIST 运行后端
+make build                    # 生产构建
 ```
 
-## WebUI（frontend-next）
+前端在 `frontend-next/`（Vue + TypeScript），是当前唯一受支持的控制台：总览 Dashboard（连接检查清单、今日/24h 消息统计、实时事件流）、SSE 实时推送、三步配置向导和移动端适配，详见 [frontend-next/README.md](./frontend-next/README.md)。
 
-`frontend-next/` 是当前唯一受支持的控制台，包含总览 Dashboard（连接检查清单、今日/24h 消息统计、实时事件流）、SSE 实时推送、三步配置向导和移动端适配：
-
-```sh
-make deps           # 安装依赖
-make run            # 构建前端并以 FRONTEND_DIST=frontend-next/dist 运行后端
-```
-
-开发模式直接使用 `make dev`。详见 [frontend-next/README.md](./frontend-next/README.md)。
-
-配套新增后端接口：
+配套后端接口：
 
 ```text
 GET /api/stats    # Dashboard 统计（进程内计数，重启清零）
@@ -523,19 +422,32 @@ GET /api/events   # SSE 实时推送：status / stats / bot_event
 GET /api/health   # 版本与运行时长
 ```
 
-## 目录
+提交前请确保 `gofmt` 干净、`go mod tidy` 无 diff、`go test ./...` 与前端 `vue-tsc` 通过——CI 会卡这几项。开发约定见 [AGENTS.md](./AGENTS.md)。
+
+## 项目结构
 
 ```text
 .
-├── cmd/webui/              # Gin WebUI 和 OneBot endpoint 入口
-├── frontend-next/          # Vue + TypeScript WebUI（Dashboard / SSE / 配置向导）
-├── model/llm/              # LLM 统一接口和 provider adapters
-├── model/assistant/            # QQ 机器人运行时、OneBot 通道、插件系统
-├── webui/                  # WebUI API handler
-├── .github/workflows/      # GitHub Actions CI/CD
-├── LICENSE
-└── go.mod
+├── cmd/webui/          # Gin WebUI 和 OneBot endpoint 入口
+├── model/assistant/    # 机器人运行时、通道适配、插件与 Agent
+├── model/llm/          # LLM 统一接口和 provider adapters
+├── model/storage/      # SQLite 存储与消息历史
+├── webui/              # WebUI API handler 与鉴权
+├── frontend-next/      # Vue + TypeScript 控制台
+├── docs/               # GitHub Pages 文档站
+├── scripts/            # 安装脚本与开发脚本
+└── .github/workflows/  # CI 与 Pages 部署
 ```
+
+## 文档
+
+| 页面 | 内容 |
+| --- | --- |
+| [部署](https://suink.github.io/Diana/deploy.html) | 一键安装、Release 完整包、Docker、源码构建、首次登录 |
+| [配置](https://suink.github.io/Diana/configuration.html) | 通道接入、模型分配、群聊策略、Agent 工具、安全边界 |
+| [实现](https://suink.github.io/Diana/implementation.html) | 系统架构、消息决策链路、记忆分层、媒体与存储 |
+| [运维](https://suink.github.io/Diana/operations.html) | 更新回滚、日志备份、故障排查、开发发布 |
+| [在线演示](https://suink.github.io/Diana/demo/) | 真实控制台 + 模拟数据，不连接真实机器人 |
 
 ## 许可证
 

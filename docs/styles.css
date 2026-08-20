@@ -131,9 +131,10 @@ pre code {
   right: 8px;
   min-width: 34px;
   height: 30px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  /* 不透明：代码行会从按钮下面滚过去，半透明时两层字叠在一起没法看。 */
+  background: #34303a;
   color: #e9dfe6;
   cursor: pointer;
   font-size: 12px;
@@ -408,62 +409,35 @@ p {
   padding: 24px 32px 80px;
 }
 
+/* 落地页首屏：文案放在页面底色上，产品截图独立成一块带窗框的展示区。
+   之前文案压在截图上，深色截图本身太花，正文几乎读不清。 */
 .landing-hero {
-  position: relative;
-  height: calc(100svh - var(--topbar) - 96px);
-  min-height: 540px;
-  max-height: 760px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
-  background: #171419;
-  color: #fff;
-}
-
-.landing-hero-media,
-.landing-hero-shade {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.landing-hero-media {
-  object-fit: cover;
-  object-position: center top;
-}
-
-.landing-hero-shade {
-  background: rgba(13, 11, 15, 0.56);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 40px;
+  padding: 56px 0 8px;
 }
 
 .landing-hero-copy {
-  position: absolute;
-  z-index: 1;
-  left: 0;
-  bottom: 0;
-  width: 100%;
-  max-width: 780px;
-  padding: 54px 58px;
-}
-
-.landing-hero .eyebrow {
-  color: #ff8ab7;
+  max-width: 760px;
 }
 
 .landing-hero h1 {
-  max-width: none;
-  color: #fff;
-  font-size: 58px;
+  max-width: 18ch;
+  margin: 0;
+  text-wrap: balance;
+  font-size: 54px;
   font-weight: 760;
+  line-height: 1.14;
+  letter-spacing: -0.02em;
 }
 
 .landing-lead {
-  max-width: 700px;
-  margin-top: 16px;
-  color: rgba(255, 255, 255, 0.88);
-  font-size: 19px;
-  line-height: 1.75;
+  max-width: 640px;
+  margin-top: 20px;
+  color: var(--text-soft);
+  font-size: 18px;
+  line-height: 1.78;
 }
 
 .landing-hero .hero-actions {
@@ -472,48 +446,170 @@ p {
 
 .landing-hero .button {
   min-height: 44px;
-  padding-inline: 19px;
+  padding-inline: 20px;
 }
 
-.button.hero-secondary {
-  border-color: rgba(255, 255, 255, 0.5);
-  background: rgba(18, 15, 19, 0.72);
-  color: #fff;
+.button.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-soft);
 }
 
-.button.hero-secondary:hover {
-  border-color: #fff;
-  background: rgba(18, 15, 19, 0.9);
+.button.ghost:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
-.landing-demo-note {
-  margin-top: 14px;
-  color: rgba(255, 255, 255, 0.65);
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hero-meta li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hero-meta li::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.landing-shot {
+  margin: 0;
+}
+
+/* 截图套一层窗框，暗色截图和浅色页面之间才有边界，不至于糊成一片。 */
+.shot-frame {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-code);
+  box-shadow: var(--shadow);
+}
+
+.shot-chrome {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px 14px;
+}
+
+.shot-chrome span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.shot-chrome em {
+  margin-left: 8px;
+  color: rgba(244, 233, 241, 0.55);
   font-size: 12px;
+  font-style: normal;
+}
+
+.shot-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.landing-shot figcaption {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.landing-shot figcaption a {
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+.landing-facts {
+  padding: 40px 0;
+}
+
+.fact-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  border-block: 1px solid var(--border);
+}
+
+.fact-grid > div {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  padding: 18px 22px 18px 0;
+}
+
+.fact-grid > div + div {
+  padding-left: 22px;
+}
+
+.fact-grid > div:last-child {
+  border-right: 0;
+}
+
+.fact-grid dt {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.fact-grid dd {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .landing-section-heading {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(340px, 1.1fr);
-  gap: 64px;
+  grid-template-columns: minmax(0, 0.9fr) minmax(300px, 1fr);
+  gap: 48px;
   align-items: end;
-  margin-bottom: 30px;
+  margin-bottom: 28px;
+}
+
+.landing-section-heading h2 {
+  margin: 0;
 }
 
 .landing-section-heading > p {
   margin: 0;
+  color: var(--text-soft);
+  font-size: 15px;
 }
 
 .landing-install-body {
-  max-width: 980px;
+  max-width: 900px;
 }
 
-.landing-install-body .tabs {
-  max-width: 440px;
+.landing-install-body .install-tabs {
+  max-width: 520px;
+  /* 三个标签要在一行，别继承 install-tabs 的两列。 */
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.landing-install-body .tab-panel {
+  padding-top: 16px;
 }
 
 .landing-install-body pre {
-  margin-bottom: 0;
+  margin: 0;
   font-size: 14px;
 }
 
@@ -522,20 +618,59 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin-top: 20px;
+  margin-top: 18px;
+  max-width: 900px;
 }
 
 .landing-install-footer p {
   margin: 0;
+  color: var(--text-soft);
+  font-size: 14px;
 }
 
 .landing-install-footer .button {
   flex: 0 0 auto;
 }
 
+.feature-grid.landing-feature-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .landing-feature-grid article {
-  min-height: 156px;
+  min-height: 150px;
   background: transparent;
+}
+
+.doc-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.doc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 18px;
+  color: var(--text);
+}
+
+.doc-card:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.doc-card strong {
+  font-size: 16px;
+}
+
+.doc-card span {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.62;
 }
 
 .hero {
@@ -1226,6 +1361,11 @@ tr:last-child td {
   text-align: right;
 }
 
+/* 首页只有「下一页」，别在左边留一个空格子。 */
+.page-nav.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .page-nav a:hover {
   border-color: var(--accent);
   text-decoration: none;
@@ -1295,11 +1435,30 @@ tr:last-child td {
   }
 
   .landing-hero {
-    height: calc(100svh - var(--topbar) - 80px);
+    padding-top: 40px;
+    gap: 32px;
   }
 
-  .landing-hero-copy {
-    padding: 42px;
+  .landing-hero h1 {
+    font-size: 44px;
+  }
+
+  .fact-grid,
+  .feature-grid.landing-feature-grid,
+  .doc-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fact-grid > div:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .fact-grid > div:nth-child(odd) {
+    padding-left: 0;
+  }
+
+  .fact-grid > div:nth-child(2n + 1) ~ div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
   }
 
   .hero {
@@ -1342,29 +1501,61 @@ tr:last-child td {
   }
 
   .landing-hero {
-    height: calc(100svh - var(--topbar) - 72px);
-    min-height: 500px;
-  }
-
-  .landing-hero-media {
-    object-position: 36% top;
-  }
-
-  .landing-hero-shade {
-    background: rgba(13, 11, 15, 0.66);
-  }
-
-  .landing-hero-copy {
-    padding: 28px 24px;
+    padding: 28px 0 0;
+    gap: 26px;
   }
 
   .landing-hero h1 {
-    font-size: 42px;
+    max-width: none;
+    font-size: 33px;
   }
 
   .landing-lead {
+    margin-top: 16px;
     font-size: 16px;
-    line-height: 1.7;
+    line-height: 1.72;
+  }
+
+  .landing-hero .hero-actions {
+    margin-top: 22px;
+  }
+
+  .landing-hero .button {
+    flex: 1 1 auto;
+  }
+
+  .hero-meta {
+    gap: 6px 16px;
+    font-size: 12px;
+  }
+
+  .shot-chrome em {
+    display: none;
+  }
+
+  .landing-facts {
+    padding: 30px 0;
+  }
+
+  .fact-grid,
+  .feature-grid.landing-feature-grid,
+  .doc-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-install-body .install-tabs {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .fact-grid > div,
+  .fact-grid > div + div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 14px 0;
+  }
+
+  .fact-grid > div:last-child {
+    border-bottom: 0;
   }
 
   .landing-section-heading {
