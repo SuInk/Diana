@@ -338,32 +338,36 @@ type BotConfig struct {
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
-	RecentContextLimit           int                  `json:"recent_context_limit,omitempty"`
-	ContextSummaryThreshold      int                  `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled        *bool                `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled      *bool                `json:"cross_group_memory_enabled,omitempty"`
-	ProactiveReplyChance         float64              `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold      float64              `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled                *bool                `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                  ChatInLevel          `json:"chat_in_level,omitempty"`
-	ChatInThreshold              float64              `json:"chat_in_threshold,omitempty"`
-	ChatInChance                 float64              `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds        int                  `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled   *bool                `json:"natural_interjection_enabled,omitempty"`
-	LegacyPassiveReplyChance     *float64             `json:"passive_reply_chance,omitempty"`
-	LegacyPassiveReplyThreshold  *float64             `json:"passive_reply_threshold,omitempty"`
-	ReplyRules                   []ReplyRule          `json:"reply_rules,omitempty"`
-	MaxBotConcurrency            int                  `json:"max_bot_concurrency,omitempty"`
-	RequestTimeout               time.Duration        `json:"request_timeout,omitempty"`
-	AgentEnabled                 bool                 `json:"agent_enabled,omitempty"`
-	AgentWorkDir                 string               `json:"agent_work_dir,omitempty"`
-	AgentMaxSteps                int                  `json:"agent_max_steps,omitempty"`
-	AgentSkillRoots              []string             `json:"agent_skill_roots,omitempty"`
-	AgentMCPConfigPath           string               `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist        []string             `json:"agent_command_allowlist,omitempty"`
-	AgentCommandTimeoutMS        int                  `json:"agent_command_timeout_ms,omitempty"`
-	AgentBrowserCDPURL           string               `json:"agent_browser_cdp_url,omitempty"`
-	AgentBrowserTimeoutMS        int                  `json:"agent_browser_timeout_ms,omitempty"`
+	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
+	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
+	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
+	MaxContextTokens            int64         `json:"max_context_tokens,omitempty"`
+	RecentContextLimit          int           `json:"recent_context_limit,omitempty"`
+	ContextSummaryThreshold     int           `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled       *bool         `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled     *bool         `json:"cross_group_memory_enabled,omitempty"`
+	ProactiveReplyChance        float64       `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold     float64       `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled               *bool         `json:"chat_in_enabled,omitempty"`
+	ChatInLevel                 ChatInLevel   `json:"chat_in_level,omitempty"`
+	ChatInThreshold             float64       `json:"chat_in_threshold,omitempty"`
+	ChatInChance                float64       `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds       int           `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled  *bool         `json:"natural_interjection_enabled,omitempty"`
+	LegacyPassiveReplyChance    *float64      `json:"passive_reply_chance,omitempty"`
+	LegacyPassiveReplyThreshold *float64      `json:"passive_reply_threshold,omitempty"`
+	ReplyRules                  []ReplyRule   `json:"reply_rules,omitempty"`
+	MaxBotConcurrency           int           `json:"max_bot_concurrency,omitempty"`
+	RequestTimeout              time.Duration `json:"request_timeout,omitempty"`
+	AgentEnabled                bool          `json:"agent_enabled,omitempty"`
+	AgentWorkDir                string        `json:"agent_work_dir,omitempty"`
+	AgentMaxSteps               int           `json:"agent_max_steps,omitempty"`
+	AgentSkillRoots             []string      `json:"agent_skill_roots,omitempty"`
+	AgentMCPConfigPath          string        `json:"agent_mcp_config_path,omitempty"`
+	AgentCommandAllowlist       []string      `json:"agent_command_allowlist,omitempty"`
+	AgentCommandTimeoutMS       int           `json:"agent_command_timeout_ms,omitempty"`
+	AgentBrowserCDPURL          string        `json:"agent_browser_cdp_url,omitempty"`
+	AgentBrowserTimeoutMS       int           `json:"agent_browser_timeout_ms,omitempty"`
 }
 
 type ModelRole struct {
@@ -430,6 +434,7 @@ type GroupConfig struct {
 	ReplyStyle                   ReplyStyle             `json:"reply_style,omitempty"`
 	WelcomeEnabled               bool                   `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string                 `json:"welcome_message,omitempty"`
+	MaxContextTokens             int64                  `json:"max_context_tokens,omitempty"`
 	RecentContextLimit           int                    `json:"recent_context_limit,omitempty"`
 	MaxReplyChars                int                    `json:"max_reply_chars,omitempty"`
 	ProactiveReplyChance         float64                `json:"proactive_reply_chance,omitempty"`
@@ -521,32 +526,36 @@ type ConfigPayload struct {
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
-	RecentContextLimit           int                  `json:"recent_context_limit,omitempty"`
-	ContextSummaryThreshold      int                  `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled        *bool                `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled      *bool                `json:"cross_group_memory_enabled,omitempty"`
-	ProactiveReplyChance         float64              `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold      float64              `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled                *bool                `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                  ChatInLevel          `json:"chat_in_level,omitempty"`
-	ChatInThreshold              float64              `json:"chat_in_threshold,omitempty"`
-	ChatInChance                 float64              `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds        int                  `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled   *bool                `json:"natural_interjection_enabled,omitempty"`
-	LegacyPassiveReplyChance     *float64             `json:"passive_reply_chance,omitempty"`
-	LegacyPassiveReplyThreshold  *float64             `json:"passive_reply_threshold,omitempty"`
-	ReplyRules                   []ReplyRule          `json:"reply_rules,omitempty"`
-	MaxBotConcurrency            int                  `json:"max_bot_concurrency,omitempty"`
-	RequestTimeoutMS             int64                `json:"request_timeout_ms,omitempty"`
-	AgentEnabled                 bool                 `json:"agent_enabled,omitempty"`
-	AgentWorkDir                 string               `json:"agent_work_dir,omitempty"`
-	AgentMaxSteps                int                  `json:"agent_max_steps,omitempty"`
-	AgentSkillRoots              []string             `json:"agent_skill_roots,omitempty"`
-	AgentMCPConfigPath           string               `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist        []string             `json:"agent_command_allowlist,omitempty"`
-	AgentCommandTimeoutMS        int                  `json:"agent_command_timeout_ms,omitempty"`
-	AgentBrowserCDPURL           string               `json:"agent_browser_cdp_url,omitempty"`
-	AgentBrowserTimeoutMS        int                  `json:"agent_browser_timeout_ms,omitempty"`
+	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
+	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
+	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
+	MaxContextTokens            int64       `json:"max_context_tokens,omitempty"`
+	RecentContextLimit          int         `json:"recent_context_limit,omitempty"`
+	ContextSummaryThreshold     int         `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled       *bool       `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled     *bool       `json:"cross_group_memory_enabled,omitempty"`
+	ProactiveReplyChance        float64     `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold     float64     `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled               *bool       `json:"chat_in_enabled,omitempty"`
+	ChatInLevel                 ChatInLevel `json:"chat_in_level,omitempty"`
+	ChatInThreshold             float64     `json:"chat_in_threshold,omitempty"`
+	ChatInChance                float64     `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds       int         `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled  *bool       `json:"natural_interjection_enabled,omitempty"`
+	LegacyPassiveReplyChance    *float64    `json:"passive_reply_chance,omitempty"`
+	LegacyPassiveReplyThreshold *float64    `json:"passive_reply_threshold,omitempty"`
+	ReplyRules                  []ReplyRule `json:"reply_rules,omitempty"`
+	MaxBotConcurrency           int         `json:"max_bot_concurrency,omitempty"`
+	RequestTimeoutMS            int64       `json:"request_timeout_ms,omitempty"`
+	AgentEnabled                bool        `json:"agent_enabled,omitempty"`
+	AgentWorkDir                string      `json:"agent_work_dir,omitempty"`
+	AgentMaxSteps               int         `json:"agent_max_steps,omitempty"`
+	AgentSkillRoots             []string    `json:"agent_skill_roots,omitempty"`
+	AgentMCPConfigPath          string      `json:"agent_mcp_config_path,omitempty"`
+	AgentCommandAllowlist       []string    `json:"agent_command_allowlist,omitempty"`
+	AgentCommandTimeoutMS       int         `json:"agent_command_timeout_ms,omitempty"`
+	AgentBrowserCDPURL          string      `json:"agent_browser_cdp_url,omitempty"`
+	AgentBrowserTimeoutMS       int         `json:"agent_browser_timeout_ms,omitempty"`
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
@@ -559,6 +568,7 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		GroupTriggers:                append([]string(nil), base.GroupTriggers...),
 		WelcomeEnabled:               base.WelcomeEnabled,
 		WelcomeMessage:               base.WelcomeMessage,
+		MaxContextTokens:             base.MaxContextTokens,
 		RecentContextLimit:           base.RecentContextLimit,
 		MaxReplyChars:                base.MaxReplyChars,
 		ProactiveReplyChance:         base.ProactiveReplyChance,
@@ -608,6 +618,9 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	}
 	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
 		cfg.WelcomeMessage = defaults.WelcomeMessage
+	}
+	if cfg.MaxContextTokens <= 0 {
+		cfg.MaxContextTokens = defaults.MaxContextTokens
 	}
 	if cfg.RecentContextLimit <= 0 {
 		cfg.RecentContextLimit = defaults.RecentContextLimit
@@ -1080,6 +1093,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
 	}
+	if cfg.MaxContextTokens < 0 {
+		cfg.MaxContextTokens = 0
+	}
 	if cfg.RecentContextLimit < 0 {
 		cfg.RecentContextLimit = defaults.RecentContextLimit
 	}
@@ -1246,6 +1262,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        cfg.RecallReplyTTLSeconds,
 		LLMQQIDMaskingEnabled:        copyBoolPointer(cfg.LLMQQIDMaskingEnabled),
+		MaxContextTokens:             cfg.MaxContextTokens,
 		RecentContextLimit:           cfg.RecentContextLimit,
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:        copyBoolPointer(cfg.LongTermMemoryEnabled),
@@ -1362,6 +1379,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        payload.RecallReplyTTLSeconds,
 		LLMQQIDMaskingEnabled:        copyBoolPointer(payload.LLMQQIDMaskingEnabled),
+		MaxContextTokens:             payload.MaxContextTokens,
 		RecentContextLimit:           payload.RecentContextLimit,
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
 		LongTermMemoryEnabled:        copyBoolPointer(payload.LongTermMemoryEnabled),
