@@ -215,7 +215,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingTemplateHeader,
 				Label:       "推送模板：整体",
-				Description: "整条通知的组装格式，可用 {repository} {summary} {body}。留空使用默认格式；占位符所在行替换后为空会整行删除。",
+				Description: "整条通知的组装格式，可用 {repository} {summary} {body}。单独一行写 <botbr> 表示从这里分成下一条消息发送。留空使用默认格式；占位符所在行替换后为空会整行删除。",
 				Type:        PluginSettingTypeText,
 				Default:     "",
 			},

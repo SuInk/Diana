@@ -38,6 +38,16 @@ CREATE TABLE IF NOT EXISTS image_descriptions (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS image_recognitions (
+  cache_key TEXT PRIMARY KEY,
+  content_sha256 TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  model TEXT,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS voice_blobs (
   audio_sha256 TEXT PRIMARY KEY,
   body BLOB NOT NULL,
@@ -206,6 +216,8 @@ CREATE INDEX IF NOT EXISTS idx_message_events_text ON message_events(text);
 CREATE INDEX IF NOT EXISTS idx_message_events_user_time ON message_events(user_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_image_descriptions_source_message ON image_descriptions(source_session, source_message_id);
 CREATE INDEX IF NOT EXISTS idx_voice_transcripts_audio ON voice_transcripts(audio_sha256, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_image_recognitions_content ON image_recognitions(content_sha256, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_image_recognitions_created_at ON image_recognitions(created_at DESC);
 
 -- Raw inline audio is only a durable queue payload. Once a transcript exists,
 -- history and long-term memory use the text and source reference instead.
