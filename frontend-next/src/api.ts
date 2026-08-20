@@ -125,6 +125,9 @@ export interface QQBotConfig {
   /** 回复行为个性化；后端缺省（字段不存在）等价于开启。 */
   reply_reference_enabled?: boolean;
   mention_user_enabled?: boolean;
+  /** on 每条都带、off 从不带、auto 交给模型自己判断；缺省时按上面的布尔开关。 */
+  reply_reference_mode?: "on" | "off" | "auto";
+  mention_user_mode?: "on" | "off" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
   error_reply_prefix?: string;
