@@ -6859,6 +6859,9 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			// staged media directly but cannot reconstruct image elements inside
 			// a merged-forward node. Fall back to ordinary media messages so a
 			// resolver result is still delivered instead of losing the whole turn.
+			// 兜底散装是「合并转发看起来没生效」的唯一入口，必须留痕，否则用户
+			// 只看到刷屏、日志里什么都查不到。
+			log.Printf("qqbot resolver merged forward failed, delivered %d messages separately: %v", len(forwardMessages), err)
 			if directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages); directErr != nil {
 				return errors.Join(err, directErr)
 			}
@@ -7558,6 +7561,23 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 	if selfID == "" {
 		return "", fmt.Errorf("qqbot: missing self id for resolver forward")
 	}
+	// 先试自定义节点：内容直接内联，一个请求就发完，是 OneBot v11 里兼容性
+	// 最好的做法（嵌套转发一直走的就是它）。暂存方式要先给机器人自己发 N 条
+	// 私聊再按 message_id 组装，不少实现根本不允许给自己发私聊，任意一步失败
+	// 整条合并转发就废掉、静默退回散装——这正是「合并转发没用」的常见成因。
+	if nodes := buildCustomForwardNodes(messages, cfg.Name, selfID); len(nodes) > 0 {
+		result, err := r.sendForwardNodesWithResult(ctx, event, nodes)
+		if err == nil {
+			return apiMessageID(result), nil
+		}
+		if errors.Is(err, errGroupSendUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// 超时的请求可能已经投递，不能再用暂存方式发第二遍。
+			return "", err
+		}
+		// 有的实现（如 SnowLuma）能直发媒体，却无法在合并转发节点里重建图片
+		// 元素。这时退回暂存方式，用真实消息 ID 组装。
+		log.Printf("qqbot resolver forward: custom nodes rejected, falling back to staged message ids: %v", err)
+	}
 	selfUIN, err := strconv.ParseInt(selfID, 10, 64)
 	if err != nil {
 		return "", fmt.Errorf("qqbot: invalid self id %q", selfID)
@@ -7574,7 +7594,7 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 			})
 		})
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("qqbot: forward staging failed (send_private_msg to self): %w", err)
 		}
 		messageID := apiMessageID(result)
 		if messageID == "" {
