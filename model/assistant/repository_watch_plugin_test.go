@@ -27,6 +27,7 @@ type repositoryWatchTestGitHub struct {
 	commitCalls  int
 	pullCalls    int
 	releaseCalls int
+	pullCommits  map[int][]map[string]any
 	starCalls    int
 	diffCalls    int
 	failCommits  bool
@@ -41,6 +42,13 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	// PR 的 commits 必须排在仓库 commits 前面：两者路径都以 /commits 结尾。
+	if strings.Contains(r.URL.Path, "/pulls/") && strings.HasSuffix(r.URL.Path, "/commits") {
+		var number int
+		_, _ = fmt.Sscanf(r.URL.Path, "/repos/acme/demo/pulls/%d/commits", &number)
+		_ = json.NewEncoder(w).Encode(s.pullCommits[number])
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/commits") {
 		s.commitCalls++
 		if s.failCommits {
@@ -230,6 +238,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		releases:     []map[string]any{repositoryWatchReleasePayload("v1.0.0", "First")},
 		starCount:    10,
 		pullFiles:    map[int][]map[string]any{},
+		pullCommits:  map[int][]map[string]any{},
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
@@ -282,7 +291,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		t.Fatalf("snapshot=%#v", change.Snapshot)
 	}
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"diana 于 ", "PR #2（已合并）", "Release v1.1.0", "Star +3", "10 → 13"} {
+	for _, want := range []string{"作者：diana", "PR #2（已合并）", "Release v1.1.0", "Star +3（10 → 13）"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -354,7 +363,7 @@ func TestRenderRepositoryWatchChangesAlwaysIncludesEveryFetchedCommit(t *testing
 		Truncated: true,
 	}
 	result := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"1111111 first", "2222222 second", "3333333 third", "Release v1.2.3", "Stable", "本次只展示了部分最新提交。"} {
+	for _, want := range []string{"Commit 1111111\nfirst", "Commit 2222222\nsecond", "Commit 3333333\nthird", "Release v1.2.3", "Stable", "本次只展示了部分最新提交。"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, result)
 		}
@@ -377,7 +386,7 @@ func TestRenderRepositoryWatchChangesUsesQQFriendlyIssueAndStarFormat(t *testing
 	}
 
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"Issue #128（新建）", "创建于", "Star +7", "@alice、@bob、@carol、@dave、@eve 等 2 人", "128 → 135"} {
+	for _, want := range []string{"Issue #128（新建）", "作者：alice", "创建于 ", "Star +7（128 → 135）", "@alice、@bob、@carol、@dave、@eve 等 2 人"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -420,7 +429,7 @@ func TestLimitRepositoryWatchChangeKeepsNewestItemsUpToTheLimit(t *testing.T) {
 		t.Fatalf("latest releases=%#v", latest.Releases)
 	}
 	rendered := renderRepositoryWatchChanges(latest)
-	if !strings.Contains(rendered, formatRepositoryWatchShortTime(latest.Commits[0].PushedAt)) {
+	if !strings.Contains(rendered, formatRepositoryWatchTime(latest.Commits[0].PushedAt)) {
 		t.Fatalf("rendered timestamp missing: %s", rendered)
 	}
 	if !strings.Contains(rendered, "还有 2 个提交未列出。") {
@@ -629,6 +638,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 			repositoryWatchPullPayload(2, "add classified notifications", "open", "", "2026-08-14T00:00:00Z"),
 			repositoryWatchPullPayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z"),
 		},
+		pullCommits: map[int][]map[string]any{},
 		pullFiles: map[int][]map[string]any{2: {{
 			"filename": "model/assistant/repository_watch_plugin.go", "status": "modified",
 			"additions": 12, "deletions": 1, "changes": 13, "patch": "@@ -1 +1 @@\n-old\n+classified",
@@ -665,30 +675,36 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		sentText = fmt.Sprint(channel.calls)
 	}
 	delivered := len(channel.sent) > 0 || len(channel.calls) > 0 && channel.calls[0].action == "send_group_forward_msg"
-	if !delivered || !strings.Contains(sentText, "diana 于 ") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
+	if !delivered || !strings.Contains(sentText, "作者：diana") || !strings.Contains(sentText, "Commit new-sha\nfix delivery") || !strings.Contains(sentText, "PR #2（更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1（7 → 8）") || strings.Contains(sentText, "watch-2") {
 		t.Fatalf("sent=%#v calls=%#v item=%#v requests=%#v", channel.sent, channel.calls, store.items[0], provider.requests)
 	}
 	item := store.items[0]
 	if item.LastCommitSHA != "new-sha" || item.LastPullRequestCursor == "" || item.LastReleaseTag != "v1.1.0" || item.LastStarCount != 8 || item.PendingDelivery != "" || item.ConsecutiveFailures != 0 {
 		t.Fatalf("item=%#v", item)
 	}
-	if len(provider.requests) != 1 || len(provider.requests[0].Tools) == 0 || !requestMessagesContain(provider.requests[0].Messages, "【external_event】") || !requestMessagesContain(provider.requests[0].Messages, "source: github.repository_watch") || !requestMessagesContain(provider.requests[0].Messages, "trust: trusted_service_data") || !requestMessagesContain(provider.requests[0].Messages, "fix delivery") || !requestMessagesContain(provider.requests[0].Messages, "classified notifications") || !requestMessagesContain(provider.requests[0].Messages, "repository_watch_plugin.go") || !requestMessagesContain(provider.requests[0].Messages, "+classified") || !requestMessagesContain(provider.requests[0].Messages, "v1.1.0") || !requestMessagesContain(provider.requests[0].Messages, "本群限定的自然人设") || !requestMessagesContain(provider.requests[0].Messages, "不得评价好坏") || requestMessagesContain(provider.requests[0].Messages, "自然反应或评价") || requestMessagesContain(provider.requests[0].Messages, "watch-2") {
-		t.Fatalf("requests=%#v", provider.requests)
+	// 通知本身不经过模型；唯一一次调用是发出去之后的跟评。
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected exactly one follow-up call, got %d: %#v", len(provider.requests), provider.requests)
 	}
-	history := runtime.contextHistory(MessageEvent{Kind: EventKindGroup, GroupID: "123"})
-	foundExternalEvent := false
-	for _, event := range history {
-		if event.ExternalEvent != nil && event.ExternalEvent.Source == "github.repository_watch" && event.ExternalEvent.Trust == "trusted_service_data" {
-			foundExternalEvent = true
-			break
+	followUp := provider.requests[0]
+	for _, want := range []string{"本群限定的自然人设", "你刚刚把下面这条仓库动态发到了这个会话里", "不要复述或概括改了什么", "fix delivery"} {
+		if !requestMessagesContain(followUp.Messages, want) {
+			t.Fatalf("follow-up prompt missing %q: %#v", want, followUp.Messages)
 		}
 	}
-	if !foundExternalEvent {
-		t.Fatalf("repository external event was not persisted in conversation history: %#v", history)
+	// 跟评只是一句感想：不该拿到原始 payload 和 diff，也不需要工具。
+	for _, unwanted := range []string{"【external_event】", "trust: trusted_service_data", "repository_watch_plugin.go", "+classified", "watch-2"} {
+		if requestMessagesContain(followUp.Messages, unwanted) {
+			t.Fatalf("follow-up prompt leaked %q: %#v", unwanted, followUp.Messages)
+		}
+	}
+	if len(followUp.Tools) != 0 {
+		t.Fatalf("follow-up should not carry tools: %#v", followUp.Tools)
 	}
 }
 
-func TestRuntimeRepositoryWatchRetriesStoredSummaryWithoutCallingLLMAgain(t *testing.T) {
+// 投递失败时把渲染好的通知存下来，下一轮原样补发；跟评只在真的送出去之后才发。
+func TestRuntimeRepositoryWatchRetriesStoredNotificationAndCommentsOnlyAfterDelivery(t *testing.T) {
 	github := &repositoryWatchTestGitHub{
 		commits: []map[string]any{
 			repositoryWatchCommitPayload("new-sha", "fix delivery"),
@@ -704,15 +720,17 @@ func TestRuntimeRepositoryWatchRetriesStoredSummaryWithoutCallingLLMAgain(t *tes
 		TriggerAt: time.Now().Add(-time.Minute), IntervalSeconds: 1800, CreatedAt: time.Now().Add(-time.Hour),
 	}}}
 	channel := &scriptedChannel{sendErrs: []error{context.DeadlineExceeded, nil, nil}}
-	provider := &sequenceLLMProvider{replies: []string{"修复了消息投递。"}}
+	provider := &sequenceLLMProvider{replies: []string{"又在修投递喵。"}}
 	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(plugin), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
 	runtime.fireDueReminders(context.Background())
-	if len(provider.requestsSnapshot()) != 1 || store.items[0].PendingDelivery == "" || store.items[0].LastCommitSHA != "new-sha" || store.items[0].ConsecutiveFailures != 1 {
+	// 第一轮连事实卡片都没送出去，没有可评的东西，不该有任何模型调用。
+	if len(provider.requestsSnapshot()) != 0 || store.items[0].PendingDelivery == "" || store.items[0].LastCommitSHA != "new-sha" || store.items[0].ConsecutiveFailures != 1 {
 		t.Fatalf("requests=%d item=%#v", len(provider.requestsSnapshot()), store.items[0])
 	}
 
 	store.items[0].TriggerAt = time.Now().Add(-time.Second)
 	runtime.fireDueReminders(context.Background())
+	// 补投成功之后才轮到跟评，而且补投用的是存下来的原文，不重新渲染。
 	if len(provider.requestsSnapshot()) != 1 || store.items[0].PendingDelivery != "" || store.items[0].ConsecutiveFailures != 0 {
 		t.Fatalf("requests=%d item=%#v", len(provider.requestsSnapshot()), store.items[0])
 	}
@@ -927,8 +945,8 @@ func TestRepositoryWatchRecoveryNoticeStaysPendingUntilAcknowledged(t *testing.T
 	}
 }
 
-// 紧凑排版取消了「Commit（分支，作者 X）」节标题，作者写进每条提交的署名行。
-func TestRenderRepositoryWatchChangesWritesABylinePerCommit(t *testing.T) {
+// 取消了「Commit（分支，作者 X）」节标题，作者写进每条提交自己的行里。
+func TestRenderRepositoryWatchChangesWritesAnAuthorPerCommit(t *testing.T) {
 	pushedAt := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
 	change := repositoryWatchChange{
 		Commits: []repositoryWatchCommit{
@@ -940,13 +958,13 @@ func TestRenderRepositoryWatchChangesWritesABylinePerCommit(t *testing.T) {
 	if strings.Contains(result, "Commit（") {
 		t.Fatalf("section header should be gone: %s", result)
 	}
-	want := "SuInk 于 " + formatRepositoryWatchShortTime(pushedAt) + " 提交"
-	if strings.Count(result, want) != 2 {
-		t.Fatalf("expected a byline on each commit: %s", result)
+	if strings.Count(result, "作者：SuInk") != 2 {
+		t.Fatalf("expected an author line on each commit: %s", result)
 	}
-	// 每条提交两行：短 SHA 加标题，然后署名加短链接。
-	if !strings.Contains(result, "3e3f03f 合并 PR #85\n"+want+" · https://example.test/1") {
-		t.Fatalf("compact two-line layout missing: %s", result)
+	// 每条提交五行：类型加短 SHA、标题、作者、提交时间、短链接。
+	want := "Commit 3e3f03f\n合并 PR #85\n作者：SuInk\n提交于 " + formatRepositoryWatchTime(pushedAt) + "\nhttps://example.test/1"
+	if !strings.Contains(result, want) {
+		t.Fatalf("commit layout missing %q: %s", want, result)
 	}
 }
 
@@ -962,40 +980,39 @@ func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *test
 	if strings.Contains(result, "Commit（") {
 		t.Fatalf("section header should be gone: %s", result)
 	}
-	// URL 缺失时第二行不能留下一个孤零零的分隔符。
-	if strings.Contains(result, "提交 ·") {
-		t.Fatalf("dangling separator left behind without a url: %s", result)
-	}
-	for _, want := range []string{"alice 于 ", "bob 于 "} {
+	for _, want := range []string{"作者：alice", "作者：bob"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, result)
 		}
 	}
 }
 
-// 概括排在事实清单之后，并且单独分成一条消息。
-func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
-	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
-	want := "GitHub 动态：SuInk/Diana\nCommit（默认分支）\n3e3f03f 合并 PR #85\n<botbr>\n刚更新了回复风格与语气控制。"
+// 通知只承载确定性的事实清单，不带模型概括。
+func TestComposeRepositoryWatchMessageCarriesOnlyFacts(t *testing.T) {
+	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit 3e3f03f\n合并 PR #85")
+	want := "GitHub 动态：SuInk/Diana\nCommit 3e3f03f\n合并 PR #85"
 	if message != want {
 		t.Fatalf("message = %q, want %q", message, want)
 	}
-	if got := composeRepositoryWatchMessage("SuInk/Diana", "", ""); got != "GitHub 动态：SuInk/Diana" {
+	if got := composeRepositoryWatchMessage("SuInk/Diana", ""); got != "GitHub 动态：SuInk/Diana" {
 		t.Fatalf("empty change message = %q", got)
 	}
-	// 概括缺失（模型没跑或失败）时不能留下一个孤零零的分条符。
-	got := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "")
-	if strings.Contains(got, notificationSplitMarker) {
-		t.Fatalf("dangling split marker without a summary: %q", got)
+	if strings.Contains(message, notificationSplitMarker) {
+		t.Fatalf("unexpected split marker: %q", message)
 	}
-	if chunks := splitNotification(got, notificationChunkSize); len(chunks) != 1 {
-		t.Fatalf("summaryless notification should stay in one message, got %#v", chunks)
+	if chunks := splitNotification(message, notificationChunkSize); len(chunks) != 1 {
+		t.Fatalf("notification should stay in one message, got %#v", chunks)
 	}
 }
 
-func TestRenderRepositoryWatchChangesPutsTimeRightAboveTheLink(t *testing.T) {
+// 五类动态排版必须一致：每行一件事，从上到下是「类型 + 标识（状态）」「标题」
+// 「作者」「附加信息」「动作 + 时间」「链接」。此前每类各写各的，同一条通知里
+// 时间格式、作者写法和链接位置都不同。
+func TestRenderRepositoryWatchChangesKeepsOneShapeForEveryKind(t *testing.T) {
 	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
 	change := repositoryWatchChange{
+		Branch:  "main",
+		Commits: []repositoryWatchCommit{{SHA: "ee5a54bdd5712ab", Title: "bump version", Author: "SuInk", PushedAt: at, URL: "https://github.com/SuInk/Diana/commit/ee5a54bdd5712ab"}},
 		PullRequests: []repositoryWatchPullRequest{{
 			Number: 85, Title: "新增群友回复风格", Author: "SuInk", Status: "merged",
 			BaseBranch: "main", HeadBranch: "claude/hello", OccurredAt: at,
@@ -1005,16 +1022,49 @@ func TestRenderRepositoryWatchChangesPutsTimeRightAboveTheLink(t *testing.T) {
 			Number: 128, Title: "修复通知格式", Author: "alice", Status: "opened", CreatedAt: at,
 			URL: "https://github.com/SuInk/Diana/issues/128",
 		}},
+		Releases: []repositoryWatchRelease{{Tag: "v0.8.46", PublishedAt: at, URL: "https://github.com/SuInk/Diana/releases/tag/v0.8.46"}},
 	}
 	result := renderRepositoryWatchChanges(change)
 	stamp := formatRepositoryWatchTime(at)
 	for _, want := range []string{
-		"合并于 " + stamp + "\nhttps://github.com/SuInk/Diana/pull/85",
-		"创建于 " + stamp + "\nhttps://github.com/SuInk/Diana/issues/128",
+		"Commit ee5a54b\nbump version\n作者：SuInk\n提交于 " + stamp + "\nhttps://github.com/SuInk/Diana/commit/ee5a54b",
+		"PR #85（已合并）\n新增群友回复风格\n作者：SuInk\nmain ← claude/hello\n合并于 " + stamp + "\nhttps://github.com/SuInk/Diana/pull/85",
+		"Issue #128（新建）\n修复通知格式\n作者：alice\n创建于 " + stamp + "\nhttps://github.com/SuInk/Diana/issues/128",
+		"Release v0.8.46\n发布于 " + stamp + "\nhttps://github.com/SuInk/Diana/releases/tag/v0.8.46",
 	} {
 		if !strings.Contains(result, want) {
-			t.Fatalf("rendered changes missing %q: %s", want, result)
+			t.Fatalf("rendered changes missing %q:\n%s", want, result)
 		}
+	}
+	// 每类都以类型词开头，扫一眼就知道这条是什么。
+	for _, prefix := range []string{"Commit ", "PR #", "Issue #", "Release "} {
+		if !strings.Contains(result, prefix) {
+			t.Fatalf("missing type label %q:\n%s", prefix, result)
+		}
+	}
+	// 链接始终自成一行、且是每条的最后一行。
+	for _, line := range strings.Split(result, "\n") {
+		if strings.Contains(line, "http") && !strings.HasPrefix(line, "http") {
+			t.Fatalf("link should own its line: %q", line)
+		}
+	}
+}
+
+// 作者或分支缺失时整行删掉，不留下「作者：」这种半截话。
+func TestRenderRepositoryWatchChangesDropsEmptyLines(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	result := renderRepositoryWatchChanges(repositoryWatchChange{
+		PullRequests: []repositoryWatchPullRequest{{
+			Number: 85, Title: "无作者无分支", Status: "opened", OccurredAt: at,
+			URL: "https://github.com/SuInk/Diana/pull/85",
+		}},
+	})
+	if strings.Contains(result, "作者：") {
+		t.Fatalf("authorless entry kept a dangling label: %q", result)
+	}
+	want := "PR #85（新建）\n无作者无分支\n创建于 " + formatRepositoryWatchTime(at) + "\nhttps://github.com/SuInk/Diana/pull/85"
+	if !strings.Contains(result, want) {
+		t.Fatalf("result = %q", result)
 	}
 }
 
@@ -1036,25 +1086,29 @@ func TestRenderRepositoryWatchChangesDoesNotRepeatTheReleaseTag(t *testing.T) {
 // 群友风格把聊天回复压到 160 字，通知不能跟着被拦腰截断。
 func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 	at := time.Date(2026, 8, 20, 14, 27, 21, 0, time.UTC)
-	change := repositoryWatchChange{Commits: []repositoryWatchCommit{{
-		SHA: "fd1a2793f402fd5107e46e6d53772400b446e22c", Author: "SuInk", PushedAt: at,
-		Title: "Merge PR #122: 发布链接解析合并转发修复与聊天记录时间段查询",
-		URL:   "https://github.com/SuInk/Diana/commit/fd1a2793f402fd5107e46e6d53772400b446e22c",
-	}}}
-	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change), "版本号由 v0.8.43 升至 v0.8.44。")
+	change := repositoryWatchChange{Commits: []repositoryWatchCommit{
+		{
+			SHA: "fd1a2793f402fd5107e46e6d53772400b446e22c", Author: "SuInk", PushedAt: at,
+			Title: "Merge PR #122: 发布链接解析合并转发修复与聊天记录时间段查询",
+			URL:   "https://github.com/SuInk/Diana/commit/fd1a2793f402fd5107e46e6d53772400b446e22c",
+		},
+		{
+			SHA: "9a534160ab1c4d6e8f2b7c0d5e3a1f9b8c7d6e5f", Author: "SuInk", PushedAt: at,
+			Title: "聊天记录工具新增按时间段列出消息的 range 操作",
+			URL:   "https://github.com/SuInk/Diana/commit/9a534160ab1c4d6e8f2b7c0d5e3a1f9b8c7d6e5f",
+		},
+	}}
+	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change))
 	if len([]rune(message)) <= groupmateReplyChunkSize {
 		t.Fatalf("sample notification is too short to cover the regression: %d runes", len([]rune(message)))
 	}
-	// 事实清单一条、概括一条；长度限制不该再往下切。
+	// 事实清单必须整条留在一起，长度限制不该把它切开。
 	chunks := splitNotification(message, notificationChunkSize)
-	if len(chunks) != 2 {
-		t.Fatalf("notification should be the fact block plus the summary, got %#v", chunks)
+	if len(chunks) != 1 {
+		t.Fatalf("notification should stay in one message, got %#v", chunks)
 	}
 	if !strings.Contains(chunks[0], "https://github.com/SuInk/Diana/commit/fd1a279") {
 		t.Fatalf("fact block lost the commit link: %q", chunks[0])
-	}
-	if chunks[1] != "版本号由 v0.8.43 升至 v0.8.44。" {
-		t.Fatalf("summary chunk = %q", chunks[1])
 	}
 	// 对照：聊天切分会在 160 字处把链接甩到下一条，这正是通知不能复用它的原因。
 	if chunks := splitReply(message, groupmateReplyChunkSize); len(chunks) < 2 {
@@ -1062,39 +1116,14 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 	}
 }
 
-// 短 SHA 链接和署名的退化路径。
-func TestRepositoryWatchCommitBylineAndShortURL(t *testing.T) {
+// 短 SHA 链接的退化路径。
+func TestRepositoryWatchShortCommitURL(t *testing.T) {
 	full := "https://github.com/SuInk/Diana/commit/fd1a2793f402fd5107e46e6d53772400b446e22c"
 	if got := repositoryWatchShortCommitURL(full, "fd1a279"); got != "https://github.com/SuInk/Diana/commit/fd1a279" {
 		t.Fatalf("short url = %q", got)
 	}
 	if got := repositoryWatchShortCommitURL("", "fd1a279"); got != "" {
 		t.Fatalf("empty url should stay empty, got %q", got)
-	}
-	if got := repositoryWatchCommitByline("SuInk", "08-20 14:27"); got != "SuInk 于 08-20 14:27 提交" {
-		t.Fatalf("byline = %q", got)
-	}
-	// 作者缺失时不能留下一个光秃秃的「于」。
-	if got := repositoryWatchCommitByline("", "08-20 14:27"); got != "提交于 08-20 14:27" {
-		t.Fatalf("authorless byline = %q", got)
-	}
-	if got := repositoryWatchCommitByline("", ""); got != "" {
-		t.Fatalf("empty byline = %q", got)
-	}
-}
-
-// 标题和事实清单留在同一条里，只有概括单独成条：一次动态最多刷两条。
-func TestComposeRepositoryWatchMessageSplitsOnlyBeforeTheSummary(t *testing.T) {
-	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
-	chunks := splitNotification(message, notificationChunkSize)
-	if len(chunks) != 2 {
-		t.Fatalf("notification should be exactly two messages, got %#v", chunks)
-	}
-	if chunks[0] != "GitHub 动态：SuInk/Diana\nCommit（默认分支）\n3e3f03f 合并 PR #85" {
-		t.Fatalf("fact block = %q", chunks[0])
-	}
-	if chunks[1] != "刚更新了回复风格与语气控制。" {
-		t.Fatalf("summary chunk = %q", chunks[1])
 	}
 }
 
@@ -1110,14 +1139,151 @@ func TestComposeRepositoryWatchMessageKeepsEveryChangeInOneMessage(t *testing.T)
 		},
 		Releases: []repositoryWatchRelease{{Tag: "v0.8.36", PublishedAt: at, URL: "https://example.com/r"}},
 	}
-	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change), "发布了新版本。")
+	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change))
 	chunks := splitNotification(message, notificationChunkSize)
-	if len(chunks) != 2 {
-		t.Fatalf("fact block should stay in one message plus the summary, got %#v", chunks)
+	if len(chunks) != 1 {
+		t.Fatalf("fact block should stay in one message, got %#v", chunks)
 	}
-	for _, want := range []string{"GitHub 动态：SuInk/Diana", "ee5a54b bump version", "Issue #128", "Issue #129", "Release v0.8.36"} {
+	for _, want := range []string{"GitHub 动态：SuInk/Diana", "Commit ee5a54b\nbump version", "Issue #128", "Issue #129", "Release v0.8.36"} {
 		if !strings.Contains(chunks[0], want) {
 			t.Fatalf("fact block missing %q: %q", want, chunks[0])
 		}
+	}
+}
+
+// 详细排版下条与条之间没有分隔，靠编号划边界；只有一条时不编号，免得多余。
+func TestRenderRepositoryWatchChangesNumbersEntriesOnlyWhenThereAreSeveral(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	commit := repositoryWatchCommit{SHA: "1111111aaa", Title: "first", Author: "alice", PushedAt: at, URL: "https://example.test/1"}
+
+	single := renderRepositoryWatchChanges(repositoryWatchChange{Commits: []repositoryWatchCommit{commit}})
+	if !strings.HasPrefix(single, "Commit 1111111") {
+		t.Fatalf("a lone entry should not be numbered: %q", single)
+	}
+
+	many := renderRepositoryWatchChanges(repositoryWatchChange{
+		Commits:      []repositoryWatchCommit{commit},
+		PullRequests: []repositoryWatchPullRequest{{Number: 85, Title: "second", Author: "bob", Status: "opened", OccurredAt: at, URL: "https://example.test/2"}},
+		Issues:       []repositoryWatchIssue{{Number: 128, Title: "third", Author: "carol", Status: "opened", CreatedAt: at, URL: "https://example.test/3"}},
+	})
+	// 编号跨类别连续，方便在群里指认「第 3 条」。
+	for _, want := range []string{"1. Commit 1111111", "2. PR #85（新建）", "3. Issue #128（新建）"} {
+		if !strings.Contains(many, want) {
+			t.Fatalf("missing %q:\n%s", want, many)
+		}
+	}
+	// 只有每条的首行带编号，正文行不受影响。
+	if strings.Contains(many, "1. 作者") || strings.Contains(many, "2. 作者") {
+		t.Fatalf("numbering leaked into the body lines:\n%s", many)
+	}
+}
+
+// 「还有 N 个提交未列出」是说明，不是动态，不占编号。
+func TestRenderRepositoryWatchChangesDoesNotNumberTrailingNotes(t *testing.T) {
+	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
+	result := renderRepositoryWatchChanges(repositoryWatchChange{
+		Commits: []repositoryWatchCommit{
+			{SHA: "1111111aaa", Title: "first", Author: "alice", PushedAt: at, URL: "https://example.test/1"},
+			{SHA: "2222222bbb", Title: "second", Author: "alice", PushedAt: at, URL: "https://example.test/2"},
+		},
+		OmittedCommits: 3,
+	})
+	if !strings.Contains(result, "1. Commit 1111111") || !strings.Contains(result, "2. Commit 2222222") {
+		t.Fatalf("entries were not numbered:\n%s", result)
+	}
+	if !strings.HasSuffix(result, "还有 3 个提交未列出。") || strings.Contains(result, "3. 还有") {
+		t.Fatalf("trailing note should stay unnumbered:\n%s", result)
+	}
+}
+
+// PR 合并后它的提交才落到被监控分支上，于是同一份工作会报两次：PR 条目一次，
+// 它带上来的每个提交再各一次。已合并 PR 覆盖到的提交要折叠掉，与 PR 无关的
+// 提交照常保留。
+func TestRepositoryWatchFoldsCommitsCoveredByMergedPullRequests(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		commits:      []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
+		pullRequests: []map[string]any{repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z")},
+		pullFiles:    map[int][]map[string]any{},
+		pullCommits:  map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Commits: true, PullRequests: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	github.mu.Lock()
+	github.commits = []map[string]any{
+		repositoryWatchCommitPayload("merge-sha", "Merge pull request #2 from acme/feature"),
+		repositoryWatchCommitPayload("pr-commit-b", "second PR commit"),
+		repositoryWatchCommitPayload("pr-commit-a", "first PR commit"),
+		repositoryWatchCommitPayload("direct-sha", "直接推到 main 的提交"),
+		repositoryWatchCommitPayload("base-sha", "initial"),
+	}
+	github.pullRequests = []map[string]any{
+		repositoryWatchPullPayload(2, "统一通知排版", "merged", "merge-sha", "2026-08-14T00:00:00Z"),
+	}
+	github.pullCommits[2] = []map[string]any{{"sha": "pr-commit-a"}, {"sha": "pr-commit-b"}}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Commits) != 1 || change.Commits[0].SHA != "direct-sha" {
+		t.Fatalf("merged PR commits were not folded: %#v", change.Commits)
+	}
+	if len(change.PullRequests) != 1 || change.PullRequests[0].Number != 2 {
+		t.Fatalf("pull requests = %#v", change.PullRequests)
+	}
+	// 游标仍要推进到最新提交，折叠只影响展示。
+	if change.Snapshot.CommitSHA != "merge-sha" {
+		t.Fatalf("cursor must still advance past folded commits: %q", change.Snapshot.CommitSHA)
+	}
+	rendered := renderRepositoryWatchChanges(change)
+	for _, unwanted := range []string{"pr-commit-a", "pr-commit-b", "Merge pull request #2"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("folded commit leaked into the notification %q:\n%s", unwanted, rendered)
+		}
+	}
+}
+
+// 拿不到 PR 的提交列表时保留原样：一次 API 失败不能把提交吞掉。
+func TestRepositoryWatchKeepsCommitsWhenPullRequestCommitsAreUnavailable(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		commits:      []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
+		pullRequests: []map[string]any{repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z")},
+		pullFiles:    map[int][]map[string]any{},
+		pullCommits:  map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Commits: true, PullRequests: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	github.mu.Lock()
+	github.commits = []map[string]any{
+		repositoryWatchCommitPayload("pr-commit-a", "first PR commit"),
+		repositoryWatchCommitPayload("base-sha", "initial"),
+	}
+	// merge_commit_sha 留空，pullCommits 也没有这个 PR：等价于列表拿不到。
+	github.pullRequests = []map[string]any{repositoryWatchPullPayload(2, "无法读取提交", "merged", "", "2026-08-14T00:00:00Z")}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Commits) != 1 || change.Commits[0].SHA != "pr-commit-a" {
+		t.Fatalf("commits should survive an unusable PR commit list: %#v", change.Commits)
 	}
 }

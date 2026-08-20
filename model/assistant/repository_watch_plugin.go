@@ -177,8 +177,8 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 		Settings: []PluginSettingSpec{
 			{
 				Key:         pluginSettingAskAgent,
-				Label:       "允许 Agent 回复",
-				Description: "允许仓库更新事件进入正式 Agent 回复流程并生成自然概括；关闭后只发送确定性的变更明细。",
+				Label:       "允许机器人跟评",
+				Description: "事实清单发出去之后，让机器人像群成员那样再顺口说一句反应。它只是感想，不承载「改了什么」——那些以清单为准。关闭后只发送确定性的变更明细。",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
 			},
@@ -214,36 +214,8 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key:         repositoryWatchSettingTemplateHeader,
-				Label:       "推送模板：整体",
-				Description: "整条通知的组装格式，可用 {repository} {summary} {body}。单独一行写 <botbr> 表示从这里分成下一条消息发送。留空使用默认格式；占位符所在行替换后为空会整行删除。",
-				Type:        PluginSettingTypeText,
-				Default:     "",
-			},
-			{
-				Key:         repositoryWatchSettingTemplateCommit,
-				Label:       "推送模板：Commit",
-				Description: "每条提交的格式，可用 {sha} {title} {author} {time} {time_short} {byline} {branch} {url} {short_url}。{time_short} 省掉秒与当年年份，{short_url} 是短 SHA 链接，{byline} 是「作者 于 时间 提交」，作者缺失时自动退成「提交于 时间」。",
-				Type:        PluginSettingTypeText,
-				Default:     "",
-			},
-			{
-				Key:         repositoryWatchSettingTemplatePull,
-				Label:       "推送模板：PR",
-				Description: "每条 PR 的格式，可用 {number} {status} {title} {author} {branches} {time_label} {time} {url}。",
-				Type:        PluginSettingTypeText,
-				Default:     "",
-			},
-			{
-				Key:         repositoryWatchSettingTemplateIssue,
-				Label:       "推送模板：Issue",
-				Description: "每条 Issue 的格式，可用 {number} {status} {title} {author} {time_label} {time} {url}。",
-				Type:        PluginSettingTypeText,
-				Default:     "",
-			},
-			{
-				Key:         repositoryWatchSettingTemplateRelease,
-				Label:       "推送模板：Release",
-				Description: "每条 Release 的格式，可用 {label} {tag} {name} {time} {url}。",
+				Label:       "推送模板",
+				Description: "整条通知的组装格式，可用 {repository} {summary} {body}。{body} 是五类动态的事实清单，排版固定为「类型 + 标识 + 标题」加「谁于何时做了什么 · 链接」两行。单独一行写 <botbr> 表示从这里分成下一条消息发送，删掉那一行则合并成一条。留空使用默认格式；占位符所在行替换后为空会整行删除。",
 				Type:        PluginSettingTypeText,
 				Default:     "",
 			},
@@ -331,6 +303,9 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 			change.PullRequests = pullRequests
 			change.Snapshot.PullRequestCursor = snapshot
 		}
+	}
+	if selection.Commits && selection.PullRequests && len(change.Commits) > 0 && len(change.PullRequests) > 0 {
+		change.Commits = p.foldMergedPullRequestCommits(ctx, repository, change.Commits, change.PullRequests, settings)
 	}
 	if selection.Issues {
 		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, settings)
@@ -547,6 +522,60 @@ func (p *RepositoryWatchPlugin) fetchSingleCommitDiff(ctx context.Context, repos
 	}
 	files, truncated := repositoryWatchDiffFiles(payload.Files, 30)
 	return &repositoryWatchDiff{Head: strings.TrimSpace(sha), TotalCommits: 1, AheadBy: 1, Files: files, FilesTruncated: truncated}, nil
+}
+
+// foldMergedPullRequestCommits 去掉那些已经被同一条通知里的「已合并 PR」代表了的
+// 提交。PR 合并后它的提交才会落到被监控分支上，于是同一份工作报两次：一次是 PR
+// 条目，一次是它带上来的每个提交，外加一条「Merge pull request #N」。PR 条目已经
+// 给了标题、作者、分支和链接，逐个提交只是重复。
+//
+// 拿不到某个 PR 的提交列表时保留原样：宁可多报，不能因为一次 API 失败就把提交吞掉。
+func (p *RepositoryWatchPlugin) foldMergedPullRequestCommits(ctx context.Context, repository string, commits []repositoryWatchCommit, pullRequests []repositoryWatchPullRequest, settings SettingValues) []repositoryWatchCommit {
+	covered := make(map[string]bool)
+	for _, pullRequest := range pullRequests {
+		if !strings.EqualFold(strings.TrimSpace(pullRequest.Status), "merged") {
+			continue
+		}
+		// 合并提交本身（squash 时就是那条压缩提交）与 PR 条目完全重复。
+		if sha := strings.ToLower(strings.TrimSpace(pullRequest.MergeCommitSHA)); sha != "" {
+			covered[sha] = true
+		}
+		shas, err := p.fetchPullRequestCommitSHAs(ctx, repository, pullRequest.Number, settings)
+		if err != nil {
+			continue
+		}
+		for sha := range shas {
+			covered[sha] = true
+		}
+	}
+	if len(covered) == 0 {
+		return commits
+	}
+	kept := make([]repositoryWatchCommit, 0, len(commits))
+	for _, commit := range commits {
+		if covered[strings.ToLower(strings.TrimSpace(commit.SHA))] {
+			continue
+		}
+		kept = append(kept, commit)
+	}
+	return kept
+}
+
+func (p *RepositoryWatchPlugin) fetchPullRequestCommitSHAs(ctx context.Context, repository string, number int, settings SettingValues) (map[string]bool, error) {
+	var payload []struct {
+		SHA string `json:"sha"`
+	}
+	path := fmt.Sprintf("/repos/%s/pulls/%d/commits?per_page=100", repository, number)
+	if err := p.getJSON(ctx, path, settings, &payload); err != nil {
+		return nil, fmt.Errorf("读取 %s PR #%d commits: %w", repository, number, err)
+	}
+	shas := make(map[string]bool, len(payload))
+	for _, item := range payload {
+		if sha := strings.ToLower(strings.TrimSpace(item.SHA)); sha != "" {
+			shas[sha] = true
+		}
+	}
+	return shas, nil
 }
 
 func (p *RepositoryWatchPlugin) fetchPullRequestFiles(ctx context.Context, repository string, number int, settings SettingValues) ([]repositoryWatchDiffFile, bool, error) {
