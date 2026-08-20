@@ -9957,9 +9957,13 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 	return false
 }
 
-// notificationChunkSize 是通知的兜底长度，取自 Config 的出厂默认值；人格预设可以
-// 把聊天回复压得更短，但不该压通知。
-const notificationChunkSize = 900
+// notificationChunkSize 是通知的兜底长度。人格预设可以把聊天回复压得更短，但不
+// 该压通知——事实卡片被切开就没法读了。
+//
+// 上限由平台决定：Telegram sendMessage 的硬限制是 4096 个 UTF-16 码元，一个
+// emoji 占两个，所以 1800 个字符即使全是 emoji（3600 码元）也进得去；QQ 侧各
+// OneBot 实现的余量都比这更宽。再往上就得按平台分别算长度了，收益不大。
+const notificationChunkSize = 1800
 
 // notificationSplitMarker 是通知里的显式分条符，与回复用的是同一个记号。
 const notificationSplitMarker = "<botbr>"
@@ -9976,16 +9980,7 @@ func splitNotification(text string, chunkSize int) []string {
 	}
 	var out []string
 	for _, part := range strings.Split(text, notificationSplitMarker) {
-		runes := []rune(strings.TrimSpace(part))
-		for len(runes) > chunkSize {
-			// 和回复一样按行、按空白切，别把链接或人名从中间劈开。
-			cut := replyChunkCut(runes, chunkSize)
-			out = append(out, strings.TrimSpace(string(runes[:cut])))
-			runes = runes[cut:]
-		}
-		if trimmed := strings.TrimSpace(string(runes)); trimmed != "" {
-			out = append(out, trimmed)
-		}
+		out = append(out, chunkTextByLength(part, chunkSize)...)
 	}
 	return out
 }
@@ -10000,18 +9995,33 @@ func splitReply(reply string, chunkSize int) []string {
 		return nil
 	}
 	var out []string
-	for _, botPart := range strings.Split(reply, "<botbr>") {
+	for _, botPart := range strings.Split(reply, notificationSplitMarker) {
 		for _, part := range splitReplyParagraphs(botPart) {
-			runes := []rune(strings.TrimSpace(part))
-			for len(runes) > chunkSize {
-				cut := replyChunkCut(runes, chunkSize)
-				out = append(out, strings.TrimSpace(string(runes[:cut])))
-				runes = runes[cut:]
-			}
-			if trimmed := strings.TrimSpace(string(runes)); trimmed != "" {
-				out = append(out, trimmed)
-			}
+			out = append(out, chunkTextByLength(part, chunkSize)...)
 		}
+	}
+	return out
+}
+
+// chunkTextByLength 是发言和通知共用的长度兜底切分：超过 chunkSize 就在 chunkSize
+// 之内找一个体面的断点，空段直接丢掉。两条投递路径的分条规则不同（发言认空行，
+// 通知不认），但「怎么切一段超长文本」必须只有一份实现——之前各写一遍，结果修
+// 好了发言那边、通知那边还在从人名和链接中间硬切。
+func chunkTextByLength(text string, chunkSize int) []string {
+	if chunkSize <= 0 {
+		chunkSize = notificationChunkSize
+	}
+	runes := []rune(strings.TrimSpace(text))
+	var out []string
+	for len(runes) > chunkSize {
+		cut := replyChunkCut(runes, chunkSize)
+		if trimmed := strings.TrimSpace(string(runes[:cut])); trimmed != "" {
+			out = append(out, trimmed)
+		}
+		runes = runes[cut:]
+	}
+	if trimmed := strings.TrimSpace(string(runes)); trimmed != "" {
+		out = append(out, trimmed)
 	}
 	return out
 }
