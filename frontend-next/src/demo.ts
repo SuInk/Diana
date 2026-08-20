@@ -252,7 +252,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === "/api/auth/status") return json({ auth_required: true, authenticated: true, username: "demo" });
   if (path.startsWith("/api/auth/")) return json({ ok: true, username: "demo" });
-  if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo" });
+  if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
 
   if (path === "/api/llm/config/export") return json(llmConfig);

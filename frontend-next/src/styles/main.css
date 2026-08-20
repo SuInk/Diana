@@ -1080,6 +1080,21 @@ code {
   color: var(--text);
 }
 
+/* 侧栏底部的 GitHub 仓库入口，和主题按钮共用 nav-action 外观。 */
+a.nav-action {
+  text-decoration: none;
+}
+
+.nav-repo-icon {
+  flex: none;
+}
+
+.nav-repo .nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 桌面收起态：侧栏完全隐藏，不保留只有图标的中间形态。 */
 .app-sidebar.collapsed {
   transform: translateX(-100%);
