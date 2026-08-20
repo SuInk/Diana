@@ -943,6 +943,9 @@ func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner
 		}
 		return "", ""
 	}
+	if _, _, ok := t.repositoryBoundCredential(repository); ok {
+		return "", ""
+	}
 	mode := repositoryPublishAuthMode(t.settings)
 	if mode == repositoryPublishAuthToken && t.effectiveGlobalToken() == "" {
 		return "token_required", "当前认证方式要求配置 GitHub Token，请在「GitHub 仓库 · 设置」里填写。"
@@ -2236,7 +2239,7 @@ func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, metho
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	token, credentialErr := t.repositoryPublishCredential(requestCtx)
+	token, credentialErr := t.repositoryPublishCredential(requestCtx, repositoryFromGitHubAPIPath(path))
 	if credentialErr != nil {
 		return nil, credentialErr
 	}
@@ -2311,7 +2314,7 @@ func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, metho
 	return headers, nil
 }
 
-func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Context) (string, *repositoryIssueAPIError) {
+func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Context, repository string) (string, *repositoryIssueAPIError) {
 	userID := strings.TrimSpace(t.event.UserID)
 	tokens, _ := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
 	modes, _ := repositoryPublishUserAuthModes(t.settings.String(repositoryPublishSettingUserAuth, ""))
@@ -2325,6 +2328,15 @@ func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Cont
 	if userMode == repositoryPublishAuthGH {
 		t.credentialSource = "gh CLI"
 		return t.repositoryPublishGHCredential(ctx)
+	}
+	// 用户自己配了 Token 的情况上面已经处理；到这里先看目标仓库有没有绑定凭据。
+	if credential, credentialToken, ok := t.repositoryBoundCredential(repository); ok {
+		if credential.authMode() == repositoryCredentialAuthGH {
+			t.credentialSource = "凭据「" + credential.label() + "」（gh CLI）"
+			return t.repositoryPublishGHCredential(ctx)
+		}
+		t.credentialSource = "凭据「" + credential.label() + "」"
+		return credentialToken, nil
 	}
 	token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, ""))
 	t.credentialSource = "公共 GitHub Token"
@@ -2353,14 +2365,30 @@ func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Cont
 // 「已配置」的提示又是「两个插件任一有就算」，结果就是界面说配好了、Issue 却用不了。
 // 与其指望前端每次都能镜像过去，不如让读取侧兑现界面的承诺。
 func (t *dianaRepositoryIssuesTool) sharedGitHubToken() string {
+	return strings.TrimSpace(t.watchSettings().String(repositoryWatchSettingToken, ""))
+}
+
+// watchSettings 取回「仓库订阅」插件的设置。凭据列表和仓库绑定都存在那边——界面上
+// 它们同属一个「GitHub 仓库 · 设置」，仓库本身也归订阅插件管。
+func (t *dianaRepositoryIssuesTool) watchSettings() SettingValues {
 	if t == nil || t.runtime == nil || t.runtime.plugins == nil {
-		return ""
+		return nil
 	}
 	_, settings, enabled := t.runtime.plugins.PluginWithSettings(repositoryWatchPluginID, t.runtime.pluginOverridesForEvent(t.event))
 	if !enabled {
-		return ""
+		return nil
 	}
-	return strings.TrimSpace(settings.String(repositoryWatchSettingToken, ""))
+	return settings
+}
+
+// repositoryBoundCredential 返回目标仓库单独绑定的凭据。没绑定就返回 false，调用方
+// 继续走原来的用户 Token / 公共 Token / gh 顺序。
+func (t *dianaRepositoryIssuesTool) repositoryBoundCredential(repository string) (repositoryCredential, string, bool) {
+	settings := t.watchSettings()
+	if settings == nil {
+		return repositoryCredential{}, "", false
+	}
+	return repositoryCredentialFor(repository, settings)
 }
 
 func (t *dianaRepositoryIssuesTool) repositoryPublishGHCredential(ctx context.Context) (string, *repositoryIssueAPIError) {

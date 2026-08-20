@@ -191,6 +191,35 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 				Secret:      true,
 			},
 			{
+				Key:         repositoryCredentialSettingList,
+				Label:       "GitHub 凭据列表",
+				Description: "由凭据编辑器维护；每条凭据有自己的名字和认证方式，仓库可在「仓库管理」里各自选用。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
+			{
+				Key:         repositoryCredentialSettingTokens,
+				Label:       "GitHub 凭据密钥",
+				Description: "由凭据编辑器维护；每条凭据的 Token 独立保存且不会回显。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+			},
+			{
+				Key:         repositoryCredentialSettingConfigured,
+				Label:       "已配置 Token 的凭据",
+				Description: "由凭据编辑器维护。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
+			{
+				Key:         repositoryCredentialSettingBindings,
+				Label:       "仓库使用的凭据",
+				Description: "由仓库管理维护；未指定的仓库使用下方的公共 Token。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+			},
+			{
 				Key:         repositoryWatchSettingTimeout,
 				Label:       "检查超时",
 				Description: "单次仓库动态检查的最长等待时间。",
@@ -221,6 +250,38 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			},
 		},
 	}
+}
+
+// MergeSecretSetting 按凭据 ID 合并 Token：界面只提交本次真的输入了的那几条，没提交
+// 的沿用已存值，提交空串表示删除。和「用户 GitHub Token」用的是同一套做法。
+func (p *RepositoryWatchPlugin) MergeSecretSetting(key, previous, submitted string) (string, error) {
+	if key != repositoryCredentialSettingTokens {
+		return submitted, nil
+	}
+	current := parseRepositoryCredentialTokens(previous)
+	var updates map[string]*string
+	if err := json.Unmarshal([]byte(submitted), &updates); err != nil {
+		return "", fmt.Errorf("qqbot: invalid credential token update")
+	}
+	for rawID, token := range updates {
+		id := strings.TrimSpace(rawID)
+		if id == "" {
+			return "", fmt.Errorf("qqbot: invalid credential token update")
+		}
+		if token == nil || strings.TrimSpace(*token) == "" {
+			delete(current, id)
+			continue
+		}
+		current[id] = strings.TrimSpace(*token)
+	}
+	if len(current) == 0 {
+		return "", nil
+	}
+	body, err := json.Marshal(current)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 func (*RepositoryWatchPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
@@ -844,7 +905,12 @@ func (p *RepositoryWatchPlugin) getJSONAccept(ctx context.Context, path string, 
 	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "Diana-Repository-Watch")
+	// 仓库单独绑了凭据就用它，否则沿用公共 Token。gh 类型的凭据这里取不到 Token，
+	// 订阅轮询是后台任务、不便调用 gh，此时同样退回公共 Token。
 	token := strings.TrimSpace(settings.String(repositoryWatchSettingToken, ""))
+	if _, credentialToken, ok := repositoryCredentialFor(repositoryFromGitHubAPIPath(path), settings); ok && credentialToken != "" {
+		token = credentialToken
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

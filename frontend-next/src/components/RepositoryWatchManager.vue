@@ -38,6 +38,11 @@
           </div>
           <span class="hint">当前模式默认 {{ formatInterval(defaultIntervalSeconds) }}；可设置 30 秒至 365 天。启用类型越多，每轮 GitHub API 请求越多。</span>
         </div>
+        <div class="field">
+          <label for="plugin-watch-credential">使用的凭据</label>
+          <AppSelect id="plugin-watch-credential" v-model="selectedCredential" :options="credentialOptions" :disabled="!repositoryKey(form.repository ?? '')" />
+          <span class="hint">这个仓库的更新检查和 Issue 操作都走选中的凭据；留空则使用公共 Token。凭据在「Token」标签页里管理。</span>
+        </div>
         <div class="field wide">
           <label for="plugin-watch-profile">发送机器人</label>
           <AppSelect id="plugin-watch-profile" v-model="form.profile_id" :options="profileOptions" />
@@ -177,6 +182,8 @@ const props = defineProps<{
   prepareAccess?: () => Promise<void>;
   tokenConfigured?: boolean;
   issueEnabledRepositories?: string[];
+  credentials?: Array<{ id: string; name: string; auth: string }>;
+  repositoryCredentials?: Record<string, string>;
   userAccess?: string;
   groupAccess?: string;
   draftUserAccess?: string;
@@ -189,6 +196,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   "update:issue-enabled-repositories": [string[]];
+  "update:repository-credentials": [Record<string, string>];
   "update:user-access": [string];
   "update:group-access": [string];
   "update:draft-user-access": [string];
@@ -240,6 +248,31 @@ function startCreate(): void {
   editingTask.value = null;
   editing.value = true;
 }
+
+// 凭据下拉：留空表示沿用公共 Token，与后端「未绑定就回落」的行为一致。
+const credentialOptions = computed(() => [
+  { value: "", label: "使用公共 Token" },
+  ...(props.credentials ?? []).map((item) => ({
+    value: item.id,
+    label: item.auth === "gh" ? `${item.name || item.id}（gh CLI）` : item.name || item.id
+  }))
+]);
+
+const selectedCredential = computed({
+  get(): string {
+    const target = repositoryKey(form.value.repository ?? "").toLowerCase();
+    if (!target) return "";
+    return props.repositoryCredentials?.[target] ?? "";
+  },
+  set(value: string) {
+    const target = repositoryKey(form.value.repository ?? "").toLowerCase();
+    if (!target) return;
+    const next = { ...(props.repositoryCredentials ?? {}) };
+    if (value) next[target] = value;
+    else delete next[target];
+    emit("update:repository-credentials", next);
+  }
+});
 
 function repositoryKey(value: string): string {
   return value.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, "").replace(/\.git\/?$/i, "").replace(/\/$/, "");
