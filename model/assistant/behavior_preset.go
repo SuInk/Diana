@@ -130,17 +130,17 @@ const (
 
 // apply 让风格能改动真正决定「机器人味」的投递方式，而不只是措辞。
 // 每条都自带引用和 @、几百字一条、秒回——这些 prompt 再怎么写都管不到。
-// 两个开关只填未显式设置的项（用户手动开过就尊重用户）；长度和间隔则是这个
+// 两个装饰件只填未显式设置的项（用户手动选过就尊重用户）；长度和间隔则是这个
 // 风格的硬策略：900 字一条、300ms 连发怎么写都不像真人，但比它更克制的设置保留。
 func (style ReplyStyle) apply(cfg *BotConfig) {
 	if style.Normalized() != ReplyStyleGroupmate {
 		return
 	}
-	if cfg.ReplyReferenceEnabled == nil {
-		cfg.ReplyReferenceEnabled = boolPointer(false)
+	if cfg.ReplyReferenceMode == "" && cfg.ReplyReferenceEnabled == nil {
+		cfg.ReplyReferenceMode = ReplyDecorationOff
 	}
-	if cfg.MentionUserEnabled == nil {
-		cfg.MentionUserEnabled = boolPointer(false)
+	if cfg.MentionUserMode == "" && cfg.MentionUserEnabled == nil {
+		cfg.MentionUserMode = ReplyDecorationOff
 	}
 	if cfg.DirectReplyChunkSize <= 0 || cfg.DirectReplyChunkSize > groupmateReplyChunkSize {
 		cfg.DirectReplyChunkSize = groupmateReplyChunkSize

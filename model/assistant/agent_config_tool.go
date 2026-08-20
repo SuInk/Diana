@@ -61,7 +61,9 @@ type dianaBotConfigSnapshot struct {
 	SystemPromptConfigured          bool                     `json:"system_prompt_configured"`
 	SystemPromptChars               int                      `json:"system_prompt_chars,omitempty"`
 	ReplyReferenceEnabled           bool                     `json:"reply_reference_enabled"`
+	ReplyReferenceMode              ReplyDecorationMode      `json:"reply_reference_mode"`
 	MentionUserEnabled              bool                     `json:"mention_user_enabled"`
+	MentionUserMode                 ReplyDecorationMode      `json:"mention_user_mode"`
 	MarkdownToPlain                 bool                     `json:"markdown_to_plain"`
 	ErrorNotifyEnabled              bool                     `json:"error_notify_enabled"`
 	ErrorReplyPrefix                string                   `json:"error_reply_prefix,omitempty"`
@@ -272,8 +274,10 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		WelcomeMessage:                  cfg.WelcomeMessage,
 		SystemPromptConfigured:          strings.TrimSpace(cfg.SystemPrompt) != "",
 		SystemPromptChars:               len([]rune(cfg.SystemPrompt)),
-		ReplyReferenceEnabled:           boolValue(cfg.ReplyReferenceEnabled, true),
-		MentionUserEnabled:              boolValue(cfg.MentionUserEnabled, true),
+		ReplyReferenceEnabled:           replyReferenceMode(cfg) == ReplyDecorationOn,
+		ReplyReferenceMode:              replyReferenceMode(cfg),
+		MentionUserMode:                 mentionUserMode(cfg),
+		MentionUserEnabled:              mentionUserMode(cfg) == ReplyDecorationOn,
 		MarkdownToPlain:                 boolValue(cfg.MarkdownToPlain, true),
 		ErrorNotifyEnabled:              boolValue(cfg.ErrorNotifyEnabled, true),
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
