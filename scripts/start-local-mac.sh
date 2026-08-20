@@ -4,6 +4,33 @@
 
 set -euo pipefail
 
+# launchd does not inherit the interactive shell PATH. Add common package-manager
+# locations when present so media dependencies remain discoverable after login.
+extend_executable_path() {
+	local dir
+	for dir in /opt/homebrew/bin /usr/local/bin /opt/local/bin "$HOME/.local/bin"; do
+		[[ -d "$dir" ]] || continue
+		case ":${PATH:-}:" in
+			*":$dir:"*) ;;
+			*) PATH="$dir${PATH:+:$PATH}" ;;
+		esac
+	done
+	export PATH
+}
+
+extend_path_from_executable() {
+	local executable="${1:-}" dir
+	[[ "$executable" == /* && -x "$executable" ]] || return 0
+	dir="$(dirname "$executable")"
+	case ":${PATH:-}:" in
+		*":$dir:"*) ;;
+		*) PATH="$dir${PATH:+:$PATH}" ;;
+	esac
+	export PATH
+}
+
+extend_executable_path
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_RUNTIME_ENV="$ROOT/runtime.env"
 if [[ ! -f "$DEFAULT_RUNTIME_ENV" && -f "$ROOT/.env" ]]; then
@@ -41,6 +68,12 @@ load_runtime_env() {
 if [[ -f "$RUNTIME_ENV" ]]; then
 	load_runtime_env "$RUNTIME_ENV"
 fi
+
+# A configured absolute path is authoritative and also exposes sibling tools
+# such as ffprobe to code paths that discover executables through PATH.
+extend_path_from_executable "${DIANA_FFMPEG_PATH:-}"
+extend_path_from_executable "${DIANA_FFPROBE_PATH:-}"
+extend_path_from_executable "${DIANA_TTS_FFMPEG_PATH:-}"
 
 mkdir -p "$ROOT/data" "$ROOT/logs"
 
