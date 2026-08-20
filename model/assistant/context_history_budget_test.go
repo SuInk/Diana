@@ -393,3 +393,83 @@ func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
 		t.Fatalf("recent history budget did not grow with the window: %d", history)
 	}
 }
+
+func TestBotContextCapOnlyTightensTheModelWindow(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "1", MessageID: "1"}
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "p1",
+		Profiles: []llm.Profile{{
+			ID: "p1", Name: "chat", Group: llm.GroupChat,
+			Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, Model: "m", APIKey: "k", ContextWindowTokens: 200000,
+			},
+		}},
+	}}
+	runtime.mu.Lock()
+	runtime.llmStore = store
+	runtime.mu.Unlock()
+
+	base := runtime.effectiveConfigForEvent(event)
+	if got := runtime.promptContextWindowTokens(event, base); got != 200000 {
+		t.Fatalf("uncapped window = %d, want the model's 200000", got)
+	}
+
+	capped := base
+	capped.MaxContextTokens = 32768
+	if got := runtime.promptContextWindowTokens(event, capped); got != 32768 {
+		t.Fatalf("capped window = %d, want 32768", got)
+	}
+
+	// 上限只能收紧：填得比模型窗口还大不会真的放宽。
+	oversized := base
+	oversized.MaxContextTokens = 1000000
+	if got := runtime.promptContextWindowTokens(event, oversized); got != 200000 {
+		t.Fatalf("oversized cap widened the window to %d", got)
+	}
+}
+
+func TestContextBudgetCapReachesTheGenerateRequest(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	provider := &capturingLLMProvider{reply: "ok"}
+
+	// 没有上限时请求不带覆盖值，按配置档窗口结算。
+	plain := runtime.withContextBudgetCapRun(context.Background(), func(client LLMProvider) (string, error) {
+		_, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}})
+		return "", err
+	})
+	if err := func() error { _, err := plain(provider); return err }(); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.requestSnapshot().MaxContextTokens; got != 0 {
+		t.Fatalf("uncapped request carried MaxContextTokens=%d", got)
+	}
+
+	// 配了上限时一路带到 Generate，Agent 的后续轮次同样受约束。
+	ctx := withContextBudgetCap(context.Background(), 32768)
+	capped := runtime.withContextBudgetCapRun(ctx, func(client LLMProvider) (string, error) {
+		_, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}})
+		return "", err
+	})
+	if err := func() error { _, err := capped(provider); return err }(); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.requestSnapshot().MaxContextTokens; got != 32768 {
+		t.Fatalf("capped request MaxContextTokens = %d, want 32768", got)
+	}
+
+	// 超限收缩重试设的更小值不能被上限顶回去。
+	shrunk := runtime.withContextBudgetCapRun(ctx, func(client LLMProvider) (string, error) {
+		_, err := client.Generate(ctx, llm.GenerateRequest{
+			Messages:         []llm.Message{{Role: llm.RoleUser, Content: "在吗"}},
+			MaxContextTokens: 8192,
+		})
+		return "", err
+	})
+	if err := func() error { _, err := shrunk(provider); return err }(); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.requestSnapshot().MaxContextTokens; got != 8192 {
+		t.Fatalf("cap overrode the shrink retry: %d", got)
+	}
+}

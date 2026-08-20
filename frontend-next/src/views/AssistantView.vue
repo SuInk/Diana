@@ -323,6 +323,11 @@
                 <label for="bot-context">历史查询条数上限</label>
                 <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
               </div>
+              <div class="field">
+                <label for="bot-maxcontext">单次请求上下文上限</label>
+                <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型" />
+                <span class="hint">这个机器人单次请求最多用掉多少 token。留空按 LLM 配置档的模型窗口，填了只会收紧不会放宽；调小可以省钱。</span>
+              </div>
               <div class="field wide memory-settings">
                 <label class="switch">
                   <input v-model="form.long_term_memory_enabled" type="checkbox" />

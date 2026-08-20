@@ -1090,6 +1090,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
+	cfg.MaxContextTokens = groupCfg.MaxContextTokens
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
@@ -1231,6 +1232,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	}
 
 	ctx = r.withDebugTraceContext(ctx, event)
+	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
 	prepared, text, handled, outcome := r.prepareMessageEvent(ctx, event)
 	if !handled {
 		return nil
@@ -4639,6 +4641,7 @@ func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (s
 
 func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
 	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	return r.runRawLLMProviderForGroup(ctx, group, run)
 }
@@ -4650,6 +4653,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 		return "", nil
 	}
 	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	_, _ = run(provider)
 	if wrapped == nil {
@@ -5005,6 +5009,7 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
 	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
