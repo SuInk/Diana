@@ -282,7 +282,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		t.Fatalf("snapshot=%#v", change.Snapshot)
 	}
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"diana 于 ", "PR #2（已合并）", "Release v1.1.0", "Star +3", "10 → 13"} {
+	for _, want := range []string{"作者：diana", "PR #2（已合并）", "Release v1.1.0", "Star +3（10 → 13）"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -354,7 +354,7 @@ func TestRenderRepositoryWatchChangesAlwaysIncludesEveryFetchedCommit(t *testing
 		Truncated: true,
 	}
 	result := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"1111111 first", "2222222 second", "3333333 third", "Release v1.2.3", "Stable", "本次只展示了部分最新提交。"} {
+	for _, want := range []string{"Commit 1111111\nfirst", "Commit 2222222\nsecond", "Commit 3333333\nthird", "Release v1.2.3", "Stable", "本次只展示了部分最新提交。"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, result)
 		}
@@ -377,7 +377,7 @@ func TestRenderRepositoryWatchChangesUsesQQFriendlyIssueAndStarFormat(t *testing
 	}
 
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"Issue #128（新建）", "alice 于 ", " 创建 · ", "Star +7（128 → 135）", "@alice、@bob、@carol、@dave、@eve 等 2 人"} {
+	for _, want := range []string{"Issue #128（新建）", "作者：alice", "创建于 ", "Star +7（128 → 135）", "@alice、@bob、@carol、@dave、@eve 等 2 人"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -420,7 +420,7 @@ func TestLimitRepositoryWatchChangeKeepsNewestItemsUpToTheLimit(t *testing.T) {
 		t.Fatalf("latest releases=%#v", latest.Releases)
 	}
 	rendered := renderRepositoryWatchChanges(latest)
-	if !strings.Contains(rendered, formatRepositoryWatchShortTime(latest.Commits[0].PushedAt)) {
+	if !strings.Contains(rendered, formatRepositoryWatchTime(latest.Commits[0].PushedAt)) {
 		t.Fatalf("rendered timestamp missing: %s", rendered)
 	}
 	if !strings.Contains(rendered, "还有 2 个提交未列出。") {
@@ -665,7 +665,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		sentText = fmt.Sprint(channel.calls)
 	}
 	delivered := len(channel.sent) > 0 || len(channel.calls) > 0 && channel.calls[0].action == "send_group_forward_msg"
-	if !delivered || !strings.Contains(sentText, "diana 于 ") || !strings.Contains(sentText, "new-sha fix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
+	if !delivered || !strings.Contains(sentText, "作者：diana") || !strings.Contains(sentText, "Commit new-sha\nfix delivery") || !strings.Contains(sentText, "PR #2（有更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1") || !strings.Contains(sentText, "7 → 8") || strings.Contains(sentText, "watch-2") {
 		t.Fatalf("sent=%#v calls=%#v item=%#v requests=%#v", channel.sent, channel.calls, store.items[0], provider.requests)
 	}
 	item := store.items[0]
@@ -927,8 +927,8 @@ func TestRepositoryWatchRecoveryNoticeStaysPendingUntilAcknowledged(t *testing.T
 	}
 }
 
-// 紧凑排版取消了「Commit（分支，作者 X）」节标题，作者写进每条提交的署名行。
-func TestRenderRepositoryWatchChangesWritesABylinePerCommit(t *testing.T) {
+// 取消了「Commit（分支，作者 X）」节标题，作者写进每条提交自己的行里。
+func TestRenderRepositoryWatchChangesWritesAnAuthorPerCommit(t *testing.T) {
 	pushedAt := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
 	change := repositoryWatchChange{
 		Commits: []repositoryWatchCommit{
@@ -940,13 +940,13 @@ func TestRenderRepositoryWatchChangesWritesABylinePerCommit(t *testing.T) {
 	if strings.Contains(result, "Commit（") {
 		t.Fatalf("section header should be gone: %s", result)
 	}
-	want := "SuInk 于 " + formatRepositoryWatchShortTime(pushedAt) + " 提交"
-	if strings.Count(result, want) != 2 {
-		t.Fatalf("expected a byline on each commit: %s", result)
+	if strings.Count(result, "作者：SuInk") != 2 {
+		t.Fatalf("expected an author line on each commit: %s", result)
 	}
-	// 每条提交两行：短 SHA 加标题，然后署名加短链接。
-	if !strings.Contains(result, "3e3f03f 合并 PR #85\n"+want+" · https://example.test/1") {
-		t.Fatalf("compact two-line layout missing: %s", result)
+	// 每条提交五行：类型加短 SHA、标题、作者、提交时间、短链接。
+	want := "Commit 3e3f03f\n合并 PR #85\n作者：SuInk\n提交于 " + formatRepositoryWatchTime(pushedAt) + "\nhttps://example.test/1"
+	if !strings.Contains(result, want) {
+		t.Fatalf("commit layout missing %q: %s", want, result)
 	}
 }
 
@@ -962,11 +962,7 @@ func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *test
 	if strings.Contains(result, "Commit（") {
 		t.Fatalf("section header should be gone: %s", result)
 	}
-	// URL 缺失时第二行不能留下一个孤零零的分隔符。
-	if strings.Contains(result, "提交 ·") {
-		t.Fatalf("dangling separator left behind without a url: %s", result)
-	}
-	for _, want := range []string{"alice 于 ", "bob 于 "} {
+	for _, want := range []string{"作者：alice", "作者：bob"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, result)
 		}
@@ -975,8 +971,8 @@ func TestRenderRepositoryWatchChangesKeepsPerCommitAuthorsWhenTheyDiffer(t *test
 
 // 概括排在事实清单之后，并且单独分成一条消息。
 func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
-	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit（默认分支）\n3e3f03f 合并 PR #85", "刚更新了回复风格与语气控制。")
-	want := "GitHub 动态：SuInk/Diana\nCommit（默认分支）\n3e3f03f 合并 PR #85\n<botbr>\n刚更新了回复风格与语气控制。"
+	message := composeRepositoryWatchMessage("SuInk/Diana", "Commit 3e3f03f\n合并 PR #85", "刚更新了回复风格与语气控制。")
+	want := "GitHub 动态：SuInk/Diana\nCommit 3e3f03f\n合并 PR #85\n<botbr>\n刚更新了回复风格与语气控制。"
 	if message != want {
 		t.Fatalf("message = %q, want %q", message, want)
 	}
@@ -993,8 +989,9 @@ func TestComposeRepositoryWatchMessagePutsTheSummaryLast(t *testing.T) {
 	}
 }
 
-// 五类动态排版必须一致：第一行「类型 + 标识 + 标题」，第二行「谁于何时做了什么
-// · 链接」。此前每类各写各的，同一条通知里时间格式、作者写法和链接位置都不同。
+// 五类动态排版必须一致：每行一件事，从上到下是「类型 + 标识（状态）」「标题」
+// 「作者」「附加信息」「动作 + 时间」「链接」。此前每类各写各的，同一条通知里
+// 时间格式、作者写法和链接位置都不同。
 func TestRenderRepositoryWatchChangesKeepsOneShapeForEveryKind(t *testing.T) {
 	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
 	change := repositoryWatchChange{
@@ -1012,40 +1009,45 @@ func TestRenderRepositoryWatchChangesKeepsOneShapeForEveryKind(t *testing.T) {
 		Releases: []repositoryWatchRelease{{Tag: "v0.8.46", PublishedAt: at, URL: "https://github.com/SuInk/Diana/releases/tag/v0.8.46"}},
 	}
 	result := renderRepositoryWatchChanges(change)
-	stamp := formatRepositoryWatchShortTime(at)
+	stamp := formatRepositoryWatchTime(at)
 	for _, want := range []string{
-		"Commit ee5a54b bump version\nSuInk 于 " + stamp + " 提交 · https://github.com/SuInk/Diana/commit/ee5a54b",
-		"PR #85（已合并）新增群友回复风格\nSuInk 于 " + stamp + " 合并 · main ← claude/hello · https://github.com/SuInk/Diana/pull/85",
-		"Issue #128（新建）修复通知格式\nalice 于 " + stamp + " 创建 · https://github.com/SuInk/Diana/issues/128",
-		"Release v0.8.46\n发布于 " + stamp + " · https://github.com/SuInk/Diana/releases/tag/v0.8.46",
+		"Commit ee5a54b\nbump version\n作者：SuInk\n提交于 " + stamp + "\nhttps://github.com/SuInk/Diana/commit/ee5a54b",
+		"PR #85（已合并）\n新增群友回复风格\n作者：SuInk\nmain ← claude/hello\n合并于 " + stamp + "\nhttps://github.com/SuInk/Diana/pull/85",
+		"Issue #128（新建）\n修复通知格式\n作者：alice\n创建于 " + stamp + "\nhttps://github.com/SuInk/Diana/issues/128",
+		"Release v0.8.46\n发布于 " + stamp + "\nhttps://github.com/SuInk/Diana/releases/tag/v0.8.46",
 	} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("rendered changes missing %q:\n%s", want, result)
 		}
 	}
-	// 完整时间戳只在自定义模板里出现，默认排版一律用紧凑时间。
-	if strings.Contains(result, formatRepositoryWatchTime(at)) {
-		t.Fatalf("default layout leaked a full timestamp:\n%s", result)
+	// 每类都以类型词开头，扫一眼就知道这条是什么。
+	for _, prefix := range []string{"Commit ", "PR #", "Issue #", "Release "} {
+		if !strings.Contains(result, prefix) {
+			t.Fatalf("missing type label %q:\n%s", prefix, result)
+		}
 	}
-	// 每条动态都是两行，不多不少。
-	if lines := strings.Count(result, "\n") + 1; lines != 8 {
-		t.Fatalf("expected 4 entries × 2 lines, got %d lines:\n%s", lines, result)
+	// 链接始终自成一行、且是每条的最后一行。
+	for _, line := range strings.Split(result, "\n") {
+		if strings.Contains(line, "http") && !strings.HasPrefix(line, "http") {
+			t.Fatalf("link should own its line: %q", line)
+		}
 	}
 }
 
-// 分支信息缺失时，第二行不能留下两个挨着的分隔符。
-func TestRenderRepositoryWatchChangesCollapsesEmptySeparators(t *testing.T) {
+// 作者或分支缺失时整行删掉，不留下「作者：」这种半截话。
+func TestRenderRepositoryWatchChangesDropsEmptyLines(t *testing.T) {
 	at := time.Date(2026, 8, 18, 16, 15, 3, 0, time.UTC)
 	result := renderRepositoryWatchChanges(repositoryWatchChange{
 		PullRequests: []repositoryWatchPullRequest{{
-			Number: 85, Title: "无分支信息", Author: "SuInk", Status: "opened", OccurredAt: at,
+			Number: 85, Title: "无作者无分支", Status: "opened", OccurredAt: at,
 			URL: "https://github.com/SuInk/Diana/pull/85",
 		}},
 	})
-	if strings.Contains(result, "·  ·") || strings.Contains(result, " · ·") {
-		t.Fatalf("dangling separator left behind: %q", result)
+	if strings.Contains(result, "作者：") {
+		t.Fatalf("authorless entry kept a dangling label: %q", result)
 	}
-	if !strings.Contains(result, "SuInk 于 "+formatRepositoryWatchShortTime(at)+" 创建 · https://github.com/SuInk/Diana/pull/85") {
+	want := "PR #85（新建）\n无作者无分支\n创建于 " + formatRepositoryWatchTime(at) + "\nhttps://github.com/SuInk/Diana/pull/85"
+	if !strings.Contains(result, want) {
 		t.Fatalf("result = %q", result)
 	}
 }
@@ -1094,24 +1096,14 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 	}
 }
 
-// 短 SHA 链接和署名的退化路径。
-func TestRepositoryWatchCommitBylineAndShortURL(t *testing.T) {
+// 短 SHA 链接的退化路径。
+func TestRepositoryWatchShortCommitURL(t *testing.T) {
 	full := "https://github.com/SuInk/Diana/commit/fd1a2793f402fd5107e46e6d53772400b446e22c"
 	if got := repositoryWatchShortCommitURL(full, "fd1a279"); got != "https://github.com/SuInk/Diana/commit/fd1a279" {
 		t.Fatalf("short url = %q", got)
 	}
 	if got := repositoryWatchShortCommitURL("", "fd1a279"); got != "" {
 		t.Fatalf("empty url should stay empty, got %q", got)
-	}
-	if got := repositoryWatchCommitByline("SuInk", "08-20 14:27"); got != "SuInk 于 08-20 14:27 提交" {
-		t.Fatalf("byline = %q", got)
-	}
-	// 作者缺失时不能留下一个光秃秃的「于」。
-	if got := repositoryWatchCommitByline("", "08-20 14:27"); got != "提交于 08-20 14:27" {
-		t.Fatalf("authorless byline = %q", got)
-	}
-	if got := repositoryWatchCommitByline("", ""); got != "" {
-		t.Fatalf("empty byline = %q", got)
 	}
 }
 
@@ -1147,7 +1139,7 @@ func TestComposeRepositoryWatchMessageKeepsEveryChangeInOneMessage(t *testing.T)
 	if len(chunks) != 2 {
 		t.Fatalf("fact block should stay in one message plus the summary, got %#v", chunks)
 	}
-	for _, want := range []string{"GitHub 动态：SuInk/Diana", "ee5a54b bump version", "Issue #128", "Issue #129", "Release v0.8.36"} {
+	for _, want := range []string{"GitHub 动态：SuInk/Diana", "Commit ee5a54b\nbump version", "Issue #128", "Issue #129", "Release v0.8.36"} {
 		if !strings.Contains(chunks[0], want) {
 			t.Fatalf("fact block missing %q: %q", want, chunks[0])
 		}
