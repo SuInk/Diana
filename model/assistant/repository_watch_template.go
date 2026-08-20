@@ -16,10 +16,11 @@ const (
 	repositoryWatchSettingTemplateRelease = "template_release"
 )
 
-// 默认模板与既有硬编码输出逐字一致，留空即维持现状。
+// 默认模板：每条提交压成两行，第一行是短 SHA 加标题，第二行是署名和链接。留空即
+// 使用这里的默认值。
 const (
 	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{summary}\n{body}"
-	repositoryWatchDefaultCommitTemplate  = "{sha} {title}\n{author} 提交于 {time}\n{url}"
+	repositoryWatchDefaultCommitTemplate  = "{sha} {title}\n{byline} · {short_url}"
 	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）\n{title}\n作者：{author}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultReleaseTemplate = "Release {label}\n发布于 {time}\n{url}"
@@ -48,6 +49,12 @@ func renderRepositoryWatchTemplate(template string, values map[string]string) st
 		}
 		if sawPlaceholder && !sawValue {
 			continue
+		}
+		// 一行里只有部分占位符为空时，静态分隔符会裸露在行首行尾——「{byline} ·
+		// {short_url}」缺链接就会留下一个孤零零的「·」。把两端的分隔符连同空白一起
+		// 剪掉。
+		if sawPlaceholder {
+			replaced = strings.Trim(replaced, " \t·|-—、,，")
 		}
 		if replaced = strings.TrimSpace(replaced); replaced == "" && sawPlaceholder {
 			continue

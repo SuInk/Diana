@@ -25,7 +25,9 @@ const (
 	defaultGitHubAPIURL            = "https://api.github.com"
 	repositoryWatchNoReleaseCursor = "__none__"
 	repositoryWatchNoPullCursor    = "__none__"
-	repositoryWatchNoIssueCursor   = "__none__"
+	// repositoryWatchDefaultLimit 是每类动态默认列出的条数，同时用作抓取上限。
+	repositoryWatchDefaultLimit  = 10
+	repositoryWatchNoIssueCursor = "__none__"
 )
 
 type RepositoryWatchPlugin struct {
@@ -61,7 +63,9 @@ type repositoryWatchChange struct {
 	Releases     []repositoryWatchRelease     `json:"releases,omitempty"`
 	Stars        *repositoryWatchStarChange   `json:"stars,omitempty"`
 	Truncated    bool                         `json:"commits_truncated,omitempty"`
-	Snapshot     repositoryWatchSnapshot      `json:"-"`
+	// OmittedCommits 是超出「摘要动态上限」而没有列出的提交数，只影响通知末尾那句提示。
+	OmittedCommits int                     `json:"omitted_commits,omitempty"`
+	Snapshot       repositoryWatchSnapshot `json:"-"`
 }
 
 type repositoryWatchCommit struct {
@@ -199,10 +203,10 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key:         repositoryWatchSettingLimit,
-				Label:       "摘要动态上限",
-				Description: "兼容历史积压设置；通知默认只展示每类最新一条动态，游标仍会推进到最新动态。",
+				Label:       "每类动态展示条数",
+				Description: "一次检查里 Commit、PR、Issue、Release 各自最多列出多少条。超出的提交会在末尾注明还剩多少条未列出，游标仍会推进到最新动态。",
 				Type:        PluginSettingTypeNumber,
-				Default:     1,
+				Default:     repositoryWatchDefaultLimit,
 				Min:         settingRange(1),
 				Max:         settingRange(30),
 				Step:        1,
@@ -218,7 +222,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingTemplateCommit,
 				Label:       "推送模板：Commit",
-				Description: "每条提交的格式，可用 {sha} {title} {author} {time} {branch} {url}。作者与所有提交相同时会写进节标题、条目内 {author} 为空。",
+				Description: "每条提交的格式，可用 {sha} {title} {author} {time} {time_short} {byline} {branch} {url} {short_url}。{time_short} 省掉秒与当年年份，{short_url} 是短 SHA 链接，{byline} 是「作者 于 时间 提交」，作者缺失时自动退成「提交于 时间」。",
 				Type:        PluginSettingTypeText,
 				Default:     "",
 			},
@@ -405,7 +409,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	if strings.TrimSpace(cursor) == "" {
 		return nil, latest, false, nil
 	}
-	limit := settings.Int(repositoryWatchSettingLimit, 1)
+	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
 	commits := make([]repositoryWatchCommit, 0, min(limit, len(payload)))
 	newCommitCount := 0
 	for _, item := range payload {
@@ -474,7 +478,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 	if strings.TrimSpace(cursor) == "" {
 		return nil, latest, nil
 	}
-	limit := settings.Int(repositoryWatchSettingLimit, 12)
+	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
 	result := make([]repositoryWatchPullRequest, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
 		if !repositoryWatchPullAfterCursor(item.UpdatedAt, item.Number, cursor) {
@@ -638,7 +642,7 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 	if strings.TrimSpace(cursor) == "" {
 		return nil, latest, nil
 	}
-	limit := settings.Int(repositoryWatchSettingLimit, 1)
+	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
 	result := make([]repositoryWatchIssue, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
 		if !repositoryWatchPullAfterCursor(item.UpdatedAt, item.Number, cursor) || len(result) >= limit {
