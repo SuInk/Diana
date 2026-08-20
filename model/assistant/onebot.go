@@ -613,6 +613,25 @@ func parseGroupLevel(value any) int {
 	return level
 }
 
+// AtMentionName 取 at 段里附带的昵称。各家 OneBot 实现字段名不一致，按群名片、
+// 昵称的优先级依次取。
+func AtMentionName(segment MessageSegment) string {
+	return strings.TrimSpace(firstNonEmpty(segment.Data["name"], segment.Data["card"], segment.Data["nickname"]))
+}
+
+// AtMentionText 把一次提及渲染成可读文本。只有 QQ 号时退回「@号码」——光一串数字
+// 看不出提到了谁，但没有昵称可用时也只能如此。
+func AtMentionText(qq, name string) string {
+	qq = strings.TrimSpace(qq)
+	if name = strings.TrimSpace(name); name == "" {
+		return "@" + qq
+	}
+	if qq == "" {
+		return "@" + name
+	}
+	return "@" + name + "（" + qq + "）"
+}
+
 // PlainText 将 OneBot segment 列表转换为可读纯文本。
 func PlainText(segments []MessageSegment) string {
 	var builder strings.Builder
@@ -622,8 +641,7 @@ func PlainText(segments []MessageSegment) string {
 			builder.WriteString(segment.Data["text"])
 		case "at":
 			if qq := segment.Data["qq"]; qq != "" && qq != "all" {
-				builder.WriteString("@")
-				builder.WriteString(qq)
+				builder.WriteString(AtMentionText(qq, AtMentionName(segment)))
 				builder.WriteString(" ")
 			}
 		case "image":

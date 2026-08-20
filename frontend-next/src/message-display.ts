@@ -31,7 +31,11 @@ function readableCQ(payload: string): string {
   const type = payload.split(",", 1)[0]?.trim().toLowerCase() ?? "";
   if (type === "at") {
     const target = cqParam(payload, "qq");
-    return target === "all" ? "@全体成员" : target ? `@${target}` : "[提及成员]";
+    if (target === "all") return "@全体成员";
+    if (!target) return "[提及成员]";
+    // 后端渲染事件正文时已经补过昵称；这里只兜底 CQ 码自带昵称的情况。
+    const name = (cqParam(payload, "name") || cqParam(payload, "card") || cqParam(payload, "nickname")).trim();
+    return name ? `@${name}（${target}）` : `@${target}`;
   }
   if (type === "text") return cqParam(payload, "text");
   if (type === "file") {
