@@ -79,11 +79,11 @@
               <span class="info-value">{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
             </div>
             <div class="info-row">
-              <span class="muted info-label">启用插件</span>
+              <span class="muted info-label">插件</span>
               <span class="info-value">{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
             </div>
             <div class="info-row">
-              <span class="muted info-label">实时通道</span>
+              <span class="muted info-label">实时</span>
               <span
                 class="info-value"
                 :class="stream.connected ? 'text-ok' : 'text-err'"
@@ -95,7 +95,7 @@
               >{{ stream.connected ? "已连接" : "重连中…" }}</span>
             </div>
             <div v-if="status?.last_error" class="info-row">
-              <span class="muted info-label">最近错误</span>
+              <span class="muted info-label">错误</span>
               <span class="info-value text-err" :title="status.last_error">{{ status.last_error }}</span>
             </div>
           </div>
