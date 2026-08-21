@@ -10,15 +10,16 @@ import (
 	"time"
 )
 
-// 回复打断：两种「这条回复不该再发出去」的情形，都在首条消息发出之前拦截。
+// 回复打断：同一用户在回复还没开口时又发来一条明确叫机器人的消息（补充、
+// 修正，或撤回后的重发），旧回复在首条消息发出之前放弃，由新消息那一轮结合
+// 上下文一并回答，避免同一个问题新旧各回一次。私聊队列按会话串行，新一轮
+// 生成时必然能看到前一条还没被回应的消息。
 //
-//  1. 撤回打断：用户撤回了触发消息，说明想收回或修正这句话。还没送出的回复
-//     直接放弃；用户修正后重发的消息按普通新消息重新回答，不会新旧各回一次。
-//  2. 追发合并：回复还没开口，同一用户又发来一条明确叫机器人的消息，多半是
-//     上一条的补充或修正。旧回复放弃，由新消息那一轮结合上下文一并回答。
-//     私聊队列按会话串行，新一轮生成时必然能看到前一条还没被回应的消息。
+// 撤回本身不取消回复：用户只撤回没重发时机器人照常回答（产品决策——撤回的
+// 话往往正是想被看到的那句）。撤回登记只有一个用途：回复一条已撤回的消息时
+// 不再挂引用装饰，免得引用一条不存在的消息发送失败或在界面上渲染成怪东西。
 //
-// 两个登记表都只存内存：进程重启后失去打断能力是安全的退化（顶多多回一条），
+// 登记表只存内存：进程重启后失去打断能力是安全的退化（顶多多回一条），
 // 而误拦一条该发的回复才是真正的事故。已经开始分条投递的回复不在中途打断，
 // 避免留下半截话（后续分条带 continuousOutboundDelivery 标记，直接放行）。
 const (
@@ -29,13 +30,7 @@ const (
 	replyInterruptPruneThreshold = 256
 )
 
-var (
-	errReplyTriggerRecalled   = errors.New("chatbot: reply trigger message was recalled")
-	errReplyTriggerSuperseded = errors.New("chatbot: reply trigger superseded by a newer directed message")
-)
-
-// inboundOutcomeRecalled 是触发消息被撤回后的终态，不重试、不补发。
-const inboundOutcomeRecalled = "dropped_recalled"
+var errReplyTriggerSuperseded = errors.New("chatbot: reply trigger superseded by a newer directed message")
 
 // directedInboundMark 记录一个会话里某用户最近一条明确叫机器人的消息。
 type directedInboundMark struct {
@@ -74,9 +69,9 @@ func directedInboundKey(event MessageEvent) string {
 	return sessionKey(event) + "|" + userID
 }
 
-// noteRecalledInbound 登记一条撤回通知。被撤回的消息如果恰好是该用户最近的
-// 直呼消息，一并清掉追发登记：否则前一条消息会因为「存在更新的直呼」被误判
-// 为已被取代，而那条更新的消息自己已经撤回，结果谁都不回答。
+// noteRecalledInbound 登记一条撤回通知。撤回的消息仍会被回答，追发登记也保持
+// 不动（撤回后重发的场景里，正是重发那条更新的直呼让旧回复让位）；登记只用来
+// 在回复时剥掉指向已撤回消息的引用装饰。
 func (r *Runtime) noteRecalledInbound(event MessageEvent) {
 	key := recalledInboundKey(event)
 	if key == "" {
@@ -90,11 +85,6 @@ func (r *Runtime) noteRecalledInbound(event MessageEvent) {
 	}
 	pruneRecalledInbound(r.recalledInbound, now)
 	r.recalledInbound[key] = now
-	if directedKey := directedInboundKey(event); directedKey != "" {
-		if mark, ok := r.latestDirectedInbound[directedKey]; ok && mark.messageID == strings.TrimSpace(event.MessageID) {
-			delete(r.latestDirectedInbound, directedKey)
-		}
-	}
 }
 
 // inboundTriggerRecalled 报告事件对应的入站消息是否已被撤回。
@@ -157,9 +147,6 @@ func (r *Runtime) inboundTriggerSuperseded(event MessageEvent) bool {
 func (r *Runtime) interruptedReplyError(ctx context.Context, event MessageEvent) error {
 	if !replyTriggerGateEnabled(ctx) || continuousOutboundDelivery(ctx) {
 		return nil
-	}
-	if r.inboundTriggerRecalled(event) {
-		return errReplyTriggerRecalled
 	}
 	if r.inboundTriggerSuperseded(event) {
 		return errReplyTriggerSuperseded

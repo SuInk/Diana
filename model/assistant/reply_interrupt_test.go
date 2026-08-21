@@ -37,36 +37,47 @@ func groupRecallNotice(messageID, userID string) MessageEvent {
 	}
 }
 
-// 撤回触发消息后，还没送出的回复必须在发送前放弃；分条投递已经开始的
-// 后续分条不打断，避免留下半截话。
-func TestRecallInterruptsPendingReply(t *testing.T) {
+// 用户只撤回没重发时机器人照常回答：撤回不取消回复，只在回复里剥掉指向
+// 已撤回消息的引用装饰。
+func TestRecalledTriggerStillGetsReply(t *testing.T) {
 	runtime := replyInterruptTestRuntime()
 	trigger := directedGroupMessage("20001", "10001", "帮我看看这个")
-
-	gated := withReplyTriggerGate(context.Background())
-	if err := runtime.interruptedReplyError(gated, trigger); err != nil {
-		t.Fatalf("reply should pass before any recall: %v", err)
-	}
+	runtime.noteDirectedInbound(trigger)
 
 	runtime.noteRecalledInbound(groupRecallNotice("20001", "10001"))
 	if !runtime.inboundTriggerRecalled(trigger) {
-		t.Fatal("recalled trigger was not detected")
+		t.Fatal("recall registry should remember the message")
 	}
-	if _, err := runtime.sendOutgoingWithResult(gated, trigger, OutgoingMessage{GroupID: "123456", Text: "旧回复"}); !errors.Is(err, errReplyTriggerRecalled) {
-		t.Fatalf("first chunk should be interrupted, err = %v", err)
+	gated := withReplyTriggerGate(context.Background())
+	if err := runtime.interruptedReplyError(gated, trigger); err != nil {
+		t.Fatalf("a recall without a resend must not interrupt the reply: %v", err)
 	}
-	// 已经开始的分条投递不在中途打断。
-	if err := runtime.interruptedReplyError(withContinuousOutboundDelivery(gated), trigger); err != nil {
-		t.Fatalf("continuation chunks must not be interrupted: %v", err)
-	}
-	// 非回复类发送（通知、欢迎语）不带回复门标记，不受影响。
-	if err := runtime.interruptedReplyError(context.Background(), trigger); err != nil {
-		t.Fatalf("non-reply sends must not be gated: %v", err)
+	if _, err := runtime.sendOutgoingWithResult(gated, trigger, OutgoingMessage{GroupID: "123456", Text: "回复照发"}); err != nil {
+		t.Fatalf("reply to a recalled message should still be sent: %v", err)
 	}
 	// 别的消息不受这次撤回影响。
 	other := directedGroupMessage("20002", "10001", "另一个问题")
 	if runtime.inboundTriggerRecalled(other) {
 		t.Fatal("a different message was wrongly treated as recalled")
+	}
+}
+
+// 撤回后重发才是让旧回复让位的信号：重发的那条直呼消息接管这轮回答。
+func TestRecallThenResendAnswersOnlyTheResend(t *testing.T) {
+	runtime := replyInterruptTestRuntime()
+	original := directedGroupMessage("20001", "10001", "帮我看看这个东习")
+	runtime.noteDirectedInbound(original)
+	runtime.noteRecalledInbound(groupRecallNotice("20001", "10001"))
+
+	resend := directedGroupMessage("20002", "10001", "帮我看看这个东西")
+	runtime.noteDirectedInbound(resend)
+
+	gated := withReplyTriggerGate(context.Background())
+	if _, err := runtime.sendOutgoingWithResult(gated, original, OutgoingMessage{GroupID: "123456", Text: "旧回复"}); !errors.Is(err, errReplyTriggerSuperseded) {
+		t.Fatalf("the recalled original should yield to the resend, err = %v", err)
+	}
+	if runtime.inboundTriggerSuperseded(resend) {
+		t.Fatal("the resend must keep its reply")
 	}
 }
 
@@ -121,23 +132,22 @@ func TestUndirectedGroupMessageIsNeverSuperseded(t *testing.T) {
 	}
 }
 
-// 追发消息自己被撤回后，前一条消息的回复要恢复放行，不能两条都没人回。
-func TestRecallOfFollowUpRestoresOriginalReply(t *testing.T) {
+// 追发消息自己被撤回也不改变归属：撤回的消息照样被回答，旧回复保持让位，
+// 不会出现两条都回或两条都没人回。
+func TestRecalledFollowUpStillOwnsTheReply(t *testing.T) {
 	runtime := replyInterruptTestRuntime()
 	first := directedGroupMessage("20001", "10001", "帮我看看这个")
-	followUp := directedGroupMessage("20002", "10001", "算了当我没说")
+	followUp := directedGroupMessage("20002", "10001", "重点看性能")
 	runtime.noteDirectedInbound(first)
 	runtime.noteDirectedInbound(followUp)
-	if !runtime.inboundTriggerSuperseded(first) {
-		t.Fatal("precondition: follow-up should supersede the first reply")
-	}
-
 	runtime.noteRecalledInbound(groupRecallNotice("20002", "10001"))
-	if !runtime.inboundTriggerRecalled(followUp) {
-		t.Fatal("recalled follow-up was not detected")
+
+	if !runtime.inboundTriggerSuperseded(first) {
+		t.Fatal("first reply must stay superseded by the follow-up")
 	}
-	if runtime.inboundTriggerSuperseded(first) {
-		t.Fatal("first reply must be released after the follow-up was recalled")
+	gated := withReplyTriggerGate(context.Background())
+	if err := runtime.interruptedReplyError(gated, followUp); err != nil {
+		t.Fatalf("the recalled follow-up still gets its reply: %v", err)
 	}
 }
 

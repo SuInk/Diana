@@ -1453,12 +1453,6 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "ignored_response_suppression", nil
 		}
-		if errors.Is(err, errReplyTriggerRecalled) {
-			setEventRecordOutcome(&record, inboundOutcomeRecalled)
-			record.Reason = "触发消息已被撤回，放弃这条回复"
-			r.record(record)
-			return inboundOutcomeRecalled, nil
-		}
 		if errors.Is(err, errReplyTriggerSuperseded) {
 			setEventRecordOutcome(&record, "superseded_follow_up")
 			record.Reason = "同一用户随后又发来直呼消息，由新消息一并回答"
@@ -7232,7 +7226,9 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			if sentChunks == 0 && !isStandaloneRecordReply(chunk) {
 				// auto 档不在这里补装饰件：模型已经在正文里自行写出引用标记和 @，
 				// 运行时再补一遍就又变成每条都带。
-				if replyToCurrent && replyReferenceMode(cfg) == ReplyDecorationOn {
+				// 原消息已撤回时不挂引用：引用一条不存在的消息要么发送失败，
+				// 要么在界面上渲染成怪东西。回复本身照常发出。
+				if replyToCurrent && replyReferenceMode(cfg) == ReplyDecorationOn && !r.inboundTriggerRecalled(event) {
 					msg.ReplyMessageID = event.MessageID
 				}
 				if mentionUserMode(cfg) == ReplyDecorationOn {
