@@ -74,21 +74,29 @@
             <h2>运行信息</h2>
           </div>
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">服务运行时长</span>
-              <span>{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
+            <div class="info-row">
+              <span class="muted info-label">运行时长</span>
+              <span class="info-value">{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
             </div>
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">启用插件</span>
-              <span>{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
+            <div class="info-row">
+              <span class="muted info-label">插件</span>
+              <span class="info-value">{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
             </div>
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">实时通道</span>
-              <span :class="stream.connected ? 'text-ok' : 'text-err'">{{ stream.connected ? "SSE 已连接" : "重连中…" }}</span>
+            <div class="info-row">
+              <span class="muted info-label">实时</span>
+              <span
+                class="info-value"
+                :class="stream.connected ? 'text-ok' : 'text-err'"
+                :title="
+                  stream.connected
+                    ? '服务器实时推送（SSE）通道正常，页面数据会自动刷新'
+                    : '实时推送已断开，正在重连；期间页面数据可能不是最新'
+                "
+              >{{ stream.connected ? "已连接" : "重连中…" }}</span>
             </div>
-            <div v-if="status?.last_error" class="cluster" style="justify-content: space-between">
-              <span class="muted">最近错误</span>
-              <span class="text-err" style="max-width: 60%; overflow-wrap: anywhere">{{ status.last_error }}</span>
+            <div v-if="status?.last_error" class="info-row">
+              <span class="muted info-label">错误</span>
+              <span class="info-value text-err" :title="status.last_error">{{ status.last_error }}</span>
             </div>
           </div>
         </section>

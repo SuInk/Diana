@@ -3856,6 +3856,30 @@ a.nav-action {
   flex-wrap: wrap;
 }
 
+/* 卡片里的「标签 — 值」行：窄屏也保持一行，标签固定、值靠右并按需省略，
+   避免 .cluster 的 flex-wrap 把两半折成两行。 */
+.info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.info-row .info-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.info-row .info-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .divider {
   border: none;
   border-top: 1px solid var(--border);
