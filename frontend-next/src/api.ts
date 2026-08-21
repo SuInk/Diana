@@ -83,6 +83,9 @@ export interface LLMProviderCatalog {
   models: LLMModelDefinition[];
 }
 
+/** 群聊触发称呼的匹配松紧。loose 出现即触发；smart 在明显是谈论机器人时放行给插话判定；strict 还要求称呼位于句首或句尾。 */
+export type AliasTriggerMode = "loose" | "smart" | "strict";
+
 export interface BotProfileConfig {
   id?: string;
   name?: string;
@@ -110,6 +113,8 @@ export interface BotProfileConfig {
   owner_login_enabled?: boolean;
   owner_llm_config_enabled?: boolean;
   group_triggers?: string[];
+  /** 触发称呼的匹配松紧；不设等同 smart。 */
+  group_trigger_mode?: AliasTriggerMode;
   disabled_groups?: string[];
   /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
   group_admission?: GroupAdmission;
@@ -190,13 +195,15 @@ export interface PluginSettingSpec {
   key: string;
   label: string;
   description?: string;
-  type: "bool" | "number" | "string" | "select" | "multi_select" | "text";
+  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size";
   default: unknown;
   min?: number;
   max?: number;
   step?: number;
   unit?: string;
   options?: PluginSettingOption[];
+  /** 多行文本框的建议行高；模板类设置比默认四行更高。 */
+  rows?: number;
   /** 凭据类设置；读接口不返回明文，提交空串表示保持原值。 */
   secret?: boolean;
 }
@@ -294,6 +301,8 @@ export interface BotGroupConfig {
   enabled: boolean;
   enabled_set?: boolean;
   group_triggers?: string[];
+  /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
+  group_trigger_mode?: AliasTriggerMode | "";
   /** 群专属人设；留空沿用全局系统提示词。 */
   system_prompt?: string;
   /** 留空时跟随机器人全局回复模式。 */

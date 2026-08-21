@@ -472,7 +472,10 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		HealthURL:        u.healthURL,
 		WorkingDir:       u.workingDir,
 		Arguments:        append([]string(nil), u.arguments...),
-		LogPath:          filepath.Join(updatesRoot, "last-update.log"),
+		// 只有当前这个被托管的进程能看到 launchd/systemd 注入的环境；
+		// 更新辅助进程是 detach 出去的，探测不到，所以随计划一起带过去。
+		Supervisor: detectServiceSupervisor(),
+		LogPath:    filepath.Join(updatesRoot, "last-update.log"),
 	}
 	for _, name := range []string{"run.sh", "run.bat", "README.txt"} {
 		if regularFileExists(filepath.Join(packageRoot, name)) {
@@ -536,6 +539,9 @@ func (u *ReleasePackageUpdater) InstallDownloaded(ctx context.Context) (Result, 
 		return Result{}, fmt.Errorf("read downloaded release plan: %w", err)
 	}
 	plan.ParentPID = os.Getpid()
+	// 下载和安装之间可能隔了一次重启，托管方式也可能变了（比如中途装了
+	// launchd 服务），按安装这一刻的实际情况重新判定。
+	plan.Supervisor = detectServiceSupervisor()
 	if err := validateReleaseApplyPlan(plan); err != nil {
 		return Result{}, err
 	}

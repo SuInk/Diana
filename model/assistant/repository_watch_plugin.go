@@ -229,13 +229,13 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryCredentialSettingBindings,
 				Label:       "仓库使用的凭据",
-				Description: "由仓库管理维护；未指定的仓库使用下方的公共 Token。",
+				Description: "由仓库管理维护；未指定的仓库使用公共 Token。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
 			{
 				Key:         repositoryWatchSettingTimeout,
-				Label:       "检查超时",
+				Label:       "仓库检查超时",
 				Description: "单次仓库动态检查的最长等待时间。",
 				Type:        PluginSettingTypeNumber,
 				Default:     20,
@@ -260,6 +260,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 				Label:       "推送模板",
 				Description: "整条通知的组装格式，可用 {repository} {summary} {body}。{body} 是五类动态的事实清单，排版固定为「类型 + 标识 + 标题」加「谁于何时做了什么 · 链接」两行。单独一行写 <botbr> 表示从这里分成下一条消息发送，删掉那一行则合并成一条。留空使用默认格式；占位符所在行替换后为空会整行删除。",
 				Type:        PluginSettingTypeText,
+				Rows:        10,
 				Default:     "",
 			},
 		},

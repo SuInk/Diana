@@ -53,7 +53,7 @@ func TestIdentityPrivacyProviderMasksRequestsAndRestoresReplies(t *testing.T) {
 
 	response, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: `owner_id=10001；日期 20260716；message_id=30003`},
-		{Role: llm.RoleUser, Content: `{"source_user_id":"10002","target_group_id":"20001","message_id":"30003"}\n账号：10001\n[CQ:at,qq=10002]`},
+		{Role: llm.RoleUser, Content: `{"source_user_id":"10002","target_group_id":"20001","message_id":"30003"}\nQQ号：10001\n[CQ:at,qq=10002]`},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestIdentityPrivacyProviderMasksRequestsAndRestoresReplies(t *testing.T) {
 		t.Fatalf("protected request missing privacy instructions: %s", protected)
 	}
 	if !strings.Contains(protected, "20260716") || !strings.Contains(protected, "30003") {
-		t.Fatalf("unrelated date or message ID was changed: %s", protected)
+		t.Fatalf("non-QQ date or message ID was changed: %s", protected)
 	}
 	want := `{"action":"final","content":"[CQ:at,qq=10002] 已处理 20001"}`
 	if response.Text != want {
@@ -85,10 +85,10 @@ type privacyRoundTripTool struct {
 	targetUserID string
 }
 
-func (*privacyRoundTripTool) Name() string { return "test.chat_lookup" }
+func (*privacyRoundTripTool) Name() string { return "test.qq_lookup" }
 
 func (*privacyRoundTripTool) Description() string {
-	return `测试账号标识往返。input: {"target_user_id":"用户标识"}`
+	return `测试 QQ 标识往返。input: {"target_user_id":"QQ 用户标识"}`
 }
 
 func (t *privacyRoundTripTool) Run(_ context.Context, input map[string]any) (string, error) {
@@ -114,11 +114,11 @@ func (p *privacyRoundTripProvider) Generate(_ context.Context, req llm.GenerateR
 	}
 	switch p.calls {
 	case 1:
-		p.alias = regexp.MustCompile(`chat_current_user_[0-9a-f]+`).FindString(requestText)
+		p.alias = regexp.MustCompile(`im_current_user_[0-9a-f]+`).FindString(requestText)
 		if p.alias == "" {
 			return nil, fmt.Errorf("current-user alias missing from request: %s", requestText)
 		}
-		return &llm.GenerateResponse{Text: fmt.Sprintf(`{"action":"tool","tool":"test.chat_lookup","input":{"target_user_id":"%s"}}`, p.alias)}, nil
+		return &llm.GenerateResponse{Text: fmt.Sprintf(`{"action":"tool","tool":"test.qq_lookup","input":{"target_user_id":"%s"}}`, p.alias)}, nil
 	case 2:
 		p.sawToolData = strings.Contains(requestText, `"user_id":"`+p.alias+`"`) && strings.Contains(requestText, `[CQ:at,qq=`+p.alias+`]`)
 		return &llm.GenerateResponse{Text: fmt.Sprintf(`{"action":"final","content":"[CQ:at,qq=%s] 查询完成"}`, p.alias)}, nil
@@ -191,7 +191,7 @@ func requestTextForPrivacyTest(req llm.GenerateRequest) string {
 }
 
 func privacyAliasForDisplayName(req llm.GenerateRequest, displayName string) string {
-	pattern := regexp.MustCompile(`"user_id"\s*:\s*"(chat_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`)
+	pattern := regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`)
 	match := pattern.FindStringSubmatch(requestTextForPrivacyTest(req))
 	if len(match) < 2 {
 		return ""
@@ -200,7 +200,7 @@ func privacyAliasForDisplayName(req llm.GenerateRequest, displayName string) str
 }
 
 func privacyAliasForIdentitySource(req llm.GenerateRequest, source string) string {
-	pattern := regexp.MustCompile(`"source"\s*:\s*"` + regexp.QuoteMeta(source) + `"\s*,\s*"user_id"\s*:\s*"(chat_[a-z_]+_[0-9a-f]+)"`)
+	pattern := regexp.MustCompile(`"source"\s*:\s*"` + regexp.QuoteMeta(source) + `"\s*,\s*"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"`)
 	match := pattern.FindStringSubmatch(requestTextForPrivacyTest(req))
 	if len(match) < 2 {
 		return ""
