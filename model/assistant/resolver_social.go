@@ -240,6 +240,12 @@ func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req Plugin
 		case "live_link":
 			result.Context = "[小红书] 暂不支持直播链接。"
 		default:
+			if strings.HasPrefix(status, "unsupported_link") {
+				// 短链跳转到的不是笔记页（首页、商品页、个人主页等），
+				// 群里只报结论，具体落地地址留在日志里排查。
+				result.Context = "[小红书] 这个分享链接没有指向可解析的笔记。"
+				break
+			}
 			result.Context = "[小红书] 页面暂时无法读取：" + status
 		}
 		recordResolverMediaLog(ctx, req, raw, "xiaohongshu", false, status)
