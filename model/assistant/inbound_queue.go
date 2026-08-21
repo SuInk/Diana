@@ -460,10 +460,6 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	if r.inboundEventIsStale(item.Event, time.Now()) {
 		return "ignored_stale", nil
 	}
-	// 撤回发生在排队期间：还没开始生成就能拦下，连模型调用都省掉。
-	if r.inboundTriggerRecalled(item.Event) {
-		return inboundOutcomeRecalled, nil
-	}
 	ctx = r.withDebugTraceContext(ctx, item.Event)
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(item.Event).MaxContextTokens)
 	// 出站幂等账本按入站事件 ID 记账：失败重跑时已经送达的分片和媒体会被跳过。
