@@ -18,12 +18,15 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const llmQQPrivacyPrompt = `【QQ 标识隐私代理】消息中的真实 QQ 号和群号已由本地代理替换为不透明别名。相同别名始终表示同一对象；qq_owner、qq_current_user、qq_bot、qq_user、qq_group 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名；本地代理会在执行工具或发送 QQ 消息前自动恢复真实标识。`
+const llmQQPrivacyPrompt = `【QQ 标识隐私代理】消息中的真实 QQ 号、群号和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；qq_owner、qq_current_user、qq_bot、qq_user、qq_group、qq_message 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:qq_message_xxx] 这种引用标记；本地代理会在执行工具或发送 QQ 消息前自动恢复真实标识。`
 
 var (
 	qqPrivacyJSONIDPattern = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
 	qqPrivacyCQIDPattern   = regexp.MustCompile(`(?i)\[CQ:(?:at|contact),[^\]]*(?:qq|id)=([1-9][0-9]{4,13})`)
 	qqPrivacyLabelPattern  = regexp.MustCompile(`(?i)(?:QQ号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
+	// 消息 ID 单独匹配：它允许负号，长度范围也和 QQ 号不同。
+	qqPrivacyMessageIDPattern   = regexp.MustCompile(`(?i)"([a-z0-9_]*message_ids?)"\s*:\s*(?:"(-?[0-9]{4,19})"|(-?[0-9]{4,19}))`)
+	qqPrivacyReplyMarkerPattern = regexp.MustCompile(`\[(?:diana-reply|回复):(-?[0-9]{4,19})\]`)
 )
 
 type qqPrivacyContextKey struct{}
@@ -199,9 +202,11 @@ func (s *qqPrivacyScope) registerEvent(event MessageEvent) {
 	s.register(event.UserID, "user")
 	s.register(event.OperatorID, "user")
 	s.register(event.GroupID, "group")
+	s.registerMessageID(event.MessageID)
 	if event.Quoted != nil {
 		s.register(event.Quoted.UserID, "user")
 		s.register(event.Quoted.GroupID, "group")
+		s.registerMessageID(event.Quoted.MessageID)
 		s.registerSegments(event.Quoted.Segments)
 	}
 	s.registerSegments(event.Segments)
@@ -215,6 +220,11 @@ func (s *qqPrivacyScope) registerSegments(segments []MessageSegment) {
 				s.register(value, "group")
 			case "qq", "user_id", "uin", "operator_id", "source_user_id":
 				s.register(value, "user")
+			case "id", "message_id", "source_message_id":
+				// reply 段的 id 指向被引用的那条消息。
+				if strings.EqualFold(strings.TrimSpace(segment.Type), "reply") || strings.Contains(strings.ToLower(key), "message") {
+					s.registerMessageID(value)
+				}
 			}
 		}
 	}
@@ -251,6 +261,41 @@ func normalizeQQPrivacyRole(role string) string {
 	default:
 		return "user"
 	}
+}
+
+// isLikelyMessageID 判定消息 ID。和 QQ 号不同，它允许前导负号，也允许比 QQ 号更短，
+// OneBot 的消息 ID 就有负数形式。
+func isLikelyMessageID(value string) bool {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "-")
+	if len(value) < 4 || len(value) > 20 {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// registerMessageID 给消息 ID 建别名。负号留在别名外面：正文里出现的是 -12345，
+// 只把数字部分换掉会剩下一个孤零零的减号，所以连符号一起注册。
+func (s *qqPrivacyScope) registerMessageID(realID string) string {
+	realID = strings.TrimSpace(realID)
+	if !isLikelyMessageID(realID) {
+		return realID
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if alias := s.realToAlias[realID]; alias != "" {
+		return alias
+	}
+	sum := sha256.Sum256([]byte(s.salt + "\x00message\x00" + realID))
+	alias := "qq_message_" + hex.EncodeToString(sum[:6])
+	s.realToAlias[realID] = alias
+	s.aliasToReal[alias] = realID
+	return alias
 }
 
 func isLikelyQQIdentifier(value string) bool {
@@ -371,6 +416,14 @@ func (s *qqPrivacyScope) discoverStructuredIDs(text string) {
 	}
 	for _, match := range qqPrivacyLabelPattern.FindAllStringSubmatch(text, -1) {
 		s.register(match[1], "user")
+	}
+	// 消息 ID 也要脱敏，否则模型手里握着一批真实 ID。入站渲染的引用标记和结构化
+	// 载荷里的 message_id 都要认，不然历史里出现过、但事件里没登记的那些会漏网。
+	for _, match := range qqPrivacyMessageIDPattern.FindAllStringSubmatch(text, -1) {
+		s.registerMessageID(firstNonEmpty(match[2], match[3]))
+	}
+	for _, match := range qqPrivacyReplyMarkerPattern.FindAllStringSubmatch(text, -1) {
+		s.registerMessageID(match[1])
 	}
 }
 
