@@ -59,3 +59,32 @@ func TestRepositoryWatchPullCursorTime(t *testing.T) {
 		}
 	}
 }
+
+// 变基只刷 committer date、保留 author date，所以「committer 新 + author 旧」就是被
+// 重写的既有提交。它们必须和真正的新增分开，否则一次变基看上去像一批新改动。
+func TestRepositoryWatchPullRewrittenCommits(t *testing.T) {
+	at := time.Date(2026, 8, 21, 9, 3, 6, 0, time.UTC)
+	pullRequest := repositoryWatchPullRequest{Number: 134, Title: "修图", Status: "updated", UpdatedAt: at, OccurredAt: at}
+
+	// 纯变基：一条新增都没有，也要说清这轮发生了什么，不能只留一个「更新」。
+	pullRequest.RewrittenCommits = 6
+	rendered := renderRepositoryWatchChanges(repositoryWatchChange{PullRequests: []repositoryWatchPullRequest{pullRequest}})
+	if !strings.Contains(rendered, "分支被变基或强推，6 个既有提交被重写") {
+		t.Fatalf("pure rebase not explained: %s", rendered)
+	}
+
+	// 变基之后又推了新提交：新增照列，重写单独交代。
+	pullRequest.Commits = []repositoryWatchPullCommit{{SHA: "2caa03a", Title: "更正说明"}}
+	rendered = renderRepositoryWatchChanges(repositoryWatchChange{PullRequests: []repositoryWatchPullRequest{pullRequest}})
+	if !strings.Contains(rendered, "2caa03a 更正说明") {
+		t.Fatalf("new commit missing: %s", rendered)
+	}
+	if !strings.Contains(rendered, "另有 6 个既有提交被变基或强推重写") {
+		t.Fatalf("rewrite notice missing: %s", rendered)
+	}
+	// 没有重写时不该凭空多一行。
+	pullRequest.RewrittenCommits = 0
+	if rendered := renderRepositoryWatchChanges(repositoryWatchChange{PullRequests: []repositoryWatchPullRequest{pullRequest}}); strings.Contains(rendered, "重写") {
+		t.Fatalf("unexpected rewrite notice: %s", rendered)
+	}
+}
