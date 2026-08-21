@@ -97,6 +97,18 @@ type repositoryWatchPullRequest struct {
 	OccurredAt     time.Time                 `json:"occurred_at,omitempty"`
 	Files          []repositoryWatchDiffFile `json:"files,omitempty"`
 	FilesTruncated bool                      `json:"files_truncated,omitempty"`
+	// Commits 是本次更新里新推上来的提交；PR 只说「有更新」看不出改了什么，
+	// 点进去才知道，通知里直接列出来省一次跳转。
+	Commits        []repositoryWatchPullCommit `json:"commits,omitempty"`
+	OmittedCommits int                         `json:"omitted_commits,omitempty"`
+}
+
+// repositoryWatchPullCommit 是 PR 里的一条提交，只留通知要用的字段。
+type repositoryWatchPullCommit struct {
+	SHA         string    `json:"sha"`
+	Title       string    `json:"title"`
+	Author      string    `json:"author,omitempty"`
+	CommittedAt time.Time `json:"committed_at,omitempty"`
 }
 
 type repositoryWatchIssue struct {
@@ -539,6 +551,15 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		if err != nil {
 			return nil, "", err
 		}
+		// 新建的 PR 列出全部提交，更新的只列这轮新推上来的。
+		since := time.Time{}
+		if status == "updated" {
+			since = repositoryWatchPullCursorTime(cursor)
+		}
+		commits, omittedCommits, err := p.fetchPullRequestCommits(ctx, repository, item.Number, since, limit, settings)
+		if err != nil {
+			return nil, "", err
+		}
 		result = append(result, repositoryWatchPullRequest{
 			Number:         item.Number,
 			Title:          strings.TrimSpace(item.Title),
@@ -551,9 +572,29 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 			UpdatedAt:      item.UpdatedAt, OccurredAt: occurredAt,
 			Files:          files,
 			FilesTruncated: filesTruncated,
+			Commits:        commits,
+			OmittedCommits: omittedCommits,
 		})
 	}
 	return result, latest, nil
+}
+
+// repositoryWatchPullCursorTime 取出游标里的时间部分，也就是上一轮轮询的水位线。
+// 游标缺失或格式不对时返回零值，调用方据此退回「不做时间过滤」。
+func repositoryWatchPullCursorTime(cursor string) time.Time {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" || cursor == repositoryWatchNoPullCursor {
+		return time.Time{}
+	}
+	separator := strings.LastIndex(cursor, "#")
+	if separator <= 0 {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, cursor[:separator])
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func (p *RepositoryWatchPlugin) fetchCommitDiff(ctx context.Context, repository, base, head string, settings SettingValues) (*repositoryWatchDiff, error) {
@@ -647,6 +688,61 @@ func (p *RepositoryWatchPlugin) fetchPullRequestFiles(ctx context.Context, repos
 	}
 	files, truncated := repositoryWatchDiffFiles(payload, 30)
 	return files, truncated, nil
+}
+
+// fetchPullRequestCommits 取这个 PR 里比 since 更新的提交。since 用的是上一轮轮询的
+// 水位线，所以拿到的正好是「上次通知之后新推上来的那些」。
+//
+// since 为零值（首次看到这个 PR）时返回全部提交，因为整个 PR 都是新的。强推改写历史
+// 会让提交时间对不上而筛不出东西，这时宁可不列，也好过报一批其实没动过的提交。
+func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, repository string, number int, since time.Time, limit int, settings SettingValues) ([]repositoryWatchPullCommit, int, error) {
+	if limit <= 0 {
+		limit = repositoryWatchDefaultLimit
+	}
+	var payload []struct {
+		SHA    string `json:"sha"`
+		Commit struct {
+			Message   string `json:"message"`
+			Committer struct {
+				Date time.Time `json:"date"`
+			} `json:"committer"`
+			Author struct {
+				Name string `json:"name"`
+			} `json:"author"`
+		} `json:"commit"`
+		Author struct {
+			Login string `json:"login"`
+		} `json:"author"`
+	}
+	path := fmt.Sprintf("/repos/%s/pulls/%d/commits?per_page=100", repository, number)
+	if err := p.getJSON(ctx, path, settings, &payload); err != nil {
+		return nil, 0, fmt.Errorf("读取 %s PR #%d 提交: %w", repository, number, err)
+	}
+	fresh := make([]repositoryWatchPullCommit, 0, len(payload))
+	for _, item := range payload {
+		committedAt := item.Commit.Committer.Date
+		if !since.IsZero() && !committedAt.IsZero() && !committedAt.After(since) {
+			continue
+		}
+		title := strings.TrimSpace(item.Commit.Message)
+		if index := strings.IndexAny(title, "\r\n"); index >= 0 {
+			title = strings.TrimSpace(title[:index])
+		}
+		fresh = append(fresh, repositoryWatchPullCommit{
+			SHA:         strings.TrimSpace(item.SHA),
+			Title:       title,
+			Author:      strings.TrimSpace(firstNonEmpty(item.Author.Login, item.Commit.Author.Name)),
+			CommittedAt: committedAt,
+		})
+	}
+	// GitHub 按时间正序返回，通知里先看最新的更顺眼。
+	for left, right := 0, len(fresh)-1; left < right; left, right = left+1, right-1 {
+		fresh[left], fresh[right] = fresh[right], fresh[left]
+	}
+	if len(fresh) > limit {
+		return fresh[:limit], len(fresh) - limit, nil
+	}
+	return fresh, 0, nil
 }
 
 func repositoryWatchDiffFiles(payload []repositoryWatchDiffFilePayload, limit int) ([]repositoryWatchDiffFile, bool) {
