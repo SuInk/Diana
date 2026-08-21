@@ -42,7 +42,17 @@ type repositoryWatchSnapshot struct {
 	ReleaseTag        string
 	StarCount         int
 	HasStarCount      bool
-	StarCheckedAt     time.Time
+	// StarEventID 是最近一条已处理的 WatchEvent id，空串表示还没初始化过。
+	StarEventID string
+	// StarEventAt 是那条事件的 GitHub 时间，只在 id 被挤出事件窗口时当兜底用。
+	StarEventAt time.Time
+}
+
+// repositoryWatchStarState 是 Star 监控这一轮要写回的游标。
+type repositoryWatchStarState struct {
+	Count   int
+	EventID string
+	EventAt time.Time
 }
 
 type repositoryWatchSelection struct {
@@ -162,6 +172,8 @@ type repositoryWatchStarChange struct {
 }
 
 type repositoryWatchStargazer struct {
+	// ID 是 WatchEvent 的事件 ID：不可变、一次性，用它去重就不会重复播报。
+	ID        string    `json:"id,omitempty"`
 	Login     string    `json:"login"`
 	URL       string    `json:"url,omitempty"`
 	StarredAt time.Time `json:"starred_at,omitempty"`
@@ -402,14 +414,15 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.Stars {
-		stars, count, checkedAt, err := p.fetchStars(ctx, repository, cursor, settings)
+		stars, state, err := p.fetchStars(ctx, repository, cursor, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
 			change.Stars = stars
-			change.Snapshot.StarCount = count
+			change.Snapshot.StarCount = state.Count
 			change.Snapshot.HasStarCount = true
-			change.Snapshot.StarCheckedAt = checkedAt
+			change.Snapshot.StarEventID = state.EventID
+			change.Snapshot.StarEventAt = state.EventAt
 		}
 	}
 	if len(errs) > 0 {
@@ -936,74 +949,128 @@ func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository, c
 	return result, latest, nil
 }
 
-func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository string, cursor repositoryWatchSnapshot, settings SettingValues) (*repositoryWatchStarChange, int, time.Time, error) {
-	checkedAt := time.Now()
-	var payload struct {
+// repositoryWatchNoStarEvent 表示「已经初始化过，只是那时仓库还没有 star 事件」。
+// 必须和空串（从没查过）分开：混在一起的话，仓库第一次被 star 会被当成初始化而静默吞掉。
+const repositoryWatchNoStarEvent = "__none__"
+
+// fetchStars 用 WatchEvent 判断有没有人 star，stargazers_count 只用来显示数字。
+//
+// 反过来做——拿 stargazers_count 当触发器、再去 /stargazers 列表里倒着数出是谁——
+// 每一环都是脆的：数字来自缓存会抖（垃圾号点完被封、点完立刻取消、副本不一致），
+// 列表是另一份缓存会滞后，两边对不上就只能猜，于是「Star +1，可谁也没点」。
+// WatchEvent 自带不可变 ID、actor 和 GitHub 侧时间戳，按 ID 去重，既不会重复播报，
+// 也不用猜是谁。
+//
+// 代价是 Events API 只保留最近 300 条 / 90 天，有几分钟缓存延迟，而且取消 star 不产生
+// 事件。这三条这里都不痛：数字仍取自 stargazers_count 所以显示是准的，晚几分钟无所谓，
+// 「有人取消了 star」本来就不该推送。
+func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository string, cursor repositoryWatchSnapshot, settings SettingValues) (*repositoryWatchStarChange, repositoryWatchStarState, error) {
+	var repo struct {
 		StargazersCount int    `json:"stargazers_count"`
 		HTMLURL         string `json:"html_url"`
 	}
-	if err := p.getJSON(ctx, "/repos/"+repository, settings, &payload); err != nil {
-		return nil, 0, time.Time{}, fmt.Errorf("读取 %s stars: %w", repository, err)
+	if err := p.getJSON(ctx, "/repos/"+repository, settings, &repo); err != nil {
+		return nil, repositoryWatchStarState{}, fmt.Errorf("读取 %s stars: %w", repository, err)
 	}
-	if !cursor.HasStarCount || cursor.StarCount == payload.StargazersCount {
-		return nil, payload.StargazersCount, checkedAt, nil
+	events, err := p.fetchStarEvents(ctx, repository, settings)
+	if err != nil {
+		return nil, repositoryWatchStarState{}, err
 	}
-	change := &repositoryWatchStarChange{
+	state := repositoryWatchStarState{Count: repo.StargazersCount, EventID: repositoryWatchNoStarEvent}
+	if len(events) > 0 {
+		state.EventID, state.EventAt = events[0].ID, events[0].StarredAt
+	}
+	// 首轮只记游标：把仓库历史上的 star 一次性全播出去毫无意义。
+	if strings.TrimSpace(cursor.StarEventID) == "" {
+		return nil, state, nil
+	}
+	added := starEventsAfter(events, cursor.StarEventID, cursor.StarEventAt)
+	if len(added) == 0 {
+		// 数字动了却没有对应的事件：缓存不一致、有人取消了 star，或者事件被挤出了窗口。
+		// 数字照常跟进，但不播报——播出去也只能说「有人 star 了，不知道是谁」。
+		return nil, state, nil
+	}
+	// 以事件数为准算增量。stargazers_count 可能还是缓存里的旧值，直接相减会算出
+	// 「+0」这种和名单自相矛盾的数字。
+	current := max(repo.StargazersCount, cursor.StarCount+len(added))
+	return &repositoryWatchStarChange{
 		Previous:   cursor.StarCount,
-		Current:    payload.StargazersCount,
-		Delta:      payload.StargazersCount - cursor.StarCount,
-		URL:        strings.TrimSpace(payload.HTMLURL),
-		DetectedAt: checkedAt,
-	}
-	if change.Delta > 0 {
-		users, err := p.fetchRecentStargazers(ctx, repository, payload.StargazersCount, change.Delta, cursor.StarCheckedAt, settings)
-		if err == nil {
-			change.AddedUsers = users
-		}
-	}
-	return change, payload.StargazersCount, checkedAt, nil
+		Current:    current,
+		Delta:      len(added),
+		URL:        strings.TrimSpace(repo.HTMLURL),
+		DetectedAt: time.Now(),
+		AddedUsers: added,
+	}, state, nil
 }
 
-func (p *RepositoryWatchPlugin) fetchRecentStargazers(ctx context.Context, repository string, total, delta int, since time.Time, settings SettingValues) ([]repositoryWatchStargazer, error) {
-	if total <= 0 || delta <= 0 {
-		return nil, nil
+// fetchStarEvents 从仓库事件流里挑出 star 事件，按 GitHub 的顺序（新的在前）返回。
+func (p *RepositoryWatchPlugin) fetchStarEvents(ctx context.Context, repository string, settings SettingValues) ([]repositoryWatchStargazer, error) {
+	var payload []struct {
+		ID        string    `json:"id"`
+		Type      string    `json:"type"`
+		CreatedAt time.Time `json:"created_at"`
+		Actor     struct {
+			Login string `json:"login"`
+		} `json:"actor"`
+		Payload struct {
+			Action string `json:"action"`
+		} `json:"payload"`
 	}
-	const perPage = 100
-	lastPage := (total-1)/perPage + 1
-	pageCount := (delta-1)/perPage + 1
-	if pageCount < 1 {
-		pageCount = 1
+	if err := p.getJSON(ctx, "/repos/"+repository+"/events?per_page=100", settings, &payload); err != nil {
+		return nil, fmt.Errorf("读取 %s 事件: %w", repository, err)
 	}
-	if pageCount > 3 {
-		pageCount = 3
-	}
-	firstPage := max(1, lastPage-pageCount)
-	users := make([]repositoryWatchStargazer, 0, min(delta, 300))
-	for page := firstPage; page <= lastPage; page++ {
-		var payload []struct {
-			StarredAt time.Time `json:"starred_at"`
-			User      struct {
-				Login   string `json:"login"`
-				HTMLURL string `json:"html_url"`
-			} `json:"user"`
+	events := make([]repositoryWatchStargazer, 0, 8)
+	for _, item := range payload {
+		// WatchEvent 只有 started 一种 action——取消 star 不产生事件——但 GitHub 以后
+		// 加了别的 action 时不该跟着一起播报。
+		if item.Type != "WatchEvent" || !strings.EqualFold(strings.TrimSpace(item.Payload.Action), "started") {
+			continue
 		}
-		path := fmt.Sprintf("/repos/%s/stargazers?per_page=%d&page=%d", repository, perPage, page)
-		if err := p.getJSONAccept(ctx, path, settings, "application/vnd.github.star+json", &payload); err != nil {
-			return nil, fmt.Errorf("读取 %s stargazers: %w", repository, err)
+		id, login := strings.TrimSpace(item.ID), strings.TrimSpace(item.Actor.Login)
+		if id == "" || login == "" {
+			continue
 		}
-		for _, item := range payload {
-			if !since.IsZero() && !item.StarredAt.After(since) {
-				continue
+		events = append(events, repositoryWatchStargazer{
+			ID: id, Login: login, URL: "https://github.com/" + login, StarredAt: item.CreatedAt,
+		})
+	}
+	return events, nil
+}
+
+// starEventsAfter 取出游标之后的 star 事件，按时间正序返回（读起来是「谁先点的」）。
+// events 是 GitHub 给的顺序，新的在前。
+func starEventsAfter(events []repositoryWatchStargazer, cursorID string, cursorAt time.Time) []repositoryWatchStargazer {
+	cursorID = strings.TrimSpace(cursorID)
+	fresh := events
+	matched := false
+	if cursorID != "" && cursorID != repositoryWatchNoStarEvent {
+		for index, item := range events {
+			if item.ID == cursorID {
+				fresh, matched = events[:index], true
+				break
 			}
-			if login := strings.TrimSpace(item.User.Login); login != "" {
-				users = append(users, repositoryWatchStargazer{Login: login, URL: strings.TrimSpace(item.User.HTMLURL), StarredAt: item.StarredAt})
-			}
 		}
 	}
-	if len(users) > delta {
-		users = users[len(users)-delta:]
+	if !matched {
+		// 游标那条已经被挤出窗口，或者上一轮仓库还没有 star 事件。退回按事件时间筛：
+		// 两边都是 GitHub 的时钟，不存在本机时钟快慢的问题。
+		if cursorAt.IsZero() {
+			fresh = events
+		} else {
+			filtered := make([]repositoryWatchStargazer, 0, len(events))
+			for _, item := range events {
+				if item.StarredAt.After(cursorAt) {
+					filtered = append(filtered, item)
+				}
+			}
+			fresh = filtered
+		}
 	}
-	return users, nil
+	out := make([]repositoryWatchStargazer, 0, len(fresh))
+	for index := len(fresh) - 1; index >= 0; index-- {
+		out = append(out, fresh[index])
+	}
+	return out
 }
 
 func (p *RepositoryWatchPlugin) getJSON(ctx context.Context, path string, settings SettingValues, target any) error {

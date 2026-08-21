@@ -200,7 +200,8 @@ type Reminder struct {
 	LastIssueCursor         string       `json:"last_issue_cursor,omitempty"`
 	LastReleaseTag          string       `json:"last_release_tag,omitempty"`
 	LastStarCount           int          `json:"last_star_count,omitempty"`
-	LastStarCheckedAt       time.Time    `json:"last_star_checked_at,omitempty"`
+	LastStarEventID         string       `json:"last_star_event_id,omitempty"`
+	LastStarEventAt         time.Time    `json:"last_star_event_at,omitempty"`
 	FeedURL                 string       `json:"feed_url,omitempty"`
 	FeedSource              string       `json:"feed_source,omitempty"`
 	FeedHandle              string       `json:"feed_handle,omitempty"`

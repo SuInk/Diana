@@ -9112,7 +9112,8 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		repositoryWatchSnapshot{
 			CommitSHA: item.LastCommitSHA, PullRequestCursor: item.LastPullRequestCursor,
 			IssueCursor: item.LastIssueCursor, ReleaseTag: item.LastReleaseTag,
-			StarCount: item.LastStarCount, HasStarCount: item.WatchStars, StarCheckedAt: item.LastStarCheckedAt,
+			StarCount: item.LastStarCount, HasStarCount: item.WatchStars,
+			StarEventID: item.LastStarEventID, StarEventAt: item.LastStarEventAt,
 		},
 		repositoryWatchSelection{
 			Commits: item.WatchCommits, PullRequests: item.WatchPullRequests,
@@ -9144,17 +9145,35 @@ func repositoryWatchDeliveryTargets(item Reminder) []MessageEvent {
 		return []MessageEvent{reminderSourceEvent(item)}
 	}
 	targets := make([]MessageEvent, 0, len(targetValues))
+	// 建订阅时已经去过重，但更早写下的订阅没经过这一步；同一个目标出现两次，
+	// 一条动态就会原样发两遍。投递前再去一次，代价只有一个 map。
+	seen := make(map[string]struct{}, len(targetValues))
 	for _, target := range targetValues {
 		event := MessageEvent{Kind: EventKindPrivate, Platform: target.Platform, ProfileID: target.ProfileID, ContextNamespace: target.ContextNamespace, UserID: target.UserID}
 		if target.GroupID != "" {
 			event.Kind, event.GroupID, event.UserID = EventKindGroup, target.GroupID, ""
 		}
+		key := messageEventDeliveryKey(event)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		targets = append(targets, event)
 	}
 	if len(targets) == 0 {
 		return []MessageEvent{reminderSourceEvent(item)}
 	}
 	return targets
+}
+
+// messageEventDeliveryKey 把一个投递目标压成可比较的字符串。平台侧的 ID 大小写
+// 不敏感（Telegram 用户名、QQ 号都不区分），统一小写再比。
+func messageEventDeliveryKey(event MessageEvent) string {
+	id := event.UserID
+	if event.Kind == EventKindGroup {
+		id = event.GroupID
+	}
+	return strings.ToLower(strings.Join([]string{event.Platform, event.ProfileID, event.ContextNamespace, string(event.Kind), id}, "|"))
 }
 
 func (r *Runtime) sendRepositoryWatch(ctx context.Context, item Reminder, message string) error {
@@ -9648,7 +9667,8 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		}
 		if item.WatchStars && snapshot.HasStarCount {
 			item.LastStarCount = snapshot.StarCount
-			item.LastStarCheckedAt = snapshot.StarCheckedAt
+			item.LastStarEventID = snapshot.StarEventID
+			item.LastStarEventAt = snapshot.StarEventAt
 		}
 		item.PendingDelivery = strings.TrimSpace(pending)
 		if item.PendingDelivery != "" {

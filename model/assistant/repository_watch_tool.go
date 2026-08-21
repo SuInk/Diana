@@ -321,15 +321,58 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		LastIssueCursor:         baseline.IssueCursor,
 		LastReleaseTag:          baseline.ReleaseTag,
 		LastStarCount:           baseline.StarCount,
-		LastStarCheckedAt:       baseline.StarCheckedAt,
+		LastStarEventID:         baseline.StarEventID,
+		LastStarEventAt:         baseline.StarEventAt,
 		TriggerAt:               now.Add(interval),
 		IntervalSeconds:         int64(interval / time.Second),
 		CreatedAt:               now,
+	}
+	if existing, ok := findOverlappingRepositoryWatch(items, item); ok {
+		// 两份订阅各记各的游标、各轮各的，同一条动态就会一字不差地发两遍。
+		// 模型被反复要求「盯一下这个仓库」时很容易再建一份，这里直接挡住并把
+		// 已有的 id 报出去，让它改成 update。
+		return Reminder{}, fmt.Errorf("这里已经有一份 %s 的仓库更新订阅（id %s），要调整监控类型或周期请用 update，不要新建", existing.Repository, existing.ID)
 	}
 	if err := r.reminders.SaveReminders(append(items, item)); err != nil {
 		return Reminder{}, fmt.Errorf("保存仓库更新订阅失败: %w", err)
 	}
 	return item, nil
+}
+
+// findOverlappingRepositoryWatch 找出会和 candidate 撞车的既有订阅：同一个仓库、
+// 同一个分支，且至少有一个投递目标重合。仓库名和分支名都按大小写不敏感比对，
+// GitHub 两者都不区分。
+func findOverlappingRepositoryWatch(items []Reminder, candidate Reminder) (Reminder, bool) {
+	targets := repositoryWatchDeliveryKeys(candidate)
+	if len(targets) == 0 {
+		return Reminder{}, false
+	}
+	for _, existing := range items {
+		if !reminderIsRepositoryWatch(existing) || !existing.CancelledAt.IsZero() {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(existing.Repository), strings.TrimSpace(candidate.Repository)) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(existing.RepositoryBranch), strings.TrimSpace(candidate.RepositoryBranch)) {
+			continue
+		}
+		for key := range repositoryWatchDeliveryKeys(existing) {
+			if _, ok := targets[key]; ok {
+				return existing, true
+			}
+		}
+	}
+	return Reminder{}, false
+}
+
+func repositoryWatchDeliveryKeys(item Reminder) map[string]struct{} {
+	targets := repositoryWatchDeliveryTargets(item)
+	keys := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		keys[messageEventDeliveryKey(target)] = struct{}{}
+	}
+	return keys
 }
 
 func (r *Runtime) cancelRepositoryWatch(ownerID, id string) (Reminder, error) {
@@ -436,7 +479,8 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		}
 		if baselineSelection.Stars {
 			item.LastStarCount = baseline.StarCount
-			item.LastStarCheckedAt = baseline.StarCheckedAt
+			item.LastStarEventID = baseline.StarEventID
+			item.LastStarEventAt = baseline.StarEventAt
 		}
 		item.Repository = repository
 		item.RepositoryBranch = branch
