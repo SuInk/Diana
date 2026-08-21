@@ -2982,17 +2982,20 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if sourceMessage := semanticReferenceContextMessage(semanticContext); !runtimeLLMMessageEmpty(sourceMessage) {
 		messages = append(messages, sourceMessage)
 	}
-	var contextImageURLs []string
-	if !directAgentDecision {
-		semanticImages, skippedSemanticImages, semanticImageErr := r.semanticReferenceImageURLsDetailed(ctx, event)
-		if semanticImageErr != nil {
-			return "", semanticImageErr
-		}
-		contextImageURLs = semanticImages
-		semanticContext.AttachedImageCount = len(semanticImages)
-		if skippedSemanticImages > 0 {
-			event.imageContextNotice = fmt.Sprintf("有 %d 张历史来源图片已失效并被跳过；不要推测这些图片的内容。", skippedSemanticImages)
-		}
+	// 用户此刻正在指向的那些图（显式引用 + 语义引用）两种模式下都要取原图。
+	//
+	// Agent 模式以前只给一句文字摘要，可摘要是后台异步识图算出来的：用户刚发完图就
+	// 追问时往往还没算完，甚至识图超时，摘要就成了「尚无缓存描述」。原图又已经被抽掉，
+	// 模型手里一张图都没有，只能回答「图片没加载到」。摘要是给没人在问的旧图做上下文
+	// 压缩用的，不能替代当前被问到的原图。
+	semanticImages, skippedSemanticImages, semanticImageErr := r.semanticReferenceImageURLsDetailed(ctx, event)
+	if semanticImageErr != nil {
+		return "", semanticImageErr
+	}
+	contextImageURLs := semanticImages
+	semanticContext.AttachedImageCount = len(semanticImages)
+	if skippedSemanticImages > 0 {
+		event.imageContextNotice = fmt.Sprintf("有 %d 张历史来源图片已失效并被跳过；不要推测这些图片的内容。", skippedSemanticImages)
 	}
 	contextImageURLs = appendUniqueStrings(contextImageURLs, pluginImageURLs(pluginResponses)...)
 	if directAgentDecision {
@@ -3006,8 +3009,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	messageEvent := event
 	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext)
 	if directAgentDecision {
-		messageEvent = eventWithoutQuotedImages(messageEvent)
-		if reference := r.agentCurrentHistoricalImageReference(ctx, event); reference != "" {
+		// 只为「确实没取到原图」的引用来源补一句文字摘要；原图已经附上的不再重复描述，
+		// 否则模型会同时看到图和一句「尚无缓存描述」，自相矛盾。
+		if reference := r.agentCurrentHistoricalImageReference(ctx, event, contextImageURLs); reference != "" {
 			currentText += "\n\n" + reference
 		}
 	}
@@ -4355,18 +4359,34 @@ func (r *Runtime) agentHistoryImageBatchMessage(ctx context.Context, history []M
 	}, nil
 }
 
-func eventWithoutQuotedImages(event MessageEvent) MessageEvent {
-	if event.Quoted == nil {
-		return event
+// sourceImagesAllAttached 判断某个引用来源的图片是否都已经以原图形式附给模型。
+// 取不到 URL 的分片按「没附上」处理，宁可多给一句摘要，也不要让模型对着空手猜。
+func sourceImagesAllAttached(source MessageEvent, attached map[string]bool) bool {
+	urls := availableImageURLs(source.Segments)
+	if len(urls) == 0 {
+		return false
 	}
-	quoted := *event.Quoted
-	quoted.Segments = segmentsWithoutHistoricalStillImages(quoted.Segments)
-	quoted.RawMessage = rawMessageWithoutImagePlaceholders(quoted.RawMessage)
-	event.Quoted = &quoted
-	return event
+	if len(urls) != historicalStillImageCount(source) {
+		return false
+	}
+	for _, url := range urls {
+		if !attached[strings.TrimSpace(url)] {
+			return false
+		}
+	}
+	return true
 }
 
-func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, event MessageEvent) string {
+// agentCurrentHistoricalImageReference 为当前轮被引用、但原图没能附上的来源补一段
+// 文字说明。attachedImageURLs 里已经有原图的来源直接跳过：模型既看到图又看到一句
+// 「尚无缓存描述」只会自相矛盾。
+func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, event MessageEvent, attachedImageURLs []string) string {
+	attached := make(map[string]bool, len(attachedImageURLs))
+	for _, url := range attachedImageURLs {
+		if url = strings.TrimSpace(url); url != "" {
+			attached[url] = true
+		}
+	}
 	var lines []string
 	seen := map[string]bool{}
 	appendEvent := func(source MessageEvent) {
@@ -4375,6 +4395,9 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 			return
 		}
 		seen[messageID] = true
+		if len(attached) > 0 && sourceImagesAllAttached(source, attached) {
+			return
+		}
 		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyImageCachedDescriptions(ctx, source)))
 	}
 	if event.Quoted != nil {

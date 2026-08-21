@@ -861,25 +861,22 @@ func TestRecentHistoryImageIndexesIgnoreVideoFrames(t *testing.T) {
 	}
 }
 
-func TestEventWithoutQuotedImagesKeepsCachedVideoFrames(t *testing.T) {
+// 引用消息里缓存好的视频关键帧要能进到模型请求里；失效的视频源不该把它一起带走。
+func TestQuotedCachedVideoFrameReachesTheModel(t *testing.T) {
 	framePath := filepath.Join(t.TempDir(), "frame.jpg")
 	if err := os.WriteFile(framePath, tinyJPEGBytes(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	event := eventWithoutQuotedImages(MessageEvent{
+	event := MessageEvent{
 		RawMessage: "看引用",
 		Quoted: &QuotedMessage{Segments: []MessageSegment{
 			{Type: "video", Data: map[string]string{"file": "expired-video.mp4"}},
 			{Type: "image", Data: map[string]string{"cached_file": framePath, "source_type": "video_frame"}},
-			{Type: "image", Data: map[string]string{"cached_file": filepath.Join(t.TempDir(), "still.jpg")}},
 		}},
-	})
-	if event.Quoted == nil || len(event.Quoted.Segments) != 2 || event.Quoted.Segments[1].Data["source_type"] != "video_frame" {
-		t.Fatalf("quoted video context was stripped with still images: %#v", event.Quoted)
 	}
 	message := llmMessageFromEventWithVideoFrames(context.Background(), event, "看引用", nil)
 	if requestImageCount(llm.GenerateRequest{Messages: []llm.Message{message}}) != 1 {
-		t.Fatalf("cached quoted video frame missing after lazy still-image filtering: %#v", message)
+		t.Fatalf("cached quoted video frame missing: %#v", message)
 	}
 }
 
