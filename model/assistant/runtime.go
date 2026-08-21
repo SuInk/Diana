@@ -5324,7 +5324,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && hasTool("diana.relationship") {
 		builder.WriteString("\n如果用户要求查询当前群的互动次数或好感度排行、全体成员的关系汇总，必须调用 diana.relationship 并传 operation=list；榜单对群内成员开放，不得自行以隐私、公开范围或权限为由拒绝。")
-		builder.WriteString("\n如果用户询问自己、被 @ 成员、指定 QQ 用户或群内成员的好感度、最近增减分、关系等级、互动次数或权限，必须调用 diana.relationship 获取目标数据；消息中的结构化 @ 会由工具自动识别。最终回复必须同时说明目标的好感度、关系等级、当前权限和提醒/订阅额度，不得省略工具结果中的 permissions；recent_changes 非空时还要按新到旧说明最近的增减分、时间和原因。不得拿当前发言者的关系上下文代替目标数据，也不得编造‘隐藏数据无法查询’之类限制。")
+		builder.WriteString("\n如果用户询问自己、被 @ 成员、指定 QQ 用户或群内成员的好感度、最近增减分、关系等级、互动次数或权限，必须调用 diana.relationship 获取目标数据；消息中的结构化 @ 会由工具自动识别。回答时像跟人说话那样讲清楚用户问的那件事：问好感度就说分数和关系；问能做什么才展开权限和提醒额度；问最近怎么变的才讲增减分、时间和原因。不要把工具结果按字段抄成清单，也不要在没人问的时候把全部数据一次性堆出来。工具查到什么就说什么，不得拿当前发言者的关系上下文代替目标数据，也不得编造‘隐藏数据无法查询’之类限制。")
 	}
 	if agentEnabled && hasTool(dianaImageToolName) {
 		builder.WriteString("\n调用 diana.image 后图片会在后台生成并自动补发。工具返回 queued=true 后必须立即继续输出本轮 final 文字回复，不要等待图片、不要重复调用图片工具，也不要把生图和文字回复当成二选一。")

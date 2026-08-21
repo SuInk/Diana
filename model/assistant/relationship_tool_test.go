@@ -205,7 +205,15 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[2].Messages, `"favorability": 5`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
-	if !requestMessagesContain(provider.requests[1].Messages, "必须调用 diana.relationship") || !requestMessagesContain(provider.requests[1].Messages, "最终回复必须同时说明") || !requestMessagesContain(provider.requests[1].Messages, "operation=list") || !requestMessagesContain(provider.requests[1].Messages, "不得自行以隐私") {
-		t.Fatalf("relationship guidance missing: %#v", provider.requests[1].Messages)
+	for _, want := range []string{"必须调用 diana.relationship", "operation=list", "不得自行以隐私", "不得编造"} {
+		if !requestMessagesContain(provider.requests[1].Messages, want) {
+			t.Fatalf("relationship guidance missing %q: %#v", want, provider.requests[1].Messages)
+		}
+	}
+	// 提示词不再要求把工具结果逐字段念出来——那正是回复读起来像填表的原因。
+	for _, unwanted := range []string{"最终回复必须同时说明", "不得省略工具结果中的 permissions", "必须简明列出结果中的 permissions"} {
+		if requestMessagesContain(provider.requests[1].Messages, unwanted) {
+			t.Fatalf("relationship guidance still mandates a field dump (%q)", unwanted)
+		}
 	}
 }
