@@ -302,6 +302,8 @@ export interface PluginDependencyResponse {
 export interface ResolverDependencyInstallResponse {
   dependency: ResolverDependency;
   resolver: ResolverDependency[];
+  /** 按插件 ID 分组，只包含这次受影响的那一组。 */
+  plugins?: Record<string, ResolverDependency[]>;
   installer?: string;
 }
 

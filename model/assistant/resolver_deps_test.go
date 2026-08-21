@@ -95,3 +95,68 @@ func TestShortVersionKeepsOnlyTheVersionToken(t *testing.T) {
 		}
 	}
 }
+
+// 浏览器和 yt-dlp 走同一套安装机制，但包名各家都不一样，Homebrew 那边还得加
+// --cask（装的是 .app 不是命令行包，少了会直接报 "No available formula"）。
+func TestResolverDependencyInstallPlanCoversBrowser(t *testing.T) {
+	tests := []struct {
+		name      string
+		goos      string
+		manager   string
+		path      string
+		installer string
+		want      [][]string
+	}{
+		{
+			name: "Homebrew 走 cask", goos: "darwin", manager: "brew", path: "/opt/homebrew/bin/brew",
+			installer: "Homebrew", want: [][]string{{"install", "--cask", "google-chrome"}},
+		},
+		{
+			name: "apt 装 chromium", goos: "linux", manager: "apt-get", path: "/usr/bin/apt-get",
+			installer: "apt", want: [][]string{{"update"}, {"install", "-y", "chromium"}},
+		},
+		{
+			name: "pacman 装 chromium", goos: "linux", manager: "pacman", path: "/usr/bin/pacman",
+			installer: "pacman", want: [][]string{{"-Sy", "--noconfirm", "chromium"}},
+		},
+		{
+			name: "winget 装 Google.Chrome", goos: "windows", manager: "winget", path: `C:\winget.exe`,
+			installer: "winget", want: [][]string{{
+				"install", "--id", "Google.Chrome", "--exact",
+				"--accept-package-agreements", "--accept-source-agreements",
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lookPath := func(name string) (string, error) {
+				if name == test.manager {
+					return test.path, nil
+				}
+				return "", fmt.Errorf("missing %s", name)
+			}
+			plan, err := resolverDependencyInstallPlan(browserDependencyName, test.goos, lookPath)
+			if err != nil {
+				t.Fatalf("resolverDependencyInstallPlan() error = %v", err)
+			}
+			if plan.installer != test.installer || len(plan.commands) != len(test.want) {
+				t.Fatalf("plan = %#v", plan)
+			}
+			for index, command := range plan.commands {
+				if command.path != test.path || !reflect.DeepEqual(command.args, test.want[index]) {
+					t.Fatalf("command[%d] = %#v, want %#v", index, command, test.want[index])
+				}
+			}
+		})
+	}
+}
+
+// 白名单之外的名字必须挡住：可执行文件和参数只能由安装计划生成，不能由请求决定。
+func TestResolverDependencyInstallPlanRejectsUnknownNames(t *testing.T) {
+	lookPath := func(string) (string, error) { return "/usr/bin/apt-get", nil }
+	for _, name := range []string{"curl", "chromium", "", "chrome; rm -rf /"} {
+		if _, err := resolverDependencyInstallPlan(name, "linux", lookPath); !errors.Is(err, ErrUnknownResolverDependency) {
+			t.Fatalf("name=%q err=%v", name, err)
+		}
+	}
+}
