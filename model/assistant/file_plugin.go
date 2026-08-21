@@ -73,7 +73,7 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          fileParserPluginID,
 		Name:        "文件解析",
-		Version:     "0.4.0",
+		Version:     "0.3.1",
 		Description: "官方内置文件解析插件；支持文本、代码、PDF、Office（docx/xlsx/pptx）、ODF 和 EPUB。PDF 在 macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
 		Official:    true,
 		BuiltIn:     true,
