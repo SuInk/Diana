@@ -47,6 +47,14 @@
               />
               <span v-if="spec.unit" class="plugin-setting-unit">{{ spec.unit }}</span>
             </div>
+            <PluginSizeInput
+              v-else-if="spec.type === 'size'"
+              :id="controlID(spec)"
+              :model-value="Number(settingValue(spec) ?? 0)"
+              :min="spec.min"
+              :max="spec.max"
+              @update:model-value="setValue(spec.key, $event)"
+            />
             <AppSelect
               v-else-if="spec.type === 'select'"
               :id="controlID(spec)"
@@ -86,6 +94,7 @@ import { computed, ref } from "vue";
 import { ChevronDown, SlidersHorizontal } from "@lucide/vue";
 import type { PluginSettingSpec, PluginState } from "../api";
 import AppSelect from "./AppSelect.vue";
+import PluginSizeInput from "./PluginSizeInput.vue";
 
 const props = defineProps<{
   plugin: PluginState;

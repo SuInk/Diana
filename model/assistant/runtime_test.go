@@ -4979,17 +4979,17 @@ func waitForCondition(t *testing.T, timeout time.Duration, ok func() bool) {
 }
 
 func TestReplyMarkerDoesNotTriggerGroupAlias(t *testing.T) {
-	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana", "diana"}, BotQQ: "3083158904"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana", "diana"}, BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	// 用户回复的是别人的消息、@ 的也是别人，正文里没有提到机器人。
 	event := MessageEvent{
 		Kind:       EventKindGroup,
-		GroupID:    "765205730",
+		GroupID:    "123456",
 		UserID:     "10001",
-		MessageID:  "1244802512",
-		RawMessage: "[CQ:reply,id=1244393238][CQ:at,qq=1907257915] 必然不可能",
+		MessageID:  "20512",
+		RawMessage: "[CQ:reply,id=20393][CQ:at,qq=10002] 必然不可能",
 		Segments: []MessageSegment{
-			{Type: "reply", Data: map[string]string{"id": "1244393238"}},
-			{Type: "at", Data: map[string]string{"qq": "1907257915"}},
+			{Type: "reply", Data: map[string]string{"id": "20393"}},
+			{Type: "at", Data: map[string]string{"qq": "10002"}},
 			{Type: "text", Data: map[string]string{"text": " 必然不可能"}},
 		},
 	}

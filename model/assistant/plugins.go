@@ -459,6 +459,9 @@ func (m *PluginManager) Restore(states map[string]PluginState) {
 			if id == resolverPluginID {
 				savedSettings = migrateResolverPlatformSettings(savedSettings)
 			}
+			if id == fileParserPluginID {
+				savedSettings = migrateFileParserSizeSettings(savedSettings)
+			}
 			current.Settings = sanitizePluginSettings(current.Manifest.Settings, savedSettings)
 		}
 		if current.Manifest.BuiltIn {
@@ -1569,6 +1572,33 @@ func resolverPlatformKeys() []string {
 
 // migrateResolverPlatformSettings converts the former exclusion list into the
 // enabled-platform allowlist. A copied map keeps persisted snapshots immutable.
+// migrateFileParserSizeSettings 把旧的 KB 数值设置迁移成新的字节数设置，
+// 用户此前调过的上限不会因为换键和换单位被重置。
+func migrateFileParserSizeSettings(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		if key != fileParserSettingMaxFileKB {
+			out[key] = value
+		}
+	}
+	if _, configured := out[fileParserSettingMaxFileBytes]; configured {
+		return out
+	}
+	legacyKB, ok := values[fileParserSettingMaxFileKB]
+	if !ok {
+		return out
+	}
+	kb := SettingValues{fileParserSettingMaxFileKB: legacyKB}.Int(fileParserSettingMaxFileKB, 0)
+	if kb <= 0 {
+		return out
+	}
+	out[fileParserSettingMaxFileBytes] = float64(kb) * 1024
+	return out
+}
+
 func migrateResolverPlatformSettings(values map[string]any) map[string]any {
 	if values == nil {
 		return nil
