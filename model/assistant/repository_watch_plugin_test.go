@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,21 +18,24 @@ import (
 )
 
 type repositoryWatchTestGitHub struct {
-	mu           sync.Mutex
-	commits      []map[string]any
-	pullRequests []map[string]any
-	pullFiles    map[int][]map[string]any
-	releases     []map[string]any
-	starCount    int
-	token        string
-	commitCalls  int
-	pullCalls    int
-	releaseCalls int
-	pullCommits  map[int][]map[string]any
-	starCalls    int
-	diffCalls    int
-	failCommits  bool
-	failReleases bool
+	mu            sync.Mutex
+	commits       []map[string]any
+	pullRequests  []map[string]any
+	pullFiles     map[int][]map[string]any
+	releases      []map[string]any
+	starCount     int
+	events        []map[string]any
+	token         string
+	commitCalls   int
+	pullCalls     int
+	releaseCalls  int
+	pullCommits   map[int][]map[string]any
+	starCalls     int
+	eventCalls    int
+	diffCalls     int
+	pullFileCalls int
+	failCommits   bool
+	failReleases  bool
 }
 
 func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +76,7 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if strings.Contains(r.URL.Path, "/pulls/") && strings.HasSuffix(r.URL.Path, "/files") {
+		s.pullFileCalls++
 		var number int
 		_, _ = fmt.Sscanf(r.URL.Path, "/repos/acme/demo/pulls/%d/files", &number)
 		_ = json.NewEncoder(w).Encode(s.pullFiles[number])
@@ -91,12 +96,48 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		_ = json.NewEncoder(w).Encode(s.releases)
 		return
 	}
+	if strings.HasSuffix(r.URL.Path, "/events") {
+		s.eventCalls++
+		_ = json.NewEncoder(w).Encode(s.events)
+		return
+	}
 	if r.URL.Path == "/repos/acme/demo" {
 		s.starCalls++
 		_ = json.NewEncoder(w).Encode(map[string]any{"stargazers_count": s.starCount, "html_url": "https://github.com/acme/demo"})
 		return
 	}
 	http.NotFound(w, r)
+}
+
+func stargazerLogins(users []repositoryWatchStargazer) []string {
+	out := make([]string, 0, len(users))
+	for _, user := range users {
+		out = append(out, user.Login)
+	}
+	return out
+}
+
+// repositoryWatchStarEventPayload 模拟 Events API 里的一条 WatchEvent。
+func repositoryWatchStarEventPayload(id, login string, createdAt time.Time) map[string]any {
+	return map[string]any{
+		"id":         id,
+		"type":       "WatchEvent",
+		"created_at": createdAt.UTC().Format(time.RFC3339),
+		"actor":      map[string]any{"login": login},
+		"payload":    map[string]any{"action": "started"},
+	}
+}
+
+// repositoryWatchStarEvents 按 GitHub 的顺序（新的在前）造一串 star 事件，
+// 传入顺序是从旧到新。
+func repositoryWatchStarEvents(logins ...string) []map[string]any {
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	out := make([]map[string]any, 0, len(logins))
+	for index, login := range logins {
+		out = append(out, repositoryWatchStarEventPayload("e"+login, login, base.Add(time.Duration(index)*time.Hour)))
+	}
+	slices.Reverse(out)
+	return out
 }
 
 func repositoryWatchCommitPayload(sha, title string) map[string]any {
@@ -237,6 +278,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		pullRequests: []map[string]any{repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z")},
 		releases:     []map[string]any{repositoryWatchReleasePayload("v1.0.0", "First")},
 		starCount:    10,
+		events:       repositoryWatchStarEvents("u01", "u02"),
 		pullFiles:    map[int][]map[string]any{},
 		pullCommits:  map[int][]map[string]any{},
 	}
@@ -249,6 +291,10 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 	if err != nil || baseline.CommitSHA != "base-sha" || baseline.PullRequestCursor == "" || baseline.ReleaseTag != "v1.0.0" || baseline.StarCount != 10 || !baseline.HasStarCount {
 		t.Fatalf("baseline=%#v err=%v", baseline, err)
 	}
+	// 建订阅时就要把事件游标记下来，否则第一轮会把仓库历史上的 star 全播一遍。
+	if baseline.StarEventID != "eu02" {
+		t.Fatalf("baseline star cursor=%q", baseline.StarEventID)
+	}
 
 	github.mu.Lock()
 	github.commits = []map[string]any{
@@ -260,15 +306,12 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		repositoryWatchPullPayload(2, "add PR classification", "merged", "merge-sha", "2026-08-14T00:00:00Z"),
 		repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z"),
 	}
-	github.pullFiles[2] = []map[string]any{{
-		"filename": "model/assistant/repository_watch_plugin.go", "status": "modified",
-		"additions": 20, "deletions": 2, "changes": 22, "patch": "@@ -1 +1 @@\n-old\n+new PR support",
-	}}
 	github.releases = []map[string]any{
 		repositoryWatchReleasePayload("v1.1.0", "Second"),
 		repositoryWatchReleasePayload("v1.0.0", "First"),
 	}
 	github.starCount = 13
+	github.events = repositoryWatchStarEvents("u01", "u02", "u11", "u12", "u13")
 	github.mu.Unlock()
 
 	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
@@ -278,20 +321,27 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 	if len(change.Commits) != 1 || change.Commits[0].SHA != "direct-sha" {
 		t.Fatalf("commits were not classified: %#v", change.Commits)
 	}
-	if change.CommitDiff == nil || len(change.CommitDiff.Files) != 1 || !strings.Contains(change.CommitDiff.Files[0].Patch, "+new") {
-		t.Fatalf("commit diff=%#v", change.CommitDiff)
-	}
-	if len(change.PullRequests) != 1 || change.PullRequests[0].Status != "merged" || len(change.PullRequests[0].Files) != 1 {
+	if len(change.PullRequests) != 1 || change.PullRequests[0].Status != "merged" {
 		t.Fatalf("pull requests=%#v", change.PullRequests)
+	}
+	// 通知里不展示 diff，就不该去拉 diff：compare 和 PR files 都是白花的请求。
+	github.mu.Lock()
+	diffCalls, fileCalls := github.diffCalls, github.pullFileCalls
+	github.mu.Unlock()
+	if diffCalls != 0 || fileCalls != 0 {
+		t.Fatalf("unused diff was fetched: compare=%d pull files=%d", diffCalls, fileCalls)
 	}
 	if change.Stars == nil || change.Stars.Previous != 10 || change.Stars.Current != 13 || change.Stars.Delta != 3 {
 		t.Fatalf("stars=%#v", change.Stars)
 	}
-	if change.Snapshot.StarCount != 13 || change.Snapshot.PullRequestCursor == baseline.PullRequestCursor {
+	if got := stargazerLogins(change.Stars.AddedUsers); !slices.Equal(got, []string{"u11", "u12", "u13"}) {
+		t.Fatalf("added stargazers=%#v", got)
+	}
+	if change.Snapshot.StarCount != 13 || change.Snapshot.StarEventID != "eu13" || change.Snapshot.PullRequestCursor == baseline.PullRequestCursor {
 		t.Fatalf("snapshot=%#v", change.Snapshot)
 	}
 	rendered := renderRepositoryWatchChanges(change)
-	for _, want := range []string{"作者：diana", "PR #2（已合并）", "Release v1.1.0", "Star +3（10 → 13）"} {
+	for _, want := range []string{"作者：diana", "PR #2（已合并）", "Release v1.1.0", "Star +3（10 → 13）", "@u11、@u12、@u13"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered changes missing %q: %s", want, rendered)
 		}
@@ -648,6 +698,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 			repositoryWatchReleasePayload("v1.0.0", "First"),
 		},
 		starCount: 8,
+		events:    repositoryWatchStarEvents("u7", "u8"),
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
@@ -656,7 +707,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		ID: "watch-2", Kind: ReminderKindRepositoryWatch, OwnerID: "owner", GroupID: "123", UserID: "owner",
 		Repository: "acme/demo", WatchCommits: true, WatchPullRequests: true, WatchReleases: true, WatchStars: true,
 		LastCommitSHA: "base-sha", LastPullRequestCursor: repositoryWatchPullCursor(time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC), 1),
-		LastReleaseTag: "v1.0.0", LastStarCount: 7,
+		LastReleaseTag: "v1.0.0", LastStarCount: 7, LastStarEventID: "eu7",
 		TriggerAt: time.Now().Add(-time.Minute), IntervalSeconds: 1800, CreatedAt: time.Now().Add(-time.Hour),
 	}}}
 	channel := &recordingChannel{}
@@ -675,11 +726,11 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		sentText = fmt.Sprint(channel.calls)
 	}
 	delivered := len(channel.sent) > 0 || len(channel.calls) > 0 && channel.calls[0].action == "send_group_forward_msg"
-	if !delivered || !strings.Contains(sentText, "作者：diana") || !strings.Contains(sentText, "Commit new-sha\nfix delivery") || !strings.Contains(sentText, "PR #2（更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1（7 → 8）") || strings.Contains(sentText, "watch-2") {
+	if !delivered || !strings.Contains(sentText, "作者：diana") || !strings.Contains(sentText, "Commit new-sha\nfix delivery") || !strings.Contains(sentText, "PR #2（更新）") || !strings.Contains(sentText, "Release v1.1.0") || !strings.Contains(sentText, "Star +1（7 → 8）\n@u8") || strings.Contains(sentText, "watch-2") {
 		t.Fatalf("sent=%#v calls=%#v item=%#v requests=%#v", channel.sent, channel.calls, store.items[0], provider.requests)
 	}
 	item := store.items[0]
-	if item.LastCommitSHA != "new-sha" || item.LastPullRequestCursor == "" || item.LastReleaseTag != "v1.1.0" || item.LastStarCount != 8 || item.PendingDelivery != "" || item.ConsecutiveFailures != 0 {
+	if item.LastCommitSHA != "new-sha" || item.LastPullRequestCursor == "" || item.LastReleaseTag != "v1.1.0" || item.LastStarCount != 8 || item.LastStarEventID != "eu8" || item.PendingDelivery != "" || item.ConsecutiveFailures != 0 {
 		t.Fatalf("item=%#v", item)
 	}
 	// 通知本身不经过模型；唯一一次调用是发出去之后的跟评。
@@ -1361,5 +1412,230 @@ func TestRepositoryWatchManifestExposesConfigTabSettings(t *testing.T) {
 	}
 	if publishTimeout == specs[repositoryWatchSettingTimeout].Label {
 		t.Fatalf("both timeout settings are labelled %q; the config tab shows them together", publishTimeout)
+	}
+}
+
+// 数字变了却没有对应的 star 事件，就不该播报：stargazers_count 来自缓存，涨了又落
+// 回来是常事（垃圾号点完被封、点完立刻取消、副本不一致）。以前拿这个数字当触发器，
+// 于是发出「Star +1，可谁也没点」，抖回去还会再发一条。
+func TestRepositoryWatchIgnoresStarCountWithoutEvent(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		starCount: 10,
+		events:    repositoryWatchStarEvents("u01", "u02"),
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Stars: true}
+
+	cursor, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", selection, nil)
+	if err != nil || cursor.StarCount != 10 || cursor.StarEventID != "eu02" {
+		t.Fatalf("baseline=%#v err=%v", cursor, err)
+	}
+	cursor.HasStarCount = true
+
+	// 数字涨了，事件流里没有新的 WatchEvent。
+	github.mu.Lock()
+	github.starCount = 11
+	github.mu.Unlock()
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change.Stars != nil {
+		t.Fatalf("count-only bump was announced: %#v", change.Stars)
+	}
+	// 数字照常跟进，游标不动——下一轮抖回去也不会有任何动静。
+	if change.Snapshot.StarCount != 11 || change.Snapshot.StarEventID != "eu02" {
+		t.Fatalf("snapshot=%#v", change.Snapshot)
+	}
+	cursor = change.Snapshot
+	cursor.HasStarCount = true
+
+	github.mu.Lock()
+	github.starCount = 10
+	github.mu.Unlock()
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "", cursor, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change.Stars != nil {
+		t.Fatalf("flap leaked through: %#v", change.Stars)
+	}
+}
+
+// 有 WatchEvent 就必须报出是谁，并且按事件数算增量——stargazers_count 可能还是缓存
+// 里的旧值，直接相减会算出和名单自相矛盾的「+0」。
+func TestRepositoryWatchNamesStargazersFromEvents(t *testing.T) {
+	tests := []struct {
+		name         string
+		starCount    int
+		wantCurrent  int
+		wantPrevious int
+	}{
+		{name: "数字已经更新", starCount: 12, wantCurrent: 12, wantPrevious: 10},
+		{name: "数字还是缓存里的旧值", starCount: 10, wantCurrent: 12, wantPrevious: 10},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			github := &repositoryWatchTestGitHub{
+				starCount: test.starCount,
+				events:    repositoryWatchStarEvents("u01", "u02", "u03", "u04"),
+			}
+			server := httptest.NewServer(http.HandlerFunc(github.handler))
+			defer server.Close()
+			plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+			cursor := repositoryWatchSnapshot{StarCount: 10, HasStarCount: true, StarEventID: "eu02"}
+
+			change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor, repositoryWatchSelection{Stars: true}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change.Stars == nil {
+				t.Fatal("star events were not announced")
+			}
+			// 名单按时间正序，读起来是「谁先点的」。
+			if got := stargazerLogins(change.Stars.AddedUsers); !slices.Equal(got, []string{"u03", "u04"}) {
+				t.Fatalf("added stargazers=%#v", got)
+			}
+			if change.Stars.Delta != 2 || change.Stars.Previous != test.wantPrevious || change.Stars.Current != test.wantCurrent {
+				t.Fatalf("stars=%#v", change.Stars)
+			}
+			if change.Snapshot.StarEventID != "eu04" {
+				t.Fatalf("snapshot=%#v", change.Snapshot)
+			}
+			rendered := renderRepositoryWatchChanges(change)
+			for _, want := range []string{"Star +2", "@u03、@u04"} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("rendered=%q missing %q", rendered, want)
+				}
+			}
+		})
+	}
+}
+
+// 事件窗口只有最近 300 条，游标那条被挤出去之后必须退回按事件时间筛。两边都是
+// GitHub 的时钟，不像以前拿本机时钟去比 starred_at，不存在时钟快慢吞掉新 star 的问题。
+func TestRepositoryWatchStarCursorFallsBackToEventTime(t *testing.T) {
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	events := []repositoryWatchStargazer{
+		{ID: "e3", Login: "u03", StarredAt: base.Add(3 * time.Hour)},
+		{ID: "e2", Login: "u02", StarredAt: base.Add(2 * time.Hour)},
+		{ID: "e1", Login: "u01", StarredAt: base.Add(time.Hour)},
+	}
+	// 游标 id 还在窗口里：以 id 为准。
+	if got := stargazerLogins(starEventsAfter(events, "e1", base)); !slices.Equal(got, []string{"u02", "u03"}) {
+		t.Fatalf("by id=%#v", got)
+	}
+	// 游标 id 已经被挤出窗口：退回按事件时间筛。
+	if got := stargazerLogins(starEventsAfter(events, "e0", base.Add(2*time.Hour))); !slices.Equal(got, []string{"u03"}) {
+		t.Fatalf("by time=%#v", got)
+	}
+	// 上一轮仓库还没有 star 事件，这一轮来的都是新的。
+	if got := stargazerLogins(starEventsAfter(events, repositoryWatchNoStarEvent, time.Time{})); !slices.Equal(got, []string{"u01", "u02", "u03"}) {
+		t.Fatalf("from none=%#v", got)
+	}
+}
+
+// 老订阅升级上来没有事件游标，第一轮只该记游标，不该把仓库历史上的 star 全播一遍。
+func TestRepositoryWatchInitialisesStarCursorSilently(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		starCount: 9,
+		events:    repositoryWatchStarEvents("u01", "u02", "u03"),
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	cursor := repositoryWatchSnapshot{StarCount: 7, HasStarCount: true}
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor, repositoryWatchSelection{Stars: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change.Stars != nil {
+		t.Fatalf("history was replayed on the first round: %#v", change.Stars)
+	}
+	if change.Snapshot.StarEventID != "eu03" || change.Snapshot.StarCount != 9 {
+		t.Fatalf("snapshot=%#v", change.Snapshot)
+	}
+}
+
+// 仓库一条 star 事件都没有时，游标要记成哨兵而不是留空——留空会和「从没查过」混在
+// 一起，仓库第一次被 star 就会被当成初始化而静默吞掉。
+func TestRepositoryWatchMarksEmptyStarHistory(t *testing.T) {
+	github := &repositoryWatchTestGitHub{starCount: 0}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+
+	cursor, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", repositoryWatchSelection{Stars: true}, nil)
+	if err != nil || cursor.StarEventID != repositoryWatchNoStarEvent {
+		t.Fatalf("baseline=%#v err=%v", cursor, err)
+	}
+	cursor.HasStarCount = true
+
+	github.mu.Lock()
+	github.starCount = 1
+	github.events = repositoryWatchStarEvents("first")
+	github.mu.Unlock()
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor, repositoryWatchSelection{Stars: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change.Stars == nil || !slices.Equal(stargazerLogins(change.Stars.AddedUsers), []string{"first"}) {
+		t.Fatalf("first ever star was swallowed: %#v", change.Stars)
+	}
+}
+
+// 同一个仓库、同一个投递目标建两份订阅，两份各记各的游标、各轮各的，同一条动态会
+// 一字不差地发两遍。
+func TestRepositoryWatchRejectsDuplicateSubscription(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		commits:   []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")},
+		starCount: 3,
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, &recordingChannel{}, NewPluginManager(plugin), nil, store, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "owner"}
+	selection := repositoryWatchSelection{Commits: true}
+
+	first, err := runtime.addRepositoryWatch(event, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.addRepositoryWatch(event, "owner", "ACME/Demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, false, nil)
+	if err == nil || !strings.Contains(err.Error(), first.ID) {
+		t.Fatalf("duplicate watch was accepted: err=%v items=%d", err, len(store.items))
+	}
+	// 换个群就是另一回事，不该被挡。
+	other := MessageEvent{Kind: EventKindGroup, GroupID: "456", UserID: "owner"}
+	if _, err := runtime.addRepositoryWatch(other, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, false, nil); err != nil {
+		t.Fatalf("watch for a different group was rejected: %v", err)
+	}
+	// 取消掉的旧订阅不算占位。
+	if _, err := runtime.cancelRepositoryWatch("owner", first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.addRepositoryWatch(event, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, false, nil); err != nil {
+		t.Fatalf("watch was still blocked by a cancelled one: %v", err)
+	}
+}
+
+// 建订阅时会去重，但更早写下的订阅没经过这一步；投递前再去一次，免得同一个群收到
+// 两份一模一样的通知。
+func TestRepositoryWatchDeliveryTargetsAreDeduplicated(t *testing.T) {
+	item := Reminder{
+		Kind: ReminderKindRepositoryWatch, GroupID: "123",
+		NotificationTargetsJSON: `[{"group_id":"123"},{"group_id":"123"},{"user_id":"owner"},{"user_id":"owner"}]`,
+	}
+	targets := repositoryWatchDeliveryTargets(item)
+	if len(targets) != 2 {
+		t.Fatalf("targets=%#v", targets)
+	}
+	if targets[0].Kind != EventKindGroup || targets[0].GroupID != "123" || targets[1].Kind != EventKindPrivate || targets[1].UserID != "owner" {
+		t.Fatalf("targets=%#v", targets)
 	}
 }
