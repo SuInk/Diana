@@ -28,6 +28,8 @@ const (
 	defaultHeadlessBrowserHTMLBytes   = 4 * 1024 * 1024
 	defaultHeadlessBrowserTextChars   = 8000
 	defaultHeadlessBrowserVirtualTime = 8 * time.Second
+	// headlessBrowserProbeTimeout 只够跑一次 --version；探测卡住不该拖住整个设置页。
+	headlessBrowserProbeTimeout = 5 * time.Second
 )
 
 // RenderedPage is the sanitized result of one disposable headless browser run.
@@ -191,6 +193,61 @@ func intFromEnv(key string, fallback int) int {
 	return value
 }
 
+// HeadlessBrowserStatus 是沙盒无头浏览器的可用性探测结果。
+type HeadlessBrowserStatus struct {
+	Available bool
+	Path      string
+	Version   string
+	// Detail 在不可用时说明卡在哪一步，直接给用户看。
+	Detail string
+}
+
+// ProbeHeadlessBrowser 检查沙盒渲染现在能不能真的跑起来。
+//
+// 判定以「--version 真的执行成功」为准，而不是文件存在：架构不匹配、缺动态库、
+// 悬空的符号链接都能骗过存在性检查，却一渲染就失败——那时候用户已经在群里发过
+// 链接了，只会看到一句「渲染失败」，还不知道是环境问题。
+func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowserStatus {
+	path, err := findHeadlessBrowserExecutable(configured)
+	if err != nil {
+		return HeadlessBrowserStatus{Detail: headlessBrowserProbeDetail(configured)}
+	}
+	// Windows 上的 chrome.exe 是 GUI 子系统程序，--version 什么都不往标准输出写，
+	// 拿它判活会把装好的 Chrome 判成不可用。这里退回到「可执行文件存在」，
+	// 版本号留空。
+	if runtime.GOOS == "windows" {
+		return HeadlessBrowserStatus{Available: true, Path: path}
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(probeCtx, path, "--version").CombinedOutput()
+	if err != nil {
+		detail := "找到了 " + path + "，但它执行失败"
+		if message := compactBrowserError(string(output)); message != "" {
+			detail += "：" + message
+		}
+		return HeadlessBrowserStatus{Path: path, Detail: detail}
+	}
+	version := strings.TrimSpace(firstNonEmptyLine(string(output)))
+	return HeadlessBrowserStatus{Available: true, Path: path, Version: version}
+}
+
+func headlessBrowserProbeDetail(configured string) string {
+	if strings.TrimSpace(configured) != "" {
+		return "配置的浏览器路径不存在：" + strings.TrimSpace(configured)
+	}
+	return "没有找到 Chrome/Chromium。装一个（Linux 上 chromium 或 google-chrome，macOS 上 Google Chrome）之后这里会自动检测到。"
+}
+
+func firstNonEmptyLine(value string) string {
+	for _, line := range strings.Split(value, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func findHeadlessBrowserExecutable(configured string) (string, error) {
 	configured = strings.TrimSpace(configured)
 	if configured != "" {
@@ -210,6 +267,15 @@ func findHeadlessBrowserExecutable(configured string) (string, error) {
 			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 			"/Applications/Chromium.app/Contents/MacOS/Chromium",
 			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+		)
+	case "linux":
+		// systemd 起的服务通常只继承 /usr/bin:/bin:/usr/sbin:/sbin，snap 和 /opt
+		// 下装的浏览器靠 PATH 一个都找不到，界面上就成了「没装浏览器」。
+		paths = append(paths,
+			"/opt/google/chrome/chrome",
+			"/snap/bin/chromium",
+			"/usr/lib/chromium/chromium",
+			"/usr/lib/chromium-browser/chromium-browser",
 		)
 	case "windows":
 		for _, base := range []string{os.Getenv("PROGRAMFILES"), os.Getenv("PROGRAMFILES(X86)"), os.Getenv("LOCALAPPDATA")} {
