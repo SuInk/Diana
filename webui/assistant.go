@@ -589,14 +589,25 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 	c.JSON(http.StatusOK, assistant.RedactStates(h.runtime.Plugins().ListVisible()))
 }
 
-// pluginDependencies 返回解析器外部依赖的探测结果，让控制台能直接看出
-// yt-dlp / ffmpeg / node 是否齐全，而不是等用户发链接后才报错。
+// pluginDependencies 返回各插件外部依赖的探测结果，让控制台能直接看出
+// yt-dlp / ffmpeg / node / 浏览器是否齐全，而不是等用户发链接后才报错。
+//
+// plugins 按插件 ID 分组，界面据此决定在哪张卡片上显示；resolver 保留原样，
+// 安装接口的返回体还在用它。
 func (h *BotHandler) pluginDependencies(c *gin.Context) {
-	deps := assistant.ResolverDependencies()
+	resolver := assistant.ResolverDependencies()
+	browser := assistant.BrowserDependencies()
 	if queryBool(c.Query("refresh")) {
-		deps = assistant.RefreshResolverDependencies()
+		resolver = assistant.RefreshResolverDependencies()
+		browser = assistant.RefreshBrowserDependencies()
 	}
-	c.JSON(http.StatusOK, gin.H{"resolver": deps})
+	c.JSON(http.StatusOK, gin.H{
+		"resolver": resolver,
+		"plugins": gin.H{
+			assistant.ResolverPluginID:         resolver,
+			assistant.SandboxedBrowserPluginID: browser,
+		},
+	})
 }
 
 // installPluginDependency 安装链接解析插件白名单中的外部命令。

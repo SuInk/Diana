@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -462,3 +463,48 @@ func (fakeChannel) Status() assistant.ChannelStatus { return assistant.ChannelSt
 
 // Close 释放当前对象持有的资源。
 func (fakeChannel) Close() error { return nil }
+
+// 依赖按插件分组返回，界面才能把浏览器那一格挂到网页渲染插件上，而不是继续
+// 只认链接解析一个插件。
+func TestBotHandlerGroupsPluginDependenciesByPlugin(t *testing.T) {
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+		return fakeChannel{}
+	})
+	router := botTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/assistant/plugins/dependencies", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Resolver []assistant.ResolverDependency            `json:"resolver"`
+		Plugins  map[string][]assistant.ResolverDependency `json:"plugins"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(payload.Plugins[assistant.ResolverPluginID]) != len(payload.Resolver) {
+		t.Fatalf("resolver group = %#v, compat field = %#v", payload.Plugins[assistant.ResolverPluginID], payload.Resolver)
+	}
+	browser := payload.Plugins[assistant.SandboxedBrowserPluginID]
+	if len(browser) != 1 {
+		t.Fatalf("browser group = %#v", browser)
+	}
+	// 装没装浏览器取决于跑测试的机器，但两种情况都必须能说清楚：装了要给出路径，
+	// 没装要给出原因——只留一句「需手动安装」等于什么都没说。
+	if browser[0].Available {
+		if strings.TrimSpace(browser[0].Path) == "" {
+			t.Fatalf("available browser without a path: %#v", browser[0])
+		}
+	} else if strings.TrimSpace(browser[0].Detail) == "" {
+		t.Fatalf("unavailable browser without a reason: %#v", browser[0])
+	}
+	// 浏览器不走包管理器一键装，界面上不该出现安装按钮。
+	if browser[0].Installable {
+		t.Fatalf("browser should not offer one-click install: %#v", browser[0])
+	}
+}

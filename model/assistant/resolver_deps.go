@@ -95,10 +95,13 @@ func resolverCommandEnv() []string {
 type ResolverDependency struct {
 	Name string `json:"name"`
 	// Purpose 说明缺了它会失去什么能力，便于用户判断要不要装。
-	Purpose     string `json:"purpose"`
-	Available   bool   `json:"available"`
-	Path        string `json:"path,omitempty"`
-	Version     string `json:"version,omitempty"`
+	Purpose   string `json:"purpose"`
+	Available bool   `json:"available"`
+	Path      string `json:"path,omitempty"`
+	Version   string `json:"version,omitempty"`
+	// Detail 在不可用时说明卡在哪一步。有的依赖没法一键安装，只说一句
+	// 「需手动安装」等于让用户自己去猜是没装、装错架构还是路径没配。
+	Detail      string `json:"detail,omitempty"`
 	Installable bool   `json:"installable"`
 	Installer   string `json:"installer,omitempty"`
 }
