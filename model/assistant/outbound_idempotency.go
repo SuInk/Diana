@@ -122,7 +122,7 @@ func (r *Runtime) claimOutboundStep(ctx context.Context, fingerprint string) (st
 	defer cancel()
 	messageID, ok, err := ledger.OutboundStepDelivered(lookupCtx, turn.id, stepKey)
 	if err != nil {
-		log.Printf("qqbot outbound step lookup failed: %v", err)
+		log.Printf("chatbot outbound step lookup failed: %v", err)
 		return stepKey, "", false
 	}
 	return stepKey, messageID, ok
@@ -143,7 +143,7 @@ func (r *Runtime) recordOutboundStep(ctx context.Context, stepKey, messageID str
 	recordCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := ledger.RecordOutboundStep(recordCtx, turn.id, stepKey, messageID); err != nil {
-		log.Printf("qqbot outbound step record failed: %v", err)
+		log.Printf("chatbot outbound step record failed: %v", err)
 	}
 }
 
@@ -160,7 +160,7 @@ func (r *Runtime) clearOutboundSteps(turnID string) {
 	clearCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := ledger.ClearOutboundSteps(clearCtx, turnID); err != nil {
-		log.Printf("qqbot outbound step cleanup failed: %v", err)
+		log.Printf("chatbot outbound step cleanup failed: %v", err)
 	}
 }
 

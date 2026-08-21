@@ -83,13 +83,13 @@ export interface LLMProviderCatalog {
   models: LLMModelDefinition[];
 }
 
-export interface QQBotConfig {
+export interface BotProfileConfig {
   id?: string;
   name?: string;
   platform?: string;
   avatar_url?: string;
   active_profile_id?: string;
-  profiles?: QQBotConfig[];
+  profiles?: BotProfileConfig[];
   /** 默认开启；关闭后不同平台可复用相同会话键中的上下文。 */
   isolate_platform_contexts?: boolean;
   enabled: boolean;
@@ -105,7 +105,7 @@ export interface QQBotConfig {
   nonebot_bridge_endpoint?: string;
   nonebot_bridge_token?: string;
   nonebot_bridge_token_configured?: boolean;
-  bot_qq?: string;
+  bot_account?: string;
   owner_id?: string;
   owner_login_enabled?: boolean;
   owner_llm_config_enabled?: boolean;
@@ -289,7 +289,7 @@ export interface ResolverDependencyInstallResponse {
   installer?: string;
 }
 
-export interface QQBotGroupConfig {
+export interface BotGroupConfig {
   group_id: string;
   enabled: boolean;
   enabled_set?: boolean;
@@ -322,7 +322,7 @@ export interface QQBotGroupConfig {
   updated_at?: string;
 }
 
-export interface QQBotGroupSummary extends QQBotGroupConfig {
+export interface BotGroupSummary extends BotGroupConfig {
   group_name?: string;
   avatar_url?: string;
   member_count?: number;
@@ -358,19 +358,19 @@ export interface ReplyGate {
   quiet_reply?: string;
 }
 
-export interface QQBotGroupAdminChallengeResponse {
+export interface BotGroupAdminChallengeResponse {
   group_id: string;
   user_id: string;
   expires_at: string;
   message: string;
 }
 
-export interface QQBotGroupAdminConfigResponse {
+export interface BotGroupAdminConfigResponse {
   group_id: string;
   user_id?: string;
   token?: string;
   expires_at?: string;
-  config: QQBotGroupConfig;
+  config: BotGroupConfig;
   plugins: PluginState[];
 }
 
@@ -437,7 +437,7 @@ export interface AppLogsResponse {
   logs: AppLogEntry[];
 }
 
-export interface QQBotEvent {
+export interface BotEvent {
   at: string;
   kind: string;
   platform?: string;
@@ -456,7 +456,7 @@ export interface QQBotEvent {
   duration_ms?: number;
 }
 
-export interface QQBotChannelStatus {
+export interface BotChannelStatus {
   profile_id?: string;
   platform?: string;
   name?: string;
@@ -477,11 +477,11 @@ export interface QQBotChannelStatus {
   updated_at: string;
 }
 
-export interface QQBotStatus {
+export interface BotStatus {
   running: boolean;
-  config: QQBotConfig;
-  channel: QQBotChannelStatus;
-  channels?: QQBotChannelStatus[];
+  config: BotProfileConfig;
+  channel: BotChannelStatus;
+  channels?: BotChannelStatus[];
   nonebot_bridge: {
     enabled: boolean;
     connected: boolean;
@@ -490,28 +490,28 @@ export interface QQBotStatus {
     updated_at: string;
   };
   plugins: PluginState[];
-  recent_events?: QQBotEvent[];
+  recent_events?: BotEvent[];
   active_workers: number;
   last_error?: string;
   updated_at: string;
 }
 
-export interface QQGroupTestResponse {
+export interface OneBotGroupTestResponse {
   group_id: string;
   message?: string;
   message_id?: string;
   sent: boolean;
   send_result?: Record<string, unknown>;
-  channel: QQBotStatus["channel"];
-  recent_events?: NonNullable<QQBotStatus["recent_events"]>;
-  status: QQBotStatus;
+  channel: BotStatus["channel"];
+  recent_events?: NonNullable<BotStatus["recent_events"]>;
+  status: BotStatus;
 }
 
-export interface QQBotFeatureFlags {
+export interface BotFeatureFlags {
   group_test: boolean;
 }
 
-export interface QQBotPlatform {
+export interface BotPlatform {
   id: string;
   name: string;
   protocol: string;
@@ -816,79 +816,79 @@ export function testProviderModel(providerId: string, modelId: string, message: 
   });
 }
 
-export function getQQBotConfig(): Promise<QQBotConfig> {
-  return requestJSON<QQBotConfig>("/api/assistant/config");
+export function getBotProfileConfig(): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/config");
 }
 
-export function getQQBotPlatforms(): Promise<{ platforms: QQBotPlatform[] }> {
-  return requestJSON<{ platforms: QQBotPlatform[] }>("/api/assistant/platforms");
+export function getBotPlatforms(): Promise<{ platforms: BotPlatform[] }> {
+  return requestJSON<{ platforms: BotPlatform[] }>("/api/assistant/platforms");
 }
 
-export function saveQQBotConfig(config: QQBotConfig): Promise<QQBotConfig> {
-  return requestJSON<QQBotConfig>("/api/assistant/config", {
+export function saveBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/config", {
     method: "POST",
     body: JSON.stringify(config)
   });
 }
 
-export function activateQQBotProfile(id: string): Promise<QQBotConfig> {
-  return requestJSON<QQBotConfig>("/api/assistant/config/activate", {
+export function activateBotProfile(id: string): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/config/activate", {
     method: "POST",
     body: JSON.stringify({ id })
   });
 }
 
-export function cloneQQBotProfile(id: string): Promise<QQBotConfig> {
-  return requestJSON<QQBotConfig>("/api/assistant/config/clone", {
+export function cloneBotProfile(id: string): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/config/clone", {
     method: "POST",
     body: JSON.stringify({ id })
   });
 }
 
-export function deleteQQBotProfile(id: string): Promise<QQBotConfig> {
-  return requestJSON<QQBotConfig>("/api/assistant/config/delete", {
+export function deleteBotProfile(id: string): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/config/delete", {
     method: "POST",
     body: JSON.stringify({ id })
   });
 }
 
-export function setQQBotContextIsolation(enabled: boolean): Promise<QQBotConfig> {
-  return requestJSON<QQBotConfig>("/api/assistant/config/context-isolation", {
+export function setBotContextIsolation(enabled: boolean): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/config/context-isolation", {
     method: "POST",
     body: JSON.stringify({ enabled })
   });
 }
 
-export function getQQBotStatus(): Promise<QQBotStatus> {
-  return requestJSON<QQBotStatus>("/api/assistant/status");
+export function getBotStatus(): Promise<BotStatus> {
+  return requestJSON<BotStatus>("/api/assistant/status");
 }
 
-export function startQQBot(): Promise<QQBotStatus> {
-  return requestJSON<QQBotStatus>("/api/assistant/start", { method: "POST" });
+export function startBot(): Promise<BotStatus> {
+  return requestJSON<BotStatus>("/api/assistant/start", { method: "POST" });
 }
 
-export function stopQQBot(): Promise<QQBotStatus> {
-  return requestJSON<QQBotStatus>("/api/assistant/stop", { method: "POST" });
+export function stopBot(): Promise<BotStatus> {
+  return requestJSON<BotStatus>("/api/assistant/stop", { method: "POST" });
 }
 
-export function requestQQBotBackfill(hours?: number): Promise<{ requested: boolean; window_hours: number }> {
+export function requestBotBackfill(hours?: number): Promise<{ requested: boolean; window_hours: number }> {
   return requestJSON<{ requested: boolean; window_hours: number }>("/api/assistant/backfill", {
     method: "POST",
     body: JSON.stringify(hours && hours > 0 ? { hours } : {})
   });
 }
 
-export function getQQBotFeatures(): Promise<QQBotFeatureFlags> {
-  return requestJSON<QQBotFeatureFlags>("/api/assistant/features");
+export function getBotFeatures(): Promise<BotFeatureFlags> {
+  return requestJSON<BotFeatureFlags>("/api/assistant/features");
 }
 
-export function getQQGroupTest(groupID: string): Promise<QQGroupTestResponse> {
+export function getOneBotGroupTest(groupID: string): Promise<OneBotGroupTestResponse> {
   const params = new URLSearchParams({ group_id: groupID });
-  return requestJSON<QQGroupTestResponse>(`/api/assistant/group-test?${params.toString()}`);
+  return requestJSON<OneBotGroupTestResponse>(`/api/assistant/group-test?${params.toString()}`);
 }
 
-export function sendQQGroupTest(groupID: string, message: string): Promise<QQGroupTestResponse> {
-  return requestJSON<QQGroupTestResponse>("/api/assistant/group-test", {
+export function sendOneBotGroupTest(groupID: string, message: string): Promise<OneBotGroupTestResponse> {
+  return requestJSON<OneBotGroupTestResponse>("/api/assistant/group-test", {
     method: "POST",
     body: JSON.stringify({ group_id: groupID, message })
   });
@@ -947,28 +947,28 @@ export function installResolverDependency(name: string): Promise<ResolverDepende
   );
 }
 
-export function requestQQBotGroupAdminChallenge(groupID: string, userID: string): Promise<QQBotGroupAdminChallengeResponse> {
-  return requestJSON<QQBotGroupAdminChallengeResponse>("/api/assistant/group-admin/challenge", {
+export function requestBotGroupAdminChallenge(groupID: string, userID: string): Promise<BotGroupAdminChallengeResponse> {
+  return requestJSON<BotGroupAdminChallengeResponse>("/api/assistant/group-admin/challenge", {
     method: "POST",
     body: JSON.stringify({ group_id: groupID, user_id: userID })
   });
 }
 
-export function verifyQQBotGroupAdmin(groupID: string, userID: string, code: string): Promise<QQBotGroupAdminConfigResponse> {
-  return requestJSON<QQBotGroupAdminConfigResponse>("/api/assistant/group-admin/verify", {
+export function verifyBotGroupAdmin(groupID: string, userID: string, code: string): Promise<BotGroupAdminConfigResponse> {
+  return requestJSON<BotGroupAdminConfigResponse>("/api/assistant/group-admin/verify", {
     method: "POST",
     body: JSON.stringify({ group_id: groupID, user_id: userID, code })
   });
 }
 
-export function getQQBotGroupAdminConfig(token: string): Promise<QQBotGroupAdminConfigResponse> {
-  return requestJSON<QQBotGroupAdminConfigResponse>("/api/assistant/group-admin/config", {
+export function getBotGroupAdminConfig(token: string): Promise<BotGroupAdminConfigResponse> {
+  return requestJSON<BotGroupAdminConfigResponse>("/api/assistant/group-admin/config", {
     headers: { "X-Diana-Group-Token": token }
   });
 }
 
-export function saveQQBotGroupAdminConfig(token: string, config: QQBotGroupConfig): Promise<QQBotGroupAdminConfigResponse> {
-  return requestJSON<QQBotGroupAdminConfigResponse>("/api/assistant/group-admin/config", {
+export function saveBotGroupAdminConfig(token: string, config: BotGroupConfig): Promise<BotGroupAdminConfigResponse> {
+  return requestJSON<BotGroupAdminConfigResponse>("/api/assistant/group-admin/config", {
     method: "POST",
     headers: { "X-Diana-Group-Token": token },
     body: JSON.stringify({ config })
@@ -1069,19 +1069,19 @@ export interface RollbackResponse {
 }
 
 export interface ConsoleGroupsResponse {
-  groups: QQBotGroupSummary[];
+  groups: BotGroupSummary[];
   plugins: PluginState[];
   live_available: boolean;
   warning?: string;
 }
 
-export function listQQBotGroups(refresh = false): Promise<ConsoleGroupsResponse> {
+export function listBotGroups(refresh = false): Promise<ConsoleGroupsResponse> {
   const suffix = refresh ? "?refresh=1" : "";
   return requestJSON<ConsoleGroupsResponse>(`/api/assistant/groups${suffix}`);
 }
 
-export function saveQQBotGroup(config: QQBotGroupConfig): Promise<{ config: QQBotGroupConfig }> {
-  return requestJSON<{ config: QQBotGroupConfig }>("/api/assistant/groups", {
+export function saveBotGroup(config: BotGroupConfig): Promise<{ config: BotGroupConfig }> {
+  return requestJSON<{ config: BotGroupConfig }>("/api/assistant/groups", {
     method: "POST",
     body: JSON.stringify({ config })
   });
@@ -1219,7 +1219,7 @@ export interface AssistantEventImage {
   unavailable?: boolean;
 }
 
-export interface AssistantEventDetail extends QQBotEvent {
+export interface AssistantEventDetail extends BotEvent {
   id: string;
   sender_name?: string;
   sub_type?: string;

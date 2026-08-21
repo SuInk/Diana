@@ -63,7 +63,7 @@ func TestAssistantEventsEndpointReturnsDurableDecisionReasons(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
-		Action:    "qqbot.llm_usage",
+		Action:    "chatbot.llm_usage",
 		Target:    event.MessageID,
 		CreatedAt: time.Now().UTC(),
 		Metadata:  map[string]any{"input_tokens": 60, "output_tokens": 15},
@@ -73,7 +73,7 @@ func TestAssistantEventsEndpointReturnsDurableDecisionReasons(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := &QQBotHandler{sqlite: store}
+	handler := &BotHandler{sqlite: store}
 	router.GET("/api/assistant/events", handler.listEvents)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h&result=not_replied&page=1&limit=20", nil))
@@ -139,7 +139,7 @@ func TestAssistantEventImageEndpointServesCachedImageWithoutLeakingSource(t *tes
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := &QQBotHandler{sqlite: store}
+	handler := &BotHandler{sqlite: store}
 	router.GET("/api/assistant/events", handler.listEvents)
 	router.GET("/api/assistant/events/:id/images/:index", handler.eventImage)
 
@@ -254,7 +254,7 @@ func TestAssistantEventsRejectsUnsupportedResultFilter(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := &QQBotHandler{sqlite: store}
+	handler := &BotHandler{sqlite: store}
 	router.GET("/api/assistant/events", handler.listEvents)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h&result=failed", nil))
@@ -294,7 +294,7 @@ func TestAssistantEventsErrorFilterClassifiesLegacyProcessingError(t *testing.T)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := &QQBotHandler{sqlite: store}
+	handler := &BotHandler{sqlite: store}
 	router.GET("/api/assistant/events", handler.listEvents)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h&result=error", nil))
@@ -340,7 +340,7 @@ func TestAssistantEventsDoesNotReportUnconfirmedLegacyErrorReplyAsReplied(t *tes
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := &QQBotHandler{sqlite: store}
+	handler := &BotHandler{sqlite: store}
 	router.GET("/api/assistant/events", handler.listEvents)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h&result=error", nil))
@@ -368,7 +368,7 @@ func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
 	ctx := context.Background()
 	event := assistant.MessageEvent{
 		Platform:  "napcat",
-		ProfileID: "qq-main",
+		ProfileID: "onebot-main",
 		Kind:      assistant.EventKindGroup,
 		GroupID:   "group-1",
 		UserID:    "user-1",
@@ -380,7 +380,7 @@ func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
-		Kind: storage.LogKindDebug, Action: "qqbot.debug_trace", Target: event.MessageID, Message: "模型请求完成",
+		Kind: storage.LogKindDebug, Action: "chatbot.debug_trace", Target: event.MessageID, Message: "模型请求完成",
 		Metadata: map[string]any{
 			"phase": "model_request", "platform": event.Platform, "profile_id": event.ProfileID,
 			"kind": "group", "group_id": event.GroupID, "user_id": event.UserID, "message_id": event.MessageID,
@@ -390,7 +390,7 @@ func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
 	}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := &QQBotHandler{sqlite: store}
+	handler := &BotHandler{sqlite: store}
 	router.GET("/api/assistant/events/:id/trace", handler.eventTrace)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/trace", nil))

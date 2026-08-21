@@ -31,22 +31,22 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		}
 		kind := applog.KindOperation
 		level := applog.LevelInfo
-		action := "qqbot.agent_run"
+		action := "chatbot.agent_run"
 		message := "Agent 运行状态已更新"
 		switch runEvent.Phase {
 		case agent.RunPhaseStarted:
 			message = "Agent 运行开始"
 		case agent.RunPhaseModelCompleted:
-			action = "qqbot.agent_model"
+			action = "chatbot.agent_model"
 			message = "Agent 模型轮次完成"
 		case agent.RunPhaseProtocolRepair:
-			action = "qqbot.agent_protocol"
+			action = "chatbot.agent_protocol"
 			message = "Agent 协议已自动修正"
 		case agent.RunPhaseToolStarted:
-			action = "qqbot.agent_tool"
+			action = "chatbot.agent_tool"
 			message = "Agent 工具调用开始"
 		case agent.RunPhaseToolCompleted:
-			action = "qqbot.agent_tool"
+			action = "chatbot.agent_tool"
 			message = "Agent 工具调用完成"
 			if runError != "" {
 				kind = applog.KindError
@@ -91,7 +91,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if len(runEvent.Metadata) > 0 {
 			metadata["tool_metadata"] = runEvent.Metadata
 		}
-		actor := qqEventActor(event)
+		actor := oneBotEventActor(event)
 		if runEvent.Tool == agent.WebSearchToolName {
 			// Search operation logs remain useful without retaining the person or
 			// conversation that produced a potentially private query. Raw queries
@@ -140,7 +140,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				"usage":           runEvent.Usage,
 			})
 		}
-		log.Printf("qqbot agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
+		log.Printf("chatbot agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
 			runEvent.TraceID, progressBar, progressLabel, runEvent.Phase, runEvent.ModelTurn, runEvent.Tool, runEvent.DurationMS)
 	}
 }

@@ -83,7 +83,7 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 		"current_text":          strings.TrimSpace(text),
 		"current_event_time":    event.Time,
 		"reference_anchor_time": anchorTime,
-		"explicit_quote":        semanticQuotedCandidate(event.Quoted, r.effectiveConfigForEvent(event).BotQQ),
+		"explicit_quote":        semanticQuotedCandidate(event.Quoted, r.effectiveConfigForEvent(event).BotAccount),
 		"candidates":            candidates,
 	})
 	if err != nil {
@@ -283,7 +283,7 @@ func semanticCandidatesHaveMedia(candidates []semanticReferenceCandidate) bool {
 	return false
 }
 
-func semanticQuotedCandidate(quoted *QuotedMessage, botQQ string) any {
+func semanticQuotedCandidate(quoted *QuotedMessage, botAccount string) any {
 	if quoted == nil {
 		return nil
 	}
@@ -295,7 +295,7 @@ func semanticQuotedCandidate(quoted *QuotedMessage, botQQ string) any {
 		ReplyToMessageIDs:        replyReferenceIDs(quoted.Segments),
 		SemanticSourceMessageID:  strings.TrimSpace(quoted.SemanticSourceMessageID),
 		SemanticSourceMessageIDs: quotedSemanticSourceMessageIDs(quoted),
-		IsBotMessage:             strings.TrimSpace(botQQ) != "" && strings.TrimSpace(quoted.UserID) == strings.TrimSpace(botQQ),
+		IsBotMessage:             strings.TrimSpace(botAccount) != "" && strings.TrimSpace(quoted.UserID) == strings.TrimSpace(botAccount),
 	}
 	countSemanticReferenceSegments(&candidate, quoted.Segments)
 	finalizeSemanticReferenceCandidate(&candidate)
@@ -318,14 +318,14 @@ func (r *Runtime) semanticReferenceCandidates(ctx context.Context, event Message
 	indexes := semanticReferenceCandidateIndexes(history, event, anchorTime)
 	candidates := make([]semanticReferenceCandidate, 0, len(indexes))
 	events := make(map[string]MessageEvent, len(indexes))
-	botQQ := r.effectiveConfigForEvent(event).BotQQ
+	botAccount := r.effectiveConfigForEvent(event).BotAccount
 	for _, index := range indexes {
 		item := history[index]
 		messageID := strings.TrimSpace(item.MessageID)
 		if messageID == "" || messageID == event.MessageID {
 			continue
 		}
-		candidate := semanticReferenceCandidateFromEvent(item, event, botQQ)
+		candidate := semanticReferenceCandidateFromEvent(item, event, botAccount)
 		if eventContainsSemanticReferenceContent(item) {
 			candidate.NearbyContext = semanticReferenceNearbyContext(history, index)
 		}
@@ -359,7 +359,7 @@ func (r *Runtime) hasDurableMediaBeyondRecentContext(ctx context.Context, event 
 	return false
 }
 
-func semanticReferenceCandidateFromEvent(item, current MessageEvent, botQQ string) semanticReferenceCandidate {
+func semanticReferenceCandidateFromEvent(item, current MessageEvent, botAccount string) semanticReferenceCandidate {
 	candidate := semanticReferenceCandidate{
 		MessageID:                strings.TrimSpace(item.MessageID),
 		Sender:                   strings.TrimSpace(item.SenderNameOrID()),
@@ -369,7 +369,7 @@ func semanticReferenceCandidateFromEvent(item, current MessageEvent, botQQ strin
 		ReplyToMessageIDs:        replyReferenceIDs(item.Segments),
 		SemanticSourceMessageID:  strings.TrimSpace(item.SemanticSourceMessageID),
 		SemanticSourceMessageIDs: eventSemanticSourceMessageIDs(item),
-		IsBotMessage:             strings.TrimSpace(botQQ) != "" && strings.TrimSpace(item.UserID) == strings.TrimSpace(botQQ),
+		IsBotMessage:             strings.TrimSpace(botAccount) != "" && strings.TrimSpace(item.UserID) == strings.TrimSpace(botAccount),
 	}
 	countSemanticReferenceSegments(&candidate, item.Segments)
 	if item.Quoted != nil {
@@ -751,9 +751,9 @@ func (r *Runtime) recordSemanticReference(ctx context.Context, event MessageEven
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.semantic_reference",
+		Action:  "chatbot.semantic_reference",
 		Message: "LLM 已完成上下文指代判断",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  messageID,
 		Metadata: map[string]any{
 			"group_id":    event.GroupID,

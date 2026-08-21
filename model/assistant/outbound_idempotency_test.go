@@ -33,7 +33,7 @@ func TestOutboundStepKeyCombinesPositionAndPayload(t *testing.T) {
 func TestSendOutgoingSkipsStepsAlreadyDeliveredInAnEarlierAttempt(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	channel := newQueueTestChannel()
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetInboundEventStore(store)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m-1"}
 	msg := OutgoingMessage{GroupID: "123", Text: "抖音解析结果"}
@@ -85,7 +85,7 @@ func TestSendOutgoingSkipsStepsAlreadyDeliveredInAnEarlierAttempt(t *testing.T) 
 
 func TestSendOutgoingStillSendsWithoutATurnOrLedger(t *testing.T) {
 	channel := newQueueTestChannel()
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", MessageID: "m-1"}
 	msg := OutgoingMessage{GroupID: "123", Text: "没有账本也要发出去"}
 	for i := 0; i < 2; i++ {

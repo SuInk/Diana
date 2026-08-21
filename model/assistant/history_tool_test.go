@@ -283,7 +283,7 @@ func TestRuntimeAgentCanQueryHistoryAroundCurrentQuote(t *testing.T) {
 		}
 	}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "10000",
+		BotAccount:              "10000",
 		RecentContextLimit:      3,
 		ContextSummaryThreshold: 3,
 		AgentEnabled:            true,

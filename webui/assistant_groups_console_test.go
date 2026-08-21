@@ -43,16 +43,16 @@ func TestConsoleGroupsListsJoinedAndSavedGroups(t *testing.T) {
 			map[string]any{"group_id": "20002", "group_name": "Beta 群", "member_count": 34, "max_member_count": 500},
 		},
 	}}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	store := NewMemoryQQBotGroupConfigStore()
+	store := NewMemoryBotGroupConfigStore()
 	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "20002", Enabled: false, EnabledSet: true, SystemPrompt: "专属人设"}, base); err != nil {
 		t.Fatalf("SaveGroupConfig(20002) error = %v", err)
 	}
 	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "30003", Enabled: true, EnabledSet: true}, base); err != nil {
 		t.Fatalf("SaveGroupConfig(30003) error = %v", err)
 	}
-	handler := NewQQBotHandler(context.Background(), runtime)
+	handler := NewBotHandler(context.Background(), runtime)
 	handler.SetGroupConfigStore(store)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
@@ -83,20 +83,20 @@ func TestConsoleGroupsListsJoinedAndSavedGroups(t *testing.T) {
 	aliasRec := httptest.NewRecorder()
 	router.ServeHTTP(aliasRec, httptest.NewRequest(http.MethodGet, "/api/qqbot/groups", nil))
 	if aliasRec.Code != http.StatusOK {
-		t.Fatalf("qqbot groups alias status = %d, body = %s", aliasRec.Code, aliasRec.Body.String())
+		t.Fatalf("chatbot groups alias status = %d, body = %s", aliasRec.Code, aliasRec.Body.String())
 	}
 }
 
 func TestConsoleGroupsFallsBackToSavedConfigWhenLiveListUnavailable(t *testing.T) {
 	base := assistant.DefaultBotConfig()
 	runtime := assistant.NewRuntime(base, consoleGroupListChannel{err: errors.New("not connected")}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	store := NewMemoryQQBotGroupConfigStore()
+	store := NewMemoryBotGroupConfigStore()
 	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "40004", Enabled: true, EnabledSet: true}, base); err != nil {
 		t.Fatalf("SaveGroupConfig() error = %v", err)
 	}
-	handler := NewQQBotHandler(context.Background(), runtime)
+	handler := NewBotHandler(context.Background(), runtime)
 	handler.SetGroupConfigStore(store)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
@@ -144,8 +144,8 @@ func TestConsoleGroupsCachesLiveListUntilRefresh(t *testing.T) {
 		},
 	}}
 	runtime := assistant.NewRuntime(base, channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandler(context.Background(), runtime)
-	router := qqBotTestRouter(handler)
+	handler := NewBotHandler(context.Background(), runtime)
+	router := botTestRouter(handler)
 
 	first := httptest.NewRecorder()
 	router.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
@@ -201,13 +201,13 @@ func TestConsoleGroupsTimesOutSlowLiveList(t *testing.T) {
 
 	base := assistant.DefaultBotConfig()
 	runtime := assistant.NewRuntime(base, blockingGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	store := NewMemoryQQBotGroupConfigStore()
+	store := NewMemoryBotGroupConfigStore()
 	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "50005", Enabled: true, EnabledSet: true}, base); err != nil {
 		t.Fatalf("SaveGroupConfig() error = %v", err)
 	}
-	handler := NewQQBotHandler(context.Background(), runtime)
+	handler := NewBotHandler(context.Background(), runtime)
 	handler.SetGroupConfigStore(store)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
@@ -226,10 +226,10 @@ func TestConsoleGroupsTimesOutSlowLiveList(t *testing.T) {
 func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
 	base := assistant.DefaultBotConfig()
 	runtime := assistant.NewRuntime(base, consoleGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	store := NewMemoryQQBotGroupConfigStore()
-	handler := NewQQBotHandler(context.Background(), runtime)
+	store := NewMemoryBotGroupConfigStore()
+	handler := NewBotHandler(context.Background(), runtime)
 	handler.SetGroupConfigStore(store)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	body := `{"config":{"group_id":"50005","enabled":true,"enabled_set":true,"natural_interjection_enabled":true,"recall_reply_auto_delete_enabled":true,"recall_reply_auto_delete_delay_seconds":90}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(body))
@@ -257,10 +257,10 @@ func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
 func TestConsoleGroupsValidatesPluginSettingOverrides(t *testing.T) {
 	base := assistant.DefaultBotConfig()
 	runtime := assistant.NewRuntime(base, consoleGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	store := NewMemoryQQBotGroupConfigStore()
-	handler := NewQQBotHandler(context.Background(), runtime)
+	store := NewMemoryBotGroupConfigStore()
+	handler := NewBotHandler(context.Background(), runtime)
 	handler.SetGroupConfigStore(store)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	body := `{"config":{"group_id":"50006","enabled":true,"enabled_set":true,"plugin_setting_overrides":{"official.nonebot-plugin-resolver-go":{"fetch_title":false,"max_links":8}}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(body))

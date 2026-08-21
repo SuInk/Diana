@@ -43,7 +43,7 @@ type recentTextReferenceCandidate struct {
 }
 
 func (r *Runtime) enrichRecentTextReference(ctx context.Context, event MessageEvent, text string, history []MessageEvent) MessageEvent {
-	reference := resolveRecentTextReference(event, text, history, r.effectiveConfigForEvent(event).BotQQ)
+	reference := resolveRecentTextReference(event, text, history, r.effectiveConfigForEvent(event).BotAccount)
 	if reference == nil {
 		return event
 	}
@@ -52,7 +52,7 @@ func (r *Runtime) enrichRecentTextReference(ctx context.Context, event MessageEv
 	return event
 }
 
-func resolveRecentTextReference(event MessageEvent, text string, history []MessageEvent, botQQ string) *recentTextReference {
+func resolveRecentTextReference(event MessageEvent, text string, history []MessageEvent, botAccount string) *recentTextReference {
 	keys := recentTextReferenceKeys(text)
 	if len(keys) == 0 {
 		return nil
@@ -69,7 +69,7 @@ func resolveRecentTextReference(event MessageEvent, text string, history []Messa
 			}
 		}
 
-		candidates := recentTextReferenceHistoryCandidates(event, history, botQQ, key)
+		candidates := recentTextReferenceHistoryCandidates(event, history, botAccount, key)
 		if reference := chooseRecentTextReference(key, candidates); reference != nil {
 			return reference
 		}
@@ -99,7 +99,7 @@ func normalizeRecentTextVersion(value string) string {
 	return value
 }
 
-func recentTextReferenceHistoryCandidates(event MessageEvent, history []MessageEvent, botQQ, key string) []recentTextReferenceCandidate {
+func recentTextReferenceHistoryCandidates(event MessageEvent, history []MessageEvent, botAccount, key string) []recentTextReferenceCandidate {
 	sameSenderIDs := map[string]bool{}
 	for _, item := range history {
 		if sameConversationSender(item, event) {
@@ -115,7 +115,7 @@ func recentTextReferenceHistoryCandidates(event MessageEvent, history []MessageE
 			continue
 		}
 		recency := index
-		if assistantHistoryEvent(item, botQQ) && recentAssistantReplyTargetsSender(item, event.UserID, sameSenderIDs) {
+		if assistantHistoryEvent(item, botAccount) && recentAssistantReplyTargetsSender(item, event.UserID, sameSenderIDs) {
 			candidates = append(candidates, recentTextCandidatesFromSource(historyPlainText(item), key, recentTextReferenceCandidate{
 				SourceMessageID: strings.TrimSpace(item.MessageID), Method: "assistant_reply", Score: 800 + recency,
 			})...)
@@ -307,7 +307,7 @@ func (r *Runtime) recordRecentTextReference(ctx context.Context, event MessageEv
 	logCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	_ = writer.AppendLog(logCtx, applog.Entry{
-		Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "qqbot.text_reference.resolved",
+		Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "chatbot.text_reference.resolved",
 		Message: "当前消息文本指代已完成确定性解析", Metadata: metadata,
 	})
 }

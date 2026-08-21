@@ -103,10 +103,10 @@ docker run -d \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
   -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
-  -e QQBOT_ENABLED=true \
+  -e DIANA_BOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e QQBOT_QQ=10001 \
+  -e DIANA_BOT_ACCOUNT=10001 \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
@@ -175,10 +175,10 @@ node scripts/dev.mjs                       # 没装 make 时
 <summary>用环境变量直接拉起一个 OneBot v11 机器人</summary>
 
 ```sh
-QQBOT_ENABLED=true \
+DIANA_BOT_ENABLED=true \
 ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
 ONEBOT_ACCESS_TOKEN=your-onebot-token \
-QQBOT_QQ=10001 \
+DIANA_BOT_ACCOUNT=10001 \
 DIANA_GROUP_TRIGGERS=Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
@@ -290,10 +290,10 @@ WebUI 里能配的都不必写环境变量。下面是常用项，完整说明�
 | `LLM_API_KEY` | 空 | LLM API Key |
 | `LLM_BASE_URL` | 空 | OpenAI 兼容接口的自定义 Base URL |
 | `LLM_MODEL` | 空 | 模型 ID（`openai_compatible` 无默认值） |
-| `QQBOT_ENABLED` | `false` | 启动时是否自动启用机器人 |
+| `DIANA_BOT_ENABLED` | `false` | 启动时是否自动启用机器人 |
 | `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | 给 OneBot v11 客户端连接的反向 WebSocket 地址 |
 | `ONEBOT_ACCESS_TOKEN` | 空 | OneBot access token |
-| `QQBOT_QQ` | 空 | 机器人账号 |
+| `DIANA_BOT_ACCOUNT` | 空 | 机器人账号 |
 | `DIANA_OWNER_ID` | 空 | 主人账号（Telegram 上填数字用户 ID） |
 | `DIANA_GROUP_TRIGGERS` | `Diana,diana` | 群聊触发词 |
 | `DIANA_AGENT_ENABLED` | `false` | 是否启用内置 Agent |
@@ -362,10 +362,10 @@ Type=simple
 WorkingDirectory=/opt/diana
 Environment=PORT=18080
 Environment=LOG_PATH=/var/log/diana/diana.log
-Environment=QQBOT_ENABLED=true
+Environment=DIANA_BOT_ENABLED=true
 Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
 Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=QQBOT_QQ=10001
+Environment=DIANA_BOT_ACCOUNT=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini

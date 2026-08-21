@@ -108,7 +108,7 @@
                 <span class="badge">{{ eventKindLabel(event.kind) }}</span>
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
                 <span v-if="event.group_id" class="mono muted">群 {{ event.group_id }}</span>
-                <span v-if="displayQQIdentity(event.sender_name, event.user_id)" class="muted">{{ displayQQIdentity(event.sender_name, event.user_id) }}</span>
+                <span v-if="displayChatIdentity(event.sender_name, event.user_id)" class="muted">{{ displayChatIdentity(event.sender_name, event.user_id) }}</span>
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
               </div>
 
@@ -306,7 +306,7 @@ import {
   type AssistantEventsResponse
 } from "../api";
 import { formatClock, formatNumber } from "../format";
-import { displayMessageText, displayQQIdentity } from "../message-display";
+import { displayMessageText, displayChatIdentity } from "../message-display";
 import { currentView } from "../router";
 import { stream } from "../stream";
 import { toastError } from "../toast";

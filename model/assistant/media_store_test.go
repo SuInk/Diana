@@ -316,7 +316,7 @@ func TestLLMMessageUsesPersistedImage(t *testing.T) {
 	defer server.Close()
 
 	store := mediaStore(t)
-	rt := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	rt := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	rt.SetMediaStore(store)
 
 	remote := server.URL + "/photo.png"
@@ -356,7 +356,7 @@ func TestLLMMessageFallsBackWhenFetchFails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	rt := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	rt := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	rt.SetMediaStore(mediaStore(t))
 
 	remote := server.URL + "/gone.png"
@@ -368,7 +368,7 @@ func TestLLMMessageFallsBackWhenFetchFails(t *testing.T) {
 
 // 没配 MediaStore 时保持原行为，不影响既有部署。
 func TestLLMMessageKeepsURLWithoutStore(t *testing.T) {
-	rt := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	rt := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	remote := "https://example.com/a.png"
 	if got := rt.resolveImageForLLM(context.Background(), remote); got != remote {
 		t.Fatalf("未配置存储时应原样返回，实际 %q", got)

@@ -116,7 +116,7 @@ func TestMemberCachePassesSourceEventToFallback(t *testing.T) {
 		return map[string]any{"level": "7", "role": "member"}, nil
 	})
 	event := groupEvent("100", "42", 0)
-	event.ProfileID = "qq-first"
+	event.ProfileID = "onebot-first"
 	event.Platform = PlatformOneBotV11
 	cache.LevelFor(event)
 

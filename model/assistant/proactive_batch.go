@@ -20,8 +20,8 @@ const (
 )
 
 var (
-	errProactiveReplySuperseded = errors.New("qqbot: proactive reply superseded by newer candidates")
-	errChatInReplyDeclined      = errors.New("qqbot: chat-in generation declined to produce a substantive reply")
+	errProactiveReplySuperseded = errors.New("chatbot: proactive reply superseded by newer candidates")
+	errChatInReplyDeclined      = errors.New("chatbot: chat-in generation declined to produce a substantive reply")
 )
 
 type proactiveReplyCandidate struct {

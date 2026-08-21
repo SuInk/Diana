@@ -240,7 +240,7 @@ func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
 }
 
 func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	messageIDs := make([]string, 0, 6)
 	for index := 1; index <= 6; index++ {
 		messageID := fmt.Sprintf("bot-reply-%d", index)
@@ -282,7 +282,7 @@ func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
 
 func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
 	provider := &capturingLLMProvider{reply: "已逐条核对"}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", RecentContextLimit: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", RecentContextLimit: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	messageIDs := make([]string, 0, 6)
@@ -401,7 +401,7 @@ func TestSemanticReferenceCanResolveMediaBehindTextQuote(t *testing.T) {
 
 func TestSemanticReferenceFindsPersistedImageBeyondShortContext(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{`{"message_id":"target-image","confidence":0.98,"reason":"错误回复之前的图片是原任务来源"}`}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", RecentContextLimit: 20, ContextSummaryThreshold: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", RecentContextLimit: 20, ContextSummaryThreshold: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	store := newSemanticTimelineStore()
@@ -485,7 +485,7 @@ func TestSemanticReferenceFindsPersistedImageBeyondShortContext(t *testing.T) {
 }
 
 func TestOutgoingHistoryPreservesReplyAndSemanticSource(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	source := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "owner", MessageID: "request"}
 	remembered := source
 	setEventSemanticSourceMessageIDs(&remembered, []string{"target-image", "target-image-2"})

@@ -50,7 +50,7 @@ func TestGroupConfigOverridesProactivePolicy(t *testing.T) {
 
 func TestRuntimeIgnoresLowLevelMemberBeforeReplyDecisionButKeepsHistory(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		BotQQ:         "42",
+		BotAccount:    "42",
 		OwnerID:       "900",
 		GroupTriggers: []string{"Diana"},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -91,7 +91,7 @@ func TestRuntimeIgnoresLowLevelMemberBeforeReplyDecisionButKeepsHistory(t *testi
 }
 
 func TestRuntimeAllowsLowLevelMemberWhenDirectlyMentioned(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
 	_, _ = store.SaveGroupConfig(GroupConfig{
 		GroupID:                 "123",
@@ -169,11 +169,11 @@ func TestRuntimeFallsBackToNapCatWhenSenderLevelIsMissing(t *testing.T) {
 	}
 }
 
-func TestDianaQQGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
+func TestDianaOneBotGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
 	runtime.SetGroupConfigStore(store)
-	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"operation":                    "set_reply_policy",
@@ -185,7 +185,7 @@ func TestDianaQQGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result dianaQQGroupResult
+	var result dianaOneBotGroupResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
@@ -198,11 +198,11 @@ func TestDianaQQGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	}
 }
 
-func TestDianaQQGroupToolAcceptsLegacyProactivePolicyNames(t *testing.T) {
+func TestDianaOneBotGroupToolAcceptsLegacyProactivePolicyNames(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
 	runtime.SetGroupConfigStore(store)
-	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	_, err := tool.Run(context.Background(), map[string]any{
 		"operation":               "set_reply_policy",
@@ -218,11 +218,11 @@ func TestDianaQQGroupToolAcceptsLegacyProactivePolicyNames(t *testing.T) {
 	}
 }
 
-func TestDianaQQGroupToolPrefersProactivePolicyNames(t *testing.T) {
+func TestDianaOneBotGroupToolPrefersProactivePolicyNames(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
 	runtime.SetGroupConfigStore(store)
-	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	_, err := tool.Run(context.Background(), map[string]any{
 		"operation":                 "set_reply_policy",
@@ -240,13 +240,13 @@ func TestDianaQQGroupToolPrefersProactivePolicyNames(t *testing.T) {
 	}
 }
 
-func TestDianaQQGroupToolRejectsOrdinaryMemberReplyPolicyUpdate(t *testing.T) {
+func TestDianaOneBotGroupToolRejectsOrdinaryMemberReplyPolicyUpdate(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_info": {"user_id": "10001", "role": "member", "level": "69"},
 	}}
 	runtime := NewRuntime(BotConfig{OwnerID: "900"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(&testWritableGroupConfigStore{})
-	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderRole: "member"})
+	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderRole: "member"})
 
 	_, err := tool.Run(context.Background(), map[string]any{
 		"operation":                  "set_reply_policy",
@@ -266,17 +266,17 @@ func TestMessageEventFromEnvelopeKeepsSenderRoleAndLevel(t *testing.T) {
 	if event.SenderRole != "admin" || event.SenderLevel != 69 || event.SenderLevelLabel != "LV69" {
 		t.Fatalf("event sender policy fields = role %q level %d label %q", event.SenderRole, event.SenderLevel, event.SenderLevelLabel)
 	}
-	if level, ok := parseQQGroupLevel(event.SenderLevel); !ok || level != 69 {
+	if level, ok := parseOneBotGroupLevel(event.SenderLevel); !ok || level != 69 {
 		t.Fatalf("parsed level = %d, ok = %v", level, ok)
 	}
 }
 
-func TestDianaQQGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
+func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
 	_, _ = store.SaveGroupConfig(GroupConfig{GroupID: "123", Enabled: true, EnabledSet: true, ResponseMode: ResponseModeStandard}, runtime.Config())
 	runtime.SetGroupConfigStore(store)
-	tool := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"operation":     "set_reply_policy",
@@ -285,7 +285,7 @@ func TestDianaQQGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result dianaQQGroupResult
+	var result dianaOneBotGroupResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
@@ -303,15 +303,15 @@ func TestDianaQQGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	}
 }
 
-func TestDianaQQGroupReplyPolicyReportsThePresetInsteadOfTheRawLevel(t *testing.T) {
+func TestDianaOneBotGroupReplyPolicyReportsThePresetInsteadOfTheRawLevel(t *testing.T) {
 	// 群仍是标准模式时，运行时用的是预设档位，报告也必须说预设值。
-	policy := dianaQQGroupReplyPolicyFromConfig(GroupConfig{
+	policy := dianaOneBotGroupReplyPolicyFromConfig(GroupConfig{
 		GroupID: "123", ResponseMode: ResponseModeStandard, ChatInLevel: ChatInLevelMax,
 	})
 	if policy.ChatInLevel != string(ChatInLevelLow) {
 		t.Fatalf("reported level = %q, want the standard preset", policy.ChatInLevel)
 	}
-	custom := dianaQQGroupReplyPolicyFromConfig(GroupConfig{
+	custom := dianaOneBotGroupReplyPolicyFromConfig(GroupConfig{
 		GroupID: "123", ResponseMode: ResponseModeCustom, ChatInLevel: ChatInLevelMax,
 	})
 	if custom.ChatInLevel != string(ChatInLevelMax) {

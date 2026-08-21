@@ -212,9 +212,9 @@ func (r *Runtime) recordRelationshipEvaluation(ctx context.Context, event Messag
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.relationship_evaluation",
+		Action:  "chatbot.relationship_evaluation",
 		Message: "LLM 已完成关系变化评估",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":      event.GroupID,
@@ -237,10 +237,10 @@ func (r *Runtime) recordRelationshipEvaluationError(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.relationship_evaluation",
+		Action:  "chatbot.relationship_evaluation",
 		Message: "关系变化语义评估失败，本条不改变好感度",
 		Detail:  err.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID,

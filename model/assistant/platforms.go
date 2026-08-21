@@ -22,8 +22,8 @@ const (
 	ProtocolTelegramBot = "telegram-bot-api"
 
 	// PlatformCategory* 用于在 WebUI 里按聊天平台分组。
-	PlatformCategoryQQ       = "qq"
-	PlatformCategoryTelegram = "telegram"
+	PlatformCategoryOneBotV11 = "onebot_v11"
+	PlatformCategoryTelegram  = "telegram"
 )
 
 // PlatformDefinition 描述一个机器人接入平台及其使用的协议适配器。
@@ -38,7 +38,7 @@ type PlatformDefinition struct {
 }
 
 var supportedPlatforms = []PlatformDefinition{
-	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryQQ, CategoryLabel: "OneBot v11", Description: "统一的 OneBot v11 反向 WebSocket 接入"},
+	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryOneBotV11, CategoryLabel: "OneBot v11", Description: "统一的 OneBot v11 反向 WebSocket 接入"},
 	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址"},
 }
 
@@ -80,7 +80,7 @@ func PlatformByID(id string) (PlatformDefinition, bool) {
 // ValidatePlatform 校验平台是否有可用适配器。
 func ValidatePlatform(id string) error {
 	if _, ok := PlatformByID(id); !ok {
-		return fmt.Errorf("qqbot: unsupported platform %q", id)
+		return fmt.Errorf("chatbot: unsupported platform %q", id)
 	}
 	return nil
 }

@@ -90,7 +90,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
-import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getQQBotConfig, listQQBotGroups, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type QQBotConfig, type QQBotGroupSummary } from "../api";
+import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, listBotGroups, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type BotGroupSummary } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import AppSelect from "./AppSelect.vue";
@@ -101,8 +101,8 @@ const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = 15 * 60;
 const emptyForm = () => ({ source: "twitter" as "twitter" | "rss", twitter_handle: "", feed_url: "", judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
 const watches = ref<AssistantTask[]>([]);
-const profiles = ref<QQBotConfig[]>([]);
-const joinedGroups = ref<QQBotGroupSummary[]>([]);
+const profiles = ref<BotProfileConfig[]>([]);
+const joinedGroups = ref<BotGroupSummary[]>([]);
 const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref(false);
 const editingTask = ref<AssistantTask | null>(null);
 const form = ref(emptyForm());
@@ -113,7 +113,7 @@ const groupOptions = computed(() => selectedProfile.value?.platform === "telegra
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getQQBotConfig(), listQQBotGroups().catch(() => ({ groups: [] }))]);
+    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups().catch(() => ({ groups: [] }))]);
     watches.value = tasks.items.filter((task) => task.kind === "rss_watch"); profiles.value = config.profiles?.length ? config.profiles : [config]; joinedGroups.value = groups.groups;
     if (!form.value.profile_id) form.value.profile_id = config.active_profile_id || profiles.value[0]?.id || "";
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅加载失败"); } finally { loading.value = false; }

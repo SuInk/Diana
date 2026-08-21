@@ -261,16 +261,16 @@ import { computed, onMounted, ref, watch } from "vue";
 import { CheckCircle2, ChevronLeft, ChevronRight, Copy, LayoutGrid, MessageCircle, Power, RefreshCw, Zap } from "@lucide/vue";
 import {
   getConfig,
-  getQQBotConfig,
+  getBotProfileConfig,
   listLLMModels,
   saveConfig,
-  saveQQBotConfig,
-  startQQBot,
+  saveBotProfileConfig,
+  startBot,
   testLLM,
   type LLMConfig,
   type LLMModelInfo,
   type Provider,
-  type QQBotConfig
+  type BotProfileConfig
 } from "../api";
 import { stream } from "../stream";
 import { navigate } from "../router";
@@ -294,7 +294,7 @@ const llmTestResult = ref("");
 const llmTestMessage = ref("hi");
 const selectedService = ref("openai");
 const savedLLM = ref<LLMConfig | null>(null);
-const savedBot = ref<QQBotConfig | null>(null);
+const savedBot = ref<BotProfileConfig | null>(null);
 const modelOptions = ref<LLMModelInfo[]>([]);
 const modelsLoading = ref(false);
 const modelsError = ref("");
@@ -465,18 +465,18 @@ async function saveBotAndStart(): Promise<void> {
   }
   busy.value = true;
   try {
-    const base = savedBot.value ?? (await getQQBotConfig());
-    const payload: QQBotConfig = {
+    const base = savedBot.value ?? (await getBotProfileConfig());
+    const payload: BotProfileConfig = {
       ...base,
       enabled: true,
       onebot_reverse_ws_endpoint: wsEndpoint.value,
-      bot_qq: base.bot_qq,
+      bot_account: base.bot_account,
       owner_id: botForm.value.owner_id.trim(),
       onebot_access_token: botForm.value.onebot_access_token.trim() || undefined,
       profiles: undefined
     };
-    savedBot.value = await saveQQBotConfig(payload);
-    await startQQBot();
+    savedBot.value = await saveBotProfileConfig(payload);
+    await startBot();
     toastSuccess("配置已保存，等待 OneBot v11 客户端连接");
     botForm.value.onebot_access_token = "";
   } catch (error) {
@@ -488,7 +488,7 @@ async function saveBotAndStart(): Promise<void> {
 
 onMounted(async () => {
   try {
-    const [llm, bot] = await Promise.all([getConfig(), getQQBotConfig()]);
+    const [llm, bot] = await Promise.all([getConfig(), getBotProfileConfig()]);
     savedLLM.value = llm;
     savedBot.value = bot;
     llmConfigured.value = Boolean(llm.api_key_configured);

@@ -130,7 +130,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 		return dianaImageToolRequest{}, fmt.Errorf("operation 必须是 generate 或 edit")
 	}
 	if t.runtime.llmStore == nil {
-		return dianaImageToolRequest{}, fmt.Errorf("qqbot: llm profile store is not configured")
+		return dianaImageToolRequest{}, fmt.Errorf("chatbot: llm profile store is not configured")
 	}
 	caption := strings.TrimSpace(configToolString(input, "caption"))
 	if len([]rune(caption)) > 200 {
@@ -202,7 +202,7 @@ func (t *dianaImageTool) taskTimeout() time.Duration {
 func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequest) (dianaImageTaskOutput, error) {
 	operation := request.Operation
 	prompt := request.Prompt
-	submittedPrompt := t.runtime.enrichImagePromptWithQQContext(ctx, t.event, prompt)
+	submittedPrompt := t.runtime.enrichImagePromptWithChatContext(ctx, t.event, prompt)
 	var (
 		cfg         llm.ProviderConfig
 		images      []string
@@ -222,7 +222,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		}
 		cfg = usedCfg
 		images = resp.Images
-		action = "qqbot.image.generate"
+		action = "chatbot.image.generate"
 		message = "Agent 图片生成已完成"
 	case "edit":
 		sources := t.runtime.imageEditSourceImages(ctx, t.event, prompt)
@@ -241,7 +241,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		cfg = usedCfg
 		images = resp.Images
 		sourceCount = len(sources)
-		action = "qqbot.image.edit"
+		action = "chatbot.image.edit"
 		message = "Agent 图片编辑已完成"
 	}
 	if len(images) == 0 {

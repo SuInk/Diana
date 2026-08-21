@@ -16,7 +16,7 @@ import (
 
 func TestSubagentTaskAcknowledgesThenSendsUnquotedFollowup(t *testing.T) {
 	channel := &concurrentRecordingChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "message-1"}
 	task := PluginTask{
 		Kind:           "test",
@@ -44,7 +44,7 @@ func TestSubagentTaskAcknowledgesThenSendsUnquotedFollowup(t *testing.T) {
 
 func TestRuntimeLaunchesPluginTaskWithoutCallingForegroundLLM(t *testing.T) {
 	channel := &concurrentRecordingChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(taskProducingPlugin{}), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(taskProducingPlugin{}), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "message-1"}
 	reply, err := runtime.replyTo(context.Background(), event, "处理这个文件")
 	if err != nil {
@@ -91,7 +91,7 @@ func TestUserFacingPluginTaskLLMUsesGroupPersona(t *testing.T) {
 
 func TestSubagentTaskDeduplicatesActiveWork(t *testing.T) {
 	channel := &concurrentRecordingChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "message-1"}
 	release := make(chan struct{})
 	var runs atomic.Int64
@@ -126,7 +126,7 @@ func TestSubagentTaskDeduplicatesActiveWork(t *testing.T) {
 
 func TestSubagentTaskReservationStartsOnlyAfterExplicitStart(t *testing.T) {
 	channel := &concurrentRecordingChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	release := make(chan struct{})
 	task := PluginTask{
 		Kind: "test",

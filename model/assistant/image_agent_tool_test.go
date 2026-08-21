@@ -112,7 +112,7 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	imageLogFound := false
 	entries := logs.entriesSnapshot()
 	for _, entry := range entries {
-		if entry.Action == "qqbot.image.generate" {
+		if entry.Action == "chatbot.image.generate" {
 			loggedPrompt, _ = entry.Metadata["prompt"].(string)
 			imageLogFound = true
 			break
@@ -262,12 +262,12 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	imageLogFound := false
 	entries := logs.entriesSnapshot()
 	for _, entry := range entries {
-		if entry.Action == "qqbot.agent_tool" {
+		if entry.Action == "chatbot.agent_tool" {
 			if _, ok := wantTargets[entry.Target]; ok {
 				wantTargets[entry.Target] = true
 			}
 		}
-		if entry.Action == "qqbot.image.generate" {
+		if entry.Action == "chatbot.image.generate" {
 			imageLogFound = true
 		}
 	}

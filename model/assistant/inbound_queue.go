@@ -90,7 +90,7 @@ type InboundMediaTurnStore interface {
 	InboundEventSuperseded(ctx context.Context, event MessageEvent) (string, bool, error)
 }
 
-var errInboundTurnSuperseded = errors.New("qqbot: inbound turn superseded by correlated follow-up")
+var errInboundTurnSuperseded = errors.New("chatbot: inbound turn superseded by correlated follow-up")
 
 func (r *Runtime) inboundTurnSuperseded(ctx context.Context, event MessageEvent) (string, bool) {
 	r.mu.RLock()
@@ -103,7 +103,7 @@ func (r *Runtime) inboundTurnSuperseded(ctx context.Context, event MessageEvent)
 	defer cancel()
 	turnID, superseded, err := store.InboundEventSuperseded(checkCtx, event)
 	if err != nil {
-		log.Printf("qqbot inbound supersession check failed: %v", err)
+		log.Printf("chatbot inbound supersession check failed: %v", err)
 		return "", false
 	}
 	return turnID, superseded
@@ -156,15 +156,15 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		duplicates, err := cleanupStore.MarkLegacyInboundNamespaceDuplicates(cleanupCtx)
 		cancel()
 		if err != nil {
-			log.Printf("qqbot inbound duplicate cleanup failed: %v", err)
+			log.Printf("chatbot inbound duplicate cleanup failed: %v", err)
 		} else if duplicates > 0 {
-			log.Printf("qqbot inbound duplicate cleanup ignored %d namespace duplicates", duplicates)
+			log.Printf("chatbot inbound duplicate cleanup ignored %d namespace duplicates", duplicates)
 		}
 	}
 	if releaseStaleLeases {
 		callCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := store.ReleaseInboundLeases(callCtx, ""); err != nil {
-			log.Printf("qqbot inbound stale lease recovery failed: %v", err)
+			log.Printf("chatbot inbound stale lease recovery failed: %v", err)
 		}
 		cancel()
 	}
@@ -176,7 +176,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	backfillBaseline, baselineErr := store.ListHistorySessions(ctx)
 	backfillBaselineReady := baselineErr == nil
 	if baselineErr != nil {
-		log.Printf("qqbot inbound history baseline snapshot failed: %v", baselineErr)
+		log.Printf("chatbot inbound history baseline snapshot failed: %v", baselineErr)
 	}
 	disconnectedAt := inferredInboundDisconnectTime(backfillBaseline, baselineCapturedTime)
 	recoveryStore, recoveryStoreReady := store.(InboundRecoveryCheckpointStore)
@@ -185,7 +185,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		checkpoint, ok, checkpointErr := recoveryStore.LoadInboundRecoveryCheckpoint(checkpointCtx)
 		cancel()
 		if checkpointErr != nil {
-			log.Printf("qqbot inbound recovery checkpoint load failed: %v", checkpointErr)
+			log.Printf("chatbot inbound recovery checkpoint load failed: %v", checkpointErr)
 		} else if ok && !checkpoint.IsZero() && !checkpoint.After(baselineCapturedTime) {
 			disconnectedAt = checkpoint
 		}
@@ -196,7 +196,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		}
 		checkpointCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := recoveryStore.SaveInboundRecoveryCheckpoint(checkpointCtx, at); err != nil {
-			log.Printf("qqbot inbound recovery checkpoint save failed: %v", err)
+			log.Printf("chatbot inbound recovery checkpoint save failed: %v", err)
 		}
 		cancel()
 	}
@@ -273,7 +273,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			backfillWG.Wait()
 			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if err := store.ReleaseInboundLeases(releaseCtx, leaseOwner); err != nil {
-				log.Printf("qqbot inbound lease release failed: %v", err)
+				log.Printf("chatbot inbound lease release failed: %v", err)
 			}
 			cancel()
 			return
@@ -302,7 +302,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		case result := <-backfillResult:
 			backfillRunning = false
 			if result.err != nil && ctx.Err() == nil {
-				log.Printf("qqbot inbound history backfill incomplete: %v", result.err)
+				log.Printf("chatbot inbound history backfill incomplete: %v", result.err)
 				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_failed", "OneBot 断线消息回补失败", result.err)
 				nextBackfillAt = time.Now().Add(historyRetryDelay)
 			} else {
@@ -418,7 +418,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			cancel()
 			if err != nil {
 				if ctx.Err() == nil {
-					log.Printf("qqbot inbound claim failed: %v", err)
+					log.Printf("chatbot inbound claim failed: %v", err)
 				}
 				break
 			}
@@ -434,7 +434,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			case ctx.Err() == nil && inboundRetriesExhausted(item.Attempts):
 				// 无限重试只会让同一条消息反复重发。到达上限后落终态，并把最后
 				// 一次失败原因写进事件明细，等人处理而不是继续骚扰群里。
-				log.Printf("qqbot inbound event %s dropped after %d attempts: %v", item.ID, item.Attempts, processErr)
+				log.Printf("chatbot inbound event %s dropped after %d attempts: %v", item.ID, item.Attempts, processErr)
 				r.recordInboundDeliveryExhausted(item, processErr)
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, inboundOutcomeRetriesExhausted)
 				r.clearOutboundSteps(item.ID)
@@ -447,7 +447,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			}
 			commitCancel()
 			if err != nil {
-				log.Printf("qqbot inbound state update failed: %v", err)
+				log.Printf("chatbot inbound state update failed: %v", err)
 			}
 			if ctx.Err() != nil {
 				return
@@ -609,9 +609,9 @@ func (r *Runtime) recordInboundMediaTurn(ctx context.Context, turnID string, eve
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.inbound.media_turn_assembled",
+		Action:  "chatbot.inbound.media_turn_assembled",
 		Message: "已合并相邻媒体与后续问题",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  strings.TrimSpace(event.MessageID),
 		Metadata: map[string]any{
 			"turn_id":              turnID,
@@ -631,9 +631,9 @@ func (r *Runtime) recordInboundMediaSupersededBeforeSend(ctx context.Context, ev
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.inbound.media_turn_superseded",
+		Action:  "chatbot.inbound.media_turn_superseded",
 		Message: "媒体任务已由关联问题接管，取消独立发送",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  strings.TrimSpace(event.MessageID),
 		Metadata: map[string]any{
 			"turn_id":               turnID,
@@ -781,20 +781,20 @@ func (r *Runtime) channelStatus() ChannelStatus {
 
 // RequestHistoryBackfill schedules a manual history backfill covering the given
 // window, capped at InboundReplayWindow. It returns once the request is queued;
-// progress and outcome surface as qqbot.backfill_* application log entries.
+// progress and outcome surface as chatbot.backfill_* application log entries.
 func (r *Runtime) RequestHistoryBackfill(window time.Duration) error {
 	r.mu.RLock()
 	store := r.inboundStore
 	running := r.running
 	r.mu.RUnlock()
 	if store == nil {
-		return errors.New("qqbot: durable inbound store is not configured")
+		return errors.New("chatbot: durable inbound store is not configured")
 	}
 	if !running {
-		return errors.New("qqbot: runtime is not running")
+		return errors.New("chatbot: runtime is not running")
 	}
 	if !channelEffectivelyOnline(r.channelStatus()) {
-		return errors.New("qqbot: onebot connection or bot account is offline")
+		return errors.New("chatbot: onebot connection or bot account is offline")
 	}
 	if window <= 0 || window > InboundReplayWindow {
 		window = InboundReplayWindow
@@ -803,7 +803,7 @@ func (r *Runtime) RequestHistoryBackfill(window time.Duration) error {
 	case r.inboundManualBackfill <- window:
 		return nil
 	default:
-		return errors.New("qqbot: a manual backfill request is already pending")
+		return errors.New("chatbot: a manual backfill request is already pending")
 	}
 }
 
@@ -855,7 +855,7 @@ func (r *Runtime) recordOneBotConnectionLifecycle(ctx context.Context, status Ch
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:      kind,
 		Level:     level,
-		Action:    "qqbot." + event,
+		Action:    "chatbot." + event,
 		Message:   message,
 		Detail:    detail,
 		Target:    status.ProfileID,
@@ -1014,9 +1014,9 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 	}
 	jobs := make(chan HistorySession, len(ordered))
 	results := make(chan historyFetchResult, len(ordered))
-	botQQ := strings.TrimSpace(r.Config().BotQQ)
+	botAccount := strings.TrimSpace(r.Config().BotAccount)
 	for _, session := range ordered {
-		if session.Kind != EventKindPrivate || session.ID != botQQ {
+		if session.Kind != EventKindPrivate || session.ID != botAccount {
 			jobs <- session
 		}
 	}
@@ -1228,7 +1228,7 @@ func (r *Runtime) historyEventFromData(session HistorySession, data map[string]a
 		normalized["group_id"] = session.ID
 	}
 	if strings.TrimSpace(stringFromAny(normalized["self_id"])) == "" {
-		normalized["self_id"] = r.Config().BotQQ
+		normalized["self_id"] = r.Config().BotAccount
 	}
 	payload, err := json.Marshal(normalized)
 	if err != nil {

@@ -188,7 +188,7 @@ func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operati
 func (t *dianaRelationshipTool) defaultTargetUserID() string {
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
 	botIDs := map[string]bool{}
-	for _, id := range []string{t.event.SelfID, cfg.BotQQ} {
+	for _, id := range []string{t.event.SelfID, cfg.BotAccount} {
 		if id = strings.TrimSpace(id); id != "" {
 			botIDs[id] = true
 		}
@@ -201,12 +201,12 @@ func (t *dianaRelationshipTool) defaultTargetUserID() string {
 	return strings.TrimSpace(t.event.UserID)
 }
 
-func (t *dianaRelationshipTool) resolveTargetMember(ctx context.Context, targetID string) (QQGroupMemberInfo, error) {
+func (t *dianaRelationshipTool) resolveTargetMember(ctx context.Context, targetID string) (OneBotGroupMemberInfo, error) {
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
 		if targetID != strings.TrimSpace(t.event.UserID) && !t.runtime.relationshipPolicy(ctx, t.event).Owner {
-			return QQGroupMemberInfo{}, fmt.Errorf("私聊中只能查询自己的关系数据")
+			return OneBotGroupMemberInfo{}, fmt.Errorf("私聊中只能查询自己的关系数据")
 		}
-		return QQGroupMemberInfo{UserID: targetID}, nil
+		return OneBotGroupMemberInfo{UserID: targetID}, nil
 	}
 
 	directlyMentioned := false
@@ -221,12 +221,12 @@ func (t *dianaRelationshipTool) resolveTargetMember(ctx context.Context, targetI
 		return member, nil
 	}
 	if directlyMentioned || targetID == strings.TrimSpace(t.event.UserID) {
-		return QQGroupMemberInfo{GroupID: t.event.GroupID, UserID: targetID}, nil
+		return OneBotGroupMemberInfo{GroupID: t.event.GroupID, UserID: targetID}, nil
 	}
 	if err != nil {
-		return QQGroupMemberInfo{}, fmt.Errorf("无法确认 QQ %s 是当前群成员: %w", targetID, err)
+		return OneBotGroupMemberInfo{}, fmt.Errorf("无法确认 QQ %s 是当前群成员: %w", targetID, err)
 	}
-	return QQGroupMemberInfo{}, fmt.Errorf("QQ %s 不是当前群成员", targetID)
+	return OneBotGroupMemberInfo{}, fmt.Errorf("QQ %s 不是当前群成员", targetID)
 }
 
 func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID string, fallbackName string, historyLimit int) (dianaRelationshipSnapshot, error) {

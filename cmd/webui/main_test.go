@@ -177,7 +177,7 @@ func TestMigrateRestoredWebSearchPluginState(t *testing.T) {
 	}
 }
 
-func TestQQBotConfigFromEnvReadsProactiveReplySettings(t *testing.T) {
+func TestBotProfileConfigFromEnvReadsProactiveReplySettings(t *testing.T) {
 	t.Setenv("DIANA_PROACTIVE_REPLY_ROUTER_PROMPT", "route carefully")
 	t.Setenv("DIANA_PROACTIVE_REPLY_PROMPT", "reply naturally")
 	t.Setenv("DIANA_RECALL_REPLY_MODE", string(assistant.RecallReplyModeOriginalForward))
@@ -187,7 +187,7 @@ func TestQQBotConfigFromEnvReadsProactiveReplySettings(t *testing.T) {
 	t.Setenv("DIANA_PROACTIVE_REPLY_CHANCE", "0.42")
 	t.Setenv("DIANA_PROACTIVE_REPLY_THRESHOLD", "0.73")
 
-	cfg := qqBotConfigFromEnv()
+	cfg := botConfigFromEnv()
 	if cfg.ProactiveReplyRouterPrompt != "route carefully" {
 		t.Fatalf("ProactiveReplyRouterPrompt = %q", cfg.ProactiveReplyRouterPrompt)
 	}
@@ -197,8 +197,8 @@ func TestQQBotConfigFromEnvReadsProactiveReplySettings(t *testing.T) {
 	if cfg.RecallReplyMode != assistant.RecallReplyModeOriginalForward {
 		t.Fatalf("RecallReplyMode = %q", cfg.RecallReplyMode)
 	}
-	if cfg.LLMQQIDMaskingEnabled == nil || *cfg.LLMQQIDMaskingEnabled {
-		t.Fatalf("LLMQQIDMaskingEnabled = %#v", cfg.LLMQQIDMaskingEnabled)
+	if cfg.LLMIdentityMaskingEnabled == nil || *cfg.LLMIdentityMaskingEnabled {
+		t.Fatalf("LLMIdentityMaskingEnabled = %#v", cfg.LLMIdentityMaskingEnabled)
 	}
 	if cfg.RecentContextLimit != 11 || cfg.ContextSummaryThreshold != 37 {
 		t.Fatalf("context limits = %d/%d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
@@ -208,7 +208,7 @@ func TestQQBotConfigFromEnvReadsProactiveReplySettings(t *testing.T) {
 	}
 }
 
-func TestQQBotConfigFromEnvMigratesLegacyProactiveReplySettings(t *testing.T) {
+func TestBotProfileConfigFromEnvMigratesLegacyProactiveReplySettings(t *testing.T) {
 	t.Setenv("DIANA_PROACTIVE_REPLY_ROUTER_PROMPT", "")
 	t.Setenv("DIANA_PROACTIVE_REPLY_PROMPT", "")
 	t.Setenv("DIANA_PROACTIVE_REPLY_CHANCE", "")
@@ -218,7 +218,7 @@ func TestQQBotConfigFromEnvMigratesLegacyProactiveReplySettings(t *testing.T) {
 	t.Setenv("DIANA_PASSIVE_REPLY_CHANCE", "0.55")
 	t.Setenv("DIANA_PASSIVE_REPLY_THRESHOLD", "0.8")
 
-	cfg := qqBotConfigFromEnv()
+	cfg := botConfigFromEnv()
 	if cfg.ProactiveReplyRouterPrompt != "legacy route" || cfg.ProactiveReplyPrompt != "legacy reply" {
 		t.Fatalf("prompts = %q / %q", cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyPrompt)
 	}
@@ -227,13 +227,13 @@ func TestQQBotConfigFromEnvMigratesLegacyProactiveReplySettings(t *testing.T) {
 	}
 }
 
-func TestQQBotConfigFromEnvPrefersProactiveReplyNames(t *testing.T) {
+func TestBotProfileConfigFromEnvPrefersProactiveReplyNames(t *testing.T) {
 	t.Setenv("DIANA_PROACTIVE_REPLY_CHANCE", "0.7")
 	t.Setenv("DIANA_PROACTIVE_REPLY_THRESHOLD", "0.96")
 	t.Setenv("DIANA_PASSIVE_REPLY_CHANCE", "0.2")
 	t.Setenv("DIANA_PASSIVE_REPLY_THRESHOLD", "0.6")
 
-	cfg := qqBotConfigFromEnv()
+	cfg := botConfigFromEnv()
 	if cfg.ProactiveReplyChance != 0.7 || cfg.ProactiveReplyThreshold != 0.96 {
 		t.Fatalf("proactive settings = %v / %v", cfg.ProactiveReplyChance, cfg.ProactiveReplyThreshold)
 	}

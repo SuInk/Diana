@@ -31,9 +31,9 @@ const (
 	replySuppressionNoticeTimeout     = 60 * time.Second
 )
 
-var replySuppressionQQPattern = regexp.MustCompile(`[1-9][0-9]{4,13}`)
+var replySuppressionAccountPattern = regexp.MustCompile(`[1-9][0-9]{4,13}`)
 
-var errReplySuppressedBeforeSend = errors.New("qqbot: reply suppressed before send")
+var errReplySuppressedBeforeSend = errors.New("chatbot: reply suppressed before send")
 
 type replySuppressionSendGuardKey struct{}
 
@@ -242,14 +242,14 @@ func (r *Runtime) activateReplySuppressionWithinOutboundGate(event MessageEvent,
 	r.replySuppressMu.Unlock()
 	r.resetBotReplyLoopUser(userID)
 	r.resetReplyRefusalUser(userID)
-	r.recordReplySuppression(event, item, "qqbot.response_suppression.activated", "已限制该用户触发机器人回复", persistErr)
+	r.recordReplySuppression(event, item, "chatbot.response_suppression.activated", "已限制该用户触发机器人回复", persistErr)
 	return item, true
 }
 
 func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now time.Time) (ReplySuppression, bool) {
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotQQ) {
+	if userID == "" || userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotAccount) {
 		return ReplySuppression{}, false
 	}
 	if now.IsZero() {
@@ -302,7 +302,7 @@ func (r *Runtime) clearReplySuppression(event MessageEvent, userID string) (Repl
 	r.resetBotReplyLoopUser(userID)
 	r.resetReplyRefusalUser(userID)
 	if ok {
-		r.recordReplySuppression(event, item, "qqbot.response_suppression.released", "主人已解除用户响应限制", persistErr)
+		r.recordReplySuppression(event, item, "chatbot.response_suppression.released", "主人已解除用户响应限制", persistErr)
 	}
 	return item, ok
 }
@@ -313,7 +313,7 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	botID := firstNonEmpty(strings.TrimSpace(cfg.BotQQ), strings.TrimSpace(event.SelfID))
+	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
 	if event.Kind != EventKindGroup || userID == "" || botID == "" || userID == botID || userID == strings.TrimSpace(cfg.OwnerID) || r.isGroupDisabled(event.GroupID) {
 		return botReplyLoopCandidate{}, false
 	}
@@ -497,9 +497,9 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.bot_reply_loop_classification",
+		Action:  "chatbot.bot_reply_loop_classification",
 		Message: "LLM 已完成 AI 自动回复判断",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID, "user_id": event.UserID, "trigger_kind": candidate.TriggerKind,
@@ -541,7 +541,7 @@ func (r *Runtime) registerReplyRefusal(event MessageEvent, now time.Time) (int, 
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotQQ) {
+	if userID == "" || userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotAccount) {
 		return 0, "", false
 	}
 	if now.IsZero() {
@@ -704,7 +704,7 @@ func (r *Runtime) handleReplySuppressionOwnerCommand(event MessageEvent, text st
 }
 
 func replySuppressionCommandTarget(event MessageEvent, text string, cfg BotConfig) string {
-	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotQQ))
+	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
 	for _, userID := range mentionedUserIDs(event.Segments) {
 		if userID != botID && userID != strings.TrimSpace(cfg.OwnerID) {
 			return userID
@@ -715,7 +715,7 @@ func replySuppressionCommandTarget(event MessageEvent, text string, cfg BotConfi
 			return userID
 		}
 	}
-	for _, userID := range replySuppressionQQPattern.FindAllString(text, -1) {
+	for _, userID := range replySuppressionAccountPattern.FindAllString(text, -1) {
 		if userID != botID && userID != strings.TrimSpace(cfg.OwnerID) && userID != strings.TrimSpace(event.GroupID) {
 			return userID
 		}
@@ -803,7 +803,7 @@ func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, 
 }
 
 func sanitizeReplySuppressionNotice(raw string) string {
-	if strings.Contains(raw, "@") || strings.Contains(raw, "[CQ:") || replySuppressionQQPattern.MatchString(raw) {
+	if strings.Contains(raw, "@") || strings.Contains(raw, "[CQ:") || replySuppressionAccountPattern.MatchString(raw) {
 		return ""
 	}
 	raw = strings.Trim(strings.TrimSpace(raw), "`\"' ")
@@ -832,7 +832,7 @@ func (r *Runtime) recordReplySuppression(event MessageEvent, item ReplySuppressi
 	defer cancel()
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind: kind, Level: level, Action: action, Message: message, Detail: detail,
-		Actor: qqEventActor(event), Target: item.UserID,
+		Actor: oneBotEventActor(event), Target: item.UserID,
 		Metadata: map[string]any{
 			"group_id": item.GroupID, "user_id": item.UserID, "until": item.Until,
 			"trigger_message_id": item.TriggerMessageID, "reason": item.Reason,
@@ -841,7 +841,7 @@ func (r *Runtime) recordReplySuppression(event MessageEvent, item ReplySuppressi
 }
 
 func (r *Runtime) recordReplySuppressionBlocked(event MessageEvent, item ReplySuppression) {
-	r.recordReplySuppression(event, item, "qqbot.response_suppression.blocked", "响应限制已拦截用户消息", nil)
+	r.recordReplySuppression(event, item, "chatbot.response_suppression.blocked", "响应限制已拦截用户消息", nil)
 }
 
 func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySuppression, llmGenerated bool, generationErr, sendErr error) {
@@ -849,13 +849,13 @@ func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySup
 	if writer == nil {
 		return
 	}
-	action := "qqbot.response_suppression.notice_sent"
+	action := "chatbot.response_suppression.notice_sent"
 	message := "响应限制提示已发送"
 	kind := applog.KindOperation
 	level := applog.LevelInfo
 	detail := ""
 	if sendErr != nil {
-		action = "qqbot.response_suppression.notice_failed"
+		action = "chatbot.response_suppression.notice_failed"
 		message = "响应限制提示发送失败"
 		kind = applog.KindError
 		level = applog.LevelError
@@ -872,6 +872,6 @@ func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySup
 	defer cancel()
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind: kind, Level: level, Action: action, Message: message, Detail: detail,
-		Actor: qqEventActor(event), Target: item.UserID, Metadata: metadata,
+		Actor: oneBotEventActor(event), Target: item.UserID, Metadata: metadata,
 	})
 }

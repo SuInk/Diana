@@ -75,7 +75,7 @@ func (r *Runtime) runMemoryCoordinator(ctx context.Context, leaseOwner string, r
 	if releaseStale {
 		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := store.ReleaseMemoryJobLeases(releaseCtx, ""); err != nil {
-			log.Printf("qqbot memory stale lease recovery failed: %v", err)
+			log.Printf("chatbot memory stale lease recovery failed: %v", err)
 		}
 		cancel()
 	}
@@ -92,7 +92,7 @@ func (r *Runtime) runMemoryCoordinator(ctx context.Context, leaseOwner string, r
 	workers.Wait()
 	releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := store.ReleaseMemoryJobLeases(releaseCtx, leaseOwner); err != nil {
-		log.Printf("qqbot memory lease release failed: %v", err)
+		log.Printf("chatbot memory lease release failed: %v", err)
 	}
 	cancel()
 }
@@ -112,7 +112,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			job, ok, err := store.ClaimNextMemoryJob(claimCtx, leaseOwner, time.Now().Add(memoryLeaseDuration))
 			cancel()
 			if err != nil {
-				log.Printf("qqbot memory job claim failed: %v", err)
+				log.Printf("chatbot memory job claim failed: %v", err)
 				break
 			}
 			if !ok {
@@ -131,7 +131,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			}
 			commitCancel()
 			if err != nil {
-				log.Printf("qqbot memory job state update failed: %v", err)
+				log.Printf("chatbot memory job state update failed: %v", err)
 			}
 		}
 	}
@@ -486,7 +486,7 @@ func (r *Runtime) enqueueEventMemory(event MessageEvent, text string) {
 	})
 	cancel()
 	if err != nil {
-		log.Printf("qqbot memory event enqueue failed: %v", err)
+		log.Printf("chatbot memory event enqueue failed: %v", err)
 		return
 	}
 	if inserted {
@@ -513,7 +513,7 @@ func (r *Runtime) enqueueContextSummary(session string, events []MessageEvent) {
 	})
 	cancel()
 	if err != nil {
-		log.Printf("qqbot memory summary enqueue failed: %v", err)
+		log.Printf("chatbot memory summary enqueue failed: %v", err)
 		return
 	}
 	if inserted {
@@ -529,7 +529,7 @@ func (r *Runtime) wakeMemoryWorkers() {
 }
 
 func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {
-	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory
@@ -553,10 +553,10 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 		if current, ok := set.Current(); ok {
 			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, true, run)
 		}
-		return "", fmt.Errorf("qqbot: no llm profile is configured")
+		return "", fmt.Errorf("chatbot: no llm profile is configured")
 	}
 	if factory == nil {
-		return "", fmt.Errorf("qqbot: llm provider is not configured")
+		return "", fmt.Errorf("chatbot: llm provider is not configured")
 	}
 	client, err := factory()
 	if err != nil {
@@ -590,7 +590,7 @@ func memoryEventEligible(cfg BotConfig, event MessageEvent, text string) bool {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return false
 	}
-	if strings.TrimSpace(event.UserID) == "" || (strings.TrimSpace(cfg.BotQQ) != "" && event.UserID == cfg.BotQQ) {
+	if strings.TrimSpace(event.UserID) == "" || (strings.TrimSpace(cfg.BotAccount) != "" && event.UserID == cfg.BotAccount) {
 		return false
 	}
 	text = strings.TrimSpace(text)

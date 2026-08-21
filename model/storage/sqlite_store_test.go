@@ -131,17 +131,17 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		OneBotReverseWSEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
 		OneBotAccessToken:       "1234567890abcdef",
 		NoneBotBridgeToken:      "fedcba0987654321",
-		BotQQ:                   "123456",
+		BotAccount:              "123456",
 		RequestTimeout:          30 * time.Second,
 	}.WithDefaults()
-	if err := store.SaveQQBotConfig(ctx, botCfg); err != nil {
+	if err := store.SaveBotProfileConfig(ctx, botCfg); err != nil {
 		t.Fatal(err)
 	}
-	gotBot, ok, err := store.LoadQQBotConfig(ctx)
+	gotBot, ok, err := store.LoadBotProfileConfig(ctx)
 	if err != nil || !ok {
-		t.Fatalf("LoadQQBotConfig() ok=%v err=%v", ok, err)
+		t.Fatalf("LoadBotProfileConfig() ok=%v err=%v", ok, err)
 	}
-	if gotBot.OneBotAccessToken != botCfg.OneBotAccessToken || gotBot.BotQQ != botCfg.BotQQ {
+	if gotBot.OneBotAccessToken != botCfg.OneBotAccessToken || gotBot.BotAccount != botCfg.BotAccount {
 		t.Fatalf("gotBot = %#v", gotBot)
 	}
 
@@ -164,12 +164,12 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 			},
 		},
 	}
-	if err := store.SaveQQBotGroupConfigs(ctx, groupConfigs); err != nil {
+	if err := store.SaveBotGroupConfigs(ctx, groupConfigs); err != nil {
 		t.Fatal(err)
 	}
-	gotGroupConfigs, ok, err := store.LoadQQBotGroupConfigs(ctx)
+	gotGroupConfigs, ok, err := store.LoadBotGroupConfigs(ctx)
 	if err != nil || !ok {
-		t.Fatalf("LoadQQBotGroupConfigs() ok=%v err=%v", ok, err)
+		t.Fatalf("LoadBotGroupConfigs() ok=%v err=%v", ok, err)
 	}
 	gotGroup, ok := gotGroupConfigs.ConfigForGroup("123456")
 	if !ok || !gotGroup.PluginOverrides["official.file-parser-go"] || gotGroup.PluginSettingOverrides["official.file-parser-go"]["max_file_kb"] != float64(512) || gotGroup.RecentContextLimit != 8 || gotGroup.NaturalInterjectionEnabled == nil || !*gotGroup.NaturalInterjectionEnabled {
@@ -349,5 +349,43 @@ func TestSQLiteStorePersistsAppLogs(t *testing.T) {
 	}
 	if len(operations) != 1 || operations[0].Action != "assistant.start" {
 		t.Fatalf("operation logs = %#v", operations)
+	}
+}
+
+// app_state 的键从带平台名的旧写法换成中性写法后，存量库里存的仍是旧键。
+// 读不回来的话，升级之后机器人配置会被当成「从未保存过」，直接退回默认值。
+func TestSQLiteStoreReadsLegacyStateKeys(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	// 直接按旧键写入，模拟升级前留下的数据。
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO app_state (key, value) VALUES (?, ?)`,
+		"qqbot_config", `{"bot_qq":"10001","owner_id":"20002"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, ok, err := store.LoadBotProfileConfig(ctx)
+	if err != nil || !ok {
+		t.Fatalf("legacy config not found: ok=%v err=%v", ok, err)
+	}
+	if cfg.BotAccount != "10001" || cfg.OwnerID != "20002" {
+		t.Fatalf("legacy config = %#v", cfg)
+	}
+
+	// 存回去用新键，旧键不再被写入。
+	if err := store.SaveBotProfileConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := store.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, "bot_config").Scan(&stored); err != nil {
+		t.Fatalf("new key was not written: %v", err)
+	}
+	if !strings.Contains(stored, `"bot_account":"10001"`) {
+		t.Fatalf("stored under the new key = %s", stored)
 	}
 }

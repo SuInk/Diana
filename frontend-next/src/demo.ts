@@ -7,10 +7,10 @@ import type {
   AssistantTask,
   LLMConfig,
   PluginState,
-  QQBotConfig,
-  QQBotGroupSummary,
-  QQBotPlatform,
-  QQBotStatus,
+  BotProfileConfig,
+  BotGroupSummary,
+  BotPlatform,
+  BotStatus,
   ResolverDependency,
   StatsSnapshot,
   UpdateStatus,
@@ -43,10 +43,10 @@ let llmConfig: LLMConfig = {
   ]
 };
 
-const qqProfile: QQBotConfig = {
-  id: "bot-qq", name: "Diana OneBot（演示）", platform: "onebot-v11", enabled: true,
+const oneBotProfile: BotProfileConfig = {
+  id: "bot-onebot", name: "Diana OneBot（演示）", platform: "onebot-v11", enabled: true,
   onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", onebot_access_token_configured: true,
-  bot_qq: "100000001", owner_id: "100200001", owner_login_enabled: true, isolate_platform_contexts: true,
+  bot_account: "100000001", owner_id: "100200001", owner_login_enabled: true, isolate_platform_contexts: true,
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
@@ -58,13 +58,13 @@ const qqProfile: QQBotConfig = {
   }
 };
 
-const telegramProfile: QQBotConfig = {
-  ...qqProfile, id: "bot-telegram", name: "Diana Telegram（演示）", platform: "telegram", enabled: true,
+const telegramProfile: BotProfileConfig = {
+  ...oneBotProfile, id: "bot-telegram", name: "Diana Telegram（演示）", platform: "telegram", enabled: true,
   onebot_reverse_ws_endpoint: "", onebot_access_token_configured: false, telegram_bot_token_configured: true,
-  telegram_api_base_url: "https://api.telegram.org", bot_qq: "", owner_id: "880024"
+  telegram_api_base_url: "https://api.telegram.org", bot_account: "", owner_id: "880024"
 };
 
-let assistantConfig: QQBotConfig = { ...qqProfile, active_profile_id: "bot-qq", profiles: [qqProfile, telegramProfile] };
+let assistantConfig: BotProfileConfig = { ...oneBotProfile, active_profile_id: "bot-onebot", profiles: [oneBotProfile, telegramProfile] };
 
 let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
@@ -112,7 +112,7 @@ const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   </svg>
 `)}`;
 
-const groups: QQBotGroupSummary[] = [
+const groups: BotGroupSummary[] = [
   { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
   { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
   { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, plugin_overrides: { "official.browser-render": false }, updated_at: before(45) },
@@ -179,11 +179,11 @@ export const demoStats: StatsSnapshot = {
   bot: { running: true, connected: true, self_id: "100000001", active_workers: 2, plugins_enabled: 7, plugins_total: 8, bridge_enabled: false, bridge_connected: false }
 };
 
-export const demoStatus: QQBotStatus = {
+export const demoStatus: BotStatus = {
   running: true, config: assistantConfig,
-  channel: { profile_id: "bot-qq", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
+  channel: { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
   channels: [
-    { profile_id: "bot-qq", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
+    { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
     { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) }
   ],
   nonebot_bridge: { enabled: false, connected: false, updated_at: before(1) }, plugins, recent_events: demoEvents, active_workers: 2, updated_at: before(1)
@@ -196,7 +196,7 @@ let tasks: AssistantTask[] = [
   { id: "task-rss-04", kind: "rss_watch", platform: "telegram", owner_id: "", user_id: "880024", message: "Diana Release Feed", status: "active", trigger_at: after(4), interval_seconds: 300, last_run_at: before(4), feed_url: "https://github.com/SuInk/Diana/releases.atom", feed_source: "rss", feed_judge_prompt: "仅在稳定版发布时提醒并总结更新点", last_feed_item_id: "tag:github.com,2008:Repository/", created_at: before(2200), consumes_quota: true }
 ];
 
-const platforms: QQBotPlatform[] = [
+const platforms: BotPlatform[] = [
   { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ", description: "通过 NapCat、Lagrange 或 go-cqhttp 接入 OneBot v11。" },
   { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。" }
 ];
@@ -211,7 +211,7 @@ const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed
 let updatePolicy = { auto_download: true, auto_install: false };
 
 const logs: AppLogEntry[] = [
-  { id: "log-1", kind: "operation", level: "info", action: "message.reply", message: "群聊消息已回复并收到发送回显", actor: "bot-qq", target: "group:100200301", created_at: before(2) },
+  { id: "log-1", kind: "operation", level: "info", action: "message.reply", message: "群聊消息已回复并收到发送回显", actor: "bot-onebot", target: "group:100200301", created_at: before(2) },
   { id: "log-2", kind: "operation", level: "info", action: "repository.watch", message: "仓库检查完成，未发现新 Commit 或 Release", actor: "scheduler", target: "SuInk/Diana", created_at: before(4) },
   { id: "log-3", kind: "operation", level: "info", action: "memory.compress", message: "已更新群聊压缩摘要与长期事实索引", actor: "memory", target: "group:100200418", created_at: before(16) }
 ];
@@ -281,7 +281,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/platforms") return json({ platforms });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
   if (path === "/api/assistant/config" && method === "POST") {
-    const incoming = body as unknown as QQBotConfig;
+    const incoming = body as unknown as BotProfileConfig;
     const profiles = [...(assistantConfig.profiles ?? [])];
     const saved = { ...incoming, id: incoming.id || `bot-${Date.now()}` };
     const index = profiles.findIndex((profile) => profile.id === saved.id);
@@ -340,7 +340,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === "/api/assistant/groups" && method === "GET") return json({ groups, plugins, live_available: true });
   if (path === "/api/assistant/groups" && method === "POST") {
-    const config = body.config as QQBotGroupSummary;
+    const config = body.config as BotGroupSummary;
     const index = groups.findIndex((group) => group.group_id === config.group_id);
     if (index >= 0) groups[index] = { ...groups[index], ...config, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
     return json({ config });
