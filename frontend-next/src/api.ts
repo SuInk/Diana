@@ -202,6 +202,8 @@ export interface PluginSettingSpec {
   step?: number;
   unit?: string;
   options?: PluginSettingOption[];
+  /** 多行文本框的建议行高；模板类设置比默认四行更高。 */
+  rows?: number;
   /** 凭据类设置；读接口不返回明文，提交空串表示保持原值。 */
   secret?: boolean;
 }
