@@ -18,6 +18,9 @@ const (
 	PluginSettingTypeMultiSelect = "multi_select"
 	// PluginSettingTypeText 渲染为多行文本框，用于模板这类带换行的配置。
 	PluginSettingTypeText = "text"
+	// PluginSettingTypeSize 的值统一是字节数，WebUI 渲染成「数字 + 单位」，
+	// 避免用户在纯数字输入框里按错数量级。
+	PluginSettingTypeSize = "size"
 )
 
 type PluginSettingOption struct {
@@ -75,6 +78,15 @@ func (v SettingValues) Int(key string, fallback int) int {
 		return fallback
 	}
 	return int(math.Round(number))
+}
+
+// Bytes 读取字节数设置（PluginSettingTypeSize），JSON 解码出的 float64 会四舍五入。
+func (v SettingValues) Bytes(key string, fallback int64) int64 {
+	number, ok := numberValue(v[key])
+	if !ok {
+		return fallback
+	}
+	return int64(math.Round(number))
 }
 
 // String 读取字符串设置，空白值视为未设置。
@@ -202,6 +214,19 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 			number = *spec.Max
 		}
 		return number, nil
+	case PluginSettingTypeSize:
+		number, ok := numberValue(raw)
+		if !ok {
+			return nil, fmt.Errorf("qqbot: setting %q expects a size in bytes", spec.Key)
+		}
+		if spec.Min != nil && number < *spec.Min {
+			number = *spec.Min
+		}
+		if spec.Max != nil && number > *spec.Max {
+			number = *spec.Max
+		}
+		// 字节数没有小数概念，落库前取整。
+		return math.Round(number), nil
 	case PluginSettingTypeString:
 		value, ok := raw.(string)
 		if !ok {

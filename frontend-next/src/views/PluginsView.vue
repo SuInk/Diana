@@ -279,6 +279,13 @@
               />
               <span v-if="spec.unit" class="plugin-setting-unit">{{ spec.unit }}</span>
             </div>
+            <PluginSizeInput
+              v-else-if="spec.type === 'size'"
+              :id="`setting-${spec.key}`"
+              v-model="activeSettingsForm[spec.key] as number"
+              :min="spec.min"
+              :max="spec.max"
+            />
             <AppSelect
               v-else-if="spec.type === 'select'"
               :id="`setting-${spec.key}`"
@@ -419,6 +426,7 @@ import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
+import PluginSizeInput from "../components/PluginSizeInput.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryCredentialEditor from "../components/RepositoryCredentialEditor.vue";

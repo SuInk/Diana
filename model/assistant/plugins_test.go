@@ -1007,7 +1007,7 @@ func TestResolverPluginRespectsSettings(t *testing.T) {
 	}
 }
 
-func TestFileParserPluginRespectsMaxFileKB(t *testing.T) {
+func TestFileParserPluginRespectsMaxFileSize(t *testing.T) {
 	large := strings.Repeat("a", 65*1024)
 	plugin := NewFileParserPlugin(&http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		header := make(http.Header)
@@ -1020,7 +1020,7 @@ func TestFileParserPluginRespectsMaxFileKB(t *testing.T) {
 	})})
 	resp, err := plugin.Handle(context.Background(), PluginRequest{
 		Text:     "看下 https://example.com/big.txt",
-		Settings: SettingValues{"max_file_kb": float64(64)},
+		Settings: SettingValues{"max_file_bytes": float64(64 * 1024)},
 	})
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)

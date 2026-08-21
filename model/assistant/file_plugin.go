@@ -28,8 +28,10 @@ const (
 	defaultFileParserMaxBytes = 32 * 1024 * 1024
 	defaultFileParserMaxChars = 24000
 
-	fileParserSettingMaxFileKB = "max_file_kb"
-	fileParserSettingMaxChars  = "max_chars"
+	// fileParserSettingMaxFileKB 是 v0.3 及更早版本的 KB 设置键，只用于迁移。
+	fileParserSettingMaxFileKB    = "max_file_kb"
+	fileParserSettingMaxFileBytes = "max_file_bytes"
+	fileParserSettingMaxChars     = "max_chars"
 )
 
 type FileParserPlugin struct {
@@ -71,22 +73,20 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          fileParserPluginID,
 		Name:        "文件解析",
-		Version:     "0.3.0",
-		Description: "官方内置文件解析插件；macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
+		Version:     "0.4.0",
+		Description: "官方内置文件解析插件；支持文本、代码、PDF、Office（docx/xlsx/pptx）、ODF 和 EPUB。PDF 在 macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "message:read", "file:parse", "llm:multiple", "task:notify"},
 		Settings: []PluginSettingSpec{
 			{
-				Key:         fileParserSettingMaxFileKB,
+				Key:         fileParserSettingMaxFileBytes,
 				Label:       "最大文件大小",
 				Description: "超过该大小的文件不下载、不解析。",
-				Type:        PluginSettingTypeNumber,
-				Default:     defaultFileParserMaxBytes / 1024,
-				Min:         settingRange(64),
-				Max:         settingRange(256 * 1024),
-				Step:        64,
-				Unit:        "KB",
+				Type:        PluginSettingTypeSize,
+				Default:     defaultFileParserMaxBytes,
+				Min:         settingRange(64 * 1024),
+				Max:         settingRange(256 * 1024 * 1024),
 			},
 			{
 				Key:         fileParserSettingMaxChars,
@@ -109,7 +109,7 @@ func (p *FileParserPlugin) Handle(ctx context.Context, req PluginRequest) (*Plug
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	maxBytes := int64(req.Settings.Int(fileParserSettingMaxFileKB, int(p.maxBytes/1024))) * 1024
+	maxBytes := req.Settings.Bytes(fileParserSettingMaxFileBytes, p.maxBytes)
 	maxChars := req.Settings.Int(fileParserSettingMaxChars, p.maxChars)
 
 	parts := make([]string, 0, len(refs))
@@ -277,8 +277,25 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 		}
 		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：PDF\n  内容：\n%s", ref.Name, source, indentText(text, "  "))}
 	}
+	if kind := officeKindFromName(ref.Name); kind != "" && looksZipArchive(data) {
+		extracted, err := extractOfficeText(kind, data, maxChars)
+		if err != nil {
+			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n  状态：解析失败：%v", ref.Name, source, officeKindLabel(kind), err)}
+		}
+		text := sanitizeFileTextString(extracted, maxChars)
+		if text == "" {
+			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n  状态：未提取到文本", ref.Name, source, officeKindLabel(kind))}
+		}
+		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n  内容：\n%s", ref.Name, source, officeKindLabel(kind), indentText(text, "  "))}
+	}
 	if !looksTextual(ref.Name, contentType, data) {
 		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  状态：暂不支持该文件类型", ref.Name, source)}
+	}
+	if looksMarkup(ref.Name, contentType) {
+		// HTML 直接塞原始标签会把上下文撑爆，先抽正文再截断。
+		if text := sanitizeFileTextString(stripMarkupText(data, maxChars), maxChars); text != "" {
+			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：网页文本\n  内容：\n%s", ref.Name, source, indentText(text, "  "))}
+		}
 	}
 	text := sanitizeFileText(data, maxChars)
 	if text == "" {
@@ -578,23 +595,77 @@ func (p *FileParserPlugin) readLocal(localPath string, maxBytes int64) ([]byte, 
 }
 
 var supportedFileExts = map[string]struct{}{
-	".txt":      {},
-	".pdf":      {},
-	".md":       {},
-	".markdown": {},
-	".json":     {},
-	".jsonl":    {},
-	".csv":      {},
-	".tsv":      {},
-	".log":      {},
-	".yaml":     {},
-	".yml":      {},
-	".toml":     {},
-	".ini":      {},
-	".conf":     {},
-	".xml":      {},
-	".html":     {},
-	".htm":      {},
+	// 纯文本与常见配置
+	".txt":        {},
+	".md":         {},
+	".markdown":   {},
+	".rst":        {},
+	".tex":        {},
+	".json":       {},
+	".jsonl":      {},
+	".ndjson":     {},
+	".csv":        {},
+	".tsv":        {},
+	".log":        {},
+	".yaml":       {},
+	".yml":        {},
+	".toml":       {},
+	".ini":        {},
+	".cfg":        {},
+	".conf":       {},
+	".properties": {},
+	".xml":        {},
+	".html":       {},
+	".htm":        {},
+	".srt":        {},
+	".vtt":        {},
+	".ass":        {},
+	// 代码：群里最常见的是直接丢一段脚本或源文件求解释
+	".go":     {},
+	".py":     {},
+	".js":     {},
+	".mjs":    {},
+	".cjs":    {},
+	".ts":     {},
+	".tsx":    {},
+	".jsx":    {},
+	".vue":    {},
+	".java":   {},
+	".kt":     {},
+	".c":      {},
+	".h":      {},
+	".cc":     {},
+	".cpp":    {},
+	".hpp":    {},
+	".cs":     {},
+	".rs":     {},
+	".rb":     {},
+	".php":    {},
+	".swift":  {},
+	".m":      {},
+	".sh":     {},
+	".bash":   {},
+	".zsh":    {},
+	".ps1":    {},
+	".bat":    {},
+	".sql":    {},
+	".css":    {},
+	".scss":   {},
+	".lua":    {},
+	".r":      {},
+	".dart":   {},
+	".gradle": {},
+	".patch":  {},
+	".diff":   {},
+	// 二进制文档：PDF 走 PDFKit/PDFium，其余是 ZIP 容器，见 file_office.go
+	".pdf":  {},
+	".docx": {},
+	".xlsx": {},
+	".pptx": {},
+	".epub": {},
+	".odt":  {},
+	".ods":  {},
+	".odp":  {},
 }
 
 // isSupportedFileURL 判断 URL 是否是支持的文本类文件链接。
@@ -632,6 +703,15 @@ func looksPDF(name string, contentType string, data []byte) bool {
 		bytes.HasPrefix(bytes.TrimSpace(data), []byte("%PDF-"))
 }
 
+// looksMarkup 判断是否是需要抽正文的 HTML 文档。
+func looksMarkup(name string, contentType string) bool {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".html", ".htm":
+		return true
+	}
+	return strings.Contains(strings.ToLower(contentType), "text/html")
+}
+
 // looksTextual 根据扩展名、Content-Type 和内容判断文件是否像文本。
 func looksTextual(name string, contentType string, data []byte) bool {
 	contentType = strings.ToLower(contentType)
@@ -641,6 +721,10 @@ func looksTextual(name string, contentType string, data []byte) bool {
 		strings.Contains(contentType, "yaml") ||
 		strings.Contains(contentType, "csv") {
 		return true
+	}
+	if officeKindFromName(name) != "" || strings.EqualFold(path.Ext(name), ".pdf") {
+		// 这两类是二进制容器，交给各自的解析分支，不能当纯文本读。
+		return false
 	}
 	if _, ok := supportedFileExts[strings.ToLower(path.Ext(name))]; ok {
 		return true
