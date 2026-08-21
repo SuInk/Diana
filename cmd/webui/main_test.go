@@ -197,8 +197,8 @@ func TestQQBotConfigFromEnvReadsProactiveReplySettings(t *testing.T) {
 	if cfg.RecallReplyMode != assistant.RecallReplyModeOriginalForward {
 		t.Fatalf("RecallReplyMode = %q", cfg.RecallReplyMode)
 	}
-	if cfg.LLMQQIDMaskingEnabled == nil || *cfg.LLMQQIDMaskingEnabled {
-		t.Fatalf("LLMQQIDMaskingEnabled = %#v", cfg.LLMQQIDMaskingEnabled)
+	if cfg.LLMIdentityMaskingEnabled == nil || *cfg.LLMIdentityMaskingEnabled {
+		t.Fatalf("LLMIdentityMaskingEnabled = %#v", cfg.LLMIdentityMaskingEnabled)
 	}
 	if cfg.RecentContextLimit != 11 || cfg.ContextSummaryThreshold != 37 {
 		t.Fatalf("context limits = %d/%d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
