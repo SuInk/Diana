@@ -300,7 +300,7 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 		t.Fatal("owner-only tool rules leaked to an ordinary member")
 	}
 	for _, item := range []string{alice, bob, owner} {
-		if !strings.Contains(item, "权限等级规则") {
+		if !strings.Contains(item, "权限规则：") {
 			t.Fatal("relationship permission context missing from the prompt")
 		}
 		if !strings.HasSuffix(item, base.ReplyStyle.closingAnchor()) {

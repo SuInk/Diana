@@ -116,7 +116,7 @@ func TestRelationshipScheduleLimitsIncreaseByTier(t *testing.T) {
 func TestRelationshipContextDrivesToneAndHardPermissionMessage(t *testing.T) {
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", "user")
 	contextText := relationshipPermissionContext(policy)
-	for _, want := range []string{"关系等级：熟悉", "语气要求", "图片生成", "好感度只影响个人提醒与订阅额度", "不能通过好感度获得"} {
+	for _, want := range []string{"关系等级：熟悉", "语气要求", "图片生成", "不得以好感度不足为由拒绝任何普通能力", "不能通过好感度获得"} {
 		if !strings.Contains(contextText, want) {
 			t.Fatalf("context = %q, missing %q", contextText, want)
 		}
@@ -189,9 +189,13 @@ func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
 	if strings.Contains(permissionContext, "当前授权能力：") {
 		t.Fatalf("baseline capabilities are still presented as a grant list:\n%s", permissionContext)
 	}
-	for _, want := range []string{"不是靠好感度解锁的", "当前提醒与订阅额度：20"} {
-		if !strings.Contains(permissionContext, want) {
-			t.Fatalf("context missing %q:\n%s", want, permissionContext)
+	if !strings.Contains(permissionContext, "不是靠好感度解锁的") {
+		t.Fatalf("context missing the shared-capability note:\n%s", permissionContext)
+	}
+	// 额度也不再提前预告：撞上限时创建工具会当场说明还能建几个。
+	for _, unwanted := range []string{"当前提醒与订阅额度", "冷淡 1 个", "最多 20 个"} {
+		if strings.Contains(permissionContext, unwanted) {
+			t.Fatalf("context still advertises the quota (%q):\n%s", unwanted, permissionContext)
 		}
 	}
 	if !strings.Contains(relationshipPermissionContext(RelationshipPolicyFor(UserMemoryProfile{}, "owner", "owner")), "机器人配置") {
