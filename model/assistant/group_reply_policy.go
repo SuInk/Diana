@@ -103,7 +103,7 @@ func eventRepliesToBot(event MessageEvent, cfg BotConfig) bool {
 
 func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (string, error) {
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" {
-		return "", fmt.Errorf("群配置只能在 QQ 群聊中修改")
+		return "", fmt.Errorf("群配置只能在 群聊中修改")
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	if ownerID := strings.TrimSpace(cfg.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(event.UserID) {

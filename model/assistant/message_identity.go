@@ -5,7 +5,7 @@ package assistant
 
 import "strings"
 
-// messageParticipantDisplayNames builds a reusable QQ identity map from
+// messageParticipantDisplayNames builds a reusable chat identity map from
 // message senders and quoted senders. Events must be passed in priority order.
 func messageParticipantDisplayNames(events ...MessageEvent) map[string]string {
 	names := make(map[string]string)

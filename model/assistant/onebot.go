@@ -619,7 +619,7 @@ func AtMentionName(segment MessageSegment) string {
 	return strings.TrimSpace(firstNonEmpty(segment.Data["name"], segment.Data["card"], segment.Data["nickname"]))
 }
 
-// AtMentionText 把一次提及渲染成可读文本。只有 QQ 号时退回「@号码」——光一串数字
+// AtMentionText 把一次提及渲染成可读文本。只有账号时退回「@号码」——光一串数字
 // 看不出提到了谁，但没有昵称可用时也只能如此。
 func AtMentionText(qq, name string) string {
 	qq = strings.TrimSpace(qq)
@@ -691,7 +691,7 @@ func PlainText(segments []MessageSegment) string {
 // 用带前缀的自有词而不是平台原生说法，既跨平台统一，也不会和正文里的自然表达撞车。
 const replyMarkerPrefix = "[diana-reply:"
 
-// legacyReplyMarkerPrefix 是早期只服务 QQ 时的写法。历史消息和摘要里仍存着这种
+// legacyReplyMarkerPrefix 是早期只服务单一平台时的写法。历史消息和摘要里仍存着这种
 // 文本，模型可能照抄，因此出站继续认它，但入站不再生成。
 const legacyReplyMarkerPrefix = "[回复:"
 

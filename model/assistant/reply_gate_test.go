@@ -436,7 +436,7 @@ func TestQuietNoticeIsRateLimited(t *testing.T) {
 	}
 }
 
-// 群等级是 QQ 独有的概念。Telegram 上不该为此调用 get_group_member_info，
+// 群等级是 OneBot v11 独有的概念。Telegram 上不该为此调用 get_group_member_info，
 // 否则每条未命中缓存的消息都会白发一次注定 404 的请求。
 func TestLevelGateSkippedOnNonOneBotPlatform(t *testing.T) {
 	calls := 0

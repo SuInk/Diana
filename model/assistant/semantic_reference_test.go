@@ -250,7 +250,7 @@ func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
 			Time:       int64(100 + index),
 			GroupID:    "group-1",
 			UserID:     "42",
-			SenderName: "嘉然",
+			SenderName: "Diana",
 			MessageID:  messageID,
 			Outbound:   true,
 			Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": fmt.Sprintf("第 %d 条完整回复正文", index)}}},
@@ -270,7 +270,7 @@ func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
 			}
 		}
 	}
-	prompt := currentPromptTextWithSemanticContext(event, "总结嘉然之前哪些回复有误", sourceContext)
+	prompt := currentPromptTextWithSemanticContext(event, "总结 Diana 之前哪些回复有误", sourceContext)
 	if !strings.Contains(prompt, "6 条包含文字") || !strings.Contains(prompt, "逐条核对") || strings.Contains(prompt, "逐张查看") || strings.Contains(prompt, "6 张") {
 		t.Fatalf("text source prompt = %q", prompt)
 	}
@@ -295,7 +295,7 @@ func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
 			SelfID:     "42",
 			GroupID:    "group-1",
 			UserID:     "42",
-			SenderName: "嘉然",
+			SenderName: "Diana",
 			MessageID:  messageID,
 			Outbound:   true,
 			Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": fmt.Sprintf("历史回复正文 %d", index)}}},
@@ -309,8 +309,8 @@ func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
 		UserID:     "owner",
 		SenderName: "主人",
 		MessageID:  "current-question",
-		RawMessage: "总结嘉然此前哪些回复有误",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "总结嘉然此前哪些回复有误"}}},
+		RawMessage: "总结 Diana 此前哪些回复有误",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "总结 Diana 此前哪些回复有误"}}},
 		ToMe:       true,
 	}
 	setEventSemanticSourceMessageIDs(&event, messageIDs)

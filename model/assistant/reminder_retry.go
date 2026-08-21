@@ -125,7 +125,7 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 		target = reminderPrivateFallbackTarget(item)
 	}
 	if strings.TrimSpace(target.UserID) == "" && target.Kind == EventKindPrivate {
-		return fmt.Errorf("提醒失败通知缺少订阅者 QQ 号")
+		return fmt.Errorf("提醒失败通知缺少订阅者账号")
 	}
 	if err := r.send(ctx, target, notice); err == nil {
 		return nil

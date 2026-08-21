@@ -58,7 +58,7 @@ func (t *dianaRelationshipTool) Name() string {
 }
 
 func (t *dianaRelationshipTool) Description() string {
-	return `查询 Diana 对 QQ 用户的好感度、最近增减分记录、关系等级和互动次数。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用本工具，不要根据“当前发言者”上下文猜测，也不要声称无法查询隐藏数据。最终回复围绕用户实际问的那件事说，用自然的中文，不要把结果按字段抄成清单。本工具不返回能力清单：基础能力对所有关系等级一律开放，用户问「你能做什么」应改用 diana.capabilities。reminder_schedule_limit 是该等级的提醒/订阅数量上限，只在用户明确问「能建几个」时才说，平时不要主动报出来——真的建满时创建工具会当场说明。问最近变化才讲 recent_changes 里的增减分、时间和原因。operation=get 时 target_user_id 可省略：消息里有被 @ 成员就自动查询该成员，否则查询当前发言者；默认返回最近 5 条变化，可用 history_limit 指定 1 到 20 条。operation=list 查询当前群内已有互动记录的成员并按好感度排序，群内成员均可使用；用户询问互动次数或好感度前几名、群内关系汇总时，必须使用 list，不得自行以隐私、公开范围或权限为由拒绝。主人还可使用 set 直接设置或 adjust 增减任意非主人用户的好感度，不增加互动次数，并可提供 reason：{"operation":"set","target_user_id":"QQ号","value":80,"reason":"备注"} 或 {"operation":"adjust","target_user_id":"QQ号","delta":10,"reason":"备注"}。若最终回复需要真正 @ 目标，请原样使用结果中的 mention_cq，不要写普通文本 @QQ号。`
+	return `查询 Diana 对用户的好感度、最近增减分记录、关系等级和互动次数。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用本工具，不要根据“当前发言者”上下文猜测，也不要声称无法查询隐藏数据。最终回复围绕用户实际问的那件事说，用自然的中文，不要把结果按字段抄成清单。本工具不返回能力清单：基础能力对所有关系等级一律开放，用户问「你能做什么」应改用 diana.capabilities。reminder_schedule_limit 是该等级的提醒/订阅数量上限，只在用户明确问「能建几个」时才说，平时不要主动报出来——真的建满时创建工具会当场说明。问最近变化才讲 recent_changes 里的增减分、时间和原因。operation=get 时 target_user_id 可省略：消息里有被 @ 成员就自动查询该成员，否则查询当前发言者；默认返回最近 5 条变化，可用 history_limit 指定 1 到 20 条。operation=list 查询当前群内已有互动记录的成员并按好感度排序，群内成员均可使用；用户询问互动次数或好感度前几名、群内关系汇总时，必须使用 list，不得自行以隐私、公开范围或权限为由拒绝。主人还可使用 set 直接设置或 adjust 增减任意非主人用户的好感度，不增加互动次数，并可提供 reason：{"operation":"set","target_user_id":"账号","value":80,"reason":"备注"} 或 {"operation":"adjust","target_user_id":"账号","delta":10,"reason":"备注"}。若最终回复需要真正 @ 目标，请原样使用结果中的 mention_cq，不要写普通文本 @账号。`
 }
 
 func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -76,7 +76,7 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 			targetID = t.defaultTargetUserID()
 		}
 		if targetID == "" {
-			return "", fmt.Errorf("没有找到要查询的 QQ 用户")
+			return "", fmt.Errorf("没有找到要查询的用户")
 		}
 		member, err := t.resolveTargetMember(ctx, targetID)
 		if err != nil {

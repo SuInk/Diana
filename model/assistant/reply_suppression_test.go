@@ -575,7 +575,7 @@ func TestReplySuppressionOwnerCanReleaseInDisabledGroup(t *testing.T) {
 		t.Fatal("owner release command should work even when the group is disabled")
 	}
 	reply, handled := runtime.handleOwnerCommand(ownerEvent, "响应限制 解除")
-	if !handled || !strings.Contains(reply, "已解除 QQ 20002") {
+	if !handled || !strings.Contains(reply, "已解除账号 20002") {
 		t.Fatalf("owner release handled=%v reply=%q", handled, reply)
 	}
 	if _, active := runtime.activeReplySuppression(targetEvent, time.Now()); active {

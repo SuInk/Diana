@@ -38,7 +38,7 @@ type PlatformDefinition struct {
 }
 
 var supportedPlatforms = []PlatformDefinition{
-	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryQQ, CategoryLabel: "QQ", Description: "QQ 的统一 OneBot v11 反向 WebSocket 接入"},
+	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryQQ, CategoryLabel: "OneBot v11", Description: "统一的 OneBot v11 反向 WebSocket 接入"},
 	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址"},
 }
 

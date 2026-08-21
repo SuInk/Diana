@@ -74,7 +74,7 @@ func TestTwitterMetadataAPIURLCanBeConfigured(t *testing.T) {
 }
 
 func TestResolverTwitterBuildsCaptionedMixedForwardWithMultipleVideos(t *testing.T) {
-	t.Setenv("DIANA_RESOLVER_NICKNAME", "嘉然")
+	t.Setenv("DIANA_RESOLVER_NICKNAME", "小助手")
 	plugin := NewResolverPlugin(nil)
 	plugin.twitterPostFetcher = func(context.Context, string) (twitterPost, bool) {
 		return twitterPost{
@@ -108,7 +108,7 @@ func TestResolverTwitterBuildsCaptionedMixedForwardWithMultipleVideos(t *testing
 	if resp == nil || !resp.Handled || !resp.Forward {
 		t.Fatalf("resp = %#v", resp)
 	}
-	if resp.Context != "嘉然识别：小蓝鸟学习版\n作者：Diana (@DianaVup)\n文案：今天的完整文案" {
+	if resp.Context != "小助手识别：小蓝鸟学习版\n作者：Diana (@DianaVup)\n文案：今天的完整文案" {
 		t.Fatalf("Context = %q", resp.Context)
 	}
 	if len(resp.ImageURLs) != 1 || len(resp.VideoURLs) != 3 {

@@ -18,12 +18,12 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const llmQQPrivacyPrompt = `【QQ 标识隐私代理】消息中的真实 QQ 号和群号已由本地代理替换为不透明别名。相同别名始终表示同一对象；qq_owner、qq_current_user、qq_bot、qq_user、qq_group 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名；本地代理会在执行工具或发送 QQ 消息前自动恢复真实标识。`
+const llmQQPrivacyPrompt = `【账号标识隐私代理】消息中的真实账号和群号已由本地代理替换为不透明别名。相同别名始终表示同一对象；qq_owner、qq_current_user、qq_bot、qq_user、qq_group 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名；本地代理会在执行工具或发送 OneBot v11 消息前自动恢复真实标识。`
 
 var (
 	qqPrivacyJSONIDPattern = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
 	qqPrivacyCQIDPattern   = regexp.MustCompile(`(?i)\[CQ:(?:at|contact),[^\]]*(?:qq|id)=([1-9][0-9]{4,13})`)
-	qqPrivacyLabelPattern  = regexp.MustCompile(`(?i)(?:QQ号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
+	qqPrivacyLabelPattern  = regexp.MustCompile(`(?i)(?:账号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
 )
 
 type qqPrivacyContextKey struct{}
@@ -135,7 +135,7 @@ func (r *Runtime) withLLMQQPrivacyRun(ctx context.Context, run llmProviderRunFun
 
 func (p *qqPrivacyProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	if p == nil || p.provider == nil {
-		return nil, errors.New("qqbot: QQ privacy provider is not configured")
+		return nil, errors.New("qqbot: chat identity privacy provider is not configured")
 	}
 	if p.scope == nil {
 		return p.provider.Generate(ctx, req)

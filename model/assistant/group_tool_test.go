@@ -96,8 +96,8 @@ func TestRuntimeAgentUsesQQGroupToolToMentionOtherMembers(t *testing.T) {
 		UserID:     "10001",
 		MessageID:  "ask-1",
 		SenderName: "TestOwner",
-		RawMessage: "然然@下除了我以外的其余人",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "然然@下除了我以外的其余人"}}},
+		RawMessage: "Diana@下除了我以外的其余人",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana@下除了我以外的其余人"}}},
 		ToMe:       true,
 	}
 

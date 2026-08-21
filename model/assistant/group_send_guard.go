@@ -197,7 +197,7 @@ func (r *Runtime) executeOutboundCall(
 			r.enterOutboundDropCooldown(event, action, gate, policy, time.Now())
 			return nil, droppedOutboundSendError(groupID, gate.lastError)
 		}
-		// An offline transport or QQ account cannot deliver anything. Fail fast
+		// An offline transport or bot account cannot deliver anything. Fail fast
 		// without consuming the failure window or blocking the worker's lease;
 		// the durable queue retries the whole reply after the channel recovers.
 		if !channelEffectivelyOnline(r.channelStatus()) {

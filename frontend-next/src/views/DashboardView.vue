@@ -31,7 +31,7 @@
         </span>
         <div class="setup-callout-main">
           <strong>完成首次配置</strong>
-          <p>配置模型渠道和机器人接入后，即可开始处理 QQ 消息。</p>
+          <p>配置模型渠道和机器人接入后，即可开始处理 OneBot v11 消息。</p>
         </div>
         <button class="btn primary" type="button" @click="navigate('setup')">
           开始配置
@@ -218,7 +218,7 @@ function eventKindLabel(kind: string): string {
 
 function platformLabel(platform: string): string {
   if (platform === "telegram") return "Telegram";
-  if (["onebot-v11", "onebot", "napcat", "lagrange", "go-cqhttp"].includes(platform)) return "QQ";
+  if (["onebot-v11", "onebot", "napcat", "lagrange", "go-cqhttp"].includes(platform)) return "OneBot v11";
   return platform;
 }
 

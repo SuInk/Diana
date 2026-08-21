@@ -159,7 +159,7 @@ func (h *QQBotHandler) startGroupAdminChallenge(c *gin.Context) {
 		GroupID:   groupID,
 		UserID:    userID,
 		ExpiresAt: expiresAt,
-		Message:   "验证码已通过 QQ 私聊发送",
+		Message:   "验证码已通过 私聊发送",
 	})
 }
 
@@ -268,7 +268,7 @@ func (h *QQBotHandler) requireGroupAdmin(ctx context.Context, groupID string, us
 	}
 	user, err := strconv.ParseInt(userID, 10, 64)
 	if err != nil {
-		return fmt.Errorf("QQ 号格式不正确")
+		return fmt.Errorf("账号格式不正确")
 	}
 	data, err := h.runtime.CallOneBotAPI(ctx, "get_group_member_info", map[string]any{
 		"group_id": group,
@@ -288,7 +288,7 @@ func (h *QQBotHandler) requireGroupAdmin(ctx context.Context, groupID string, us
 func (h *QQBotHandler) sendPrivateMessage(ctx context.Context, userID string, text string) error {
 	parsed, err := strconv.ParseInt(userID, 10, 64)
 	if err != nil {
-		return fmt.Errorf("QQ 号格式不正确")
+		return fmt.Errorf("账号格式不正确")
 	}
 	_, err = h.runtime.CallOneBotAPI(ctx, "send_private_msg", map[string]any{
 		"user_id": parsed,
@@ -306,13 +306,13 @@ func normalizeGroupAdminIdentity(groupID string, userID string) (string, string,
 		return groupID, userID, fmt.Errorf("群号不能为空")
 	}
 	if userID == "" {
-		return groupID, userID, fmt.Errorf("QQ 号不能为空")
+		return groupID, userID, fmt.Errorf("账号不能为空")
 	}
 	if _, err := strconv.ParseInt(groupID, 10, 64); err != nil {
 		return groupID, userID, fmt.Errorf("群号格式不正确")
 	}
 	if _, err := strconv.ParseInt(userID, 10, 64); err != nil {
-		return groupID, userID, fmt.Errorf("QQ 号格式不正确")
+		return groupID, userID, fmt.Errorf("账号格式不正确")
 	}
 	return groupID, userID, nil
 }

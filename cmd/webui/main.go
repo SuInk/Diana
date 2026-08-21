@@ -188,7 +188,7 @@ func main() {
 			}
 			var channel assistant.Channel
 			if assistant.IsOneBotPlatform(profile.Platform) {
-				// The reverse WebSocket endpoint is process-wide. QQ and Telegram can
+				// The reverse WebSocket endpoint is process-wide. OneBot v11 and Telegram can
 				// run together; multiple enabled OneBot profiles still share this one
 				// listener, so only the first is attached.
 				if oneBotAdded {
@@ -574,7 +574,7 @@ func setupLogging() (io.Writer, func()) {
 	}
 }
 
-// qqBotConfigFromEnv 从环境变量构建 QQ 机器人默认配置。
+// qqBotConfigFromEnv 从环境变量构建 OneBot v11 机器人默认配置。
 func qqBotConfigFromEnv() assistant.BotConfig {
 	cfg := assistant.DefaultBotConfig()
 	// 默认回连到当前 WebUI 端口，开发环境只要 NapCat 指向这个地址即可联调。

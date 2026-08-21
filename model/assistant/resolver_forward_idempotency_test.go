@@ -82,7 +82,7 @@ func TestResolverForwardIsNotResentOnInboundReplay(t *testing.T) {
 	}
 }
 
-// 打包请求超时时消息可能已被 QQ 投递，此时兜底直发就是「图集来两份」。
+// 打包请求超时时消息可能已被平台投递，此时兜底直发就是「图集来两份」。
 // 超时错误必须原样上抛，交给入站队列按账本重跑。
 func TestResolverForwardDoesNotFallBackToDirectSendOnTimeout(t *testing.T) {
 	channel := resolverForwardChannel()
@@ -149,7 +149,7 @@ func countRecordingSends(channel *recordingChannel) int {
 	return count + len(channel.sentSnapshot())
 }
 
-// 合并转发优先用自定义节点：一个请求发完，且不给机器人自己发私聊——不少 QQ
+// 合并转发优先用自定义节点：一个请求发完，且不给机器人自己发私聊——不少 OneBot 实现
 // 协议实现根本不允许自发私聊，暂存方式在那里必然失败并静默退回散装。
 func TestResolverForwardPrefersCustomNodesOverSelfStaging(t *testing.T) {
 	channel := resolverForwardChannel()

@@ -55,7 +55,7 @@ const (
 // uses the observed offline duration plus inboundReplayPadding instead.
 const InboundReplayWindow = 24 * time.Hour
 
-// InboundQueueItem is a persisted QQ message waiting to be processed.
+// InboundQueueItem is a persisted inbound message waiting to be processed.
 type InboundQueueItem struct {
 	ID       string
 	Session  string
@@ -109,7 +109,7 @@ func (r *Runtime) inboundTurnSuperseded(ctx context.Context, event MessageEvent)
 	return turnID, superseded
 }
 
-// InboundRecoveryCheckpointStore persists the latest instant at which the QQ
+// InboundRecoveryCheckpointStore persists the latest instant at which the bot
 // channel was known to be online, allowing restart recovery to match downtime.
 type InboundRecoveryCheckpointStore interface {
 	LoadInboundRecoveryCheckpoint(ctx context.Context) (time.Time, bool, error)
@@ -280,7 +280,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		case window := <-r.inboundManualBackfill:
 			status := r.channelStatus()
 			if !channelEffectivelyOnline(status) {
-				r.recordOneBotConnectionLifecycle(ctx, status, "backfill_manual_rejected", "手动回补已跳过：OneBot 连接或 QQ 账号当前不在线", nil)
+				r.recordOneBotConnectionLifecycle(ctx, status, "backfill_manual_rejected", "手动回补已跳过：OneBot 连接或账号当前不在线", nil)
 				continue
 			}
 			if window <= 0 || window > InboundReplayWindow {
@@ -330,14 +330,14 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 				r.recordOneBotConnectionLifecycle(ctx, status, "duplicate_client_conflict", "已拒绝重复 OneBot 客户端连接", nil)
 				observedDuplicateConnections = status.DuplicateConnections
 			}
-			// A banned or logged-out QQ account misses messages exactly like a
+			// A banned or logged-out bot account misses messages exactly like a
 			// dropped WebSocket, so heartbeat-reported account state shares the
 			// disconnect/reconnect path instead of only reaching the status page.
 			if !channelEffectivelyOnline(status) {
 				if connected {
 					event, message := "disconnected", "OneBot 客户端已断开"
 					if status.Connected {
-						event, message = "account_offline", "QQ 账号已离线或状态异常（连接仍在），恢复后将回补此期间消息"
+						event, message = "account_offline", "账号已离线或状态异常（连接仍在），恢复后将回补此期间消息"
 					}
 					r.recordOneBotConnectionLifecycle(ctx, status, event, message, nil)
 					disconnectedAt = lastConnectedAt
@@ -385,7 +385,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			if wasConnected {
 				r.recordOneBotConnectionLifecycle(ctx, status, "reconnected", "OneBot 连接 epoch 已变化，已安排消息回补", nil)
 			} else if offlineWasAccountOnly && status.ConnectionEpoch == previousEpoch {
-				r.recordOneBotConnectionLifecycle(ctx, status, "account_recovered", "QQ 账号已恢复在线，已安排消息回补", nil)
+				r.recordOneBotConnectionLifecycle(ctx, status, "account_recovered", "账号已恢复在线，已安排消息回补", nil)
 			} else if status.ConnectionEpoch > 1 {
 				r.recordOneBotConnectionLifecycle(ctx, status, "reconnected", "OneBot 客户端已重新连接", nil)
 			} else {
@@ -794,7 +794,7 @@ func (r *Runtime) RequestHistoryBackfill(window time.Duration) error {
 		return errors.New("qqbot: runtime is not running")
 	}
 	if !channelEffectivelyOnline(r.channelStatus()) {
-		return errors.New("qqbot: onebot connection or QQ account is offline")
+		return errors.New("qqbot: onebot connection or bot account is offline")
 	}
 	if window <= 0 || window > InboundReplayWindow {
 		window = InboundReplayWindow
@@ -807,7 +807,7 @@ func (r *Runtime) RequestHistoryBackfill(window time.Duration) error {
 	}
 }
 
-// channelAccountDown reports a heartbeat-confirmed unhealthy QQ account: the
+// channelAccountDown reports a heartbeat-confirmed unhealthy bot account: the
 // transport may be fine while NapCat cannot receive messages for the account.
 func channelAccountDown(status ChannelStatus) bool {
 	return status.AccountStatusKnown && (!status.AccountOnline || !status.AccountGood)

@@ -202,7 +202,7 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 	messages := []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 Diana/嘉然的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。
+			Content: strings.TrimSpace(`你是 Diana 的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。
 
 必须遵守：
 1. 逐句理解语义、指代、引用和最近上下文，不得用关键词、前缀、子串或正则机械判断。
@@ -300,7 +300,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	messages := []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 Diana/嘉然的会话记忆整合器。请把一批较早的原始聊天事件整理为按时间和主题组织的长期会话摘要，原始事件会继续保留。
+			Content: strings.TrimSpace(`你是 Diana 的会话记忆整合器。请把一批较早的原始聊天事件整理为按时间和主题组织的长期会话摘要，原始事件会继续保留。
 
 要求：
 1. 理解整段对话后按主题聚合，保留人物、时间、事件、决定、未解决问题和事实变化；删除寒暄、重复和无后续价值的噪声。

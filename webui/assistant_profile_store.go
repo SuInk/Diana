@@ -23,7 +23,7 @@ type MemoryQQBotProfileStore struct {
 	data assistant.ProfileSet
 }
 
-// NewMemoryQQBotProfileStore 创建内存版 QQ 机器人配置集存储。
+// NewMemoryQQBotProfileStore 创建内存版 OneBot v11 机器人配置集存储。
 func NewMemoryQQBotProfileStore(cfg assistant.BotConfig) *MemoryQQBotProfileStore {
 	return &MemoryQQBotProfileStore{data: assistant.NewProfileSet(cfg)}
 }
@@ -66,7 +66,7 @@ type PersistentQQBotProfileStore struct {
 	ctx   context.Context
 }
 
-// NewPersistentQQBotProfileStore 创建 SQLite 持久化版 QQ 机器人配置集存储。
+// NewPersistentQQBotProfileStore 创建 SQLite 持久化版 OneBot v11 机器人配置集存储。
 func NewPersistentQQBotProfileStore(ctx context.Context, store *storage.SQLiteStore, fallback assistant.BotConfig) (*PersistentQQBotProfileStore, error) {
 	data := assistant.NewProfileSet(fallback)
 	if saved, ok, err := store.LoadQQBotProfiles(ctx); err != nil {

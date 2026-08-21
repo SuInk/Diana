@@ -500,7 +500,7 @@ func (s *fakePDFTextSession) PageText(_ context.Context, page int) (string, erro
 	return s.texts[page], nil
 }
 
-// TestFileParserPluginResolvesOneBotFileID 验证 QQ 文件段只有 file_id 时会调用 OneBot 获取文件。
+// TestFileParserPluginResolvesOneBotFileID 验证 OneBot 文件段只有 file_id 时会调用 OneBot 获取文件。
 func TestFileParserPluginResolvesOneBotFileID(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "report.txt")

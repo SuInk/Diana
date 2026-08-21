@@ -6,7 +6,7 @@ import (
 )
 
 func TestNormalizeReplyPreservingControlIntentStripsMarkdown(t *testing.T) {
-	// QQ 不渲染 Markdown；标志断在这一层会让 cfg.MarkdownToPlain 形同虚设，
+	// OneBot v11 不渲染 Markdown；标志断在这一层会让 cfg.MarkdownToPlain 形同虚设，
 	// ** 之类的标记直接漏进聊天窗口（仓库订阅通知就这样漏过）。
 	got := normalizeReplyPreservingControlIntent("**群友风格补上投递层（#91）**", 0, true)
 	if strings.Contains(got, "**") {

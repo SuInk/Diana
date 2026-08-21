@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
       <section class="section searchable" id="troubleshooting">
         <div class="section-heading"><p class="eyebrow">故障排查</p><h2>先看事件原因，再看模型调用链</h2></div>
         <div class="faq">
-          <details><summary>机器人在线，但群里不回复</summary><p>从事件明细读取确定性原因：群启用、回复时间、屏蔽 QQ、群等级、机器人抑制、显式 @、触发词和主动回复结果。打开调试模式后，再核对模型收到的上下文与结构化判断。</p></details>
+          <details><summary>机器人在线，但群里不回复</summary><p>从事件明细读取确定性原因：群启用、回复时间、屏蔽账号、群等级、机器人抑制、显式 @、触发词和主动回复结果。打开调试模式后，再核对模型收到的上下文与结构化判断。</p></details>
           <details><summary>引用机器人消息并 @，却被忽略</summary><p>运行版本必须包含“显式 @ 优先于引用”的路由逻辑。OneBot 事件中应有 at segment；后端先识别显式 @，只有没有 @ 的引用才进入主动回复语义判断。</p></details>
           <details><summary>视觉模型看不清截图或小字</summary><p>确认视觉职责绑定了经过真实图片测试的模型、原图未被缩放、图片未被 token 预算裁掉。文本密集图片使用 OCR 与原图双证据。</p></details>
           <details><summary>群管理显示 not found 或缺少群</summary><p>检查 OneBot 连接与 <code>get_group_list</code> 响应。在线时应显示机器人加入的全部群；只有连接不可用才回退本地配置。</p></details>

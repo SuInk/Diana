@@ -60,7 +60,7 @@ func TestPlatformCategories(t *testing.T) {
 		byID[p.ID] = p
 	}
 	if byID[PlatformOneBotV11].Category != PlatformCategoryQQ {
-		t.Fatalf("%s 应属于 QQ 分类，实际 %q", PlatformOneBotV11, byID[PlatformOneBotV11].Category)
+		t.Fatalf("%s 应属于 OneBot v11 分类，实际 %q", PlatformOneBotV11, byID[PlatformOneBotV11].Category)
 	}
 	if !IsOneBotPlatform(PlatformOneBotV11) {
 		t.Fatalf("%s 应走 OneBot 适配器", PlatformOneBotV11)

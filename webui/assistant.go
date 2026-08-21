@@ -182,7 +182,7 @@ func (h *QQBotHandler) SetLocalMediaSharer(sharer assistant.LocalMediaSharer) {
 	h.localMedia = sharer
 }
 
-// SetProfileStore 注入 QQ 机器人配置集存储。
+// SetProfileStore 注入 OneBot v11 机器人配置集存储。
 func (h *QQBotHandler) SetProfileStore(store QQBotProfileStore) {
 	if store == nil {
 		return
@@ -196,7 +196,7 @@ func (h *QQBotHandler) SetChannelSetFactory(factory QQBotChannelSetFactory) {
 	h.newChannelSet = factory
 }
 
-// SetGroupConfigStore 注入 QQ 群级配置存储。
+// SetGroupConfigStore 注入 群级配置存储。
 func (h *QQBotHandler) SetGroupConfigStore(store QQBotGroupConfigStore) {
 	if store == nil {
 		return
@@ -210,7 +210,7 @@ func (h *QQBotHandler) SetSQLiteStore(store *storage.SQLiteStore) {
 	h.logs = store
 }
 
-// Register registers the generic assistant API and its legacy QQ-only alias.
+// Register registers the generic assistant API and its legacy single-platform alias.
 func (h *QQBotHandler) Register(router gin.IRouter) {
 	h.registerRoutes(router, "/api/assistant")
 	h.registerRoutes(router, "/api/qqbot")
@@ -278,12 +278,12 @@ func (h *QQBotHandler) platforms(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"platforms": assistant.SupportedPlatforms()})
 }
 
-// getConfig 处理 QQ 机器人配置读取请求。
+// getConfig 处理 OneBot v11 机器人配置读取请求。
 func (h *QQBotHandler) getConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(h.profiles.Profiles()))
 }
 
-// featuresStatus 返回当前 WebUI 暴露的 QQ 机器人测试能力。
+// featuresStatus 返回当前 WebUI 暴露的 OneBot v11 机器人测试能力。
 func (h *QQBotHandler) featuresStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, h.features)
 }
@@ -324,11 +324,11 @@ func (h *QQBotHandler) saveConfig(c *gin.Context) {
 		return
 	}
 	h.profiles.SaveProfiles(next)
-	recordRequestOperation(c, h.logs, "assistant.config.save", "QQ 机器人配置已保存", current.ID, botLogMetadata(current))
+	recordRequestOperation(c, h.logs, "assistant.config.save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
 
-// activateProfile 切换当前激活的 QQ 机器人配置档。
+// activateProfile 切换当前激活的 OneBot v11 机器人配置档。
 func (h *QQBotHandler) activateProfile(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
@@ -351,11 +351,11 @@ func (h *QQBotHandler) activateProfile(c *gin.Context) {
 		return
 	}
 	h.profiles.SaveProfiles(next)
-	recordRequestOperation(c, h.logs, "assistant.profile.activate", "QQ 机器人配置已切换", targetID, botLogMetadata(current))
+	recordRequestOperation(c, h.logs, "assistant.profile.activate", "OneBot v11 机器人配置已切换", targetID, botLogMetadata(current))
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
 
-// cloneProfile 复制指定 QQ 机器人配置档。
+// cloneProfile 复制指定 OneBot v11 机器人配置档。
 func (h *QQBotHandler) cloneProfile(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
@@ -388,14 +388,14 @@ func (h *QQBotHandler) cloneProfile(c *gin.Context) {
 			return
 		}
 		h.profiles.SaveProfiles(next)
-		recordRequestOperation(c, h.logs, "assistant.profile.clone", "QQ 机器人配置已复制", sourceID, botLogMetadata(profile))
+		recordRequestOperation(c, h.logs, "assistant.profile.clone", "OneBot v11 机器人配置已复制", sourceID, botLogMetadata(profile))
 		c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 		return
 	}
 	h.writeError(c, http.StatusNotFound, "assistant.profile.clone", fmt.Errorf("profile %q not found", sourceID), sourceID, nil)
 }
 
-// deleteProfile 删除指定 QQ 机器人配置档。
+// deleteProfile 删除指定 OneBot v11 机器人配置档。
 func (h *QQBotHandler) deleteProfile(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
@@ -427,7 +427,7 @@ func (h *QQBotHandler) deleteProfile(c *gin.Context) {
 		return
 	}
 	h.profiles.SaveProfiles(next)
-	recordRequestOperation(c, h.logs, "assistant.profile.delete", "QQ 机器人配置已删除", targetID, map[string]any{"profile_id": targetID})
+	recordRequestOperation(c, h.logs, "assistant.profile.delete", "OneBot v11 机器人配置已删除", targetID, map[string]any{"profile_id": targetID})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
 
@@ -479,28 +479,28 @@ func validateTokenLength(field string, value string) error {
 	return nil
 }
 
-// status 返回 QQ 机器人运行状态快照。
+// status 返回 OneBot v11 机器人运行状态快照。
 func (h *QQBotHandler) status(c *gin.Context) {
 	c.JSON(http.StatusOK, h.runtime.Status())
 }
 
-// start 处理启动 QQ 机器人的请求。
+// start 处理启动 OneBot v11 机器人的请求。
 func (h *QQBotHandler) start(c *gin.Context) {
 	if err := h.runtime.Start(h.ctx); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.start", err, qqbotLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.start", "QQ 机器人已启动", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
+	recordRequestOperation(c, h.logs, "assistant.start", "OneBot v11 机器人已启动", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
 	c.JSON(http.StatusOK, h.runtime.Status())
 }
 
-// stop 处理停止 QQ 机器人的请求。
+// stop 处理停止 OneBot v11 机器人的请求。
 func (h *QQBotHandler) stop(c *gin.Context) {
 	if err := h.runtime.Stop(); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.stop", err, qqbotLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.stop", "QQ 机器人已停止", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
+	recordRequestOperation(c, h.logs, "assistant.stop", "OneBot v11 机器人已停止", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
 	c.JSON(http.StatusOK, h.runtime.Status())
 }
 
@@ -528,7 +528,7 @@ func (h *QQBotHandler) requestBackfill(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"requested": true, "window_hours": window.Hours()})
 }
 
-// getGroupTest 返回指定群最近收发事件，辅助真实 QQ 群联调。
+// getGroupTest 返回指定群最近收发事件，辅助真实 群联调。
 func (h *QQBotHandler) getGroupTest(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Query("group_id"))
 	if groupID == "" {
@@ -544,7 +544,7 @@ func (h *QQBotHandler) getGroupTest(c *gin.Context) {
 	})
 }
 
-// sendGroupTest 通过当前 OneBot 连接向 QQ 群发送测试消息，并返回近期收到的同群事件。
+// sendGroupTest 通过当前 OneBot 连接向 群发送测试消息，并返回近期收到的同群事件。
 func (h *QQBotHandler) sendGroupTest(c *gin.Context) {
 	var payload groupTestPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
@@ -568,7 +568,7 @@ func (h *QQBotHandler) sendGroupTest(c *gin.Context) {
 	}
 	messageID := oneBotMessageID(sendResult)
 	status := h.runtime.Status()
-	recordRequestOperation(c, h.logs, "assistant.group_test.send", "QQ群测试消息已发送", groupID, map[string]any{
+	recordRequestOperation(c, h.logs, "assistant.group_test.send", "群测试消息已发送", groupID, map[string]any{
 		"group_id":   groupID,
 		"message_id": messageID,
 	})
@@ -707,7 +707,7 @@ func (h *QQBotHandler) persistState() {
 	}
 }
 
-// botLogMetadata 构造 QQ 机器人操作日志的附加信息。
+// botLogMetadata 构造 OneBot v11 机器人操作日志的附加信息。
 func botLogMetadata(cfg assistant.BotConfig) map[string]any {
 	return map[string]any{
 		"profile_id":              cfg.ID,

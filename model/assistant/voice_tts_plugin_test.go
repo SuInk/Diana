@@ -324,9 +324,9 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 		UserID:    "10001",
 		SelfID:    "20002",
 		MessageID: "group-voice-request",
-		Segments:  []MessageSegment{{Type: "text", Data: map[string]string{"text": "嘉然，用语音跟我说晚安"}}},
+		Segments:  []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana，用语音跟我说晚安"}}},
 	}
-	if _, err := runtime.replyTo(context.Background(), event, "嘉然，用语音跟我说晚安"); err != nil {
+	if _, err := runtime.replyTo(context.Background(), event, "Diana，用语音跟我说晚安"); err != nil {
 		t.Fatal(err)
 	}
 	if len(channel.sent) != 1 {

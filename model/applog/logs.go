@@ -26,7 +26,7 @@ const (
 	LevelError Level = "error"
 )
 
-// Entry 是跨包共享的审计日志结构，放在 storage 外面是为了让 QQ 插件不用依赖 SQLite 实现。
+// Entry 是跨包共享的审计日志结构，放在 storage 外面是为了让聊天插件不用依赖 SQLite 实现。
 type Entry struct {
 	ID        string         `json:"id"`
 	Kind      Kind           `json:"kind"`

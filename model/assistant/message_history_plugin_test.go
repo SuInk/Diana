@@ -78,7 +78,7 @@ func TestMessageHistoryPluginUsesRecent24HoursOldestFirst(t *testing.T) {
 	if newerIndex < 0 || olderIndex < 0 || olderIndex >= newerIndex {
 		t.Fatalf("recalls are not oldest first: %s", resp.Context)
 	}
-	for _, want := range []string{"最近24小时群撤回消息时间线", "记录总数=2", "字段顺序=序号|撤回时间|原消息发送时间|原消息ID|原消息发送者|被@对象|执行撤回者|执行者身份|结论", "|newer|", "|older|", "原消息完整内容=较新内容", "直接生成最终QQ回复"} {
+	for _, want := range []string{"最近24小时群撤回消息时间线", "记录总数=2", "字段顺序=序号|撤回时间|原消息发送时间|原消息ID|原消息发送者|被@对象|执行撤回者|执行者身份|结论", "|newer|", "|older|", "原消息完整内容=较新内容", "直接生成最终回复"} {
 		if !strings.Contains(resp.Context, want) {
 			t.Fatalf("context missing %q: %s", want, resp.Context)
 		}

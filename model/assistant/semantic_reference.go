@@ -102,12 +102,12 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 			resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 				{
 					Role: llm.RoleSystem,
-					Content: strings.TrimSpace(`你是 QQ 对话的上下文指代判断器。判断当前消息具体在询问、评价、修改或接续哪一条或哪些历史消息。
+					Content: strings.TrimSpace(`你是群聊对话的上下文指代判断器。判断当前消息具体在询问、评价、修改或接续哪一条或哪些历史消息。
 
 规则：
 1. 候选可以来自任何发送者；event_time 和 age_seconds 表示消息时间及距当前消息的秒数。结合时间判断是否仍属于当前话题，间隔过长且当前措辞没有明确指向时选择 none；不要默认只选当前发言者自己的消息。
 2. 综合当前措辞、发送者名称、消息先后顺序和内容类型判断。像“这是什么”“他刚发的图”“上面那个视频”“前面说的方案”都可能指向历史消息。
-3. explicit_quote 是用户在 QQ 中直接引用的消息。通常优先保持它；但 is_error_wrapper=true 表示它只是机器人产生的超时、失败或重试提示，不是原任务内容。此时要结合 semantic_source_message_id、semantic_source_message_ids、reply_to_message_ids、reference_anchor_time、候选时间顺序和 nearby_context，寻找该失败任务实际使用的图片、语音、视频或文件。
+3. explicit_quote 是用户直接引用的消息。通常优先保持它；但 is_error_wrapper=true 表示它只是机器人产生的超时、失败或重试提示，不是原任务内容。此时要结合 semantic_source_message_id、semantic_source_message_ids、reply_to_message_ids、reference_anchor_time、候选时间顺序和 nearby_context，寻找该失败任务实际使用的图片、语音、视频或文件。
 4. semantic_source_message_id 和 semantic_source_message_ids 是先前处理时持久化的真实来源关系，是强证据；但仍要结合当前措辞判断用户现在是否在指代它们。
 5. candidates 已由长期消息时间线检索并排序，不只包含短期聊天。nearby_context 是媒体前后的原始对话，用于分辨多张图片或多个任务。
 6. 当前措辞明确指向多条消息或多份媒体，例如“这几张图”“刚才连发的三张”“上面那些”，必须把属于同一批次且被共同指代的所有候选都选出，不能只选其中一条。message_ids 按原消息从旧到新排列。

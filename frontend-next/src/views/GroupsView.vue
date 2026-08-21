@@ -6,7 +6,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>群管理</h1>
-        <p>查看机器人已加入的全部群，并按群配置回复时间、屏蔽 QQ 号、专属人设与插件开关</p>
+        <p>查看机器人已加入的全部群，并按群配置回复时间、屏蔽账号、专属人设与插件开关</p>
       </div>
       <div class="group-manual-add">
         <input
@@ -126,7 +126,7 @@
         </div>
         <div class="field wide">
           <label for="group-triggers">本群触发词（逗号分隔，留空用全局）</label>
-          <input id="group-triggers" v-model="triggersDraft" class="input" placeholder="嘉然,然然" />
+          <input id="group-triggers" v-model="triggersDraft" class="input" placeholder="Diana,diana" />
         </div>
         <div class="field wide">
           <label for="group-prompt">本群专属人设（留空用全局系统提示词）</label>
@@ -221,7 +221,7 @@
           />
         </div>
         <div class="field wide">
-          <label>本群回复时间与屏蔽 QQ 号</label>
+          <label>本群回复时间与屏蔽账号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
         </div>
         <div class="field wide">
@@ -285,7 +285,7 @@ import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { toastError, toastSuccess } from "../toast";
 
 const groups = ref<QQBotGroupSummary[]>([]);
-// 群等级只有 QQ 有；按当前激活的机器人平台决定要不要显示这一项。
+// 群等级只有 OneBot v11 有；按当前激活的机器人平台决定要不要显示这一项。
 const supportsGroupLevel = ref(true);
 const plugins = ref<PluginState[]>([]);
 const loaded = ref(false);

@@ -14,7 +14,7 @@
 
     <div v-if="!allowInherit || custom" class="form-grid">
       <div v-if="supportsGroupLevel" class="field">
-        <label :for="`${idPrefix}-level`">QQ 群等级门槛</label>
+        <label :for="`${idPrefix}-level`">群等级门槛</label>
         <input
           :id="`${idPrefix}-level`"
           class="input"
@@ -22,7 +22,7 @@
           :value="gate.min_group_level ?? 0"
           @input="patch({ min_group_level: numberOf($event) })"
         />
-        <p class="muted" style="margin-top: 4px">0 表示不限。指群内活跃度等级（Lv.1~6），不是 QQ 账号等级。</p>
+        <p class="muted" style="margin-top: 4px">0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。</p>
       </div>
 
       <div v-if="supportsGroupLevel" class="field">
@@ -131,14 +131,14 @@
       </div>
 
       <div class="field">
-        <label :for="`${idPrefix}-blocked`">{{ allowInherit ? "本群屏蔽 QQ 号" : "屏蔽用户" }}（逗号分隔{{ accountNoun }}）</label>
+        <label :for="`${idPrefix}-blocked`">{{ allowInherit ? "本群屏蔽账号" : "屏蔽用户" }}（逗号分隔{{ accountNoun }}）</label>
         <input
           :id="`${idPrefix}-blocked`"
           class="input"
           :value="(gate.blocked_users ?? []).join(',')"
           @input="patch({ blocked_users: listOf($event) })"
         />
-        <p class="muted" style="margin-top: 4px">{{ allowInherit ? "仅在当前群不回复这些 QQ 号。" : "群聊和私聊都不回复。" }}</p>
+        <p class="muted" style="margin-top: 4px">{{ allowInherit ? "仅在当前群不回复这些账号。" : "群聊和私聊都不回复。" }}</p>
       </div>
     </div>
   </div>
@@ -155,7 +155,7 @@ const props = defineProps<{
   allowInherit?: boolean;
   idPrefix: string;
   /**
-   * 群等级是 QQ 独有的概念，Telegram 上没有对应字段，
+   * 群等级是 OneBot v11 独有的概念，Telegram 上没有对应字段，
    * 显示出来只会让人以为配了会生效。
    */
   supportsGroupLevel?: boolean;
@@ -163,7 +163,7 @@ const props = defineProps<{
 const emit = defineEmits<{ "update:modelValue": [ReplyGate | null] }>();
 
 // 账号在不同平台叫法不同，文案跟着平台走。
-const accountNoun = computed(() => (props.supportsGroupLevel ? " QQ 号" : "用户 ID"));
+const accountNoun = computed(() => (props.supportsGroupLevel ? " 账号" : "用户 ID"));
 
 const unknownPolicyOptions: AppSelectOption[] = [
   { value: "allow", label: "放行（推荐）", hint: "读不到等级时不拦截" },
