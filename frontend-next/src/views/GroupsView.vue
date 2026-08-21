@@ -129,6 +129,16 @@
           <input id="group-triggers" v-model="triggersDraft" class="input" placeholder="嘉然,然然" />
         </div>
         <div class="field wide">
+          <label for="group-trigger-mode">本群触发词匹配（留空用全局）</label>
+          <select id="group-trigger-mode" v-model="editing.group_trigger_mode" class="input">
+            <option value="">跟随全局</option>
+            <option value="smart">智能</option>
+            <option value="strict">严格</option>
+            <option value="loose">宽松</option>
+          </select>
+          <span class="hint">智能档下，群里谈论机器人而不是叫它的消息不会强制回复。</span>
+        </div>
+        <div class="field wide">
           <label for="group-prompt">本群专属人设（留空用全局系统提示词）</label>
           <textarea
             id="group-prompt"

@@ -335,7 +335,7 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	if strings.Contains(event.RawMessage, "[CQ:at,qq="+botID+"]") {
 		return botReplyLoopCandidate{TriggerKind: "mention"}, true
 	}
-	if len(matchedGroupAliases(event, cfg.GroupTriggers)) > 0 {
+	if len(matchedGroupAliases(event, cfg, text)) > 0 {
 		return botReplyLoopCandidate{TriggerKind: "alias"}, true
 	}
 	if event.ToMe {

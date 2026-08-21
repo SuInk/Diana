@@ -857,7 +857,7 @@ func TestForwardedAliasDoesNotTriggerGroupReply(t *testing.T) {
 	if got := directEventText(event, event.RawMessage); got != "" {
 		t.Fatalf("direct event text = %q, want empty", got)
 	}
-	if matches := matchedGroupAliases(event, cfg.GroupTriggers); len(matches) != 0 {
+	if matches := matchedGroupAliases(event, cfg, event.RawMessage); len(matches) != 0 {
 		t.Fatalf("forwarded aliases matched direct triggers: %#v", matches)
 	}
 	if eventDirectlyMentionsBot(event, cfg) {
@@ -4998,7 +4998,7 @@ func TestReplyMarkerDoesNotTriggerGroupAlias(t *testing.T) {
 	if got := directEventText(event, event.RawMessage); strings.Contains(got, "diana") {
 		t.Fatalf("direct event text still carries the reply marker: %q", got)
 	}
-	if matches := matchedGroupAliases(event, cfg.GroupTriggers); len(matches) != 0 {
+	if matches := matchedGroupAliases(event, cfg, event.RawMessage); len(matches) != 0 {
 		t.Fatalf("reply marker matched a trigger alias: %#v", matches)
 	}
 	if runtime.shouldHandleChatTrigger(event, PlainText(event.Segments)) {
