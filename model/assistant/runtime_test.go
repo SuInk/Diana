@@ -1606,12 +1606,13 @@ func TestSplitReplyHonorsChunkSize(t *testing.T) {
 	}
 }
 
-// 超长的逐行列表（排行榜这类）必须在行边界分段，不能按字数把某一行从
+// 逐行列表长到必须分段时（排行榜这类），只能在行边界切，不能按字数把某一行从
 // 人名中间劈开，拆成「9. t」和「：0（初识）」两条消息。
 func TestSplitReplyPrefersLineBoundaries(t *testing.T) {
 	var lines []string
-	for i := 1; i <= 12; i++ {
-		lines = append(lines, fmt.Sprintf("%d. 群友昵称示例%d：%d（熟悉）", i, i, 30-i))
+	// 清单会走 structuredReplyChunkSize，样本要长过它才会真正触发长度切分。
+	for i := 1; i <= 60; i++ {
+		lines = append(lines, fmt.Sprintf("%d. 群友昵称示例%d：%d（熟悉）", i, i, 90-i))
 	}
 	reply := "当前完整排行：\n" + strings.Join(lines, "\n")
 
@@ -1636,6 +1637,32 @@ func TestSplitReplyPrefersLineBoundaries(t *testing.T) {
 	}
 }
 
+// 逐项打分这类清单里的空行是排版而不是分条信号：整份清单要一条发出去，
+// 不能把标签行和它下面的解释拆成两条消息。
+func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
+	reply := strings.Join([]string{
+		"硬按褒义到贬义排，我会给：",
+		"",
+		"变装皇后：+1",
+		"中性偏正面，指以夸张造型进行舞台表演的人。",
+		"",
+		"男娘：0～+1",
+		"二次元语境里常带亲昵、审美意味。",
+		"",
+		"伪娘：-1",
+		"「伪」有假装成女性的意味。",
+	}, "\n")
+
+	got := splitReply(reply, groupmateReplyChunkSize)
+	if len(got) != 1 {
+		t.Fatalf("structured list should stay in one message, got %#v", got)
+	}
+	if got[0] != reply {
+		t.Fatalf("chunk changed the list layout:\n%q", got[0])
+	}
+}
+
+// 普通聊天不受影响：空行仍然是分条信号。
 func TestSplitReplySplitsBlankLineParagraphs(t *testing.T) {
 	got := splitReply("第一段\n仍是第一段\n\n第二段", 100)
 	want := []string{"第一段\n仍是第一段", "第二段"}

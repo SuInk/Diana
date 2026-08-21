@@ -1110,9 +1110,11 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 	if !strings.Contains(chunks[0], "https://github.com/SuInk/Diana/commit/fd1a279") {
 		t.Fatalf("fact block lost the commit link: %q", chunks[0])
 	}
-	// 对照：聊天切分会在 160 字处把链接甩到下一条，这正是通知不能复用它的原因。
-	if chunks := splitReply(message, groupmateReplyChunkSize); len(chunks) < 2 {
-		t.Fatalf("expected the chat splitter to break this message, got %#v", chunks)
+	// 对照：同样长度的散文聊天会被 160 字的群友切分拆成多条，这正是通知不能
+	// 复用聊天切分的原因。事实卡片本身是清单，走的是清单整块保留的分支。
+	prose := strings.Repeat("这段话没有任何列表结构只是普通闲聊内容而已", 12)
+	if chunks := splitReply(prose, groupmateReplyChunkSize); len(chunks) < 2 {
+		t.Fatalf("expected the chat splitter to break plain prose, got %#v", chunks)
 	}
 }
 
