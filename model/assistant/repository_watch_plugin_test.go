@@ -18,23 +18,24 @@ import (
 )
 
 type repositoryWatchTestGitHub struct {
-	mu           sync.Mutex
-	commits      []map[string]any
-	pullRequests []map[string]any
-	pullFiles    map[int][]map[string]any
-	releases     []map[string]any
-	starCount    int
-	events       []map[string]any
-	token        string
-	commitCalls  int
-	pullCalls    int
-	releaseCalls int
-	pullCommits  map[int][]map[string]any
-	starCalls    int
-	eventCalls   int
-	diffCalls    int
-	failCommits  bool
-	failReleases bool
+	mu            sync.Mutex
+	commits       []map[string]any
+	pullRequests  []map[string]any
+	pullFiles     map[int][]map[string]any
+	releases      []map[string]any
+	starCount     int
+	events        []map[string]any
+	token         string
+	commitCalls   int
+	pullCalls     int
+	releaseCalls  int
+	pullCommits   map[int][]map[string]any
+	starCalls     int
+	eventCalls    int
+	diffCalls     int
+	pullFileCalls int
+	failCommits   bool
+	failReleases  bool
 }
 
 func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +76,7 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if strings.Contains(r.URL.Path, "/pulls/") && strings.HasSuffix(r.URL.Path, "/files") {
+		s.pullFileCalls++
 		var number int
 		_, _ = fmt.Sscanf(r.URL.Path, "/repos/acme/demo/pulls/%d/files", &number)
 		_ = json.NewEncoder(w).Encode(s.pullFiles[number])
@@ -304,10 +306,6 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 		repositoryWatchPullPayload(2, "add PR classification", "merged", "merge-sha", "2026-08-14T00:00:00Z"),
 		repositoryWatchPullPayload(1, "initial PR", "open", "", "2026-08-13T00:00:00Z"),
 	}
-	github.pullFiles[2] = []map[string]any{{
-		"filename": "model/assistant/repository_watch_plugin.go", "status": "modified",
-		"additions": 20, "deletions": 2, "changes": 22, "patch": "@@ -1 +1 @@\n-old\n+new PR support",
-	}}
 	github.releases = []map[string]any{
 		repositoryWatchReleasePayload("v1.1.0", "Second"),
 		repositoryWatchReleasePayload("v1.0.0", "First"),
@@ -323,11 +321,15 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 	if len(change.Commits) != 1 || change.Commits[0].SHA != "direct-sha" {
 		t.Fatalf("commits were not classified: %#v", change.Commits)
 	}
-	if change.CommitDiff == nil || len(change.CommitDiff.Files) != 1 || !strings.Contains(change.CommitDiff.Files[0].Patch, "+new") {
-		t.Fatalf("commit diff=%#v", change.CommitDiff)
-	}
-	if len(change.PullRequests) != 1 || change.PullRequests[0].Status != "merged" || len(change.PullRequests[0].Files) != 1 {
+	if len(change.PullRequests) != 1 || change.PullRequests[0].Status != "merged" {
 		t.Fatalf("pull requests=%#v", change.PullRequests)
+	}
+	// 通知里不展示 diff，就不该去拉 diff：compare 和 PR files 都是白花的请求。
+	github.mu.Lock()
+	diffCalls, fileCalls := github.diffCalls, github.pullFileCalls
+	github.mu.Unlock()
+	if diffCalls != 0 || fileCalls != 0 {
+		t.Fatalf("unused diff was fetched: compare=%d pull files=%d", diffCalls, fileCalls)
 	}
 	if change.Stars == nil || change.Stars.Previous != 10 || change.Stars.Current != 13 || change.Stars.Delta != 3 {
 		t.Fatalf("stars=%#v", change.Stars)
