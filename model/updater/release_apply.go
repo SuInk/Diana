@@ -28,23 +28,26 @@ type releaseApplyFile struct {
 }
 
 type releaseApplyPlan struct {
-	Schema           int                `json:"schema"`
-	ParentPID        int                `json:"parent_pid"`
-	CurrentVersion   string             `json:"current_version"`
-	TargetVersion    string             `json:"target_version"`
-	InstallRoot      string             `json:"install_root"`
-	WorkRoot         string             `json:"work_root"`
-	BackupRoot       string             `json:"backup_root"`
-	ExecutablePath   string             `json:"executable_path"`
-	StagedExecutable string             `json:"staged_executable"`
-	FrontendPath     string             `json:"frontend_path"`
-	StagedFrontend   string             `json:"staged_frontend"`
-	DatabasePath     string             `json:"database_path"`
-	HealthURL        string             `json:"health_url"`
-	WorkingDir       string             `json:"working_dir"`
-	Arguments        []string           `json:"arguments,omitempty"`
-	OptionalFiles    []releaseApplyFile `json:"optional_files,omitempty"`
-	LogPath          string             `json:"log_path"`
+	Schema           int      `json:"schema"`
+	ParentPID        int      `json:"parent_pid"`
+	CurrentVersion   string   `json:"current_version"`
+	TargetVersion    string   `json:"target_version"`
+	InstallRoot      string   `json:"install_root"`
+	WorkRoot         string   `json:"work_root"`
+	BackupRoot       string   `json:"backup_root"`
+	ExecutablePath   string   `json:"executable_path"`
+	StagedExecutable string   `json:"staged_executable"`
+	FrontendPath     string   `json:"frontend_path"`
+	StagedFrontend   string   `json:"staged_frontend"`
+	DatabasePath     string   `json:"database_path"`
+	HealthURL        string   `json:"health_url"`
+	WorkingDir       string   `json:"working_dir"`
+	Arguments        []string `json:"arguments,omitempty"`
+	// Supervisor 记录旧进程是否由 launchd/systemd 托管。托管时重启交给管理器，
+	// 更新器自己再启动一次就会和管理器抢端口。
+	Supervisor    serviceSupervisor  `json:"supervisor,omitempty"`
+	OptionalFiles []releaseApplyFile `json:"optional_files,omitempty"`
+	LogPath       string             `json:"log_path"`
 }
 
 type releaseUpdateState struct {
@@ -92,17 +95,38 @@ func (p *commandManagedProcess) Release() error {
 }
 
 type releaseApplyHooks struct {
-	waitForParent func(pid int, timeout time.Duration) error
-	launch        func(releaseApplyPlan) (releaseManagedProcess, error)
-	health        func(context.Context, string) error
+	waitForParent  func(pid int, timeout time.Duration) error
+	launch         func(releaseApplyPlan) (releaseManagedProcess, error)
+	health         func(context.Context, string) error
+	restartService func(serviceSupervisor) error
 }
 
 func defaultReleaseApplyHooks() releaseApplyHooks {
 	return releaseApplyHooks{
-		waitForParent: waitForProcessExit,
-		launch:        launchReleaseProcess,
-		health:        waitForReleaseHealth,
+		waitForParent:  waitForProcessExit,
+		launch:         launchReleaseProcess,
+		health:         waitForReleaseHealth,
+		restartService: restartSupervisedService,
 	}
+}
+
+// startReleaseInstance 把「让服务重新跑起来」这件事收敛到一个地方。
+//
+// 被 launchd/systemd 托管时，管理器已经在旧进程退出的瞬间把服务拉起来了
+// （那时文件还没换，跑的仍是旧版本）。这里换完文件后请管理器再重启一次，
+// 由它串行地停旧起新；更新器自己绝不能再 exec 一个实例出来，否则两边
+// 抢 127.0.0.1 的监听端口，后启动的直接 address already in use 退出。
+func startReleaseInstance(plan releaseApplyPlan, hooks releaseApplyHooks) (releaseManagedProcess, error) {
+	if !plan.Supervisor.Managed() {
+		return hooks.launch(plan)
+	}
+	if hooks.restartService == nil {
+		return nil, errors.New("updater: missing service restart hook")
+	}
+	if err := hooks.restartService(plan.Supervisor); err != nil {
+		return nil, fmt.Errorf("restart %s service: %w", plan.Supervisor, err)
+	}
+	return supervisedProcess{}, nil
 }
 
 // RunReleaseApplyHelper executes the internal post-shutdown update handoff.
@@ -184,6 +208,9 @@ func validateReleaseApplyPlan(plan releaseApplyPlan) error {
 			return errors.New("updater: optional package file escapes an allowed root")
 		}
 	}
+	if err := validateServiceSupervisor(plan.Supervisor); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -215,7 +242,7 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 		return rollbackReleasePlan(plan, hooks, switched, databaseBackup, fmt.Errorf("switch release files: %w", err))
 	}
 
-	process, err := hooks.launch(plan)
+	process, err := startReleaseInstance(plan, hooks)
 	if err != nil {
 		return rollbackReleasePlan(plan, hooks, switched, databaseBackup, fmt.Errorf("start updated Diana: %w", err))
 	}
@@ -256,7 +283,7 @@ func rollbackReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks, switche
 }
 
 func restartPreviousRelease(plan releaseApplyPlan, hooks releaseApplyHooks, reason error, databaseBackup string) error {
-	oldProcess, launchErr := hooks.launch(plan)
+	oldProcess, launchErr := startReleaseInstance(plan, hooks)
 	if launchErr != nil {
 		return fmt.Errorf("%v; old version restore launch failed: %w", reason, launchErr)
 	}

@@ -516,3 +516,135 @@ func assertUpdaterTestContent(t *testing.T, path, expected string) {
 		t.Fatalf("%s = %q, want %q", path, content, expected)
 	}
 }
+
+// launchd 的 KeepAlive 和 systemd 的 Restart= 已经负责把服务拉起来了。
+// 更新器再自己启动一个实例，两边会抢同一个监听端口，后启动的报
+// address already in use 后退出——所以被托管时一律不许自己 launch。
+func TestApplyReleasePlanDelegatesRestartToServiceManager(t *testing.T) {
+	plan := releaseApplyFixture(t)
+	plan.Supervisor = serviceSupervisor{Kind: supervisorLaunchd, Label: "com.suink.diana", Domain: "gui/501"}
+	var restarted []serviceSupervisor
+	err := applyReleasePlan(plan, releaseApplyHooks{
+		waitForParent: func(int, time.Duration) error { return nil },
+		launch: func(releaseApplyPlan) (releaseManagedProcess, error) {
+			t.Fatal("updater launched its own instance while the service manager owns the restart")
+			return nil, nil
+		},
+		health:         func(context.Context, string) error { return nil },
+		restartService: func(s serviceSupervisor) error { restarted = append(restarted, s); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restarted) != 1 || restarted[0].Label != "com.suink.diana" || restarted[0].Domain != "gui/501" {
+		t.Fatalf("restarted = %#v, want one kickstart of the launchd job", restarted)
+	}
+	assertUpdaterTestContent(t, plan.ExecutablePath, "new-binary")
+	// 文件必须在请求重启之前就换好，否则管理器拉起来的还是旧版本。
+	state, ok := readReleaseState(plan.InstallRoot)
+	if !ok || state.Status != "healthy" {
+		t.Fatalf("release state = %#v, ok = %v", state, ok)
+	}
+}
+
+// 回滚同样不能自己启动：换回旧文件之后，还是请管理器重启一次。
+// 被托管的实例也不该被 Stop 掉——杀了管理器只会把同一个版本再拉起来。
+func TestApplyReleasePlanRollsBackThroughServiceManager(t *testing.T) {
+	plan := releaseApplyFixture(t)
+	plan.Supervisor = serviceSupervisor{Kind: supervisorSystemd, Label: "diana.service", Domain: "user"}
+	restarts := 0
+	healthChecks := 0
+	err := applyReleasePlan(plan, releaseApplyHooks{
+		waitForParent: func(int, time.Duration) error { return nil },
+		launch: func(releaseApplyPlan) (releaseManagedProcess, error) {
+			t.Fatal("updater launched its own instance during rollback")
+			return nil, nil
+		},
+		health: func(context.Context, string) error {
+			healthChecks++
+			if healthChecks == 1 {
+				return errors.New("boom")
+			}
+			return nil
+		},
+		restartService: func(serviceSupervisor) error { restarts++; return nil },
+	})
+	if !errors.Is(err, errReleaseUpdateRolledBack) {
+		t.Fatalf("applyReleasePlan() error = %v, want rollback", err)
+	}
+	if restarts != 2 {
+		t.Fatalf("restarts = %d, want 2 (updated, then restored)", restarts)
+	}
+	assertUpdaterTestContent(t, plan.ExecutablePath, "old-binary")
+	state, ok := readReleaseState(plan.InstallRoot)
+	if !ok || state.Status != "rolled_back" {
+		t.Fatalf("release state = %#v, ok = %v", state, ok)
+	}
+}
+
+// 没有管理器托管时行为不变：更新器仍然自己启动新实例。
+func TestApplyReleasePlanStillLaunchesWhenUnmanaged(t *testing.T) {
+	plan := releaseApplyFixture(t)
+	process := &fakeReleaseProcess{}
+	launches := 0
+	err := applyReleasePlan(plan, releaseApplyHooks{
+		waitForParent: func(int, time.Duration) error { return nil },
+		launch:        func(releaseApplyPlan) (releaseManagedProcess, error) { launches++; return process, nil },
+		health:        func(context.Context, string) error { return nil },
+		restartService: func(serviceSupervisor) error {
+			t.Fatal("asked the service manager to restart an unmanaged install")
+			return nil
+		},
+	})
+	if err != nil || launches != 1 {
+		t.Fatalf("applyReleasePlan() error = %v, launches = %d", err, launches)
+	}
+}
+
+func TestServiceSupervisorRestartCommands(t *testing.T) {
+	launchd := supervisorRestartCommands(serviceSupervisor{Kind: supervisorLaunchd, Label: "com.suink.diana", Domain: "gui/501"})
+	if len(launchd) == 0 || strings.Join(launchd[0], " ") != "launchctl kickstart -k gui/501/com.suink.diana" {
+		t.Fatalf("launchd commands = %#v", launchd)
+	}
+	systemd := supervisorRestartCommands(serviceSupervisor{Kind: supervisorSystemd, Label: "diana.service", Domain: "user"})
+	if len(systemd) == 0 || strings.Join(systemd[0], " ") != "systemctl --user restart diana.service" {
+		t.Fatalf("systemd commands = %#v", systemd)
+	}
+}
+
+func TestSystemdUnitFromCgroup(t *testing.T) {
+	cases := map[string]string{
+		"0::/user.slice/user-501.slice/user@501.service/app.slice/diana.service\n":         "diana.service",
+		"11:name=systemd:/system.slice/diana.service\n5:cpu:/system.slice/diana.service\n": "diana.service",
+		"0::/\n": "",
+		"":       "",
+	}
+	for content, want := range cases {
+		if got := systemdUnitFromCgroup(content); got != want {
+			t.Fatalf("systemdUnitFromCgroup(%q) = %q, want %q", content, got, want)
+		}
+	}
+}
+
+// 计划文件里的管理器标识会拼进 launchctl/systemctl 的参数，只接受服务名该有的字符。
+func TestValidateReleaseApplyPlanRejectsUnsafeSupervisor(t *testing.T) {
+	base := releaseApplyFixture(t)
+	for name, supervisor := range map[string]serviceSupervisor{
+		"unknown kind":       {Kind: "runit", Label: "diana"},
+		"label without kind": {Label: "diana"},
+		"option-like label":  {Kind: supervisorLaunchd, Label: "-k"},
+		"spaced label":       {Kind: supervisorLaunchd, Label: "com.suink.diana extra"},
+		"unsafe domain":      {Kind: supervisorSystemd, Label: "diana.service", Domain: "user;reboot"},
+	} {
+		plan := base
+		plan.Supervisor = supervisor
+		if err := validateReleaseApplyPlan(plan); err == nil {
+			t.Fatalf("%s: validateReleaseApplyPlan() accepted %#v", name, supervisor)
+		}
+	}
+	accepted := base
+	accepted.Supervisor = serviceSupervisor{Kind: supervisorLaunchd, Label: "com.suink.diana", Domain: "gui/501"}
+	if err := validateReleaseApplyPlan(accepted); err != nil {
+		t.Fatalf("validateReleaseApplyPlan() rejected a normal launchd job: %v", err)
+	}
+}
