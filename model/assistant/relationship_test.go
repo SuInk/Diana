@@ -182,7 +182,7 @@ func TestRelationshipLevelsDifferOnlyByScheduleQuota(t *testing.T) {
 // 提示词不能再把人人都有的基础能力摆成「授权能力」清单——那正是回复里冒出
 // 一长串「当前权限：…」的来源。
 func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
-	profile := UserMemoryProfile{Favorability: 101, MessageCount: 1128}
+	profile := UserMemoryProfile{UserID: "10005", DisplayName: "小林", Favorability: 101, MessageCount: 1128}
 	policy := RelationshipPolicyFor(profile, "owner", "user")
 
 	permissionContext := relationshipPermissionContext(policy)
