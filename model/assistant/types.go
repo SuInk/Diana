@@ -297,6 +297,7 @@ type BotConfig struct {
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
 	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
 	DisabledUsers                []string             `json:"disabled_users,omitempty"`
 	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
@@ -431,6 +432,7 @@ type GroupConfig struct {
 	Enabled                      bool                   `json:"enabled"`
 	EnabledSet                   bool                   `json:"enabled_set,omitempty"`
 	GroupTriggers                []string               `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode       `json:"group_trigger_mode,omitempty"`
 	SystemPrompt                 string                 `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode           `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle             `json:"reply_style,omitempty"`
@@ -487,6 +489,7 @@ type ConfigPayload struct {
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
 	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
 	DisabledUsers                []string             `json:"disabled_users,omitempty"`
 	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
@@ -570,6 +573,7 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		Enabled:                      true,
 		EnabledSet:                   true,
 		GroupTriggers:                append([]string(nil), base.GroupTriggers...),
+		GroupTriggerMode:             base.GroupTriggerMode,
 		WelcomeEnabled:               base.WelcomeEnabled,
 		WelcomeMessage:               base.WelcomeMessage,
 		MaxContextTokens:             base.MaxContextTokens,
@@ -620,6 +624,7 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if len(cfg.GroupTriggers) == 0 {
 		cfg.GroupTriggers = append([]string(nil), defaults.GroupTriggers...)
 	}
+	// 空值表示这个群没有单独表态，读取时按全局配置解析，不在这里写死档位。
 	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
 		cfg.WelcomeMessage = defaults.WelcomeMessage
 	}
@@ -900,6 +905,7 @@ func DefaultBotConfig() BotConfig {
 		OneBotReverseWSEndpoint:      "ws://127.0.0.1:18080/onebot/v11/ws",
 		NoneBotBridgeEndpoint:        "ws://127.0.0.1:8080/onebot/v11/ws",
 		GroupTriggers:                []string{"Diana", "diana"},
+		GroupTriggerMode:             defaultAliasTriggerMode,
 		DisabledGroups:               []string{},
 		DisabledUsers:                []string{},
 		GroupAdmission:               GroupAdmission{}.WithDefaults(),
@@ -1227,6 +1233,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		OwnerLoginEnabled:            cfg.OwnerLoginEnabled,
 		OwnerLLMConfigEnabled:        copyBoolPointer(cfg.OwnerLLMConfigEnabled),
 		GroupTriggers:                append([]string(nil), cfg.GroupTriggers...),
+		GroupTriggerMode:             cfg.GroupTriggerMode,
 		DisabledGroups:               append([]string(nil), cfg.DisabledGroups...),
 		DisabledUsers:                append([]string(nil), cfg.DisabledUsers...),
 		GroupAdmission:               cfg.GroupAdmission.WithDefaults(),
@@ -1346,6 +1353,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		OwnerLoginEnabled:            payload.OwnerLoginEnabled,
 		OwnerLLMConfigEnabled:        copyBoolPointer(payload.OwnerLLMConfigEnabled),
 		GroupTriggers:                payload.GroupTriggers,
+		GroupTriggerMode:             payload.GroupTriggerMode,
 		DisabledGroups:               payload.DisabledGroups,
 		DisabledUsers:                payload.DisabledUsers,
 		GroupAdmission:               payload.GroupAdmission,
