@@ -9485,6 +9485,11 @@ func repositoryWatchShortCommitURL(rawURL, shortSHA string) string {
 // 空串，模板会把整行删掉。
 func renderRepositoryWatchPullCommits(pullRequest repositoryWatchPullRequest) string {
 	if len(pullRequest.Commits) == 0 {
+		// 一条新增都没有、却有被重写的提交：这轮就是一次纯变基或强推，说清楚即可，
+		// 不然读者只看到「更新」却没有任何提交行，无从判断发生了什么。
+		if pullRequest.RewrittenCommits > 0 {
+			return fmt.Sprintf("分支被变基或强推，%d 个既有提交被重写", pullRequest.RewrittenCommits)
+		}
 		return ""
 	}
 	lines := make([]string, 0, len(pullRequest.Commits)+1)
@@ -9501,6 +9506,9 @@ func renderRepositoryWatchPullCommits(pullRequest repositoryWatchPullRequest) st
 	}
 	if pullRequest.OmittedCommits > 0 {
 		lines = append(lines, fmt.Sprintf("还有 %d 个提交未列出", pullRequest.OmittedCommits))
+	}
+	if pullRequest.RewrittenCommits > 0 {
+		lines = append(lines, fmt.Sprintf("另有 %d 个既有提交被变基或强推重写", pullRequest.RewrittenCommits))
 	}
 	return strings.Join(lines, "\n")
 }

@@ -101,6 +101,8 @@ type repositoryWatchPullRequest struct {
 	// 点进去才知道，通知里直接列出来省一次跳转。
 	Commits        []repositoryWatchPullCommit `json:"commits,omitempty"`
 	OmittedCommits int                         `json:"omitted_commits,omitempty"`
+	// RewrittenCommits 是这轮被变基或强推重写、但内容并非新写的提交数。
+	RewrittenCommits int `json:"rewritten_commits,omitempty"`
 }
 
 // repositoryWatchPullCommit 是 PR 里的一条提交，只留通知要用的字段。
@@ -556,7 +558,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		if status == "updated" {
 			since = repositoryWatchPullCursorTime(cursor)
 		}
-		commits, omittedCommits, err := p.fetchPullRequestCommits(ctx, repository, item.Number, since, limit, settings)
+		commits, omittedCommits, rewrittenCommits, err := p.fetchPullRequestCommits(ctx, repository, item.Number, since, limit, settings)
 		if err != nil {
 			return nil, "", err
 		}
@@ -570,10 +572,11 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 			HeadBranch:     strings.TrimSpace(item.Head.Ref),
 			MergeCommitSHA: strings.TrimSpace(item.MergeCommitSHA),
 			UpdatedAt:      item.UpdatedAt, OccurredAt: occurredAt,
-			Files:          files,
-			FilesTruncated: filesTruncated,
-			Commits:        commits,
-			OmittedCommits: omittedCommits,
+			Files:            files,
+			FilesTruncated:   filesTruncated,
+			Commits:          commits,
+			OmittedCommits:   omittedCommits,
+			RewrittenCommits: rewrittenCommits,
 		})
 	}
 	return result, latest, nil
@@ -700,8 +703,10 @@ func (p *RepositoryWatchPlugin) fetchPullRequestFiles(ctx context.Context, repos
 //     于是整条分支的提交都晚于水位线，会被重列一遍，看上去像突然多了一批新提交；
 //   - 把分支重置到更早的状态再推，提交时间还是旧的，筛不出来，那条更新就没有提交行。
 //
-// 想把「重写」和「新增」区分开，得按 PR 记住上次的 head SHA 才做得准，现在不值这个成本。
-func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, repository string, number int, since time.Time, limit int, settings SettingValues) ([]repositoryWatchPullCommit, int, error) {
+// 后一种没办法，也不必要。前一种能靠 author date 认出来：变基只刷 committer date，
+// author date 原样保留，所以「committer 新、author 旧」就是被重写的既有提交。它们
+// 单独计数，不混进新增列表，免得一次变基看上去像一批新改动。
+func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, repository string, number int, since time.Time, limit int, settings SettingValues) ([]repositoryWatchPullCommit, int, int, error) {
 	if limit <= 0 {
 		limit = repositoryWatchDefaultLimit
 	}
@@ -713,7 +718,8 @@ func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, rep
 				Date time.Time `json:"date"`
 			} `json:"committer"`
 			Author struct {
-				Name string `json:"name"`
+				Name string    `json:"name"`
+				Date time.Time `json:"date"`
 			} `json:"author"`
 		} `json:"commit"`
 		Author struct {
@@ -722,12 +728,19 @@ func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, rep
 	}
 	path := fmt.Sprintf("/repos/%s/pulls/%d/commits?per_page=100", repository, number)
 	if err := p.getJSON(ctx, path, settings, &payload); err != nil {
-		return nil, 0, fmt.Errorf("读取 %s PR #%d 提交: %w", repository, number, err)
+		return nil, 0, 0, fmt.Errorf("读取 %s PR #%d 提交: %w", repository, number, err)
 	}
 	fresh := make([]repositoryWatchPullCommit, 0, len(payload))
+	rewritten := 0
 	for _, item := range payload {
 		committedAt := item.Commit.Committer.Date
 		if !since.IsZero() && !committedAt.IsZero() && !committedAt.After(since) {
+			continue
+		}
+		// committer 时间新、author 时间旧，说明这条提交的内容早就写好了，这轮只是被
+		// 变基或强推重写了一遍。照旧当成新提交列出来，读者会以为发生了一批新改动。
+		if authoredAt := item.Commit.Author.Date; !since.IsZero() && !authoredAt.IsZero() && !authoredAt.After(since) {
+			rewritten++
 			continue
 		}
 		title := strings.TrimSpace(item.Commit.Message)
@@ -746,9 +759,9 @@ func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, rep
 		fresh[left], fresh[right] = fresh[right], fresh[left]
 	}
 	if len(fresh) > limit {
-		return fresh[:limit], len(fresh) - limit, nil
+		return fresh[:limit], len(fresh) - limit, rewritten, nil
 	}
-	return fresh, 0, nil
+	return fresh, 0, rewritten, nil
 }
 
 func repositoryWatchDiffFiles(payload []repositoryWatchDiffFilePayload, limit int) ([]repositoryWatchDiffFile, bool) {
