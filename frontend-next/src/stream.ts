@@ -2,13 +2,13 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { reactive, readonly } from "vue";
-import type { QQBotStatus, StatsSnapshot } from "./api";
+import type { BotStatus, StatsSnapshot } from "./api";
 
-export type BotEvent = NonNullable<QQBotStatus["recent_events"]>[number];
+export type BotEvent = NonNullable<BotStatus["recent_events"]>[number];
 
 interface StreamState {
   connected: boolean;
-  status: QQBotStatus | null;
+  status: BotStatus | null;
   stats: StatsSnapshot | null;
   events: BotEvent[];
   lastEventAt: string | null;
@@ -29,7 +29,7 @@ let started = false;
 
 function handleStatus(raw: string): void {
   try {
-    state.status = JSON.parse(raw) as QQBotStatus;
+    state.status = JSON.parse(raw) as BotStatus;
   } catch {
     /* 忽略坏帧，等待下一次快照 */
   }
@@ -99,7 +99,7 @@ export function startEventStream(): void {
 export const stream = readonly(state);
 
 /** 手动把外部拉取的快照合并进流状态（如按钮触发的刷新）。 */
-export function pushStatusSnapshot(status: QQBotStatus): void {
+export function pushStatusSnapshot(status: BotStatus): void {
   state.status = status;
 }
 

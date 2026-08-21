@@ -17,7 +17,7 @@ import (
 )
 
 // 从 storage 重新导出日志类型，旧 WebUI 代码可继续用 storage.AppLogEntry，
-// QQ 插件则只依赖 model/applog，不需要知道 SQLite 存储细节。
+// 聊天插件则只依赖 model/applog，不需要知道 SQLite 存储细节。
 type AppLogKind = applog.Kind
 
 const (

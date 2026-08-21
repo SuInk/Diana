@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// QQ（OneBot 文本消息）不渲染 Markdown，模型输出里的标记会原样显示成星号井号。
+// OneBot v11 文本消息不渲染 Markdown，模型输出里的标记会原样显示成星号井号。
 // 这里在发送前把常见 Markdown 语法降级成纯文本；未来接入支持富文本的平台
 //（如 Telegram）时应按平台能力跳过这层转换。
 
@@ -24,7 +24,7 @@ var (
 	mdExtraBlankPattern = regexp.MustCompile(`\n{3,}`)
 )
 
-// markdownToPlain 把 Markdown 标记降级为 QQ 可读的纯文本，保留 <botbr> 分段标记。
+// markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 <botbr> 分段标记。
 func markdownToPlain(text string) string {
 	if !strings.ContainsAny(text, "*#`[]_->") {
 		return text

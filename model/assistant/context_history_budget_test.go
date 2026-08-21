@@ -74,7 +74,7 @@ func TestRecentHistoryKeepsOversizedNewestTurnForFinalCompaction(t *testing.T) {
 }
 
 func TestSemanticReferenceContextIncludesAllTextSources(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	ids := make([]string, 0, 6)
 	for index := 1; index <= 6; index++ {
 		id := fmt.Sprintf("source-%d", index)
@@ -132,7 +132,7 @@ func TestTokenHistoryMergeKeepsTrueNewestTimeline(t *testing.T) {
 }
 
 func TestSemanticReferenceNoticeSeparatesTextAndImages(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind: EventKindPrivate, Time: 1, UserID: "user", MessageID: "text", SenderName: "Diana", botReply: "文字结论",
 	})
@@ -162,7 +162,7 @@ func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
 		MessageID: "30001",
 		Time:      1700000200,
 	}
-	cfg := BotConfig{DebugModeEnabled: true, BotQQ: "90001"}
+	cfg := BotConfig{DebugModeEnabled: true, BotAccount: "90001"}
 	messages := []llm.Message{
 		{Role: llm.RoleSystem, Content: "人设与规则", Priority: llm.MessagePrioritySystem},
 		{Role: llm.RoleUser, Content: "【较早上下文压缩摘要】" + strings.Repeat("旧事", 50), Priority: llm.MessagePrioritySummary},
@@ -181,7 +181,7 @@ func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
 	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, semantic, sources, false)
 
 	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "qqbot.context_budget" {
+	if len(entries) != 1 || entries[0].Action != "chatbot.context_budget" {
 		t.Fatalf("unexpected debug entries: %+v", entries)
 	}
 	metadata := entries[0].Metadata

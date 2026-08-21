@@ -58,7 +58,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 	insert("old", now.Add(-40*24*time.Hour), inboundStatusDone, "ignored_stale", "很久以前", 0)
 	for _, entry := range []applog.Entry{
 		{
-			Action:    "qqbot.llm_usage",
+			Action:    "chatbot.llm_usage",
 			Target:    "replied",
 			CreatedAt: now.Add(-20 * time.Minute),
 			Metadata:  map[string]any{"input_tokens": 100, "output_tokens": 40, "total_tokens": 0},
@@ -70,7 +70,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 			Metadata:  map[string]any{"input_tokens": 20, "output_tokens": 10, "total_tokens": 35},
 		},
 		{
-			Action:    "qqbot.llm_usage",
+			Action:    "chatbot.llm_usage",
 			Target:    "old",
 			CreatedAt: now.Add(-40 * 24 * time.Hour),
 			Metadata:  map[string]any{"input_tokens": 1000, "output_tokens": 1000},
@@ -235,7 +235,7 @@ func TestListInboundEventDetailsFallsBackToProfileDisplayName(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO user_profiles (user_id, display_name, favorability, message_count, memories, updated_at)
-VALUES ('10001', '嘉然', 0, 0, '[]', ?)
+VALUES ('10001', 'Diana', 0, 0, '[]', ?)
 `, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ VALUES ('profile-name', 'group:20001', 'group', '20001', '10001', 'message-1', ?
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Events) != 1 || page.Events[0].SenderName != "嘉然" {
+	if len(page.Events) != 1 || page.Events[0].SenderName != "Diana" {
 		t.Fatalf("events = %#v, want profile display name fallback", page.Events)
 	}
 }
@@ -592,7 +592,7 @@ CREATE TABLE inbound_events (
 	}
 }
 
-// 事件列表里的 @ 只有一串 QQ 号看不出提到了谁。昵称按「最近一次发言的群名片 →
+// 事件列表里的 @ 只有一串账号看不出提到了谁。昵称按「最近一次发言的群名片 →
 // 全局资料显示名」解析后补进正文。
 func TestListInboundEventDetailsResolvesMentionNicknames(t *testing.T) {
 	ctx := context.Background()
@@ -608,7 +608,7 @@ func TestListInboundEventDetailsResolvesMentionNicknames(t *testing.T) {
 	// 3129583166 只有全局资料名；4200000001 还发过言，群名片应当优先。
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO user_profiles (user_id, display_name, favorability, message_count, memories, updated_at)
-VALUES ('3129583166', '向晚', 0, 0, '[]', ?), ('4200000001', '全局名', 0, 0, '[]', ?)
+VALUES ('3129583166', '小满', 0, 0, '[]', ?), ('4200000001', '全局名', 0, 0, '[]', ?)
 `, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +659,7 @@ VALUES ('mention', 'group:104970', 'group', '104970', '10001', 'message-1', ?, '
 			text = event.Text
 		}
 	}
-	if !strings.Contains(text, "@向晚（3129583166）") {
+	if !strings.Contains(text, "@小满（3129583166）") {
 		t.Fatalf("profile display name not applied: %q", text)
 	}
 	// 群名片比全局资料名更贴近群里看到的称呼，而且要取最近一次的。

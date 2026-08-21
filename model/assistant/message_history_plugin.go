@@ -349,7 +349,7 @@ func formatRecallRecords(recalls []MessageEvent, referenceTime int64) string {
 		"最近24小时群撤回消息时间线（结构化事实，仅包含该时间窗口；按撤回时间从旧到新）：",
 		"时间窗口=" + formatRecallTime(windowStart) + " 至 " + formatRecallTime(referenceTime),
 		fmt.Sprintf("记录总数=%d", len(recalls)),
-		"回复要求=根据当前用户的问题直接生成最终QQ回复，不得猜测，也不要声称看不到撤回内容。",
+		"回复要求=根据当前用户的问题直接生成最终回复，不得猜测，也不要声称看不到撤回内容。",
 		"字段顺序=序号|撤回时间|原消息发送时间|原消息ID|原消息发送者|被@对象|执行撤回者|执行者身份|结论",
 		"每条数据的下一行“原消息完整内容=”保存对应原文；字段名只声明一次以避免重复消耗上下文。",
 		"图片说明=优先使用已缓存的图片内容描述；标记为附件的图片按附件编号与下方多模态图片从1开始一一对应，必须查看对应图片后再描述。",
@@ -591,7 +591,7 @@ func (p *MessageHistoryPlugin) enrichRecallIdentities(ctx context.Context, chann
 			})
 			cancel()
 			if err == nil {
-				member := qqGroupMemberInfoFromData(groupID, data)
+				member := oneBotGroupMemberInfoFromData(groupID, data)
 				if name := strings.TrimSpace(member.DisplayName()); name != "" {
 					identity.Name = name
 				}

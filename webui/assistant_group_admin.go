@@ -129,7 +129,7 @@ func (v *groupAdminVerifier) cleanupLocked(now time.Time) {
 	}
 }
 
-func (h *QQBotHandler) startGroupAdminChallenge(c *gin.Context) {
+func (h *BotHandler) startGroupAdminChallenge(c *gin.Context) {
 	var payload groupAdminChallengePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.challenge", err, "", nil)
@@ -159,11 +159,11 @@ func (h *QQBotHandler) startGroupAdminChallenge(c *gin.Context) {
 		GroupID:   groupID,
 		UserID:    userID,
 		ExpiresAt: expiresAt,
-		Message:   "验证码已通过 QQ 私聊发送",
+		Message:   "验证码已通过 私聊发送",
 	})
 }
 
-func (h *QQBotHandler) verifyGroupAdminChallenge(c *gin.Context) {
+func (h *BotHandler) verifyGroupAdminChallenge(c *gin.Context) {
 	var payload groupAdminVerifyPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.verify", err, "", nil)
@@ -191,7 +191,7 @@ func (h *QQBotHandler) verifyGroupAdminChallenge(c *gin.Context) {
 	})
 }
 
-func (h *QQBotHandler) getGroupAdminConfig(c *gin.Context) {
+func (h *BotHandler) getGroupAdminConfig(c *gin.Context) {
 	session, ok := h.groupAdminSessionFromRequest(c)
 	if !ok {
 		h.writeError(c, http.StatusUnauthorized, "assistant.group_admin.config", fmt.Errorf("群管理登录已过期，请重新验证"), "", nil)
@@ -206,7 +206,7 @@ func (h *QQBotHandler) getGroupAdminConfig(c *gin.Context) {
 	})
 }
 
-func (h *QQBotHandler) saveGroupAdminConfig(c *gin.Context) {
+func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 	session, ok := h.groupAdminSessionFromRequest(c)
 	if !ok {
 		h.writeError(c, http.StatusUnauthorized, "assistant.group_admin.config.save", fmt.Errorf("群管理登录已过期，请重新验证"), "", nil)
@@ -237,7 +237,7 @@ func (h *QQBotHandler) saveGroupAdminConfig(c *gin.Context) {
 	})
 }
 
-func (h *QQBotHandler) groupAdminSessionFromRequest(c *gin.Context) (groupAdminSession, bool) {
+func (h *BotHandler) groupAdminSessionFromRequest(c *gin.Context) (groupAdminSession, bool) {
 	token := c.GetHeader("X-Diana-Group-Token")
 	if token == "" {
 		token = c.Query("token")
@@ -245,14 +245,14 @@ func (h *QQBotHandler) groupAdminSessionFromRequest(c *gin.Context) (groupAdminS
 	return h.groupAdmin.Session(token)
 }
 
-func (h *QQBotHandler) groupConfigForResponse(groupID string) assistant.GroupConfig {
+func (h *BotHandler) groupConfigForResponse(groupID string) assistant.GroupConfig {
 	if cfg, ok := h.groupConfigs.ConfigForGroup(groupID); ok {
 		return h.groupConfigForAPI(cfg.WithDefaults(groupID, h.runtime.Config()))
 	}
 	return h.groupConfigForAPI(assistant.DefaultGroupConfig(groupID, h.runtime.Config()))
 }
 
-func (h *QQBotHandler) groupConfigForAPI(cfg assistant.GroupConfig) assistant.GroupConfig {
+func (h *BotHandler) groupConfigForAPI(cfg assistant.GroupConfig) assistant.GroupConfig {
 	if plugins := h.runtime.Plugins(); plugins != nil {
 		cfg.PluginSettingOverrides = plugins.SanitizeGroupSettingOverrides(cfg.PluginSettingOverrides)
 	} else {
@@ -261,14 +261,14 @@ func (h *QQBotHandler) groupConfigForAPI(cfg assistant.GroupConfig) assistant.Gr
 	return cfg
 }
 
-func (h *QQBotHandler) requireGroupAdmin(ctx context.Context, groupID string, userID string) error {
+func (h *BotHandler) requireGroupAdmin(ctx context.Context, groupID string, userID string) error {
 	group, err := strconv.ParseInt(groupID, 10, 64)
 	if err != nil {
 		return fmt.Errorf("群号格式不正确")
 	}
 	user, err := strconv.ParseInt(userID, 10, 64)
 	if err != nil {
-		return fmt.Errorf("QQ 号格式不正确")
+		return fmt.Errorf("账号格式不正确")
 	}
 	data, err := h.runtime.CallOneBotAPI(ctx, "get_group_member_info", map[string]any{
 		"group_id": group,
@@ -285,10 +285,10 @@ func (h *QQBotHandler) requireGroupAdmin(ctx context.Context, groupID string, us
 	return nil
 }
 
-func (h *QQBotHandler) sendPrivateMessage(ctx context.Context, userID string, text string) error {
+func (h *BotHandler) sendPrivateMessage(ctx context.Context, userID string, text string) error {
 	parsed, err := strconv.ParseInt(userID, 10, 64)
 	if err != nil {
-		return fmt.Errorf("QQ 号格式不正确")
+		return fmt.Errorf("账号格式不正确")
 	}
 	_, err = h.runtime.CallOneBotAPI(ctx, "send_private_msg", map[string]any{
 		"user_id": parsed,
@@ -306,18 +306,18 @@ func normalizeGroupAdminIdentity(groupID string, userID string) (string, string,
 		return groupID, userID, fmt.Errorf("群号不能为空")
 	}
 	if userID == "" {
-		return groupID, userID, fmt.Errorf("QQ 号不能为空")
+		return groupID, userID, fmt.Errorf("账号不能为空")
 	}
 	if _, err := strconv.ParseInt(groupID, 10, 64); err != nil {
 		return groupID, userID, fmt.Errorf("群号格式不正确")
 	}
 	if _, err := strconv.ParseInt(userID, 10, 64); err != nil {
-		return groupID, userID, fmt.Errorf("QQ 号格式不正确")
+		return groupID, userID, fmt.Errorf("账号格式不正确")
 	}
 	return groupID, userID, nil
 }
 
-func (h *QQBotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, groupID string) (assistant.GroupConfig, error) {
+func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, groupID string) (assistant.GroupConfig, error) {
 	// Older clients do not know this field. Omission preserves existing values;
 	// an explicit empty object from a current client resets all group overrides.
 	if cfg.PluginSettingOverrides == nil {

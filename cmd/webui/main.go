@@ -65,7 +65,7 @@ func main() {
 	}
 	logWriter, closeLog := setupLogging()
 	defer closeLog()
-	probeMacOSQQAppDataAccess()
+	probeMacOSClientAppDataAccess()
 	port := envOr("PORT", "18080")
 	host := envOrAny([]string{"HOST", "BACKEND_HOST"}, "")
 
@@ -91,11 +91,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	botProfileStore, err := webui.NewPersistentQQBotProfileStore(ctx, sqliteStore, qqBotConfigFromEnv())
+	botProfileStore, err := webui.NewPersistentBotProfileStore(ctx, sqliteStore, botConfigFromEnv())
 	if err != nil {
 		log.Fatal(err)
 	}
-	botGroupConfigStore, err := webui.NewPersistentQQBotGroupConfigStore(ctx, sqliteStore)
+	botGroupConfigStore, err := webui.NewPersistentBotGroupConfigStore(ctx, sqliteStore)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func main() {
 			}
 			var channel assistant.Channel
 			if assistant.IsOneBotPlatform(profile.Platform) {
-				// The reverse WebSocket endpoint is process-wide. QQ and Telegram can
+				// The reverse WebSocket endpoint is process-wide. OneBot v11 and Telegram can
 				// run together; multiple enabled OneBot profiles still share this one
 				// listener, so only the first is attached.
 				if oneBotAdded {
@@ -279,7 +279,7 @@ func main() {
 			log.Printf("assistant start skipped: %v", err)
 		}
 	}
-	botHandler := webui.NewQQBotHandlerWithFactory(ctx, botRuntime, func(cfg assistant.BotConfig) assistant.Channel {
+	botHandler := webui.NewBotHandlerWithFactory(ctx, botRuntime, func(cfg assistant.BotConfig) assistant.Channel {
 		if cfg.Platform == assistant.PlatformTelegram {
 			return assistant.NewTelegramChannel(assistant.TelegramConfig{
 				BotToken:   cfg.TelegramBotToken,
@@ -294,8 +294,8 @@ func main() {
 		return oneBotServer
 	})
 	botHandler.SetChannelSetFactory(channelSetFactory)
-	botHandler.SetFeatureFlags(webui.QQBotFeatureFlags{
-		GroupTest: boolFromEnv("QQBOT_GROUP_TEST_ENABLED", false),
+	botHandler.SetFeatureFlags(webui.BotFeatureFlags{
+		GroupTest: boolFromEnvAny([]string{"DIANA_GROUP_TEST_ENABLED", "QQBOT_GROUP_TEST_ENABLED"}, false),
 	})
 	botHandler.SetLocalMediaSharer(localMediaStore)
 	botHandler.SetProfileStore(botProfileStore)
@@ -456,7 +456,7 @@ func newSystemUpdater() (*updater.GitUpdater, error) {
 	return updater.NewGitUpdaterWithOptions(root, options)
 }
 
-func probeMacOSQQAppDataAccess() {
+func probeMacOSClientAppDataAccess() {
 	if runtime.GOOS != "darwin" {
 		return
 	}
@@ -574,18 +574,18 @@ func setupLogging() (io.Writer, func()) {
 	}
 }
 
-// qqBotConfigFromEnv 从环境变量构建 QQ 机器人默认配置。
-func qqBotConfigFromEnv() assistant.BotConfig {
+// botConfigFromEnv 从环境变量构建 OneBot v11 机器人默认配置。
+func botConfigFromEnv() assistant.BotConfig {
 	cfg := assistant.DefaultBotConfig()
 	// 默认回连到当前 WebUI 端口，开发环境只要 NapCat 指向这个地址即可联调。
 	defaultOneBotEndpoint := "ws://127.0.0.1:" + envOr("PORT", "18080") + "/onebot/v11/ws"
-	cfg.Enabled = boolFromEnv("QQBOT_ENABLED", cfg.Enabled)
+	cfg.Enabled = boolFromEnvAny([]string{"DIANA_BOT_ENABLED", "QQBOT_ENABLED"}, cfg.Enabled)
 	cfg.OneBotReverseWSEndpoint = envOrAny([]string{"ONEBOT_REVERSE_WS_ENDPOINT", "QQBOT_ONEBOT_REVERSE_WS_ENDPOINT"}, defaultOneBotEndpoint)
 	cfg.OneBotAccessToken = envOrAny([]string{"ONEBOT_ACCESS_TOKEN", "QQBOT_ONEBOT_ACCESS_TOKEN"}, "")
 	cfg.NoneBotBridgeEnabled = boolFromEnv("NONEBOT_BRIDGE_ENABLED", cfg.NoneBotBridgeEnabled)
 	cfg.NoneBotBridgeEndpoint = envOrAny([]string{"NONEBOT_BRIDGE_ENDPOINT", "QQBOT_NONEBOT_BRIDGE_ENDPOINT"}, cfg.NoneBotBridgeEndpoint)
 	cfg.NoneBotBridgeToken = envOrAny([]string{"NONEBOT_BRIDGE_TOKEN", "QQBOT_NONEBOT_BRIDGE_TOKEN"}, "")
-	cfg.BotQQ = envOrAny([]string{"QQBOT_SELF_ID", "QQBOT_QQ", "BOT_QQ"}, "")
+	cfg.BotAccount = envOrAny([]string{"DIANA_BOT_ACCOUNT", "QQBOT_SELF_ID", "QQBOT_QQ", "BOT_QQ"}, "")
 	cfg.OwnerID = envOrAny([]string{"DIANA_OWNER_ID", "QQBOT_OWNER_ID"}, "")
 	cfg.GroupTriggers = stringListFromEnv("DIANA_GROUP_TRIGGERS", cfg.GroupTriggers)
 	cfg.SystemPrompt = envOrAny([]string{"DIANA_SYSTEM_PROMPT", "QQBOT_SYSTEM_PROMPT"}, cfg.SystemPrompt)
@@ -599,7 +599,7 @@ func qqBotConfigFromEnv() assistant.BotConfig {
 	cfg.DirectReplyChunkSize = intFromEnv("DIANA_DIRECT_REPLY_CHUNK_SIZE", cfg.DirectReplyChunkSize)
 	cfg.ForwardReplyThreshold = intFromEnv("DIANA_FORWARD_REPLY_THRESHOLD", cfg.ForwardReplyThreshold)
 	cfg.RecallReplyMode = assistant.RecallReplyMode(envOr("DIANA_RECALL_REPLY_MODE", string(cfg.RecallReplyMode)))
-	llmIdentityMaskingEnabled := boolFromEnv("DIANA_LLM_QQ_ID_MASKING_ENABLED", true)
+	llmIdentityMaskingEnabled := boolFromEnvAny([]string{"DIANA_LLM_IDENTITY_MASKING_ENABLED", "DIANA_LLM_QQ_ID_MASKING_ENABLED"}, true)
 	cfg.LLMIdentityMaskingEnabled = &llmIdentityMaskingEnabled
 	cfg.RecentContextLimit = intFromEnv("DIANA_RECENT_GROUP_CONTEXT_LIMIT", cfg.RecentContextLimit)
 	cfg.ContextSummaryThreshold = intFromEnv("DIANA_CONTEXT_SUMMARY_THRESHOLD", cfg.ContextSummaryThreshold)
@@ -776,6 +776,16 @@ func envOrAny(keys []string, fallback string) string {
 }
 
 // boolFromEnv 将环境变量解析为布尔值。
+// boolFromEnvAny 依次尝试多个变量名，用来在换新名的同时兼容旧部署。
+func boolFromEnvAny(keys []string, fallback bool) bool {
+	for _, key := range keys {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return boolFromEnv(key, fallback)
+		}
+	}
+	return fallback
+}
+
 func boolFromEnv(key string, fallback bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	if value == "" {

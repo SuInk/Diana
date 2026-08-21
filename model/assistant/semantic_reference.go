@@ -83,7 +83,7 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 		"current_text":          strings.TrimSpace(text),
 		"current_event_time":    event.Time,
 		"reference_anchor_time": anchorTime,
-		"explicit_quote":        semanticQuotedCandidate(event.Quoted, r.effectiveConfigForEvent(event).BotQQ),
+		"explicit_quote":        semanticQuotedCandidate(event.Quoted, r.effectiveConfigForEvent(event).BotAccount),
 		"candidates":            candidates,
 	})
 	if err != nil {
@@ -102,12 +102,12 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 			resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 				{
 					Role: llm.RoleSystem,
-					Content: strings.TrimSpace(`你是 QQ 对话的上下文指代判断器。判断当前消息具体在询问、评价、修改或接续哪一条或哪些历史消息。
+					Content: strings.TrimSpace(`你是群聊对话的上下文指代判断器。判断当前消息具体在询问、评价、修改或接续哪一条或哪些历史消息。
 
 规则：
 1. 候选可以来自任何发送者；event_time 和 age_seconds 表示消息时间及距当前消息的秒数。结合时间判断是否仍属于当前话题，间隔过长且当前措辞没有明确指向时选择 none；不要默认只选当前发言者自己的消息。
 2. 综合当前措辞、发送者名称、消息先后顺序和内容类型判断。像“这是什么”“他刚发的图”“上面那个视频”“前面说的方案”都可能指向历史消息。
-3. explicit_quote 是用户在 QQ 中直接引用的消息。通常优先保持它；但 is_error_wrapper=true 表示它只是机器人产生的超时、失败或重试提示，不是原任务内容。此时要结合 semantic_source_message_id、semantic_source_message_ids、reply_to_message_ids、reference_anchor_time、候选时间顺序和 nearby_context，寻找该失败任务实际使用的图片、语音、视频或文件。
+3. explicit_quote 是用户直接引用的消息。通常优先保持它；但 is_error_wrapper=true 表示它只是机器人产生的超时、失败或重试提示，不是原任务内容。此时要结合 semantic_source_message_id、semantic_source_message_ids、reply_to_message_ids、reference_anchor_time、候选时间顺序和 nearby_context，寻找该失败任务实际使用的图片、语音、视频或文件。
 4. semantic_source_message_id 和 semantic_source_message_ids 是先前处理时持久化的真实来源关系，是强证据；但仍要结合当前措辞判断用户现在是否在指代它们。
 5. candidates 已由长期消息时间线检索并排序，不只包含短期聊天。nearby_context 是媒体前后的原始对话，用于分辨多张图片或多个任务。
 6. 当前措辞明确指向多条消息或多份媒体，例如“这几张图”“刚才连发的三张”“上面那些”，必须把属于同一批次且被共同指代的所有候选都选出，不能只选其中一条。message_ids 按原消息从旧到新排列。
@@ -283,7 +283,7 @@ func semanticCandidatesHaveMedia(candidates []semanticReferenceCandidate) bool {
 	return false
 }
 
-func semanticQuotedCandidate(quoted *QuotedMessage, botQQ string) any {
+func semanticQuotedCandidate(quoted *QuotedMessage, botAccount string) any {
 	if quoted == nil {
 		return nil
 	}
@@ -295,7 +295,7 @@ func semanticQuotedCandidate(quoted *QuotedMessage, botQQ string) any {
 		ReplyToMessageIDs:        replyReferenceIDs(quoted.Segments),
 		SemanticSourceMessageID:  strings.TrimSpace(quoted.SemanticSourceMessageID),
 		SemanticSourceMessageIDs: quotedSemanticSourceMessageIDs(quoted),
-		IsBotMessage:             strings.TrimSpace(botQQ) != "" && strings.TrimSpace(quoted.UserID) == strings.TrimSpace(botQQ),
+		IsBotMessage:             strings.TrimSpace(botAccount) != "" && strings.TrimSpace(quoted.UserID) == strings.TrimSpace(botAccount),
 	}
 	countSemanticReferenceSegments(&candidate, quoted.Segments)
 	finalizeSemanticReferenceCandidate(&candidate)
@@ -318,14 +318,14 @@ func (r *Runtime) semanticReferenceCandidates(ctx context.Context, event Message
 	indexes := semanticReferenceCandidateIndexes(history, event, anchorTime)
 	candidates := make([]semanticReferenceCandidate, 0, len(indexes))
 	events := make(map[string]MessageEvent, len(indexes))
-	botQQ := r.effectiveConfigForEvent(event).BotQQ
+	botAccount := r.effectiveConfigForEvent(event).BotAccount
 	for _, index := range indexes {
 		item := history[index]
 		messageID := strings.TrimSpace(item.MessageID)
 		if messageID == "" || messageID == event.MessageID {
 			continue
 		}
-		candidate := semanticReferenceCandidateFromEvent(item, event, botQQ)
+		candidate := semanticReferenceCandidateFromEvent(item, event, botAccount)
 		if eventContainsSemanticReferenceContent(item) {
 			candidate.NearbyContext = semanticReferenceNearbyContext(history, index)
 		}
@@ -359,7 +359,7 @@ func (r *Runtime) hasDurableMediaBeyondRecentContext(ctx context.Context, event 
 	return false
 }
 
-func semanticReferenceCandidateFromEvent(item, current MessageEvent, botQQ string) semanticReferenceCandidate {
+func semanticReferenceCandidateFromEvent(item, current MessageEvent, botAccount string) semanticReferenceCandidate {
 	candidate := semanticReferenceCandidate{
 		MessageID:                strings.TrimSpace(item.MessageID),
 		Sender:                   strings.TrimSpace(item.SenderNameOrID()),
@@ -369,7 +369,7 @@ func semanticReferenceCandidateFromEvent(item, current MessageEvent, botQQ strin
 		ReplyToMessageIDs:        replyReferenceIDs(item.Segments),
 		SemanticSourceMessageID:  strings.TrimSpace(item.SemanticSourceMessageID),
 		SemanticSourceMessageIDs: eventSemanticSourceMessageIDs(item),
-		IsBotMessage:             strings.TrimSpace(botQQ) != "" && strings.TrimSpace(item.UserID) == strings.TrimSpace(botQQ),
+		IsBotMessage:             strings.TrimSpace(botAccount) != "" && strings.TrimSpace(item.UserID) == strings.TrimSpace(botAccount),
 	}
 	countSemanticReferenceSegments(&candidate, item.Segments)
 	if item.Quoted != nil {
@@ -751,9 +751,9 @@ func (r *Runtime) recordSemanticReference(ctx context.Context, event MessageEven
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.semantic_reference",
+		Action:  "chatbot.semantic_reference",
 		Message: "LLM 已完成上下文指代判断",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  messageID,
 		Metadata: map[string]any{
 			"group_id":    event.GroupID,

@@ -50,7 +50,7 @@ func resolverForwardChannel() *recordingChannel {
 func TestResolverForwardIsNotResentOnInboundReplay(t *testing.T) {
 	channel := resolverForwardChannel()
 	store := &memoryInboundEventStore{}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetInboundEventStore(store)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
 	resp := resolverForwardTestResponse()
@@ -82,11 +82,11 @@ func TestResolverForwardIsNotResentOnInboundReplay(t *testing.T) {
 	}
 }
 
-// 打包请求超时时消息可能已被 QQ 投递，此时兜底直发就是「图集来两份」。
+// 打包请求超时时消息可能已被平台投递，此时兜底直发就是「图集来两份」。
 // 超时错误必须原样上抛，交给入站队列按账本重跑。
 func TestResolverForwardDoesNotFallBackToDirectSendOnTimeout(t *testing.T) {
 	channel := resolverForwardChannel()
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
 	resp := resolverForwardTestResponse()
 	cfg := runtime.effectiveConfigForEvent(event)
@@ -118,7 +118,7 @@ func countRecordingCalls(channel *recordingChannel, action string) int {
 // WebUI 关闭「合并转发发送」后恢复普通消息投递，不生成转发卡片。
 func TestResolverMergedForwardToggleUsesOriginalDirectDelivery(t *testing.T) {
 	channel := resolverForwardChannel()
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
 	resp := resolverForwardTestResponse()
 	resp.Forward = false
@@ -149,11 +149,11 @@ func countRecordingSends(channel *recordingChannel) int {
 	return count + len(channel.sentSnapshot())
 }
 
-// 合并转发优先用自定义节点：一个请求发完，且不给机器人自己发私聊——不少 QQ
+// 合并转发优先用自定义节点：一个请求发完，且不给机器人自己发私聊——不少 OneBot 实现
 // 协议实现根本不允许自发私聊，暂存方式在那里必然失败并静默退回散装。
 func TestResolverForwardPrefersCustomNodesOverSelfStaging(t *testing.T) {
 	channel := resolverForwardChannel()
-	runtime := NewRuntime(BotConfig{BotQQ: "42", Name: "Diana"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42", Name: "Diana"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
 	resp := resolverForwardTestResponse()
 
@@ -193,7 +193,7 @@ func (c *customNodeRejectingChannel) CallAPI(ctx context.Context, action string,
 func TestResolverForwardFallsBackToStagingWhenCustomNodesRejected(t *testing.T) {
 	base := resolverForwardChannel()
 	channel := &customNodeRejectingChannel{recordingChannel: base}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", Name: "Diana"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42", Name: "Diana"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
 	resp := resolverForwardTestResponse()
 

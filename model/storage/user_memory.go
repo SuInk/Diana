@@ -22,7 +22,7 @@ const (
 	maxUserMemoryTextRunes  = 180
 )
 
-// UpdateUserMemory updates one QQ user's long-term profile without calling the LLM.
+// UpdateUserMemory updates one user's long-term profile without calling the LLM.
 func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.MessageEvent, update assistant.UserMemoryUpdate) (assistant.UserMemoryProfile, error) {
 	var profile assistant.UserMemoryProfile
 	if s == nil || s.db == nil {
@@ -236,7 +236,7 @@ func escapeUserMemoryLike(value string) string {
 	return replacer.Replace(value)
 }
 
-// GetUserMemory loads one QQ user's long-term profile.
+// GetUserMemory loads one user's long-term profile.
 func (s *SQLiteStore) GetUserMemory(ctx context.Context, userID string) (assistant.UserMemoryProfile, bool, error) {
 	var profile assistant.UserMemoryProfile
 	if s == nil || s.db == nil {

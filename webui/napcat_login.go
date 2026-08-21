@@ -211,7 +211,7 @@ func (h *NapCatLoginHandler) refresh(c *gin.Context) {
 	if !h.requireConfigured(c) {
 		return
 	}
-	if err := h.call(c.Request.Context(), "/api/QQLogin/RefreshQRcode", struct{}{}, nil); err != nil {
+	if err := h.call(c.Request.Context(), "/api/OneBotLogin/RefreshQRcode", struct{}{}, nil); err != nil {
 		h.writeUpstreamError(c)
 		return
 	}
@@ -236,10 +236,10 @@ func (h *NapCatLoginHandler) quickLogin(c *gin.Context) {
 	}
 	payload.UIN = strings.TrimSpace(payload.UIN)
 	if !napCatUINPattern.MatchString(payload.UIN) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "QQ account must contain digits only"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bot account must contain digits only"})
 		return
 	}
-	if err := h.call(c.Request.Context(), "/api/QQLogin/SetQuickLogin", gin.H{"uin": payload.UIN}, nil); err != nil {
+	if err := h.call(c.Request.Context(), "/api/OneBotLogin/SetQuickLogin", gin.H{"uin": payload.UIN}, nil); err != nil {
 		h.writeUpstreamError(c)
 		return
 	}
@@ -270,7 +270,7 @@ func (h *NapCatLoginHandler) loadStatus(ctx context.Context) (NapCatLoginStatus,
 	}
 
 	var quickRaw json.RawMessage
-	if err := h.call(ctx, "/api/QQLogin/GetQuickLoginListNew", struct{}{}, &quickRaw); err != nil {
+	if err := h.call(ctx, "/api/OneBotLogin/GetQuickLoginListNew", struct{}{}, &quickRaw); err != nil {
 		return NapCatLoginStatus{}, err
 	}
 	quickAccounts, err := parseNapCatAccounts(quickRaw)
@@ -288,7 +288,7 @@ func (h *NapCatLoginHandler) loadStatus(ctx context.Context) (NapCatLoginStatus,
 	}
 	if state.IsLogin {
 		var payload napCatAccountPayload
-		if err := h.call(ctx, "/api/QQLogin/GetQQLoginInfo", struct{}{}, &payload); err != nil {
+		if err := h.call(ctx, "/api/OneBotLogin/GetOneBotLoginInfo", struct{}{}, &payload); err != nil {
 			return NapCatLoginStatus{}, err
 		}
 		account := sanitizeNapCatAccount(payload)
@@ -299,7 +299,7 @@ func (h *NapCatLoginHandler) loadStatus(ctx context.Context) (NapCatLoginStatus,
 
 func (h *NapCatLoginHandler) loadLoginState(ctx context.Context) (napCatLoginState, error) {
 	var state napCatLoginState
-	if err := h.call(ctx, "/api/QQLogin/CheckLoginStatus", struct{}{}, &state); err != nil {
+	if err := h.call(ctx, "/api/OneBotLogin/CheckLoginStatus", struct{}{}, &state); err != nil {
 		return napCatLoginState{}, err
 	}
 	return state, nil

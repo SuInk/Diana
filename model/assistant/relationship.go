@@ -107,7 +107,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaChatHistoryToolName:   true,
 		dianaHistoryImagesToolName: true,
 		"diana.relationship":       true,
-		"diana.qq_group":           true,
+		"diana.onebot_group":       true,
 		dianaOneBotV11ToolName:     true,
 		dianaImageToolName:         true,
 		"diana.reminder":           true,

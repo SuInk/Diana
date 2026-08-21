@@ -90,7 +90,7 @@ func TestTextToOneBotSegmentsKeepsCQAt(t *testing.T) {
 	}
 }
 
-func TestTextToOneBotSegmentsConvertsPlainQQMention(t *testing.T) {
+func TestTextToOneBotSegmentsConvertsPlainMention(t *testing.T) {
 	got := TextToOneBotSegments("看下 @10005 的好感度")
 	if len(got) != 3 {
 		t.Fatalf("segments = %#v", got)
@@ -349,7 +349,7 @@ func TestReverseServerStatusUpdatesPreserveConnectionEpoch(t *testing.T) {
 	}
 }
 
-func TestReverseServerHeartbeatTracksQQAccountHealth(t *testing.T) {
+func TestReverseServerHeartbeatTracksBotAccountHealth(t *testing.T) {
 	server := NewOneBotReverseServer(OneBotConfig{Endpoint: "/onebot/v11/ws"})
 	if err := server.handleFrame([]byte(`{"post_type":"meta_event","meta_event_type":"heartbeat","self_id":42,"status":{"online":false,"good":false}}`)); err != nil {
 		t.Fatal(err)
@@ -582,17 +582,17 @@ func TestPlainTextRendersNeutralReplyMarker(t *testing.T) {
 	}
 }
 
-// at 段带昵称时渲染成「@昵称（QQ）」，只有号码时退回「@QQ」。
+// at 段带昵称时渲染成「@昵称（账号）」，只有号码时退回「@QQ」。
 func TestPlainTextRendersAtMentionsWithNicknames(t *testing.T) {
 	segments := []MessageSegment{
-		{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "向晚"}},
+		{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "小满"}},
 		{Type: "at", Data: map[string]string{"qq": "4200000001", "card": "群名片"}},
 		{Type: "at", Data: map[string]string{"qq": "9999999999"}},
 		{Type: "at", Data: map[string]string{"qq": "all"}},
 		{Type: "text", Data: map[string]string{"text": "少回复点"}},
 	}
 	got := PlainText(segments)
-	for _, want := range []string{"@向晚（3129583166）", "@群名片（4200000001）", "@9999999999", "少回复点"} {
+	for _, want := range []string{"@小满（3129583166）", "@群名片（4200000001）", "@9999999999", "少回复点"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("plain text missing %q: %q", want, got)
 		}
@@ -607,10 +607,10 @@ func TestAtMentionTextHandlesMissingPieces(t *testing.T) {
 	if got := AtMentionText("123", ""); got != "@123" {
 		t.Fatalf("id-only mention = %q", got)
 	}
-	if got := AtMentionText("", "向晚"); got != "@向晚" {
+	if got := AtMentionText("", "小满"); got != "@小满" {
 		t.Fatalf("name-only mention = %q", got)
 	}
-	if got := AtMentionText("123", "  向晚  "); got != "@向晚（123）" {
+	if got := AtMentionText("123", "  小满  "); got != "@小满（123）" {
 		t.Fatalf("trimmed mention = %q", got)
 	}
 }

@@ -106,7 +106,7 @@ func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageE
 		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
 	scope.register(cfg.OwnerID, "owner")
-	scope.register(firstNonEmpty(cfg.BotQQ, event.SelfID), "bot")
+	scope.register(firstNonEmpty(cfg.BotAccount, event.SelfID), "bot")
 	scope.register(event.UserID, "current_user")
 	scope.register(event.GroupID, "group")
 	scope.registerEvent(event)
@@ -143,7 +143,7 @@ func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProvider
 
 func (p *identityPrivacyProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	if p == nil || p.provider == nil {
-		return nil, errors.New("qqbot: QQ privacy provider is not configured")
+		return nil, errors.New("chatbot: identity privacy provider is not configured")
 	}
 	if p.scope == nil {
 		return p.provider.Generate(ctx, req)

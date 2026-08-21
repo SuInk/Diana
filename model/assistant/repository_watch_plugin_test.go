@@ -370,7 +370,7 @@ func TestRenderRepositoryWatchChangesAlwaysIncludesEveryFetchedCommit(t *testing
 	}
 }
 
-func TestRenderRepositoryWatchChangesUsesQQFriendlyIssueAndStarFormat(t *testing.T) {
+func TestRenderRepositoryWatchChangesUsesChatFriendlyIssueAndStarFormat(t *testing.T) {
 	change := repositoryWatchChange{
 		Issues: []repositoryWatchIssue{{
 			Number: 128, Title: "修复通知格式", Author: "alice", Status: "opened",
@@ -563,7 +563,7 @@ func TestRuntimeCreatesRepositoryWatchForWebUI(t *testing.T) {
 	item, err := runtime.CreateRepositoryWatch(context.Background(), RepositoryWatchCreateInput{
 		Repository:   "https://github.com/acme/demo",
 		WatchCommits: true, WatchReleases: true, Platform: PlatformOneBotV11,
-		ProfileID: "qq-main", GroupID: "123",
+		ProfileID: "onebot-main", GroupID: "123",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -571,7 +571,7 @@ func TestRuntimeCreatesRepositoryWatchForWebUI(t *testing.T) {
 	if len(store.items) != 1 {
 		t.Fatalf("items=%#v", store.items)
 	}
-	if item.Kind != ReminderKindRepositoryWatch || item.OwnerID != "webui:qq-main" || item.GroupID != "123" || item.UserID != "" || item.ProfileID != "qq-main" || item.LastCommitSHA != "base-sha" || item.LastReleaseTag != "v1.0.0" {
+	if item.Kind != ReminderKindRepositoryWatch || item.OwnerID != "webui:onebot-main" || item.GroupID != "123" || item.UserID != "" || item.ProfileID != "onebot-main" || item.LastCommitSHA != "base-sha" || item.LastReleaseTag != "v1.0.0" {
 		t.Fatalf("item=%#v", item)
 	}
 	if remaining := time.Until(item.TriggerAt); remaining < 59*time.Minute || remaining > 61*time.Minute {

@@ -57,24 +57,24 @@ type groupTestOneBotPayload struct {
 	Params map[string]any `json:"params"`
 }
 
-type qqbotAutoInfoResponse struct {
-	BotQQ         string               `json:"bot_qq,omitempty"`
-	Nickname      string               `json:"nickname,omitempty"`
-	AvatarURL     string               `json:"avatar_url,omitempty"`
-	Groups        []qqbotAutoGroupInfo `json:"groups,omitempty"`
-	RecentGroupID string               `json:"recent_group_id,omitempty"`
-	RecentUserID  string               `json:"recent_user_id,omitempty"`
+type botAutoInfoResponse struct {
+	BotAccount    string             `json:"bot_account,omitempty"`
+	Nickname      string             `json:"nickname,omitempty"`
+	AvatarURL     string             `json:"avatar_url,omitempty"`
+	Groups        []botAutoGroupInfo `json:"groups,omitempty"`
+	RecentGroupID string             `json:"recent_group_id,omitempty"`
+	RecentUserID  string             `json:"recent_user_id,omitempty"`
 }
 
-type qqbotAutoGroupInfo struct {
+type botAutoGroupInfo struct {
 	GroupID        string `json:"group_id"`
 	GroupName      string `json:"group_name,omitempty"`
 	MemberCount    int    `json:"member_count,omitempty"`
 	MaxMemberCount int    `json:"max_member_count,omitempty"`
 }
 
-type qqbotTasksResponse struct {
-	Items []qqbotTaskPayload `json:"items"`
+type botTasksResponse struct {
+	Items []botTaskPayload `json:"items"`
 }
 
 type repositoryWatchCreatePayload struct {
@@ -135,7 +135,7 @@ type rssWatchUpdatePayload struct {
 	IntervalSeconds int64   `json:"interval_seconds,omitempty"`
 }
 
-type qqbotTaskPayload struct {
+type botTaskPayload struct {
 	ID                    string                             `json:"id"`
 	Kind                  string                             `json:"kind"`
 	Platform              string                             `json:"platform,omitempty"`
@@ -196,7 +196,7 @@ var groupTestOneBotReadActions = map[string]struct{}{
 	"get_msg":               {},
 }
 
-func (h *QQBotHandler) dashboardStats(c *gin.Context) {
+func (h *BotHandler) dashboardStats(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusOK, storage.DashboardStats{Server: collectDashboardServerStats(time.Now())})
 		return
@@ -210,7 +210,7 @@ func (h *QQBotHandler) dashboardStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
-func (h *QQBotHandler) shareNapCatQRCode(c *gin.Context) {
+func (h *BotHandler) shareNapCatQRCode(c *gin.Context) {
 	if h.localMedia == nil {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.group_test.napcat_qrcode", fmt.Errorf("local media store is unavailable"), "napcat-qrcode", nil)
 		return
@@ -232,7 +232,7 @@ func (h *QQBotHandler) shareNapCatQRCode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"url": sharedURL, "expires_in_seconds": 120})
 }
 
-func (h *QQBotHandler) listGroupTestFiles(c *gin.Context) {
+func (h *BotHandler) listGroupTestFiles(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Query("group_id"))
 	parsedGroupID, err := strconv.ParseInt(groupID, 10, 64)
 	if err != nil {
@@ -247,7 +247,7 @@ func (h *QQBotHandler) listGroupTestFiles(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"group_id": groupID, "result": result})
 }
 
-func (h *QQBotHandler) uploadGroupTestFile(c *gin.Context) {
+func (h *BotHandler) uploadGroupTestFile(c *gin.Context) {
 	var payload groupTestUploadFilePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", err, "", nil)
@@ -276,25 +276,25 @@ func (h *QQBotHandler) uploadGroupTestFile(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", err, groupID, map[string]any{"group_id": groupID, "name": name})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.upload_file", "QQ群测试文件已上传", groupID, map[string]any{"group_id": groupID, "name": name})
+	recordRequestOperation(c, h.logs, "assistant.group_test.upload_file", "群测试文件已上传", groupID, map[string]any{"group_id": groupID, "name": name})
 	c.JSON(http.StatusOK, gin.H{"group_id": groupID, "name": name, "result": result})
 }
 
-func (h *QQBotHandler) autoInfo(c *gin.Context) {
+func (h *BotHandler) autoInfo(c *gin.Context) {
 	status := h.runtime.Status()
-	info := qqbotAutoInfoResponse{
-		BotQQ:     strings.TrimSpace(status.Channel.SelfID),
-		AvatarURL: assistant.QQMemberAvatarURL(status.Channel.SelfID),
+	info := botAutoInfoResponse{
+		BotAccount: strings.TrimSpace(status.Channel.SelfID),
+		AvatarURL:  assistant.OneBotMemberAvatarURL(status.Channel.SelfID),
 	}
 	if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_login_info", map[string]any{}); err == nil {
 		if userID := firstNonEmptyWebUI(stringFromAnyWebUI(data["user_id"]), stringFromAnyWebUI(data["self_id"])); userID != "" {
-			info.BotQQ = userID
-			info.AvatarURL = assistant.QQMemberAvatarURL(userID)
+			info.BotAccount = userID
+			info.AvatarURL = assistant.OneBotMemberAvatarURL(userID)
 		}
 		info.Nickname = firstNonEmptyWebUI(stringFromAnyWebUI(data["nickname"]), stringFromAnyWebUI(data["user_name"]), stringFromAnyWebUI(data["name"]))
 	}
-	if info.BotQQ != "" && info.Nickname == "" {
-		if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_stranger_info", map[string]any{"user_id": oneBotIDParam(info.BotQQ), "no_cache": true}); err == nil {
+	if info.BotAccount != "" && info.Nickname == "" {
+		if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_stranger_info", map[string]any{"user_id": oneBotIDParam(info.BotAccount), "no_cache": true}); err == nil {
 			info.Nickname = firstNonEmptyWebUI(stringFromAnyWebUI(data["nickname"]), stringFromAnyWebUI(data["user_name"]), stringFromAnyWebUI(data["name"]))
 		}
 	}
@@ -305,7 +305,7 @@ func (h *QQBotHandler) autoInfo(c *gin.Context) {
 		if info.RecentGroupID == "" && strings.TrimSpace(event.GroupID) != "" {
 			info.RecentGroupID = strings.TrimSpace(event.GroupID)
 		}
-		if info.RecentUserID == "" && strings.TrimSpace(event.UserID) != "" && strings.TrimSpace(event.UserID) != info.BotQQ {
+		if info.RecentUserID == "" && strings.TrimSpace(event.UserID) != "" && strings.TrimSpace(event.UserID) != info.BotAccount {
 			info.RecentUserID = strings.TrimSpace(event.UserID)
 		}
 		if info.RecentGroupID != "" && info.RecentUserID != "" {
@@ -315,7 +315,7 @@ func (h *QQBotHandler) autoInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, info)
 }
 
-func autoGroupsFromOneBotData(data map[string]any) []qqbotAutoGroupInfo {
+func autoGroupsFromOneBotData(data map[string]any) []botAutoGroupInfo {
 	for _, key := range []string{"items", "list", "groups"} {
 		if groups := autoGroupsFromAny(data[key]); len(groups) > 0 {
 			return groups
@@ -327,10 +327,10 @@ func autoGroupsFromOneBotData(data map[string]any) []qqbotAutoGroupInfo {
 	return autoGroupsFromAny(data)
 }
 
-func autoGroupsFromAny(value any) []qqbotAutoGroupInfo {
+func autoGroupsFromAny(value any) []botAutoGroupInfo {
 	switch typed := value.(type) {
 	case []any:
-		groups := make([]qqbotAutoGroupInfo, 0, len(typed))
+		groups := make([]botAutoGroupInfo, 0, len(typed))
 		for _, item := range typed {
 			if group := autoGroupFromAny(item); group.GroupID != "" {
 				groups = append(groups, group)
@@ -338,7 +338,7 @@ func autoGroupsFromAny(value any) []qqbotAutoGroupInfo {
 		}
 		return groups
 	case []map[string]any:
-		groups := make([]qqbotAutoGroupInfo, 0, len(typed))
+		groups := make([]botAutoGroupInfo, 0, len(typed))
 		for _, item := range typed {
 			if group := autoGroupFromMap(item); group.GroupID != "" {
 				groups = append(groups, group)
@@ -347,21 +347,21 @@ func autoGroupsFromAny(value any) []qqbotAutoGroupInfo {
 		return groups
 	case map[string]any:
 		if group := autoGroupFromMap(typed); group.GroupID != "" {
-			return []qqbotAutoGroupInfo{group}
+			return []botAutoGroupInfo{group}
 		}
 	}
 	return nil
 }
 
-func autoGroupFromAny(value any) qqbotAutoGroupInfo {
+func autoGroupFromAny(value any) botAutoGroupInfo {
 	if item, ok := value.(map[string]any); ok {
 		return autoGroupFromMap(item)
 	}
-	return qqbotAutoGroupInfo{}
+	return botAutoGroupInfo{}
 }
 
-func autoGroupFromMap(item map[string]any) qqbotAutoGroupInfo {
-	return qqbotAutoGroupInfo{
+func autoGroupFromMap(item map[string]any) botAutoGroupInfo {
+	return botAutoGroupInfo{
 		GroupID:        firstNonEmptyWebUI(stringFromAnyWebUI(item["group_id"]), stringFromAnyWebUI(item["id"])),
 		GroupName:      firstNonEmptyWebUI(stringFromAnyWebUI(item["group_name"]), stringFromAnyWebUI(item["name"])),
 		MemberCount:    intFromAnyWebUI(item["member_count"]),
@@ -369,7 +369,7 @@ func autoGroupFromMap(item map[string]any) qqbotAutoGroupInfo {
 	}
 }
 
-func (h *QQBotHandler) callGroupTestOneBot(c *gin.Context) {
+func (h *BotHandler) callGroupTestOneBot(c *gin.Context) {
 	var payload groupTestOneBotPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.onebot", err, "", nil)
@@ -391,7 +391,7 @@ func (h *QQBotHandler) callGroupTestOneBot(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"action": action, "result": result})
 }
 
-func (h *QQBotHandler) listTasks(c *gin.Context) {
+func (h *BotHandler) listTasks(c *gin.Context) {
 	if h.sqlite == nil {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.tasks.list", fmt.Errorf("task store is unavailable"), "", nil)
 		return
@@ -401,18 +401,18 @@ func (h *QQBotHandler) listTasks(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "assistant.tasks.list", err, "", nil)
 		return
 	}
-	out := make([]qqbotTaskPayload, 0, len(items))
+	out := make([]botTaskPayload, 0, len(items))
 	for _, item := range items {
-		out = append(out, qqbotTaskPayload{
+		out = append(out, botTaskPayload{
 			ID:                    item.ID,
-			Kind:                  qqbotTaskKind(item),
+			Kind:                  botTaskKind(item),
 			Platform:              item.Platform,
 			ProfileID:             item.ProfileID,
 			OwnerID:               item.OwnerID,
 			GroupID:               item.GroupID,
 			UserID:                item.UserID,
 			Message:               item.Message,
-			Status:                qqbotTaskStatus(item),
+			Status:                botTaskStatus(item),
 			TriggerAt:             item.TriggerAt,
 			IntervalSeconds:       item.IntervalSeconds,
 			LastRunAt:             item.LastRunAt,
@@ -449,10 +449,10 @@ func (h *QQBotHandler) listTasks(c *gin.Context) {
 		}
 		return out[i].ID < out[j].ID
 	})
-	c.JSON(http.StatusOK, qqbotTasksResponse{Items: out})
+	c.JSON(http.StatusOK, botTasksResponse{Items: out})
 }
 
-func (h *QQBotHandler) createRepositoryWatch(c *gin.Context) {
+func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.create", fmt.Errorf("repository watch runtime is unavailable"), "", nil)
@@ -509,10 +509,10 @@ func (h *QQBotHandler) createRepositoryWatch(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.repository_watch.create", "仓库更新订阅已创建", item.ID, map[string]any{"repository": item.Repository, "profile_id": item.ProfileID, "group_id": item.GroupID})
-	c.JSON(http.StatusCreated, qqbotTaskFromReminder(item))
+	c.JSON(http.StatusCreated, botTaskFromReminder(item))
 }
 
-func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
+func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.update", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
@@ -596,10 +596,10 @@ func (h *QQBotHandler) updateRepositoryWatch(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.repository_watch.update", "仓库更新订阅已更新", item.ID, map[string]any{"repository": item.Repository})
-	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
-func (h *QQBotHandler) cancelRepositoryWatch(c *gin.Context) {
+func (h *BotHandler) cancelRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.cancel", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
@@ -616,10 +616,10 @@ func (h *QQBotHandler) cancelRepositoryWatch(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.repository_watch.cancel", "仓库更新订阅已取消", item.ID, nil)
-	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
-func (h *QQBotHandler) runRepositoryWatch(c *gin.Context) {
+func (h *BotHandler) runRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.run", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
@@ -636,10 +636,10 @@ func (h *QQBotHandler) runRepositoryWatch(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.repository_watch.run", "仓库更新订阅已安排立即检查", item.ID, map[string]any{"repository": item.Repository})
-	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
-func (h *QQBotHandler) deleteRepositoryWatch(c *gin.Context) {
+func (h *BotHandler) deleteRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.delete", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
@@ -663,7 +663,7 @@ func (h *QQBotHandler) deleteRepositoryWatch(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (h *QQBotHandler) createRSSWatch(c *gin.Context) {
+func (h *BotHandler) createRSSWatch(c *gin.Context) {
 	manager, ok := h.runtime.(rssWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.create", fmt.Errorf("rss watch runtime is unavailable"), "", nil)
@@ -712,10 +712,10 @@ func (h *QQBotHandler) createRSSWatch(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.rss_watch.create", "RSS 订阅已创建", item.ID, map[string]any{"feed_url": item.FeedURL, "profile_id": item.ProfileID})
-	c.JSON(http.StatusCreated, qqbotTaskFromReminder(item))
+	c.JSON(http.StatusCreated, botTaskFromReminder(item))
 }
 
-func (h *QQBotHandler) updateRSSWatch(c *gin.Context) {
+func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 	manager, ok := h.runtime.(rssWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.update", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
@@ -740,10 +740,10 @@ func (h *QQBotHandler) updateRSSWatch(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.rss_watch.update", "RSS 订阅已更新", item.ID, map[string]any{"feed_url": item.FeedURL})
-	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
-func (h *QQBotHandler) cancelRSSWatch(c *gin.Context) {
+func (h *BotHandler) cancelRSSWatch(c *gin.Context) {
 	manager, ok := h.runtime.(rssWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.cancel", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
@@ -760,10 +760,10 @@ func (h *QQBotHandler) cancelRSSWatch(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.rss_watch.cancel", "RSS 订阅已取消", item.ID, nil)
-	c.JSON(http.StatusOK, qqbotTaskFromReminder(item))
+	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
-func (h *QQBotHandler) deleteRSSWatch(c *gin.Context) {
+func (h *BotHandler) deleteRSSWatch(c *gin.Context) {
 	manager, ok := h.runtime.(rssWatchRuntime)
 	if !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.delete", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
@@ -796,7 +796,7 @@ func firstNonEmptyWeb(values ...string) string {
 	return ""
 }
 
-func (h *QQBotHandler) repositoryWatchProfile(profileID string) (assistant.BotConfig, assistant.ProfileSet, error) {
+func (h *BotHandler) repositoryWatchProfile(profileID string) (assistant.BotConfig, assistant.ProfileSet, error) {
 	set := h.profiles.Profiles().WithDefaults()
 	profileID = strings.TrimSpace(profileID)
 	if profileID == "" {
@@ -817,11 +817,11 @@ func repositoryWatchContextNamespace(set assistant.ProfileSet, profileID string)
 	return ""
 }
 
-func (h *QQBotHandler) repositoryWatchOwner(id string) (string, error) {
+func (h *BotHandler) repositoryWatchOwner(id string) (string, error) {
 	return h.taskOwner(id, assistant.ReminderKindRepositoryWatch, "仓库更新订阅")
 }
 
-func (h *QQBotHandler) taskOwner(id string, kind assistant.ReminderKind, label string) (string, error) {
+func (h *BotHandler) taskOwner(id string, kind assistant.ReminderKind, label string) (string, error) {
 	if h.sqlite == nil {
 		return "", fmt.Errorf("task store is unavailable")
 	}
@@ -837,11 +837,11 @@ func (h *QQBotHandler) taskOwner(id string, kind assistant.ReminderKind, label s
 	return "", fmt.Errorf("%s %s 不存在", label, id)
 }
 
-func qqbotTaskFromReminder(item assistant.Reminder) qqbotTaskPayload {
-	return qqbotTaskPayload{
-		ID: item.ID, Kind: qqbotTaskKind(item), Platform: item.Platform, ProfileID: item.ProfileID,
+func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
+	return botTaskPayload{
+		ID: item.ID, Kind: botTaskKind(item), Platform: item.Platform, ProfileID: item.ProfileID,
 		OwnerID: item.OwnerID, GroupID: item.GroupID, UserID: item.UserID, Message: item.Message,
-		Status: qqbotTaskStatus(item), TriggerAt: item.TriggerAt, IntervalSeconds: item.IntervalSeconds,
+		Status: botTaskStatus(item), TriggerAt: item.TriggerAt, IntervalSeconds: item.IntervalSeconds,
 		LastRunAt: item.LastRunAt, CancelledAt: item.CancelledAt, LastError: item.LastError,
 		ConsecutiveFailures: item.ConsecutiveFailures, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != "",
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
@@ -877,7 +877,7 @@ func repositoryWatchTargetsFromPayload(values []repositoryWatchTargetPayload, pr
 	return targets
 }
 
-func qqbotTaskKind(item assistant.Reminder) string {
+func botTaskKind(item assistant.Reminder) string {
 	if item.Kind == assistant.ReminderKindRSSWatch && item.IntervalSeconds > 0 {
 		return "rss_watch"
 	}
@@ -890,7 +890,7 @@ func qqbotTaskKind(item assistant.Reminder) string {
 	return "reminder"
 }
 
-func qqbotTaskStatus(item assistant.Reminder) string {
+func botTaskStatus(item assistant.Reminder) string {
 	if !item.CancelledAt.IsZero() {
 		return "cancelled"
 	}
@@ -919,7 +919,7 @@ func taskConsumesQuota(item assistant.Reminder) bool {
 	return item.LastRunAt.IsZero() && item.CancelledAt.IsZero()
 }
 
-func (h *QQBotHandler) recallGroupTestMessage(c *gin.Context) {
+func (h *BotHandler) recallGroupTestMessage(c *gin.Context) {
 	var payload groupTestRecallPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", err, "", nil)
@@ -935,11 +935,11 @@ func (h *QQBotHandler) recallGroupTestMessage(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", err, messageID, map[string]any{"message_id": messageID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.recall", "QQ群测试消息已撤回", messageID, map[string]any{"message_id": messageID})
+	recordRequestOperation(c, h.logs, "assistant.group_test.recall", "群测试消息已撤回", messageID, map[string]any{"message_id": messageID})
 	c.JSON(http.StatusOK, groupTestRecallResponse{MessageID: messageID, Recalled: true, Result: result})
 }
 
-func (h *QQBotHandler) parseGroupTestFile(c *gin.Context) {
+func (h *BotHandler) parseGroupTestFile(c *gin.Context) {
 	var payload groupTestFilePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", err, "", nil)
@@ -988,7 +988,7 @@ func (h *QQBotHandler) parseGroupTestFile(c *gin.Context) {
 			ProfileID: testCfg.ID,
 			Segments:  []assistant.MessageSegment{{Type: "file", Data: segmentData}},
 		},
-		Text: "QQ群文件解析测试",
+		Text: "群文件解析测试",
 	})
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", err, logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
@@ -1022,7 +1022,7 @@ func (h *QQBotHandler) parseGroupTestFile(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("file parser returned no result"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.file", "QQ群文件解析测试完成", logTarget, map[string]any{"group_id": groupID, "file_id": fileID, "name": name})
+	recordRequestOperation(c, h.logs, "assistant.group_test.file", "群文件解析测试完成", logTarget, map[string]any{"group_id": groupID, "file_id": fileID, "name": name})
 	c.JSON(http.StatusOK, groupTestFileResponse{GroupID: groupID, FileID: fileID, Name: name, Context: contextText})
 }
 
@@ -1097,7 +1097,7 @@ func intFromAnyWebUI(value any) int {
 }
 
 type runtimeAPICallChannel struct {
-	runtime QQBotRuntime
+	runtime BotRuntime
 }
 
 func (c runtimeAPICallChannel) Connect(context.Context, assistant.EventHandler) error { return nil }

@@ -11,25 +11,25 @@ import (
 	"github.com/SuInk/diana/model/storage"
 )
 
-type QQBotProfileStore interface {
+type BotProfileStore interface {
 	Current() assistant.BotConfig
 	Profiles() assistant.ProfileSet
 	SaveProfiles(assistant.ProfileSet)
 	SaveCurrentConfig(assistant.BotConfig)
 }
 
-type MemoryQQBotProfileStore struct {
+type MemoryBotProfileStore struct {
 	mu   sync.RWMutex
 	data assistant.ProfileSet
 }
 
-// NewMemoryQQBotProfileStore 创建内存版 QQ 机器人配置集存储。
-func NewMemoryQQBotProfileStore(cfg assistant.BotConfig) *MemoryQQBotProfileStore {
-	return &MemoryQQBotProfileStore{data: assistant.NewProfileSet(cfg)}
+// NewMemoryBotProfileStore 创建内存版 OneBot v11 机器人配置集存储。
+func NewMemoryBotProfileStore(cfg assistant.BotConfig) *MemoryBotProfileStore {
+	return &MemoryBotProfileStore{data: assistant.NewProfileSet(cfg)}
 }
 
 // Current 返回内存存储中的当前机器人配置。
-func (s *MemoryQQBotProfileStore) Current() assistant.BotConfig {
+func (s *MemoryBotProfileStore) Current() assistant.BotConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if profile, ok := s.data.Current(); ok {
@@ -39,47 +39,47 @@ func (s *MemoryQQBotProfileStore) Current() assistant.BotConfig {
 }
 
 // Profiles 返回内存存储中的机器人配置集。
-func (s *MemoryQQBotProfileStore) Profiles() assistant.ProfileSet {
+func (s *MemoryBotProfileStore) Profiles() assistant.ProfileSet {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.WithDefaults()
 }
 
 // SaveProfiles 更新内存中的机器人配置集。
-func (s *MemoryQQBotProfileStore) SaveProfiles(set assistant.ProfileSet) {
+func (s *MemoryBotProfileStore) SaveProfiles(set assistant.ProfileSet) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = set.WithDefaults()
 }
 
 // SaveCurrentConfig 把运行时当前配置写回当前激活的机器人档案。
-func (s *MemoryQQBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) {
+func (s *MemoryBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data = upsertCurrentQQBotProfileSet(s.data, cfg)
+	s.data = upsertCurrentBotProfileSet(s.data, cfg)
 }
 
-type PersistentQQBotProfileStore struct {
+type PersistentBotProfileStore struct {
 	mu    sync.RWMutex
 	data  assistant.ProfileSet
 	store *storage.SQLiteStore
 	ctx   context.Context
 }
 
-// NewPersistentQQBotProfileStore 创建 SQLite 持久化版 QQ 机器人配置集存储。
-func NewPersistentQQBotProfileStore(ctx context.Context, store *storage.SQLiteStore, fallback assistant.BotConfig) (*PersistentQQBotProfileStore, error) {
+// NewPersistentBotProfileStore 创建 SQLite 持久化版 OneBot v11 机器人配置集存储。
+func NewPersistentBotProfileStore(ctx context.Context, store *storage.SQLiteStore, fallback assistant.BotConfig) (*PersistentBotProfileStore, error) {
 	data := assistant.NewProfileSet(fallback)
-	if saved, ok, err := store.LoadQQBotProfiles(ctx); err != nil {
+	if saved, ok, err := store.LoadBotProfiles(ctx); err != nil {
 		return nil, err
 	} else if ok && len(saved.Profiles) > 0 {
 		data = saved.WithDefaults()
-	} else if savedCfg, ok, err := store.LoadQQBotConfig(ctx); err != nil {
+	} else if savedCfg, ok, err := store.LoadBotProfileConfig(ctx); err != nil {
 		return nil, err
 	} else if ok {
 		// 兼容旧版只有单个 qqbot_config 的数据库，首次启动时自动升级为配置集。
 		data = assistant.NewProfileSet(savedCfg)
 	}
-	return &PersistentQQBotProfileStore{
+	return &PersistentBotProfileStore{
 		data:  data.WithDefaults(),
 		store: store,
 		ctx:   ctx,
@@ -87,7 +87,7 @@ func NewPersistentQQBotProfileStore(ctx context.Context, store *storage.SQLiteSt
 }
 
 // Current 返回持久化存储中的当前机器人配置。
-func (s *PersistentQQBotProfileStore) Current() assistant.BotConfig {
+func (s *PersistentBotProfileStore) Current() assistant.BotConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if profile, ok := s.data.Current(); ok {
@@ -97,42 +97,42 @@ func (s *PersistentQQBotProfileStore) Current() assistant.BotConfig {
 }
 
 // Profiles 返回持久化存储中的机器人配置集。
-func (s *PersistentQQBotProfileStore) Profiles() assistant.ProfileSet {
+func (s *PersistentBotProfileStore) Profiles() assistant.ProfileSet {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.WithDefaults()
 }
 
 // SaveProfiles 保存机器人配置集并同步旧版 flat 配置。
-func (s *PersistentQQBotProfileStore) SaveProfiles(set assistant.ProfileSet) {
+func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) {
 	set = set.WithDefaults()
 	s.mu.Lock()
 	s.data = set
 	s.mu.Unlock()
 	if s.store != nil {
-		_ = s.store.SaveQQBotProfiles(s.ctx, set)
+		_ = s.store.SaveBotProfiles(s.ctx, set)
 		if profile, ok := set.Current(); ok {
-			_ = s.store.SaveQQBotConfig(s.ctx, profile)
+			_ = s.store.SaveBotProfileConfig(s.ctx, profile)
 		}
 	}
 }
 
 // SaveCurrentConfig 把运行时当前配置回写到激活中的机器人配置档。
-func (s *PersistentQQBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) {
+func (s *PersistentBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) {
 	s.mu.Lock()
-	s.data = upsertCurrentQQBotProfileSet(s.data, cfg)
+	s.data = upsertCurrentBotProfileSet(s.data, cfg)
 	set := s.data
 	s.mu.Unlock()
 	if s.store != nil {
-		_ = s.store.SaveQQBotProfiles(s.ctx, set)
+		_ = s.store.SaveBotProfiles(s.ctx, set)
 		if profile, ok := set.Current(); ok {
-			_ = s.store.SaveQQBotConfig(s.ctx, profile)
+			_ = s.store.SaveBotProfileConfig(s.ctx, profile)
 		}
 	}
 }
 
-// upsertCurrentQQBotProfileSet 用最新运行态覆盖当前激活的机器人配置档。
-func upsertCurrentQQBotProfileSet(set assistant.ProfileSet, cfg assistant.BotConfig) assistant.ProfileSet {
+// upsertCurrentBotProfileSet 用最新运行态覆盖当前激活的机器人配置档。
+func upsertCurrentBotProfileSet(set assistant.ProfileSet, cfg assistant.BotConfig) assistant.ProfileSet {
 	set = set.WithDefaults()
 	current, ok := set.Current()
 	if cfg.ID == "" && ok {

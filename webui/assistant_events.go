@@ -53,7 +53,7 @@ type assistantEventTraceResponse struct {
 	Steps     []storage.AppLogEntry `json:"steps"`
 }
 
-func (h *QQBotHandler) eventTrace(c *gin.Context) {
+func (h *BotHandler) eventTrace(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "事件存储未配置"})
 		return
@@ -75,7 +75,7 @@ func (h *QQBotHandler) eventTrace(c *gin.Context) {
 	})
 }
 
-func (h *QQBotHandler) eventImage(c *gin.Context) {
+func (h *BotHandler) eventImage(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "事件存储未配置"})
 		return
@@ -163,7 +163,7 @@ func eventRasterImageContentType(contentType string) (string, bool) {
 	}
 }
 
-func (h *QQBotHandler) listEvents(c *gin.Context) {
+func (h *BotHandler) listEvents(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "事件存储未配置"})
 		return

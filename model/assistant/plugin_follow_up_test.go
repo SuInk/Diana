@@ -13,7 +13,7 @@ func TestPluginFollowUpAddsNaturalComment(t *testing.T) {
 	// 插件把内容发出去之后，机器人应该像群友那样再接一句。
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{"这个我看过，确实好笑"}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}
@@ -48,7 +48,7 @@ func TestPluginFollowUpAddsNaturalComment(t *testing.T) {
 func TestPluginFollowUpStaysQuietWhenNotRequested(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{"不该出现"}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}
@@ -62,7 +62,7 @@ func TestPluginFollowUpSkipsWhenModelHasNothingToSay(t *testing.T) {
 	// 没什么可说时模型回 SKIP，不该把这个词发到群里。
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{"SKIP"}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}
@@ -87,7 +87,7 @@ func TestResolverReplyDropsModelFacingLabel(t *testing.T) {
 func TestResolverStaysSilentWithNothingToSend(t *testing.T) {
 	// 触发了却没提取到内容属于诊断信息，不该当成发言播报到群里。
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}
 
 	reply, err := runtime.replyWithResolverOnly(context.Background(), event, "https://example.com/nothing")
@@ -110,7 +110,7 @@ func TestResolverStaysSilentWithNothingToSend(t *testing.T) {
 func TestFollowUpPromptsDefaultToSilenceAndNameTheFillerModes(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{"SKIP"}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}

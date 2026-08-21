@@ -75,7 +75,7 @@ func NewVoiceSTTPlugin(client *http.Client) *VoiceSTTPlugin {
 func (p *VoiceSTTPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID: voiceSTTPluginID, Name: "语音识别", Version: "0.1.0",
-		Description: "将收到的 QQ 语音转写为内部对话文本；支持本地 Whisper 和 OpenAI 兼容音频转写接口。",
+		Description: "将收到的 语音转写为内部对话文本；支持本地 Whisper 和 OpenAI 兼容音频转写接口。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "network:http", "filesystem:temp", "process:media"},
 		Settings: []PluginSettingSpec{
@@ -597,5 +597,5 @@ func (r *Runtime) recordVoiceSTT(ctx context.Context, event MessageEvent, segmen
 	if writer == nil {
 		return
 	}
-	_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "qqbot.voice.stt", Message: "语音识别已处理", Actor: qqEventActor(event), Target: event.MessageID, Metadata: map[string]any{"backend": cfg.Backend, "model": cfg.Model, "duration_ms": duration.Milliseconds(), "latency_ms": latency.Milliseconds(), "cache_hit": cacheHit, "error_code": errorCode, "format": filepath.Ext(firstNonEmpty(segment.Data["file"], segment.Data["path"])), "audio_sha256": segment.Data[voiceSTTAudioHashKey]}})
+	_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "chatbot.voice.stt", Message: "语音识别已处理", Actor: oneBotEventActor(event), Target: event.MessageID, Metadata: map[string]any{"backend": cfg.Backend, "model": cfg.Model, "duration_ms": duration.Milliseconds(), "latency_ms": latency.Milliseconds(), "cache_hit": cacheHit, "error_code": errorCode, "format": filepath.Ext(firstNonEmpty(segment.Data["file"], segment.Data["path"])), "audio_sha256": segment.Data[voiceSTTAudioHashKey]}})
 }

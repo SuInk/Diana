@@ -130,7 +130,7 @@ func normalizePluginSettings(specs []PluginSettingSpec, values map[string]any) (
 	for key, raw := range values {
 		spec, ok := byKey[key]
 		if !ok {
-			return nil, fmt.Errorf("qqbot: unknown plugin setting %q", key)
+			return nil, fmt.Errorf("chatbot: unknown plugin setting %q", key)
 		}
 		value, err := normalizeSettingValue(spec, raw)
 		if err != nil {
@@ -174,7 +174,7 @@ func normalizeGroupPluginSettings(specs []PluginSettingSpec, values map[string]a
 	secrets := secretSettingKeys(specs)
 	for key := range values {
 		if secrets[key] {
-			return nil, fmt.Errorf("qqbot: secret plugin setting %q cannot be overridden per group", key)
+			return nil, fmt.Errorf("chatbot: secret plugin setting %q cannot be overridden per group", key)
 		}
 	}
 	return normalizePluginSettings(nonSecretPluginSettingSpecs(specs), values)
@@ -202,13 +202,13 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 	case PluginSettingTypeBool:
 		value, ok := raw.(bool)
 		if !ok {
-			return nil, fmt.Errorf("qqbot: setting %q expects a boolean", spec.Key)
+			return nil, fmt.Errorf("chatbot: setting %q expects a boolean", spec.Key)
 		}
 		return value, nil
 	case PluginSettingTypeNumber:
 		number, ok := numberValue(raw)
 		if !ok {
-			return nil, fmt.Errorf("qqbot: setting %q expects a number", spec.Key)
+			return nil, fmt.Errorf("chatbot: setting %q expects a number", spec.Key)
 		}
 		if spec.Min != nil && number < *spec.Min {
 			number = *spec.Min
@@ -233,24 +233,24 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 	case PluginSettingTypeString:
 		value, ok := raw.(string)
 		if !ok {
-			return nil, fmt.Errorf("qqbot: setting %q expects a string", spec.Key)
+			return nil, fmt.Errorf("chatbot: setting %q expects a string", spec.Key)
 		}
 		return strings.TrimSpace(value), nil
 	case PluginSettingTypeSelect:
 		value, ok := raw.(string)
 		if !ok {
-			return nil, fmt.Errorf("qqbot: setting %q expects a string option", spec.Key)
+			return nil, fmt.Errorf("chatbot: setting %q expects a string option", spec.Key)
 		}
 		for _, option := range spec.Options {
 			if option.Value == value {
 				return value, nil
 			}
 		}
-		return nil, fmt.Errorf("qqbot: setting %q got unsupported option %q", spec.Key, value)
+		return nil, fmt.Errorf("chatbot: setting %q got unsupported option %q", spec.Key, value)
 	case PluginSettingTypeMultiSelect:
 		items, err := stringSliceValue(raw)
 		if err != nil {
-			return nil, fmt.Errorf("qqbot: setting %q expects a string array", spec.Key)
+			return nil, fmt.Errorf("chatbot: setting %q expects a string array", spec.Key)
 		}
 		allowed := make(map[string]bool, len(spec.Options))
 		for _, option := range spec.Options {
@@ -260,7 +260,7 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 		seen := map[string]bool{}
 		for _, item := range items {
 			if !allowed[item] {
-				return nil, fmt.Errorf("qqbot: setting %q got unsupported option %q", spec.Key, item)
+				return nil, fmt.Errorf("chatbot: setting %q got unsupported option %q", spec.Key, item)
 			}
 			if !seen[item] {
 				seen[item] = true
@@ -269,7 +269,7 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 		}
 		return out, nil
 	default:
-		return nil, fmt.Errorf("qqbot: setting %q has unsupported type %q", spec.Key, spec.Type)
+		return nil, fmt.Errorf("chatbot: setting %q has unsupported type %q", spec.Key, spec.Type)
 	}
 }
 

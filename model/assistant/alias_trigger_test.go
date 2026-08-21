@@ -74,10 +74,10 @@ func TestMatchedAliasesInTextRespectsASCIIWordBoundary(t *testing.T) {
 }
 
 func TestMatchedAliasesInTextNonASCIIAliasIgnoresWordBoundary(t *testing.T) {
-	if got := matchedAliasesInText("嘉然帮我看看", []string{"嘉然"}, AliasTriggerSmart); len(got) == 0 {
+	if got := matchedAliasesInText("小满帮我看看", []string{"小满"}, AliasTriggerSmart); len(got) == 0 {
 		t.Fatal("中文称呼没有词边界概念，应正常命中")
 	}
-	if got := matchedAliasesInText("嘉然刚才说的那个", []string{"嘉然"}, AliasTriggerSmart); len(got) != 0 {
+	if got := matchedAliasesInText("小满刚才说的那个", []string{"小满"}, AliasTriggerSmart); len(got) != 0 {
 		t.Fatalf("中文称呼同样要能识别谈论语境，命中 %v", got)
 	}
 }

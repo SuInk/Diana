@@ -144,7 +144,7 @@ func (r *Runtime) enrichRecallImageDescriptions(ctx context.Context, event Messa
 		}
 		record, ok, err := store.GetImageDescription(ctx, target.contentSHA256)
 		if err != nil {
-			log.Printf("qqbot recall image description cache load failed: %v", err)
+			log.Printf("chatbot recall image description cache load failed: %v", err)
 			continue
 		}
 		if ok && strings.TrimSpace(record.Description) != "" {
@@ -367,7 +367,7 @@ func (r *Runtime) runHistoryImageDescription(event MessageEvent, hash, source st
 		time.AfterFunc(historyImageDescriptionIdlePoll, func() { r.enqueueHistoryImageDescriptions(event) })
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("qqbot history image description failed: message_id=%s err=%v", event.MessageID, err)
+		log.Printf("chatbot history image description failed: message_id=%s err=%v", event.MessageID, err)
 	}
 }
 
@@ -524,7 +524,7 @@ func (r *Runtime) recallDescriptionTimeline(ctx context.Context, event MessageEv
 	defer cancel()
 	loaded, err := timelineStore.ListMessageEventsBetween(loadCtx, sessionKey(event), fromTime, throughTime)
 	if err != nil {
-		log.Printf("qqbot recall image description timeline load failed: %v", err)
+		log.Printf("chatbot recall image description timeline load failed: %v", err)
 		return inMemory
 	}
 	return mergeMessageTimelines(loaded, inMemory)
@@ -552,8 +552,8 @@ func mergeMessageTimelines(primary, secondary []MessageEvent) []MessageEvent {
 }
 
 func recallDescriptionBotMessage(event MessageEvent, cfg BotConfig) bool {
-	botQQ := strings.TrimSpace(cfg.BotQQ)
-	if botQQ != "" && strings.TrimSpace(event.UserID) == botQQ {
+	botAccount := strings.TrimSpace(cfg.BotAccount)
+	if botAccount != "" && strings.TrimSpace(event.UserID) == botAccount {
 		return true
 	}
 	return strings.TrimSpace(cfg.Name) != "" && strings.TrimSpace(event.SenderName) == strings.TrimSpace(cfg.Name)
@@ -621,7 +621,7 @@ func (r *Runtime) describeMissingRecallImages(ctx context.Context, event Message
 
 	for result := range results {
 		if result.err != nil {
-			log.Printf("qqbot recall image description failed: message_id=%s err=%v", firstNonEmpty(result.target.sourceMessageIDs...), result.err)
+			log.Printf("chatbot recall image description failed: message_id=%s err=%v", firstNonEmpty(result.target.sourceMessageIDs...), result.err)
 			continue
 		}
 		result.target.description = compactRecallImageDescription(result.description)
@@ -683,6 +683,6 @@ func (r *Runtime) saveRecallImageDescription(target *recallImageTarget, event Me
 		Source:          target.descriptionSource,
 		Version:         recallImageDescriptionVersion,
 	}); err != nil {
-		log.Printf("qqbot recall image description cache save failed: %v", err)
+		log.Printf("chatbot recall image description cache save failed: %v", err)
 	}
 }

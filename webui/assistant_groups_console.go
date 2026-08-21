@@ -18,7 +18,7 @@ import (
 )
 
 // 控制台群管理接口：走全局登录鉴权，登录用户即管理员，
-// 无需再经过 QQ 验证码流程（该流程保留给群管自助场景）。
+// 无需再经过登录验证码流程（该流程保留给群管自助场景）。
 
 type consoleGroupsResponse struct {
 	Groups        []consoleGroupItem      `json:"groups"`
@@ -42,7 +42,7 @@ type consoleGroupSavePayload struct {
 }
 
 // registerConsoleGroupRoutes 注册控制台群配置直连路由。
-func (h *QQBotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
+func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 	for _, base := range []string{"/api/assistant", "/api/qqbot"} {
 		router.GET(base+"/groups", h.listConsoleGroups)
 		router.POST(base+"/groups", h.saveConsoleGroup)
@@ -50,7 +50,7 @@ func (h *QQBotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 }
 
 // listConsoleGroups 返回机器人已加入的群、已保存群配置与插件清单。
-func (h *QQBotHandler) listConsoleGroups(c *gin.Context) {
+func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	base := h.runtime.Config()
 	set := h.groupConfigs.Groups()
 	refresh := queryBool(c.Query("refresh"))
@@ -73,22 +73,22 @@ var (
 )
 
 type liveGroupListCache struct {
-	groups    []qqbotAutoGroupInfo
+	groups    []botAutoGroupInfo
 	available bool
 	warning   string
 	fetchedAt time.Time
 }
 
-func cloneLiveGroups(groups []qqbotAutoGroupInfo) []qqbotAutoGroupInfo {
+func cloneLiveGroups(groups []botAutoGroupInfo) []botAutoGroupInfo {
 	if len(groups) == 0 {
 		return nil
 	}
-	out := make([]qqbotAutoGroupInfo, len(groups))
+	out := make([]botAutoGroupInfo, len(groups))
 	copy(out, groups)
 	return out
 }
 
-func (h *QQBotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]qqbotAutoGroupInfo, bool, string) {
+func (h *BotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]botAutoGroupInfo, bool, string) {
 	if h == nil {
 		return nil, false, "机器人尚未连接，暂时只显示已保存的群配置"
 	}
@@ -130,7 +130,7 @@ func (h *QQBotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]q
 	return liveGroups, true, ""
 }
 
-func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []qqbotAutoGroupInfo) []consoleGroupItem {
+func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []botAutoGroupInfo) []consoleGroupItem {
 	saved := make(map[string]assistant.GroupConfig, len(set.Groups))
 	for _, cfg := range set.Groups {
 		groupID := strings.TrimSpace(cfg.GroupID)
@@ -157,7 +157,7 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		items = append(items, consoleGroupItem{
 			GroupConfig:    cfg.WithDefaults(groupID, base),
 			GroupName:      strings.TrimSpace(live.GroupName),
-			AvatarURL:      assistant.QQGroupAvatarURL(groupID),
+			AvatarURL:      assistant.OneBotGroupAvatarURL(groupID),
 			MemberCount:    live.MemberCount,
 			MaxMemberCount: live.MaxMemberCount,
 			Configured:     configured,
@@ -168,7 +168,7 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 	for groupID, cfg := range saved {
 		items = append(items, consoleGroupItem{
 			GroupConfig: cfg,
-			AvatarURL:   assistant.QQGroupAvatarURL(groupID),
+			AvatarURL:   assistant.OneBotGroupAvatarURL(groupID),
 			Configured:  true,
 			Joined:      false,
 		})
@@ -195,7 +195,7 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 }
 
 // saveConsoleGroup 创建或更新单个群配置。
-func (h *QQBotHandler) saveConsoleGroup(c *gin.Context) {
+func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 	var payload consoleGroupSavePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, "", nil)

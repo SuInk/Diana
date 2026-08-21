@@ -176,19 +176,19 @@ func TestDianaOneBotV11ToolRejectsInvalidInputAndUnavailablePlugin(t *testing.T)
 }
 
 func TestDianaOneBotV11ToolRoutesToSourceProfile(t *testing.T) {
-	qqChannel := &recordingChannel{apiResponses: map[string]map[string]any{"get_status": {"online": true}}}
+	oneBotChannel := &recordingChannel{apiResponses: map[string]map[string]any{"get_status": {"online": true}}}
 	tgChannel := &recordingChannel{}
 	multi := NewMultiChannel([]ChannelBinding{
-		{ProfileID: "qq-main", Platform: PlatformOneBotV11, Channel: qqChannel},
+		{ProfileID: "onebot-main", Platform: PlatformOneBotV11, Channel: oneBotChannel},
 		{ProfileID: "tg-main", Platform: PlatformTelegram, Channel: tgChannel},
 	})
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, multi, NewDefaultPluginManager(), nil, nil, nil, nil)
-	tool := newDianaOneBotV11Tool(runtime, MessageEvent{ProfileID: "qq-main", Platform: PlatformOneBotV11, UserID: "owner"})
+	tool := newDianaOneBotV11Tool(runtime, MessageEvent{ProfileID: "onebot-main", Platform: PlatformOneBotV11, UserID: "owner"})
 	if _, err := tool.Run(context.Background(), map[string]any{"action": "get_status"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(qqChannel.callsSnapshot()) != 1 || len(tgChannel.callsSnapshot()) != 0 {
-		t.Fatalf("qq calls=%#v tg calls=%#v", qqChannel.callsSnapshot(), tgChannel.callsSnapshot())
+	if len(oneBotChannel.callsSnapshot()) != 1 || len(tgChannel.callsSnapshot()) != 0 {
+		t.Fatalf("qq calls=%#v tg calls=%#v", oneBotChannel.callsSnapshot(), tgChannel.callsSnapshot())
 	}
 }
 

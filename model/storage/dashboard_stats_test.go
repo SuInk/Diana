@@ -59,9 +59,9 @@ func TestDashboardStatsForDayTotalsCurrentAndLegacyLLMUsage(t *testing.T) {
 
 	now := time.Date(2026, time.July, 19, 15, 30, 0, 0, time.Local)
 	for _, entry := range []AppLogEntry{
-		{Action: "qqbot.llm_usage", CreatedAt: now.Add(-time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 80, "output_tokens": 20}},
+		{Action: "chatbot.llm_usage", CreatedAt: now.Add(-time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 80, "output_tokens": 20}},
 		{Action: "assistant.llm_usage", CreatedAt: now.Add(-2 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 30, "output_tokens": 10, "total_tokens": 45}},
-		{Action: "qqbot.llm_usage", CreatedAt: now.Add(-24 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 1000, "output_tokens": 1000}},
+		{Action: "chatbot.llm_usage", CreatedAt: now.Add(-24 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 1000, "output_tokens": 1000}},
 	} {
 		if err := store.AppendLog(ctx, entry); err != nil {
 			t.Fatal(err)

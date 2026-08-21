@@ -32,7 +32,7 @@ type assistantUserDetailResponse struct {
 }
 
 // listAssistantUsers 返回机器人记住的人员画像列表，供控制台人员管理使用。
-func (h *QQBotHandler) listAssistantUsers(c *gin.Context) {
+func (h *BotHandler) listAssistantUsers(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "人员画像存储未配置"})
 		return
@@ -62,7 +62,7 @@ func (h *QQBotHandler) listAssistantUsers(c *gin.Context) {
 }
 
 // getAssistantUser 返回单个人员的长期记忆与好感度变更历史。
-func (h *QQBotHandler) getAssistantUser(c *gin.Context) {
+func (h *BotHandler) getAssistantUser(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "人员画像存储未配置"})
 		return

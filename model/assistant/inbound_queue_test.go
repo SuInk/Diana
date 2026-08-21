@@ -19,7 +19,7 @@ import (
 func TestRuntimeDurableInboxSurvivesRestartAndDeduplicates(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	event := queuedDirectTestEvent("incoming-1", time.Now().Unix())
-	ingestRuntime := NewRuntime(BotConfig{BotQQ: "42", GroupTriggers: []string{"Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	ingestRuntime := NewRuntime(BotConfig{BotAccount: "42", GroupTriggers: []string{"Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	ingestRuntime.SetInboundEventStore(store)
 	for i := 0; i < 2; i++ {
 		if err := ingestRuntime.HandleEvent(context.Background(), event); err != nil {
@@ -95,14 +95,14 @@ func TestRuntimeBackfillsMissedHistoryIntoDurableQueue(t *testing.T) {
 func TestHistoryBackfillBindsActiveProfileContext(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	channel := NewMultiChannel([]ChannelBinding{{
-		ProfileID: "qq-main",
+		ProfileID: "onebot-main",
 		Platform:  PlatformOneBotV11,
 		Channel:   newQueueTestChannel(),
 	}})
 	runtime := NewRuntime(BotConfig{
-		ID:       "qq-main",
-		Platform: PlatformOneBotV11,
-		BotQQ:    "42",
+		ID:         "onebot-main",
+		Platform:   PlatformOneBotV11,
+		BotAccount: "42",
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetInboundEventStore(store)
 
@@ -110,13 +110,13 @@ func TestHistoryBackfillBindsActiveProfileContext(t *testing.T) {
 	if !ok {
 		t.Fatal("history event was not parsed")
 	}
-	if event.ProfileID != "qq-main" || event.Platform != PlatformOneBotV11 || event.ContextNamespace != "qq-main" {
+	if event.ProfileID != "onebot-main" || event.Platform != PlatformOneBotV11 || event.ContextNamespace != "onebot-main" {
 		t.Fatalf("backfilled identity = profile:%q platform:%q namespace:%q", event.ProfileID, event.Platform, event.ContextNamespace)
 	}
 	if _, inserted, err := store.EnqueueInboundEvent(context.Background(), sessionKey(event), event); err != nil || !inserted {
 		t.Fatalf("enqueue backfilled event inserted=%v err=%v", inserted, err)
 	}
-	if !store.hasEvent("qq-main:group:123:901") {
+	if !store.hasEvent("onebot-main:group:123:901") {
 		t.Fatal("backfilled event entered the legacy unnamespaced session")
 	}
 }
@@ -205,11 +205,11 @@ func TestRuntimeObservesConnectionEpochChangesWithoutDisconnectedEdge(t *testing
 	defer runtime.Stop()
 
 	waitForCondition(t, 2*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.connection_opened")
+		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.connection_opened")
 	})
 	channel.bumpConnectionEpoch()
 	waitForCondition(t, 2*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.reconnected")
+		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.reconnected")
 	})
 }
 
@@ -285,13 +285,13 @@ func TestRuntimeBackfillsWhenAccountRecoversWithoutWSReconnect(t *testing.T) {
 	defer runtime.Stop()
 
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.backfill_completed")
+		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.backfill_completed")
 	})
 
 	// QQ 被风控：WS 连接保持，心跳报告账号离线。
 	channel.setAccountStatus(true, false, false)
 	waitForCondition(t, 2*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.account_offline")
+		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.account_offline")
 	})
 	if runtime.inboundProcessingReady() {
 		t.Fatal("inbound processing stayed ready while the account was offline")
@@ -305,7 +305,7 @@ func TestRuntimeBackfillsWhenAccountRecoversWithoutWSReconnect(t *testing.T) {
 	// 解封：账号恢复在线，epoch 与连接状态均未变化。
 	channel.setAccountStatus(true, true, true)
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.account_recovered")
+		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.account_recovered")
 	})
 	waitForCondition(t, 4*time.Second, func() bool {
 		return store.hasEvent("group:123:950")
@@ -325,7 +325,7 @@ func TestRuntimeManualBackfillRewindsWatermarkWithinWindow(t *testing.T) {
 	}
 	defer runtime.Stop()
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.backfill_completed")
+		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.backfill_completed")
 	})
 
 	// 这条消息早于当前水位，常规回补不会再看它，只有手动回退水位才能找回。
@@ -336,7 +336,7 @@ func TestRuntimeManualBackfillRewindsWatermarkWithinWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "qqbot.backfill_manual_requested")
+		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.backfill_manual_requested")
 	})
 	waitForCondition(t, 4*time.Second, func() bool {
 		return store.hasEvent("group:123:960")
@@ -369,7 +369,7 @@ func TestRuntimeManualBackfillDoesNotReplyToDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, 4*time.Second, func() bool {
-		return countAppLogAction(logs.entriesSnapshot(), "qqbot.backfill_completed") >= 2
+		return countAppLogAction(logs.entriesSnapshot(), "chatbot.backfill_completed") >= 2
 	})
 	time.Sleep(500 * time.Millisecond)
 	if got := channel.sentCount(); got != 1 {
@@ -535,7 +535,7 @@ func TestHistoryBackfillPaddingDoesNotExceedReplayCutoff(t *testing.T) {
 }
 
 func TestReplyToBotEntersSemanticAnswerabilityGate(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &capturingLLMProvider{}, nil
 	})
 	event := MessageEvent{
@@ -571,7 +571,7 @@ func TestProactiveReplyRouterUsesStrictSemanticTimeout(t *testing.T) {
 }
 
 func TestRuntimeAssignsInboundPriorities(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	tests := []struct {
 		name  string
 		event MessageEvent
@@ -619,7 +619,7 @@ func TestProactiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
 		},
 	}}
 	provider := &countingErrorLLMProvider{err: errors.New("502 Bad Gateway")}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ProactiveReplyChance: 1}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	var configuredModels []string
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
 		configuredModels = append(configuredModels, cfg.Model)
@@ -679,7 +679,7 @@ func newQueuedTestRuntime(channel Channel, store InboundEventStore, provider LLM
 	if provider != nil {
 		factory = func() (LLMProvider, error) { return provider, nil }
 	}
-	runtime := NewRuntime(BotConfig{Enabled: true, BotQQ: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, factory)
+	runtime := NewRuntime(BotConfig{Enabled: true, BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, factory)
 	runtime.SetInboundEventStore(store)
 	return runtime
 }

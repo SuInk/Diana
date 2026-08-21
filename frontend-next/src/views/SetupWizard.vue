@@ -180,7 +180,7 @@
             <span class="hint">填写 OneBot v11 客户端实际能访问的地址；Docker 或局域网部署时请修改主机名。自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
           </div>
           <div class="field">
-            <label for="wizard-owner">主人 QQ 号（可选）</label>
+            <label for="wizard-owner">主人账号（可选）</label>
             <input
               id="wizard-owner"
               v-model="botForm.owner_id"
@@ -188,7 +188,7 @@
               inputmode="numeric"
               placeholder="例如 123456789，用于管理指令和私聊登录"
             />
-            <span class="hint">不需要聊天内管理或 QQ 配对登录时可以留空。</span>
+            <span class="hint">不需要聊天内管理或配对登录时可以留空。</span>
           </div>
           <div class="field wide">
             <label for="wizard-token">OneBot Access Token（可选，至少 16 位）</label>
@@ -228,7 +228,7 @@
         </div>
         <p class="muted">
           现在给机器人发一条私聊消息，或在群里 @ 它试试。群聊触发词默认为
-          <code>嘉然</code>、<code>然然</code>、<code>Diana</code>。
+          <code>Diana</code>、<code>diana</code>。
         </p>
         <div class="cluster">
           <button class="btn primary" type="button" @click="finishSetup">
@@ -261,16 +261,16 @@ import { computed, onMounted, ref, watch } from "vue";
 import { CheckCircle2, ChevronLeft, ChevronRight, Copy, LayoutGrid, MessageCircle, Power, RefreshCw, Zap } from "@lucide/vue";
 import {
   getConfig,
-  getQQBotConfig,
+  getBotProfileConfig,
   listLLMModels,
   saveConfig,
-  saveQQBotConfig,
-  startQQBot,
+  saveBotProfileConfig,
+  startBot,
   testLLM,
   type LLMConfig,
   type LLMModelInfo,
   type Provider,
-  type QQBotConfig
+  type BotProfileConfig
 } from "../api";
 import { stream } from "../stream";
 import { navigate } from "../router";
@@ -294,7 +294,7 @@ const llmTestResult = ref("");
 const llmTestMessage = ref("hi");
 const selectedService = ref("openai");
 const savedLLM = ref<LLMConfig | null>(null);
-const savedBot = ref<QQBotConfig | null>(null);
+const savedBot = ref<BotProfileConfig | null>(null);
 const modelOptions = ref<LLMModelInfo[]>([]);
 const modelsLoading = ref(false);
 const modelsError = ref("");
@@ -465,18 +465,18 @@ async function saveBotAndStart(): Promise<void> {
   }
   busy.value = true;
   try {
-    const base = savedBot.value ?? (await getQQBotConfig());
-    const payload: QQBotConfig = {
+    const base = savedBot.value ?? (await getBotProfileConfig());
+    const payload: BotProfileConfig = {
       ...base,
       enabled: true,
       onebot_reverse_ws_endpoint: wsEndpoint.value,
-      bot_qq: base.bot_qq,
+      bot_account: base.bot_account,
       owner_id: botForm.value.owner_id.trim(),
       onebot_access_token: botForm.value.onebot_access_token.trim() || undefined,
       profiles: undefined
     };
-    savedBot.value = await saveQQBotConfig(payload);
-    await startQQBot();
+    savedBot.value = await saveBotProfileConfig(payload);
+    await startBot();
     toastSuccess("配置已保存，等待 OneBot v11 客户端连接");
     botForm.value.onebot_access_token = "";
   } catch (error) {
@@ -488,7 +488,7 @@ async function saveBotAndStart(): Promise<void> {
 
 onMounted(async () => {
   try {
-    const [llm, bot] = await Promise.all([getConfig(), getQQBotConfig()]);
+    const [llm, bot] = await Promise.all([getConfig(), getBotProfileConfig()]);
     savedLLM.value = llm;
     savedBot.value = bot;
     llmConfigured.value = Boolean(llm.api_key_configured);
@@ -523,7 +523,7 @@ function validWebSocketURL(value: string): boolean {
 
 watch([connected, selfID], ([isConnected, id]) => {
   if (isConnected && id && step.value === 1) {
-    toastSuccess(`已识别机器人 QQ：${id}`);
+    toastSuccess(`已识别机器人账号：${id}`);
     step.value = 2;
   }
 });

@@ -21,9 +21,9 @@ var (
 	publicErrorUnixPathPattern    = regexp.MustCompile(`(?:/Users|/home|/var|/private|/tmp)/[^\s"'<>]+`)
 )
 
-// publicQQErrorMessage keeps operational details in logs while returning only
-// a safe, useful summary to QQ users.
-func publicQQErrorMessage(err error) string {
+// publicChatErrorMessage keeps operational details in logs while returning only
+// a safe, useful summary to chat users.
+func publicChatErrorMessage(err error) string {
 	if err == nil {
 		return "请求处理失败，请稍后重试。"
 	}
