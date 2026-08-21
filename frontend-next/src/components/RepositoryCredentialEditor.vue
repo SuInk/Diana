@@ -15,7 +15,7 @@
     </div>
 
     <p v-if="!credentials.length" class="hint credential-empty">
-      还没有凭据。不添加也可以——所有仓库会使用下方的公共 Token。
+      还没有凭据。不添加也可以——所有仓库会使用上方的公共 Token。
     </p>
 
     <ul v-else class="credential-list">
@@ -104,6 +104,8 @@ watch(
 );
 
 const configured = computed(() => new Set(props.configuredIds ?? []));
+// 本次弹窗里被删掉、且服务端存过 Token 的凭据 ID；保存时要连 Token 一起清掉。
+const removedIDs = ref<Set<string>>(new Set());
 
 // 统计每条凭据被多少个仓库选用，删除前能看出影响面。
 function usageOf(id: string): string {
@@ -130,6 +132,9 @@ function removeCredential(index: number): void {
   const [removed] = credentials.value.splice(index, 1);
   if (removed) {
     delete tokenDrafts.value[removed.id];
+    // 删掉的凭据要显式提交一次空串，后端才会把它的 Token 从库里删掉。
+    // 只从列表里去掉 ID 的话，明文 Token 会一直留在 github_credential_tokens 里。
+    if (configured.value.has(removed.id)) removedIDs.value.add(removed.id);
     // 删掉凭据的同时解绑仓库，否则仓库会指向一条不存在的凭据。
     const bindings = { ...(props.repositoryCredentials ?? {}) };
     let changed = false;
@@ -151,6 +156,8 @@ function emitCredentials(): void {
 
 function emitTokens(): void {
   const tokens: Record<string, string> = {};
+  // 空串是「删除这条凭据的 Token」，非空是「覆盖」，没出现的键沿用已存值。
+  for (const id of removedIDs.value) tokens[id] = "";
   for (const [id, value] of Object.entries(tokenDrafts.value)) {
     const token = value.trim();
     if (token) tokens[id] = token;
@@ -161,6 +168,7 @@ function emitTokens(): void {
 defineExpose({
   clearDrafts(): void {
     tokenDrafts.value = {};
+    removedIDs.value = new Set();
   }
 });
 </script>

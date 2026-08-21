@@ -1323,3 +1323,41 @@ func TestRuntimeRepositoryWatchFollowUpCarriesConversationHistory(t *testing.T) 
 		t.Fatalf("follow-up prompt is missing the notification body: %#v", messages)
 	}
 }
+
+// WebUI 的「配置信息」页按键名把这些设置项分到「通知」和「运行」两组。
+// 键名在 Go 这边改掉、前端没跟着改的话，对应的开关会从界面上消失而不报错，
+// 所以这里把契约钉住。
+func TestRepositoryWatchManifestExposesConfigTabSettings(t *testing.T) {
+	specs := map[string]PluginSettingSpec{}
+	for _, spec := range (&RepositoryWatchPlugin{}).Manifest().Settings {
+		specs[spec.Key] = spec
+	}
+	for _, key := range []string{pluginSettingAskAgent, repositoryWatchSettingTemplateHeader, repositoryWatchSettingLimit, repositoryWatchSettingTimeout, repositoryWatchSettingToken} {
+		if _, ok := specs[key]; !ok {
+			t.Fatalf("missing setting spec %q", key)
+		}
+	}
+	if got := specs[pluginSettingAskAgent].Type; got != PluginSettingTypeBool {
+		t.Fatalf("ask_agent type = %q, want bool", got)
+	}
+	if got := specs[pluginSettingAskAgent].Default; got != true {
+		t.Fatalf("ask_agent default = %v, want true", got)
+	}
+	// 模板要写多行还带 <botbr>，默认四行的文本框太挤。
+	if got := specs[repositoryWatchSettingTemplateHeader].Rows; got <= 4 {
+		t.Fatalf("template_header rows = %d, want more than the default 4", got)
+	}
+	// 两个超时分属不同插件却同处一页，标签必须能区分开。
+	publishTimeout := ""
+	for _, spec := range (&RepositoryPublishPlugin{}).Manifest().Settings {
+		if spec.Key == repositoryPublishSettingTimeout {
+			publishTimeout = spec.Label
+		}
+	}
+	if publishTimeout == "" {
+		t.Fatal("repository publish plugin has no timeout setting")
+	}
+	if publishTimeout == specs[repositoryWatchSettingTimeout].Label {
+		t.Fatalf("both timeout settings are labelled %q; the config tab shows them together", publishTimeout)
+	}
+}
