@@ -902,10 +902,7 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 	}
 	xhsID, xsecSource, xsecToken := xiaohongshuRequestParts(pageURL)
 	if xhsID == "" {
-		if isXiaohongshuLiveURL(pageURL) || isXiaohongshuLiveURL(raw) {
-			return nil, "live_link"
-		}
-		return nil, "unsupported_link"
+		return nil, xiaohongshuUnresolvedStatus(raw, pageURL)
 	}
 	reqURL := fmt.Sprintf(xiaohongshuExploreURL, xhsID, url.QueryEscape(firstNonEmpty(xsecSource, "pc_feed")), url.QueryEscape(xsecToken))
 	body, ok := fetchResolverBody(ctx, reqURL, headers)
@@ -926,6 +923,19 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 		return nil, "note_unavailable"
 	}
 	return note, ""
+}
+
+// xiaohongshuUnresolvedStatus 解释一条没解析出笔记 ID 的小红书地址。
+// 短链跳转成功后只看最终地址；只有跳转没走成（仍停在 xhslink.com）才回落到
+// 短链路径的启发式，避免把普通 /m/ 分享短链一律误报成直播链接。
+func xiaohongshuUnresolvedStatus(raw, pageURL string) string {
+	if isXiaohongshuLiveURL(pageURL) {
+		return "live_link"
+	}
+	if urlMatchesDomain(pageURL, "xhslink.com") && isXiaohongshuLiveURL(raw) {
+		return "live_link"
+	}
+	return "unsupported_link: " + redactURLQuery(pageURL)
 }
 
 func isXiaohongshuLiveURL(raw string) bool {
