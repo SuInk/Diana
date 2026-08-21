@@ -22,7 +22,7 @@ func TestParseProactiveReplyQualityDecision(t *testing.T) {
 func TestJudgeProactiveReplyQualityRejectsLowConfidence(t *testing.T) {
 	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.72,"reason":"回答方向不够确定"}`}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -36,7 +36,7 @@ func TestJudgeProactiveReplyQualityRejectsLowConfidence(t *testing.T) {
 func TestJudgeProactiveReplyQualityAllowsQualifiedReply(t *testing.T) {
 	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.95,"reason":"回答直接且有依据"}`}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil

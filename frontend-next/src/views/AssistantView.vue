@@ -103,7 +103,7 @@
             <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
             <span class="bot-profile-meta">
               <span class="platform-chip">{{ platformName(profile.platform) }}</span>
-              <span class="bot-profile-qq">{{ profile.bot_qq || accountPlaceholder(profile) }}</span>
+              <span class="bot-profile-account">{{ profile.bot_account || accountPlaceholder(profile) }}</span>
             </span>
           </button>
           <!-- 卡片主体已经能点进编辑；底部只放紧凑的配置和删除，避免大按钮抢视觉。 -->
@@ -806,22 +806,22 @@
 import { computed, onMounted, ref } from "vue";
 import { ArrowLeft, Bot, ChevronRight, Copy, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Trash2, X } from "@lucide/vue";
 import {
-  activateQQBotProfile,
-  deleteQQBotProfile,
+  activateBotProfile,
+  deleteBotProfile,
   getConfig,
-  getQQBotConfig,
-  getQQBotPlatforms,
+  getBotProfileConfig,
+  getBotPlatforms,
   listLLMModels,
-  requestQQBotBackfill,
-  saveQQBotConfig,
-  setQQBotContextIsolation,
-  startQQBot,
-  stopQQBot,
+  requestBotBackfill,
+  saveBotProfileConfig,
+  setBotContextIsolation,
+  startBot,
+  stopBot,
   type LLMConfig,
   type LLMModelInfo,
-  type QQBotConfig,
-  type QQBotChannelStatus,
-  type QQBotPlatform
+  type BotProfileConfig,
+  type BotChannelStatus,
+  type BotPlatform
 } from "../api";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -831,8 +831,8 @@ import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
 
-const form = ref<QQBotConfig | null>(null);
-const profileSet = ref<QQBotConfig | null>(null);
+const form = ref<BotProfileConfig | null>(null);
+const profileSet = ref<BotProfileConfig | null>(null);
 const busy = ref(false);
 const tokenDraft = ref("");
 const bridgeTokenDraft = ref("");
@@ -843,7 +843,7 @@ const telegramTokenDraft = ref("");
 
 /** OneBot v11 与 Telegram 的接入字段完全不同。 */
 /** 账号字段在不同平台叫法不同，列表卡片的占位文案跟着平台走。 */
-function accountPlaceholder(profile: QQBotConfig): string {
+function accountPlaceholder(profile: BotProfileConfig): string {
   const def = platforms.value.find((item) => item.id === profile.platform);
   if (def && !def.protocol.startsWith("onebot")) {
     return "未填账号";
@@ -854,7 +854,7 @@ function accountPlaceholder(profile: QQBotConfig): string {
 /** 平台筛选项，按机器人实际使用的平台生成。 */
 const selectedPlatforms = ref<string[]>([]);
 
-function platformCategoryOf(profile: QQBotConfig): { category: string; label: string } {
+function platformCategoryOf(profile: BotProfileConfig): { category: string; label: string } {
   const def = platforms.value.find((item) => item.id === profile.platform);
   return { category: def?.category ?? "other", label: def?.category_label ?? "其他" };
 }
@@ -909,7 +909,7 @@ type EditorTab = (typeof editorTabs)[number]["key"];
 const editorTab = ref<EditorTab>("access");
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
-const platforms = ref<QQBotPlatform[]>([]);
+const platforms = ref<BotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
 const platformPickerOpen = ref(false);
 const creating = ref(false);
@@ -940,10 +940,10 @@ const globalGate = computed({
 });
 
 const status = computed(() => stream.status);
-const profiles = computed<QQBotConfig[]>(() => profileSet.value?.profiles ?? []);
+const profiles = computed<BotProfileConfig[]>(() => profileSet.value?.profiles ?? []);
 const activeProfileID = computed(() => profileSet.value?.active_profile_id);
 const contextIsolationEnabled = computed(() => profileSet.value?.isolate_platform_contexts ?? true);
-const channelStatuses = computed<readonly QQBotChannelStatus[]>(() => status.value?.channels ?? (status.value?.channel ? [status.value.channel] : []));
+const channelStatuses = computed<readonly BotChannelStatus[]>(() => status.value?.channels ?? (status.value?.channel ? [status.value.channel] : []));
 const visibleChannels = computed(() => {
   const profileID = form.value?.id;
   if (!profileID) return channelStatuses.value;
@@ -958,7 +958,7 @@ const platformOptions = computed<AppSelectOption[]>(() =>
   }))
 );
 
-function platformDefinition(id?: string): QQBotPlatform | undefined {
+function platformDefinition(id?: string): BotPlatform | undefined {
   return platforms.value.find((platform) => platform.id === id);
 }
 
@@ -976,7 +976,7 @@ function platformDescription(id?: string): string {
   return platformDefinition(id)?.description ?? "请选择已安装适配器支持的平台。";
 }
 
-function profileState(profile: QQBotConfig): { label: string; tone: string } {
+function profileState(profile: BotProfileConfig): { label: string; tone: string } {
   if (!profile.enabled) return { label: "未启用", tone: "idle" };
   const channel = channelStatuses.value.find((item) => item.profile_id === profile.id);
   if (channel && channelAccountUnhealthy(channel)) return { label: channelStatusLabel(channel), tone: "error" };
@@ -989,7 +989,7 @@ function profileState(profile: QQBotConfig): { label: string; tone: string } {
 async function updateContextIsolation(enabled: boolean): Promise<void> {
   busy.value = true;
   try {
-    applyConfig(await setQQBotContextIsolation(enabled));
+    applyConfig(await setBotContextIsolation(enabled));
     toastSuccess(enabled ? "OneBot v11 与 Telegram 上下文已隔离" : "OneBot v11 与 Telegram 现在可以共享上下文");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "隔离设置保存失败");
@@ -1325,7 +1325,7 @@ function setRoleModel(role: RoleKey, value: string): void {
   }
 }
 
-function setForm(config: QQBotConfig): void {
+function setForm(config: BotProfileConfig): void {
   form.value = {
     ...config,
     profiles: undefined,
@@ -1366,7 +1366,7 @@ function setForm(config: QQBotConfig): void {
   roleForm.value = roles;
 }
 
-function applyConfig(config: QQBotConfig): void {
+function applyConfig(config: BotProfileConfig): void {
   profileSet.value = config;
   setForm(config);
 }
@@ -1439,13 +1439,13 @@ async function save(): Promise<void> {
   }
   busy.value = true;
   try {
-    const modelRoles: QQBotConfig["model_roles"] = {};
+    const modelRoles: BotProfileConfig["model_roles"] = {};
     for (const [key, role] of Object.entries(roleForm.value)) {
 		if (role && (role.profile_id || role.group || (role.provider_id && role.model_id)) && role.model.trim()) {
 			modelRoles[key] = { profile_id: role.profile_id, group: role.group, model: role.model.trim(), provider_id: role.provider_id, model_id: role.model_id };
       }
     }
-    const payload: QQBotConfig = {
+    const payload: BotProfileConfig = {
       ...current,
       group_triggers: splitList(triggersDraft.value),
       agent_command_allowlist: splitList(allowlistDraft.value),
@@ -1461,7 +1461,7 @@ async function save(): Promise<void> {
       },
       model_roles: modelRoles
     };
-    const saved = await saveQQBotConfig(payload);
+    const saved = await saveBotProfileConfig(payload);
     applyConfig(saved);
     creating.value = false;
     toastSuccess("机器人配置已保存");
@@ -1484,7 +1484,7 @@ function validWebSocketURL(value: string): boolean {
 async function toggle(start: boolean): Promise<void> {
   busy.value = true;
   try {
-    const result = start ? await startQQBot() : await stopQQBot();
+    const result = start ? await startBot() : await stopBot();
     pushStatusSnapshot(result);
     toastSuccess(start ? "机器人已启动" : "机器人已停止");
   } catch (error) {
@@ -1505,7 +1505,7 @@ async function triggerBackfill(): Promise<void> {
   }
   busy.value = true;
   try {
-    await requestQQBotBackfill();
+    await requestBotBackfill();
     toastSuccess("回补已触发，进度见系统日志（backfill_completed 表示完成）");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "回补触发失败");
@@ -1514,13 +1514,13 @@ async function triggerBackfill(): Promise<void> {
   }
 }
 
-async function activateProfile(profile: QQBotConfig): Promise<void> {
+async function activateProfile(profile: BotProfileConfig): Promise<void> {
   if (!profile.id || profile.id === activeProfileID.value) {
     return;
   }
   busy.value = true;
   try {
-    applyConfig(await activateQQBotProfile(profile.id));
+    applyConfig(await activateBotProfile(profile.id));
     toastSuccess("已切换机器人配置档");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "切换失败");
@@ -1529,7 +1529,7 @@ async function activateProfile(profile: QQBotConfig): Promise<void> {
   }
 }
 
-async function editProfile(profile: QQBotConfig): Promise<void> {
+async function editProfile(profile: BotProfileConfig): Promise<void> {
   if (!profile.id) {
     return;
   }
@@ -1552,7 +1552,7 @@ function leaveEditor(): void {
   page.value = "list";
 }
 
-function beginCreate(platform: QQBotPlatform): void {
+function beginCreate(platform: BotPlatform): void {
   const source = profiles.value.find((profile) => profile.id === activeProfileID.value) ?? form.value;
   if (!source) return;
   setForm({
@@ -1561,7 +1561,7 @@ function beginCreate(platform: QQBotPlatform): void {
     name: `新建 ${platform.name} 机器人`,
     platform: platform.id,
     enabled: false,
-    bot_qq: "",
+    bot_account: "",
     owner_login_enabled: false
   });
   creating.value = true;
@@ -1570,7 +1570,7 @@ function beginCreate(platform: QQBotPlatform): void {
   page.value = "edit";
 }
 
-async function removeProfile(profile: QQBotConfig): Promise<void> {
+async function removeProfile(profile: BotProfileConfig): Promise<void> {
   if (!profile.id) {
     return;
   }
@@ -1585,7 +1585,7 @@ async function removeProfile(profile: QQBotConfig): Promise<void> {
   }
   busy.value = true;
   try {
-    applyConfig(await deleteQQBotProfile(profile.id));
+    applyConfig(await deleteBotProfile(profile.id));
     toastSuccess("配置档已删除");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "删除失败");
@@ -1609,8 +1609,8 @@ async function copyEndpoint(): Promise<void> {
 
 onMounted(async () => {
   const [platformResult, botConfig, llmConfig] = await Promise.all([
-    getQQBotPlatforms().catch(() => ({ platforms: [] as QQBotPlatform[] })),
-    getQQBotConfig().catch((error: unknown) => {
+    getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),
+    getBotProfileConfig().catch((error: unknown) => {
       toastError(error instanceof Error ? error.message : "加载配置失败");
       return null;
     }),

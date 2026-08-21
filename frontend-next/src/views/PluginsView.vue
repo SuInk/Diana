@@ -409,11 +409,11 @@ import {
   uninstallPlugin,
   updatePluginSettings,
   listResolverDependencies,
-  listQQBotGroups,
+  listBotGroups,
   type PluginSettingSpec,
   type PluginState,
   type ResolverDependency,
-  type QQBotGroupSummary
+  type BotGroupSummary
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
@@ -486,7 +486,7 @@ function onRepositoryCredentialsChanged(value: Record<string, string>): void {
 }
 const savingSettings = ref(false);
 const githubSettingsTab = ref<"token" | "repositories" | "records">("token");
-const joinedGroups = ref<QQBotGroupSummary[]>([]);
+const joinedGroups = ref<BotGroupSummary[]>([]);
 const groupsLoading = ref(false);
 const groupsWarning = ref("");
 
@@ -617,7 +617,7 @@ async function loadJoinedGroups(): Promise<void> {
   groupsLoading.value = true;
   groupsWarning.value = "";
   try {
-    joinedGroups.value = (await listQQBotGroups()).groups ?? [];
+    joinedGroups.value = (await listBotGroups()).groups ?? [];
   } catch (error) {
     joinedGroups.value = [];
     groupsWarning.value = error instanceof Error ? error.message : "群列表暂不可用，可手动填写群号";

@@ -26,7 +26,7 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 			"role":     "member",
 		},
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotQQ: "10000"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "10000"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetUserMemoryStore(memory)
 	event := MessageEvent{
 		Kind:    EventKindGroup,
@@ -175,7 +175,7 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	}}
 	runtime := NewRuntime(BotConfig{
 		OwnerID:       "10001",
-		BotQQ:         "10000",
+		BotAccount:    "10000",
 		AgentEnabled:  true,
 		AgentWorkDir:  t.TempDir(),
 		AgentMaxSteps: 3,

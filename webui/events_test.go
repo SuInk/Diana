@@ -76,7 +76,7 @@ func TestStatusSignatureIncludesPerChannelState(t *testing.T) {
 	}
 }
 
-func TestStatusSignatureIncludesQQAccountHealth(t *testing.T) {
+func TestStatusSignatureIncludesBotAccountHealth(t *testing.T) {
 	base := assistant.RuntimeStatus{Channels: []assistant.ChannelStatus{{ProfileID: "qq", Connected: true}}}
 	offline := base
 	offline.Channels = append([]assistant.ChannelStatus(nil), base.Channels...)

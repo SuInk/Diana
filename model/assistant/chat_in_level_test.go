@@ -130,7 +130,7 @@ func TestNaturalInterjectionCanBeConfiguredPerGroup(t *testing.T) {
 func TestChatInGenerationDeclineStaysSilent(t *testing.T) {
 	provider := &refusalLLMProvider{replies: []string{"这句没有实质内容。" + replyRefusalMarker}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "10001", UserID: "20002", RawMessage: "普通群聊", chatInReply: true}
@@ -340,7 +340,7 @@ func TestResponseModePresetClearsChatInFineTuning(t *testing.T) {
 
 func TestChatInCooldownIsNotConsumedByRoutingAlone(t *testing.T) {
 	provider := &refusalLLMProvider{replies: []string{"端口被占了。"}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m-1", RawMessage: "这个报错什么意思", chatInReply: true}

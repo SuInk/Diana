@@ -241,8 +241,8 @@ func TestReminderPrivateFallbackKeepsProfileIdentity(t *testing.T) {
 	// 下裸造事件会让「提醒失败」的兜底通知自己也发不出去，故障就此静默。
 	item := Reminder{
 		Platform:         PlatformOneBotV11,
-		ProfileID:        "qq-main",
-		ContextNamespace: "qq-main",
+		ProfileID:        "onebot-main",
+		ContextNamespace: "onebot-main",
 		GroupID:          "123456",
 		UserID:           "10001",
 	}
@@ -250,7 +250,7 @@ func TestReminderPrivateFallbackKeepsProfileIdentity(t *testing.T) {
 	if target.Kind != EventKindPrivate || target.GroupID != "" || target.UserID != "10001" {
 		t.Fatalf("fallback target = %#v, want a private target for the subscriber", target)
 	}
-	if target.Platform != PlatformOneBotV11 || target.ProfileID != "qq-main" || target.ContextNamespace != "qq-main" {
+	if target.Platform != PlatformOneBotV11 || target.ProfileID != "onebot-main" || target.ContextNamespace != "onebot-main" {
 		t.Fatalf("fallback dropped routing identity: %#v", target)
 	}
 }
@@ -260,15 +260,15 @@ func TestReminderPrivateFallbackRoutesUnderMultipleProfiles(t *testing.T) {
 	target := newQueueTestChannel()
 	other := newQueueTestChannel()
 	channel := NewMultiChannel([]ChannelBinding{
-		{ProfileID: "qq-other", Platform: PlatformOneBotV11, Channel: other},
-		{ProfileID: "qq-main", Platform: PlatformOneBotV11, Channel: target},
+		{ProfileID: "onebot-other", Platform: PlatformOneBotV11, Channel: other},
+		{ProfileID: "onebot-main", Platform: PlatformOneBotV11, Channel: target},
 	})
-	runtime := NewRuntime(BotConfig{ID: "qq-main", Platform: PlatformOneBotV11, BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ID: "onebot-main", Platform: PlatformOneBotV11, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 
 	item := Reminder{
 		Platform:         PlatformOneBotV11,
-		ProfileID:        "qq-main",
-		ContextNamespace: "qq-main",
+		ProfileID:        "onebot-main",
+		ContextNamespace: "onebot-main",
 		GroupID:          "123456",
 		UserID:           "10001",
 	}

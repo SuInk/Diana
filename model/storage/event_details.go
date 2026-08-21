@@ -502,7 +502,7 @@ func (s *SQLiteStore) inboundEventTokenUsage(ctx context.Context, since time.Tim
 	rows, err := s.db.QueryContext(ctx, `
 SELECT target, metadata
 FROM app_logs
-WHERE created_at >= ? AND action IN ('qqbot.llm_usage', 'assistant.llm_usage')
+WHERE created_at >= ? AND action IN ('chatbot.llm_usage', 'qqbot.llm_usage', 'assistant.llm_usage')
 `, sinceText)
 	if err != nil {
 		return nil, inboundEventTokenTotals{}, fmt.Errorf("query event token usage: %w", err)

@@ -2648,9 +2648,9 @@ func (t *dianaRepositoryIssuesTool) audit(result repositoryIssueResult) {
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     kind,
 		Level:    level,
-		Action:   "qqbot.repository_issue",
+		Action:   "chatbot.repository_issue",
 		Message:  message,
-		Actor:    qqEventActor(t.event),
+		Actor:    oneBotEventActor(t.event),
 		Target:   target,
 		Metadata: metadata,
 	})

@@ -38,7 +38,7 @@ func newNapCatTestServer(t *testing.T) *napCatTestServer {
 	fake := &napCatTestServer{
 		t:             t,
 		credential:    "test-credential",
-		state:         napCatLoginState{QRCodeURL: "https://example.test/qq-login?ticket=qr-secret"},
+		state:         napCatLoginState{QRCodeURL: "https://example.test/onebot-login?ticket=qr-secret"},
 		quickAccounts: []any{map[string]any{"uin": 10003, "nickName": "Test Account", "faceUrl": "https://example.test/avatar.jpg"}},
 		account:       map[string]any{"uin": 10003, "nick": "Test Account", "online": true, "avatarUrl": "https://example.test/avatar.jpg"},
 	}
@@ -81,15 +81,15 @@ func (s *napCatTestServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	switch r.URL.Path {
-	case "/api/QQLogin/CheckLoginStatus":
+	case "/api/OneBotLogin/CheckLoginStatus":
 		s.writeEnvelope(w, 0, "success", s.state)
-	case "/api/QQLogin/GetQuickLoginListNew":
+	case "/api/OneBotLogin/GetQuickLoginListNew":
 		s.writeEnvelope(w, 0, "success", s.quickAccounts)
-	case "/api/QQLogin/GetQQLoginInfo":
+	case "/api/OneBotLogin/GetOneBotLoginInfo":
 		s.writeEnvelope(w, 0, "success", s.account)
-	case "/api/QQLogin/RefreshQRcode":
+	case "/api/OneBotLogin/RefreshQRcode":
 		s.writeEnvelope(w, 0, "success", nil)
-	case "/api/QQLogin/SetQuickLogin":
+	case "/api/OneBotLogin/SetQuickLogin":
 		var payload struct {
 			UIN string `json:"uin"`
 		}
@@ -191,7 +191,7 @@ func TestNapCatLoginRefreshAndQuickLoginReturnUpdatedStatus(t *testing.T) {
 	var mu sync.Mutex
 	called := map[string]int{}
 	fake.onRequest = func(_ http.ResponseWriter, r *http.Request) bool {
-		if r.URL.Path == "/api/QQLogin/RefreshQRcode" || r.URL.Path == "/api/QQLogin/SetQuickLogin" {
+		if r.URL.Path == "/api/OneBotLogin/RefreshQRcode" || r.URL.Path == "/api/OneBotLogin/SetQuickLogin" {
 			mu.Lock()
 			called[r.URL.Path]++
 			mu.Unlock()
@@ -214,7 +214,7 @@ func TestNapCatLoginRefreshAndQuickLoginReturnUpdatedStatus(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if called["/api/QQLogin/RefreshQRcode"] != 1 || called["/api/QQLogin/SetQuickLogin"] != 1 {
+	if called["/api/OneBotLogin/RefreshQRcode"] != 1 || called["/api/OneBotLogin/SetQuickLogin"] != 1 {
 		t.Fatalf("action calls = %#v", called)
 	}
 }
@@ -241,7 +241,7 @@ func TestNapCatLoginRetriesExpiredCredentialOnce(t *testing.T) {
 	fake := newNapCatTestServer(t)
 	var once sync.Once
 	fake.onRequest = func(w http.ResponseWriter, r *http.Request) bool {
-		if r.URL.Path != "/api/QQLogin/CheckLoginStatus" {
+		if r.URL.Path != "/api/OneBotLogin/CheckLoginStatus" {
 			return false
 		}
 		handled := false
@@ -268,7 +268,7 @@ func TestNapCatLoginRetriesExpiredCredentialOnce(t *testing.T) {
 func TestNapCatLoginDoesNotLeakUpstreamSecrets(t *testing.T) {
 	fake := newNapCatTestServer(t)
 	fake.onRequest = func(w http.ResponseWriter, r *http.Request) bool {
-		if r.URL.Path == "/api/QQLogin/CheckLoginStatus" {
+		if r.URL.Path == "/api/OneBotLogin/CheckLoginStatus" {
 			fake.writeEnvelope(w, -1, fmt.Sprintf("failed at %s with token %s", fake.server.URL, napCatTestToken), nil)
 			return true
 		}

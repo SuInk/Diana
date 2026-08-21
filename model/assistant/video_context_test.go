@@ -102,7 +102,7 @@ func TestVideoFrameCountGrowsWithDuration(t *testing.T) {
 	}
 }
 
-func TestVideoContextPathAllowedForNapCatMacQQStorage(t *testing.T) {
+func TestVideoContextPathAllowedForNapCatMacClientStorage(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)

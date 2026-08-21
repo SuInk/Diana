@@ -600,7 +600,7 @@ func (r *Runtime) Start(parent context.Context) error {
 		err := r.channel.Connect(ctx, r.HandleEvent)
 		if err != nil && ctx.Err() == nil {
 			r.setError(err.Error())
-			log.Printf("qqbot runtime stopped: %v", err)
+			log.Printf("chatbot runtime stopped: %v", err)
 		}
 		r.mu.Lock()
 		if r.runGeneration == runGeneration {
@@ -636,14 +636,14 @@ func (r *Runtime) Stop() error {
 		select {
 		case <-inboundDone:
 		case <-time.After(5 * time.Second):
-			log.Printf("qqbot inbound workers did not stop within 5s; their leases will expire safely")
+			log.Printf("chatbot inbound workers did not stop within 5s; their leases will expire safely")
 		}
 	}
 	if memoryDone != nil {
 		select {
 		case <-memoryDone:
 		case <-time.After(5 * time.Second):
-			log.Printf("qqbot memory workers did not stop within 5s; their leases will expire safely")
+			log.Printf("chatbot memory workers did not stop within 5s; their leases will expire safely")
 		}
 	}
 	r.closeAgentRegistryCache()
@@ -704,14 +704,14 @@ func (r *Runtime) Config() BotConfig {
 func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
 	action = strings.TrimSpace(action)
 	if action == "" {
-		return nil, fmt.Errorf("qqbot: onebot action is required")
+		return nil, fmt.Errorf("chatbot: onebot action is required")
 	}
 	r.mu.RLock()
 	cfg := r.cfg
 	channel := r.channel
 	r.mu.RUnlock()
 	if channel == nil {
-		return nil, fmt.Errorf("qqbot: channel is not configured")
+		return nil, fmt.Errorf("chatbot: channel is not configured")
 	}
 	if _, multi := channel.(*MultiChannel); multi && IsOneBotPlatform(cfg.Platform) {
 		return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, action, params)
@@ -723,13 +723,13 @@ func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[s
 // produced the message. This matters when one Runtime serves multiple bots.
 func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent, action string, params map[string]any) (map[string]any, error) {
 	if r == nil {
-		return nil, fmt.Errorf("qqbot: runtime is not configured")
+		return nil, fmt.Errorf("chatbot: runtime is not configured")
 	}
 	r.mu.RLock()
 	channel := r.channel
 	r.mu.RUnlock()
 	if channel == nil {
-		return nil, fmt.Errorf("qqbot: channel is not configured")
+		return nil, fmt.Errorf("chatbot: channel is not configured")
 	}
 	if multi, ok := channel.(*MultiChannel); ok {
 		binding, err := multi.bindingFor(event.ProfileID, event.Platform)
@@ -737,7 +737,7 @@ func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent,
 			return nil, err
 		}
 		if !IsOneBotPlatform(binding.Platform) {
-			return nil, fmt.Errorf("qqbot: profile %q is not a OneBot platform", binding.ProfileID)
+			return nil, fmt.Errorf("chatbot: profile %q is not a OneBot platform", binding.ProfileID)
 		}
 		return binding.Channel.CallAPI(ctx, action, params)
 	}
@@ -746,7 +746,7 @@ func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent,
 
 type oneBotAPICaller func(context.Context, string, map[string]any) (map[string]any, error)
 
-type QQGroupInfo struct {
+type OneBotGroupInfo struct {
 	GroupID        string `json:"group_id"`
 	GroupName      string `json:"group_name,omitempty"`
 	AvatarURL      string `json:"avatar_url,omitempty"`
@@ -754,7 +754,7 @@ type QQGroupInfo struct {
 	MaxMemberCount int    `json:"max_member_count,omitempty"`
 }
 
-type QQGroupMemberInfo struct {
+type OneBotGroupMemberInfo struct {
 	GroupID   string `json:"group_id,omitempty"`
 	UserID    string `json:"user_id"`
 	Nickname  string `json:"nickname,omitempty"`
@@ -768,11 +768,11 @@ type QQGroupMemberInfo struct {
 	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
-func (m QQGroupMemberInfo) DisplayName() string {
+func (m OneBotGroupMemberInfo) DisplayName() string {
 	return firstNonEmpty(m.Card, m.Nickname, m.UserID)
 }
 
-func QQGroupAvatarURL(groupID string) string {
+func OneBotGroupAvatarURL(groupID string) string {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
 		return ""
@@ -781,7 +781,7 @@ func QQGroupAvatarURL(groupID string) string {
 	return "https://p.qlogo.cn/gh/" + escaped + "/" + escaped + "/640"
 }
 
-func QQMemberAvatarURL(userID string) string {
+func OneBotMemberAvatarURL(userID string) string {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return ""
@@ -789,20 +789,20 @@ func QQMemberAvatarURL(userID string) string {
 	return "https://q1.qlogo.cn/g?b=qq&nk=" + url.QueryEscape(userID) + "&s=640"
 }
 
-func (r *Runtime) GetGroupInfo(ctx context.Context, groupID string) (QQGroupInfo, error) {
+func (r *Runtime) GetGroupInfo(ctx context.Context, groupID string) (OneBotGroupInfo, error) {
 	return r.getGroupInfo(ctx, groupID, r.CallOneBotAPI)
 }
 
-func (r *Runtime) getGroupInfoForEvent(ctx context.Context, event MessageEvent, groupID string) (QQGroupInfo, error) {
+func (r *Runtime) getGroupInfoForEvent(ctx context.Context, event MessageEvent, groupID string) (OneBotGroupInfo, error) {
 	return r.getGroupInfo(ctx, groupID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 }
 
-func (r *Runtime) getGroupInfo(ctx context.Context, groupID string, call oneBotAPICaller) (QQGroupInfo, error) {
+func (r *Runtime) getGroupInfo(ctx context.Context, groupID string, call oneBotAPICaller) (OneBotGroupInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
-		return QQGroupInfo{}, fmt.Errorf("qqbot: group id is required")
+		return OneBotGroupInfo{}, fmt.Errorf("chatbot: group id is required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
@@ -811,26 +811,26 @@ func (r *Runtime) getGroupInfo(ctx context.Context, groupID string, call oneBotA
 		"no_cache": true,
 	})
 	if err != nil {
-		return QQGroupInfo{}, err
+		return OneBotGroupInfo{}, err
 	}
-	return qqGroupInfoFromData(groupID, data), nil
+	return oneBotGroupInfoFromData(groupID, data), nil
 }
 
-func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID string) (QQGroupMemberInfo, error) {
+func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID string) (OneBotGroupMemberInfo, error) {
 	return r.getGroupMemberInfo(ctx, groupID, userID, r.CallOneBotAPI)
 }
 
-func (r *Runtime) getGroupMemberInfoForEvent(ctx context.Context, event MessageEvent, groupID string, userID string) (QQGroupMemberInfo, error) {
+func (r *Runtime) getGroupMemberInfoForEvent(ctx context.Context, event MessageEvent, groupID string, userID string) (OneBotGroupMemberInfo, error) {
 	return r.getGroupMemberInfo(ctx, groupID, userID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 }
 
-func (r *Runtime) getGroupMemberInfo(ctx context.Context, groupID string, userID string, call oneBotAPICaller) (QQGroupMemberInfo, error) {
+func (r *Runtime) getGroupMemberInfo(ctx context.Context, groupID string, userID string, call oneBotAPICaller) (OneBotGroupMemberInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	userID = strings.TrimSpace(userID)
 	if groupID == "" || userID == "" {
-		return QQGroupMemberInfo{}, fmt.Errorf("qqbot: group id and user id are required")
+		return OneBotGroupMemberInfo{}, fmt.Errorf("chatbot: group id and user id are required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
@@ -840,25 +840,25 @@ func (r *Runtime) getGroupMemberInfo(ctx context.Context, groupID string, userID
 		"no_cache": true,
 	})
 	if err != nil {
-		return QQGroupMemberInfo{}, err
+		return OneBotGroupMemberInfo{}, err
 	}
-	return qqGroupMemberInfoFromData(groupID, data), nil
+	return oneBotGroupMemberInfoFromData(groupID, data), nil
 }
 
-func (r *Runtime) GetGroupMemberList(ctx context.Context, groupID string) ([]QQGroupMemberInfo, error) {
+func (r *Runtime) GetGroupMemberList(ctx context.Context, groupID string) ([]OneBotGroupMemberInfo, error) {
 	return r.getGroupMemberList(ctx, groupID, r.CallOneBotAPI)
 }
 
-func (r *Runtime) getGroupMemberListForEvent(ctx context.Context, event MessageEvent, groupID string) ([]QQGroupMemberInfo, error) {
+func (r *Runtime) getGroupMemberListForEvent(ctx context.Context, event MessageEvent, groupID string) ([]OneBotGroupMemberInfo, error) {
 	return r.getGroupMemberList(ctx, groupID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 }
 
-func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call oneBotAPICaller) ([]QQGroupMemberInfo, error) {
+func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call oneBotAPICaller) ([]OneBotGroupMemberInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
-		return nil, fmt.Errorf("qqbot: group id is required")
+		return nil, fmt.Errorf("chatbot: group id is required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
@@ -870,13 +870,13 @@ func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call o
 		return nil, err
 	}
 	items := oneBotListItems(data)
-	members := make([]QQGroupMemberInfo, 0, len(items))
+	members := make([]OneBotGroupMemberInfo, 0, len(items))
 	for _, item := range items {
 		memberData, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		member := qqGroupMemberInfoFromData(groupID, memberData)
+		member := oneBotGroupMemberInfoFromData(groupID, memberData)
 		if member.UserID != "" {
 			members = append(members, member)
 		}
@@ -884,20 +884,20 @@ func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call o
 	return members, nil
 }
 
-func qqGroupInfoFromData(groupID string, data map[string]any) QQGroupInfo {
+func oneBotGroupInfoFromData(groupID string, data map[string]any) OneBotGroupInfo {
 	id := firstNonEmpty(stringFromAny(data["group_id"]), groupID)
-	return QQGroupInfo{
+	return OneBotGroupInfo{
 		GroupID:        id,
 		GroupName:      firstNonEmpty(stringFromAny(data["group_name"]), stringFromAny(data["name"])),
-		AvatarURL:      QQGroupAvatarURL(id),
+		AvatarURL:      OneBotGroupAvatarURL(id),
 		MemberCount:    intFromAny(data["member_count"]),
 		MaxMemberCount: intFromAny(data["max_member_count"]),
 	}
 }
 
-func qqGroupMemberInfoFromData(groupID string, data map[string]any) QQGroupMemberInfo {
+func oneBotGroupMemberInfoFromData(groupID string, data map[string]any) OneBotGroupMemberInfo {
 	userID := firstNonEmpty(stringFromAny(data["user_id"]), stringFromAny(data["uin"]), stringFromAny(data["qq"]))
-	return QQGroupMemberInfo{
+	return OneBotGroupMemberInfo{
 		GroupID:   firstNonEmpty(stringFromAny(data["group_id"]), groupID),
 		UserID:    userID,
 		Nickname:  stringFromAny(data["nickname"]),
@@ -908,7 +908,7 @@ func qqGroupMemberInfoFromData(groupID string, data map[string]any) QQGroupMembe
 		Age:       intFromAny(data["age"]),
 		Area:      stringFromAny(data["area"]),
 		Level:     stringFromAny(data["level"]),
-		AvatarURL: QQMemberAvatarURL(userID),
+		AvatarURL: OneBotMemberAvatarURL(userID),
 	}
 }
 
@@ -960,14 +960,14 @@ func (r *Runtime) SendGroupMessage(ctx context.Context, groupID string, text str
 	groupID = strings.TrimSpace(groupID)
 	text = strings.TrimSpace(text)
 	if groupID == "" {
-		return nil, fmt.Errorf("qqbot: group id is required")
+		return nil, fmt.Errorf("chatbot: group id is required")
 	}
 	if text == "" {
-		return nil, fmt.Errorf("qqbot: message is required")
+		return nil, fmt.Errorf("chatbot: message is required")
 	}
 	parsedGroupID, err := strconv.ParseInt(groupID, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("qqbot: invalid group id %q", groupID)
+		return nil, fmt.Errorf("chatbot: invalid group id %q", groupID)
 	}
 	event := MessageEvent{Kind: EventKindGroup, GroupID: groupID}
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
@@ -1011,8 +1011,8 @@ func (r *Runtime) Status() RuntimeStatus {
 			}
 		}
 	}
-	if cfg.BotQQ == "" && selfID != "" {
-		cfg = r.rememberBotQQ(selfID)
+	if cfg.BotAccount == "" && selfID != "" {
+		cfg = r.rememberBotAccount(selfID)
 	}
 
 	return RuntimeStatus{
@@ -1032,20 +1032,20 @@ func (r *Runtime) Status() RuntimeStatus {
 	}
 }
 
-// rememberBotQQ records the account reported by the connected platform once,
+// rememberBotAccount records the account reported by the connected platform once,
 // without overwriting an explicitly configured identity.
-func (r *Runtime) rememberBotQQ(selfID string) BotConfig {
+func (r *Runtime) rememberBotAccount(selfID string) BotConfig {
 	selfID = strings.TrimSpace(selfID)
 	if selfID == "" {
 		return r.Config()
 	}
 	r.mu.Lock()
-	if r.cfg.BotQQ != "" {
+	if r.cfg.BotAccount != "" {
 		cfg := r.cfg
 		r.mu.Unlock()
 		return cfg
 	}
-	r.cfg.BotQQ = selfID
+	r.cfg.BotAccount = selfID
 	r.updatedAt = time.Now()
 	cfg := r.cfg
 	saver := r.configSaver
@@ -1271,7 +1271,7 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := store.RecordNoticeEvent(ctx, sessionKey(event), withoutReplyRuntimeState(event)); err != nil {
-		log.Printf("qqbot notice audit persist failed: %v", err)
+		log.Printf("chatbot notice audit persist failed: %v", err)
 	}
 }
 
@@ -1316,7 +1316,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	history := r.contextHistory(event)
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
-	ctx = r.withQQPrivacyContext(ctx, event, history)
+	ctx = r.withIdentityPrivacyContext(ctx, event, history)
 	finishWithoutReply := func(outcome string) (MessageEvent, string, bool, string) {
 		r.enqueueHistoryImageDescriptions(event)
 		return event, text, false, outcome
@@ -1496,7 +1496,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "", ctx.Err()
 		}
-		_, acknowledged, sendErr := r.sendWithDeliveryEvidence(replyCtx, event, "出错了："+publicQQErrorMessage(err))
+		_, acknowledged, sendErr := r.sendWithDeliveryEvidence(replyCtx, event, "出错了："+publicChatErrorMessage(err))
 		if sendErr != nil {
 			if errors.Is(sendErr, errReplySuppressedBeforeSend) {
 				setEventRecordOutcome(&record, "ignored_response_suppression")
@@ -1650,7 +1650,7 @@ func (r *Runtime) recordInboundSelfEcho(event MessageEvent) {
 	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := store.RecordInboundEventSelfEcho(auditCtx, event.MessageID, observedAt); err != nil {
-		log.Printf("qqbot persist outbound self echo failed: %v", err)
+		log.Printf("chatbot persist outbound self echo failed: %v", err)
 	}
 }
 
@@ -2083,7 +2083,7 @@ type proactiveReplyPayload struct {
 	CurrentText                   string                           `json:"current_text"`
 	CurrentSender                 string                           `json:"current_sender,omitempty"`
 	CurrentImages                 int                              `json:"current_images"`
-	BotQQ                         string                           `json:"bot_qq,omitempty"`
+	BotAccount                    string                           `json:"bot_account,omitempty"`
 	BotAliases                    []string                         `json:"bot_aliases,omitempty"`
 	QuotedText                    string                           `json:"quoted_text,omitempty"`
 	QuotedSender                  string                           `json:"quoted_sender,omitempty"`
@@ -2122,7 +2122,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		CurrentText:      strings.TrimSpace(text),
 		CurrentSender:    strings.TrimSpace(event.SenderNameOrID()),
 		CurrentImages:    imageSegmentCount(event.Segments),
-		BotQQ:            strings.TrimSpace(cfg.BotQQ),
+		BotAccount:       strings.TrimSpace(cfg.BotAccount),
 		BotAliases:       append([]string(nil), cfg.GroupTriggers...),
 		RecentImageCount: len(r.localImageEditSourceImages(event)),
 	}
@@ -2133,7 +2133,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	}
 	if cfg.AgentEnabled && event.Kind == EventKindGroup {
 		payload.AvailableReplyTools = append(payload.AvailableReplyTools,
-			"diana.qq_group：可实时读取当前群资料、完整成员列表和成员总数",
+			"diana.onebot_group：可实时读取当前群资料、完整成员列表和成员总数",
 		)
 		if r.llmStore != nil {
 			payload.AvailableReplyTools = append(payload.AvailableReplyTools,
@@ -2145,7 +2145,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		payload.QuotedText = quotedPlainText(event.Quoted)
 		payload.QuotedSender = strings.TrimSpace(firstNonEmpty(event.Quoted.SenderName, event.Quoted.UserID))
 		payload.QuotedImages = imageSegmentCount(event.Quoted.Segments)
-		payload.QuotedIsBot = cfg.BotQQ != "" && event.Quoted.UserID == cfg.BotQQ
+		payload.QuotedIsBot = cfg.BotAccount != "" && event.Quoted.UserID == cfg.BotAccount
 	}
 	history := r.contextHistory(event)
 	for i := len(history) - 1; i >= 0; i-- {
@@ -2167,7 +2167,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 			Sender:     strings.TrimSpace(item.SenderNameOrID()),
 			Text:       truncateRunesFromStart(text, 180),
 			Images:     imageCount,
-			IsBot:      cfg.BotQQ != "" && item.UserID == cfg.BotQQ,
+			IsBot:      cfg.BotAccount != "" && item.UserID == cfg.BotAccount,
 			AgeSeconds: ageSeconds,
 		}
 		if historyItem.IsBot && payload.LastBotMessage == nil {
@@ -2373,7 +2373,7 @@ func directedFollowupNeedsResponse(text string) bool {
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有 @ 或没有点名对象而归为 none。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 判断 substantive。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有无法从上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.qq_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
+	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有 @ 或没有点名对象而归为 none。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 判断 substantive。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有无法从上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
 	const expressiveChatInGuard = `风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard
 	configured = strings.TrimSpace(configured)
@@ -2476,10 +2476,10 @@ func (r *Runtime) recordProactiveReplyRouteError(ctx context.Context, event Mess
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.proactive_reply_route",
+		Action:  "chatbot.proactive_reply_route",
 		Message: "主动回复判断失败，已保持沉默",
 		Detail:  err.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID,
@@ -2496,10 +2496,10 @@ func (r *Runtime) recordProactiveReplyRouteFallback(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.proactive_reply_route_fallback",
+		Action:  "chatbot.proactive_reply_route_fallback",
 		Message: "主动回复路由超时，明确公开问题已降级进入回复流程",
 		Detail:  routeErr.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID,
@@ -2516,9 +2516,9 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.proactive_reply_route",
+		Action:  "chatbot.proactive_reply_route",
 		Message: "LLM 已完成主动回复判断",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":          event.GroupID,
@@ -2549,9 +2549,9 @@ func (r *Runtime) recordProactiveReplySuperseded(ctx context.Context, event Mess
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.proactive_reply_superseded",
+		Action:  "chatbot.proactive_reply_superseded",
 		Message: "检测到新的候选消息，旧主动回复候选将交由 LLM 合并重判",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":                event.GroupID,
@@ -2601,7 +2601,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	replyHistory := r.promptContextHistory(event, cfg)
-	ctx = r.withQQPrivacyContext(ctx, event, replyHistory)
+	ctx = r.withIdentityPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
@@ -2737,7 +2737,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event),
 				newDianaHistoryImagesTool(r, event),
-				newDianaQQGroupTool(r, event),
+				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
@@ -2892,7 +2892,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				turnMessageIDs[messageID] = true
 			}
 		}
-		historyGroups, recentHistory := historyContextMetadata(replyHistory, event.Time, cfg.BotQQ)
+		historyGroups, recentHistory := historyContextMetadata(replyHistory, event.Time, cfg.BotAccount)
 		for _, historyEvent := range replyHistory {
 			historyKey := messageHistoryDedupeKey(historyEvent)
 			historyGroup := historyGroups[historyKey]
@@ -2919,7 +2919,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 				continue
 			}
-			if assistantHistoryEvent(historyEvent, firstNonEmpty(strings.TrimSpace(cfg.BotQQ), strings.TrimSpace(event.SelfID))) {
+			if assistantHistoryEvent(historyEvent, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))) {
 				if botText := strings.TrimSpace(historyPlainText(historyEvent)); botText != "" {
 					if semanticErrorWrapperText(botText) {
 						continue
@@ -3159,7 +3159,7 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	hasMedia := len(resp.ImageURLs) > 0 || len(resp.VideoURLs) > 0 || len(resp.ForwardMessages) > 0
 	if reply == "" && !hasMedia {
 		// 插件触发了却什么都没提取到，这是诊断信息，不该当成发言播报到群里。
-		log.Printf("qqbot resolver produced no sendable content: message_id=%s", event.MessageID)
+		log.Printf("chatbot resolver produced no sendable content: message_id=%s", event.MessageID)
 		return "", nil
 	}
 	if _, err := r.deliverResolverResponse(ctx, event, *resp); err != nil {
@@ -3215,7 +3215,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 		Content:  r.systemPrompt(source, nil),
 		Priority: llm.MessagePrioritySystem,
 	}}
-	botID := firstNonEmpty(cfg.BotQQ, source.SelfID)
+	botID := firstNonEmpty(cfg.BotAccount, source.SelfID)
 	for _, historyEvent := range r.contextHistory(source) {
 		content := strings.TrimSpace(historyPlainText(historyEvent))
 		if content == "" {
@@ -3246,7 +3246,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 		return normalizeReply(llmResp.Text, pluginFollowUpMaxChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 	if err != nil {
-		log.Printf("qqbot plugin follow-up generation failed: %v", err)
+		log.Printf("chatbot plugin follow-up generation failed: %v", err)
 		return
 	}
 	comment = strings.TrimSpace(comment)
@@ -3254,7 +3254,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 		return
 	}
 	if err := r.send(ctx, event, comment); err != nil {
-		log.Printf("qqbot plugin follow-up send failed: %v", err)
+		log.Printf("chatbot plugin follow-up send failed: %v", err)
 	}
 }
 
@@ -3266,8 +3266,8 @@ func directPluginReply(resp PluginResponse) string {
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
-	if _, initialized := qqPrivacyStateFromContext(ctx); !initialized {
-		ctx = r.withQQPrivacyContext(ctx, event, r.contextHistory(event))
+	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
+		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
 	if cfg.AgentEnabled && relationship.allowsAgentTools() {
 		// A tool can add images after the first planning turn. Route every Agent
@@ -3307,7 +3307,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		traceID := strings.TrimSpace(event.MessageID)
 		if traceID != "" {
-			traceID = "qq-" + traceID
+			traceID = "chat-" + traceID
 		}
 		resp, err := agentRunner.Run(ctx, agent.Request{
 			Messages: messages,
@@ -3348,7 +3348,7 @@ func newRuntimeAgentLLMProvider(runtime *Runtime, ctx context.Context) *runtimeA
 
 func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	if p == nil || p.runtime == nil {
-		return nil, fmt.Errorf("qqbot: runtime agent llm provider is not configured")
+		return nil, fmt.Errorf("chatbot: runtime agent llm provider is not configured")
 	}
 	group := llm.GroupChat
 	if messagesContainImages(req.Messages) || messagesContainAudio(req.Messages) {
@@ -3381,7 +3381,7 @@ func (p *runtimeAgentLLMProvider) providerForGroup(group string) (LLMProvider, e
 		return nil, err
 	}
 	if provider == nil {
-		return nil, fmt.Errorf("qqbot: no llm provider is configured for group %q", group)
+		return nil, fmt.Errorf("chatbot: no llm provider is configured for group %q", group)
 	}
 	p.providers[group] = provider
 	return provider, nil
@@ -3496,7 +3496,7 @@ func (r *Runtime) evaluateReplyRules(ctx context.Context, event MessageEvent, te
 			Sender: strings.TrimSpace(item.SenderNameOrID()),
 			Text:   truncateRunesFromStart(text, 180),
 			Images: imageCount,
-			IsBot:  strings.TrimSpace(cfg.BotQQ) != "" && item.UserID == cfg.BotQQ,
+			IsBot:  strings.TrimSpace(cfg.BotAccount) != "" && item.UserID == cfg.BotAccount,
 		})
 	}
 	for left, right := 0, len(payload.RecentMessages)-1; left < right; left, right = left+1, right-1 {
@@ -3641,10 +3641,10 @@ func (r *Runtime) recordReplyRuleRouteError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:     applog.KindError,
 		Level:    applog.LevelError,
-		Action:   "qqbot.reply_rule.route",
+		Action:   "chatbot.reply_rule.route",
 		Message:  "回复规则判断失败，已使用默认回复策略",
 		Detail:   err.Error(),
-		Actor:    qqEventActor(event),
+		Actor:    oneBotEventActor(event),
 		Target:   event.MessageID,
 		Metadata: map[string]any{"group_id": event.GroupID, "user_id": event.UserID},
 	})
@@ -3658,9 +3658,9 @@ func (r *Runtime) recordReplyRuleRoute(ctx context.Context, event MessageEvent, 
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.reply_rule.route",
+		Action:  "chatbot.reply_rule.route",
 		Message: "回复规则判断已完成",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":       event.GroupID,
@@ -3686,10 +3686,10 @@ func (r *Runtime) recordReplyRuleError(ctx context.Context, event MessageEvent, 
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.reply_rule.apply",
+		Action:  "chatbot.reply_rule.apply",
 		Message: "回复规则执行失败，已回退文字回复",
 		Detail:  err.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":  event.GroupID,
@@ -3891,7 +3891,7 @@ func (r *Runtime) visualIntentIdentityImages(event MessageEvent) []visualIntentI
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	botIDs := map[string]bool{}
-	for _, id := range []string{event.SelfID, cfg.BotQQ} {
+	for _, id := range []string{event.SelfID, cfg.BotAccount} {
 		if id = strings.TrimSpace(id); id != "" {
 			botIDs[id] = true
 		}
@@ -4003,10 +4003,10 @@ func (r *Runtime) recordVisualIntentError(ctx context.Context, event MessageEven
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.visual_intent",
+		Action:  "chatbot.visual_intent",
 		Message: "图片功能意图判断失败，已回退普通聊天",
 		Detail:  err.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID,
@@ -4023,9 +4023,9 @@ func (r *Runtime) recordVisualIntentDecision(ctx context.Context, event MessageE
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.visual_intent",
+		Action:  "chatbot.visual_intent",
 		Message: "图片功能意图已命中",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID,
@@ -4045,7 +4045,7 @@ func (r *Runtime) generateAndSendImage(ctx context.Context, event MessageEvent, 
 		}
 		return reply, nil
 	}
-	imagePrompt := r.enrichImagePromptWithQQContext(ctx, event, prompt)
+	imagePrompt := r.enrichImagePromptWithChatContext(ctx, event, prompt)
 	resp, cfg, err := r.generateImageWithFailover(ctx, llm.ImageGenerateRequest{
 		Prompt: imagePrompt,
 		Size:   "1024x1024",
@@ -4055,7 +4055,7 @@ func (r *Runtime) generateAndSendImage(ctx context.Context, event MessageEvent, 
 		return "", err
 	}
 	if r.channel == nil {
-		return "", fmt.Errorf("qqbot: channel is not configured")
+		return "", fmt.Errorf("chatbot: channel is not configured")
 	}
 	reply := "生成好了。"
 	msg := OutgoingMessage{Text: reply, ImageURLs: resp.Images}
@@ -4069,7 +4069,7 @@ func (r *Runtime) generateAndSendImage(ctx context.Context, event MessageEvent, 
 	if err := r.sendOutgoing(ctx, event, msg); err != nil {
 		return "", err
 	}
-	r.recordImageOperation(ctx, event, "qqbot.image.generate", "图片生成已发送", prompt, imagePrompt, cfg.ImageModelWithDefault(), len(resp.Images), 0)
+	r.recordImageOperation(ctx, event, "chatbot.image.generate", "图片生成已发送", prompt, imagePrompt, cfg.ImageModelWithDefault(), len(resp.Images), 0)
 	return reply, nil
 }
 
@@ -4090,7 +4090,7 @@ func (r *Runtime) editAndSendImage(ctx context.Context, event MessageEvent, prom
 		}
 		return reply, nil
 	}
-	imagePrompt := r.enrichImagePromptWithQQContext(ctx, event, prompt)
+	imagePrompt := r.enrichImagePromptWithChatContext(ctx, event, prompt)
 	resp, cfg, err := r.editImageWithFailover(ctx, llm.ImageEditRequest{
 		Prompt: imagePrompt,
 		Images: sourceImages,
@@ -4112,7 +4112,7 @@ func (r *Runtime) editAndSendImage(ctx context.Context, event MessageEvent, prom
 	if err := r.sendOutgoing(ctx, event, msg); err != nil {
 		return "", err
 	}
-	r.recordImageOperation(ctx, event, "qqbot.image.edit", "图片编辑已发送", prompt, imagePrompt, cfg.ImageModelWithDefault(), len(resp.Images), len(sourceImages))
+	r.recordImageOperation(ctx, event, "chatbot.image.edit", "图片编辑已发送", prompt, imagePrompt, cfg.ImageModelWithDefault(), len(resp.Images), len(sourceImages))
 	return reply, nil
 }
 
@@ -4126,7 +4126,7 @@ func (r *Runtime) recordImageOperation(ctx context.Context, event MessageEvent, 
 		Level:   applog.LevelInfo,
 		Action:  action,
 		Message: message,
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":      event.GroupID,
@@ -4154,9 +4154,9 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.llm_usage",
+		Action:  "chatbot.llm_usage",
 		Message: "LLM 调用用量已记录",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":            event.GroupID,
@@ -4173,7 +4173,7 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	})
 }
 
-func (r *Runtime) enrichImagePromptWithQQContext(ctx context.Context, event MessageEvent, prompt string) string {
+func (r *Runtime) enrichImagePromptWithChatContext(ctx context.Context, event MessageEvent, prompt string) string {
 	prompt = strings.TrimSpace(prompt)
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
 		return prompt
@@ -4194,7 +4194,7 @@ func (r *Runtime) enrichImagePromptWithQQContext(ctx context.Context, event Mess
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	botIDs := map[string]bool{}
-	for _, id := range []string{event.SelfID, cfg.BotQQ} {
+	for _, id := range []string{event.SelfID, cfg.BotAccount} {
 		if id = strings.TrimSpace(id); id != "" {
 			botIDs[id] = true
 		}
@@ -4205,7 +4205,7 @@ func (r *Runtime) enrichImagePromptWithQQContext(ctx context.Context, event Mess
 		}
 		member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
 		if err != nil || member.UserID == "" {
-			lines = append(lines, "被@成员："+userID+"，头像："+QQMemberAvatarURL(userID))
+			lines = append(lines, "被@成员："+userID+"，头像："+OneBotMemberAvatarURL(userID))
 			continue
 		}
 		lines = append(lines, "被@成员："+member.DisplayName()+" ("+member.UserID+")，头像："+member.AvatarURL)
@@ -4213,10 +4213,10 @@ func (r *Runtime) enrichImagePromptWithQQContext(ctx context.Context, event Mess
 	if len(lines) == 0 {
 		return prompt
 	}
-	return prompt + "\n\nQQ上下文（仅供理解群名、成员和头像来源；不要在图片中加入文字，除非用户明确要求）：\n" + strings.Join(lines, "\n")
+	return prompt + "\n\n群聊上下文（仅供理解群名、成员和头像来源；不要在图片中加入文字，除非用户明确要求）：\n" + strings.Join(lines, "\n")
 }
 
-const maxQQAvatarImageSources = 8
+const maxAvatarImageSources = 8
 
 func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 	var out []string
@@ -4243,7 +4243,7 @@ func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent,
 	if len(out) > 0 {
 		return out
 	}
-	out = appendImageEditSourceImages(out, r.qqImageEditSourceImages(ctx, event, prompt)...)
+	out = appendImageEditSourceImages(out, r.chatImageEditSourceImages(ctx, event, prompt)...)
 	if len(out) > 0 {
 		return out
 	}
@@ -4515,7 +4515,7 @@ func segmentsWithAvailableImages(segments []MessageSegment) []MessageSegment {
 	return out
 }
 
-func (r *Runtime) qqImageEditSourceImages(ctx context.Context, event MessageEvent, prompt string) []string {
+func (r *Runtime) chatImageEditSourceImages(ctx context.Context, event MessageEvent, prompt string) []string {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return nil
 	}
@@ -4526,26 +4526,26 @@ func (r *Runtime) qqImageEditSourceImages(ctx context.Context, event MessageEven
 	}, " ")
 	var out []string
 	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && wantsGroupAvatarImage(sourceText) {
-		out = appendImageEditSourceImages(out, QQGroupAvatarURL(event.GroupID))
+		out = appendImageEditSourceImages(out, OneBotGroupAvatarURL(event.GroupID))
 	}
-	for _, userID := range r.qqAvatarTargetUserIDs(ctx, event, sourceText) {
-		out = appendImageEditSourceImages(out, QQMemberAvatarURL(userID))
+	for _, userID := range r.avatarTargetUserIDs(ctx, event, sourceText) {
+		out = appendImageEditSourceImages(out, OneBotMemberAvatarURL(userID))
 	}
 	return out
 }
 
-func (r *Runtime) qqAvatarTargetUserIDs(ctx context.Context, event MessageEvent, text string) []string {
+func (r *Runtime) avatarTargetUserIDs(ctx context.Context, event MessageEvent, text string) []string {
 	cfg := r.effectiveConfigForEvent(event)
 	botIDs := map[string]bool{}
-	for _, id := range []string{event.SelfID, cfg.BotQQ} {
+	for _, id := range []string{event.SelfID, cfg.BotAccount} {
 		if id = strings.TrimSpace(id); id != "" {
 			botIDs[id] = true
 		}
 	}
 	var ids []string
 	if wantsBotAvatarImage(text) {
-		if cfg.BotQQ != "" {
-			ids = appendUniqueStrings(ids, cfg.BotQQ)
+		if cfg.BotAccount != "" {
+			ids = appendUniqueStrings(ids, cfg.BotAccount)
 		} else if event.SelfID != "" {
 			ids = appendUniqueStrings(ids, event.SelfID)
 		}
@@ -4584,7 +4584,7 @@ func (r *Runtime) qqAvatarTargetUserIDs(ctx context.Context, event MessageEvent,
 				break
 			}
 		}
-		if len(ids) >= maxQQAvatarImageSources {
+		if len(ids) >= maxAvatarImageSources {
 			return ids
 		}
 	}
@@ -4670,7 +4670,7 @@ func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (s
 }
 
 func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
-	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	return r.runRawLLMProviderForGroup(ctx, group, run)
@@ -4682,7 +4682,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 		wrapped = client
 		return "", nil
 	}
-	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	_, _ = run(provider)
@@ -4725,7 +4725,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 					return runLLMProviderProfileAttempts(ctx, []llm.Profile{profile}, cfgFactory, true, run)
 				}
 			}
-			return "", fmt.Errorf("qqbot: reply rule llm profile %q not found", profileID)
+			return "", fmt.Errorf("chatbot: reply rule llm profile %q not found", profileID)
 		}
 		profiles, roleErr := r.roleBoundProfiles(set, group)
 		if roleErr != nil {
@@ -4750,7 +4750,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
 	}
 	if factory == nil {
-		return "", fmt.Errorf("qqbot: llm provider is not configured")
+		return "", fmt.Errorf("chatbot: llm provider is not configured")
 	}
 	client, err := factory()
 	if err != nil {
@@ -4779,7 +4779,7 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 				return profileRegistrySelection(registry, profile), true, nil
 			}
 		}
-		return llm.AgentModelConfig{}, false, fmt.Errorf("qqbot: reply rule llm profile %q not found", profileID)
+		return llm.AgentModelConfig{}, false, fmt.Errorf("chatbot: reply rule llm profile %q not found", profileID)
 	}
 	var profiles []llm.Profile
 	if role, ok := roles[key]; ok {
@@ -4843,7 +4843,7 @@ func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Pro
 	if role.Group != "" {
 		profiles := set.GroupProfiles(role.Group)
 		if len(profiles) == 0 {
-			return nil, fmt.Errorf("qqbot: model role group %q has no configured provider", role.Group)
+			return nil, fmt.Errorf("chatbot: model role group %q has no configured provider", role.Group)
 		}
 		candidates := make([]llm.Profile, 0, len(profiles))
 		skipped := make([]string, 0, len(profiles))
@@ -4851,14 +4851,14 @@ func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Pro
 			profile.Config = profile.Config.WithDefaults()
 			if supported, known := profileSupportsRoleModel(profile, role.Model); known && !supported {
 				skipped = append(skipped, profile.ID)
-				log.Printf("qqbot model role skipped incompatible profile: group=%q profile=%q model=%q", role.Group, profile.ID, role.Model)
+				log.Printf("chatbot model role skipped incompatible profile: group=%q profile=%q model=%q", role.Group, profile.ID, role.Model)
 				continue
 			}
 			profile.Config.Model = role.Model
 			candidates = append(candidates, profile)
 		}
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("qqbot: model role group %q has no provider supporting model %q (incompatible profiles: %s)", role.Group, role.Model, strings.Join(skipped, ", "))
+			return nil, fmt.Errorf("chatbot: model role group %q has no provider supporting model %q (incompatible profiles: %s)", role.Group, role.Model, strings.Join(skipped, ", "))
 		}
 		return candidates, nil
 	}
@@ -4868,12 +4868,12 @@ func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Pro
 		}
 		profile.Config = profile.Config.WithDefaults()
 		if supported, known := profileSupportsRoleModel(profile, role.Model); known && !supported {
-			return nil, fmt.Errorf("qqbot: model role profile %q does not support model %q", role.ProfileID, role.Model)
+			return nil, fmt.Errorf("chatbot: model role profile %q does not support model %q", role.ProfileID, role.Model)
 		}
 		profile.Config.Model = role.Model
 		return []llm.Profile{profile}, nil
 	}
-	return nil, fmt.Errorf("qqbot: model role profile %q was not found", role.ProfileID)
+	return nil, fmt.Errorf("chatbot: model role profile %q was not found", role.ProfileID)
 }
 
 func profileSupportsRoleModel(profile llm.Profile, modelID string) (supported bool, known bool) {
@@ -4935,7 +4935,7 @@ func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
 func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGenerateRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
 	configs := r.imageProviderConfigs()
 	if len(configs) == 0 {
-		return nil, llm.ProviderConfig{}, fmt.Errorf("qqbot: llm profile store is not configured")
+		return nil, llm.ProviderConfig{}, fmt.Errorf("chatbot: llm profile store is not configured")
 	}
 	var lastErr error
 	for _, cfg := range configs {
@@ -4956,7 +4956,7 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
 	configs := r.imageProviderConfigs()
 	if len(configs) == 0 {
-		return nil, llm.ProviderConfig{}, fmt.Errorf("qqbot: llm profile store is not configured")
+		return nil, llm.ProviderConfig{}, fmt.Errorf("chatbot: llm profile store is not configured")
 	}
 	var lastErr error
 	for _, cfg := range configs {
@@ -5038,7 +5038,7 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 }
 
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
-	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	r.mu.RLock()
@@ -5091,10 +5091,10 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		if current, ok := set.Current(); ok {
 			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, retryTransient, run)
 		}
-		return "", fmt.Errorf("qqbot: no llm profile is configured")
+		return "", fmt.Errorf("chatbot: no llm profile is configured")
 	}
 	if factory == nil {
-		return "", fmt.Errorf("qqbot: llm provider is not configured")
+		return "", fmt.Errorf("chatbot: llm provider is not configured")
 	}
 	client, err := factory()
 	if err != nil {
@@ -5135,7 +5135,7 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 	set := store.Profiles().WithDefaults()
 	attempts := set.ActiveGroupProfiles()
 	if len(attempts) == 0 {
-		return "", fmt.Errorf("qqbot: no llm profile is configured")
+		return "", fmt.Errorf("chatbot: no llm profile is configured")
 	}
 	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, func(profileID string) {
 		activateLLMProfile(store, profileID)
@@ -5342,8 +5342,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if agentEnabled && hasTool("diana.capabilities") {
 		builder.WriteString("\n如果用户询问你会什么、能否完成某类任务、某功能由哪个插件负责，或质疑你是否具有某项能力，必须先调用 diana.capabilities 从自身能力知识库检索；不要仅凭系统提示词记忆猜测。回答时结合检索结果和当前关系权限，未解锁的能力要如实说明门槛。")
 	}
-	if agentEnabled && hasTool("diana.qq_group") {
-		builder.WriteString("\n如果用户要求读取当前群资料、群成员列表、按昵称查成员，或真正 @ 某位/多位/其余成员，必须调用 diana.qq_group 获取 OneBot v11 的实时结果；不要声称只能识别用户手动 @ 出来的成员。如果用户要求读取或修改当前群的回复频率、回复阈值、自然插话模式或最低回复成员群等级，必须调用 diana.qq_group 的 reply_policy 或 set_reply_policy；不要口头声称已经修改，工具会校验机器人主人、群主或群管理员权限。")
+	if agentEnabled && hasTool("diana.onebot_group") {
+		builder.WriteString("\n如果用户要求读取当前群资料、群成员列表、按昵称查成员，或真正 @ 某位/多位/其余成员，必须调用 diana.onebot_group 获取 OneBot v11 的实时结果；不要声称只能识别用户手动 @ 出来的成员。如果用户要求读取或修改当前群的回复频率、回复阈值、自然插话模式或最低回复成员群等级，必须调用 diana.onebot_group 的 reply_policy 或 set_reply_policy；不要口头声称已经修改，工具会校验机器人主人、群主或群管理员权限。")
 	}
 	if agentEnabled && hasTool("diana.relationship") {
 		builder.WriteString("\n如果用户要求查询当前群的互动次数或好感度排行、全体成员的关系汇总，必须调用 diana.relationship 并传 operation=list；榜单对群内成员开放，不得自行以隐私、公开范围或权限为由拒绝。")
@@ -5471,7 +5471,7 @@ func (r *Runtime) replyMentionPrompt(event MessageEvent, history []MessageEvent)
 
 func (r *Runtime) replyMentionCandidates(event MessageEvent, history []MessageEvent) []replyMentionCandidate {
 	cfg := r.effectiveConfigForEvent(event)
-	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotQQ))
+	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
 	identityEvents := make([]MessageEvent, 0, len(history)+1)
 	identityEvents = append(identityEvents, event)
 	for index := len(history) - 1; index >= 0; index-- {
@@ -5700,7 +5700,7 @@ func (r *Runtime) applyQuotedMessage(event MessageEvent, quoted *QuotedMessage) 
 	if quoted == nil {
 		return event
 	}
-	if botQQ := strings.TrimSpace(r.effectiveConfigForEvent(event).BotQQ); botQQ != "" && quoted.UserID == botQQ {
+	if botAccount := strings.TrimSpace(r.effectiveConfigForEvent(event).BotAccount); botAccount != "" && quoted.UserID == botAccount {
 		event.ToMe = true
 	}
 	return event
@@ -5738,10 +5738,10 @@ func (r *Runtime) recordReplyReferenceError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.reply_reference.get_msg",
+		Action:  "chatbot.reply_reference.get_msg",
 		Message: "引用消息读取失败",
 		Detail:  err.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  messageID,
 		Metadata: map[string]any{
 			"message_id": messageID,
@@ -5874,10 +5874,10 @@ func (r *Runtime) recordForwardMessageError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.forward.get_forward_msg",
+		Action:  "chatbot.forward.get_forward_msg",
 		Message: "合并转发读取失败",
 		Detail:  err.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  forwardID,
 		Metadata: map[string]any{
 			"forward_id": forwardID,
@@ -6395,7 +6395,7 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 				if record, found, err := store.GetImageDescription(ctx, hash); err == nil && found {
 					description = strings.TrimSpace(record.Description)
 				} else if err != nil {
-					log.Printf("qqbot history image description cache load failed: %v", err)
+					log.Printf("chatbot history image description cache load failed: %v", err)
 				}
 			}
 		}
@@ -6806,11 +6806,11 @@ func (r *Runtime) sendPluginResponse(ctx context.Context, event MessageEvent, re
 	for _, value := range resp.VideoURLs {
 		if path := localMediaPath(value); path != "" {
 			if sharer == nil {
-				return fmt.Errorf("qqbot: local media sharing is not configured")
+				return fmt.Errorf("chatbot: local media sharing is not configured")
 			}
 			sharedURL, ok := sharer.Share(path, resolverLocalMediaTTL)
 			if !ok {
-				return fmt.Errorf("qqbot: cannot share downloaded media %q", filepath.Base(path))
+				return fmt.Errorf("chatbot: cannot share downloaded media %q", filepath.Base(path))
 			}
 			videoURLs = append(videoURLs, sharedURL)
 			localPaths = append(localPaths, path)
@@ -6844,7 +6844,7 @@ func (r *Runtime) sendPluginResponse(ctx context.Context, event MessageEvent, re
 
 func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse, cfg BotConfig) error {
 	if r.channel == nil {
-		return fmt.Errorf("qqbot: channel is not configured")
+		return fmt.Errorf("chatbot: channel is not configured")
 	}
 	messages := append([]OutgoingMessage(nil), resp.ForwardMessages...)
 	if len(messages) == 0 {
@@ -6891,7 +6891,7 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			// resolver result is still delivered instead of losing the whole turn.
 			// 兜底散装是「合并转发看起来没生效」的唯一入口，必须留痕，否则用户
 			// 只看到刷屏、日志里什么都查不到。
-			log.Printf("qqbot resolver merged forward failed, delivered %d messages separately: %v", len(forwardMessages), err)
+			log.Printf("chatbot resolver merged forward failed, delivered %d messages separately: %v", len(forwardMessages), err)
 			if directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages); directErr != nil {
 				return errors.Join(err, directErr)
 			}
@@ -7071,7 +7071,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 
 func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEvent, upload resolverVideoUpload) error {
 	if r.channel == nil {
-		return fmt.Errorf("qqbot: channel is not configured")
+		return fmt.Errorf("chatbot: channel is not configured")
 	}
 	file := upload.Path
 	// 桥可能运行在容器或另一台机器上，宿主机路径对它不可见；能生成共享
@@ -7087,14 +7087,14 @@ func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEven
 	if event.Kind == EventKindGroup {
 		groupID, err := strconv.ParseInt(event.GroupID, 10, 64)
 		if err != nil {
-			return fmt.Errorf("qqbot: invalid group id %q", event.GroupID)
+			return fmt.Errorf("chatbot: invalid group id %q", event.GroupID)
 		}
 		action = "upload_group_file"
 		params["group_id"] = groupID
 	} else {
 		userID, err := strconv.ParseInt(event.UserID, 10, 64)
 		if err != nil {
-			return fmt.Errorf("qqbot: invalid user id %q", event.UserID)
+			return fmt.Errorf("chatbot: invalid user id %q", event.UserID)
 		}
 		params["user_id"] = userID
 	}
@@ -7288,7 +7288,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		return result, err
 	}
 	if r.channel == nil {
-		return nil, fmt.Errorf("qqbot: channel is not configured")
+		return nil, fmt.Errorf("chatbot: channel is not configured")
 	}
 	if replySuppressionSendGuardEnabled(ctx) {
 		if restriction, blocked := r.activeReplySuppression(event, time.Now()); blocked {
@@ -7368,7 +7368,7 @@ func (r *Runtime) recordInboundDelivery(event MessageEvent, stage OutboundDelive
 	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := store.RecordInboundEventDelivery(auditCtx, event, stage, outboundMessageID, detail); err != nil {
-		log.Printf("qqbot persist outbound delivery stage failed: %v", err)
+		log.Printf("chatbot persist outbound delivery stage failed: %v", err)
 	}
 }
 
@@ -7389,7 +7389,7 @@ func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage,
 		channel := r.channel
 		r.mu.RUnlock()
 		if channel == nil {
-			return nil, fmt.Errorf("qqbot: channel is not configured")
+			return nil, fmt.Errorf("chatbot: channel is not configured")
 		}
 		var result map[string]any
 		if resultChannel, ok := channel.(ResultChannel); ok {
@@ -7404,7 +7404,7 @@ func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage,
 			return nil, lastErr
 		}
 	}
-	return nil, fmt.Errorf("qqbot: send failed after %d attempts: %w", attempts, lastErr)
+	return nil, fmt.Errorf("chatbot: send failed after %d attempts: %w", attempts, lastErr)
 }
 
 func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg OutgoingMessage) {
@@ -7466,7 +7466,7 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 		return MessageEvent{}
 	}
 	cfg := r.effectiveConfigForEvent(source)
-	selfID := firstNonEmpty(strings.TrimSpace(source.SelfID), strings.TrimSpace(cfg.BotQQ), "bot")
+	selfID := firstNonEmpty(strings.TrimSpace(source.SelfID), strings.TrimSpace(cfg.BotAccount), "bot")
 	senderName := firstNonEmpty(strings.TrimSpace(cfg.Name), "Diana")
 	event := MessageEvent{
 		Platform:                 source.Platform,
@@ -7602,11 +7602,11 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 		return "", blockedErr
 	}
 	if r.channel == nil {
-		return "", fmt.Errorf("qqbot: channel is not configured")
+		return "", fmt.Errorf("chatbot: channel is not configured")
 	}
-	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotQQ), strings.TrimSpace(r.channel.Status().SelfID))
+	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(r.channel.Status().SelfID))
 	if selfID == "" {
-		return "", fmt.Errorf("qqbot: missing self id for resolver forward")
+		return "", fmt.Errorf("chatbot: missing self id for resolver forward")
 	}
 	// 先试自定义节点：内容直接内联，一个请求就发完，是 OneBot v11 里兼容性
 	// 最好的做法（嵌套转发一直走的就是它）。暂存方式要先给机器人自己发 N 条
@@ -7623,11 +7623,11 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 		}
 		// 有的实现（如 SnowLuma）能直发媒体，却无法在合并转发节点里重建图片
 		// 元素。这时退回暂存方式，用真实消息 ID 组装。
-		log.Printf("qqbot resolver forward: custom nodes rejected, falling back to staged message ids: %v", err)
+		log.Printf("chatbot resolver forward: custom nodes rejected, falling back to staged message ids: %v", err)
 	}
 	selfUIN, err := strconv.ParseInt(selfID, 10, 64)
 	if err != nil {
-		return "", fmt.Errorf("qqbot: invalid self id %q", selfID)
+		return "", fmt.Errorf("chatbot: invalid self id %q", selfID)
 	}
 	messageIDs := make([]string, 0, len(messages))
 	for _, msg := range messages {
@@ -7641,11 +7641,11 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 			})
 		})
 		if err != nil {
-			return "", fmt.Errorf("qqbot: forward staging failed (send_private_msg to self): %w", err)
+			return "", fmt.Errorf("chatbot: forward staging failed (send_private_msg to self): %w", err)
 		}
 		messageID := apiMessageID(result)
 		if messageID == "" {
-			return "", fmt.Errorf("qqbot: forward staging did not return message_id: %#v", result)
+			return "", fmt.Errorf("chatbot: forward staging did not return message_id: %#v", result)
 		}
 		messageIDs = append(messageIDs, messageID)
 	}
@@ -7657,15 +7657,15 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 
 func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse, summary string, cfg BotConfig) ([]string, error) {
 	if r.channel == nil {
-		return nil, fmt.Errorf("qqbot: channel is not configured")
+		return nil, fmt.Errorf("chatbot: channel is not configured")
 	}
-	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotQQ), strings.TrimSpace(r.channel.Status().SelfID))
+	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(r.channel.Status().SelfID))
 	if selfID == "" {
-		return nil, fmt.Errorf("qqbot: missing self id for nested forward")
+		return nil, fmt.Errorf("chatbot: missing self id for nested forward")
 	}
 	innerNodes := buildCustomForwardNodes(resp.ForwardMessages, cfg.Name, selfID)
 	if len(innerNodes) == 0 {
-		return nil, fmt.Errorf("qqbot: recall forward has no original message nodes")
+		return nil, fmt.Errorf("chatbot: recall forward has no original message nodes")
 	}
 	summaryNodes := buildCustomForwardNodes([]OutgoingMessage{{
 		Text:        strings.TrimSpace(summary),
@@ -7682,21 +7682,21 @@ func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event Mes
 		if errors.Is(err, errGroupSendUnavailable) {
 			return nil, err
 		}
-		log.Printf("qqbot recall forward with media failed, retrying as text: %v", err)
+		log.Printf("chatbot recall forward with media failed, retrying as text: %v", err)
 		fallbackNodes := append(summaryNodes, buildCustomForwardNodes(recallForwardTextFallback(resp.ForwardMessages), cfg.Name, selfID)...)
 		outerResult, err = r.sendForwardNodesWithResult(ctx, event, fallbackNodes)
 		if err != nil {
-			log.Printf("qqbot recall text forward failed, sending summary only: %v", err)
+			log.Printf("chatbot recall text forward failed, sending summary only: %v", err)
 			messageIDs, directErr := r.sendWithMessageIDs(ctx, event, strings.TrimSpace(summary))
 			if directErr != nil {
-				return nil, errors.Join(fmt.Errorf("qqbot: send recall forward: %w", err), directErr)
+				return nil, errors.Join(fmt.Errorf("chatbot: send recall forward: %w", err), directErr)
 			}
 			return messageIDs, nil
 		}
 	}
 	messageID := apiMessageID(outerResult)
 	if messageID == "" {
-		log.Printf("qqbot recall forward cannot schedule cleanup: missing message_id")
+		log.Printf("chatbot recall forward cannot schedule cleanup: missing message_id")
 	}
 	r.rememberOutgoingWithMessageID(ctx, event, OutgoingMessage{Text: strings.TrimSpace(summary)}, messageID)
 	return []string{messageID}, nil
@@ -7807,14 +7807,14 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	if event.Kind == EventKindGroup {
 		groupID, err := strconv.ParseInt(event.GroupID, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("qqbot: invalid group id %q", event.GroupID)
+			return nil, fmt.Errorf("chatbot: invalid group id %q", event.GroupID)
 		}
 		action = "send_group_forward_msg"
 		params["group_id"] = groupID
 	} else {
 		userID, err := strconv.ParseInt(event.UserID, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("qqbot: invalid user id %q", event.UserID)
+			return nil, fmt.Errorf("chatbot: invalid user id %q", event.UserID)
 		}
 		params["user_id"] = userID
 	}
@@ -7860,7 +7860,7 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 	if senderName == "" {
 		senderName = "Diana"
 	}
-	senderUIN := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotQQ), "0")
+	senderUIN := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount), "0")
 	stepKey, replayedMessageID, alreadyDelivered := r.claimOutboundStep(ctx, fingerprintOf(
 		"forward", string(event.Kind), event.GroupID, event.UserID, senderName, senderUIN, strings.Join(chunks, "\x00")))
 	if alreadyDelivered {
@@ -7918,7 +7918,7 @@ func (r *Runtime) scheduleMessageDeletes(event MessageEvent, messageIDs []string
 func (r *Runtime) recordRecallReplyDelete(event MessageEvent, messageID string, delay time.Duration, deleteErr error) {
 	writer := r.appLogWriter()
 	if deleteErr != nil {
-		log.Printf("qqbot recall disclosure auto-delete failed: message_id=%s: %v", messageID, deleteErr)
+		log.Printf("chatbot recall disclosure auto-delete failed: message_id=%s: %v", messageID, deleteErr)
 	}
 	if writer == nil {
 		return
@@ -7926,9 +7926,9 @@ func (r *Runtime) recordRecallReplyDelete(event MessageEvent, messageID string, 
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.recall_reply.auto_delete",
+		Action:  "chatbot.recall_reply.auto_delete",
 		Message: "撤回记录回复已自动撤回",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  messageID,
 		Metadata: map[string]any{
 			"group_id":      event.GroupID,
@@ -8060,7 +8060,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := store.AppendMessageEvent(ctx, sessionKey(event), event); err != nil {
-		log.Printf("qqbot message history persist failed: %v", err)
+		log.Printf("chatbot message history persist failed: %v", err)
 	}
 }
 
@@ -8107,7 +8107,7 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	update.OwnerID = cfg.OwnerID
 	profile, err := store.UpdateUserMemory(ctx, event, update)
 	if err != nil {
-		log.Printf("qqbot user memory update failed: %v", err)
+		log.Printf("chatbot user memory update failed: %v", err)
 		return UserMemoryProfile{}, false
 	}
 	return profile, true
@@ -8137,7 +8137,7 @@ func (r *Runtime) loadUserMemoryProfile(ctx context.Context, event MessageEvent)
 	defer cancel()
 	profile, ok, err := store.GetUserMemory(loadCtx, userID)
 	if err != nil {
-		log.Printf("qqbot user memory load failed: %v", err)
+		log.Printf("chatbot user memory load failed: %v", err)
 		return UserMemoryProfile{UserID: userID, DisplayName: event.SenderNameOrID()}, false
 	}
 	if !ok {
@@ -8218,7 +8218,7 @@ func (r *Runtime) contextHistory(event MessageEvent) []MessageEvent {
 	defer cancel()
 	stored, err := store.ListRecentMessageEvents(ctx, session, limit)
 	if err != nil {
-		log.Printf("qqbot message history load failed: %v", err)
+		log.Printf("chatbot message history load failed: %v", err)
 		return memory
 	}
 	current := mergeMessageHistory(memory, stored, limit)
@@ -8241,7 +8241,7 @@ func (r *Runtime) recallHistory(event MessageEvent) []MessageEvent {
 	defer cancel()
 	events, err := recallStore.ListGroupRecallEvents(ctx, event.GroupID)
 	if err != nil {
-		log.Printf("qqbot recall history load failed: %v", err)
+		log.Printf("chatbot recall history load failed: %v", err)
 		return nil
 	}
 	return events
@@ -8263,7 +8263,7 @@ func (r *Runtime) enrichRecallNotice(ctx context.Context, event MessageEvent) Me
 		record, found, err = lookup.FindMessageEvent(loadCtx, sessionKey(event), event.MessageID)
 		cancel()
 		if err != nil {
-			log.Printf("qqbot recalled message load failed: %v", err)
+			log.Printf("chatbot recalled message load failed: %v", err)
 		}
 	}
 	if !found && r.channel != nil {
@@ -8271,7 +8271,7 @@ func (r *Runtime) enrichRecallNotice(ctx context.Context, event MessageEvent) Me
 		data, callErr := r.callOneBotAPIForEvent(callCtx, event, "get_msg", map[string]any{"message_id": oneBotMessageIDParam(event.MessageID)})
 		callCancel()
 		if callErr != nil {
-			log.Printf("qqbot recalled message get_msg failed: message_id=%s: %v", event.MessageID, callErr)
+			log.Printf("chatbot recalled message get_msg failed: message_id=%s: %v", event.MessageID, callErr)
 		} else {
 			session := HistorySession{Kind: EventKindPrivate, ID: event.UserID}
 			if event.GroupID != "" {
@@ -8388,7 +8388,7 @@ func (r *Runtime) record(record EventRecord) {
 	if auditStore, ok := inboundStore.(InboundEventAuditStore); ok && strings.TrimSpace(record.MessageID) != "" {
 		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if err := auditStore.RecordInboundEventAudit(auditCtx, record); err != nil {
-			log.Printf("qqbot persist inbound event reason failed: %v", err)
+			log.Printf("chatbot persist inbound event reason failed: %v", err)
 		}
 		cancel()
 	}
@@ -9238,7 +9238,7 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 		return normalizeReply(llmResp.Text, pluginFollowUpMaxChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 	if err != nil {
-		log.Printf("qqbot repository watch follow-up generation failed: %v", err)
+		log.Printf("chatbot repository watch follow-up generation failed: %v", err)
 		return
 	}
 	comment = strings.TrimSpace(comment)
@@ -9247,7 +9247,7 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 	}
 	for _, target := range repositoryWatchDeliveryTargets(item) {
 		if err := r.sendNotification(ctx, target, comment); err != nil {
-			log.Printf("qqbot repository watch follow-up send failed: %v", err)
+			log.Printf("chatbot repository watch follow-up send failed: %v", err)
 		}
 	}
 }
@@ -9939,18 +9939,18 @@ func (r *Runtime) allowQuietNotice(event MessageEvent) bool {
 // isSelfMessage 判断事件是否来自机器人自身。
 func (r *Runtime) isSelfMessage(event MessageEvent) bool {
 	cfg := r.Config().WithDefaults()
-	if event.UserID == "" || cfg.BotQQ == "" {
+	if event.UserID == "" || cfg.BotAccount == "" {
 		return false
 	}
-	return event.UserID == cfg.BotQQ
+	return event.UserID == cfg.BotAccount
 }
 
 func (r *Runtime) isBotOwnRecall(event MessageEvent) bool {
 	if !isRecallNotice(event) {
 		return false
 	}
-	botQQ := firstNonEmpty(r.Config().WithDefaults().BotQQ, event.SelfID)
-	return botQQ != "" && event.UserID == botQQ && event.OperatorID == botQQ
+	botAccount := firstNonEmpty(r.Config().WithDefaults().BotAccount, event.SelfID)
+	return botAccount != "" && event.UserID == botAccount && event.OperatorID == botAccount
 }
 
 // isGroupDisabled 判断群是否被禁用。
@@ -9981,7 +9981,7 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 	r.mu.RLock()
 	cfg := r.cfg.WithDefaults()
 	r.mu.RUnlock()
-	if userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotQQ) {
+	if userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotAccount) {
 		return false
 	}
 	for _, disabled := range cfg.DisabledUsers {

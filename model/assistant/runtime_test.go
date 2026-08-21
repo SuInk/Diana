@@ -29,7 +29,7 @@ import (
 func TestRuntimeShouldHandleGroupMentionAndTrigger(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		GroupTriggers:  []string{"Diana"},
-		BotQQ:          "42",
+		BotAccount:     "42",
 		DisabledGroups: []string{"999"},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
@@ -155,7 +155,7 @@ func TestRuntimeDirectTriggersBypassProactiveRouter(t *testing.T) {
 				`{"action":"none","prompt":""}`,
 				"直接触发成功",
 			}}
-			runtime := NewRuntime(BotConfig{BotQQ: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+			runtime := NewRuntime(BotConfig{BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
 			})
 			if err := runtime.HandleEvent(context.Background(), tt.event); err != nil {
@@ -199,7 +199,7 @@ func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
 	}
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.96,"category":"bot_related","target_message_id":"reply-1","turn_message_ids":["reply-1"],"directed_at_bot":true,"answerable":true,"reason":"用户在追问机器人刚才结论的依据，现有上下文足够回答"}`}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    0.000001,
 		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -247,7 +247,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 				tt.routeReply,
 			}}
 			runtime := NewRuntime(BotConfig{
-				BotQQ:                   "42",
+				BotAccount:              "42",
 				ProactiveReplyChance:    0.000001,
 				ProactiveReplyThreshold: 0.9,
 			}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -297,7 +297,7 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":false,"confidence":0.99,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"reason":"群成员实时人数属于不可访问的群内数据"}`}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:            true,
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{}, nil, nil, func() (LLMProvider, error) {
@@ -328,7 +328,7 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 		t.Fatalf("router request = %#v", provider.request.Messages)
 	}
 	prompt := provider.request.Messages[0].Content + "\n" + provider.request.Messages[1].Content
-	for _, want := range []string{"web_search.search", "始终注册", "diana.qq_group", "成员总数", "diana.image", "系统没有绘图工具", "available_reply_tools"} {
+	for _, want := range []string{"web_search.search", "始终注册", "diana.onebot_group", "成员总数", "diana.image", "系统没有绘图工具", "available_reply_tools"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("router prompt missing %q: %s", want, prompt)
 		}
@@ -405,7 +405,7 @@ func TestRuntimeJudgesProactiveGroupMessagesImmediately(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			provider := &sequenceLLMProvider{replies: []string{tt.routeReply}}
 			runtime := NewRuntime(BotConfig{
-				BotQQ: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8,
+				BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8,
 			}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
 			})
@@ -459,7 +459,7 @@ func TestLegacyProactiveReplyOutcomesRemainReadable(t *testing.T) {
 func TestRuntimeUpdateConfigIgnoresPreviousRunExit(t *testing.T) {
 	first := newDelayedExitChannel()
 	second := newDelayedExitChannel()
-	cfg := BotConfig{Enabled: true, BotQQ: "42"}
+	cfg := BotConfig{Enabled: true, BotAccount: "42"}
 	runtime := NewRuntime(cfg, first, NewPluginManager(), nil, nil, nil, nil)
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1377,7 +1377,7 @@ func TestRuntimeSystemPromptOmitsDeprecatedPoliticalRule(t *testing.T) {
 // TestRuntimeIgnoresSelfMessage 验证对应功能场景。
 func TestRuntimeIgnoresSelfMessage(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	if !runtime.isSelfMessage(MessageEvent{UserID: "42"}) {
 		t.Fatal("self message should be ignored")
@@ -1390,7 +1390,7 @@ func TestRuntimeIgnoresSelfMessage(t *testing.T) {
 func TestRuntimeRecordsSelfMessageWithoutReply(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
 		Kind:       EventKindGroup,
@@ -1415,7 +1415,7 @@ func TestRuntimeRecordsSelfMessageWithoutReply(t *testing.T) {
 func TestRuntimeDisabledUserRecordsWithoutReply(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:         "42",
+		BotAccount:    "42",
 		OwnerID:       "10000",
 		DisabledUsers: []string{"10007"},
 		GroupTriggers: []string{"Diana"},
@@ -1446,7 +1446,7 @@ func TestRuntimeDisabledUserRecordsWithoutReply(t *testing.T) {
 func TestRuntimeSelfEchoFeedsRecallHistory(t *testing.T) {
 	plugins := NewDefaultPluginManager()
 	runtime := NewRuntime(BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 	}, &recordingChannel{}, plugins, nil, nil, nil, nil)
 	selfMessage := MessageEvent{
 		Kind:       EventKindGroup,
@@ -1484,7 +1484,7 @@ func TestRuntimeSelfEchoFeedsRecallHistory(t *testing.T) {
 
 func TestRuntimeSendsRecallSummaryWithFlatForgedForward(t *testing.T) {
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{Name: "Diana", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{Name: "Diana", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	resp := PluginResponse{NestedForward: true, ForwardMessages: []OutgoingMessage{
 		{Text: "第一条原消息", ForwardName: "Alice", ForwardUIN: "10001", ForwardTime: 100},
 		{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"cached_file": "/tmp/recalled.jpg", "cached_mime": "image/jpeg", "url": "https://example.com/recalled.jpg"}}}, ForwardName: "Bob", ForwardUIN: "10002", ForwardTime: 200},
@@ -1513,7 +1513,7 @@ func TestRuntimeSendsRecallSummaryWithFlatForgedForward(t *testing.T) {
 
 func TestRuntimeFallsBackToTextRecallForwardWhenMediaForwardFails(t *testing.T) {
 	channel := &rejectMediaRecallForwardChannel{}
-	runtime := NewRuntime(BotConfig{Name: "Diana", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{Name: "Diana", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	resp := PluginResponse{NestedForward: true, ForwardMessages: []OutgoingMessage{{
 		Segments:    []MessageSegment{{Type: "image", Data: map[string]string{"cached_file": "/tmp/recalled.jpg"}}},
 		ForwardName: "Alice",
@@ -1710,7 +1710,7 @@ func TestRuntimeFiveReplyChunksUseForwardMessage(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
 		Name:                 "Diana",
-		BotQQ:                "42",
+		BotAccount:           "42",
 		DirectReplyChunkSize: 1,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
 
@@ -1744,7 +1744,7 @@ func TestRuntimeLongGroupReplyUsesForwardMessage(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
 		Name:                  "Diana",
-		BotQQ:                 "42",
+		BotAccount:            "42",
 		DirectReplyChunkSize:  3,
 		ForwardReplyThreshold: 5,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
@@ -1786,7 +1786,7 @@ func TestRuntimeLongGroupReplyUsesForwardMessage(t *testing.T) {
 func TestRuntimeLongPrivateReplyUsesForwardMessage(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
+		BotAccount:            "42",
 		DirectReplyChunkSize:  3,
 		ForwardReplyThreshold: 5,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
@@ -1919,7 +1919,7 @@ func TestRuntimeKeepsMentionAndGroupTriggerInPrompt(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &capturingLLMProvider{reply: "在呢"}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:         "42",
+		BotAccount:    "42",
 		GroupTriggers: []string{"Diana"},
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -1969,7 +1969,7 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 			return "", fmt.Errorf("unexpected LLM call %d", call)
 		}
 	}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.remember(MessageEvent{
@@ -2041,7 +2041,7 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 func TestRuntimeGroupLLMDefaultsMentionToCurrentSender(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{`{"action":"none"}`, "这是面向全群的说明。"}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
@@ -2173,7 +2173,7 @@ func TestRuntimeGroupLLMPreservesModelChosenAdditionalMentionPosition(t *testing
 func TestRuntimeMentionOnlyUsesFallbackPrompt(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &capturingLLMProvider{reply: "在"}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	_, err := runtime.replyTo(context.Background(), MessageEvent{
@@ -2199,7 +2199,7 @@ func TestRuntimeMentionOnlyUsesFallbackPrompt(t *testing.T) {
 func TestRuntimeKeepsReplyAndMentionInCurrentPrompt(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &capturingLLMProvider{reply: "接住了"}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 
@@ -2439,7 +2439,7 @@ func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 		`{"action":"none"}`,
 		"看起来是拍摄角度和光线让表情显得没那么明显。",
 	}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.remember(MessageEvent{
@@ -2485,7 +2485,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.82,"category":"bot_related","directed_at_bot":true,"answerable":true,"reason":"明确承接了机器人上一条回复且问题可回答"}`}
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.8,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -2518,7 +2518,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 			t.Fatalf("proactive router prompt missing %q", want)
 		}
 	}
-	if len(logs.entries) != 1 || logs.entries[0].Action != "qqbot.proactive_reply_route" {
+	if len(logs.entries) != 1 || logs.entries[0].Action != "chatbot.proactive_reply_route" {
 		t.Fatalf("route logs = %#v", logs.entries)
 	}
 	metadata := logs.entries[0].Metadata
@@ -2528,7 +2528,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 }
 
 func TestRuntimeProactiveReplyPayloadIncludesMessageAges(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind:       EventKindGroup,
 		Time:       1000,
@@ -2560,7 +2560,7 @@ func TestRuntimeProactiveReplyPayloadIncludesMessageAges(t *testing.T) {
 }
 
 func TestRuntimeProactiveReplyPayloadIdentifiesCorrectionToRecentBotReply(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind:       EventKindGroup,
 		Time:       100,
@@ -2612,7 +2612,7 @@ func TestRuntimeProactiveReplyPayloadIdentifiesCorrectionToRecentBotReply(t *tes
 func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.99,"category":"chat_in","target_message_id":"novel-remark","turn_message_ids":["novel-remark"],"directed_at_bot":false,"answerable":true,"substantive":true,"reason":"群友顺着机器人刚提到的离线小说轻松接话，可以自然回应"}`}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                 "42",
+		BotAccount:            "42",
 		ChatInEnabled:         boolPointer(true),
 		ChatInLevel:           ChatInLevelMax,
 		ChatInChance:          1,
@@ -2681,7 +2681,7 @@ func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 func TestRuntimeProactiveReplyKeepsBotFollowupAcrossSameSenderImage(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.97,"category":"bot_related","directed_at_bot":true,"answerable":true}`}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -2754,7 +2754,7 @@ func TestRuntimeProactiveReplyRoutesClearQuestionsAtStrictThreshold(t *testing.T
 		`{"should_reply":true,"confidence":0.96,"category":"needs_response","directed_at_bot":false,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -2820,7 +2820,7 @@ func TestRuntimeRepliesWhenImageFulfillsRecentBotRequest(t *testing.T) {
 		"看到了，截图里的 QQ 版本是 9.9.31。",
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.8,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -2906,7 +2906,7 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	}
 	var attempts []string
 	var attemptsMu sync.Mutex
-	runtime := NewRuntime(BotConfig{BotQQ: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), store, nil, nil, nil)
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
 		attemptsMu.Lock()
 		defer attemptsMu.Unlock()
@@ -3053,7 +3053,7 @@ func TestRuntimeProactiveReplyDoesNotRateLimitQualifiedMessages(t *testing.T) {
 		`{"should_reply":true,"confidence":0.99,"category":"bot_related","directed_at_bot":true,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -3314,7 +3314,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	channel := &recordingChannel{}
 	logs := &captureAppLogs{}
 	var llmCalls atomic.Int32
-	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, BotQQ: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls.Add(1)
 		return &capturingLLMProvider{reply: "不应该调用"}, nil
 	})
@@ -3375,7 +3375,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		t.Fatalf("history missing bot resolver reply: %#v", history)
 	}
 	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "qqbot.resolver.video_download" {
+	if len(entries) != 1 || entries[0].Action != "chatbot.resolver.video_download" {
 		t.Fatalf("resolver logs = %#v", entries)
 	}
 }
@@ -3397,7 +3397,7 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 	manager := NewPluginManager(plugin)
 	channel := &recordingChannel{}
 	var llmCalls atomic.Int32
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls.Add(1)
 		return &capturingLLMProvider{reply: "不应该调用"}, nil
 	})
@@ -3458,7 +3458,7 @@ func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
 	manager := NewPluginManager(plugin)
 	channel := &recordingChannel{}
 	var llmCalls atomic.Int32
-	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, BotQQ: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls.Add(1)
 		return &capturingLLMProvider{reply: "不应该调用"}, nil
 	})
@@ -3875,7 +3875,7 @@ func TestRuntimeImageEditCommandUsesRecentImageAndSendsImage(t *testing.T) {
 		Model:      "gpt-test",
 		ImageModel: "gpt-image-2",
 	})}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["10001"] = UserMemoryProfile{UserID: "10001", Favorability: 20, MessageCount: 10}
 	runtime.SetUserMemoryStore(memory)
@@ -3927,7 +3927,7 @@ func TestRuntimeImageEditCommandUsesRecentImageAndSendsImage(t *testing.T) {
 	}
 }
 
-func TestRuntimeQQGroupInfoAndMemberList(t *testing.T) {
+func TestRuntimeOneBotGroupInfoAndMemberList(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_info": {
 			"group_id":         float64(123456),
@@ -3948,7 +3948,7 @@ func TestRuntimeQQGroupInfoAndMemberList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetGroupInfo() error = %v", err)
 	}
-	if group.GroupName != "测试群" || group.MemberCount != 2 || group.MaxMemberCount != 500 || group.AvatarURL != QQGroupAvatarURL("123456") {
+	if group.GroupName != "测试群" || group.MemberCount != 2 || group.MaxMemberCount != 500 || group.AvatarURL != OneBotGroupAvatarURL("123456") {
 		t.Fatalf("group = %#v", group)
 	}
 
@@ -3956,13 +3956,13 @@ func TestRuntimeQQGroupInfoAndMemberList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetGroupMemberList() error = %v", err)
 	}
-	if len(members) != 2 || members[0].UserID != "20002" || members[0].DisplayName() != "阿梨" || members[0].AvatarURL != QQMemberAvatarURL("20002") {
+	if len(members) != 2 || members[0].UserID != "20002" || members[0].DisplayName() != "阿梨" || members[0].AvatarURL != OneBotMemberAvatarURL("20002") {
 		t.Fatalf("members = %#v", members)
 	}
 }
 
 func TestRuntimeImageEditCanUseMentionedMemberAvatar(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
 		Kind:      EventKindGroup,
 		GroupID:   "123456",
@@ -3976,13 +3976,13 @@ func TestRuntimeImageEditCanUseMentionedMemberAvatar(t *testing.T) {
 		ToMe: true,
 	}
 	sources := runtime.imageEditSourceImages(context.Background(), event, "把 @20002 的头像改成赛博风")
-	if len(sources) != 1 || sources[0] != QQMemberAvatarURL("20002") {
+	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("20002") {
 		t.Fatalf("sources = %#v", sources)
 	}
 }
 
 func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind:      EventKindPrivate,
 		UserID:    "10001",
@@ -4003,8 +4003,8 @@ func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
 	}
 
 	sources := runtime.imageEditSourceImages(context.Background(), event, "把我头像变成黑白")
-	if len(sources) != 1 || sources[0] != QQMemberAvatarURL("10001") {
-		t.Fatalf("sources = %#v, want sender avatar %q", sources, QQMemberAvatarURL("10001"))
+	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("10001") {
+		t.Fatalf("sources = %#v, want sender avatar %q", sources, OneBotMemberAvatarURL("10001"))
 	}
 }
 
@@ -4015,7 +4015,7 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 	)
 	recentImage := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(tinyJPEGBytes(t))
 	newRuntimeWithRecentImage := func() *Runtime {
-		runtime := NewRuntime(BotConfig{BotQQ: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		runtime := NewRuntime(BotConfig{BotAccount: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 		runtime.remember(MessageEvent{
 			Kind:      EventKindPrivate,
 			UserID:    "10001",
@@ -4067,7 +4067,7 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 				Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "把我头像变成黑白"}}},
 			},
 			prompt: "把我头像变成黑白",
-			want:   QQMemberAvatarURL("10001"),
+			want:   OneBotMemberAvatarURL("10001"),
 		},
 		{
 			name: "recent context image",
@@ -4105,7 +4105,7 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 		}
 		return fmt.Sprintf(`{"action":"edit_image","prompt":"以 @%s 的头像为身份参考，创作宇航员主题头像，并保持身份特征。"}`, identityAlias), nil
 	}
-	runtime := NewRuntime(BotConfig{BotQQ: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
@@ -4144,7 +4144,7 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 		t.Fatalf("available identity images = %#v", payload.AvailableIdentityImages)
 	}
 	identity := payload.AvailableIdentityImages[0]
-	if identity.Source != "mentioned_member_avatar" || identity.UserID != identityAlias || !strings.HasPrefix(identity.UserID, "qq_user_") {
+	if identity.Source != "mentioned_member_avatar" || identity.UserID != identityAlias || !strings.HasPrefix(identity.UserID, "chat_user_") {
 		t.Fatalf("identity image = %#v", identity)
 	}
 	if strings.Contains(requestTextForPrivacyTest(request), "10001") {
@@ -4157,7 +4157,7 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 		t.Fatalf("restored decision prompt = %q", decision.Prompt)
 	}
 	sources := runtime.imageEditSourceImages(context.Background(), event, decision.Prompt)
-	if len(sources) != 1 || sources[0] != QQMemberAvatarURL("10001") {
+	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("10001") {
 		t.Fatalf("sources = %#v", sources)
 	}
 }
@@ -4227,10 +4227,10 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 	runtime.recordImageOperation(
 		context.Background(),
 		MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456", MessageID: "789"},
-		"qqbot.image.edit",
+		"chatbot.image.edit",
 		"图片编辑已发送",
 		"只修改背景",
-		"只修改背景\n\nQQ 上下文：\n当前发送者：Alice (456)，头像：https://example.test/avatar.png",
+		"只修改背景\n\n群聊上下文：\n当前发送者：Alice (456)，头像：https://example.test/avatar.png",
 		"gpt-image-2",
 		1,
 		1,
@@ -4244,7 +4244,7 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 		t.Fatalf("intent_prompt = %#v", metadata["intent_prompt"])
 	}
 	submitted, _ := metadata["prompt"].(string)
-	if !strings.Contains(submitted, "QQ 上下文") || !strings.Contains(submitted, "Alice") {
+	if !strings.Contains(submitted, "群聊上下文") || !strings.Contains(submitted, "Alice") {
 		t.Fatalf("submitted prompt = %#v", metadata["prompt"])
 	}
 }
@@ -4332,7 +4332,7 @@ func TestRuntimeImageEditCanUseNamedMemberAvatar(t *testing.T) {
 			},
 		},
 	}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
 		Kind:      EventKindGroup,
 		GroupID:   "123456",
@@ -4345,7 +4345,7 @@ func TestRuntimeImageEditCanUseNamedMemberAvatar(t *testing.T) {
 		ToMe: true,
 	}
 	sources := runtime.imageEditSourceImages(context.Background(), event, "把阿梨头像改成赛博风")
-	if len(sources) != 1 || sources[0] != QQMemberAvatarURL("20002") {
+	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("20002") {
 		t.Fatalf("sources = %#v", sources)
 	}
 }
@@ -4980,7 +4980,7 @@ func waitForCondition(t *testing.T, timeout time.Duration, ok func() bool) {
 }
 
 func TestReplyMarkerDoesNotTriggerGroupAlias(t *testing.T) {
-	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana", "diana"}, BotQQ: "3083158904"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana", "diana"}, BotAccount: "3083158904"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	// 用户回复的是别人的消息、@ 的也是别人，正文里没有提到机器人。
 	event := MessageEvent{
 		Kind:       EventKindGroup,

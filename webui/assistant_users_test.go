@@ -23,11 +23,11 @@ func newAssistantUsersTestRouter(t *testing.T) (*storage.SQLiteStore, http.Handl
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
 	handler.SetSQLiteStore(store)
-	return store, qqBotTestRouter(handler)
+	return store, botTestRouter(handler)
 }
 
 func TestAssistantUsersListAndDetail(t *testing.T) {
@@ -117,10 +117,10 @@ func TestAssistantUsersNotFoundAndNoStore(t *testing.T) {
 	}
 
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	bare := qqBotTestRouter(handler)
+	bare := botTestRouter(handler)
 	req = httptest.NewRequest(http.MethodGet, "/api/assistant/users", nil)
 	rec = httptest.NewRecorder()
 	bare.ServeHTTP(rec, req)

@@ -165,14 +165,14 @@ import {
   createRepositoryWatch,
   deleteRepositoryWatch,
   getAssistantTasks,
-  getQQBotConfig,
-  listQQBotGroups,
+  getBotProfileConfig,
+  listBotGroups,
   runRepositoryWatch,
   updateRepositoryWatch,
   type AssistantTask,
   type AssistantTaskStatus,
-  type QQBotConfig,
-  type QQBotGroupSummary
+  type BotProfileConfig,
+  type BotGroupSummary
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
@@ -190,7 +190,7 @@ const props = defineProps<{
   draftGroupAccess?: string;
   managerUserAccess?: string;
   managerGroupAccess?: string;
-  joinedGroups?: QQBotGroupSummary[];
+  joinedGroups?: BotGroupSummary[];
   groupsLoading?: boolean;
   groupsWarning?: string;
 }>();
@@ -213,8 +213,8 @@ const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = computed(() => props.tokenConfigured ? authenticatedIntervalSeconds : anonymousIntervalSeconds);
 const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
 const watches = ref<AssistantTask[]>([]);
-const profiles = ref<QQBotConfig[]>([]);
-const joinedGroups = ref<QQBotGroupSummary[]>([]);
+const profiles = ref<BotProfileConfig[]>([]);
+const joinedGroups = ref<BotGroupSummary[]>([]);
 const loading = ref(false);
 const saving = ref(false);
 const busyID = ref("");
@@ -230,7 +230,7 @@ const destinationOptions = [{ value: "private", label: "私聊" }, { value: "gro
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getQQBotConfig(), listQQBotGroups().catch(() => ({ groups: [] }))]);
+    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups().catch(() => ({ groups: [] }))]);
     watches.value = tasks.items.filter((task) => task.kind === "repository_watch");
     profiles.value = config.profiles?.length ? config.profiles : [config];
     joinedGroups.value = groups.groups;

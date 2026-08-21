@@ -591,7 +591,7 @@ func (p *MessageHistoryPlugin) enrichRecallIdentities(ctx context.Context, chann
 			})
 			cancel()
 			if err == nil {
-				member := qqGroupMemberInfoFromData(groupID, data)
+				member := oneBotGroupMemberInfoFromData(groupID, data)
 				if name := strings.TrimSpace(member.DisplayName()); name != "" {
 					identity.Name = name
 				}

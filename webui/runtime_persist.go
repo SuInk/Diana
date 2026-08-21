@@ -8,11 +8,11 @@ import (
 )
 
 type RuntimePersistor struct {
-	store QQBotProfileStore
+	store BotProfileStore
 }
 
 // NewRuntimePersistor 创建机器人运行态配置持久化器。
-func NewRuntimePersistor(store QQBotProfileStore) *RuntimePersistor {
+func NewRuntimePersistor(store BotProfileStore) *RuntimePersistor {
 	return &RuntimePersistor{store: store}
 }
 

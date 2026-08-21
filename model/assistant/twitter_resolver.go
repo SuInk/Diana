@@ -432,9 +432,9 @@ func twitterResolverRequestAllowed(ctx context.Context, req PluginRequest) bool 
 	}
 	level, ok := 0, false
 	if label := strings.TrimSpace(req.Event.SenderLevelLabel); label != "" {
-		level, ok = parseQQGroupLevel(label)
+		level, ok = parseOneBotGroupLevel(label)
 	} else if req.Event.SenderLevel > 0 {
-		level, ok = parseQQGroupLevel(req.Event.SenderLevel)
+		level, ok = parseOneBotGroupLevel(req.Event.SenderLevel)
 	}
 	if !ok && req.Channel != nil {
 		callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
@@ -445,7 +445,7 @@ func twitterResolverRequestAllowed(ctx context.Context, req PluginRequest) bool 
 			"no_cache": true,
 		})
 		if err == nil {
-			level, ok = parseQQGroupLevel(qqGroupMemberInfoFromData(req.Event.GroupID, data).Level)
+			level, ok = parseOneBotGroupLevel(oneBotGroupMemberInfoFromData(req.Event.GroupID, data).Level)
 		}
 	}
 	return ok && level >= minimum

@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type QQBotRuntime interface {
+type BotRuntime interface {
 	Start(context.Context) error
 	Stop() error
 	UpdateConfig(context.Context, assistant.BotConfig, assistant.Channel) error
@@ -32,8 +32,8 @@ type QQBotRuntime interface {
 	Plugins() *assistant.PluginManager
 }
 
-type QQBotChannelFactory func(assistant.BotConfig) assistant.Channel
-type QQBotChannelSetFactory func(assistant.ProfileSet) assistant.Channel
+type BotChannelFactory func(assistant.BotConfig) assistant.Channel
+type BotChannelSetFactory func(assistant.ProfileSet) assistant.Channel
 
 type profileAwareRuntime interface {
 	SetProfiles(assistant.ProfileSet)
@@ -58,24 +58,24 @@ type rssWatchRuntime interface {
 	DeleteRSSWatch(string, string) (bool, error)
 }
 
-type QQBotHandler struct {
-	runtime                   QQBotRuntime
-	newChannel                QQBotChannelFactory
-	newChannelSet             QQBotChannelSetFactory
+type BotHandler struct {
+	runtime                   BotRuntime
+	newChannel                BotChannelFactory
+	newChannelSet             BotChannelSetFactory
 	ctx                       context.Context
-	profiles                  QQBotProfileStore
-	groupConfigs              QQBotGroupConfigStore
+	profiles                  BotProfileStore
+	groupConfigs              BotGroupConfigStore
 	groupAdmin                *groupAdminVerifier
 	localMedia                assistant.LocalMediaSharer
 	sqlite                    *storage.SQLiteStore
 	logs                      AppLogWriter
-	features                  QQBotFeatureFlags
+	features                  BotFeatureFlags
 	installResolverDependency func(context.Context, string) (assistant.ResolverDependencyInstallResult, error)
 	liveGroupMu               sync.Mutex
 	liveGroupCache            liveGroupListCache
 }
 
-type QQBotFeatureFlags struct {
+type BotFeatureFlags struct {
 	GroupTest bool `json:"group_test"`
 }
 
@@ -139,11 +139,11 @@ type groupTestResponse struct {
 	Status       assistant.RuntimeStatus `json:"status"`
 }
 
-const minQQBotTokenChars = 16
+const minBotTokenChars = 16
 
-// NewQQBotHandler 创建 QQBotHandler 实例。
-func NewQQBotHandler(ctx context.Context, runtime QQBotRuntime) *QQBotHandler {
-	return NewQQBotHandlerWithFactory(ctx, runtime, func(cfg assistant.BotConfig) assistant.Channel {
+// NewBotHandler 创建 BotHandler 实例。
+func NewBotHandler(ctx context.Context, runtime BotRuntime) *BotHandler {
+	return NewBotHandlerWithFactory(ctx, runtime, func(cfg assistant.BotConfig) assistant.Channel {
 		if cfg.Platform == assistant.PlatformTelegram {
 			return assistant.NewTelegramChannel(assistant.TelegramConfig{
 				BotToken:   cfg.TelegramBotToken,
@@ -158,32 +158,32 @@ func NewQQBotHandler(ctx context.Context, runtime QQBotRuntime) *QQBotHandler {
 	})
 }
 
-// NewQQBotHandlerWithFactory 创建 QQBotHandler 实例。
-func NewQQBotHandlerWithFactory(ctx context.Context, runtime QQBotRuntime, factory QQBotChannelFactory) *QQBotHandler {
-	return &QQBotHandler{
+// NewBotHandlerWithFactory 创建 BotHandler 实例。
+func NewBotHandlerWithFactory(ctx context.Context, runtime BotRuntime, factory BotChannelFactory) *BotHandler {
+	return &BotHandler{
 		runtime:                   runtime,
 		newChannel:                factory,
 		ctx:                       ctx,
 		installResolverDependency: assistant.InstallResolverDependency,
 		// 没有显式持久化 store 时，至少保证本次进程内也能按配置集语义工作。
-		profiles:     NewMemoryQQBotProfileStore(runtime.Config()),
-		groupConfigs: NewMemoryQQBotGroupConfigStore(),
+		profiles:     NewMemoryBotProfileStore(runtime.Config()),
+		groupConfigs: NewMemoryBotGroupConfigStore(),
 		groupAdmin:   newGroupAdminVerifier(),
 	}
 }
 
 // SetFeatureFlags 配置只应在显式测试环境开放的 WebUI 功能。
-func (h *QQBotHandler) SetFeatureFlags(flags QQBotFeatureFlags) {
+func (h *BotHandler) SetFeatureFlags(flags BotFeatureFlags) {
 	h.features = flags
 }
 
 // SetLocalMediaSharer lets OneBot fetch local diagnostic files over HTTP.
-func (h *QQBotHandler) SetLocalMediaSharer(sharer assistant.LocalMediaSharer) {
+func (h *BotHandler) SetLocalMediaSharer(sharer assistant.LocalMediaSharer) {
 	h.localMedia = sharer
 }
 
 // SetProfileStore 注入 OneBot v11 机器人配置集存储。
-func (h *QQBotHandler) SetProfileStore(store QQBotProfileStore) {
+func (h *BotHandler) SetProfileStore(store BotProfileStore) {
 	if store == nil {
 		return
 	}
@@ -192,12 +192,12 @@ func (h *QQBotHandler) SetProfileStore(store QQBotProfileStore) {
 
 // SetChannelSetFactory enables all configured transports to be rebuilt as one
 // routed channel whenever a profile is saved, enabled, disabled, or deleted.
-func (h *QQBotHandler) SetChannelSetFactory(factory QQBotChannelSetFactory) {
+func (h *BotHandler) SetChannelSetFactory(factory BotChannelSetFactory) {
 	h.newChannelSet = factory
 }
 
 // SetGroupConfigStore 注入 群级配置存储。
-func (h *QQBotHandler) SetGroupConfigStore(store QQBotGroupConfigStore) {
+func (h *BotHandler) SetGroupConfigStore(store BotGroupConfigStore) {
 	if store == nil {
 		return
 	}
@@ -205,20 +205,20 @@ func (h *QQBotHandler) SetGroupConfigStore(store QQBotGroupConfigStore) {
 }
 
 // SetSQLiteStore 注入 SQLite，用于插件状态持久化和操作日志。
-func (h *QQBotHandler) SetSQLiteStore(store *storage.SQLiteStore) {
+func (h *BotHandler) SetSQLiteStore(store *storage.SQLiteStore) {
 	h.sqlite = store
 	h.logs = store
 }
 
 // Register registers the generic assistant API and its legacy single-platform alias.
-func (h *QQBotHandler) Register(router gin.IRouter) {
+func (h *BotHandler) Register(router gin.IRouter) {
 	h.registerRoutes(router, "/api/assistant")
 	h.registerRoutes(router, "/api/qqbot")
 	// 控制台登录用户直接管理全部群配置，无需群验证码流程。
 	h.registerConsoleGroupRoutes(router)
 }
 
-func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
+func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/config", h.getConfig)
 	router.GET(base+"/platforms", h.platforms)
 	router.POST(base+"/config", h.saveConfig)
@@ -274,22 +274,22 @@ func (h *QQBotHandler) registerRoutes(router gin.IRouter, base string) {
 }
 
 // platforms 返回可用于创建机器人配置的平台及协议适配器。
-func (h *QQBotHandler) platforms(c *gin.Context) {
+func (h *BotHandler) platforms(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"platforms": assistant.SupportedPlatforms()})
 }
 
 // getConfig 处理 OneBot v11 机器人配置读取请求。
-func (h *QQBotHandler) getConfig(c *gin.Context) {
+func (h *BotHandler) getConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(h.profiles.Profiles()))
 }
 
 // featuresStatus 返回当前 WebUI 暴露的 OneBot v11 机器人测试能力。
-func (h *QQBotHandler) featuresStatus(c *gin.Context) {
+func (h *BotHandler) featuresStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, h.features)
 }
 
 // saveConfig 保存当前机器人配置或新增机器人配置档。
-func (h *QQBotHandler) saveConfig(c *gin.Context) {
+func (h *BotHandler) saveConfig(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, "", nil)
@@ -297,30 +297,30 @@ func (h *QQBotHandler) saveConfig(c *gin.Context) {
 	}
 
 	set := h.profiles.Profiles()
-	existing := existingQQBotProfileConfig(set, payload)
+	existing := existingBotProfileConfig(set, payload)
 	cfg := assistant.ConfigFromPayload(payload, existing)
 	if err := validateTokenLength("onebot_access_token", payload.OneBotAccessToken); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, qqbotLogTarget(cfg), botLogMetadata(cfg))
+		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
 	if err := validateTokenLength("nonebot_bridge_token", payload.NoneBotBridgeToken); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, qqbotLogTarget(cfg), botLogMetadata(cfg))
+		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
 	if err := cfg.Validate(); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, qqbotLogTarget(cfg), botLogMetadata(cfg))
+		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
 
-	next := upsertQQBotProfileSet(set, payload, cfg)
+	next := upsertBotProfileSet(set, payload, cfg)
 	current, ok := next.Current()
 	if !ok {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", fmt.Errorf("qqbot profile set is empty"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "assistant.config.save", fmt.Errorf("chatbot profile set is empty"), "", nil)
 		return
 	}
 	// 当前激活机器人配置发生变化时，运行时要同步切换并按需重启连接。
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, qqbotLogTarget(current), botLogMetadata(current))
+		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
 	h.profiles.SaveProfiles(next)
@@ -329,7 +329,7 @@ func (h *QQBotHandler) saveConfig(c *gin.Context) {
 }
 
 // activateProfile 切换当前激活的 OneBot v11 机器人配置档。
-func (h *QQBotHandler) activateProfile(c *gin.Context) {
+func (h *BotHandler) activateProfile(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.activate", err, "", nil)
@@ -347,7 +347,7 @@ func (h *QQBotHandler) activateProfile(c *gin.Context) {
 		return
 	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.activate", err, qqbotLogTarget(current), botLogMetadata(current))
+		h.writeError(c, http.StatusBadRequest, "assistant.profile.activate", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
 	h.profiles.SaveProfiles(next)
@@ -356,7 +356,7 @@ func (h *QQBotHandler) activateProfile(c *gin.Context) {
 }
 
 // cloneProfile 复制指定 OneBot v11 机器人配置档。
-func (h *QQBotHandler) cloneProfile(c *gin.Context) {
+func (h *BotHandler) cloneProfile(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", err, "", nil)
@@ -377,14 +377,14 @@ func (h *QQBotHandler) cloneProfile(c *gin.Context) {
 		// A cloned credential must never start a second poller/socket until the
 		// administrator explicitly enables it.
 		cloned.Enabled = false
-		next := upsertQQBotProfileSet(set, assistant.ConfigPayload{Name: cloned.Name}, cloned)
+		next := upsertBotProfileSet(set, assistant.ConfigPayload{Name: cloned.Name}, cloned)
 		current, ok := next.Current()
 		if !ok {
-			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("qqbot profile set is empty"), "", nil)
+			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("chatbot profile set is empty"), "", nil)
 			return
 		}
 		if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", err, qqbotLogTarget(current), botLogMetadata(current))
+			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", err, botLogTarget(current), botLogMetadata(current))
 			return
 		}
 		h.profiles.SaveProfiles(next)
@@ -396,7 +396,7 @@ func (h *QQBotHandler) cloneProfile(c *gin.Context) {
 }
 
 // deleteProfile 删除指定 OneBot v11 机器人配置档。
-func (h *QQBotHandler) deleteProfile(c *gin.Context) {
+func (h *BotHandler) deleteProfile(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, "", nil)
@@ -419,11 +419,11 @@ func (h *QQBotHandler) deleteProfile(c *gin.Context) {
 	}
 	current, ok := next.Current()
 	if !ok {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", fmt.Errorf("qqbot profile set is empty"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", fmt.Errorf("chatbot profile set is empty"), "", nil)
 		return
 	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, qqbotLogTarget(current), botLogMetadata(current))
+		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
 	h.profiles.SaveProfiles(next)
@@ -435,7 +435,7 @@ type contextIsolationPayload struct {
 	Enabled bool `json:"enabled"`
 }
 
-func (h *QQBotHandler) setContextIsolation(c *gin.Context) {
+func (h *BotHandler) setContextIsolation(c *gin.Context) {
 	var payload contextIsolationPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.context_isolation.update", err, "", nil)
@@ -451,7 +451,7 @@ func (h *QQBotHandler) setContextIsolation(c *gin.Context) {
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
 
-func (h *QQBotHandler) applyProfileSet(set assistant.ProfileSet) error {
+func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 	set = set.WithDefaults()
 	cfg, ok := set.RuntimeConfig()
 	if !ok {
@@ -473,21 +473,21 @@ func validateTokenLength(field string, value string) error {
 	if value == "" {
 		return nil
 	}
-	if utf8.RuneCountInString(value) < minQQBotTokenChars {
-		return fmt.Errorf("%s must be at least %d characters", field, minQQBotTokenChars)
+	if utf8.RuneCountInString(value) < minBotTokenChars {
+		return fmt.Errorf("%s must be at least %d characters", field, minBotTokenChars)
 	}
 	return nil
 }
 
 // status 返回 OneBot v11 机器人运行状态快照。
-func (h *QQBotHandler) status(c *gin.Context) {
+func (h *BotHandler) status(c *gin.Context) {
 	c.JSON(http.StatusOK, h.runtime.Status())
 }
 
 // start 处理启动 OneBot v11 机器人的请求。
-func (h *QQBotHandler) start(c *gin.Context) {
+func (h *BotHandler) start(c *gin.Context) {
 	if err := h.runtime.Start(h.ctx); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.start", err, qqbotLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		h.writeError(c, http.StatusBadRequest, "assistant.start", err, botLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.start", "OneBot v11 机器人已启动", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
@@ -495,9 +495,9 @@ func (h *QQBotHandler) start(c *gin.Context) {
 }
 
 // stop 处理停止 OneBot v11 机器人的请求。
-func (h *QQBotHandler) stop(c *gin.Context) {
+func (h *BotHandler) stop(c *gin.Context) {
 	if err := h.runtime.Stop(); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.stop", err, qqbotLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		h.writeError(c, http.StatusBadRequest, "assistant.stop", err, botLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.stop", "OneBot v11 机器人已停止", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
@@ -505,10 +505,10 @@ func (h *QQBotHandler) stop(c *gin.Context) {
 }
 
 // requestBackfill 手动触发一次历史消息回补，用于实测回补效果。
-func (h *QQBotHandler) requestBackfill(c *gin.Context) {
+func (h *BotHandler) requestBackfill(c *gin.Context) {
 	runtime, ok := h.runtime.(historyBackfillRuntime)
 	if !ok {
-		h.writeError(c, http.StatusNotImplemented, "assistant.backfill", fmt.Errorf("runtime does not support manual history backfill"), qqbotLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		h.writeError(c, http.StatusNotImplemented, "assistant.backfill", fmt.Errorf("runtime does not support manual history backfill"), botLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
 		return
 	}
 	var payload struct {
@@ -521,7 +521,7 @@ func (h *QQBotHandler) requestBackfill(c *gin.Context) {
 		window = assistant.InboundReplayWindow
 	}
 	if err := runtime.RequestHistoryBackfill(window); err != nil {
-		h.writeError(c, http.StatusConflict, "assistant.backfill", err, qqbotLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		h.writeError(c, http.StatusConflict, "assistant.backfill", err, botLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.backfill", fmt.Sprintf("已触发手动回补，窗口 %s", window), h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
@@ -529,7 +529,7 @@ func (h *QQBotHandler) requestBackfill(c *gin.Context) {
 }
 
 // getGroupTest 返回指定群最近收发事件，辅助真实 群联调。
-func (h *QQBotHandler) getGroupTest(c *gin.Context) {
+func (h *BotHandler) getGroupTest(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Query("group_id"))
 	if groupID == "" {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.status", fmt.Errorf("group_id is required"), "", nil)
@@ -545,7 +545,7 @@ func (h *QQBotHandler) getGroupTest(c *gin.Context) {
 }
 
 // sendGroupTest 通过当前 OneBot 连接向 群发送测试消息，并返回近期收到的同群事件。
-func (h *QQBotHandler) sendGroupTest(c *gin.Context) {
+func (h *BotHandler) sendGroupTest(c *gin.Context) {
 	var payload groupTestPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", err, "", nil)
@@ -585,13 +585,13 @@ func (h *QQBotHandler) sendGroupTest(c *gin.Context) {
 }
 
 // listPlugins 返回机器人插件列表。
-func (h *QQBotHandler) listPlugins(c *gin.Context) {
+func (h *BotHandler) listPlugins(c *gin.Context) {
 	c.JSON(http.StatusOK, assistant.RedactStates(h.runtime.Plugins().ListVisible()))
 }
 
 // pluginDependencies 返回解析器外部依赖的探测结果，让控制台能直接看出
 // yt-dlp / ffmpeg / node 是否齐全，而不是等用户发链接后才报错。
-func (h *QQBotHandler) pluginDependencies(c *gin.Context) {
+func (h *BotHandler) pluginDependencies(c *gin.Context) {
 	deps := assistant.ResolverDependencies()
 	if queryBool(c.Query("refresh")) {
 		deps = assistant.RefreshResolverDependencies()
@@ -600,7 +600,7 @@ func (h *QQBotHandler) pluginDependencies(c *gin.Context) {
 }
 
 // installPluginDependency 安装链接解析插件白名单中的外部命令。
-func (h *QQBotHandler) installPluginDependency(c *gin.Context) {
+func (h *BotHandler) installPluginDependency(c *gin.Context) {
 	name := strings.TrimSpace(c.Param("name"))
 	result, err := h.installResolverDependency(c.Request.Context(), name)
 	if err != nil {
@@ -625,7 +625,7 @@ func (h *QQBotHandler) installPluginDependency(c *gin.Context) {
 }
 
 // installPlugin 处理插件安装请求。
-func (h *QQBotHandler) installPlugin(c *gin.Context) {
+func (h *BotHandler) installPlugin(c *gin.Context) {
 	state, err := h.runtime.Plugins().Install(c.Param("id"))
 	if err != nil {
 		h.writePluginError(c, "assistant.plugin.install", err, c.Param("id"))
@@ -637,7 +637,7 @@ func (h *QQBotHandler) installPlugin(c *gin.Context) {
 }
 
 // uninstallPlugin 处理插件卸载请求。
-func (h *QQBotHandler) uninstallPlugin(c *gin.Context) {
+func (h *BotHandler) uninstallPlugin(c *gin.Context) {
 	state, err := h.runtime.Plugins().Uninstall(c.Param("id"))
 	if err != nil {
 		h.writePluginError(c, "assistant.plugin.uninstall", err, c.Param("id"))
@@ -649,7 +649,7 @@ func (h *QQBotHandler) uninstallPlugin(c *gin.Context) {
 }
 
 // setPluginEnabled 处理插件启用状态变更请求。
-func (h *QQBotHandler) setPluginEnabled(c *gin.Context) {
+func (h *BotHandler) setPluginEnabled(c *gin.Context) {
 	var payload pluginEnabledPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.plugin.enabled", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
@@ -666,7 +666,7 @@ func (h *QQBotHandler) setPluginEnabled(c *gin.Context) {
 }
 
 // updatePluginSettings 处理插件详细设置变更请求。
-func (h *QQBotHandler) updatePluginSettings(c *gin.Context) {
+func (h *BotHandler) updatePluginSettings(c *gin.Context) {
 	var payload pluginSettingsPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.plugin.settings", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
@@ -683,7 +683,7 @@ func (h *QQBotHandler) updatePluginSettings(c *gin.Context) {
 }
 
 // writePluginError 按插件错误类型返回合适的 HTTP 状态码。
-func (h *QQBotHandler) writePluginError(c *gin.Context, action string, err error, target string) {
+func (h *BotHandler) writePluginError(c *gin.Context, action string, err error, target string) {
 	if errors.Is(err, assistant.ErrPluginNotFound) {
 		h.writeError(c, http.StatusNotFound, action, err, target, map[string]any{"plugin_id": target})
 		return
@@ -692,12 +692,12 @@ func (h *QQBotHandler) writePluginError(c *gin.Context, action string, err error
 }
 
 // writeError 写出统一 JSON 错误响应。
-func (h *QQBotHandler) writeError(c *gin.Context, status int, action string, err error, target string, metadata map[string]any) {
+func (h *BotHandler) writeError(c *gin.Context, status int, action string, err error, target string, metadata map[string]any) {
 	logAndWriteError(c, h.logs, status, action, err, target, metadata)
 }
 
 // persistState 将插件状态写入 SQLite。
-func (h *QQBotHandler) persistState() {
+func (h *BotHandler) persistState() {
 	if h.sqlite == nil {
 		return
 	}
@@ -717,7 +717,7 @@ func botLogMetadata(cfg assistant.BotConfig) map[string]any {
 		"onebot_reverse_ws":       cfg.OneBotReverseWSEndpoint,
 		"nonebot_bridge_enabled":  cfg.NoneBotBridgeEnabled,
 		"nonebot_bridge_endpoint": cfg.NoneBotBridgeEndpoint,
-		"bot_qq":                  cfg.BotQQ,
+		"bot_qq":                  cfg.BotAccount,
 		"owner_id":                cfg.OwnerID,
 	}
 }
@@ -771,8 +771,8 @@ func oneBotMessageID(data map[string]any) string {
 	}
 }
 
-// existingQQBotProfileConfig 根据 payload 推断“编辑的是哪个机器人配置档”。
-func existingQQBotProfileConfig(set assistant.ProfileSet, payload assistant.ConfigPayload) assistant.BotConfig {
+// existingBotProfileConfig 根据 payload 推断“编辑的是哪个机器人配置档”。
+func existingBotProfileConfig(set assistant.ProfileSet, payload assistant.ConfigPayload) assistant.BotConfig {
 	targetID := strings.TrimSpace(payload.ID)
 	if targetID == "" {
 		targetID = strings.TrimSpace(payload.ActiveProfileID)
@@ -791,8 +791,8 @@ func existingQQBotProfileConfig(set assistant.ProfileSet, payload assistant.Conf
 	return assistant.DefaultBotConfig()
 }
 
-// upsertQQBotProfileSet 把当前表单保存为配置档，并让它成为新的激活机器人。
-func upsertQQBotProfileSet(set assistant.ProfileSet, payload assistant.ConfigPayload, cfg assistant.BotConfig) assistant.ProfileSet {
+// upsertBotProfileSet 把当前表单保存为配置档，并让它成为新的激活机器人。
+func upsertBotProfileSet(set assistant.ProfileSet, payload assistant.ConfigPayload, cfg assistant.BotConfig) assistant.ProfileSet {
 	set = set.WithDefaults()
 	targetID := strings.TrimSpace(payload.ID)
 	if targetID == "" {
@@ -816,9 +816,9 @@ func upsertQQBotProfileSet(set assistant.ProfileSet, payload assistant.ConfigPay
 	return set.WithDefaults()
 }
 
-// qqbotLogTarget 选择更适合日志索引的机器人配置目标。
-func qqbotLogTarget(cfg assistant.BotConfig) string {
-	for _, value := range []string{cfg.ID, cfg.BotQQ, cfg.OneBotReverseWSEndpoint, cfg.Name} {
+// botLogTarget 选择更适合日志索引的机器人配置目标。
+func botLogTarget(cfg assistant.BotConfig) string {
+	for _, value := range []string{cfg.ID, cfg.BotAccount, cfg.OneBotReverseWSEndpoint, cfg.Name} {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
 			return trimmed
 		}

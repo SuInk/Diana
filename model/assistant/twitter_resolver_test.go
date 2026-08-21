@@ -151,7 +151,7 @@ func TestTwitterResolverRequiresGroupLevel40ByDefault(t *testing.T) {
 					Kind:             EventKindGroup,
 					GroupID:          "20001",
 					UserID:           test.userID,
-					SenderLevel:      func() int { level, _ := parseQQGroupLevel(test.level); return level }(),
+					SenderLevel:      func() int { level, _ := parseOneBotGroupLevel(test.level); return level }(),
 					SenderLevelLabel: test.level,
 				},
 				OwnerID: test.ownerID,
@@ -213,7 +213,7 @@ func TestRuntimeLowLevelTwitterMentionIsSilentWithoutLLM(t *testing.T) {
 	}
 	channel := &recordingChannel{}
 	llmCalls := 0
-	runtime := NewRuntime(BotConfig{BotQQ: "42", OwnerID: "owner"}, channel, NewPluginManager(plugin), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, channel, NewPluginManager(plugin), nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls++
 		return &capturingLLMProvider{reply: "不应回复"}, nil
 	})

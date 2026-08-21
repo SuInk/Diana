@@ -119,7 +119,7 @@ func TestSendOnlyFirstChunkCarriesReplyAndAt(t *testing.T) {
 func TestSendLongReplyUsesForward(t *testing.T) {
 	withFastSendTiming(t)
 	channel := &scriptedChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "999", DirectReplyChunkSize: 10, ForwardReplyThreshold: 12}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "999", DirectReplyChunkSize: 10, ForwardReplyThreshold: 12}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001"}
 
 	reply := strings.Repeat("长回复内容", 5)
@@ -142,7 +142,7 @@ func TestSendLongReplyUsesForward(t *testing.T) {
 func TestSendForwardFallsBackToChunks(t *testing.T) {
 	withFastSendTiming(t)
 	channel := &scriptedChannel{apiErr: errors.New("forward unsupported")}
-	runtime := NewRuntime(BotConfig{BotQQ: "999", DirectReplyChunkSize: 10, ForwardReplyThreshold: 12, SendChunkIntervalMS: 1}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "999", DirectReplyChunkSize: 10, ForwardReplyThreshold: 12, SendChunkIntervalMS: 1}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
 
 	reply := strings.Repeat("长回复内容", 5)
@@ -175,7 +175,7 @@ func TestRememberReplyEntersAssistantContext(t *testing.T) {
 }
 
 func TestPrivateOutgoingHistoryKeepsPeerSessionAndAssistantRole(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	source := MessageEvent{Kind: EventKindPrivate, SelfID: "42", UserID: "10001", MessageID: "incoming-1"}
 
 	runtime.remember(source)

@@ -292,7 +292,7 @@ type BotConfig struct {
 	NoneBotBridgeEnabled         bool                 `json:"nonebot_bridge_enabled,omitempty"`
 	NoneBotBridgeEndpoint        string               `json:"nonebot_bridge_endpoint,omitempty"`
 	NoneBotBridgeToken           string               `json:"nonebot_bridge_token,omitempty"`
-	BotQQ                        string               `json:"bot_qq,omitempty"`
+	BotAccount                   string               `json:"bot_account,omitempty"`
 	OwnerID                      string               `json:"owner_id,omitempty"`
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
 	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
@@ -339,7 +339,7 @@ type BotConfig struct {
 	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
+	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -482,7 +482,7 @@ type ConfigPayload struct {
 	NoneBotBridgeEndpoint        string               `json:"nonebot_bridge_endpoint,omitempty"`
 	NoneBotBridgeToken           string               `json:"nonebot_bridge_token,omitempty"`
 	NoneBotBridgeTokenConfigured bool                 `json:"nonebot_bridge_token_configured,omitempty"`
-	BotQQ                        string               `json:"bot_qq,omitempty"`
+	BotAccount                   string               `json:"bot_account,omitempty"`
 	OwnerID                      string               `json:"owner_id,omitempty"`
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
 	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
@@ -529,7 +529,7 @@ type ConfigPayload struct {
 	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
+	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -563,6 +563,49 @@ type ConfigPayload struct {
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
+// legacyConfigAliases 是历史上带平台名的配置键。存量数据库里存的还是这些键，
+// 读的时候补回来，不然升级之后机器人账号和脱敏开关会凭空丢失。
+type legacyConfigAliases struct {
+	BotAccount                *string `json:"bot_qq,omitempty"`
+	LLMIdentityMaskingEnabled *bool   `json:"llm_qq_id_masking_enabled,omitempty"`
+}
+
+func (cfg *BotConfig) UnmarshalJSON(data []byte) error {
+	type plain BotConfig
+	if err := json.Unmarshal(data, (*plain)(cfg)); err != nil {
+		return err
+	}
+	var legacy legacyConfigAliases
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return nil
+	}
+	if cfg.BotAccount == "" && legacy.BotAccount != nil {
+		cfg.BotAccount = *legacy.BotAccount
+	}
+	if cfg.LLMIdentityMaskingEnabled == nil && legacy.LLMIdentityMaskingEnabled != nil {
+		cfg.LLMIdentityMaskingEnabled = legacy.LLMIdentityMaskingEnabled
+	}
+	return nil
+}
+
+func (cfg *ConfigPayload) UnmarshalJSON(data []byte) error {
+	type plain ConfigPayload
+	if err := json.Unmarshal(data, (*plain)(cfg)); err != nil {
+		return err
+	}
+	var legacy legacyConfigAliases
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return nil
+	}
+	if cfg.BotAccount == "" && legacy.BotAccount != nil {
+		cfg.BotAccount = *legacy.BotAccount
+	}
+	if cfg.LLMIdentityMaskingEnabled == nil && legacy.LLMIdentityMaskingEnabled != nil {
+		cfg.LLMIdentityMaskingEnabled = legacy.LLMIdentityMaskingEnabled
+	}
+	return nil
+}
+
 func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 	base = base.WithDefaults()
 	return GroupConfig{
@@ -745,11 +788,11 @@ type ProfileSet struct {
 }
 
 var (
-	ErrMissingOneBotEndpoint  = errors.New("qqbot: onebot reverse websocket endpoint is required")
+	ErrMissingOneBotEndpoint  = errors.New("chatbot: onebot reverse websocket endpoint is required")
 	ErrMissingTelegramToken   = errors.New("assistant: telegram bot token is required")
 	ErrInvalidTelegramAPIBase = errors.New("assistant: telegram api base url must be http(s)")
-	ErrInvalidOneBotEndpoint  = errors.New("qqbot: onebot reverse websocket endpoint must use ws or wss and include a host")
-	ErrBotDisabled            = errors.New("qqbot: bot is disabled")
+	ErrInvalidOneBotEndpoint  = errors.New("chatbot: onebot reverse websocket endpoint must use ws or wss and include a host")
+	ErrBotDisabled            = errors.New("chatbot: bot is disabled")
 )
 
 // NewProfileSet 基于单个机器人配置创建配置集。
@@ -929,7 +972,7 @@ func DefaultBotConfig() BotConfig {
 		RecallReplyMode:              RecallReplyModeLLMSummary,
 		RecallReplyAutoDeleteEnabled: boolPointer(false),
 		RecallReplyTTLSeconds:        defaultRecallReplyTTLSeconds,
-		LLMQQIDMaskingEnabled:        boolPointer(true),
+		LLMIdentityMaskingEnabled:    boolPointer(true),
 		BotReplyLoopDetectionEnabled: boolPointer(true),
 		RecentContextLimit:           20,
 		ContextSummaryThreshold:      100,
@@ -1091,8 +1134,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	} else if cfg.RecallReplyTTLSeconds > maximumRecallReplyTTLSeconds {
 		cfg.RecallReplyTTLSeconds = maximumRecallReplyTTLSeconds
 	}
-	if cfg.LLMQQIDMaskingEnabled == nil {
-		cfg.LLMQQIDMaskingEnabled = boolPointer(true)
+	if cfg.LLMIdentityMaskingEnabled == nil {
+		cfg.LLMIdentityMaskingEnabled = boolPointer(true)
 	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
@@ -1222,7 +1265,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		NoneBotBridgeEnabled:         cfg.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:        cfg.NoneBotBridgeEndpoint,
 		NoneBotBridgeTokenConfigured: cfg.NoneBotBridgeToken != "",
-		BotQQ:                        cfg.BotQQ,
+		BotAccount:                   cfg.BotAccount,
 		OwnerID:                      cfg.OwnerID,
 		OwnerLoginEnabled:            cfg.OwnerLoginEnabled,
 		OwnerLLMConfigEnabled:        copyBoolPointer(cfg.OwnerLLMConfigEnabled),
@@ -1267,7 +1310,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		RecallReplyMode:              cfg.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        cfg.RecallReplyTTLSeconds,
-		LLMQQIDMaskingEnabled:        copyBoolPointer(cfg.LLMQQIDMaskingEnabled),
+		LLMIdentityMaskingEnabled:    copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
 		MaxContextTokens:             cfg.MaxContextTokens,
 		RecentContextLimit:           cfg.RecentContextLimit,
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
@@ -1341,7 +1384,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		NoneBotBridgeEnabled:         payload.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:        payload.NoneBotBridgeEndpoint,
 		NoneBotBridgeToken:           payload.NoneBotBridgeToken,
-		BotQQ:                        payload.BotQQ,
+		BotAccount:                   payload.BotAccount,
 		OwnerID:                      payload.OwnerID,
 		OwnerLoginEnabled:            payload.OwnerLoginEnabled,
 		OwnerLLMConfigEnabled:        copyBoolPointer(payload.OwnerLLMConfigEnabled),
@@ -1386,7 +1429,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		RecallReplyMode:              payload.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        payload.RecallReplyTTLSeconds,
-		LLMQQIDMaskingEnabled:        copyBoolPointer(payload.LLMQQIDMaskingEnabled),
+		LLMIdentityMaskingEnabled:    copyBoolPointer(payload.LLMIdentityMaskingEnabled),
 		MaxContextTokens:             payload.MaxContextTokens,
 		RecentContextLimit:           payload.RecentContextLimit,
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
@@ -1542,7 +1585,7 @@ const defaultProactiveReplyRouterPrompt = `你是 群聊机器人 Diana 的 plan
 
 必须遵守：
 1. 分别判断 directed_at_bot 和 answerable。directed_at_bot 只有在当前消息从语义上明确承接、评价、纠正或继续追问机器人时才为 true；直接引用机器人的消息是强证据，但纯确认、结束语或借引用转向别人仍不是需要回复的追问。仅仅时间相邻、话题相同或机器人之前说过话不算。
-2. answerable 只有在结合当前消息、所给上下文、稳定常识、available_reply_tools 或公开可检索信息后，机器人能给出具体且可靠的帮助时才为 true。available_reply_tools 中列出的工具能实时读取的数据不要求已经出现在短上下文中；例如其中列出 diana.qq_group 时，“群里现在几个人”应视为可回答。若缺少关键前提、回答可信度不足，或合适的回复大概率只能是“不知道”“问本人”“看情况”“可能是”和没有新增信息的泛泛附和，必须为 false 并保持沉默。
+2. answerable 只有在结合当前消息、所给上下文、稳定常识、available_reply_tools 或公开可检索信息后，机器人能给出具体且可靠的帮助时才为 true。available_reply_tools 中列出的工具能实时读取的数据不要求已经出现在短上下文中；例如其中列出 diana.onebot_group 时，“群里现在几个人”应视为可回答。若缺少关键前提、回答可信度不足，或合适的回复大概率只能是“不知道”“问本人”“看情况”“可能是”和没有新增信息的泛泛附和，必须为 false 并保持沉默。
 3. 私人行程、未公开决定、个人偏好或意图、群内未解释的昵称和暗语、不可访问的私有数据、缺少关键图片/文件/前提，以及必须靠猜测才能回答的问题，answerable=false。问题带问号、语义像提问或答案将来可能查到，都不能改变这一点。
 4. 没有点名对象不等于在问机器人，也不等于不需要回复。面向全群提出的定义、解释、辨析或求助问题，只要 answerable=true，就应使用 needs_response；不得仅因句子短、没有问号、没有 @ 或没有点名对象而拒绝。群友之间的反问、随口确认和接梗不属于 needs_response；它们只有满足第 6.1 至 6.4 条时才可使用 chat_in，否则保持沉默。无法从上下文确定含义的私人昵称、暗语或残缺指代始终保持沉默。
 5. last_bot_message 是最近一条机器人消息；last_bot_addressed_current_sender 表示它是否回复了当前发送者；messages_after_last_bot 表示此后又出现了多少条有效消息。只有当前消息与该机器人回复存在清楚的语义承接时才用 bot_related。针对机器人答案的具体追问、纠正或反驳，在 answerable=true 时应优先回复；“好”“还真是”“666”等结束性确认、纯情绪反应，以及要求机器人安静或停止回复的消息，不需要再回。

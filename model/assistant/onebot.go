@@ -151,13 +151,13 @@ func (c *OneBotChannel) SendWithResult(ctx context.Context, msg OutgoingMessage)
 		action = "send_group_msg"
 		groupID, err := strconv.ParseInt(msg.GroupID, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("qqbot: invalid group id %q", msg.GroupID)
+			return nil, fmt.Errorf("chatbot: invalid group id %q", msg.GroupID)
 		}
 		params["group_id"] = groupID
 	} else {
 		userID, err := strconv.ParseInt(msg.UserID, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("qqbot: invalid user id %q", msg.UserID)
+			return nil, fmt.Errorf("chatbot: invalid user id %q", msg.UserID)
 		}
 		params["user_id"] = userID
 	}
@@ -302,7 +302,7 @@ func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[s
 	conn := c.conn
 	c.connMu.RUnlock()
 	if conn == nil {
-		return nil, errors.New("qqbot: onebot websocket is not connected")
+		return nil, errors.New("chatbot: onebot websocket is not connected")
 	}
 
 	echo := strconv.FormatInt(time.Now().UnixNano(), 36)
@@ -888,7 +888,7 @@ func TextToOneBotSegments(text string) []MessageSegment {
 	segments := make([]MessageSegment, 0, len(parsed)+2)
 	for index, segment := range parsed {
 		if segment.Type == "text" {
-			segments = appendTextWithQQMentions(segments, segment.Data["text"])
+			segments = appendTextWithMentions(segments, segment.Data["text"])
 			continue
 		}
 		segments = append(segments, segment)
@@ -902,10 +902,10 @@ func TextToOneBotSegments(text string) []MessageSegment {
 	return segments
 }
 
-func appendTextWithQQMentions(segments []MessageSegment, text string) []MessageSegment {
+func appendTextWithMentions(segments []MessageSegment, text string) []MessageSegment {
 	start := 0
 	for index := 0; index < len(text); index++ {
-		if text[index] != '@' || !qqMentionPrefixAllowed(text, index) {
+		if text[index] != '@' || !mentionPrefixAllowed(text, index) {
 			continue
 		}
 		end := index + 1
@@ -913,7 +913,7 @@ func appendTextWithQQMentions(segments []MessageSegment, text string) []MessageS
 			end++
 		}
 		digits := end - index - 1
-		if digits < 5 || digits > 12 || (end < len(text) && qqMentionIDContinuation(text[end])) {
+		if digits < 5 || digits > 12 || (end < len(text) && mentionIDContinuation(text[end])) {
 			continue
 		}
 		if index > start {
@@ -934,7 +934,7 @@ func appendTextWithQQMentions(segments []MessageSegment, text string) []MessageS
 	return segments
 }
 
-func qqMentionPrefixAllowed(text string, index int) bool {
+func mentionPrefixAllowed(text string, index int) bool {
 	if index == 0 {
 		return true
 	}
@@ -945,7 +945,7 @@ func qqMentionPrefixAllowed(text string, index int) bool {
 		previous == '_' || previous == '@' || previous == '/')
 }
 
-func qqMentionIDContinuation(value byte) bool {
+func mentionIDContinuation(value byte) bool {
 	return (value >= 'a' && value <= 'z') ||
 		(value >= 'A' && value <= 'Z') ||
 		(value >= '0' && value <= '9') || value == '_'
@@ -1035,14 +1035,14 @@ func hasAt(segments []MessageSegment, selfID string) bool {
 }
 
 // stripBotMentions 从输入文本里移除机器人的 at 标记。
-func stripBotMentions(text string, botQQ string) string {
+func stripBotMentions(text string, botAccount string) string {
 	text = strings.TrimSpace(text)
-	if botQQ == "" {
+	if botAccount == "" {
 		return text
 	}
 	replacements := []string{
-		"[CQ:at,qq=" + botQQ + "]",
-		"@" + botQQ,
+		"[CQ:at,qq=" + botAccount + "]",
+		"@" + botAccount,
 	}
 	for _, value := range replacements {
 		text = strings.ReplaceAll(text, value, "")

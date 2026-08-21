@@ -27,7 +27,7 @@ func TestRestoredGroupControlRoutes(t *testing.T) {
 		"get_login_info":       {"user_id": int64(10001)},
 	}}
 	handler := restoredControlHandler(channel)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/group-test/recall", `{"message_id":"42"}`)
 	if recorder.Code != http.StatusOK {
@@ -78,17 +78,17 @@ func TestRestoredAutoInfoParsesOneBotData(t *testing.T) {
 			},
 		},
 	}
-	router := qqBotTestRouter(restoredControlHandler(channel))
+	router := botTestRouter(restoredControlHandler(channel))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/auto-info", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	var info qqbotAutoInfoResponse
+	var info botAutoInfoResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&info); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if info.BotQQ != "10001" || info.Nickname != "Diana" || len(info.Groups) != 1 {
+	if info.BotAccount != "10001" || info.Nickname != "Diana" || len(info.Groups) != 1 {
 		t.Fatalf("auto info = %#v", info)
 	}
 	if info.Groups[0].GroupID != "123456" || info.Groups[0].MemberCount != 12 {
@@ -107,7 +107,7 @@ func TestRestoredFileParseAndUploadRoutes(t *testing.T) {
 	}}
 	handler := restoredControlHandler(channel)
 	handler.SetLocalMediaSharer(fixedMediaSharer{url: "http://127.0.0.1/media/test"})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	body, err := json.Marshal(groupTestFilePayload{Name: "fixture.txt", LocalPath: path})
 	if err != nil {
@@ -149,13 +149,13 @@ func TestRestoredTaskListKeepsStatusAndNewestFirst(t *testing.T) {
 
 	handler := restoredControlHandler(&restoredControlChannel{})
 	handler.SetSQLiteStore(store)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/qqbot/tasks", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	var payload qqbotTasksResponse
+	var payload botTasksResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
@@ -169,7 +169,7 @@ func TestRestoredTaskListKeepsStatusAndNewestFirst(t *testing.T) {
 
 func TestRestoredOneTimeTaskReportsRetryingAndQuota(t *testing.T) {
 	item := assistant.Reminder{Kind: assistant.ReminderKindMessage, ConsecutiveFailures: 2}
-	if status := qqbotTaskStatus(item); status != "retrying" {
+	if status := botTaskStatus(item); status != "retrying" {
 		t.Fatalf("status = %q, want retrying", status)
 	}
 	if !taskConsumesQuota(item) {
@@ -191,13 +191,13 @@ func TestRepositoryWatchDoesNotConsumePersonalTaskQuota(t *testing.T) {
 func TestRepositoryWatchCreateUsesSelectedProfileAndGroupTarget(t *testing.T) {
 	base := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime := &capturingRepositoryWatchRuntime{Runtime: base}
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
-	profiles := NewMemoryQQBotProfileStore(assistant.BotConfig{
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	profiles := NewMemoryBotProfileStore(assistant.BotConfig{
 		Name: "通知机器人", Platform: assistant.PlatformOneBotV11, Enabled: true,
 	})
 	handler.SetProfileStore(profiles)
 	profileID := profiles.Profiles().ActiveID
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
 		"repository":"acme/private","profile_id":%q,"destination":"group","group_id":"123456",
 		"watch_commits":true,"watch_pull_requests":true,"watch_releases":true,"watch_stars":true
@@ -220,10 +220,10 @@ func TestRepositoryWatchCreateUsesSelectedProfileAndGroupTarget(t *testing.T) {
 func TestRepositoryWatchCreateUsesArbitraryPrivateTargetWithoutProfileOwner(t *testing.T) {
 	base := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime := &capturingRepositoryWatchRuntime{Runtime: base}
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
-	profiles := NewMemoryQQBotProfileStore(assistant.BotConfig{Platform: assistant.PlatformOneBotV11, Enabled: true})
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	profiles := NewMemoryBotProfileStore(assistant.BotConfig{Platform: assistant.PlatformOneBotV11, Enabled: true})
 	handler.SetProfileStore(profiles)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
 		"repository":"acme/private","profile_id":%q,"destination":"private","user_id":"998877","watch_commits":true
 	}`, profiles.Profiles().ActiveID))
@@ -238,10 +238,10 @@ func TestRepositoryWatchCreateUsesArbitraryPrivateTargetWithoutProfileOwner(t *t
 func TestRepositoryWatchCreateRequiresPrivateTarget(t *testing.T) {
 	base := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime := &capturingRepositoryWatchRuntime{Runtime: base}
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
-	profiles := NewMemoryQQBotProfileStore(assistant.BotConfig{Platform: assistant.PlatformOneBotV11, Enabled: true})
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	profiles := NewMemoryBotProfileStore(assistant.BotConfig{Platform: assistant.PlatformOneBotV11, Enabled: true})
 	handler.SetProfileStore(profiles)
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
 		"repository":"acme/private","profile_id":%q,"destination":"private","watch_commits":true
 	}`, profiles.Profiles().ActiveID))
@@ -254,7 +254,7 @@ func TestRepositoryWatchCreateRequiresPrivateTarget(t *testing.T) {
 }
 
 func TestRestoredDashboardStatsAvailableWithoutStore(t *testing.T) {
-	router := qqBotTestRouter(restoredControlHandler(&restoredControlChannel{}))
+	router := botTestRouter(restoredControlHandler(&restoredControlChannel{}))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/dashboard-stats", nil))
 	if recorder.Code != http.StatusOK {
@@ -269,10 +269,10 @@ func TestRestoredDashboardStatsAvailableWithoutStore(t *testing.T) {
 	}
 }
 
-func restoredControlHandler(channel assistant.Channel) *QQBotHandler {
+func restoredControlHandler(channel assistant.Channel) *BotHandler {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return channel })
-	handler.SetFeatureFlags(QQBotFeatureFlags{GroupTest: true})
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return channel })
+	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
 	return handler
 }
 

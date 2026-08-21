@@ -223,7 +223,7 @@ func TestRouteReplyIntentUsesCompactToolCatalog(t *testing.T) {
 	}
 }
 
-func TestQQSystemPromptOmitsUnselectedToolRules(t *testing.T) {
+func TestSystemPromptOmitsUnselectedToolRules(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nil, NewPluginManager(), nil, nil, nil, nil)
 	registry := agent.NewToolRegistry(&scopeTestTool{name: "web_search.search"})
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(
@@ -234,7 +234,7 @@ func TestQQSystemPromptOmitsUnselectedToolRules(t *testing.T) {
 		true,
 		registry,
 	)
-	for _, unexpected := range []string{"diana.config", "diana.llm_config", "diana.relationship", "diana.tasks", "diana.reminder", "diana.schedule", "diana.tts", "diana.qq_group"} {
+	for _, unexpected := range []string{"diana.config", "diana.llm_config", "diana.relationship", "diana.tasks", "diana.reminder", "diana.schedule", "diana.tts", "diana.onebot_group"} {
 		if strings.Contains(prompt, unexpected) {
 			t.Fatalf("prompt unexpectedly contains unselected tool %q: %s", unexpected, prompt)
 		}
@@ -252,7 +252,7 @@ func TestReplyToUsesSingleAgentDecisionWithoutPreRouter(t *testing.T) {
 	channel := &recordingChannel{}
 	workDir := t.TempDir()
 	runtime := NewRuntime(BotConfig{
-		BotQQ:              "42",
+		BotAccount:         "42",
 		OwnerID:            "owner",
 		AgentEnabled:       true,
 		AgentWorkDir:       workDir,

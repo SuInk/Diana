@@ -25,7 +25,7 @@ type repositoryIssueTestTransport struct {
 	target *url.URL
 }
 
-func TestQQBotHandlerListsPersistentRepositoryIssueDrafts(t *testing.T) {
+func TestBotHandlerListsPersistentRepositoryIssueDrafts(t *testing.T) {
 	store, err := storage.NewSQLiteStore(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestQQBotHandlerListsPersistentRepositoryIssueDrafts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	handler := &QQBotHandler{sqlite: store}
+	handler := &BotHandler{sqlite: store}
 	router := gin.New()
 	router.GET("/api/assistant/plugins/repository-publish/drafts", handler.listRepositoryIssueDrafts)
 	recorder := httptest.NewRecorder()
@@ -60,7 +60,7 @@ func (t repositoryIssueTestTransport) RoundTrip(request *http.Request) (*http.Re
 	return t.base.RoundTrip(clone)
 }
 
-func TestQQBotHandlerCreatesRepositoryIssueThroughPublishingPlugin(t *testing.T) {
+func TestBotHandlerCreatesRepositoryIssueThroughPublishingPlugin(t *testing.T) {
 	var mu sync.Mutex
 	methods := make([]string, 0, 2)
 	authorizations := make([]string, 0, 2)
@@ -94,10 +94,10 @@ func TestQQBotHandlerCreatesRepositoryIssueThroughPublishingPlugin(t *testing.T)
 		t.Fatal(err)
 	}
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, manager, nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	body := []byte(`{"repository":"acme/demo","title":"WebUI issue","body":"details","labels":["bug"]}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repository-publish/issues", bytes.NewReader(body))

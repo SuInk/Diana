@@ -340,7 +340,7 @@ func TestRememberOutgoingPersistsSharedImage(t *testing.T) {
 	if !ok {
 		t.Fatal("Share() returned false")
 	}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot-1"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot-1"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetLocalMediaSharer(store)
 	source := MessageEvent{Kind: EventKindPrivate, UserID: "user-1", MessageID: "edit-request"}
 	runtime.rememberOutgoingWithMessageID(context.Background(), source, OutgoingMessage{
@@ -378,7 +378,7 @@ func TestRememberOutgoingCachesSharedVideoBeforeTemporarySourceExpires(t *testin
 	if !ok {
 		t.Fatal("Share() returned false")
 	}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot-1"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot-1"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetLocalMediaSharer(store)
 	source := MessageEvent{Kind: EventKindPrivate, UserID: "user-1", MessageID: "video-request"}
 	runtime.rememberOutgoingWithMessageID(context.Background(), source, OutgoingMessage{
@@ -417,7 +417,7 @@ func TestRememberOutgoingRecoversSentImageThroughOneBot(t *testing.T) {
 		},
 		"get_image": {"sourcePath": localPath},
 	}}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot-1"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot-1"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	source := MessageEvent{Kind: EventKindPrivate, UserID: "user-1", MessageID: "edit-request"}
 	runtime.rememberOutgoingWithMessageID(context.Background(), source, OutgoingMessage{
 		Text:      "改好了。",
@@ -897,7 +897,7 @@ func TestRuntimeCachesIncomingVideoThenRoutesFollowupToItsFrames(t *testing.T) {
 		`{"action":"none","prompt":""}`,
 		"视频里是测试画面。",
 	}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", RecentContextLimit: 20}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", RecentContextLimit: 20}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	prepared, _, handled, _ := runtime.prepareMessageEvent(context.Background(), MessageEvent{

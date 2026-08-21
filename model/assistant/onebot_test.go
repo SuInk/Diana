@@ -90,7 +90,7 @@ func TestTextToOneBotSegmentsKeepsCQAt(t *testing.T) {
 	}
 }
 
-func TestTextToOneBotSegmentsConvertsPlainQQMention(t *testing.T) {
+func TestTextToOneBotSegmentsConvertsPlainMention(t *testing.T) {
 	got := TextToOneBotSegments("看下 @10005 的好感度")
 	if len(got) != 3 {
 		t.Fatalf("segments = %#v", got)
@@ -349,7 +349,7 @@ func TestReverseServerStatusUpdatesPreserveConnectionEpoch(t *testing.T) {
 	}
 }
 
-func TestReverseServerHeartbeatTracksQQAccountHealth(t *testing.T) {
+func TestReverseServerHeartbeatTracksBotAccountHealth(t *testing.T) {
 	server := NewOneBotReverseServer(OneBotConfig{Endpoint: "/onebot/v11/ws"})
 	if err := server.handleFrame([]byte(`{"post_type":"meta_event","meta_event_type":"heartbeat","self_id":42,"status":{"online":false,"good":false}}`)); err != nil {
 		t.Fatal(err)

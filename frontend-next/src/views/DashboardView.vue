@@ -148,7 +148,7 @@
                   <span v-if="event.platform" class="badge">{{ platformLabel(event.platform) }}</span>
                   <span class="badge" :class="eventBadgeClass(event)">{{ eventKindLabel(event.kind) }}</span>
                   <span v-if="event.group_id" class="muted mono">群 {{ event.group_id }}</span>
-                  <span v-if="displayQQIdentity(event.sender_name, event.user_id)" class="muted">{{ displayQQIdentity(event.sender_name, event.user_id) }}</span>
+                  <span v-if="displayChatIdentity(event.sender_name, event.user_id)" class="muted">{{ displayChatIdentity(event.sender_name, event.user_id) }}</span>
                   <span v-if="event.duration_ms" class="muted">{{ (event.duration_ms / 1000).toFixed(1) }}s</span>
                   <span v-if="event.decision" class="badge" :class="eventDecisionClass(event)">{{ eventDecisionLabel(event) }}</span>
                 </div>
@@ -182,11 +182,11 @@ import {
   TriangleAlert,
   Zap
 } from "@lucide/vue";
-import { getConfig, getQQBotStatus, getStats, startQQBot, stopQQBot, type StatsHourBucket } from "../api";
+import { getConfig, getBotStatus, getStats, startBot, stopBot, type StatsHourBucket } from "../api";
 import { pushStatsSnapshot, pushStatusSnapshot, stream, type BotEvent } from "../stream";
 import { navigate } from "../router";
 import { formatBytes, formatClock, formatNumber, formatRelative, formatUptime, truncate } from "../format";
-import { displayMessageText, displayQQIdentity } from "../message-display";
+import { displayMessageText, displayChatIdentity } from "../message-display";
 import { toastError, toastSuccess } from "../toast";
 import StatCard from "../components/StatCard.vue";
 import HourlyBars from "../components/HourlyBars.vue";
@@ -253,7 +253,7 @@ function formatPercent(value: number | undefined): string {
 
 async function refresh(): Promise<void> {
   try {
-    const [statusResult, statsResult, llmConfig] = await Promise.all([getQQBotStatus(), getStats(), getConfig()]);
+    const [statusResult, statsResult, llmConfig] = await Promise.all([getBotStatus(), getStats(), getConfig()]);
     pushStatusSnapshot(statusResult);
     pushStatsSnapshot(statsResult);
     setupNeeded.value = !llmConfig.model || !llmConfig.api_key_configured;
@@ -265,7 +265,7 @@ async function refresh(): Promise<void> {
 async function toggleBot(start: boolean): Promise<void> {
   busy.value = true;
   try {
-    const result = start ? await startQQBot() : await stopQQBot();
+    const result = start ? await startBot() : await stopBot();
     pushStatusSnapshot(result);
     toastSuccess(start ? "机器人已启动" : "机器人已停止");
   } catch (error) {

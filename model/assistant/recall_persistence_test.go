@@ -141,7 +141,7 @@ func TestRuntimeRecoversMissingRecallContentFromNapCat(t *testing.T) {
 
 func TestRuntimeDoesNotPersistBotOwnRecall(t *testing.T) {
 	store := newRecallPersistenceStore()
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	if err := runtime.HandleEvent(context.Background(), MessageEvent{
 		Kind:       EventKindNotice,
@@ -173,7 +173,7 @@ func TestRuntimePersistsBotMessageRecalledByAdministrator(t *testing.T) {
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "机器人原消息"}}},
 		SenderName: "Diana",
 	}}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	if err := runtime.HandleEvent(context.Background(), MessageEvent{
 		Kind:       EventKindNotice,
@@ -196,7 +196,7 @@ func TestRuntimePersistsBotMessageRecalledByAdministrator(t *testing.T) {
 func TestRuntimePersistsSentMessageWithOneBotIDForAdministratorRecall(t *testing.T) {
 	store := newRecallPersistenceStore()
 	channel := newRecallDeleteChannel()
-	runtime := NewRuntime(BotConfig{BotQQ: "42", Name: "Diana"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42", Name: "Diana"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	source := MessageEvent{
 		Kind:      EventKindGroup,

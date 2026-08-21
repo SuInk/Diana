@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-func TestPublicQQErrorMessageHidesRelayURL(t *testing.T) {
+func TestPublicChatErrorMessageHidesRelayURL(t *testing.T) {
 	err := errors.New(`Post "https://relay.private.example/v1/responses": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`)
-	got := publicQQErrorMessage(err)
+	got := publicChatErrorMessage(err)
 	if got != "上游模型服务响应超时，请稍后重试。" {
 		t.Fatalf("message = %q", got)
 	}
@@ -23,9 +23,9 @@ func TestPublicQQErrorMessageHidesRelayURL(t *testing.T) {
 	}
 }
 
-func TestPublicQQErrorMessageDoesNotExposeUnknownProviderError(t *testing.T) {
+func TestPublicChatErrorMessageDoesNotExposeUnknownProviderError(t *testing.T) {
 	err := errors.New(`request to https://relay.private.example/v1 failed: Authorization: Bearer example-secret-token`)
-	got := publicQQErrorMessage(err)
+	got := publicChatErrorMessage(err)
 	for _, useful := range []string{"request to", "failed", "[REDACTED_URL]", "[REDACTED]"} {
 		if !strings.Contains(got, useful) {
 			t.Fatalf("message %q does not contain diagnostic %q", got, useful)
@@ -38,9 +38,9 @@ func TestPublicQQErrorMessageDoesNotExposeUnknownProviderError(t *testing.T) {
 	}
 }
 
-func TestPublicQQErrorMessageRedactsBareHostCredentialsAndLocalPath(t *testing.T) {
+func TestPublicChatErrorMessageRedactsBareHostCredentialsAndLocalPath(t *testing.T) {
 	raw := `provider relay.private.example failed: api_key=test-value file=/private/config.json`
-	got := publicQQErrorMessage(errors.New(raw))
+	got := publicChatErrorMessage(errors.New(raw))
 	for _, useful := range []string{"provider", "failed", "[REDACTED_HOST]", "api_key=[REDACTED]", "[REDACTED_PATH]"} {
 		if !strings.Contains(got, useful) {
 			t.Fatalf("message %q does not contain %q", got, useful)
@@ -53,9 +53,9 @@ func TestPublicQQErrorMessageRedactsBareHostCredentialsAndLocalPath(t *testing.T
 	}
 }
 
-func TestPublicQQErrorMessageMapsEmptyModelOutput(t *testing.T) {
+func TestPublicChatErrorMessageMapsEmptyModelOutput(t *testing.T) {
 	err := errors.New("llm: openai-compatible chat completions output is empty")
-	got := publicQQErrorMessage(err)
+	got := publicChatErrorMessage(err)
 	if got != "上游模型服务暂时没有返回有效内容，请稍后重试。" {
 		t.Fatalf("message = %q", got)
 	}
@@ -64,9 +64,9 @@ func TestPublicQQErrorMessageMapsEmptyModelOutput(t *testing.T) {
 	}
 }
 
-func TestPublicQQErrorMessageMapsContentPolicyRejection(t *testing.T) {
+func TestPublicChatErrorMessageMapsContentPolicyRejection(t *testing.T) {
 	err := classifyLLMError(errors.New("400 Bad Request: request was rejected because it was considered high risk"))
-	got := publicQQErrorMessage(err)
+	got := publicChatErrorMessage(err)
 	for _, want := range []string{"上游模型因内容安全策略拒绝了这次请求", "上游说明：", "high risk"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("message = %q, missing %q", got, want)
@@ -74,17 +74,17 @@ func TestPublicQQErrorMessageMapsContentPolicyRejection(t *testing.T) {
 	}
 }
 
-func TestPublicQQErrorMessageMapsUnavailableImage(t *testing.T) {
+func TestPublicChatErrorMessageMapsUnavailableImage(t *testing.T) {
 	err := newImageMediaUnavailableError([]error{errors.New("image download failed: status=400")})
-	got := publicQQErrorMessage(err)
+	got := publicChatErrorMessage(err)
 	if got != "图片读取失败：原图片地址不可用，OneBot v11 回退也没有取得可读取的本地文件或下载地址。请重新发送图片后再试。" {
 		t.Fatalf("message = %q", got)
 	}
 }
 
-func TestPublicQQErrorMessageGuidesGitHubRateLimitConfiguration(t *testing.T) {
+func TestPublicChatErrorMessageGuidesGitHubRateLimitConfiguration(t *testing.T) {
 	err := errors.New("读取 SuInk/Diana commits: GitHub API 匿名请求额度已耗尽（公开仓库同样受限）")
-	got := publicQQErrorMessage(err)
+	got := publicChatErrorMessage(err)
 	for _, text := range []string{"GitHub API", "公开仓库", "插件 → 仓库更新订阅 → 设置", "GitHub Token"} {
 		if !strings.Contains(got, text) {
 			t.Fatalf("message %q does not contain %q", got, text)
@@ -95,9 +95,9 @@ func TestPublicQQErrorMessageGuidesGitHubRateLimitConfiguration(t *testing.T) {
 	}
 }
 
-func TestPublicQQErrorMessageGuidesInvalidGitHubTokenConfiguration(t *testing.T) {
+func TestPublicChatErrorMessageGuidesInvalidGitHubTokenConfiguration(t *testing.T) {
 	err := errors.New("读取 SuInk/Diana releases: GitHub Token 无效或已过期，请在插件设置中重新配置")
-	got := publicQQErrorMessage(err)
+	got := publicChatErrorMessage(err)
 	if !strings.Contains(got, "GitHub Token 无效或已过期") || !strings.Contains(got, "插件 → 仓库更新订阅 → 设置") {
 		t.Fatalf("message = %q", got)
 	}

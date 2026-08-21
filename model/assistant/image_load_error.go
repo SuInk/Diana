@@ -136,10 +136,10 @@ func (r *Runtime) recordImageLoadError(ctx context.Context, event MessageEvent, 
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.image.load",
+		Action:  "chatbot.image.load",
 		Message: "图片读取失败",
 		Detail:  err.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  strings.TrimSpace(event.MessageID),
 		Metadata: map[string]any{
 			"group_id":   event.GroupID,

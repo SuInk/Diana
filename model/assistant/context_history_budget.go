@@ -51,7 +51,7 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 		stored, err = store.ListRecentMessageEvents(loadCtx, session, candidateLimit)
 		cancel()
 		if err != nil {
-			log.Printf("qqbot token-budget history load failed: %v", err)
+			log.Printf("chatbot token-budget history load failed: %v", err)
 		}
 	}
 	history := dropSummarizedHistory(mergeMessageHistory(memory, stored, candidateLimit), memory, summaryWatermark)
@@ -64,7 +64,7 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 		}
 		history = filtered
 	}
-	return selectRecentHistoryTurns(history, event, cfg.BotQQ, budget)
+	return selectRecentHistoryTurns(history, event, cfg.BotAccount, budget)
 }
 
 // promptContextWindowTokens 取本轮可能被选中的配置档里最小的那个请求上下文上限：
@@ -138,11 +138,11 @@ func historyCandidateLimitForBudget(budget int64) int {
 	return limit
 }
 
-func selectRecentHistoryTurns(history []MessageEvent, current MessageEvent, botQQ string, budget int64) []MessageEvent {
+func selectRecentHistoryTurns(history []MessageEvent, current MessageEvent, botAccount string, budget int64) []MessageEvent {
 	if len(history) == 0 || budget <= 0 {
 		return nil
 	}
-	turns := groupHistoryContextTurns(history, current.Time, botQQ)
+	turns := groupHistoryContextTurns(history, current.Time, botAccount)
 	remaining := budget
 	first := len(turns)
 	for index := len(turns) - 1; index >= 0; index-- {
@@ -169,10 +169,10 @@ func selectRecentHistoryTurns(history []MessageEvent, current MessageEvent, botQ
 	return selected
 }
 
-func groupHistoryContextTurns(history []MessageEvent, currentTime int64, botQQ string) []historyContextTurn {
+func groupHistoryContextTurns(history []MessageEvent, currentTime int64, botAccount string) []historyContextTurn {
 	turns := make([]historyContextTurn, 0, len(history))
 	for _, event := range history {
-		assistantEvent := strings.TrimSpace(event.botReply) != "" || assistantHistoryEvent(event, botQQ)
+		assistantEvent := strings.TrimSpace(event.botReply) != "" || assistantHistoryEvent(event, botAccount)
 		cost := estimateHistoryContextEventTokens(event, currentTime, assistantEvent)
 		if assistantEvent && len(turns) > 0 && !turns[len(turns)-1].hasAssistant {
 			last := &turns[len(turns)-1]
@@ -203,10 +203,10 @@ func groupHistoryContextTurns(history []MessageEvent, currentTime int64, botQQ s
 	return turns
 }
 
-func historyContextMetadata(history []MessageEvent, currentTime int64, botQQ string) (map[string]string, map[string]bool) {
+func historyContextMetadata(history []MessageEvent, currentTime int64, botAccount string) (map[string]string, map[string]bool) {
 	groups := make(map[string]string, len(history))
 	recent := make(map[string]bool, len(history))
-	turns := groupHistoryContextTurns(history, currentTime, botQQ)
+	turns := groupHistoryContextTurns(history, currentTime, botAccount)
 	recentFrom := max(0, len(turns)-recentHistoryPriorityTurns)
 	for turnIndex, turn := range turns {
 		groupID := "history-turn-" + fmt.Sprint(turnIndex)
@@ -298,7 +298,7 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		"summary_token_budget":      contextShareBudget(window, compressedSummaryTokenShare),
 		"memory_token_budget":       contextShareBudget(window, longTermMemoryTokenShare),
 		"history_selected_messages": len(history),
-		"history_selected_turns":    len(groupHistoryContextTurns(history, event.Time, cfg.BotQQ)),
+		"history_selected_turns":    len(groupHistoryContextTurns(history, event.Time, cfg.BotAccount)),
 		"history_earliest_time":     earliest,
 		"history_latest_time":       latest,
 		"summary":                   contextBudgetSummaryTrace(breakdown, contextShareBudget(window, compressedSummaryTokenShare), summaryRecompressed),
@@ -315,9 +315,9 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     applog.KindDebug,
 		Level:    applog.LevelInfo,
-		Action:   "qqbot.context_budget",
+		Action:   "chatbot.context_budget",
 		Message:  "上下文预算已编排",
-		Actor:    "qq_context",
+		Actor:    "chat_context",
 		Target:   strings.TrimSpace(event.MessageID),
 		Metadata: metadata,
 	})

@@ -249,11 +249,11 @@ func TestRuntimeCollectsSentMessageIDAndDeletesItAfterDelay(t *testing.T) {
 func TestRuntimeDeletesRecallReplyThroughSourceProfile(t *testing.T) {
 	first := newRecallDeleteChannel()
 	second := newRecallDeleteChannel()
-	runtime := NewRuntime(BotConfig{ID: "qq-second", Platform: PlatformOneBotV11}, NewMultiChannel([]ChannelBinding{
-		{ProfileID: "qq-first", Platform: PlatformOneBotV11, Channel: first},
-		{ProfileID: "qq-second", Platform: PlatformOneBotV11, Channel: second},
+	runtime := NewRuntime(BotConfig{ID: "onebot-second", Platform: PlatformOneBotV11}, NewMultiChannel([]ChannelBinding{
+		{ProfileID: "onebot-first", Platform: PlatformOneBotV11, Channel: first},
+		{ProfileID: "onebot-second", Platform: PlatformOneBotV11, Channel: second},
 	}), NewPluginManager(), nil, nil, nil, nil)
-	event := MessageEvent{Kind: EventKindGroup, ProfileID: "qq-first", Platform: PlatformOneBotV11, GroupID: "123"}
+	event := MessageEvent{Kind: EventKindGroup, ProfileID: "onebot-first", Platform: PlatformOneBotV11, GroupID: "123"}
 
 	runtime.scheduleMessageDeletes(event, []string{"101"}, 0)
 	select {
@@ -273,7 +273,7 @@ func TestRuntimeDeletesRecallReplyThroughSourceProfile(t *testing.T) {
 
 func TestRuntimeCollectsForwardMessageID(t *testing.T) {
 	channel := newRecallDeleteChannel()
-	runtime := NewRuntime(BotConfig{BotQQ: "42", DirectReplyChunkSize: 10, ForwardReplyThreshold: 5}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42", DirectReplyChunkSize: 10, ForwardReplyThreshold: 5}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456", MessageID: "source-1", SelfID: "42"}
 
 	messageIDs, err := runtime.sendWithMessageIDs(context.Background(), event, "这是一条超过合并转发阈值的撤回记录")

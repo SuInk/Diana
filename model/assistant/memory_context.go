@@ -73,7 +73,7 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	})
 	cancel()
 	if err != nil {
-		log.Printf("qqbot structured memory load failed: %v", err)
+		log.Printf("chatbot structured memory load failed: %v", err)
 		return formatStructuredMemoryContextWithTokenBudget(profile, policy, nil, memoryBudget)
 	}
 	return formatStructuredMemoryContextWithTokenBudget(profile, policy, rankStructuredMemories(items, event, queryText, time.Now()), memoryBudget)

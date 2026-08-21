@@ -23,7 +23,7 @@ func gateRuntime(t *testing.T, cfg BotConfig, now time.Time) *Runtime {
 func TestReplyGateAbsentKeepsLegacyBehaviour(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
 		GroupTriggers:  []string{"Diana"},
-		BotQQ:          "42",
+		BotAccount:     "42",
 		DisabledGroups: []string{"999"},
 	}, time.Date(2026, 8, 4, 3, 0, 0, 0, time.Local))
 
@@ -46,7 +46,7 @@ func TestReplyGateAbsentKeepsLegacyBehaviour(t *testing.T) {
 
 func TestGroupAdmissionWhitelist(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 		GroupAdmission: GroupAdmission{
 			Mode:          GroupAdmissionWhitelist,
 			AllowedGroups: []string{"100"},
@@ -68,7 +68,7 @@ func TestGroupAdmissionWhitelist(t *testing.T) {
 // 白名单和 DisabledGroups 叠加：先过白名单，再过黑名单。
 func TestGroupAdmissionWhitelistStillHonoursDisabledGroups(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ:          "42",
+		BotAccount:     "42",
 		DisabledGroups: []string{"100"},
 		GroupAdmission: GroupAdmission{
 			Mode:          GroupAdmissionWhitelist,
@@ -175,7 +175,7 @@ func TestActiveHoursDisabledWhenClockInvalid(t *testing.T) {
 
 func TestShouldHandleBlocksOutsideActiveHours(t *testing.T) {
 	cfg := BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 		ReplyGate: &ReplyGate{
 			ActiveHoursEnabled: true,
 			ActiveStart:        "09:00",
@@ -196,7 +196,7 @@ func TestShouldHandleBlocksOutsideActiveHours(t *testing.T) {
 
 func TestGroupReplyGateUsesItsOwnActiveHours(t *testing.T) {
 	base := BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 		ReplyGate: &ReplyGate{
 			ActiveHoursEnabled: true,
 			ActiveStart:        "00:00",
@@ -227,8 +227,8 @@ func TestGroupReplyGateUsesItsOwnActiveHours(t *testing.T) {
 	}
 }
 
-func TestGroupReplyGateBlocksQQOnlyInConfiguredGroup(t *testing.T) {
-	base := BotConfig{BotQQ: "42"}
+func TestGroupReplyGateBlocksOneBotOnlyInConfiguredGroup(t *testing.T) {
+	base := BotConfig{BotAccount: "42"}
 	rt := gateRuntime(t, base, time.Now())
 	store := &testWritableGroupConfigStore{}
 	_, _ = store.SaveGroupConfig(GroupConfig{
@@ -256,8 +256,8 @@ func TestGroupReplyGateBlocksQQOnlyInConfiguredGroup(t *testing.T) {
 // 主人不受时段限制，否则配错了就把自己锁在门外。
 func TestOwnerBypassesActiveHours(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ:   "42",
-		OwnerID: "1001",
+		BotAccount: "42",
+		OwnerID:    "1001",
 		ReplyGate: &ReplyGate{
 			ActiveHoursEnabled: true,
 			ActiveStart:        "09:00",
@@ -277,8 +277,8 @@ func TestOwnerBypassesActiveHours(t *testing.T) {
 
 func TestOwnerBypassCanBeDisabled(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ:   "42",
-		OwnerID: "1001",
+		BotAccount: "42",
+		OwnerID:    "1001",
 		ReplyGate: &ReplyGate{
 			ActiveHoursEnabled: true,
 			ActiveStart:        "09:00",
@@ -295,8 +295,8 @@ func TestOwnerBypassCanBeDisabled(t *testing.T) {
 
 func TestLevelGateBlocksLowLevelMember(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ:     "42",
-		ReplyGate: &ReplyGate{MinGroupLevel: 3},
+		BotAccount: "42",
+		ReplyGate:  &ReplyGate{MinGroupLevel: 3},
 	}, time.Now())
 
 	low := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "7", SenderLevel: 1, ToMe: true}
@@ -312,8 +312,8 @@ func TestLevelGateBlocksLowLevelMember(t *testing.T) {
 // 等级拿不到时默认放行：OneBot 实现差异很大，宁可漏拦也不能整群失联。
 func TestLevelGateFailsOpenWhenUnknown(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ:     "42",
-		ReplyGate: &ReplyGate{MinGroupLevel: 3},
+		BotAccount: "42",
+		ReplyGate:  &ReplyGate{MinGroupLevel: 3},
 	}, time.Now())
 
 	unknown := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "7", ToMe: true}
@@ -324,7 +324,7 @@ func TestLevelGateFailsOpenWhenUnknown(t *testing.T) {
 
 func TestLevelGateCanFailClosed(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 		ReplyGate: &ReplyGate{
 			MinGroupLevel:      3,
 			LevelUnknownPolicy: LevelUnknownDeny,
@@ -340,7 +340,7 @@ func TestLevelGateCanFailClosed(t *testing.T) {
 // 等级门槛只作用于群聊，私聊没有群等级这回事。
 func TestLevelGateDoesNotAffectPrivateChat(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 		ReplyGate: &ReplyGate{
 			MinGroupLevel:      6,
 			LevelUnknownPolicy: LevelUnknownDeny,
@@ -354,7 +354,7 @@ func TestLevelGateDoesNotAffectPrivateChat(t *testing.T) {
 
 func TestBlockedAndExemptUsers(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ: "42",
+		BotAccount: "42",
 		ReplyGate: &ReplyGate{
 			MinGroupLevel: 5,
 			BlockedUsers:  []string{"666"},
@@ -379,8 +379,8 @@ func TestBlockedAndExemptUsers(t *testing.T) {
 // 群级门槛整体替换全局，而不是逐字段合并。
 func TestGroupReplyGateOverridesGlobal(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotQQ:     "42",
-		ReplyGate: &ReplyGate{MinGroupLevel: 9},
+		BotAccount: "42",
+		ReplyGate:  &ReplyGate{MinGroupLevel: 9},
 	}, time.Now())
 	rt.SetGroupConfigStore(staticGroupConfigStore{cfg: GroupConfig{
 		GroupID:    "100",
@@ -417,7 +417,7 @@ func (s staticGroupConfigStore) SaveGroupConfig(cfg GroupConfig) error { return 
 
 func TestQuietNoticeIsRateLimited(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 0, 0, 0, time.Local)
-	rt := gateRuntime(t, BotConfig{BotQQ: "42"}, now)
+	rt := gateRuntime(t, BotConfig{BotAccount: "42"}, now)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "7"}
 
 	if !rt.allowQuietNotice(event) {
@@ -442,8 +442,8 @@ func TestLevelGateSkippedOnNonOneBotPlatform(t *testing.T) {
 	calls := 0
 	newRT := func(platform string) *Runtime {
 		rt := gateRuntime(t, BotConfig{
-			Platform: platform,
-			BotQQ:    "42",
+			Platform:   platform,
+			BotAccount: "42",
 			ReplyGate: &ReplyGate{
 				MinGroupLevel:      5,
 				LevelUnknownPolicy: "deny",

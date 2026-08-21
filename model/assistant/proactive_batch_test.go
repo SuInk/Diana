@@ -18,7 +18,7 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 		`{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","turn_message_ids":["message-1"],"directed_at_bot":false,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.8,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -67,7 +67,7 @@ func TestProactiveReplyBatchUsesConfiguredRouterPrompt(t *testing.T) {
 		`{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","turn_message_ids":["message-1"],"directed_at_bot":false,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                      "42",
+		BotAccount:                 "42",
 		ProactiveReplyChance:       1,
 		ProactiveReplyThreshold:    0.8,
 		ProactiveReplyRouterPrompt: "custom proactive router prompt",
@@ -93,7 +93,7 @@ func TestProactiveReplyBatchUsesConfiguredRouterPrompt(t *testing.T) {
 
 func TestProactiveReplyRouterTimeoutFallsBackForExplicitQuestion(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.8,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -113,7 +113,7 @@ func TestProactiveReplyRouterTimeoutFallsBackForExplicitQuestion(t *testing.T) {
 }
 
 func TestProactiveReplyRouterTimeoutKeepsStatementSilent(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return failingLLMProvider{err: context.DeadlineExceeded}, nil
 	})
 	candidate := proactiveReplyCandidate{
@@ -131,7 +131,7 @@ func TestProactiveReplyBatchSelectsCompleteSemanticTurn(t *testing.T) {
 		`{"should_reply":true,"confidence":0.99,"category":"bot_related","target_message_id":"message-3","turn_message_ids":["message-1","message-2","message-3"],"directed_at_bot":true,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.9,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -258,7 +258,7 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	}
 	provider := &proactiveReplyRerouteProvider{second: second}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		OwnerID:                 "owner",
 		AgentEnabled:            false,
 		ProactiveReplyChance:    1,
@@ -305,7 +305,7 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	}
 	var superseded bool
 	for _, entry := range logs.entries {
-		if entry.Action == "qqbot.proactive_reply_superseded" && entry.Metadata["stage"] == "before_send" {
+		if entry.Action == "chatbot.proactive_reply_superseded" && entry.Metadata["stage"] == "before_send" {
 			superseded = true
 		}
 	}
@@ -321,7 +321,7 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 }
 
 func TestProactiveReplyBatchCollectsPerSenderAndCanBeCancelled(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &capturingLLMProvider{}, nil
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -357,7 +357,7 @@ func TestProactiveReplyBatchCollectsPerSenderAndCanBeCancelled(t *testing.T) {
 }
 
 func TestProactiveReplyBatchDoesNotMixSendersInSameGroup(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &capturingLLMProvider{}, nil
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -402,7 +402,7 @@ func TestProactiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *tes
 	}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		OwnerID:                 "owner",
 		AgentEnabled:            false,
 		ProactiveReplyChance:    1,
@@ -449,7 +449,7 @@ func TestProactiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *tes
 	}
 	var relationshipLogFound bool
 	for _, entry := range logs.entries {
-		if entry.Action == "qqbot.relationship_evaluation" && entry.Metadata["delta"] == 1 {
+		if entry.Action == "chatbot.relationship_evaluation" && entry.Metadata["delta"] == 1 {
 			relationshipLogFound = true
 		}
 	}
@@ -464,7 +464,7 @@ func TestProactiveReplyBatchDoesNotEvaluateUnselectedMessages(t *testing.T) {
 	}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		OwnerID:                 "owner",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.8,
@@ -493,7 +493,7 @@ func TestProactiveReplyBatchDoesNotAwardFavorabilityWhenReplyFails(t *testing.T)
 	provider := &proactiveBatchReplyFailureProvider{}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		OwnerID:                 "owner",
 		AgentEnabled:            false,
 		ProactiveReplyChance:    1,
@@ -537,7 +537,7 @@ func TestProactiveReplyBatchRechecksSuppressionAfterRouting(t *testing.T) {
 	provider := &proactiveRouteSuppressionProvider{}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:                   "42",
+		BotAccount:              "42",
 		OwnerID:                 "owner",
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.8,

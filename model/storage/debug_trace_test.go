@@ -33,11 +33,11 @@ func TestInboundEventDebugTraceIsScopedToExactEvent(t *testing.T) {
 	}
 	for _, entry := range []applog.Entry{
 		{
-			Kind: applog.KindDebug, Action: "qqbot.debug_trace", Target: event.MessageID,
+			Kind: applog.KindDebug, Action: "chatbot.debug_trace", Target: event.MessageID,
 			Message: "matching", Metadata: map[string]any{"kind": "group", "group_id": "group-1", "user_id": "user-1", "phase": "model_request"},
 		},
 		{
-			Kind: applog.KindDebug, Action: "qqbot.debug_trace", Target: event.MessageID,
+			Kind: applog.KindDebug, Action: "chatbot.debug_trace", Target: event.MessageID,
 			Message: "other group", Metadata: map[string]any{"kind": "group", "group_id": "group-2", "user_id": "user-1", "phase": "model_request"},
 		},
 	} {

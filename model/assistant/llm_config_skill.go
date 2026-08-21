@@ -199,14 +199,14 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 		Action:   "assistant.llm_config.command",
 		Message:  message,
 		Detail:   detail,
-		Actor:    qqEventActor(req.Event),
+		Actor:    oneBotEventActor(req.Event),
 		Target:   firstNonEmpty(result.ProfileID, result.NewModel, result.OldModel),
 		Metadata: metadata,
 	})
 }
 
-// qqEventActor 将 OneBot 事件转换为日志操作者标识。
-func qqEventActor(event MessageEvent) string {
+// oneBotEventActor 将 OneBot 事件转换为日志操作者标识。
+func oneBotEventActor(event MessageEvent) string {
 	// 给 actor 加命名空间，日志中心里能区分 WebUI 操作者和用户。
 	if userID := strings.TrimSpace(event.UserID); userID != "" {
 		return "qq:" + userID

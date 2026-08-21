@@ -103,10 +103,10 @@ docker run -d \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
   -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
-  -e QQBOT_ENABLED=true \
+  -e DIANA_BOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e QQBOT_QQ=10001 \
+  -e DIANA_BOT_ACCOUNT=10001 \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
@@ -175,10 +175,10 @@ node scripts/dev.mjs                       # when make is unavailable
 <summary>Starting an OneBot v11 bot purely from environment variables</summary>
 
 ```sh
-QQBOT_ENABLED=true \
+DIANA_BOT_ENABLED=true \
 ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
 ONEBOT_ACCESS_TOKEN=your-onebot-token \
-QQBOT_QQ=10001 \
+DIANA_BOT_ACCOUNT=10001 \
 DIANA_GROUP_TRIGGERS=Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
@@ -290,10 +290,10 @@ Anything configurable in the WebUI needs no environment variable. The common one
 | `LLM_API_KEY` | empty | LLM API key |
 | `LLM_BASE_URL` | empty | Custom base URL for OpenAI-compatible endpoints |
 | `LLM_MODEL` | empty | Model ID (no default for `openai_compatible`) |
-| `QQBOT_ENABLED` | `false` | Start the bot automatically on launch |
+| `DIANA_BOT_ENABLED` | `false` | Start the bot automatically on launch |
 | `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | Reverse WebSocket address for OneBot v11 clients |
 | `ONEBOT_ACCESS_TOKEN` | empty | OneBot access token |
-| `QQBOT_QQ` | empty | The bot's QQ number |
+| `DIANA_BOT_ACCOUNT` | empty | The bot's account ID |
 | `DIANA_OWNER_ID` | empty | Owner account ID (numeric user ID on Telegram) |
 | `DIANA_GROUP_TRIGGERS` | `Diana,diana` | Group chat trigger words |
 | `DIANA_AGENT_ENABLED` | `false` | Enable the built-in Agent |
@@ -362,10 +362,10 @@ Type=simple
 WorkingDirectory=/opt/diana
 Environment=PORT=18080
 Environment=LOG_PATH=/var/log/diana/diana.log
-Environment=QQBOT_ENABLED=true
+Environment=DIANA_BOT_ENABLED=true
 Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
 Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=QQBOT_QQ=10001
+Environment=DIANA_BOT_ACCOUNT=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini

@@ -11,34 +11,34 @@ import (
 	"github.com/SuInk/diana/model/storage"
 )
 
-type QQBotGroupConfigStore interface {
+type BotGroupConfigStore interface {
 	ConfigForGroup(groupID string) (assistant.GroupConfig, bool)
 	Groups() assistant.GroupConfigSet
 	SaveGroupConfig(assistant.GroupConfig, assistant.BotConfig) (assistant.GroupConfig, error)
 }
 
-type MemoryQQBotGroupConfigStore struct {
+type MemoryBotGroupConfigStore struct {
 	mu   sync.RWMutex
 	data assistant.GroupConfigSet
 }
 
-func NewMemoryQQBotGroupConfigStore() *MemoryQQBotGroupConfigStore {
-	return &MemoryQQBotGroupConfigStore{data: assistant.GroupConfigSet{}}
+func NewMemoryBotGroupConfigStore() *MemoryBotGroupConfigStore {
+	return &MemoryBotGroupConfigStore{data: assistant.GroupConfigSet{}}
 }
 
-func (s *MemoryQQBotGroupConfigStore) ConfigForGroup(groupID string) (assistant.GroupConfig, bool) {
+func (s *MemoryBotGroupConfigStore) ConfigForGroup(groupID string) (assistant.GroupConfig, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.ConfigForGroup(groupID)
 }
 
-func (s *MemoryQQBotGroupConfigStore) Groups() assistant.GroupConfigSet {
+func (s *MemoryBotGroupConfigStore) Groups() assistant.GroupConfigSet {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data
 }
 
-func (s *MemoryQQBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfig, base assistant.BotConfig) (assistant.GroupConfig, error) {
+func (s *MemoryBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfig, base assistant.BotConfig) (assistant.GroupConfig, error) {
 	cfg = cfg.WithDefaults(cfg.GroupID, base)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -47,40 +47,40 @@ func (s *MemoryQQBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfig,
 	return saved, nil
 }
 
-type PersistentQQBotGroupConfigStore struct {
+type PersistentBotGroupConfigStore struct {
 	mu    sync.RWMutex
 	data  assistant.GroupConfigSet
 	store *storage.SQLiteStore
 	ctx   context.Context
 }
 
-func NewPersistentQQBotGroupConfigStore(ctx context.Context, store *storage.SQLiteStore) (*PersistentQQBotGroupConfigStore, error) {
+func NewPersistentBotGroupConfigStore(ctx context.Context, store *storage.SQLiteStore) (*PersistentBotGroupConfigStore, error) {
 	data := assistant.GroupConfigSet{}
-	if saved, ok, err := store.LoadQQBotGroupConfigs(ctx); err != nil {
+	if saved, ok, err := store.LoadBotGroupConfigs(ctx); err != nil {
 		return nil, err
 	} else if ok {
 		data = saved
 	}
-	return &PersistentQQBotGroupConfigStore{
+	return &PersistentBotGroupConfigStore{
 		data:  data,
 		store: store,
 		ctx:   ctx,
 	}, nil
 }
 
-func (s *PersistentQQBotGroupConfigStore) ConfigForGroup(groupID string) (assistant.GroupConfig, bool) {
+func (s *PersistentBotGroupConfigStore) ConfigForGroup(groupID string) (assistant.GroupConfig, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.ConfigForGroup(groupID)
 }
 
-func (s *PersistentQQBotGroupConfigStore) Groups() assistant.GroupConfigSet {
+func (s *PersistentBotGroupConfigStore) Groups() assistant.GroupConfigSet {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data
 }
 
-func (s *PersistentQQBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfig, base assistant.BotConfig) (assistant.GroupConfig, error) {
+func (s *PersistentBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfig, base assistant.BotConfig) (assistant.GroupConfig, error) {
 	cfg = cfg.WithDefaults(cfg.GroupID, base)
 	s.mu.Lock()
 	s.data = s.data.WithDefaults(base).Upsert(cfg, base)
@@ -88,7 +88,7 @@ func (s *PersistentQQBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupCon
 	saved, _ := set.ConfigForGroup(cfg.GroupID)
 	s.mu.Unlock()
 	if s.store != nil {
-		if err := s.store.SaveQQBotGroupConfigs(s.ctx, set); err != nil {
+		if err := s.store.SaveBotGroupConfigs(s.ctx, set); err != nil {
 			return saved, err
 		}
 	}
