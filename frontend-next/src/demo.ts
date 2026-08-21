@@ -68,7 +68,7 @@ let assistantConfig: BotProfileConfig = { ...oneBotProfile, active_profile_id: "
 
 let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
-  { manifest: { id: "official.link-resolver", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
+  { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {
     manifest: {
@@ -100,7 +100,7 @@ let plugins: PluginState[] = [
     manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
-  { manifest: { id: "official.browser-render", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: false }
+  { manifest: { id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: true }
 ];
 
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
@@ -115,7 +115,7 @@ const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
 const groups: BotGroupSummary[] = [
   { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
   { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
-  { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, plugin_overrides: { "official.browser-render": false }, updated_at: before(45) },
+  { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, plugin_overrides: { "official.sandboxed-browser-renderer": false }, updated_at: before(45) },
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
 
@@ -204,7 +204,19 @@ const platforms: BotPlatform[] = [
 const dependencies: ResolverDependency[] = [
   { name: "ffmpeg", purpose: "媒体转码与时长检测", available: true, version: "7.1", path: "/usr/local/bin/ffmpeg", installable: true, installer: "系统包管理器" },
   { name: "yt-dlp", purpose: "视频地址解析", available: true, version: "2026.08.10", path: "/usr/local/bin/yt-dlp", installable: true, installer: "pipx" },
-  { name: "chromium", purpose: "动态网页渲染", available: true, version: "139", path: "/usr/bin/chromium", installable: true, installer: "系统包管理器" }
+  { name: "node", purpose: "抖音接口签名（a-bogus）", available: true, version: "22.11.0", path: "/usr/local/bin/node", installable: true, installer: "系统包管理器" }
+];
+
+// 演示里故意让浏览器缺席：这一格就是要给人看「插件开着但其实跑不起来」长什么样。
+const browserDependencies: ResolverDependency[] = [
+  {
+    name: "chrome",
+    purpose: "网页渲染：在一次性沙盒里执行页面 JS 后读取正文",
+    available: false,
+    detail: "没有找到 Chrome/Chromium",
+    installable: true,
+    installer: "apt"
+  }
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
@@ -298,7 +310,14 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/features") return json({ group_test: true });
   if (path === "/api/assistant/group-test") return json({ group_id: String(body.group_id ?? url.searchParams.get("group_id") ?? ""), message: String(body.message ?? "模拟通道测试"), message_id: "demo-group-test", sent: true, send_result: { status: "ok" }, channel: demoStatus.channel, recent_events: demoStatus.recent_events, status: demoStatus });
 
-  if (path === "/api/assistant/plugins/dependencies") return json({ resolver: dependencies });
+  if (path === "/api/assistant/plugins/dependencies")
+    return json({
+      resolver: dependencies,
+      plugins: {
+        "official.nonebot-plugin-resolver-go": dependencies,
+        "official.sandboxed-browser-renderer": browserDependencies
+      }
+    });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
   if (path === "/api/assistant/plugins") return json(plugins);
   if (path === "/api/assistant/plugins/repository-publish/drafts") {

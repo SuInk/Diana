@@ -6,6 +6,8 @@ package agent
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -231,5 +233,46 @@ func TestSandboxedHeadlessBrowserDelayedRedirectIntegration(t *testing.T) {
 	}
 	if len(page.NavigationChain) < 2 || len(page.PreviousPages) == 0 || !strings.Contains(page.PreviousPages[0].Text, "Welcome to 67movies") {
 		t.Fatalf("navigation evidence missing: %#v", page)
+	}
+}
+
+// 插件在控制台上是「已启用」，机器上没装浏览器也照样是「已启用」——以前只有等
+// 有人发了链接才会知道。探测要能分清「没找到」和「找到了但跑不起来」，这两种
+// 的处理方式完全不同。
+func TestProbeHeadlessBrowserReportsWhyItIsUnavailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 上 chrome.exe 不往标准输出打印版本，探测走的是另一条路径")
+	}
+	dir := t.TempDir()
+
+	missing := filepath.Join(dir, "nope")
+	status := ProbeHeadlessBrowser(context.Background(), missing)
+	if status.Available || !strings.Contains(status.Detail, missing) {
+		t.Fatalf("status=%#v", status)
+	}
+
+	// 存在但一执行就失败：架构不匹配、缺动态库都是这个形状，不能算可用。
+	broken := filepath.Join(dir, "broken")
+	writeExecutable(t, broken, "#!/bin/sh\necho 'error while loading shared libraries' >&2\nexit 127\n")
+	status = ProbeHeadlessBrowser(context.Background(), broken)
+	if status.Available || status.Path != broken || !strings.Contains(status.Detail, "执行失败") {
+		t.Fatalf("status=%#v", status)
+	}
+
+	working := filepath.Join(dir, "chromium")
+	writeExecutable(t, working, "#!/bin/sh\necho 'Chromium 120.0.6099.109'\n")
+	status = ProbeHeadlessBrowser(context.Background(), working)
+	if !status.Available || status.Path != working || status.Version != "Chromium 120.0.6099.109" {
+		t.Fatalf("status=%#v", status)
+	}
+	if status.Detail != "" {
+		t.Fatalf("available browser still carried a failure detail: %q", status.Detail)
+	}
+}
+
+func writeExecutable(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
 	}
 }
