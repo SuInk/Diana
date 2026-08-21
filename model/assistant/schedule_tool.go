@@ -57,7 +57,26 @@ func (t *dianaScheduleTool) Name() string {
 }
 
 func (t *dianaScheduleTool) Description() string {
-	return `创建和管理持久化周期查询/订阅。用户要求“每 N 分钟/小时自动查询、定期搜索并通知”时必须使用此工具；只执行一次的提醒使用 diana.reminder。GitHub 仓库 Commit、PR、Release 或 Star 更新订阅不能用本工具，且不能由群聊或私聊自动创建，只能提示前往 WebUI 的“提醒与订阅”页面管理。禁止使用 run_command、sleep 或后台进程代替。初识及以上可用。单项创建兼容 input: {"operation":"create","interval":"2h","query":"查询要求"}；一次创建多项使用 items，最多 5 项。update 可修改有效订阅的 interval 和/或 query。剩余额度不足时按 items 顺序创建到额度上限；有效周期订阅在用户取消或删除前始终占用额度。cancel 只停止并保留记录，delete 才彻底删除。主人可在任意操作中提供 target_user_id 代其他用户管理，创建仍占目标用户额度。管理示例：{"operation":"list|update|cancel|delete","id":"update/cancel/delete 必填","target_user_id":"仅主人可选"}`
+	return `创建和管理持久化周期查询/订阅：按固定间隔重复执行一段查询并把结果通知用户。只执行一次的提醒改用 diana.reminder。GitHub 仓库的 Commit、PR、Release、Star 更新订阅不属于本工具，也不能由聊天创建，只能提示用户去 WebUI 的「提醒与订阅」页面管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
+}
+
+// InputSchema 声明参数契约。interval 的上下限直接引用校验用的同一份常量，
+// 避免文案和校验代码各写一份数字然后漂移。
+func (t *dianaScheduleTool) InputSchema() map[string]any {
+	item := map[string]any{
+		"interval": toolStringParam("重复间隔，只接受 Go 时长写法：30m、2h、24h（可组合成 1h30m）。不短于 " + minimumScheduleInterval.String() + "，不超过 " + maximumScheduleInterval.String() + "。"),
+		"query":    toolStringParam("每次触发时要执行的查询要求，写成一句完整的自然语言指令。"),
+	}
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
+			"create", "list", "update", "cancel", "delete"),
+		"interval": item["interval"],
+		"query":    item["query"],
+		"items": toolItemsParam("一次创建多个订阅；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。剩余额度不足时按顺序创建到额度上限。",
+			maximumTasksPerToolCall, []string{"interval", "query"}, item),
+		"id":             toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
+		"target_user_id": toolStringParam("代其他用户管理时的目标账号，仅机器人主人可用；创建仍占目标用户的额度。"),
+	})
 }
 
 func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string, error) {

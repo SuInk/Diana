@@ -26,7 +26,15 @@ func (t *dianaLLMConfigTool) Name() string {
 }
 
 func (t *dianaLLMConfigTool) Description() string {
-	return `修改 Diana 自己当前激活的 LLM provider 和 model。只有主人明确要求更改机器人自身配置时才能调用；讨论模型、推荐 API 中转项目、分析别人的 Agent/模型、说“我用某模型”都不得调用。input: {"operation":"update","provider":"openai_compatible|gemini|anthropic，可选","model":"模型 ID，可选"}`
+	return `修改 Diana 自己当前激活的 LLM provider 和 model。只有主人明确要求更改机器人自身配置时才能调用；讨论模型、推荐 API 中转、分析别人的 Agent 或模型、用户说「我用某模型」都不得调用。`
+}
+
+func (t *dianaLLMConfigTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation": toolEnumParam("要执行的操作。", "update"),
+		"provider":  toolEnumParam("要切换到的 provider，不改则省略。", "openai_compatible", "gemini", "anthropic"),
+		"model":     toolStringParam("要切换到的模型 ID，不改则省略。"),
+	})
 }
 
 func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (string, error) {

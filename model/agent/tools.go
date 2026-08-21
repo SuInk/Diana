@@ -464,7 +464,7 @@ func (r *ToolRegistry) Descriptions() string {
 		builder.WriteString("- ")
 		builder.WriteString(tool.Name())
 		builder.WriteString(": ")
-		builder.WriteString(compactToolDescription(tool.Description(), 720))
+		builder.WriteString(compactToolDescription(tool.Description(), ToolDescriptionBudget))
 		builder.WriteByte('\n')
 	}
 	return strings.TrimSpace(builder.String())
@@ -487,7 +487,7 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 		if typed, ok := tool.(ToolInputSchema); ok {
 			if provided := typed.InputSchema(); provided != nil {
 				schema = provided
-				strict = true
+				strict = schemaAllowsStrictMode(provided)
 			}
 		}
 		definitions = append(definitions, llm.ToolDefinition{
@@ -495,6 +495,49 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 		})
 	}
 	return definitions
+}
+
+// ToolDescriptionBudget 是工具清单里单个描述的字数上限。超出会被截断，且
+// compactToolDescription 优先保留 input: 之后的参数示例——被砍掉的恰好是开头
+// 那句「什么时候该用我」。参数契约应当放进 InputSchema，描述留在预算内。
+const ToolDescriptionBudget = 720
+
+// schemaAllowsStrictMode 报告这份 schema 能否安全地声明 strict。严格模式要求禁止
+// 额外字段并且每个属性都出现在 required 里；不满足时照样把 schema 发出去（模型
+// 仍然能看到参数名、类型和取值范围），只是不声明 strict——声明了 provider 会直接
+// 拒绝整个请求，比没有 schema 更糟。
+func schemaAllowsStrictMode(schema map[string]any) bool {
+	if allowExtra, ok := schema["additionalProperties"].(bool); !ok || allowExtra {
+		return false
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok || len(properties) == 0 {
+		return false
+	}
+	required := map[string]bool{}
+	switch values := schema["required"].(type) {
+	case []string:
+		for _, name := range values {
+			required[name] = true
+		}
+	case []any:
+		for _, value := range values {
+			if name, ok := value.(string); ok {
+				required[name] = true
+			}
+		}
+	default:
+		return false
+	}
+	if len(required) != len(properties) {
+		return false
+	}
+	for name := range properties {
+		if !required[name] {
+			return false
+		}
+	}
+	return true
 }
 
 func compactToolDescription(description string, maxRunes int) string {

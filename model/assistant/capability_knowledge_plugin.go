@@ -19,6 +19,12 @@ import (
 
 const capabilityKnowledgePluginID = "official.capability-knowledge-rag"
 
+const (
+	// 检索条数上下限。schema 文案和下面的夹取引用同一份常量。
+	defaultCapabilityResultLimit = 5
+	maximumCapabilityResultLimit = 8
+)
+
 type CapabilityKnowledgePlugin struct {
 	mu            sync.RWMutex
 	stateProvider func() []PluginState
@@ -101,7 +107,14 @@ func (t *dianaCapabilitiesTool) Name() string {
 }
 
 func (t *dianaCapabilitiesTool) Description() string {
-	return `从 Diana 自身能力知识库检索相关能力、工具、权限门槛和实时插件状态。用户询问“你会什么”“能否处理某事”“哪个插件负责某功能”或质疑机器人能力时必须先调用本工具，不要凭提示词记忆猜测。input: {"query":"用户关于能力的问题","limit":"可选，默认 5，最大 8"}`
+	return `从 Diana 自身能力知识库检索相关能力、工具、权限门槛和实时插件状态。用户问「你会什么」「能不能处理某事」「哪个插件负责某功能」或质疑机器人能力时必须先调用，不要凭提示词记忆猜测。`
+}
+
+func (t *dianaCapabilitiesTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"query"}, map[string]any{
+		"query": toolStringParam("用户关于能力的问题，原样或稍加归纳后传入。"),
+		"limit": toolIntParam("返回条数，默认 "+itoa(defaultCapabilityResultLimit)+"。", 1, maximumCapabilityResultLimit),
+	})
 }
 
 func (t *dianaCapabilitiesTool) Run(_ context.Context, input map[string]any) (string, error) {
@@ -112,14 +125,14 @@ func (t *dianaCapabilitiesTool) Run(_ context.Context, input map[string]any) (st
 	if query == "" {
 		return "", fmt.Errorf("query 不能为空")
 	}
-	limit := 5
+	limit := defaultCapabilityResultLimit
 	if raw := strings.TrimSpace(configToolString(input, "limit")); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 			limit = parsed
 		}
 	}
-	if limit > 8 {
-		limit = 8
+	if limit > maximumCapabilityResultLimit {
+		limit = maximumCapabilityResultLimit
 	}
 	hits := retrieveCapabilityDocuments(query, t.plugin.documents(), limit)
 	body, err := json.MarshalIndent(map[string]any{

@@ -78,7 +78,26 @@ func (t *dianaChatHistoryTool) Name() string {
 }
 
 func (t *dianaChatHistoryTool) Description() string {
-	return `按需读取本地持久化聊天记录。当引用里的指代需要更早上文、短上下文不足，或用户询问长期历史时，必须先调用，不要直接声称看不到。around 读取当前会话某条消息前后记录；recent 读取当前会话最近记录；range 按时间段完整列出当前会话的消息，用户要求总结/回顾某个时间段（如「昨天 12 点到 17 点」）时用它，不要用 search 去猜关键词；search 在 SQLite 中按关键词检索，hours、days、from_time 可选，all_time=true 检索全部历史。range 与 search 的 from_time、through_time 既接受 Unix 秒，也接受本地时间字符串（"2006-01-02 15:04" 或 "2006-01-02"）。range 结果按时间从旧到新排列；一次读不完时会给出 next_from_time，用它继续读完整个时间段再总结。scope=current 仅当前会话；scope=all_groups 仅在管理员已开启跨群记忆时可用（仅 search 支持），并严格限定同一机器人命名空间。input: {"operation":"around|recent|range|search","message_id":"around 可选","query":"search 必填","from_time":"2026-08-19 12:00","through_time":"2026-08-19 17:00","scope":"current|all_groups","hours":24,"days":0,"all_time":false,"limit":20}`
+	return `按需读取本地持久化聊天记录。引用里的指代需要更早上文、短上下文不够、或用户询问长期历史时必须先调用，不要直接声称看不到。`
+}
+
+// InputSchema 声明参数契约。哪个 operation 配哪些参数写在字段说明里，
+// 比在散文里列一遍内联 JSON 更不容易看漏。
+func (t *dianaChatHistoryTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；range 按时间段完整列出消息，用户要求总结或回顾某个时间段（「昨天 12 点到 17 点」）时用它，不要改用 search 猜关键词；search 按关键词检索。",
+			"around", "recent", "range", "search"),
+		"message_id":   toolStringParam("around 可选：以哪条消息为中心；省略时以当前消息为中心。"),
+		"query":        toolStringParam("search 必填：检索关键词。"),
+		"from_time":    toolStringParam(`range 与 search 的起始时间。接受 Unix 秒，也接受本地时间字符串 "2006-01-02 15:04" 或 "2006-01-02"。range 一次读不完时结果会给出 next_from_time，用它继续读完整个时间段再总结。`),
+		"through_time": toolStringParam(`range 与 search 的结束时间，写法同 from_time。`),
+		"scope": toolEnumParam("检索范围。current 仅当前会话；all_groups 只有 search 支持，且需要管理员已开启跨群记忆，并严格限定在同一机器人命名空间内。",
+			"current", "all_groups"),
+		"hours":    toolIntParam("search 可选：只检索最近多少小时。", 1, 24*365),
+		"days":     toolIntParam("search 可选：只检索最近多少天。", 1, 365),
+		"all_time": toolBoolParam("search 可选：置 true 时检索全部历史，忽略 hours 和 days。"),
+		"limit":    toolIntParam("返回条数，默认 "+itoa(defaultChatHistoryRecentLimit)+"。", 1, maximumChatHistoryResultLimit),
+	})
 }
 
 func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (string, error) {
