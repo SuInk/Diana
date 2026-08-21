@@ -4143,7 +4143,7 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 		t.Fatalf("available identity images = %#v", payload.AvailableIdentityImages)
 	}
 	identity := payload.AvailableIdentityImages[0]
-	if identity.Source != "mentioned_member_avatar" || identity.UserID != identityAlias || !strings.HasPrefix(identity.UserID, "qq_user_") {
+	if identity.Source != "mentioned_member_avatar" || identity.UserID != identityAlias || !strings.HasPrefix(identity.UserID, "im_user_") {
 		t.Fatalf("identity image = %#v", identity)
 	}
 	if strings.Contains(requestTextForPrivacyTest(request), "10001") {

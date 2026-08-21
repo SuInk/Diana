@@ -69,7 +69,7 @@ func TestQQPrivacyProviderMasksRequestsAndRestoresReplies(t *testing.T) {
 			t.Fatalf("protected request missing alias %q: %s", alias, protected)
 		}
 	}
-	if !strings.Contains(protected, llmQQPrivacyPrompt) {
+	if !strings.Contains(protected, llmIdentityPrivacyPrompt) {
 		t.Fatalf("protected request missing privacy instructions: %s", protected)
 	}
 	if !strings.Contains(protected, "20260716") || !strings.Contains(protected, "30003") {
@@ -114,7 +114,7 @@ func (p *privacyRoundTripProvider) Generate(_ context.Context, req llm.GenerateR
 	}
 	switch p.calls {
 	case 1:
-		p.alias = regexp.MustCompile(`qq_current_user_[0-9a-f]+`).FindString(requestText)
+		p.alias = regexp.MustCompile(`im_current_user_[0-9a-f]+`).FindString(requestText)
 		if p.alias == "" {
 			return nil, fmt.Errorf("current-user alias missing from request: %s", requestText)
 		}
@@ -191,7 +191,7 @@ func requestTextForPrivacyTest(req llm.GenerateRequest) string {
 }
 
 func privacyAliasForDisplayName(req llm.GenerateRequest, displayName string) string {
-	pattern := regexp.MustCompile(`"user_id"\s*:\s*"(qq_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`)
+	pattern := regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`)
 	match := pattern.FindStringSubmatch(requestTextForPrivacyTest(req))
 	if len(match) < 2 {
 		return ""
@@ -200,7 +200,7 @@ func privacyAliasForDisplayName(req llm.GenerateRequest, displayName string) str
 }
 
 func privacyAliasForIdentitySource(req llm.GenerateRequest, source string) string {
-	pattern := regexp.MustCompile(`"source"\s*:\s*"` + regexp.QuoteMeta(source) + `"\s*,\s*"user_id"\s*:\s*"(qq_[a-z_]+_[0-9a-f]+)"`)
+	pattern := regexp.MustCompile(`"source"\s*:\s*"` + regexp.QuoteMeta(source) + `"\s*,\s*"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"`)
 	match := pattern.FindStringSubmatch(requestTextForPrivacyTest(req))
 	if len(match) < 2 {
 		return ""
