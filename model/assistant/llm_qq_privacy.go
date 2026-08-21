@@ -147,7 +147,52 @@ func (p *qqPrivacyProvider) Generate(ctx context.Context, req llm.GenerateReques
 	}
 	copyResponse := *response
 	copyResponse.Text = p.scope.restoreText(response.Text)
+	// 工具参数同样要还原。提示词明确告诉模型「原样复制别名，本地代理会在执行工具前
+	// 自动恢复真实标识」，模型照做了，可这里以前只还原回复正文，别名就原封不动地进了
+	// 工具——提醒工具收到 qq_user_f49c630bf7cf 这种值，只能报「必须是有效 QQ 号」。
+	copyResponse.ToolCalls = p.scope.restoreToolCalls(response.ToolCalls)
 	return &copyResponse, nil
+}
+
+// restoreToolCalls 把工具参数里的别名换回真实标识。参数是任意 JSON 结构，字符串可能
+// 藏在嵌套的对象或数组里，所以要递归走一遍。
+func (s *qqPrivacyScope) restoreToolCalls(calls []llm.ToolCall) []llm.ToolCall {
+	if s == nil || len(calls) == 0 {
+		return calls
+	}
+	out := make([]llm.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		restored := call
+		if len(call.Arguments) > 0 {
+			arguments := make(map[string]any, len(call.Arguments))
+			for key, value := range call.Arguments {
+				arguments[key] = s.restoreValue(value)
+			}
+			restored.Arguments = arguments
+		}
+		out = append(out, restored)
+	}
+	return out
+}
+
+func (s *qqPrivacyScope) restoreValue(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return s.restoreText(typed)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = s.restoreValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, s.restoreValue(item))
+		}
+		return out
+	}
+	return value
 }
 
 func (s *qqPrivacyScope) registerEvent(event MessageEvent) {
@@ -234,6 +279,10 @@ func (s *qqPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateReq
 				protectedMessage.Parts[partIndex] = protectedPart
 			}
 		}
+		// Agent 循环会把上一轮的工具调用连同参数回放进历史。那些参数在执行前已经被
+		// 还原成真实 QQ 号，不在这里重新替换回别名，真实标识就会从历史里漏回模型，
+		// 隐私代理等于白做。
+		protectedMessage.ToolCalls = s.protectToolCalls(message.ToolCalls)
 		protected.Messages[index] = protectedMessage
 	}
 	for index := range protected.Messages {
@@ -244,6 +293,45 @@ func (s *qqPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateReq
 	}
 	protected.Messages = append([]llm.Message{{Role: llm.RoleSystem, Content: llmQQPrivacyPrompt}}, protected.Messages...)
 	return protected
+}
+
+func (s *qqPrivacyScope) protectToolCalls(calls []llm.ToolCall) []llm.ToolCall {
+	if s == nil || len(calls) == 0 {
+		return calls
+	}
+	out := make([]llm.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		protected := call
+		if len(call.Arguments) > 0 {
+			arguments := make(map[string]any, len(call.Arguments))
+			for key, value := range call.Arguments {
+				arguments[key] = s.protectValue(value)
+			}
+			protected.Arguments = arguments
+		}
+		out = append(out, protected)
+	}
+	return out
+}
+
+func (s *qqPrivacyScope) protectValue(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return s.protectText(typed)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = s.protectValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, s.protectValue(item))
+		}
+		return out
+	}
+	return value
 }
 
 func (s *qqPrivacyScope) protectText(text string) string {
