@@ -2972,6 +2972,13 @@ a.nav-action {
   border-top: 1px solid var(--border);
 }
 
+/* 在「仓库管理」标签页里它是页面第一块内容，上面那条分隔线没有东西可分隔。 */
+.github-settings-tabs + .repository-watch-manager {
+  margin-top: 4px;
+  padding-top: 0;
+  border-top: none;
+}
+
 .repository-watch-manager-head {
   display: flex;
   align-items: flex-start;
@@ -3002,6 +3009,24 @@ a.nav-action {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-2);
+}
+
+/* 组名不是某个具体控件的 label（一组复选框没有单一控件可指），
+   但视觉上要和 .field > label 一致。 */
+.plugin-setting-group-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.hint.warn-text {
+  color: var(--warn);
+}
+
+.plugin-settings-subsection {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
 }
 
 .repository-section-title {

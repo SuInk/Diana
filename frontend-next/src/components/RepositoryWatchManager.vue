@@ -48,14 +48,14 @@
           <AppSelect id="plugin-watch-profile" v-model="form.profile_id" :options="profileOptions" />
         </div>
         <div class="field wide repository-notification-settings">
-          <div class="repository-section-title"><label>仓库通知</label><label class="switch"><input v-model="form.notification_enabled" type="checkbox" /><span class="track" aria-hidden="true"></span></label></div>
+          <div class="repository-section-title"><span id="watch-notify-title">仓库通知</span><label class="switch"><input v-model="form.notification_enabled" type="checkbox" aria-labelledby="watch-notify-title" /><span class="track" aria-hidden="true"></span></label></div>
           <span class="hint">开启后把选中类型的更新摘要发送到这里配置的私聊或群聊；关闭后仍保留仓库检查状态。</span>
           <div class="issue-role-block">
             <div class="issue-role-head">
-              <label>监控内容</label>
+              <span id="watch-scopes-title">监控内容</span>
               <span class="hint">选择要检查的更新类型；启用类型越多，每轮 GitHub API 请求越多。</span>
             </div>
-            <div class="repository-watch-scopes">
+            <div class="repository-watch-scopes" role="group" aria-labelledby="watch-scopes-title">
               <label class="check-item"><input v-model="form.watch_commits" type="checkbox" />Commit</label>
               <label class="check-item"><input v-model="form.watch_pull_requests" type="checkbox" />PR</label>
               <label class="check-item"><input v-model="form.watch_issues" type="checkbox" />Issue</label>
@@ -63,12 +63,15 @@
               <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
             </div>
           </div>
-          <div v-if="form.notification_enabled" class="target-list">
+          <!-- 群列表拉不到时下拉框只会变成空的，不说一声用户会以为自己没进群。 -->
+          <p v-if="form.notification_enabled && groupsLoading" class="hint">正在读取已加入的群聊…</p>
+          <p v-else-if="form.notification_enabled && groupsWarning" class="hint warn-text">{{ groupsWarning }}</p>
+          <div v-if="form.notification_enabled" class="target-list" role="group" aria-labelledby="watch-notify-title">
             <div v-for="(target, index) in form.notification_targets" :key="`target-${index}`" class="target-row">
-              <AppSelect v-model="target.destination" :options="destinationOptions" />
-              <AppSelect v-if="target.destination === 'group' && groupOptions.length" :model-value="target.group_id ?? ''" :options="groupOptions" @update:model-value="target.group_id = String($event ?? '')" />
-              <input v-else-if="target.destination === 'group'" v-model.trim="target.group_id" class="input" type="text" placeholder="群号或 Chat ID" />
-              <input v-else v-model.trim="target.user_id" class="input" type="text" placeholder="私聊对象 ID" />
+              <AppSelect v-model="target.destination" :options="destinationOptions" aria-label="通知对象类型" />
+              <AppSelect v-if="target.destination === 'group' && groupOptions.length" :model-value="target.group_id ?? ''" :options="groupOptions" aria-label="通知群聊" @update:model-value="target.group_id = String($event ?? '')" />
+              <input v-else-if="target.destination === 'group'" v-model.trim="target.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="通知群号或 Chat ID" />
+              <input v-else v-model.trim="target.user_id" class="input" type="text" placeholder="私聊对象 ID" aria-label="通知私聊对象 ID" />
               <button class="btn small ghost danger icon-only" type="button" title="移除通知对象" aria-label="移除通知对象" @click="removeTarget(index)"><Trash2 :size="14" aria-hidden="true" /></button>
             </div>
             <button class="btn small ghost" type="button" @click="addTarget"><Plus :size="14" aria-hidden="true" />添加通知对象</button>
@@ -76,17 +79,17 @@
           </div>
         </div>
         <div class="field wide repository-notification-settings">
-          <div class="repository-section-title"><label>Issue 管理</label><label class="switch"><input v-model="form.issue_enabled" type="checkbox" /><span class="track" aria-hidden="true"></span></label></div>
+          <div class="repository-section-title"><span id="watch-issue-title">Issue 管理</span><label class="switch"><input v-model="form.issue_enabled" type="checkbox" aria-labelledby="watch-issue-title" /><span class="track" aria-hidden="true"></span></label></div>
           <span class="hint">开启后，此仓库允许通过机器人操作 Issue：管理人员可直接创建和管理，草稿人只能提交草稿、由管理人员确认写入。</span>
           <template v-if="form.issue_enabled">
             <div class="issue-role-block">
-              <div class="issue-role-head"><label>管理人员</label><span class="hint">可直接创建、更新、评论、关闭 Issue，也负责确认草稿。</span></div>
-              <div class="target-list">
+              <div class="issue-role-head"><span id="watch-managers-title">管理人员</span><span class="hint">可直接创建、更新、评论、关闭 Issue，也负责确认草稿。</span></div>
+              <div class="target-list" role="group" aria-labelledby="watch-managers-title">
                 <div v-for="(member, index) in form.issue_managers" :key="`manager-${index}`" class="target-row">
-                  <AppSelect v-model="member.destination" :options="destinationOptions" />
-                  <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" @update:model-value="member.group_id = String($event ?? '')" />
-                  <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" />
-                  <input v-else v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" />
+                  <AppSelect v-model="member.destination" :options="destinationOptions" :aria-label="`管理人员类型`" />
+                  <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`管理人员群聊`" @update:model-value="member.group_id = String($event ?? '')" />
+                  <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="管理人员群号或 Chat ID" />
+                  <input v-else v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" aria-label="管理人员私聊用户 ID" />
                   <button class="btn small ghost danger icon-only" type="button" title="移除管理人员" aria-label="移除管理人员" @click="form.issue_managers.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
                 <button class="btn small ghost" type="button" @click="form.issue_managers.push({ destination: 'private', user_id: '' })"><Plus :size="14" aria-hidden="true" />添加管理人员</button>
@@ -94,13 +97,13 @@
               </div>
             </div>
             <div class="issue-role-block">
-              <div class="issue-role-head"><label>草稿人</label><span class="hint">可以提出需求并生成 Issue 草稿，不能直接写入 GitHub。</span></div>
-              <div class="target-list">
+              <div class="issue-role-head"><span id="watch-drafters-title">草稿人</span><span class="hint">可以提出需求并生成 Issue 草稿，不能直接写入 GitHub。</span></div>
+              <div class="target-list" role="group" aria-labelledby="watch-drafters-title">
                 <div v-for="(member, index) in form.issue_drafters" :key="`drafter-${index}`" class="target-row">
-                  <AppSelect v-model="member.destination" :options="destinationOptions" />
-                  <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" @update:model-value="member.group_id = String($event ?? '')" />
-                  <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" />
-                  <input v-else v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" />
+                  <AppSelect v-model="member.destination" :options="destinationOptions" :aria-label="`草稿人类型`" />
+                  <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`草稿人群聊`" @update:model-value="member.group_id = String($event ?? '')" />
+                  <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="草稿人群号或 Chat ID" />
+                  <input v-else v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" aria-label="草稿人私聊用户 ID" />
                   <button class="btn small ghost danger icon-only" type="button" title="移除草稿人" aria-label="移除草稿人" @click="form.issue_drafters.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
                 <button class="btn small ghost" type="button" @click="form.issue_drafters.push({ destination: 'group', group_id: '' })"><Plus :size="14" aria-hidden="true" />添加草稿人</button>
