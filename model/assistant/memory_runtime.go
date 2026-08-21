@@ -529,7 +529,7 @@ func (r *Runtime) wakeMemoryWorkers() {
 }
 
 func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {
-	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory

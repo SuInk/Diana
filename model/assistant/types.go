@@ -339,7 +339,11 @@ type BotConfig struct {
 	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
+	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
+	// LegacyLLMQQIDMaskingEnabled 是这项设置改名前的键。名字带 QQ，可同一套脱敏还
+	// 服务 Telegram。只保留读取：已经显式关掉脱敏的配置升级后必须仍然是关的，静默
+	// 变回开启是隐私回退。写出时一律用新键。
+	LegacyLLMQQIDMaskingEnabled *bool `json:"llm_qq_id_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -529,7 +533,11 @@ type ConfigPayload struct {
 	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMQQIDMaskingEnabled        *bool                `json:"llm_qq_id_masking_enabled,omitempty"`
+	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
+	// LegacyLLMQQIDMaskingEnabled 是这项设置改名前的键。名字带 QQ，可同一套脱敏还
+	// 服务 Telegram。只保留读取：已经显式关掉脱敏的配置升级后必须仍然是关的，静默
+	// 变回开启是隐私回退。写出时一律用新键。
+	LegacyLLMQQIDMaskingEnabled *bool `json:"llm_qq_id_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -929,7 +937,7 @@ func DefaultBotConfig() BotConfig {
 		RecallReplyMode:              RecallReplyModeLLMSummary,
 		RecallReplyAutoDeleteEnabled: boolPointer(false),
 		RecallReplyTTLSeconds:        defaultRecallReplyTTLSeconds,
-		LLMQQIDMaskingEnabled:        boolPointer(true),
+		LLMIdentityMaskingEnabled:    boolPointer(true),
 		BotReplyLoopDetectionEnabled: boolPointer(true),
 		RecentContextLimit:           20,
 		ContextSummaryThreshold:      100,
@@ -1091,8 +1099,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	} else if cfg.RecallReplyTTLSeconds > maximumRecallReplyTTLSeconds {
 		cfg.RecallReplyTTLSeconds = maximumRecallReplyTTLSeconds
 	}
-	if cfg.LLMQQIDMaskingEnabled == nil {
-		cfg.LLMQQIDMaskingEnabled = boolPointer(true)
+	if cfg.LLMIdentityMaskingEnabled == nil && cfg.LegacyLLMQQIDMaskingEnabled != nil {
+		cfg.LLMIdentityMaskingEnabled = copyBoolPointer(cfg.LegacyLLMQQIDMaskingEnabled)
+	}
+	cfg.LegacyLLMQQIDMaskingEnabled = nil
+	if cfg.LLMIdentityMaskingEnabled == nil {
+		cfg.LLMIdentityMaskingEnabled = boolPointer(true)
 	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
@@ -1267,7 +1279,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		RecallReplyMode:              cfg.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        cfg.RecallReplyTTLSeconds,
-		LLMQQIDMaskingEnabled:        copyBoolPointer(cfg.LLMQQIDMaskingEnabled),
+		LLMIdentityMaskingEnabled:    copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
 		MaxContextTokens:             cfg.MaxContextTokens,
 		RecentContextLimit:           cfg.RecentContextLimit,
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
@@ -1386,7 +1398,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		RecallReplyMode:              payload.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        payload.RecallReplyTTLSeconds,
-		LLMQQIDMaskingEnabled:        copyBoolPointer(payload.LLMQQIDMaskingEnabled),
+		LLMIdentityMaskingEnabled:    copyBoolPointer(firstNonNilBoolPointer(payload.LLMIdentityMaskingEnabled, payload.LegacyLLMQQIDMaskingEnabled)),
 		MaxContextTokens:             payload.MaxContextTokens,
 		RecentContextLimit:           payload.RecentContextLimit,
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
@@ -1486,6 +1498,16 @@ func boolValue(value *bool, fallback bool) bool {
 		return fallback
 	}
 	return *value
+}
+
+// firstNonNilBoolPointer 取第一个非空指针，用于新旧配置键共存期间的回落读取。
+func firstNonNilBoolPointer(values ...*bool) *bool {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func copyBoolPointer(value *bool) *bool {

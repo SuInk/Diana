@@ -1316,7 +1316,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	history := r.contextHistory(event)
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
-	ctx = r.withQQPrivacyContext(ctx, event, history)
+	ctx = r.withIdentityPrivacyContext(ctx, event, history)
 	finishWithoutReply := func(outcome string) (MessageEvent, string, bool, string) {
 		r.enqueueHistoryImageDescriptions(event)
 		return event, text, false, outcome
@@ -2601,7 +2601,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	replyHistory := r.promptContextHistory(event, cfg)
-	ctx = r.withQQPrivacyContext(ctx, event, replyHistory)
+	ctx = r.withIdentityPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
@@ -3262,8 +3262,8 @@ func directPluginReply(resp PluginResponse) string {
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
-	if _, initialized := qqPrivacyStateFromContext(ctx); !initialized {
-		ctx = r.withQQPrivacyContext(ctx, event, r.contextHistory(event))
+	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
+		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
 	if cfg.AgentEnabled && relationship.allowsAgentTools() {
 		// A tool can add images after the first planning turn. Route every Agent
@@ -4647,7 +4647,7 @@ func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (s
 }
 
 func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
-	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	return r.runRawLLMProviderForGroup(ctx, group, run)
@@ -4659,7 +4659,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 		wrapped = client
 		return "", nil
 	}
-	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	_, _ = run(provider)
@@ -5015,7 +5015,7 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 }
 
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
-	run = r.withLLMQQPrivacyRun(ctx, run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
 	r.mu.RLock()

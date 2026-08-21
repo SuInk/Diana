@@ -650,7 +650,7 @@ func (r *Runtime) describeRecallImage(ctx context.Context, event MessageEvent, s
 			},
 		},
 	}
-	callCtx := r.withQQPrivacyContext(ctx, event, nil)
+	callCtx := r.withIdentityPrivacyContext(ctx, event, nil)
 	return r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
 		response, err := client.Generate(callCtx, request)
 		if err != nil {

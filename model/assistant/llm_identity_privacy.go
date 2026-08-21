@@ -23,87 +23,87 @@ import (
 const llmIdentityPrivacyPrompt = `【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；im_owner、im_current_user、im_bot、im_user、im_group、im_message 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:im_message_xxx] 这种引用标记；本地代理会在执行工具或发送消息前自动恢复真实标识。`
 
 var (
-	qqPrivacyJSONIDPattern = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
-	qqPrivacyCQIDPattern   = regexp.MustCompile(`(?i)\[CQ:(?:at|contact),[^\]]*(?:qq|id)=([1-9][0-9]{4,13})`)
-	qqPrivacyLabelPattern  = regexp.MustCompile(`(?i)(?:QQ号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
+	identityPrivacyJSONIDPattern = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
+	identityPrivacyCQIDPattern   = regexp.MustCompile(`(?i)\[CQ:(?:at|contact),[^\]]*(?:qq|id)=([1-9][0-9]{4,13})`)
+	identityPrivacyLabelPattern  = regexp.MustCompile(`(?i)(?:QQ号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
 	// 消息 ID 单独匹配：它允许负号，长度范围也和 QQ 号不同。
-	qqPrivacyMessageIDPattern   = regexp.MustCompile(`(?i)"([a-z0-9_]*message_ids?)"\s*:\s*(?:"(-?[0-9]{4,19})"|(-?[0-9]{4,19}))`)
-	qqPrivacyReplyMarkerPattern = regexp.MustCompile(`\[(?:diana-reply|回复):(-?[0-9]{4,19})\]`)
+	identityPrivacyMessageIDPattern   = regexp.MustCompile(`(?i)"([a-z0-9_]*message_ids?)"\s*:\s*(?:"(-?[0-9]{4,19})"|(-?[0-9]{4,19}))`)
+	identityPrivacyReplyMarkerPattern = regexp.MustCompile(`\[(?:diana-reply|回复):(-?[0-9]{4,19})\]`)
 )
 
 // identityAliasPrefix 是所有脱敏别名的共同前缀。
 const identityAliasPrefix = "im_"
 
-type qqPrivacyContextKey struct{}
+type identityPrivacyContextKey struct{}
 
-type qqPrivacyContextState struct {
+type identityPrivacyContextState struct {
 	enabled bool
-	scope   *qqPrivacyScope
+	scope   *identityPrivacyScope
 }
 
-type qqPrivacyScope struct {
+type identityPrivacyScope struct {
 	mu          sync.Mutex
 	salt        string
 	realToAlias map[string]string
 	aliasToReal map[string]string
 }
 
-type qqPrivacyProvider struct {
+type identityPrivacyProvider struct {
 	provider LLMProvider
-	scope    *qqPrivacyScope
+	scope    *identityPrivacyScope
 }
 
-func newQQPrivacyScope() *qqPrivacyScope {
+func newIdentityPrivacyScope() *identityPrivacyScope {
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		sum := sha256.Sum256([]byte(time.Now().String()))
 		random = sum[:16]
 	}
-	return &qqPrivacyScope{
+	return &identityPrivacyScope{
 		salt:        hex.EncodeToString(random),
 		realToAlias: map[string]string{},
 		aliasToReal: map[string]string{},
 	}
 }
 
-func qqPrivacyScopeFromContext(ctx context.Context) *qqPrivacyScope {
-	state, _ := qqPrivacyStateFromContext(ctx)
+func identityPrivacyScopeFromContext(ctx context.Context) *identityPrivacyScope {
+	state, _ := identityPrivacyStateFromContext(ctx)
 	if state == nil || !state.enabled {
 		return nil
 	}
 	return state.scope
 }
 
-func qqPrivacyStateFromContext(ctx context.Context) (*qqPrivacyContextState, bool) {
+func identityPrivacyStateFromContext(ctx context.Context) (*identityPrivacyContextState, bool) {
 	if ctx == nil {
 		return nil, false
 	}
-	state, ok := ctx.Value(qqPrivacyContextKey{}).(*qqPrivacyContextState)
+	state, ok := ctx.Value(identityPrivacyContextKey{}).(*identityPrivacyContextState)
 	return state, ok
 }
 
-func withQQPrivacyScope(ctx context.Context, scope *qqPrivacyScope) context.Context {
+func withIdentityPrivacyScope(ctx context.Context, scope *identityPrivacyScope) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if scope == nil || qqPrivacyScopeFromContext(ctx) == scope {
+	if scope == nil || identityPrivacyScopeFromContext(ctx) == scope {
 		return ctx
 	}
-	return context.WithValue(ctx, qqPrivacyContextKey{}, &qqPrivacyContextState{enabled: true, scope: scope})
+	return context.WithValue(ctx, identityPrivacyContextKey{}, &identityPrivacyContextState{enabled: true, scope: scope})
 }
 
-func (r *Runtime) withQQPrivacyContext(ctx context.Context, event MessageEvent, history []MessageEvent) context.Context {
+func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageEvent, history []MessageEvent) context.Context {
 	cfg := r.effectiveConfigForEvent(event)
-	if !llmQQIDMaskingEnabled(cfg) {
+	if !llmIdentityMaskingEnabled(cfg) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		return context.WithValue(ctx, qqPrivacyContextKey{}, &qqPrivacyContextState{enabled: false})
+		return context.WithValue(ctx, identityPrivacyContextKey{}, &identityPrivacyContextState{enabled: false})
 	}
-	scope := qqPrivacyScopeFromContext(ctx)
+	scope := identityPrivacyScopeFromContext(ctx)
 	if scope == nil {
-		scope = newQQPrivacyScope()
-		ctx = withQQPrivacyScope(ctx, scope)
+		scope = newIdentityPrivacyScope()
+		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
 	scope.register(cfg.OwnerID, "owner")
 	scope.register(firstNonEmpty(cfg.BotQQ, event.SelfID), "bot")
@@ -116,32 +116,32 @@ func (r *Runtime) withQQPrivacyContext(ctx context.Context, event MessageEvent, 
 	return ctx
 }
 
-func llmQQIDMaskingEnabled(cfg BotConfig) bool {
+func llmIdentityMaskingEnabled(cfg BotConfig) bool {
 	cfg = cfg.WithDefaults()
-	return cfg.LLMQQIDMaskingEnabled != nil && *cfg.LLMQQIDMaskingEnabled
+	return cfg.LLMIdentityMaskingEnabled != nil && *cfg.LLMIdentityMaskingEnabled
 }
 
-func (r *Runtime) withLLMQQPrivacyRun(ctx context.Context, run llmProviderRunFunc) llmProviderRunFunc {
+func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProviderRunFunc) llmProviderRunFunc {
 	if run == nil {
 		return run
 	}
-	state, hasState := qqPrivacyStateFromContext(ctx)
+	state, hasState := identityPrivacyStateFromContext(ctx)
 	if hasState && (state == nil || !state.enabled) {
 		return run
 	}
-	if !hasState && !llmQQIDMaskingEnabled(r.Config()) {
+	if !hasState && !llmIdentityMaskingEnabled(r.Config()) {
 		return run
 	}
-	scope := qqPrivacyScopeFromContext(ctx)
+	scope := identityPrivacyScopeFromContext(ctx)
 	if scope == nil {
-		scope = newQQPrivacyScope()
+		scope = newIdentityPrivacyScope()
 	}
 	return func(provider LLMProvider) (string, error) {
-		return run(&qqPrivacyProvider{provider: provider, scope: scope})
+		return run(&identityPrivacyProvider{provider: provider, scope: scope})
 	}
 }
 
-func (p *qqPrivacyProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+func (p *identityPrivacyProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	if p == nil || p.provider == nil {
 		return nil, errors.New("qqbot: QQ privacy provider is not configured")
 	}
@@ -164,7 +164,7 @@ func (p *qqPrivacyProvider) Generate(ctx context.Context, req llm.GenerateReques
 
 // restoreToolCalls 把工具参数里的别名换回真实标识。参数是任意 JSON 结构，字符串可能
 // 藏在嵌套的对象或数组里，所以要递归走一遍。
-func (s *qqPrivacyScope) restoreToolCalls(calls []llm.ToolCall) []llm.ToolCall {
+func (s *identityPrivacyScope) restoreToolCalls(calls []llm.ToolCall) []llm.ToolCall {
 	if s == nil || len(calls) == 0 {
 		return calls
 	}
@@ -183,7 +183,7 @@ func (s *qqPrivacyScope) restoreToolCalls(calls []llm.ToolCall) []llm.ToolCall {
 	return out
 }
 
-func (s *qqPrivacyScope) restoreValue(value any) any {
+func (s *identityPrivacyScope) restoreValue(value any) any {
 	switch typed := value.(type) {
 	case string:
 		return s.restoreText(typed)
@@ -203,7 +203,7 @@ func (s *qqPrivacyScope) restoreValue(value any) any {
 	return value
 }
 
-func (s *qqPrivacyScope) registerEvent(event MessageEvent) {
+func (s *identityPrivacyScope) registerEvent(event MessageEvent) {
 	s.register(event.UserID, "user")
 	s.register(event.OperatorID, "user")
 	s.register(event.GroupID, "group")
@@ -217,7 +217,7 @@ func (s *qqPrivacyScope) registerEvent(event MessageEvent) {
 	s.registerSegments(event.Segments)
 }
 
-func (s *qqPrivacyScope) registerSegments(segments []MessageSegment) {
+func (s *identityPrivacyScope) registerSegments(segments []MessageSegment) {
 	for _, segment := range segments {
 		for key, value := range segment.Data {
 			switch strings.ToLower(strings.TrimSpace(key)) {
@@ -235,12 +235,12 @@ func (s *qqPrivacyScope) registerSegments(segments []MessageSegment) {
 	}
 }
 
-func (s *qqPrivacyScope) register(realID string, role string) string {
+func (s *identityPrivacyScope) register(realID string, role string) string {
 	realID = strings.TrimSpace(realID)
-	if !isLikelyQQIdentifier(realID) {
+	if !isLikelyChatIdentifier(realID) {
 		return realID
 	}
-	role = normalizeQQPrivacyRole(role)
+	role = normalizeIdentityPrivacyRole(role)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if alias := s.realToAlias[realID]; alias != "" {
@@ -253,7 +253,7 @@ func (s *qqPrivacyScope) register(realID string, role string) string {
 	return alias
 }
 
-func normalizeQQPrivacyRole(role string) string {
+func normalizeIdentityPrivacyRole(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "owner":
 		return "owner"
@@ -286,7 +286,7 @@ func isLikelyMessageID(value string) bool {
 
 // registerMessageID 给消息 ID 建别名。负号留在别名外面：正文里出现的是 -12345，
 // 只把数字部分换掉会剩下一个孤零零的减号，所以连符号一起注册。
-func (s *qqPrivacyScope) registerMessageID(realID string) string {
+func (s *identityPrivacyScope) registerMessageID(realID string) string {
 	realID = strings.TrimSpace(realID)
 	if !isLikelyMessageID(realID) {
 		return realID
@@ -303,7 +303,7 @@ func (s *qqPrivacyScope) registerMessageID(realID string) string {
 	return alias
 }
 
-func isLikelyQQIdentifier(value string) bool {
+func isLikelyChatIdentifier(value string) bool {
 	if len(value) < 5 || len(value) > 14 || value[0] == '0' {
 		return false
 	}
@@ -315,7 +315,7 @@ func isLikelyQQIdentifier(value string) bool {
 	return true
 }
 
-func (s *qqPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateRequest {
+func (s *identityPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateRequest {
 	protected := req
 	protected.Messages = make([]llm.Message, len(req.Messages))
 	for index, message := range req.Messages {
@@ -345,7 +345,7 @@ func (s *qqPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateReq
 	return protected
 }
 
-func (s *qqPrivacyScope) protectToolCalls(calls []llm.ToolCall) []llm.ToolCall {
+func (s *identityPrivacyScope) protectToolCalls(calls []llm.ToolCall) []llm.ToolCall {
 	if s == nil || len(calls) == 0 {
 		return calls
 	}
@@ -364,7 +364,7 @@ func (s *qqPrivacyScope) protectToolCalls(calls []llm.ToolCall) []llm.ToolCall {
 	return out
 }
 
-func (s *qqPrivacyScope) protectValue(value any) any {
+func (s *identityPrivacyScope) protectValue(value any) any {
 	switch typed := value.(type) {
 	case string:
 		return s.protectText(typed)
@@ -384,7 +384,7 @@ func (s *qqPrivacyScope) protectValue(value any) any {
 	return value
 }
 
-func (s *qqPrivacyScope) protectText(text string) string {
+func (s *identityPrivacyScope) protectText(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
 	}
@@ -402,8 +402,8 @@ func (s *qqPrivacyScope) protectText(text string) string {
 	return text
 }
 
-func (s *qqPrivacyScope) discoverStructuredIDs(text string) {
-	for _, match := range qqPrivacyJSONIDPattern.FindAllStringSubmatch(text, -1) {
+func (s *identityPrivacyScope) discoverStructuredIDs(text string) {
+	for _, match := range identityPrivacyJSONIDPattern.FindAllStringSubmatch(text, -1) {
 		value := firstNonEmpty(match[2], match[3])
 		role := "user"
 		key := strings.ToLower(match[1])
@@ -416,23 +416,23 @@ func (s *qqPrivacyScope) discoverStructuredIDs(text string) {
 		}
 		s.register(value, role)
 	}
-	for _, match := range qqPrivacyCQIDPattern.FindAllStringSubmatch(text, -1) {
+	for _, match := range identityPrivacyCQIDPattern.FindAllStringSubmatch(text, -1) {
 		s.register(match[1], "user")
 	}
-	for _, match := range qqPrivacyLabelPattern.FindAllStringSubmatch(text, -1) {
+	for _, match := range identityPrivacyLabelPattern.FindAllStringSubmatch(text, -1) {
 		s.register(match[1], "user")
 	}
 	// 消息 ID 也要脱敏，否则模型手里握着一批真实 ID。入站渲染的引用标记和结构化
 	// 载荷里的 message_id 都要认，不然历史里出现过、但事件里没登记的那些会漏网。
-	for _, match := range qqPrivacyMessageIDPattern.FindAllStringSubmatch(text, -1) {
+	for _, match := range identityPrivacyMessageIDPattern.FindAllStringSubmatch(text, -1) {
 		s.registerMessageID(firstNonEmpty(match[2], match[3]))
 	}
-	for _, match := range qqPrivacyReplyMarkerPattern.FindAllStringSubmatch(text, -1) {
+	for _, match := range identityPrivacyReplyMarkerPattern.FindAllStringSubmatch(text, -1) {
 		s.registerMessageID(match[1])
 	}
 }
 
-func (s *qqPrivacyScope) restoreText(text string) string {
+func (s *identityPrivacyScope) restoreText(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
 	}

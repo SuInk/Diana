@@ -41,15 +41,15 @@ func (p *privacyAwareTestProvider) Generate(_ context.Context, req llm.GenerateR
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: text}, nil
 }
 
-func TestQQPrivacyProviderMasksRequestsAndRestoresReplies(t *testing.T) {
-	scope := newQQPrivacyScope()
+func TestIdentityPrivacyProviderMasksRequestsAndRestoresReplies(t *testing.T) {
+	scope := newIdentityPrivacyScope()
 	ownerAlias := scope.register("10001", "owner")
 	currentAlias := scope.register("10002", "current_user")
 	groupAlias := scope.register("20001", "group")
 	provider := &privacyRequestProvider{
 		reply: fmt.Sprintf(`{"action":"final","content":"[CQ:at,qq=%s] 已处理 %s"}`, currentAlias, groupAlias),
 	}
-	client := &qqPrivacyProvider{provider: provider, scope: scope}
+	client := &identityPrivacyProvider{provider: provider, scope: scope}
 
 	response, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: `owner_id=10001；日期 20260716；message_id=30003`},
@@ -127,14 +127,14 @@ func (p *privacyRoundTripProvider) Generate(_ context.Context, req llm.GenerateR
 	}
 }
 
-func TestQQPrivacyProviderRoundTripsAgentToolIdentifiers(t *testing.T) {
+func TestIdentityPrivacyProviderRoundTripsAgentToolIdentifiers(t *testing.T) {
 	const realID = "10002"
-	scope := newQQPrivacyScope()
+	scope := newIdentityPrivacyScope()
 	scope.register(realID, "current_user")
 	provider := &privacyRoundTripProvider{realID: realID}
 	tool := &privacyRoundTripTool{}
 	runner, err := agent.NewRunner(
-		&qqPrivacyProvider{provider: provider, scope: scope},
+		&identityPrivacyProvider{provider: provider, scope: scope},
 		agent.Config{WorkDir: t.TempDir(), MaxSteps: 2},
 		agent.NewToolRegistry(tool),
 	)
@@ -164,18 +164,18 @@ func TestQQPrivacyProviderRoundTripsAgentToolIdentifiers(t *testing.T) {
 	}
 }
 
-func TestLLMQQIDMaskingDefaultsOnAndCanBeDisabled(t *testing.T) {
-	if !llmQQIDMaskingEnabled(BotConfig{}) {
+func TestLLMIdentityMaskingDefaultsOnAndCanBeDisabled(t *testing.T) {
+	if !llmIdentityMaskingEnabled(BotConfig{}) {
 		t.Fatal("QQ ID masking should default to enabled")
 	}
 	disabled := boolPointer(false)
-	cfg := ConfigFromPayload(ConfigPayload{LLMQQIDMaskingEnabled: disabled}, BotConfig{})
-	if llmQQIDMaskingEnabled(cfg) {
+	cfg := ConfigFromPayload(ConfigPayload{LLMIdentityMaskingEnabled: disabled}, BotConfig{})
+	if llmIdentityMaskingEnabled(cfg) {
 		t.Fatal("QQ ID masking should respect an explicit false value")
 	}
 	payload := PayloadFromConfig(cfg)
-	if payload.LLMQQIDMaskingEnabled == nil || *payload.LLMQQIDMaskingEnabled {
-		t.Fatalf("config round trip lost explicit false: %#v", payload.LLMQQIDMaskingEnabled)
+	if payload.LLMIdentityMaskingEnabled == nil || *payload.LLMIdentityMaskingEnabled {
+		t.Fatalf("config round trip lost explicit false: %#v", payload.LLMIdentityMaskingEnabled)
 	}
 }
 
