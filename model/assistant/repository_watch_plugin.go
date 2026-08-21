@@ -693,8 +693,14 @@ func (p *RepositoryWatchPlugin) fetchPullRequestFiles(ctx context.Context, repos
 // fetchPullRequestCommits 取这个 PR 里比 since 更新的提交。since 用的是上一轮轮询的
 // 水位线，所以拿到的正好是「上次通知之后新推上来的那些」。
 //
-// since 为零值（首次看到这个 PR）时返回全部提交，因为整个 PR 都是新的。强推改写历史
-// 会让提交时间对不上而筛不出东西，这时宁可不列，也好过报一批其实没动过的提交。
+// since 为零值（首次看到这个 PR）时返回全部提交，因为整个 PR 都是新的。
+//
+// 筛选用的是 committer date，强推之后的表现分两种，都不做特殊标记：
+//   - rebase、amend 会把 committer date 刷成当前时间（author date 才保留），
+//     于是整条分支的提交都晚于水位线，会被重列一遍，看上去像突然多了一批新提交；
+//   - 把分支重置到更早的状态再推，提交时间还是旧的，筛不出来，那条更新就没有提交行。
+//
+// 想把「重写」和「新增」区分开，得按 PR 记住上次的 head SHA 才做得准，现在不值这个成本。
 func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, repository string, number int, since time.Time, limit int, settings SettingValues) ([]repositoryWatchPullCommit, int, error) {
 	if limit <= 0 {
 		limit = repositoryWatchDefaultLimit
