@@ -599,8 +599,8 @@ func qqBotConfigFromEnv() assistant.BotConfig {
 	cfg.DirectReplyChunkSize = intFromEnv("DIANA_DIRECT_REPLY_CHUNK_SIZE", cfg.DirectReplyChunkSize)
 	cfg.ForwardReplyThreshold = intFromEnv("DIANA_FORWARD_REPLY_THRESHOLD", cfg.ForwardReplyThreshold)
 	cfg.RecallReplyMode = assistant.RecallReplyMode(envOr("DIANA_RECALL_REPLY_MODE", string(cfg.RecallReplyMode)))
-	llmQQIDMaskingEnabled := boolFromEnv("DIANA_LLM_QQ_ID_MASKING_ENABLED", true)
-	cfg.LLMQQIDMaskingEnabled = &llmQQIDMaskingEnabled
+	llmIdentityMaskingEnabled := boolFromEnv("DIANA_LLM_QQ_ID_MASKING_ENABLED", true)
+	cfg.LLMIdentityMaskingEnabled = &llmIdentityMaskingEnabled
 	cfg.RecentContextLimit = intFromEnv("DIANA_RECENT_GROUP_CONTEXT_LIMIT", cfg.RecentContextLimit)
 	cfg.ContextSummaryThreshold = intFromEnv("DIANA_CONTEXT_SUMMARY_THRESHOLD", cfg.ContextSummaryThreshold)
 	if chance, ok := floatFromEnvAny("DIANA_PROACTIVE_REPLY_CHANCE", "DIANA_PASSIVE_REPLY_CHANCE"); ok {

@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -13,8 +14,8 @@ import (
 // 提示词告诉模型「原样复制别名，本地代理会在执行工具前自动恢复真实标识」。以前只
 // 还原了回复正文，别名原封不动地进了工具，提醒工具收到 qq_user_xxx 只能报「必须是
 // 有效 QQ 号」。工具参数必须一起还原。
-func TestQQPrivacyRestoresToolCallArguments(t *testing.T) {
-	scope := newQQPrivacyScope()
+func TestIdentityPrivacyRestoresToolCallArguments(t *testing.T) {
+	scope := newIdentityPrivacyScope()
 	alias := scope.register("10001234", "user")
 	if alias == "10001234" {
 		t.Fatal("id should have been aliased")
@@ -56,8 +57,8 @@ func TestQQPrivacyRestoresToolCallArguments(t *testing.T) {
 
 // 反向的同一个漏洞：Agent 循环会把上一轮的工具调用回放进历史，那些参数已经被还原成
 // 真实 QQ 号，不重新替换回别名就会漏回模型，隐私代理等于白做。
-func TestQQPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
-	scope := newQQPrivacyScope()
+func TestIdentityPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
+	scope := newIdentityPrivacyScope()
 	alias := scope.register("10001234", "user")
 
 	request := llm.GenerateRequest{Messages: []llm.Message{
@@ -89,8 +90,8 @@ func TestQQPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
 
 // 消息 ID 也要脱敏，否则模型手里握着一批真实 ID。难点在于它可以是负数，而且必须能
 // 原路还原——不然模型写的 [diana-reply:别名] 会因为不是纯数字而被丢弃，引用悄悄失效。
-func TestQQPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
-	scope := newQQPrivacyScope()
+func TestIdentityPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
+	scope := newIdentityPrivacyScope()
 	scope.registerEvent(MessageEvent{
 		Kind: EventKindGroup, GroupID: "987654321", UserID: "10001234", MessageID: "1145141919",
 		Quoted: &QuotedMessage{MessageID: "-810975", UserID: "10005678"},
@@ -117,8 +118,8 @@ func TestQQPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
 }
 
 // 端到端：模型原样复制别名标记，代理还原后必须能解析出真正的回复目标。
-func TestQQPrivacyReplyMarkerSurvivesMasking(t *testing.T) {
-	scope := newQQPrivacyScope()
+func TestIdentityPrivacyReplyMarkerSurvivesMasking(t *testing.T) {
+	scope := newIdentityPrivacyScope()
 	alias := scope.registerMessageID("1145141919")
 	if alias == "1145141919" {
 		t.Fatal("message id should have been aliased")
@@ -146,7 +147,44 @@ func TestIsLikelyMessageID(t *testing.T) {
 		}
 	}
 	// QQ 号判定仍然拒绝负数。
-	if isLikelyQQIdentifier("-810975") {
+	if isLikelyChatIdentifier("-810975") {
 		t.Fatal("negative value must not be treated as a QQ id")
+	}
+}
+
+// 配置键从 llm_qq_id_masking_enabled 改名为 llm_identity_masking_enabled。旧配置里
+// 显式关掉脱敏的必须仍然是关的——静默变回开启是隐私回退，比不改名严重得多。
+func TestLegacyMaskingKeyIsHonoured(t *testing.T) {
+	cases := map[string]struct {
+		raw  string
+		want bool
+	}{
+		"旧键显式关闭":      {`{"llm_qq_id_masking_enabled":false}`, false},
+		"旧键显式开启":      {`{"llm_qq_id_masking_enabled":true}`, true},
+		"新键显式关闭":      {`{"llm_identity_masking_enabled":false}`, false},
+		"两个键都没有时默认开启": {`{}`, true},
+		// 两个键并存时以新键为准，避免升级过程中旧值反过来盖住新设置。
+		"新键优先于旧键": {`{"llm_identity_masking_enabled":true,"llm_qq_id_masking_enabled":false}`, true},
+	}
+	for name, testCase := range cases {
+		var cfg BotConfig
+		if err := json.Unmarshal([]byte(testCase.raw), &cfg); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		cfg = cfg.WithDefaults()
+		if got := llmIdentityMaskingEnabled(cfg); got != testCase.want {
+			t.Fatalf("%s: masking = %v, want %v", name, got, testCase.want)
+		}
+		// 归一化之后不再写出旧键，避免两份真相长期并存。
+		if cfg.LegacyLLMQQIDMaskingEnabled != nil {
+			t.Fatalf("%s: legacy key should be cleared after WithDefaults", name)
+		}
+		encoded, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(string(encoded), "llm_qq_id_masking_enabled") {
+			t.Fatalf("%s: legacy key must not be written back: %s", name, encoded)
+		}
 	}
 }
