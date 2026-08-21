@@ -5,6 +5,8 @@ package assistant
 
 import (
 	"context"
+	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -14,7 +16,7 @@ import (
 // 网页渲染插件唯一的外部依赖就是一个 Chrome/Chromium，可它以前只在真正渲染时
 // 才去找：插件在控制台上是「已启用」，机器上没装浏览器也照样是「已启用」，直到
 // 有人在群里发了个链接，才收到一句「渲染失败」。这里把它做成和 yt-dlp / ffmpeg
-// 一样的运行依赖，启用之前就能看出来齐不齐。
+// 完全一样的运行依赖：启用之前就能看出来齐不齐，缺了也能一键装。
 var (
 	browserDepsMu    sync.RWMutex
 	browserDepsCache []ResolverDependency
@@ -62,8 +64,48 @@ func probeBrowserDependencies() []ResolverDependency {
 		dep.Version = strings.TrimSpace(status.Version)
 		return []ResolverDependency{dep}
 	}
-	// 浏览器不走包管理器一键装：体积大、发行版之间差异也大，装错版本比没装更难查。
-	// 这里只如实说明卡在哪一步，界面会显示成「需手动安装」加上这句原因。
 	dep.Detail = strings.TrimSpace(status.Detail)
+	// 和 yt-dlp / ffmpeg 一样能一键装。浏览器体积大，但装的过程同样是「一条包管理器
+	// 命令」，没理由让用户自己去查这个发行版对应的包名叫什么。
+	if plan, err := resolverDependencyInstallPlan(browserDependencyName, runtime.GOOS, lookResolverCommand); err == nil {
+		dep.Installable = true
+		dep.Installer = plan.installer
+	} else {
+		// 装不了的时候才需要教怎么装；能一键装时再写这句只会和按钮打架。
+		dep.Detail = strings.TrimSpace(dep.Detail + "。这台机器上没有可用的包管理器，需要自己装一个（Linux 上 chromium 或 google-chrome，macOS 上 Google Chrome）")
+	}
 	return []ResolverDependency{dep}
+}
+
+// installBrowserDependency 装浏览器，并用真正的探测确认装完能用。
+//
+// 装完还要复核，是因为「包管理器说成功了」不等于能用：Ubuntu 的 chromium-browser
+// 是个转发到 snap 的过渡包，容器里没有 snapd 就会装上一个跑不起来的壳子。复核这一步
+// 会把它照实说出来，而不是让用户在群里发链接时才撞见。
+func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallResult, error) {
+	deps := RefreshBrowserDependencies()
+	if dep, ok := resolverDependencyByName(deps, browserDependencyName); ok && dep.Available {
+		return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps)}, nil
+	}
+	plan, err := resolverDependencyInstallPlan(browserDependencyName, runtime.GOOS, lookResolverCommand)
+	if err != nil {
+		return ResolverDependencyInstallResult{}, err
+	}
+	if err := runDependencyInstallPlan(ctx, plan, browserDependencyName); err != nil {
+		return ResolverDependencyInstallResult{}, err
+	}
+	deps = RefreshBrowserDependencies()
+	dep, ok := resolverDependencyByName(deps, browserDependencyName)
+	if !ok || !dep.Available {
+		detail := ""
+		if ok && strings.TrimSpace(dep.Detail) != "" {
+			detail = "：" + dep.Detail
+		}
+		return ResolverDependencyInstallResult{}, fmt.Errorf("%s 已执行，但浏览器仍然不可用%s", plan.installer, detail)
+	}
+	return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps), Installer: plan.installer}, nil
+}
+
+func browserDependencyGroup(deps []ResolverDependency) map[string][]ResolverDependency {
+	return map[string][]ResolverDependency{SandboxedBrowserPluginID: deps}
 }

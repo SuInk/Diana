@@ -108,9 +108,12 @@ type ResolverDependency struct {
 
 // ResolverDependencyInstallResult 是安装后返回给控制台的最新依赖状态。
 type ResolverDependencyInstallResult struct {
-	Dependency ResolverDependency   `json:"dependency"`
-	Resolver   []ResolverDependency `json:"resolver"`
-	Installer  string               `json:"installer,omitempty"`
+	Dependency ResolverDependency `json:"dependency"`
+	// Resolver 是链接解析那一组，保留给旧字段。
+	Resolver []ResolverDependency `json:"resolver"`
+	// Plugins 按插件 ID 分组，界面据此只更新受影响的那一组。
+	Plugins   map[string][]ResolverDependency `json:"plugins,omitempty"`
+	Installer string                          `json:"installer,omitempty"`
 }
 
 type resolverDependencySpec struct {
@@ -161,7 +164,7 @@ func RefreshResolverDependencies() []ResolverDependency {
 // 用户输入永远不会被拼进 shell；每条可执行文件和参数都由安装计划生成。
 func InstallResolverDependency(ctx context.Context, name string) (ResolverDependencyInstallResult, error) {
 	name = strings.TrimSpace(name)
-	if _, ok := resolverDependencySpecByName(name); !ok {
+	if !installableDependency(name) {
 		return ResolverDependencyInstallResult{}, fmt.Errorf("%w：%s", ErrUnknownResolverDependency, name)
 	}
 	if ctx == nil {
@@ -171,9 +174,13 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 	resolverDependencyInstallMu.Lock()
 	defer resolverDependencyInstallMu.Unlock()
 
+	if name == browserDependencyName {
+		return installBrowserDependency(ctx)
+	}
+
 	deps := RefreshResolverDependencies()
 	if dep, ok := resolverDependencyByName(deps, name); ok && dep.Available {
-		return ResolverDependencyInstallResult{Dependency: dep, Resolver: deps}, nil
+		return ResolverDependencyInstallResult{Dependency: dep, Resolver: deps, Plugins: resolverDependencyGroup(deps)}, nil
 	}
 
 	plan, err := resolverDependencyInstallPlan(name, runtime.GOOS, lookResolverCommand)
@@ -181,6 +188,25 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 		return ResolverDependencyInstallResult{}, err
 	}
 
+	if err := runDependencyInstallPlan(ctx, plan, name); err != nil {
+		return ResolverDependencyInstallResult{}, err
+	}
+
+	deps = RefreshResolverDependencies()
+	dep, ok := resolverDependencyByName(deps, name)
+	if !ok || !dep.Available {
+		return ResolverDependencyInstallResult{}, fmt.Errorf("%s 已执行，但 %s 仍不在服务进程的 PATH 中", plan.installer, name)
+	}
+	return ResolverDependencyInstallResult{Dependency: dep, Resolver: deps, Plugins: resolverDependencyGroup(deps), Installer: plan.installer}, nil
+}
+
+func resolverDependencyGroup(deps []ResolverDependency) map[string][]ResolverDependency {
+	return map[string][]ResolverDependency{ResolverPluginID: deps}
+}
+
+// runDependencyInstallPlan 按顺序执行安装计划。失败时把包管理器自己的输出带出来——
+// 「apt 安装 chromium 失败」不说清是没有这个包还是没权限，用户无从下手。
+func runDependencyInstallPlan(ctx context.Context, plan resolverInstallPlan, name string) error {
 	installCtx, cancel := context.WithTimeout(ctx, resolverDependencyInstallTimeout)
 	defer cancel()
 	for _, command := range plan.commands {
@@ -197,16 +223,10 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 			if detail != "" {
 				detail = "：" + detail
 			}
-			return ResolverDependencyInstallResult{}, fmt.Errorf("%s 安装 %s 失败：%w%s", plan.installer, name, err, detail)
+			return fmt.Errorf("%s 安装 %s 失败：%w%s", plan.installer, name, err, detail)
 		}
 	}
-
-	deps = RefreshResolverDependencies()
-	dep, ok := resolverDependencyByName(deps, name)
-	if !ok || !dep.Available {
-		return ResolverDependencyInstallResult{}, fmt.Errorf("%s 已执行，但 %s 仍不在服务进程的 PATH 中", plan.installer, name)
-	}
-	return ResolverDependencyInstallResult{Dependency: dep, Resolver: deps, Installer: plan.installer}, nil
+	return nil
 }
 
 func probeResolverDependencies() []ResolverDependency {
@@ -229,7 +249,7 @@ func probeResolverDependencies() []ResolverDependency {
 }
 
 func resolverDependencyInstallPlan(name, goos string, lookPath func(string) (string, error)) (resolverInstallPlan, error) {
-	if _, ok := resolverDependencySpecByName(name); !ok {
+	if !installableDependency(name) {
 		return resolverInstallPlan{}, fmt.Errorf("%w：%s", ErrUnknownResolverDependency, name)
 	}
 
@@ -239,7 +259,13 @@ func resolverDependencyInstallPlan(name, goos string, lookPath func(string) (str
 		build   func(string, string) []resolverInstallCommand
 	}
 	brew := managerSpec{command: "brew", label: "Homebrew", build: func(path, dependency string) []resolverInstallCommand {
-		return []resolverInstallCommand{{path: path, args: []string{"install", dependency}}}
+		args := []string{"install"}
+		// 浏览器在 Homebrew 里是 cask（装的是 .app，不是命令行包），少了 --cask
+		// 会直接报 "No available formula"。
+		if resolverBrewCask(dependency) {
+			args = append(args, "--cask")
+		}
+		return []resolverInstallCommand{{path: path, args: append(args, resolverPackageName(dependency, "brew"))}}
 	}}
 	linuxManagers := []managerSpec{
 		{command: "apk", label: "apk", build: func(path, dependency string) []resolverInstallCommand {
@@ -292,7 +318,35 @@ func resolverDependencyInstallPlan(name, goos string, lookPath func(string) (str
 	return resolverInstallPlan{}, fmt.Errorf("%w，无法自动安装 %s", ErrResolverInstallerUnavailable, name)
 }
 
+// installableDependency 是允许自动安装的白名单。参数永远不会被拼进 shell，
+// 但仍然要挡住白名单之外的名字：可执行文件和参数都只能由安装计划生成。
+func installableDependency(name string) bool {
+	if _, ok := resolverDependencySpecByName(name); ok {
+		return true
+	}
+	return name == browserDependencyName
+}
+
+// resolverBrewCask 标出 Homebrew 里属于 cask 的依赖。
+func resolverBrewCask(name string) bool {
+	return name == browserDependencyName
+}
+
 func resolverPackageName(name, manager string) string {
+	if name == browserDependencyName {
+		// 各家包名不一样，Linux 上一律装 chromium：google-chrome 只在 Google 自己的
+		// 源里，为了装个浏览器去偷偷加第三方 apt 源不合适。
+		switch manager {
+		case "apk", "apt", "dnf", "yum", "pacman":
+			return "chromium"
+		case "brew":
+			return "google-chrome"
+		case "winget":
+			return "Google.Chrome"
+		case "choco":
+			return "googlechrome"
+		}
+	}
 	if name == "node" {
 		switch manager {
 		case "apk", "apt", "dnf", "yum", "pacman":

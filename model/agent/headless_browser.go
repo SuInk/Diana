@@ -236,7 +236,7 @@ func headlessBrowserProbeDetail(configured string) string {
 	if strings.TrimSpace(configured) != "" {
 		return "配置的浏览器路径不存在：" + strings.TrimSpace(configured)
 	}
-	return "没有找到 Chrome/Chromium。装一个（Linux 上 chromium 或 google-chrome，macOS 上 Google Chrome）之后这里会自动检测到。"
+	return "没有找到 Chrome/Chromium"
 }
 
 func firstNonEmptyLine(value string) string {

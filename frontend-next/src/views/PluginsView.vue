@@ -427,7 +427,7 @@ const permissionsTarget = ref<PluginState | null>(null);
 const dependencyHints: Record<string, string> = {
   [resolverPluginID]: "缺少这些命令时，对应平台的解析会失败；可直接在这里安装。",
   [sandboxedBrowserPluginID]:
-    "没有可用的浏览器时，网页渲染会在用到的那一刻才失败。浏览器不做一键安装：体积大、发行版之间差异也大，装错版本比没装更难查。"
+    "没有可用的浏览器时，网页渲染会在用到的那一刻才失败；可直接在这里安装。浏览器体积不小，安装会比其它依赖慢一些。"
 };
 
 function dependenciesFor(pluginID: string): ResolverDependency[] {
@@ -931,8 +931,11 @@ async function installDependency(dependency: ResolverDependency): Promise<void> 
   busyDependency.value = dependency.name;
   try {
     const result = await installResolverDependency(dependency.name);
-    // 能一键装的只有链接解析那一组，别把其它分组一起覆盖掉。
-    dependencyGroups.value = { ...dependencyGroups.value, [resolverPluginID]: result.resolver };
+    // 只合并这次真正受影响的那一组，别把其它插件的探测结果一起覆盖掉。
+    dependencyGroups.value = {
+      ...dependencyGroups.value,
+      ...(result.plugins ?? { [resolverPluginID]: result.resolver })
+    };
     toastSuccess(`已安装 ${dependency.name}`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : `安装 ${dependency.name} 失败`);

@@ -503,8 +503,8 @@ func TestBotHandlerGroupsPluginDependenciesByPlugin(t *testing.T) {
 	} else if strings.TrimSpace(browser[0].Detail) == "" {
 		t.Fatalf("unavailable browser without a reason: %#v", browser[0])
 	}
-	// 浏览器不走包管理器一键装，界面上不该出现安装按钮。
-	if browser[0].Installable {
-		t.Fatalf("browser should not offer one-click install: %#v", browser[0])
+	// 能不能一键装取决于跑测试的机器上有没有包管理器，但只要说能装，就必须说清用哪个装。
+	if browser[0].Installable && strings.TrimSpace(browser[0].Installer) == "" {
+		t.Fatalf("installable browser without an installer: %#v", browser[0])
 	}
 }

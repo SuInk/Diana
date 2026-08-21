@@ -213,8 +213,9 @@ const browserDependencies: ResolverDependency[] = [
     name: "chrome",
     purpose: "网页渲染：在一次性沙盒里执行页面 JS 后读取正文",
     available: false,
-    detail: "没有找到 Chrome/Chromium。装一个（Linux 上 chromium 或 google-chrome，macOS 上 Google Chrome）之后这里会自动检测到。",
-    installable: false
+    detail: "没有找到 Chrome/Chromium",
+    installable: true,
+    installer: "apt"
   }
 ];
 
