@@ -16,8 +16,8 @@ import (
 // 有效 QQ 号」。工具参数必须一起还原。
 func TestIdentityPrivacyRestoresToolCallArguments(t *testing.T) {
 	scope := newIdentityPrivacyScope()
-	alias := scope.register("10001234", "user")
-	if alias == "10001234" {
+	alias := scope.register("10001", "user")
+	if alias == "10001" {
 		t.Fatal("id should have been aliased")
 	}
 
@@ -35,15 +35,15 @@ func TestIdentityPrivacyRestoresToolCallArguments(t *testing.T) {
 		},
 	}}
 	restored := scope.restoreToolCalls(calls)
-	if got := restored[0].Arguments["target_user_id"]; got != "10001234" {
+	if got := restored[0].Arguments["target_user_id"]; got != "10001" {
 		t.Fatalf("target_user_id = %v", got)
 	}
 	nested, _ := restored[0].Arguments["targets"].([]any)
-	if len(nested) != 2 || nested[0] != "10001234" {
+	if len(nested) != 2 || nested[0] != "10001" {
 		t.Fatalf("nested slice not restored: %#v", nested)
 	}
 	inner, _ := nested[1].(map[string]any)
-	if inner["user_id"] != "10001234" {
+	if inner["user_id"] != "10001" {
 		t.Fatalf("nested map not restored: %#v", inner)
 	}
 	if restored[0].Arguments["count"] != float64(3) {
@@ -59,13 +59,13 @@ func TestIdentityPrivacyRestoresToolCallArguments(t *testing.T) {
 // 真实 QQ 号，不重新替换回别名就会漏回模型，隐私代理等于白做。
 func TestIdentityPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
 	scope := newIdentityPrivacyScope()
-	alias := scope.register("10001234", "user")
+	alias := scope.register("10001", "user")
 
 	request := llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: "系统"},
 		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 			ID: "call-1", Name: "diana.reminder",
-			Arguments: map[string]any{"target_user_id": "10001234"},
+			Arguments: map[string]any{"target_user_id": "10001"},
 		}}},
 	}}
 	protected := scope.protectRequest(request)
@@ -83,7 +83,7 @@ func TestIdentityPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
 		t.Fatalf("real id leaked back to the model: %v", got)
 	}
 	// 原请求不能被就地改写。
-	if request.Messages[1].ToolCalls[0].Arguments["target_user_id"] != "10001234" {
+	if request.Messages[1].ToolCalls[0].Arguments["target_user_id"] != "10001" {
 		t.Fatal("original request was mutated")
 	}
 }
@@ -93,8 +93,8 @@ func TestIdentityPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
 func TestIdentityPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
 	scope := newIdentityPrivacyScope()
 	scope.registerEvent(MessageEvent{
-		Kind: EventKindGroup, GroupID: "987654321", UserID: "10001234", MessageID: "1145141919",
-		Quoted: &QuotedMessage{MessageID: "-810975", UserID: "10005678"},
+		Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "1145141919",
+		Quoted: &QuotedMessage{MessageID: "-810975", UserID: "10002"},
 	})
 
 	for _, sample := range []string{

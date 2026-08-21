@@ -10034,6 +10034,10 @@ func splitNotification(text string, chunkSize int) []string {
 }
 
 // splitReply 将长回复按模型分隔符、空行和长度切分。
+//
+// 清单型回复（逐项打分、排行、步骤这类）是个例外：里面的空行是排版，不是分条
+// 信号。按聊天规则拆开会把「变装皇后：+1」和它下面那句解释发成两条，一份榜单
+// 散成七八条消息，读起来比一整块还乱。真人贴这种清单也是一条发出去的。
 func splitReply(reply string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = 900
@@ -10042,14 +10046,83 @@ func splitReply(reply string, chunkSize int) []string {
 	if reply == "" {
 		return nil
 	}
+	structured := looksStructuredReply(reply)
+	if structured && chunkSize < structuredReplyChunkSize {
+		chunkSize = structuredReplyChunkSize
+	}
 	var out []string
 	for _, botPart := range strings.Split(reply, notificationSplitMarker) {
+		// <botbr> 是模型显式要求的分条，任何情况下都保留。
+		if structured {
+			out = append(out, chunkTextByLength(botPart, chunkSize)...)
+			continue
+		}
 		for _, part := range splitReplyParagraphs(botPart) {
 			out = append(out, chunkTextByLength(part, chunkSize)...)
 		}
 	}
 	return out
 }
+
+// structuredReplyChunkSize 是清单型回复的长度下限：群友风格把聊天压到 160 字，
+// 那是为了像真人说话，不该顺带把一份清单剁成碎片。
+const structuredReplyChunkSize = 900
+
+// structuredReplyMinItems 是判定为清单的最少条目数。要求三条以上，普通聊天里
+// 偶尔出现的一两个「谁：说了什么」不会被误判成清单。
+const structuredReplyMinItems = 3
+
+// looksStructuredReply 判断回复是不是逐条罗列的清单。
+func looksStructuredReply(reply string) bool {
+	items := 0
+	for _, line := range strings.Split(strings.ReplaceAll(reply, "\r", ""), "\n") {
+		if isStructuredReplyLine(strings.TrimSpace(line)) {
+			items++
+			if items >= structuredReplyMinItems {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isStructuredReplyLine 识别列表项：符号项目符号、有序编号、Markdown 表格行，
+// 以及「短标签：内容」这种逐项打分常用的写法。
+func isStructuredReplyLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	runes := []rune(line)
+	switch runes[0] {
+	case '-', '*', '+', '•', '·', '|':
+		return len(runes) > 1 && strings.TrimSpace(string(runes[1:])) != ""
+	}
+	digits := 0
+	for digits < len(runes) && unicode.IsDigit(runes[digits]) {
+		digits++
+	}
+	if digits > 0 && digits < len(runes) {
+		switch runes[digits] {
+		case '.', '、', ')', '）', ':', '：':
+			return strings.TrimSpace(string(runes[digits+1:])) != ""
+		}
+	}
+	// 「变装皇后：+1」这类标签行：冒号靠前，且冒号两侧都有内容。
+	for index, r := range runes {
+		if r != '：' && r != ':' {
+			continue
+		}
+		if index == 0 || index > structuredReplyLabelMaxRunes {
+			return false
+		}
+		return strings.TrimSpace(string(runes[index+1:])) != ""
+	}
+	return false
+}
+
+// structuredReplyLabelMaxRunes 限制标签长度，避免把「今天想说的是：……」这种
+// 正常句子当成清单项。
+const structuredReplyLabelMaxRunes = 12
 
 // chunkTextByLength 是发言和通知共用的长度兜底切分：超过 chunkSize 就在 chunkSize
 // 之内找一个体面的断点，空段直接丢掉。两条投递路径的分条规则不同（发言认空行，
