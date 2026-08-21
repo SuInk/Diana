@@ -305,7 +305,19 @@
               <div class="field wide">
                 <label for="bot-triggers">群聊触发词（逗号分隔）</label>
                 <input id="bot-triggers" v-model="triggersDraft" class="input" placeholder="Diana,diana" />
-                <span class="hint">群聊中 @ 机器人或以触发词开头会触发；私聊总是触发。</span>
+                <span class="hint">群聊中 @ 机器人或消息里出现触发词会触发；私聊总是触发。</span>
+              </div>
+              <div class="field wide">
+                <label for="bot-trigger-mode">触发词匹配</label>
+                <select id="bot-trigger-mode" v-model="form.group_trigger_mode" class="input">
+                  <option value="smart">智能（推荐）</option>
+                  <option value="strict">严格</option>
+                  <option value="loose">宽松</option>
+                </select>
+                <span class="hint">
+                  智能：出现触发词就回，但「Diana 刚才那句好怪」这类在谈论它的消息不强制回复，改由插话判定决定。
+                  严格：还要求触发词出现在句首或句尾。宽松：出现即回，等同旧行为。
+                </span>
               </div>
               <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
@@ -1348,6 +1360,7 @@ function setForm(config: BotProfileConfig): void {
     natural_interjection_enabled: config.natural_interjection_enabled ?? false,
     response_mode: config.response_mode ?? "custom",
     reply_style: config.reply_style ?? "assistant",
+    group_trigger_mode: config.group_trigger_mode ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
     prompt_inject_plaintext_rules: config.prompt_inject_plaintext_rules ?? true,
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,

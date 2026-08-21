@@ -1287,3 +1287,77 @@ func TestRepositoryWatchKeepsCommitsWhenPullRequestCommitsAreUnavailable(t *test
 		t.Fatalf("commits should survive an unusable PR commit list: %#v", change.Commits)
 	}
 }
+
+// 跟评的门槛写着「和会话里正在聊的事对得上」，但提示词里一度只有通知正文、
+// 没有任何会话历史——条件永远验证不了，模型只能一路 SKIP，跟评等于没了。
+// 历史必须和链接解析的跟评一样进提示词。
+func TestRuntimeRepositoryWatchFollowUpCarriesConversationHistory(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{"SKIP"}}
+	runtime := NewRuntime(
+		BotConfig{RequestTimeout: 5 * time.Second, SystemPrompt: "本群限定的自然人设"},
+		channel, NewPluginManager(), nil, nil, nil,
+		func() (LLMProvider, error) { return provider, nil },
+	)
+	runtime.remember(MessageEvent{
+		Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m1",
+		RawMessage: "投递那个 bug 什么时候修啊", Time: time.Now().Unix(),
+	})
+
+	comment := runtime.repositoryWatchFollowUpComment(
+		context.Background(),
+		MessageEvent{Kind: EventKindGroup, GroupID: "123"},
+		"GitHub 动态：demo/repo\nCommit new-sha\nfix delivery",
+	)
+	if comment != "" {
+		t.Fatalf("SKIP should produce no comment, got %q", comment)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected one follow-up call, got %d", len(provider.requests))
+	}
+	messages := provider.requests[0].Messages
+	if !requestMessagesContain(messages, "投递那个 bug 什么时候修啊") {
+		t.Fatalf("follow-up prompt is missing the conversation history: %#v", messages)
+	}
+	if !requestMessagesContain(messages, "fix delivery") {
+		t.Fatalf("follow-up prompt is missing the notification body: %#v", messages)
+	}
+}
+
+// WebUI 的「配置信息」页按键名把这些设置项分到「通知」和「运行」两组。
+// 键名在 Go 这边改掉、前端没跟着改的话，对应的开关会从界面上消失而不报错，
+// 所以这里把契约钉住。
+func TestRepositoryWatchManifestExposesConfigTabSettings(t *testing.T) {
+	specs := map[string]PluginSettingSpec{}
+	for _, spec := range (&RepositoryWatchPlugin{}).Manifest().Settings {
+		specs[spec.Key] = spec
+	}
+	for _, key := range []string{pluginSettingAskAgent, repositoryWatchSettingTemplateHeader, repositoryWatchSettingLimit, repositoryWatchSettingTimeout, repositoryWatchSettingToken} {
+		if _, ok := specs[key]; !ok {
+			t.Fatalf("missing setting spec %q", key)
+		}
+	}
+	if got := specs[pluginSettingAskAgent].Type; got != PluginSettingTypeBool {
+		t.Fatalf("ask_agent type = %q, want bool", got)
+	}
+	if got := specs[pluginSettingAskAgent].Default; got != true {
+		t.Fatalf("ask_agent default = %v, want true", got)
+	}
+	// 模板要写多行还带 <botbr>，默认四行的文本框太挤。
+	if got := specs[repositoryWatchSettingTemplateHeader].Rows; got <= 4 {
+		t.Fatalf("template_header rows = %d, want more than the default 4", got)
+	}
+	// 两个超时分属不同插件却同处一页，标签必须能区分开。
+	publishTimeout := ""
+	for _, spec := range (&RepositoryPublishPlugin{}).Manifest().Settings {
+		if spec.Key == repositoryPublishSettingTimeout {
+			publishTimeout = spec.Label
+		}
+	}
+	if publishTimeout == "" {
+		t.Fatal("repository publish plugin has no timeout setting")
+	}
+	if publishTimeout == specs[repositoryWatchSettingTimeout].Label {
+		t.Fatalf("both timeout settings are labelled %q; the config tab shows them together", publishTimeout)
+	}
+}

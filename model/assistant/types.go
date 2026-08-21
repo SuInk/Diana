@@ -297,6 +297,7 @@ type BotConfig struct {
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
 	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
 	DisabledUsers                []string             `json:"disabled_users,omitempty"`
 	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
@@ -340,6 +341,10 @@ type BotConfig struct {
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
+	// LegacyLLMQQIDMaskingEnabled 是这项设置改名前的键。名字带 QQ，可同一套脱敏还
+	// 服务 Telegram。只保留读取：已经显式关掉脱敏的配置升级后必须仍然是关的，静默
+	// 变回开启是隐私回退。写出时一律用新键。
+	LegacyLLMQQIDMaskingEnabled *bool `json:"llm_qq_id_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -431,6 +436,7 @@ type GroupConfig struct {
 	Enabled                      bool                   `json:"enabled"`
 	EnabledSet                   bool                   `json:"enabled_set,omitempty"`
 	GroupTriggers                []string               `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode       `json:"group_trigger_mode,omitempty"`
 	SystemPrompt                 string                 `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode           `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle             `json:"reply_style,omitempty"`
@@ -487,6 +493,7 @@ type ConfigPayload struct {
 	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
 	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
 	GroupTriggers                []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
 	DisabledUsers                []string             `json:"disabled_users,omitempty"`
 	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
@@ -530,6 +537,10 @@ type ConfigPayload struct {
 	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
+	// LegacyLLMQQIDMaskingEnabled 是这项设置改名前的键。名字带 QQ，可同一套脱敏还
+	// 服务 Telegram。只保留读取：已经显式关掉脱敏的配置升级后必须仍然是关的，静默
+	// 变回开启是隐私回退。写出时一律用新键。
+	LegacyLLMQQIDMaskingEnabled *bool `json:"llm_qq_id_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -562,12 +573,19 @@ type ConfigPayload struct {
 	AgentBrowserTimeoutMS       int         `json:"agent_browser_timeout_ms,omitempty"`
 }
 
-// DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
 // legacyConfigAliases 是历史上带平台名的配置键。存量数据库里存的还是这些键，
-// 读的时候补回来，不然升级之后机器人账号和脱敏开关会凭空丢失。
+// 读的时候补回来，不然升级之后机器人账号会凭空丢失。
 type legacyConfigAliases struct {
-	BotAccount                *string `json:"bot_qq,omitempty"`
-	LLMIdentityMaskingEnabled *bool   `json:"llm_qq_id_masking_enabled,omitempty"`
+	BotAccount *string `json:"bot_qq,omitempty"`
+}
+
+// applyLegacyMaskingAlias 在解析时就把旧键补进新字段。
+// WithDefaults 里也有一份同样的迁移，但不是每条读取路径都会经过它；
+// 已经显式关掉脱敏的配置升级后必须仍然是关的，静默变回开启是隐私回退。
+func applyLegacyMaskingAlias(current **bool, legacy *bool) {
+	if *current == nil && legacy != nil {
+		*current = copyBoolPointer(legacy)
+	}
 }
 
 func (cfg *BotConfig) UnmarshalJSON(data []byte) error {
@@ -582,9 +600,7 @@ func (cfg *BotConfig) UnmarshalJSON(data []byte) error {
 	if cfg.BotAccount == "" && legacy.BotAccount != nil {
 		cfg.BotAccount = *legacy.BotAccount
 	}
-	if cfg.LLMIdentityMaskingEnabled == nil && legacy.LLMIdentityMaskingEnabled != nil {
-		cfg.LLMIdentityMaskingEnabled = legacy.LLMIdentityMaskingEnabled
-	}
+	applyLegacyMaskingAlias(&cfg.LLMIdentityMaskingEnabled, cfg.LegacyLLMQQIDMaskingEnabled)
 	return nil
 }
 
@@ -600,12 +616,11 @@ func (cfg *ConfigPayload) UnmarshalJSON(data []byte) error {
 	if cfg.BotAccount == "" && legacy.BotAccount != nil {
 		cfg.BotAccount = *legacy.BotAccount
 	}
-	if cfg.LLMIdentityMaskingEnabled == nil && legacy.LLMIdentityMaskingEnabled != nil {
-		cfg.LLMIdentityMaskingEnabled = legacy.LLMIdentityMaskingEnabled
-	}
+	applyLegacyMaskingAlias(&cfg.LLMIdentityMaskingEnabled, cfg.LegacyLLMQQIDMaskingEnabled)
 	return nil
 }
 
+// DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
 func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 	base = base.WithDefaults()
 	return GroupConfig{
@@ -613,6 +628,7 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		Enabled:                      true,
 		EnabledSet:                   true,
 		GroupTriggers:                append([]string(nil), base.GroupTriggers...),
+		GroupTriggerMode:             base.GroupTriggerMode,
 		WelcomeEnabled:               base.WelcomeEnabled,
 		WelcomeMessage:               base.WelcomeMessage,
 		MaxContextTokens:             base.MaxContextTokens,
@@ -663,6 +679,7 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if len(cfg.GroupTriggers) == 0 {
 		cfg.GroupTriggers = append([]string(nil), defaults.GroupTriggers...)
 	}
+	// 空值表示这个群没有单独表态，读取时按全局配置解析，不在这里写死档位。
 	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
 		cfg.WelcomeMessage = defaults.WelcomeMessage
 	}
@@ -943,6 +960,7 @@ func DefaultBotConfig() BotConfig {
 		OneBotReverseWSEndpoint:      "ws://127.0.0.1:18080/onebot/v11/ws",
 		NoneBotBridgeEndpoint:        "ws://127.0.0.1:8080/onebot/v11/ws",
 		GroupTriggers:                []string{"Diana", "diana"},
+		GroupTriggerMode:             defaultAliasTriggerMode,
 		DisabledGroups:               []string{},
 		DisabledUsers:                []string{},
 		GroupAdmission:               GroupAdmission{}.WithDefaults(),
@@ -1134,6 +1152,10 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	} else if cfg.RecallReplyTTLSeconds > maximumRecallReplyTTLSeconds {
 		cfg.RecallReplyTTLSeconds = maximumRecallReplyTTLSeconds
 	}
+	if cfg.LLMIdentityMaskingEnabled == nil && cfg.LegacyLLMQQIDMaskingEnabled != nil {
+		cfg.LLMIdentityMaskingEnabled = copyBoolPointer(cfg.LegacyLLMQQIDMaskingEnabled)
+	}
+	cfg.LegacyLLMQQIDMaskingEnabled = nil
 	if cfg.LLMIdentityMaskingEnabled == nil {
 		cfg.LLMIdentityMaskingEnabled = boolPointer(true)
 	}
@@ -1270,6 +1292,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		OwnerLoginEnabled:            cfg.OwnerLoginEnabled,
 		OwnerLLMConfigEnabled:        copyBoolPointer(cfg.OwnerLLMConfigEnabled),
 		GroupTriggers:                append([]string(nil), cfg.GroupTriggers...),
+		GroupTriggerMode:             cfg.GroupTriggerMode,
 		DisabledGroups:               append([]string(nil), cfg.DisabledGroups...),
 		DisabledUsers:                append([]string(nil), cfg.DisabledUsers...),
 		GroupAdmission:               cfg.GroupAdmission.WithDefaults(),
@@ -1389,6 +1412,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		OwnerLoginEnabled:            payload.OwnerLoginEnabled,
 		OwnerLLMConfigEnabled:        copyBoolPointer(payload.OwnerLLMConfigEnabled),
 		GroupTriggers:                payload.GroupTriggers,
+		GroupTriggerMode:             payload.GroupTriggerMode,
 		DisabledGroups:               payload.DisabledGroups,
 		DisabledUsers:                payload.DisabledUsers,
 		GroupAdmission:               payload.GroupAdmission,
@@ -1429,7 +1453,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		RecallReplyMode:              payload.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        payload.RecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:    copyBoolPointer(payload.LLMIdentityMaskingEnabled),
+		LLMIdentityMaskingEnabled:    copyBoolPointer(firstNonNilBoolPointer(payload.LLMIdentityMaskingEnabled, payload.LegacyLLMQQIDMaskingEnabled)),
 		MaxContextTokens:             payload.MaxContextTokens,
 		RecentContextLimit:           payload.RecentContextLimit,
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
@@ -1529,6 +1553,16 @@ func boolValue(value *bool, fallback bool) bool {
 		return fallback
 	}
 	return *value
+}
+
+// firstNonNilBoolPointer 取第一个非空指针，用于新旧配置键共存期间的回落读取。
+func firstNonNilBoolPointer(values ...*bool) *bool {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func copyBoolPointer(value *bool) *bool {

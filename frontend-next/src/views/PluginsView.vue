@@ -208,117 +208,93 @@
       </details>
 
       <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
-        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'token'" :class="{ active: githubSettingsTab === 'token' }" @click="githubSettingsTab = 'token'">Token</button>
+        <button type="button" role="tab" :aria-selected="githubSettingsTab === 'config'" :class="{ active: githubSettingsTab === 'config' }" @click="githubSettingsTab = 'config'">配置信息</button>
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'repositories'" :class="{ active: githubSettingsTab === 'repositories' }" @click="githubSettingsTab = 'repositories'">仓库管理</button>
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'records'" :class="{ active: githubSettingsTab === 'records' }" @click="githubSettingsTab = 'records'">运行记录</button>
       </div>
 
-      <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="plugin-settings-section-head">
-        <h3>GitHub 认证</h3>
-        <p>公共 Token 同时用于仓库更新检查和 Issue 创建；具体仓库是否允许 Issue 操作，在“仓库管理”中配置。</p>
-        <div class="token-type-guide">
-          <p><strong>Fine-grained token</strong>：只授权选定的仓库和具体权限，适合只管理自己明确配置的仓库，权限更小、更安全。</p>
-          <p><strong>Classic token</strong>：权限范围更大；需要查看未加入白名单的仓库、跨账号或组织访问，或调用更多旧版 GitHub API 能力时使用。</p>
-          <p>公开仓库也可以匿名读取，但请求额度较低；配置 Token 后可提高额度。无论哪种 Token，都必须拥有目标仓库本身的访问权限。<a class="token-create-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer"><ExternalLink :size="13" aria-hidden="true" />创建 Token</a></p>
+      <template v-if="isGitHubSettings && githubSettingsTab === 'config'">
+        <div class="plugin-settings-section-head">
+          <h3>GitHub 认证</h3>
+          <p>
+            公共 Token 同时用于仓库更新检查和 Issue 创建；具体仓库是否允许 Issue 操作，在「仓库管理」中配置。
+            公开仓库也可以匿名读取，但请求额度较低。
+            <a class="token-create-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer"><ExternalLink :size="13" aria-hidden="true" />创建 Token</a>
+          </p>
+        </div>
+        <!-- Token 是这一页的主角，排在最前；认证方式和凭据列表都是围绕它的补充。 -->
+        <div class="stack plugin-settings-form">
+          <PluginSettingField
+            v-for="spec in githubTokenSpecs"
+            :key="spec.key"
+            :spec="spec"
+            :form="settingsForm"
+            :clearing="clearSecrets.includes(spec.key)"
+            :secret-configured="secretConfigured(spec.key)"
+            :secret-placeholder="secretPlaceholder(spec.key)"
+            @toggle-clear="toggleClearSecret"
+          />
+          <div v-if="repositoryPublishAuthSpec" class="field">
+            <label for="setting-github_auth_mode">{{ repositoryPublishAuthSpec.label }}</label>
+            <AppSelect id="setting-github_auth_mode" v-model="repositoryPublishForm.github_auth_mode" :options="repositoryPublishAuthSpec.options ?? []" />
+            <span v-if="repositoryPublishAuthSpec.description" class="hint">{{ repositoryPublishAuthSpec.description }}</span>
+          </div>
+        </div>
+        <RepositoryCredentialEditor
+          ref="credentialEditor"
+          :credentials="credentialList"
+          :configured-ids="configuredCredentialIDs"
+          :repository-credentials="repositoryCredentialMap"
+          @update:credentials="onCredentialsChanged"
+          @update:tokens="credentialTokenDrafts = $event"
+          @update:repository-credentials="onRepositoryCredentialsChanged"
+        />
+        <div v-if="githubNotifySpecs.length" class="plugin-settings-section-head plugin-settings-subsection">
+          <h3>通知</h3>
+          <p>仓库动态推送成什么样，以及要不要让机器人在推送后接一句话。</p>
+        </div>
+        <div class="stack plugin-settings-form">
+          <PluginSettingField
+            v-for="spec in githubNotifySpecs"
+            :key="spec.key"
+            :spec="spec"
+            :form="settingsForm"
+          />
+        </div>
+        <div class="plugin-settings-section-head plugin-settings-subsection">
+          <h3>运行</h3>
+          <p>两个超时管的是不同的事：一个是拉取仓库动态，一个是创建或评论 Issue。</p>
+        </div>
+        <div class="stack plugin-settings-form">
+          <PluginSettingField
+            v-for="spec in githubRuntimeSpecs"
+            :key="spec.key"
+            :spec="spec"
+            :form="settingsForm"
+          />
+          <PluginSettingField
+            v-if="repositoryPublishTimeoutSpec"
+            :spec="repositoryPublishTimeoutSpec"
+            :form="repositoryPublishForm"
+            field-id="setting-publish-timeout"
+          />
         </div>
         <button class="btn small ghost github-settings-link" type="button" @click="githubSettingsTab = 'repositories'">
-          去仓库管理配置用户和群聊
+          去仓库管理配置订阅、用户和群聊
           <ArrowRight :size="14" aria-hidden="true" />
         </button>
-      </div>
-      <RepositoryCredentialEditor
-        v-if="isGitHubSettings && githubSettingsTab === 'token'"
-        ref="credentialEditor"
-        :credentials="credentialList"
-        :configured-ids="configuredCredentialIDs"
-        :repository-credentials="repositoryCredentialMap"
-        @update:credentials="onCredentialsChanged"
-        @update:tokens="credentialTokenDrafts = $event"
-        @update:repository-credentials="onRepositoryCredentialsChanged"
-      />
-      <div v-if="isGitHubSettings && githubSettingsTab === 'token'" class="stack plugin-settings-form github-publish-global-settings">
-        <div v-if="repositoryPublishAuthSpec" class="field">
-          <label for="setting-github_auth_mode">{{ repositoryPublishAuthSpec.label }}</label>
-          <AppSelect id="setting-github_auth_mode" v-model="repositoryPublishForm.github_auth_mode" :options="repositoryPublishAuthSpec.options ?? []" />
-          <span v-if="repositoryPublishAuthSpec.description" class="hint">{{ repositoryPublishAuthSpec.description }}</span>
-        </div>
-        <div v-if="repositoryPublishTimeoutSpec" class="field">
-          <label for="setting-publish-timeout">{{ repositoryPublishTimeoutSpec.label }}</label>
-          <div class="plugin-setting-number">
-            <input id="setting-publish-timeout" v-model.number="repositoryPublishForm.timeout_seconds" class="input" type="number" :min="repositoryPublishTimeoutSpec.min" :max="repositoryPublishTimeoutSpec.max" :step="repositoryPublishTimeoutSpec.step || 1" />
-            <span v-if="repositoryPublishTimeoutSpec.unit" class="plugin-setting-unit">{{ repositoryPublishTimeoutSpec.unit }}</span>
-          </div>
-          <span v-if="repositoryPublishTimeoutSpec.description" class="hint">{{ repositoryPublishTimeoutSpec.description }}</span>
-        </div>
-      </div>
-      <div v-if="!isGitHubSettings || githubSettingsTab !== 'records'" class="stack plugin-settings-form">
-        <div v-for="spec in visibleSettingsSpecs" :key="spec.key" class="field">
-          <template v-if="spec.type === 'bool'">
-            <div class="plugin-setting-switch">
-              <div class="plugin-setting-switch-text">
-                <label :for="`setting-${spec.key}`">{{ spec.label }}</label>
-                <span v-if="spec.description" class="hint">{{ spec.description }}</span>
-              </div>
-              <label class="switch">
-                <input :id="`setting-${spec.key}`" v-model="activeSettingsForm[spec.key]" type="checkbox" />
-                <span class="track" aria-hidden="true"></span>
-              </label>
-            </div>
-          </template>
-          <template v-else>
-            <label :for="`setting-${spec.key}`">{{ spec.label }}</label>
-            <div v-if="spec.type === 'number'" class="plugin-setting-number">
-              <input
-                :id="`setting-${spec.key}`"
-                v-model.number="activeSettingsForm[spec.key]"
-                class="input"
-                type="number"
-                :min="spec.min"
-                :max="spec.max"
-                :step="spec.step || 1"
-              />
-              <span v-if="spec.unit" class="plugin-setting-unit">{{ spec.unit }}</span>
-            </div>
-            <AppSelect
-              v-else-if="spec.type === 'select'"
-              :id="`setting-${spec.key}`"
-              v-model="activeSettingsForm[spec.key]"
-              :options="spec.options ?? []"
-            />
-            <div v-else-if="spec.type === 'multi_select'" class="plugin-setting-checks">
-              <label v-for="option in spec.options ?? []" :key="option.value" class="check-item">
-                <input
-                  type="checkbox"
-                  :checked="multiSelected(spec.key, option.value)"
-                  @change="toggleMultiSelect(spec.key, option.value, $event)"
-                />
-                <span>{{ option.label }}</span>
-              </label>
-            </div>
-            <div v-else-if="spec.secret" class="input-group">
-              <input
-                :id="`setting-${spec.key}`"
-                v-model="activeSettingsForm[spec.key]"
-                class="input"
-                type="password"
-                autocomplete="off"
-                :disabled="clearSecrets.includes(spec.key)"
-                :placeholder="secretPlaceholder(spec.key)"
-              />
-              <button
-                v-if="secretConfigured(spec.key)"
-                class="btn small"
-                type="button"
-                @click="toggleClearSecret(spec.key)"
-              >
-                {{ clearSecrets.includes(spec.key) ? "取消清除" : "清除" }}
-              </button>
-            </div>
-            <textarea v-else-if="spec.type === 'text'" :id="`setting-${spec.key}`" v-model="activeSettingsForm[spec.key]" class="input plugin-setting-textarea" rows="4"></textarea>
-            <input v-else :id="`setting-${spec.key}`" v-model="activeSettingsForm[spec.key]" class="input" type="text" />
-            <span v-if="spec.description" class="hint">{{ spec.description }}</span>
-          </template>
-        </div>
+      </template>
+      <div v-if="!isGitHubSettings" class="stack plugin-settings-form">
+        <PluginSettingField
+          v-for="spec in visibleSettingsSpecs"
+          :key="spec.key"
+          :spec="spec"
+          :form="settingsForm"
+          :clearing="clearSecrets.includes(spec.key)"
+          :secret-configured="secretConfigured(spec.key)"
+          :secret-placeholder="secretPlaceholder(spec.key)"
+          @toggle-clear="toggleClearSecret"
+        />
       </div>
       <RepositoryWatchManager
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
@@ -419,6 +395,7 @@ import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
+import PluginSettingField from "../components/PluginSettingField.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryCredentialEditor from "../components/RepositoryCredentialEditor.vue";
@@ -485,7 +462,8 @@ function onRepositoryCredentialsChanged(value: Record<string, string>): void {
   settingsForm.value.repository_credentials = JSON.stringify(value);
 }
 const savingSettings = ref(false);
-const githubSettingsTab = ref<"token" | "repositories" | "records">("token");
+const openedSnapshot = ref("");
+const githubSettingsTab = ref<"config" | "repositories" | "records">("config");
 const joinedGroups = ref<BotGroupSummary[]>([]);
 const groupsLoading = ref(false);
 const groupsWarning = ref("");
@@ -497,20 +475,36 @@ const isGitHubSettings = computed(() => settingsTarget.value?.manifest.id === re
 const repositoryPublishAuthSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_auth_mode"));
 const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
 const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
-const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() => {
-  if (!isGitHubSettings.value) return settingsSpecs.value;
-  if (githubSettingsTab.value === "token") return settingsSpecs.value.filter((spec) => spec.key === "github_token");
-  if (githubSettingsTab.value === "records") return [];
-  const repositoryManagedKeys = new Set(["github_token", "allowed_repositories", "user_repository_access", "group_repository_access", "issue_draft_user_access", "issue_draft_group_access", "issue_manager_user_access", "issue_manager_group_access", "user_github_tokens", "user_github_token_users", "user_github_auth_modes",
-    // 凭据由 Token 标签页的编辑器和仓库管理维护，不再渲染成裸的文本框。
-    "github_credentials", "github_credential_tokens", "github_credential_ids", "repository_credentials"]);
-  return settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key));
-});
+const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() =>
+  isGitHubSettings.value ? [] : settingsSpecs.value
+);
+// 这些键要么由仓库管理和凭据编辑器维护，要么是不该渲染成裸文本框的内部存档。
+const repositoryManagedKeys = new Set([
+  "github_token", "allowed_repositories", "user_repository_access", "group_repository_access",
+  "issue_draft_user_access", "issue_draft_group_access", "issue_manager_user_access", "issue_manager_group_access",
+  "user_github_tokens", "user_github_token_users", "user_github_auth_modes",
+  "github_credentials", "github_credential_tokens", "github_credential_ids", "repository_credentials",
+]);
+const githubTokenSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => spec.key === "github_token"));
+// 通知相关的设置按这个顺序排；跟评开关排第一，它是最常被找的那个。
+const githubNotifyKeys = ["ask_agent", "template_header", "summary_commit_limit"];
+const githubGeneralSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key)));
+const githubNotifySpecs = computed<PluginSettingSpec[]>(() =>
+  githubNotifyKeys
+    .map((key) => githubGeneralSpecs.value.find((spec) => spec.key === key))
+    .filter((spec): spec is PluginSettingSpec => Boolean(spec))
+);
+// 剩下的一律归到「运行」，这样以后新增设置项不会因为漏登记而从界面上消失。
+const githubRuntimeSpecs = computed<PluginSettingSpec[]>(() =>
+  githubGeneralSpecs.value.filter((spec) => !githubNotifyKeys.includes(spec.key))
+);
 const activeSettingsForm = computed(() => settingsForm.value);
+// 只认已经保存成功的 Token。输入框里刚打的字还没落库，若据此把轮询间隔
+// 从 3600 秒改成 60 秒，保存一旦失败就会拿匿名身份高频撞 GitHub 的限额。
 const repositoryWatchTokenConfigured = computed(() => {
   const key = "github_token";
   if (clearSecrets.value.includes(key)) return false;
-  return String(settingsForm.value[key] ?? "").trim() !== "" || secretConfigured(key);
+  return secretConfigured(key);
 });
 
 function upsert(state: PluginState): void {
@@ -608,8 +602,10 @@ function openSettings(plugin: PluginState): void {
   }
   repositoryPublishForm.value = publishForm;
   clearSecrets.value = [];
+  credentialTokenDrafts.value = {};
   settingsTarget.value = plugin;
-  githubSettingsTab.value = "token";
+  githubSettingsTab.value = "config";
+  openedSnapshot.value = settingsSnapshot();
   if (isGitHubSettings.value) void loadJoinedGroups();
 }
 
@@ -706,38 +702,55 @@ function toggleClearSecret(key: string): void {
   activeSettingsForm.value[key] = "";
 }
 
-function multiSelected(key: string, option: string): boolean {
-  const value = activeSettingsForm.value[key];
-  return Array.isArray(value) && value.includes(option);
+// 打开时的快照，用来判断关闭前有没有未保存的改动。
+function settingsSnapshot(): string {
+  return JSON.stringify([settingsForm.value, repositoryPublishForm.value]);
 }
 
-function toggleMultiSelect(key: string, option: string, event: Event): void {
-  const checked = (event.target as HTMLInputElement).checked;
-  const current: string[] = Array.isArray(activeSettingsForm.value[key]) ? [...activeSettingsForm.value[key]] : [];
-  if (checked && !current.includes(option)) {
-    current.push(option);
-  }
-  if (!checked) {
-    const index = current.indexOf(option);
-    if (index >= 0) {
-      current.splice(index, 1);
-    }
-  }
-  activeSettingsForm.value[key] = current;
+function settingsDirty(): boolean {
+  if (Object.keys(credentialTokenDrafts.value).length > 0) return true;
+  if (clearSecrets.value.length > 0) return true;
+  return settingsSnapshot() !== openedSnapshot.value;
 }
 
-function closeSettings(): void {
+function discardSettings(): void {
   settingsTarget.value = null;
   settingsForm.value = {};
   repositoryPublishForm.value = {};
   credentialTokenDrafts.value = {};
   clearSecrets.value = [];
+  openedSnapshot.value = "";
   if (viewQuery().has("settings")) {
     navigate("plugins");
   }
 }
 
-function resetSettings(): void {
+async function closeSettings(): Promise<void> {
+  // 保存进行中关掉弹窗会让人以为改动没生效，也会把「保存到一半」的状态藏起来。
+  if (savingSettings.value) return;
+  if (settingsDirty()) {
+    const confirmed = await askConfirm({
+      title: "放弃未保存的改动？",
+      message: "这个弹窗里的改动还没保存，关闭后会丢失。",
+      confirmLabel: "放弃改动",
+      danger: true,
+    });
+    if (!confirmed) return;
+  }
+  discardSettings();
+}
+
+async function resetSettings(): Promise<void> {
+  // 「恢复默认」会连凭据列表和仓库绑定一起清空，这是不可逆的，必须先问一句。
+  const confirmed = await askConfirm({
+    title: "恢复默认设置？",
+    message: isGitHubSettings.value
+      ? "所有设置项会回到默认值，已保存的 Token、凭据列表和仓库绑定都会在保存后被清除。仓库订阅本身不受影响。"
+      : "所有设置项会回到默认值，已保存的凭据会在保存后被清除。",
+    confirmLabel: "恢复默认",
+    danger: true,
+  });
+  if (!confirmed) return;
   const form: Record<string, any> = {};
   for (const spec of settingsSpecs.value) {
     form[spec.key] = spec.default;
@@ -748,6 +761,18 @@ function resetSettings(): void {
     for (const spec of repositoryPublishSpecs.value) publishForm[spec.key] = spec.default;
     repositoryPublishForm.value = publishForm;
   }
+  // 密钥项置空在后端是「保持不变」的意思，光靠恢复默认清不掉，
+  // 必须显式进 clear_secrets，否则这个按钮名不副实。
+  credentialTokenDrafts.value = {};
+  credentialEditor.value?.clearDrafts();
+  const clears = new Set(clearSecrets.value);
+  for (const spec of settingsSpecs.value) {
+    if (spec.secret && secretConfigured(spec.key)) clears.add(spec.key);
+  }
+  for (const spec of repositoryPublishSpecs.value) {
+    if (spec.secret && repositoryPublishTarget.value?.secrets_configured?.[spec.key]) clears.add(spec.key);
+  }
+  clearSecrets.value = [...clears];
 }
 
 // 只提交与默认值不同的键：等于默认值的键不落库，插件默认值升级后能自动跟随。
@@ -809,7 +834,16 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
       const sharedToken = String(settingsForm.value.github_token ?? "").trim();
       if (sharedToken) publishPayload.github_token = sharedToken;
       const publishClears = clearSecrets.value.includes("github_token") ? ["github_token"] : [];
-      const publishUpdated = await updatePluginSettings(repositoryPublishPluginID, publishPayload, publishClears);
+      let publishUpdated;
+      try {
+        publishUpdated = await updatePluginSettings(repositoryPublishPluginID, publishPayload, publishClears);
+      } catch (error) {
+        // 两次请求没有事务：第一次已经落库了，这里失败会留下半保存状态。
+        // 与其只弹一句「保存失败」，不如说清楚哪半边生效了，并把界面刷成真实状态。
+        plugins.value = await listPlugins().catch(() => plugins.value);
+        const reason = error instanceof Error ? error.message : "未知错误";
+        throw new Error(`Token 与仓库检查设置已保存，但 Issue 权限部分没保存成功：${reason}。请重新打开设置检查 Issue 相关配置。`);
+      }
       upsert(publishUpdated);
       for (const spec of repositoryPublishSpecs.value) {
         if (spec.secret) repositoryPublishForm.value[spec.key] = "";
@@ -821,9 +855,10 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
     credentialTokenDrafts.value = {};
     credentialEditor.value?.clearDrafts();
     clearSecrets.value = [];
+    openedSnapshot.value = settingsSnapshot();
     if (closeAfterSave) {
       toastSuccess(`已保存 ${target.manifest.name} 的设置`);
-      closeSettings();
+      discardSettings();
     }
   } finally {
     savingSettings.value = false;

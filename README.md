@@ -242,7 +242,7 @@ WebUI 从首次启动起强制登录，本机和公网访问同一套规则。�
 「机器人插件」区域可以启用、停用和配置官方内置插件，内置能力无需安装或卸载。
 
 - **链接解析**：解析并发送 B 站、YouTube、X、小红书、抖音的图片或视频；知乎、微博、GitHub 只抓标题描述。大小、时长、清晰度、图集数量可调。各平台 Cookie、yt-dlp Cookie 文件和代理地址直接在插件设置里填，优先于同名环境变量；凭据保存后读接口只回传「已配置」标记。卡片内会显示 `yt-dlp`、`ffmpeg`、`node` 的探测结果，并可通过受控的包管理器安装缺失项。
-- **文件解析**：支持 OneBot 文件段和文本类文件链接，提取内容作为 LLM 上下文。
+- **文件解析**：支持 OneBot 文件段和文件直链，提取内容作为 LLM 上下文。覆盖纯文本、配置、常见源码、PDF、Office（docx / xlsx / pptx）、ODF（odt / ods / odp）和 EPUB；文件大小上限在插件设置里按 KB/MB/GB 选择单位填写。
 - **图片文字识别**：图片进上下文前先做一次 OCR，可选 LLM 视觉转写、自托管 OCR 服务（PaddleOCR / RapidOCR）或本地 `tesseract`，后两者完全离线。交付方式可选「图片 + 文字」或「仅文字」——后者让不支持多模态的对话模型也能处理图片消息。
 - **联网搜索**：默认安装并启用，可停用和配置但不能卸载。独立于内置 Agent 开关，未开 Agent 时不会同时开放本地文件、命令或浏览器工具。
 
@@ -284,6 +284,9 @@ WebUI 里能配的都不必写环境变量。下面是常用项，完整说明�
 | `APP_DB_PATH` | `data/diana.db` | 本地 SQLite 配置数据库路径 |
 | `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
 | `DIANA_TRUSTED_PROXIES` | 空 | 可信反向代理的 IP 或 CIDR，逗号分隔；设置后才解析 `X-Forwarded-For` |
+| `DIANA_SERVICE_MANAGER` | 自动探测 | 托管本服务的进程管理器：`launchd`、`systemd` 或 `none`。设置后自更新不再自行启动新实例，改为请管理器重启，避免和 `KeepAlive`／`Restart=` 抢监听端口 |
+| `DIANA_SERVICE_LABEL` | 自动探测 | launchd job label 或 systemd unit 名，例如 `com.suink.diana`、`diana.service` |
+| `DIANA_SERVICE_DOMAIN` | 自动探测 | launchd 域（`gui/<uid>` 或 `system`）；systemd 填 `user` 或 `system` |
 | `DIANA_ADMIN_USERNAME` | 自动随机生成 | 首次初始化的管理员账号，之后以 SQLite 中的凭据为准 |
 | `DIANA_ADMIN_PASSWORD` | 自动随机生成 | 首次初始化的管理员密码，之后以 SQLite 中的凭据为准 |
 | `LLM_PROVIDER` | `openai_compatible` | `openai_compatible` / `gemini` / `anthropic` |

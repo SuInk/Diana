@@ -334,7 +334,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key:         repositoryPublishSettingTimeout,
-				Label:       "GitHub 请求超时",
+				Label:       "Issue 操作超时",
 				Description: "单次 GitHub API 请求的最长等待时间。创建或评论超时后只执行只读对账，不盲目重试写入。",
 				Type:        PluginSettingTypeNumber,
 				Default:     defaultRepositoryPublishTimeoutSecs,

@@ -52,6 +52,7 @@ type dianaBotConfigSnapshot struct {
 	OwnerID                         string                   `json:"owner_id,omitempty"`
 	OwnerLoginEnabled               bool                     `json:"owner_login_enabled"`
 	GroupTriggers                   []string                 `json:"group_triggers,omitempty"`
+	GroupTriggerMode                AliasTriggerMode         `json:"group_trigger_mode,omitempty"`
 	DisabledGroups                  []string                 `json:"disabled_groups,omitempty"`
 	DisabledUsers                   []string                 `json:"disabled_users,omitempty"`
 	GroupAdmission                  GroupAdmission           `json:"group_admission"`
@@ -266,6 +267,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		OwnerID:                         cfg.OwnerID,
 		OwnerLoginEnabled:               cfg.OwnerLoginEnabled,
 		GroupTriggers:                   append([]string(nil), cfg.GroupTriggers...),
+		GroupTriggerMode:                aliasTriggerMode(cfg),
 		DisabledGroups:                  append([]string(nil), cfg.DisabledGroups...),
 		DisabledUsers:                   append([]string(nil), cfg.DisabledUsers...),
 		GroupAdmission:                  cfg.GroupAdmission.WithDefaults(),

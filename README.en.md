@@ -284,6 +284,9 @@ Anything configurable in the WebUI needs no environment variable. The common one
 | `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database |
 | `LOG_PATH` | empty | Log file path; when set, output goes to both stdout and the file |
 | `DIANA_TRUSTED_PROXIES` | empty | Trusted reverse proxy IPs or CIDRs, comma separated; `X-Forwarded-For` is parsed only when set |
+| `DIANA_SERVICE_MANAGER` | auto-detected | Process manager owning this service: `launchd`, `systemd`, or `none`. When set, the self-updater stops launching its own instance and asks the manager to restart instead, so it no longer races `KeepAlive`/`Restart=` for the listening port |
+| `DIANA_SERVICE_LABEL` | auto-detected | launchd job label or systemd unit name, e.g. `com.suink.diana`, `diana.service` |
+| `DIANA_SERVICE_DOMAIN` | auto-detected | launchd domain (`gui/<uid>` or `system`); for systemd use `user` or `system` |
 | `DIANA_ADMIN_USERNAME` | random | Administrator account for the first initialization only |
 | `DIANA_ADMIN_PASSWORD` | random | Administrator password for the first initialization only |
 | `LLM_PROVIDER` | `openai_compatible` | `openai_compatible` / `gemini` / `anthropic` |
