@@ -1147,3 +1147,60 @@ func TestInternalPluginIsAlwaysOnAndHidden(t *testing.T) {
 		}
 	}
 }
+
+// 未勾选的平台会整条跳过，这条路径以前完全静默：用户只看到「链接没反应」，
+// 日志和调试追踪里什么都查不到。跳过必须写一条失败日志。
+func TestResolverLogsDisabledPlatformSkip(t *testing.T) {
+	logs := &captureAppLogs{}
+	plugin := &ResolverPlugin{}
+	text := "复制打开小红书 http://xhslink.com/a/8bV2Sd1cLkVfb"
+	resp, err := plugin.Handle(context.Background(), PluginRequest{
+		Text:    text,
+		Event:   MessageEvent{Kind: EventKindGroup, RawMessage: text},
+		AppLogs: logs,
+		Settings: SettingValues{
+			resolverSettingEnabledPlatforms: []any{"bilibili"},
+			resolverSettingDownloadMedia:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("expected the disabled platform to produce no response, got %+v", resp)
+	}
+	entries := logs.entriesSnapshot()
+	found := false
+	for _, entry := range entries {
+		if strings.Contains(entry.Detail, "platform_disabled") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a platform_disabled log entry, got %+v", entries)
+	}
+}
+
+// /m/ 既是直播短链也是普通笔记分享短链。跳转成功后必须以最终地址为准，
+// 否则任何跳转到非笔记页的 /m/ 短链都会被误报成「暂不支持直播链接」。
+func TestXiaohongshuUnresolvedStatus(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		pageURL string
+		want    string
+	}{
+		{"live final url", "http://xhslink.com/m/abc", "https://www.xiaohongshu.com/livestream/dynpath/123", "live_link"},
+		{"note share short link that landed elsewhere", "http://xhslink.com/m/abc", "https://www.xiaohongshu.com/user/profile/123", "unsupported_link: https://www.xiaohongshu.com/user/profile/123"},
+		{"redirect never left the short domain", "http://xhslink.com/m/abc", "http://xhslink.com/m/abc", "live_link"},
+		{"a-style short link", "http://xhslink.com/a/abc", "https://www.xiaohongshu.com", "unsupported_link: https://www.xiaohongshu.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := xiaohongshuUnresolvedStatus(tc.raw, tc.pageURL); got != tc.want {
+				t.Fatalf("xiaohongshuUnresolvedStatus(%q, %q) = %q, want %q", tc.raw, tc.pageURL, got, tc.want)
+			}
+		})
+	}
+}

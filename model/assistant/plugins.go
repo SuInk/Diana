@@ -1235,9 +1235,11 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	legacyResolver := p.videoDownloader != nil || p.twitterPostFetcher != nil || p.twitterMediaDownloader != nil
 	for _, raw := range urls {
 		if parsed, err := url.Parse(raw); err == nil {
-			key, _ := platformKeyAndLabel(parsed.Hostname())
+			key, label := platformKeyAndLabel(parsed.Hostname())
 			if key != "" && !slices.Contains(opts.enabledPlatforms, key) {
-				// 未启用的平台整条跳过，不进上下文。
+				// 未启用的平台整条跳过，不进上下文。跳过必须留痕，否则用户
+				// 只看到「链接没反应」，无法区分是开关没勾还是解析失败。
+				recordResolverMediaLog(ctx, req, raw, key, false, "platform_disabled: 「"+label+"」未在链接解析的启用平台里勾选")
 				continue
 			}
 		}
