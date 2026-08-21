@@ -9322,6 +9322,7 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				"time_label": repositoryWatchPullTimeLabel(pullRequest.Status),
 				"time":       formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)),
 				"url":        strings.TrimSpace(pullRequest.URL),
+				"commits":    renderRepositoryWatchPullCommits(pullRequest),
 			}))
 		}
 	}
@@ -9477,6 +9478,31 @@ func repositoryWatchShortCommitURL(rawURL, shortSHA string) string {
 		return rawURL
 	}
 	return rawURL[:index+1] + shortSHA
+}
+
+// renderRepositoryWatchPullCommits 把本次新增的提交渲染成缩进的几行。「PR 有更新」
+// 本身看不出改了什么，得点进去才知道；把提交列出来就省了这一跳。没有新增提交时返回
+// 空串，模板会把整行删掉。
+func renderRepositoryWatchPullCommits(pullRequest repositoryWatchPullRequest) string {
+	if len(pullRequest.Commits) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(pullRequest.Commits)+1)
+	for _, commit := range pullRequest.Commits {
+		sha := strings.TrimSpace(commit.SHA)
+		if len(sha) > 7 {
+			sha = sha[:7]
+		}
+		line := sha
+		if title := strings.TrimSpace(commit.Title); title != "" {
+			line += " " + title
+		}
+		lines = append(lines, line)
+	}
+	if pullRequest.OmittedCommits > 0 {
+		lines = append(lines, fmt.Sprintf("还有 %d 个提交未列出", pullRequest.OmittedCommits))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func repositoryWatchPullStatusLabel(status string) string {
