@@ -249,6 +249,9 @@ type Runtime struct {
 	llmFactory                LLMProviderFactory
 	llmCfgFactory             LLMProviderConfigFactory
 	llmRegistry               *llm.ProviderRegistry
+	replyInterruptMu          sync.Mutex
+	recalledInbound           map[string]time.Time
+	latestDirectedInbound     map[string]directedInboundMark
 	cancel                    context.CancelFunc
 	runCtx                    context.Context
 	running                   bool
@@ -1186,6 +1189,8 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	if event.Kind == EventKindNotice {
 		if isRecallNotice(event) {
 			event = r.enrichRecallNotice(ctx, event)
+			// 撤回通知不走队列、即时到达：登记后还没送出的回复会在发送前放弃。
+			r.noteRecalledInbound(event)
 		}
 		if r.plugins != nil {
 			event = r.plugins.ObserveEvent(ctx, event)
@@ -1217,6 +1222,9 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 			return nil
 		}
 	}
+
+	// 在入队之前登记直呼消息，保证旧消息处理时能看到更新的直呼。
+	r.noteDirectedInbound(event)
 
 	r.mu.RLock()
 	inboundStore := r.inboundStore
@@ -1431,7 +1439,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
-	replyCtx := withReplySuppressionSendGuard(ctx)
+	replyCtx := withReplyTriggerGate(withReplySuppressionSendGuard(ctx))
 	reply, err := r.replyTo(replyCtx, event, text)
 	record.Duration = time.Since(start).Milliseconds()
 	if err != nil {
@@ -1444,6 +1452,18 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			setEventRecordOutcome(&record, "ignored_response_suppression")
 			r.record(record)
 			return "ignored_response_suppression", nil
+		}
+		if errors.Is(err, errReplyTriggerRecalled) {
+			setEventRecordOutcome(&record, inboundOutcomeRecalled)
+			record.Reason = "触发消息已被撤回，放弃这条回复"
+			r.record(record)
+			return inboundOutcomeRecalled, nil
+		}
+		if errors.Is(err, errReplyTriggerSuperseded) {
+			setEventRecordOutcome(&record, "superseded_follow_up")
+			record.Reason = "同一用户随后又发来直呼消息，由新消息一并回答"
+			r.record(record)
+			return "superseded_follow_up", nil
 		}
 		var qualityErr *proactiveReplyQualityRejectedError
 		if errors.As(err, &qualityErr) {
@@ -7283,6 +7303,9 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 			return nil, errReplySuppressedBeforeSend
 		}
 	}
+	if err := r.interruptedReplyError(ctx, event); err != nil {
+		return nil, err
+	}
 	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded {
 		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
 		return nil, errInboundTurnSuperseded
@@ -7784,6 +7807,9 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 			r.recordReplySuppressionBlocked(event, restriction)
 			return nil, errReplySuppressedBeforeSend
 		}
+	}
+	if err := r.interruptedReplyError(ctx, event); err != nil {
+		return nil, err
 	}
 	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded {
 		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
