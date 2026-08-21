@@ -223,7 +223,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	result, err := runPluginTaskSafely(ctx, item.task, services)
 	if err != nil {
 		if ctx.Err() == nil || rootCtx.Err() == nil {
-			message := fmt.Sprintf("任务 %s 执行失败：%s", item.id, publicQQErrorMessage(err))
+			message := fmt.Sprintf("任务 %s 执行失败：%s", item.id, publicChatErrorMessage(err))
 			_ = r.sendSubagentFollowup(rootCtx, item.event, message)
 			r.recordSubagentTaskLog(context.Background(), item, applog.KindError, applog.LevelError, "后台任务执行失败", err.Error())
 		}
@@ -405,10 +405,10 @@ func (r *Runtime) recordSubagentTaskLog(ctx context.Context, item reservedSubage
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "qqbot.subagent_task",
+		Action:  "chatbot.subagent_task",
 		Message: message,
 		Detail:  detail,
-		Actor:   qqEventActor(item.event),
+		Actor:   oneBotEventActor(item.event),
 		Target:  item.id,
 		Metadata: map[string]any{
 			"kind":     item.task.Kind,

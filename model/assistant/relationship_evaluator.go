@@ -64,7 +64,7 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	messages := []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 QQ 机器人 Diana/嘉然的关系变化评估器。请判断当前发言是否对“当前发言者与机器人之间的关系”产生了真实、明确的变化。
+			Content: strings.TrimSpace(`你是聊天机器人 Diana 的关系变化评估器。请判断当前发言是否对“当前发言者与机器人之间的关系”产生了真实、明确的变化。
 
 必须遵守：
 1. 必须理解整句话、引用对象和最近对话，不得按关键词、子串、前缀或正则机械加减分。
@@ -212,9 +212,9 @@ func (r *Runtime) recordRelationshipEvaluation(ctx context.Context, event Messag
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.relationship_evaluation",
+		Action:  "chatbot.relationship_evaluation",
 		Message: "LLM 已完成关系变化评估",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":      event.GroupID,
@@ -237,10 +237,10 @@ func (r *Runtime) recordRelationshipEvaluationError(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.relationship_evaluation",
+		Action:  "chatbot.relationship_evaluation",
 		Message: "关系变化语义评估失败，本条不改变好感度",
 		Detail:  err.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID,

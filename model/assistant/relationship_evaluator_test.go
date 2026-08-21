@@ -52,7 +52,7 @@ func TestRelationshipEvaluationUsesRouterSemantics(t *testing.T) {
 	}}
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["user"] = UserMemoryProfile{UserID: "user", Favorability: 17, MessageCount: 8}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	runtime.SetUserMemoryStore(memory)
 	var usedModel string
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
@@ -85,7 +85,7 @@ func TestRelationshipEvaluationAllowsNaturalInteractionBeforeThreshold(t *testin
 	provider := &capturingLLMProvider{reply: `{"should_update":true,"delta":1,"confidence":0.96,"reason":"初识阶段的一次真实提问会带来轻微熟悉"}`}
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["user"] = UserMemoryProfile{UserID: "user", Favorability: 19, MessageCount: 8}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetUserMemoryStore(memory)
@@ -117,7 +117,7 @@ func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 	}}
 	memory := newMemoryUserMemoryStore()
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot", OwnerID: "owner", AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner", AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetUserMemoryStore(memory)
@@ -161,7 +161,7 @@ func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 	}
 	var relationshipLog *applog.Entry
 	for index := range logs.entries {
-		if logs.entries[index].Action == "qqbot.relationship_evaluation" {
+		if logs.entries[index].Action == "chatbot.relationship_evaluation" {
 			relationshipLog = &logs.entries[index]
 			break
 		}
@@ -175,7 +175,7 @@ func TestRelationshipEvaluationDisablesNaturalInteractionAtThreshold(t *testing.
 	provider := &capturingLLMProvider{reply: `{"should_update":false,"delta":0,"confidence":0.98,"reason":"已达到自然熟悉阈值，普通提问不再加分"}`}
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["user"] = UserMemoryProfile{UserID: "user", Favorability: naturalInteractionFavorabilityThreshold, MessageCount: 10}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetUserMemoryStore(memory)

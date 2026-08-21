@@ -37,7 +37,7 @@ func TestMemoryGateUsesMemoryProfileAndExistingKeys(t *testing.T) {
 	}}}
 	usedModel := ""
 	provider := &capturingLLMProvider{reply: `{"memories":[{"action":"upsert","key":"preference.food.spicy","kind":"preference","topic":"饮食偏好","entity":"辣味食物","content":"Alice现在不喜欢辣味食物","evidence":"我现在不吃辣了","source_type":"explicit","confidence":0.99,"importance":0.75,"visibility":"session","sensitive":false,"retention_days":0}]}`}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), profiles, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), profiles, nil, nil, nil)
 	runtime.SetStructuredMemoryStore(memory)
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
 		usedModel = cfg.Model
@@ -181,7 +181,7 @@ func TestStructuredMemoryRankingDiversifiesNearDuplicates(t *testing.T) {
 
 func TestMemoryEnqueueSkipsResolverAndMediaOnlyMessages(t *testing.T) {
 	memory := &testStructuredMemoryStore{}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetStructuredMemoryStore(memory)
 	resolver := MessageEvent{
 		Kind: EventKindGroup, GroupID: "123", UserID: "user", MessageID: "link",
@@ -427,7 +427,7 @@ func TestMemoryContextKeepsUserScopedMemoriesWhenCrossGroupIsOff(t *testing.T) {
 		Topic: "猫娘设定", Entity: "Diana", Content: "猫娘模式下句尾说老吴，炸毛时说哈",
 		Visibility: MemoryVisibilityUser, Confidence: 0.98, Importance: 0.8,
 	}}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", CrossGroupMemoryEnabled: boolPointer(false)}.WithDefaults(),
+	runtime := NewRuntime(BotConfig{BotAccount: "42", CrossGroupMemoryEnabled: boolPointer(false)}.WithDefaults(),
 		nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetStructuredMemoryStore(memory)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m-1", RawMessage: "继续扮猫娘"}
@@ -456,7 +456,7 @@ func TestMemoryGateFetchesRelevantMemoriesBeforeImportantOnes(t *testing.T) {
 	}}
 	memory := &testStructuredMemoryStore{}
 	provider := &capturingLLMProvider{reply: `{"memories":[]}`}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), profiles, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), profiles, nil, nil, nil)
 	runtime.SetStructuredMemoryStore(memory)
 	runtime.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) { return provider, nil })
 

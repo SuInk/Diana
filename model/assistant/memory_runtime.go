@@ -75,7 +75,7 @@ func (r *Runtime) runMemoryCoordinator(ctx context.Context, leaseOwner string, r
 	if releaseStale {
 		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := store.ReleaseMemoryJobLeases(releaseCtx, ""); err != nil {
-			log.Printf("qqbot memory stale lease recovery failed: %v", err)
+			log.Printf("chatbot memory stale lease recovery failed: %v", err)
 		}
 		cancel()
 	}
@@ -92,7 +92,7 @@ func (r *Runtime) runMemoryCoordinator(ctx context.Context, leaseOwner string, r
 	workers.Wait()
 	releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := store.ReleaseMemoryJobLeases(releaseCtx, leaseOwner); err != nil {
-		log.Printf("qqbot memory lease release failed: %v", err)
+		log.Printf("chatbot memory lease release failed: %v", err)
 	}
 	cancel()
 }
@@ -112,7 +112,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			job, ok, err := store.ClaimNextMemoryJob(claimCtx, leaseOwner, time.Now().Add(memoryLeaseDuration))
 			cancel()
 			if err != nil {
-				log.Printf("qqbot memory job claim failed: %v", err)
+				log.Printf("chatbot memory job claim failed: %v", err)
 				break
 			}
 			if !ok {
@@ -131,7 +131,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			}
 			commitCancel()
 			if err != nil {
-				log.Printf("qqbot memory job state update failed: %v", err)
+				log.Printf("chatbot memory job state update failed: %v", err)
 			}
 		}
 	}
@@ -202,7 +202,7 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 	messages := []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 Diana/嘉然的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。
+			Content: strings.TrimSpace(`你是 Diana 的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。
 
 必须遵守：
 1. 逐句理解语义、指代、引用和最近上下文，不得用关键词、前缀、子串或正则机械判断。
@@ -300,7 +300,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	messages := []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 Diana/嘉然的会话记忆整合器。请把一批较早的原始聊天事件整理为按时间和主题组织的长期会话摘要，原始事件会继续保留。
+			Content: strings.TrimSpace(`你是 Diana 的会话记忆整合器。请把一批较早的原始聊天事件整理为按时间和主题组织的长期会话摘要，原始事件会继续保留。
 
 要求：
 1. 理解整段对话后按主题聚合，保留人物、时间、事件、决定、未解决问题和事实变化；删除寒暄、重复和无后续价值的噪声。
@@ -486,7 +486,7 @@ func (r *Runtime) enqueueEventMemory(event MessageEvent, text string) {
 	})
 	cancel()
 	if err != nil {
-		log.Printf("qqbot memory event enqueue failed: %v", err)
+		log.Printf("chatbot memory event enqueue failed: %v", err)
 		return
 	}
 	if inserted {
@@ -513,7 +513,7 @@ func (r *Runtime) enqueueContextSummary(session string, events []MessageEvent) {
 	})
 	cancel()
 	if err != nil {
-		log.Printf("qqbot memory summary enqueue failed: %v", err)
+		log.Printf("chatbot memory summary enqueue failed: %v", err)
 		return
 	}
 	if inserted {
@@ -553,10 +553,10 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 		if current, ok := set.Current(); ok {
 			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, true, run)
 		}
-		return "", fmt.Errorf("qqbot: no llm profile is configured")
+		return "", fmt.Errorf("chatbot: no llm profile is configured")
 	}
 	if factory == nil {
-		return "", fmt.Errorf("qqbot: llm provider is not configured")
+		return "", fmt.Errorf("chatbot: llm provider is not configured")
 	}
 	client, err := factory()
 	if err != nil {
@@ -590,7 +590,7 @@ func memoryEventEligible(cfg BotConfig, event MessageEvent, text string) bool {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return false
 	}
-	if strings.TrimSpace(event.UserID) == "" || (strings.TrimSpace(cfg.BotQQ) != "" && event.UserID == cfg.BotQQ) {
+	if strings.TrimSpace(event.UserID) == "" || (strings.TrimSpace(cfg.BotAccount) != "" && event.UserID == cfg.BotAccount) {
 		return false
 	}
 	text = strings.TrimSpace(text)

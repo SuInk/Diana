@@ -234,7 +234,7 @@ func TestResolverPluginExtractsURLFromRawMessage(t *testing.T) {
 		return ""
 	}
 	resp, err := plugin.Handle(context.Background(), PluginRequest{
-		Event: MessageEvent{RawMessage: "分享 https://github.com/SuInk/diana-qq-bot"},
+		Event: MessageEvent{RawMessage: "分享 https://github.com/SuInk/Diana"},
 	})
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)
@@ -289,7 +289,7 @@ func TestResolverPluginDownloadsPlatformVideo(t *testing.T) {
 	if len(resp.ForwardMessages[1].VideoURLs) != 1 || resp.ForwardMessages[1].VideoURLs[0] != "/tmp/diana-test-video.mp4" {
 		t.Fatalf("video node = %#v", resp.ForwardMessages[1])
 	}
-	if len(logs.entries) != 1 || logs.entries[0].Action != "qqbot.resolver.video_download" || logs.entries[0].Kind != applog.KindOperation {
+	if len(logs.entries) != 1 || logs.entries[0].Action != "chatbot.resolver.video_download" || logs.entries[0].Kind != applog.KindOperation {
 		t.Fatalf("logs = %#v", logs.entries)
 	}
 }
@@ -307,7 +307,7 @@ func TestResolverPluginDedupesHTMLEscapedURLs(t *testing.T) {
 	}
 }
 
-func TestResolverPluginExtractsEscapedQQMiniAppURL(t *testing.T) {
+func TestResolverPluginExtractsEscapedMiniAppURL(t *testing.T) {
 	raw := `[CQ:json,data={"meta":{"detail_1":{"title":"哔哩哔哩","qqdocurl":"https:\/\/b23.tv\/tOnAfAQ?share_medium=android&amp;share_source=qq"}}}]`
 	urls := extractResolverRequestURLs(PluginRequest{
 		Event: MessageEvent{RawMessage: raw},
@@ -524,7 +524,7 @@ func (s *fakePDFTextSession) PageText(_ context.Context, page int) (string, erro
 	return s.texts[page], nil
 }
 
-// TestFileParserPluginResolvesOneBotFileID 验证 QQ 文件段只有 file_id 时会调用 OneBot 获取文件。
+// TestFileParserPluginResolvesOneBotFileID 验证 OneBot 文件段只有 file_id 时会调用 OneBot 获取文件。
 func TestFileParserPluginResolvesOneBotFileID(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "report.txt")

@@ -40,21 +40,21 @@ func (c *multiChannelProbe) Status() ChannelStatus { return c.status }
 func (c *multiChannelProbe) Close() error          { return nil }
 
 func TestMultiChannelRoutesRepliesToSourceProfile(t *testing.T) {
-	qq := &multiChannelProbe{status: ChannelStatus{Connected: true, SelfID: "qq-bot"}}
+	oneBot := &multiChannelProbe{status: ChannelStatus{Connected: true, SelfID: "onebot"}}
 	telegram := &multiChannelProbe{status: ChannelStatus{Connected: true, SelfID: "tg-bot"}}
 	channel := NewMultiChannel([]ChannelBinding{
-		{ProfileID: "qq-profile", Platform: PlatformOneBotV11, Name: "QQ", Channel: qq},
+		{ProfileID: "onebot-profile", Platform: PlatformOneBotV11, Name: "OneBot", Channel: oneBot},
 		{ProfileID: "tg-profile", Platform: PlatformTelegram, Name: "Telegram", Channel: telegram},
 	})
 
 	if err := channel.Send(context.Background(), OutgoingMessage{ProfileID: "tg-profile", Platform: PlatformTelegram, UserID: "42", Text: "hello"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(qq.sent) != 0 || len(telegram.sent) != 1 || telegram.sent[0].Text != "hello" {
-		t.Fatalf("qq sent=%#v telegram sent=%#v", qq.sent, telegram.sent)
+	if len(oneBot.sent) != 0 || len(telegram.sent) != 1 || telegram.sent[0].Text != "hello" {
+		t.Fatalf("onebot sent=%#v telegram sent=%#v", oneBot.sent, telegram.sent)
 	}
 	statuses := channel.ChannelStatuses()
-	if len(statuses) != 2 || statuses[0].ProfileID != "qq-profile" || statuses[1].Platform != PlatformTelegram {
+	if len(statuses) != 2 || statuses[0].ProfileID != "onebot-profile" || statuses[1].Platform != PlatformTelegram {
 		t.Fatalf("statuses=%#v", statuses)
 	}
 }
@@ -70,10 +70,10 @@ func TestMultiChannelCanIsolateOrShareConversationKeys(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			qq := &multiChannelProbe{event: MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "200", MessageID: "qq-message"}}
+			oneBot := &multiChannelProbe{event: MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "200", MessageID: "onebot-message"}}
 			tg := &multiChannelProbe{event: MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "200", MessageID: "tg-message"}}
 			channel := NewMultiChannel([]ChannelBinding{
-				{ProfileID: "qq-profile", Platform: PlatformOneBotV11, Channel: qq},
+				{ProfileID: "onebot-profile", Platform: PlatformOneBotV11, Channel: oneBot},
 				{ProfileID: "tg-profile", Platform: PlatformTelegram, Channel: tg},
 			}, tt.isolate)
 
@@ -127,13 +127,13 @@ func TestRuntimeRoutesOneBotMediaCallsToSourceProfile(t *testing.T) {
 		"get_image": {"url": "https://example.com/second.png"},
 	}}
 	multi := NewMultiChannel([]ChannelBinding{
-		{ProfileID: "qq-first", Platform: PlatformOneBotV11, Channel: first},
-		{ProfileID: "qq-second", Platform: PlatformOneBotV11, Channel: second},
+		{ProfileID: "onebot-first", Platform: PlatformOneBotV11, Channel: first},
+		{ProfileID: "onebot-second", Platform: PlatformOneBotV11, Channel: second},
 	})
-	runtime := NewRuntime(BotConfig{ID: "qq-second", Platform: PlatformOneBotV11}, multi, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ID: "onebot-second", Platform: PlatformOneBotV11}, multi, NewPluginManager(), nil, nil, nil, nil)
 
 	event := runtime.enrichMediaReferences(context.Background(), MessageEvent{
-		ProfileID: "qq-first",
+		ProfileID: "onebot-first",
 		Platform:  PlatformOneBotV11,
 		MessageID: "image-message",
 		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
@@ -157,13 +157,13 @@ func TestRuntimeRoutesGroupLookupsAndMemberCacheToSourceProfile(t *testing.T) {
 		"get_group_info":        {"group_id": "100", "group_name": "second group"},
 		"get_group_member_info": {"group_id": "100", "user_id": "42", "level": "3"},
 	}}
-	runtime := NewRuntime(BotConfig{ID: "qq-second", Platform: PlatformOneBotV11}, NewMultiChannel([]ChannelBinding{
-		{ProfileID: "qq-first", Platform: PlatformOneBotV11, Channel: first},
-		{ProfileID: "qq-second", Platform: PlatformOneBotV11, Channel: second},
+	runtime := NewRuntime(BotConfig{ID: "onebot-second", Platform: PlatformOneBotV11}, NewMultiChannel([]ChannelBinding{
+		{ProfileID: "onebot-first", Platform: PlatformOneBotV11, Channel: first},
+		{ProfileID: "onebot-second", Platform: PlatformOneBotV11, Channel: second},
 	}), NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
 		Kind:      EventKindGroup,
-		ProfileID: "qq-first",
+		ProfileID: "onebot-first",
 		Platform:  PlatformOneBotV11,
 		GroupID:   "100",
 		UserID:    "42",
@@ -195,9 +195,9 @@ func TestRuntimeRoutesGroupLookupsAndMemberCacheToSourceProfile(t *testing.T) {
 func TestRuntimeRoutesGlobalOneBotCallToCurrentProfile(t *testing.T) {
 	first := &recordingChannel{apiResponses: map[string]map[string]any{"get_status": {"profile": "first"}}}
 	second := &recordingChannel{apiResponses: map[string]map[string]any{"get_status": {"profile": "second"}}}
-	runtime := NewRuntime(BotConfig{ID: "qq-second", Platform: PlatformOneBotV11}, NewMultiChannel([]ChannelBinding{
-		{ProfileID: "qq-first", Platform: PlatformOneBotV11, Channel: first},
-		{ProfileID: "qq-second", Platform: PlatformOneBotV11, Channel: second},
+	runtime := NewRuntime(BotConfig{ID: "onebot-second", Platform: PlatformOneBotV11}, NewMultiChannel([]ChannelBinding{
+		{ProfileID: "onebot-first", Platform: PlatformOneBotV11, Channel: first},
+		{ProfileID: "onebot-second", Platform: PlatformOneBotV11, Channel: second},
 	}), NewPluginManager(), nil, nil, nil, nil)
 
 	status, err := runtime.CallOneBotAPI(context.Background(), "get_status", nil)

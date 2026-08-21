@@ -209,7 +209,7 @@ func TestTelegramGroupMessageMapping(t *testing.T) {
 	if !event.ToMe {
 		t.Fatal("带 mention 实体应视为 @机器人")
 	}
-	// Telegram 没有 QQ 群等级，等级门槛会按「读不到即放行」处理。
+	// Telegram 没有 群等级，等级门槛会按「读不到即放行」处理。
 	if event.SenderLevel != 0 {
 		t.Fatalf("Telegram 不应有群等级，实际 %d", event.SenderLevel)
 	}

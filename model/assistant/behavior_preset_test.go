@@ -118,7 +118,7 @@ func TestSystemPromptEndsWithReplyStyleClosingAnchor(t *testing.T) {
 }
 
 func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
-	base := BotConfig{BotQQ: "42", ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
+	base := BotConfig{BotAccount: "42", ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9"}
 

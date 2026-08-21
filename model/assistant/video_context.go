@@ -76,7 +76,7 @@ func extractVideoContextFramesAfterReady(ctx context.Context, sources []string, 
 		return nil
 	}
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		log.Printf("qqbot video context unavailable: ffmpeg not found")
+		log.Printf("chatbot video context unavailable: ffmpeg not found")
 		return nil
 	}
 	out := make([]string, 0, maxVideoContextFrames)
@@ -102,7 +102,7 @@ func materializeVideoContextSource(ctx context.Context, source string, wait time
 	if remote := normalizedHTTPURL(source); remote != "" {
 		path, dir, err := downloadVideoContextSource(ctx, remote)
 		if err != nil {
-			log.Printf("qqbot video download failed: %v", err)
+			log.Printf("chatbot video download failed: %v", err)
 			return "", func() {}
 		}
 		return path, func() { _ = os.RemoveAll(dir) }
@@ -200,7 +200,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) [
 	}
 	stagedPath, err := stageVideoForContext(videoPath, workDir)
 	if err != nil {
-		log.Printf("qqbot video staging failed for %s: %v", filepath.Base(videoPath), err)
+		log.Printf("chatbot video staging failed for %s: %v", filepath.Base(videoPath), err)
 		_ = os.RemoveAll(workDir)
 		return nil
 	}
@@ -214,7 +214,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) [
 		output, runErr := cmd.CombinedOutput()
 		cancel()
 		if runErr != nil {
-			log.Printf("qqbot video frame extraction failed: %v: %s", runErr, strings.TrimSpace(string(output)))
+			log.Printf("chatbot video frame extraction failed: %v: %s", runErr, strings.TrimSpace(string(output)))
 			continue
 		}
 		if info, statErr := os.Stat(framePath); statErr == nil && info.Size() > 0 {

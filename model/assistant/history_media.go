@@ -72,7 +72,7 @@ func cacheVideoFrames(ctx context.Context, targetKind, groupID, userID, messageI
 	frames := extractVideoContextFramesAfterReady(ctx, videoURLs, historyMediaReadyTimeout)
 	defer cleanupVideoContextFrames(frames)
 	if len(frames) == 0 {
-		log.Printf("qqbot video history cache produced no frames: message_id=%s", messageID)
+		log.Printf("chatbot video history cache produced no frames: message_id=%s", messageID)
 		return segments
 	}
 	out := append([]MessageSegment(nil), segments...)
@@ -98,7 +98,7 @@ func cacheVideoFrames(ctx context.Context, targetKind, groupID, userID, messageI
 			},
 		})
 	}
-	log.Printf("qqbot video history cached: message_id=%s frames=%d", messageID, len(cachedVideoFrameURLs(out)))
+	log.Printf("chatbot video history cached: message_id=%s frames=%d", messageID, len(cachedVideoFrameURLs(out)))
 	return out
 }
 

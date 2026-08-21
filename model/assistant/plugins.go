@@ -192,9 +192,9 @@ type PluginManager struct {
 }
 
 var (
-	ErrPluginNotFound        = errors.New("qqbot: plugin not found")
-	ErrBuiltInPluginAction   = errors.New("qqbot: built-in plugins do not support install or uninstall")
-	ErrInternalPluginDisable = errors.New("qqbot: 该能力已内置，无法停用")
+	ErrPluginNotFound        = errors.New("chatbot: plugin not found")
+	ErrBuiltInPluginAction   = errors.New("chatbot: built-in plugins do not support install or uninstall")
+	ErrInternalPluginDisable = errors.New("chatbot: 该能力已内置，无法停用")
 )
 
 const (
@@ -375,7 +375,7 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 		return nil, nil
 	}
 	if m == nil {
-		return nil, fmt.Errorf("qqbot: plugin manager is not configured")
+		return nil, fmt.Errorf("chatbot: plugin manager is not configured")
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -383,7 +383,7 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 	for id, values := range overrides {
 		id = strings.TrimSpace(id)
 		if id == "" {
-			return nil, fmt.Errorf("qqbot: plugin ID cannot be empty")
+			return nil, fmt.Errorf("chatbot: plugin ID cannot be empty")
 		}
 		plugin, ok := m.catalog[id]
 		if !ok {
@@ -391,7 +391,7 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 		}
 		normalized, err := normalizeGroupPluginSettings(plugin.Manifest().Settings, values)
 		if err != nil {
-			return nil, fmt.Errorf("qqbot: plugin %q group settings: %w", id, err)
+			return nil, fmt.Errorf("chatbot: plugin %q group settings: %w", id, err)
 		}
 		if len(normalized) > 0 {
 			out[id] = normalized
@@ -533,7 +533,7 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 	}
 	manifest := plugin.Manifest()
 	if len(manifest.Settings) == 0 {
-		return PluginState{}, fmt.Errorf("qqbot: plugin %q has no configurable settings", id)
+		return PluginState{}, fmt.Errorf("chatbot: plugin %q has no configurable settings", id)
 	}
 	normalized, err := normalizePluginSettings(manifest.Settings, values)
 	if err != nil {
@@ -587,7 +587,7 @@ func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error)
 	state := m.states[id]
 	state.Manifest = plugin.Manifest()
 	if !state.Installed {
-		return state, fmt.Errorf("qqbot: plugin %q is not installed", id)
+		return state, fmt.Errorf("chatbot: plugin %q is not installed", id)
 	}
 	if state.Manifest.Internal && !enabled {
 		return state, ErrInternalPluginDisable
@@ -744,7 +744,7 @@ func (m *PluginManager) AgentToolsWithGroupOverrides(enabledOverrides map[string
 	for _, item := range providers {
 		provided, err := item.plugin.AgentTools(item.settings)
 		if err != nil {
-			return nil, fmt.Errorf("qqbot: plugin %q agent tools: %w", item.id, err)
+			return nil, fmt.Errorf("chatbot: plugin %q agent tools: %w", item.id, err)
 		}
 		tools = append(tools, provided...)
 	}
@@ -828,7 +828,7 @@ func safeHandlePlugin(ctx context.Context, id string, plugin Plugin, req PluginR
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			resp = nil
-			err = fmt.Errorf("qqbot: plugin %q panicked: %v", id, recovered)
+			err = fmt.Errorf("chatbot: plugin %q panicked: %v", id, recovered)
 		}
 	}()
 	return plugin.Handle(ctx, req)

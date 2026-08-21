@@ -12,7 +12,7 @@ export interface AccentOption {
 }
 
 export const accentOptions: AccentOption[] = [
-  { id: "diana", label: "嘉然粉", color: "#e0578f" },
+  { id: "diana", label: "樱粉", color: "#e0578f" },
   { id: "violet", label: "星夜紫", color: "#7c5cff" },
   { id: "ocean", label: "深海蓝", color: "#2f7df6" },
   { id: "forest", label: "松间绿", color: "#159f6c" }

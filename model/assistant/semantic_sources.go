@@ -128,7 +128,7 @@ func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEve
 		return result
 	}
 
-	botID := firstNonEmpty(strings.TrimSpace(r.effectiveConfigForEvent(event).BotQQ), strings.TrimSpace(event.SelfID))
+	botID := firstNonEmpty(strings.TrimSpace(r.effectiveConfigForEvent(event).BotAccount), strings.TrimSpace(event.SelfID))
 	lines := []string{"【语义指代选中的历史来源，按下列顺序逐条核对；这些来源不是当前用户的新消息】"}
 	for _, messageID := range messageIDs {
 		source, found := r.findSemanticReferenceEvent(ctx, event, messageID)

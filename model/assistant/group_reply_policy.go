@@ -23,12 +23,12 @@ type groupReplyLevelDecision struct {
 	LookupErr error
 }
 
-func normalizeQQGroupRole(role string) string {
+func normalizeOneBotGroupRole(role string) string {
 	return strings.ToLower(strings.TrimSpace(role))
 }
 
-func qqGroupRoleCanConfigure(role string) bool {
-	switch normalizeQQGroupRole(role) {
+func oneBotGroupRoleCanConfigure(role string) bool {
+	switch normalizeOneBotGroupRole(role) {
 	case "owner", "admin":
 		return true
 	default:
@@ -36,7 +36,7 @@ func qqGroupRoleCanConfigure(role string) bool {
 	}
 }
 
-func parseQQGroupLevel(value any) (int, bool) {
+func parseOneBotGroupLevel(value any) (int, bool) {
 	if value == nil {
 		return 0, false
 	}
@@ -73,7 +73,7 @@ func eventExplicitlyMentionsBot(event MessageEvent, cfg BotConfig) bool {
 	if event.Kind != EventKindGroup {
 		return false
 	}
-	for _, botID := range []string{event.SelfID, cfg.BotQQ} {
+	for _, botID := range []string{event.SelfID, cfg.BotAccount} {
 		botID = strings.TrimSpace(botID)
 		if botID == "" {
 			continue
@@ -93,7 +93,7 @@ func eventRepliesToBot(event MessageEvent, cfg BotConfig) bool {
 	if quotedUserID == "" {
 		return false
 	}
-	for _, botID := range []string{event.SelfID, cfg.BotQQ} {
+	for _, botID := range []string{event.SelfID, cfg.BotAccount} {
 		if botID = strings.TrimSpace(botID); botID != "" && quotedUserID == botID {
 			return true
 		}
@@ -103,21 +103,21 @@ func eventRepliesToBot(event MessageEvent, cfg BotConfig) bool {
 
 func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (string, error) {
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" {
-		return "", fmt.Errorf("群配置只能在 QQ 群聊中修改")
+		return "", fmt.Errorf("群配置只能在 群聊中修改")
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	if ownerID := strings.TrimSpace(cfg.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(event.UserID) {
 		return "bot_owner", nil
 	}
-	if role := normalizeQQGroupRole(event.SenderRole); qqGroupRoleCanConfigure(role) {
+	if role := normalizeOneBotGroupRole(event.SenderRole); oneBotGroupRoleCanConfigure(role) {
 		return role, nil
 	}
 	member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID)
 	if err != nil {
 		return "", fmt.Errorf("无法校验当前群权限: %w", err)
 	}
-	role := normalizeQQGroupRole(member.Role)
-	if !qqGroupRoleCanConfigure(role) {
+	role := normalizeOneBotGroupRole(member.Role)
+	if !oneBotGroupRoleCanConfigure(role) {
 		return role, fmt.Errorf("只有机器人主人、群主或群管理员可以配置本群")
 	}
 	return role, nil
@@ -140,13 +140,13 @@ func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event
 		return false, decision
 	}
 
-	decision.Role = normalizeQQGroupRole(event.SenderRole)
+	decision.Role = normalizeOneBotGroupRole(event.SenderRole)
 	levelValue := any(event.SenderLevel)
 	if strings.TrimSpace(event.SenderLevelLabel) != "" {
 		levelValue = event.SenderLevelLabel
 	}
-	decision.Level, decision.LevelSet = parseQQGroupLevel(levelValue)
-	if qqGroupRoleCanConfigure(decision.Role) {
+	decision.Level, decision.LevelSet = parseOneBotGroupLevel(levelValue)
+	if oneBotGroupRoleCanConfigure(decision.Role) {
 		decision.Reason = "privileged_role"
 		return false, decision
 	}
@@ -157,9 +157,9 @@ func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event
 			decision.Reason = "member_lookup_failed"
 			return true, decision
 		}
-		decision.Role = normalizeQQGroupRole(member.Role)
-		decision.Level, decision.LevelSet = parseQQGroupLevel(member.Level)
-		if qqGroupRoleCanConfigure(decision.Role) {
+		decision.Role = normalizeOneBotGroupRole(member.Role)
+		decision.Level, decision.LevelSet = parseOneBotGroupLevel(member.Level)
+		if oneBotGroupRoleCanConfigure(decision.Role) {
 			decision.Reason = "privileged_role"
 			return false, decision
 		}
@@ -200,10 +200,10 @@ func (r *Runtime) recordGroupReplyLevelIgnored(ctx context.Context, event Messag
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.group_reply_level_filter",
+		Action:  "chatbot.group_reply_level_filter",
 		Message: "成员未达到本群回复等级要求，已跳过回复判断",
 		Detail:  detail,
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":      event.GroupID,
@@ -225,9 +225,9 @@ func (r *Runtime) recordGroupReplyPolicyChanged(ctx context.Context, event Messa
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.group_reply_policy_config",
+		Action:  "chatbot.group_reply_policy_config",
 		Message: "群级回复策略已通过聊天更新",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
 		Metadata: map[string]any{
 			"group_id":                     event.GroupID,

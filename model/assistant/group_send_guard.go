@@ -16,10 +16,10 @@ import (
 )
 
 var (
-	errOutboundSend            = errors.New("qqbot: outbound send failed")
-	errGroupSendUnavailable    = errors.New("qqbot: group send target is unavailable")
-	errOutboundDeliveryDropped = errors.New("qqbot: outbound delivery dropped after backoff")
-	errOutboundChannelOffline  = errors.New("qqbot: outbound send deferred while the channel is offline")
+	errOutboundSend            = errors.New("chatbot: outbound send failed")
+	errGroupSendUnavailable    = errors.New("chatbot: group send target is unavailable")
+	errOutboundDeliveryDropped = errors.New("chatbot: outbound delivery dropped after backoff")
+	errOutboundChannelOffline  = errors.New("chatbot: outbound send deferred while the channel is offline")
 )
 
 const (
@@ -197,7 +197,7 @@ func (r *Runtime) executeOutboundCall(
 			r.enterOutboundDropCooldown(event, action, gate, policy, time.Now())
 			return nil, droppedOutboundSendError(groupID, gate.lastError)
 		}
-		// An offline transport or QQ account cannot deliver anything. Fail fast
+		// An offline transport or bot account cannot deliver anything. Fail fast
 		// without consuming the failure window or blocking the worker's lease;
 		// the durable queue retries the whole reply after the channel recovers.
 		if !channelEffectivelyOnline(r.channelStatus()) {
@@ -321,7 +321,7 @@ func outboundBackoffDelay(event MessageEvent, action string, failures int, polic
 func offlineOutboundSendError(groupID string) error {
 	return &outboundSendError{
 		GroupID:        groupID,
-		Cause:          fmt.Errorf("qqbot: channel offline while sending to group %s; delivery deferred for durable retry", groupID),
+		Cause:          fmt.Errorf("chatbot: channel offline while sending to group %s; delivery deferred for durable retry", groupID),
 		ChannelOffline: true,
 	}
 }
@@ -333,7 +333,7 @@ func droppedOutboundSendError(groupID, cause string) error {
 	}
 	return &outboundSendError{
 		GroupID:         groupID,
-		Cause:           fmt.Errorf("qqbot: dropped outbound delivery for group %s: %s", groupID, cause),
+		Cause:           fmt.Errorf("chatbot: dropped outbound delivery for group %s: %s", groupID, cause),
 		DeliveryDropped: true,
 	}
 }
@@ -350,10 +350,10 @@ func (r *Runtime) enterOutboundDropCooldown(event MessageEvent, action string, g
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.outbound_delivery_dropped",
+		Action:  "chatbot.outbound_delivery_dropped",
 		Message: "群消息连续发送失败，已丢弃等待结果并进入冷却",
 		Detail:  gate.lastError,
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
 		Metadata: map[string]any{
 			"group_id":               event.GroupID,
@@ -376,10 +376,10 @@ func (r *Runtime) recordOutboundDeliveryBackoff(event MessageEvent, action strin
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.outbound_delivery_backoff",
+		Action:  "chatbot.outbound_delivery_backoff",
 		Message: "群消息发送失败，已按指数退避等待下次尝试",
 		Detail:  cause.Error(),
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
 		Metadata: map[string]any{
 			"group_id":       event.GroupID,
@@ -401,9 +401,9 @@ func (r *Runtime) recordOutboundDeliveryRecovered(event MessageEvent, action str
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "qqbot.outbound_delivery_recovered",
+		Action:  "chatbot.outbound_delivery_recovered",
 		Message: "群消息发送已恢复，后续消息将连续放行",
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
 		Metadata: map[string]any{
 			"group_id":      event.GroupID,
@@ -518,7 +518,7 @@ func (r *Runtime) blockedGroupSendError(event MessageEvent) error {
 	}
 	return &outboundSendError{
 		GroupID:          groupID,
-		Cause:            fmt.Errorf("qqbot: sending to group %s is disabled: %s", groupID, reason),
+		Cause:            fmt.Errorf("chatbot: sending to group %s is disabled: %s", groupID, reason),
 		GroupUnavailable: true,
 	}
 }
@@ -556,10 +556,10 @@ func (r *Runtime) markGroupSendUnavailable(ctx context.Context, event MessageEve
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.group_send_disabled",
+		Action:  "chatbot.group_send_disabled",
 		Message: "群发送目标失效，已停止向该群发送后续消息",
 		Detail:  reason,
-		Actor:   qqEventActor(event),
+		Actor:   oneBotEventActor(event),
 		Target:  groupID,
 		Metadata: map[string]any{
 			"group_id":   groupID,

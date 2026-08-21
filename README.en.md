@@ -2,7 +2,7 @@
 
 # Diana
 
-**A self-hosted multi-platform AI assistant — QQ and Telegram online at the same time, with your data staying on your own machine.**
+**A self-hosted multi-platform AI assistant — OneBot v11 and Telegram online at the same time, with your data staying on your own machine.**
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
@@ -35,7 +35,7 @@
 
 ## What Is Diana
 
-Diana is a multi-platform AI assistant service written in Go: an LLM compatibility layer, platform adapters, a Gin WebUI, and a plugin system, all compiled into a single binary. It ships with QQ (OneBot v11) and Telegram channels; the WebUI manages multiple bot profiles, model assignments, per-group policies, plugins, and the built-in Agent.
+Diana is a multi-platform AI assistant service written in Go: an LLM compatibility layer, platform adapters, a Gin WebUI, and a plugin system, all compiled into a single binary. It ships with OneBot v11 and Telegram channels; the WebUI manages multiple bot profiles, model assignments, per-group policies, plugins, and the built-in Agent.
 
 Configuration, memory, and logs live in a local SQLite database — no hosted service required. For every message you can look up why it was answered, why it was skipped, which tools ran, and how many tokens it cost.
 
@@ -43,11 +43,11 @@ Configuration, memory, and logs live in a local SQLite database — no hosted se
 
 | | |
 | --- | --- |
-| **Channels in parallel** | QQ and Telegram run side by side; replies, images, and reminders always return to the originating channel, and session context can be isolated or shared per profile |
+| **Channels in parallel** | OneBot v11 and Telegram run side by side; replies, images, and reminders always return to the originating channel, and session context can be isolated or shared per profile |
 | **Split model duties** | Chat, vision, intent detection, and image generation each bind their own provider and model, validated with a real request before saving |
 | **Built-in web search** | No plugin to install; the model can search before answering time-sensitive questions. Exa MCP first, Tavily as fallback |
 | **Image text recognition** | Images can go through a vision model and OCR at once (LLM transcription, self-hosted OCR service, or local tesseract). When the chat model has no vision support, it can receive the recognized text only. Results are cached in the database by image content hash, so a repeated image or sticker is only recognized once |
-| **Per-group policies** | Reply windows, allow/deny lists, trigger words, persona, QQ group level thresholds, and tool permissions per group |
+| **Per-group policies** | Reply windows, allow/deny lists, trigger words, persona, group level thresholds, and tool permissions per group |
 | **Layered long-term memory** | Recent context, compressed summaries, structured facts, and on-demand history search work in layers to keep token usage down |
 | **Built-in Agent** | A minimal Pi-style tool loop with file, command, and browser tools, loading Skills and MCP servers on demand |
 | **Full event auditing** | Reply reasons, model call chains, tokens, and errors are recorded; operation logs carry the acting operator |
@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 ```sh
 git clone https://github.com/SuInk/Diana.git && cd Diana
 cp docker-compose.yml docker-compose.local.yml
-# Edit the token, QQ number, and LLM settings in docker-compose.local.yml
+# Edit the token, bot account, and LLM settings in docker-compose.local.yml
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
@@ -103,10 +103,10 @@ docker run -d \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
   -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
-  -e QQBOT_ENABLED=true \
+  -e DIANA_BOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e QQBOT_QQ=10001 \
+  -e DIANA_BOT_ACCOUNT=10001 \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
@@ -172,14 +172,14 @@ node scripts/dev.mjs                       # when make is unavailable
 4. **Check the events** — send a message and confirm the reply reason and model call chain in the event centre.
 
 <details>
-<summary>Starting a QQ bot purely from environment variables</summary>
+<summary>Starting an OneBot v11 bot purely from environment variables</summary>
 
 ```sh
-QQBOT_ENABLED=true \
+DIANA_BOT_ENABLED=true \
 ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
 ONEBOT_ACCESS_TOKEN=your-onebot-token \
-QQBOT_QQ=10001 \
-DIANA_GROUP_TRIGGERS=嘉然,然然,Diana,diana \
+DIANA_BOT_ACCOUNT=10001 \
+DIANA_GROUP_TRIGGERS=Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
 LLM_MODEL=gpt-4o-mini \
@@ -194,14 +194,14 @@ Private messages always trigger a reply; group messages need an `@mention` or a 
 
 | Category | Platform | Transport |
 | --- | --- | --- |
-| QQ | OneBot v11 | Reverse WebSocket; the OneBot v11 client connects to Diana (NapCat, Lagrange.Core, go-cqhttp all belong here) |
+| OneBot v11 | OneBot v11 | Reverse WebSocket; the OneBot v11 client connects to Diana (NapCat, Lagrange.Core, go-cqhttp all belong here) |
 | Telegram | Telegram Bot API | Official long polling, outbound from Diana — no public address or webhook needed |
 
 Every enabled profile stays online simultaneously. Telegram only needs the bot token from BotFather; a proxy address is usually required from mainland China, and a self-hosted Bot API server can be configured to bypass the 50 MB upload limit.
 
 Platform differences:
 
-- **Group level thresholds are QQ-only.** Telegram has no such concept, so the option is hidden for Telegram bots.
+- **Group level thresholds are OneBot v11-only.** Telegram has no such concept, so the option is hidden for Telegram bots.
 - **Voice messages and mentions** rely on OneBot CQ codes and degrade gracefully on Telegram: the text is still sent, but nobody gets mentioned.
 - **Local media**: OneBot clients fetch Diana's `/media/resolver` URL, while Telegram cannot reach local addresses and receives a direct multipart upload instead.
 
@@ -230,10 +230,10 @@ Exempt paths: the login and quick-login endpoints, `/api/health` (monitoring pro
 Both the Bots page ("admission control") and each group on the Groups page can restrict when the bot replies. Global settings act as defaults, and group settings replace them wholesale rather than merging field by field.
 
 - **Group admission mode**: "deny list" by default — active everywhere except disabled groups. Switching to "allow list" means the bot only works in listed groups and stays silent when pulled into others; the disabled list still applies.
-- **QQ group level threshold**: this is the in-group activity level (Lv.1–6), not the QQ account level (suns/moons/stars, which the OneBot protocol cannot read). Levels accumulate per group.
+- **Group level threshold**: this is the in-group activity level (Lv.1–6), not the platform account level (which the OneBot protocol cannot read). Levels accumulate per group.
 - **Reply windows**: an end time earlier than the start means overnight (e.g. `22:00-06:00`); identical values mean always open. Time zones use IANA names such as `Asia/Shanghai`. A quiet-hours notice can be configured and is sent at most once per hour per session.
 - **Exempt / blocked users**: exempt users ignore level and time restrictions; blocked users get no reply anywhere.
-- **Owner bypass**: on by default and best left that way — otherwise a misconfigured window or threshold locks you out too, with no way to recover from the QQ side.
+- **Owner bypass**: on by default and best left that way — otherwise a misconfigured window or threshold locks you out too, with no way to recover from the chat side.
 
 Some OneBot implementations omit `level` in message events, so Diana fills it in through `get_group_member_info` when needed and caches it for 10 minutes. **When the level cannot be read, the message is allowed through**: implementations vary wildly, and treating "unknown" as "level 0" would silence an entire group. Strict blocking is available, but know the trade-off.
 
@@ -242,7 +242,7 @@ Some OneBot implementations omit `level` in message events, so Diana fills it in
 The bot plugins area enables, disables, and configures the official built-in plugins; built-in capabilities are never installed or uninstalled.
 
 - **Link resolution**: resolves and sends images or video from Bilibili, YouTube, X, Xiaohongshu, and Douyin; Zhihu, Weibo, and GitHub only yield title and description. Size, duration, quality, and gallery limits are adjustable. Per-platform cookies, the yt-dlp cookie file, and proxy addresses can be set in the plugin settings and take precedence over the matching environment variables; once saved, read endpoints only report that a credential is configured. The card also probes `yt-dlp`, `ffmpeg`, and `node`, and can install what is missing through a controlled package manager.
-- **File parsing**: handles QQ file segments and links to text-like files, feeding the content to the LLM as context.
+- **File parsing**: handles OneBot file segments and links to text-like files, feeding the content to the LLM as context.
 - **Image text recognition**: runs OCR before images enter the context, using LLM vision transcription, a self-hosted OCR service (PaddleOCR / RapidOCR), or local `tesseract` — the latter two fully offline. Delivery is either "image plus text" or "text only", the latter letting a chat model without vision support handle image messages.
 - **Web search**: installed and enabled by default; it can be disabled and configured but never uninstalled. It is independent of the Agent switch, so local file, command, and browser tools stay closed when the Agent is off.
 
@@ -261,7 +261,7 @@ Browser tools need Chrome/Chromium with remote debugging enabled: `chrome --remo
 
 ### Third-Party NoneBot Plugins
 
-The Go binary cannot load Python NoneBot plugins directly, so run a NoneBot sidecar: install the plugins in a NoneBot2 project, give it an OneBot v11 reverse WebSocket driver, then enable the `NoneBot plugin bridge` on Diana's QQ bot page (default `ws://127.0.0.1:8080/onebot/v11/ws`). Diana forwards OneBot events to the sidecar, and forwards the plugins' `send_msg`, `get_group_info`, and other API calls back to the active OneBot client.
+The Go binary cannot load Python NoneBot plugins directly, so run a NoneBot sidecar: install the plugins in a NoneBot2 project, give it an OneBot v11 reverse WebSocket driver, then enable the `NoneBot plugin bridge` on Diana's bot page (default `ws://127.0.0.1:8080/onebot/v11/ws`). Diana forwards OneBot events to the sidecar, and forwards the plugins' `send_msg`, `get_group_info`, and other API calls back to the active OneBot client.
 
 ### Log Centre
 
@@ -293,12 +293,12 @@ Anything configurable in the WebUI needs no environment variable. The common one
 | `LLM_API_KEY` | empty | LLM API key |
 | `LLM_BASE_URL` | empty | Custom base URL for OpenAI-compatible endpoints |
 | `LLM_MODEL` | empty | Model ID (no default for `openai_compatible`) |
-| `QQBOT_ENABLED` | `false` | Start the bot automatically on launch |
+| `DIANA_BOT_ENABLED` | `false` | Start the bot automatically on launch |
 | `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | Reverse WebSocket address for OneBot v11 clients |
 | `ONEBOT_ACCESS_TOKEN` | empty | OneBot access token |
-| `QQBOT_QQ` | empty | The bot's QQ number |
-| `DIANA_OWNER_ID` | empty | Owner QQ number (numeric user ID on Telegram) |
-| `DIANA_GROUP_TRIGGERS` | `嘉然,然然,Diana,diana` | Group chat trigger words |
+| `DIANA_BOT_ACCOUNT` | empty | The bot's account ID |
+| `DIANA_OWNER_ID` | empty | Owner account ID (numeric user ID on Telegram) |
+| `DIANA_GROUP_TRIGGERS` | `Diana,diana` | Group chat trigger words |
 | `DIANA_AGENT_ENABLED` | `false` | Enable the built-in Agent |
 
 <details>
@@ -365,10 +365,10 @@ Type=simple
 WorkingDirectory=/opt/diana
 Environment=PORT=18080
 Environment=LOG_PATH=/var/log/diana/diana.log
-Environment=QQBOT_ENABLED=true
+Environment=DIANA_BOT_ENABLED=true
 Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
 Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=QQBOT_QQ=10001
+Environment=DIANA_BOT_ACCOUNT=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini

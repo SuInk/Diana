@@ -26,7 +26,7 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 			"role":     "member",
 		},
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotQQ: "10000"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "10000"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetUserMemoryStore(memory)
 	event := MessageEvent{
 		Kind:    EventKindGroup,
@@ -34,7 +34,7 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 		UserID:  "10001",
 		GroupID: "20002",
 		Segments: []MessageSegment{
-			{Type: "text", Data: map[string]string{"text": "嘉然看下"}},
+			{Type: "text", Data: map[string]string{"text": "Diana看下"}},
 			{Type: "at", Data: map[string]string{"qq": "10005"}},
 			{Type: "text", Data: map[string]string{"text": " 的好感度"}},
 		},
@@ -175,7 +175,7 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	}}
 	runtime := NewRuntime(BotConfig{
 		OwnerID:       "10001",
-		BotQQ:         "10000",
+		BotAccount:    "10000",
 		AgentEnabled:  true,
 		AgentWorkDir:  t.TempDir(),
 		AgentMaxSteps: 3,
@@ -190,7 +190,7 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 		GroupID:   "20002",
 		MessageID: "30004",
 		Segments: []MessageSegment{
-			{Type: "text", Data: map[string]string{"text": "嘉然看下"}},
+			{Type: "text", Data: map[string]string{"text": "Diana看下"}},
 			{Type: "at", Data: map[string]string{"qq": "10005"}},
 			{Type: "text", Data: map[string]string{"text": " 的好感度"}},
 		},

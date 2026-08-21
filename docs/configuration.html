@@ -16,9 +16,9 @@
       <header class="page-intro"><p class="eyebrow">配置</p><h1>通道、模型与群聊策略</h1><p class="lead">先建立稳定的模型连接，再分配模型职责和平台通道，最后按群收敛触发、时间、用户与工具边界。</p></header>
 
       <section class="section searchable" id="channels">
-        <div class="section-heading"><p class="eyebrow">平台接入</p><h2>QQ 与 Telegram 可以同时在线</h2></div>
+        <div class="section-heading"><p class="eyebrow">平台接入</p><h2>OneBot v11 与 Telegram 可以同时在线</h2></div>
         <div class="comparison">
-          <article><h3>QQ / OneBot V11</h3><dl>
+          <article><h3>OneBot v11</h3><dl>
             <div><dt>适配器</dt><dd>NapCat、Lagrange.Core、go-cqhttp</dd></div>
             <div><dt>连接</dt><dd>适配器主动连接 Diana 的反向 WebSocket</dd></div>
             <div><dt>地址</dt><dd><code>ws://HOST:18080/onebot/v11/ws</code></dd></div>
@@ -32,7 +32,7 @@
           </dl></article>
         </div>
         <h3>多通道上下文</h3>
-        <p>每个机器人保存独立的平台、账号、主人、人设和模型分配。QQ 与 Telegram 同时运行时，回复始终回到来源通道。默认隔离会话与记忆；关闭隔离后可共享允许跨通道使用的长期事实，但不会改变发送路由。</p>
+        <p>每个机器人保存独立的平台、账号、主人、人设和模型分配。OneBot v11 与 Telegram 同时运行时，回复始终回到来源通道。默认隔离会话与记忆；关闭隔离后可共享允许跨通道使用的长期事实，但不会改变发送路由。</p>
       </section>
 
       <section class="section searchable" id="models">
@@ -60,7 +60,7 @@ LLM_TIMEOUT_MS=60000</code></pre>
           <div><strong>启用状态</strong><span>单独停止某个群，不影响其他群或私聊。</span></div>
           <div><strong>触发与主动回复</strong><span>显式 @、引用、触发词和主动回复语义路由分层判断；显式 @ 优先于引用。</span></div>
           <div><strong>回复时间</strong><span>支持同日、跨夜时间段和 IANA 时区；这属于群策略，不写入模型提示。</span></div>
-          <div><strong>屏蔽 QQ 号</strong><span>名单只影响当前群，不影响同一用户在其他群或私聊中的消息。</span></div>
+          <div><strong>屏蔽账号</strong><span>名单只影响当前群，不影响同一用户在其他群或私聊中的消息。</span></div>
           <div><strong>人设与上下文</strong><span>群级提示、历史条数和回复长度可以覆盖机器人默认值。</span></div>
           <div><strong>工具覆盖</strong><span>每个群可跟随全局、强制开启或强制关闭具体工具和插件。</span></div>
         </div>

@@ -54,9 +54,9 @@ export function displayMessageText(value?: string): string {
     .trim();
 }
 
-export function displayQQIdentity(name?: string, qq?: string): string {
+export function displayChatIdentity(name?: string, qq?: string): string {
   const normalizedName = name?.trim() ?? "";
-  const normalizedQQ = qq?.trim() ?? "";
-  if (normalizedName && normalizedQQ) return `${normalizedName}（${normalizedQQ}）`;
-  return normalizedName || normalizedQQ;
+  const normalizedAccount = qq?.trim() ?? "";
+  if (normalizedName && normalizedAccount) return `${normalizedName}（${normalizedAccount}）`;
+  return normalizedName || normalizedAccount;
 }

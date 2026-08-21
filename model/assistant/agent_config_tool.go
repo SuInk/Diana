@@ -48,7 +48,7 @@ type dianaBotConfigSnapshot struct {
 	NoneBotBridgeEnabled            bool                     `json:"nonebot_bridge_enabled"`
 	NoneBotBridgeEndpoint           string                   `json:"nonebot_bridge_endpoint,omitempty"`
 	NoneBotBridgeTokenConfigured    bool                     `json:"nonebot_bridge_token_configured"`
-	BotQQ                           string                   `json:"bot_qq,omitempty"`
+	BotAccount                      string                   `json:"bot_account,omitempty"`
 	OwnerID                         string                   `json:"owner_id,omitempty"`
 	OwnerLoginEnabled               bool                     `json:"owner_login_enabled"`
 	GroupTriggers                   []string                 `json:"group_triggers,omitempty"`
@@ -263,7 +263,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		NoneBotBridgeEnabled:            cfg.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:           cfg.NoneBotBridgeEndpoint,
 		NoneBotBridgeTokenConfigured:    strings.TrimSpace(cfg.NoneBotBridgeToken) != "",
-		BotQQ:                           cfg.BotQQ,
+		BotAccount:                      cfg.BotAccount,
 		OwnerID:                         cfg.OwnerID,
 		OwnerLoginEnabled:               cfg.OwnerLoginEnabled,
 		GroupTriggers:                   append([]string(nil), cfg.GroupTriggers...),

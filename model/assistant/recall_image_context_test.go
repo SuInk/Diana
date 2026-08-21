@@ -115,7 +115,7 @@ func TestRecallImageDescriptionUsesPersistentCacheWithoutLLM(t *testing.T) {
 	store := newRecallImageTestStore()
 	store.descriptions[hash] = ImageDescriptionRecord{ContentSHA256: hash, Description: "缓存中的图片描述", Source: "vision"}
 	provider := &recallImageVisionProvider{}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetMessageHistoryStore(store)
@@ -155,7 +155,7 @@ func TestRecallImageDescriptionBackfillsHistoricalSemanticReply(t *testing.T) {
 		},
 	}
 	provider := &recallImageVisionProvider{}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot", Name: "Diana"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", Name: "Diana"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetMessageHistoryStore(store)
@@ -176,7 +176,7 @@ func TestRecallImageDescriptionCallsVisionOnceThenReusesCache(t *testing.T) {
 	imagePath, hash := writeRecallImageFixture(t)
 	store := newRecallImageTestStore()
 	provider := &recallImageVisionProvider{}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetMessageHistoryStore(store)
@@ -202,7 +202,7 @@ func TestHistoryImageDescriptionRunsInBackgroundAndReusesCache(t *testing.T) {
 	imagePath, hash := writeRecallImageFixture(t)
 	store := newRecallImageTestStore()
 	provider := &recallImageVisionProvider{}
-	runtime := NewRuntime(BotConfig{BotQQ: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetMessageHistoryStore(store)

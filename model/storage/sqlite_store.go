@@ -28,17 +28,17 @@ const (
 	llmConfigKey         = "llm_config"
 	llmProfilesKey       = "llm_profiles"
 	llmRegistryKey       = "llm_provider_registry"
-	qqbotConfigKey       = "qqbot_config"
-	qqbotProfilesKey     = "qqbot_profiles"
-	qqbotGroupConfigKey  = "qqbot_group_configs"
+	botConfigKey         = "bot_config"
+	botProfilesKey       = "bot_profiles"
+	botGroupConfigKey    = "bot_group_configs"
 	pluginStateKey       = "plugin_states"
 	remindersKey         = "reminders"
 	updatePolicyKey      = "system_update_policy"
-	replySuppressionsKey = "qqbot_reply_suppressions"
+	replySuppressionsKey = "bot_reply_suppressions"
 	webuiAuthKey         = "webui_auth"
 	webuiSessionsKey     = "webui_sessions"
 	releaseCacheKey      = "system_release_cache"
-	inboundRecoveryKey   = "qqbot_inbound_recovery_checkpoint"
+	inboundRecoveryKey   = "bot_inbound_recovery_checkpoint"
 )
 
 type SQLiteStore struct {
@@ -289,40 +289,40 @@ func (s *SQLiteStore) SaveLLMProviderRegistry(ctx context.Context, document llm.
 	return s.saveJSON(ctx, llmRegistryKey, document)
 }
 
-// LoadQQBotConfig 读取 QQ 机器人配置。
-func (s *SQLiteStore) LoadQQBotConfig(ctx context.Context) (assistant.BotConfig, bool, error) {
+// LoadBotProfileConfig 读取 OneBot v11 机器人配置。
+func (s *SQLiteStore) LoadBotProfileConfig(ctx context.Context) (assistant.BotConfig, bool, error) {
 	var cfg assistant.BotConfig
-	ok, err := s.loadJSON(ctx, qqbotConfigKey, &cfg)
+	ok, err := s.loadJSON(ctx, botConfigKey, &cfg)
 	return cfg, ok, err
 }
 
-// SaveQQBotConfig 保存 QQ 机器人配置。
-func (s *SQLiteStore) SaveQQBotConfig(ctx context.Context, cfg assistant.BotConfig) error {
-	return s.saveJSON(ctx, qqbotConfigKey, cfg)
+// SaveBotProfileConfig 保存 OneBot v11 机器人配置。
+func (s *SQLiteStore) SaveBotProfileConfig(ctx context.Context, cfg assistant.BotConfig) error {
+	return s.saveJSON(ctx, botConfigKey, cfg)
 }
 
-// LoadQQBotProfiles 读取 QQ 机器人配置集。
-func (s *SQLiteStore) LoadQQBotProfiles(ctx context.Context) (assistant.ProfileSet, bool, error) {
+// LoadBotProfiles 读取 OneBot v11 机器人配置集。
+func (s *SQLiteStore) LoadBotProfiles(ctx context.Context) (assistant.ProfileSet, bool, error) {
 	var set assistant.ProfileSet
-	ok, err := s.loadJSON(ctx, qqbotProfilesKey, &set)
+	ok, err := s.loadJSON(ctx, botProfilesKey, &set)
 	return set, ok, err
 }
 
-// SaveQQBotProfiles 保存 QQ 机器人配置集。
-func (s *SQLiteStore) SaveQQBotProfiles(ctx context.Context, set assistant.ProfileSet) error {
-	return s.saveJSON(ctx, qqbotProfilesKey, set)
+// SaveBotProfiles 保存 OneBot v11 机器人配置集。
+func (s *SQLiteStore) SaveBotProfiles(ctx context.Context, set assistant.ProfileSet) error {
+	return s.saveJSON(ctx, botProfilesKey, set)
 }
 
-// LoadQQBotGroupConfigs 读取 QQ 群级机器人配置。
-func (s *SQLiteStore) LoadQQBotGroupConfigs(ctx context.Context) (assistant.GroupConfigSet, bool, error) {
+// LoadBotGroupConfigs 读取 群级机器人配置。
+func (s *SQLiteStore) LoadBotGroupConfigs(ctx context.Context) (assistant.GroupConfigSet, bool, error) {
 	var set assistant.GroupConfigSet
-	ok, err := s.loadJSON(ctx, qqbotGroupConfigKey, &set)
+	ok, err := s.loadJSON(ctx, botGroupConfigKey, &set)
 	return set, ok, err
 }
 
-// SaveQQBotGroupConfigs 保存 QQ 群级机器人配置。
-func (s *SQLiteStore) SaveQQBotGroupConfigs(ctx context.Context, set assistant.GroupConfigSet) error {
-	return s.saveJSON(ctx, qqbotGroupConfigKey, set)
+// SaveBotGroupConfigs 保存 群级机器人配置。
+func (s *SQLiteStore) SaveBotGroupConfigs(ctx context.Context, set assistant.GroupConfigSet) error {
+	return s.saveJSON(ctx, botGroupConfigKey, set)
 }
 
 // WebUIAuth 是 WebUI 管理密码的持久化记录。
@@ -426,7 +426,7 @@ func (s *SQLiteStore) SaveReleaseCache(ctx context.Context, payload []byte) erro
 	return s.saveJSON(ctx, releaseCacheKey, json.RawMessage(payload))
 }
 
-// LoadInboundRecoveryCheckpoint returns the latest instant when the QQ channel
+// LoadInboundRecoveryCheckpoint returns the latest instant when the channel
 // was known to be online. The coordinator uses it to size reconnect backfill.
 func (s *SQLiteStore) LoadInboundRecoveryCheckpoint(ctx context.Context) (time.Time, bool, error) {
 	var checkpoint time.Time
@@ -488,9 +488,24 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAM
 }
 
 // loadJSON 读取指定 key 的 JSON 并解码。
+// legacyStateKeys 是历史上带平台名的 app_state 键。新键读不到时回退到旧键，
+// 否则升级之后机器人配置、群配置和恢复位点会当成「从未保存过」。写入一律用新键。
+var legacyStateKeys = map[string]string{
+	botConfigKey:         "qqbot_config",
+	botProfilesKey:       "qqbot_profiles",
+	botGroupConfigKey:    "qqbot_group_configs",
+	replySuppressionsKey: "qqbot_reply_suppressions",
+	inboundRecoveryKey:   "qqbot_inbound_recovery_checkpoint",
+}
+
 func (s *SQLiteStore) loadJSON(ctx context.Context, key string, dest any) (bool, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, key).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		if legacy, ok := legacyStateKeys[key]; ok {
+			err = s.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, legacy).Scan(&raw)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// bool 返回值表示“没有保存过”，调用方据此使用默认配置或环境变量。

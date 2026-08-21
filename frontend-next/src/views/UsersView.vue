@@ -20,7 +20,7 @@
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px">
           <div class="input-group" style="flex: 1; max-width: 360px">
-            <input v-model="query" class="input" placeholder="按 QQ 号 / 昵称搜索…" @keydown.enter="search" />
+            <input v-model="query" class="input" placeholder="按账号 / 昵称搜索…" @keydown.enter="search" />
           </div>
           <button class="btn ghost small" type="button" :disabled="loading" @click="search">搜索</button>
           <span class="muted" style="font-size: 12.5px">共 {{ total }} 人</span>

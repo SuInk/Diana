@@ -240,7 +240,7 @@ func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
 }
 
 func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	messageIDs := make([]string, 0, 6)
 	for index := 1; index <= 6; index++ {
 		messageID := fmt.Sprintf("bot-reply-%d", index)
@@ -250,7 +250,7 @@ func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
 			Time:       int64(100 + index),
 			GroupID:    "group-1",
 			UserID:     "42",
-			SenderName: "嘉然",
+			SenderName: "Diana",
 			MessageID:  messageID,
 			Outbound:   true,
 			Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": fmt.Sprintf("第 %d 条完整回复正文", index)}}},
@@ -270,7 +270,7 @@ func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
 			}
 		}
 	}
-	prompt := currentPromptTextWithSemanticContext(event, "总结嘉然之前哪些回复有误", sourceContext)
+	prompt := currentPromptTextWithSemanticContext(event, "总结 Diana 之前哪些回复有误", sourceContext)
 	if !strings.Contains(prompt, "6 条包含文字") || !strings.Contains(prompt, "逐条核对") || strings.Contains(prompt, "逐张查看") || strings.Contains(prompt, "6 张") {
 		t.Fatalf("text source prompt = %q", prompt)
 	}
@@ -282,7 +282,7 @@ func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
 
 func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
 	provider := &capturingLLMProvider{reply: "已逐条核对"}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", RecentContextLimit: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", RecentContextLimit: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	messageIDs := make([]string, 0, 6)
@@ -295,7 +295,7 @@ func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
 			SelfID:     "42",
 			GroupID:    "group-1",
 			UserID:     "42",
-			SenderName: "嘉然",
+			SenderName: "Diana",
 			MessageID:  messageID,
 			Outbound:   true,
 			Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": fmt.Sprintf("历史回复正文 %d", index)}}},
@@ -309,8 +309,8 @@ func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
 		UserID:     "owner",
 		SenderName: "主人",
 		MessageID:  "current-question",
-		RawMessage: "总结嘉然此前哪些回复有误",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "总结嘉然此前哪些回复有误"}}},
+		RawMessage: "总结 Diana 此前哪些回复有误",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "总结 Diana 此前哪些回复有误"}}},
 		ToMe:       true,
 	}
 	setEventSemanticSourceMessageIDs(&event, messageIDs)
@@ -401,7 +401,7 @@ func TestSemanticReferenceCanResolveMediaBehindTextQuote(t *testing.T) {
 
 func TestSemanticReferenceFindsPersistedImageBeyondShortContext(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{`{"message_id":"target-image","confidence":0.98,"reason":"错误回复之前的图片是原任务来源"}`}}
-	runtime := NewRuntime(BotConfig{BotQQ: "42", RecentContextLimit: 20, ContextSummaryThreshold: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", RecentContextLimit: 20, ContextSummaryThreshold: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	store := newSemanticTimelineStore()
@@ -485,7 +485,7 @@ func TestSemanticReferenceFindsPersistedImageBeyondShortContext(t *testing.T) {
 }
 
 func TestOutgoingHistoryPreservesReplyAndSemanticSource(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	source := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "owner", MessageID: "request"}
 	remembered := source
 	setEventSemanticSourceMessageIDs(&remembered, []string{"target-image", "target-image-2"})

@@ -13,7 +13,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestDianaQQGroupToolListsOtherMembersWithMentions(t *testing.T) {
+func TestDianaOneBotGroupToolListsOtherMembersWithMentions(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_list": {
 			"items": []any{
@@ -24,8 +24,8 @@ func TestDianaQQGroupToolListsOtherMembersWithMentions(t *testing.T) {
 			},
 		},
 	}}
-	runtime := NewRuntime(BotConfig{BotQQ: "10000"}, channel, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaQQGroupTool(runtime, MessageEvent{
+	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	tool := newDianaOneBotGroupTool(runtime, MessageEvent{
 		Kind:    EventKindGroup,
 		SelfID:  "10000",
 		GroupID: "20001",
@@ -39,7 +39,7 @@ func TestDianaQQGroupToolListsOtherMembersWithMentions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result dianaQQGroupResult
+	var result dianaOneBotGroupResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestDianaQQGroupToolListsOtherMembersWithMentions(t *testing.T) {
 	}
 }
 
-func TestRuntimeAgentUsesQQGroupToolToMentionOtherMembers(t *testing.T) {
+func TestRuntimeAgentUsesOneBotGroupToolToMentionOtherMembers(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_list": {
 			"items": []any{
@@ -70,7 +70,7 @@ func TestRuntimeAgentUsesQQGroupToolToMentionOtherMembers(t *testing.T) {
 		case 1:
 			return `{"action":"none"}`, nil
 		case 2:
-			return `{"action":"tool","tool":"diana.qq_group","input":{"operation":"members","exclude_current_sender":true}}`, nil
+			return `{"action":"tool","tool":"diana.onebot_group","input":{"operation":"members","exclude_current_sender":true}}`, nil
 		case 3:
 			targetAlias = privacyAliasForDisplayName(req, "Alice")
 			if targetAlias == "" {
@@ -82,7 +82,7 @@ func TestRuntimeAgentUsesQQGroupToolToMentionOtherMembers(t *testing.T) {
 		}
 	}
 	runtime := NewRuntime(BotConfig{
-		BotQQ:         "10000",
+		BotAccount:    "10000",
 		AgentEnabled:  true,
 		AgentWorkDir:  t.TempDir(),
 		AgentMaxSteps: 3,
@@ -96,8 +96,8 @@ func TestRuntimeAgentUsesQQGroupToolToMentionOtherMembers(t *testing.T) {
 		UserID:     "10001",
 		MessageID:  "ask-1",
 		SenderName: "TestOwner",
-		RawMessage: "然然@下除了我以外的其余人",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "然然@下除了我以外的其余人"}}},
+		RawMessage: "Diana@下除了我以外的其余人",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana@下除了我以外的其余人"}}},
 		ToMe:       true,
 	}
 
@@ -108,7 +108,7 @@ func TestRuntimeAgentUsesQQGroupToolToMentionOtherMembers(t *testing.T) {
 	if !strings.Contains(reply, "[CQ:at,qq=10002]") {
 		t.Fatalf("reply = %q", reply)
 	}
-	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "diana.qq_group") || !requestMessagesContain(provider.requests[2].Messages, `"mention_cq": "[CQ:at,qq=`+targetAlias+`]"`) {
+	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "diana.onebot_group") || !requestMessagesContain(provider.requests[2].Messages, `"mention_cq": "[CQ:at,qq=`+targetAlias+`]"`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
 	for _, req := range provider.requests {
@@ -131,7 +131,7 @@ func TestRuntimeAgentUsesQQGroupToolToMentionOtherMembers(t *testing.T) {
 	}
 }
 
-func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithQQGroupTool(t *testing.T) {
+func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithOneBotGroupTool(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_list": {
 			"items": []any{
@@ -142,7 +142,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithQQGroupTool(t *testing
 		},
 	}}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"action":"tool","tool":"diana.qq_group","input":{"operation":"members"}}`,
+		`{"action":"tool","tool":"diana.onebot_group","input":{"operation":"members"}}`,
 		`{"action":"final","content":"群里现在有 3 个人。"}`,
 		`{"should_send":true,"confidence":0.99,"reason":"准确回答群成员数量"}`,
 	}}
@@ -150,7 +150,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithQQGroupTool(t *testing
 		AgentEnabled:  true,
 		AgentWorkDir:  t.TempDir(),
 		AgentMaxSteps: 3,
-		BotQQ:         "42",
+		BotAccount:    "42",
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -180,7 +180,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithQQGroupTool(t *testing
 	}
 }
 
-func TestDianaQQGroupToolSearchesByCardOrNickname(t *testing.T) {
+func TestDianaOneBotGroupToolSearchesByCardOrNickname(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_list": {
 			"items": []any{
@@ -190,7 +190,7 @@ func TestDianaQQGroupToolSearchesByCardOrNickname(t *testing.T) {
 		},
 	}}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
-	raw, err := newDianaQQGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "owner"}).Run(context.Background(), map[string]any{
+	raw, err := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "owner"}).Run(context.Background(), map[string]any{
 		"operation": "members",
 		"query":     "阿梨",
 	})

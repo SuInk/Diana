@@ -21,7 +21,7 @@ func (r *Runtime) semanticReferenceContextBlock(ctx context.Context, event Messa
 	if len(ids) == 0 {
 		return result
 	}
-	botQQ := r.effectiveConfigForEvent(event).BotQQ
+	botAccount := r.effectiveConfigForEvent(event).BotAccount
 	lines := make([]string, 0, len(ids))
 	for _, messageID := range ids {
 		source, found := r.findSemanticReferenceEvent(ctx, event, messageID)
@@ -36,7 +36,7 @@ func (r *Runtime) semanticReferenceContextBlock(ctx context.Context, event Messa
 		}
 		result.TextSources++
 		role := "用户"
-		if strings.TrimSpace(source.botReply) != "" || assistantHistoryEvent(source, botQQ) {
+		if strings.TrimSpace(source.botReply) != "" || assistantHistoryEvent(source, botAccount) {
 			role = "Diana"
 		}
 		timeLabel := "未知时间"

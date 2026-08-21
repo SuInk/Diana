@@ -83,7 +83,7 @@ func TestReplyRefusalThirdSuccessfulSendShowsCooldownForGroupAndPrivate(t *testi
 				"这次我仍然不能答应。" + replyRefusalMarker,
 			}}
 			channel := &recordingChannel{}
-			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
 			})
 
@@ -144,7 +144,7 @@ func TestReplyRefusalThirdSuccessfulSendShowsCooldownForGroupAndPrivate(t *testi
 func TestReplyRefusalMarkerOnlyUsesVisibleFallback(t *testing.T) {
 	provider := &refusalLLMProvider{replies: []string{replyRefusalMarker}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := refusalTestEvent(EventKindPrivate, "", "user", "marker-only")
@@ -167,7 +167,7 @@ func TestReplyRefusalMarkerOnlyUsesVisibleFallback(t *testing.T) {
 func TestImmediateReplySuppressionMarkerOnlyUsesVisibleFallback(t *testing.T) {
 	provider := &refusalLLMProvider{replies: []string{replySuppressionMarker}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := refusalTestEvent(EventKindPrivate, "", "user", "hard-marker-only")
@@ -193,7 +193,7 @@ func TestReplyRefusalFailedSendDoesNotCount(t *testing.T) {
 		provider.replies = append(provider.replies, fmt.Sprintf("拒绝说明 %d。", index+1)+replyRefusalMarker)
 	}
 	channel := &failNthSendChannel{recordingChannel: &recordingChannel{}, failAt: 3}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 
@@ -228,7 +228,7 @@ func TestReplyRefusalCooldownNoticeFailureDoesNotActivateSilentCooldown(t *testi
 		provider.replies = append(provider.replies, fmt.Sprintf("拒绝说明 %d。", index+1)+replyRefusalMarker)
 	}
 	channel := &failNthSendChannel{recordingChannel: &recordingChannel{}, failAt: replyRefusalThreshold + 1}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 
@@ -260,7 +260,7 @@ func TestReplyRefusalCooldownNoticeFailureDoesNotActivateSilentCooldown(t *testi
 func TestReplyRefusalConcurrentThresholdBlocksTheExtraReply(t *testing.T) {
 	provider := fixedRefusalLLMProvider{}
 	channel := &concurrentRecordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	seedAt := time.Now().Add(-time.Minute)
@@ -298,7 +298,7 @@ func TestReplyRefusalConcurrentThresholdBlocksTheExtraReply(t *testing.T) {
 
 func TestReplyRefusalCooldownNoticeUsesIndependentContext(t *testing.T) {
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	seedAt := time.Now().Add(-time.Minute)
 	for index := 0; index < replyRefusalThreshold-1; index++ {
 		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("seed-context-%d", index))
@@ -317,8 +317,8 @@ func TestReplyRefusalCooldownNoticeUsesIndependentContext(t *testing.T) {
 	}
 }
 
-func TestReplyRefusalCounterIsGlobalPerQQAndDeduplicatesPerSessionMessage(t *testing.T) {
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+func TestReplyRefusalCounterIsGlobalPerAccountAndDeduplicatesPerSessionMessage(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	t0 := time.Date(2026, time.July, 18, 9, 0, 0, 0, time.UTC)
 	first := refusalTestEvent(EventKindGroup, "group-a", "user", "same-id")
 	if count, _, reached := runtime.registerReplyRefusal(first, t0); count != 1 || reached {
@@ -357,7 +357,7 @@ func TestReplyRefusalMarkerSurvivesReplyLimit(t *testing.T) {
 }
 
 func TestReplySuppressionActivationIsIdempotent(t *testing.T) {
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	t0 := time.Date(2026, time.July, 18, 9, 0, 0, 0, time.UTC)
 	firstEvent := refusalTestEvent(EventKindGroup, "group-a", "user", "first")
 	first, activated := runtime.activateReplySuppression(firstEvent, "first reason", t0)
@@ -449,7 +449,7 @@ func TestReplySuppressionBlocksFollowingMentionAndQuote(t *testing.T) {
 		`{"action":"none","prompt":""}`,
 		"收到，这轮就到这里，我不再接机器人复读啦。" + replySuppressionMarker,
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	first := MessageEvent{
@@ -501,7 +501,7 @@ func TestReplySuppressionMarkerSurvivesReplyLimit(t *testing.T) {
 		strings.Repeat("较长拒绝说明", 20) + replySuppressionMarker,
 	}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42", MaxReplyChars: 12}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", MaxReplyChars: 12}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
@@ -532,7 +532,7 @@ func TestReplySuppressionBlocksReplyActivatedDuringGeneration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			provider := &generationTimeSuppressionProvider{}
 			channel := &recordingChannel{}
-			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42", ForwardReplyThreshold: tt.forwardThreshold}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", ForwardReplyThreshold: tt.forwardThreshold}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
 			})
 			event := MessageEvent{
@@ -558,7 +558,7 @@ func TestReplySuppressionBlocksReplyActivatedDuringGeneration(t *testing.T) {
 
 func TestReplySuppressionOwnerCanReleaseInDisabledGroup(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		OwnerID: "10001", BotQQ: "42", DisabledGroups: []string{"123456"},
+		OwnerID: "10001", BotAccount: "42", DisabledGroups: []string{"123456"},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	targetEvent := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "20002", MessageID: "blocked"}
 	if _, ok := runtime.activateReplySuppression(targetEvent, "test", time.Now()); !ok {
@@ -575,7 +575,7 @@ func TestReplySuppressionOwnerCanReleaseInDisabledGroup(t *testing.T) {
 		t.Fatal("owner release command should work even when the group is disabled")
 	}
 	reply, handled := runtime.handleOwnerCommand(ownerEvent, "响应限制 解除")
-	if !handled || !strings.Contains(reply, "已解除 QQ 20002") {
+	if !handled || !strings.Contains(reply, "已解除账号 20002") {
 		t.Fatalf("owner release handled=%v reply=%q", handled, reply)
 	}
 	if _, active := runtime.activeReplySuppression(targetEvent, time.Now()); active {
@@ -585,7 +585,7 @@ func TestReplySuppressionOwnerCanReleaseInDisabledGroup(t *testing.T) {
 
 func TestReplySuppressionPersistsAcrossRuntimeRestart(t *testing.T) {
 	store := &memoryReplySuppressionStore{}
-	first := NewRuntime(BotConfig{OwnerID: "10001", BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	first := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	if err := first.SetReplySuppressionStore(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +597,7 @@ func TestReplySuppressionPersistsAcrossRuntimeRestart(t *testing.T) {
 		t.Fatalf("persisted items = %d, want 1", len(store.items))
 	}
 
-	second := NewRuntime(BotConfig{OwnerID: "10001", BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	second := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	if err := second.SetReplySuppressionStore(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +616,7 @@ func TestBotReplyLoopSuppressesThirdAIClassifiedMessageAcrossLowFrequency(t *tes
 		`为避免机器人互相循环，已暂停响应此账号约 30 分钟，期间不再接续消息。`,
 	}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	start := time.Now().Add(-25 * time.Minute).Truncate(time.Second)
@@ -671,7 +671,7 @@ func TestBotReplyLoopDetectionCanBeDisabled(t *testing.T) {
 	}}
 	runtime := NewRuntime(BotConfig{
 		OwnerID:                      "10001",
-		BotQQ:                        "42",
+		BotAccount:                   "42",
 		BotReplyLoopDetectionEnabled: &disabled,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -695,7 +695,7 @@ func TestBotReplyLoopDoesNotCountHumanClassifiedMessages(t *testing.T) {
 		provider.replies = append(provider.replies, `{"automated_ai_reply":false,"confidence":0.99,"reason":"普通真人连续聊天"}`)
 		provider.replies = append(provider.replies, `{"should_reply":true,"confidence":0.97,"category":"bot_related","directed_at_bot":true,"answerable":true,"reason":"真人在继续追问可回答的问题"}`)
 	}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	start := time.Now().Add(-20 * time.Minute).Truncate(time.Second)
@@ -753,7 +753,7 @@ func TestBotReplyLoopThresholdAndWindowBoundaries(t *testing.T) {
 }
 
 func TestReplySuppressionExpiresAtThirtyMinuteBoundary(t *testing.T) {
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: "message"}
 	t0 := time.Date(2026, time.July, 18, 9, 0, 0, 0, time.UTC)
 	item, activated := runtime.activateReplySuppression(event, "test", t0)
@@ -809,7 +809,7 @@ func TestBotReplyLoopNeverClassifiesOwner(t *testing.T) {
 	for i := 0; i < botReplyLoopThreshold+1; i++ {
 		provider.replies = append(provider.replies, `{"should_reply":false,"confidence":0.99,"category":"none","directed_at_bot":true,"answerable":false,"reason":"没有需要继续回答的内容"}`)
 	}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotQQ: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	start := time.Now().Add(-time.Minute).Truncate(time.Second)

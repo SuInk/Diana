@@ -2,7 +2,7 @@
 
 # Diana
 
-**可自托管的多平台 AI 助手 —— QQ 与 Telegram 同时在线，数据留在自己的机器上。**
+**可自托管的多平台 AI 助手 —— OneBot v11 与 Telegram 同时在线，数据留在自己的机器上。**
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
@@ -35,7 +35,7 @@
 
 ## 这是什么
 
-Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、平台适配层、Gin WebUI 和插件系统，编译成单个二进制运行。当前自带 QQ（OneBot v11）和 Telegram 两类通道，WebUI 可以管理多个机器人配置、模型分配、群聊策略、插件与内置 Agent。
+Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、平台适配层、Gin WebUI 和插件系统，编译成单个二进制运行。当前自带 OneBot v11 和 Telegram 两类通道，WebUI 可以管理多个机器人配置、模型分配、群聊策略、插件与内置 Agent。
 
 配置、记忆、日志都存在本机的 SQLite 里，不依赖任何托管服务；每条消息为什么回复、为什么不回复、用了哪些工具、花了多少 token，都能在事件中心查到。
 
@@ -43,11 +43,11 @@ Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、�
 
 | | |
 | --- | --- |
-| **多通道同时在线** | QQ 与 Telegram 并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享 |
+| **多通道同时在线** | OneBot v11 与 Telegram 并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享 |
 | **模型职责拆分** | 对话、识图、意图识别、图片生成分别绑定 Provider 与模型，保存前用真实请求验证 |
 | **内置联网搜索** | 无需安装插件，面对时效性内容可以先检索再回答；Exa MCP 优先，Tavily 兜底 |
 | **图片文字识别** | 图片可同时走视觉模型与 OCR（LLM 转写 / 自托管 OCR 服务 / 本地 tesseract）；对话模型不支持看图时也能只收识别后的文字。识别结果按图片内容哈希落库，同一张图或表情包只识别一次 |
-| **群级回复策略** | 每个群独立设置回复时段、黑白名单、触发词、人设、QQ 群等级门槛和工具权限 |
+| **群级回复策略** | 每个群独立设置回复时段、黑白名单、触发词、人设、群等级门槛和工具权限 |
 | **长期记忆与检索** | 近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，控制 token 消耗 |
 | **内置 Agent** | Pi 风格的最小工具循环，可调用文件、命令、浏览器工具，并按需装载 Skills 与 MCP 服务 |
 | **完整事件审计** | 记录回复原因、模型调用链、token 与错误；操作日志区分操作人 |
@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 ```sh
 git clone https://github.com/SuInk/Diana.git && cd Diana
 cp docker-compose.yml docker-compose.local.yml
-# 修改 docker-compose.local.yml 中的 token、QQ 号和 LLM 配置
+# 修改 docker-compose.local.yml 中的 token、账号和 LLM 配置
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
@@ -103,10 +103,10 @@ docker run -d \
   -v "$PWD/logs:/app/logs" \
   -e LOG_PATH=/app/logs/diana.log \
   -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
-  -e QQBOT_ENABLED=true \
+  -e DIANA_BOT_ENABLED=true \
   -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
   -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e QQBOT_QQ=10001 \
+  -e DIANA_BOT_ACCOUNT=10001 \
   -e LLM_PROVIDER=openai_compatible \
   -e LLM_API_KEY=your-key \
   -e LLM_MODEL=gpt-4o-mini \
@@ -172,14 +172,14 @@ node scripts/dev.mjs                       # 没装 make 时
 4. **检查事件** —— 发一条消息，在事件中心确认回复原因与模型调用链。
 
 <details>
-<summary>用环境变量直接拉起一个 QQ 机器人</summary>
+<summary>用环境变量直接拉起一个 OneBot v11 机器人</summary>
 
 ```sh
-QQBOT_ENABLED=true \
+DIANA_BOT_ENABLED=true \
 ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
 ONEBOT_ACCESS_TOKEN=your-onebot-token \
-QQBOT_QQ=10001 \
-DIANA_GROUP_TRIGGERS=嘉然,然然,Diana,diana \
+DIANA_BOT_ACCOUNT=10001 \
+DIANA_GROUP_TRIGGERS=Diana,diana \
 LLM_PROVIDER=openai_compatible \
 LLM_API_KEY=your-key \
 LLM_MODEL=gpt-4o-mini \
@@ -194,14 +194,14 @@ LLM_MODEL=gpt-4o-mini \
 
 | 分类 | 平台 | 接入方式 |
 | --- | --- | --- |
-| QQ | OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana（NapCat、Lagrange.Core、go-cqhttp 等同属这一类） |
+| OneBot v11 | OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana（NapCat、Lagrange.Core、go-cqhttp 等同属这一类） |
 | Telegram | Telegram Bot API | 官方长轮询，由 Diana 主动出站连接，不需要公网地址和 webhook |
 
 所有启用的配置会同时在线。Telegram 只需要 BotFather 给的 Bot Token；国内网络通常还要在机器人页填代理地址，部署了本地 Bot API server 可填自建地址绕过 50MB 上传限制。
 
 两个平台的能力差异：
 
-- **群等级门槛只对 QQ 生效**。Telegram 没有群等级概念，准入设置里不显示该项。
+- **群等级门槛只对 OneBot v11 生效**。Telegram 没有群等级概念，准入设置里不显示该项。
 - **语音消息、@某人** 依赖 OneBot 的 CQ 码，Telegram 上自然降级：正文照发，但不会 @ 到人。
 - **本地媒体**：OneBot 侧由接入端拉取 Diana 的 `/media/resolver` 地址；Telegram 拉不到本机地址，改为直接 multipart 上传。
 
@@ -230,10 +230,10 @@ WebUI 从首次启动起强制登录，本机和公网访问同一套规则。�
 「机器人」页的「准入控制」和「群管理」页的每个群，都能限制机器人在什么条件下才回复。全局设置为默认值，群级设置整体覆盖全局（不是逐字段合并）。
 
 - **群准入模式**：默认「黑名单」，除禁用群外都工作；切到「白名单」后只在列出的群工作，被拉进别的群不会回话。白名单模式下禁用群列表仍生效。
-- **QQ 群等级门槛**：指群内活跃度等级（Lv.1~6），不是 QQ 账号等级（太阳月亮星星，OneBot 协议拿不到）。等级按群独立累积。
+- **群等级门槛**：指群内活跃度等级（Lv.1~6），不是账号等级（太阳月亮星星，OneBot 协议拿不到）。等级按群独立累积。
 - **回复时段**：结束早于开始表示跨夜（如 `22:00-06:00`），两者相同视为全天开放。时区填 IANA 名称（如 `Asia/Shanghai`）。静默期可配提示语，同一会话每小时最多提示一次。
 - **豁免 / 屏蔽用户**：豁免用户无视等级与时段；屏蔽用户群聊私聊都不回。
-- **主人绕过**：默认开启，建议保持——否则时段或等级配错时你自己也会被挡在门外，QQ 侧没有补救手段。
+- **主人绕过**：默认开启，建议保持——否则时段或等级配错时你自己也会被挡在门外，OneBot 侧没有补救手段。
 
 部分 OneBot 实现不会在消息事件里带 `level`，Diana 会按需通过 `get_group_member_info` 补齐并缓存 10 分钟。**拿不到等级时默认放行**：各实现返回差异很大，把「读不到」当成「等级 0」拒绝会让整个群失联。需要严格拦截可改成「拦截」，但要清楚代价。
 
@@ -242,7 +242,7 @@ WebUI 从首次启动起强制登录，本机和公网访问同一套规则。�
 「机器人插件」区域可以启用、停用和配置官方内置插件，内置能力无需安装或卸载。
 
 - **链接解析**：解析并发送 B 站、YouTube、X、小红书、抖音的图片或视频；知乎、微博、GitHub 只抓标题描述。大小、时长、清晰度、图集数量可调。各平台 Cookie、yt-dlp Cookie 文件和代理地址直接在插件设置里填，优先于同名环境变量；凭据保存后读接口只回传「已配置」标记。卡片内会显示 `yt-dlp`、`ffmpeg`、`node` 的探测结果，并可通过受控的包管理器安装缺失项。
-- **文件解析**：支持 QQ 文件段和文件直链，提取内容作为 LLM 上下文。覆盖纯文本、配置、常见源码、PDF、Office（docx / xlsx / pptx）、ODF（odt / ods / odp）和 EPUB；文件大小上限在插件设置里按 KB/MB/GB 选择单位填写。
+- **文件解析**：支持 OneBot 文件段和文件直链，提取内容作为 LLM 上下文。覆盖纯文本、配置、常见源码、PDF、Office（docx / xlsx / pptx）、ODF（odt / ods / odp）和 EPUB；文件大小上限在插件设置里按 KB/MB/GB 选择单位填写。
 - **图片文字识别**：图片进上下文前先做一次 OCR，可选 LLM 视觉转写、自托管 OCR 服务（PaddleOCR / RapidOCR）或本地 `tesseract`，后两者完全离线。交付方式可选「图片 + 文字」或「仅文字」——后者让不支持多模态的对话模型也能处理图片消息。
 - **联网搜索**：默认安装并启用，可停用和配置但不能卸载。独立于内置 Agent 开关，未开 Agent 时不会同时开放本地文件、命令或浏览器工具。
 
@@ -261,11 +261,11 @@ Agent 用统一扩展目录管理三类能力：**内置插件**（沿用原有�
 
 ### 第三方 NoneBot 插件
 
-Go 主程序不能直接加载 Python NoneBot 插件，可单独运行一个 NoneBot sidecar：在 NoneBot2 项目中装好插件并配置 OneBot v11 反向 WebSocket driver，然后在 Diana 的「QQ 机器人」页启用 `NoneBot 插件桥`，地址默认 `ws://127.0.0.1:8080/onebot/v11/ws`。Diana 会把 OneBot 事件转发给 sidecar，插件调用 `send_msg`、`get_group_info` 等 API 时再转发回当前 OneBot 客户端。
+Go 主程序不能直接加载 Python NoneBot 插件，可单独运行一个 NoneBot sidecar：在 NoneBot2 项目中装好插件并配置 OneBot v11 反向 WebSocket driver，然后在 Diana 的「OneBot v11 机器人」页启用 `NoneBot 插件桥`，地址默认 `ws://127.0.0.1:8080/onebot/v11/ws`。Diana 会把 OneBot 事件转发给 sidecar，插件调用 `send_msg`、`get_group_info` 等 API 时再转发回当前 OneBot 客户端。
 
 ### 日志中心
 
-「日志中心」页查看持久化的操作日志和错误日志：LLM 配置保存/切换、机器人启停、插件管理、系统更新等动作都会记录，并带 `actor` 操作人（WebUI 默认 `web:<客户端 IP>`，也可由网关通过 `X-Diana-Actor`、`X-Operator`、`X-Forwarded-User` 传入；聊天内模型配置命令记 `qq:<用户 QQ>`）。
+「日志中心」页查看持久化的操作日志和错误日志：LLM 配置保存/切换、机器人启停、插件管理、系统更新等动作都会记录，并带 `actor` 操作人（WebUI 默认 `web:<客户端 IP>`，也可由网关通过 `X-Diana-Actor`、`X-Operator`、`X-Forwarded-User` 传入；聊天内模型配置命令记 `qq:<用户账号>`）。
 
 ```text
 GET /api/logs?kind=operation&limit=100
@@ -293,12 +293,12 @@ WebUI 里能配的都不必写环境变量。下面是常用项，完整说明�
 | `LLM_API_KEY` | 空 | LLM API Key |
 | `LLM_BASE_URL` | 空 | OpenAI 兼容接口的自定义 Base URL |
 | `LLM_MODEL` | 空 | 模型 ID（`openai_compatible` 无默认值） |
-| `QQBOT_ENABLED` | `false` | 启动时是否自动启用机器人 |
+| `DIANA_BOT_ENABLED` | `false` | 启动时是否自动启用机器人 |
 | `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | 给 OneBot v11 客户端连接的反向 WebSocket 地址 |
 | `ONEBOT_ACCESS_TOKEN` | 空 | OneBot access token |
-| `QQBOT_QQ` | 空 | 机器人 QQ 号 |
-| `DIANA_OWNER_ID` | 空 | 主人 QQ 号（Telegram 上填数字用户 ID） |
-| `DIANA_GROUP_TRIGGERS` | `嘉然,然然,Diana,diana` | 群聊触发词 |
+| `DIANA_BOT_ACCOUNT` | 空 | 机器人账号 |
+| `DIANA_OWNER_ID` | 空 | 主人账号（Telegram 上填数字用户 ID） |
+| `DIANA_GROUP_TRIGGERS` | `Diana,diana` | 群聊触发词 |
 | `DIANA_AGENT_ENABLED` | `false` | 是否启用内置 Agent |
 
 <details>
@@ -365,10 +365,10 @@ Type=simple
 WorkingDirectory=/opt/diana
 Environment=PORT=18080
 Environment=LOG_PATH=/var/log/diana/diana.log
-Environment=QQBOT_ENABLED=true
+Environment=DIANA_BOT_ENABLED=true
 Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
 Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=QQBOT_QQ=10001
+Environment=DIANA_BOT_ACCOUNT=10001
 Environment=LLM_PROVIDER=openai_compatible
 Environment=LLM_API_KEY=change-me
 Environment=LLM_MODEL=gpt-4o-mini

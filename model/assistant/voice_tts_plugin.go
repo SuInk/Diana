@@ -233,7 +233,7 @@ func (t *dianaTTSTool) Name() string {
 }
 
 func (t *dianaTTSTool) Description() string {
-	return fmt.Sprintf(`将最终回复合成为%s音色并直接发送一条 QQ 语音。仅当用户明确要求用语音回复、要求朗读/念出内容，或明确要求把某段文字说出来时调用；普通文字聊天、仅讨论声音/TTS/语音功能时严禁调用。调用后工具会直接完成本次回复，不要再发送重复文字。input: {"text":"实际要说的完整自然语言内容，不含 Markdown、CQ 码或工具说明"}`, voiceTTSVoiceName())
+	return fmt.Sprintf(`将最终回复合成为%s音色并直接发送一条 语音。仅当用户明确要求用语音回复、要求朗读/念出内容，或明确要求把某段文字说出来时调用；普通文字聊天、仅讨论声音/TTS/语音功能时严禁调用。调用后工具会直接完成本次回复，不要再发送重复文字。input: {"text":"实际要说的完整自然语言内容，不含 Markdown、CQ 码或工具说明"}`, voiceTTSVoiceName())
 }
 
 func (t *dianaTTSTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -421,14 +421,14 @@ func (p *VoiceTTSPlugin) encodeTencentSilk(ctx context.Context, cfg voiceTTSConf
 		"-STX=true",
 	)
 	if err != nil {
-		return "", voiceCommandError("QQ Silk 编码", output, err)
+		return "", voiceCommandError("Silk 编码", output, err)
 	}
 	header, err := readFilePrefix(silkPath, 16)
 	if err != nil {
-		return "", fmt.Errorf("读取 QQ Silk 结果失败: %w", err)
+		return "", fmt.Errorf("读取 Silk 结果失败: %w", err)
 	}
 	if !looksLikeTencentSilk(header) {
-		return "", fmt.Errorf("QQ Silk 编码器未返回有效 Tencent Silk 音频")
+		return "", fmt.Errorf("Silk 编码器未返回有效 Tencent Silk 音频")
 	}
 	removeSilk = false
 	return silkPath, nil

@@ -749,7 +749,7 @@ func (r *Runner) systemPrompt() string {
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每轮最多选择一个工具。",
-		"最终回复使用 JSON：{\"action\":\"final\",\"content\":\"给 QQ 用户看的自然语言回复\",\"task_state\":\"pending\",\"claims\":[...]}（仅有异步任务仍在处理时填写 task_state；执行联网研究时 claims 必填）。若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
+		"最终回复使用 JSON：{\"action\":\"final\",\"content\":\"给用户看的自然语言回复\",\"task_state\":\"pending\",\"claims\":[...]}（仅有异步任务仍在处理时填写 task_state；执行联网研究时 claims 必填）。若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 		"可用工具：\n" + r.registry.Descriptions(),
 	}
 	if skillsPrompt != "" {

@@ -93,7 +93,7 @@ func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string,
 	requester := t.runtime.relationshipPolicy(ctx, t.event)
 	targetID := normalizeRelationshipUserID(configToolString(input, "target_user_id"))
 	if configToolString(input, "target_user_id") != "" && targetID == "" {
-		return "", fmt.Errorf("target_user_id 必须是有效 QQ 号")
+		return "", fmt.Errorf("target_user_id 必须是有效账号")
 	}
 	if scope == "all" && !requester.Owner {
 		return "", fmt.Errorf("只有主人可以查询所有用户的提醒和订阅")
@@ -144,7 +144,7 @@ func taskTargetUserID(ctx context.Context, runtime *Runtime, event MessageEvent,
 	}
 	targetID := normalizeRelationshipUserID(raw)
 	if targetID == "" {
-		return "", fmt.Errorf("target_user_id 必须是有效 QQ 号")
+		return "", fmt.Errorf("target_user_id 必须是有效账号")
 	}
 	if targetID != strings.TrimSpace(event.UserID) && !runtime.relationshipPolicy(ctx, event).Owner {
 		return "", fmt.Errorf("只有主人可以管理其他用户的提醒和订阅")

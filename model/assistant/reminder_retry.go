@@ -125,7 +125,7 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 		target = reminderPrivateFallbackTarget(item)
 	}
 	if strings.TrimSpace(target.UserID) == "" && target.Kind == EventKindPrivate {
-		return fmt.Errorf("提醒失败通知缺少订阅者 QQ 号")
+		return fmt.Errorf("提醒失败通知缺少订阅者账号")
 	}
 	if err := r.send(ctx, target, notice); err == nil {
 		return nil
@@ -146,7 +146,7 @@ func reminderFailureNotice(item Reminder, cause error) string {
 		if strings.TrimSpace(item.PendingDelivery) != "" {
 			return fmt.Sprintf("定时订阅结果发送失败，结果已保留。将在 %s 自动重试发送（连续失败 %d 次）。", nextAttempt, item.ConsecutiveFailures)
 		}
-		return fmt.Sprintf("定时订阅本次执行失败：%s 将在 %s 自动重试（连续失败 %d 次）。", publicQQErrorMessage(cause), nextAttempt, item.ConsecutiveFailures)
+		return fmt.Sprintf("定时订阅本次执行失败：%s 将在 %s 自动重试（连续失败 %d 次）。", publicChatErrorMessage(cause), nextAttempt, item.ConsecutiveFailures)
 	}
 	return fmt.Sprintf("提醒 %s 本次发送失败，将在 %s 自动重试（连续失败 %d 次）。", item.ID, nextAttempt, item.ConsecutiveFailures)
 }
@@ -159,7 +159,7 @@ func (r *Runtime) recordReminderRetryAttempt(item Reminder, cause error, noticeE
 	detail := cause.Error()
 	if noticeErr != nil {
 		detail += "\n失败通知发送失败：" + noticeErr.Error()
-		log.Printf("qqbot reminder failure notice could not be delivered: id=%s: %v", item.ID, noticeErr)
+		log.Printf("chatbot reminder failure notice could not be delivered: id=%s: %v", item.ID, noticeErr)
 	}
 	writer := r.appLogWriter()
 	if writer == nil {
@@ -171,7 +171,7 @@ func (r *Runtime) recordReminderRetryAttempt(item Reminder, cause error, noticeE
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "qqbot.reminder.retry_scheduled",
+		Action:  "chatbot.reminder.retry_scheduled",
 		Message: "提醒或订阅执行失败，已安排自动重试",
 		Detail:  detail,
 		Actor:   item.OwnerID,

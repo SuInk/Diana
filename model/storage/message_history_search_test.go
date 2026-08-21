@@ -23,10 +23,10 @@ func TestSearchMessageEventsSupportsAllTimeAndNamespaceScopedGroups(t *testing.T
 		session string
 		event   assistant.MessageEvent
 	}{
-		{"qq-main:group:one", historySearchEvent(10, "one", "old", "Alice", "很久以前讨论过长期记忆")},
-		{"qq-main:group:two", historySearchEvent(20, "two", "new", "Bob", "另一个群也讨论长期记忆")},
-		{"qq-other:group:three", historySearchEvent(30, "three", "foreign", "Carol", "其他机器人讨论长期记忆")},
-		{"qq-main:group:two", historySearchEvent(40, "two", "noise", "Bob", "无关消息")},
+		{"onebot-main:group:one", historySearchEvent(10, "one", "old", "Alice", "很久以前讨论过长期记忆")},
+		{"onebot-main:group:two", historySearchEvent(20, "two", "new", "Bob", "另一个群也讨论长期记忆")},
+		{"onebot-other:group:three", historySearchEvent(30, "three", "foreign", "Carol", "其他机器人讨论长期记忆")},
+		{"onebot-main:group:two", historySearchEvent(40, "two", "noise", "Bob", "无关消息")},
 	}
 	for _, item := range events {
 		item.event.ContextNamespace = item.session[:7]
@@ -36,7 +36,7 @@ func TestSearchMessageEventsSupportsAllTimeAndNamespaceScopedGroups(t *testing.T
 	}
 
 	current, total, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{
-		Session: "qq-main:group:one", Text: "长期记忆", FromTime: 0, ThroughTime: 100, Limit: 20,
+		Session: "onebot-main:group:one", Text: "长期记忆", FromTime: 0, ThroughTime: 100, Limit: 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestSearchMessageEventsSupportsAllTimeAndNamespaceScopedGroups(t *testing.T
 	}
 
 	groups, total, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{
-		SessionPrefix: "qq-main:group:", CrossSession: true, Text: "长期 记忆", FromTime: 0, ThroughTime: 100, Limit: 1,
+		SessionPrefix: "onebot-main:group:", CrossSession: true, Text: "长期 记忆", FromTime: 0, ThroughTime: 100, Limit: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -68,12 +68,12 @@ func TestSearchMessageEventsRanksExactPhraseThenPartialTerms(t *testing.T) {
 		historySearchEvent(20, "one", "exact", "Bob", "虎皮凤爪很好吃"),
 		historySearchEvent(10, "one", "noise", "Carol", "今天讨论别的菜"),
 	} {
-		if err := store.AppendMessageEvent(ctx, "qq-main:group:one", event); err != nil {
+		if err := store.AppendMessageEvent(ctx, "onebot-main:group:one", event); err != nil {
 			t.Fatal(err)
 		}
 	}
 	events, total, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{
-		Session: "qq-main:group:one", Text: "虎皮凤爪好吃吗", Terms: []string{"虎皮凤爪", "凤爪", "好吃"},
+		Session: "onebot-main:group:one", Text: "虎皮凤爪好吃吗", Terms: []string{"虎皮凤爪", "凤爪", "好吃"},
 		FromTime: 0, ThroughTime: 100, Limit: 20,
 	})
 	if err != nil {
@@ -93,7 +93,7 @@ func TestMessageHistoryPersistsOutboundRole(t *testing.T) {
 	}
 	event := assistant.MessageEvent{
 		Kind: assistant.EventKindPrivate, Time: 10, SelfID: "42", UserID: "10001",
-		MessageID: "outgoing-1", SenderName: "嘉然", Outbound: true,
+		MessageID: "outgoing-1", SenderName: "Diana", Outbound: true,
 		Segments: []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "我刚才说过的话"}}},
 	}
 	if err := store.AppendMessageEvent(ctx, "private:10001", event); err != nil {

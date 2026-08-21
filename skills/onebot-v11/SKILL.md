@@ -1,6 +1,6 @@
 ---
 name: onebot-v11
-description: Safely inspect or operate the current QQ bot through OneBot v11. Use when a user explicitly asks to read OneBot or QQ state, query protocol data, perform a QQ management action, or invoke a standard or implementation-specific OneBot action.
+description: Safely inspect or operate the current bot through OneBot v11. Use when a user explicitly asks to read OneBot v11 state, query protocol data, perform a group management action, or invoke a standard or implementation-specific OneBot action.
 ---
 
 # OneBot v11
@@ -17,7 +17,7 @@ Use `diana.onebot_v11` as the only protocol entry point. Do not emulate an actio
 
 ## Workflow
 
-1. Confirm that the current user explicitly asked for the QQ or OneBot operation.
+1. Confirm that the current user explicitly asked for the OneBot operation.
 2. Choose the narrowest action and parameters. Reuse IDs supplied by the user or trusted conversation context; never invent an ID.
 3. Call `diana.onebot_v11` with `{"action":"...","params":{...}}`.
 4. Treat the returned JSON as authoritative. Report errors plainly and never claim a mutation succeeded without a successful tool result.

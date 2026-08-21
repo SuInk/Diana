@@ -53,7 +53,7 @@ func repositoryWatchFailureDetails(err error) (stage, fingerprint, publicReason 
 	if errors.As(err, &staged) && strings.TrimSpace(staged.Stage) != "" {
 		stage = staged.Stage
 	}
-	publicReason = publicQQErrorMessage(err)
+	publicReason = publicChatErrorMessage(err)
 	sum := sha256.Sum256([]byte(stage + "\x00" + publicReason))
 	return stage, fmt.Sprintf("%x", sum[:]), publicReason
 }

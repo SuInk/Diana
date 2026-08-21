@@ -16,8 +16,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TestQQBotHandlerConfigKeepsTokenHidden 验证对应功能场景。
-func TestQQBotHandlerConfigKeepsTokenHidden(t *testing.T) {
+// TestBotHandlerConfigKeepsTokenHidden 验证对应功能场景。
+func TestBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 	runtime := assistant.NewRuntime(
 		assistant.BotConfig{
 			Enabled:                 false,
@@ -34,10 +34,10 @@ func TestQQBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 		nil,
 		nil,
 	)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	body := []byte(`{"enabled":false,"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","nonebot_bridge_enabled":true,"nonebot_bridge_endpoint":"ws://127.0.0.1:8080/onebot/v11/ws","group_triggers":["Diana"],"disabled_groups":["123456"],"welcome_enabled":true,"welcome_message":"欢迎 {user_id}","request_timeout_ms":1000}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/config", bytes.NewReader(body))
@@ -71,13 +71,13 @@ func TestQQBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 	}
 }
 
-// TestQQBotHandlerPluginInstallAndEnable 验证对应功能场景。
-func TestQQBotHandlerPluginInstallAndEnable(t *testing.T) {
+// TestBotHandlerPluginInstallAndEnable 验证对应功能场景。
+func TestBotHandlerPluginInstallAndEnable(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/plugins/official.nonebot-plugin-resolver-go/enabled", bytes.NewReader([]byte(`{"enabled":false}`)))
 	rec := httptest.NewRecorder()
@@ -95,9 +95,9 @@ func TestQQBotHandlerPluginInstallAndEnable(t *testing.T) {
 	}
 }
 
-func TestQQBotHandlerInstallsResolverDependency(t *testing.T) {
+func TestBotHandlerInstallsResolverDependency(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
 	calledWith := ""
@@ -110,7 +110,7 @@ func TestQQBotHandlerInstallsResolverDependency(t *testing.T) {
 			Installer:  "test-installer",
 		}, nil
 	}
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/dependencies/yt-dlp/install", nil)
 	rec := httptest.NewRecorder()
@@ -131,15 +131,15 @@ func TestQQBotHandlerInstallsResolverDependency(t *testing.T) {
 	}
 }
 
-func TestQQBotHandlerRejectsUnknownResolverDependency(t *testing.T) {
+func TestBotHandlerRejectsUnknownResolverDependency(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
 	handler.installResolverDependency = func(context.Context, string) (assistant.ResolverDependencyInstallResult, error) {
 		return assistant.ResolverDependencyInstallResult{}, assistant.ErrUnknownResolverDependency
 	}
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/dependencies/not-allowed/install", nil)
 	rec := httptest.NewRecorder()
@@ -150,13 +150,13 @@ func TestQQBotHandlerRejectsUnknownResolverDependency(t *testing.T) {
 	}
 }
 
-// TestQQBotHandlerPluginSettingsUpdateAndReject 验证对应功能场景。
-func TestQQBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
+// TestBotHandlerPluginSettingsUpdateAndReject 验证对应功能场景。
+func TestBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/plugins/official.nonebot-plugin-resolver-go/settings", bytes.NewReader([]byte(`{"settings":{"fetch_title":false,"max_links":8}}`)))
 	rec := httptest.NewRecorder()
@@ -190,13 +190,13 @@ func TestQQBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	}
 }
 
-// TestQQBotHandlerRejectsShortTokens 验证对应功能场景。
-func TestQQBotHandlerRejectsShortTokens(t *testing.T) {
+// TestBotHandlerRejectsShortTokens 验证对应功能场景。
+func TestBotHandlerRejectsShortTokens(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	body := []byte(`{"enabled":false,"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","onebot_access_token":"short","group_triggers":["Diana"],"request_timeout_ms":1000}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/config", bytes.NewReader(body))
@@ -208,15 +208,15 @@ func TestQQBotHandlerRejectsShortTokens(t *testing.T) {
 	}
 }
 
-// TestQQBotHandlerGroupTestSendsMessage 验证QQ群收发测试会调用当前 channel 发群消息。
-func TestQQBotHandlerGroupTestSendsMessage(t *testing.T) {
+// TestBotHandlerGroupTestSendsMessage 验证QQ群收发测试会调用当前 channel 发群消息。
+func TestBotHandlerGroupTestSendsMessage(t *testing.T) {
 	channel := &recordingFakeChannel{}
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return channel
 	})
-	handler.SetFeatureFlags(QQBotFeatureFlags{GroupTest: true})
-	router := qqBotTestRouter(handler)
+	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/group-test", bytes.NewReader([]byte(`{"group_id":"123456","message":"测试消息"}`)))
 	rec := httptest.NewRecorder()
@@ -251,14 +251,14 @@ func TestQQBotHandlerGroupTestSendsMessage(t *testing.T) {
 	}
 }
 
-// TestQQBotHandlerGroupTestRequiresGroupID 验证QQ群收发测试必须填写群号。
-func TestQQBotHandlerGroupTestRequiresGroupID(t *testing.T) {
+// TestBotHandlerGroupTestRequiresGroupID 验证QQ群收发测试必须填写群号。
+func TestBotHandlerGroupTestRequiresGroupID(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	handler.SetFeatureFlags(QQBotFeatureFlags{GroupTest: true})
-	router := qqBotTestRouter(handler)
+	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/group-test", bytes.NewReader([]byte(`{"message":"测试消息"}`)))
 	rec := httptest.NewRecorder()
@@ -269,15 +269,15 @@ func TestQQBotHandlerGroupTestRequiresGroupID(t *testing.T) {
 	}
 }
 
-// TestQQBotHandlerGroupTestRequiresNumericGroupID 验证群测试不会把明显非法群号透传给 OneBot。
-func TestQQBotHandlerGroupTestRequiresNumericGroupID(t *testing.T) {
+// TestBotHandlerGroupTestRequiresNumericGroupID 验证群测试不会把明显非法群号透传给 OneBot。
+func TestBotHandlerGroupTestRequiresNumericGroupID(t *testing.T) {
 	channel := &recordingFakeChannel{}
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return channel
 	})
-	handler.SetFeatureFlags(QQBotFeatureFlags{GroupTest: true})
-	router := qqBotTestRouter(handler)
+	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/group-test", bytes.NewReader([]byte(`{"group_id":"abc","message":"测试消息"}`)))
 	rec := httptest.NewRecorder()
@@ -291,8 +291,8 @@ func TestQQBotHandlerGroupTestRequiresNumericGroupID(t *testing.T) {
 	}
 }
 
-// TestQQBotHandlerGroupTestReturnsRecentGroupEvents 验证QQ群收发测试能读取指定群最近收到的消息。
-func TestQQBotHandlerGroupTestReturnsRecentGroupEvents(t *testing.T) {
+// TestBotHandlerGroupTestReturnsRecentGroupEvents 验证QQ群收发测试能读取指定群最近收到的消息。
+func TestBotHandlerGroupTestReturnsRecentGroupEvents(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	if err := runtime.HandleEvent(context.Background(), assistant.MessageEvent{
 		Kind:       assistant.EventKindGroup,
@@ -302,11 +302,11 @@ func TestQQBotHandlerGroupTestReturnsRecentGroupEvents(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("HandleEvent() error = %v", err)
 	}
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	handler.SetFeatureFlags(QQBotFeatureFlags{GroupTest: true})
-	router := qqBotTestRouter(handler)
+	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/qqbot/group-test?group_id=123456", nil)
 	rec := httptest.NewRecorder()
@@ -327,13 +327,13 @@ func TestQQBotHandlerGroupTestReturnsRecentGroupEvents(t *testing.T) {
 	}
 }
 
-// TestQQBotHandlerGroupTestDisabledByDefault 验证QQ群收发测试默认不暴露到正式环境。
-func TestQQBotHandlerGroupTestDisabledByDefault(t *testing.T) {
+// TestBotHandlerGroupTestDisabledByDefault 验证QQ群收发测试默认不暴露到正式环境。
+func TestBotHandlerGroupTestDisabledByDefault(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/qqbot/group-test?group_id=123456", nil)
 	rec := httptest.NewRecorder()
@@ -348,7 +348,7 @@ func TestQQBotHandlerGroupTestDisabledByDefault(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("features status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var flags QQBotFeatureFlags
+	var flags BotFeatureFlags
 	if err := json.NewDecoder(rec.Body).Decode(&flags); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
@@ -357,20 +357,20 @@ func TestQQBotHandlerGroupTestDisabledByDefault(t *testing.T) {
 	}
 }
 
-// qqBotTestRouter 封装当前模块的 qqBotTestRouter 逻辑。
-func qqBotTestRouter(handler *QQBotHandler) *gin.Engine {
+// botTestRouter 封装当前模块的 botTestRouter 逻辑。
+func botTestRouter(handler *BotHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handler.Register(router)
 	return router
 }
 
-func TestQQBotPlatforms(t *testing.T) {
+func TestBotPlatforms(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/qqbot/platforms", nil))
 	if rec.Code != http.StatusOK {
@@ -395,10 +395,10 @@ func TestQQBotPlatforms(t *testing.T) {
 	}
 }
 
-func TestQQBotContextIsolationEndpointPersistsAndRebuildsChannels(t *testing.T) {
+func TestBotContextIsolationEndpointPersistsAndRebuildsChannels(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	profiles := NewMemoryQQBotProfileStore(assistant.DefaultBotConfig())
-	handler := NewQQBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+	profiles := NewMemoryBotProfileStore(assistant.DefaultBotConfig())
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
 	handler.SetProfileStore(profiles)
@@ -407,7 +407,7 @@ func TestQQBotContextIsolationEndpointPersistsAndRebuildsChannels(t *testing.T) 
 		rebuilt = set
 		return fakeChannel{}
 	})
-	router := qqBotTestRouter(handler)
+	router := botTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config/context-isolation", bytes.NewReader([]byte(`{"enabled":false}`)))
 	req.Header.Set("Content-Type", "application/json")

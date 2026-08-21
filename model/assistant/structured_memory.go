@@ -36,7 +36,7 @@ const (
 type MemoryVisibility string
 
 const (
-	// MemoryVisibilitySession keeps a memory inside the QQ private chat or group
+	// MemoryVisibilitySession keeps a memory inside the private chat or group
 	// in which it was learned.
 	MemoryVisibilitySession MemoryVisibility = "session"
 	// MemoryVisibilityUser allows a non-sensitive, explicit memory about the

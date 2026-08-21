@@ -153,7 +153,7 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 		return
 	}
 	// 聊天修改 LLM 配置会影响运行时行为，所以和 WebUI 配置变更写入同一条审计流。
-	// 成功算操作日志，被拒绝或失败算错误日志，操作者记录为 QQ 用户。
+	// 成功算操作日志，被拒绝或失败算错误日志，操作者记录为用户。
 	kind := applog.KindError
 	level := applog.LevelError
 	message := result.Reply
@@ -199,15 +199,15 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 		Action:   "assistant.llm_config.command",
 		Message:  message,
 		Detail:   detail,
-		Actor:    qqEventActor(req.Event),
+		Actor:    oneBotEventActor(req.Event),
 		Target:   firstNonEmpty(result.ProfileID, result.NewModel, result.OldModel),
 		Metadata: metadata,
 	})
 }
 
-// qqEventActor 将 QQ 事件转换为日志操作者标识。
-func qqEventActor(event MessageEvent) string {
-	// 给 actor 加命名空间，日志中心里能区分 WebUI 操作者和 QQ 用户。
+// oneBotEventActor 将 OneBot 事件转换为日志操作者标识。
+func oneBotEventActor(event MessageEvent) string {
+	// 给 actor 加命名空间，日志中心里能区分 WebUI 操作者和用户。
 	if userID := strings.TrimSpace(event.UserID); userID != "" {
 		return "qq:" + userID
 	}

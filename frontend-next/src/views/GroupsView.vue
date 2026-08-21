@@ -6,7 +6,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>群管理</h1>
-        <p>查看机器人已加入的全部群，并按群配置回复时间、屏蔽 QQ 号、专属人设与插件开关</p>
+        <p>查看机器人已加入的全部群，并按群配置回复时间、屏蔽账号、专属人设与插件开关</p>
       </div>
       <div class="group-manual-add">
         <input
@@ -126,7 +126,7 @@
         </div>
         <div class="field wide">
           <label for="group-triggers">本群触发词（逗号分隔，留空用全局）</label>
-          <input id="group-triggers" v-model="triggersDraft" class="input" placeholder="嘉然,然然" />
+          <input id="group-triggers" v-model="triggersDraft" class="input" placeholder="Diana,diana" />
         </div>
         <div class="field wide">
           <label for="group-trigger-mode">本群触发词匹配（留空用全局）</label>
@@ -231,7 +231,7 @@
           />
         </div>
         <div class="field wide">
-          <label>本群回复时间与屏蔽 QQ 号</label>
+          <label>本群回复时间与屏蔽账号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
         </div>
         <div class="field wide">
@@ -280,13 +280,13 @@
 import { computed, onMounted, ref } from "vue";
 import { Plus, RefreshCw, Save, Search, SlidersHorizontal, Users, WifiOff } from "@lucide/vue";
 import {
-  getQQBotConfig,
-  getQQBotPlatforms,
-  listQQBotGroups,
-  saveQQBotGroup,
+  getBotProfileConfig,
+  getBotPlatforms,
+  listBotGroups,
+  saveBotGroup,
   type PluginState,
-  type QQBotGroupConfig,
-  type QQBotGroupSummary
+  type BotGroupConfig,
+  type BotGroupSummary
 } from "../api";
 import EmptyState from "../components/EmptyState.vue";
 import GroupPluginSettings from "../components/GroupPluginSettings.vue";
@@ -294,8 +294,8 @@ import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { toastError, toastSuccess } from "../toast";
 
-const groups = ref<QQBotGroupSummary[]>([]);
-// 群等级只有 QQ 有；按当前激活的机器人平台决定要不要显示这一项。
+const groups = ref<BotGroupSummary[]>([]);
+// 群等级只有 OneBot v11 有；按当前激活的机器人平台决定要不要显示这一项。
 const supportsGroupLevel = ref(true);
 const plugins = ref<PluginState[]>([]);
 const loaded = ref(false);
@@ -304,7 +304,7 @@ const liveAvailable = ref(false);
 const syncWarning = ref("");
 const searchQuery = ref("");
 const newGroupID = ref("");
-const editing = ref<QQBotGroupConfig | null>(null);
+const editing = ref<BotGroupConfig | null>(null);
 const editingGroupName = ref("");
 const triggersDraft = ref("");
 const saving = ref(false);
@@ -329,26 +329,26 @@ function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + "…" : text;
 }
 
-function responseModeLabel(mode: QQBotGroupConfig["response_mode"]): string {
+function responseModeLabel(mode: BotGroupConfig["response_mode"]): string {
   return ({ quiet: "安静模式", standard: "标准模式", active: "活跃模式", custom: "自定义回复" } as const)[mode as "quiet" | "standard" | "active" | "custom"] ?? "";
 }
 
-function replyStyleLabel(style: QQBotGroupConfig["reply_style"]): string {
+function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
   return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格" } as const)[style as "groupmate" | "assistant" | "gentle" | "lively" | "concise"] ?? "";
 }
 
-function overrideCount(group: QQBotGroupConfig): number {
+function overrideCount(group: BotGroupConfig): number {
   return new Set([
     ...Object.keys(group.plugin_overrides ?? {}),
     ...Object.keys(group.plugin_setting_overrides ?? {})
   ]).size;
 }
 
-function blockedUserCount(group: QQBotGroupConfig): number {
+function blockedUserCount(group: BotGroupConfig): number {
   return group.reply_gate?.blocked_users?.length ?? 0;
 }
 
-function hasOtherReplyGateRules(group: QQBotGroupConfig): boolean {
+function hasOtherReplyGateRules(group: BotGroupConfig): boolean {
   const gate = group.reply_gate;
   if (!gate) {
     return false;
@@ -365,8 +365,8 @@ async function load(showFeedback = false): Promise<void> {
   refreshing.value = true;
   try {
     const [response, configAndPlatforms] = await Promise.all([
-      listQQBotGroups(showFeedback),
-      Promise.all([getQQBotConfig(), getQQBotPlatforms()]).catch(() => null)
+      listBotGroups(showFeedback),
+      Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null)
     ]);
     groups.value = response.groups;
     plugins.value = response.plugins;
@@ -423,9 +423,9 @@ function addGroup(): void {
   newGroupID.value = "";
 }
 
-function openEditor(group: QQBotGroupConfig, groupName = ""): void {
+function openEditor(group: BotGroupConfig, groupName = ""): void {
   // 深拷贝编辑，取消时不污染列表数据。
-  const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as QQBotGroupConfig;
+  const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as BotGroupConfig;
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
   config.natural_interjection_enabled ??= defaultNaturalInterjectionEnabled.value;
   config.plugin_setting_overrides ??= {};
@@ -438,10 +438,10 @@ function openEditor(group: QQBotGroupConfig, groupName = ""): void {
   triggersDraft.value = (group.group_triggers ?? []).join(",");
 }
 
-function groupConfigOf(group: QQBotGroupConfig): QQBotGroupConfig {
-  const summary = group as Partial<QQBotGroupSummary>;
+function groupConfigOf(group: BotGroupConfig): BotGroupConfig {
+  const summary = group as Partial<BotGroupSummary>;
   const { group_name, avatar_url, member_count, max_member_count, configured, joined, ...config } = summary;
-  return config as QQBotGroupConfig;
+  return config as BotGroupConfig;
 }
 
 function groupAvatarURL(groupID: string): string {
@@ -487,11 +487,11 @@ function setPluginSettingOverrides(pluginID: string, values: Record<string, unkn
   editing.value.plugin_setting_overrides = overrides;
 }
 
-async function toggleGroup(group: QQBotGroupSummary, event: Event): Promise<void> {
+async function toggleGroup(group: BotGroupSummary, event: Event): Promise<void> {
   const enabled = (event.target as HTMLInputElement).checked;
   togglingGroupID.value = group.group_id;
   try {
-    const saved = await saveQQBotGroup({ ...groupConfigOf(group), enabled });
+    const saved = await saveBotGroup({ ...groupConfigOf(group), enabled });
     upsert(saved.config);
     toastSuccess(enabled ? `群 ${group.group_id} 已启用` : `群 ${group.group_id} 已停用`);
   } catch (error) {
@@ -517,7 +517,7 @@ async function saveEditing(): Promise<void> {
   }
   saving.value = true;
   try {
-    const payload: QQBotGroupConfig = {
+    const payload: BotGroupConfig = {
       ...current,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
@@ -527,7 +527,7 @@ async function saveEditing(): Promise<void> {
         .map((item) => item.trim())
         .filter((item) => item !== "")
     };
-    const saved = await saveQQBotGroup(payload);
+    const saved = await saveBotGroup(payload);
     upsert(saved.config);
     editing.value = null;
     toastSuccess(`群 ${payload.group_id} 配置已保存`);
@@ -538,7 +538,7 @@ async function saveEditing(): Promise<void> {
   }
 }
 
-function upsert(config: QQBotGroupConfig): void {
+function upsert(config: BotGroupConfig): void {
   const index = groups.value.findIndex((group) => group.group_id === config.group_id);
   if (index >= 0) {
     groups.value[index] = { ...groups.value[index], ...config, configured: true };

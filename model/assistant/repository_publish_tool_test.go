@@ -484,7 +484,7 @@ func TestRepositoryIssueCreateSanitizesAndSendsOptionalFields(t *testing.T) {
 		t.Fatalf("assignees=%#v", request.Payload["assignees"])
 	}
 	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "qqbot.repository_issue" {
+	if len(entries) != 1 || entries[0].Action != "chatbot.repository_issue" {
 		t.Fatalf("audit entries=%#v", entries)
 	}
 	audit, _ := json.Marshal(entries[0])

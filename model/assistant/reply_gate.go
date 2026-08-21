@@ -36,8 +36,8 @@ type GroupAdmission struct {
 // 的风格一致，界面上一个「跟随全局 / 自定义」开关就能讲清楚；逐字段合并
 // 会产生「时段是自己的、等级是全局的」这类难以表达的中间态。
 type ReplyGate struct {
-	// MinGroupLevel 是 QQ 群等级门槛（按群内活跃度累积），0 表示不限。
-	// 注意这不是 QQ 账号等级（太阳月亮星星），后者 OneBot 协议拿不到。
+	// MinGroupLevel 是 群等级门槛（按群内活跃度累积），0 表示不限。
+	// 注意这不是账号等级（太阳月亮星星），后者 OneBot 协议拿不到。
 	MinGroupLevel int `json:"min_group_level,omitempty"`
 	// LevelUnknownPolicy 决定拿不到等级时放行还是拦截，默认 allow。
 	LevelUnknownPolicy string `json:"level_unknown_policy,omitempty"`
@@ -140,7 +140,7 @@ func (g ReplyGate) IsExempt(userID string) bool {
 }
 
 // OwnerBypassEnabled 在未显式配置时返回 true——否则时段或等级配错了，
-// 主人自己也会被挡在门外，而 QQ 侧没有任何补救手段。
+// 主人自己也会被挡在门外，而 OneBot 侧没有任何补救手段。
 func (g ReplyGate) OwnerBypassEnabled() bool {
 	if g.OwnerBypass == nil {
 		return true

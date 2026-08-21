@@ -75,7 +75,7 @@ func newMemberCacheForEvent(call oneBotEventAPICaller) *memberCache {
 }
 
 // memberCacheKey 必须同时含群号——群等级是每个群独立累积的，
-// 同一个 QQ 在 A 群 Lv.6、B 群 Lv.1，只按 QQ 号缓存会让等级门槛失效。
+// 同一个账号在 A 群 Lv.6、B 群 Lv.1，只按账号缓存会让等级门槛失效。
 func memberCacheKey(groupID string, userID string) string {
 	return groupID + ":" + userID
 }

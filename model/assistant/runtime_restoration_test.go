@@ -294,18 +294,18 @@ func (s *restoredConfigSaver) SaveBotConfig(cfg BotConfig) {
 func TestRestoredRuntimeLearnsBotIdentityOnce(t *testing.T) {
 	saver := &restoredConfigSaver{}
 	runtime := NewRuntime(BotConfig{}, restoredStatusChannel{status: ChannelStatus{Connected: true, SelfID: "1784464"}}, NewPluginManager(), nil, nil, saver, nil)
-	if got := runtime.Status().Config.BotQQ; got != "1784464" {
-		t.Fatalf("BotQQ=%q", got)
+	if got := runtime.Status().Config.BotAccount; got != "1784464" {
+		t.Fatalf("BotAccount=%q", got)
 	}
 	runtime.Status()
-	if saver.calls != 1 || saver.saved.BotQQ != "1784464" {
+	if saver.calls != 1 || saver.saved.BotAccount != "1784464" {
 		t.Fatalf("saved=%#v calls=%d", saver.saved, saver.calls)
 	}
 
 	explicitSaver := &restoredConfigSaver{}
-	explicit := NewRuntime(BotConfig{BotQQ: "10001"}, restoredStatusChannel{status: ChannelStatus{SelfID: "1784464"}}, NewPluginManager(), nil, nil, explicitSaver, nil)
-	if got := explicit.Status().Config.BotQQ; got != "10001" || explicitSaver.calls != 0 {
-		t.Fatalf("explicit BotQQ=%q save calls=%d", got, explicitSaver.calls)
+	explicit := NewRuntime(BotConfig{BotAccount: "10001"}, restoredStatusChannel{status: ChannelStatus{SelfID: "1784464"}}, NewPluginManager(), nil, nil, explicitSaver, nil)
+	if got := explicit.Status().Config.BotAccount; got != "10001" || explicitSaver.calls != 0 {
+		t.Fatalf("explicit BotAccount=%q save calls=%d", got, explicitSaver.calls)
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func (h *QQBotHandler) listRepositoryIssueDrafts(c *gin.Context) {
+func (h *BotHandler) listRepositoryIssueDrafts(c *gin.Context) {
 	if h.sqlite == nil {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_issue.drafts", fmt.Errorf("草稿存储不可用"), "", nil)
 		return
@@ -31,7 +31,7 @@ func (h *QQBotHandler) listRepositoryIssueDrafts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"drafts": items})
 }
 
-func (h *QQBotHandler) createRepositoryIssue(c *gin.Context) {
+func (h *BotHandler) createRepositoryIssue(c *gin.Context) {
 	var payload assistant.RepositoryIssueCreateInput
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_issue.create", err, "", nil)
