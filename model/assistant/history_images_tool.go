@@ -59,7 +59,21 @@ func (t *dianaHistoryImagesTool) Name() string {
 }
 
 func (t *dianaHistoryImagesTool) Description() string {
-	return `按需读取当前会话历史消息中的原始图片，并把图片作为真实多模态附件交给下一轮模型。历史摘要足够回答时不要调用；需要辨认细小文字、比较多张图片或核对视觉细节时调用，并一次传入所有相关消息。只接受当前会话中真实存在的 message_id，不接受文件路径或 URL。单次最多读取 8 张以保证整批图片能完整进入模型；更大集合需分批读取。单张失效会跳过并报告，不会拖垮其他图片。input: {"message_ids":["消息1","消息2"],"detail":"auto|low|high"}；精确选图可用 {"items":[{"message_id":"消息1","image_indexes":[1,2]},{"message_id":"消息2"}],"detail":"high"}。省略 message_ids/items 时使用当前引用或语义来源。`
+	return `读取当前会话历史消息里的原始图片，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认细小文字、比较多张图片或核对视觉细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他图片。`
+}
+
+func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"message_ids": toolStringArrayParam("要读取图片的消息 ID；只接受当前会话中真实存在的 message_id，不接受文件路径或 URL。省略 message_ids 和 items 时使用当前引用或语义来源。"),
+		"items": toolItemsParam("需要精确指定某条消息里的第几张图片时改用它，与 message_ids 二选一。",
+			maximumHistoryImagesPerToolCall,
+			[]string{"message_id"},
+			map[string]any{
+				"message_id":    toolStringParam("消息 ID。"),
+				"image_indexes": map[string]any{"type": "array", "description": "要读取的图片序号，从 1 开始；省略表示该消息里的全部图片。", "items": map[string]any{"type": "integer", "minimum": 1}},
+			}),
+		"detail": toolEnumParam("图片细节档位。auto 由运行时按预算决定；辨认细小文字时用 high。", "auto", "low", "high"),
+	})
 }
 
 func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) (string, error) {

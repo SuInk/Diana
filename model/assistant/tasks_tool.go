@@ -69,7 +69,16 @@ func (t *dianaTasksTool) Name() string {
 }
 
 func (t *dianaTasksTool) Description() string {
-	return `一次查询持久化存储中的全部一次性提醒和周期订阅，包含运行中、已使用、已取消状态以及是否占用额度。用户询问“我的所有任务/提醒/订阅”“现在有哪些定时任务”时必须使用本工具，不要分别猜测。默认 scope=mine，只返回当前用户；只有主人可使用 scope=all 查询所有用户，或用 target_user_id 查询指定用户。input: {"operation":"list","scope":"mine|all，可选","target_user_id":"仅主人可选"}`
+	return `一次查询持久化存储中的全部一次性提醒和周期订阅，含运行中、已使用、已取消状态以及是否占用额度。用户问「我的所有任务/提醒/订阅」「现在有哪些定时任务」时必须使用本工具，不要分别猜测。`
+}
+
+func (t *dianaTasksTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation": toolEnumParam("要执行的操作。", "list"),
+		"scope": toolEnumParam("查询范围。默认 mine 只返回当前用户；all 查询所有用户，仅机器人主人可用。",
+			"mine", "all"),
+		"target_user_id": toolStringParam("查询指定用户的任务，仅机器人主人可用。"),
+	})
 }
 
 func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string, error) {

@@ -185,7 +185,14 @@ func (t *dianaConfigTool) Name() string {
 }
 
 func (t *dianaConfigTool) Description() string {
-	return `读取 Diana 自己的脱敏运行配置、当前 LLM profile、已安装 skills/插件状态和运行路径。input: {"section":"all|bot|llm|skills|runtime|paths，可选"}`
+	return `读取 Diana 自己的脱敏运行配置、当前 LLM profile、已安装 skills 与插件状态和运行路径。`
+}
+
+func (t *dianaConfigTool) InputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"section": toolEnumParam("要读取的部分，省略等同 all。",
+			"all", "bot", "llm", "skills", "runtime", "paths"),
+	})
 }
 
 func (t *dianaConfigTool) Run(_ context.Context, input map[string]any) (string, error) {

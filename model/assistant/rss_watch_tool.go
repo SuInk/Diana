@@ -64,7 +64,19 @@ func newDianaRSSWatchTool(runtime *Runtime, event MessageEvent) *dianaRSSWatchTo
 func (*dianaRSSWatchTool) Name() string { return "diana.rss" }
 
 func (*dianaRSSWatchTool) Description() string {
-	return `创建和管理 RSS/Atom 或 X (Twitter) 用户订阅。发现新条目后由 LLM 按 judge_prompt 判断是否通知并生成回复，不符合条件时保持静默。用户要求持续关注网站 Feed、指定推特用户并只在特定消息出现时通知，必须使用本工具；普通周期搜索使用 diana.schedule。创建示例：{"operation":"create","twitter_handle":"tibo","interval":"15m","judge_prompt":"仅当推文明确提到额度重置、恢复或刷新时通知，并用中文说明时间和原文链接"}；也可传 feed_url。create 必须且只能提供 twitter_handle 或 feed_url 之一。支持 list/update/cancel/delete，管理单项需 id。首次创建只建立当前内容基线，不补发历史条目。`
+	return `创建和管理 RSS/Atom 或 X (Twitter) 用户订阅：发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。用户要求持续关注某个网站 Feed 或某个推特用户、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 diana.schedule。首次创建只建立当前内容基线，不补发历史条目。`
+}
+
+func (*dianaRSSWatchTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
+			"create", "list", "update", "cancel", "delete"),
+		"twitter_handle": toolStringParam("要关注的 X (Twitter) 用户名，不带 @。create 时必须且只能提供它或 feed_url 之一。"),
+		"feed_url":       toolStringParam("要关注的 RSS/Atom feed 地址。create 时必须且只能提供它或 twitter_handle 之一。"),
+		"interval":       toolStringParam("检查间隔，只接受 Go 时长写法：15m、1h。不短于 " + minimumRSSWatchInterval.String() + "，省略按 " + defaultRSSWatchInterval.String() + " 处理。"),
+		"judge_prompt":   toolStringParam("判断条件：写清楚什么样的新条目才值得通知、通知时要说什么。最多 " + itoa(maximumRSSJudgeRunes) + " 个字符。例如「仅当推文明确提到额度重置、恢复或刷新时通知，并用中文说明时间和原文链接」。"),
+		"id":             toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
+	})
 }
 
 func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (string, error) {
