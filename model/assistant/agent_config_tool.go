@@ -92,7 +92,7 @@ type dianaBotConfigSnapshot struct {
 	RecallReplyAutoDeleteEnabled    bool                     `json:"recall_reply_auto_delete_enabled"`
 	RecallReplyTTLSeconds           int                      `json:"recall_reply_auto_delete_delay_seconds"`
 	OwnerLLMConfigEnabled           bool                     `json:"owner_llm_config_enabled"`
-	LLMQQIDMaskingEnabled           bool                     `json:"llm_qq_id_masking_enabled"`
+	LLMIdentityMaskingEnabled       bool                     `json:"llm_identity_masking_enabled"`
 	RecentContextLimit              int                      `json:"recent_context_limit"`
 	ContextSummaryThreshold         int                      `json:"context_summary_threshold"`
 	LongTermMemoryEnabled           bool                     `json:"long_term_memory_enabled"`
@@ -307,7 +307,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		RecallReplyAutoDeleteEnabled:    boolValue(cfg.RecallReplyAutoDeleteEnabled, false),
 		RecallReplyTTLSeconds:           cfg.RecallReplyTTLSeconds,
 		OwnerLLMConfigEnabled:           boolValue(cfg.OwnerLLMConfigEnabled, true),
-		LLMQQIDMaskingEnabled:           llmQQIDMaskingEnabled(cfg),
+		LLMIdentityMaskingEnabled:       llmIdentityMaskingEnabled(cfg),
 		RecentContextLimit:              cfg.RecentContextLimit,
 		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:           boolValue(cfg.LongTermMemoryEnabled, true),
