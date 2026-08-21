@@ -18,7 +18,9 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const llmQQPrivacyPrompt = `【QQ 标识隐私代理】消息中的真实 QQ 号、群号和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；qq_owner、qq_current_user、qq_bot、qq_user、qq_group、qq_message 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:qq_message_xxx] 这种引用标记；本地代理会在执行工具或发送 QQ 消息前自动恢复真实标识。`
+// 别名前缀刻意不带平台名：同一套脱敏要服务 QQ、Telegram 以及以后接入的平台，
+// 叫 qq_ 会让模型以为当前一定是 QQ。im_ 取 instant messaging，平台中立。
+const llmIdentityPrivacyPrompt = `【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；im_owner、im_current_user、im_bot、im_user、im_group、im_message 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:im_message_xxx] 这种引用标记；本地代理会在执行工具或发送消息前自动恢复真实标识。`
 
 var (
 	qqPrivacyJSONIDPattern = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
@@ -28,6 +30,9 @@ var (
 	qqPrivacyMessageIDPattern   = regexp.MustCompile(`(?i)"([a-z0-9_]*message_ids?)"\s*:\s*(?:"(-?[0-9]{4,19})"|(-?[0-9]{4,19}))`)
 	qqPrivacyReplyMarkerPattern = regexp.MustCompile(`\[(?:diana-reply|回复):(-?[0-9]{4,19})\]`)
 )
+
+// identityAliasPrefix 是所有脱敏别名的共同前缀。
+const identityAliasPrefix = "im_"
 
 type qqPrivacyContextKey struct{}
 
@@ -242,7 +247,7 @@ func (s *qqPrivacyScope) register(realID string, role string) string {
 		return alias
 	}
 	sum := sha256.Sum256([]byte(s.salt + "\x00" + role + "\x00" + realID))
-	alias := "qq_" + role + "_" + hex.EncodeToString(sum[:6])
+	alias := identityAliasPrefix + role + "_" + hex.EncodeToString(sum[:6])
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
 	return alias
@@ -292,7 +297,7 @@ func (s *qqPrivacyScope) registerMessageID(realID string) string {
 		return alias
 	}
 	sum := sha256.Sum256([]byte(s.salt + "\x00message\x00" + realID))
-	alias := "qq_message_" + hex.EncodeToString(sum[:6])
+	alias := identityAliasPrefix + "message_" + hex.EncodeToString(sum[:6])
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
 	return alias
@@ -332,11 +337,11 @@ func (s *qqPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateReq
 	}
 	for index := range protected.Messages {
 		if protected.Messages[index].Role == llm.RoleSystem {
-			protected.Messages[index].Content = llmQQPrivacyPrompt + "\n\n" + protected.Messages[index].Content
+			protected.Messages[index].Content = llmIdentityPrivacyPrompt + "\n\n" + protected.Messages[index].Content
 			return protected
 		}
 	}
-	protected.Messages = append([]llm.Message{{Role: llm.RoleSystem, Content: llmQQPrivacyPrompt}}, protected.Messages...)
+	protected.Messages = append([]llm.Message{{Role: llm.RoleSystem, Content: llmIdentityPrivacyPrompt}}, protected.Messages...)
 	return protected
 }
 
