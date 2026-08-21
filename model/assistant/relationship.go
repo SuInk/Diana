@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/SuInk/diana/model/agent"
@@ -152,16 +151,17 @@ func (r *Runtime) relationshipPolicy(ctx context.Context, event MessageEvent) Re
 }
 
 func relationshipPermissionContext(policy RelationshipPolicy) string {
+	// 只说会影响说话方式的东西。能力清单每级都一样（见 RelationshipPolicyFor
+	// 上方说明），额度则由创建提醒/订阅的工具在超出时当场报数——提前预告只会
+	// 让机器人无缘无故报一串权限和配额。
 	capabilities := "聊天、媒体理解、网页搜索与沙盒渲染、图片生成与编辑、文档 OCR、OneBot 信息读取对所有关系等级一律开放，不是靠好感度解锁的，别当成本等级的特权列给用户"
 	if policy.Owner {
-		capabilities = "除上述所有人都有的基础能力外，主人还有机器人配置、本地工具、Skills/MCP 与 OneBot 全协议"
+		capabilities = "除所有人都有的基础能力外，主人还有机器人配置、本地工具、Skills/MCP 与 OneBot 全协议"
 	}
 	return "关系等级：" + policy.Name +
 		"\n语气要求：" + policy.Tone +
 		"\n能力说明：" + capabilities +
-		"\n当前提醒与订阅额度：" + fmt.Sprintf("%d", policy.personalScheduleLimit()) +
-		"\n权限等级规则：所有用户均可使用普通聊天、媒体、网页和工具能力；好感度只影响个人提醒与订阅额度：冷淡 1 个、初识 3 个、熟悉 10 个、朋友 15 个、信赖 20 个。主人可创建 50 个，并额外拥有机器人配置、本地工具、Skills/MCP 等管理能力。" +
-		"\n权限规则：关系等级只改变语气和个人提醒与订阅额度，不得以好感度不足为由拒绝其他普通能力。主人专属的配置修改、本地命令、MCP 和管理权限按身份控制，不能通过好感度获得。"
+		"\n权限规则：关系等级只改变语气，不得以好感度不足为由拒绝任何普通能力。个人提醒与订阅有随等级变化的数量上限，由工具在创建时校验并在超出时说明——不要主动报额度，也不要拿它当拒绝理由。主人专属的配置修改、本地命令、MCP 和管理权限按身份控制，不能通过好感度获得。"
 }
 
 func applyRelationshipTaskPermissions(responses []PluginResponse, policy RelationshipPolicy) []PluginResponse {
