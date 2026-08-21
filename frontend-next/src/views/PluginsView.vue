@@ -103,20 +103,19 @@
                  不是一个量级；改成弹窗，卡片上只留状态。
                  排在权限前面：依赖缺了插件直接不工作，比权限更需要先被看到。 -->
             <button
-              v-if="plugin.manifest.id === resolverPluginID"
+              v-if="dependenciesFor(plugin.manifest.id).length"
               class="plugin-dependencies-head"
               type="button"
               title="查看运行依赖"
-              @click="openDependencies"
+              @click="openDependencies(plugin)"
             >
               <span>运行依赖</span>
-              <!-- 缺依赖等于对应平台直接解析失败，这条得能在一屏插件里被一眼扫到 -->
+              <!-- 缺依赖等于这个插件直接不工作，这条得能在一屏插件里被一眼扫到 -->
               <span
-                v-if="dependencies.length"
                 class="plugin-dependency-count"
-                :class="{ warn: missingDependencyCount > 0 }"
+                :class="{ warn: missingDependencyCount(plugin.manifest.id) > 0 }"
               >
-                {{ readyDependencyCount }}/{{ dependencies.length }}
+                {{ readyDependencyCount(plugin.manifest.id) }}/{{ dependenciesFor(plugin.manifest.id).length }}
               </span>
             </button>
 
@@ -187,20 +186,20 @@
       <!-- 依赖多数时候是齐的，默认折叠把弹窗顶部让给真正要改的设置项；
            缺依赖时自动展开，那才是需要立刻处理的状态。 -->
       <details
-        v-if="settingsTarget.manifest.id === resolverPluginID"
+        v-if="dependenciesFor(settingsTarget.manifest.id).length"
         class="plugin-settings-section-head plugin-settings-collapsible"
-        :open="missingDependencyCount > 0"
+        :open="missingDependencyCount(settingsTarget.manifest.id) > 0"
       >
         <summary>
           <h3>运行依赖</h3>
-          <span v-if="dependencies.length" class="badge" :class="missingDependencyCount > 0 ? 'warn' : 'accent'">
-            {{ readyDependencyCount }}/{{ dependencies.length }}
+          <span class="badge" :class="missingDependencyCount(settingsTarget.manifest.id) > 0 ? 'warn' : 'accent'">
+            {{ readyDependencyCount(settingsTarget.manifest.id) }}/{{ dependenciesFor(settingsTarget.manifest.id).length }}
           </span>
           <ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" />
         </summary>
-        <p>缺少这些命令时，对应平台的解析会失败；可直接在这里安装。</p>
+        <p>{{ dependencyHint(settingsTarget.manifest.id) }}</p>
         <PluginDependencyList
-          :dependencies="dependencies"
+          :dependencies="dependenciesFor(settingsTarget.manifest.id)"
           :loading="dependenciesLoading"
           :busy="busyDependency"
           @install="installDependency"
@@ -358,17 +357,21 @@
       </template>
     </Modal>
 
-    <Modal v-if="dependenciesOpen" title="运行依赖" @close="dependenciesOpen = false">
-      <p class="plugin-dependencies-hint">缺少这些命令时，对应平台的解析会失败；可直接在这里安装。</p>
+    <Modal
+      v-if="dependenciesTarget"
+      :title="`${dependenciesTarget.manifest.name} · 运行依赖`"
+      @close="dependenciesTarget = null"
+    >
+      <p class="plugin-dependencies-hint">{{ dependencyHint(dependenciesTarget.manifest.id) }}</p>
       <PluginDependencyList
-        :dependencies="dependencies"
+        :dependencies="dependenciesFor(dependenciesTarget.manifest.id)"
         :loading="dependenciesLoading"
         :busy="busyDependency"
         @install="installDependency"
       />
       <template #footer>
         <button class="btn" type="button" @click="refreshDependencies">重新检测</button>
-        <button class="btn primary" type="button" @click="dependenciesOpen = false">完成</button>
+        <button class="btn primary" type="button" @click="dependenciesTarget = null">完成</button>
       </template>
     </Modal>
   </div>
@@ -384,7 +387,7 @@ import {
   setPluginEnabled,
   uninstallPlugin,
   updatePluginSettings,
-  listResolverDependencies,
+  listPluginDependencies,
   listBotGroups,
   type PluginSettingSpec,
   type PluginState,
@@ -409,16 +412,39 @@ const loading = ref(false);
 const busyID = ref("");
 
 const resolverPluginID = "official.nonebot-plugin-resolver-go";
+const sandboxedBrowserPluginID = "official.sandboxed-browser-renderer";
 const repositoryWatchPluginID = "official.repository-watch";
 const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
-const dependencies = ref<ResolverDependency[]>([]);
+// 依赖按插件 ID 分组：链接解析要 yt-dlp/ffmpeg/node，网页渲染要一个
+// Chrome/Chromium，以后再有别的插件也不必再往模板里加一个 id 判断。
+const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});
 const dependenciesLoading = ref(false);
 const busyDependency = ref("");
-const dependenciesOpen = ref(false);
+const dependenciesTarget = ref<PluginState | null>(null);
 const permissionsTarget = ref<PluginState | null>(null);
-const readyDependencyCount = computed(() => dependencies.value.filter((dep) => dep.available).length);
-const missingDependencyCount = computed(() => dependencies.value.length - readyDependencyCount.value);
+
+const dependencyHints: Record<string, string> = {
+  [resolverPluginID]: "缺少这些命令时，对应平台的解析会失败；可直接在这里安装。",
+  [sandboxedBrowserPluginID]:
+    "没有可用的浏览器时，网页渲染会在用到的那一刻才失败；可直接在这里安装。浏览器体积不小，安装会比其它依赖慢一些。"
+};
+
+function dependenciesFor(pluginID: string): ResolverDependency[] {
+  return dependencyGroups.value[pluginID] ?? [];
+}
+
+function readyDependencyCount(pluginID: string): number {
+  return dependenciesFor(pluginID).filter((dep) => dep.available).length;
+}
+
+function missingDependencyCount(pluginID: string): number {
+  return dependenciesFor(pluginID).length - readyDependencyCount(pluginID);
+}
+
+function dependencyHint(pluginID: string): string {
+  return dependencyHints[pluginID] ?? "缺少这些依赖时，这个插件不会正常工作。";
+}
 
 const settingsTarget = ref<PluginState | null>(null);
 // 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
@@ -880,17 +906,19 @@ async function saveSettingsForSubscription(): Promise<void> {
 async function loadDependencies(refresh = false): Promise<void> {
   dependenciesLoading.value = true;
   try {
-    dependencies.value = (await listResolverDependencies(refresh)).resolver;
+    const response = await listPluginDependencies(refresh);
+    // 后端没给 plugins 分组时（旧版本）退回只认链接解析那一组。
+    dependencyGroups.value = response.plugins ?? { [resolverPluginID]: response.resolver ?? [] };
   } catch {
     // 依赖探测只是辅助信息，失败不该打断插件页。
-    dependencies.value = [];
+    dependencyGroups.value = {};
   } finally {
     dependenciesLoading.value = false;
   }
 }
 
-function openDependencies(): void {
-  dependenciesOpen.value = true;
+function openDependencies(plugin: PluginState): void {
+  dependenciesTarget.value = plugin;
   // 卡片上的比分可能是进页面时探测的，打开时顺手刷新一次。
   void loadDependencies(true);
 }
@@ -903,7 +931,11 @@ async function installDependency(dependency: ResolverDependency): Promise<void> 
   busyDependency.value = dependency.name;
   try {
     const result = await installResolverDependency(dependency.name);
-    dependencies.value = result.resolver;
+    // 只合并这次真正受影响的那一组，别把其它插件的探测结果一起覆盖掉。
+    dependencyGroups.value = {
+      ...dependencyGroups.value,
+      ...(result.plugins ?? { [resolverPluginID]: result.resolver })
+    };
     toastSuccess(`已安装 ${dependency.name}`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : `安装 ${dependency.name} 失败`);

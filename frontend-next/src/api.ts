@@ -286,13 +286,24 @@ export interface ResolverDependency {
   available: boolean;
   path?: string;
   version?: string;
+  /** 不可用时说明卡在哪一步；没法一键安装的依赖只靠「需手动安装」说不清原因。 */
+  detail?: string;
   installable: boolean;
   installer?: string;
+}
+
+export interface PluginDependencyResponse {
+  /** 兼容字段：等同 plugins 里链接解析那一组。 */
+  resolver: ResolverDependency[];
+  /** 按插件 ID 分组，界面据此决定在哪张卡片上显示。 */
+  plugins?: Record<string, ResolverDependency[]>;
 }
 
 export interface ResolverDependencyInstallResponse {
   dependency: ResolverDependency;
   resolver: ResolverDependency[];
+  /** 按插件 ID 分组，只包含这次受影响的那一组。 */
+  plugins?: Record<string, ResolverDependency[]>;
   installer?: string;
 }
 
@@ -958,9 +969,9 @@ export function listRepositoryIssueDrafts(status = "all"): Promise<{ drafts: Rep
   return requestJSON<{ drafts: RepositoryIssueDraft[] }>(`/api/assistant/plugins/repository-publish/drafts?status=${encodeURIComponent(status)}`);
 }
 
-export function listResolverDependencies(refresh = false): Promise<{ resolver: ResolverDependency[] }> {
+export function listPluginDependencies(refresh = false): Promise<PluginDependencyResponse> {
   const suffix = refresh ? "?refresh=1" : "";
-  return requestJSON<{ resolver: ResolverDependency[] }>(`/api/assistant/plugins/dependencies${suffix}`);
+  return requestJSON<PluginDependencyResponse>(`/api/assistant/plugins/dependencies${suffix}`);
 }
 
 export function installResolverDependency(name: string): Promise<ResolverDependencyInstallResponse> {

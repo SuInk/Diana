@@ -10,6 +10,9 @@
         <div class="plugin-dependency-main">
           <strong class="mono">{{ dep.name }}</strong>
           <span>{{ dep.purpose }}</span>
+          <!-- 装不了的依赖只显示「需手动安装」等于让人自己猜是没装、装错架构
+               还是路径没配；后端探到什么就照说什么。 -->
+          <span v-if="!dep.available && dep.detail" class="plugin-dependency-detail">{{ dep.detail }}</span>
         </div>
         <span
           v-if="dep.available"
@@ -43,3 +46,11 @@ import type { ResolverDependency } from "../api";
 defineProps<{ dependencies: ResolverDependency[]; loading: boolean; busy: string }>();
 const emit = defineEmits<{ install: [dependency: ResolverDependency] }>();
 </script>
+
+<style scoped>
+/* 和名称、用途一样是 11px，但用告警色：这行讲的是「为什么现在用不了」，
+   埋在灰字里就等于没写。 */
+.plugin-dependency-detail {
+  color: var(--warn);
+}
+</style>
