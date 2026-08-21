@@ -1116,6 +1116,40 @@ code {
   color: var(--text);
 }
 
+/* 人设生成器与「自定义注入文案」折叠区 */
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.persona-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.prompt-advanced > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  user-select: none;
+}
+
+.prompt-advanced > summary:hover {
+  color: var(--text);
+}
+
+.prompt-advanced[open] > summary {
+  margin-bottom: 8px;
+}
+
 /* 侧栏底部的 GitHub 仓库入口，和主题按钮共用 nav-action 外观。 */
 a.nav-action {
   text-decoration: none;

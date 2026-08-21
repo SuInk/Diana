@@ -790,6 +790,20 @@ export function testLLM(message: string, config?: LLMConfig): Promise<GenerateRe
   });
 }
 
+export interface PersonaGenerateResponse {
+  persona: string;
+  model?: string;
+  provider?: string;
+}
+
+/** 用当前已配置的模型把一句话需求写成基础人设；带上 current 时是改写而不是重写。 */
+export function generatePersona(description: string, name?: string, current?: string): Promise<PersonaGenerateResponse> {
+  return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
+    method: "POST",
+    body: JSON.stringify({ description, name, current })
+  });
+}
+
 export function testLLMImage(prompt: string, config?: LLMConfig): Promise<ImageGenerateResponse> {
   return requestJSON<ImageGenerateResponse>("/api/llm/test", {
     method: "POST",
