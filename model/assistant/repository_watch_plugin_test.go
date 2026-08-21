@@ -1287,3 +1287,39 @@ func TestRepositoryWatchKeepsCommitsWhenPullRequestCommitsAreUnavailable(t *test
 		t.Fatalf("commits should survive an unusable PR commit list: %#v", change.Commits)
 	}
 }
+
+// 跟评的门槛写着「和会话里正在聊的事对得上」，但提示词里一度只有通知正文、
+// 没有任何会话历史——条件永远验证不了，模型只能一路 SKIP，跟评等于没了。
+// 历史必须和链接解析的跟评一样进提示词。
+func TestRuntimeRepositoryWatchFollowUpCarriesConversationHistory(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{"SKIP"}}
+	runtime := NewRuntime(
+		BotConfig{RequestTimeout: 5 * time.Second, SystemPrompt: "本群限定的自然人设"},
+		channel, NewPluginManager(), nil, nil, nil,
+		func() (LLMProvider, error) { return provider, nil },
+	)
+	runtime.remember(MessageEvent{
+		Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m1",
+		RawMessage: "投递那个 bug 什么时候修啊", Time: time.Now().Unix(),
+	})
+
+	comment := runtime.repositoryWatchFollowUpComment(
+		context.Background(),
+		MessageEvent{Kind: EventKindGroup, GroupID: "123"},
+		"GitHub 动态：demo/repo\nCommit new-sha\nfix delivery",
+	)
+	if comment != "" {
+		t.Fatalf("SKIP should produce no comment, got %q", comment)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected one follow-up call, got %d", len(provider.requests))
+	}
+	messages := provider.requests[0].Messages
+	if !requestMessagesContain(messages, "投递那个 bug 什么时候修啊") {
+		t.Fatalf("follow-up prompt is missing the conversation history: %#v", messages)
+	}
+	if !requestMessagesContain(messages, "fix delivery") {
+		t.Fatalf("follow-up prompt is missing the notification body: %#v", messages)
+	}
+}
