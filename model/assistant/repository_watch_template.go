@@ -20,7 +20,7 @@ const repositoryWatchSettingTemplateHeader = "template_header"
 const (
 	repositoryWatchDefaultHeaderTemplate  = "GitHub 动态：{repository}\n{body}"
 	repositoryWatchDefaultCommitTemplate  = "Commit {sha}\n{title}\n作者：{author}\n提交于 {time}\n{short_url}"
-	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{time_label} {time}\n{url}"
+	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{commits}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）\n{title}\n作者：{author}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultReleaseTemplate = "Release {label}\n发布于 {time}\n{url}"
 )
