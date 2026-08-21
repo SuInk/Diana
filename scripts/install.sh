@@ -290,6 +290,10 @@ WorkingDirectory=$install_dir
 ExecStart=$install_dir/start-installed.sh
 Restart=on-failure
 RestartSec=3
+# 让自更新器知道重启由 systemd 负责：两边都去启动新实例会抢同一个监听端口。
+Environment=DIANA_SERVICE_MANAGER=systemd
+Environment=DIANA_SERVICE_LABEL=diana.service
+Environment=DIANA_SERVICE_DOMAIN=user
 
 [Install]
 WantedBy=default.target
@@ -314,6 +318,12 @@ EOF
   <key>WorkingDirectory</key><string>$install_dir</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <!-- 让自更新器知道重启由 launchd 负责：两边都去启动新实例会抢同一个监听端口。 -->
+  <key>EnvironmentVariables</key><dict>
+    <key>DIANA_SERVICE_MANAGER</key><string>launchd</string>
+    <key>DIANA_SERVICE_LABEL</key><string>com.suink.diana</string>
+    <key>DIANA_SERVICE_DOMAIN</key><string>gui/$(id -u)</string>
+  </dict>
   <key>StandardOutPath</key><string>$install_dir/logs/launchd.log</string>
   <key>StandardErrorPath</key><string>$install_dir/logs/launchd-error.log</string>
 </dict></plist>

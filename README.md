@@ -284,6 +284,9 @@ WebUI 里能配的都不必写环境变量。下面是常用项，完整说明�
 | `APP_DB_PATH` | `data/diana.db` | 本地 SQLite 配置数据库路径 |
 | `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
 | `DIANA_TRUSTED_PROXIES` | 空 | 可信反向代理的 IP 或 CIDR，逗号分隔；设置后才解析 `X-Forwarded-For` |
+| `DIANA_SERVICE_MANAGER` | 自动探测 | 托管本服务的进程管理器：`launchd`、`systemd` 或 `none`。设置后自更新不再自行启动新实例，改为请管理器重启，避免和 `KeepAlive`／`Restart=` 抢监听端口 |
+| `DIANA_SERVICE_LABEL` | 自动探测 | launchd job label 或 systemd unit 名，例如 `com.suink.diana`、`diana.service` |
+| `DIANA_SERVICE_DOMAIN` | 自动探测 | launchd 域（`gui/<uid>` 或 `system`）；systemd 填 `user` 或 `system` |
 | `DIANA_ADMIN_USERNAME` | 自动随机生成 | 首次初始化的管理员账号，之后以 SQLite 中的凭据为准 |
 | `DIANA_ADMIN_PASSWORD` | 自动随机生成 | 首次初始化的管理员密码，之后以 SQLite 中的凭据为准 |
 | `LLM_PROVIDER` | `openai_compatible` | `openai_compatible` / `gemini` / `anthropic` |
