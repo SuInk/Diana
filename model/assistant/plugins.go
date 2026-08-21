@@ -1309,7 +1309,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 
 var (
 	urlPattern                = regexp.MustCompile(`https?://[^\s<>"'，。！？、]+`)
-	bareXiaohongshuURLPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9._@-])((?:www\.)?(?:xhslink\.com|xiaohongshu\.com)/[^\s<>"'，。！？、]+)`)
+	bareXiaohongshuURLPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9._@-])((?:www\.)?(?:xhslink\.(?:com|cn)|xiaohongshu\.com)/[^\s<>"'，。！？、]+)`)
 	bilibiliVideoIDPattern    = regexp.MustCompile(`(?i)\b(BV[a-z0-9]{10})\b`)
 )
 
@@ -1467,7 +1467,7 @@ func isKnownResolverPlatformHost(host string) bool {
 	return hostMatchesDomain(host, "bilibili.com", "b23.tv", "bili2233.cn") ||
 		hostMatchesDomain(host, "youtube.com", "youtu.be") ||
 		hostMatchesDomain(host, "x.com", "twitter.com") ||
-		hostMatchesDomain(host, "xiaohongshu.com", "xhslink.com") ||
+		hostMatchesDomain(host, xiaohongshuHosts...) ||
 		hostMatchesDomain(host, "douyin.com")
 }
 
@@ -1527,7 +1527,7 @@ var resolverPlatforms = []struct {
 	{"bilibili", "Bilibili", []string{"bilibili.com", "b23.tv"}, true},
 	{"youtube", "YouTube", []string{"youtube.com", "youtu.be"}, true},
 	{"x", "X / Twitter", []string{"x.com", "twitter.com"}, true},
-	{"xiaohongshu", "小红书", []string{"xiaohongshu.com", "xhslink.com"}, true},
+	{"xiaohongshu", "小红书", xiaohongshuHosts, true},
 	{"zhihu", "知乎", []string{"zhihu.com"}, false},
 	{"weibo", "微博", []string{"weibo.com", "weibo.cn"}, false},
 	{"douyin", "抖音", []string{"douyin.com"}, true},

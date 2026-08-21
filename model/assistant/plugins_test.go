@@ -171,9 +171,33 @@ func TestFetchFinalURLDetailsReportsExpiredShortLink(t *testing.T) {
 	}
 }
 
+// App 新版分享用的是 xhslink.cn，旧域名 xhslink.com 仍在流通。
+// 漏掉 .cn 会让整条链接识别不出平台，被链接解析静默丢弃。
+func TestXiaohongshuShortLinkDomains(t *testing.T) {
+	cases := map[string]string{
+		"点击查看超自然融图 https://xhslink.cn/o/6kxZZXGfDWA 留住这段口令，去【小红书】瞅瞅笔记~": "https://xhslink.cn/o/6kxZZXGfDWA",
+		"xhslink.cn/o/6kxZZXGfDWA": "https://xhslink.cn/o/6kxZZXGfDWA",
+		"避雷立充 http://xhslink.com/o/20YWuppICeI 留住这段口令": "http://xhslink.com/o/20YWuppICeI",
+	}
+	for text, want := range cases {
+		urls := extractURLs(text)
+		if len(urls) != 1 || urls[0] != want {
+			t.Fatalf("extractURLs(%q) = %v, want [%q]", text, urls, want)
+		}
+		if !isKnownResolverPlatformURL(want) {
+			t.Fatalf("isKnownResolverPlatformURL(%q) = false", want)
+		}
+		host := strings.TrimPrefix(strings.SplitN(strings.SplitN(want, "://", 2)[1], "/", 2)[0], "www.")
+		if key, _ := platformKeyAndLabel(host); key != "xiaohongshu" {
+			t.Fatalf("platformKeyAndLabel(%q) = %q, want xiaohongshu", host, key)
+		}
+	}
+}
+
 func TestIsXiaohongshuLiveURL(t *testing.T) {
 	for _, rawURL := range []string{
 		"http://xhslink.com/m/9ry2BJL0V4D",
+		"https://xhslink.cn/m/9ry2BJL0V4D",
 		"https://www.xiaohongshu.com/live/123",
 		"https://www.xiaohongshu.com/livestream/123",
 	} {

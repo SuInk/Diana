@@ -762,7 +762,7 @@ func platformCookieHeader(ctx context.Context, raw string) string {
 	switch {
 	case hostMatchesDomain(host, "douyin.com"):
 		return resolverDouyinCookie(ctx)
-	case hostMatchesDomain(host, "xiaohongshu.com", "xhslink.com"):
+	case hostMatchesDomain(host, xiaohongshuHosts...):
 		return resolverXHSCookie(ctx)
 	default:
 		return ""
@@ -877,6 +877,13 @@ func xiaohongshuRequestParts(raw string) (id string, xsecSource string, xsecToke
 	return id, xsecSource, xsecToken
 }
 
+// 小红书分享短链有 .com 和 .cn 两套域名，App 新版分享用的是 xhslink.cn，
+// 漏掉任何一个都会让整条链接识别不出平台、被链接解析静默丢弃。
+var (
+	xiaohongshuShortLinkHosts = []string{"xhslink.com", "xhslink.cn"}
+	xiaohongshuHosts          = append([]string{"xiaohongshu.com"}, xiaohongshuShortLinkHosts...)
+)
+
 func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, string) {
 	raw = html.UnescapeString(strings.TrimSpace(raw))
 	cookie := resolverXHSCookie(ctx)
@@ -885,7 +892,7 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 	}
 	headers := xiaohongshuPageHeaders(cookie)
 	pageURL := raw
-	if urlMatchesDomain(raw, "xhslink.com") {
+	if urlMatchesDomain(raw, xiaohongshuShortLinkHosts...) {
 		finalURL, statusCode, err := fetchFinalURLDetails(ctx, raw, headers)
 		if err != nil {
 			return nil, "request_failed"
@@ -926,13 +933,13 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 }
 
 // xiaohongshuUnresolvedStatus 解释一条没解析出笔记 ID 的小红书地址。
-// 短链跳转成功后只看最终地址；只有跳转没走成（仍停在 xhslink.com）才回落到
+// 短链跳转成功后只看最终地址；只有跳转没走成（仍停在短链域名）才回落到
 // 短链路径的启发式，避免把普通 /m/ 分享短链一律误报成直播链接。
 func xiaohongshuUnresolvedStatus(raw, pageURL string) string {
 	if isXiaohongshuLiveURL(pageURL) {
 		return "live_link"
 	}
-	if urlMatchesDomain(pageURL, "xhslink.com") && isXiaohongshuLiveURL(raw) {
+	if urlMatchesDomain(pageURL, xiaohongshuShortLinkHosts...) && isXiaohongshuLiveURL(raw) {
 		return "live_link"
 	}
 	return "unsupported_link: " + redactURLQuery(pageURL)
@@ -945,7 +952,7 @@ func isXiaohongshuLiveURL(raw string) bool {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	path := strings.ToLower(parsed.Path)
-	return (hostMatchesDomain(host, "xhslink.com") && strings.HasPrefix(path, "/m/")) ||
+	return (hostMatchesDomain(host, xiaohongshuShortLinkHosts...) && strings.HasPrefix(path, "/m/")) ||
 		(hostMatchesDomain(host, "xiaohongshu.com") && (strings.Contains(path, "/live/") || strings.Contains(path, "/livestream/")))
 }
 
@@ -1262,7 +1269,7 @@ func isDouyinURL(raw string) bool {
 }
 
 func isXiaohongshuURL(raw string) bool {
-	return urlMatchesDomain(raw, "xiaohongshu.com", "xhslink.com")
+	return urlMatchesDomain(raw, xiaohongshuHosts...)
 }
 
 func isTwitterURL(raw string) bool {
