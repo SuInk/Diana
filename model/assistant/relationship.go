@@ -27,7 +27,6 @@ type RelationshipPolicy struct {
 	Tier                  RelationshipTier `json:"tier"`
 	Name                  string           `json:"name"`
 	Tone                  string           `json:"tone"`
-	Permissions           []string         `json:"permissions"`
 	Score                 int              `json:"score"`
 	MessageCount          int              `json:"message_count"`
 	Owner                 bool             `json:"owner"`
@@ -37,22 +36,12 @@ type RelationshipPolicy struct {
 	AllowPersonalSchedule bool             `json:"allow_personal_schedule"`
 }
 
-// relationshipBaselineCapabilities 是所有关系等级都有的能力。它们不随好感度
-// 解锁，因此不该被当成「这个等级的特权」念给用户听——之前每一级各写一遍相同
-// 的清单，措辞还不统一（「图片/视频/文件理解」对「媒体理解」），回复里就变成
-// 一长串看着像特权、其实人人都有的条目。
-var relationshipBaselineCapabilities = []string{
-	"基础聊天", "媒体理解", "图片生成", "图片编辑", "文档 OCR",
-	"实时网页搜索", "沙盒网页渲染", "OneBot 信息读取",
-}
-
-// relationshipPermissions 拼出完整能力清单：基础能力 + 该等级的提醒订阅额度。
-// 等级之间真正的差别只有最后这一项。
-func relationshipPermissions(scheduleLimit int) []string {
-	out := make([]string, 0, len(relationshipBaselineCapabilities)+1)
-	out = append(out, relationshipBaselineCapabilities...)
-	return append(out, fmt.Sprintf("个人提醒与订阅（最多 %d 个）", scheduleLimit))
-}
+// 五个非主人等级的能力完全一样——聊天、媒体理解、搜索与沙盒渲染、生图与修图、
+// 文档 OCR、OneBot 读取一律开放，随好感度变化的只有个人提醒与订阅额度
+// （见 personalScheduleLimit）。所以这里不再维护一份「本等级授权能力」清单：
+// 那份清单曾经每级各写一遍、措辞还不统一，被灌进提示词后就成了一串看着像特权、
+// 其实人人都有的条目。能力问题由 diana.capabilities 回答，能力管控走 Allow*
+// 与 allowedAgentToolNames。
 
 func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) RelationshipPolicy {
 	ownerID = strings.TrimSpace(ownerID)
@@ -65,7 +54,6 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		Tier:                  RelationshipAcquaintance,
 		Name:                  "初识",
 		Tone:                  "自然随和，像刚认识但好相处的群友；不用敬语和客服腔，也不要假装已经很熟或用过度亲密的称呼。",
-		Permissions:           relationshipPermissions(3),
 		Score:                 profile.Favorability,
 		MessageCount:          profile.MessageCount,
 		AllowImageGeneration:  true,
@@ -80,22 +68,18 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		policy.Tier = RelationshipHostile
 		policy.Name = "冷淡"
 		policy.Tone = "保持礼貌但明显疏离，只回答必要内容；面对辱骂可设边界，不争吵、不讨好。"
-		policy.Permissions = relationshipPermissions(1)
 	case profile.Favorability >= 100 && profile.MessageCount >= 80:
 		policy.Tier = RelationshipTrusted
 		policy.Name = "信赖"
 		policy.Tone = "像长期信赖的朋友一样直接、温和、有默契，可以主动结合已知偏好，但不要编造共同经历。"
-		policy.Permissions = relationshipPermissions(20)
 	case profile.Favorability >= 60 && profile.MessageCount >= 30:
 		policy.Tier = RelationshipFriend
 		policy.Name = "朋友"
 		policy.Tone = "像熟悉的朋友一样温暖、轻松，可以适度接梗和调侃，仍要尊重边界。"
-		policy.Permissions = relationshipPermissions(15)
 	case profile.Favorability >= 20 && profile.MessageCount >= 10:
 		policy.Tier = RelationshipFamiliar
 		policy.Name = "熟悉"
 		policy.Tone = "语气比初识更放松，可以自然使用对方昵称并结合长期偏好，但不要过分亲密。"
-		policy.Permissions = relationshipPermissions(10)
 	}
 	return policy
 }
@@ -105,7 +89,6 @@ func relationshipOwnerPolicy(profile UserMemoryProfile) RelationshipPolicy {
 		Tier:                  RelationshipOwner,
 		Name:                  "主人",
 		Tone:                  "亲近、坦率、执行导向；可以自然接梗，但涉及风险和失败时必须如实说明。",
-		Permissions:           []string{"全部聊天与媒体能力", "网页与浏览器", "图片生成与编辑", "文档 OCR", "定时订阅（最多 50 个）", "OneBot 全协议", "机器人配置", "本地工具", "Skills/MCP"},
 		Score:                 profile.Favorability,
 		MessageCount:          profile.MessageCount,
 		Owner:                 true,
