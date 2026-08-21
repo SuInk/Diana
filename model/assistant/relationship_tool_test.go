@@ -54,7 +54,8 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 	if result.Target.Favorability != 5 || result.Target.MessageCount != 18 || result.Target.RelationshipTier != RelationshipAcquaintance {
 		t.Fatalf("relationship = %#v", result.Target)
 	}
-	if result.Target.ScheduleLimit != 3 || len(result.Target.Permissions) == 0 || !result.Target.CanGenerateImage || !result.Target.CanEditImage || !result.Target.CanDocumentOCR {
+	// 结果里不再带能力清单：它对所有等级都一样，留着只会被复述成本等级的特权。
+	if result.Target.ScheduleLimit != 3 || !result.Target.CanGenerateImage || !result.Target.CanEditImage || !result.Target.CanDocumentOCR {
 		t.Fatalf("permissions = %#v", result.Target)
 	}
 	if result.Target.MentionCQ != "[CQ:at,qq=10005]" || !result.Target.HasHistory {

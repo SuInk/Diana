@@ -227,8 +227,8 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 	builder.WriteString(policy.Name)
 	builder.WriteString("；语气：")
 	builder.WriteString(policy.Tone)
-	builder.WriteString("\n已授权能力：")
-	builder.WriteString(strings.Join(policy.Permissions, "、"))
+	// 不再列「已授权能力」：那份清单每个等级都一样，摆进上下文只会被复述成
+	// 本等级的特权。能力问题由 diana.capabilities 负责。
 	builder.WriteString("；累计互动：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
 
@@ -292,12 +292,11 @@ func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy Relationsh
 	if llm.EstimateTextTokens(text) <= tokenBudget {
 		return text
 	}
-	// Relationship, favorability, permissions and interaction count are the
-	// fixed core. A very small configured window may still require omitting the
-	// verbose tone and permission descriptions as a dedicated degradation.
+	// Relationship, favorability and interaction count are the fixed core. A very
+	// small configured window may still require omitting the verbose tone as a
+	// dedicated degradation.
 	compactPolicy := policy
 	compactPolicy.Tone = ""
-	compactPolicy.Permissions = nil
 	return formatUserMemoryContext(core, compactPolicy)
 }
 

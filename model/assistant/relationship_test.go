@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -151,8 +150,7 @@ func TestRelationshipAllowsOCRTasksForEveryTier(t *testing.T) {
 	}
 }
 
-// 五个非主人等级的能力完全相同，差别只有提醒与订阅额度。之前每级各写一遍
-// 相同的清单，措辞还不统一，回复里就成了一串看着像特权、其实人人都有的条目。
+// 五个非主人等级的能力完全相同，真正随好感度变化的只有提醒与订阅额度。
 func TestRelationshipLevelsDifferOnlyByScheduleQuota(t *testing.T) {
 	levels := []struct {
 		name  string
@@ -174,34 +172,38 @@ func TestRelationshipLevelsDifferOnlyByScheduleQuota(t *testing.T) {
 		if policy.personalScheduleLimit() != level.limit {
 			t.Fatalf("%s quota = %d, want %d", level.name, policy.personalScheduleLimit(), level.limit)
 		}
-		// 除最后一条额度外，各等级的能力必须逐项一致。
-		if got := policy.Permissions[:len(policy.Permissions)-1]; strings.Join(got, "、") != strings.Join(relationshipBaselineCapabilities, "、") {
-			t.Fatalf("%s capabilities = %v, want the shared baseline", level.name, got)
-		}
-		if last := policy.Permissions[len(policy.Permissions)-1]; !strings.Contains(last, fmt.Sprintf("最多 %d 个", level.limit)) {
-			t.Fatalf("%s quota entry = %q", level.name, last)
-		}
+		// 能力一项都不因等级收窄，包括好感度最低的「冷淡」。
 		if !policy.AllowImageGeneration || !policy.AllowImageEditing || !policy.AllowDocumentOCR || !policy.AllowPersonalSchedule {
 			t.Fatalf("%s unexpectedly restricts a baseline capability: %#v", level.name, policy)
 		}
 	}
 }
 
-// 系统提示不能再把人人都有的基础能力摆成「当前授权能力」清单。
-func TestRelationshipPermissionContextDoesNotListBaselineAsGrants(t *testing.T) {
-	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 120, MessageCount: 100}, "owner", "user")
-	context := relationshipPermissionContext(policy)
-	if strings.Contains(context, "当前授权能力：") {
-		t.Fatalf("baseline capabilities are still presented as a grant list:\n%s", context)
+// 提示词不能再把人人都有的基础能力摆成「授权能力」清单——那正是回复里冒出
+// 一长串「当前权限：…」的来源。
+func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
+	profile := UserMemoryProfile{Favorability: 101, MessageCount: 1128}
+	policy := RelationshipPolicyFor(profile, "owner", "user")
+
+	permissionContext := relationshipPermissionContext(policy)
+	if strings.Contains(permissionContext, "当前授权能力：") {
+		t.Fatalf("baseline capabilities are still presented as a grant list:\n%s", permissionContext)
 	}
 	for _, want := range []string{"不是靠好感度解锁的", "当前提醒与订阅额度：20"} {
-		if !strings.Contains(context, want) {
-			t.Fatalf("context missing %q:\n%s", want, context)
+		if !strings.Contains(permissionContext, want) {
+			t.Fatalf("context missing %q:\n%s", want, permissionContext)
 		}
 	}
+	if !strings.Contains(relationshipPermissionContext(RelationshipPolicyFor(UserMemoryProfile{}, "owner", "owner")), "机器人配置") {
+		t.Fatal("owner context lost its extra capabilities")
+	}
 
-	owner := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "owner")
-	if !strings.Contains(relationshipPermissionContext(owner), "机器人配置") {
-		t.Fatalf("owner context lost its extra capabilities:\n%s", relationshipPermissionContext(owner))
+	// 长期记忆上下文是第二个曾经复述能力清单的地方。
+	memoryContext := formatUserMemoryContext(profile, policy)
+	if strings.Contains(memoryContext, "已授权能力") {
+		t.Fatalf("memory context still lists capabilities:\n%s", memoryContext)
+	}
+	if !strings.Contains(memoryContext, "好感度：101") || !strings.Contains(memoryContext, "关系等级：信赖") {
+		t.Fatalf("memory context lost the core fields:\n%s", memoryContext)
 	}
 }
