@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -83,5 +84,69 @@ func TestQQPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
 	// 原请求不能被就地改写。
 	if request.Messages[1].ToolCalls[0].Arguments["target_user_id"] != "10001234" {
 		t.Fatal("original request was mutated")
+	}
+}
+
+// 消息 ID 也要脱敏，否则模型手里握着一批真实 ID。难点在于它可以是负数，而且必须能
+// 原路还原——不然模型写的 [diana-reply:别名] 会因为不是纯数字而被丢弃，引用悄悄失效。
+func TestQQPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
+	scope := newQQPrivacyScope()
+	scope.registerEvent(MessageEvent{
+		Kind: EventKindGroup, GroupID: "987654321", UserID: "10001234", MessageID: "1145141919",
+		Quoted: &QuotedMessage{MessageID: "-810975", UserID: "10005678"},
+	})
+
+	for _, sample := range []string{
+		"[diana-reply:1145141919] 收到",
+		"[diana-reply:-810975] 负数 ID",
+		`{"message_id":"1145141919","quoted_message_id":"-810975"}`,
+		// 事件里没登记、只在历史文本里出现过的也要认出来。
+		"[diana-reply:2233445566] 旧消息",
+	} {
+		masked := scope.protectText(sample)
+		if strings.Contains(masked, "1145141919") || strings.Contains(masked, "810975") || strings.Contains(masked, "2233445566") {
+			t.Fatalf("message id leaked: %q -> %q", sample, masked)
+		}
+		if !strings.Contains(masked, "qq_message_") {
+			t.Fatalf("message id not aliased: %q -> %q", sample, masked)
+		}
+		if restored := scope.restoreText(masked); restored != sample {
+			t.Fatalf("round trip broken: %q -> %q -> %q", sample, masked, restored)
+		}
+	}
+}
+
+// 端到端：模型原样复制别名标记，代理还原后必须能解析出真正的回复目标。
+func TestQQPrivacyReplyMarkerSurvivesMasking(t *testing.T) {
+	scope := newQQPrivacyScope()
+	alias := scope.registerMessageID("1145141919")
+	if alias == "1145141919" {
+		t.Fatal("message id should have been aliased")
+	}
+	// 别名直接交给出站解析会被拒（不是纯数字），这正是必须先还原的原因。
+	if _, _, ok := extractOutgoingReplyMarker("[diana-reply:" + alias + "] 看到了"); ok {
+		t.Fatal("alias should not parse as a reply target before restoration")
+	}
+	id, rest, ok := extractOutgoingReplyMarker(scope.restoreText("[diana-reply:" + alias + "] 看到了"))
+	if !ok || id != "1145141919" || rest != "看到了" {
+		t.Fatalf("reply marker broken after restoration: id=%q rest=%q ok=%v", id, rest, ok)
+	}
+}
+
+// 消息 ID 允许负号，QQ 号不允许；两者的判定不能混用。
+func TestIsLikelyMessageID(t *testing.T) {
+	for _, valid := range []string{"1145141919", "-810975", "1234"} {
+		if !isLikelyMessageID(valid) {
+			t.Fatalf("%q should be a message id", valid)
+		}
+	}
+	for _, invalid := range []string{"", "123", "abc", "-", "12a45", "-12a45"} {
+		if isLikelyMessageID(invalid) {
+			t.Fatalf("%q should not be a message id", invalid)
+		}
+	}
+	// QQ 号判定仍然拒绝负数。
+	if isLikelyQQIdentifier("-810975") {
+		t.Fatal("negative value must not be treated as a QQ id")
 	}
 }
