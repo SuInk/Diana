@@ -212,6 +212,30 @@ func (t *dianaRepositoryIssuesTool) Description() string {
 		"。用户只给出仓库简称、别名或链接时，按这份清单匹配后直接填 repository，不要反问完整的 owner/repo；只有确实对不上时才追问。"
 }
 
+// InputSchema 声明参数契约。写操作对当前用户消息原文的要求写在 user_confirmed_write
+// 的字段说明里——这是最容易踩的一条，放在参数旁边比埋在描述中段更显眼。
+func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation": toolEnumParam("要执行的操作。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。",
+			"search", "create", "update", "comment", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
+		"repository": toolStringParam("目标仓库，写成 owner/repo。approve、cancel_draft、list_drafts 不需要。"),
+		"number":     toolIntParam("目标 Issue 编号；update、comment、close、reopen 必填。", 1, 1_000_000),
+		"query":      toolStringParam("search 专用：检索关键词。"),
+		"title":      toolStringParam("create 必填、update 可选：Issue 标题，最多 " + itoa(repositoryIssueTitleLimit) + " 字符。"),
+		"body":       toolStringParam("create 与 update 的正文，comment 的评论内容，最多 " + itoa(repositoryIssueBodyLimit) + " 字符。"),
+		"labels":     toolStringArrayParam("要设置的标签；传空数组表示清空。"),
+		"assignees":  toolStringArrayParam("要设置的负责人；传空数组表示清空。"),
+		"milestone":  toolStringParam("要设置的里程碑；传 null 表示清空。"),
+		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求立即执行这次写入。写操作必填 true，" +
+			"且后端会拿用户消息原文核对：消息里必须只出现一个 owner/repo 和一个 Issue 编号，" +
+			"comment 还要求编号之后用冒号（或「内容为」「评论为」）引出评论正文，且正文与 body 逐字一致。" +
+			"用户没把正文写全、或你打算自己润色措辞时，先把要发的内容复述给用户确认，不要直接调用。"),
+		"operation_id":       toolStringParam("幂等标识：同一次写入重试时传相同值，避免重复发布。"),
+		"draft_id":           toolStringParam("approve 与 cancel_draft 必填：要审批或取消的草稿 ID，可用 list_drafts 查到。"),
+		"confirmation_token": toolStringParam("审批流程返回的确认令牌，按提示原样回传。"),
+	})
+}
+
 func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}

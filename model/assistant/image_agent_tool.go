@@ -73,7 +73,24 @@ func (t *dianaImageTool) Description() string {
 	if len(operations) == 0 {
 		operations = append(operations, "无")
 	}
-	return `异步生成或编辑图片。工具会立即返回已受理的任务编号，图片在后台完成后自动发送；调用后必须继续输出 final 文字回复，不要等待图片，也不要再次调用本工具。当前允许操作：` + strings.Join(operations, "、") + `。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索/浏览器调用；prompt 必须包含已确认的具体事实、外观和约束，不能虚构未查到的内容。input: {"operation":"generate 或 edit，可选；省略时默认 generate","prompt":"交给图片模型的完整、自包含最终提示词","caption":"图片完成后随图发送的短文字，可选"}`
+	return `异步生成或编辑图片。工具会立即返回已受理的任务编号，图片在后台完成后自动发送；调用后必须继续输出 final 文字回复，不要等待图片，也不要再次调用本工具。当前允许操作：` + strings.Join(operations, "、") + `。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。`
+}
+
+// InputSchema 的 operation 枚举按当前关系等级裁剪：没解锁的操作压根不出现在
+// 参数里，比在描述里说明「你没有权限」更省事，模型也不会去试。
+func (t *dianaImageTool) InputSchema() map[string]any {
+	operations := make([]string, 0, 2)
+	if t.relationship.AllowImageGeneration {
+		operations = append(operations, "generate")
+	}
+	if t.relationship.AllowImageEditing {
+		operations = append(operations, "edit")
+	}
+	return toolObjectSchema([]string{"prompt"}, map[string]any{
+		"operation": toolEnumParam("generate 生成新图片；edit 编辑当前、引用或近期出现过的图片与成员头像。省略时按 generate 处理。", operations...),
+		"prompt":    toolStringParam("交给图片模型的完整、自包含的最终提示词。不要写成对话口吻，也不要依赖上下文里的指代。"),
+		"caption":   toolStringParam("图片完成后随图发送的一句短文字，可选。"),
+	})
 }
 
 func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string, error) {

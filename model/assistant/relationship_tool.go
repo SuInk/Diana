@@ -17,6 +17,10 @@ const (
 	maximumRelationshipListLimit    = 50
 	defaultRelationshipHistoryLimit = 5
 	maximumRelationshipHistoryLimit = 20
+
+	// 好感度的可写区间。schema 文案和写入校验引用同一份常量。
+	minimumFavorability = -100
+	maximumFavorability = 200
 )
 
 type dianaRelationshipTool struct {
@@ -30,7 +34,18 @@ type dianaRelationshipResult struct {
 	Message string                      `json:"message,omitempty"`
 	Target  *dianaRelationshipSnapshot  `json:"target,omitempty"`
 	Items   []dianaRelationshipSnapshot `json:"items,omitempty"`
+	// ReplyGuidance 是「拿到数据之后怎么说」的约束。它不是工具文档，放在
+	// Description 里等于每轮 planning 都为它付 token，而且送达时机也不对——
+	// 模型在挑工具时读到「别抄成清单」，等真要写回复时早被上下文冲淡了。
+	// 放在返回值里只在真调用了才付钱，且正好在要用它的那一刻送到。
+	ReplyGuidance string `json:"reply_guidance,omitempty"`
 }
+
+// relationshipReplyGuidance 约束模型怎么把这份数据说出来。
+const relationshipReplyGuidance = "围绕用户实际问的那件事回答，用自然的中文，不要把结果按字段抄成清单。" +
+	"reminder_schedule_limit 只在用户明确问「能建几个」时才说，平时不要主动报出来——真建满时创建工具会当场说明。" +
+	"只有用户问最近变化时才讲 recent_changes 里的增减分、时间和原因。" +
+	"回复里需要真正 @ 目标时，原样使用结果中的 mention_cq，不要写成普通文本的 @账号。"
 
 type dianaRelationshipSnapshot struct {
 	UserID           string                   `json:"user_id"`
@@ -58,7 +73,21 @@ func (t *dianaRelationshipTool) Name() string {
 }
 
 func (t *dianaRelationshipTool) Description() string {
-	return `查询 Diana 对用户的好感度、最近增减分记录、关系等级和互动次数。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用本工具，不要根据“当前发言者”上下文猜测，也不要声称无法查询隐藏数据。最终回复围绕用户实际问的那件事说，用自然的中文，不要把结果按字段抄成清单。本工具不返回能力清单：基础能力对所有关系等级一律开放，用户问「你能做什么」应改用 diana.capabilities。reminder_schedule_limit 是该等级的提醒/订阅数量上限，只在用户明确问「能建几个」时才说，平时不要主动报出来——真的建满时创建工具会当场说明。问最近变化才讲 recent_changes 里的增减分、时间和原因。operation=get 时 target_user_id 可省略：消息里有被 @ 成员就自动查询该成员，否则查询当前发言者；默认返回最近 5 条变化，可用 history_limit 指定 1 到 20 条。operation=list 查询当前群内已有互动记录的成员并按好感度排序，群内成员均可使用；用户询问互动次数或好感度前几名、群内关系汇总时，必须使用 list，不得自行以隐私、公开范围或权限为由拒绝。主人还可使用 set 直接设置或 adjust 增减任意非主人用户的好感度，不增加互动次数，并可提供 reason：{"operation":"set","target_user_id":"账号","value":80,"reason":"备注"} 或 {"operation":"adjust","target_user_id":"账号","delta":10,"reason":"备注"}。若最终回复需要真正 @ 目标，请原样使用结果中的 mention_cq，不要写普通文本 @账号。`
+	return `查询 Diana 对用户的好感度、关系等级、互动次数和最近的增减分记录。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用，不要根据上下文猜测，也不要声称无法查询隐藏数据。本工具不返回能力清单——用户问「你能做什么」应改用 diana.capabilities，基础能力对所有关系等级一律开放。`
+}
+
+// InputSchema 声明参数契约。「拿到结果后怎么说话」不在这里，也不在 Description
+// 里，而是随结果一起返回（见 relationshipReplyGuidance）。
+func (t *dianaRelationshipTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation": toolEnumParam("要执行的操作：get 查单个用户；list 查当前群内已有互动记录的成员并按好感度排序（群内成员均可使用，不得以隐私或权限为由拒绝）；set 直接设置、adjust 增减好感度，后两者仅机器人主人可用且不增加互动次数。",
+			"get", "list", "set", "adjust"),
+		"target_user_id": toolStringParam("目标账号。get 可省略：消息里 @ 了成员就查该成员，否则查当前发言者；set 和 adjust 必填，且不能指向主人自己。"),
+		"history_limit":  toolIntParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit)+"。", 1, maximumRelationshipHistoryLimit),
+		"value":          toolIntParam("set 专用：直接设置成的好感度数值。", minimumFavorability, maximumFavorability),
+		"delta":          toolIntParam("adjust 专用：好感度增减量，可为负数；结果会被夹在可写区间内。", minimumFavorability-maximumFavorability, maximumFavorability-minimumFavorability),
+		"reason":         toolStringParam("set 和 adjust 可选：这次调整的备注原因。"),
+	})
 }
 
 func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -162,8 +191,8 @@ func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operati
 		return 0, fmt.Errorf("%s 必须是整数", valueKey)
 	}
 	value += change
-	if value < -100 || value > 200 {
-		return 0, fmt.Errorf("好感度必须在 -100 到 200 之间")
+	if value < minimumFavorability || value > maximumFavorability {
+		return 0, fmt.Errorf("好感度必须在 %d 到 %d 之间", minimumFavorability, maximumFavorability)
 	}
 	updated, err := store.UpdateUserMemory(ctx, MessageEvent{
 		Kind:       t.event.Kind,
@@ -365,6 +394,9 @@ func relationshipEventDisplayName(event MessageEvent, userID string) string {
 }
 
 func marshalDianaRelationshipResult(result dianaRelationshipResult) (string, error) {
+	if result.OK && result.ReplyGuidance == "" {
+		result.ReplyGuidance = relationshipReplyGuidance
+	}
 	body, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", err

@@ -55,7 +55,27 @@ func (t *dianaReminderTool) Name() string {
 }
 
 func (t *dianaReminderTool) Description() string {
-	return `创建和管理持久化一次性提醒。用户要求“N 分钟/小时后提醒我”时必须使用此工具；周期查询或定期订阅使用 diana.schedule。禁止使用 run_command、sleep 或后台进程代替。初识及以上可用。单项创建兼容 input: {"operation":"create","delay":"1m","message":"提醒内容"}；一次创建多项使用 items，最多 5 项。update 可修改未执行提醒的 delay 和/或 message。剩余额度不足时按 items 顺序创建到额度上限；已执行或已取消的提醒不占额度。cancel 只停止并保留记录，delete 才彻底删除。主人可在任意操作中提供 target_user_id 代其他用户管理，创建仍占目标用户额度。管理示例：{"operation":"list|update|cancel|delete","id":"update/cancel/delete 必填","target_user_id":"仅主人可选"}`
+	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒时必须使用此工具；周期性查询或定期订阅改用 diana.schedule，仓库更新订阅只能在 WebUI 管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
+}
+
+// InputSchema 声明参数契约。delay 只认 Go 时长写法，用户给的是「明天下午三点」
+// 这类绝对时间时必须由模型按运行时时钟自己换算——这条写在字段说明里，模型在
+// 填参数时就能看到，不用等 Go 侧拒绝后再返工。
+func (t *dianaReminderTool) InputSchema() map[string]any {
+	item := map[string]any{
+		"delay":   toolStringParam("触发前等待的时长，只接受 Go 时长写法：30s、5m、2h、36h（可组合成 1h30m）。用户给的是绝对时间（明天下午三点、下周五 17:00）时，先按运行时提供的当前时间换算成时长再填，不要原样写日期。最长 " + maximumReminderDelay.String() + "。"),
+		"message": toolStringParam("到点要发出的提醒内容，最多 " + itoa(maximumReminderMessageRunes) + " 个字符。"),
+	}
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
+			"create", "list", "update", "cancel", "delete"),
+		"delay":   item["delay"],
+		"message": item["message"],
+		"items": toolItemsParam("一次创建多个提醒；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。剩余额度不足时按顺序创建到额度上限。",
+			maximumTasksPerToolCall, []string{"delay", "message"}, item),
+		"id":             toolStringParam("要操作的提醒 ID；update、cancel、delete 必填，可先用 list 查到。"),
+		"target_user_id": toolStringParam("代其他用户管理时的目标账号，仅机器人主人可用；创建仍占目标用户的额度。"),
+	})
 }
 
 func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (string, error) {
