@@ -180,7 +180,7 @@
             <span class="hint">填写 OneBot v11 客户端实际能访问的地址；Docker 或局域网部署时请修改主机名。自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
           </div>
           <div class="field">
-            <label for="wizard-owner">主人 QQ 号（可选）</label>
+            <label for="wizard-owner">主人账号（可选）</label>
             <input
               id="wizard-owner"
               v-model="botForm.owner_id"
@@ -188,7 +188,7 @@
               inputmode="numeric"
               placeholder="例如 123456789，用于管理指令和私聊登录"
             />
-            <span class="hint">不需要聊天内管理或 QQ 配对登录时可以留空。</span>
+            <span class="hint">不需要聊天内管理或配对登录时可以留空。</span>
           </div>
           <div class="field wide">
             <label for="wizard-token">OneBot Access Token（可选，至少 16 位）</label>
@@ -228,7 +228,7 @@
         </div>
         <p class="muted">
           现在给机器人发一条私聊消息，或在群里 @ 它试试。群聊触发词默认为
-          <code>嘉然</code>、<code>然然</code>、<code>Diana</code>。
+          <code>Diana</code>、<code>diana</code>。
         </p>
         <div class="cluster">
           <button class="btn primary" type="button" @click="finishSetup">
@@ -523,7 +523,7 @@ function validWebSocketURL(value: string): boolean {
 
 watch([connected, selfID], ([isConnected, id]) => {
   if (isConnected && id && step.value === 1) {
-    toastSuccess(`已识别机器人 QQ：${id}`);
+    toastSuccess(`已识别机器人账号：${id}`);
     step.value = 2;
   }
 });

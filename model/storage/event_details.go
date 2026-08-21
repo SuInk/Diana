@@ -374,7 +374,7 @@ type pendingMentionText struct {
 	segments []assistant.MessageSegment
 }
 
-// collectMentionIDs 收出 at 段里还没有昵称的 QQ 号。已经带昵称的（部分 OneBot 实现
+// collectMentionIDs 收出 at 段里还没有昵称的账号。已经带昵称的（部分 OneBot 实现
 // 会附上）不必再查库。
 func collectMentionIDs(segments []assistant.MessageSegment, into map[string]struct{}) {
 	for _, segment := range segments {
@@ -389,7 +389,7 @@ func collectMentionIDs(segments []assistant.MessageSegment, into map[string]stru
 	}
 }
 
-// applyMentionNames 把查到的昵称写回 at 段，PlainText 随后就能渲染成「@昵称（QQ）」。
+// applyMentionNames 把查到的昵称写回 at 段，PlainText 随后就能渲染成「@昵称（账号）」。
 func applyMentionNames(segments []assistant.MessageSegment, names map[string]string) {
 	for _, segment := range segments {
 		if segment.Type != "at" || segment.Data == nil {

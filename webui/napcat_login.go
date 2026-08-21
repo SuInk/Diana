@@ -236,7 +236,7 @@ func (h *NapCatLoginHandler) quickLogin(c *gin.Context) {
 	}
 	payload.UIN = strings.TrimSpace(payload.UIN)
 	if !napCatUINPattern.MatchString(payload.UIN) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "QQ account must contain digits only"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bot account must contain digits only"})
 		return
 	}
 	if err := h.call(c.Request.Context(), "/api/QQLogin/SetQuickLogin", gin.H{"uin": payload.UIN}, nil); err != nil {

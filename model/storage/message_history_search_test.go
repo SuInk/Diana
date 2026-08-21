@@ -93,7 +93,7 @@ func TestMessageHistoryPersistsOutboundRole(t *testing.T) {
 	}
 	event := assistant.MessageEvent{
 		Kind: assistant.EventKindPrivate, Time: 10, SelfID: "42", UserID: "10001",
-		MessageID: "outgoing-1", SenderName: "嘉然", Outbound: true,
+		MessageID: "outgoing-1", SenderName: "Diana", Outbound: true,
 		Segments: []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "我刚才说过的话"}}},
 	}
 	if err := store.AppendMessageEvent(ctx, "private:10001", event); err != nil {

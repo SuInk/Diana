@@ -54,11 +54,11 @@
         <div v-if="!editingTask && form.destination === 'group'" class="field wide">
           <label for="rss-watch-group">群号 / Chat ID</label>
           <AppSelect v-if="groupOptions.length" id="rss-watch-group" v-model="form.group_id" :options="groupOptions" />
-          <input v-else id="rss-watch-group" v-model.trim="form.group_id" class="input" type="text" placeholder="QQ 群号或 Telegram 群 Chat ID" />
+          <input v-else id="rss-watch-group" v-model.trim="form.group_id" class="input" type="text" placeholder="群号或 Telegram 群 Chat ID" />
         </div>
         <div v-if="!editingTask && form.destination === 'private'" class="field wide">
           <label for="rss-watch-user">私聊对象 ID</label>
-          <input id="rss-watch-user" v-model.trim="form.user_id" class="input" type="text" placeholder="QQ 号或 Telegram Chat ID" />
+          <input id="rss-watch-user" v-model.trim="form.user_id" class="input" type="text" placeholder="账号或 Telegram Chat ID" />
         </div>
       </div>
       <div class="repository-watch-editor-actions">

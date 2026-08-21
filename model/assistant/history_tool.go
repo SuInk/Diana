@@ -123,7 +123,7 @@ func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any)
 		messageID = strings.TrimSpace(t.event.SemanticSourceMessageID)
 	}
 	if messageID == "" {
-		return dianaChatHistoryResult{}, fmt.Errorf("around 需要 message_id；当前消息也没有 QQ 引用可作为默认锚点")
+		return dianaChatHistoryResult{}, fmt.Errorf("around 需要 message_id；当前消息也没有引用可作为默认锚点")
 	}
 	anchor, found := t.runtime.findSemanticReferenceEvent(ctx, t.event, messageID)
 	if !found {

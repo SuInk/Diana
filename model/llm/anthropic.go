@@ -266,7 +266,7 @@ func anthropicText(blocks []anthropic.ContentBlockUnion) string {
 	parts := make([]string, 0, len(blocks))
 	for _, block := range blocks {
 		if block.Type == "text" && block.Text != "" {
-			// 当前只消费文本块，工具/图片等块先忽略，避免把结构化内容直接拼给 QQ。
+			// 当前只消费文本块，工具/图片等块先忽略，避免把结构化内容直接拼给聊天通道。
 			parts = append(parts, block.Text)
 		}
 	}

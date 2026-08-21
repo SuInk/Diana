@@ -20,12 +20,12 @@ import (
 const (
 	defaultMessageHistoryLimit = 20
 	// Prompt history candidates are loaded from a token-derived limit. Keep this
-	// ceiling high enough for large windows containing many short QQ messages;
+	// ceiling high enough for large windows containing many short chat messages;
 	// the assistant still applies its token budget before constructing a prompt.
 	maxMessageHistoryLimit = 4096
 )
 
-// AppendMessageEvent persists a QQ message event for later context recovery.
+// AppendMessageEvent persists an inbound message event for later context recovery.
 func (s *SQLiteStore) AppendMessageEvent(ctx context.Context, session string, event assistant.MessageEvent) error {
 	if s == nil || s.db == nil {
 		return nil

@@ -44,10 +44,10 @@ let llmConfig: LLMConfig = {
 };
 
 const qqProfile: QQBotConfig = {
-  id: "bot-qq", name: "Diana QQ（演示）", platform: "onebot-v11", enabled: true,
+  id: "bot-qq", name: "Diana OneBot（演示）", platform: "onebot-v11", enabled: true,
   onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", onebot_access_token_configured: true,
   bot_qq: "100000001", owner_id: "100200001", owner_login_enabled: true, isolate_platform_contexts: true,
-  group_triggers: ["Diana", "嘉然"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
+  group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   long_term_memory_enabled: true, cross_group_memory_enabled: true, agent_enabled: true, agent_max_steps: 12,
@@ -69,7 +69,7 @@ let assistantConfig: QQBotConfig = { ...qqProfile, active_profile_id: "bot-qq", 
 let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: { id: "official.link-resolver", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
-  { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 QQ 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
+  { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {
     manifest: {
       id: "official.repository-publish", name: "Issue 发布", version: "0.4.0", description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
@@ -113,7 +113,7 @@ const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
 `)}`;
 
 const groups: QQBotGroupSummary[] = [
-  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "嘉然"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
+  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
   { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
   { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, plugin_overrides: { "official.browser-render": false }, updated_at: before(45) },
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
@@ -181,9 +181,9 @@ export const demoStats: StatsSnapshot = {
 
 export const demoStatus: QQBotStatus = {
   running: true, config: assistantConfig,
-  channel: { profile_id: "bot-qq", platform: "onebot-v11", name: "Diana QQ（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
+  channel: { profile_id: "bot-qq", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
   channels: [
-    { profile_id: "bot-qq", platform: "onebot-v11", name: "Diana QQ（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
+    { profile_id: "bot-qq", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
     { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) }
   ],
   nonebot_bridge: { enabled: false, connected: false, updated_at: before(1) }, plugins, recent_events: demoEvents, active_workers: 2, updated_at: before(1)
@@ -197,7 +197,7 @@ let tasks: AssistantTask[] = [
 ];
 
 const platforms: QQBotPlatform[] = [
-  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ", description: "通过 NapCat、Lagrange 或 go-cqhttp 接入 QQ。" },
+  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ", description: "通过 NapCat、Lagrange 或 go-cqhttp 接入 OneBot v11。" },
   { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。" }
 ];
 

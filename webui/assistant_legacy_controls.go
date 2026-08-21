@@ -276,7 +276,7 @@ func (h *QQBotHandler) uploadGroupTestFile(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", err, groupID, map[string]any{"group_id": groupID, "name": name})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.upload_file", "QQ群测试文件已上传", groupID, map[string]any{"group_id": groupID, "name": name})
+	recordRequestOperation(c, h.logs, "assistant.group_test.upload_file", "群测试文件已上传", groupID, map[string]any{"group_id": groupID, "name": name})
 	c.JSON(http.StatusOK, gin.H{"group_id": groupID, "name": name, "result": result})
 }
 
@@ -935,7 +935,7 @@ func (h *QQBotHandler) recallGroupTestMessage(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", err, messageID, map[string]any{"message_id": messageID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.recall", "QQ群测试消息已撤回", messageID, map[string]any{"message_id": messageID})
+	recordRequestOperation(c, h.logs, "assistant.group_test.recall", "群测试消息已撤回", messageID, map[string]any{"message_id": messageID})
 	c.JSON(http.StatusOK, groupTestRecallResponse{MessageID: messageID, Recalled: true, Result: result})
 }
 
@@ -988,7 +988,7 @@ func (h *QQBotHandler) parseGroupTestFile(c *gin.Context) {
 			ProfileID: testCfg.ID,
 			Segments:  []assistant.MessageSegment{{Type: "file", Data: segmentData}},
 		},
-		Text: "QQ群文件解析测试",
+		Text: "群文件解析测试",
 	})
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", err, logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
@@ -1022,7 +1022,7 @@ func (h *QQBotHandler) parseGroupTestFile(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("file parser returned no result"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.file", "QQ群文件解析测试完成", logTarget, map[string]any{"group_id": groupID, "file_id": fileID, "name": name})
+	recordRequestOperation(c, h.logs, "assistant.group_test.file", "群文件解析测试完成", logTarget, map[string]any{"group_id": groupID, "file_id": fileID, "name": name})
 	c.JSON(http.StatusOK, groupTestFileResponse{GroupID: groupID, FileID: fileID, Name: name, Context: contextText})
 }
 

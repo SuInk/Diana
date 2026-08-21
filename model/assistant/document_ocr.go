@@ -191,13 +191,13 @@ func runDocumentOCRTask(ctx context.Context, services PluginTaskServices, render
 	reply, err := generateReply(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 Diana 的文档分析子代理。请根据已经完成的 OCR 结果回答当前 QQ 消息。
+			Content: strings.TrimSpace(`你是 Diana 的文档分析子代理。请根据已经完成的 OCR 结果回答当前 OneBot v11 消息。
 
 要求：
 - 只回答当前问题；上下文只作参考，不要转而回复旧消息。
 - 不要声称无法读取文件，也不要虚构 OCR 中不存在的内容。
 - 涉及差异或结论时尽量标注文件名和页码。
-- QQ 默认不启用 Markdown，请使用自然的纯文本，避免标题符号、表格语法和过度分条。
+- 默认不启用 Markdown，请使用自然的纯文本，避免标题符号、表格语法和过度分条。
 - 内容较长时先给结论，再给必要依据。`),
 		},
 		{

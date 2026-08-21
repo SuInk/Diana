@@ -317,7 +317,7 @@ export interface QQBotGroupConfig {
   plugin_overrides?: Record<string, boolean>;
   /** 按插件、按字段保存的群级非密钥设置覆盖；缺失字段沿用全局。 */
   plugin_setting_overrides?: Record<string, Record<string, unknown>>;
-  /** 本群专属回复时间、屏蔽 QQ 号与准入门槛；不设表示跟随全局。 */
+  /** 本群专属回复时间、屏蔽账号与准入门槛；不设表示跟随全局。 */
   reply_gate?: ReplyGate | null;
   updated_at?: string;
 }
@@ -340,7 +340,7 @@ export interface GroupAdmission {
 }
 
 export interface ReplyGate {
-  /** QQ 群等级门槛，0 表示不限。 */
+  /** 群等级门槛，0 表示不限。 */
   min_group_level?: number;
   /** 等级拿不到时的策略，默认 allow（放行）。 */
   level_unknown_policy?: "allow" | "deny";

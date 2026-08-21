@@ -64,7 +64,7 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	messages := []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 QQ 机器人 Diana/嘉然的关系变化评估器。请判断当前发言是否对“当前发言者与机器人之间的关系”产生了真实、明确的变化。
+			Content: strings.TrimSpace(`你是聊天机器人 Diana 的关系变化评估器。请判断当前发言是否对“当前发言者与机器人之间的关系”产生了真实、明确的变化。
 
 必须遵守：
 1. 必须理解整句话、引用对象和最近对话，不得按关键词、子串、前缀或正则机械加减分。

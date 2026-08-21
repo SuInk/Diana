@@ -53,7 +53,7 @@ func TestQQPrivacyProviderMasksRequestsAndRestoresReplies(t *testing.T) {
 
 	response, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: `owner_id=10001；日期 20260716；message_id=30003`},
-		{Role: llm.RoleUser, Content: `{"source_user_id":"10002","target_group_id":"20001","message_id":"30003"}\nQQ号：10001\n[CQ:at,qq=10002]`},
+		{Role: llm.RoleUser, Content: `{"source_user_id":"10002","target_group_id":"20001","message_id":"30003"}\n账号：10001\n[CQ:at,qq=10002]`},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ type privacyRoundTripTool struct {
 func (*privacyRoundTripTool) Name() string { return "test.qq_lookup" }
 
 func (*privacyRoundTripTool) Description() string {
-	return `测试 QQ 标识往返。input: {"target_user_id":"QQ 用户标识"}`
+	return `测试账号标识往返。input: {"target_user_id":"用户标识"}`
 }
 
 func (t *privacyRoundTripTool) Run(_ context.Context, input map[string]any) (string, error) {

@@ -34,7 +34,7 @@ func TestMemberCacheObservesLevelFromEvent(t *testing.T) {
 	}
 }
 
-// 群等级按群独立累积，缓存键必须带群号。只按 QQ 号缓存会让 A 群刷到高等级的人
+// 群等级按群独立累积，缓存键必须带群号。只按账号缓存会让 A 群刷到高等级的人
 // 在 B 群也被判定为高等级，等级门槛直接失效。
 func TestMemberCacheIsScopedPerGroup(t *testing.T) {
 	cache := newMemberCache(nil)

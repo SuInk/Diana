@@ -75,7 +75,7 @@ func NewVoiceSTTPlugin(client *http.Client) *VoiceSTTPlugin {
 func (p *VoiceSTTPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID: voiceSTTPluginID, Name: "语音识别", Version: "0.1.0",
-		Description: "将收到的 QQ 语音转写为内部对话文本；支持本地 Whisper 和 OpenAI 兼容音频转写接口。",
+		Description: "将收到的 语音转写为内部对话文本；支持本地 Whisper 和 OpenAI 兼容音频转写接口。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "network:http", "filesystem:temp", "process:media"},
 		Settings: []PluginSettingSpec{

@@ -51,7 +51,8 @@ func TestRuntimeShouldHandleGroupMentionAndTrigger(t *testing.T) {
 	if runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "画图 一只猫") {
 		t.Fatal("image words alone should not trigger group chat")
 	}
-	if runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "嘉然画图 一只猫") {
+	// 这里要的是一个「没有配置成触发词」的别名，别换成 Diana——它是配好的。
+	if runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "小满画图 一只猫") {
 		t.Fatal("image words with unconfigured alias should not trigger group chat")
 	}
 	if runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "改图 把肤色变黑一点") {
@@ -1299,7 +1300,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	if !strings.Contains(prompt, "同一发送者紧邻补发") || !strings.Contains(prompt, "发送一条完整回复") || !strings.Contains(prompt, "不要按历史消息逐条作答") {
 		t.Fatalf("system prompt missing adjacent-message merge guidance: %q", prompt)
 	}
-	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") || !strings.Contains(prompt, "都必须放在同一条 QQ 消息里") || !strings.Contains(prompt, "严禁在每个列表项或普通段落前使用 <botbr>") || !strings.Contains(prompt, "语义上确实是下一次独立发言") {
+	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") || !strings.Contains(prompt, "都必须放在同一条 OneBot v11 消息里") || !strings.Contains(prompt, "严禁在每个列表项或普通段落前使用 <botbr>") || !strings.Contains(prompt, "语义上确实是下一次独立发言") {
 		t.Fatalf("system prompt missing QQ plain-text guidance: %q", prompt)
 	}
 	if strings.Contains(prompt, "需要分段时直接使用换行") {
@@ -1322,15 +1323,15 @@ func TestPromptChineseSlangDefaultMigrationPreservesCustomText(t *testing.T) {
 }
 
 func TestRuntimeSystemPromptExplainsMatchedAliasRoles(t *testing.T) {
-	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"嘉然", "Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"小满", "Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := runtime.systemPrompt(MessageEvent{
 		Kind:       EventKindGroup,
-		RawMessage: "嘉然晚晚是向晚还是御坂晚",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "嘉然晚晚是向晚还是御坂晚"}}},
+		RawMessage: "小满满月是小满还是满月",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "小满满月是小满还是满月"}}},
 	}, nil)
 	for _, want := range []string{
-		`"嘉然"、"Diana"`,
-		`当前消息命中的配置别名："嘉然"`,
+		`"小满"、"Diana"`,
+		`当前消息命中的配置别名："小满"`,
 		"命中只表示这条消息的触发来源",
 		"以第一人称理解和回应",
 		"固定词组",
@@ -1919,7 +1920,7 @@ func TestRuntimeKeepsMentionAndGroupTriggerInPrompt(t *testing.T) {
 	provider := &capturingLLMProvider{reply: "在呢"}
 	runtime := NewRuntime(BotConfig{
 		BotQQ:         "42",
-		GroupTriggers: []string{"嘉然"},
+		GroupTriggers: []string{"Diana"},
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -1929,12 +1930,12 @@ func TestRuntimeKeepsMentionAndGroupTriggerInPrompt(t *testing.T) {
 		GroupID:    "123456",
 		UserID:     "10001",
 		MessageID:  "msg-1",
-		RawMessage: "[CQ:at,qq=42] 嘉然",
+		RawMessage: "[CQ:at,qq=42] Diana",
 		Segments: []MessageSegment{
 			{Type: "at", Data: map[string]string{"qq": "42"}},
-			{Type: "text", Data: map[string]string{"text": " 嘉然"}},
+			{Type: "text", Data: map[string]string{"text": " Diana"}},
 		},
-	}, "@42 嘉然")
+	}, "@42 Diana")
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
@@ -1942,7 +1943,7 @@ func TestRuntimeKeepsMentionAndGroupTriggerInPrompt(t *testing.T) {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	got := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "@42 嘉然") {
+	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "@42 Diana") {
 		t.Fatalf("last message content = %q", got)
 	}
 }
@@ -3515,7 +3516,7 @@ func TestRuntimeResolverLocalVideoUploadsFile(t *testing.T) {
 	if len(channel.sent[0].VideoURLs) != 0 || channel.sent[0].Text != "链接解析结果" {
 		t.Fatalf("first sent = %#v", channel.sent[0])
 	}
-	if !strings.Contains(channel.sent[1].Text, "改用 QQ 文件发送") {
+	if !strings.Contains(channel.sent[1].Text, "改用文件发送") {
 		t.Fatalf("notice = %#v", channel.sent[1])
 	}
 	uploadCalls := recordedCallsByAction(channel.calls, "upload_group_file")
@@ -4296,9 +4297,9 @@ func TestRuntimeVisualIntentIncludesRecentTextEditRequirements(t *testing.T) {
 		UserID:     "10001",
 		MessageID:  "edit-1",
 		SenderName: "TestOwner",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "嘉然改一下"}}},
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana改一下"}}},
 	}
-	payload := runtime.visualIntentPayload(event, "嘉然改一下")
+	payload := runtime.visualIntentPayload(event, "Diana改一下")
 
 	if len(payload.RecentMessages) != 4 {
 		t.Fatalf("recent messages = %#v", payload.RecentMessages)
@@ -4494,9 +4495,9 @@ func TestRuntimeReplyRuleConvertsReplyToVoice(t *testing.T) {
 		GroupID:        "123456",
 		UserID:         "10001",
 		MessageID:      "rule-voice",
-		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "嘉然用语音说晚安"}}},
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana用语音说晚安"}}},
 		proactiveReply: true,
-	}, "嘉然用语音说晚安")
+	}, "Diana用语音说晚安")
 	if err != nil {
 		t.Fatal(err)
 	}

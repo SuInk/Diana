@@ -272,8 +272,8 @@ const botSummary = computed(() => {
   const unhealthy = channels.filter(channelAccountUnhealthy);
   if (unhealthy.length > 0) {
     const first = unhealthy[0];
-    const message = first?.account_status_message || "QQ 账号状态异常，请在 NapCat 中检查登录状态";
-    const label = first?.account_status_known && !first.account_online ? "QQ 账号离线" : "QQ 状态异常";
+    const message = first?.account_status_message || "账号状态异常，请在 NapCat 中检查登录状态";
+    const label = first?.account_status_known && !first.account_online ? "账号离线" : "账号状态异常";
     return { kind: "err", label, hint: `${message}；WebSocket 仍已连接。` };
   }
   const connected = channels.filter((channel) => channel.connected).length;

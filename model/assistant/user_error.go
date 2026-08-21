@@ -22,7 +22,7 @@ var (
 )
 
 // publicQQErrorMessage keeps operational details in logs while returning only
-// a safe, useful summary to QQ users.
+// a safe, useful summary to chat users.
 func publicQQErrorMessage(err error) string {
 	if err == nil {
 		return "请求处理失败，请稍后重试。"

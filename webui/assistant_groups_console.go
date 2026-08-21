@@ -18,7 +18,7 @@ import (
 )
 
 // 控制台群管理接口：走全局登录鉴权，登录用户即管理员，
-// 无需再经过 QQ 验证码流程（该流程保留给群管自助场景）。
+// 无需再经过登录验证码流程（该流程保留给群管自助场景）。
 
 type consoleGroupsResponse struct {
 	Groups        []consoleGroupItem      `json:"groups"`

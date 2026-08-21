@@ -384,9 +384,9 @@ func (s *OneBotReverseServer) updateAccountStatus(raw any) {
 	}
 	message := ""
 	if !online {
-		message = "QQ 账号已离线，请在 NapCat 中检查 QQ 登录状态并重新登录"
+		message = "账号已离线，请在 NapCat 中检查登录状态并重新登录"
 	} else if !good {
-		message = "NapCat 报告 QQ 账号状态异常，请检查账号风控、网络或登录状态"
+		message = "NapCat 报告账号状态异常，请检查账号风控、网络或登录状态"
 	}
 	s.connMu.Lock()
 	s.status.AccountStatusKnown = true

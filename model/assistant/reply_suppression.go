@@ -49,7 +49,7 @@ type replyControlIntent struct {
 	SuppressCurrentUser bool
 }
 
-// ReplySuppression is a restart-safe temporary refusal to answer one QQ user.
+// ReplySuppression is a restart-safe temporary refusal to answer one chat user.
 type ReplySuppression struct {
 	UserID           string    `json:"user_id"`
 	GroupID          string    `json:"group_id,omitempty"`
@@ -116,7 +116,7 @@ func consumeReplyControlIntent(reply string) (string, replyControlIntent) {
 	return reply, intent
 }
 
-// markdownPlain 必须一路传到 normalizeReply：QQ 不渲染 Markdown，标志断在这里
+// markdownPlain 必须一路传到 normalizeReply：OneBot v11 不渲染 Markdown，标志断在这里
 // 会让 cfg.MarkdownToPlain 形同虚设，** 之类的标记直接漏进聊天窗口。
 func normalizeReplyPreservingControlIntent(reply string, maxRunes int, markdownPlain ...bool) string {
 	reply, intent := consumeReplyControlIntent(reply)
@@ -373,7 +373,7 @@ func (r *Runtime) classifyBotReplyLoopMessage(ctx context.Context, event Message
 	messages := []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 QQ 群聊的反机器人循环分类器。判断当前发言是否很可能是另一个 AI 聊天机器人自动生成并自动回应 Diana 的消息，而不是普通真人发言。
+			Content: strings.TrimSpace(`你是 群聊的反机器人循环分类器。判断当前发言是否很可能是另一个 AI 聊天机器人自动生成并自动回应 Diana 的消息，而不是普通真人发言。
 
 必须遵守：
 1. 引用、@、点名 Diana 或回复很快都只是触发背景，绝不能单独作为 AI 证据。
@@ -689,18 +689,18 @@ func (r *Runtime) handleReplySuppressionOwnerCommand(event MessageEvent, text st
 		}
 		lines := []string{"当前响应限制："}
 		for _, item := range items {
-			lines = append(lines, fmt.Sprintf("- QQ %s，剩余 %s", item.UserID, formatReplySuppressionRemaining(time.Until(item.Until))))
+			lines = append(lines, fmt.Sprintf("- 账号 %s，剩余 %s", item.UserID, formatReplySuppressionRemaining(time.Until(item.Until))))
 		}
 		return strings.Join(lines, "\n"), true
 	}
 	target := replySuppressionCommandTarget(event, text, r.effectiveConfigForEvent(event))
 	if target == "" {
-		return "请 @ 要解除限制的用户，或使用：响应限制 解除 <QQ号>。", true
+		return "请 @ 要解除限制的用户，或使用：响应限制 解除 <账号>。", true
 	}
 	if _, ok := r.clearReplySuppression(event, target); !ok {
-		return fmt.Sprintf("QQ %s 当前没有生效中的响应限制。", target), true
+		return fmt.Sprintf("账号 %s 当前没有生效中的响应限制。", target), true
 	}
-	return fmt.Sprintf("已解除 QQ %s 的响应限制，后续消息可以正常触发。", target), true
+	return fmt.Sprintf("已解除账号 %s 的响应限制，后续消息可以正常触发。", target), true
 }
 
 func replySuppressionCommandTarget(event MessageEvent, text string, cfg BotConfig) string {
@@ -770,12 +770,12 @@ func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, 
 	messages := r.withUserFacingPersona(event, []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你为 QQ 群聊生成一条简短的系统状态提示。
+			Content: strings.TrimSpace(`你为 群聊生成一条简短的系统状态提示。
 要求：
 1. 说明为避免机器人互相循环，机器人已暂时停止响应“此账号”。
 2. 说明暂停的大约时长。
 3. 只输出一句自然中文纯文本，不要解释检测细节，不要责怪对方。
-4. 不得使用 @、QQ 号、昵称、引用、CQ 码、Markdown、表情或引号。
+4. 不得使用 @、账号、昵称、引用、CQ 码、Markdown、表情或引号。
 5. 最多 70 个汉字。`),
 		},
 		{

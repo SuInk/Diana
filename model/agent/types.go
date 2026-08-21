@@ -136,7 +136,7 @@ func (cfg Config) WithDefaults() Config {
 		cfg.MaxSteps = DefaultMaxSteps
 	}
 	if cfg.MaxSteps > MaxAllowedSteps {
-		// Agent 步数设置硬上限，避免模型反复调用工具导致一次 QQ 回复无限拖长。
+		// Agent 步数设置硬上限，避免模型反复调用工具导致一次回复无限拖长。
 		cfg.MaxSteps = MaxAllowedSteps
 	}
 	if cfg.MaxToolOutputChars <= 0 {

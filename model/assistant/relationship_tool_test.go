@@ -34,7 +34,7 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 		UserID:  "10001",
 		GroupID: "20002",
 		Segments: []MessageSegment{
-			{Type: "text", Data: map[string]string{"text": "嘉然看下"}},
+			{Type: "text", Data: map[string]string{"text": "Diana看下"}},
 			{Type: "at", Data: map[string]string{"qq": "10005"}},
 			{Type: "text", Data: map[string]string{"text": " 的好感度"}},
 		},
@@ -190,7 +190,7 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 		GroupID:   "20002",
 		MessageID: "30004",
 		Segments: []MessageSegment{
-			{Type: "text", Data: map[string]string{"text": "嘉然看下"}},
+			{Type: "text", Data: map[string]string{"text": "Diana看下"}},
 			{Type: "at", Data: map[string]string{"qq": "10005"}},
 			{Type: "text", Data: map[string]string{"text": " 的好感度"}},
 		},

@@ -513,7 +513,7 @@ type telegramPhoto struct {
 //
 // 语义对照：
 //   - chat.type private -> 私聊；group/supergroup/channel -> 群聊，chat.id 当群号
-//   - from.id -> 用户 ID；Telegram 没有 QQ 那样的群等级，SenderLevel 保持 0，
+//   - from.id -> 用户 ID；Telegram 没有 OneBot 那样的群等级，SenderLevel 保持 0，
 //     ReplyGate 的等级门槛会按「读不到即放行」处理
 //   - ToMe 由文本里的 @username 提及判断
 func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) MessageEvent {

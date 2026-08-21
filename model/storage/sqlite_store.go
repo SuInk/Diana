@@ -289,38 +289,38 @@ func (s *SQLiteStore) SaveLLMProviderRegistry(ctx context.Context, document llm.
 	return s.saveJSON(ctx, llmRegistryKey, document)
 }
 
-// LoadQQBotConfig 读取 QQ 机器人配置。
+// LoadQQBotConfig 读取 OneBot v11 机器人配置。
 func (s *SQLiteStore) LoadQQBotConfig(ctx context.Context) (assistant.BotConfig, bool, error) {
 	var cfg assistant.BotConfig
 	ok, err := s.loadJSON(ctx, qqbotConfigKey, &cfg)
 	return cfg, ok, err
 }
 
-// SaveQQBotConfig 保存 QQ 机器人配置。
+// SaveQQBotConfig 保存 OneBot v11 机器人配置。
 func (s *SQLiteStore) SaveQQBotConfig(ctx context.Context, cfg assistant.BotConfig) error {
 	return s.saveJSON(ctx, qqbotConfigKey, cfg)
 }
 
-// LoadQQBotProfiles 读取 QQ 机器人配置集。
+// LoadQQBotProfiles 读取 OneBot v11 机器人配置集。
 func (s *SQLiteStore) LoadQQBotProfiles(ctx context.Context) (assistant.ProfileSet, bool, error) {
 	var set assistant.ProfileSet
 	ok, err := s.loadJSON(ctx, qqbotProfilesKey, &set)
 	return set, ok, err
 }
 
-// SaveQQBotProfiles 保存 QQ 机器人配置集。
+// SaveQQBotProfiles 保存 OneBot v11 机器人配置集。
 func (s *SQLiteStore) SaveQQBotProfiles(ctx context.Context, set assistant.ProfileSet) error {
 	return s.saveJSON(ctx, qqbotProfilesKey, set)
 }
 
-// LoadQQBotGroupConfigs 读取 QQ 群级机器人配置。
+// LoadQQBotGroupConfigs 读取 群级机器人配置。
 func (s *SQLiteStore) LoadQQBotGroupConfigs(ctx context.Context) (assistant.GroupConfigSet, bool, error) {
 	var set assistant.GroupConfigSet
 	ok, err := s.loadJSON(ctx, qqbotGroupConfigKey, &set)
 	return set, ok, err
 }
 
-// SaveQQBotGroupConfigs 保存 QQ 群级机器人配置。
+// SaveQQBotGroupConfigs 保存 群级机器人配置。
 func (s *SQLiteStore) SaveQQBotGroupConfigs(ctx context.Context, set assistant.GroupConfigSet) error {
 	return s.saveJSON(ctx, qqbotGroupConfigKey, set)
 }
@@ -426,7 +426,7 @@ func (s *SQLiteStore) SaveReleaseCache(ctx context.Context, payload []byte) erro
 	return s.saveJSON(ctx, releaseCacheKey, json.RawMessage(payload))
 }
 
-// LoadInboundRecoveryCheckpoint returns the latest instant when the QQ channel
+// LoadInboundRecoveryCheckpoint returns the latest instant when the channel
 // was known to be online. The coordinator uses it to size reconnect backfill.
 func (s *SQLiteStore) LoadInboundRecoveryCheckpoint(ctx context.Context) (time.Time, bool, error) {
 	var checkpoint time.Time

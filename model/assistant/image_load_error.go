@@ -66,7 +66,7 @@ func (r *Runtime) prepareEventImages(ctx context.Context, event MessageEvent) Me
 	}
 	diagnostics = append(diagnostics, loadFailures...)
 
-	// A syntactically valid QQ CDN URL is not proof that its rkey still works.
+	// A syntactically valid CDN URL is not proof that its rkey still works.
 	// First validate get_image directly; only if that source also fails do we ask
 	// get_msg to refresh NapCat's message-media map and retry get_image.
 	for range 2 {

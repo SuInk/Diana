@@ -110,7 +110,7 @@ func (b *NoneBotBridge) Status() NoneBotBridgeStatus {
 	return b.status
 }
 
-// ForwardEvent 将 QQ 事件转发给 NoneBot bridge。
+// ForwardEvent 将 OneBot 事件转发给 NoneBot bridge。
 func (b *NoneBotBridge) ForwardEvent(event MessageEvent) {
 	payload := oneBotEventPayload(event)
 	b.mu.RLock()
@@ -253,12 +253,12 @@ func oneBotEventPayload(event MessageEvent) map[string]any {
 	return payload
 }
 
-// numberOrString 将 QQ ID 转为 OneBot 需要的数字或字符串。
+// numberOrString 将账号 ID 转为 OneBot 需要的数字或字符串。
 func numberOrString(value string) any {
 	if value == "" {
 		return int64(0)
 	}
-	// QQ/群号能转数字就按 OneBot 常见 number 输出，非数字 ID 保持字符串。
+	// 账号/群号能转数字就按 OneBot 常见 number 输出，非数字 ID 保持字符串。
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err == nil {
 		return parsed
