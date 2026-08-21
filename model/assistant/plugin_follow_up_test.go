@@ -103,3 +103,39 @@ func TestResolverStaysSilentWithNothingToSend(t *testing.T) {
 		}
 	}
 }
+
+// 跟评提示词以前清一色是「不要……」，模型被禁完之后无话可说，就抓着分支名、编号
+// 这类附带细节凑一句，或者干脆断言效果（「这下就不用担心了」）。这两条都既空洞又
+// 越界。提示词必须把 SKIP 摆成默认，并且点名这两种凑话方式。
+func TestFollowUpPromptsDefaultToSilenceAndNameTheFillerModes(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{"SKIP"}}
+	runtime := NewRuntime(BotConfig{BotQQ: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}
+	if err := runtime.sendDirectPluginResponse(context.Background(), event, "链接解析结果", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	runtime.maybeSendPluginFollowUp(context.Background(), event, PluginResponse{FollowUp: true})
+	waitForCondition(t, time.Second, func() bool { return len(provider.requestsSnapshot()) > 0 })
+
+	prompt := ""
+	for _, message := range provider.requestsSnapshot()[0].Messages {
+		if strings.Contains(message.Content, "刚刚把上面最后那条内容发到了这个会话里") {
+			prompt = message.Content
+		}
+	}
+	if prompt == "" {
+		t.Fatal("follow-up prompt not found")
+	}
+	for _, want := range []string{"默认回 SKIP", "附带细节凑话", "不要断言效果"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("follow-up prompt missing %q: %s", want, prompt)
+		}
+	}
+	// SKIP 时不该多发一条。
+	if sent := channel.sentSnapshot(); len(sent) != 1 {
+		t.Fatalf("SKIP should stay silent, sent = %#v", sent)
+	}
+}
