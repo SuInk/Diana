@@ -6,227 +6,246 @@
     <header class="view-header">
       <div class="view-title">
         <h1>设置</h1>
-        <p>界面主题、访问安全与系统更新</p>
+        <p>控制台自身的配置。机器人怎么说话、回不回复，在「机器人」页里改。</p>
       </div>
     </header>
 
-    <div class="settings-grid">
-      <div class="settings-grid-column">
-      <!-- 访问安全 -->
-      <section class="card">
-      <div class="card-header">
-        <h2>访问安全</h2>
-        <span class="badge" :class="authRequired ? 'ok' : 'warn'">{{ authRequired ? "已开启密码保护" : "未设置密码" }}</span>
-      </div>
-      <div class="card-body form-grid">
-        <p v-if="!authRequired" class="muted field wide" style="margin: 0; font-size: 13px">
-          当前控制台无需登录即可访问。部署在公网或局域网前，请务必设置管理密码。
-        </p>
-        <div class="field">
-          <label for="sec-username">管理账号</label>
-          <input id="sec-username" v-model="username" class="input" placeholder="留空则沿用当前账号" autocomplete="username" />
-        </div>
-        <div v-if="authRequired" class="field">
-          <label for="sec-current">当前密码</label>
-          <div class="password-field">
-            <input
-              id="sec-current"
-              v-model="currentPassword"
-              class="input"
-              :type="showCurrentPassword ? 'text' : 'password'"
-              autocomplete="current-password"
-            />
-            <button
-              class="password-toggle"
-              type="button"
-              :aria-label="showCurrentPassword ? '隐藏当前密码' : '显示当前密码'"
-              @click="showCurrentPassword = !showCurrentPassword"
-            >
-              <EyeOff v-if="showCurrentPassword" :size="16" aria-hidden="true" />
-              <Eye v-else :size="16" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <div class="field">
-          <label for="sec-new">{{ authRequired ? "新密码（至少 8 位）" : "设置管理密码（至少 8 位）" }}</label>
-          <div class="password-field">
-            <input
-              id="sec-new"
-              v-model="newPassword"
-              class="input"
-              :type="showNewPassword ? 'text' : 'password'"
-              autocomplete="new-password"
-            />
-            <button
-              class="password-toggle"
-              type="button"
-              :aria-label="showNewPassword ? '隐藏新密码' : '显示新密码'"
-              @click="showNewPassword = !showNewPassword"
-            >
-              <EyeOff v-if="showNewPassword" :size="16" aria-hidden="true" />
-              <Eye v-else :size="16" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <div class="field wide cluster" style="gap: 8px">
-          <button class="btn primary" type="button" :disabled="savingPassword || username.length === 0 || newPassword.length === 0" @click="saveCredentials">
-            <KeyRound :size="15" aria-hidden="true" />
-            {{ savingPassword ? "保存中…" : authRequired ? "更新账号与密码" : "开启密码保护" }}
-          </button>
-        </div>
-      </div>
-    </section>
+    <!-- 按「改的是什么」分三档：账号与会话决定谁能进来，系统是这台服务本身，
+         外观只影响你眼前这个浏览器。原先五张卡平铺成两列，既没有标题也没有边界，
+         找一项设置只能一张张看过去。用和机器人配置同一套 tab，两处操作手感一致。 -->
+    <nav class="editor-tabs settings-tabs" role="tablist" aria-label="设置分区">
+      <button
+        v-for="item in settingsTabs"
+        :key="item.key"
+        class="editor-tab"
+        :class="{ active: tab === item.key }"
+        type="button"
+        role="tab"
+        :aria-selected="tab === item.key"
+        @click="tab = item.key"
+      >
+        {{ item.label }}
+      </button>
+    </nav>
+    <p class="settings-tab-hint">{{ activeTabHint }}</p>
 
-      <!-- 登录会话 -->
-      <section v-if="authRequired" class="card">
-      <div class="card-header">
-        <h2>登录会话</h2>
-        <span class="card-sub">机器人发来异常登录提醒时，在这里把对应设备踢下线</span>
-      </div>
-      <div class="card-body stack">
-        <p v-if="sessionsLoading && sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">加载中…</p>
-        <p v-else-if="sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">当前没有活跃会话。</p>
-        <ul v-else class="session-list">
-          <li v-for="session in sessions" :key="session.id" class="session-item">
-            <div class="session-main">
-              <span class="session-name">
-                {{ session.device_name || "未知设备" }}
-                <span v-if="session.current" class="badge ok">当前设备</span>
-              </span>
-              <span class="session-meta">
-                {{ session.ip_address || "IP 未知" }} · 最后活跃 {{ formatTime(session.last_seen_at) }}
-              </span>
-              <span v-if="session.user_agent" class="session-agent">{{ session.user_agent }}</span>
-            </div>
-            <button
-              class="btn small danger"
-              type="button"
-              :disabled="revokingID !== ''"
-              @click="revokeSession(session)"
-            >
-              <LogOut :size="14" aria-hidden="true" />
-              {{ revokingID === session.id ? "处理中…" : session.current ? "退出本机" : "踢下线" }}
-            </button>
-          </li>
-        </ul>
-        <div class="cluster" style="gap: 8px">
-          <button class="btn" type="button" :disabled="sessionsLoading" @click="loadSessions">
-            <RefreshCw :size="14" aria-hidden="true" />
-            刷新
-          </button>
-          <button class="btn danger" type="button" :disabled="revokingID !== '' || otherSessionCount === 0" @click="revokeOthers">
-            <LogOut :size="14" aria-hidden="true" />
-            登出其他 {{ otherSessionCount }} 个设备
-          </button>
-        </div>
-      </div>
-    </section>
-
-      <!-- 主题 -->
-      <section class="card">
-        <div class="card-header">
-          <h2>界面主题</h2>
-        </div>
-        <div class="card-body stack">
-          <div class="field">
-            <label>主题模式</label>
-            <div class="segmented" role="radiogroup" aria-label="主题模式">
-              <button type="button" :class="{ active: theme.mode === 'auto' }" @click="theme.mode = 'auto'">跟随系统</button>
-              <button type="button" :class="{ active: theme.mode === 'light' }" @click="theme.mode = 'light'">浅色</button>
-              <button type="button" :class="{ active: theme.mode === 'dark' }" @click="theme.mode = 'dark'">深色</button>
-            </div>
+      <div v-show="tab === 'security'" class="settings-section-body">
+          <!-- 访问安全 -->
+          <section class="card">
+          <div class="card-header">
+            <h2>访问安全</h2>
+            <span class="badge" :class="authRequired ? 'ok' : 'warn'">{{ authRequired ? "已开启密码保护" : "未设置密码" }}</span>
           </div>
-          <div class="field">
-            <label>主题色</label>
-            <div class="accent-swatches">
-              <button
-                v-for="option in accentOptions"
-                :key="option.id"
-                type="button"
-                class="accent-swatch"
-                :class="{ selected: theme.accent === option.id }"
-                @click="theme.accent = option.id"
-              >
-                <span class="swatch-dot" :style="{ background: option.color }" aria-hidden="true"></span>
-                {{ option.label }}
+          <div class="card-body form-grid">
+            <p v-if="!authRequired" class="muted field wide" style="margin: 0; font-size: 13px">
+              当前控制台无需登录即可访问。部署在公网或局域网前，请务必设置管理密码。
+            </p>
+            <div class="field">
+              <label for="sec-username">管理账号</label>
+              <input id="sec-username" v-model="username" class="input" placeholder="留空则沿用当前账号" autocomplete="username" />
+            </div>
+            <div v-if="authRequired" class="field">
+              <label for="sec-current">当前密码</label>
+              <div class="password-field">
+                <input
+                  id="sec-current"
+                  v-model="currentPassword"
+                  class="input"
+                  :type="showCurrentPassword ? 'text' : 'password'"
+                  autocomplete="current-password"
+                />
+                <button
+                  class="password-toggle"
+                  type="button"
+                  :aria-label="showCurrentPassword ? '隐藏当前密码' : '显示当前密码'"
+                  @click="showCurrentPassword = !showCurrentPassword"
+                >
+                  <EyeOff v-if="showCurrentPassword" :size="16" aria-hidden="true" />
+                  <Eye v-else :size="16" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="sec-new">{{ authRequired ? "新密码（至少 8 位）" : "设置管理密码（至少 8 位）" }}</label>
+              <div class="password-field">
+                <input
+                  id="sec-new"
+                  v-model="newPassword"
+                  class="input"
+                  :type="showNewPassword ? 'text' : 'password'"
+                  autocomplete="new-password"
+                />
+                <button
+                  class="password-toggle"
+                  type="button"
+                  :aria-label="showNewPassword ? '隐藏新密码' : '显示新密码'"
+                  @click="showNewPassword = !showNewPassword"
+                >
+                  <EyeOff v-if="showNewPassword" :size="16" aria-hidden="true" />
+                  <Eye v-else :size="16" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <div class="field wide cluster" style="gap: 8px">
+              <button class="btn primary" type="button" :disabled="savingPassword || username.length === 0 || newPassword.length === 0" @click="saveCredentials">
+                <KeyRound :size="15" aria-hidden="true" />
+                {{ savingPassword ? "保存中…" : authRequired ? "更新账号与密码" : "开启密码保护" }}
               </button>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+
+          <!-- 登录会话 -->
+          <section v-if="authRequired" class="card">
+          <div class="card-header">
+            <h2>登录会话</h2>
+            <span class="card-sub">机器人发来异常登录提醒时，在这里把对应设备踢下线</span>
+          </div>
+          <div class="card-body stack">
+            <p v-if="sessionsLoading && sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">加载中…</p>
+            <p v-else-if="sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">当前没有活跃会话。</p>
+            <ul v-else class="session-list">
+              <li v-for="session in sessions" :key="session.id" class="session-item">
+                <div class="session-main">
+                  <span class="session-name">
+                    {{ session.device_name || "未知设备" }}
+                    <span v-if="session.current" class="badge ok">当前设备</span>
+                  </span>
+                  <span class="session-meta">
+                    {{ session.ip_address || "IP 未知" }} · 最后活跃 {{ formatTime(session.last_seen_at) }}
+                  </span>
+                  <span v-if="session.user_agent" class="session-agent">{{ session.user_agent }}</span>
+                </div>
+                <button
+                  class="btn small danger"
+                  type="button"
+                  :disabled="revokingID !== ''"
+                  @click="revokeSession(session)"
+                >
+                  <LogOut :size="14" aria-hidden="true" />
+                  {{ revokingID === session.id ? "处理中…" : session.current ? "退出本机" : "踢下线" }}
+                </button>
+              </li>
+            </ul>
+            <div class="cluster" style="gap: 8px">
+              <button class="btn" type="button" :disabled="sessionsLoading" @click="loadSessions">
+                <RefreshCw :size="14" aria-hidden="true" />
+                刷新
+              </button>
+              <button class="btn danger" type="button" :disabled="revokingID !== '' || otherSessionCount === 0" @click="revokeOthers">
+                <LogOut :size="14" aria-hidden="true" />
+                登出其他 {{ otherSessionCount }} 个设备
+              </button>
+            </div>
+          </div>
+        </section>
       </div>
 
-      <div class="settings-grid-column">
-      <!-- 系统更新 -->
-      <section class="card">
-        <div class="card-header">
-          <h2>系统更新</h2>
-          <span class="badge">{{ deploymentMode === "git" ? "源码更新" : systemVersion?.update_supported ? "Release 自更新" : "Docker" }}</span>
-          <button class="btn small ghost" type="button" :disabled="loading" title="刷新更新状态" @click="loadUpdates">
-            <RefreshCw :size="14" aria-hidden="true" />
-          </button>
-        </div>
-        <div class="card-body stack" style="gap: 10px; font-size: 13px">
-          <div class="cluster" style="justify-content: space-between">
-            <span class="muted">当前版本</span>
-            <span class="cluster" style="gap: 6px">
-              <span v-if="sourceBuild" class="badge warn">源码构建</span>
-              <span v-if="currentVersionLabel" class="mono">{{ currentVersionLabel }}</span>
-            </span>
+      <div v-show="tab === 'system'" class="settings-section-body">
+        <!-- 系统更新 -->
+        <section class="card">
+          <div class="card-header">
+            <h2>系统更新</h2>
+            <span class="badge">{{ deploymentMode === "git" ? "源码更新" : systemVersion?.update_supported ? "Release 自更新" : "Docker" }}</span>
+            <button class="btn small ghost" type="button" :disabled="loading" title="刷新更新状态" @click="loadUpdates">
+              <RefreshCw :size="14" aria-hidden="true" />
+            </button>
           </div>
-          <p class="muted" style="font-size: 12.5px; margin: 0">
-            {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；安装和重启必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
-          </p>
-
-          <template v-if="deploymentMode === 'git' && updateStatus">
-            <hr class="divider" style="margin: 4px 0" />
+          <div class="card-body stack" style="gap: 10px; font-size: 13px">
             <div class="cluster" style="justify-content: space-between">
-              <span class="muted">分支 / 提交</span>
-              <span class="mono">{{ updateStatus.branch || "—" }} · {{ shortCommit }}</span>
+              <span class="muted">当前版本</span>
+              <span class="cluster" style="gap: 6px">
+                <span v-if="sourceBuild" class="badge warn">源码构建</span>
+                <span v-if="currentVersionLabel" class="mono">{{ currentVersionLabel }}</span>
+              </span>
             </div>
-            <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
-          </template>
-          <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
-            <RefreshCw v-if="deploymentMode === 'release' && updateStatus?.download_ready" :size="15" aria-hidden="true" />
-            <Download v-else :size="15" aria-hidden="true" />
-            {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : updateStatus?.download_ready ? "安装并重启" : "下载最新 Release" }}
-          </button>
-          <div v-if="operationRunning && deploymentMode === 'release'" class="update-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="updatePercent">
-            <div class="update-progress-label">
-              <span>{{ updatePhaseLabel }}</span>
-              <strong class="mono">{{ updatePercent }}%</strong>
-            </div>
-            <div class="update-progress-track"><span :style="{ width: `${updatePercent}%` }"></span></div>
-          </div>
-          <pre v-if="updateOutput" class="mono update-output" :class="{ error: updateFailed }">{{ updateOutput }}</pre>
-          <hr class="divider" style="margin: 4px 0" />
-          <button class="btn" type="button" :disabled="restarting" @click="doRestart">
-            <RotateCw :size="15" aria-hidden="true" />
-            {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
-          </button>
-          <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
-          <div v-if="loading" class="skeleton" style="height: 72px"></div>
-        </div>
-      </section>
+            <p class="muted" style="font-size: 12.5px; margin: 0">
+              {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；安装和重启必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
+            </p>
 
-      <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
-      <section class="card">
-        <div class="card-header">
-          <h2>运行状态</h2>
-        </div>
-        <div class="card-body stack" style="gap: 8px; font-size: 13px">
-          <div class="info-row">
-            <span class="muted info-label">运行时长</span>
-            <span class="info-value">{{ health ? formatUptime(health.uptime_seconds) : "—" }}</span>
+            <template v-if="deploymentMode === 'git' && updateStatus">
+              <hr class="divider" style="margin: 4px 0" />
+              <div class="cluster" style="justify-content: space-between">
+                <span class="muted">分支 / 提交</span>
+                <span class="mono">{{ updateStatus.branch || "—" }} · {{ shortCommit }}</span>
+              </div>
+              <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
+            </template>
+            <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
+              <RefreshCw v-if="deploymentMode === 'release' && updateStatus?.download_ready" :size="15" aria-hidden="true" />
+              <Download v-else :size="15" aria-hidden="true" />
+              {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : updateStatus?.download_ready ? "安装并重启" : "下载最新 Release" }}
+            </button>
+            <div v-if="operationRunning && deploymentMode === 'release'" class="update-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="updatePercent">
+              <div class="update-progress-label">
+                <span>{{ updatePhaseLabel }}</span>
+                <strong class="mono">{{ updatePercent }}%</strong>
+              </div>
+              <div class="update-progress-track"><span :style="{ width: `${updatePercent}%` }"></span></div>
+            </div>
+            <pre v-if="updateOutput" class="mono update-output" :class="{ error: updateFailed }">{{ updateOutput }}</pre>
+            <hr class="divider" style="margin: 4px 0" />
+            <button class="btn" type="button" :disabled="restarting" @click="doRestart">
+              <RotateCw :size="15" aria-hidden="true" />
+              {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
+            </button>
+            <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
+            <div v-if="loading" class="skeleton" style="height: 72px"></div>
           </div>
-          <div class="info-row">
-            <span class="muted info-label">启动时间</span>
-            <span class="mono info-value">{{ health ? formatTime(health.started_at) : "—" }}</span>
+        </section>
+
+        <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
+        <section class="card">
+          <div class="card-header">
+            <h2>运行状态</h2>
           </div>
-        </div>
-      </section>
+          <div class="card-body stack" style="gap: 8px; font-size: 13px">
+            <div class="info-row">
+              <span class="muted info-label">运行时长</span>
+              <span class="info-value">{{ health ? formatUptime(health.uptime_seconds) : "—" }}</span>
+            </div>
+            <div class="info-row">
+              <span class="muted info-label">启动时间</span>
+              <span class="mono info-value">{{ health ? formatTime(health.started_at) : "—" }}</span>
+            </div>
+          </div>
+        </section>
       </div>
-    </div>
+
+      <div v-show="tab === 'appearance'" class="settings-section-body">
+        <!-- 主题 -->
+        <section class="card">
+          <div class="card-header">
+            <h2>界面主题</h2>
+          </div>
+          <div class="card-body stack">
+            <div class="field">
+              <label>主题模式</label>
+              <div class="segmented" role="radiogroup" aria-label="主题模式">
+                <button type="button" :class="{ active: theme.mode === 'auto' }" @click="theme.mode = 'auto'">跟随系统</button>
+                <button type="button" :class="{ active: theme.mode === 'light' }" @click="theme.mode = 'light'">浅色</button>
+                <button type="button" :class="{ active: theme.mode === 'dark' }" @click="theme.mode = 'dark'">深色</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>主题色</label>
+              <div class="accent-swatches">
+                <button
+                  v-for="option in accentOptions"
+                  :key="option.id"
+                  type="button"
+                  class="accent-swatch"
+                  :class="{ selected: theme.accent === option.id }"
+                  @click="theme.accent = option.id"
+                >
+                  <span class="swatch-dot" :style="{ background: option.color }" aria-hidden="true"></span>
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
   </div>
 </template>
 
@@ -255,6 +274,15 @@ import { askConfirm } from "../confirm";
 import { accentOptions, theme } from "../theme";
 import { formatTime, formatUptime } from "../format";
 import { toastError, toastSuccess } from "../toast";
+
+const settingsTabs = [
+  { key: "security", label: "安全", hint: "谁能打开这个控制台，以及现在有哪些设备登着。" },
+  { key: "system", label: "系统", hint: "这台服务本身的版本、更新与运行信息。" },
+  { key: "appearance", label: "外观", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。" }
+] as const;
+
+const tab = ref<(typeof settingsTabs)[number]["key"]>("security");
+const activeTabHint = computed(() => settingsTabs.find((item) => item.key === tab.value)?.hint ?? "");
 
 const updateStatus = ref<UpdateStatus | null>(null);
 const systemVersion = ref<SystemVersion | null>(null);
@@ -511,24 +539,36 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* 两列对称：左列是账号与外观，右列是版本与运行信息，避免整行卡片右侧留白。 */
-.settings-grid {
+/* 只有三档，铺满整行反而显得空；靠左按内容宽度排。 */
+.settings-tabs {
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.settings-tabs .editor-tab {
+  flex: 0 0 auto;
+}
+
+/* 一句话说明跟着当前 tab 变：分区名进了 tab 之后，「这一档管什么」得有地方说。 */
+.settings-tab-hint {
+  margin: 10px 0 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* auto-fit 让只有一张卡的分区（外观）自己占满整行，右边不留空位；
+   两张卡的分区并排，和原来的两列观感一致。 */
+.settings-section-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 16px;
   align-items: start;
 }
 
-.settings-grid-column {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
+@media (max-width: 960px) {
+  .settings-section-body { grid-template-columns: minmax(0, 1fr); }
 }
 
-@media (max-width: 960px) {
-  .settings-grid { grid-template-columns: minmax(0, 1fr); }
-}
 
 .update-progress { display: grid; gap: 7px; }
 .update-progress-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); }

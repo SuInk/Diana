@@ -48,17 +48,17 @@ func TestReplySuppressionPromptCoversAllMessagesWithVisibleRefusal(t *testing.T)
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate}, nil)
 	for _, want := range []string{
-		"拒绝回答任何当前消息",
+		"拒绝回答任何一条消息",
 		"不限于机器人自动回复",
-		"无论当前发言者是普通用户还是其他机器人",
-		"群聊和私聊均可拒绝",
-		"非空、简短、自然且对用户可见的拒绝说明",
+		"对方是普通用户还是机器人都可以",
+		"群聊私聊都可以",
+		"非空、简短、自然、用户看得见的拒绝说明",
 		replyRefusalMarker,
 		"累计 3 次拒答",
-		"同一非主人账号",
+		"同一个非主人账号",
 		replySuppressionMarker,
-		"两个标记不得同时使用",
-		"期间消息不会在到期后补发",
+		"两个标记不得同时出现",
+		"期间的消息不会在到期后补发",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q: %s", want, prompt)

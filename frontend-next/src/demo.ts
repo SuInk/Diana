@@ -263,6 +263,14 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const path = url.pathname;
 
   if (path === "/api/auth/status") return json({ auth_required: true, authenticated: true, username: "demo" });
+  // 演示里也给几条会话：这张卡原本永远停在「加载中…」，看不出真实排版。
+  if (path === "/api/auth/sessions")
+    return json({
+      sessions: [
+        { id: "sess-1", device_name: "MacBook Pro · Chrome", user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/139", ip_address: "192.168.1.24", created_at: before(180), last_seen_at: before(2), expires_at: before(-10080), current: true },
+        { id: "sess-2", device_name: "iPhone · Safari", user_agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) Safari/605.1.15", ip_address: "192.168.1.31", created_at: before(2880), last_seen_at: before(420), expires_at: before(-4320), current: false }
+      ]
+    });
   if (path.startsWith("/api/auth/")) return json({ ok: true, username: "demo" });
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
