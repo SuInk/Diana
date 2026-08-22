@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,43 +42,21 @@ func TestVoiceTTSPluginSupportsAgentToolAndIsEnabledByDefault(t *testing.T) {
 	}
 }
 
-func TestVoiceTTSPluginSynthesizesExplicitCommand(t *testing.T) {
-	var requestBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-			t.Error(err)
-		}
-		w.Header().Set("Content-Type", "audio/wav")
-		_, _ = w.Write(testWAVBytes())
-	}))
-	defer server.Close()
-
-	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
-	plugin := NewVoiceTTSPlugin(server.Client())
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
-		Text: "语音说：晚安",
-		Settings: SettingValues{
-			voiceTTSSettingPreset:   voiceTTSPresetCustom,
-			voiceTTSSettingEndpoint: server.URL,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp == nil || !resp.Handled || !strings.HasPrefix(resp.Reply, "[CQ:record,file=base64://") {
-		t.Fatalf("response=%#v", resp)
-	}
-	if requestBody["text"] != "晚安" || requestBody["media_type"] != "wav" {
-		t.Fatalf("request=%#v", requestBody)
-	}
-	encoded := strings.TrimSuffix(strings.TrimPrefix(resp.Reply, "[CQ:record,file=base64://"), "]")
-	if _, err := base64.StdEncoding.DecodeString(encoded); err != nil {
-		t.Fatalf("invalid base64 record: %v", err)
-	}
-	segments := buildOutgoingSegments(OutgoingMessage{Text: resp.Reply})
-	if len(segments) != 1 || segments[0]["type"] != "record" {
-		t.Fatalf("onebot segments=%#v", segments)
+// 「用语音说 / 语音说 / 朗读 / 念一下 / 读一下」这张同义词前缀表已经删除：插件不再
+// 自己拦消息，要不要合成语音由模型判断后调用 diana.tts（合成路径见
+// TestVoiceTTSPluginAgentToolSynthesizesAndShares）。
+func TestVoiceTTSPluginNoLongerInterceptsWordedRequests(t *testing.T) {
+	plugin := NewVoiceTTSPlugin(nil)
+	for _, text := range []string{"语音说：晚安", "用语音说晚安", "朗读这段", "念一下", "读一下这句话"} {
+		t.Run(text, func(t *testing.T) {
+			if plugin.ShouldHandle(MessageEvent{}, text) {
+				t.Fatalf("ShouldHandle(%q) = true", text)
+			}
+			resp, err := plugin.Handle(context.Background(), PluginRequest{Text: text})
+			if err != nil || resp != nil {
+				t.Fatalf("Handle(%q) resp=%#v err=%v", text, resp, err)
+			}
+		})
 	}
 }
 
