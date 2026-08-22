@@ -19,6 +19,18 @@ func TestEveryReplyStyleCarriesTheEmojiRule(t *testing.T) {
 	}
 }
 
+func TestEveryReplyStyleCarriesTheBlankLineRule(t *testing.T) {
+	// 空行规则必须对所有风格生效：运行时把空行当分条信号，模型却当段落间距，
+	// 从源头上不让它输出空行，两边就不会再对不上。
+	for _, style := range []ReplyStyle{
+		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, "",
+	} {
+		if !strings.Contains(style.prompt(), replyBlankLineRule) {
+			t.Errorf("风格 %q 的提示词没有带上空行规则", style)
+		}
+	}
+}
+
 func TestGroupmateStyleDropsFillerWordQuota(t *testing.T) {
 	// 语气词和颜文字的计数约束已经去掉：那是「最多一个」的上限，反而暗示可以带，
 	// 而且「颜文字」说的是字符拼的表情，管不到 emoji。

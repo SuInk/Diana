@@ -407,8 +407,8 @@ func TestRepositoryIssueWriteTargetNeverBypassesConfirmation(t *testing.T) {
 			if result.Draft.Repository != test.repository {
 				t.Errorf("draft repository=%q, want %q", result.Draft.Repository, test.repository)
 			}
-			if test.number != 0 && result.Draft.TargetNumber != test.number {
-				t.Errorf("draft target number=%d, want %d", result.Draft.TargetNumber, test.number)
+			if test.number != 0 && result.Draft.IssueTarget != test.number {
+				t.Errorf("draft issue target=%d, want %d", result.Draft.IssueTarget, test.number)
 			}
 			if calls := github.count(http.MethodPost) + github.count(http.MethodPatch); calls != 0 {
 				t.Fatalf("draft stage reached GitHub (%d requests): %#v", calls, github.requests)
