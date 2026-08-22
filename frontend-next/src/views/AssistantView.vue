@@ -281,27 +281,6 @@
               <h2>触发与回复</h2>
             </div>
             <div class="card-body form-grid">
-              <div class="field">
-                <label for="bot-response-mode">回复模式</label>
-                <select id="bot-response-mode" v-model="form.response_mode" class="input">
-                  <option value="quiet">安静模式</option>
-                  <option value="standard">标准模式</option>
-                  <option value="active">活跃模式</option>
-                  <option value="custom">自定义</option>
-                </select>
-                <span class="hint">控制机器人在没人点名时主动参与群聊的欲望。</span>
-              </div>
-              <div class="field">
-                <label for="bot-reply-style">表达风格</label>
-                <select id="bot-reply-style" v-model="form.reply_style" class="input">
-                  <option value="groupmate">群友</option>
-                  <option value="assistant">助手</option>
-                  <option value="gentle">温柔</option>
-                  <option value="lively">活泼</option>
-                  <option value="concise">简洁</option>
-                </select>
-                <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
-              </div>
               <div class="field wide">
                 <label for="bot-triggers">群聊触发词（逗号分隔）</label>
                 <input id="bot-triggers" v-model="triggersDraft" class="input" placeholder="Diana,diana" />
@@ -492,12 +471,12 @@
         </div>
 
         <div v-show="editorTab === 'persona'" class="stack">
-          <!-- 提示词 -->
+          <!-- 人设 -->
           <section class="card">
             <div class="card-header">
               <div>
-                <h2>提示词</h2>
-                <span class="card-sub">人设、场景上下文和输入兜底均可定制</span>
+                <h2>人设</h2>
+                <span class="card-sub">机器人是谁、怎么说话、多主动，都在这里定</span>
               </div>
               <button class="btn small" type="button" @click="resetPromptDefaults">
                 <RotateCcw :size="14" aria-hidden="true" />
@@ -505,6 +484,27 @@
               </button>
             </div>
             <div class="card-body form-grid">
+              <div class="field">
+                <label for="bot-reply-style">表达风格</label>
+                <select id="bot-reply-style" v-model="form.reply_style" class="input">
+                  <option value="groupmate">群友</option>
+                  <option value="assistant">助手</option>
+                  <option value="gentle">温柔</option>
+                  <option value="lively">活泼</option>
+                  <option value="concise">简洁</option>
+                </select>
+                <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
+              </div>
+              <div class="field">
+                <label for="bot-response-mode">回复模式</label>
+                <select id="bot-response-mode" v-model="form.response_mode" class="input">
+                  <option value="quiet">安静模式</option>
+                  <option value="standard">标准模式</option>
+                  <option value="active">活跃模式</option>
+                  <option value="custom">自定义</option>
+                </select>
+                <span class="hint">控制机器人在没人点名时主动参与群聊的欲望。</span>
+              </div>
               <div class="field wide">
                 <div class="field-head">
                   <label for="bot-prompt">基础人设</label>
@@ -526,7 +526,7 @@
                     <button class="btn primary small" type="button" :disabled="personaBusy || !personaDraft.trim()" @click="runPersonaGenerate">
                       {{ personaBusy ? "生成中…" : form.system_prompt?.trim() ? "按需求改写" : "生成人设" }}
                     </button>
-                    <span class="hint">用当前启用的模型生成。已有人设时是在它基础上改写，不会推倒重来。</span>
+                    <span class="hint">用当前启用的模型生成，会跟随上面选的表达风格和回复模式。已有人设时是在它基础上改写，不会推倒重来。</span>
                   </div>
                 </div>
                 <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
@@ -537,72 +537,10 @@
                 <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。</span>
               </div>
 
-              <!-- 下面几项都自带内置文案，默认只给开关；正文收进「自定义注入文案」，
-                   免得一进人设页就是满屏读不完的大段文字。 -->
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.prompt_chinese_slang_hint" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">中文语境提示</span>
-                </label>
-                <span class="hint">让它听得懂谐音梗、拼音缩写和圈内称呼，别把梗当错字纠正。</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.prompt_inject_plaintext_rules" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">注入纯文本输出规范</span>
-                </label>
-                <span class="hint">QQ 不渲染 Markdown，关掉后回复里可能出现 ** 和 # 这类标记。</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.prompt_inject_time" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">注入当前时间</span>
-                </label>
-                <span class="hint">让它知道现在几点几号，回答时效性问题时用得上。</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.prompt_inject_group_sender" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">注入群聊发言者身份</span>
-                </label>
-                <span class="hint">告诉它当前在跟群里的哪位说话。</span>
-              </div>
-
-              <details class="field wide prompt-advanced">
-                <summary>自定义注入文案</summary>
-                <div class="form-grid">
-                  <div class="field wide">
-                    <label for="bot-slang-text">中文语境提示文案</label>
-                    <textarea id="bot-slang-text" v-model="form.prompt_chinese_slang_text" class="textarea" rows="3" :disabled="!form.prompt_chinese_slang_hint"></textarea>
-                  </div>
-                  <div class="field wide">
-                    <label for="bot-plaintext-rules">纯文本输出规范文案</label>
-                    <textarea id="bot-plaintext-rules" v-model="form.prompt_plaintext_rules_text" class="textarea" rows="3" :disabled="!form.prompt_inject_plaintext_rules"></textarea>
-                  </div>
-                  <div class="field wide">
-                    <label for="bot-time-template">时间注入模板</label>
-                    <textarea id="bot-time-template" v-model="form.prompt_time_template" class="textarea" rows="2" :disabled="!form.prompt_inject_time"></textarea>
-                    <span class="hint">可用占位符：{datetime}、{weekday}</span>
-                  </div>
-                  <div class="field wide">
-                    <label for="bot-sender-template">群聊发言者模板</label>
-                    <textarea id="bot-sender-template" v-model="form.prompt_group_sender_template" class="textarea" rows="3" :disabled="!form.prompt_inject_group_sender"></textarea>
-                    <span class="hint">可用占位符：{sender}</span>
-                  </div>
-                  <div class="field wide">
-                    <label for="bot-image-only-prompt">仅发送图片时</label>
-                    <textarea id="bot-image-only-prompt" v-model="form.prompt_image_only_text" class="textarea" rows="2"></textarea>
-                  </div>
-                  <div class="field wide">
-                    <label for="bot-wake-only-prompt">仅唤醒机器人时</label>
-                    <textarea id="bot-wake-only-prompt" v-model="form.prompt_wake_only_text" class="textarea" rows="2"></textarea>
-                  </div>
-                </div>
-              </details>
+              <!-- 纯文本输出规范、时间注入、发言者标注、中文语境提示都是运行必需项，
+                   关掉只会让回复变差（QQ 冒出 Markdown 记号、答错日期），所以不再摆到
+                   界面上；字段仍在配置里，需要时可通过 API 调整，「恢复内置默认」也会
+                   把它们一并复位。 -->
               <div v-if="form.response_mode === 'custom'" class="field">
                 <label for="bot-proactive-chance">主动回复采样率</label>
                 <input id="bot-proactive-chance" v-model.number="form.proactive_reply_chance" class="input" type="number" min="0.05" max="1" step="0.05" />
@@ -621,21 +559,6 @@
                 </label>
                 <span class="hint">开启后，普通群聊只要模型能生成具体、可靠且有实质内容的回复就可以插话；仍遵守群禁用、成员门槛和响应限制。</span>
               </div>
-              <details class="field wide prompt-advanced">
-                <summary>自定义主动回复提示词</summary>
-                <div class="form-grid">
-                  <div class="field wide">
-                    <label for="bot-proactive-router-prompt">主动回复判断</label>
-                    <textarea id="bot-proactive-router-prompt" v-model="form.proactive_reply_router_prompt" class="textarea" rows="8"></textarea>
-                    <span class="hint">仅用于群聊未显式唤醒机器人时的语义判断；决定是否回复、目标消息和同轮消息。留空保存会恢复内置规则。</span>
-                  </div>
-                  <div class="field wide">
-                    <label for="bot-proactive-reply-prompt">主动回复生成约束</label>
-                    <textarea id="bot-proactive-reply-prompt" v-model="form.proactive_reply_prompt" class="textarea" rows="3"></textarea>
-                    <span class="hint">仅在主动回复判断放行后注入最终回复模型，不影响显式 @、私聊和插件回复。</span>
-                  </div>
-                </div>
-              </details>
             </div>
           </section>
 
@@ -1480,7 +1403,10 @@ async function runPersonaGenerate(): Promise<void> {
   personaBusy.value = true;
   try {
     const current = form.value.system_prompt?.trim() || "";
-    const result = await generatePersona(description, form.value.name, current);
+    const result = await generatePersona(description, form.value.name, current, {
+      reply_style: form.value.reply_style,
+      response_mode: form.value.response_mode
+    });
     const persona = result.persona?.trim();
     if (!persona) {
       toastError("模型没有返回可用的人设");

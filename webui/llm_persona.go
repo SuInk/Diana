@@ -23,6 +23,26 @@ type personaGeneratePayload struct {
 	Description string `json:"description"`
 	Name        string `json:"name,omitempty"`
 	Current     string `json:"current,omitempty"`
+	// ReplyStyle 和 ResponseMode 是界面上和人设并列的两个选择。生成时带上它们，
+	// 写出来的人设才会和已经选好的语气、搭话频率是同一个人，而不是各说各的。
+	ReplyStyle   string `json:"reply_style,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
+}
+
+// personaGenerateStyleHints 把界面上的风格选项翻译成一句写作要求。
+var personaGenerateStyleHints = map[string]string{
+	"groupmate": "说话像群里的普通朋友：短句、口语、不端着，不要用客服或助理腔。",
+	"assistant": "说话像可靠的助理：条理清楚、用词稳，但不啰嗦。",
+	"gentle":    "语气温柔耐心，多一点体谅和安抚，但不腻。",
+	"lively":    "语气活泼跳脱，有梗有情绪，但不要吵闹到掩盖信息。",
+	"concise":   "能一句说完就不说两句，砍掉所有寒暄和铺垫。",
+}
+
+// personaGenerateModeHints 描述搭话欲望，让人设自己带上这个分寸。
+var personaGenerateModeHints = map[string]string{
+	"quiet":    "性格偏安静，没人叫它就不太主动插话。",
+	"standard": "性格分寸感正常，有话题时会接，但不会硬凑。",
+	"active":   "性格外向，乐意主动参与群里的话题。",
 }
 
 // personaGenerateSystemPrompt 约束生成结果只写「它是谁、怎么说话」。
@@ -31,7 +51,8 @@ const personaGenerateSystemPrompt = `你在为一个运行在 QQ 里的聊天机
 
 要求：
 1. 用第二人称直接对机器人说话，例如「你是……」。
-2. 只写身份、性格、说话方式和该守的边界，不要写输出格式规范（纯文本、不用 Markdown、分条方式）——那些由独立开关注入，重复写会互相打架。
+2. 只写身份、性格、说话方式和该守的边界，不要写输出格式规范（纯文本、不用 Markdown、分条方式）——那些运行时会自动注入，重复写会互相打架。
+2.1 给出了已选的表达风格或回复模式时，人设的语气和搭话分寸必须和它们一致，但不要把这些要求原样抄进去，要化成这个角色本来的性格。
 3. 不要写工具用法、权限规则、拒答流程、时间注入、群聊发言者标注，这些运行时会自动补。
 4. 写成连贯的一段话，不要分点、不要标题、不要 Markdown、不要代码围栏。
 5. 控制在 200 字以内，宁可精准也不要堆形容词。
@@ -63,7 +84,7 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 	resp, err := client.Generate(c.Request.Context(), llm.GenerateRequest{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: personaGenerateSystemPrompt},
-			{Role: llm.RoleUser, Content: personaGenerateUserPrompt(description, payload.Name, payload.Current)},
+			{Role: llm.RoleUser, Content: personaGenerateUserPrompt(description, payload.Name, payload.Current, payload.ReplyStyle, payload.ResponseMode)},
 		},
 	})
 	if err != nil {
@@ -81,10 +102,16 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 
 // personaGenerateUserPrompt 拼接这次的需求。带上现有人设时是「改写」而不是「重写」，
 // 否则用户微调一句话就会丢掉已经调好的其它设定。
-func personaGenerateUserPrompt(description, name, current string) string {
+func personaGenerateUserPrompt(description, name, current, replyStyle, responseMode string) string {
 	var builder strings.Builder
 	if name = strings.TrimSpace(name); name != "" {
 		builder.WriteString("机器人的名字是「" + name + "」。\n")
+	}
+	if hint := personaGenerateStyleHints[strings.ToLower(strings.TrimSpace(replyStyle))]; hint != "" {
+		builder.WriteString("已选的表达风格：" + hint + "\n")
+	}
+	if hint := personaGenerateModeHints[strings.ToLower(strings.TrimSpace(responseMode))]; hint != "" {
+		builder.WriteString("已选的回复模式：" + hint + "\n")
 	}
 	if current = strings.TrimSpace(current); current != "" {
 		if len([]rune(current)) > personaGenerateMaxOutput {

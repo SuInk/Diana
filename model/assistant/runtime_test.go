@@ -1332,7 +1332,7 @@ func TestRuntimeSystemPromptExplainsMatchedAliasRoles(t *testing.T) {
 	for _, want := range []string{
 		`"小满"、"Diana"`,
 		`当前消息命中的配置别名："小满"`,
-		"命中只表示这条消息的触发来源",
+		"命中只说明这条消息的触发来源",
 		"以第一人称理解和回应",
 		"固定词组",
 	} {
