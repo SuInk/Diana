@@ -549,6 +549,22 @@ func weightedStructuredMemoryTerms(text string) map[string]float64 {
 				terms[string(cjk[index:index+3])] = 1.25
 			}
 		}
+		// 词典词压过同长度的 n-gram 碎片:排序时真实词先被选进检索词表,
+		// 「爪很」这类跨词二字组沉底。词典没收录的词靠上面的 n-gram 兜底。
+		for _, word := range cjkSegmentWords(string(cjk)) {
+			// 档位要整体压过 n-gram 的最高档 1.25,否则「凤爪很」这种
+			// 三字碎片会排在真实二字词前面。
+			weight := 1.35
+			switch length := len([]rune(word)); {
+			case length >= 4:
+				weight = 1.55
+			case length == 3:
+				weight = 1.45
+			}
+			if weight > terms[word] {
+				terms[word] = weight
+			}
+		}
 		cjk = cjk[:0]
 	}
 	for _, value := range strings.ToLower(text) {

@@ -105,6 +105,24 @@ type MessageHistorySearchStore interface {
 	SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error)
 }
 
+type MessageHistoryVectorQuery struct {
+	Session       string
+	SessionPrefix string
+	Vector        []float32
+	Model         string
+	FromTime      int64
+	ThroughTime   int64
+	Limit         int
+	CrossSession  bool
+}
+
+// MessageHistoryVectorStore 是语义检索的可选存储能力:向量随消息异步入库,
+// 检索按余弦相似度取近邻。存储不支持时语义检索整体退化为纯词面检索。
+type MessageHistoryVectorStore interface {
+	SaveMessageEventVector(ctx context.Context, session string, messageID string, model string, vector []float32) error
+	SearchMessageEventsByVector(ctx context.Context, query MessageHistoryVectorQuery) ([]MessageEvent, error)
+}
+
 type ImageDescriptionStore interface {
 	GetImageDescription(ctx context.Context, contentSHA256 string) (ImageDescriptionRecord, bool, error)
 	SaveImageDescription(ctx context.Context, record ImageDescriptionRecord) error
@@ -272,6 +290,9 @@ type Runtime struct {
 	relationshipEvalWG  sync.WaitGroup
 	history             map[string][]MessageEvent
 	semanticRefCache    map[string]SemanticReferenceCacheRecord
+	semanticIndexQueue  chan semanticIndexItem
+	semanticIndexOnce   sync.Once
+	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
 	chatInLastReplyAt   map[string]time.Time
 	contextSummaries    map[string]string
 	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
@@ -449,6 +470,8 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	if plugins == nil {
 		plugins = NewDefaultPluginManager()
 	}
+	// 词典分词按配置启用;加载要几秒,后台预热,别让第一条消息扛这个延迟。
+	applyCJKSegmentConfig(cfg)
 	runtime := &Runtime{
 		cfg:                   cfg,
 		profileConfigs:        map[string]BotConfig{cfg.ID: cfg},
@@ -656,10 +679,12 @@ func (r *Runtime) Stop() error {
 // Restart 使用新配置和 channel 重启运行时。
 func (r *Runtime) Restart(ctx context.Context, cfg BotConfig, channel Channel) error {
 	_ = r.Stop()
+	cfg = cfg.WithDefaults()
 	r.mu.Lock()
-	r.cfg = cfg.WithDefaults()
+	r.cfg = cfg
 	r.channel = channel
 	r.mu.Unlock()
+	applyCJKSegmentConfig(cfg)
 	return r.Start(ctx)
 }
 
@@ -680,6 +705,7 @@ func (r *Runtime) UpdateConfig(ctx context.Context, cfg BotConfig, channel Chann
 	r.mu.Lock()
 	r.cfg = cfg.WithDefaults()
 	r.updatedAt = time.Now()
+	applyCJKSegmentConfig(cfg)
 	if channel != nil {
 		r.channel = channel
 		if r.bridge != nil {
@@ -7869,7 +7895,10 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 	defer cancel()
 	if err := store.AppendMessageEvent(ctx, sessionKey(event), event); err != nil {
 		log.Printf("chatbot message history persist failed: %v", err)
+		return
 	}
+	// 语义检索开着的话,落库后把消息投给后台向量化。非阻塞,失败只丢这一条。
+	r.enqueueSemanticIndex(event)
 }
 
 func withoutReplyRuntimeState(event MessageEvent) MessageEvent {

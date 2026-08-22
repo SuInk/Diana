@@ -363,11 +363,18 @@ type BotConfig struct {
 	// 群消息可能是十几 token 的表情占位，也可能是三千 token 的长粘贴——按条数配，
 	// 实际开销会在一个数量级的区间里飘。RecentContextLimit 仍按条数配，因为它管的
 	// 是路由、指代和记忆门控这些「往回数 N 条」的旁路，那里条数才是对的单位。
-	RecentHistoryTokenBudget    int64         `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit          int           `json:"recent_context_limit,omitempty"`
-	ContextSummaryThreshold     int           `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled       *bool         `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled     *bool         `json:"cross_group_memory_enabled,omitempty"`
+	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
+	ContextSummaryThreshold  int   `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled    *bool `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled  *bool `json:"cross_group_memory_enabled,omitempty"`
+	// 词典分词要把整个分词词典常驻内存（约 130MB），所以默认关。开启立即生效
+	// （后台加载词典，期间选词退回 n-gram）；关闭要重启进程才真正生效——
+	// 词典占用的内存本来也只有重启才能归还。
+	DictSegmentEnabled *bool `json:"dict_segment_enabled,omitempty"`
+	// 语义检索:消息经 embedding 模型转成向量,检索时按余弦相似度召回并与
+	// 词面结果融合。需要 embedding 分组的 LLM 配置档,默认关。
+	SemanticSearchEnabled       *bool         `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance        float64       `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold     float64       `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled               *bool         `json:"chat_in_enabled,omitempty"`
@@ -572,6 +579,8 @@ type ConfigPayload struct {
 	ContextSummaryThreshold     int         `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled       *bool       `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled     *bool       `json:"cross_group_memory_enabled,omitempty"`
+	DictSegmentEnabled          *bool       `json:"dict_segment_enabled,omitempty"`
+	SemanticSearchEnabled       *bool       `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance        float64     `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold     float64     `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled               *bool       `json:"chat_in_enabled,omitempty"`
@@ -1028,6 +1037,8 @@ func DefaultBotConfig() BotConfig {
 		ContextSummaryThreshold: 100,
 		LongTermMemoryEnabled:   boolPointer(true),
 		CrossGroupMemoryEnabled: boolPointer(false),
+		DictSegmentEnabled:      boolPointer(false),
+		SemanticSearchEnabled:   boolPointer(false),
 		ProactiveReplyChance:    defaultProactiveReplyChance,
 		ProactiveReplyThreshold: defaultProactiveReplyThreshold,
 		ReplyRules:              []ReplyRule{},
@@ -1218,6 +1229,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.CrossGroupMemoryEnabled == nil {
 		cfg.CrossGroupMemoryEnabled = boolPointer(false)
 	}
+	if cfg.DictSegmentEnabled == nil {
+		cfg.DictSegmentEnabled = boolPointer(false)
+	}
+	if cfg.SemanticSearchEnabled == nil {
+		cfg.SemanticSearchEnabled = boolPointer(false)
+	}
 	if cfg.ProactiveReplyChance <= 0 {
 		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
 	}
@@ -1380,6 +1397,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:        copyBoolPointer(cfg.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:      copyBoolPointer(cfg.CrossGroupMemoryEnabled),
+		DictSegmentEnabled:           copyBoolPointer(cfg.DictSegmentEnabled),
+		SemanticSearchEnabled:        copyBoolPointer(cfg.SemanticSearchEnabled),
 		ProactiveReplyChance:         cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:      cfg.ProactiveReplyThreshold,
 		ChatInEnabled:                copyBoolPointer(cfg.ChatInEnabled),
@@ -1503,6 +1522,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
 		LongTermMemoryEnabled:        copyBoolPointer(payload.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:      copyBoolPointer(payload.CrossGroupMemoryEnabled),
+		DictSegmentEnabled:           copyBoolPointer(payload.DictSegmentEnabled),
+		SemanticSearchEnabled:        copyBoolPointer(payload.SemanticSearchEnabled),
 		ProactiveReplyChance:         payload.ProactiveReplyChance,
 		ProactiveReplyThreshold:      payload.ProactiveReplyThreshold,
 		ChatInEnabled:                copyBoolPointer(payload.ChatInEnabled),
