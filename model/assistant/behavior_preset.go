@@ -100,7 +100,7 @@ const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类�
 // replyBlankLineRule 同样对所有风格生效。模型按训练里的 Markdown 习惯用空行做
 // 段落间距，而运行时把空行当分条信号——同一个符号两边理解不一样，于是空行落在
 // 哪儿全看模型的排版习惯，投递出来的分条位置就显得莫名其妙。这里从源头上让它
-// 别输出空行；真要分条有 <botbr>，语义明确。
+// 别输出空行；真要分条有 <dianabr>，语义明确。
 const replyBlankLineRule = "回复里不要出现空行：段落之间用单个换行，不要空一行再写下一段，也不要在小结、清单或链接前面空行。聊天窗口不是文档，空行会显示成一整行空白。"
 
 func (style ReplyStyle) prompt() string {

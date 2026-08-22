@@ -240,7 +240,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingTemplateHeader,
 				Label:       "推送模板",
-				Description: "整条通知的组装格式，可用 {repository} {summary} {body}。{body} 是五类动态的事实清单，排版固定为「类型 + 标识 + 标题」加「谁于何时做了什么 · 链接」两行。单独一行写 <botbr> 表示从这里分成下一条消息发送，删掉那一行则合并成一条。留空使用默认格式；占位符所在行替换后为空会整行删除。",
+				Description: "整条通知的组装格式，可用 {repository} {summary} {body}。{body} 是五类动态的事实清单，排版固定为「类型 + 标识 + 标题」加「谁于何时做了什么 · 链接」两行。单独一行写 " + notificationSplitMarker + " 表示从这里分成下一条消息发送，删掉那一行则合并成一条。留空使用默认格式；占位符所在行替换后为空会整行删除。",
 				Type:        PluginSettingTypeText,
 				Rows:        10,
 				Default:     "",
