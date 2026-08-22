@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -104,8 +105,16 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	if err != nil || string(data) != "search-derived-image" {
 		t.Fatalf("shared image = %q, err = %v", data, err)
 	}
+	// 第一条是运行时替模型发的「开始处理」，第二条才是图片结果。开场白以前留给模型
+	// 自己在 final 里写，写不写、写成什么样都不保证。
 	sent := channel.sentSnapshot()
-	if len(sent) != 1 || sent[0].Text != "按检索结果画好了。" || len(sent[0].ImageURLs) != 1 || sent[0].ImageURLs[0] != sharer.url {
+	if len(sent) != 2 {
+		t.Fatalf("sent = %#v", sent)
+	}
+	if !strings.Contains(sent[0].Text, "开始生成图片") || !strings.Contains(sent[0].Text, "任务编号") {
+		t.Fatalf("start announcement = %#v", sent[0])
+	}
+	if sent[1].Text != "按检索结果画好了。" || len(sent[1].ImageURLs) != 1 || sent[1].ImageURLs[0] != sharer.url {
 		t.Fatalf("sent = %#v", sent)
 	}
 	var loggedPrompt string
@@ -235,8 +244,11 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 		t.Fatalf("reply = %q", reply)
 	}
 	sent := channel.sentSnapshot()
-	if len(sent) != 2 {
+	if len(sent) != 3 {
 		t.Fatalf("sent = %#v", sent)
+	}
+	if !strings.Contains(sent[0].Text, "开始生成图片") || !strings.Contains(sent[0].Text, "任务编号") {
+		t.Fatalf("start announcement = %#v", sent[0])
 	}
 	textFound := false
 	imageFound := false
@@ -318,4 +330,183 @@ var _ AgentToolProviderPlugin = (*agentImageSearchPlugin)(nil)
 func writeTestPNG(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "image/png")
 	_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nmock-image"))
+}
+
+// source_mode="each" 对每张参考图各做一次编辑，产出多张一起发。以前所有参考图被
+// 塞进同一次请求（语义是合成一张），「把每个人的头像都改一下」这类请求做不出来。
+func TestDianaImageToolEditsEachSourceSeparately(t *testing.T) {
+	var (
+		editMu    sync.Mutex
+		editCalls [][]string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/media" {
+			writeTestPNG(w)
+			return
+		}
+		if r.URL.Path != "/v1/images/edits" {
+			t.Errorf("path = %q", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Errorf("parse multipart: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		names := make([]string, 0, 2)
+		for _, headers := range r.MultipartForm.File {
+			for _, header := range headers {
+				names = append(names, header.Filename)
+			}
+		}
+		editMu.Lock()
+		editCalls = append(editCalls, names)
+		editMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"ZWRpdGVkLWltYWdl"}]}`))
+	}))
+	defer server.Close()
+
+	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
+		Provider:   llm.ProviderOpenAICompatible,
+		APIKey:     "secret",
+		BaseURL:    server.URL + "/v1",
+		Model:      "gpt-test",
+		ImageModel: "gpt-image-2",
+	})}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime.SetMediaStore(mediaStore(t))
+	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: server.URL + "/media"})
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "batch-edit",
+		Segments: []MessageSegment{
+			{Type: "image", Data: map[string]string{"url": server.URL + "/media?a"}},
+			{Type: "image", Data: map[string]string{"url": server.URL + "/media?b"}},
+			{Type: "text", Data: map[string]string{"text": "这两张都改成赛博风"}},
+		},
+	}
+	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
+	tool := newDianaImageTool(runtime, event, policy)
+
+	raw, err := tool.Run(context.Background(), map[string]any{
+		"operation":   "edit",
+		"prompt":      "改成赛博朋克风格，保持人物身份特征",
+		"source_mode": "each",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaImageToolResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || result.TaskID == "" || !result.Announced {
+		t.Fatalf("result = %#v", result)
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		editMu.Lock()
+		defer editMu.Unlock()
+		return len(editCalls) == 2
+	})
+
+	editMu.Lock()
+	calls := append([][]string(nil), editCalls...)
+	editMu.Unlock()
+	for _, names := range calls {
+		if len(names) != 1 {
+			t.Fatalf("each 模式下每次请求只应带一张参考图：%#v", calls)
+		}
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		for _, message := range channel.sentSnapshot() {
+			if len(message.ImageURLs) == 2 {
+				return true
+			}
+		}
+		return false
+	})
+
+	sent := channel.sentSnapshot()
+	if !strings.Contains(sent[0].Text, "逐张编辑图片") {
+		t.Fatalf("start announcement = %#v", sent[0])
+	}
+	if !strings.Contains(sent[len(sent)-1].Text, "共 2 张") {
+		t.Fatalf("result caption should report the count: %#v", sent[len(sent)-1])
+	}
+}
+
+// 默认仍是 combine：多张参考图交给同一次编辑，合成一张。逐张模式是新增能力，
+// 不是把原来的行为改掉。
+func TestDianaImageToolCombinesSourcesByDefault(t *testing.T) {
+	var (
+		editMu    sync.Mutex
+		editCalls [][]string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/media" {
+			writeTestPNG(w)
+			return
+		}
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		names := make([]string, 0, 2)
+		for _, headers := range r.MultipartForm.File {
+			for _, header := range headers {
+				names = append(names, header.Filename)
+			}
+		}
+		editMu.Lock()
+		editCalls = append(editCalls, names)
+		editMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"ZWRpdGVkLWltYWdl"}]}`))
+	}))
+	defer server.Close()
+
+	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
+		Provider:   llm.ProviderOpenAICompatible,
+		APIKey:     "secret",
+		BaseURL:    server.URL + "/v1",
+		Model:      "gpt-test",
+		ImageModel: "gpt-image-2",
+	})}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime.SetMediaStore(mediaStore(t))
+	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: server.URL + "/media"})
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "combine-edit",
+		Segments: []MessageSegment{
+			{Type: "image", Data: map[string]string{"url": server.URL + "/media?a"}},
+			{Type: "image", Data: map[string]string{"url": server.URL + "/media?b"}},
+			{Type: "text", Data: map[string]string{"text": "把这两张合成一张"}},
+		},
+	}
+	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
+	tool := newDianaImageTool(runtime, event, policy)
+
+	if _, err := tool.Run(context.Background(), map[string]any{
+		"operation": "edit",
+		"prompt":    "把两张图合成一张海报",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		editMu.Lock()
+		defer editMu.Unlock()
+		return len(editCalls) == 1
+	})
+	editMu.Lock()
+	calls := append([][]string(nil), editCalls...)
+	editMu.Unlock()
+	if len(calls) != 1 || len(calls[0]) != 2 {
+		t.Fatalf("combine 模式应当把两张参考图交给同一次请求：%#v", calls)
+	}
 }
