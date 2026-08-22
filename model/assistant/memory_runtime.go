@@ -23,6 +23,7 @@ const (
 	memoryPollInterval      = 750 * time.Millisecond
 	memoryLeaseDuration     = 3 * time.Minute
 	memoryExtractionTimeout = 60 * time.Second
+	memoryMaxAttempts       = 8
 	memorySummaryMaxEvents  = 100
 	memorySummaryRollupSize = 12
 )
@@ -118,6 +119,16 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			if !ok {
 				break
 			}
+			if memoryJobAttemptsExhausted(job.Attempts) {
+				log.Printf("chatbot memory job abandoned after %d attempts: id=%s", job.Attempts-1, job.ID)
+				commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err = store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner)
+				commitCancel()
+				if err != nil {
+					log.Printf("chatbot memory job state update failed: %v", err)
+				}
+				continue
+			}
 			jobCtx, jobCancel := context.WithTimeout(ctx, memoryExtractionTimeout)
 			err = r.processMemoryJob(jobCtx, store, job)
 			jobCancel()
@@ -135,6 +146,10 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			}
 		}
 	}
+}
+
+func memoryJobAttemptsExhausted(attempts int) bool {
+	return attempts > memoryMaxAttempts
 }
 
 func memoryRetryDelay(attempt int) time.Duration {
@@ -657,7 +672,7 @@ func memoryGateEventFromMessage(event MessageEvent, text string) memoryGateEvent
 }
 
 func (r *Runtime) memoryGateRecentEvents(current MessageEvent) []memoryGateEvent {
-	history := r.contextHistory(current)
+	history, _ := r.sessionContextHistory(current)
 	items := make([]memoryGateEvent, 0, 6)
 	for index := len(history) - 1; index >= 0 && len(items) < 6; index-- {
 		event := history[index]
