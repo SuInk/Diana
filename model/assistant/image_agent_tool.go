@@ -14,11 +14,20 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
+)
+
+const (
+	dianaImageSourceModeCombine = "combine"
+	dianaImageSourceModeEach    = "each"
+	// dianaImageMaxEachSources 限制逐张模式的扇出：每一张都要单独打一次图片接口，
+	// 数量不设上限的话一条消息就能把配额和后台队列吃干净。
+	dianaImageMaxEachSources = 6
 )
 
 const (
@@ -41,12 +50,19 @@ type dianaImageToolResult struct {
 	Action  string `json:"action"`
 	Caption string `json:"caption,omitempty"`
 	Reused  bool   `json:"reused,omitempty"`
+	// Announced 表示运行时已经替你把「开始处理」发给用户了，final 回复不用再重复
+	// 一遍「正在处理」。
+	Announced bool `json:"announced,omitempty"`
 }
 
 type dianaImageToolRequest struct {
-	Operation string
-	Prompt    string
-	Caption   string
+	Operation       string
+	Prompt          string
+	Caption         string
+	IdentitySources []string
+	// SourceMode 决定多张参考图怎么用：combine 把它们合成一张（默认，也是历史行为），
+	// each 对每张各做一次编辑，最后一起发出。
+	SourceMode string
 }
 
 type dianaImageTaskOutput struct {
@@ -73,7 +89,27 @@ func (t *dianaImageTool) Description() string {
 	if len(operations) == 0 {
 		operations = append(operations, "无")
 	}
-	return `异步生成或编辑图片。工具会立即返回已受理的任务编号，图片在后台完成后自动发送；调用后必须继续输出 final 文字回复，不要等待图片，也不要再次调用本工具。当前允许操作：` + strings.Join(operations, "、") + `。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。`
+	return `异步生成或编辑图片。工具会立即返回已受理的任务编号，并由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。`
+}
+
+// dianaImageStartedMessage 是任务受理后立刻发给用户的那句话。
+func dianaImageStartedMessage(request dianaImageToolRequest, result dianaImageToolResult) string {
+	if !result.OK || result.TaskID == "" {
+		return ""
+	}
+	action := "生成图片"
+	if request.Operation == "edit" {
+		action = "编辑图片"
+		// 参考图要等任务真正跑起来才解析得出来，这里说不出确切张数，就不说，
+		// 免得开场白报一个数、结果发另一个数。确切张数由结果说明给出。
+		if request.SourceMode == dianaImageSourceModeEach {
+			action = "逐张编辑图片"
+		}
+	}
+	if result.Reused {
+		return fmt.Sprintf("同样的%s任务已经在处理中（任务编号：%s），完成后我会把结果发出来。", action, result.TaskID)
+	}
+	return fmt.Sprintf("开始%s（任务编号：%s），完成后我会把结果发出来。", action, result.TaskID)
 }
 
 // InputSchema 的 operation 枚举按当前关系等级裁剪：没解锁的操作压根不出现在
@@ -86,11 +122,29 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	if t.relationship.AllowImageEditing {
 		operations = append(operations, "edit")
 	}
-	return toolObjectSchema([]string{"prompt"}, map[string]any{
+	properties := map[string]any{
 		"operation": toolEnumParam("generate 生成新图片；edit 编辑当前、引用或近期出现过的图片与成员头像。省略时按 generate 处理。", operations...),
 		"prompt":    toolStringParam("交给图片模型的完整、自包含的最终提示词。不要写成对话口吻，也不要依赖上下文里的指代。"),
 		"caption":   toolStringParam("图片完成后随图发送的一句短文字，可选。"),
-	})
+	}
+	// 要编辑谁的头像由你来判断：运行时不去读用户的措辞，只负责把你点名的 id 换成
+	// 头像地址，并核对这个人在当前会话里确实存在。
+	if t.relationship.AllowImageEditing {
+		properties["identity_sources"] = toolStringArrayParam(
+			`operation="edit" 且要编辑的是某人或本群的头像时，在这里点名头像来源；当前消息或引用消息本身带图时不要填。` +
+				`可选值："` + avatarSourceSender + `"（本条消息的发送者）、"` + avatarSourceBot + `"（机器人自己）、"` +
+				avatarSourceGroup + `"（本群的群头像）、"` + avatarSourceMemberPrefix + `<user_id>"（指定成员，user_id 用真实 QQ 号）。` +
+				`用户按名字或昵称指人时，先从上下文或群成员工具里查出对应 user_id 再填，不要编造；最多 ` +
+				strconv.Itoa(maxAvatarImageSources) + ` 个。`)
+	}
+	if t.relationship.AllowImageEditing {
+		properties["source_mode"] = toolEnumParam(
+			`operation="edit" 时多张参考图怎么用。combine：把它们合成为一张（默认）。`+
+				`each：对每张各做一次编辑，产出多张图一起发出——用户要求「每个人的头像都处理一下」`+
+				`「挨个改」这类逐张产出时用它。`,
+			"combine", "each")
+	}
+	return toolObjectSchema([]string{"prompt"}, properties)
 }
 
 func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -107,6 +161,17 @@ func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string,
 	result, err := t.enqueue(request)
 	if err != nil {
 		return "", err
+	}
+	// 开场白由运行时发，不留给模型自由发挥。以前这里只是把「已受理」写进工具结果，
+	// 指望模型自己在 final 里说一句；模型经常改口成「没办法直接修改」「你没有这个
+	// 权限」之类，用户那边就只剩一句推脱，而任务其实已经在后台跑了。
+	if announcement := dianaImageStartedMessage(request, result); announcement != "" {
+		if sendErr := t.runtime.send(ctx, t.event, announcement); sendErr != nil {
+			// 开场白发不出去不影响任务本身，只记一笔。
+			log.Printf("chatbot image task announcement failed: %v", sendErr)
+		} else {
+			result.Announced = true
+		}
 	}
 	body, err := json.Marshal(result)
 	if err != nil {
@@ -160,7 +225,18 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 			caption = "图片生成完成。"
 		}
 	}
-	return dianaImageToolRequest{Operation: operation, Prompt: prompt, Caption: caption}, nil
+	identitySources := configToolStringSlice(input, "identity_sources")
+	if operation == "edit" && len(identitySources) == 0 {
+		identitySources = defaultAvatarIdentitySources(t.event, t.runtime.effectiveConfigForEvent(t.event).BotAccount)
+	}
+	sourceMode := strings.ToLower(strings.TrimSpace(configToolString(input, "source_mode")))
+	if sourceMode != dianaImageSourceModeEach {
+		sourceMode = dianaImageSourceModeCombine
+	}
+	return dianaImageToolRequest{
+		Operation: operation, Prompt: prompt, Caption: caption,
+		IdentitySources: identitySources, SourceMode: sourceMode,
+	}, nil
 }
 
 func (t *dianaImageTool) enqueue(request dianaImageToolRequest) (dianaImageToolResult, error) {
@@ -173,8 +249,8 @@ func (t *dianaImageTool) enqueue(request dianaImageToolRequest) (dianaImageToolR
 		Name:    name,
 		Key:     dianaImageTaskKey(t.event, request),
 		Timeout: t.taskTimeout(),
-		Run: func(ctx context.Context, _ PluginTaskServices) (PluginTaskResult, error) {
-			output, err := t.execute(ctx, request)
+		Run: func(ctx context.Context, services PluginTaskServices) (PluginTaskResult, error) {
+			output, err := t.execute(ctx, request, services.Report)
 			if err != nil {
 				return PluginTaskResult{}, err
 			}
@@ -216,7 +292,7 @@ func (t *dianaImageTool) taskTimeout() time.Duration {
 	return timeout
 }
 
-func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequest) (dianaImageTaskOutput, error) {
+func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequest, progress func(PluginTaskProgress)) (dianaImageTaskOutput, error) {
 	operation := request.Operation
 	prompt := request.Prompt
 	submittedPrompt := t.runtime.enrichImagePromptWithChatContext(ctx, t.event, prompt)
@@ -226,6 +302,10 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		sourceCount int
 		action      string
 		message     string
+		// dropped 是超出逐张上限被丢掉的参考图数量，failed 是逐张模式里失败的张数。
+		// 两者都要如实告诉用户，静默少发几张比报错更难查。
+		dropped int
+		failed  int
 	)
 	switch operation {
 	case "generate":
@@ -242,22 +322,53 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		action = "chatbot.image.generate"
 		message = "Agent 图片生成已完成"
 	case "edit":
-		sources := t.runtime.imageEditSourceImages(ctx, t.event, prompt)
+		sources := t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
 		if len(sources) == 0 {
 			return dianaImageTaskOutput{}, fmt.Errorf("没有找到可编辑的图片；请让用户发送图片或引用图片消息")
 		}
-		resp, usedCfg, err := t.runtime.editImageWithFailover(ctx, llm.ImageEditRequest{
-			Prompt: submittedPrompt,
-			Images: sources,
-			Size:   "1024x1024",
-			N:      1,
-		})
-		if err != nil {
-			return dianaImageTaskOutput{}, err
+		// combine 把所有参考图交给一次编辑（合成一张）；each 对每张各编辑一次，
+		// 产出多张。以前只有前者，「把每个人的头像都改一下」这类请求做不出来。
+		batches := [][]string{sources}
+		if request.SourceMode == dianaImageSourceModeEach && len(sources) > 1 {
+			if len(sources) > dianaImageMaxEachSources {
+				dropped = len(sources) - dianaImageMaxEachSources
+				sources = sources[:dianaImageMaxEachSources]
+			}
+			batches = make([][]string, 0, len(sources))
+			for _, source := range sources {
+				batches = append(batches, []string{source})
+			}
 		}
-		cfg = usedCfg
-		images = resp.Images
-		sourceCount = len(sources)
+		for index, batch := range batches {
+			if err := ctx.Err(); err != nil {
+				return dianaImageTaskOutput{}, err
+			}
+			if progress != nil && len(batches) > 1 {
+				progress(PluginTaskProgress{
+					Phase:     "running",
+					Message:   fmt.Sprintf("正在编辑第 %d/%d 张", index+1, len(batches)),
+					Completed: index,
+					Total:     len(batches),
+				})
+			}
+			resp, usedCfg, err := t.runtime.editImageWithFailover(ctx, llm.ImageEditRequest{
+				Prompt: submittedPrompt,
+				Images: batch,
+				Size:   "1024x1024",
+				N:      1,
+			})
+			if err != nil {
+				// 逐张模式里一张失败不该埋掉已经成功的那些。
+				if len(batches) == 1 || len(images) == 0 {
+					return dianaImageTaskOutput{}, err
+				}
+				failed++
+				continue
+			}
+			cfg = usedCfg
+			images = append(images, resp.Images...)
+			sourceCount += len(batch)
+		}
 		action = "chatbot.image.edit"
 		message = "Agent 图片编辑已完成"
 	}
@@ -273,11 +384,35 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		cleanupLocalMediaFilesLater(localPaths, dianaImageMediaTTL)
 	}
 	t.runtime.recordImageOperation(ctx, t.event, action, message, prompt, submittedPrompt, cfg.ImageModelWithDefault(), len(images), sourceCount)
-	return dianaImageTaskOutput{Caption: request.Caption, ImageURLs: sharedImages}, nil
+	return dianaImageTaskOutput{
+		Caption:   dianaImageResultCaption(request.Caption, len(sharedImages), dropped, failed),
+		ImageURLs: sharedImages,
+	}, nil
+}
+
+// dianaImageResultCaption 在结果说明里如实带上少发的张数。逐张模式下超出上限或
+// 中途失败时静默少发几张，用户看不出差别，也没法判断要不要重试。
+func dianaImageResultCaption(caption string, delivered, dropped, failed int) string {
+	notes := make([]string, 0, 2)
+	if delivered > 1 {
+		notes = append(notes, fmt.Sprintf("共 %d 张", delivered))
+	}
+	if failed > 0 {
+		notes = append(notes, fmt.Sprintf("%d 张处理失败", failed))
+	}
+	if dropped > 0 {
+		notes = append(notes, fmt.Sprintf("另有 %d 张超出单次上限未处理", dropped))
+	}
+	if len(notes) == 0 {
+		return caption
+	}
+	return strings.TrimSpace(caption) + "（" + strings.Join(notes, "，") + "）"
 }
 
 func dianaImageTaskKey(event MessageEvent, request dianaImageToolRequest) string {
-	payload := strings.Join([]string{sessionKey(event), event.MessageID, request.Operation, request.Prompt}, "\x00")
+	payload := strings.Join(append([]string{
+		sessionKey(event), event.MessageID, request.Operation, request.Prompt, request.SourceMode,
+	}, request.IdentitySources...), "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("image:%x", digest[:12])
 }
@@ -287,7 +422,13 @@ func asyncImageReplyInstruction(result dianaImageToolResult) string {
 	if result.Reused {
 		status = "已在后台处理"
 	}
-	return fmt.Sprintf("【本轮图片任务】%s（任务编号：%s）。立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image，也不要声称无法生图；图片完成后会由运行时自动补发。", status, result.TaskID)
+	announced := ""
+	if result.Announced {
+		announced = "运行时已经把「开始处理」发给用户了，不要再说一遍「正在处理」「稍等」。"
+	}
+	// 明确堵住几种常见的推脱说法：任务其实已经在后台跑了，这时回一句「做不到」或
+	// 「你没有权限」，用户看到的就只剩这句话。
+	return fmt.Sprintf("【本轮图片任务】%s（任务编号：%s）。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, result.TaskID, announced)
 }
 
 func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent, relationship RelationshipPolicy, operation string, prompt string, caption string) (dianaImageToolResult, error) {

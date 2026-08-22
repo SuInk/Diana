@@ -6,7 +6,6 @@ package assistant
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -105,7 +104,7 @@ func (p *VoiceTTSPlugin) Manifest() PluginManifest {
 		ID:          voiceTTSPluginID,
 		Name:        voiceName + "语音合成",
 		Version:     "0.3.0",
-		Description: "通过可配置的 GPT-SoVITS 服务把回复合成为" + voiceName + "音色；支持明确语音命令和 Agent 工具调用。",
+		Description: "通过可配置的 GPT-SoVITS 服务把回复合成为" + voiceName + "音色；由模型通过 Agent 工具按需调用。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"agent:tool", "network:http", "file:write", "process:execute", "message:read", "message:send"},
@@ -163,49 +162,18 @@ func voiceTTSLanguageOptions() []PluginSettingOption {
 	}
 }
 
-func (p *VoiceTTSPlugin) ShouldHandle(_ MessageEvent, text string) bool {
-	_, ok := voiceTTSCommandText(text)
-	return ok
-}
+// ShouldHandle 恒为 false：本插件不再自己拦消息。
+//
+// 以前这里用 `用语音说 / 语音说 / 朗读 / 念一下 / 读一下` 一张同义词前缀表判断
+// 「用户是不是要语音回复」。那不是固定命令前缀，是自然语言的若干种说法——补不完，
+// 也挡不住「你能不能念一下这段」这种绕过去的问法。这属于用关键词判断语义意图。
+//
+// 判断改由模型做：同一个插件已经导出 diana.tts 工具，模型读完整条消息后自行决定要
+// 不要合成语音，合成什么内容也由它给。
+func (p *VoiceTTSPlugin) ShouldHandle(MessageEvent, string) bool { return false }
 
-func (p *VoiceTTSPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
-	text, ok := voiceTTSCommandText(req.Text)
-	if !ok {
-		return nil, nil
-	}
-	if strings.TrimSpace(text) == "" {
-		return &PluginResponse{Handled: true, Reply: "请在“语音说”后面填写要合成的内容。"}, nil
-	}
-	cfg, err := voiceTTSConfigFromSettings(req.Settings)
-	if err != nil {
-		return nil, err
-	}
-	// The direct command embeds WAV as base64 and does not need a
-	// platform-specific Silk encoder.
-	cfg.SilkEncoder = ""
-	text = sanitizeVoiceTTSText(text, cfg.MaxChars)
-	path, err := p.synthesize(ctx, cfg, text)
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(path)
-	audio, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("读取语音合成结果失败: %w", err)
-	}
-	record := "[CQ:record,file=base64://" + base64.StdEncoding.EncodeToString(audio) + "]"
-	return &PluginResponse{Handled: true, Reply: record}, nil
-}
-
-func voiceTTSCommandText(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	prefixes := []string{"用语音说", "语音说", "朗读", "念一下", "读一下"}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(text, prefix) {
-			return strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(text, prefix), "：:，, ")), true
-		}
-	}
-	return "", false
+func (p *VoiceTTSPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
+	return nil, nil
 }
 
 func (p *VoiceTTSPlugin) AgentTools(settings SettingValues) ([]agent.Tool, error) {

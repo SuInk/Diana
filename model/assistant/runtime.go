@@ -4003,86 +4003,6 @@ func (r *Runtime) recordVisualIntentDecision(ctx context.Context, event MessageE
 	})
 }
 
-func (r *Runtime) generateAndSendImage(ctx context.Context, event MessageEvent, prompt string) (string, error) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		reply := "想生成什么画面？把画面描述发给我就行。"
-		if err := r.send(ctx, event, reply); err != nil {
-			return "", err
-		}
-		return reply, nil
-	}
-	imagePrompt := r.enrichImagePromptWithChatContext(ctx, event, prompt)
-	resp, cfg, err := r.generateImageWithFailover(ctx, llm.ImageGenerateRequest{
-		Prompt: imagePrompt,
-		Size:   "1024x1024",
-		N:      1,
-	})
-	if err != nil {
-		return "", err
-	}
-	if r.channel == nil {
-		return "", fmt.Errorf("chatbot: channel is not configured")
-	}
-	reply := "生成好了。"
-	msg := OutgoingMessage{Text: reply, ImageURLs: resp.Images}
-	if event.Kind == EventKindGroup {
-		msg.GroupID = event.GroupID
-		msg.ReplyMessageID = event.MessageID
-		msg.MentionUserID = event.UserID
-	} else {
-		msg.UserID = event.UserID
-	}
-	if err := r.sendOutgoing(ctx, event, msg); err != nil {
-		return "", err
-	}
-	r.recordImageOperation(ctx, event, "chatbot.image.generate", "图片生成已发送", prompt, imagePrompt, cfg.ImageModelWithDefault(), len(resp.Images), 0)
-	return reply, nil
-}
-
-func (r *Runtime) editAndSendImage(ctx context.Context, event MessageEvent, prompt string) (string, error) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		reply := "想怎么改？发图时顺便说清楚要改哪里就行。"
-		if err := r.send(ctx, event, reply); err != nil {
-			return "", err
-		}
-		return reply, nil
-	}
-	sourceImages := r.imageEditSourceImages(ctx, event, prompt)
-	if len(sourceImages) == 0 {
-		reply := "我没找到要改的图。把图片和要求发在同一条里，或者引用那条图片消息再叫我改。"
-		if err := r.send(ctx, event, reply); err != nil {
-			return "", err
-		}
-		return reply, nil
-	}
-	imagePrompt := r.enrichImagePromptWithChatContext(ctx, event, prompt)
-	resp, cfg, err := r.editImageWithFailover(ctx, llm.ImageEditRequest{
-		Prompt: imagePrompt,
-		Images: sourceImages,
-		Size:   "1024x1024",
-		N:      1,
-	})
-	if err != nil {
-		return "", err
-	}
-	reply := "改好了。"
-	msg := OutgoingMessage{Text: reply, ImageURLs: resp.Images}
-	if event.Kind == EventKindGroup {
-		msg.GroupID = event.GroupID
-		msg.ReplyMessageID = event.MessageID
-		msg.MentionUserID = event.UserID
-	} else {
-		msg.UserID = event.UserID
-	}
-	if err := r.sendOutgoing(ctx, event, msg); err != nil {
-		return "", err
-	}
-	r.recordImageOperation(ctx, event, "chatbot.image.edit", "图片编辑已发送", prompt, imagePrompt, cfg.ImageModelWithDefault(), len(resp.Images), len(sourceImages))
-	return reply, nil
-}
-
 func (r *Runtime) recordImageOperation(ctx context.Context, event MessageEvent, action string, message string, intentPrompt string, submittedPrompt string, model string, imageCount int, sourceCount int) {
 	writer := r.appLogWriter()
 	if writer == nil {
@@ -4200,7 +4120,10 @@ func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 	return out
 }
 
-func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent, prompt string) []string {
+// imageEditSourceImages 按优先级挑出可编辑的图片：当前消息与引用消息里的图、指代
+// 解析选中的图、模型点名的头像来源，最后才退回最近历史图。identitySources 由模型
+// 在调用 diana.image 时给出，运行时不再从用户措辞里推断要用谁的头像。
+func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent, identitySources []string) []string {
 	var out []string
 	out = appendImageEditSourceImages(out, availableImageURLs(event.Segments)...)
 	if event.Quoted != nil {
@@ -4210,7 +4133,7 @@ func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent,
 	if len(out) > 0 {
 		return out
 	}
-	out = appendImageEditSourceImages(out, r.chatImageEditSourceImages(ctx, event, prompt)...)
+	out = appendImageEditSourceImages(out, r.avatarIdentityImageURLs(ctx, event, identitySources)...)
 	if len(out) > 0 {
 		return out
 	}
@@ -4482,82 +4405,6 @@ func segmentsWithAvailableImages(segments []MessageSegment) []MessageSegment {
 	return out
 }
 
-func (r *Runtime) chatImageEditSourceImages(ctx context.Context, event MessageEvent, prompt string) []string {
-	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
-		return nil
-	}
-	sourceText := strings.Join([]string{
-		prompt,
-		readableEventText(event, ""),
-		event.RawMessage,
-	}, " ")
-	var out []string
-	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && wantsGroupAvatarImage(sourceText) {
-		out = appendImageEditSourceImages(out, OneBotGroupAvatarURL(event.GroupID))
-	}
-	for _, userID := range r.avatarTargetUserIDs(ctx, event, sourceText) {
-		out = appendImageEditSourceImages(out, OneBotMemberAvatarURL(userID))
-	}
-	return out
-}
-
-func (r *Runtime) avatarTargetUserIDs(ctx context.Context, event MessageEvent, text string) []string {
-	cfg := r.effectiveConfigForEvent(event)
-	botIDs := map[string]bool{}
-	for _, id := range []string{event.SelfID, cfg.BotAccount} {
-		if id = strings.TrimSpace(id); id != "" {
-			botIDs[id] = true
-		}
-	}
-	var ids []string
-	if wantsBotAvatarImage(text) {
-		if cfg.BotAccount != "" {
-			ids = appendUniqueStrings(ids, cfg.BotAccount)
-		} else if event.SelfID != "" {
-			ids = appendUniqueStrings(ids, event.SelfID)
-		}
-	}
-	for _, id := range mentionedUserIDs(event.Segments) {
-		if !botIDs[id] {
-			ids = appendUniqueStrings(ids, id)
-		}
-	}
-	if event.Quoted != nil && event.Quoted.UserID != "" && wantsAvatarImage(text) {
-		if !botIDs[event.Quoted.UserID] {
-			ids = appendUniqueStrings(ids, event.Quoted.UserID)
-		}
-	}
-	if wantsOwnAvatarImage(text) && event.UserID != "" {
-		ids = appendUniqueStrings(ids, event.UserID)
-	}
-	if len(ids) > 0 || !wantsAvatarImage(text) || event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
-		return ids
-	}
-	members, err := r.getGroupMemberListForEvent(ctx, event, event.GroupID)
-	if err != nil {
-		return ids
-	}
-	for _, member := range members {
-		if member.UserID == "" || botIDs[member.UserID] {
-			continue
-		}
-		for _, name := range []string{member.Card, member.Nickname} {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
-			}
-			if strings.Contains(text, name) {
-				ids = appendUniqueStrings(ids, member.UserID)
-				break
-			}
-		}
-		if len(ids) >= maxAvatarImageSources {
-			return ids
-		}
-	}
-	return ids
-}
-
 func mentionedUserIDs(segments []MessageSegment) []string {
 	var ids []string
 	for _, segment := range segments {
@@ -4571,22 +4418,6 @@ func mentionedUserIDs(segments []MessageSegment) []string {
 		ids = appendUniqueStrings(ids, id)
 	}
 	return ids
-}
-
-func wantsAvatarImage(text string) bool {
-	return strings.Contains(text, "头像")
-}
-
-func wantsGroupAvatarImage(text string) bool {
-	return strings.Contains(text, "群头像") || strings.Contains(text, "群聊头像") || strings.Contains(text, "本群头像")
-}
-
-func wantsOwnAvatarImage(text string) bool {
-	return strings.Contains(text, "我的头像") || strings.Contains(text, "我头像")
-}
-
-func wantsBotAvatarImage(text string) bool {
-	return strings.Contains(text, "你的头像") || strings.Contains(text, "机器人头像")
 }
 
 func appendUniqueStrings(items []string, values ...string) []string {
