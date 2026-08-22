@@ -279,6 +279,25 @@ func TestReverseServerStaleReadLoopCannotDisconnectReplacement(t *testing.T) {
 	}
 }
 
+// waitForReverseConnection 等反向服务端把连接登记好再断言。
+//
+// Dial 在客户端读到 HTTP 101 的那一刻就返回了，服务端的 handler 还在自己的
+// goroutine 里往下跑，连接状态未必已经写进去。紧接着直接读 Status() 会偶发
+// 读到 Connected=false——这不是实现有问题，是断言比被测行为跑得快。
+func waitForReverseConnection(t *testing.T, reverse *OneBotReverseServer, epoch uint64) ChannelStatus {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var status ChannelStatus
+	for time.Now().Before(deadline) {
+		if status = reverse.Status(); status.Connected && status.ConnectionEpoch == epoch {
+			return status
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("reverse server did not register connection epoch %d: %#v", epoch, status)
+	return status
+}
+
 func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t *testing.T) {
 	reverse := NewOneBotReverseServer(OneBotConfig{AccessToken: "test-token", Endpoint: "/onebot/v11/ws"})
 	server := httptest.NewServer(reverse)
@@ -295,8 +314,8 @@ func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t 
 		t.Fatalf("primary dial error = %v response=%v", err, response)
 	}
 	defer primary.Close()
-	status := reverse.Status()
-	if !status.Connected || status.ConnectionEpoch != 1 || status.ConnectionOwner == "" {
+	status := waitForReverseConnection(t, reverse, 1)
+	if status.ConnectionOwner == "" {
 		t.Fatalf("primary connection status = %#v", status)
 	}
 
@@ -334,7 +353,7 @@ func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t 
 		t.Fatalf("reconnect dial error = %v response=%v", err, response)
 	}
 	defer reconnected.Close()
-	if status = reverse.Status(); !status.Connected || status.ConnectionEpoch != 2 || status.LastRejectedClient == "" {
+	if status = waitForReverseConnection(t, reverse, 2); status.LastRejectedClient == "" {
 		t.Fatalf("reconnected status = %#v", status)
 	}
 }
@@ -422,7 +441,9 @@ func TestReverseServerConnectionOriginFollowsHandshake(t *testing.T) {
 	}
 	defer conn.Close()
 
+	// 同样要等服务端登记完再断言：Dial 返回时 handler 可能还没写下握手来源。
 	want := server.URL // httptest 的 URL 就是客户端握手用的 http://host:port
+	waitForCondition(t, 2*time.Second, func() bool { return reverse.ConnectionOrigin() == want })
 	if origin := reverse.ConnectionOrigin(); origin != want {
 		t.Fatalf("ConnectionOrigin() = %q, want %q", origin, want)
 	}

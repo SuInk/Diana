@@ -307,6 +307,23 @@
                 <input id="bot-maxreply" v-model.number="form.max_reply_chars" class="input" inputmode="numeric" />
               </div>
               <div class="field">
+                <label for="bot-followup-chars">跟评长度上限（字符）</label>
+                <input id="bot-followup-chars" v-model.number="form.follow_up_max_chars" class="input" inputmode="numeric" placeholder="留空跟随单次回复上限" />
+                <span class="hint">链接解析和仓库订阅发完内容后，机器人顺口接的那一句有多长。留空就跟随上面的单次回复上限；填了也不会超过它。跟评本来就只说一句，长度主要由提示词约束。</span>
+              </div>
+              <div class="field">
+                <div class="plugin-setting-switch">
+                  <div class="plugin-setting-switch-text">
+                    <label for="bot-followup-quiet">跟评默认不接话</label>
+                    <span class="hint">开启时没有明确理由就不接话，只在确实和会话对得上时才说一句；关闭后只要对得上就会接话，机器人会明显话多一些。</span>
+                  </div>
+                  <label class="switch">
+                    <input id="bot-followup-quiet" v-model="form.follow_up_quiet_default" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="field">
                 <label for="bot-chunk">分段发送长度</label>
                 <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" />
               </div>
