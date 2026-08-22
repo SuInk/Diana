@@ -332,6 +332,8 @@ Anything configurable in the WebUI needs no environment variable. The common one
 | `DIANA_SYSTEM_PROMPT` | built-in prompt | Bot system prompt |
 | `DIANA_MAX_INPUT_CHARS` | `2000` | Max characters per input |
 | `DIANA_MAX_REPLY_CHARS` | `3500` | Max characters per reply |
+| `DIANA_FOLLOW_UP_MAX_CHARS` | `60` | Length cap for follow-up remarks — the one-liner the bot adds after a plugin posts content; never exceeds `DIANA_MAX_REPLY_CHARS` |
+| `DIANA_FOLLOW_UP_QUIET_DEFAULT` | `true` | Follow-ups stay quiet unless there is a clear reason to speak; set `false` to comment whenever it connects to the conversation |
 | `DIANA_DIRECT_REPLY_CHUNK_SIZE` | `500` | Characters per chunk when splitting text replies |
 | `DIANA_MAX_BOT_CONCURRENCY` | `5` | Global concurrency limit |
 | `DIANA_AGENT_WORK_DIR` / `AGENT_WORK_DIR` | `.` | Work directory the Agent may access |

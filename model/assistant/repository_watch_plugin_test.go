@@ -738,7 +738,8 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 		t.Fatalf("expected exactly one follow-up call, got %d: %#v", len(provider.requests), provider.requests)
 	}
 	followUp := provider.requests[0]
-	for _, want := range []string{"本群限定的自然人设", "你刚刚把下面这条仓库动态发到了这个会话里", "不要复述或概括改了什么", "fix delivery"} {
+	// 提示词和链接解析跟评共用一份（followUpInstruction），措辞是通用的「内容」而不是「仓库动态」。
+	for _, want := range []string{"本群限定的自然人设", "你刚刚把下面这条内容发到了这个会话里", "不要复述或概括内容", "fix delivery"} {
 		if !requestMessagesContain(followUp.Messages, want) {
 			t.Fatalf("follow-up prompt missing %q: %#v", want, followUp.Messages)
 		}
@@ -1357,8 +1358,9 @@ func TestRuntimeRepositoryWatchFollowUpCarriesConversationHistory(t *testing.T) 
 		RawMessage: "投递那个 bug 什么时候修啊", Time: time.Now().Unix(),
 	})
 
-	comment := runtime.repositoryWatchFollowUpComment(
+	comment := runtime.followUpComment(
 		context.Background(),
+		followUpKindRepositoryWatch,
 		MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 		"GitHub 动态：demo/repo\nCommit new-sha\nfix delivery",
 	)
