@@ -177,3 +177,37 @@ func TestMessageHistoryFTSRespectsTimeWindow(t *testing.T) {
 		t.Fatalf("时间窗外的记录不该被检索到：total=%d events=%d", total, len(events))
 	}
 }
+
+// ASCII 连续段整体存成一个 token，如果查询不做前缀匹配，搜「diana」就命中不了
+// 「dianabot」——而原来的 LIKE 路径是能命中的。这是换索引时最容易悄悄丢掉的一
+// 类召回，拿真实语料做过差分才发现，所以钉死。
+func TestMessageHistoryFTSKeepsASCIIPrefixRecall(t *testing.T) {
+	ctx := context.Background()
+	store := ftsStore(t)
+	session := "onebot-main:group:one"
+	for _, event := range []assistant.MessageEvent{
+		historySearchEvent(30, "one", "prefix", "Alice", "我在 github 上开了个仓库叫 dianabot"),
+		historySearchEvent(20, "one", "stem", "Bob", "deployment 明天再说"),
+		historySearchEvent(10, "one", "noise", "Carol", "今天讨论别的菜"),
+	} {
+		if err := store.AppendMessageEvent(ctx, session, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ term, want string }{
+		{"diana", "prefix"},
+		{"dianabot", "prefix"},
+		{"deploy", "stem"},
+		{"github", "prefix"},
+	} {
+		events, _, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{
+			Session: session, Text: tc.term, FromTime: 0, ThroughTime: 100, Limit: 20,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) != 1 || events[0].MessageID != tc.want {
+			t.Fatalf("查 %q 应当只命中 %s，实际命中 %d 条", tc.term, tc.want, len(events))
+		}
+	}
+}
