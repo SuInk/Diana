@@ -349,15 +349,15 @@ type BotConfig struct {
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
-	MaxContextTokens            int64         `json:"max_context_tokens,omitempty"`
-	RecentContextLimit          int           `json:"recent_context_limit,omitempty"`
-	ContextSummaryThreshold     int           `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled       *bool         `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled     *bool         `json:"cross_group_memory_enabled,omitempty"`
+	MaxContextTokens        int64 `json:"max_context_tokens,omitempty"`
+	RecentContextLimit      int   `json:"recent_context_limit,omitempty"`
+	ContextSummaryThreshold int   `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled   *bool `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled *bool `json:"cross_group_memory_enabled,omitempty"`
 	// 词典分词要把整个分词词典常驻内存（约 130MB），所以默认关。开启立即生效
 	// （后台加载词典，期间选词退回 n-gram）；关闭要重启进程才真正生效——
 	// 词典占用的内存本来也只有重启才能归还。
-	DictSegmentEnabled          *bool         `json:"dict_segment_enabled,omitempty"`
+	DictSegmentEnabled *bool `json:"dict_segment_enabled,omitempty"`
 	// 语义检索:消息经 embedding 模型转成向量,检索时按余弦相似度召回并与
 	// 词面结果融合。需要 embedding 分组的 LLM 配置档,默认关。
 	SemanticSearchEnabled       *bool         `json:"semantic_search_enabled,omitempty"`

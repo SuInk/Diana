@@ -46,10 +46,10 @@ type SQLiteStore struct {
 	path string
 	// historyFTS 表示历史检索能否走 FTS5 倒排索引。个别构建里 FTS5 不可用，
 	// 那时回退到 LIKE 检索：慢，但功能不中断。
-	historyFTS   bool
+	historyFTS bool
 	// historyVectors 表示语义向量表是否可用。
 	historyVectors bool
-	userMemoryMu sync.Mutex
+	userMemoryMu   sync.Mutex
 }
 
 // NewSQLiteStore 打开 SQLite 数据库并执行迁移。
