@@ -142,16 +142,18 @@ func TestFollowUpPromptsDefaultToSilenceAndNameTheFillerModes(t *testing.T) {
 }
 
 // 跟评长度以前硬编码 60，改不了也和全局的回复上限脱节。
+// 现在没单独配置就跟随 MaxReplyChars，代码里不再留一个写死的数字。
 func TestFollowUpMaxCharsFollowsConfig(t *testing.T) {
 	cases := []struct {
 		name string
 		cfg  BotConfig
 		want int
 	}{
-		{"未配置时用默认值", BotConfig{MaxReplyChars: 3500}, defaultFollowUpMaxChars},
+		{"未配置时跟随整体回复上限", BotConfig{MaxReplyChars: 3500}, 3500},
 		{"配置值生效", BotConfig{MaxReplyChars: 3500, FollowUpMaxChars: 140}, 140},
 		{"不得超过整体回复上限", BotConfig{MaxReplyChars: 30, FollowUpMaxChars: 140}, 30},
 		{"回复上限未设时不参与收敛", BotConfig{FollowUpMaxChars: 140}, 140},
+		{"两个都没配就不截断", BotConfig{}, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

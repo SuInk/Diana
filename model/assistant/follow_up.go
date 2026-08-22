@@ -17,10 +17,6 @@ import (
 // 链接解析和仓库订阅都走这里：两边各写一份提示词、各自硬编码一个长度，
 // 结果是同一个功能在两个入口下语气和长度不一样，改一处也修不到另一处。
 
-// defaultFollowUpMaxChars 是跟评长度的默认上限。跟评是一句感想不是第二次回答，
-// 所以远小于 MaxReplyChars；具体数值由 BotConfig.FollowUpMaxChars 决定。
-const defaultFollowUpMaxChars = 60
-
 // followUpTimeout 是跟评自己的时间预算。
 //
 // 跟评以前直接复用上游任务的 ctx：链接解析的 ctx 是整条回复链路的超时，
@@ -56,15 +52,19 @@ func detachFollowUpContext(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(context.WithoutCancel(ctx), followUpTimeout)
 }
 
-// followUpMaxChars 取跟评的长度上限，并且不允许超过整体回复上限——
-// 用户把回复压到很短时，跟评不该比正常回复还长。
+// followUpMaxChars 取跟评的长度上限。
+//
+// 没单独配置时跟随全局的回复上限，不再另有一个写死的数字：跟评本来就该
+// 和其他回复用同一套长度规则，「一句话」由提示词负责，不靠一个藏在代码里
+// 的常数去砍。单独配置了就以它为准，但同样不允许超过整体回复上限——
+// 把回复压到很短时，跟评不该比正常回复还长。
 func followUpMaxChars(cfg BotConfig) int {
 	limit := cfg.FollowUpMaxChars
 	if limit <= 0 {
-		limit = defaultFollowUpMaxChars
+		return cfg.MaxReplyChars
 	}
 	if cfg.MaxReplyChars > 0 && limit > cfg.MaxReplyChars {
-		limit = cfg.MaxReplyChars
+		return cfg.MaxReplyChars
 	}
 	return limit
 }

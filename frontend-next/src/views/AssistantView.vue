@@ -329,8 +329,8 @@
               </div>
               <div class="field">
                 <label for="bot-followup-chars">跟评长度上限（字符）</label>
-                <input id="bot-followup-chars" v-model.number="form.follow_up_max_chars" class="input" inputmode="numeric" placeholder="留空按 60" />
-                <span class="hint">链接解析和仓库订阅发完内容后，机器人顺口接的那一句有多长。不会超过上面的单次回复上限。</span>
+                <input id="bot-followup-chars" v-model.number="form.follow_up_max_chars" class="input" inputmode="numeric" placeholder="留空跟随单次回复上限" />
+                <span class="hint">链接解析和仓库订阅发完内容后，机器人顺口接的那一句有多长。留空就跟随上面的单次回复上限；填了也不会超过它。跟评本来就只说一句，长度主要由提示词约束。</span>
               </div>
               <div class="field">
                 <div class="plugin-setting-switch">

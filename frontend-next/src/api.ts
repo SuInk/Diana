@@ -165,7 +165,7 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
-  /** 跟评长度上限；留空用默认的 60，且不会超过 max_reply_chars。 */
+  /** 跟评长度上限；留空跟随 max_reply_chars，填了也不会超过它。 */
   follow_up_max_chars?: number;
   /** 跟评的默认取向：开启时没有明确理由就不接话。 */
   follow_up_quiet_default?: boolean;
@@ -329,7 +329,7 @@ export interface BotGroupConfig {
   max_context_tokens?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
-  /** 跟评长度上限；留空用默认的 60，且不会超过 max_reply_chars。 */
+  /** 跟评长度上限；留空跟随 max_reply_chars，填了也不会超过它。 */
   follow_up_max_chars?: number;
   /** 跟评的默认取向：开启时没有明确理由就不接话。 */
   follow_up_quiet_default?: boolean;
