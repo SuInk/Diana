@@ -7204,7 +7204,7 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 }
 
 // sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行
-// 与 <botbr> 在这里只是排版，不是分条信号；人格预设的短句切分（群友风格把每条压到
+// 与 <dianabr> 在这里只是排版，不是分条信号；人格预设的短句切分（群友风格把每条压到
 // 160 字）会把一张卡片拦腰截断，把链接甩到下一条里。所以这里只按平台长度兜底。
 func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text string) error {
 	cfg := r.effectiveConfigForEvent(event)
@@ -7600,7 +7600,7 @@ func shouldUseForwardReply(reply string, chunks []string, threshold int) bool {
 	if threshold <= 0 {
 		return false
 	}
-	text := strings.TrimSpace(strings.ReplaceAll(reply, "<botbr>", "\n"))
+	text := strings.TrimSpace(strings.ReplaceAll(normalizeSplitMarkers(reply), notificationSplitMarker, "\n"))
 	return len([]rune(text)) > threshold
 }
 
@@ -8977,7 +8977,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if label == "" {
 		label = item.FeedURL
 	}
-	message = fmt.Sprintf("RSS 订阅 %s：%s<botbr>%s", item.ID, label, message)
+	message = fmt.Sprintf("RSS 订阅 %s：%s"+notificationSplitMarker+"%s", item.ID, label, message)
 	if err := r.storeRSSWatchProgress(item.ID, change.Snapshot, message); err != nil {
 		return startedAt, err
 	}
@@ -10072,15 +10072,29 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 const notificationChunkSize = 1800
 
 // notificationSplitMarker 是通知里的显式分条符，与回复用的是同一个记号。
-const notificationSplitMarker = "<botbr>"
+// notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
+// legacyNotificationSplitMarker 是它的旧名字：用户自定义过的提示词文案和模型的
+// 历史习惯里都还留着，解析时一并认，输出规范只教新的那个。
+const (
+	notificationSplitMarker       = "<dianabr>"
+	legacyNotificationSplitMarker = "<botbr>"
+)
 
-// splitNotification 按 <botbr> 分条，再按长度兜底切分。空行不分条：通知正文里
-// 的空行是排版，不该让一条通知碎成好几条；要分条就显式写 <botbr>。
+// normalizeSplitMarkers 把旧标记统一成新标记，后续只需按一种写法切分。
+func normalizeSplitMarkers(text string) string {
+	if !strings.Contains(text, legacyNotificationSplitMarker) {
+		return text
+	}
+	return strings.ReplaceAll(text, legacyNotificationSplitMarker, notificationSplitMarker)
+}
+
+// splitNotification 按 <dianabr> 分条，再按长度兜底切分。空行不分条：通知正文里
+// 的空行是排版，不该让一条通知碎成好几条；要分条就显式写 <dianabr>。
 func splitNotification(text string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = notificationChunkSize
 	}
-	text = strings.TrimSpace(text)
+	text = normalizeSplitMarkers(strings.TrimSpace(text))
 	if text == "" {
 		return nil
 	}
@@ -10100,7 +10114,7 @@ func splitReply(reply string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = 900
 	}
-	reply = strings.TrimSpace(reply)
+	reply = normalizeSplitMarkers(strings.TrimSpace(reply))
 	if reply == "" {
 		return nil
 	}
@@ -10110,7 +10124,7 @@ func splitReply(reply string, chunkSize int) []string {
 	}
 	var out []string
 	for _, botPart := range strings.Split(reply, notificationSplitMarker) {
-		// <botbr> 是模型显式要求的分条，任何情况下都保留。
+		// <dianabr> 是模型显式要求的分条，任何情况下都保留。
 		if structured {
 			out = append(out, chunkTextByLength(collapseBlankLines(botPart), chunkSize)...)
 			continue
