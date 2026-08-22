@@ -40,7 +40,7 @@ type PluginSettingSpec struct {
 	Unit        string                `json:"unit,omitempty"`
 	Options     []PluginSettingOption `json:"options,omitempty"`
 	// Rows 是多行文本框的建议行高。模板类设置默认的四行装不下带
-	// <botbr> 的多行模板，编辑时全靠滚动，给它一个更合身的高度。
+	// <dianabr> 的多行模板，编辑时全靠滚动，给它一个更合身的高度。
 	Rows int `json:"rows,omitempty"`
 	// Secret 标记凭据类设置（Cookie、密钥等）。这类值读接口一律不回传明文，
 	// 前端用密码框 + 「已配置」徽章展示，提交空串表示保持原值不变。

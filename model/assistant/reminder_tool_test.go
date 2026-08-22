@@ -260,7 +260,7 @@ func TestRuntimeAgentCanCreateNaturalLanguageReminder(t *testing.T) {
 		if strings.Contains(msg.Content, "diana.reminder") {
 			foundReminderTool = true
 		}
-		if strings.Contains(msg.Content, "禁止使用 run_command") {
+		if strings.Contains(msg.Content, "不得用 run_command") {
 			foundNoCommandTimerRule = true
 		}
 	}

@@ -22,19 +22,45 @@ const (
 // a current member of the target group. This keeps the author inside the
 // audience while avoiding source-group identifiers, media, and quote chains.
 func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHistoryStore) []MessageEvent {
+	// 这条链有六道过滤，任何一道不过都是静默返回 nil，从外面分不清「没命中」
+	// 和「功能没生效」。调试模式下把整条漏斗记下来。
+	traced := r.crossGroupTraceEnabled(event)
+	trace := crossGroupContextTrace{}
+	startedAt := time.Now()
+	finish := func(selected []MessageEvent, reason string) []MessageEvent {
+		if !traced {
+			return selected
+		}
+		trace.SkipReason = reason
+		trace.Selected = len(selected)
+		trace.DurationMS = time.Since(startedAt).Milliseconds()
+		r.recordCrossGroupContextTrace(event, trace)
+		return selected
+	}
+
 	cfg := r.effectiveConfigForEvent(event)
-	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" ||
-		!boolValue(cfg.CrossGroupMemoryEnabled, false) {
-		return nil
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" {
+		return finish(nil, "不是群聊消息或缺少群号、发送者")
+	}
+	if !boolValue(cfg.CrossGroupMemoryEnabled, false) {
+		return finish(nil, "跨群记忆未启用")
 	}
 	searchStore, ok := store.(MessageHistorySearchStore)
 	if !ok {
-		return nil
+		return finish(nil, "当前消息存储不支持检索")
 	}
 	queryText := crossGroupContextQueryText(event)
 	terms := structuredMemorySearchTerms(queryText, 16)
+	trace.Terms = len(terms)
+	if traced {
+		sample := terms
+		if len(sample) > 5 {
+			sample = sample[:5]
+		}
+		trace.SampleTerms = append([]string(nil), sample...)
+	}
 	if !crossGroupQueryHasSignal(terms) {
-		return nil
+		return finish(nil, "查询词信号不足：需要至少一个 3 字词或两个 2 字词")
 	}
 	throughTime := event.Time
 	if throughTime <= 0 {
@@ -53,29 +79,47 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 	})
 	cancel()
 	if err != nil {
-		return nil
+		return finish(nil, "检索失败："+err.Error())
 	}
+	trace.Candidates = len(candidates)
 
 	candidatesByAuthor := make(map[string][]MessageEvent)
 	for _, candidate := range candidates {
 		groupID := strings.TrimSpace(candidate.GroupID)
 		authorID := strings.TrimSpace(candidate.UserID)
-		if candidate.Kind != EventKindGroup || groupID == "" || groupID == event.GroupID || candidate.Outbound ||
-			authorID == "" ||
-			(event.Platform != "" && candidate.Platform != "" && NormalizePlatformID(candidate.Platform) != NormalizePlatformID(event.Platform)) ||
-			!crossGroupTopicOverlaps(terms, candidate) {
+		if candidate.Kind != EventKindGroup || groupID == "" || groupID == event.GroupID || authorID == "" {
+			trace.DroppedSameGroup++
+			continue
+		}
+		if candidate.Outbound {
+			trace.DroppedOutbound++
+			continue
+		}
+		if event.Platform != "" && candidate.Platform != "" && NormalizePlatformID(candidate.Platform) != NormalizePlatformID(event.Platform) {
+			trace.DroppedPlatform++
+			continue
+		}
+		if !crossGroupTopicOverlaps(terms, candidate) {
+			trace.DroppedTopic++
 			continue
 		}
 		clean, ok := crossGroupTextContext(candidate)
 		if !ok {
+			trace.DroppedText++
 			continue
 		}
 		candidatesByAuthor[authorID] = append(candidatesByAuthor[authorID], clean)
 	}
+	trace.Authors = len(candidatesByAuthor)
 	if len(candidatesByAuthor) == 0 {
-		return nil
+		return finish(nil, "")
 	}
 	allowed := r.crossGroupCurrentMembers(event, candidatesByAuthor)
+	for _, ok := range allowed {
+		if ok {
+			trace.AllowedAuthors++
+		}
+	}
 	selected := make([]MessageEvent, 0, crossGroupContextResultLimit)
 	for authorID, events := range candidatesByAuthor {
 		if allowed[authorID] {
@@ -87,7 +131,7 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 		selected = selected[:crossGroupContextResultLimit]
 	}
 	sort.SliceStable(selected, func(left, right int) bool { return selected[left].Time < selected[right].Time })
-	return selected
+	return finish(selected, "")
 }
 
 func crossGroupContextQueryText(event MessageEvent) string {
