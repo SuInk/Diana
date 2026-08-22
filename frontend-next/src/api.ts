@@ -810,10 +810,15 @@ export interface PersonaGenerateResponse {
 }
 
 /** 用当前已配置的模型把一句话需求写成基础人设；带上 current 时是改写而不是重写。 */
-export function generatePersona(description: string, name?: string, current?: string): Promise<PersonaGenerateResponse> {
+export function generatePersona(
+  description: string,
+  name?: string,
+  current?: string,
+  style?: { reply_style?: string; response_mode?: string }
+): Promise<PersonaGenerateResponse> {
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
-    body: JSON.stringify({ description, name, current })
+    body: JSON.stringify({ description, name, current, ...(style ?? {}) })
   });
 }
 
