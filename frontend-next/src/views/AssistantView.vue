@@ -358,6 +358,14 @@
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
+                  <input v-model="form.dict_segment_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">词典分词</span>
+                </label>
+                <span class="hint">用中文词典切出真实词参与记忆与历史检索，排序更准；词典常驻约 130MB 内存，开启立即生效，关闭需重启进程。</span>
+              </div>
+              <div class="field wide memory-settings">
+                <label class="switch">
                   <input v-model="form.debug_mode_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">调试模式</span>
@@ -1419,6 +1427,7 @@ function setForm(config: BotProfileConfig): void {
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,
     debug_mode_enabled: config.debug_mode_enabled ?? false,
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
+    dict_segment_enabled: config.dict_segment_enabled ?? false,
     natural_interjection_enabled: config.natural_interjection_enabled ?? false,
     response_mode: config.response_mode ?? "custom",
     reply_style: config.reply_style ?? "assistant",

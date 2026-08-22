@@ -354,6 +354,10 @@ type BotConfig struct {
 	ContextSummaryThreshold     int           `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled       *bool         `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled     *bool         `json:"cross_group_memory_enabled,omitempty"`
+	// 词典分词要把整个分词词典常驻内存（约 130MB），所以默认关。开启立即生效
+	// （后台加载词典，期间选词退回 n-gram）；关闭要重启进程才真正生效——
+	// 词典占用的内存本来也只有重启才能归还。
+	DictSegmentEnabled          *bool         `json:"dict_segment_enabled,omitempty"`
 	ProactiveReplyChance        float64       `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold     float64       `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled               *bool         `json:"chat_in_enabled,omitempty"`
@@ -550,6 +554,7 @@ type ConfigPayload struct {
 	ContextSummaryThreshold     int         `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled       *bool       `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled     *bool       `json:"cross_group_memory_enabled,omitempty"`
+	DictSegmentEnabled          *bool       `json:"dict_segment_enabled,omitempty"`
 	ProactiveReplyChance        float64     `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold     float64     `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled               *bool       `json:"chat_in_enabled,omitempty"`
@@ -997,6 +1002,7 @@ func DefaultBotConfig() BotConfig {
 		ContextSummaryThreshold:      100,
 		LongTermMemoryEnabled:        boolPointer(true),
 		CrossGroupMemoryEnabled:      boolPointer(false),
+		DictSegmentEnabled:           boolPointer(false),
 		ProactiveReplyChance:         defaultProactiveReplyChance,
 		ProactiveReplyThreshold:      defaultProactiveReplyThreshold,
 		ReplyRules:                   []ReplyRule{},
@@ -1181,6 +1187,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.CrossGroupMemoryEnabled == nil {
 		cfg.CrossGroupMemoryEnabled = boolPointer(false)
 	}
+	if cfg.DictSegmentEnabled == nil {
+		cfg.DictSegmentEnabled = boolPointer(false)
+	}
 	if cfg.ProactiveReplyChance <= 0 {
 		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
 	}
@@ -1340,6 +1349,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:        copyBoolPointer(cfg.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:      copyBoolPointer(cfg.CrossGroupMemoryEnabled),
+		DictSegmentEnabled:           copyBoolPointer(cfg.DictSegmentEnabled),
 		ProactiveReplyChance:         cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:      cfg.ProactiveReplyThreshold,
 		ChatInEnabled:                copyBoolPointer(cfg.ChatInEnabled),
@@ -1460,6 +1470,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
 		LongTermMemoryEnabled:        copyBoolPointer(payload.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:      copyBoolPointer(payload.CrossGroupMemoryEnabled),
+		DictSegmentEnabled:           copyBoolPointer(payload.DictSegmentEnabled),
 		ProactiveReplyChance:         payload.ProactiveReplyChance,
 		ProactiveReplyThreshold:      payload.ProactiveReplyThreshold,
 		ChatInEnabled:                copyBoolPointer(payload.ChatInEnabled),

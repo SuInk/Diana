@@ -449,8 +449,8 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	if plugins == nil {
 		plugins = NewDefaultPluginManager()
 	}
-	// 分词词典要加载几秒,后台预热掉,别让第一条消息扛这个延迟。
-	startCJKSegmenterWarmup()
+	// 词典分词按配置启用;加载要几秒,后台预热,别让第一条消息扛这个延迟。
+	applyCJKSegmentConfig(cfg)
 	runtime := &Runtime{
 		cfg:                   cfg,
 		profileConfigs:        map[string]BotConfig{cfg.ID: cfg},
@@ -658,10 +658,12 @@ func (r *Runtime) Stop() error {
 // Restart 使用新配置和 channel 重启运行时。
 func (r *Runtime) Restart(ctx context.Context, cfg BotConfig, channel Channel) error {
 	_ = r.Stop()
+	cfg = cfg.WithDefaults()
 	r.mu.Lock()
-	r.cfg = cfg.WithDefaults()
+	r.cfg = cfg
 	r.channel = channel
 	r.mu.Unlock()
+	applyCJKSegmentConfig(cfg)
 	return r.Start(ctx)
 }
 
@@ -682,6 +684,7 @@ func (r *Runtime) UpdateConfig(ctx context.Context, cfg BotConfig, channel Chann
 	r.mu.Lock()
 	r.cfg = cfg.WithDefaults()
 	r.updatedAt = time.Now()
+	applyCJKSegmentConfig(cfg)
 	if channel != nil {
 		r.channel = channel
 		if r.bridge != nil {

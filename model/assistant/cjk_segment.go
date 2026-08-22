@@ -6,6 +6,7 @@ package assistant
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/go-ego/gse"
@@ -22,15 +23,28 @@ import (
 // 「搜什么」,不碰「怎么存」,不存在索引和查询切法不一致的问题,也不用
 // 重建索引。
 //
-// 词典加载要几秒,不能让第一条消息扛着,NewRuntime 时后台预热;预热没
-// 完成或加载失败时 cjkSegmentWords 返回 nil,调用方自然退回纯 n-gram。
+// 词典要常驻约 130MB 内存,默认不开,由配置 dict_segment_enabled 控制。
+// 开启是即时的:后台加载词典,加载完成前 cjkSegmentWords 返回 nil,调用方
+// 自然退回纯 n-gram。关闭要重启进程才生效——已经加载的词典内存只有重启
+// 才能归还,与其做一个"关了开关但内存还占着"的假关闭,不如把语义说清楚。
 
 var (
 	cjkSegmenter       gse.Segmenter
 	cjkSegmentErr      error
 	cjkSegmentWarmOnce sync.Once
 	cjkSegmentWarmed   = make(chan struct{})
+	cjkSegmentEnabled  atomic.Bool
 )
+
+// applyCJKSegmentConfig 按配置决定是否启用词典分词。启用是只进不退的闩:
+// 配置里关掉不会在运行中把它扳回去,重启进程后才回到关闭状态,
+// 语义与词典内存的生命周期一致。
+func applyCJKSegmentConfig(cfg BotConfig) {
+	if boolValue(cfg.DictSegmentEnabled, false) {
+		cjkSegmentEnabled.Store(true)
+		startCJKSegmenterWarmup()
+	}
+}
 
 // startCJKSegmenterWarmup 异步加载词典,重复调用无害。
 func startCJKSegmenterWarmup() {
@@ -67,7 +81,7 @@ func cjkSegmentReady() bool {
 // cjkSegmentWords 把一段 CJK 连续文本切成 2 字以上的词典词。
 // 词典未就绪或没切出多字词时返回 nil。
 func cjkSegmentWords(run string) []string {
-	if strings.TrimSpace(run) == "" || !cjkSegmentReady() {
+	if !cjkSegmentEnabled.Load() || strings.TrimSpace(run) == "" || !cjkSegmentReady() {
 		return nil
 	}
 	var words []string
