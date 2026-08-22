@@ -1439,7 +1439,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
-	replyCtx := withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx)))
+	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
 	reply, err := r.replyTo(replyCtx, event, text)
 	record.Duration = time.Since(start).Milliseconds()
 	if err != nil {
@@ -7196,8 +7196,9 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 		// Some OneBot implementations do not support merged forwards. Continue
 		// through the normal chunk path so long replies are still delivered.
 	}
-	// 开口前先停一下：秒回比措辞更容易暴露。风格不需要时 typingDelay 返回 0。
-	if delay := cfg.ReplyStyle.typingDelay(reply); delay > 0 && !sleepContext(ctx, delay) {
+	// 开口前先停一下：秒回比措辞更容易暴露。生成本身花掉的时间已经算进去了，
+	// 模型慢的时候不再额外空等。风格不需要时返回 0。
+	if delay := cfg.ReplyStyle.remainingTypingDelay(reply, replyTurnElapsed(ctx)); delay > 0 && !sleepContext(ctx, delay) {
 		return nil, ctx.Err()
 	}
 	return r.deliverChunks(ctx, event, chunks, cfg, mentionUserID, replyToCurrent)
@@ -8218,10 +8219,11 @@ func (r *Runtime) contextHistory(event MessageEvent) []MessageEvent {
 // need an expensive cross-group semantic search for every queued event.
 func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, MessageHistoryStore) {
 	if event.replyHistoryLoaded {
-		r.mu.RLock()
-		store := r.messageStore
-		r.mu.RUnlock()
-		return append([]MessageEvent(nil), event.replyHistory...), store
+		// 历史已经在本轮更早的地方加载过，直接用缓存并且不返回 store：
+		// 返回 store 会让 contextHistory 顺手补一次跨群检索，而这条正是回复
+		// 热路径，每轮会走好几次，等于凭空多出好几次全表文本搜索。跨群上下文
+		// 在历史首次加载时就已经并进去了。
+		return append([]MessageEvent(nil), event.replyHistory...), nil
 	}
 	session := sessionKey(event)
 	r.mu.RLock()

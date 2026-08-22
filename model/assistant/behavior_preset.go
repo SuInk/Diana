@@ -175,6 +175,23 @@ func (style ReplyStyle) allowsForwardReply() bool {
 	return style.Normalized() != ReplyStyleGroupmate
 }
 
+// remainingTypingDelay 返回还需要补多少停顿。拟真的目标是「别秒回」，而不是
+// 「在已经想了很久之后再多等一会儿」——生成本身耗掉的时间同样算数。模型慢的
+// 时候这里直接返回 0，停顿不再是白加在延迟上的一笔。
+func (style ReplyStyle) remainingTypingDelay(text string, elapsed time.Duration) time.Duration {
+	delay := style.typingDelay(text)
+	if delay <= 0 {
+		return 0
+	}
+	if elapsed <= 0 {
+		return delay
+	}
+	if elapsed >= delay {
+		return 0
+	}
+	return delay - elapsed
+}
+
 // typingDelay 返回开口前的拟真停顿：秒回是最容易暴露的一点。
 // 按字数线性增长并封顶，避免长回复把人晾太久。
 func (style ReplyStyle) typingDelay(text string) time.Duration {
