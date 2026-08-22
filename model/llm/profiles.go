@@ -21,6 +21,8 @@ const (
 	GroupIntent = "intent"
 	GroupImage  = "image"
 	GroupVision = "vision"
+	// GroupEmbedding 分组的配置档用于语义检索的向量化(/embeddings 接口)。
+	GroupEmbedding = "embedding"
 )
 
 type Profile struct {

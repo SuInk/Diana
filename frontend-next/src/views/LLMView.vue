@@ -453,10 +453,11 @@ function startCreate(): void {
 }
 
 const groupLabels: Record<string, string> = {
-  default: "默认分组"
+  default: "默认分组",
+  embedding: "向量嵌入（语义检索）"
 };
 
-const groupOrder = ["default", "vision", "intent", "image"];
+const groupOrder = ["default", "vision", "intent", "image", "embedding"];
 
 // 配置列表按用途分节展示；已知用途按固定顺序排前，自定义分组跟在后面。
 const groupedProfiles = computed<{ group: string; items: LLMConfig[] }[]>(() => {

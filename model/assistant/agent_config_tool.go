@@ -97,6 +97,8 @@ type dianaBotConfigSnapshot struct {
 	ContextSummaryThreshold         int                      `json:"context_summary_threshold"`
 	LongTermMemoryEnabled           bool                     `json:"long_term_memory_enabled"`
 	CrossGroupMemoryEnabled         bool                     `json:"cross_group_memory_enabled"`
+	DictSegmentEnabled              bool                     `json:"dict_segment_enabled"`
+	SemanticSearchEnabled           bool                     `json:"semantic_search_enabled"`
 	ProactiveReplyChance            float64                  `json:"proactive_reply_chance"`
 	ProactiveReplyThreshold         float64                  `json:"proactive_reply_threshold"`
 	ChatInEnabled                   bool                     `json:"chat_in_enabled"`
@@ -319,6 +321,8 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:           boolValue(cfg.LongTermMemoryEnabled, true),
 		CrossGroupMemoryEnabled:         boolValue(cfg.CrossGroupMemoryEnabled, false),
+		DictSegmentEnabled:              boolValue(cfg.DictSegmentEnabled, false),
+		SemanticSearchEnabled:           boolValue(cfg.SemanticSearchEnabled, false),
 		ProactiveReplyChance:            cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:         cfg.ProactiveReplyThreshold,
 		ChatInEnabled:                   chatIn.Enabled,

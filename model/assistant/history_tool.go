@@ -307,6 +307,13 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		if err != nil {
 			return dianaChatHistoryResult{}, fmt.Errorf("检索持久化聊天记录失败: %w", err)
 		}
+		// 语义召回与词面结果做 RRF 融合;未启用或失败时 semantic 为 nil,词面结果原样返回。
+		if semantic := t.runtime.semanticSearchEvents(ctx, t.event, query, fromTime, throughTime, crossGroup); len(semantic) > 0 {
+			matched = mergeSearchResultsRRF(matched, semantic, limit)
+			if len(matched) > total {
+				total = len(matched)
+			}
+		}
 		label := "当前会话"
 		if crossGroup {
 			label = "同一机器人的所有群"
