@@ -8203,8 +8203,23 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 
 // contextHistory 返回当前会话历史副本。
 func (r *Runtime) contextHistory(event MessageEvent) []MessageEvent {
+	current, store := r.sessionContextHistory(event)
+	if store == nil {
+		return current
+	}
+	crossGroup := r.crossGroupContextEvents(event, store)
+	return mergeCrossGroupContextHistory(current, crossGroup)
+}
+
+// sessionContextHistory returns only the current conversation. Background
+// memory extraction uses this path because its recent-message prompt does not
+// need an expensive cross-group semantic search for every queued event.
+func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, MessageHistoryStore) {
 	if event.replyHistoryLoaded {
-		return append([]MessageEvent(nil), event.replyHistory...)
+		r.mu.RLock()
+		store := r.messageStore
+		r.mu.RUnlock()
+		return append([]MessageEvent(nil), event.replyHistory...), store
 	}
 	session := sessionKey(event)
 	r.mu.RLock()
@@ -8221,18 +8236,16 @@ func (r *Runtime) contextHistory(event MessageEvent) []MessageEvent {
 	store := r.messageStore
 	r.mu.RUnlock()
 	if store == nil {
-		return memory
+		return memory, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	stored, err := store.ListRecentMessageEvents(ctx, session, limit)
 	if err != nil {
 		log.Printf("chatbot message history load failed: %v", err)
-		return memory
+		return memory, store
 	}
-	current := mergeMessageHistory(memory, stored, limit)
-	crossGroup := r.crossGroupContextEvents(event, store)
-	return mergeCrossGroupContextHistory(current, crossGroup)
+	return mergeMessageHistory(memory, stored, limit), store
 }
 
 func (r *Runtime) recallHistory(event MessageEvent) []MessageEvent {
