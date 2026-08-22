@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -16,7 +17,20 @@ const (
 	MemoryKindEpisode     MemoryKind = "episode"
 	MemoryKindInstruction MemoryKind = "instruction"
 	MemoryKindSummary     MemoryKind = "summary"
+	// MemoryKindThread 是每个会话唯一的「当前进行状态」便签：正在聊什么、推进
+	// 到哪、做了什么决定、还悬着什么。它和 summary 的分工是「进行中 vs 已归档」。
+	//
+	// 结构化记忆答得了「关于这个人我知道哪些事实」，答不了「我们刚才聊到哪一步」——
+	// 离散事实点里没有叙事线索。历史被裁掉之后这条线就断了，thread 补的正是它。
+	// 因此它不参加相关性检索：跟当前消息像不像无关，每轮都注入。
+	MemoryKindThread MemoryKind = "thread"
 )
+
+// ThreadMemoryKey 返回某个会话的线程便签 key。每个会话恒定一条，靠 supersedes_id
+// 滚动更新，不按日期或主题分裂。
+func ThreadMemoryKey(session string) string {
+	return "thread." + strings.TrimSpace(session)
+}
 
 type MemoryCandidateAction string
 
@@ -115,14 +129,17 @@ type MemoryWriteRequest struct {
 }
 
 type StructuredMemoryQuery struct {
-	SubjectUserID      string
-	Session            string
-	GroupID            string
-	Text               string
-	SearchTerms        []string
-	Now                time.Time
-	MaxCandidates      int
-	Kinds              []MemoryKind
+	SubjectUserID string
+	Session       string
+	GroupID       string
+	Text          string
+	SearchTerms   []string
+	Now           time.Time
+	MaxCandidates int
+	Kinds         []MemoryKind
+	// ExcludeKinds 剔除指定类型。回复提示词用它排掉 thread：那一层由专门的通道
+	// 常驻注入，再被相关性检索捞一次就成了重复注入。
+	ExcludeKinds       []MemoryKind
 	CrossGroup         bool
 	GroupSessionPrefix string
 	// CurrentSessionOnly 只保留当前会话作用域的记忆，连当前发言者自己的
@@ -161,4 +178,12 @@ type StructuredMemoryStore interface {
 	ReleaseMemoryJobLeases(ctx context.Context, leaseOwner string) error
 	ApplyMemoryCandidates(ctx context.Context, request MemoryWriteRequest) ([]StructuredMemoryItem, error)
 	ListStructuredMemories(ctx context.Context, query StructuredMemoryQuery) ([]StructuredMemoryItem, error)
+}
+
+// StructuredMemoryTouchStore 是可选能力：把「这条记忆刚刚被检索命中」写回去。
+//
+// 单独成接口而不是并进 StructuredMemoryStore，是为了不强迫所有实现都提供触达
+// 记录——没有它时软遗忘退化成纯按事件时间衰减，其余行为不变。
+type StructuredMemoryTouchStore interface {
+	TouchStructuredMemories(ctx context.Context, ids []string, at time.Time) error
 }

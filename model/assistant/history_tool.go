@@ -34,6 +34,8 @@ const (
 type dianaChatHistoryTool struct {
 	runtime *Runtime
 	event   MessageEvent
+	// recallSink 收集本轮读到的撤回记录，供回复阶段按既有链路投递转发卡片。
+	recallSink *recallDisclosureSink
 }
 
 type dianaChatHistoryResult struct {
@@ -69,6 +71,57 @@ type dianaChatHistoryItem struct {
 	GroupID                 string   `json:"group_id,omitempty"`
 }
 
+// withRecallSink 绑定本轮的撤回响应收集器。只有正式回复路径需要它：读到撤回记录后
+// 转发卡片仍由回复阶段按既有链路投递。
+func (t *dianaChatHistoryTool) withRecallSink(sink *recallDisclosureSink) *dianaChatHistoryTool {
+	if t != nil {
+		t.recallSink = sink
+	}
+	return t
+}
+
+// recalls 读本群最近窗口内的撤回记录。
+//
+// 这条路以前不是工具：插件用词表扫消息里有没有「撤回」加「谁/什么/看看」，命中就
+// 劫持整条回复。判断用户想不想看撤回记录是语义问题，本项目一律交给模型。
+func (t *dianaChatHistoryTool) recalls(ctx context.Context) (dianaChatHistoryResult, error) {
+	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+		return dianaChatHistoryResult{}, fmt.Errorf("撤回记录只在群聊中可用")
+	}
+	plugin, ok := t.runtime.messageHistoryPlugin()
+	if !ok {
+		return dianaChatHistoryResult{}, fmt.Errorf("消息历史插件未启用，无法读取撤回记录")
+	}
+	t.runtime.mu.RLock()
+	channel := t.runtime.channel
+	t.runtime.mu.RUnlock()
+	response, recalls, referenceTime := plugin.RecallDisclosureResponse(
+		ctx, channel, t.event, t.runtime.contextHistory(t.event), t.runtime.recallHistory(t.event))
+	if response == nil {
+		return dianaChatHistoryResult{}, fmt.Errorf("撤回记录只在群聊中可用")
+	}
+	// 交回本轮，由回复阶段沿用原有的转发卡片与自动撤回投递。
+	t.recallSink.add(*response)
+	if len(recalls) == 0 {
+		return dianaChatHistoryResult{
+			OK:      true,
+			Action:  "recalls",
+			Message: "最近 24 小时没有记录到群消息撤回。",
+			Items:   []dianaChatHistoryItem{},
+		}, nil
+	}
+	items := t.items(ctx, t.runtime.enrichRecallImageDescriptions(ctx, t.event, recalls))
+	return dianaChatHistoryResult{
+		OK:     true,
+		Action: "recalls",
+		Message: fmt.Sprintf("已读取本群最近 24 小时的 %d 条撤回记录，原文会另行以合并转发卡片发出；"+
+			"你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。", len(items)),
+		Window: chatHistoryWindowLabel(referenceTime-int64(recallDefaultWindow/time.Second), referenceTime),
+		Items:  items,
+		Total:  len(items),
+	}, nil
+}
+
 func newDianaChatHistoryTool(runtime *Runtime, event MessageEvent) *dianaChatHistoryTool {
 	return &dianaChatHistoryTool{runtime: runtime, event: event}
 }
@@ -85,8 +138,8 @@ func (t *dianaChatHistoryTool) Description() string {
 // 比在散文里列一遍内联 JSON 更不容易看漏。
 func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；range 按时间段完整列出消息，用户要求总结或回顾某个时间段（「昨天 12 点到 17 点」）时用它，不要改用 search 猜关键词；search 按关键词检索。",
-			"around", "recent", "range", "search"),
+		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；range 按时间段完整列出消息，用户要求总结或回顾某个时间段（「昨天 12 点到 17 点」）时用它，不要改用 search 猜关键词；search 按关键词检索；recalls 读本群最近 24 小时被撤回的消息，用户想知道谁撤回了什么时用它。",
+			"around", "recent", "range", "search", "recalls"),
 		"message_id":   toolStringParam("around 可选：以哪条消息为中心；省略时以当前消息为中心。"),
 		"query":        toolStringParam("search 必填：检索关键词。"),
 		"from_time":    toolStringParam(`range 与 search 的起始时间。接受 Unix 秒，也接受本地时间字符串 "2006-01-02 15:04" 或 "2006-01-02"。range 一次读不完时结果会给出 next_from_time，用它继续读完整个时间段再总结。`),
@@ -124,8 +177,10 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		result, err = t.window(ctx, input)
 	case "search", "find":
 		result, err = t.search(ctx, input)
+	case "recalls", "recall":
+		result, err = t.recalls(ctx)
 	default:
-		return "", fmt.Errorf("operation 必须是 around、recent、range 或 search")
+		return "", fmt.Errorf("operation 必须是 around、recent、range、search 或 recalls")
 	}
 	if err != nil {
 		return "", err

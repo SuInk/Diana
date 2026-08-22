@@ -20,7 +20,30 @@ import (
 const (
 	structuredMemoryContextBudget = 3200
 	structuredMemoryLoadLimit     = 120
+	// maximumCoreMemoryItems 限制常驻档条数。它不参加相关性排序，配额必须小而固定，
+	// 否则「一直带着」的东西会越攒越多。
+	maximumCoreMemoryItems = 8
+	// memoryStalenessGraceDays 之内不做衰减：刚发生的事本来就该参与竞争。
+	memoryStalenessGraceDays = 30
+	// memoryStalenessFullDecayDays 是衰减打满所需的未命中天数。
+	memoryStalenessFullDecayDays = 365
+	// memoryStalenessMaxDecay 是衰减上限。它要小于普通门槛与典型得分的差，
+	// 目的是让旧记忆排在后面，而不是把它们一笔勾销。
+	memoryStalenessMaxDecay = 0.12
 )
+
+// memoryStalenessDecay 把「多久没被检索命中」换算成一个有上限的扣分。
+func memoryStalenessDecay(age time.Duration) float64 {
+	days := age.Hours() / 24
+	if days <= memoryStalenessGraceDays {
+		return 0
+	}
+	ratio := (days - memoryStalenessGraceDays) / (memoryStalenessFullDecayDays - memoryStalenessGraceDays)
+	if ratio > 1 {
+		ratio = 1
+	}
+	return ratio * memoryStalenessMaxDecay
+}
 
 func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryText string) string {
 	cfg := r.effectiveConfigForEvent(event)
@@ -37,7 +60,8 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 
 func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEvent, queryText string, profile UserMemoryProfile, policy RelationshipPolicy) string {
 	cfg := r.effectiveConfigForEvent(event)
-	memoryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), longTermMemoryTokenShare)
+	window := r.promptContextWindowTokens(event, cfg)
+	memoryBudget := retrievedMemoryBudget(window) + coreMemoryBudget(window)
 	if profile.UserID == "" {
 		profile = UserMemoryProfile{
 			UserID:      strings.TrimSpace(event.UserID),
@@ -58,13 +82,15 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	crossGroup := boolValue(cfg.CrossGroupMemoryEnabled, false) && event.Kind == EventKindGroup
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	items, err := store.ListStructuredMemories(loadCtx, StructuredMemoryQuery{
-		SubjectUserID:      event.UserID,
-		Session:            sessionKey(event),
-		GroupID:            event.GroupID,
-		Text:               queryText,
-		SearchTerms:        structuredMemorySearchTerms(queryText, 48),
-		Now:                time.Now(),
-		MaxCandidates:      structuredMemoryLoadLimit,
+		SubjectUserID: event.UserID,
+		Session:       sessionKey(event),
+		GroupID:       event.GroupID,
+		Text:          queryText,
+		SearchTerms:   structuredMemorySearchTerms(queryText, 48),
+		Now:           time.Now(),
+		MaxCandidates: structuredMemoryLoadLimit,
+		// thread 由 sessionThreadNote 常驻注入，检索再捞一次就是重复注入。
+		ExcludeKinds:       []MemoryKind{MemoryKindThread},
 		CrossGroup:         crossGroup,
 		GroupSessionPrefix: groupHistorySessionPrefix(event),
 		// 跨群记忆开关管的是「别的群的会话记忆」。当前发言者自己的 visibility=user
@@ -76,7 +102,35 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 		log.Printf("chatbot structured memory load failed: %v", err)
 		return formatStructuredMemoryContextWithTokenBudget(profile, policy, nil, memoryBudget)
 	}
-	return formatStructuredMemoryContextWithTokenBudget(profile, policy, rankStructuredMemories(items, event, queryText, time.Now()), memoryBudget)
+	ranked := rankStructuredMemories(items, event, queryText, time.Now())
+	r.touchRetrievedMemories(ctx, store, ranked)
+	return formatStructuredMemoryContextWithTokenBudget(profile, policy, ranked, memoryBudget)
+}
+
+// touchRetrievedMemories 把命中回写成 last_verified_at。回写失败不影响本轮回复，
+// 最坏只是这条记忆的龄期衰减照旧。
+func (r *Runtime) touchRetrievedMemories(ctx context.Context, store StructuredMemoryStore, items []StructuredMemoryItem) {
+	toucher, ok := store.(StructuredMemoryTouchStore)
+	if !ok || len(items) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		if id := strings.TrimSpace(item.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	now := time.Now()
+	go func() {
+		touchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		if err := toucher.TouchStructuredMemories(touchCtx, ids, now); err != nil {
+			log.Printf("chatbot structured memory touch failed: %v", err)
+		}
+	}()
 }
 
 func memoryRetrievalText(event MessageEvent, current string) string {
@@ -105,6 +159,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		terms map[string]struct{}
 	}
 	candidates := make([]scoredMemory, 0, len(items))
+	core := make([]scoredMemory, 0, maximumCoreMemoryItems)
 	for index, item := range items {
 		lexical, strongestField, exactField := structuredMemoryLexicalScore(item, analysis, documentFrequency, len(items))
 		score := item.Importance*0.18 + item.Confidence*0.09 + lexical*0.58
@@ -130,53 +185,66 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 			score += 0.03
 		case MemoryKindPreference:
 			score += 0.03
-		case MemoryKindSummary:
-			score -= 0.03
 		}
 		verifiedAt := item.LastVerifiedAt
 		if verifiedAt.IsZero() {
 			verifiedAt = item.SourceEventTime
 		}
-		if !verifiedAt.IsZero() && !analysis.historical {
+		// 新近度只按龄期算一条曲线。这里以前会先用关键词猜「用户在问最近的事还是
+		// 很久以前的事」再切换两种曲线，那是拿词表判断语义意图——本项目一律不这么
+		// 做，语义判断要么交给模型，要么改用算得出来的信号。
+		if !verifiedAt.IsZero() {
 			ageDays := now.Sub(verifiedAt).Hours() / 24
 			if ageDays < 0 {
 				ageDays = 0
 			}
-			if analysis.recent {
-				score += 0.13 / (1 + ageDays/7)
-				if ageDays <= 14 {
-					reasons = append(reasons, "近期记忆")
-				}
-			} else {
-				score += 0.04 / (1 + ageDays/30)
+			score += 0.04 / (1 + ageDays/30)
+			if ageDays <= 14 {
+				reasons = append(reasons, "近期记忆")
 			}
 		}
-		if analysis.historical && (item.Kind == MemoryKindEpisode || item.Kind == MemoryKindSummary) {
-			score += 0.08
-			reasons = append(reasons, "历史回忆")
+		recollection := item.Kind == MemoryKindEpisode || item.Kind == MemoryKindSummary
+		// 软遗忘：长期没被检索命中的旧情景和摘要逐步退场。只有硬过期时间的话，
+		// 陈年往事会一直和新记忆平等竞争。命中会回写 last_verified_at，所以真正
+		// 常被提起的旧事不会被这条衰减压下去。
+		if recollection && !verifiedAt.IsZero() {
+			if decay := memoryStalenessDecay(now.Sub(verifiedAt)); decay > 0 {
+				score -= decay
+			}
 		}
 
-		relatedEpisode := lexical >= 0.08 || exactField != "" || (item.Importance >= 0.95 && structuredMemoryQueryIsSafetyRelated(analysis.normalized))
-		if (item.Kind == MemoryKindEpisode || item.Kind == MemoryKindSummary) && !relatedEpisode {
+		relatedEpisode := lexical >= 0.08 || exactField != ""
+		if recollection && !relatedEpisode {
 			continue
 		}
 		coreCurrentMemory := item.SubjectUserID == event.UserID && item.Confidence >= 0.9 &&
 			((item.Kind != MemoryKindEpisode && item.Kind != MemoryKindSummary && item.Importance >= 0.9) ||
 				(item.Kind == MemoryKindInstruction && item.Importance >= 0.55))
-		if !coreCurrentMemory {
-			if score < 0.38 {
-				continue
-			}
+		if !coreCurrentMemory && score < 0.38 {
+			continue
 		}
 		item.RetrievalScore = score
 		item.RetrievalReason = strings.Join(uniqueMemoryReasons(reasons), "、")
+		if coreCurrentMemory {
+			// 常驻档：长期交互要求和高置信要害事实不该跟检索结果抢名额。「回复永远
+			// 带颜文字」这类要求只在话题相关时才生效是错的，它本来就与话题无关。
+			core = append(core, scoredMemory{item: item, terms: documentTerms[index]})
+			continue
+		}
 		candidates = append(candidates, scoredMemory{item: item, terms: documentTerms[index]})
+	}
+	sort.SliceStable(core, func(left, right int) bool {
+		return core[left].item.RetrievalScore > core[right].item.RetrievalScore
+	})
+	if len(core) > maximumCoreMemoryItems {
+		core = core[:maximumCoreMemoryItems]
 	}
 
 	// MMR-style selection keeps several useful topics instead of spending the
 	// complete context budget on near-duplicate memories.
-	selected := make([]scoredMemory, 0, min(24, len(candidates)))
-	for len(candidates) > 0 && len(selected) < 24 {
+	selected := make([]scoredMemory, 0, min(24, len(candidates))+len(core))
+	selected = append(selected, core...)
+	for len(candidates) > 0 && len(selected) < 24+len(core) {
 		bestIndex := 0
 		bestScore := math.Inf(-1)
 		for index, candidate := range candidates {
@@ -300,13 +368,6 @@ func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy Relationsh
 	return formatUserMemoryContext(core, compactPolicy)
 }
 
-func structuredMemoryQueryIsSafetyRelated(query string) bool {
-	return containsAnyMemoryPhrase(query,
-		"自杀", "自残", "不想活", "去死", "结束生命", "伤害自己",
-		"suicide", "self-harm", "kill myself",
-	)
-}
-
 func formatStructuredMemoryLine(item StructuredMemoryItem) string {
 	subject := firstNonEmpty(strings.TrimSpace(item.SubjectName), strings.TrimSpace(item.SubjectUserID))
 	if subject == "" {
@@ -356,8 +417,6 @@ func structuredMemoryTerms(text string) map[string]struct{} {
 type structuredMemoryQueryAnalysis struct {
 	normalized string
 	terms      map[string]float64
-	recent     bool
-	historical bool
 }
 
 var structuredMemoryStopTerms = map[string]struct{}{
@@ -371,9 +430,6 @@ func analyzeStructuredMemoryQuery(query string) structuredMemoryQueryAnalysis {
 		normalized: normalizeStructuredMemoryText(query),
 		terms:      weightedStructuredMemoryTerms(structuredMemorySemanticText(query)),
 	}
-	lower := strings.ToLower(query)
-	analysis.recent = containsAnyMemoryPhrase(lower, "最近", "刚才", "刚刚", "上次", "今天", "昨天", "latest", "recent")
-	analysis.historical = containsAnyMemoryPhrase(lower, "以前", "之前", "过去", "当时", "很久", "去年", "historical", "previously")
 	for term := range structuredMemoryStopTerms {
 		delete(analysis.terms, term)
 	}
@@ -556,15 +612,6 @@ func normalizeStructuredMemoryText(text string) string {
 	return builder.String()
 }
 
-func containsAnyMemoryPhrase(text string, phrases ...string) bool {
-	for _, phrase := range phrases {
-		if strings.Contains(text, phrase) {
-			return true
-		}
-	}
-	return false
-}
-
 func uniqueMemoryReasons(reasons []string) []string {
 	seen := make(map[string]struct{}, len(reasons))
 	unique := make([]string, 0, len(reasons))
@@ -579,4 +626,65 @@ func uniqueMemoryReasons(reasons []string) []string {
 		unique = append(unique, reason)
 	}
 	return unique
+}
+
+// sessionThreadNote 读取当前会话的线程便签。它不参加相关性检索，也不受当前消息
+// 影响：会话线程是「我们聊到哪了」的状态，跟这句话像不像无关，取到就注入。
+func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) string {
+	cfg := r.effectiveConfigForEvent(event)
+	if !boolValue(cfg.LongTermMemoryEnabled, true) {
+		return ""
+	}
+	r.mu.RLock()
+	store := r.structuredMemory
+	r.mu.RUnlock()
+	if store == nil {
+		return ""
+	}
+	session := sessionKey(event)
+	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	items, err := store.ListStructuredMemories(loadCtx, StructuredMemoryQuery{
+		Session:       session,
+		Now:           time.Now(),
+		MaxCandidates: 4,
+		Kinds:         []MemoryKind{MemoryKindThread},
+	})
+	cancel()
+	if err != nil {
+		log.Printf("chatbot session thread load failed: %v", err)
+		return ""
+	}
+	key := ThreadMemoryKey(session)
+	for _, item := range items {
+		if item.Key == key {
+			return strings.TrimSpace(item.Content)
+		}
+	}
+	return ""
+}
+
+// fitSessionThreadToBudget 把线程便签压进配额。它天然只有几百字，超限说明模型把
+// 已完结话题囤在了 thread 里；这里按行截断即可，不值得再打一次压缩调用。
+func fitSessionThreadToBudget(note string, budget int64) string {
+	note = strings.TrimSpace(note)
+	if note == "" || budget <= 0 {
+		return ""
+	}
+	if llm.EstimateTextTokens(note) <= budget {
+		return note
+	}
+	lines := strings.Split(note, "\n")
+	for len(lines) > 1 && llm.EstimateTextTokens(strings.Join(lines, "\n")) > budget {
+		lines = lines[:len(lines)-1]
+	}
+	trimmed := strings.Join(lines, "\n")
+	if llm.EstimateTextTokens(trimmed) <= budget {
+		return strings.TrimSpace(trimmed)
+	}
+	// 单行也超限时按字符粗裁：估算是每 2 字符约 1 token，留一成余量。
+	limit := int(budget) * 2
+	if limit < 8 {
+		limit = 8
+	}
+	return strings.TrimSpace(truncateRunes(trimmed, limit))
 }

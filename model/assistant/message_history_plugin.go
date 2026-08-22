@@ -57,28 +57,39 @@ func (p *MessageHistoryPlugin) Manifest() PluginManifest {
 	}
 }
 
-func (p *MessageHistoryPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
-	if req.Event.Kind != EventKindGroup || req.Event.GroupID == "" {
-		return nil, nil
-	}
-	if !recallHistoryQuery(req.Text) {
-		return nil, nil
+// Handle 曾经用词表判断「这条消息是不是在问撤回记录」，命中就劫持整条回复。判断
+// 用户想不想看撤回记录是语义问题，本项目一律交给模型，不做关键词匹配。读撤回记录
+// 现在是 diana.chat_history 的 recalls 操作，由模型自己决定什么时候需要。
+//
+// 保留空实现而不是删掉方法，是因为插件仍然要通过 Observe 记录撤回通知；被撤掉的
+// 只有「主动劫持回复」这一步。转发卡片与自动撤回策略的投递链路一行没动，改成由
+// 工具把同一个 PluginResponse 交回本轮。
+func (p *MessageHistoryPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
+	return nil, nil
+}
+
+// RecallDisclosureResponse 组装本群最近窗口内的撤回记录响应。它不判断用户想不想
+// 看，只负责取数和组装——要不要调用由模型决定。返回的 PluginResponse 与旧路径完全
+// 一致，因此转发卡片、嵌套转发和自动撤回都沿用原有投递逻辑，不复制第二份。
+func (p *MessageHistoryPlugin) RecallDisclosureResponse(ctx context.Context, channel Channel, event MessageEvent, recentEvents, recallEvents []MessageEvent) (*PluginResponse, []MessageEvent, int64) {
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
+		return nil, nil, 0
 	}
 	p.mu.RLock()
-	memoryRecalls := append([]MessageEvent(nil), p.recalls[req.Event.GroupID]...)
+	memoryRecalls := append([]MessageEvent(nil), p.recalls[event.GroupID]...)
 	p.mu.RUnlock()
-	recalls := mergeRecallRecords(recallRecordsForGroup(req.RecallEvents, req.Event.GroupID), memoryRecalls)
-	referenceTime := recallReferenceTime(req.Event.Time, recalls)
+	recalls := mergeRecallRecords(recallRecordsForGroup(recallEvents, event.GroupID), memoryRecalls)
+	referenceTime := recallReferenceTime(event.Time, recalls)
 	recalls = recentRecallRecords(recalls, referenceTime, recallDefaultWindow)
 	if len(recalls) == 0 {
 		return &PluginResponse{
 			Handled:          true,
 			Reply:            "最近24小时没有记录到群消息撤回。",
 			RecallDisclosure: true,
-		}, nil
+		}, nil, referenceTime
 	}
-	recalls = p.enrichRecallIdentities(ctx, req.Channel, req.Event, req.RecentEvents, recalls)
-	return buildRecallPluginResponse(recalls, referenceTime, recallHistoryQuery(req.Text)), nil
+	recalls = p.enrichRecallIdentities(ctx, channel, event, recentEvents, recalls)
+	return buildRecallPluginResponse(recalls, referenceTime, true), recalls, referenceTime
 }
 
 func buildRecallPluginResponse(recalls []MessageEvent, referenceTime int64, disclosure bool) *PluginResponse {
@@ -128,19 +139,6 @@ func applyRecallReplyMode(responses []PluginResponse, mode RecallReplyMode) []Pl
 		out[index].ForwardMessages = nil
 	}
 	return out
-}
-
-func recallHistoryQuery(text string) bool {
-	text = strings.TrimSpace(text)
-	if !strings.Contains(text, "撤回") {
-		return false
-	}
-	for _, marker := range []string{"什么", "消息", "内容", "记录", "查看", "看看", "看下", "看一下", "刚才", "最近", "所有", "谁", "怎么", "如何"} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func (p *MessageHistoryPlugin) Observe(_ context.Context, event MessageEvent) MessageEvent {
@@ -753,4 +751,52 @@ func recallEventHasContent(event MessageEvent) bool {
 		}
 	}
 	return false
+}
+
+// recallDisclosureSink 收集本轮 Agent 通过工具读到的撤回记录响应。
+//
+// 工具在 Agent 循环里跑，而转发卡片和自动撤回是在回复发送阶段按 pluginResponses
+// 投递的。把响应放进本轮的收集器、由回复阶段合并回去，就能复用整条既有链路——
+// 那里面有合并转发的两种投递方式和踩过坑的降级逻辑，不该被复制第二份。
+type recallDisclosureSink struct {
+	mu        sync.Mutex
+	responses []PluginResponse
+}
+
+func (s *recallDisclosureSink) add(response PluginResponse) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.responses = append(s.responses, response)
+}
+
+// drain 取走已收集的响应。同一轮里模型可能多次调用工具，这里只保留第一次：撤回
+// 记录在一轮内不会变，重复投递会把同一张转发卡片发好几遍。
+func (s *recallDisclosureSink) drain() []PluginResponse {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	responses := s.responses
+	s.responses = nil
+	if len(responses) > 1 {
+		responses = responses[:1]
+	}
+	return responses
+}
+
+// messageHistoryPlugin 取回已启用的消息历史插件实例，供工具读取撤回记录。
+func (r *Runtime) messageHistoryPlugin() (*MessageHistoryPlugin, bool) {
+	if r == nil || r.plugins == nil {
+		return nil, false
+	}
+	value, _, enabled := r.plugins.PluginWithSettings(messageHistoryPluginID, r.pluginOverridesForEvent(MessageEvent{}))
+	if !enabled {
+		return nil, false
+	}
+	plugin, ok := value.(*MessageHistoryPlugin)
+	return plugin, ok
 }

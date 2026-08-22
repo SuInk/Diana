@@ -418,6 +418,14 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 		}
 		kindClause = " AND kind IN (" + strings.Join(placeholders, ",") + ")"
 	}
+	if len(query.ExcludeKinds) > 0 {
+		placeholders := make([]string, 0, len(query.ExcludeKinds))
+		for _, kind := range query.ExcludeKinds {
+			placeholders = append(placeholders, "?")
+			args = append(args, string(kind))
+		}
+		kindClause += " AND kind NOT IN (" + strings.Join(placeholders, ",") + ")"
+	}
 	searchTerms := query.SearchTerms
 	if len(searchTerms) == 0 && strings.TrimSpace(query.Text) != "" {
 		searchTerms = strings.Fields(strings.ToLower(query.Text))
@@ -490,7 +498,7 @@ func normalizeMemoryCandidate(candidate assistant.MemoryCandidate, request assis
 	candidate.Topic = truncateMemoryText(strings.TrimSpace(candidate.Topic), 80)
 	candidate.Entity = truncateMemoryText(strings.TrimSpace(candidate.Entity), 80)
 	contentLimit := 320
-	if candidate.Kind == assistant.MemoryKindSummary {
+	if candidate.Kind == assistant.MemoryKindSummary || candidate.Kind == assistant.MemoryKindThread {
 		contentLimit = 1200
 	}
 	candidate.Content = truncateMemoryText(strings.Join(strings.Fields(candidate.Content), " "), contentLimit)
@@ -499,7 +507,8 @@ func normalizeMemoryCandidate(candidate assistant.MemoryCandidate, request assis
 		return assistant.MemoryCandidate{}, false
 	}
 	switch candidate.Kind {
-	case assistant.MemoryKindFact, assistant.MemoryKindPreference, assistant.MemoryKindEpisode, assistant.MemoryKindInstruction, assistant.MemoryKindSummary:
+	case assistant.MemoryKindFact, assistant.MemoryKindPreference, assistant.MemoryKindEpisode,
+		assistant.MemoryKindInstruction, assistant.MemoryKindSummary, assistant.MemoryKindThread:
 	default:
 		return assistant.MemoryCandidate{}, false
 	}
@@ -523,7 +532,8 @@ func normalizeMemoryCandidate(candidate assistant.MemoryCandidate, request assis
 	if candidate.Sensitive || candidate.SourceType != assistant.MemorySourceExplicit || strings.TrimSpace(request.SubjectUserID) == "" {
 		candidate.Visibility = assistant.MemoryVisibilitySession
 	}
-	if request.EventKind == assistant.EventKindPrivate || candidate.Kind == assistant.MemoryKindSummary {
+	if request.EventKind == assistant.EventKindPrivate ||
+		candidate.Kind == assistant.MemoryKindSummary || candidate.Kind == assistant.MemoryKindThread {
 		candidate.Visibility = assistant.MemoryVisibilitySession
 	}
 	if candidate.RetentionDays < 0 {
@@ -755,4 +765,37 @@ func firstNonEmptyMemory(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// TouchStructuredMemories 记录这批记忆刚刚被检索命中。
+//
+// 它只动 last_verified_at，不碰 updated_at：后者表示内容变化，被读一次不算改动。
+// 命中回写是软遗忘的另一半——常被提起的旧事因此不会被龄期衰减压下去。
+func (s *SQLiteStore) TouchStructuredMemories(ctx context.Context, ids []string, at time.Time) error {
+	if s == nil || s.db == nil || len(ids) == 0 {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	placeholders := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, at.Unix())
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	if len(placeholders) == 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE memory_items
+SET last_verified_at = ?
+WHERE status = 'active' AND id IN (`+strings.Join(placeholders, ",")+`)
+`, args...)
+	return err
 }

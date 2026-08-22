@@ -25,6 +25,12 @@ const (
 	semanticReferenceQuoteContextRadius   = 8
 	semanticReferenceNearbyContextRadius  = 3
 	semanticReferenceCacheTTL             = 10 * time.Minute
+	// semanticReferenceMinimumConfidence 是采纳指代结论的最低置信度。
+	//
+	// 指代本身有本质歧义，判错的代价是贴错一张图、模型据此答错。阈值定高一点，
+	// 拿不准就退回「没有指代」——那时模型至少知道自己没看到图，而不是笃定地
+	// 描述另一张。提示词同时要求给出判据，说不出判据的按低置信度处理。
+	semanticReferenceMinimumConfidence = 0.65
 )
 
 type SemanticReferenceCacheRecord struct {
@@ -89,12 +95,10 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 	if err != nil {
 		return event
 	}
-	cacheKey := ""
-	decision, cacheHit := semanticReferenceDecision{}, false
-	if semanticCandidatesHaveMedia(candidates) {
-		cacheKey = semanticReferenceDecisionCacheKey(event, text, candidates)
-		decision, cacheHit = r.loadSemanticReferenceDecision(ctx, cacheKey)
-	}
+	// 负结果同样要缓存：判成「没有指代」也是花了一次调用得到的结论，同一句话重问
+	// 不该重新付费。
+	cacheKey := semanticReferenceDecisionCacheKey(event, text, candidates)
+	decision, cacheHit := r.loadSemanticReferenceDecision(ctx, cacheKey)
 	if !cacheHit {
 		callCtx, cancel := context.WithTimeout(ctx, semanticRouteTimeout)
 		defer cancel()
@@ -114,7 +118,9 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 7. 只能返回候选中真实存在的 message_id，不能编造。当前消息确实是在“重试/再看”一个错误包装消息，并且能定位到其底层媒体时，应返回底层媒体消息；无法可靠判断时返回空数组。
 8. 只输出 JSON，不要输出 Markdown 或解释。为兼容旧调用，单条也必须放进 message_ids。
 
-输出格式：{"message_ids":["候选ID1","候选ID2"],"confidence":0到1,"reason":"简短理由"}`),
+9. reason 必须写出你依据的是什么：措辞直接指明、时间紧邻、nearby_context 佐证、还是 semantic_source 关系。说不出具体判据就说明你在猜，此时 confidence 不得高于 0.5。
+
+输出格式：{"message_ids":["候选ID1","候选ID2"],"confidence":0到1,"reason":"简短理由，必须点明判据"}`),
 				},
 				{Role: llm.RoleUser, Content: "请判断当前消息指向哪个历史候选：\n" + string(payload)},
 			}})
@@ -132,11 +138,9 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 		if !ok {
 			return event
 		}
-		if cacheKey != "" {
-			r.saveSemanticReferenceDecision(ctx, cacheKey, decision)
-		}
+		r.saveSemanticReferenceDecision(ctx, cacheKey, decision)
 	}
-	if len(decision.MessageIDs) == 0 || decision.Confidence < 0.55 {
+	if len(decision.MessageIDs) == 0 || decision.Confidence < semanticReferenceMinimumConfidence {
 		if cacheHit {
 			r.recordSemanticReference(ctx, event, nil, decision.Confidence, true, nil)
 		}
@@ -336,6 +340,42 @@ func (r *Runtime) semanticReferenceCandidates(ctx context.Context, event Message
 		events[messageID] = item
 	}
 	return candidates, events, anchorTime
+}
+
+// shouldResolveSemanticReference 决定这一轮要不要付一次前置指代解析。
+//
+// 以前的门是 `!AgentEnabled || 有媒体掉出窗口`：非 agent 模式短路成「每条消息都
+// 跑」，哪怕群里从没人发过图，而关掉 agent 往往正是为了省钱省延迟。现在两种模式
+// 都先问「有没有值得解析的历史媒体」，纯文字会话零额外调用。
+//
+// agent 模式则完全不再跑路由器：窗口外媒体改由 durableMediaIndex 以文字索引进
+// 提示词，模型自己判断要不要用 diana.history_images 取原图。索引是可缓存的静态
+// 文本，比每条消息一次路由调用便宜，而且模型手里有描述，比路由器按时间顺序猜
+// 更准。工具被关系等级挡掉时没有取图手段，仍然回退到路由器。
+func (r *Runtime) shouldResolveSemanticReference(ctx context.Context, cfg BotConfig, event MessageEvent, agentCanFetchMedia bool) bool {
+	if cfg.AgentEnabled && agentCanFetchMedia {
+		return false
+	}
+	if cfg.AgentEnabled {
+		return r.hasDurableMediaBeyondRecentContext(ctx, event)
+	}
+	// 非 agent 模式下 historyPromptTextAt 会整条丢掉纯图片历史，模型连「这里有过
+	// 一张图」都不知道，所以判据是「历史里有没有任何媒体」，不是「有没有掉出窗口」。
+	return r.hasSemanticReferenceMedia(ctx, event)
+}
+
+// hasSemanticReferenceMedia 判断可解析的历史里是否存在任何媒体。
+func (r *Runtime) hasSemanticReferenceMedia(ctx context.Context, event MessageEvent) bool {
+	history, _ := r.semanticReferenceHistory(ctx, event)
+	for _, item := range history {
+		if strings.TrimSpace(item.MessageID) == "" || item.MessageID == event.MessageID {
+			continue
+		}
+		if segmentsHaveReferenceContent(item.Segments) || quotedMessageHasReferenceContent(item.Quoted) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) hasDurableMediaBeyondRecentContext(ctx context.Context, event MessageEvent) bool {

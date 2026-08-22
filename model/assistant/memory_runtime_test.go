@@ -169,7 +169,7 @@ func TestStructuredMemoryRankingDoesNotInjectUnrelatedSafetyEpisode(t *testing.T
 	}
 }
 
-func TestStructuredMemoryRankingUnderstandsTimeIntent(t *testing.T) {
+func TestStructuredMemoryRankingDoesNotSwitchOnTimeWording(t *testing.T) {
 	now := time.Now()
 	items := []StructuredMemoryItem{
 		{
@@ -184,13 +184,24 @@ func TestStructuredMemoryRankingUnderstandsTimeIntent(t *testing.T) {
 		},
 	}
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "user"}
-	recent := rankStructuredMemories(items, event, "最近讨论的部署方案是什么", now)
-	if len(recent) < 2 || recent[0].ID != "recent" || !strings.Contains(recent[0].RetrievalReason, "近期记忆") {
-		t.Fatalf("recent ranking = %#v", recent)
+
+	// 排序过去会先用词表猜「用户问的是最近还是很久以前」，再切换两套打分。那是拿
+	// 关键词判断语义意图，本项目不允许；现在两种问法必须得到同一个结果，排序只依据
+	// 算得出来的信号：词面相关度、重要度、置信度和龄期。
+	recentWording := rankStructuredMemories(items, event, "最近讨论的部署方案是什么", now)
+	historicalWording := rankStructuredMemories(items, event, "以前讨论过的部署方案是什么", now)
+	if len(recentWording) < 2 || len(historicalWording) < 2 {
+		t.Fatalf("both phrasings should surface both episodes: recent=%#v historical=%#v", recentWording, historicalWording)
 	}
-	historical := rankStructuredMemories(items, event, "以前讨论过的部署方案是什么", now)
-	if len(historical) < 2 || historical[0].ID != "old" || !strings.Contains(historical[0].RetrievalReason, "历史回忆") {
-		t.Fatalf("historical ranking = %#v", historical)
+	for index := range recentWording {
+		if recentWording[index].ID != historicalWording[index].ID {
+			t.Fatalf("ranking diverged on time wording: recent=%v historical=%v",
+				recentWording[index].ID, historicalWording[index].ID)
+		}
+	}
+	// 龄期仍然参与打分，只是不再由措辞切换曲线。
+	if recentWording[0].ID != "recent" {
+		t.Fatalf("recently verified episode did not rank first: %#v", recentWording)
 	}
 }
 
@@ -454,6 +465,16 @@ func (s *testStructuredMemoryStore) ListStructuredMemories(_ context.Context, qu
 			if !matched {
 				continue
 			}
+		}
+		excluded := false
+		for _, kind := range query.ExcludeKinds {
+			if item.Kind == kind {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
 		}
 		items = append(items, item)
 	}

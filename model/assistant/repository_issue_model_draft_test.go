@@ -20,7 +20,7 @@ func TestModelAuthoredIssueBecomesDraftInsteadOfFailing(t *testing.T) {
 	defer server.Close()
 
 	tool := repositoryPublishTestTool(server, "帮我给 acme/demo 提个 issue，说 @Bot 的消息段被过滤掉了影响理解", nil)
-	result := runRepositoryPublishTestTool(t, tool, map[string]any{
+	result := runRepositoryPublishToolOnce(t, tool, map[string]any{
 		"operation":  "create",
 		"repository": "acme/demo",
 		"title":      "@ Bot 的消息段会被自动过滤，影响语义理解",
@@ -61,7 +61,7 @@ func TestModelAuthoredCommentBecomesDraftAndPostsAfterApproval(t *testing.T) {
 	}
 
 	// 第一步：用户只说了大意，正文由模型撰写 —— 落草稿，不碰 GitHub。
-	drafted := runRepositoryPublishTestTool(t, toolFor("在 acme/demo 的 #9 下面回复一下，说这个已经修好了"), map[string]any{
+	drafted := runRepositoryPublishToolOnce(t, toolFor("在 acme/demo 的 #9 下面回复一下，说这个已经修好了"), map[string]any{
 		"operation":  "comment",
 		"repository": "acme/demo",
 		"number":     9,
@@ -77,8 +77,8 @@ func TestModelAuthoredCommentBecomesDraftAndPostsAfterApproval(t *testing.T) {
 		t.Fatalf("草稿阶段不该碰 GitHub：%#v", github.requests)
 	}
 
-	// 第二步：用户明确同意 —— 这时才真正发出去，且发的是评论而不是新建 Issue。
-	approved := runRepositoryPublishTestTool(t, toolFor("同意，发吧"), map[string]any{
+	// 第二步：用户原样打出确认码 —— 这时才真正发出去，且发的是评论而不是新建 Issue。
+	approved := runRepositoryPublishToolOnce(t, toolFor("确认 "+repositoryIssueConfirmationCode(drafted.Draft.ID)), map[string]any{
 		"operation": "approve",
 		"draft_id":  drafted.Draft.ID,
 	})
@@ -117,14 +117,15 @@ func TestUnapprovedDraftNeverReachesGitHub(t *testing.T) {
 			plugin, settings)
 	}
 
-	drafted := runRepositoryPublishTestTool(t, toolFor("在 acme/demo 的 #9 下面回复一下"), map[string]any{
+	drafted := runRepositoryPublishToolOnce(t, toolFor("在 acme/demo 的 #9 下面回复一下"), map[string]any{
 		"operation": "comment", "repository": "acme/demo", "number": 9, "body": "模型自己写的一句话",
 	})
 	if drafted.Draft == nil {
 		t.Fatalf("没有生成草稿：%#v", drafted)
 	}
-	// 用户没有表示同意，草稿不得执行。
-	rejected := runRepositoryPublishTestTool(t, toolFor("再想想吧"), map[string]any{
+	// 消息里没有确认码，草稿不得执行。以前这里判的是「有没有说同意」，靠一张同意/
+	// 拒绝词表；换成确认码之后，「再想想吧」和任何其他措辞一样都不放行。
+	rejected := runRepositoryPublishToolOnce(t, toolFor("再想想吧"), map[string]any{
 		"operation": "approve", "draft_id": drafted.Draft.ID,
 	})
 	if rejected.OK || rejected.FailureCode != "explicit_approval_required" {
@@ -156,7 +157,7 @@ func TestApprovingAnAlreadyAppliedDraftReportsTheTruth(t *testing.T) {
 			plugin, settings)
 	}
 
-	drafted := runRepositoryPublishTestTool(t, toolFor("帮我给 acme/demo 提个 issue，说转发有问题"), map[string]any{
+	drafted := runRepositoryPublishToolOnce(t, toolFor("帮我给 acme/demo 提个 issue，说转发有问题"), map[string]any{
 		"operation": "create", "repository": "acme/demo",
 		"title": "转发有问题，需要排查", "body": "模型自己组织的正文。",
 	})
@@ -164,7 +165,8 @@ func TestApprovingAnAlreadyAppliedDraftReportsTheTruth(t *testing.T) {
 		t.Fatalf("没有生成草稿：%#v", drafted)
 	}
 
-	first := runRepositoryPublishTestTool(t, toolFor("同意"), map[string]any{
+	code := repositoryIssueConfirmationCode(drafted.Draft.ID)
+	first := runRepositoryPublishToolOnce(t, toolFor("确认 "+code), map[string]any{
 		"operation": "approve", "draft_id": drafted.Draft.ID,
 	})
 	if !first.OK || first.Issue == nil {
@@ -174,7 +176,7 @@ func TestApprovingAnAlreadyAppliedDraftReportsTheTruth(t *testing.T) {
 	writesAfterFirst := len(github.requests)
 
 	// 第二条审批：草稿已被消费，但 Issue 确实已经建好了。
-	second := runRepositoryPublishTestTool(t, toolFor("同意提交这个草稿"), map[string]any{
+	second := runRepositoryPublishToolOnce(t, toolFor("确认 "+code), map[string]any{
 		"operation": "approve", "draft_id": drafted.Draft.ID,
 	})
 	if !second.OK || second.Outcome != "already_applied" || !second.Idempotent {
