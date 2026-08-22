@@ -91,7 +91,12 @@ func messageHistoryFTSQuery(terms []string) string {
 		seen[tokens] = struct{}{}
 		// token 里不会有双引号（切分时非字母数字一律作为分隔符丢弃），
 		// 这里仍然转义一次，避免将来改分词规则时留下注入面。
-		phrases = append(phrases, `"`+strings.ReplaceAll(tokens, `"`, `""`)+`"`)
+		//
+		// 末尾加 * 做前缀匹配：ASCII 连续段整体存成一个 token，不加前缀的话搜
+		// 「diana」命中不了「dianabot」、搜「deploy」命中不了「deployment」，
+		// 而原来的 LIKE 是能命中的。CJK 侧 token 长度固定为二元组，前缀匹配
+		// 退化成精确匹配，不会放宽召回。
+		phrases = append(phrases, `"`+strings.ReplaceAll(tokens, `"`, `""`)+`"*`)
 	}
 	if len(phrases) == 0 {
 		return ""
