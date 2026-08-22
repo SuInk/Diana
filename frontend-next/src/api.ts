@@ -176,6 +176,7 @@ export interface BotProfileConfig {
   /** 允许在同一机器人下检索其他群的非敏感记忆和聊天历史；缺省关闭。 */
   cross_group_memory_enabled?: boolean;
   dict_segment_enabled?: boolean;
+  semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;
   request_timeout_ms?: number;
   agent_enabled?: boolean;

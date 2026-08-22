@@ -358,6 +358,9 @@ type BotConfig struct {
 	// （后台加载词典，期间选词退回 n-gram）；关闭要重启进程才真正生效——
 	// 词典占用的内存本来也只有重启才能归还。
 	DictSegmentEnabled          *bool         `json:"dict_segment_enabled,omitempty"`
+	// 语义检索:消息经 embedding 模型转成向量,检索时按余弦相似度召回并与
+	// 词面结果融合。需要 embedding 分组的 LLM 配置档,默认关。
+	SemanticSearchEnabled       *bool         `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance        float64       `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold     float64       `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled               *bool         `json:"chat_in_enabled,omitempty"`
@@ -555,6 +558,7 @@ type ConfigPayload struct {
 	LongTermMemoryEnabled       *bool       `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled     *bool       `json:"cross_group_memory_enabled,omitempty"`
 	DictSegmentEnabled          *bool       `json:"dict_segment_enabled,omitempty"`
+	SemanticSearchEnabled       *bool       `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance        float64     `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold     float64     `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled               *bool       `json:"chat_in_enabled,omitempty"`
@@ -1003,6 +1007,7 @@ func DefaultBotConfig() BotConfig {
 		LongTermMemoryEnabled:        boolPointer(true),
 		CrossGroupMemoryEnabled:      boolPointer(false),
 		DictSegmentEnabled:           boolPointer(false),
+		SemanticSearchEnabled:        boolPointer(false),
 		ProactiveReplyChance:         defaultProactiveReplyChance,
 		ProactiveReplyThreshold:      defaultProactiveReplyThreshold,
 		ReplyRules:                   []ReplyRule{},
@@ -1190,6 +1195,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.DictSegmentEnabled == nil {
 		cfg.DictSegmentEnabled = boolPointer(false)
 	}
+	if cfg.SemanticSearchEnabled == nil {
+		cfg.SemanticSearchEnabled = boolPointer(false)
+	}
 	if cfg.ProactiveReplyChance <= 0 {
 		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
 	}
@@ -1350,6 +1358,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		LongTermMemoryEnabled:        copyBoolPointer(cfg.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:      copyBoolPointer(cfg.CrossGroupMemoryEnabled),
 		DictSegmentEnabled:           copyBoolPointer(cfg.DictSegmentEnabled),
+		SemanticSearchEnabled:        copyBoolPointer(cfg.SemanticSearchEnabled),
 		ProactiveReplyChance:         cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:      cfg.ProactiveReplyThreshold,
 		ChatInEnabled:                copyBoolPointer(cfg.ChatInEnabled),
@@ -1471,6 +1480,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		LongTermMemoryEnabled:        copyBoolPointer(payload.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:      copyBoolPointer(payload.CrossGroupMemoryEnabled),
 		DictSegmentEnabled:           copyBoolPointer(payload.DictSegmentEnabled),
+		SemanticSearchEnabled:        copyBoolPointer(payload.SemanticSearchEnabled),
 		ProactiveReplyChance:         payload.ProactiveReplyChance,
 		ProactiveReplyThreshold:      payload.ProactiveReplyThreshold,
 		ChatInEnabled:                copyBoolPointer(payload.ChatInEnabled),
