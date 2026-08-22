@@ -449,6 +449,8 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	if plugins == nil {
 		plugins = NewDefaultPluginManager()
 	}
+	// 分词词典要加载几秒,后台预热掉,别让第一条消息扛这个延迟。
+	startCJKSegmenterWarmup()
 	runtime := &Runtime{
 		cfg:                   cfg,
 		profileConfigs:        map[string]BotConfig{cfg.ID: cfg},
