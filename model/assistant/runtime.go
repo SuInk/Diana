@@ -1439,7 +1439,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
-	replyCtx := withReplyTriggerGate(withReplySuppressionSendGuard(ctx))
+	replyCtx := withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx)))
 	reply, err := r.replyTo(replyCtx, event, text)
 	record.Duration = time.Since(start).Milliseconds()
 	if err != nil {
@@ -7302,7 +7302,8 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	if err := r.interruptedReplyError(ctx, event); err != nil {
 		return nil, err
 	}
-	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded {
+	// 已经写到外部系统的这一轮不能丢：丢了用户就看不到「已经做完了」。
+	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded && !hasExternalSideEffect(ctx) {
 		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
 		return nil, errInboundTurnSuperseded
 	}
@@ -7807,7 +7808,8 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	if err := r.interruptedReplyError(ctx, event); err != nil {
 		return nil, err
 	}
-	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded {
+	// 已经写到外部系统的这一轮不能丢：丢了用户就看不到「已经做完了」。
+	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded && !hasExternalSideEffect(ctx) {
 		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
 		return nil, errInboundTurnSuperseded
 	}

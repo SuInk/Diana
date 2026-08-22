@@ -134,3 +134,58 @@ func TestUnapprovedDraftNeverReachesGitHub(t *testing.T) {
 		t.Fatalf("未批准的草稿到达了 GitHub：%#v", github.requests)
 	}
 }
+
+// 两条审批消息并发到达：第一条已经创建成功并把草稿标记为 created，第二条按
+// pending 查就查不到。此前照直报「本群找不到草稿」，用户看到的是「其实建好了
+// 却说失败」。现在必须照实说明已经提交过，并带上 Issue 编号。
+func TestApprovingAnAlreadyAppliedDraftReportsTheTruth(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+
+	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
+	settings := SettingValues{
+		repositoryPublishSettingToken:     repositoryPublishTestToken,
+		repositoryPublishSettingAllowlist: "acme/demo",
+		repositoryPublishSettingTimeout:   5,
+	}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	toolFor := func(rawMessage string) *dianaRepositoryIssuesTool {
+		return newDianaRepositoryIssuesTool(runtime,
+			MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: rawMessage},
+			plugin, settings)
+	}
+
+	drafted := runRepositoryPublishTestTool(t, toolFor("帮我给 acme/demo 提个 issue，说转发有问题"), map[string]any{
+		"operation": "create", "repository": "acme/demo",
+		"title": "转发有问题，需要排查", "body": "模型自己组织的正文。",
+	})
+	if drafted.Draft == nil {
+		t.Fatalf("没有生成草稿：%#v", drafted)
+	}
+
+	first := runRepositoryPublishTestTool(t, toolFor("同意"), map[string]any{
+		"operation": "approve", "draft_id": drafted.Draft.ID,
+	})
+	if !first.OK || first.Issue == nil {
+		t.Fatalf("第一条审批应当创建成功：%#v", first)
+	}
+	createdNumber := first.Issue.Number
+	writesAfterFirst := len(github.requests)
+
+	// 第二条审批：草稿已被消费，但 Issue 确实已经建好了。
+	second := runRepositoryPublishTestTool(t, toolFor("同意提交这个草稿"), map[string]any{
+		"operation": "approve", "draft_id": drafted.Draft.ID,
+	})
+	if !second.OK || second.Outcome != "already_applied" || !second.Idempotent {
+		t.Fatalf("重复审批应当照实报告已提交过：%#v", second)
+	}
+	if second.RequestedNumber != createdNumber {
+		t.Fatalf("重复审批没有指出实际创建的 Issue：want #%d, got %#v", createdNumber, second)
+	}
+	for _, request := range github.requests[writesAfterFirst:] {
+		if request.Method == http.MethodPost {
+			t.Fatalf("重复审批产生了第二次写入：%#v", request)
+		}
+	}
+}

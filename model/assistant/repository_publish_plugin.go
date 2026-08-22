@@ -201,6 +201,35 @@ func (p *RepositoryPublishPlugin) findDraft(ctx context.Context, groupID, draftI
 	return latest, latest.ID != "", nil
 }
 
+// findResolvedDraft 按 ID 查找已经处理过的草稿，不做 pending 过滤。
+// 审批消息并发到达时，第一条已经把草稿消费掉并写进了 GitHub，第二条按 pending
+// 查就查不到——如果照直报「找不到草稿」，用户看到的就是「其实建好了却说失败」。
+func (p *RepositoryPublishPlugin) findResolvedDraft(ctx context.Context, groupID, draftID string) (repositoryIssueDraft, bool, error) {
+	if p == nil {
+		return repositoryIssueDraft{}, false, nil
+	}
+	groupID, draftID = strings.TrimSpace(groupID), strings.TrimSpace(draftID)
+	if draftID == "" {
+		return repositoryIssueDraft{}, false, nil
+	}
+	privateApproval := strings.HasPrefix(groupID, "private:")
+	p.draftsMu.Lock()
+	store := p.draftStore
+	cached, cachedOK := p.drafts[draftID]
+	p.draftsMu.Unlock()
+	if store != nil {
+		draft, ok, err := store.RepositoryIssueDraft(ctx, draftID)
+		if err != nil || !ok || (!privateApproval && draft.GroupID != groupID) {
+			return repositoryIssueDraft{}, false, err
+		}
+		return draft, true, nil
+	}
+	if !cachedOK || (!privateApproval && cached.GroupID != groupID) {
+		return repositoryIssueDraft{}, false, nil
+	}
+	return cached, true, nil
+}
+
 func (p *RepositoryPublishPlugin) updateDraft(ctx context.Context, draft repositoryIssueDraft) error {
 	if p == nil {
 		return nil

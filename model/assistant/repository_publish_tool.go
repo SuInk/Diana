@@ -988,6 +988,11 @@ func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositor
 	if result.Operation != "" && result.Operation != "search" {
 		t.audit(result)
 	}
+	// GitHub 上已经落地的写入不可撤销：标记之后，这一轮回复不会再被后续消息
+	// 打断丢弃，用户至少能看到「已经建好了」和链接。草稿只存在本地，不算。
+	if result.OK && result.Outcome != "" && result.Outcome != "draft_pending" && result.Operation != "search" && result.Operation != "list_drafts" {
+		markExternalSideEffect(ctx)
+	}
 	body, err := json.Marshal(result)
 	if err != nil {
 		return "", err
@@ -1278,6 +1283,31 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 	return result
 }
 
+// describeResolvedDraft 说明一份已经处理过的草稿的真实归宿。
+func (t *dianaRepositoryIssuesTool) describeResolvedDraft(draft repositoryIssueDraft) repositoryIssueResult {
+	result := repositoryIssueResult{
+		Operation:  "approve",
+		Repository: draft.Repository,
+		Draft:      repositoryIssueDraftViewFromDraft(draft),
+	}
+	switch strings.TrimSpace(draft.Status) {
+	case "created":
+		result.OK = true
+		result.Outcome = "already_applied"
+		result.Idempotent = true
+		result.Message = "这份草稿已经提交过了，本次没有重复写入。"
+		if draft.IssueNumber > 0 {
+			result.RequestedNumber = draft.IssueNumber
+			result.Message = fmt.Sprintf("这份草稿已经提交过了（#%d），本次没有重复写入。", draft.IssueNumber)
+			result.Issue = &repositoryIssueSummary{Number: draft.IssueNumber, URL: draft.IssueURL, Title: configToolString(draft.Input, "title")}
+		}
+		return result
+	case "cancelled":
+		return result.fail("draft_cancelled", "这份草稿已经被取消，没有提交。")
+	}
+	return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
+}
+
 // repositoryIssueDraftableOperation 报告这个写操作能否落成待审批草稿。
 // close/reopen 不带自由文本，内容出自用户原话这条对它们本来就不构成障碍。
 func repositoryIssueDraftableOperation(operation string) bool {
@@ -1377,6 +1407,12 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 		return result.fail("draft_store_failed", "读取 Issue 草稿失败。")
 	}
 	if !ok {
+		// 并发审批时草稿可能已经被前一条消息消费掉。这时必须照实说明它已经
+		// 执行过，而不是含糊地报「找不到」——后者会让用户以为写入失败，可
+		// GitHub 上其实已经建好了。
+		if resolved, found, findErr := t.plugin.findResolvedDraft(ctx, scope, configToolString(input, "draft_id")); findErr == nil && found {
+			return t.describeResolvedDraft(resolved)
+		}
 		return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
 	}
 	result.Repository = draft.Repository
