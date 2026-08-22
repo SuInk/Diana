@@ -668,9 +668,12 @@ func replySuppressionOwnerCommandKind(text string) string {
 	switch {
 	case command == "响应限制" || command == "响应限制 列表" || command == "查看响应限制":
 		return "list"
-	case strings.Contains(command, "响应限制") && (strings.Contains(command, "解除") || strings.Contains(command, "恢复") || strings.Contains(command, "取消")):
+	case command == "解除响应限制" || command == "恢复响应限制" || command == "取消响应限制":
 		return "release"
-	case strings.HasPrefix(command, "恢复响应 ") || strings.HasPrefix(command, "取消忽略 ") || strings.HasPrefix(command, "解除忽略 "):
+	// 以前这里还有一条「命令里同时出现『响应限制』和 解除/恢复/取消 任一词」的模糊
+	// 分支。那是拿同义词组合在整句话里找意图，一句正常聊天只要凑齐这两个词就会被当成
+	// 主人命令劫持掉。命令识别只保留下面这些固定前缀和上面的整句相等匹配。
+	case strings.HasPrefix(command, "解除响应限制 ") || strings.HasPrefix(command, "恢复响应 ") || strings.HasPrefix(command, "取消忽略 ") || strings.HasPrefix(command, "解除忽略 "):
 		return "release"
 	default:
 		return ""

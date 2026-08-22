@@ -2392,7 +2392,7 @@ func TestImageEditSourcesKeepRecentCrossMessageBatchOrder(t *testing.T) {
 		})
 	}
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "edit-request"}
-	if got := runtime.imageEditSourceImages(context.Background(), event, "把刚才三张拼起来"); strings.Join(got, ",") != strings.Join(imageURLs, ",") {
+	if got := runtime.imageEditSourceImages(context.Background(), event, nil); strings.Join(got, ",") != strings.Join(imageURLs, ",") {
 		t.Fatalf("image edit sources = %#v", got)
 	}
 }
@@ -3996,7 +3996,8 @@ func TestRuntimeImageEditCanUseMentionedMemberAvatar(t *testing.T) {
 		},
 		ToMe: true,
 	}
-	sources := runtime.imageEditSourceImages(context.Background(), event, "把 @20002 的头像改成赛博风")
+	// @ 是用户亲手打出的结构化指向，模型没有点名头像来源时也按它兜底。
+	sources := runtime.imageEditSourceImages(context.Background(), event, defaultAvatarIdentitySources(event, "42"))
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("20002") {
 		t.Fatalf("sources = %#v", sources)
 	}
@@ -4023,7 +4024,8 @@ func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
 		},
 	}
 
-	sources := runtime.imageEditSourceImages(context.Background(), event, "把我头像变成黑白")
+	// 「我的头像」由模型判断后点名 sender_avatar，运行时不再扫措辞。
+	sources := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceSender})
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("10001") {
 		t.Fatalf("sources = %#v, want sender avatar %q", sources, OneBotMemberAvatarURL("10001"))
 	}
@@ -4047,10 +4049,10 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		event  MessageEvent
-		prompt string
-		want   string
+		name     string
+		event    MessageEvent
+		identity []string
+		want     string
 	}{
 		{
 			name: "current message image",
@@ -4060,8 +4062,7 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 				MessageID: "current-image",
 				Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": currentImage}}},
 			},
-			prompt: "把这张图变成黑白",
-			want:   currentImage,
+			want: currentImage,
 		},
 		{
 			name: "quoted image",
@@ -4074,8 +4075,7 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 					Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": quotedImage}}},
 				},
 			},
-			prompt: "把引用的图片变成黑白",
-			want:   quotedImage,
+			want: quotedImage,
 		},
 		{
 			name: "explicit own avatar",
@@ -4087,8 +4087,8 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 				RawMessage: "把我头像变成黑白",
 				Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "把我头像变成黑白"}}},
 			},
-			prompt: "把我头像变成黑白",
-			want:   OneBotMemberAvatarURL("10001"),
+			identity: []string{avatarSourceSender},
+			want:     OneBotMemberAvatarURL("10001"),
 		},
 		{
 			name: "recent context image",
@@ -4098,14 +4098,13 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 				MessageID: "recent-image-edit",
 				Segments:  []MessageSegment{{Type: "text", Data: map[string]string{"text": "把刚才那张图变成黑白"}}},
 			},
-			prompt: "把刚才那张图变成黑白",
-			want:   recentImage,
+			want: recentImage,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sources := newRuntimeWithRecentImage().imageEditSourceImages(context.Background(), tt.event, tt.prompt)
+			sources := newRuntimeWithRecentImage().imageEditSourceImages(context.Background(), tt.event, tt.identity)
 			if len(sources) != 1 || sources[0] != tt.want {
 				t.Fatalf("sources = %#v, want %q", sources, tt.want)
 			}
@@ -4177,7 +4176,7 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 	if !strings.Contains(decision.Prompt, "@10001") {
 		t.Fatalf("restored decision prompt = %q", decision.Prompt)
 	}
-	sources := runtime.imageEditSourceImages(context.Background(), event, decision.Prompt)
+	sources := runtime.imageEditSourceImages(context.Background(), event, defaultAvatarIdentitySources(event, "10000"))
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("10001") {
 		t.Fatalf("sources = %#v", sources)
 	}
@@ -4345,7 +4344,10 @@ func TestRuntimeVisualIntentIncludesRecentTextEditRequirements(t *testing.T) {
 	}
 }
 
-func TestRuntimeImageEditCanUseNamedMemberAvatar(t *testing.T) {
+// 以前运行时拿群成员的名片和昵称去正文里做子串匹配，靠命中判断「用户说的是这个
+// 人」。现在由模型点名 user_id，运行时只负责把 id 换成头像地址，并核对这个人确实
+// 在当前会话里；编出来的 QQ 号拿不到任何图。
+func TestRuntimeImageEditNamedMemberAvatarComesFromModelSelection(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_list": {
 			"items": []any{
@@ -4365,9 +4367,16 @@ func TestRuntimeImageEditCanUseNamedMemberAvatar(t *testing.T) {
 		},
 		ToMe: true,
 	}
-	sources := runtime.imageEditSourceImages(context.Background(), event, "把阿梨头像改成赛博风")
+
+	// 模型从群成员工具里查到「阿梨」是 20002 之后点名它。
+	sources := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "20002"})
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("20002") {
 		t.Fatalf("sources = %#v", sources)
+	}
+
+	// 不在当前会话里的 id 不能凭空变出一张头像。
+	if extra := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "99999"}); len(extra) != 0 {
+		t.Fatalf("unknown identity source produced %#v", extra)
 	}
 }
 
