@@ -97,8 +97,18 @@ func (style ReplyStyle) Normalized() ReplyStyle {
 // (╹◡╹) 这类字符拼的表情，模型不会认为它管得着 😂。
 const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类彩色表情符号），一个都不要，包括用来表达情绪反应或缓和语气的场合。需要表达情绪就用文字说。"
 
+// replyBlankLineRule 同样对所有风格生效。模型按训练里的 Markdown 习惯用空行做
+// 段落间距，而运行时把空行当分条信号——同一个符号两边理解不一样，于是空行落在
+// 哪儿全看模型的排版习惯，投递出来的分条位置就显得莫名其妙。这里从源头上让它
+// 别输出空行；真要分条有 <botbr>，语义明确。
+const replyBlankLineRule = "回复里不要出现空行：段落之间用单个换行，不要空一行再写下一段，也不要在小结、清单或链接前面空行。聊天窗口不是文档，空行会显示成一整行空白。"
+
 func (style ReplyStyle) prompt() string {
-	return strings.TrimSpace(style.stylePrompt() + "\n" + replyEmojiRule)
+	return strings.TrimSpace(strings.Join([]string{
+		style.stylePrompt(),
+		replyEmojiRule,
+		replyBlankLineRule,
+	}, "\n"))
 }
 
 func (style ReplyStyle) stylePrompt() string {

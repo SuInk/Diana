@@ -1657,7 +1657,18 @@ func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("structured list should stay in one message, got %#v", got)
 	}
-	if got[0] != reply {
+	// 整块发送时空行会被折掉：它不再是消息边界，留着只会在气泡里显示成一整行
+	// 空白。除此之外的行序和内容必须原样保留。
+	want := strings.Join([]string{
+		"硬按褒义到贬义排，我会给：",
+		"变装皇后：+1",
+		"中性偏正面，指以夸张造型进行舞台表演的人。",
+		"男娘：0～+1",
+		"二次元语境里常带亲昵、审美意味。",
+		"伪娘：-1",
+		"「伪」有假装成女性的意味。",
+	}, "\n")
+	if got[0] != want {
 		t.Fatalf("chunk changed the list layout:\n%q", got[0])
 	}
 }

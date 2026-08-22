@@ -10096,7 +10096,7 @@ func splitReply(reply string, chunkSize int) []string {
 	for _, botPart := range strings.Split(reply, notificationSplitMarker) {
 		// <botbr> 是模型显式要求的分条，任何情况下都保留。
 		if structured {
-			out = append(out, chunkTextByLength(botPart, chunkSize)...)
+			out = append(out, chunkTextByLength(collapseBlankLines(botPart), chunkSize)...)
 			continue
 		}
 		for _, part := range splitReplyParagraphs(botPart) {
@@ -10104,6 +10104,22 @@ func splitReply(reply string, chunkSize int) []string {
 		}
 	}
 	return out
+}
+
+// collapseBlankLines 去掉整块发送时残留的空行。普通回复按空行分条，空行本身
+// 就是消息边界、永远不会显示出来；清单型回复跳过了分条，空行便原样留在气泡里
+// 渲染成一整行空白——写文档时正常，聊天窗口里很突兀。
+func collapseBlankLines(text string) string {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(text, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		kept = append(kept, strings.TrimRight(line, " \t"))
+	}
+	return strings.Join(kept, "\n")
 }
 
 // structuredReplyChunkSize 是清单型回复的长度下限：群友风格把聊天压到 160 字，
