@@ -202,12 +202,12 @@ func relaxWebSearchParentheticalConstraints(query string) string {
 func sanitizeExternalSearchQuery(query string) string {
 	query = webSearchSecretPattern.ReplaceAllString(query, "[secret omitted]")
 	query = webSearchPrivateHost.ReplaceAllString(query, "[internal host omitted]")
-	lower := strings.ToLower(query)
-	publicContext := strings.Contains(lower, "public") || strings.Contains(lower, "official") || strings.Contains(query, "公开") || strings.Contains(query, "官网") || strings.Contains(query, "公告")
-	if !publicContext {
-		query = webSearchEmailPattern.ReplaceAllString(query, "[email omitted]")
-		query = webSearchPhonePattern.ReplaceAllString(query, "[phone omitted]")
-	}
+	// 邮箱和电话一律脱敏。以前这里先扫 public/official/公开/官网/公告 判断查询是不是
+	// 「公开语境」，命中就放行——那是拿关键词猜用户在问什么，而判错的代价是把私人邮箱
+	// 或手机号原样发给外部搜索引擎。查公开联系方式本来也不需要把号码当搜索词，
+	// 少这一条不影响检索，判错却不可撤回。
+	query = webSearchEmailPattern.ReplaceAllString(query, "[email omitted]")
+	query = webSearchPhonePattern.ReplaceAllString(query, "[phone omitted]")
 	return normalizeWebSearchQuery(query)
 }
 

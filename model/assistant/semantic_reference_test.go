@@ -231,7 +231,7 @@ func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
 	if item := chatHistoryItem(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": imageURLs[0]}}}, RawMessage: "[图片]"}); item.Text != "" || item.ImageCount != 1 {
 		t.Fatalf("chat history image metadata = %#v", item)
 	}
-	if sources := runtime.imageEditSourceImages(context.Background(), event, "把这三张拼在一起"); strings.Join(sources, ",") != strings.Join(imageURLs, ",") {
+	if sources := runtime.imageEditSourceImages(context.Background(), event, nil); strings.Join(sources, ",") != strings.Join(imageURLs, ",") {
 		t.Fatalf("image edit sources = %#v", sources)
 	}
 	if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].Messages[0].Content, "message_ids") {

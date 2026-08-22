@@ -568,13 +568,13 @@ func TestReplySuppressionOwnerCanReleaseInDisabledGroup(t *testing.T) {
 		Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "release",
 		Segments: []MessageSegment{
 			{Type: "at", Data: map[string]string{"qq": "20002"}},
-			{Type: "text", Data: map[string]string{"text": " 响应限制 解除"}},
+			{Type: "text", Data: map[string]string{"text": " 解除响应限制"}},
 		},
 	}
-	if !runtime.shouldHandleChat(ownerEvent, "响应限制 解除") {
+	if !runtime.shouldHandleChat(ownerEvent, "解除响应限制") {
 		t.Fatal("owner release command should work even when the group is disabled")
 	}
-	reply, handled := runtime.handleOwnerCommand(ownerEvent, "响应限制 解除")
+	reply, handled := runtime.handleOwnerCommand(ownerEvent, "解除响应限制")
 	if !handled || !strings.Contains(reply, "已解除账号 20002") {
 		t.Fatalf("owner release handled=%v reply=%q", handled, reply)
 	}

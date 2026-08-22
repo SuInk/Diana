@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,9 +45,10 @@ type dianaImageToolResult struct {
 }
 
 type dianaImageToolRequest struct {
-	Operation string
-	Prompt    string
-	Caption   string
+	Operation       string
+	Prompt          string
+	Caption         string
+	IdentitySources []string
 }
 
 type dianaImageTaskOutput struct {
@@ -86,11 +88,22 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	if t.relationship.AllowImageEditing {
 		operations = append(operations, "edit")
 	}
-	return toolObjectSchema([]string{"prompt"}, map[string]any{
+	properties := map[string]any{
 		"operation": toolEnumParam("generate 生成新图片；edit 编辑当前、引用或近期出现过的图片与成员头像。省略时按 generate 处理。", operations...),
 		"prompt":    toolStringParam("交给图片模型的完整、自包含的最终提示词。不要写成对话口吻，也不要依赖上下文里的指代。"),
 		"caption":   toolStringParam("图片完成后随图发送的一句短文字，可选。"),
-	})
+	}
+	// 要编辑谁的头像由你来判断：运行时不去读用户的措辞，只负责把你点名的 id 换成
+	// 头像地址，并核对这个人在当前会话里确实存在。
+	if t.relationship.AllowImageEditing {
+		properties["identity_sources"] = toolStringArrayParam(
+			`operation="edit" 且要编辑的是某人或本群的头像时，在这里点名头像来源；当前消息或引用消息本身带图时不要填。` +
+				`可选值："` + avatarSourceSender + `"（本条消息的发送者）、"` + avatarSourceBot + `"（机器人自己）、"` +
+				avatarSourceGroup + `"（本群的群头像）、"` + avatarSourceMemberPrefix + `<user_id>"（指定成员，user_id 用真实 QQ 号）。` +
+				`用户按名字或昵称指人时，先从上下文或群成员工具里查出对应 user_id 再填，不要编造；最多 ` +
+				strconv.Itoa(maxAvatarImageSources) + ` 个。`)
+	}
+	return toolObjectSchema([]string{"prompt"}, properties)
 }
 
 func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -160,7 +173,11 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 			caption = "图片生成完成。"
 		}
 	}
-	return dianaImageToolRequest{Operation: operation, Prompt: prompt, Caption: caption}, nil
+	identitySources := configToolStringSlice(input, "identity_sources")
+	if operation == "edit" && len(identitySources) == 0 {
+		identitySources = defaultAvatarIdentitySources(t.event, t.runtime.effectiveConfigForEvent(t.event).BotAccount)
+	}
+	return dianaImageToolRequest{Operation: operation, Prompt: prompt, Caption: caption, IdentitySources: identitySources}, nil
 }
 
 func (t *dianaImageTool) enqueue(request dianaImageToolRequest) (dianaImageToolResult, error) {
@@ -242,7 +259,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		action = "chatbot.image.generate"
 		message = "Agent 图片生成已完成"
 	case "edit":
-		sources := t.runtime.imageEditSourceImages(ctx, t.event, prompt)
+		sources := t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
 		if len(sources) == 0 {
 			return dianaImageTaskOutput{}, fmt.Errorf("没有找到可编辑的图片；请让用户发送图片或引用图片消息")
 		}

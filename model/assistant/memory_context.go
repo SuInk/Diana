@@ -419,6 +419,15 @@ type structuredMemoryQueryAnalysis struct {
 	terms      map[string]float64
 }
 
+// structuredMemoryStopTerms 是记忆检索的中文停用词表。
+//
+// 它长得像本项目禁止的那类词表，但用途不同：这里不判断「用户想干什么」，只是在
+// TF-IDF 打分前把几乎出现在每条查询里、因而没有区分度的词去掉——和英文检索里去掉
+// the/of 是同一件事。判断意图的那些词表已经从 analyzeStructuredMemoryQuery 里删干净，
+// 这张表只影响排序权重，不会改变检不检索、检索什么范围。
+//
+// 维护约束：只能往里加没有区分度的高频词，不能加任何用来识别语义类别的词（时间、
+// 否定、疑问方向等），那会让排序重新变成变相的意图判定。
 var structuredMemoryStopTerms = map[string]struct{}{
 	"这个": {}, "那个": {}, "什么": {}, "怎么": {}, "一下": {}, "来着": {},
 	"关于": {}, "有没有": {}, "是否": {}, "如何": {}, "帮我": {}, "可以": {},

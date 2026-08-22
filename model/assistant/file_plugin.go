@@ -212,14 +212,13 @@ func collectFileRefs(req PluginRequest) []fileRef {
 	if req.Event.Quoted != nil {
 		addSegments(firstNonEmpty(req.Event.Quoted.GroupID, req.Event.GroupID), req.Event.Quoted.Segments)
 	}
-	if shouldCollectRecentFileRefs(req.Text) {
-		for _, event := range req.RecentEvents {
-			addSegments(event.GroupID, event.Segments)
-			if event.Quoted != nil {
-				addSegments(firstNonEmpty(event.Quoted.GroupID, event.GroupID), event.Quoted.Segments)
-			}
-		}
-	}
+	// 以前这里用一张 20 个词的表（文件/文档/附件/讲义…外加 pdf、docx、csv 等扩展名）
+	// 去正文里匹配，命中就把最近所有消息里的附件全都拉进来解析。那张表匹配的是聊天
+	// 散文而不是文件名，实际是在用关键词猜「用户是不是在指之前发过的文件」——说法一换
+	// 就漏，词命中了又会平白下载并解析一堆无关文件。
+	//
+	// 「刚才那个文件」这类指代现在由前置指代解析（LLM）处理：它会把选中的历史消息填进
+	// event.Quoted，上面那次 addSegments 就已经把文件带进来了，这里不再需要词表兜底。
 
 	for _, raw := range extractURLs(req.Text) {
 		// 文本里的直链也当作候选文件，方便用户直接丢 txt/md/json 链接给机器人解析。
@@ -227,23 +226,6 @@ func collectFileRefs(req PluginRequest) []fileRef {
 	}
 
 	return refs
-}
-
-func shouldCollectRecentFileRefs(text string) bool {
-	text = strings.ToLower(strings.TrimSpace(text))
-	if text == "" {
-		return false
-	}
-	for _, marker := range []string{
-		"文件", "文档", "附件", "资料", "讲义", "表格", "电子书", "压缩包",
-		"pdf", "docx", "xlsx", "pptx", "txt", "markdown", "csv", "json", "epub",
-		"file", "document", "attachment",
-	} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 type parsedFileRef struct {

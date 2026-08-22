@@ -397,22 +397,30 @@ func TestFileParserPluginParsesTextFileURL(t *testing.T) {
 	}
 }
 
-// TestFileParserPluginCollectsRecentPDFFile 验证当前问题能引用最近文件消息里的 PDF。
-func TestFileParserPluginCollectsRecentPDFFile(t *testing.T) {
+// 「刚才那个文件」这类指代由前置指代解析（LLM）处理：它把选中的历史消息填进
+// event.Quoted，文件从那里带进来。运行时不再用词表去正文里猜用户是不是在指之前
+// 发过的文件。
+func TestFileParserPluginCollectsSemanticallyResolvedFile(t *testing.T) {
+	file := MessageSegment{
+		Type: "file",
+		Data: map[string]string{
+			"name":    "项目说明文档.pdf",
+			"file_id": "file-1",
+			"busid":   "101",
+		},
+	}
 	refs := collectFileRefs(PluginRequest{
 		Text: "这两个文件有什么区别",
-		RecentEvents: []MessageEvent{{
+		Event: MessageEvent{
 			Kind:    EventKindGroup,
 			GroupID: "123456",
-			Segments: []MessageSegment{{
-				Type: "file",
-				Data: map[string]string{
-					"name":    "项目说明文档.pdf",
-					"file_id": "file-1",
-					"busid":   "101",
-				},
-			}},
-		}},
+			Quoted: &QuotedMessage{
+				MessageID: "earlier-file",
+				GroupID:   "123456",
+				Semantic:  true,
+				Segments:  []MessageSegment{file},
+			},
+		},
 	})
 	if len(refs) != 1 {
 		t.Fatalf("refs = %#v", refs)
@@ -423,7 +431,8 @@ func TestFileParserPluginCollectsRecentPDFFile(t *testing.T) {
 }
 
 func TestFileParserPluginDoesNotCollectUnreferencedRecentFile(t *testing.T) {
-	for _, text := range []string{"宝", "什么意思", "重试下"} {
+	// 正文写什么都一样：没有被指代解析选中，就不会被收集。
+	for _, text := range []string{"宝", "什么意思", "重试下", "这两个文件有什么区别", "看看那个 pdf"} {
 		t.Run(text, func(t *testing.T) {
 			refs := collectFileRefs(PluginRequest{
 				Text: text,
