@@ -332,7 +332,7 @@ WebUI 里能配的都不必写环境变量。下面是常用项，完整说明�
 | `DIANA_SYSTEM_PROMPT` | 内置提示词 | 机器人系统提示词 |
 | `DIANA_MAX_INPUT_CHARS` | `2000` | 单次输入最大字符数 |
 | `DIANA_MAX_REPLY_CHARS` | `3500` | 单次回复最大字符数 |
-| `DIANA_FOLLOW_UP_MAX_CHARS` | `60` | 跟评长度上限；跟评是插件发完内容后顺口接的一句，不会超过 `DIANA_MAX_REPLY_CHARS` |
+| `DIANA_FOLLOW_UP_MAX_CHARS` | 跟随 `DIANA_MAX_REPLY_CHARS` | 跟评长度上限；跟评是插件发完内容后顺口接的一句，填了也不会超过 `DIANA_MAX_REPLY_CHARS` |
 | `DIANA_FOLLOW_UP_QUIET_DEFAULT` | `true` | 跟评默认不接话；设为 `false` 后只要和会话对得上就会接话 |
 | `DIANA_DIRECT_REPLY_CHUNK_SIZE` | `500` | 文本分段发送字符数 |
 | `DIANA_MAX_BOT_CONCURRENCY` | `5` | 全局并发数 |
