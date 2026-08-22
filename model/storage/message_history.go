@@ -61,7 +61,12 @@ ON CONFLICT(id) DO UPDATE SET
   payload=excluded.payload,
   created_at=excluded.created_at
 `, id, session, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.SenderName, eventTime, text, string(payload), time.Now().UTC().Format(time.RFC3339Nano))
-	return err
+	if err != nil {
+		return err
+	}
+	// 检索 token 要在 Go 侧切分，触发器做不到，所以写入后同步一次索引。
+	s.indexMessageHistoryRow(id, event.SenderName, event.UserID, text)
+	return nil
 }
 
 // ListRecentMessageEvents returns recent message events in chronological order.
@@ -193,6 +198,11 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 		args = append(args, query.Session)
 	}
 	terms := historySearchTerms(query)
+	if s.historyFTS {
+		if events, total, ok, err := s.searchMessageEventsFTS(ctx, where, args, terms, limit); ok {
+			return events, total, err
+		}
+	}
 	matchParts := make([]string, 0, len(terms))
 	for _, term := range terms {
 		matchParts = append(matchParts, searchable+` LIKE ? ESCAPE '\'`)
@@ -374,4 +384,74 @@ func normalizeMessageHistoryLimit(limit int) int {
 		return maxMessageHistoryLimit
 	}
 	return limit
+}
+
+// searchMessageEventsFTS 走 FTS5 倒排索引，按 BM25 相关度排序。
+//
+// trigram 分词器查不了短于 3 个字符的词，而中文 2 字词（凤爪、好吃）很常见，
+// 全丢掉召回会明显变差。所以短词仍旧用 LIKE，与索引结果取并集：命中索引的
+// 按 BM25 排前面，只靠短词命中的按时间排在后面。
+//
+// 第三个返回值为 false 表示这次用不了索引，调用方回退到原来的 LIKE 检索。
+func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, args []any, terms []string, limit int) ([]assistant.MessageEvent, int, bool, error) {
+	match := messageHistoryFTSQuery(terms)
+	if match == "" {
+		return nil, 0, false, nil
+	}
+	scopedWhere := prefixMessageHistoryColumns(where)
+
+	// MATCH 放进 CTE 只求值一次。写成逐行的相关子查询会让每个候选都重跑一遍
+	// 全文检索，实测比原来的 LIKE 还慢一个数量级。
+	hits := `WITH hits AS (SELECT rowid AS rid, bm25(` + messageHistoryFTSTable + `) AS score
+FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?)`
+
+	hitArgs := []any{match}
+	hit := `h.rid IS NOT NULL`
+	from := `FROM message_events AS e JOIN hits AS h ON h.rid = e.rowid`
+
+	countArgs := append(append([]any(nil), hitArgs...), args...)
+	var total int
+	if err := s.db.QueryRowContext(ctx,
+		hits+` SELECT COUNT(*) `+from+` WHERE `+hit+` AND `+scopedWhere, countArgs...).Scan(&total); err != nil {
+		// 索引出问题时不要让检索整个失败，交回 LIKE 那一路。
+		return nil, 0, false, nil
+	}
+
+	rowArgs := append(append([]any(nil), hitArgs...), args...)
+	rowArgs = append(rowArgs, limit)
+	rows, err := s.db.QueryContext(ctx, hits+`
+SELECT e.payload `+from+`
+WHERE `+hit+` AND `+scopedWhere+`
+ORDER BY h.score ASC, e.event_time DESC, e.created_at DESC, e.id DESC
+LIMIT ?`, rowArgs...)
+	if err != nil {
+		return nil, 0, false, nil
+	}
+	defer func() { _ = rows.Close() }()
+	events := make([]assistant.MessageEvent, 0, min(limit, total))
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, 0, true, err
+		}
+		var event assistant.MessageEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			continue
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, true, err
+	}
+	return events, total, true, nil
+}
+
+// prefixMessageHistoryColumns 给 where 子句里的列名加上 e. 前缀。
+// 拼 where 的地方就在本文件里，列名固定是这几个，不接受外部输入。
+func prefixMessageHistoryColumns(where string) string {
+	for _, column := range []string{"kind", "event_time", "session", "sender_name", "user_id", "message_id", "group_id", "text", "payload"} {
+		where = strings.ReplaceAll(where, "COALESCE("+column+",", "COALESCE(e."+column+",")
+		where = strings.ReplaceAll(where, column+" ", "e."+column+" ")
+	}
+	return strings.ReplaceAll(where, "|| payload)", "|| e.payload)")
 }

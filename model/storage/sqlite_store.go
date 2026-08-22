@@ -42,8 +42,11 @@ const (
 )
 
 type SQLiteStore struct {
-	db           *sql.DB
-	path         string
+	db   *sql.DB
+	path string
+	// historyFTS 表示历史检索能否走 FTS5 倒排索引。个别构建里 FTS5 不可用，
+	// 那时回退到 LIKE 检索：慢，但功能不中断。
+	historyFTS   bool
 	userMemoryMu sync.Mutex
 }
 
@@ -469,7 +472,11 @@ CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, t
 	if err != nil {
 		return err
 	}
-	return s.migrateRestoredFeatures()
+	if err := s.migrateRestoredFeatures(); err != nil {
+		return err
+	}
+	s.historyFTS = ensureMessageHistoryFTS(s.db)
+	return nil
 }
 
 // saveJSON 将指定 key 的结构体编码为 JSON 保存。
