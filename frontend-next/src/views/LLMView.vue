@@ -274,8 +274,8 @@
         </div>
         <div class="field">
           <label for="llm-window">模型上下文窗口</label>
-          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="16384" />
-          <span class="hint">模型自身的硬上限，同步模型列表时会自动填。留空按 16384 兜底。</span>
+          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="128000" />
+          <span class="hint">模型自身的硬上限，同步模型列表时会自动填。留空按模型名推断，推断不出按 128000 兜底。</span>
         </div>
         <div class="field">
           <label for="llm-maxcontext">单次请求上下文上限</label>

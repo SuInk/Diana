@@ -25,7 +25,10 @@ const (
 	memoryExtractionTimeout = 60 * time.Second
 	memoryMaxAttempts       = 8
 	memorySummaryMaxEvents  = 100
-	memorySummaryRollupSize = 12
+	// memoryThreadRetentionDays 让冷会话的线程便签自然过期：一周没人说话，
+	// 「当前进行到哪」这件事本身就不成立了，不该继续常驻注入。
+	memoryThreadRetentionDays = 7
+	memorySummaryRollupSize   = 12
 )
 
 var memoryProfileGroups = []string{"memory", "memories", "recall"}
@@ -190,6 +193,7 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 		SearchTerms:   structuredMemorySearchTerms(text, 32),
 		Now:           time.Now(),
 		MaxCandidates: 24,
+		ExcludeKinds:  []MemoryKind{MemoryKindThread},
 	})
 	if err != nil {
 		return fmt.Errorf("load relevant memories: %w", err)
@@ -200,6 +204,7 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 		GroupID:       event.GroupID,
 		Now:           time.Now(),
 		MaxCandidates: 40,
+		ExcludeKinds:  []MemoryKind{MemoryKindThread},
 	})
 	if err != nil {
 		return fmt.Errorf("load existing memories: %w", err)
@@ -287,6 +292,23 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	if err != nil {
 		return fmt.Errorf("load conversation summaries: %w", err)
 	}
+	// thread 和 summary 由同一次调用产出：这批事件本来就在手上，多要一条「当前
+	// 进行状态」不额外花一次 LLM 调用。
+	threadKey := ThreadMemoryKey(job.Payload.Session)
+	currentThread := ""
+	if items, threadErr := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
+		Session:       job.Payload.Session,
+		Now:           time.Now(),
+		MaxCandidates: 4,
+		Kinds:         []MemoryKind{MemoryKindThread},
+	}); threadErr == nil {
+		for _, item := range items {
+			if item.Key == threadKey {
+				currentThread = strings.TrimSpace(item.Content)
+				break
+			}
+		}
+	}
 	lines := make([]string, 0, len(events))
 	for _, event := range events {
 		if line := compactContextEventWithTime(event); line != "" {
@@ -298,15 +320,19 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	}
 	rollup := selectMemorySummaryRollup(existing)
 	input := struct {
-		Session  string               `json:"session"`
-		Events   []string             `json:"events"`
-		Existing []memoryGateMemory   `json:"existing_summaries,omitempty"`
-		Rollup   *memorySummaryRollup `json:"rollup,omitempty"`
+		Session       string               `json:"session"`
+		Events        []string             `json:"events"`
+		Existing      []memoryGateMemory   `json:"existing_summaries,omitempty"`
+		Rollup        *memorySummaryRollup `json:"rollup,omitempty"`
+		ThreadKey     string               `json:"thread_key"`
+		CurrentThread string               `json:"current_thread,omitempty"`
 	}{
-		Session:  job.Payload.Session,
-		Events:   lines,
-		Existing: memoryGateExistingMemories(existing, ""),
-		Rollup:   rollup,
+		Session:       job.Payload.Session,
+		Events:        lines,
+		Existing:      memoryGateExistingMemories(existing, ""),
+		Rollup:        rollup,
+		ThreadKey:     threadKey,
+		CurrentThread: currentThread,
 	}
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
@@ -323,8 +349,10 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 3. existing_summaries 是同会话已有摘要。相同日期和主题必须复用原 key，并生成包含旧摘要与新事件的完整更新版；不同主题建立新 key。
 4. 若提供 rollup，必须额外输出且只输出一条 key 精确等于 rollup.target_key 的层级摘要，把 source_summaries 合并为自包含的时间线；保留人物、关键事实、决定、变化和未解决事项，不得遗漏相互矛盾的信息。不要为 source_summaries 输出逐条副本。
 5. 普通摘要 key 使用 summary.<YYYY-MM-DD>.<topic>；层级摘要必须使用给定 target_key。topic 简短明确，content 自包含。importance/confidence 为 0 到 1，visibility 固定 session，source_type 固定 summary，sensitive 按内容判断。普通摘要 retention_days=365，month 层级=730，year 层级=3650。
-6. 最多输出 6 条；完全没有长期价值且没有 rollup 时输出空数组。
-7. 只输出合法 JSON：{"memories":[{"action":"upsert","key":"summary.2026-07-15.memory-design","kind":"summary","topic":"记忆系统设计","entity":"Diana","content":"...","evidence":"事件范围摘要","source_type":"summary","confidence":0.96,"importance":0.8,"visibility":"session","sensitive":false,"retention_days":365}]}`),
+6. 除普通摘要外，必须再输出且只输出一条 key 精确等于 thread_key 的会话线程便签，kind="thread"：写清这个会话「当前进行到哪」——正在聊的事、已经推进到的步骤、已经做出的决定、以及还悬而未决的问题。它是给下一轮对话直接看的状态便签，不是历史流水。
+7. 写 thread 时以 current_thread 为基础做增量更新：已经完结、被取代或不再推进的话题从 thread 里移走（它们归 summary 管），只保留仍然活着的线索。没有任何进行中的事情时，content 写一句话说明会话处于空闲状态。thread 控制在 300 字以内，retention_days 固定 7。
+8. 最多输出 6 条摘要（thread 不计入）；完全没有长期价值且没有 rollup 时摘要可以为空，但 thread 仍要输出。
+9. 只输出合法 JSON：{"memories":[{"action":"upsert","key":"summary.2026-07-15.memory-design","kind":"summary","topic":"记忆系统设计","entity":"Diana","content":"...","evidence":"事件范围摘要","source_type":"summary","confidence":0.96,"importance":0.8,"visibility":"session","sensitive":false,"retention_days":365}]}`),
 		},
 		{Role: llm.RoleUser, Content: "请整合这批较早会话。上下文 JSON：\n" + string(inputJSON)},
 	}
@@ -344,9 +372,17 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	}
 	for index := range candidates {
 		candidates[index].Action = MemoryActionUpsert
-		candidates[index].Kind = MemoryKindSummary
 		candidates[index].SourceType = MemorySourceSummary
 		candidates[index].Visibility = MemoryVisibilitySession
+		if candidates[index].Key == threadKey || candidates[index].Kind == MemoryKindThread {
+			// 线程便签只认固定 key：模型另起 key 会让同一个会话出现多条状态，
+			// 常驻注入就成了互相矛盾的几份。
+			candidates[index].Key = threadKey
+			candidates[index].Kind = MemoryKindThread
+			candidates[index].RetentionDays = memoryThreadRetentionDays
+			continue
+		}
+		candidates[index].Kind = MemoryKindSummary
 		if candidates[index].RetentionDays == 0 {
 			switch {
 			case strings.HasPrefix(candidates[index].Key, "summary.rollup.year."):

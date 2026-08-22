@@ -27,17 +27,20 @@ import (
 )
 
 const (
-	dianaRepositoryIssuesToolName  = "diana.repository_issues"
-	repositoryIssueBodyLimit       = 60_000
-	repositoryIssueTitleLimit      = 256
-	repositoryIssueCommentLimit    = 60_000
-	repositoryIssueListLimit       = 100
-	repositoryIssueRecentWindow    = 90 * 24 * time.Hour
-	repositoryIssueCommentMaxPages = 100
-	repositoryIssueListMaxPages    = 10
-	repositoryIssueConfirmationTTL = 15 * time.Minute
-	repositoryIssueResponseLimit   = 16 << 20
-	repositoryIssueCredentialKey   = `(?:[a-z0-9]+[_-])*(?:authorization|api[_-]?key|access[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|token|secret|password|passwd)(?:[_-][a-z0-9]+)*`
+	dianaRepositoryIssuesToolName = "diana.repository_issues"
+	repositoryIssueBodyLimit      = 60_000
+	repositoryIssueTitleLimit     = 256
+	// repositoryIssueConfirmationCodeLength 是确认码取草稿 ID 前缀的长度。
+	// 6 位十六进制既短到能手打，又不可能在正常聊天里被无意打出来。
+	repositoryIssueConfirmationCodeLength = 6
+	repositoryIssueCommentLimit           = 60_000
+	repositoryIssueListLimit              = 100
+	repositoryIssueRecentWindow           = 90 * 24 * time.Hour
+	repositoryIssueCommentMaxPages        = 100
+	repositoryIssueListMaxPages           = 10
+	repositoryIssueConfirmationTTL        = 15 * time.Minute
+	repositoryIssueResponseLimit          = 16 << 20
+	repositoryIssueCredentialKey          = `(?:[a-z0-9]+[_-])*(?:authorization|api[_-]?key|access[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|token|secret|password|passwd)(?:[_-][a-z0-9]+)*`
 )
 
 var (
@@ -97,11 +100,14 @@ type repositoryIssueResult struct {
 }
 
 type RepositoryIssueDraft struct {
-	ID            string         `json:"id"`
-	Platform      string         `json:"platform,omitempty"`
-	ProfileID     string         `json:"profile_id,omitempty"`
-	GroupID       string         `json:"group_id"`
-	Repository    string         `json:"repository"`
+	ID         string `json:"id"`
+	Platform   string `json:"platform,omitempty"`
+	ProfileID  string `json:"profile_id,omitempty"`
+	GroupID    string `json:"group_id"`
+	Repository string `json:"repository"`
+	// Operation 记录这份草稿最终要执行的写操作。以前草稿只用于 create，其余写操作
+	// 靠比对用户措辞放行；措辞判断已经移除，所有写操作统一走草稿加确认码。
+	Operation     string         `json:"operation,omitempty"`
 	RequesterID   string         `json:"requester_id"`
 	RequesterName string         `json:"requester_name,omitempty"`
 	Input         map[string]any `json:"input"`
@@ -121,6 +127,11 @@ type RepositoryIssueDraftStore interface {
 	ListRepositoryIssueDrafts(context.Context, string, string) ([]RepositoryIssueDraft, error)
 }
 
+// repositoryIssueDraftView 是交给模型转述给用户看的草稿内容。
+//
+// 确认码要成立，用户必须看得到「确认之后到底会写什么」，所以这里列出全部会进入
+// 请求体的字段——以前 assignees、milestone 和目标 Issue 编号靠比对用户措辞来防止
+// 模型夹带，那层措辞判断已经移除，改由这份清单让用户自己核对。
 type repositoryIssueDraftView struct {
 	ID string `json:"id"`
 	// Operation 区分这份草稿要执行的写操作。历史草稿没有这个字段，读取时按
@@ -132,6 +143,9 @@ type repositoryIssueDraftView struct {
 	Title         string    `json:"title"`
 	Body          string    `json:"body,omitempty"`
 	Labels        []string  `json:"labels,omitempty"`
+	Assignees     []string  `json:"assignees,omitempty"`
+	Milestone     any       `json:"milestone,omitempty"`
+	State         string    `json:"state,omitempty"`
 	RequesterID   string    `json:"requester_id"`
 	RequesterName string    `json:"requester_name,omitempty"`
 	Status        string    `json:"status"`
@@ -269,7 +283,7 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 		return t.finish(ctx, result.fail(code, message))
 	}
 	if operation == "create" && !userAllowed && groupAllowed {
-		return t.finish(ctx, t.createDraft(ctx, repository, input))
+		return t.finish(ctx, t.createWriteDraft(ctx, repository, operation, input))
 	}
 	if !userAllowed {
 		return t.finish(ctx, result.fail("permission_denied", "当前用户没有该仓库的审批或写入权限。"))
@@ -285,34 +299,13 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 		}
 		return t.finish(ctx, t.search(ctx, repository, input))
 	}
-	if !boolInput(input, "user_confirmed_write") {
-		return t.finish(ctx, result.fail("explicit_request_required", "模型未确认当前消息要求立即执行这项 Issue 写操作。"))
-	}
-	requestText := repositoryIssueCurrentRequestText(t.event)
-	if code, message := validateRepositoryIssueWriteRequest(requestText, operation, repository, input); code != "" {
-		// explicit_fields_required 说的是「要写的内容不在用户原话里」——模型自己
-		// 组织措辞时必然如此。目标仓库和编号本身没有歧义（那是 explicit_target_
-		// required 管的），所以这里不该直接拒绝，而是落成草稿等用户确认。
-		if code == "explicit_fields_required" && repositoryIssueDraftableOperation(operation) {
-			return t.finish(ctx, t.saveOperationDraft(ctx, operation, repository, input))
-		}
-		return t.finish(ctx, result.fail(code, message))
-	}
 	if code, message := t.validateWriteAccess(repository, owner); code != "" {
 		return t.finish(ctx, result.fail(code, message))
 	}
-
-	switch operation {
-	case "create":
-		result = t.create(ctx, repository, input)
-	case "update":
-		result = t.update(ctx, repository, input)
-	case "comment":
-		result = t.comment(ctx, repository, input)
-	case "close", "reopen":
-		result = t.setState(ctx, repository, input, operation)
-	}
-	return t.finish(ctx, result)
+	// 写操作一律先落草稿。真正执行只发生在 approve：那里要求用户本人原样打出确认码，
+	// 而不是让代码去比对「用户是不是真的这么要求了」——那件事以前靠字段名、否定词和
+	// 清空词三组词表来判，属于用关键词判断语义意图。
+	return t.finish(ctx, t.createWriteDraft(ctx, repository, operation, input))
 }
 
 func normalizeRepositoryIssueOperation(operation, state string) string {
@@ -444,80 +437,6 @@ func repositoryIssueStripUntrustedContext(text string) string {
 	return strings.TrimSpace(text)
 }
 
-func validateRepositoryIssueWriteRequest(text, operation, repository string, input map[string]any) (string, string) {
-	repositories := repositoryIssueMentionedRepositories(text)
-	if len(repositories) != 1 || !repositories[strings.ToLower(repository)] {
-		return "explicit_target_required", "当前用户消息必须明确且无歧义地写出唯一目标 owner/repo，不能包含其他候选仓库。"
-	}
-	if operation != "create" {
-		number := repositoryIssueNumber(input)
-		numbers := repositoryIssueMentionedNumbers(text)
-		if number <= 0 || len(numbers) != 1 || !numbers[number] {
-			return "explicit_target_required", "当前用户消息必须明确且无歧义地写出唯一 Issue 编号。"
-		}
-	}
-	if operation == "create" {
-		if !repositoryIssueRequestContainsFieldValue(text, "title", configToolString(input, "title")) {
-			return "explicit_fields_required", "创建 Issue 时，当前用户消息必须包含要发布的 title 内容。"
-		}
-		if body := configToolString(input, "body"); body != "" && !repositoryIssueRequestContainsFieldValue(text, "body", body) {
-			return "explicit_fields_required", "创建 Issue 时，当前用户消息必须包含要发布的 body 内容。"
-		}
-	}
-	if operation == "update" {
-		for _, field := range []string{"title", "body"} {
-			if _, present := input[field]; !present {
-				continue
-			}
-			if !repositoryIssueRequestContainsFieldValue(text, field, configToolString(input, field)) {
-				return "explicit_fields_required", "更新 Issue 时，当前用户消息必须明确点名字段并包含要写入的 title/body 内容。"
-			}
-		}
-	}
-	if operation == "comment" && !repositoryIssueRequestContainsCommentBody(text, configToolString(input, "body")) {
-		return "explicit_fields_required", "添加评论时，当前用户消息必须包含要发布的评论内容。"
-	}
-	if code, message := validateRepositoryIssueMetadataRequest(text, operation, input); code != "" {
-		return code, message
-	}
-	return "", ""
-}
-
-func repositoryIssueRequestMentionsRepository(text, repository string) bool {
-	repositories := repositoryIssueMentionedRepositories(text)
-	return len(repositories) == 1 && repositories[strings.ToLower(repository)]
-}
-
-func repositoryIssueRequestMentionsNumber(text string, number int) bool {
-	mentions := repositoryIssueMentionedNumbers(text)
-	return len(mentions) == 1 && mentions[number]
-}
-
-func repositoryIssueMentionedRepositories(text string) map[string]bool {
-	result := map[string]bool{}
-	collect := func(pattern *regexp.Regexp) {
-		for _, match := range pattern.FindAllStringSubmatchIndex(text, -1) {
-			if len(match) < 4 || match[2] < 0 {
-				continue
-			}
-			repository, err := normalizeGitHubRepository(text[match[2]:match[3]])
-			if err != nil {
-				continue
-			}
-			key := strings.ToLower(repository)
-			nonNegated := !repositoryIssuePrefixNegates(text[:match[2]])
-			if previous, seen := result[key]; seen {
-				result[key] = previous && nonNegated
-			} else {
-				result[key] = nonNegated
-			}
-		}
-	}
-	collect(repositoryIssueGitHubRepositoryPattern)
-	collect(repositoryIssuePlainRepositoryPattern)
-	return result
-}
-
 func repositoryIssueMentionedNumbers(text string) map[int]bool {
 	result := map[int]bool{}
 	for _, match := range repositoryIssueNumberMentionPattern.FindAllStringSubmatchIndex(text, -1) {
@@ -528,366 +447,9 @@ func repositoryIssueMentionedNumbers(text string) map[int]bool {
 		if err != nil || number <= 0 {
 			continue
 		}
-		nonNegated := !repositoryIssuePrefixNegates(text[:match[2]])
-		if previous, seen := result[number]; seen {
-			result[number] = previous && nonNegated
-		} else {
-			result[number] = nonNegated
-		}
+		result[number] = true
 	}
 	return result
-}
-
-func repositoryIssuePrefixNegates(prefix string) bool {
-	window := strings.ToLower(prefix)
-	cut := 0
-	for _, separator := range []string{";", "；", "。", ".", "!", "！", "?", "？", "\n"} {
-		if index := strings.LastIndex(window, separator); index >= 0 && index+len(separator) > cut {
-			cut = index + len(separator)
-		}
-	}
-	window = window[cut:]
-	trimmed := strings.TrimSpace(window)
-	for _, marker := range []string{"do not", "don't", "dont", "not", "never", "avoid", "without", "but", "except", "exclude", "excluding", "rather than"} {
-		if strings.HasSuffix(trimmed, marker) {
-			return true
-		}
-	}
-	for _, marker := range []string{" do not ", "do not ", " don't ", "don't ", " dont ", "dont ", " not ", "not ", " never ", "never ", " avoid ", "avoid ", " without ", "without ", " but ", "but ", "except ", "exclude ", "excluding ", "rather than ", "不要", "请勿", "勿", "不得", "禁止", "严禁", "不是", "别", "而非", "排除", "不用", "不选", "除外", "除了"} {
-		if strings.Contains(window, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func repositoryIssueRequestMentionsField(text, field string) bool {
-	lower := strings.ToLower(text)
-	for _, term := range repositoryIssueFieldTerms(field) {
-		if strings.Contains(lower, term) {
-			return true
-		}
-	}
-	return false
-}
-
-func repositoryIssueRequestContainsValue(text, value string) bool {
-	value = strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
-	if value == "" {
-		lower := strings.ToLower(text)
-		for _, term := range []string{"clear", "remove", "delete", "empty", "清空", "删除", "移除", "置空"} {
-			if strings.Contains(lower, term) {
-				return true
-			}
-		}
-		return false
-	}
-	normalizedText := strings.Join(strings.Fields(strings.ToLower(text)), " ")
-	if !repositoryIssueASCIIIdentifier(value) {
-		searchFrom := 0
-		for {
-			index := strings.Index(normalizedText[searchFrom:], value)
-			if index < 0 {
-				return false
-			}
-			index += searchFrom
-			if !repositoryIssuePrefixNegates(normalizedText[:index]) {
-				return true
-			}
-			searchFrom = index + len(value)
-		}
-	}
-	pattern := regexp.MustCompile(`(?i)(?:^|[^a-z0-9_.-])` + regexp.QuoteMeta(value) + `(?:[^a-z0-9_.-]|$)`)
-	for _, match := range pattern.FindAllStringIndex(normalizedText, -1) {
-		if !repositoryIssuePrefixNegates(normalizedText[:match[0]]) {
-			return true
-		}
-	}
-	return false
-}
-
-func repositoryIssueRequestContainsPayloadValue(text, value string) bool {
-	text = repositoryIssueGitHubRepositoryPattern.ReplaceAllString(text, " ")
-	text = repositoryIssuePlainRepositoryPattern.ReplaceAllString(text, " ")
-	text = repositoryIssueNumberMentionPattern.ReplaceAllString(text, " ")
-	return repositoryIssueRequestContainsValue(text, value)
-}
-
-func repositoryIssueRequestContainsFieldValue(text, field, value string) bool {
-	if strings.TrimSpace(value) == "" {
-		return repositoryIssueRequestExplicitlyClearsField(text, field)
-	}
-	activeField := ""
-	assignmentActive := false
-	var selectedPayloads []string
-	// pendingSeparator 是上一个子句后面的分隔符。取值本身带逗号时，下一个子句
-	// 其实是同一个取值的后半段，要连着分隔符一起拼回来。
-	pendingSeparator := ""
-	selected := false
-	for _, token := range repositoryIssueRequestClauseTokens(text) {
-		clause := token.Text
-		fields := repositoryIssueFieldsMentioned(clause)
-		switch len(fields) {
-		case 1:
-			activeField = fields[0]
-			payloads := repositoryIssueFieldPayloads(clause, activeField)
-			assignmentActive = len(payloads) > 0
-			if activeField == field {
-				selectedPayloads = payloads
-				selected = len(payloads) > 0
-			}
-		case 0:
-			if activeField == field && assignmentActive {
-				if payload, ok := repositoryIssueFieldContinuationPayload(clause); ok {
-					selectedPayloads = []string{payload}
-					selected = true
-					break
-				}
-				// 续接：把本子句接到已有候选后面，同时保留较短的候选。
-				// 取值必须与其中某一个完全相等，既不会被截断也不会被撑长。
-				selectedPayloads = appendRepositoryIssueContinuations(selectedPayloads, pendingSeparator, clause)
-			}
-		default:
-			for _, mentioned := range fields {
-				if mentioned == field {
-					selectedPayloads = nil
-					selected = false
-					break
-				}
-			}
-			activeField = ""
-			assignmentActive = false
-		}
-		pendingSeparator = token.Separator
-	}
-	if !selected {
-		return false
-	}
-	for _, payload := range selectedPayloads {
-		if field == "title" || field == "body" || field == "milestone" {
-			if repositoryIssuePayloadEquals(payload, value) {
-				return true
-			}
-			continue
-		}
-		if repositoryIssueRequestContainsPayloadValue(payload, value) {
-			return true
-		}
-	}
-	return false
-}
-
-func repositoryIssuePayloadEquals(payload, value string) bool {
-	normalize := func(text string) string {
-		text = strings.TrimSpace(text)
-		text = strings.Trim(text, "\"'`“”‘’「」『』")
-		return strings.Join(strings.Fields(strings.ToLower(text)), " ")
-	}
-	return normalize(payload) != "" && normalize(payload) == normalize(value)
-}
-
-func repositoryIssueRequestContainsCommentBody(text, value string) bool {
-	targetEnd := -1
-	for _, match := range repositoryIssueNumberMentionPattern.FindAllStringIndex(text, -1) {
-		if match[1] > targetEnd {
-			targetEnd = match[1]
-		}
-	}
-	if targetEnd < 0 {
-		return false
-	}
-	tail := text[targetEnd:]
-	lower := strings.ToLower(tail)
-	bestIndex := -1
-	bestLength := 0
-	for _, marker := range []string{"：", ":", " saying ", " that ", "内容为", "评论为"} {
-		if index := strings.Index(lower, marker); index >= 0 && (bestIndex < 0 || index < bestIndex) {
-			bestIndex = index
-			bestLength = len(marker)
-		}
-	}
-	if bestIndex < 0 {
-		return false
-	}
-	return repositoryIssuePayloadEquals(tail[bestIndex+bestLength:], value)
-}
-
-func repositoryIssueFieldTerms(field string) []string {
-	return map[string][]string{
-		"title":     {"title", "标题"},
-		"body":      {"description", "details", "content", "body", "正文", "描述", "内容"},
-		"labels":    {"labels", "label", "标签", "标记"},
-		"assignees": {"assignees", "assignee", "assign", "负责人", "经办人", "指派"},
-		"milestone": {"milestone", "里程碑"},
-	}[field]
-}
-
-func repositoryIssueFieldPayloads(clause, field string) []string {
-	lower := strings.ToLower(clause)
-	fieldIndex := -1
-	fieldLength := 0
-	for _, term := range repositoryIssueFieldTerms(field) {
-		if index := strings.Index(lower, term); index >= 0 && (fieldIndex < 0 || index < fieldIndex || index == fieldIndex && len(term) > fieldLength) {
-			fieldIndex = index
-			fieldLength = len(term)
-		}
-	}
-	if fieldIndex < 0 {
-		return nil
-	}
-	before := strings.TrimSpace(clause[:fieldIndex])
-	after := strings.TrimSpace(clause[fieldIndex+fieldLength:])
-	payloads := make([]string, 0, 2)
-	afterMarkers := []string{"内容改为", "内容为", "设置为", "改成", "改为", "：", ":", "=", "为", "是", "to ", "as "}
-	if field == "assignees" {
-		afterMarkers = append([]string{"给", "to "}, afterMarkers...)
-	}
-	if field == "milestone" {
-		afterMarkers = append([]string{"设为"}, afterMarkers...)
-	}
-	for _, marker := range afterMarkers {
-		if strings.HasPrefix(strings.ToLower(after), marker) {
-			if payload := strings.TrimSpace(after[len(marker):]); payload != "" {
-				payloads = append(payloads, payload)
-			}
-			break
-		}
-	}
-	if field == "milestone" && len(payloads) == 0 && after != "" {
-		if first := []rune(after)[0]; first >= '0' && first <= '9' {
-			payloads = append(payloads, after)
-		}
-	}
-	if field == "labels" {
-		lowerBefore := strings.ToLower(before)
-		for _, marker := range []string{"add ", "with ", "加上", "添加", "加", "设置"} {
-			if index := strings.LastIndex(lowerBefore, marker); index >= 0 {
-				if payload := strings.TrimSpace(before[index+len(marker):]); payload != "" {
-					payloads = append(payloads, payload)
-				}
-				break
-			}
-		}
-	}
-	return payloads
-}
-
-// appendRepositoryIssueContinuations 在已有候选之外，再补上「续接到本子句为止」
-// 的更长候选。用户原文里的取值可能横跨多个子句，但取值必须与某个候选完全相等，
-// 所以这里只是放宽了取值的边界，没有放宽「必须出自用户原文」这条。
-func appendRepositoryIssueContinuations(payloads []string, separator, clause string) []string {
-	if len(payloads) == 0 || strings.TrimSpace(clause) == "" {
-		return payloads
-	}
-	if separator == "" {
-		separator = "，"
-	}
-	extended := make([]string, 0, len(payloads)*2)
-	extended = append(extended, payloads...)
-	// 只从最长的那个候选继续接，避免候选数量随子句数指数增长。
-	longest := payloads[len(payloads)-1]
-	extended = append(extended, longest+separator+clause)
-	return extended
-}
-
-func repositoryIssueFieldContinuationPayload(clause string) (string, bool) {
-	clause = strings.TrimSpace(clause)
-	lower := strings.ToLower(clause)
-	for _, marker := range []string{"use ", "set to ", "改成", "改为", "而是", "最终用"} {
-		if strings.HasPrefix(lower, marker) {
-			payload := strings.TrimSpace(clause[len(marker):])
-			return payload, payload != ""
-		}
-	}
-	return "", false
-}
-
-func repositoryIssueRequestExplicitlyClearsField(text, field string) bool {
-	activeField := ""
-	selected := false
-	clears := false
-	for _, clause := range repositoryIssueRequestClauses(text) {
-		fields := repositoryIssueFieldsMentioned(clause)
-		switch len(fields) {
-		case 1:
-			activeField = fields[0]
-			if activeField == field {
-				selected = true
-				clears = repositoryIssueClauseExplicitlyClearsField(clause, field)
-			}
-		case 0:
-		default:
-			for _, mentioned := range fields {
-				if mentioned == field {
-					selected = false
-					clears = false
-					break
-				}
-			}
-			activeField = ""
-		}
-	}
-	return selected && clears
-}
-
-// repositoryIssueClause 是一个子句和它后面跟着的分隔符。保留分隔符是为了把
-// 「标题：甲，乙」这种被逗号切开的取值原样拼回来——标题里带逗号是常事，切了
-// 就永远对不上用户原文。
-type repositoryIssueClause struct {
-	Text      string
-	Separator string
-}
-
-func isRepositoryIssueClauseSeparator(char rune) bool {
-	switch char {
-	case ',', '，', ';', '；', '。', '!', '！', '?', '？', '\n', '\r':
-		return true
-	default:
-		return false
-	}
-}
-
-func repositoryIssueRequestClauses(text string) []string {
-	tokens := repositoryIssueRequestClauseTokens(text)
-	clauses := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		clauses = append(clauses, token.Text)
-	}
-	return clauses
-}
-
-func repositoryIssueRequestClauseTokens(text string) []repositoryIssueClause {
-	tokens := make([]repositoryIssueClause, 0, 8)
-	current := strings.Builder{}
-	for _, char := range text {
-		if !isRepositoryIssueClauseSeparator(char) {
-			current.WriteRune(char)
-			continue
-		}
-		if current.Len() > 0 {
-			tokens = append(tokens, repositoryIssueClause{Text: current.String(), Separator: string(char)})
-			current.Reset()
-			continue
-		}
-		// 连续分隔符并入上一个子句的分隔符，重新拼接时才能还原原文。
-		if len(tokens) > 0 {
-			tokens[len(tokens)-1].Separator += string(char)
-		}
-	}
-	if current.Len() > 0 {
-		tokens = append(tokens, repositoryIssueClause{Text: current.String()})
-	}
-	return tokens
-}
-
-func repositoryIssueFieldsMentioned(text string) []string {
-	fields := make([]string, 0, 5)
-	for _, field := range []string{"title", "body", "labels", "assignees", "milestone"} {
-		if repositoryIssueRequestMentionsField(text, field) {
-			fields = append(fields, field)
-		}
-	}
-	return fields
 }
 
 func repositoryIssueASCIIIdentifier(value string) bool {
@@ -901,79 +463,6 @@ func repositoryIssueASCIIIdentifier(value string) bool {
 		return false
 	}
 	return true
-}
-
-func validateRepositoryIssueMetadataRequest(text, operation string, input map[string]any) (string, string) {
-	for _, field := range []string{"labels", "assignees"} {
-		raw, present := input[field]
-		if !present {
-			continue
-		}
-		items, err := stringSliceValue(raw)
-		if err != nil {
-			continue
-		}
-		if operation == "create" && len(items) == 0 {
-			continue
-		}
-		if !repositoryIssueRequestMentionsField(text, field) {
-			return "explicit_fields_required", "labels、assignees 和 milestone 只有在当前用户消息明确要求时才能写入。"
-		}
-		if operation == "update" && len(items) == 0 && !repositoryIssueRequestExplicitlyClearsField(text, field) {
-			return "explicit_fields_required", "清空 labels 或 assignees 必须由当前用户消息明确要求。"
-		}
-		for _, item := range items {
-			if !repositoryIssueRequestContainsFieldValue(text, field, item) {
-				return "explicit_fields_required", "当前用户消息必须包含每个要写入的 label 或 assignee。"
-			}
-		}
-	}
-	if raw, present := input["milestone"]; present && raw != nil {
-		if !repositoryIssueRequestMentionsField(text, "milestone") {
-			return "explicit_fields_required", "labels、assignees 和 milestone 只有在当前用户消息明确要求时才能写入。"
-		}
-		if value, ok := numberValue(raw); ok && value == float64(int(value)) && !repositoryIssueRequestContainsFieldValue(text, "milestone", strconv.Itoa(int(value))) {
-			return "explicit_fields_required", "当前用户消息必须包含要设置的 milestone 编号。"
-		}
-	}
-	if raw, present := input["milestone"]; present && raw == nil && !repositoryIssueRequestExplicitlyClearsField(text, "milestone") {
-		return "explicit_fields_required", "清除 milestone 必须由当前用户消息明确要求。"
-	}
-	return "", ""
-}
-
-func repositoryIssueClauseExplicitlyClearsField(clause, field string) bool {
-	lower := strings.ToLower(clause)
-	for _, term := range repositoryIssueFieldTerms(field) {
-		index := strings.Index(lower, term)
-		if index < 0 {
-			continue
-		}
-		before := strings.TrimSpace(lower[:index])
-		after := strings.TrimSpace(lower[index+len(term):])
-		words := strings.Fields(before)
-		for len(words) > 0 && (words[len(words)-1] == "all" || words[len(words)-1] == "the") {
-			words = words[:len(words)-1]
-		}
-		if len(words) > 0 {
-			switch words[len(words)-1] {
-			case "clear", "remove", "delete", "empty":
-				return true
-			}
-		}
-		for _, marker := range []string{"清空", "删除", "移除", "置空", "取消"} {
-			if strings.HasSuffix(before, marker) {
-				return true
-			}
-		}
-		after = strings.TrimSpace(strings.TrimLeft(after, " :=："))
-		for _, marker := range []string{"clear", "remove", "delete", "empty", "清空", "删除", "移除", "置空", "取消"} {
-			if after == marker || after == marker+" all" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (r repositoryIssueResult) fail(code, message string) repositoryIssueResult {
@@ -1308,31 +797,28 @@ func (t *dianaRepositoryIssuesTool) describeResolvedDraft(draft repositoryIssueD
 	return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
 }
 
-// repositoryIssueDraftableOperation 报告这个写操作能否落成待审批草稿。
-// close/reopen 不带自由文本，内容出自用户原话这条对它们本来就不构成障碍。
-func repositoryIssueDraftableOperation(operation string) bool {
-	return operation == "create" || operation == "comment"
-}
-
-// repositoryIssueDraftOperation 返回草稿要执行的写操作。旧草稿没有存这个字段，
-// 一律按 create 处理，保持向后兼容。
+// repositoryIssueDraftOperation 返回草稿要执行的写操作。
+//
+// 新草稿把它存在 Operation 字段上；更早的版本存在 Input["operation"] 里，再早的
+// 版本压根没存（那时只有 create 会落草稿）。三种都要认，否则升级前留下的待审批草稿
+// 会被当成 create 执行。
 func repositoryIssueDraftOperation(draft repositoryIssueDraft) string {
+	if operation := strings.TrimSpace(draft.Operation); operation != "" {
+		return operation
+	}
 	if operation := strings.TrimSpace(configToolString(draft.Input, "operation")); operation != "" {
 		return operation
 	}
 	return "create"
 }
 
-func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
-	return t.saveOperationDraft(ctx, "create", repository, input)
-}
-
-// saveOperationDraft 把一次写操作存成待审批草稿，不碰 GitHub。
-// 除了群成员发起的 create，模型自行撰写内容的写操作也走这里：写入要求内容出自
-// 用户原文，而模型组织的措辞天然对不上，硬卡只会让功能不可用。先落草稿、由有
-// 权限的人看过并明确同意再写，既保住了「不擅自以用户名义发内容」，也不必逼用户
-// 把整段正文手打进聊天框。
-func (t *dianaRepositoryIssuesTool) saveOperationDraft(ctx context.Context, operation, repository string, input map[string]any) repositoryIssueResult {
+// createWriteDraft 把一次写操作存成待确认草稿。
+//
+// 以前只有 create 和 comment 会走这里，update/close/reopen 直接执行，靠比对用户措辞
+// （字段名、否定词、清空词）确认「用户真的要求了这件事」。措辞判断已经移除，而替代
+// 不能是「什么都不查」——那就只剩模型自报。改为所有写操作先落草稿，由用户原样打出
+// 确认码之后再执行：用户看到的是将要写入的确切内容，比猜措辞更强也更好解释。
+func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, repository, operation string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: operation, Repository: repository}
 	draftScope := strings.TrimSpace(t.event.GroupID)
 	if t.event.Kind != EventKindGroup {
@@ -1353,16 +839,42 @@ func (t *dianaRepositoryIssuesTool) saveOperationDraft(ctx context.Context, oper
 			return result.fail("invalid_input", "评论草稿必须提供非空 body。")
 		}
 		result.RequestedNumber = number
-	} else if title == "" {
+	} else if operation == "create" && title == "" {
 		return result.fail("invalid_input", "生成 Issue 草稿必须提供标题。")
+	}
+	if operation != "create" && repositoryIssueNumber(input) <= 0 {
+		return result.fail("invalid_input", "改动已有 Issue 必须提供 issue 编号。")
 	}
 	labels, _, code, message := repositoryIssueStringList(input, "labels", 20)
 	if code != "" {
 		return result.fail(code, message)
 	}
-	draftInput := map[string]any{"title": title, "body": body, "user_confirmed_write": true, "operation": operation}
+	// 只把调用方真正传了的字段写进草稿。无条件塞 title/body 会让 update 把没提到的
+	// 字段当成「要求清空」，把一次改标题变成连正文一起抹掉。
+	draftInput := map[string]any{"user_confirmed_write": true}
+	if _, present := input["title"]; present || operation == "create" {
+		draftInput["title"] = title
+	}
+	if _, present := input["body"]; present {
+		draftInput["body"] = body
+	}
 	if number := repositoryIssueNumber(input); number > 0 {
 		draftInput["number"] = number
+	}
+	// 幂等键、去重放行和确认令牌都属于本次写操作的一部分，必须跟着草稿走，否则
+	// 确认之后执行的是一个丢了这些参数的请求。
+	for _, key := range []string{"operation_id", "allow_duplicate", "confirmation_token"} {
+		if value, present := input[key]; present {
+			draftInput[key] = value
+		}
+	}
+	// 记下提出这次写操作的那条用户消息。确认阶段的消息里只有确认码，而重复候选校验
+	// 要看的是「提出者有没有点名候选编号」，那件事发生在提出的时候。
+	if requestText := repositoryIssueCurrentRequestText(t.event); requestText != "" {
+		draftInput["request_text"] = requestText
+	}
+	if state := strings.TrimSpace(configToolString(input, "state")); state != "" {
+		draftInput["state"] = state
 	}
 	if len(labels) > 0 {
 		draftInput["labels"] = labels
@@ -1379,7 +891,7 @@ func (t *dianaRepositoryIssuesTool) saveOperationDraft(ctx context.Context, oper
 	}
 	draft, err := t.plugin.saveDraft(ctx, repositoryIssueDraft{
 		Platform: t.event.Platform, ProfileID: t.event.ProfileID,
-		GroupID: draftScope, Repository: repository,
+		GroupID: draftScope, Repository: repository, Operation: operation,
 		RequesterID: strings.TrimSpace(t.event.UserID), RequesterName: strings.TrimSpace(t.event.SenderName), Input: draftInput,
 	})
 	if err != nil {
@@ -1387,10 +899,10 @@ func (t *dianaRepositoryIssuesTool) saveOperationDraft(ctx context.Context, oper
 	}
 	result.OK = true
 	result.Outcome = "draft_pending"
-	result.Message = "Issue 草稿已生成，尚未写入 GitHub；把内容复述给用户，得到明确同意后再调用 approve。"
-	if operation == "comment" {
-		result.Message = "评论草稿已生成，尚未发到 GitHub；把内容复述给用户，得到明确同意后再调用 approve。"
-	}
+	result.Message = fmt.Sprintf(
+		"草稿已生成，尚未写入 GitHub。把将要写入的内容原样告诉用户，并请有权限的人回复确认码 %s；"+
+			"收到之后再用 operation=approve 和这个 draft_id 执行。不要替用户说出确认码。",
+		repositoryIssueConfirmationCode(draft.ID))
 	result.RequiresApproval = true
 	result.Draft = repositoryIssueDraftViewFromDraft(draft)
 	return result
@@ -1424,56 +936,55 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 		}
 		return result.fail(code, message)
 	}
-	request := strings.ToLower(repositoryIssueCurrentRequestText(t.event))
-	approved := false
-	for _, marker := range []string{"同意", "批准", "确认创建", "确认发布", "确认评论", "提交", "approve", "confirm", "create it"} {
-		if strings.Contains(request, marker) {
-			approved = true
-			break
-		}
-	}
-	for _, marker := range []string{"不同意", "不批准", "取消", "拒绝", "do not", "don't", "reject", "cancel"} {
-		if strings.Contains(request, marker) {
-			approved = false
-			break
-		}
-	}
-	if !approved {
-		return result.fail("explicit_approval_required", "当前消息必须明确表示同意执行该草稿。")
+	// 确认必须是用户本人原样打出运行时给的确认码。以前这里扫「同意/批准/提交」并用
+	// 「不同意/取消/拒绝」反向排除，那是拿关键词判断意图：措辞千变万化，判宽了会替
+	// 用户写 Issue，判严了又让人确认不了。确认码没有这个歧义。
+	if !repositoryIssueRequestConfirms(repositoryIssueCurrentRequestText(t.event), draft.ID) {
+		return result.fail("explicit_approval_required", fmt.Sprintf(
+			"当前消息里没有确认码 %s。请让有权限的人原样回复它再执行。", repositoryIssueConfirmationCode(draft.ID)))
 	}
 	if code, message := t.validateWriteAccess(draft.Repository, owner); code != "" {
 		return result.fail(code, message)
 	}
-	createInput := make(map[string]any, len(draft.Input)+2)
+	writeInput := make(map[string]any, len(draft.Input)+2)
 	for key, value := range draft.Input {
-		createInput[key] = value
+		writeInput[key] = value
 	}
 	for _, key := range []string{"allow_duplicate", "confirmation_token"} {
 		if value, ok := input[key]; ok {
-			createInput[key] = value
+			writeInput[key] = value
 		}
 	}
-	// 草稿记录了自己要执行的写操作；批准后照原样执行，而不是一律当成建 Issue。
-	var created repositoryIssueResult
-	if repositoryIssueDraftOperation(draft) == "comment" {
-		created = t.comment(ctx, draft.Repository, createInput)
-	} else {
-		created = t.create(ctx, draft.Repository, createInput)
+	// 执行草稿记录的那个操作，而不是一律当成 create：草稿现在也承载 update、comment
+	// 和开关状态。旧草稿没有 operation 字段，按 create 处理保持兼容。
+	operation := repositoryIssueDraftOperation(draft)
+	var executed repositoryIssueResult
+	switch operation {
+	case "create":
+		executed = t.create(ctx, draft.Repository, writeInput)
+	case "update":
+		executed = t.update(ctx, draft.Repository, writeInput)
+	case "comment":
+		executed = t.comment(ctx, draft.Repository, writeInput)
+	case "close", "reopen":
+		executed = t.setState(ctx, draft.Repository, writeInput, operation)
+	default:
+		return result.fail("invalid_operation", "草稿记录的操作无法执行。")
 	}
-	created.Operation = "approve"
-	created.Draft = repositoryIssueDraftViewFromDraft(draft)
-	if created.OK {
+	executed.Operation = "approve"
+	executed.Draft = repositoryIssueDraftViewFromDraft(draft)
+	if executed.OK {
 		draft.Status = "created"
 		draft.ResolvedBy = strings.TrimSpace(t.event.UserID)
-		if created.Issue != nil {
-			draft.IssueNumber = created.Issue.Number
-			draft.IssueURL = created.Issue.URL
+		if executed.Issue != nil {
+			draft.IssueNumber = executed.Issue.Number
+			draft.IssueURL = executed.Issue.URL
 		}
 		if err := t.plugin.updateDraft(ctx, draft); err != nil {
-			created.Message += " Issue 已创建，但草稿状态保存失败。"
+			executed.Message += " 写操作已执行，但草稿状态保存失败。"
 		}
 	}
-	return created
+	return executed
 }
 
 func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[string]any) repositoryIssueResult {
@@ -1542,17 +1053,9 @@ func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[s
 	if code != "" || !userAllowed {
 		return result.fail("permission_denied", "当前用户没有该仓库的草稿管理权限。")
 	}
-	request := strings.ToLower(repositoryIssueCurrentRequestText(t.event))
-	explicit := false
-	for _, marker := range []string{"取消", "拒绝", "作废", "cancel", "reject"} {
-		if strings.Contains(request, marker) {
-			explicit = true
-			break
-		}
-	}
-	if !explicit {
-		return result.fail("explicit_cancellation_required", "当前消息必须明确表示取消该草稿。")
-	}
+	// 取消草稿只会让写操作不发生，判错的代价是「本该写的没写」，用户重说一次即可。
+	// 这里原本扫「取消/拒绝/作废」确认意图，属于关键词判断；权限已在上面校验过，
+	// 安全方向的动作不需要再猜措辞。
 	draft.Status = "cancelled"
 	draft.ResolvedBy = strings.TrimSpace(t.event.UserID)
 	if err := t.plugin.updateDraft(ctx, draft); err != nil {
@@ -1565,12 +1068,54 @@ func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[s
 	return result
 }
 
+// repositoryIssueConfirmationCode 取草稿 ID 的前缀作为确认码。
+//
+// 确认要用一个运行时自己生成、用户必须原样打出来的记号，而不是去猜「同意/批准」
+// 这类措辞——那是拿关键词判断意图。前缀足够短到能手打，又不可能在正常聊天里撞上。
+func repositoryIssueConfirmationCode(draftID string) string {
+	draftID = strings.TrimSpace(draftID)
+	if len(draftID) <= repositoryIssueConfirmationCodeLength {
+		return draftID
+	}
+	return draftID[:repositoryIssueConfirmationCodeLength]
+}
+
+// repositoryIssueRequestConfirms 判断用户本人这条消息里是否原样写出了确认码。
+// 只看用户自己的话：引用和转发内容已由 repositoryIssueStripUntrustedContext 去掉，
+// 免得别人贴一段带确认码的记录就能替他确认。
+func repositoryIssueRequestConfirms(text, draftID string) bool {
+	code := repositoryIssueConfirmationCode(draftID)
+	if code == "" {
+		return false
+	}
+	pattern := regexp.MustCompile(`(?i)(?:^|[^a-z0-9])` + regexp.QuoteMeta(code) + `(?:[^a-z0-9]|$)`)
+	return pattern.MatchString(text)
+}
+
+// writeRequestText 返回提出这次写操作的用户消息。走草稿时它记在草稿里，因为确认阶段
+// 的消息只有确认码；直接调用时就是当前消息。
+func (t *dianaRepositoryIssuesTool) writeRequestText(input map[string]any) string {
+	if recorded := strings.TrimSpace(configToolString(input, "request_text")); recorded != "" {
+		return recorded
+	}
+	return repositoryIssueCurrentRequestText(t.event)
+}
+
 func repositoryIssueDraftViewFromDraft(draft repositoryIssueDraft) *repositoryIssueDraftView {
 	labels, _, _, _ := repositoryIssueStringList(draft.Input, "labels", 20)
+	assignees, _, _, _ := repositoryIssueStringList(draft.Input, "assignees", 10)
+	operation := strings.TrimSpace(draft.Operation)
+	if operation == "" {
+		operation = "create"
+	}
 	return &repositoryIssueDraftView{
-		ID: draft.ID, Operation: repositoryIssueDraftOperation(draft), IssueTarget: repositoryIssueNumber(draft.Input),
-		GroupID: draft.GroupID, Repository: draft.Repository, Title: configToolString(draft.Input, "title"),
-		Body: configToolString(draft.Input, "body"), Labels: labels,
+		ID: draft.ID, GroupID: draft.GroupID, Repository: draft.Repository, Operation: operation,
+		IssueTarget: repositoryIssueNumber(draft.Input),
+		Title:       configToolString(draft.Input, "title"),
+		Body:        configToolString(draft.Input, "body"), Labels: labels,
+		Assignees:   assignees,
+		Milestone:   draft.Input["milestone"],
+		State:       configToolString(draft.Input, "state"),
 		RequesterID: draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
 		IssueNumber: draft.IssueNumber, IssueURL: draft.IssueURL,
 	}
@@ -1638,7 +1183,7 @@ func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository strin
 	if len(candidates) > 0 {
 		confirmation := strings.TrimSpace(configToolString(input, "confirmation_token"))
 		confirmed := boolInput(input, "allow_duplicate") &&
-			repositoryIssueRequestMentionsCandidate(repositoryIssueCurrentRequestText(t.event), candidates) &&
+			repositoryIssueRequestMentionsCandidate(t.writeRequestText(input), candidates) &&
 			t.verifyDuplicateConfirmation(confirmation, repository, fingerprint, candidates)
 		if !confirmed {
 			result.OK = false
@@ -2228,8 +1773,9 @@ func similarRepositoryIssues(issues []githubRepositoryIssue, title string, label
 }
 
 func repositoryIssueRequestMentionsCandidate(text string, candidates []repositoryIssueSummary) bool {
+	numbers := repositoryIssueMentionedNumbers(text)
 	for _, candidate := range candidates {
-		if repositoryIssueRequestMentionsNumber(text, candidate.Number) {
+		if numbers[candidate.Number] {
 			return true
 		}
 	}

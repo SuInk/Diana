@@ -315,8 +315,8 @@
                   <option value="loose">宽松</option>
                 </select>
                 <span class="hint">
-                  智能：出现触发词就回，但「Diana 刚才那句好怪」这类在谈论它的消息不强制回复，改由插话判定决定。
-                  严格：还要求触发词出现在句首或句尾。宽松：出现即回，等同旧行为。
+                  智能：出现触发词就回，但「「Diana」这名字挺好听」这类把触发词整个引起来的引述不算呼叫。
+                  严格：还要求触发词出现在句首或句尾。宽松：出现即回，连引述也算。
                 </span>
               </div>
               <div class="field">
@@ -332,8 +332,14 @@
                 <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" />
               </div>
               <div class="field">
+                <label for="bot-history-budget">回复历史 token 预算</label>
+                <input id="bot-history-budget" v-model.number="form.recent_history_token_budget" class="input" inputmode="numeric" placeholder="16000" />
+                <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条。留空按 16000；同时受模型窗口 55% 约束，填了只会收紧不会放宽。</span>
+              </div>
+              <div class="field">
                 <label for="bot-context">历史查询条数上限</label>
                 <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
+                <span class="hint">意图路由、指代消解和记忆门控这些旁路往回看几条，不影响正式回复的历史长度。</span>
               </div>
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>

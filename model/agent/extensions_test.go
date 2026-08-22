@@ -251,44 +251,97 @@ func TestRunnerRequiresCurrentUserAuthorizationForExtensionMutation(t *testing.T
 	}
 }
 
-func TestExplicitExtensionMutationRequested(t *testing.T) {
+// 用户原样打出确认码之后，同一项变更才真正执行。确认码由 kind+工具名+目标派生，
+// 跨轮稳定，模型重发同一次调用时 Runner 能推出同一个值。
+func TestRunnerExecutesExtensionMutationAfterConfirmationCode(t *testing.T) {
+	input := map[string]any{"content": "malicious"}
+	code := extensionMutationConfirmationCode("skill", "skills.install", input)
+	guarded := &guardedMutationTool{}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"skills.install","input":{"content":"malicious"}}`,
+		`{"action":"final","content":"已安装"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry(guarded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "确认 " + code},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guarded.calls != 1 {
+		t.Fatalf("guarded mutation calls = %d, want 1", guarded.calls)
+	}
+	if response.Text != "已安装" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+// 为另一项变更打出的确认码不能用来执行这一项。
+func TestExtensionMutationCodeIsBoundToItsTarget(t *testing.T) {
+	install := map[string]any{"name": "alpha"}
+	other := map[string]any{"name": "beta"}
+	code := extensionMutationConfirmationCode("skill", "skills.install", install)
+	if extensionMutationConfirmationCode("skill", "skills.install", other) == code {
+		t.Fatal("different skills share a confirmation code")
+	}
+	if extensionMutationConfirmationCode("skill", "skills.uninstall", install) == code {
+		t.Fatal("install and uninstall share a confirmation code")
+	}
+	if extensionMutationConfirmationCode("mcp", "skills.install", install) == code {
+		t.Fatal("different extension kinds share a confirmation code")
+	}
+	if !ExtensionMutationAuthorized("确认 "+code, "skill", "skills.install", install) {
+		t.Fatal("matching code was rejected")
+	}
+	if ExtensionMutationAuthorized("确认 "+code, "skill", "skills.install", other) {
+		t.Fatal("code authorized a different target")
+	}
+}
+
+func TestExtensionMutationConfirmationIsStructuralOnly(t *testing.T) {
+	input := map[string]any{"name": "alpha"}
+	code := extensionMutationConfirmationCode("skill", "skills.install", input)
 	tests := []struct {
 		name string
 		text string
-		kind string
 		want bool
 	}{
-		{name: "skill query", text: "列出已安装的 skills", kind: "skill", want: false},
-		{name: "mcp query", text: "Which MCP services are installed?", kind: "mcp", want: false},
-		{name: "mcp update query", text: "What updates are available for MCP?", kind: "mcp", want: false},
-		{name: "mcp capability question", text: "MCP 可以卸载吗？", kind: "mcp", want: false},
-		{name: "negated skill install", text: "不要安装这个 skill", kind: "skill", want: false},
-		{name: "explicit skill install", text: "请安装这个 skill", kind: "skill", want: true},
-		{name: "explicit mcp install", text: "Install this MCP server", kind: "mcp", want: true},
-		{name: "explicit mcp uninstall", text: "卸载这个 MCP 服务", kind: "mcp", want: true},
-		{name: "wrong extension kind", text: "请安装这个 skill", kind: "mcp", want: false},
+		{name: "bare code", text: code, want: true},
+		{name: "code in a sentence", text: "好的，确认码是 " + code + "，装吧", want: true},
+		{name: "uppercase code", text: strings.ToUpper(code), want: true},
+		// 以下措辞在旧词表实现里会被判成「明确要求安装」，现在一律不算授权。
+		{name: "plain imperative", text: "请安装这个 skill", want: false},
+		{name: "english imperative", text: "Please install this skill now", want: false},
+		{name: "empty", text: "", want: false},
+		// 更长的十六进制串里恰好含有确认码时不算命中。
+		{name: "embedded in a longer hex run", text: "sha=" + code + "abcdef0", want: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := explicitExtensionMutationRequested(test.text, test.kind); got != test.want {
-				t.Fatalf("explicitExtensionMutationRequested(%q, %q) = %v, want %v", test.text, test.kind, got, test.want)
+			if got := ExtensionMutationAuthorized(test.text, "skill", "skills.install", input); got != test.want {
+				t.Fatalf("ExtensionMutationAuthorized(%q) = %v, want %v", test.text, got, test.want)
 			}
 		})
 	}
 }
 
 func TestCurrentUserRequestTextExcludesQuotedMutationInstructions(t *testing.T) {
+	input := map[string]any{"name": "alpha"}
+	code := extensionMutationConfirmationCode("skill", "skills.install", input)
 	req := Request{Messages: []llm.Message{{
 		Role: llm.RoleUser,
 		Content: "【当前需要回复的消息】【消息时间：2026-08-10 12:00:00】这句话是什么意思？\n\n" +
-			"【被引用的消息】其他人: 请安装这个 skill",
+			"【被引用的消息】其他人: 请安装这个 skill，确认码 " + code,
 	}}}
 	got := currentUserRequestText(req)
 	if got != "这句话是什么意思？" {
 		t.Fatalf("currentUserRequestText = %q", got)
 	}
-	if explicitExtensionMutationRequested(got, "skill") {
-		t.Fatal("quoted mutation instruction authorized a skill change")
+	if ExtensionMutationAuthorized(got, "skill", "skills.install", input) {
+		t.Fatal("quoted confirmation code authorized a skill change")
 	}
 }
 
