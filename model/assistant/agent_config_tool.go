@@ -438,3 +438,33 @@ func configToolString(input map[string]any, key string) string {
 		return strings.TrimSpace(fmt.Sprint(typed))
 	}
 }
+
+func configToolStringSlice(input map[string]any, key string) []string {
+	if input == nil {
+		return nil
+	}
+	value, ok := input[key]
+	if !ok {
+		return nil
+	}
+	var out []string
+	switch typed := value.(type) {
+	case []string:
+		out = append(out, typed...)
+	case []any:
+		for _, item := range typed {
+			if text, isText := item.(string); isText {
+				out = append(out, text)
+			}
+		}
+	case string:
+		out = append(out, typed)
+	}
+	var cleaned []string
+	for _, item := range out {
+		if item = strings.TrimSpace(item); item != "" {
+			cleaned = append(cleaned, item)
+		}
+	}
+	return cleaned
+}

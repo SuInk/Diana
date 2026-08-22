@@ -596,6 +596,12 @@ func botConfigFromEnv() assistant.BotConfig {
 	cfg.SendChunkIntervalMS = intFromEnv("DIANA_SEND_CHUNK_INTERVAL_MS", cfg.SendChunkIntervalMS)
 	cfg.MaxInputChars = intFromEnv("DIANA_MAX_INPUT_CHARS", cfg.MaxInputChars)
 	cfg.MaxReplyChars = intFromEnv("DIANA_MAX_REPLY_CHARS", cfg.MaxReplyChars)
+	cfg.FollowUpMaxChars = intFromEnv("DIANA_FOLLOW_UP_MAX_CHARS", cfg.FollowUpMaxChars)
+	// 只有真的设了这个变量才覆盖，否则保持数据库里已保存的选择。
+	if strings.TrimSpace(os.Getenv("DIANA_FOLLOW_UP_QUIET_DEFAULT")) != "" {
+		quiet := boolFromEnv("DIANA_FOLLOW_UP_QUIET_DEFAULT", true)
+		cfg.FollowUpQuietDefault = &quiet
+	}
 	cfg.DirectReplyChunkSize = intFromEnv("DIANA_DIRECT_REPLY_CHUNK_SIZE", cfg.DirectReplyChunkSize)
 	cfg.ForwardReplyThreshold = intFromEnv("DIANA_FORWARD_REPLY_THRESHOLD", cfg.ForwardReplyThreshold)
 	cfg.RecallReplyMode = assistant.RecallReplyMode(envOr("DIANA_RECALL_REPLY_MODE", string(cfg.RecallReplyMode)))
@@ -632,19 +638,21 @@ func botConfigFromEnv() assistant.BotConfig {
 func llmConfigFromEnv() llm.ProviderConfig {
 	provider := providerFromEnv("LLM_PROVIDER", llm.ProviderOpenAICompatible)
 	cfg := llm.ProviderConfig{
-		Provider:            provider,
-		APIKey:              os.Getenv("LLM_API_KEY"),
-		BaseURL:             os.Getenv("LLM_BASE_URL"),
-		APIFormat:           llm.APIFormat(os.Getenv("LLM_API_FORMAT")),
-		Model:               envOr("LLM_MODEL", llm.DefaultModel(provider)),
-		ImageModel:          os.Getenv("LLM_IMAGE_MODEL"),
-		ImageBaseURL:        os.Getenv("LLM_IMAGE_BASE_URL"),
-		ImageOrigin:         os.Getenv("LLM_IMAGE_ORIGIN"),
-		ImageTimeout:        time.Duration(int64FromEnv("LLM_IMAGE_TIMEOUT_MS", 0)) * time.Millisecond,
-		UserAgent:           os.Getenv("LLM_USER_AGENT"),
-		ReasoningEffort:     os.Getenv("LLM_REASONING_EFFORT"),
-		ContextWindowTokens: int64FromEnv("LLM_CONTEXT_WINDOW_TOKENS", llm.DefaultContextWindowTokens),
-		MaxContextTokens:    int64FromEnv("LLM_MAX_CONTEXT_TOKENS", llm.DefaultMaxContextTokens),
+		Provider:        provider,
+		APIKey:          os.Getenv("LLM_API_KEY"),
+		BaseURL:         os.Getenv("LLM_BASE_URL"),
+		APIFormat:       llm.APIFormat(os.Getenv("LLM_API_FORMAT")),
+		Model:           envOr("LLM_MODEL", llm.DefaultModel(provider)),
+		ImageModel:      os.Getenv("LLM_IMAGE_MODEL"),
+		ImageBaseURL:    os.Getenv("LLM_IMAGE_BASE_URL"),
+		ImageOrigin:     os.Getenv("LLM_IMAGE_ORIGIN"),
+		ImageTimeout:    time.Duration(int64FromEnv("LLM_IMAGE_TIMEOUT_MS", 0)) * time.Millisecond,
+		UserAgent:       os.Getenv("LLM_USER_AGENT"),
+		ReasoningEffort: os.Getenv("LLM_REASONING_EFFORT"),
+		// 不设环境变量时留 0，交给 WithDefaults 按模型名推断真实窗口；写死默认常量
+		// 会让 Claude/Gemini 这类大窗口模型被当成 128K。
+		ContextWindowTokens: int64FromEnv("LLM_CONTEXT_WINDOW_TOKENS", 0),
+		MaxContextTokens:    int64FromEnv("LLM_MAX_CONTEXT_TOKENS", 0),
 		MaxOutputTokens:     int64FromEnv("LLM_MAX_OUTPUT_TOKENS", 1024),
 		Timeout:             time.Duration(int64FromEnv("LLM_TIMEOUT_MS", 60000)) * time.Millisecond,
 	}

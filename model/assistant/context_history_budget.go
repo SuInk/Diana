@@ -15,12 +15,70 @@ const (
 	recentHistoryTokenShare       int64 = 55
 	longTermMemoryTokenShare      int64 = 10
 	compressedSummaryTokenShare   int64 = 15
+	coreMemoryTokenShare          int64 = 5
 	contextShareDenominator       int64 = 100
 	minimumHistoryCandidateTokens int64 = 16
 	minimumRecentHistoryTokens    int64 = 512
 	maximumHistoryCandidates            = 4096
 	recentHistoryPriorityTurns          = 3
 )
+
+// 纯百分比预算在大窗口下会失控：55% × 128K 等于每条群消息都注入 70K 历史。历史的
+// 价值曲线衰减极快，最近几百条几乎就是全部价值，再往前是白付 prefill 的钱和延迟，
+// 还会稀释注意力。所以每层在份额之外再加一个绝对上限，取两者较小值。
+//
+// 这些是上限不是下限：小窗口下份额本来就更小，仍按份额走，不会因为常量比窗口大
+// 而超发。
+const (
+	// DefaultRecentHistoryTokenBudget 是近期聊天历史的默认绝对上限，约合普通群聊
+	// 300–600 条。它按群聊场景估算，没有实测支撑，所以做成可配置而不是常量：
+	// 长期只用到一半说明虚高，长期顶满说明该调大。
+	DefaultRecentHistoryTokenBudget int64 = 16000
+	// sessionThreadTokenCeiling 限制会话线程便签。它天然只有几百字，撞上限通常
+	// 说明模型把已完结话题囤在了 thread 里，而不是预算不够。
+	sessionThreadTokenCeiling int64 = 1200
+	// retrievedMemoryTokenCeiling 限制按相关性检索出来的长期记忆。配合 MMR 的 24
+	// 条上限，平均每条约 100 token。
+	retrievedMemoryTokenCeiling int64 = 2400
+	// coreMemoryTokenCeiling 限制常驻注入的核心记忆（长期交互要求和高置信要害
+	// 事实）。它不参加相关性排序，所以配额必须小而固定。
+	coreMemoryTokenCeiling int64 = 600
+)
+
+// contextLayerBudget 取「份额」和「绝对上限」中较小的那个。
+func contextLayerBudget(contextWindow, share, ceiling int64) int64 {
+	budget := contextShareBudget(contextWindow, share)
+	if ceiling > 0 && budget > ceiling {
+		return ceiling
+	}
+	return budget
+}
+
+// recentHistoryBudget 返回本轮近期历史的 token 预算。配置值只能收紧不能放宽：
+// 填得比窗口份额还大时仍按份额走，否则单群配置能绕过窗口保护。
+func recentHistoryBudget(contextWindow int64, cfg BotConfig) int64 {
+	ceiling := cfg.RecentHistoryTokenBudget
+	if ceiling <= 0 {
+		ceiling = DefaultRecentHistoryTokenBudget
+	}
+	return contextLayerBudget(contextWindow, recentHistoryTokenShare, ceiling)
+}
+
+// sessionThreadBudget 返回会话线程便签的 token 预算。
+func sessionThreadBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, compressedSummaryTokenShare, sessionThreadTokenCeiling)
+}
+
+// retrievedMemoryBudget 返回按相关性检索的长期记忆预算。
+func retrievedMemoryBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, longTermMemoryTokenShare, retrievedMemoryTokenCeiling)
+}
+
+// coreMemoryBudget 返回常驻核心记忆预算。它同时受 5% 份额约束，避免 8K 本地模型上
+// 两个固定项合起来把历史挤到墙角。
+func coreMemoryBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, coreMemoryTokenShare, coreMemoryTokenCeiling)
+}
 
 type historyContextTurn struct {
 	events       []MessageEvent
@@ -34,7 +92,9 @@ type historyContextTurn struct {
 // complete recent turns from newest to oldest. RecentContextLimit remains
 // available to legacy history tools, but no longer defines the normal prompt.
 func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []MessageEvent {
-	budget := contextShareBudget(r.promptContextWindowTokens(event, cfg), recentHistoryTokenShare)
+	budget := recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg)
+	// 就着眼前这张图问一句时收紧历史：答案几乎全在图里，长历史是白付的 prefill。
+	budget = visionFocusedHistoryBudget(budget, event, PlainText(event.Segments))
 	candidateLimit := historyCandidateLimitForBudget(budget)
 	session := sessionKey(event)
 
@@ -294,14 +354,15 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		"over_budget":               breakdown.OverBudget,
 		"categories":                contextBudgetCategoryTrace(breakdown),
 		"category_tokens":           categoryTokens,
-		"history_token_budget":      contextShareBudget(window, recentHistoryTokenShare),
-		"summary_token_budget":      contextShareBudget(window, compressedSummaryTokenShare),
-		"memory_token_budget":       contextShareBudget(window, longTermMemoryTokenShare),
+		"history_token_budget":      recentHistoryBudget(window, cfg),
+		"history_token_share":       contextShareBudget(window, recentHistoryTokenShare),
+		"summary_token_budget":      sessionThreadBudget(window),
+		"memory_token_budget":       retrievedMemoryBudget(window) + coreMemoryBudget(window),
 		"history_selected_messages": len(history),
 		"history_selected_turns":    len(groupHistoryContextTurns(history, event.Time, cfg.BotAccount)),
 		"history_earliest_time":     earliest,
 		"history_latest_time":       latest,
-		"summary":                   contextBudgetSummaryTrace(breakdown, contextShareBudget(window, compressedSummaryTokenShare), summaryRecompressed),
+		"summary":                   contextBudgetSummaryTrace(breakdown, sessionThreadBudget(window), summaryRecompressed),
 		"semantic_requested":        semantic.Requested,
 		"semantic_resolved":         semantic.Resolved,
 		"semantic_text_sources":     semantic.TextSources,

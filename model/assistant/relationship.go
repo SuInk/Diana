@@ -106,16 +106,19 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		"diana.capabilities":       true,
 		dianaChatHistoryToolName:   true,
 		dianaHistoryImagesToolName: true,
-		"diana.relationship":       true,
-		"diana.onebot_group":       true,
-		dianaOneBotV11ToolName:     true,
-		dianaImageToolName:         true,
-		"diana.reminder":           true,
-		"diana.schedule":           true,
-		"diana.rss":                true,
-		"diana.tasks":              true,
-		"diana.tts":                true,
-		agent.WebSearchToolName:    true,
+		// 子调用不碰本地文件、命令和浏览器，只是把调用方给的素材压成一句结论，
+		// 所以和读历史同级，不需要 owner 权限。
+		dianaSubtaskToolName:    true,
+		"diana.relationship":    true,
+		"diana.onebot_group":    true,
+		dianaOneBotV11ToolName:  true,
+		dianaImageToolName:      true,
+		"diana.reminder":        true,
+		"diana.schedule":        true,
+		"diana.rss":             true,
+		"diana.tasks":           true,
+		"diana.tts":             true,
+		agent.WebSearchToolName: true,
 	}
 	allowed["browser_render"] = true
 	return allowed

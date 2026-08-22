@@ -165,11 +165,16 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
+  /** 跟评长度上限；留空跟随 max_reply_chars，填了也不会超过它。 */
+  follow_up_max_chars?: number;
+  /** 跟评的默认取向：开启时没有明确理由就不接话。 */
+  follow_up_quiet_default?: boolean;
   direct_reply_chunk_size?: number;
   forward_reply_threshold?: number;
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
+  recent_history_token_budget?: number;
   recent_context_limit?: number;
   /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
   long_term_memory_enabled?: boolean;
@@ -325,8 +330,13 @@ export interface BotGroupConfig {
   welcome_enabled?: boolean;
   welcome_message?: string;
   max_context_tokens?: number;
+  recent_history_token_budget?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
+  /** 跟评长度上限；留空跟随 max_reply_chars，填了也不会超过它。 */
+  follow_up_max_chars?: number;
+  /** 跟评的默认取向：开启时没有明确理由就不接话。 */
+  follow_up_quiet_default?: boolean;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
   /** 本群是否开启自然插话模式。 */
@@ -810,10 +820,15 @@ export interface PersonaGenerateResponse {
 }
 
 /** 用当前已配置的模型把一句话需求写成基础人设；带上 current 时是改写而不是重写。 */
-export function generatePersona(description: string, name?: string, current?: string): Promise<PersonaGenerateResponse> {
+export function generatePersona(
+  description: string,
+  name?: string,
+  current?: string,
+  style?: { reply_style?: string; response_mode?: string }
+): Promise<PersonaGenerateResponse> {
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
-    body: JSON.stringify({ description, name, current })
+    body: JSON.stringify({ description, name, current, ...(style ?? {}) })
   });
 }
 

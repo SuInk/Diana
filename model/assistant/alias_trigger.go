@@ -14,19 +14,24 @@ import (
 // 裸子串匹配只能回答「这条消息里有没有出现这个称呼」，但群里出现称呼有两种截然
 // 不同的情况：叫它（「diana 帮我看看」）和谈论它（「diana 刚才那句话好怪」）。
 // 后者按裸匹配一样会触发，机器人就凑进了本来没它的对话里。
+//
+// 这里只做结构判断：词边界、是否被引号整个括起来、是否处在呼语位置。区分「叫它」
+// 和「谈论它」是语义问题，以前靠三张中文词表在代码里判（「diana 的/说的/刚才」算
+// 谈论，「diana 帮/你/看看」算呼叫），本项目不允许用关键词判断意图，那段判断已经
+// 删除。代价是谈论它的消息会重新触发回复；要恢复这层区分，正确做法是让主动回复
+// 路由来判——它的输入里本来就有 bot_aliases 和完整上下文，并会给出 directed_at_bot。
 type AliasTriggerMode string
 
 const (
-	// AliasTriggerLoose 出现即触发，等于本功能加入之前的行为。
+	// AliasTriggerLoose 出现即触发，连被引号整个括起来的引述也算。
 	AliasTriggerLoose AliasTriggerMode = "loose"
-	// AliasTriggerSmart 出现即触发，但明显是在谈论它时放行给插话判定。
+	// AliasTriggerSmart 出现即触发，但被引号整个括起来时视为引述这个词本身，不触发。
 	AliasTriggerSmart AliasTriggerMode = "smart"
-	// AliasTriggerStrict 只有称呼用作呼语（句首或句尾）且不是谈论时才触发。
+	// AliasTriggerStrict 还要求称呼处在呼语位置：一侧只剩标点或空白。
 	AliasTriggerStrict AliasTriggerMode = "strict"
 )
 
-// defaultAliasTriggerMode 默认取 smart：只丢掉有明确谈论特征的消息，其余照旧触发。
-// 宁可多回一条，也不要漏掉真正在叫它的人。
+// defaultAliasTriggerMode 默认取 smart：宁可多回一条，也不要漏掉真正在叫它的人。
 const defaultAliasTriggerMode = AliasTriggerSmart
 
 // normalizeAliasTriggerMode 归一化匹配模式，未识别的值一律回落到默认档。
@@ -51,27 +56,6 @@ func AliasTriggerModes() []AliasTriggerMode {
 func aliasTriggerMode(cfg BotConfig) AliasTriggerMode {
 	return normalizeAliasTriggerMode(cfg.GroupTriggerMode)
 }
-
-// aliasAddressedPatterns 是紧跟称呼之后、说明这是在跟它说话的词。它们优先于
-// aliasDiscussPatterns 判定，用来救回「说说」「回我」这类和谈论词共享前缀的说法。
-var aliasAddressedPatterns = []string{
-	"说说", "讲讲", "回我", "回答我", "回复我", "发个", "发一", "发张", "发条",
-	"你", "您", "咱", "帮", "给我", "告诉我", "查一", "查查", "看看", "来一", "来个",
-	"在吗", "在么", "在不在", "醒醒", "求", "能不能", "可不可以",
-}
-
-// aliasDiscussPatterns 是紧跟称呼之后、说明这条消息在谈论它而不是在叫它的词。
-var aliasDiscussPatterns = []string{
-	"的", "地", "得",
-	"说的", "说得", "说过", "说了", "讲的", "讲过",
-	"发的", "发了", "发过", "回的", "回了", "回复的", "回复了", "答的",
-	"提到", "刚才", "刚刚", "之前", "上次", "昨天", "今天早",
-	"又开始", "好像", "似乎", "怎么样", "是不是有", "这句", "那句", "这条", "那条",
-}
-
-// aliasDiscussPrefixes 是紧挨在称呼之前、说明这条消息在谈论它的词。
-// 只收明确指向第三方的说法；「让 diana 看看」这类仍然算在叫它，不收。
-var aliasDiscussPrefixes = []string{"跟", "和", "与", "关于", "像", "问过", "问了"}
 
 // aliasQuotePairs 是把称呼整个括起来时的引号对，括起来通常是在引述这个词本身。
 var aliasQuotePairs = map[rune]rune{
@@ -120,7 +104,7 @@ func aliasTriggers(text, alias string, mode AliasTriggerMode) bool {
 		if mode == AliasTriggerLoose {
 			return true
 		}
-		if aliasIsQuoted(before, after) || aliasDiscussed(before, after) {
+		if aliasIsQuoted(before, after) {
 			continue
 		}
 		if mode == AliasTriggerStrict && !aliasIsVocative(before, after) {
@@ -159,18 +143,6 @@ func aliasIsQuoted(before, after string) bool {
 	return size > 0 && next == closing
 }
 
-// aliasDiscussed 报告这次出现的上下文是否说明消息在谈论它，而不是在叫它。
-func aliasDiscussed(before, after string) bool {
-	trimmedAfter := strings.TrimLeft(after, " \t　")
-	if hasAnyPrefix(trimmedAfter, aliasAddressedPatterns) {
-		return false
-	}
-	if hasAnyPrefix(trimmedAfter, aliasDiscussPatterns) {
-		return true
-	}
-	return hasAnySuffix(strings.TrimRight(before, " \t　"), aliasDiscussPrefixes)
-}
-
 // aliasIsVocative 报告这次出现是否处在呼语位置：句首或句尾，两侧只有标点或空白。
 func aliasIsVocative(before, after string) bool {
 	return aliasBoundaryIsBlank(before) || aliasBoundaryIsBlank(after)
@@ -185,24 +157,6 @@ func aliasBoundaryIsBlank(side string) bool {
 		return false
 	}
 	return true
-}
-
-func hasAnyPrefix(text string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(text, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasAnySuffix(text string, suffixes []string) bool {
-	for _, suffix := range suffixes {
-		if strings.HasSuffix(text, suffix) {
-			return true
-		}
-	}
-	return false
 }
 
 func isASCIIWord(value string) bool {

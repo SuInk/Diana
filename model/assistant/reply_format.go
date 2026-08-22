@@ -24,7 +24,7 @@ var (
 	mdExtraBlankPattern = regexp.MustCompile(`\n{3,}`)
 )
 
-// markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 <botbr> 分段标记。
+// markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 <dianabr> 分段标记。
 func markdownToPlain(text string) string {
 	if !strings.ContainsAny(text, "*#`[]_->") {
 		return text

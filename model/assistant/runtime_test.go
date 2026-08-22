@@ -235,7 +235,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 		},
 		{
 			name:        "router mistakes tool-readable data for missing information",
-			routeReply:  `{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"reason":"缺少所指文件，无法可靠回答"}`,
+			routeReply:  `{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"requests_response":true,"blocker":"missing_context","reason":"缺少所指文件，无法可靠回答"}`,
 			wantHandled: true,
 			wantOutcome: "replied_proactive",
 		},
@@ -294,7 +294,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 }
 
 func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"should_reply":false,"confidence":0.99,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"reason":"群成员实时人数属于不可访问的群内数据"}`}
+	provider := &capturingLLMProvider{reply: `{"should_reply":false,"confidence":0.99,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"requests_response":true,"blocker":"no_capability","reason":"群成员实时人数属于不可访问的群内数据"}`}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:            true,
 		BotAccount:              "42",
@@ -337,7 +337,8 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 
 func TestRuntimePromotesDirectedImageRequestDespiteRouterToolMistake(t *testing.T) {
 	decision := proactiveReplyDecision{
-		Confidence: 0.97, DirectedAtBot: true, Reason: "当前没有可用的绘图工具，无法实际完成请求",
+		Confidence: 0.97, DirectedAtBot: true, RequestsResponse: true,
+		Blocker: proactiveBlockerNoCapability, Reason: "当前没有可用的绘图工具，无法实际完成请求",
 	}
 	event := MessageEvent{Kind: EventKindGroup, MessageID: "draw-request"}
 	if !promoteDirectedFollowup(&decision, event, "那你画一只奶鼠", 0.9, chatInSettings{}) {
@@ -349,8 +350,11 @@ func TestRuntimePromotesDirectedImageRequestDespiteRouterToolMistake(t *testing.
 }
 
 func TestRuntimeDoesNotPromoteDirectedAcknowledgement(t *testing.T) {
+	// 用户只是道谢，没有在要求回应：路由器给出 requests_response=false，
+	// 运行时就不该把它救成一次回复。
 	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, Reason: "信息不足，无法可靠回答",
+		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: false,
+		Blocker: proactiveBlockerMissingInfo, Reason: "信息不足，无法可靠回答",
 	}
 	event := MessageEvent{Kind: EventKindGroup, MessageID: "ack"}
 	if promoteDirectedFollowup(&decision, event, "谢谢", 0.9, chatInSettings{}) {
@@ -360,7 +364,8 @@ func TestRuntimeDoesNotPromoteDirectedAcknowledgement(t *testing.T) {
 
 func TestRuntimePromotesClearDirectedQuestionDespiteRouterAnswerabilityMistake(t *testing.T) {
 	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, Reason: "机器人无法直接判断",
+		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: true,
+		Blocker: proactiveBlockerMissingInfo, Reason: "机器人无法直接判断",
 	}
 	event := MessageEvent{Kind: EventKindGroup, MessageID: "clear-question"}
 	if !promoteDirectedFollowup(&decision, event, "那为什么会这样？", 0.9, chatInSettings{}) {
@@ -372,8 +377,10 @@ func TestRuntimePromotesClearDirectedQuestionDespiteRouterAnswerabilityMistake(t
 }
 
 func TestRuntimeDoesNotPromoteIntentionalSemanticSilence(t *testing.T) {
+	// 能答但没有新增价值：blocker=low_value 不在可救回的两类里。
 	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, Reason: "只是待命式自动回应，没有需要可靠回答的问题",
+		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: true,
+		Blocker: proactiveBlockerLowValue, Reason: "只是待命式自动回应，没有需要可靠回答的问题",
 	}
 	event := MessageEvent{Kind: EventKindGroup, MessageID: "auto-reply"}
 	if promoteDirectedFollowup(&decision, event, "有需要随时告诉我", 0.9, chatInSettings{}) {
@@ -637,10 +644,15 @@ func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
 	}
 }
 
-func TestDefaultBotConfigKeepsTwentyMessagesAndCompressesAtOneHundred(t *testing.T) {
+func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.T) {
 	cfg := DefaultBotConfig()
-	if cfg.RecentContextLimit != 20 || cfg.ContextSummaryThreshold != 100 {
+	// RecentContextLimit 只管旁路回看深度，不进正式提示词；正式提示词的历史预算
+	// 由 RecentHistoryTokenBudget 按 token 计。
+	if cfg.RecentContextLimit != 40 || cfg.ContextSummaryThreshold != 100 {
 		t.Fatalf("context defaults = recent %d threshold %d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
+	}
+	if cfg.RecentHistoryTokenBudget != DefaultRecentHistoryTokenBudget {
+		t.Fatalf("history token budget default = %d", cfg.RecentHistoryTokenBudget)
 	}
 	if !boolValue(cfg.LongTermMemoryEnabled, false) || boolValue(cfg.CrossGroupMemoryEnabled, true) {
 		t.Fatalf("memory defaults = long_term %v cross_group %v", cfg.LongTermMemoryEnabled, cfg.CrossGroupMemoryEnabled)
@@ -1134,13 +1146,10 @@ func TestMessageHistoryPluginAddsRecallContext(t *testing.T) {
 		UserID:     "20002",
 		MessageID:  "old-1",
 	}))
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{
 		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 		Text:  "撤回了什么",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if resp == nil || !strings.Contains(resp.Context, "最近24小时群撤回消息") || !strings.Contains(resp.Context, "要撤回的内容") || !resp.NestedForward {
 		t.Fatalf("response = %#v", resp)
 	}
@@ -1150,6 +1159,10 @@ func TestMessageHistoryPluginAddsRecallContext(t *testing.T) {
 }
 
 func TestRuntimeRecallDefaultsToLLMReplyWithoutOriginalForward(t *testing.T) {
+	// 这个用例以前是端到端的：靠词表让插件劫持回复，再断言撤回原文以插件优先级进了
+	// LLM 请求、且默认档位不发原文转发卡片。触发权交给模型之后，撤回原文改由
+	// diana.chat_history 的 recalls 操作作为工具结果回给模型，而「默认档位不发原文
+	// 卡片」这条策略仍由 applyRecallReplyMode 决定——这里直接验证那一步。
 	history := NewMessageHistoryPlugin()
 	history.Observe(context.Background(), MessageEvent{
 		Kind:       EventKindGroup,
@@ -1167,51 +1180,30 @@ func TestRuntimeRecallDefaultsToLLMReplyWithoutOriginalForward(t *testing.T) {
 		UserID:     "20002",
 		MessageID:  "old-1",
 	}))
-	channel := &recordingChannel{}
-	provider := &sequenceLLMProvider{replies: []string{"这是 LLM 根据撤回记录生成的回复。"}}
-	runtime := NewRuntime(BotConfig{
-		AgentEnabled:          false,
-		DirectReplyChunkSize:  900,
-		ForwardReplyThreshold: 900,
-	}, channel, NewPluginManager(history), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
+
+	disclosure := recallDisclosureForTest(t, history, PluginRequest{
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 	})
-	event := MessageEvent{
-		Kind:       EventKindGroup,
-		GroupID:    "123",
-		UserID:     "10001",
-		MessageID:  "query-1",
-		RawMessage: "查看撤回记录",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "查看撤回记录"}}},
+	if disclosure == nil || len(disclosure.ForwardMessages) == 0 {
+		t.Fatalf("recall disclosure = %#v", disclosure)
 	}
-	reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
-	if err != nil {
-		t.Fatal(err)
+
+	summary := applyRecallReplyMode([]PluginResponse{*disclosure}, RecallReplyModeLLMSummary)
+	if len(summary) != 1 {
+		t.Fatalf("summary responses = %#v", summary)
 	}
-	if reply != "这是 LLM 根据撤回记录生成的回复。" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
-		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
+	// 默认档位只让模型写一句说明，不把原文卡片发出去。
+	if summary[0].Forward || summary[0].NestedForward || len(summary[0].ForwardMessages) != 0 {
+		t.Fatalf("default recall mode kept the original forward: %#v", summary[0])
 	}
-	for _, call := range channel.calls {
-		if strings.Contains(call.action, "forward") {
-			t.Fatalf("default recall mode sent original forward: %#v", channel.calls)
-		}
+	// 原文必须仍以事实上下文交给模型，而不是变成直接发出的文案。
+	if summary[0].Reply != "" || !strings.Contains(summary[0].Context, "撤回前的完整内容") {
+		t.Fatalf("recall context lost after applying the default mode: %#v", summary[0])
 	}
-	if len(provider.requests) != 1 {
-		t.Fatalf("recall query should use one LLM request, got %d: %#v", len(provider.requests), provider.requests)
-	}
-	var pluginMessage *llm.Message
-	for index := range provider.requests[0].Messages {
-		message := &provider.requests[0].Messages[index]
-		if strings.Contains(message.Content, "撤回前的完整内容") {
-			pluginMessage = message
-			break
-		}
-	}
-	if pluginMessage == nil || pluginMessage.Priority != llm.MessagePriorityPlugin || !strings.Contains(pluginMessage.Content, "【插件事实结果，必须完整使用】") {
-		t.Fatalf("LLM did not receive recall context: %#v", provider.requests)
-	}
-	if strings.Contains(provider.requests[0].Messages[0].Content, "撤回前的完整内容") {
-		t.Fatalf("recall context is still embedded inside the system prompt: %#v", provider.requests[0].Messages)
+
+	original := applyRecallReplyMode([]PluginResponse{*disclosure}, RecallReplyModeOriginalForward)
+	if len(original) != 1 || !original[0].NestedForward || len(original[0].ForwardMessages) == 0 {
+		t.Fatalf("original-forward mode dropped the card: %#v", original)
 	}
 }
 
@@ -1224,13 +1216,10 @@ func TestMessageHistoryPluginHandlesRecallBeforeCachedMessage(t *testing.T) {
 		UserID:     "20002",
 		MessageID:  "missing-1",
 	}))
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{
 		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 		Text:  "刚才撤回了什么",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if resp == nil || !strings.Contains(resp.Context, "missing-1") || !strings.Contains(resp.Context, "[已撤回消息]") {
 		t.Fatalf("response = %#v", resp)
 	}
@@ -1300,7 +1289,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	if !strings.Contains(prompt, "同一发送者紧邻补发") || !strings.Contains(prompt, "发送一条完整回复") || !strings.Contains(prompt, "不要按历史消息逐条作答") {
 		t.Fatalf("system prompt missing adjacent-message merge guidance: %q", prompt)
 	}
-	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") || !strings.Contains(prompt, "都必须放在同一条 OneBot v11 消息里") || !strings.Contains(prompt, "严禁在每个列表项或普通段落前使用 <botbr>") || !strings.Contains(prompt, "语义上确实是下一次独立发言") {
+	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") || !strings.Contains(prompt, "都必须放在同一条 OneBot v11 消息里") || !strings.Contains(prompt, "严禁在每个列表项或普通段落前使用 "+notificationSplitMarker) || !strings.Contains(prompt, "语义上确实是下一次独立发言") {
 		t.Fatalf("system prompt missing QQ plain-text guidance: %q", prompt)
 	}
 	if strings.Contains(prompt, "需要分段时直接使用换行") {
@@ -1332,7 +1321,7 @@ func TestRuntimeSystemPromptExplainsMatchedAliasRoles(t *testing.T) {
 	for _, want := range []string{
 		`"小满"、"Diana"`,
 		`当前消息命中的配置别名："小满"`,
-		"命中只表示这条消息的触发来源",
+		"命中只说明这条消息的触发来源",
 		"以第一人称理解和回应",
 		"固定词组",
 	} {
@@ -1471,12 +1460,17 @@ func TestRuntimeSelfEchoFeedsRecallHistory(t *testing.T) {
 	if err := runtime.HandleEvent(context.Background(), recall); err != nil {
 		t.Fatalf("HandleEvent(recall) error = %v", err)
 	}
-	resp, err := plugins.RunOneWithOverrides(context.Background(), messageHistoryPluginID, PluginRequest{
-		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123456"}, Text: "查看撤回记录",
-	}, nil)
-	if err != nil {
-		t.Fatalf("message history plugin error = %v", err)
+	plugin, _, enabled := plugins.PluginWithSettings(messageHistoryPluginID, nil)
+	if !enabled {
+		t.Fatal("message history plugin is not enabled")
 	}
+	historyPlugin, ok := plugin.(*MessageHistoryPlugin)
+	if !ok {
+		t.Fatalf("unexpected plugin type %T", plugin)
+	}
+	resp := recallDisclosureForTest(t, historyPlugin, PluginRequest{
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123456"},
+	})
 	if resp == nil || resp.Reply != "最近24小时没有记录到群消息撤回。" || len(resp.ForwardMessages) != 0 {
 		t.Fatalf("bot's own recall must not enter recall history: %#v", resp)
 	}
@@ -2409,7 +2403,7 @@ func TestImageEditSourcesKeepRecentCrossMessageBatchOrder(t *testing.T) {
 		})
 	}
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "edit-request"}
-	if got := runtime.imageEditSourceImages(context.Background(), event, "把刚才三张拼起来"); strings.Join(got, ",") != strings.Join(imageURLs, ",") {
+	if got := runtime.imageEditSourceImages(context.Background(), event, nil); strings.Join(got, ",") != strings.Join(imageURLs, ",") {
 		t.Fatalf("image edit sources = %#v", got)
 	}
 }
@@ -4013,7 +4007,8 @@ func TestRuntimeImageEditCanUseMentionedMemberAvatar(t *testing.T) {
 		},
 		ToMe: true,
 	}
-	sources := runtime.imageEditSourceImages(context.Background(), event, "把 @20002 的头像改成赛博风")
+	// @ 是用户亲手打出的结构化指向，模型没有点名头像来源时也按它兜底。
+	sources := runtime.imageEditSourceImages(context.Background(), event, defaultAvatarIdentitySources(event, "42"))
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("20002") {
 		t.Fatalf("sources = %#v", sources)
 	}
@@ -4040,7 +4035,8 @@ func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
 		},
 	}
 
-	sources := runtime.imageEditSourceImages(context.Background(), event, "把我头像变成黑白")
+	// 「我的头像」由模型判断后点名 sender_avatar，运行时不再扫措辞。
+	sources := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceSender})
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("10001") {
 		t.Fatalf("sources = %#v, want sender avatar %q", sources, OneBotMemberAvatarURL("10001"))
 	}
@@ -4064,10 +4060,10 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		event  MessageEvent
-		prompt string
-		want   string
+		name     string
+		event    MessageEvent
+		identity []string
+		want     string
 	}{
 		{
 			name: "current message image",
@@ -4077,8 +4073,7 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 				MessageID: "current-image",
 				Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": currentImage}}},
 			},
-			prompt: "把这张图变成黑白",
-			want:   currentImage,
+			want: currentImage,
 		},
 		{
 			name: "quoted image",
@@ -4091,8 +4086,7 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 					Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": quotedImage}}},
 				},
 			},
-			prompt: "把引用的图片变成黑白",
-			want:   quotedImage,
+			want: quotedImage,
 		},
 		{
 			name: "explicit own avatar",
@@ -4104,8 +4098,8 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 				RawMessage: "把我头像变成黑白",
 				Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "把我头像变成黑白"}}},
 			},
-			prompt: "把我头像变成黑白",
-			want:   OneBotMemberAvatarURL("10001"),
+			identity: []string{avatarSourceSender},
+			want:     OneBotMemberAvatarURL("10001"),
 		},
 		{
 			name: "recent context image",
@@ -4115,14 +4109,13 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 				MessageID: "recent-image-edit",
 				Segments:  []MessageSegment{{Type: "text", Data: map[string]string{"text": "把刚才那张图变成黑白"}}},
 			},
-			prompt: "把刚才那张图变成黑白",
-			want:   recentImage,
+			want: recentImage,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sources := newRuntimeWithRecentImage().imageEditSourceImages(context.Background(), tt.event, tt.prompt)
+			sources := newRuntimeWithRecentImage().imageEditSourceImages(context.Background(), tt.event, tt.identity)
 			if len(sources) != 1 || sources[0] != tt.want {
 				t.Fatalf("sources = %#v, want %q", sources, tt.want)
 			}
@@ -4194,7 +4187,7 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 	if !strings.Contains(decision.Prompt, "@10001") {
 		t.Fatalf("restored decision prompt = %q", decision.Prompt)
 	}
-	sources := runtime.imageEditSourceImages(context.Background(), event, decision.Prompt)
+	sources := runtime.imageEditSourceImages(context.Background(), event, defaultAvatarIdentitySources(event, "10000"))
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("10001") {
 		t.Fatalf("sources = %#v", sources)
 	}
@@ -4362,7 +4355,10 @@ func TestRuntimeVisualIntentIncludesRecentTextEditRequirements(t *testing.T) {
 	}
 }
 
-func TestRuntimeImageEditCanUseNamedMemberAvatar(t *testing.T) {
+// 以前运行时拿群成员的名片和昵称去正文里做子串匹配，靠命中判断「用户说的是这个
+// 人」。现在由模型点名 user_id，运行时只负责把 id 换成头像地址，并核对这个人确实
+// 在当前会话里；编出来的 QQ 号拿不到任何图。
+func TestRuntimeImageEditNamedMemberAvatarComesFromModelSelection(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_list": {
 			"items": []any{
@@ -4382,9 +4378,16 @@ func TestRuntimeImageEditCanUseNamedMemberAvatar(t *testing.T) {
 		},
 		ToMe: true,
 	}
-	sources := runtime.imageEditSourceImages(context.Background(), event, "把阿梨头像改成赛博风")
+
+	// 模型从群成员工具里查到「阿梨」是 20002 之后点名它。
+	sources := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "20002"})
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("20002") {
 		t.Fatalf("sources = %#v", sources)
+	}
+
+	// 不在当前会话里的 id 不能凭空变出一张头像。
+	if extra := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "99999"}); len(extra) != 0 {
+		t.Fatalf("unknown identity source produced %#v", extra)
 	}
 }
 

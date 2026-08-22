@@ -28,7 +28,7 @@ func TestRepositoryWatchFollowUpSeesTargetConversationHistory(t *testing.T) {
 	target.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": target.RawMessage}}}
 	runtime.remember(target)
 
-	runtime.repositoryWatchFollowUpComment(context.Background(), target, "【仓库动态】SuInk/Diana 合并了 #120")
+	runtime.followUpComment(context.Background(), followUpKindRepositoryWatch, target, "【仓库动态】SuInk/Diana 合并了 #120")
 
 	requests := provider.requestsSnapshot()
 	if len(requests) == 0 {
@@ -73,7 +73,7 @@ func TestRepositoryWatchFollowUpJudgesEachTargetSeparately(t *testing.T) {
 func TestRepositoryWatchFollowUpStaysQuietOnSkip(t *testing.T) {
 	runtime, channel, provider := repositoryWatchFollowUpRuntime("SKIP")
 
-	comment := runtime.repositoryWatchFollowUpComment(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g1"}, "【仓库动态】SuInk/Diana 合并了 #120")
+	comment := runtime.followUpComment(context.Background(), followUpKindRepositoryWatch, MessageEvent{Kind: EventKindGroup, GroupID: "g1"}, "【仓库动态】SuInk/Diana 合并了 #120")
 
 	if comment != "" {
 		t.Fatalf("模型回 SKIP 时不该产出跟评：%q", comment)
@@ -90,7 +90,7 @@ func TestRepositoryWatchFollowUpPromptCarriesTheNotification(t *testing.T) {
 	runtime, _, provider := repositoryWatchFollowUpRuntime("SKIP")
 	notification := "【仓库动态】SuInk/Diana 合并了 #120"
 
-	runtime.repositoryWatchFollowUpComment(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g1"}, notification)
+	runtime.followUpComment(context.Background(), followUpKindRepositoryWatch, MessageEvent{Kind: EventKindGroup, GroupID: "g1"}, notification)
 
 	requests := provider.requestsSnapshot()
 	if len(requests) == 0 {
