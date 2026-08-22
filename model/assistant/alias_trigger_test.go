@@ -24,19 +24,28 @@ func TestMatchedAliasesInTextSmartKeepsDirectCalls(t *testing.T) {
 	}
 }
 
-func TestMatchedAliasesInTextSmartDropsDiscussion(t *testing.T) {
+func TestMatchedAliasesInTextSmartDropsQuotedMention(t *testing.T) {
 	aliases := []string{"diana"}
-	cases := []string{
+	// 被引号整个括起来是在引述这个词本身，这是结构判断，保留。
+	for _, text := range []string{"「diana」这个名字挺好听", "他说的“diana”是哪个"} {
+		if got := matchedAliasesInText(text, aliases, AliasTriggerSmart); len(got) != 0 {
+			t.Errorf("smart 模式应把整词引述当作没提到：%q（命中 %v）", text, got)
+		}
+	}
+}
+
+func TestMatchedAliasesInTextNoLongerGuessesDiscussionFromWording(t *testing.T) {
+	aliases := []string{"diana"}
+	// 「diana 的/说的/刚才」算谈论、「diana 帮/你/看看」算呼叫，这层区分以前靠三张
+	// 中文词表。本项目不允许用关键词判断语义意图，那段判断已经删除：这些消息现在
+	// 一律触发。要恢复区分应当由主动回复路由来判，而不是在代码里数词。
+	for _, text := range []string{
 		"diana 刚才那句话好怪",
 		"diana的回复越来越慢了",
 		"diana说的那个方案我觉得不行",
-		"跟diana聊天挺有意思的",
-		"diana又开始复读了",
-		"「diana」这个名字挺好听",
-	}
-	for _, text := range cases {
-		if got := matchedAliasesInText(text, aliases, AliasTriggerSmart); len(got) != 0 {
-			t.Errorf("smart 模式没能识别出这是在谈论它：%q（命中 %v）", text, got)
+	} {
+		if got := matchedAliasesInText(text, aliases, AliasTriggerSmart); len(got) == 0 {
+			t.Errorf("称呼出现即应命中：%q", text)
 		}
 	}
 }
@@ -77,8 +86,13 @@ func TestMatchedAliasesInTextNonASCIIAliasIgnoresWordBoundary(t *testing.T) {
 	if got := matchedAliasesInText("小满帮我看看", []string{"小满"}, AliasTriggerSmart); len(got) == 0 {
 		t.Fatal("中文称呼没有词边界概念，应正常命中")
 	}
-	if got := matchedAliasesInText("小满刚才说的那个", []string{"小满"}, AliasTriggerSmart); len(got) != 0 {
-		t.Fatalf("中文称呼同样要能识别谈论语境，命中 %v", got)
+	// 「小满刚才说的那个」以前被词表判成谈论而不触发。语义判断已经交出去，中文称呼
+	// 同样只按结构判定，出现即命中。
+	if got := matchedAliasesInText("小满刚才说的那个", []string{"小满"}, AliasTriggerSmart); len(got) == 0 {
+		t.Fatal("中文称呼出现即应命中")
+	}
+	if got := matchedAliasesInText("「小满」这名字不错", []string{"小满"}, AliasTriggerSmart); len(got) != 0 {
+		t.Fatalf("整词引述仍应视为没提到，命中 %v", got)
 	}
 }
 
@@ -104,7 +118,7 @@ func groupAliasEvent(text string) MessageEvent {
 	}
 }
 
-func TestShouldHandleChatTriggerSkipsAliasDiscussionByDefault(t *testing.T) {
+func TestShouldHandleChatTriggerUsesStructuralAliasMatchOnly(t *testing.T) {
 	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
 	called := groupAliasEvent("Diana 帮我看看这个报错")
@@ -112,9 +126,17 @@ func TestShouldHandleChatTriggerSkipsAliasDiscussionByDefault(t *testing.T) {
 		t.Fatal("默认档位漏掉了直接呼叫")
 	}
 
+	// 「Diana 刚才那句话好怪」以前被词表判成谈论而不触发。用关键词判断语义意图已经
+	// 从项目里移除，闸门只剩结构判断：称呼出现即触发。
 	discussed := groupAliasEvent("Diana 刚才那句话好怪")
-	if runtime.shouldHandleChatTrigger(discussed, PlainText(discussed.Segments)) {
-		t.Fatal("默认档位把谈论机器人的消息当成了显式呼叫")
+	if !runtime.shouldHandleChatTrigger(discussed, PlainText(discussed.Segments)) {
+		t.Fatal("称呼出现即应触发")
+	}
+
+	// 整词引述仍然按结构排除。
+	quoted := groupAliasEvent("「Diana」这名字挺好听")
+	if runtime.shouldHandleChatTrigger(quoted, PlainText(quoted.Segments)) {
+		t.Fatal("整词引述不该被当成呼叫")
 	}
 }
 
@@ -132,9 +154,12 @@ func TestShouldHandleChatTriggerLooseModeKeepsLegacyBehaviour(t *testing.T) {
 func TestReplyDecisionReasonMatchesTriggerGate(t *testing.T) {
 	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	// 判定理由和闸门必须用同一套匹配，否则后台会显示一条并不成立的触发原因。
-	discussed := groupAliasEvent("Diana 刚才那句话好怪")
-	reason := runtime.replyDecisionReason(discussed, PlainText(discussed.Segments), "replied")
-	if reason == "群消息命中了触发称呼“Diana”" {
+	quoted := groupAliasEvent("「Diana」这名字挺好听")
+	if reason := runtime.replyDecisionReason(quoted, PlainText(quoted.Segments), "replied"); reason == "群消息命中了触发称呼“Diana”" {
 		t.Fatalf("判定理由仍然报告了已被闸门丢弃的称呼命中：%q", reason)
+	}
+	called := groupAliasEvent("Diana 帮我看看这个报错")
+	if reason := runtime.replyDecisionReason(called, PlainText(called.Segments), "replied"); reason != "群消息命中了触发称呼“Diana”" {
+		t.Fatalf("命中称呼时判定理由 = %q", reason)
 	}
 }

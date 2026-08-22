@@ -235,7 +235,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 		},
 		{
 			name:        "router mistakes tool-readable data for missing information",
-			routeReply:  `{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"reason":"缺少所指文件，无法可靠回答"}`,
+			routeReply:  `{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"requests_response":true,"blocker":"missing_context","reason":"缺少所指文件，无法可靠回答"}`,
 			wantHandled: true,
 			wantOutcome: "replied_proactive",
 		},
@@ -294,7 +294,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 }
 
 func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"should_reply":false,"confidence":0.99,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"reason":"群成员实时人数属于不可访问的群内数据"}`}
+	provider := &capturingLLMProvider{reply: `{"should_reply":false,"confidence":0.99,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"requests_response":true,"blocker":"no_capability","reason":"群成员实时人数属于不可访问的群内数据"}`}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:            true,
 		BotAccount:              "42",
@@ -337,7 +337,8 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 
 func TestRuntimePromotesDirectedImageRequestDespiteRouterToolMistake(t *testing.T) {
 	decision := proactiveReplyDecision{
-		Confidence: 0.97, DirectedAtBot: true, Reason: "当前没有可用的绘图工具，无法实际完成请求",
+		Confidence: 0.97, DirectedAtBot: true, RequestsResponse: true,
+		Blocker: proactiveBlockerNoCapability, Reason: "当前没有可用的绘图工具，无法实际完成请求",
 	}
 	event := MessageEvent{Kind: EventKindGroup, MessageID: "draw-request"}
 	if !promoteDirectedFollowup(&decision, event, "那你画一只奶鼠", 0.9, chatInSettings{}) {
@@ -349,8 +350,11 @@ func TestRuntimePromotesDirectedImageRequestDespiteRouterToolMistake(t *testing.
 }
 
 func TestRuntimeDoesNotPromoteDirectedAcknowledgement(t *testing.T) {
+	// 用户只是道谢，没有在要求回应：路由器给出 requests_response=false，
+	// 运行时就不该把它救成一次回复。
 	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, Reason: "信息不足，无法可靠回答",
+		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: false,
+		Blocker: proactiveBlockerMissingInfo, Reason: "信息不足，无法可靠回答",
 	}
 	event := MessageEvent{Kind: EventKindGroup, MessageID: "ack"}
 	if promoteDirectedFollowup(&decision, event, "谢谢", 0.9, chatInSettings{}) {
@@ -360,7 +364,8 @@ func TestRuntimeDoesNotPromoteDirectedAcknowledgement(t *testing.T) {
 
 func TestRuntimePromotesClearDirectedQuestionDespiteRouterAnswerabilityMistake(t *testing.T) {
 	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, Reason: "机器人无法直接判断",
+		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: true,
+		Blocker: proactiveBlockerMissingInfo, Reason: "机器人无法直接判断",
 	}
 	event := MessageEvent{Kind: EventKindGroup, MessageID: "clear-question"}
 	if !promoteDirectedFollowup(&decision, event, "那为什么会这样？", 0.9, chatInSettings{}) {
@@ -372,8 +377,10 @@ func TestRuntimePromotesClearDirectedQuestionDespiteRouterAnswerabilityMistake(t
 }
 
 func TestRuntimeDoesNotPromoteIntentionalSemanticSilence(t *testing.T) {
+	// 能答但没有新增价值：blocker=low_value 不在可救回的两类里。
 	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, Reason: "只是待命式自动回应，没有需要可靠回答的问题",
+		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: true,
+		Blocker: proactiveBlockerLowValue, Reason: "只是待命式自动回应，没有需要可靠回答的问题",
 	}
 	event := MessageEvent{Kind: EventKindGroup, MessageID: "auto-reply"}
 	if promoteDirectedFollowup(&decision, event, "有需要随时告诉我", 0.9, chatInSettings{}) {
@@ -637,10 +644,15 @@ func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
 	}
 }
 
-func TestDefaultBotConfigKeepsTwentyMessagesAndCompressesAtOneHundred(t *testing.T) {
+func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.T) {
 	cfg := DefaultBotConfig()
-	if cfg.RecentContextLimit != 20 || cfg.ContextSummaryThreshold != 100 {
+	// RecentContextLimit 只管旁路回看深度，不进正式提示词；正式提示词的历史预算
+	// 由 RecentHistoryTokenBudget 按 token 计。
+	if cfg.RecentContextLimit != 40 || cfg.ContextSummaryThreshold != 100 {
 		t.Fatalf("context defaults = recent %d threshold %d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
+	}
+	if cfg.RecentHistoryTokenBudget != DefaultRecentHistoryTokenBudget {
+		t.Fatalf("history token budget default = %d", cfg.RecentHistoryTokenBudget)
 	}
 	if !boolValue(cfg.LongTermMemoryEnabled, false) || boolValue(cfg.CrossGroupMemoryEnabled, true) {
 		t.Fatalf("memory defaults = long_term %v cross_group %v", cfg.LongTermMemoryEnabled, cfg.CrossGroupMemoryEnabled)
@@ -1134,13 +1146,10 @@ func TestMessageHistoryPluginAddsRecallContext(t *testing.T) {
 		UserID:     "20002",
 		MessageID:  "old-1",
 	}))
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{
 		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 		Text:  "撤回了什么",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if resp == nil || !strings.Contains(resp.Context, "最近24小时群撤回消息") || !strings.Contains(resp.Context, "要撤回的内容") || !resp.NestedForward {
 		t.Fatalf("response = %#v", resp)
 	}
@@ -1150,6 +1159,10 @@ func TestMessageHistoryPluginAddsRecallContext(t *testing.T) {
 }
 
 func TestRuntimeRecallDefaultsToLLMReplyWithoutOriginalForward(t *testing.T) {
+	// 这个用例以前是端到端的：靠词表让插件劫持回复，再断言撤回原文以插件优先级进了
+	// LLM 请求、且默认档位不发原文转发卡片。触发权交给模型之后，撤回原文改由
+	// diana.chat_history 的 recalls 操作作为工具结果回给模型，而「默认档位不发原文
+	// 卡片」这条策略仍由 applyRecallReplyMode 决定——这里直接验证那一步。
 	history := NewMessageHistoryPlugin()
 	history.Observe(context.Background(), MessageEvent{
 		Kind:       EventKindGroup,
@@ -1167,51 +1180,30 @@ func TestRuntimeRecallDefaultsToLLMReplyWithoutOriginalForward(t *testing.T) {
 		UserID:     "20002",
 		MessageID:  "old-1",
 	}))
-	channel := &recordingChannel{}
-	provider := &sequenceLLMProvider{replies: []string{"这是 LLM 根据撤回记录生成的回复。"}}
-	runtime := NewRuntime(BotConfig{
-		AgentEnabled:          false,
-		DirectReplyChunkSize:  900,
-		ForwardReplyThreshold: 900,
-	}, channel, NewPluginManager(history), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
+
+	disclosure := recallDisclosureForTest(t, history, PluginRequest{
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 	})
-	event := MessageEvent{
-		Kind:       EventKindGroup,
-		GroupID:    "123",
-		UserID:     "10001",
-		MessageID:  "query-1",
-		RawMessage: "查看撤回记录",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "查看撤回记录"}}},
+	if disclosure == nil || len(disclosure.ForwardMessages) == 0 {
+		t.Fatalf("recall disclosure = %#v", disclosure)
 	}
-	reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
-	if err != nil {
-		t.Fatal(err)
+
+	summary := applyRecallReplyMode([]PluginResponse{*disclosure}, RecallReplyModeLLMSummary)
+	if len(summary) != 1 {
+		t.Fatalf("summary responses = %#v", summary)
 	}
-	if reply != "这是 LLM 根据撤回记录生成的回复。" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
-		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
+	// 默认档位只让模型写一句说明，不把原文卡片发出去。
+	if summary[0].Forward || summary[0].NestedForward || len(summary[0].ForwardMessages) != 0 {
+		t.Fatalf("default recall mode kept the original forward: %#v", summary[0])
 	}
-	for _, call := range channel.calls {
-		if strings.Contains(call.action, "forward") {
-			t.Fatalf("default recall mode sent original forward: %#v", channel.calls)
-		}
+	// 原文必须仍以事实上下文交给模型，而不是变成直接发出的文案。
+	if summary[0].Reply != "" || !strings.Contains(summary[0].Context, "撤回前的完整内容") {
+		t.Fatalf("recall context lost after applying the default mode: %#v", summary[0])
 	}
-	if len(provider.requests) != 1 {
-		t.Fatalf("recall query should use one LLM request, got %d: %#v", len(provider.requests), provider.requests)
-	}
-	var pluginMessage *llm.Message
-	for index := range provider.requests[0].Messages {
-		message := &provider.requests[0].Messages[index]
-		if strings.Contains(message.Content, "撤回前的完整内容") {
-			pluginMessage = message
-			break
-		}
-	}
-	if pluginMessage == nil || pluginMessage.Priority != llm.MessagePriorityPlugin || !strings.Contains(pluginMessage.Content, "【插件事实结果，必须完整使用】") {
-		t.Fatalf("LLM did not receive recall context: %#v", provider.requests)
-	}
-	if strings.Contains(provider.requests[0].Messages[0].Content, "撤回前的完整内容") {
-		t.Fatalf("recall context is still embedded inside the system prompt: %#v", provider.requests[0].Messages)
+
+	original := applyRecallReplyMode([]PluginResponse{*disclosure}, RecallReplyModeOriginalForward)
+	if len(original) != 1 || !original[0].NestedForward || len(original[0].ForwardMessages) == 0 {
+		t.Fatalf("original-forward mode dropped the card: %#v", original)
 	}
 }
 
@@ -1224,13 +1216,10 @@ func TestMessageHistoryPluginHandlesRecallBeforeCachedMessage(t *testing.T) {
 		UserID:     "20002",
 		MessageID:  "missing-1",
 	}))
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{
 		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 		Text:  "刚才撤回了什么",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if resp == nil || !strings.Contains(resp.Context, "missing-1") || !strings.Contains(resp.Context, "[已撤回消息]") {
 		t.Fatalf("response = %#v", resp)
 	}
@@ -1471,12 +1460,17 @@ func TestRuntimeSelfEchoFeedsRecallHistory(t *testing.T) {
 	if err := runtime.HandleEvent(context.Background(), recall); err != nil {
 		t.Fatalf("HandleEvent(recall) error = %v", err)
 	}
-	resp, err := plugins.RunOneWithOverrides(context.Background(), messageHistoryPluginID, PluginRequest{
-		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123456"}, Text: "查看撤回记录",
-	}, nil)
-	if err != nil {
-		t.Fatalf("message history plugin error = %v", err)
+	plugin, _, enabled := plugins.PluginWithSettings(messageHistoryPluginID, nil)
+	if !enabled {
+		t.Fatal("message history plugin is not enabled")
 	}
+	historyPlugin, ok := plugin.(*MessageHistoryPlugin)
+	if !ok {
+		t.Fatalf("unexpected plugin type %T", plugin)
+	}
+	resp := recallDisclosureForTest(t, historyPlugin, PluginRequest{
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123456"},
+	})
 	if resp == nil || resp.Reply != "最近24小时没有记录到群消息撤回。" || len(resp.ForwardMessages) != 0 {
 		t.Fatalf("bot's own recall must not enter recall history: %#v", resp)
 	}

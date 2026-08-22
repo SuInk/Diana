@@ -28,6 +28,7 @@ const (
 	llmConfigKey         = "llm_config"
 	llmProfilesKey       = "llm_profiles"
 	llmRegistryKey       = "llm_provider_registry"
+	llmContextWindowKey  = "llm_context_window_migration"
 	botConfigKey         = "bot_config"
 	botProfilesKey       = "bot_profiles"
 	botGroupConfigKey    = "bot_group_configs"
@@ -287,6 +288,22 @@ func (s *SQLiteStore) LoadLLMProviderRegistry(ctx context.Context) (llm.Provider
 // legacy profile set during the migration window.
 func (s *SQLiteStore) SaveLLMProviderRegistry(ctx context.Context, document llm.ProviderRegistryDocument) error {
 	return s.saveJSON(ctx, llmRegistryKey, document)
+}
+
+// LoadLLMContextWindowMigration 返回旧版 16K 兜底窗口清理是否已经跑过。
+func (s *SQLiteStore) LoadLLMContextWindowMigration(ctx context.Context) (bool, error) {
+	var done bool
+	ok, err := s.loadJSON(ctx, llmContextWindowKey, &done)
+	if err != nil || !ok {
+		return false, err
+	}
+	return done, nil
+}
+
+// SaveLLMContextWindowMigration 记录旧版 16K 兜底窗口清理已经跑过，避免重复清理
+// 用户后来自己填回来的 16384。
+func (s *SQLiteStore) SaveLLMContextWindowMigration(ctx context.Context, done bool) error {
+	return s.saveJSON(ctx, llmContextWindowKey, done)
 }
 
 // LoadBotProfileConfig 读取 OneBot v11 机器人配置。

@@ -94,14 +94,11 @@ func TestRuntimePersistsRecallIndependentlyAndPluginRestoresIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	plugin := NewMessageHistoryPlugin()
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{
 		Event:        MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 		RecallEvents: restored,
 		Text:         "撤回了什么",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if resp == nil || !strings.Contains(resp.Context, original.RawMessage) || !strings.Contains(resp.Context, "Alice") {
 		t.Fatalf("restored response = %#v", resp)
 	}

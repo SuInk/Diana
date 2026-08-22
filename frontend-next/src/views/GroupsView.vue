@@ -182,6 +182,10 @@
           <textarea id="group-welcome" v-model="editing.welcome_message" class="textarea" rows="2"></textarea>
         </div>
         <div class="field">
+          <label for="group-history-budget">回复历史 token 预算</label>
+          <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+        </div>
+        <div class="field">
           <label for="group-context">历史查询条数上限</label>
           <input id="group-context" v-model.number="editing.recent_context_limit" class="input" inputmode="numeric" />
         </div>
