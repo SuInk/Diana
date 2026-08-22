@@ -70,6 +70,35 @@ func TestMemoryGateUsesMemoryProfileAndExistingKeys(t *testing.T) {
 	}
 }
 
+func TestMemoryGateRecentEventsDoesNotRunCrossGroupSearch(t *testing.T) {
+	store := &memoryGateHistoryStore{memoryMessageHistoryStore: newMemoryMessageHistoryStore()}
+	store.events["group:123"] = []MessageEvent{
+		{Kind: EventKindGroup, GroupID: "123", UserID: "other", MessageID: "m1", Time: 100, RawMessage: "当前群最近消息"},
+	}
+	runtime := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+
+	items := runtime.memoryGateRecentEvents(MessageEvent{
+		Kind: EventKindGroup, GroupID: "123", UserID: "user", MessageID: "m2", Time: 200, RawMessage: "需要记忆的消息",
+	})
+
+	if store.searches != 0 {
+		t.Fatalf("cross-group searches = %d, want 0", store.searches)
+	}
+	if len(items) != 1 || items[0].Text != "当前群最近消息" {
+		t.Fatalf("recent events = %#v", items)
+	}
+}
+
+func TestMemoryJobAttemptsExhausted(t *testing.T) {
+	if memoryJobAttemptsExhausted(memoryMaxAttempts) {
+		t.Fatalf("attempt %d should still run", memoryMaxAttempts)
+	}
+	if !memoryJobAttemptsExhausted(memoryMaxAttempts + 1) {
+		t.Fatalf("attempt %d should be abandoned", memoryMaxAttempts+1)
+	}
+}
+
 func TestStructuredMemoryRankingExcludesUnrelatedFacts(t *testing.T) {
 	now := time.Now()
 	items := []StructuredMemoryItem{
@@ -359,6 +388,16 @@ type testStructuredMemoryStore struct {
 	applied  []MemoryWriteRequest
 	enqueued []MemoryJobPayload
 	queries  []StructuredMemoryQuery
+}
+
+type memoryGateHistoryStore struct {
+	*memoryMessageHistoryStore
+	searches int
+}
+
+func (s *memoryGateHistoryStore) SearchMessageEvents(context.Context, MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	s.searches++
+	return nil, 0, nil
 }
 
 func (s *testStructuredMemoryStore) EnqueueMemoryJob(_ context.Context, payload MemoryJobPayload) (string, bool, error) {
