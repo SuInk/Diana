@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -155,7 +156,7 @@ func sanitizeOneBotV11DebugToolCall(input map[string]any, output string) (map[st
 	return redactedInput, "[OneBot v11 tool output omitted]"
 }
 
-func sanitizeRepositoryIssuesDebugToolCall(input map[string]any, _ string) (map[string]any, string) {
+func sanitizeRepositoryIssuesDebugToolCall(input map[string]any, output string) (map[string]any, string) {
 	redactedInput := map[string]any{
 		"operation":  strings.TrimSpace(configToolString(input, "operation")),
 		"repository": strings.TrimSpace(configToolString(input, "repository")),
@@ -167,7 +168,55 @@ func sanitizeRepositoryIssuesDebugToolCall(input map[string]any, _ string) (map[
 	if state := strings.TrimSpace(configToolString(input, "state")); state != "" {
 		redactedInput["state"] = state
 	}
-	return redactedInput, "[repository issue tool output omitted]"
+	return redactedInput, repositoryIssueDebugOutcome(output)
+}
+
+// repositoryIssueDebugOutcome 只把结果的状态字段透出到调试追踪。
+// Issue 标题和正文可能含敏感内容，必须挡住；但 ok/outcome/failure_code 和那句
+// 固定失败文案不含任何用户内容，全挡掉的结果是排查时一片空白——写操作被闸门
+// 拒绝时，追踪里连「为什么被拒」都看不到。
+func repositoryIssueDebugOutcome(output string) string {
+	var result struct {
+		OK                   bool   `json:"ok"`
+		Operation            string `json:"operation"`
+		Outcome              string `json:"outcome"`
+		FailureCode          string `json:"failure_code"`
+		Message              string `json:"message"`
+		RequiresConfirmation bool   `json:"requires_confirmation"`
+		RequiresApproval     bool   `json:"requires_approval"`
+		Idempotent           bool   `json:"idempotent"`
+	}
+	if json.Unmarshal([]byte(output), &result) != nil {
+		return "[repository issue tool output omitted]"
+	}
+	status := map[string]any{"ok": result.OK}
+	for key, value := range map[string]string{
+		"operation":    result.Operation,
+		"outcome":      result.Outcome,
+		"failure_code": result.FailureCode,
+	} {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			status[key] = trimmed
+		}
+	}
+	// 失败文案取自固定文案表，不含用户内容；成功文案同理。
+	if message := strings.TrimSpace(result.Message); message != "" {
+		status["message"] = message
+	}
+	for key, value := range map[string]bool{
+		"requires_confirmation": result.RequiresConfirmation,
+		"requires_approval":     result.RequiresApproval,
+		"idempotent":            result.Idempotent,
+	} {
+		if value {
+			status[key] = true
+		}
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		return "[repository issue tool output omitted]"
+	}
+	return string(encoded) + " [issue 正文已省略]"
 }
 
 func formatAgentProgress(event agent.RunEvent) (bar, label string, current, total, percent int) {

@@ -122,7 +122,11 @@ type RepositoryIssueDraftStore interface {
 }
 
 type repositoryIssueDraftView struct {
-	ID            string    `json:"id"`
+	ID string `json:"id"`
+	// Operation 区分这份草稿要执行的写操作。历史草稿没有这个字段，读取时按
+	// create 处理。
+	Operation     string    `json:"operation,omitempty"`
+	IssueTarget   int       `json:"issue_target,omitempty"`
 	GroupID       string    `json:"group_id"`
 	Repository    string    `json:"repository"`
 	Title         string    `json:"title"`
@@ -194,7 +198,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `搜索和管理 GitHub Issues。已配置的群聊或私聊草稿提交者可调用 create，机器人应根据当前需求整理 title/body；后端只保存并复述草稿，不会写入 GitHub。群聊草稿需要对应仓库的管理人员明确回复同意后调用 approve，私聊草稿也可传 draft_id 由管理人员审批；明确拒绝时调用 cancel_draft。list_drafts 的结果包含提出人、日期和完整内容。管理人员可直接执行 search/create/update/comment/close/reopen；直接写入必须传 user_confirmed_write=true，并遵守明确目标与字段校验。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `搜索和管理 GitHub Issues。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，对方明确同意再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -226,10 +230,10 @@ func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
 		"labels":     toolStringArrayParam("要设置的标签；传空数组表示清空。"),
 		"assignees":  toolStringArrayParam("要设置的负责人；传空数组表示清空。"),
 		"milestone":  toolStringParam("要设置的里程碑；传 null 表示清空。"),
-		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求立即执行这次写入。写操作必填 true，" +
-			"且后端会拿用户消息原文核对：消息里必须只出现一个 owner/repo 和一个 Issue 编号，" +
-			"comment 还要求编号之后用冒号（或「内容为」「评论为」）引出评论正文，且正文与 body 逐字一致。" +
-			"用户没把正文写全、或你打算自己润色措辞时，先把要发的内容复述给用户确认，不要直接调用。"),
+		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求立即执行这次写入。写操作必填 true。" +
+			"后端会拿用户消息原文核对目标：消息里必须只出现一个 owner/repo，update/comment/close/reopen 还必须只出现一个 Issue 编号，" +
+			"对不上会直接拒绝。至于内容，只有用户在消息里逐字写出 title/body 时才会立即写入；" +
+			"你自己组织措辞时会自动落成待审批草稿，把草稿内容复述给用户，等对方明确同意后再用 approve 提交。"),
 		"operation_id":       toolStringParam("幂等标识：同一次写入重试时传相同值，避免重复发布。"),
 		"draft_id":           toolStringParam("approve 与 cancel_draft 必填：要审批或取消的草稿 ID，可用 list_drafts 查到。"),
 		"confirmation_token": toolStringParam("审批流程返回的确认令牌，按提示原样回传。"),
@@ -286,6 +290,12 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	}
 	requestText := repositoryIssueCurrentRequestText(t.event)
 	if code, message := validateRepositoryIssueWriteRequest(requestText, operation, repository, input); code != "" {
+		// explicit_fields_required 说的是「要写的内容不在用户原话里」——模型自己
+		// 组织措辞时必然如此。目标仓库和编号本身没有歧义（那是 explicit_target_
+		// required 管的），所以这里不该直接拒绝，而是落成草稿等用户确认。
+		if code == "explicit_fields_required" && repositoryIssueDraftableOperation(operation) {
+			return t.finish(ctx, t.saveOperationDraft(ctx, operation, repository, input))
+		}
 		return t.finish(ctx, result.fail(code, message))
 	}
 	if code, message := t.validateWriteAccess(repository, owner); code != "" {
@@ -610,8 +620,12 @@ func repositoryIssueRequestContainsFieldValue(text, field, value string) bool {
 	activeField := ""
 	assignmentActive := false
 	var selectedPayloads []string
+	// pendingSeparator 是上一个子句后面的分隔符。取值本身带逗号时，下一个子句
+	// 其实是同一个取值的后半段，要连着分隔符一起拼回来。
+	pendingSeparator := ""
 	selected := false
-	for _, clause := range repositoryIssueRequestClauses(text) {
+	for _, token := range repositoryIssueRequestClauseTokens(text) {
+		clause := token.Text
 		fields := repositoryIssueFieldsMentioned(clause)
 		switch len(fields) {
 		case 1:
@@ -627,7 +641,11 @@ func repositoryIssueRequestContainsFieldValue(text, field, value string) bool {
 				if payload, ok := repositoryIssueFieldContinuationPayload(clause); ok {
 					selectedPayloads = []string{payload}
 					selected = true
+					break
 				}
+				// 续接：把本子句接到已有候选后面，同时保留较短的候选。
+				// 取值必须与其中某一个完全相等，既不会被截断也不会被撑长。
+				selectedPayloads = appendRepositoryIssueContinuations(selectedPayloads, pendingSeparator, clause)
 			}
 		default:
 			for _, mentioned := range fields {
@@ -640,6 +658,7 @@ func repositoryIssueRequestContainsFieldValue(text, field, value string) bool {
 			activeField = ""
 			assignmentActive = false
 		}
+		pendingSeparator = token.Separator
 	}
 	if !selected {
 		return false
@@ -753,6 +772,24 @@ func repositoryIssueFieldPayloads(clause, field string) []string {
 	return payloads
 }
 
+// appendRepositoryIssueContinuations 在已有候选之外，再补上「续接到本子句为止」
+// 的更长候选。用户原文里的取值可能横跨多个子句，但取值必须与某个候选完全相等，
+// 所以这里只是放宽了取值的边界，没有放宽「必须出自用户原文」这条。
+func appendRepositoryIssueContinuations(payloads []string, separator, clause string) []string {
+	if len(payloads) == 0 || strings.TrimSpace(clause) == "" {
+		return payloads
+	}
+	if separator == "" {
+		separator = "，"
+	}
+	extended := make([]string, 0, len(payloads)*2)
+	extended = append(extended, payloads...)
+	// 只从最长的那个候选继续接，避免候选数量随子句数指数增长。
+	longest := payloads[len(payloads)-1]
+	extended = append(extended, longest+separator+clause)
+	return extended
+}
+
 func repositoryIssueFieldContinuationPayload(clause string) (string, bool) {
 	clause = strings.TrimSpace(clause)
 	lower := strings.ToLower(clause)
@@ -793,15 +830,54 @@ func repositoryIssueRequestExplicitlyClearsField(text, field string) bool {
 	return selected && clears
 }
 
+// repositoryIssueClause 是一个子句和它后面跟着的分隔符。保留分隔符是为了把
+// 「标题：甲，乙」这种被逗号切开的取值原样拼回来——标题里带逗号是常事，切了
+// 就永远对不上用户原文。
+type repositoryIssueClause struct {
+	Text      string
+	Separator string
+}
+
+func isRepositoryIssueClauseSeparator(char rune) bool {
+	switch char {
+	case ',', '，', ';', '；', '。', '!', '！', '?', '？', '\n', '\r':
+		return true
+	default:
+		return false
+	}
+}
+
 func repositoryIssueRequestClauses(text string) []string {
-	return strings.FieldsFunc(text, func(char rune) bool {
-		switch char {
-		case ',', '，', ';', '；', '。', '!', '！', '?', '？', '\n', '\r':
-			return true
-		default:
-			return false
+	tokens := repositoryIssueRequestClauseTokens(text)
+	clauses := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		clauses = append(clauses, token.Text)
+	}
+	return clauses
+}
+
+func repositoryIssueRequestClauseTokens(text string) []repositoryIssueClause {
+	tokens := make([]repositoryIssueClause, 0, 8)
+	current := strings.Builder{}
+	for _, char := range text {
+		if !isRepositoryIssueClauseSeparator(char) {
+			current.WriteRune(char)
+			continue
 		}
-	})
+		if current.Len() > 0 {
+			tokens = append(tokens, repositoryIssueClause{Text: current.String(), Separator: string(char)})
+			current.Reset()
+			continue
+		}
+		// 连续分隔符并入上一个子句的分隔符，重新拼接时才能还原原文。
+		if len(tokens) > 0 {
+			tokens[len(tokens)-1].Separator += string(char)
+		}
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, repositoryIssueClause{Text: current.String()})
+	}
+	return tokens
 }
 
 func repositoryIssueFieldsMentioned(text string) []string {
@@ -1202,8 +1278,32 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 	return result
 }
 
+// repositoryIssueDraftableOperation 报告这个写操作能否落成待审批草稿。
+// close/reopen 不带自由文本，内容出自用户原话这条对它们本来就不构成障碍。
+func repositoryIssueDraftableOperation(operation string) bool {
+	return operation == "create" || operation == "comment"
+}
+
+// repositoryIssueDraftOperation 返回草稿要执行的写操作。旧草稿没有存这个字段，
+// 一律按 create 处理，保持向后兼容。
+func repositoryIssueDraftOperation(draft repositoryIssueDraft) string {
+	if operation := strings.TrimSpace(configToolString(draft.Input, "operation")); operation != "" {
+		return operation
+	}
+	return "create"
+}
+
 func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
-	result := repositoryIssueResult{Operation: "create", Repository: repository}
+	return t.saveOperationDraft(ctx, "create", repository, input)
+}
+
+// saveOperationDraft 把一次写操作存成待审批草稿，不碰 GitHub。
+// 除了群成员发起的 create，模型自行撰写内容的写操作也走这里：写入要求内容出自
+// 用户原文，而模型组织的措辞天然对不上，硬卡只会让功能不可用。先落草稿、由有
+// 权限的人看过并明确同意再写，既保住了「不擅自以用户名义发内容」，也不必逼用户
+// 把整段正文手打进聊天框。
+func (t *dianaRepositoryIssuesTool) saveOperationDraft(ctx context.Context, operation, repository string, input map[string]any) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: operation, Repository: repository}
 	draftScope := strings.TrimSpace(t.event.GroupID)
 	if t.event.Kind != EventKindGroup {
 		if strings.TrimSpace(t.event.UserID) == "" {
@@ -1214,14 +1314,26 @@ func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository 
 	title, redactions := sanitizeRepositoryIssueText(configToolString(input, "title"), repositoryIssueTitleLimit, true)
 	body, bodyRedactions := sanitizeRepositoryIssueText(configToolString(input, "body"), repositoryIssueBodyLimit, false)
 	result.Redactions = redactions + bodyRedactions
-	if title == "" {
+	if operation == "comment" {
+		number := repositoryIssueNumber(input)
+		if number <= 0 {
+			return result.fail("invalid_input", "评论草稿必须提供有效的 Issue number。")
+		}
+		if body == "" {
+			return result.fail("invalid_input", "评论草稿必须提供非空 body。")
+		}
+		result.RequestedNumber = number
+	} else if title == "" {
 		return result.fail("invalid_input", "生成 Issue 草稿必须提供标题。")
 	}
 	labels, _, code, message := repositoryIssueStringList(input, "labels", 20)
 	if code != "" {
 		return result.fail(code, message)
 	}
-	draftInput := map[string]any{"title": title, "body": body, "user_confirmed_write": true}
+	draftInput := map[string]any{"title": title, "body": body, "user_confirmed_write": true, "operation": operation}
+	if number := repositoryIssueNumber(input); number > 0 {
+		draftInput["number"] = number
+	}
 	if len(labels) > 0 {
 		draftInput["labels"] = labels
 	}
@@ -1245,7 +1357,10 @@ func (t *dianaRepositoryIssuesTool) createDraft(ctx context.Context, repository 
 	}
 	result.OK = true
 	result.Outcome = "draft_pending"
-	result.Message = "Issue 草稿已生成，尚未写入 GitHub；需要对应仓库的管理人员明确同意。"
+	result.Message = "Issue 草稿已生成，尚未写入 GitHub；把内容复述给用户，得到明确同意后再调用 approve。"
+	if operation == "comment" {
+		result.Message = "评论草稿已生成，尚未发到 GitHub；把内容复述给用户，得到明确同意后再调用 approve。"
+	}
 	result.RequiresApproval = true
 	result.Draft = repositoryIssueDraftViewFromDraft(draft)
 	return result
@@ -1275,7 +1390,7 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 	}
 	request := strings.ToLower(repositoryIssueCurrentRequestText(t.event))
 	approved := false
-	for _, marker := range []string{"同意", "批准", "确认创建", "提交", "approve", "confirm", "create it"} {
+	for _, marker := range []string{"同意", "批准", "确认创建", "确认发布", "确认评论", "提交", "approve", "confirm", "create it"} {
 		if strings.Contains(request, marker) {
 			approved = true
 			break
@@ -1288,7 +1403,7 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 		}
 	}
 	if !approved {
-		return result.fail("explicit_approval_required", "当前消息必须明确表示同意创建该 Issue。")
+		return result.fail("explicit_approval_required", "当前消息必须明确表示同意执行该草稿。")
 	}
 	if code, message := t.validateWriteAccess(draft.Repository, owner); code != "" {
 		return result.fail(code, message)
@@ -1302,7 +1417,13 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 			createInput[key] = value
 		}
 	}
-	created := t.create(ctx, draft.Repository, createInput)
+	// 草稿记录了自己要执行的写操作；批准后照原样执行，而不是一律当成建 Issue。
+	var created repositoryIssueResult
+	if repositoryIssueDraftOperation(draft) == "comment" {
+		created = t.comment(ctx, draft.Repository, createInput)
+	} else {
+		created = t.create(ctx, draft.Repository, createInput)
+	}
 	created.Operation = "approve"
 	created.Draft = repositoryIssueDraftViewFromDraft(draft)
 	if created.OK {
@@ -1411,7 +1532,8 @@ func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[s
 func repositoryIssueDraftViewFromDraft(draft repositoryIssueDraft) *repositoryIssueDraftView {
 	labels, _, _, _ := repositoryIssueStringList(draft.Input, "labels", 20)
 	return &repositoryIssueDraftView{
-		ID: draft.ID, GroupID: draft.GroupID, Repository: draft.Repository, Title: configToolString(draft.Input, "title"),
+		ID: draft.ID, Operation: repositoryIssueDraftOperation(draft), IssueTarget: repositoryIssueNumber(draft.Input),
+		GroupID: draft.GroupID, Repository: draft.Repository, Title: configToolString(draft.Input, "title"),
 		Body: configToolString(draft.Input, "body"), Labels: labels,
 		RequesterID: draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
 		IssueNumber: draft.IssueNumber, IssueURL: draft.IssueURL,

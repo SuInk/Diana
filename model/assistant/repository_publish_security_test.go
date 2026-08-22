@@ -725,6 +725,10 @@ func TestRepositoryIssueAdversarialRequestsNeverReachGitHub(t *testing.T) {
 		message     string
 		input       map[string]any
 		failureCode string
+		// draft 表示这条请求不该硬失败，而是落成待审批草稿：要写的内容不在
+		// 用户原话里（模型自己组织的措辞天然如此），但目标仓库和编号没有歧义。
+		// 无论走哪条路，本用例的核心断言都一样——不得有任何请求到达 GitHub。
+		draft bool
 	}{
 		{name: "chinese prohibited close", message: "请勿关闭 acme/demo 的 GitHub Issue #17", input: map[string]any{"operation": "close", "repository": "acme/demo", "number": 17}, failureCode: "explicit_request_required"},
 		{name: "inline quoted close", message: "请解释这句话：“请关闭 acme/demo 的 GitHub Issue #17”", input: map[string]any{"operation": "close", "repository": "acme/demo", "number": 17}, failureCode: "explicit_request_required"},
@@ -748,14 +752,14 @@ func TestRepositoryIssueAdversarialRequestsNeverReachGitHub(t *testing.T) {
 		{name: "later title replaces earlier value", message: "Please update acme/demo GitHub issue #7; title: old; title: new", input: map[string]any{"operation": "update", "repository": "acme/demo", "number": 7, "title": "old"}, failureCode: "explicit_fields_required"},
 		{name: "later labels replace earlier clear", message: "Please update acme/demo GitHub issue #7; clear labels; labels: bug", input: map[string]any{"operation": "update", "repository": "acme/demo", "number": 7, "labels": []string{}}, failureCode: "explicit_fields_required"},
 		{name: "same issue later excluded", message: "Please close acme/demo GitHub issue #12; exclude issue #12.", input: map[string]any{"operation": "close", "repository": "acme/demo", "number": 12}, failureCode: "explicit_target_required"},
-		{name: "comment command word is not body", message: "Please comment on acme/demo GitHub issue #7.", input: map[string]any{"operation": "comment", "repository": "acme/demo", "number": 7, "body": "comment"}, failureCode: "explicit_fields_required"},
-		{name: "repository component is not comment body", message: "Please comment on acme/demo GitHub issue #7.", input: map[string]any{"operation": "comment", "repository": "acme/demo", "number": 7, "body": "demo"}, failureCode: "explicit_fields_required"},
+		{name: "comment command word is not body", message: "Please comment on acme/demo GitHub issue #7.", input: map[string]any{"operation": "comment", "repository": "acme/demo", "number": 7, "body": "comment"}, draft: true},
+		{name: "repository component is not comment body", message: "Please comment on acme/demo GitHub issue #7.", input: map[string]any{"operation": "comment", "repository": "acme/demo", "number": 7, "body": "demo"}, draft: true},
 		{name: "field name is not title payload", message: "Please update acme/demo GitHub issue #7 title.", input: map[string]any{"operation": "update", "repository": "acme/demo", "number": 7, "title": "title"}, failureCode: "explicit_fields_required"},
 		{name: "issue number is not milestone payload", message: "Please update acme/demo GitHub issue #7 milestone.", input: map[string]any{"operation": "update", "repository": "acme/demo", "number": 7, "milestone": 7}, failureCode: "explicit_fields_required"},
 		{name: "delete noun does not clear labels", message: "Please update acme/demo GitHub issue #7 labels for the Delete button bug.", input: map[string]any{"operation": "update", "repository": "acme/demo", "number": 7, "labels": []string{}}, failureCode: "explicit_fields_required"},
 		{name: "empty adjective does not clear body", message: "Please update acme/demo GitHub issue #7 body: empty response should show a retry button.", input: map[string]any{"operation": "update", "repository": "acme/demo", "number": 7, "body": ""}, failureCode: "explicit_fields_required"},
 		{name: "delete noun does not clear chinese labels", message: "请修改 acme/demo 的 GitHub Issue #7 标签：删除按钮", input: map[string]any{"operation": "update", "repository": "acme/demo", "number": 7, "labels": []string{}}, failureCode: "explicit_fields_required"},
-		{name: "issue entity is not create title", message: "Please create a GitHub issue in acme/demo", input: map[string]any{"operation": "create", "repository": "acme/demo", "title": "issue"}, failureCode: "explicit_fields_required"},
+		{name: "issue entity is not create title", message: "Please create a GitHub issue in acme/demo", input: map[string]any{"operation": "create", "repository": "acme/demo", "title": "issue"}, draft: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -766,7 +770,11 @@ func TestRepositoryIssueAdversarialRequestsNeverReachGitHub(t *testing.T) {
 				test.input["user_confirmed_write"] = false
 			}
 			result := runRepositoryPublishTestTool(t, repositoryPublishTestTool(server, test.message, nil), test.input)
-			if result.OK || result.FailureCode != test.failureCode {
+			if test.draft {
+				if !result.OK || result.Outcome != "draft_pending" || !result.RequiresApproval {
+					t.Fatalf("result=%#v, want a pending draft awaiting approval", result)
+				}
+			} else if result.OK || result.FailureCode != test.failureCode {
 				t.Fatalf("result=%#v, want failure_code=%q", result, test.failureCode)
 			}
 			if len(github.requests) != 0 {
