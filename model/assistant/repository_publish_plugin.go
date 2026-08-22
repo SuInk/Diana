@@ -135,9 +135,9 @@ func (p *RepositoryPublishPlugin) saveDraft(ctx context.Context, draft repositor
 	} else {
 		draft.ID = fmt.Sprintf("%d", time.Now().UnixNano())
 	}
-	if draft.Input != nil {
-		draft.Input["operation_id"] = "draft-" + draft.ID
-	}
+	// 不再往草稿里塞合成的 operation_id。它会让「探测重复候选」和「确认后重试」落到
+	// 两个不同的指纹上，确认令牌因此永远校验不过。重复审批由草稿状态阻断，写入层
+	// 自己也有指纹去重，这里不需要再兜一层。调用方自己带的 operation_id 原样保留。
 	now := time.Now()
 	draft.CreatedAt = now
 	draft.UpdatedAt = now

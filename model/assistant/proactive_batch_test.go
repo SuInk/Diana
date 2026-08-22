@@ -91,7 +91,10 @@ func TestProactiveReplyBatchUsesConfiguredRouterPrompt(t *testing.T) {
 	}
 }
 
-func TestProactiveReplyRouterTimeoutFallsBackForExplicitQuestion(t *testing.T) {
+func TestProactiveReplyRouterTimeoutKeepsQuestionsSilent(t *testing.T) {
+	// 路由超时以前会退回一条词表规则：扫到问号或「怎么/为什么」就当成公开问题强行
+	// 回答。那是拿关键词判断语义意图，而且判错的方向是「本来不该说话却开口」。
+	// 没有模型结论时保持沉默才是保守的默认值。
 	runtime := NewRuntime(BotConfig{
 		BotAccount:              "42",
 		ProactiveReplyChance:    1,
@@ -103,12 +106,12 @@ func TestProactiveReplyRouterTimeoutFallsBackForExplicitQuestion(t *testing.T) {
 		Event: MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "question-1"},
 		Text:  "这个报错应该怎么处理？",
 	}
-	event, text, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{candidate})
-	if !allowed || !event.proactiveReply || event.MessageID != "question-1" || text != candidate.Text || len(turn) != 1 {
-		t.Fatalf("timeout fallback event=%#v text=%q turn=%#v allowed=%v", event, text, turn, allowed)
+	event, _, _, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{candidate})
+	if allowed {
+		t.Fatalf("timed-out routing still produced a reply: %#v", event)
 	}
-	if !strings.Contains(event.routingReason, "路由超时") || !strings.Contains(event.routingReason, "明确的公开问题") {
-		t.Fatalf("fallback reason = %q", event.routingReason)
+	if !strings.Contains(event.routingReason, "保持沉默") {
+		t.Fatalf("routing reason = %q", event.routingReason)
 	}
 }
 

@@ -9,8 +9,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/SuInk/diana/model/llm"
 )
 
 func TestRecallReplyAutoDeleteConfigDefaultsDisabledAndCanBeEnabled(t *testing.T) {
@@ -99,81 +97,73 @@ func TestGroupConfigOverridesRecallReplyAutoDeletePolicy(t *testing.T) {
 	}
 }
 
-func TestRecallReplyAutoDeleteHonorsGroupPolicyAfterLLMProcessing(t *testing.T) {
+func TestRecallReplyAutoDeleteHonorsGroupPolicy(t *testing.T) {
+	// 这个用例以前是端到端的：靠词表让插件劫持回复，再断言撤回上下文进了 LLM 请求。
+	// 触发权交给模型之后，撤回记录由 diana.chat_history 的 recalls 操作读回，响应经
+	// recallDisclosureSink 合并进本轮 pluginResponses——自动撤回策略读的仍是同一处，
+	// 所以这里直接验证那个接缝，不再依赖一次伪造的 LLM 往返。
 	enabled := true
 	disabled := false
 	tests := []struct {
 		name        string
 		groupPolicy *bool
 		wantDelete  bool
+		wantDelay   time.Duration
 	}{
-		{name: "enabled", groupPolicy: &enabled, wantDelete: true},
+		{name: "enabled", groupPolicy: &enabled, wantDelete: true, wantDelay: time.Second},
 		{name: "disabled", groupPolicy: &disabled, wantDelete: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			channel := newRecallDeleteChannel()
-			provider := &capturingLLMProvider{reply: "LLM 已确认最近没有撤回记录。"}
 			runtime := NewRuntime(BotConfig{
 				RecallReplyMode:              RecallReplyModeOriginalForward,
 				RecallReplyAutoDeleteEnabled: &disabled,
 				RecallReplyTTLSeconds:        60,
-			}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-				return provider, nil
-			})
+			}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 			store := &testWritableGroupConfigStore{}
-			_, err := store.SaveGroupConfig(GroupConfig{
+			if _, err := store.SaveGroupConfig(GroupConfig{
 				GroupID:                      "123",
 				Enabled:                      true,
 				EnabledSet:                   true,
 				RecallReplyAutoDeleteEnabled: tt.groupPolicy,
 				RecallReplyTTLSeconds:        1,
-			}, runtime.Config())
-			if err != nil {
+			}, runtime.Config()); err != nil {
 				t.Fatal(err)
 			}
 			runtime.SetGroupConfigStore(store)
-			event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456", MessageID: "source-1"}
 
-			reply, err := runtime.replyTo(context.Background(), event, "查看撤回记录")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if reply != provider.reply {
-				t.Fatalf("reply = %q", reply)
-			}
-			request := provider.requestSnapshot()
-			if len(request.Messages) == 0 {
-				t.Fatal("recall response bypassed LLM")
-			}
-			var sawRecallContext bool
-			for _, message := range request.Messages {
-				if strings.Contains(message.Content, "【插件事实结果，必须完整使用】") &&
-					strings.Contains(message.Content, "记录总数=0") &&
-					message.Priority == llm.MessagePriorityPlugin {
-					sawRecallContext = true
-				}
-			}
-			if !sawRecallContext {
-				t.Fatalf("LLM request missing recall plugin context: %#v", request.Messages)
+			event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456", MessageID: "source-1"}
+			cfg := runtime.effectiveConfigForEvent(event)
+
+			sink := &recallDisclosureSink{}
+			sink.add(PluginResponse{Handled: true, RecallDisclosure: true})
+			disclosures := applyRecallReplyMode(sink.drain(), cfg.RecallReplyMode)
+
+			if got := recallReplyShouldAutoDelete(cfg, disclosures); got != tt.wantDelete {
+				t.Fatalf("auto delete = %v, want %v", got, tt.wantDelete)
 			}
 			if tt.wantDelete {
-				select {
-				case deleted := <-channel.deleted:
-					if deleted != int64(101) {
-						t.Fatalf("deleted message id = %#v", deleted)
-					}
-				case <-time.After(1500 * time.Millisecond):
-					t.Fatal("delete_msg was not called")
+				if got := recallReplyAutoDeleteDelay(cfg); got != tt.wantDelay {
+					t.Fatalf("auto delete delay = %v, want %v", got, tt.wantDelay)
 				}
-				return
-			}
-			select {
-			case deleted := <-channel.deleted:
-				t.Fatalf("unexpected delete_msg for disabled group: %#v", deleted)
-			case <-time.After(100 * time.Millisecond):
 			}
 		})
+	}
+}
+
+func TestRecallDisclosureSinkKeepsOneResponsePerTurn(t *testing.T) {
+	// 模型可能在一轮里多次调用 recalls；转发卡片只能发一次，否则同一批撤回记录会
+	// 被重复投递。
+	sink := &recallDisclosureSink{}
+	sink.add(PluginResponse{Handled: true, RecallDisclosure: true, Reply: "first"})
+	sink.add(PluginResponse{Handled: true, RecallDisclosure: true, Reply: "second"})
+
+	drained := sink.drain()
+	if len(drained) != 1 || drained[0].Reply != "first" {
+		t.Fatalf("drained = %#v", drained)
+	}
+	if again := sink.drain(); len(again) != 0 {
+		t.Fatalf("sink was not emptied: %#v", again)
 	}
 }
 
@@ -195,19 +185,16 @@ func TestMessageHistoryPluginMarksOnlyRecallQueriesForAutoDelete(t *testing.T) {
 		MessageID: "old-1",
 	})
 
-	query, err := plugin.Handle(context.Background(), PluginRequest{Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"}, Text: "查看刚才撤回的消息"})
-	if err != nil {
-		t.Fatal(err)
+	// 「这条消息算不算在问撤回」现在由模型判断：Handle 不再靠词表劫持回复，普通
+	// 消息自然拿不到 disclosure，因为模型压根不会去调 recalls 操作。
+	if normal, err := plugin.Handle(context.Background(), PluginRequest{
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"}, Text: "查看刚才撤回的消息",
+	}); err != nil || normal != nil {
+		t.Fatalf("plugin still hijacks replies: resp=%#v err=%v", normal, err)
 	}
-	normal, err := plugin.Handle(context.Background(), PluginRequest{Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"}, Text: "今天吃什么"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	query := recallDisclosureForTest(t, plugin, PluginRequest{Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"}})
 	if query == nil || !query.RecallDisclosure {
 		t.Fatalf("recall query response = %#v", query)
-	}
-	if normal != nil {
-		t.Fatalf("normal response = %#v", normal)
 	}
 	if recallReplyShouldAutoDelete(BotConfig{}, []PluginResponse{*query}) {
 		t.Fatal("default recall disclosure should not auto-delete")
@@ -324,3 +311,43 @@ func (c *recallDeleteChannel) Status() ChannelStatus {
 	return ChannelStatus{Connected: true, SelfID: "42"}
 }
 func (c *recallDeleteChannel) Close() error { return nil }
+
+func TestChatHistoryRecallsOperationFeedsForwardCardBackIntoTheTurn(t *testing.T) {
+	history := NewMessageHistoryPlugin()
+	history.Observe(context.Background(), MessageEvent{
+		Kind: EventKindGroup, GroupID: "123", UserID: "20002", MessageID: "old-1",
+		RawMessage: "撤回前的完整内容", SenderName: "Alice",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "撤回前的完整内容"}}},
+	})
+	history.Observe(context.Background(), messageEventFromEnvelope(oneBotEnvelope{
+		PostType: "notice", NoticeType: "group_recall", GroupID: "123", UserID: "20002", MessageID: "old-1",
+	}))
+	runtime := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(history), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", MessageID: "query-1"}
+
+	sink := &recallDisclosureSink{}
+	raw, err := newDianaChatHistoryTool(runtime, event).withRecallSink(sink).
+		Run(context.Background(), map[string]any{"operation": "recalls"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模型拿到的是数据，用来写一句说明。
+	if !strings.Contains(raw, "撤回前的完整内容") || !strings.Contains(raw, "recalls") {
+		t.Fatalf("tool output = %s", raw)
+	}
+	// 转发卡片仍由回复阶段沿用既有链路投递，所以响应必须被交回本轮。
+	drained := sink.drain()
+	if len(drained) != 1 || !drained[0].RecallDisclosure || len(drained[0].ForwardMessages) == 0 {
+		t.Fatalf("sink = %#v", drained)
+	}
+}
+
+func TestChatHistoryRecallsOperationRejectsPrivateChats(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(NewMessageHistoryPlugin()), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "query-1"}
+
+	if _, err := newDianaChatHistoryTool(runtime, event).withRecallSink(&recallDisclosureSink{}).
+		Run(context.Background(), map[string]any{"operation": "recalls"}); err == nil {
+		t.Fatal("recalls should be rejected outside group chats")
+	}
+}

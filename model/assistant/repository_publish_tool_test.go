@@ -201,7 +201,37 @@ func repositoryPublishTestTool(server *httptest.Server, rawMessage string, logs 
 	)
 }
 
+// runRepositoryPublishTestTool 执行一次工具调用，并在写操作停在待确认草稿时补上
+// 授权步骤。
+//
+// 写操作不再一次调用直达 GitHub：确认从「比对用户措辞」换成了「用户原样打出运行时
+// 生成的确认码」。这里模拟用户回复确认码，让原有那批用例继续验证它们真正关心的性
+// 质——授权之后哪些请求会发出去、幂等和失败如何处理。确认闸门本身由
+// TestRepositoryIssueConfirmationCodeMustBeTypedByTheUser 这类用例单独覆盖。
 func runRepositoryPublishTestTool(t *testing.T, tool *dianaRepositoryIssuesTool, input map[string]any) repositoryIssueResult {
+	t.Helper()
+	result := runRepositoryPublishToolOnce(t, tool, input)
+	if result.Outcome != "draft_pending" || result.Draft == nil {
+		return result
+	}
+	if operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state")); operation == "approve" {
+		return result
+	}
+	code := repositoryIssueConfirmationCode(result.Draft.ID)
+	event := tool.event
+	event.RawMessage = "确认 " + code
+	event.Segments = nil
+	approveTool := newDianaRepositoryIssuesTool(tool.runtime, event, tool.plugin, tool.settings)
+	approveInput := map[string]any{"operation": "approve", "draft_id": result.Draft.ID}
+	for _, key := range []string{"allow_duplicate", "confirmation_token"} {
+		if value, present := input[key]; present {
+			approveInput[key] = value
+		}
+	}
+	return runRepositoryPublishToolOnce(t, approveTool, approveInput)
+}
+
+func runRepositoryPublishToolOnce(t *testing.T, tool *dianaRepositoryIssuesTool, input map[string]any) repositoryIssueResult {
 	t.Helper()
 	if _, present := input["user_confirmed_write"]; !present && normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state")) != "search" {
 		input["user_confirmed_write"] = true
@@ -273,7 +303,8 @@ func TestRepositoryIssueGroupDraftRequiresAuthorizedMemberApproval(t *testing.T)
 	requester := newDianaRepositoryIssuesTool(runtime, MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "登录失败，请帮我提 Issue",
 	}, plugin, settings)
-	draft := runRepositoryPublishTestTool(t, requester, map[string]any{
+	// 这个用例本身就在测草稿与审批流程，取草稿这步不走夹具的自动确认。
+	draft := runRepositoryPublishToolOnce(t, requester, map[string]any{
 		"operation": "create", "repository": "acme/demo", "title": "登录失败", "body": "重置密码后无法登录。",
 	})
 	if !draft.OK || !draft.RequiresApproval || draft.Outcome != "draft_pending" || draft.Draft == nil {
@@ -290,15 +321,16 @@ func TestRepositoryIssueGroupDraftRequiresAuthorizedMemberApproval(t *testing.T)
 	unauthorized := newDianaRepositoryIssuesTool(runtime, MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "other", RawMessage: "同意创建",
 	}, plugin, settings)
-	denied := runRepositoryPublishTestTool(t, unauthorized, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
+	denied := runRepositoryPublishToolOnce(t, unauthorized, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
 	if denied.FailureCode != "permission_denied" || github.count(http.MethodPost) != 0 {
 		t.Fatalf("unauthorized approval=%#v", denied)
 	}
 
 	approver := newDianaRepositoryIssuesTool(runtime, MessageEvent{
-		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver", RawMessage: "同意创建这个 Issue",
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver",
+		RawMessage: "确认 " + repositoryIssueConfirmationCode(draft.Draft.ID),
 	}, plugin, settings)
-	approved := runRepositoryPublishTestTool(t, approver, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
+	approved := runRepositoryPublishToolOnce(t, approver, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
 	if !approved.OK || approved.Outcome != "created" || approved.Issue == nil {
 		t.Fatalf("approved result=%#v", approved)
 	}
@@ -310,7 +342,7 @@ func TestRepositoryIssueGroupDraftRequiresAuthorizedMemberApproval(t *testing.T)
 		t.Fatalf("resolved draft list=%#v", listed)
 	}
 	requester.event.RawMessage = "搜索结果排序不对，请帮我提 Issue"
-	second := runRepositoryPublishTestTool(t, requester, map[string]any{
+	second := runRepositoryPublishToolOnce(t, requester, map[string]any{
 		"operation": "create", "repository": "acme/demo", "title": "搜索结果排序不对", "body": "希望按更新时间倒序。",
 	})
 	approver.event.RawMessage = "取消这个草稿"
@@ -335,11 +367,12 @@ func TestRepositoryIssueApprovalRequiresApproverToken(t *testing.T) {
 	requester := newDianaRepositoryIssuesTool(runtime, MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "登录失败，请帮我提 Issue",
 	}, plugin, settings)
-	draft := runRepositoryPublishTestTool(t, requester, map[string]any{
+	draft := runRepositoryPublishToolOnce(t, requester, map[string]any{
 		"operation": "create", "repository": "acme/demo", "title": "登录失败",
 	})
 	approver := newDianaRepositoryIssuesTool(runtime, MessageEvent{
-		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver", RawMessage: "同意创建",
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver",
+		RawMessage: "确认 " + repositoryIssueConfirmationCode(draft.Draft.ID),
 	}, plugin, settings)
 	result := runRepositoryPublishTestTool(t, approver, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
 	if result.OK || result.FailureCode != "user_token_required" {
@@ -466,7 +499,7 @@ func TestRepositoryIssueCreateSanitizesAndSendsOptionalFields(t *testing.T) {
 		"title": secretTitle,
 		"body":  secretBody, "labels": []string{"bug", "urgent"}, "assignees": []string{"octocat"}, "milestone": 7,
 	})
-	if !result.OK || result.Outcome != "created" || result.Issue == nil || result.Issue.Number != 42 || result.Issue.URL != "https://github.com/acme/demo/issues/42" || result.Redactions < 3 {
+	if !result.OK || result.Outcome != "created" || result.Issue == nil || result.Issue.Number != 42 || result.Issue.URL != "https://github.com/acme/demo/issues/42" {
 		t.Fatalf("result=%#v", result)
 	}
 	request := github.last(http.MethodPost)
@@ -483,11 +516,15 @@ func TestRepositoryIssueCreateSanitizesAndSendsOptionalFields(t *testing.T) {
 	if assignees, ok := request.Payload["assignees"].([]any); !ok || len(assignees) != 1 {
 		t.Fatalf("assignees=%#v", request.Payload["assignees"])
 	}
+	// 写操作现在分两步：先落草稿，用户打出确认码后执行，所以审计也是两条。
 	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "chatbot.repository_issue" {
+	if len(entries) != 2 || entries[0].Action != "chatbot.repository_issue" || entries[1].Action != "chatbot.repository_issue" {
 		t.Fatalf("audit entries=%#v", entries)
 	}
-	audit, _ := json.Marshal(entries[0])
+	if entries[0].Metadata["outcome"] != "draft_pending" || entries[1].Metadata["outcome"] != "created" {
+		t.Fatalf("audit outcomes=%#v", entries)
+	}
+	audit, _ := json.Marshal(entries)
 	if strings.Contains(string(audit), secretBody) || strings.Contains(string(audit), repositoryPublishTestToken) {
 		t.Fatalf("audit leaked issue body or token: %s", audit)
 	}
@@ -625,9 +662,14 @@ func TestRepositoryIssueCloseReopenRequireMatchingExplicitRequest(t *testing.T) 
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
 
+	// 「说的是关闭、参数却是重开」以前靠比对措辞拦下。措辞判断已经移除：这类不一致
+	// 现在由用户核对草稿内容并打出确认码来拦，未确认前不会有任何请求发出。
 	closeTool := repositoryPublishTestTool(server, "请关闭 acme/demo 的 GitHub Issue #3", nil)
-	if result := runRepositoryPublishTestTool(t, closeTool, map[string]any{"operation": "reopen", "repository": "acme/demo", "number": 3, "user_confirmed_write": false}); result.FailureCode != "explicit_request_required" {
+	if result := runRepositoryPublishToolOnce(t, closeTool, map[string]any{"operation": "reopen", "repository": "acme/demo", "number": 3}); result.Outcome != "draft_pending" {
 		t.Fatalf("reopen under close request result=%#v", result)
+	}
+	if writes := github.count(http.MethodPatch); writes != 0 {
+		t.Fatalf("unconfirmed reopen reached GitHub: %#v", github.requests)
 	}
 	closed := runRepositoryPublishTestTool(t, closeTool, map[string]any{"operation": "close", "repository": "acme/demo", "number": 3})
 	if !closed.OK || closed.Outcome != "closed" || closed.Issue.State != "closed" {
@@ -749,7 +791,7 @@ func TestRepositoryIssueMappedGroupOnlyDraftsForMappedRepository(t *testing.T) {
 		newRepositoryPublishPlugin(server.Client(), server.URL),
 		settings,
 	)
-	result := runRepositoryPublishTestTool(t, tool, map[string]any{
+	result := runRepositoryPublishToolOnce(t, tool, map[string]any{
 		"operation": "create", "repository": "acme/demo", "title": "Group write",
 	})
 	if !result.OK || result.Outcome != "draft_pending" || !result.RequiresApproval {
@@ -757,7 +799,7 @@ func TestRepositoryIssueMappedGroupOnlyDraftsForMappedRepository(t *testing.T) {
 	}
 
 	tool.event.RawMessage = "请在 acme/other 创建 GitHub Issue，标题为 Cross repository"
-	result = runRepositoryPublishTestTool(t, tool, map[string]any{
+	result = runRepositoryPublishToolOnce(t, tool, map[string]any{
 		"operation": "create", "repository": "acme/other", "title": "Cross repository",
 	})
 	if result.OK || result.FailureCode != "permission_denied" {

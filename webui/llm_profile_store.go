@@ -72,6 +72,11 @@ func NewPersistentLLMProfileStore(ctx context.Context, store *storage.SQLiteStor
 		// 兼容旧版本只有单个 llm_config 的数据库，首次启动时自动升级为配置集。
 		data = llm.NewProfileSet(savedCfg)
 	}
+	migrated, err := clearLegacyContextWindowFallback(ctx, store, data)
+	if err != nil {
+		return nil, err
+	}
+	data = migrated
 	registry, registryOK, err := store.LoadLLMProviderRegistry(ctx)
 	if err != nil {
 		return nil, err
@@ -125,10 +130,14 @@ func (s *PersistentLLMProfileStore) SaveProfiles(set llm.ProfileSet) {
 	s.data = set
 	s.mu.Unlock()
 	if s.store != nil {
+		// 落库前剥掉 WithDefaults 派生出来的上下文窗口，只保存用户填的真实值。
+		// 否则当前兜底值会被写死进数据库，日后改兜底或改推断表都追不回来——旧版本
+		// 的 16K 兜底就是这样把老部署永久钉在 16K 上下文的。
+		stored := set.WithoutRedundantContextLimits()
 		// 同时写 profile set 和旧 flat config，旧代码/测试读取 llm_config 时仍能拿到当前配置。
-		_ = s.store.SaveLLMProfiles(s.ctx, set)
+		_ = s.store.SaveLLMProfiles(s.ctx, stored)
 		if profile, ok := set.Current(); ok {
-			_ = s.store.SaveLLMConfig(s.ctx, profile.Config)
+			_ = s.store.SaveLLMConfig(s.ctx, profile.Config.WithoutRedundantContextLimits())
 		}
 		if registry, _, err := llm.NewProviderRegistryFromProfiles(set); err == nil {
 			document := registry
@@ -138,4 +147,37 @@ func (s *PersistentLLMProfileStore) SaveProfiles(set llm.ProfileSet) {
 			s.mu.Unlock()
 		}
 	}
+}
+
+// clearLegacyContextWindowFallback 一次性把旧版兜底常量 16384 当作「未设置」清掉。
+//
+// 旧版本的 WithDefaults 会把当时的兜底窗口写进配置并落库，升级后这个显式
+// 值优先级高于新兜底和模型名推断，窗口就永远停在 16K。清理只跑一次并记录标记，
+// 用户之后自己填的 16384 不会再被动过。
+func clearLegacyContextWindowFallback(ctx context.Context, store *storage.SQLiteStore, set llm.ProfileSet) (llm.ProfileSet, error) {
+	if store == nil {
+		return set.WithDefaults(), nil
+	}
+	done, err := store.LoadLLMContextWindowMigration(ctx)
+	if err != nil {
+		return llm.ProfileSet{}, err
+	}
+	if done {
+		return set.WithDefaults(), nil
+	}
+	cleared, changed := set.ClearLegacyContextFallback()
+	if changed {
+		if err := store.SaveLLMProfiles(ctx, cleared); err != nil {
+			return llm.ProfileSet{}, err
+		}
+		if profile, ok := cleared.Current(); ok {
+			if err := store.SaveLLMConfig(ctx, profile.Config.WithoutRedundantContextLimits()); err != nil {
+				return llm.ProfileSet{}, err
+			}
+		}
+	}
+	if err := store.SaveLLMContextWindowMigration(ctx, true); err != nil {
+		return llm.ProfileSet{}, err
+	}
+	return cleared.WithDefaults(), nil
 }

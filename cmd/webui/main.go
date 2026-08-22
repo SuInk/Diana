@@ -632,19 +632,21 @@ func botConfigFromEnv() assistant.BotConfig {
 func llmConfigFromEnv() llm.ProviderConfig {
 	provider := providerFromEnv("LLM_PROVIDER", llm.ProviderOpenAICompatible)
 	cfg := llm.ProviderConfig{
-		Provider:            provider,
-		APIKey:              os.Getenv("LLM_API_KEY"),
-		BaseURL:             os.Getenv("LLM_BASE_URL"),
-		APIFormat:           llm.APIFormat(os.Getenv("LLM_API_FORMAT")),
-		Model:               envOr("LLM_MODEL", llm.DefaultModel(provider)),
-		ImageModel:          os.Getenv("LLM_IMAGE_MODEL"),
-		ImageBaseURL:        os.Getenv("LLM_IMAGE_BASE_URL"),
-		ImageOrigin:         os.Getenv("LLM_IMAGE_ORIGIN"),
-		ImageTimeout:        time.Duration(int64FromEnv("LLM_IMAGE_TIMEOUT_MS", 0)) * time.Millisecond,
-		UserAgent:           os.Getenv("LLM_USER_AGENT"),
-		ReasoningEffort:     os.Getenv("LLM_REASONING_EFFORT"),
-		ContextWindowTokens: int64FromEnv("LLM_CONTEXT_WINDOW_TOKENS", llm.DefaultContextWindowTokens),
-		MaxContextTokens:    int64FromEnv("LLM_MAX_CONTEXT_TOKENS", llm.DefaultMaxContextTokens),
+		Provider:        provider,
+		APIKey:          os.Getenv("LLM_API_KEY"),
+		BaseURL:         os.Getenv("LLM_BASE_URL"),
+		APIFormat:       llm.APIFormat(os.Getenv("LLM_API_FORMAT")),
+		Model:           envOr("LLM_MODEL", llm.DefaultModel(provider)),
+		ImageModel:      os.Getenv("LLM_IMAGE_MODEL"),
+		ImageBaseURL:    os.Getenv("LLM_IMAGE_BASE_URL"),
+		ImageOrigin:     os.Getenv("LLM_IMAGE_ORIGIN"),
+		ImageTimeout:    time.Duration(int64FromEnv("LLM_IMAGE_TIMEOUT_MS", 0)) * time.Millisecond,
+		UserAgent:       os.Getenv("LLM_USER_AGENT"),
+		ReasoningEffort: os.Getenv("LLM_REASONING_EFFORT"),
+		// 不设环境变量时留 0，交给 WithDefaults 按模型名推断真实窗口；写死默认常量
+		// 会让 Claude/Gemini 这类大窗口模型被当成 128K。
+		ContextWindowTokens: int64FromEnv("LLM_CONTEXT_WINDOW_TOKENS", 0),
+		MaxContextTokens:    int64FromEnv("LLM_MAX_CONTEXT_TOKENS", 0),
 		MaxOutputTokens:     int64FromEnv("LLM_MAX_OUTPUT_TOKENS", 1024),
 		Timeout:             time.Duration(int64FromEnv("LLM_TIMEOUT_MS", 60000)) * time.Millisecond,
 	}

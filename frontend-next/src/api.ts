@@ -170,6 +170,7 @@ export interface BotProfileConfig {
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
+  recent_history_token_budget?: number;
   recent_context_limit?: number;
   /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
   long_term_memory_enabled?: boolean;
@@ -323,6 +324,7 @@ export interface BotGroupConfig {
   welcome_enabled?: boolean;
   welcome_message?: string;
   max_context_tokens?: number;
+  recent_history_token_budget?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
   proactive_reply_chance?: number;

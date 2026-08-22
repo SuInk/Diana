@@ -1741,10 +1741,17 @@ func (r *Runtime) shouldHandleChatTrigger(event MessageEvent, text string) bool 
 	if eventDirectlyMentionsBot(event, cfg) {
 		return true
 	}
-	// 裸子串匹配分不清「叫它」和「谈论它」，后者会让机器人凑进本来没它的对话。
-	// 判定为谈论时这里返回 false，消息继续走插话判定，由那边的阈值和冷却决定
-	// 要不要开口，而不是被当成显式呼叫强制回复。
+	// 称呼匹配只做结构判断：词边界、是否被引号整个括起来、是否处在呼语位置。区分
+	// 「叫它」和「谈论它」是语义问题，以前靠三张中文词表在代码里判，本项目不允许
+	// 这么做，那段判断已经删除。
 	return len(matchedGroupAliases(event, cfg, text)) > 0
+}
+
+// hasProactiveReplyRouter 报告是否配置了可用于语义判定的模型。
+func (r *Runtime) hasProactiveReplyRouter() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.llmFactory != nil || (r.llmCfgFactory != nil && r.llmStore != nil)
 }
 
 // matchedGroupAliases 返回本条消息里按当前匹配档位判定为「在叫机器人」的称呼。
@@ -1803,10 +1810,7 @@ func (r *Runtime) proactiveReplyConsideration(event MessageEvent, text string) (
 	if proactiveReplyTriggerText(event, text) == "" && !hasReplyCandidateImage(event.Segments) {
 		return false, "消息没有可供主动回复模型判断的文字或图片内容"
 	}
-	r.mu.RLock()
-	hasRouter := r.llmFactory != nil || (r.llmCfgFactory != nil && r.llmStore != nil)
-	r.mu.RUnlock()
-	if !hasRouter {
+	if !r.hasProactiveReplyRouter() {
 		return false, "未配置可用的主动回复判断模型，消息未进入语义判断"
 	}
 	return true, ""
@@ -1885,15 +1889,10 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		return resp.Text, nil
 	})
 	if err != nil {
+		// 路由超时以前会退回一条词表规则：扫到问号或「怎么/为什么/有没有」就当成
+		// 公开问题强行回答。那是拿关键词判断语义意图，而且判错的方向是「本来不该
+		// 说话却开口」。没有模型结论时保持沉默才是保守的默认值。
 		r.recordProactiveReplyRouteError(ctx, event, err)
-		if ctx.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(routeCtx.Err(), context.DeadlineExceeded)) {
-			if fallbackEvent, fallbackText, ok := proactiveReplyTimeoutFallback(candidates); ok {
-				fallbackEvent.proactiveReply = true
-				fallbackEvent.routingReason = "主动回复路由超时；消息是明确的公开问题，已按保守规则降级回答"
-				r.recordProactiveReplyRouteFallback(ctx, fallbackEvent, err)
-				return fallbackEvent, fallbackText, []proactiveReplyCandidate{{Event: fallbackEvent, Text: fallbackText}}, true
-			}
-		}
 		event.routingReason = "主动回复判断失败，已保持沉默：" + err.Error()
 		return event, text, nil, false
 	}
@@ -2037,36 +2036,6 @@ func selectProactiveReplyTurn(candidates []proactiveReplyCandidate, targetMessag
 func hasReplyCandidateImage(segments []MessageSegment) bool {
 	for _, segment := range segments {
 		if segment.Type == "image" && segment.Data["source_type"] != "video_frame" {
-			return true
-		}
-	}
-	return false
-}
-
-func proactiveReplyTimeoutFallback(candidates []proactiveReplyCandidate) (MessageEvent, string, bool) {
-	for index := len(candidates) - 1; index >= 0; index-- {
-		candidate := candidates[index]
-		text := strings.TrimSpace(readableEventText(candidate.Event, candidate.Text))
-		if explicitPublicQuestion(text) {
-			return candidate.Event, candidate.Text, true
-		}
-	}
-	return MessageEvent{}, "", false
-}
-
-func explicitPublicQuestion(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return false
-	}
-	if strings.ContainsAny(text, "?？") {
-		return true
-	}
-	for _, marker := range []string{
-		"请问", "有人知道", "求推荐", "怎么", "如何", "为什么", "为啥", "咋", "能否", "可不可以",
-		"有没有", "是不是", "该不该", "哪里", "哪个", "多少", "几个", "几人", "怎么办", "是什么",
-	} {
-		if strings.Contains(text, marker) {
 			return true
 		}
 	}
@@ -2252,8 +2221,27 @@ type proactiveReplyDecision struct {
 	DirectedAtBot   bool     `json:"directed_at_bot"`
 	Answerable      bool     `json:"answerable"`
 	Substantive     bool     `json:"substantive"`
-	Reason          string   `json:"reason,omitempty"`
+	// RequestsResponse 表示发言者这句话本身在要求得到回应。它和 ShouldReply 是两
+	// 件事：后者是路由器的最终结论，前者只描述用户的诉求，用来在结论保守过头时
+	// 把明确的追问救回来。以前这件事是拿「帮我/请你/闭嘴/好的」之类的词表在代码
+	// 里判的，那是用关键词判断语义意图。
+	RequestsResponse bool `json:"requests_response"`
+	// Blocker 是 should_reply=false 时的原因分类。以前这里靠扫 reason 里的中文措辞
+	// 反推路由器是不是判错了，等于让代码去理解模型写的自然语言。
+	Blocker string `json:"blocker,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
+
+// 路由器判定不回复时给出的原因分类。missing_context 和 no_capability 描述的是
+// 「路由阶段还不具备条件」，而正式回复阶段有工具和完整上下文，往往真能答上来，
+// 所以只有这两类允许被追问诉求救回。
+const (
+	proactiveBlockerNone         = "none"
+	proactiveBlockerMissingInfo  = "missing_context"
+	proactiveBlockerNoCapability = "no_capability"
+	proactiveBlockerNotAddressed = "not_addressed"
+	proactiveBlockerLowValue     = "low_value"
+)
 
 func (decision proactiveReplyDecision) qualifiedBotFollowup() bool {
 	return strings.EqualFold(strings.TrimSpace(decision.Category), "bot_related") && decision.DirectedAtBot
@@ -2294,11 +2282,12 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 	if decision == nil || decision.allows(threshold, chatIn) || !decision.DirectedAtBot || decision.Confidence < threshold {
 		return false
 	}
-	text = strings.TrimSpace(readableEventText(event, text))
-	if !directedFollowupNeedsResponse(text) {
+	// 用户没有在要求回应，或者路由器不回复的原因跟「条件不够」无关，就不救。
+	// 这两个判断以前是代码扫词表得出的；现在由路由器直接给结论，代码只做取舍。
+	if !decision.RequestsResponse {
 		return false
 	}
-	if !explicitPublicQuestion(text) && !directedFollowupRoutingMistake(decision.Reason) {
+	if decision.Blocker != proactiveBlockerMissingInfo && decision.Blocker != proactiveBlockerNoCapability {
 		return false
 	}
 	originalReason := strings.TrimSpace(decision.Reason)
@@ -2315,62 +2304,6 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 		decision.Reason += "；路由器原判断：" + originalReason
 	}
 	return true
-}
-
-func directedFollowupRoutingMistake(reason string) bool {
-	reason = strings.TrimSpace(reason)
-	for _, marker := range []string{
-		"不可访问", "无法访问", "拿不到", "无法读取", "不能读取", "没有权限读取",
-		"没有可用", "没有绘图工具", "无法实际完成",
-		"信息不足", "缺少信息", "缺少所指", "缺少关键", "缺少上下文", "无法可靠回答",
-	} {
-		if strings.Contains(reason, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func directedFollowupNeedsResponse(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return false
-	}
-	for _, marker := range []string{"别回复", "不用回复", "不要回复", "不用回", "别回", "别说了", "停止回复", "安静", "闭嘴"} {
-		if strings.Contains(text, marker) {
-			return false
-		}
-	}
-	normalized := strings.Trim(text, " \t\r\n，。！？!?~～")
-	for _, acknowledgement := range []string{"好", "好的", "行", "知道了", "明白了", "收到", "谢谢", "感谢", "哈哈", "笑死", "666", "确实"} {
-		if normalized == acknowledgement {
-			return false
-		}
-	}
-	if explicitPublicQuestion(text) {
-		return true
-	}
-	for _, marker := range []string{"帮我", "请你", "麻烦", "查一下", "看一下", "告诉我", "解释一下", "再说一下", "继续说", "画一", "画个", "画张", "生成图片", "生成一张", "做张图", "改图"} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	for _, marker := range []string{"依据", "原因", "理由", "证据", "然后呢", "后来呢", "接下来呢"} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	if strings.HasSuffix(normalized, "呢") {
-		return true
-	}
-	if strings.Contains(text, "群") {
-		for _, marker := range []string{"人数", "成员", "几个人", "多少人", "群名", "群主", "管理员", "谁在", "有谁"} {
-			if strings.Contains(text, marker) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
@@ -2397,6 +2330,23 @@ func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSetting
 	return prompt + "\n\n当前闲聊插话已关闭：禁止使用 category=chat_in，普通闲聊一律 should_reply=false。"
 }
 
+// normalizeProactiveBlocker 只接受约定的分类值，其余一律归为「无阻碍」。
+// 这样模型写歪了字段也不会被当成可以救回的条件。
+func normalizeProactiveBlocker(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case proactiveBlockerMissingInfo:
+		return proactiveBlockerMissingInfo
+	case proactiveBlockerNoCapability:
+		return proactiveBlockerNoCapability
+	case proactiveBlockerNotAddressed:
+		return proactiveBlockerNotAddressed
+	case proactiveBlockerLowValue:
+		return proactiveBlockerLowValue
+	default:
+		return proactiveBlockerNone
+	}
+}
+
 func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 	raw = strings.TrimSpace(stripJSONCodeFence(raw))
 	start := strings.Index(raw, "{")
@@ -2405,15 +2355,17 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 		return proactiveReplyDecision{}, false
 	}
 	var payload struct {
-		ShouldReply     *bool    `json:"should_reply"`
-		Confidence      *float64 `json:"confidence"`
-		Category        *string  `json:"category"`
-		TargetMessageID *string  `json:"target_message_id"`
-		TurnMessageIDs  []string `json:"turn_message_ids"`
-		DirectedAtBot   *bool    `json:"directed_at_bot"`
-		Answerable      *bool    `json:"answerable"`
-		Substantive     *bool    `json:"substantive"`
-		Reason          *string  `json:"reason"`
+		ShouldReply      *bool    `json:"should_reply"`
+		Confidence       *float64 `json:"confidence"`
+		Category         *string  `json:"category"`
+		TargetMessageID  *string  `json:"target_message_id"`
+		TurnMessageIDs   []string `json:"turn_message_ids"`
+		DirectedAtBot    *bool    `json:"directed_at_bot"`
+		Answerable       *bool    `json:"answerable"`
+		Substantive      *bool    `json:"substantive"`
+		RequestsResponse *bool    `json:"requests_response"`
+		Blocker          *string  `json:"blocker"`
+		Reason           *string  `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil {
 		return proactiveReplyDecision{}, false
@@ -2442,6 +2394,12 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 	}
 	if payload.Substantive != nil {
 		decision.Substantive = *payload.Substantive
+	}
+	if payload.RequestsResponse != nil {
+		decision.RequestsResponse = *payload.RequestsResponse
+	}
+	if payload.Blocker != nil {
+		decision.Blocker = normalizeProactiveBlocker(*payload.Blocker)
 	}
 	if payload.Reason != nil {
 		decision.Reason = strings.TrimSpace(*payload.Reason)
@@ -2526,6 +2484,8 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 			"user_id":           event.UserID,
 			"parsed":            parsed,
 			"should_reply":      decision.ShouldReply,
+			"requests_response": decision.RequestsResponse,
+			"blocker":           decision.Blocker,
 			"confidence":        decision.Confidence,
 			"category":          decision.Category,
 			"target_message_id": decision.TargetMessageID,
@@ -2635,10 +2595,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	event = r.enrichRecentTextReference(ctx, event, cleanText, replyHistory)
 	overrides := r.pluginOverridesForEvent(event)
 	settingOverrides := r.pluginSettingOverridesForEvent(event)
+	// 撤回记录以前靠词表判断「用户是不是在问撤回」再预取并劫持回复。现在由模型通过
+	// diana.chat_history 的 recalls 操作按需读取，读到之后仍走原有的转发卡片链路。
 	var recallEvents []MessageEvent
-	if recallHistoryQuery(cleanText) {
-		recallEvents = r.recallHistory(event)
-	}
+	recallSink := &recallDisclosureSink{}
 	pluginRequest := func(current MessageEvent, history []MessageEvent) PluginRequest {
 		return PluginRequest{
 			Event:                   current,
@@ -2653,17 +2613,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			AppLogs:                 r.appLogWriter(),
 		}
 	}
+	// 模型能不能自己取历史原图，决定了要不要走前置指代解析：能取就给索引让它自己
+	// 判断，不能取就得在调用前替它解完。
+	agentCanFetchMedia := cfg.AgentEnabled && relationship.allowsAgentTools()
 	var pluginResponses []PluginResponse
-	if recallResponse, _ := r.plugins.RunOneWithGroupOverrides(ctx, messageHistoryPluginID, pluginRequest(event, replyHistory), overrides, settingOverrides); recallResponse != nil && recallResponse.RecallDisclosure {
-		// Recall facts are already complete and deterministic. Do not spend a large
-		// semantic-reference request before handing them to the answering model.
-		recallsWithDescriptions := r.enrichRecallImageDescriptions(ctx, event, recallResponse.RecallEvents)
-		refreshRecallPluginResponse(recallResponse, recallsWithDescriptions)
-		pluginResponses = append(pluginResponses, *recallResponse)
-	} else {
-		// Agent already receives recent multimodal history. Invoke the semantic
-		// router only when durable media has fallen outside that bounded window.
-		if !cfg.AgentEnabled || r.hasDurableMediaBeyondRecentContext(ctx, event) {
+	{
+		// agent 模式下窗口外媒体改由 durableMediaIndex 以文字索引进提示词，模型
+		// 自己决定要不要取原图，不再每条消息都付一次前置路由调用。工具被关系等级
+		// 挡掉时没有取图手段，仍然回退到路由器。
+		if r.shouldResolveSemanticReference(ctx, cfg, event, agentCanFetchMedia) {
 			event = r.enrichSemanticReference(ctx, event, cleanText)
 		}
 		event = r.prepareIncomingVoice(ctx, event)
@@ -2716,9 +2674,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	fullAgentEnabled := cfg.AgentEnabled && !authoritativePluginContext
 	olderSummary := ""
+	sessionThread := ""
 	summaryRecompressed := false
+	var contextPreload *promptContextPreload
 	if !authoritativePluginContext {
+		// contextSummary 只读内存里的压缩摘要，不做 I/O，留在原处：下面的意图路由
+		// 要用它判断「有没有更早的上下文」，预取到组装阶段才收就晚了。
 		olderSummary = r.contextSummary(event)
+		// event 到这里已经不会再被改写，三层要查存储层的只读上下文可以并发预取；
+		// 下面建工具表和跑意图路由的时间正好用来等它们。
+		contextPreload = r.startPromptContextPreload(ctx, event, cleanText, userProfile, relationship, agentCanFetchMedia)
 	}
 	var agentRegistry *agent.ToolRegistry
 	if !authoritativePluginContext {
@@ -2736,8 +2701,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		if fullAgentEnabled {
 			extraTools := []agent.Tool{
-				newDianaChatHistoryTool(r, event),
+				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
+				newDianaSubtaskTool(r, event),
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaImageTool(r, event, relationship),
@@ -2865,12 +2831,44 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 	}
 	if !authoritativePluginContext {
-		if memoryContext := r.memoryContextWithProfile(ctx, event, cleanText, userProfile, relationship); memoryContext != "" {
+		contextPreload.wait()
+		// 结构化记忆接管后 contextSummary 恒为空，这条通道一直空转。改由会话线程
+		// 便签填上：被裁掉的历史不该只剩离散事实点，叙事线索也要有人接。两者互斥，
+		// 没有存储层的部署仍然走旧的流水摘要。
+		sessionThread = contextPreload.sessionThread
+		if sessionThread != "" {
+			olderSummary = ""
+		}
+		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
 			messages = append(messages, llm.Message{
 				Role:     llm.RoleUser,
 				Content:  memoryContext,
 				Priority: llm.MessagePriorityMemory,
 			})
+		}
+		if directAgentDecision && agentCanFetchMedia {
+			// 索引挂在历史优先级上：预算紧张时它跟着旧历史一起让位，不该挤掉当前
+			// 消息或长期要求。
+			if mediaIndex := contextPreload.mediaIndex; mediaIndex != "" {
+				messages = append(messages, llm.Message{
+					Role:       llm.RoleUser,
+					Content:    mediaIndex,
+					Priority:   llm.MessagePriorityHistory,
+					AtomicText: true,
+				})
+			}
+		}
+		if thread := strings.TrimSpace(sessionThread); thread != "" {
+			const threadPrefix = "【当前会话进行状态，用于接上正在聊的事；不要复述它，也不要直接回复它】\n"
+			threadBudget := sessionThreadBudget(r.promptContextWindowTokens(event, cfg)) - llm.EstimateTextTokens(threadPrefix)
+			if thread = fitSessionThreadToBudget(thread, threadBudget); thread != "" {
+				messages = append(messages, llm.Message{
+					Role:       llm.RoleUser,
+					Content:    threadPrefix + thread,
+					Priority:   llm.MessagePrioritySummary,
+					AtomicText: true,
+				})
+			}
 		}
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
@@ -3068,6 +3066,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		return "", err
+	}
+	// Agent 在循环里读过撤回记录时，把同一个 PluginResponse 合并回本轮：转发卡片、
+	// 嵌套转发和自动撤回都由下面既有的投递路径处理，不在工具里复制第二份。
+	// applyRecallReplyMode 仍然生效，「仅摘要」档位下不会发出原文卡片。
+	if disclosures := recallSink.drain(); len(disclosures) > 0 {
+		pluginResponses = append(pluginResponses, applyRecallReplyMode(disclosures, cfg.RecallReplyMode)...)
 	}
 	reply, controlIntent := consumeReplyControlIntent(reply)
 	if event.chatInReply && (reply == "" || controlIntent.RefuseCurrent || controlIntent.SuppressCurrentUser) {

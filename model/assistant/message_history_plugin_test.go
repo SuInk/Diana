@@ -34,13 +34,10 @@ func TestMessageHistoryPluginAddsEveryCachedRecallToContext(t *testing.T) {
 		}))
 	}
 
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{
 		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"},
 		Text:  "查看所有撤回内容",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if resp == nil {
 		t.Fatal("expected recall context")
 	}
@@ -55,7 +52,7 @@ func TestMessageHistoryPluginAddsEveryCachedRecallToContext(t *testing.T) {
 func TestMessageHistoryPluginUsesRecent24HoursOldestFirst(t *testing.T) {
 	referenceTime := int64(1_800_000_000)
 	plugin := NewMessageHistoryPlugin()
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{
 		Event: MessageEvent{Kind: EventKindGroup, GroupID: "123", Time: referenceTime},
 		Text:  "查看撤回记录",
 		RecallEvents: []MessageEvent{
@@ -64,9 +61,6 @@ func TestMessageHistoryPluginUsesRecent24HoursOldestFirst(t *testing.T) {
 			{Kind: EventKindNotice, SubType: "group_recall", GroupID: "123", MessageID: "older", Time: referenceTime - 120, OriginalTime: referenceTime - 180, RawMessage: "较旧内容", UserID: "user-2", OperatorID: "admin"},
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if resp == nil {
 		t.Fatal("expected recall context")
 	}
@@ -191,10 +185,7 @@ func TestMessageHistoryPluginKeepsRecallOperator(t *testing.T) {
 		MessageID:  "old-bot",
 	}))
 
-	resp, err := plugin.Handle(context.Background(), PluginRequest{Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"}, Text: "查看撤回记录"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{Event: MessageEvent{Kind: EventKindGroup, GroupID: "123"}, Text: "查看撤回记录"})
 	if resp == nil || !strings.Contains(resp.Context, "机器人以管理员身份撤回，绝不是发送者自行撤回") || !strings.Contains(resp.Context, "机器人自行撤回") {
 		t.Fatalf("resp = %#v", resp)
 	}
@@ -232,10 +223,7 @@ func TestMessageHistoryPluginNamesAdministratorSeparatelyFromOriginalSender(t *t
 	}
 
 	req.Text = "查看撤回记录"
-	resp, err := plugin.Handle(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := recallDisclosureForTest(t, plugin, req)
 	if resp == nil {
 		t.Fatal("expected recall context")
 	}
@@ -296,14 +284,11 @@ func TestMessageHistoryPluginReusesRecentParticipantNamesForRecalledMentions(t *
 		MessageID:  "recalled",
 	}))
 
-	resp, err := plugin.Handle(context.Background(), PluginRequest{
+	resp := recallDisclosureForTest(t, plugin, PluginRequest{
 		Event:        MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20001"},
 		RecentEvents: []MessageEvent{recentParticipant},
 		Text:         "查看撤回记录",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if resp == nil {
 		t.Fatal("expected recall context")
 	}
@@ -337,10 +322,7 @@ func TestMessageHistoryPluginLooksUpAndCachesRecalledMentionIdentity(t *testing.
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		resp, err := plugin.Handle(context.Background(), req)
-		if err != nil {
-			t.Fatal(err)
-		}
+		resp := recallDisclosureForTest(t, plugin, req)
 		if resp == nil || !strings.Contains(resp.Context, "|Alice(10002)|") {
 			t.Fatalf("resp = %#v", resp)
 		}
@@ -387,4 +369,14 @@ func (c *recallIdentityChannel) CallAPI(_ context.Context, action string, params
 		"nickname": "TestOwner",
 		"role":     "owner",
 	}, nil
+}
+
+// recallDisclosureForTest 走的是模型通过 diana.chat_history 的 recalls 操作取撤回
+// 记录的那条路。这些用例以前调 plugin.Handle：那条路靠词表判断「用户是不是在问撤
+// 回」，现在触发权交给模型，取数和组装响应仍是同一段代码，断言的行为因此不变。
+func recallDisclosureForTest(t *testing.T, plugin *MessageHistoryPlugin, req PluginRequest) *PluginResponse {
+	t.Helper()
+	response, _, _ := plugin.RecallDisclosureResponse(
+		context.Background(), req.Channel, req.Event, req.RecentEvents, req.RecallEvents)
+	return response
 }
