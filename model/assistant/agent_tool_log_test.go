@@ -170,7 +170,36 @@ func TestAgentRunObserverRedactsRepositoryIssueDebugPayload(t *testing.T) {
 	if input["operation"] != "create" || input["repository"] != "acme/demo" {
 		t.Fatalf("debug input = %#v", input)
 	}
-	if debug.Metadata["tool_output"] != "[repository issue tool output omitted]" || debug.Metadata["error"] != "[repository issue tool error omitted]" {
+	if debug.Metadata["error"] != "[repository issue tool error omitted]" {
 		t.Fatalf("debug metadata = %#v", debug.Metadata)
+	}
+	// 状态字段要透出来（没有它们就没法排查写操作为什么被拒），Issue 标题和
+	// 正文仍然一个字都不能出现——上面的泄漏检查已经覆盖了这一点。
+	output, _ := debug.Metadata["tool_output"].(string)
+	if !strings.Contains(output, `"ok":true`) {
+		t.Fatalf("tool_output 里没有状态字段：%q", output)
+	}
+	if !strings.Contains(output, "issue 正文已省略") {
+		t.Fatalf("tool_output 没有标注正文已省略：%q", output)
+	}
+}
+
+func TestRepositoryIssueDebugOutcomeSurfacesFailureCode(t *testing.T) {
+	// 写操作被闸门拒绝时，追踪里必须看得出是哪一道闸——此前一律只有
+	// 「output omitted」，排查时完全是黑箱。
+	output := repositoryIssueDebugOutcome(`{"ok":false,"operation":"create","failure_code":"explicit_fields_required","message":"创建 Issue 时，当前用户消息必须包含要发布的 title 内容。","issue":{"title":"private title"}}`)
+	for _, want := range []string{`"ok":false`, "explicit_fields_required", "必须包含要发布的 title 内容"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("追踪里缺少 %q：%s", want, output)
+		}
+	}
+	if strings.Contains(output, "private title") {
+		t.Fatalf("追踪泄漏了 Issue 标题：%s", output)
+	}
+}
+
+func TestRepositoryIssueDebugOutcomeFallsBackOnUnparsableOutput(t *testing.T) {
+	if got := repositoryIssueDebugOutcome("not json at all，可能含正文"); got != "[repository issue tool output omitted]" {
+		t.Fatalf("解析不了的输出必须整体挡掉，实际 %q", got)
 	}
 }

@@ -148,6 +148,12 @@ func (r *Runtime) interruptedReplyError(ctx context.Context, event MessageEvent)
 	if !replyTriggerGateEnabled(ctx) || continuousOutboundDelivery(ctx) {
 		return nil
 	}
+	// 本轮已经在外部系统留下不可撤销的痕迹时不再打断：回复被丢掉的话，用户
+	// 看不到成功，而随后那一轮会因为草稿已被消费而报告失败，最后呈现为
+	// 「创建成功却提示失败」。
+	if hasExternalSideEffect(ctx) {
+		return nil
+	}
 	if r.inboundTriggerSuperseded(event) {
 		return errReplyTriggerSuperseded
 	}
