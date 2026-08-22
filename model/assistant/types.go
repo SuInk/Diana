@@ -336,12 +336,18 @@ type BotConfig struct {
 	LegacyPassiveReplyPrompt     *string              `json:"passive_reply_prompt,omitempty"`
 	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int                  `json:"max_reply_chars,omitempty"`
-	DirectReplyChunkSize         int                  `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int                  `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
+	// FollowUpMaxChars 是跟评的长度上限。跟评是插件发完确定性内容后补的一句感想，
+	// 比正常回复短得多，但上限以前硬编码在代码里，改不了也和 MaxReplyChars 脱节。
+	FollowUpMaxChars int `json:"follow_up_max_chars,omitempty"`
+	// FollowUpQuietDefault 决定跟评的默认取向：true 时没有明确理由就不接话，
+	// false 时只要和会话对得上就说一句。默认 true，保持既有的克制风格。
+	FollowUpQuietDefault         *bool           `json:"follow_up_quiet_default,omitempty"`
+	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// LegacyLLMQQIDMaskingEnabled 是这项设置改名前的键。名字带 QQ，可同一套脱敏还
 	// 服务 Telegram。只保留读取：已经显式关掉脱敏的配置升级后必须仍然是关的，静默
 	// 变回开启是隐私回退。写出时一律用新键。
@@ -532,12 +538,18 @@ type ConfigPayload struct {
 	LegacyPassiveReplyPrompt     *string              `json:"passive_reply_prompt,omitempty"`
 	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int                  `json:"max_reply_chars,omitempty"`
-	DirectReplyChunkSize         int                  `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int                  `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
+	// FollowUpMaxChars 是跟评的长度上限。跟评是插件发完确定性内容后补的一句感想，
+	// 比正常回复短得多，但上限以前硬编码在代码里，改不了也和 MaxReplyChars 脱节。
+	FollowUpMaxChars int `json:"follow_up_max_chars,omitempty"`
+	// FollowUpQuietDefault 决定跟评的默认取向：true 时没有明确理由就不接话，
+	// false 时只要和会话对得上就说一句。默认 true，保持既有的克制风格。
+	FollowUpQuietDefault         *bool           `json:"follow_up_quiet_default,omitempty"`
+	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// LegacyLLMQQIDMaskingEnabled 是这项设置改名前的键。名字带 QQ，可同一套脱敏还
 	// 服务 Telegram。只保留读取：已经显式关掉脱敏的配置升级后必须仍然是关的，静默
 	// 变回开启是隐私回退。写出时一律用新键。
@@ -986,6 +998,8 @@ func DefaultBotConfig() BotConfig {
 		NaturalInterjectionEnabled:   boolPointer(false),
 		MaxInputChars:                2000,
 		MaxReplyChars:                3500,
+		FollowUpMaxChars:             defaultFollowUpMaxChars,
+		FollowUpQuietDefault:         boolPointer(true),
 		DirectReplyChunkSize:         900,
 		ForwardReplyThreshold:        900,
 		RecallReplyMode:              RecallReplyModeLLMSummary,
@@ -1137,6 +1151,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.MaxReplyChars <= 0 {
 		cfg.MaxReplyChars = defaults.MaxReplyChars
+	}
+	if cfg.FollowUpMaxChars <= 0 {
+		cfg.FollowUpMaxChars = defaults.FollowUpMaxChars
+	}
+	if cfg.FollowUpQuietDefault == nil {
+		cfg.FollowUpQuietDefault = copyBoolPointer(defaults.FollowUpQuietDefault)
 	}
 	if cfg.DirectReplyChunkSize <= 0 {
 		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
@@ -1329,6 +1349,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ProactiveReplyPrompt:         cfg.ProactiveReplyPrompt,
 		MaxInputChars:                cfg.MaxInputChars,
 		MaxReplyChars:                cfg.MaxReplyChars,
+		FollowUpMaxChars:             cfg.FollowUpMaxChars,
+		FollowUpQuietDefault:         copyBoolPointer(cfg.FollowUpQuietDefault),
 		DirectReplyChunkSize:         cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:        cfg.ForwardReplyThreshold,
 		RecallReplyMode:              cfg.RecallReplyMode,
@@ -1449,6 +1471,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ProactiveReplyPrompt:         payload.ProactiveReplyPrompt,
 		MaxInputChars:                payload.MaxInputChars,
 		MaxReplyChars:                payload.MaxReplyChars,
+		FollowUpMaxChars:             payload.FollowUpMaxChars,
+		FollowUpQuietDefault:         copyBoolPointer(payload.FollowUpQuietDefault),
 		DirectReplyChunkSize:         payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:        payload.ForwardReplyThreshold,
 		RecallReplyMode:              payload.RecallReplyMode,
