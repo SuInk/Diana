@@ -133,17 +133,19 @@ type RepositoryIssueDraftStore interface {
 // 请求体的字段——以前 assignees、milestone 和目标 Issue 编号靠比对用户措辞来防止
 // 模型夹带，那层措辞判断已经移除，改由这份清单让用户自己核对。
 type repositoryIssueDraftView struct {
-	ID            string    `json:"id"`
+	ID string `json:"id"`
+	// Operation 区分这份草稿要执行的写操作。历史草稿没有这个字段，读取时按
+	// create 处理。
+	Operation     string    `json:"operation,omitempty"`
+	IssueTarget   int       `json:"issue_target,omitempty"`
 	GroupID       string    `json:"group_id"`
 	Repository    string    `json:"repository"`
-	Operation     string    `json:"operation,omitempty"`
 	Title         string    `json:"title"`
 	Body          string    `json:"body,omitempty"`
 	Labels        []string  `json:"labels,omitempty"`
 	Assignees     []string  `json:"assignees,omitempty"`
 	Milestone     any       `json:"milestone,omitempty"`
 	State         string    `json:"state,omitempty"`
-	TargetNumber  int       `json:"target_number,omitempty"`
 	RequesterID   string    `json:"requester_id"`
 	RequesterName string    `json:"requester_name,omitempty"`
 	Status        string    `json:"status"`
@@ -210,7 +212,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `搜索和管理 GitHub Issues。已配置的群聊或私聊草稿提交者可调用 create，机器人应根据当前需求整理 title/body；后端只保存并复述草稿，不会写入 GitHub。群聊草稿需要对应仓库的管理人员明确回复同意后调用 approve，私聊草稿也可传 draft_id 由管理人员审批；明确拒绝时调用 cancel_draft。list_drafts 的结果包含提出人、日期和完整内容。管理人员可直接执行 search/create/update/comment/close/reopen；直接写入必须传 user_confirmed_write=true，并遵守明确目标与字段校验。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `搜索和管理 GitHub Issues。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，对方明确同意再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -242,10 +244,10 @@ func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
 		"labels":     toolStringArrayParam("要设置的标签；传空数组表示清空。"),
 		"assignees":  toolStringArrayParam("要设置的负责人；传空数组表示清空。"),
 		"milestone":  toolStringParam("要设置的里程碑；传 null 表示清空。"),
-		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求立即执行这次写入。写操作必填 true，" +
-			"且后端会拿用户消息原文核对：消息里必须只出现一个 owner/repo 和一个 Issue 编号，" +
-			"comment 还要求编号之后用冒号（或「内容为」「评论为」）引出评论正文，且正文与 body 逐字一致。" +
-			"用户没把正文写全、或你打算自己润色措辞时，先把要发的内容复述给用户确认，不要直接调用。"),
+		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求立即执行这次写入。写操作必填 true。" +
+			"后端会拿用户消息原文核对目标：消息里必须只出现一个 owner/repo，update/comment/close/reopen 还必须只出现一个 Issue 编号，" +
+			"对不上会直接拒绝。至于内容，只有用户在消息里逐字写出 title/body 时才会立即写入；" +
+			"你自己组织措辞时会自动落成待审批草稿，把草稿内容复述给用户，等对方明确同意后再用 approve 提交。"),
 		"operation_id":       toolStringParam("幂等标识：同一次写入重试时传相同值，避免重复发布。"),
 		"draft_id":           toolStringParam("approve 与 cancel_draft 必填：要审批或取消的草稿 ID，可用 list_drafts 查到。"),
 		"confirmation_token": toolStringParam("审批流程返回的确认令牌，按提示原样回传。"),
@@ -474,6 +476,11 @@ func (r repositoryIssueResult) fail(code, message string) repositoryIssueResult 
 func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositoryIssueResult) (string, error) {
 	if result.Operation != "" && result.Operation != "search" {
 		t.audit(result)
+	}
+	// GitHub 上已经落地的写入不可撤销：标记之后，这一轮回复不会再被后续消息
+	// 打断丢弃，用户至少能看到「已经建好了」和链接。草稿只存在本地，不算。
+	if result.OK && result.Outcome != "" && result.Outcome != "draft_pending" && result.Operation != "search" && result.Operation != "list_drafts" {
+		markExternalSideEffect(ctx)
 	}
 	body, err := json.Marshal(result)
 	if err != nil {
@@ -765,12 +772,52 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 	return result
 }
 
+// describeResolvedDraft 说明一份已经处理过的草稿的真实归宿。
+func (t *dianaRepositoryIssuesTool) describeResolvedDraft(draft repositoryIssueDraft) repositoryIssueResult {
+	result := repositoryIssueResult{
+		Operation:  "approve",
+		Repository: draft.Repository,
+		Draft:      repositoryIssueDraftViewFromDraft(draft),
+	}
+	switch strings.TrimSpace(draft.Status) {
+	case "created":
+		result.OK = true
+		result.Outcome = "already_applied"
+		result.Idempotent = true
+		result.Message = "这份草稿已经提交过了，本次没有重复写入。"
+		if draft.IssueNumber > 0 {
+			result.RequestedNumber = draft.IssueNumber
+			result.Message = fmt.Sprintf("这份草稿已经提交过了（#%d），本次没有重复写入。", draft.IssueNumber)
+			result.Issue = &repositoryIssueSummary{Number: draft.IssueNumber, URL: draft.IssueURL, Title: configToolString(draft.Input, "title")}
+		}
+		return result
+	case "cancelled":
+		return result.fail("draft_cancelled", "这份草稿已经被取消，没有提交。")
+	}
+	return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
+}
+
+// repositoryIssueDraftOperation 返回草稿要执行的写操作。
+//
+// 新草稿把它存在 Operation 字段上；更早的版本存在 Input["operation"] 里，再早的
+// 版本压根没存（那时只有 create 会落草稿）。三种都要认，否则升级前留下的待审批草稿
+// 会被当成 create 执行。
+func repositoryIssueDraftOperation(draft repositoryIssueDraft) string {
+	if operation := strings.TrimSpace(draft.Operation); operation != "" {
+		return operation
+	}
+	if operation := strings.TrimSpace(configToolString(draft.Input, "operation")); operation != "" {
+		return operation
+	}
+	return "create"
+}
+
 // createWriteDraft 把一次写操作存成待确认草稿。
 //
-// 以前只有 create 会走这里，update/comment/close 直接执行，靠比对用户措辞（字段名、
-// 否定词、清空词）确认「用户真的要求了这件事」。措辞判断已经移除，而替代不能是
-// 「什么都不查」——那就只剩模型自报。改为所有写操作先落草稿，由用户原样打出确认码
-// 之后再执行：用户看到的是将要写入的确切内容，比猜措辞更强也更好解释。
+// 以前只有 create 和 comment 会走这里，update/close/reopen 直接执行，靠比对用户措辞
+// （字段名、否定词、清空词）确认「用户真的要求了这件事」。措辞判断已经移除，而替代
+// 不能是「什么都不查」——那就只剩模型自报。改为所有写操作先落草稿，由用户原样打出
+// 确认码之后再执行：用户看到的是将要写入的确切内容，比猜措辞更强也更好解释。
 func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, repository, operation string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: operation, Repository: repository}
 	draftScope := strings.TrimSpace(t.event.GroupID)
@@ -783,7 +830,16 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 	title, redactions := sanitizeRepositoryIssueText(configToolString(input, "title"), repositoryIssueTitleLimit, true)
 	body, bodyRedactions := sanitizeRepositoryIssueText(configToolString(input, "body"), repositoryIssueBodyLimit, false)
 	result.Redactions = redactions + bodyRedactions
-	if operation == "create" && title == "" {
+	if operation == "comment" {
+		number := repositoryIssueNumber(input)
+		if number <= 0 {
+			return result.fail("invalid_input", "评论草稿必须提供有效的 Issue number。")
+		}
+		if body == "" {
+			return result.fail("invalid_input", "评论草稿必须提供非空 body。")
+		}
+		result.RequestedNumber = number
+	} else if operation == "create" && title == "" {
 		return result.fail("invalid_input", "生成 Issue 草稿必须提供标题。")
 	}
 	if operation != "create" && repositoryIssueNumber(input) <= 0 {
@@ -863,6 +919,12 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 		return result.fail("draft_store_failed", "读取 Issue 草稿失败。")
 	}
 	if !ok {
+		// 并发审批时草稿可能已经被前一条消息消费掉。这时必须照实说明它已经
+		// 执行过，而不是含糊地报「找不到」——后者会让用户以为写入失败，可
+		// GitHub 上其实已经建好了。
+		if resolved, found, findErr := t.plugin.findResolvedDraft(ctx, scope, configToolString(input, "draft_id")); findErr == nil && found {
+			return t.describeResolvedDraft(resolved)
+		}
 		return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
 	}
 	result.Repository = draft.Repository
@@ -895,10 +957,7 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 	}
 	// 执行草稿记录的那个操作，而不是一律当成 create：草稿现在也承载 update、comment
 	// 和开关状态。旧草稿没有 operation 字段，按 create 处理保持兼容。
-	operation := strings.TrimSpace(draft.Operation)
-	if operation == "" {
-		operation = "create"
-	}
+	operation := repositoryIssueDraftOperation(draft)
 	var executed repositoryIssueResult
 	switch operation {
 	case "create":
@@ -1051,13 +1110,13 @@ func repositoryIssueDraftViewFromDraft(draft repositoryIssueDraft) *repositoryIs
 	}
 	return &repositoryIssueDraftView{
 		ID: draft.ID, GroupID: draft.GroupID, Repository: draft.Repository, Operation: operation,
-		Title: configToolString(draft.Input, "title"),
-		Body:  configToolString(draft.Input, "body"), Labels: labels,
-		Assignees:    assignees,
-		Milestone:    draft.Input["milestone"],
-		State:        configToolString(draft.Input, "state"),
-		TargetNumber: repositoryIssueNumber(draft.Input),
-		RequesterID:  draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
+		IssueTarget: repositoryIssueNumber(draft.Input),
+		Title:       configToolString(draft.Input, "title"),
+		Body:        configToolString(draft.Input, "body"), Labels: labels,
+		Assignees:   assignees,
+		Milestone:   draft.Input["milestone"],
+		State:       configToolString(draft.Input, "state"),
+		RequesterID: draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
 		IssueNumber: draft.IssueNumber, IssueURL: draft.IssueURL,
 	}
 }

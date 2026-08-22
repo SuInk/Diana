@@ -97,8 +97,18 @@ func (style ReplyStyle) Normalized() ReplyStyle {
 // (╹◡╹) 这类字符拼的表情，模型不会认为它管得着 😂。
 const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类彩色表情符号），一个都不要，包括用来表达情绪反应或缓和语气的场合。需要表达情绪就用文字说。"
 
+// replyBlankLineRule 同样对所有风格生效。模型按训练里的 Markdown 习惯用空行做
+// 段落间距，而运行时把空行当分条信号——同一个符号两边理解不一样，于是空行落在
+// 哪儿全看模型的排版习惯，投递出来的分条位置就显得莫名其妙。这里从源头上让它
+// 别输出空行；真要分条有 <botbr>，语义明确。
+const replyBlankLineRule = "回复里不要出现空行：段落之间用单个换行，不要空一行再写下一段，也不要在小结、清单或链接前面空行。聊天窗口不是文档，空行会显示成一整行空白。"
+
 func (style ReplyStyle) prompt() string {
-	return strings.TrimSpace(style.stylePrompt() + "\n" + replyEmojiRule)
+	return strings.TrimSpace(strings.Join([]string{
+		style.stylePrompt(),
+		replyEmojiRule,
+		replyBlankLineRule,
+	}, "\n"))
 }
 
 func (style ReplyStyle) stylePrompt() string {
@@ -163,6 +173,23 @@ func (style ReplyStyle) apply(cfg *BotConfig) {
 // 转发卡片是机器人专属控件，真人不会这么发言，所以群友风格永远走普通消息。
 func (style ReplyStyle) allowsForwardReply() bool {
 	return style.Normalized() != ReplyStyleGroupmate
+}
+
+// remainingTypingDelay 返回还需要补多少停顿。拟真的目标是「别秒回」，而不是
+// 「在已经想了很久之后再多等一会儿」——生成本身耗掉的时间同样算数。模型慢的
+// 时候这里直接返回 0，停顿不再是白加在延迟上的一笔。
+func (style ReplyStyle) remainingTypingDelay(text string, elapsed time.Duration) time.Duration {
+	delay := style.typingDelay(text)
+	if delay <= 0 {
+		return 0
+	}
+	if elapsed <= 0 {
+		return delay
+	}
+	if elapsed >= delay {
+		return 0
+	}
+	return delay - elapsed
 }
 
 // typingDelay 返回开口前的拟真停顿：秒回是最容易暴露的一点。

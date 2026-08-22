@@ -634,6 +634,7 @@ func (m *PluginManager) RunWithOverrides(ctx context.Context, req PluginRequest,
 func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginRequest, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) []PluginResponse {
 	type runnable struct {
 		id       string
+		builtIn  bool
 		plugin   Plugin
 		settings SettingValues
 	}
@@ -647,8 +648,9 @@ func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginReq
 		}
 		if state.Installed && enabled {
 			plugins = append(plugins, runnable{
-				id:     id,
-				plugin: plugin,
+				id:      id,
+				builtIn: state.Manifest.BuiltIn,
+				plugin:  plugin,
 				// 生效设置在锁内合并成快照，插件执行期间的设置变更不影响本次请求。
 				settings: effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id]),
 			})
@@ -656,20 +658,47 @@ func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginReq
 	}
 	m.mu.RUnlock()
 
+	// 插件之间互不依赖，但其中几个要打网络（链接解析、浏览器渲染、OCR），
+	// 串行跑等于把它们的耗时逐个加到回复延迟上。并发执行、按固定顺序收集结果。
+	//
+	// 顺序取 List() 的同一套规则（内置在前，其次按 ID）。此前是直接遍历 map，
+	// 顺序本身就是随机的——两个插件同时给出 Reply 时谁生效全看运气，改成固定
+	// 顺序反而消除了这个不确定性。
+	slices.SortFunc(plugins, func(a, b runnable) int {
+		if a.builtIn != b.builtIn {
+			if a.builtIn {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.id, b.id)
+	})
+	collected := make([]*PluginResponse, len(plugins))
+	var wg sync.WaitGroup
+	for index, item := range plugins {
+		wg.Add(1)
+		go func(index int, item runnable) {
+			defer wg.Done()
+			pluginReq := req
+			pluginReq.Settings = item.settings
+			resp, err := safeHandlePlugin(ctx, item.id, item.plugin, pluginReq)
+			if err != nil {
+				recordPluginFailure(ctx, req, item.id, err)
+				return
+			}
+			if resp == nil || !resp.Handled {
+				// 插件失败或未处理不打断主回复链路，运行时会继续用其它插件/LLM。
+				return
+			}
+			collected[index] = resp
+		}(index, item)
+	}
+	wg.Wait()
 	responses := make([]PluginResponse, 0, len(plugins))
-	for _, item := range plugins {
-		pluginReq := req
-		pluginReq.Settings = item.settings
-		resp, err := safeHandlePlugin(ctx, item.id, item.plugin, pluginReq)
-		if err != nil {
-			recordPluginFailure(ctx, req, item.id, err)
-			continue
+	for _, resp := range collected {
+		if resp != nil {
+			responses = append(responses, *resp)
 		}
-		if resp == nil || !resp.Handled {
-			// 插件失败或未处理不打断主回复链路，运行时会继续调用其它插件/LLM。
-			continue
-		}
-		responses = append(responses, *resp)
 	}
 	return responses
 }
