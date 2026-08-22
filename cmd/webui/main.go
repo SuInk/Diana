@@ -596,6 +596,12 @@ func botConfigFromEnv() assistant.BotConfig {
 	cfg.SendChunkIntervalMS = intFromEnv("DIANA_SEND_CHUNK_INTERVAL_MS", cfg.SendChunkIntervalMS)
 	cfg.MaxInputChars = intFromEnv("DIANA_MAX_INPUT_CHARS", cfg.MaxInputChars)
 	cfg.MaxReplyChars = intFromEnv("DIANA_MAX_REPLY_CHARS", cfg.MaxReplyChars)
+	cfg.FollowUpMaxChars = intFromEnv("DIANA_FOLLOW_UP_MAX_CHARS", cfg.FollowUpMaxChars)
+	// 只有真的设了这个变量才覆盖，否则保持数据库里已保存的选择。
+	if strings.TrimSpace(os.Getenv("DIANA_FOLLOW_UP_QUIET_DEFAULT")) != "" {
+		quiet := boolFromEnv("DIANA_FOLLOW_UP_QUIET_DEFAULT", true)
+		cfg.FollowUpQuietDefault = &quiet
+	}
 	cfg.DirectReplyChunkSize = intFromEnv("DIANA_DIRECT_REPLY_CHUNK_SIZE", cfg.DirectReplyChunkSize)
 	cfg.ForwardReplyThreshold = intFromEnv("DIANA_FORWARD_REPLY_THRESHOLD", cfg.ForwardReplyThreshold)
 	cfg.RecallReplyMode = assistant.RecallReplyMode(envOr("DIANA_RECALL_REPLY_MODE", string(cfg.RecallReplyMode)))
