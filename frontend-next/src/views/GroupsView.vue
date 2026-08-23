@@ -168,6 +168,7 @@
             <option value="gentle">温柔</option>
             <option value="lively">活泼</option>
             <option value="concise">简洁</option>
+            <option value="catgirl">猫娘</option>
           </select>
         </div>
         <div class="field wide">
@@ -338,7 +339,9 @@ function responseModeLabel(mode: BotGroupConfig["response_mode"]): string {
 }
 
 function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
-  return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格" } as const)[style as "groupmate" | "assistant" | "gentle" | "lively" | "concise"] ?? "";
+  return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格", catgirl: "猫娘风格" } as const)[
+    style as "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl"
+  ] ?? "";
 }
 
 function overrideCount(group: BotGroupConfig): number {

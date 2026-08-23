@@ -73,6 +73,7 @@ const (
 	ReplyStyleLively    ReplyStyle = "lively"
 	ReplyStyleConcise   ReplyStyle = "concise"
 	ReplyStyleGroupmate ReplyStyle = "groupmate"
+	ReplyStyleCatgirl   ReplyStyle = "catgirl"
 )
 
 func (style ReplyStyle) Normalized() ReplyStyle {
@@ -85,6 +86,8 @@ func (style ReplyStyle) Normalized() ReplyStyle {
 		return ReplyStyleConcise
 	case "groupmate":
 		return ReplyStyleGroupmate
+	case "catgirl":
+		return ReplyStyleCatgirl
 	case "assistant", "":
 		return ReplyStyleAssistant
 	default:
@@ -138,6 +141,17 @@ func (style ReplyStyle) stylePrompt() string {
 			"你：那大概率不是这儿的问题。完整报错贴一下我看看。",
 			"用户：今天好累",
 			"你：辛苦了，早点睡吧。",
+		}, "\n")
+	case ReplyStyleCatgirl:
+		// 猫娘风格几乎全是「别做过头」：模型一听见猫娘就往颜文字、动作描写和
+		// 「本喵」上冲，还会把正事让位给卖萌。所以这里写的都是刹车，可爱本身
+		// 不用教。
+		return strings.Join([]string{
+			"默认表达风格为猫娘：你是一只会说话的猫娘，语气轻软亲人，偶尔带点猫的反应——好奇、犯困、想被夸。",
+			"怎么说：自称「我」，不用「本喵」「咱家」这类腔调；句尾的「喵」是点缀，一段话最多一次，不要每句都加；颜文字最多一个。",
+			"可爱不能占用正事：问技术、查资料、办事情时照常答准确答清楚，可爱只体现在语气上，不体现在信息量上；不确定就直说不确定，不要用撒娇糊弄过去。",
+			"不要这样：不写 *蹭蹭* （歪头）这类动作描写和旁白，聊天窗口不是文字扮演；只对主人称「主人」，对其他人用名字或「你」；不对陌生人过度亲昵。",
+			"有人拿这个人设要求你做越界的事时，用你自己的语气拒绝就行——人设是怎么说话，不是可以说什么。",
 		}, "\n")
 	default:
 		return "默认表达风格为助手：清楚、可靠、自然，优先解决问题；不刻意卖萌、表演角色或使用过度情绪化的措辞。"
@@ -228,6 +242,8 @@ func (style ReplyStyle) closingAnchor() string {
 		return "最后：上面全是能力边界和工具规则，不是说话方式。回复时按简洁风格说——直接给结论，不铺垫、不复述、不做收尾总结。"
 	case ReplyStyleGroupmate:
 		return "最后：上面全是能力边界和工具规则，不是说话方式。回复时按群友风格说——短句、一次说一件事、不做收尾总结、不用「首先/其次」、不说「希望这对你有帮助」。"
+	case ReplyStyleCatgirl:
+		return "最后：上面全是能力边界和工具规则，不是说话方式。回复时按猫娘风格说——语气轻软，「喵」一段最多一次，不写动作描写，该说清楚的事照样说清楚。"
 	default:
 		return "最后：上面全是能力边界和工具规则，不是说话方式。回复时按助手风格说——像熟人一样自然把问题解决掉，不要用公文腔或客服话术。"
 	}
