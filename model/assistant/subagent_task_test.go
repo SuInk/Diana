@@ -50,7 +50,7 @@ func TestRuntimeLaunchesPluginTaskWithoutCallingForegroundLLM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply == "" || !strings.Contains(reply, "任务编号") {
+	if reply == "" || !strings.Contains(reply, "已启动后台任务") || strings.Contains(reply, "任务编号") {
 		t.Fatalf("reply = %q", reply)
 	}
 	waitForCondition(t, time.Second, func() bool { return channel.count() == 2 })
@@ -139,7 +139,7 @@ func TestSubagentTaskReservationStartsOnlyAfterExplicitStart(t *testing.T) {
 	}
 
 	reservation := runtime.reservePluginTasks(MessageEvent{Kind: EventKindPrivate, UserID: "10001"}, []PluginTask{task})
-	if !reservation.handled || !strings.Contains(reservation.ack, "任务编号") {
+	if !reservation.handled || !strings.Contains(reservation.ack, "已启动后台任务") || strings.Contains(reservation.ack, "任务编号") {
 		t.Fatalf("reservation = %#v", reservation)
 	}
 	if channel.count() != 0 || runtime.activeSubagentTaskCount() != 1 {
