@@ -162,6 +162,12 @@
               <span class="card-sub">通过 {{ platformProtocol(form.platform) }} 连接</span>
             </div>
             <div class="card-body stack">
+              <!-- 名称放在最前：先确认这是哪个机器人，再填它的接入凭据。 -->
+              <div class="field">
+                <label for="bot-name">机器人名称</label>
+                <input id="bot-name" v-model="form.name" class="input" placeholder="例如：主群助手、客服机器人" />
+                <span class="hint">用于控制台区分多个机器人，不会自动修改账号昵称。</span>
+              </div>
               <!-- OneBot 是接入端反连过来，Telegram 是我们主动出站长轮询，
                    两者需要的凭据完全不同，按平台分别展示。 -->
               <div v-if="isOneBotPlatform" class="field">
@@ -206,15 +212,15 @@
                   <span class="hint">Telegram 用长轮询出站连接，不需要公网地址，也不用配置 webhook。</span>
                 </div>
                 <div class="field">
-                  <label for="bot-tg-proxy">代理地址</label>
+                  <label for="bot-tg-proxy">代理地址（可选）</label>
                   <input
                     id="bot-tg-proxy"
                     v-model="form.telegram_proxy_url"
                     class="input mono"
-                    placeholder="http://127.0.0.1:7890"
+                    placeholder="留空直连，例如 http://127.0.0.1:7890"
                     autocomplete="off"
                   />
-                  <span class="hint">国内网络访问 api.telegram.org 通常需要代理，支持 http/https/socks5。</span>
+                  <span class="hint">直连不通时再填；国内网络访问 api.telegram.org 通常需要代理，支持 http/https/socks5。</span>
                 </div>
                 <div class="field">
                   <label for="bot-tg-base">自建 Bot API 地址</label>
@@ -229,11 +235,6 @@
                 </div>
               </template>
               <div class="form-grid">
-                <div class="field wide">
-                  <label for="bot-name">机器人名称</label>
-                  <input id="bot-name" v-model="form.name" class="input" placeholder="例如：主群助手、客服机器人" />
-                  <span class="hint">用于控制台区分多个机器人，不会自动修改账号昵称。</span>
-                </div>
                 <div class="field wide">
                   <label>接入平台</label>
                   <AppSelect
