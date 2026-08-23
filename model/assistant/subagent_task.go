@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,32 @@ const (
 	subagentProgressMinRuntime     = 5 * time.Second
 	subagentProgressMinInterval    = 15 * time.Second
 )
+
+// InboundEventSubtask 是一条入站消息触发的后台子任务（生成图片、文档 OCR 等）。
+//
+// 这些任务此前只活在内存里：运行期能从 RuntimeStatus.SubagentTasks 看到，跑完就
+// 消失，事件详情里也查不到「这条消息到底触发了什么」。图片是异步发出去的，用户在
+// 事件页只看得到一句文字回复，图片像是凭空出现的。
+type InboundEventSubtask struct {
+	EventID    string     `json:"event_id"`
+	TaskID     string     `json:"task_id"`
+	Kind       string     `json:"kind"`
+	Name       string     `json:"name"`
+	Phase      string     `json:"phase"`
+	Completed  int        `json:"completed,omitempty"`
+	Total      int        `json:"total,omitempty"`
+	Detail     string     `json:"detail,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+// InboundEventSubtaskStore 把子任务挂到触发它的那条入站消息上。可选接口：
+// 没有实现它的存储照常工作，只是事件详情里看不到子任务。
+type InboundEventSubtaskStore interface {
+	SaveInboundEventSubtask(ctx context.Context, item InboundEventSubtask) error
+}
 
 type SubagentTaskStatus struct {
 	ID        string    `json:"id"`
@@ -47,6 +74,10 @@ type reservedSubagentTask struct {
 	task       PluginTask
 	event      MessageEvent
 	debugTrace *debugTraceState
+	// eventID 是触发这个任务的那条入站事件。任务在自己的 goroutine 里跑，用的是
+	// 运行时根 context，拿不到那一轮的出站账本，所以必须在预约时就把它记下来，
+	// 否则事件详情页无从知道这条消息触发了什么。
+	eventID string
 }
 
 type pluginTaskReservation struct {
@@ -67,7 +98,7 @@ func subagentLLMConcurrency(maxBotConcurrency int) int {
 }
 
 func (r *Runtime) launchPluginTasks(ctx context.Context, event MessageEvent, tasks []PluginTask) (string, bool, error) {
-	reservation := r.reservePluginTasks(event, tasks)
+	reservation := r.reservePluginTasksForTurn(ctx, event, tasks)
 	if !reservation.handled {
 		return "", false, nil
 	}
@@ -83,6 +114,16 @@ func (r *Runtime) launchPluginTasks(ctx context.Context, event MessageEvent, tas
 }
 
 func (r *Runtime) reservePluginTasks(event MessageEvent, tasks []PluginTask) pluginTaskReservation {
+	return r.reservePluginTasksForTurn(context.Background(), event, tasks)
+}
+
+// reservePluginTasksForTurn 与 reservePluginTasks 相同，另外从 ctx 里取出当前入站
+// 事件的 ID，用来把子任务挂到那条消息上。
+func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEvent, tasks []PluginTask) pluginTaskReservation {
+	turnID := ""
+	if turn := outboundTurnFromContext(ctx); turn != nil {
+		turnID = turn.id
+	}
 	reserved := make([]reservedSubagentTask, 0, len(tasks))
 	duplicates := make([]SubagentTaskStatus, 0, len(tasks))
 	now := time.Now()
@@ -118,7 +159,7 @@ func (r *Runtime) reservePluginTasks(event MessageEvent, tasks []PluginTask) plu
 			UpdatedAt: now,
 		}
 		r.subagentTasks[key] = activeSubagentTask{status: status}
-		reserved = append(reserved, reservedSubagentTask{id: id, key: key, task: task, event: event})
+		reserved = append(reserved, reservedSubagentTask{id: id, key: key, task: task, event: event, eventID: turnID})
 	}
 	r.subagentMu.Unlock()
 
@@ -210,6 +251,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	defer cancel()
 	r.updateSubagentTask(item.key, item.id, PluginTaskProgress{Phase: "running"})
 	r.recordSubagentTaskLog(ctx, item, applog.KindOperation, applog.LevelInfo, "后台任务已开始", "")
+	r.persistSubagentTask(item, "running", PluginTaskProgress{}, nil, false)
 
 	services := PluginTaskServices{
 		Generate: r.generateForPluginTask,
@@ -230,6 +272,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 			message := fmt.Sprintf("后台任务「%s」执行失败：%s", item.task.Name, publicChatErrorMessage(err))
 			_ = r.sendSubagentFollowup(rootCtx, item.event, message)
 			r.recordSubagentTaskLog(context.Background(), item, applog.KindError, applog.LevelError, "后台任务执行失败", err.Error())
+			r.persistSubagentTask(item, "failed", PluginTaskProgress{}, err, true)
 		}
 		r.removeSubagentTask(item.key, item.id)
 		return
@@ -241,6 +284,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 		if err := r.sendOutgoing(rootCtx, item.event, message); err != nil {
 			r.setError(err.Error())
 			r.recordSubagentTaskLog(context.Background(), item, applog.KindError, applog.LevelError, "后台任务结果发送失败", err.Error())
+			r.persistSubagentTask(item, "failed", PluginTaskProgress{}, err, true)
 			r.removeSubagentTask(item.key, item.id)
 			return
 		}
@@ -259,6 +303,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 		}
 	}
 	r.recordSubagentTaskLog(context.Background(), item, applog.KindOperation, applog.LevelInfo, "后台任务已完成", "")
+	r.persistSubagentTask(item, "completed", PluginTaskProgress{}, nil, true)
 	r.removeSubagentTask(item.key, item.id)
 }
 
@@ -312,6 +357,7 @@ func (r *Runtime) generateUserFacingPluginReply(ctx context.Context, event Messa
 }
 
 func (r *Runtime) reportSubagentProgress(ctx context.Context, item reservedSubagentTask, progress PluginTaskProgress) {
+	r.persistSubagentTask(item, firstNonEmpty(strings.TrimSpace(progress.Phase), "running"), progress, nil, false)
 	shouldNotify, message := r.updateSubagentTask(item.key, item.id, progress)
 	if !shouldNotify || strings.TrimSpace(message) == "" {
 		return
@@ -398,6 +444,45 @@ func (r *Runtime) sendSubagentFollowup(ctx context.Context, event MessageEvent, 
 		}
 	}
 	return nil
+}
+
+// persistSubagentTask 把子任务的生命周期写到它所属的入站事件上。失败只记日志：
+// 可观测性不该拖垮任务本身。
+func (r *Runtime) persistSubagentTask(item reservedSubagentTask, phase string, progress PluginTaskProgress, taskErr error, finished bool) {
+	if strings.TrimSpace(item.eventID) == "" {
+		return
+	}
+	r.mu.RLock()
+	store, _ := r.messageStore.(InboundEventSubtaskStore)
+	r.mu.RUnlock()
+	if store == nil {
+		return
+	}
+	now := time.Now()
+	record := InboundEventSubtask{
+		EventID:   item.eventID,
+		TaskID:    item.id,
+		Kind:      item.task.Kind,
+		Name:      item.task.Name,
+		Phase:     phase,
+		Completed: progress.Completed,
+		Total:     progress.Total,
+		Detail:    strings.TrimSpace(progress.Message),
+		StartedAt: now,
+		UpdatedAt: now,
+	}
+	if taskErr != nil {
+		record.Error = taskErr.Error()
+	}
+	if finished {
+		finishedAt := now
+		record.FinishedAt = &finishedAt
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := store.SaveInboundEventSubtask(ctx, record); err != nil {
+		log.Printf("chatbot subagent task persist failed: %v", err)
+	}
 }
 
 func (r *Runtime) recordSubagentTaskLog(ctx context.Context, item reservedSubagentTask, kind applog.Kind, level applog.Level, message string, detail string) {

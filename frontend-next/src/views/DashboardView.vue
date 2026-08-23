@@ -42,7 +42,7 @@
 
       <!-- 统计卡片 -->
       <div class="stat-grid dashboard-stats">
-        <StatCard label="今日消息" :value="formatNumber(stats?.today_events ?? 0)" :foot="`累计 ${formatNumber(stats?.total_events ?? 0)}`">
+        <StatCard label="今日消息" :value="formatNumber(stats?.today_events ?? 0)" :foot="inboundFoot">
           <template #icon><MessageCircle :size="14" aria-hidden="true" /></template>
         </StatCard>
         <StatCard label="今日已回复" :value="formatNumber(stats?.today_handled ?? 0)" :foot="`累计 ${formatNumber(stats?.handled_events ?? 0)}`">
@@ -51,7 +51,9 @@
         <StatCard label="今日错误" :value="formatNumber(stats?.today_errors ?? 0)" :foot="`累计 ${formatNumber(stats?.error_events ?? 0)}`">
           <template #icon><TriangleAlert :size="14" aria-hidden="true" /></template>
         </StatCard>
-        <StatCard label="平均响应" :value="stats && stats.avg_reply_ms > 0 ? `${(stats.avg_reply_ms / 1000).toFixed(1)}s` : '—'" :foot="`并发 ${status?.active_workers ?? 0}`">
+        <!-- 队列积压和后台子任务并发是排查「机器人怎么不理我」最直接的两个指标，
+             后端一直在算，前端此前没有读。 -->
+        <StatCard label="平均响应" :value="stats && stats.avg_reply_ms > 0 ? `${(stats.avg_reply_ms / 1000).toFixed(1)}s` : '—'" :foot="`回复并发 ${status?.active_workers ?? 0} / 后台任务 ${status?.active_subagent_tasks ?? 0}`">
           <template #icon><Zap :size="14" aria-hidden="true" /></template>
         </StatCard>
       </div>
@@ -197,6 +199,14 @@ const setupNeeded = ref(false);
 
 const status = computed(() => stream.status);
 const stats = computed(() => stream.stats);
+
+// 队列积压和后台子任务并发是排查「机器人怎么不理我」最直接的两个指标，后端一直在
+// 算，前端此前没有读过。积压为 0 时不显示，免得平时多一串没信息量的文字。
+const inboundFoot = computed(() => {
+  const total = `累计 ${formatNumber(stats.value?.total_events ?? 0)}`;
+  const pending = status.value?.pending_events ?? 0;
+  return pending > 0 ? `${total} · 队列积压 ${formatNumber(pending)}` : total;
+});
 const hourlyBuckets = computed<StatsHourBucket[]>(() => (stream.stats ? [...stream.stats.hourly] : []));
 // 进程指标可能因为权限或平台限制采集不到，那时整张卡片退回整机读数。
 const processMetricsReady = computed(() => {
