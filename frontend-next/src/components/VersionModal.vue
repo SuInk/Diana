@@ -21,10 +21,13 @@
           <span v-else-if="operationRunning" class="badge warn">正在下载并校验</span>
           <span v-else-if="checkResult?.update_available" class="badge accent">发现新版本</span>
           <span v-else-if="switchToRelease" class="badge accent">可切换到正式版</span>
+          <!-- 「升不了级」不能渲染成「已是最新」：两者都没有可点的按钮，但含义相反。 -->
+          <span v-else-if="updateUnsupported" class="badge err">不支持自更新</span>
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
           <span v-else class="muted" style="font-size: 12.5px">尚未检查</span>
           <span v-if="sourceBuild" class="badge warn">源码构建</span>
         </div>
+        <p v-if="updateUnsupportedReason" class="update-unsupported-note">{{ updateUnsupportedReason }}</p>
         <div class="version-hero-meta">
           <span v-if="checkResult?.latest_published_at">
             {{ checkResult.update_available || switchToRelease ? "新版本" : "" }}发布于 {{ formatDateTime(checkResult.latest_published_at) }}
@@ -284,6 +287,17 @@ let installStartedAt = 0;
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 const releaseSelfUpdate = computed(() => deploymentMode.value === "release" && version.value?.update_supported === true);
 const operationRunning = computed(() => updating.value || installTracking.value || status.value?.updating === true);
+// 不支持自更新时，界面必须明说原因：显示「已是最新」会让人以为自己已经升过了，
+// 直到某天发现版本号停在几个月前。
+const updateUnsupported = computed(() => checkResult.value
+  ? checkResult.value.update_supported === false
+  : version.value?.update_supported === false);
+const updateUnsupportedReason = computed(() => {
+  if (!updateUnsupported.value) return "";
+  return checkResult.value?.update_unsupported_reason
+    || version.value?.update_unsupported_reason
+    || "当前部署不支持自更新，需要手动更换新版本。";
+});
 const sourceBuild = computed(() => deploymentMode.value === "release"
   && (checkResult.value?.build_type ?? version.value?.build_type) === "source");
 const switchToRelease = computed(() => sourceBuild.value
@@ -427,6 +441,11 @@ async function check(notify = true): Promise<void> {
         toastSuccess(`发现新版本 ${checkResult.value.latest_version || ""}`.trim());
       } else if (switchToRelease.value) {
         toastSuccess(`当前为源码构建，可切换到正式 ${checkResult.value.latest_version || "版本"}`);
+      } else if (updateUnsupported.value) {
+        const latest = checkResult.value.latest_version;
+        toastError(latest && latest !== checkResult.value.current_version
+          ? `最新版本是 ${latest}，但${updateUnsupportedReason.value}`
+          : updateUnsupportedReason.value);
       } else {
         toastSuccess("已是最新版本");
       }
@@ -781,6 +800,13 @@ watch([releases, expandedNotes], () => {
   gap: 5px;
   color: var(--muted);
   font-size: 12.5px;
+}
+
+.update-unsupported-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--err);
 }
 
 .version-hero-meta {
