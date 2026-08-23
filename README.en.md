@@ -26,7 +26,7 @@
 - [Supported Channels](#supported-channels)
 - [Access Security](#access-security)
 - [Capabilities and Extensions](#capabilities-and-extensions)
-- [Environment Variables](#environment-variables)
+- [Configuration File](#configuration-file)
 - [Deployment Recipes](#deployment-recipes)
 - [Development](#development)
 - [Project Layout](#project-layout)
@@ -69,11 +69,11 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 ```
 
-Then open `http://127.0.0.1:18080`. The generated administrator account and password are printed to the terminal once and stored in `runtime.env` inside the install directory — keep that file private.
+Then open `http://127.0.0.1:18080`. The generated administrator account and password are printed to the terminal once and stored in `config.yaml` inside the install directory — keep that file private.
 
 Default install directory: `~/.local/share/diana` on Linux/macOS, `%LOCALAPPDATA%\Diana` on Windows.
 
-Environment variables pick the version, directory, port, or install-without-start behaviour:
+The install script takes its own parameters through environment variables (installer arguments, not application configuration):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
@@ -96,33 +96,39 @@ directly.
 To change the binding of an existing install, re-run the script with the new
 `DIANA_HOST` — it restarts the service for you, so the change takes effect
 immediately (with `DIANA_START_AFTER_INSTALL=false` nothing is restarted and you
-start it yourself). Editing `HOST` in `runtime.env` directly also works, but then the
-restart is on you:
+start it yourself). Editing `server.host` in `config.yaml` directly also works, but then
+the restart is on you:
 
 ```sh
 systemctl --user restart diana.service   # Linux
 launchctl kickstart -k "gui/$(id -u)/com.suink.diana"   # macOS
 ```
 
-Common settings can be written at install time instead of filling them in through the
-WebUI afterwards: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_FORMAT`,
-`LLM_IMAGE_MODEL`, `DIANA_PUBLIC_BASE_URL`, `DIANA_LOCAL_MEDIA_BASE_URL`,
+Common settings can be written into the generated `config.yaml` at install time instead
+of filling them in through the WebUI afterwards: `LLM_API_KEY`, `LLM_BASE_URL`,
+`LLM_MODEL`, `LLM_API_FORMAT`, `LLM_IMAGE_MODEL`, `DIANA_LOCAL_MEDIA_BASE_URL`,
 `DIANA_NAPCAT_WEBUI_URL`, `DIANA_NAPCAT_WEBUI_TOKEN`. For anything else, point
-`DIANA_ENV_FILE` at a `KEY=VALUE` file and it is merged into `runtime.env` verbatim:
+`DIANA_CONFIG_FILE` at a YAML fragment and it is merged into `config.yaml` verbatim:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
-  DIANA_HOST=0.0.0.0 LLM_API_KEY=sk-xxx DIANA_ENV_FILE=/root/diana.env sh
+  DIANA_HOST=0.0.0.0 LLM_API_KEY=sk-xxx DIANA_CONFIG_FILE=/root/diana-extra.yaml sh
 ```
+
+Note that the `LLM_*` names are installer arguments only: they are written into the
+`llm:` section of `config.yaml`, which is seeded once while the database is empty.
+Changing them after the install has no effect — use the WebUI.
 
 ### Docker
 
 ```sh
 git clone https://github.com/SuInk/Diana.git && cd Diana
-cp docker-compose.yml docker-compose.local.yml
-# Edit the token, bot account, and LLM settings in docker-compose.local.yml
-docker compose -f docker-compose.local.yml up -d --build
+cp config.example.yaml config.yaml
+# Edit config.yaml: administrator password, token, LLM settings
+docker compose up -d --build
 ```
+
+`config.yaml` is mounted read-only and `DIANA_CONFIG` points at it. Skipping the mount also works — open the WebUI and use the setup wizard.
 
 <details>
 <summary>Using <code>docker run</code></summary>
@@ -136,15 +142,8 @@ docker run -d \
   -p 18080:18080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
-  -e LOG_PATH=/app/logs/diana.log \
-  -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
-  -e DIANA_BOT_ENABLED=true \
-  -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
-  -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e DIANA_BOT_ACCOUNT=10001 \
-  -e LLM_PROVIDER=openai_compatible \
-  -e LLM_API_KEY=your-key \
-  -e LLM_MODEL=gpt-4o-mini \
+  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  -e DIANA_CONFIG=/app/config.yaml \
   diana:latest
 ```
 
@@ -191,15 +190,15 @@ node scripts/dev.mjs                       # when make is unavailable
 ## First-Run Setup
 
 1. **Sign in** — open `http://127.0.0.1:18080` and use the credentials printed in the terminal.
-2. **Configure models** — on the LLM page, enter the provider and API key, sync the model list, then pick the default model. Environment variables can seed this too:
+2. **Configure models** — on the LLM page, enter the provider and API key, sync the model list, then pick the default model. Unattended deployments can seed this in `config.yaml` instead; it lands in the database on the first start:
 
-   ```sh
-   LLM_PROVIDER=openai_compatible \
-   LLM_API_KEY=your-key \
-   LLM_BASE_URL=https://example.com/v1 \
-   LLM_MODEL=gpt-4o-mini \
-   LLM_IMAGE_MODEL=gpt-image-1 \
-   ./dist/diana-webui
+   ```yaml
+   llm:
+     provider: openai_compatible
+     api_key: your-key
+     base_url: https://example.com/v1
+     model: gpt-4o-mini
+     image_model: gpt-image-1
    ```
 
    Supported providers: `openai_compatible`, `gemini`, `anthropic`. Multiple named configurations can be saved and switched.
@@ -207,21 +206,28 @@ node scripts/dev.mjs                       # when make is unavailable
 4. **Check the events** — send a message and confirm the reply reason and model call chain in the event centre.
 
 <details>
-<summary>Starting an OneBot v11 bot purely from environment variables</summary>
+<summary>Starting an OneBot v11 bot purely from config.yaml</summary>
 
-```sh
-DIANA_BOT_ENABLED=true \
-ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
-ONEBOT_ACCESS_TOKEN=your-onebot-token \
-DIANA_BOT_ACCOUNT=10001 \
-DIANA_GROUP_TRIGGERS=Diana,diana \
-LLM_PROVIDER=openai_compatible \
-LLM_API_KEY=your-key \
-LLM_MODEL=gpt-4o-mini \
-./dist/diana-webui
+```yaml
+bot:
+  platform: onebot-v11
+  enabled: true
+  onebot_reverse_ws_endpoint: ws://127.0.0.1:18080/onebot/v11/ws
+  onebot_access_token: your-onebot-token
+  bot_account: "10001"
+  group_triggers: [Diana, diana]
+
+llm:
+  provider: openai_compatible
+  api_key: your-key
+  model: gpt-4o-mini
 ```
 
-Private messages always trigger a reply; group messages need an `@mention` or a trigger word prefix.
+```sh
+./dist/diana-webui --config ./config.yaml
+```
+
+Private messages always trigger a reply; group messages need an `@mention` or a trigger word prefix. Both sections are seeded once while the database is empty; change them in the WebUI afterwards.
 
 </details>
 
@@ -244,8 +250,8 @@ Platform differences:
 
 The WebUI requires a login from the very first start, with the same rules for local and public access. The default administrator account is generated securely (`diana#` plus 16 random characters) and persisted in SQLite.
 
-- Without `DIANA_ADMIN_PASSWORD` on first start, a random password is generated; the credentials appear once in that run's stderr log.
-- `DIANA_ADMIN_USERNAME` and `DIANA_ADMIN_PASSWORD` can seed the first initialization; existing credentials are never overwritten.
+- With no password in the `admin` section of `config.yaml` on first start, a random one is generated; the credentials appear once in that run's stderr log.
+- `admin.username` and `admin.password` can seed the first initialization; existing credentials are never overwritten.
 - After signing in, the account and password can be changed under Settings → Access Security. Usernames are 2–64 characters without spaces or control characters (`diana#` is just the shape of generated names, not a required prefix), and passwords need at least 8 characters.
 - Every `/api` endpoint requires a session, valid for 30 days; changing the password invalidates all existing sessions. The settings page lists signed-in devices and can revoke them individually.
 
@@ -307,78 +313,78 @@ GET /api/logs?kind=operation&limit=100
 GET /api/logs?kind=error&limit=100
 ```
 
-These structured logs live in the SQLite database at `APP_DB_PATH`; `LOG_PATH` still controls the plain runtime log file.
+## Configuration File
 
-## Environment Variables
+Everything lives in `config.yaml`; there are no configuration environment variables. The process looks for it via `--config`, `DIANA_CONFIG`, the working directory, then the directory holding the executable. If none exists it runs on built-in defaults — just open the WebUI and use the setup wizard. See [`config.example.yaml`](./config.example.yaml) and the [configuration docs](https://suink.github.io/Diana/configuration.html) for every field.
 
-Anything configurable in the WebUI needs no environment variable. The common ones are below; see [`.env.example`](./.env.example) and the [configuration docs](https://suink.github.io/Diana/configuration.html) for the rest.
+The file has two layers, split by **whether the WebUI can change the setting**:
 
-| Variable | Default | Description |
+| Section | Layer | How it applies |
 | --- | --- | --- |
-| `PORT` | `18080` | Port for the WebUI and the OneBot endpoint |
-| `APP_DB_PATH` | `data/diana.db` | Local SQLite configuration database |
-| `LOG_PATH` | empty | Log file path; when set, output goes to both stdout and the file |
-| `DIANA_TRUSTED_PROXIES` | empty | Trusted reverse proxy IPs or CIDRs, comma separated; `X-Forwarded-For` is parsed only when set |
-| `DIANA_SERVICE_MANAGER` | auto-detected | Process manager owning this service: `launchd`, `systemd`, or `none`. When set, the self-updater stops launching its own instance and asks the manager to restart instead, so it no longer races `KeepAlive`/`Restart=` for the listening port |
-| `DIANA_SERVICE_LABEL` | auto-detected | launchd job label or systemd unit name, e.g. `com.suink.diana`, `diana.service` |
-| `DIANA_SERVICE_DOMAIN` | auto-detected | launchd domain (`gui/<uid>` or `system`); for systemd use `user` or `system` |
-| `DIANA_ADMIN_USERNAME` | random | Administrator account for the first initialization only |
-| `DIANA_ADMIN_PASSWORD` | random | Administrator password for the first initialization only |
-| `LLM_PROVIDER` | `openai_compatible` | `openai_compatible` / `gemini` / `anthropic` |
-| `LLM_API_KEY` | empty | LLM API key |
-| `LLM_BASE_URL` | empty | Custom base URL for OpenAI-compatible endpoints |
-| `LLM_MODEL` | empty | Model ID (no default for `openai_compatible`) |
-| `DIANA_BOT_ENABLED` | `false` | Start the bot automatically on launch |
-| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | Reverse WebSocket address for OneBot v11 clients |
-| `ONEBOT_ACCESS_TOKEN` | empty | OneBot access token |
-| `DIANA_BOT_ACCOUNT` | empty | The bot's account ID |
-| `DIANA_OWNER_ID` | empty | Owner account ID (numeric user ID on Telegram) |
-| `DIANA_GROUP_TRIGGERS` | `Diana,diana` | Group chat trigger words |
-| `DIANA_AGENT_ENABLED` | `false` | Enable the built-in Agent |
+| `server` / `storage` / `admin` / `update` / `napcat` | Infrastructure, no WebUI entry point | Read on every start; `config.yaml` is the only source |
+| `bot` / `llm` | Runtime configuration, editable in the WebUI | **Seeded once, only while the database is empty**; the database wins afterwards |
 
-<details>
-<summary>All environment variables</summary>
+The `bot` / `llm` sections exist for unattended deployments: bring the token and API key along on the container's first start instead of walking the wizard by hand. Once the database holds a configuration they stop applying, and startup logs say so explicitly — `config: bot section in ... was NOT applied`. No more debugging against a file that is not in effect. Clear the database to re-seed; otherwise change settings in the WebUI.
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `FRONTEND_DIST` | auto-detected | Frontend build output directory; falls back to `frontend-next/dist` |
-| `DIANA_SEND_RETRY_ATTEMPTS` | `3` | Send retries per message (1–5) |
-| `DIANA_SEND_CHUNK_INTERVAL_MS` | `300` | Delay between chunks of a split reply, in milliseconds |
-| `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | Prefix for in-chat error notices |
-| `DIANA_LOG_PATH` | empty | Compatibility alias for `LOG_PATH` |
-| `DIANA_MEDIA_DIR` | `data/media` | Inbound image storage; vision submits base64 from these local files |
-| `DIANA_MEDIA_MAX_MB` | `10` | Download limit per inbound image |
-| `DIANA_MEDIA_CACHE_MB` | `512` | Total image directory budget; least recently used files are evicted |
-| `DIANA_LOCAL_MEDIA_BASE_URL` | this service's `/media/resolver` | Media address reachable by OneBot clients; set to `http://diana:18080/media/resolver` for split containers |
-| `DIANA_BILI_SESSDATA` | empty | `SESSDATA` from Bilibili login cookies; WebUI plugin settings win |
-| `DIANA_DOUYIN_CK` | empty | Douyin cookie, required for Douyin parsing; WebUI plugin settings win |
-| `DIANA_XHS_CK` | empty | Xiaohongshu cookie, required for its parsing; WebUI plugin settings win |
-| `DIANA_YTDLP_COOKIES` | empty | Path to a yt-dlp Netscape cookie file; WebUI plugin settings win |
-| `DIANA_RESOLVER_PROXY` | empty | Proxy for social media parsing and yt-dlp; WebUI plugin settings win |
-| `DIANA_RELEASE_UPDATE_ENABLED` | `true` | Allow downloading, verifying, backing up, and self-updating from complete release packages; never enabled for source or container deployments |
-| `LLM_USER_AGENT` | `codex-cli/0.142.0` | User-Agent for OpenAI-compatible endpoints |
-| `LLM_IMAGE_MODEL` | provider default | Image generation model; `gpt-image-1` for OpenAI-compatible, `imagen-4.0-generate-001` for Gemini |
-| `LLM_TEMPERATURE` | empty | Temperature |
-| `LLM_MAX_OUTPUT_TOKENS` | `1024` | Max output tokens for the Responses API |
-| `LLM_TIMEOUT_MS` | `30000` | LLM request timeout in milliseconds |
-| `NONEBOT_BRIDGE_ENABLED` | `false` | Enable the third-party NoneBot plugin bridge |
-| `NONEBOT_BRIDGE_ENDPOINT` | `ws://127.0.0.1:8080/onebot/v11/ws` | Reverse WebSocket address of the NoneBot sidecar |
-| `NONEBOT_BRIDGE_TOKEN` | empty | Access token for the NoneBot bridge |
-| `DIANA_SYSTEM_PROMPT` | built-in prompt | Bot system prompt |
-| `DIANA_MAX_INPUT_CHARS` | `2000` | Max characters per input |
-| `DIANA_MAX_REPLY_CHARS` | `3500` | Max characters per reply |
-| `DIANA_DIRECT_REPLY_CHUNK_SIZE` | `500` | Characters per chunk when splitting text replies |
-| `DIANA_MAX_BOT_CONCURRENCY` | `5` | Global concurrency limit |
-| `DIANA_AGENT_WORK_DIR` / `AGENT_WORK_DIR` | `.` | Work directory the Agent may access |
-| `DIANA_AGENT_MAX_STEPS` | `4` | Max tool loop steps per reply, up to `8` |
-| `DIANA_AGENT_COMMAND_ALLOWLIST` | common dev commands | Commands `run_command` may execute, comma separated; `*` allows everything |
-| `DIANA_AGENT_COMMAND_TIMEOUT_MS` | `10000` | Local command timeout, up to `60000` |
-| `DIANA_AGENT_SKILL_ROOTS` | `.agents/skills,skills` | Skill search directories, comma separated; self-installed Skills always land in `.agents/skills` under the work directory |
-| `DIANA_AGENT_MCP_CONFIG` | `.mcp.json` | MCP server config file; relative paths resolve against the Agent work directory |
-| `DIANA_AGENT_BROWSER_CDP_URL` / `AGENT_BROWSER_CDP_URL` | `http://127.0.0.1:9222` | Chrome DevTools address for the browser tools |
-| `DIANA_AGENT_BROWSER_TIMEOUT_MS` | `15000` | Browser tool timeout, up to `60000` |
+```yaml
+server:
+  # Use 0.0.0.0 to reach the console from another machine; keep 127.0.0.1 for local-only.
+  host: 127.0.0.1
+  port: "18080"
+  # Trusted reverse-proxy IPs or CIDRs; X-Forwarded-For is only parsed when set.
+  trusted_proxies: []
+  frontend_dist: ""
 
-</details>
+storage:
+  db_path: data/diana.db
+  # Empty means stdout only.
+  log_path: logs/diana.log
+  media_dir: ""
+  media_max_mb: 0
+  media_cache_mb: 0
+  # Empty derives the URL from the address the client used for the reverse WebSocket handshake.
+  local_media_base_url: ""
+
+admin:
+  # Leave both empty to generate an account and a strong password on first start, printed once.
+  username: ""
+  password: ""
+
+update:
+  root: "."
+  apply_enabled: true
+  release_enabled: true
+  group_test_enabled: false
+
+napcat:
+  webui_url: ""
+  webui_token: ""
+
+# Seeded once while the database is empty. Field names match the WebUI config API payload.
+bot:
+  platform: onebot-v11
+  enabled: true
+  onebot_reverse_ws_endpoint: ws://127.0.0.1:18080/onebot/v11/ws
+  onebot_access_token: ""
+  bot_account: ""
+  owner_id: ""
+  group_triggers: [Diana, diana]
+
+llm:
+  provider: openai_compatible
+  base_url: https://api.example.com/v1
+  api_key: ""
+  model: ""
+```
+
+Structured logs live in the SQLite database at `storage.db_path`; `storage.log_path` still holds the plain runtime log file.
+
+### What Remains an Environment Variable
+
+Only two kinds, neither of which has a WebUI counterpart, so neither creates a second source of truth:
+
+- `DIANA_CONFIG` — where the config file is. It is a bootstrap pointer, not configuration.
+- External integration credentials and external program paths — `BILI_SESSDATA`, `DOUYIN_CK`, `XHS_CK`, `RESOLVER_PROXY` for link resolution, `EXA_API_KEY` / `TAVILY_API_KEY` for search, plus host-probing settings such as `DIANA_FFMPEG_PATH` and `DIANA_SERVICE_MANAGER`. Per-platform cookies can also be entered in the plugin settings, which take precedence over the matching environment variable.
 
 ## Deployment Recipes
 
@@ -398,15 +404,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/diana
-Environment=PORT=18080
-Environment=LOG_PATH=/var/log/diana/diana.log
-Environment=DIANA_BOT_ENABLED=true
-Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
-Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=DIANA_BOT_ACCOUNT=10001
-Environment=LLM_PROVIDER=openai_compatible
-Environment=LLM_API_KEY=change-me
-Environment=LLM_MODEL=gpt-4o-mini
+Environment=DIANA_CONFIG=/opt/diana/config.yaml
 ExecStart=/opt/diana/diana-webui
 Restart=always
 RestartSec=3

@@ -15,9 +15,9 @@ host="${DIANA_HOST:-}"
 host_explicit=false
 [ -n "$host" ] && host_explicit=true
 [ -n "$host" ] || host='127.0.0.1'
-# DIANA_ENV_FILE 指向一个额外的 KEY=VALUE 文件,内容原样并进 runtime.env。
-# 安装器不可能把几十个可选配置都做成参数,给一个统一入口。
-extra_env_file="${DIANA_ENV_FILE:-}"
+# DIANA_CONFIG_FILE 指向一份 YAML 片段,内容原样并进生成的 config.yaml。
+# 安装器不可能把所有可选配置都做成参数,给一个统一入口。
+extra_config_file="${DIANA_CONFIG_FILE:-}"
 start_after_install="${DIANA_START_AFTER_INSTALL:-true}"
 
 fail() {
@@ -53,8 +53,8 @@ case "$host" in
   *[!0-9A-Za-z.:_-]*) fail "DIANA_HOST must be a host name or IP address" ;;
 esac
 
-if [ -n "$extra_env_file" ] && [ ! -f "$extra_env_file" ]; then
-  fail "DIANA_ENV_FILE does not exist: $extra_env_file"
+if [ -n "$extra_config_file" ] && [ ! -f "$extra_config_file" ]; then
+  fail "DIANA_CONFIG_FILE does not exist: $extra_config_file"
 fi
 
 need_command curl
@@ -222,75 +222,139 @@ sign_macos_app() {
   return 0
 }
 
-# 这些环境变量在装的时候就填好比装完再进 WebUI 改一遍省事,尤其是无人值守
-# 部署。只写调用方真的传了的项:没传就不落进 runtime.env,让应用用自己的默认。
-optional_env_keys='LLM_API_KEY LLM_BASE_URL LLM_MODEL LLM_API_FORMAT LLM_IMAGE_MODEL DIANA_PUBLIC_BASE_URL DIANA_LOCAL_MEDIA_BASE_URL DIANA_NAPCAT_WEBUI_URL DIANA_NAPCAT_WEBUI_TOKEN'
+# 这些项在装的时候就填好比装完再进 WebUI 改一遍省事,尤其是无人值守部署。
+# 只写调用方真的传了的项:没传就不落进 config.yaml,让应用用自己的默认。
+# 键名沿用环境变量的写法只是为了让调用方式不变,实际写进的是 YAML。
+optional_llm_keys='LLM_API_KEY LLM_BASE_URL LLM_MODEL LLM_API_FORMAT LLM_IMAGE_MODEL'
+optional_storage_keys='DIANA_LOCAL_MEDIA_BASE_URL'
+optional_napcat_keys='DIANA_NAPCAT_WEBUI_URL DIANA_NAPCAT_WEBUI_TOKEN'
 
-append_optional_env() {
+# yaml_quote 把值包成单引号 YAML 标量,内部单引号按 YAML 规则翻倍。
+yaml_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
+# yaml_key 把 LLM_API_KEY 这类环境变量名转成 config.yaml 里的字段名。
+yaml_key() {
+  case $1 in
+    LLM_*) printf '%s' "$(printf '%s' "${1#LLM_}" | tr 'A-Z' 'a-z')" ;;
+    DIANA_LOCAL_MEDIA_BASE_URL) printf 'local_media_base_url' ;;
+    DIANA_NAPCAT_WEBUI_URL) printf 'webui_url' ;;
+    DIANA_NAPCAT_WEBUI_TOKEN) printf 'webui_token' ;;
+    *) printf '%s' "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" ;;
+  esac
+}
+
+# append_optional_section 把一组可选项写成一个 YAML 段,一个都没传就整段不写。
+append_optional_section() {
   target=$1
-  for key in $optional_env_keys; do
+  section=$2
+  shift 2
+  written=false
+  for key in "$@"; do
     value=$(printenv "$key" 2>/dev/null || true)
     [ -n "$value" ] || continue
-    printf "%s='%s'\n" "$key" "$(shell_quote "$value")" >>"$target"
+    if [ "$written" = "false" ]; then
+      printf '%s:\n' "$section" >>"$target"
+      written=true
+    fi
+    printf '  %s: %s\n' "$(yaml_key "$key")" "$(yaml_quote "$value")" >>"$target"
   done
-  if [ -n "$extra_env_file" ]; then
-    # 原样并入:这个文件由部署者自己写,不做键名白名单,只跳过空行和注释。
-    awk 'NF && $0 !~ /^[[:space:]]*#/' "$extra_env_file" >>"$target"
-  fi
 }
 
-# set_env_value 在已有的 runtime.env 里改一个键,没有就追加。重装时用得上:
-# 用户带着新的 DIANA_HOST 重跑安装,不该因为 runtime.env 已存在就被忽略。
-set_env_value() {
+# set_yaml_value 改写指定顶层段下的一个键,段内没有就追加到段末。重装时用得上:
+# 用户带着新的 DIANA_HOST 重跑安装,不该因为 config.yaml 已存在就被忽略。
+set_yaml_value() {
   target=$1
-  key=$2
-  value=$3
-  rewritten="$temp_dir/runtime.env.rewritten"
-  if grep -q "^$key=" "$target"; then
-    sed "s|^$key=.*|$key='$(shell_quote "$value")'|" "$target" >"$rewritten"
-    mv "$rewritten" "$target"
-  else
-    printf "%s='%s'\n" "$key" "$(shell_quote "$value")" >>"$target"
-  fi
+  section=$2
+  key=$3
+  value=$4
+  rewritten="$temp_dir/config.yaml.rewritten"
+  awk -v section="$section" -v key="$key" -v value="$(yaml_quote "$value")" '
+    BEGIN { in_section = 0; done = 0 }
+    # 顶层段名:行首无缩进、以冒号结尾。
+    /^[a-z_]+:[[:space:]]*$/ {
+      if (in_section && !done) { print "  " key ": " value; done = 1 }
+      in_section = ($0 == section ":")
+      print
+      next
+    }
+    {
+      if (in_section && !done && $0 ~ "^[[:space:]]+" key ":") {
+        print "  " key ": " value
+        done = 1
+        next
+      }
+      print
+    }
+    END {
+      if (!done) {
+        if (!in_section) { print section ":" }
+        print "  " key ": " value
+      }
+    }
+  ' "$target" >"$rewritten"
+  mv "$rewritten" "$target"
 }
 
+# read_yaml_value 读回指定顶层段下的一个键,用于重装时保留已生成的凭据。
+read_yaml_value() {
+  awk -v section="$2" -v key="$3" '
+    /^[a-z_]+:[[:space:]]*$/ { in_section = ($0 == section ":"); next }
+    in_section && $0 ~ "^[[:space:]]+" key ":" {
+      line = $0
+      sub("^[[:space:]]+" key ":[[:space:]]*", "", line)
+      gsub(/^'"'"'|'"'"'$/, "", line)
+      gsub(/'"''"'/, "'"'"'", line)
+      print line
+      exit
+    }
+  ' "$1"
+}
 assemble_macos_app
 
 generated_password=""
 generated_username=""
-if [ ! -f "$install_dir/runtime.env" ]; then
+config_file="$install_dir/config.yaml"
+if [ ! -f "$config_file" ]; then
   username="${DIANA_ADMIN_USERNAME:-diana#$(random_hex 8)}"
   generated_password="${DIANA_ADMIN_PASSWORD:-}"
   if [ -z "$generated_password" ]; then
     generated_password=$(random_hex 16)
   fi
-  port_q=$(shell_quote "$port")
-  db_path_q=$(shell_quote "$db_path")
-  log_path_q=$(shell_quote "$install_dir/logs/diana.log")
   if [ "$os" = "darwin" ]; then
-    frontend_dist_q=$(shell_quote "$macos_app_dir/Contents/MacOS/frontend-next/dist")
+    frontend_dist="$macos_app_dir/Contents/MacOS/frontend-next/dist"
   else
-    frontend_dist_q=$(shell_quote "$install_dir/frontend-next/dist")
+    frontend_dist="$install_dir/frontend-next/dist"
   fi
-  username_q=$(shell_quote "$username")
-  password_q=$(shell_quote "$generated_password")
-  host_q=$(shell_quote "$host")
-  cat >"$install_dir/runtime.env" <<EOF
-HOST='$host_q'
-PORT='$port_q'
-APP_DB_PATH='$db_path_q'
-LOG_PATH='$log_path_q'
-FRONTEND_DIST='$frontend_dist_q'
-DIANA_ADMIN_USERNAME='$username_q'
-DIANA_ADMIN_PASSWORD='$password_q'
+  cat >"$config_file" <<EOF
+# Diana 配置。基础设施段每次启动生效;bot / llm 段只在数据库为空时播种一次,
+# 之后以 WebUI 里的配置为准。完整字段见仓库里的 config.example.yaml。
+server:
+  host: $(yaml_quote "$host")
+  port: $(yaml_quote "$port")
+  frontend_dist: $(yaml_quote "$frontend_dist")
+storage:
+  db_path: $(yaml_quote "$db_path")
+  log_path: $(yaml_quote "$install_dir/logs/diana.log")
+admin:
+  username: $(yaml_quote "$username")
+  password: $(yaml_quote "$generated_password")
 EOF
-  append_optional_env "$install_dir/runtime.env"
-  chmod 600 "$install_dir/runtime.env"
+  append_optional_section "$config_file" storage $optional_storage_keys
+  append_optional_section "$config_file" napcat $optional_napcat_keys
+  append_optional_section "$config_file" llm $optional_llm_keys
+  if [ -n "$extra_config_file" ]; then
+    # 原样并入:这段由部署者自己写,内容必须是合法 YAML 顶层段。
+    printf '\n' >>"$config_file"
+    cat "$extra_config_file" >>"$config_file"
+  fi
+  chmod 600 "$config_file"
 else
   # 重装时显式传的绑定地址要生效,否则「改成 0.0.0.0 再跑一遍安装」不起作用,
-  # 用户只能自己去翻 runtime.env。端口同理。
+  # 用户只能自己去翻 config.yaml。端口同理。
   if [ "$host_explicit" = "true" ]; then
-    set_env_value "$install_dir/runtime.env" HOST "$host"
+    set_yaml_value "$config_file" server host "$host"
     # 绑定地址是进程启动时读的:默认路径后面会重启服务,改动立刻生效;
     # 但 DIANA_START_AFTER_INSTALL=false 时不重启,得说清楚还没生效,
     # 否则改完发现连不上会以为是配置没写进去。
@@ -301,26 +365,17 @@ else
     fi
   fi
   if [ -n "${DIANA_PORT:-}" ]; then
-    set_env_value "$install_dir/runtime.env" PORT "$port"
+    set_yaml_value "$config_file" server port "$port"
   fi
-  append_optional_env "$install_dir/runtime.env"
-  chmod 600 "$install_dir/runtime.env"
-  existing_username=$(sed -n "s/^DIANA_ADMIN_USERNAME='\([^']*\)'$/\1/p" "$install_dir/runtime.env" | head -n 1)
+  chmod 600 "$config_file"
+  existing_username=$(read_yaml_value "$config_file" admin username)
   username_suffix=${existing_username#diana#}
   username_valid=true
   case "$username_suffix" in *[!A-Za-z0-9]*) username_valid=false ;; esac
   if [ "$existing_username" = "diana#admin" ] || [ "$existing_username" = "diana#admin0000" ] || [ "$username_suffix" = "$existing_username" ] || [ "${#username_suffix}" -lt 8 ] || [ "$username_valid" != "true" ]; then
     generated_username="diana#$(random_hex 8)"
-    username_q=$(shell_quote "$generated_username")
-    repaired_env="$temp_dir/runtime.env.repaired"
-    if grep -q '^DIANA_ADMIN_USERNAME=' "$install_dir/runtime.env"; then
-      sed "s/^DIANA_ADMIN_USERNAME=.*/DIANA_ADMIN_USERNAME='$username_q'/" "$install_dir/runtime.env" >"$repaired_env"
-    else
-      cp "$install_dir/runtime.env" "$repaired_env"
-      printf "DIANA_ADMIN_USERNAME='%s'\n" "$username_q" >>"$repaired_env"
-    fi
-    mv "$repaired_env" "$install_dir/runtime.env"
-    chmod 600 "$install_dir/runtime.env"
+    set_yaml_value "$config_file" admin username "$generated_username"
+    chmod 600 "$config_file"
     info "Configuration → repaired invalid administrator username"
   fi
 fi
@@ -332,9 +387,7 @@ if [ "$os" = "darwin" ]; then
 #!/bin/sh
 set -eu
 install_root=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
-set -a
-. "\$install_root/runtime.env"
-set +a
+export DIANA_CONFIG="\$install_root/config.yaml"
 app_dir="\$install_root/Diana.app"
 app_binary="\$app_dir/Contents/MacOS/$binary_name"
 if [ -x "\$app_binary" ]; then
@@ -355,9 +408,7 @@ else
 #!/bin/sh
 set -eu
 install_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-set -a
-. "$install_root/runtime.env"
-set +a
+export DIANA_CONFIG="$install_root/config.yaml"
 exec "$install_root/run.sh"
 EOF
 fi
@@ -555,10 +606,10 @@ if [ "$start_after_install" = "true" ]; then
   case "$host" in
     127.0.0.1|localhost|::1)
       # 装在服务器上却只绑回环,是「装完打不开」的头号原因。默认不改,
-      # 但必须让人知道开关在哪,而不是自己去翻 runtime.env。
+      # 但必须让人知道开关在哪,而不是自己去翻 config.yaml。
       printf 'Access:    local only (bound to %s).\n' "$host"
       printf '           To reach it from another machine, reinstall with DIANA_HOST=0.0.0.0,\n'
-      printf '           or set HOST in %s/runtime.env and restart.\n' "$install_dir"
+      printf '           or set server.host in %s/config.yaml and restart.\n' "$install_dir"
       printf '           The console has admin rights: keep it behind a firewall, security\n'
       printf '           group or reverse proxy with TLS rather than exposing it to the internet.\n'
       ;;
@@ -577,9 +628,9 @@ printf 'Backup:    %s\n' "$backup_dir"
 if [ -n "$generated_password" ]; then
   printf 'Username:  %s\n' "$username"
   printf 'Password:  %s\n' "$generated_password"
-  printf 'Credentials are stored in %s/runtime.env (mode 600).\n' "$install_dir"
+  printf 'Credentials are stored in %s/config.yaml (mode 600).\n' "$install_dir"
 fi
 if [ -n "$generated_username" ]; then
   printf 'Username:  %s\n' "$generated_username"
-  printf 'The existing password remains stored in %s/runtime.env.\n' "$install_dir"
+  printf 'The existing password remains stored in %s/config.yaml.\n' "$install_dir"
 fi
