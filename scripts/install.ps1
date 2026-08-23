@@ -9,6 +9,40 @@ $repository = if ($env:DIANA_REPOSITORY) { $env:DIANA_REPOSITORY } else { "SuInk
 $installDir = if ($env:DIANA_INSTALL_DIR) { $env:DIANA_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Diana" }
 $version = if ($env:DIANA_VERSION) { $env:DIANA_VERSION } else { "latest" }
 $port = if ($env:DIANA_PORT) { [int]$env:DIANA_PORT } else { 18080 }
+# 默认只绑回环:WebUI 是带管理权限的控制台,装完就对外敞开不是合理默认。
+# 要从别的机器访问就显式设 DIANA_HOST=0.0.0.0(或某张网卡的地址)。
+$hostExplicit = [bool]$env:DIANA_HOST
+$bindHost = if ($env:DIANA_HOST) { $env:DIANA_HOST } else { "127.0.0.1" }
+# DIANA_ENV_FILE 指向额外的 KEY=VALUE 文件,内容原样并进 runtime.env。
+$extraEnvFile = $env:DIANA_ENV_FILE
+if ($extraEnvFile -and -not (Test-Path $extraEnvFile)) {
+    throw "DIANA_ENV_FILE does not exist: $extraEnvFile"
+}
+# 这些配置在装的时候填好比装完再进 WebUI 改一遍省事,尤其是无人值守部署。
+$optionalEnvKeys = @(
+    "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_FORMAT", "LLM_IMAGE_MODEL",
+    "DIANA_PUBLIC_BASE_URL", "DIANA_LOCAL_MEDIA_BASE_URL",
+    "DIANA_NAPCAT_WEBUI_URL", "DIANA_NAPCAT_WEBUI_TOKEN"
+)
+
+# 绑定地址不是回环时,健康检查要打到真正在听的地址;0.0.0.0 是通配符,
+# 本机仍从回环探测。
+# 注意 elseif/else 必须跟在右花括号同一行:换行写会让 PowerShell 把 if 当成
+# 已结束的语句,后面的 elseif 直接语法错误。
+$healthHost = if ($bindHost -in @("", "0.0.0.0", "::", "*")) { "127.0.0.1" } elseif ($bindHost -like "*:*") { "[$bindHost]" } else { $bindHost }
+
+function Get-DianaOptionalEnvLines {
+    $lines = @()
+    foreach ($key in $optionalEnvKeys) {
+        $value = [Environment]::GetEnvironmentVariable($key)
+        if ($value) { $lines += "$key=$value" }
+    }
+    if ($extraEnvFile) {
+        # 原样并入:文件由部署者自己写,只跳过空行和注释。
+        $lines += Get-Content $extraEnvFile | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith("#") }
+    }
+    return $lines
+}
 $startAfterInstall = $env:DIANA_START_AFTER_INSTALL -ne "false"
 
 function Get-DianaDownload {
@@ -115,7 +149,7 @@ try {
         $username = if ($env:DIANA_ADMIN_USERNAME) { $env:DIANA_ADMIN_USERNAME } else { "diana#$(New-DianaRandomHex 8)" }
         $generatedPassword = if ($env:DIANA_ADMIN_PASSWORD) { $env:DIANA_ADMIN_PASSWORD } else { New-DianaRandomHex 16 }
         $runtimeContent = @"
-HOST=127.0.0.1
+HOST=$bindHost
 PORT=$port
 APP_DB_PATH=$dbPath
 LOG_PATH=$(Join-Path $installDir "logs\diana.log")
@@ -123,9 +157,26 @@ FRONTEND_DIST=$(Join-Path $installDir "frontend-next\dist")
 DIANA_ADMIN_USERNAME=$username
 DIANA_ADMIN_PASSWORD=$generatedPassword
 "@
+        $optionalLines = Get-DianaOptionalEnvLines
+        if ($optionalLines) { $runtimeContent += (($optionalLines -join "`n") + "`n") }
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [IO.File]::WriteAllText($runtimeEnv, $runtimeContent, $utf8NoBom)
     } else {
+        # 重装时显式传的绑定地址要生效,否则「改成 0.0.0.0 再跑一遍安装」不起作用。
+        if ($hostExplicit) {
+            $rebound = @(Get-Content $runtimeEnv | Where-Object { $_ -notmatch '^HOST=' })
+            $rebound = @("HOST=$bindHost") + $rebound
+            Set-Content -Path $runtimeEnv -Value $rebound -Encoding UTF8
+            # 绑定地址是进程启动时读的:默认路径后面会重启服务;不启动时要说清楚
+            # 还没生效,否则改完连不上会以为是配置没写进去。
+            if ($startAfterInstall) {
+                Write-Host "==> Configuration -> bind address set to $bindHost"
+            } else {
+                Write-Host "==> Configuration -> bind address set to $bindHost (restart Diana to apply)"
+            }
+        }
+        $optionalLines = Get-DianaOptionalEnvLines
+        if ($optionalLines) { Add-Content -Path $runtimeEnv -Value $optionalLines -Encoding UTF8 }
         $runtimeLines = Get-Content $runtimeEnv
         $usernameLine = $runtimeLines | Where-Object { $_ -match '^DIANA_ADMIN_USERNAME=' } | Select-Object -First 1
         $existingUsername = if ($usernameLine) { ($usernameLine -replace '^DIANA_ADMIN_USERNAME=', '').Trim("'", '"') } else { "" }
@@ -165,7 +216,7 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
         $healthy = $false
         for ($attempt = 0; $attempt -lt 45; $attempt++) {
             try {
-                Invoke-RestMethod -TimeoutSec 2 -Uri "http://127.0.0.1:$port/api/health" | Out-Null
+                Invoke-RestMethod -TimeoutSec 2 -Uri "http://${healthHost}:$port/api/health" | Out-Null
                 $healthy = $true
                 break
             } catch {
@@ -202,9 +253,21 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
             }
             throw "Health check failed. The previous runtime was restored when available. See $backupDir."
         }
-        Write-Host "==> Diana is healthy at http://127.0.0.1:$port"
+        Write-Host "==> Diana is healthy at http://${healthHost}:$port"
+        if ($bindHost -in @("127.0.0.1", "localhost", "::1")) {
+            # 只绑回环是「装完打不开」的头号原因。默认不改,但要让人知道开关在哪。
+            Write-Host "Access:    local only (bound to $bindHost)."
+            Write-Host "           To reach it from another machine, reinstall with DIANA_HOST=0.0.0.0,"
+            Write-Host "           or set HOST in $runtimeEnv and restart."
+            Write-Host "           The console has admin rights: keep it behind a firewall or a"
+            Write-Host "           reverse proxy with TLS rather than exposing it to the internet."
+        } else {
+            Write-Host "Access:    listening on $bindHost - make sure the port is allowed by the"
+            Write-Host "           firewall, and prefer a reverse proxy with TLS."
+        }
     } else {
         Write-Host "==> Installation completed without starting Diana"
+        Write-Host "Note:      configuration changes apply the next time Diana starts."
     }
 
     Write-Host "Installed: $installDir"

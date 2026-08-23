@@ -9,6 +9,15 @@ repo="${DIANA_REPOSITORY:-SuInk/Diana}"
 install_dir="${DIANA_INSTALL_DIR:-$HOME/.local/share/diana}"
 version="${DIANA_VERSION:-latest}"
 port="${DIANA_PORT:-18080}"
+# 默认只绑回环:WebUI 是带管理权限的控制台,装完就对公网敞开不是合理默认。
+# 要从别的机器访问就显式设 DIANA_HOST=0.0.0.0(或某张网卡的地址)。
+host="${DIANA_HOST:-}"
+host_explicit=false
+[ -n "$host" ] && host_explicit=true
+[ -n "$host" ] || host='127.0.0.1'
+# DIANA_ENV_FILE 指向一个额外的 KEY=VALUE 文件,内容原样并进 runtime.env。
+# 安装器不可能把几十个可选配置都做成参数,给一个统一入口。
+extra_env_file="${DIANA_ENV_FILE:-}"
 start_after_install="${DIANA_START_AFTER_INSTALL:-true}"
 
 fail() {
@@ -39,6 +48,14 @@ esac
 case "$port" in
   *[!0-9]*|"") fail "DIANA_PORT must be a number" ;;
 esac
+
+case "$host" in
+  *[!0-9A-Za-z.:_-]*) fail "DIANA_HOST must be a host name or IP address" ;;
+esac
+
+if [ -n "$extra_env_file" ] && [ ! -f "$extra_env_file" ]; then
+  fail "DIANA_ENV_FILE does not exist: $extra_env_file"
+fi
 
 need_command curl
 need_command tar
@@ -205,6 +222,38 @@ sign_macos_app() {
   return 0
 }
 
+# 这些环境变量在装的时候就填好比装完再进 WebUI 改一遍省事,尤其是无人值守
+# 部署。只写调用方真的传了的项:没传就不落进 runtime.env,让应用用自己的默认。
+optional_env_keys='LLM_API_KEY LLM_BASE_URL LLM_MODEL LLM_API_FORMAT LLM_IMAGE_MODEL DIANA_PUBLIC_BASE_URL DIANA_LOCAL_MEDIA_BASE_URL DIANA_NAPCAT_WEBUI_URL DIANA_NAPCAT_WEBUI_TOKEN'
+
+append_optional_env() {
+  target=$1
+  for key in $optional_env_keys; do
+    value=$(printenv "$key" 2>/dev/null || true)
+    [ -n "$value" ] || continue
+    printf "%s='%s'\n" "$key" "$(shell_quote "$value")" >>"$target"
+  done
+  if [ -n "$extra_env_file" ]; then
+    # 原样并入:这个文件由部署者自己写,不做键名白名单,只跳过空行和注释。
+    awk 'NF && $0 !~ /^[[:space:]]*#/' "$extra_env_file" >>"$target"
+  fi
+}
+
+# set_env_value 在已有的 runtime.env 里改一个键,没有就追加。重装时用得上:
+# 用户带着新的 DIANA_HOST 重跑安装,不该因为 runtime.env 已存在就被忽略。
+set_env_value() {
+  target=$1
+  key=$2
+  value=$3
+  rewritten="$temp_dir/runtime.env.rewritten"
+  if grep -q "^$key=" "$target"; then
+    sed "s|^$key=.*|$key='$(shell_quote "$value")'|" "$target" >"$rewritten"
+    mv "$rewritten" "$target"
+  else
+    printf "%s='%s'\n" "$key" "$(shell_quote "$value")" >>"$target"
+  fi
+}
+
 assemble_macos_app
 
 generated_password=""
@@ -225,8 +274,9 @@ if [ ! -f "$install_dir/runtime.env" ]; then
   fi
   username_q=$(shell_quote "$username")
   password_q=$(shell_quote "$generated_password")
+  host_q=$(shell_quote "$host")
   cat >"$install_dir/runtime.env" <<EOF
-HOST='127.0.0.1'
+HOST='$host_q'
 PORT='$port_q'
 APP_DB_PATH='$db_path_q'
 LOG_PATH='$log_path_q'
@@ -234,8 +284,27 @@ FRONTEND_DIST='$frontend_dist_q'
 DIANA_ADMIN_USERNAME='$username_q'
 DIANA_ADMIN_PASSWORD='$password_q'
 EOF
+  append_optional_env "$install_dir/runtime.env"
   chmod 600 "$install_dir/runtime.env"
 else
+  # 重装时显式传的绑定地址要生效,否则「改成 0.0.0.0 再跑一遍安装」不起作用,
+  # 用户只能自己去翻 runtime.env。端口同理。
+  if [ "$host_explicit" = "true" ]; then
+    set_env_value "$install_dir/runtime.env" HOST "$host"
+    # 绑定地址是进程启动时读的:默认路径后面会重启服务,改动立刻生效;
+    # 但 DIANA_START_AFTER_INSTALL=false 时不重启,得说清楚还没生效,
+    # 否则改完发现连不上会以为是配置没写进去。
+    if [ "$start_after_install" = "true" ]; then
+      info "Configuration → bind address set to $host"
+    else
+      info "Configuration → bind address set to $host (restart Diana to apply)"
+    fi
+  fi
+  if [ -n "${DIANA_PORT:-}" ]; then
+    set_env_value "$install_dir/runtime.env" PORT "$port"
+  fi
+  append_optional_env "$install_dir/runtime.env"
+  chmod 600 "$install_dir/runtime.env"
   existing_username=$(sed -n "s/^DIANA_ADMIN_USERNAME='\([^']*\)'$/\1/p" "$install_dir/runtime.env" | head -n 1)
   username_suffix=${existing_username#diana#}
   username_valid=true
@@ -455,7 +524,14 @@ if [ "$start_after_install" = "true" ]; then
   stop_other_diana_instances
   info "Start → launching Diana"
   start_service
-  health_url="http://127.0.0.1:$port/api/health"
+  # 绑定地址不是回环时,健康检查得打到真正在听的那个地址上;0.0.0.0 和 ::
+  # 是通配符,本机仍从回环探测。IPv6 字面量要加方括号。
+  case "$host" in
+    ''|0.0.0.0|::|'*') health_host='127.0.0.1' ;;
+    *:*) health_host="[$host]" ;;
+    *) health_host="$host" ;;
+  esac
+  health_url="http://$health_host:$port/api/health"
   healthy=false
   attempts=0
   while [ "$attempts" -lt 45 ]; do
@@ -474,10 +550,26 @@ if [ "$start_after_install" = "true" ]; then
     restore_previous
     fail "health check failed; the previous runtime was restored when available. See $install_dir/logs"
   fi
-  info "Diana is healthy at http://127.0.0.1:$port"
+  info "Diana is healthy at http://$health_host:$port"
   printf 'Service: %s\n' "$service_kind"
+  case "$host" in
+    127.0.0.1|localhost|::1)
+      # 装在服务器上却只绑回环,是「装完打不开」的头号原因。默认不改,
+      # 但必须让人知道开关在哪,而不是自己去翻 runtime.env。
+      printf 'Access:    local only (bound to %s).\n' "$host"
+      printf '           To reach it from another machine, reinstall with DIANA_HOST=0.0.0.0,\n'
+      printf '           or set HOST in %s/runtime.env and restart.\n' "$install_dir"
+      printf '           The console has admin rights: keep it behind a firewall, security\n'
+      printf '           group or reverse proxy with TLS rather than exposing it to the internet.\n'
+      ;;
+    *)
+      printf 'Access:    listening on %s — make sure the port is allowed by the firewall\n' "$host"
+      printf '           and security group, and prefer a reverse proxy with TLS.\n'
+      ;;
+  esac
 else
   info "Installation completed without starting Diana"
+  printf 'Note:      configuration changes apply the next time Diana starts.\n'
 fi
 
 printf 'Installed: %s\n' "$install_dir"
