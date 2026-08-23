@@ -4,8 +4,9 @@ frontend-next/node_modules/
 .claude/
 .env
 .env.*
-!.env.example
 runtime.env
+# 生成的配置文件里有管理员密码和 API Key，示例是 config.example.yaml。
+config.yaml
 web-search.json
 secrets/
 *.pem

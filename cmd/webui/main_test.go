@@ -6,13 +6,13 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
-	"time"
 
 	"github.com/SuInk/diana/model/assistant"
-	"github.com/SuInk/diana/model/llm"
 
 	"github.com/gin-gonic/gin"
 )
@@ -177,104 +177,6 @@ func TestMigrateRestoredWebSearchPluginState(t *testing.T) {
 	}
 }
 
-func TestBotProfileConfigFromEnvReadsProactiveReplySettings(t *testing.T) {
-	t.Setenv("DIANA_PROACTIVE_REPLY_ROUTER_PROMPT", "route carefully")
-	t.Setenv("DIANA_PROACTIVE_REPLY_PROMPT", "reply naturally")
-	t.Setenv("DIANA_RECALL_REPLY_MODE", string(assistant.RecallReplyModeOriginalForward))
-	t.Setenv("DIANA_LLM_QQ_ID_MASKING_ENABLED", "false")
-	t.Setenv("DIANA_RECENT_GROUP_CONTEXT_LIMIT", "11")
-	t.Setenv("DIANA_CONTEXT_SUMMARY_THRESHOLD", "37")
-	t.Setenv("DIANA_PROACTIVE_REPLY_CHANCE", "0.42")
-	t.Setenv("DIANA_PROACTIVE_REPLY_THRESHOLD", "0.73")
-
-	cfg := botConfigFromEnv()
-	if cfg.ProactiveReplyRouterPrompt != "route carefully" {
-		t.Fatalf("ProactiveReplyRouterPrompt = %q", cfg.ProactiveReplyRouterPrompt)
-	}
-	if cfg.ProactiveReplyPrompt != "reply naturally" {
-		t.Fatalf("ProactiveReplyPrompt = %q", cfg.ProactiveReplyPrompt)
-	}
-	if cfg.RecallReplyMode != assistant.RecallReplyModeOriginalForward {
-		t.Fatalf("RecallReplyMode = %q", cfg.RecallReplyMode)
-	}
-	if cfg.LLMIdentityMaskingEnabled == nil || *cfg.LLMIdentityMaskingEnabled {
-		t.Fatalf("LLMIdentityMaskingEnabled = %#v", cfg.LLMIdentityMaskingEnabled)
-	}
-	if cfg.RecentContextLimit != 11 || cfg.ContextSummaryThreshold != 37 {
-		t.Fatalf("context limits = %d/%d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
-	}
-	if cfg.ProactiveReplyChance != 0.42 || cfg.ProactiveReplyThreshold != 0.73 {
-		t.Fatalf("proactive settings = %v/%v", cfg.ProactiveReplyChance, cfg.ProactiveReplyThreshold)
-	}
-}
-
-func TestBotProfileConfigFromEnvMigratesLegacyProactiveReplySettings(t *testing.T) {
-	t.Setenv("DIANA_PROACTIVE_REPLY_ROUTER_PROMPT", "")
-	t.Setenv("DIANA_PROACTIVE_REPLY_PROMPT", "")
-	t.Setenv("DIANA_PROACTIVE_REPLY_CHANCE", "")
-	t.Setenv("DIANA_PROACTIVE_REPLY_THRESHOLD", "")
-	t.Setenv("DIANA_PASSIVE_REPLY_ROUTER_PROMPT", "legacy route")
-	t.Setenv("DIANA_PASSIVE_REPLY_PROMPT", "legacy reply")
-	t.Setenv("DIANA_PASSIVE_REPLY_CHANCE", "0.55")
-	t.Setenv("DIANA_PASSIVE_REPLY_THRESHOLD", "0.8")
-
-	cfg := botConfigFromEnv()
-	if cfg.ProactiveReplyRouterPrompt != "legacy route" || cfg.ProactiveReplyPrompt != "legacy reply" {
-		t.Fatalf("prompts = %q / %q", cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyPrompt)
-	}
-	if cfg.ProactiveReplyChance != 0.55 || cfg.ProactiveReplyThreshold != 0.9 {
-		t.Fatalf("proactive settings = %v / %v", cfg.ProactiveReplyChance, cfg.ProactiveReplyThreshold)
-	}
-}
-
-func TestBotProfileConfigFromEnvPrefersProactiveReplyNames(t *testing.T) {
-	t.Setenv("DIANA_PROACTIVE_REPLY_CHANCE", "0.7")
-	t.Setenv("DIANA_PROACTIVE_REPLY_THRESHOLD", "0.96")
-	t.Setenv("DIANA_PASSIVE_REPLY_CHANCE", "0.2")
-	t.Setenv("DIANA_PASSIVE_REPLY_THRESHOLD", "0.6")
-
-	cfg := botConfigFromEnv()
-	if cfg.ProactiveReplyChance != 0.7 || cfg.ProactiveReplyThreshold != 0.96 {
-		t.Fatalf("proactive settings = %v / %v", cfg.ProactiveReplyChance, cfg.ProactiveReplyThreshold)
-	}
-}
-
-func TestLLMConfigFromEnvRestoresLegacyProviderSettings(t *testing.T) {
-	t.Setenv("LLM_PROVIDER", "openai_compatible")
-	t.Setenv("LLM_API_KEY", "test-api-key")
-	t.Setenv("LLM_BASE_URL", "https://api.example.test/v1")
-	t.Setenv("LLM_API_FORMAT", "chat_completions")
-	t.Setenv("LLM_MODEL", "gpt-test")
-	t.Setenv("LLM_IMAGE_MODEL", "gpt-image-test")
-	t.Setenv("LLM_IMAGE_BASE_URL", "https://image.example.test/v1")
-	t.Setenv("LLM_IMAGE_ORIGIN", "203.0.113.10:443")
-	t.Setenv("LLM_IMAGE_TIMEOUT_MS", "600000")
-	t.Setenv("LLM_REASONING_EFFORT", "high")
-	t.Setenv("LLM_CONTEXT_WINDOW_TOKENS", "200000")
-	t.Setenv("LLM_MAX_CONTEXT_TOKENS", "12000")
-
-	cfg := llmConfigFromEnv()
-	if cfg.APIFormat != llm.APIFormatChatCompletions || cfg.ReasoningEffort != "high" {
-		t.Fatalf("protocol settings = %q/%q", cfg.APIFormat, cfg.ReasoningEffort)
-	}
-	if cfg.ContextWindowTokens != 200000 || cfg.MaxContextTokens != 12000 {
-		t.Fatalf("context budgets = %d/%d", cfg.ContextWindowTokens, cfg.MaxContextTokens)
-	}
-	if cfg.ImageBaseURL != "https://image.example.test/v1" || cfg.ImageOrigin != "203.0.113.10:443" || cfg.ImageTimeout != 10*time.Minute {
-		t.Fatalf("image settings = %#v", cfg)
-	}
-}
-
-func TestLLMConfigFromEnvDefaultsOpenAICompatibleToResponses(t *testing.T) {
-	t.Setenv("LLM_PROVIDER", "openai_compatible")
-	t.Setenv("LLM_API_FORMAT", "")
-
-	cfg := llmConfigFromEnv()
-	if cfg.APIFormat != llm.APIFormatResponses {
-		t.Fatalf("APIFormat = %q, want %q", cfg.APIFormat, llm.APIFormatResponses)
-	}
-}
-
 // TestBotChannelSetFactoryBindsListenerToEnabledOneBotProfile 固定共享监听器的
 // token 来源：只认启用中的 OneBot 配置档，没有就清空，绝不留着上一次的 token。
 func TestBotChannelSetFactoryBindsListenerToEnabledOneBotProfile(t *testing.T) {
@@ -324,5 +226,123 @@ func TestBotChannelSetFactoryBindsListenerToEnabledOneBotProfile(t *testing.T) {
 	}
 	if event := server.Status().LastConnectionEvent; event != "unauthorized:server_token_unset" {
 		t.Fatalf("last connection event = %q", event)
+	}
+}
+
+// TestLoadAppConfigReadsBothLayers 覆盖配置文件的两层：基础设施段每次启动都读，
+// 业务段按 WebUI 接口的 payload 字段名解析。
+func TestLoadAppConfigReadsBothLayers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `
+server:
+  host: 0.0.0.0
+  port: "19000"
+  trusted_proxies:
+    - 10.0.0.1
+    - "  "
+storage:
+  db_path: /data/diana.db
+  media_max_mb: 25
+admin:
+  username: owner
+update:
+  apply_enabled: false
+bot:
+  platform: onebot-v11
+  enabled: true
+  onebot_access_token: "0123456789abcdef"
+  owner_id: "10001"
+  group_triggers: [Diana, diana]
+llm:
+  provider: openai_compatible
+  base_url: https://api.example.com/v1
+  api_key: seed-key
+  model: gp5.5
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadAppConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Host != "0.0.0.0" || cfg.Server.Port != "19000" || cfg.Storage.DBPath != "/data/diana.db" || cfg.Storage.MediaMaxMB != 25 || cfg.Admin.Username != "owner" {
+		t.Fatalf("infrastructure layer = %+v %+v %+v", cfg.Server, cfg.Storage, cfg.Admin)
+	}
+	if got := trimmedList(cfg.Server.TrustedProxies); len(got) != 1 || got[0] != "10.0.0.1" {
+		t.Fatalf("trusted proxies = %v", got)
+	}
+	// 没写的布尔项保持默认值，写了的按写的来——两者必须区分开，否则「没配置」
+	// 会被当成「配置为 false」。
+	if boolOr(cfg.Update.ApplyEnabled, true) || !boolOr(cfg.Update.ReleaseEnabled, true) {
+		t.Fatalf("update flags = %v / %v", cfg.Update.ApplyEnabled, cfg.Update.ReleaseEnabled)
+	}
+
+	bot, seeded, err := cfg.botSeedConfig(defaultOneBotEndpoint("19000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seeded || bot.OneBotAccessToken != "0123456789abcdef" || bot.OwnerID != "10001" || !bot.Enabled {
+		t.Fatalf("bot seed = %+v seeded=%v", bot, seeded)
+	}
+	// 配置文件没写反连地址时按实际端口兜底，不能退回写死的 18080。
+	if bot.OneBotReverseWSEndpoint != "ws://127.0.0.1:19000/onebot/v11/ws" {
+		t.Fatalf("bot endpoint = %q", bot.OneBotReverseWSEndpoint)
+	}
+	if len(bot.GroupTriggers) != 2 {
+		t.Fatalf("group triggers = %v", bot.GroupTriggers)
+	}
+
+	provider, seeded, err := cfg.llmSeedConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seeded || provider.APIKey != "seed-key" || provider.Model != "gp5.5" || provider.BaseURL != "https://api.example.com/v1" {
+		t.Fatalf("llm seed = %+v seeded=%v", provider, seeded)
+	}
+}
+
+// TestLoadAppConfigTreatsMissingFileAsDefaults 全新部署第一次跑起来就该能进
+// 安装向导，而不是先要求写一份 YAML。
+func TestLoadAppConfigTreatsMissingFileAsDefaults(t *testing.T) {
+	cfg, err := loadAppConfig(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatalf("missing config must not fail: %v", err)
+	}
+	if cfg.path != "" {
+		t.Fatalf("path = %q, want empty so startup logs say defaults are in use", cfg.path)
+	}
+	if _, seeded, err := cfg.botSeedConfig(defaultOneBotEndpoint("18080")); err != nil || seeded {
+		t.Fatalf("bot seeded = %v, err = %v", seeded, err)
+	}
+	if _, seeded, err := cfg.llmSeedConfig(); err != nil || seeded {
+		t.Fatalf("llm seeded = %v, err = %v", seeded, err)
+	}
+}
+
+// TestLoadAppConfigRejectsBrokenYAML 配置写错必须直接报错退出，不能静默用默认值
+// 顶上去——那样等于把一份没生效的配置留在机器上继续误导人。
+func TestLoadAppConfigRejectsBrokenYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  port: \"18080\"\n bad indent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadAppConfig(path); err == nil {
+		t.Fatal("broken YAML must fail loudly")
+	}
+}
+
+// TestResolveConfigPathPrefersExplicitFlag 固定查找顺序：--config 高于
+// DIANA_CONFIG，两者都没有才看约定位置。
+func TestResolveConfigPathPrefersExplicitFlag(t *testing.T) {
+	t.Setenv(configPathEnv, "/from/env.yaml")
+	if got := resolveConfigPath([]string{"--config", "/from/flag.yaml"}); got != "/from/flag.yaml" {
+		t.Fatalf("path = %q", got)
+	}
+	if got := resolveConfigPath([]string{"--config=/from/equals.yaml"}); got != "/from/equals.yaml" {
+		t.Fatalf("path = %q", got)
+	}
+	if got := resolveConfigPath(nil); got != "/from/env.yaml" {
+		t.Fatalf("path = %q", got)
 	}
 }

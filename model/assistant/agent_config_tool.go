@@ -239,7 +239,7 @@ func (r *Runtime) dianaConfigSnapshot() dianaConfigSnapshot {
 	status := r.Status()
 	cfg := r.Config().WithDefaults()
 	return dianaConfigSnapshot{
-		Note:        "配置已脱敏：不会返回 API key、OneBot token、自定义 header 值、runtime.env 原文或 secrets 文件内容。",
+		Note:        "配置已脱敏：不会返回 API key、OneBot token、自定义 header 值、config.yaml 原文或 secrets 文件内容。",
 		Runtime:     dianaRuntimeFromStatus(status),
 		Bot:         dianaBotConfigFromConfig(cfg),
 		LLM:         r.dianaLLMSnapshot(),

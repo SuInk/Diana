@@ -28,9 +28,8 @@ RUN apk add --no-cache ffmpeg nodejs yt-dlp tesseract-ocr tesseract-ocr-data-chi
     && chown -R diana:diana /app/data /app/logs
 COPY --from=backend /out/diana-webui /app/diana-webui
 COPY --from=frontend-next /src/frontend-next/dist /app/frontend-next/dist
-ENV PORT=18080
-ENV FRONTEND_DIST=/app/frontend-next/dist
-ENV LOG_PATH=/app/logs/diana.log
+# 应用配置走 config.yaml；镜像内只放一份内置默认配置，挂载同名文件即可覆盖。
+ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080
 USER diana
 ENTRYPOINT ["/app/diana-webui"]

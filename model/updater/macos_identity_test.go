@@ -52,7 +52,8 @@ func TestInstallScriptKeepsFrontendInsideBundle(t *testing.T) {
 		`macos_app_dir="$install_dir/Diana.app"`,
 		`macos_app_binary="$macos_app_dir/Contents/MacOS/$binary_name"`,
 		`cp -R "$install_dir/frontend-next" "$macos_app_dir/Contents/MacOS/frontend-next"`,
-		`frontend_dist_q=$(shell_quote "$macos_app_dir/Contents/MacOS/frontend-next/dist")`,
+		`frontend_dist="$macos_app_dir/Contents/MacOS/frontend-next/dist"`,
+		`  frontend_dist: $(yaml_quote "$frontend_dist")`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install.sh is missing %q", want)

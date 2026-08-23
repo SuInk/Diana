@@ -116,38 +116,60 @@ func main() {
 		}
 		return
 	}
-	logWriter, closeLog := setupLogging()
+	appCfg, err := loadAppConfig(resolveConfigPath(os.Args[1:]))
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+	logWriter, closeLog := setupLogging(appCfg.Storage.LogPath)
 	defer closeLog()
+	if appCfg.path != "" {
+		log.Printf("config loaded from %s", appCfg.path)
+	} else {
+		log.Printf("no config file found; using built-in defaults (set %s or pass --config)", configPathEnv)
+	}
 	probeMacOSClientAppDataAccess()
-	port := envOr("PORT", "18080")
-	host := envOrAny([]string{"HOST", "BACKEND_HOST"}, "")
+	port := stringOr(appCfg.Server.Port, "18080")
+	host := strings.TrimSpace(appCfg.Server.Host)
 
 	// 所有后台 goroutine 共用这个根 context，收到 Ctrl+C 或 SIGTERM 时统一退出。
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	cfg := llmConfigFromEnv()
+	llmSeed, llmSeeded, err := appCfg.llmSeedConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// SQLite 同时保存模型、助手、插件、提醒和操作日志配置。
-	sqliteStore, err := storage.NewSQLiteStore(envOr("APP_DB_PATH", ""))
+	sqliteStore, err := storage.NewSQLiteStore(strings.TrimSpace(appCfg.Storage.DBPath))
 	if err != nil {
 		log.Fatal(err)
 	}
 	if sqliteStore.Path() != "" {
+		// 这不是配置入口，是往进程内部传值：model 层几个模块（如历史媒体目录）
+		// 按数据库位置决定自己的落盘路径，通过环境变量拿到解析后的绝对路径。
 		_ = os.Setenv("APP_DB_PATH", sqliteStore.Path())
 	}
 	defer func() {
 		_ = sqliteStore.Close()
 	}()
 
-	store, err := webui.NewPersistentLLMProfileStore(ctx, sqliteStore, cfg)
+	store, err := webui.NewPersistentLLMProfileStore(ctx, sqliteStore, llmSeed)
 	if err != nil {
 		log.Fatal(err)
 	}
-	botProfileStore, err := webui.NewPersistentBotProfileStore(ctx, sqliteStore, botConfigFromEnv())
+	botSeed, botSeeded, err := appCfg.botSeedConfig(defaultOneBotEndpoint(port))
 	if err != nil {
 		log.Fatal(err)
 	}
+	botProfileStore, err := webui.NewPersistentBotProfileStore(ctx, sqliteStore, botSeed)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// 业务配置的真相源是数据库。config.yaml 里写了但没被采用时必须说清楚，
+	// 否则就退回到以前那种「改了配置文件重启没反应也不报错」的状态。
+	reportSeedOutcome(appCfg.path, llmSeeded, llmSeed, store.Current(), botSeeded, botSeed, botProfileStore.Current())
 	botGroupConfigStore, err := webui.NewPersistentBotGroupConfigStore(ctx, sqliteStore)
 	if err != nil {
 		log.Fatal(err)
@@ -169,7 +191,7 @@ func main() {
 	handler := webui.NewLLMConfigHandler(store)
 	handler.SetModelListFactory(modelListFactory)
 	handler.SetLogStore(sqliteStore)
-	systemUpdater, err := newSystemUpdater()
+	systemUpdater, err := newSystemUpdater(appCfg.Update)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -185,12 +207,12 @@ func main() {
 	}
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
 		CurrentVersion: runtimeVersion,
-		FrontendDir:    frontendDistDir(),
+		FrontendDir:    frontendDistDir(appCfg.Server.FrontendDist),
 		DatabasePath:   sqliteStore.Path(),
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
 		Arguments:      os.Args[1:],
 		Shutdown:       cancel,
-		Disable:        !boolFromEnv("DIANA_RELEASE_UPDATE_ENABLED", true),
+		Disable:        !boolOr(appCfg.Update.ReleaseEnabled, true),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -251,12 +273,13 @@ func main() {
 	}
 	botRuntime.SetLLMModelLister(modelListFactory)
 	botRuntime.SetAppLogWriter(sqliteStore)
-	localMediaBaseURL := envOr(
-		"DIANA_LOCAL_MEDIA_BASE_URL",
+	configuredMediaBaseURL := strings.TrimSpace(appCfg.Storage.LocalMediaBaseURL)
+	localMediaBaseURL := stringOr(
+		configuredMediaBaseURL,
 		"http://"+net.JoinHostPort(displayHost(host), port)+"/media/resolver",
 	)
 	localMediaStore := assistant.NewLocalMediaStore(localMediaBaseURL)
-	if strings.TrimSpace(os.Getenv("DIANA_LOCAL_MEDIA_BASE_URL")) == "" {
+	if configuredMediaBaseURL == "" {
 		// 未显式配置媒体基址时，按反向 ws 握手时客户端使用的地址动态拼
 		// 媒体 URL：桥在容器或别的机器上时（如 host.docker.internal），
 		// 能连上 ws 的地址一定也能回源取媒体，用户只需配置 ws 地址。
@@ -265,10 +288,10 @@ func main() {
 	botRuntime.SetLocalMediaSharer(localMediaStore)
 	// 入站图片下载后持久化，识图一律用本地文件的 base64，不依赖模型服务商
 	// 能否访问聊天平台那些短时效地址。
-	mediaStore := assistant.NewMediaStore(envOr("DIANA_MEDIA_DIR", ""))
+	mediaStore := assistant.NewMediaStore(strings.TrimSpace(appCfg.Storage.MediaDir))
 	mediaStore.SetLimits(
-		int64(envInt("DIANA_MEDIA_MAX_MB", 0))<<20,
-		int64(envInt("DIANA_MEDIA_CACHE_MB", 0))<<20,
+		int64(appCfg.Storage.MediaMaxMB)<<20,
+		int64(appCfg.Storage.MediaCacheMB)<<20,
 	)
 	botRuntime.SetMediaStore(mediaStore)
 	// 先恢复持久统计再挂监听器。配置保存或切换只重启机器人连接，
@@ -317,7 +340,7 @@ func main() {
 	})
 	botHandler.SetChannelSetFactory(channelSetFactory)
 	botHandler.SetFeatureFlags(webui.BotFeatureFlags{
-		GroupTest: boolFromEnvAny([]string{"DIANA_GROUP_TEST_ENABLED", "QQBOT_GROUP_TEST_ENABLED"}, false),
+		GroupTest: boolOr(appCfg.Update.GroupTest, false),
 	})
 	botHandler.SetLocalMediaSharer(localMediaStore)
 	botHandler.SetProfileStore(botProfileStore)
@@ -325,8 +348,8 @@ func main() {
 	botHandler.SetSQLiteStore(sqliteStore)
 	logHandler := webui.NewAppLogHandler(sqliteStore)
 	napCatLoginHandler, err := webui.NewNapCatLoginHandler(webui.NapCatLoginConfig{
-		BaseURL: os.Getenv("DIANA_NAPCAT_WEBUI_URL"),
-		Token:   os.Getenv("DIANA_NAPCAT_WEBUI_TOKEN"),
+		BaseURL: strings.TrimSpace(appCfg.NapCat.WebUIURL),
+		Token:   strings.TrimSpace(appCfg.NapCat.WebUIToken),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -346,7 +369,7 @@ func main() {
 	router.Use(gin.LoggerWithWriter(logWriter), gin.RecoveryWithWriter(logWriter))
 	// 鉴权中间件必须在业务路由之前挂载；未设密码时等价于关闭。
 	authManager := webui.NewAuthManager(sqliteStore)
-	bootstrap, err := authManager.Bootstrap(os.Getenv("DIANA_ADMIN_USERNAME"), os.Getenv("DIANA_ADMIN_PASSWORD"))
+	bootstrap, err := authManager.Bootstrap(strings.TrimSpace(appCfg.Admin.Username), appCfg.Admin.Password)
 	if err != nil {
 		log.Fatalf("bootstrap admin credentials: %v", err)
 	}
@@ -378,7 +401,7 @@ func main() {
 	// 成全局限流，真管理员会被攻击者的失败次数连坐。部署在反代后面时用
 	// DIANA_TRUSTED_PROXIES 声明代理地址（逗号分隔的 IP 或 CIDR），声明之后才
 	// 会解析 X-Forwarded-For。
-	trustedProxies := stringListFromEnv("DIANA_TRUSTED_PROXIES", nil)
+	trustedProxies := trimmedList(appCfg.Server.TrustedProxies)
 	if err := router.SetTrustedProxies(trustedProxies); err != nil {
 		log.Fatalf("DIANA_TRUSTED_PROXIES 配置无效：%v", err)
 	}
@@ -422,7 +445,7 @@ func main() {
 	})
 	// OneBot 路由必须在 SPA fallback 之前注册，否则 NapCat 会拿到前端 HTML 而不是 WebSocket。
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
-	router.NoRoute(spaHandler(http.Dir(frontendDistDir())))
+	router.NoRoute(spaHandler(http.Dir(frontendDistDir(appCfg.Server.FrontendDist))))
 
 	addr := net.JoinHostPort(host, port)
 	listener, err := net.Listen("tcp", addr)
@@ -455,11 +478,8 @@ func main() {
 	}
 }
 
-func newSystemUpdater() (*updater.GitUpdater, error) {
-	root := strings.TrimSpace(os.Getenv("DIANA_UPDATE_ROOT"))
-	if root == "" {
-		root = "."
-	}
+func newSystemUpdater(cfg updateConfig) (*updater.GitUpdater, error) {
+	root := stringOr(cfg.Root, ".")
 	runningExecutable, _ := os.Executable()
 	runningCommit := strings.TrimSpace(buildVersion)
 	if strings.EqualFold(runningCommit, "dev") {
@@ -470,7 +490,7 @@ func newSystemUpdater() (*updater.GitUpdater, error) {
 		RunningExecutable: runningExecutable,
 	}
 	applyScript := filepath.Join(root, "scripts", "apply-update.sh")
-	if runtime.GOOS != "windows" && boolFromEnv("DIANA_UPDATE_APPLY_ENABLED", true) {
+	if runtime.GOOS != "windows" && boolOr(cfg.ApplyEnabled, true) {
 		if info, statErr := os.Stat(applyScript); statErr == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
 			options.ApplyCommand = []string{applyScript}
 		}
@@ -568,8 +588,8 @@ func limitRequestBody(maxBytes int64) gin.HandlerFunc {
 }
 
 // setupLogging 配置控制台和文件日志输出。
-func setupLogging() (io.Writer, func()) {
-	logPath := envOrAny([]string{"LOG_PATH", "DIANA_LOG_PATH"}, "")
+func setupLogging(logPath string) (io.Writer, func()) {
+	logPath = strings.TrimSpace(logPath)
 	if logPath == "" {
 		return os.Stdout, func() {}
 	}
@@ -596,90 +616,8 @@ func setupLogging() (io.Writer, func()) {
 	}
 }
 
-// botConfigFromEnv 从环境变量构建 OneBot v11 机器人默认配置。
-func botConfigFromEnv() assistant.BotConfig {
-	cfg := assistant.DefaultBotConfig()
-	// 默认回连到当前 WebUI 端口，开发环境只要 NapCat 指向这个地址即可联调。
-	defaultOneBotEndpoint := "ws://127.0.0.1:" + envOr("PORT", "18080") + "/onebot/v11/ws"
-	cfg.Enabled = boolFromEnvAny([]string{"DIANA_BOT_ENABLED", "QQBOT_ENABLED"}, cfg.Enabled)
-	cfg.OneBotReverseWSEndpoint = envOrAny([]string{"ONEBOT_REVERSE_WS_ENDPOINT", "QQBOT_ONEBOT_REVERSE_WS_ENDPOINT"}, defaultOneBotEndpoint)
-	cfg.OneBotAccessToken = envOrAny([]string{"ONEBOT_ACCESS_TOKEN", "QQBOT_ONEBOT_ACCESS_TOKEN"}, "")
-	cfg.NoneBotBridgeEnabled = boolFromEnv("NONEBOT_BRIDGE_ENABLED", cfg.NoneBotBridgeEnabled)
-	cfg.NoneBotBridgeEndpoint = envOrAny([]string{"NONEBOT_BRIDGE_ENDPOINT", "QQBOT_NONEBOT_BRIDGE_ENDPOINT"}, cfg.NoneBotBridgeEndpoint)
-	cfg.NoneBotBridgeToken = envOrAny([]string{"NONEBOT_BRIDGE_TOKEN", "QQBOT_NONEBOT_BRIDGE_TOKEN"}, "")
-	cfg.BotAccount = envOrAny([]string{"DIANA_BOT_ACCOUNT", "QQBOT_SELF_ID", "QQBOT_QQ", "BOT_QQ"}, "")
-	cfg.OwnerID = envOrAny([]string{"DIANA_OWNER_ID", "QQBOT_OWNER_ID"}, "")
-	cfg.GroupTriggers = stringListFromEnv("DIANA_GROUP_TRIGGERS", cfg.GroupTriggers)
-	cfg.SystemPrompt = envOrAny([]string{"DIANA_SYSTEM_PROMPT", "QQBOT_SYSTEM_PROMPT"}, cfg.SystemPrompt)
-	cfg.ProactiveReplyRouterPrompt = envOrAny([]string{"DIANA_PROACTIVE_REPLY_ROUTER_PROMPT", "DIANA_PASSIVE_REPLY_ROUTER_PROMPT"}, cfg.ProactiveReplyRouterPrompt)
-	cfg.ProactiveReplyPrompt = envOrAny([]string{"DIANA_PROACTIVE_REPLY_PROMPT", "DIANA_PASSIVE_REPLY_PROMPT"}, cfg.ProactiveReplyPrompt)
-	cfg.ErrorReplyPrefix = envOr("DIANA_ERROR_REPLY_PREFIX", cfg.ErrorReplyPrefix)
-	cfg.SendRetryAttempts = intFromEnv("DIANA_SEND_RETRY_ATTEMPTS", cfg.SendRetryAttempts)
-	cfg.SendChunkIntervalMS = intFromEnv("DIANA_SEND_CHUNK_INTERVAL_MS", cfg.SendChunkIntervalMS)
-	cfg.MaxInputChars = intFromEnv("DIANA_MAX_INPUT_CHARS", cfg.MaxInputChars)
-	cfg.MaxReplyChars = intFromEnv("DIANA_MAX_REPLY_CHARS", cfg.MaxReplyChars)
-	cfg.DirectReplyChunkSize = intFromEnv("DIANA_DIRECT_REPLY_CHUNK_SIZE", cfg.DirectReplyChunkSize)
-	cfg.ForwardReplyThreshold = intFromEnv("DIANA_FORWARD_REPLY_THRESHOLD", cfg.ForwardReplyThreshold)
-	cfg.RecallReplyMode = assistant.RecallReplyMode(envOr("DIANA_RECALL_REPLY_MODE", string(cfg.RecallReplyMode)))
-	llmIdentityMaskingEnabled := boolFromEnvAny([]string{"DIANA_LLM_IDENTITY_MASKING_ENABLED", "DIANA_LLM_QQ_ID_MASKING_ENABLED"}, true)
-	cfg.LLMIdentityMaskingEnabled = &llmIdentityMaskingEnabled
-	cfg.RecentContextLimit = intFromEnv("DIANA_RECENT_GROUP_CONTEXT_LIMIT", cfg.RecentContextLimit)
-	cfg.ContextSummaryThreshold = intFromEnv("DIANA_CONTEXT_SUMMARY_THRESHOLD", cfg.ContextSummaryThreshold)
-	if chance, ok := floatFromEnvAny("DIANA_PROACTIVE_REPLY_CHANCE", "DIANA_PASSIVE_REPLY_CHANCE"); ok {
-		cfg.ProactiveReplyChance = chance
-	}
-	if threshold, ok := floatFromEnv("DIANA_PROACTIVE_REPLY_THRESHOLD"); ok {
-		cfg.ProactiveReplyThreshold = threshold
-	} else if threshold, ok := floatFromEnv("DIANA_PASSIVE_REPLY_THRESHOLD"); ok {
-		if threshold == 0.8 {
-			threshold = 0.9
-		}
-		cfg.ProactiveReplyThreshold = threshold
-	}
-	cfg.MaxBotConcurrency = intFromEnv("DIANA_MAX_BOT_CONCURRENCY", cfg.MaxBotConcurrency)
-	cfg.RequestTimeout = time.Duration(int64FromEnv("DIANA_HTTP_TIMEOUT_SECONDS", int64(cfg.RequestTimeout.Seconds()))) * time.Second
-	cfg.AgentEnabled = boolFromEnv("DIANA_AGENT_ENABLED", cfg.AgentEnabled)
-	cfg.AgentWorkDir = envOrAny([]string{"DIANA_AGENT_WORK_DIR", "AGENT_WORK_DIR"}, cfg.AgentWorkDir)
-	cfg.AgentMaxSteps = intFromEnv("DIANA_AGENT_MAX_STEPS", cfg.AgentMaxSteps)
-	cfg.AgentSkillRoots = stringListFromEnv("DIANA_AGENT_SKILL_ROOTS", cfg.AgentSkillRoots)
-	cfg.AgentMCPConfigPath = envOrAny([]string{"DIANA_AGENT_MCP_CONFIG", "AGENT_MCP_CONFIG"}, cfg.AgentMCPConfigPath)
-	cfg.AgentCommandAllowlist = stringListFromEnv("DIANA_AGENT_COMMAND_ALLOWLIST", cfg.AgentCommandAllowlist)
-	cfg.AgentCommandTimeoutMS = intFromEnv("DIANA_AGENT_COMMAND_TIMEOUT_MS", cfg.AgentCommandTimeoutMS)
-	cfg.AgentBrowserCDPURL = envOrAny([]string{"DIANA_AGENT_BROWSER_CDP_URL", "AGENT_BROWSER_CDP_URL"}, cfg.AgentBrowserCDPURL)
-	cfg.AgentBrowserTimeoutMS = intFromEnv("DIANA_AGENT_BROWSER_TIMEOUT_MS", cfg.AgentBrowserTimeoutMS)
-	return cfg.WithDefaults()
-}
-
-// llmConfigFromEnv 从环境变量构建默认 LLM provider 配置。
-func llmConfigFromEnv() llm.ProviderConfig {
-	provider := providerFromEnv("LLM_PROVIDER", llm.ProviderOpenAICompatible)
-	cfg := llm.ProviderConfig{
-		Provider:        provider,
-		APIKey:          os.Getenv("LLM_API_KEY"),
-		BaseURL:         os.Getenv("LLM_BASE_URL"),
-		APIFormat:       llm.APIFormat(os.Getenv("LLM_API_FORMAT")),
-		Model:           envOr("LLM_MODEL", llm.DefaultModel(provider)),
-		ImageModel:      os.Getenv("LLM_IMAGE_MODEL"),
-		ImageBaseURL:    os.Getenv("LLM_IMAGE_BASE_URL"),
-		ImageOrigin:     os.Getenv("LLM_IMAGE_ORIGIN"),
-		ImageTimeout:    time.Duration(int64FromEnv("LLM_IMAGE_TIMEOUT_MS", 0)) * time.Millisecond,
-		UserAgent:       os.Getenv("LLM_USER_AGENT"),
-		ReasoningEffort: os.Getenv("LLM_REASONING_EFFORT"),
-		// 不设环境变量时留 0，交给 WithDefaults 按模型名推断真实窗口；写死默认常量
-		// 会让 Claude/Gemini 这类大窗口模型被当成 128K。
-		ContextWindowTokens: int64FromEnv("LLM_CONTEXT_WINDOW_TOKENS", 0),
-		MaxContextTokens:    int64FromEnv("LLM_MAX_CONTEXT_TOKENS", 0),
-		MaxOutputTokens:     int64FromEnv("LLM_MAX_OUTPUT_TOKENS", 1024),
-		Timeout:             time.Duration(int64FromEnv("LLM_TIMEOUT_MS", 60000)) * time.Millisecond,
-	}
-	if temp, ok := floatFromEnv("LLM_TEMPERATURE"); ok {
-		cfg.Temperature = &temp
-	}
-	return cfg.WithDefaults()
-}
-
 // frontendDistDir 查找生产前端静态文件目录。
-func frontendDistDir() string {
+func frontendDistDir(custom string) string {
 	// 同时兼容源码目录运行、打包后从二进制旁边运行、以及测试工作目录切换。
 	// 旧版 frontend 已停用，不再静默回退，避免误把过时控制台部署到生产环境。
 	candidates := []string{
@@ -695,7 +633,7 @@ func frontendDistDir() string {
 	if configDir, err := os.UserConfigDir(); err == nil {
 		candidates = append(candidates, filepath.Join(configDir, "diana", "frontend-next", "dist"))
 	}
-	if custom := envOr("FRONTEND_DIST", ""); custom != "" {
+	if custom = strings.TrimSpace(custom); custom != "" {
 		// 显式指定的目录永远最优先，即使暂时不存在也按它返回，方便部署脚本预创建。
 		candidates = append([]string{custom}, candidates...)
 	}
@@ -766,139 +704,4 @@ func serveFile(c *gin.Context, root http.FileSystem, path string) {
 	if _, err := io.Copy(c.Writer, file); err != nil {
 		log.Printf("serve %s: %v", path, err)
 	}
-}
-
-// envOr 读取环境变量，空值时返回默认值。
-// envInt 读取正整数环境变量，未设置或非法时返回 fallback。
-func envInt(key string, fallback int) int {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return fallback
-	}
-	return parsed
-}
-
-func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-// envOrAny 按顺序读取多个环境变量并返回第一个非空值。
-func envOrAny(keys []string, fallback string) string {
-	for _, key := range keys {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return value
-		}
-	}
-	return fallback
-}
-
-// boolFromEnv 将环境变量解析为布尔值。
-// boolFromEnvAny 依次尝试多个变量名，用来在换新名的同时兼容旧部署。
-func boolFromEnvAny(keys []string, fallback bool) bool {
-	for _, key := range keys {
-		if strings.TrimSpace(os.Getenv(key)) != "" {
-			return boolFromEnv(key, fallback)
-		}
-	}
-	return fallback
-}
-
-func boolFromEnv(key string, fallback bool) bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
-	if value == "" {
-		return fallback
-	}
-	switch value {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
-}
-
-// intFromEnv 将环境变量解析为 int。
-func intFromEnv(key string, fallback int) int {
-	parsed := int64FromEnv(key, int64(fallback))
-	if parsed > int64(^uint(0)>>1) {
-		return fallback
-	}
-	return int(parsed)
-}
-
-// stringListFromEnv 将逗号分隔的环境变量解析为字符串列表。
-func stringListFromEnv(key string, fallback []string) []string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	if len(out) == 0 {
-		return fallback
-	}
-	return out
-}
-
-// providerFromEnv 将环境变量解析为受支持的 LLM provider。
-func providerFromEnv(key string, fallback llm.Provider) llm.Provider {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
-	case string(llm.ProviderGemini), "google", "google_genai":
-		return llm.ProviderGemini
-	case string(llm.ProviderAnthropic), "claude":
-		return llm.ProviderAnthropic
-	case string(llm.ProviderOpenAICompatible), "openai", "openai-compatible":
-		return llm.ProviderOpenAICompatible
-	default:
-		return fallback
-	}
-}
-
-// int64FromEnv 将环境变量解析为 int64。
-func int64FromEnv(key string, fallback int64) int64 {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-// floatFromEnv 将环境变量解析为 float64，并返回是否解析成功。
-func floatFromEnv(key string) (float64, bool) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return 0, false
-	}
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return 0, false
-	}
-	return parsed, true
-}
-
-func floatFromEnvAny(keys ...string) (float64, bool) {
-	for _, key := range keys {
-		if value, ok := floatFromEnv(key); ok {
-			return value, true
-		}
-	}
-	return 0, false
 }

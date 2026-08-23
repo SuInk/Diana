@@ -13,16 +13,17 @@ $port = if ($env:DIANA_PORT) { [int]$env:DIANA_PORT } else { 18080 }
 # 要从别的机器访问就显式设 DIANA_HOST=0.0.0.0(或某张网卡的地址)。
 $hostExplicit = [bool]$env:DIANA_HOST
 $bindHost = if ($env:DIANA_HOST) { $env:DIANA_HOST } else { "127.0.0.1" }
-# DIANA_ENV_FILE 指向额外的 KEY=VALUE 文件,内容原样并进 runtime.env。
-$extraEnvFile = $env:DIANA_ENV_FILE
-if ($extraEnvFile -and -not (Test-Path $extraEnvFile)) {
-    throw "DIANA_ENV_FILE does not exist: $extraEnvFile"
+# DIANA_CONFIG_FILE 指向一份 YAML 片段,内容原样并进生成的 config.yaml。
+$extraConfigFile = $env:DIANA_CONFIG_FILE
+if ($extraConfigFile -and -not (Test-Path $extraConfigFile)) {
+    throw "DIANA_CONFIG_FILE does not exist: $extraConfigFile"
 }
 # 这些配置在装的时候填好比装完再进 WebUI 改一遍省事,尤其是无人值守部署。
-$optionalEnvKeys = @(
-    "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_FORMAT", "LLM_IMAGE_MODEL",
-    "DIANA_PUBLIC_BASE_URL", "DIANA_LOCAL_MEDIA_BASE_URL",
-    "DIANA_NAPCAT_WEBUI_URL", "DIANA_NAPCAT_WEBUI_TOKEN"
+# 键名沿用环境变量的写法只是为了让调用方式不变,实际写进的是 config.yaml。
+$optionalSections = @(
+    @{ Section = "storage"; Keys = @{ "DIANA_LOCAL_MEDIA_BASE_URL" = "local_media_base_url" } },
+    @{ Section = "napcat"; Keys = [ordered]@{ "DIANA_NAPCAT_WEBUI_URL" = "webui_url"; "DIANA_NAPCAT_WEBUI_TOKEN" = "webui_token" } },
+    @{ Section = "llm"; Keys = [ordered]@{ "LLM_API_KEY" = "api_key"; "LLM_BASE_URL" = "base_url"; "LLM_MODEL" = "model"; "LLM_API_FORMAT" = "api_format"; "LLM_IMAGE_MODEL" = "image_model" } }
 )
 
 # 绑定地址不是回环时,健康检查要打到真正在听的地址;0.0.0.0 是通配符,
@@ -31,17 +32,74 @@ $optionalEnvKeys = @(
 # 已结束的语句,后面的 elseif 直接语法错误。
 $healthHost = if ($bindHost -in @("", "0.0.0.0", "::", "*")) { "127.0.0.1" } elseif ($bindHost -like "*:*") { "[$bindHost]" } else { $bindHost }
 
-function Get-DianaOptionalEnvLines {
+# ConvertTo-DianaYamlScalar 把值包成单引号 YAML 标量,内部单引号按 YAML 规则翻倍。
+function ConvertTo-DianaYamlScalar {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+# Get-DianaOptionalConfigLines 生成可选配置段。一个都没传的段整段不写。
+function Get-DianaOptionalConfigLines {
     $lines = @()
-    foreach ($key in $optionalEnvKeys) {
-        $value = [Environment]::GetEnvironmentVariable($key)
-        if ($value) { $lines += "$key=$value" }
+    foreach ($group in $optionalSections) {
+        $written = $false
+        foreach ($key in $group.Keys.Keys) {
+            $value = [Environment]::GetEnvironmentVariable($key)
+            if (-not $value) { continue }
+            if (-not $written) { $lines += "$($group.Section):"; $written = $true }
+            $lines += "  $($group.Keys[$key]): $(ConvertTo-DianaYamlScalar $value)"
+        }
     }
-    if ($extraEnvFile) {
-        # 原样并入:文件由部署者自己写,只跳过空行和注释。
-        $lines += Get-Content $extraEnvFile | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith("#") }
+    if ($extraConfigFile) {
+        # 原样并入:这段由部署者自己写,内容必须是合法 YAML 顶层段。
+        $lines += Get-Content $extraConfigFile
     }
     return $lines
+}
+
+# Set-DianaYamlValue 改写指定顶层段下的一个键,段内没有就追加到段末。
+function Set-DianaYamlValue {
+    param([string]$Path, [string]$Section, [string]$Key, [string]$Value)
+    $scalar = ConvertTo-DianaYamlScalar $Value
+    $result = @()
+    $inSection = $false
+    $done = $false
+    foreach ($line in @(Get-Content $Path)) {
+        if ($line -match '^[a-z_]+:\s*$') {
+            if ($inSection -and -not $done) { $result += "  $($Key): $scalar"; $done = $true }
+            $inSection = ($line.Trim() -eq "$($Section):")
+            $result += $line
+            continue
+        }
+        if ($inSection -and -not $done -and $line -match "^\s+$($Key):") {
+            $result += "  $($Key): $scalar"
+            $done = $true
+            continue
+        }
+        $result += $line
+    }
+    if (-not $done) {
+        if (-not $inSection) { $result += "$($Section):" }
+        $result += "  $($Key): $scalar"
+    }
+    [IO.File]::WriteAllLines($Path, $result, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Get-DianaYamlValue 读回指定顶层段下的一个键,用于重装时保留已生成的凭据。
+function Get-DianaYamlValue {
+    param([string]$Path, [string]$Section, [string]$Key)
+    $inSection = $false
+    foreach ($line in @(Get-Content $Path)) {
+        if ($line -match '^[a-z_]+:\s*$') { $inSection = ($line.Trim() -eq "$($Section):"); continue }
+        if ($inSection -and $line -match "^\s+$($Key):\s*(.*)$") {
+            $raw = $matches[1].Trim()
+            if ($raw.StartsWith("'") -and $raw.EndsWith("'") -and $raw.Length -ge 2) {
+                return $raw.Substring(1, $raw.Length - 2) -replace "''", "'"
+            }
+            return $raw
+        }
+    }
+    return ""
 }
 $startAfterInstall = $env:DIANA_START_AFTER_INSTALL -ne "false"
 
@@ -142,31 +200,32 @@ try {
     }
 
     Copy-Item -Recurse -Force -Path (Join-Path $packageDir "*") -Destination $installDir
-    $runtimeEnv = Join-Path $installDir "runtime.env"
+    $configFile = Join-Path $installDir "config.yaml"
     $generatedPassword = $null
     $generatedUsername = $null
-    if (-not (Test-Path $runtimeEnv)) {
+    if (-not (Test-Path $configFile)) {
         $username = if ($env:DIANA_ADMIN_USERNAME) { $env:DIANA_ADMIN_USERNAME } else { "diana#$(New-DianaRandomHex 8)" }
         $generatedPassword = if ($env:DIANA_ADMIN_PASSWORD) { $env:DIANA_ADMIN_PASSWORD } else { New-DianaRandomHex 16 }
-        $runtimeContent = @"
-HOST=$bindHost
-PORT=$port
-APP_DB_PATH=$dbPath
-LOG_PATH=$(Join-Path $installDir "logs\diana.log")
-FRONTEND_DIST=$(Join-Path $installDir "frontend-next\dist")
-DIANA_ADMIN_USERNAME=$username
-DIANA_ADMIN_PASSWORD=$generatedPassword
-"@
-        $optionalLines = Get-DianaOptionalEnvLines
-        if ($optionalLines) { $runtimeContent += (($optionalLines -join "`n") + "`n") }
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [IO.File]::WriteAllText($runtimeEnv, $runtimeContent, $utf8NoBom)
+        $configLines = @(
+            "# Diana 配置。基础设施段每次启动生效;bot / llm 段只在数据库为空时播种一次,",
+            "# 之后以 WebUI 里的配置为准。完整字段见仓库里的 config.example.yaml。",
+            "server:",
+            "  host: $(ConvertTo-DianaYamlScalar $bindHost)",
+            "  port: $(ConvertTo-DianaYamlScalar ([string]$port))",
+            "  frontend_dist: $(ConvertTo-DianaYamlScalar (Join-Path $installDir 'frontend-next\dist'))",
+            "storage:",
+            "  db_path: $(ConvertTo-DianaYamlScalar $dbPath)",
+            "  log_path: $(ConvertTo-DianaYamlScalar (Join-Path $installDir 'logs\diana.log'))",
+            "admin:",
+            "  username: $(ConvertTo-DianaYamlScalar $username)",
+            "  password: $(ConvertTo-DianaYamlScalar $generatedPassword)"
+        )
+        $configLines += Get-DianaOptionalConfigLines
+        [IO.File]::WriteAllLines($configFile, $configLines, (New-Object System.Text.UTF8Encoding($false)))
     } else {
         # 重装时显式传的绑定地址要生效,否则「改成 0.0.0.0 再跑一遍安装」不起作用。
         if ($hostExplicit) {
-            $rebound = @(Get-Content $runtimeEnv | Where-Object { $_ -notmatch '^HOST=' })
-            $rebound = @("HOST=$bindHost") + $rebound
-            Set-Content -Path $runtimeEnv -Value $rebound -Encoding UTF8
+            Set-DianaYamlValue -Path $configFile -Section "server" -Key "host" -Value $bindHost
             # 绑定地址是进程启动时读的:默认路径后面会重启服务;不启动时要说清楚
             # 还没生效,否则改完连不上会以为是配置没写进去。
             if ($startAfterInstall) {
@@ -175,20 +234,11 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
                 Write-Host "==> Configuration -> bind address set to $bindHost (restart Diana to apply)"
             }
         }
-        $optionalLines = Get-DianaOptionalEnvLines
-        if ($optionalLines) { Add-Content -Path $runtimeEnv -Value $optionalLines -Encoding UTF8 }
-        $runtimeLines = Get-Content $runtimeEnv
-        $usernameLine = $runtimeLines | Where-Object { $_ -match '^DIANA_ADMIN_USERNAME=' } | Select-Object -First 1
-        $existingUsername = if ($usernameLine) { ($usernameLine -replace '^DIANA_ADMIN_USERNAME=', '').Trim("'", '"') } else { "" }
+        if ($env:DIANA_PORT) { Set-DianaYamlValue -Path $configFile -Section "server" -Key "port" -Value ([string]$port) }
+        $existingUsername = Get-DianaYamlValue -Path $configFile -Section "admin" -Key "username"
         if ($existingUsername -in @("diana#admin", "diana#admin0000") -or $existingUsername -notmatch '^diana#[A-Za-z0-9]{8,}$') {
-            $username = "diana#$(New-DianaRandomHex 8)"
-            $generatedUsername = $username
-            if ($usernameLine) {
-                $runtimeLines = $runtimeLines | ForEach-Object { if ($_ -match '^DIANA_ADMIN_USERNAME=') { "DIANA_ADMIN_USERNAME=$username" } else { $_ } }
-            } else {
-                $runtimeLines = @($runtimeLines) + "DIANA_ADMIN_USERNAME=$username"
-            }
-            [IO.File]::WriteAllLines($runtimeEnv, $runtimeLines, (New-Object System.Text.UTF8Encoding($false)))
+            $generatedUsername = "diana#$(New-DianaRandomHex 8)"
+            Set-DianaYamlValue -Path $configFile -Section "admin" -Key "username" -Value $generatedUsername
             Write-Host "==> Configuration -> repaired invalid administrator username"
         }
     }
@@ -206,9 +256,8 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
             throw "Port $port is already used by PID $owners; Diana did not start a second instance."
         }
 
-        Get-Content $runtimeEnv | ForEach-Object {
-            if ($_ -match '^([^#=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") }
-        }
+        # 唯一需要传给进程的环境变量:配置文件在哪。其余配置都在 config.yaml 里。
+        [Environment]::SetEnvironmentVariable("DIANA_CONFIG", $configFile, "Process")
         $executablePath = Join-Path $installDir $binaryName
         $process = Start-Process -FilePath $executablePath -WorkingDirectory $installDir -WindowStyle Hidden -PassThru
         Set-Content -Encoding ASCII -Path (Join-Path $installDir ".diana.pid") -Value $process.Id
@@ -258,7 +307,7 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
             # 只绑回环是「装完打不开」的头号原因。默认不改,但要让人知道开关在哪。
             Write-Host "Access:    local only (bound to $bindHost)."
             Write-Host "           To reach it from another machine, reinstall with DIANA_HOST=0.0.0.0,"
-            Write-Host "           or set HOST in $runtimeEnv and restart."
+            Write-Host "           or set server.host in $configFile and restart."
             Write-Host "           The console has admin rights: keep it behind a firewall or a"
             Write-Host "           reverse proxy with TLS rather than exposing it to the internet."
         } else {
@@ -275,11 +324,11 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
     if ($generatedPassword) {
         Write-Host "Username:  $username"
         Write-Host "Password:  $generatedPassword"
-        Write-Host "Credentials are stored in $runtimeEnv."
+        Write-Host "Credentials are stored in $configFile."
     }
     if ($generatedUsername) {
         Write-Host "Username:  $generatedUsername"
-        Write-Host "The existing password remains stored in $runtimeEnv."
+        Write-Host "The existing password remains stored in $configFile."
     }
 } finally {
     if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }
