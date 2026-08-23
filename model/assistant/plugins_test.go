@@ -751,8 +751,17 @@ func TestDianaLLMConfigToolUpdatesProviderAndModel(t *testing.T) {
 		t.Fatalf("output = %q", output)
 	}
 	got := store.Current()
-	if got.Provider != llm.ProviderGemini || got.Model != "gemini-2.5-pro" || got.ContextWindowTokens != 200000 || got.MaxContextTokens != llm.DefaultMaxContextTokens {
+	if got.Provider != llm.ProviderGemini || got.Model != "gemini-2.5-pro" {
 		t.Fatalf("current = %#v", got)
+	}
+	// 换模型不再把目录返回的窗口写进配置：写进去就等于把某一刻的第三方数据固定成
+	// 用户设置，换下一个模型时不跟着变。窗口按当前模型现算即可。
+	if got.ContextWindowTokens != 0 || got.MaxContextTokens != 0 {
+		t.Fatalf("model switch persisted a catalog window: %#v", got)
+	}
+	// 清单跟着这次校验一起刷新，窗口就按清单里这个模型的真实值算。
+	if window := got.ContextWindowTokensWithDefault(); window != 200000 {
+		t.Fatalf("resolved window = %d, want the model list value", window)
 	}
 	if len(logs.entries) != 1 {
 		t.Fatalf("logs = %#v", logs.entries)

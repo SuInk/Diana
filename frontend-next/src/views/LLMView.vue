@@ -274,13 +274,18 @@
         </div>
         <div class="field">
           <label for="llm-window">模型上下文窗口</label>
-          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="128000" />
-          <span class="hint">模型自身的硬上限，同步模型列表时会自动填。留空按模型名推断，推断不出按 128000 兜底。</span>
+          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="跟随模型" />
+          <span class="hint">
+            只填你想强制覆盖的值。{{ effectiveContextHint }}
+            一个 provider 下的模型窗口各不相同，填死之后换模型不会自动跟着变。
+          </span>
         </div>
         <div class="field">
           <label for="llm-maxcontext">单次请求上下文上限</label>
           <input id="llm-maxcontext" v-model="form.max_context_tokens" class="input" inputmode="numeric" placeholder="跟随窗口" />
-          <span class="hint">留空即用满窗口。近期历史、长期记忆等预算都按它按比例分配，调小可以省钱，调大能记住更多对话。</span>
+          <span class="hint">
+            {{ effectiveMaxContextHint }}近期历史、长期记忆等预算都按它按比例分配，调小可以省钱，调大能记住更多对话。
+          </span>
         </div>
         <div v-if="form.provider === 'openai_compatible'" class="field">
           <label for="llm-ua">User-Agent（可选）</label>
@@ -365,6 +370,8 @@ const editorOpen = ref(false);
 const editingID = ref<string | undefined>(undefined);
 const editingConfigured = ref(false);
 const editingKeyPreview = ref("");
+// 正在编辑的那份配置的服务端回显，只用来读「当前实际生效的窗口」这类只读字段。
+const editingProfile = ref<LLMConfig | null>(null);
 const showKey = ref(false);
 const form = ref<LLMFormState>({ ...emptyForm });
 const selectedService = ref("openai");
@@ -444,6 +451,7 @@ function startCreate(): void {
   editingID.value = undefined;
   editingConfigured.value = false;
   editingKeyPreview.value = "";
+  editingProfile.value = null;
   form.value = { ...emptyForm };
   selectedService.value = "openai";
   applyServicePreset("openai");
@@ -543,6 +551,7 @@ function startEdit(profile: LLMConfig): void {
   editingID.value = profile.id;
   editingConfigured.value = Boolean(profile.api_key_configured);
   editingKeyPreview.value = profile.api_key_preview ?? "";
+  editingProfile.value = profile;
   form.value = {
     name: profile.name ?? "",
     provider: profile.provider,
@@ -563,6 +572,42 @@ function startEdit(profile: LLMConfig): void {
   modelsError.value = "";
   editorOpen.value = true;
 }
+
+// optionalTokenInput 把输入框翻译成「用户覆盖值」：留空是 0（自动），填了才是数字。
+function optionalTokenInput(raw: string): number {
+  const value = raw.trim();
+  if (value === "" || Number.isNaN(Number(value))) {
+    return 0;
+  }
+  return Number(value);
+}
+
+const contextWindowSourceLabels: Record<string, string> = {
+  user: "你填写的值",
+  model_list: "同步下来的模型清单",
+  inferred: "按模型名推断",
+  fallback: "兜底值"
+};
+
+// 编辑器里这两个框留空是常态，所以要如实说明「留空时到底用多少、这个数哪来的」，
+// 而不是把推断值预填进输入框冒充用户设置。
+const effectiveContextHint = computed(() => {
+  const profile = editingProfile.value;
+  const window = profile?.effective_context_window_tokens;
+  if (!window) {
+    return "留空即按当前模型自动判断。";
+  }
+  const source = contextWindowSourceLabels[profile?.context_window_source ?? ""] ?? "自动判断";
+  return `留空即按当前模型自动判断，当前为 ${window.toLocaleString("en-US")}（${source}）。`;
+});
+
+const effectiveMaxContextHint = computed(() => {
+  const budget = editingProfile.value?.effective_max_context_tokens;
+  if (!budget) {
+    return "留空即用满窗口。";
+  }
+  return `留空即用满窗口，当前为 ${budget.toLocaleString("en-US")}。`;
+});
 
 function formToPayload(): LLMConfig {
   const payload: LLMConfig = {
@@ -586,14 +631,10 @@ function formToPayload(): LLMConfig {
   if (maxTokens !== "" && !Number.isNaN(Number(maxTokens))) {
     payload.max_output_tokens = Number(maxTokens);
   }
-  const contextWindow = form.value.context_window_tokens.trim();
-  if (contextWindow !== "" && !Number.isNaN(Number(contextWindow))) {
-    payload.context_window_tokens = Number(contextWindow);
-  }
-  const maxContext = form.value.max_context_tokens.trim();
-  if (maxContext !== "" && !Number.isNaN(Number(maxContext))) {
-    payload.max_context_tokens = Number(maxContext);
-  }
+  // 这两个字段必须每次都提交：留空表示「改回按模型自动推断」，省略掉的话后端
+  // 会当成「这个客户端没提交」而保留旧值，于是填过的数字永远删不掉。
+  payload.context_window_tokens = optionalTokenInput(form.value.context_window_tokens);
+  payload.max_context_tokens = optionalTokenInput(form.value.max_context_tokens);
   return payload;
 }
 

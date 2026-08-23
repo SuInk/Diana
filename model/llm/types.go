@@ -467,31 +467,23 @@ func (cfg ProviderConfig) WithDefaults() ProviderConfig {
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = DefaultUserAgent(cfg.Provider)
 	}
-	if cfg.ContextWindowTokens == 0 {
-		// 目录没给窗口时先按模型名推断，推断不出再用兜底值。
-		cfg.ContextWindowTokens = KnownContextWindowTokens(cfg.Model)
-		if cfg.ContextWindowTokens <= 0 {
-			cfg.ContextWindowTokens = DefaultContextWindowTokens
-		}
-	}
-	if cfg.MaxContextTokens == 0 {
-		// MaxContextTokens 表示「这次请求最多用掉多少上下文」，未设置时就该等于模型
-		// 自己的窗口。以前它回落到 DefaultMaxContextTokens，而那个常量本来只是窗口
-		// 未知时的兜底值：结果换上 128K/200K 的模型后预算仍被钉在 16K，而且整条
-		// 预算链（近期历史 55%、记忆 10% 等）都是按它算的。
-		cfg.MaxContextTokens = cfg.ContextWindowTokens
-		if cfg.MaxContextTokens <= 0 {
-			cfg.MaxContextTokens = DefaultMaxContextTokens
-		}
-	}
+	// ContextWindowTokens 和 MaxContextTokens 一律保持原样，0 就是 0。
+	//
+	// 以前这里会把推断结果写进字段，于是「推断值」和「用户设的值」在结构体里长得
+	// 一模一样：配置一落库就把某一刻的猜测固定成了设置，换模型不跟着变，界面回显
+	// 出来还像是用户自己填的（「模型默认填了 400k」就是这么来的）。窗口是模型的
+	// 属性，不是这套配置的属性——改由 ContextWindowTokensWithDefault 在读取时
+	// 按当前模型现算。
 	return cfg
 }
 
 // MaxContextTokensWithDefault 返回不超过模型窗口的请求总 token 预算。
+// 用户没单独设上限时就是整个窗口；设了也不能超过窗口。
 func (cfg ProviderConfig) MaxContextTokensWithDefault() int64 {
 	cfg = cfg.WithDefaults()
-	if cfg.ContextWindowTokens > 0 && cfg.MaxContextTokens > cfg.ContextWindowTokens {
-		return cfg.ContextWindowTokens
+	window := cfg.ContextWindowTokensWithDefault()
+	if cfg.MaxContextTokens <= 0 || cfg.MaxContextTokens > window {
+		return window
 	}
 	return cfg.MaxContextTokens
 }

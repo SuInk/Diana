@@ -39,11 +39,11 @@ func (cfg ProviderConfig) WithoutRedundantContextLimits() ProviderConfig {
 	probe := cfg
 	probe.ContextWindowTokens = 0
 	probe.MaxContextTokens = 0
-	derived := probe.WithDefaults()
-	if cfg.ContextWindowTokens == derived.ContextWindowTokens {
+	window := probe.ContextWindowTokensWithDefault()
+	if cfg.ContextWindowTokens == window {
 		cfg.ContextWindowTokens = 0
 	}
-	if cfg.MaxContextTokens == derived.MaxContextTokens {
+	if cfg.MaxContextTokens == window {
 		cfg.MaxContextTokens = 0
 	}
 	return cfg

@@ -725,3 +725,82 @@ func testRouter(handler *LLMConfigHandler) *gin.Engine {
 	handler.Register(router)
 	return router
 }
+
+// 「模型默认填了 400k」的由来：WithDefaults 把推断出来的窗口写进配置对象，回显
+// 时就长得像用户自己填的；用户随手一保存，这个猜测就变成了真正的设置。
+// 回显必须只报用户填过的值，推断结果单独放在只读字段里。
+func TestLLMPayloadReportsOverridesSeparatelyFromEffectiveWindow(t *testing.T) {
+	payload := payloadFromConfig(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible,
+		APIKey:   "sk-test",
+		Model:    "claude-sonnet-4-5",
+	})
+	if payload.ContextWindowTokens != nil || payload.MaxContextTokens != nil {
+		t.Fatalf("推断值被当成用户设置回显了: %v/%v", payload.ContextWindowTokens, payload.MaxContextTokens)
+	}
+	if payload.EffectiveContextWindowTokens != 200000 || payload.EffectiveMaxContextTokens != 200000 {
+		t.Fatalf("effective = %d/%d", payload.EffectiveContextWindowTokens, payload.EffectiveMaxContextTokens)
+	}
+	if payload.ContextWindowSource != llm.ContextWindowSourceInferred {
+		t.Fatalf("source = %q", payload.ContextWindowSource)
+	}
+
+	// 模型清单里有这个模型时按清单走，而且换模型会跟着变——窗口是模型的属性。
+	withList := llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible,
+		APIKey:   "sk-test",
+		Model:    "house-model",
+		Models: []llm.ModelInfo{
+			{ID: "house-model", ContextWindowTokens: 65536},
+			{ID: "house-model-mini", ContextWindowTokens: 8192},
+		},
+	}
+	listed := payloadFromConfig(withList)
+	if listed.EffectiveContextWindowTokens != 65536 || listed.ContextWindowSource != llm.ContextWindowSourceModelList {
+		t.Fatalf("model list window = %d source %q", listed.EffectiveContextWindowTokens, listed.ContextWindowSource)
+	}
+	withList.Model = "house-model-mini"
+	if switched := payloadFromConfig(withList); switched.EffectiveContextWindowTokens != 8192 {
+		t.Fatalf("换模型后窗口没跟着变: %d", switched.EffectiveContextWindowTokens)
+	}
+
+	// 用户填过的值原样回显，并标明来源是用户。
+	explicit := payloadFromConfig(llm.ProviderConfig{
+		Provider:            llm.ProviderOpenAICompatible,
+		APIKey:              "sk-test",
+		Model:               "claude-sonnet-4-5",
+		ContextWindowTokens: 32768,
+	})
+	if explicit.ContextWindowTokens == nil || *explicit.ContextWindowTokens != 32768 {
+		t.Fatalf("override = %v", explicit.ContextWindowTokens)
+	}
+	if explicit.ContextWindowSource != llm.ContextWindowSourceUser {
+		t.Fatalf("source = %q", explicit.ContextWindowSource)
+	}
+}
+
+// 清空输入框要能真的清掉。以前 payload 是 int64，「清空」和「没提交这个字段」都
+// 是 0，于是填过的窗口再也删不掉。
+func TestLLMPayloadDistinguishesClearedFromUnsubmitted(t *testing.T) {
+	existing := llm.ProviderConfig{
+		Provider:            llm.ProviderOpenAICompatible,
+		APIKey:              "sk-test",
+		Model:               "claude-sonnet-4-5",
+		ContextWindowTokens: 32768,
+		MaxContextTokens:    16384,
+	}
+	cleared := llmConfigPayload{Provider: llm.ProviderOpenAICompatible, Model: "claude-sonnet-4-5"}
+	zero := int64(0)
+	cleared.ContextWindowTokens = &zero
+	cleared.MaxContextTokens = &zero
+	merged := mergeUnsubmittedLLMConfig(cleared, configFromPayload(cleared), existing)
+	if merged.ContextWindowTokens != 0 || merged.MaxContextTokens != 0 {
+		t.Fatalf("清空没生效: %d/%d", merged.ContextWindowTokens, merged.MaxContextTokens)
+	}
+
+	untouched := llmConfigPayload{Provider: llm.ProviderOpenAICompatible, Model: "claude-sonnet-4-5"}
+	kept := mergeUnsubmittedLLMConfig(untouched, configFromPayload(untouched), existing)
+	if kept.ContextWindowTokens != 32768 || kept.MaxContextTokens != 16384 {
+		t.Fatalf("没提交的字段应当保留旧值: %d/%d", kept.ContextWindowTokens, kept.MaxContextTokens)
+	}
+}
