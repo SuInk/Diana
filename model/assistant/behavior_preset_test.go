@@ -318,7 +318,7 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 		}
 	}
 	prompt := ReplyStyleCatgirl.prompt()
-	for _, want := range []string{"本喵", "星号写法", "只对主人称", "可爱只体现在语气上"} {
+	for _, want := range []string{"本喵", "动作描写", "只对主人称", "可爱只体现在语气上"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)
 		}
@@ -344,6 +344,14 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 		if strings.HasPrefix(line, "你：") && strings.Contains(line, "。") {
 			t.Fatalf("catgirl example still ends sentences with a full stop: %q", line)
 		}
+	}
+	// 「（」在这里是语气词，不是括号：不写内容、也不配对闭合。不说死的话，模型
+	// 要么把它当成漏字补全，要么往里填动作描写。
+	if !strings.Contains(prompt, "括号里不写任何内容") || !strings.Contains(prompt, "不要补上「）」") {
+		t.Fatalf("catgirl prompt does not pin the bare paren usage: %q", prompt)
+	}
+	if !strings.Contains(prompt, "你：……好像是喵（") {
+		t.Fatalf("catgirl prompt has no worked example of the bare paren: %q", prompt)
 	}
 	// 表达风格换人不代表输出规范换人：emoji、空行、篇幅三条对所有风格生效。
 	for _, want := range []string{replyEmojiRule, replyBlankLineRule, replyProportionRule} {
