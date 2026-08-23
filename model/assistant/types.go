@@ -202,13 +202,16 @@ type Reminder struct {
 	LastStarCount           int          `json:"last_star_count,omitempty"`
 	LastStarEventID         string       `json:"last_star_event_id,omitempty"`
 	LastStarEventAt         time.Time    `json:"last_star_event_at,omitempty"`
-	FeedURL                 string       `json:"feed_url,omitempty"`
-	FeedSource              string       `json:"feed_source,omitempty"`
-	FeedHandle              string       `json:"feed_handle,omitempty"`
-	FeedJudgePrompt         string       `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID          string       `json:"last_feed_item_id,omitempty"`
-	LastFeedPublishedAt     time.Time    `json:"last_feed_published_at,omitempty"`
-	CreatedAt               time.Time    `json:"created_at"`
+	// WatchAnchorsJSON 记录每个投递目标里各 PR/Issue 首次宣布消息的 ID,
+	// 后续同一编号的更新推送引用它,把动态串成一条线。
+	WatchAnchorsJSON    string    `json:"watch_anchors,omitempty"`
+	FeedURL             string    `json:"feed_url,omitempty"`
+	FeedSource          string    `json:"feed_source,omitempty"`
+	FeedHandle          string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt time.Time `json:"last_feed_published_at,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // ReminderDeliveryTarget is an additional destination for recurring watch
@@ -336,18 +339,12 @@ type BotConfig struct {
 	LegacyPassiveReplyPrompt     *string              `json:"passive_reply_prompt,omitempty"`
 	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int                  `json:"max_reply_chars,omitempty"`
-	// FollowUpMaxChars 是跟评的长度上限，留空跟随 MaxReplyChars。
-	// 这个上限以前硬编码在代码里，改不了也和 MaxReplyChars 脱节。
-	FollowUpMaxChars int `json:"follow_up_max_chars,omitempty"`
-	// FollowUpQuietDefault 决定跟评的默认取向：true 时没有明确理由就不接话，
-	// false 时只要和会话对得上就说一句。默认 true，保持既有的克制风格。
-	FollowUpQuietDefault         *bool           `json:"follow_up_quiet_default,omitempty"`
-	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
+	DirectReplyChunkSize         int                  `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int                  `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
 	// LegacyLLMQQIDMaskingEnabled 是这项设置改名前的键。名字带 QQ，可同一套脱敏还
 	// 服务 Telegram。只保留读取：已经显式关掉脱敏的配置升级后必须仍然是关的，静默
 	// 变回开启是隐私回退。写出时一律用新键。
@@ -554,18 +551,12 @@ type ConfigPayload struct {
 	LegacyPassiveReplyPrompt     *string              `json:"passive_reply_prompt,omitempty"`
 	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int                  `json:"max_reply_chars,omitempty"`
-	// FollowUpMaxChars 是跟评的长度上限，留空跟随 MaxReplyChars。
-	// 这个上限以前硬编码在代码里，改不了也和 MaxReplyChars 脱节。
-	FollowUpMaxChars int `json:"follow_up_max_chars,omitempty"`
-	// FollowUpQuietDefault 决定跟评的默认取向：true 时没有明确理由就不接话，
-	// false 时只要和会话对得上就说一句。默认 true，保持既有的克制风格。
-	FollowUpQuietDefault         *bool           `json:"follow_up_quiet_default,omitempty"`
-	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
+	DirectReplyChunkSize         int                  `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int                  `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
 	// LegacyLLMQQIDMaskingEnabled 是这项设置改名前的键。名字带 QQ，可同一套脱敏还
 	// 服务 Telegram。只保留读取：已经显式关掉脱敏的配置升级后必须仍然是关的，静默
 	// 变回开启是隐私回退。写出时一律用新键。
@@ -1021,7 +1012,6 @@ func DefaultBotConfig() BotConfig {
 		NaturalInterjectionEnabled:   boolPointer(false),
 		MaxInputChars:                2000,
 		MaxReplyChars:                3500,
-		FollowUpQuietDefault:         boolPointer(true),
 		DirectReplyChunkSize:         900,
 		ForwardReplyThreshold:        900,
 		RecallReplyMode:              RecallReplyModeLLMSummary,
@@ -1114,6 +1104,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
 	cfg.PromptChineseSlangText = migratedPromptChineseSlangText(cfg.PromptChineseSlangText)
+	cfg.PromptPlaintextRulesText = migratedPromptPlaintextRulesText(cfg.PromptPlaintextRulesText)
 	if strings.TrimSpace(cfg.PromptPlaintextRulesText) == "" {
 		cfg.PromptPlaintextRulesText = defaults.PromptPlaintextRulesText
 	}
@@ -1179,9 +1170,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.MaxReplyChars <= 0 {
 		cfg.MaxReplyChars = defaults.MaxReplyChars
-	}
-	if cfg.FollowUpQuietDefault == nil {
-		cfg.FollowUpQuietDefault = copyBoolPointer(defaults.FollowUpQuietDefault)
 	}
 	if cfg.DirectReplyChunkSize <= 0 {
 		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
@@ -1383,8 +1371,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ProactiveReplyPrompt:         cfg.ProactiveReplyPrompt,
 		MaxInputChars:                cfg.MaxInputChars,
 		MaxReplyChars:                cfg.MaxReplyChars,
-		FollowUpMaxChars:             cfg.FollowUpMaxChars,
-		FollowUpQuietDefault:         copyBoolPointer(cfg.FollowUpQuietDefault),
 		DirectReplyChunkSize:         cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:        cfg.ForwardReplyThreshold,
 		RecallReplyMode:              cfg.RecallReplyMode,
@@ -1508,8 +1494,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ProactiveReplyPrompt:         payload.ProactiveReplyPrompt,
 		MaxInputChars:                payload.MaxInputChars,
 		MaxReplyChars:                payload.MaxReplyChars,
-		FollowUpMaxChars:             payload.FollowUpMaxChars,
-		FollowUpQuietDefault:         copyBoolPointer(payload.FollowUpQuietDefault),
 		DirectReplyChunkSize:         payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:        payload.ForwardReplyThreshold,
 		RecallReplyMode:              payload.RecallReplyMode,
@@ -1649,9 +1633,15 @@ const defaultSystemPrompt = "你是 Diana，运行在群聊里的机器人。像
 const legacyDefaultSystemPromptFormatRules = "默认按纯文本回复，不使用 Markdown。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <botbr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <botbr>。管理员可通过 WebUI 或 DIANA_SYSTEM_PROMPT 配置额外的人格与群规。"
 
 const (
-	legacyDefaultPromptChineseSlang  = "中文聊天里常有谐音梗、音近字、故意错别字、拼音缩写和圈内称呼；回复前先按上下文理解用户真正想表达的梗，能接梗就自然接，不要把梗当错字生硬纠正，也不要过度解释。"
-	defaultPromptChineseSlang        = legacyDefaultPromptChineseSlang + "在闲聊、叙事、氛围描写和开放式表达中，可以遵循当前人设与用户要求，使用贴合语境的比喻、拟人、意象、节奏感和角色口吻，写出有画面感、有辨识度的句子；风格化表达必须带来新的观察、情绪、观点或笑点，不要只堆形容词、套用网感模板或为了文艺牺牲准确。事实、技术和操作说明仍以清楚准确为先。"
-	defaultPromptPlaintextRules      = "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 " + notificationSplitMarker + "。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 " + notificationSplitMarker + "。"
+	legacyDefaultPromptChineseSlang = "中文聊天里常有谐音梗、音近字、故意错别字、拼音缩写和圈内称呼；回复前先按上下文理解用户真正想表达的梗，能接梗就自然接，不要把梗当错字生硬纠正，也不要过度解释。"
+	defaultPromptChineseSlang       = legacyDefaultPromptChineseSlang + "在闲聊、叙事、氛围描写和开放式表达中，可以遵循当前人设与用户要求，使用贴合语境的比喻、拟人、意象、节奏感和角色口吻，写出有画面感、有辨识度的句子；风格化表达必须带来新的观察、情绪、观点或笑点，不要只堆形容词、套用网感模板或为了文艺牺牲准确。事实、技术和操作说明仍以清楚准确为先。"
+	// legacyPromptPlaintextRules 是旧版排版规则:它要求「围绕同一问题的连续
+	// 论述必须放在同一条消息里」,叠加空行折叠后,长回答必然糊成一整个气泡,
+	// 线上反馈就是「格式乱」。老配置里存的这段文案按完全匹配升级到新版。
+	legacyPromptPlaintextRules = "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 " + notificationSplitMarker + "。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 " + notificationSplitMarker + "。"
+	// defaultPromptPlaintextRules:长回答按意群分条,像真人连发几条;一个列表
+	// 或一组步骤仍是整体,不许逐项拆散。
+	defaultPromptPlaintextRules      = "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。回复较长、包含多个意群时（例如先给结论、再讲理由、最后补提醒），在意群边界写 " + notificationSplitMarker + " 拆成两三条消息，像真人连发几条那样，不要把好几段内容挤进同一条消息。一个编号或项目符号列表、一组步骤是一个整体，放在同一条消息里，严禁在每个列表项前使用 " + notificationSplitMarker + "。"
 	defaultPromptTimeTemplate        = "当前时间：{datetime} {weekday}"
 	defaultPromptGroupSenderTemplate = "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。"
 	defaultPromptImageOnly           = "请分析这张图片，并直接回答用户关于图片的问题。"
@@ -1673,6 +1663,17 @@ func migratedSystemPrompt(prompt string) string {
 		return defaultSystemPrompt
 	}
 	return stripped
+}
+
+// migratedPromptPlaintextRulesText 把老配置里存的旧版排版规则升级到新版:
+// 只认完全匹配(含 botbr 时代的旧标记写法),用户自己改过的文案一个字不动。
+func migratedPromptPlaintextRulesText(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	legacyWithOldMarker := strings.ReplaceAll(legacyPromptPlaintextRules, notificationSplitMarker, legacyNotificationSplitMarker)
+	if trimmed == legacyPromptPlaintextRules || trimmed == legacyWithOldMarker {
+		return defaultPromptPlaintextRules
+	}
+	return prompt
 }
 
 func migratedPromptChineseSlangText(prompt string) string {

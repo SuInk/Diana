@@ -5,7 +5,7 @@ module github.com/SuInk/diana
 
 go 1.25.0
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.51.1

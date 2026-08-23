@@ -165,10 +165,6 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
-  /** 跟评长度上限；留空跟随 max_reply_chars，填了也不会超过它。 */
-  follow_up_max_chars?: number;
-  /** 跟评的默认取向：开启时没有明确理由就不接话。 */
-  follow_up_quiet_default?: boolean;
   direct_reply_chunk_size?: number;
   forward_reply_threshold?: number;
   recall_reply_auto_delete_enabled?: boolean;
@@ -333,10 +329,6 @@ export interface BotGroupConfig {
   recent_history_token_budget?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
-  /** 跟评长度上限；留空跟随 max_reply_chars，填了也不会超过它。 */
-  follow_up_max_chars?: number;
-  /** 跟评的默认取向：开启时没有明确理由就不接话。 */
-  follow_up_quiet_default?: boolean;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
   /** 本群是否开启自然插话模式。 */
@@ -1081,6 +1073,7 @@ export interface SystemVersion {
   git_available: boolean;
   deployment_mode: "git" | "release";
   update_supported: boolean;
+  update_unsupported_reason?: string;
   head_commit?: string;
   head_subject?: string;
   branch?: string;
@@ -1161,6 +1154,8 @@ export interface UpdateCheckResponse {
   checked_at: string;
   update_available: boolean;
   update_supported: boolean;
+  /** update_supported 为 false 时说明为什么升不了级。 */
+  update_unsupported_reason?: string;
   build_type: BuildType;
   switch_to_release_available: boolean;
   integrity_mode: "git-object-hash" | "sha256";
