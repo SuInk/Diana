@@ -59,7 +59,7 @@ func TestDashboardStatsForDayTotalsCurrentAndLegacyLLMUsage(t *testing.T) {
 
 	now := time.Date(2026, time.July, 19, 15, 30, 0, 0, time.Local)
 	for _, entry := range []AppLogEntry{
-		{Action: "chatbot.llm_usage", CreatedAt: now.Add(-time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 80, "output_tokens": 20}},
+		{Action: "chatbot.llm_usage", CreatedAt: now.Add(-time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 80, "output_tokens": 20, "cached_input_tokens": 60}},
 		{Action: "assistant.llm_usage", CreatedAt: now.Add(-2 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 30, "output_tokens": 10, "total_tokens": 45}},
 		{Action: "chatbot.llm_usage", CreatedAt: now.Add(-24 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 1000, "output_tokens": 1000}},
 	} {
@@ -74,6 +74,10 @@ func TestDashboardStatsForDayTotalsCurrentAndLegacyLLMUsage(t *testing.T) {
 	}
 	if stats.LLMCalls != 2 || stats.LLMInputTokens != 110 || stats.LLMOutputTokens != 30 || stats.LLMTotalTokens != 145 {
 		t.Fatalf("LLM totals = calls:%d input:%d output:%d total:%d, want 2/110/30/145", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens, stats.LLMTotalTokens)
+	}
+	// 命中的部分算在输入里，不是额外的量：命中率的分母是输入 token。
+	if stats.LLMCachedInputTokens != 60 {
+		t.Fatalf("cached input tokens = %d, want 60", stats.LLMCachedInputTokens)
 	}
 }
 

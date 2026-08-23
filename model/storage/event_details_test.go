@@ -60,7 +60,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 			Action:    "chatbot.llm_usage",
 			Target:    "replied",
 			CreatedAt: now.Add(-20 * time.Minute),
-			Metadata:  map[string]any{"input_tokens": 100, "output_tokens": 40, "total_tokens": 0},
+			Metadata:  map[string]any{"input_tokens": 100, "output_tokens": 40, "total_tokens": 0, "cached_input_tokens": 75},
 		},
 		{
 			Action:    "assistant.llm_usage",
@@ -92,6 +92,10 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 	}
 	if page.Events[0].SenderName != "测试成员" || page.Events[0].DurationMS != 1500 {
 		t.Fatalf("replied detail = %#v", page.Events[0])
+	}
+	// 缓存命中量要同时出现在单条事件和页面汇总上：界面按「命中 / 输入」算命中率。
+	if page.Events[0].CachedInputTokens != 75 || page.CachedInputTokens != 75 {
+		t.Fatalf("cached input tokens = event %d / page %d, want 75/75", page.Events[0].CachedInputTokens, page.CachedInputTokens)
 	}
 	if page.LLMCalls != 2 || page.InputTokens != 120 || page.OutputTokens != 50 || page.TotalTokens != 175 {
 		t.Fatalf("token totals = calls:%d input:%d output:%d total:%d, want 2/120/50/175", page.LLMCalls, page.InputTokens, page.OutputTokens, page.TotalTokens)
