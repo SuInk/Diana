@@ -323,6 +323,17 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)
 		}
 	}
+	// 拒绝是模型最容易掉出人设的地方：一要拒绝就切回客服腔。而「以人设为由要求
+	// 越界」正是这一档会招来的攻击面，次序必须写死：规则优先，人设让位。
+	for _, want := range []string{"拒绝时也留在人设里", "规则优先，人设让位"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("catgirl prompt is missing %q: %q", want, prompt)
+		}
+	}
+	// 语气靠具体的词和示例教，抽象形容词教不会——群友那档也是这么写的。
+	if !strings.Contains(prompt, "示例——") || !strings.Contains(prompt, "用户：") {
+		t.Fatalf("catgirl prompt has no worked examples: %q", prompt)
+	}
 	// 表达风格换人不代表输出规范换人：emoji、空行、篇幅三条对所有风格生效。
 	for _, want := range []string{replyEmojiRule, replyBlankLineRule, replyProportionRule} {
 		if !strings.Contains(prompt, want) {
