@@ -177,6 +177,7 @@ func (r *Runtime) processMemoryJob(ctx context.Context, store StructuredMemorySt
 }
 
 func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMemoryStore, payload MemoryJobPayload) error {
+	ctx = withLLMUsagePurpose(ctx, "memory_extract")
 	event := payload.Event
 	text := memoryEventText(event)
 	if !memoryEventEligible(r.effectiveConfigForEvent(event), event, text) {
@@ -276,6 +277,7 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 }
 
 func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredMemoryStore, job MemoryJob) error {
+	ctx = withLLMUsagePurpose(ctx, "memory_summary")
 	events := job.Payload.Events
 	if len(events) == 0 {
 		return nil

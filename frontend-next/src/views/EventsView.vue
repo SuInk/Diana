@@ -109,6 +109,7 @@
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
                 <span v-if="event.group_id" class="mono muted">群 {{ event.group_id }}</span>
                 <span v-if="displayChatIdentity(event.sender_name, event.user_id)" class="muted">{{ displayChatIdentity(event.sender_name, event.user_id) }}</span>
+                <span v-if="senderLevelLabel(event)" class="badge" :title="senderLevelTitle(event)">{{ senderLevelLabel(event) }}</span>
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
               </div>
 
@@ -542,6 +543,27 @@ function selectResult(value: AssistantEventResultFilter): void {
 function eventKindLabel(kind: string): string {
   const labels: Record<string, string> = { private: "私聊", group: "群聊", notice: "通知", meta: "元事件" };
   return labels[kind] ?? kind;
+}
+
+const senderRoleLabels: Record<string, string> = { owner: "群主", admin: "管理员", member: "成员" };
+
+// 群等级：优先显示平台给的等级名（「冒泡」「潜水」这类），没有就显示数字等级。
+// 回复门槛按等级卡人，排查「这条为什么没回」时要能直接看到当时的等级。
+function senderLevelLabel(event: AssistantEventDetail): string {
+  const label = event.sender_level_label?.trim();
+  if (label) return `Lv.${label}`;
+  if (typeof event.sender_level === "number" && event.sender_level > 0) return `Lv.${event.sender_level}`;
+  return "";
+}
+
+function senderLevelTitle(event: AssistantEventDetail): string {
+  const parts: string[] = [];
+  if (typeof event.sender_level === "number" && event.sender_level > 0) parts.push(`群等级 ${event.sender_level}`);
+  const label = event.sender_level_label?.trim();
+  if (label) parts.push(label);
+  const role = event.sender_role?.trim();
+  if (role) parts.push(senderRoleLabels[role] ?? role);
+  return parts.join(" · ");
 }
 
 function decisionLabel(event: AssistantEventDetail): string {

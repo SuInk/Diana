@@ -335,6 +335,7 @@ func (r *Runtime) RunPluginTask(ctx context.Context, task PluginTask) (PluginTas
 }
 
 func (r *Runtime) generateForPluginTask(ctx context.Context, req llm.GenerateRequest) (string, error) {
+	ctx = withLLMUsagePurpose(ctx, "subagent")
 	sem := r.subagentLLMSem
 	select {
 	case sem <- struct{}{}:

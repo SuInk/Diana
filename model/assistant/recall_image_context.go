@@ -650,13 +650,12 @@ func (r *Runtime) describeRecallImage(ctx context.Context, event MessageEvent, s
 			},
 		},
 	}
-	callCtx := r.withIdentityPrivacyContext(ctx, event, nil)
+	callCtx := withLLMUsagePurpose(withLLMUsageContext(r.withIdentityPrivacyContext(ctx, event, nil), event), "image_description_cache")
 	return r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
 		response, err := client.Generate(callCtx, request)
 		if err != nil {
 			return "", err
 		}
-		r.recordLLMUsage(callCtx, event, response.Provider, response.Model, response.Usage, "image_description_cache")
 		description := compactRecallImageDescription(response.Text)
 		if description == "" {
 			return "", fmt.Errorf("vision model returned an empty description")

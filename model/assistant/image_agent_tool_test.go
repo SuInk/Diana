@@ -198,7 +198,6 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		OwnerID:       "owner",
 		AgentEnabled:  true,
-		AgentWorkDir:  t.TempDir(),
 		AgentMaxSteps: 4,
 	}, channel, plugins, store, nil, nil, func() (LLMProvider, error) {
 		return provider, nil

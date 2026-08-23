@@ -83,7 +83,7 @@ func TestRuntimeAgentCanQueryAllPersonalTasks(t *testing.T) {
 		`{"action":"final","content":"你有一个喝水提醒和一个查询公告的周期订阅。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		OwnerID: "owner", AgentEnabled: true, AgentWorkDir: t.TempDir(), AgentMaxSteps: 3,
+		OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3,
 	}, &recordingChannel{}, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

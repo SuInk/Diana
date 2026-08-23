@@ -76,7 +76,7 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 		`{"action":"tool","tool":"diana.capabilities","input":{"query":"你能解析视频吗","limit":3}}`,
 		`{"action":"final","content":"可以，我能读取视频并抽取多帧理解内容。"}`,
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentWorkDir: t.TempDir(), AgentMaxSteps: 3}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "capability", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "你能解析视频吗"}}}}

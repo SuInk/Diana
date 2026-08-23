@@ -287,7 +287,6 @@ func TestRuntimeAgentCanQueryHistoryAroundCurrentQuote(t *testing.T) {
 		RecentContextLimit:      3,
 		ContextSummaryThreshold: 3,
 		AgentEnabled:            true,
-		AgentWorkDir:            t.TempDir(),
 		AgentMaxSteps:           3,
 	}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
