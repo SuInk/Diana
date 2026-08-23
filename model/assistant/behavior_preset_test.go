@@ -334,6 +334,17 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 	if !strings.Contains(prompt, "示例——") || !strings.Contains(prompt, "用户：") {
 		t.Fatalf("catgirl prompt has no worked examples: %q", prompt)
 	}
+	// 「每句加喵」和「句末不打句号」必须一起说：只说前者，模型会写成「……了喵。」，
+	// 句号跟在后面，读起来还是助理腔。示例里也一个句号都不能有，否则规则和样例
+	// 自相矛盾，模型跟样例走。
+	if !strings.Contains(prompt, "每句话结尾都加「喵」") || !strings.Contains(prompt, "句末不要「。」") {
+		t.Fatalf("catgirl prompt does not pin the sentence ending: %q", prompt)
+	}
+	for _, line := range strings.Split(prompt, "\n") {
+		if strings.HasPrefix(line, "你：") && strings.Contains(line, "。") {
+			t.Fatalf("catgirl example still ends sentences with a full stop: %q", line)
+		}
+	}
 	// 表达风格换人不代表输出规范换人：emoji、空行、篇幅三条对所有风格生效。
 	for _, want := range []string{replyEmojiRule, replyBlankLineRule, replyProportionRule} {
 		if !strings.Contains(prompt, want) {
