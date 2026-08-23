@@ -91,8 +91,16 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 ```
 
 监听非回环地址时，记得在防火墙和云厂商安全组里放行端口，并尽量套一层带 TLS 的反向
-代理，不要把控制台直接暴露到公网。已经装过的实例带上新的 `DIANA_HOST` 重跑安装脚本
-即可改绑定，也可以直接改 `runtime.env` 里的 `HOST` 后重启。
+代理，不要把控制台直接暴露到公网。
+
+已经装过的实例带上新的 `DIANA_HOST` 重跑安装脚本即可改绑定——脚本会顺带重启服务，
+改完立即生效（`DIANA_START_AFTER_INSTALL=false` 时不重启，需要自己启动）。也可以直接
+改 `runtime.env` 里的 `HOST`，但这样必须手动重启才会生效：
+
+```sh
+systemctl --user restart diana.service   # Linux
+launchctl kickstart -k "gui/$(id -u)/com.suink.diana"   # macOS
+```
 
 常用配置可以在安装时一并写入，省得装完再进 WebUI 填一遍：`LLM_API_KEY`、
 `LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_FORMAT`、`LLM_IMAGE_MODEL`、

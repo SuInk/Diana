@@ -91,8 +91,18 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 
 When listening on a non-loopback address, allow the port in the firewall and your
 cloud security group, and prefer a reverse proxy with TLS over exposing the console
-directly. To change the binding of an existing install, re-run the script with the
-new `DIANA_HOST`, or edit `HOST` in `runtime.env` and restart.
+directly.
+
+To change the binding of an existing install, re-run the script with the new
+`DIANA_HOST` — it restarts the service for you, so the change takes effect
+immediately (with `DIANA_START_AFTER_INSTALL=false` nothing is restarted and you
+start it yourself). Editing `HOST` in `runtime.env` directly also works, but then the
+restart is on you:
+
+```sh
+systemctl --user restart diana.service   # Linux
+launchctl kickstart -k "gui/$(id -u)/com.suink.diana"   # macOS
+```
 
 Common settings can be written at install time instead of filling them in through the
 WebUI afterwards: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_FORMAT`,

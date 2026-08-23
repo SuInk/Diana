@@ -167,7 +167,13 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
             $rebound = @(Get-Content $runtimeEnv | Where-Object { $_ -notmatch '^HOST=' })
             $rebound = @("HOST=$bindHost") + $rebound
             Set-Content -Path $runtimeEnv -Value $rebound -Encoding UTF8
-            Write-Host "==> Configuration -> bind address set to $bindHost"
+            # 绑定地址是进程启动时读的:默认路径后面会重启服务;不启动时要说清楚
+            # 还没生效,否则改完连不上会以为是配置没写进去。
+            if ($startAfterInstall) {
+                Write-Host "==> Configuration -> bind address set to $bindHost"
+            } else {
+                Write-Host "==> Configuration -> bind address set to $bindHost (restart Diana to apply)"
+            }
         }
         $optionalLines = Get-DianaOptionalEnvLines
         if ($optionalLines) { Add-Content -Path $runtimeEnv -Value $optionalLines -Encoding UTF8 }
@@ -261,6 +267,7 @@ DIANA_ADMIN_PASSWORD=$generatedPassword
         }
     } else {
         Write-Host "==> Installation completed without starting Diana"
+        Write-Host "Note:      configuration changes apply the next time Diana starts."
     }
 
     Write-Host "Installed: $installDir"

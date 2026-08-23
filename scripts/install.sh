@@ -291,7 +291,14 @@ else
   # 用户只能自己去翻 runtime.env。端口同理。
   if [ "$host_explicit" = "true" ]; then
     set_env_value "$install_dir/runtime.env" HOST "$host"
-    info "Configuration → bind address set to $host"
+    # 绑定地址是进程启动时读的:默认路径后面会重启服务,改动立刻生效;
+    # 但 DIANA_START_AFTER_INSTALL=false 时不重启,得说清楚还没生效,
+    # 否则改完发现连不上会以为是配置没写进去。
+    if [ "$start_after_install" = "true" ]; then
+      info "Configuration → bind address set to $host"
+    else
+      info "Configuration → bind address set to $host (restart Diana to apply)"
+    fi
   fi
   if [ -n "${DIANA_PORT:-}" ]; then
     set_env_value "$install_dir/runtime.env" PORT "$port"
@@ -562,6 +569,7 @@ if [ "$start_after_install" = "true" ]; then
   esac
 else
   info "Installation completed without starting Diana"
+  printf 'Note:      configuration changes apply the next time Diana starts.\n'
 fi
 
 printf 'Installed: %s\n' "$install_dir"
