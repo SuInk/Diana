@@ -3247,7 +3247,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	source.replyHistoryLoaded = false
 	source.replyHistory = nil
 
-	comment := r.followUpComment(ctx, followUpKindPlugin, source, directPluginReply(resp))
+	comment := r.followUpComment(ctx, followUpKindPlugin, source, directPluginReply(resp), resp)
 	if comment == "" {
 		return
 	}
