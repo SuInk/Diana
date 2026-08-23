@@ -5,6 +5,7 @@ package webui
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -14,8 +15,8 @@ import (
 type BotProfileStore interface {
 	Current() assistant.BotConfig
 	Profiles() assistant.ProfileSet
-	SaveProfiles(assistant.ProfileSet)
-	SaveCurrentConfig(assistant.BotConfig)
+	SaveProfiles(assistant.ProfileSet) error
+	SaveCurrentConfig(assistant.BotConfig) error
 }
 
 type MemoryBotProfileStore struct {
@@ -46,17 +47,19 @@ func (s *MemoryBotProfileStore) Profiles() assistant.ProfileSet {
 }
 
 // SaveProfiles 更新内存中的机器人配置集。
-func (s *MemoryBotProfileStore) SaveProfiles(set assistant.ProfileSet) {
+func (s *MemoryBotProfileStore) SaveProfiles(set assistant.ProfileSet) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = set.WithDefaults()
+	return nil
 }
 
 // SaveCurrentConfig 把运行时当前配置写回当前激活的机器人档案。
-func (s *MemoryBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) {
+func (s *MemoryBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = upsertCurrentBotProfileSet(s.data, cfg)
+	return nil
 }
 
 type PersistentBotProfileStore struct {
@@ -73,11 +76,6 @@ func NewPersistentBotProfileStore(ctx context.Context, store *storage.SQLiteStor
 		return nil, err
 	} else if ok && len(saved.Profiles) > 0 {
 		data = saved.WithDefaults()
-	} else if savedCfg, ok, err := store.LoadBotProfileConfig(ctx); err != nil {
-		return nil, err
-	} else if ok {
-		// 兼容旧版只有单个 qqbot_config 的数据库，首次启动时自动升级为配置集。
-		data = assistant.NewProfileSet(savedCfg)
 	}
 	return &PersistentBotProfileStore{
 		data:  data.WithDefaults(),
@@ -103,32 +101,35 @@ func (s *PersistentBotProfileStore) Profiles() assistant.ProfileSet {
 	return s.data.WithDefaults()
 }
 
-// SaveProfiles 保存机器人配置集并同步旧版 flat 配置。
-func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) {
+// SaveProfiles 保存机器人配置集。
+// 落库失败必须往上抛:以前这里把错误丢了,磁盘写不进去时接口照样回 200,
+// 前端提示「保存成功」,重启后配置又变回旧值,查起来完全没有线索。
+func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) error {
 	set = set.WithDefaults()
 	s.mu.Lock()
 	s.data = set
 	s.mu.Unlock()
-	if s.store != nil {
-		_ = s.store.SaveBotProfiles(s.ctx, set)
-		if profile, ok := set.Current(); ok {
-			_ = s.store.SaveBotProfileConfig(s.ctx, profile)
-		}
-	}
+	return s.persist(set)
 }
 
 // SaveCurrentConfig 把运行时当前配置回写到激活中的机器人配置档。
-func (s *PersistentBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) {
+func (s *PersistentBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) error {
 	s.mu.Lock()
 	s.data = upsertCurrentBotProfileSet(s.data, cfg)
 	set := s.data
 	s.mu.Unlock()
-	if s.store != nil {
-		_ = s.store.SaveBotProfiles(s.ctx, set)
-		if profile, ok := set.Current(); ok {
-			_ = s.store.SaveBotProfileConfig(s.ctx, profile)
-		}
+	return s.persist(set)
+}
+
+// persist 把配置集写进存储。
+func (s *PersistentBotProfileStore) persist(set assistant.ProfileSet) error {
+	if s.store == nil {
+		return nil
 	}
+	if err := s.store.SaveBotProfiles(s.ctx, set); err != nil {
+		return fmt.Errorf("persist chatbot profiles: %w", err)
+	}
+	return nil
 }
 
 // upsertCurrentBotProfileSet 用最新运行态覆盖当前激活的机器人配置档。

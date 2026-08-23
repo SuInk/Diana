@@ -78,6 +78,9 @@
         <StatCard label="Token 总量" :value="formatNumber(summary.total_tokens)" :foot="tokenBreakdown">
           <template #icon><Sigma :size="14" aria-hidden="true" /></template>
         </StatCard>
+        <StatCard label="缓存命中率" :value="cacheHitRateText" :foot="cacheHitFoot">
+          <template #icon><DatabaseZap :size="14" aria-hidden="true" /></template>
+        </StatCard>
       </div>
 
       <section class="card event-detail-card">
@@ -109,6 +112,7 @@
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
                 <span v-if="event.group_id" class="mono muted">群 {{ event.group_id }}</span>
                 <span v-if="displayChatIdentity(event.sender_name, event.user_id)" class="muted">{{ displayChatIdentity(event.sender_name, event.user_id) }}</span>
+                <span v-if="senderLevelLabel(event)" class="badge" :title="senderLevelTitle(event)">{{ senderLevelLabel(event) }}</span>
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
               </div>
 
@@ -194,7 +198,7 @@
                 <span>结果 {{ event.outcome || event.status }}</span>
                 <span v-if="event.outbound_message_id">出站 {{ event.outbound_message_id }}</span>
                 <span v-if="event.total_tokens">
-                  Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="event.cached_input_tokens"> / 缓存命中 {{ formatNumber(event.cached_input_tokens) }}</template>）
+                  Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="eventCacheHitText(event)"> / {{ eventCacheHitText(event) }}</template>）
                 </span>
               </div>
 
@@ -298,6 +302,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock3,
+  DatabaseZap,
   Filter,
   ImageOff,
   LoaderCircle,
@@ -383,7 +388,8 @@ const summary = computed(() => ({
   llm_calls: response.value?.llm_calls ?? 0,
   input_tokens: response.value?.input_tokens ?? 0,
   output_tokens: response.value?.output_tokens ?? 0,
-  total_tokens: response.value?.total_tokens ?? 0
+  total_tokens: response.value?.total_tokens ?? 0,
+  cached_input_tokens: response.value?.cached_input_tokens ?? 0
 }));
 const hasMore = computed(() => response.value?.has_more ?? false);
 const filteredTotal = computed(() => response.value?.filtered_total ?? summary.value.total);
@@ -402,6 +408,31 @@ const replyRate = computed(() => {
 const tokenBreakdown = computed(() =>
   `输入 ${formatNumber(summary.value.input_tokens)} / 输出 ${formatNumber(summary.value.output_tokens)} · ${formatNumber(summary.value.llm_calls)} 次调用`
 );
+
+// 命中的部分本来就算在输入 token 里，不是额外的量，所以分母是输入而不是总量。
+// 供应商按缓存命中打折计价，这个比例直接对应省下来的钱。
+function cacheHitRate(cached: number, input: number): number | null {
+  if (input <= 0) return null;
+  return Math.min(1, cached / input);
+}
+
+const cacheHitRateText = computed(() => {
+  const rate = cacheHitRate(summary.value.cached_input_tokens, summary.value.input_tokens);
+  if (rate === null) return "—";
+  return `${Math.round(rate * 100)}%`;
+});
+
+const cacheHitFoot = computed(() => {
+  if (summary.value.input_tokens <= 0) return "当前范围没有模型调用";
+  if (summary.value.cached_input_tokens <= 0) return "当前范围没有命中前缀缓存";
+  return `命中 ${formatNumber(summary.value.cached_input_tokens)} / 输入 ${formatNumber(summary.value.input_tokens)}`;
+});
+
+function eventCacheHitText(event: AssistantEventDetail): string {
+  const rate = cacheHitRate(event.cached_input_tokens || 0, event.input_tokens || 0);
+  if (rate === null || !event.cached_input_tokens) return "";
+  return `缓存命中 ${formatNumber(event.cached_input_tokens)}（${Math.round(rate * 100)}%）`;
+}
 
 function platformLabel(platform: string): string {
   if (platform === "telegram") return "Telegram";
@@ -542,6 +573,27 @@ function selectResult(value: AssistantEventResultFilter): void {
 function eventKindLabel(kind: string): string {
   const labels: Record<string, string> = { private: "私聊", group: "群聊", notice: "通知", meta: "元事件" };
   return labels[kind] ?? kind;
+}
+
+const senderRoleLabels: Record<string, string> = { owner: "群主", admin: "管理员", member: "成员" };
+
+// 群等级：优先显示平台给的等级名（「冒泡」「潜水」这类），没有就显示数字等级。
+// 回复门槛按等级卡人，排查「这条为什么没回」时要能直接看到当时的等级。
+function senderLevelLabel(event: AssistantEventDetail): string {
+  const label = event.sender_level_label?.trim();
+  if (label) return `Lv.${label}`;
+  if (typeof event.sender_level === "number" && event.sender_level > 0) return `Lv.${event.sender_level}`;
+  return "";
+}
+
+function senderLevelTitle(event: AssistantEventDetail): string {
+  const parts: string[] = [];
+  if (typeof event.sender_level === "number" && event.sender_level > 0) parts.push(`群等级 ${event.sender_level}`);
+  const label = event.sender_level_label?.trim();
+  if (label) parts.push(label);
+  const role = event.sender_role?.trim();
+  if (role) parts.push(senderRoleLabels[role] ?? role);
+  return parts.join(" · ");
 }
 
 function decisionLabel(event: AssistantEventDetail): string {

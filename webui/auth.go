@@ -30,7 +30,6 @@ import (
 
 const (
 	authCookieName          = "diana_session"
-	legacyAdminUser         = "admin@diana.local"
 	adminUsernamePrefix     = "diana#"
 	authRandomUsernameBytes = 8
 	authMinUsernameLen      = 2
@@ -123,9 +122,6 @@ func NewAuthManager(store AuthStore) *AuthManager {
 	}
 	ctx := context.Background()
 	if auth, ok, err := store.LoadWebUIAuth(ctx); err == nil && ok && auth.PasswordHash != "" {
-		if strings.TrimSpace(auth.Username) == "" {
-			auth.Username = legacyAdminUser
-		}
 		m.auth = &auth
 	}
 	if set, ok, err := store.LoadWebUISessions(ctx); err == nil && ok {
@@ -531,10 +527,10 @@ func authExemptPath(path string) bool {
 	case strings.HasPrefix(path, "/onebot/"):
 		// NapCat 反向 WebSocket 由 OneBot access token 单独鉴权。
 		return true
-	case strings.HasPrefix(path, "/api/qqbot/media/"), strings.HasPrefix(path, "/api/assistant/media/"):
+	case strings.HasPrefix(path, "/api/assistant/media/"):
 		// 临时媒体使用高熵、短有效期 token，供 NapCat 在独立进程或容器中拉取。
 		return true
-	case strings.HasPrefix(path, "/api/assistant/group-admin"), strings.HasPrefix(path, "/api/qqbot/group-admin"):
+	case strings.HasPrefix(path, "/api/assistant/group-admin"):
 		// 群管理页有自己的一次性群验证码 token 流程。
 		return true
 	default:

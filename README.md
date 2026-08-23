@@ -26,7 +26,7 @@
 - [通道支持](#通道支持)
 - [访问安全](#访问安全)
 - [能力与扩展](#能力与扩展)
-- [环境变量](#环境变量)
+- [配置文件](#配置文件)
 - [部署形态](#部署形态)
 - [开发](#开发)
 - [项目结构](#项目结构)
@@ -71,25 +71,60 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 
 > macOS 上安装器会把运行时装进安装目录里固定的 `Diana.app`，用固定的 `com.suink.diana` 做本地 Ad-hoc 签名，并把 designated requirement 改写成只认这个标识。这样每次更新换了二进制，系统仍然认它是同一个 Diana：麦克风、完全磁盘访问这些授权不会失效，「隐私与安全性」列表里也不会堆出一排同名条目。没装命令行工具（`codesign` 不可用）时会跳过签名，功能不受影响，只是授权可能要重新点一次。
 
-完成后打开 `http://127.0.0.1:18080`。首次生成的管理员账号和密码会显示在终端，并保存在安装目录的 `runtime.env`——请妥善保存，不要公开该文件。
+完成后打开 `http://127.0.0.1:18080`。首次生成的管理员账号和密码会显示在终端，并保存在安装目录的 `config.yaml`——请妥善保存，不要公开该文件。
 
 默认安装目录：Linux / macOS 为 `~/.local/share/diana`，Windows 为 `%LOCALAPPDATA%\Diana`。
 
-可以用环境变量选择版本、目录、端口或仅安装不启动：
+安装脚本本身用环境变量传参（这些是安装器的参数，不是应用配置）：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
   DIANA_VERSION=v0.8.9 DIANA_INSTALL_DIR=/opt/diana DIANA_PORT=18081 sh
 ```
 
+**装在服务器上要从别的机器打开后台，必须设 `DIANA_HOST`。** 默认只绑
+`127.0.0.1`——WebUI 带管理权限，装完就对公网敞开不是合理默认，所以这一步是显式的：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  DIANA_HOST=0.0.0.0 sh
+```
+
+监听非回环地址时，记得在防火墙和云厂商安全组里放行端口，并尽量套一层带 TLS 的反向
+代理，不要把控制台直接暴露到公网。
+
+已经装过的实例带上新的 `DIANA_HOST` 重跑安装脚本即可改绑定——脚本会顺带重启服务，
+改完立即生效（`DIANA_START_AFTER_INSTALL=false` 时不重启，需要自己启动）。也可以直接
+改 `config.yaml` 里的 `server.host`，但这样必须手动重启才会生效：
+
+```sh
+systemctl --user restart diana.service   # Linux
+launchctl kickstart -k "gui/$(id -u)/com.suink.diana"   # macOS
+```
+
+常用配置可以在安装时一并写进生成的 `config.yaml`，省得装完再进 WebUI 填一遍：
+`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_FORMAT`、`LLM_IMAGE_MODEL`、
+`DIANA_LOCAL_MEDIA_BASE_URL`、`DIANA_NAPCAT_WEBUI_URL`、`DIANA_NAPCAT_WEBUI_TOKEN`。
+更多项用 `DIANA_CONFIG_FILE` 指向一份 YAML 片段，内容会原样并进 `config.yaml`：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  DIANA_HOST=0.0.0.0 LLM_API_KEY=sk-xxx DIANA_CONFIG_FILE=/root/diana-extra.yaml sh
+```
+
+注意 `LLM_*` 这些只是安装器参数：它们被写进 `config.yaml` 的 `llm:` 段，而那一段
+只在数据库为空时播种一次。装完之后再改这些值不会有任何效果，要去 WebUI 改。
+
 ### Docker
 
 ```sh
 git clone https://github.com/SuInk/Diana.git && cd Diana
-cp docker-compose.yml docker-compose.local.yml
-# 修改 docker-compose.local.yml 中的 token、账号和 LLM 配置
-docker compose -f docker-compose.local.yml up -d --build
+cp config.example.yaml config.yaml
+# 改 config.yaml：管理员密码、token、LLM 配置
+docker compose up -d --build
 ```
+
+`config.yaml` 以只读方式挂进容器，`DIANA_CONFIG` 指向它。不挂也能起，打开 WebUI 走安装向导即可。
 
 <details>
 <summary><code>docker run</code> 方式</summary>
@@ -103,15 +138,8 @@ docker run -d \
   -p 18080:18080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
-  -e LOG_PATH=/app/logs/diana.log \
-  -e DIANA_ADMIN_PASSWORD=change-this-admin-password \
-  -e DIANA_BOT_ENABLED=true \
-  -e ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
-  -e ONEBOT_ACCESS_TOKEN=your-onebot-token \
-  -e DIANA_BOT_ACCOUNT=10001 \
-  -e LLM_PROVIDER=openai_compatible \
-  -e LLM_API_KEY=your-key \
-  -e LLM_MODEL=gpt-4o-mini \
+  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  -e DIANA_CONFIG=/app/config.yaml \
   diana:latest
 ```
 
@@ -158,15 +186,15 @@ node scripts/dev.mjs                       # 没装 make 时
 ## 首次配置
 
 1. **登录控制台** —— 打开 `http://127.0.0.1:18080`，用终端给出的账号密码登录。
-2. **配置模型** —— 在「LLM 配置」页填 Provider 与 API Key，同步模型列表后再选默认模型。也可以用环境变量预置：
+2. **配置模型** —— 在「LLM 配置」页填 Provider 与 API Key，同步模型列表后再选默认模型。无人值守部署也可以在 `config.yaml` 里预置，第一次启动时播种进数据库：
 
-   ```sh
-   LLM_PROVIDER=openai_compatible \
-   LLM_API_KEY=your-key \
-   LLM_BASE_URL=https://example.com/v1 \
-   LLM_MODEL=gpt-4o-mini \
-   LLM_IMAGE_MODEL=gpt-image-1 \
-   ./dist/diana-webui
+   ```yaml
+   llm:
+     provider: openai_compatible
+     api_key: your-key
+     base_url: https://example.com/v1
+     model: gpt-4o-mini
+     image_model: gpt-image-1
    ```
 
    支持的 provider：`openai_compatible`、`gemini`、`anthropic`。支持命名保存多套配置并切换激活项。
@@ -174,21 +202,28 @@ node scripts/dev.mjs                       # 没装 make 时
 4. **检查事件** —— 发一条消息，在事件中心确认回复原因与模型调用链。
 
 <details>
-<summary>用环境变量直接拉起一个 OneBot v11 机器人</summary>
+<summary>用 config.yaml 直接拉起一个 OneBot v11 机器人</summary>
 
-```sh
-DIANA_BOT_ENABLED=true \
-ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws \
-ONEBOT_ACCESS_TOKEN=your-onebot-token \
-DIANA_BOT_ACCOUNT=10001 \
-DIANA_GROUP_TRIGGERS=Diana,diana \
-LLM_PROVIDER=openai_compatible \
-LLM_API_KEY=your-key \
-LLM_MODEL=gpt-4o-mini \
-./dist/diana-webui
+```yaml
+bot:
+  platform: onebot-v11
+  enabled: true
+  onebot_reverse_ws_endpoint: ws://127.0.0.1:18080/onebot/v11/ws
+  onebot_access_token: your-onebot-token
+  bot_account: "10001"
+  group_triggers: [Diana, diana]
+
+llm:
+  provider: openai_compatible
+  api_key: your-key
+  model: gpt-4o-mini
 ```
 
-启动后私聊直接触发；群聊中 `@机器人` 或以触发词开头才触发。
+```sh
+./dist/diana-webui --config ./config.yaml
+```
+
+启动后私聊直接触发；群聊中 `@机器人` 或以触发词开头才触发。这两段只在数据库为空时播种一次，之后改配置请去 WebUI。
 
 </details>
 
@@ -211,8 +246,8 @@ LLM_MODEL=gpt-4o-mini \
 
 WebUI 从首次启动起强制登录，本机和公网访问同一套规则。默认管理员账号安全随机生成（`diana#` 加 16 位随机字符串），持久化在 SQLite。
 
-- 首次启动未提供 `DIANA_ADMIN_PASSWORD` 时会生成随机密码，账号密码仅在该次启动的标准错误日志中显示一次。
-- 也可在首次启动时注入 `DIANA_ADMIN_USERNAME` 和 `DIANA_ADMIN_PASSWORD`；已有凭据时不会覆盖。
+- 首次启动未在 `config.yaml` 的 `admin` 段填密码时会生成随机密码，账号密码仅在该次启动的标准错误日志中显示一次。
+- 也可在首次启动前写好 `admin.username` 和 `admin.password`；已有凭据时不会覆盖。
 - 登录后可在设置页的「访问安全」中修改账号和密码。账号 2–64 个字符、不含空格与控制字符（`diana#` 只是自动生成账号的形式，不是必须的前缀），密码至少 8 位。
 - 所有 `/api` 接口需要登录，会话有效期 30 天；改密会使全部已登录会话失效。设置页可查看登录中的设备并逐个踢下线。
 
@@ -274,78 +309,78 @@ GET /api/logs?kind=operation&limit=100
 GET /api/logs?kind=error&limit=100
 ```
 
-结构化日志存在 `APP_DB_PATH` 指向的 SQLite 中；`LOG_PATH` 仍用于普通运行日志文件。
+## 配置文件
 
-## 环境变量
+所有配置都在 `config.yaml` 里，没有配置类环境变量。进程按 `--config`、`DIANA_CONFIG`、工作目录、可执行文件同级目录的顺序查找；一个都没有就全部走内置默认值，直接打开 WebUI 走安装向导。完整字段见 [`config.example.yaml`](./config.example.yaml) 和[配置文档](https://suink.github.io/Diana/configuration.html)。
 
-WebUI 里能配的都不必写环境变量。下面是常用项，完整说明见 [`.env.example`](./.env.example) 和[配置文档](https://suink.github.io/Diana/configuration.html)。
+配置分两层，边界是**这项能不能在 WebUI 里改**：
 
-| 变量 | 默认值 | 说明 |
+| 段 | 层级 | 生效方式 |
 | --- | --- | --- |
-| `PORT` | `18080` | WebUI 和 OneBot endpoint 监听端口 |
-| `APP_DB_PATH` | `data/diana.db` | 本地 SQLite 配置数据库路径 |
-| `LOG_PATH` | 空 | 日志文件路径；设置后同时输出到 stdout 和文件 |
-| `DIANA_TRUSTED_PROXIES` | 空 | 可信反向代理的 IP 或 CIDR，逗号分隔；设置后才解析 `X-Forwarded-For` |
-| `DIANA_SERVICE_MANAGER` | 自动探测 | 托管本服务的进程管理器：`launchd`、`systemd` 或 `none`。设置后自更新不再自行启动新实例，改为请管理器重启，避免和 `KeepAlive`／`Restart=` 抢监听端口 |
-| `DIANA_SERVICE_LABEL` | 自动探测 | launchd job label 或 systemd unit 名，例如 `com.suink.diana`、`diana.service` |
-| `DIANA_SERVICE_DOMAIN` | 自动探测 | launchd 域（`gui/<uid>` 或 `system`）；systemd 填 `user` 或 `system` |
-| `DIANA_ADMIN_USERNAME` | 自动随机生成 | 首次初始化的管理员账号，之后以 SQLite 中的凭据为准 |
-| `DIANA_ADMIN_PASSWORD` | 自动随机生成 | 首次初始化的管理员密码，之后以 SQLite 中的凭据为准 |
-| `LLM_PROVIDER` | `openai_compatible` | `openai_compatible` / `gemini` / `anthropic` |
-| `LLM_API_KEY` | 空 | LLM API Key |
-| `LLM_BASE_URL` | 空 | OpenAI 兼容接口的自定义 Base URL |
-| `LLM_MODEL` | 空 | 模型 ID（`openai_compatible` 无默认值） |
-| `DIANA_BOT_ENABLED` | `false` | 启动时是否自动启用机器人 |
-| `ONEBOT_REVERSE_WS_ENDPOINT` | `ws://127.0.0.1:<PORT>/onebot/v11/ws` | 给 OneBot v11 客户端连接的反向 WebSocket 地址 |
-| `ONEBOT_ACCESS_TOKEN` | 空 | OneBot access token |
-| `DIANA_BOT_ACCOUNT` | 空 | 机器人账号 |
-| `DIANA_OWNER_ID` | 空 | 主人账号（Telegram 上填数字用户 ID） |
-| `DIANA_GROUP_TRIGGERS` | `Diana,diana` | 群聊触发词 |
-| `DIANA_AGENT_ENABLED` | `false` | 是否启用内置 Agent |
+| `server` / `storage` / `admin` / `update` / `napcat` | 基础设施，WebUI 里没有入口 | 每次启动都读，`config.yaml` 是唯一来源 |
+| `bot` / `llm` | 业务配置，WebUI 随时可改 | **只在数据库为空时播种一次**，之后以数据库为准 |
 
-<details>
-<summary>全部环境变量</summary>
+`bot` / `llm` 两段是给无人值守部署用的：容器第一次起来时把 token 和 API Key 带进去，省掉手动走向导。数据库里已经有配置之后这两段就不再生效，启动日志会明确打一行 `config: bot section in ... was NOT applied`——不会让你对着一份不生效的配置排查。想重新播种就清空数据库，想改配置就去 WebUI。
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `FRONTEND_DIST` | 自动探测 | 前端构建产物目录；未设置时使用 `frontend-next/dist` |
-| `DIANA_SEND_RETRY_ATTEMPTS` | `3` | 单条消息发送重试次数（1–5） |
-| `DIANA_SEND_CHUNK_INTERVAL_MS` | `300` | 分段回复的段间间隔（毫秒） |
-| `DIANA_ERROR_REPLY_PREFIX` | `出错了：` | 聊天内错误提示前缀 |
-| `DIANA_LOG_PATH` | 空 | `LOG_PATH` 的兼容别名 |
-| `DIANA_MEDIA_DIR` | `data/media` | 入站图片持久化目录；识图用本地文件的 base64 提交 |
-| `DIANA_MEDIA_MAX_MB` | `10` | 单张入站图片下载上限 |
-| `DIANA_MEDIA_CACHE_MB` | `512` | 图片目录总量上限，超出后按最后使用时间淘汰 |
-| `DIANA_LOCAL_MEDIA_BASE_URL` | 当前服务的 `/media/resolver` | OneBot 客户端可访问的媒体地址；分容器部署可设为 `http://diana:18080/media/resolver` |
-| `DIANA_BILI_SESSDATA` | 空 | B 站登录 Cookie 中的 `SESSDATA`；WebUI 插件设置优先 |
-| `DIANA_DOUYIN_CK` | 空 | 抖音 Cookie；抖音解析必需，WebUI 插件设置优先 |
-| `DIANA_XHS_CK` | 空 | 小红书 Cookie；小红书解析必需，WebUI 插件设置优先 |
-| `DIANA_YTDLP_COOKIES` | 空 | yt-dlp Netscape Cookie 文件路径；WebUI 插件设置优先 |
-| `DIANA_RESOLVER_PROXY` | 空 | 社交媒体解析与 yt-dlp 使用的代理地址；WebUI 插件设置优先 |
-| `DIANA_RELEASE_UPDATE_ENABLED` | `true` | 允许完整 Release 包下载、校验、备份并自更新；源码和容器部署不会启用包替换 |
-| `LLM_USER_AGENT` | `codex-cli/0.142.0` | OpenAI 兼容接口的 User-Agent |
-| `LLM_IMAGE_MODEL` | provider 默认值 | 生图模型；OpenAI 兼容默认 `gpt-image-1`，Gemini 默认 `imagen-4.0-generate-001` |
-| `LLM_TEMPERATURE` | 空 | temperature |
-| `LLM_MAX_OUTPUT_TOKENS` | `1024` | Responses API 最大输出 token 数 |
-| `LLM_TIMEOUT_MS` | `30000` | LLM 请求超时（毫秒） |
-| `NONEBOT_BRIDGE_ENABLED` | `false` | 是否启用第三方 NoneBot 插件桥 |
-| `NONEBOT_BRIDGE_ENDPOINT` | `ws://127.0.0.1:8080/onebot/v11/ws` | NoneBot sidecar 的反向 WebSocket 地址 |
-| `NONEBOT_BRIDGE_TOKEN` | 空 | NoneBot 插件桥 access token |
-| `DIANA_SYSTEM_PROMPT` | 内置提示词 | 机器人系统提示词 |
-| `DIANA_MAX_INPUT_CHARS` | `2000` | 单次输入最大字符数 |
-| `DIANA_MAX_REPLY_CHARS` | `3500` | 单次回复最大字符数 |
-| `DIANA_DIRECT_REPLY_CHUNK_SIZE` | `500` | 文本分段发送字符数 |
-| `DIANA_MAX_BOT_CONCURRENCY` | `5` | 全局并发数 |
-| `DIANA_AGENT_WORK_DIR` / `AGENT_WORK_DIR` | `.` | Agent 可访问的工作目录 |
-| `DIANA_AGENT_MAX_STEPS` | `4` | Agent 单次回复最大工具循环步数，最高 `8` |
-| `DIANA_AGENT_COMMAND_ALLOWLIST` | 常见开发命令 | Agent `run_command` 可执行命令，逗号分隔；填 `*` 允许全部 |
-| `DIANA_AGENT_COMMAND_TIMEOUT_MS` | `10000` | Agent 本地命令执行超时，最高 `60000` |
-| `DIANA_AGENT_SKILL_ROOTS` | `.agents/skills,skills` | Agent Skill 搜索目录，逗号分隔；自安装内容固定写入工作目录下的 `.agents/skills` |
-| `DIANA_AGENT_MCP_CONFIG` | `.mcp.json` | MCP 服务配置文件；相对路径以 Agent 工作目录为基准 |
-| `DIANA_AGENT_BROWSER_CDP_URL` / `AGENT_BROWSER_CDP_URL` | `http://127.0.0.1:9222` | 浏览器工具连接的 Chrome DevTools 地址 |
-| `DIANA_AGENT_BROWSER_TIMEOUT_MS` | `15000` | 浏览器工具调用超时，最高 `60000` |
+```yaml
+server:
+  # 要从别的机器访问就填 0.0.0.0，只本机用就留 127.0.0.1。
+  host: 127.0.0.1
+  port: "18080"
+  # 可信反向代理的 IP 或 CIDR；设置后才解析 X-Forwarded-For。
+  trusted_proxies: []
+  frontend_dist: ""
 
-</details>
+storage:
+  db_path: data/diana.db
+  # 留空表示只写标准输出。
+  log_path: logs/diana.log
+  media_dir: ""
+  media_max_mb: 0
+  media_cache_mb: 0
+  # 留空时按接入端反连握手用的地址动态推断。
+  local_media_base_url: ""
+
+admin:
+  # 两项都留空时首启自动生成账号和强密码，只在日志里打印一次。
+  username: ""
+  password: ""
+
+update:
+  root: "."
+  apply_enabled: true
+  release_enabled: true
+  group_test_enabled: false
+
+napcat:
+  webui_url: ""
+  webui_token: ""
+
+# 以下两段只在数据库为空时播种一次，字段名和 WebUI 配置接口的 payload 一致。
+bot:
+  platform: onebot-v11
+  enabled: true
+  onebot_reverse_ws_endpoint: ws://127.0.0.1:18080/onebot/v11/ws
+  onebot_access_token: ""
+  bot_account: ""
+  owner_id: ""
+  group_triggers: [Diana, diana]
+
+llm:
+  provider: openai_compatible
+  base_url: https://api.example.com/v1
+  api_key: ""
+  model: ""
+```
+
+结构化日志存在 `storage.db_path` 指向的 SQLite 中；`storage.log_path` 仍用于普通运行日志文件。
+
+### 仍然是环境变量的部分
+
+只有两类还走环境变量，它们在 WebUI 里没有对应项，也不存在两个真相源的问题：
+
+- `DIANA_CONFIG` —— 配置文件路径。它不是配置，是指向配置的引导指针。
+- 外部集成凭据与外部程序路径 —— 各站点解析用的 `BILI_SESSDATA`、`DOUYIN_CK`、`XHS_CK`、`RESOLVER_PROXY`，搜索服务的 `EXA_API_KEY` / `TAVILY_API_KEY`，以及 `DIANA_FFMPEG_PATH`、`DIANA_SERVICE_MANAGER` 一类的本机环境探测项。链接解析的各平台 Cookie 也可以直接在插件设置里填，那里填的优先于同名环境变量。
 
 ## 部署形态
 
@@ -365,15 +400,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/diana
-Environment=PORT=18080
-Environment=LOG_PATH=/var/log/diana/diana.log
-Environment=DIANA_BOT_ENABLED=true
-Environment=ONEBOT_REVERSE_WS_ENDPOINT=ws://127.0.0.1:18080/onebot/v11/ws
-Environment=ONEBOT_ACCESS_TOKEN=change-me
-Environment=DIANA_BOT_ACCOUNT=10001
-Environment=LLM_PROVIDER=openai_compatible
-Environment=LLM_API_KEY=change-me
-Environment=LLM_MODEL=gpt-4o-mini
+Environment=DIANA_CONFIG=/opt/diana/config.yaml
 ExecStart=/opt/diana/diana-webui
 Restart=always
 RestartSec=3

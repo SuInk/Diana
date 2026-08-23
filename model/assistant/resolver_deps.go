@@ -109,8 +109,6 @@ type ResolverDependency struct {
 // ResolverDependencyInstallResult 是安装后返回给控制台的最新依赖状态。
 type ResolverDependencyInstallResult struct {
 	Dependency ResolverDependency `json:"dependency"`
-	// Resolver 是链接解析那一组，保留给旧字段。
-	Resolver []ResolverDependency `json:"resolver"`
 	// Plugins 按插件 ID 分组，界面据此只更新受影响的那一组。
 	Plugins   map[string][]ResolverDependency `json:"plugins,omitempty"`
 	Installer string                          `json:"installer,omitempty"`
@@ -180,7 +178,7 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 
 	deps := RefreshResolverDependencies()
 	if dep, ok := resolverDependencyByName(deps, name); ok && dep.Available {
-		return ResolverDependencyInstallResult{Dependency: dep, Resolver: deps, Plugins: resolverDependencyGroup(deps)}, nil
+		return ResolverDependencyInstallResult{Dependency: dep, Plugins: resolverDependencyGroup(deps)}, nil
 	}
 
 	plan, err := resolverDependencyInstallPlan(name, runtime.GOOS, lookResolverCommand)
@@ -197,7 +195,7 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 	if !ok || !dep.Available {
 		return ResolverDependencyInstallResult{}, fmt.Errorf("%s 已执行，但 %s 仍不在服务进程的 PATH 中", plan.installer, name)
 	}
-	return ResolverDependencyInstallResult{Dependency: dep, Resolver: deps, Plugins: resolverDependencyGroup(deps), Installer: plan.installer}, nil
+	return ResolverDependencyInstallResult{Dependency: dep, Plugins: resolverDependencyGroup(deps), Installer: plan.installer}, nil
 }
 
 func resolverDependencyGroup(deps []ResolverDependency) map[string][]ResolverDependency {

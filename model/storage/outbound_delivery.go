@@ -6,7 +6,6 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -88,99 +87,6 @@ WHERE ',' || outbound_message_id || ',' LIKE '%,' || ? || ',%'
 		return fmt.Errorf("record inbound self echo: %w", err)
 	}
 	return nil
-}
-
-// MarkLegacyInboundNamespaceDuplicates prevents already-persisted duplicate
-// backfill rows from being claimed after an upgrade. It keeps every audit row
-// and only terminalizes duplicate pending/processing copies.
-func (s *SQLiteStore) MarkLegacyInboundNamespaceDuplicates(ctx context.Context) (int64, error) {
-	if s == nil || s.db == nil {
-		return 0, nil
-	}
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id, payload, status
-FROM inbound_events
-WHERE NULLIF(TRIM(message_id), '') IS NOT NULL
-ORDER BY event_time ASC, created_at ASC, id ASC
-`)
-	if err != nil {
-		return 0, fmt.Errorf("list legacy inbound duplicates: %w", err)
-	}
-	type candidate struct {
-		id     string
-		event  assistant.MessageEvent
-		status string
-	}
-	var candidates []candidate
-	for rows.Next() {
-		var item candidate
-		var payload string
-		if err := rows.Scan(&item.id, &payload, &item.status); err != nil {
-			_ = rows.Close()
-			return 0, fmt.Errorf("scan legacy inbound duplicate: %w", err)
-		}
-		if jsonErr := json.Unmarshal([]byte(payload), &item.event); jsonErr == nil {
-			candidates = append(candidates, item)
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return 0, err
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	groups := map[string][]candidate{}
-	for _, item := range candidates {
-		key := inboundTransportKey(item.event)
-		if key == "" {
-			continue
-		}
-		groups[key] = append(groups[key], item)
-	}
-	var duplicates []string
-	for _, group := range groups {
-		if len(group) < 2 {
-			continue
-		}
-		hasDone := false
-		for _, item := range group {
-			if item.status == inboundStatusDone {
-				hasDone = true
-				break
-			}
-		}
-		keptLive := false
-		for _, item := range group {
-			if item.status == inboundStatusDone {
-				continue
-			}
-			if !hasDone && !keptLive {
-				keptLive = true
-				continue
-			}
-			duplicates = append(duplicates, item.id)
-		}
-	}
-	if len(duplicates) == 0 {
-		return 0, nil
-	}
-	now := time.Now().UTC().UnixNano()
-	var updated int64
-	for _, id := range duplicates {
-		result, err := s.db.ExecContext(ctx, `
-UPDATE inbound_events
-SET status = 'done', outcome = 'ignored_duplicate', decision = 'not_replied',
-    decision_reason = '同一平台消息已在其他会话命名空间入队，本条重复回补已忽略',
-    lease_owner = NULL, lease_until = NULL, completed_at = ?, updated_at = ?
-WHERE id = ? AND status IN ('pending', 'processing')
-`, now, now, id)
-		if err != nil {
-			return updated, fmt.Errorf("mark legacy inbound duplicate %q: %w", id, err)
-		}
-		count, _ := result.RowsAffected()
-		updated += count
-	}
-	return updated, nil
 }
 
 func inboundTransportKey(event assistant.MessageEvent) string {

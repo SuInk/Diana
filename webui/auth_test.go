@@ -76,8 +76,7 @@ func newAuthTestRouter(t *testing.T) (*gin.Engine, *AuthManager, *memoryAuthStor
 	NewAuthHandler(manager).Register(router)
 	router.GET("/api/protected", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 	router.GET("/api/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
-	router.GET("/api/qqbot/group-admin/session", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
-	router.GET("/api/qqbot/media/:token", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/api/assistant/group-admin/session", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 	router.GET("/api/assistant/media/:token", func(c *gin.Context) { c.Status(http.StatusOK) })
 	return router, manager, store
 }
@@ -108,7 +107,7 @@ func TestAuthFullFlow(t *testing.T) {
 	}
 
 	// 豁免路径不受影响。
-	for _, path := range []string{"/api/health", "/api/qqbot/group-admin/session", "/api/qqbot/media/token", "/api/assistant/media/token", "/api/auth/status"} {
+	for _, path := range []string{"/api/health", "/api/assistant/group-admin/session", "/api/assistant/media/token", "/api/auth/status"} {
 		rec = httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusOK {

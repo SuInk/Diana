@@ -445,6 +445,7 @@ func (r *Runtime) describeContextImage(ctx context.Context, event MessageEvent, 
 }
 
 func (r *Runtime) llmImageDescription(callCtx context.Context, event MessageEvent, cfg imageOCRConfig, imageURL string) (string, error) {
+	callCtx = withLLMUsagePurpose(withLLMUsageContext(callCtx, event), "image_describe")
 	systemPrompt := `你是图片理解子代理。对话主模型无法直接查看图片，请客观描述这张图片，让只读文字的人能明白图里是什么。
 
 要求：
@@ -475,7 +476,6 @@ func (r *Runtime) llmImageDescription(callCtx context.Context, event MessageEven
 		if err != nil {
 			return "", err
 		}
-		r.recordLLMUsage(callCtx, event, resp.Provider, resp.Model, resp.Usage, "image_describe")
 		return resp.Text, nil
 	})
 }
@@ -613,6 +613,7 @@ func imageOCRDataURLBytes(imageURL string) ([]byte, string, error) {
 }
 
 func (r *Runtime) llmImageOCRTranscription(callCtx context.Context, event MessageEvent, cfg imageOCRConfig, imageURL string) (string, error) {
+	callCtx = withLLMUsagePurpose(withLLMUsageContext(callCtx, event), "image_ocr")
 	prompt := "请完整转写这张图片里的文字。"
 	return r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{
@@ -640,7 +641,6 @@ func (r *Runtime) llmImageOCRTranscription(callCtx context.Context, event Messag
 		if err != nil {
 			return "", err
 		}
-		r.recordLLMUsage(callCtx, event, resp.Provider, resp.Model, resp.Usage, "image_ocr")
 		return resp.Text, nil
 	})
 }

@@ -154,6 +154,7 @@ func (r *Runtime) fitOlderSummaryToBudget(ctx context.Context, summary string, b
 }
 
 func (r *Runtime) recompressContextSummary(ctx context.Context, summary string, targetRunes int, cfg BotConfig) string {
+	ctx = withLLMUsagePurpose(ctx, "context_summary_compaction")
 	if targetRunes <= 0 {
 		return ""
 	}

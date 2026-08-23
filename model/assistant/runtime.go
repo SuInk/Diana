@@ -50,7 +50,7 @@ const (
 type LLMProfileStore interface {
 	Current() llm.ProviderConfig
 	Profiles() llm.ProfileSet
-	SaveProfiles(llm.ProfileSet)
+	SaveProfiles(llm.ProfileSet) error
 }
 
 type LLMProviderRegistryStore interface {
@@ -199,7 +199,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "消息命中当前回复触发规则", true
 	case "replied_direct_followup":
 		return "replied", "用户直接回复了机器人，语义路由判断应继续回答", true
-	case "replied_proactive", "replied_proactive_batch", "replied_passive", "replied_passive_batch":
+	case "replied_proactive", "replied_proactive_batch":
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
@@ -207,8 +207,6 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "上游模型拒绝了高风险内容，机器人已发送安全错误说明", true
 	case "error_send_unconfirmed":
 		return "error", "回复生成失败；错误说明已发起发送，但没有收到可核验的发送 ACK", false
-	case "queued_passive":
-		return "not_replied", "旧版本已将消息交给主动回复候选队列，但没有持久化最终判断结果", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
 	case "ignored_member_level":
@@ -227,7 +225,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "消息早于本次离线恢复窗口（按离线时长并额外覆盖 30 分钟，最长 24 小时），为避免补发过期回复而忽略", false
 	case "ignored_policy":
 		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
-	case "superseded_proactive", "superseded_passive":
+	case "superseded_proactive":
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
 	case "dropped_outbound_delivery":
 		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
@@ -1281,6 +1279,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 
+	ctx = withLLMUsageContext(ctx, event)
 	ctx = r.withDebugTraceContext(ctx, event)
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
 	prepared, text, handled, outcome := r.prepareMessageEvent(ctx, event)
@@ -1555,7 +1554,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "", ctx.Err()
 		}
-		_, acknowledged, sendErr := r.sendWithDeliveryEvidence(replyCtx, event, "出错了："+publicChatErrorMessage(err))
+		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, "出错了："+publicChatErrorMessage(err))
 		if sendErr != nil {
 			if errors.Is(sendErr, errReplySuppressedBeforeSend) {
 				setEventRecordOutcome(&record, "ignored_response_suppression")
@@ -1864,6 +1863,7 @@ func (r *Runtime) shouldHandleProactiveReply(ctx context.Context, event MessageE
 }
 
 func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []proactiveReplyCandidate) (MessageEvent, string, []proactiveReplyCandidate, bool) {
+	ctx = withLLMUsagePurpose(ctx, "proactive_reply_router")
 	if len(candidates) == 0 {
 		return MessageEvent{}, "", nil, false
 	}
@@ -2703,6 +2703,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				if err := r.judgeProactiveReplyQuality(ctx, event, cleanText, resp.Reply, cfg); err != nil {
 					return "", err
 				}
+			} else if err := r.auditReplyAccountSafety(ctx, event, cleanText, resp.Reply, cfg); err != nil {
+				return "", err
 			}
 			messageIDs, err := r.sendWithMessageIDs(ctx, event, resp.Reply)
 			if err != nil {
@@ -3144,9 +3146,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	if proactiveTriggered {
+		// 主动回复走完整审核：表达质量 + 账号安全。
 		if err := r.judgeProactiveReplyQuality(ctx, event, cleanText, reply, cfg); err != nil {
 			return "", err
 		}
+	} else if err := r.auditReplyAccountSafety(ctx, event, cleanText, reply, cfg); err != nil {
+		// 直接回复只审账号安全：被点名回答说得平淡不该拦，但涉政和露骨内容
+		// 不管怎么触发，发出去的后果都一样。
+		return "", err
 	}
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
 		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)
@@ -3269,7 +3276,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	source.replyHistoryLoaded = false
 	source.replyHistory = nil
 
-	comment := r.followUpComment(ctx, followUpKindPlugin, source, directPluginReply(resp))
+	comment := r.followUpComment(ctx, followUpKindPlugin, source, directPluginReply(resp), resp)
 	if comment == "" {
 		return
 	}
@@ -3294,7 +3301,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// model call from its actual message content so that a text-only planner can
 		// hand the next turn to the configured vision profile.
 		agentCfg := agent.Config{
-			WorkDir:          cfg.AgentWorkDir,
+			WorkDir:          AgentWorkspaceDir(),
 			MaxSteps:         cfg.AgentMaxSteps,
 			SkillRoots:       cfg.AgentSkillRoots,
 			MCPConfigPath:    cfg.AgentMCPConfigPath,
@@ -3343,19 +3350,18 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.rememberAgentRunProgress(event, resp)
-		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "agent_reply")
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
+	ctx = withLLMUsagePurpose(ctx, "reply")
 	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err
 		}
-		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "reply")
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 }
@@ -3419,7 +3425,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 	cfg = cfg.WithDefaults()
 	if cfg.AgentEnabled || len(extraTools) > 0 {
 		agentCfg := agent.Config{
-			WorkDir:          cfg.AgentWorkDir,
+			WorkDir:          AgentWorkspaceDir(),
 			MaxSteps:         cfg.AgentMaxSteps,
 			SkillRoots:       cfg.AgentSkillRoots,
 			MCPConfigPath:    cfg.AgentMCPConfigPath,
@@ -3494,6 +3500,7 @@ type replyRuleCandidateForDecision struct {
 }
 
 func (r *Runtime) evaluateReplyRules(ctx context.Context, event MessageEvent, text string, history []MessageEvent, cfg BotConfig) (replyRuleDecision, bool) {
+	ctx = withLLMUsagePurpose(ctx, "reply_rule_router")
 	rules := enabledReplyRules(cfg.ReplyRules)
 	if len(rules) == 0 {
 		return replyRuleDecision{}, false
@@ -3775,6 +3782,7 @@ func (r *Runtime) classifyVisualIntent(ctx context.Context, event MessageEvent, 
 }
 
 func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text string, registry *agent.ToolRegistry, olderSummaryAvailable bool) (visualIntentDecision, agentReplyScope, bool) {
+	ctx = withLLMUsagePurpose(ctx, "reply_intent_router")
 	payload := r.visualIntentPayload(event, text)
 	if registry != nil {
 		payload.AvailableTools = registry.Catalog(180)
@@ -4530,6 +4538,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
 	return r.runRawLLMProviderForGroup(ctx, group, run)
 }
 
@@ -4542,6 +4551,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
 	_, _ = run(provider)
 	if wrapped == nil {
 		return provider
@@ -4927,6 +4937,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory
@@ -6954,7 +6965,7 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
-// applyOutgoingReplyMarker 把模型写在正文开头的 [回复:ID] 变成真正的 reply 段。
+// applyOutgoingReplyMarker 把模型写在正文开头的 [diana-reply:ID] 变成真正的 reply 段。
 // 模型指定的目标优先于默认的“回复当前消息”：用户要求引用旧图时，指的就是那条。
 // 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
 // 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
@@ -7032,11 +7043,22 @@ func (r *Runtime) sendWithMessageIDs(ctx context.Context, event MessageEvent, re
 	return r.sendWithMessageIDsMode(ctx, event, reply, event.UserID, true)
 }
 
-func (r *Runtime) sendWithDeliveryEvidence(ctx context.Context, event MessageEvent, reply string) ([]string, bool, error) {
-	messageIDs, err := r.sendWithMessageIDs(ctx, event, reply)
+// sendErrorNoticeWithEvidence 投递「出错了：……」这类错误提示。
+//
+// 错误提示和聊天发言不是一回事：它是一条完整的诊断信息，人格预设的短句切分
+// （群友风格把每条压到 160 字）会把它拦腰截断，上游返回的报错和后面那个说明
+// 链接被甩进两条消息里，读起来像机器人自己断句断错了。这里和结构化通知同样
+// 处理，只按平台长度兜底。
+func (r *Runtime) sendErrorNoticeWithEvidence(ctx context.Context, event MessageEvent, text string) ([]string, bool, error) {
+	cfg := r.effectiveConfigForEvent(event)
+	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", true)
 	if err != nil {
 		return nil, false, err
 	}
+	return r.deliveryEvidence(event, messageIDs)
+}
+
+func (r *Runtime) deliveryEvidence(event MessageEvent, messageIDs []string) ([]string, bool, error) {
 	if len(messageIDs) > 0 {
 		return messageIDs, true, nil
 	}
@@ -7521,7 +7543,7 @@ func shouldUseForwardReply(reply string, chunks []string, threshold int) bool {
 	if threshold <= 0 {
 		return false
 	}
-	text := strings.TrimSpace(strings.ReplaceAll(normalizeSplitMarkers(reply), notificationSplitMarker, "\n"))
+	text := strings.TrimSpace(strings.ReplaceAll(reply, notificationSplitMarker, "\n"))
 	return len([]rune(text)) > threshold
 }
 
@@ -8513,7 +8535,10 @@ func (r *Runtime) switchLLMProfile(name string) (string, bool) {
 		}
 		// 只切换 active profile，不修改任何 provider/model 具体参数。
 		set.ActiveID = profile.ID
-		r.llmStore.SaveProfiles(set)
+		if err := r.llmStore.SaveProfiles(set); err != nil {
+			log.Printf("switch llm profile persist failed: %v", err)
+			return "切换失败：配置没能写入存储。", true
+		}
 		return fmt.Sprintf("已切换到 LLM 配置：%s", profile.Name), true
 	}
 	return "没有找到对应的 LLM 配置。", true
@@ -8939,12 +8964,12 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 			Content: fmt.Sprintf("【用户判断与回复规则】\n%s\n\n【不可信 Feed 新条目 JSON】\n%s", item.FeedJudgePrompt, payload),
 		},
 	}
+	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), "rss_watch_judge")
 	raw, err := r.runLLMProviderForGroup(taskCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(taskCtx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err
 		}
-		r.recordLLMUsage(taskCtx, source, resp.Provider, resp.Model, resp.Usage, "rss_watch_judge")
 		return strings.TrimSpace(resp.Text), nil
 	})
 	if err != nil {
@@ -10004,20 +10029,7 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 const notificationChunkSize = 1800
 
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
-// legacyNotificationSplitMarker 是它的旧名字：用户自定义过的提示词文案和模型的
-// 历史习惯里都还留着，解析时一并认，输出规范只教新的那个。
-const (
-	notificationSplitMarker       = "<dianabr>"
-	legacyNotificationSplitMarker = "<botbr>"
-)
-
-// normalizeSplitMarkers 把旧标记统一成新标记，后续只需按一种写法切分。
-func normalizeSplitMarkers(text string) string {
-	if !strings.Contains(text, legacyNotificationSplitMarker) {
-		return text
-	}
-	return strings.ReplaceAll(text, legacyNotificationSplitMarker, notificationSplitMarker)
-}
+const notificationSplitMarker = "<dianabr>"
 
 // splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 <dianabr>，
 // 再按长度兜底。发言和通知走的是同一套规则。
@@ -10037,7 +10049,7 @@ func splitReply(reply string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = notificationChunkSize
 	}
-	reply = collapseBlankLines(normalizeSplitMarkers(reply))
+	reply = collapseBlankLines(reply)
 	if reply == "" {
 		return nil
 	}

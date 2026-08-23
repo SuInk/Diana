@@ -98,7 +98,7 @@ func TestDianaTTSToolSynthesizesAndReturnsTerminalRecord(t *testing.T) {
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", outputDir)
 	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 	plugin := NewVoiceTTSPlugin(server.Client())
-	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/voice-token"}
+	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/voice-token"}
 	plugin.SetLocalMediaSharer(sharer)
 	tool := mustVoiceTTSTool(t, plugin, nil)
 
@@ -125,7 +125,7 @@ func TestDianaTTSToolSynthesizesAndReturnsTerminalRecord(t *testing.T) {
 		t.Fatal("tts tool is not terminal")
 	}
 	reply, done := terminal.TerminalResult(raw)
-	if !done || reply != "[CQ:record,file=http://127.0.0.1:18080/api/qqbot/media/voice-token]" {
+	if !done || reply != "[CQ:record,file=http://127.0.0.1:18080/api/assistant/media/voice-token]" {
 		t.Fatalf("terminal reply=%q done=%v raw=%s", reply, done, raw)
 	}
 	segments := buildOutgoingSegments(OutgoingMessage{Text: reply})
@@ -166,7 +166,7 @@ func TestDianaTTSToolPreEncodesTencentSilkForNapCat(t *testing.T) {
 			return nil, fmt.Errorf("unexpected command %q", name)
 		}
 	}
-	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/silk-token"}
+	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/silk-token"}
 	plugin.SetLocalMediaSharer(sharer)
 
 	if _, err := mustVoiceTTSTool(t, plugin, nil).Run(context.Background(), map[string]any{"text": "用语音说晚安"}); err != nil {
@@ -234,10 +234,10 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 	}}
 	channel := &recordingChannel{}
 	plugins := NewDefaultPluginManager()
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentWorkDir: t.TempDir(), AgentMaxSteps: 3}, channel, plugins, nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3}, channel, plugins, nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/voice-token"})
+	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/voice-token"})
 	event := MessageEvent{
 		Kind:      EventKindPrivate,
 		UserID:    "user",
@@ -279,7 +279,7 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 		`{"action":"tool","tool":"diana.tts","input":{"text":"晚安，做个好梦。"}}`,
 	}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentWorkDir: t.TempDir(), AgentMaxSteps: 3}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
@@ -294,7 +294,7 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 			},
 		},
 	}})
-	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/group-voice-token"})
+	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/group-voice-token"})
 	event := MessageEvent{
 		Kind:      EventKindGroup,
 		GroupID:   "123456",

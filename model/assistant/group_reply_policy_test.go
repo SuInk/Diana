@@ -198,48 +198,6 @@ func TestDianaOneBotGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	}
 }
 
-func TestDianaOneBotGroupToolAcceptsLegacyProactivePolicyNames(t *testing.T) {
-	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	store := &testWritableGroupConfigStore{}
-	runtime.SetGroupConfigStore(store)
-	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
-
-	_, err := tool.Run(context.Background(), map[string]any{
-		"operation":               "set_reply_policy",
-		"passive_reply_chance":    0.45,
-		"passive_reply_threshold": 0.92,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	saved, ok := store.ConfigForGroup("123")
-	if !ok || saved.ProactiveReplyChance != 0.45 || saved.ProactiveReplyThreshold != 0.92 {
-		t.Fatalf("saved = %#v, ok = %v", saved, ok)
-	}
-}
-
-func TestDianaOneBotGroupToolPrefersProactivePolicyNames(t *testing.T) {
-	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	store := &testWritableGroupConfigStore{}
-	runtime.SetGroupConfigStore(store)
-	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
-
-	_, err := tool.Run(context.Background(), map[string]any{
-		"operation":                 "set_reply_policy",
-		"proactive_reply_chance":    0.75,
-		"proactive_reply_threshold": 0.96,
-		"passive_reply_chance":      0.25,
-		"passive_reply_threshold":   0.6,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	saved, ok := store.ConfigForGroup("123")
-	if !ok || saved.ProactiveReplyChance != 0.75 || saved.ProactiveReplyThreshold != 0.96 {
-		t.Fatalf("saved = %#v, ok = %v", saved, ok)
-	}
-}
-
 func TestDianaOneBotGroupToolRejectsOrdinaryMemberReplyPolicyUpdate(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_info": {"user_id": "10001", "role": "member", "level": "69"},

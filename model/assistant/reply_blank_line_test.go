@@ -46,10 +46,10 @@ func TestBlankLinesAreLayoutNotMessageBoundaries(t *testing.T) {
 // 识别命中后阈值被顶到 900，一份 400 多字的清单会整块发成一条，QQ 再按最长行把
 // 气泡横向撑开。
 func TestStructuredReplyRespectsConfiguredChunkSize(t *testing.T) {
-	// 复刻真实场景：一份四百字上下的清单，群友风格下上限是 160。
+	// 复刻真实场景：一份明显超过群友风格上限的清单。
 	var builder strings.Builder
 	builder.WriteString("附近这么走顺路：\n")
-	for index := 1; index <= 8; index++ {
+	for index := 1; index <= 20; index++ {
 		fmt.Fprintf(&builder, "%d. 第 %d 个去处\n", index, index)
 		builder.WriteString("这里写一句三十来个字的说明，交代为什么值得去、什么时候去比较合适。\n\n")
 	}
@@ -69,7 +69,7 @@ func TestStructuredReplyRespectsConfiguredChunkSize(t *testing.T) {
 	}
 	// 内容不能被顺带吃掉。
 	joined := strings.Join(parts, "\n")
-	for _, keep := range []string{"1. 第 1 个去处", "8. 第 8 个去处", "什么时候去比较合适"} {
+	for _, keep := range []string{"1. 第 1 个去处", "20. 第 20 个去处", "什么时候去比较合适"} {
 		if !strings.Contains(joined, keep) {
 			t.Fatalf("清单内容丢失 %q：\n%s", keep, joined)
 		}

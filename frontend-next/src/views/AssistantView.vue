@@ -162,6 +162,12 @@
               <span class="card-sub">通过 {{ platformProtocol(form.platform) }} 连接</span>
             </div>
             <div class="card-body stack">
+              <!-- 名称放在最前：先确认这是哪个机器人，再填它的接入凭据。 -->
+              <div class="field">
+                <label for="bot-name">机器人名称</label>
+                <input id="bot-name" v-model="form.name" class="input" placeholder="例如：主群助手、客服机器人" />
+                <span class="hint">用于控制台区分多个机器人，不会自动修改账号昵称。</span>
+              </div>
               <!-- OneBot 是接入端反连过来，Telegram 是我们主动出站长轮询，
                    两者需要的凭据完全不同，按平台分别展示。 -->
               <div v-if="isOneBotPlatform" class="field">
@@ -183,26 +189,38 @@
               <template v-else>
                 <div class="field">
                   <label for="bot-tg-token">Bot Token</label>
-                  <input
-                    id="bot-tg-token"
-                    v-model="telegramTokenDraft"
-                    class="input"
-                    type="password"
-                    autocomplete="off"
-                    :placeholder="form.telegram_bot_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '从 @BotFather 获取'"
-                  />
+                  <div class="input-group">
+                    <input
+                      id="bot-tg-token"
+                      v-model="telegramTokenDraft"
+                      class="input"
+                      :type="tokenRevealed.telegram_bot_token ? 'text' : 'password'"
+                      autocomplete="off"
+                      :placeholder="form.telegram_bot_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '从 @BotFather 获取'"
+                    />
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      :disabled="tokenRevealBusy === 'telegram_bot_token'"
+                      :aria-label="tokenRevealed.telegram_bot_token ? '隐藏 Token' : '查看 Token'"
+                      @click="toggleTokenReveal('telegram_bot_token')"
+                    >
+                      <EyeOff v-if="tokenRevealed.telegram_bot_token" :size="14" aria-hidden="true" />
+                      <Eye v-else :size="14" aria-hidden="true" />
+                    </button>
+                  </div>
                   <span class="hint">Telegram 用长轮询出站连接，不需要公网地址，也不用配置 webhook。</span>
                 </div>
                 <div class="field">
-                  <label for="bot-tg-proxy">代理地址</label>
+                  <label for="bot-tg-proxy">代理地址（可选）</label>
                   <input
                     id="bot-tg-proxy"
                     v-model="form.telegram_proxy_url"
                     class="input mono"
-                    placeholder="http://127.0.0.1:7890"
+                    placeholder="留空直连，例如 http://127.0.0.1:7890"
                     autocomplete="off"
                   />
-                  <span class="hint">国内网络访问 api.telegram.org 通常需要代理，支持 http/https/socks5。</span>
+                  <span class="hint">直连不通时再填；国内网络访问 api.telegram.org 通常需要代理，支持 http/https/socks5。</span>
                 </div>
                 <div class="field">
                   <label for="bot-tg-base">自建 Bot API 地址</label>
@@ -217,11 +235,6 @@
                 </div>
               </template>
               <div class="form-grid">
-                <div class="field wide">
-                  <label for="bot-name">机器人名称</label>
-                  <input id="bot-name" v-model="form.name" class="input" placeholder="例如：主群助手、客服机器人" />
-                  <span class="hint">用于控制台区分多个机器人，不会自动修改账号昵称。</span>
-                </div>
                 <div class="field wide">
                   <label>接入平台</label>
                   <AppSelect
@@ -252,14 +265,26 @@
                 </div>
                 <div v-if="isOneBotPlatform" class="field wide">
                   <label for="bot-token">OneBot Access Token</label>
-                  <input
-                    id="bot-token"
-                    v-model="tokenDraft"
-                    class="input"
-                    type="password"
-                    autocomplete="off"
-                    :placeholder="form.onebot_access_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '可选，至少 16 位'"
-                  />
+                  <div class="input-group">
+                    <input
+                      id="bot-token"
+                      v-model="tokenDraft"
+                      class="input"
+                      :type="tokenRevealed.onebot_access_token ? 'text' : 'password'"
+                      autocomplete="off"
+                      :placeholder="form.onebot_access_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '可选，至少 16 位'"
+                    />
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      :disabled="tokenRevealBusy === 'onebot_access_token'"
+                      :aria-label="tokenRevealed.onebot_access_token ? '隐藏 Token' : '查看 Token'"
+                      @click="toggleTokenReveal('onebot_access_token')"
+                    >
+                      <EyeOff v-if="tokenRevealed.onebot_access_token" :size="14" aria-hidden="true" />
+                      <Eye v-else :size="14" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
                 <div class="field wide">
                   <label class="switch">
@@ -288,11 +313,12 @@
               </div>
               <div class="field wide">
                 <label for="bot-trigger-mode">触发词匹配</label>
-                <select id="bot-trigger-mode" v-model="form.group_trigger_mode" class="input">
-                  <option value="smart">智能（推荐）</option>
-                  <option value="strict">严格</option>
-                  <option value="loose">宽松</option>
-                </select>
+                <AppSelect
+                  id="bot-trigger-mode"
+                  :model-value="form.group_trigger_mode ?? 'smart'"
+                  :options="triggerModeOptions"
+                  @update:model-value="(value) => { if (form) form.group_trigger_mode = value as AliasTriggerMode; }"
+                />
                 <span class="hint">
                   智能：出现触发词就回，但「「Diana」这名字挺好听」这类把触发词整个引起来的引述不算呼叫。
                   严格：还要求触发词出现在句首或句尾。宽松：出现即回，连引述也算。
@@ -392,20 +418,22 @@
             <div class="card-body form-grid">
               <div class="field">
                 <label for="bot-reply-reference-mode">群聊引用原消息</label>
-                <select id="bot-reply-reference-mode" v-model="form.reply_reference_mode">
-                  <option value="on">总是引用</option>
-                  <option value="off">从不引用</option>
-                  <option value="auto">让模型自己决定</option>
-                </select>
+                <AppSelect
+                  id="bot-reply-reference-mode"
+                  :model-value="form.reply_reference_mode ?? 'on'"
+                  :options="replyReferenceModeOptions"
+                  @update:model-value="(value) => { if (form) form.reply_reference_mode = value as 'on' | 'off' | 'auto'; }"
+                />
                 <span class="hint">选「让模型自己决定」后，只有话题跳转或隔轮回应时它才会引用。</span>
               </div>
               <div class="field">
                 <label for="bot-mention-user-mode">群聊 @ 发送者</label>
-                <select id="bot-mention-user-mode" v-model="form.mention_user_mode">
-                  <option value="on">总是 @</option>
-                  <option value="off">从不 @</option>
-                  <option value="auto">让模型自己决定</option>
-                </select>
+                <AppSelect
+                  id="bot-mention-user-mode"
+                  :model-value="form.mention_user_mode ?? 'on'"
+                  :options="mentionUserModeOptions"
+                  @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
+                />
                 <span class="hint">选「让模型自己决定」后，只有需要点名时它才会 @，不会每句都带。</span>
               </div>
               <div class="field">
@@ -508,24 +536,22 @@
             <div class="card-body form-grid">
               <div class="field">
                 <label for="bot-reply-style">表达风格</label>
-                <select id="bot-reply-style" v-model="form.reply_style" class="input">
-                  <option value="groupmate">群友</option>
-                  <option value="assistant">助手</option>
-                  <option value="gentle">温柔</option>
-                  <option value="lively">活泼</option>
-                  <option value="concise">简洁</option>
-                  <option value="catgirl">猫娘</option>
-                </select>
+                <AppSelect
+                  id="bot-reply-style"
+                  :model-value="form.reply_style ?? 'assistant'"
+                  :options="replyStyleOptions"
+                  @update:model-value="(value) => { if (form) form.reply_style = value as 'groupmate' | 'assistant' | 'gentle' | 'lively' | 'concise' | 'catgirl'; }"
+                />
                 <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
               </div>
               <div class="field">
                 <label for="bot-response-mode">回复模式</label>
-                <select id="bot-response-mode" v-model="form.response_mode" class="input">
-                  <option value="quiet">安静模式</option>
-                  <option value="standard">标准模式</option>
-                  <option value="active">活跃模式</option>
-                  <option value="custom">自定义</option>
-                </select>
+                <AppSelect
+                  id="bot-response-mode"
+                  :model-value="form.response_mode ?? 'standard'"
+                  :options="responseModeOptions"
+                  @update:model-value="(value) => { if (form) form.response_mode = value as 'quiet' | 'standard' | 'active' | 'custom'; }"
+                />
                 <span class="hint">控制机器人在没人点名时主动参与群聊的欲望。</span>
               </div>
               <div class="field wide">
@@ -627,6 +653,28 @@
             </div>
           </section>
 
+          <section class="card">
+            <div class="card-header">
+              <h2>账号安全审核</h2>
+              <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
+                {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">直接回复也做发送前安全审核</span>
+                </label>
+                <span class="hint">
+                  涉政、露骨和其他可能导致账号被处置的内容会被拦下不发。主动回复本来就要过一次审核，安全判断顺带完成，始终生效；
+                  打开这个开关后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                </span>
+              </div>
+            </div>
+          </section>
+
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
@@ -674,13 +722,9 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">启用工具循环（文件读写 / 命令 / 浏览器）</span>
                 </label>
-                <span class="hint">Agent 可在工作目录内执行白名单命令，生产环境请谨慎放开。</span>
+                <span class="hint">Agent 只能在数据目录下的 workspace 里执行白名单命令，路径固定不可配置；生产环境请谨慎放开。</span>
               </div>
               <template v-if="form.agent_enabled">
-                <div class="field">
-                  <label for="agent-dir">工作目录</label>
-                  <input id="agent-dir" v-model="form.agent_work_dir" class="input" placeholder="." />
-                </div>
                 <div class="field">
                   <label for="agent-steps">最大工具步数（≤8）</label>
                   <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" inputmode="numeric" />
@@ -724,14 +768,26 @@
                 </div>
                 <div class="field wide">
                   <label for="bridge-token">Bridge Token</label>
-                  <input
-                    id="bridge-token"
-                    v-model="bridgeTokenDraft"
-                    class="input"
-                    type="password"
-                    autocomplete="off"
-                    :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 16 位'"
-                  />
+                  <div class="input-group">
+                    <input
+                      id="bridge-token"
+                      v-model="bridgeTokenDraft"
+                      class="input"
+                      :type="tokenRevealed.nonebot_bridge_token ? 'text' : 'password'"
+                      autocomplete="off"
+                      :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 16 位'"
+                    />
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      :disabled="tokenRevealBusy === 'nonebot_bridge_token'"
+                      :aria-label="tokenRevealed.nonebot_bridge_token ? '隐藏 Token' : '查看 Token'"
+                      @click="toggleTokenReveal('nonebot_bridge_token')"
+                    >
+                      <EyeOff v-if="tokenRevealed.nonebot_bridge_token" :size="14" aria-hidden="true" />
+                      <Eye v-else :size="14" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
               </template>
             </div>
@@ -817,8 +873,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { ArrowLeft, Bot, ChevronRight, Copy, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
+import { computed, onMounted, ref, type Ref } from "vue";
+import { ArrowLeft, Bot, ChevronRight, Copy, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -836,7 +892,8 @@ import {
   type LLMModelInfo,
   type BotProfileConfig,
   type BotChannelStatus,
-  type BotPlatform
+  type BotPlatform,
+  type AliasTriggerMode
 } from "../api";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -860,6 +917,77 @@ const triggersDraft = ref("");
 const allowlistDraft = ref("");
 const allowedGroupsDraft = ref("");
 const telegramTokenDraft = ref("");
+// 三个凭据输入框共用一套「查看」状态：key 是字段名，值表示当前是否明文显示。
+const tokenRevealed = ref<Record<TokenField, boolean>>({
+  onebot_access_token: false,
+  telegram_bot_token: false,
+  nonebot_bridge_token: false
+});
+const tokenRevealBusy = ref<TokenField | "">("");
+
+type TokenField = "onebot_access_token" | "telegram_bot_token" | "nonebot_bridge_token";
+
+function tokenDraftRef(field: TokenField): Ref<string> {
+  switch (field) {
+    case "telegram_bot_token":
+      return telegramTokenDraft;
+    case "nonebot_bridge_token":
+      return bridgeTokenDraft;
+    default:
+      return tokenDraft;
+  }
+}
+
+function tokenConfigured(field: TokenField): boolean {
+  const current = form.value;
+  if (!current) {
+    return false;
+  }
+  switch (field) {
+    case "telegram_bot_token":
+      return Boolean(current.telegram_bot_token_configured);
+    case "nonebot_bridge_token":
+      return Boolean(current.nonebot_bridge_token_configured);
+    default:
+      return Boolean(current.onebot_access_token_configured);
+  }
+}
+
+function tokenValue(config: BotProfileConfig, field: TokenField): string {
+  switch (field) {
+    case "telegram_bot_token":
+      return config.telegram_bot_token ?? "";
+    case "nonebot_bridge_token":
+      return config.nonebot_bridge_token ?? "";
+    default:
+      return config.onebot_access_token ?? "";
+  }
+}
+
+// 点「查看」才去后端要一次真实凭据：草稿是空的说明用户没改过,值只在服务端,
+// 常规配置接口不会带回来。取到后填进草稿,再保存等于原样写回,不会误清空。
+async function toggleTokenReveal(field: TokenField): Promise<void> {
+  if (tokenRevealed.value[field]) {
+    tokenRevealed.value = { ...tokenRevealed.value, [field]: false };
+    return;
+  }
+  const draft = tokenDraftRef(field);
+  if (!draft.value && tokenConfigured(field)) {
+    tokenRevealBusy.value = field;
+    try {
+      const secrets = await getBotProfileConfig(true);
+      const profileID = form.value?.id;
+      const profile = (secrets.profiles ?? []).find((item) => item.id === profileID) ?? secrets;
+      draft.value = tokenValue(profile, field);
+    } catch (error) {
+      toastError(error instanceof Error ? error.message : "读取凭据失败");
+      return;
+    } finally {
+      tokenRevealBusy.value = "";
+    }
+  }
+  tokenRevealed.value = { ...tokenRevealed.value, [field]: true };
+}
 
 /** OneBot v11 与 Telegram 的接入字段完全不同。 */
 /** 账号字段在不同平台叫法不同，列表卡片的占位文案跟着平台走。 */
@@ -933,6 +1061,40 @@ const platforms = ref<BotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
 const platformPickerOpen = ref(false);
 const creating = ref(false);
+
+const triggerModeOptions: AppSelectOption[] = [
+  { value: "smart", label: "智能（推荐）" },
+  { value: "strict", label: "严格" },
+  { value: "loose", label: "宽松" }
+];
+
+const replyReferenceModeOptions: AppSelectOption[] = [
+  { value: "on", label: "总是引用" },
+  { value: "off", label: "从不引用" },
+  { value: "auto", label: "让模型自己决定" }
+];
+
+const mentionUserModeOptions: AppSelectOption[] = [
+  { value: "on", label: "总是 @" },
+  { value: "off", label: "从不 @" },
+  { value: "auto", label: "让模型自己决定" }
+];
+
+const replyStyleOptions: AppSelectOption[] = [
+  { value: "groupmate", label: "群友" },
+  { value: "assistant", label: "助手" },
+  { value: "gentle", label: "温柔" },
+  { value: "lively", label: "活泼" },
+  { value: "concise", label: "简洁" },
+  { value: "catgirl", label: "猫娘" }
+];
+
+const responseModeOptions: AppSelectOption[] = [
+  { value: "quiet", label: "安静模式" },
+  { value: "standard", label: "标准模式" },
+  { value: "active", label: "活跃模式" },
+  { value: "custom", label: "自定义" }
+];
 
 const admissionModeOptions: AppSelectOption[] = [
   { value: "blacklist", label: "黑名单（默认）", hint: "除禁用群外都工作" },
@@ -1353,11 +1515,10 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
-    reply_reference_enabled: config.reply_reference_enabled ?? true,
-    mention_user_enabled: config.mention_user_enabled ?? true,
+    reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
-    reply_reference_mode: config.reply_reference_mode ?? ((config.reply_reference_enabled ?? true) ? "on" : "off"),
-    mention_user_mode: config.mention_user_mode ?? ((config.mention_user_enabled ?? true) ? "on" : "off"),
+    reply_reference_mode: config.reply_reference_mode ?? "on",
+    mention_user_mode: config.mention_user_mode ?? "on",
     markdown_to_plain: config.markdown_to_plain ?? true,
     error_notify_enabled: config.error_notify_enabled ?? true,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
@@ -1382,6 +1543,8 @@ function setForm(config: BotProfileConfig): void {
   telegramTokenDraft.value = "";
   tokenDraft.value = "";
   bridgeTokenDraft.value = "";
+  // 换一个配置档就得重新索取，别把上一档的明文状态带过来。
+  tokenRevealed.value = { onebot_access_token: false, telegram_bot_token: false, nonebot_bridge_token: false };
   const roles: typeof roleForm.value = {};
   for (const [key, role] of Object.entries(config.model_roles ?? {})) {
 		roles[key as RoleKey] = { profile_id: role.profile_id, group: role.group, model: role.model, provider_id: role.provider_id, model_id: role.model_id };

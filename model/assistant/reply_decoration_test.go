@@ -10,24 +10,19 @@ import (
 	"time"
 )
 
-func TestReplyDecorationModeFallsBackToLegacyToggle(t *testing.T) {
-	off := false
-	on := true
-	if got := normalizeReplyDecorationMode("", &off); got != ReplyDecorationOff {
-		t.Fatalf("legacy false = %q, want off", got)
+// 归一化要吃掉大小写和空白，没写或写错都按 on 处理。
+func TestNormalizeReplyDecorationMode(t *testing.T) {
+	cases := map[ReplyDecorationMode]ReplyDecorationMode{
+		"":         ReplyDecorationOn,
+		"on":       ReplyDecorationOn,
+		"off":      ReplyDecorationOff,
+		" AUTO ":   ReplyDecorationAuto,
+		"nonsense": ReplyDecorationOn,
 	}
-	if got := normalizeReplyDecorationMode("", &on); got != ReplyDecorationOn {
-		t.Fatalf("legacy true = %q, want on", got)
-	}
-	if got := normalizeReplyDecorationMode("", nil); got != ReplyDecorationOn {
-		t.Fatalf("unset = %q, want on", got)
-	}
-	// 显式选过的档位不能被旧开关翻回去：升级后 auto + 遗留 true 必须仍是 auto。
-	if got := normalizeReplyDecorationMode(" AUTO ", &on); got != ReplyDecorationAuto {
-		t.Fatalf("auto with legacy true = %q, want auto", got)
-	}
-	if got := normalizeReplyDecorationMode("nonsense", &off); got != ReplyDecorationOff {
-		t.Fatalf("invalid mode = %q, want legacy off", got)
+	for input, want := range cases {
+		if got := normalizeReplyDecorationMode(input); got != want {
+			t.Fatalf("normalizeReplyDecorationMode(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

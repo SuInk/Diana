@@ -424,9 +424,6 @@ func (m *PluginManager) SanitizeGroupSettingOverrides(overrides PluginSettingOve
 		if !ok {
 			continue
 		}
-		if id == resolverPluginID {
-			values = migrateResolverPlatformSettings(values)
-		}
 		sanitized := sanitizeGroupPluginSettings(plugin.Manifest().Settings, values)
 		if len(sanitized) > 0 {
 			out[id] = sanitized
@@ -461,14 +458,7 @@ func (m *PluginManager) Restore(states map[string]PluginState) {
 			current.Installed = saved.Installed
 			current.Enabled = saved.Enabled
 			// 历史数据可能包含已下线的设置键或非法值，恢复时按当前声明清洗。
-			savedSettings := saved.Settings
-			if id == resolverPluginID {
-				savedSettings = migrateResolverPlatformSettings(savedSettings)
-			}
-			if id == fileParserPluginID {
-				savedSettings = migrateFileParserSizeSettings(savedSettings)
-			}
-			current.Settings = sanitizePluginSettings(current.Manifest.Settings, savedSettings)
+			current.Settings = sanitizePluginSettings(current.Manifest.Settings, saved.Settings)
 		}
 		if current.Manifest.BuiltIn {
 			// 内置插件不能被彻底卸载，但允许用户在 WebUI 里关闭启用状态。
@@ -904,7 +894,6 @@ const (
 	resolverSettingBrowserRender    = "browser_render"
 	resolverSettingBrowserCDPURL    = "browser_cdp_url"
 	resolverSettingEnabledPlatforms = "enabled_platforms"
-	resolverSettingExcludePlatforms = "exclude_platforms" // v0.8.41 及更早版本的迁移键。
 	resolverSettingSummaryMaxRunes  = "summary_max_runes"
 	resolverSettingCacheTTLMinutes  = "cache_ttl_minutes"
 	resolverSettingUserAgent        = "user_agent"
@@ -1605,63 +1594,6 @@ func resolverPlatformKeys() []string {
 		keys = append(keys, platform.key)
 	}
 	return keys
-}
-
-// migrateResolverPlatformSettings converts the former exclusion list into the
-// enabled-platform allowlist. A copied map keeps persisted snapshots immutable.
-// migrateFileParserSizeSettings 把旧的 KB 数值设置迁移成新的字节数设置，
-// 用户此前调过的上限不会因为换键和换单位被重置。
-func migrateFileParserSizeSettings(values map[string]any) map[string]any {
-	if values == nil {
-		return nil
-	}
-	out := make(map[string]any, len(values))
-	for key, value := range values {
-		if key != fileParserSettingMaxFileKB {
-			out[key] = value
-		}
-	}
-	if _, configured := out[fileParserSettingMaxFileBytes]; configured {
-		return out
-	}
-	legacyKB, ok := values[fileParserSettingMaxFileKB]
-	if !ok {
-		return out
-	}
-	kb := SettingValues{fileParserSettingMaxFileKB: legacyKB}.Int(fileParserSettingMaxFileKB, 0)
-	if kb <= 0 {
-		return out
-	}
-	out[fileParserSettingMaxFileBytes] = float64(kb) * 1024
-	return out
-}
-
-func migrateResolverPlatformSettings(values map[string]any) map[string]any {
-	if values == nil {
-		return nil
-	}
-	out := make(map[string]any, len(values))
-	for key, value := range values {
-		if key != resolverSettingExcludePlatforms {
-			out[key] = value
-		}
-	}
-	if _, configured := out[resolverSettingEnabledPlatforms]; configured {
-		return out
-	}
-	rawExcluded, legacy := values[resolverSettingExcludePlatforms]
-	if !legacy {
-		return out
-	}
-	excluded := SettingValues{resolverSettingExcludePlatforms: rawExcluded}.StringSlice(resolverSettingExcludePlatforms)
-	enabled := make([]string, 0, len(resolverPlatforms))
-	for _, key := range resolverPlatformKeys() {
-		if !slices.Contains(excluded, key) {
-			enabled = append(enabled, key)
-		}
-	}
-	out[resolverSettingEnabledPlatforms] = enabled
-	return out
 }
 
 // resolverPlatformOptions 生成启用平台设置的勾选项。

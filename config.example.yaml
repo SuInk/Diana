@@ -1,0 +1,81 @@
+# Copyright (c) 2025-now SuInk.
+# Licensed under the Limited Redistribution License in the repository root.
+#
+# 复制为 config.yaml 使用。进程按 --config、DIANA_CONFIG、工作目录、可执行文件
+# 同级目录的顺序查找；一个都没有就全部走内置默认值，直接打开 WebUI 走安装向导。
+#
+# 这份文件分两层，边界是「这项能不能在 WebUI 里改」：
+#
+#   server / storage / admin / update / napcat —— 基础设施，WebUI 里没有入口，
+#     这里是唯一来源，每次启动都读。
+#
+#   bot / llm —— 业务配置，唯一真相源是数据库，WebUI 随时可改。这两段只在数据库
+#     为空时用作首启播种，给无人值守部署用。数据库里已经有配置了，这两段就不会
+#     生效，启动日志会明确说一句 "was NOT applied"，不会让你对着一份不生效的
+#     配置排查。想重新播种就清空数据库，想改配置就去 WebUI。
+#
+# 别把填好的这份文件提交进版本库，里面有 API Key 和 access token。
+
+server:
+  # 监听地址。要从别的机器访问就填 0.0.0.0，只本机用就留 127.0.0.1。
+  host: 127.0.0.1
+  port: "18080"
+  # 反向代理的可信来源，留空表示不信任任何代理转发的客户端 IP。
+  trusted_proxies: []
+  # 前端静态目录，留空时按约定位置自动查找。
+  frontend_dist: ""
+
+storage:
+  # 留空则放在默认数据目录。
+  db_path: data/diana.db
+  # 留空表示只写标准输出。
+  log_path: logs/diana.log
+  # 入站图片落盘目录，留空则跟随数据库所在目录。
+  media_dir: ""
+  # 0 表示用内置默认值。
+  media_max_mb: 0
+  media_cache_mb: 0
+  # 媒体回源基址。留空时按接入端反连握手用的地址动态推断——桥在容器或别的机器
+  # 上（比如 host.docker.internal）也能取到，只需要配好 ws 地址。
+  local_media_base_url: ""
+
+admin:
+  # 两项都留空时首启自动生成账号和强密码，只在日志里打印一次。
+  username: ""
+  password: ""
+
+update:
+  # 源码检出目录，WebUI 的在线更新在这里执行。
+  root: "."
+  apply_enabled: true
+  release_enabled: true
+  # 群测试能力，默认关闭。
+  group_test_enabled: false
+
+napcat:
+  webui_url: ""
+  webui_token: ""
+
+# ---------------------------------------------------------------------------
+# 以下两段只在数据库为空时播种一次。字段名和 WebUI 配置接口的 payload 完全一致。
+# ---------------------------------------------------------------------------
+
+# bot:
+#   platform: onebot-v11
+#   enabled: true
+#   onebot_reverse_ws_endpoint: ws://127.0.0.1:18080/onebot/v11/ws
+#   onebot_access_token: ""
+#   bot_account: ""
+#   owner_id: ""
+#   group_triggers:
+#     - Diana
+#     - diana
+#   system_prompt: ""
+#   agent_enabled: false
+
+# llm:
+#   provider: openai_compatible
+#   base_url: https://api.example.com/v1
+#   api_key: ""
+#   model: ""
+#   api_format: responses

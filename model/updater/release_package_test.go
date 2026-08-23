@@ -153,33 +153,6 @@ func TestReleasePackageUpdaterReportsActiveOperation(t *testing.T) {
 	}
 }
 
-func TestReleasePackageUpdaterContinuesLegacyExecutableName(t *testing.T) {
-	installRoot := t.TempDir()
-	legacyExecutable := filepath.Join(installRoot, legacyReleaseBinaryName(runtime.GOOS, runtime.GOARCH))
-	frontend := filepath.Join(installRoot, "frontend-next", "dist")
-	database := filepath.Join(installRoot, "data", "diana.db")
-	writeUpdaterTestFile(t, legacyExecutable, "old-binary", 0o700)
-	writeUpdaterTestFile(t, filepath.Join(frontend, "index.html"), "old-frontend", 0o600)
-	writeUpdaterTestFile(t, database, "database", 0o600)
-
-	u, err := NewReleasePackageUpdater(ReleasePackageOptions{
-		CurrentVersion: "v0.8.13",
-		Executable:     legacyExecutable,
-		FrontendDir:    frontend,
-		DatabasePath:   database,
-		HealthURL:      "http://127.0.0.1:18080/api/health",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !u.Supported() {
-		t.Fatalf("legacy release updater is unsupported: %s", u.unsupportedWhy)
-	}
-	if u.executable != legacyExecutable || u.binaryName != filepath.Base(legacyExecutable) {
-		t.Fatalf("legacy executable=%q binary=%q", u.executable, u.binaryName)
-	}
-}
-
 func TestReleasePackageUpdaterRejectsChecksumMismatch(t *testing.T) {
 	assetName := ExpectedReleaseAssetName(runtime.GOOS, runtime.GOARCH)
 	if !strings.HasSuffix(assetName, ".tar.gz") {

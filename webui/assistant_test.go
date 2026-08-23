@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,7 +42,7 @@ func TestBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 	router := botTestRouter(handler)
 
 	body := []byte(`{"enabled":false,"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","nonebot_bridge_enabled":true,"nonebot_bridge_endpoint":"ws://127.0.0.1:8080/onebot/v11/ws","group_triggers":["Diana"],"disabled_groups":["123456"],"welcome_enabled":true,"welcome_message":"欢迎 {user_id}","request_timeout_ms":1000}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/config", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -80,7 +81,7 @@ func TestBotHandlerPluginInstallAndEnable(t *testing.T) {
 	})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/plugins/official.nonebot-plugin-resolver-go/enabled", bytes.NewReader([]byte(`{"enabled":false}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/enabled", bytes.NewReader([]byte(`{"enabled":false}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -107,7 +108,7 @@ func TestBotHandlerInstallsResolverDependency(t *testing.T) {
 		dep := assistant.ResolverDependency{Name: name, Available: true, Version: "2026.08.09"}
 		return assistant.ResolverDependencyInstallResult{
 			Dependency: dep,
-			Resolver:   []assistant.ResolverDependency{dep},
+			Plugins:    map[string][]assistant.ResolverDependency{assistant.ResolverPluginID: {dep}},
 			Installer:  "test-installer",
 		}, nil
 	}
@@ -159,7 +160,7 @@ func TestBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/plugins/official.nonebot-plugin-resolver-go/settings", bytes.NewReader([]byte(`{"settings":{"fetch_title":false,"max_links":8}}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/settings", bytes.NewReader([]byte(`{"settings":{"fetch_title":false,"max_links":8}}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -175,7 +176,7 @@ func TestBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	}
 
 	// 未知设置键返回 400。
-	req = httptest.NewRequest(http.MethodPost, "/api/qqbot/plugins/official.nonebot-plugin-resolver-go/settings", bytes.NewReader([]byte(`{"settings":{"bogus":1}}`)))
+	req = httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/settings", bytes.NewReader([]byte(`{"settings":{"bogus":1}}`)))
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -183,7 +184,7 @@ func TestBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	}
 
 	// 不存在的插件返回 404。
-	req = httptest.NewRequest(http.MethodPost, "/api/qqbot/plugins/missing/settings", bytes.NewReader([]byte(`{"settings":{}}`)))
+	req = httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/missing/settings", bytes.NewReader([]byte(`{"settings":{}}`)))
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -200,7 +201,7 @@ func TestBotHandlerRejectsShortTokens(t *testing.T) {
 	router := botTestRouter(handler)
 
 	body := []byte(`{"enabled":false,"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","onebot_access_token":"short","group_triggers":["Diana"],"request_timeout_ms":1000}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/config", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -219,7 +220,7 @@ func TestBotHandlerGroupTestSendsMessage(t *testing.T) {
 	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/group-test", bytes.NewReader([]byte(`{"group_id":"123456","message":"测试消息"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/group-test", bytes.NewReader([]byte(`{"group_id":"123456","message":"测试消息"}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -261,7 +262,7 @@ func TestBotHandlerGroupTestRequiresGroupID(t *testing.T) {
 	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/group-test", bytes.NewReader([]byte(`{"message":"测试消息"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/group-test", bytes.NewReader([]byte(`{"message":"测试消息"}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -280,7 +281,7 @@ func TestBotHandlerGroupTestRequiresNumericGroupID(t *testing.T) {
 	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/qqbot/group-test", bytes.NewReader([]byte(`{"group_id":"abc","message":"测试消息"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/group-test", bytes.NewReader([]byte(`{"group_id":"abc","message":"测试消息"}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -309,7 +310,7 @@ func TestBotHandlerGroupTestReturnsRecentGroupEvents(t *testing.T) {
 	handler.SetFeatureFlags(BotFeatureFlags{GroupTest: true})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/qqbot/group-test?group_id=123456", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/assistant/group-test?group_id=123456", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -336,14 +337,14 @@ func TestBotHandlerGroupTestDisabledByDefault(t *testing.T) {
 	})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/qqbot/group-test?group_id=123456", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/assistant/group-test?group_id=123456", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/api/qqbot/features", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/assistant/features", nil)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -373,7 +374,7 @@ func TestBotPlatforms(t *testing.T) {
 	})
 	router := botTestRouter(handler)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/qqbot/platforms", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/platforms", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("platforms = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -481,14 +482,13 @@ func TestBotHandlerGroupsPluginDependenciesByPlugin(t *testing.T) {
 	}
 
 	var payload struct {
-		Resolver []assistant.ResolverDependency            `json:"resolver"`
-		Plugins  map[string][]assistant.ResolverDependency `json:"plugins"`
+		Plugins map[string][]assistant.ResolverDependency `json:"plugins"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if len(payload.Plugins[assistant.ResolverPluginID]) != len(payload.Resolver) {
-		t.Fatalf("resolver group = %#v, compat field = %#v", payload.Plugins[assistant.ResolverPluginID], payload.Resolver)
+	if len(payload.Plugins[assistant.ResolverPluginID]) == 0 {
+		t.Fatalf("resolver group = %#v", payload.Plugins[assistant.ResolverPluginID])
 	}
 	browser := payload.Plugins[assistant.SandboxedBrowserPluginID]
 	if len(browser) != 1 {
@@ -506,5 +506,123 @@ func TestBotHandlerGroupsPluginDependenciesByPlugin(t *testing.T) {
 	// 能不能一键装取决于跑测试的机器上有没有包管理器，但只要说能装，就必须说清用哪个装。
 	if browser[0].Installable && strings.TrimSpace(browser[0].Installer) == "" {
 		t.Fatalf("installable browser without an installer: %#v", browser[0])
+	}
+}
+
+// TestBotConfigGetMasksTokensUnlessSecretsRequested 固定凭据的默认遮蔽行为:
+// 常规读取只给「已配置」标记,带上 include_secrets=true 才回真实 token。
+func TestBotConfigGetMasksTokensUnlessSecretsRequested(t *testing.T) {
+	cfg := assistant.DefaultBotConfig()
+	cfg.OneBotAccessToken = "onebot-secret-token"
+	cfg.TelegramBotToken = "telegram-secret-token"
+	cfg.NoneBotBridgeToken = "bridge-secret-token"
+
+	runtime := assistant.NewRuntime(cfg, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+		return fakeChannel{}
+	})
+	handler.SetProfileStore(NewMemoryBotProfileStore(cfg))
+	router := botTestRouter(handler)
+
+	fetch := func(target string) assistant.ConfigPayload {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var payload assistant.ConfigPayload
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+
+	masked := fetch("/api/assistant/config")
+	if masked.OneBotAccessToken != "" || masked.TelegramBotToken != "" || masked.NoneBotBridgeToken != "" {
+		t.Fatalf("default response leaked credentials: %#v", masked)
+	}
+	if !masked.OneBotAccessTokenConfigured || !masked.TelegramBotTokenConfigured || !masked.NoneBotBridgeTokenConfigured {
+		t.Fatalf("configured flags = %#v, want all true", masked)
+	}
+
+	revealed := fetch("/api/assistant/config?include_secrets=true")
+	if revealed.OneBotAccessToken != cfg.OneBotAccessToken || revealed.TelegramBotToken != cfg.TelegramBotToken || revealed.NoneBotBridgeToken != cfg.NoneBotBridgeToken {
+		t.Fatalf("include_secrets response = %#v", revealed)
+	}
+	if len(revealed.Profiles) != 1 || revealed.Profiles[0].OneBotAccessToken != cfg.OneBotAccessToken {
+		t.Fatalf("profiles = %#v, want the token echoed per profile", revealed.Profiles)
+	}
+}
+
+// failingBotProfileStore 模拟落库失败的配置存储。
+type failingBotProfileStore struct {
+	*MemoryBotProfileStore
+	err error
+}
+
+func (s *failingBotProfileStore) SaveProfiles(assistant.ProfileSet) error { return s.err }
+
+func (s *failingBotProfileStore) SaveCurrentConfig(assistant.BotConfig) error { return s.err }
+
+// TestBotConfigSaveReportsPersistenceFailure 固定保存失败必须回错误：
+// 以前落库错误被直接丢掉，接口照样回 200，前端提示保存成功，重启后配置又是旧的。
+func TestBotConfigSaveReportsPersistenceFailure(t *testing.T) {
+	cfg := assistant.DefaultBotConfig()
+	runtime := assistant.NewRuntime(cfg, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+		return fakeChannel{}
+	})
+	handler.SetProfileStore(&failingBotProfileStore{
+		MemoryBotProfileStore: NewMemoryBotProfileStore(cfg),
+		err:                   errors.New("disk is full"),
+	})
+	router := botTestRouter(handler)
+
+	body := []byte(`{"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","owner_id":"10001","onebot_access_token":"0123456789abcdef"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body = %s, want 500", rec.Code, rec.Body.String())
+	}
+}
+
+// TestApplyProfileSetDoesNotInvokeSingleChannelFactory 固定这次 401 的根因：
+// 配置集工厂在场时不能再调单配置工厂。单配置工厂造出来的 channel 会被丢弃，
+// 但它有副作用——共享的 OneBot 反连监听器会被「当前激活配置」的 token 覆盖，
+// 而激活的未必是 OneBot 配置档，监听器于是拿着一个对不上任何配置的 token。
+func TestApplyProfileSetDoesNotInvokeSingleChannelFactory(t *testing.T) {
+	cfg := assistant.DefaultBotConfig()
+	runtime := assistant.NewRuntime(cfg, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	singleCalls := 0
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+		singleCalls++
+		return fakeChannel{}
+	})
+	handler.SetProfileStore(NewMemoryBotProfileStore(cfg))
+	setCalls := 0
+	handler.SetChannelSetFactory(func(assistant.ProfileSet) assistant.Channel {
+		setCalls++
+		return fakeChannel{}
+	})
+	router := botTestRouter(handler)
+
+	body := []byte(`{"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","owner_id":"10001","onebot_access_token":"0123456789abcdef"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if setCalls == 0 {
+		t.Fatal("channel set factory was never called")
+	}
+	if singleCalls != 0 {
+		t.Fatalf("single-config factory called %d times, want 0 while a set factory is installed", singleCalls)
 	}
 }

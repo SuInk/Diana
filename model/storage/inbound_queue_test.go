@@ -5,7 +5,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -110,117 +109,6 @@ func TestInboundQueueDeduplicatesAcrossContextNamespaces(t *testing.T) {
 	}
 	if inboundRows != 1 || historyRows != 1 {
 		t.Fatalf("deduplicated rows inbound=%d history=%d", inboundRows, historyRows)
-	}
-}
-
-func TestInboundQueueNamespaceDedupeFindsLegacySessionScopedHistory(t *testing.T) {
-	ctx := context.Background()
-	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "legacy-namespace-dedupe.db"))
-	defer func() { _ = store.Close() }()
-	event := inboundTestEvent("legacy-scoped-message", "already seen", time.Now().Unix())
-	event.Platform = assistant.PlatformNapCat
-	event.SelfID = "bot-1"
-	event.GroupID = "group-1"
-	event.UserID = "user-1"
-	event.ContextNamespace = "old-profile"
-	if err := store.AppendMessageEvent(ctx, "old-profile:group:group-1", event); err != nil {
-		t.Fatal(err)
-	}
-	event.Platform = assistant.PlatformOneBotV11
-	event.ContextNamespace = "new-profile"
-	id, inserted, err := store.EnqueueInboundEvent(ctx, "new-profile:group:group-1", event)
-	if err != nil || inserted {
-		t.Fatalf("legacy namespace duplicate id=%q inserted=%v err=%v", id, inserted, err)
-	}
-	if count := pendingInboundCount(t, store); count != 0 {
-		t.Fatalf("legacy history was replayed into queue: %d", count)
-	}
-}
-
-func TestInboundQueueMarksLegacyNamespaceDuplicatesTerminal(t *testing.T) {
-	ctx := context.Background()
-	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "legacy-queue-duplicates.db"))
-	defer func() { _ = store.Close() }()
-	event := inboundTestEvent("duplicated-backfill", "process once", time.Now().Unix())
-	event.Platform = assistant.PlatformOneBotV11
-	event.SelfID = "bot-1"
-	event.GroupID = "group-1"
-	event.UserID = "user-1"
-	payload, err := json.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UnixNano()
-	for index, session := range []string{"old-profile:group:group-1", "new-profile:group:group-1"} {
-		id := fmt.Sprintf("legacy-duplicate-%d", index)
-		if _, err := store.db.Exec(`
-INSERT INTO inbound_events (
-  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
-  status, attempts, available_at, created_at, updated_at
-) VALUES (?, ?, 'group', 'group-1', 'user-1', ?, ?, ?, 0, 'pending', 0, ?, ?, ?)
-`, id, session, event.MessageID, event.Time, string(payload), now, now+int64(index), now+int64(index)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	updated, err := store.MarkLegacyInboundNamespaceDuplicates(ctx)
-	if err != nil || updated != 1 {
-		t.Fatalf("cleanup updated=%d err=%v", updated, err)
-	}
-	var pending, ignored int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM inbound_events WHERE status = 'pending'`).Scan(&pending); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM inbound_events WHERE outcome = 'ignored_duplicate'`).Scan(&ignored); err != nil {
-		t.Fatal(err)
-	}
-	if pending != 1 || ignored != 1 {
-		t.Fatalf("cleanup rows pending=%d ignored=%d", pending, ignored)
-	}
-}
-
-func TestInboundQueueMigrationRestoresStaleDrops(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "restore-stale.db")
-	store := openInboundTestStore(t, dbPath)
-	id, inserted, err := store.EnqueueInboundEvent(ctx, "group:100", inboundTestEvent("stale", "recover me", time.Now().Add(-time.Hour).Unix()))
-	if err != nil || !inserted {
-		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
-	}
-	if _, ok, err := store.ClaimNextInboundEvent(ctx, "old-worker", time.Now().Add(time.Minute)); err != nil || !ok {
-		t.Fatalf("claim ok=%v err=%v", ok, err)
-	}
-	if err := store.CompleteInboundEvent(ctx, id, "old-worker", "ignored_stale"); err != nil {
-		t.Fatal(err)
-	}
-	oldID, inserted, err := store.EnqueueInboundEvent(ctx, "group:100", inboundTestEvent("too-old", "leave terminal", time.Now().Add(-25*time.Hour).Unix()))
-	if err != nil || !inserted {
-		t.Fatalf("enqueue old inserted=%v err=%v", inserted, err)
-	}
-	if _, ok, err := store.ClaimNextInboundEvent(ctx, "old-worker", time.Now().Add(time.Minute)); err != nil || !ok {
-		t.Fatalf("claim old ok=%v err=%v", ok, err)
-	}
-	if err := store.CompleteInboundEvent(ctx, oldID, "old-worker", "ignored_stale"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store = openInboundTestStore(t, dbPath)
-	defer func() { _ = store.Close() }()
-	if count := pendingInboundCount(t, store); count != 1 {
-		t.Fatalf("restored pending count=%d, want 1", count)
-	}
-	item, ok, err := store.ClaimNextInboundEvent(ctx, "new-worker", time.Now().Add(time.Minute))
-	if err != nil || !ok || item.ID != id || item.Attempts != 2 {
-		t.Fatalf("restored item=%#v ok=%v err=%v", item, ok, err)
-	}
-	var oldStatus, oldOutcome string
-	if err := store.db.QueryRowContext(ctx, `SELECT status, outcome FROM inbound_events WHERE id = ?`, oldID).Scan(&oldStatus, &oldOutcome); err != nil {
-		t.Fatal(err)
-	}
-	if oldStatus != inboundStatusDone || oldOutcome != "ignored_stale" {
-		t.Fatalf("old stale row status=%q outcome=%q", oldStatus, oldOutcome)
 	}
 }
 
@@ -626,62 +514,6 @@ func TestSQLiteStoreConfiguresQueuePragmas(t *testing.T) {
 	}
 	if max := store.db.Stats().MaxOpenConnections; max != 1 {
 		t.Fatalf("MaxOpenConnections=%d", max)
-	}
-}
-
-func TestInboundQueueMigrationAddsPriorityColumn(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "priority-migration.db")
-	store := openInboundTestStore(t, path)
-	if _, err := store.db.Exec(`
-DROP TABLE inbound_events;
-CREATE TABLE inbound_events (
-  id TEXT PRIMARY KEY,
-  session TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  group_id TEXT,
-  user_id TEXT,
-  message_id TEXT,
-  event_time INTEGER NOT NULL,
-  payload TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  attempts INTEGER NOT NULL DEFAULT 0,
-  available_at INTEGER NOT NULL,
-  lease_owner TEXT,
-  lease_until INTEGER,
-  outcome TEXT,
-  last_error TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  completed_at INTEGER
-);
-INSERT INTO inbound_events (
-  id, session, kind, group_id, user_id, message_id, event_time, payload,
-  status, attempts, available_at, created_at, updated_at
-) VALUES ('legacy', 'group:1', 'group', '1', '2', 'legacy', 1, '{}',
-          'pending', 0, 1, 1, 1);
-`); err != nil {
-		_ = store.Close()
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store = openInboundTestStore(t, path)
-	defer func() { _ = store.Close() }()
-	var priority int
-	if err := store.db.QueryRow(`SELECT priority FROM inbound_events WHERE id = 'legacy'`).Scan(&priority); err != nil {
-		t.Fatal(err)
-	}
-	if priority != assistant.InboundPriorityNormal {
-		t.Fatalf("migrated priority=%d, want %d", priority, assistant.InboundPriorityNormal)
-	}
-	var indexCount int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_inbound_events_priority_claim'`).Scan(&indexCount); err != nil {
-		t.Fatal(err)
-	}
-	if indexCount != 1 {
-		t.Fatalf("priority claim index count=%d, want 1", indexCount)
 	}
 }
 

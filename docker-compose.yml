@@ -14,19 +14,11 @@ services:
       # 不挂出来的话容器重建就全丢了。
       - ./data:/app/data
       - ./logs:/app/logs
+      # 配置文件。复制 config.example.yaml 改好再挂进来；不挂也能起，
+      # 打开 WebUI 走安装向导即可。
+      - ./config.yaml:/app/config.yaml:ro
     environment:
-      PORT: "18080"
-      LOG_PATH: "/app/logs/diana.log"
-      DIANA_LOCAL_MEDIA_BASE_URL: "http://diana:18080/media/resolver"
-      DIANA_ADMIN_PASSWORD: "change-this-admin-password"
-      DIANA_BOT_ENABLED: "true"
-      ONEBOT_REVERSE_WS_ENDPOINT: "ws://127.0.0.1:18080/onebot/v11/ws"
-      ONEBOT_ACCESS_TOKEN: "change-me"
-      NONEBOT_BRIDGE_ENABLED: "false"
-      NONEBOT_BRIDGE_ENDPOINT: "ws://127.0.0.1:8080/onebot/v11/ws"
-      NONEBOT_BRIDGE_TOKEN: ""
-      DIANA_BOT_ACCOUNT: "10001"
-      LLM_PROVIDER: "openai_compatible"
-      LLM_API_KEY: "change-me"
-      LLM_MODEL: "gp5.5"
-      LLM_USER_AGENT: "codex-cli/0.142.0"
+      # 唯一需要的环境变量：告诉进程去哪找配置文件。其余配置一律写在
+      # config.yaml 里——基础设施段每次启动生效，bot/llm 段只在数据库为空时
+      # 播种一次，之后以 WebUI 里的配置为准。
+      DIANA_CONFIG: "/app/config.yaml"

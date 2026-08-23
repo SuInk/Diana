@@ -27,7 +27,7 @@ func TestMarkdownToPlainStripsCommonSyntax(t *testing.T) {
 
 // TestMarkdownToPlainKeepsBotBrAndPlainText 验证对应功能场景。
 func TestMarkdownToPlainKeepsBotBrAndPlainText(t *testing.T) {
-	input := "第一段<botbr>第二段，2*3=6，纯文本不应被改动。"
+	input := "第一段<dianabr>第二段，2*3=6，纯文本不应被改动。"
 	if got := markdownToPlain(input); got != input {
 		t.Fatalf("plain text changed: %q -> %q", input, got)
 	}

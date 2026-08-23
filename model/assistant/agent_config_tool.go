@@ -61,9 +61,7 @@ type dianaBotConfigSnapshot struct {
 	WelcomeMessage                  string                   `json:"welcome_message,omitempty"`
 	SystemPromptConfigured          bool                     `json:"system_prompt_configured"`
 	SystemPromptChars               int                      `json:"system_prompt_chars,omitempty"`
-	ReplyReferenceEnabled           bool                     `json:"reply_reference_enabled"`
 	ReplyReferenceMode              ReplyDecorationMode      `json:"reply_reference_mode"`
-	MentionUserEnabled              bool                     `json:"mention_user_enabled"`
 	MentionUserMode                 ReplyDecorationMode      `json:"mention_user_mode"`
 	MarkdownToPlain                 bool                     `json:"markdown_to_plain"`
 	ErrorNotifyEnabled              bool                     `json:"error_notify_enabled"`
@@ -239,7 +237,7 @@ func (r *Runtime) dianaConfigSnapshot() dianaConfigSnapshot {
 	status := r.Status()
 	cfg := r.Config().WithDefaults()
 	return dianaConfigSnapshot{
-		Note:        "配置已脱敏：不会返回 API key、OneBot token、自定义 header 值、runtime.env 原文或 secrets 文件内容。",
+		Note:        "配置已脱敏：不会返回 API key、OneBot token、自定义 header 值、config.yaml 原文或 secrets 文件内容。",
 		Runtime:     dianaRuntimeFromStatus(status),
 		Bot:         dianaBotConfigFromConfig(cfg),
 		LLM:         r.dianaLLMSnapshot(),
@@ -285,10 +283,8 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		WelcomeMessage:                  cfg.WelcomeMessage,
 		SystemPromptConfigured:          strings.TrimSpace(cfg.SystemPrompt) != "",
 		SystemPromptChars:               len([]rune(cfg.SystemPrompt)),
-		ReplyReferenceEnabled:           replyReferenceMode(cfg) == ReplyDecorationOn,
 		ReplyReferenceMode:              replyReferenceMode(cfg),
 		MentionUserMode:                 mentionUserMode(cfg),
-		MentionUserEnabled:              mentionUserMode(cfg) == ReplyDecorationOn,
 		MarkdownToPlain:                 boolValue(cfg.MarkdownToPlain, true),
 		ErrorNotifyEnabled:              boolValue(cfg.ErrorNotifyEnabled, true),
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
@@ -336,7 +332,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
 		Agent: dianaAgentConfigSnapshot{
 			Enabled:          cfg.AgentEnabled,
-			WorkDir:          cfg.AgentWorkDir,
+			WorkDir:          AgentWorkspaceDir(),
 			MaxSteps:         cfg.AgentMaxSteps,
 			SkillRoots:       append([]string(nil), cfg.AgentSkillRoots...),
 			MCPConfigPath:    cfg.AgentMCPConfigPath,
@@ -418,7 +414,7 @@ func dianaRuntimePathsFromEnv() dianaRuntimePathSnapshot {
 		AppDBPath:       os.Getenv("APP_DB_PATH"),
 		LogPath:         os.Getenv("LOG_PATH"),
 		FrontendDist:    os.Getenv("FRONTEND_DIST"),
-		AgentWorkDir:    os.Getenv("DIANA_AGENT_WORK_DIR"),
+		AgentWorkDir:    AgentWorkspaceDir(),
 		AgentSkillRoots: os.Getenv("DIANA_AGENT_SKILL_ROOTS"),
 		AgentMCPConfig:  os.Getenv("DIANA_AGENT_MCP_CONFIG"),
 	}

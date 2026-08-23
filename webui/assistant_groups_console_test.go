@@ -81,7 +81,7 @@ func TestConsoleGroupsListsJoinedAndSavedGroups(t *testing.T) {
 	}
 
 	aliasRec := httptest.NewRecorder()
-	router.ServeHTTP(aliasRec, httptest.NewRequest(http.MethodGet, "/api/qqbot/groups", nil))
+	router.ServeHTTP(aliasRec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
 	if aliasRec.Code != http.StatusOK {
 		t.Fatalf("chatbot groups alias status = %d, body = %s", aliasRec.Code, aliasRec.Body.String())
 	}
