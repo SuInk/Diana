@@ -427,9 +427,7 @@ const permissionsTarget = ref<PluginState | null>(null);
 const dependencyHints: Record<string, string> = {
   [resolverPluginID]: "缺少这些命令时，对应平台的解析会失败；可直接在这里安装。",
   [sandboxedBrowserPluginID]:
-    "没有可用的浏览器时，网页渲染会在用到的那一刻才失败；可直接在这里安装。浏览器体积不小，安装会比其它依赖慢一些。",
-  [rssWatchPluginID]:
-    "只有抖音订阅需要浏览器：它靠无头浏览器打开主页截取官方接口。X、哔哩哔哩、小红书、GitHub 和自定义 RSS 都不需要。"
+    "没有可用的浏览器时，网页渲染会在用到的那一刻才失败；可直接在这里安装。浏览器体积不小，安装会比其它依赖慢一些。"
 };
 
 function dependenciesFor(pluginID: string): ResolverDependency[] {

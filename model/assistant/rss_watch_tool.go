@@ -20,8 +20,8 @@ const (
 )
 
 type RSSWatchCreateInput struct {
-	// FeedPlatform 是订阅平台（x、bilibili、douyin、xiaohongshu、github、rss），
-	// FeedTarget 是平台内的目标。FeedURL / TwitterHandle 是旧字段，仅作兼容。
+	// FeedPlatform 是订阅平台（x 或 rss），FeedTarget 是平台内的目标。
+	// FeedURL / TwitterHandle 是旧字段，仅作兼容。
 	FeedPlatform, FeedTarget                                        string
 	FeedURL, TwitterHandle, JudgePrompt                             string
 	Interval                                                        time.Duration
@@ -69,7 +69,7 @@ func newDianaRSSWatchTool(runtime *Runtime, event MessageEvent) *dianaRSSWatchTo
 func (*dianaRSSWatchTool) Name() string { return "diana.rss" }
 
 func (*dianaRSSWatchTool) Description() string {
-	return `创建和管理内容订阅：支持 X、哔哩哔哩、抖音、小红书、GitHub 这些平台的内置抓取，也支持任意 RSS/Atom 地址。发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。用户要求持续关注某个账号或某个网站 Feed、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 diana.schedule。首次创建只建立当前内容基线，不补发历史条目。`
+	return `创建和管理内容订阅：X 用户由内置抓取器直接读取，另外也支持任意 RSS/Atom 地址。发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。用户要求持续关注某个账号或某个网站 Feed、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 diana.schedule。首次创建只建立当前内容基线，不补发历史条目。`
 }
 
 func (*dianaRSSWatchTool) InputSchema() map[string]any {
@@ -77,7 +77,7 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
 			"create", "list", "update", "cancel", "delete"),
 		"platform":       toolEnumParam("订阅平台。"+rssWatchPlatformSummary(), rssWatchPlatformIDs()...),
-		"target":         toolStringParam("平台内的订阅目标：X 填用户名，哔哩哔哩填 UID，抖音填 sec_uid 或主页链接，小红书填用户 ID，GitHub 填 owner/repo，rss 填完整 Feed 地址。create 时必填。"),
+		"target":         toolStringParam("平台内的订阅目标：platform=x 时填用户名或用户主页链接，platform=rss 时填完整 Feed 地址。create 时必填。"),
 		"twitter_handle": toolStringParam("[旧字段] 等价于 platform=x 加 target；新调用请改用 platform + target。"),
 		"feed_url":       toolStringParam("[旧字段] 等价于 platform=rss 加 target；新调用请改用 platform + target。"),
 		"interval":       toolStringParam("检查间隔，只接受 Go 时长写法：15m、1h。不短于 " + minimumRSSWatchInterval.String() + "，省略按 " + defaultRSSWatchInterval.String() + " 处理。"),

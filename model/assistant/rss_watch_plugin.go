@@ -25,12 +25,9 @@ import (
 const (
 	rssWatchPluginID = "official.rss-watch"
 
-	rssWatchSettingTwitterTemplate   = "twitter_rss_template"
-	rssWatchSettingBilibiliCookie    = "bilibili_cookie"
-	rssWatchSettingDouyinCookie      = "douyin_cookie"
-	rssWatchSettingXiaohongshuCookie = "xiaohongshu_cookie"
-	rssWatchSettingTimeout           = "timeout_seconds"
-	rssWatchSettingItemLimit         = "judge_item_limit"
+	rssWatchSettingTwitterTemplate = "twitter_rss_template"
+	rssWatchSettingTimeout         = "timeout_seconds"
+	rssWatchSettingItemLimit       = "judge_item_limit"
 
 	// legacyTwitterRSSTemplate 是 0.1.x 默认写死的 RSSHub 公共实例。X 已经改成
 	// 内置抓取，这个值再出现就只能当「没配置」处理，否则老用户会被继续绑在
@@ -39,14 +36,13 @@ const (
 
 	maximumRSSBodyBytes = 4 << 20
 
-	// rssWatchBrowserUserAgent 是原生抓取统一使用的桌面 Chrome UA。几个站点都会
-	// 按 UA 决定是直接返回数据还是丢一段风控 JS。
+	// rssWatchBrowserUserAgent 是原生抓取使用的桌面 Chrome UA：X 会按 UA 决定
+	// 是返回时间线数据还是一段风控页面。
 	rssWatchBrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
 type RSSWatchPlugin struct {
-	client   *http.Client
-	bilibili *bilibiliAccessCache
+	client *http.Client
 }
 
 type rssWatchSnapshot struct {
@@ -79,7 +75,7 @@ func NewRSSWatchPlugin(client *http.Client) *RSSWatchPlugin {
 	if client == nil {
 		client = netguard.NewPublicHTTPClient(20 * time.Second)
 	}
-	return &RSSWatchPlugin{client: client, bilibili: &bilibiliAccessCache{}}
+	return &RSSWatchPlugin{client: client}
 }
 
 func (p *RSSWatchPlugin) Manifest() PluginManifest {
@@ -87,7 +83,7 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 		ID:          rssWatchPluginID,
 		Name:        "RSS 订阅",
 		Version:     "0.2.0",
-		Description: "订阅 X、哔哩哔哩、抖音、小红书、GitHub 或任意 RSS/Atom：平台内容由内置抓取器直接读取，不依赖 RSSHub；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
+		Description: "订阅 X 用户或任意 RSS/Atom：X 由内置抓取器直接读取，不依赖 RSSHub；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:https", "task:persistent", "message:send", "llm:generate"},
@@ -98,30 +94,6 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 				Description: "留空即用内置抓取（syndication 接口，无需账号）。只有想走自建 RSSHub、Nitter 这类中转时才填，例如 https://rss.example.com/twitter/user/{handle}，其中 {handle} 会被替换成用户名。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
-			},
-			{
-				Key:         rssWatchSettingBilibiliCookie,
-				Label:       "哔哩哔哩 Cookie",
-				Description: "可选。留空时用匿名访问抓取 UP 主投稿；填写登录后的整段 Cookie 可以改抓完整动态（图文、转发、直播）。",
-				Type:        PluginSettingTypeString,
-				Default:     "",
-				Secret:      true,
-			},
-			{
-				Key:         rssWatchSettingDouyinCookie,
-				Label:       "抖音 Cookie",
-				Description: "可选。抖音订阅通过本机无头浏览器打开主页截取官方接口响应，填写 Cookie 可以降低触发验证码的概率。",
-				Type:        PluginSettingTypeString,
-				Default:     "",
-				Secret:      true,
-			},
-			{
-				Key:         rssWatchSettingXiaohongshuCookie,
-				Label:       "小红书 Cookie",
-				Description: "可选。留空时读主页服务端渲染数据（拿不到笔记链接），填写登录后的 Cookie 可以带上笔记 ID 和直达链接。",
-				Type:        PluginSettingTypeString,
-				Default:     "",
-				Secret:      true,
 			},
 			{
 				Key:         rssWatchSettingTimeout,
