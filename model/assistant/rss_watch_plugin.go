@@ -30,7 +30,10 @@ const (
 	rssWatchSettingTimeout         = "timeout_seconds"
 	rssWatchSettingItemLimit       = "judge_item_limit"
 
-	defaultTwitterRSSTemplate = "https://rsshub.app/twitter/user/{handle}"
+	// Twitter RSS 模板没有默认值。以前默认填的是公共 RSSHub 实例，而它已经不再
+	// 提供 X/Twitter 路由（所有请求 302 到 google.com/404），带着这个默认值建订阅
+	// 必然失败。宁可要求用户显式填一个能用的地址，也不要给一个看起来能用的死链。
+	exampleTwitterRSSTemplate = "https://rss.example.com/twitter/user/{handle}"
 	maximumRSSBodyBytes       = 4 << 20
 )
 
@@ -86,9 +89,8 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         rssWatchSettingTwitterTemplate,
 				Label:       "Twitter RSS 模板",
-				Description: "将 {handle} 替换为用户名。默认使用 RSSHub 公共实例；生产环境建议填写自建 RSSHub，例如 https://rss.example.com/twitter/user/{handle}。",
+				Description: "将 {handle} 替换为用户名，例如 " + exampleTwitterRSSTemplate + "。公共 RSSHub 实例已不再提供 X/Twitter 路由，必须填写自建 RSSHub 或其他可用的 Feed 地址；留空则无法按用户名创建 Twitter 订阅。",
 				Type:        PluginSettingTypeString,
-				Default:     defaultTwitterRSSTemplate,
 			},
 			{
 				Key:         rssWatchSettingTimeout,
@@ -140,8 +142,11 @@ func twitterFeedURL(handle string, settings SettingValues) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	template := strings.TrimSpace(settings.String(rssWatchSettingTwitterTemplate, defaultTwitterRSSTemplate))
-	if template == "" || !strings.Contains(template, "{handle}") {
+	template := strings.TrimSpace(settings.String(rssWatchSettingTwitterTemplate, ""))
+	if template == "" {
+		return "", fmt.Errorf("尚未配置 Twitter RSS 模板：公共 RSSHub 已不再提供 X/Twitter 路由，请在「插件 → RSS 订阅」里填写自建 RSSHub 地址，例如 %s；也可以改用直接填 Feed 地址的方式创建订阅", exampleTwitterRSSTemplate)
+	}
+	if !strings.Contains(template, "{handle}") {
 		return "", fmt.Errorf("Twitter RSS 模板必须包含 {handle}")
 	}
 	raw := strings.ReplaceAll(template, "{handle}", url.PathEscape(handle))
@@ -222,6 +227,48 @@ func (p *RSSWatchPlugin) check(ctx context.Context, feedURL, cursor string, publ
 	return change, nil
 }
 
+// feedFetchStatusError 把上游的状态码翻译成能照着做的说明。
+//
+// 光报一个「HTTP 404」没法行动：同样是 404，可能是用户名打错了，也可能是整条
+// 路由已经下线。公共 RSSHub 的 X/Twitter 路由就属于后者——它现在把所有请求
+// 302 到 google.com/404，任何用户名都是这个结果，重试和改用户名都没有用。
+func feedFetchStatusError(requestedURL string, resp *http.Response) error {
+	hint := ""
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		if redirectedOffHost(requestedURL, resp) {
+			hint = "：整条路由已被上游下线（请求被重定向到了别的站点），换用户名或重试都不会生效"
+			if isPublicRSSHubHost(requestedURL) {
+				hint = "：公共 RSSHub 实例已经不再提供 X/Twitter 路由，请在插件设置里把「Twitter RSS 模板」改成自建 RSSHub 或其他可用的 Feed 地址"
+			}
+		} else {
+			hint = "：确认用户名或 Feed 地址是否正确"
+		}
+	}
+	return fmt.Errorf("抓取 Feed 返回 HTTP %d%s", resp.StatusCode, hint)
+}
+
+// redirectedOffHost 判断这次请求有没有被跨站重定向。Feed 正常不会跳到别的域名，
+// 跳了基本就是「这条路由没了」的兜底页。
+func redirectedOffHost(requestedURL string, resp *http.Response) bool {
+	if resp == nil || resp.Request == nil || resp.Request.URL == nil {
+		return false
+	}
+	requested, err := url.Parse(requestedURL)
+	if err != nil {
+		return false
+	}
+	return !strings.EqualFold(requested.Hostname(), resp.Request.URL.Hostname())
+}
+
+func isPublicRSSHubHost(requestedURL string) bool {
+	parsed, err := url.Parse(requestedURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "rsshub.app" || strings.HasSuffix(host, ".rsshub.app")
+}
+
 func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings SettingValues) (parsedFeed, error) {
 	feedURL, err := normalizeRSSURL(feedURL)
 	if err != nil {
@@ -245,7 +292,7 @@ func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings Set
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return parsedFeed{}, fmt.Errorf("抓取 Feed 返回 HTTP %d", resp.StatusCode)
+		return parsedFeed{}, feedFetchStatusError(feedURL, resp)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maximumRSSBodyBytes+1))
 	if err != nil {

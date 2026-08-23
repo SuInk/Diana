@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -168,5 +169,51 @@ func TestRSSJudgeDecisionRequiresNotify(t *testing.T) {
 	decision, err := parseRSSJudgeDecision("```json\n{\"notify\":false,\"reply\":\"不应发送\"}\n```")
 	if err != nil || decision.Notify || decision.Reply != "" {
 		t.Fatalf("decision=%#v err=%v", decision, err)
+	}
+}
+
+// 光报一个「HTTP 404」没法行动：同样是 404，可能是用户名打错了，也可能是整条
+// 路由已经下线。公共 RSSHub 的 X/Twitter 路由属于后者——它把所有请求 302 到
+// google.com/404，换用户名和重试都不会生效，报错必须说出这件事。
+func TestFeedFetchStatusErrorExplainsRetiredRoute(t *testing.T) {
+	redirected := func(finalURL string) *http.Response {
+		parsed, err := url.Parse(finalURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusNotFound, Request: &http.Request{URL: parsed}}
+	}
+
+	err := feedFetchStatusError("https://rsshub.app/twitter/user/someone", redirected("https://google.com/404"))
+	if err == nil || !strings.Contains(err.Error(), "公共 RSSHub") || !strings.Contains(err.Error(), "Twitter RSS 模板") {
+		t.Fatalf("public RSSHub 404 should name the retired route and the fix: %v", err)
+	}
+
+	err = feedFetchStatusError("https://rss.example.com/twitter/user/someone", redirected("https://elsewhere.example/404"))
+	if err == nil || !strings.Contains(err.Error(), "已被上游下线") {
+		t.Fatalf("off-host redirect should be reported as a retired route: %v", err)
+	}
+
+	sameHost, _ := url.Parse("https://rss.example.com/feed.xml")
+	err = feedFetchStatusError("https://rss.example.com/feed.xml", &http.Response{StatusCode: http.StatusNotFound, Request: &http.Request{URL: sameHost}})
+	if err == nil || !strings.Contains(err.Error(), "确认用户名或 Feed 地址") {
+		t.Fatalf("plain 404 should suggest checking the address: %v", err)
+	}
+
+	err = feedFetchStatusError("https://rss.example.com/feed.xml", &http.Response{StatusCode: http.StatusInternalServerError, Request: &http.Request{URL: sameHost}})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 500") || strings.Contains(err.Error(), "确认用户名") {
+		t.Fatalf("non-404 status should stay plain: %v", err)
+	}
+}
+
+// 不再给一个看起来能用的死链当默认值：没配模板就直说要去哪配。
+func TestTwitterFeedURLRequiresConfiguredTemplate(t *testing.T) {
+	_, err := twitterFeedURL("someone", SettingValues{})
+	if err == nil || !strings.Contains(err.Error(), "尚未配置 Twitter RSS 模板") {
+		t.Fatalf("missing template should be reported explicitly: %v", err)
+	}
+	got, err := twitterFeedURL("someone", SettingValues{rssWatchSettingTwitterTemplate: "https://rss.example.com/twitter/user/{handle}"})
+	if err != nil || got != "https://rss.example.com/twitter/user/someone" {
+		t.Fatalf("configured template = %q, err = %v", got, err)
 	}
 }
