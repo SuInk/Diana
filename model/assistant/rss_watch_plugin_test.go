@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -168,5 +169,103 @@ func TestRSSJudgeDecisionRequiresNotify(t *testing.T) {
 	decision, err := parseRSSJudgeDecision("```json\n{\"notify\":false,\"reply\":\"不应发送\"}\n```")
 	if err != nil || decision.Notify || decision.Reply != "" {
 		t.Fatalf("decision=%#v err=%v", decision, err)
+	}
+}
+
+// 光报一个「HTTP 404」没法行动：同样是 404，可能是用户名打错了，也可能是整条
+// 路由已经下线。公共 RSSHub 的 X/Twitter 路由属于后者——它把所有请求 302 到
+// google.com/404，换用户名和重试都不会生效，报错必须说出这件事。
+func TestFeedFetchStatusErrorExplainsRetiredRoute(t *testing.T) {
+	redirected := func(finalURL string) *http.Response {
+		parsed, err := url.Parse(finalURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusNotFound, Request: &http.Request{URL: parsed}}
+	}
+
+	err := feedFetchStatusError("https://rsshub.app/twitter/user/someone", redirected("https://google.com/404"))
+	if err == nil || !strings.Contains(err.Error(), "公共 RSSHub") || !strings.Contains(err.Error(), "Twitter RSS 模板") {
+		t.Fatalf("public RSSHub 404 should name the retired route and the fix: %v", err)
+	}
+
+	err = feedFetchStatusError("https://rss.example.com/twitter/user/someone", redirected("https://elsewhere.example/404"))
+	if err == nil || !strings.Contains(err.Error(), "已被上游下线") {
+		t.Fatalf("off-host redirect should be reported as a retired route: %v", err)
+	}
+
+	sameHost, _ := url.Parse("https://rss.example.com/feed.xml")
+	err = feedFetchStatusError("https://rss.example.com/feed.xml", &http.Response{StatusCode: http.StatusNotFound, Request: &http.Request{URL: sameHost}})
+	if err == nil || !strings.Contains(err.Error(), "确认用户名或 Feed 地址") {
+		t.Fatalf("plain 404 should suggest checking the address: %v", err)
+	}
+
+	err = feedFetchStatusError("https://rss.example.com/feed.xml", &http.Response{StatusCode: http.StatusInternalServerError, Request: &http.Request{URL: sameHost}})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 500") || strings.Contains(err.Error(), "确认用户名") {
+		t.Fatalf("non-404 status should stay plain: %v", err)
+	}
+}
+
+// Twitter 订阅默认直接读 X 公开时间线，不需要任何额外部署；填了模板才走模板。
+func TestTwitterFeedURLDefaultsToPublicTimeline(t *testing.T) {
+	for _, input := range []string{"someone", "@someone", "https://x.com/someone", "https://twitter.com/someone/"} {
+		got, err := twitterFeedURL(input, SettingValues{})
+		if err != nil {
+			t.Fatalf("twitterFeedURL(%q) error = %v", input, err)
+		}
+		if got != "https://api.fxtwitter.com/2/profile/someone/statuses" {
+			t.Fatalf("twitterFeedURL(%q) = %q", input, got)
+		}
+	}
+	got, err := twitterFeedURL("someone", SettingValues{rssWatchSettingTwitterTemplate: "https://rss.example.com/twitter/user/{handle}"})
+	if err != nil || got != "https://rss.example.com/twitter/user/someone" {
+		t.Fatalf("configured template = %q, err = %v", got, err)
+	}
+}
+
+// 时间线响应转 feed 条目：raw_text 在上游有字符串和对象两种形态，都要认。
+func TestParseTwitterStatusesFeed(t *testing.T) {
+	body := []byte(`{"code":200,"results":[
+		{"type":"status","id":"2","url":"https://x.com/a/status/2","text":"第二条","created_timestamp":1787482674,"author":{"name":"Alice","screen_name":"alice"}},
+		{"type":"status","id":"1","url":"https://x.com/b/status/1","raw_text":{"text":"转推正文","facets":[]},"created_timestamp":1787482000,"author":{"name":"","screen_name":"bob"}},
+		{"type":"status","id":"","text":"没有 id 的要丢掉"}
+	]}`)
+	feed, err := parseTwitterStatusesFeed(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feed.Items) != 2 {
+		t.Fatalf("items = %#v", feed.Items)
+	}
+	if feed.Items[0].ID != "2" || feed.Items[0].Content != "第二条" || feed.Items[0].Author != "Alice" {
+		t.Fatalf("first item = %#v", feed.Items[0])
+	}
+	if feed.Items[0].PublishedAt.Unix() != 1787482674 {
+		t.Fatalf("published = %v", feed.Items[0].PublishedAt)
+	}
+	// raw_text 是对象时也要取出正文；作者名为空时回退到 @handle。
+	if feed.Items[1].Content != "转推正文" || feed.Items[1].Author != "@bob" {
+		t.Fatalf("second item = %#v", feed.Items[1])
+	}
+}
+
+// 标题必须是订阅的那个账号。时间线里第一条常常是转推，取条目作者会让订阅
+// @OpenAI 显示成被转推者的名字。
+func TestTwitterStatusesFeedTitleTracksSubscribedHandle(t *testing.T) {
+	if got := twitterHandleFromStatusesURL("https://api.fxtwitter.com/2/profile/OpenAI/statuses"); got != "OpenAI" {
+		t.Fatalf("handle = %q", got)
+	}
+	if got := twitterHandleFromStatusesURL("https://rss.example.com/twitter/user/OpenAI"); got != "" {
+		t.Fatalf("custom template should not be parsed as a profile path: %q", got)
+	}
+}
+
+// JSON 与 XML 按内容分流，自建的 FxTwitter 兼容实例也能直接用。
+func TestLooksLikeJSONDocument(t *testing.T) {
+	if !looksLikeJSONDocument([]byte("\n  {\"code\":200}")) {
+		t.Fatal("leading whitespace should still be detected as JSON")
+	}
+	if looksLikeJSONDocument([]byte(`<?xml version="1.0"?><rss></rss>`)) {
+		t.Fatal("XML must not be treated as JSON")
 	}
 }

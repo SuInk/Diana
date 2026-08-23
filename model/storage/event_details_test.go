@@ -60,7 +60,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 			Action:    "chatbot.llm_usage",
 			Target:    "replied",
 			CreatedAt: now.Add(-20 * time.Minute),
-			Metadata:  map[string]any{"input_tokens": 100, "output_tokens": 40, "total_tokens": 0},
+			Metadata:  map[string]any{"input_tokens": 100, "output_tokens": 40, "total_tokens": 0, "cached_input_tokens": 75},
 		},
 		{
 			Action:    "assistant.llm_usage",
@@ -92,6 +92,10 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 	}
 	if page.Events[0].SenderName != "测试成员" || page.Events[0].DurationMS != 1500 {
 		t.Fatalf("replied detail = %#v", page.Events[0])
+	}
+	// 缓存命中量要同时出现在单条事件和页面汇总上：界面按「命中 / 输入」算命中率。
+	if page.Events[0].CachedInputTokens != 75 || page.CachedInputTokens != 75 {
+		t.Fatalf("cached input tokens = event %d / page %d, want 75/75", page.Events[0].CachedInputTokens, page.CachedInputTokens)
 	}
 	if page.LLMCalls != 2 || page.InputTokens != 120 || page.OutputTokens != 50 || page.TotalTokens != 175 {
 		t.Fatalf("token totals = calls:%d input:%d output:%d total:%d, want 2/120/50/175", page.LLMCalls, page.InputTokens, page.OutputTokens, page.TotalTokens)
@@ -604,5 +608,49 @@ VALUES ('mention', 'group:104970', 'group', '104970', '10001', 'message-1', ?, '
 	}
 	if !strings.Contains(text, "少回复点") {
 		t.Fatalf("message body missing: %q", text)
+	}
+}
+
+// 群等级要从事件 payload 里带到详情上：回复门槛按等级卡人，排查「这条为什么没回」
+// 时得能直接看到当时的等级，而不是回群里翻资料卡。
+func TestInboundEventDetailExposesSenderGroupLevel(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sender-level.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().UTC()
+	event := assistant.MessageEvent{
+		Time:             now.Unix(),
+		Kind:             assistant.EventKindGroup,
+		GroupID:          "g1",
+		UserID:           "u1",
+		MessageID:        "m1",
+		SenderName:       "Alice",
+		SenderRole:       "admin",
+		SenderLevel:      16,
+		SenderLevelLabel: "冒泡",
+		RawMessage:       "在吗",
+	}
+	// 先入队再落历史：反过来的话入队会把这条当成已处理的重复消息直接丢掉。
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:g1", event); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	if err := store.AppendMessageEvent(ctx, "group:g1", event); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("events = %#v", page.Events)
+	}
+	got := page.Events[0]
+	if got.SenderLevel != 16 || got.SenderLevelLabel != "冒泡" || got.SenderRole != "admin" {
+		t.Fatalf("sender level fields = %d / %q / %q", got.SenderLevel, got.SenderLevelLabel, got.SenderRole)
 	}
 }

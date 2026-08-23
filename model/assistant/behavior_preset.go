@@ -155,7 +155,7 @@ func (style ReplyStyle) stylePrompt() string {
 // 群友风格的投递参数：真人发的是聊天体量的短消息，不是几百字一坨；连发之间
 // 有打字间隔；开口前也要有想和打的时间。
 const (
-	groupmateReplyChunkSize     = 160
+	groupmateReplyChunkSize     = 400
 	groupmateSendChunkIntervalM = 1200
 	groupmateTypingBaseDelay    = 900 * time.Millisecond
 	groupmateTypingPerRune      = 55 * time.Millisecond

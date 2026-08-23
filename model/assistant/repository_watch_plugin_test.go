@@ -1135,7 +1135,7 @@ func TestRenderRepositoryWatchChangesDoesNotRepeatTheReleaseTag(t *testing.T) {
 	}
 }
 
-// 群友风格把聊天回复压到 160 字，通知不能跟着被拦腰截断。
+// 群友风格把聊天回复压到几百字一条，通知不能跟着被拦腰截断。
 func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 	at := time.Date(2026, 8, 20, 14, 27, 21, 0, time.UTC)
 	change := repositoryWatchChange{Commits: []repositoryWatchCommit{
@@ -1148,6 +1148,16 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 			SHA: "9a534160ab1c4d6e8f2b7c0d5e3a1f9b8c7d6e5f", Author: "SuInk", PushedAt: at,
 			Title: "聊天记录工具新增按时间段列出消息的 range 操作",
 			URL:   "https://github.com/SuInk/Diana/commit/9a534160ab1c4d6e8f2b7c0d5e3a1f9b8c7d6e5f",
+		},
+		{
+			SHA: "3c7e9b21d5f84a06c9e2b7d413a5f8c0e6b9d2a4", Author: "SuInk", PushedAt: at,
+			Title: "主动回复审核合并账号安全判断，涉政与露骨内容一票否决",
+			URL:   "https://github.com/SuInk/Diana/commit/3c7e9b21d5f84a06c9e2b7d413a5f8c0e6b9d2a4",
+		},
+		{
+			SHA: "5f0a8d63e29b4c71a8d3f6e0b2c9a4d7e1f8b3c6", Author: "SuInk", PushedAt: at,
+			Title: "模型用量记账挂到 provider 装饰链，路由与子任务一并计入",
+			URL:   "https://github.com/SuInk/Diana/commit/5f0a8d63e29b4c71a8d3f6e0b2c9a4d7e1f8b3c6",
 		},
 	}}
 	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change))
@@ -1162,9 +1172,9 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 	if !strings.Contains(chunks[0], "https://github.com/SuInk/Diana/commit/fd1a279") {
 		t.Fatalf("fact block lost the commit link: %q", chunks[0])
 	}
-	// 对照：同样长度的散文聊天会被 160 字的群友切分拆成多条，这正是通知不能
-	// 复用聊天切分的原因。事实卡片本身是清单，走的是清单整块保留的分支。
-	prose := strings.Repeat("这段话没有任何列表结构只是普通闲聊内容而已", 12)
+	// 对照：同样长度的散文聊天会被群友风格的切分拆成多条，这正是通知不能复用
+	// 聊天切分的原因。事实卡片本身是清单，走的是清单整块保留的分支。
+	prose := strings.Repeat("这段话没有任何列表结构只是普通闲聊内容而已", 30)
 	if chunks := splitReply(prose, groupmateReplyChunkSize); len(chunks) < 2 {
 		t.Fatalf("expected the chat splitter to break plain prose, got %#v", chunks)
 	}

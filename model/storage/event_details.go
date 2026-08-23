@@ -18,14 +18,19 @@ import (
 // InboundEventDetail is the durable message-processing audit row exposed to
 // the WebUI.
 type InboundEventDetail struct {
-	ID                string              `json:"id"`
-	At                time.Time           `json:"at"`
-	Kind              string              `json:"kind"`
-	Platform          string              `json:"platform,omitempty"`
-	ProfileID         string              `json:"profile_id,omitempty"`
-	GroupID           string              `json:"group_id,omitempty"`
-	UserID            string              `json:"user_id,omitempty"`
-	SenderName        string              `json:"sender_name,omitempty"`
+	ID         string    `json:"id"`
+	At         time.Time `json:"at"`
+	Kind       string    `json:"kind"`
+	Platform   string    `json:"platform,omitempty"`
+	ProfileID  string    `json:"profile_id,omitempty"`
+	GroupID    string    `json:"group_id,omitempty"`
+	UserID     string    `json:"user_id,omitempty"`
+	SenderName string    `json:"sender_name,omitempty"`
+	SenderRole string    `json:"sender_role,omitempty"`
+	// SenderLevel 是发言者的群等级。回复门槛按等级卡人，排查「为什么这条没回」
+	// 时得能直接看到当时的等级，而不是回群里翻资料卡。
+	SenderLevel       int                 `json:"sender_level,omitempty"`
+	SenderLevelLabel  string              `json:"sender_level_label,omitempty"`
 	SubType           string              `json:"sub_type,omitempty"`
 	OriginalTime      *time.Time          `json:"original_time,omitempty"`
 	OperatorID        string              `json:"operator_id,omitempty"`
@@ -259,6 +264,9 @@ LIMIT ? OFFSET ?
 			item.OperatorID = strings.TrimSpace(source.OperatorID)
 			item.OperatorName = strings.TrimSpace(source.OperatorName)
 			item.OperatorRole = strings.TrimSpace(source.OperatorRole)
+			item.SenderRole = strings.TrimSpace(source.SenderRole)
+			item.SenderLevel = source.SenderLevel
+			item.SenderLevelLabel = strings.TrimSpace(source.SenderLevelLabel)
 			if source.OriginalTime > 0 {
 				originalAt := time.Unix(source.OriginalTime, 0).UTC()
 				item.OriginalTime = &originalAt

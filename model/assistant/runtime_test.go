@@ -1229,7 +1229,6 @@ func TestDianaConfigToolReturnsRedactedBotConfigAndSkills(t *testing.T) {
 		OneBotAccessToken:  "onebot-secret-value",
 		NoneBotBridgeToken: "bridge-secret-value",
 		AgentEnabled:       true,
-		AgentWorkDir:       "/tmp/diana",
 		AgentSkillRoots:    []string{"/tmp/diana/skills"},
 		AgentMCPConfigPath: "/tmp/diana/.mcp.json",
 	}, nilChannel{}, NewDefaultPluginManager(), store, nil, nil, nil)

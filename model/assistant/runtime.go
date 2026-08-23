@@ -1270,6 +1270,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 
+	ctx = withLLMUsageContext(ctx, event)
 	ctx = r.withDebugTraceContext(ctx, event)
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
 	prepared, text, handled, outcome := r.prepareMessageEvent(ctx, event)
@@ -1544,7 +1545,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "", ctx.Err()
 		}
-		_, acknowledged, sendErr := r.sendWithDeliveryEvidence(replyCtx, event, "出错了："+publicChatErrorMessage(err))
+		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, "出错了："+publicChatErrorMessage(err))
 		if sendErr != nil {
 			if errors.Is(sendErr, errReplySuppressedBeforeSend) {
 				setEventRecordOutcome(&record, "ignored_response_suppression")
@@ -1853,6 +1854,7 @@ func (r *Runtime) shouldHandleProactiveReply(ctx context.Context, event MessageE
 }
 
 func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []proactiveReplyCandidate) (MessageEvent, string, []proactiveReplyCandidate, bool) {
+	ctx = withLLMUsagePurpose(ctx, "proactive_reply_router")
 	if len(candidates) == 0 {
 		return MessageEvent{}, "", nil, false
 	}
@@ -2692,6 +2694,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				if err := r.judgeProactiveReplyQuality(ctx, event, cleanText, resp.Reply, cfg); err != nil {
 					return "", err
 				}
+			} else if err := r.auditReplyAccountSafety(ctx, event, cleanText, resp.Reply, cfg); err != nil {
+				return "", err
 			}
 			messageIDs, err := r.sendWithMessageIDs(ctx, event, resp.Reply)
 			if err != nil {
@@ -3122,9 +3126,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	if proactiveTriggered {
+		// 主动回复走完整审核：表达质量 + 账号安全。
 		if err := r.judgeProactiveReplyQuality(ctx, event, cleanText, reply, cfg); err != nil {
 			return "", err
 		}
+	} else if err := r.auditReplyAccountSafety(ctx, event, cleanText, reply, cfg); err != nil {
+		// 直接回复只审账号安全：被点名回答说得平淡不该拦，但涉政和露骨内容
+		// 不管怎么触发，发出去的后果都一样。
+		return "", err
 	}
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
 		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)
@@ -3272,7 +3281,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// model call from its actual message content so that a text-only planner can
 		// hand the next turn to the configured vision profile.
 		agentCfg := agent.Config{
-			WorkDir:          cfg.AgentWorkDir,
+			WorkDir:          AgentWorkspaceDir(),
 			MaxSteps:         cfg.AgentMaxSteps,
 			SkillRoots:       cfg.AgentSkillRoots,
 			MCPConfigPath:    cfg.AgentMCPConfigPath,
@@ -3321,19 +3330,18 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.rememberAgentRunProgress(event, resp)
-		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "agent_reply")
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
+	ctx = withLLMUsagePurpose(ctx, "reply")
 	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err
 		}
-		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "reply")
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 }
@@ -3397,7 +3405,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 	cfg = cfg.WithDefaults()
 	if cfg.AgentEnabled || len(extraTools) > 0 {
 		agentCfg := agent.Config{
-			WorkDir:          cfg.AgentWorkDir,
+			WorkDir:          AgentWorkspaceDir(),
 			MaxSteps:         cfg.AgentMaxSteps,
 			SkillRoots:       cfg.AgentSkillRoots,
 			MCPConfigPath:    cfg.AgentMCPConfigPath,
@@ -3472,6 +3480,7 @@ type replyRuleCandidateForDecision struct {
 }
 
 func (r *Runtime) evaluateReplyRules(ctx context.Context, event MessageEvent, text string, history []MessageEvent, cfg BotConfig) (replyRuleDecision, bool) {
+	ctx = withLLMUsagePurpose(ctx, "reply_rule_router")
 	rules := enabledReplyRules(cfg.ReplyRules)
 	if len(rules) == 0 {
 		return replyRuleDecision{}, false
@@ -3753,6 +3762,7 @@ func (r *Runtime) classifyVisualIntent(ctx context.Context, event MessageEvent, 
 }
 
 func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text string, registry *agent.ToolRegistry, olderSummaryAvailable bool) (visualIntentDecision, agentReplyScope, bool) {
+	ctx = withLLMUsagePurpose(ctx, "reply_intent_router")
 	payload := r.visualIntentPayload(event, text)
 	if registry != nil {
 		payload.AvailableTools = registry.Catalog(180)
@@ -4508,6 +4518,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
 	return r.runRawLLMProviderForGroup(ctx, group, run)
 }
 
@@ -4520,6 +4531,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
 	_, _ = run(provider)
 	if wrapped == nil {
 		return provider
@@ -4876,6 +4888,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory
@@ -6978,11 +6991,22 @@ func (r *Runtime) sendWithMessageIDs(ctx context.Context, event MessageEvent, re
 	return r.sendWithMessageIDsMode(ctx, event, reply, event.UserID, true)
 }
 
-func (r *Runtime) sendWithDeliveryEvidence(ctx context.Context, event MessageEvent, reply string) ([]string, bool, error) {
-	messageIDs, err := r.sendWithMessageIDs(ctx, event, reply)
+// sendErrorNoticeWithEvidence 投递「出错了：……」这类错误提示。
+//
+// 错误提示和聊天发言不是一回事：它是一条完整的诊断信息，人格预设的短句切分
+// （群友风格把每条压到 160 字）会把它拦腰截断，上游返回的报错和后面那个说明
+// 链接被甩进两条消息里，读起来像机器人自己断句断错了。这里和结构化通知同样
+// 处理，只按平台长度兜底。
+func (r *Runtime) sendErrorNoticeWithEvidence(ctx context.Context, event MessageEvent, text string) ([]string, bool, error) {
+	cfg := r.effectiveConfigForEvent(event)
+	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", true)
 	if err != nil {
 		return nil, false, err
 	}
+	return r.deliveryEvidence(event, messageIDs)
+}
+
+func (r *Runtime) deliveryEvidence(event MessageEvent, messageIDs []string) ([]string, bool, error) {
 	if len(messageIDs) > 0 {
 		return messageIDs, true, nil
 	}
@@ -8888,12 +8912,12 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 			Content: fmt.Sprintf("【用户判断与回复规则】\n%s\n\n【不可信 Feed 新条目 JSON】\n%s", item.FeedJudgePrompt, payload),
 		},
 	}
+	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), "rss_watch_judge")
 	raw, err := r.runLLMProviderForGroup(taskCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(taskCtx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err
 		}
-		r.recordLLMUsage(taskCtx, source, resp.Provider, resp.Model, resp.Usage, "rss_watch_judge")
 		return strings.TrimSpace(resp.Text), nil
 	})
 	if err != nil {

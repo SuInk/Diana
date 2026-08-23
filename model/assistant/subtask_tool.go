@@ -116,6 +116,7 @@ func (t *dianaSubtaskTool) reserve() error {
 // 一套：主回复、后台任务和子调用共用同一个「同时能有多少路 LLM 在跑」的额度，
 // 免得三套限流各管各的，加起来把供应商打满。
 func (r *Runtime) runSubtask(ctx context.Context, group, question, material string) (string, error) {
+	ctx = withLLMUsagePurpose(ctx, "subtask")
 	sem := r.subagentLLMSem
 	if sem != nil {
 		select {

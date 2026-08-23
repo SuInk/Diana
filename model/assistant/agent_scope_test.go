@@ -43,7 +43,6 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 	runtime := &Runtime{plugins: plugins}
 	workDir := t.TempDir()
 	cfg := DefaultBotConfig()
-	cfg.AgentWorkDir = workDir
 	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
 	registry, err := runtime.newAgentRegistry(
 		context.Background(),
@@ -78,7 +77,6 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := DefaultBotConfig()
-	cfg.AgentWorkDir = workDir
 	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
 	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -116,7 +114,6 @@ func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
 func TestOwnerAgentRegistryReusesSharedExtensionsAcrossRequests(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := DefaultBotConfig()
-	cfg.AgentWorkDir = workDir
 	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
 	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -255,7 +252,6 @@ func TestReplyToUsesSingleAgentDecisionWithoutPreRouter(t *testing.T) {
 		BotAccount:         "42",
 		OwnerID:            "owner",
 		AgentEnabled:       true,
-		AgentWorkDir:       workDir,
 		AgentSkillRoots:    []string{filepath.Join(workDir, "skills")},
 		AgentMCPConfigPath: filepath.Join(workDir, "missing-mcp.json"),
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
