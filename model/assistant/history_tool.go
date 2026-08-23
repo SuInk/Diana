@@ -560,19 +560,7 @@ func chatHistoryPositiveInt(input map[string]any, key string, fallback, maximum 
 }
 
 func chatHistoryBool(input map[string]any, key string) bool {
-	value, ok := input[key]
-	if !ok {
-		return false
-	}
-	switch raw := value.(type) {
-	case bool:
-		return raw
-	case string:
-		parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
-		return err == nil && parsed
-	default:
-		return intFromAny(raw) != 0
-	}
+	return toolInputBool(input, key)
 }
 
 func chatHistoryReferenceOutsideContext(event MessageEvent, history []MessageEvent) bool {

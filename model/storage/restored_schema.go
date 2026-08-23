@@ -281,6 +281,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.backfillLegacyUserMemories(); err != nil {
 		return err
 	}
+	if err := s.migrateGlossary(); err != nil {
+		return err
+	}
 
 	now := time.Now().UTC().UnixNano()
 	cutoff := time.Now().Add(-assistant.InboundReplayWindow).Unix()

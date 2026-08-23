@@ -230,6 +230,7 @@ func main() {
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
+	botRuntime.SetGlossaryStore(sqliteStore)
 	botRuntime.SetRepositoryIssueDraftStore(sqliteStore)
 	if err := botRuntime.SetReplySuppressionStore(ctx, sqliteStore); err != nil {
 		log.Printf("assistant reply suppression load failed: %v", err)

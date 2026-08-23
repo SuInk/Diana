@@ -234,7 +234,7 @@ func TestSystemPromptOmitsUnselectedToolRules(t *testing.T) {
 		true,
 		registry,
 	)
-	for _, unexpected := range []string{"diana.config", "diana.llm_config", "diana.relationship", "diana.tasks", "diana.reminder", "diana.schedule", "diana.tts", "diana.onebot_group"} {
+	for _, unexpected := range []string{"diana.config", "diana.llm_config", "diana.relationship", "diana.tasks", "diana.reminder", "diana.schedule", "diana.tts", "diana.onebot_group", dianaGlossaryToolName} {
 		if strings.Contains(prompt, unexpected) {
 			t.Fatalf("prompt unexpectedly contains unselected tool %q: %s", unexpected, prompt)
 		}
