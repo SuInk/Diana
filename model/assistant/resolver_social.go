@@ -187,6 +187,9 @@ func (p *ResolverPlugin) resolveBilibiliMedia(ctx context.Context, req PluginReq
 		if desc := strings.TrimSpace(view.Data.Desc); desc != "" {
 			result.Context += "\n简介：" + truncateRunes(desc, 240)
 		}
+		if conclusion, ok := fetchBilibiliAIConclusion(ctx, raw, view); ok {
+			result.Context += "\n【B站 AI 总结】" + conclusion
+		}
 		result.ImageURLs = singleURL(view.Data.Pic)
 		if view.Data.Duration > resolverVideoMaxDuration(ctx) {
 			result.Context += fmt.Sprintf("\n视频时长超过限制（%d 秒），未下载。", resolverVideoMaxDuration(ctx))

@@ -12,12 +12,6 @@ const (
 	PlatformOneBotV11 = "onebot-v11"
 	PlatformTelegram  = "telegram"
 
-	// Deprecated: implementation names are no longer separate platforms.
-	// Keep the legacy values as migration inputs; all normalized data uses OneBot v11.
-	PlatformNapCat   = "napcat"
-	PlatformLagrange = "lagrange"
-	PlatformGoCQHTTP = "go-cqhttp"
-
 	ProtocolOneBotV11   = "onebot-v11-reverse-ws"
 	ProtocolTelegramBot = "telegram-bot-api"
 
@@ -53,11 +47,11 @@ func SupportedPlatforms() []PlatformDefinition {
 	return append([]PlatformDefinition(nil), supportedPlatforms...)
 }
 
-// NormalizePlatformID 把旧版实现名称迁移为统一的平台 ID。
+// NormalizePlatformID 归一化平台 ID：大小写、空白和常见写法都收敛到注册表里的
+// 那一个值，空值按默认平台处理。调用方遍布配置、路由和存储，不能直接比较字符串。
 func NormalizePlatformID(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "onebot", "onebot-v11", "onebot v11", "napcat", "napcat / onebot v11",
-		"lagrange", "lagrange.core", "lagrange core", "go-cqhttp", "gocqhttp", "go cqhttp":
+	case "", "onebot", "onebot-v11", "onebot v11":
 		return PlatformOneBotV11
 	case "telegram", "tg", "telegram bot":
 		return PlatformTelegram

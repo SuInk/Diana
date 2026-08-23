@@ -64,7 +64,7 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 
 func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensionManagement bool) agent.Config {
 	return agent.Config{
-		WorkDir:             cfg.AgentWorkDir,
+		WorkDir:             AgentWorkspaceDir(),
 		MaxSteps:            cfg.AgentMaxSteps,
 		SkillRoots:          cfg.AgentSkillRoots,
 		MCPConfigPath:       cfg.AgentMCPConfigPath,

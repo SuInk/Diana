@@ -252,7 +252,11 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 	}
 
 	next := upsertProfileSet(set, payload, cfg)
-	h.store.SaveProfiles(next)
+	// 落库失败就不能回 200，否则前端提示保存成功、重启后配置又变回旧值。
+	if err := h.store.SaveProfiles(next); err != nil {
+		h.writeError(c, 500, "llm.config.save", err, next.ActiveID, llmLogMetadata(cfg, next.ActiveID))
+		return
+	}
 	recordRequestOperation(c, h.logs, "llm.config.save", "LLM 配置已保存", next.ActiveID, llmLogMetadata(cfg, next.ActiveID))
 	c.JSON(200, payloadFromProfileSet(next))
 }
@@ -275,7 +279,10 @@ func (h *LLMConfigHandler) activateProfile(c *gin.Context) {
 		h.writeError(c, 404, "llm.profile.activate", fmt.Errorf("profile %q not found", targetID), targetID, nil)
 		return
 	}
-	h.store.SaveProfiles(set)
+	if err := h.store.SaveProfiles(set); err != nil {
+		h.writeError(c, 500, "llm.profile.activate", err, targetID, llmLogMetadata(current.Config, targetID))
+		return
+	}
 	recordRequestOperation(c, h.logs, "llm.profile.activate", "LLM 配置已切换", targetID, llmLogMetadata(current.Config, targetID))
 	c.JSON(200, payloadFromProfileSet(set))
 }
@@ -294,7 +301,10 @@ func (h *LLMConfigHandler) reorderProfiles(c *gin.Context) {
 		return
 	}
 	set := h.store.Profiles().Reorder(payload.IDs)
-	h.store.SaveProfiles(set)
+	if err := h.store.SaveProfiles(set); err != nil {
+		h.writeError(c, 500, "llm.profile.reorder", err, "", nil)
+		return
+	}
 	recordRequestOperation(c, h.logs, "llm.profile.reorder", "LLM 配置优先级已调整", "", nil)
 	c.JSON(200, payloadFromProfileSet(set))
 }
@@ -321,7 +331,10 @@ func (h *LLMConfigHandler) deleteProfile(c *gin.Context) {
 		h.writeError(c, 404, "llm.profile.delete", fmt.Errorf("profile %q not found", targetID), targetID, nil)
 		return
 	}
-	h.store.SaveProfiles(next)
+	if err := h.store.SaveProfiles(next); err != nil {
+		h.writeError(c, 500, "llm.profile.delete", err, targetID, map[string]any{"profile_id": targetID})
+		return
+	}
 	recordRequestOperation(c, h.logs, "llm.profile.delete", "LLM 配置已删除", targetID, map[string]any{"profile_id": targetID})
 	c.JSON(200, payloadFromProfileSet(next))
 }
@@ -347,7 +360,10 @@ func (h *LLMConfigHandler) cloneProfile(c *gin.Context) {
 		cloned.Group = profile.Group
 		cloned.Description = profile.Description
 		next := upsertProfileSet(set, llmConfigPayload{Name: cloned.Name, Group: cloned.Group, Description: cloned.Description}, profile.Config)
-		h.store.SaveProfiles(next)
+		if err := h.store.SaveProfiles(next); err != nil {
+			h.writeError(c, 500, "llm.profile.clone", err, sourceID, llmLogMetadata(profile.Config, sourceID))
+			return
+		}
 		recordRequestOperation(c, h.logs, "llm.profile.clone", "LLM 配置已复制", sourceID, llmLogMetadata(profile.Config, sourceID))
 		c.JSON(200, payloadFromProfileSet(next))
 		return
@@ -407,7 +423,10 @@ func (h *LLMConfigHandler) importProfiles(c *gin.Context) {
 	if current, ok := next.Current(); !ok || current.ID == "" {
 		next.ActiveID = next.Profiles[0].ID
 	}
-	h.store.SaveProfiles(next)
+	if err := h.store.SaveProfiles(next); err != nil {
+		h.writeError(c, 500, "llm.profile.import", err, next.ActiveID, map[string]any{"profile_count": len(next.Profiles), "active_profile_id": next.ActiveID})
+		return
+	}
 	recordRequestOperation(c, h.logs, "llm.profile.import", "LLM 配置已导入", next.ActiveID, map[string]any{"profile_count": len(next.Profiles), "active_profile_id": next.ActiveID})
 	c.JSON(200, payloadFromProfileSet(next))
 }

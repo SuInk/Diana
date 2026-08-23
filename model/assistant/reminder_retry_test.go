@@ -71,7 +71,6 @@ func TestScheduledQuerySendFailurePersistsResultAndRetriesWithoutLLM(t *testing.
 	runtime := NewRuntime(BotConfig{
 		OwnerID:        "10001",
 		AgentEnabled:   true,
-		AgentWorkDir:   t.TempDir(),
 		AgentMaxSteps:  3,
 		RequestTimeout: 5 * time.Second,
 	}, channel, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {

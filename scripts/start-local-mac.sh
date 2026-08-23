@@ -57,8 +57,11 @@ load_runtime_env() {
 			value="${value:1:${#value}-2}"
 		fi
 
+		# 应用配置已经搬进 config.yaml，这里只放外部集成用的变量：解析器的站点
+		# cookie 和代理、搜索服务的 key、ffmpeg / NapCat 这些外部程序的路径。
+		# 它们在 WebUI 里没有对应项，不存在两个真相源的问题。
 		case "$key" in
-			DIANA_*|LLM_*|QQBOT_*|BOT_QQ|ONEBOT_*|NONEBOT_*|AGENT_*|EXA_API_KEY*|TAVILY_API_KEY*|APP_DB_PATH|LOG_PATH|HOST|PORT|FRONTEND_DIST|BILI_SESSDATA|DOUYIN_CK|XHS_CK|RESOLVER_PROXY|NAPCAT_QQ)
+			DIANA_*|EXA_API_KEY*|TAVILY_API_KEY*|BILI_SESSDATA|DOUYIN_CK|XHS_CK|RESOLVER_PROXY|NAPCAT_QQ)
 				export "$key=$value"
 				;;
 		esac
@@ -86,42 +89,29 @@ if [[ "$(uname -s)" == "Darwin" && "${DIANA_START_NAPCAT:-true}" != "false" ]]; 
 	fi
 fi
 
-export HOST="${HOST:-127.0.0.1}"
-export PORT="${PORT:-18080}"
-export APP_DB_PATH="${APP_DB_PATH:-$ROOT/data/diana.db}"
-export LOG_PATH="${LOG_PATH:-$ROOT/logs/diana.log}"
-export FRONTEND_DIST="${FRONTEND_DIST:-$ROOT/frontend-next/dist}"
-if [[ -z "${DIANA_UPDATE_ROOT:-}" && -d "$ROOT/.git" ]]; then
-	export DIANA_UPDATE_ROOT="$ROOT"
+# 应用配置走 config.yaml。本地开发第一次跑的时候生成一份指向仓库目录的默认
+# 配置；已经存在就原样用，不覆盖开发者自己改过的内容。
+CONFIG_FILE="${DIANA_CONFIG:-$ROOT/config.yaml}"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+	cat >"$CONFIG_FILE" <<EOF
+# 本地开发用配置，由 scripts/start-local-mac.sh 首次运行时生成。
+# 完整字段见 config.example.yaml。bot / llm 两段只在数据库为空时播种一次，
+# 之后请在 WebUI 里改。
+server:
+  host: '127.0.0.1'
+  port: '18080'
+  frontend_dist: '$ROOT/frontend-next/dist'
+storage:
+  db_path: '$ROOT/data/diana.db'
+  log_path: '$ROOT/logs/diana.log'
+update:
+  root: '$ROOT'
+  apply_enabled: true
+EOF
+	chmod 600 "$CONFIG_FILE"
+	echo "generated $CONFIG_FILE"
 fi
-export DIANA_UPDATE_APPLY_ENABLED="${DIANA_UPDATE_APPLY_ENABLED:-true}"
-
-export ONEBOT_REVERSE_WS_ENDPOINT="${ONEBOT_REVERSE_WS_ENDPOINT:-ws://127.0.0.1:${PORT}/onebot/v11/ws}"
-export ONEBOT_ACCESS_TOKEN="${ONEBOT_ACCESS_TOKEN:-${QQBOT_ONEBOT_ACCESS_TOKEN:-}}"
-export DIANA_OWNER_ID="${DIANA_OWNER_ID:-${QQBOT_OWNER_ID:-}}"
-export DIANA_GROUP_TRIGGERS="${DIANA_GROUP_TRIGGERS:-Diana,diana}"
-export DIANA_AGENT_WORK_DIR="${DIANA_AGENT_WORK_DIR:-${AGENT_WORK_DIR:-$ROOT}}"
-export DIANA_AGENT_SKILL_ROOTS="${DIANA_AGENT_SKILL_ROOTS:-$ROOT/skills}"
-export DIANA_AGENT_MCP_CONFIG="${DIANA_AGENT_MCP_CONFIG:-${AGENT_MCP_CONFIG:-$ROOT/.mcp.json}}"
-
-if [[ -z "${QQBOT_QQ:-}" ]]; then
-	export DIANA_BOT_ACCOUNT="${DIANA_BOT_ACCOUNT:-${QQBOT_SELF_ID:-${BOT_QQ:-${NAPCAT_QQ:-}}}}"
-fi
-if [[ -z "${LLM_BASE_URL:-}" && -n "${DIANA_BASE_URL:-}" ]]; then
-	export LLM_BASE_URL="$DIANA_BASE_URL"
-fi
-if [[ -z "${LLM_MODEL:-}" && -n "${DIANA_MODEL:-}" ]]; then
-	export LLM_MODEL="$DIANA_MODEL"
-fi
-if [[ -z "${LLM_API_KEY:-}" ]]; then
-	if [[ -n "${DIANA_API_KEY:-}" ]]; then
-		export LLM_API_KEY="$DIANA_API_KEY"
-	elif [[ -n "${LLM_API_KEY_FILE:-}" && -r "$LLM_API_KEY_FILE" ]]; then
-		export LLM_API_KEY="$(tr -d '\r\n' < "$LLM_API_KEY_FILE")"
-	elif [[ -n "${DIANA_API_KEY_FILE:-}" && -r "$DIANA_API_KEY_FILE" ]]; then
-		export LLM_API_KEY="$(tr -d '\r\n' < "$DIANA_API_KEY_FILE")"
-	fi
-fi
+export DIANA_CONFIG="$CONFIG_FILE"
 
 cd "$ROOT"
 executables=()

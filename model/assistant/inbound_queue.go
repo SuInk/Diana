@@ -139,10 +139,6 @@ type InboundEventDeliveryAuditStore interface {
 	RecordInboundEventSelfEcho(ctx context.Context, outboundMessageID string, observedAt time.Time) error
 }
 
-type InboundEventDuplicateCleanupStore interface {
-	MarkLegacyInboundNamespaceDuplicates(ctx context.Context) (int64, error)
-}
-
 func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, workers int, releaseStaleLeases bool, done chan struct{}) {
 	defer close(done)
 	r.mu.RLock()
@@ -150,16 +146,6 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	r.mu.RUnlock()
 	if store == nil {
 		return
-	}
-	if cleanupStore, ok := store.(InboundEventDuplicateCleanupStore); ok {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		duplicates, err := cleanupStore.MarkLegacyInboundNamespaceDuplicates(cleanupCtx)
-		cancel()
-		if err != nil {
-			log.Printf("chatbot inbound duplicate cleanup failed: %v", err)
-		} else if duplicates > 0 {
-			log.Printf("chatbot inbound duplicate cleanup ignored %d namespace duplicates", duplicates)
-		}
 	}
 	if releaseStaleLeases {
 		callCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -460,6 +446,7 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	if r.inboundEventIsStale(item.Event, time.Now()) {
 		return "ignored_stale", nil
 	}
+	ctx = withLLMUsageContext(ctx, item.Event)
 	ctx = r.withDebugTraceContext(ctx, item.Event)
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(item.Event).MaxContextTokens)
 	// 出站幂等账本按入站事件 ID 记账：失败重跑时已经送达的分片和媒体会被跳过。

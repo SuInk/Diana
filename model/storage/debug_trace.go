@@ -40,7 +40,7 @@ WHERE id = ?
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, kind, level, action, message, detail, actor, target, metadata, created_at
 FROM app_logs
-WHERE kind = ? AND action IN ('chatbot.debug_trace', 'qqbot.debug_trace') AND target = ?
+WHERE kind = ? AND action IN ('chatbot.debug_trace') AND target = ?
 ORDER BY created_at ASC, id ASC
 `, string(LogKindDebug), messageID)
 	if err != nil {

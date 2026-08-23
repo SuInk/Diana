@@ -22,31 +22,26 @@ const (
 	ReplyDecorationAuto ReplyDecorationMode = "auto"
 )
 
-// normalizeReplyDecorationMode 归一化装饰件模式。mode 为空时回落到旧的布尔开关，
-// 让升级前保存的配置保持原有行为；两者都没有时按 on（历史默认值）处理。
-func normalizeReplyDecorationMode(mode ReplyDecorationMode, legacy *bool) ReplyDecorationMode {
+// normalizeReplyDecorationMode 归一化装饰件模式，没写就按 on 处理。
+func normalizeReplyDecorationMode(mode ReplyDecorationMode) ReplyDecorationMode {
 	switch ReplyDecorationMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
-	case ReplyDecorationOn:
-		return ReplyDecorationOn
 	case ReplyDecorationOff:
 		return ReplyDecorationOff
 	case ReplyDecorationAuto:
 		return ReplyDecorationAuto
+	default:
+		return ReplyDecorationOn
 	}
-	if legacy != nil && !*legacy {
-		return ReplyDecorationOff
-	}
-	return ReplyDecorationOn
 }
 
 // replyReferenceMode 返回本次生效的引用模式，未归一化的配置也能安全读取。
 func replyReferenceMode(cfg BotConfig) ReplyDecorationMode {
-	return normalizeReplyDecorationMode(cfg.ReplyReferenceMode, cfg.ReplyReferenceEnabled)
+	return normalizeReplyDecorationMode(cfg.ReplyReferenceMode)
 }
 
 // mentionUserMode 返回本次生效的 @ 模式，未归一化的配置也能安全读取。
 func mentionUserMode(cfg BotConfig) ReplyDecorationMode {
-	return normalizeReplyDecorationMode(cfg.MentionUserMode, cfg.MentionUserEnabled)
+	return normalizeReplyDecorationMode(cfg.MentionUserMode)
 }
 
 // replyDecorationPrompt 只在 auto 模式下告诉模型怎么自己带引用和 @。返回值包含

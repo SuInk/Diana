@@ -14,23 +14,26 @@ import (
 )
 
 type DashboardStats struct {
-	Since              time.Time               `json:"since"`
-	Until              time.Time               `json:"until"`
-	ReceivedMessages   int64                   `json:"received_messages"`
-	ActiveMembers      int64                   `json:"active_members"`
-	RepliedMessages    int64                   `json:"replied_messages"`
-	TextReplies        int64                   `json:"text_replies"`
-	ImageGenerations   int64                   `json:"image_generations"`
-	ImageEdits         int64                   `json:"image_edits"`
-	SearchCalls        int64                   `json:"search_calls"`
-	APICalls           int64                   `json:"api_calls"`
-	LLMCalls           int64                   `json:"llm_calls"`
-	LLMInputTokens     int64                   `json:"llm_input_tokens"`
-	LLMOutputTokens    int64                   `json:"llm_output_tokens"`
-	LLMTotalTokens     int64                   `json:"llm_total_tokens"`
-	Server             DashboardServerStats    `json:"server"`
-	Hourly             []DashboardStatsBucket  `json:"hourly"`
-	OperationBreakdown []DashboardStatsMeasure `json:"operation_breakdown"`
+	Since            time.Time `json:"since"`
+	Until            time.Time `json:"until"`
+	ReceivedMessages int64     `json:"received_messages"`
+	ActiveMembers    int64     `json:"active_members"`
+	RepliedMessages  int64     `json:"replied_messages"`
+	TextReplies      int64     `json:"text_replies"`
+	ImageGenerations int64     `json:"image_generations"`
+	ImageEdits       int64     `json:"image_edits"`
+	SearchCalls      int64     `json:"search_calls"`
+	APICalls         int64     `json:"api_calls"`
+	LLMCalls         int64     `json:"llm_calls"`
+	LLMInputTokens   int64     `json:"llm_input_tokens"`
+	LLMOutputTokens  int64     `json:"llm_output_tokens"`
+	LLMTotalTokens   int64     `json:"llm_total_tokens"`
+	// LLMCachedInputTokens 是输入 token 里命中供应商前缀缓存的部分。它已经算在
+	// LLMInputTokens 里，不是额外的量；命中率 = 它 / LLMInputTokens。
+	LLMCachedInputTokens int64                   `json:"llm_cached_input_tokens"`
+	Server               DashboardServerStats    `json:"server"`
+	Hourly               []DashboardStatsBucket  `json:"hourly"`
+	OperationBreakdown   []DashboardStatsMeasure `json:"operation_breakdown"`
 }
 
 type DashboardServerStats struct {
@@ -344,7 +347,7 @@ WHERE created_at >= ? AND created_at < ?
 			_ = json.Unmarshal([]byte(metadata.String), &meta)
 		}
 		switch action {
-		case "assistant.llm_usage", "chatbot.llm_usage", "qqbot.llm_usage":
+		case "assistant.llm_usage", "chatbot.llm_usage":
 			stats.LLMCalls++
 			inputTokens := int64FromAny(meta["input_tokens"])
 			outputTokens := int64FromAny(meta["output_tokens"])
@@ -355,6 +358,7 @@ WHERE created_at >= ? AND created_at < ?
 			stats.LLMInputTokens += inputTokens
 			stats.LLMOutputTokens += outputTokens
 			stats.LLMTotalTokens += totalTokens
+			stats.LLMCachedInputTokens += int64FromAny(meta["cached_input_tokens"])
 		case "assistant.image.generate":
 			stats.ImageGenerations++
 			if bucketIndex >= 0 && bucketIndex < len(stats.Hourly) {

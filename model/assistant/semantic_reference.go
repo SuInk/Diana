@@ -74,6 +74,7 @@ type semanticReferenceDecision struct {
 }
 
 func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEvent, text string) MessageEvent {
+	ctx = withLLMUsagePurpose(ctx, "semantic_reference")
 	if eventHasDirectReferenceContent(event) || quotedMessageHasReferenceContent(event.Quoted) {
 		return event
 	}

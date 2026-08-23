@@ -5,16 +5,17 @@ package assistant
 
 import "testing"
 
-func TestNormalizePlatformIDMigratesLegacyNames(t *testing.T) {
+// 归一化本身是当前功能：配置、路由和存储都靠它把写法收敛到注册表里的值。
+func TestNormalizePlatformIDCollapsesSpellingVariants(t *testing.T) {
 	cases := map[string]string{
-		"":                    PlatformOneBotV11,
-		"OneBot v11":          PlatformOneBotV11,
-		"onebot-v11":          PlatformOneBotV11,
-		"NapCat / OneBot V11": PlatformOneBotV11,
-		"Lagrange.Core":       PlatformOneBotV11,
-		"go-cqhttp":           PlatformOneBotV11,
-		"Telegram":            PlatformTelegram,
-		"tg":                  PlatformTelegram,
+		"":           PlatformOneBotV11,
+		"  ":         PlatformOneBotV11,
+		"OneBot v11": PlatformOneBotV11,
+		"onebot-v11": PlatformOneBotV11,
+		"ONEBOT":     PlatformOneBotV11,
+		"Telegram":   PlatformTelegram,
+		"tg":         PlatformTelegram,
+		"discord":    "discord",
 	}
 	for input, want := range cases {
 		if got := NormalizePlatformID(input); got != want {
@@ -23,24 +24,9 @@ func TestNormalizePlatformIDMigratesLegacyNames(t *testing.T) {
 	}
 }
 
-func TestLegacyOneBotPlatformPersistsAsUnifiedID(t *testing.T) {
-	for _, legacyID := range []string{"napcat", "lagrange", "go-cqhttp"} {
-		cfg := BotConfig{Platform: legacyID}.WithDefaults()
-		if cfg.Platform != PlatformOneBotV11 {
-			t.Fatalf("WithDefaults(%q) platform = %q", legacyID, cfg.Platform)
-		}
-		if payload := PayloadFromConfig(BotConfig{Platform: legacyID}); payload.Platform != PlatformOneBotV11 {
-			t.Fatalf("PayloadFromConfig(%q) platform = %q", legacyID, payload.Platform)
-		}
-	}
-}
-
 func TestValidatePlatformRejectsUnknownAdapter(t *testing.T) {
 	if err := ValidatePlatform(PlatformOneBotV11); err != nil {
 		t.Fatalf("ValidatePlatform(%q) error = %v", PlatformOneBotV11, err)
-	}
-	if err := ValidatePlatform("lagrange"); err != nil {
-		t.Fatalf("legacy platform should remain valid: %v", err)
 	}
 	if err := ValidatePlatform(PlatformTelegram); err != nil {
 		t.Fatalf("ValidatePlatform(%q) error = %v", PlatformTelegram, err)
@@ -64,14 +50,6 @@ func TestPlatformCategories(t *testing.T) {
 	}
 	if !IsOneBotPlatform(PlatformOneBotV11) {
 		t.Fatalf("%s 应走 OneBot 适配器", PlatformOneBotV11)
-	}
-	for _, legacyID := range []string{"napcat", "lagrange", "go-cqhttp"} {
-		if _, exposed := byID[legacyID]; exposed {
-			t.Fatalf("旧实现 ID %q 不应继续作为独立平台暴露", legacyID)
-		}
-		if !IsOneBotPlatform(legacyID) {
-			t.Fatalf("旧实现 ID %q 应兼容迁移到 OneBot v11", legacyID)
-		}
 	}
 	if byID[PlatformTelegram].Category != PlatformCategoryTelegram {
 		t.Fatal("Telegram 应自成一个分类")
@@ -156,7 +134,7 @@ func TestBotReplyLoopDetectionSettingDefaultsAndRoundTripsThroughPayload(t *test
 func TestProfileSetPlatformContextIsolationDefaultsOnAndCanBeDisabled(t *testing.T) {
 	set := ProfileSet{Profiles: []BotConfig{{ID: "qq", Platform: PlatformOneBotV11}}}.WithDefaults()
 	if !set.PlatformContextsIsolated() {
-		t.Fatal("legacy profile sets must default to isolated contexts")
+		t.Fatal("profile sets must default to isolated contexts")
 	}
 	payload := PayloadFromProfileSet(set)
 	if payload.IsolatePlatformContexts == nil || !*payload.IsolatePlatformContexts {

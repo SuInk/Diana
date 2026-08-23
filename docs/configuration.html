@@ -46,10 +46,11 @@
         </tbody></table></div>
         <div class="callout recommended"><strong>默认启用</strong><p>“识别机器人并自动不回复”默认打开，用于避免机器人之间循环对话；有明确业务需要时再关闭。</p></div>
         <h3>上下文与超时</h3>
-        <pre><code>LLM_CONTEXT_WINDOW_TOKENS=65536
-LLM_MAX_CONTEXT_TOKENS=65536
-LLM_MAX_OUTPUT_TOKENS=2048
-LLM_TIMEOUT_MS=60000</code></pre>
+        <pre><code>llm:
+  context_window_tokens: 65536
+  max_context_tokens: 65536
+  max_output_tokens: 2048
+  timeout: 60000ms</code></pre>
         <p>图片同样占用视觉 token。视觉质量差时，优先检查模型职责是否真的绑定了视觉模型、原图是否进入请求、图片是否因数量或 token 预算被裁剪，再考虑提高细节等级和上下文上限。</p>
       </section>
 
@@ -82,7 +83,7 @@ LLM_TIMEOUT_MS=60000</code></pre>
         <ul class="check-list">
           <li>WebUI 使用登录会话保护 API，并立即更换首次管理员密码。</li>
           <li>OneBot 单独配置 access token，反向 WebSocket 两端保持一致。</li>
-          <li><code>runtime.env</code>、模型 API Key、Bot Token 和平台 Cookie 不进入 Git。</li>
+          <li><code>config.yaml</code>、模型 API Key、Bot Token 和平台 Cookie 不进入 Git。</li>
           <li>调试模式会记录完整上下文和工具参数，只在可信环境短期开启。</li>
           <li>公网入口放在 HTTPS 反向代理后，并限制管理端来源。</li>
         </ul>

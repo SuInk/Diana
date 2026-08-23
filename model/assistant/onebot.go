@@ -691,23 +691,14 @@ func PlainText(segments []MessageSegment) string {
 // 用带前缀的自有词而不是平台原生说法，既跨平台统一，也不会和正文里的自然表达撞车。
 const replyMarkerPrefix = "[diana-reply:"
 
-// legacyReplyMarkerPrefix 是早期只服务单一平台时的写法。历史消息和摘要里仍存着这种
-// 文本，模型可能照抄，因此出站继续认它，但入站不再生成。
-const legacyReplyMarkerPrefix = "[回复:"
-
 // extractOutgoingReplyMarker 解析模型写在正文开头的引用标记。
 // 出站若不解析回来，标记就会作为纯文本发出去。只认开头、且 ID 形如可选负号加
 // 数字的写法，避免把正文里提到的字样当成指令。
 func extractOutgoingReplyMarker(text string) (string, string, bool) {
-	prefix := ""
-	switch {
-	case strings.HasPrefix(text, replyMarkerPrefix):
-		prefix = replyMarkerPrefix
-	case strings.HasPrefix(text, legacyReplyMarkerPrefix):
-		prefix = legacyReplyMarkerPrefix
-	default:
+	if !strings.HasPrefix(text, replyMarkerPrefix) {
 		return "", text, false
 	}
+	prefix := replyMarkerPrefix
 	end := strings.Index(text, "]")
 	if end < 0 {
 		return "", text, false
@@ -723,7 +714,7 @@ func extractOutgoingReplyMarker(text string) (string, string, bool) {
 // 不是发送者写下的字：拿它做触发称呼匹配，等于任何人回复任何一条消息都会因为
 // 标记里的 "diana" 命中称呼，从而被当成在叫机器人。
 func stripReplyMarkers(text string) string {
-	for _, prefix := range []string{replyMarkerPrefix, legacyReplyMarkerPrefix} {
+	for _, prefix := range []string{replyMarkerPrefix} {
 		offset := 0
 		for {
 			relative := strings.Index(text[offset:], prefix)

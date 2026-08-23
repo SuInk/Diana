@@ -182,12 +182,20 @@ func TestResolverCredentialsPreferSettings(t *testing.T) {
 
 func TestResolverCredentialsFromSettings(t *testing.T) {
 	values := SettingValues{
+		resolverSettingBiliSessdata: "  bili%2Csession  ",
 		resolverSettingDouyinCookie: "  dy  ",
 		resolverSettingProxyURL:     "http://127.0.0.1:7890",
 	}
 	creds := resolverCredentialsFromSettings(values)
 	if creds.DouyinCookie != "dy" {
 		t.Fatalf("应去掉首尾空白，实际 %q", creds.DouyinCookie)
+	}
+	if creds.BiliSessdata != "bili%2Csession" {
+		t.Fatalf("B 站 SESSDATA 读取错误：%q", creds.BiliSessdata)
+	}
+	ctx := withResolverCredentials(context.Background(), creds)
+	if got := bilibiliDownloadHeaders(ctx, nil)["Cookie"]; got != "SESSDATA=bili%2Csession" {
+		t.Fatalf("B 站下载请求没有携带 SESSDATA：%q", got)
 	}
 	if creds.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("代理读取错误：%q", creds.ProxyURL)

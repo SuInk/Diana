@@ -32,7 +32,7 @@
         <ol class="steps compact">
           <li><span>1</span><div><h3>识别平台</h3><p>根据 OS 和 CPU 选择正确的完整归档，拒绝不受支持的平台。</p></div></li>
           <li><span>2</span><div><h3>下载并校验</h3><p>同时下载 Release 的 <code>SHA256SUMS</code>，校验成功后才解压。</p></div></li>
-          <li><span>3</span><div><h3>备份再切换</h3><p>备份数据库、WAL/SHM、前端、旧二进制和启动脚本；保留已有 <code>runtime.env</code>。</p></div></li>
+          <li><span>3</span><div><h3>备份再切换</h3><p>备份数据库、WAL/SHM、前端、旧二进制和启动脚本；保留已有 <code>config.yaml</code>。</p></div></li>
           <li><span>4</span><div><h3>启动并探活</h3><p>最多等待 45 秒访问 <code>/api/health</code>。Unix 更新失败时恢复上一套运行文件。</p></div></li>
         </ol>
       </section>
@@ -42,7 +42,7 @@
         <div class="table-wrap"><table><thead><tr><th>变量</th><th>默认值</th><th>用途</th></tr></thead><tbody>
           <tr><td><code>DIANA_INSTALL_DIR</code></td><td>Unix: <code>~/.local/share/diana</code><br />Windows: <code>%LOCALAPPDATA%\Diana</code></td><td>程序、数据、日志和备份目录。</td></tr>
           <tr><td><code>DIANA_VERSION</code></td><td><code>latest</code></td><td>指定 <code>v0.4.2</code> 形式的版本；默认解析最新稳定版。</td></tr>
-          <tr><td><code>DIANA_PORT</code></td><td><code>18080</code></td><td>首次安装写入 <code>runtime.env</code> 的 WebUI 端口。</td></tr>
+          <tr><td><code>DIANA_PORT</code></td><td><code>18080</code></td><td>首次安装写入 <code>config.yaml</code> 的 WebUI 端口。</td></tr>
           <tr><td><code>DIANA_ADMIN_USERNAME</code></td><td><code>diana#admin</code></td><td>首次安装的管理员用户名。</td></tr>
           <tr><td><code>DIANA_ADMIN_PASSWORD</code></td><td>随机 32 位十六进制</td><td>首次安装的管理员密码。</td></tr>
           <tr><td><code>DIANA_START_AFTER_INSTALL</code></td><td><code>true</code></td><td>设为 <code>false</code> 时只安装和校验，不启动。</td></tr>
@@ -91,7 +91,7 @@ FRONTEND_DIST=frontend-next/dist ./dist/diana-webui</code></pre>
       <section class="section searchable" id="first-run">
         <div class="section-heading"><p class="eyebrow">首次登录</p><h2>先验证模型，再连接通道</h2></div>
         <ol class="steps compact">
-          <li><span>1</span><div><h3>登录控制台</h3><p>打开 <code>http://127.0.0.1:18080</code>，一键安装凭据位于终端输出和权限为 600 的 <code>runtime.env</code>。</p></div></li>
+          <li><span>1</span><div><h3>登录控制台</h3><p>打开 <code>http://127.0.0.1:18080</code>，一键安装凭据位于终端输出和权限为 600 的 <code>config.yaml</code>。</p></div></li>
           <li><span>2</span><div><h3>配置模型</h3><p>先同步模型列表，再填写默认模型；对话、视觉、意图识别和生图分别测试。</p></div></li>
           <li><span>3</span><div><h3>连接机器人</h3><p>配置 OneBot v11 或 Telegram，可同时启用，并选择通道间上下文是否隔离。</p></div></li>
           <li><span>4</span><div><h3>检查事件</h3><p>发送测试消息，在事件明细确认决策原因、调用结果与 token 统计。</p></div></li>

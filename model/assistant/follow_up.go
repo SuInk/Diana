@@ -74,7 +74,7 @@ func followUpInstruction(notice string) string {
 // followUpComment 按目标会话的历史和全局回复风格生成跟评；生成失败时返回空串。
 //
 // 提示词、长度上限、沉默取向都从这一条路径走，两个入口不会再各自漂移。
-func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source MessageEvent, notice string) string {
+func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source MessageEvent, notice string, pluginResponses ...PluginResponse) string {
 	cfg := r.effectiveConfigForEvent(source)
 	messages := []llm.Message{{
 		Role:     llm.RoleSystem,
@@ -96,6 +96,11 @@ func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source
 		}
 		messages = append(messages, llm.Message{Role: role, Content: content, Priority: llm.MessagePriorityHistory})
 	}
+	mediaFrames := followUpPluginMediaFrames(ctx, pluginResponses)
+	defer cleanupVideoContextFrames(mediaFrames.videoFrames)
+	if mediaMessage, ok := followUpPluginMediaMessage(ctx, mediaFrames); ok {
+		messages = append(messages, mediaMessage)
+	}
 	messages = append(messages, llm.Message{
 		Role:     llm.RoleUser,
 		Priority: llm.MessagePriorityCurrent,
@@ -111,12 +116,13 @@ func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source
 	if messagesContainImages(messages) {
 		group = llm.GroupVision
 	}
+	// 和上面的脱敏同理：定时轮询进来的 ctx 没带用量上下文，补上才记得到账。
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, source), kind.usageTag())
 	comment, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		llmResp, llmErr := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if llmErr != nil {
 			return "", llmErr
 		}
-		r.recordLLMUsage(ctx, source, llmResp.Provider, llmResp.Model, llmResp.Usage, kind.usageTag())
 		return normalizeReply(llmResp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 	if err != nil {
@@ -128,6 +134,50 @@ func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source
 		return ""
 	}
 	return comment
+}
+
+type followUpMediaFrames struct {
+	images      []string
+	videoFrames []string
+}
+
+func followUpPluginMediaFrames(ctx context.Context, responses []PluginResponse) followUpMediaFrames {
+	var imageURLs []string
+	var videoURLs []string
+	for _, response := range responses {
+		imageURLs = append(imageURLs, response.ImageURLs...)
+		videoURLs = append(videoURLs, response.VideoURLs...)
+		for _, message := range response.ForwardMessages {
+			imageURLs = append(imageURLs, message.ImageURLs...)
+			videoURLs = append(videoURLs, message.VideoURLs...)
+		}
+	}
+	return followUpMediaFrames{
+		images:      dedupeStrings(imageURLs),
+		videoFrames: extractVideoContextFrames(ctx, dedupeStrings(videoURLs)),
+	}
+}
+
+func followUpPluginMediaMessage(ctx context.Context, media followUpMediaFrames) (llm.Message, bool) {
+	ready := llmReadyImageURLs(ctx, append(append([]string(nil), media.images...), media.videoFrames...))
+	if len(ready) == 0 {
+		return llm.Message{}, false
+	}
+	content := "【本次插件刚刚发送的媒体】请实际查看附带画面后再生成跟评；不要声称没有看到画面。"
+	if len(media.videoFrames) > 0 {
+		content = "【本次插件刚刚发送的视频抽样帧】请结合附带画面自然回应。只依据抽样帧，不要臆测未覆盖的情节、声音或台词，也不要声称没有看到画面；正文若含平台提供的总结，以平台总结为准。"
+	}
+	parts := make([]llm.ContentPart, 0, len(ready)+1)
+	parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: content})
+	for _, imageURL := range ready {
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
+	}
+	return llm.Message{
+		Role:     llm.RoleUser,
+		Content:  content,
+		Parts:    parts,
+		Priority: llm.MessagePriorityPlugin,
+	}, true
 }
 
 // recordFollowUpFailure 把跟评失败写进运行日志。

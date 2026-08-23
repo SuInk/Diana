@@ -140,7 +140,9 @@ func applyLLMConfigCommand(ctx context.Context, store LLMProfileStore, command l
 		}
 		set.Profiles[i].Config = nextCfg
 		set.ActiveID = current.ID
-		store.SaveProfiles(set)
+		if err := store.SaveProfiles(set); err != nil {
+			return llmConfigApplyResult{Reply: fmt.Sprintf("更新失败：配置没能写入存储（%v）。", err)}
+		}
 		return llmConfigApplyResult{
 			Reply:       fmt.Sprintf("已更新当前 LLM：%s\nProvider：%s -> %s\nModel：%s -> %s", current.Name, oldProvider, nextCfg.Provider, oldModel, nextCfg.Model),
 			Updated:     true,
