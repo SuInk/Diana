@@ -208,10 +208,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		action, ok := parseAction(lastText)
 		nativeToolCall := len(resp.ToolCalls) > 0
 		var nativeCall llm.ToolCall
+		var parallelDropNotice string
 		if nativeToolCall {
 			nativeCall = resp.ToolCalls[0]
 			action = llmAction{Action: "tool", Tool: nativeCall.Name, Input: nativeCall.Arguments}
 			ok = true
+			// 当前实现每个规划步只执行一个工具调用。并行发多个时,静默丢弃
+			// 会让模型以为其余的执行过了(或者得出「一次只能调一个」的错误
+			// 经验),必须在观察里明说,让它下一步接着补发。
+			if len(resp.ToolCalls) > 1 {
+				dropped := make([]string, 0, len(resp.ToolCalls)-1)
+				for _, call := range resp.ToolCalls[1:] {
+					dropped = append(dropped, call.Name)
+				}
+				parallelDropNotice = fmt.Sprintf("\n\n注意:你在这一步并行请求了 %d 个工具调用,当前只执行了第 1 个(%s),其余(%s)没有执行。请在接下来的规划步里逐个继续调用,不要认为它们已经完成。",
+					len(resp.ToolCalls), nativeCall.Name, strings.Join(dropped, "、"))
+			}
 		}
 		if imageTaskQueued && ((!ok && !looksLikeAgentAction(lastText)) || (ok && action.Action == "final" && !imageTaskFinalIsPending(action))) {
 			protocolRepairs++
@@ -434,7 +446,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
-		observationText := toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls)
+		observationText := toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls) + parallelDropNotice
 		if action.Tool == webSearchToolName && claimLedger.active {
 			observationText += "\n\n" + claimLedger.prompt()
 		}
@@ -693,7 +705,10 @@ func (r *Runner) systemPrompt() string {
 		}
 		return false
 	}
-	rules := []string{"- 每轮最多调用一个工具。"}
+	// 措辞必须把「规划轮」和「用户消息」区分开:此前只写「每轮最多调用一个
+	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
+	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
+	rules := []string{fmt.Sprintf("- 每个规划步只选择一个工具,看到结果后继续选下一个;这一条回复内你最多可连续调用 %d 次工具。预算没用完就不要停下来向用户要求「继续」,直接接着调用,直到任务完成或预算耗尽。", r.cfg.MaxSteps)}
 	if len(r.registry.Skills()) > 0 && hasTool("skills.read") {
 		rules = append(rules, "- 如果要使用 skill，先调用 skills.read 读取完整 SKILL.md，再按其中说明行动。")
 	}
@@ -746,7 +761,7 @@ func (r *Runner) systemPrompt() string {
 	rules = append(rules, "- 已经足够回答时必须使用 final。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
-		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每轮最多选择一个工具。",
+		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
 		"最终回复使用 JSON：{\"action\":\"final\",\"content\":\"给用户看的自然语言回复\",\"task_state\":\"pending\",\"claims\":[...]}（仅有异步任务仍在处理时填写 task_state；执行联网研究时 claims 必填）。若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 		"可用工具：\n" + r.registry.Descriptions(),
 	}
