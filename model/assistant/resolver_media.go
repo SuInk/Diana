@@ -76,6 +76,7 @@ type bilibiliViewResponse struct {
 		Duration int    `json:"duration"`
 		Owner    struct {
 			Name string `json:"name"`
+			Mid  int64  `json:"mid"`
 		} `json:"owner"`
 		Stat struct {
 			View     int `json:"view"`
