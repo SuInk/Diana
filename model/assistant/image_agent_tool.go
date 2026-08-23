@@ -167,7 +167,7 @@ func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string,
 	if err != nil {
 		return "", err
 	}
-	result, err := t.enqueue(request)
+	result, err := t.enqueue(ctx, request)
 	if err != nil {
 		return "", err
 	}
@@ -253,7 +253,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	}, nil
 }
 
-func (t *dianaImageTool) enqueue(request dianaImageToolRequest) (dianaImageToolResult, error) {
+func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequest) (dianaImageToolResult, error) {
 	name := "图片生成"
 	if request.Operation == "edit" {
 		name = "图片编辑"
@@ -284,7 +284,7 @@ func (t *dianaImageTool) enqueue(request dianaImageToolRequest) (dianaImageToolR
 			return PluginTaskResult{Messages: []OutgoingMessage{message}}, nil
 		},
 	}
-	reservation := t.runtime.reservePluginTasks(t.event, []PluginTask{task})
+	reservation := t.runtime.reservePluginTasksForTurn(ctx, t.event, []PluginTask{task})
 	if !reservation.handled {
 		return dianaImageToolResult{}, fmt.Errorf("图片任务无法启动")
 	}
@@ -518,7 +518,7 @@ func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent,
 	if err != nil {
 		return dianaImageToolResult{}, err
 	}
-	return tool.enqueue(request)
+	return tool.enqueue(ctx, request)
 }
 
 func (r *Runtime) shareAgentImages(images []string) ([]string, []string, error) {

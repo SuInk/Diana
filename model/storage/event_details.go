@@ -53,6 +53,9 @@ type InboundEventDetail struct {
 	TotalTokens       int64               `json:"total_tokens,omitempty"`
 	CachedInputTokens int64               `json:"cached_input_tokens,omitempty"`
 	Images            []InboundEventImage `json:"images,omitempty"`
+	// Subtasks 是这条消息触发的后台子任务（生成图片、文档 OCR 等）。图片是任务跑完
+	// 之后异步发出去的，事件详情里只有一句文字回复时看不出它从哪来。
+	Subtasks []assistant.InboundEventSubtask `json:"subtasks,omitempty"`
 }
 
 // InboundEventImage intentionally contains display metadata only. The WebUI
@@ -275,6 +278,17 @@ LIMIT ? OFFSET ?
 			// code lets the WebUI render the structured image instead.
 			page.Events[item.index].Text = displayText
 		}
+	}
+	eventIDs := make([]string, 0, len(page.Events))
+	for index := range page.Events {
+		eventIDs = append(eventIDs, page.Events[index].ID)
+	}
+	subtasks, err := s.LoadInboundEventSubtasks(ctx, eventIDs)
+	if err != nil {
+		return InboundEventDetailPage{}, err
+	}
+	for index := range page.Events {
+		page.Events[index].Subtasks = subtasks[page.Events[index].ID]
 	}
 	usageByMessage, usage, err := s.inboundEventTokenUsage(ctx, since)
 	if err != nil {
