@@ -6803,6 +6803,33 @@ func (r *Runtime) prepareForwardResolverVideoDelivery(messages []OutgoingMessage
 	return forwardMessages, uploads, sharedUploads
 }
 
+// resolveOutgoingLocalImages 把消息里的本地图片路径换成桥能访问的共享 URL。
+// 视频早有这层转换(prepareResolverVideoDelivery),图片一直漏着:X 图片下载
+// 到宿主机临时目录后,绝对路径被直接塞进转发节点,桥运行在容器或另一台机器
+// 上时根本读不到——合并转发、暂存、散装三条路挨个失败,重试耗尽后整条事件
+// 被丢弃。换不成时保留原路径,桥与宿主同机的部署行为不变。
+func (r *Runtime) resolveOutgoingLocalImages(msg OutgoingMessage) OutgoingMessage {
+	if len(msg.ImageURLs) == 0 {
+		return msg
+	}
+	resolved := make([]string, 0, len(msg.ImageURLs))
+	changed := false
+	for _, imageURL := range msg.ImageURLs {
+		if path := localMediaPath(imageURL); path != "" {
+			if sharedURL, ok := r.shareLocalMedia(path); ok {
+				resolved = append(resolved, sharedURL)
+				changed = true
+				continue
+			}
+		}
+		resolved = append(resolved, imageURL)
+	}
+	if changed {
+		msg.ImageURLs = resolved
+	}
+	return msg
+}
+
 func (r *Runtime) shareLocalMedia(path string) (string, bool) {
 	r.mu.RLock()
 	sharer := r.localMedia
@@ -7107,6 +7134,7 @@ func (r *Runtime) sendOutgoing(ctx context.Context, event MessageEvent, msg Outg
 
 func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent, msg OutgoingMessage) (map[string]any, error) {
 	msg = routeOutgoingToEvent(event, msg)
+	msg = r.resolveOutgoingLocalImages(msg)
 	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
@@ -7444,6 +7472,11 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(r.channel.Status().SelfID))
 	if selfID == "" {
 		return "", fmt.Errorf("chatbot: missing self id for resolver forward")
+	}
+	// 本地图片路径先换成共享 URL:转发节点里的路径桥端拿去自行下载,
+	// 宿主机临时路径它读不到。
+	for index := range messages {
+		messages[index] = r.resolveOutgoingLocalImages(messages[index])
 	}
 	// 先试自定义节点：内容直接内联，一个请求就发完，是 OneBot v11 里兼容性
 	// 最好的做法（嵌套转发一直走的就是它）。暂存方式要先给机器人自己发 N 条
