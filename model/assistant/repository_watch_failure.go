@@ -123,7 +123,7 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 	acknowledged := false
 	var firstErr error
 	for _, target := range repositoryWatchDeliveryTargets(item) {
-		_, delivered, err := r.sendWithDeliveryEvidence(ctx, target, notice)
+		_, delivered, err := r.sendErrorNoticeWithEvidence(ctx, target, notice)
 		if delivered {
 			acknowledged = true
 		}

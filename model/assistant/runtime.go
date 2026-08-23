@@ -1545,7 +1545,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "", ctx.Err()
 		}
-		_, acknowledged, sendErr := r.sendWithDeliveryEvidence(replyCtx, event, "出错了："+publicChatErrorMessage(err))
+		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, "出错了："+publicChatErrorMessage(err))
 		if sendErr != nil {
 			if errors.Is(sendErr, errReplySuppressedBeforeSend) {
 				setEventRecordOutcome(&record, "ignored_response_suppression")
@@ -6991,11 +6991,22 @@ func (r *Runtime) sendWithMessageIDs(ctx context.Context, event MessageEvent, re
 	return r.sendWithMessageIDsMode(ctx, event, reply, event.UserID, true)
 }
 
-func (r *Runtime) sendWithDeliveryEvidence(ctx context.Context, event MessageEvent, reply string) ([]string, bool, error) {
-	messageIDs, err := r.sendWithMessageIDs(ctx, event, reply)
+// sendErrorNoticeWithEvidence 投递「出错了：……」这类错误提示。
+//
+// 错误提示和聊天发言不是一回事：它是一条完整的诊断信息，人格预设的短句切分
+// （群友风格把每条压到 160 字）会把它拦腰截断，上游返回的报错和后面那个说明
+// 链接被甩进两条消息里，读起来像机器人自己断句断错了。这里和结构化通知同样
+// 处理，只按平台长度兜底。
+func (r *Runtime) sendErrorNoticeWithEvidence(ctx context.Context, event MessageEvent, text string) ([]string, bool, error) {
+	cfg := r.effectiveConfigForEvent(event)
+	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", true)
 	if err != nil {
 		return nil, false, err
 	}
+	return r.deliveryEvidence(event, messageIDs)
+}
+
+func (r *Runtime) deliveryEvidence(event MessageEvent, messageIDs []string) ([]string, bool, error) {
 	if len(messageIDs) > 0 {
 		return messageIDs, true, nil
 	}
