@@ -4,7 +4,6 @@
 package assistant
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -149,42 +148,5 @@ func TestIsLikelyMessageID(t *testing.T) {
 	// QQ 号判定仍然拒绝负数。
 	if isLikelyChatIdentifier("-810975") {
 		t.Fatal("negative value must not be treated as a QQ id")
-	}
-}
-
-// 配置键从 llm_qq_id_masking_enabled 改名为 llm_identity_masking_enabled。旧配置里
-// 显式关掉脱敏的必须仍然是关的——静默变回开启是隐私回退，比不改名严重得多。
-func TestLegacyMaskingKeyIsHonoured(t *testing.T) {
-	cases := map[string]struct {
-		raw  string
-		want bool
-	}{
-		"旧键显式关闭":      {`{"llm_qq_id_masking_enabled":false}`, false},
-		"旧键显式开启":      {`{"llm_qq_id_masking_enabled":true}`, true},
-		"新键显式关闭":      {`{"llm_identity_masking_enabled":false}`, false},
-		"两个键都没有时默认开启": {`{}`, true},
-		// 两个键并存时以新键为准，避免升级过程中旧值反过来盖住新设置。
-		"新键优先于旧键": {`{"llm_identity_masking_enabled":true,"llm_qq_id_masking_enabled":false}`, true},
-	}
-	for name, testCase := range cases {
-		var cfg BotConfig
-		if err := json.Unmarshal([]byte(testCase.raw), &cfg); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		cfg = cfg.WithDefaults()
-		if got := llmIdentityMaskingEnabled(cfg); got != testCase.want {
-			t.Fatalf("%s: masking = %v, want %v", name, got, testCase.want)
-		}
-		// 归一化之后不再写出旧键，避免两份真相长期并存。
-		if cfg.LegacyLLMQQIDMaskingEnabled != nil {
-			t.Fatalf("%s: legacy key should be cleared after WithDefaults", name)
-		}
-		encoded, err := json.Marshal(cfg)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if strings.Contains(string(encoded), "llm_qq_id_masking_enabled") {
-			t.Fatalf("%s: legacy key must not be written back: %s", name, encoded)
-		}
 	}
 }

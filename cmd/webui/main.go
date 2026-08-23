@@ -49,8 +49,7 @@ var buildVersion = "dev"
 var runtimeVersion = version.Resolve(buildVersion)
 
 const (
-	legacyLLMConfigPluginID = "official.llm-config-skill"
-	webSearchPluginID       = "official.web-search"
+	webSearchPluginID = "official.web-search"
 )
 
 const maxHTTPRequestBodyBytes = 8 << 20
@@ -224,24 +223,6 @@ func main() {
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
 		log.Fatal(err)
 	} else if ok {
-		statesChanged := false
-		if _, exists := savedPluginStates[legacyLLMConfigPluginID]; exists {
-			profiles, changed := migrateLegacyLLMConfigPluginState(botProfileStore.Profiles(), savedPluginStates)
-			if changed {
-				if err := botProfileStore.SaveProfiles(profiles); err != nil {
-					log.Printf("migrate legacy llm config plugin state failed: %v", err)
-				}
-			}
-			statesChanged = true
-		}
-		if catalogState, exists := plugins.Get(webSearchPluginID); exists && migrateRestoredWebSearchPluginState(savedPluginStates, catalogState) {
-			statesChanged = true
-		}
-		if statesChanged {
-			if err := sqliteStore.SavePluginStates(ctx, savedPluginStates); err != nil {
-				log.Fatal(err)
-			}
-		}
 		plugins.Restore(savedPluginStates)
 	}
 	botSet := botProfileStore.Profiles()
@@ -435,11 +416,7 @@ func main() {
 	router.GET("/media/resolver/:token", func(c *gin.Context) {
 		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
 	})
-	// Keep historical media URLs valid across upgrades. These token-only routes
-	// contain no browseable file path and are intentionally exempt from sessions.
-	router.GET("/api/qqbot/media/:token", func(c *gin.Context) {
-		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
-	})
+	// 这条 token-only 路由不含可浏览的文件路径，有意不走会话鉴权。
 	router.GET("/api/assistant/media/:token", func(c *gin.Context) {
 		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
 	})
@@ -513,53 +490,6 @@ func probeMacOSClientAppDataAccess() {
 		return
 	}
 	log.Printf("macOS QQ app data access granted")
-}
-
-// migrateLegacyLLMConfigPluginState 把旧全局插件开关迁到每个机器人，并从插件状态中移除旧条目。
-func migrateLegacyLLMConfigPluginState(set assistant.ProfileSet, states map[string]assistant.PluginState) (assistant.ProfileSet, bool) {
-	legacy, ok := states[legacyLLMConfigPluginID]
-	if !ok {
-		return set, false
-	}
-	delete(states, legacyLLMConfigPluginID)
-	if legacy.Enabled {
-		return set, false
-	}
-
-	disabled := false
-	changed := false
-	for i := range set.Profiles {
-		if set.Profiles[i].OwnerLLMConfigEnabled != nil {
-			continue
-		}
-		set.Profiles[i].OwnerLLMConfigEnabled = &disabled
-		changed = true
-	}
-	return set, changed
-}
-
-// migrateRestoredWebSearchPluginState upgrades the former optional search plugin
-// to a built-in capability. An explicitly disabled installed plugin stays
-// disabled, while the old "not installed" state becomes installed and enabled.
-func migrateRestoredWebSearchPluginState(states map[string]assistant.PluginState, catalogState assistant.PluginState) bool {
-	state, exists := states[webSearchPluginID]
-	if !exists {
-		catalogState.Installed = true
-		catalogState.Enabled = true
-		states[webSearchPluginID] = catalogState
-		return true
-	}
-	if state.Manifest.BuiltIn && state.Installed {
-		return false
-	}
-	wasInstalled := state.Installed
-	state.Manifest = catalogState.Manifest
-	state.Installed = true
-	if !wasInstalled {
-		state.Enabled = true
-	}
-	states[webSearchPluginID] = state
-	return true
 }
 
 func displayHost(host string) string {

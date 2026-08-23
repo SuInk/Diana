@@ -162,7 +162,7 @@ func (t *dianaOneBotGroupTool) replyPolicy(ctx context.Context, input map[string
 	}
 
 	changed := false
-	if chance, present, err := groupToolFloatWithLegacy(input, "proactive_reply_chance", "passive_reply_chance"); err != nil {
+	if chance, present, err := groupToolFloat(input, "proactive_reply_chance"); err != nil {
 		return "", err
 	} else if present {
 		if chance < minimumReplyChance || chance > maximumReplyChance {
@@ -171,7 +171,7 @@ func (t *dianaOneBotGroupTool) replyPolicy(ctx context.Context, input map[string
 		cfg.ProactiveReplyChance = chance
 		changed = true
 	}
-	if threshold, present, err := groupToolFloatWithLegacy(input, "proactive_reply_threshold", "passive_reply_threshold"); err != nil {
+	if threshold, present, err := groupToolFloat(input, "proactive_reply_threshold"); err != nil {
 		return "", err
 	} else if present {
 		if threshold < minimumReplyThreshold || threshold > maximumReplyThreshold {
@@ -371,14 +371,6 @@ func groupToolFloat(input map[string]any, key string) (float64, bool, error) {
 		return 0, true, fmt.Errorf("%s 必须是数字", key)
 	}
 	return parsed, true, nil
-}
-
-func groupToolFloatWithLegacy(input map[string]any, key string, legacyKey string) (float64, bool, error) {
-	value, present, err := groupToolFloat(input, key)
-	if present {
-		return value, true, err
-	}
-	return groupToolFloat(input, legacyKey)
 }
 
 func groupToolInteger(value any) (int, error) {

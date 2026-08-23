@@ -210,10 +210,9 @@ func (h *BotHandler) SetSQLiteStore(store *storage.SQLiteStore) {
 	h.logs = store
 }
 
-// Register registers the generic assistant API and its legacy single-platform alias.
+// Register registers the assistant API.
 func (h *BotHandler) Register(router gin.IRouter) {
 	h.registerRoutes(router, "/api/assistant")
-	h.registerRoutes(router, "/api/qqbot")
 	// 控制台登录用户直接管理全部群配置，无需群验证码流程。
 	h.registerConsoleGroupRoutes(router)
 }
@@ -622,8 +621,7 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 // pluginDependencies 返回各插件外部依赖的探测结果，让控制台能直接看出
 // yt-dlp / ffmpeg / node / 浏览器是否齐全，而不是等用户发链接后才报错。
 //
-// plugins 按插件 ID 分组，界面据此决定在哪张卡片上显示；resolver 保留原样，
-// 安装接口的返回体还在用它。
+// plugins 按插件 ID 分组，界面据此决定在哪张卡片上显示。
 func (h *BotHandler) pluginDependencies(c *gin.Context) {
 	resolver := assistant.ResolverDependencies()
 	browser := assistant.BrowserDependencies()
@@ -632,7 +630,6 @@ func (h *BotHandler) pluginDependencies(c *gin.Context) {
 		browser = assistant.RefreshBrowserDependencies()
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"resolver": resolver,
 		"plugins": gin.H{
 			assistant.ResolverPluginID:         resolver,
 			assistant.SandboxedBrowserPluginID: browser,

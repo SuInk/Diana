@@ -43,10 +43,8 @@ type consoleGroupSavePayload struct {
 
 // registerConsoleGroupRoutes 注册控制台群配置直连路由。
 func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
-	for _, base := range []string{"/api/assistant", "/api/qqbot"} {
-		router.GET(base+"/groups", h.listConsoleGroups)
-		router.POST(base+"/groups", h.saveConsoleGroup)
-	}
+	router.GET("/api/assistant/groups", h.listConsoleGroups)
+	router.POST("/api/assistant/groups", h.saveConsoleGroup)
 }
 
 // listConsoleGroups 返回机器人已加入的群、已保存群配置与插件清单。

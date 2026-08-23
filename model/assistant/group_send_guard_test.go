@@ -242,7 +242,7 @@ func TestGroupOutboundBackoffContinuesRemainingChunksAfterFirstSuccess(t *testin
 	ctx := withOutboundDeliveryPolicy(context.Background(), fastOutboundDeliveryPolicy())
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "chunks-1"}
 
-	if _, err := runtime.sendWithMessageIDs(ctx, event, "first<botbr>second"); err != nil {
+	if _, err := runtime.sendWithMessageIDs(ctx, event, "first<dianabr>second"); err != nil {
 		t.Fatalf("sendWithMessageIDs() error = %v", err)
 	}
 	if got := channel.attemptTexts("123456"); len(got) != 3 || got[0] != "first" || got[1] != "second" || got[2] != "second" {
