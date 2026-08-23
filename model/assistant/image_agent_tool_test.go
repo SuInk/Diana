@@ -111,7 +111,7 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	if len(sent) != 2 {
 		t.Fatalf("sent = %#v", sent)
 	}
-	if !strings.Contains(sent[0].Text, "开始生成图片") || !strings.Contains(sent[0].Text, "任务编号") {
+	if !strings.Contains(sent[0].Text, "开始生成图片") || strings.Contains(sent[0].Text, "任务编号") {
 		t.Fatalf("start announcement = %#v", sent[0])
 	}
 	if sent[1].Text != "按检索结果画好了。" || len(sent[1].ImageURLs) != 1 || sent[1].ImageURLs[0] != sharer.url {
@@ -247,7 +247,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	if len(sent) != 3 {
 		t.Fatalf("sent = %#v", sent)
 	}
-	if !strings.Contains(sent[0].Text, "开始生成图片") || !strings.Contains(sent[0].Text, "任务编号") {
+	if !strings.Contains(sent[0].Text, "开始生成图片") || strings.Contains(sent[0].Text, "任务编号") {
 		t.Fatalf("start announcement = %#v", sent[0])
 	}
 	textFound := false
@@ -421,21 +421,85 @@ func TestDianaImageToolEditsEachSourceSeparately(t *testing.T) {
 		}
 	}
 
+	// 逐张模式改为完成一张发一张:应出现两条各带一张图的消息,而不是攒到
+	// 最后一条消息里带两张图。
 	waitForCondition(t, 5*time.Second, func() bool {
+		count := 0
 		for _, message := range channel.sentSnapshot() {
-			if len(message.ImageURLs) == 2 {
-				return true
+			if len(message.ImageURLs) == 1 {
+				count++
 			}
 		}
-		return false
+		return count == 2
 	})
 
 	sent := channel.sentSnapshot()
 	if !strings.Contains(sent[0].Text, "逐张编辑图片") {
 		t.Fatalf("start announcement = %#v", sent[0])
 	}
-	if !strings.Contains(sent[len(sent)-1].Text, "共 2 张") {
-		t.Fatalf("result caption should report the count: %#v", sent[len(sent)-1])
+	firstImage := -1
+	for index, message := range sent {
+		if len(message.ImageURLs) == 2 {
+			t.Fatalf("图片不该攒到一条消息里发:%#v", message)
+		}
+		if len(message.ImageURLs) == 1 && firstImage < 0 {
+			firstImage = index
+		}
+		// 编号是内部标识,处理过程中的任何消息都不该带。
+		if strings.Contains(message.Text, "任务 img-") || strings.Contains(message.Text, "任务编号") {
+			t.Fatalf("消息里不该出现任务编号:%#v", message)
+		}
+	}
+	if firstImage < 0 {
+		t.Fatal("没有逐张发出的图片消息")
+	}
+	if sent[firstImage].ReplyMessageID != "batch-edit" {
+		t.Fatalf("第一张应引用原消息:%#v", sent[firstImage])
+	}
+	// 全部成功时安静收尾:最后不再补一条「共 N 张」汇总。
+	for _, message := range sent {
+		if strings.Contains(message.Text, "共 2 张") {
+			t.Fatalf("不该再有汇总消息:%#v", message)
+		}
+	}
+}
+
+// 标注数量和来源对不上时整组丢弃——错位的标注会把 A 的头像标成 B,
+// 比没有标注更糟。
+func TestDianaImageToolDiscardsMismatchedSourceLabels(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible, APIKey: "secret", Model: "gpt-test", ImageModel: "gpt-image-2",
+	})}, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "m1"}
+	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
+	tool := &dianaImageTool{runtime: runtime, event: event, relationship: policy}
+
+	request, err := tool.prepareRequest(map[string]any{
+		"operation":        "edit",
+		"prompt":           "加上旗帜元素",
+		"source_mode":      "each",
+		"identity_sources": []any{"member:10001", "member:10002"},
+		"source_labels":    []any{"只有一个标注"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.SourceLabels != nil {
+		t.Fatalf("数量不匹配的标注应整组丢弃:%#v", request.SourceLabels)
+	}
+
+	request, err = tool.prepareRequest(map[string]any{
+		"operation":        "edit",
+		"prompt":           "加上旗帜元素",
+		"source_mode":      "each",
+		"identity_sources": []any{"member:10001", "member:10002"},
+		"source_labels":    []any{"Winter 的头像", "美海的头像"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.SourceLabels) != 2 || request.SourceLabels[0] != "Winter 的头像" {
+		t.Fatalf("数量匹配的标注应保留:%#v", request.SourceLabels)
 	}
 }
 

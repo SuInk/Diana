@@ -60,6 +60,9 @@ type dianaImageToolRequest struct {
 	Prompt          string
 	Caption         string
 	IdentitySources []string
+	// SourceLabels 与 IdentitySources 一一对应的人类可读标注（昵称等）。
+	// 逐张发送时作为对应图片的说明文字,让大家知道每张是谁的。
+	SourceLabels []string
 	// SourceMode 决定多张参考图怎么用：combine 把它们合成一张（默认，也是历史行为），
 	// each 对每张各做一次编辑，最后一起发出。
 	SourceMode string
@@ -68,6 +71,9 @@ type dianaImageToolRequest struct {
 type dianaImageTaskOutput struct {
 	Caption   string
 	ImageURLs []string
+	// Delivered 表示图片已在执行过程中逐张发出,Caption 只剩失败/超限说明
+	//（可能为空）,调用方不要再做一次汇总投递。
+	Delivered bool
 }
 
 func newDianaImageTool(runtime *Runtime, event MessageEvent, relationship RelationshipPolicy) agent.Tool {
@@ -89,7 +95,7 @@ func (t *dianaImageTool) Description() string {
 	if len(operations) == 0 {
 		operations = append(operations, "无")
 	}
-	return `异步生成或编辑图片。工具会立即返回已受理的任务编号，并由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。`
+	return `异步生成或编辑图片。工具受理后由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。`
 }
 
 // dianaImageStartedMessage 是任务受理后立刻发给用户的那句话。
@@ -107,9 +113,9 @@ func dianaImageStartedMessage(request dianaImageToolRequest, result dianaImageTo
 		}
 	}
 	if result.Reused {
-		return fmt.Sprintf("同样的%s任务已经在处理中（任务编号：%s），完成后我会把结果发出来。", action, result.TaskID)
+		return fmt.Sprintf("同样的%s任务已经在处理中，完成后我会把结果发出来。", action)
 	}
-	return fmt.Sprintf("开始%s（任务编号：%s），完成后我会把结果发出来。", action, result.TaskID)
+	return fmt.Sprintf("开始%s，完成后我会把结果发出来。", action)
 }
 
 // InputSchema 的 operation 枚举按当前关系等级裁剪：没解锁的操作压根不出现在
@@ -138,6 +144,9 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 				strconv.Itoa(maxAvatarImageSources) + ` 个。`)
 	}
 	if t.relationship.AllowImageEditing {
+		properties["source_labels"] = toolStringArrayParam(
+			`与 identity_sources 一一对应的说明文字，可选，逐张发送时原样作为对应图片附带的说明发出（例如「Winter 的头像」），让大家知道每张是谁的。` +
+				`填写时数量必须与 identity_sources 相同。`)
 		properties["source_mode"] = toolEnumParam(
 			`operation="edit" 时多张参考图怎么用。combine：把它们合成为一张（默认）。`+
 				`each：对每张各做一次编辑，产出多张图一起发出——用户要求「每个人的头像都处理一下」`+
@@ -233,9 +242,14 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	if sourceMode != dianaImageSourceModeEach {
 		sourceMode = dianaImageSourceModeCombine
 	}
+	sourceLabels := configToolStringSlice(input, "source_labels")
+	if len(sourceLabels) != len(identitySources) {
+		// 数量对不上就整组丢弃:错位的标注比没有标注更糟(把 A 的头像标成 B)。
+		sourceLabels = nil
+	}
 	return dianaImageToolRequest{
 		Operation: operation, Prompt: prompt, Caption: caption,
-		IdentitySources: identitySources, SourceMode: sourceMode,
+		IdentitySources: identitySources, SourceLabels: sourceLabels, SourceMode: sourceMode,
 	}, nil
 }
 
@@ -250,9 +264,18 @@ func (t *dianaImageTool) enqueue(request dianaImageToolRequest) (dianaImageToolR
 		Key:     dianaImageTaskKey(t.event, request),
 		Timeout: t.taskTimeout(),
 		Run: func(ctx context.Context, services PluginTaskServices) (PluginTaskResult, error) {
-			output, err := t.execute(ctx, request, services.Report)
+			output, err := t.execute(ctx, request, services)
 			if err != nil {
 				return PluginTaskResult{}, err
+			}
+			// 逐张模式下图片已经边完成边发出去了,这里只补失败/超限说明,
+			// 全部成功时安静收尾,不再来一条汇总。
+			if output.Delivered {
+				result := PluginTaskResult{Delivered: true}
+				if note := strings.TrimSpace(output.Caption); note != "" {
+					result.Reply = note
+				}
+				return result, nil
 			}
 			message := OutgoingMessage{Text: output.Caption, ImageURLs: output.ImageURLs}
 			if t.event.Kind == EventKindGroup {
@@ -292,7 +315,8 @@ func (t *dianaImageTool) taskTimeout() time.Duration {
 	return timeout
 }
 
-func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequest, progress func(PluginTaskProgress)) (dianaImageTaskOutput, error) {
+func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequest, services PluginTaskServices) (dianaImageTaskOutput, error) {
+	progress := services.Report
 	operation := request.Operation
 	prompt := request.Prompt
 	submittedPrompt := t.runtime.enrichImagePromptWithChatContext(ctx, t.event, prompt)
@@ -339,17 +363,35 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 				batches = append(batches, []string{source})
 			}
 		}
+		// 逐张模式且能中途投递时,完成一张立刻发一张:用户马上看到成果,
+		// 也不再需要「正在编辑第 N/M 张」这种带内部味道的进度播报——
+		// 图片本身就是进度。发不出去再退回攒总。
+		streaming := request.SourceMode == dianaImageSourceModeEach && len(batches) > 1 && services.Send != nil
+		streamed := 0
+		// 标注按「来源→解析出的头像地址」建映射:来源解析是保序但有损的
+		//（解析失败会整个跳过）,按下标硬对会把 A 的头像标成 B。查不到就
+		// 不标,宁缺毋错。
+		labelByURL := map[string]string{}
+		if streaming && len(request.SourceLabels) == len(request.IdentitySources) {
+			for labelIndex, identity := range request.IdentitySources {
+				label := strings.TrimSpace(request.SourceLabels[labelIndex])
+				if label == "" {
+					continue
+				}
+				for _, resolved := range t.runtime.avatarIdentityImageURLs(ctx, t.event, []string{identity}) {
+					if _, exists := labelByURL[resolved]; !exists {
+						labelByURL[resolved] = label
+					}
+				}
+			}
+		}
 		for index, batch := range batches {
 			if err := ctx.Err(); err != nil {
 				return dianaImageTaskOutput{}, err
 			}
 			if progress != nil && len(batches) > 1 {
-				progress(PluginTaskProgress{
-					Phase:     "running",
-					Message:   fmt.Sprintf("正在编辑第 %d/%d 张", index+1, len(batches)),
-					Completed: index,
-					Total:     len(batches),
-				})
+				// 只更新后台任务状态,不发聊天消息(Message 留空)。
+				progress(PluginTaskProgress{Phase: "running", Completed: index, Total: len(batches)})
 			}
 			resp, usedCfg, err := t.runtime.editImageWithFailover(ctx, llm.ImageEditRequest{
 				Prompt: submittedPrompt,
@@ -359,15 +401,47 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 			})
 			if err != nil {
 				// 逐张模式里一张失败不该埋掉已经成功的那些。
-				if len(batches) == 1 || len(images) == 0 {
+				if len(batches) == 1 || (len(images) == 0 && streamed == 0) {
 					return dianaImageTaskOutput{}, err
 				}
 				failed++
 				continue
 			}
 			cfg = usedCfg
-			images = append(images, resp.Images...)
 			sourceCount += len(batch)
+			if streaming {
+				shared, localPaths, shareErr := t.runtime.shareAgentImages(resp.Images)
+				if shareErr == nil && len(shared) > 0 {
+					if len(localPaths) > 0 {
+						cleanupLocalMediaFilesLater(localPaths, dianaImageMediaTTL)
+					}
+					outgoing := OutgoingMessage{ImageURLs: shared}
+					// 有标注就每张带上「这是谁的」;没有标注时第一张带整体说明。
+					if label := labelByURL[batch[0]]; label != "" {
+						outgoing.Text = label
+					} else if streamed == 0 {
+						outgoing.Text = request.Caption
+					}
+					if streamed == 0 && t.event.Kind == EventKindGroup {
+						// 第一张引用原消息,后面的直接发图。
+						outgoing.ReplyMessageID = t.event.MessageID
+					}
+					if sendErr := services.Send(ctx, outgoing); sendErr == nil {
+						streamed++
+						continue
+					}
+				}
+				// 分享或发送失败就把这张并回攒总,任务结束时统一投递,不丢图。
+			}
+			images = append(images, resp.Images...)
+		}
+		if streamed > 0 && len(images) == 0 {
+			t.runtime.recordImageOperation(ctx, t.event, "chatbot.image.edit", "Agent 图片编辑已完成", prompt, submittedPrompt, cfg.ImageModelWithDefault(), streamed, sourceCount)
+			note := ""
+			if failed > 0 || dropped > 0 {
+				note = dianaImageResultCaption("", 0, dropped, failed)
+			}
+			return dianaImageTaskOutput{Delivered: true, Caption: note}, nil
 		}
 		action = "chatbot.image.edit"
 		message = "Agent 图片编辑已完成"
@@ -428,7 +502,7 @@ func asyncImageReplyInstruction(result dianaImageToolResult) string {
 	}
 	// 明确堵住几种常见的推脱说法：任务其实已经在后台跑了，这时回一句「做不到」或
 	// 「你没有权限」，用户看到的就只剩这句话。
-	return fmt.Sprintf("【本轮图片任务】%s（任务编号：%s）。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, result.TaskID, announced)
+	return fmt.Sprintf("【本轮图片任务】%s。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, announced)
 }
 
 func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent, relationship RelationshipPolicy, operation string, prompt string, caption string) (dianaImageToolResult, error) {
