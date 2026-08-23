@@ -7038,7 +7038,7 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 // 160 字）会把一张卡片拦腰截断，把链接甩到下一条里。所以这里只按平台长度兜底。
 func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text string) error {
 	cfg := r.effectiveConfigForEvent(event)
-	_, err := r.deliverChunks(ctx, event, splitNotification(text, notificationChunkSize), cfg, "", false)
+	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", false)
 	return err
 }
 
@@ -9854,7 +9854,6 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 // OneBot 实现的余量都比这更宽。再往上就得按平台分别算长度了，收益不大。
 const notificationChunkSize = 1800
 
-// notificationSplitMarker 是通知里的显式分条符，与回复用的是同一个记号。
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
 // legacyNotificationSplitMarker 是它的旧名字：用户自定义过的提示词文案和模型的
 // 历史习惯里都还留着，解析时一并认，输出规范只教新的那个。
@@ -9871,57 +9870,37 @@ func normalizeSplitMarkers(text string) string {
 	return strings.ReplaceAll(text, legacyNotificationSplitMarker, notificationSplitMarker)
 }
 
-// splitNotification 按 <dianabr> 分条，再按长度兜底切分。空行不分条：通知正文里
-// 的空行是排版，不该让一条通知碎成好几条；要分条就显式写 <dianabr>。
-func splitNotification(text string, chunkSize int) []string {
+// splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 <dianabr>，
+// 再按长度兜底。发言和通知走的是同一套规则。
+//
+// 空行不是分条信号。模型按 Markdown 习惯用空行做段落间距，运行时却曾把它当成消息
+// 边界——同一个符号两边理解不一样，分条位置就全看模型的排版习惯。提示词已经从源头
+// 要求「不要出现空行，要分条就写 <dianabr>」（见 replyBlankLineRule），这里把残留的
+// 空行按排版收掉，不再据此分条。
+//
+// 这一版之前还有一套「清单识别」：扫到三行以上的项目符号、编号或「短标签：内容」
+// 就判定为清单，把长度上限从 160 顶到 900 以免榜单被拆碎。它有两个问题——一是拿
+// 「不拆分」和「可以很长」共用一个数字，清单因此被允许发成一条 400 多字的宽气泡，
+// 还正好把 shouldUseForwardReply 的触发条件（>=5 块或 >900 字）压到永远不成立，
+// 反而堵死了本该走的转发卡片；二是它防的「空行拆碎清单」这件事，提示词已经从源头
+// 解决了。空行不再分条之后，这套识别没有存在理由，连同它的三个阈值一并删除。
+func splitReply(reply string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = notificationChunkSize
 	}
-	text = normalizeSplitMarkers(strings.TrimSpace(text))
-	if text == "" {
+	reply = collapseBlankLines(normalizeSplitMarkers(reply))
+	if reply == "" {
 		return nil
 	}
 	var out []string
-	for _, part := range strings.Split(text, notificationSplitMarker) {
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		out = append(out, chunkTextByLength(part, chunkSize)...)
 	}
 	return out
 }
 
-// splitReply 将长回复按模型分隔符、空行和长度切分。
-//
-// 清单型回复（逐项打分、排行、步骤这类）是个例外：里面的空行是排版，不是分条
-// 信号。按聊天规则拆开会把「变装皇后：+1」和它下面那句解释发成两条，一份榜单
-// 散成七八条消息，读起来比一整块还乱。真人贴这种清单也是一条发出去的。
-func splitReply(reply string, chunkSize int) []string {
-	if chunkSize <= 0 {
-		chunkSize = 900
-	}
-	reply = normalizeSplitMarkers(strings.TrimSpace(reply))
-	if reply == "" {
-		return nil
-	}
-	structured := looksStructuredReply(reply)
-	if structured && chunkSize < structuredReplyChunkSize {
-		chunkSize = structuredReplyChunkSize
-	}
-	var out []string
-	for _, botPart := range strings.Split(reply, notificationSplitMarker) {
-		// <dianabr> 是模型显式要求的分条，任何情况下都保留。
-		if structured {
-			out = append(out, chunkTextByLength(collapseBlankLines(botPart), chunkSize)...)
-			continue
-		}
-		for _, part := range splitReplyParagraphs(botPart) {
-			out = append(out, chunkTextByLength(part, chunkSize)...)
-		}
-	}
-	return out
-}
-
-// collapseBlankLines 去掉整块发送时残留的空行。普通回复按空行分条，空行本身
-// 就是消息边界、永远不会显示出来；清单型回复跳过了分条，空行便原样留在气泡里
-// 渲染成一整行空白——写文档时正常，聊天窗口里很突兀。
+// collapseBlankLines 把空行当排版收掉，并去掉行尾空白。空行留在气泡里会渲染成
+// 一整行空白：写文档时正常，聊天窗口里很突兀。
 func collapseBlankLines(text string) string {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(text, "\n")
@@ -9934,66 +9913,6 @@ func collapseBlankLines(text string) string {
 	}
 	return strings.Join(kept, "\n")
 }
-
-// structuredReplyChunkSize 是清单型回复的长度下限：群友风格把聊天压到 160 字，
-// 那是为了像真人说话，不该顺带把一份清单剁成碎片。
-const structuredReplyChunkSize = 900
-
-// structuredReplyMinItems 是判定为清单的最少条目数。要求三条以上，普通聊天里
-// 偶尔出现的一两个「谁：说了什么」不会被误判成清单。
-const structuredReplyMinItems = 3
-
-// looksStructuredReply 判断回复是不是逐条罗列的清单。
-func looksStructuredReply(reply string) bool {
-	items := 0
-	for _, line := range strings.Split(strings.ReplaceAll(reply, "\r", ""), "\n") {
-		if isStructuredReplyLine(strings.TrimSpace(line)) {
-			items++
-			if items >= structuredReplyMinItems {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// isStructuredReplyLine 识别列表项：符号项目符号、有序编号、Markdown 表格行，
-// 以及「短标签：内容」这种逐项打分常用的写法。
-func isStructuredReplyLine(line string) bool {
-	if line == "" {
-		return false
-	}
-	runes := []rune(line)
-	switch runes[0] {
-	case '-', '*', '+', '•', '·', '|':
-		return len(runes) > 1 && strings.TrimSpace(string(runes[1:])) != ""
-	}
-	digits := 0
-	for digits < len(runes) && unicode.IsDigit(runes[digits]) {
-		digits++
-	}
-	if digits > 0 && digits < len(runes) {
-		switch runes[digits] {
-		case '.', '、', ')', '）', ':', '：':
-			return strings.TrimSpace(string(runes[digits+1:])) != ""
-		}
-	}
-	// 「变装皇后：+1」这类标签行：冒号靠前，且冒号两侧都有内容。
-	for index, r := range runes {
-		if r != '：' && r != ':' {
-			continue
-		}
-		if index == 0 || index > structuredReplyLabelMaxRunes {
-			return false
-		}
-		return strings.TrimSpace(string(runes[index+1:])) != ""
-	}
-	return false
-}
-
-// structuredReplyLabelMaxRunes 限制标签长度，避免把「今天想说的是：……」这种
-// 正常句子当成清单项。
-const structuredReplyLabelMaxRunes = 12
 
 // chunkTextByLength 是发言和通知共用的长度兜底切分：超过 chunkSize 就在 chunkSize
 // 之内找一个体面的断点，空段直接丢掉。两条投递路径的分条规则不同（发言认空行，
@@ -10035,28 +9954,4 @@ func replyChunkCut(runes []rune, chunkSize int) int {
 		}
 	}
 	return chunkSize
-}
-
-func splitReplyParagraphs(reply string) []string {
-	reply = strings.ReplaceAll(reply, "\r\n", "\n")
-	reply = strings.ReplaceAll(reply, "\r", "\n")
-	lines := strings.Split(reply, "\n")
-	var out []string
-	var current []string
-	flush := func() {
-		text := strings.TrimSpace(strings.Join(current, "\n"))
-		if text != "" {
-			out = append(out, text)
-		}
-		current = nil
-	}
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			flush()
-			continue
-		}
-		current = append(current, line)
-	}
-	flush()
-	return out
 }

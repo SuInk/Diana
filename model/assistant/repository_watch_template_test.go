@@ -48,7 +48,7 @@ func TestRepositoryWatchCustomTemplateChangesTheLayout(t *testing.T) {
 	if !strings.HasPrefix(message, "【SuInk/Diana】") || !strings.Contains(message, "Release v0.9.0") {
 		t.Fatalf("custom header template ignored: %q", message)
 	}
-	if chunks := splitNotification(message, notificationChunkSize); len(chunks) != 1 {
+	if chunks := splitReply(message, notificationChunkSize); len(chunks) != 1 {
 		t.Fatalf("template without a split marker should stay in one message: %#v", chunks)
 	}
 }
@@ -81,7 +81,7 @@ func TestRepositoryWatchTemplateKeepsExplicitSplitMarker(t *testing.T) {
 	if message != "【SuInk/Diana】\n<botbr>\n明细" {
 		t.Fatalf("message = %q", message)
 	}
-	chunks := splitNotification(message, notificationChunkSize)
+	chunks := splitReply(message, notificationChunkSize)
 	if len(chunks) != 2 || chunks[1] != "明细" {
 		t.Fatalf("chunks = %#v", chunks)
 	}

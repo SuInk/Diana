@@ -52,7 +52,7 @@ func TestSplitMarkersAcceptLegacyName(t *testing.T) {
 		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("splitReply with %s = %#v", marker, got)
 		}
-		if got := splitNotification("第一条"+marker+"第二条", 100); len(got) != 2 {
+		if got := splitReply("第一条"+marker+"第二条", 100); len(got) != 2 {
 			t.Fatalf("splitNotification with %s = %#v", marker, got)
 		}
 	}
