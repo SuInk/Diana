@@ -80,6 +80,31 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
   DIANA_VERSION=v0.8.9 DIANA_INSTALL_DIR=/opt/diana DIANA_PORT=18081 sh
 ```
 
+**Installing on a server and want to open the console from another machine? Set
+`DIANA_HOST`.** The default binds to `127.0.0.1` only — the WebUI carries admin
+rights, so exposing it the moment it is installed is not a sane default:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  DIANA_HOST=0.0.0.0 sh
+```
+
+When listening on a non-loopback address, allow the port in the firewall and your
+cloud security group, and prefer a reverse proxy with TLS over exposing the console
+directly. To change the binding of an existing install, re-run the script with the
+new `DIANA_HOST`, or edit `HOST` in `runtime.env` and restart.
+
+Common settings can be written at install time instead of filling them in through the
+WebUI afterwards: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_FORMAT`,
+`LLM_IMAGE_MODEL`, `DIANA_PUBLIC_BASE_URL`, `DIANA_LOCAL_MEDIA_BASE_URL`,
+`DIANA_NAPCAT_WEBUI_URL`, `DIANA_NAPCAT_WEBUI_TOKEN`. For anything else, point
+`DIANA_ENV_FILE` at a `KEY=VALUE` file and it is merged into `runtime.env` verbatim:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  DIANA_HOST=0.0.0.0 LLM_API_KEY=sk-xxx DIANA_ENV_FILE=/root/diana.env sh
+```
+
 ### Docker
 
 ```sh
