@@ -4858,7 +4858,7 @@ type capturingLLMProvider struct {
 // Generate 记录请求并返回固定回复。
 func (p *capturingLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "主动回复答案质量审核器") {
+		if strings.Contains(message.Content, "should_send") {
 			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 		}
 	}
@@ -4899,7 +4899,7 @@ func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "主动回复答案质量审核器") {
+		if strings.Contains(message.Content, "should_send") {
 			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 		}
 	}
