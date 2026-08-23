@@ -4,9 +4,11 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -30,9 +32,11 @@ const (
 	rssWatchSettingTimeout         = "timeout_seconds"
 	rssWatchSettingItemLimit       = "judge_item_limit"
 
-	// Twitter RSS 模板没有默认值。以前默认填的是公共 RSSHub 实例，而它已经不再
-	// 提供 X/Twitter 路由（所有请求 302 到 google.com/404），带着这个默认值建订阅
-	// 必然失败。宁可要求用户显式填一个能用的地址，也不要给一个看起来能用的死链。
+	// Twitter 订阅默认直接走 FxTwitter 的公开时间线接口，不需要任何额外部署。
+	// 这和链接解析抓单条推文用的是同一个上游，只是换成 v2 的 profile 路由。
+	// 公共 RSSHub 已经不再提供 X/Twitter 路由（所有请求 302 到 google.com/404），
+	// 所以它不能再当默认值；自建 RSSHub 仍可通过模板设置覆盖。
+	defaultTwitterStatusesAPI = "https://api.fxtwitter.com/2/profile/{handle}/statuses"
 	exampleTwitterRSSTemplate = "https://rss.example.com/twitter/user/{handle}"
 	maximumRSSBodyBytes       = 4 << 20
 )
@@ -89,7 +93,7 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         rssWatchSettingTwitterTemplate,
 				Label:       "Twitter RSS 模板",
-				Description: "将 {handle} 替换为用户名，例如 " + exampleTwitterRSSTemplate + "。公共 RSSHub 实例已不再提供 X/Twitter 路由，必须填写自建 RSSHub 或其他可用的 Feed 地址；留空则无法按用户名创建 Twitter 订阅。",
+				Description: "留空即可：默认直接读取 X 的公开时间线，不需要额外部署。只有想改用自建 RSSHub 等其他来源时才填，把 {handle} 替换为用户名，例如 " + exampleTwitterRSSTemplate + "。公共 RSSHub 实例已不再提供 X/Twitter 路由，不要填它。",
 				Type:        PluginSettingTypeString,
 			},
 			{
@@ -144,7 +148,7 @@ func twitterFeedURL(handle string, settings SettingValues) (string, error) {
 	}
 	template := strings.TrimSpace(settings.String(rssWatchSettingTwitterTemplate, ""))
 	if template == "" {
-		return "", fmt.Errorf("尚未配置 Twitter RSS 模板：公共 RSSHub 已不再提供 X/Twitter 路由，请在「插件 → RSS 订阅」里填写自建 RSSHub 地址，例如 %s；也可以改用直接填 Feed 地址的方式创建订阅", exampleTwitterRSSTemplate)
+		template = defaultTwitterStatusesAPI
 	}
 	if !strings.Contains(template, "{handle}") {
 		return "", fmt.Errorf("Twitter RSS 模板必须包含 {handle}")
@@ -301,9 +305,125 @@ func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings Set
 	if len(body) > maximumRSSBodyBytes {
 		return parsedFeed{}, fmt.Errorf("Feed 内容超过 %d MiB 限制", maximumRSSBodyBytes>>20)
 	}
+	// 按内容而不是按域名分流：自建的 FxTwitter 兼容实例也能直接用。
+	if looksLikeJSONDocument(body) {
+		feed, err := parseTwitterStatusesFeed(body)
+		if err != nil {
+			return parsedFeed{}, fmt.Errorf("解析 Feed 失败: %w", err)
+		}
+		// 标题要用订阅的那个账号，不能取第一条的作者：时间线里第一条常常是转推，
+		// 那样订阅 @OpenAI 会显示成被转推者的名字。
+		if handle := twitterHandleFromStatusesURL(feedURL); handle != "" {
+			feed.Title = "@" + handle
+		}
+		return feed, nil
+	}
 	feed, err := parseRSSOrAtom(body)
 	if err != nil {
 		return parsedFeed{}, fmt.Errorf("解析 Feed 失败: %w", err)
+	}
+	return feed, nil
+}
+
+// twitterHandleFromStatusesURL 从默认时间线地址里取回订阅的账号名。自定义模板
+// 路径形状不一定一样，取不到就返回空，交由上层保持原样。
+func twitterHandleFromStatusesURL(feedURL string) string {
+	parsed, err := url.Parse(feedURL)
+	if err != nil {
+		return ""
+	}
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for index := 0; index+1 < len(segments); index++ {
+		if segments[index] != "profile" {
+			continue
+		}
+		if handle := segments[index+1]; twitterHandlePattern.MatchString(handle) {
+			return handle
+		}
+	}
+	return ""
+}
+
+func looksLikeJSONDocument(body []byte) bool {
+	return bytes.HasPrefix(bytes.TrimLeft(body, " \t\r\n\ufeff"), []byte("{"))
+}
+
+// twitterStatusesResponse 是 FxTwitter /2/profile/{handle}/statuses 的响应。
+// 只取订阅判断真正用得上的字段，其余（互动数、媒体、引用等）忽略。
+type twitterStatusesResponse struct {
+	Code    int `json:"code"`
+	Results []struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		URL  string `json:"url"`
+		Text string `json:"text"`
+		// raw_text 在上游有两种形态：纯字符串，或 {"text":...,"facets":[...]}。
+		// 用 RawMessage 收着再按形态取，换成 string 会直接解码失败。
+		RawText   json.RawMessage `json:"raw_text"`
+		Timestamp int64           `json:"created_timestamp"`
+		CreatedAt string          `json:"created_at"`
+		Author    struct {
+			Name       string `json:"name"`
+			ScreenName string `json:"screen_name"`
+		} `json:"author"`
+	} `json:"results"`
+}
+
+// twitterRawTextValue 兼容 raw_text 的两种形态：纯字符串，或带 facets 的对象。
+func twitterRawTextValue(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	var wrapped struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil {
+		return strings.TrimSpace(wrapped.Text)
+	}
+	return ""
+}
+
+// parseTwitterStatusesFeed 把 X 时间线转成通用的 feed 条目。
+func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
+	var payload twitterStatusesResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return parsedFeed{}, err
+	}
+	if payload.Code != 0 && (payload.Code < 200 || payload.Code >= 300) {
+		return parsedFeed{}, fmt.Errorf("上游返回 code %d", payload.Code)
+	}
+	feed := parsedFeed{Items: make([]rssWatchItem, 0, len(payload.Results))}
+	for _, entry := range payload.Results {
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
+			continue
+		}
+		text := strings.TrimSpace(entry.Text)
+		if text == "" {
+			text = twitterRawTextValue(entry.RawText)
+		}
+		published := time.Time{}
+		if entry.Timestamp > 0 {
+			published = time.Unix(entry.Timestamp, 0).UTC()
+		} else if parsed := parseFeedTime(entry.CreatedAt); !parsed.IsZero() {
+			published = parsed
+		}
+		author := strings.TrimSpace(entry.Author.Name)
+		if handle := strings.TrimSpace(entry.Author.ScreenName); handle != "" && author == "" {
+			author = "@" + handle
+		}
+		feed.Items = append(feed.Items, rssWatchItem{
+			ID:          id,
+			Title:       truncateRunes(text, 120),
+			Link:        strings.TrimSpace(entry.URL),
+			Author:      author,
+			Content:     text,
+			PublishedAt: published,
+		})
 	}
 	return feed, nil
 }

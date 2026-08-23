@@ -206,14 +206,66 @@ func TestFeedFetchStatusErrorExplainsRetiredRoute(t *testing.T) {
 	}
 }
 
-// 不再给一个看起来能用的死链当默认值：没配模板就直说要去哪配。
-func TestTwitterFeedURLRequiresConfiguredTemplate(t *testing.T) {
-	_, err := twitterFeedURL("someone", SettingValues{})
-	if err == nil || !strings.Contains(err.Error(), "尚未配置 Twitter RSS 模板") {
-		t.Fatalf("missing template should be reported explicitly: %v", err)
+// Twitter 订阅默认直接读 X 公开时间线，不需要任何额外部署；填了模板才走模板。
+func TestTwitterFeedURLDefaultsToPublicTimeline(t *testing.T) {
+	for _, input := range []string{"someone", "@someone", "https://x.com/someone", "https://twitter.com/someone/"} {
+		got, err := twitterFeedURL(input, SettingValues{})
+		if err != nil {
+			t.Fatalf("twitterFeedURL(%q) error = %v", input, err)
+		}
+		if got != "https://api.fxtwitter.com/2/profile/someone/statuses" {
+			t.Fatalf("twitterFeedURL(%q) = %q", input, got)
+		}
 	}
 	got, err := twitterFeedURL("someone", SettingValues{rssWatchSettingTwitterTemplate: "https://rss.example.com/twitter/user/{handle}"})
 	if err != nil || got != "https://rss.example.com/twitter/user/someone" {
 		t.Fatalf("configured template = %q, err = %v", got, err)
+	}
+}
+
+// 时间线响应转 feed 条目：raw_text 在上游有字符串和对象两种形态，都要认。
+func TestParseTwitterStatusesFeed(t *testing.T) {
+	body := []byte(`{"code":200,"results":[
+		{"type":"status","id":"2","url":"https://x.com/a/status/2","text":"第二条","created_timestamp":1787482674,"author":{"name":"Alice","screen_name":"alice"}},
+		{"type":"status","id":"1","url":"https://x.com/b/status/1","raw_text":{"text":"转推正文","facets":[]},"created_timestamp":1787482000,"author":{"name":"","screen_name":"bob"}},
+		{"type":"status","id":"","text":"没有 id 的要丢掉"}
+	]}`)
+	feed, err := parseTwitterStatusesFeed(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feed.Items) != 2 {
+		t.Fatalf("items = %#v", feed.Items)
+	}
+	if feed.Items[0].ID != "2" || feed.Items[0].Content != "第二条" || feed.Items[0].Author != "Alice" {
+		t.Fatalf("first item = %#v", feed.Items[0])
+	}
+	if feed.Items[0].PublishedAt.Unix() != 1787482674 {
+		t.Fatalf("published = %v", feed.Items[0].PublishedAt)
+	}
+	// raw_text 是对象时也要取出正文；作者名为空时回退到 @handle。
+	if feed.Items[1].Content != "转推正文" || feed.Items[1].Author != "@bob" {
+		t.Fatalf("second item = %#v", feed.Items[1])
+	}
+}
+
+// 标题必须是订阅的那个账号。时间线里第一条常常是转推，取条目作者会让订阅
+// @OpenAI 显示成被转推者的名字。
+func TestTwitterStatusesFeedTitleTracksSubscribedHandle(t *testing.T) {
+	if got := twitterHandleFromStatusesURL("https://api.fxtwitter.com/2/profile/OpenAI/statuses"); got != "OpenAI" {
+		t.Fatalf("handle = %q", got)
+	}
+	if got := twitterHandleFromStatusesURL("https://rss.example.com/twitter/user/OpenAI"); got != "" {
+		t.Fatalf("custom template should not be parsed as a profile path: %q", got)
+	}
+}
+
+// JSON 与 XML 按内容分流，自建的 FxTwitter 兼容实例也能直接用。
+func TestLooksLikeJSONDocument(t *testing.T) {
+	if !looksLikeJSONDocument([]byte("\n  {\"code\":200}")) {
+		t.Fatal("leading whitespace should still be detected as JSON")
+	}
+	if looksLikeJSONDocument([]byte(`<?xml version="1.0"?><rss></rss>`)) {
+		t.Fatal("XML must not be treated as JSON")
 	}
 }

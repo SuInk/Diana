@@ -23,7 +23,7 @@
         <div v-if="form.source === 'twitter'" class="field wide">
           <label for="rss-watch-handle">Twitter 用户</label>
           <input id="rss-watch-handle" v-model.trim="form.twitter_handle" class="input" type="text" placeholder="@tibo、tibo 或用户主页链接" />
-          <span class="hint">通过「插件 → RSS 订阅」里的 Twitter RSS 模板访问。公共 RSSHub 实例已不再提供 X/Twitter 路由，必须先在那里填好自建 RSSHub 地址；也可以改用「RSS 地址」直接填 Feed 链接。</span>
+          <span class="hint">直接填就行，默认读取 X 的公开时间线，不需要额外部署。想换成自建 RSSHub 等其他来源，可在「插件 → RSS 订阅」里填 Twitter RSS 模板。</span>
         </div>
         <div v-else class="field wide">
           <label for="rss-watch-url">Feed URL</label>
