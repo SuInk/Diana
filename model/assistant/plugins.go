@@ -980,7 +980,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingFollowUpComment,
 				Label:       "发送后自然点评",
-				Description: "解析结果发出后，让机器人再用一句话说说自己的反应，像群友那样；关闭后只发解析结果。",
+				Description: "解析结果发出后，让机器人按全局回复风格自然回应；关闭后只发解析结果。",
 				Type:        PluginSettingTypeBool,
 				Default:     false,
 			},
