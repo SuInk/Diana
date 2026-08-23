@@ -95,19 +95,11 @@ const defaultIntervalSeconds = 15 * 60;
 type SelectablePlatform = Exclude<RSSWatchPlatform, "twitter">;
 // 平台内容由后端内置抓取器直接读取，不依赖 RSSHub；想走自建中转就选「自定义 RSS / Atom」。
 const platformFields: Record<SelectablePlatform, { label: string; summary: string; placeholder: string; hint: string }> = {
-  x: { label: "X 用户", summary: "内置抓取 X 公开时间线，无需账号。", placeholder: "@tibo、tibo 或用户主页链接", hint: "被限流时可在上方填写自定义 Feed 模板，改走自建中转。" },
-  bilibili: { label: "UP 主 UID", summary: "内置抓取 UP 主投稿；配置 Cookie 后改抓完整动态。", placeholder: "2267573 或 https://space.bilibili.com/2267573", hint: "填 UID 数字或空间主页链接。" },
-  douyin: { label: "抖音用户", summary: "用本机无头浏览器打开主页并截取官方接口，需要装有 Chrome/Chromium。", placeholder: "https://www.douyin.com/user/MS4wLjABAAAA…", hint: "填用户主页链接，或链接里 MS4wLjABAAAA 开头的 sec_uid。" },
-  xiaohongshu: { label: "小红书用户", summary: "内置读取主页服务端渲染数据；配置 Cookie 后能带上笔记直达链接。", placeholder: "593032945e87e77791e03696 或用户主页链接", hint: "填主页链接末尾的 24 位用户 ID。" },
-  github: { label: "GitHub 仓库或用户", summary: "内置读取 GitHub 官方 Atom 源，无需 Token。", placeholder: "SuInk/Diana 或 SuInk/Diana/commits/main", hint: "owner/repo 默认跟 Release；也可写 owner/repo/commits[/分支]、owner/repo/tags 或单个用户名。" },
-  rss: { label: "Feed URL", summary: "任意 RSS 2.0 或 Atom 地址，包括自建 RSSHub。", placeholder: "https://example.com/feed.xml", hint: "只允许公网 http/https 地址。" }
+  x: { label: "X 用户", summary: "内置抓取 X 公开时间线，不依赖 RSSHub，也不需要账号。", placeholder: "@tibo、tibo 或用户主页链接", hint: "被限流时可在插件设置里填写自定义 Feed 模板，改走自建中转。" },
+  rss: { label: "Feed URL", summary: "任意 RSS 2.0 或 Atom 地址，自建 RSSHub 也从这里填。", placeholder: "https://example.com/feed.xml", hint: "只允许公网 http/https 地址。" }
 };
 const platformOptions = [
   { value: "x", label: "X (Twitter)" },
-  { value: "bilibili", label: "哔哩哔哩" },
-  { value: "douyin", label: "抖音" },
-  { value: "xiaohongshu", label: "小红书" },
-  { value: "github", label: "GitHub" },
   { value: "rss", label: "自定义 RSS / Atom" }
 ];
 function selectablePlatform(value?: RSSWatchPlatform | string): SelectablePlatform {

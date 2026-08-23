@@ -1465,9 +1465,9 @@ export interface RepositoryWatchInput {
   notification_targets?: RepositoryWatchTarget[];
 }
 
-// 订阅平台。x / bilibili / douyin / xiaohongshu / github 都是内置抓取，
-// rss 是自定义 Feed 地址。twitter 只出现在升级前创建的订阅里。
-export type RSSWatchPlatform = "x" | "bilibili" | "douyin" | "xiaohongshu" | "github" | "rss" | "twitter";
+// 订阅平台。x 是内置抓取，rss 是自定义 Feed 地址；
+// twitter 只出现在升级前创建的订阅里。
+export type RSSWatchPlatform = "x" | "rss" | "twitter";
 
 export interface RSSWatchInput {
   platform: RSSWatchPlatform;

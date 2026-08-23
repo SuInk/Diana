@@ -11,16 +11,12 @@ import (
 	"strings"
 )
 
-// 订阅支持的平台。除了 rss（自定义 Feed 地址）之外，每个平台都有内置抓取实现，
-// 不依赖 RSSHub 这类第三方中转；确实想走自建中转的人，可以给平台配一条自定义
-// Feed 模板，或者直接用 rss 平台填完整地址。
+// 订阅支持的平台。x 有内置抓取实现，不依赖 RSSHub 这类第三方中转；确实想走
+// 自建中转的人，可以给平台配一条自定义 Feed 模板，或者直接用 rss 平台填完整
+// 地址。以后接别的平台只要往 rssWatchPlatformSpecs 里加一条。
 const (
-	rssWatchPlatformRSS         = "rss"
-	rssWatchPlatformX           = "x"
-	rssWatchPlatformBilibili    = "bilibili"
-	rssWatchPlatformDouyin      = "douyin"
-	rssWatchPlatformXiaohongshu = "xiaohongshu"
-	rssWatchPlatformGitHub      = "github"
+	rssWatchPlatformRSS = "rss"
+	rssWatchPlatformX   = "x"
 	// rssWatchPlatformLegacyTwitter 是旧订阅记录里 X 的来源写法。
 	rssWatchPlatformLegacyTwitter = "twitter"
 )
@@ -47,13 +43,7 @@ type rssWatchPlatformSpec struct {
 	fetch func(context.Context, *RSSWatchPlugin, rssWatchSource, SettingValues) (parsedFeed, error)
 }
 
-var (
-	twitterHandlePattern     = regexp.MustCompile(`^[A-Za-z0-9_]{1,15}$`)
-	bilibiliUIDPattern       = regexp.MustCompile(`^[0-9]{1,20}$`)
-	douyinSecUIDPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{16,120}$`)
-	xiaohongshuUserIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{24}$`)
-	githubNamePattern        = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
-)
+var twitterHandlePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,15}$`)
 
 func rssWatchPlatformSpecs() []rssWatchPlatformSpec {
 	return []rssWatchPlatformSpec{
@@ -66,41 +56,6 @@ func rssWatchPlatformSpecs() []rssWatchPlatformSpec {
 			fetch: func(ctx context.Context, p *RSSWatchPlugin, source rssWatchSource, settings SettingValues) (parsedFeed, error) {
 				return p.fetchXTimeline(ctx, source.Target, settings)
 			},
-		},
-		{
-			ID: rssWatchPlatformBilibili, Label: "哔哩哔哩", TargetLabel: "UP 主 UID",
-			TargetHint: "填 UID 数字或 space.bilibili.com 主页链接。",
-			normalize:  normalizeBilibiliUID,
-			resolve:    func(target string) (string, error) { return "https://space.bilibili.com/" + target, nil },
-			fetch: func(ctx context.Context, p *RSSWatchPlugin, source rssWatchSource, settings SettingValues) (parsedFeed, error) {
-				return p.fetchBilibiliSpace(ctx, source.Target, settings)
-			},
-		},
-		{
-			ID: rssWatchPlatformDouyin, Label: "抖音", TargetLabel: "用户 sec_uid",
-			TargetHint: "填用户主页链接，或链接里 MS4wLjABAAAA 开头的 sec_uid。",
-			normalize:  normalizeDouyinSecUID,
-			resolve:    func(target string) (string, error) { return "https://www.douyin.com/user/" + target, nil },
-			fetch: func(ctx context.Context, p *RSSWatchPlugin, source rssWatchSource, settings SettingValues) (parsedFeed, error) {
-				return p.fetchDouyinUser(ctx, source.Target, settings)
-			},
-		},
-		{
-			ID: rssWatchPlatformXiaohongshu, Label: "小红书", TargetLabel: "用户 ID",
-			TargetHint: "填 24 位用户 ID 或用户主页链接。",
-			normalize:  normalizeXiaohongshuUserID,
-			resolve: func(target string) (string, error) {
-				return "https://www.xiaohongshu.com/user/profile/" + target, nil
-			},
-			fetch: func(ctx context.Context, p *RSSWatchPlugin, source rssWatchSource, settings SettingValues) (parsedFeed, error) {
-				return p.fetchXiaohongshuUser(ctx, source.Target, settings)
-			},
-		},
-		{
-			ID: rssWatchPlatformGitHub, Label: "GitHub", TargetLabel: "仓库或用户",
-			TargetHint: "owner/repo 默认跟 Release；也可以写 owner/repo/commits[/分支]、owner/repo/tags 或单个用户名。",
-			normalize:  normalizeGitHubTarget,
-			resolve:    githubFeedURL,
 		},
 		{
 			ID: rssWatchPlatformRSS, Label: "自定义 RSS / Atom", TargetLabel: "Feed URL",
@@ -207,16 +162,10 @@ func rssWatchSourceFromReminder(item Reminder) rssWatchSource {
 
 // rssWatchSourceLabel 是通知与任务列表里展示的来源名字。
 func rssWatchSourceLabel(source rssWatchSource, feedName string) string {
-	spec, ok := rssWatchPlatform(source.Platform)
-	switch {
-	case source.Platform == rssWatchPlatformX && source.Target != "":
+	if source.Platform == rssWatchPlatformX && source.Target != "" {
 		return "@" + source.Target
-	case ok && source.Platform != rssWatchPlatformRSS && source.Target != "":
-		if feedName != "" {
-			return spec.Label + " " + feedName
-		}
-		return spec.Label + " " + source.Target
-	case feedName != "":
+	}
+	if feedName != "" {
 		return feedName
 	}
 	return source.URL
@@ -237,137 +186,10 @@ func normalizeTwitterHandle(raw string) (string, error) {
 	return raw, nil
 }
 
-func normalizeBilibiliUID(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
-		host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
-		if !strings.HasSuffix(host, "bilibili.com") {
-			return "", fmt.Errorf("哔哩哔哩订阅只接受 UID 或 space.bilibili.com 主页链接")
-		}
-		segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-		raw = segments[0]
-	}
-	raw = strings.TrimPrefix(strings.TrimSpace(raw), "UID:")
-	raw = strings.TrimSpace(raw)
-	if !bilibiliUIDPattern.MatchString(raw) {
-		return "", fmt.Errorf("哔哩哔哩 UID 不正确，请填写 UID 数字或 space.bilibili.com 主页链接")
-	}
-	return raw, nil
-}
-
-func normalizeDouyinSecUID(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
-		host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
-		if !strings.HasSuffix(host, "douyin.com") {
-			return "", fmt.Errorf("抖音订阅只接受用户主页链接或 sec_uid")
-		}
-		segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-		raw = segments[len(segments)-1]
-	}
-	if !douyinSecUIDPattern.MatchString(raw) {
-		return "", fmt.Errorf("抖音 sec_uid 不正确，请复制用户主页链接，或链接里 MS4wLjABAAAA 开头的那段")
-	}
-	return raw, nil
-}
-
-func normalizeXiaohongshuUserID(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
-		host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
-		if !strings.HasSuffix(host, "xiaohongshu.com") && !strings.HasSuffix(host, "xhslink.com") {
-			return "", fmt.Errorf("小红书订阅只接受用户主页链接或 24 位用户 ID")
-		}
-		segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-		raw = segments[len(segments)-1]
-	}
-	if !xiaohongshuUserIDPattern.MatchString(raw) {
-		return "", fmt.Errorf("小红书用户 ID 不正确，请填写主页链接末尾的 24 位 ID")
-	}
-	return strings.ToLower(raw), nil
-}
-
-// normalizeGitHubTarget 收敛成 user、owner/repo/releases、owner/repo/tags
-// 或 owner/repo/commits[/分支] 这几种规范写法。
-func normalizeGitHubTarget(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
-		host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
-		if host != "github.com" {
-			return "", fmt.Errorf("GitHub 订阅只接受 github.com 链接、owner/repo 或用户名")
-		}
-		raw = strings.Trim(parsed.Path, "/")
-	}
-	raw = strings.TrimSuffix(strings.Trim(raw, "/"), ".git")
-	raw = strings.TrimSuffix(raw, ".atom")
-	segments := []string{}
-	for _, segment := range strings.Split(raw, "/") {
-		if segment = strings.TrimSpace(segment); segment != "" {
-			segments = append(segments, segment)
-		}
-	}
-	if len(segments) == 0 {
-		return "", fmt.Errorf("GitHub 订阅目标不能为空")
-	}
-	for _, segment := range segments[:min(len(segments), 2)] {
-		if !githubNamePattern.MatchString(segment) {
-			return "", fmt.Errorf("GitHub 名称 %q 不合法", segment)
-		}
-	}
-	if len(segments) == 1 {
-		return segments[0], nil
-	}
-	owner, repo := segments[0], segments[1]
-	if len(segments) == 2 {
-		return owner + "/" + repo + "/releases", nil
-	}
-	switch strings.ToLower(segments[2]) {
-	case "releases", "release":
-		return owner + "/" + repo + "/releases", nil
-	case "tags", "tag":
-		return owner + "/" + repo + "/tags", nil
-	case "commits", "commit":
-		if len(segments) == 3 {
-			return owner + "/" + repo + "/commits", nil
-		}
-		branch := strings.Join(segments[3:], "/")
-		return owner + "/" + repo + "/commits/" + branch, nil
-	default:
-		return "", fmt.Errorf("GitHub 订阅只支持 releases、tags、commits 三种内容，收到 %q", segments[2])
-	}
-}
-
-func githubFeedURL(target string) (string, error) {
-	segments := strings.Split(target, "/")
-	switch {
-	case len(segments) == 1:
-		return "https://github.com/" + url.PathEscape(segments[0]) + ".atom", nil
-	case len(segments) < 3:
-		return "", fmt.Errorf("GitHub 订阅目标不完整：%s", target)
-	}
-	owner, repo, kind := url.PathEscape(segments[0]), url.PathEscape(segments[1]), segments[2]
-	base := "https://github.com/" + owner + "/" + repo + "/"
-	switch kind {
-	case "releases", "tags":
-		return base + kind + ".atom", nil
-	case "commits":
-		if len(segments) == 3 {
-			return base + "commits.atom", nil
-		}
-		branch := strings.Join(segments[3:], "/")
-		escaped := make([]string, 0, len(segments)-3)
-		for _, part := range strings.Split(branch, "/") {
-			escaped = append(escaped, url.PathEscape(part))
-		}
-		return base + "commits/" + strings.Join(escaped, "/") + ".atom", nil
-	}
-	return "", fmt.Errorf("GitHub 订阅目标不合法：%s", target)
-}
-
 // applyFeedTemplate 把自定义模板里的占位符换成目标，用于自建 RSS 中转。
 func applyFeedTemplate(template, target string) (string, error) {
 	template = strings.TrimSpace(template)
-	placeholders := []string{"{handle}", "{target}", "{id}", "{uid}"}
+	placeholders := []string{"{handle}", "{target}"}
 	replaced := false
 	for _, placeholder := range placeholders {
 		if strings.Contains(template, placeholder) {
