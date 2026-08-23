@@ -202,13 +202,16 @@ type Reminder struct {
 	LastStarCount           int          `json:"last_star_count,omitempty"`
 	LastStarEventID         string       `json:"last_star_event_id,omitempty"`
 	LastStarEventAt         time.Time    `json:"last_star_event_at,omitempty"`
-	FeedURL                 string       `json:"feed_url,omitempty"`
-	FeedSource              string       `json:"feed_source,omitempty"`
-	FeedHandle              string       `json:"feed_handle,omitempty"`
-	FeedJudgePrompt         string       `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID          string       `json:"last_feed_item_id,omitempty"`
-	LastFeedPublishedAt     time.Time    `json:"last_feed_published_at,omitempty"`
-	CreatedAt               time.Time    `json:"created_at"`
+	// WatchAnchorsJSON 记录每个投递目标里各 PR/Issue 首次宣布消息的 ID,
+	// 后续同一编号的更新推送引用它,把动态串成一条线。
+	WatchAnchorsJSON    string    `json:"watch_anchors,omitempty"`
+	FeedURL             string    `json:"feed_url,omitempty"`
+	FeedSource          string    `json:"feed_source,omitempty"`
+	FeedHandle          string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt time.Time `json:"last_feed_published_at,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // ReminderDeliveryTarget is an additional destination for recurring watch
