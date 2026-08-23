@@ -50,7 +50,7 @@ const (
 type LLMProfileStore interface {
 	Current() llm.ProviderConfig
 	Profiles() llm.ProfileSet
-	SaveProfiles(llm.ProfileSet)
+	SaveProfiles(llm.ProfileSet) error
 }
 
 type LLMProviderRegistryStore interface {
@@ -8461,7 +8461,10 @@ func (r *Runtime) switchLLMProfile(name string) (string, bool) {
 		}
 		// 只切换 active profile，不修改任何 provider/model 具体参数。
 		set.ActiveID = profile.ID
-		r.llmStore.SaveProfiles(set)
+		if err := r.llmStore.SaveProfiles(set); err != nil {
+			log.Printf("switch llm profile persist failed: %v", err)
+			return "切换失败：配置没能写入存储。", true
+		}
 		return fmt.Sprintf("已切换到 LLM 配置：%s", profile.Name), true
 	}
 	return "没有找到对应的 LLM 配置。", true

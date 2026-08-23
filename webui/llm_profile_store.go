@@ -5,6 +5,7 @@ package webui
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/SuInk/diana/model/llm"
@@ -14,7 +15,7 @@ import (
 type LLMProfileStore interface {
 	Current() llm.ProviderConfig
 	Profiles() llm.ProfileSet
-	SaveProfiles(llm.ProfileSet)
+	SaveProfiles(llm.ProfileSet) error
 }
 
 type MemoryLLMProfileStore struct {
@@ -45,10 +46,11 @@ func (s *MemoryLLMProfileStore) Profiles() llm.ProfileSet {
 }
 
 // SaveProfiles 更新内存中的 LLM 配置集。
-func (s *MemoryLLMProfileStore) SaveProfiles(set llm.ProfileSet) {
+func (s *MemoryLLMProfileStore) SaveProfiles(set llm.ProfileSet) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = set.WithDefaults()
+	return nil
 }
 
 type PersistentLLMProfileStore struct {
@@ -124,29 +126,39 @@ func (s *PersistentLLMProfileStore) Profiles() llm.ProfileSet {
 }
 
 // SaveProfiles 保存 LLM 配置集并同步当前 flat 配置。
-func (s *PersistentLLMProfileStore) SaveProfiles(set llm.ProfileSet) {
+// 落库失败必须往上抛，否则接口回 200、前端提示保存成功，重启后配置又是旧的。
+func (s *PersistentLLMProfileStore) SaveProfiles(set llm.ProfileSet) error {
 	set = set.WithDefaults()
 	s.mu.Lock()
 	s.data = set
 	s.mu.Unlock()
-	if s.store != nil {
-		// 落库前剥掉 WithDefaults 派生出来的上下文窗口，只保存用户填的真实值。
-		// 否则当前兜底值会被写死进数据库，日后改兜底或改推断表都追不回来——旧版本
-		// 的 16K 兜底就是这样把老部署永久钉在 16K 上下文的。
-		stored := set.WithoutRedundantContextLimits()
-		// 同时写 profile set 和旧 flat config，旧代码/测试读取 llm_config 时仍能拿到当前配置。
-		_ = s.store.SaveLLMProfiles(s.ctx, stored)
-		if profile, ok := set.Current(); ok {
-			_ = s.store.SaveLLMConfig(s.ctx, profile.Config.WithoutRedundantContextLimits())
-		}
-		if registry, _, err := llm.NewProviderRegistryFromProfiles(set); err == nil {
-			document := registry
-			_ = s.store.SaveLLMProviderRegistry(s.ctx, document.Document())
-			s.mu.Lock()
-			s.registry = document.Document()
-			s.mu.Unlock()
+	if s.store == nil {
+		return nil
+	}
+	// 落库前剥掉 WithDefaults 派生出来的上下文窗口，只保存用户填的真实值。
+	// 否则当前兜底值会被写死进数据库，日后改兜底或改推断表都追不回来——旧版本
+	// 的 16K 兜底就是这样把老部署永久钉在 16K 上下文的。
+	stored := set.WithoutRedundantContextLimits()
+	// 同时写 profile set 和旧 flat config，旧代码/测试读取 llm_config 时仍能拿到当前配置。
+	if err := s.store.SaveLLMProfiles(s.ctx, stored); err != nil {
+		return fmt.Errorf("persist llm profiles: %w", err)
+	}
+	if profile, ok := set.Current(); ok {
+		if err := s.store.SaveLLMConfig(s.ctx, profile.Config.WithoutRedundantContextLimits()); err != nil {
+			return fmt.Errorf("persist active llm profile: %w", err)
 		}
 	}
+	// 注册表是从配置集派生出来的缓存，构造失败沿用旧的即可，不算保存失败。
+	if registry, _, err := llm.NewProviderRegistryFromProfiles(set); err == nil {
+		document := registry.Document()
+		if err := s.store.SaveLLMProviderRegistry(s.ctx, document); err != nil {
+			return fmt.Errorf("persist llm provider registry: %w", err)
+		}
+		s.mu.Lock()
+		s.registry = document
+		s.mu.Unlock()
+	}
+	return nil
 }
 
 // clearLegacyContextWindowFallback 一次性把旧版兜底常量 16384 当作「未设置」清掉。
