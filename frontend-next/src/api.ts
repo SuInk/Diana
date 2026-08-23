@@ -1306,6 +1306,17 @@ export interface AssistantEventDetail extends BotEvent {
   images?: AssistantEventImage[];
   /** 这条消息触发的后台子任务。图片是任务跑完后异步发出去的。 */
   subtasks?: AssistantEventSubtask[];
+  /** 这一轮实际发出去的内容概览。reply 只是文本，说不出还发了卡片和媒体。 */
+  delivery?: AssistantEventDelivery;
+}
+
+export interface AssistantEventDelivery {
+  messages?: number;
+  images?: number;
+  videos?: number;
+  audios?: number;
+  forward_cards?: number;
+  forward_nodes?: number;
 }
 
 export interface AssistantEventSubtask {

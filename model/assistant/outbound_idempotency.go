@@ -34,6 +34,94 @@ type outboundTurnKey struct{}
 type outboundTurn struct {
 	id  string
 	seq atomic.Int64
+	// 下面几个计数器记录这一轮实际发出去的东西。事件详情里的「回复结果」只有一个
+	// 文本字段，装不下「发了一张转发卡片加九张图」；发媒体不发文字时它甚至是空的，
+	// 前端于是显示「未保存回复正文」——可东西明明发出去了。
+	//
+	// 逐条投递路径去补是补不完的（转发卡片、resolver 散装兜底、插件直发各走各的），
+	// 所以在两个真正的收口处记账：普通消息在 sendOutgoingWithResult，合并转发在
+	// sendForwardNodesWithResult。
+	sentMessages atomic.Int64
+	sentImages   atomic.Int64
+	sentVideos   atomic.Int64
+	sentAudios   atomic.Int64
+	forwardCards atomic.Int64
+	forwardNodes atomic.Int64
+}
+
+// OutboundDelivery 是一轮回复实际发出去的内容概览。
+type OutboundDelivery struct {
+	Messages     int `json:"messages,omitempty"`
+	Images       int `json:"images,omitempty"`
+	Videos       int `json:"videos,omitempty"`
+	Audios       int `json:"audios,omitempty"`
+	ForwardCards int `json:"forward_cards,omitempty"`
+	ForwardNodes int `json:"forward_nodes,omitempty"`
+}
+
+// Empty 报告这一轮有没有发出任何东西。
+func (d OutboundDelivery) Empty() bool {
+	return d.Messages == 0 && d.Images == 0 && d.Videos == 0 &&
+		d.Audios == 0 && d.ForwardCards == 0 && d.ForwardNodes == 0
+}
+
+func (t *outboundTurn) recordSentMessage(msg OutgoingMessage) {
+	if t == nil {
+		return
+	}
+	t.sentMessages.Add(1)
+	images, videos, audios := outgoingMediaCounts(msg)
+	if images > 0 {
+		t.sentImages.Add(int64(images))
+	}
+	if videos > 0 {
+		t.sentVideos.Add(int64(videos))
+	}
+	if audios > 0 {
+		t.sentAudios.Add(int64(audios))
+	}
+}
+
+func (t *outboundTurn) recordSentForward(nodes int) {
+	if t == nil {
+		return
+	}
+	t.forwardCards.Add(1)
+	if nodes > 0 {
+		t.forwardNodes.Add(int64(nodes))
+	}
+}
+
+func (t *outboundTurn) delivery() OutboundDelivery {
+	if t == nil {
+		return OutboundDelivery{}
+	}
+	return OutboundDelivery{
+		Messages:     int(t.sentMessages.Load()),
+		Images:       int(t.sentImages.Load()),
+		Videos:       int(t.sentVideos.Load()),
+		Audios:       int(t.sentAudios.Load()),
+		ForwardCards: int(t.forwardCards.Load()),
+		ForwardNodes: int(t.forwardNodes.Load()),
+	}
+}
+
+// outboundMediaCounts 数一条出站消息里的图片、视频和语音。URL 字段和 segment
+// 两种写法都要认：插件用前者，Agent 工具和 CQ 码走后者。
+func outgoingMediaCounts(msg OutgoingMessage) (images, videos, audios int) {
+	images = len(msg.ImageURLs)
+	videos = len(msg.VideoURLs)
+	for _, segment := range msg.Segments {
+		switch strings.ToLower(strings.TrimSpace(segment.Type)) {
+		case "image":
+			images++
+		case "video":
+			videos++
+		case "record":
+			audios++
+		}
+	}
+	return images, videos, audios
 }
 
 func withOutboundTurn(ctx context.Context, turnID string) context.Context {

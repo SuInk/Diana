@@ -182,6 +182,9 @@ type EventRecord struct {
 	Decision  string    `json:"decision,omitempty"`
 	Reason    string    `json:"reason,omitempty"`
 	Duration  int64     `json:"duration_ms,omitempty"`
+	// Delivery 是这一轮实际发出去的内容概览。Reply 只是文本，说不出还发了转发
+	// 卡片、几张图或一个视频；发媒体不发文字时它甚至是空的。
+	Delivery OutboundDelivery `json:"delivery,omitempty"`
 }
 
 // DescribeEventOutcome converts durable queue outcomes into stable UI-facing
@@ -1469,6 +1472,9 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
 	reply, err := r.replyTo(replyCtx, event, text)
 	record.Duration = time.Since(start).Milliseconds()
+	// 出错也要带上：resolver 可能已经把图发出去了才在后面某步失败，这时事件页
+	// 只写「处理异常」会让人以为什么都没发。
+	record.Delivery = outboundTurnFromContext(replyCtx).delivery()
 	if err != nil {
 		if errors.Is(err, errChatInReplyDeclined) {
 			setEventRecordOutcome(&record, "ignored_no_natural_reply")
@@ -7200,6 +7206,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		r.recordInboundDelivery(event, OutboundDeliveryAcknowledged, messageID, "")
 	}
 	r.recordOutboundStep(ctx, stepKey, messageID)
+	outboundTurnFromContext(ctx).recordSentMessage(msg)
 	r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)
 	return result, nil
 }
@@ -7692,9 +7699,14 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		}
 		params["user_id"] = userID
 	}
-	return r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
+	result, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
+	if err != nil {
+		return nil, err
+	}
+	outboundTurnFromContext(ctx).recordSentForward(len(nodes))
+	return result, nil
 }
 
 func apiMessageID(result map[string]any) string {
