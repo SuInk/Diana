@@ -353,3 +353,43 @@ func TestCleanInputUsesCustomFallbackPrompts(t *testing.T) {
 		t.Fatalf("wake fallback = %q", got)
 	}
 }
+
+// 错误提示不能被人格预设的短句切分拦腰截断。群友风格把每条聊天压到 160 字，
+// 上游返回的报错往往比这长，切开之后报错和后面那个说明链接会落进两条消息里，
+// 看起来像机器人自己断句断错了。
+func TestErrorNoticeIsNotChunkedByPersonaStyle(t *testing.T) {
+	withFastSendTiming(t)
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{
+		ResponseMode: ResponseModeStandard,
+		ReplyStyle:   ReplyStyleGroupmate,
+	}, channel, NewPluginManager(), nil, nil, nil, nil)
+	if size := runtime.Config().DirectReplyChunkSize; size <= 0 || size > 200 {
+		t.Fatalf("fixture needs the short groupmate chunk size, got %d", size)
+	}
+
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "m1"}
+	notice := "出错了：llm: provider request failed: llm: openai-compatible request failed: 403 Forbidden: " +
+		"type=error; message=The latest version of this model is only available hosted in China and " +
+		"requires explicit opt in: https://example.test/docs/opt-in"
+	if len([]rune(notice)) <= runtime.Config().DirectReplyChunkSize {
+		t.Fatalf("fixture notice must be longer than the chat chunk size: %d runes", len([]rune(notice)))
+	}
+
+	if _, _, err := runtime.sendErrorNoticeWithEvidence(context.Background(), event, notice); err != nil {
+		t.Fatalf("send error notice: %v", err)
+	}
+	channel.mu.Lock()
+	sent := append([]OutgoingMessage(nil), channel.sent...)
+	channel.mu.Unlock()
+	if len(sent) != 1 {
+		texts := make([]string, 0, len(sent))
+		for _, message := range sent {
+			texts = append(texts, message.Text)
+		}
+		t.Fatalf("error notice was split into %d messages: %#v", len(sent), texts)
+	}
+	if sent[0].Text != notice {
+		t.Fatalf("error notice was rewritten: %q", sent[0].Text)
+	}
+}
