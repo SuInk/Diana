@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -240,6 +241,13 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 	switched, err := switchReleaseFiles(plan.InstallRoot, plan.BackupRoot, files)
 	if err != nil {
 		return rollbackReleasePlan(plan, hooks, switched, databaseBackup, fmt.Errorf("switch release files: %w", err))
+	}
+	// 新二进制刚落地，签名还是 Release 里的样子（CI 产物根本没签）。先按固定
+	// identifier 重签再启动，否则 macOS 会把它当成一个全新程序重新登记，隐私
+	// 列表里多出一条同名 Diana，之前给过的授权也全部作废。签不上不算更新失败：
+	// 顶多是授权要重点一次，回滚反而让用户彻底升不上去。
+	if err := restoreMacOSIdentity(plan.ExecutablePath); err != nil {
+		log.Printf("updater: restore macOS code identity: %v", err)
 	}
 
 	process, err := startReleaseInstance(plan, hooks)

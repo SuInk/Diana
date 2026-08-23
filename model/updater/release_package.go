@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -280,6 +281,22 @@ func (u *ReleasePackageUpdater) Supported() bool {
 	return u != nil && u.supported
 }
 
+// UnsupportedReason 返回本次部署不支持 Release 自更新的原因；支持时返回空。
+// 界面要把这个原因说给用户听，否则「不支持更新」和「已经是最新」在页面上
+// 长得一模一样，用户只会以为自己已经升级过了。
+func (u *ReleasePackageUpdater) UnsupportedReason() string {
+	if u == nil {
+		return "release package updater is not configured"
+	}
+	if u.supported {
+		return ""
+	}
+	if strings.TrimSpace(u.unsupportedWhy) == "" {
+		return "release package self-update is not supported by this deployment"
+	}
+	return u.unsupportedWhy
+}
+
 func (u *ReleasePackageUpdater) ExpectedAssetName() string {
 	if u == nil {
 		return ""
@@ -454,6 +471,12 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	}
 	if err := copyRegularFile(u.executable, helperPath, 0o700); err != nil {
 		return Result{}, fmt.Errorf("stage update helper: %w", err)
+	}
+	// 助手是当前二进制的一份拷贝，落到临时目录就成了一个全新的 Mach-O：macOS 会
+	// 把它当成另一个程序，替换 .app 内容时还要单独申请「App 管理」权限，隐私列表
+	// 里也会多出一条。用同一个 identifier 重签，让它和 Diana 本体是同一个身份。
+	if err := resignMacOSPath(helperPath); err != nil {
+		log.Printf("updater: sign update helper: %v", err)
 	}
 	backupName := time.Now().UTC().Format("20060102T150405Z") + "-" + safePathComponent(u.currentVersion)
 	plan := releaseApplyPlan{
