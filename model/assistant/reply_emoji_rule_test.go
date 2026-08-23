@@ -51,3 +51,14 @@ func TestReplyStylePromptKeepsStyleGuidance(t *testing.T) {
 		t.Fatal("群友风格的提示词丢了")
 	}
 }
+
+// 篇幅规则对所有风格生效:闲聊一句话问的,即使联网查证过也不要写成小评测,
+// 更不要在回复里罗列参考链接。
+func TestEveryReplyStyleForbidsEssayAndLinkDump(t *testing.T) {
+	for _, style := range []ReplyStyle{ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyle("")} {
+		prompt := style.prompt()
+		if !strings.Contains(prompt, replyProportionRule) {
+			t.Fatalf("风格 %q 缺少篇幅与链接规则", style)
+		}
+	}
+}
