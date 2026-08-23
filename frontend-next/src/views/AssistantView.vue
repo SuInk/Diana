@@ -183,14 +183,26 @@
               <template v-else>
                 <div class="field">
                   <label for="bot-tg-token">Bot Token</label>
-                  <input
-                    id="bot-tg-token"
-                    v-model="telegramTokenDraft"
-                    class="input"
-                    type="password"
-                    autocomplete="off"
-                    :placeholder="form.telegram_bot_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '从 @BotFather 获取'"
-                  />
+                  <div class="input-group">
+                    <input
+                      id="bot-tg-token"
+                      v-model="telegramTokenDraft"
+                      class="input"
+                      :type="tokenRevealed.telegram_bot_token ? 'text' : 'password'"
+                      autocomplete="off"
+                      :placeholder="form.telegram_bot_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '从 @BotFather 获取'"
+                    />
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      :disabled="tokenRevealBusy === 'telegram_bot_token'"
+                      :aria-label="tokenRevealed.telegram_bot_token ? '隐藏 Token' : '查看 Token'"
+                      @click="toggleTokenReveal('telegram_bot_token')"
+                    >
+                      <EyeOff v-if="tokenRevealed.telegram_bot_token" :size="14" aria-hidden="true" />
+                      <Eye v-else :size="14" aria-hidden="true" />
+                    </button>
+                  </div>
                   <span class="hint">Telegram 用长轮询出站连接，不需要公网地址，也不用配置 webhook。</span>
                 </div>
                 <div class="field">
@@ -252,14 +264,26 @@
                 </div>
                 <div v-if="isOneBotPlatform" class="field wide">
                   <label for="bot-token">OneBot Access Token</label>
-                  <input
-                    id="bot-token"
-                    v-model="tokenDraft"
-                    class="input"
-                    type="password"
-                    autocomplete="off"
-                    :placeholder="form.onebot_access_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '可选，至少 16 位'"
-                  />
+                  <div class="input-group">
+                    <input
+                      id="bot-token"
+                      v-model="tokenDraft"
+                      class="input"
+                      :type="tokenRevealed.onebot_access_token ? 'text' : 'password'"
+                      autocomplete="off"
+                      :placeholder="form.onebot_access_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '可选，至少 16 位'"
+                    />
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      :disabled="tokenRevealBusy === 'onebot_access_token'"
+                      :aria-label="tokenRevealed.onebot_access_token ? '隐藏 Token' : '查看 Token'"
+                      @click="toggleTokenReveal('onebot_access_token')"
+                    >
+                      <EyeOff v-if="tokenRevealed.onebot_access_token" :size="14" aria-hidden="true" />
+                      <Eye v-else :size="14" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
                 <div class="field wide">
                   <label class="switch">
@@ -723,14 +747,26 @@
                 </div>
                 <div class="field wide">
                   <label for="bridge-token">Bridge Token</label>
-                  <input
-                    id="bridge-token"
-                    v-model="bridgeTokenDraft"
-                    class="input"
-                    type="password"
-                    autocomplete="off"
-                    :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 16 位'"
-                  />
+                  <div class="input-group">
+                    <input
+                      id="bridge-token"
+                      v-model="bridgeTokenDraft"
+                      class="input"
+                      :type="tokenRevealed.nonebot_bridge_token ? 'text' : 'password'"
+                      autocomplete="off"
+                      :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 16 位'"
+                    />
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      :disabled="tokenRevealBusy === 'nonebot_bridge_token'"
+                      :aria-label="tokenRevealed.nonebot_bridge_token ? '隐藏 Token' : '查看 Token'"
+                      @click="toggleTokenReveal('nonebot_bridge_token')"
+                    >
+                      <EyeOff v-if="tokenRevealed.nonebot_bridge_token" :size="14" aria-hidden="true" />
+                      <Eye v-else :size="14" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
               </template>
             </div>
@@ -816,8 +852,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { ArrowLeft, Bot, ChevronRight, Copy, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
+import { computed, onMounted, ref, type Ref } from "vue";
+import { ArrowLeft, Bot, ChevronRight, Copy, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -859,6 +895,77 @@ const triggersDraft = ref("");
 const allowlistDraft = ref("");
 const allowedGroupsDraft = ref("");
 const telegramTokenDraft = ref("");
+// 三个凭据输入框共用一套「查看」状态：key 是字段名，值表示当前是否明文显示。
+const tokenRevealed = ref<Record<TokenField, boolean>>({
+  onebot_access_token: false,
+  telegram_bot_token: false,
+  nonebot_bridge_token: false
+});
+const tokenRevealBusy = ref<TokenField | "">("");
+
+type TokenField = "onebot_access_token" | "telegram_bot_token" | "nonebot_bridge_token";
+
+function tokenDraftRef(field: TokenField): Ref<string> {
+  switch (field) {
+    case "telegram_bot_token":
+      return telegramTokenDraft;
+    case "nonebot_bridge_token":
+      return bridgeTokenDraft;
+    default:
+      return tokenDraft;
+  }
+}
+
+function tokenConfigured(field: TokenField): boolean {
+  const current = form.value;
+  if (!current) {
+    return false;
+  }
+  switch (field) {
+    case "telegram_bot_token":
+      return Boolean(current.telegram_bot_token_configured);
+    case "nonebot_bridge_token":
+      return Boolean(current.nonebot_bridge_token_configured);
+    default:
+      return Boolean(current.onebot_access_token_configured);
+  }
+}
+
+function tokenValue(config: BotProfileConfig, field: TokenField): string {
+  switch (field) {
+    case "telegram_bot_token":
+      return config.telegram_bot_token ?? "";
+    case "nonebot_bridge_token":
+      return config.nonebot_bridge_token ?? "";
+    default:
+      return config.onebot_access_token ?? "";
+  }
+}
+
+// 点「查看」才去后端要一次真实凭据：草稿是空的说明用户没改过,值只在服务端,
+// 常规配置接口不会带回来。取到后填进草稿,再保存等于原样写回,不会误清空。
+async function toggleTokenReveal(field: TokenField): Promise<void> {
+  if (tokenRevealed.value[field]) {
+    tokenRevealed.value = { ...tokenRevealed.value, [field]: false };
+    return;
+  }
+  const draft = tokenDraftRef(field);
+  if (!draft.value && tokenConfigured(field)) {
+    tokenRevealBusy.value = field;
+    try {
+      const secrets = await getBotProfileConfig(true);
+      const profileID = form.value?.id;
+      const profile = (secrets.profiles ?? []).find((item) => item.id === profileID) ?? secrets;
+      draft.value = tokenValue(profile, field);
+    } catch (error) {
+      toastError(error instanceof Error ? error.message : "读取凭据失败");
+      return;
+    } finally {
+      tokenRevealBusy.value = "";
+    }
+  }
+  tokenRevealed.value = { ...tokenRevealed.value, [field]: true };
+}
 
 /** OneBot v11 与 Telegram 的接入字段完全不同。 */
 /** 账号字段在不同平台叫法不同，列表卡片的占位文案跟着平台走。 */
@@ -1381,6 +1488,8 @@ function setForm(config: BotProfileConfig): void {
   telegramTokenDraft.value = "";
   tokenDraft.value = "";
   bridgeTokenDraft.value = "";
+  // 换一个配置档就得重新索取，别把上一档的明文状态带过来。
+  tokenRevealed.value = { onebot_access_token: false, telegram_bot_token: false, nonebot_bridge_token: false };
   const roles: typeof roleForm.value = {};
   for (const [key, role] of Object.entries(config.model_roles ?? {})) {
 		roles[key as RoleKey] = { profile_id: role.profile_id, group: role.group, model: role.model, provider_id: role.provider_id, model_id: role.model_id };

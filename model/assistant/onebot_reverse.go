@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -39,6 +40,10 @@ type OneBotReverseServer struct {
 	status           ChannelStatus
 	pending          sync.Map
 	upgrader         websocket.Upgrader
+	// 鉴权失败日志的去重状态，避免接入端每几秒重连就刷一行。
+	lastUnauthorizedReason string
+	lastUnauthorizedClient string
+	lastUnauthorizedLog    time.Time
 }
 
 func (s *OneBotReverseServer) OutboundBackoffEnabled() bool { return true }
@@ -85,7 +90,8 @@ func (s *OneBotReverseServer) Connect(ctx context.Context, handler EventHandler)
 
 // ServeHTTP 接受 NapCat 反向 WebSocket 连接。
 func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(r) {
+	if ok, reason := s.authorized(r); !ok {
+		s.recordUnauthorized(r, reason)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -443,27 +449,74 @@ func oneBotClientFingerprint(r *http.Request) string {
 	return fmt.Sprintf("client-%x", sum[:8])
 }
 
-// authorized 校验反向 WebSocket 请求鉴权。
-func (s *OneBotReverseServer) authorized(r *http.Request) bool {
+// recordUnauthorized 记录一次握手鉴权失败，写进状态并按需打一行日志。
+// 接入端通常会几秒重连一次，同样的原因不重复刷屏，只在原因或客户端变化、
+// 或者距上次超过一分钟时再打。任何情况下都不记录 token 本身。
+func (s *OneBotReverseServer) recordUnauthorized(r *http.Request, reason string) {
+	fingerprint := oneBotClientFingerprint(r)
+	now := time.Now()
+	s.connMu.Lock()
+	s.status.UnauthorizedConnections++
+	s.status.LastRejectedClient = fingerprint
+	s.status.LastConnectionEvent = "unauthorized:" + reason
+	s.status.LastConnectionEventTime = &now
+	shouldLog := s.lastUnauthorizedReason != reason ||
+		s.lastUnauthorizedClient != fingerprint ||
+		s.lastUnauthorizedLog.IsZero() ||
+		now.Sub(s.lastUnauthorizedLog) >= time.Minute
+	if shouldLog {
+		s.lastUnauthorizedReason = reason
+		s.lastUnauthorizedClient = fingerprint
+		s.lastUnauthorizedLog = now
+	}
+	s.connMu.Unlock()
+	if shouldLog {
+		log.Printf("onebot reverse handshake rejected: reason=%s client=%s", reason, fingerprint)
+	}
+}
+
+// authorized 校验反向 WebSocket 请求鉴权，第二个返回值是失败原因。
+// 握手被拒时接入端只看到一个 401，原因必须留在我们这边，否则「两边 token
+// 明明一样却连不上」只能靠猜。
+func (s *OneBotReverseServer) authorized(r *http.Request) (bool, string) {
 	s.mu.RLock()
 	token := strings.TrimSpace(s.cfg.AccessToken)
 	s.mu.RUnlock()
 	if token == "" {
-		return false
+		return false, "server_token_unset"
 	}
-	// 兼容 Authorization Bearer 和 access_token 查询参数两种 NapCat 常见鉴权方式。
-	if got := bearerToken(r.Header.Get("Authorization")); secureOneBotTokenEqual(got, token) {
-		return true
+	// 兼容 Authorization 头和 access_token 查询参数两种常见鉴权方式。
+	presented := false
+	if header := strings.TrimSpace(r.Header.Get("Authorization")); header != "" {
+		presented = true
+		if secureOneBotTokenEqual(authorizationToken(header), token) {
+			return true, ""
+		}
 	}
-	return secureOneBotTokenEqual(r.URL.Query().Get("access_token"), token)
+	if query := strings.TrimSpace(r.URL.Query().Get("access_token")); query != "" {
+		presented = true
+		if secureOneBotTokenEqual(query, token) {
+			return true, ""
+		}
+	}
+	if !presented {
+		return false, "token_missing"
+	}
+	return false, "token_mismatch"
 }
 
-func bearerToken(value string) string {
+// authorizationToken 取出 Authorization 头里的凭据。OneBot v11 写的是
+// 「Bearer <token>」，但实现里也有发「Token <token>」、甚至直接发裸 token 的，
+// 这些都当凭据看；真正的校验仍是常量时间全等比较，放宽的只是外层写法。
+func authorizationToken(value string) string {
 	scheme, token, ok := strings.Cut(strings.TrimSpace(value), " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
-		return ""
+	if !ok {
+		return strings.TrimSpace(value)
 	}
-	return strings.TrimSpace(token)
+	if strings.EqualFold(scheme, "Bearer") || strings.EqualFold(scheme, "Token") {
+		return strings.TrimSpace(token)
+	}
+	return strings.TrimSpace(value)
 }
 
 func secureOneBotTokenEqual(left, right string) bool {

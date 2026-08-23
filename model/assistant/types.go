@@ -274,6 +274,7 @@ type ChannelStatus struct {
 	ConnectionEpoch         uint64     `json:"connection_epoch,omitempty"`
 	ConnectionOwner         string     `json:"connection_owner,omitempty"`
 	DuplicateConnections    uint64     `json:"duplicate_connections,omitempty"`
+	UnauthorizedConnections uint64     `json:"unauthorized_connections,omitempty"`
 	LastRejectedClient      string     `json:"last_rejected_client,omitempty"`
 	LastConnectionEvent     string     `json:"last_connection_event,omitempty"`
 	LastConnectionEventTime *time.Time `json:"last_connection_event_time,omitempty"`
@@ -1408,19 +1409,41 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 	}
 }
 
+// PayloadFromConfigWithSecrets 在 PayloadFromConfig 之上带回真实 token。
+// 常规配置接口每次打开页面都会拉,凭据跟着到处跑没必要;但控制台的主人本来
+// 就有权改这些 token,不给看反而只能去翻配置文件。所以做成显式索取:
+// 调用方带上 include_secrets 才返回,和 LLM API Key 那套一致。
+func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
+	payload := PayloadFromConfig(cfg)
+	cfg = cfg.WithDefaults()
+	payload.OneBotAccessToken = cfg.OneBotAccessToken
+	payload.TelegramBotToken = cfg.TelegramBotToken
+	payload.NoneBotBridgeToken = cfg.NoneBotBridgeToken
+	return payload
+}
+
 // PayloadFromProfileSet 把机器人配置集转换为前端可直接消费的 payload。
 func PayloadFromProfileSet(set ProfileSet) ConfigPayload {
+	return payloadFromProfileSet(set, PayloadFromConfig)
+}
+
+// PayloadFromProfileSetWithSecrets 与 PayloadFromProfileSet 相同,但带回真实 token。
+func PayloadFromProfileSetWithSecrets(set ProfileSet) ConfigPayload {
+	return payloadFromProfileSet(set, PayloadFromConfigWithSecrets)
+}
+
+func payloadFromProfileSet(set ProfileSet, convert func(BotConfig) ConfigPayload) ConfigPayload {
 	set = set.WithDefaults()
 	current, ok := set.Current()
 	if !ok {
 		return ConfigPayload{}
 	}
-	payload := PayloadFromConfig(current)
+	payload := convert(current)
 	payload.ActiveProfileID = set.ActiveID
 	payload.IsolatePlatformContexts = copyBoolPointer(set.IsolatePlatformContexts)
 	payload.Profiles = make([]ConfigPayload, 0, len(set.Profiles))
 	for _, profile := range set.Profiles {
-		payload.Profiles = append(payload.Profiles, PayloadFromConfig(profile))
+		payload.Profiles = append(payload.Profiles, convert(profile))
 	}
 	return payload
 }

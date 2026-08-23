@@ -279,7 +279,13 @@ func (h *BotHandler) platforms(c *gin.Context) {
 }
 
 // getConfig 处理 OneBot v11 机器人配置读取请求。
+// 默认响应把 Access Token 一类凭据抹成占位符;配置页要查看真实值时显式带
+// include_secrets=true 再要一次,和 LLM API Key 那套保持一致。
 func (h *BotHandler) getConfig(c *gin.Context) {
+	if queryBool(c.Query("include_secrets")) {
+		c.JSON(http.StatusOK, assistant.PayloadFromProfileSetWithSecrets(h.profiles.Profiles()))
+		return
+	}
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(h.profiles.Profiles()))
 }
 
@@ -323,7 +329,12 @@ func (h *BotHandler) saveConfig(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
-	h.profiles.SaveProfiles(next)
+	// 落库失败就不能回 200：以前这里吞掉错误，前端提示保存成功，重启后配置
+	// 又是旧的，只能靠翻数据库才发现。
+	if err := h.profiles.SaveProfiles(next); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.config.save", err, botLogTarget(current), botLogMetadata(current))
+		return
+	}
 	recordRequestOperation(c, h.logs, "assistant.config.save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
@@ -350,7 +361,10 @@ func (h *BotHandler) activateProfile(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.activate", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
-	h.profiles.SaveProfiles(next)
+	if err := h.profiles.SaveProfiles(next); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.profile.activate", err, botLogTarget(current), botLogMetadata(current))
+		return
+	}
 	recordRequestOperation(c, h.logs, "assistant.profile.activate", "OneBot v11 机器人配置已切换", targetID, botLogMetadata(current))
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
@@ -387,7 +401,10 @@ func (h *BotHandler) cloneProfile(c *gin.Context) {
 			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", err, botLogTarget(current), botLogMetadata(current))
 			return
 		}
-		h.profiles.SaveProfiles(next)
+		if err := h.profiles.SaveProfiles(next); err != nil {
+			h.writeError(c, http.StatusInternalServerError, "assistant.profile.clone", err, botLogTarget(current), botLogMetadata(current))
+			return
+		}
 		recordRequestOperation(c, h.logs, "assistant.profile.clone", "OneBot v11 机器人配置已复制", sourceID, botLogMetadata(profile))
 		c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 		return
@@ -426,7 +443,10 @@ func (h *BotHandler) deleteProfile(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
-	h.profiles.SaveProfiles(next)
+	if err := h.profiles.SaveProfiles(next); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.profile.delete", err, targetID, map[string]any{"profile_id": targetID})
+		return
+	}
 	recordRequestOperation(c, h.logs, "assistant.profile.delete", "OneBot v11 机器人配置已删除", targetID, map[string]any{"profile_id": targetID})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
@@ -446,7 +466,10 @@ func (h *BotHandler) setContextIsolation(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.context_isolation.update", err, "", nil)
 		return
 	}
-	h.profiles.SaveProfiles(next)
+	if err := h.profiles.SaveProfiles(next); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.context_isolation.update", err, "", map[string]any{"enabled": payload.Enabled})
+		return
+	}
 	recordRequestOperation(c, h.logs, "assistant.context_isolation.update", "平台上下文隔离设置已更新", "", map[string]any{"enabled": payload.Enabled})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }

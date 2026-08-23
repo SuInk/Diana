@@ -153,7 +153,9 @@ func main() {
 		if _, exists := savedPluginStates[legacyLLMConfigPluginID]; exists {
 			profiles, changed := migrateLegacyLLMConfigPluginState(botProfileStore.Profiles(), savedPluginStates)
 			if changed {
-				botProfileStore.SaveProfiles(profiles)
+				if err := botProfileStore.SaveProfiles(profiles); err != nil {
+					log.Printf("migrate legacy llm config plugin state failed: %v", err)
+				}
 			}
 			statesChanged = true
 		}
