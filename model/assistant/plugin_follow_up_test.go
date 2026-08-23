@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +44,51 @@ func TestPluginFollowUpAddsNaturalComment(t *testing.T) {
 	}
 	if !sawSentContent {
 		t.Fatalf("follow-up prompt missed the just-sent content: %#v", requests[len(requests)-1].Messages)
+	}
+}
+
+func TestPluginFollowUpUsesBilibiliVideoFramesAsFallback(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	videoPath := filepath.Join(t.TempDir(), "resolved.mp4")
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=1", "-pix_fmt", "yuv420p", videoPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create sample video: %v: %s", err, output)
+	}
+
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{"画面里是测试图案。"}}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}
+	runtime.maybeSendPluginFollowUp(context.Background(), event, PluginResponse{
+		FollowUp:  true,
+		Reply:     "[Bilibili] 示例视频\nUP主：测试用户",
+		VideoURLs: []string{videoPath},
+	})
+
+	waitForCondition(t, 5*time.Second, func() bool { return len(provider.requestsSnapshot()) > 0 })
+	request := provider.requestsSnapshot()[0]
+	if images := requestImageCount(request); images == 0 {
+		t.Fatalf("resolved video frames did not reach follow-up request: %#v", request.Messages)
+	}
+	var mediaPriority bool
+	var fallbackInstruction bool
+	for _, message := range request.Messages {
+		if message.Priority == llm.MessagePriorityPlugin && len(message.Parts) > 1 {
+			mediaPriority = true
+			if strings.Contains(message.Content, "视频抽样帧") && strings.Contains(message.Content, "平台总结为准") {
+				fallbackInstruction = true
+			}
+		}
+	}
+	if !mediaPriority {
+		t.Fatalf("follow-up media was not protected as plugin evidence: %#v", request.Messages)
+	}
+	if !fallbackInstruction {
+		t.Fatalf("Bilibili follow-up did not retain the visual fallback boundary: %#v", request.Messages)
 	}
 }
 
