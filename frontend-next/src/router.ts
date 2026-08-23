@@ -22,15 +22,17 @@ export interface NavItem {
   hint: string;
 }
 
+// 顺序按「装机器人时的实际操作顺序」排：先看总览，再配模型和机器人，然后才是
+// 插件、群、人这些日常项，事件和日志属于出问题时才翻的排查页，放后面。
 export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
-  { id: "events", label: "事件", hint: "消息处理与回复决策" },
-  { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅" },
   { id: "llm", label: "LLM 配置", hint: "Provider 与模型管理" },
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为" },
   { id: "plugins", label: "插件", hint: "插件安装与设置" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置" },
   { id: "users", label: "人员", hint: "人员画像与长期记忆" },
+  { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅" },
+  { id: "events", label: "事件", hint: "消息处理与回复决策" },
   { id: "logs", label: "日志", hint: "操作与错误日志" },
   { id: "settings", label: "设置", hint: "主题与系统更新" }
 ];

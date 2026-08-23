@@ -650,6 +650,28 @@
             </div>
           </section>
 
+          <section class="card">
+            <div class="card-header">
+              <h2>账号安全审核</h2>
+              <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
+                {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">直接回复也做发送前安全审核</span>
+                </label>
+                <span class="hint">
+                  涉政、露骨和其他可能导致账号被处置的内容会被拦下不发。主动回复本来就要过一次审核，安全判断顺带完成，始终生效；
+                  打开这个开关后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                </span>
+              </div>
+            </div>
+          </section>
+
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
@@ -697,13 +719,9 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">启用工具循环（文件读写 / 命令 / 浏览器）</span>
                 </label>
-                <span class="hint">Agent 可在工作目录内执行白名单命令，生产环境请谨慎放开。</span>
+                <span class="hint">Agent 只能在数据目录下的 workspace 里执行白名单命令，路径固定不可配置；生产环境请谨慎放开。</span>
               </div>
               <template v-if="form.agent_enabled">
-                <div class="field">
-                  <label for="agent-dir">工作目录</label>
-                  <input id="agent-dir" v-model="form.agent_work_dir" class="input" placeholder="." />
-                </div>
                 <div class="field">
                   <label for="agent-steps">最大工具步数（≤8）</label>
                   <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" inputmode="numeric" />
@@ -1459,6 +1477,7 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
+    reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     reply_reference_mode: config.reply_reference_mode ?? "on",
     mention_user_mode: config.mention_user_mode ?? "on",

@@ -345,6 +345,7 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 }
 
 func (r *Runtime) classifyBotReplyLoopMessage(ctx context.Context, event MessageEvent, text string, candidate botReplyLoopCandidate, history []MessageEvent) (botReplyLoopAIDecision, string, error) {
+	ctx = withLLMUsagePurpose(ctx, "bot_reply_loop_detection")
 	payload := botReplyLoopClassificationPayload{
 		CurrentText: strings.TrimSpace(truncateRunesFromStart(readableEventText(event, text), 600)),
 		TriggerKind: candidate.TriggerKind,
@@ -770,6 +771,7 @@ func (r *Runtime) sendReplyRefusalCooldownNotice(ctx context.Context, event Mess
 }
 
 func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, event MessageEvent, item ReplySuppression) (string, error) {
+	ctx = withLLMUsagePurpose(ctx, "reply_suppression_notice")
 	messages := r.withUserFacingPersona(event, []llm.Message{
 		{
 			Role: llm.RoleSystem,

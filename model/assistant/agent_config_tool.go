@@ -332,7 +332,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
 		Agent: dianaAgentConfigSnapshot{
 			Enabled:          cfg.AgentEnabled,
-			WorkDir:          cfg.AgentWorkDir,
+			WorkDir:          AgentWorkspaceDir(),
 			MaxSteps:         cfg.AgentMaxSteps,
 			SkillRoots:       append([]string(nil), cfg.AgentSkillRoots...),
 			MCPConfigPath:    cfg.AgentMCPConfigPath,
@@ -413,7 +413,7 @@ func dianaRuntimePathsFromEnv() dianaRuntimePathSnapshot {
 		AppDBPath:       os.Getenv("APP_DB_PATH"),
 		LogPath:         os.Getenv("LOG_PATH"),
 		FrontendDist:    os.Getenv("FRONTEND_DIST"),
-		AgentWorkDir:    os.Getenv("DIANA_AGENT_WORK_DIR"),
+		AgentWorkDir:    AgentWorkspaceDir(),
 		AgentSkillRoots: os.Getenv("DIANA_AGENT_SKILL_ROOTS"),
 		AgentMCPConfig:  os.Getenv("DIANA_AGENT_MCP_CONFIG"),
 	}

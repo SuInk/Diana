@@ -236,7 +236,6 @@ func TestRuntimeAgentCanCreateScheduledQuery(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		OwnerID:        "10001",
 		AgentEnabled:   true,
-		AgentWorkDir:   t.TempDir(),
 		AgentMaxSteps:  3,
 		RequestTimeout: 5 * time.Second,
 	}, channel, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {
@@ -293,7 +292,6 @@ func TestRuntimeDueScheduledQueryRunsAgentAndReschedules(t *testing.T) {
 		OwnerID:        "10001",
 		SystemPrompt:   "你是说话自然的 Diana。",
 		AgentEnabled:   true,
-		AgentWorkDir:   t.TempDir(),
 		AgentMaxSteps:  3,
 		RequestTimeout: 5 * time.Second,
 	}, channel, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {

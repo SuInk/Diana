@@ -139,6 +139,8 @@ export interface BotProfileConfig {
   model_roles?: Record<string, { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>;
   /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
+  /** 直接回复是否也做发送前账号安全审核；主动回复始终审核，不受此开关影响。 */
+  reply_account_safety_audit_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
   prompt_inject_time?: boolean;
   prompt_inject_plaintext_rules?: boolean;
@@ -178,7 +180,6 @@ export interface BotProfileConfig {
   max_bot_concurrency?: number;
   request_timeout_ms?: number;
   agent_enabled?: boolean;
-  agent_work_dir?: string;
   agent_max_steps?: number;
   agent_command_allowlist?: string[];
   agent_command_timeout_ms?: number;
@@ -1282,6 +1283,10 @@ export interface AssistantEventImage {
 export interface AssistantEventDetail extends BotEvent {
   id: string;
   sender_name?: string;
+  sender_role?: string;
+  /** 发言者当时的群等级；回复门槛按等级卡人，排查时要能直接看到。 */
+  sender_level?: number;
+  sender_level_label?: string;
   sub_type?: string;
   original_time?: string;
   operator_id?: string;

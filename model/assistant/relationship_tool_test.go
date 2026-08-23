@@ -177,7 +177,6 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 		OwnerID:       "10001",
 		BotAccount:    "10000",
 		AgentEnabled:  true,
-		AgentWorkDir:  t.TempDir(),
 		AgentMaxSteps: 3,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil

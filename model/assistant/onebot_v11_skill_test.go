@@ -213,7 +213,6 @@ func TestOneBotV11BuiltinSkillFollowsPluginAndPlatform(t *testing.T) {
 func TestMemberAgentRegistryRetainsOneBotReadTool(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := DefaultBotConfig()
-	cfg.AgentWorkDir = workDir
 	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
 	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "member", Platform: PlatformOneBotV11}
