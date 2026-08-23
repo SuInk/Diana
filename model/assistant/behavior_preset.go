@@ -109,12 +109,20 @@ const replyBlankLineRule = "回复里不要出现空行：段落之间用单个�
 // 出处口头点名就够。
 const replyProportionRule = "回复的篇幅要跟随问题的分量：群里随口一问，答结论加一两句理由就够，即使你查了很多资料也不要写成小评测或文章。不要在回复里罗列参考链接或来源清单；需要交代出处时口头点名（如「豆瓣 8.5」「澎湃有报道」），对方追问再给链接。"
 
+// replyTrailingPunctuationRule 同样对所有风格生效。模型按书面语习惯给每句话收一个
+// 句号，聊天窗口里一条「知道了。」读起来是公事公办的冷淡，真人不这么打字。
+//
+// 只管整条消息末尾那一个标点，句子中间该怎么标点还怎么标点——否则一段稍长的回复
+// 会连不成句。问号和感叹号也留着：它们承载的是语气而不是句读，删了意思就变了。
+const replyTrailingPunctuationRule = "整条消息的结尾不要用句号或逗号收尾，直接以文字结束；句子中间的标点照常使用。问号和感叹号是语气，该用就用，不受这条限制。"
+
 func (style ReplyStyle) prompt() string {
 	return strings.TrimSpace(strings.Join([]string{
 		style.stylePrompt(),
 		replyEmojiRule,
 		replyBlankLineRule,
 		replyProportionRule,
+		replyTrailingPunctuationRule,
 	}, "\n"))
 }
 
