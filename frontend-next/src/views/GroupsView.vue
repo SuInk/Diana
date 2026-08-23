@@ -130,12 +130,12 @@
         </div>
         <div class="field wide">
           <label for="group-trigger-mode">本群触发词匹配（留空用全局）</label>
-          <select id="group-trigger-mode" v-model="editing.group_trigger_mode" class="input">
-            <option value="">跟随全局</option>
-            <option value="smart">智能</option>
-            <option value="strict">严格</option>
-            <option value="loose">宽松</option>
-          </select>
+          <AppSelect
+            id="group-trigger-mode"
+            :model-value="editing.group_trigger_mode ?? ''"
+            :options="groupTriggerModeOptions"
+            @update:model-value="(value) => { if (editing) editing.group_trigger_mode = value as typeof editing.group_trigger_mode; }"
+          />
           <span class="hint">智能档下，群里谈论机器人而不是叫它的消息不会强制回复。</span>
         </div>
         <div class="field wide">
@@ -150,25 +150,22 @@
         </div>
         <div class="field">
           <label for="group-response-mode">回复模式</label>
-          <select id="group-response-mode" v-model="editing.response_mode" class="input">
-            <option value="">跟随全局</option>
-            <option value="quiet">安静模式</option>
-            <option value="standard">标准模式</option>
-            <option value="active">活跃模式</option>
-            <option value="custom">自定义</option>
-          </select>
+          <AppSelect
+            id="group-response-mode"
+            :model-value="editing.response_mode ?? ''"
+            :options="groupResponseModeOptions"
+            @update:model-value="(value) => { if (editing) editing.response_mode = value as typeof editing.response_mode; }"
+          />
           <span class="hint">控制本群中机器人主动接话的频率。</span>
         </div>
         <div class="field">
           <label for="group-reply-style">表达风格</label>
-          <select id="group-reply-style" v-model="editing.reply_style" class="input">
-            <option value="">跟随全局</option>
-            <option value="groupmate">群友</option>
-            <option value="assistant">助手</option>
-            <option value="gentle">温柔</option>
-            <option value="lively">活泼</option>
-            <option value="concise">简洁</option>
-          </select>
+          <AppSelect
+            id="group-reply-style"
+            :model-value="editing.reply_style ?? ''"
+            :options="groupReplyStyleOptions"
+            @update:model-value="(value) => { if (editing) editing.reply_style = value as typeof editing.reply_style; }"
+          />
         </div>
         <div class="field wide">
           <label class="switch">
@@ -294,8 +291,34 @@ import {
 } from "../api";
 import EmptyState from "../components/EmptyState.vue";
 import GroupPluginSettings from "../components/GroupPluginSettings.vue";
+import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
+
+// 空值代表「跟随全局」，与后端把空字符串当成未覆盖的约定一致。
+const groupTriggerModeOptions: AppSelectOption[] = [
+  { value: "", label: "跟随全局" },
+  { value: "smart", label: "智能" },
+  { value: "strict", label: "严格" },
+  { value: "loose", label: "宽松" }
+];
+
+const groupResponseModeOptions: AppSelectOption[] = [
+  { value: "", label: "跟随全局" },
+  { value: "quiet", label: "安静模式" },
+  { value: "standard", label: "标准模式" },
+  { value: "active", label: "活跃模式" },
+  { value: "custom", label: "自定义" }
+];
+
+const groupReplyStyleOptions: AppSelectOption[] = [
+  { value: "", label: "跟随全局" },
+  { value: "groupmate", label: "群友" },
+  { value: "assistant", label: "助手" },
+  { value: "gentle", label: "温柔" },
+  { value: "lively", label: "活泼" },
+  { value: "concise", label: "简洁" }
+];
 import { toastError, toastSuccess } from "../toast";
 
 const groups = ref<BotGroupSummary[]>([]);
