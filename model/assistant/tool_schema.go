@@ -3,7 +3,10 @@
 
 package assistant
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // 工具参数的 JSON Schema 辅助构造。
 //
@@ -69,4 +72,22 @@ func toolItemsParam(description string, maxItems int, required []string, propert
 // itoa 让 schema 里的取值上限直接引用常量，不用在文案里重抄一遍数字。
 func itoa(value int) string {
 	return strconv.Itoa(value)
+}
+
+// toolInputBool 读取布尔参数。模型时常把 true 写成字符串或 1，按字面类型取值会
+// 悄悄退化成 false——一个被忽略的开关比一个报错的开关难查得多。
+func toolInputBool(input map[string]any, key string) bool {
+	value, ok := input[key]
+	if !ok {
+		return false
+	}
+	switch raw := value.(type) {
+	case bool:
+		return raw
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+		return err == nil && parsed
+	default:
+		return intFromAny(raw) != 0
+	}
 }

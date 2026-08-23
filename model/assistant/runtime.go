@@ -260,6 +260,7 @@ type Runtime struct {
 	inboundStore              InboundEventStore
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
+	glossary                  GlossaryStore
 	reminders                 ReminderStore
 	groupConfigs              GroupConfigStore
 	configSaver               ConfigSaver
@@ -395,6 +396,14 @@ func (r *Runtime) SetStructuredMemoryStore(store StructuredMemoryStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.structuredMemory = store
+}
+
+// SetGlossaryStore 注入词典存储。没有它时词典整体静默失效：自动命中查不到、
+// diana.glossary 明确报错，回复本身不受影响。
+func (r *Runtime) SetGlossaryStore(store GlossaryStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.glossary = store
 }
 
 // SetRepositoryIssueDraftStore enables restart-safe Issue draft approval.
@@ -2741,6 +2750,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaSubtaskTool(r, event),
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
+				newDianaGlossaryTool(r, event, relationship),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
 				newDianaReminderTool(r, event),
@@ -2879,6 +2889,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Role:     llm.RoleUser,
 				Content:  memoryContext,
 				Priority: llm.MessagePriorityMemory,
+			})
+		}
+		// 词典和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
+		// 一起让位给当前消息，而不是互相挤。
+		if glossaryContext := contextPreload.glossaryContext; glossaryContext != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    glossaryContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
 			})
 		}
 		if directAgentDecision && agentCanFetchMedia {
@@ -4594,6 +4614,9 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 				return run(provider)
 			}
 		}
+		if current, ok := set.Current(); ok {
+			logUnboundGroupFallback(roles, group, current.ID)
+		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
 	}
 	if factory == nil {
@@ -4609,6 +4632,37 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 // registrySelectionForGroup resolves both new provider/model roles and legacy
 // profile/group settings to a registered model. This keeps the Agent callback
 // contract stable while ensuring every Runtime request crosses ProviderRegistry.
+// modelRoleForGroup 返回某个用途实际绑定的模型角色，没有专门绑定时回落到 chat 绑定。
+//
+// 回落这条是有意的：机器人绑定的是「这台机器人用哪个模型说话」。一轮对话中途多出
+// 几张图（例如 diana.history_images 把历史原图作为附件补进下一轮），用途会从 chat
+// 变成 vision，但说话的还是同一台机器人。没有单独绑视觉模型时就该继续用它绑定的
+// 聊天模型，而不是滑到全局激活配置那份和这台机器人无关的配置上——那种切换是静默的，
+// 表现为「聊着聊着换了个模型答话」，而日志里两轮的 provider/model 都是「正常」的。
+func modelRoleForGroup(roles map[string]ModelRole, group string) (ModelRole, bool) {
+	if len(roles) == 0 {
+		return ModelRole{}, false
+	}
+	key := llm.NormalizeProfileGroup(group)
+	if key == llm.GroupChat {
+		key = "chat"
+	}
+	if role, ok := roles[key]; ok {
+		return role, true
+	}
+	role, ok := roles["chat"]
+	return role, ok
+}
+
+// logUnboundGroupFallback 记录一次「这台机器人有模型绑定，但这个用途落到了全局激活
+// 配置」。修好回落之后它基本不该出现；真出现了就是绑定本身有问题，得让人看得见。
+func logUnboundGroupFallback(roles map[string]ModelRole, group, profileID string) {
+	if len(roles) == 0 {
+		return
+	}
+	log.Printf("chatbot model role fallback: group=%q has no bound provider, using the active profile %q", llm.NormalizeProfileGroup(group), profileID)
+}
+
 func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSet, roles map[string]ModelRole, group, profileID string) (llm.AgentModelConfig, bool, error) {
 	if registry == nil {
 		return llm.AgentModelConfig{}, false, nil
@@ -4617,7 +4671,8 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 	if key == llm.GroupChat {
 		key = "chat"
 	}
-	if role, ok := roles[key]; ok && role.ProviderID != "" && role.ModelID != "" {
+	boundRole, hasBoundRole := modelRoleForGroup(roles, group)
+	if role := boundRole; hasBoundRole && role.ProviderID != "" && role.ModelID != "" {
 		return normalizeRegistrySelection(registry, role.ProviderID, role.ModelID), true, nil
 	}
 	if profileID != "" {
@@ -4629,7 +4684,7 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 		return llm.AgentModelConfig{}, false, fmt.Errorf("chatbot: reply rule llm profile %q not found", profileID)
 	}
 	var profiles []llm.Profile
-	if role, ok := roles[key]; ok {
+	if role := boundRole; hasBoundRole {
 		if role.Group != "" {
 			profiles = set.GroupProfiles(role.Group)
 		} else if role.ProfileID != "" {
@@ -4646,6 +4701,7 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 	}
 	if len(profiles) == 0 {
 		if current, ok := set.Current(); ok {
+			logUnboundGroupFallback(roles, group, current.ID)
 			profiles = []llm.Profile{current}
 		}
 	}
@@ -4676,14 +4732,7 @@ func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Pro
 	if len(roles) == 0 {
 		return nil, nil
 	}
-	key := llm.NormalizeProfileGroup(group)
-	if key == llm.GroupChat {
-		key = "chat"
-	}
-	role, ok := roles[key]
-	if !ok {
-		role, ok = roles["chat"]
-	}
+	role, ok := modelRoleForGroup(roles, group)
 	if !ok {
 		return nil, nil
 	}
@@ -5185,6 +5234,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)
+	}
+	if agentEnabled && hasTool(dianaGlossaryToolName) {
+		builder.WriteString("\n" + promptToolGlossary)
 	}
 	if agentEnabled && hasTool("diana.capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)

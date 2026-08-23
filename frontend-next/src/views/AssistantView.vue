@@ -540,7 +540,7 @@
                   id="bot-reply-style"
                   :model-value="form.reply_style ?? 'assistant'"
                   :options="replyStyleOptions"
-                  @update:model-value="(value) => { if (form) form.reply_style = value as 'groupmate' | 'assistant' | 'gentle' | 'lively' | 'concise'; }"
+                  @update:model-value="(value) => { if (form) form.reply_style = value as 'groupmate' | 'assistant' | 'gentle' | 'lively' | 'concise' | 'catgirl'; }"
                 />
                 <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
               </div>
@@ -701,7 +701,7 @@
                 />
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                识图与意图未分配时跟随「对话」；图片生成未分配时使用对话 Provider 的生图配置。
+                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话 Provider 的生图配置。
               </p>
             </div>
           </section>
@@ -1085,7 +1085,8 @@ const replyStyleOptions: AppSelectOption[] = [
   { value: "assistant", label: "助手" },
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
-  { value: "concise", label: "简洁" }
+  { value: "concise", label: "简洁" },
+  { value: "catgirl", label: "猫娘" }
 ];
 
 const responseModeOptions: AppSelectOption[] = [
@@ -1183,7 +1184,7 @@ async function updateContextIsolation(enabled: boolean): Promise<void> {
 type RoleKey = "chat" | "vision" | "intent" | "image";
 const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
   { key: "chat", label: "对话", fallbackHint: "使用 LLM 配置页的激活配置" },
-  { key: "vision", label: "识图", fallbackHint: "跟随对话模型" },
+  { key: "vision", label: "视觉理解", fallbackHint: "跟随对话模型" },
   { key: "intent", label: "意图识别", fallbackHint: "跟随对话模型" },
   { key: "image", label: "图片生成", fallbackHint: "跟随对话 Provider 的生图模型" }
 ];
@@ -1277,7 +1278,7 @@ function modelCapabilityLabel(model: LLMModelInfo): string {
   const output = new Set(normalizedModalities(model.output_modalities));
   const labels: string[] = [];
   if (output.has("text")) {
-    labels.push(input.has("image") ? "文字 / 识图" : "文字");
+    labels.push(input.has("image") ? "文字 / 视觉理解" : "文字");
   }
   if (output.has("image")) {
     labels.push(input.has("image") ? "图片生成 / 编辑" : "图片生成");

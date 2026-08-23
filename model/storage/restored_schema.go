@@ -264,7 +264,10 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err != nil {
 		return err
 	}
-	return s.backfillRecallNoticeAudits()
+	if err := s.backfillRecallNoticeAudits(); err != nil {
+		return err
+	}
+	return s.migrateGlossary()
 }
 
 func (s *SQLiteStore) backfillRecallNoticeAudits() error {

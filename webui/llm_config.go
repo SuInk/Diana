@@ -27,34 +27,43 @@ type LLMClientFactory func(llm.ProviderConfig) (llm.LLMClient, error)
 type LLMModelListFactory func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error)
 
 type llmConfigPayload struct {
-	ID                  string             `json:"id,omitempty"`
-	Name                string             `json:"name,omitempty"`
-	Group               string             `json:"group,omitempty"`
-	Description         string             `json:"description,omitempty"`
-	UpdatedAt           string             `json:"updated_at,omitempty"`
-	ActiveProfileID     string             `json:"active_profile_id,omitempty"`
-	Profiles            []llmConfigPayload `json:"profiles,omitempty"`
-	Provider            llm.Provider       `json:"provider"`
-	APIStyle            llm.APIStyle       `json:"api_style,omitempty"`
-	APIFormat           llm.APIFormat      `json:"api_format,omitempty"`
-	APIKey              string             `json:"api_key,omitempty"`
-	APIKeyConfigured    bool               `json:"api_key_configured,omitempty"`
-	APIKeyPreview       string             `json:"api_key_preview,omitempty"`
-	BaseURL             string             `json:"base_url,omitempty"`
-	Models              []llm.ModelInfo    `json:"models,omitempty"`
-	Model               string             `json:"model"`
-	ImageModel          string             `json:"image_model,omitempty"`
-	ImageBaseURL        string             `json:"image_base_url,omitempty"`
-	ImageOrigin         string             `json:"image_origin,omitempty"`
-	ImageTimeoutMS      int64              `json:"image_timeout_ms,omitempty"`
-	UserAgent           string             `json:"user_agent,omitempty"`
-	Headers             map[string]string  `json:"headers,omitempty"`
-	Temperature         *float64           `json:"temperature,omitempty"`
-	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
-	ContextWindowTokens int64              `json:"context_window_tokens,omitempty"`
-	MaxContextTokens    int64              `json:"max_context_tokens,omitempty"`
-	MaxOutputTokens     int64              `json:"max_output_tokens,omitempty"`
-	TimeoutMS           int64              `json:"timeout_ms,omitempty"`
+	ID               string             `json:"id,omitempty"`
+	Name             string             `json:"name,omitempty"`
+	Group            string             `json:"group,omitempty"`
+	Description      string             `json:"description,omitempty"`
+	UpdatedAt        string             `json:"updated_at,omitempty"`
+	ActiveProfileID  string             `json:"active_profile_id,omitempty"`
+	Profiles         []llmConfigPayload `json:"profiles,omitempty"`
+	Provider         llm.Provider       `json:"provider"`
+	APIStyle         llm.APIStyle       `json:"api_style,omitempty"`
+	APIFormat        llm.APIFormat      `json:"api_format,omitempty"`
+	APIKey           string             `json:"api_key,omitempty"`
+	APIKeyConfigured bool               `json:"api_key_configured,omitempty"`
+	APIKeyPreview    string             `json:"api_key_preview,omitempty"`
+	BaseURL          string             `json:"base_url,omitempty"`
+	Models           []llm.ModelInfo    `json:"models,omitempty"`
+	Model            string             `json:"model"`
+	ImageModel       string             `json:"image_model,omitempty"`
+	ImageBaseURL     string             `json:"image_base_url,omitempty"`
+	ImageOrigin      string             `json:"image_origin,omitempty"`
+	ImageTimeoutMS   int64              `json:"image_timeout_ms,omitempty"`
+	UserAgent        string             `json:"user_agent,omitempty"`
+	Headers          map[string]string  `json:"headers,omitempty"`
+	Temperature      *float64           `json:"temperature,omitempty"`
+	ReasoningEffort  string             `json:"reasoning_effort,omitempty"`
+	// 这两个是「用户手填的覆盖值」，不是当前生效值：指针类型才分得清「没提交这个
+	// 字段」（nil，保留旧值）和「清空了这个输入框」（0，改回自动）。以前它们是 int64，
+	// 清空输入框和没提交长得一样，于是填过的值永远删不掉。
+	ContextWindowTokens *int64 `json:"context_window_tokens"`
+	MaxContextTokens    *int64 `json:"max_context_tokens"`
+	// 下面两个是只读回显：当前这个模型实际生效的窗口和请求上限，以及窗口的来源。
+	// 界面据此提示「未填写 · 当前按模型清单为 1,050,000」，而不是把推断值预填进
+	// 输入框冒充用户设置——那正是「模型默认填了 400k」的由来。
+	EffectiveContextWindowTokens int64                   `json:"effective_context_window_tokens,omitempty"`
+	EffectiveMaxContextTokens    int64                   `json:"effective_max_context_tokens,omitempty"`
+	ContextWindowSource          llm.ContextWindowSource `json:"context_window_source,omitempty"`
+	MaxOutputTokens              int64                   `json:"max_output_tokens,omitempty"`
+	TimeoutMS                    int64                   `json:"timeout_ms,omitempty"`
 }
 
 type llmTestPayload struct {
@@ -482,7 +491,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 
 	cfg := h.store.Current()
 	// 连通测试允许直接使用表单里的临时配置，成功与否不影响当前已保存配置。
-	if payload.Provider != "" || payload.Model != "" || payload.BaseURL != "" || payload.APIStyle != "" || payload.APIFormat != "" || payload.APIKey != "" || payload.UserAgent != "" || payload.ImageModel != "" || payload.ImageBaseURL != "" || payload.ImageOrigin != "" || payload.ImageTimeoutMS != 0 || payload.ContextWindowTokens != 0 || payload.MaxContextTokens != 0 || payload.MaxOutputTokens != 0 || payload.TimeoutMS != 0 || payload.Temperature != nil || payload.ReasoningEffort != "" {
+	if payload.Provider != "" || payload.Model != "" || payload.BaseURL != "" || payload.APIStyle != "" || payload.APIFormat != "" || payload.APIKey != "" || payload.UserAgent != "" || payload.ImageModel != "" || payload.ImageBaseURL != "" || payload.ImageOrigin != "" || payload.ImageTimeoutMS != 0 || tokenLimitValue(payload.ContextWindowTokens) != 0 || tokenLimitValue(payload.MaxContextTokens) != 0 || payload.MaxOutputTokens != 0 || payload.TimeoutMS != 0 || payload.Temperature != nil || payload.ReasoningEffort != "" {
 		cfg = configFromPayload(payload.llmConfigPayload)
 		existing := existingProfileConfig(h.store.Profiles(), payload.llmConfigPayload)
 		cfg = mergeUnsubmittedLLMConfig(payload.llmConfigPayload, cfg, existing)
@@ -535,31 +544,55 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 
 // payloadFromConfig 把 LLM provider 配置转换为前端 payload。
 func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
+	// raw 保留落库的原样：WithDefaults 会把推断出来的窗口写进字段，拿它回显就等于
+	// 告诉用户「这个数是你设的」。
+	raw := cfg
 	cfg = cfg.WithDefaults()
 	// API Key 只暴露“是否已配置”，实际值由 WithSecrets 版本在可信场景下返回。
 	payload := llmConfigPayload{
-		Provider:            cfg.Provider,
-		APIStyle:            cfg.APIStyle,
-		APIFormat:           cfg.APIFormatWithDefault(),
-		APIKeyConfigured:    cfg.APIKey != "",
-		APIKeyPreview:       maskLLMAPIKey(cfg.APIKey),
-		BaseURL:             cfg.BaseURL,
-		Models:              cfg.Models,
-		Model:               cfg.Model,
-		ImageModel:          cfg.ImageModelWithDefault(),
-		ImageBaseURL:        cfg.ImageBaseURL,
-		ImageOrigin:         cfg.ImageOrigin,
-		ImageTimeoutMS:      cfg.ImageTimeout.Milliseconds(),
-		UserAgent:           cfg.UserAgentWithDefault(),
-		Headers:             cfg.NormalizedHeaders(),
-		Temperature:         cfg.Temperature,
-		ReasoningEffort:     cfg.ReasoningEffort,
-		ContextWindowTokens: cfg.ContextWindowTokens,
-		MaxContextTokens:    cfg.MaxContextTokensWithDefault(),
-		MaxOutputTokens:     cfg.MaxOutputTokens,
-		TimeoutMS:           cfg.Timeout.Milliseconds(),
+		Provider:         cfg.Provider,
+		APIStyle:         cfg.APIStyle,
+		APIFormat:        cfg.APIFormatWithDefault(),
+		APIKeyConfigured: cfg.APIKey != "",
+		APIKeyPreview:    maskLLMAPIKey(cfg.APIKey),
+		BaseURL:          cfg.BaseURL,
+		Models:           cfg.Models,
+		Model:            cfg.Model,
+		ImageModel:       cfg.ImageModelWithDefault(),
+		ImageBaseURL:     cfg.ImageBaseURL,
+		ImageOrigin:      cfg.ImageOrigin,
+		ImageTimeoutMS:   cfg.ImageTimeout.Milliseconds(),
+		UserAgent:        cfg.UserAgentWithDefault(),
+		Headers:          cfg.NormalizedHeaders(),
+		Temperature:      cfg.Temperature,
+		ReasoningEffort:  cfg.ReasoningEffort,
+		MaxOutputTokens:  cfg.MaxOutputTokens,
+		TimeoutMS:        cfg.Timeout.Milliseconds(),
 	}
+	payload.ContextWindowTokens = optionalTokenLimit(raw.ContextWindowTokens)
+	payload.MaxContextTokens = optionalTokenLimit(raw.MaxContextTokens)
+	window, source := raw.ResolveContextWindowTokens()
+	payload.EffectiveContextWindowTokens = window
+	payload.EffectiveMaxContextTokens = cfg.MaxContextTokensWithDefault()
+	payload.ContextWindowSource = source
 	return payload
+}
+
+// optionalTokenLimit 把「0 表示没填」翻译成 JSON 的 null。
+func optionalTokenLimit(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	limit := value
+	return &limit
+}
+
+// tokenLimitValue 读回可选的 token 上限：nil 表示这次请求没提交这个字段。
+func tokenLimitValue(value *int64) int64 {
+	if value == nil || *value < 0 {
+		return 0
+	}
+	return *value
 }
 
 func maskLLMAPIKey(value string) string {
@@ -660,8 +693,8 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 		Headers:             payload.Headers,
 		Temperature:         payload.Temperature,
 		ReasoningEffort:     payload.ReasoningEffort,
-		ContextWindowTokens: payload.ContextWindowTokens,
-		MaxContextTokens:    payload.MaxContextTokens,
+		ContextWindowTokens: tokenLimitValue(payload.ContextWindowTokens),
+		MaxContextTokens:    tokenLimitValue(payload.MaxContextTokens),
 		MaxOutputTokens:     payload.MaxOutputTokens,
 		Timeout:             time.Duration(payload.TimeoutMS) * time.Millisecond,
 	}.WithDefaults()
@@ -701,10 +734,11 @@ func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.Provi
 	if strings.TrimSpace(payload.ReasoningEffort) == "" {
 		cfg.ReasoningEffort = existing.ReasoningEffort
 	}
-	if payload.ContextWindowTokens == 0 {
+	// nil 才是「这个客户端没提交这个字段」；提交了 0 就是明确要求改回自动推断。
+	if payload.ContextWindowTokens == nil {
 		cfg.ContextWindowTokens = existing.ContextWindowTokens
 	}
-	if payload.MaxContextTokens == 0 {
+	if payload.MaxContextTokens == nil {
 		cfg.MaxContextTokens = existing.MaxContextTokens
 	}
 	if payload.TimeoutMS == 0 {

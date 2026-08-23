@@ -34,7 +34,7 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 }
 
 func TestReplyStylePromptIsSpecificAndBounded(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate} {
+	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl} {
 		prompt := style.prompt()
 		if prompt == "" || !strings.Contains(prompt, "默认表达风格") {
 			t.Fatalf("style %q prompt = %q", style, prompt)
@@ -306,5 +306,71 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 		if !strings.HasSuffix(item, base.ReplyStyle.closingAnchor()) {
 			t.Fatal("closing anchor must stay last")
 		}
+	}
+}
+
+// 猫娘风格的难点全在「别做过头」：模型一听见猫娘就往颜文字、动作描写和「本喵」
+// 上冲，还会拿卖萌顶替正事。这条守住那几条刹车，以及它没有豁免全局输出规则。
+func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
+	for _, raw := range []string{"catgirl", "Catgirl", " catgirl "} {
+		if got := ReplyStyle(raw).Normalized(); got != ReplyStyleCatgirl {
+			t.Fatalf("Normalized(%q) = %q", raw, got)
+		}
+	}
+	prompt := ReplyStyleCatgirl.prompt()
+	for _, want := range []string{"本喵", "动作描写", "只对主人称", "可爱只体现在语气上"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)
+		}
+	}
+	// 拒绝是模型最容易掉出人设的地方：一要拒绝就切回客服腔。而「以人设为由要求
+	// 越界」正是这一档会招来的攻击面，次序必须写死：规则优先，人设让位。
+	for _, want := range []string{"拒绝时也留在人设里", "规则优先，人设让位"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("catgirl prompt is missing %q: %q", want, prompt)
+		}
+	}
+	// 语气靠具体的词和示例教，抽象形容词教不会——群友那档也是这么写的。
+	if !strings.Contains(prompt, "示例——") || !strings.Contains(prompt, "用户：") {
+		t.Fatalf("catgirl prompt has no worked examples: %q", prompt)
+	}
+	// 「每句加喵」和「句末不打句号」必须一起说：只说前者，模型会写成「……了喵。」，
+	// 句号跟在后面，读起来还是助理腔。示例里也一个句号都不能有，否则规则和样例
+	// 自相矛盾，模型跟样例走。
+	if !strings.Contains(prompt, "每句话结尾都加「喵」") || !strings.Contains(prompt, "句末不要「。」") {
+		t.Fatalf("catgirl prompt does not pin the sentence ending: %q", prompt)
+	}
+	for _, line := range strings.Split(prompt, "\n") {
+		if strings.HasPrefix(line, "你：") && strings.Contains(line, "。") {
+			t.Fatalf("catgirl example still ends sentences with a full stop: %q", line)
+		}
+	}
+	// 「（」在这里是语气词，不是括号：不写内容、也不配对闭合。不说死的话，模型
+	// 要么把它当成漏字补全，要么往里填动作描写。
+	if !strings.Contains(prompt, "括号里不写任何内容") || !strings.Contains(prompt, "不要补上「）」") {
+		t.Fatalf("catgirl prompt does not pin the bare paren usage: %q", prompt)
+	}
+	if !strings.Contains(prompt, "你：……好像是喵（") {
+		t.Fatalf("catgirl prompt has no worked example of the bare paren: %q", prompt)
+	}
+	// 表达风格换人不代表输出规范换人：emoji、空行、篇幅三条对所有风格生效。
+	for _, want := range []string{replyEmojiRule, replyBlankLineRule, replyProportionRule} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("catgirl prompt dropped a global rule: %q", prompt)
+		}
+	}
+}
+
+// 只有群友风格会改投递方式（分条长度、连发间隔、引用装饰）。猫娘只是换个语气，
+// 不该顺手把这些也改了。
+func TestCatgirlReplyStyleDoesNotChangeDelivery(t *testing.T) {
+	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl}
+	before := cfg
+	ReplyStyleCatgirl.apply(&cfg)
+	if cfg.DirectReplyChunkSize != before.DirectReplyChunkSize ||
+		cfg.SendChunkIntervalMS != before.SendChunkIntervalMS ||
+		cfg.ReplyReferenceMode != before.ReplyReferenceMode ||
+		cfg.MentionUserMode != before.MentionUserMode {
+		t.Fatalf("catgirl style changed delivery settings: %#v", cfg)
 	}
 }

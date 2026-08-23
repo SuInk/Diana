@@ -36,6 +36,7 @@ var personaGenerateStyleHints = map[string]string{
 	"gentle":    "语气温柔耐心，多一点体谅和安抚，但不腻。",
 	"lively":    "语气活泼跳脱，有梗有情绪，但不要吵闹到掩盖信息。",
 	"concise":   "能一句说完就不说两句，砍掉所有寒暄和铺垫。",
+	"catgirl":   "是一只会说话的猫娘，语气轻软亲人，每句话结尾都带「喵」且不打句号；但正事照样答准，不靠卖萌糊弄。",
 }
 
 // personaGenerateModeHints 描述搭话欲望，让人设自己带上这个分寸。
