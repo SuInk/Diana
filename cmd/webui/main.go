@@ -55,6 +55,59 @@ const (
 
 const maxHTTPRequestBodyBytes = 8 << 20
 
+// newBotChannelSetFactory 按配置集重建全部通道。OneBot 反连监听器是进程内共享
+// 的单个实例，它的 endpoint/token 只能由这里决定——这是唯一的写入点，别处再写
+// 就会出现运行态和存储配置对不上的 401。
+func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer) func(assistant.ProfileSet) assistant.Channel {
+	return func(set assistant.ProfileSet) assistant.Channel {
+		set = set.WithDefaults()
+		bindings := make([]assistant.ChannelBinding, 0, len(set.Profiles))
+		oneBotAdded := false
+		for _, profile := range set.Profiles {
+			profile = profile.WithDefaults()
+			if !profile.Enabled {
+				continue
+			}
+			var channel assistant.Channel
+			if assistant.IsOneBotPlatform(profile.Platform) {
+				// The reverse WebSocket endpoint is process-wide. OneBot v11 and Telegram can
+				// run together; multiple enabled OneBot profiles still share this one
+				// listener, so only the first is attached.
+				if oneBotAdded {
+					continue
+				}
+				oneBotAdded = true
+				oneBotServer.SetConfig(assistant.OneBotConfig{
+					Endpoint:    profile.OneBotReverseWSEndpoint,
+					AccessToken: profile.OneBotAccessToken,
+				})
+				channel = oneBotServer
+			} else if profile.Platform == assistant.PlatformTelegram {
+				channel = assistant.NewTelegramChannel(assistant.TelegramConfig{
+					BotToken:   profile.TelegramBotToken,
+					APIBaseURL: profile.TelegramAPIBaseURL,
+					ProxyURL:   profile.TelegramProxyURL,
+				})
+			}
+			if channel != nil {
+				bindings = append(bindings, assistant.ChannelBinding{
+					ProfileID: profile.ID,
+					Platform:  profile.Platform,
+					Name:      profile.Name,
+					Channel:   channel,
+				})
+			}
+		}
+		if !oneBotAdded {
+			// 没有启用中的 OneBot 配置档时要显式清空监听器,否则它会一直拿着上一
+			// 次的 token 收连接。清空后握手会以 server_token_unset 被拒,状态和
+			// 日志里看得见原因,而不是一个对不上任何配置的神秘 401。
+			oneBotServer.SetConfig(assistant.OneBotConfig{})
+		}
+		return assistant.NewMultiChannel(bindings, set.PlatformContextsIsolated())
+	}
+}
+
 func main() {
 	if len(os.Args) == 3 && os.Args[1] == updater.InternalReleaseApplyCommand {
 		if err := updater.RunReleaseApplyHelper(os.Args[2]); err != nil {
@@ -153,7 +206,9 @@ func main() {
 		if _, exists := savedPluginStates[legacyLLMConfigPluginID]; exists {
 			profiles, changed := migrateLegacyLLMConfigPluginState(botProfileStore.Profiles(), savedPluginStates)
 			if changed {
-				botProfileStore.SaveProfiles(profiles)
+				if err := botProfileStore.SaveProfiles(profiles); err != nil {
+					log.Printf("migrate legacy llm config plugin state failed: %v", err)
+				}
 			}
 			statesChanged = true
 		}
@@ -177,47 +232,7 @@ func main() {
 		Endpoint:    botCfg.OneBotReverseWSEndpoint,
 		AccessToken: botCfg.OneBotAccessToken,
 	})
-	channelSetFactory := func(set assistant.ProfileSet) assistant.Channel {
-		set = set.WithDefaults()
-		bindings := make([]assistant.ChannelBinding, 0, len(set.Profiles))
-		oneBotAdded := false
-		for _, profile := range set.Profiles {
-			profile = profile.WithDefaults()
-			if !profile.Enabled {
-				continue
-			}
-			var channel assistant.Channel
-			if assistant.IsOneBotPlatform(profile.Platform) {
-				// The reverse WebSocket endpoint is process-wide. OneBot v11 and Telegram can
-				// run together; multiple enabled OneBot profiles still share this one
-				// listener, so only the first is attached.
-				if oneBotAdded {
-					continue
-				}
-				oneBotAdded = true
-				oneBotServer.SetConfig(assistant.OneBotConfig{
-					Endpoint:    profile.OneBotReverseWSEndpoint,
-					AccessToken: profile.OneBotAccessToken,
-				})
-				channel = oneBotServer
-			} else if profile.Platform == assistant.PlatformTelegram {
-				channel = assistant.NewTelegramChannel(assistant.TelegramConfig{
-					BotToken:   profile.TelegramBotToken,
-					APIBaseURL: profile.TelegramAPIBaseURL,
-					ProxyURL:   profile.TelegramProxyURL,
-				})
-			}
-			if channel != nil {
-				bindings = append(bindings, assistant.ChannelBinding{
-					ProfileID: profile.ID,
-					Platform:  profile.Platform,
-					Name:      profile.Name,
-					Channel:   channel,
-				})
-			}
-		}
-		return assistant.NewMultiChannel(bindings, set.PlatformContextsIsolated())
-	}
+	channelSetFactory := newBotChannelSetFactory(oneBotServer)
 	botRuntime := assistant.NewRuntime(botCfg, channelSetFactory(botSet), plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
 		return llm.NewClient(store.Current())
 	})
@@ -286,6 +301,13 @@ func main() {
 				APIBaseURL: cfg.TelegramAPIBaseURL,
 				ProxyURL:   cfg.TelegramProxyURL,
 			})
+		}
+		// 这里必须和 channelSetFactory 用同一个平台判断。以前是「不是 Telegram
+		// 就当 OneBot」,平台字段一旦不是已注册的 OneBot 平台,两边判断就分叉:
+		// 这条路径拿它的(往往是空的)token 覆盖了共享监听器,配置集那条路径又不
+		// 认它、不会把 token 写回去,监听器就此停在一个谁都对不上的 token 上。
+		if !assistant.IsOneBotPlatform(cfg.Platform) {
+			return nil
 		}
 		oneBotServer.SetConfig(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,

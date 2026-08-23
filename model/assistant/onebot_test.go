@@ -390,19 +390,64 @@ func TestReverseServerHeartbeatTracksBotAccountHealth(t *testing.T) {
 func TestReverseServerRequiresAccessToken(t *testing.T) {
 	server := NewOneBotReverseServer(OneBotConfig{})
 	request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
-	if server.authorized(request) {
-		t.Fatal("empty OneBot token must not authorize a connection")
+	if ok, reason := server.authorized(request); ok || reason != "server_token_unset" {
+		t.Fatalf("empty OneBot token authorized=%v reason=%q", ok, reason)
 	}
 
 	server.SetConfig(OneBotConfig{AccessToken: "0123456789abcdef"})
+	if ok, reason := server.authorized(request); ok || reason != "token_missing" {
+		t.Fatalf("request without credentials authorized=%v reason=%q", ok, reason)
+	}
 	request.Header.Set("Authorization", "Bearer 0123456789abcdef")
-	if !server.authorized(request) {
+	if ok, _ := server.authorized(request); !ok {
 		t.Fatal("matching bearer token was rejected")
 	}
 	request.Header.Set("Authorization", "Bearer wrong")
+	if ok, reason := server.authorized(request); ok || reason != "token_mismatch" {
+		t.Fatalf("wrong token authorized=%v reason=%q", ok, reason)
+	}
 	request.URL.RawQuery = "access_token=0123456789abcdef"
-	if !server.authorized(request) {
+	if ok, _ := server.authorized(request); !ok {
 		t.Fatal("matching query token was rejected")
+	}
+}
+
+// TestReverseServerAcceptsCommonAuthorizationSchemes 覆盖各家 OneBot 实现的
+// Authorization 写法：规范是 Bearer，但也有发 Token 前缀或裸 token 的。
+func TestReverseServerAcceptsCommonAuthorizationSchemes(t *testing.T) {
+	const token = "0123456789abcdef"
+	server := NewOneBotReverseServer(OneBotConfig{AccessToken: token})
+	for _, header := range []string{"Bearer " + token, "bearer " + token, "Token " + token, token} {
+		request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+		request.Header.Set("Authorization", header)
+		if ok, reason := server.authorized(request); !ok {
+			t.Fatalf("Authorization %q rejected: %s", header, reason)
+		}
+	}
+	for _, header := range []string{"Bearer wrong", "Token wrong", "wrong", "Basic " + token} {
+		request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+		request.Header.Set("Authorization", header)
+		if ok, _ := server.authorized(request); ok {
+			t.Fatalf("Authorization %q must not authorize", header)
+		}
+	}
+}
+
+// TestReverseServerRecordsUnauthorizedHandshake 固定 401 的可排查性：
+// 状态里要留下计数和原因，不然接入端只看到 401，两边都查不出为什么。
+func TestReverseServerRecordsUnauthorizedHandshake(t *testing.T) {
+	server := NewOneBotReverseServer(OneBotConfig{AccessToken: "0123456789abcdef"})
+	request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+	request.Header.Set("Authorization", "Bearer wrong-token-value")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", recorder.Code)
+	}
+	status := server.Status()
+	if status.UnauthorizedConnections != 1 || status.LastConnectionEvent != "unauthorized:token_mismatch" || status.LastRejectedClient == "" {
+		t.Fatalf("status = %#v", status)
 	}
 }
 

@@ -274,3 +274,55 @@ func TestLLMConfigFromEnvDefaultsOpenAICompatibleToResponses(t *testing.T) {
 		t.Fatalf("APIFormat = %q, want %q", cfg.APIFormat, llm.APIFormatResponses)
 	}
 }
+
+// TestBotChannelSetFactoryBindsListenerToEnabledOneBotProfile 固定共享监听器的
+// token 来源：只认启用中的 OneBot 配置档，没有就清空，绝不留着上一次的 token。
+func TestBotChannelSetFactoryBindsListenerToEnabledOneBotProfile(t *testing.T) {
+	const token = "0123456789abcdef"
+	server := assistant.NewOneBotReverseServer(assistant.OneBotConfig{})
+	factory := newBotChannelSetFactory(server)
+
+	oneBot := assistant.DefaultBotConfig()
+	oneBot.ID = "onebot"
+	oneBot.Platform = assistant.PlatformOneBotV11
+	oneBot.Enabled = true
+	oneBot.OneBotReverseWSEndpoint = "ws://127.0.0.1:18080/onebot/v11/ws"
+	oneBot.OneBotAccessToken = token
+
+	telegram := assistant.DefaultBotConfig()
+	telegram.ID = "telegram"
+	telegram.Platform = assistant.PlatformTelegram
+	telegram.Enabled = true
+	telegram.TelegramBotToken = "telegram-token"
+
+	// 激活档是 Telegram，OneBot 档只是启用着：监听器仍必须绑到 OneBot 档的 token。
+	set := assistant.ProfileSet{ActiveID: telegram.ID, Profiles: []assistant.BotConfig{telegram, oneBot}}
+	factory(set)
+	request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code == http.StatusUnauthorized {
+		t.Fatal("listener rejected the token of the enabled OneBot profile")
+	}
+	if !server.Status().AccessTokenConfigured {
+		t.Fatal("status must report the listener holds a token")
+	}
+
+	// OneBot 档被停用后，监听器不能继续拿着旧 token 收连接。
+	oneBot.Enabled = false
+	factory(assistant.ProfileSet{ActiveID: telegram.ID, Profiles: []assistant.BotConfig{telegram, oneBot}})
+	if server.Status().AccessTokenConfigured {
+		t.Fatal("disabled OneBot profile must clear the listener token")
+	}
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 after the profile was disabled", recorder.Code)
+	}
+	if event := server.Status().LastConnectionEvent; event != "unauthorized:server_token_unset" {
+		t.Fatalf("last connection event = %q", event)
+	}
+}

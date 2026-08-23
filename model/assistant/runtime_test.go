@@ -4581,7 +4581,8 @@ func TestRuntimeSendsWelcomeOnGroupIncrease(t *testing.T) {
 }
 
 type stubLLMProfileStore struct {
-	set llm.ProfileSet
+	set     llm.ProfileSet
+	saveErr error
 }
 
 // Current 封装当前模块的 Current 逻辑。
@@ -4596,8 +4597,9 @@ func (s *stubLLMProfileStore) Profiles() llm.ProfileSet {
 }
 
 // SaveProfiles 保存Profiles数据。
-func (s *stubLLMProfileStore) SaveProfiles(set llm.ProfileSet) {
+func (s *stubLLMProfileStore) SaveProfiles(set llm.ProfileSet) error {
 	s.set = set
+	return s.saveErr
 }
 
 type stubReminderStore struct {

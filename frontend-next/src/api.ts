@@ -876,8 +876,11 @@ export function testProviderModel(providerId: string, modelId: string, message: 
   });
 }
 
-export function getBotProfileConfig(): Promise<BotProfileConfig> {
-  return requestJSON<BotProfileConfig>("/api/assistant/config");
+// includeSecrets 只在配置页显式点「查看」时才带上：常规拉取不需要把 token
+// 一起搬到前端，但主人本来就有权改这些凭据，要看时得能看到。
+export function getBotProfileConfig(includeSecrets = false): Promise<BotProfileConfig> {
+  const suffix = includeSecrets ? "?include_secrets=true" : "";
+  return requestJSON<BotProfileConfig>(`/api/assistant/config${suffix}`);
 }
 
 export function getBotPlatforms(): Promise<{ platforms: BotPlatform[] }> {
