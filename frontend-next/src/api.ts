@@ -1429,7 +1429,7 @@ export interface AssistantTask {
   last_release_tag?: string;
   last_star_count?: number;
   feed_url?: string;
-  feed_source?: "rss" | "twitter";
+  feed_source?: RSSWatchPlatform;
   feed_handle?: string;
   feed_judge_prompt?: string;
   last_feed_item_id?: string;
@@ -1465,9 +1465,13 @@ export interface RepositoryWatchInput {
   notification_targets?: RepositoryWatchTarget[];
 }
 
+// 订阅平台。x / bilibili / douyin / xiaohongshu / github 都是内置抓取，
+// rss 是自定义 Feed 地址。twitter 只出现在升级前创建的订阅里。
+export type RSSWatchPlatform = "x" | "bilibili" | "douyin" | "xiaohongshu" | "github" | "rss" | "twitter";
+
 export interface RSSWatchInput {
-  feed_url?: string;
-  twitter_handle?: string;
+  platform: RSSWatchPlatform;
+  target: string;
   judge_prompt: string;
   interval_seconds: number;
   profile_id?: string;
@@ -1510,7 +1514,7 @@ export function createRSSWatch(input: RSSWatchInput): Promise<AssistantTask> {
   return requestJSON<AssistantTask>("/api/assistant/tasks/rss-watches", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "judge_prompt" | "interval_seconds">>): Promise<AssistantTask> {
+export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "platform" | "target" | "judge_prompt" | "interval_seconds">>): Promise<AssistantTask> {
   return requestJSON<AssistantTask>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) });
 }
 

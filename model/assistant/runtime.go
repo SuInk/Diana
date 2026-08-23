@@ -8818,7 +8818,8 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if !enabled || !ok {
 		return startedAt, fmt.Errorf("RSS 与社交订阅插件已停用，无法检查 %s", item.FeedURL)
 	}
-	change, err := plugin.check(ctx, item.FeedURL, item.LastFeedItemID, item.LastFeedPublishedAt, settings)
+	watchSource := rssWatchSourceFromReminder(item)
+	change, err := plugin.check(ctx, watchSource, item.LastFeedItemID, item.LastFeedPublishedAt, settings)
 	if err != nil {
 		return startedAt, err
 	}
@@ -8836,10 +8837,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if message == "" {
 		return startedAt, fmt.Errorf("RSS 判断器要求通知，但回复内容为空")
 	}
-	label := change.FeedName
-	if item.FeedSource == "twitter" && item.FeedHandle != "" {
-		label = "@" + item.FeedHandle
-	}
+	label := rssWatchSourceLabel(watchSource, change.FeedName)
 	if label == "" {
 		label = item.FeedURL
 	}

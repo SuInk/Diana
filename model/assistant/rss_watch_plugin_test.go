@@ -35,6 +35,10 @@ func (f *mutableFeed) set(body string) {
 	f.mu.Unlock()
 }
 
+func rssFeedURLSource(feedURL string) rssWatchSource {
+	return rssWatchSource{Platform: rssWatchPlatformRSS, Target: feedURL, URL: feedURL}
+}
+
 func rssTestBody(items ...string) string {
 	return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Tibo updates</title>` + strings.Join(items, "") + `</channel></rss>`
 }
@@ -64,16 +68,28 @@ func TestParseRSSAndAtom(t *testing.T) {
 	}
 }
 
-func TestTwitterFeedURLUsesConfigurableTemplate(t *testing.T) {
-	settings := SettingValues{rssWatchSettingTwitterTemplate: "https://rss.example.test/x/{handle}/feed"}
-	got, err := twitterFeedURL("https://x.com/Tibo", settings)
+func TestXCustomTemplateReplacesNativeFetch(t *testing.T) {
+	source, err := resolveRSSWatchSource(rssWatchPlatformX, "https://x.com/Tibo", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "https://rss.example.test/x/Tibo/feed" {
-		t.Fatalf("url=%q", got)
+	if source.Platform != rssWatchPlatformX || source.Target != "Tibo" || source.URL != "https://x.com/Tibo" {
+		t.Fatalf("source=%#v", source)
 	}
-	if _, err := twitterFeedURL("bad/name", settings); err == nil {
+	spec, _ := rssWatchPlatform(rssWatchPlatformX)
+	settings := SettingValues{rssWatchSettingTwitterTemplate: "https://rss.example.test/x/{handle}/feed"}
+	feedURL, err := applyFeedTemplate(customFeedTemplate(spec, settings), source.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if feedURL != "https://rss.example.test/x/Tibo/feed" {
+		t.Fatalf("url=%q", feedURL)
+	}
+	// 0.1.x 写死的 RSSHub 公共实例按未配置处理，走内置抓取。
+	if template := customFeedTemplate(spec, SettingValues{rssWatchSettingTwitterTemplate: legacyTwitterRSSTemplate}); template != "" {
+		t.Fatalf("legacy default should be ignored, got %q", template)
+	}
+	if _, err := resolveRSSWatchSource(rssWatchPlatformX, "bad/name", "", ""); err == nil {
 		t.Fatal("invalid handle should fail")
 	}
 }
@@ -83,7 +99,7 @@ func TestRSSWatchBaselineAndChangeOrdering(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(feed.serve))
 	defer server.Close()
 	plugin := NewRSSWatchPlugin(server.Client())
-	baseline, _, err := plugin.snapshot(context.Background(), server.URL, nil)
+	baseline, _, err := plugin.snapshot(context.Background(), rssFeedURLSource(server.URL), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +108,7 @@ func TestRSSWatchBaselineAndChangeOrdering(t *testing.T) {
 		rssTestItem("2", "Second", "pending", "Fri, 14 Aug 2026 11:00:00 +0800"),
 		rssTestItem("1", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"),
 	))
-	change, err := plugin.check(context.Background(), server.URL, baseline.ItemID, baseline.PublishedAt, nil)
+	change, err := plugin.check(context.Background(), rssFeedURLSource(server.URL), baseline.ItemID, baseline.PublishedAt, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +139,7 @@ func TestRuntimeRSSWatchStaysSilentWhenJudgeRejects(t *testing.T) {
 	)}
 	server := httptest.NewServer(http.HandlerFunc(feed.serve))
 	defer server.Close()
-	store := &stubReminderStore{items: []Reminder{{ID: "rss-1", Kind: ReminderKindRSSWatch, OwnerID: "owner", UserID: "owner", FeedURL: server.URL, FeedSource: "twitter", FeedHandle: "tibo", FeedJudgePrompt: "只在重置额度时通知", LastFeedItemID: "base", LastFeedPublishedAt: time.Date(2026, 8, 14, 2, 0, 0, 0, time.UTC), TriggerAt: time.Now().Add(-time.Second), IntervalSeconds: 900}}}
+	store := &stubReminderStore{items: []Reminder{{ID: "rss-1", Kind: ReminderKindRSSWatch, OwnerID: "owner", UserID: "owner", FeedURL: server.URL, FeedSource: rssWatchPlatformRSS, FeedJudgePrompt: "只在重置额度时通知", LastFeedItemID: "base", LastFeedPublishedAt: time.Date(2026, 8, 14, 2, 0, 0, 0, time.UTC), TriggerAt: time.Now().Add(-time.Second), IntervalSeconds: 900}}}
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{`{"notify":false,"reply":""}`}}
 	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(NewRSSWatchPlugin(server.Client())), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
@@ -140,7 +156,7 @@ func TestRuntimeRSSWatchNotifiesAndRetriesPendingReply(t *testing.T) {
 	)}
 	server := httptest.NewServer(http.HandlerFunc(feed.serve))
 	defer server.Close()
-	store := &stubReminderStore{items: []Reminder{{ID: "rss-2", Kind: ReminderKindRSSWatch, OwnerID: "owner", UserID: "owner", GroupID: "group-1", FeedURL: server.URL, FeedSource: "twitter", FeedHandle: "tibo", FeedJudgePrompt: "重置额度时通知", LastFeedItemID: "base", LastFeedPublishedAt: time.Date(2026, 8, 14, 2, 0, 0, 0, time.UTC), TriggerAt: time.Now().Add(-time.Second), IntervalSeconds: 900}}}
+	store := &stubReminderStore{items: []Reminder{{ID: "rss-2", Kind: ReminderKindRSSWatch, OwnerID: "owner", UserID: "owner", GroupID: "group-1", FeedURL: server.URL, FeedSource: rssWatchPlatformRSS, FeedJudgePrompt: "重置额度时通知", LastFeedItemID: "base", LastFeedPublishedAt: time.Date(2026, 8, 14, 2, 0, 0, 0, time.UTC), TriggerAt: time.Now().Add(-time.Second), IntervalSeconds: 900}}}
 	channel := &scriptedChannel{sendErrs: []error{errors.New("send failed"), nil, nil}}
 	provider := &sequenceLLMProvider{replies: []string{`{"notify":true,"reply":"Tibo 表示额度会在 12:00 UTC 重置：https://x.com/tibo/status/new"}`}}
 	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(NewRSSWatchPlugin(server.Client())), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
