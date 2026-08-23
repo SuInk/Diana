@@ -118,7 +118,7 @@ func TestReduceOCRContextFallsBackWhenOneSubagentFails(t *testing.T) {
 func TestWASMPDFRendererRendersImageOnlyPage(t *testing.T) {
 	t.Setenv("DIANA_OCR_RENDER_CONCURRENCY", "1")
 	renderer := newWASMPDFRenderer()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := pdfRenderTestContext(t)
 	defer cancel()
 	session, err := renderer.Open(ctx, minimalImageOnlyPDF())
 	if err != nil {
@@ -140,7 +140,7 @@ func TestWASMPDFRendererRendersImageOnlyPage(t *testing.T) {
 func TestWASMPDFRendererExtractsTextLayer(t *testing.T) {
 	t.Setenv("DIANA_OCR_RENDER_CONCURRENCY", "1")
 	renderer := newWASMPDFRenderer()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := pdfRenderTestContext(t)
 	defer cancel()
 	session, err := renderer.Open(ctx, minimalTextPDF())
 	if err != nil {
@@ -227,4 +227,28 @@ func buildMinimalPDF(objects []string) []byte {
 	}
 	fmt.Fprintf(&pdf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xrefOffset)
 	return pdf.Bytes()
+}
+
+// pdfRenderTestContext 给 PDFium 测试一个跟着 go test 自身超时走的 ctx。
+//
+// 这里原本硬编码 30 秒。PDFium 是一个 WASM 模块，第一次用之前要由 wazero 编译，这一步
+// 在普通模式下约 4 秒，开 -race 之后约 29 秒——正好贴着 30 秒，于是 go test -race 必然
+// 报 "open pdf: context deadline exceeded"，而不加 -race 又完全看不出问题。真正的渲染
+// 只要十几毫秒，超时报的从来不是渲染慢。
+//
+// 固定秒数没法同时伺候两种差七倍的运行模式，所以改成从 t.Deadline()（也就是 go test
+// -timeout）推导：ctx 只用来兜住真卡死的情况，具体给多少跟着运行模式走。
+func pdfRenderTestContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		// -timeout 0：没有整体上限时给一个足够宽的值，仍然保留兜底能力。
+		return context.WithTimeout(context.Background(), 5*time.Minute)
+	}
+	// 留出余量，别让 ctx 和 go test 的超时同时到期——那样报出来的会是包级超时，
+	// 看不到是哪一步卡住的。
+	if margin := time.Until(deadline) / 10; margin < 5*time.Second {
+		return context.WithDeadline(context.Background(), deadline)
+	}
+	return context.WithDeadline(context.Background(), deadline.Add(-time.Until(deadline)/10))
 }

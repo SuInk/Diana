@@ -3072,7 +3072,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
-	if decorationPrompt := replyDecorationPrompt(cfg, event); decorationPrompt != "" {
+	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory); decorationPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
 			Content:  decorationPrompt,
@@ -6803,6 +6803,33 @@ func (r *Runtime) prepareForwardResolverVideoDelivery(messages []OutgoingMessage
 	return forwardMessages, uploads, sharedUploads
 }
 
+// resolveOutgoingLocalImages 把消息里的本地图片路径换成桥能访问的共享 URL。
+// 视频早有这层转换(prepareResolverVideoDelivery),图片一直漏着:X 图片下载
+// 到宿主机临时目录后,绝对路径被直接塞进转发节点,桥运行在容器或另一台机器
+// 上时根本读不到——合并转发、暂存、散装三条路挨个失败,重试耗尽后整条事件
+// 被丢弃。换不成时保留原路径,桥与宿主同机的部署行为不变。
+func (r *Runtime) resolveOutgoingLocalImages(msg OutgoingMessage) OutgoingMessage {
+	if len(msg.ImageURLs) == 0 {
+		return msg
+	}
+	resolved := make([]string, 0, len(msg.ImageURLs))
+	changed := false
+	for _, imageURL := range msg.ImageURLs {
+		if path := localMediaPath(imageURL); path != "" {
+			if sharedURL, ok := r.shareLocalMedia(path); ok {
+				resolved = append(resolved, sharedURL)
+				changed = true
+				continue
+			}
+		}
+		resolved = append(resolved, imageURL)
+	}
+	if changed {
+		msg.ImageURLs = resolved
+	}
+	return msg
+}
+
 func (r *Runtime) shareLocalMedia(path string) (string, bool) {
 	r.mu.RLock()
 	sharer := r.localMedia
@@ -7037,9 +7064,13 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 // 与 <dianabr> 在这里只是排版，不是分条信号；人格预设的短句切分（群友风格把每条压到
 // 160 字）会把一张卡片拦腰截断，把链接甩到下一条里。所以这里只按平台长度兜底。
 func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text string) error {
-	cfg := r.effectiveConfigForEvent(event)
-	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", false)
+	_, err := r.sendNotificationWithIDs(ctx, event, text)
 	return err
+}
+
+func (r *Runtime) sendNotificationWithIDs(ctx context.Context, event MessageEvent, text string) ([]string, error) {
+	cfg := r.effectiveConfigForEvent(event)
+	return r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", false)
 }
 
 func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks []string, cfg BotConfig, mentionUserID string, replyToCurrent bool) ([]string, error) {
@@ -7107,6 +7138,7 @@ func (r *Runtime) sendOutgoing(ctx context.Context, event MessageEvent, msg Outg
 
 func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent, msg OutgoingMessage) (map[string]any, error) {
 	msg = routeOutgoingToEvent(event, msg)
+	msg = r.resolveOutgoingLocalImages(msg)
 	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
@@ -7444,6 +7476,11 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(r.channel.Status().SelfID))
 	if selfID == "" {
 		return "", fmt.Errorf("chatbot: missing self id for resolver forward")
+	}
+	// 本地图片路径先换成共享 URL:转发节点里的路径桥端拿去自行下载,
+	// 宿主机临时路径它读不到。
+	for index := range messages {
+		messages[index] = r.resolveOutgoingLocalImages(messages[index])
 	}
 	// 先试自定义节点：内容直接内联，一个请求就发完，是 OneBot v11 里兼容性
 	// 最好的做法（嵌套转发一直走的就是它）。暂存方式要先给机器人自己发 N 条
@@ -9002,7 +9039,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	if err := r.storeRepositoryWatchProgress(item.ID, change.Snapshot, message); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, err)
 	}
-	if err := r.sendRepositoryWatch(ctx, item, message); err != nil {
+	if err := r.sendRepositoryWatchChange(ctx, item, message, &change); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
@@ -9048,16 +9085,64 @@ func messageEventDeliveryKey(event MessageEvent) string {
 }
 
 func (r *Runtime) sendRepositoryWatch(ctx context.Context, item Reminder, message string) error {
+	return r.sendRepositoryWatchChange(ctx, item, message, nil)
+}
+
+// sendRepositoryWatchChange 在带着动态明细投递时维护引用锚点:PR/Issue 的
+// 更新推送引用当初宣布它的那条消息,首次出现则记下本次消息 ID 供以后引用。
+// change 为 nil(补投、失败通知)时只发不引不记。
+func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, message string, change *repositoryWatchChange) error {
 	if !item.NotificationEnabled && item.NotificationTargetsJSON == "" && item.GroupID == "" && item.UserID == "" {
 		return nil
 	}
+	anchors := decodeRepositoryWatchAnchors(item.WatchAnchorsJSON)
+	added := map[string]string{}
 	var firstErr error
 	for _, target := range repositoryWatchDeliveryTargets(item) {
-		if err := r.sendNotification(ctx, target, message); err != nil && firstErr == nil {
-			firstErr = err
+		text := message
+		targetKey := messageEventDeliveryKey(target)
+		if change != nil {
+			if replyID := repositoryWatchAnchorReplyID(anchors, targetKey, *change); replyID != "" {
+				// 借用回复标记通道:sendOutgoing 的标记解析会把它转成引用元数据。
+				text = replyMarkerPrefix + replyID + "]" + message
+			}
+		}
+		messageIDs, err := r.sendNotificationWithIDs(ctx, target, text)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if change != nil && len(messageIDs) > 0 {
+			for key, id := range repositoryWatchAnchorEntries(targetKey, *change, messageIDs[0]) {
+				added[key] = id
+			}
 		}
 	}
+	if len(added) > 0 {
+		r.storeRepositoryWatchAnchors(item.ID, encodeRepositoryWatchAnchors(appendRepositoryWatchAnchors(anchors, added)))
+	}
 	return firstErr
+}
+
+// storeRepositoryWatchAnchors 把锚点写回订阅本体。写不进去只影响以后的引用,
+// 不影响本次已经发出的通知,失败静默。
+func (r *Runtime) storeRepositoryWatchAnchors(id string, encoded string) {
+	if r.reminders == nil {
+		return
+	}
+	r.reminderMu.Lock()
+	defer r.reminderMu.Unlock()
+	items := r.reminders.Reminders()
+	for index := range items {
+		if items[index].ID != id || !reminderIsRepositoryWatch(items[index]) {
+			continue
+		}
+		items[index].WatchAnchorsJSON = encoded
+		_ = r.reminders.SaveReminders(items)
+		return
+	}
 }
 
 // renderRepositoryWatchMessage 只渲染确定性的事实清单。通知里不再放模型概括：
