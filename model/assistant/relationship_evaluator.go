@@ -43,6 +43,7 @@ type relationshipEvaluationPayload struct {
 }
 
 func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageEvent, text string, handled bool) (relationshipEvaluationDecision, UserMemoryProfile, bool) {
+	ctx = withLLMUsagePurpose(ctx, "relationship_evaluate")
 	if !handled || !r.relationshipEvaluationAvailable(event) {
 		return relationshipEvaluationDecision{}, UserMemoryProfile{}, false
 	}

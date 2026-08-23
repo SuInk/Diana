@@ -325,26 +325,30 @@ type BotConfig struct {
 	SendChunkIntervalMS          int                  `json:"send_chunk_interval_ms,omitempty"`
 	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
 	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	PromptInjectTime             *bool                `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules   *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender      *bool                `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint       *bool                `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText       string               `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText     string               `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate           string               `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate    string               `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText          string               `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText           string               `json:"prompt_wake_only_text,omitempty"`
-	ProactiveReplyRouterPrompt   string               `json:"proactive_reply_router_prompt,omitempty"`
-	ProactiveReplyPrompt         string               `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
-	MaxReplyChars                int                  `json:"max_reply_chars,omitempty"`
-	DirectReplyChunkSize         int                  `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int                  `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
+	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
+	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
+	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
+	ReplyAccountSafetyAuditEnabled *bool           `json:"reply_account_safety_audit_enabled,omitempty"`
+	PromptInjectTime               *bool           `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules     *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender        *bool           `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint         *bool           `json:"prompt_chinese_slang_hint,omitempty"`
+	PromptChineseSlangText         string          `json:"prompt_chinese_slang_text,omitempty"`
+	PromptPlaintextRulesText       string          `json:"prompt_plaintext_rules_text,omitempty"`
+	PromptTimeTemplate             string          `json:"prompt_time_template,omitempty"`
+	PromptGroupSenderTemplate      string          `json:"prompt_group_sender_template,omitempty"`
+	PromptImageOnlyText            string          `json:"prompt_image_only_text,omitempty"`
+	PromptWakeOnlyText             string          `json:"prompt_wake_only_text,omitempty"`
+	ProactiveReplyRouterPrompt     string          `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyPrompt           string          `json:"proactive_reply_prompt,omitempty"`
+	MaxInputChars                  int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars                  int             `json:"max_reply_chars,omitempty"`
+	DirectReplyChunkSize           int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold          int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode                RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RecallReplyAutoDeleteEnabled   *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds          int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled      *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -380,7 +384,6 @@ type BotConfig struct {
 	MaxBotConcurrency          int           `json:"max_bot_concurrency,omitempty"`
 	RequestTimeout             time.Duration `json:"request_timeout,omitempty"`
 	AgentEnabled               bool          `json:"agent_enabled,omitempty"`
-	AgentWorkDir               string        `json:"agent_work_dir,omitempty"`
 	AgentMaxSteps              int           `json:"agent_max_steps,omitempty"`
 	AgentSkillRoots            []string      `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfigPath         string        `json:"agent_mcp_config_path,omitempty"`
@@ -535,16 +538,20 @@ type ConfigPayload struct {
 	PromptWakeOnlyText           string               `json:"prompt_wake_only_text,omitempty"`
 	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
 	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ProactiveReplyRouterPrompt   string               `json:"proactive_reply_router_prompt,omitempty"`
-	ProactiveReplyPrompt         string               `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars                int                  `json:"max_input_chars,omitempty"`
-	MaxReplyChars                int                  `json:"max_reply_chars,omitempty"`
-	DirectReplyChunkSize         int                  `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int                  `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode              RecallReplyMode      `json:"recall_reply_mode,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool                `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int                  `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool                `json:"llm_identity_masking_enabled,omitempty"`
+	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
+	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
+	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
+	ReplyAccountSafetyAuditEnabled *bool           `json:"reply_account_safety_audit_enabled,omitempty"`
+	ProactiveReplyRouterPrompt     string          `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyPrompt           string          `json:"proactive_reply_prompt,omitempty"`
+	MaxInputChars                  int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars                  int             `json:"max_reply_chars,omitempty"`
+	DirectReplyChunkSize           int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold          int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode                RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RecallReplyAutoDeleteEnabled   *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds          int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled      *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -568,7 +575,6 @@ type ConfigPayload struct {
 	MaxBotConcurrency          int         `json:"max_bot_concurrency,omitempty"`
 	RequestTimeoutMS           int64       `json:"request_timeout_ms,omitempty"`
 	AgentEnabled               bool        `json:"agent_enabled,omitempty"`
-	AgentWorkDir               string      `json:"agent_work_dir,omitempty"`
 	AgentMaxSteps              int         `json:"agent_max_steps,omitempty"`
 	AgentSkillRoots            []string    `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfigPath         string      `json:"agent_mcp_config_path,omitempty"`
@@ -908,45 +914,46 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 func DefaultBotConfig() BotConfig {
 	// 默认不开启机器人，避免首次启动服务就暴露 OneBot 连接面。
 	return BotConfig{
-		Name:                         DefaultProfileName,
-		Platform:                     DefaultPlatform,
-		Enabled:                      false,
-		OneBotReverseWSEndpoint:      "ws://127.0.0.1:18080/onebot/v11/ws",
-		NoneBotBridgeEndpoint:        "ws://127.0.0.1:8080/onebot/v11/ws",
-		GroupTriggers:                []string{"Diana", "diana"},
-		GroupTriggerMode:             defaultAliasTriggerMode,
-		DisabledGroups:               []string{},
-		DisabledUsers:                []string{},
-		GroupAdmission:               GroupAdmission{}.WithDefaults(),
-		WelcomeEnabled:               false,
-		WelcomeMessage:               "欢迎加入本群，可以直接 @我 开始聊天。",
-		SystemPrompt:                 defaultSystemPrompt,
-		ResponseMode:                 ResponseModeStandard,
-		ReplyStyle:                   ReplyStyleAssistant,
-		PromptChineseSlangText:       defaultPromptChineseSlang,
-		PromptPlaintextRulesText:     defaultPromptPlaintextRules,
-		PromptTimeTemplate:           defaultPromptTimeTemplate,
-		PromptGroupSenderTemplate:    defaultPromptGroupSenderTemplate,
-		PromptImageOnlyText:          defaultPromptImageOnly,
-		PromptWakeOnlyText:           defaultPromptWakeOnly,
-		ErrorReplyPrefix:             "出错了：",
-		SendRetryAttempts:            3,
-		SendChunkIntervalMS:          300,
-		ProactiveReplyRouterPrompt:   defaultProactiveReplyRouterPrompt,
-		ProactiveReplyPrompt:         defaultProactiveReplyPrompt,
-		ChatInEnabled:                boolPointer(true),
-		ChatInLevel:                  defaultChatInLevel,
-		NaturalInterjectionEnabled:   boolPointer(false),
-		MaxInputChars:                2000,
-		MaxReplyChars:                3500,
-		DirectReplyChunkSize:         900,
-		ForwardReplyThreshold:        900,
-		RecallReplyMode:              RecallReplyModeLLMSummary,
-		RecallReplyAutoDeleteEnabled: boolPointer(false),
-		RecallReplyTTLSeconds:        defaultRecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:    boolPointer(true),
-		BotReplyLoopDetectionEnabled: boolPointer(true),
-		RecentHistoryTokenBudget:     DefaultRecentHistoryTokenBudget,
+		Name:                           DefaultProfileName,
+		Platform:                       DefaultPlatform,
+		Enabled:                        false,
+		OneBotReverseWSEndpoint:        "ws://127.0.0.1:18080/onebot/v11/ws",
+		NoneBotBridgeEndpoint:          "ws://127.0.0.1:8080/onebot/v11/ws",
+		GroupTriggers:                  []string{"Diana", "diana"},
+		GroupTriggerMode:               defaultAliasTriggerMode,
+		DisabledGroups:                 []string{},
+		DisabledUsers:                  []string{},
+		GroupAdmission:                 GroupAdmission{}.WithDefaults(),
+		WelcomeEnabled:                 false,
+		WelcomeMessage:                 "欢迎加入本群，可以直接 @我 开始聊天。",
+		SystemPrompt:                   defaultSystemPrompt,
+		ResponseMode:                   ResponseModeStandard,
+		ReplyStyle:                     ReplyStyleAssistant,
+		PromptChineseSlangText:         defaultPromptChineseSlang,
+		PromptPlaintextRulesText:       defaultPromptPlaintextRules,
+		PromptTimeTemplate:             defaultPromptTimeTemplate,
+		PromptGroupSenderTemplate:      defaultPromptGroupSenderTemplate,
+		PromptImageOnlyText:            defaultPromptImageOnly,
+		PromptWakeOnlyText:             defaultPromptWakeOnly,
+		ErrorReplyPrefix:               "出错了：",
+		SendRetryAttempts:              3,
+		SendChunkIntervalMS:            300,
+		ProactiveReplyRouterPrompt:     defaultProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:           defaultProactiveReplyPrompt,
+		ChatInEnabled:                  boolPointer(true),
+		ChatInLevel:                    defaultChatInLevel,
+		NaturalInterjectionEnabled:     boolPointer(false),
+		MaxInputChars:                  2000,
+		MaxReplyChars:                  3500,
+		DirectReplyChunkSize:           900,
+		ForwardReplyThreshold:          900,
+		RecallReplyMode:                RecallReplyModeLLMSummary,
+		RecallReplyAutoDeleteEnabled:   boolPointer(false),
+		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:      boolPointer(true),
+		BotReplyLoopDetectionEnabled:   boolPointer(true),
+		ReplyAccountSafetyAuditEnabled: boolPointer(false),
+		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
@@ -962,7 +969,6 @@ func DefaultBotConfig() BotConfig {
 		MaxBotConcurrency:       8,
 		RequestTimeout:          180 * time.Second,
 		AgentEnabled:            true,
-		AgentWorkDir:            ".",
 		AgentMaxSteps:           agent.DefaultMaxSteps,
 		AgentSkillRoots:         []string{},
 		AgentCommandAllowlist:   []string{},
@@ -1098,6 +1104,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.LLMIdentityMaskingEnabled == nil {
 		cfg.LLMIdentityMaskingEnabled = boolPointer(true)
 	}
+	if cfg.ReplyAccountSafetyAuditEnabled == nil {
+		cfg.ReplyAccountSafetyAuditEnabled = boolPointer(false)
+	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
 	}
@@ -1146,9 +1155,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = defaults.RequestTimeout
 	}
-	if strings.TrimSpace(cfg.AgentWorkDir) == "" {
-		cfg.AgentWorkDir = defaults.AgentWorkDir
-	}
 	if cfg.AgentMaxSteps <= 0 {
 		cfg.AgentMaxSteps = defaults.AgentMaxSteps
 	}
@@ -1172,7 +1178,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.AgentBrowserCDPURL = defaults.AgentBrowserCDPURL
 	}
 	agentDefaults := agent.Config{
-		WorkDir:       cfg.AgentWorkDir,
+		WorkDir:       AgentWorkspaceDir(),
 		SkillRoots:    cfg.AgentSkillRoots,
 		MCPConfigPath: cfg.AgentMCPConfigPath,
 	}.WithDefaults()
@@ -1222,92 +1228,92 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 	cfg = cfg.WithDefaults()
 	// token 只返回 configured 标志，不把保存的密钥明文暴露给普通配置接口。
 	return ConfigPayload{
-		ID:                           cfg.ID,
-		Name:                         cfg.Name,
-		Platform:                     cfg.Platform,
-		AvatarURL:                    cfg.AvatarURL,
-		Enabled:                      cfg.Enabled,
-		OneBotReverseWSEndpoint:      cfg.OneBotReverseWSEndpoint,
-		OneBotAccessTokenConfigured:  cfg.OneBotAccessToken != "",
-		TelegramBotTokenConfigured:   cfg.TelegramBotToken != "",
-		TelegramAPIBaseURL:           cfg.TelegramAPIBaseURL,
-		TelegramProxyURL:             cfg.TelegramProxyURL,
-		NoneBotBridgeEnabled:         cfg.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:        cfg.NoneBotBridgeEndpoint,
-		NoneBotBridgeTokenConfigured: cfg.NoneBotBridgeToken != "",
-		BotAccount:                   cfg.BotAccount,
-		OwnerID:                      cfg.OwnerID,
-		OwnerLoginEnabled:            cfg.OwnerLoginEnabled,
-		OwnerLLMConfigEnabled:        copyBoolPointer(cfg.OwnerLLMConfigEnabled),
-		GroupTriggers:                append([]string(nil), cfg.GroupTriggers...),
-		GroupTriggerMode:             cfg.GroupTriggerMode,
-		DisabledGroups:               append([]string(nil), cfg.DisabledGroups...),
-		DisabledUsers:                append([]string(nil), cfg.DisabledUsers...),
-		GroupAdmission:               cfg.GroupAdmission.WithDefaults(),
-		ReplyGate:                    cfg.ReplyGate.Clone(),
-		WelcomeEnabled:               cfg.WelcomeEnabled,
-		WelcomeMessage:               cfg.WelcomeMessage,
-		SystemPrompt:                 cfg.SystemPrompt,
-		ResponseMode:                 cfg.ResponseMode,
-		ReplyStyle:                   cfg.ReplyStyle,
-		DebugModeEnabled:             cfg.DebugModeEnabled,
-		ReplyReferenceMode:           cfg.ReplyReferenceMode,
-		MentionUserMode:              cfg.MentionUserMode,
-		MarkdownToPlain:              copyBoolPointer(cfg.MarkdownToPlain),
-		ErrorNotifyEnabled:           copyBoolPointer(cfg.ErrorNotifyEnabled),
-		ErrorReplyPrefix:             cfg.ErrorReplyPrefix,
-		SendRetryAttempts:            cfg.SendRetryAttempts,
-		SendChunkIntervalMS:          cfg.SendChunkIntervalMS,
-		PromptInjectTime:             copyBoolPointer(cfg.PromptInjectTime),
-		PromptInjectPlaintextRules:   copyBoolPointer(cfg.PromptInjectPlaintextRules),
-		PromptInjectGroupSender:      copyBoolPointer(cfg.PromptInjectGroupSender),
-		PromptChineseSlangHint:       copyBoolPointer(cfg.PromptChineseSlangHint),
-		PromptChineseSlangText:       cfg.PromptChineseSlangText,
-		PromptPlaintextRulesText:     cfg.PromptPlaintextRulesText,
-		PromptTimeTemplate:           cfg.PromptTimeTemplate,
-		PromptGroupSenderTemplate:    cfg.PromptGroupSenderTemplate,
-		PromptImageOnlyText:          cfg.PromptImageOnlyText,
-		PromptWakeOnlyText:           cfg.PromptWakeOnlyText,
-		ModelRoles:                   normalizeModelRoles(cfg.ModelRoles),
-		BotReplyLoopDetectionEnabled: copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
-		ProactiveReplyRouterPrompt:   cfg.ProactiveReplyRouterPrompt,
-		ProactiveReplyPrompt:         cfg.ProactiveReplyPrompt,
-		MaxInputChars:                cfg.MaxInputChars,
-		MaxReplyChars:                cfg.MaxReplyChars,
-		DirectReplyChunkSize:         cfg.DirectReplyChunkSize,
-		ForwardReplyThreshold:        cfg.ForwardReplyThreshold,
-		RecallReplyMode:              cfg.RecallReplyMode,
-		RecallReplyAutoDeleteEnabled: copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
-		RecallReplyTTLSeconds:        cfg.RecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:    copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
-		MaxContextTokens:             cfg.MaxContextTokens,
-		RecentHistoryTokenBudget:     cfg.RecentHistoryTokenBudget,
-		RecentContextLimit:           cfg.RecentContextLimit,
-		ContextSummaryThreshold:      cfg.ContextSummaryThreshold,
-		LongTermMemoryEnabled:        copyBoolPointer(cfg.LongTermMemoryEnabled),
-		CrossGroupMemoryEnabled:      copyBoolPointer(cfg.CrossGroupMemoryEnabled),
-		DictSegmentEnabled:           copyBoolPointer(cfg.DictSegmentEnabled),
-		SemanticSearchEnabled:        copyBoolPointer(cfg.SemanticSearchEnabled),
-		ProactiveReplyChance:         cfg.ProactiveReplyChance,
-		ProactiveReplyThreshold:      cfg.ProactiveReplyThreshold,
-		ChatInEnabled:                copyBoolPointer(cfg.ChatInEnabled),
-		ChatInLevel:                  cfg.ChatInLevel,
-		ChatInThreshold:              cfg.ChatInThreshold,
-		ChatInChance:                 cfg.ChatInChance,
-		ChatInCooldownSeconds:        cfg.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:   copyBoolPointer(cfg.NaturalInterjectionEnabled),
-		ReplyRules:                   append([]ReplyRule(nil), cfg.ReplyRules...),
-		MaxBotConcurrency:            cfg.MaxBotConcurrency,
-		RequestTimeoutMS:             cfg.RequestTimeout.Milliseconds(),
-		AgentEnabled:                 cfg.AgentEnabled,
-		AgentWorkDir:                 cfg.AgentWorkDir,
-		AgentMaxSteps:                cfg.AgentMaxSteps,
-		AgentSkillRoots:              append([]string(nil), cfg.AgentSkillRoots...),
-		AgentMCPConfigPath:           cfg.AgentMCPConfigPath,
-		AgentCommandAllowlist:        append([]string(nil), cfg.AgentCommandAllowlist...),
-		AgentCommandTimeoutMS:        cfg.AgentCommandTimeoutMS,
-		AgentBrowserCDPURL:           cfg.AgentBrowserCDPURL,
-		AgentBrowserTimeoutMS:        cfg.AgentBrowserTimeoutMS,
+		ID:                             cfg.ID,
+		Name:                           cfg.Name,
+		Platform:                       cfg.Platform,
+		AvatarURL:                      cfg.AvatarURL,
+		Enabled:                        cfg.Enabled,
+		OneBotReverseWSEndpoint:        cfg.OneBotReverseWSEndpoint,
+		OneBotAccessTokenConfigured:    cfg.OneBotAccessToken != "",
+		TelegramBotTokenConfigured:     cfg.TelegramBotToken != "",
+		TelegramAPIBaseURL:             cfg.TelegramAPIBaseURL,
+		TelegramProxyURL:               cfg.TelegramProxyURL,
+		NoneBotBridgeEnabled:           cfg.NoneBotBridgeEnabled,
+		NoneBotBridgeEndpoint:          cfg.NoneBotBridgeEndpoint,
+		NoneBotBridgeTokenConfigured:   cfg.NoneBotBridgeToken != "",
+		BotAccount:                     cfg.BotAccount,
+		OwnerID:                        cfg.OwnerID,
+		OwnerLoginEnabled:              cfg.OwnerLoginEnabled,
+		OwnerLLMConfigEnabled:          copyBoolPointer(cfg.OwnerLLMConfigEnabled),
+		GroupTriggers:                  append([]string(nil), cfg.GroupTriggers...),
+		GroupTriggerMode:               cfg.GroupTriggerMode,
+		DisabledGroups:                 append([]string(nil), cfg.DisabledGroups...),
+		DisabledUsers:                  append([]string(nil), cfg.DisabledUsers...),
+		GroupAdmission:                 cfg.GroupAdmission.WithDefaults(),
+		ReplyGate:                      cfg.ReplyGate.Clone(),
+		WelcomeEnabled:                 cfg.WelcomeEnabled,
+		WelcomeMessage:                 cfg.WelcomeMessage,
+		SystemPrompt:                   cfg.SystemPrompt,
+		ResponseMode:                   cfg.ResponseMode,
+		ReplyStyle:                     cfg.ReplyStyle,
+		DebugModeEnabled:               cfg.DebugModeEnabled,
+		ReplyReferenceMode:             cfg.ReplyReferenceMode,
+		MentionUserMode:                cfg.MentionUserMode,
+		MarkdownToPlain:                copyBoolPointer(cfg.MarkdownToPlain),
+		ErrorNotifyEnabled:             copyBoolPointer(cfg.ErrorNotifyEnabled),
+		ErrorReplyPrefix:               cfg.ErrorReplyPrefix,
+		SendRetryAttempts:              cfg.SendRetryAttempts,
+		SendChunkIntervalMS:            cfg.SendChunkIntervalMS,
+		PromptInjectTime:               copyBoolPointer(cfg.PromptInjectTime),
+		PromptInjectPlaintextRules:     copyBoolPointer(cfg.PromptInjectPlaintextRules),
+		PromptInjectGroupSender:        copyBoolPointer(cfg.PromptInjectGroupSender),
+		PromptChineseSlangHint:         copyBoolPointer(cfg.PromptChineseSlangHint),
+		PromptChineseSlangText:         cfg.PromptChineseSlangText,
+		PromptPlaintextRulesText:       cfg.PromptPlaintextRulesText,
+		PromptTimeTemplate:             cfg.PromptTimeTemplate,
+		PromptGroupSenderTemplate:      cfg.PromptGroupSenderTemplate,
+		PromptImageOnlyText:            cfg.PromptImageOnlyText,
+		PromptWakeOnlyText:             cfg.PromptWakeOnlyText,
+		ModelRoles:                     normalizeModelRoles(cfg.ModelRoles),
+		BotReplyLoopDetectionEnabled:   copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
+		ReplyAccountSafetyAuditEnabled: copyBoolPointer(cfg.ReplyAccountSafetyAuditEnabled),
+		ProactiveReplyRouterPrompt:     cfg.ProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:           cfg.ProactiveReplyPrompt,
+		MaxInputChars:                  cfg.MaxInputChars,
+		MaxReplyChars:                  cfg.MaxReplyChars,
+		DirectReplyChunkSize:           cfg.DirectReplyChunkSize,
+		ForwardReplyThreshold:          cfg.ForwardReplyThreshold,
+		RecallReplyMode:                cfg.RecallReplyMode,
+		RecallReplyAutoDeleteEnabled:   copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
+		RecallReplyTTLSeconds:          cfg.RecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:      copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
+		MaxContextTokens:               cfg.MaxContextTokens,
+		RecentHistoryTokenBudget:       cfg.RecentHistoryTokenBudget,
+		RecentContextLimit:             cfg.RecentContextLimit,
+		ContextSummaryThreshold:        cfg.ContextSummaryThreshold,
+		LongTermMemoryEnabled:          copyBoolPointer(cfg.LongTermMemoryEnabled),
+		CrossGroupMemoryEnabled:        copyBoolPointer(cfg.CrossGroupMemoryEnabled),
+		DictSegmentEnabled:             copyBoolPointer(cfg.DictSegmentEnabled),
+		SemanticSearchEnabled:          copyBoolPointer(cfg.SemanticSearchEnabled),
+		ProactiveReplyChance:           cfg.ProactiveReplyChance,
+		ProactiveReplyThreshold:        cfg.ProactiveReplyThreshold,
+		ChatInEnabled:                  copyBoolPointer(cfg.ChatInEnabled),
+		ChatInLevel:                    cfg.ChatInLevel,
+		ChatInThreshold:                cfg.ChatInThreshold,
+		ChatInChance:                   cfg.ChatInChance,
+		ChatInCooldownSeconds:          cfg.ChatInCooldownSeconds,
+		NaturalInterjectionEnabled:     copyBoolPointer(cfg.NaturalInterjectionEnabled),
+		ReplyRules:                     append([]ReplyRule(nil), cfg.ReplyRules...),
+		MaxBotConcurrency:              cfg.MaxBotConcurrency,
+		RequestTimeoutMS:               cfg.RequestTimeout.Milliseconds(),
+		AgentEnabled:                   cfg.AgentEnabled,
+		AgentMaxSteps:                  cfg.AgentMaxSteps,
+		AgentSkillRoots:                append([]string(nil), cfg.AgentSkillRoots...),
+		AgentMCPConfigPath:             cfg.AgentMCPConfigPath,
+		AgentCommandAllowlist:          append([]string(nil), cfg.AgentCommandAllowlist...),
+		AgentCommandTimeoutMS:          cfg.AgentCommandTimeoutMS,
+		AgentBrowserCDPURL:             cfg.AgentBrowserCDPURL,
+		AgentBrowserTimeoutMS:          cfg.AgentBrowserTimeoutMS,
 	}
 }
 
@@ -1353,92 +1359,92 @@ func payloadFromProfileSet(set ProfileSet, convert func(BotConfig) ConfigPayload
 // ConfigFromPayload 把前端 payload 合并旧密钥后转为内部配置。
 func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	cfg := BotConfig{
-		ID:                           strings.TrimSpace(payload.ID),
-		Name:                         payload.Name,
-		Platform:                     payload.Platform,
-		AvatarURL:                    strings.TrimSpace(payload.AvatarURL),
-		Enabled:                      payload.Enabled,
-		OneBotReverseWSEndpoint:      payload.OneBotReverseWSEndpoint,
-		OneBotAccessToken:            payload.OneBotAccessToken,
-		TelegramBotToken:             payload.TelegramBotToken,
-		TelegramAPIBaseURL:           payload.TelegramAPIBaseURL,
-		TelegramProxyURL:             payload.TelegramProxyURL,
-		NoneBotBridgeEnabled:         payload.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:        payload.NoneBotBridgeEndpoint,
-		NoneBotBridgeToken:           payload.NoneBotBridgeToken,
-		BotAccount:                   payload.BotAccount,
-		OwnerID:                      payload.OwnerID,
-		OwnerLoginEnabled:            payload.OwnerLoginEnabled,
-		OwnerLLMConfigEnabled:        copyBoolPointer(payload.OwnerLLMConfigEnabled),
-		GroupTriggers:                payload.GroupTriggers,
-		GroupTriggerMode:             payload.GroupTriggerMode,
-		DisabledGroups:               payload.DisabledGroups,
-		DisabledUsers:                payload.DisabledUsers,
-		GroupAdmission:               payload.GroupAdmission,
-		ReplyGate:                    payload.ReplyGate.Clone(),
-		WelcomeEnabled:               payload.WelcomeEnabled,
-		WelcomeMessage:               payload.WelcomeMessage,
-		SystemPrompt:                 payload.SystemPrompt,
-		ResponseMode:                 payload.ResponseMode,
-		ReplyStyle:                   payload.ReplyStyle,
-		DebugModeEnabled:             payload.DebugModeEnabled,
-		ReplyReferenceMode:           payload.ReplyReferenceMode,
-		MentionUserMode:              payload.MentionUserMode,
-		MarkdownToPlain:              copyBoolPointer(payload.MarkdownToPlain),
-		ErrorNotifyEnabled:           copyBoolPointer(payload.ErrorNotifyEnabled),
-		ErrorReplyPrefix:             payload.ErrorReplyPrefix,
-		SendRetryAttempts:            payload.SendRetryAttempts,
-		SendChunkIntervalMS:          payload.SendChunkIntervalMS,
-		PromptInjectTime:             copyBoolPointer(payload.PromptInjectTime),
-		PromptInjectPlaintextRules:   copyBoolPointer(payload.PromptInjectPlaintextRules),
-		PromptInjectGroupSender:      copyBoolPointer(payload.PromptInjectGroupSender),
-		PromptChineseSlangHint:       copyBoolPointer(payload.PromptChineseSlangHint),
-		PromptChineseSlangText:       payload.PromptChineseSlangText,
-		PromptPlaintextRulesText:     payload.PromptPlaintextRulesText,
-		PromptTimeTemplate:           payload.PromptTimeTemplate,
-		PromptGroupSenderTemplate:    payload.PromptGroupSenderTemplate,
-		PromptImageOnlyText:          payload.PromptImageOnlyText,
-		PromptWakeOnlyText:           payload.PromptWakeOnlyText,
-		ModelRoles:                   normalizeModelRoles(payload.ModelRoles),
-		BotReplyLoopDetectionEnabled: copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
-		ProactiveReplyRouterPrompt:   payload.ProactiveReplyRouterPrompt,
-		ProactiveReplyPrompt:         payload.ProactiveReplyPrompt,
-		MaxInputChars:                payload.MaxInputChars,
-		MaxReplyChars:                payload.MaxReplyChars,
-		DirectReplyChunkSize:         payload.DirectReplyChunkSize,
-		ForwardReplyThreshold:        payload.ForwardReplyThreshold,
-		RecallReplyMode:              payload.RecallReplyMode,
-		RecallReplyAutoDeleteEnabled: copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
-		RecallReplyTTLSeconds:        payload.RecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:    copyBoolPointer(payload.LLMIdentityMaskingEnabled),
-		MaxContextTokens:             payload.MaxContextTokens,
-		RecentHistoryTokenBudget:     payload.RecentHistoryTokenBudget,
-		RecentContextLimit:           payload.RecentContextLimit,
-		ContextSummaryThreshold:      payload.ContextSummaryThreshold,
-		LongTermMemoryEnabled:        copyBoolPointer(payload.LongTermMemoryEnabled),
-		CrossGroupMemoryEnabled:      copyBoolPointer(payload.CrossGroupMemoryEnabled),
-		DictSegmentEnabled:           copyBoolPointer(payload.DictSegmentEnabled),
-		SemanticSearchEnabled:        copyBoolPointer(payload.SemanticSearchEnabled),
-		ProactiveReplyChance:         payload.ProactiveReplyChance,
-		ProactiveReplyThreshold:      payload.ProactiveReplyThreshold,
-		ChatInEnabled:                copyBoolPointer(payload.ChatInEnabled),
-		ChatInLevel:                  payload.ChatInLevel,
-		ChatInThreshold:              payload.ChatInThreshold,
-		ChatInChance:                 payload.ChatInChance,
-		ChatInCooldownSeconds:        payload.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:   copyBoolPointer(payload.NaturalInterjectionEnabled),
-		ReplyRules:                   append([]ReplyRule(nil), payload.ReplyRules...),
-		MaxBotConcurrency:            payload.MaxBotConcurrency,
-		RequestTimeout:               time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
-		AgentEnabled:                 payload.AgentEnabled,
-		AgentWorkDir:                 payload.AgentWorkDir,
-		AgentMaxSteps:                payload.AgentMaxSteps,
-		AgentSkillRoots:              append([]string(nil), payload.AgentSkillRoots...),
-		AgentMCPConfigPath:           payload.AgentMCPConfigPath,
-		AgentCommandAllowlist:        append([]string(nil), payload.AgentCommandAllowlist...),
-		AgentCommandTimeoutMS:        payload.AgentCommandTimeoutMS,
-		AgentBrowserCDPURL:           payload.AgentBrowserCDPURL,
-		AgentBrowserTimeoutMS:        payload.AgentBrowserTimeoutMS,
+		ID:                             strings.TrimSpace(payload.ID),
+		Name:                           payload.Name,
+		Platform:                       payload.Platform,
+		AvatarURL:                      strings.TrimSpace(payload.AvatarURL),
+		Enabled:                        payload.Enabled,
+		OneBotReverseWSEndpoint:        payload.OneBotReverseWSEndpoint,
+		OneBotAccessToken:              payload.OneBotAccessToken,
+		TelegramBotToken:               payload.TelegramBotToken,
+		TelegramAPIBaseURL:             payload.TelegramAPIBaseURL,
+		TelegramProxyURL:               payload.TelegramProxyURL,
+		NoneBotBridgeEnabled:           payload.NoneBotBridgeEnabled,
+		NoneBotBridgeEndpoint:          payload.NoneBotBridgeEndpoint,
+		NoneBotBridgeToken:             payload.NoneBotBridgeToken,
+		BotAccount:                     payload.BotAccount,
+		OwnerID:                        payload.OwnerID,
+		OwnerLoginEnabled:              payload.OwnerLoginEnabled,
+		OwnerLLMConfigEnabled:          copyBoolPointer(payload.OwnerLLMConfigEnabled),
+		GroupTriggers:                  payload.GroupTriggers,
+		GroupTriggerMode:               payload.GroupTriggerMode,
+		DisabledGroups:                 payload.DisabledGroups,
+		DisabledUsers:                  payload.DisabledUsers,
+		GroupAdmission:                 payload.GroupAdmission,
+		ReplyGate:                      payload.ReplyGate.Clone(),
+		WelcomeEnabled:                 payload.WelcomeEnabled,
+		WelcomeMessage:                 payload.WelcomeMessage,
+		SystemPrompt:                   payload.SystemPrompt,
+		ResponseMode:                   payload.ResponseMode,
+		ReplyStyle:                     payload.ReplyStyle,
+		DebugModeEnabled:               payload.DebugModeEnabled,
+		ReplyReferenceMode:             payload.ReplyReferenceMode,
+		MentionUserMode:                payload.MentionUserMode,
+		MarkdownToPlain:                copyBoolPointer(payload.MarkdownToPlain),
+		ErrorNotifyEnabled:             copyBoolPointer(payload.ErrorNotifyEnabled),
+		ErrorReplyPrefix:               payload.ErrorReplyPrefix,
+		SendRetryAttempts:              payload.SendRetryAttempts,
+		SendChunkIntervalMS:            payload.SendChunkIntervalMS,
+		PromptInjectTime:               copyBoolPointer(payload.PromptInjectTime),
+		PromptInjectPlaintextRules:     copyBoolPointer(payload.PromptInjectPlaintextRules),
+		PromptInjectGroupSender:        copyBoolPointer(payload.PromptInjectGroupSender),
+		PromptChineseSlangHint:         copyBoolPointer(payload.PromptChineseSlangHint),
+		PromptChineseSlangText:         payload.PromptChineseSlangText,
+		PromptPlaintextRulesText:       payload.PromptPlaintextRulesText,
+		PromptTimeTemplate:             payload.PromptTimeTemplate,
+		PromptGroupSenderTemplate:      payload.PromptGroupSenderTemplate,
+		PromptImageOnlyText:            payload.PromptImageOnlyText,
+		PromptWakeOnlyText:             payload.PromptWakeOnlyText,
+		ModelRoles:                     normalizeModelRoles(payload.ModelRoles),
+		BotReplyLoopDetectionEnabled:   copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
+		ReplyAccountSafetyAuditEnabled: copyBoolPointer(payload.ReplyAccountSafetyAuditEnabled),
+		ProactiveReplyRouterPrompt:     payload.ProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:           payload.ProactiveReplyPrompt,
+		MaxInputChars:                  payload.MaxInputChars,
+		MaxReplyChars:                  payload.MaxReplyChars,
+		DirectReplyChunkSize:           payload.DirectReplyChunkSize,
+		ForwardReplyThreshold:          payload.ForwardReplyThreshold,
+		RecallReplyMode:                payload.RecallReplyMode,
+		RecallReplyAutoDeleteEnabled:   copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
+		RecallReplyTTLSeconds:          payload.RecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:      copyBoolPointer(payload.LLMIdentityMaskingEnabled),
+		MaxContextTokens:               payload.MaxContextTokens,
+		RecentHistoryTokenBudget:       payload.RecentHistoryTokenBudget,
+		RecentContextLimit:             payload.RecentContextLimit,
+		ContextSummaryThreshold:        payload.ContextSummaryThreshold,
+		LongTermMemoryEnabled:          copyBoolPointer(payload.LongTermMemoryEnabled),
+		CrossGroupMemoryEnabled:        copyBoolPointer(payload.CrossGroupMemoryEnabled),
+		DictSegmentEnabled:             copyBoolPointer(payload.DictSegmentEnabled),
+		SemanticSearchEnabled:          copyBoolPointer(payload.SemanticSearchEnabled),
+		ProactiveReplyChance:           payload.ProactiveReplyChance,
+		ProactiveReplyThreshold:        payload.ProactiveReplyThreshold,
+		ChatInEnabled:                  copyBoolPointer(payload.ChatInEnabled),
+		ChatInLevel:                    payload.ChatInLevel,
+		ChatInThreshold:                payload.ChatInThreshold,
+		ChatInChance:                   payload.ChatInChance,
+		ChatInCooldownSeconds:          payload.ChatInCooldownSeconds,
+		NaturalInterjectionEnabled:     copyBoolPointer(payload.NaturalInterjectionEnabled),
+		ReplyRules:                     append([]ReplyRule(nil), payload.ReplyRules...),
+		MaxBotConcurrency:              payload.MaxBotConcurrency,
+		RequestTimeout:                 time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
+		AgentEnabled:                   payload.AgentEnabled,
+		AgentMaxSteps:                  payload.AgentMaxSteps,
+		AgentSkillRoots:                append([]string(nil), payload.AgentSkillRoots...),
+		AgentMCPConfigPath:             payload.AgentMCPConfigPath,
+		AgentCommandAllowlist:          append([]string(nil), payload.AgentCommandAllowlist...),
+		AgentCommandTimeoutMS:          payload.AgentCommandTimeoutMS,
+		AgentBrowserCDPURL:             payload.AgentBrowserCDPURL,
+		AgentBrowserTimeoutMS:          payload.AgentBrowserTimeoutMS,
 	}.WithDefaults()
 	if cfg.OneBotAccessToken == "" {
 		// 前端留空 token 表示沿用旧值，不表示删除鉴权。

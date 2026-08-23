@@ -111,12 +111,13 @@ func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source
 	if messagesContainImages(messages) {
 		group = llm.GroupVision
 	}
+	// 和上面的脱敏同理：定时轮询进来的 ctx 没带用量上下文，补上才记得到账。
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, source), kind.usageTag())
 	comment, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		llmResp, llmErr := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if llmErr != nil {
 			return "", llmErr
 		}
-		r.recordLLMUsage(ctx, source, llmResp.Provider, llmResp.Model, llmResp.Usage, kind.usageTag())
 		return normalizeReply(llmResp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	})
 	if err != nil {

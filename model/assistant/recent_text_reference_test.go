@@ -108,7 +108,7 @@ func TestRecentTextReferenceIgnoresInterleavedGroupNoise(t *testing.T) {
 func TestRecentTextReferenceSurvivesIntoAgentProviderRequest(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"action":"final","content":"GLM-5.3 的综合能力不错。"}`}
 	runtime := NewRuntime(BotConfig{
-		AgentEnabled: true, AgentWorkDir: t.TempDir(), AgentMaxSteps: 3,
+		AgentEnabled: true, AgentMaxSteps: 3,
 	}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	for index := 0; index < 24; index++ {
 		runtime.remember(textReferenceEvent(int64(10+index), "user-a", "old-"+time.Unix(int64(index), 0).Format("150405"), strings.Repeat("旧上下文 ", 80)))
