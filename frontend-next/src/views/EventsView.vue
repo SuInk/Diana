@@ -163,6 +163,21 @@
               <div v-if="event.decision === 'replied' || event.handled" class="event-detail-reply">
                 <strong>回复结果</strong>
                 <p>{{ replyResultText(event) }}</p>
+                <p v-if="deliverySummary(event)" class="muted">{{ deliverySummary(event) }}</p>
+              </div>
+              <div v-if="event.subtasks?.length" class="event-subtasks">
+                <strong>触发的后台任务</strong>
+                <ul>
+                  <li v-for="task in event.subtasks" :key="task.task_id" :class="subtaskClass(task)">
+                    <span class="subtask-name">{{ task.name || task.kind }}</span>
+                    <span class="badge" :class="subtaskClass(task)">{{ subtaskPhaseLabel(task) }}</span>
+                    <span v-if="subtaskProgress(task)" class="muted">{{ subtaskProgress(task) }}</span>
+                    <span v-if="subtaskDuration(task)" class="muted">{{ subtaskDuration(task) }}</span>
+                    <span class="muted mono">{{ task.task_id }}</span>
+                    <p v-if="task.error" class="event-error">{{ task.error }}</p>
+                    <p v-else-if="task.detail" class="muted">{{ task.detail }}</p>
+                  </li>
+                </ul>
               </div>
               <div v-if="event.delivery_stage" class="event-delivery" :class="[deliveryClass(event), { quiet: deliverySettled(event) }]">
                 <component :is="deliveryIcon(event)" :size="deliverySettled(event) ? 14 : 16" aria-hidden="true" />
@@ -301,6 +316,8 @@ import {
   getAssistantEvents,
   type AppLogEntry,
   type AssistantEventDetail,
+  type AssistantEventDelivery,
+  type AssistantEventSubtask,
   type AssistantEventRange,
   type AssistantEventResultFilter,
   type AssistantEventsResponse
@@ -565,9 +582,73 @@ function fallbackDecisionReason(event: AssistantEventDetail): string {
   return "消息未命中回复规则，旧记录没有保存更详细的判断原因";
 }
 
+function subtaskPhaseLabel(task: AssistantEventSubtask): string {
+  switch (task.phase) {
+    case "queued":
+      return "排队中";
+    case "running":
+      return "进行中";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    default:
+      return task.phase || "进行中";
+  }
+}
+
+function subtaskClass(task: AssistantEventSubtask): string {
+  if (task.phase === "failed" || task.error) return "err";
+  if (task.phase === "completed") return "ok";
+  return "warn";
+}
+
+function subtaskProgress(task: AssistantEventSubtask): string {
+  if (!task.total || task.total <= 1) return "";
+  return `${task.completed || 0}/${task.total}`;
+}
+
+// 未完成的任务按「已经跑了多久」显示：卡住的任务正是要在这里一眼看出来的。
+function subtaskDuration(task: AssistantEventSubtask): string {
+  const started = Date.parse(task.started_at);
+  if (Number.isNaN(started)) return "";
+  const end = task.finished_at ? Date.parse(task.finished_at) : Date.now();
+  if (Number.isNaN(end) || end < started) return "";
+  const elapsed = end - started;
+  const text = formatDuration(elapsed);
+  return task.finished_at ? text : `已运行 ${text}`;
+}
+
+// 纯文字回复时不显示这一行——「本轮发出：1 条消息」没有信息量。只有发过媒体或
+// 转发卡片时才补，那些恰恰是回复正文说不出来的部分。
+function deliverySummary(event: AssistantEventDetail): string {
+  const delivery = event.delivery;
+  if (!delivery) return "";
+  const hasMedia = Boolean(delivery.images || delivery.videos || delivery.audios || delivery.forward_cards);
+  if (!hasMedia) return "";
+  return `本轮发出：${deliveryParts(delivery).join("、")}`;
+}
+
+function deliveryParts(delivery?: AssistantEventDelivery): string[] {
+  if (!delivery) return [];
+  const parts: string[] = [];
+  if (delivery.forward_cards) {
+    const nodes = delivery.forward_nodes ? `（${delivery.forward_nodes} 条）` : "";
+    parts.push(`${delivery.forward_cards} 张转发卡片${nodes}`);
+  }
+  if (delivery.messages) parts.push(`${delivery.messages} 条消息`);
+  if (delivery.images) parts.push(`${delivery.images} 张图片`);
+  if (delivery.videos) parts.push(`${delivery.videos} 个视频`);
+  if (delivery.audios) parts.push(`${delivery.audios} 条语音`);
+  return parts;
+}
+
 function replyResultText(event: AssistantEventDetail): string {
   if (event.reply?.trim()) return displayMessageText(event.reply);
   if (event.error?.trim()) return `机器人已发送错误说明：${displayMessageText(event.error)}`;
+  // 以前这里一律写「未保存回复正文」。发媒体不发文字是正常情况，说成没保存是误导。
+  const parts = deliveryParts(event.delivery);
+  if (parts.length) return `本轮没有文字回复，只发了${parts.join("、")}`;
   return "已完成回复，但该历史记录未保存回复正文";
 }
 
@@ -1144,6 +1225,46 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--muted);
+}
+
+.event-subtasks {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.event-subtasks > strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.event-subtasks ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.event-subtasks li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.event-subtasks li p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
+
+.subtask-name {
+  font-weight: 500;
 }
 
 .event-delivery.quiet {

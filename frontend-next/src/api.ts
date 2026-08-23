@@ -516,7 +516,24 @@ export interface BotStatus {
   plugins: PluginState[];
   recent_events?: BotEvent[];
   active_workers: number;
+  /** 正在跑的后台子任务（生成图片、文档 OCR 等）。 */
+  subagent_tasks?: SubagentTask[];
+  active_subagent_tasks?: number;
+  /** 入站队列积压。排查「机器人怎么不理我」最直接的指标。 */
+  pending_events?: number;
   last_error?: string;
+  updated_at: string;
+}
+
+/** 运行中的后台子任务。跑完即从状态里消失，历史记录见事件详情的 subtasks。 */
+export interface SubagentTask {
+  id: string;
+  kind: string;
+  name: string;
+  phase: string;
+  completed?: number;
+  total?: number;
+  started_at: string;
   updated_at: string;
 }
 
@@ -1290,6 +1307,33 @@ export interface AssistantEventDetail extends BotEvent {
   self_echo_at?: string;
   delivery_error?: string;
   images?: AssistantEventImage[];
+  /** 这条消息触发的后台子任务。图片是任务跑完后异步发出去的。 */
+  subtasks?: AssistantEventSubtask[];
+  /** 这一轮实际发出去的内容概览。reply 只是文本，说不出还发了卡片和媒体。 */
+  delivery?: AssistantEventDelivery;
+}
+
+export interface AssistantEventDelivery {
+  messages?: number;
+  images?: number;
+  videos?: number;
+  audios?: number;
+  forward_cards?: number;
+  forward_nodes?: number;
+}
+
+export interface AssistantEventSubtask {
+  task_id: string;
+  kind: string;
+  name: string;
+  phase: string;
+  completed?: number;
+  total?: number;
+  detail?: string;
+  error?: string;
+  started_at: string;
+  updated_at: string;
+  finished_at?: string;
 }
 
 export interface AssistantEventsResponse {

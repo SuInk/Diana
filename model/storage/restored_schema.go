@@ -169,6 +169,25 @@ CREATE TABLE IF NOT EXISTS outbound_delivery_steps (
   PRIMARY KEY (turn_id, step_key)
 );
 
+CREATE TABLE IF NOT EXISTS inbound_event_subtasks (
+  event_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  completed INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  detail TEXT,
+  error TEXT,
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  PRIMARY KEY (event_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbound_event_subtasks_event
+  ON inbound_event_subtasks (event_id, started_at);
+
 CREATE TABLE IF NOT EXISTS inbound_events (
   id TEXT PRIMARY KEY,
   session TEXT NOT NULL,
@@ -364,6 +383,9 @@ func (s *SQLiteStore) ensureInboundAuditColumns() error {
 		{name: "self_echo_at", definition: "INTEGER"},
 		{name: "delivery_error", definition: "TEXT"},
 		{name: "superseded_by", definition: "TEXT"},
+		// 这一轮实际发出去的内容概览（几条消息、几张图、几个视频、有没有转发
+		// 卡片）。reply_text 只是文本，发媒体不发文字时它是空的。
+		{name: "delivery_json", definition: "TEXT"},
 	}
 	for _, column := range columns {
 		if found[column.name] {
