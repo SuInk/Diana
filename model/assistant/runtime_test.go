@@ -1289,7 +1289,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	if !strings.Contains(prompt, "同一发送者紧邻补发") || !strings.Contains(prompt, "发送一条完整回复") || !strings.Contains(prompt, "不要按历史消息逐条作答") {
 		t.Fatalf("system prompt missing adjacent-message merge guidance: %q", prompt)
 	}
-	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") || !strings.Contains(prompt, "都必须放在同一条 OneBot v11 消息里") || !strings.Contains(prompt, "严禁在每个列表项或普通段落前使用 "+notificationSplitMarker) || !strings.Contains(prompt, "语义上确实是下一次独立发言") {
+	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") || !strings.Contains(prompt, "意群边界写 "+notificationSplitMarker) || !strings.Contains(prompt, "严禁在每个列表项前使用 "+notificationSplitMarker) {
 		t.Fatalf("system prompt missing QQ plain-text guidance: %q", prompt)
 	}
 	if strings.Contains(prompt, "需要分段时直接使用换行") {
@@ -1667,10 +1667,10 @@ func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
 	}
 }
 
-// 普通聊天不受影响：空行仍然是分条信号。
-func TestSplitReplySplitsBlankLineParagraphs(t *testing.T) {
+// 空行只是排版：收掉，不分条。分条只认模型显式写的 <dianabr>。
+func TestSplitReplyTreatsBlankLinesAsLayout(t *testing.T) {
 	got := splitReply("第一段\n仍是第一段\n\n第二段", 100)
-	want := []string{"第一段\n仍是第一段", "第二段"}
+	want := []string{"第一段\n仍是第一段\n第二段"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
 	}
@@ -5117,7 +5117,7 @@ func parseTrailingNumber(t *testing.T, line string) int {
 func TestNotificationAndReplyShareTheSameLengthChunking(t *testing.T) {
 	text := strings.Repeat("确定性的事实清单需要完整保留 ", 200)
 	reply := splitReply(text, 300)
-	notification := splitNotification(text, 300)
+	notification := splitReply(text, 300)
 	if len(reply) != len(notification) {
 		t.Fatalf("chunk counts differ: reply=%d notification=%d", len(reply), len(notification))
 	}
@@ -5133,7 +5133,7 @@ func TestNotificationAndReplyShareTheSameLengthChunking(t *testing.T) {
 func TestNotificationChunkFitsTelegramLimit(t *testing.T) {
 	const telegramUTF16Limit = 4096
 	worstCase := strings.Repeat("🐕", notificationChunkSize)
-	chunks := splitNotification(worstCase, notificationChunkSize)
+	chunks := splitReply(worstCase, notificationChunkSize)
 	if len(chunks) != 1 {
 		t.Fatalf("worst case should stay in one message, got %d chunks", len(chunks))
 	}

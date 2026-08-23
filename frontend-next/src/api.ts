@@ -1090,6 +1090,7 @@ export interface SystemVersion {
   git_available: boolean;
   deployment_mode: "git" | "release";
   update_supported: boolean;
+  update_unsupported_reason?: string;
   head_commit?: string;
   head_subject?: string;
   branch?: string;
@@ -1170,6 +1171,8 @@ export interface UpdateCheckResponse {
   checked_at: string;
   update_available: boolean;
   update_supported: boolean;
+  /** update_supported 为 false 时说明为什么升不了级。 */
+  update_unsupported_reason?: string;
   build_type: BuildType;
   switch_to_release_available: boolean;
   integrity_mode: "git-object-hash" | "sha256";
