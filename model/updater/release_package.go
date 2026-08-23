@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -454,6 +455,12 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	}
 	if err := copyRegularFile(u.executable, helperPath, 0o700); err != nil {
 		return Result{}, fmt.Errorf("stage update helper: %w", err)
+	}
+	// 助手是当前二进制的一份拷贝，落到临时目录就成了一个全新的 Mach-O：macOS 会
+	// 把它当成另一个程序，替换 .app 内容时还要单独申请「App 管理」权限，隐私列表
+	// 里也会多出一条。用同一个 identifier 重签，让它和 Diana 本体是同一个身份。
+	if err := resignMacOSPath(helperPath); err != nil {
+		log.Printf("updater: sign update helper: %v", err)
 	}
 	backupName := time.Now().UTC().Format("20060102T150405Z") + "-" + safePathComponent(u.currentVersion)
 	plan := releaseApplyPlan{

@@ -69,6 +69,8 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 ```
 
+> macOS 上安装器会把运行时装进安装目录里固定的 `Diana.app`，用固定的 `com.suink.diana` 做本地 Ad-hoc 签名，并把 designated requirement 改写成只认这个标识。这样每次更新换了二进制，系统仍然认它是同一个 Diana：麦克风、完全磁盘访问这些授权不会失效，「隐私与安全性」列表里也不会堆出一排同名条目。没装命令行工具（`codesign` 不可用）时会跳过签名，功能不受影响，只是授权可能要重新点一次。
+
 完成后打开 `http://127.0.0.1:18080`。首次生成的管理员账号和密码会显示在终端，并保存在安装目录的 `runtime.env`——请妥善保存，不要公开该文件。
 
 默认安装目录：Linux / macOS 为 `~/.local/share/diana`，Windows 为 `%LOCALAPPDATA%\Diana`。
