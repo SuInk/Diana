@@ -169,6 +169,25 @@ CREATE TABLE IF NOT EXISTS outbound_delivery_steps (
   PRIMARY KEY (turn_id, step_key)
 );
 
+CREATE TABLE IF NOT EXISTS inbound_event_subtasks (
+  event_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  completed INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  detail TEXT,
+  error TEXT,
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  PRIMARY KEY (event_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbound_event_subtasks_event
+  ON inbound_event_subtasks (event_id, started_at);
+
 CREATE TABLE IF NOT EXISTS inbound_events (
   id TEXT PRIMARY KEY,
   session TEXT NOT NULL,

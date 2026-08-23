@@ -32,6 +32,24 @@
         </StatCard>
       </div>
 
+      <!-- 后台子任务（生成图片、文档 OCR 等）跑完即消失，不在提醒/订阅这套持久任务
+           里，此前 WebUI 完全看不到。跑完之后的记录见事件页对应消息的「触发的后台任务」。 -->
+      <section v-if="subagentTasks.length" class="panel" aria-label="运行中的后台任务">
+        <header class="panel-header">
+          <h2>运行中的后台任务</h2>
+          <p class="muted">生成图片、文档识别这类临时任务，完成后从这里消失</p>
+        </header>
+        <ul class="subagent-list">
+          <li v-for="task in subagentTasks" :key="task.id">
+            <span class="subagent-name">{{ task.name || task.kind }}</span>
+            <span class="badge warn">{{ subagentPhaseLabel(task.phase) }}</span>
+            <span v-if="subagentProgress(task)" class="muted">{{ subagentProgress(task) }}</span>
+            <span class="muted">已运行 {{ subagentElapsed(task) }}</span>
+            <span class="muted mono">{{ task.id }}</span>
+          </li>
+        </ul>
+      </section>
+
       <section class="task-filter-band" aria-label="任务筛选">
         <div class="task-filter-group">
           <span class="task-filter-label">类型</span>
@@ -206,7 +224,14 @@ import {
   UserRound,
   UsersRound
 } from "@lucide/vue";
-import { getAssistantTasks, type AssistantTask, type AssistantTaskKind, type AssistantTaskStatus } from "../api";
+import {
+  getAssistantTasks,
+  getBotStatus,
+  type AssistantTask,
+  type AssistantTaskKind,
+  type AssistantTaskStatus,
+  type SubagentTask
+} from "../api";
 import { formatClock, formatNumber, formatTime } from "../format";
 import { navigate } from "../router";
 import { toastError } from "../toast";
@@ -239,6 +264,8 @@ const loading = ref(false);
 const lastLoadedAt = ref<string | null>(null);
 let refreshTimer: number | undefined;
 
+const subagentTasks = ref<SubagentTask[]>([]);
+
 const reminderCount = computed(() => tasks.value.filter((task) => task.kind === "reminder").length);
 const scheduleCount = computed(() => tasks.value.filter((task) => task.kind === "schedule").length);
 const repositoryWatchCount = computed(() => tasks.value.filter((task) => task.kind === "repository_watch").length);
@@ -249,6 +276,32 @@ const quotaCount = computed(() => tasks.value.filter((task) => task.consumes_quo
 const usedCount = computed(() => tasks.value.filter((task) => task.status === "used").length);
 const cancelledCount = computed(() => tasks.value.filter((task) => task.status === "cancelled").length);
 const finishedCount = computed(() => usedCount.value + cancelledCount.value);
+
+function subagentPhaseLabel(phase: string): string {
+  switch (phase) {
+    case "queued":
+      return "排队中";
+    case "running":
+      return "进行中";
+    default:
+      return phase || "进行中";
+  }
+}
+
+function subagentProgress(task: SubagentTask): string {
+  if (!task.total || task.total <= 1) return "";
+  return `${task.completed || 0}/${task.total}`;
+}
+
+function subagentElapsed(task: SubagentTask): string {
+  const started = Date.parse(task.started_at);
+  if (Number.isNaN(started)) return "—";
+  const seconds = Math.max(0, Math.round((Date.now() - started) / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
 
 const filteredTasks = computed(() => {
   const keyword = query.value.trim().toLowerCase();
@@ -267,8 +320,14 @@ async function load(opts?: { silent?: boolean }): Promise<void> {
   if (loading.value) return;
   if (!silent) loading.value = true;
   try {
-    const response = await getAssistantTasks();
+    // 两个数据源：持久任务来自 /api/assistant/tasks，运行中的后台子任务只存在于
+    // 运行时状态里。后者拿不到不该拖垮整页。
+    const [response, status] = await Promise.all([
+      getAssistantTasks(),
+      getBotStatus().catch(() => null)
+    ]);
     tasks.value = response.items;
+    subagentTasks.value = status?.subagent_tasks ?? [];
     lastLoadedAt.value = new Date().toISOString();
   } catch (error) {
     if (!silent) {

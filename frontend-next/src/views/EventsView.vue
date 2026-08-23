@@ -164,6 +164,20 @@
                 <strong>回复结果</strong>
                 <p>{{ replyResultText(event) }}</p>
               </div>
+              <div v-if="event.subtasks?.length" class="event-subtasks">
+                <strong>触发的后台任务</strong>
+                <ul>
+                  <li v-for="task in event.subtasks" :key="task.task_id" :class="subtaskClass(task)">
+                    <span class="subtask-name">{{ task.name || task.kind }}</span>
+                    <span class="badge" :class="subtaskClass(task)">{{ subtaskPhaseLabel(task) }}</span>
+                    <span v-if="subtaskProgress(task)" class="muted">{{ subtaskProgress(task) }}</span>
+                    <span v-if="subtaskDuration(task)" class="muted">{{ subtaskDuration(task) }}</span>
+                    <span class="muted mono">{{ task.task_id }}</span>
+                    <p v-if="task.error" class="event-error">{{ task.error }}</p>
+                    <p v-else-if="task.detail" class="muted">{{ task.detail }}</p>
+                  </li>
+                </ul>
+              </div>
               <div v-if="event.delivery_stage" class="event-delivery" :class="[deliveryClass(event), { quiet: deliverySettled(event) }]">
                 <component :is="deliveryIcon(event)" :size="deliverySettled(event) ? 14 : 16" aria-hidden="true" />
                 <div>
@@ -301,6 +315,7 @@ import {
   getAssistantEvents,
   type AppLogEntry,
   type AssistantEventDetail,
+  type AssistantEventSubtask,
   type AssistantEventRange,
   type AssistantEventResultFilter,
   type AssistantEventsResponse
@@ -563,6 +578,43 @@ function fallbackDecisionReason(event: AssistantEventDetail): string {
   if (event.decision === "replied" || event.handled) return "消息已通过回复路由并完成回答";
   if (event.outcome) return `消息未回复，处理结果为 ${event.outcome}`;
   return "消息未命中回复规则，旧记录没有保存更详细的判断原因";
+}
+
+function subtaskPhaseLabel(task: AssistantEventSubtask): string {
+  switch (task.phase) {
+    case "queued":
+      return "排队中";
+    case "running":
+      return "进行中";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    default:
+      return task.phase || "进行中";
+  }
+}
+
+function subtaskClass(task: AssistantEventSubtask): string {
+  if (task.phase === "failed" || task.error) return "err";
+  if (task.phase === "completed") return "ok";
+  return "warn";
+}
+
+function subtaskProgress(task: AssistantEventSubtask): string {
+  if (!task.total || task.total <= 1) return "";
+  return `${task.completed || 0}/${task.total}`;
+}
+
+// 未完成的任务按「已经跑了多久」显示：卡住的任务正是要在这里一眼看出来的。
+function subtaskDuration(task: AssistantEventSubtask): string {
+  const started = Date.parse(task.started_at);
+  if (Number.isNaN(started)) return "";
+  const end = task.finished_at ? Date.parse(task.finished_at) : Date.now();
+  if (Number.isNaN(end) || end < started) return "";
+  const elapsed = end - started;
+  const text = formatDuration(elapsed);
+  return task.finished_at ? text : `已运行 ${text}`;
 }
 
 function replyResultText(event: AssistantEventDetail): string {
@@ -1144,6 +1196,46 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--muted);
+}
+
+.event-subtasks {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.event-subtasks > strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.event-subtasks ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.event-subtasks li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.event-subtasks li p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
+
+.subtask-name {
+  font-weight: 500;
 }
 
 .event-delivery.quiet {
