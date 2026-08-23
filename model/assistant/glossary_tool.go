@@ -106,7 +106,7 @@ func (t *dianaGlossaryTool) Run(ctx context.Context, input map[string]any) (stri
 }
 
 func (t *dianaGlossaryTool) get(ctx context.Context, store GlossaryStore, input map[string]any) (string, error) {
-	term := TruncateGlossaryText(configToolString(input, "term"), glossaryTermMaxRunes)
+	term := TruncateGlossaryText(configToolString(input, "term"), GlossaryTermMaxRunes)
 	if strings.TrimSpace(term) == "" {
 		return "", fmt.Errorf("要查的词条不能为空")
 	}
@@ -157,8 +157,8 @@ func (t *dianaGlossaryTool) list(ctx context.Context, store GlossaryStore, input
 }
 
 func (t *dianaGlossaryTool) upsert(ctx context.Context, store GlossaryStore, input map[string]any) (string, error) {
-	term := TruncateGlossaryText(configToolString(input, "term"), glossaryTermMaxRunes)
-	meaning := TruncateGlossaryText(configToolString(input, "meaning"), glossaryMeaningMaxRunes)
+	term := TruncateGlossaryText(configToolString(input, "term"), GlossaryTermMaxRunes)
+	meaning := TruncateGlossaryText(configToolString(input, "meaning"), GlossaryMeaningMaxRunes)
 	if strings.TrimSpace(term) == "" {
 		return "", fmt.Errorf("词条不能为空")
 	}
@@ -174,8 +174,8 @@ func (t *dianaGlossaryTool) upsert(ctx context.Context, store GlossaryStore, inp
 		Term:            term,
 		Aliases:         NormalizeGlossaryAliases(term, configToolStringSlice(input, "aliases")),
 		Meaning:         meaning,
-		Example:         TruncateGlossaryText(configToolString(input, "example"), glossaryExampleMaxRunes),
-		Note:            TruncateGlossaryText(configToolString(input, "note"), glossaryNoteMaxRunes),
+		Example:         TruncateGlossaryText(configToolString(input, "example"), GlossaryExampleMaxRunes),
+		Note:            TruncateGlossaryText(configToolString(input, "note"), GlossaryNoteMaxRunes),
 		EditorUserID:    strings.TrimSpace(t.event.UserID),
 		EditorName:      strings.TrimSpace(t.event.SenderNameOrID()),
 		SourceSession:   sessionKey(t.event),
@@ -199,7 +199,7 @@ func (t *dianaGlossaryTool) upsert(ctx context.Context, store GlossaryStore, inp
 }
 
 func (t *dianaGlossaryTool) delete(ctx context.Context, store GlossaryStore, input map[string]any) (string, error) {
-	term := TruncateGlossaryText(configToolString(input, "term"), glossaryTermMaxRunes)
+	term := TruncateGlossaryText(configToolString(input, "term"), GlossaryTermMaxRunes)
 	if strings.TrimSpace(term) == "" {
 		return "", fmt.Errorf("要作废的词条不能为空")
 	}
@@ -218,7 +218,7 @@ func (t *dianaGlossaryTool) delete(ctx context.Context, store GlossaryStore, inp
 	}
 	deleted, found, err := store.DeleteGlossaryEntry(ctx, scope, term,
 		strings.TrimSpace(t.event.UserID), strings.TrimSpace(t.event.SenderNameOrID()),
-		TruncateGlossaryText(configToolString(input, "note"), glossaryNoteMaxRunes), time.Now())
+		TruncateGlossaryText(configToolString(input, "note"), GlossaryNoteMaxRunes), time.Now())
 	if err != nil {
 		return "", err
 	}
@@ -235,7 +235,7 @@ func (t *dianaGlossaryTool) delete(ctx context.Context, store GlossaryStore, inp
 }
 
 func (t *dianaGlossaryTool) restore(ctx context.Context, store GlossaryStore, input map[string]any) (string, error) {
-	term := TruncateGlossaryText(configToolString(input, "term"), glossaryTermMaxRunes)
+	term := TruncateGlossaryText(configToolString(input, "term"), GlossaryTermMaxRunes)
 	if strings.TrimSpace(term) == "" {
 		return "", fmt.Errorf("要恢复的词条不能为空")
 	}

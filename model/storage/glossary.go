@@ -551,3 +551,45 @@ func placeholders(count int) string {
 	}
 	return strings.TrimSuffix(strings.Repeat("?, ", count), ", ")
 }
+
+// GlossaryScopeSummary 是一个作用域下的词条统计，供控制台列出「有哪些本词典」。
+type GlossaryScopeSummary struct {
+	ScopeKey     string    `json:"scope_key"`
+	ActiveCount  int       `json:"active_count"`
+	DeletedCount int       `json:"deleted_count"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// ListGlossaryScopes 列出所有存在词条的作用域。控制台要先知道有哪些群立过词典，
+// 才谈得上翻它——按作用域名字猜是猜不出来的。
+func (s *SQLiteStore) ListGlossaryScopes(ctx context.Context) ([]GlossaryScopeSummary, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT scope_key,
+       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN status = 'deleted' THEN 1 ELSE 0 END),
+       MAX(updated_at)
+FROM glossary_entries
+GROUP BY scope_key
+ORDER BY MAX(updated_at) DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("query glossary scopes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	summaries := make([]GlossaryScopeSummary, 0, 8)
+	for rows.Next() {
+		var summary GlossaryScopeSummary
+		var updatedAt int64
+		if err := rows.Scan(&summary.ScopeKey, &summary.ActiveCount, &summary.DeletedCount, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan glossary scope: %w", err)
+		}
+		summary.UpdatedAt = time.Unix(0, updatedAt).UTC()
+		summaries = append(summaries, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate glossary scopes: %w", err)
+	}
+	return summaries, nil
+}
