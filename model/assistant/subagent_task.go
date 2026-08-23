@@ -164,7 +164,7 @@ func shortSubagentTaskID(kind string) string {
 func subagentStartedMessage(reserved []reservedSubagentTask, duplicates []SubagentTaskStatus) string {
 	if len(reserved) == 0 {
 		if len(duplicates) == 1 {
-			return fmt.Sprintf("同一任务正在后台处理中（任务编号：%s），完成后我会继续回复。", duplicates[0].ID)
+			return "同一任务正在后台处理中，完成后我会继续回复。"
 		}
 		return "这些任务已经在后台处理中，完成后我会继续回复。"
 	}
@@ -174,7 +174,7 @@ func subagentStartedMessage(reserved []reservedSubagentTask, duplicates []Subage
 		if message == "" {
 			message = fmt.Sprintf("已启动后台任务：%s。", item.task.Name)
 		}
-		return fmt.Sprintf("%s\n任务编号：%s。完成后我会继续回复。", message, item.id)
+		return message + "完成后我会继续回复。"
 	}
 	return fmt.Sprintf("已启动 %d 个后台任务。完成后我会依次回复。", len(reserved))
 }
@@ -219,11 +219,15 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 		Report: func(progress PluginTaskProgress) {
 			r.reportSubagentProgress(ctx, item, progress)
 		},
+		Send: func(sendCtx context.Context, message OutgoingMessage) error {
+			message = routeOutgoingToEvent(item.event, message)
+			return r.sendOutgoing(sendCtx, item.event, message)
+		},
 	}
 	result, err := runPluginTaskSafely(ctx, item.task, services)
 	if err != nil {
 		if ctx.Err() == nil || rootCtx.Err() == nil {
-			message := fmt.Sprintf("任务 %s 执行失败：%s", item.id, publicChatErrorMessage(err))
+			message := fmt.Sprintf("后台任务「%s」执行失败：%s", item.task.Name, publicChatErrorMessage(err))
 			_ = r.sendSubagentFollowup(rootCtx, item.event, message)
 			r.recordSubagentTaskLog(context.Background(), item, applog.KindError, applog.LevelError, "后台任务执行失败", err.Error())
 		}
@@ -231,7 +235,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 		return
 	}
 
-	sent := false
+	sent := result.Delivered
 	for _, message := range result.Messages {
 		message = routeOutgoingToEvent(item.event, message)
 		if err := r.sendOutgoing(rootCtx, item.event, message); err != nil {
@@ -244,7 +248,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	}
 	reply := strings.TrimSpace(result.Reply)
 	if reply == "" && !sent {
-		reply = fmt.Sprintf("任务 %s 已完成，但没有生成可发送的结果。", item.id)
+		reply = fmt.Sprintf("后台任务「%s」已完成，但没有生成可发送的结果。", item.task.Name)
 	}
 	if reply != "" {
 		if err := r.sendSubagentFollowup(rootCtx, item.event, reply); err != nil {
@@ -314,7 +318,8 @@ func (r *Runtime) reportSubagentProgress(ctx context.Context, item reservedSubag
 	}
 	notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	_ = r.sendSubagentFollowup(notifyCtx, item.event, fmt.Sprintf("任务 %s：%s", item.id, message))
+	// 进度播报不带任务编号——那是内部标识,聊天里读起来像调试输出。
+	_ = r.sendSubagentFollowup(notifyCtx, item.event, message)
 }
 
 func (r *Runtime) updateSubagentTask(key string, id string, progress PluginTaskProgress) (bool, string) {

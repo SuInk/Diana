@@ -136,6 +136,9 @@ type PluginTask struct {
 type PluginTaskResult struct {
 	Reply    string
 	Messages []OutgoingMessage
+	// Delivered 表示任务在执行过程中已经把结果直接发给了用户(逐张流式发送
+	// 这类),运行时不要再补一句「已完成但没有结果」。
+	Delivered bool
 }
 
 type PluginTaskProgress struct {
@@ -149,6 +152,9 @@ type PluginTaskServices struct {
 	Generate      func(context.Context, llm.GenerateRequest) (string, error)
 	GenerateReply func(context.Context, llm.GenerateRequest) (string, error)
 	Report        func(PluginTaskProgress)
+	// Send 让任务在执行中途就把一条结果发出去(比如逐张编辑完成一张发一张),
+	// 不必攒到任务结束一次性投递。可能为 nil,用前判空。
+	Send func(context.Context, OutgoingMessage) error
 }
 
 type Plugin interface {
