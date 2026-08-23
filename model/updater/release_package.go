@@ -166,14 +166,6 @@ func expectedReleaseBinaryName(goos, _ string) string {
 	return name
 }
 
-func legacyReleaseBinaryName(goos, goarch string) string {
-	name := "diana-webui-" + strings.TrimSpace(goos) + "-" + strings.TrimSpace(goarch)
-	if goos == "windows" {
-		name += ".exe"
-	}
-	return name
-}
-
 // NewReleasePackageUpdater detects whether the current process is running from
 // a complete Release package. Unsupported layouts return a usable updater whose
 // Status method reports ErrReleaseUpdateUnsupported; this keeps source and
@@ -201,10 +193,6 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 	}
 	installRoot := filepath.Dir(absExecutable)
 	binaryName := expectedReleaseBinaryName(goos, goarch)
-	legacyBinaryName := legacyReleaseBinaryName(goos, goarch)
-	if filepath.Base(absExecutable) == legacyBinaryName {
-		binaryName = legacyBinaryName
-	}
 	frontendDir := strings.TrimSpace(options.FrontendDir)
 	if frontendDir == "" {
 		frontendDir = filepath.Join(installRoot, "frontend-next", "dist")

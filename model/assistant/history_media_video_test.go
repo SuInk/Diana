@@ -335,7 +335,7 @@ func TestRememberOutgoingPersistsSharedImage(t *testing.T) {
 	if err := os.WriteFile(sourcePath, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := NewLocalMediaStore("http://127.0.0.1:18080/api/qqbot/media")
+	store := NewLocalMediaStore("http://127.0.0.1:18080/api/assistant/media")
 	sharedURL, ok := store.Share(sourcePath, time.Minute)
 	if !ok {
 		t.Fatal("Share() returned false")

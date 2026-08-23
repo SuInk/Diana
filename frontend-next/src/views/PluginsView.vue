@@ -907,8 +907,7 @@ async function loadDependencies(refresh = false): Promise<void> {
   dependenciesLoading.value = true;
   try {
     const response = await listPluginDependencies(refresh);
-    // 后端没给 plugins 分组时（旧版本）退回只认链接解析那一组。
-    dependencyGroups.value = response.plugins ?? { [resolverPluginID]: response.resolver ?? [] };
+    dependencyGroups.value = response.plugins;
   } catch {
     // 依赖探测只是辅助信息，失败不该打断插件页。
     dependencyGroups.value = {};
@@ -934,7 +933,7 @@ async function installDependency(dependency: ResolverDependency): Promise<void> 
     // 只合并这次真正受影响的那一组，别把其它插件的探测结果一起覆盖掉。
     dependencyGroups.value = {
       ...dependencyGroups.value,
-      ...(result.plugins ?? { [resolverPluginID]: result.resolver })
+      ...result.plugins
     };
     toastSuccess(`已安装 ${dependency.name}`);
   } catch (error) {

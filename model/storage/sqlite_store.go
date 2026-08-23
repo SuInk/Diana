@@ -24,12 +24,8 @@ import (
 
 const (
 	defaultDatabasePath  = "data/diana.db"
-	legacyDatabasePath   = "data/diana-qq-bot.db"
-	llmConfigKey         = "llm_config"
 	llmProfilesKey       = "llm_profiles"
 	llmRegistryKey       = "llm_provider_registry"
-	llmContextWindowKey  = "llm_context_window_migration"
-	botConfigKey         = "bot_config"
 	botProfilesKey       = "bot_profiles"
 	botGroupConfigKey    = "bot_group_configs"
 	pluginStateKey       = "plugin_states"
@@ -64,10 +60,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve sqlite path: %w", err)
 		}
-		path, err = migrateLegacyDatabasePath(absPath)
-		if err != nil {
-			return nil, err
-		}
+		path = absPath
 		resolvedPath = path
 	}
 	// 数据库目录可能不存在，先创建目录再打开 SQLite 文件。
@@ -96,151 +89,6 @@ PRAGMA foreign_keys = ON;
 	return store, nil
 }
 
-func migrateLegacyDatabasePath(requestedPath string) (string, error) {
-	base := filepath.Base(requestedPath)
-	canonicalName := filepath.Base(defaultDatabasePath)
-	legacyName := filepath.Base(legacyDatabasePath)
-	if base != canonicalName && base != legacyName {
-		return requestedPath, nil
-	}
-
-	directory := filepath.Dir(requestedPath)
-	canonicalPath := filepath.Join(directory, canonicalName)
-	legacyPath := filepath.Join(directory, legacyName)
-	legacyExists, err := regularPathExists(legacyPath)
-	if err != nil {
-		return "", fmt.Errorf("inspect legacy SQLite database: %w", err)
-	}
-	canonicalExists, err := regularPathExists(canonicalPath)
-	if err != nil {
-		return "", fmt.Errorf("inspect canonical SQLite database: %w", err)
-	}
-	if !legacyExists {
-		return canonicalPath, nil
-	}
-	if canonicalExists {
-		legacyHasData, err := sqliteFamilyHasData(legacyPath)
-		if err != nil {
-			return "", err
-		}
-		canonicalHasData, err := sqliteFamilyHasData(canonicalPath)
-		if err != nil {
-			return "", err
-		}
-		switch {
-		case !canonicalHasData:
-			if err := removeEmptySQLiteFamily(canonicalPath); err != nil {
-				return "", err
-			}
-		case !legacyHasData:
-			if err := removeEmptySQLiteFamily(legacyPath); err != nil {
-				return "", err
-			}
-			return canonicalPath, nil
-		default:
-			return "", fmt.Errorf("both legacy SQLite database %q and canonical database %q contain data; archive the obsolete copy before starting Diana", legacyPath, canonicalPath)
-		}
-	}
-	if err := renameSQLiteFamily(legacyPath, canonicalPath); err != nil {
-		return "", fmt.Errorf("rename legacy SQLite database to %s: %w", canonicalName, err)
-	}
-	return canonicalPath, nil
-}
-
-func sqliteFamilyHasData(databasePath string) (bool, error) {
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		info, err := os.Stat(databasePath + suffix)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return false, err
-		}
-		if !info.Mode().IsRegular() {
-			return false, fmt.Errorf("%s is not a regular file", databasePath+suffix)
-		}
-		if info.Size() > 0 {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func removeEmptySQLiteFamily(databasePath string) error {
-	hasData, err := sqliteFamilyHasData(databasePath)
-	if err != nil {
-		return err
-	}
-	if hasData {
-		return fmt.Errorf("refusing to remove non-empty SQLite database family %s", databasePath)
-	}
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.Remove(databasePath + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	return nil
-}
-
-func renameSQLiteFamily(sourcePath, targetPath string) error {
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return err
-	}
-	type renamedFile struct {
-		source string
-		target string
-	}
-	renamed := make([]renamedFile, 0, 3)
-	rollback := func() {
-		for index := len(renamed) - 1; index >= 0; index-- {
-			_ = os.Rename(renamed[index].target, renamed[index].source)
-		}
-	}
-	// Move the main database last so an interrupted migration never exposes a
-	// canonical main file without its existing WAL sidecars.
-	for _, suffix := range []string{"-wal", "-shm", ""} {
-		source := sourcePath + suffix
-		exists, err := regularPathExists(source)
-		if err != nil {
-			rollback()
-			return err
-		}
-		if !exists {
-			continue
-		}
-		target := targetPath + suffix
-		targetExists, err := regularPathExists(target)
-		if err != nil {
-			rollback()
-			return err
-		}
-		if targetExists {
-			rollback()
-			return fmt.Errorf("target file already exists: %s", target)
-		}
-		if err := os.Rename(source, target); err != nil {
-			rollback()
-			return err
-		}
-		renamed = append(renamed, renamedFile{source: source, target: target})
-	}
-	return nil
-}
-
-func regularPathExists(path string) (bool, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
-	}
-	if !info.Mode().IsRegular() {
-		return false, fmt.Errorf("%s is not a regular file", path)
-	}
-	return true, nil
-}
-
 // Path returns the absolute path of the SQLite database opened by this store.
 // The Release updater uses it after shutdown to create a consistent backup.
 func (s *SQLiteStore) Path() string {
@@ -256,18 +104,6 @@ func (s *SQLiteStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
-}
-
-// LoadLLMConfig 读取旧版单配置 LLM 数据。
-func (s *SQLiteStore) LoadLLMConfig(ctx context.Context) (llm.ProviderConfig, bool, error) {
-	var cfg llm.ProviderConfig
-	ok, err := s.loadJSON(ctx, llmConfigKey, &cfg)
-	return cfg, ok, err
-}
-
-// SaveLLMConfig 保存旧版单配置 LLM 数据。
-func (s *SQLiteStore) SaveLLMConfig(ctx context.Context, cfg llm.ProviderConfig) error {
-	return s.saveJSON(ctx, llmConfigKey, cfg)
 }
 
 // LoadLLMProfiles 读取 LLM 配置集。
@@ -289,38 +125,9 @@ func (s *SQLiteStore) LoadLLMProviderRegistry(ctx context.Context) (llm.Provider
 	return document, ok, err
 }
 
-// SaveLLMProviderRegistry persists the provider/model document alongside the
-// legacy profile set during the migration window.
+// SaveLLMProviderRegistry persists the provider/model document.
 func (s *SQLiteStore) SaveLLMProviderRegistry(ctx context.Context, document llm.ProviderRegistryDocument) error {
 	return s.saveJSON(ctx, llmRegistryKey, document)
-}
-
-// LoadLLMContextWindowMigration 返回旧版 16K 兜底窗口清理是否已经跑过。
-func (s *SQLiteStore) LoadLLMContextWindowMigration(ctx context.Context) (bool, error) {
-	var done bool
-	ok, err := s.loadJSON(ctx, llmContextWindowKey, &done)
-	if err != nil || !ok {
-		return false, err
-	}
-	return done, nil
-}
-
-// SaveLLMContextWindowMigration 记录旧版 16K 兜底窗口清理已经跑过，避免重复清理
-// 用户后来自己填回来的 16384。
-func (s *SQLiteStore) SaveLLMContextWindowMigration(ctx context.Context, done bool) error {
-	return s.saveJSON(ctx, llmContextWindowKey, done)
-}
-
-// LoadBotProfileConfig 读取 OneBot v11 机器人配置。
-func (s *SQLiteStore) LoadBotProfileConfig(ctx context.Context) (assistant.BotConfig, bool, error) {
-	var cfg assistant.BotConfig
-	ok, err := s.loadJSON(ctx, botConfigKey, &cfg)
-	return cfg, ok, err
-}
-
-// SaveBotProfileConfig 保存 OneBot v11 机器人配置。
-func (s *SQLiteStore) SaveBotProfileConfig(ctx context.Context, cfg assistant.BotConfig) error {
-	return s.saveJSON(ctx, botConfigKey, cfg)
 }
 
 // LoadBotProfiles 读取 OneBot v11 机器人配置集。
@@ -515,27 +322,12 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAM
 }
 
 // loadJSON 读取指定 key 的 JSON 并解码。
-// legacyStateKeys 是历史上带平台名的 app_state 键。新键读不到时回退到旧键，
-// 否则升级之后机器人配置、群配置和恢复位点会当成「从未保存过」。写入一律用新键。
-var legacyStateKeys = map[string]string{
-	botConfigKey:         "qqbot_config",
-	botProfilesKey:       "qqbot_profiles",
-	botGroupConfigKey:    "qqbot_group_configs",
-	replySuppressionsKey: "qqbot_reply_suppressions",
-	inboundRecoveryKey:   "qqbot_inbound_recovery_checkpoint",
-}
-
 func (s *SQLiteStore) loadJSON(ctx context.Context, key string, dest any) (bool, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, key).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		if legacy, ok := legacyStateKeys[key]; ok {
-			err = s.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, legacy).Scan(&raw)
-		}
-	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// bool 返回值表示“没有保存过”，调用方据此使用默认配置或环境变量。
+			// bool 返回值表示“没有保存过”，调用方据此使用 config.yaml 里的播种配置或内置默认值。
 			return false, nil
 		}
 		return false, err

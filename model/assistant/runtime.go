@@ -199,7 +199,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "消息命中当前回复触发规则", true
 	case "replied_direct_followup":
 		return "replied", "用户直接回复了机器人，语义路由判断应继续回答", true
-	case "replied_proactive", "replied_proactive_batch", "replied_passive", "replied_passive_batch":
+	case "replied_proactive", "replied_proactive_batch":
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
@@ -207,8 +207,6 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "上游模型拒绝了高风险内容，机器人已发送安全错误说明", true
 	case "error_send_unconfirmed":
 		return "error", "回复生成失败；错误说明已发起发送，但没有收到可核验的发送 ACK", false
-	case "queued_passive":
-		return "not_replied", "旧版本已将消息交给主动回复候选队列，但没有持久化最终判断结果", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
 	case "ignored_member_level":
@@ -227,7 +225,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "消息早于本次离线恢复窗口（按离线时长并额外覆盖 30 分钟，最长 24 小时），为避免补发过期回复而忽略", false
 	case "ignored_policy":
 		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
-	case "superseded_proactive", "superseded_passive":
+	case "superseded_proactive":
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
 	case "dropped_outbound_delivery":
 		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
@@ -6902,7 +6900,7 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
-// applyOutgoingReplyMarker 把模型写在正文开头的 [回复:ID] 变成真正的 reply 段。
+// applyOutgoingReplyMarker 把模型写在正文开头的 [diana-reply:ID] 变成真正的 reply 段。
 // 模型指定的目标优先于默认的“回复当前消息”：用户要求引用旧图时，指的就是那条。
 // 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
 // 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
@@ -7469,7 +7467,7 @@ func shouldUseForwardReply(reply string, chunks []string, threshold int) bool {
 	if threshold <= 0 {
 		return false
 	}
-	text := strings.TrimSpace(strings.ReplaceAll(normalizeSplitMarkers(reply), notificationSplitMarker, "\n"))
+	text := strings.TrimSpace(strings.ReplaceAll(reply, notificationSplitMarker, "\n"))
 	return len([]rune(text)) > threshold
 }
 
@@ -9955,20 +9953,7 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 const notificationChunkSize = 1800
 
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
-// legacyNotificationSplitMarker 是它的旧名字：用户自定义过的提示词文案和模型的
-// 历史习惯里都还留着，解析时一并认，输出规范只教新的那个。
-const (
-	notificationSplitMarker       = "<dianabr>"
-	legacyNotificationSplitMarker = "<botbr>"
-)
-
-// normalizeSplitMarkers 把旧标记统一成新标记，后续只需按一种写法切分。
-func normalizeSplitMarkers(text string) string {
-	if !strings.Contains(text, legacyNotificationSplitMarker) {
-		return text
-	}
-	return strings.ReplaceAll(text, legacyNotificationSplitMarker, notificationSplitMarker)
-}
+const notificationSplitMarker = "<dianabr>"
 
 // splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 <dianabr>，
 // 再按长度兜底。发言和通知走的是同一套规则。
@@ -9988,7 +9973,7 @@ func splitReply(reply string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = notificationChunkSize
 	}
-	reply = collapseBlankLines(normalizeSplitMarkers(reply))
+	reply = collapseBlankLines(reply)
 	if reply == "" {
 		return nil
 	}

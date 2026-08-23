@@ -76,11 +76,6 @@ func NewPersistentBotProfileStore(ctx context.Context, store *storage.SQLiteStor
 		return nil, err
 	} else if ok && len(saved.Profiles) > 0 {
 		data = saved.WithDefaults()
-	} else if savedCfg, ok, err := store.LoadBotProfileConfig(ctx); err != nil {
-		return nil, err
-	} else if ok {
-		// 兼容旧版只有单个 qqbot_config 的数据库，首次启动时自动升级为配置集。
-		data = assistant.NewProfileSet(savedCfg)
 	}
 	return &PersistentBotProfileStore{
 		data:  data.WithDefaults(),
@@ -106,7 +101,7 @@ func (s *PersistentBotProfileStore) Profiles() assistant.ProfileSet {
 	return s.data.WithDefaults()
 }
 
-// SaveProfiles 保存机器人配置集并同步旧版 flat 配置。
+// SaveProfiles 保存机器人配置集。
 // 落库失败必须往上抛:以前这里把错误丢了,磁盘写不进去时接口照样回 200,
 // 前端提示「保存成功」,重启后配置又变回旧值,查起来完全没有线索。
 func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) error {
@@ -126,18 +121,13 @@ func (s *PersistentBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) e
 	return s.persist(set)
 }
 
-// persist 同时写配置集和旧版 flat 配置,两者任一失败都算保存失败。
+// persist 把配置集写进存储。
 func (s *PersistentBotProfileStore) persist(set assistant.ProfileSet) error {
 	if s.store == nil {
 		return nil
 	}
 	if err := s.store.SaveBotProfiles(s.ctx, set); err != nil {
 		return fmt.Errorf("persist chatbot profiles: %w", err)
-	}
-	if profile, ok := set.Current(); ok {
-		if err := s.store.SaveBotProfileConfig(s.ctx, profile); err != nil {
-			return fmt.Errorf("persist active chatbot profile: %w", err)
-		}
 	}
 	return nil
 }

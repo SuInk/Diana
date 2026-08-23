@@ -74,11 +74,11 @@ func TestRepositoryWatchTemplatesFallBackToDefaultsWhenBlank(t *testing.T) {
 	}
 }
 
-// 分条符仍然可用：自定义模板里写一行 <botbr> 就从那里分成下一条消息。
+// 分条符仍然可用：自定义模板里写一行 <dianabr> 就从那里分成下一条消息。
 func TestRepositoryWatchTemplateKeepsExplicitSplitMarker(t *testing.T) {
 	message := composeRepositoryWatchMessageWithTemplate(
-		"【{repository}】\n<botbr>\n{body}", "SuInk/Diana", "明细")
-	if message != "【SuInk/Diana】\n<botbr>\n明细" {
+		"【{repository}】\n<dianabr>\n{body}", "SuInk/Diana", "明细")
+	if message != "【SuInk/Diana】\n<dianabr>\n明细" {
 		t.Fatalf("message = %q", message)
 	}
 	chunks := splitReply(message, notificationChunkSize)
@@ -88,7 +88,7 @@ func TestRepositoryWatchTemplateKeepsExplicitSplitMarker(t *testing.T) {
 
 	// 正文为空时不能留下孤立的分条符，否则会多发一条空消息。
 	empty := composeRepositoryWatchMessageWithTemplate(
-		"【{repository}】\n<botbr>\n{body}", "SuInk/Diana", "")
+		"【{repository}】\n<dianabr>\n{body}", "SuInk/Diana", "")
 	if strings.Contains(empty, notificationSplitMarker) {
 		t.Fatalf("dangling split marker: %q", empty)
 	}

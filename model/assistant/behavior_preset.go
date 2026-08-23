@@ -162,10 +162,10 @@ func (style ReplyStyle) apply(cfg *BotConfig) {
 	if style.Normalized() != ReplyStyleGroupmate {
 		return
 	}
-	if cfg.ReplyReferenceMode == "" && cfg.ReplyReferenceEnabled == nil {
+	if cfg.ReplyReferenceMode == "" {
 		cfg.ReplyReferenceMode = ReplyDecorationOff
 	}
-	if cfg.MentionUserMode == "" && cfg.MentionUserEnabled == nil {
+	if cfg.MentionUserMode == "" {
 		cfg.MentionUserMode = ReplyDecorationOff
 	}
 	if cfg.DirectReplyChunkSize <= 0 || cfg.DirectReplyChunkSize > groupmateReplyChunkSize {

@@ -1398,7 +1398,7 @@ func TestRepositoryWatchManifestExposesConfigTabSettings(t *testing.T) {
 	if got := specs[pluginSettingAskAgent].Default; got != true {
 		t.Fatalf("ask_agent default = %v, want true", got)
 	}
-	// 模板要写多行还带 <botbr>，默认四行的文本框太挤。
+	// 模板要写多行还带 <dianabr>，默认四行的文本框太挤。
 	if got := specs[repositoryWatchSettingTemplateHeader].Rows; got <= 4 {
 		t.Fatalf("template_header rows = %d, want more than the default 4", got)
 	}

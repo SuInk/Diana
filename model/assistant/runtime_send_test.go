@@ -262,11 +262,10 @@ func TestGroupSystemPromptOverridesGlobal(t *testing.T) {
 // TestSendRespectsReferenceAndMentionToggles 验证对应功能场景。
 func TestSendRespectsReferenceAndMentionToggles(t *testing.T) {
 	withFastSendTiming(t)
-	off := false
 	channel := &scriptedChannel{}
 	runtime := NewRuntime(BotConfig{
-		ReplyReferenceEnabled: &off,
-		MentionUserEnabled:    &off,
+		ReplyReferenceMode: ReplyDecorationOff,
+		MentionUserMode:    ReplyDecorationOff,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "m1"}
 

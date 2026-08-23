@@ -5,11 +5,7 @@ package storage
 
 import (
 	"context"
-	"database/sql"
-	"errors"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,85 +14,6 @@ import (
 	"github.com/SuInk/diana/model/updater"
 )
 
-func TestSQLiteStoreMigratesLegacyDatabaseFilename(t *testing.T) {
-	directory := t.TempDir()
-	legacyPath := filepath.Join(directory, "diana-qq-bot.db")
-	canonicalPath := filepath.Join(directory, "diana.db")
-	db, err := sql.Open("sqlite", legacyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE legacy_marker (value TEXT); INSERT INTO legacy_marker(value) VALUES ('preserved')`); err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(canonicalPath, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := NewSQLiteStore(legacyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = store.Close() }()
-	wantPath, err := filepath.Abs(canonicalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if store.Path() != wantPath {
-		t.Fatalf("store path=%q, want %q", store.Path(), wantPath)
-	}
-	var value string
-	if err := store.db.QueryRow(`SELECT value FROM legacy_marker`).Scan(&value); err != nil || value != "preserved" {
-		t.Fatalf("migrated value=%q err=%v", value, err)
-	}
-	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy database still exists: %v", err)
-	}
-}
-
-func TestSQLiteStoreRejectsTwoPopulatedDatabaseNames(t *testing.T) {
-	directory := t.TempDir()
-	legacyPath := filepath.Join(directory, "diana-qq-bot.db")
-	canonicalPath := filepath.Join(directory, "diana.db")
-	if err := os.WriteFile(legacyPath, []byte("legacy"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(canonicalPath, []byte("canonical"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewSQLiteStore(legacyPath); err == nil || !strings.Contains(err.Error(), "both legacy SQLite database") {
-		t.Fatalf("conflict error=%v", err)
-	}
-}
-
-func TestRenameSQLiteFamilyMovesWALSidecars(t *testing.T) {
-	directory := t.TempDir()
-	source := filepath.Join(directory, "diana-qq-bot.db")
-	target := filepath.Join(directory, "diana.db")
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.WriteFile(source+suffix, []byte("content"+suffix), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := renameSQLiteFamily(source, target); err != nil {
-		t.Fatal(err)
-	}
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if _, err := os.Stat(source + suffix); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("source sidecar %q still exists: %v", suffix, err)
-		}
-		content, err := os.ReadFile(target + suffix)
-		if err != nil || string(content) != "content"+suffix {
-			t.Fatalf("target sidecar %q content=%q err=%v", suffix, content, err)
-		}
-	}
-}
-
-// TestSQLiteStorePersistsConfigsAndPluginStates 验证对应功能场景。
 func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
@@ -115,13 +32,18 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		Headers:         map[string]string{"X-Relay": "earlyso"},
 		MaxOutputTokens: 512,
 	}
-	if err := store.SaveLLMConfig(ctx, llmCfg); err != nil {
+	if err := store.SaveLLMProfiles(ctx, llm.NewProfileSet(llmCfg)); err != nil {
 		t.Fatal(err)
 	}
-	gotLLM, ok, err := store.LoadLLMConfig(ctx)
+	llmSet, ok, err := store.LoadLLMProfiles(ctx)
 	if err != nil || !ok {
-		t.Fatalf("LoadLLMConfig() ok=%v err=%v", ok, err)
+		t.Fatalf("LoadLLMProfiles() ok=%v err=%v", ok, err)
 	}
+	gotProfile, ok := llmSet.Current()
+	if !ok {
+		t.Fatalf("llm profile set has no current profile: %#v", llmSet)
+	}
+	gotLLM := gotProfile.Config
 	if gotLLM.APIKey != "secret-key" || gotLLM.Model != "gp5.5" || gotLLM.UserAgent != "codex-cli/0.142.0" || gotLLM.Headers["X-Relay"] != "earlyso" {
 		t.Fatalf("gotLLM = %#v", gotLLM)
 	}
@@ -134,12 +56,16 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		BotAccount:              "123456",
 		RequestTimeout:          30 * time.Second,
 	}.WithDefaults()
-	if err := store.SaveBotProfileConfig(ctx, botCfg); err != nil {
+	if err := store.SaveBotProfiles(ctx, assistant.NewProfileSet(botCfg)); err != nil {
 		t.Fatal(err)
 	}
-	gotBot, ok, err := store.LoadBotProfileConfig(ctx)
+	botSet, ok, err := store.LoadBotProfiles(ctx)
 	if err != nil || !ok {
-		t.Fatalf("LoadBotProfileConfig() ok=%v err=%v", ok, err)
+		t.Fatalf("LoadBotProfiles() ok=%v err=%v", ok, err)
+	}
+	gotBot, ok := botSet.Current()
+	if !ok {
+		t.Fatalf("bot profile set has no current profile: %#v", botSet)
 	}
 	if gotBot.OneBotAccessToken != botCfg.OneBotAccessToken || gotBot.BotAccount != botCfg.BotAccount {
 		t.Fatalf("gotBot = %#v", gotBot)
@@ -349,43 +275,5 @@ func TestSQLiteStorePersistsAppLogs(t *testing.T) {
 	}
 	if len(operations) != 1 || operations[0].Action != "assistant.start" {
 		t.Fatalf("operation logs = %#v", operations)
-	}
-}
-
-// app_state 的键从带平台名的旧写法换成中性写法后，存量库里存的仍是旧键。
-// 读不回来的话，升级之后机器人配置会被当成「从未保存过」，直接退回默认值。
-func TestSQLiteStoreReadsLegacyStateKeys(t *testing.T) {
-	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = store.Close() }()
-	ctx := context.Background()
-
-	// 直接按旧键写入，模拟升级前留下的数据。
-	if _, err := store.db.ExecContext(ctx,
-		`INSERT INTO app_state (key, value) VALUES (?, ?)`,
-		"qqbot_config", `{"bot_qq":"10001","owner_id":"20002"}`); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, ok, err := store.LoadBotProfileConfig(ctx)
-	if err != nil || !ok {
-		t.Fatalf("legacy config not found: ok=%v err=%v", ok, err)
-	}
-	if cfg.BotAccount != "10001" || cfg.OwnerID != "20002" {
-		t.Fatalf("legacy config = %#v", cfg)
-	}
-
-	// 存回去用新键，旧键不再被写入。
-	if err := store.SaveBotProfileConfig(ctx, cfg); err != nil {
-		t.Fatal(err)
-	}
-	var stored string
-	if err := store.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, "bot_config").Scan(&stored); err != nil {
-		t.Fatalf("new key was not written: %v", err)
-	}
-	if !strings.Contains(stored, `"bot_account":"10001"`) {
-		t.Fatalf("stored under the new key = %s", stored)
 	}
 }
