@@ -23,8 +23,13 @@ export interface LLMConfig {
   user_agent?: string;
   headers?: Record<string, string>;
   temperature?: number | null;
+  /** 用户手填的覆盖值；0 或缺省表示按当前模型自动判断。 */
   context_window_tokens?: number;
   max_context_tokens?: number;
+  /** 只读回显：当前模型实际生效的窗口与请求上限，以及窗口的来源。 */
+  effective_context_window_tokens?: number;
+  effective_max_context_tokens?: number;
+  context_window_source?: "user" | "model_list" | "inferred" | "fallback";
   max_output_tokens?: number;
   timeout_ms?: number;
 }
@@ -124,7 +129,7 @@ export interface BotProfileConfig {
   welcome_message?: string;
   system_prompt?: string;
   response_mode?: "quiet" | "standard" | "active" | "custom";
-  reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise";
+  reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
   /** 回复行为个性化：on 每条都带、off 从不带、auto 交给模型自己判断；缺省等价于 on。 */
@@ -317,7 +322,7 @@ export interface BotGroupConfig {
   /** 留空时跟随机器人全局回复模式。 */
   response_mode?: "" | "quiet" | "standard" | "active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
-  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise";
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
   welcome_enabled?: boolean;
   welcome_message?: string;
   max_context_tokens?: number;
@@ -1437,6 +1442,103 @@ export function listAssistantUsers(query = "", limit = 50, offset = 0): Promise<
 
 export function getAssistantUser(userID: string): Promise<AssistantUserDetailResponse> {
   return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}`);
+}
+
+export interface GlossaryRevision {
+  version: number;
+  meaning?: string;
+  example?: string;
+  aliases?: string[];
+  note?: string;
+  editor_user_id?: string;
+  editor_name?: string;
+  recorded_at: string;
+}
+
+export interface GlossaryEntry {
+  id: string;
+  scope_key: string;
+  term: string;
+  aliases?: string[];
+  meaning: string;
+  example?: string;
+  note?: string;
+  author_user_id?: string;
+  author_name?: string;
+  editor_user_id?: string;
+  editor_name?: string;
+  usage_count: number;
+  last_used_at?: string;
+  version: number;
+  status: "active" | "deleted";
+  created_at: string;
+  updated_at: string;
+  /** 只有详情接口带修订记录。 */
+  revisions?: GlossaryRevision[];
+}
+
+export interface GlossaryScopeSummary {
+  scope_key: string;
+  active_count: number;
+  deleted_count: number;
+  updated_at: string;
+}
+
+export interface GlossaryListResponse {
+  scopes: GlossaryScopeSummary[];
+  scope: string;
+  entries: GlossaryEntry[];
+  query?: string;
+}
+
+export interface GlossaryEntryInput {
+  scope: string;
+  term: string;
+  aliases?: string[];
+  meaning?: string;
+  example?: string;
+  note?: string;
+}
+
+export function listGlossary(scope = "", query = "", includeDeleted = false): Promise<GlossaryListResponse> {
+  const params = new URLSearchParams();
+  if (scope) {
+    params.set("scope", scope);
+  }
+  if (query) {
+    params.set("q", query);
+  }
+  if (includeDeleted) {
+    params.set("include_deleted", "true");
+  }
+  const search = params.toString();
+  return requestJSON<GlossaryListResponse>(`/api/assistant/glossary${search ? `?${search}` : ""}`);
+}
+
+export function getGlossaryEntry(scope: string, term: string): Promise<GlossaryEntry> {
+  const params = new URLSearchParams({ scope, term });
+  return requestJSON<GlossaryEntry>(`/api/assistant/glossary/entry?${params.toString()}`);
+}
+
+export function saveGlossaryEntry(input: GlossaryEntryInput): Promise<GlossaryEntry> {
+  return requestJSON<GlossaryEntry>("/api/assistant/glossary", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function deleteGlossaryEntry(scope: string, term: string, note = ""): Promise<GlossaryEntry> {
+  return requestJSON<GlossaryEntry>("/api/assistant/glossary/delete", {
+    method: "POST",
+    body: JSON.stringify({ scope, term, note })
+  });
+}
+
+export function restoreGlossaryEntry(scope: string, term: string): Promise<GlossaryEntry> {
+  return requestJSON<GlossaryEntry>("/api/assistant/glossary/restore", {
+    method: "POST",
+    body: JSON.stringify({ scope, term })
+  });
 }
 
 export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "rss_watch";

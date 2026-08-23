@@ -317,7 +317,8 @@ const groupReplyStyleOptions: AppSelectOption[] = [
   { value: "assistant", label: "助手" },
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
-  { value: "concise", label: "简洁" }
+  { value: "concise", label: "简洁" },
+  { value: "catgirl", label: "猫娘" }
 ];
 import { toastError, toastSuccess } from "../toast";
 
@@ -361,7 +362,9 @@ function responseModeLabel(mode: BotGroupConfig["response_mode"]): string {
 }
 
 function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
-  return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格" } as const)[style as "groupmate" | "assistant" | "gentle" | "lively" | "concise"] ?? "";
+  return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格", catgirl: "猫娘风格" } as const)[
+    style as "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl"
+  ] ?? "";
 }
 
 function overrideCount(group: BotGroupConfig): number {

@@ -110,8 +110,12 @@ func TestProviderConfigAPIFormatDefaultsAndValidation(t *testing.T) {
 
 func TestProviderConfigContextBudgetDefaultsAndValidation(t *testing.T) {
 	defaults := (ProviderConfig{Provider: ProviderOpenAICompatible}).WithDefaults()
-	if defaults.ContextWindowTokens != DefaultContextWindowTokens || defaults.MaxContextTokens != DefaultMaxContextTokens {
-		t.Fatalf("context defaults = window %d max %d", defaults.ContextWindowTokens, defaults.MaxContextTokens)
+	// WithDefaults 不再把推断值写进字段：没填过就是没填过，落库和回显都要如实。
+	if defaults.ContextWindowTokens != 0 || defaults.MaxContextTokens != 0 {
+		t.Fatalf("context defaults were materialised: window %d max %d", defaults.ContextWindowTokens, defaults.MaxContextTokens)
+	}
+	if defaults.ContextWindowTokensWithDefault() != DefaultContextWindowTokens || defaults.MaxContextTokensWithDefault() != DefaultMaxContextTokens {
+		t.Fatalf("resolved defaults = window %d max %d", defaults.ContextWindowTokensWithDefault(), defaults.MaxContextTokensWithDefault())
 	}
 	if defaults.MaxOutputTokens != 0 {
 		t.Fatalf("MaxOutputTokens = %d, want 0 so incompatible gateways do not receive the parameter", defaults.MaxOutputTokens)

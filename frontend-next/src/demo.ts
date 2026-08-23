@@ -11,6 +11,8 @@ import type {
   BotGroupSummary,
   BotPlatform,
   BotStatus,
+  GlossaryEntry,
+  GlossaryScopeSummary,
   ResolverDependency,
   StatsSnapshot,
   UpdateStatus,
@@ -25,8 +27,8 @@ const before = (minutes: number) => new Date(now - minutes * 60_000).toISOString
 const after = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
 
 const modelCatalog = [
-  { id: "gpt-5.2", input_modalities: ["text", "image"], output_modalities: ["text"] },
-  { id: "gpt-5-mini", input_modalities: ["text"], output_modalities: ["text"] },
+  { id: "gpt-5.2", input_modalities: ["text", "image"], output_modalities: ["text"], context_window_tokens: 400_000 },
+  { id: "gpt-5-mini", input_modalities: ["text"], output_modalities: ["text"], context_window_tokens: 272_000 },
   { id: "gpt-image-1.5", input_modalities: ["text", "image"], output_modalities: ["image"] }
 ];
 
@@ -36,9 +38,9 @@ let llmConfig: LLMConfig = {
   api_key_configured: true,
   active_profile_id: "llm-chat",
   profiles: [
-    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog, temperature: 0.7, max_output_tokens: 4096 },
-    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog },
-    { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5-mini", models: modelCatalog, temperature: 0.2 },
+    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog, temperature: 0.7, max_output_tokens: 4096, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "model_list" },
+    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "model_list" },
+    { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5-mini", models: modelCatalog, temperature: 0.2, effective_context_window_tokens: 272_000, effective_max_context_tokens: 272_000, context_window_source: "model_list" },
     { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-1.5", image_model: "gpt-image-1.5", models: modelCatalog }
   ]
 };
@@ -144,6 +146,41 @@ const demoUsers: UserMemoryProfile[] = [
     memories: [{ text: "多次刷屏广告链接，已被设计群屏蔽", source: "group", group_id: "100200519", at: before(3000) }]
   }
 ];
+
+// 演示模式的词典：机器人自己收下的梗长什么样，比一段说明更说明问题。
+const demoGlossary: GlossaryEntry[] = [
+  {
+    id: "glossary-1", scope_key: "group:100200301", term: "带薪拉屎", aliases: ["DXLS"],
+    meaning: "上班时间摸鱼，群里用来自嘲，没有恶意", example: "今天带薪拉屎半小时",
+    author_name: "青禾", usage_count: 27, last_used_at: before(3), version: 2, status: "active",
+    created_at: before(9000), updated_at: before(120),
+    revisions: [
+      { version: 2, meaning: "上班时间摸鱼，群里用来自嘲，没有恶意", note: "更新：补上「自嘲、无恶意」，之前被当成骂人", editor_name: "控制台", recorded_at: before(120) },
+      { version: 1, meaning: "上班时间摸鱼", note: "新建", editor_name: "青禾", recorded_at: before(9000) }
+    ]
+  },
+  {
+    id: "glossary-2", scope_key: "group:100200301", term: "鸽", aliases: ["咕咕"],
+    meaning: "放人鸽子、说好的事没做；本群多用于调侃谁又拖了发布",
+    author_name: "星野", usage_count: 41, last_used_at: before(20), version: 1, status: "active",
+    created_at: before(7200), updated_at: before(7200), revisions: []
+  },
+  {
+    id: "glossary-3", scope_key: "group:100200418", term: "手冲", aliases: [],
+    meaning: "手冲咖啡，这个群里只指咖啡", usage_count: 6, last_used_at: before(900),
+    version: 1, status: "active", created_at: before(5400), updated_at: before(5400), revisions: []
+  }
+];
+
+function demoGlossaryScopes(): GlossaryScopeSummary[] {
+  const scopes = new Map<string, GlossaryScopeSummary>();
+  for (const entry of demoGlossary) {
+    const summary = scopes.get(entry.scope_key) ?? { scope_key: entry.scope_key, active_count: 0, deleted_count: 0, updated_at: entry.updated_at };
+    if (entry.status === "active") summary.active_count += 1; else summary.deleted_count += 1;
+    scopes.set(entry.scope_key, summary);
+  }
+  return [...scopes.values()];
+}
 
 const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
   "100200711": [
@@ -384,6 +421,29 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const user = demoUsers.find((item) => item.user_id === decodeURIComponent(userMatch[1]));
     if (!user) return json({ error: "人员不存在或还没有画像记录" }, 404);
     return json({ profile: user, favorability_changes: demoFavorabilityChanges[user.user_id] ?? [] });
+  }
+
+  if (path === "/api/assistant/glossary" && method === "GET") {
+    const scopes = demoGlossaryScopes();
+    const scope = url.searchParams.get("scope") || scopes[0]?.scope_key || "";
+    const keyword = (url.searchParams.get("q") ?? "").trim();
+    const includeDeleted = url.searchParams.get("include_deleted") === "true";
+    const entries = demoGlossary
+      .filter((entry) => entry.scope_key === scope)
+      .filter((entry) => includeDeleted || entry.status === "active")
+      .filter((entry) => !keyword || entry.term.includes(keyword) || entry.meaning.includes(keyword))
+      .map((entry) => ({ ...entry, revisions: undefined }));
+    return json({ scopes, scope, entries, query: keyword || undefined });
+  }
+  if (path === "/api/assistant/glossary/entry") {
+    const scope = url.searchParams.get("scope") ?? "";
+    const term = url.searchParams.get("term") ?? "";
+    const entry = demoGlossary.find((item) => item.scope_key === scope && item.term === term);
+    if (!entry) return json({ error: "词条不存在" }, 404);
+    return json(entry);
+  }
+  if (path.startsWith("/api/assistant/glossary") && method === "POST") {
+    return json({ error: "演示模式不写入词典；正式部署里这里会新增、修订或作废词条。" }, 403);
   }
 
   if (path === "/api/assistant/events") {

@@ -149,6 +149,7 @@ import {
   Sun,
   SunMoon,
   UserRound,
+  BookMarked,
   Users,
   Wrench
 } from "@lucide/vue";
@@ -172,6 +173,7 @@ import AssistantView from "./views/AssistantView.vue";
 import PluginsView from "./views/PluginsView.vue";
 import GroupsView from "./views/GroupsView.vue";
 import UsersView from "./views/UsersView.vue";
+import GlossaryView from "./views/GlossaryView.vue";
 import LogsView from "./views/LogsView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
@@ -185,6 +187,7 @@ const viewComponents: Record<ViewID, Component> = {
   plugins: PluginsView,
   groups: GroupsView,
   users: UsersView,
+  glossary: GlossaryView,
   logs: LogsView,
   settings: SettingsView
 };
@@ -255,6 +258,7 @@ const viewTitles: Record<ViewID, string> = {
   plugins: "插件",
   groups: "群管理",
   users: "人员",
+  glossary: "词典",
   logs: "日志",
   settings: "设置"
 };
@@ -309,6 +313,7 @@ function navIcon(id: ViewID): Component {
     plugins: PlugZap,
     groups: Users,
     users: UserRound,
+    glossary: BookMarked,
     logs: FileClock,
     settings: Wrench
   };
