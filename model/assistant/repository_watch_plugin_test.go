@@ -1052,7 +1052,7 @@ func TestComposeRepositoryWatchMessageCarriesOnlyFacts(t *testing.T) {
 	if strings.Contains(message, notificationSplitMarker) {
 		t.Fatalf("unexpected split marker: %q", message)
 	}
-	if chunks := splitNotification(message, notificationChunkSize); len(chunks) != 1 {
+	if chunks := splitReply(message, notificationChunkSize); len(chunks) != 1 {
 		t.Fatalf("notification should stay in one message, got %#v", chunks)
 	}
 }
@@ -1155,7 +1155,7 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 		t.Fatalf("sample notification is too short to cover the regression: %d runes", len([]rune(message)))
 	}
 	// 事实清单必须整条留在一起，长度限制不该把它切开。
-	chunks := splitNotification(message, notificationChunkSize)
+	chunks := splitReply(message, notificationChunkSize)
 	if len(chunks) != 1 {
 		t.Fatalf("notification should stay in one message, got %#v", chunks)
 	}
@@ -1194,7 +1194,7 @@ func TestComposeRepositoryWatchMessageKeepsEveryChangeInOneMessage(t *testing.T)
 		Releases: []repositoryWatchRelease{{Tag: "v0.8.36", PublishedAt: at, URL: "https://example.com/r"}},
 	}
 	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change))
-	chunks := splitNotification(message, notificationChunkSize)
+	chunks := splitReply(message, notificationChunkSize)
 	if len(chunks) != 1 {
 		t.Fatalf("fact block should stay in one message, got %#v", chunks)
 	}
