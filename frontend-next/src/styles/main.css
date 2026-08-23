@@ -1223,6 +1223,15 @@ a.nav-action {
   border-color: var(--err);
 }
 
+/* GitHub 和退出登录是一组「账号与外链」操作，用更紧的间距收在一起；
+   顶栏本身的 12px 让这一组和左侧的状态信息拉开距离。 */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
 /* 顶栏 GitHub 入口：只留图标，和退出登录并排，用同一套 btn ghost small 外观。 */
 .topbar-repo {
   flex: none;
