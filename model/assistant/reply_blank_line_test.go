@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -20,35 +21,63 @@ const structuredReplyWithBlankLines = `附近这么走顺路：
 
 我最推荐：书院→萝峰寺→后山短走→万达吃饭。`
 
-func TestStructuredReplyDropsBlankLines(t *testing.T) {
-	// 清单型回复整块发送，空行不再是消息边界，会原样渲染成一整行空白。
-	parts := splitReply(structuredReplyWithBlankLines, 160)
-	if len(parts) != 1 {
-		t.Fatalf("清单应整块发送，实际拆成 %d 条", len(parts))
+// 空行只是排版，不是消息边界。以前运行时按空行分条，于是清单会被拆碎，又反过来
+// 加了一套「看起来像清单就别拆」的识别去救；识别顺手把长度上限从 160 顶到 900，
+// 清单因此能发成一条 400 多字的宽气泡。现在空行统一收掉、不再分条，那套识别连同
+// 它的三个阈值一起删掉了。
+func TestBlankLinesAreLayoutNotMessageBoundaries(t *testing.T) {
+	for name, reply := range map[string]string{
+		"清单":   structuredReplyWithBlankLines,
+		"普通对话": "先说结论，端口被占了。\n\n完整报错贴一下我看看。",
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, part := range splitReply(reply, 900) {
+				for _, line := range strings.Split(part, "\n") {
+					if strings.TrimSpace(line) == "" {
+						t.Fatalf("发出去的文本里残留空行：\n%s", part)
+					}
+				}
+			}
+		})
 	}
-	for _, line := range strings.Split(parts[0], "\n") {
-		if strings.TrimSpace(line) == "" {
-			t.Fatalf("整块发送的清单里仍然残留空行：\n%s", parts[0])
+}
+
+// 清单不再享受被抬高的长度上限：该按配置的长度切就切。这正是宽气泡的来源——
+// 识别命中后阈值被顶到 900，一份 400 多字的清单会整块发成一条，QQ 再按最长行把
+// 气泡横向撑开。
+func TestStructuredReplyRespectsConfiguredChunkSize(t *testing.T) {
+	// 复刻真实场景：一份四百字上下的清单，群友风格下上限是 160。
+	var builder strings.Builder
+	builder.WriteString("附近这么走顺路：\n")
+	for index := 1; index <= 8; index++ {
+		fmt.Fprintf(&builder, "%d. 第 %d 个去处\n", index, index)
+		builder.WriteString("这里写一句三十来个字的说明，交代为什么值得去、什么时候去比较合适。\n\n")
+	}
+	reply := builder.String()
+	if total := len([]rune(reply)); total <= groupmateReplyChunkSize {
+		t.Fatalf("用例本身要长过上限才有意义，实际 %d 字", total)
+	}
+
+	parts := splitReply(reply, groupmateReplyChunkSize)
+	if len(parts) < 2 {
+		t.Fatalf("清单应按配置的 %d 字上限切分，实际 %d 条", groupmateReplyChunkSize, len(parts))
+	}
+	for _, part := range parts {
+		if got := len([]rune(part)); got > groupmateReplyChunkSize {
+			t.Fatalf("切分后仍有 %d 字的分片，超过上限 %d：%q", got, groupmateReplyChunkSize, part)
 		}
 	}
 	// 内容不能被顺带吃掉。
-	for _, keep := range []string{"1. 玉岩书院＋萝峰寺", "岭南古建和碑刻", "我最推荐"} {
-		if !strings.Contains(parts[0], keep) {
-			t.Fatalf("清单内容丢失 %q：\n%s", keep, parts[0])
+	joined := strings.Join(parts, "\n")
+	for _, keep := range []string{"1. 第 1 个去处", "8. 第 8 个去处", "什么时候去比较合适"} {
+		if !strings.Contains(joined, keep) {
+			t.Fatalf("清单内容丢失 %q：\n%s", keep, joined)
 		}
 	}
 }
 
-func TestOrdinaryReplyStillSplitsOnBlankLines(t *testing.T) {
-	// 普通聊天按空行分条的行为不变：那里空行本来就不会显示出来。
-	parts := splitReply("先说结论，端口被占了。\n\n完整报错贴一下我看看。", 900)
-	if len(parts) != 2 {
-		t.Fatalf("普通回复应按空行分成两条，实际 %d 条：%#v", len(parts), parts)
-	}
-}
-
-func TestExplicitBotBreakStillSplitsStructuredReply(t *testing.T) {
-	// <botbr> 是模型显式要求的分条，去空行不能把它一起吃掉。
+// <dianabr> 是模型显式要求的分条，任何情况下都保留；收空行不能把它一起吃掉。
+func TestExplicitBreakStillSplitsReply(t *testing.T) {
 	reply := "1. 甲\n2. 乙\n3. 丙\n" + notificationSplitMarker + "\n对了，你带伞了吗。"
 	parts := splitReply(reply, 900)
 	if len(parts) != 2 {
