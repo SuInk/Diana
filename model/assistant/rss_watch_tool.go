@@ -20,12 +20,16 @@ const (
 )
 
 type RSSWatchCreateInput struct {
+	// FeedPlatform 是订阅平台（x、bilibili、douyin、xiaohongshu、github、rss），
+	// FeedTarget 是平台内的目标。FeedURL / TwitterHandle 是旧字段，仅作兼容。
+	FeedPlatform, FeedTarget                                        string
 	FeedURL, TwitterHandle, JudgePrompt                             string
 	Interval                                                        time.Duration
 	Platform, ProfileID, ContextNamespace, OwnerID, GroupID, UserID string
 }
 
 type RSSWatchUpdateInput struct {
+	FeedPlatform, FeedTarget            *string
 	FeedURL, TwitterHandle, JudgePrompt *string
 	Interval                            time.Duration
 }
@@ -47,6 +51,7 @@ type dianaRSSWatch struct {
 	ID              string    `json:"id"`
 	FeedURL         string    `json:"feed_url"`
 	Source          string    `json:"source"`
+	Target          string    `json:"target,omitempty"`
 	TwitterHandle   string    `json:"twitter_handle,omitempty"`
 	JudgePrompt     string    `json:"judge_prompt"`
 	Interval        string    `json:"interval"`
@@ -64,15 +69,17 @@ func newDianaRSSWatchTool(runtime *Runtime, event MessageEvent) *dianaRSSWatchTo
 func (*dianaRSSWatchTool) Name() string { return "diana.rss" }
 
 func (*dianaRSSWatchTool) Description() string {
-	return `创建和管理 RSS/Atom 或 X (Twitter) 用户订阅：发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。用户要求持续关注某个网站 Feed 或某个推特用户、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 diana.schedule。首次创建只建立当前内容基线，不补发历史条目。`
+	return `创建和管理内容订阅：支持 X、哔哩哔哩、抖音、小红书、GitHub 这些平台的内置抓取，也支持任意 RSS/Atom 地址。发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。用户要求持续关注某个账号或某个网站 Feed、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 diana.schedule。首次创建只建立当前内容基线，不补发历史条目。`
 }
 
 func (*dianaRSSWatchTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
 			"create", "list", "update", "cancel", "delete"),
-		"twitter_handle": toolStringParam("要关注的 X (Twitter) 用户名，不带 @。create 时必须且只能提供它或 feed_url 之一。"),
-		"feed_url":       toolStringParam("要关注的 RSS/Atom feed 地址。create 时必须且只能提供它或 twitter_handle 之一。"),
+		"platform":       toolEnumParam("订阅平台。"+rssWatchPlatformSummary(), rssWatchPlatformIDs()...),
+		"target":         toolStringParam("平台内的订阅目标：X 填用户名，哔哩哔哩填 UID，抖音填 sec_uid 或主页链接，小红书填用户 ID，GitHub 填 owner/repo，rss 填完整 Feed 地址。create 时必填。"),
+		"twitter_handle": toolStringParam("[旧字段] 等价于 platform=x 加 target；新调用请改用 platform + target。"),
+		"feed_url":       toolStringParam("[旧字段] 等价于 platform=rss 加 target；新调用请改用 platform + target。"),
 		"interval":       toolStringParam("检查间隔，只接受 Go 时长写法：15m、1h。不短于 " + minimumRSSWatchInterval.String() + "，省略按 " + defaultRSSWatchInterval.String() + " 处理。"),
 		"judge_prompt":   toolStringParam("判断条件：写清楚什么样的新条目才值得通知、通知时要说什么。最多 " + itoa(maximumRSSJudgeRunes) + " 个字符。例如「仅当推文明确提到额度重置、恢复或刷新时通知，并用中文说明时间和原文链接」。"),
 		"id":             toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
@@ -105,6 +112,7 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 			return "", err
 		}
 		item, err := t.runtime.CreateRSSWatch(ctx, RSSWatchCreateInput{
+			FeedPlatform: configToolString(input, "platform"), FeedTarget: configToolString(input, "target"),
 			FeedURL: configToolString(input, "feed_url"), TwitterHandle: configToolString(input, "twitter_handle"),
 			JudgePrompt: configToolString(input, "judge_prompt"), Interval: interval,
 			Platform: t.event.Platform, ProfileID: t.event.ProfileID, ContextNamespace: t.event.ContextNamespace,
@@ -234,51 +242,29 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 	if len([]rune(judge)) > maximumRSSJudgeRunes {
 		return Reminder{}, fmt.Errorf("judge_prompt 不能超过 %d 个字符", maximumRSSJudgeRunes)
 	}
-	feedURL, source, handle, err := resolveRSSWatchSource(input.FeedURL, input.TwitterHandle, settings)
+	source, err := resolveRSSWatchSource(input.FeedPlatform, input.FeedTarget, input.FeedURL, input.TwitterHandle)
 	if err != nil {
 		return Reminder{}, err
 	}
-	baseline, feedName, err := plugin.snapshot(ctx, feedURL, settings)
+	baseline, feedName, err := plugin.snapshot(ctx, source, settings)
 	if err != nil {
 		return Reminder{}, fmt.Errorf("建立 Feed 基线失败: %w", err)
 	}
-	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), feedURL, source, handle, judge, feedName, interval, baseline)
+	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), source, judge, feedName, interval, baseline)
 }
 
-func resolveRSSWatchSource(rawURL, rawHandle string, settings SettingValues) (string, string, string, error) {
-	rawURL, rawHandle = strings.TrimSpace(rawURL), strings.TrimSpace(rawHandle)
-	if (rawURL == "") == (rawHandle == "") {
-		return "", "", "", fmt.Errorf("feed_url 和 twitter_handle 必须且只能填写一个")
-	}
-	if rawHandle != "" {
-		handle, err := normalizeTwitterHandle(rawHandle)
-		if err != nil {
-			return "", "", "", err
-		}
-		feedURL, err := twitterFeedURL(handle, settings)
-		return feedURL, "twitter", handle, err
-	}
-	feedURL, err := normalizeRSSURL(rawURL)
-	return feedURL, "rss", "", err
-}
-
-func (r *Runtime) addRSSWatch(event MessageEvent, owner, feedURL, source, handle, judge, feedName string, interval time.Duration, baseline rssWatchSnapshot) (Reminder, error) {
+func (r *Runtime) addRSSWatch(event MessageEvent, owner string, source rssWatchSource, judge, feedName string, interval time.Duration, baseline rssWatchSnapshot) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
 	}
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	now := time.Now()
-	message := "监控 RSS Feed"
-	if source == "twitter" {
-		message = "监控 @" + handle + " 的最新推文"
-	} else if feedName != "" {
-		message = "监控 " + feedName
-	}
+	message := "监控 " + rssWatchSourceLabel(source, feedName)
 	item := Reminder{
 		ID: uuid.NewString()[:8], Kind: ReminderKindRSSWatch, Platform: event.Platform, ProfileID: event.ProfileID,
 		ContextNamespace: event.ContextNamespace, OwnerID: owner, GroupID: event.GroupID, UserID: event.UserID,
-		Message: message, FeedURL: feedURL, FeedSource: source, FeedHandle: handle, FeedJudgePrompt: judge,
+		Message: message, FeedURL: source.URL, FeedSource: source.Platform, FeedHandle: source.Target, FeedJudgePrompt: judge,
 		LastFeedItemID: baseline.ItemID, LastFeedPublishedAt: baseline.PublishedAt,
 		TriggerAt: now.Add(interval), IntervalSeconds: int64(interval / time.Second), CreatedAt: now,
 	}
@@ -306,21 +292,31 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 	if !current.CancelledAt.IsZero() {
 		return Reminder{}, fmt.Errorf("RSS 订阅 %s 已取消，不能修改", id)
 	}
-	feedURL, source, handle := current.FeedURL, current.FeedSource, current.FeedHandle
+	source := rssWatchSourceFromReminder(current)
 	sourceChanged := false
-	if input.FeedURL != nil || input.TwitterHandle != nil {
-		rawURL, rawHandle := "", ""
+	if input.FeedPlatform != nil || input.FeedTarget != nil || input.FeedURL != nil || input.TwitterHandle != nil {
+		platform, target, rawURL, rawHandle := source.Platform, "", "", ""
+		if input.FeedPlatform != nil {
+			platform = *input.FeedPlatform
+		}
+		if input.FeedTarget != nil {
+			target = *input.FeedTarget
+		}
 		if input.FeedURL != nil {
 			rawURL = *input.FeedURL
 		}
 		if input.TwitterHandle != nil {
 			rawHandle = *input.TwitterHandle
 		}
-		feedURL, source, handle, err = resolveRSSWatchSource(rawURL, rawHandle, settings)
+		// 只改平台不改目标时沿用原目标，省得用户重填一遍用户名。
+		if target == "" && rawURL == "" && rawHandle == "" {
+			target = source.Target
+		}
+		source, err = resolveRSSWatchSource(platform, target, rawURL, rawHandle)
 		if err != nil {
 			return Reminder{}, err
 		}
-		sourceChanged = feedURL != current.FeedURL
+		sourceChanged = source.URL != current.FeedURL || source.Platform != current.FeedSource || source.Target != current.FeedHandle
 	}
 	judge := current.FeedJudgePrompt
 	if input.JudgePrompt != nil {
@@ -339,22 +335,18 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 	baseline := rssWatchSnapshot{ItemID: current.LastFeedItemID, PublishedAt: current.LastFeedPublishedAt}
 	feedName := ""
 	if sourceChanged {
-		baseline, feedName, err = plugin.snapshot(ctx, feedURL, settings)
+		baseline, feedName, err = plugin.snapshot(ctx, source, settings)
 		if err != nil {
 			return Reminder{}, fmt.Errorf("更新 Feed 基线失败: %w", err)
 		}
 	}
 	return r.mutateRSSWatch(owner, id, func(item *Reminder) error {
-		item.FeedURL, item.FeedSource, item.FeedHandle, item.FeedJudgePrompt = feedURL, source, handle, judge
+		item.FeedURL, item.FeedSource, item.FeedHandle, item.FeedJudgePrompt = source.URL, source.Platform, source.Target, judge
 		item.IntervalSeconds, item.TriggerAt = int64(interval/time.Second), time.Now().Add(interval)
 		item.PendingDelivery, item.PendingSince, item.LastError, item.ConsecutiveFailures = "", time.Time{}, "", 0
 		if sourceChanged {
 			item.LastFeedItemID, item.LastFeedPublishedAt = baseline.ItemID, baseline.PublishedAt
-		}
-		if source == "twitter" {
-			item.Message = "监控 @" + handle + " 的最新推文"
-		} else if feedName != "" {
-			item.Message = "监控 " + feedName
+			item.Message = "监控 " + rssWatchSourceLabel(source, feedName)
 		}
 		return nil
 	})
@@ -447,6 +439,14 @@ func reminderIsRSSWatch(item Reminder) bool {
 
 func rssWatchUpdateFromTool(input map[string]any) (RSSWatchUpdateInput, error) {
 	result := RSSWatchUpdateInput{}
+	if value, present := input["platform"]; present {
+		raw := strings.TrimSpace(fmt.Sprint(value))
+		result.FeedPlatform = &raw
+	}
+	if value, present := input["target"]; present {
+		raw := strings.TrimSpace(fmt.Sprint(value))
+		result.FeedTarget = &raw
+	}
 	if value, present := input["feed_url"]; present {
 		raw := strings.TrimSpace(fmt.Sprint(value))
 		result.FeedURL = &raw
@@ -470,7 +470,16 @@ func rssWatchUpdateFromTool(input map[string]any) (RSSWatchUpdateInput, error) {
 }
 
 func rssWatchForTool(item Reminder) *dianaRSSWatch {
-	return &dianaRSSWatch{ID: item.ID, FeedURL: item.FeedURL, Source: item.FeedSource, TwitterHandle: item.FeedHandle, JudgePrompt: item.FeedJudgePrompt, Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: item.LastError, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
+	return &dianaRSSWatch{ID: item.ID, FeedURL: item.FeedURL, Source: item.FeedSource, Target: item.FeedHandle, TwitterHandle: twitterHandleForTool(item), JudgePrompt: item.FeedJudgePrompt, Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: item.LastError, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
+}
+
+// twitterHandleForTool 只在 X 订阅上回填旧字段，别的平台留空避免误读。
+func twitterHandleForTool(item Reminder) string {
+	switch strings.ToLower(strings.TrimSpace(item.FeedSource)) {
+	case rssWatchPlatformX, rssWatchPlatformLegacyTwitter:
+		return item.FeedHandle
+	}
+	return ""
 }
 
 func marshalDianaRSSWatchResult(result dianaRSSWatchResult) (string, error) {

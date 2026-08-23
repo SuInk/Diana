@@ -118,6 +118,8 @@ type repositoryWatchUpdatePayload struct {
 }
 
 type rssWatchCreatePayload struct {
+	FeedPlatform    string `json:"platform,omitempty"`
+	FeedTarget      string `json:"target,omitempty"`
 	FeedURL         string `json:"feed_url,omitempty"`
 	TwitterHandle   string `json:"twitter_handle,omitempty"`
 	JudgePrompt     string `json:"judge_prompt"`
@@ -129,6 +131,8 @@ type rssWatchCreatePayload struct {
 }
 
 type rssWatchUpdatePayload struct {
+	FeedPlatform    *string `json:"platform,omitempty"`
+	FeedTarget      *string `json:"target,omitempty"`
 	FeedURL         *string `json:"feed_url,omitempty"`
 	TwitterHandle   *string `json:"twitter_handle,omitempty"`
 	JudgePrompt     *string `json:"judge_prompt,omitempty"`
@@ -702,13 +706,14 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 		}
 	}
 	item, err := manager.CreateRSSWatch(c.Request.Context(), assistant.RSSWatchCreateInput{
+		FeedPlatform: payload.FeedPlatform, FeedTarget: payload.FeedTarget,
 		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second, Platform: profile.Platform, ProfileID: profile.ID,
 		OwnerID: "webui:" + strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID,
 		ContextNamespace: repositoryWatchContextNamespace(set, profile.ID),
 	})
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, firstNonEmptyWeb(payload.TwitterHandle, payload.FeedURL), nil)
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, firstNonEmptyWeb(payload.FeedTarget, payload.TwitterHandle, payload.FeedURL), nil)
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.rss_watch.create", "RSS 订阅已创建", item.ID, map[string]any{"feed_url": item.FeedURL, "profile_id": item.ProfileID})
@@ -732,6 +737,7 @@ func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 		return
 	}
 	item, err := manager.UpdateRSSWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RSSWatchUpdateInput{
+		FeedPlatform: payload.FeedPlatform, FeedTarget: payload.FeedTarget,
 		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 	})

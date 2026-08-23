@@ -606,6 +606,7 @@ func (h *BotHandler) pluginDependencies(c *gin.Context) {
 		"plugins": gin.H{
 			assistant.ResolverPluginID:         resolver,
 			assistant.SandboxedBrowserPluginID: browser,
+			assistant.RSSWatchPluginID:         assistant.RSSWatchBrowserDependencies(browser),
 		},
 	})
 }

@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -26,18 +25,28 @@ import (
 const (
 	rssWatchPluginID = "official.rss-watch"
 
-	rssWatchSettingTwitterTemplate = "twitter_rss_template"
-	rssWatchSettingTimeout         = "timeout_seconds"
-	rssWatchSettingItemLimit       = "judge_item_limit"
+	rssWatchSettingTwitterTemplate   = "twitter_rss_template"
+	rssWatchSettingBilibiliCookie    = "bilibili_cookie"
+	rssWatchSettingDouyinCookie      = "douyin_cookie"
+	rssWatchSettingXiaohongshuCookie = "xiaohongshu_cookie"
+	rssWatchSettingTimeout           = "timeout_seconds"
+	rssWatchSettingItemLimit         = "judge_item_limit"
 
-	defaultTwitterRSSTemplate = "https://rsshub.app/twitter/user/{handle}"
-	maximumRSSBodyBytes       = 4 << 20
+	// legacyTwitterRSSTemplate 是 0.1.x 默认写死的 RSSHub 公共实例。X 已经改成
+	// 内置抓取，这个值再出现就只能当「没配置」处理，否则老用户会被继续绑在
+	// 一个随时会挂的公共中转上。
+	legacyTwitterRSSTemplate = "https://rsshub.app/twitter/user/{handle}"
+
+	maximumRSSBodyBytes = 4 << 20
+
+	// rssWatchBrowserUserAgent 是原生抓取统一使用的桌面 Chrome UA。几个站点都会
+	// 按 UA 决定是直接返回数据还是丢一段风控 JS。
+	rssWatchBrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-var twitterHandlePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,15}$`)
-
 type RSSWatchPlugin struct {
-	client *http.Client
+	client   *http.Client
+	bilibili *bilibiliAccessCache
 }
 
 type rssWatchSnapshot struct {
@@ -70,25 +79,49 @@ func NewRSSWatchPlugin(client *http.Client) *RSSWatchPlugin {
 	if client == nil {
 		client = netguard.NewPublicHTTPClient(20 * time.Second)
 	}
-	return &RSSWatchPlugin{client: client}
+	return &RSSWatchPlugin{client: client, bilibili: &bilibiliAccessCache{}}
 }
 
 func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          rssWatchPluginID,
 		Name:        "RSS 订阅",
-		Version:     "0.1.0",
-		Description: "订阅 RSS/Atom 或指定 X (Twitter) 用户；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
+		Version:     "0.2.0",
+		Description: "订阅 X、哔哩哔哩、抖音、小红书、GitHub 或任意 RSS/Atom：平台内容由内置抓取器直接读取，不依赖 RSSHub；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:https", "task:persistent", "message:send", "llm:generate"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         rssWatchSettingTwitterTemplate,
-				Label:       "Twitter RSS 模板",
-				Description: "将 {handle} 替换为用户名。默认使用 RSSHub 公共实例；生产环境建议填写自建 RSSHub，例如 https://rss.example.com/twitter/user/{handle}。",
+				Label:       "X 自定义 Feed 模板",
+				Description: "留空即用内置抓取（syndication 接口，无需账号）。只有想走自建 RSSHub、Nitter 这类中转时才填，例如 https://rss.example.com/twitter/user/{handle}，其中 {handle} 会被替换成用户名。",
 				Type:        PluginSettingTypeString,
-				Default:     defaultTwitterRSSTemplate,
+				Default:     "",
+			},
+			{
+				Key:         rssWatchSettingBilibiliCookie,
+				Label:       "哔哩哔哩 Cookie",
+				Description: "可选。留空时用匿名访问抓取 UP 主投稿；填写登录后的整段 Cookie 可以改抓完整动态（图文、转发、直播）。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+			},
+			{
+				Key:         rssWatchSettingDouyinCookie,
+				Label:       "抖音 Cookie",
+				Description: "可选。抖音订阅通过本机无头浏览器打开主页截取官方接口响应，填写 Cookie 可以降低触发验证码的概率。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+			},
+			{
+				Key:         rssWatchSettingXiaohongshuCookie,
+				Label:       "小红书 Cookie",
+				Description: "可选。留空时读主页服务端渲染数据（拿不到笔记链接），填写登录后的 Cookie 可以带上笔记 ID 和直达链接。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
 			},
 			{
 				Key:         rssWatchSettingTimeout,
@@ -120,32 +153,17 @@ func (*RSSWatchPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, 
 	return nil, nil
 }
 
-func normalizeTwitterHandle(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
-		host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
-		if host == "x.com" || host == "twitter.com" {
-			raw = strings.Split(strings.Trim(parsed.Path, "/"), "/")[0]
-		}
+// customFeedTemplate 返回该平台配置的自定义 Feed 模板；0.1.x 写死的 RSSHub
+// 公共实例按未配置处理。
+func customFeedTemplate(spec rssWatchPlatformSpec, settings SettingValues) string {
+	if spec.TemplateKey == "" {
+		return ""
 	}
-	raw = strings.TrimPrefix(raw, "@")
-	if !twitterHandlePattern.MatchString(raw) {
-		return "", fmt.Errorf("Twitter 用户名不正确，请填写 @handle、handle 或用户主页链接")
+	template := strings.TrimSpace(settings.String(spec.TemplateKey, ""))
+	if template == legacyTwitterRSSTemplate {
+		return ""
 	}
-	return raw, nil
-}
-
-func twitterFeedURL(handle string, settings SettingValues) (string, error) {
-	handle, err := normalizeTwitterHandle(handle)
-	if err != nil {
-		return "", err
-	}
-	template := strings.TrimSpace(settings.String(rssWatchSettingTwitterTemplate, defaultTwitterRSSTemplate))
-	if template == "" || !strings.Contains(template, "{handle}") {
-		return "", fmt.Errorf("Twitter RSS 模板必须包含 {handle}")
-	}
-	raw := strings.ReplaceAll(template, "{handle}", url.PathEscape(handle))
-	return normalizeRSSURL(raw)
+	return template
 }
 
 func normalizeRSSURL(raw string) (string, error) {
@@ -160,8 +178,8 @@ func normalizeRSSURL(raw string) (string, error) {
 	return parsed.String(), nil
 }
 
-func (p *RSSWatchPlugin) snapshot(ctx context.Context, feedURL string, settings SettingValues) (rssWatchSnapshot, string, error) {
-	feed, err := p.fetch(ctx, feedURL, settings)
+func (p *RSSWatchPlugin) snapshot(ctx context.Context, source rssWatchSource, settings SettingValues) (rssWatchSnapshot, string, error) {
+	feed, err := p.fetch(ctx, source, settings)
 	if err != nil {
 		return rssWatchSnapshot{}, "", err
 	}
@@ -172,12 +190,12 @@ func (p *RSSWatchPlugin) snapshot(ctx context.Context, feedURL string, settings 
 	return rssWatchSnapshot{ItemID: latest.ID, PublishedAt: latest.PublishedAt}, feed.Title, nil
 }
 
-func (p *RSSWatchPlugin) check(ctx context.Context, feedURL, cursor string, publishedAt time.Time, settings SettingValues) (rssWatchChange, error) {
-	feed, err := p.fetch(ctx, feedURL, settings)
+func (p *RSSWatchPlugin) check(ctx context.Context, source rssWatchSource, cursor string, publishedAt time.Time, settings SettingValues) (rssWatchChange, error) {
+	feed, err := p.fetch(ctx, source, settings)
 	if err != nil {
 		return rssWatchChange{}, err
 	}
-	change := rssWatchChange{FeedURL: feedURL, FeedName: feed.Title, Items: []rssWatchItem{}}
+	change := rssWatchChange{FeedURL: source.URL, FeedName: feed.Title, Items: []rssWatchItem{}}
 	if len(feed.Items) == 0 {
 		return change, nil
 	}
@@ -222,43 +240,81 @@ func (p *RSSWatchPlugin) check(ctx context.Context, feedURL, cursor string, publ
 	return change, nil
 }
 
-func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings SettingValues) (parsedFeed, error) {
-	feedURL, err := normalizeRSSURL(feedURL)
+// fetch 按平台取内容：自定义模板优先，其次是平台内置抓取，最后按普通 RSS/Atom 解析。
+func (p *RSSWatchPlugin) fetch(ctx context.Context, source rssWatchSource, settings SettingValues) (parsedFeed, error) {
+	spec, ok := rssWatchPlatform(source.Platform)
+	if !ok {
+		return parsedFeed{}, fmt.Errorf("不支持的订阅平台 %q", source.Platform)
+	}
+	if template := customFeedTemplate(spec, settings); template != "" {
+		feedURL, err := applyFeedTemplate(template, source.Target)
+		if err != nil {
+			return parsedFeed{}, err
+		}
+		return p.fetchFeedURL(ctx, feedURL, settings)
+	}
+	if spec.fetch != nil {
+		return spec.fetch(ctx, p, source, settings)
+	}
+	return p.fetchFeedURL(ctx, source.URL, settings)
+}
+
+func (p *RSSWatchPlugin) fetchFeedURL(ctx context.Context, feedURL string, settings SettingValues) (parsedFeed, error) {
+	body, err := p.get(ctx, feedURL, settings, map[string]string{
+		"Accept":     "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
+		"User-Agent": "Diana-RSS/0.2",
+	})
 	if err != nil {
 		return parsedFeed{}, err
-	}
-	timeout := time.Duration(settings.Int(rssWatchSettingTimeout, 20)) * time.Second
-	if timeout < 5*time.Second {
-		timeout = 5 * time.Second
-	}
-	requestCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, feedURL, nil)
-	if err != nil {
-		return parsedFeed{}, err
-	}
-	req.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5")
-	req.Header.Set("User-Agent", "Diana-RSS/0.1")
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return parsedFeed{}, fmt.Errorf("抓取 Feed 失败: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return parsedFeed{}, fmt.Errorf("抓取 Feed 返回 HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maximumRSSBodyBytes+1))
-	if err != nil {
-		return parsedFeed{}, fmt.Errorf("读取 Feed 失败: %w", err)
-	}
-	if len(body) > maximumRSSBodyBytes {
-		return parsedFeed{}, fmt.Errorf("Feed 内容超过 %d MiB 限制", maximumRSSBodyBytes>>20)
 	}
 	feed, err := parseRSSOrAtom(body)
 	if err != nil {
 		return parsedFeed{}, fmt.Errorf("解析 Feed 失败: %w", err)
 	}
 	return feed, nil
+}
+
+// get 是所有原生抓取共用的 HTTP 读取：统一超时、统一体积上限、统一错误措辞。
+func (p *RSSWatchPlugin) get(ctx context.Context, rawURL string, settings SettingValues, headers map[string]string) ([]byte, error) {
+	rawURL, err := normalizeRSSURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, rssWatchTimeout(settings))
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range headers {
+		if strings.TrimSpace(value) != "" {
+			req.Header.Set(key, value)
+		}
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("抓取 Feed 失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("抓取 Feed 返回 HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maximumRSSBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("读取 Feed 失败: %w", err)
+	}
+	if len(body) > maximumRSSBodyBytes {
+		return nil, fmt.Errorf("Feed 内容超过 %d MiB 限制", maximumRSSBodyBytes>>20)
+	}
+	return body, nil
+}
+
+func rssWatchTimeout(settings SettingValues) time.Duration {
+	timeout := time.Duration(settings.Int(rssWatchSettingTimeout, 20)) * time.Second
+	if timeout < 5*time.Second {
+		timeout = 5 * time.Second
+	}
+	return timeout
 }
 
 type rssDocument struct {
@@ -384,14 +440,20 @@ func parseRSSOrAtom(body []byte) (parsedFeed, error) {
 	default:
 		return parsedFeed{}, fmt.Errorf("不支持的 XML 根节点 %q，仅支持 RSS 2.0 与 Atom", root.XMLName.Local)
 	}
-	sort.SliceStable(feed.Items, func(i, j int) bool {
-		left, right := feed.Items[i].PublishedAt, feed.Items[j].PublishedAt
+	sortFeedItemsByPublishedAt(feed.Items)
+	return feed, nil
+}
+
+// sortFeedItemsByPublishedAt 把条目按发布时间从新到旧排；缺时间的条目保持原顺序，
+// 因为各平台接口本来就是新的在前。
+func sortFeedItemsByPublishedAt(items []rssWatchItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i].PublishedAt, items[j].PublishedAt
 		if left.IsZero() || right.IsZero() || left.Equal(right) {
 			return false
 		}
 		return left.After(right)
 	})
-	return feed, nil
 }
 
 func parseFeedTime(raw string) time.Time {

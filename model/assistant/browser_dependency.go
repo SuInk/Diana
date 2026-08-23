@@ -28,7 +28,18 @@ const browserDependencyName = "chrome"
 const (
 	ResolverPluginID         = resolverPluginID
 	SandboxedBrowserPluginID = sandboxedBrowserPluginID
+	RSSWatchPluginID         = rssWatchPluginID
 )
+
+// RSSWatchBrowserDependencies 把同一个浏览器依赖挂到订阅插件下：抖音订阅要靠
+// 无头浏览器打开主页截接口，缺浏览器时应该在订阅插件的卡片上就能看出来。
+func RSSWatchBrowserDependencies(deps []ResolverDependency) []ResolverDependency {
+	out := cloneResolverDependencies(deps)
+	for index := range out {
+		out[index].Purpose = "抖音订阅：用一次性无头浏览器打开主页并截取官方接口响应"
+	}
+	return out
+}
 
 // BrowserDependencies 返回缓存的浏览器探测结果。
 func BrowserDependencies() []ResolverDependency {
