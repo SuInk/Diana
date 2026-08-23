@@ -483,9 +483,16 @@ func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 	if runtime, ok := h.runtime.(profileAwareRuntime); ok {
 		runtime.SetProfiles(set)
 	}
-	channel := h.newChannel(cfg)
+	// 只在没有配置集工厂时才退回单配置工厂。以前这里两个都调,单配置工厂造出来
+	// 的 channel 直接被丢弃,但它有副作用——OneBot 反连监听器是进程内共享的一个
+	// 实例,那次调用会用「当前激活配置」的 token 覆盖监听器,而当前激活的未必是
+	// OneBot 配置档。于是监听器拿着一个空的或别的档案的 token,连数据库里自己的
+	// token 都认不出来,握手一律 401。
+	var channel assistant.Channel
 	if h.newChannelSet != nil {
 		channel = h.newChannelSet(set)
+	} else {
+		channel = h.newChannel(cfg)
 	}
 	return h.runtime.UpdateConfig(h.ctx, cfg, channel)
 }

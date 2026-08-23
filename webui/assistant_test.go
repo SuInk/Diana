@@ -590,3 +590,40 @@ func TestBotConfigSaveReportsPersistenceFailure(t *testing.T) {
 		t.Fatalf("status = %d body = %s, want 500", rec.Code, rec.Body.String())
 	}
 }
+
+// TestApplyProfileSetDoesNotInvokeSingleChannelFactory 固定这次 401 的根因：
+// 配置集工厂在场时不能再调单配置工厂。单配置工厂造出来的 channel 会被丢弃，
+// 但它有副作用——共享的 OneBot 反连监听器会被「当前激活配置」的 token 覆盖，
+// 而激活的未必是 OneBot 配置档，监听器于是拿着一个对不上任何配置的 token。
+func TestApplyProfileSetDoesNotInvokeSingleChannelFactory(t *testing.T) {
+	cfg := assistant.DefaultBotConfig()
+	runtime := assistant.NewRuntime(cfg, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	singleCalls := 0
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
+		singleCalls++
+		return fakeChannel{}
+	})
+	handler.SetProfileStore(NewMemoryBotProfileStore(cfg))
+	setCalls := 0
+	handler.SetChannelSetFactory(func(assistant.ProfileSet) assistant.Channel {
+		setCalls++
+		return fakeChannel{}
+	})
+	router := botTestRouter(handler)
+
+	body := []byte(`{"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","owner_id":"10001","onebot_access_token":"0123456789abcdef"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if setCalls == 0 {
+		t.Fatal("channel set factory was never called")
+	}
+	if singleCalls != 0 {
+		t.Fatalf("single-config factory called %d times, want 0 while a set factory is installed", singleCalls)
+	}
+}

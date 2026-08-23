@@ -53,8 +53,9 @@ func NewOneBotReverseServer(cfg OneBotConfig) *OneBotReverseServer {
 	return &OneBotReverseServer{
 		cfg: cfg,
 		status: ChannelStatus{
-			Endpoint:  cfg.Endpoint,
-			UpdatedAt: time.Now(),
+			AccessTokenConfigured: strings.TrimSpace(cfg.AccessToken) != "",
+			Endpoint:              cfg.Endpoint,
+			UpdatedAt:             time.Now(),
 		},
 		upgrader: websocket.Upgrader{
 			// NapCat does not send Origin. Browser clients must be same-origin so a
@@ -71,6 +72,7 @@ func (s *OneBotReverseServer) SetConfig(cfg OneBotConfig) {
 	s.mu.Unlock()
 	s.connMu.Lock()
 	s.status.Endpoint = cfg.Endpoint
+	s.status.AccessTokenConfigured = strings.TrimSpace(cfg.AccessToken) != ""
 	s.status.UpdatedAt = time.Now()
 	s.connMu.Unlock()
 }

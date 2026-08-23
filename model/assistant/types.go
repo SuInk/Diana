@@ -260,15 +260,18 @@ type ResultChannel interface {
 }
 
 type ChannelStatus struct {
-	ProfileID               string     `json:"profile_id,omitempty"`
-	Platform                string     `json:"platform,omitempty"`
-	Name                    string     `json:"name,omitempty"`
-	Connected               bool       `json:"connected"`
-	AccountStatusKnown      bool       `json:"account_status_known,omitempty"`
-	AccountOnline           bool       `json:"account_online"`
-	AccountGood             bool       `json:"account_good"`
-	AccountStatusMessage    string     `json:"account_status_message,omitempty"`
-	Endpoint                string     `json:"endpoint"`
+	ProfileID            string `json:"profile_id,omitempty"`
+	Platform             string `json:"platform,omitempty"`
+	Name                 string `json:"name,omitempty"`
+	Connected            bool   `json:"connected"`
+	AccountStatusKnown   bool   `json:"account_status_known,omitempty"`
+	AccountOnline        bool   `json:"account_online"`
+	AccountGood          bool   `json:"account_good"`
+	AccountStatusMessage string `json:"account_status_message,omitempty"`
+	Endpoint             string `json:"endpoint"`
+	// AccessTokenConfigured 反映的是「运行中的监听器」手上有没有 token，
+	// 用来和存储里的配置对照:两边不一致就说明运行态没跟上保存的配置。
+	AccessTokenConfigured   bool       `json:"access_token_configured,omitempty"`
 	SelfID                  string     `json:"self_id,omitempty"`
 	LastError               string     `json:"last_error,omitempty"`
 	ConnectionEpoch         uint64     `json:"connection_epoch,omitempty"`
