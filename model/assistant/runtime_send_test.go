@@ -364,14 +364,17 @@ func TestErrorNoticeIsNotChunkedByPersonaStyle(t *testing.T) {
 		ResponseMode: ResponseModeStandard,
 		ReplyStyle:   ReplyStyleGroupmate,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
-	if size := runtime.Config().DirectReplyChunkSize; size <= 0 || size > 200 {
-		t.Fatalf("fixture needs the short groupmate chunk size, got %d", size)
+	if size := runtime.Config().DirectReplyChunkSize; size != groupmateReplyChunkSize {
+		t.Fatalf("fixture needs the groupmate chunk size, got %d", size)
 	}
 
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "m1"}
 	notice := "出错了：llm: provider request failed: llm: openai-compatible request failed: 403 Forbidden: " +
 		"type=error; message=The latest version of this model is only available hosted in China and " +
-		"requires explicit opt in: https://example.test/docs/opt-in"
+		"requires explicit opt in: https://example.test/docs/opt-in. " +
+		"Retrying will keep failing until the account owner accepts the regional terms for this model, " +
+		"switches the profile to a model that is available in the current region, or routes the request " +
+		"through a provider endpoint that already carries the required opt-in flag."
 	if len([]rune(notice)) <= runtime.Config().DirectReplyChunkSize {
 		t.Fatalf("fixture notice must be longer than the chat chunk size: %d runes", len([]rune(notice)))
 	}
