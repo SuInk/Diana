@@ -163,6 +163,7 @@
               <div v-if="event.decision === 'replied' || event.handled" class="event-detail-reply">
                 <strong>回复结果</strong>
                 <p>{{ replyResultText(event) }}</p>
+                <p v-if="deliverySummary(event)" class="muted">{{ deliverySummary(event) }}</p>
               </div>
               <div v-if="event.subtasks?.length" class="event-subtasks">
                 <strong>触发的后台任务</strong>
@@ -315,6 +316,7 @@ import {
   getAssistantEvents,
   type AppLogEntry,
   type AssistantEventDetail,
+  type AssistantEventDelivery,
   type AssistantEventSubtask,
   type AssistantEventRange,
   type AssistantEventResultFilter,
@@ -617,9 +619,36 @@ function subtaskDuration(task: AssistantEventSubtask): string {
   return task.finished_at ? text : `已运行 ${text}`;
 }
 
+// 纯文字回复时不显示这一行——「本轮发出：1 条消息」没有信息量。只有发过媒体或
+// 转发卡片时才补，那些恰恰是回复正文说不出来的部分。
+function deliverySummary(event: AssistantEventDetail): string {
+  const delivery = event.delivery;
+  if (!delivery) return "";
+  const hasMedia = Boolean(delivery.images || delivery.videos || delivery.audios || delivery.forward_cards);
+  if (!hasMedia) return "";
+  return `本轮发出：${deliveryParts(delivery).join("、")}`;
+}
+
+function deliveryParts(delivery?: AssistantEventDelivery): string[] {
+  if (!delivery) return [];
+  const parts: string[] = [];
+  if (delivery.forward_cards) {
+    const nodes = delivery.forward_nodes ? `（${delivery.forward_nodes} 条）` : "";
+    parts.push(`${delivery.forward_cards} 张转发卡片${nodes}`);
+  }
+  if (delivery.messages) parts.push(`${delivery.messages} 条消息`);
+  if (delivery.images) parts.push(`${delivery.images} 张图片`);
+  if (delivery.videos) parts.push(`${delivery.videos} 个视频`);
+  if (delivery.audios) parts.push(`${delivery.audios} 条语音`);
+  return parts;
+}
+
 function replyResultText(event: AssistantEventDetail): string {
   if (event.reply?.trim()) return displayMessageText(event.reply);
   if (event.error?.trim()) return `机器人已发送错误说明：${displayMessageText(event.error)}`;
+  // 以前这里一律写「未保存回复正文」。发媒体不发文字是正常情况，说成没保存是误导。
+  const parts = deliveryParts(event.delivery);
+  if (parts.length) return `本轮没有文字回复，只发了${parts.join("、")}`;
   return "已完成回复，但该历史记录未保存回复正文";
 }
 

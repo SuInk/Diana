@@ -383,6 +383,9 @@ func (s *SQLiteStore) ensureInboundAuditColumns() error {
 		{name: "self_echo_at", definition: "INTEGER"},
 		{name: "delivery_error", definition: "TEXT"},
 		{name: "superseded_by", definition: "TEXT"},
+		// 这一轮实际发出去的内容概览（几条消息、几张图、几个视频、有没有转发
+		// 卡片）。reply_text 只是文本，发媒体不发文字时它是空的。
+		{name: "delivery_json", definition: "TEXT"},
 	}
 	for _, column := range columns {
 		if found[column.name] {

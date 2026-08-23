@@ -56,6 +56,9 @@ type InboundEventDetail struct {
 	// Subtasks 是这条消息触发的后台子任务（生成图片、文档 OCR 等）。图片是任务跑完
 	// 之后异步发出去的，事件详情里只有一句文字回复时看不出它从哪来。
 	Subtasks []assistant.InboundEventSubtask `json:"subtasks,omitempty"`
+	// Delivery 是这一轮实际发出去的内容概览。Reply 只是文本，说不出还发了转发
+	// 卡片、几张图或一个视频。
+	Delivery assistant.OutboundDelivery `json:"delivery,omitempty"`
 }
 
 // InboundEventImage intentionally contains display metadata only. The WebUI
@@ -200,7 +203,7 @@ SELECT
   COALESCE(i.duration_ms, 0), COALESCE(i.delivery_stage, ''), COALESCE(i.outbound_message_id, ''),
   COALESCE(i.reply_generated_at, 0), COALESCE(i.send_attempted_at, 0), COALESCE(i.send_acked_at, 0),
   COALESCE(i.self_echo_at, 0), COALESCE(i.delivery_error, ''),
-  COALESCE(i.created_at, 0), COALESCE(i.completed_at, 0)
+  COALESCE(i.created_at, 0), COALESCE(i.completed_at, 0), COALESCE(i.delivery_json, '')
 FROM inbound_events AS i
 LEFT JOIN message_events AS m ON m.id = i.id
 LEFT JOIN user_profiles AS u ON u.user_id = i.user_id
@@ -219,15 +222,22 @@ LIMIT ? OFFSET ?
 		var item InboundEventDetail
 		var payload string
 		var eventTime, replyGeneratedAt, sendAttemptedAt, sendAckedAt, selfEchoAt, createdAt, completedAt int64
+		var deliveryJSON string
 		if err := rows.Scan(
 			&item.ID, &eventTime, &item.Kind, &item.GroupID, &item.UserID,
 			&item.SenderName, &item.MessageID, &item.Text, &payload, &item.Status,
 			&item.Outcome, &item.Decision, &item.Reason, &item.Reply, &item.Error,
 			&item.DurationMS, &item.DeliveryStage, &item.OutboundMessageID,
 			&replyGeneratedAt, &sendAttemptedAt, &sendAckedAt, &selfEchoAt, &item.DeliveryError,
-			&createdAt, &completedAt,
+			&createdAt, &completedAt, &deliveryJSON,
 		); err != nil {
 			return InboundEventDetailPage{}, fmt.Errorf("scan inbound event detail: %w", err)
+		}
+		if strings.TrimSpace(deliveryJSON) != "" {
+			// 旧记录没有这一列，解析失败也不该让整页事件查不出来。
+			if err := json.Unmarshal([]byte(deliveryJSON), &item.Delivery); err != nil {
+				item.Delivery = assistant.OutboundDelivery{}
+			}
 		}
 		item.At = time.Unix(eventTime, 0)
 		item.Status = strings.TrimSpace(item.Status)

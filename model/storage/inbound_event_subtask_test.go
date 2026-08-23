@@ -93,3 +93,61 @@ func TestInboundEventSubtaskIgnoresEmptyKeys(t *testing.T) {
 		t.Fatalf("缺少 event_id 或 task_id 的记录不该落库：%#v", loaded)
 	}
 }
+
+// delivery_json 走审计写入、事件详情读出这一整条路。发媒体不发文字时它是「到底
+// 发了什么」的唯一记录。
+func TestInboundEventDeliveryRoundTrip(t *testing.T) {
+	store := subtaskStore(t)
+	ctx := context.Background()
+
+	event := assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "m-1",
+		Time: time.Now().Unix(),
+	}
+	if _, _, err := store.EnqueueInboundEvent(ctx, "s", event); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind: assistant.EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "m-1",
+		Decision: "replied", Reason: "命中触发", Handled: true,
+		Delivery: assistant.OutboundDelivery{Images: 9, Videos: 1, ForwardCards: 1, ForwardNodes: 10},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, time.Time{}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("events = %#v", page.Events)
+	}
+	got := page.Events[0].Delivery
+	if got.Images != 9 || got.Videos != 1 || got.ForwardCards != 1 || got.ForwardNodes != 10 {
+		t.Fatalf("delivery 没有原样往返：%#v", got)
+	}
+}
+
+// 什么都没发时不写占位，读出来也是零值。
+func TestInboundEventDeliveryOmittedWhenNothingSent(t *testing.T) {
+	store := subtaskStore(t)
+	ctx := context.Background()
+	event := assistant.MessageEvent{
+		Kind: assistant.EventKindPrivate, UserID: "10001", MessageID: "m-2", Time: time.Now().Unix(),
+	}
+	if _, _, err := store.EnqueueInboundEvent(ctx, "s", event); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind: assistant.EventKindPrivate, UserID: "10001", MessageID: "m-2", Decision: "not_replied",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.ListInboundEventDetails(ctx, time.Time{}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || !page.Events[0].Delivery.Empty() {
+		t.Fatalf("没发东西却有 delivery：%#v", page.Events)
+	}
+}
