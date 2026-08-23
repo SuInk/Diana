@@ -290,6 +290,7 @@ type Runtime struct {
 	relationshipEvalWG  sync.WaitGroup
 	history             map[string][]MessageEvent
 	semanticRefCache    map[string]SemanticReferenceCacheRecord
+	agentCarryovers     map[string]agentRunCarryover
 	semanticIndexQueue  chan semanticIndexItem
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
@@ -3302,6 +3303,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if traceID != "" {
 			traceID = "chat-" + traceID
 		}
+		// 上一条回复预算耗尽时留下的工具观察存档,注入后模型直接续跑,
+		// 不再从零核验。本次运行结束后按结果续档或清档。
+		if carryover, ok := r.agentCarryoverMessage(event); ok {
+			messages = append(messages, carryover)
+		}
 		resp, err := agentRunner.Run(ctx, agent.Request{
 			Messages: messages,
 			TraceID:  traceID,
@@ -3310,6 +3316,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if err != nil {
 			return "", err
 		}
+		r.rememberAgentRunProgress(event, resp)
 		r.recordLLMUsage(ctx, event, resp.Provider, resp.Model, resp.Usage, "agent_reply")
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
