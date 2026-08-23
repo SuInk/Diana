@@ -262,6 +262,7 @@ type Runtime struct {
 	inboundStore              InboundEventStore
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
+	glossary                  GlossaryStore
 	reminders                 ReminderStore
 	groupConfigs              GroupConfigStore
 	configSaver               ConfigSaver
@@ -397,6 +398,14 @@ func (r *Runtime) SetStructuredMemoryStore(store StructuredMemoryStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.structuredMemory = store
+}
+
+// SetGlossaryStore 注入词典存储。没有它时词典整体静默失效：自动命中查不到、
+// diana.glossary 明确报错，回复本身不受影响。
+func (r *Runtime) SetGlossaryStore(store GlossaryStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.glossary = store
 }
 
 // SetRepositoryIssueDraftStore enables restart-safe Issue draft approval.
@@ -2739,6 +2748,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaSubtaskTool(r, event),
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
+				newDianaGlossaryTool(r, event, relationship),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
 				newDianaReminderTool(r, event),
@@ -2877,6 +2887,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Role:     llm.RoleUser,
 				Content:  memoryContext,
 				Priority: llm.MessagePriorityMemory,
+			})
+		}
+		// 词典和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
+		// 一起让位给当前消息，而不是互相挤。
+		if glossaryContext := contextPreload.glossaryContext; glossaryContext != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    glossaryContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
 			})
 		}
 		if directAgentDecision && agentCanFetchMedia {
@@ -5174,6 +5194,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)
+	}
+	if agentEnabled && hasTool(dianaGlossaryToolName) {
+		builder.WriteString("\n" + promptToolGlossary)
 	}
 	if agentEnabled && hasTool("diana.capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)
