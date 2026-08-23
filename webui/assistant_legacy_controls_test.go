@@ -38,7 +38,7 @@ func TestRestoredGroupControlRoutes(t *testing.T) {
 	}
 
 	recorder = httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/qqbot/group-test/files?group_id=123456", nil))
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/group-test/files?group_id=123456", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("files status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
@@ -113,7 +113,7 @@ func TestRestoredFileParseAndUploadRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	recorder := performJSONRequest(router, http.MethodPost, "/api/qqbot/group-test/file", string(body))
+	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/group-test/file", string(body))
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Diana restored file parser") {
 		t.Fatalf("file parse status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
@@ -151,7 +151,7 @@ func TestRestoredTaskListKeepsStatusAndNewestFirst(t *testing.T) {
 	handler.SetSQLiteStore(store)
 	router := botTestRouter(handler)
 	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/qqbot/tasks", nil))
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/tasks", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}

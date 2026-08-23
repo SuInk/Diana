@@ -5,7 +5,6 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -522,73 +521,6 @@ INSERT INTO inbound_events (
 	}
 	if len(errorPage.Events) != 1 || errorPage.Events[0].ID != "error-0" {
 		t.Fatalf("error events = %#v", errorPage.Events)
-	}
-}
-
-func TestInboundEventAuditColumnsMigrateExistingDatabase(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy-event-audit.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`
-CREATE TABLE inbound_events (
-  id TEXT PRIMARY KEY,
-  session TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  group_id TEXT,
-  user_id TEXT,
-  message_id TEXT,
-  event_time INTEGER NOT NULL,
-  payload TEXT NOT NULL,
-  priority INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'pending',
-  attempts INTEGER NOT NULL DEFAULT 0,
-  available_at INTEGER NOT NULL,
-  lease_owner TEXT,
-  lease_until INTEGER,
-  outcome TEXT,
-  last_error TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  completed_at INTEGER
-)
-`)
-	if err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := NewSQLiteStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = store.Close() }()
-	rows, err := store.db.Query(`PRAGMA table_info(inbound_events)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = rows.Close() }()
-	found := map[string]bool{}
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			t.Fatal(err)
-		}
-		found[name] = true
-	}
-	for _, name := range []string{
-		"decision", "decision_reason", "reply_text", "processing_error", "duration_ms",
-		"delivery_stage", "outbound_message_id", "reply_generated_at", "send_attempted_at", "send_acked_at", "self_echo_at", "delivery_error",
-	} {
-		if !found[name] {
-			t.Fatalf("audit column %q was not migrated", name)
-		}
 	}
 }
 

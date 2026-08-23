@@ -28,8 +28,6 @@ const (
 	defaultFileParserMaxBytes = 32 * 1024 * 1024
 	defaultFileParserMaxChars = 24000
 
-	// fileParserSettingMaxFileKB 是 v0.3 及更早版本的 KB 设置键，只用于迁移。
-	fileParserSettingMaxFileKB    = "max_file_kb"
 	fileParserSettingMaxFileBytes = "max_file_bytes"
 	fileParserSettingMaxChars     = "max_chars"
 )

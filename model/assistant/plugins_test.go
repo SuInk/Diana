@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -60,15 +59,12 @@ func TestExtractURLsNormalizesStandaloneBilibiliVideoID(t *testing.T) {
 	}
 }
 
-func TestResolverVideoDownloadLimitCannotBeDisabledByLegacyZero(t *testing.T) {
+// 下载上限必须始终跟随配置的最终文件上限：下载过程中也要拦，否则恶意服务端能
+// 一直吐流把磁盘写满。
+func TestResolverVideoDownloadLimitFollowsConfiguredLimit(t *testing.T) {
 	t.Setenv("DIANA_RESOLVER_VIDEO_MAX_MB", "64")
-	t.Setenv("DIANA_RESOLVER_VIDEO_DOWNLOAD_MAX_MB", "0")
 	if got := resolverVideoDownloadMaxMB(context.Background()); got != 64 {
-		t.Fatalf("legacy zero download limit = %d, want fallback 64", got)
-	}
-	t.Setenv("DIANA_RESOLVER_VIDEO_DOWNLOAD_MAX_MB", "32")
-	if got := resolverVideoDownloadMaxMB(context.Background()); got != 32 {
-		t.Fatalf("legacy positive download limit = %d, want 32", got)
+		t.Fatalf("download limit = %d, want 64", got)
 	}
 }
 
@@ -905,11 +901,10 @@ func TestPluginManagerRestoreSanitizesSettings(t *testing.T) {
 			Installed: true,
 			Enabled:   true,
 			Settings: map[string]any{
-				"fetch_title":       false,
-				"max_links":         float64(99),
-				"exclude_platforms": []any{"weibo", "github"},
-				"removed_key":       "stale",
-				"timeout_seconds":   "slow",
+				"fetch_title":     false,
+				"max_links":       float64(99),
+				"removed_key":     "stale",
+				"timeout_seconds": "slow",
 			},
 		},
 	})
@@ -923,29 +918,11 @@ func TestPluginManagerRestoreSanitizesSettings(t *testing.T) {
 	if got := state.Settings["max_links"]; got != float64(20) {
 		t.Fatalf("max_links = %#v, want 20", got)
 	}
-	enabled := SettingValues(state.Settings).StringSlice(resolverSettingEnabledPlatforms)
-	if slices.Contains(enabled, "weibo") || slices.Contains(enabled, "github") || len(enabled) != len(resolverPlatforms)-2 {
-		t.Fatalf("migrated enabled platforms = %#v", enabled)
-	}
-	if _, ok := state.Settings[resolverSettingExcludePlatforms]; ok {
-		t.Fatalf("legacy exclude_platforms survived: %#v", state.Settings)
-	}
 	if _, ok := state.Settings["removed_key"]; ok {
 		t.Fatalf("removed_key survived: %#v", state.Settings)
 	}
 	if _, ok := state.Settings["timeout_seconds"]; ok {
 		t.Fatalf("invalid timeout survived: %#v", state.Settings)
-	}
-}
-
-func TestPluginManagerSanitizeGroupSettingsMigratesExcludedPlatforms(t *testing.T) {
-	manager := NewDefaultPluginManager()
-	overrides := manager.SanitizeGroupSettingOverrides(PluginSettingOverrides{
-		resolverPluginID: {resolverSettingExcludePlatforms: []any{"x", "zhihu"}},
-	})
-	enabled := SettingValues(overrides[resolverPluginID]).StringSlice(resolverSettingEnabledPlatforms)
-	if slices.Contains(enabled, "x") || slices.Contains(enabled, "zhihu") || len(enabled) != len(resolverPlatforms)-2 {
-		t.Fatalf("migrated group enabled platforms = %#v", enabled)
 	}
 }
 

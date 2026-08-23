@@ -39,7 +39,7 @@ func TestRuntimeShouldHandleGroupMentionAndTrigger(t *testing.T) {
 	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "Diana 帮我看看") {
 		t.Fatal("group trigger should trigger directly")
 	}
-	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "[回复:30006]Diana你怎么看") {
+	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "[diana-reply:30006]Diana你怎么看") {
 		t.Fatal("group trigger after reply marker should trigger directly")
 	}
 	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "我觉得Diana这事得看上下文") {
@@ -445,24 +445,6 @@ func TestRuntimeJudgesProactiveGroupMessagesImmediately(t *testing.T) {
 	}
 }
 
-func TestQueuedPassiveLegacyOutcomeIsTerminal(t *testing.T) {
-	decision, reason, handled := DescribeEventOutcome("queued_passive")
-	if decision != "not_replied" || handled || !strings.Contains(reason, "旧版本") {
-		t.Fatalf("decision=%q reason=%q handled=%v", decision, reason, handled)
-	}
-}
-
-func TestLegacyProactiveReplyOutcomesRemainReadable(t *testing.T) {
-	decision, reason, handled := DescribeEventOutcome("replied_passive")
-	if decision != "replied" || !handled || !strings.Contains(reason, "主动回复") {
-		t.Fatalf("decision=%q reason=%q handled=%v", decision, reason, handled)
-	}
-	decision, reason, handled = DescribeEventOutcome("superseded_passive")
-	if decision != "not_replied" || handled || !strings.Contains(reason, "主动回复") {
-		t.Fatalf("decision=%q reason=%q handled=%v", decision, reason, handled)
-	}
-}
-
 func TestRuntimeUpdateConfigIgnoresPreviousRunExit(t *testing.T) {
 	first := newDelayedExitChannel()
 	second := newDelayedExitChannel()
@@ -773,7 +755,7 @@ func TestRuntimeEnrichesReplyReferenceFromOneBot(t *testing.T) {
 	if event.Quoted == nil || event.Quoted.RawMessage != "被引用内容" || event.Quoted.SenderName != "Alice" {
 		t.Fatalf("quoted = %#v", event.Quoted)
 	}
-	prompt := currentPromptText(event, "[回复:abc] 这是什么意思")
+	prompt := currentPromptText(event, "[diana-reply:abc] 这是什么意思")
 	if !strings.Contains(prompt, "【被引用的消息】Alice: 被引用内容") {
 		t.Fatalf("prompt = %q", prompt)
 	}
@@ -1297,17 +1279,17 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	}
 }
 
-func TestPromptChineseSlangDefaultMigrationPreservesCustomText(t *testing.T) {
-	legacy := (BotConfig{PromptChineseSlangText: legacyDefaultPromptChineseSlang}).WithDefaults()
-	for _, want := range []string{"比喻、拟人、意象、节奏感和角色口吻", "不要只堆形容词", "事实、技术和操作说明仍以清楚准确为先"} {
-		if !strings.Contains(legacy.PromptChineseSlangText, want) {
-			t.Fatalf("legacy default was not upgraded with %q: %q", want, legacy.PromptChineseSlangText)
-		}
-	}
-
+// 用户自己写的中文语境提示词不能被默认值覆盖；留空才回落默认。
+func TestPromptChineseSlangKeepsCustomTextAndDefaultsWhenEmpty(t *testing.T) {
 	const custom = "保持冷峻克制的侦探口吻，避免比喻。"
 	if got := (BotConfig{PromptChineseSlangText: custom}).WithDefaults().PromptChineseSlangText; got != custom {
 		t.Fatalf("custom Chinese context prompt was overwritten: %q", got)
+	}
+	filled := (BotConfig{}).WithDefaults().PromptChineseSlangText
+	for _, want := range []string{"比喻、拟人、意象、节奏感和角色口吻", "不要只堆形容词", "事实、技术和操作说明仍以清楚准确为先"} {
+		if !strings.Contains(filled, want) {
+			t.Fatalf("default Chinese context prompt is missing %q: %q", want, filled)
+		}
 	}
 }
 
@@ -1347,19 +1329,13 @@ func TestRuntimeTrustedRuntimeClockStaysOutOfSystemPrompt(t *testing.T) {
 	}
 }
 
-func TestRuntimeSystemPromptOmitsDeprecatedPoliticalRule(t *testing.T) {
+func TestRuntimeSystemPromptHasNoPoliticalContentRule(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindGroup}, nil)
 	for _, removed := range []string{"禁止回复、展开、评价、搜索或协助生成任何政治相关内容", "简短说明群规不方便聊政治"} {
 		if strings.Contains(prompt, removed) {
 			t.Fatalf("system prompt still contains deprecated political rule %q: %q", removed, prompt)
 		}
-	}
-
-	legacy := BotConfig{SystemPrompt: "前置人格。" + deprecatedPoliticalPromptRule + "后置人格。"}
-	migrated := legacy.WithDefaults().SystemPrompt
-	if migrated != "前置人格。后置人格。" {
-		t.Fatalf("legacy political rule migration = %q", migrated)
 	}
 }
 
@@ -1575,7 +1551,7 @@ func forwardCallContainsText(call recordingAPICall, want string) bool {
 }
 
 func TestSplitReplyTreatsBotbrAsMessageBreak(t *testing.T) {
-	got := splitReply("abc<botbr>def", 20)
+	got := splitReply("abc<dianabr>def", 20)
 	want := []string{"abc", "def"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
@@ -1690,7 +1666,7 @@ func TestRuntimeBotbrReplySendsMultipleMessages(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "刚刚撤回的是两条：<botbr>1. A<botbr>2. B")
+	}, "刚刚撤回的是两条：<dianabr>1. A<dianabr>2. B")
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
@@ -3567,7 +3543,7 @@ func TestRuntimeResolverLocalVideoSharesHTTPURL(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	channel := &recordingChannel{}
-	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/token"}
+	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/token"}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetLocalMediaSharer(sharer)
 	event := MessageEvent{
@@ -3601,7 +3577,7 @@ func TestRuntimeResolverLocalVideoShareFailureFallsBackToFile(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	channel := &recordingChannel{sendErr: errors.New("send failed")}
-	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/token"}
+	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/token"}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetLocalMediaSharer(sharer)
 	event := MessageEvent{
@@ -4529,7 +4505,7 @@ func TestRuntimeReplyRuleConvertsReplyToVoice(t *testing.T) {
 	}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/qqbot/media/rule-voice"})
+	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/rule-voice"})
 
 	reply, err := runtime.replyTo(context.Background(), MessageEvent{
 		Kind:           EventKindGroup,
@@ -5063,7 +5039,6 @@ func TestStripReplyMarkersKeepsSenderText(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"[diana-reply:1244393238]@1907257915 必然不可能", "@1907257915 必然不可能"},
 		{"[diana-reply:-797497448]就是这张", "就是这张"},
-		{"[回复:30006]收到", "收到"},
 		{"[diana-reply:谁]还在吗", "[diana-reply:谁]还在吗"},
 		{"[diana-reply:30006", "[diana-reply:30006"},
 		{"我刚才[diana-reply:30006]过了", "我刚才过了"},

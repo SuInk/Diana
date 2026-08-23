@@ -344,7 +344,7 @@ WHERE created_at >= ? AND created_at < ?
 			_ = json.Unmarshal([]byte(metadata.String), &meta)
 		}
 		switch action {
-		case "assistant.llm_usage", "chatbot.llm_usage", "qqbot.llm_usage":
+		case "assistant.llm_usage", "chatbot.llm_usage":
 			stats.LLMCalls++
 			inputTokens := int64FromAny(meta["input_tokens"])
 			outputTokens := int64FromAny(meta["output_tokens"])

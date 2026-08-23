@@ -127,10 +127,7 @@ export interface BotProfileConfig {
   reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
-  /** 回复行为个性化；后端缺省（字段不存在）等价于开启。 */
-  reply_reference_enabled?: boolean;
-  mention_user_enabled?: boolean;
-  /** on 每条都带、off 从不带、auto 交给模型自己判断；缺省时按上面的布尔开关。 */
+  /** 回复行为个性化：on 每条都带、off 从不带、auto 交给模型自己判断；缺省等价于 on。 */
   reply_reference_mode?: "on" | "off" | "auto";
   mention_user_mode?: "on" | "off" | "auto";
   markdown_to_plain?: boolean;
@@ -296,17 +293,14 @@ export interface ResolverDependency {
 }
 
 export interface PluginDependencyResponse {
-  /** 兼容字段：等同 plugins 里链接解析那一组。 */
-  resolver: ResolverDependency[];
   /** 按插件 ID 分组，界面据此决定在哪张卡片上显示。 */
-  plugins?: Record<string, ResolverDependency[]>;
+  plugins: Record<string, ResolverDependency[]>;
 }
 
 export interface ResolverDependencyInstallResponse {
   dependency: ResolverDependency;
-  resolver: ResolverDependency[];
   /** 按插件 ID 分组，只包含这次受影响的那一组。 */
-  plugins?: Record<string, ResolverDependency[]>;
+  plugins: Record<string, ResolverDependency[]>;
   installer?: string;
 }
 

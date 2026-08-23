@@ -154,10 +154,10 @@ func TestReplyStyleGroupmateDropsReplyReferenceAndMention(t *testing.T) {
 func TestReplyStyleGroupmateRespectsExplicitDeliverySettings(t *testing.T) {
 	// 用户手动打开过就尊重用户，preset 只负责填未设置的项。
 	cfg := BotConfig{
-		ResponseMode:          ResponseModeStandard,
-		ReplyStyle:            ReplyStyleGroupmate,
-		ReplyReferenceEnabled: boolPointer(true),
-		MentionUserEnabled:    boolPointer(true),
+		ResponseMode:       ResponseModeStandard,
+		ReplyStyle:         ReplyStyleGroupmate,
+		ReplyReferenceMode: ReplyDecorationOn,
+		MentionUserMode:    ReplyDecorationOn,
 	}.WithDefaults()
 	if replyReferenceMode(cfg) != ReplyDecorationOn || mentionUserMode(cfg) != ReplyDecorationOn {
 		t.Fatalf("explicit delivery settings were overwritten: %#v", cfg)

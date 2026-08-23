@@ -1459,11 +1459,9 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
-    reply_reference_enabled: config.reply_reference_enabled ?? true,
-    mention_user_enabled: config.mention_user_enabled ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
-    reply_reference_mode: config.reply_reference_mode ?? ((config.reply_reference_enabled ?? true) ? "on" : "off"),
-    mention_user_mode: config.mention_user_mode ?? ((config.mention_user_enabled ?? true) ? "on" : "off"),
+    reply_reference_mode: config.reply_reference_mode ?? "on",
+    mention_user_mode: config.mention_user_mode ?? "on",
     markdown_to_plain: config.markdown_to_plain ?? true,
     error_notify_enabled: config.error_notify_enabled ?? true,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,

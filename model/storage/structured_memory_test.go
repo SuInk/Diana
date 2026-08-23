@@ -396,47 +396,6 @@ func TestMemoryJobQueueIsDurableAndDeduplicated(t *testing.T) {
 	}
 }
 
-func TestStructuredMemoryBackfillsLegacyProfileAsUncertainEpisode(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "memory.db")
-	store, err := NewSQLiteStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event := assistant.MessageEvent{
-		Kind: assistant.EventKindGroup, GroupID: "123", UserID: "user", SenderName: "Alice",
-		MessageID: "legacy-message", Time: time.Now().Unix(),
-		Segments: []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "我家的猫叫小白"}}},
-	}
-	if _, err := store.UpdateUserMemory(ctx, event, assistant.UserMemoryUpdate{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err = NewSQLiteStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = store.Close() }()
-	items, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{
-		SubjectUserID: "user",
-		Session:       "group:123",
-		Now:           time.Now(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("backfilled items = %#v", items)
-	}
-	item := items[0]
-	if item.Kind != assistant.MemoryKindEpisode || item.SourceType != assistant.MemorySourceInferred || !item.Sensitive || item.Confidence >= 0.7 || item.Topic != "历史聊天片段" {
-		t.Fatalf("legacy item was promoted too strongly: %#v", item)
-	}
-}
-
 func TestStructuredMemoryLexicalScoreWeighsLongTermsOverShortNoise(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "memory-weight.db"))

@@ -1183,9 +1183,6 @@ func resolverVideoDownloadMaxBytes(ctx context.Context) int64 {
 func resolverVideoDownloadMaxMB(ctx context.Context) int {
 	// Never allow an unlimited stream: the configured final-file limit is also
 	// enforced while downloading so a hostile server cannot fill the disk.
-	if legacy := envInt("DIANA_RESOLVER_VIDEO_DOWNLOAD_MAX_MB", 0); legacy > 0 {
-		return legacy
-	}
 	return resolverVideoMaxMB(ctx)
 }
 

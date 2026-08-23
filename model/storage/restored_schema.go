@@ -5,11 +5,7 @@ package storage
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
-	"strings"
-	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 )
@@ -217,6 +213,9 @@ CREATE TABLE IF NOT EXISTS inbound_events (
   send_acked_at INTEGER,
   self_echo_at INTEGER,
   delivery_error TEXT,
+  -- 这一轮实际发出去的内容概览（几条消息、几张图、几个视频、有没有转发卡片）。
+  -- reply_text 只是文本，发媒体不发文字时它是空的。
+  delivery_json TEXT,
   last_error TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -258,41 +257,14 @@ CREATE INDEX IF NOT EXISTS idx_inbound_events_lease ON inbound_events(status, le
 CREATE INDEX IF NOT EXISTS idx_inbound_events_session_lease ON inbound_events(status, session, lease_until);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_session_time ON inbound_events(session, event_time, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_group_time ON inbound_events(group_id, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_inbound_events_outbound_message ON inbound_events(outbound_message_id) WHERE outbound_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_inbound_events_priority_claim ON inbound_events(status, available_at, priority DESC, event_time, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repository_issue_drafts(group_id, status, created_at DESC);
 `)
 	if err != nil {
 		return err
 	}
-	if err := s.ensureInboundPriorityColumn(); err != nil {
-		return err
-	}
-	if err := s.ensureInboundAuditColumns(); err != nil {
-		return err
-	}
-	if err := s.backfillRecallNoticeAudits(); err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_inbound_events_priority_claim ON inbound_events(status, available_at, priority DESC, event_time, created_at, id)`); err != nil {
-		return err
-	}
-	if err := s.ensureMemoryKindSupportsThread(); err != nil {
-		return err
-	}
-	if err := s.backfillLegacyUserMemories(); err != nil {
-		return err
-	}
-
-	now := time.Now().UTC().UnixNano()
-	cutoff := time.Now().Add(-assistant.InboundReplayWindow).Unix()
-	_, err = s.db.Exec(`
-	UPDATE inbound_events
-	SET status = 'pending', available_at = ?, lease_owner = NULL, lease_until = NULL,
-	    outcome = NULL, decision = NULL, decision_reason = NULL, reply_text = NULL,
-	    processing_error = NULL, duration_ms = NULL, last_error = NULL,
-	    completed_at = NULL, updated_at = ?
-WHERE status = 'done' AND outcome = 'ignored_stale' AND event_time >= ?
-`, now, now, cutoff)
-	return err
+	return s.backfillRecallNoticeAudits()
 }
 
 func (s *SQLiteStore) backfillRecallNoticeAudits() error {
@@ -317,91 +289,6 @@ WHERE kind = 'notice'
 	return nil
 }
 
-func (s *SQLiteStore) ensureInboundPriorityColumn() error {
-	rows, err := s.db.Query(`PRAGMA table_info(inbound_events)`)
-	if err != nil {
-		return fmt.Errorf("inspect inbound queue schema: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	found := false
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return fmt.Errorf("inspect inbound queue column: %w", err)
-		}
-		if name == "priority" {
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate inbound queue schema: %w", err)
-	}
-	if found {
-		return nil
-	}
-	if _, err := s.db.Exec(`ALTER TABLE inbound_events ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); err != nil {
-		return fmt.Errorf("add inbound queue priority: %w", err)
-	}
-	return nil
-}
-
-func (s *SQLiteStore) ensureInboundAuditColumns() error {
-	rows, err := s.db.Query(`PRAGMA table_info(inbound_events)`)
-	if err != nil {
-		return fmt.Errorf("inspect inbound audit schema: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	found := map[string]bool{}
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return fmt.Errorf("inspect inbound audit column: %w", err)
-		}
-		found[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate inbound audit schema: %w", err)
-	}
-	columns := []struct {
-		name       string
-		definition string
-	}{
-		{name: "decision", definition: "TEXT"},
-		{name: "decision_reason", definition: "TEXT"},
-		{name: "reply_text", definition: "TEXT"},
-		{name: "processing_error", definition: "TEXT"},
-		{name: "duration_ms", definition: "INTEGER"},
-		{name: "delivery_stage", definition: "TEXT"},
-		{name: "outbound_message_id", definition: "TEXT"},
-		{name: "reply_generated_at", definition: "INTEGER"},
-		{name: "send_attempted_at", definition: "INTEGER"},
-		{name: "send_acked_at", definition: "INTEGER"},
-		{name: "self_echo_at", definition: "INTEGER"},
-		{name: "delivery_error", definition: "TEXT"},
-		{name: "superseded_by", definition: "TEXT"},
-		// 这一轮实际发出去的内容概览（几条消息、几张图、几个视频、有没有转发
-		// 卡片）。reply_text 只是文本，发媒体不发文字时它是空的。
-		{name: "delivery_json", definition: "TEXT"},
-	}
-	for _, column := range columns {
-		if found[column.name] {
-			continue
-		}
-		query := fmt.Sprintf("ALTER TABLE inbound_events ADD COLUMN %s %s", column.name, column.definition)
-		if _, err := s.db.Exec(query); err != nil {
-			return fmt.Errorf("add inbound audit column %s: %w", column.name, err)
-		}
-	}
-	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_inbound_events_outbound_message ON inbound_events(outbound_message_id) WHERE outbound_message_id IS NOT NULL`); err != nil {
-		return fmt.Errorf("create inbound outbound-message index: %w", err)
-	}
-	return nil
-}
-
 func (s *SQLiteStore) LoadReplySuppressions(ctx context.Context) ([]assistant.ReplySuppression, bool, error) {
 	var items []assistant.ReplySuppression
 	ok, err := s.loadJSON(ctx, replySuppressionsKey, &items)
@@ -415,65 +302,3 @@ func (s *SQLiteStore) SaveReplySuppressions(ctx context.Context, items []assista
 // memoryItemsKindCheck 是 memory_items.kind 当前允许的取值。加类型必须同时改这里、
 // 建表语句和 normalizeMemoryCandidate 的白名单，否则新类型会在写入时被 CHECK 拒掉。
 const memoryItemsKindCheck = `CHECK (kind IN ('fact', 'preference', 'episode', 'instruction', 'summary', 'thread'))`
-
-// ensureMemoryKindSupportsThread 给旧库的 memory_items 放开 thread 类型。
-//
-// SQLite 改不了已有的 CHECK 约束，只能整表重建。建表语句里已经带上 thread，所以
-// 新库不会进这条路径；老库里那条 CHECK 是升级前写死的，不重建就会在写线程便签时
-// 报 constraint failed。
-func (s *SQLiteStore) ensureMemoryKindSupportsThread() error {
-	var schema string
-	err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memory_items'`).Scan(&schema)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect memory item schema: %w", err)
-	}
-	if strings.Contains(schema, "'thread'") {
-		return nil
-	}
-	// 重建期间关掉外键：memory_items.supersedes_id 自引用，改名过程中会短暂悬空。
-	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
-		return fmt.Errorf("relax foreign keys for memory kind migration: %w", err)
-	}
-	defer func() { _, _ = s.db.Exec(`PRAGMA foreign_keys = ON`) }()
-
-	rebuilt := strings.Replace(schema, "CREATE TABLE IF NOT EXISTS memory_items", "CREATE TABLE memory_items_kind_migration", 1)
-	rebuilt = strings.Replace(rebuilt, "CREATE TABLE memory_items", "CREATE TABLE memory_items_kind_migration", 1)
-	if !strings.Contains(rebuilt, "memory_items_kind_migration") {
-		return fmt.Errorf("memory kind migration: unexpected table schema")
-	}
-	start := strings.Index(rebuilt, "CHECK (kind IN (")
-	if start < 0 {
-		return fmt.Errorf("memory kind migration: kind constraint not found")
-	}
-	end := strings.Index(rebuilt[start:], "))")
-	if end < 0 {
-		return fmt.Errorf("memory kind migration: kind constraint is malformed")
-	}
-	rebuilt = rebuilt[:start] + memoryItemsKindCheck + rebuilt[start+end+2:]
-	// 自引用外键也要跟着改名，否则新表会指回即将被删掉的旧表。
-	rebuilt = strings.ReplaceAll(rebuilt, "REFERENCES memory_items(id)", "REFERENCES memory_items_kind_migration(id)")
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin memory kind migration: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, statement := range []string{
-		`DROP TABLE IF EXISTS memory_items_kind_migration`,
-		rebuilt,
-		`INSERT INTO memory_items_kind_migration SELECT * FROM memory_items`,
-		`DROP TABLE memory_items`,
-		`ALTER TABLE memory_items_kind_migration RENAME TO memory_items`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_items_active_key ON memory_items(scope_key, subject_user_id, memory_key) WHERE status = 'active'`,
-		`CREATE INDEX IF NOT EXISTS idx_memory_items_subject_active ON memory_items(subject_user_id, status, importance DESC, confidence DESC, updated_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_memory_items_scope_active ON memory_items(scope_key, status, importance DESC, confidence DESC, updated_at DESC)`,
-	} {
-		if _, err := tx.Exec(statement); err != nil {
-			return fmt.Errorf("memory kind migration: %w", err)
-		}
-	}
-	return tx.Commit()
-}

@@ -556,7 +556,6 @@ func TestExtractOutgoingReplyMarkerParsesLeadingMarker(t *testing.T) {
 		{name: "positive id", input: "[diana-reply:30006]收到", wantID: "30006", wantRest: "收到"},
 		{name: "space after marker", input: "[diana-reply:30006]  收到", wantID: "30006", wantRest: "收到"},
 		{name: "marker only", input: "[diana-reply:30006]", wantID: "30006", wantRest: ""},
-		{name: "legacy qq marker", input: "[回复:30006]收到", wantID: "30006", wantRest: "收到"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id, rest, ok := extractOutgoingReplyMarker(tc.input)
@@ -575,7 +574,6 @@ func TestExtractOutgoingReplyMarkerKeepsNonMarkerText(t *testing.T) {
 		"[diana-reply:]",
 		"[diana-reply:30006",
 		"[diana-reply:12ab]",
-		"[回复:12ab]",
 		"没有标记",
 	} {
 		id, rest, ok := extractOutgoingReplyMarker(input)
