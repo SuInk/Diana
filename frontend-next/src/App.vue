@@ -89,6 +89,7 @@
           <span class="topbar-stream-text">{{ stream.connected ? "实时连接正常" : "实时连接已断开" }}</span>
         </span>
         <span v-if="health" class="topbar-uptime mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
+        <div class="topbar-actions">
         <a
           class="btn ghost small icon-only topbar-repo"
           :href="repositoryURL"
@@ -108,6 +109,7 @@
           <LogOut :size="15" aria-hidden="true" />
           <span class="topbar-logout-text">退出登录</span>
         </button>
+        </div>
       </header>
 
       <main class="app-content">
