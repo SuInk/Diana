@@ -95,11 +95,7 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		if len(preview) > 40 {
 			preview = append(preview[:40], '…')
 		}
-		hint := "发送者刚连发了多条消息,上一条「" + string(preview) + "」你还没有回复。这一轮把它们一起接住:先回应那一条,再回应当前这条,别让对方觉得前一条被跳过。"
-		if earlierID := strings.TrimSpace(earlier.MessageID); replyReferenceMode(cfg) != ReplyDecorationOff && validOutgoingReplyMessageID(earlierID) {
-			hint += "建议在回复最开头写 " + replyMarkerPrefix + earlierID + "] 引用那条更早的消息,让对方看到两条都被回复了。"
-		}
-		builder.WriteString(hint)
+		builder.WriteString("发送者刚连发了多条消息,上一条「" + string(preview) + "」你还没有回复。这一轮把它们一起接住:先明确回应那一条,再回应当前这条,别让对方觉得前一条被跳过。")
 	}
 	if replyReferenceMode(cfg) == ReplyDecorationAuto {
 		if messageID := strings.TrimSpace(event.MessageID); validOutgoingReplyMessageID(messageID) {

@@ -109,8 +109,9 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 	if !strings.Contains(prompt, "你还没有回复") || !strings.Contains(prompt, "commit提交也不用每次都推") {
 		t.Fatalf("连发未回时应点出上一条:%s", prompt)
 	}
-	if !strings.Contains(prompt, replyMarkerPrefix+"111]") {
-		t.Fatalf("应建议引用更早那条消息:%s", prompt)
+	// 承接靠措辞完成,不建议引用——引用框太重,连发场景里真人也只是接着说。
+	if strings.Contains(prompt, replyMarkerPrefix+"111]") {
+		t.Fatalf("不该建议引用更早那条消息:%s", prompt)
 	}
 
 	// 中间隔着机器人回复,说明上一条已经回过,不算连发未回。
