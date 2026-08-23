@@ -147,6 +147,66 @@ done
 cp -R "$package_dir/." "$install_dir/"
 chmod +x "$install_dir/run.sh" "$install_dir/$binary_name"
 
+# macOS 按代码签名身份记住授权（麦克风、完全磁盘访问、App 管理都挂在上面）。
+# 裸二进制没有签名，每次更新换一份新的 Mach-O，系统就当成一个全新程序：授权重新
+# 弹窗，「隐私与安全性」里堆出一排同名 Diana。把运行时装进一个路径固定的 .app，
+# 每次都用同一个 identifier ad-hoc 重签，并把 designated requirement 改写成只认
+# identifier（默认的 DR 会连 cdhash 一起钉死，换个二进制就不满足了），系统里就
+# 始终只有一条 Diana。
+macos_app_identifier='com.suink.diana'
+macos_app_dir="$install_dir/Diana.app"
+macos_app_binary="$macos_app_dir/Contents/MacOS/$binary_name"
+
+write_macos_app_plist() {
+  cat >"$macos_app_dir/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
+	<key>CFBundleDisplayName</key><string>Diana</string>
+	<key>CFBundleExecutable</key><string>$binary_name</string>
+	<key>CFBundleIdentifier</key><string>$macos_app_identifier</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>Diana</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>${version#v}</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>LSMinimumSystemVersion</key><string>12.0</string>
+	<key>LSUIElement</key><true/>
+	<key>NSHumanReadableCopyright</key><string>Copyright SuInk</string>
+</dict>
+</plist>
+PLIST
+}
+
+assemble_macos_app() {
+  [ "$os" = "darwin" ] || return 0
+  # 运行时和前端都放进 bundle：自更新器要求前端目录在可执行文件所在目录之内，
+  # 否则会判定「不支持 Release 自更新」。
+  mkdir -p "$macos_app_dir/Contents/MacOS"
+  write_macos_app_plist
+  cp -f "$install_dir/$binary_name" "$macos_app_binary"
+  chmod +x "$macos_app_binary"
+  rm -rf "$macos_app_dir/Contents/MacOS/frontend-next"
+  if [ -d "$install_dir/frontend-next" ]; then
+    cp -R "$install_dir/frontend-next" "$macos_app_dir/Contents/MacOS/frontend-next"
+  fi
+  sign_macos_app || info "macOS → codesign unavailable, permissions may need re-approval"
+}
+
+sign_macos_app() {
+  command -v codesign >/dev/null 2>&1 || return 1
+  codesign --force --deep --sign - \
+    --identifier "$macos_app_identifier" \
+    --requirements "=designated => identifier \"$macos_app_identifier\"" \
+    "$macos_app_dir" >/dev/null 2>&1 || return 1
+  codesign --verify --deep --strict "$macos_app_dir" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+assemble_macos_app
+
 generated_password=""
 generated_username=""
 if [ ! -f "$install_dir/runtime.env" ]; then
@@ -158,7 +218,11 @@ if [ ! -f "$install_dir/runtime.env" ]; then
   port_q=$(shell_quote "$port")
   db_path_q=$(shell_quote "$db_path")
   log_path_q=$(shell_quote "$install_dir/logs/diana.log")
-  frontend_dist_q=$(shell_quote "$install_dir/frontend-next/dist")
+  if [ "$os" = "darwin" ]; then
+    frontend_dist_q=$(shell_quote "$macos_app_dir/Contents/MacOS/frontend-next/dist")
+  else
+    frontend_dist_q=$(shell_quote "$install_dir/frontend-next/dist")
+  fi
   username_q=$(shell_quote "$username")
   password_q=$(shell_quote "$generated_password")
   cat >"$install_dir/runtime.env" <<EOF
@@ -192,7 +256,33 @@ else
   fi
 fi
 
-cat >"$install_dir/start-installed.sh" <<'EOF'
+if [ "$os" = "darwin" ]; then
+  # 每次启动先确认 .app 的签名还满足固定 identifier：WebUI 自更新替换了 bundle
+  # 里的文件之后签名会失效，这里补签回来，避免下次启动被系统当成新程序登记。
+  cat >"$install_dir/start-installed.sh" <<EOF
+#!/bin/sh
+set -eu
+install_root=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
+set -a
+. "\$install_root/runtime.env"
+set +a
+app_dir="\$install_root/Diana.app"
+app_binary="\$app_dir/Contents/MacOS/$binary_name"
+if [ -x "\$app_binary" ]; then
+  if command -v codesign >/dev/null 2>&1; then
+    if ! codesign --verify --deep --strict "\$app_dir" >/dev/null 2>&1; then
+      codesign --force --deep --sign - \\
+        --identifier "$macos_app_identifier" \\
+        --requirements "=designated => identifier \\"$macos_app_identifier\\"" \\
+        "\$app_dir" >/dev/null 2>&1 || true
+    fi
+  fi
+  exec "\$app_binary"
+fi
+exec "\$install_root/run.sh"
+EOF
+else
+  cat >"$install_dir/start-installed.sh" <<'EOF'
 #!/bin/sh
 set -eu
 install_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -201,6 +291,7 @@ set -a
 set +a
 exec "$install_root/run.sh"
 EOF
+fi
 chmod +x "$install_dir/start-installed.sh"
 printf '%s\n' "$version" >"$install_dir/.installed-version"
 
@@ -348,6 +439,9 @@ restore_previous() {
       mv "$backup_dir/runtime/$item" "$install_dir/$item"
     fi
   done
+  # .app 里装的是同一份运行时，回滚后按恢复出来的旧文件重新组装并重签，
+  # 否则 launchd 下次拉起的还是新版本。
+  assemble_macos_app
   for suffix in "" -wal -shm; do
     if [ -f "$backup_dir/data/diana.db$suffix" ]; then
       cp -p "$backup_dir/data/diana.db$suffix" "$db_path$suffix"
