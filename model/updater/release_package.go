@@ -281,6 +281,22 @@ func (u *ReleasePackageUpdater) Supported() bool {
 	return u != nil && u.supported
 }
 
+// UnsupportedReason 返回本次部署不支持 Release 自更新的原因；支持时返回空。
+// 界面要把这个原因说给用户听，否则「不支持更新」和「已经是最新」在页面上
+// 长得一模一样，用户只会以为自己已经升级过了。
+func (u *ReleasePackageUpdater) UnsupportedReason() string {
+	if u == nil {
+		return "release package updater is not configured"
+	}
+	if u.supported {
+		return ""
+	}
+	if strings.TrimSpace(u.unsupportedWhy) == "" {
+		return "release package self-update is not supported by this deployment"
+	}
+	return u.unsupportedWhy
+}
+
 func (u *ReleasePackageUpdater) ExpectedAssetName() string {
 	if u == nil {
 		return ""
