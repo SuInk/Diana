@@ -44,6 +44,9 @@ type systemUpdateCheckResponse struct {
 	UpdateAvailable   bool   `json:"update_available"`
 	UpdateSupported   bool   `json:"update_supported"`
 	BuildType         string `json:"build_type"`
+	// UpdateUnsupportedReason 在 UpdateSupported 为 false 时说明原因。界面必须
+	// 把它显示出来，否则「升不了级」会被渲染成「已经是最新」。
+	UpdateUnsupportedReason string `json:"update_unsupported_reason,omitempty"`
 	// SwitchToReleaseAvailable 表示当前是源码构建，可以显式切换到正式 Release 包。
 	SwitchToReleaseAvailable bool                 `json:"switch_to_release_available"`
 	IntegrityMode            string               `json:"integrity_mode"`
@@ -55,6 +58,8 @@ type systemUpdateCheckResponse struct {
 
 type ReleasePackageUpdater interface {
 	Supported() bool
+	// UnsupportedReason 说明为什么这台机器升不了级；支持时返回空。
+	UnsupportedReason() string
 	ExpectedAssetName() string
 	Status(context.Context) (updater.Status, error)
 	Download(context.Context, updater.ReleasePackage, bool) (updater.Result, error)
@@ -190,14 +195,15 @@ func (h *SystemUpdateHandler) version(c *gin.Context) {
 		payload["head_subject"] = status.HeadSubject
 		payload["branch"] = status.Branch
 		payload["behind"] = status.Behind
-		if v := status.VersionLabel(); v != "" {
-			// 侧栏展示语义化版本（tag 或 tag+N），只有仓库完全没有 tag 时才退回提交短号。
-			label = v
-		}
+		label = preferredVersionLabel(label, status.VersionLabel())
 		payload["update_supported"] = gitAvailable
+		if !gitAvailable {
+			payload["update_unsupported_reason"] = gitUpdateUnsupportedReason
+		}
 	} else {
 		payload["git_available"] = false
 		payload["deployment_mode"] = "release"
+		payload["update_unsupported_reason"] = h.releaseUpdateSupport(false, false, false).Reason
 	}
 	payload["version_label"] = label
 	c.JSON(http.StatusOK, payload)
@@ -270,6 +276,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, versionErr)
 		return
 	}
+	support := h.releaseUpdateSupport(gitAvailable, packageReady, statusErr == nil && status.Root != "")
 	// 源码构建不提示更新，避免把用户自己编译的版本当成落后版本自动换掉；
 	// 改为提供一个显式的“切换到正式 Release”入口。
 	switchToRelease := false
@@ -289,8 +296,10 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 		LatestPublishedAt: latestPublishedAt,
 		CheckedAt:         checkedAt.Format(time.RFC3339),
 		UpdateAvailable:   updateAvailable || releaseApplyPending(status, gitAvailable),
-		UpdateSupported:   gitAvailable || packageReady,
+		UpdateSupported:   support.Supported,
 		BuildType:         h.buildType,
+
+		UpdateUnsupportedReason: support.Reason,
 
 		SwitchToReleaseAvailable: switchToRelease,
 
@@ -875,6 +884,24 @@ func (h *SystemUpdateHandler) writeUpdateError(c *gin.Context, action string, er
 		return
 	}
 	logAndWriteError(c, h.logs, http.StatusBadRequest, action, err, "", nil)
+}
+
+// preferredVersionLabel 在编译版本号和仓库版本标签之间挑一个像版本号的。
+// 仓库没打过 tag 时 VersionLabel() 会退回提交短号，把它当版本号显示等于告诉
+// 用户「你的版本是 3095b85」——既看不出新旧，也没法和 Release 对比。这种时候
+// 宁可用编译期注入的版本号。
+func preferredVersionLabel(buildVersion, repositoryLabel string) string {
+	repositoryLabel = strings.TrimSpace(repositoryLabel)
+	if repositoryLabel == "" {
+		return buildVersion
+	}
+	if _, ok := versionParts(repositoryLabel); ok {
+		return repositoryLabel
+	}
+	if _, ok := versionParts(buildVersion); ok {
+		return buildVersion
+	}
+	return repositoryLabel
 }
 
 func deploymentMode(gitAvailable bool) string {

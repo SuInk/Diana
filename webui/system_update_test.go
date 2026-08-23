@@ -34,16 +34,19 @@ type recordingSystemUpdater struct {
 }
 
 type recordingReleasePackageUpdater struct {
-	status      updater.Status
-	expected    string
-	release     updater.ReleasePackage
-	force       bool
-	downloaded  bool
-	installed   bool
-	downloadErr error
+	unsupportedReason string
+	status            updater.Status
+	expected          string
+	release           updater.ReleasePackage
+	force             bool
+	downloaded        bool
+	installed         bool
+	downloadErr       error
 }
 
 func (r *recordingReleasePackageUpdater) Supported() bool { return true }
+
+func (r *recordingReleasePackageUpdater) UnsupportedReason() string { return r.unsupportedReason }
 
 func (r *recordingReleasePackageUpdater) ExpectedAssetName() string { return r.expected }
 
