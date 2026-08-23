@@ -313,11 +313,12 @@
               </div>
               <div class="field wide">
                 <label for="bot-trigger-mode">触发词匹配</label>
-                <select id="bot-trigger-mode" v-model="form.group_trigger_mode" class="input">
-                  <option value="smart">智能（推荐）</option>
-                  <option value="strict">严格</option>
-                  <option value="loose">宽松</option>
-                </select>
+                <AppSelect
+                  id="bot-trigger-mode"
+                  :model-value="form.group_trigger_mode ?? 'smart'"
+                  :options="triggerModeOptions"
+                  @update:model-value="(value) => { if (form) form.group_trigger_mode = value as AliasTriggerMode; }"
+                />
                 <span class="hint">
                   智能：出现触发词就回，但「「Diana」这名字挺好听」这类把触发词整个引起来的引述不算呼叫。
                   严格：还要求触发词出现在句首或句尾。宽松：出现即回，连引述也算。
@@ -417,20 +418,22 @@
             <div class="card-body form-grid">
               <div class="field">
                 <label for="bot-reply-reference-mode">群聊引用原消息</label>
-                <select id="bot-reply-reference-mode" v-model="form.reply_reference_mode">
-                  <option value="on">总是引用</option>
-                  <option value="off">从不引用</option>
-                  <option value="auto">让模型自己决定</option>
-                </select>
+                <AppSelect
+                  id="bot-reply-reference-mode"
+                  :model-value="form.reply_reference_mode ?? 'on'"
+                  :options="replyReferenceModeOptions"
+                  @update:model-value="(value) => { if (form) form.reply_reference_mode = value as 'on' | 'off' | 'auto'; }"
+                />
                 <span class="hint">选「让模型自己决定」后，只有话题跳转或隔轮回应时它才会引用。</span>
               </div>
               <div class="field">
                 <label for="bot-mention-user-mode">群聊 @ 发送者</label>
-                <select id="bot-mention-user-mode" v-model="form.mention_user_mode">
-                  <option value="on">总是 @</option>
-                  <option value="off">从不 @</option>
-                  <option value="auto">让模型自己决定</option>
-                </select>
+                <AppSelect
+                  id="bot-mention-user-mode"
+                  :model-value="form.mention_user_mode ?? 'on'"
+                  :options="mentionUserModeOptions"
+                  @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
+                />
                 <span class="hint">选「让模型自己决定」后，只有需要点名时它才会 @，不会每句都带。</span>
               </div>
               <div class="field">
@@ -533,23 +536,22 @@
             <div class="card-body form-grid">
               <div class="field">
                 <label for="bot-reply-style">表达风格</label>
-                <select id="bot-reply-style" v-model="form.reply_style" class="input">
-                  <option value="groupmate">群友</option>
-                  <option value="assistant">助手</option>
-                  <option value="gentle">温柔</option>
-                  <option value="lively">活泼</option>
-                  <option value="concise">简洁</option>
-                </select>
+                <AppSelect
+                  id="bot-reply-style"
+                  :model-value="form.reply_style ?? 'assistant'"
+                  :options="replyStyleOptions"
+                  @update:model-value="(value) => { if (form) form.reply_style = value as 'groupmate' | 'assistant' | 'gentle' | 'lively' | 'concise'; }"
+                />
                 <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
               </div>
               <div class="field">
                 <label for="bot-response-mode">回复模式</label>
-                <select id="bot-response-mode" v-model="form.response_mode" class="input">
-                  <option value="quiet">安静模式</option>
-                  <option value="standard">标准模式</option>
-                  <option value="active">活跃模式</option>
-                  <option value="custom">自定义</option>
-                </select>
+                <AppSelect
+                  id="bot-response-mode"
+                  :model-value="form.response_mode ?? 'standard'"
+                  :options="responseModeOptions"
+                  @update:model-value="(value) => { if (form) form.response_mode = value as 'quiet' | 'standard' | 'active' | 'custom'; }"
+                />
                 <span class="hint">控制机器人在没人点名时主动参与群聊的欲望。</span>
               </div>
               <div class="field wide">
@@ -872,7 +874,8 @@ import {
   type LLMModelInfo,
   type BotProfileConfig,
   type BotChannelStatus,
-  type BotPlatform
+  type BotPlatform,
+  type AliasTriggerMode
 } from "../api";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -1040,6 +1043,39 @@ const platforms = ref<BotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
 const platformPickerOpen = ref(false);
 const creating = ref(false);
+
+const triggerModeOptions: AppSelectOption[] = [
+  { value: "smart", label: "智能（推荐）" },
+  { value: "strict", label: "严格" },
+  { value: "loose", label: "宽松" }
+];
+
+const replyReferenceModeOptions: AppSelectOption[] = [
+  { value: "on", label: "总是引用" },
+  { value: "off", label: "从不引用" },
+  { value: "auto", label: "让模型自己决定" }
+];
+
+const mentionUserModeOptions: AppSelectOption[] = [
+  { value: "on", label: "总是 @" },
+  { value: "off", label: "从不 @" },
+  { value: "auto", label: "让模型自己决定" }
+];
+
+const replyStyleOptions: AppSelectOption[] = [
+  { value: "groupmate", label: "群友" },
+  { value: "assistant", label: "助手" },
+  { value: "gentle", label: "温柔" },
+  { value: "lively", label: "活泼" },
+  { value: "concise", label: "简洁" }
+];
+
+const responseModeOptions: AppSelectOption[] = [
+  { value: "quiet", label: "安静模式" },
+  { value: "standard", label: "标准模式" },
+  { value: "active", label: "活跃模式" },
+  { value: "custom", label: "自定义" }
+];
 
 const admissionModeOptions: AppSelectOption[] = [
   { value: "blacklist", label: "黑名单（默认）", hint: "除禁用群外都工作" },
