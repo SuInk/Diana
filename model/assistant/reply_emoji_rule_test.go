@@ -62,3 +62,25 @@ func TestEveryReplyStyleForbidsEssayAndLinkDump(t *testing.T) {
 		}
 	}
 }
+
+// 末尾标点规则对所有风格生效：聊天窗口里一条「知道了。」读起来是公事公办的冷淡，
+// 真人不这么打字。
+func TestEveryReplyStyleCarriesTheTrailingPunctuationRule(t *testing.T) {
+	for _, style := range []ReplyStyle{
+		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, "",
+	} {
+		if !strings.Contains(style.prompt(), replyTrailingPunctuationRule) {
+			t.Errorf("风格 %q 的提示词没有带上末尾标点规则", style)
+		}
+	}
+}
+
+// 规则只管末尾，不能把问号感叹号和句中标点一起禁掉——那会让稍长的回复连不成句，
+// 也会把疑问和惊讶的语气抹平。
+func TestTrailingPunctuationRuleKeepsQuestionAndMidSentenceMarks(t *testing.T) {
+	for _, keep := range []string{"句子中间的标点照常使用", "问号和感叹号"} {
+		if !strings.Contains(replyTrailingPunctuationRule, keep) {
+			t.Errorf("末尾标点规则缺少例外说明 %q", keep)
+		}
+	}
+}
