@@ -158,9 +158,6 @@ func TestMaxContextTokensFollowsTheModelWindow(t *testing.T) {
 				ContextWindowTokens: item.window,
 				MaxContextTokens:    item.maxContext,
 			}.WithDefaults()
-			if cfg.MaxContextTokens != item.wantContext {
-				t.Fatalf("MaxContextTokens = %d, want %d", cfg.MaxContextTokens, item.wantContext)
-			}
 			if got := cfg.MaxContextTokensWithDefault(); got != item.wantContext {
 				t.Fatalf("MaxContextTokensWithDefault = %d, want %d", got, item.wantContext)
 			}

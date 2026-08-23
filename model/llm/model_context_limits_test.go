@@ -30,18 +30,18 @@ func TestKnownContextWindowTokensCoversCommonFamilies(t *testing.T) {
 func TestProviderConfigInfersWindowFromModelName(t *testing.T) {
 	// 目录取不到窗口时按模型名推断。
 	cfg := ProviderConfig{Provider: ProviderAnthropic, Model: "claude-sonnet-4-5"}.WithDefaults()
-	if cfg.ContextWindowTokens != 200000 || cfg.MaxContextTokens != 200000 {
-		t.Fatalf("claude window = %d/%d, want 200000", cfg.ContextWindowTokens, cfg.MaxContextTokens)
+	if window, max := cfg.ContextWindowTokensWithDefault(), cfg.MaxContextTokensWithDefault(); window != 200000 || max != 200000 {
+		t.Fatalf("claude window = %d/%d, want 200000", window, max)
 	}
 	// 未知模型走兜底值。
 	unknown := ProviderConfig{Provider: ProviderOpenAICompatible, Model: "some-local-build"}.WithDefaults()
-	if unknown.ContextWindowTokens != DefaultContextWindowTokens {
-		t.Fatalf("unknown model window = %d, want the default", unknown.ContextWindowTokens)
+	if unknown.ContextWindowTokensWithDefault() != DefaultContextWindowTokens {
+		t.Fatalf("unknown model window = %d, want the default", unknown.ContextWindowTokensWithDefault())
 	}
 	// 用户显式配置优先于推断。
 	explicit := ProviderConfig{Provider: ProviderAnthropic, Model: "claude-sonnet-4-5", ContextWindowTokens: 32768}.WithDefaults()
-	if explicit.ContextWindowTokens != 32768 || explicit.MaxContextTokens != 32768 {
-		t.Fatalf("explicit window overridden: %d/%d", explicit.ContextWindowTokens, explicit.MaxContextTokens)
+	if window, max := explicit.ContextWindowTokensWithDefault(), explicit.MaxContextTokensWithDefault(); window != 32768 || max != 32768 {
+		t.Fatalf("explicit window overridden: %d/%d", window, max)
 	}
 }
 

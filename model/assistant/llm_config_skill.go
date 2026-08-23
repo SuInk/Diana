@@ -86,7 +86,7 @@ func applyLLMConfigCommand(ctx context.Context, store LLMProfileStore, command l
 	}
 	nextCfg = nextCfg.WithDefaults()
 	// 必须先问后端模型列表，防止用户切到 provider 里不存在的模型后导致机器人不可用。
-	modelInfo, err := ensureLLMModelAvailable(ctx, nextCfg, listModels)
+	modelInfo, models, err := ensureLLMModelAvailable(ctx, nextCfg, listModels)
 	if err != nil {
 		return llmConfigApplyResult{
 			Reply:       "更新失败：" + err.Error(),
@@ -98,21 +98,29 @@ func applyLLMConfigCommand(ctx context.Context, store LLMProfileStore, command l
 			NewModel:    nextCfg.Model,
 		}
 	}
-	if modelInfo.ContextWindowTokens > 0 {
-		nextCfg.ContextWindowTokens = modelInfo.ContextWindowTokens
-	} else if oldProvider != nextCfg.Provider || oldModel != nextCfg.Model {
-		nextCfg.ContextWindowTokens = llm.DefaultContextWindowTokens
+	if len(models) > 0 {
+		nextCfg.Models = models
 	}
-	// 只在没设过或超出新模型窗口时才重算：用户手动设的上限要留住，换模型时也不能
-	// 反过来把预算压回 16K 的兜底值。
-	if nextCfg.MaxContextTokens <= 0 || nextCfg.MaxContextTokens > nextCfg.ContextWindowTokens {
-		nextCfg.MaxContextTokens = nextCfg.ContextWindowTokens
+	// 换模型时不再把目录返回的窗口写进配置。窗口是模型的属性，一个 provider 下面
+	// 挂着几十个模型；写进配置就等于把「某一刻从第三方目录读到的数」固定成用户设置，
+	// 之后换模型不跟着变，目录改了也不跟着变。读取时按当前模型现算即可，
+	// 用户手填的值仍然优先（见 llm.ResolveContextWindowTokens）。
+	window := nextCfg.ContextWindowTokensWithDefault()
+	if modelInfo.ContextWindowTokens > 0 {
+		window = modelInfo.ContextWindowTokens
+	}
+	if nextCfg.ContextWindowTokens > 0 {
+		window = nextCfg.ContextWindowTokens
+	}
+	// 用户设过的请求上限要留住，但不能超过新模型的窗口。
+	if nextCfg.MaxContextTokens > window {
+		nextCfg.MaxContextTokens = window
 	}
 	if modelInfo.MaxOutputTokens > 0 && nextCfg.MaxOutputTokens > modelInfo.MaxOutputTokens {
 		nextCfg.MaxOutputTokens = modelInfo.MaxOutputTokens
 	}
-	if nextCfg.MaxOutputTokens >= nextCfg.MaxContextTokens {
-		nextCfg.MaxOutputTokens = nextCfg.MaxContextTokens / 4
+	if budget := nextCfg.MaxContextTokensWithDefault(); nextCfg.MaxOutputTokens >= budget {
+		nextCfg.MaxOutputTokens = budget / 4
 	}
 	if err := nextCfg.Validate(); err != nil {
 		return llmConfigApplyResult{
@@ -220,19 +228,22 @@ func defaultLLMModelLister(ctx context.Context, cfg llm.ProviderConfig) ([]llm.M
 }
 
 // ensureLLMModelAvailable 校验目标模型是否存在于 provider 后端列表。
-func ensureLLMModelAvailable(ctx context.Context, cfg llm.ProviderConfig, listModels LLMModelLister) (llm.ModelInfo, error) {
+// ensureLLMModelAvailable 校验模型可用，并把这次拿到的完整模型清单一起带回。
+// 清单要跟着写回配置：切了 provider 之后旧清单就不再对应当前后端，留着它会让
+// 「按模型清单取窗口」查到上一个 provider 的条目。
+func ensureLLMModelAvailable(ctx context.Context, cfg llm.ProviderConfig, listModels LLMModelLister) (llm.ModelInfo, []llm.ModelInfo, error) {
 	model := strings.TrimSpace(cfg.Model)
 	// listModels 会走当前 provider 的真实后端接口；不能靠本地硬编码模型名判断。
 	models, err := listModels(ctx, cfg)
 	if err != nil {
-		return llm.ModelInfo{}, fmt.Errorf("无法读取 %s 的模型列表，未保存；请先在 WebUI 的模型列表里选择可用模型。%v", cfg.Provider, err)
+		return llm.ModelInfo{}, nil, fmt.Errorf("无法读取 %s 的模型列表，未保存；请先在 WebUI 的模型列表里选择可用模型。%v", cfg.Provider, err)
 	}
 	for _, candidate := range models {
 		if strings.EqualFold(strings.TrimSpace(candidate.ID), model) {
-			return candidate, nil
+			return candidate, models, nil
 		}
 	}
-	return llm.ModelInfo{}, fmt.Errorf("模型 %s 不在 %s 的模型列表中，未保存。可选：%s", model, cfg.Provider, summarizeModelIDs(models))
+	return llm.ModelInfo{}, nil, fmt.Errorf("模型 %s 不在 %s 的模型列表中，未保存。可选：%s", model, cfg.Provider, summarizeModelIDs(models))
 }
 
 // summarizeModelIDs 摘要展示可选模型 ID。

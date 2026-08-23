@@ -17,9 +17,8 @@ func TestClearLegacyContextFallbackRestoresInference(t *testing.T) {
 	if !changed {
 		t.Fatal("legacy fallback not detected")
 	}
-	resolved := cleared.WithDefaults()
-	if resolved.ContextWindowTokens != 200000 || resolved.MaxContextTokens != 200000 {
-		t.Fatalf("resolved budgets = %d/%d", resolved.ContextWindowTokens, resolved.MaxContextTokens)
+	if window, max := cleared.ContextWindowTokensWithDefault(), cleared.MaxContextTokensWithDefault(); window != 200000 || max != 200000 {
+		t.Fatalf("resolved budgets = %d/%d", window, max)
 	}
 }
 
@@ -35,17 +34,15 @@ func TestClearLegacyContextFallbackKeepsOtherValues(t *testing.T) {
 }
 
 func TestWithoutRedundantContextLimitsStripsDerivedValues(t *testing.T) {
-	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, Model: "claude-sonnet-4"}.WithDefaults()
-	if cfg.ContextWindowTokens != 200000 {
-		t.Fatalf("derived window = %d", cfg.ContextWindowTokens)
-	}
+	// 老配置里可能还留着当年被 WithDefaults 写进去的派生值。
+	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, Model: "claude-sonnet-4", ContextWindowTokens: 200000, MaxContextTokens: 200000}
 	stored := cfg.WithoutRedundantContextLimits()
 	if stored.ContextWindowTokens != 0 || stored.MaxContextTokens != 0 {
 		t.Fatalf("stored budgets = %d/%d", stored.ContextWindowTokens, stored.MaxContextTokens)
 	}
 	// 剥掉派生值不改变实际生效的预算。
-	if resolved := stored.WithDefaults(); resolved.ContextWindowTokens != 200000 || resolved.MaxContextTokens != 200000 {
-		t.Fatalf("resolved budgets = %d/%d", resolved.ContextWindowTokens, resolved.MaxContextTokens)
+	if window, max := stored.ContextWindowTokensWithDefault(), stored.MaxContextTokensWithDefault(); window != 200000 || max != 200000 {
+		t.Fatalf("resolved budgets = %d/%d", window, max)
 	}
 }
 

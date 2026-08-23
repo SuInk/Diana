@@ -27,8 +27,8 @@ const before = (minutes: number) => new Date(now - minutes * 60_000).toISOString
 const after = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
 
 const modelCatalog = [
-  { id: "gpt-5.2", input_modalities: ["text", "image"], output_modalities: ["text"] },
-  { id: "gpt-5-mini", input_modalities: ["text"], output_modalities: ["text"] },
+  { id: "gpt-5.2", input_modalities: ["text", "image"], output_modalities: ["text"], context_window_tokens: 400_000 },
+  { id: "gpt-5-mini", input_modalities: ["text"], output_modalities: ["text"], context_window_tokens: 272_000 },
   { id: "gpt-image-1.5", input_modalities: ["text", "image"], output_modalities: ["image"] }
 ];
 
@@ -38,9 +38,9 @@ let llmConfig: LLMConfig = {
   api_key_configured: true,
   active_profile_id: "llm-chat",
   profiles: [
-    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog, temperature: 0.7, max_output_tokens: 4096 },
-    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog },
-    { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5-mini", models: modelCatalog, temperature: 0.2 },
+    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog, temperature: 0.7, max_output_tokens: 4096, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "model_list" },
+    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "model_list" },
+    { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5-mini", models: modelCatalog, temperature: 0.2, effective_context_window_tokens: 272_000, effective_max_context_tokens: 272_000, context_window_source: "model_list" },
     { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-1.5", image_model: "gpt-image-1.5", models: modelCatalog }
   ]
 };

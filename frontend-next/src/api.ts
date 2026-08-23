@@ -23,8 +23,13 @@ export interface LLMConfig {
   user_agent?: string;
   headers?: Record<string, string>;
   temperature?: number | null;
+  /** 用户手填的覆盖值；0 或缺省表示按当前模型自动判断。 */
   context_window_tokens?: number;
   max_context_tokens?: number;
+  /** 只读回显：当前模型实际生效的窗口与请求上限，以及窗口的来源。 */
+  effective_context_window_tokens?: number;
+  effective_max_context_tokens?: number;
+  context_window_source?: "user" | "model_list" | "inferred" | "fallback";
   max_output_tokens?: number;
   timeout_ms?: number;
 }
