@@ -1150,19 +1150,9 @@ code {
   margin-bottom: 8px;
 }
 
-/* 侧栏底部的 GitHub 仓库入口，和主题按钮共用 nav-action 外观。 */
+/* 侧栏里仍有主题切换等链接型入口，保留去下划线。 */
 a.nav-action {
   text-decoration: none;
-}
-
-.nav-repo-icon {
-  flex: none;
-}
-
-.nav-repo .nav-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* 桌面收起态：侧栏完全隐藏，不保留只有图标的中间形态。 */
@@ -1231,6 +1221,17 @@ a.nav-action {
 .topbar-logout:hover {
   color: var(--err);
   border-color: var(--err);
+}
+
+/* 顶栏 GitHub 入口：只留图标，和退出登录并排，用同一套 btn ghost small 外观。 */
+.topbar-repo {
+  flex: none;
+  text-decoration: none;
+}
+
+.topbar-repo:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* 返回链接：带文字说明去向，避免光秃秃的箭头被误当成「退出」 */
