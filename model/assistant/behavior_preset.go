@@ -103,11 +103,18 @@ const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类�
 // 别输出空行；真要分条有 <dianabr>，语义明确。
 const replyBlankLineRule = "回复里不要出现空行：段落之间用单个换行，不要空一行再写下一段，也不要在小结、清单或链接前面空行。聊天窗口不是文档，空行会显示成一整行空白。"
 
+// replyProportionRule 同样对所有风格生效。联网查证过的回答特别容易写成小评测:
+// 背景、口碑、优缺点、结论、末尾再罗列参考链接——群里随口一句「好看吗」换来
+// 一整屏,读的人只觉得乱。查证是为了答得准,不是为了答得长;链接原文没人点,
+// 出处口头点名就够。
+const replyProportionRule = "回复的篇幅要跟随问题的分量：群里随口一问，答结论加一两句理由就够，即使你查了很多资料也不要写成小评测或文章。不要在回复里罗列参考链接或来源清单；需要交代出处时口头点名（如「豆瓣 8.5」「澎湃有报道」），对方追问再给链接。"
+
 func (style ReplyStyle) prompt() string {
 	return strings.TrimSpace(strings.Join([]string{
 		style.stylePrompt(),
 		replyEmojiRule,
 		replyBlankLineRule,
+		replyProportionRule,
 	}, "\n"))
 }
 
