@@ -739,12 +739,12 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 	}
 	followUp := provider.requests[0]
 	// 提示词和链接解析跟评共用一份（followUpInstruction），措辞是通用的「内容」而不是「仓库动态」。
-	for _, want := range []string{"本群限定的自然人设", "你刚刚把下面这条内容发到了这个会话里", "不要复述或概括内容", "fix delivery"} {
+	for _, want := range []string{"本群限定的自然人设", "你刚刚把下面这条内容发到了这个会话里", "完全遵循全局回复风格", "不要把推测写成事实", "fix delivery"} {
 		if !requestMessagesContain(followUp.Messages, want) {
 			t.Fatalf("follow-up prompt missing %q: %#v", want, followUp.Messages)
 		}
 	}
-	// 跟评只是一句感想：不该拿到原始 payload 和 diff，也不需要工具。
+	// 跟评基于已投递通知，不该拿到原始 payload 和 diff，也不需要工具。
 	for _, unwanted := range []string{"【external_event】", "trust: trusted_service_data", "repository_watch_plugin.go", "+classified", "watch-2"} {
 		if requestMessagesContain(followUp.Messages, unwanted) {
 			t.Fatalf("follow-up prompt leaked %q: %#v", unwanted, followUp.Messages)

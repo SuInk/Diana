@@ -10,7 +10,7 @@ RUN npm ci
 COPY frontend-next/ ./
 RUN npm run build
 
-FROM golang:1.26.5-alpine AS backend
+FROM golang:1.26.6-alpine AS backend
 ARG BUILD_VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
