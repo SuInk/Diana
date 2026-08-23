@@ -318,7 +318,7 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 		}
 	}
 	prompt := ReplyStyleCatgirl.prompt()
-	for _, want := range []string{"本喵", "动作描写", "只对主人称", "可爱只体现在语气上"} {
+	for _, want := range []string{"本喵", "星号写法", "只对主人称", "可爱只体现在语气上"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)
 		}
