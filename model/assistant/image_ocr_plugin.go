@@ -331,7 +331,9 @@ func (r *Runtime) imageOCRAdjustMessage(ctx context.Context, event MessageEvent,
 	if total > len(imageURLs) {
 		lines = append(lines, fmt.Sprintf("（另有 %d 张图超出单条识别上限，未识别）", total-len(imageURLs)))
 	}
-	block := "【图片消息】对话模型未直接查看图片，以下为机器识别内容（可能有误）：\n" + strings.Join(lines, "\n\n")
+	// 结尾这句是必须的：识别文本本身长得就像一段现成的答复，模型很容易原样发出去，
+	// 用户发张表情包只会收到一段图解。
+	block := "【图片消息】对话模型未直接查看图片，以下为机器识别内容（可能有误），只供你理解这张图，不要复述、转述或改写给用户：\n" + strings.Join(lines, "\n\n")
 	message = stripLLMImageParts(message)
 	return appendLLMMessageText(message, block)
 }
