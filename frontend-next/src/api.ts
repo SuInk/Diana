@@ -1437,6 +1437,103 @@ export function getAssistantUser(userID: string): Promise<AssistantUserDetailRes
   return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}`);
 }
 
+export interface GlossaryRevision {
+  version: number;
+  meaning?: string;
+  example?: string;
+  aliases?: string[];
+  note?: string;
+  editor_user_id?: string;
+  editor_name?: string;
+  recorded_at: string;
+}
+
+export interface GlossaryEntry {
+  id: string;
+  scope_key: string;
+  term: string;
+  aliases?: string[];
+  meaning: string;
+  example?: string;
+  note?: string;
+  author_user_id?: string;
+  author_name?: string;
+  editor_user_id?: string;
+  editor_name?: string;
+  usage_count: number;
+  last_used_at?: string;
+  version: number;
+  status: "active" | "deleted";
+  created_at: string;
+  updated_at: string;
+  /** 只有详情接口带修订记录。 */
+  revisions?: GlossaryRevision[];
+}
+
+export interface GlossaryScopeSummary {
+  scope_key: string;
+  active_count: number;
+  deleted_count: number;
+  updated_at: string;
+}
+
+export interface GlossaryListResponse {
+  scopes: GlossaryScopeSummary[];
+  scope: string;
+  entries: GlossaryEntry[];
+  query?: string;
+}
+
+export interface GlossaryEntryInput {
+  scope: string;
+  term: string;
+  aliases?: string[];
+  meaning?: string;
+  example?: string;
+  note?: string;
+}
+
+export function listGlossary(scope = "", query = "", includeDeleted = false): Promise<GlossaryListResponse> {
+  const params = new URLSearchParams();
+  if (scope) {
+    params.set("scope", scope);
+  }
+  if (query) {
+    params.set("q", query);
+  }
+  if (includeDeleted) {
+    params.set("include_deleted", "true");
+  }
+  const search = params.toString();
+  return requestJSON<GlossaryListResponse>(`/api/assistant/glossary${search ? `?${search}` : ""}`);
+}
+
+export function getGlossaryEntry(scope: string, term: string): Promise<GlossaryEntry> {
+  const params = new URLSearchParams({ scope, term });
+  return requestJSON<GlossaryEntry>(`/api/assistant/glossary/entry?${params.toString()}`);
+}
+
+export function saveGlossaryEntry(input: GlossaryEntryInput): Promise<GlossaryEntry> {
+  return requestJSON<GlossaryEntry>("/api/assistant/glossary", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function deleteGlossaryEntry(scope: string, term: string, note = ""): Promise<GlossaryEntry> {
+  return requestJSON<GlossaryEntry>("/api/assistant/glossary/delete", {
+    method: "POST",
+    body: JSON.stringify({ scope, term, note })
+  });
+}
+
+export function restoreGlossaryEntry(scope: string, term: string): Promise<GlossaryEntry> {
+  return requestJSON<GlossaryEntry>("/api/assistant/glossary/restore", {
+    method: "POST",
+    body: JSON.stringify({ scope, term })
+  });
+}
+
 export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "rss_watch";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 

@@ -12,6 +12,7 @@ export type ViewID =
   | "bot"
   | "groups"
   | "users"
+  | "glossary"
   | "plugins"
   | "logs"
   | "settings";
@@ -31,11 +32,12 @@ export const navItems: NavItem[] = [
   { id: "plugins", label: "插件", hint: "插件安装与设置" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置" },
   { id: "users", label: "人员", hint: "人员画像与长期记忆" },
+  { id: "glossary", label: "词典", hint: "机器人学会的梗与黑话" },
   { id: "logs", label: "日志", hint: "操作与错误日志" },
   { id: "settings", label: "设置", hint: "主题与系统更新" }
 ];
 
-const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "llm", "bot", "groups", "users", "plugins", "logs", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "llm", "bot", "groups", "users", "glossary", "plugins", "logs", "settings"]);
 
 function parseHash(): ViewID {
   const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0] ?? "";

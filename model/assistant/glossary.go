@@ -31,17 +31,17 @@ const (
 	// 默认不该泄漏到别的群，更不该被别人改。
 	GlossaryScopeGlobal = "global"
 
-	// glossaryTermMaxRunes 限制词条本身的长度。词典收的是词，不是句子；放开了
+	// GlossaryTermMaxRunes 限制词条本身的长度。词典收的是词，不是句子；放开了
 	// 模型会把整段对话当成「词」塞进来。
-	glossaryTermMaxRunes = 32
-	// glossaryMeaningMaxRunes 限制释义长度。释义是给回复时看一眼的，不是百科。
-	glossaryMeaningMaxRunes = 400
-	// glossaryExampleMaxRunes 限制例句长度。
-	glossaryExampleMaxRunes = 160
-	// glossaryNoteMaxRunes 限制修订说明长度。
-	glossaryNoteMaxRunes = 160
-	// glossaryMaxAliases 限制别名个数。
-	glossaryMaxAliases = 8
+	GlossaryTermMaxRunes = 32
+	// GlossaryMeaningMaxRunes 限制释义长度。释义是给回复时看一眼的，不是百科。
+	GlossaryMeaningMaxRunes = 400
+	// GlossaryExampleMaxRunes 限制例句长度。
+	GlossaryExampleMaxRunes = 160
+	// GlossaryNoteMaxRunes 限制修订说明长度。
+	GlossaryNoteMaxRunes = 160
+	// GlossaryMaxAliases 限制别名个数。
+	GlossaryMaxAliases = 8
 
 	// glossaryContextLimit 是自动命中最多注入的词条数。命中一堆词说明这条消息
 	// 本来就在聊黑话，注太多反而把当前消息挤走。
@@ -163,14 +163,14 @@ func NormalizeGlossaryAliases(term string, aliases []string) []string {
 	seen := map[string]bool{normalizedTerm: true}
 	out := make([]string, 0, len(aliases))
 	for _, alias := range aliases {
-		alias = TruncateGlossaryText(alias, glossaryTermMaxRunes)
+		alias = TruncateGlossaryText(alias, GlossaryTermMaxRunes)
 		key := NormalizeGlossaryTerm(alias)
 		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
 		out = append(out, alias)
-		if len(out) >= glossaryMaxAliases {
+		if len(out) >= GlossaryMaxAliases {
 			break
 		}
 	}
