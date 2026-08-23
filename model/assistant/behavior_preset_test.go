@@ -34,7 +34,7 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 }
 
 func TestReplyStylePromptIsSpecificAndBounded(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate} {
+	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl} {
 		prompt := style.prompt()
 		if prompt == "" || !strings.Contains(prompt, "默认表达风格") {
 			t.Fatalf("style %q prompt = %q", style, prompt)
@@ -306,5 +306,41 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 		if !strings.HasSuffix(item, base.ReplyStyle.closingAnchor()) {
 			t.Fatal("closing anchor must stay last")
 		}
+	}
+}
+
+// 猫娘风格的难点全在「别做过头」：模型一听见猫娘就往颜文字、动作描写和「本喵」
+// 上冲，还会拿卖萌顶替正事。这条守住那几条刹车，以及它没有豁免全局输出规则。
+func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
+	for _, raw := range []string{"catgirl", "Catgirl", " catgirl "} {
+		if got := ReplyStyle(raw).Normalized(); got != ReplyStyleCatgirl {
+			t.Fatalf("Normalized(%q) = %q", raw, got)
+		}
+	}
+	prompt := ReplyStyleCatgirl.prompt()
+	for _, want := range []string{"本喵", "动作描写", "只对主人称", "可爱只体现在语气上"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)
+		}
+	}
+	// 表达风格换人不代表输出规范换人：emoji、空行、篇幅三条对所有风格生效。
+	for _, want := range []string{replyEmojiRule, replyBlankLineRule, replyProportionRule} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("catgirl prompt dropped a global rule: %q", prompt)
+		}
+	}
+}
+
+// 只有群友风格会改投递方式（分条长度、连发间隔、引用装饰）。猫娘只是换个语气，
+// 不该顺手把这些也改了。
+func TestCatgirlReplyStyleDoesNotChangeDelivery(t *testing.T) {
+	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl}
+	before := cfg
+	ReplyStyleCatgirl.apply(&cfg)
+	if cfg.DirectReplyChunkSize != before.DirectReplyChunkSize ||
+		cfg.SendChunkIntervalMS != before.SendChunkIntervalMS ||
+		cfg.ReplyReferenceMode != before.ReplyReferenceMode ||
+		cfg.MentionUserMode != before.MentionUserMode {
+		t.Fatalf("catgirl style changed delivery settings: %#v", cfg)
 	}
 }

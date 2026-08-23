@@ -514,6 +514,7 @@
                   <option value="gentle">温柔</option>
                   <option value="lively">活泼</option>
                   <option value="concise">简洁</option>
+                  <option value="catgirl">猫娘</option>
                 </select>
                 <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
               </div>
