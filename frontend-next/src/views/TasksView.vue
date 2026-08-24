@@ -121,6 +121,8 @@
                 </span>
                 <span v-if="task.watch_stars">
                   Star <strong class="mono">{{ task.last_star_count ?? 0 }}</strong>
+                  <template v-if="task.star_notify_mode === 'milestone'"> · 里程碑 <strong>{{ (task.star_notify_milestones ?? []).join(" / ") }}</strong></template>
+                  <template v-else> · 增长阈值 <strong>{{ task.star_notify_threshold || 1 }}</strong></template>
                 </span>
               </div>
 

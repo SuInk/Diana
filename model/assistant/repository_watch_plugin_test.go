@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -624,6 +625,9 @@ func TestRuntimeCreatesRepositoryWatchForWebUI(t *testing.T) {
 	if item.Kind != ReminderKindRepositoryWatch || item.OwnerID != "webui:onebot-main" || item.GroupID != "123" || item.UserID != "" || item.ProfileID != "onebot-main" || item.LastCommitSHA != "base-sha" || item.LastReleaseTag != "v1.0.0" {
 		t.Fatalf("item=%#v", item)
 	}
+	if item.StarNotifyThreshold != 1 {
+		t.Fatalf("default star threshold = %d, want 1", item.StarNotifyThreshold)
+	}
 	if remaining := time.Until(item.TriggerAt); remaining < 59*time.Minute || remaining > 61*time.Minute {
 		t.Fatalf("next run=%s", item.TriggerAt)
 	}
@@ -647,8 +651,28 @@ func TestRuntimeUpdatesRepositoryWatchDelivery(t *testing.T) {
 	if item.ProfileID != "new-bot" || item.ContextNamespace != "new-bot" || item.OwnerID != "webui:new-bot" || item.GroupID != "123456" || item.UserID != "" {
 		t.Fatalf("updated delivery=%#v", item)
 	}
-	if len(store.items) != 1 || store.items[0] != item {
+	if len(store.items) != 1 || !reflect.DeepEqual(store.items[0], item) {
 		t.Fatalf("stored=%#v updated=%#v", store.items, item)
+	}
+}
+
+func TestRuntimeUpdatesLegacyRepositoryStarThresholdFromCurrentCount(t *testing.T) {
+	store := &stubReminderStore{items: []Reminder{{
+		ID: "watch-stars", Kind: ReminderKindRepositoryWatch, OwnerID: "owner",
+		Repository: "acme/demo", WatchStars: true, LastStarCount: 50,
+		IntervalSeconds: 60, TriggerAt: time.Now().Add(time.Minute),
+	}}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(NewRepositoryWatchPlugin(nil)), nil, store, nil, nil)
+	threshold := 5
+	mode := starNotifyModeMilestone
+	item, err := runtime.UpdateRepositoryWatch(context.Background(), "owner", "watch-stars", RepositoryWatchUpdateInput{
+		StarNotifyMode: &mode, StarNotifyThreshold: &threshold, StarNotifyMilestones: []int{500, 100, 500},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.StarNotifyMode != starNotifyModeMilestone || item.StarNotifyThreshold != 5 || !slices.Equal(item.StarNotifyMilestones, []int{100, 500}) || item.LastNotifiedStarCount != 50 {
+		t.Fatalf("updated threshold item = %#v", item)
 	}
 }
 
@@ -1476,6 +1500,52 @@ func TestRepositoryWatchIgnoresStarCountWithoutEvent(t *testing.T) {
 	}
 }
 
+func TestRepositoryWatchStarNotifyThresholdAccumulatesAcrossPolls(t *testing.T) {
+	item := Reminder{WatchStars: true, StarNotifyThreshold: 3, LastStarCount: 10, LastNotifiedStarCount: 10}
+	first := applyRepositoryStarNotifyThreshold(item, repositoryWatchChange{
+		Stars: &repositoryWatchStarChange{Previous: 10, Current: 11, Delta: 1, AddedUsers: []repositoryWatchStargazer{{Login: "first"}}}, Snapshot: repositoryWatchSnapshot{StarCount: 11, HasStarCount: true},
+	})
+	if first.Stars != nil || !first.Snapshot.HasStarNotifiedCount || first.Snapshot.StarNotifiedCount != 10 {
+		t.Fatalf("first threshold result = %#v", first)
+	}
+	item.LastStarCount = 12
+	third := applyRepositoryStarNotifyThreshold(item, repositoryWatchChange{
+		Stars: &repositoryWatchStarChange{Previous: 12, Current: 13, Delta: 1, AddedUsers: []repositoryWatchStargazer{{Login: "third"}}}, Snapshot: repositoryWatchSnapshot{StarCount: 13, HasStarCount: true},
+	})
+	if third.Stars == nil || third.Stars.Previous != 10 || third.Stars.Current != 13 || third.Stars.Delta != 3 || len(third.Stars.AddedUsers) != 0 || third.Snapshot.StarNotifiedCount != 13 {
+		t.Fatalf("threshold notification = %#v", third)
+	}
+}
+
+func TestRepositoryWatchLegacyStarThresholdStartsAtObservedCount(t *testing.T) {
+	change := applyRepositoryStarNotifyThreshold(Reminder{WatchStars: true, LastStarCount: 50}, repositoryWatchChange{
+		Stars: &repositoryWatchStarChange{Previous: 50, Current: 51, Delta: 1}, Snapshot: repositoryWatchSnapshot{StarCount: 51, HasStarCount: true},
+	})
+	if change.Stars == nil || change.Stars.Previous != 50 || change.Stars.Delta != 1 {
+		t.Fatalf("legacy threshold result = %#v", change.Stars)
+	}
+}
+
+func TestRepositoryWatchCustomStarMilestones(t *testing.T) {
+	item := Reminder{WatchStars: true, StarNotifyMode: starNotifyModeMilestone, StarNotifyMilestones: []int{100, 250, 500}, LastStarCount: 99}
+	change := applyRepositoryStarNotifyThreshold(item, repositoryWatchChange{
+		Stars: &repositoryWatchStarChange{Previous: 99, Current: 260, Delta: 161}, Snapshot: repositoryWatchSnapshot{StarCount: 260, HasStarCount: true},
+	})
+	if change.Stars == nil || !slices.Equal(change.Stars.Milestones, []int{100, 250}) {
+		t.Fatalf("crossed milestones = %#v", change.Stars)
+	}
+	if got := renderRepositoryWatchChanges(change); !strings.Contains(got, "Star 里程碑 100、250（99 → 260）") {
+		t.Fatalf("milestone notification = %q", got)
+	}
+	item.LastStarCount = 260
+	quiet := applyRepositoryStarNotifyThreshold(item, repositoryWatchChange{
+		Stars: &repositoryWatchStarChange{Previous: 260, Current: 300, Delta: 40}, Snapshot: repositoryWatchSnapshot{StarCount: 300, HasStarCount: true},
+	})
+	if quiet.Stars != nil {
+		t.Fatalf("non-milestone growth generated a notification: %#v", quiet.Stars)
+	}
+}
+
 // 有 WatchEvent 就必须报出是谁，并且按事件数算增量——stargazers_count 可能还是缓存
 // 里的旧值，直接相减会算出和名单自相矛盾的「+0」。
 func TestRepositoryWatchNamesStargazersFromEvents(t *testing.T) {
@@ -1614,24 +1684,24 @@ func TestRepositoryWatchRejectsDuplicateSubscription(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "owner"}
 	selection := repositoryWatchSelection{Commits: true}
 
-	first, err := runtime.addRepositoryWatch(event, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, false, nil)
+	first, err := runtime.addRepositoryWatch(event, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, starNotifyModeGrowth, 1, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.addRepositoryWatch(event, "owner", "ACME/Demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, false, nil)
+	_, err = runtime.addRepositoryWatch(event, "owner", "ACME/Demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, starNotifyModeGrowth, 1, nil, false, nil)
 	if err == nil || !strings.Contains(err.Error(), first.ID) {
 		t.Fatalf("duplicate watch was accepted: err=%v items=%d", err, len(store.items))
 	}
 	// 换个群就是另一回事，不该被挡。
 	other := MessageEvent{Kind: EventKindGroup, GroupID: "456", UserID: "owner"}
-	if _, err := runtime.addRepositoryWatch(other, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, false, nil); err != nil {
+	if _, err := runtime.addRepositoryWatch(other, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, starNotifyModeGrowth, 1, nil, false, nil); err != nil {
 		t.Fatalf("watch for a different group was rejected: %v", err)
 	}
 	// 取消掉的旧订阅不算占位。
 	if _, err := runtime.cancelRepositoryWatch("owner", first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.addRepositoryWatch(event, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, false, nil); err != nil {
+	if _, err := runtime.addRepositoryWatch(event, "owner", "acme/demo", "", time.Hour, selection, repositoryWatchSnapshot{CommitSHA: "base-sha"}, starNotifyModeGrowth, 1, nil, false, nil); err != nil {
 		t.Fatalf("watch was still blocked by a cancelled one: %v", err)
 	}
 }
