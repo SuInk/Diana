@@ -48,10 +48,13 @@ type llmConfigCommand struct {
 	Provider    llm.Provider
 	ProviderSet bool
 	Model       string
+	// Role 是要改的用途：chat / vision / intent / image。空表示对话。
+	Role string
 }
 
 type llmConfigApplyResult struct {
 	Reply       string
+	Role        string
 	Updated     bool
 	ProfileID   string
 	ProfileName string
@@ -61,19 +64,18 @@ type llmConfigApplyResult struct {
 	NewModel    string
 }
 
-// applyLLMConfigCommand 把「换个模型」落到这台机器人的对话模型绑定上。
+// applyLLMConfigCommand 把「换个模型」落到这台机器人的模型分配上。
 //
-// 改的是 BotConfig.ModelRoles["chat"]，不是 LLM 配置本身。两者管的是不同的事：
-// provider 的地址、密钥、默认模型属于「这个 provider 怎么连」，归 WebUI 的 LLM
-// 配置页；「这台机器人用哪个模型说话」属于机器人配置，也就是模型分配。
+// 改的是 BotConfig.ModelRoles，不是 LLM 配置本身。两者管的是不同的事：provider
+// 的地址、密钥、默认模型属于「这个 provider 怎么连」，归 WebUI 的 LLM 配置页；
+// 「这台机器人各个用途分别用哪个模型」属于机器人配置，也就是模型分配。
+//
+// 四个用途都能改：对话、视觉理解、意图识别、图片生成，由 command.Role 指定，
+// 默认对话。它们和 WebUI「模型分配」那四行是同一份数据。
 //
 // 以前这里改的是激活配置的默认模型。只要配过模型分配，roleBoundProfiles 就会用
 // role.Model 覆盖它——回执说「已更新 Model：old -> new」，对话实际还在用旧模型。
 // 一个会说谎的成功回执比失败更难查。
-//
-// 没配过任何模型分配的部署仍然走老路（改激活配置的默认模型）：那种部署里激活
-// 配置的默认模型就是它实际在用的，凭空写一条 chat 绑定反而会把识图、意图这些
-// 未分配的用途一起拽到对话模型上（它们的回落顺序是 roles[用途] -> roles["chat"]）。
 func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCommand, listModels LLMModelLister) llmConfigApplyResult {
 	r.mu.RLock()
 	store := r.llmStore
@@ -87,8 +89,12 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 	set := store.Profiles().WithDefaults()
 	botCfg := r.Config().WithDefaults()
 	roles := normalizeModelRoles(botCfg.ModelRoles)
+	roleKey, ok := normalizeLLMConfigRole(command.Role)
+	if !ok {
+		return llmConfigApplyResult{Reply: "更新失败：不认识的用途 " + command.Role + "，只能是 chat、vision、intent、image。"}
+	}
 
-	boundProfile, boundModel, ok := chatModelBinding(set, roles)
+	boundProfile, boundModel, ok := modelRoleBinding(set, roles, roleKey)
 	if !ok {
 		return llmConfigApplyResult{Reply: "当前没有可用的 LLM 配置。"}
 	}
@@ -97,7 +103,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 
 	target, model, err := resolveLLMConfigTarget(set, boundProfile, boundModel, command)
 	if err != nil {
-		return llmConfigApplyResult{Reply: "更新失败：" + err.Error(), OldProvider: oldProvider, OldModel: oldModel}
+		return llmConfigApplyResult{Reply: "更新失败：" + err.Error(), Role: roleKey, OldProvider: oldProvider, OldModel: oldModel}
 	}
 
 	probe := target.Config.WithDefaults()
@@ -107,6 +113,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 	if err != nil {
 		return llmConfigApplyResult{
 			Reply:       "更新失败：" + err.Error(),
+			Role:        roleKey,
 			ProfileID:   target.ID,
 			ProfileName: target.Name,
 			OldProvider: oldProvider,
@@ -119,6 +126,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 
 	result := llmConfigApplyResult{
 		Updated:     true,
+		Role:        roleKey,
 		ProfileID:   target.ID,
 		ProfileName: target.Name,
 		OldProvider: oldProvider,
@@ -126,46 +134,115 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 		OldModel:    oldModel,
 		NewModel:    model,
 	}
-	if len(roles) == 0 {
+	label := llmConfigRoleLabel(roleKey)
+	// 只有「对话」这一档在完全没配过模型分配时走老路：那种部署里激活配置的默认
+	// 模型就是对话实际在用的，凭空写一条 chat 绑定反而会把视觉理解、意图识别这些
+	// 未分配的用途一起拽过来（它们的回落顺序是 roles[用途] -> roles["chat"]）。
+	// 其余三档写自己的绑定不会影响别人，直接写。
+	if len(roles) == 0 && roleKey == llmConfigRoleChat {
 		// 顺带把这次列到的模型清单存回去：窗口是按「清单里这个模型的窗口」现算的，
 		// 清单越新算得越准。这不是用户设置，是缓存下来的 provider 事实。
 		if err := saveLLMProfileModel(store, set, target.ID, probe.Provider, model, models); err != nil {
 			return llmConfigApplyResult{Reply: "更新失败：配置没能写入存储（" + err.Error() + "）。"}
 		}
-		result.Reply = fmt.Sprintf("已把对话模型换成 %s（配置：%s）。这个部署没有配模型分配，改的是激活配置的默认模型。%s", model, target.Name, notes)
+		result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s）。这个部署没有配模型分配，改的是激活配置的默认模型。%s", label, model, target.Name, notes)
 		return result
 	}
-	if err := r.saveChatModelRole(botCfg, roles, target, model); err != nil {
+	if err := r.saveModelRole(botCfg, roles, roleKey, target, model); err != nil {
 		return llmConfigApplyResult{Reply: "更新失败：机器人配置没能保存（" + err.Error() + "）。"}
 	}
-	result.Reply = fmt.Sprintf("已把对话模型换成 %s（配置：%s）。改的是机器人的模型分配，没有动 LLM 配置里的 provider 设置；识图、意图这些用途各自的分配保持不变。%s", model, target.Name, notes)
+	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s）。改的是机器人模型分配里的这一档，没有动 LLM 配置里的 provider 设置，其余用途各自的分配保持不变。%s", label, model, target.Name, notes)
 	return result
 }
 
-// chatModelBinding 报出「这台机器人现在用哪套配置的哪个模型说话」。
-// 顺序和 roleBoundProfiles 一致：chat 绑定优先，没绑才是激活配置。
-func chatModelBinding(set llm.ProfileSet, roles map[string]ModelRole) (llm.Profile, string, bool) {
-	if role, ok := roles["chat"]; ok {
-		var candidates []llm.Profile
-		if role.Group != "" {
-			candidates = set.GroupProfiles(role.Group)
-		} else {
-			for _, profile := range set.Profiles {
-				if profile.ID == role.ProfileID {
-					candidates = []llm.Profile{profile}
-					break
-				}
-			}
+// 模型分配的四个用途。和 WebUI「模型分配」那四行、normalizeModelRoles 的白名单
+// 是同一套 key。
+const (
+	llmConfigRoleChat   = "chat"
+	llmConfigRoleVision = "vision"
+	llmConfigRoleIntent = "intent"
+	llmConfigRoleImage  = "image"
+)
+
+func normalizeLLMConfigRole(role string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "", llmConfigRoleChat, "default", "text":
+		return llmConfigRoleChat, true
+	case llmConfigRoleVision:
+		return llmConfigRoleVision, true
+	case llmConfigRoleIntent:
+		return llmConfigRoleIntent, true
+	case llmConfigRoleImage:
+		return llmConfigRoleImage, true
+	default:
+		return "", false
+	}
+}
+
+func llmConfigRoleLabel(role string) string {
+	switch role {
+	case llmConfigRoleVision:
+		return "视觉理解"
+	case llmConfigRoleIntent:
+		return "意图识别"
+	case llmConfigRoleImage:
+		return "图片生成"
+	default:
+		return "对话"
+	}
+}
+
+// modelRoleBinding 报出「某个用途现在实际用哪套配置的哪个模型」，用于回执里的
+// 「旧模型」。回落顺序和运行时一致：本用途绑定 -> chat 绑定 -> 该用途的配置分组
+// -> 激活配置。图片生成那一档取的是生图模型，不是对话模型。
+func modelRoleBinding(set llm.ProfileSet, roles map[string]ModelRole, roleKey string) (llm.Profile, string, bool) {
+	if profile, model, ok := profilesForRole(set, roles, roleKey); ok {
+		return profile, model, true
+	}
+	if roleKey != llmConfigRoleChat {
+		if profile, model, ok := profilesForRole(set, roles, llmConfigRoleChat); ok {
+			return profile, model, true
 		}
-		if len(candidates) > 0 {
-			return candidates[0], role.Model, true
+		if candidates := set.GroupProfiles(roleKey); len(candidates) > 0 {
+			return candidates[0], roleModelFromProfile(candidates[0], roleKey), true
 		}
 	}
 	current, ok := set.Current()
 	if !ok {
 		return llm.Profile{}, "", false
 	}
-	return current, current.Config.WithDefaults().Model, true
+	return current, roleModelFromProfile(current, roleKey), true
+}
+
+// profilesForRole 解析一条已存在的绑定。
+func profilesForRole(set llm.ProfileSet, roles map[string]ModelRole, roleKey string) (llm.Profile, string, bool) {
+	role, ok := roles[roleKey]
+	if !ok {
+		return llm.Profile{}, "", false
+	}
+	var candidates []llm.Profile
+	if role.Group != "" {
+		candidates = set.GroupProfiles(role.Group)
+	} else {
+		for _, profile := range set.Profiles {
+			if profile.ID == role.ProfileID {
+				candidates = []llm.Profile{profile}
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return llm.Profile{}, "", false
+	}
+	return candidates[0], role.Model, true
+}
+
+func roleModelFromProfile(profile llm.Profile, roleKey string) string {
+	cfg := profile.Config.WithDefaults()
+	if roleKey == llmConfigRoleImage {
+		return cfg.ImageModelWithDefault()
+	}
+	return cfg.Model
 }
 
 // resolveLLMConfigTarget 选出这次要绑到哪套配置的哪个模型。
@@ -231,13 +308,13 @@ func llmConfigOutputTokenNote(cfg llm.ProviderConfig, info llm.ModelInfo) string
 	return fmt.Sprintf("提醒：这套配置的最大输出 Token 填的是 %d，超过新模型的 %d，需要在 WebUI 的 LLM 配置里调低。", cfg.MaxOutputTokens, info.MaxOutputTokens)
 }
 
-// saveChatModelRole 只改 chat 这一档绑定，其余用途原样保留。
-func (r *Runtime) saveChatModelRole(botCfg BotConfig, roles map[string]ModelRole, target llm.Profile, model string) error {
+// saveModelRole 只改指定用途的绑定，其余用途原样保留。
+func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, roleKey string, target llm.Profile, model string) error {
 	next := make(map[string]ModelRole, len(roles)+1)
 	for key, role := range roles {
 		next[key] = role
 	}
-	role := next["chat"]
+	role := next[roleKey]
 	// 原来按分组绑定、而新配置仍在那个分组里时保留分组绑定，只换模型：
 	// 分组绑定带故障转移，改成单配置会把这个能力弄丢。
 	if role.Group != "" && profileInGroup(target, role.Group) {
@@ -245,7 +322,7 @@ func (r *Runtime) saveChatModelRole(botCfg BotConfig, roles map[string]ModelRole
 	} else {
 		role = ModelRole{ProfileID: target.ID, Model: model}
 	}
-	next["chat"] = role
+	next[roleKey] = role
 	botCfg.ModelRoles = normalizeModelRoles(next)
 	botCfg = botCfg.WithDefaults()
 	r.mu.Lock()
@@ -315,6 +392,9 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 	}
 	if result.ProfileName != "" {
 		metadata["profile_name"] = result.ProfileName
+	}
+	if result.Role != "" {
+		metadata["role"] = result.Role
 	}
 	if result.OldProvider != "" {
 		metadata["old_provider"] = string(result.OldProvider)
