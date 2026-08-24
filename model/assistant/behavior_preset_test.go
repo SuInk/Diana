@@ -140,8 +140,12 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 
 func TestReplyStyleGroupmateDropsReplyReferenceAndMention(t *testing.T) {
 	// 每条群回复都带引用和 @ 是最硬的机器人痕迹，prompt 管不到，得由风格关掉。
+	//
+	// 两个装饰件的落点不一样：引用直接关掉，@ 交给模型按插话人数自己判断。@ 关掉
+	// 的代价是几个人同时说话、真需要点名时也不点，对方不知道这句在回谁；而 auto
+	// 冷清时本来就不 @，不需要再用「从不」兜一层。
 	cfg := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
-	if replyReferenceMode(cfg) != ReplyDecorationOff || mentionUserMode(cfg) != ReplyDecorationOff {
+	if replyReferenceMode(cfg) != ReplyDecorationOff || mentionUserMode(cfg) != ReplyDecorationAuto {
 		t.Fatalf("groupmate style kept the bot-looking delivery flags: %#v", cfg)
 	}
 
@@ -219,7 +223,7 @@ func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
 		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleGroupmate},
 	}})
 	casual := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "casual"})
-	if replyReferenceMode(casual) != ReplyDecorationOff || mentionUserMode(casual) != ReplyDecorationOff {
+	if replyReferenceMode(casual) != ReplyDecorationOff || mentionUserMode(casual) != ReplyDecorationAuto {
 		t.Fatalf("group-level groupmate style did not drop delivery flags: %#v", casual)
 	}
 }

@@ -133,3 +133,71 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 		t.Fatalf("他人消息不该触发承接提示:%s", prompt)
 	}
 }
+
+// 「群里有没有别人在说话」是算得出来的，不该让模型从历史文本里猜。
+func TestOtherSpeakersBeforeCountsInterveningPeople(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m5", Time: now}
+	history := []MessageEvent{
+		{GroupID: "g", UserID: "1", MessageID: "m1", Time: now - 60},
+		{GroupID: "g", UserID: "2", MessageID: "m2", Time: now - 40},
+		{GroupID: "g", UserID: "3", MessageID: "m3", Time: now - 20},
+		{GroupID: "g", UserID: "2", MessageID: "m4", Time: now - 10},
+		event,
+	}
+	if got := otherSpeakersBefore(history, event); got != 2 {
+		t.Fatalf("otherSpeakersBefore = %d, want 2", got)
+	}
+}
+
+func TestOtherSpeakersBeforeIgnoresSelfBotAndStaleTurns(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m9", Time: now}
+	history := []MessageEvent{
+		// 窗口之外的插话不算：那是上一个话题了。
+		{GroupID: "g", UserID: "7", MessageID: "old", Time: now - int64(mentionCrowdWindow.Seconds()) - 1},
+		// 机器人自己的发言不算。
+		{GroupID: "g", UserID: "bot", MessageID: "m7", Time: now - 30, Outbound: true},
+		// 发送者自己连发不算「有人插话」。
+		{GroupID: "g", UserID: "1", MessageID: "m8", Time: now - 10},
+		event,
+	}
+	if got := otherSpeakersBefore(history, event); got != 0 {
+		t.Fatalf("otherSpeakersBefore = %d, want 0", got)
+	}
+}
+
+// 冷清和热闹给的是两条不同的规则，不是同一句话加个数字。
+func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
+	quiet := mentionDecorationRule("123456", 0)
+	if !strings.Contains(quiet, "不用 @") {
+		t.Fatalf("一对一时应当明说不用 @：%s", quiet)
+	}
+	busy := mentionDecorationRule("123456", 3)
+	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "@123456") {
+		t.Fatalf("热闹时应当给出人数并要求点名：%s", busy)
+	}
+}
+
+// auto 模式下这条规则要真的进到提示词里，并且带上算出来的人数。
+func TestReplyDecorationPromptCarriesMentionCrowd(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m3", Time: now}
+	history := []MessageEvent{
+		{GroupID: "g", UserID: "2", MessageID: "m1", Time: now - 30},
+		{GroupID: "g", UserID: "3", MessageID: "m2", Time: now - 20},
+		event,
+	}
+	cfg := BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOff}
+	prompt := replyDecorationPrompt(cfg, event, history)
+	if !strings.Contains(prompt, "2 个人") {
+		t.Fatalf("提示词里没有算出来的插话人数：%s", prompt)
+	}
+	// 关掉和总是 @ 两种模式不需要这条规则，模型不该被告知怎么判断。
+	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationOff} {
+		off := replyDecorationPrompt(BotConfig{MentionUserMode: mode, ReplyReferenceMode: ReplyDecorationOff}, event, history)
+		if strings.Contains(off, "个人在说话") {
+			t.Fatalf("mode %s 不该带 @ 判断规则：%s", mode, off)
+		}
+	}
+}

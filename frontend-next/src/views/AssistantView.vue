@@ -434,7 +434,7 @@
                   :options="mentionUserModeOptions"
                   @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
                 />
-                <span class="hint">选「让模型自己决定」后，只有需要点名时它才会 @，不会每句都带。</span>
+                <span class="hint">选「让模型自己决定」后，群里还有别人在说话时它才 @，一对一接话时不带。群友风格没选过就按这个来。</span>
               </div>
               <div class="field">
                 <label class="switch">

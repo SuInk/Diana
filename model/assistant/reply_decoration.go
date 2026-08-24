@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -100,9 +101,64 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 	}
 	if mentionUserMode(cfg) == ReplyDecorationAuto {
 		if userID := strings.TrimSpace(event.UserID); userID != "" {
-			appendPromptSection(&builder, "本次是否 @ 发送者由你自己决定：多人同时说话需要点名、或对方可能已经走开时才写 @"+userID+
-				"；一对一顺畅接话、对方刚刚说完话时不要 @，每句都 @ 很像机器人。")
+			appendPromptSection(&builder, mentionDecorationRule(userID, otherSpeakersBefore(history, event)))
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// 「该不该 @」原先整条交给模型判断：提示词说「多人同时说话需要点名时才写 @」,
+// 而模型看不出群有多热闹——它拿到的是一段已经排好序的历史,谁在跟谁说话、隔了
+// 多久,都得从文本里猜。猜不准就一律不 @,实际表现是该点名的时候也不点。
+//
+// 插话人数是运行时算得出来的,那就别让模型猜:这里把它数出来写进提示词,规则挂在
+// 这个数上。判断仍然由模型做（写不写 @ 是语气问题）,但它依据的是事实而不是印象。
+const (
+	// mentionCrowdWindow 是「刚才这段时间」的长度。再往前就不影响当下这句话
+	// 该不该点名了。
+	mentionCrowdWindow = 5 * time.Minute
+	// mentionCrowdLookback 限制回溯条数,免得在刷屏群里把整段历史都数一遍。
+	mentionCrowdLookback = 20
+)
+
+// otherSpeakersBefore 数出当前消息之前那一小段里,除发送者和机器人之外还有几个
+// 不同的人说过话。跨群带进来的上下文不算——那不是这个群里的插话。
+func otherSpeakersBefore(history []MessageEvent, event MessageEvent) int {
+	senderID := strings.TrimSpace(event.UserID)
+	currentID := strings.TrimSpace(event.MessageID)
+	speakers := make(map[string]struct{})
+	scanned := 0
+	for index := len(history) - 1; index >= 0 && scanned < mentionCrowdLookback; index-- {
+		item := history[index]
+		if item.crossGroupContext {
+			continue
+		}
+		if currentID != "" && strings.TrimSpace(item.MessageID) == currentID {
+			continue
+		}
+		if event.Time > 0 && item.Time > 0 && event.Time-item.Time > int64(mentionCrowdWindow/time.Second) {
+			break
+		}
+		scanned++
+		if item.Outbound {
+			continue
+		}
+		userID := strings.TrimSpace(item.UserID)
+		if userID == "" || userID == senderID {
+			continue
+		}
+		speakers[userID] = struct{}{}
+	}
+	return len(speakers)
+}
+
+// mentionDecorationRule 按插话人数给出这一轮的 @ 规则。
+func mentionDecorationRule(userID string, otherSpeakers int) string {
+	if otherSpeakers == 0 {
+		return "本次是否 @ 发送者由你自己决定：刚才这段时间里群里只有 TA 在说话,你们是一对一在接话,不用 @；" +
+			"只有隔了很久才回、对方可能已经走开时才写 @" + userID + "。"
+	}
+	return "本次是否 @ 发送者由你自己决定：刚才这段时间里群里除了 TA 还有 " + strconv.Itoa(otherSpeakers) +
+		" 个人在说话,这种时候在回复最开头写 @" + userID + " 点名,对方才知道这句是回 TA 的；" +
+		"除非你上一条刚回过 TA、这句是紧接着的补充,那就不用重复 @。"
 }

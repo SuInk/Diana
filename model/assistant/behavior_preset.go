@@ -213,8 +213,12 @@ func (style ReplyStyle) apply(cfg *BotConfig) {
 	if cfg.ReplyReferenceMode == "" {
 		cfg.ReplyReferenceMode = ReplyDecorationOff
 	}
+	// @ 默认交给模型自己判断,而不是一刀切关掉。关掉是为了躲开「每条都 @」那种
+	// 机器人味,但代价是群里几个人同时说话、真需要点名的时候也不点,对方不知道
+	// 这句在回谁。auto 现在拿得到插话人数（见 mentionDecorationRule）,冷清时不
+	// @、热闹时才 @,正是真人的做法,不需要再用「从不」来兜底。
 	if cfg.MentionUserMode == "" {
-		cfg.MentionUserMode = ReplyDecorationOff
+		cfg.MentionUserMode = ReplyDecorationAuto
 	}
 	if cfg.DirectReplyChunkSize <= 0 || cfg.DirectReplyChunkSize > groupmateReplyChunkSize {
 		cfg.DirectReplyChunkSize = groupmateReplyChunkSize
