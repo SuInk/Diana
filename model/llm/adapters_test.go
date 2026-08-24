@@ -1367,3 +1367,184 @@ func TestAnthropicMessagesMapsRoles(t *testing.T) {
 		t.Fatalf("assistant role = %q, want assistant", got[2].Role)
 	}
 }
+func TestForcedToolChoiceReachesEveryProvider(t *testing.T) {
+	definition := ToolDefinition{Name: "agent.finalize", Description: "finish", Parameters: map[string]any{"type": "object"}}
+	req := GenerateRequest{Tools: []ToolDefinition{definition}, ToolChoice: definition.Name}
+
+	choice := anthropicToolChoice(req)
+	if choice.OfTool == nil || choice.OfTool.Name != wireToolName(definition.Name) {
+		t.Fatalf("anthropic tool choice=%#v", choice)
+	}
+	if auto := anthropicToolChoice(GenerateRequest{Tools: req.Tools}); auto.OfAuto == nil {
+		t.Fatalf("anthropic default tool choice=%#v", auto)
+	}
+
+	config := geminiToolConfig(req)
+	if config == nil || config.FunctionCallingConfig == nil ||
+		config.FunctionCallingConfig.Mode != "ANY" ||
+		len(config.FunctionCallingConfig.AllowedFunctionNames) != 1 ||
+		config.FunctionCallingConfig.AllowedFunctionNames[0] != wireToolName(definition.Name) {
+		t.Fatalf("gemini tool config=%#v", config)
+	}
+	if auto := geminiToolConfig(GenerateRequest{Tools: req.Tools}); auto != nil {
+		t.Fatalf("gemini default tool config=%#v", auto)
+	}
+
+	responseChoice := openAIResponseToolChoice(req)
+	if responseChoice.OfFunctionTool == nil || responseChoice.OfFunctionTool.Name != wireToolName(definition.Name) {
+		t.Fatalf("responses tool choice=%#v", responseChoice)
+	}
+	chatChoice, _ := openAIChatToolChoice(req).(map[string]any)
+	function, _ := chatChoice["function"].(map[string]any)
+	if chatChoice["type"] != "function" || function["name"] != wireToolName(definition.Name) {
+		t.Fatalf("chat tool choice=%#v", chatChoice)
+	}
+	if auto := openAIChatToolChoice(GenerateRequest{Tools: req.Tools}); auto != nil {
+		t.Fatalf("chat default tool choice=%#v", auto)
+	}
+}
+
+func TestAnthropicCachesStablePrefix(t *testing.T) {
+	tools := anthropicTools([]ToolDefinition{
+		{Name: "lookup", Parameters: map[string]any{"type": "object"}},
+		{Name: "agent.finalize", Parameters: map[string]any{"type": "object"}},
+	})
+	if len(tools) != 2 {
+		t.Fatalf("tools=%#v", tools)
+	}
+	if tools[1].OfTool.CacheControl.Type != "ephemeral" {
+		t.Fatalf("last tool must carry the cache breakpoint: %#v", tools[1].OfTool.CacheControl)
+	}
+	if tools[0].OfTool.CacheControl.Type == "ephemeral" {
+		t.Fatalf("cache breakpoint must sit on the last tool only: %#v", tools[0].OfTool.CacheControl)
+	}
+
+	converted := anthropicMessages([]Message{
+		{Role: RoleUser, Content: "第一轮"},
+		{Role: RoleAssistant, Content: "第一轮回复", CacheBreakpoint: true},
+		{Role: RoleUser, Content: "第二轮"},
+	}, nil)
+	if len(converted) != 3 {
+		t.Fatalf("messages=%#v", converted)
+	}
+	if control := converted[1].Content[0].GetCacheControl(); control == nil || control.Type != "ephemeral" {
+		t.Fatalf("marked message cache control=%#v", converted[1].Content[0])
+	}
+	if control := converted[2].Content[0].GetCacheControl(); control != nil && control.Type == "ephemeral" {
+		t.Fatalf("unmarked message must not be cached: %#v", converted[2].Content[0])
+	}
+}
+
+func TestStrictToolSchemaRewritesOptionalArguments(t *testing.T) {
+	plain := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"content":    map[string]any{"type": "string"},
+			"task_state": map[string]any{"type": "string", "enum": []string{"pending"}},
+			"claims": map[string]any{"type": "array", "items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":      map[string]any{"type": "string"},
+					"summary": map[string]any{"type": "string"},
+				},
+				"required":             []string{"id"},
+				"additionalProperties": false,
+			}},
+		},
+		"required":             []string{"claims"},
+		"additionalProperties": false,
+	}
+	strict := strictToolSchema(plain)
+
+	if names := schemaRequiredNames(strict); len(names) != 3 {
+		t.Fatalf("strict schema must require every property: %#v", names)
+	}
+	properties, _ := strict["properties"].(map[string]any)
+	content, _ := properties["content"].(map[string]any)
+	types, _ := content["type"].([]any)
+	if len(types) != 2 || types[0] != "string" || types[1] != "null" {
+		t.Fatalf("optional property was not widened: %#v", content)
+	}
+	taskState, _ := properties["task_state"].(map[string]any)
+	enum, _ := taskState["enum"].([]any)
+	if len(enum) != 2 || enum[0] != "pending" || enum[1] != nil {
+		t.Fatalf("widened enum must admit null: %#v", taskState)
+	}
+	// Nested item schemas are rewritten too, otherwise the array elements stay
+	// outside the grammar.
+	claims, _ := properties["claims"].(map[string]any)
+	items, _ := claims["items"].(map[string]any)
+	if names := schemaRequiredNames(items); len(names) != 2 {
+		t.Fatalf("array items were not rewritten: %#v", items)
+	}
+	// The caller's schema must not be mutated: other providers keep seeing the
+	// genuinely optional form.
+	if names := schemaRequiredNames(plain); len(names) != 1 {
+		t.Fatalf("original schema was mutated: %#v", plain)
+	}
+}
+
+func TestOpenAICompatibleRetriesOnceWhenGatewayRejectsStrictTools(t *testing.T) {
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		requests = append(requests, body)
+		tools, _ := body["tools"].([]any)
+		first, _ := tools[0].(map[string]any)
+		function, _ := first["function"].(map[string]any)
+		if function["strict"] == true {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Invalid schema: strict is not supported","type":"invalid_request_error"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chat_test","model":"test","choices":[{"message":{"role":"assistant","content":"降级后仍然可用"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":4,"total_tokens":13}}`))
+	}))
+	defer server.Close()
+
+	client := newOpenAICompatibleClient(ProviderConfig{
+		Provider:  ProviderOpenAICompatible,
+		APIKey:    "test-key",
+		BaseURL:   server.URL + "/v1",
+		APIFormat: APIFormatChatCompletions,
+		Model:     "test",
+	}, server.Client())
+	request := GenerateRequest{
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Tools: []ToolDefinition{{
+			Name:   "agent.finalize",
+			Strict: true,
+			Parameters: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{"content": map[string]any{"type": "string"}},
+				"additionalProperties": false,
+			},
+		}},
+	}
+	resp, err := client.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "降级后仍然可用" || len(requests) != 2 {
+		t.Fatalf("response=%#v requests=%d", resp, len(requests))
+	}
+
+	// The downgrade is remembered, so the next turn does not pay for the
+	// rejected attempt again.
+	if _, err := client.Generate(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("strict downgrade was not remembered: requests=%d", len(requests))
+	}
+	last, _ := requests[2]["tools"].([]any)
+	lastTool, _ := last[0].(map[string]any)
+	lastFunction, _ := lastTool["function"].(map[string]any)
+	if lastFunction["strict"] == true {
+		t.Fatalf("strict was sent again after the downgrade: %#v", lastFunction)
+	}
+}
