@@ -1147,7 +1147,6 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupResponseModeOverridden {
 		cfg.ResponseMode.apply(&cfg)
 	}
-	cfg.ReplyStyle.apply(&cfg)
 	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
 	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
 	if groupCfg.ReplyGate != nil {

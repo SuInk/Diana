@@ -192,38 +192,32 @@ func (style ReplyStyle) stylePrompt() string {
 	}
 }
 
-// 群友风格的投递参数：真人发的是聊天体量的短消息，不是几百字一坨；连发之间
-// 有打字间隔；开口前也要有想和打的时间。
+// 聊天体量的投递参数：真人发的是短消息，不是几百字一坨；连发之间有打字间隔。
+// 这两项是 DefaultBotConfig 的默认值，不再由风格钳定，用户在 WebUI 里说了算。
 const (
-	groupmateReplyChunkSize     = 400
-	groupmateSendChunkIntervalM = 1200
-	groupmateTypingBaseDelay    = 900 * time.Millisecond
-	groupmateTypingPerRune      = 55 * time.Millisecond
-	groupmateTypingMaxDelay     = 5 * time.Second
+	chatReplyChunkSize      = 400
+	chatSendChunkIntervalMS = 1200
 )
 
-// apply 让风格能改动真正决定「机器人味」的投递方式，而不只是措辞。
-// 几百字一条、秒回——这些 prompt 再怎么写都管不到。长度和间隔是这个风格的硬
-// 策略：900 字一条、300ms 连发怎么写都不像真人，但比它更克制的设置保留。
+// 群友风格的打字节奏：开口前要有想和打的时间。这几项配置里没有对应项，
+// 只有风格自己知道，所以留在风格里。
+const (
+	groupmateTypingBaseDelay = 900 * time.Millisecond
+	groupmateTypingPerRune   = 55 * time.Millisecond
+	groupmateTypingMaxDelay  = 5 * time.Second
+)
+
+// 表达风格不再改动任何 BotConfig 字段。
 //
-// 引用和 @ 曾经也在这里填：群友风格把两项都按成「从不」。那是错的，错的不是
-// 值而是位置——这两项在 WebUI 里有对应的下拉框，于是「要不要 @」有了两个来源。
-// 更糟的是 WithDefaults 会把填进去的值一起存库，保存过一次配置之后，风格填的
-// 「从不」和用户亲手选的「从不」就再也分不开，「用户选过就尊重用户」名存实亡，
-// 改风格的默认值也到不了这些人手上。现在这两项只由配置决定，默认是「让模型
-// 自己决定」（见 DefaultBotConfig）——它本来就冷清时不 @、热闹时才 @，正是当初
-// 想用「从不」换来的效果，不需要风格再插一手。
-func (style ReplyStyle) apply(cfg *BotConfig) {
-	if style.Normalized() != ReplyStyleGroupmate {
-		return
-	}
-	if cfg.DirectReplyChunkSize <= 0 || cfg.DirectReplyChunkSize > groupmateReplyChunkSize {
-		cfg.DirectReplyChunkSize = groupmateReplyChunkSize
-	}
-	if cfg.SendChunkIntervalMS < groupmateSendChunkIntervalM {
-		cfg.SendChunkIntervalMS = groupmateSendChunkIntervalM
-	}
-}
+// 它曾经有个 apply：群友风格在那里把引用和 @ 按成「从不」，把每条长度钳到 400、
+// 连发间隔顶到 1200ms。这四项在 WebUI 里都有对应的输入框，于是同一件事有了两个
+// 来源；更糟的是 WithDefaults 会把风格写进去的值一起存库，保存过一次配置之后，
+// 风格填的值和用户亲手填的值再也分不开——「用户设过就尊重用户」名存实亡，之后
+// 改风格的默认值也到不了这些人手上。
+//
+// 现在这些都只由配置决定，风格对应的取值搬进了 DefaultBotConfig 当默认值。风格
+// 只保留配置里没有对应项、prompt 也管不到的部分：开口前的拟真停顿、以及不使用
+// 合并转发卡片。
 
 // allowsForwardReply 报告这个风格能否把长回复折成合并转发卡片。
 // 转发卡片是机器人专属控件，真人不会这么发言，所以群友风格永远走普通消息。

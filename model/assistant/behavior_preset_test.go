@@ -163,35 +163,30 @@ func TestReplyDecorationModesAreNotStyleDriven(t *testing.T) {
 	}
 }
 
-func TestReplyStyleGroupmateRespectsExplicitDeliverySettings(t *testing.T) {
-	// 用户手动打开过就尊重用户，preset 只负责填未设置的项。
-	cfg := BotConfig{
-		ResponseMode:       ResponseModeStandard,
-		ReplyStyle:         ReplyStyleGroupmate,
-		ReplyReferenceMode: ReplyDecorationOn,
-		MentionUserMode:    ReplyDecorationOn,
-	}.WithDefaults()
-	if replyReferenceMode(cfg) != ReplyDecorationOn || mentionUserMode(cfg) != ReplyDecorationOn {
-		t.Fatalf("explicit delivery settings were overwritten: %#v", cfg)
-	}
-}
-
-func TestReplyStyleGroupmateUsesChatSizedDelivery(t *testing.T) {
-	// 900 字一条、300ms 连发是机器人特征，群友风格要压到聊天体量和打字节奏。
-	cfg := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
-	if cfg.DirectReplyChunkSize != groupmateReplyChunkSize || cfg.SendChunkIntervalMS != groupmateSendChunkIntervalM {
-		t.Fatalf("delivery = %d/%d", cfg.DirectReplyChunkSize, cfg.SendChunkIntervalMS)
+// 投递方式只由配置决定：填了就照填的来，没填才用默认值。风格不参与。
+func TestDeliverySettingsAreConfigOnly(t *testing.T) {
+	// 没填：所有风格拿到同一份聊天体量的默认值。
+	for _, style := range []ReplyStyle{ReplyStyleGroupmate, ReplyStyleAssistant, ReplyStyleCatgirl} {
+		cfg := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: style}.WithDefaults()
+		if cfg.DirectReplyChunkSize != chatReplyChunkSize || cfg.SendChunkIntervalMS != chatSendChunkIntervalMS {
+			t.Fatalf("风格 %s 的默认投递 = %d/%d，want %d/%d",
+				style, cfg.DirectReplyChunkSize, cfg.SendChunkIntervalMS, chatReplyChunkSize, chatSendChunkIntervalMS)
+		}
 	}
 
-	// 比策略更克制的设置保留，更铺张的被压回来。
-	tighter := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleGroupmate, DirectReplyChunkSize: 80, SendChunkIntervalMS: 2000}.WithDefaults()
-	if tighter.DirectReplyChunkSize != 80 || tighter.SendChunkIntervalMS != 2000 {
-		t.Fatalf("tighter settings were overwritten: %#v", tighter)
-	}
-
-	assistant := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleAssistant}.WithDefaults()
-	if assistant.DirectReplyChunkSize != 900 || assistant.SendChunkIntervalMS != 300 {
-		t.Fatalf("assistant delivery changed: %#v", assistant)
+	// 填了：两个方向都照填的来。以前更铺张的值会被群友风格压回去——那正是
+	// 「WebUI 里改了不生效」的来源。
+	for _, want := range []struct{ chunk, interval int }{{80, 2000}, {900, 300}} {
+		cfg := BotConfig{
+			ResponseMode:         ResponseModeStandard,
+			ReplyStyle:           ReplyStyleGroupmate,
+			DirectReplyChunkSize: want.chunk,
+			SendChunkIntervalMS:  want.interval,
+		}.WithDefaults()
+		if cfg.DirectReplyChunkSize != want.chunk || cfg.SendChunkIntervalMS != want.interval {
+			t.Fatalf("显式投递设置被改掉了：%d/%d，want %d/%d",
+				cfg.DirectReplyChunkSize, cfg.SendChunkIntervalMS, want.chunk, want.interval)
+		}
 	}
 }
 
@@ -231,8 +226,12 @@ func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
 		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleGroupmate},
 	}})
 	casual := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "casual"})
-	if casual.DirectReplyChunkSize != groupmateReplyChunkSize || casual.SendChunkIntervalMS < groupmateSendChunkIntervalM {
-		t.Fatalf("group-level groupmate style did not apply chat-sized delivery: %#v", casual)
+	if casual.ReplyStyle.Normalized() != ReplyStyleGroupmate {
+		t.Fatalf("group-level style did not take effect: %#v", casual)
+	}
+	// 风格按群生效的是措辞和打字节奏，投递配置不归它管。
+	if casual.ReplyStyle.allowsForwardReply() {
+		t.Fatalf("group-level groupmate style should still refuse forward cards: %#v", casual)
 	}
 }
 
@@ -373,16 +372,21 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 	}
 }
 
-// 只有群友风格会改投递方式（分条长度、连发间隔、引用装饰）。猫娘只是换个语气，
-// 不该顺手把这些也改了。
-func TestCatgirlReplyStyleDoesNotChangeDelivery(t *testing.T) {
-	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl}
-	before := cfg
-	ReplyStyleCatgirl.apply(&cfg)
-	if cfg.DirectReplyChunkSize != before.DirectReplyChunkSize ||
-		cfg.SendChunkIntervalMS != before.SendChunkIntervalMS ||
-		cfg.ReplyReferenceMode != before.ReplyReferenceMode ||
-		cfg.MentionUserMode != before.MentionUserMode {
-		t.Fatalf("catgirl style changed delivery settings: %#v", cfg)
+// 任何风格都不该动投递方式的四项配置——它们在 WebUI 里各有一个输入框，
+// 风格再改一遍就有了两个来源。
+func TestReplyStyleDoesNotChangeDeliveryConfig(t *testing.T) {
+	for _, style := range []ReplyStyle{ReplyStyleCatgirl, ReplyStyleGroupmate, ReplyStyleLively, ReplyStyleConcise} {
+		filled := BotConfig{
+			ReplyStyle:           style,
+			DirectReplyChunkSize: 777,
+			SendChunkIntervalMS:  333,
+			ReplyReferenceMode:   ReplyDecorationOff,
+			MentionUserMode:      ReplyDecorationOn,
+		}.WithDefaults()
+		if filled.DirectReplyChunkSize != 777 || filled.SendChunkIntervalMS != 333 ||
+			filled.ReplyReferenceMode != ReplyDecorationOff || filled.MentionUserMode != ReplyDecorationOn {
+			t.Fatalf("风格 %s 改动了投递配置：%d/%d %s/%s", style,
+				filled.DirectReplyChunkSize, filled.SendChunkIntervalMS, filled.ReplyReferenceMode, filled.MentionUserMode)
+		}
 	}
 }

@@ -334,7 +334,8 @@
               </div>
               <div class="field">
                 <label for="bot-chunk">分段发送长度</label>
-                <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" />
+                <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" placeholder="400" />
+                <span class="hint">单条聊天消息最多多少字，超出的部分另发一条。留空按 400；表达风格不会改动这一项。</span>
               </div>
               <div class="field">
                 <label for="bot-history-budget">回复历史 token 预算</label>
@@ -483,8 +484,8 @@
               </div>
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
-                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。</span>
+                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="1200" />
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。留空按 1200；表达风格不会改动这一项。</span>
               </div>
             </div>
           </section>

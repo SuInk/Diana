@@ -930,25 +930,28 @@ func DefaultBotConfig() BotConfig {
 		// 引用和 @ 默认交给模型自己判断。「每条都带」和「一条都不带」都不像真人，
 		// 而 auto 拿得到插话人数这类算得出来的信号（见 replyDecorationPrompt），
 		// 冷清时不带、需要点名时才带。
-		ReplyReferenceMode:             ReplyDecorationAuto,
-		MentionUserMode:                ReplyDecorationAuto,
-		DisabledGroups:                 []string{},
-		DisabledUsers:                  []string{},
-		GroupAdmission:                 GroupAdmission{}.WithDefaults(),
-		WelcomeEnabled:                 false,
-		WelcomeMessage:                 "欢迎加入本群，可以直接 @我 开始聊天。",
-		SystemPrompt:                   defaultSystemPrompt,
-		ResponseMode:                   ResponseModeStandard,
-		ReplyStyle:                     ReplyStyleAssistant,
-		PromptChineseSlangText:         defaultPromptChineseSlang,
-		PromptPlaintextRulesText:       defaultPromptPlaintextRules,
-		PromptTimeTemplate:             defaultPromptTimeTemplate,
-		PromptGroupSenderTemplate:      defaultPromptGroupSenderTemplate,
-		PromptImageOnlyText:            defaultPromptImageOnly,
-		PromptWakeOnlyText:             defaultPromptWakeOnly,
-		ErrorReplyPrefix:               "出错了：",
-		SendRetryAttempts:              3,
-		SendChunkIntervalMS:            300,
+		ReplyReferenceMode:        ReplyDecorationAuto,
+		MentionUserMode:           ReplyDecorationAuto,
+		DisabledGroups:            []string{},
+		DisabledUsers:             []string{},
+		GroupAdmission:            GroupAdmission{}.WithDefaults(),
+		WelcomeEnabled:            false,
+		WelcomeMessage:            "欢迎加入本群，可以直接 @我 开始聊天。",
+		SystemPrompt:              defaultSystemPrompt,
+		ResponseMode:              ResponseModeStandard,
+		ReplyStyle:                ReplyStyleAssistant,
+		PromptChineseSlangText:    defaultPromptChineseSlang,
+		PromptPlaintextRulesText:  defaultPromptPlaintextRules,
+		PromptTimeTemplate:        defaultPromptTimeTemplate,
+		PromptGroupSenderTemplate: defaultPromptGroupSenderTemplate,
+		PromptImageOnlyText:       defaultPromptImageOnly,
+		PromptWakeOnlyText:        defaultPromptWakeOnly,
+		ErrorReplyPrefix:          "出错了：",
+		SendRetryAttempts:         3,
+		// 连发间隔和每条长度取的是聊天体量：几百字一坨、300ms 连发怎么看都不像
+		// 真人。这两个数原先是群友风格在 apply 里钳出来的，风格不再改配置之后
+		// 搬到这里当默认值——想要长一点的气泡、快一点的连发就在 WebUI 里改。
+		SendChunkIntervalMS:            chatSendChunkIntervalMS,
 		ProactiveReplyRouterPrompt:     defaultProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           defaultProactiveReplyPrompt,
 		ChatInEnabled:                  boolPointer(true),
@@ -956,7 +959,7 @@ func DefaultBotConfig() BotConfig {
 		NaturalInterjectionEnabled:     boolPointer(false),
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
-		DirectReplyChunkSize:           900,
+		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
 		RecallReplyMode:                RecallReplyModeLLMSummary,
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
@@ -1090,8 +1093,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.MentionUserMode == "" {
 		cfg.MentionUserMode = defaults.MentionUserMode
 	}
-	// 风格的投递策略要在数值默认之前套用，否则分不清「用户填的 900」和「默认 900」。
-	cfg.ReplyStyle.apply(&cfg)
 	if cfg.SendChunkIntervalMS <= 0 {
 		cfg.SendChunkIntervalMS = defaults.SendChunkIntervalMS
 	}

@@ -1622,7 +1622,7 @@ func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
 		"「伪」有假装成女性的意味。",
 	}, "\n")
 
-	got := splitReply(reply, groupmateReplyChunkSize)
+	got := splitReply(reply, chatReplyChunkSize)
 	if len(got) != 1 {
 		t.Fatalf("structured list should stay in one message, got %#v", got)
 	}

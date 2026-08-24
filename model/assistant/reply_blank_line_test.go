@@ -54,17 +54,17 @@ func TestStructuredReplyRespectsConfiguredChunkSize(t *testing.T) {
 		builder.WriteString("这里写一句三十来个字的说明，交代为什么值得去、什么时候去比较合适。\n\n")
 	}
 	reply := builder.String()
-	if total := len([]rune(reply)); total <= groupmateReplyChunkSize {
+	if total := len([]rune(reply)); total <= chatReplyChunkSize {
 		t.Fatalf("用例本身要长过上限才有意义，实际 %d 字", total)
 	}
 
-	parts := splitReply(reply, groupmateReplyChunkSize)
+	parts := splitReply(reply, chatReplyChunkSize)
 	if len(parts) < 2 {
-		t.Fatalf("清单应按配置的 %d 字上限切分，实际 %d 条", groupmateReplyChunkSize, len(parts))
+		t.Fatalf("清单应按配置的 %d 字上限切分，实际 %d 条", chatReplyChunkSize, len(parts))
 	}
 	for _, part := range parts {
-		if got := len([]rune(part)); got > groupmateReplyChunkSize {
-			t.Fatalf("切分后仍有 %d 字的分片，超过上限 %d：%q", got, groupmateReplyChunkSize, part)
+		if got := len([]rune(part)); got > chatReplyChunkSize {
+			t.Fatalf("切分后仍有 %d 字的分片，超过上限 %d：%q", got, chatReplyChunkSize, part)
 		}
 	}
 	// 内容不能被顺带吃掉。

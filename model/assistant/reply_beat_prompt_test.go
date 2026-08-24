@@ -41,7 +41,7 @@ func TestOtherStylesDoNotTeachSplitMarker(t *testing.T) {
 // 模型照做之后，投递侧原样按标记分条——这条链路本来就通，不需要额外规则。
 func TestGroupmateConsecutiveBeatsSplitOnMarker(t *testing.T) {
 	reply := "又来" + notificationSplitMarker + "先看 dmesg，多半是被 OOM 掉了"
-	got := splitReply(reply, groupmateReplyChunkSize)
+	got := splitReply(reply, chatReplyChunkSize)
 	want := []string{"又来", "先看 dmesg，多半是被 OOM 掉了"}
 	if len(got) != len(want) {
 		t.Fatalf("got %d chunks %q, want %v", len(got), got, want)
@@ -56,7 +56,7 @@ func TestGroupmateConsecutiveBeatsSplitOnMarker(t *testing.T) {
 // 单个换行仍然是同一条消息里的排版，运行时不碰它。
 func TestSingleNewlineStaysInOneMessage(t *testing.T) {
 	reply := "端口被占了\n先 lsof -i:8080 看看是谁占着"
-	if got := splitReply(reply, groupmateReplyChunkSize); len(got) != 1 {
+	if got := splitReply(reply, chatReplyChunkSize); len(got) != 1 {
 		t.Fatalf("单个换行被拆成了 %d 条：%q", len(got), got)
 	}
 }

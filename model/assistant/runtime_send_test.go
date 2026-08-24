@@ -365,7 +365,7 @@ func TestErrorNoticeIsNotChunkedByPersonaStyle(t *testing.T) {
 		ResponseMode: ResponseModeStandard,
 		ReplyStyle:   ReplyStyleGroupmate,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
-	if size := runtime.Config().DirectReplyChunkSize; size != groupmateReplyChunkSize {
+	if size := runtime.Config().DirectReplyChunkSize; size != chatReplyChunkSize {
 		t.Fatalf("fixture needs the groupmate chunk size, got %d", size)
 	}
 
