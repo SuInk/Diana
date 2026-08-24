@@ -7051,7 +7051,8 @@ func (r *Runtime) sendWithMessageIDs(ctx context.Context, event MessageEvent, re
 // 处理，只按平台长度兜底。
 func (r *Runtime) sendErrorNoticeWithEvidence(ctx context.Context, event MessageEvent, text string) ([]string, bool, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", true)
+	// 错误提示是对当前这条消息的回应，引用照旧、不额外 @：真正要点名的是订阅推送。
+	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{ReplyToCurrent: true})
 	if err != nil {
 		return nil, false, err
 	}
@@ -7116,6 +7117,20 @@ func generatedReplyTargetsOtherParticipant(event MessageEvent, reply string) boo
 }
 
 func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent, reply string, mentionUserID string, replyToCurrent bool) ([]string, error) {
+	return r.sendDecorated(ctx, event, reply, outboundDecoration{MentionUserID: mentionUserID, ReplyToCurrent: replyToCurrent})
+}
+
+// sendSubscriberNotice 投递提醒、周期查询、RSS 这类「到点了主动找人」的通知：
+// 群里一律 @ 订阅者，不引用任何消息（触发它的那条消息可能是几天前的了）。
+func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
+	_, err := r.sendDecorated(ctx, event, text, outboundDecoration{
+		MentionUserID: strings.TrimSpace(event.UserID),
+		MentionAlways: true,
+	})
+	return err
+}
+
+func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
 	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
@@ -7137,7 +7152,7 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 	if delay := cfg.ReplyStyle.remainingTypingDelay(reply, replyTurnElapsed(ctx)); delay > 0 && !sleepContext(ctx, delay) {
 		return nil, ctx.Err()
 	}
-	return r.deliverChunks(ctx, event, chunks, cfg, mentionUserID, replyToCurrent)
+	return r.deliverChunks(ctx, event, chunks, cfg, decoration)
 }
 
 // sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行
@@ -7150,10 +7165,38 @@ func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text
 
 func (r *Runtime) sendNotificationWithIDs(ctx context.Context, event MessageEvent, text string) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	return r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", false)
+	// 订阅推送是主动找人，知道订阅者是谁就 @ 上：这条动态是他订的，不点名的话
+	// 群里刷过去就错过了。目标是纯群（没有记订阅人）时 MentionUserID 为空，自然不 @。
+	return r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
+		MentionUserID: strings.TrimSpace(event.UserID),
+		MentionAlways: true,
+	})
 }
 
-func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks []string, cfg BotConfig, mentionUserID string, replyToCurrent bool) ([]string, error) {
+// outboundDecoration 描述这次投递要不要挂引用和 @。
+//
+// 拆出来是因为「聊天回复」和「主动通知」对 @ 的诉求相反：前者由「群聊 @ 发送者」
+// 开关管，选 auto 时运行时不补、交给模型在正文里自己写；后者是过了很久之后主动
+// 找某个人（提醒到点了、他订的仓库有更新），正文是模板或后台任务生成的，没有模型
+// 帮它写 @，被那个开关连坐的结果就是订阅者在群里永远收不到点名。
+type outboundDecoration struct {
+	// MentionUserID 是要 @ 的人，空表示不 @。私聊投递永远用不上。
+	MentionUserID string
+	// ReplyToCurrent 表示第一条挂上对当前消息的引用。
+	ReplyToCurrent bool
+	// MentionAlways 让 @ 不受「群聊 @ 发送者」开关约束，只用于主动通知。
+	MentionAlways bool
+}
+
+// mentionEnabled 判断本次投递该不该挂 @。
+func (decoration outboundDecoration) mentionEnabled(cfg BotConfig) bool {
+	if strings.TrimSpace(decoration.MentionUserID) == "" {
+		return false
+	}
+	return decoration.MentionAlways || mentionUserMode(cfg) == ReplyDecorationOn
+}
+
+func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks []string, cfg BotConfig, decoration outboundDecoration) ([]string, error) {
 	sentChunks := 0
 	messageIDs := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -7169,11 +7212,11 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 				// 运行时再补一遍就又变成每条都带。
 				// 原消息已撤回时不挂引用：引用一条不存在的消息要么发送失败，
 				// 要么在界面上渲染成怪东西。回复本身照常发出。
-				if replyToCurrent && replyReferenceMode(cfg) == ReplyDecorationOn && !r.inboundTriggerRecalled(event) {
+				if decoration.ReplyToCurrent && replyReferenceMode(cfg) == ReplyDecorationOn && !r.inboundTriggerRecalled(event) {
 					msg.ReplyMessageID = event.MessageID
 				}
-				if mentionUserMode(cfg) == ReplyDecorationOn {
-					msg.MentionUserID = mentionUserID
+				if decoration.mentionEnabled(cfg) {
+					msg.MentionUserID = decoration.MentionUserID
 				}
 			}
 		} else {
@@ -8877,7 +8920,7 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		return
 	}
 
-	err := r.send(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
+	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
 	if err != nil {
 		updated, retryErr := r.rescheduleOneTimeReminder(item.ID, err)
 		if retryErr != nil {
@@ -8904,7 +8947,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
-		return startedAt, r.send(ctx, source, pending)
+		return startedAt, r.sendSubscriberNotice(ctx, source, pending)
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(rssWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
 	plugin, ok := pluginValue.(*RSSWatchPlugin)
@@ -8940,7 +8983,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if err := r.storeRSSWatchProgress(item.ID, change.Snapshot, message); err != nil {
 		return startedAt, err
 	}
-	return startedAt, r.send(ctx, source, message)
+	return startedAt, r.sendSubscriberNotice(ctx, source, message)
 }
 
 func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWatchChange) (rssJudgeDecision, error) {
@@ -9052,7 +9095,7 @@ func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
-		return startedAt, r.send(ctx, source, pending)
+		return startedAt, r.sendSubscriberNotice(ctx, source, pending)
 	}
 
 	r.mu.RLock()
@@ -9083,7 +9126,7 @@ func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (
 	if err := r.storeScheduledQueryPending(item.ID, message); err != nil {
 		return startedAt, err
 	}
-	return startedAt, r.send(ctx, source, message)
+	return startedAt, r.sendSubscriberNotice(ctx, source, message)
 }
 
 func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) (time.Time, error) {
@@ -9148,7 +9191,9 @@ func repositoryWatchDeliveryTargets(item Reminder) []MessageEvent {
 	for _, target := range targetValues {
 		event := MessageEvent{Kind: EventKindPrivate, Platform: target.Platform, ProfileID: target.ProfileID, ContextNamespace: target.ContextNamespace, UserID: target.UserID}
 		if target.GroupID != "" {
-			event.Kind, event.GroupID, event.UserID = EventKindGroup, target.GroupID, ""
+			// UserID 保留：群目标的去重键只看群号（见 messageEventDeliveryKey），
+			// 留着它是为了投递时能 @ 上当初订阅的人。
+			event.Kind, event.GroupID = EventKindGroup, target.GroupID
 		}
 		key := messageEventDeliveryKey(event)
 		if _, ok := seen[key]; ok {

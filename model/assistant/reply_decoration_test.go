@@ -133,3 +133,87 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 		t.Fatalf("他人消息不该触发承接提示:%s", prompt)
 	}
 }
+
+// 订阅推送和聊天回复对 @ 的诉求相反：聊天里每句都 @ 很烦人，所以有 auto/off；
+// 但提醒和订阅是过了很久之后主动找某个人，正文是模板或后台任务生成的，没有模型
+// 帮它写 @，被那个开关连坐的结果就是订阅者在群里永远收不到点名。
+func TestSubscriberNoticeMentionsIgnoringChatMentionMode(t *testing.T) {
+	withFastSendTiming(t)
+	for _, mode := range []ReplyDecorationMode{ReplyDecorationAuto, ReplyDecorationOff, ReplyDecorationOn} {
+		channel := &scriptedChannel{}
+		runtime := NewRuntime(BotConfig{
+			ReplyReferenceMode: mode,
+			MentionUserMode:    mode,
+		}, channel, NewPluginManager(), nil, nil, nil, nil)
+		event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001"}
+
+		if err := runtime.sendSubscriberNotice(context.Background(), event, "提醒你：该喝水了"); err != nil {
+			t.Fatalf("mode %q: %v", mode, err)
+		}
+		if len(channel.sent) != 1 {
+			t.Fatalf("mode %q sent = %#v", mode, channel.sent)
+		}
+		if channel.sent[0].MentionUserID != "10001" {
+			t.Fatalf("mode %q did not mention the subscriber: %#v", mode, channel.sent[0])
+		}
+		// 触发它的那条消息可能是几天前的，引用没有意义。
+		if channel.sent[0].ReplyMessageID != "" {
+			t.Fatalf("mode %q attached a reply reference: %#v", mode, channel.sent[0])
+		}
+	}
+}
+
+// 私聊本来就只有他一个人，@ 没有意义，也不该冒出一个 at 段。
+func TestSubscriberNoticeDoesNotMentionInPrivateChat(t *testing.T) {
+	withFastSendTiming(t)
+	channel := &scriptedChannel{}
+	runtime := NewRuntime(BotConfig{MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
+
+	if err := runtime.sendSubscriberNotice(context.Background(), event, "提醒你：该喝水了"); err != nil {
+		t.Fatal(err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].MentionUserID != "" {
+		t.Fatalf("private notice = %#v", channel.sent)
+	}
+}
+
+// 仓库订阅走的是另一条投递函数（通知卡片不按人设分条），@ 也要跟上。
+func TestRepositoryNotificationMentionsSubscriber(t *testing.T) {
+	withFastSendTiming(t)
+	channel := &scriptedChannel{}
+	runtime := NewRuntime(BotConfig{MentionUserMode: ReplyDecorationOff}, channel, NewPluginManager(), nil, nil, nil, nil)
+
+	group := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001"}
+	if err := runtime.sendNotification(context.Background(), group, "仓库有新动态"); err != nil {
+		t.Fatal(err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].MentionUserID != "10001" {
+		t.Fatalf("repository notice = %#v", channel.sent)
+	}
+
+	// 纯群目标（没记订阅人）没有可 @ 的对象，就老实不 @。
+	channel.sent = nil
+	anonymous := MessageEvent{Kind: EventKindGroup, GroupID: "123456"}
+	if err := runtime.sendNotification(context.Background(), anonymous, "仓库有新动态"); err != nil {
+		t.Fatal(err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].MentionUserID != "" {
+		t.Fatalf("anonymous group notice = %#v", channel.sent)
+	}
+}
+
+// 普通聊天回复不受这次改动影响：off 就是一条都不 @。
+func TestChatReplyStillFollowsMentionMode(t *testing.T) {
+	withFastSendTiming(t)
+	channel := &scriptedChannel{}
+	runtime := NewRuntime(BotConfig{MentionUserMode: ReplyDecorationOff}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "42"}
+
+	if err := runtime.send(context.Background(), event, "你好"); err != nil {
+		t.Fatal(err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].MentionUserID != "" {
+		t.Fatalf("chat reply = %#v", channel.sent)
+	}
+}
