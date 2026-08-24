@@ -42,7 +42,7 @@ const (
 	// promptToolRuntimeModel：模型对「我是谁」有很强的先验——训练语料里全是
 	// 「我是 ChatGPT/Claude」，被问到就顺口答出来，而 Diana 背后挂的是哪个
 	// provider、哪个模型 ID，只有运行时知道。
-	promptToolRuntimeModel = "用户问你现在用的是什么模型、模型 ID、哪个 provider、什么接口协议，或者质疑你到底是不是某个模型时，必须调用 diana.runtime_model 取本轮实际生效的结果，按它如实回答，不得凭训练记忆说自己是某某模型。它只读不改，报的是当前在用的模型，不会动任何配置。"
+	promptToolRuntimeModel = "用户问你现在用的是什么模型、模型 ID、哪个 provider、什么接口协议，或者质疑你到底是不是某个模型时，必须调用 diana.runtime_model 取本轮实际生效的结果，按它如实回答，不得凭训练记忆说自己是某某模型。回答模型是什么时报 model_id 的原文，不要拿 config_name 顶替——那是这套配置在控制台里的名字，不是模型。它只读不改，不会动任何配置。"
 
 	// promptToolVersion：版本号写在构建期注入的变量里，模型看不见，问起来只会
 	// 按训练记忆编一个像模像样的号。

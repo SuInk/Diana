@@ -26,7 +26,15 @@ func TestRuntimeModelToolReadsActualProfileSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"provider":"备用配置"`, `"model":"claude-sonnet"`, `"group":"default"`} {
+	// 模型 ID、供应商、配置名分成三个字段：以前 provider 里装的是配置显示名，
+	// 模型照着念，用户问「什么模型」拿到的是一个配置名。
+	for _, want := range []string{
+		`"model_id":"claude-sonnet"`,
+		`"provider":"anthropic"`,
+		`"config_name":"备用配置"`,
+		`"group":"default"`,
+		`"group_label":"对话"`,
+	} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("result %q does not contain %q", result, want)
 		}
@@ -57,7 +65,7 @@ func TestSystemPromptInjectsRuntimeModelRule(t *testing.T) {
 	if strings.Contains(promptToolRuntimeModel, "diana.llm_config") {
 		t.Fatal("runtime model rule must not name the owner-only config tool")
 	}
-	for _, want := range []string{"模型 ID", "不得凭训练记忆", "只读不改"} {
+	for _, want := range []string{"模型 ID", "不得凭训练记忆", "只读不改", "model_id", "config_name"} {
 		if !strings.Contains(promptToolRuntimeModel, want) {
 			t.Fatalf("runtime model rule is missing %q", want)
 		}
@@ -91,7 +99,37 @@ func TestRuntimeModelToolFollowsTheGroupInUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, `"model":"vision-model"`) || !strings.Contains(result, `"group":"vision"`) {
+	if !strings.Contains(result, `"model_id":"vision-model"`) || !strings.Contains(result, `"group":"vision"`) {
 		t.Fatalf("result = %q", result)
+	}
+	if !strings.Contains(result, `"group_label":"视觉理解"`) {
+		t.Fatalf("group label missing: %q", result)
+	}
+}
+
+// 配置名不是模型名：这条守的是「知道自己的配置、却说不出模型 ID」那个表现。
+func TestRuntimeModelToolSeparatesModelIDFromConfigName(t *testing.T) {
+	failover, err := newProfileFailoverLLMProvider([]llm.Profile{
+		{ID: "chat", Name: "主对话模型", Config: llm.ProviderConfig{
+			Provider: llm.ProviderOpenAICompatible, APIFormat: llm.APIFormatResponses, Model: "gpt-5.6-sol",
+		}},
+	}, func(llm.ProviderConfig) (LLMProvider, error) { return &capturingLLMProvider{reply: "ok"}, nil }, false, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &runtimeAgentLLMProvider{providers: map[string]LLMProvider{llm.GroupChat: failover}, lastGroup: llm.GroupChat}
+	identity, err := provider.currentModelIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ModelID != "gpt-5.6-sol" {
+		t.Fatalf("model id = %q", identity.ModelID)
+	}
+	if identity.ConfigName != "主对话模型" || identity.Provider != "openai_compatible" {
+		t.Fatalf("identity = %+v", identity)
+	}
+	// 结果自带一句用法说明，免得模型拿配置名当模型名回答。
+	if !strings.Contains(identity.ReplyGuidance, "model_id") || !strings.Contains(identity.ReplyGuidance, "config_name") {
+		t.Fatalf("reply guidance = %q", identity.ReplyGuidance)
 	}
 }
