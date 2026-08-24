@@ -5279,6 +5279,10 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if event.chatInReply {
 		builder.WriteString("\n" + chatInReplyPrompt)
 	}
+	if eventCarriesImages(event) {
+		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
+		tail.WriteString("\n" + promptImageReply)
+	}
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {
 			continue
