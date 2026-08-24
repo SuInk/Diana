@@ -5250,6 +5250,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)
 	}
+	if agentEnabled && hasTool(dianaRuntimeModelToolName) {
+		builder.WriteString("\n" + promptToolRuntimeModel)
+	}
 	if agentEnabled && hasTool(dianaVersionToolName) {
 		builder.WriteString("\n" + promptToolVersion)
 	}
