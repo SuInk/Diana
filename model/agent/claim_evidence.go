@@ -51,17 +51,26 @@ type ClaimTrace struct {
 }
 
 type claimEvidenceLedger struct {
-	active           bool
-	order            []string
-	claims           map[string]*ClaimTrace
-	covered          []string
-	allowedSources   map[string]string
-	lastRejectedHash string
-	stopReason       string
+	active            bool
+	advisory          bool
+	order             []string
+	claims            map[string]*ClaimTrace
+	covered           []string
+	allowedSources    map[string]string
+	firstPartySources map[string]bool
+	renderedSources   []string
+	rejections        map[string][]string
+	lastRejectedHash  string
+	stopReason        string
 }
 
 func newClaimEvidenceLedger() *claimEvidenceLedger {
-	return &claimEvidenceLedger{claims: map[string]*ClaimTrace{}, allowedSources: map[string]string{}}
+	return &claimEvidenceLedger{
+		claims:            map[string]*ClaimTrace{},
+		allowedSources:    map[string]string{},
+		firstPartySources: map[string]bool{},
+		rejections:        map[string][]string{},
+	}
 }
 
 func (l *claimEvidenceLedger) prepareSearch(input map[string]any) map[string]any {
@@ -148,6 +157,41 @@ func (l *claimEvidenceLedger) observeSearch(output string, runErr error) map[str
 	return metadata
 }
 
+// observeRenderedPage 把 browser_render 成功读取的页面登记为可引用来源。
+// 沙盒浏览器直接读到的页面属于第一方直接证据，比搜索摘要更强，
+// 因此不能因为它没有出现在搜索候选里就被证据校验拒绝。
+func (l *claimEvidenceLedger) observeRenderedPage(output string, runErr error) map[string]any {
+	if l == nil || !l.active || runErr != nil {
+		return nil
+	}
+	var page RenderedPage
+	if json.Unmarshal([]byte(output), &page) != nil {
+		return nil
+	}
+	if strings.TrimSpace(page.Text) == "" && strings.TrimSpace(page.Title) == "" {
+		return nil
+	}
+	added := 0
+	for _, raw := range []string{page.URL, page.RequestedURL} {
+		canonical := canonicalEvidenceURL(raw)
+		if canonical == "" {
+			continue
+		}
+		if l.allowedSources[canonical] == "" {
+			added++
+		}
+		l.allowedSources[canonical] = strings.TrimSpace(raw)
+		l.firstPartySources[canonical] = true
+		l.renderedSources = appendUniqueClaimString(l.renderedSources, strings.TrimSpace(raw))
+	}
+	if added == 0 {
+		return nil
+	}
+	metadata := l.metadata()
+	metadata["rendered_source_count"] = len(l.renderedSources)
+	return metadata
+}
+
 func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 	if l == nil || !l.active {
 		return
@@ -159,11 +203,18 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 			continue
 		}
 		validEvidence := make([]ClaimEvidence, 0, len(update.Evidence))
+		delete(l.rejections, id)
 		for _, evidence := range update.Evidence {
 			canonical := canonicalEvidenceURL(evidence.URL)
-			if canonical == "" || l.allowedSources[canonical] == "" {
+			if canonical == "" {
+				l.reject(id, "证据 URL "+strings.TrimSpace(evidence.URL)+" 不是合法的 http(s) 地址")
 				continue
 			}
+			if l.allowedSources[canonical] == "" {
+				l.reject(id, "证据 URL "+strings.TrimSpace(evidence.URL)+" 不在本轮已检索或已渲染的来源里")
+				continue
+			}
+			firstParty := l.firstPartySources[canonical]
 			evidence.URL = l.allowedSources[canonical]
 			if parsed, err := url.Parse(evidence.URL); err == nil {
 				evidence.Domain = strings.ToLower(parsed.Hostname())
@@ -171,17 +222,26 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 			evidence.Relation = normalizeEnum(evidence.Relation, "supports", "refutes")
 			if evidence.Relation == "" {
 				if update.Status != ClaimStatusSupported {
+					l.reject(id, "证据 "+evidence.URL+" 缺少 relation，只能填 supports 或 refutes")
 					continue
 				}
 				evidence.Relation = "supports"
 			}
 			evidence.SourceType = normalizeEnum(evidence.SourceType, "first_party", "official_record", "primary_reporting", "secondary", "unknown")
 			if evidence.SourceType == "" {
-				evidence.SourceType = "unknown"
+				if firstParty {
+					evidence.SourceType = "first_party"
+				} else {
+					evidence.SourceType = "unknown"
+				}
 			}
 			evidence.Distance = normalizeEnum(evidence.Distance, "direct", "near", "secondary")
 			if evidence.Distance == "" {
-				evidence.Distance = "secondary"
+				if firstParty {
+					evidence.Distance = "direct"
+				} else {
+					evidence.Distance = "secondary"
+				}
 			}
 			evidence.Strength = normalizeEnum(evidence.Strength, "high", "medium", "low")
 			if evidence.Strength == "" {
@@ -192,6 +252,9 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 		status := update.Status
 		if (status == ClaimStatusSupported || status == ClaimStatusConflicting) && len(validEvidence) == 0 {
 			status = ClaimStatusInsufficient
+			if len(update.Evidence) == 0 {
+				l.reject(id, "申报 "+string(update.Status)+" 但没有给出任何证据")
+			}
 		}
 		claim.Status = status
 		claim.Summary = strings.TrimSpace(update.Summary)
@@ -199,8 +262,53 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 	}
 }
 
+func (l *claimEvidenceLedger) reject(id, reason string) {
+	if l == nil || strings.TrimSpace(reason) == "" {
+		return
+	}
+	if l.rejections == nil {
+		l.rejections = map[string][]string{}
+	}
+	l.rejections[id] = appendUniqueClaimString(l.rejections[id], reason)
+}
+
+// availableSources 列出模型现在真正可以引用的 URL，避免它只被告知“绑定失败”而无从修正。
+func (l *claimEvidenceLedger) availableSources(limit int) []string {
+	if l == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 6
+	}
+	sources := make([]string, 0, limit)
+	for _, raw := range l.renderedSources {
+		if len(sources) >= limit {
+			return sources
+		}
+		sources = appendUniqueClaimString(sources, raw)
+	}
+	for _, id := range l.order {
+		claim := l.claims[id]
+		if claim == nil {
+			continue
+		}
+		for _, raw := range claim.CandidateSources {
+			if len(sources) >= limit {
+				return sources
+			}
+			sources = appendUniqueClaimString(sources, raw)
+		}
+	}
+	return sources
+}
+
 func (l *claimEvidenceLedger) validateFinal(updates []ClaimUpdate) (string, bool) {
 	if l == nil || !l.active {
+		return "", true
+	}
+	// 关掉强制校验后仍然结算并留痕，只是不再拦截 final。
+	if l.advisory {
+		l.applyUpdates(updates)
 		return "", true
 	}
 	if len(updates) == 0 {
@@ -223,13 +331,26 @@ func (l *claimEvidenceLedger) validateFinal(updates []ClaimUpdate) (string, bool
 			return "claim " + id + " 的状态无效", false
 		}
 		if requestedStatus[id] != claim.Status {
-			return "claim " + id + " 的结论缺少有效的来源绑定或证据元数据", false
+			return l.bindingFailure(id, requestedStatus[id]), false
 		}
 		if (claim.Status == ClaimStatusSupported || claim.Status == ClaimStatusConflicting) && len(claim.Evidence) == 0 {
-			return "claim " + id + " 缺少已检索来源证据", false
+			return l.bindingFailure(id, claim.Status), false
 		}
 	}
 	return "", true
+}
+
+// bindingFailure 说清楚是哪条证据、因为什么被拒，并给出现在可以引用的来源，
+// 让模型能补齐绑定，而不是只能把结论降级、连带推翻已经写对的正文。
+func (l *claimEvidenceLedger) bindingFailure(id string, requested ClaimStatus) string {
+	message := "claim " + id + " 申报 " + string(requested) + " 但证据没有通过校验"
+	if reasons := l.rejections[id]; len(reasons) > 0 {
+		message += "：" + strings.Join(reasons, "；")
+	}
+	if sources := l.availableSources(6); len(sources) > 0 {
+		message += "。现在可以引用的来源：" + strings.Join(sources, " ")
+	}
+	return message
 }
 
 func (l *claimEvidenceLedger) recordRejectedSearch(input map[string]any, reason string) {
@@ -251,11 +372,14 @@ func (l *claimEvidenceLedger) prompt() string {
 		"claims":      l.traces(),
 		"stop_reason": l.stopReason,
 	}
+	if len(l.renderedSources) > 0 {
+		payload["rendered_sources"] = l.renderedSources
+	}
 	if l.lastRejectedHash != "" {
 		payload["last_rejected_query_hash"] = l.lastRejectedHash
 	}
 	raw, _ := json.Marshal(payload)
-	return "【逐主张证据账本，仅供内部校验】\n" + string(raw) + "\n仅候选来源不等于事实已获支持。下一次搜索用 claim_updates 结算已有证据，并优先覆盖 insufficient/not_searched；最终 final 动作必须携带完整 claims。证据 URL 必须原样取自 candidate_sources；relation 仅用 supports/refutes，source_type 仅用 first_party/official_record/primary_reporting/secondary/unknown，distance 仅用 direct/near/secondary，strength 仅用 high/medium/low。content 必须直接回答用户，不得提及 claim ID、证据账本、协议、字段、元数据或内部校验过程；外部事实证据不足时用自然语言限定该事实，对问题本身的逻辑、措辞和推理仍应直接作答。"
+	return "【逐主张证据账本，仅供内部校验】\n" + string(raw) + "\n仅候选来源不等于事实已获支持。下一次搜索用 claim_updates 结算已有证据，并优先覆盖 insufficient/not_searched；最终 final 动作必须携带完整 claims。证据 URL 必须原样取自 candidate_sources 或 rendered_sources；rendered_sources 是 browser_render 已经直接读到的页面，属于第一方直接证据，可信度高于搜索摘要，不要因为它没有出现在搜索结果里就判成证据不足。relation 仅用 supports/refutes，source_type 仅用 first_party/official_record/primary_reporting/secondary/unknown，distance 仅用 direct/near/secondary，strength 仅用 high/medium/low。content 必须直接回答用户，不得提及 claim ID、证据账本、协议、字段、元数据或内部校验过程；证据校验失败只说明绑定需要修正，不代表已经查到的事实不成立，不得据此改写或推翻正文结论；确实缺证据时只用自然语言限定对应那一句事实，对问题本身的逻辑、措辞和推理仍应直接作答。"
 }
 
 func (l *claimEvidenceLedger) metadata() map[string]any {
