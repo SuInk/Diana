@@ -264,7 +264,7 @@ func TestProviderConfigImageModelWithDefault(t *testing.T) {
 		{
 			name: "gemini default",
 			cfg:  ProviderConfig{Provider: ProviderGemini},
-			want: "imagen-4.0-generate-001",
+			want: "gemini-3-pro-image",
 		},
 		{
 			name: "custom",
