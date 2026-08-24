@@ -30,6 +30,8 @@ var (
 	webSearchEmailPattern  = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
 	webSearchPhonePattern  = regexp.MustCompile(`\b(?:\+?86[- ]?)?1[3-9][0-9]{9}\b`)
 	webSearchPrivateHost   = regexp.MustCompile(`(?i)\b(?:localhost|(?:[a-z0-9-]+\.)+(?:internal|local)|10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})\b`)
+
+	webSearchOperatorPattern = regexp.MustCompile(`(?i)(^|\s)-?(?:site|inurl|intitle|intext|allintitle|allinurl|filetype|ext|repo|cache|related):`)
 )
 
 type webSearchQueryCandidate struct {
@@ -131,6 +133,7 @@ func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandi
 		appendCandidate(query, strategy)
 	}
 	for _, query := range append([]string(nil), supplied...) {
+		appendCandidate(relaxWebSearchOperators(query), "operators_relaxed")
 		appendCandidate(relaxWebSearchQuotes(query), "quotes_relaxed")
 		appendCandidate(normalizeWebSearchSeparators(query), "separators_normalized")
 		appendCandidate(relaxWebSearchParentheticalConstraints(normalizeWebSearchSeparators(relaxWebSearchQuotes(query))), "constraints_relaxed")
@@ -152,6 +155,12 @@ func normalizeWebSearchQuery(query string) string {
 	}, query)
 	query = strings.Join(strings.Fields(query), " ")
 	return truncateRunes(strings.TrimSpace(query), maximumWebSearchQueryRunes)
+}
+
+// relaxWebSearchOperators 去掉 site:、inurl: 这类检索算子前缀，只保留后面的关键词。
+// 多数 provider 不支持这些算子，带着它们的查询会直接返回 no_results 并浪费一轮回退。
+func relaxWebSearchOperators(query string) string {
+	return webSearchOperatorPattern.ReplaceAllString(query, "$1")
 }
 
 func relaxWebSearchQuotes(query string) string {

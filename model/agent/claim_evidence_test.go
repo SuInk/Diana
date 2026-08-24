@@ -59,7 +59,7 @@ func TestClaimEvidenceLedgerRejectsUnsupportedAndUnknownSources(t *testing.T) {
 		ID: "c1", Status: ClaimStatusSupported, Summary: "声称已确认",
 		Evidence: []ClaimEvidence{{URL: "https://invented.example/fact", Relation: "supports", SourceType: "secondary", Distance: "direct", Strength: "high"}},
 	}}
-	if reason, ok := ledger.validateFinal(updates); ok || !strings.Contains(reason, "缺少有效") {
+	if reason, ok := ledger.validateFinal(updates); ok || !strings.Contains(reason, "invented.example") {
 		t.Fatalf("unsupported final accepted reason=%q ok=%v traces=%#v", reason, ok, ledger.traces())
 	}
 	if got := ledger.traces()[0].Status; got != ClaimStatusInsufficient {
