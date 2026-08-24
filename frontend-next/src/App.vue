@@ -153,12 +153,11 @@ import {
   Moon,
   Sun,
   SunMoon,
-  UserRound,
-  BookMarked,
+  BookUser,
   Users,
   Wrench
 } from "@lucide/vue";
-import { currentView, navSections, navigate, type ViewID } from "./router";
+import { currentView, navItemForView, navSections, navigate, type ViewID } from "./router";
 import { startEventStream, stream } from "./stream";
 import { theme } from "./theme";
 import { formatUptime } from "./format";
@@ -177,8 +176,7 @@ import LLMView from "./views/LLMView.vue";
 import AssistantView from "./views/AssistantView.vue";
 import PluginsView from "./views/PluginsView.vue";
 import GroupsView from "./views/GroupsView.vue";
-import UsersView from "./views/UsersView.vue";
-import GlossaryView from "./views/GlossaryView.vue";
+import MemoryView from "./views/MemoryView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
 const viewComponents: Record<ViewID, Component> = {
@@ -190,8 +188,8 @@ const viewComponents: Record<ViewID, Component> = {
   bot: AssistantView,
   plugins: PluginsView,
   groups: GroupsView,
-  users: UsersView,
-  glossary: GlossaryView,
+  users: MemoryView,
+  glossary: MemoryView,
   logs: RecordsView,
   settings: SettingsView
 };
@@ -261,8 +259,8 @@ const viewTitles: Record<ViewID, string> = {
   bot: "机器人",
   plugins: "插件",
   groups: "群管理",
-  users: "人员",
-  glossary: "词典",
+  users: "记忆",
+  glossary: "记忆",
   logs: "运行记录",
   settings: "设置"
 };
@@ -271,13 +269,11 @@ const sections = computed(() => navSections());
 
 const viewTitle = computed(() => viewTitles[currentView.value]);
 
-// 日志是「记录」页里的一档，停在那一档时侧边栏要继续亮着记录，别让人以为自己
-// 掉出了导航。
+// 日志之于「记录」、词典之于「记忆」都是页内的一档，停在那一档时侧边栏要继续
+// 亮着它所属的那一项，别让人以为自己掉出了导航。归属关系写在 navItems 的 covers
+// 里，这里不再逐个视图硬编码。
 function isActiveNav(id: ViewID): boolean {
-  if (id === "events") {
-    return currentView.value === "events" || currentView.value === "logs";
-  }
-  return currentView.value === id;
+  return navItemForView(currentView.value) === id;
 }
 const activeView = computed(() => viewComponents[currentView.value] ?? DashboardView);
 
@@ -327,8 +323,7 @@ function navIcon(id: ViewID): Component {
     bot: Bot,
     plugins: PlugZap,
     groups: Users,
-    users: UserRound,
-    glossary: BookMarked,
+    users: BookUser,
     logs: FileClock,
     settings: Wrench
   };

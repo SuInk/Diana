@@ -38,6 +38,9 @@ export interface NavItem {
   label: string;
   hint: string;
   group?: NavGroupID;
+  // covers 列出这一项还代表哪些视图。合并成一页多档之后，档位仍是各自的路由
+  // 地址，侧边栏得知道停在哪个地址时该亮哪一项，否则用户会以为自己掉出了导航。
+  covers?: ViewID[];
 }
 
 // 顺序按「装机器人时的实际操作顺序」排：先看总览，再配模型和机器人，然后才是
@@ -48,12 +51,21 @@ export const navItems: NavItem[] = [
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
   { id: "plugins", label: "插件", hint: "插件安装与设置", group: "setup" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "operate" },
-  { id: "users", label: "人员", hint: "人员画像与长期记忆", group: "operate" },
-  { id: "glossary", label: "词典", hint: "机器人学会的梗与黑话", group: "operate" },
+  { id: "users", label: "记忆", hint: "机器人记住的人与词", group: "operate", covers: ["glossary"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
-  { id: "events", label: "记录", hint: "消息处理、回复决策与运行日志", group: "operate" },
+  { id: "events", label: "记录", hint: "消息处理、回复决策与运行日志", group: "operate", covers: ["logs"] },
   { id: "settings", label: "设置", hint: "主题与系统更新" }
 ];
+
+// navItemCovers 判断某个视图该由哪一个侧边栏条目代表。
+export function navItemForView(view: ViewID): ViewID | undefined {
+  for (const item of navItems) {
+    if (item.id === view || item.covers?.includes(view)) {
+      return item.id;
+    }
+  }
+  return undefined;
+}
 
 // navSections 把条目按组切成连续的段，模板据此插入组标题。条目顺序仍以
 // navItems 为准，这里不重排，只是把相邻的同组条目收在一起。
