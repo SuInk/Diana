@@ -7117,7 +7117,7 @@ func generatedReplyTargetsOtherParticipant(event MessageEvent, reply string) boo
 
 func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent, reply string, mentionUserID string, replyToCurrent bool) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	chunks := splitChatReply(reply, cfg.DirectReplyChunkSize, cfg.ReplyStyle)
+	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
 	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
