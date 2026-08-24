@@ -9,7 +9,6 @@ export interface LLMRoleBinding {
   role: "chat" | "vision" | "intent" | "image";
   role_label: string;
   model: string;
-  context_window_tokens?: number;
 }
 
 export interface LLMConfig {
@@ -35,7 +34,7 @@ export interface LLMConfig {
   /** 用户手填的覆盖值；0 或缺省表示按当前模型自动判断。 */
   context_window_tokens?: number;
   max_context_tokens?: number;
-  /** 只读回显：机器人模型分配里指向这套配置的用途，窗口按各自的模型算。 */
+  /** 只读回显：机器人模型分配里指向这套配置的用途，用来说明改它会影响谁。 */
   role_bindings?: LLMRoleBinding[];
   /** 只读回显：当前模型实际生效的窗口与请求上限，以及窗口的来源。 */
   effective_context_window_tokens?: number;

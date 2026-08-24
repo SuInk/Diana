@@ -812,9 +812,8 @@ type stubBotProfileSource struct {
 
 func (s stubBotProfileSource) Profiles() assistant.ProfileSet { return s.set }
 
-// 「本配置默认模型的窗口」和「机器人实际在用的模型的窗口」经常不是一个数：
-// 机器人多半在模型分配里另选了模型。这一页必须把两者都摆出来，否则页面上写着
-// 一个不生效的窗口，比不写更误导。
+// 窗口是配置级的，所以这一页只报一个数；但要说清楚这套配置正被谁的哪个用途、
+// 按哪个模型使用——改它会一起影响它们。
 func TestLLMPayloadListsModelRoleBindings(t *testing.T) {
 	store := NewMemoryLLMProfileStore(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model"})
 	if err := store.SaveProfiles(llm.ProfileSet{
@@ -864,17 +863,17 @@ func TestLLMPayloadListsModelRoleBindings(t *testing.T) {
 	if binding.Role != "chat" || binding.RoleLabel != "对话" || binding.BotName != "Diana" {
 		t.Fatalf("binding = %+v", binding)
 	}
-	// 机器人实际在用的是 small-model，窗口跟着它走，不是那个 400000。
-	if binding.Model != "small-model" || binding.ContextWindowTokens != 32000 {
-		t.Fatalf("binding window = %+v", binding)
+	// 报的是这个用途实际绑定的模型，不是配置的默认模型。
+	if binding.Model != "small-model" {
+		t.Fatalf("binding = %+v", binding)
 	}
 
 	vision := payload.Profiles[1]
 	if len(vision.RoleBindings) != 1 || vision.RoleBindings[0].Role != "vision" {
 		t.Fatalf("group binding = %+v", vision.RoleBindings)
 	}
-	if vision.RoleBindings[0].ContextWindowTokens != 128000 {
-		t.Fatalf("group binding window = %+v", vision.RoleBindings[0])
+	if vision.RoleBindings[0].Model != "see-model" {
+		t.Fatalf("group binding = %+v", vision.RoleBindings[0])
 	}
 }
 

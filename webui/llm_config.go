@@ -74,8 +74,8 @@ type llmConfigPayload struct {
 	// 下面两个是只读回显：当前这个模型实际生效的窗口和请求上限，以及窗口的来源。
 	// 界面据此提示「未填写 · 当前按模型清单为 1,050,000」，而不是把推断值预填进
 	// 输入框冒充用户设置——那正是「模型默认填了 400k」的由来。
-	// RoleBindings 列出机器人模型分配里指向这套配置的用途。窗口按各自的模型算，
-	// 所以它们和上面那个「本配置默认模型」的窗口经常不是一个数。
+	// RoleBindings 列出机器人模型分配里指向这套配置的用途，用来说明「改这套配置
+	// 会影响谁」。
 	RoleBindings                 []llmRoleBinding        `json:"role_bindings,omitempty"`
 	EffectiveContextWindowTokens int64                   `json:"effective_context_window_tokens,omitempty"`
 	EffectiveMaxContextTokens    int64                   `json:"effective_max_context_tokens,omitempty"`
@@ -85,13 +85,15 @@ type llmConfigPayload struct {
 }
 
 // llmRoleBinding 是「某个机器人的某个用途绑到了这套配置的哪个模型」。
+//
+// 不带窗口：上下文窗口是配置级的设置，一套配置一个值，用途换模型也不跟着变。
+// 这里只回答「谁在用这套配置、用的哪个模型」。
 type llmRoleBinding struct {
-	BotID               string `json:"bot_id,omitempty"`
-	BotName             string `json:"bot_name,omitempty"`
-	Role                string `json:"role"`
-	RoleLabel           string `json:"role_label"`
-	Model               string `json:"model"`
-	ContextWindowTokens int64  `json:"context_window_tokens,omitempty"`
+	BotID     string `json:"bot_id,omitempty"`
+	BotName   string `json:"bot_name,omitempty"`
+	Role      string `json:"role"`
+	RoleLabel string `json:"role_label"`
+	Model     string `json:"model"`
 }
 
 type llmTestPayload struct {
@@ -686,10 +688,10 @@ func (h *LLMConfigHandler) attachRoleBindings(payload llmConfigPayload) llmConfi
 		return payload
 	}
 	bots := h.botProfiles.Profiles()
-	payload.RoleBindings = botRoleBindingsFor(bots, payload.ID, payload.Group, payload.Models)
+	payload.RoleBindings = botRoleBindingsFor(bots, payload.ID, payload.Group)
 	for index := range payload.Profiles {
 		payload.Profiles[index].RoleBindings = botRoleBindingsFor(
-			bots, payload.Profiles[index].ID, payload.Profiles[index].Group, payload.Profiles[index].Models)
+			bots, payload.Profiles[index].ID, payload.Profiles[index].Group)
 	}
 	return payload
 }
@@ -704,7 +706,7 @@ var llmRoleLabels = map[string]string{
 
 // botRoleBindingsFor 找出所有指向这套配置的模型分配。按 profile_id 直接指定和按
 // 分组指定两种绑定都要算上。
-func botRoleBindingsFor(bots assistant.ProfileSet, profileID, group string, models []llm.ModelInfo) []llmRoleBinding {
+func botRoleBindingsFor(bots assistant.ProfileSet, profileID, group string) []llmRoleBinding {
 	profileID = strings.TrimSpace(profileID)
 	if profileID == "" {
 		return nil
@@ -727,12 +729,11 @@ func botRoleBindingsFor(bots assistant.ProfileSet, profileID, group string, mode
 				continue
 			}
 			bindings = append(bindings, llmRoleBinding{
-				BotID:               bot.ID,
-				BotName:             strings.TrimSpace(bot.Name),
-				Role:                role,
-				RoleLabel:           llmRoleLabels[role],
-				Model:               model,
-				ContextWindowTokens: modelWindowFromList(models, model),
+				BotID:     bot.ID,
+				BotName:   strings.TrimSpace(bot.Name),
+				Role:      role,
+				RoleLabel: llmRoleLabels[role],
+				Model:     model,
 			})
 		}
 	}
@@ -740,12 +741,6 @@ func botRoleBindingsFor(bots assistant.ProfileSet, profileID, group string, mode
 		return nil
 	}
 	return bindings
-}
-
-// modelWindowFromList 用已同步的模型清单算这个模型的窗口；清单里没有就按模型名推断。
-func modelWindowFromList(models []llm.ModelInfo, model string) int64 {
-	probe := llm.ProviderConfig{Model: model, Models: models}
-	return probe.ContextWindowTokensWithDefault()
 }
 
 // payloadFromProfileSet 把 LLM 配置集转换为前端安全 payload。
