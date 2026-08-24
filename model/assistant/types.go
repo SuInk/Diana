@@ -150,9 +150,13 @@ type OutgoingMessage struct {
 	ImagesFirst    bool
 	ReplyMessageID string
 	MentionUserID  string
-	ForwardName    string
-	ForwardUIN     string
-	ForwardTime    int64
+	// MentionNames 是正文里 [diana-at:ID] 标记要显示的昵称，按 id 索引。
+	// Telegram 的 text_mention 需要一段可见文字，光有 id 显示不出来；查不到
+	// 的 id 退回显示 @<id>。OneBot 不需要它——那边 at 段自己会渲染。
+	MentionNames map[string]string
+	ForwardName  string
+	ForwardUIN   string
+	ForwardTime  int64
 }
 
 type ReminderKind string

@@ -5371,10 +5371,10 @@ func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history 
 	发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。
 	可提及成员候选 JSON：%s
 	1. %s
-	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，使用 [CQ:at,qq=成员账号] 提及实际对象。%s
-	3. 可以同时提及多人，也可以把多个额外 CQ at 放在不同位置。不要重复提及同一成员；CQ at 前后按正常中文语句保留必要空格。
-	4. 发送层会原样保留额外 CQ at 的对象和相对位置。%s
-	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把 CQ 码放进 Markdown 代码块。
+	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 [diana-at:成员user_id] 提及实际对象。%s
+	3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
+	4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
+	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进 Markdown 代码块，也不要自己写平台专用的提及写法。
 	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
 		string(payload),
 		currentSenderMentionRule(cfg),
@@ -5389,7 +5389,7 @@ func currentSenderMentionRule(cfg BotConfig) string {
 	case ReplyDecorationOn:
 		return "当前发言者是在直接询问你时，发送层会在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at。"
 	case ReplyDecorationOff:
-		return "发送层不会自动 @ 任何人。当前发言者这一位按本群习惯通常不用 @，需要点名时自己写 [CQ:at,qq=成员账号]。"
+		return "发送层不会自动 @ 任何人。当前发言者这一位按本群习惯通常不用 @，需要点名时自己写 [diana-at:成员user_id]。"
 	default:
 		return "发送层不会自动 @ 任何人，包括当前发言者。这一轮要不要 @ 当前发言者，按本轮单独给出的那条规则判断；判断为要，就自己在回复最开头写出来。"
 	}
@@ -7038,6 +7038,33 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 	return msg
 }
 
+// resolveOutgoingMentionNames 给正文里的 [diana-at:ID] 标记配上显示用的昵称。
+//
+// 标记里只有 id——昵称会改、会重名，不能当标识。但 Telegram 的 text_mention 需要
+// 一段可见文字，所以在这里按 id 查一次昵称。查的是本会话内存里的近期消息加当前
+// 这条事件，不落库查询：发送路径上多一次 IO 不值得，查不到的 id 退回显示 @<id>。
+func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	ids := mentionedIDsInText(msg.Text)
+	if len(ids) == 0 {
+		return msg
+	}
+	r.mu.RLock()
+	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
+	r.mu.RUnlock()
+	names := messageParticipantDisplayNames(append(history, event)...)
+	resolved := make(map[string]string, len(ids))
+	for _, id := range ids {
+		if name := strings.TrimSpace(names[id]); name != "" {
+			resolved[id] = name
+		}
+	}
+	if len(resolved) == 0 {
+		return msg
+	}
+	msg.MentionNames = resolved
+	return msg
+}
+
 func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEvent, upload resolverVideoUpload) error {
 	if r.channel == nil {
 		return fmt.Errorf("chatbot: channel is not configured")
@@ -7263,6 +7290,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	msg = routeOutgoingToEvent(event, msg)
 	msg = r.resolveOutgoingLocalImages(msg)
 	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
+	msg = r.resolveOutgoingMentionNames(event, msg)
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}

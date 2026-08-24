@@ -48,9 +48,10 @@ const relationshipReplyGuidance = "围绕用户实际问的那件事回答，用
 	"回复里需要真正 @ 目标时，原样使用结果中的 mention_cq，不要写成普通文本的 @账号。"
 
 type dianaRelationshipSnapshot struct {
-	UserID           string                   `json:"user_id"`
-	DisplayName      string                   `json:"display_name"`
-	MentionCQ        string                   `json:"mention_cq"`
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	// Mention 是可以直接抄进回复的提及标记，出站时按平台翻译。
+	Mention          string                   `json:"mention"`
 	Favorability     int                      `json:"favorability"`
 	MessageCount     int                      `json:"message_count"`
 	RelationshipTier RelationshipTier         `json:"relationship_tier"`
@@ -289,7 +290,7 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 	return dianaRelationshipSnapshot{
 		UserID:           userID,
 		DisplayName:      profile.DisplayName,
-		MentionCQ:        "[CQ:at,qq=" + userID + "]",
+		Mention:          mentionMarkerFor(userID),
 		Favorability:     profile.Favorability,
 		MessageCount:     profile.MessageCount,
 		RelationshipTier: policy.Tier,
@@ -372,6 +373,11 @@ func relationshipChangeReason(operation string, input map[string]any) string {
 
 func normalizeRelationshipUserID(raw string) string {
 	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "@"))
+	// 参数里带着提及标记照样认。工具返回给模型的是 [diana-at:ID]，它可能原样
+	// 抄回来；群消息原文里则是 CQ 码，同样可能被抄进参数。两种都剥掉。
+	if match := dianaMentionMarkerPattern.FindStringSubmatch(raw); match != nil {
+		raw = match[1]
+	}
 	if strings.HasPrefix(raw, "[CQ:at,qq=") && strings.HasSuffix(raw, "]") {
 		raw = strings.TrimSuffix(strings.TrimPrefix(raw, "[CQ:at,qq="), "]")
 	}

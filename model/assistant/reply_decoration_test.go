@@ -92,7 +92,7 @@ func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 	if !strings.Contains(prompt, replyMarkerPrefix+"1244393238]") {
 		t.Fatalf("auto prompt is missing the current message marker: %q", prompt)
 	}
-	if !strings.Contains(prompt, "[CQ:at,qq=10001]") {
+	if !strings.Contains(prompt, "[diana-at:10001]") {
 		t.Fatalf("auto prompt is missing the sender mention hint: %q", prompt)
 	}
 	// 私聊没有引用和 @ 的概念，不该占用上下文。
@@ -184,12 +184,15 @@ func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
 		t.Fatalf("一对一时应当明说不用 @：%s", quiet)
 	}
 	busy := mentionDecorationRule("123456", 3)
-	// 写法要和「群聊真实提及规则」一致，都用 CQ 码，不再另教一套裸 @ 数字。
-	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "[CQ:at,qq=123456]") {
-		t.Fatalf("热闹时应当给出人数并要求用 CQ 码点名：%s", busy)
+	// 写法要和「群聊真实提及规则」一致，都用平台中立的标记：既不教裸 @数字，
+	// 也不教 OneBot 方言的 CQ 码——Telegram 群里那只会把字面量发出去。
+	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "[diana-at:123456]") {
+		t.Fatalf("热闹时应当给出人数并要求用提及标记点名：%s", busy)
 	}
-	if strings.Contains(busy, "写 @123456") {
-		t.Fatalf("不该再教裸的 @数字 写法：%s", busy)
+	for _, unwanted := range []string{"写 @123456", "[CQ:at"} {
+		if strings.Contains(busy, unwanted) {
+			t.Fatalf("不该再教平台方言写法 %q：%s", unwanted, busy)
+		}
 	}
 }
 

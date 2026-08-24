@@ -156,12 +156,11 @@ func otherSpeakersBefore(history []MessageEvent, event MessageEvent) int {
 
 // mentionDecorationRule 按插话人数给出这一轮的 @ 规则。
 //
-// 写法统一用 CQ 码,和「群聊真实提及规则」那段一致。出站两种写法其实都认——
-// CQToSegments 认 CQ 码,剩下的纯文本再过 appendTextWithMentions 认裸的 @数字——
-// 但模型在相邻两段提示词里看到同一件事有两种拼法,本来就容易犹豫。CQ 码这一种
-// 还更不容易误伤:裸的 @12345 在正文里可能只是个数字。
+// 写法用平台中立的提及标记,和「群聊真实提及规则」那段一致。同一件事在相邻两段
+// 提示词里有两种拼法,模型本来就容易犹豫;而且 CQ 码是 OneBot 方言,Telegram 群里
+// 教它只会把字面量发出去（见 mention_marker.go）。
 func mentionDecorationRule(userID string, otherSpeakers int) string {
-	mention := "[CQ:at,qq=" + userID + "]"
+	mention := mentionMarkerFor(userID)
 	if otherSpeakers == 0 {
 		return "本次是否 @ 发送者由你自己决定：刚才这段时间里群里只有 TA 在说话,你们是一对一在接话,不用 @；" +
 			"只有隔了很久才回、对方可能已经走开时才写 " + mention + "。"
