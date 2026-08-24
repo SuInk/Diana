@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,20 @@ type LLMConfigHandler struct {
 	newClient  LLMClientFactory
 	listModels LLMModelListFactory
 	logs       AppLogWriter
+	// botProfiles 用来回答「这套配置正被哪个机器人的哪个用途、按哪个模型使用」。
+	// 没有它时这一页只能按配置自己的默认模型说话，而机器人多半用的是模型分配里
+	// 另选的模型——同一个页面上写着一个不生效的窗口，比不写更误导。
+	botProfiles BotModelRoleSource
+}
+
+// BotModelRoleSource 提供各机器人的模型分配。
+type BotModelRoleSource interface {
+	Profiles() assistant.ProfileSet
+}
+
+// SetBotProfileSource 注入机器人配置集，用于展示模型分配对这套 LLM 配置的引用。
+func (h *LLMConfigHandler) SetBotProfileSource(source BotModelRoleSource) {
+	h.botProfiles = source
 }
 
 type LLMClientFactory func(llm.ProviderConfig) (llm.LLMClient, error)
@@ -59,11 +74,24 @@ type llmConfigPayload struct {
 	// 下面两个是只读回显：当前这个模型实际生效的窗口和请求上限，以及窗口的来源。
 	// 界面据此提示「未填写 · 当前按模型清单为 1,050,000」，而不是把推断值预填进
 	// 输入框冒充用户设置——那正是「模型默认填了 400k」的由来。
+	// RoleBindings 列出机器人模型分配里指向这套配置的用途。窗口按各自的模型算，
+	// 所以它们和上面那个「本配置默认模型」的窗口经常不是一个数。
+	RoleBindings                 []llmRoleBinding        `json:"role_bindings,omitempty"`
 	EffectiveContextWindowTokens int64                   `json:"effective_context_window_tokens,omitempty"`
 	EffectiveMaxContextTokens    int64                   `json:"effective_max_context_tokens,omitempty"`
 	ContextWindowSource          llm.ContextWindowSource `json:"context_window_source,omitempty"`
 	MaxOutputTokens              int64                   `json:"max_output_tokens,omitempty"`
 	TimeoutMS                    int64                   `json:"timeout_ms,omitempty"`
+}
+
+// llmRoleBinding 是「某个机器人的某个用途绑到了这套配置的哪个模型」。
+type llmRoleBinding struct {
+	BotID               string `json:"bot_id,omitempty"`
+	BotName             string `json:"bot_name,omitempty"`
+	Role                string `json:"role"`
+	RoleLabel           string `json:"role_label"`
+	Model               string `json:"model"`
+	ContextWindowTokens int64  `json:"context_window_tokens,omitempty"`
 }
 
 type llmTestPayload struct {
@@ -198,7 +226,7 @@ func (h *LLMConfigHandler) getConfig(c *gin.Context) {
 		c.JSON(200, payloadFromProfileSetWithSecrets(h.store.Profiles()))
 		return
 	}
-	c.JSON(200, payloadFromProfileSet(h.store.Profiles()))
+	c.JSON(200, h.profileSetPayload(h.store.Profiles()))
 }
 
 // exportConfig 导出包含密钥的 LLM 配置集。
@@ -258,7 +286,7 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "llm.config.save", "LLM 配置已保存", next.ActiveID, llmLogMetadata(cfg, next.ActiveID))
-	c.JSON(200, payloadFromProfileSet(next))
+	c.JSON(200, h.profileSetPayload(next))
 }
 
 // activateProfile 切换当前激活的 LLM 配置档。
@@ -284,7 +312,7 @@ func (h *LLMConfigHandler) activateProfile(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "llm.profile.activate", "LLM 配置已切换", targetID, llmLogMetadata(current.Config, targetID))
-	c.JSON(200, payloadFromProfileSet(set))
+	c.JSON(200, h.profileSetPayload(set))
 }
 
 // reorderProfiles 按给定 ID 顺序重排配置档；组内顺序即失败降级的优先级。
@@ -306,7 +334,7 @@ func (h *LLMConfigHandler) reorderProfiles(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "llm.profile.reorder", "LLM 配置优先级已调整", "", nil)
-	c.JSON(200, payloadFromProfileSet(set))
+	c.JSON(200, h.profileSetPayload(set))
 }
 
 // deleteProfile 删除指定 LLM 配置档。
@@ -336,7 +364,7 @@ func (h *LLMConfigHandler) deleteProfile(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "llm.profile.delete", "LLM 配置已删除", targetID, map[string]any{"profile_id": targetID})
-	c.JSON(200, payloadFromProfileSet(next))
+	c.JSON(200, h.profileSetPayload(next))
 }
 
 // cloneProfile 复制指定 LLM 配置档。
@@ -365,7 +393,7 @@ func (h *LLMConfigHandler) cloneProfile(c *gin.Context) {
 			return
 		}
 		recordRequestOperation(c, h.logs, "llm.profile.clone", "LLM 配置已复制", sourceID, llmLogMetadata(profile.Config, sourceID))
-		c.JSON(200, payloadFromProfileSet(next))
+		c.JSON(200, h.profileSetPayload(next))
 		return
 	}
 	h.writeError(c, 404, "llm.profile.clone", fmt.Errorf("profile %q not found", sourceID), sourceID, nil)
@@ -428,7 +456,7 @@ func (h *LLMConfigHandler) importProfiles(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "llm.profile.import", "LLM 配置已导入", next.ActiveID, map[string]any{"profile_count": len(next.Profiles), "active_profile_id": next.ActiveID})
-	c.JSON(200, payloadFromProfileSet(next))
+	c.JSON(200, h.profileSetPayload(next))
 }
 
 // models 根据当前或草稿配置读取可用模型列表。
@@ -645,6 +673,79 @@ func payloadFromProfileWithSecrets(profile llm.Profile, activeID string) llmConf
 	}
 	payload.ActiveProfileID = activeID
 	return payload
+}
+
+// profileSetPayload 在安全 payload 基础上补上模型分配的引用关系。
+func (h *LLMConfigHandler) profileSetPayload(set llm.ProfileSet) llmConfigPayload {
+	return h.attachRoleBindings(payloadFromProfileSet(set))
+}
+
+// attachRoleBindings 给每套配置标出「谁在用它、用的哪个模型、那个模型的窗口多大」。
+func (h *LLMConfigHandler) attachRoleBindings(payload llmConfigPayload) llmConfigPayload {
+	if h == nil || h.botProfiles == nil {
+		return payload
+	}
+	bots := h.botProfiles.Profiles()
+	payload.RoleBindings = botRoleBindingsFor(bots, payload.ID, payload.Group, payload.Models)
+	for index := range payload.Profiles {
+		payload.Profiles[index].RoleBindings = botRoleBindingsFor(
+			bots, payload.Profiles[index].ID, payload.Profiles[index].Group, payload.Profiles[index].Models)
+	}
+	return payload
+}
+
+// llmRoleLabels 和机器人页「模型分配」那四行用同一套说法。
+var llmRoleLabels = map[string]string{
+	"chat":   "对话",
+	"vision": "视觉理解",
+	"intent": "意图识别",
+	"image":  "图片生成",
+}
+
+// botRoleBindingsFor 找出所有指向这套配置的模型分配。按 profile_id 直接指定和按
+// 分组指定两种绑定都要算上。
+func botRoleBindingsFor(bots assistant.ProfileSet, profileID, group string, models []llm.ModelInfo) []llmRoleBinding {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return nil
+	}
+	group = llm.NormalizeProfileGroup(group)
+	bindings := make([]llmRoleBinding, 0, 4)
+	for _, bot := range bots.Profiles {
+		for _, role := range []string{"chat", "vision", "intent", "image"} {
+			binding, ok := bot.ModelRoles[role]
+			if !ok {
+				continue
+			}
+			boundProfile := strings.TrimSpace(binding.ProfileID)
+			boundGroup := llm.NormalizeProfileGroup(binding.Group)
+			if boundProfile != profileID && !(boundProfile == "" && boundGroup != "" && boundGroup == group) {
+				continue
+			}
+			model := strings.TrimSpace(binding.Model)
+			if model == "" {
+				continue
+			}
+			bindings = append(bindings, llmRoleBinding{
+				BotID:               bot.ID,
+				BotName:             strings.TrimSpace(bot.Name),
+				Role:                role,
+				RoleLabel:           llmRoleLabels[role],
+				Model:               model,
+				ContextWindowTokens: modelWindowFromList(models, model),
+			})
+		}
+	}
+	if len(bindings) == 0 {
+		return nil
+	}
+	return bindings
+}
+
+// modelWindowFromList 用已同步的模型清单算这个模型的窗口；清单里没有就按模型名推断。
+func modelWindowFromList(models []llm.ModelInfo, model string) int64 {
+	probe := llm.ProviderConfig{Model: model, Models: models}
+	return probe.ContextWindowTokensWithDefault()
 }
 
 // payloadFromProfileSet 把 LLM 配置集转换为前端安全 payload。

@@ -279,6 +279,9 @@
             只填你想强制覆盖的值。{{ effectiveContextHint }}
             一个 provider 下的模型窗口各不相同，填死之后换模型不会自动跟着变。
           </span>
+          <ul v-if="contextWindowBindings.length > 0" class="hint context-binding-list">
+            <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
+          </ul>
         </div>
         <div class="field">
           <label for="llm-maxcontext">单次请求上下文上限</label>
@@ -595,11 +598,24 @@ const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
   const window = profile?.effective_context_window_tokens;
   if (!window) {
-    return "留空即按当前模型自动判断。";
+    return "留空即按实际使用的模型自动判断。";
   }
   const source = contextWindowSourceLabels[profile?.context_window_source ?? ""] ?? "自动判断";
-  return `留空即按当前模型自动判断，当前为 ${window.toLocaleString("en-US")}（${source}）。`;
+  const model = profile?.model ? `本配置默认模型 ${profile.model}` : "本配置默认模型";
+  return `留空即按实际使用的模型自动判断。${model}算出来是 ${window.toLocaleString("en-US")}（${source}）。`;
 });
+
+// 机器人多半在「模型分配」里另选了模型，那时生效的窗口不是上面这个数。把引用这套
+// 配置的用途连同各自的窗口列出来，省得在两个页面之间对。
+const contextWindowBindings = computed(() =>
+  (editingProfile.value?.role_bindings ?? []).map((binding) => {
+    const owner = binding.bot_name ? `${binding.role_label}（${binding.bot_name}）` : binding.role_label;
+    const window = binding.context_window_tokens
+      ? binding.context_window_tokens.toLocaleString("en-US")
+      : "窗口未知";
+    return `${owner}：${binding.model} → ${window}`;
+  })
+);
 
 const effectiveMaxContextHint = computed(() => {
   const budget = editingProfile.value?.effective_max_context_tokens;
@@ -884,3 +900,12 @@ onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", onDocumentPointerDown);
 });
 </script>
+
+<style scoped>
+/* 模型分配引用列表：跟在 hint 后面的一小段列表，排版继承 hint 的字号和颜色。 */
+.context-binding-list {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  list-style: disc;
+}
+</style>

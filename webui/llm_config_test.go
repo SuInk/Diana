@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
 
 	"github.com/gin-gonic/gin"
@@ -802,5 +803,88 @@ func TestLLMPayloadDistinguishesClearedFromUnsubmitted(t *testing.T) {
 	kept := mergeUnsubmittedLLMConfig(untouched, configFromPayload(untouched), existing)
 	if kept.ContextWindowTokens != 32768 || kept.MaxContextTokens != 16384 {
 		t.Fatalf("没提交的字段应当保留旧值: %d/%d", kept.ContextWindowTokens, kept.MaxContextTokens)
+	}
+}
+
+type stubBotProfileSource struct {
+	set assistant.ProfileSet
+}
+
+func (s stubBotProfileSource) Profiles() assistant.ProfileSet { return s.set }
+
+// 「本配置默认模型的窗口」和「机器人实际在用的模型的窗口」经常不是一个数：
+// 机器人多半在模型分配里另选了模型。这一页必须把两者都摆出来，否则页面上写着
+// 一个不生效的窗口，比不写更误导。
+func TestLLMPayloadListsModelRoleBindings(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model"})
+	if err := store.SaveProfiles(llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{
+			{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model",
+				Models: []llm.ModelInfo{
+					{ID: "big-model", ContextWindowTokens: 400000},
+					{ID: "small-model", ContextWindowTokens: 32000},
+				},
+			}},
+			{ID: "vision", Name: "视觉配置", Group: "vision", Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "see-model",
+				Models: []llm.ModelInfo{{ID: "see-model", ContextWindowTokens: 128000}},
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewLLMConfigHandler(store)
+	handler.SetBotProfileSource(stubBotProfileSource{set: assistant.ProfileSet{
+		Profiles: []assistant.BotConfig{{
+			ID: "bot-1", Name: "Diana",
+			ModelRoles: map[string]assistant.ModelRole{
+				// 对话按配置直接绑定，而且选的不是这套配置的默认模型。
+				"chat": {ProfileID: "main", Model: "small-model"},
+				// 视觉理解按分组绑定。
+				"vision": {Group: "vision", Model: "see-model"},
+			},
+		}},
+	}})
+
+	payload := handler.profileSetPayload(handler.store.Profiles())
+	main := payload.Profiles[0]
+	if main.ID != "main" {
+		t.Fatalf("unexpected profile order: %+v", payload.Profiles)
+	}
+	// 配置自己的默认模型仍然按默认模型算。
+	if main.EffectiveContextWindowTokens != 400000 {
+		t.Fatalf("default model window = %d", main.EffectiveContextWindowTokens)
+	}
+	if len(main.RoleBindings) != 1 {
+		t.Fatalf("role bindings = %+v", main.RoleBindings)
+	}
+	binding := main.RoleBindings[0]
+	if binding.Role != "chat" || binding.RoleLabel != "对话" || binding.BotName != "Diana" {
+		t.Fatalf("binding = %+v", binding)
+	}
+	// 机器人实际在用的是 small-model，窗口跟着它走，不是那个 400000。
+	if binding.Model != "small-model" || binding.ContextWindowTokens != 32000 {
+		t.Fatalf("binding window = %+v", binding)
+	}
+
+	vision := payload.Profiles[1]
+	if len(vision.RoleBindings) != 1 || vision.RoleBindings[0].Role != "vision" {
+		t.Fatalf("group binding = %+v", vision.RoleBindings)
+	}
+	if vision.RoleBindings[0].ContextWindowTokens != 128000 {
+		t.Fatalf("group binding window = %+v", vision.RoleBindings[0])
+	}
+}
+
+// 没有注入机器人配置集时不编造引用关系。
+func TestLLMPayloadWithoutBotSourceHasNoBindings(t *testing.T) {
+	handler := NewLLMConfigHandler(NewMemoryLLMProfileStore(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model",
+	}))
+	payload := handler.profileSetPayload(handler.store.Profiles())
+	if len(payload.Profiles[0].RoleBindings) != 0 {
+		t.Fatalf("bindings = %+v", payload.Profiles[0].RoleBindings)
 	}
 }
