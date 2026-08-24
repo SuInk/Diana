@@ -581,7 +581,7 @@ func DefaultImageModel(provider Provider) string {
 	case ProviderOpenAICompatible:
 		return "gpt-image-2"
 	case ProviderGemini:
-		return "imagen-4.0-generate-001"
+		return "gemini-3-pro-image"
 	default:
 		return ""
 	}
