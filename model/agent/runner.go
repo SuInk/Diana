@@ -26,15 +26,23 @@ type Runner struct {
 
 const (
 	webSearchToolName            = "web_search.search"
+	browserRenderToolName        = "browser_render"
 	dianaImageToolName           = "diana.image"
 	imageTaskPendingState        = "pending"
 	maxWebSearchCallsPerAgentRun = 3
 )
 
 var (
-	pendingToolCommitmentZH = regexp.MustCompile(`(?:下一步|接下来|然后|这次)(?:我|应|应该|会|要|将|直接|先|需|需要|必须|得|就|仍|再|立即|马上|现在|[\s，,:：]){0,16}(?:联网|搜索|查询|检索|核对|调用|执行|读取|获取|确认|操作)`)
-	pendingToolCommitmentEN = regexp.MustCompile(`(?i)\b(?:next|then|now)\s+(?:i\s+)?(?:should|will|must|need to|am going to)\s+(?:search|query|look up|verify|call|run|execute|read|fetch|check)\b`)
+	pendingToolCommitmentZH     = regexp.MustCompile(`(?:下一步|接下来|然后|这次)(?:我|应|应该|会|要|将|直接|先|需|需要|必须|得|就|仍|再|立即|马上|现在|[\s，,:：]){0,16}(?:联网|搜索|查询|检索|核对|调用|执行|读取|获取|确认|操作)`)
+	pendingToolCommitmentEN     = regexp.MustCompile(`(?i)\b(?:next|then|now)\s+(?:i\s+)?(?:should|will|must|need to|am going to)\s+(?:search|query|look up|verify|call|run|execute|read|fetch|check)\b`)
+	internalProtocolTermPattern = regexp.MustCompile(`(?i)证据账本|逐主张|candidate_sources|rendered_sources|claim_updates|claim_ids|not_searched|stop_reason|\bclaim[ _-]?c[0-9]+\b`)
 )
+
+// internalProtocolLeak 返回正文里泄漏的内部协议词；证据账本只用于内部校验，
+// 不能出现在发给用户的回复里，靠提示词约束兜不住，需要在出口再拦一次。
+func internalProtocolLeak(content string) string {
+	return strings.TrimSpace(internalProtocolTermPattern.FindString(content))
+}
 
 // NewRunner 创建内置 Agent 运行器。
 func NewRunner(client LLMClient, cfg Config, registry *ToolRegistry) (*Runner, error) {
@@ -122,6 +130,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	imageTaskQueued := false
 	finishReason := "final"
 	claimLedger := newClaimEvidenceLedger()
+	claimLedger.advisory = r.cfg.EvidenceLedgerAdvisory
 	emitRunEvent(ctx, req.Observer, RunEvent{
 		TraceID:        traceID,
 		Phase:          RunPhaseStarted,
@@ -289,7 +298,21 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 				messages = append(messages,
 					llm.Message{Role: llm.RoleAssistant, Content: lastText},
-					llm.Message{Role: llm.RoleUser, Content: reason + "。请按证据账本修正，只输出带完整 claims 的 final JSON。\n" + claimLedger.prompt()},
+					llm.Message{Role: llm.RoleUser, Content: reason + "。只修正 claims 的证据绑定：把每条证据的 URL 换成上面列出的可引用来源并补齐 relation、source_type、distance、strength。content 保持原样，不要因为这次校验失败改写、削弱或推翻已经写好的答案；确实没有来源可绑的那一条才降级状态，并只在正文里限定对应那一句事实。只输出带完整 claims 的 final JSON。\n" + claimLedger.prompt()},
+				)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
+			if leak := internalProtocolLeak(action.Content); leak != "" {
+				protocolRepairs++
+				reason := "最终回复里出现了内部协议词「" + leak + "」"
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				messages = append(messages,
+					llm.Message{Role: llm.RoleAssistant, Content: lastText},
+					llm.Message{Role: llm.RoleUser, Content: reason + "。claims、证据账本、字段名和校验过程只用于内部结构化校验，不能出现在给用户看的正文里。保持结论和 claims 不变，只把 content 改写成正常对话的说法；需要交代出处时口头点名来源即可。"},
 				)
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
@@ -408,9 +431,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		toolCancel()
 		toolDuration := time.Since(toolStartedAt)
 		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, DurationMS: toolDuration.Milliseconds()}
+		// 证据登记必须读未截断的原始结果：截断后的 JSON 无法反序列化，
+		// 会让成功的搜索被当成 provider_error、渲染成功的页面登记不上。
+		rawOutput := output
 		if err != nil {
 			record.Error = normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS)
 			output = toolExecutionErrorForModel(action.Tool, record.Error)
+			rawOutput = ""
 		} else {
 			record.Output = truncateRunes(output, r.cfg.MaxToolOutputChars)
 			output = record.Output
@@ -420,8 +447,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		steps = append(steps, record)
 		toolMetadata = mergeRunMetadata(toolMetadata, webSearchRunMetadataFromOutput(action.Tool, output, err))
-		if action.Tool == webSearchToolName {
-			toolMetadata = mergeRunMetadata(toolMetadata, claimLedger.observeSearch(output, err))
+		switch action.Tool {
+		case webSearchToolName:
+			toolMetadata = mergeRunMetadata(toolMetadata, claimLedger.observeSearch(rawOutput, err))
+		case browserRenderToolName:
+			toolMetadata = mergeRunMetadata(toolMetadata, claimLedger.observeRenderedPage(rawOutput, err))
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,

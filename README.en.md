@@ -197,8 +197,8 @@ node scripts/dev.mjs                       # when make is unavailable
      provider: openai_compatible
      api_key: your-key
      base_url: https://example.com/v1
-     model: gpt-4o-mini
-     image_model: gpt-image-1
+     model: gpt-5.4-mini
+     image_model: gpt-image-2
    ```
 
    Supported providers: `openai_compatible`, `gemini`, `anthropic`. Multiple named configurations can be saved and switched.
@@ -220,7 +220,7 @@ bot:
 llm:
   provider: openai_compatible
   api_key: your-key
-  model: gpt-4o-mini
+  model: gpt-5.4-mini
 ```
 
 ```sh

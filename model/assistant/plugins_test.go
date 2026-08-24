@@ -713,51 +713,55 @@ func (c *fileResolveChannel) CallAPI(_ context.Context, action string, _ map[str
 	return map[string]any{"file": c.filePath}, nil
 }
 
-// TestDianaLLMConfigToolUpdatesProviderAndModel verifies a structured owner update.
-func TestDianaLLMConfigToolUpdatesProviderAndModel(t *testing.T) {
-	store := &stubLLMProfileStore{
-		set: llm.ProfileSet{
-			ActiveID: "main",
-			Profiles: []llm.Profile{
-				{
-					ID:   "main",
-					Name: "主配置",
-					Config: llm.ProviderConfig{
-						Provider: llm.ProviderOpenAICompatible,
-						APIKey:   "valid-key",
-						Model:    "example-chat-model",
-					},
-				},
-			},
+// 聊天里换模型改的是机器人的对话模型分配，不是 LLM provider 配置。
+func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{
+			{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, APIKey: "valid-key", Model: "example-chat-model",
+				Models: []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "example-pro-model"}},
+			}},
 		},
-	}
+	}}
 	logs := &captureAppLogs{}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	saver := &restoredConfigSaver{}
+	runtime := NewRuntime(BotConfig{
+		OwnerID:    "10001",
+		ModelRoles: map[string]ModelRole{"chat": {ProfileID: "main", Model: "example-chat-model"}},
+	}, nilChannel{}, NewPluginManager(), store, nil, saver, nil)
 	runtime.SetAppLogWriter(logs)
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
-		return []llm.ModelInfo{{ID: "gemini-2.5-pro", ContextWindowTokens: 200000, MaxOutputTokens: 8192}}, nil
+		return []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "example-pro-model", MaxOutputTokens: 8192}}, nil
 	})
-	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002"}).Run(context.Background(), map[string]any{
-		"operation": "update", "provider": "gemini", "model": "gemini-2.5-pro",
-	})
+
+	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002"}).Run(
+		context.Background(), map[string]any{"operation": "update", "model": "example-pro-model"})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !strings.Contains(output, "已更新当前 LLM") {
+	if !strings.Contains(output, "已把对话模型换成 example-pro-model") {
 		t.Fatalf("output = %q", output)
 	}
-	got := store.Current()
-	if got.Provider != llm.ProviderGemini || got.Model != "gemini-2.5-pro" {
-		t.Fatalf("current = %#v", got)
+	// 这才是真正决定机器人用什么模型的地方。
+	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	if roles["chat"].Model != "example-pro-model" || roles["chat"].ProfileID != "main" {
+		t.Fatalf("chat role = %#v", roles["chat"])
 	}
-	// 换模型不再把目录返回的窗口写进配置：写进去就等于把某一刻的第三方数据固定成
-	// 用户设置，换下一个模型时不跟着变。窗口按当前模型现算即可。
-	if got.ContextWindowTokens != 0 || got.MaxContextTokens != 0 {
-		t.Fatalf("model switch persisted a catalog window: %#v", got)
+	if saver.calls != 1 {
+		t.Fatalf("机器人配置没有落盘，重启就丢了: calls=%d", saver.calls)
 	}
-	// 清单跟着这次校验一起刷新，窗口就按清单里这个模型的真实值算。
-	if window := got.ContextWindowTokensWithDefault(); window != 200000 {
-		t.Fatalf("resolved window = %d, want the model list value", window)
+	// LLM provider 配置归 WebUI，聊天里不动它。
+	if got := store.Current(); got.Model != "example-chat-model" {
+		t.Fatalf("provider config was rewritten: %#v", got)
+	}
+	// 换完之后实际生效的就是新模型——旧实现在这里仍然是旧模型。
+	profiles, err := runtime.roleBoundProfiles(store.Profiles().WithDefaults(), llm.GroupChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].Config.Model != "example-pro-model" {
+		t.Fatalf("对话实际使用的模型没有跟着换: %#v", profiles)
 	}
 	if len(logs.entries) != 1 {
 		t.Fatalf("logs = %#v", logs.entries)
@@ -765,8 +769,63 @@ func TestDianaLLMConfigToolUpdatesProviderAndModel(t *testing.T) {
 	if logs.entries[0].Kind != applog.KindOperation || logs.entries[0].Actor != "qq:10001" {
 		t.Fatalf("log entry = %#v", logs.entries[0])
 	}
-	if logs.entries[0].Metadata["group_id"] != "20002" || logs.entries[0].Metadata["new_model"] != "gemini-2.5-pro" {
+	if logs.entries[0].Metadata["group_id"] != "20002" || logs.entries[0].Metadata["new_model"] != "example-pro-model" {
 		t.Fatalf("log metadata = %#v", logs.entries[0].Metadata)
+	}
+}
+
+// 切到一个 WebUI 里根本没配过的 provider 时要明确拒绝：provider 不是一个枚举值，
+// 换家就得换地址和密钥，把当前配置的 provider 字段改掉只会得到一套连不上的配置。
+func TestDianaLLMConfigToolRefusesUnconfiguredProvider(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
+			Provider: llm.ProviderOpenAICompatible, APIKey: "valid-key", Model: "example-chat-model",
+		}}},
+	}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
+	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		return []llm.ModelInfo{{ID: "gemini-2.5-pro"}}, nil
+	})
+	_, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+		context.Background(), map[string]any{"operation": "update", "provider": "gemini", "model": "gemini-2.5-pro"})
+	if err == nil || !strings.Contains(err.Error(), "没有配置 gemini 的 provider") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := store.Current(); got.Provider != llm.ProviderOpenAICompatible || got.Model != "example-chat-model" {
+		t.Fatalf("被拒绝的切换不该改动任何配置: %#v", got)
+	}
+}
+
+// 只报模型名时，如果它挂在另一套配置下，绑定要跟着换过去。
+func TestDianaLLMConfigToolFollowsModelToItsProfile(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{
+			{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, APIKey: "k1", Model: "chat-model",
+				Models: []llm.ModelInfo{{ID: "chat-model"}},
+			}},
+			{ID: "claude", Name: "Claude 配置", Config: llm.ProviderConfig{
+				Provider: llm.ProviderAnthropic, APIKey: "k2", Model: "claude-sonnet",
+				Models: []llm.ModelInfo{{ID: "claude-sonnet"}},
+			}},
+		},
+	}}
+	runtime := NewRuntime(BotConfig{
+		OwnerID:    "10001",
+		ModelRoles: map[string]ModelRole{"chat": {ProfileID: "main", Model: "chat-model"}},
+	}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
+	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		return []llm.ModelInfo{{ID: "claude-sonnet"}}, nil
+	})
+	if _, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+		context.Background(), map[string]any{"operation": "update", "model": "claude-sonnet"}); err != nil {
+		t.Fatal(err)
+	}
+	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	if roles["chat"].ProfileID != "claude" || roles["chat"].Model != "claude-sonnet" {
+		t.Fatalf("chat role = %#v", roles["chat"])
 	}
 }
 
@@ -788,7 +847,7 @@ func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 			},
 		},
 	}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "gpt-4.1-mini"}}, nil
 	})
@@ -799,9 +858,16 @@ func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 	if !strings.Contains(output, "gpt-4.1-mini") {
 		t.Fatalf("output = %q", output)
 	}
-	got := store.Current()
-	if got.Provider != llm.ProviderOpenAICompatible || got.Model != "gpt-4.1-mini" {
-		t.Fatalf("current = %#v", got)
+	// 换模型写的是机器人的模型分配，provider 配置一个字不动。
+	if roles := normalizeModelRoles(runtime.Config().ModelRoles); roles["chat"].Model != "gpt-4.1-mini" {
+		t.Fatalf("chat role = %#v", roles["chat"])
+	}
+	if got := store.Current(); got.Model != "example-chat-model" {
+		t.Fatalf("provider config was rewritten: %#v", got)
+	}
+	// 第一次给对话定绑定会连带影响未分配的用途，回执要说出来。
+	if !strings.Contains(output, "会跟随对话模型") {
+		t.Fatalf("output 缺少连带影响说明: %q", output)
 	}
 }
 
@@ -1221,5 +1287,96 @@ func TestXiaohongshuUnresolvedStatus(t *testing.T) {
 				t.Fatalf("xiaohongshuUnresolvedStatus(%q, %q) = %q, want %q", tc.raw, tc.pageURL, got, tc.want)
 			}
 		})
+	}
+}
+
+// 四个用途都能在聊天里改，而且只动自己那一档。
+func TestDianaLLMConfigToolRebindsEveryModelRole(t *testing.T) {
+	newRuntime := func() (*Runtime, *stubLLMProfileStore) {
+		store := &stubLLMProfileStore{set: llm.ProfileSet{
+			ActiveID: "main",
+			Profiles: []llm.Profile{
+				{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
+					Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "chat-model", ImageModel: "draw-model",
+					Models: []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}, {ID: "route-model"}, {ID: "draw-model"}, {ID: "draw-model-2"}},
+				}},
+			},
+		}}
+		runtime := NewRuntime(BotConfig{
+			OwnerID: "10001",
+			ModelRoles: map[string]ModelRole{
+				"chat":   {ProfileID: "main", Model: "chat-model"},
+				"vision": {ProfileID: "main", Model: "see-model"},
+			},
+		}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
+		runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+			return []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}, {ID: "see-model-pro"}, {ID: "route-model"}, {ID: "draw-model-2"}}, nil
+		})
+		return runtime, store
+	}
+
+	cases := []struct {
+		role      string
+		model     string
+		wantLabel string
+	}{
+		{role: "vision", model: "see-model-pro", wantLabel: "视觉理解"},
+		{role: "intent", model: "route-model", wantLabel: "意图识别"},
+		{role: "image", model: "draw-model-2", wantLabel: "图片生成"},
+		{role: "chat", model: "route-model", wantLabel: "对话"},
+	}
+	for _, item := range cases {
+		runtime, _ := newRuntime()
+		output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+			context.Background(), map[string]any{"operation": "update", "role": item.role, "model": item.model})
+		if err != nil {
+			t.Fatalf("role %s: %v", item.role, err)
+		}
+		if !strings.Contains(output, "已把"+item.wantLabel+"模型换成 "+item.model) {
+			t.Fatalf("role %s output = %q", item.role, output)
+		}
+		roles := normalizeModelRoles(runtime.Config().ModelRoles)
+		if roles[item.role].Model != item.model {
+			t.Fatalf("role %s = %#v", item.role, roles[item.role])
+		}
+		// 只动自己那一档。
+		for _, other := range []struct{ key, model string }{{"chat", "chat-model"}, {"vision", "see-model"}} {
+			if other.key == item.role {
+				continue
+			}
+			if roles[other.key].Model != other.model {
+				t.Fatalf("改 %s 时动了 %s：%#v", item.role, other.key, roles[other.key])
+			}
+		}
+	}
+}
+
+// 改「视觉理解」只写自己那一档，不会顺手给对话也钉一个绑定。
+func TestDianaLLMConfigToolBindsNonChatRoleWithoutTouchingChat(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
+			Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "chat-model",
+			Models: []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}},
+		}}},
+	}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
+	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		return []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}}, nil
+	})
+	if _, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+		context.Background(), map[string]any{"operation": "update", "role": "vision", "model": "see-model"}); err != nil {
+		t.Fatal(err)
+	}
+	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	if roles["vision"].Model != "see-model" {
+		t.Fatalf("vision role = %#v", roles["vision"])
+	}
+	if _, pinned := roles["chat"]; pinned {
+		t.Fatalf("不该顺手给对话钉一个绑定: %#v", roles)
+	}
+	// 对话仍然走激活配置的默认模型。
+	if got := store.Current(); got.Model != "chat-model" {
+		t.Fatalf("provider config changed: %#v", got)
 	}
 }

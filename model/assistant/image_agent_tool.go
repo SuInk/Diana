@@ -171,11 +171,17 @@ func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string,
 	if err != nil {
 		return "", err
 	}
-	// 开场白由运行时发，不留给模型自由发挥。以前这里只是把「已受理」写进工具结果，
-	// 指望模型自己在 final 里说一句；模型经常改口成「没办法直接修改」「你没有这个
-	// 权限」之类，用户那边就只剩一句推脱，而任务其实已经在后台跑了。
+	// 开场白不留给模型自由发挥：它经常改口成「没办法直接修改」「你没有这个权限」，
+	// 用户那边就只剩一句推脱，而任务其实已经在后台跑了。
+	//
+	// 但也不能当场就发：模型随后的 final 回复照样会说一遍图片的事，用户连着收到
+	// 两条几乎一样的话。所以先交给本轮回复攒着——模型自己说了就用模型那句，模型
+	// 什么都没说才把开场白作为这一轮的回复发出去（见 drainPendingImageAnnouncement）。
+	// 不在回复轮次里（后台任务直接调工具）没有 final 可兜底，维持当场发送。
 	if announcement := dianaImageStartedMessage(request, result); announcement != "" {
-		if sendErr := t.runtime.send(ctx, t.event, announcement); sendErr != nil {
+		if sink := imageAnnouncementSinkFrom(ctx); sink != nil {
+			sink.offer(announcement)
+		} else if sendErr := t.runtime.send(ctx, t.event, announcement); sendErr != nil {
 			// 开场白发不出去不影响任务本身，只记一笔。
 			log.Printf("chatbot image task announcement failed: %v", sendErr)
 		} else {
@@ -498,11 +504,11 @@ func asyncImageReplyInstruction(result dianaImageToolResult) string {
 	}
 	announced := ""
 	if result.Announced {
-		announced = "运行时已经把「开始处理」发给用户了，不要再说一遍「正在处理」「稍等」。"
+		announced = "运行时已经把「开始处理」发给用户了，不要再说一遍。"
 	}
 	// 明确堵住几种常见的推脱说法：任务其实已经在后台跑了，这时回一句「做不到」或
 	// 「你没有权限」，用户看到的就只剩这句话。
-	return fmt.Sprintf("【本轮图片任务】%s。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, announced)
+	return fmt.Sprintf("【本轮图片任务】%s。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」，也不要描述图里长什么样——你还没看到它。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, announced)
 }
 
 func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent, relationship RelationshipPolicy, operation string, prompt string, caption string) (dianaImageToolResult, error) {
