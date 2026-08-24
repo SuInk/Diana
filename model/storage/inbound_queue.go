@@ -119,11 +119,11 @@ WHERE id = ? AND status = ?
 	availableAt := inboundInitialAvailableAt(event, now)
 	result, err := tx.ExecContext(ctx, `
 INSERT OR IGNORE INTO inbound_events (
-  id, session, kind, group_id, user_id, message_id, event_time, payload,
+  id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload,
   priority, status, attempts, available_at, created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-`, id, session, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Time, string(payload), priority, inboundStatusPending, availableAt.UnixNano(), nowNanos, nowNanos)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+`, id, session, string(event.Kind), strings.TrimSpace(event.ProfileID), event.GroupID, event.UserID, event.MessageID, event.Time, string(payload), priority, inboundStatusPending, availableAt.UnixNano(), nowNanos, nowNanos)
 	if err != nil {
 		return "", false, fmt.Errorf("enqueue inbound event: %w", err)
 	}
@@ -161,11 +161,11 @@ func (s *SQLiteStore) RecordNoticeEvent(ctx context.Context, session string, eve
 	now := time.Now().UTC().UnixNano()
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO inbound_events (
-  id, session, kind, group_id, user_id, message_id, event_time, payload,
+  id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload,
   priority, status, attempts, available_at, outcome, decision, decision_reason,
   created_at, updated_at, completed_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   payload = excluded.payload,
   outcome = excluded.outcome,
@@ -173,7 +173,7 @@ ON CONFLICT(id) DO UPDATE SET
   decision_reason = excluded.decision_reason,
   updated_at = excluded.updated_at,
   completed_at = excluded.completed_at
-`, id, session, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Time, string(payload),
+`, id, session, string(event.Kind), strings.TrimSpace(event.ProfileID), event.GroupID, event.UserID, event.MessageID, event.Time, string(payload),
 		inboundStatusDone, now, "notice_"+strings.TrimSpace(event.SubType), "notice", "已记录平台通知", now, now, now)
 	if err != nil {
 		return fmt.Errorf("record notice event: %w", err)

@@ -192,12 +192,14 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		limit = 100
 	}
 	groupID := strings.TrimSpace(c.Query("group"))
+	profileID := strings.TrimSpace(c.Query("profile"))
 	stored, err := h.sqlite.ListInboundEventDetails(c.Request.Context(), storage.InboundEventQuery{
-		Since:   since,
-		Limit:   limit,
-		Offset:  (page - 1) * limit,
-		Result:  resultFilter,
-		GroupID: groupID,
+		Since:     since,
+		Limit:     limit,
+		Offset:    (page - 1) * limit,
+		Result:    resultFilter,
+		GroupID:   groupID,
+		ProfileID: profileID,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
