@@ -105,6 +105,12 @@ type MessageHistorySearchStore interface {
 	SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error)
 }
 
+// MessageSearchExtraStore 记录「正文之外还能被搜到的文本」。图片描述由后台视觉
+// 调用异步生成，消息早就落库了，只能事后补写到这里，正文列保持原样。
+type MessageSearchExtraStore interface {
+	SaveMessageSearchExtra(ctx context.Context, session, messageID, extra string) error
+}
+
 type MessageHistoryVectorQuery struct {
 	Session       string
 	SessionPrefix string
@@ -5225,6 +5231,13 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptToolHistoryImages)
 	}
+	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
+		builder.WriteString("\n" + promptInternalIdentifiers)
+		// 引用被管理员关掉时不教这一手：那是「永不带引用」的明确配置。
+		if replyReferenceMode(cfg) != ReplyDecorationOff {
+			builder.WriteString("\n" + promptQuoteHistoryMessage)
+		}
+	}
 	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
 		tail.WriteString("\n" + promptOwnerRelationshipTarget)
 	}
@@ -5278,6 +5291,10 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if event.chatInReply {
 		builder.WriteString("\n" + chatInReplyPrompt)
+	}
+	if eventCarriesImages(event) {
+		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
+		tail.WriteString("\n" + promptImageReply)
 	}
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {
