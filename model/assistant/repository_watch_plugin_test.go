@@ -1185,7 +1185,7 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 		},
 	}}
 	message := composeRepositoryWatchMessage("SuInk/Diana", renderRepositoryWatchChanges(change))
-	if len([]rune(message)) <= groupmateReplyChunkSize {
+	if len([]rune(message)) <= chatReplyChunkSize {
 		t.Fatalf("sample notification is too short to cover the regression: %d runes", len([]rune(message)))
 	}
 	// 事实清单必须整条留在一起，长度限制不该把它切开。
@@ -1199,7 +1199,7 @@ func TestRepositoryWatchNotificationSurvivesShortReplyChunking(t *testing.T) {
 	// 对照：同样长度的散文聊天会被群友风格的切分拆成多条，这正是通知不能复用
 	// 聊天切分的原因。事实卡片本身是清单，走的是清单整块保留的分支。
 	prose := strings.Repeat("这段话没有任何列表结构只是普通闲聊内容而已", 30)
-	if chunks := splitReply(prose, groupmateReplyChunkSize); len(chunks) < 2 {
+	if chunks := splitReply(prose, chatReplyChunkSize); len(chunks) < 2 {
 		t.Fatalf("expected the chat splitter to break plain prose, got %#v", chunks)
 	}
 }

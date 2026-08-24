@@ -12,12 +12,14 @@ import (
 
 // 归一化要吃掉大小写和空白，没写或写错都按 on 处理。
 func TestNormalizeReplyDecorationMode(t *testing.T) {
+	// 没写和写错都按 auto，和 DefaultBotConfig 的默认值一致：同一份没填的配置
+	// 不该在两条路径上得到两种行为。
 	cases := map[ReplyDecorationMode]ReplyDecorationMode{
-		"":         ReplyDecorationOn,
+		"":         ReplyDecorationAuto,
 		"on":       ReplyDecorationOn,
 		"off":      ReplyDecorationOff,
 		" AUTO ":   ReplyDecorationAuto,
-		"nonsense": ReplyDecorationOn,
+		"nonsense": ReplyDecorationAuto,
 	}
 	for input, want := range cases {
 		if got := normalizeReplyDecorationMode(input); got != want {
@@ -73,8 +75,16 @@ func TestSendAutoModeKeepsModelWrittenReplyMarker(t *testing.T) {
 
 func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "1244393238"}
-	if prompt := replyDecorationPrompt(BotConfig{}.WithDefaults(), event, nil); prompt != "" {
-		t.Fatalf("default config should not emit decoration guidance: %q", prompt)
+	// on 和 off 都是运行时说了算，不需要也不该告诉模型怎么判断。
+	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationOff} {
+		decided := BotConfig{ReplyReferenceMode: mode, MentionUserMode: mode}.WithDefaults()
+		if prompt := replyDecorationPrompt(decided, event, nil); prompt != "" {
+			t.Fatalf("mode %s should not emit decoration guidance: %q", mode, prompt)
+		}
+	}
+	// 默认就是 auto，所以默认配置反过来必须带上这份判断依据。
+	if prompt := replyDecorationPrompt(BotConfig{}.WithDefaults(), event, nil); prompt == "" {
+		t.Fatal("default config is auto now, it must carry the decoration guidance")
 	}
 
 	cfg := BotConfig{ReplyReferenceMode: ReplyDecorationAuto, MentionUserMode: ReplyDecorationAuto}.WithDefaults()
@@ -82,7 +92,7 @@ func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 	if !strings.Contains(prompt, replyMarkerPrefix+"1244393238]") {
 		t.Fatalf("auto prompt is missing the current message marker: %q", prompt)
 	}
-	if !strings.Contains(prompt, "@10001") {
+	if !strings.Contains(prompt, "[diana-at:10001]") {
 		t.Fatalf("auto prompt is missing the sender mention hint: %q", prompt)
 	}
 	// 私聊没有引用和 @ 的概念，不该占用上下文。
@@ -131,5 +141,143 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 	prompt = replyDecorationPrompt(cfg, current, []MessageEvent{other, current})
 	if strings.Contains(prompt, "你还没有回复") {
 		t.Fatalf("他人消息不该触发承接提示:%s", prompt)
+	}
+}
+
+// 「群里有没有别人在说话」是算得出来的，不该让模型从历史文本里猜。
+func TestOtherSpeakersBeforeCountsInterveningPeople(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m5", Time: now}
+	history := []MessageEvent{
+		{GroupID: "g", UserID: "1", MessageID: "m1", Time: now - 60},
+		{GroupID: "g", UserID: "2", MessageID: "m2", Time: now - 40},
+		{GroupID: "g", UserID: "3", MessageID: "m3", Time: now - 20},
+		{GroupID: "g", UserID: "2", MessageID: "m4", Time: now - 10},
+		event,
+	}
+	if got := otherSpeakersBefore(history, event); got != 2 {
+		t.Fatalf("otherSpeakersBefore = %d, want 2", got)
+	}
+}
+
+func TestOtherSpeakersBeforeIgnoresSelfBotAndStaleTurns(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m9", Time: now}
+	history := []MessageEvent{
+		// 窗口之外的插话不算：那是上一个话题了。
+		{GroupID: "g", UserID: "7", MessageID: "old", Time: now - int64(mentionCrowdWindow.Seconds()) - 1},
+		// 机器人自己的发言不算。
+		{GroupID: "g", UserID: "bot", MessageID: "m7", Time: now - 30, Outbound: true},
+		// 发送者自己连发不算「有人插话」。
+		{GroupID: "g", UserID: "1", MessageID: "m8", Time: now - 10},
+		event,
+	}
+	if got := otherSpeakersBefore(history, event); got != 0 {
+		t.Fatalf("otherSpeakersBefore = %d, want 0", got)
+	}
+}
+
+// 冷清和热闹给的是两条不同的规则，不是同一句话加个数字。
+func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
+	quiet := mentionDecorationRule("123456", 0)
+	if !strings.Contains(quiet, "不用 @") {
+		t.Fatalf("一对一时应当明说不用 @：%s", quiet)
+	}
+	busy := mentionDecorationRule("123456", 3)
+	// 写法要和「群聊真实提及规则」一致，都用平台中立的标记：既不教裸 @数字，
+	// 也不教 OneBot 方言的 CQ 码——Telegram 群里那只会把字面量发出去。
+	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "[diana-at:123456]") {
+		t.Fatalf("热闹时应当给出人数并要求用提及标记点名：%s", busy)
+	}
+	for _, unwanted := range []string{"写 @123456", "[CQ:at"} {
+		if strings.Contains(busy, unwanted) {
+			t.Fatalf("不该再教平台方言写法 %q：%s", unwanted, busy)
+		}
+	}
+}
+
+// auto 模式下这条规则要真的进到提示词里，并且带上算出来的人数。
+func TestReplyDecorationPromptCarriesMentionCrowd(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m3", Time: now}
+	history := []MessageEvent{
+		{GroupID: "g", UserID: "2", MessageID: "m1", Time: now - 30},
+		{GroupID: "g", UserID: "3", MessageID: "m2", Time: now - 20},
+		event,
+	}
+	cfg := BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOff}
+	prompt := replyDecorationPrompt(cfg, event, history)
+	if !strings.Contains(prompt, "2 个人") {
+		t.Fatalf("提示词里没有算出来的插话人数：%s", prompt)
+	}
+	// 关掉和总是 @ 两种模式不需要这条规则，模型不该被告知怎么判断。
+	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationOff} {
+		off := replyDecorationPrompt(BotConfig{MentionUserMode: mode, ReplyReferenceMode: ReplyDecorationOff}, event, history)
+		if strings.Contains(off, "个人在说话") {
+			t.Fatalf("mode %s 不该带 @ 判断规则：%s", mode, off)
+		}
+	}
+}
+
+// 两段关于 @ 的提示词不能各说各的。
+//
+// 「群聊真实提及规则」曾经写死一句「发送层会引用并 @ 当前发言者，这部分不需要
+// 你输出 CQ at」——只有 on 档成立。auto 档发送层一个装饰件都不加，另一段却在请
+// 模型自己写 @：模型两段都收到，前一段是陈述句、后一段是选择题，于是按前一段
+// 办，@ 就消失了。
+func TestMentionPromptAgreesWithDecorationMode(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindGroup, SelfID: "42", GroupID: "123456", UserID: "10001",
+		MessageID: "m1", ToMe: true,
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
+	}
+
+	cases := []struct {
+		mode   ReplyDecorationMode
+		want   string
+		reject string
+	}{
+		// on：发送层确实会自己加，这句话成立，模型不该重复输出。
+		{mode: ReplyDecorationOn, want: "不需要你输出 CQ at", reject: "发送层不会自动 @ 任何人"},
+		// auto：发送层什么都不加，必须说清楚，并把判断交回给另一段规则。
+		{mode: ReplyDecorationAuto, want: "按本轮单独给出的那条规则判断", reject: "不需要你输出 CQ at"},
+		// off：发送层同样不加，但也没有另一段规则，需要点名就自己写。
+		{mode: ReplyDecorationOff, want: "需要点名时自己写", reject: "不需要你输出 CQ at"},
+	}
+	for _, tc := range cases {
+		cfg := BotConfig{BotAccount: "42", MentionUserMode: tc.mode, ReplyReferenceMode: tc.mode}.WithDefaults()
+		prompt := runtime.replyMentionPrompt(cfg, event, nil)
+		if prompt == "" {
+			t.Fatalf("mode %s: 提及规则不该为空", tc.mode)
+		}
+		if !strings.Contains(prompt, tc.want) {
+			t.Fatalf("mode %s 缺少 %q：%s", tc.mode, tc.want, prompt)
+		}
+		if strings.Contains(prompt, tc.reject) {
+			t.Fatalf("mode %s 不该出现 %q：%s", tc.mode, tc.reject, prompt)
+		}
+	}
+}
+
+// 「发送层会取消自动引用和 @」这句只有真的加了才成立。
+func TestMentionPromptDropsSendLayerClausesWhenNothingIsAdded(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindGroup, SelfID: "42", GroupID: "123456", UserID: "10001",
+		MessageID: "m1", ToMe: true,
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
+	}
+	quiet := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationAuto}.WithDefaults()
+	prompt := runtime.replyMentionPrompt(quiet, event, nil)
+	for _, unwanted := range []string{"会取消对触发者的自动引用", "自动避免把触发者误当成回应对象"} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("auto 档不该承诺发送层的动作 %q：%s", unwanted, prompt)
+		}
+	}
+	// 引用还开着的时候，「会取消自动引用」仍然成立，不能一起删掉。
+	mixed := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOn}.WithDefaults()
+	if !strings.Contains(runtime.replyMentionPrompt(mixed, event, nil), "会取消对触发者的自动引用") {
+		t.Fatal("引用仍为 on 时应当保留取消说明")
 	}
 }

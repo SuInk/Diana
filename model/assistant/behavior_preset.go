@@ -141,7 +141,7 @@ func (style ReplyStyle) stylePrompt() string {
 		return strings.Join([]string{
 			"默认表达风格为群友：像群里一个熟悉的普通朋友那样说话，自然活泼但不卖萌。",
 			"怎么说：一条消息只讲一件事；句子短，一句能说完就不用两句；先给结论再补一句为什么，不铺垫；有反应感，该惊讶就惊讶、该吐槽就吐槽；不确定就直说不确定。",
-			"要连着说两三句短的，就一句一行写下来——每一行会作为单独一条消息发出去，像真人连发那样。写不下的长内容不要靠断行拆，清单和步骤也照常写在一行一条里，不要拆。",
+			"连着说两三句短的时候，那就是两三次独立发言，句与句之间写 <dianabr>，会分成几条消息发出去，像真人连发那样。同一段论述、清单、步骤仍然是一条消息里的排版，用单个换行，不要写 <dianabr>。",
 			"不要这样：不用「首先/其次/最后」「总的来说」「综上」；不在结尾总结自己刚说过的话；不问「还有什么可以帮你的吗」，不说「希望这对你有帮助」；不主动列 1234 条，除非对方问的就是步骤；不加「作为一个 AI」之类的自我说明。",
 			"示例——",
 			"用户：这个报错什么意思啊",
@@ -150,6 +150,8 @@ func (style ReplyStyle) stylePrompt() string {
 			"你：那大概率不是这儿的问题。完整报错贴一下我看看。",
 			"用户：今天好累",
 			"你：辛苦了，早点睡吧。",
+			"用户：服务器又炸了",
+			"你：又来<dianabr>先看 dmesg，多半是被 OOM 掉了",
 		}, "\n")
 	case ReplyStyleCatgirl:
 		// 这一档要教两件事，方向相反：语气要够（模型默认会往「礼貌助理加个喵」
@@ -190,37 +192,32 @@ func (style ReplyStyle) stylePrompt() string {
 	}
 }
 
-// 群友风格的投递参数：真人发的是聊天体量的短消息，不是几百字一坨；连发之间
-// 有打字间隔；开口前也要有想和打的时间。
+// 聊天体量的投递参数：真人发的是短消息，不是几百字一坨；连发之间有打字间隔。
+// 这两项是 DefaultBotConfig 的默认值，不再由风格钳定，用户在 WebUI 里说了算。
 const (
-	groupmateReplyChunkSize     = 400
-	groupmateSendChunkIntervalM = 1200
-	groupmateTypingBaseDelay    = 900 * time.Millisecond
-	groupmateTypingPerRune      = 55 * time.Millisecond
-	groupmateTypingMaxDelay     = 5 * time.Second
+	chatReplyChunkSize      = 400
+	chatSendChunkIntervalMS = 1200
 )
 
-// apply 让风格能改动真正决定「机器人味」的投递方式，而不只是措辞。
-// 每条都自带引用和 @、几百字一条、秒回——这些 prompt 再怎么写都管不到。
-// 两个装饰件只填未显式设置的项（用户手动选过就尊重用户）；长度和间隔则是这个
-// 风格的硬策略：900 字一条、300ms 连发怎么写都不像真人，但比它更克制的设置保留。
-func (style ReplyStyle) apply(cfg *BotConfig) {
-	if style.Normalized() != ReplyStyleGroupmate {
-		return
-	}
-	if cfg.ReplyReferenceMode == "" {
-		cfg.ReplyReferenceMode = ReplyDecorationOff
-	}
-	if cfg.MentionUserMode == "" {
-		cfg.MentionUserMode = ReplyDecorationOff
-	}
-	if cfg.DirectReplyChunkSize <= 0 || cfg.DirectReplyChunkSize > groupmateReplyChunkSize {
-		cfg.DirectReplyChunkSize = groupmateReplyChunkSize
-	}
-	if cfg.SendChunkIntervalMS < groupmateSendChunkIntervalM {
-		cfg.SendChunkIntervalMS = groupmateSendChunkIntervalM
-	}
-}
+// 群友风格的打字节奏：开口前要有想和打的时间。这几项配置里没有对应项，
+// 只有风格自己知道，所以留在风格里。
+const (
+	groupmateTypingBaseDelay = 900 * time.Millisecond
+	groupmateTypingPerRune   = 55 * time.Millisecond
+	groupmateTypingMaxDelay  = 5 * time.Second
+)
+
+// 表达风格不再改动任何 BotConfig 字段。
+//
+// 它曾经有个 apply：群友风格在那里把引用和 @ 按成「从不」，把每条长度钳到 400、
+// 连发间隔顶到 1200ms。这四项在 WebUI 里都有对应的输入框，于是同一件事有了两个
+// 来源；更糟的是 WithDefaults 会把风格写进去的值一起存库，保存过一次配置之后，
+// 风格填的值和用户亲手填的值再也分不开——「用户设过就尊重用户」名存实亡，之后
+// 改风格的默认值也到不了这些人手上。
+//
+// 现在这些都只由配置决定，风格对应的取值搬进了 DefaultBotConfig 当默认值。风格
+// 只保留配置里没有对应项、prompt 也管不到的部分：开口前的拟真停顿、以及不使用
+// 合并转发卡片。
 
 // allowsForwardReply 报告这个风格能否把长回复折成合并转发卡片。
 // 转发卡片是机器人专属控件，真人不会这么发言，所以群友风格永远走普通消息。

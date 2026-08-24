@@ -18,10 +18,12 @@ var (
 	mdBoldPattern       = regexp.MustCompile(`\*\*([^*\n]+)\*\*|__([^_\n]+)__`)
 	mdHeadingPattern    = regexp.MustCompile(`(?m)^\s*#{1,6}\s+`)
 	mdLinkPattern       = regexp.MustCompile(`!?\[([^\]\n]*)\]\(([^)\n]+)\)`)
-	mdBulletPattern     = regexp.MustCompile(`(?m)^(\s*)[-*+]\s+`)
-	mdQuotePattern      = regexp.MustCompile(`(?m)^\s*>\s?`)
-	mdRulePattern       = regexp.MustCompile(`(?m)^\s*(?:-{3,}|\*{3,}|_{3,})\s*$\n?`)
-	mdExtraBlankPattern = regexp.MustCompile(`\n{3,}`)
+	// dianaMarkerLabelPattern 认出 Diana 自己的方括号标记，它们不参与 Markdown 降级。
+	dianaMarkerLabelPattern = regexp.MustCompile(`^(?:diana-at|diana-reply|回复):`)
+	mdBulletPattern         = regexp.MustCompile(`(?m)^(\s*)[-*+]\s+`)
+	mdQuotePattern          = regexp.MustCompile(`(?m)^\s*>\s?`)
+	mdRulePattern           = regexp.MustCompile(`(?m)^\s*(?:-{3,}|\*{3,}|_{3,})\s*$\n?`)
+	mdExtraBlankPattern     = regexp.MustCompile(`\n{3,}`)
 )
 
 // markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 <dianabr> 分段标记。
@@ -38,6 +40,12 @@ func markdownToPlain(text string) string {
 	text = mdHeadingPattern.ReplaceAllString(text, "")
 	text = mdLinkPattern.ReplaceAllStringFunc(text, func(match string) string {
 		parts := mdLinkPattern.FindStringSubmatch(match)
+		// Diana 自己的标记不是链接标签。[diana-at:10002]（后面正好跟个半角括号）
+		// 会被这条规则当成 [文字](目标) 拆掉方括号，标记就废了——出站时认不出来，
+		// 字面量直接发进群。
+		if dianaMarkerLabelPattern.MatchString(parts[1]) {
+			return match
+		}
 		label := strings.TrimSpace(parts[1])
 		target := strings.TrimSpace(parts[2])
 		if label == "" || label == target {

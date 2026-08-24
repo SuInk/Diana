@@ -1365,15 +1365,43 @@ export interface AssistantEventsResponse {
   page: number;
   limit: number;
   has_more: boolean;
+  group?: string;
+  groups: AssistantEventGroup[];
+  context_budget?: AssistantContextBudget;
+}
+
+export interface AssistantEventGroup {
+  group_id: string;
+  events: number;
+}
+
+export interface AssistantContextBudgetLayer {
+  key: string;
+  label: string;
+  share_percent: number;
+  ceiling: number;
+  tokens: number;
+  capped_by_ceiling: boolean;
+  configurable: boolean;
+}
+
+export interface AssistantContextBudget {
+  group_id?: string;
+  context_window: number;
+  layers: AssistantContextBudgetLayer[];
+  allocated: number;
+  headroom: number;
 }
 
 export function getAssistantEvents(
   range: AssistantEventRange,
   result: AssistantEventResultFilter = "all",
   page = 1,
-  limit = 50
+  limit = 50,
+  group = ""
 ): Promise<AssistantEventsResponse> {
   const params = new URLSearchParams({ range, result, page: String(page), limit: String(limit) });
+  if (group) params.set("group", group);
   return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
 }
 

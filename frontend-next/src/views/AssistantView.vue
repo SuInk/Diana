@@ -2,8 +2,8 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <div>
-    <header class="view-header">
+  <div ref="viewRoot">
+    <header ref="viewHeader" class="view-header">
       <div class="view-title">
         <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="leaveEditor">
           <ArrowLeft :size="16" aria-hidden="true" />
@@ -334,7 +334,8 @@
               </div>
               <div class="field">
                 <label for="bot-chunk">分段发送长度</label>
-                <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" />
+                <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" placeholder="400" />
+                <span class="hint">单条聊天消息最多多少字，超出的部分另发一条。留空按 400；表达风格不会改动这一项。</span>
               </div>
               <div class="field">
                 <label for="bot-history-budget">回复历史 token 预算</label>
@@ -420,21 +421,21 @@
                 <label for="bot-reply-reference-mode">群聊引用原消息</label>
                 <AppSelect
                   id="bot-reply-reference-mode"
-                  :model-value="form.reply_reference_mode ?? 'on'"
+                  :model-value="form.reply_reference_mode ?? 'auto'"
                   :options="replyReferenceModeOptions"
                   @update:model-value="(value) => { if (form) form.reply_reference_mode = value as 'on' | 'off' | 'auto'; }"
                 />
-                <span class="hint">选「让模型自己决定」后，只有话题跳转或隔轮回应时它才会引用。</span>
+                <span class="hint">默认「让模型自己决定」：只有话题跳转或隔轮回应时才引用。表达风格不会改动这一项。</span>
               </div>
               <div class="field">
                 <label for="bot-mention-user-mode">群聊 @ 发送者</label>
                 <AppSelect
                   id="bot-mention-user-mode"
-                  :model-value="form.mention_user_mode ?? 'on'"
+                  :model-value="form.mention_user_mode ?? 'auto'"
                   :options="mentionUserModeOptions"
                   @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
                 />
-                <span class="hint">选「让模型自己决定」后，只有需要点名时它才会 @，不会每句都带。</span>
+                <span class="hint">默认「让模型自己决定」：群里还有别人在说话时才 @，一对一接话时不带。表达风格不会改动这一项。</span>
               </div>
               <div class="field">
                 <label class="switch">
@@ -483,8 +484,8 @@
               </div>
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
-                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。</span>
+                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="1200" />
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。留空按 1200；表达风格不会改动这一项。</span>
               </div>
             </div>
           </section>
@@ -820,7 +821,7 @@
       </div>
 
       <!-- 侧栏状态 -->
-      <div class="stack">
+      <div class="stack grid-side-sticky">
         <section class="card">
           <div class="card-header">
             <h2>运行状态</h2>
@@ -895,7 +896,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, type Ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
 import { ArrowLeft, Bot, ChevronRight, Copy, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
 import {
   activateBotProfile,
@@ -1081,6 +1082,24 @@ const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const platforms = ref<BotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
+
+// 表头吸顶之后（.view-header 全站生效），右侧状态卡的停靠位置要落在它下面。
+// 表头会随窗口宽度换行、按钮也会随运行状态增减，高度不是常数，写死一个数
+// 迟早错位——所以量出来写进 CSS 变量，让样式表去用。
+const viewRoot = ref<HTMLElement | null>(null);
+const viewHeader = ref<HTMLElement | null>(null);
+let headerResizeObserver: ResizeObserver | null = null;
+
+function trackHeaderHeight(): void {
+  if (typeof ResizeObserver === "undefined") return;
+  headerResizeObserver = new ResizeObserver(() => {
+    const header = viewHeader.value;
+    const root = viewRoot.value;
+    if (!header || !root) return;
+    root.style.setProperty("--view-header-height", `${Math.round(header.getBoundingClientRect().height)}px`);
+  });
+  if (viewHeader.value) headerResizeObserver.observe(viewHeader.value);
+}
 const platformPickerOpen = ref(false);
 const creating = ref(false);
 
@@ -1540,8 +1559,8 @@ function setForm(config: BotProfileConfig): void {
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     glossary_shared_scope_enabled: config.glossary_shared_scope_enabled ?? false,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
-    reply_reference_mode: config.reply_reference_mode ?? "on",
-    mention_user_mode: config.mention_user_mode ?? "on",
+    reply_reference_mode: config.reply_reference_mode ?? "auto",
+    mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? true,
     error_notify_enabled: config.error_notify_enabled ?? true,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
@@ -1854,7 +1873,13 @@ async function copyEndpoint(): Promise<void> {
   }
 }
 
+onBeforeUnmount(() => {
+  headerResizeObserver?.disconnect();
+  headerResizeObserver = null;
+});
+
 onMounted(async () => {
+  trackHeaderHeight();
   const [platformResult, botConfig, llmConfig] = await Promise.all([
     getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),
     getBotProfileConfig().catch((error: unknown) => {

@@ -266,6 +266,9 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 		AgentEnabled:            false,
 		ProactiveReplyChance:    1,
 		ProactiveReplyThreshold: 0.8,
+		// 这条用例看的是合并后的回复指向哪条消息，所以要显式打开引用；
+		// 默认档是 auto，运行时不补装饰件，读不到这个信号。
+		ReplyReferenceMode: ReplyDecorationOn,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
