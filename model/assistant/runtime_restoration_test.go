@@ -413,7 +413,8 @@ func TestRestoredLLMConfigUsesStructuredAgentTool(t *testing.T) {
 	})
 
 	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
-	if err != nil || !strings.Contains(output, "已更新当前 LLM") || store.Current().Model != "gpt-4.1-mini" {
+	// 这个部署没配模型分配，激活配置的默认模型就是它实际在用的，所以仍然改配置本身。
+	if err != nil || !strings.Contains(output, "已把对话模型换成 gpt-4.1-mini") || store.Current().Model != "gpt-4.1-mini" {
 		t.Fatalf("output=%q err=%v config=%#v", output, err, store.Current())
 	}
 	plugins := NewDefaultPluginManager()

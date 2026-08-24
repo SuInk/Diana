@@ -26,7 +26,8 @@ func (t *dianaLLMConfigTool) Name() string {
 }
 
 func (t *dianaLLMConfigTool) Description() string {
-	return `修改 Diana 自己当前激活的 LLM provider 和 model。只有主人明确要求更改机器人自身配置时才能调用；讨论模型、推荐 API 中转、分析别人的 Agent 或模型、用户说「我用某模型」都不得调用。`
+	return `切换 Diana 说话用的模型（改的是机器人的对话模型分配，不动 provider 的地址和密钥）。` +
+		`只有主人明确要求更改机器人自身配置时才能调用；讨论模型、推荐 API 中转、分析别人的 Agent 或模型、用户说「我用某模型」都不得调用。`
 }
 
 func (t *dianaLLMConfigTool) InputSchema() map[string]any {
@@ -68,7 +69,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if t.runtime.llmStore == nil {
 		return "", fmt.Errorf("当前未接入 LLM 配置集")
 	}
-	result := applyLLMConfigCommand(ctx, t.runtime.llmStore, command, t.runtime.llmModelLister())
+	result := t.runtime.applyLLMConfigCommand(ctx, command, t.runtime.llmModelLister())
 	recordLLMConfigSkillLog(ctx, PluginRequest{
 		Event:    t.event,
 		Text:     fmt.Sprintf("diana.llm_config provider=%s model=%s", providerRaw, model),
