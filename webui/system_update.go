@@ -1019,6 +1019,7 @@ func (h *SystemUpdateHandler) ReleaseStatus(ctx context.Context) (assistant.Rele
 		return assistant.ReleaseStatus{}, failure.err
 	}
 	status := assistant.ReleaseStatus{
+		RepositoryURL:            h.repositoryURL(ctx),
 		DeploymentMode:           response.DeploymentMode,
 		CurrentVersion:           response.CurrentVersion,
 		LatestVersion:            response.LatestVersion,
@@ -1034,4 +1035,20 @@ func (h *SystemUpdateHandler) ReleaseStatus(ctx context.Context) (assistant.Rele
 		status.CheckedAt = checkedAt
 	}
 	return status, nil
+}
+
+// repositoryURL 返回这个部署实际跟随的仓库地址：源码部署跟着 git 远端走，
+// 其余回落到官方仓库。机器人被问到「源码在哪」时用它，免得自己编一个链接。
+func (h *SystemUpdateHandler) repositoryURL(ctx context.Context) string {
+	remoteURL := ""
+	if h.updater != nil {
+		if status, err := h.updater.Status(ctx); err == nil {
+			remoteURL = status.RemoteURL
+		}
+	}
+	owner, repo, ok := githubRepoFromRemote(remoteURL)
+	if !ok {
+		owner, repo = defaultReleaseOwner, defaultReleaseRepo
+	}
+	return "https://github.com/" + owner + "/" + repo
 }
