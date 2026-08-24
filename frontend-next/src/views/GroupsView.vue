@@ -23,6 +23,8 @@
       </div>
     </header>
 
+    <BotScopeNotice subject="群配置" />
+
     <div v-if="loaded">
       <div class="group-list-toolbar">
         <div class="group-list-summary">
@@ -278,6 +280,7 @@
 </template>
 
 <script setup lang="ts">
+import BotScopeNotice from "../components/BotScopeNotice.vue";
 import { computed, onMounted, ref } from "vue";
 import { Plus, RefreshCw, Save, Search, SlidersHorizontal, Users, WifiOff } from "@lucide/vue";
 import {

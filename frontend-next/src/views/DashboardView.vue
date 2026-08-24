@@ -24,6 +24,8 @@
       </div>
     </header>
 
+    <BotScopeNotice subject="总览统计" />
+
     <div class="stack">
       <section v-if="setupNeeded" class="setup-callout">
         <span class="setup-callout-icon">
@@ -171,6 +173,7 @@
 </template>
 
 <script setup lang="ts">
+import BotScopeNotice from "../components/BotScopeNotice.vue";
 import { computed, onMounted, ref } from "vue";
 import {
   Activity,

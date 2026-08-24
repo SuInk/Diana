@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -191,6 +192,7 @@ CREATE TABLE IF NOT EXISTS inbound_events (
   id TEXT PRIMARY KEY,
   session TEXT NOT NULL,
   kind TEXT NOT NULL,
+  profile_id TEXT,
   group_id TEXT,
   user_id TEXT,
   message_id TEXT,
@@ -267,6 +269,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err != nil {
 		return err
 	}
+	if err := s.addInboundEventProfileColumn(); err != nil {
+		return err
+	}
 	if err := s.addMessageSearchExtraColumn(); err != nil {
 		return err
 	}
@@ -274,6 +279,53 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 		return err
 	}
 	return s.migrateGlossary()
+}
+
+// addInboundEventProfileColumn 给事件表补上机器人维度。
+//
+// 事件本来就带 profile_id，但只躺在 payload 的 JSON 里，SQL 过滤不到：控制台想
+// 「只看这台机器人的事件」就得把整段历史读出来在内存里筛。这里补一列，并从已有
+// payload 里回填一次，老库升级后历史事件同样可以按机器人过滤。
+func (s *SQLiteStore) addInboundEventProfileColumn() error {
+	has, err := s.hasColumn("inbound_events", "profile_id")
+	if err != nil || has {
+		return err
+	}
+	if _, err := s.db.Exec(`ALTER TABLE inbound_events ADD COLUMN profile_id TEXT`); err != nil {
+		return err
+	}
+	// json_extract 在 SQLite 3.38 之后随 JSON1 默认可用；万一这个构建里没有，
+	// 回填失败不该挡住启动——新事件仍会写入正确的列。
+	if _, err := s.db.Exec(`
+UPDATE inbound_events
+SET profile_id = TRIM(COALESCE(json_extract(payload, '$.profile_id'), ''))
+WHERE COALESCE(profile_id, '') = ''
+`); err != nil {
+		log.Printf("storage: backfill inbound event profile_id skipped: %v", err)
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_inbound_events_profile_time ON inbound_events(profile_id, event_time DESC)`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// hasColumn 判断表里有没有这一列，用于幂等地补列。
+func (s *SQLiteStore) hasColumn(table, column string) (bool, error) {
+	rows, err := s.db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, column) {
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
 }
 
 // addMessageSearchExtraColumn 给老库补上检索附加列。图片描述这类「消息发出来
