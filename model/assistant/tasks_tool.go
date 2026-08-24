@@ -47,10 +47,14 @@ type dianaTask struct {
 	WatchIssues           bool      `json:"watch_issues,omitempty"`
 	WatchReleases         bool      `json:"watch_releases,omitempty"`
 	WatchStars            bool      `json:"watch_stars,omitempty"`
+	StarNotifyMode        string    `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold   int       `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones  []int     `json:"star_notify_milestones,omitempty"`
 	LastCommitSHA         string    `json:"last_commit_sha,omitempty"`
 	LastPullRequestCursor string    `json:"last_pull_request_cursor,omitempty"`
 	LastReleaseTag        string    `json:"last_release_tag,omitempty"`
 	LastStarCount         int       `json:"last_star_count,omitempty"`
+	LastNotifiedStarCount int       `json:"last_notified_star_count,omitempty"`
 	FeedURL               string    `json:"feed_url,omitempty"`
 	FeedSource            string    `json:"feed_source,omitempty"`
 	FeedHandle            string    `json:"feed_handle,omitempty"`
@@ -202,10 +206,14 @@ func taskForTool(item Reminder) dianaTask {
 		WatchIssues:           item.WatchIssues,
 		WatchReleases:         item.WatchReleases,
 		WatchStars:            item.WatchStars,
+		StarNotifyMode:        item.StarNotifyMode,
+		StarNotifyThreshold:   item.StarNotifyThreshold,
+		StarNotifyMilestones:  append([]int(nil), item.StarNotifyMilestones...),
 		LastCommitSHA:         item.LastCommitSHA,
 		LastPullRequestCursor: item.LastPullRequestCursor,
 		LastReleaseTag:        item.LastReleaseTag,
 		LastStarCount:         item.LastStarCount,
+		LastNotifiedStarCount: item.LastNotifiedStarCount,
 		FeedURL:               item.FeedURL,
 		FeedSource:            item.FeedSource,
 		FeedHandle:            item.FeedHandle,

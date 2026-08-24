@@ -193,3 +193,30 @@ func TestRuntimeSendsPluginMediaThroughSharer(t *testing.T) {
 		t.Fatalf("message = %#v", msg)
 	}
 }
+
+func TestResolverResourceKeysNormalizeCanonicalPlatformIDs(t *testing.T) {
+	tests := []struct {
+		platform string
+		url      string
+		want     string
+	}{
+		{"bilibili", "https://www.bilibili.com/video/BV1f48t6pE3x?p=1", "bilibili:BV1F48T6PE3X"},
+		{"douyin", "https://www.douyin.com/video/1234567890", "douyin:1234567890"},
+		{"xiaohongshu", "https://www.xiaohongshu.com/explore/6a8bc11b0000000033021410", "xiaohongshu:6a8bc11b0000000033021410"},
+		{"x", "https://x.com/example/status/1999999999999999999", "x:1999999999999999999"},
+		{"youtube", "https://youtu.be/dQw4w9WgXcQ", "youtube:dQw4w9WgXcQ"},
+	}
+	for _, test := range tests {
+		if got := resolverResourceKeyFromURL(test.platform, test.url); got != test.want {
+			t.Errorf("resolverResourceKeyFromURL(%q, %q) = %q, want %q", test.platform, test.url, got, test.want)
+		}
+	}
+}
+
+func TestBilibiliResolverResourceKeyUsesAPIBVID(t *testing.T) {
+	var view bilibiliViewResponse
+	view.Data.BVID = "bv1f48t6pe3x"
+	if got := bilibiliResolverResourceKey(view); got != "bilibili:BV1F48T6PE3X" {
+		t.Fatalf("bilibili resource key = %q", got)
+	}
+}

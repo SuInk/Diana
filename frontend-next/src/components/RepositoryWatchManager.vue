@@ -62,6 +62,20 @@
               <label class="check-item"><input v-model="form.watch_releases" type="checkbox" />Release</label>
               <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
             </div>
+            <div v-if="form.watch_stars" class="field">
+              <label for="watch-star-mode">Star 通知模式</label>
+              <select id="watch-star-mode" v-model="form.star_notify_mode" class="input"><option value="growth">累计增长</option><option value="milestone">自定义里程碑</option></select>
+            </div>
+            <div v-if="form.watch_stars && form.star_notify_mode === 'growth'" class="field">
+              <label for="watch-star-threshold">Star 增长通知阈值</label>
+              <input id="watch-star-threshold" v-model.number="form.star_notify_threshold" class="input" type="number" min="1" max="1000000" step="1" />
+              <span class="hint">累计新增达到该数量后再通知；默认 1。</span>
+            </div>
+            <div v-if="form.watch_stars && form.star_notify_mode === 'milestone'" class="field wide">
+              <label for="watch-star-milestones">Star 里程碑</label>
+              <input id="watch-star-milestones" v-model.trim="form.star_milestones_text" class="input" type="text" placeholder="100, 500, 1000" />
+              <span class="hint">跨过指定绝对 Star 数时通知；已越过的里程碑不会补发。</span>
+            </div>
           </div>
           <!-- 群列表拉不到时下拉框只会变成空的，不说一声用户会以为自己没进群。 -->
           <p v-if="form.notification_enabled && groupsLoading" class="hint">正在读取已加入的群聊…</p>
@@ -214,7 +228,7 @@ const anonymousIntervalSeconds = 60 * 60;
 const minimumIntervalSeconds = 30;
 const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = computed(() => props.tokenConfigured ? authenticatedIntervalSeconds : anonymousIntervalSeconds);
-const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
+const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, star_notify_mode: "growth" as "growth" | "milestone", star_notify_threshold: 1, star_milestones_text: "", issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const joinedGroups = ref<BotGroupSummary[]>([]);
@@ -345,7 +359,7 @@ function startEdit(task: AssistantTask): void {
   editingTask.value = task;
   const repository = task.repository ?? "";
   const legacyTarget = task.group_id ? [{ destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ destination: "private" as const, user_id: task.user_id }] : [];
-  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
+  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
   editing.value = true;
 }
 
@@ -360,6 +374,8 @@ async function save(): Promise<void> {
   if (form.value.interval_seconds < minimumIntervalSeconds) return toastError("检查周期不能低于 30 秒");
   if (form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期不能超过 365 天");
   if (!form.value.watch_commits && !form.value.watch_pull_requests && !form.value.watch_issues && !form.value.watch_releases && !form.value.watch_stars) return toastError("Commit、PR、Issue、Release 和 Star 至少选择一项");
+  const starMilestones = parseStarMilestones(form.value.star_milestones_text);
+  if (form.value.watch_stars && form.value.star_notify_mode === "milestone" && !starMilestones.length) return toastError("里程碑模式至少填写一个有效 Star 数");
   if (!form.value.profile_id) return toastError("请选择发送机器人");
   if (form.value.notification_enabled && !form.value.notification_targets.some((target) => target.destination === "group" ? target.group_id : target.user_id)) return toastError("请至少添加一个通知对象");
   const managerUserIDs = issueMemberIDs(form.value.issue_managers, "private");
@@ -369,7 +385,7 @@ async function save(): Promise<void> {
   if (form.value.issue_enabled && !managerUserIDs.length && !managerGroupIDs.length) return toastError("开启 Issue 管理后，请至少添加一名管理人员");
   saving.value = true;
   try {
-    const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_issues: form.value.watch_issues, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars };
+    const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_issues: form.value.watch_issues, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars, star_notify_mode: form.value.star_notify_mode, star_notify_threshold: form.value.star_notify_threshold, star_notify_milestones: starMilestones };
     const delivery = { profile_id: form.value.profile_id, notification_enabled: form.value.notification_enabled, notification_targets: form.value.notification_enabled ? form.value.notification_targets : [] };
     const repository = repositoryKey(form.value.repository);
     const enabledRepositories = [...(props.issueEnabledRepositories ?? [])].filter((item) => repositoryKey(item).toLowerCase() !== repository.toLowerCase());
@@ -432,6 +448,7 @@ async function remove(task: AssistantTask): Promise<void> {
 function statusLabel(value: AssistantTaskStatus): string { return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消" }[value] ?? value; }
 function statusTone(value: AssistantTaskStatus): string { return value === "active" ? "ok" : value === "retrying" ? "warn" : value === "cancelled" ? "err" : ""; }
 function watchScopeLabel(task: AssistantTask): string { return [task.watch_commits ? "Commit" : "", task.watch_pull_requests ? "PR" : "", task.watch_issues ? "Issue" : "", task.watch_releases ? "Release" : "", task.watch_stars ? "Star" : ""].filter(Boolean).join(" + "); }
+function parseStarMilestones(value: string): number[] { return [...new Set(value.split(/[\s,，;；]+/).map(Number).filter((item) => Number.isInteger(item) && item >= 1 && item <= 1000000))].sort((a, b) => a - b); }
 function formatInterval(seconds: number): string { return seconds % 86400 === 0 ? `${seconds / 86400} 天` : seconds % 3600 === 0 ? `${seconds / 3600} 小时` : seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`; }
 
 watch(() => props.tokenConfigured, (configured, previous) => {

@@ -1573,11 +1573,15 @@ export interface AssistantTask {
   watch_issues?: boolean;
   watch_releases?: boolean;
   watch_stars?: boolean;
+  star_notify_mode?: "growth" | "milestone";
+  star_notify_threshold?: number;
+  star_notify_milestones?: number[];
   last_commit_sha?: string;
   last_pull_request_cursor?: string;
   last_issue_cursor?: string;
   last_release_tag?: string;
   last_star_count?: number;
+  last_notified_star_count?: number;
   feed_url?: string;
   feed_source?: "rss" | "twitter";
   feed_handle?: string;
@@ -1607,6 +1611,9 @@ export interface RepositoryWatchInput {
   watch_issues: boolean;
   watch_releases: boolean;
   watch_stars: boolean;
+  star_notify_mode?: "growth" | "milestone";
+  star_notify_threshold?: number;
+  star_notify_milestones?: number[];
   profile_id?: string;
   destination?: "private" | "group";
   group_id?: string;

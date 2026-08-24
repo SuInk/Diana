@@ -284,6 +284,9 @@ type Runtime struct {
 	members                   *memberCache
 	now                       func() time.Time
 	quietNotices              map[string]time.Time
+	resolverDeliveryMu        sync.Mutex
+	resolverDeliverySeq       uint64
+	resolverDeliveries        map[string]resolverDeliveryReservation
 
 	// sem 控制同时生成回复的 worker 数，history/recent 支撑上下文和状态页展示。
 	sem                 chan struct{}
@@ -519,6 +522,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		historyImageDescSem:   make(chan struct{}, 1),
 		agentRegistryCache:    map[string]*agent.ToolRegistry{},
 		quietNotices:          map[string]time.Time{},
+		resolverDeliveries:    map[string]resolverDeliveryReservation{},
 		inboundWake:           make(chan struct{}, 1),
 		inboundManualBackfill: make(chan time.Duration, 1),
 		memoryWake:            make(chan struct{}, 1),
@@ -3227,9 +3231,17 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 		log.Printf("chatbot resolver produced no sendable content: message_id=%s", event.MessageID)
 		return "", nil
 	}
+	reservation, duplicate := r.reserveResolverDelivery(event, resp.ResolverResourceKeys)
+	if duplicate {
+		r.recordResolverDuplicateSuppressed(ctx, event, resp.ResolverResourceKeys)
+		return "", nil
+	}
+	delivered := false
+	defer func() { r.finishResolverDelivery(reservation, delivered) }()
 	if _, err := r.deliverResolverResponse(ctx, event, *resp); err != nil {
 		return "", err
 	}
+	delivered = true
 	r.maybeSendPluginFollowUp(ctx, event, *resp)
 	return reply, nil
 }
@@ -9121,6 +9133,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	if err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStagePolling, err)
 	}
+	change = applyRepositoryStarNotifyThreshold(item, change)
 	if len(change.Commits) == 0 && len(change.PullRequests) == 0 && len(change.Issues) == 0 && len(change.Releases) == 0 && change.Stars == nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, r.storeRepositoryWatchProgress(item.ID, change.Snapshot, ""))
 	}
@@ -9134,6 +9147,51 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
 	r.maybeSendRepositoryWatchFollowUp(ctx, item, message)
 	return startedAt, nil
+}
+
+func applyRepositoryStarNotifyThreshold(item Reminder, change repositoryWatchChange) repositoryWatchChange {
+	if !item.WatchStars {
+		return change
+	}
+	threshold, lastNotified := item.StarNotifyThreshold, item.LastNotifiedStarCount
+	if threshold <= 0 {
+		threshold, lastNotified = 1, item.LastStarCount
+	}
+	change.Snapshot.StarNotifiedCount, change.Snapshot.HasStarNotifiedCount = lastNotified, true
+	if change.Stars != nil && change.Stars.Current > change.Snapshot.StarCount {
+		change.Snapshot.StarCount = change.Stars.Current
+	}
+	mode, _ := normalizeStarNotifyMode(item.StarNotifyMode)
+	if mode == starNotifyModeMilestone {
+		change.Snapshot.StarNotifiedCount = change.Snapshot.StarCount
+		if change.Stars == nil {
+			return change
+		}
+		milestones, _ := normalizeStarNotifyMilestones(item.StarNotifyMilestones)
+		for _, milestone := range milestones {
+			if milestone > item.LastStarCount && milestone <= change.Stars.Current {
+				change.Stars.Milestones = append(change.Stars.Milestones, milestone)
+			}
+		}
+		if len(change.Stars.Milestones) == 0 {
+			change.Stars = nil
+		}
+		return change
+	}
+	if change.Stars == nil {
+		return change
+	}
+	delta := change.Stars.Current - lastNotified
+	if delta > 0 && delta < threshold {
+		change.Stars = nil
+		return change
+	}
+	change.Stars.Previous, change.Stars.Delta = lastNotified, delta
+	if len(change.Stars.AddedUsers) != delta {
+		change.Stars.AddedUsers = nil
+	}
+	change.Snapshot.StarNotifiedCount = change.Stars.Current
+	return change
 }
 
 func repositoryWatchDeliveryTargets(item Reminder) []MessageEvent {
@@ -9413,7 +9471,15 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 	}
 	if change.Stars != nil {
 		// 和其它四类一样每行一件事：标识（含增减与前后数）、名单、时间、链接。
-		lines := []string{fmt.Sprintf("Star %+d（%d → %d）", change.Stars.Delta, change.Stars.Previous, change.Stars.Current)}
+		label := fmt.Sprintf("Star %+d（%d → %d）", change.Stars.Delta, change.Stars.Previous, change.Stars.Current)
+		if len(change.Stars.Milestones) > 0 {
+			values := make([]string, 0, len(change.Stars.Milestones))
+			for _, milestone := range change.Stars.Milestones {
+				values = append(values, strconv.Itoa(milestone))
+			}
+			label = fmt.Sprintf("Star 里程碑 %s（%d → %d）", strings.Join(values, "、"), change.Stars.Previous, change.Stars.Current)
+		}
+		lines := []string{label}
 		if change.Stars.Delta > 0 && len(change.Stars.AddedUsers) > 0 {
 			names := make([]string, 0, min(5, len(change.Stars.AddedUsers)))
 			for _, user := range change.Stars.AddedUsers {
@@ -9664,6 +9730,9 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 			item.LastStarCount = snapshot.StarCount
 			item.LastStarEventID = snapshot.StarEventID
 			item.LastStarEventAt = snapshot.StarEventAt
+		}
+		if item.WatchStars && snapshot.HasStarNotifiedCount {
+			item.LastNotifiedStarCount = snapshot.StarNotifiedCount
 		}
 		item.PendingDelivery = strings.TrimSpace(pending)
 		if item.PendingDelivery != "" {
