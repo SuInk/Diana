@@ -821,7 +821,7 @@
       </div>
 
       <!-- 侧栏状态 -->
-      <div class="stack">
+      <div class="stack grid-side-sticky">
         <section class="card">
           <div class="card-header">
             <h2>运行状态</h2>

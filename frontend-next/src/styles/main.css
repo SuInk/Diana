@@ -3883,6 +3883,20 @@ a.nav-action {
   align-items: start;
 }
 
+/* 左边那栏很长（机器人配置一屏放不下），右边只有一张状态卡。跟着一起滚的话，
+   翻到下半屏时右边就是一大片空白，而运行状态恰恰是改配置时最想随时瞄一眼的
+   东西。让它贴着顶栏停住。 */
+.grid-side-sticky {
+  position: sticky;
+  top: calc(var(--topbar-height) + 24px);
+  /* 侧栏自己比视口还高时（以后往里加卡片）让它自己滚，否则底部内容够不着。 */
+  max-height: calc(100vh - var(--topbar-height) - 48px);
+  overflow-y: auto;
+  /* sticky 元素上加 overflow 会裁掉溢出的阴影，留一点内边距接住它。 */
+  padding: 2px;
+  margin: -2px;
+}
+
 .dashboard-stats,
 .dashboard-insights {
   display: grid;
@@ -4307,6 +4321,13 @@ a.nav-action {
   .grid-2,
   .grid-main-side {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 单列下侧栏排在正文后面，再 sticky 就成了一张挡在内容上的浮卡。 */
+  .grid-side-sticky {
+    position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .app-content {
