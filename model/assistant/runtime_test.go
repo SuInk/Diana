@@ -1622,7 +1622,7 @@ func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
 		"「伪」有假装成女性的意味。",
 	}, "\n")
 
-	got := splitReply(reply, groupmateReplyChunkSize)
+	got := splitReply(reply, chatReplyChunkSize)
 	if len(got) != 1 {
 		t.Fatalf("structured list should stay in one message, got %#v", got)
 	}
@@ -1658,7 +1658,7 @@ func TestSplitReplyTreatsBlankLinesAsLayout(t *testing.T) {
 
 func TestRuntimeBotbrReplySendsMultipleMessages(t *testing.T) {
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 100}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 100, ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, nil)
 
 	err := runtime.send(context.Background(), MessageEvent{
 		Kind:      EventKindGroup,
@@ -1689,7 +1689,7 @@ func TestRuntimeBotbrReplySendsMultipleMessages(t *testing.T) {
 // TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk 验证群聊分条时只有第一条带引用和 @。
 func TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk(t *testing.T) {
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 3}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 3, ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, nil)
 
 	err := runtime.send(context.Background(), MessageEvent{
 		Kind:      EventKindGroup,
@@ -2027,7 +2027,8 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 			systemPrompt.WriteByte('\n')
 		}
 	}
-	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "当前发言者是在直接询问你时", "可以直接回答", "原样保留额外 CQ at 的对象和相对位置"} {
+	// 这份配置是默认档（auto），所以第 1 条应当是「发送层不会自动 @」那一版。
+	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "发送层不会自动 @ 任何人", "可以直接回答", "原样保留这些标记的对象和相对位置"} {
 		if !strings.Contains(systemPrompt.String(), want) {
 			t.Fatalf("system prompt missing %q: %s", want, systemPrompt.String())
 		}
@@ -2048,7 +2049,9 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 func TestRuntimeGroupLLMDefaultsMentionToCurrentSender(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{`{"action":"none"}`, "这是面向全群的说明。"}}
-	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	// 这条看的是「运行时自动补的装饰件指向谁」，所以要显式打开；默认档是 auto，
+	// 由模型自己在正文里写，运行时一个都不补。
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
@@ -5116,6 +5119,54 @@ func TestNotificationChunkFitsTelegramLimit(t *testing.T) {
 	for _, chunk := range chunks {
 		if units := len(utf16.Encode([]rune(chunk))); units > telegramUTF16Limit {
 			t.Fatalf("chunk uses %d UTF-16 units, over the %d limit", units, telegramUTF16Limit)
+		}
+	}
+}
+
+// 截图里的原话：162 字撞上 160 的分条上限，切出来是「…正规零售版5060」加一条「Ti」。
+func TestSplitReplyDoesNotStrandATinyTail(t *testing.T) {
+	reply := "那确实，3k买联想5060就完全没必要了，同样预算都摸到5060 Ti，性能档位更重要。只要那张联想5060 Ti尺寸能装下、能当场烤机验卡，卖家把来源和是否拆修说清楚，3k左右可以优先考虑；但先确认是8GB还是16GB，以及OEM拆机卡基本没独立保修。要是8GB无保，价格还得再压，不然宁可加一点买正规零售版5060 Ti"
+	got := splitReply(reply, 160)
+	if len(got) != 1 {
+		t.Fatalf("超出上限 %d 字就被切成了 %d 条：%q", len([]rune(reply))-160, len(got), got)
+	}
+}
+
+// 碎片不该只是这一条用例里不出现：只要循环进得来，尾巴就一定长于容差。
+// 各种长度和上限组合下都扫一遍，确认没有短尾。
+func TestSplitReplyNeverEmitsRunts(t *testing.T) {
+	body := []rune(strings.Repeat("测试文本内容 abc 12345，", 200))
+	for _, chunkSize := range []int{40, 160, 400, 900, notificationChunkSize} {
+		allowance := chunkOverflowAllowance(chunkSize)
+		for _, length := range []int{chunkSize - 1, chunkSize, chunkSize + 1, chunkSize + allowance,
+			chunkSize + allowance + 1, chunkSize*2 + 3, chunkSize*3 + 7} {
+			if length <= 0 || length > len(body) {
+				continue
+			}
+			chunks := splitReply(string(body[:length]), chunkSize)
+			if len(chunks) < 2 {
+				continue
+			}
+			for index, chunk := range chunks {
+				if size := len([]rune(chunk)); size <= allowance {
+					t.Fatalf("chunkSize=%d length=%d 切出第 %d 条只有 %d 字：%q",
+						chunkSize, length, index, size, chunk)
+				}
+			}
+		}
+	}
+}
+
+// 容差是给「超一点点」用的，真正的长文本照切不误。
+func TestSplitReplyStillChunksLongText(t *testing.T) {
+	long := strings.Repeat("这是一段需要被切开的长文本，", 60)
+	chunks := splitReply(long, 160)
+	if len(chunks) < 2 {
+		t.Fatalf("长文本没有被切开：%d 条", len(chunks))
+	}
+	for _, chunk := range chunks {
+		if size := len([]rune(chunk)); size > 160+chunkOverflowAllowance(160) {
+			t.Fatalf("切出的分条超过上限加容差：%d 字", size)
 		}
 	}
 }

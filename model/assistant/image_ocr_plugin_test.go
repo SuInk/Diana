@@ -338,6 +338,10 @@ func TestImageOCRTextOnlyCombinesDescriptionAndTranscript(t *testing.T) {
 	if !strings.Contains(content, "【图片消息】") {
 		t.Fatalf("missing text-only header: %q", content)
 	}
+	// 识别文本长得就像一段现成答复，块头必须说清它只是理解材料，不能复述给用户。
+	if !strings.Contains(content, "不要复述") {
+		t.Fatalf("text-only header must forbid reciting the recognition text: %q", content)
+	}
 	if provider.calls.Load() != 2 {
 		t.Fatalf("provider calls = %d, want 2 (describe + transcribe)", provider.calls.Load())
 	}

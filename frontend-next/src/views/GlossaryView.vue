@@ -6,7 +6,11 @@
     <header class="view-header">
       <div class="view-title">
         <h1>词典</h1>
-        <p>机器人自己收下的梗、黑话与内部称呼；这里可以改释义、作废记错的词条</p>
+        <p>
+          机器人自己收下的梗、黑话与内部称呼；这里可以改释义、作废记错的词条。
+          <template v-if="sharedScope">当前跨群共用一本，新词条都记进全局词典。</template>
+          <template v-else>当前按会话隔离，一个群记下的梗只在这个群生效；想共用可在「机器人 → 词典作用域」打开。</template>
+        </p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="scopes.length === 0" @click="openCreate">
@@ -23,7 +27,7 @@
     <section class="card">
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px; gap: 10px">
-          <select v-model="scope" class="input" style="max-width: 240px" @change="reload">
+          <select v-model="scope" class="input" style="max-width: 320px" @change="reload">
             <option v-for="item in scopes" :key="item.scope_key" :value="item.scope_key">
               {{ scopeLabel(item.scope_key) }}（{{ item.active_count }}）
             </option>
@@ -162,6 +166,8 @@ import { ChevronRight, Plus, RefreshCw } from "@lucide/vue";
 import {
   deleteGlossaryEntry,
   getGlossaryEntry,
+  getBotProfileConfig,
+  listBotGroups,
   listGlossary,
   restoreGlossaryEntry,
   saveGlossaryEntry,
@@ -184,13 +190,21 @@ const saving = ref(false);
 const editing = ref(false);
 const creating = ref(false);
 const detail = ref<GlossaryEntry | null>(null);
+const groupNames = ref<Record<string, string>>({});
+const sharedScope = ref(false);
+const profileNames = ref<Record<string, string>>({});
 
 const form = reactive({ term: "", meaning: "", aliases: "", example: "", note: "" });
 
 const editingTitle = computed(() => (creating.value ? "新增词条" : `词条：${form.term}`));
 const canSave = computed(() => form.term.trim() !== "" && form.meaning.trim() !== "");
 
-// 作用域键是内部格式（group:123 / private:456 / global），直接摆出来没人看得懂。
+// 作用域键是内部格式（<配置档>:group:123 / <配置档>:private:456 / global），直接
+// 摆出来没人看得懂。
+//
+// 排版顺序很重要：配置档 ID 是个 UUID，放在前面会把真正有用的群号挤出可视范围，
+// 手机上整个下拉框只剩一串 UUID，多开几个群就没法选了。所以群名/群号排最前，
+// 配置档只在确实有多个时作为后缀出现。
 function scopeLabel(key: string): string {
   if (key === "global") {
     return "全局词典";
@@ -198,14 +212,68 @@ function scopeLabel(key: string): string {
   const parts = key.split(":");
   const id = parts[parts.length - 1] ?? "";
   const kind = parts[parts.length - 2] ?? "";
-  const namespace = parts.length > 2 ? `${parts.slice(0, parts.length - 2).join(":")} ` : "";
-  if (kind === "group") {
-    return `${namespace}群 ${id}`;
+  if (kind !== "group" && kind !== "private") {
+    return key;
   }
-  if (kind === "private") {
-    return `${namespace}私聊 ${id}`;
+  const namespace = parts.slice(0, parts.length - 2).join(":");
+  const head = kind === "group" ? groupLabel(id) : `私聊 ${id}`;
+  if (!namespace || !multipleNamespaces.value) {
+    return head;
   }
-  return key;
+  return `${head} · ${profileLabel(namespace)}`;
+}
+
+// 有群名就用群名，群号退居括号里；查不到名字才只显示群号。
+function groupLabel(groupID: string): string {
+  const name = groupNames.value[groupID]?.trim();
+  return name ? `${name}（${groupID}）` : `群 ${groupID}`;
+}
+
+// 配置档同样优先显示名字；名字缺失时 UUID 只留前 8 位，够区分又不占地方。
+function profileLabel(profileID: string): string {
+  const name = profileNames.value[profileID]?.trim();
+  return name || profileID.slice(0, 8);
+}
+
+// 只有真的跨多个配置档时才把配置档摆出来。单机器人部署里它是恒定的噪音。
+const multipleNamespaces = computed(() => {
+  const seen = new Set<string>();
+  for (const item of scopes.value) {
+    const parts = item.scope_key.split(":");
+    if (parts.length > 2) {
+      seen.add(parts.slice(0, parts.length - 2).join(":"));
+    }
+  }
+  return seen.size > 1;
+});
+
+// 群名和配置档名都是为了让下拉框可读，取不到就退回 ID，不阻塞词典本身。
+async function loadScopeNames(): Promise<void> {
+  try {
+    const response = await listBotGroups();
+    const names: Record<string, string> = {};
+    for (const group of response.groups ?? []) {
+      if (group.group_id && group.group_name) {
+        names[group.group_id] = group.group_name;
+      }
+    }
+    groupNames.value = names;
+  } catch {
+    // 群列表拿不到不影响词典，标签退回群号。
+  }
+  try {
+    const config = await getBotProfileConfig();
+    sharedScope.value = config.glossary_shared_scope_enabled ?? false;
+    const names: Record<string, string> = {};
+    for (const profile of config.profiles ?? []) {
+      if (profile.id && profile.name) {
+        names[profile.id] = profile.name;
+      }
+    }
+    profileNames.value = names;
+  } catch {
+    // 同上，退回 UUID 前 8 位。
+  }
 }
 
 async function reload(): Promise<void> {
@@ -328,6 +396,7 @@ async function restoreEntry(): Promise<void> {
 }
 
 onMounted(() => {
+  void loadScopeNames();
   void reload();
 });
 </script>

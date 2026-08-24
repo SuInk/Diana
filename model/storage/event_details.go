@@ -147,31 +147,55 @@ func inboundEventResultCondition(filter InboundEventResultFilter) (string, bool)
 
 // ListInboundEventDetails returns one page of durable inbound decisions and
 // aggregate counts for the entire selected time range.
-func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, since time.Time, limit, offset int, resultFilters ...InboundEventResultFilter) (InboundEventDetailPage, error) {
+// InboundEventQuery 是事件列表的查询条件。
+//
+// 原先是 since/limit/offset 加一个变参 result，再想按群、按用户筛就只能继续往
+// 位置参数上堆，调用方读起来全是没有名字的值。条件写成结构体之后，加一维筛选
+// 不动签名，也不动只关心其中两三项的调用方。
+type InboundEventQuery struct {
+	Since  time.Time
+	Limit  int
+	Offset int
+	Result InboundEventResultFilter
+	// GroupID 只看这一个群，留空表示不限。
+	GroupID string
+}
+
+func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query InboundEventQuery) (InboundEventDetailPage, error) {
 	page := InboundEventDetailPage{Events: []InboundEventDetail{}}
 	if s == nil || s.db == nil {
 		return page, nil
 	}
+	limit := query.Limit
 	if limit <= 0 {
 		limit = 50
 	}
 	if limit > 200 {
 		limit = 200
 	}
+	offset := query.Offset
 	if offset < 0 {
 		offset = 0
 	}
-	resultFilter := InboundEventResultAll
-	if len(resultFilters) > 0 {
-		resultFilter = resultFilters[0]
+	resultFilter := query.Result
+	if strings.TrimSpace(string(resultFilter)) == "" {
+		resultFilter = InboundEventResultAll
 	}
 	resultCondition, ok := inboundEventResultCondition(resultFilter)
 	if !ok {
 		return InboundEventDetailPage{}, fmt.Errorf("unsupported inbound event result filter %q", resultFilter)
 	}
 	sinceUnix := int64(0)
-	if !since.IsZero() {
-		sinceUnix = since.Unix()
+	if !query.Since.IsZero() {
+		sinceUnix = query.Since.Unix()
+	}
+	// 群筛选要同时作用在两个计数和列表上，否则顶部统计说的是全部事件、
+	// 下面列的却是一个群，两个数字对不上。
+	groupCondition := ""
+	scopeArgs := []any{sinceUnix}
+	if groupID := strings.TrimSpace(query.GroupID); groupID != "" {
+		groupCondition = " AND i.group_id = ?"
+		scopeArgs = append(scopeArgs, groupID)
 	}
 
 	if err := s.db.QueryRowContext(ctx, `
@@ -183,8 +207,8 @@ SELECT
 	COALESCE(SUM(CASE WHEN `+inboundEventErrorCondition+` THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN `+inboundEventNoticeCondition+` THEN 1 ELSE 0 END), 0)
 FROM inbound_events AS i
-WHERE i.event_time >= ?
-`, sinceUnix).Scan(&page.Total, &page.Replied, &page.NotReplied, &page.Pending, &page.Errors, &page.Notices); err != nil {
+WHERE i.event_time >= ?`+groupCondition+`
+`, scopeArgs...).Scan(&page.Total, &page.Replied, &page.NotReplied, &page.Pending, &page.Errors, &page.Notices); err != nil {
 		return InboundEventDetailPage{}, fmt.Errorf("count inbound event details: %w", err)
 	}
 	page.FilteredTotal = page.Total
@@ -192,8 +216,8 @@ WHERE i.event_time >= ?
 		if err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM inbound_events AS i
-WHERE i.event_time >= ? AND (`+resultCondition+`)
-`, sinceUnix).Scan(&page.FilteredTotal); err != nil {
+WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
+`, scopeArgs...).Scan(&page.FilteredTotal); err != nil {
 			return InboundEventDetailPage{}, fmt.Errorf("count filtered inbound event details: %w", err)
 		}
 	}
@@ -212,10 +236,10 @@ SELECT
 FROM inbound_events AS i
 LEFT JOIN message_events AS m ON m.id = i.id
 LEFT JOIN user_profiles AS u ON u.user_id = i.user_id
-WHERE i.event_time >= ? AND (`+resultCondition+`)
+WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
 ORDER BY i.event_time DESC, i.created_at DESC, i.id DESC
 LIMIT ? OFFSET ?
-`, sinceUnix, limit, offset)
+`, append(append([]any(nil), scopeArgs...), limit, offset)...)
 	if err != nil {
 		return InboundEventDetailPage{}, fmt.Errorf("list inbound event details: %w", err)
 	}
@@ -308,7 +332,7 @@ LIMIT ? OFFSET ?
 	for index := range page.Events {
 		page.Events[index].Subtasks = subtasks[page.Events[index].ID]
 	}
-	usageByMessage, usage, err := s.inboundEventTokenUsage(ctx, since)
+	usageByMessage, usage, err := s.inboundEventTokenUsage(ctx, query.Since, query.GroupID)
 	if err != nil {
 		return InboundEventDetailPage{}, err
 	}
@@ -526,7 +550,11 @@ type inboundEventTokenTotals struct {
 	CachedInputTokens int64
 }
 
-func (s *SQLiteStore) inboundEventTokenUsage(ctx context.Context, since time.Time) (map[string]inboundEventTokenTotals, inboundEventTokenTotals, error) {
+// groupID 非空时只统计这个群的用量：顶部的 token 统计必须和下面列出的事件同范围，
+// 否则筛了一个群、token 数还是全站的，那个数就没法用来判断这个群贵不贵。
+// 用量日志的 metadata 里带 group_id，直接按它过滤，不用回表连 inbound_events。
+func (s *SQLiteStore) inboundEventTokenUsage(ctx context.Context, since time.Time, groupID string) (map[string]inboundEventTokenTotals, inboundEventTokenTotals, error) {
+	groupID = strings.TrimSpace(groupID)
 	sinceText := time.Unix(0, 0).UTC().Format(time.RFC3339Nano)
 	if !since.IsZero() {
 		sinceText = since.UTC().Format(time.RFC3339Nano)
@@ -551,6 +579,9 @@ WHERE created_at >= ? AND action IN ('chatbot.llm_usage', 'assistant.llm_usage')
 		meta := map[string]any{}
 		if metadata.Valid && strings.TrimSpace(metadata.String) != "" {
 			_ = json.Unmarshal([]byte(metadata.String), &meta)
+		}
+		if groupID != "" && metadataGroupID(meta) != groupID {
+			continue
 		}
 		inputTokens := int64FromAny(meta["input_tokens"])
 		outputTokens := int64FromAny(meta["output_tokens"])
@@ -592,4 +623,52 @@ func (t *inboundEventTokenTotals) add(other inboundEventTokenTotals) {
 	t.OutputTokens += other.OutputTokens
 	t.TotalTokens += other.TotalTokens
 	t.CachedInputTokens += other.CachedInputTokens
+}
+
+// metadataGroupID 取用量日志里记的群号。私聊那条是空的，按群筛选时自然不匹配。
+func metadataGroupID(meta map[string]any) string {
+	value, _ := meta["group_id"].(string)
+	return strings.TrimSpace(value)
+}
+
+// InboundEventGroup 是某个范围内出现过事件的一个群，用于给筛选器列选项。
+type InboundEventGroup struct {
+	GroupID string `json:"group_id"`
+	Events  int64  `json:"events"`
+}
+
+// ListInboundEventGroups 列出这个时间范围里有事件的群，按事件数从多到少。
+// 筛选器只列真正有数据的群：机器人可能进了几十个群，绝大多数一条事件都没有，
+// 全列出来反而找不到要看的那个。
+func (s *SQLiteStore) ListInboundEventGroups(ctx context.Context, since time.Time) ([]InboundEventGroup, error) {
+	groups := []InboundEventGroup{}
+	if s == nil || s.db == nil {
+		return groups, nil
+	}
+	sinceUnix := int64(0)
+	if !since.IsZero() {
+		sinceUnix = since.Unix()
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT i.group_id, COUNT(*)
+FROM inbound_events AS i
+WHERE i.event_time >= ? AND COALESCE(TRIM(i.group_id), '') != ''
+GROUP BY i.group_id
+ORDER BY COUNT(*) DESC, i.group_id ASC
+`, sinceUnix)
+	if err != nil {
+		return nil, fmt.Errorf("list inbound event groups: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var group InboundEventGroup
+		if err := rows.Scan(&group.GroupID, &group.Events); err != nil {
+			return nil, fmt.Errorf("scan inbound event group: %w", err)
+		}
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate inbound event groups: %w", err)
+	}
+	return groups, nil
 }

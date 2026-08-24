@@ -43,18 +43,23 @@
         </button>
       </div>
 
-      <button
-        v-for="item in navItems"
-        :key="item.id"
-        type="button"
-        class="nav-item"
-        :class="{ active: currentView === item.id }"
-        :title="item.hint"
-        @click="go(item.id)"
-      >
-        <component :is="navIcon(item.id)" :size="17" aria-hidden="true" />
-        <span class="nav-label">{{ item.label }}</span>
-      </button>
+      <nav class="nav-sections" aria-label="主导航">
+        <div v-for="(section, index) in sections" :key="section.group?.id ?? `plain-${index}`" class="nav-section">
+          <p v-if="section.group" class="nav-group-title">{{ section.group.label }}</p>
+          <button
+            v-for="item in section.items"
+            :key="item.id"
+            type="button"
+            class="nav-item"
+            :class="{ active: isActiveNav(item.id) }"
+            :title="item.hint"
+            @click="go(item.id)"
+          >
+            <component :is="navIcon(item.id)" :size="17" aria-hidden="true" />
+            <span class="nav-label">{{ item.label }}</span>
+          </button>
+        </div>
+      </nav>
 
       <div class="nav-footer">
         <button class="nav-action" type="button" :title="themeToggleLabel" @click="cycleTheme">
@@ -148,12 +153,11 @@ import {
   Moon,
   Sun,
   SunMoon,
-  UserRound,
-  BookMarked,
+  BookUser,
   Users,
   Wrench
 } from "@lucide/vue";
-import { currentView, navItems, navigate, type ViewID } from "./router";
+import { currentView, navItemForView, navSections, navigate, type ViewID } from "./router";
 import { startEventStream, stream } from "./stream";
 import { theme } from "./theme";
 import { formatUptime } from "./format";
@@ -165,30 +169,28 @@ import { channelAccountUnhealthy } from "./channel-status";
 import VersionModal from "./components/VersionModal.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
-import EventsView from "./views/EventsView.vue";
+import RecordsView from "./views/RecordsView.vue";
 import TasksView from "./views/TasksView.vue";
 import SetupWizard from "./views/SetupWizard.vue";
 import LLMView from "./views/LLMView.vue";
 import AssistantView from "./views/AssistantView.vue";
 import PluginsView from "./views/PluginsView.vue";
 import GroupsView from "./views/GroupsView.vue";
-import UsersView from "./views/UsersView.vue";
-import GlossaryView from "./views/GlossaryView.vue";
-import LogsView from "./views/LogsView.vue";
+import MemoryView from "./views/MemoryView.vue";
 import SettingsView from "./views/SettingsView.vue";
 
 const viewComponents: Record<ViewID, Component> = {
   dashboard: DashboardView,
-  events: EventsView,
+  events: RecordsView,
   tasks: TasksView,
   setup: SetupWizard,
   llm: LLMView,
   bot: AssistantView,
   plugins: PluginsView,
   groups: GroupsView,
-  users: UsersView,
-  glossary: GlossaryView,
-  logs: LogsView,
+  users: MemoryView,
+  glossary: MemoryView,
+  logs: RecordsView,
   settings: SettingsView
 };
 
@@ -250,20 +252,29 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
-  events: "事件明细",
+  events: "运行记录",
   tasks: "提醒与订阅",
   setup: "配置向导",
   llm: "LLM 配置",
   bot: "机器人",
   plugins: "插件",
   groups: "群管理",
-  users: "人员",
-  glossary: "词典",
-  logs: "日志",
+  users: "记忆",
+  glossary: "记忆",
+  logs: "运行记录",
   settings: "设置"
 };
 
+const sections = computed(() => navSections());
+
 const viewTitle = computed(() => viewTitles[currentView.value]);
+
+// 日志之于「记录」、词典之于「记忆」都是页内的一档，停在那一档时侧边栏要继续
+// 亮着它所属的那一项，别让人以为自己掉出了导航。归属关系写在 navItems 的 covers
+// 里，这里不再逐个视图硬编码。
+function isActiveNav(id: ViewID): boolean {
+  return navItemForView(currentView.value) === id;
+}
 const activeView = computed(() => viewComponents[currentView.value] ?? DashboardView);
 
 const botSummary = computed(() => {
@@ -312,8 +323,7 @@ function navIcon(id: ViewID): Component {
     bot: Bot,
     plugins: PlugZap,
     groups: Users,
-    users: UserRound,
-    glossary: BookMarked,
+    users: BookUser,
     logs: FileClock,
     settings: Wrench
   };

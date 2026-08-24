@@ -35,6 +35,9 @@ const (
 	semanticQueryTimeout    = 3 * time.Second
 	semanticSearchOverfetch = 40
 	semanticMinTextRunes    = 4
+	// semanticIndexDescriptionTimeout 限制入库路径上读图片描述的那次点查：
+	// 索引是尽力而为的后台活，不该拖住消息处理。
+	semanticIndexDescriptionTimeout = 2 * time.Second
 )
 
 type semanticIndexItem struct {
@@ -85,7 +88,12 @@ func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
 	if !r.semanticSearchActive(r.effectiveConfigForEvent(event)) || r.messageVectorStore() == nil {
 		return
 	}
-	text := strings.TrimSpace(historyPlainText(event))
+	// 纯图片消息的正文是空的，只有图片描述能代表它。描述是后台异步生成的：
+	// 第一次入库时通常还没有，等描述落库后 refreshMessageImageSearchText 会把
+	// 这条消息重新排一次索引，那时才真正进向量库。
+	lookupCtx, cancel := context.WithTimeout(context.Background(), semanticIndexDescriptionTimeout)
+	text := semanticIndexText(lookupCtx, r, event)
+	cancel()
 	if len([]rune(text)) < semanticMinTextRunes {
 		return
 	}
@@ -97,6 +105,19 @@ func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
 	case r.semanticIndexQueue <- semanticIndexItem{session: sessionKey(event), messageID: event.MessageID, text: text}:
 	default:
 	}
+}
+
+// semanticIndexText 是一条消息进向量库时的文本：正文加上已经生成的图片描述。
+func semanticIndexText(ctx context.Context, r *Runtime, event MessageEvent) string {
+	text := strings.TrimSpace(historyPlainText(event))
+	descriptions := r.messageImageDescriptionText(ctx, event)
+	if descriptions == "" {
+		return text
+	}
+	if text == "" {
+		return descriptions
+	}
+	return text + "\n" + descriptions
 }
 
 // runSemanticIndexer 攒批调用 embedding 接口,把向量写回存储。

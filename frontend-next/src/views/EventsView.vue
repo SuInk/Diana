@@ -39,6 +39,19 @@
         </div>
         <div class="event-filter-row">
           <div class="event-filter-copy">
+            <Users :size="16" aria-hidden="true" />
+            <span>会话</span>
+          </div>
+          <AppSelect
+            class="event-group-filter"
+            :model-value="selectedGroup"
+            :options="groupOptions"
+            aria-label="按群聊筛选事件"
+            @update:model-value="(value) => selectGroup(String(value))"
+          />
+        </div>
+        <div class="event-filter-row">
+          <div class="event-filter-copy">
             <Filter :size="16" aria-hidden="true" />
             <span>处理结果</span>
           </div>
@@ -56,6 +69,45 @@
               <span class="event-filter-count">{{ formatNumber(resultOptionCount(option.value)) }}</span>
             </button>
           </div>
+        </div>
+      </section>
+
+      <section v-if="contextBudget" class="card context-budget">
+        <div class="card-head">
+          <div>
+            <h2>上下文预算 · 群 {{ contextBudget.group_id }}</h2>
+            <span class="card-sub">
+              窗口 {{ formatNumber(contextBudget.context_window) }} token，四层合计
+              {{ formatNumber(contextBudget.allocated) }}，其余留给系统提示、当前消息、工具结果与输出
+            </span>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="budget-bar" role="img" :aria-label="`四层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
+            <span
+              v-for="segment in contextBudgetSegments"
+              :key="segment.key"
+              class="budget-slice"
+              :class="`budget-slice-${segment.key}`"
+              :style="{ width: `${segment.percent}%` }"
+              :title="`${segment.label} ${segment.tokens} token`"
+            ></span>
+            <span class="budget-slice budget-slice-headroom" :style="{ width: `${contextBudgetHeadroomPercent}%` }"></span>
+          </div>
+          <ul class="budget-legend">
+            <li v-for="layer in contextBudget.layers" :key="layer.key">
+              <span class="budget-dot" :class="`budget-slice-${layer.key}`" aria-hidden="true"></span>
+              <span class="budget-legend-label">{{ layer.label }}</span>
+              <span class="budget-legend-value mono">{{ formatNumber(layer.tokens) }}</span>
+              <span class="budget-legend-foot">{{ contextBudgetLayerFoot(layer) }}</span>
+            </li>
+            <li>
+              <span class="budget-dot budget-slice-headroom" aria-hidden="true"></span>
+              <span class="budget-legend-label">留白</span>
+              <span class="budget-legend-value mono">{{ formatNumber(contextBudget.headroom) }}</span>
+              <span class="budget-legend-foot">系统提示 / 当前消息 / 工具结果 / 输出</span>
+            </li>
+          </ul>
         </div>
       </section>
 
@@ -314,6 +366,7 @@ import {
   Send,
   TimerReset,
   TriangleAlert,
+  Users,
   X
 } from "@lucide/vue";
 import {
@@ -325,7 +378,8 @@ import {
   type AssistantEventSubtask,
   type AssistantEventRange,
   type AssistantEventResultFilter,
-  type AssistantEventsResponse
+  type AssistantEventsResponse,
+  type AssistantContextBudgetLayer
 } from "../api";
 import { formatClock, formatNumber } from "../format";
 import { displayMessageText, displayChatIdentity } from "../message-display";
@@ -334,6 +388,7 @@ import { stream } from "../stream";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import StatCard from "../components/StatCard.vue";
+import AppSelect from "../components/AppSelect.vue";
 
 const rangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
   { value: "1h", label: "最近 1h" },
@@ -354,6 +409,7 @@ const resultOptions: Array<{ value: AssistantEventResultFilter; label: string }>
 
 const selectedRange = ref<AssistantEventRange>("24h");
 const selectedResult = ref<AssistantEventResultFilter>("all");
+const selectedGroup = ref("");
 const events = ref<AssistantEventDetail[]>([]);
 const response = ref<AssistantEventsResponse | null>(null);
 const page = ref(1);
@@ -524,6 +580,7 @@ async function load(reset: boolean): Promise<void> {
   const requestedPage = reset ? 1 : page.value;
   const requestedRange = selectedRange.value;
   const requestedResult = selectedResult.value;
+  const requestedGroup = selectedGroup.value;
   if (reset) {
     loading.value = true;
     page.value = 1;
@@ -532,7 +589,7 @@ async function load(reset: boolean): Promise<void> {
     loadingMore.value = true;
   }
   try {
-    const next = await getAssistantEvents(requestedRange, requestedResult, requestedPage, 50);
+    const next = await getAssistantEvents(requestedRange, requestedResult, requestedPage, 50, requestedGroup);
     if (generation !== loadGeneration) return;
     response.value = next;
     if (reset) {
@@ -568,6 +625,52 @@ function selectResult(value: AssistantEventResultFilter): void {
   events.value = [];
   response.value = null;
   void load(true);
+}
+
+function selectGroup(value: string): void {
+  if (selectedGroup.value === value) return;
+  selectedGroup.value = value;
+  events.value = [];
+  response.value = null;
+  void load(true);
+}
+
+// 群选项跟着时间范围走，只列这段时间里真有事件的群：机器人可能进了几十个群，
+// 绝大多数一条事件都没有，全列出来反而找不到要看的那个。
+const groupOptions = computed(() => {
+  const options = [{ value: "", label: "全部会话" }];
+  for (const group of response.value?.groups ?? []) {
+    options.push({ value: group.group_id, label: `群 ${group.group_id}（${formatNumber(group.events)}）` });
+  }
+  // 选中的群这一轮可能已经没有事件了（换了更短的时间范围），选项要留着，
+  // 否则下拉框显示空白、也没法切回去。
+  if (selectedGroup.value && !options.some((option) => option.value === selectedGroup.value)) {
+    options.push({ value: selectedGroup.value, label: `群 ${selectedGroup.value}（0）` });
+  }
+  return options;
+});
+
+const contextBudget = computed(() => response.value?.context_budget ?? null);
+
+// 每一层在整条窗口里占的宽度。留白单独算，它是「没有分配出去」的部分。
+const contextBudgetSegments = computed(() => {
+  const budget = contextBudget.value;
+  if (!budget || budget.context_window <= 0) return [];
+  return budget.layers.map((layer) => ({
+    ...layer,
+    percent: (layer.tokens / budget.context_window) * 100
+  }));
+});
+
+const contextBudgetHeadroomPercent = computed(() => {
+  const budget = contextBudget.value;
+  if (!budget || budget.context_window <= 0) return 0;
+  return (budget.headroom / budget.context_window) * 100;
+});
+
+function contextBudgetLayerFoot(layer: AssistantContextBudgetLayer): string {
+  const rule = layer.capped_by_ceiling ? `上限 ${formatNumber(layer.ceiling)}` : `窗口 ${layer.share_percent}%`;
+  return layer.configurable ? `${rule} · 可配` : rule;
 }
 
 function eventKindLabel(kind: string): string {
@@ -849,7 +952,7 @@ async function syncLiveEvents(): Promise<void> {
     return;
   }
   try {
-    const next = await getAssistantEvents(selectedRange.value, selectedResult.value, 1, 50);
+    const next = await getAssistantEvents(selectedRange.value, selectedResult.value, 1, 50, selectedGroup.value);
     if (currentView.value !== "events" || isReadingBelowTop()) {
       pendingLiveEvents.value = true;
       return;
@@ -917,6 +1020,94 @@ onBeforeUnmount(() => {
   color: var(--muted);
   font-size: 13px;
   white-space: nowrap;
+}
+
+.event-group-filter {
+  min-width: 220px;
+  max-width: 320px;
+}
+
+/* 四层是同一份窗口切出来的有序片段，不是互不相干的分类，所以用主题色的一条
+   明度梯度，而不是四种色相：既表达了「同一个整体」，也不会跟四套可选主题色
+   里的任何一种撞车。留白用中性色，它不属于任何一层。 */
+.budget-bar {
+  display: flex;
+  width: 100%;
+  height: 22px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.budget-slice {
+  display: block;
+  height: 100%;
+  /* 大窗口下常驻记忆只占 0.5%，不给最小宽度就是一条看不见的缝。 */
+  min-width: 3px;
+}
+
+.budget-slice-recent_history {
+  background: var(--accent);
+}
+
+.budget-slice-session_thread {
+  background: color-mix(in srgb, var(--accent) 62%, transparent);
+}
+
+.budget-slice-retrieved_memory {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.budget-slice-core_memory {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.budget-slice-headroom {
+  background: transparent;
+  min-width: 0;
+}
+
+.budget-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px 18px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.budget-legend li {
+  display: grid;
+  grid-template-columns: 10px auto 1fr;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.budget-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  align-self: center;
+}
+
+.budget-dot.budget-slice-headroom {
+  background: var(--surface-2);
+}
+
+.budget-legend-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.budget-legend-value {
+  justify-self: end;
+  font-size: 13px;
+}
+
+.budget-legend-foot {
+  grid-column: 2 / -1;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .event-range,

@@ -124,7 +124,7 @@
     </Modal>
 
     <!-- 编辑弹窗 -->
-    <Modal v-if="editorOpen" :title="editingID ? '编辑配置' : '新建配置'" wide @close="editorOpen = false">
+    <Modal v-if="editorOpen" :title="editingID ? '编辑配置' : '新建配置'" wide @close="closeEditor">
       <div class="form-grid">
         <div class="field">
           <label for="llm-name">名称</label>
@@ -300,7 +300,7 @@
         </div>
       </div>
       <template #footer>
-        <button class="btn ghost" type="button" @click="editorOpen = false">取消</button>
+        <button class="btn ghost" type="button" @click="closeEditor">取消</button>
         <button class="btn primary" type="button" :disabled="busy" @click="save">
           <Save :size="15" aria-hidden="true" />
           保存
@@ -648,6 +648,18 @@ function formToPayload(): LLMConfig {
   return payload;
 }
 
+// closeEditor 关闭编辑弹窗，并把「正在编辑哪一条」一起复位。
+//
+// 列表项的绿色边框绑的是 editingID：它表达的是「这条正在编辑中」。以前三个关闭
+// 路径（保存成功、取消、右上角叉）都只把 editorOpen 置 false，editingID 留在原地，
+// 于是编辑过的那条会一直亮着边框，直到点「新建配置」或刷新页面。更糟的是这个
+// 高亮很容易被读成「当前启用的是这套」——那是完全不同的意思。
+function closeEditor(): void {
+  editorOpen.value = false;
+  editingID.value = undefined;
+  editingProfile.value = null;
+}
+
 async function save(): Promise<void> {
   if (!form.value.model.trim()) {
     const resolved = await loadModels(true);
@@ -658,7 +670,7 @@ async function save(): Promise<void> {
     const editingProfileID = editingID.value;
     const saved = await saveConfig(formToPayload());
     profileSet.value = saved;
-    editorOpen.value = false;
+    closeEditor();
     const savedProfile =
       saved.profiles?.find((profile) => profile.id === editingProfileID) ??
       saved.profiles?.find((profile) => profile.id === saved.active_profile_id) ??
