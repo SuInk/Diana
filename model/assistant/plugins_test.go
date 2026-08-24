@@ -713,51 +713,55 @@ func (c *fileResolveChannel) CallAPI(_ context.Context, action string, _ map[str
 	return map[string]any{"file": c.filePath}, nil
 }
 
-// TestDianaLLMConfigToolUpdatesProviderAndModel verifies a structured owner update.
-func TestDianaLLMConfigToolUpdatesProviderAndModel(t *testing.T) {
-	store := &stubLLMProfileStore{
-		set: llm.ProfileSet{
-			ActiveID: "main",
-			Profiles: []llm.Profile{
-				{
-					ID:   "main",
-					Name: "主配置",
-					Config: llm.ProviderConfig{
-						Provider: llm.ProviderOpenAICompatible,
-						APIKey:   "valid-key",
-						Model:    "example-chat-model",
-					},
-				},
-			},
+// 聊天里换模型改的是机器人的对话模型分配，不是 LLM provider 配置。
+func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{
+			{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, APIKey: "valid-key", Model: "example-chat-model",
+				Models: []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "example-pro-model"}},
+			}},
 		},
-	}
+	}}
 	logs := &captureAppLogs{}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	saver := &restoredConfigSaver{}
+	runtime := NewRuntime(BotConfig{
+		OwnerID:    "10001",
+		ModelRoles: map[string]ModelRole{"chat": {ProfileID: "main", Model: "example-chat-model"}},
+	}, nilChannel{}, NewPluginManager(), store, nil, saver, nil)
 	runtime.SetAppLogWriter(logs)
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
-		return []llm.ModelInfo{{ID: "gemini-2.5-pro", ContextWindowTokens: 200000, MaxOutputTokens: 8192}}, nil
+		return []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "example-pro-model", MaxOutputTokens: 8192}}, nil
 	})
-	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002"}).Run(context.Background(), map[string]any{
-		"operation": "update", "provider": "gemini", "model": "gemini-2.5-pro",
-	})
+
+	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002"}).Run(
+		context.Background(), map[string]any{"operation": "update", "model": "example-pro-model"})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !strings.Contains(output, "已更新当前 LLM") {
+	if !strings.Contains(output, "已把对话模型换成 example-pro-model") {
 		t.Fatalf("output = %q", output)
 	}
-	got := store.Current()
-	if got.Provider != llm.ProviderGemini || got.Model != "gemini-2.5-pro" {
-		t.Fatalf("current = %#v", got)
+	// 这才是真正决定机器人用什么模型的地方。
+	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	if roles["chat"].Model != "example-pro-model" || roles["chat"].ProfileID != "main" {
+		t.Fatalf("chat role = %#v", roles["chat"])
 	}
-	// 换模型不再把目录返回的窗口写进配置：写进去就等于把某一刻的第三方数据固定成
-	// 用户设置，换下一个模型时不跟着变。窗口按当前模型现算即可。
-	if got.ContextWindowTokens != 0 || got.MaxContextTokens != 0 {
-		t.Fatalf("model switch persisted a catalog window: %#v", got)
+	if saver.calls != 1 {
+		t.Fatalf("机器人配置没有落盘，重启就丢了: calls=%d", saver.calls)
 	}
-	// 清单跟着这次校验一起刷新，窗口就按清单里这个模型的真实值算。
-	if window := got.ContextWindowTokensWithDefault(); window != 200000 {
-		t.Fatalf("resolved window = %d, want the model list value", window)
+	// LLM provider 配置归 WebUI，聊天里不动它。
+	if got := store.Current(); got.Model != "example-chat-model" {
+		t.Fatalf("provider config was rewritten: %#v", got)
+	}
+	// 换完之后实际生效的就是新模型——旧实现在这里仍然是旧模型。
+	profiles, err := runtime.roleBoundProfiles(store.Profiles().WithDefaults(), llm.GroupChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].Config.Model != "example-pro-model" {
+		t.Fatalf("对话实际使用的模型没有跟着换: %#v", profiles)
 	}
 	if len(logs.entries) != 1 {
 		t.Fatalf("logs = %#v", logs.entries)
@@ -765,8 +769,63 @@ func TestDianaLLMConfigToolUpdatesProviderAndModel(t *testing.T) {
 	if logs.entries[0].Kind != applog.KindOperation || logs.entries[0].Actor != "qq:10001" {
 		t.Fatalf("log entry = %#v", logs.entries[0])
 	}
-	if logs.entries[0].Metadata["group_id"] != "20002" || logs.entries[0].Metadata["new_model"] != "gemini-2.5-pro" {
+	if logs.entries[0].Metadata["group_id"] != "20002" || logs.entries[0].Metadata["new_model"] != "example-pro-model" {
 		t.Fatalf("log metadata = %#v", logs.entries[0].Metadata)
+	}
+}
+
+// 切到一个 WebUI 里根本没配过的 provider 时要明确拒绝：provider 不是一个枚举值，
+// 换家就得换地址和密钥，把当前配置的 provider 字段改掉只会得到一套连不上的配置。
+func TestDianaLLMConfigToolRefusesUnconfiguredProvider(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
+			Provider: llm.ProviderOpenAICompatible, APIKey: "valid-key", Model: "example-chat-model",
+		}}},
+	}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
+	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		return []llm.ModelInfo{{ID: "gemini-2.5-pro"}}, nil
+	})
+	_, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+		context.Background(), map[string]any{"operation": "update", "provider": "gemini", "model": "gemini-2.5-pro"})
+	if err == nil || !strings.Contains(err.Error(), "没有配置 gemini 的 provider") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := store.Current(); got.Provider != llm.ProviderOpenAICompatible || got.Model != "example-chat-model" {
+		t.Fatalf("被拒绝的切换不该改动任何配置: %#v", got)
+	}
+}
+
+// 只报模型名时，如果它挂在另一套配置下，绑定要跟着换过去。
+func TestDianaLLMConfigToolFollowsModelToItsProfile(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{
+			{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, APIKey: "k1", Model: "chat-model",
+				Models: []llm.ModelInfo{{ID: "chat-model"}},
+			}},
+			{ID: "claude", Name: "Claude 配置", Config: llm.ProviderConfig{
+				Provider: llm.ProviderAnthropic, APIKey: "k2", Model: "claude-sonnet",
+				Models: []llm.ModelInfo{{ID: "claude-sonnet"}},
+			}},
+		},
+	}}
+	runtime := NewRuntime(BotConfig{
+		OwnerID:    "10001",
+		ModelRoles: map[string]ModelRole{"chat": {ProfileID: "main", Model: "chat-model"}},
+	}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
+	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		return []llm.ModelInfo{{ID: "claude-sonnet"}}, nil
+	})
+	if _, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+		context.Background(), map[string]any{"operation": "update", "model": "claude-sonnet"}); err != nil {
+		t.Fatal(err)
+	}
+	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	if roles["chat"].ProfileID != "claude" || roles["chat"].Model != "claude-sonnet" {
+		t.Fatalf("chat role = %#v", roles["chat"])
 	}
 }
 
