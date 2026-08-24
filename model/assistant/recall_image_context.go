@@ -256,7 +256,7 @@ func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
 			jobEvent := sourceEvent
 			jobEvent.Segments = []MessageSegment{segment}
 			jobEvent.Quoted = nil
-			go r.runHistoryImageDescription(jobEvent, hash, source)
+			go r.runHistoryImageDescription(jobEvent, sourceEvent, hash, source)
 		}
 	}
 }
@@ -317,7 +317,7 @@ func (r *Runtime) reserveHistoryImageDescription(hash string) bool {
 	return true
 }
 
-func (r *Runtime) runHistoryImageDescription(event MessageEvent, hash, source string) {
+func (r *Runtime) runHistoryImageDescription(event, indexEvent MessageEvent, hash, source string) {
 	ctx := context.Background()
 	r.mu.RLock()
 	runtimeCtx := r.runCtx
@@ -338,6 +338,9 @@ func (r *Runtime) runHistoryImageDescription(event MessageEvent, hash, source st
 			err = loadErr
 		} else if found && strings.TrimSpace(record.Description) != "" {
 			r.markHistoryImageDescriptionReady(hash)
+			// 描述早就生成过（同一张表情包、或升级前留下的记录），但这条消息的
+			// 检索文本可能还是空的：顺手补上，老历史才搜得到。
+			r.refreshMessageImageSearchText(ctx, indexEvent)
 		} else {
 			var description string
 			description, err = r.describeRecallImage(ctx, event, source)
@@ -352,6 +355,7 @@ func (r *Runtime) runHistoryImageDescription(event MessageEvent, hash, source st
 				})
 				if err == nil {
 					r.markHistoryImageDescriptionReady(hash)
+					r.refreshMessageImageSearchText(ctx, indexEvent)
 				}
 			}
 		}
@@ -369,6 +373,66 @@ func (r *Runtime) runHistoryImageDescription(event MessageEvent, hash, source st
 	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("chatbot history image description failed: message_id=%s err=%v", event.MessageID, err)
 	}
+}
+
+// refreshMessageImageSearchText 在图片描述生成之后，把描述补进这条消息的可检索
+// 文本，并重新排一次语义索引。
+//
+// 不这么做的话，纯图片消息在两条检索路径上都是隐形的：词面索引只收正文，语义
+// 索引因为正文为空连门槛都过不去。用户后来问「上次那张猫哈气的图」，检索一条
+// 都召不回——图早就在库里，只是没有任何一个字能被搜到。
+func (r *Runtime) refreshMessageImageSearchText(ctx context.Context, event MessageEvent) {
+	if r == nil || strings.TrimSpace(event.MessageID) == "" {
+		return
+	}
+	descriptions := r.messageImageDescriptionText(ctx, event)
+	if descriptions == "" {
+		return
+	}
+	r.mu.RLock()
+	store, _ := r.messageStore.(MessageSearchExtraStore)
+	r.mu.RUnlock()
+	if store != nil {
+		if err := store.SaveMessageSearchExtra(ctx, sessionKey(event), event.MessageID, descriptions); err != nil {
+			log.Printf("chatbot history image search text update failed: message_id=%s err=%v", event.MessageID, err)
+		}
+	}
+	r.enqueueSemanticIndex(event)
+}
+
+// messageImageDescriptionText 汇总一条消息里所有图片的描述，供检索使用。
+// 只读已经落库的描述，不触发新的视觉调用。
+func (r *Runtime) messageImageDescriptionText(ctx context.Context, event MessageEvent) string {
+	store := r.recallImageDescriptionStore()
+	segments := append([]MessageSegment(nil), event.Segments...)
+	if event.Quoted != nil {
+		segments = append(segments, event.Quoted.Segments...)
+	}
+	var parts []string
+	seen := map[string]bool{}
+	for _, segment := range segments {
+		if !recallStillImageSegment(segment) {
+			continue
+		}
+		description := strings.TrimSpace(segment.Data[recallImageDescriptionKey])
+		if description == "" && store != nil {
+			hash, ok := imageSegmentContentSHA256(segment)
+			if !ok {
+				continue
+			}
+			record, found, err := store.GetImageDescription(ctx, hash)
+			if err != nil || !found {
+				continue
+			}
+			description = strings.TrimSpace(record.Description)
+		}
+		if description == "" || seen[description] {
+			continue
+		}
+		seen[description] = true
+		parts = append(parts, compactRecallImageDescription(description))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func (r *Runtime) beginHistoryImageDescriptionForeground() {

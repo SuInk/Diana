@@ -327,7 +327,7 @@ func TestRunnerRequiresPendingStateAfterQueuedImage(t *testing.T) {
 	if resp.Text != "已经开始画啦，完成后会自动发出来。" || len(client.requests) != 3 || tool.calls != 1 {
 		t.Fatalf("resp=%#v requests=%d calls=%d", resp, len(client.requests), tool.calls)
 	}
-	if !strings.Contains(client.requests[2].Messages[len(client.requests[2].Messages)-1].Content, "final.task_state 必须是 pending") {
+	if !strings.Contains(client.requests[2].Messages[len(client.requests[2].Messages)-1].Content, "task_state 必须是 pending") {
 		t.Fatalf("repair prompt = %#v", client.requests[2].Messages)
 	}
 }
@@ -840,7 +840,7 @@ func TestRunnerUsesNativeToolCallsAndReturnsToolResult(t *testing.T) {
 	if response.Text != "native done" || tool.calls != 1 || len(client.requests) != 2 {
 		t.Fatalf("response=%#v calls=%d requests=%d", response, tool.calls, len(client.requests))
 	}
-	if len(client.requests[0].Tools) != 1 || client.requests[0].Tools[0].Name != "lookup" {
+	if len(client.requests[0].Tools) != 2 || client.requests[0].Tools[0].Name != "lookup" || client.requests[0].Tools[1].Name != finalizeToolName {
 		t.Fatalf("tools=%#v", client.requests[0].Tools)
 	}
 	messages := client.requests[1].Messages
@@ -849,5 +849,109 @@ func TestRunnerUsesNativeToolCallsAndReturnsToolResult(t *testing.T) {
 	}
 	if len(messages[len(messages)-2].ResponsesOutput) != 2 {
 		t.Fatalf("native Responses output history=%#v", messages[len(messages)-2].ResponsesOutput)
+	}
+}
+
+// nativeFinalizeClient answers with a tool call, then with prose plus a native
+// agent.finalize call, which is the shape providers produce when text and a
+// tool call share one turn.
+type nativeFinalizeClient struct {
+	requests []llm.GenerateRequest
+}
+
+func (c *nativeFinalizeClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if len(c.requests) == 1 {
+		return &llm.GenerateResponse{
+			ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "lookup", Arguments: map[string]any{"query": "Diana"}}},
+		}, nil
+	}
+	return &llm.GenerateResponse{
+		Text:      "文件内容是\n第二行「带引号」的正文",
+		ToolCalls: []llm.ToolCall{{ID: "call-2", Name: finalizeToolName, Arguments: map[string]any{}}},
+	}, nil
+}
+
+func TestRunnerTakesFinalReplyFromTextWhenFinalizeCarriesNoContent(t *testing.T) {
+	client := &nativeFinalizeClient{}
+	tool := &countingTool{name: "lookup"}
+	runner, err := NewRunner(client, Config{MaxSteps: 3}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "look it up"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Text != "文件内容是\n第二行「带引号」的正文" || response.FinishReason != "final" {
+		t.Fatalf("response=%#v", response)
+	}
+	if tool.calls != 1 || len(client.requests) != 2 {
+		t.Fatalf("calls=%d requests=%d", tool.calls, len(client.requests))
+	}
+}
+
+// nativeBudgetClient never finishes on its own, so the run reaches the reserved
+// finalization turn after the tool budget is exhausted.
+type nativeBudgetClient struct {
+	requests []llm.GenerateRequest
+}
+
+func (c *nativeBudgetClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if len(c.requests) == 1 {
+		return &llm.GenerateResponse{
+			ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "lookup", Arguments: map[string]any{"query": "Diana"}}},
+		}, nil
+	}
+	return &llm.GenerateResponse{
+		ToolCalls: []llm.ToolCall{{ID: "call-2", Name: finalizeToolName, Arguments: map[string]any{"content": "已经查到了。"}}},
+	}, nil
+}
+
+func TestRunnerForcesFinalizeToolOnFinalizationTurn(t *testing.T) {
+	client := &nativeBudgetClient{}
+	tool := &countingTool{name: "lookup"}
+	runner, err := NewRunner(client, Config{MaxSteps: 1}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "look it up"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Text != "已经查到了。" || response.FinishReason != "tool_budget_exhausted" {
+		t.Fatalf("response=%#v", response)
+	}
+	finalization := client.requests[len(client.requests)-1]
+	if finalization.ToolChoice != finalizeToolName || len(finalization.Tools) != 1 || finalization.Tools[0].Name != finalizeToolName {
+		t.Fatalf("finalization request=%#v", finalization)
+	}
+}
+
+func TestRunnerMarksCacheBreakpointsAroundVolatilePrefix(t *testing.T) {
+	client := &scriptedClient{responses: []string{`{"action":"final","content":"好的"}`}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "第一轮"},
+		{Role: llm.RoleAssistant, Content: "第一轮回复"},
+		{Role: llm.RoleUser, Content: "第二轮"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	messages := client.requests[0].Messages
+	var marked []string
+	for _, message := range messages {
+		if message.CacheBreakpoint {
+			marked = append(marked, message.Content)
+		}
+	}
+	// The stable prefix ends at the settled history; the moving breakpoint sits
+	// on the newest message so the next turn reads this turn's cached prefix.
+	if len(marked) != 2 || marked[0] != "第一轮回复" || marked[1] != "第二轮" {
+		t.Fatalf("cache breakpoints=%#v", marked)
 	}
 }

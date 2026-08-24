@@ -279,7 +279,11 @@ func (t *SkillsListTool) Name() string {
 }
 
 func (t *SkillsListTool) Description() string {
-	return `列出可用的内置或本地 SKILL.md skills。input: {}`
+	return `列出可用的内置或本地 SKILL.md skills。`
+}
+
+func (t *SkillsListTool) InputSchema() map[string]any {
+	return toolEmptySchema()
 }
 
 func (t *SkillsListTool) Run(context.Context, map[string]any) (string, error) {
@@ -299,7 +303,13 @@ func (t *SkillsReadTool) Name() string {
 }
 
 func (t *SkillsReadTool) Description() string {
-	return `读取某个 skill 的完整 SKILL.md。input: {"name":"skill 名称"}`
+	return `读取某个 skill 的完整 SKILL.md。`
+}
+
+func (t *SkillsReadTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"name"}, map[string]any{
+		"name": toolStringParam("skill 名称"),
+	})
 }
 
 func (t *SkillsReadTool) Run(_ context.Context, input map[string]any) (string, error) {
