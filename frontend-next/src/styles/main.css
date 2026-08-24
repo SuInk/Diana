@@ -715,6 +715,14 @@ code {
   border-color: var(--err, #d94848);
 }
 
+/* 多机器人作用域切换器：紧跟在品牌区下面，和导航之间留一道分隔，表明它管的是
+   「看哪台机器人」，不是又一个页面入口。 */
+.bot-scope {
+  padding: 0 4px 10px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
 /* 导航 */
 .nav-sections {
   display: flex;
