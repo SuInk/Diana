@@ -157,6 +157,71 @@ func TestDianaImageAgentToolEnforcesRelationshipPermissions(t *testing.T) {
 	}
 }
 
+// 用户只说了「生成图片」，模型没有别的可回时，开场白就是这一轮的回复——
+// 而不是「我这边没有生成有效回复」，更不是一条都不发。
+func TestImageAnnouncementBecomesReplyWhenModelSaysNothing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/media" {
+			writeTestPNG(w)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"YWdlbnQtaW1hZ2U="}]}`))
+	}))
+	defer server.Close()
+
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"action":"none","prompt":""}`,
+		`{"action":"tool","tool":"diana.image","input":{"operation":"generate","prompt":"一只在窗台上打盹的猫"}}`,
+		`{"action":"final","task_state":"pending","content":""}`,
+	}}
+	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
+		Provider:   llm.ProviderOpenAICompatible,
+		APIKey:     "secret",
+		BaseURL:    server.URL + "/v1",
+		Model:      "gpt-test",
+		ImageModel: "gpt-image-2",
+	})}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{
+		OwnerID:       "owner",
+		AgentEnabled:  true,
+		AgentMaxSteps: 4,
+	}, channel, NewPluginManager(), store, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMediaStore(mediaStore(t))
+	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: server.URL + "/media"})
+	event := MessageEvent{
+		Kind:       EventKindPrivate,
+		UserID:     "owner",
+		MessageID:  "image-only",
+		RawMessage: "生成图片",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "生成图片"}}},
+	}
+
+	reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply, "开始生成图片") {
+		t.Fatalf("reply = %q", reply)
+	}
+	waitForCondition(t, 2*time.Second, func() bool {
+		return runtime.activeSubagentTaskCount() == 0
+	})
+	sent := channel.sentSnapshot()
+	texts := 0
+	for _, message := range sent {
+		if len(message.ImageURLs) == 0 {
+			texts++
+		}
+	}
+	if texts != 1 {
+		t.Fatalf("发图前的文字应当恰好一条: %#v", sent)
+	}
+}
+
 func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	var submittedPrompt string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -243,11 +308,15 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 		t.Fatalf("reply = %q", reply)
 	}
 	sent := channel.sentSnapshot()
-	if len(sent) != 3 {
+	// 发图之前只该有一条文字。模型自己交代了这一轮，运行时的开场白就不再补发——
+	// 以前两条都发，用户连着看到两句几乎一样的话。
+	if len(sent) != 2 {
 		t.Fatalf("sent = %#v", sent)
 	}
-	if !strings.Contains(sent[0].Text, "开始生成图片") || strings.Contains(sent[0].Text, "任务编号") {
-		t.Fatalf("start announcement = %#v", sent[0])
+	for _, message := range sent {
+		if strings.Contains(message.Text, "开始生成图片") {
+			t.Fatalf("模型已经说过了，不该再补一条开场白: %#v", sent)
+		}
 	}
 	textFound := false
 	imageFound := false
