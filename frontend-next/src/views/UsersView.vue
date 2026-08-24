@@ -16,6 +16,8 @@
       </div>
     </header>
 
+    <BotScopeNotice subject="人员画像与长期记忆" />
+
     <section class="card">
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px">
@@ -124,6 +126,7 @@
 </template>
 
 <script setup lang="ts">
+import BotScopeNotice from "../components/BotScopeNotice.vue";
 import { computed, onMounted, ref } from "vue";
 import { ChevronRight, RefreshCw } from "@lucide/vue";
 import {

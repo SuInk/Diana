@@ -1410,10 +1410,12 @@ export function getAssistantEvents(
   result: AssistantEventResultFilter = "all",
   page = 1,
   limit = 50,
-  group = ""
+  group = "",
+  profile = ""
 ): Promise<AssistantEventsResponse> {
   const params = new URLSearchParams({ range, result, page: String(page), limit: String(limit) });
   if (group) params.set("group", group);
+  if (profile) params.set("profile", profile);
   return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
 }
 

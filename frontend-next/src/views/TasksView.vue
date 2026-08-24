@@ -204,7 +204,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { botScope, matchesBotScope } from "../bot-scope";
 import {
   Bell,
   CalendarClock,
@@ -259,6 +260,11 @@ const statusOptions: Array<{ value: StatusFilter; label: string }> = [
 ];
 
 const tasks = ref<AssistantTask[]>([]);
+
+// 换了机器人重新拉一次，顺带把运行状态也刷新到最新。
+watch(botScope, () => {
+  void load();
+});
 const kind = ref<KindFilter>("all");
 const status = ref<StatusFilter>("all");
 const query = ref("");
@@ -328,7 +334,8 @@ async function load(opts?: { silent?: boolean }): Promise<void> {
       getAssistantTasks(),
       getBotStatus().catch(() => null)
     ]);
-    tasks.value = response.items;
+    // 任务接口一次返回全部，按当前机器人作用域在前端筛：没有分页，不会漏。
+    tasks.value = response.items.filter((task) => matchesBotScope(task.profile_id));
     subagentTasks.value = status?.subagent_tasks ?? [];
     lastLoadedAt.value = new Date().toISOString();
   } catch (error) {
