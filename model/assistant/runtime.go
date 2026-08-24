@@ -3118,8 +3118,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// handles long replies with chunks or merged forwards.
 		replyCfg.MaxReplyChars = 0
 	}
+	// 图片开场白攒在这一轮里：模型自己说了就用模型那句，什么都没说才拿它兜底，
+	// 保证发图前只出现一条文字（见 image_announcement.go）。
+	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
 	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
+		if pending := imageAnnouncements.drain(); pending != "" {
+			// 生成失败也要让用户知道图在画：任务已经受理了。
+			if sendErr := r.send(ctx, event, pending); sendErr != nil {
+				log.Printf("chatbot image announcement fallback failed: %v", sendErr)
+			}
+		}
 		return "", err
 	}
 	// Agent 在循环里读过撤回记录时，把同一个 PluginResponse 合并回本轮：转发卡片、
@@ -3141,6 +3150,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			reply = "为避免继续自动循环，我会暂停响应此账号约 30 分钟。"
 		} else if controlIntent.RefuseCurrent {
 			reply = "这条消息我暂时不想回答，我们换个话题吧。"
+		} else if pending := imageAnnouncements.drain(); pending != "" {
+			// 用户这条消息只是要图，模型没有别的可说——开场白就是这一轮的回复。
+			reply = pending
 		} else {
 			reply = "我这边没有生成有效回复。"
 		}
