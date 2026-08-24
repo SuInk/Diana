@@ -1476,16 +1476,20 @@ export interface AssistantUserDetailResponse {
   favorability_changes: UserFavorabilityChange[];
 }
 
-export function listAssistantUsers(query = "", limit = 50, offset = 0): Promise<AssistantUsersResponse> {
+export function listAssistantUsers(query = "", limit = 50, offset = 0, profile = ""): Promise<AssistantUsersResponse> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (query) {
     params.set("q", query);
   }
+  if (profile) {
+    params.set("profile", profile);
+  }
   return requestJSON<AssistantUsersResponse>(`/api/assistant/users?${params.toString()}`);
 }
 
-export function getAssistantUser(userID: string): Promise<AssistantUserDetailResponse> {
-  return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}`);
+export function getAssistantUser(userID: string, profile = ""): Promise<AssistantUserDetailResponse> {
+  const suffix = profile ? `?profile=${encodeURIComponent(profile)}` : "";
+  return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}${suffix}`);
 }
 
 export interface GlossaryRevision {
