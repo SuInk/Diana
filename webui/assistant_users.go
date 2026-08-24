@@ -40,7 +40,7 @@ func (h *BotHandler) listAssistantUsers(c *gin.Context) {
 	query := strings.TrimSpace(c.Query("q"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	profiles, total, err := h.sqlite.ListUserMemories(c.Request.Context(), query, limit, offset)
+	profiles, total, err := h.sqlite.ListUserMemories(c.Request.Context(), botProfileScope(c), query, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -68,7 +68,7 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 		return
 	}
 	userID := strings.TrimSpace(c.Param("id"))
-	profile, found, err := h.sqlite.GetUserMemory(c.Request.Context(), userID)
+	profile, found, err := h.sqlite.GetUserMemory(c.Request.Context(), botProfileScope(c), userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -77,7 +77,7 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "人员不存在或还没有画像记录"})
 		return
 	}
-	changes, err := h.sqlite.ListUserFavorabilityChanges(c.Request.Context(), userID, 50)
+	changes, err := h.sqlite.ListUserFavorabilityChanges(c.Request.Context(), botProfileScope(c), userID, 50)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -92,4 +92,9 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 		Profile:             profile,
 		FavorabilityChanges: changes,
 	})
+}
+
+// botProfileScope 读控制台传来的机器人作用域。留空表示「全部机器人」。
+func botProfileScope(c *gin.Context) string {
+	return strings.TrimSpace(c.Query("profile"))
 }

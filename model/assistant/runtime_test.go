@@ -667,7 +667,7 @@ func TestRuntimeUpdatesUserMemoryForProactiveGroupMessage(t *testing.T) {
 	if err := runtime.HandleEvent(context.Background(), event); err != nil {
 		t.Fatalf("HandleEvent() error = %v", err)
 	}
-	profile, ok, err := store.GetUserMemory(context.Background(), "10001")
+	profile, ok, err := store.GetUserMemory(context.Background(), "", "10001")
 	if err != nil || !ok {
 		t.Fatalf("GetUserMemory() ok=%v err=%v", ok, err)
 	}
@@ -4760,7 +4760,7 @@ func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event Messag
 	return profile, nil
 }
 
-func (s *memoryUserMemoryStore) ListUserFavorabilityChanges(_ context.Context, userID string, limit int) ([]UserFavorabilityChange, error) {
+func (s *memoryUserMemoryStore) ListUserFavorabilityChanges(_ context.Context, _, userID string, limit int) ([]UserFavorabilityChange, error) {
 	changes := append([]UserFavorabilityChange(nil), s.favorabilityChanges[userID]...)
 	if limit > 0 && len(changes) > limit {
 		changes = changes[:limit]
@@ -4768,7 +4768,7 @@ func (s *memoryUserMemoryStore) ListUserFavorabilityChanges(_ context.Context, u
 	return changes, nil
 }
 
-func (s *memoryUserMemoryStore) GetUserMemory(_ context.Context, userID string) (UserMemoryProfile, bool, error) {
+func (s *memoryUserMemoryStore) GetUserMemory(_ context.Context, _, userID string) (UserMemoryProfile, bool, error) {
 	profile, ok := s.profiles[userID]
 	return profile, ok, nil
 }
