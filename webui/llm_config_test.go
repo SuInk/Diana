@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
 
 	"github.com/gin-gonic/gin"
@@ -728,7 +729,7 @@ func testRouter(handler *LLMConfigHandler) *gin.Engine {
 
 // 「模型默认填了 400k」的由来：WithDefaults 把推断出来的窗口写进配置对象，回显
 // 时就长得像用户自己填的；用户随手一保存，这个猜测就变成了真正的设置。
-// 回显必须只报用户填过的值，推断结果单独放在只读字段里。
+// 现在窗口只认手填，回显也必须只报用户填过的值。
 func TestLLMPayloadReportsOverridesSeparatelyFromEffectiveWindow(t *testing.T) {
 	payload := payloadFromConfig(llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible,
@@ -736,16 +737,16 @@ func TestLLMPayloadReportsOverridesSeparatelyFromEffectiveWindow(t *testing.T) {
 		Model:    "claude-sonnet-4-5",
 	})
 	if payload.ContextWindowTokens != nil || payload.MaxContextTokens != nil {
-		t.Fatalf("推断值被当成用户设置回显了: %v/%v", payload.ContextWindowTokens, payload.MaxContextTokens)
+		t.Fatalf("没填过的值不该回显成用户设置: %v/%v", payload.ContextWindowTokens, payload.MaxContextTokens)
 	}
-	if payload.EffectiveContextWindowTokens != 200000 || payload.EffectiveMaxContextTokens != 200000 {
-		t.Fatalf("effective = %d/%d", payload.EffectiveContextWindowTokens, payload.EffectiveMaxContextTokens)
+	if payload.EffectiveContextWindowTokens != llm.DefaultContextWindowTokens {
+		t.Fatalf("effective = %d", payload.EffectiveContextWindowTokens)
 	}
-	if payload.ContextWindowSource != llm.ContextWindowSourceInferred {
+	if payload.ContextWindowSource != llm.ContextWindowSourceFallback {
 		t.Fatalf("source = %q", payload.ContextWindowSource)
 	}
 
-	// 模型清单里有这个模型时按清单走，而且换模型会跟着变——窗口是模型的属性。
+	// 模型清单里的窗口只当参考值展示，不参与计算，也不因为换模型而变。
 	withList := llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible,
 		APIKey:   "sk-test",
@@ -756,12 +757,11 @@ func TestLLMPayloadReportsOverridesSeparatelyFromEffectiveWindow(t *testing.T) {
 		},
 	}
 	listed := payloadFromConfig(withList)
-	if listed.EffectiveContextWindowTokens != 65536 || listed.ContextWindowSource != llm.ContextWindowSourceModelList {
-		t.Fatalf("model list window = %d source %q", listed.EffectiveContextWindowTokens, listed.ContextWindowSource)
+	if listed.EffectiveContextWindowTokens != llm.DefaultContextWindowTokens {
+		t.Fatalf("清单窗口混进了生效值: %d", listed.EffectiveContextWindowTokens)
 	}
-	withList.Model = "house-model-mini"
-	if switched := payloadFromConfig(withList); switched.EffectiveContextWindowTokens != 8192 {
-		t.Fatalf("换模型后窗口没跟着变: %d", switched.EffectiveContextWindowTokens)
+	if listed.CatalogContextWindowTokens != 65536 {
+		t.Fatalf("参考值 = %d", listed.CatalogContextWindowTokens)
 	}
 
 	// 用户填过的值原样回显，并标明来源是用户。
@@ -802,5 +802,90 @@ func TestLLMPayloadDistinguishesClearedFromUnsubmitted(t *testing.T) {
 	kept := mergeUnsubmittedLLMConfig(untouched, configFromPayload(untouched), existing)
 	if kept.ContextWindowTokens != 32768 || kept.MaxContextTokens != 16384 {
 		t.Fatalf("没提交的字段应当保留旧值: %d/%d", kept.ContextWindowTokens, kept.MaxContextTokens)
+	}
+}
+
+type stubBotProfileSource struct {
+	set assistant.ProfileSet
+}
+
+func (s stubBotProfileSource) Profiles() assistant.ProfileSet { return s.set }
+
+// 窗口是配置级的，所以这一页只报一个数；但要说清楚这套配置正被谁的哪个用途、
+// 按哪个模型使用——改它会一起影响它们。
+func TestLLMPayloadListsModelRoleBindings(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model"})
+	if err := store.SaveProfiles(llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{
+			{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model",
+				Models: []llm.ModelInfo{
+					{ID: "big-model", ContextWindowTokens: 400000},
+					{ID: "small-model", ContextWindowTokens: 32000},
+				},
+			}},
+			{ID: "vision", Name: "视觉配置", Group: "vision", Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "see-model",
+				Models: []llm.ModelInfo{{ID: "see-model", ContextWindowTokens: 128000}},
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewLLMConfigHandler(store)
+	handler.SetBotProfileSource(stubBotProfileSource{set: assistant.ProfileSet{
+		Profiles: []assistant.BotConfig{{
+			ID: "bot-1", Name: "Diana",
+			ModelRoles: map[string]assistant.ModelRole{
+				// 对话按配置直接绑定，而且选的不是这套配置的默认模型。
+				"chat": {ProfileID: "main", Model: "small-model"},
+				// 视觉理解按分组绑定。
+				"vision": {Group: "vision", Model: "see-model"},
+			},
+		}},
+	}})
+
+	payload := handler.profileSetPayload(handler.store.Profiles())
+	main := payload.Profiles[0]
+	if main.ID != "main" {
+		t.Fatalf("unexpected profile order: %+v", payload.Profiles)
+	}
+	// 没手填过窗口，生效值就是兜底常量；清单里的 400000 只作参考值。
+	if main.EffectiveContextWindowTokens != llm.DefaultContextWindowTokens {
+		t.Fatalf("effective window = %d", main.EffectiveContextWindowTokens)
+	}
+	if main.CatalogContextWindowTokens != 400000 {
+		t.Fatalf("catalog reference = %d", main.CatalogContextWindowTokens)
+	}
+	if len(main.RoleBindings) != 1 {
+		t.Fatalf("role bindings = %+v", main.RoleBindings)
+	}
+	binding := main.RoleBindings[0]
+	if binding.Role != "chat" || binding.RoleLabel != "对话" || binding.BotName != "Diana" {
+		t.Fatalf("binding = %+v", binding)
+	}
+	// 报的是这个用途实际绑定的模型，不是配置的默认模型。
+	if binding.Model != "small-model" {
+		t.Fatalf("binding = %+v", binding)
+	}
+
+	vision := payload.Profiles[1]
+	if len(vision.RoleBindings) != 1 || vision.RoleBindings[0].Role != "vision" {
+		t.Fatalf("group binding = %+v", vision.RoleBindings)
+	}
+	if vision.RoleBindings[0].Model != "see-model" {
+		t.Fatalf("group binding = %+v", vision.RoleBindings[0])
+	}
+}
+
+// 没有注入机器人配置集时不编造引用关系。
+func TestLLMPayloadWithoutBotSourceHasNoBindings(t *testing.T) {
+	handler := NewLLMConfigHandler(NewMemoryLLMProfileStore(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model",
+	}))
+	payload := handler.profileSetPayload(handler.store.Profiles())
+	if len(payload.Profiles[0].RoleBindings) != 0 {
+		t.Fatalf("bindings = %+v", payload.Profiles[0].RoleBindings)
 	}
 }

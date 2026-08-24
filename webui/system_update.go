@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/updater"
 
 	"github.com/gin-gonic/gin"
@@ -227,16 +228,39 @@ func (h *SystemUpdateHandler) status(c *gin.Context) {
 }
 
 // check 始终以最新稳定 GitHub Release 判断版本；Git 只负责源码状态和安装传输。
+// releaseCheckFailure 记录一次检查失败该用哪个 HTTP 状态码回应。聊天里的
+// diana.version 用不上状态码，只看错误本身。
+type releaseCheckFailure struct {
+	status int
+	err    error
+	// updateError 表示要走 writeUpdateError 的分类逻辑，而不是直接写状态码。
+	updateError bool
+}
+
 func (h *SystemUpdateHandler) check(c *gin.Context) {
-	status, statusErr := h.updater.Status(c.Request.Context())
+	response, failure := h.runReleaseCheck(c.Request.Context())
+	if failure != nil {
+		if failure.updateError {
+			h.writeUpdateError(c, "system.update.check", failure.err)
+			return
+		}
+		writeError(c, failure.status, failure.err)
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+// runReleaseCheck 汇总「当前什么版本、最新什么版本、能不能升」这一组结论。
+// HTTP 接口和聊天里的 diana.version 共用同一份判断，免得两处各写一套然后慢慢漂移。
+func (h *SystemUpdateHandler) runReleaseCheck(requestCtx context.Context) (systemUpdateCheckResponse, *releaseCheckFailure) {
+	status, statusErr := h.updater.Status(requestCtx)
 	releaseAvailable := h.releaseUpdater != nil && h.releaseUpdater.Supported()
 	gitAvailable := !releaseAvailable && statusErr == nil && status.RemoteURL != ""
 	if gitAvailable {
 		var err error
-		status, err = h.updater.Check(c.Request.Context())
+		status, err = h.updater.Check(requestCtx)
 		if err != nil {
-			h.writeUpdateError(c, "system.update.check", err)
-			return
+			return systemUpdateCheckResponse{}, &releaseCheckFailure{err: err, updateError: true}
 		}
 	}
 
@@ -244,10 +268,9 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 	if gitAvailable {
 		remoteURL = status.RemoteURL
 	}
-	latest, err := h.latestStableRelease(c.Request.Context(), remoteURL)
+	latest, err := h.latestStableRelease(requestCtx, remoteURL)
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err)
-		return
+		return systemUpdateCheckResponse{}, &releaseCheckFailure{status: http.StatusBadGateway, err: err}
 	}
 	current := strings.TrimSpace(h.buildVersion)
 	mode := "release"
@@ -259,7 +282,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 		integrity = "git-object-hash"
 		gitStatus = &status
 	} else if releaseAvailable {
-		if packageStatus, packageErr := h.releaseUpdater.Status(c.Request.Context()); packageErr == nil {
+		if packageStatus, packageErr := h.releaseUpdater.Status(requestCtx); packageErr == nil {
 			status = packageStatus
 			if value := packageStatus.VersionLabel(); value != "" {
 				current = value
@@ -273,8 +296,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 	}
 	updateAvailable, versionErr := updateAvailableAgainst(current, latest.Tag)
 	if versionErr != nil {
-		writeError(c, http.StatusInternalServerError, versionErr)
-		return
+		return systemUpdateCheckResponse{}, &releaseCheckFailure{status: http.StatusInternalServerError, err: versionErr}
 	}
 	support := h.releaseUpdateSupport(gitAvailable, packageReady, statusErr == nil && status.Root != "")
 	// 源码构建不提示更新，避免把用户自己编译的版本当成落后版本自动换掉；
@@ -289,7 +311,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 	if !latest.Date.IsZero() {
 		latestPublishedAt = latest.Date.UTC().Format(time.RFC3339)
 	}
-	c.JSON(http.StatusOK, systemUpdateCheckResponse{
+	return systemUpdateCheckResponse{
 		DeploymentMode:    mode,
 		CurrentVersion:    current,
 		LatestVersion:     latest.Tag,
@@ -308,7 +330,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 		ChecksumURL:       latest.ChecksumURL,
 		Status:            gitStatus,
 		Policy:            h.currentPolicy(),
-	})
+	}, nil
 }
 
 func (h *SystemUpdateHandler) getPolicy(c *gin.Context) {
@@ -985,4 +1007,48 @@ func writeUpdateHTTPError(c *gin.Context, err error) {
 		return
 	}
 	writeError(c, http.StatusBadRequest, err)
+}
+
+// ReleaseStatus 让机器人在聊天里答得出「有没有新版本」。它复用 HTTP 检查那一套
+// 结论，判断逻辑（源码构建不提示更新、平台包缺失算不支持）只有一份。
+//
+// 实现 assistant.ReleaseStatusProvider。
+func (h *SystemUpdateHandler) ReleaseStatus(ctx context.Context) (assistant.ReleaseStatus, error) {
+	response, failure := h.runReleaseCheck(ctx)
+	if failure != nil {
+		return assistant.ReleaseStatus{}, failure.err
+	}
+	status := assistant.ReleaseStatus{
+		RepositoryURL:            h.repositoryURL(ctx),
+		DeploymentMode:           response.DeploymentMode,
+		CurrentVersion:           response.CurrentVersion,
+		LatestVersion:            response.LatestVersion,
+		UpdateAvailable:          response.UpdateAvailable,
+		UpdateSupported:          response.UpdateSupported,
+		UnsupportedReason:        response.UpdateUnsupportedReason,
+		SwitchToReleaseAvailable: response.SwitchToReleaseAvailable,
+	}
+	if publishedAt, err := time.Parse(time.RFC3339, response.LatestPublishedAt); err == nil {
+		status.LatestPublishedAt = publishedAt
+	}
+	if checkedAt, err := time.Parse(time.RFC3339, response.CheckedAt); err == nil {
+		status.CheckedAt = checkedAt
+	}
+	return status, nil
+}
+
+// repositoryURL 返回这个部署实际跟随的仓库地址：源码部署跟着 git 远端走，
+// 其余回落到官方仓库。机器人被问到「源码在哪」时用它，免得自己编一个链接。
+func (h *SystemUpdateHandler) repositoryURL(ctx context.Context) string {
+	remoteURL := ""
+	if h.updater != nil {
+		if status, err := h.updater.Status(ctx); err == nil {
+			remoteURL = status.RemoteURL
+		}
+	}
+	owner, repo, ok := githubRepoFromRemote(remoteURL)
+	if !ok {
+		owner, repo = defaultReleaseOwner, defaultReleaseRepo
+	}
+	return "https://github.com/" + owner + "/" + repo
 }
