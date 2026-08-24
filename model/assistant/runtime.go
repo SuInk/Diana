@@ -65,7 +65,7 @@ type ReminderStore interface {
 }
 
 type GroupConfigStore interface {
-	ConfigForGroup(groupID string) (GroupConfig, bool)
+	ConfigForGroup(botProfileID, groupID string) (GroupConfig, bool)
 }
 
 type GroupConfigWriter interface {
@@ -1130,7 +1130,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || r.groupConfigs == nil {
 		return cfg
 	}
-	groupCfg, ok := r.groupConfigs.ConfigForGroup(event.GroupID)
+	groupCfg, ok := r.groupConfigs.ConfigForGroup(strings.TrimSpace(event.ProfileID), event.GroupID)
 	if !ok {
 		return cfg
 	}
@@ -1184,7 +1184,7 @@ func (r *Runtime) groupConfigForEvent(event MessageEvent) (GroupConfig, bool) {
 	if store == nil {
 		return GroupConfig{}, false
 	}
-	groupCfg, ok := store.ConfigForGroup(event.GroupID)
+	groupCfg, ok := store.ConfigForGroup(strings.TrimSpace(event.ProfileID), event.GroupID)
 	if !ok {
 		return GroupConfig{}, false
 	}
@@ -1797,7 +1797,7 @@ func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
 	if event.Kind != EventKindGroup {
 		return false
 	}
-	if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(event.GroupID) {
+	if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 		return false
 	}
 	return r.replyGateAllows(cfg, event)
@@ -1810,7 +1810,7 @@ func (r *Runtime) shouldHandlePlugin(event MessageEvent, text string) bool {
 	if r.isUserDisabled(event.UserID) {
 		return false
 	}
-	if event.Kind == EventKindGroup && r.isGroupDisabled(event.GroupID) {
+	if event.Kind == EventKindGroup && r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 		return false
 	}
 	return r.plugins.ShouldHandleWithOverrides(event, text, r.pluginOverridesForEvent(event))
@@ -2642,7 +2642,7 @@ func (r *Runtime) shouldHandleResolver(event MessageEvent, text string) bool {
 	if r.isUserDisabled(event.UserID) {
 		return false
 	}
-	if event.Kind == EventKindGroup && r.isGroupDisabled(event.GroupID) {
+	if event.Kind == EventKindGroup && r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 		return false
 	}
 	return r.resolverEnabledForEvent(event) && hasKnownResolverPlatformURL(event, text)
@@ -8159,7 +8159,7 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if event.SubType != "group_increase" || event.GroupID == "" || event.UserID == "" {
 		return nil
 	}
-	if r.isGroupDisabled(event.GroupID) {
+	if r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 		return nil
 	}
 	// 只处理群成员增加通知，避免把其它 notice 类型误当作可回复消息。
@@ -10205,7 +10205,7 @@ func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent,
 		return
 	}
 	if event.Kind == EventKindGroup {
-		if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(event.GroupID) {
+		if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 			return
 		}
 	} else if event.Kind != EventKindPrivate {
@@ -10281,14 +10281,15 @@ func (r *Runtime) isBotOwnRecall(event MessageEvent) bool {
 	return botAccount != "" && event.UserID == botAccount && event.OperatorID == botAccount
 }
 
-// isGroupDisabled 判断群是否被禁用。
-func (r *Runtime) isGroupDisabled(groupID string) bool {
+// isGroupDisabled 判断这台机器人在这个群里是否被禁用。同一个群里两台机器人可以
+// 一台开一台关，所以必须带上是谁在问。
+func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
 	r.mu.RLock()
 	cfg := r.cfg.WithDefaults()
 	store := r.groupConfigs
 	r.mu.RUnlock()
 	if store != nil {
-		if groupCfg, ok := store.ConfigForGroup(groupID); ok && !groupCfg.WithDefaults(groupID, cfg).Enabled {
+		if groupCfg, ok := store.ConfigForGroup(botProfileID, groupID); ok && !groupCfg.WithDefaults(groupID, cfg).Enabled {
 			return true
 		}
 	}

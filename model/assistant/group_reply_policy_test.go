@@ -14,13 +14,13 @@ type testWritableGroupConfigStore struct {
 	set GroupConfigSet
 }
 
-func (s *testWritableGroupConfigStore) ConfigForGroup(groupID string) (GroupConfig, bool) {
-	return s.set.ConfigForGroup(groupID)
+func (s *testWritableGroupConfigStore) ConfigForGroup(botProfileID, groupID string) (GroupConfig, bool) {
+	return s.set.ConfigForGroup(botProfileID, groupID)
 }
 
 func (s *testWritableGroupConfigStore) SaveGroupConfig(cfg GroupConfig, base BotConfig) (GroupConfig, error) {
 	s.set = s.set.Upsert(cfg, base)
-	saved, _ := s.set.ConfigForGroup(cfg.GroupID)
+	saved, _ := s.set.ConfigForGroup(cfg.BotProfileID, cfg.GroupID)
 	return saved, nil
 }
 
@@ -192,7 +192,7 @@ func TestDianaOneBotGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	if result.OperatorRole != "bot_owner" || result.ReplyPolicy == nil || result.ReplyPolicy.MinimumReplyMemberLevel != 15 || !result.ReplyPolicy.NaturalInterjectionEnabled {
 		t.Fatalf("result = %#v", result)
 	}
-	saved, ok := store.ConfigForGroup("123")
+	saved, ok := store.ConfigForGroup("", "123")
 	if !ok || saved.ProactiveReplyChance != 0.4 || saved.ProactiveReplyThreshold != 0.93 || saved.MinimumReplyMemberLevel != 15 || saved.NaturalInterjectionEnabled == nil || !*saved.NaturalInterjectionEnabled {
 		t.Fatalf("saved = %#v, ok = %v", saved, ok)
 	}
@@ -248,7 +248,7 @@ func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 预设模式会在运行时套回自己的档位，所以必须同时切成自定义，改动才真的生效。
-	saved, ok := store.ConfigForGroup("123")
+	saved, ok := store.ConfigForGroup("", "123")
 	if !ok || saved.ResponseMode != ResponseModeCustom || saved.ChatInLevel != ChatInLevelMax {
 		t.Fatalf("saved = %#v, ok = %v", saved, ok)
 	}

@@ -713,7 +713,7 @@ VALUES (?, ?, 'group', ?, 'u1', ?, ?, '{}', 0, ?, 0, ?, 'replied', ?, ?, ?)
 		t.Fatalf("total without filter = %d, want 4", all.Total)
 	}
 
-	groups, err := store.ListInboundEventGroups(ctx, now.Add(-time.Hour))
+	groups, err := store.ListInboundEventGroups(ctx, now.Add(-time.Hour), "")
 	if err != nil {
 		t.Fatal(err)
 	}
