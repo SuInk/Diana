@@ -293,7 +293,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Group:             groupID,
 		Groups:            []storage.InboundEventGroup{},
 	}
-	if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since); err == nil {
+	if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since, botProfileScope(c)); err == nil {
 		response.Groups = groups
 	} else {
 		// 筛选器列不出来不该让整页打不开：事件本身已经查到了。

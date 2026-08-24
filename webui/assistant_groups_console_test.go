@@ -248,7 +248,7 @@ func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
 	if response.Config.NaturalInterjectionEnabled == nil || !*response.Config.NaturalInterjectionEnabled || response.Config.RecallReplyAutoDeleteEnabled == nil || !*response.Config.RecallReplyAutoDeleteEnabled || response.Config.RecallReplyTTLSeconds != 90 {
 		t.Fatalf("response config = %#v", response.Config)
 	}
-	saved, ok := store.ConfigForGroup("50005")
+	saved, ok := store.ConfigForGroup("", "50005")
 	if !ok || saved.NaturalInterjectionEnabled == nil || !*saved.NaturalInterjectionEnabled || saved.RecallReplyAutoDeleteEnabled == nil || !*saved.RecallReplyAutoDeleteEnabled || saved.RecallReplyTTLSeconds != 90 {
 		t.Fatalf("saved config = %#v, ok = %v", saved, ok)
 	}
@@ -301,7 +301,7 @@ func TestConsoleGroupsValidatesPluginSettingOverrides(t *testing.T) {
 		t.Fatalf("secret status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	saved, ok := store.ConfigForGroup("50006")
+	saved, ok := store.ConfigForGroup("", "50006")
 	if !ok || saved.PluginSettingOverrides["official.nonebot-plugin-resolver-go"]["max_links"] != float64(8) {
 		t.Fatalf("saved = %#v, ok = %v", saved, ok)
 	}
@@ -314,8 +314,41 @@ func TestConsoleGroupsValidatesPluginSettingOverrides(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reset status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	saved, ok = store.ConfigForGroup("50006")
+	saved, ok = store.ConfigForGroup("", "50006")
 	if !ok || len(saved.PluginSettingOverrides) != 0 {
 		t.Fatalf("reset saved = %#v, ok = %v", saved, ok)
+	}
+}
+
+// 群配置按机器人各存一份：同一个群号下两台机器人各配各的，控制台按作用域取。
+func TestConsoleGroupsAreScopedPerBotProfile(t *testing.T) {
+	store := NewMemoryBotGroupConfigStore()
+	base := assistant.BotConfig{}
+	if _, err := store.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "bot-onebot", GroupID: "100", GroupTriggers: []string{"小 A"}}, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "bot-telegram", GroupID: "100", GroupTriggers: []string{"小 B"}}, base); err != nil {
+		t.Fatal(err)
+	}
+
+	onebot, ok := store.ConfigForGroup("bot-onebot", "100")
+	if !ok || len(onebot.GroupTriggers) == 0 || onebot.GroupTriggers[0] != "小 A" {
+		t.Fatalf("onebot group config = %#v ok=%v", onebot, ok)
+	}
+	telegram, ok := store.ConfigForGroup("bot-telegram", "100")
+	if !ok || len(telegram.GroupTriggers) == 0 || telegram.GroupTriggers[0] != "小 B" {
+		t.Fatalf("telegram group config = %#v ok=%v", telegram, ok)
+	}
+	if len(store.Groups().GroupsForProfile("bot-onebot")) != 1 {
+		t.Fatalf("每台机器人应各有一份配置: %#v", store.Groups().Groups)
+	}
+}
+
+// 升级前的群配置没有机器人标记，在迁移把它填上之前不能整体失效。
+func TestConsoleGroupsFallBackToLegacyRecords(t *testing.T) {
+	set := assistant.GroupConfigSet{Groups: []assistant.GroupConfig{{GroupID: "100", GroupTriggers: []string{"老配置"}}}}
+	cfg, ok := set.ConfigForGroup("bot-onebot", "100")
+	if !ok || len(cfg.GroupTriggers) == 0 || cfg.GroupTriggers[0] != "老配置" {
+		t.Fatalf("legacy fallback = %#v ok=%v", cfg, ok)
 	}
 }

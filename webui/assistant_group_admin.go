@@ -246,7 +246,8 @@ func (h *BotHandler) groupAdminSessionFromRequest(c *gin.Context) (groupAdminSes
 }
 
 func (h *BotHandler) groupConfigForResponse(groupID string) assistant.GroupConfig {
-	if cfg, ok := h.groupConfigs.ConfigForGroup(groupID); ok {
+	// 群管理员自助的会话里还没有机器人身份，先保持改造前的行为。
+	if cfg, ok := h.groupConfigs.ConfigForGroupAnyProfile(groupID); ok {
 		return h.groupConfigForAPI(cfg.WithDefaults(groupID, h.runtime.Config()))
 	}
 	return h.groupConfigForAPI(assistant.DefaultGroupConfig(groupID, h.runtime.Config()))
@@ -321,7 +322,7 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 	// Older clients do not know this field. Omission preserves existing values;
 	// an explicit empty object from a current client resets all group overrides.
 	if cfg.PluginSettingOverrides == nil {
-		if existing, ok := h.groupConfigs.ConfigForGroup(groupID); ok {
+		if existing, ok := h.groupConfigs.ConfigForGroupAnyProfile(groupID); ok {
 			cfg.PluginSettingOverrides = existing.PluginSettingOverrides
 		}
 	}
