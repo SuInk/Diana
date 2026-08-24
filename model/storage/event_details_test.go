@@ -722,3 +722,94 @@ VALUES (?, ?, 'group', ?, 'u1', ?, ?, '{}', 0, ?, 0, ?, 'replied', ?, ?, ?)
 		t.Fatalf("groups = %#v", groups)
 	}
 }
+
+// 多机器人部署里，控制台按机器人筛事件必须走 SQL：profile_id 以前只躺在 payload
+// 里，分页时前端筛会漏掉不在本页的记录。
+func TestListInboundEventDetailsFiltersByProfile(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-profile.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	insert := func(id, profileID string, at time.Time) {
+		t.Helper()
+		createdAt := at.UnixNano()
+		if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES (?, ?, 'group', ?, 'g1', 'u1', ?, ?, '{}', 0, 'done', 0, ?, 'replied', ?, ?, ?)
+`, id, "group:g1", profileID, id, at.Unix(), createdAt, createdAt, createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("onebot-1", "profile-onebot", now.Add(-10*time.Minute))
+	insert("onebot-2", "profile-onebot", now.Add(-20*time.Minute))
+	insert("telegram-1", "profile-telegram", now.Add(-30*time.Minute))
+
+	all, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Total != 3 || len(all.Events) != 3 {
+		t.Fatalf("unscoped total=%d events=%d", all.Total, len(all.Events))
+	}
+
+	scoped, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 50, ProfileID: "profile-onebot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 顶部统计和列表必须说的是同一批事件，否则数字和内容对不上。
+	if scoped.Total != 2 || len(scoped.Events) != 2 {
+		t.Fatalf("scoped total=%d events=%d", scoped.Total, len(scoped.Events))
+	}
+	for _, event := range scoped.Events {
+		if event.ID == "telegram-1" {
+			t.Fatalf("scoped listing leaked another profile: %#v", scoped.Events)
+		}
+	}
+}
+
+// 老库升级：profile_id 列是后加的，历史事件的来源只在 payload 里，迁移必须把它
+// 回填出来，否则升级前的事件在按机器人筛选时会全部消失。
+func TestInboundEventProfileBackfillFromPayload(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "event-backfill.db")
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES ('legacy', 'group:g1', 'group', 'g1', 'u1', 'legacy', ?, ?, 0, 'done', 0, ?, 'replied', ?, ?, ?)
+`, now.Unix(), `{"profile_id":"profile-onebot"}`, now.UnixNano(), now.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟升级前的库：把列清空，再跑一次迁移。
+	if _, err := store.db.ExecContext(ctx, `UPDATE inbound_events SET profile_id = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE inbound_events DROP COLUMN profile_id`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.addInboundEventProfileColumn(); err != nil {
+		t.Fatal(err)
+	}
+
+	scoped, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 50, ProfileID: "profile-onebot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scoped.Total != 1 || len(scoped.Events) != 1 || scoped.Events[0].ID != "legacy" {
+		t.Fatalf("backfilled listing = %#v", scoped)
+	}
+	_ = store.Close()
+}

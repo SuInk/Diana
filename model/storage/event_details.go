@@ -159,6 +159,9 @@ type InboundEventQuery struct {
 	Result InboundEventResultFilter
 	// GroupID 只看这一个群，留空表示不限。
 	GroupID string
+	// ProfileID 只看这一台机器人，留空表示不限。多机器人部署里，控制台的
+	// 「当前机器人」切换靠它生效。
+	ProfileID string
 }
 
 func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query InboundEventQuery) (InboundEventDetailPage, error) {
@@ -196,6 +199,12 @@ func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query Inbound
 	if groupID := strings.TrimSpace(query.GroupID); groupID != "" {
 		groupCondition = " AND i.group_id = ?"
 		scopeArgs = append(scopeArgs, groupID)
+	}
+	// 机器人筛选和群筛选一样要同时作用在计数和列表上，否则顶部统计与下面的
+	// 列表说的不是同一批事件。
+	if profileID := strings.TrimSpace(query.ProfileID); profileID != "" {
+		groupCondition += " AND COALESCE(i.profile_id, '') = ?"
+		scopeArgs = append(scopeArgs, profileID)
 	}
 
 	if err := s.db.QueryRowContext(ctx, `
