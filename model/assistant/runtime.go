@@ -7477,8 +7477,12 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 		return MessageEvent{}
 	}
 	raw := strings.TrimSpace(msg.Text)
-	if raw == "" {
-		raw = PlainText(segments)
+	// 提及标记不能原样留在历史里。它是给发送层看的中间形式，发出去的那一份已经
+	// 按平台翻译过了（OneBot 是 at 段，Telegram 是 text_mention），历史却还留着
+	// [diana-at:10002] 的话，事件页显示的就不是群里实际看到的样子，模型下一轮读
+	// 自己的发言也会读到一个没渲染的标记。segments 这时已经翻好了，从它取。
+	if raw == "" || strings.Contains(raw, dianaMentionMarkerPrefix) {
+		raw = firstNonEmpty(strings.TrimSpace(PlainText(segments)), raw)
 	}
 	if strings.TrimSpace(raw) == "" && len(msg.VideoURLs) > 0 {
 		raw = "[视频]"

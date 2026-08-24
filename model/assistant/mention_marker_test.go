@@ -194,3 +194,38 @@ func TestMarkdownDowngradeKeepsDianaMarkers(t *testing.T) {
 		t.Fatalf("普通链接没有正常降级：%q", got)
 	}
 }
+
+// 标记是给发送层看的中间形式，不能留在历史里：事件页要显示群里实际看到的样子，
+// 模型下一轮读自己的发言也不该读到一个没渲染的标记。
+func TestOutgoingHistoryRendersMentionMarker(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", Name: "Diana"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	source := MessageEvent{
+		Kind: EventKindGroup, SelfID: "42", GroupID: "123456", UserID: "10001", MessageID: "m1",
+	}
+	event := runtime.outgoingHistoryEvent(source, OutgoingMessage{
+		GroupID: "123456",
+		Text:    "[diana-at:10002] 看下这个",
+	})
+	if strings.Contains(event.RawMessage, dianaMentionMarkerPrefix) {
+		t.Fatalf("历史里留下了未翻译的标记：%q", event.RawMessage)
+	}
+	if !strings.Contains(event.RawMessage, "10002") || !strings.Contains(event.RawMessage, "看下这个") {
+		t.Fatalf("历史正文丢了内容：%q", event.RawMessage)
+	}
+	// 段落侧必须是真正的 at 段，历史检索和「谁被提到了」都依赖它。
+	var hasAt bool
+	for _, segment := range event.Segments {
+		if segment.Type == "at" && segment.Data["qq"] == "10002" {
+			hasAt = true
+		}
+	}
+	if !hasAt {
+		t.Fatalf("历史段落里没有 at 段：%#v", event.Segments)
+	}
+
+	// 没有标记的普通发言原样保留，不要绕道 PlainText 改写。
+	plain := runtime.outgoingHistoryEvent(source, OutgoingMessage{GroupID: "123456", Text: "普通一句话"})
+	if plain.RawMessage != "普通一句话" {
+		t.Fatalf("普通发言被改写了：%q", plain.RawMessage)
+	}
+}
