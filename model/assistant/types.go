@@ -195,11 +195,15 @@ type Reminder struct {
 	WatchIssues             bool         `json:"watch_issues,omitempty"`
 	WatchReleases           bool         `json:"watch_releases,omitempty"`
 	WatchStars              bool         `json:"watch_stars,omitempty"`
+	StarNotifyMode          string       `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold     int          `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones    []int        `json:"star_notify_milestones,omitempty"`
 	LastCommitSHA           string       `json:"last_commit_sha,omitempty"`
 	LastPullRequestCursor   string       `json:"last_pull_request_cursor,omitempty"`
 	LastIssueCursor         string       `json:"last_issue_cursor,omitempty"`
 	LastReleaseTag          string       `json:"last_release_tag,omitempty"`
 	LastStarCount           int          `json:"last_star_count,omitempty"`
+	LastNotifiedStarCount   int          `json:"last_notified_star_count,omitempty"`
 	LastStarEventID         string       `json:"last_star_event_id,omitempty"`
 	LastStarEventAt         time.Time    `json:"last_star_event_at,omitempty"`
 	// WatchAnchorsJSON 记录每个投递目标里各 PR/Issue 首次宣布消息的 ID,

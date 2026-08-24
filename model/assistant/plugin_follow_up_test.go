@@ -151,6 +151,79 @@ func TestResolverStaysSilentWithNothingToSend(t *testing.T) {
 	}
 }
 
+type duplicateResolverPlugin struct{}
+
+func (duplicateResolverPlugin) Manifest() PluginManifest {
+	return PluginManifest{ID: resolverPluginID, Name: "resolver duplicate test", BuiltIn: true}
+}
+
+func (duplicateResolverPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
+	return &PluginResponse{Handled: true, Reply: "同一个视频", ResolverResourceKeys: []string{"bilibili:BV1TEST12345"}}, nil
+}
+
+func TestResolverSuppressesSameResourceAcrossDifferentInboundMessages(t *testing.T) {
+	channel := &recordingChannel{}
+	logs := &captureAppLogs{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(duplicateResolverPlugin{}), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(logs)
+	first := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "u1", MessageID: "first"}
+	second := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "bot2", MessageID: "second"}
+
+	if reply, err := runtime.replyWithResolverOnly(context.Background(), first, "https://b23.tv/test"); err != nil || reply == "" {
+		t.Fatalf("first resolver delivery reply=%q err=%v", reply, err)
+	}
+	if reply, err := runtime.replyWithResolverOnly(context.Background(), second, "https://www.bilibili.com/video/BV1TEST12345"); err != nil || reply != "" {
+		t.Fatalf("duplicate resolver delivery reply=%q err=%v", reply, err)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 || sent[0].Text != "同一个视频" {
+		t.Fatalf("resolver deliveries = %#v", sent)
+	}
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 || entries[0].Action != "assistant.resolver_duplicate_suppressed" || entries[0].Target != "second" {
+		t.Fatalf("duplicate audit entries = %#v", entries)
+	}
+
+	otherGroup := MessageEvent{Kind: EventKindGroup, GroupID: "200", UserID: "u1", MessageID: "third"}
+	if reply, err := runtime.replyWithResolverOnly(context.Background(), otherGroup, "https://www.bilibili.com/video/BV1TEST12345"); err != nil || reply == "" {
+		t.Fatalf("other group resolver delivery reply=%q err=%v", reply, err)
+	}
+	if got := len(channel.sentSnapshot()); got != 2 {
+		t.Fatalf("cross-group resource was suppressed, sends=%d", got)
+	}
+}
+
+func TestResolverDeliveryReservationIsReleasedAfterFailure(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "100", MessageID: "m1"}
+	handle, duplicate := runtime.reserveResolverDelivery(event, []string{"bilibili:BV1TEST12345"})
+	if duplicate || handle.token == 0 {
+		t.Fatalf("first reservation handle=%#v duplicate=%v", handle, duplicate)
+	}
+	runtime.finishResolverDelivery(handle, false)
+	if _, duplicate := runtime.reserveResolverDelivery(event, []string{"bilibili:BV1TEST12345"}); duplicate {
+		t.Fatal("failed delivery left the resource reserved")
+	}
+}
+
+func TestResolverDeliveryReservationExpires(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	now := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
+	runtime.now = func() time.Time { return now }
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "100", MessageID: "m1"}
+	handle, duplicate := runtime.reserveResolverDelivery(event, []string{"bilibili:BV1TEST12345"})
+	if duplicate {
+		t.Fatal("first reservation was treated as duplicate")
+	}
+	runtime.finishResolverDelivery(handle, true)
+	if _, duplicate := runtime.reserveResolverDelivery(event, []string{"bilibili:BV1TEST12345"}); !duplicate {
+		t.Fatal("delivered resource was not suppressed inside the TTL")
+	}
+	now = now.Add(resolverDeliveryDedupeTTL + time.Second)
+	if _, duplicate := runtime.reserveResolverDelivery(event, []string{"bilibili:BV1TEST12345"}); duplicate {
+		t.Fatal("expired resource was still suppressed")
+	}
+}
+
 func TestFollowUpPromptUsesGlobalReplyStyleWithoutSkipGate(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{"这条确实接上刚才聊的内容了。"}}
