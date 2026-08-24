@@ -146,6 +146,8 @@ export interface BotProfileConfig {
   bot_reply_loop_detection_enabled?: boolean;
   /** 直接回复是否也做发送前账号安全审核；主动回复始终审核，不受此开关影响。 */
   reply_account_safety_audit_enabled?: boolean;
+  /** 词典是否跨群共用一本；默认按会话隔离。 */
+  glossary_shared_scope_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
   prompt_inject_time?: boolean;
   prompt_inject_plaintext_rules?: boolean;
