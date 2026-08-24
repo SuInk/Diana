@@ -406,7 +406,7 @@ type staticGroupConfigStore struct {
 	cfg GroupConfig
 }
 
-func (s staticGroupConfigStore) ConfigForGroup(groupID string) (GroupConfig, bool) {
+func (s staticGroupConfigStore) ConfigForGroup(_, groupID string) (GroupConfig, bool) {
 	if groupID == s.cfg.GroupID {
 		return s.cfg, true
 	}

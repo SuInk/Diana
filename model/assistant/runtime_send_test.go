@@ -238,7 +238,7 @@ type stubGroupConfigStore struct {
 }
 
 // ConfigForGroup 返回预置的群配置。
-func (s *stubGroupConfigStore) ConfigForGroup(groupID string) (GroupConfig, bool) {
+func (s *stubGroupConfigStore) ConfigForGroup(_, groupID string) (GroupConfig, bool) {
 	cfg, ok := s.configs[groupID]
 	return cfg, ok
 }

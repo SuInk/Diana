@@ -1862,13 +1862,13 @@ func TestRuntimeOwnerCommandsSwitchProfilesAndClearHistory(t *testing.T) {
 	}
 
 	reply, handled = runtime.handleOwnerCommand(event, "群 禁用 123456")
-	if !handled || !strings.Contains(reply, "已禁用") || !runtime.isGroupDisabled("123456") {
-		t.Fatalf("reply=%q handled=%v disabled=%v", reply, handled, runtime.isGroupDisabled("123456"))
+	if !handled || !strings.Contains(reply, "已禁用") || !runtime.isGroupDisabled("", "123456") {
+		t.Fatalf("reply=%q handled=%v disabled=%v", reply, handled, runtime.isGroupDisabled("", "123456"))
 	}
 
 	reply, handled = runtime.handleOwnerCommand(event, "群 启用 123456")
-	if !handled || !strings.Contains(reply, "已恢复") || runtime.isGroupDisabled("123456") {
-		t.Fatalf("reply=%q handled=%v disabled=%v", reply, handled, runtime.isGroupDisabled("123456"))
+	if !handled || !strings.Contains(reply, "已恢复") || runtime.isGroupDisabled("", "123456") {
+		t.Fatalf("reply=%q handled=%v disabled=%v", reply, handled, runtime.isGroupDisabled("", "123456"))
 	}
 }
 

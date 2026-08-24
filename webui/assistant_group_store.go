@@ -12,7 +12,8 @@ import (
 )
 
 type BotGroupConfigStore interface {
-	ConfigForGroup(groupID string) (assistant.GroupConfig, bool)
+	ConfigForGroup(botProfileID, groupID string) (assistant.GroupConfig, bool)
+	ConfigForGroupAnyProfile(groupID string) (assistant.GroupConfig, bool)
 	Groups() assistant.GroupConfigSet
 	SaveGroupConfig(assistant.GroupConfig, assistant.BotConfig) (assistant.GroupConfig, error)
 }
@@ -26,10 +27,16 @@ func NewMemoryBotGroupConfigStore() *MemoryBotGroupConfigStore {
 	return &MemoryBotGroupConfigStore{data: assistant.GroupConfigSet{}}
 }
 
-func (s *MemoryBotGroupConfigStore) ConfigForGroup(groupID string) (assistant.GroupConfig, bool) {
+func (s *MemoryBotGroupConfigStore) ConfigForGroup(botProfileID, groupID string) (assistant.GroupConfig, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data.ConfigForGroup(groupID)
+	return s.data.ConfigForGroup(botProfileID, groupID)
+}
+
+func (s *MemoryBotGroupConfigStore) ConfigForGroupAnyProfile(groupID string) (assistant.GroupConfig, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.ConfigForGroupAnyProfile(groupID)
 }
 
 func (s *MemoryBotGroupConfigStore) Groups() assistant.GroupConfigSet {
@@ -43,7 +50,7 @@ func (s *MemoryBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfig, b
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = s.data.Upsert(cfg, base)
-	saved, _ := s.data.ConfigForGroup(cfg.GroupID)
+	saved, _ := s.data.ConfigForGroup(cfg.BotProfileID, cfg.GroupID)
 	return saved, nil
 }
 
@@ -68,10 +75,16 @@ func NewPersistentBotGroupConfigStore(ctx context.Context, store *storage.SQLite
 	}, nil
 }
 
-func (s *PersistentBotGroupConfigStore) ConfigForGroup(groupID string) (assistant.GroupConfig, bool) {
+func (s *PersistentBotGroupConfigStore) ConfigForGroup(botProfileID, groupID string) (assistant.GroupConfig, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data.ConfigForGroup(groupID)
+	return s.data.ConfigForGroup(botProfileID, groupID)
+}
+
+func (s *PersistentBotGroupConfigStore) ConfigForGroupAnyProfile(groupID string) (assistant.GroupConfig, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.ConfigForGroupAnyProfile(groupID)
 }
 
 func (s *PersistentBotGroupConfigStore) Groups() assistant.GroupConfigSet {
@@ -85,7 +98,7 @@ func (s *PersistentBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfi
 	s.mu.Lock()
 	s.data = s.data.WithDefaults(base).Upsert(cfg, base)
 	set := s.data
-	saved, _ := set.ConfigForGroup(cfg.GroupID)
+	saved, _ := set.ConfigForGroup(cfg.BotProfileID, cfg.GroupID)
 	s.mu.Unlock()
 	if s.store != nil {
 		if err := s.store.SaveBotGroupConfigs(s.ctx, set); err != nil {

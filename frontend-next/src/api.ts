@@ -325,6 +325,7 @@ export interface ResolverDependencyInstallResponse {
 }
 
 export interface BotGroupConfig {
+  bot_profile_id?: string;
   group_id: string;
   enabled: boolean;
   enabled_set?: boolean;
@@ -1153,8 +1154,11 @@ export interface ConsoleGroupsResponse {
   warning?: string;
 }
 
-export function listBotGroups(refresh = false): Promise<ConsoleGroupsResponse> {
-  const suffix = refresh ? "?refresh=1" : "";
+export function listBotGroups(refresh = false, profile = ""): Promise<ConsoleGroupsResponse> {
+  const params = new URLSearchParams();
+  if (refresh) params.set("refresh", "1");
+  if (profile) params.set("profile", profile);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
   return requestJSON<ConsoleGroupsResponse>(`/api/assistant/groups${suffix}`);
 }
 

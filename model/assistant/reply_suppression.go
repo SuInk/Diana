@@ -314,7 +314,7 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
 	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
-	if event.Kind != EventKindGroup || userID == "" || botID == "" || userID == botID || userID == strings.TrimSpace(cfg.OwnerID) || r.isGroupDisabled(event.GroupID) {
+	if event.Kind != EventKindGroup || userID == "" || botID == "" || userID == botID || userID == strings.TrimSpace(cfg.OwnerID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 		return botReplyLoopCandidate{}, false
 	}
 	directBotFollowup := eventRepliesToBot(event, cfg)
