@@ -847,7 +847,7 @@ func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 			},
 		},
 	}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "gpt-4.1-mini"}}, nil
 	})
@@ -858,9 +858,16 @@ func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 	if !strings.Contains(output, "gpt-4.1-mini") {
 		t.Fatalf("output = %q", output)
 	}
-	got := store.Current()
-	if got.Provider != llm.ProviderOpenAICompatible || got.Model != "gpt-4.1-mini" {
-		t.Fatalf("current = %#v", got)
+	// 换模型写的是机器人的模型分配，provider 配置一个字不动。
+	if roles := normalizeModelRoles(runtime.Config().ModelRoles); roles["chat"].Model != "gpt-4.1-mini" {
+		t.Fatalf("chat role = %#v", roles["chat"])
+	}
+	if got := store.Current(); got.Model != "example-chat-model" {
+		t.Fatalf("provider config was rewritten: %#v", got)
+	}
+	// 第一次给对话定绑定会连带影响未分配的用途，回执要说出来。
+	if !strings.Contains(output, "会跟随对话模型") {
+		t.Fatalf("output 缺少连带影响说明: %q", output)
 	}
 }
 
@@ -1344,7 +1351,7 @@ func TestDianaLLMConfigToolRebindsEveryModelRole(t *testing.T) {
 	}
 }
 
-// 没配过任何分配时，改「视觉理解」只写自己那一档，不会顺手给对话也钉一个绑定。
+// 改「视觉理解」只写自己那一档，不会顺手给对话也钉一个绑定。
 func TestDianaLLMConfigToolBindsNonChatRoleWithoutTouchingChat(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		ActiveID: "main",
