@@ -1151,7 +1151,6 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupResponseModeOverridden {
 		cfg.ResponseMode.apply(&cfg)
 	}
-	cfg.ReplyStyle.apply(&cfg)
 	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
 	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
 	if groupCfg.ReplyGate != nil {
@@ -2862,7 +2861,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if asyncImageTaskNotice != "" {
 		systemPrompt += "\n" + asyncImageTaskNotice
 	}
-	if mentionPrompt := r.replyMentionPrompt(event, replyHistory); mentionPrompt != "" {
+	if mentionPrompt := r.replyMentionPrompt(cfg, event, replyHistory); mentionPrompt != "" {
 		systemPrompt += "\n" + mentionPrompt
 	}
 	ruleDecision, ruleMatched := r.evaluateReplyRules(ctx, event, cleanText, replyHistory, cfg)
@@ -5355,7 +5354,18 @@ type replyMentionCandidate struct {
 	Source        string `json:"source,omitempty"`
 }
 
-func (r *Runtime) replyMentionPrompt(event MessageEvent, history []MessageEvent) string {
+// replyMentionPrompt 说明「怎么 @ 别人」：候选名单和 CQ at 的写法。
+//
+// 「要不要 @ 当前发言者」不在这里,由 replyDecorationPrompt 按本轮的装饰件模式
+// 单独给出。两段提示词曾经各说各的:这一段写死「发送层会引用并 @ 当前发言者,
+// 这部分不需要你输出 CQ at」,那句话只有 on 档成立;而 auto 档发送层一个装饰件
+// 都不加,另一段却在请模型自己写 @。模型两段都收到,前一段是陈述句("发送层会
+// 做"),后一段是选择题,于是按前一段理解——不输出 CQ at,发送层也没加,@ 就消失了。
+// 「该 @ 的时候也不 @」是这么来的,不是模型判断保守。
+//
+// 现在描述发送层行为的那几句按模式给:on 档照旧说会自动加,auto/off 档明说不会,
+// 谁也不再替另一段做决定。
+func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
 	if event.Kind != EventKindGroup {
 		return ""
 	}
@@ -5372,12 +5382,45 @@ func (r *Runtime) replyMentionPrompt(event MessageEvent, history []MessageEvent)
 	【群聊真实提及规则】
 	发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。
 	可提及成员候选 JSON：%s
-	1. 当前发言者是在直接询问你时，发送层会在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at。
-	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，使用 [CQ:at,qq=成员账号] 提及实际对象。发送层看到你明确提及其他成员，或识别到当前消息正在承接其他成员时，会取消对触发者的自动引用和 @。
-	3. 可以同时提及多人，也可以把多个额外 CQ at 放在不同位置。不要重复提及同一成员；CQ at 前后按正常中文语句保留必要空格。
-	4. 发送层会原样保留额外 CQ at 的对象和相对位置，并自动避免把触发者误当成回应对象。
-	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把 CQ 码放进 Markdown 代码块。
-	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`, string(payload)))
+	1. %s
+	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 [diana-at:成员user_id] 提及实际对象。%s
+	3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
+	4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
+	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进 Markdown 代码块，也不要自己写平台专用的提及写法。
+	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
+		string(payload),
+		currentSenderMentionRule(cfg),
+		autoDecorationCancelClause(cfg),
+		autoDecorationAvoidClause(cfg)))
+}
+
+// currentSenderMentionRule 说明当前发言者这一位由谁来 @。三档说的是三件不同的事，
+// 含糊其辞比说错更糟：模型会按最像陈述句的那一句办。
+func currentSenderMentionRule(cfg BotConfig) string {
+	switch mentionUserMode(cfg) {
+	case ReplyDecorationOn:
+		return "当前发言者是在直接询问你时，发送层会在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at。"
+	case ReplyDecorationOff:
+		return "发送层不会自动 @ 任何人。当前发言者这一位按本群习惯通常不用 @，需要点名时自己写 [diana-at:成员user_id]。"
+	default:
+		return "发送层不会自动 @ 任何人，包括当前发言者。这一轮要不要 @ 当前发言者，按本轮单独给出的那条规则判断；判断为要，就自己在回复最开头写出来。"
+	}
+}
+
+// autoDecorationCancelClause 只在 on 档成立：发送层看到模型点名了别人才会撤掉
+// 自己加的那一份。auto/off 档它本来就没加，没有可撤的。
+func autoDecorationCancelClause(cfg BotConfig) string {
+	if mentionUserMode(cfg) != ReplyDecorationOn && replyReferenceMode(cfg) != ReplyDecorationOn {
+		return ""
+	}
+	return "发送层看到你明确提及其他成员，或识别到当前消息正在承接其他成员时，会取消对触发者的自动引用和 @。"
+}
+
+func autoDecorationAvoidClause(cfg BotConfig) string {
+	if mentionUserMode(cfg) != ReplyDecorationOn {
+		return ""
+	}
+	return "并自动避免把触发者误当成回应对象。"
 }
 
 func (r *Runtime) replyMentionCandidates(event MessageEvent, history []MessageEvent) []replyMentionCandidate {
@@ -7007,6 +7050,33 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 	return msg
 }
 
+// resolveOutgoingMentionNames 给正文里的 [diana-at:ID] 标记配上显示用的昵称。
+//
+// 标记里只有 id——昵称会改、会重名，不能当标识。但 Telegram 的 text_mention 需要
+// 一段可见文字，所以在这里按 id 查一次昵称。查的是本会话内存里的近期消息加当前
+// 这条事件，不落库查询：发送路径上多一次 IO 不值得，查不到的 id 退回显示 @<id>。
+func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	ids := mentionedIDsInText(msg.Text)
+	if len(ids) == 0 {
+		return msg
+	}
+	r.mu.RLock()
+	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
+	r.mu.RUnlock()
+	names := messageParticipantDisplayNames(append(history, event)...)
+	resolved := make(map[string]string, len(ids))
+	for _, id := range ids {
+		if name := strings.TrimSpace(names[id]); name != "" {
+			resolved[id] = name
+		}
+	}
+	if len(resolved) == 0 {
+		return msg
+	}
+	msg.MentionNames = resolved
+	return msg
+}
+
 func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEvent, upload resolverVideoUpload) error {
 	if r.channel == nil {
 		return fmt.Errorf("chatbot: channel is not configured")
@@ -7129,7 +7199,7 @@ func generatedReplyTargetsOtherParticipant(event MessageEvent, reply string) boo
 
 func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent, reply string, mentionUserID string, replyToCurrent bool) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	chunks := splitChatReply(reply, cfg.DirectReplyChunkSize, cfg.ReplyStyle)
+	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
 	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
@@ -7232,6 +7302,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	msg = routeOutgoingToEvent(event, msg)
 	msg = r.resolveOutgoingLocalImages(msg)
 	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
+	msg = r.resolveOutgoingMentionNames(event, msg)
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
@@ -7418,8 +7489,12 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 		return MessageEvent{}
 	}
 	raw := strings.TrimSpace(msg.Text)
-	if raw == "" {
-		raw = PlainText(segments)
+	// 提及标记不能原样留在历史里。它是给发送层看的中间形式，发出去的那一份已经
+	// 按平台翻译过了（OneBot 是 at 段，Telegram 是 text_mention），历史却还留着
+	// [diana-at:10002] 的话，事件页显示的就不是群里实际看到的样子，模型下一轮读
+	// 自己的发言也会读到一个没渲染的标记。segments 这时已经翻好了，从它取。
+	if raw == "" || strings.Contains(raw, dianaMentionMarkerPrefix) {
+		raw = firstNonEmpty(strings.TrimSpace(PlainText(segments)), raw)
 	}
 	if strings.TrimSpace(raw) == "" && len(msg.VideoURLs) > 0 {
 		raw = "[视频]"
@@ -10097,6 +10172,20 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 // OneBot 实现的余量都比这更宽。再往上就得按平台分别算长度了，收益不大。
 const notificationChunkSize = 1800
 
+// chunkOrphanTolerance 是允许超出分条长度的字数上限。宁可这一条长十来个字，
+// 也不要在后面挂一条「Ti」「了」「。」这样的碎片。
+const chunkOrphanTolerance = 12
+
+// chunkOverflowAllowance 返回这个上限下实际允许超出多少。
+// 「碎片」是相对分条长度而言的：上限本身只有几个字时（测试里会这么用），
+// 固定容差会把一切都吞掉，所以再按上限的四分之一压一道。
+func chunkOverflowAllowance(chunkSize int) int {
+	if allowance := chunkSize / 4; allowance < chunkOrphanTolerance {
+		return allowance
+	}
+	return chunkOrphanTolerance
+}
+
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
 const notificationSplitMarker = "<dianabr>"
 
@@ -10154,7 +10243,15 @@ func chunkTextByLength(text string, chunkSize int) []string {
 	}
 	runes := []rune(strings.TrimSpace(text))
 	var out []string
-	for len(runes) > chunkSize {
+	// 只在明显超长时才切。分条长度是人格偏好，不是平台硬限制（那个是
+	// notificationChunkSize，宽得多），为了守住它而多发一条碎片是本末倒置：
+	// 162 字撞上 160 的上限，切出来是「…正规零售版5060」加一条「Ti」。
+	//
+	// 加了这道门槛之后，切出来的尾巴一定长于容差——循环进得来就说明总长超过
+	// chunkSize+容差，而切点不会超过 chunkSize，余下的自然更长。所以碎片不只是
+	// 这一次不出现，是不可能出现。
+	allowance := chunkOverflowAllowance(chunkSize)
+	for len(runes) > chunkSize+allowance {
 		cut := replyChunkCut(runes, chunkSize)
 		if trimmed := strings.TrimSpace(string(runes[:cut])); trimmed != "" {
 			out = append(out, trimmed)

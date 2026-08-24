@@ -405,3 +405,72 @@ func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
 		t.Fatalf("response=%+v", response)
 	}
 }
+
+// 事件页按群筛选：列表、计数和上下文预算都要跟着这个群走。
+func TestListEventsFiltersByGroupAndReportsContextBudget(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "events-group-filter.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	for _, seed := range []struct{ groupID, messageID string }{
+		{"111", "m-111-a"},
+		{"111", "m-111-b"},
+		{"222", "m-222-a"},
+	} {
+		event := assistant.MessageEvent{
+			Kind: assistant.EventKindGroup, GroupID: seed.groupID, UserID: "20002",
+			MessageID: seed.messageID, SenderName: "测试成员",
+			Time: time.Now().Add(-time.Minute).Unix(), RawMessage: "在吗",
+		}
+		if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:"+seed.groupID, event); err != nil || !inserted {
+			t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+		}
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := &BotHandler{sqlite: store, runtime: assistant.NewRuntime(
+		assistant.BotConfig{MaxContextTokens: 128000}, fakeChannel{}, assistant.NewPluginManager(), nil, nil, nil, nil)}
+	router.GET("/api/assistant/events", handler.listEvents)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h&group=111", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload assistantEventsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Group != "111" {
+		t.Fatalf("group = %q", payload.Group)
+	}
+	for _, event := range payload.Events {
+		if event.GroupID != "111" {
+			t.Fatalf("leaked event from group %q", event.GroupID)
+		}
+	}
+	if payload.ContextBudget == nil {
+		t.Fatal("筛了群却没给上下文预算")
+	}
+	if payload.ContextBudget.GroupID != "111" || len(payload.ContextBudget.Layers) == 0 {
+		t.Fatalf("context budget = %#v", payload.ContextBudget)
+	}
+
+	// 不筛群时没有「这个群的预算」可言，不该给一个看起来像的数字。
+	plain := httptest.NewRecorder()
+	router.ServeHTTP(plain, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h", nil))
+	var all assistantEventsResponse
+	if err := json.Unmarshal(plain.Body.Bytes(), &all); err != nil {
+		t.Fatal(err)
+	}
+	if all.ContextBudget != nil {
+		t.Fatalf("没筛群却给了预算：%#v", all.ContextBudget)
+	}
+	if all.Groups == nil {
+		t.Fatal("筛选器缺少可选群列表")
+	}
+}

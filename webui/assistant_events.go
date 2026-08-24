@@ -9,6 +9,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,6 +46,12 @@ type assistantEventsResponse struct {
 	Page              int                    `json:"page"`
 	Limit             int                    `json:"limit"`
 	HasMore           bool                   `json:"has_more"`
+	// Group 是当前筛选的群号，Groups 是这个时间范围内可选的群。
+	Group  string                      `json:"group,omitempty"`
+	Groups []storage.InboundEventGroup `json:"groups"`
+	// ContextBudget 只在筛了具体某个群时给出：预算是按群算的，全部事件混在
+	// 一起没有一个「这个群的预算」可言。
+	ContextBudget *assistant.ContextBudgetBreakdown `json:"context_budget,omitempty"`
 }
 
 type assistantEventTraceResponse struct {
@@ -184,7 +191,14 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 	if limit > 100 {
 		limit = 100
 	}
-	stored, err := h.sqlite.ListInboundEventDetails(c.Request.Context(), since, limit, (page-1)*limit, resultFilter)
+	groupID := strings.TrimSpace(c.Query("group"))
+	stored, err := h.sqlite.ListInboundEventDetails(c.Request.Context(), storage.InboundEventQuery{
+		Since:   since,
+		Limit:   limit,
+		Offset:  (page - 1) * limit,
+		Result:  resultFilter,
+		GroupID: groupID,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -274,6 +288,18 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Page:              page,
 		Limit:             limit,
 		HasMore:           int64(page*limit) < stored.FilteredTotal,
+		Group:             groupID,
+		Groups:            []storage.InboundEventGroup{},
+	}
+	if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since); err == nil {
+		response.Groups = groups
+	} else {
+		// 筛选器列不出来不该让整页打不开：事件本身已经查到了。
+		log.Printf("assistant events: list groups failed: %v", err)
+	}
+	if budgetRuntime, ok := h.runtime.(contextBudgetRuntime); ok && groupID != "" {
+		breakdown := budgetRuntime.ContextBudgetBreakdownForGroup(groupID)
+		response.ContextBudget = &breakdown
 	}
 	if !since.IsZero() {
 		response.Since = &since

@@ -150,9 +150,13 @@ type OutgoingMessage struct {
 	ImagesFirst    bool
 	ReplyMessageID string
 	MentionUserID  string
-	ForwardName    string
-	ForwardUIN     string
-	ForwardTime    int64
+	// MentionNames 是正文里 [diana-at:ID] 标记要显示的昵称，按 id 索引。
+	// Telegram 的 text_mention 需要一段可见文字，光有 id 显示不出来；查不到
+	// 的 id 退回显示 @<id>。OneBot 不需要它——那边 at 段自己会渲染。
+	MentionNames map[string]string
+	ForwardName  string
+	ForwardUIN   string
+	ForwardTime  int64
 }
 
 type ReminderKind string
@@ -924,30 +928,38 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 func DefaultBotConfig() BotConfig {
 	// 默认不开启机器人，避免首次启动服务就暴露 OneBot 连接面。
 	return BotConfig{
-		Name:                           DefaultProfileName,
-		Platform:                       DefaultPlatform,
-		Enabled:                        false,
-		OneBotReverseWSEndpoint:        "ws://127.0.0.1:18080/onebot/v11/ws",
-		NoneBotBridgeEndpoint:          "ws://127.0.0.1:8080/onebot/v11/ws",
-		GroupTriggers:                  []string{"Diana", "diana"},
-		GroupTriggerMode:               defaultAliasTriggerMode,
-		DisabledGroups:                 []string{},
-		DisabledUsers:                  []string{},
-		GroupAdmission:                 GroupAdmission{}.WithDefaults(),
-		WelcomeEnabled:                 false,
-		WelcomeMessage:                 "欢迎加入本群，可以直接 @我 开始聊天。",
-		SystemPrompt:                   defaultSystemPrompt,
-		ResponseMode:                   ResponseModeStandard,
-		ReplyStyle:                     ReplyStyleAssistant,
-		PromptChineseSlangText:         defaultPromptChineseSlang,
-		PromptPlaintextRulesText:       defaultPromptPlaintextRules,
-		PromptTimeTemplate:             defaultPromptTimeTemplate,
-		PromptGroupSenderTemplate:      defaultPromptGroupSenderTemplate,
-		PromptImageOnlyText:            defaultPromptImageOnly,
-		PromptWakeOnlyText:             defaultPromptWakeOnly,
-		ErrorReplyPrefix:               "出错了：",
-		SendRetryAttempts:              3,
-		SendChunkIntervalMS:            300,
+		Name:                    DefaultProfileName,
+		Platform:                DefaultPlatform,
+		Enabled:                 false,
+		OneBotReverseWSEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
+		NoneBotBridgeEndpoint:   "ws://127.0.0.1:8080/onebot/v11/ws",
+		GroupTriggers:           []string{"Diana", "diana"},
+		GroupTriggerMode:        defaultAliasTriggerMode,
+		// 引用和 @ 默认交给模型自己判断。「每条都带」和「一条都不带」都不像真人，
+		// 而 auto 拿得到插话人数这类算得出来的信号（见 replyDecorationPrompt），
+		// 冷清时不带、需要点名时才带。
+		ReplyReferenceMode:        ReplyDecorationAuto,
+		MentionUserMode:           ReplyDecorationAuto,
+		DisabledGroups:            []string{},
+		DisabledUsers:             []string{},
+		GroupAdmission:            GroupAdmission{}.WithDefaults(),
+		WelcomeEnabled:            false,
+		WelcomeMessage:            "欢迎加入本群，可以直接 @我 开始聊天。",
+		SystemPrompt:              defaultSystemPrompt,
+		ResponseMode:              ResponseModeStandard,
+		ReplyStyle:                ReplyStyleAssistant,
+		PromptChineseSlangText:    defaultPromptChineseSlang,
+		PromptPlaintextRulesText:  defaultPromptPlaintextRules,
+		PromptTimeTemplate:        defaultPromptTimeTemplate,
+		PromptGroupSenderTemplate: defaultPromptGroupSenderTemplate,
+		PromptImageOnlyText:       defaultPromptImageOnly,
+		PromptWakeOnlyText:        defaultPromptWakeOnly,
+		ErrorReplyPrefix:          "出错了：",
+		SendRetryAttempts:         3,
+		// 连发间隔和每条长度取的是聊天体量：几百字一坨、300ms 连发怎么看都不像
+		// 真人。这两个数原先是群友风格在 apply 里钳出来的，风格不再改配置之后
+		// 搬到这里当默认值——想要长一点的气泡、快一点的连发就在 WebUI 里改。
+		SendChunkIntervalMS:            chatSendChunkIntervalMS,
 		ProactiveReplyRouterPrompt:     defaultProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           defaultProactiveReplyPrompt,
 		ChatInEnabled:                  boolPointer(true),
@@ -955,7 +967,7 @@ func DefaultBotConfig() BotConfig {
 		NaturalInterjectionEnabled:     boolPointer(false),
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
-		DirectReplyChunkSize:           900,
+		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
 		RecallReplyMode:                RecallReplyModeLLMSummary,
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
@@ -1083,8 +1095,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SendRetryAttempts > 5 {
 		cfg.SendRetryAttempts = 5
 	}
-	// 风格的投递策略要在数值默认之前套用，否则分不清「用户填的 900」和「默认 900」。
-	cfg.ReplyStyle.apply(&cfg)
+	if cfg.ReplyReferenceMode == "" {
+		cfg.ReplyReferenceMode = defaults.ReplyReferenceMode
+	}
+	if cfg.MentionUserMode == "" {
+		cfg.MentionUserMode = defaults.MentionUserMode
+	}
 	if cfg.SendChunkIntervalMS <= 0 {
 		cfg.SendChunkIntervalMS = defaults.SendChunkIntervalMS
 	}

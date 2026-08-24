@@ -506,3 +506,54 @@ func TestTelegramMessageToEventWithoutReplyKeepsTextOnly(t *testing.T) {
 		t.Fatalf("segments = %#v, want text only", event.Segments)
 	}
 }
+
+// Telegram 侧的提及：正文写「@昵称」，另附一条 text_mention entity 指向用户 id。
+// 这是给「没有 username 的人」准备的提及方式，等于把提及虚拟出来。
+func TestTelegramRendersMentionMarkerAsTextMention(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	msg := OutgoingMessage{
+		GroupID:      "-100123",
+		Text:         "[diana-at:10002] 看下这个",
+		MentionNames: map[string]string{"10002": "Alice"},
+	}
+	if err := api.channel().Send(context.Background(), msg); err != nil {
+		t.Fatalf("发送失败：%v", err)
+	}
+	calls := api.callsOf("sendMessage")
+	if len(calls) != 1 {
+		t.Fatalf("期望 1 次 sendMessage，实际 %d", len(calls))
+	}
+	// 标记本身绝不能出现在正文里——那正是这套机制要消灭的东西。
+	text, _ := calls[0].Params["text"].(string)
+	if text != "@Alice 看下这个" {
+		t.Fatalf("text = %q", text)
+	}
+	entities, ok := calls[0].Params["entities"].([]any)
+	if !ok || len(entities) != 1 {
+		t.Fatalf("entities = %#v", calls[0].Params["entities"])
+	}
+	entity, _ := entities[0].(map[string]any)
+	if entity["type"] != "text_mention" || entity["offset"] != float64(0) || entity["length"] != float64(6) {
+		t.Fatalf("entity = %#v", entity)
+	}
+	user, _ := entity["user"].(map[string]any)
+	if user["id"] != float64(10002) {
+		t.Fatalf("entity user = %#v", entity["user"])
+	}
+	// 只传 entities、不传 parse_mode：正文仍按纯文本发，* # ` 不会被当格式标记。
+	if _, has := calls[0].Params["parse_mode"]; has {
+		t.Fatalf("不该设置 parse_mode：%#v", calls[0].Params)
+	}
+}
+
+// 没有提及的普通消息不该多带一个空的 entities 参数。
+func TestTelegramOmitsEntitiesWithoutMentions(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	if err := api.channel().Send(context.Background(), OutgoingMessage{GroupID: "-100123", Text: "你好"}); err != nil {
+		t.Fatalf("发送失败：%v", err)
+	}
+	calls := api.callsOf("sendMessage")
+	if _, has := calls[0].Params["entities"]; has {
+		t.Fatalf("不该出现 entities：%#v", calls[0].Params)
+	}
+}

@@ -473,3 +473,85 @@ func TestContextBudgetCapReachesTheGenerateRequest(t *testing.T) {
 		t.Fatalf("cap overrode the shrink retry: %d", got)
 	}
 }
+
+// 分配图必须和运行时真正用的预算函数一致。图自己实现一份 min(份额, 上限)，
+// 改了预算逻辑而忘了改图，图就开始骗人。
+func TestContextBudgetBreakdownMatchesRuntimeBudgets(t *testing.T) {
+	runtime := NewRuntime(BotConfig{MaxContextTokens: 128000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	breakdown := runtime.ContextBudgetBreakdownForGroup("123456")
+	if breakdown.GroupID != "123456" {
+		t.Fatalf("group = %q", breakdown.GroupID)
+	}
+	window := breakdown.ContextWindow
+	cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123456"})
+	want := map[string]int64{
+		"recent_history":   recentHistoryBudget(window, cfg),
+		"session_thread":   sessionThreadBudget(window),
+		"retrieved_memory": retrievedMemoryBudget(window),
+		"core_memory":      coreMemoryBudget(window),
+	}
+	if len(breakdown.Layers) != len(want) {
+		t.Fatalf("layers = %#v", breakdown.Layers)
+	}
+	var sum int64
+	for _, layer := range breakdown.Layers {
+		expected, ok := want[layer.Key]
+		if !ok {
+			t.Fatalf("unexpected layer %q", layer.Key)
+		}
+		if layer.Tokens != expected {
+			t.Fatalf("layer %s = %d, want %d", layer.Key, layer.Tokens, expected)
+		}
+		sum += layer.Tokens
+	}
+	if breakdown.Allocated != sum {
+		t.Fatalf("allocated = %d, want %d", breakdown.Allocated, sum)
+	}
+	if breakdown.Headroom != window-sum {
+		t.Fatalf("headroom = %d, want %d", breakdown.Headroom, window-sum)
+	}
+	// 只有近期历史可配，另外三层的取值由各自结构决定，给旋钮没有对应的失效模式。
+	for _, layer := range breakdown.Layers {
+		if layer.Configurable != (layer.Key == "recent_history") {
+			t.Fatalf("layer %s configurable = %v", layer.Key, layer.Configurable)
+		}
+	}
+}
+
+// 大窗口下四层几乎全被绝对上限压住，小窗口下全按份额走——分层预算要表达的正是这件事，
+// 图上那个「上限 16000」还是「窗口 55%」的说明不能反过来。
+func TestContextBudgetBreakdownReportsWhichBoundApplies(t *testing.T) {
+	large := NewRuntime(BotConfig{MaxContextTokens: 128000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	for _, layer := range large.ContextBudgetBreakdownForGroup("g").Layers {
+		if !layer.CappedByCeiling {
+			t.Fatalf("128K 窗口下 %s 应当被绝对上限压住：%#v", layer.Key, layer)
+		}
+	}
+	small := NewRuntime(BotConfig{MaxContextTokens: 8000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	breakdown := small.ContextBudgetBreakdownForGroup("g")
+	for _, layer := range breakdown.Layers {
+		if layer.CappedByCeiling {
+			t.Fatalf("8K 窗口下 %s 应当按份额走：%#v", layer.Key, layer)
+		}
+	}
+	// 小窗口也不能被四层吃干净，否则系统提示和当前消息没地方放。
+	if breakdown.Headroom <= 0 {
+		t.Fatalf("8K 窗口没有留白：%#v", breakdown)
+	}
+}
+
+// 没有 LLM 配置档时也要认配置里的窗口上限。这条路径以前直接 return 兜底常量，
+// 机器人和群配的 max_context_tokens 在上面完全不生效。
+func TestPromptContextWindowRespectsConfigWithoutLLMStore(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g"}
+	cfg := BotConfig{MaxContextTokens: 8000}
+	if got := runtime.promptContextWindowTokens(event, cfg); got != 8000 {
+		t.Fatalf("window = %d, want 8000", got)
+	}
+	// 比兜底常量还大的配置不放宽窗口，只收紧。
+	wide := BotConfig{MaxContextTokens: llm.DefaultContextWindowTokens * 4}
+	if got := runtime.promptContextWindowTokens(event, wide); got != llm.DefaultContextWindowTokens {
+		t.Fatalf("window = %d, want the fallback %d", got, llm.DefaultContextWindowTokens)
+	}
+}

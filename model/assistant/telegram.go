@@ -241,11 +241,19 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 	}
 
 	if text := strings.TrimSpace(msg.Text); text != "" {
+		// 提及标记在这里落地成 Telegram 自己的形式：正文写「@昵称」，另外附一条
+		// text_mention entity 指向用户 id。这是 Telegram 给「没有 username 的人」
+		// 准备的提及方式——显示成可点击的名字，对方有通知，不依赖 username。
+		text, mentions := renderDianaMentions(text, msg.MentionNames)
 		params := map[string]any{
 			"chat_id": chatID,
 			"text":    text,
 			// 统一发纯文本：机器人回复里的 * # ` 等符号不该被当成格式标记。
 			"disable_web_page_preview": true,
+		}
+		// entities 和 parse_mode 是两条路，只传 entities 不会把正文当 Markdown 解析。
+		if entities := telegramMentionEntities(mentions); len(entities) > 0 {
+			params["entities"] = entities
 		}
 		if replyID := strings.TrimSpace(msg.ReplyMessageID); replyID != "" {
 			params["reply_to_message_id"] = replyID
@@ -640,4 +648,32 @@ func telegramAnyID(value any) string {
 		return strconv.FormatInt(v, 10)
 	}
 	return ""
+}
+
+// telegramMentionEntities 把提及位置翻成 Telegram 的 MessageEntity 列表。
+//
+// user.id 必须是数字：Telegram 的用户 id 就是数字，拿到非数字（比如脱敏别名没
+// 还原干净，或者这条消息其实来自别的平台）就跳过这一条——宁可少一个可点击的
+// 提及，也不能让整条消息因为参数非法发不出去。正文里的「@昵称」照常留着。
+func telegramMentionEntities(mentions []dianaMentionSpan) []map[string]any {
+	if len(mentions) == 0 {
+		return nil
+	}
+	entities := make([]map[string]any, 0, len(mentions))
+	for _, mention := range mentions {
+		userID, err := strconv.ParseInt(strings.TrimSpace(mention.UserID), 10, 64)
+		if err != nil {
+			continue
+		}
+		entities = append(entities, map[string]any{
+			"type":   "text_mention",
+			"offset": mention.Offset,
+			"length": mention.Length,
+			"user":   map[string]any{"id": userID},
+		})
+	}
+	if len(entities) == 0 {
+		return nil
+	}
+	return entities
 }

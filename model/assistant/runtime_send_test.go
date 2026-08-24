@@ -97,7 +97,8 @@ func TestSendGivesUpAfterRetries(t *testing.T) {
 func TestSendOnlyFirstChunkCarriesReplyAndAt(t *testing.T) {
 	withFastSendTiming(t)
 	channel := &scriptedChannel{}
-	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 4, ForwardReplyThreshold: 1000, SendChunkIntervalMS: 1}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 4, ForwardReplyThreshold: 1000, SendChunkIntervalMS: 1,
+		ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "m1"}
 
 	if err := runtime.send(context.Background(), event, "一二三四五六七"); err != nil {
@@ -364,7 +365,7 @@ func TestErrorNoticeIsNotChunkedByPersonaStyle(t *testing.T) {
 		ResponseMode: ResponseModeStandard,
 		ReplyStyle:   ReplyStyleGroupmate,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
-	if size := runtime.Config().DirectReplyChunkSize; size != groupmateReplyChunkSize {
+	if size := runtime.Config().DirectReplyChunkSize; size != chatReplyChunkSize {
 		t.Fatalf("fixture needs the groupmate chunk size, got %d", size)
 	}
 

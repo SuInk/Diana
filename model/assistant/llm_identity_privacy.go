@@ -20,7 +20,7 @@ import (
 
 // 别名前缀刻意不带平台名：同一套脱敏要服务 QQ、Telegram 以及以后接入的平台，
 // 叫 qq_ 会让模型以为当前一定是 QQ。im_ 取 instant messaging，平台中立。
-const llmIdentityPrivacyPrompt = `【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；im_owner、im_current_user、im_bot、im_user、im_group、im_message 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:im_message_xxx] 这种引用标记；本地代理会在执行工具或发送消息前自动恢复真实标识。`
+const llmIdentityPrivacyPrompt = `【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；im_owner、im_current_user、im_bot、im_user、im_group、im_message 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:im_message_xxx]、[diana-at:im_user_xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。`
 
 var (
 	identityPrivacyJSONIDPattern = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
@@ -29,6 +29,9 @@ var (
 	// 消息 ID 单独匹配：它允许负号，长度范围也和 QQ 号不同。
 	identityPrivacyMessageIDPattern   = regexp.MustCompile(`(?i)"([a-z0-9_]*message_ids?)"\s*:\s*(?:"(-?[0-9]{4,19})"|(-?[0-9]{4,19}))`)
 	identityPrivacyReplyMarkerPattern = regexp.MustCompile(`\[(?:diana-reply|回复):(-?[0-9]{4,19})\]`)
+	// 提及标记里的 id 也要脱敏。它通常在候选 JSON 里已经登记过，但提示词里
+	// 只出现在标记中的那一个（当前发言者）不该漏网。
+	identityPrivacyMentionMarkerPattern = regexp.MustCompile(`\[diana-at:([1-9][0-9]{4,13})\]`)
 )
 
 // identityAliasPrefix 是所有脱敏别名的共同前缀。
@@ -429,6 +432,9 @@ func (s *identityPrivacyScope) discoverStructuredIDs(text string) {
 	}
 	for _, match := range identityPrivacyReplyMarkerPattern.FindAllStringSubmatch(text, -1) {
 		s.registerMessageID(match[1])
+	}
+	for _, match := range identityPrivacyMentionMarkerPattern.FindAllStringSubmatch(text, -1) {
+		s.register(match[1], "user")
 	}
 }
 
