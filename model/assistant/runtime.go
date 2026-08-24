@@ -10103,6 +10103,20 @@ func (r *Runtime) isUserDisabled(userID string) bool {
 // OneBot 实现的余量都比这更宽。再往上就得按平台分别算长度了，收益不大。
 const notificationChunkSize = 1800
 
+// chunkOrphanTolerance 是允许超出分条长度的字数上限。宁可这一条长十来个字，
+// 也不要在后面挂一条「Ti」「了」「。」这样的碎片。
+const chunkOrphanTolerance = 12
+
+// chunkOverflowAllowance 返回这个上限下实际允许超出多少。
+// 「碎片」是相对分条长度而言的：上限本身只有几个字时（测试里会这么用），
+// 固定容差会把一切都吞掉，所以再按上限的四分之一压一道。
+func chunkOverflowAllowance(chunkSize int) int {
+	if allowance := chunkSize / 4; allowance < chunkOrphanTolerance {
+		return allowance
+	}
+	return chunkOrphanTolerance
+}
+
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
 const notificationSplitMarker = "<dianabr>"
 
@@ -10160,7 +10174,15 @@ func chunkTextByLength(text string, chunkSize int) []string {
 	}
 	runes := []rune(strings.TrimSpace(text))
 	var out []string
-	for len(runes) > chunkSize {
+	// 只在明显超长时才切。分条长度是人格偏好，不是平台硬限制（那个是
+	// notificationChunkSize，宽得多），为了守住它而多发一条碎片是本末倒置：
+	// 162 字撞上 160 的上限，切出来是「…正规零售版5060」加一条「Ti」。
+	//
+	// 加了这道门槛之后，切出来的尾巴一定长于容差——循环进得来就说明总长超过
+	// chunkSize+容差，而切点不会超过 chunkSize，余下的自然更长。所以碎片不只是
+	// 这一次不出现，是不可能出现。
+	allowance := chunkOverflowAllowance(chunkSize)
+	for len(runes) > chunkSize+allowance {
 		cut := replyChunkCut(runes, chunkSize)
 		if trimmed := strings.TrimSpace(string(runes[:cut])); trimmed != "" {
 			out = append(out, trimmed)

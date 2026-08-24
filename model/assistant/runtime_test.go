@@ -5122,3 +5122,51 @@ func TestNotificationChunkFitsTelegramLimit(t *testing.T) {
 		}
 	}
 }
+
+// 截图里的原话：162 字撞上 160 的分条上限，切出来是「…正规零售版5060」加一条「Ti」。
+func TestSplitReplyDoesNotStrandATinyTail(t *testing.T) {
+	reply := "那确实，3k买联想5060就完全没必要了，同样预算都摸到5060 Ti，性能档位更重要。只要那张联想5060 Ti尺寸能装下、能当场烤机验卡，卖家把来源和是否拆修说清楚，3k左右可以优先考虑；但先确认是8GB还是16GB，以及OEM拆机卡基本没独立保修。要是8GB无保，价格还得再压，不然宁可加一点买正规零售版5060 Ti"
+	got := splitReply(reply, 160)
+	if len(got) != 1 {
+		t.Fatalf("超出上限 %d 字就被切成了 %d 条：%q", len([]rune(reply))-160, len(got), got)
+	}
+}
+
+// 碎片不该只是这一条用例里不出现：只要循环进得来，尾巴就一定长于容差。
+// 各种长度和上限组合下都扫一遍，确认没有短尾。
+func TestSplitReplyNeverEmitsRunts(t *testing.T) {
+	body := []rune(strings.Repeat("测试文本内容 abc 12345，", 200))
+	for _, chunkSize := range []int{40, 160, 400, 900, notificationChunkSize} {
+		allowance := chunkOverflowAllowance(chunkSize)
+		for _, length := range []int{chunkSize - 1, chunkSize, chunkSize + 1, chunkSize + allowance,
+			chunkSize + allowance + 1, chunkSize*2 + 3, chunkSize*3 + 7} {
+			if length <= 0 || length > len(body) {
+				continue
+			}
+			chunks := splitReply(string(body[:length]), chunkSize)
+			if len(chunks) < 2 {
+				continue
+			}
+			for index, chunk := range chunks {
+				if size := len([]rune(chunk)); size <= allowance {
+					t.Fatalf("chunkSize=%d length=%d 切出第 %d 条只有 %d 字：%q",
+						chunkSize, length, index, size, chunk)
+				}
+			}
+		}
+	}
+}
+
+// 容差是给「超一点点」用的，真正的长文本照切不误。
+func TestSplitReplyStillChunksLongText(t *testing.T) {
+	long := strings.Repeat("这是一段需要被切开的长文本，", 60)
+	chunks := splitReply(long, 160)
+	if len(chunks) < 2 {
+		t.Fatalf("长文本没有被切开：%d 条", len(chunks))
+	}
+	for _, chunk := range chunks {
+		if size := len([]rune(chunk)); size > 160+chunkOverflowAllowance(160) {
+			t.Fatalf("切出的分条超过上限加容差：%d 字", size)
+		}
+	}
+}
