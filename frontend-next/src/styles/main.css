@@ -716,6 +716,30 @@ code {
 }
 
 /* 导航 */
+.nav-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.nav-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 组标题只做「这几条是一类」的提示，不该抢条目本身的注意力：小字、弱色、
+   字距拉开，和条目之间留出比条目行距更大的间隔。 */
+.nav-group-title {
+  margin: 0;
+  padding: 0 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: none;
+}
+
 .nav-item {
   display: flex;
   align-items: center;
