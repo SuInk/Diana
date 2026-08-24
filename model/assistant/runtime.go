@@ -5234,6 +5234,10 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptInternalIdentifiers)
+		// 引用被管理员关掉时不教这一手：那是「永不带引用」的明确配置。
+		if replyReferenceMode(cfg) != ReplyDecorationOff {
+			builder.WriteString("\n" + promptQuoteHistoryMessage)
+		}
 	}
 	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
 		tail.WriteString("\n" + promptOwnerRelationshipTarget)

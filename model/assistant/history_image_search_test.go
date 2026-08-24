@@ -105,12 +105,25 @@ func TestHistoryToolKeepsMessageIDsOutOfReplies(t *testing.T) {
 		t.Fatalf("system prompt is missing the internal identifier rule: %q", prompt)
 	}
 
-	body, err := marshalDianaChatHistoryResult(dianaChatHistoryResult{OK: true, Action: "search", Message: "已完成检索。"})
-	if err != nil {
-		t.Fatal(err)
+	if !strings.Contains(prompt, promptQuoteHistoryMessage) {
+		t.Fatalf("system prompt is missing the quote-instead-of-ID rule: %q", prompt)
 	}
-	if !strings.Contains(body, chatHistoryIDNotice) {
-		t.Fatalf("tool result is missing the identifier notice: %s", body)
+
+	// 工具结果里就近再提醒一次：禁令 + 该怎么做。
+	tool := newDianaChatHistoryTool(runtime, event)
+	notice := tool.idNotice()
+	if !strings.Contains(notice, chatHistoryIDNotice) || !strings.Contains(notice, replyMarkerPrefix) {
+		t.Fatalf("tool notice = %q", notice)
+	}
+
+	// 管理员把引用关掉时不教引用，只留禁令——那个动作会被配置丢掉。
+	off := NewRuntime(BotConfig{ReplyReferenceMode: ReplyDecorationOff}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	if notice := newDianaChatHistoryTool(off, event).idNotice(); notice != chatHistoryIDNotice {
+		t.Fatalf("reply-off notice = %q", notice)
+	}
+	offPrompt := off.systemPromptWithRelationshipAndAgentTools(event, nil, false, relationship, true, nil)
+	if strings.Contains(offPrompt, promptQuoteHistoryMessage) {
+		t.Fatalf("reply-off prompt should not teach quoting: %q", offPrompt)
 	}
 }
 
@@ -141,5 +154,33 @@ func TestExistingImageDescriptionStillBackfillsSearchText(t *testing.T) {
 	})
 	if provider.callCount() != 0 {
 		t.Fatalf("cached description should not trigger vision calls, got %d", provider.callCount())
+	}
+}
+
+// 引用历史消息要真的落成引用：模型写在开头的标记指向一条旧消息时，出站消息
+// 的 ReplyMessageID 必须是那条旧消息，正文里不能留下标记。
+func TestOutgoingMarkerQuotesHistoryMessage(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "2001"}
+	old := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "-1659533658",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "上下文压缩比例截图"}}}}
+	runtime.mu.Lock()
+	runtime.history[sessionKey(event)] = []MessageEvent{old}
+	runtime.mu.Unlock()
+
+	msg := runtime.applyOutgoingReplyMarker(context.Background(), event,
+		OutgoingMessage{Text: replyMarkerPrefix + "-1659533658] 就是这张喵", ReplyMessageID: event.MessageID})
+	if msg.ReplyMessageID != "-1659533658" {
+		t.Fatalf("reply target = %q, want the history message", msg.ReplyMessageID)
+	}
+	if msg.Text != "就是这张喵" {
+		t.Fatalf("body = %q, marker must not survive", msg.Text)
+	}
+
+	// 指向本会话里不存在的消息时只去掉标记，正文照发，不会发送失败。
+	missing := runtime.applyOutgoingReplyMarker(context.Background(), event,
+		OutgoingMessage{Text: replyMarkerPrefix + "999999] 找不到了", ReplyMessageID: event.MessageID})
+	if missing.ReplyMessageID != event.MessageID || missing.Text != "找不到了" {
+		t.Fatalf("missing target = %#v", missing)
 	}
 }
