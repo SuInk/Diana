@@ -306,7 +306,10 @@ type Runtime struct {
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
 	chatInLastReplyAt   map[string]time.Time
-	contextSummaries    map[string]string
+	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
+	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
+	recentClaimSources map[string][]claimSourceRecord
+	contextSummaries   map[string]string
 	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
 	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
 	// 摘要、又以完整原文进入同一个请求。
@@ -510,6 +513,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		history:               map[string][]MessageEvent{},
 		semanticRefCache:      map[string]SemanticReferenceCacheRecord{},
 		chatInLastReplyAt:     map[string]time.Time{},
+		recentClaimSources:    map[string][]claimSourceRecord{},
 		contextSummaries:      map[string]string{},
 		contextSummaryMarks:   map[string]int64{},
 		activeReminders:       map[string]struct{}{},
@@ -1197,6 +1201,54 @@ func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 		out[id] = enabled
 	}
 	return out
+}
+
+// webSearchPluginSettings 读取本次事件生效的联网搜索插件设置，支持按群覆盖。
+func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bool) {
+	if r == nil || r.plugins == nil {
+		return nil, false
+	}
+	_, settings, enabled := r.plugins.PluginWithSettingsForGroup(
+		webSearchPluginID,
+		r.pluginOverridesForEvent(event),
+		r.pluginSettingOverridesForEvent(event),
+	)
+	return settings, enabled
+}
+
+// evidenceLedgerAdvisory 读取联网搜索插件的证据账本开关。关闭后账本仍然结算并留痕，
+// 但不再因为证据绑定失败拦截回复；插件本身没启用时账本也不会激活。
+func (r *Runtime) evidenceLedgerAdvisory(event MessageEvent) bool {
+	settings, enabled := r.webSearchPluginSettings(event)
+	if !enabled {
+		return false
+	}
+	return !settings.Bool(webSearchSettingEvidenceLedger, true)
+}
+
+// replyLinkPolicy 决定联网结论要不要在回复正文里给出 URL。
+func (r *Runtime) replyLinkPolicy(event MessageEvent) string {
+	settings, enabled := r.webSearchPluginSettings(event)
+	if !enabled {
+		return replyLinkPolicyOnRequest
+	}
+	switch strings.TrimSpace(settings.String(webSearchSettingLinkPolicy, replyLinkPolicyOnRequest)) {
+	case replyLinkPolicyAlways:
+		return replyLinkPolicyAlways
+	case replyLinkPolicyNever:
+		return replyLinkPolicyNever
+	default:
+		return replyLinkPolicyOnRequest
+	}
+}
+
+// claimSourceRecallEnabled 决定是否把结论引用的来源留到之后几轮供追问使用。
+func (r *Runtime) claimSourceRecallEnabled(event MessageEvent) bool {
+	settings, enabled := r.webSearchPluginSettings(event)
+	if !enabled {
+		return false
+	}
+	return settings.Bool(webSearchSettingSourceRecall, true)
 }
 
 func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSettingOverrides {
@@ -2934,6 +2986,22 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 			}
 		}
+		if linkPolicy := r.replyLinkPolicyContext(event); linkPolicy != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    linkPolicy,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
+		if sources := r.claimSourceContext(event); sources != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    sources,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
 			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
@@ -3318,14 +3386,15 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// model call from its actual message content so that a text-only planner can
 		// hand the next turn to the configured vision profile.
 		agentCfg := agent.Config{
-			WorkDir:          AgentWorkspaceDir(),
-			MaxSteps:         cfg.AgentMaxSteps,
-			SkillRoots:       cfg.AgentSkillRoots,
-			MCPConfigPath:    cfg.AgentMCPConfigPath,
-			CommandAllowlist: cfg.AgentCommandAllowlist,
-			CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
-			BrowserCDPURL:    cfg.AgentBrowserCDPURL,
-			BrowserTimeoutMS: cfg.AgentBrowserTimeoutMS,
+			WorkDir:                AgentWorkspaceDir(),
+			MaxSteps:               cfg.AgentMaxSteps,
+			SkillRoots:             cfg.AgentSkillRoots,
+			MCPConfigPath:          cfg.AgentMCPConfigPath,
+			CommandAllowlist:       cfg.AgentCommandAllowlist,
+			CommandTimeoutMS:       cfg.AgentCommandTimeoutMS,
+			BrowserCDPURL:          cfg.AgentBrowserCDPURL,
+			BrowserTimeoutMS:       cfg.AgentBrowserTimeoutMS,
+			EvidenceLedgerAdvisory: r.evidenceLedgerAdvisory(event),
 		}
 		registry := preparedRegistry
 		ownsRegistry := false
@@ -3367,6 +3436,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.rememberAgentRunProgress(event, resp)
+		r.rememberClaimSources(event, resp.Claims)
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
 	group := llm.GroupChat
@@ -3442,14 +3512,15 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 	cfg = cfg.WithDefaults()
 	if cfg.AgentEnabled || len(extraTools) > 0 {
 		agentCfg := agent.Config{
-			WorkDir:          AgentWorkspaceDir(),
-			MaxSteps:         cfg.AgentMaxSteps,
-			SkillRoots:       cfg.AgentSkillRoots,
-			MCPConfigPath:    cfg.AgentMCPConfigPath,
-			CommandAllowlist: cfg.AgentCommandAllowlist,
-			CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
-			BrowserCDPURL:    cfg.AgentBrowserCDPURL,
-			BrowserTimeoutMS: cfg.AgentBrowserTimeoutMS,
+			WorkDir:                AgentWorkspaceDir(),
+			MaxSteps:               cfg.AgentMaxSteps,
+			SkillRoots:             cfg.AgentSkillRoots,
+			MCPConfigPath:          cfg.AgentMCPConfigPath,
+			CommandAllowlist:       cfg.AgentCommandAllowlist,
+			CommandTimeoutMS:       cfg.AgentCommandTimeoutMS,
+			BrowserCDPURL:          cfg.AgentBrowserCDPURL,
+			BrowserTimeoutMS:       cfg.AgentBrowserTimeoutMS,
+			EvidenceLedgerAdvisory: r.evidenceLedgerAdvisory(MessageEvent{}),
 		}
 		registry := agent.NewToolRegistry()
 		if cfg.AgentEnabled {
