@@ -61,6 +61,9 @@ type Config struct {
 	ToolTimeoutMS         int
 	FinalizationReserveMS int
 	ProtocolRepairLimit   int
+	// EvidenceLedgerAdvisory 让逐主张证据账本只记录不拦截：claims 仍然写进
+	// trace 和运行元数据，但不再因为证据绑定失败要求模型重写 final。
+	EvidenceLedgerAdvisory bool
 }
 
 type Request struct {

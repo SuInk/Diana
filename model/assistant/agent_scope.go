@@ -85,6 +85,9 @@ func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*a
 	// the underlying Skills/MCP processes. Request views overlay that state.
 	baseCfg := cfg
 	baseCfg.BuiltinExtensions = nil
+	// 证据账本开关按群覆盖，只影响 Runner 的校验行为，不改变工具集合；
+	// 参与缓存键会把同一套 Skills/MCP 进程按开关拆成两份。
+	baseCfg.EvidenceLedgerAdvisory = false
 	keyBody, err := json.Marshal(baseCfg)
 	if err != nil {
 		return nil, err
