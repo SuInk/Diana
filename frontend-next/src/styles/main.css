@@ -1086,12 +1086,23 @@ code {
 }
 
 /* 页头 */
+/* 每一页的表头都吸顶。页面动作（保存、新建、刷新）和搜索、筛选都在这一行，
+   而下面的列表和表单大多一屏放不下——翻到下半屏还得滚回顶部才能用，是这些
+   页面最常做的事。 */
 .view-header {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 20px;
+  position: sticky;
+  top: var(--topbar-height);
+  /* 低于顶栏的 30：两者都吸顶时表头滑到顶栏底下，而不是盖住它。 */
+  z-index: 20;
+  /* 不透明，否则滚动的内容会从标题字底下穿过去。表头原本靠 margin 和下方内容
+     拉开距离，那段空白在吸顶后同样要被盖住，所以把它换成 padding。 */
+  background: var(--bg);
+  padding-bottom: 16px;
+  margin-bottom: 4px;
 }
 
 /* 侧栏底部动作项：和导航项同一套「图标 + 文字」单行样式 */
@@ -3886,24 +3897,9 @@ a.nav-action {
 /* 左边那栏很长（机器人配置一屏放不下），右边只有一张状态卡。跟着一起滚的话，
    翻到下半屏时右边就是一大片空白，而运行状态恰恰是改配置时最想随时瞄一眼的
    东西。让它贴着顶栏停住。 */
-/* 机器人配置页的表头吸顶：启动/停止和保存都在这一行，而下面的表单有五个分区、
-   一屏放不下。翻到下半屏还得滚回顶部才能保存，是这一页最常做的一件事。
-   高度由脚本量出来写进 --editor-header-height，右侧状态卡按它往下让位。 */
-.editor-header-sticky {
-  position: sticky;
-  top: var(--topbar-height);
-  /* 低于顶栏的 30：两者都吸顶时表头要滑到顶栏底下，而不是盖住它。 */
-  z-index: 20;
-  /* 不透明，否则滚动的内容会从标题字底下穿过去。表头原本靠 margin 和下方内容
-     拉开距离，那段空白在吸顶后同样要被盖住，所以把它换成 padding。 */
-  background: var(--bg);
-  padding-bottom: 16px;
-  margin-bottom: 4px;
-}
-
 .grid-side-sticky {
   position: sticky;
-  top: calc(var(--topbar-height) + var(--editor-header-height, 84px) + 16px);
+  top: calc(var(--topbar-height) + var(--view-header-height, 84px) + 16px);
   /* 侧栏自己比视口还高时（以后往里加卡片）让它自己滚，否则底部内容够不着。 */
   max-height: calc(100vh - var(--topbar-height) - 48px);
   overflow-y: auto;
@@ -4345,8 +4341,9 @@ a.nav-action {
     overflow: visible;
   }
 
-  /* 窄屏下表头会折成两三行，吸顶要吃掉小半个屏幕，不如让它跟着滚走。 */
-  .editor-header-sticky {
+  /* 窄屏下表头会折成两三行（插件页那种带搜索和筛选的更明显），吸顶要吃掉
+     小半个屏幕，不如让它跟着滚走。 */
+  .view-header {
     position: static;
     padding-bottom: 0;
     margin-bottom: 20px;

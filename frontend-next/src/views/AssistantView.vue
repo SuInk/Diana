@@ -3,7 +3,7 @@
 
 <template>
   <div ref="viewRoot">
-    <header ref="viewHeader" class="view-header" :class="{ 'editor-header-sticky': page === 'edit' }">
+    <header ref="viewHeader" class="view-header">
       <div class="view-title">
         <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="leaveEditor">
           <ArrowLeft :size="16" aria-hidden="true" />
@@ -1083,9 +1083,9 @@ const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const platforms = ref<BotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
 
-// 表头吸顶之后，右侧状态卡的停靠位置要落在它下面。表头会随窗口宽度换行、
-// 按钮也会随运行状态增减，高度不是常数，写死一个数迟早错位——所以量出来
-// 写进 CSS 变量，让样式表去用。
+// 表头吸顶之后（.view-header 全站生效），右侧状态卡的停靠位置要落在它下面。
+// 表头会随窗口宽度换行、按钮也会随运行状态增减，高度不是常数，写死一个数
+// 迟早错位——所以量出来写进 CSS 变量，让样式表去用。
 const viewRoot = ref<HTMLElement | null>(null);
 const viewHeader = ref<HTMLElement | null>(null);
 let headerResizeObserver: ResizeObserver | null = null;
@@ -1096,7 +1096,7 @@ function trackHeaderHeight(): void {
     const header = viewHeader.value;
     const root = viewRoot.value;
     if (!header || !root) return;
-    root.style.setProperty("--editor-header-height", `${Math.round(header.getBoundingClientRect().height)}px`);
+    root.style.setProperty("--view-header-height", `${Math.round(header.getBoundingClientRect().height)}px`);
   });
   if (viewHeader.value) headerResizeObserver.observe(viewHeader.value);
 }
