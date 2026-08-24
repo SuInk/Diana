@@ -105,6 +105,12 @@ type MessageHistorySearchStore interface {
 	SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error)
 }
 
+// MessageSearchExtraStore 记录「正文之外还能被搜到的文本」。图片描述由后台视觉
+// 调用异步生成，消息早就落库了，只能事后补写到这里，正文列保持原样。
+type MessageSearchExtraStore interface {
+	SaveMessageSearchExtra(ctx context.Context, session, messageID, extra string) error
+}
+
 type MessageHistoryVectorQuery struct {
 	Session       string
 	SessionPrefix string
@@ -5225,6 +5231,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptToolHistoryImages)
+	}
+	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
+		builder.WriteString("\n" + promptInternalIdentifiers)
 	}
 	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
 		tail.WriteString("\n" + promptOwnerRelationshipTarget)
