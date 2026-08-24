@@ -92,7 +92,7 @@ func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 	if !strings.Contains(prompt, replyMarkerPrefix+"1244393238]") {
 		t.Fatalf("auto prompt is missing the current message marker: %q", prompt)
 	}
-	if !strings.Contains(prompt, "@10001") {
+	if !strings.Contains(prompt, "[CQ:at,qq=10001]") {
 		t.Fatalf("auto prompt is missing the sender mention hint: %q", prompt)
 	}
 	// 私聊没有引用和 @ 的概念，不该占用上下文。
@@ -184,8 +184,12 @@ func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
 		t.Fatalf("一对一时应当明说不用 @：%s", quiet)
 	}
 	busy := mentionDecorationRule("123456", 3)
-	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "@123456") {
-		t.Fatalf("热闹时应当给出人数并要求点名：%s", busy)
+	// 写法要和「群聊真实提及规则」一致，都用 CQ 码，不再另教一套裸 @ 数字。
+	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "[CQ:at,qq=123456]") {
+		t.Fatalf("热闹时应当给出人数并要求用 CQ 码点名：%s", busy)
+	}
+	if strings.Contains(busy, "写 @123456") {
+		t.Fatalf("不该再教裸的 @数字 写法：%s", busy)
 	}
 }
 
