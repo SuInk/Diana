@@ -2,8 +2,8 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <div>
-    <header class="view-header">
+  <div ref="viewRoot">
+    <header ref="viewHeader" class="view-header" :class="{ 'editor-header-sticky': page === 'edit' }">
       <div class="view-title">
         <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="leaveEditor">
           <ArrowLeft :size="16" aria-hidden="true" />
@@ -896,7 +896,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, type Ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
 import { ArrowLeft, Bot, ChevronRight, Copy, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
 import {
   activateBotProfile,
@@ -1082,6 +1082,24 @@ const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const platforms = ref<BotPlatform[]>([]);
 const page = ref<"list" | "edit">("list");
+
+// 表头吸顶之后，右侧状态卡的停靠位置要落在它下面。表头会随窗口宽度换行、
+// 按钮也会随运行状态增减，高度不是常数，写死一个数迟早错位——所以量出来
+// 写进 CSS 变量，让样式表去用。
+const viewRoot = ref<HTMLElement | null>(null);
+const viewHeader = ref<HTMLElement | null>(null);
+let headerResizeObserver: ResizeObserver | null = null;
+
+function trackHeaderHeight(): void {
+  if (typeof ResizeObserver === "undefined") return;
+  headerResizeObserver = new ResizeObserver(() => {
+    const header = viewHeader.value;
+    const root = viewRoot.value;
+    if (!header || !root) return;
+    root.style.setProperty("--editor-header-height", `${Math.round(header.getBoundingClientRect().height)}px`);
+  });
+  if (viewHeader.value) headerResizeObserver.observe(viewHeader.value);
+}
 const platformPickerOpen = ref(false);
 const creating = ref(false);
 
@@ -1855,7 +1873,13 @@ async function copyEndpoint(): Promise<void> {
   }
 }
 
+onBeforeUnmount(() => {
+  headerResizeObserver?.disconnect();
+  headerResizeObserver = null;
+});
+
 onMounted(async () => {
+  trackHeaderHeight();
   const [platformResult, botConfig, llmConfig] = await Promise.all([
     getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),
     getBotProfileConfig().catch((error: unknown) => {
