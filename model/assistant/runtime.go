@@ -134,11 +134,13 @@ type GroupRecallHistoryStore interface {
 
 type UserMemoryStore interface {
 	UpdateUserMemory(ctx context.Context, event MessageEvent, update UserMemoryUpdate) (UserMemoryProfile, error)
-	GetUserMemory(ctx context.Context, userID string) (UserMemoryProfile, bool, error)
+	// botProfileID 指明这份画像属于哪台机器人：同一个人面对不同机器人是不同的
+	// 关系，各记各的。留空表示不限，用于「全部机器人」视图。
+	GetUserMemory(ctx context.Context, botProfileID, userID string) (UserMemoryProfile, bool, error)
 }
 
 type UserFavorabilityHistoryStore interface {
-	ListUserFavorabilityChanges(ctx context.Context, userID string, limit int) ([]UserFavorabilityChange, error)
+	ListUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, limit int) ([]UserFavorabilityChange, error)
 }
 
 type ConfigSaver interface {
@@ -8189,7 +8191,7 @@ func (r *Runtime) loadUserMemoryProfile(ctx context.Context, event MessageEvent)
 	}
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	profile, ok, err := store.GetUserMemory(loadCtx, userID)
+	profile, ok, err := store.GetUserMemory(loadCtx, strings.TrimSpace(event.ProfileID), userID)
 	if err != nil {
 		log.Printf("chatbot user memory load failed: %v", err)
 		return UserMemoryProfile{UserID: userID, DisplayName: event.SenderNameOrID()}, false

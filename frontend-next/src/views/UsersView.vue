@@ -16,8 +16,6 @@
       </div>
     </header>
 
-    <BotScopeNotice subject="人员画像与长期记忆" />
-
     <section class="card">
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px">
@@ -126,8 +124,8 @@
 </template>
 
 <script setup lang="ts">
-import BotScopeNotice from "../components/BotScopeNotice.vue";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { botScope } from "../bot-scope";
 import { ChevronRight, RefreshCw } from "@lucide/vue";
 import {
   getAssistantUser,
@@ -161,7 +159,7 @@ const detailTitle = computed(() => {
 async function fetchUsers(offset: number): Promise<void> {
   loading.value = true;
   try {
-    const response = await listAssistantUsers(activeQuery.value, PAGE_SIZE, offset);
+    const response = await listAssistantUsers(activeQuery.value, PAGE_SIZE, offset, botScope.value);
     users.value = offset === 0 ? response.users : [...users.value, ...response.users];
     total.value = response.total;
   } catch (error) {
@@ -189,7 +187,7 @@ async function openDetail(user: UserMemoryProfile): Promise<void> {
   detail.value = null;
   detailLoading.value = true;
   try {
-    detail.value = await getAssistantUser(user.user_id);
+    detail.value = await getAssistantUser(user.user_id, botScope.value);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "加载人员详情失败");
     selected.value = null;
@@ -222,6 +220,12 @@ function changeSourceLabel(source: string): string {
   };
   return labels[source] ?? source;
 }
+
+// 换了机器人，画像和好感度都是另一份，列表和详情一起重置。
+watch(botScope, () => {
+  detail.value = null;
+  reload();
+});
 
 onMounted(() => {
   reload();
