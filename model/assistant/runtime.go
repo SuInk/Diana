@@ -2857,7 +2857,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if asyncImageTaskNotice != "" {
 		systemPrompt += "\n" + asyncImageTaskNotice
 	}
-	if mentionPrompt := r.replyMentionPrompt(event, replyHistory); mentionPrompt != "" {
+	if mentionPrompt := r.replyMentionPrompt(cfg, event, replyHistory); mentionPrompt != "" {
 		systemPrompt += "\n" + mentionPrompt
 	}
 	ruleDecision, ruleMatched := r.evaluateReplyRules(ctx, event, cleanText, replyHistory, cfg)
@@ -5342,7 +5342,18 @@ type replyMentionCandidate struct {
 	Source        string `json:"source,omitempty"`
 }
 
-func (r *Runtime) replyMentionPrompt(event MessageEvent, history []MessageEvent) string {
+// replyMentionPrompt 说明「怎么 @ 别人」：候选名单和 CQ at 的写法。
+//
+// 「要不要 @ 当前发言者」不在这里,由 replyDecorationPrompt 按本轮的装饰件模式
+// 单独给出。两段提示词曾经各说各的:这一段写死「发送层会引用并 @ 当前发言者,
+// 这部分不需要你输出 CQ at」,那句话只有 on 档成立;而 auto 档发送层一个装饰件
+// 都不加,另一段却在请模型自己写 @。模型两段都收到,前一段是陈述句("发送层会
+// 做"),后一段是选择题,于是按前一段理解——不输出 CQ at,发送层也没加,@ 就消失了。
+// 「该 @ 的时候也不 @」是这么来的,不是模型判断保守。
+//
+// 现在描述发送层行为的那几句按模式给:on 档照旧说会自动加,auto/off 档明说不会,
+// 谁也不再替另一段做决定。
+func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
 	if event.Kind != EventKindGroup {
 		return ""
 	}
@@ -5359,12 +5370,45 @@ func (r *Runtime) replyMentionPrompt(event MessageEvent, history []MessageEvent)
 	【群聊真实提及规则】
 	发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。
 	可提及成员候选 JSON：%s
-	1. 当前发言者是在直接询问你时，发送层会在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at。
-	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，使用 [CQ:at,qq=成员账号] 提及实际对象。发送层看到你明确提及其他成员，或识别到当前消息正在承接其他成员时，会取消对触发者的自动引用和 @。
+	1. %s
+	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，使用 [CQ:at,qq=成员账号] 提及实际对象。%s
 	3. 可以同时提及多人，也可以把多个额外 CQ at 放在不同位置。不要重复提及同一成员；CQ at 前后按正常中文语句保留必要空格。
-	4. 发送层会原样保留额外 CQ at 的对象和相对位置，并自动避免把触发者误当成回应对象。
+	4. 发送层会原样保留额外 CQ at 的对象和相对位置。%s
 	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把 CQ 码放进 Markdown 代码块。
-	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`, string(payload)))
+	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
+		string(payload),
+		currentSenderMentionRule(cfg),
+		autoDecorationCancelClause(cfg),
+		autoDecorationAvoidClause(cfg)))
+}
+
+// currentSenderMentionRule 说明当前发言者这一位由谁来 @。三档说的是三件不同的事，
+// 含糊其辞比说错更糟：模型会按最像陈述句的那一句办。
+func currentSenderMentionRule(cfg BotConfig) string {
+	switch mentionUserMode(cfg) {
+	case ReplyDecorationOn:
+		return "当前发言者是在直接询问你时，发送层会在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at。"
+	case ReplyDecorationOff:
+		return "发送层不会自动 @ 任何人。当前发言者这一位按本群习惯通常不用 @，需要点名时自己写 [CQ:at,qq=成员账号]。"
+	default:
+		return "发送层不会自动 @ 任何人，包括当前发言者。这一轮要不要 @ 当前发言者，按本轮单独给出的那条规则判断；判断为要，就自己在回复最开头写出来。"
+	}
+}
+
+// autoDecorationCancelClause 只在 on 档成立：发送层看到模型点名了别人才会撤掉
+// 自己加的那一份。auto/off 档它本来就没加，没有可撤的。
+func autoDecorationCancelClause(cfg BotConfig) string {
+	if mentionUserMode(cfg) != ReplyDecorationOn && replyReferenceMode(cfg) != ReplyDecorationOn {
+		return ""
+	}
+	return "发送层看到你明确提及其他成员，或识别到当前消息正在承接其他成员时，会取消对触发者的自动引用和 @。"
+}
+
+func autoDecorationAvoidClause(cfg BotConfig) string {
+	if mentionUserMode(cfg) != ReplyDecorationOn {
+		return ""
+	}
+	return "并自动避免把触发者误当成回应对象。"
 }
 
 func (r *Runtime) replyMentionCandidates(event MessageEvent, history []MessageEvent) []replyMentionCandidate {

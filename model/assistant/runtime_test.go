@@ -2027,7 +2027,8 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 			systemPrompt.WriteByte('\n')
 		}
 	}
-	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "当前发言者是在直接询问你时", "可以直接回答", "原样保留额外 CQ at 的对象和相对位置"} {
+	// 这份配置是默认档（auto），所以第 1 条应当是「发送层不会自动 @」那一版。
+	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "发送层不会自动 @ 任何人", "可以直接回答", "原样保留额外 CQ at 的对象和相对位置"} {
 		if !strings.Contains(systemPrompt.String(), want) {
 			t.Fatalf("system prompt missing %q: %s", want, systemPrompt.String())
 		}

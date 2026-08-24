@@ -211,3 +211,66 @@ func TestReplyDecorationPromptCarriesMentionCrowd(t *testing.T) {
 		}
 	}
 }
+
+// 两段关于 @ 的提示词不能各说各的。
+//
+// 「群聊真实提及规则」曾经写死一句「发送层会引用并 @ 当前发言者，这部分不需要
+// 你输出 CQ at」——只有 on 档成立。auto 档发送层一个装饰件都不加，另一段却在请
+// 模型自己写 @：模型两段都收到，前一段是陈述句、后一段是选择题，于是按前一段
+// 办，@ 就消失了。
+func TestMentionPromptAgreesWithDecorationMode(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindGroup, SelfID: "42", GroupID: "123456", UserID: "10001",
+		MessageID: "m1", ToMe: true,
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
+	}
+
+	cases := []struct {
+		mode   ReplyDecorationMode
+		want   string
+		reject string
+	}{
+		// on：发送层确实会自己加，这句话成立，模型不该重复输出。
+		{mode: ReplyDecorationOn, want: "不需要你输出 CQ at", reject: "发送层不会自动 @ 任何人"},
+		// auto：发送层什么都不加，必须说清楚，并把判断交回给另一段规则。
+		{mode: ReplyDecorationAuto, want: "按本轮单独给出的那条规则判断", reject: "不需要你输出 CQ at"},
+		// off：发送层同样不加，但也没有另一段规则，需要点名就自己写。
+		{mode: ReplyDecorationOff, want: "需要点名时自己写", reject: "不需要你输出 CQ at"},
+	}
+	for _, tc := range cases {
+		cfg := BotConfig{BotAccount: "42", MentionUserMode: tc.mode, ReplyReferenceMode: tc.mode}.WithDefaults()
+		prompt := runtime.replyMentionPrompt(cfg, event, nil)
+		if prompt == "" {
+			t.Fatalf("mode %s: 提及规则不该为空", tc.mode)
+		}
+		if !strings.Contains(prompt, tc.want) {
+			t.Fatalf("mode %s 缺少 %q：%s", tc.mode, tc.want, prompt)
+		}
+		if strings.Contains(prompt, tc.reject) {
+			t.Fatalf("mode %s 不该出现 %q：%s", tc.mode, tc.reject, prompt)
+		}
+	}
+}
+
+// 「发送层会取消自动引用和 @」这句只有真的加了才成立。
+func TestMentionPromptDropsSendLayerClausesWhenNothingIsAdded(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindGroup, SelfID: "42", GroupID: "123456", UserID: "10001",
+		MessageID: "m1", ToMe: true,
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
+	}
+	quiet := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationAuto}.WithDefaults()
+	prompt := runtime.replyMentionPrompt(quiet, event, nil)
+	for _, unwanted := range []string{"会取消对触发者的自动引用", "自动避免把触发者误当成回应对象"} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("auto 档不该承诺发送层的动作 %q：%s", unwanted, prompt)
+		}
+	}
+	// 引用还开着的时候，「会取消自动引用」仍然成立，不能一起删掉。
+	mixed := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOn}.WithDefaults()
+	if !strings.Contains(runtime.replyMentionPrompt(mixed, event, nil), "会取消对触发者的自动引用") {
+		t.Fatal("引用仍为 on 时应当保留取消说明")
+	}
+}
