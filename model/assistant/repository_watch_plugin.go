@@ -45,7 +45,9 @@ type repositoryWatchSnapshot struct {
 	// StarEventID 是最近一条已处理的 WatchEvent id，空串表示还没初始化过。
 	StarEventID string
 	// StarEventAt 是那条事件的 GitHub 时间，只在 id 被挤出事件窗口时当兜底用。
-	StarEventAt time.Time
+	StarEventAt          time.Time
+	StarNotifiedCount    int
+	HasStarNotifiedCount bool
 }
 
 // repositoryWatchStarState 是 Star 监控这一轮要写回的游标。
@@ -138,6 +140,7 @@ type repositoryWatchStarChange struct {
 	Delta      int                        `json:"delta"`
 	URL        string                     `json:"url,omitempty"`
 	AddedUsers []repositoryWatchStargazer `json:"added_users,omitempty"`
+	Milestones []int                      `json:"milestones,omitempty"`
 	DetectedAt time.Time                  `json:"detected_at,omitempty"`
 }
 

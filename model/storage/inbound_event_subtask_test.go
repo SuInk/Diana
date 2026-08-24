@@ -115,7 +115,7 @@ func TestInboundEventDeliveryRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, time.Time{}, 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: time.Time{}, Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestInboundEventDeliveryOmittedWhenNothingSent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	page, err := store.ListInboundEventDetails(ctx, time.Time{}, 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: time.Time{}, Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}

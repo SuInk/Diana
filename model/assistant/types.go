@@ -150,9 +150,13 @@ type OutgoingMessage struct {
 	ImagesFirst    bool
 	ReplyMessageID string
 	MentionUserID  string
-	ForwardName    string
-	ForwardUIN     string
-	ForwardTime    int64
+	// MentionNames 是正文里 [diana-at:ID] 标记要显示的昵称，按 id 索引。
+	// Telegram 的 text_mention 需要一段可见文字，光有 id 显示不出来；查不到
+	// 的 id 退回显示 @<id>。OneBot 不需要它——那边 at 段自己会渲染。
+	MentionNames map[string]string
+	ForwardName  string
+	ForwardUIN   string
+	ForwardTime  int64
 }
 
 type ReminderKind string
@@ -195,11 +199,15 @@ type Reminder struct {
 	WatchIssues             bool         `json:"watch_issues,omitempty"`
 	WatchReleases           bool         `json:"watch_releases,omitempty"`
 	WatchStars              bool         `json:"watch_stars,omitempty"`
+	StarNotifyMode          string       `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold     int          `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones    []int        `json:"star_notify_milestones,omitempty"`
 	LastCommitSHA           string       `json:"last_commit_sha,omitempty"`
 	LastPullRequestCursor   string       `json:"last_pull_request_cursor,omitempty"`
 	LastIssueCursor         string       `json:"last_issue_cursor,omitempty"`
 	LastReleaseTag          string       `json:"last_release_tag,omitempty"`
 	LastStarCount           int          `json:"last_star_count,omitempty"`
+	LastNotifiedStarCount   int          `json:"last_notified_star_count,omitempty"`
 	LastStarEventID         string       `json:"last_star_event_id,omitempty"`
 	LastStarEventAt         time.Time    `json:"last_star_event_at,omitempty"`
 	// WatchAnchorsJSON 记录每个投递目标里各 PR/Issue 首次宣布消息的 ID,
@@ -328,27 +336,30 @@ type BotConfig struct {
 	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
-	ReplyAccountSafetyAuditEnabled *bool           `json:"reply_account_safety_audit_enabled,omitempty"`
-	PromptInjectTime               *bool           `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules     *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender        *bool           `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint         *bool           `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText         string          `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText       string          `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate             string          `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate      string          `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText            string          `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText             string          `json:"prompt_wake_only_text,omitempty"`
-	ProactiveReplyRouterPrompt     string          `json:"proactive_reply_router_prompt,omitempty"`
-	ProactiveReplyPrompt           string          `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars                  int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars                  int             `json:"max_reply_chars,omitempty"`
-	DirectReplyChunkSize           int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold          int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode                RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RecallReplyAutoDeleteEnabled   *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds          int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled      *bool           `json:"llm_identity_masking_enabled,omitempty"`
+	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
+	// GlossarySharedScopeEnabled 让词典跨群共用一本：新词条写进全局作用域，
+	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
+	GlossarySharedScopeEnabled   *bool           `json:"glossary_shared_scope_enabled,omitempty"`
+	PromptInjectTime             *bool           `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules   *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender      *bool           `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint       *bool           `json:"prompt_chinese_slang_hint,omitempty"`
+	PromptChineseSlangText       string          `json:"prompt_chinese_slang_text,omitempty"`
+	PromptPlaintextRulesText     string          `json:"prompt_plaintext_rules_text,omitempty"`
+	PromptTimeTemplate           string          `json:"prompt_time_template,omitempty"`
+	PromptGroupSenderTemplate    string          `json:"prompt_group_sender_template,omitempty"`
+	PromptImageOnlyText          string          `json:"prompt_image_only_text,omitempty"`
+	PromptWakeOnlyText           string          `json:"prompt_wake_only_text,omitempty"`
+	ProactiveReplyRouterPrompt   string          `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
+	MaxInputChars                int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -541,17 +552,20 @@ type ConfigPayload struct {
 	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
-	ReplyAccountSafetyAuditEnabled *bool           `json:"reply_account_safety_audit_enabled,omitempty"`
-	ProactiveReplyRouterPrompt     string          `json:"proactive_reply_router_prompt,omitempty"`
-	ProactiveReplyPrompt           string          `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars                  int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars                  int             `json:"max_reply_chars,omitempty"`
-	DirectReplyChunkSize           int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold          int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode                RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RecallReplyAutoDeleteEnabled   *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds          int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled      *bool           `json:"llm_identity_masking_enabled,omitempty"`
+	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
+	// GlossarySharedScopeEnabled 让词典跨群共用一本：新词条写进全局作用域，
+	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
+	GlossarySharedScopeEnabled   *bool           `json:"glossary_shared_scope_enabled,omitempty"`
+	ProactiveReplyRouterPrompt   string          `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
+	MaxInputChars                int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -914,30 +928,38 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 func DefaultBotConfig() BotConfig {
 	// 默认不开启机器人，避免首次启动服务就暴露 OneBot 连接面。
 	return BotConfig{
-		Name:                           DefaultProfileName,
-		Platform:                       DefaultPlatform,
-		Enabled:                        false,
-		OneBotReverseWSEndpoint:        "ws://127.0.0.1:18080/onebot/v11/ws",
-		NoneBotBridgeEndpoint:          "ws://127.0.0.1:8080/onebot/v11/ws",
-		GroupTriggers:                  []string{"Diana", "diana"},
-		GroupTriggerMode:               defaultAliasTriggerMode,
-		DisabledGroups:                 []string{},
-		DisabledUsers:                  []string{},
-		GroupAdmission:                 GroupAdmission{}.WithDefaults(),
-		WelcomeEnabled:                 false,
-		WelcomeMessage:                 "欢迎加入本群，可以直接 @我 开始聊天。",
-		SystemPrompt:                   defaultSystemPrompt,
-		ResponseMode:                   ResponseModeStandard,
-		ReplyStyle:                     ReplyStyleAssistant,
-		PromptChineseSlangText:         defaultPromptChineseSlang,
-		PromptPlaintextRulesText:       defaultPromptPlaintextRules,
-		PromptTimeTemplate:             defaultPromptTimeTemplate,
-		PromptGroupSenderTemplate:      defaultPromptGroupSenderTemplate,
-		PromptImageOnlyText:            defaultPromptImageOnly,
-		PromptWakeOnlyText:             defaultPromptWakeOnly,
-		ErrorReplyPrefix:               "出错了：",
-		SendRetryAttempts:              3,
-		SendChunkIntervalMS:            300,
+		Name:                    DefaultProfileName,
+		Platform:                DefaultPlatform,
+		Enabled:                 false,
+		OneBotReverseWSEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
+		NoneBotBridgeEndpoint:   "ws://127.0.0.1:8080/onebot/v11/ws",
+		GroupTriggers:           []string{"Diana", "diana"},
+		GroupTriggerMode:        defaultAliasTriggerMode,
+		// 引用和 @ 默认交给模型自己判断。「每条都带」和「一条都不带」都不像真人，
+		// 而 auto 拿得到插话人数这类算得出来的信号（见 replyDecorationPrompt），
+		// 冷清时不带、需要点名时才带。
+		ReplyReferenceMode:        ReplyDecorationAuto,
+		MentionUserMode:           ReplyDecorationAuto,
+		DisabledGroups:            []string{},
+		DisabledUsers:             []string{},
+		GroupAdmission:            GroupAdmission{}.WithDefaults(),
+		WelcomeEnabled:            false,
+		WelcomeMessage:            "欢迎加入本群，可以直接 @我 开始聊天。",
+		SystemPrompt:              defaultSystemPrompt,
+		ResponseMode:              ResponseModeStandard,
+		ReplyStyle:                ReplyStyleAssistant,
+		PromptChineseSlangText:    defaultPromptChineseSlang,
+		PromptPlaintextRulesText:  defaultPromptPlaintextRules,
+		PromptTimeTemplate:        defaultPromptTimeTemplate,
+		PromptGroupSenderTemplate: defaultPromptGroupSenderTemplate,
+		PromptImageOnlyText:       defaultPromptImageOnly,
+		PromptWakeOnlyText:        defaultPromptWakeOnly,
+		ErrorReplyPrefix:          "出错了：",
+		SendRetryAttempts:         3,
+		// 连发间隔和每条长度取的是聊天体量：几百字一坨、300ms 连发怎么看都不像
+		// 真人。这两个数原先是群友风格在 apply 里钳出来的，风格不再改配置之后
+		// 搬到这里当默认值——想要长一点的气泡、快一点的连发就在 WebUI 里改。
+		SendChunkIntervalMS:            chatSendChunkIntervalMS,
 		ProactiveReplyRouterPrompt:     defaultProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           defaultProactiveReplyPrompt,
 		ChatInEnabled:                  boolPointer(true),
@@ -945,7 +967,7 @@ func DefaultBotConfig() BotConfig {
 		NaturalInterjectionEnabled:     boolPointer(false),
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
-		DirectReplyChunkSize:           900,
+		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
 		RecallReplyMode:                RecallReplyModeLLMSummary,
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
@@ -953,6 +975,7 @@ func DefaultBotConfig() BotConfig {
 		LLMIdentityMaskingEnabled:      boolPointer(true),
 		BotReplyLoopDetectionEnabled:   boolPointer(true),
 		ReplyAccountSafetyAuditEnabled: boolPointer(false),
+		GlossarySharedScopeEnabled:     boolPointer(false),
 		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
@@ -1072,8 +1095,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SendRetryAttempts > 5 {
 		cfg.SendRetryAttempts = 5
 	}
-	// 风格的投递策略要在数值默认之前套用，否则分不清「用户填的 900」和「默认 900」。
-	cfg.ReplyStyle.apply(&cfg)
+	if cfg.ReplyReferenceMode == "" {
+		cfg.ReplyReferenceMode = defaults.ReplyReferenceMode
+	}
+	if cfg.MentionUserMode == "" {
+		cfg.MentionUserMode = defaults.MentionUserMode
+	}
 	if cfg.SendChunkIntervalMS <= 0 {
 		cfg.SendChunkIntervalMS = defaults.SendChunkIntervalMS
 	}
@@ -1106,6 +1133,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.ReplyAccountSafetyAuditEnabled == nil {
 		cfg.ReplyAccountSafetyAuditEnabled = boolPointer(false)
+	}
+	if cfg.GlossarySharedScopeEnabled == nil {
+		cfg.GlossarySharedScopeEnabled = boolPointer(false)
 	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
@@ -1277,6 +1307,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ModelRoles:                     normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:   copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyAccountSafetyAuditEnabled: copyBoolPointer(cfg.ReplyAccountSafetyAuditEnabled),
+		GlossarySharedScopeEnabled:     copyBoolPointer(cfg.GlossarySharedScopeEnabled),
 		ProactiveReplyRouterPrompt:     cfg.ProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           cfg.ProactiveReplyPrompt,
 		MaxInputChars:                  cfg.MaxInputChars,
@@ -1408,6 +1439,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ModelRoles:                     normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled:   copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyAccountSafetyAuditEnabled: copyBoolPointer(payload.ReplyAccountSafetyAuditEnabled),
+		GlossarySharedScopeEnabled:     copyBoolPointer(payload.GlossarySharedScopeEnabled),
 		ProactiveReplyRouterPrompt:     payload.ProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           payload.ProactiveReplyPrompt,
 		MaxInputChars:                  payload.MaxInputChars,

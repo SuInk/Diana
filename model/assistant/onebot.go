@@ -875,7 +875,9 @@ func normalizedHTTPURL(value string) string {
 
 // TextToOneBotSegments 将文本转换为 OneBot segment 列表。
 func TextToOneBotSegments(text string) []MessageSegment {
-	parsed := CQToSegments(text)
+	// 平台中立的提及标记先翻成 CQ at 码，后面照原路走。模型写的是
+	// [diana-at:ID]，OneBot 这边它就是一个 at 段。
+	parsed := CQToSegments(dianaMentionsToCQ(text))
 	segments := make([]MessageSegment, 0, len(parsed)+2)
 	for index, segment := range parsed {
 		if segment.Type == "text" {

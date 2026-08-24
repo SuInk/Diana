@@ -64,7 +64,8 @@ type dianaOneBotGroupMemberItem struct {
 	Role        string `json:"role,omitempty"`
 	Title       string `json:"title,omitempty"`
 	AvatarURL   string `json:"avatar_url,omitempty"`
-	MentionCQ   string `json:"mention_cq"`
+	// Mention 是可以直接抄进回复的提及标记，出站时按平台翻译。
+	Mention string `json:"mention"`
 }
 
 func newDianaOneBotGroupTool(runtime *Runtime, event MessageEvent) *dianaOneBotGroupTool {
@@ -323,7 +324,7 @@ func (t *dianaOneBotGroupTool) listMembers(ctx context.Context, input map[string
 			Role:        member.Role,
 			Title:       member.Title,
 			AvatarURL:   member.AvatarURL,
-			MentionCQ:   "[CQ:at,qq=" + member.UserID + "]",
+			Mention:     mentionMarkerFor(member.UserID),
 		})
 	}
 	return marshalDianaOneBotGroupResult(dianaOneBotGroupResult{

@@ -65,7 +65,55 @@ ON CONFLICT(id) DO UPDATE SET
 		return err
 	}
 	// 检索 token 要在 Go 侧切分，触发器做不到，所以写入后同步一次索引。
-	s.indexMessageHistoryRow(id, event.SenderName, event.UserID, text)
+	// 同一条消息重复入库时 search_extra 保持原值（图片描述是后到的，不能被覆盖掉）。
+	s.indexMessageHistoryRow(id, event.SenderName, event.UserID, text, s.messageSearchExtra(ctx, id))
+	return nil
+}
+
+// messageSearchExtra 读取某条消息已有的检索附加文本。
+func (s *SQLiteStore) messageSearchExtra(ctx context.Context, id string) string {
+	var extra sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT search_extra FROM message_events WHERE id = ?`, id).Scan(&extra); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(extra.String)
+}
+
+// SaveMessageSearchExtra 记录一条消息「正文之外还能被搜到的文本」，目前是图片
+// 描述。描述由后台视觉调用异步生成，消息早就落库了，所以只能事后补写；写完立刻
+// 重建这一行的检索索引，否则新描述要等下次消息更新才进得去。
+func (s *SQLiteStore) SaveMessageSearchExtra(ctx context.Context, session, messageID, extra string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	session, messageID = strings.TrimSpace(session), strings.TrimSpace(messageID)
+	extra = strings.TrimSpace(extra)
+	if session == "" || messageID == "" || extra == "" {
+		return nil
+	}
+	var (
+		id     string
+		sender sql.NullString
+		userID sql.NullString
+		text   sql.NullString
+	)
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, sender_name, user_id, text
+FROM message_events
+WHERE session = ? AND message_id = ?
+ORDER BY event_time DESC, created_at DESC
+LIMIT 1
+`, session, messageID).Scan(&id, &sender, &userID, &text)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("load message for search extra: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE message_events SET search_extra = ? WHERE id = ?`, extra, id); err != nil {
+		return fmt.Errorf("save message search extra: %w", err)
+	}
+	s.indexMessageHistoryRow(id, sender.String, userID.String, text.String, extra)
 	return nil
 }
 
@@ -187,7 +235,7 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 	}
 	limit := normalizeMessageHistoryLimit(query.Limit)
 
-	searchable := `LOWER(COALESCE(sender_name, '') || CHAR(10) || COALESCE(user_id, '') || CHAR(10) || COALESCE(message_id, '') || CHAR(10) || COALESCE(group_id, '') || CHAR(10) || COALESCE(text, '') || CHAR(10) || payload)`
+	searchable := `LOWER(COALESCE(sender_name, '') || CHAR(10) || COALESCE(user_id, '') || CHAR(10) || COALESCE(message_id, '') || CHAR(10) || COALESCE(group_id, '') || CHAR(10) || COALESCE(text, '') || CHAR(10) || COALESCE(search_extra, '') || CHAR(10) || payload)`
 	where := `kind != ? AND event_time BETWEEN ? AND ?`
 	args := []any{string(assistant.EventKindNotice), query.FromTime, query.ThroughTime}
 	if query.CrossSession {

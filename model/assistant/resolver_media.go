@@ -44,6 +44,7 @@ var (
 )
 
 type ytdlpInfo struct {
+	ID               string            `json:"id"`
 	Title            string            `json:"title"`
 	Description      string            `json:"description"`
 	Thumbnail        string            `json:"thumbnail"`
@@ -930,6 +931,7 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 	if len(note) == 0 {
 		return nil, "note_unavailable"
 	}
+	note["noteId"] = xhsID
 	return note, ""
 }
 

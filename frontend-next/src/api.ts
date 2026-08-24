@@ -158,6 +158,8 @@ export interface BotProfileConfig {
   bot_reply_loop_detection_enabled?: boolean;
   /** 直接回复是否也做发送前账号安全审核；主动回复始终审核，不受此开关影响。 */
   reply_account_safety_audit_enabled?: boolean;
+  /** 词典是否跨群共用一本；默认按会话隔离。 */
+  glossary_shared_scope_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
   prompt_inject_time?: boolean;
   prompt_inject_plaintext_rules?: boolean;
@@ -1375,15 +1377,43 @@ export interface AssistantEventsResponse {
   page: number;
   limit: number;
   has_more: boolean;
+  group?: string;
+  groups: AssistantEventGroup[];
+  context_budget?: AssistantContextBudget;
+}
+
+export interface AssistantEventGroup {
+  group_id: string;
+  events: number;
+}
+
+export interface AssistantContextBudgetLayer {
+  key: string;
+  label: string;
+  share_percent: number;
+  ceiling: number;
+  tokens: number;
+  capped_by_ceiling: boolean;
+  configurable: boolean;
+}
+
+export interface AssistantContextBudget {
+  group_id?: string;
+  context_window: number;
+  layers: AssistantContextBudgetLayer[];
+  allocated: number;
+  headroom: number;
 }
 
 export function getAssistantEvents(
   range: AssistantEventRange,
   result: AssistantEventResultFilter = "all",
   page = 1,
-  limit = 50
+  limit = 50,
+  group = ""
 ): Promise<AssistantEventsResponse> {
   const params = new URLSearchParams({ range, result, page: String(page), limit: String(limit) });
+  if (group) params.set("group", group);
   return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
 }
 
@@ -1583,11 +1613,15 @@ export interface AssistantTask {
   watch_issues?: boolean;
   watch_releases?: boolean;
   watch_stars?: boolean;
+  star_notify_mode?: "growth" | "milestone";
+  star_notify_threshold?: number;
+  star_notify_milestones?: number[];
   last_commit_sha?: string;
   last_pull_request_cursor?: string;
   last_issue_cursor?: string;
   last_release_tag?: string;
   last_star_count?: number;
+  last_notified_star_count?: number;
   feed_url?: string;
   feed_source?: "rss" | "twitter";
   feed_handle?: string;
@@ -1617,6 +1651,9 @@ export interface RepositoryWatchInput {
   watch_issues: boolean;
   watch_releases: boolean;
   watch_stars: boolean;
+  star_notify_mode?: "growth" | "milestone";
+  star_notify_threshold?: number;
+  star_notify_milestones?: number[];
   profile_id?: string;
   destination?: "private" | "group";
   group_id?: string;

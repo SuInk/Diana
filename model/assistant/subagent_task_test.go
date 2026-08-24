@@ -16,7 +16,9 @@ import (
 
 func TestSubagentTaskAcknowledgesThenSendsUnquotedFollowup(t *testing.T) {
 	channel := &concurrentRecordingChannel{}
-	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	// 这条比的是「受理消息带装饰件、后续结果不带」，所以要显式打开装饰件；
+	// 默认档是 auto，两条都不带，比不出差别。
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "message-1"}
 	task := PluginTask{
 		Kind:           "test",

@@ -6,6 +6,8 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,43 +52,97 @@ func defaultRepositoryWatchInterval(settings SettingValues) time.Duration {
 	return anonymousRepositoryWatchDefaultInterval
 }
 
+const (
+	starNotifyModeGrowth       = "growth"
+	starNotifyModeMilestone    = "milestone"
+	maximumStarNotifyThreshold = 1_000_000
+	maximumStarMilestones      = 100
+)
+
+func normalizeStarNotifyMode(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return starNotifyModeGrowth, nil
+	}
+	if value != starNotifyModeGrowth && value != starNotifyModeMilestone {
+		return "", fmt.Errorf("Star 通知模式必须是 growth 或 milestone")
+	}
+	return value, nil
+}
+
+func normalizeStarNotifyThreshold(value int) (int, error) {
+	if value == 0 {
+		return 1, nil
+	}
+	if value < 1 || value > maximumStarNotifyThreshold {
+		return 0, fmt.Errorf("Star 增长通知阈值必须在 1 到 %d 之间", maximumStarNotifyThreshold)
+	}
+	return value, nil
+}
+
+func normalizeStarNotifyMilestones(values []int) ([]int, error) {
+	seen := make(map[int]struct{}, len(values))
+	out := make([]int, 0, len(values))
+	for _, value := range values {
+		if value < 1 || value > maximumStarNotifyThreshold {
+			return nil, fmt.Errorf("Star 里程碑必须在 1 到 %d 之间", maximumStarNotifyThreshold)
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) > maximumStarMilestones {
+		return nil, fmt.Errorf("Star 里程碑最多设置 %d 个", maximumStarMilestones)
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
 type RepositoryWatchCreateInput struct {
-	Repository          string
-	Branch              string
-	Interval            time.Duration
-	WatchCommits        bool
-	WatchPullRequests   bool
-	WatchIssues         bool
-	WatchReleases       bool
-	WatchStars          bool
-	Platform            string
-	ProfileID           string
-	ContextNamespace    string
-	OwnerID             string
-	GroupID             string
-	UserID              string
-	NotificationEnabled bool
-	NotificationTargets []ReminderDeliveryTarget
+	Repository           string
+	Branch               string
+	Interval             time.Duration
+	WatchCommits         bool
+	WatchPullRequests    bool
+	WatchIssues          bool
+	WatchReleases        bool
+	WatchStars           bool
+	StarNotifyMode       string
+	StarNotifyThreshold  int
+	StarNotifyMilestones []int
+	Platform             string
+	ProfileID            string
+	ContextNamespace     string
+	OwnerID              string
+	GroupID              string
+	UserID               string
+	NotificationEnabled  bool
+	NotificationTargets  []ReminderDeliveryTarget
 }
 
 type RepositoryWatchUpdateInput struct {
-	Repository          string
-	Branch              *string
-	Interval            time.Duration
-	WatchCommits        *bool
-	WatchPullRequests   *bool
-	WatchIssues         *bool
-	WatchReleases       *bool
-	WatchStars          *bool
-	Delivery            bool
-	Platform            string
-	ProfileID           string
-	ContextNamespace    string
-	OwnerID             string
-	GroupID             string
-	UserID              string
-	NotificationEnabled *bool
-	NotificationTargets []ReminderDeliveryTarget
+	Repository           string
+	Branch               *string
+	Interval             time.Duration
+	WatchCommits         *bool
+	WatchPullRequests    *bool
+	WatchIssues          *bool
+	WatchReleases        *bool
+	WatchStars           *bool
+	StarNotifyMode       *string
+	StarNotifyThreshold  *int
+	StarNotifyMilestones []int
+	Delivery             bool
+	Platform             string
+	ProfileID            string
+	ContextNamespace     string
+	OwnerID              string
+	GroupID              string
+	UserID               string
+	NotificationEnabled  *bool
+	NotificationTargets  []ReminderDeliveryTarget
 }
 
 func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWatchCreateInput) (Reminder, error) {
@@ -148,12 +204,27 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
 		return Reminder{}, fmt.Errorf("Commit、PR、Issue、Release 和 Star 至少启用一项")
 	}
+	starThreshold, err := normalizeStarNotifyThreshold(input.StarNotifyThreshold)
+	if err != nil {
+		return Reminder{}, err
+	}
+	starMode, err := normalizeStarNotifyMode(input.StarNotifyMode)
+	if err != nil {
+		return Reminder{}, err
+	}
+	starMilestones, err := normalizeStarNotifyMilestones(input.StarNotifyMilestones)
+	if err != nil {
+		return Reminder{}, err
+	}
+	if starMode == starNotifyModeMilestone && len(starMilestones) == 0 {
+		return Reminder{}, fmt.Errorf("里程碑模式至少需要一个 Star 里程碑")
+	}
 	baseline, err := plugin.snapshotSelected(ctx, repository, strings.TrimSpace(input.Branch), selection, settings)
 	if err != nil {
 		return Reminder{}, fmt.Errorf("建立仓库基线失败: %w", err)
 	}
 	ownerID := firstNonEmpty(strings.TrimSpace(input.OwnerID), repositoryWatchWebUIOwner(event.ProfileID))
-	return r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, selection, baseline, input.NotificationEnabled, input.NotificationTargets)
+	return r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, selection, baseline, starMode, starThreshold, starMilestones, input.NotificationEnabled, input.NotificationTargets)
 }
 
 func repositoryWatchWebUIOwner(profileID string) string {
@@ -231,6 +302,15 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	if input.WatchStars != nil {
 		values["watch_stars"] = *input.WatchStars
 	}
+	if input.StarNotifyMode != nil {
+		values["star_notify_mode"] = *input.StarNotifyMode
+	}
+	if input.StarNotifyThreshold != nil {
+		values["star_notify_threshold"] = *input.StarNotifyThreshold
+	}
+	if input.StarNotifyMilestones != nil {
+		values["star_notify_milestones"] = input.StarNotifyMilestones
+	}
 	if input.Delivery {
 		values["delivery"] = true
 		values["platform"] = event.Platform
@@ -286,7 +366,7 @@ func parseRepositoryWatchInterval(raw string, settings SettingValues) (time.Dura
 	return interval, nil
 }
 
-func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, branch string, interval time.Duration, selection repositoryWatchSelection, baseline repositoryWatchSnapshot, notificationEnabled bool, targets []ReminderDeliveryTarget) (Reminder, error) {
+func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, branch string, interval time.Duration, selection repositoryWatchSelection, baseline repositoryWatchSnapshot, starNotifyMode string, starNotifyThreshold int, starNotifyMilestones []int, notificationEnabled bool, targets []ReminderDeliveryTarget) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -316,11 +396,15 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		WatchIssues:             selection.Issues,
 		WatchReleases:           selection.Releases,
 		WatchStars:              selection.Stars,
+		StarNotifyMode:          starNotifyMode,
+		StarNotifyThreshold:     starNotifyThreshold,
+		StarNotifyMilestones:    append([]int(nil), starNotifyMilestones...),
 		LastCommitSHA:           baseline.CommitSHA,
 		LastPullRequestCursor:   baseline.PullRequestCursor,
 		LastIssueCursor:         baseline.IssueCursor,
 		LastReleaseTag:          baseline.ReleaseTag,
 		LastStarCount:           baseline.StarCount,
+		LastNotifiedStarCount:   baseline.StarCount,
 		LastStarEventID:         baseline.StarEventID,
 		LastStarEventAt:         baseline.StarEventAt,
 		TriggerAt:               now.Add(interval),
@@ -443,6 +527,47 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	if value, present := input["watch_stars"].(bool); present {
 		selection.Stars = value
 	}
+	starNotifyThreshold := current.StarNotifyThreshold
+	if starNotifyThreshold <= 0 {
+		starNotifyThreshold = 1
+	}
+	starNotifyMode, _ := normalizeStarNotifyMode(current.StarNotifyMode)
+	starNotifyMilestones, _ := normalizeStarNotifyMilestones(current.StarNotifyMilestones)
+	starConfigProvided, starConfigChanged := false, false
+	if value, present := input["star_notify_threshold"]; present {
+		starConfigProvided = true
+		parsed, parseErr := normalizeStarNotifyThreshold(intFromAny(value))
+		if parseErr != nil {
+			return Reminder{}, parseErr
+		}
+		starConfigChanged = current.StarNotifyThreshold <= 0 || parsed != starNotifyThreshold
+		starNotifyThreshold = parsed
+	}
+	if value, present := input["star_notify_mode"]; present {
+		starConfigProvided = true
+		parsed, parseErr := normalizeStarNotifyMode(stringFromAny(value))
+		if parseErr != nil {
+			return Reminder{}, parseErr
+		}
+		starConfigChanged = starConfigChanged || parsed != starNotifyMode
+		starNotifyMode = parsed
+	}
+	if value, present := input["star_notify_milestones"]; present {
+		starConfigProvided = true
+		raw, ok := value.([]int)
+		if !ok {
+			return Reminder{}, fmt.Errorf("Star 里程碑格式无效")
+		}
+		parsed, parseErr := normalizeStarNotifyMilestones(raw)
+		if parseErr != nil {
+			return Reminder{}, parseErr
+		}
+		starConfigChanged = starConfigChanged || !slices.Equal(parsed, starNotifyMilestones)
+		starNotifyMilestones = parsed
+	}
+	if starNotifyMode == starNotifyModeMilestone && len(starNotifyMilestones) == 0 {
+		return Reminder{}, fmt.Errorf("里程碑模式至少需要一个 Star 里程碑")
+	}
 	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
 		return Reminder{}, fmt.Errorf("仓库动态监控类型不能全部关闭")
 	}
@@ -479,8 +604,12 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		}
 		if baselineSelection.Stars {
 			item.LastStarCount = baseline.StarCount
+			item.LastNotifiedStarCount = baseline.StarCount
 			item.LastStarEventID = baseline.StarEventID
 			item.LastStarEventAt = baseline.StarEventAt
+		}
+		if starConfigChanged {
+			item.LastNotifiedStarCount = item.LastStarCount
 		}
 		item.Repository = repository
 		item.RepositoryBranch = branch
@@ -489,6 +618,11 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		item.WatchIssues = selection.Issues
 		item.WatchReleases = selection.Releases
 		item.WatchStars = selection.Stars
+		if starConfigProvided {
+			item.StarNotifyMode = starNotifyMode
+			item.StarNotifyThreshold = starNotifyThreshold
+			item.StarNotifyMilestones = append([]int(nil), starNotifyMilestones...)
+		}
 		if delivery, _ := input["delivery"].(bool); delivery {
 			item.Platform = strings.TrimSpace(configToolString(input, "platform"))
 			item.ProfileID = strings.TrimSpace(configToolString(input, "profile_id"))

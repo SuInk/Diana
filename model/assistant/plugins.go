@@ -105,16 +105,17 @@ type PluginRequest struct {
 }
 
 type PluginResponse struct {
-	Handled          bool              `json:"handled"`
-	Context          string            `json:"context,omitempty"`
-	Reply            string            `json:"reply,omitempty"`
-	ImageURLs        []string          `json:"image_urls,omitempty"`
-	ContextImageURLs []string          `json:"-"`
-	VideoURLs        []string          `json:"video_urls,omitempty"`
-	Forward          bool              `json:"forward,omitempty"`
-	NestedForward    bool              `json:"-"`
-	ForwardMessages  []OutgoingMessage `json:"-"`
-	Tasks            []PluginTask      `json:"-"`
+	Handled              bool              `json:"handled"`
+	Context              string            `json:"context,omitempty"`
+	Reply                string            `json:"reply,omitempty"`
+	ImageURLs            []string          `json:"image_urls,omitempty"`
+	ContextImageURLs     []string          `json:"-"`
+	VideoURLs            []string          `json:"video_urls,omitempty"`
+	Forward              bool              `json:"forward,omitempty"`
+	NestedForward        bool              `json:"-"`
+	ForwardMessages      []OutgoingMessage `json:"-"`
+	ResolverResourceKeys []string          `json:"-"`
+	Tasks                []PluginTask      `json:"-"`
 	// FollowUp 让插件在内容发出后，请机器人像真人那样再自然接一句。
 	// 只是一个开关：刚发出的内容已经写进历史，模型从历史里就能看到自己发了什么。
 	FollowUp            bool           `json:"-"`
@@ -958,7 +959,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.2.0",
+		Version:     "0.2.1",
 		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频。",
 		Official:    true,
 		BuiltIn:     true,
@@ -1238,6 +1239,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	imageURLs := make([]string, 0)
 	videoURLs := make([]string, 0)
 	forwardMessages := make([]OutgoingMessage, 0)
+	resourceKeys := make([]string, 0, len(urls))
 	deferredToBrowser := false
 	// PluginManager always injects effective settings. Direct unit callers that
 	// omit Settings keep the legacy metadata-only behavior and never perform a
@@ -1279,6 +1281,12 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 			imageURLs = append(imageURLs, media.ImageURLs...)
 			videoURLs = append(videoURLs, media.VideoURLs...)
 			forwardMessages = append(forwardMessages, media.ForwardMessages...)
+			if parsed, err := url.Parse(raw); err == nil {
+				platform, _ := platformKeyAndLabel(parsed.Hostname())
+				if key := resolverResourceKeyFromURL(platform, raw); key != "" {
+					resourceKeys = append(resourceKeys, key)
+				}
+			}
 			continue
 		}
 		if downloadMedia {
@@ -1293,6 +1301,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 				imageURLs = append(imageURLs, media.ImageURLs...)
 				videoURLs = append(videoURLs, media.VideoURLs...)
 				forwardMessages = append(forwardMessages, media.ForwardMessages...)
+				resourceKeys = append(resourceKeys, media.ResourceKeys...)
 				continue
 			}
 		}
@@ -1311,12 +1320,13 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	// 直接单元调用没有注入设置时保持既有的合并转发行为，与 downloadMedia 同理。
 	mergedForward := len(req.Settings) == 0 || req.Settings.Bool(resolverSettingMergedForward, true)
 	response := &PluginResponse{
-		Handled:         true,
-		Context:         "链接解析结果：\n" + strings.Join(parts, "\n"),
-		ImageURLs:       dedupeMediaURLs(imageURLs),
-		VideoURLs:       dedupeMediaURLs(videoURLs),
-		Forward:         len(forwardMessages) > 0 && mergedForward,
-		ForwardMessages: forwardMessages,
+		Handled:              true,
+		Context:              "链接解析结果：\n" + strings.Join(parts, "\n"),
+		ImageURLs:            dedupeMediaURLs(imageURLs),
+		VideoURLs:            dedupeMediaURLs(videoURLs),
+		Forward:              len(forwardMessages) > 0 && mergedForward,
+		ForwardMessages:      forwardMessages,
+		ResolverResourceKeys: dedupeStrings(resourceKeys),
 	}
 	if len(forwardMessages) > 0 && len(parts) == 1 {
 		response.Context = strings.TrimSpace(parts[0])
