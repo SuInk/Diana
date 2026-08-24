@@ -277,7 +277,7 @@
           <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="跟随模型" />
           <span class="hint">
             只填你想强制覆盖的值。{{ effectiveContextHint }}
-            一个 provider 下的模型窗口各不相同，填死之后换模型不会自动跟着变。
+            <template v-if="contextWindowBindings.length > 0">在用这套配置的用途：</template>
           </span>
           <ul v-if="contextWindowBindings.length > 0" class="hint context-binding-list">
             <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
@@ -594,26 +594,23 @@ const contextWindowSourceLabels: Record<string, string> = {
 
 // 编辑器里这两个框留空是常态，所以要如实说明「留空时到底用多少、这个数哪来的」，
 // 而不是把推断值预填进输入框冒充用户设置。
+// 窗口是配置级的：这套配置统一用一个值，用途分配换了模型也不跟着变。
 const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
   const window = profile?.effective_context_window_tokens;
   if (!window) {
-    return "留空即按实际使用的模型自动判断。";
+    return "留空即按本配置的默认模型自动判断。";
   }
   const source = contextWindowSourceLabels[profile?.context_window_source ?? ""] ?? "自动判断";
-  const model = profile?.model ? `本配置默认模型 ${profile.model}` : "本配置默认模型";
-  return `留空即按实际使用的模型自动判断。${model}算出来是 ${window.toLocaleString("en-US")}（${source}）。`;
+  const model = profile?.model ? `按默认模型 ${profile.model}` : "按默认模型";
+  return `留空即${model}自动判断，当前为 ${window.toLocaleString("en-US")}（${source}）。这套配置统一用它。`;
 });
 
-// 机器人多半在「模型分配」里另选了模型，那时生效的窗口不是上面这个数。把引用这套
-// 配置的用途连同各自的窗口列出来，省得在两个页面之间对。
+// 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。
 const contextWindowBindings = computed(() =>
   (editingProfile.value?.role_bindings ?? []).map((binding) => {
     const owner = binding.bot_name ? `${binding.role_label}（${binding.bot_name}）` : binding.role_label;
-    const window = binding.context_window_tokens
-      ? binding.context_window_tokens.toLocaleString("en-US")
-      : "窗口未知";
-    return `${owner}：${binding.model} → ${window}`;
+    return `${owner}：${binding.model}`;
   })
 );
 

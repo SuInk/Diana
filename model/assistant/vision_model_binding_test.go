@@ -128,3 +128,43 @@ func TestRegistrySelectionWithoutRolesKeepsGroupThenActive(t *testing.T) {
 		t.Fatalf("selection = %+v", selection)
 	}
 }
+
+// 上下文窗口是配置级的：模型分配换了模型，预算仍按这套配置本身算，不跟着角色模型
+// 变。不这样固定的话，同一套配置在对话和识图两档上会算出两个不同的预算，而 LLM
+// 配置页只显示一个数，页面和运行时就对不上。
+func TestRoleBoundProfilesKeepProviderScopedContextWindow(t *testing.T) {
+	set := llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
+			Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "big-model",
+			Models: []llm.ModelInfo{
+				{ID: "big-model", ContextWindowTokens: 400000},
+				{ID: "small-model", ContextWindowTokens: 8192},
+			},
+		}}},
+	}
+	runtime := NewRuntime(BotConfig{
+		ModelRoles: map[string]ModelRole{"chat": {ProfileID: "main", Model: "small-model"}},
+	}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
+
+	profiles, err := runtime.roleBoundProfiles(set, llm.GroupChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].Config.Model != "small-model" {
+		t.Fatalf("profiles = %+v", profiles)
+	}
+	if got := profiles[0].Config.ContextWindowTokensWithDefault(); got != 400000 {
+		t.Fatalf("窗口应当按这套配置算: %d", got)
+	}
+
+	// 用户在配置里手填过就以手填的为准，固定这一步不许覆盖它。
+	set.Profiles[0].Config.ContextWindowTokens = 65536
+	profiles, err = runtime.roleBoundProfiles(set, llm.GroupChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := profiles[0].Config.ContextWindowTokensWithDefault(); got != 65536 {
+		t.Fatalf("手填窗口被覆盖了: %d", got)
+	}
+}
