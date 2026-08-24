@@ -585,25 +585,22 @@ function optionalTokenInput(raw: string): number {
   return Number(value);
 }
 
-const contextWindowSourceLabels: Record<string, string> = {
-  user: "你填写的值",
-  model_list: "同步下来的模型清单",
-  inferred: "按模型名推断",
-  fallback: "兜底值"
-};
+
 
 // 编辑器里这两个框留空是常态，所以要如实说明「留空时到底用多少、这个数哪来的」，
 // 而不是把推断值预填进输入框冒充用户设置。
-// 窗口是配置级的：这套配置统一用一个值，用途分配换了模型也不跟着变。
+// 窗口只认手填：不填就是兜底值，不再按模型清单或模型名去猜。清单里的数只作参考。
 const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
   const window = profile?.effective_context_window_tokens;
-  if (!window) {
-    return "留空即按本配置的默认模型自动判断。";
+  if (profile?.context_window_source === "user" && window) {
+    return `当前生效 ${window.toLocaleString("en-US")}，这套配置统一用它。`;
   }
-  const source = contextWindowSourceLabels[profile?.context_window_source ?? ""] ?? "自动判断";
-  const model = profile?.model ? `按默认模型 ${profile.model}` : "按默认模型";
-  return `留空即${model}自动判断，当前为 ${window.toLocaleString("en-US")}（${source}）。这套配置统一用它。`;
+  const fallback = window ? window.toLocaleString("en-US") : "内置兜底值";
+  const reference = profile?.catalog_context_window_tokens
+    ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}，可以照着填。`
+    : "";
+  return `留空按 ${fallback} 计算，不会自动去猜模型的真实窗口。${reference}`;
 });
 
 // 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。

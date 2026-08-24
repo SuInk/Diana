@@ -729,7 +729,7 @@ func testRouter(handler *LLMConfigHandler) *gin.Engine {
 
 // 「模型默认填了 400k」的由来：WithDefaults 把推断出来的窗口写进配置对象，回显
 // 时就长得像用户自己填的；用户随手一保存，这个猜测就变成了真正的设置。
-// 回显必须只报用户填过的值，推断结果单独放在只读字段里。
+// 现在窗口只认手填，回显也必须只报用户填过的值。
 func TestLLMPayloadReportsOverridesSeparatelyFromEffectiveWindow(t *testing.T) {
 	payload := payloadFromConfig(llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible,
@@ -737,16 +737,16 @@ func TestLLMPayloadReportsOverridesSeparatelyFromEffectiveWindow(t *testing.T) {
 		Model:    "claude-sonnet-4-5",
 	})
 	if payload.ContextWindowTokens != nil || payload.MaxContextTokens != nil {
-		t.Fatalf("推断值被当成用户设置回显了: %v/%v", payload.ContextWindowTokens, payload.MaxContextTokens)
+		t.Fatalf("没填过的值不该回显成用户设置: %v/%v", payload.ContextWindowTokens, payload.MaxContextTokens)
 	}
-	if payload.EffectiveContextWindowTokens != 200000 || payload.EffectiveMaxContextTokens != 200000 {
-		t.Fatalf("effective = %d/%d", payload.EffectiveContextWindowTokens, payload.EffectiveMaxContextTokens)
+	if payload.EffectiveContextWindowTokens != llm.DefaultContextWindowTokens {
+		t.Fatalf("effective = %d", payload.EffectiveContextWindowTokens)
 	}
-	if payload.ContextWindowSource != llm.ContextWindowSourceInferred {
+	if payload.ContextWindowSource != llm.ContextWindowSourceFallback {
 		t.Fatalf("source = %q", payload.ContextWindowSource)
 	}
 
-	// 模型清单里有这个模型时按清单走，而且换模型会跟着变——窗口是模型的属性。
+	// 模型清单里的窗口只当参考值展示，不参与计算，也不因为换模型而变。
 	withList := llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible,
 		APIKey:   "sk-test",
@@ -757,12 +757,11 @@ func TestLLMPayloadReportsOverridesSeparatelyFromEffectiveWindow(t *testing.T) {
 		},
 	}
 	listed := payloadFromConfig(withList)
-	if listed.EffectiveContextWindowTokens != 65536 || listed.ContextWindowSource != llm.ContextWindowSourceModelList {
-		t.Fatalf("model list window = %d source %q", listed.EffectiveContextWindowTokens, listed.ContextWindowSource)
+	if listed.EffectiveContextWindowTokens != llm.DefaultContextWindowTokens {
+		t.Fatalf("清单窗口混进了生效值: %d", listed.EffectiveContextWindowTokens)
 	}
-	withList.Model = "house-model-mini"
-	if switched := payloadFromConfig(withList); switched.EffectiveContextWindowTokens != 8192 {
-		t.Fatalf("换模型后窗口没跟着变: %d", switched.EffectiveContextWindowTokens)
+	if listed.CatalogContextWindowTokens != 65536 {
+		t.Fatalf("参考值 = %d", listed.CatalogContextWindowTokens)
 	}
 
 	// 用户填过的值原样回显，并标明来源是用户。
@@ -852,9 +851,12 @@ func TestLLMPayloadListsModelRoleBindings(t *testing.T) {
 	if main.ID != "main" {
 		t.Fatalf("unexpected profile order: %+v", payload.Profiles)
 	}
-	// 配置自己的默认模型仍然按默认模型算。
-	if main.EffectiveContextWindowTokens != 400000 {
-		t.Fatalf("default model window = %d", main.EffectiveContextWindowTokens)
+	// 没手填过窗口，生效值就是兜底常量；清单里的 400000 只作参考值。
+	if main.EffectiveContextWindowTokens != llm.DefaultContextWindowTokens {
+		t.Fatalf("effective window = %d", main.EffectiveContextWindowTokens)
+	}
+	if main.CatalogContextWindowTokens != 400000 {
+		t.Fatalf("catalog reference = %d", main.CatalogContextWindowTokens)
 	}
 	if len(main.RoleBindings) != 1 {
 		t.Fatalf("role bindings = %+v", main.RoleBindings)
