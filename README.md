@@ -193,8 +193,8 @@ node scripts/dev.mjs                       # 没装 make 时
      provider: openai_compatible
      api_key: your-key
      base_url: https://example.com/v1
-     model: gpt-4o-mini
-     image_model: gpt-image-1
+     model: gpt-5.4-mini
+     image_model: gpt-image-2
    ```
 
    支持的 provider：`openai_compatible`、`gemini`、`anthropic`。支持命名保存多套配置并切换激活项。
@@ -216,7 +216,7 @@ bot:
 llm:
   provider: openai_compatible
   api_key: your-key
-  model: gpt-4o-mini
+  model: gpt-5.4-mini
 ```
 
 ```sh
