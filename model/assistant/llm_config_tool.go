@@ -26,14 +26,19 @@ func (t *dianaLLMConfigTool) Name() string {
 }
 
 func (t *dianaLLMConfigTool) Description() string {
-	return `修改 Diana 自己当前激活的 LLM provider 和 model。只有主人明确要求更改机器人自身配置时才能调用；讨论模型、推荐 API 中转、分析别人的 Agent 或模型、用户说「我用某模型」都不得调用。`
+	return `切换 Diana 各个用途使用的模型：对话、视觉理解、意图识别、图片生成，由 role 指定，默认对话。` +
+		`改的是机器人的模型分配，不动 provider 的地址和密钥。` +
+		`只有主人明确要求更改机器人自身配置时才能调用；讨论模型、推荐 API 中转、分析别人的 Agent 或模型、用户说「我用某模型」都不得调用。`
 }
 
 func (t *dianaLLMConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作。", "update"),
-		"provider":  toolEnumParam("要切换到的 provider，不改则省略。", "openai_compatible", "gemini", "anthropic"),
-		"model":     toolStringParam("要切换到的模型 ID，不改则省略。"),
+		"role": toolEnumParam("要改哪个用途的模型：chat 对话（默认）、vision 视觉理解、intent 意图识别、image 图片生成。"+
+			"用户说「识图用 X」「生图换成 Y」「意图判断用 Z」时要传对应的值。",
+			"chat", "vision", "intent", "image"),
+		"provider": toolEnumParam("要切换到的 provider，不改则省略。", "openai_compatible", "gemini", "anthropic"),
+		"model":    toolStringParam("要切换到的模型 ID，不改则省略。"),
 	})
 }
 
@@ -56,7 +61,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if providerRaw == "" && model == "" {
 		return "", fmt.Errorf("至少提供 provider 或 model")
 	}
-	command := llmConfigCommand{Model: model}
+	command := llmConfigCommand{Model: model, Role: strings.TrimSpace(configToolString(input, "role"))}
 	if providerRaw != "" {
 		provider, err := structuredLLMProvider(providerRaw)
 		if err != nil {
@@ -68,10 +73,10 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if t.runtime.llmStore == nil {
 		return "", fmt.Errorf("当前未接入 LLM 配置集")
 	}
-	result := applyLLMConfigCommand(ctx, t.runtime.llmStore, command, t.runtime.llmModelLister())
+	result := t.runtime.applyLLMConfigCommand(ctx, command, t.runtime.llmModelLister())
 	recordLLMConfigSkillLog(ctx, PluginRequest{
 		Event:    t.event,
-		Text:     fmt.Sprintf("diana.llm_config provider=%s model=%s", providerRaw, model),
+		Text:     fmt.Sprintf("diana.llm_config role=%s provider=%s model=%s", command.Role, providerRaw, model),
 		OwnerID:  t.runtime.effectiveConfigForEvent(t.event).OwnerID,
 		LLMStore: t.runtime.llmStore,
 		AppLogs:  t.runtime.appLogWriter(),
@@ -82,6 +87,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	body, err := json.Marshal(map[string]any{
 		"ok":           true,
 		"action":       "updated",
+		"role":         result.Role,
 		"message":      result.Reply,
 		"profile_id":   result.ProfileID,
 		"profile_name": result.ProfileName,

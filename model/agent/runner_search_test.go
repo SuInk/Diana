@@ -98,7 +98,7 @@ func TestRunnerRepairsFinalThatClaimsUnsupportedFact(t *testing.T) {
 	if resp.Text != "当前检索不足，暂时无法确认。" || len(client.requests) != 3 || resp.Claims[0].Status != ClaimStatusInsufficient {
 		t.Fatalf("response=%#v requests=%d", resp, len(client.requests))
 	}
-	if correction := client.requests[2].Messages[len(client.requests[2].Messages)-1].Content; !strings.Contains(correction, "缺少有效") || !strings.Contains(correction, "证据账本") {
+	if correction := client.requests[2].Messages[len(client.requests[2].Messages)-1].Content; !strings.Contains(correction, "没有通过校验") || !strings.Contains(correction, "content 保持原样") || !strings.Contains(correction, "证据账本") {
 		t.Fatalf("repair prompt=%q", correction)
 	}
 }

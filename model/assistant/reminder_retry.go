@@ -127,13 +127,13 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 	if strings.TrimSpace(target.UserID) == "" && target.Kind == EventKindPrivate {
 		return fmt.Errorf("提醒失败通知缺少订阅者账号")
 	}
-	if err := r.send(ctx, target, notice); err == nil {
+	if err := r.sendSubscriberNotice(ctx, target, notice); err == nil {
 		return nil
 	} else if target.Kind != EventKindGroup || strings.TrimSpace(item.UserID) == "" {
 		return err
 	} else {
 		privateTarget := reminderPrivateFallbackTarget(item)
-		if privateErr := r.send(ctx, privateTarget, notice); privateErr != nil {
+		if privateErr := r.sendSubscriberNotice(ctx, privateTarget, notice); privateErr != nil {
 			return errors.Join(err, privateErr)
 		}
 		return nil

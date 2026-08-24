@@ -25,6 +25,13 @@ const (
 	webSearchSettingMaxResults      = "max_results"
 	webSearchSettingProviderTimeout = "provider_timeout_seconds"
 	webSearchSettingTotalTimeout    = "total_timeout_seconds"
+	webSearchSettingEvidenceLedger  = "evidence_ledger_enforced"
+	webSearchSettingSourceRecall    = "claim_source_recall"
+	webSearchSettingLinkPolicy      = "reply_link_policy"
+
+	replyLinkPolicyOnRequest = "on_request"
+	replyLinkPolicyAlways    = "always"
+	replyLinkPolicyNever     = "never"
 
 	defaultExaSearchURL    = "https://mcp.exa.ai/mcp?tools=web_search_exa"
 	defaultTavilySearchURL = "https://api.tavily.com/search"
@@ -143,6 +150,33 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 				Max:         settingRange(90),
 				Step:        1,
 				Unit:        "秒",
+			},
+			{
+				Key:         webSearchSettingEvidenceLedger,
+				Label:       "证据账本强制校验",
+				Description: "开启后联网研究必须为每条结论绑定已检索或已渲染的来源，绑不上就要求重写。关闭后仍然记录来源和结论，但不再拦截回复，适合以确定性查询为主的场景。",
+				Type:        PluginSettingTypeBool,
+				Default:     true,
+			},
+			{
+				Key:         webSearchSettingSourceRecall,
+				Label:       "来源链接回溯",
+				Description: "把结论引用过的来源链接留到之后几轮，有人追问「链接呢」时可以原样给出。关闭后不再记录也不再注入，追问链接需要重新检索。",
+				Type:        PluginSettingTypeBool,
+				Default:     true,
+			},
+			{
+				Key:   webSearchSettingLinkPolicy,
+				Label: "回复附带链接",
+				// 默认档不注入任何规则，完全交给人设文本，避免和已有人设互相打架。
+				Description: "决定联网结论要不要在回复里直接给出 URL。「跟随人设」不额外注入规则，沿用系统提示词里的写法；另外两档会注入明确规则并覆盖人设的相应说法。",
+				Type:        PluginSettingTypeSelect,
+				Default:     replyLinkPolicyOnRequest,
+				Options: []PluginSettingOption{
+					{Value: replyLinkPolicyOnRequest, Label: "跟随人设，追问再给（默认）"},
+					{Value: replyLinkPolicyAlways, Label: "有可靠来源时随回复附一条"},
+					{Value: replyLinkPolicyNever, Label: "从不给出链接"},
+				},
 			},
 		},
 	}
