@@ -51,7 +51,7 @@ func TestSQLiteStoreRecordsRealFavorabilityChangesNewestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changes, err := store.ListUserFavorabilityChanges(ctx, "10002", 10)
+	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10002", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestSQLiteStoreRecordsRealFavorabilityChangesNewestFirst(t *testing.T) {
 		t.Fatalf("oldest change=%#v", changes[1])
 	}
 
-	limited, err := store.ListUserFavorabilityChanges(ctx, "10002", 1)
+	limited, err := store.ListUserFavorabilityChanges(ctx, "", "10002", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestSQLiteStoreDoesNotRecordOwnerProfileInitializationAsChange(t *testing.T
 	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{UserID: "10001"}, assistant.UserMemoryUpdate{OwnerID: "10001"}); err != nil {
 		t.Fatal(err)
 	}
-	changes, err := store.ListUserFavorabilityChanges(ctx, "10001", 5)
+	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10001", 5)
 	if err != nil {
 		t.Fatal(err)
 	}

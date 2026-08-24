@@ -77,17 +77,20 @@ CREATE INDEX IF NOT EXISTS idx_semantic_reference_cache_expiry
   ON semantic_reference_cache(expires_at);
 
 CREATE TABLE IF NOT EXISTS user_profiles (
-  user_id TEXT PRIMARY KEY,
+  bot_profile_id TEXT NOT NULL DEFAULT '',
+  user_id TEXT NOT NULL,
   display_name TEXT,
   favorability INTEGER NOT NULL,
   message_count INTEGER NOT NULL,
   memories TEXT NOT NULL,
   last_seen_at TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (bot_profile_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS user_favorability_changes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot_profile_id TEXT NOT NULL DEFAULT '',
   user_id TEXT NOT NULL,
   delta INTEGER NOT NULL,
   before_score INTEGER NOT NULL,
@@ -270,6 +273,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addInboundEventProfileColumn(); err != nil {
 		return err
 	}
+	if err := s.migrateUserProfilesToBotScope(); err != nil {
+		return err
+	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
@@ -321,6 +327,93 @@ func (s *SQLiteStore) hasColumn(table, column string) (bool, error) {
 		}
 	}
 	return false, rows.Err()
+}
+
+// migrateUserProfilesToBotScope 把人员画像和好感度改成按机器人各记一份。
+//
+// 一个人在 QQ 上和在 Telegram 上面对的是两台机器人、两种关系，共用一份好感度和
+// 长期记忆会让「Telegram 上的它记得你在 QQ 说过什么」，那不是同一个角色。
+//
+// 已有数据归给迁移时的当前配置档：历史上通常只有一台在跑，这些记忆本来就是它攒
+// 下来的。其余机器人从空白开始，而不是复制一份——复制等于凭空给每台都编造一段
+// 它没经历过的关系。
+func (s *SQLiteStore) migrateUserProfilesToBotScope() error {
+	has, err := s.hasColumn("user_profiles", "bot_profile_id")
+	if err != nil {
+		return err
+	}
+	owner := s.currentBotProfileID()
+	if !has {
+		if err := s.rebuildUserProfilesWithBotScope(owner); err != nil {
+			return err
+		}
+	}
+	changesHas, err := s.hasColumn("user_favorability_changes", "bot_profile_id")
+	if err != nil {
+		return err
+	}
+	if !changesHas {
+		if _, err := s.db.Exec(`ALTER TABLE user_favorability_changes ADD COLUMN bot_profile_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`UPDATE user_favorability_changes SET bot_profile_id = ? WHERE COALESCE(bot_profile_id, '') = ''`, owner); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_user_favorability_changes_scope ON user_favorability_changes(bot_profile_id, user_id, id DESC)`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// rebuildUserProfilesWithBotScope 重建表来换主键：SQLite 改不了已有表的主键，
+// 只能新建、搬数据、换名。
+func (s *SQLiteStore) rebuildUserProfilesWithBotScope(owner string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS user_profiles_scoped (
+  bot_profile_id TEXT NOT NULL DEFAULT '',
+  user_id TEXT NOT NULL,
+  display_name TEXT,
+  favorability INTEGER NOT NULL,
+  message_count INTEGER NOT NULL,
+  memories TEXT NOT NULL,
+  last_seen_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (bot_profile_id, user_id)
+)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+INSERT OR REPLACE INTO user_profiles_scoped (bot_profile_id, user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at)
+SELECT ?, user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at FROM user_profiles
+`, owner); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE user_profiles`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE user_profiles_scoped RENAME TO user_profiles`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// currentBotProfileID 读当前生效的机器人配置档 ID，供迁移决定历史数据的归属。
+// 读不到（全新库、或还没配过机器人）就归到空作用域，后续第一次写入会带上真实 ID。
+func (s *SQLiteStore) currentBotProfileID() string {
+	set, ok, err := s.LoadBotProfiles(context.Background())
+	if err != nil || !ok {
+		return ""
+	}
+	if current, found := set.Current(); found {
+		return strings.TrimSpace(current.ID)
+	}
+	return ""
 }
 
 func (s *SQLiteStore) backfillRecallNoticeAudits() error {

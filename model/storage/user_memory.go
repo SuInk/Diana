@@ -35,7 +35,8 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 		return profile, nil
 	}
 
-	profile, ok, err := s.GetUserMemory(ctx, userID)
+	botProfileID := strings.TrimSpace(event.ProfileID)
+	profile, ok, err := s.GetUserMemory(ctx, botProfileID, userID)
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
@@ -83,25 +84,25 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	}
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO user_profiles (user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(user_id) DO UPDATE SET
+INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(bot_profile_id, user_id) DO UPDATE SET
   display_name=excluded.display_name,
   favorability=excluded.favorability,
   message_count=excluded.message_count,
   memories=excluded.memories,
   last_seen_at=excluded.last_seen_at,
   updated_at=excluded.updated_at
-`, profile.UserID, profile.DisplayName, profile.Favorability, profile.MessageCount, string(memories), lastSeen, profile.UpdatedAt.Format(time.RFC3339Nano))
+`, botProfileID, profile.UserID, profile.DisplayName, profile.Favorability, profile.MessageCount, string(memories), lastSeen, profile.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
 	if profile.Favorability != previousFavorability && favorabilityChangeRequested(update) {
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO user_favorability_changes (
-  user_id, delta, before_score, after_score, source, reason, operator_id, group_id, message_id, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`, profile.UserID, profile.Favorability-previousFavorability, previousFavorability, profile.Favorability,
+  bot_profile_id, user_id, delta, before_score, after_score, source, reason, operator_id, group_id, message_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, botProfileID, profile.UserID, profile.Favorability-previousFavorability, previousFavorability, profile.Favorability,
 			favorabilityChangeSource(update), strings.TrimSpace(update.FavorabilityChangeReason),
 			strings.TrimSpace(update.FavorabilityChangeOperator), strings.TrimSpace(event.GroupID),
 			strings.TrimSpace(event.MessageID), profile.UpdatedAt.Format(time.RFC3339Nano))
@@ -116,7 +117,7 @@ INSERT INTO user_favorability_changes (
 }
 
 // ListUserFavorabilityChanges returns the newest real score changes first.
-func (s *SQLiteStore) ListUserFavorabilityChanges(ctx context.Context, userID string, limit int) ([]assistant.UserFavorabilityChange, error) {
+func (s *SQLiteStore) ListUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, limit int) ([]assistant.UserFavorabilityChange, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -127,13 +128,14 @@ func (s *SQLiteStore) ListUserFavorabilityChanges(ctx context.Context, userID st
 	if limit > 100 {
 		limit = 100
 	}
+	scopeCondition, scopeArgs := favorabilityScopeCondition(botProfileID)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, user_id, delta, before_score, after_score, source, reason, operator_id, group_id, message_id, created_at
 FROM user_favorability_changes
-WHERE user_id = ?
+WHERE user_id = ?`+scopeCondition+`
 ORDER BY id DESC
 LIMIT ?
-`, userID, limit)
+`, append(append([]any{userID}, scopeArgs...), limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +176,7 @@ func favorabilityChangeRequested(update assistant.UserMemoryUpdate) bool {
 // ListUserMemories returns long-term user profiles ordered by most recently
 // updated. query filters by user ID or display name; the second return value
 // is the total row count matching the same filter.
-func (s *SQLiteStore) ListUserMemories(ctx context.Context, query string, limit int, offset int) ([]assistant.UserMemoryProfile, int, error) {
+func (s *SQLiteStore) ListUserMemories(ctx context.Context, botProfileID, query string, limit int, offset int) ([]assistant.UserMemoryProfile, int, error) {
 	if s == nil || s.db == nil {
 		return []assistant.UserMemoryProfile{}, 0, nil
 	}
@@ -190,8 +192,17 @@ func (s *SQLiteStore) ListUserMemories(ctx context.Context, query string, limit 
 	where := ""
 	args := []any{}
 	query = strings.TrimSpace(query)
+	if botProfileID = strings.TrimSpace(botProfileID); botProfileID != "" {
+		where = " WHERE bot_profile_id = ?"
+		args = append(args, botProfileID)
+	}
 	if query != "" {
-		where = ` WHERE user_id LIKE ? ESCAPE '\' OR display_name LIKE ? ESCAPE '\'`
+		if where == "" {
+			where = " WHERE ("
+		} else {
+			where += " AND ("
+		}
+		where += `user_id LIKE ? ESCAPE '\' OR display_name LIKE ? ESCAPE '\')`
 		pattern := "%" + escapeUserMemoryLike(query) + "%"
 		args = append(args, pattern, pattern)
 	}
@@ -236,8 +247,11 @@ func escapeUserMemoryLike(value string) string {
 	return replacer.Replace(value)
 }
 
-// GetUserMemory loads one user's long-term profile.
-func (s *SQLiteStore) GetUserMemory(ctx context.Context, userID string) (assistant.UserMemoryProfile, bool, error) {
+// GetUserMemory loads one user's long-term profile for one bot profile.
+//
+// botProfileID 留空表示「不限机器人」：控制台在「全部机器人」视图下查一个人时用
+// 它，取最近更新的那一份，好过报「查不到」。
+func (s *SQLiteStore) GetUserMemory(ctx context.Context, botProfileID, userID string) (assistant.UserMemoryProfile, bool, error) {
 	var profile assistant.UserMemoryProfile
 	if s == nil || s.db == nil {
 		return profile, false, nil
@@ -250,11 +264,14 @@ func (s *SQLiteStore) GetUserMemory(ctx context.Context, userID string) (assista
 	var memoriesRaw string
 	var lastSeenRaw sql.NullString
 	var updatedRaw sql.NullString
+	scopeCondition, scopeArgs := userProfileScopeCondition(botProfileID)
 	err := s.db.QueryRowContext(ctx, `
 SELECT user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at
 FROM user_profiles
-WHERE user_id = ?
-`, userID).Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &lastSeenRaw, &updatedRaw)
+WHERE user_id = ?`+scopeCondition+`
+ORDER BY updated_at DESC
+LIMIT 1
+`, append([]any{userID}, scopeArgs...)...).Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &lastSeenRaw, &updatedRaw)
 	if err == sql.ErrNoRows {
 		return assistant.UserMemoryProfile{}, false, nil
 	}
@@ -367,4 +384,22 @@ func parseUserProfileTime(value sql.NullString) time.Time {
 		return time.Time{}
 	}
 	return parsed
+}
+
+// userProfileScopeCondition 拼出机器人作用域条件。留空表示不限，交给调用方按
+// updated_at 取最近的一份。
+func userProfileScopeCondition(botProfileID string) (string, []any) {
+	if botProfileID = strings.TrimSpace(botProfileID); botProfileID != "" {
+		return " AND bot_profile_id = ?", []any{botProfileID}
+	}
+	return "", nil
+}
+
+// favorabilityScopeCondition 与 userProfileScopeCondition 同义，只是作用在
+// 好感度变更表上。
+func favorabilityScopeCondition(botProfileID string) (string, []any) {
+	if botProfileID = strings.TrimSpace(botProfileID); botProfileID != "" {
+		return " AND bot_profile_id = ?", []any{botProfileID}
+	}
+	return "", nil
 }

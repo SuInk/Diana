@@ -177,7 +177,7 @@ func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operati
 	if store == nil {
 		return 0, fmt.Errorf("当前未启用用户关系存储")
 	}
-	profile, _, err := store.GetUserMemory(ctx, targetID)
+	profile, _, err := store.GetUserMemory(ctx, strings.TrimSpace(t.event.ProfileID), targetID)
 	if err != nil {
 		return 0, fmt.Errorf("读取用户关系失败: %w", err)
 	}
@@ -266,7 +266,7 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 	if store == nil {
 		return dianaRelationshipSnapshot{}, fmt.Errorf("当前未启用用户关系存储")
 	}
-	profile, found, err := store.GetUserMemory(ctx, userID)
+	profile, found, err := store.GetUserMemory(ctx, strings.TrimSpace(t.event.ProfileID), userID)
 	if err != nil {
 		return dianaRelationshipSnapshot{}, fmt.Errorf("读取用户关系失败: %w", err)
 	}
@@ -281,7 +281,7 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 	var recentChanges []UserFavorabilityChange
 	if historyLimit > 0 {
 		if historyStore, ok := store.(UserFavorabilityHistoryStore); ok {
-			recentChanges, err = historyStore.ListUserFavorabilityChanges(ctx, userID, historyLimit)
+			recentChanges, err = historyStore.ListUserFavorabilityChanges(ctx, strings.TrimSpace(t.event.ProfileID), userID, historyLimit)
 			if err != nil {
 				return dianaRelationshipSnapshot{}, fmt.Errorf("读取好感度变化记录失败: %w", err)
 			}
