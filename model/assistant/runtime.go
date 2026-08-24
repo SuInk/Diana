@@ -261,6 +261,7 @@ type Runtime struct {
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
 	glossary                  GlossaryStore
+	buildInfo                 BuildInfo
 	reminders                 ReminderStore
 	groupConfigs              GroupConfigStore
 	configSaver               ConfigSaver
@@ -2751,6 +2752,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaGlossaryTool(r, event, relationship),
+				newDianaVersionTool(r),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
 				newDianaReminderTool(r, event),
@@ -5246,6 +5248,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)
+	}
+	if agentEnabled && hasTool(dianaVersionToolName) {
+		builder.WriteString("\n" + promptToolVersion)
 	}
 	if agentEnabled && hasTool(dianaGlossaryToolName) {
 		builder.WriteString("\n" + promptToolGlossary)
