@@ -420,21 +420,21 @@
                 <label for="bot-reply-reference-mode">群聊引用原消息</label>
                 <AppSelect
                   id="bot-reply-reference-mode"
-                  :model-value="form.reply_reference_mode ?? 'on'"
+                  :model-value="form.reply_reference_mode ?? 'auto'"
                   :options="replyReferenceModeOptions"
                   @update:model-value="(value) => { if (form) form.reply_reference_mode = value as 'on' | 'off' | 'auto'; }"
                 />
-                <span class="hint">选「让模型自己决定」后，只有话题跳转或隔轮回应时它才会引用。</span>
+                <span class="hint">默认「让模型自己决定」：只有话题跳转或隔轮回应时才引用。表达风格不会改动这一项。</span>
               </div>
               <div class="field">
                 <label for="bot-mention-user-mode">群聊 @ 发送者</label>
                 <AppSelect
                   id="bot-mention-user-mode"
-                  :model-value="form.mention_user_mode ?? 'on'"
+                  :model-value="form.mention_user_mode ?? 'auto'"
                   :options="mentionUserModeOptions"
                   @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
                 />
-                <span class="hint">选「让模型自己决定」后，群里还有别人在说话时它才 @，一对一接话时不带。群友风格没选过就按这个来。</span>
+                <span class="hint">默认「让模型自己决定」：群里还有别人在说话时才 @，一对一接话时不带。表达风格不会改动这一项。</span>
               </div>
               <div class="field">
                 <label class="switch">
@@ -1540,8 +1540,8 @@ function setForm(config: BotProfileConfig): void {
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     glossary_shared_scope_enabled: config.glossary_shared_scope_enabled ?? false,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
-    reply_reference_mode: config.reply_reference_mode ?? "on",
-    mention_user_mode: config.mention_user_mode ?? "on",
+    reply_reference_mode: config.reply_reference_mode ?? "auto",
+    mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? true,
     error_notify_enabled: config.error_notify_enabled ?? true,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,

@@ -12,12 +12,14 @@ import (
 
 // 归一化要吃掉大小写和空白，没写或写错都按 on 处理。
 func TestNormalizeReplyDecorationMode(t *testing.T) {
+	// 没写和写错都按 auto，和 DefaultBotConfig 的默认值一致：同一份没填的配置
+	// 不该在两条路径上得到两种行为。
 	cases := map[ReplyDecorationMode]ReplyDecorationMode{
-		"":         ReplyDecorationOn,
+		"":         ReplyDecorationAuto,
 		"on":       ReplyDecorationOn,
 		"off":      ReplyDecorationOff,
 		" AUTO ":   ReplyDecorationAuto,
-		"nonsense": ReplyDecorationOn,
+		"nonsense": ReplyDecorationAuto,
 	}
 	for input, want := range cases {
 		if got := normalizeReplyDecorationMode(input); got != want {
@@ -73,8 +75,16 @@ func TestSendAutoModeKeepsModelWrittenReplyMarker(t *testing.T) {
 
 func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "1244393238"}
-	if prompt := replyDecorationPrompt(BotConfig{}.WithDefaults(), event, nil); prompt != "" {
-		t.Fatalf("default config should not emit decoration guidance: %q", prompt)
+	// on 和 off 都是运行时说了算，不需要也不该告诉模型怎么判断。
+	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationOff} {
+		decided := BotConfig{ReplyReferenceMode: mode, MentionUserMode: mode}.WithDefaults()
+		if prompt := replyDecorationPrompt(decided, event, nil); prompt != "" {
+			t.Fatalf("mode %s should not emit decoration guidance: %q", mode, prompt)
+		}
+	}
+	// 默认就是 auto，所以默认配置反过来必须带上这份判断依据。
+	if prompt := replyDecorationPrompt(BotConfig{}.WithDefaults(), event, nil); prompt == "" {
+		t.Fatal("default config is auto now, it must carry the decoration guidance")
 	}
 
 	cfg := BotConfig{ReplyReferenceMode: ReplyDecorationAuto, MentionUserMode: ReplyDecorationAuto}.WithDefaults()

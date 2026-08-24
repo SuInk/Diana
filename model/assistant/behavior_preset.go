@@ -203,22 +203,19 @@ const (
 )
 
 // apply 让风格能改动真正决定「机器人味」的投递方式，而不只是措辞。
-// 每条都自带引用和 @、几百字一条、秒回——这些 prompt 再怎么写都管不到。
-// 两个装饰件只填未显式设置的项（用户手动选过就尊重用户）；长度和间隔则是这个
-// 风格的硬策略：900 字一条、300ms 连发怎么写都不像真人，但比它更克制的设置保留。
+// 几百字一条、秒回——这些 prompt 再怎么写都管不到。长度和间隔是这个风格的硬
+// 策略：900 字一条、300ms 连发怎么写都不像真人，但比它更克制的设置保留。
+//
+// 引用和 @ 曾经也在这里填：群友风格把两项都按成「从不」。那是错的，错的不是
+// 值而是位置——这两项在 WebUI 里有对应的下拉框，于是「要不要 @」有了两个来源。
+// 更糟的是 WithDefaults 会把填进去的值一起存库，保存过一次配置之后，风格填的
+// 「从不」和用户亲手选的「从不」就再也分不开，「用户选过就尊重用户」名存实亡，
+// 改风格的默认值也到不了这些人手上。现在这两项只由配置决定，默认是「让模型
+// 自己决定」（见 DefaultBotConfig）——它本来就冷清时不 @、热闹时才 @，正是当初
+// 想用「从不」换来的效果，不需要风格再插一手。
 func (style ReplyStyle) apply(cfg *BotConfig) {
 	if style.Normalized() != ReplyStyleGroupmate {
 		return
-	}
-	if cfg.ReplyReferenceMode == "" {
-		cfg.ReplyReferenceMode = ReplyDecorationOff
-	}
-	// @ 默认交给模型自己判断,而不是一刀切关掉。关掉是为了躲开「每条都 @」那种
-	// 机器人味,但代价是群里几个人同时说话、真需要点名的时候也不点,对方不知道
-	// 这句在回谁。auto 现在拿得到插话人数（见 mentionDecorationRule）,冷清时不
-	// @、热闹时才 @,正是真人的做法,不需要再用「从不」来兜底。
-	if cfg.MentionUserMode == "" {
-		cfg.MentionUserMode = ReplyDecorationAuto
 	}
 	if cfg.DirectReplyChunkSize <= 0 || cfg.DirectReplyChunkSize > groupmateReplyChunkSize {
 		cfg.DirectReplyChunkSize = groupmateReplyChunkSize

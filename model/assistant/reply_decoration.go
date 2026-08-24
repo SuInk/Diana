@@ -23,15 +23,17 @@ const (
 	ReplyDecorationAuto ReplyDecorationMode = "auto"
 )
 
-// normalizeReplyDecorationMode 归一化装饰件模式，没写就按 on 处理。
+// normalizeReplyDecorationMode 归一化装饰件模式，没写就按 auto 处理——和
+// DefaultBotConfig 的默认值保持一致，免得同一份没填的配置在两条路径上得到
+// 两种行为。
 func normalizeReplyDecorationMode(mode ReplyDecorationMode) ReplyDecorationMode {
 	switch ReplyDecorationMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
 	case ReplyDecorationOff:
 		return ReplyDecorationOff
-	case ReplyDecorationAuto:
-		return ReplyDecorationAuto
-	default:
+	case ReplyDecorationOn:
 		return ReplyDecorationOn
+	default:
+		return ReplyDecorationAuto
 	}
 }
 

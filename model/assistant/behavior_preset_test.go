@@ -138,20 +138,28 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 	}
 }
 
-func TestReplyStyleGroupmateDropsReplyReferenceAndMention(t *testing.T) {
-	// 每条群回复都带引用和 @ 是最硬的机器人痕迹，prompt 管不到，得由风格关掉。
-	//
-	// 两个装饰件的落点不一样：引用直接关掉，@ 交给模型按插话人数自己判断。@ 关掉
-	// 的代价是几个人同时说话、真需要点名时也不点，对方不知道这句在回谁；而 auto
-	// 冷清时本来就不 @，不需要再用「从不」兜一层。
-	cfg := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
-	if replyReferenceMode(cfg) != ReplyDecorationOff || mentionUserMode(cfg) != ReplyDecorationAuto {
-		t.Fatalf("groupmate style kept the bot-looking delivery flags: %#v", cfg)
+// 引用和 @ 只有配置一个来源，风格不插手。
+//
+// 风格曾经把这两项按成「从不」。错的不是值而是位置：它们在 WebUI 里有对应的
+// 下拉框，风格再填一遍就有了两个来源；而 WithDefaults 会把填进去的值一起存库，
+// 保存过一次配置之后，风格填的「从不」和用户亲手选的「从不」再也分不开——
+// 「用户选过就尊重用户」名存实亡，之后改风格的默认值也到不了这些人手上。
+func TestReplyDecorationModesAreNotStyleDriven(t *testing.T) {
+	for _, style := range []ReplyStyle{ReplyStyleGroupmate, ReplyStyleAssistant, ReplyStyleCatgirl} {
+		cfg := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: style}.WithDefaults()
+		if replyReferenceMode(cfg) != ReplyDecorationAuto || mentionUserMode(cfg) != ReplyDecorationAuto {
+			t.Fatalf("风格 %s 改动了装饰件默认值：引用=%s @=%s", style, replyReferenceMode(cfg), mentionUserMode(cfg))
+		}
 	}
-
-	assistant := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleAssistant}.WithDefaults()
-	if replyReferenceMode(assistant) != ReplyDecorationOn || mentionUserMode(assistant) != ReplyDecorationOn {
-		t.Fatalf("assistant style should keep default delivery: %#v", assistant)
+	// 显式选过的值任何风格都不许动。
+	explicit := BotConfig{
+		ResponseMode:       ResponseModeStandard,
+		ReplyStyle:         ReplyStyleGroupmate,
+		ReplyReferenceMode: ReplyDecorationOn,
+		MentionUserMode:    ReplyDecorationOff,
+	}.WithDefaults()
+	if replyReferenceMode(explicit) != ReplyDecorationOn || mentionUserMode(explicit) != ReplyDecorationOff {
+		t.Fatalf("显式设置被风格改掉了：%#v", explicit)
 	}
 }
 
@@ -223,8 +231,8 @@ func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
 		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleGroupmate},
 	}})
 	casual := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "casual"})
-	if replyReferenceMode(casual) != ReplyDecorationOff || mentionUserMode(casual) != ReplyDecorationAuto {
-		t.Fatalf("group-level groupmate style did not drop delivery flags: %#v", casual)
+	if casual.DirectReplyChunkSize != groupmateReplyChunkSize || casual.SendChunkIntervalMS < groupmateSendChunkIntervalM {
+		t.Fatalf("group-level groupmate style did not apply chat-sized delivery: %#v", casual)
 	}
 }
 

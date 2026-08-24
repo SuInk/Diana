@@ -1658,7 +1658,7 @@ func TestSplitReplyTreatsBlankLinesAsLayout(t *testing.T) {
 
 func TestRuntimeBotbrReplySendsMultipleMessages(t *testing.T) {
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 100}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 100, ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, nil)
 
 	err := runtime.send(context.Background(), MessageEvent{
 		Kind:      EventKindGroup,
@@ -1689,7 +1689,7 @@ func TestRuntimeBotbrReplySendsMultipleMessages(t *testing.T) {
 // TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk 验证群聊分条时只有第一条带引用和 @。
 func TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk(t *testing.T) {
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 3}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{DirectReplyChunkSize: 3, ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, nil)
 
 	err := runtime.send(context.Background(), MessageEvent{
 		Kind:      EventKindGroup,
@@ -2048,7 +2048,9 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 func TestRuntimeGroupLLMDefaultsMentionToCurrentSender(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{`{"action":"none"}`, "这是面向全群的说明。"}}
-	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	// 这条看的是「运行时自动补的装饰件指向谁」，所以要显式打开；默认档是 auto，
+	// 由模型自己在正文里写，运行时一个都不补。
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
