@@ -80,7 +80,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 		}
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, now.Add(-24*time.Hour), 2, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-24 * time.Hour), Limit: 2, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 		t.Fatalf("ignored token usage = %#v", page.Events[1])
 	}
 
-	next, err := store.ListInboundEventDetails(ctx, now.Add(-24*time.Hour), 2, 2)
+	next, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-24 * time.Hour), Limit: 2, Offset: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 		{name: "pending", filter: InboundEventResultPending, wantID: "pending"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			filtered, err := store.ListInboundEventDetails(ctx, now.Add(-24*time.Hour), 1, 0, test.filter)
+			filtered, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-24 * time.Hour), Limit: 1, Offset: 0, Result: test.filter})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -142,7 +142,7 @@ WHERE id = 'ignored'
 `); err != nil {
 		t.Fatal(err)
 	}
-	errorPage, err := store.ListInboundEventDetails(ctx, now.Add(-24*time.Hour), 1, 0, InboundEventResultError)
+	errorPage, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-24 * time.Hour), Limit: 1, Offset: 0, Result: InboundEventResultError})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ WHERE id = 'ignored'
 	if errorPage.NotReplied != 0 || errorPage.Replied+errorPage.NotReplied+errorPage.Pending+errorPage.Errors != errorPage.Total {
 		t.Fatalf("result categories are not exclusive: %+v", errorPage)
 	}
-	if _, err := store.ListInboundEventDetails(ctx, now.Add(-24*time.Hour), 1, 0, InboundEventResultFilter("unknown")); err == nil {
+	if _, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-24 * time.Hour), Limit: 1, Offset: 0, Result: InboundEventResultFilter("unknown")}); err == nil {
 		t.Fatal("unsupported event result filter was accepted")
 	}
 }
@@ -186,7 +186,7 @@ func TestListInboundEventDetailsRendersStructuredImagesInsteadOfCQText(t *testin
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, time.Now().Add(-time.Hour), 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: time.Now().Add(-time.Hour), Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ VALUES ('profile-name', 'group:20001', 'group', '20001', '10001', 'message-1', ?
 		t.Fatal(err)
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Minute), 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Minute), Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestListInboundEventDetailsIncludesRecallNoticeAndOperator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0, InboundEventResultNotice)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Offset: 0, Result: InboundEventResultNotice})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestRestoredSchemaBackfillsPersistedRecallNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0, InboundEventResultNotice)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Offset: 0, Result: InboundEventResultNotice})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestListInboundEventDetailsParsesLegacyCQOnlyImage(t *testing.T) {
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, time.Now().Add(-time.Hour), 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: time.Now().Add(-time.Hour), Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestRecordInboundEventAuditPersistsDecisionReasonAndReply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, time.Now().Add(-time.Hour), 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: time.Now().Add(-time.Hour), Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestInboundDeliveryAuditTracksAckAndSelfEcho(t *testing.T) {
 	if err := store.RecordInboundEventSelfEcho(ctx, "outbound-43", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	page, err := store.ListInboundEventDetails(ctx, time.Now().Add(-time.Hour), 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: time.Now().Add(-time.Hour), Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,14 +512,14 @@ INSERT INTO inbound_events (
 			t.Fatal(err)
 		}
 	}
-	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if page.Replied != 1 || page.NotReplied != 0 || page.Errors != 1 {
 		t.Fatalf("counts = replied=%d not=%d errors=%d", page.Replied, page.NotReplied, page.Errors)
 	}
-	errorPage, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0, InboundEventResultError)
+	errorPage, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Offset: 0, Result: InboundEventResultError})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +585,7 @@ VALUES ('mention', 'group:104970', 'group', '104970', '10001', 'message-1', ?, '
 		t.Fatal(err)
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Minute), 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Minute), Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +642,7 @@ func TestInboundEventDetailExposesSenderGroupLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, err := store.ListInboundEventDetails(ctx, now.Add(-time.Hour), 10, 0)
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,5 +652,73 @@ func TestInboundEventDetailExposesSenderGroupLevel(t *testing.T) {
 	got := page.Events[0]
 	if got.SenderLevel != 16 || got.SenderLevelLabel != "冒泡" || got.SenderRole != "admin" {
 		t.Fatalf("sender level fields = %d / %q / %q", got.SenderLevel, got.SenderLevelLabel, got.SenderRole)
+	}
+}
+
+// 群筛选要同时作用在列表和两个计数上：顶部统计说的是全部事件、下面列的却是
+// 一个群，两个数字对不上就没法用。
+func TestListInboundEventDetailsFiltersByGroup(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-group-filter.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+	seed := []struct {
+		id      string
+		groupID string
+	}{
+		{"g1-a", "111"},
+		{"g1-b", "111"},
+		{"g2-a", "222"},
+		{"private", ""},
+	}
+	for _, item := range seed {
+		createdAt := now.UnixNano()
+		if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES (?, ?, 'group', ?, 'u1', ?, ?, '{}', 0, ?, 0, ?, 'replied', ?, ?, ?)
+`, item.id, "group:"+item.groupID, item.groupID, item.id, now.Unix(), inboundStatusDone, createdAt, createdAt, createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, GroupID: "111"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 2 {
+		t.Fatalf("events = %d, want 2", len(page.Events))
+	}
+	for _, event := range page.Events {
+		if event.GroupID != "111" {
+			t.Fatalf("leaked event from group %q", event.GroupID)
+		}
+	}
+	if page.Total != 2 || page.FilteredTotal != 2 {
+		t.Fatalf("total = %d, filtered = %d, want 2/2", page.Total, page.FilteredTotal)
+	}
+
+	// 不筛群时四条都在，证明上面的 2 是筛出来的而不是本来就只有两条。
+	all, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Total != 4 {
+		t.Fatalf("total without filter = %d, want 4", all.Total)
+	}
+
+	groups, err := store.ListInboundEventGroups(ctx, now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 只列真有事件的群，按事件数从多到少；私聊没有群号，不该出现在筛选器里。
+	if len(groups) != 2 || groups[0].GroupID != "111" || groups[0].Events != 2 || groups[1].GroupID != "222" {
+		t.Fatalf("groups = %#v", groups)
 	}
 }

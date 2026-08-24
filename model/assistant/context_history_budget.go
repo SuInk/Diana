@@ -136,7 +136,9 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 	store := r.llmStore
 	r.mu.RUnlock()
 	if store == nil {
-		return llm.DefaultContextWindowTokens
+		// 没有配置档时用兜底常量当窗口，但仍要过下面那道配置收紧：这里以前直接
+		// 返回常量，于是机器人或群配的 max_context_tokens 在这条路径上完全不生效。
+		return clampContextWindowToConfig(llm.DefaultContextWindowTokens, cfg)
 	}
 	group := llm.GroupChat
 	if hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments)) {
@@ -168,10 +170,14 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 	if window <= 0 {
 		window = llm.DefaultContextWindowTokens
 	}
-	// 机器人/群配置的上限只能收紧：模型窗口是能力上限，这里是这个机器人愿意
-	// 在单次请求上花多少。
+	return clampContextWindowToConfig(window, cfg)
+}
+
+// clampContextWindowToConfig 让机器人/群配置的上限只能收紧：模型窗口是能力上限，
+// 配置里那个数是这个机器人愿意在单次请求上花多少。
+func clampContextWindowToConfig(window int64, cfg BotConfig) int64 {
 	if cfg.MaxContextTokens > 0 && cfg.MaxContextTokens < window {
-		window = cfg.MaxContextTokens
+		return cfg.MaxContextTokens
 	}
 	return window
 }
@@ -472,4 +478,83 @@ func dropSummarizedHistory(history, memory []MessageEvent, watermark int64) []Me
 		filtered = append(filtered, event)
 	}
 	return filtered
+}
+
+// ContextBudgetLayer 是上下文预算里的一层，用于对外展示。
+type ContextBudgetLayer struct {
+	// Key 供前端上色和排序，不随文案改动。
+	Key string `json:"key"`
+	// Label 是这一层的中文名。
+	Label string `json:"label"`
+	// SharePercent 是这一层的窗口份额，Ceiling 是绝对上限。
+	SharePercent int64 `json:"share_percent"`
+	Ceiling      int64 `json:"ceiling"`
+	// Tokens 是两者取小之后本群实际生效的预算。
+	Tokens int64 `json:"tokens"`
+	// CappedByCeiling 说明这一层是被绝对上限压住的，还是窗口份额本来就更小。
+	// 大窗口下几乎全是前者，小窗口下全是后者——这正是分层预算要表达的事。
+	CappedByCeiling bool `json:"capped_by_ceiling"`
+	// Configurable 标记这一层能不能在配置里调。只有近期历史可以：另外三层的
+	// 取值由各自的结构决定（便签天然只有几百字、检索层配合 MMR 的条数上限、
+	// 常驻层不参加相关性排序所以必须小而固定），给旋钮也没有对应的失效模式。
+	Configurable bool `json:"configurable"`
+}
+
+// ContextBudgetBreakdown 是某个会话当前的上下文预算分配。
+type ContextBudgetBreakdown struct {
+	GroupID string `json:"group_id,omitempty"`
+	// ContextWindow 是这个群实际会用到的模型窗口。
+	ContextWindow int64                `json:"context_window"`
+	Layers        []ContextBudgetLayer `json:"layers"`
+	// Allocated 是四层合计，Headroom 是留给系统提示、当前消息、工具结果和输出的余量。
+	Allocated int64 `json:"allocated"`
+	Headroom  int64 `json:"headroom"`
+}
+
+// ContextBudgetBreakdownForGroup 按群算出当前的预算分配。
+//
+// 它复用运行时真正用的那几个预算函数，不另算一遍：分配图一旦自己实现一份
+// min(份额, 上限)，改了预算逻辑而忘了改图，图就开始骗人。
+func (r *Runtime) ContextBudgetBreakdownForGroup(groupID string) ContextBudgetBreakdown {
+	event := MessageEvent{Kind: EventKindGroup, GroupID: strings.TrimSpace(groupID)}
+	if event.GroupID == "" {
+		event.Kind = EventKindPrivate
+	}
+	cfg := r.effectiveConfigForEvent(event)
+	window := r.promptContextWindowTokens(event, cfg)
+
+	historyCeiling := cfg.RecentHistoryTokenBudget
+	if historyCeiling <= 0 {
+		historyCeiling = DefaultRecentHistoryTokenBudget
+	}
+	breakdown := ContextBudgetBreakdown{
+		GroupID:       event.GroupID,
+		ContextWindow: window,
+		Layers: []ContextBudgetLayer{
+			newContextBudgetLayer("recent_history", "近期历史", window, recentHistoryTokenShare, historyCeiling, true),
+			newContextBudgetLayer("session_thread", "会话便签", window, compressedSummaryTokenShare, sessionThreadTokenCeiling, false),
+			newContextBudgetLayer("retrieved_memory", "检索记忆", window, longTermMemoryTokenShare, retrievedMemoryTokenCeiling, false),
+			newContextBudgetLayer("core_memory", "常驻记忆", window, coreMemoryTokenShare, coreMemoryTokenCeiling, false),
+		},
+	}
+	for _, layer := range breakdown.Layers {
+		breakdown.Allocated += layer.Tokens
+	}
+	if breakdown.Headroom = window - breakdown.Allocated; breakdown.Headroom < 0 {
+		breakdown.Headroom = 0
+	}
+	return breakdown
+}
+
+func newContextBudgetLayer(key, label string, window, share, ceiling int64, configurable bool) ContextBudgetLayer {
+	tokens := contextLayerBudget(window, share, ceiling)
+	return ContextBudgetLayer{
+		Key:             key,
+		Label:           label,
+		SharePercent:    share,
+		Ceiling:         ceiling,
+		Tokens:          tokens,
+		CappedByCeiling: ceiling > 0 && contextShareBudget(window, share) > ceiling,
+		Configurable:    configurable,
+	}
 }

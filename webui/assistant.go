@@ -39,6 +39,12 @@ type profileAwareRuntime interface {
 	SetProfiles(assistant.ProfileSet)
 }
 
+// contextBudgetRuntime 让事件页拿到按群算好的上下文预算分配。做成可选接口而不是
+// 塞进 BotRuntime：它只服务一个页面，测试里的假运行时不必为此实现一个空方法。
+type contextBudgetRuntime interface {
+	ContextBudgetBreakdownForGroup(string) assistant.ContextBudgetBreakdown
+}
+
 type repositoryWatchRuntime interface {
 	CreateRepositoryWatch(context.Context, assistant.RepositoryWatchCreateInput) (assistant.Reminder, error)
 	UpdateRepositoryWatch(context.Context, string, string, assistant.RepositoryWatchUpdateInput) (assistant.Reminder, error)
