@@ -407,14 +407,18 @@ func TestRestoredLLMConfigUsesStructuredAgentTool(t *testing.T) {
 			},
 		}},
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "old-model"}, {ID: "gpt-4.1-mini"}}, nil
 	})
 
 	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
-	if err != nil || !strings.Contains(output, "已更新当前 LLM") || store.Current().Model != "gpt-4.1-mini" {
+	// 换模型改的是机器人的模型分配，LLM provider 配置保持原样。
+	if err != nil || !strings.Contains(output, "已把对话模型换成 gpt-4.1-mini") || store.Current().Model != "old-model" {
 		t.Fatalf("output=%q err=%v config=%#v", output, err, store.Current())
+	}
+	if roles := normalizeModelRoles(runtime.Config().ModelRoles); roles["chat"].Model != "gpt-4.1-mini" {
+		t.Fatalf("chat role = %#v", roles["chat"])
 	}
 	plugins := NewDefaultPluginManager()
 	state, exposed := plugins.Get(llmConfigPluginID)
@@ -427,7 +431,8 @@ func TestRestoredLLMConfigUsesStructuredAgentTool(t *testing.T) {
 		Text:     "把模型换回 old-model",
 		LLMStore: store,
 	}, nil)
-	if err != nil || resp != nil || store.Current().Model != "gpt-4.1-mini" {
+	// 自然语言那条路什么都不做：provider 配置停在原样，模型分配也不该被它改。
+	if err != nil || resp != nil || store.Current().Model != "old-model" {
 		t.Fatalf("natural-language plugin run resp=%#v err=%v config=%#v", resp, err, store.Current())
 	}
 }

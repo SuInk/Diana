@@ -27,21 +27,21 @@ const before = (minutes: number) => new Date(now - minutes * 60_000).toISOString
 const after = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
 
 const modelCatalog = [
-  { id: "gpt-5.2", input_modalities: ["text", "image"], output_modalities: ["text"], context_window_tokens: 400_000 },
-  { id: "gpt-5-mini", input_modalities: ["text"], output_modalities: ["text"], context_window_tokens: 272_000 },
-  { id: "gpt-image-1.5", input_modalities: ["text", "image"], output_modalities: ["image"] }
+  { id: "gpt-5.6", input_modalities: ["text", "image"], output_modalities: ["text"], context_window_tokens: 1_050_000 },
+  { id: "gpt-5.4-mini", input_modalities: ["text"], output_modalities: ["text"], context_window_tokens: 400_000 },
+  { id: "gpt-image-2", input_modalities: ["text", "image"], output_modalities: ["image"] }
 ];
 
 let llmConfig: LLMConfig = {
   provider: "openai_compatible",
-  model: "gpt-5.2",
+  model: "gpt-5.6",
   api_key_configured: true,
   active_profile_id: "llm-chat",
   profiles: [
-    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog, temperature: 0.7, max_output_tokens: 4096, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "model_list" },
-    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.2", models: modelCatalog, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "model_list" },
-    { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5-mini", models: modelCatalog, temperature: 0.2, effective_context_window_tokens: 272_000, effective_max_context_tokens: 272_000, context_window_source: "model_list" },
-    { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-1.5", image_model: "gpt-image-1.5", models: modelCatalog }
+    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, temperature: 0.7, max_output_tokens: 4096, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "chat", role_label: "对话", model: "gpt-5.4-mini" }] },
+    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000 },
+    { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.4-mini", models: modelCatalog, temperature: 0.2, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "user", catalog_context_window_tokens: 400_000 },
+    { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-2", image_model: "gpt-image-2", models: modelCatalog }
   ]
 };
 
@@ -55,8 +55,8 @@ const oneBotProfile: BotProfileConfig = {
   long_term_memory_enabled: true, cross_group_memory_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
-    chat: { profile_id: "llm-chat", model: "gpt-5.2" }, vision: { profile_id: "llm-vision", model: "gpt-5.2" },
-    intent: { profile_id: "llm-intent", model: "gpt-5-mini" }, image: { profile_id: "llm-image", model: "gpt-image-1.5" }
+    chat: { profile_id: "llm-chat", model: "gpt-5.6" }, vision: { profile_id: "llm-vision", model: "gpt-5.6" },
+    intent: { profile_id: "llm-intent", model: "gpt-5.4-mini" }, image: { profile_id: "llm-image", model: "gpt-image-2" }
   }
 };
 
@@ -202,8 +202,8 @@ export const demoEvents: AssistantEventDetail[] = [
 ];
 
 const trace: AppLogEntry[] = [
-  { id: "trace-1", kind: "debug", level: "info", action: "agent_trace", message: "模型请求", created_at: before(2), metadata: { phase: "model_request", purpose: "intent", provider: "openai_compatible", model: "gpt-5-mini", duration_ms: 640, request: { messages: [{ role: "system", content: "判断消息是否明确指向机器人" }, { role: "user", content: "@Diana 帮我总结一下今天的发布变更" }] }, response: { directed_at_bot: true, answerable: true, confidence: 0.99 } } },
-  { id: "trace-2", kind: "debug", level: "info", action: "agent_trace", message: "Agent 启动", created_at: before(2), metadata: { phase: "agent_started", model: "gpt-5.2", available_tools: ["repository_history", "web_search", "memory_search", "message_send"] } },
+  { id: "trace-1", kind: "debug", level: "info", action: "agent_trace", message: "模型请求", created_at: before(2), metadata: { phase: "model_request", purpose: "intent", provider: "openai_compatible", model: "gpt-5.4-mini", duration_ms: 640, request: { messages: [{ role: "system", content: "判断消息是否明确指向机器人" }, { role: "user", content: "@Diana 帮我总结一下今天的发布变更" }] }, response: { directed_at_bot: true, answerable: true, confidence: 0.99 } } },
+  { id: "trace-2", kind: "debug", level: "info", action: "agent_trace", message: "Agent 启动", created_at: before(2), metadata: { phase: "agent_started", model: "gpt-5.6", available_tools: ["repository_history", "web_search", "memory_search", "message_send"] } },
   { id: "trace-3", kind: "debug", level: "info", action: "agent_trace", message: "仓库工具完成", created_at: before(2), metadata: { phase: "agent_tool_completed", tool: "repository_history", duration_ms: 920, tool_input: { repository: "SuInk/Diana", range: "today" }, tool_output: "读取到 6 条提交和 1 个 Release（模拟数据）" } },
   { id: "trace-4", kind: "debug", level: "info", action: "agent_trace", message: "Agent 完成", created_at: before(1), metadata: { phase: "agent_completed", finish_reason: "stop", duration_ms: 6800 } }
 ];
@@ -330,9 +330,9 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/llm/test") {
     if (body.mode === "image") {
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024"><rect width="1024" height="1024" fill="#20242a"/><circle cx="512" cy="430" r="230" fill="#c44c7d"/><path d="M330 360 390 170 475 340M549 340 635 170 695 360" fill="#c44c7d"/><circle cx="440" cy="430" r="22" fill="#fff"/><circle cx="584" cy="430" r="22" fill="#fff"/><path d="M430 560 Q512 620 594 560" fill="none" stroke="#fff" stroke-width="18" stroke-linecap="round"/><text x="512" y="850" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="42">Diana 生图测试 · 模拟结果</text></svg>`;
-      return json({ provider: "openai_compatible", model: "gpt-image-1.5", images: [`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`] });
+      return json({ provider: "openai_compatible", model: "gpt-image-2", images: [`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`] });
     }
-    return json({ provider: "openai_compatible", model: String(body.model ?? "gpt-5.2"), text: "模型测试通过。这是 Pages 演示模式返回的模拟结果，不会消耗真实 Token。", usage: { input_tokens: 36, output_tokens: 24, total_tokens: 60 } });
+    return json({ provider: "openai_compatible", model: String(body.model ?? "gpt-5.6"), text: "模型测试通过。这是 Pages 演示模式返回的模拟结果，不会消耗真实 Token。", usage: { input_tokens: 36, output_tokens: 24, total_tokens: 60 } });
   }
 
   if (path === "/api/assistant/platforms") return json({ platforms });
