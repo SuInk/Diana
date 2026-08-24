@@ -59,7 +59,7 @@ func TestClaimEvidenceLedgerRejectsUnsupportedAndUnknownSources(t *testing.T) {
 		ID: "c1", Status: ClaimStatusSupported, Summary: "声称已确认",
 		Evidence: []ClaimEvidence{{URL: "https://invented.example/fact", Relation: "supports", SourceType: "secondary", Distance: "direct", Strength: "high"}},
 	}}
-	if reason, ok := ledger.validateFinal(updates); ok || !strings.Contains(reason, "缺少有效") {
+	if reason, ok := ledger.validateFinal(updates); ok || !strings.Contains(reason, "invented.example") {
 		t.Fatalf("unsupported final accepted reason=%q ok=%v traces=%#v", reason, ok, ledger.traces())
 	}
 	if got := ledger.traces()[0].Status; got != ClaimStatusInsufficient {
@@ -91,16 +91,16 @@ func TestClaimEvidenceLedgerKeepsAllowedSourceWithConservativeMetadata(t *testin
 	}
 }
 
-func TestClaimEvidencePromptKeepsProtocolOutOfUserContent(t *testing.T) {
+func TestClaimEvidenceDigestKeepsProtocolOutOfUserContent(t *testing.T) {
 	ledger := newClaimEvidenceLedger()
 	ledger.prepareSearch(map[string]any{
 		"claims":    []any{map[string]any{"id": "c1", "statement": "待验证事实"}},
 		"claim_ids": []any{"c1"},
 	})
-	prompt := ledger.prompt()
-	for _, expected := range []string{"仅供内部校验", "URL 必须原样取自 candidate_sources", "content 必须直接回答用户", "不得提及 claim ID"} {
-		if !strings.Contains(prompt, expected) {
-			t.Fatalf("prompt missing %q: %s", expected, prompt)
+	digest := ledger.digest()
+	for _, expected := range []string{"仅供内部校验", "c1 [not_searched]", "不得出现在最终回复正文里"} {
+		if !strings.Contains(digest, expected) {
+			t.Fatalf("digest missing %q: %s", expected, digest)
 		}
 	}
 }
@@ -139,8 +139,36 @@ func TestClaimEvidenceLedgerRecordsRejectedQueryWithoutRawText(t *testing.T) {
 		"claims": []any{map[string]any{"id": "c1", "statement": "待验证事实"}}, "claim_ids": []any{"c1"},
 	})
 	ledger.recordRejectedSearch(map[string]any{"query": "private raw query"}, "search_call_limit")
-	prompt := ledger.prompt()
-	if ledger.lastRejectedHash == "" || strings.Contains(prompt, "private raw query") || !strings.Contains(prompt, "last_rejected_query_hash") {
-		t.Fatalf("rejected query prompt=%s", prompt)
+	digest := ledger.digest()
+	if ledger.lastRejectedHash == "" || strings.Contains(digest, "private raw query") || !strings.Contains(digest, "last_rejected_query_hash") {
+		t.Fatalf("rejected query digest=%s", digest)
+	}
+}
+func TestClaimSchemaBindsEvidenceToRetrievedSources(t *testing.T) {
+	ledger := newClaimEvidenceLedger()
+	ledger.prepareSearch(map[string]any{
+		"claims":    []any{map[string]any{"id": "c1", "statement": "待验证事实"}},
+		"claim_ids": []any{"c1"},
+	})
+	result := webSearchResult{Status: "ok", StopReason: "sufficient_evidence", Sources: []string{"https://official.example/record"}}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.observeSearch(string(raw), nil)
+
+	schema := claimUpdateSchema(ledger.declaredClaimIDs(), ledger.allowedSourceURLs())
+	properties, _ := schema["properties"].(map[string]any)
+	id, _ := properties["id"].(map[string]any)
+	if enum, _ := id["enum"].([]string); len(enum) != 1 || enum[0] != "c1" {
+		t.Fatalf("claim id enum=%#v", id["enum"])
+	}
+	evidence, _ := properties["evidence"].(map[string]any)
+	items, _ := evidence["items"].(map[string]any)
+	evidenceProperties, _ := items["properties"].(map[string]any)
+	url, _ := evidenceProperties["url"].(map[string]any)
+	enum, _ := url["enum"].([]string)
+	if len(enum) != 1 || enum[0] != "https://official.example/record" {
+		t.Fatalf("evidence url enum=%#v", url["enum"])
 	}
 }

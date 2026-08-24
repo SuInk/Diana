@@ -5,6 +5,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strings"
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS message_events (
   sender_name TEXT,
   event_time INTEGER NOT NULL,
   text TEXT,
+  search_extra TEXT,
   payload TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -279,6 +281,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.migrateGroupConfigsToBotScope(); err != nil {
 		return err
 	}
+	if err := s.addMessageSearchExtraColumn(); err != nil {
+		return err
+	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
@@ -446,6 +451,35 @@ func (s *SQLiteStore) migrateGroupConfigsToBotScope() error {
 		return nil
 	}
 	return s.SaveBotGroupConfigs(ctx, set)
+}
+
+// addMessageSearchExtraColumn 给老库补上检索附加列。图片描述这类「消息发出来
+// 之后才算出来的可检索文本」写在这里，不动 text 正文列。
+func (s *SQLiteStore) addMessageSearchExtraColumn() error {
+	rows, err := s.db.Query(`PRAGMA table_info(message_events)`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			cid                 int
+			name, columnType    string
+			notNull, primaryKey int
+			defaultValue        sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, "search_extra") {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE message_events ADD COLUMN search_extra TEXT`)
+	return err
 }
 
 func (s *SQLiteStore) backfillRecallNoticeAudits() error {

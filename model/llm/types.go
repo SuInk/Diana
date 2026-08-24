@@ -97,6 +97,10 @@ type Message struct {
 	// ContextGroup keeps related optional messages atomic during token fitting.
 	// It is local orchestration metadata and is never sent to providers.
 	ContextGroup string `json:"-"`
+	// CacheBreakpoint marks the last message of a stable prompt prefix.
+	// Providers with explicit prompt caching place a cache breakpoint after this
+	// message; providers with automatic prefix caching ignore it.
+	CacheBreakpoint bool `json:"-"`
 	// AtomicText marks a message whose text is a single semantic unit. A
 	// compressed summary cut in the middle still reads as complete while having
 	// lost its conclusions, entity relations or time bounds, so the budgeter
@@ -157,6 +161,9 @@ type GenerateRequest struct {
 	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
 	MaxOutputTokens int64            `json:"max_output_tokens,omitempty"`
 	Tools           []ToolDefinition `json:"tools,omitempty"`
+	// ToolChoice 强制本轮只能调用指定名字的工具。为空时保持供应商默认的自动
+	// 选择；不支持强制选择的供应商按自动处理。
+	ToolChoice string `json:"tool_choice,omitempty"`
 	// MaxContextTokens 覆盖配置档的请求上下文上限。上游只在「上一次请求被供应商
 	// 判为超出上下文」后重试时设置它，用来把请求收缩到更保守的预算；为 0 时按
 	// 配置档取值。
@@ -581,7 +588,7 @@ func DefaultImageModel(provider Provider) string {
 	case ProviderOpenAICompatible:
 		return "gpt-image-2"
 	case ProviderGemini:
-		return "imagen-4.0-generate-001"
+		return "gemini-3-pro-image"
 	default:
 		return ""
 	}

@@ -34,6 +34,15 @@ type ToolInputSchema interface {
 	InputSchema() map[string]any
 }
 
+// StrictDecodingTool 让工具主动要求严格解码，即使它的 schema 声明了可选参数。
+// 严格模式要求每个参数都出现并在不用时显式为 null，这个代价只值得付给「一旦
+// 参数写错就要整轮重试」的工具。schema 的改写在 provider 边界完成，工具自身
+// 保持一份可读的普通 schema。
+type StrictDecodingTool interface {
+	Tool
+	PrefersStrictDecoding() bool
+}
+
 // ToolResultPartsTool lets a tool attach non-text evidence to the observation
 // sent into the next model turn. The regular string result remains the source
 // of truth for logs and models that do not support the extra content part.
@@ -490,12 +499,46 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 				strict = schemaAllowsStrictMode(provided)
 			}
 		}
+		if typed, ok := tool.(StrictDecodingTool); ok && typed.PrefersStrictDecoding() {
+			strict = true
+		}
 		definitions = append(definitions, llm.ToolDefinition{
 			Name: tool.Name(), Description: tool.Description(), Parameters: schema, Strict: strict,
 		})
 	}
 	return definitions
 }
+
+// SystemPromptCatalog 为系统提示词渲染一份每行一个工具的目录。每轮请求都会带上
+// 原生工具定义，那里已经有权威描述和 JSON Schema，在提示词里再抄一遍全文只是
+// 在同一个请求里重复同样的文本。短目录仍然让不支持 function calling 的供应商
+// 能用兼容 JSON 协议选对工具。
+func (r *ToolRegistry) SystemPromptCatalog() string {
+	if r == nil {
+		return "无可用工具。"
+	}
+	names := r.Names()
+	if len(names) == 0 {
+		return "无可用工具。"
+	}
+	var builder strings.Builder
+	for _, name := range names {
+		tool, ok := r.Get(name)
+		if !ok {
+			continue
+		}
+		builder.WriteString("- ")
+		builder.WriteString(tool.Name())
+		builder.WriteString(": ")
+		builder.WriteString(compactToolDescription(tool.Description(), SystemPromptToolDescriptionBudget))
+		builder.WriteByte('\n')
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+// SystemPromptToolDescriptionBudget 把系统提示词里的目录压到大约一行一个工具。
+// 完整的行为约束留在发给模型的工具定义里。
+const SystemPromptToolDescriptionBudget = 120
 
 // ToolDescriptionBudget 是工具清单里单个描述的字数上限。超出会被截断，且
 // compactToolDescription 优先保留 input: 之后的参数示例——被砍掉的恰好是开头
@@ -681,7 +724,13 @@ func (t *ListFilesTool) Name() string {
 
 // Description 返回列目录工具说明。
 func (t *ListFilesTool) Description() string {
-	return `列出 Agent 工作目录内的文件。input: {"path":"相对目录，可选"}`
+	return `列出 Agent 工作目录内的文件。`
+}
+
+func (t *ListFilesTool) InputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"path": toolStringParam("工作目录内的相对目录，省略时列出根目录"),
+	})
 }
 
 // Run 列出 Agent 工作目录内的文件。
@@ -753,7 +802,16 @@ func (t *RunCommandTool) Name() string {
 
 // Description 返回命令执行工具说明。
 func (t *RunCommandTool) Description() string {
-	return `在 Agent 工作目录内执行短时本地命令，不经过 shell。不要用于网页搜索、计时、提醒、周期任务、sleep 或后台驻留；这些场景必须使用对应的专用工具。实时网页搜索必须优先使用 web_search.search。input: {"command":"命令名","args":["参数"],"cwd":"相对目录，可选","timeout_ms":10000}`
+	return `在 Agent 工作目录内执行短时本地命令，不经过 shell。不要用于网页搜索、计时、提醒、周期任务、sleep 或后台驻留；这些场景必须使用对应的专用工具。实时网页搜索必须优先使用 web_search.search。`
+}
+
+func (t *RunCommandTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"command"}, map[string]any{
+		"command":    toolStringParam("命令名，必须在允许列表内"),
+		"args":       toolStringArrayParam("命令参数，按顺序传入，不经过 shell 解析"),
+		"cwd":        toolStringParam("工作目录内的相对执行目录，可选"),
+		"timeout_ms": toolIntParam("超时毫秒数，可选"),
+	})
 }
 
 // Run 在 Agent 工作目录内执行白名单命令。
@@ -875,7 +933,14 @@ func (t *ReadFileTool) Name() string {
 
 // Description 返回读文件工具说明。
 func (t *ReadFileTool) Description() string {
-	return `读取 Agent 工作目录内的文本文件。input: {"path":"相对文件路径","max_bytes":65536}`
+	return `读取 Agent 工作目录内的文本文件。`
+}
+
+func (t *ReadFileTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"path"}, map[string]any{
+		"path":      toolStringParam("工作目录内的相对文件路径"),
+		"max_bytes": toolIntParam("最大读取字节数，可选"),
+	})
 }
 
 // Run 读取 Agent 工作目录内的文本文件。

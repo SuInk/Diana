@@ -41,7 +41,17 @@ type SkillsInstallTool struct {
 func (t *SkillsInstallTool) Name() string { return "skills.install" }
 
 func (t *SkillsInstallTool) Description() string {
-	return `安装一个受 Diana 管理的 Skill 并立即刷新能力目录。首次调用会被拒绝并返回确认码，请把要装的内容讲清楚、等用户原样回复确认码后再重发本次调用。input: {"content":"完整 SKILL.md，可与 source_url 二选一","source_url":"公开 HTTP(S) SKILL.md 或 zip 包，可选","name":"期望的 skill 名，可选","subdir":"zip 内 skill 子目录，可选","replace":false}`
+	return `安装一个受 Diana 管理的 Skill 并立即刷新能力目录。首次调用会被拒绝并返回确认码，请把要装的内容讲清楚、等用户原样回复确认码后再重发本次调用。`
+}
+
+func (t *SkillsInstallTool) InputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"content":    toolStringParam("完整 SKILL.md 内容，与 source_url 二选一"),
+		"source_url": toolStringParam("公开 HTTP(S) SKILL.md 或 zip 包地址，与 content 二选一"),
+		"name":       toolStringParam("期望的 skill 名，可选"),
+		"subdir":     toolStringParam("zip 包内的 skill 子目录，可选"),
+		"replace":    toolBoolParam("同名 skill 已存在时是否覆盖"),
+	})
 }
 
 func (t *SkillsInstallTool) ExplicitUserRequestKind() string { return "skill" }
@@ -74,7 +84,13 @@ type SkillsUninstallTool struct {
 func (t *SkillsUninstallTool) Name() string { return "skills.uninstall" }
 
 func (t *SkillsUninstallTool) Description() string {
-	return `卸载一个由 Diana 管理的 Skill；外部只读 Skill 不可卸载。首次调用会被拒绝并返回确认码，等用户原样回复后再重发本次调用。input: {"name":"skill 名称"}`
+	return `卸载一个由 Diana 管理的 Skill；外部只读 Skill 不可卸载。首次调用会被拒绝并返回确认码，等用户原样回复后再重发本次调用。`
+}
+
+func (t *SkillsUninstallTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"name"}, map[string]any{
+		"name": toolStringParam("要卸载的 skill 名称"),
+	})
 }
 
 func (t *SkillsUninstallTool) ExplicitUserRequestKind() string { return "skill" }

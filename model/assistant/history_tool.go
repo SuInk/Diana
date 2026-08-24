@@ -185,6 +185,9 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 	if err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(result.Message) != "" {
+		result.Message = strings.TrimSpace(result.Message) + " " + t.idNotice()
+	}
 	return marshalDianaChatHistoryResult(result)
 }
 
@@ -340,6 +343,8 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 			item.SenderNameOrID(),
 			historyToolEventText(item),
 			quotedPlainText(item.Quoted),
+			// 纯图片消息正文是空的，图片描述是它唯一能被搜到的内容。
+			t.runtime.messageImageDescriptionText(ctx, item),
 		}, "\n"))
 		if !strings.Contains(searchable, normalizedQuery) {
 			continue
@@ -740,6 +745,26 @@ func truncateChatHistoryText(text string, limit int) string {
 		return text
 	}
 	return string(runes[:limit]) + "..."
+}
+
+// chatHistoryIDNotice 跟着每个结果一起回去。系统提示词里已经有同样的规则，
+// 但模型是在读完这份结果、手里正攥着一串 message_id 的时候动笔的，就近再说
+// 一遍比隔着几千 token 的规则管用。
+const chatHistoryIDNotice = "message_id 只用于继续调用历史工具，不得写进给用户的回复；指认某条消息时用时间、发送者和内容描述。"
+
+// chatHistoryQuoteNotice 在禁令之外给出真正该做的动作：把那条消息引用出来。
+const chatHistoryQuoteNotice = "要让用户直接定位到某条消息，在回复最开头写 " + replyMarkerPrefix + "该消息的 message_id]，客户端会渲染成引用框。"
+
+// idNotice 按本会话的引用配置决定提醒内容：引用被关掉时只留禁令，不教一个
+// 注定会被丢掉的动作。
+func (t *dianaChatHistoryTool) idNotice() string {
+	if t == nil || t.runtime == nil {
+		return chatHistoryIDNotice
+	}
+	if replyReferenceMode(t.runtime.effectiveConfigForEvent(t.event)) == ReplyDecorationOff {
+		return chatHistoryIDNotice
+	}
+	return chatHistoryIDNotice + " " + chatHistoryQuoteNotice
 }
 
 func marshalDianaChatHistoryResult(result dianaChatHistoryResult) (string, error) {

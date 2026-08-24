@@ -285,7 +285,11 @@ func NewExtensionsListTool(catalog ExtensionCatalog, managementEnabled bool) *Ex
 func (t *ExtensionsListTool) Name() string { return "extensions.list" }
 
 func (t *ExtensionsListTool) Description() string {
-	return `列出 Diana 的统一能力目录，包括默认内置插件、本地 Skills、MCP 服务、启用状态和 MCP 工具名。input: {}`
+	return `列出 Diana 的统一能力目录，包括默认内置插件、本地 Skills、MCP 服务、启用状态和 MCP 工具名。`
+}
+
+func (t *ExtensionsListTool) InputSchema() map[string]any {
+	return toolEmptySchema()
 }
 
 func (t *ExtensionsListTool) Run(context.Context, map[string]any) (string, error) {

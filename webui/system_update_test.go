@@ -895,3 +895,19 @@ func systemUpdateTestRouter(handler *SystemUpdateHandler) *gin.Engine {
 	handler.Register(router)
 	return router
 }
+
+// 「你源码在哪」不给真链接，模型就会编一个像模像样的 GitHub 地址。源码部署
+// 跟着自己的 git 远端走，其余回落到官方仓库。
+func TestSystemUpdateHandlerRepositoryURL(t *testing.T) {
+	forked := NewSystemUpdateHandler(fakeSystemUpdater{
+		status: updater.Status{Root: "/tmp/repo", RemoteURL: "https://github.com/example/repo.git"},
+	})
+	if got := forked.repositoryURL(context.Background()); got != "https://github.com/example/repo" {
+		t.Fatalf("forked repository url = %q", got)
+	}
+
+	packaged := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRemoteNotConfigured})
+	if got := packaged.repositoryURL(context.Background()); got != "https://github.com/SuInk/Diana" {
+		t.Fatalf("packaged repository url = %q", got)
+	}
+}

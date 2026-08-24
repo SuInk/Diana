@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
@@ -47,10 +48,13 @@ type llmConfigCommand struct {
 	Provider    llm.Provider
 	ProviderSet bool
 	Model       string
+	// Role 是要改的用途：chat / vision / intent / image。空表示对话。
+	Role string
 }
 
 type llmConfigApplyResult struct {
 	Reply       string
+	Role        string
 	Updated     bool
 	ProfileID   string
 	ProfileName string
@@ -60,101 +64,288 @@ type llmConfigApplyResult struct {
 	NewModel    string
 }
 
-// applyLLMConfigCommand applies validated input from the structured Agent tool.
-func applyLLMConfigCommand(ctx context.Context, store LLMProfileStore, command llmConfigCommand, listModels LLMModelLister) llmConfigApplyResult {
-	set := store.Profiles().WithDefaults()
-	current, ok := set.Current()
-	if !ok {
-		return llmConfigApplyResult{Reply: "当前没有激活的 LLM 配置。"}
+// applyLLMConfigCommand 把「换个模型」落到这台机器人的模型分配上。
+//
+// 改的是 BotConfig.ModelRoles，不是 LLM 配置本身。两者管的是不同的事：provider
+// 的地址、密钥、默认模型属于「这个 provider 怎么连」，归 WebUI 的 LLM 配置页；
+// 「这台机器人各个用途分别用哪个模型」属于机器人配置，也就是模型分配。
+//
+// 四个用途都能改：对话、视觉理解、意图识别、图片生成，由 command.Role 指定，
+// 默认对话。它们和 WebUI「模型分配」那四行是同一份数据。
+//
+// 以前这里改的是激活配置的默认模型。只要配过模型分配，roleBoundProfiles 就会用
+// role.Model 覆盖它——回执说「已更新 Model：old -> new」，对话实际还在用旧模型。
+// 一个会说谎的成功回执比失败更难查。
+func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCommand, listModels LLMModelLister) llmConfigApplyResult {
+	r.mu.RLock()
+	store := r.llmStore
+	r.mu.RUnlock()
+	if store == nil {
+		return llmConfigApplyResult{Reply: "当前未接入 LLM 配置集。"}
 	}
 	if listModels == nil {
 		listModels = defaultLLMModelLister
 	}
+	set := store.Profiles().WithDefaults()
+	botCfg := r.Config().WithDefaults()
+	roles := normalizeModelRoles(botCfg.ModelRoles)
+	roleKey, ok := normalizeLLMConfigRole(command.Role)
+	if !ok {
+		return llmConfigApplyResult{Reply: "更新失败：不认识的用途 " + command.Role + "，只能是 chat、vision、intent、image。"}
+	}
 
-	nextCfg := current.Config.WithDefaults()
-	oldProvider := nextCfg.Provider
-	oldModel := nextCfg.Model
-	if command.ProviderSet {
-		// 只切 provider 且没指定模型时，换到该 provider 的默认模型，避免保留旧 provider 的无效模型名。
-		nextCfg.Provider = command.Provider
-		if strings.TrimSpace(command.Model) == "" && oldProvider != command.Provider {
-			nextCfg.Model = llm.DefaultModel(command.Provider)
-		}
+	boundProfile, boundModel, ok := modelRoleBinding(set, roles, roleKey)
+	if !ok {
+		return llmConfigApplyResult{Reply: "当前没有可用的 LLM 配置。"}
 	}
-	if strings.TrimSpace(command.Model) != "" {
-		nextCfg.Model = strings.TrimSpace(command.Model)
+	oldProvider := boundProfile.Config.Provider
+	oldModel := boundModel
+
+	target, model, err := resolveLLMConfigTarget(set, boundProfile, boundModel, command)
+	if err != nil {
+		return llmConfigApplyResult{Reply: "更新失败：" + err.Error(), Role: roleKey, OldProvider: oldProvider, OldModel: oldModel}
 	}
-	nextCfg = nextCfg.WithDefaults()
-	// 必须先问后端模型列表，防止用户切到 provider 里不存在的模型后导致机器人不可用。
-	modelInfo, models, err := ensureLLMModelAvailable(ctx, nextCfg, listModels)
+
+	probe := target.Config.WithDefaults()
+	probe.Model = model
+	// 必须先问后端模型列表，防止切到 provider 里不存在的模型后机器人直接不可用。
+	modelInfo, err := ensureLLMModelAvailable(ctx, probe, listModels)
 	if err != nil {
 		return llmConfigApplyResult{
 			Reply:       "更新失败：" + err.Error(),
-			ProfileID:   current.ID,
-			ProfileName: current.Name,
+			Role:        roleKey,
+			ProfileID:   target.ID,
+			ProfileName: target.Name,
 			OldProvider: oldProvider,
-			NewProvider: nextCfg.Provider,
+			NewProvider: probe.Provider,
 			OldModel:    oldModel,
-			NewModel:    nextCfg.Model,
+			NewModel:    model,
 		}
 	}
-	if len(models) > 0 {
-		nextCfg.Models = models
-	}
-	// 换模型时不再把目录返回的窗口写进配置。窗口是模型的属性，一个 provider 下面
-	// 挂着几十个模型；写进配置就等于把「某一刻从第三方目录读到的数」固定成用户设置，
-	// 之后换模型不跟着变，目录改了也不跟着变。读取时按当前模型现算即可，
-	// 用户手填的值仍然优先（见 llm.ResolveContextWindowTokens）。
-	window := nextCfg.ContextWindowTokensWithDefault()
-	if modelInfo.ContextWindowTokens > 0 {
-		window = modelInfo.ContextWindowTokens
-	}
-	if nextCfg.ContextWindowTokens > 0 {
-		window = nextCfg.ContextWindowTokens
-	}
-	// 用户设过的请求上限要留住，但不能超过新模型的窗口。
-	if nextCfg.MaxContextTokens > window {
-		nextCfg.MaxContextTokens = window
-	}
-	if modelInfo.MaxOutputTokens > 0 && nextCfg.MaxOutputTokens > modelInfo.MaxOutputTokens {
-		nextCfg.MaxOutputTokens = modelInfo.MaxOutputTokens
-	}
-	if budget := nextCfg.MaxContextTokensWithDefault(); nextCfg.MaxOutputTokens >= budget {
-		nextCfg.MaxOutputTokens = budget / 4
-	}
-	if err := nextCfg.Validate(); err != nil {
-		return llmConfigApplyResult{
-			Reply:       "更新失败：" + err.Error(),
-			ProfileID:   current.ID,
-			ProfileName: current.Name,
-			OldProvider: oldProvider,
-			NewProvider: nextCfg.Provider,
-			OldModel:    oldModel,
-			NewModel:    nextCfg.Model,
-		}
-	}
+	notes := llmConfigOutputTokenNote(target.Config, modelInfo)
 
-	for i := range set.Profiles {
-		if set.Profiles[i].ID != current.ID {
-			continue
-		}
-		set.Profiles[i].Config = nextCfg
-		set.ActiveID = current.ID
-		if err := store.SaveProfiles(set); err != nil {
-			return llmConfigApplyResult{Reply: fmt.Sprintf("更新失败：配置没能写入存储（%v）。", err)}
-		}
-		return llmConfigApplyResult{
-			Reply:       fmt.Sprintf("已更新当前 LLM：%s\nProvider：%s -> %s\nModel：%s -> %s", current.Name, oldProvider, nextCfg.Provider, oldModel, nextCfg.Model),
-			Updated:     true,
-			ProfileID:   current.ID,
-			ProfileName: current.Name,
-			OldProvider: oldProvider,
-			NewProvider: nextCfg.Provider,
-			OldModel:    oldModel,
-			NewModel:    nextCfg.Model,
+	result := llmConfigApplyResult{
+		Updated:     true,
+		Role:        roleKey,
+		ProfileID:   target.ID,
+		ProfileName: target.Name,
+		OldProvider: oldProvider,
+		NewProvider: probe.Provider,
+		OldModel:    oldModel,
+		NewModel:    model,
+	}
+	if err := r.saveModelRole(botCfg, roles, roleKey, target, model); err != nil {
+		return llmConfigApplyResult{Reply: "更新失败：机器人配置没能保存（" + err.Error() + "）。"}
+	}
+	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s）。改的是机器人模型分配里的这一档，没有动 LLM 配置里的 provider 设置，其余用途各自的分配保持不变。%s%s",
+		llmConfigRoleLabel(roleKey), model, target.Name, llmConfigFollowChatNote(roleKey, roles), notes)
+	return result
+}
+
+// llmConfigFollowChatNote 在第一次给对话定下绑定时说明连带影响：视觉理解、意图
+// 识别、图片生成没有单独分配时跟随对话（这也是 WebUI 模型分配页写明的规则），
+// 所以这一次改动会连它们一起改掉。不说的话就是一次静默的连带变更。
+func llmConfigFollowChatNote(roleKey string, previous map[string]ModelRole) string {
+	if roleKey != llmConfigRoleChat {
+		return ""
+	}
+	unassigned := make([]string, 0, 3)
+	for _, key := range []string{llmConfigRoleVision, llmConfigRoleIntent, llmConfigRoleImage} {
+		if _, ok := previous[key]; !ok {
+			unassigned = append(unassigned, llmConfigRoleLabel(key))
 		}
 	}
-	return llmConfigApplyResult{Reply: "当前没有激活的 LLM 配置。"}
+	if len(unassigned) == 0 {
+		return ""
+	}
+	return strings.Join(unassigned, "、") + "没有单独分配，会跟随对话模型。"
+}
+
+// 模型分配的四个用途。和 WebUI「模型分配」那四行、normalizeModelRoles 的白名单
+// 是同一套 key。
+const (
+	llmConfigRoleChat   = "chat"
+	llmConfigRoleVision = "vision"
+	llmConfigRoleIntent = "intent"
+	llmConfigRoleImage  = "image"
+)
+
+func normalizeLLMConfigRole(role string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "", llmConfigRoleChat, "default", "text":
+		return llmConfigRoleChat, true
+	case llmConfigRoleVision:
+		return llmConfigRoleVision, true
+	case llmConfigRoleIntent:
+		return llmConfigRoleIntent, true
+	case llmConfigRoleImage:
+		return llmConfigRoleImage, true
+	default:
+		return "", false
+	}
+}
+
+func llmConfigRoleLabel(role string) string {
+	switch role {
+	case llmConfigRoleVision:
+		return "视觉理解"
+	case llmConfigRoleIntent:
+		return "意图识别"
+	case llmConfigRoleImage:
+		return "图片生成"
+	default:
+		return "对话"
+	}
+}
+
+// modelRoleBinding 报出「某个用途现在实际用哪套配置的哪个模型」，用于回执里的
+// 「旧模型」。回落顺序和运行时一致：本用途绑定 -> chat 绑定 -> 该用途的配置分组
+// -> 激活配置。图片生成那一档取的是生图模型，不是对话模型。
+func modelRoleBinding(set llm.ProfileSet, roles map[string]ModelRole, roleKey string) (llm.Profile, string, bool) {
+	if profile, model, ok := profilesForRole(set, roles, roleKey); ok {
+		return profile, model, true
+	}
+	if roleKey != llmConfigRoleChat {
+		if profile, model, ok := profilesForRole(set, roles, llmConfigRoleChat); ok {
+			return profile, model, true
+		}
+		if candidates := set.GroupProfiles(roleKey); len(candidates) > 0 {
+			return candidates[0], roleModelFromProfile(candidates[0], roleKey), true
+		}
+	}
+	current, ok := set.Current()
+	if !ok {
+		return llm.Profile{}, "", false
+	}
+	return current, roleModelFromProfile(current, roleKey), true
+}
+
+// profilesForRole 解析一条已存在的绑定。
+func profilesForRole(set llm.ProfileSet, roles map[string]ModelRole, roleKey string) (llm.Profile, string, bool) {
+	role, ok := roles[roleKey]
+	if !ok {
+		return llm.Profile{}, "", false
+	}
+	var candidates []llm.Profile
+	if role.Group != "" {
+		candidates = set.GroupProfiles(role.Group)
+	} else {
+		for _, profile := range set.Profiles {
+			if profile.ID == role.ProfileID {
+				candidates = []llm.Profile{profile}
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return llm.Profile{}, "", false
+	}
+	return candidates[0], role.Model, true
+}
+
+func roleModelFromProfile(profile llm.Profile, roleKey string) string {
+	cfg := profile.Config.WithDefaults()
+	if roleKey == llmConfigRoleImage {
+		return cfg.ImageModelWithDefault()
+	}
+	return cfg.Model
+}
+
+// resolveLLMConfigTarget 选出这次要绑到哪套配置的哪个模型。
+func resolveLLMConfigTarget(set llm.ProfileSet, bound llm.Profile, boundModel string, command llmConfigCommand) (llm.Profile, string, error) {
+	target := bound
+	model := strings.TrimSpace(command.Model)
+	if command.ProviderSet && command.Provider != bound.Config.Provider {
+		match, ok := firstProfileForProvider(set, command.Provider)
+		if !ok {
+			return llm.Profile{}, "", fmt.Errorf("WebUI 里没有配置 %s 的 provider，请先添加再切换", command.Provider)
+		}
+		target = match
+		if model == "" {
+			model = llm.DefaultModel(command.Provider)
+		}
+	}
+	if model == "" {
+		model = boundModel
+	}
+	if model == "" {
+		return llm.Profile{}, "", fmt.Errorf("没有指定要用的模型")
+	}
+	// 只报了模型名时，如果当前这套配置的模型清单里没有它、而别的配置有，就跟着换过去：
+	// 用户说的是模型，不该逼他先想清楚这个模型挂在哪套配置下。
+	if !command.ProviderSet && !profileOffersModel(target, model) {
+		if match, ok := profileOfferingModel(set, model); ok {
+			target = match
+		}
+	}
+	return target, model, nil
+}
+
+func firstProfileForProvider(set llm.ProfileSet, provider llm.Provider) (llm.Profile, bool) {
+	for _, profile := range set.Profiles {
+		if profile.Config.WithDefaults().Provider == provider {
+			return profile, true
+		}
+	}
+	return llm.Profile{}, false
+}
+
+// profileOffersModel 只看已经同步下来的模型清单；清单为空时不做判断（当作可能支持）。
+func profileOffersModel(profile llm.Profile, model string) bool {
+	supported, known := profileSupportsRoleModel(profile, model)
+	return !known || supported
+}
+
+func profileOfferingModel(set llm.ProfileSet, model string) (llm.Profile, bool) {
+	for _, profile := range set.Profiles {
+		if supported, known := profileSupportsRoleModel(profile, model); known && supported {
+			return profile, true
+		}
+	}
+	return llm.Profile{}, false
+}
+
+// llmConfigOutputTokenNote 在新模型的输出上限比配置里填的还小时给一句提醒。
+// 这里不代改：最大输出 Token 是 provider 配置，归 WebUI。
+func llmConfigOutputTokenNote(cfg llm.ProviderConfig, info llm.ModelInfo) string {
+	if info.MaxOutputTokens <= 0 || cfg.MaxOutputTokens <= 0 || cfg.MaxOutputTokens <= info.MaxOutputTokens {
+		return ""
+	}
+	return fmt.Sprintf("提醒：这套配置的最大输出 Token 填的是 %d，超过新模型的 %d，需要在 WebUI 的 LLM 配置里调低。", cfg.MaxOutputTokens, info.MaxOutputTokens)
+}
+
+// saveModelRole 只改指定用途的绑定，其余用途原样保留。
+func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, roleKey string, target llm.Profile, model string) error {
+	next := make(map[string]ModelRole, len(roles)+1)
+	for key, role := range roles {
+		next[key] = role
+	}
+	role := next[roleKey]
+	// 原来按分组绑定、而新配置仍在那个分组里时保留分组绑定，只换模型：
+	// 分组绑定带故障转移，改成单配置会把这个能力弄丢。
+	if role.Group != "" && profileInGroup(target, role.Group) {
+		role.Model = model
+	} else {
+		role = ModelRole{ProfileID: target.ID, Model: model}
+	}
+	next[roleKey] = role
+	botCfg.ModelRoles = normalizeModelRoles(next)
+	botCfg = botCfg.WithDefaults()
+	r.mu.Lock()
+	r.cfg = botCfg
+	r.updatedAt = time.Now()
+	saver := r.configSaver
+	r.mu.Unlock()
+	if saver == nil {
+		return fmt.Errorf("当前部署没有接入机器人配置存储")
+	}
+	// 聊天里改的配置必须立刻落盘，否则重启就丢。
+	saver.SaveBotConfig(botCfg)
+	return nil
+}
+
+func profileInGroup(profile llm.Profile, group string) bool {
+	return llm.NormalizeProfileGroup(profile.Group) == llm.NormalizeProfileGroup(group)
 }
 
 // recordLLMConfigSkillLog 记录聊天修改 LLM 配置的审计日志。
@@ -185,6 +376,9 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 	}
 	if result.ProfileName != "" {
 		metadata["profile_name"] = result.ProfileName
+	}
+	if result.Role != "" {
+		metadata["role"] = result.Role
 	}
 	if result.OldProvider != "" {
 		metadata["old_provider"] = string(result.OldProvider)
@@ -229,23 +423,21 @@ func defaultLLMModelLister(ctx context.Context, cfg llm.ProviderConfig) ([]llm.M
 	return llm.ListModels(ctx, cfg)
 }
 
-// ensureLLMModelAvailable 校验目标模型是否存在于 provider 后端列表。
-// ensureLLMModelAvailable 校验模型可用，并把这次拿到的完整模型清单一起带回。
-// 清单要跟着写回配置：切了 provider 之后旧清单就不再对应当前后端，留着它会让
-// 「按模型清单取窗口」查到上一个 provider 的条目。
-func ensureLLMModelAvailable(ctx context.Context, cfg llm.ProviderConfig, listModels LLMModelLister) (llm.ModelInfo, []llm.ModelInfo, error) {
+// ensureLLMModelAvailable 校验模型确实在这个 provider 的模型清单里。
+// 只认后端返回的清单：本地硬编码的模型名判断不了中转和自建服务。
+func ensureLLMModelAvailable(ctx context.Context, cfg llm.ProviderConfig, listModels LLMModelLister) (llm.ModelInfo, error) {
 	model := strings.TrimSpace(cfg.Model)
 	// listModels 会走当前 provider 的真实后端接口；不能靠本地硬编码模型名判断。
 	models, err := listModels(ctx, cfg)
 	if err != nil {
-		return llm.ModelInfo{}, nil, fmt.Errorf("无法读取 %s 的模型列表，未保存；请先在 WebUI 的模型列表里选择可用模型。%v", cfg.Provider, err)
+		return llm.ModelInfo{}, fmt.Errorf("无法读取 %s 的模型列表，未保存；请先在 WebUI 的模型列表里选择可用模型。%v", cfg.Provider, err)
 	}
 	for _, candidate := range models {
 		if strings.EqualFold(strings.TrimSpace(candidate.ID), model) {
-			return candidate, models, nil
+			return candidate, nil
 		}
 	}
-	return llm.ModelInfo{}, nil, fmt.Errorf("模型 %s 不在 %s 的模型列表中，未保存。可选：%s", model, cfg.Provider, summarizeModelIDs(models))
+	return llm.ModelInfo{}, fmt.Errorf("模型 %s 不在 %s 的模型列表中，未保存。可选：%s", model, cfg.Provider, summarizeModelIDs(models))
 }
 
 // summarizeModelIDs 摘要展示可选模型 ID。

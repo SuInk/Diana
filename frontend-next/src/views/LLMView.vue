@@ -124,7 +124,7 @@
     </Modal>
 
     <!-- 编辑弹窗 -->
-    <Modal v-if="editorOpen" :title="editingID ? '编辑配置' : '新建配置'" wide @close="editorOpen = false">
+    <Modal v-if="editorOpen" :title="editingID ? '编辑配置' : '新建配置'" wide @close="closeEditor">
       <div class="form-grid">
         <div class="field">
           <label for="llm-name">名称</label>
@@ -277,8 +277,11 @@
           <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="跟随模型" />
           <span class="hint">
             只填你想强制覆盖的值。{{ effectiveContextHint }}
-            一个 provider 下的模型窗口各不相同，填死之后换模型不会自动跟着变。
+            <template v-if="contextWindowBindings.length > 0">在用这套配置的用途：</template>
           </span>
+          <ul v-if="contextWindowBindings.length > 0" class="hint context-binding-list">
+            <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
+          </ul>
         </div>
         <div class="field">
           <label for="llm-maxcontext">单次请求上下文上限</label>
@@ -297,7 +300,7 @@
         </div>
       </div>
       <template #footer>
-        <button class="btn ghost" type="button" @click="editorOpen = false">取消</button>
+        <button class="btn ghost" type="button" @click="closeEditor">取消</button>
         <button class="btn primary" type="button" :disabled="busy" @click="save">
           <Save :size="15" aria-hidden="true" />
           保存
@@ -582,24 +585,31 @@ function optionalTokenInput(raw: string): number {
   return Number(value);
 }
 
-const contextWindowSourceLabels: Record<string, string> = {
-  user: "你填写的值",
-  model_list: "同步下来的模型清单",
-  inferred: "按模型名推断",
-  fallback: "兜底值"
-};
+
 
 // 编辑器里这两个框留空是常态，所以要如实说明「留空时到底用多少、这个数哪来的」，
 // 而不是把推断值预填进输入框冒充用户设置。
+// 窗口只认手填：不填就是兜底值，不再按模型清单或模型名去猜。清单里的数只作参考。
 const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
   const window = profile?.effective_context_window_tokens;
-  if (!window) {
-    return "留空即按当前模型自动判断。";
+  if (profile?.context_window_source === "user" && window) {
+    return `当前生效 ${window.toLocaleString("en-US")}，这套配置统一用它。`;
   }
-  const source = contextWindowSourceLabels[profile?.context_window_source ?? ""] ?? "自动判断";
-  return `留空即按当前模型自动判断，当前为 ${window.toLocaleString("en-US")}（${source}）。`;
+  const fallback = window ? window.toLocaleString("en-US") : "内置兜底值";
+  const reference = profile?.catalog_context_window_tokens
+    ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}，可以照着填。`
+    : "";
+  return `留空按 ${fallback} 计算，不会自动去猜模型的真实窗口。${reference}`;
 });
+
+// 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。
+const contextWindowBindings = computed(() =>
+  (editingProfile.value?.role_bindings ?? []).map((binding) => {
+    const owner = binding.bot_name ? `${binding.role_label}（${binding.bot_name}）` : binding.role_label;
+    return `${owner}：${binding.model}`;
+  })
+);
 
 const effectiveMaxContextHint = computed(() => {
   const budget = editingProfile.value?.effective_max_context_tokens;
@@ -638,6 +648,18 @@ function formToPayload(): LLMConfig {
   return payload;
 }
 
+// closeEditor 关闭编辑弹窗，并把「正在编辑哪一条」一起复位。
+//
+// 列表项的绿色边框绑的是 editingID：它表达的是「这条正在编辑中」。以前三个关闭
+// 路径（保存成功、取消、右上角叉）都只把 editorOpen 置 false，editingID 留在原地，
+// 于是编辑过的那条会一直亮着边框，直到点「新建配置」或刷新页面。更糟的是这个
+// 高亮很容易被读成「当前启用的是这套」——那是完全不同的意思。
+function closeEditor(): void {
+  editorOpen.value = false;
+  editingID.value = undefined;
+  editingProfile.value = null;
+}
+
 async function save(): Promise<void> {
   if (!form.value.model.trim()) {
     const resolved = await loadModels(true);
@@ -648,7 +670,7 @@ async function save(): Promise<void> {
     const editingProfileID = editingID.value;
     const saved = await saveConfig(formToPayload());
     profileSet.value = saved;
-    editorOpen.value = false;
+    closeEditor();
     const savedProfile =
       saved.profiles?.find((profile) => profile.id === editingProfileID) ??
       saved.profiles?.find((profile) => profile.id === saved.active_profile_id) ??
@@ -884,3 +906,12 @@ onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", onDocumentPointerDown);
 });
 </script>
+
+<style scoped>
+/* 模型分配引用列表：跟在 hint 后面的一小段列表，排版继承 hint 的字号和颜色。 */
+.context-binding-list {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  list-style: disc;
+}
+</style>

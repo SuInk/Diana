@@ -66,15 +66,15 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 	}
 	if system != "" {
 		// Anthropic 的 system prompt 单独放在 System 字段，不能混进 Messages。
-		params.System = []anthropic.TextBlockParam{{Text: system}}
+		// 工具定义和 system 是每轮都一样的稳定前缀，打上缓存断点后同一次 Agent
+		// 循环里的后续请求按缓存命中计费。
+		params.System = []anthropic.TextBlockParam{{Text: system, CacheControl: anthropic.NewCacheControlEphemeralParam()}}
 	}
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
 	}
 	params.Tools = anthropicTools(req.Tools)
-	if len(req.Tools) > 0 {
-		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{DisableParallelToolUse: param.NewOpt(true)}}
-	}
+	params.ToolChoice = anthropicToolChoice(req)
 
 	resp, err := c.client.Messages.New(ctx, params)
 	if err != nil {
@@ -109,11 +109,12 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (<-ch
 	system, messages := splitSystemPrompt(req.Messages)
 	params := anthropic.MessageNewParams{Model: anthropic.Model(req.Model), MaxTokens: req.MaxOutputTokens, Messages: anthropicMessages(messages, req.Tools), Tools: anthropicTools(req.Tools)}
 	if system != "" {
-		params.System = []anthropic.TextBlockParam{{Text: system}}
+		params.System = []anthropic.TextBlockParam{{Text: system, CacheControl: anthropic.NewCacheControlEphemeralParam()}}
 	}
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
 	}
+	params.ToolChoice = anthropicToolChoice(req)
 	stream := c.client.Messages.NewStreaming(ctx, params)
 	out := make(chan ChatEvent, 4)
 	go func() {
@@ -188,6 +189,11 @@ func anthropicMessages(messages []Message, definitions []ToolDefinition) []anthr
 		if msg.Role == RoleTool {
 			blocks = []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)}
 		}
+		if msg.CacheBreakpoint && len(blocks) > 0 {
+			if control := blocks[len(blocks)-1].GetCacheControl(); control != nil {
+				*control = anthropic.NewCacheControlEphemeralParam()
+			}
+		}
 		if msg.Role == RoleAssistant {
 			out = append(out, anthropic.NewAssistantMessage(blocks...))
 			continue
@@ -199,14 +205,33 @@ func anthropicMessages(messages []Message, definitions []ToolDefinition) []anthr
 
 func anthropicTools(definitions []ToolDefinition) []anthropic.ToolUnionParam {
 	tools := make([]anthropic.ToolUnionParam, 0, len(definitions))
-	for _, definition := range definitions {
+	for _, definition := range strictToolDefinitions(definitions) {
 		schema := anthropic.ToolInputSchemaParam{ExtraFields: definition.Parameters}
 		tool := anthropic.ToolUnionParamOfTool(schema, wireToolName(definition.Name))
 		tool.OfTool.Description = param.NewOpt(definition.Description)
 		tool.OfTool.Strict = param.NewOpt(definition.Strict)
 		tools = append(tools, tool)
 	}
+	if len(tools) > 0 {
+		// 工具定义排在缓存层级最前面，最后一个工具上的断点覆盖整个工具块。
+		tools[len(tools)-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	}
 	return tools
+}
+
+// anthropicToolChoice 把统一的 ToolChoice 语义翻译成 Anthropic 参数：空值保持
+// auto，指定工具名时强制本轮只调用该工具。
+func anthropicToolChoice(req GenerateRequest) anthropic.ToolChoiceUnionParam {
+	if len(req.Tools) == 0 {
+		return anthropic.ToolChoiceUnionParam{}
+	}
+	if name := strings.TrimSpace(req.ToolChoice); name != "" {
+		return anthropic.ToolChoiceUnionParam{OfTool: &anthropic.ToolChoiceToolParam{
+			Name:                   wireToolName(name),
+			DisableParallelToolUse: param.NewOpt(true),
+		}}
+	}
+	return anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{DisableParallelToolUse: param.NewOpt(true)}}
 }
 
 func anthropicToolCalls(content []anthropic.ContentBlockUnion, definitions []ToolDefinition) []ToolCall {

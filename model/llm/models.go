@@ -16,8 +16,8 @@ import (
 // OpenAI-compatible backends do not share a universal model name. The model
 // must come from the backend list or an explicit user selection.
 const DefaultOpenAICompatibleModel = ""
-const DefaultGeminiModel = "gemini-2.5-flash"
-const DefaultAnthropicModel = "claude-sonnet-4-5"
+const DefaultGeminiModel = "gemini-3.7-flash"
+const DefaultAnthropicModel = "claude-sonnet-5"
 const DefaultOpenAICompatibleUserAgent = "codex-cli/0.142.0"
 
 type ModelInfo struct {
@@ -48,19 +48,22 @@ func DefaultModel(provider Provider) string {
 }
 
 // ModelPresets 返回 provider 的本地模型预设。
+// ModelPresets 是 gemini / anthropic 的起步样例：这两家我们没有接它们的模型列表
+// 接口，界面上得先有几个能选的。样例会过期——发新模型时记得跟着换，也可以在
+// 「手动添加模型 ID」里直接填新的，不必等这里更新。
 func ModelPresets(provider Provider) []ModelInfo {
 	switch provider {
 	case ProviderOpenAICompatible:
 		return nil
 	case ProviderGemini:
 		return []ModelInfo{
-			{ID: DefaultGeminiModel, Name: "Gemini 2.5 Flash"},
-			{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro"},
+			{ID: DefaultGeminiModel, Name: "Gemini 3.7 Flash"},
+			{ID: "gemini-3.5-flash", Name: "Gemini 3.5 Flash"},
 		}
 	case ProviderAnthropic:
 		return []ModelInfo{
-			{ID: DefaultAnthropicModel, Name: "Claude Sonnet 4.5"},
-			{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"},
+			{ID: DefaultAnthropicModel, Name: "Claude Sonnet 5"},
+			{ID: "claude-opus-5", Name: "Claude Opus 5"},
 		}
 	default:
 		return nil
