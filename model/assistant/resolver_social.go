@@ -22,6 +22,7 @@ type resolverSocialResult struct {
 	ImageURLs       []string
 	VideoURLs       []string
 	ForwardMessages []OutgoingMessage
+	ResourceKeys    []string
 }
 
 // resolverSocialForwardMessages restores the merged-forward contract for the
@@ -85,20 +86,83 @@ func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginReque
 		// 只能抓标题的平台走通用元数据路径，不进媒体分发。
 		return resolverSocialResult{}
 	}
+	var result resolverSocialResult
 	switch platform {
 	case "bilibili":
-		return p.resolveBilibiliMedia(ctx, req, raw)
+		result = p.resolveBilibiliMedia(ctx, req, raw)
 	case "douyin":
-		return p.resolveDouyinMedia(ctx, req, raw, maxImages)
+		result = p.resolveDouyinMedia(ctx, req, raw, maxImages)
 	case "xiaohongshu":
-		return p.resolveXiaohongshuMedia(ctx, req, raw, maxImages)
+		result = p.resolveXiaohongshuMedia(ctx, req, raw, maxImages)
 	case "x":
-		return p.resolveTwitterMedia(ctx, req, raw)
+		result = p.resolveTwitterMedia(ctx, req, raw)
 	case "youtube":
-		return p.resolveYTDLPMedia(ctx, req, raw, label)
+		result = p.resolveYTDLPMedia(ctx, req, raw, label)
 	default:
 		return resolverSocialResult{}
 	}
+	if len(result.ResourceKeys) == 0 {
+		if key := resolverResourceKeyFromURL(platform, raw); key != "" {
+			result.ResourceKeys = []string{key}
+		}
+	}
+	return result
+}
+
+func resolverPlatformResourcePrefix(platform string) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "youtube", "youtube.com":
+		return "youtube"
+	case "x", "x / twitter", "twitter":
+		return "x"
+	default:
+		return strings.ToLower(strings.TrimSpace(platform))
+	}
+}
+
+func resolverResourceKeyFromURL(platform, raw string) string {
+	switch platform {
+	case "bilibili":
+		if id := bilibiliBVID(raw); id != "" {
+			return "bilibili:" + strings.ToUpper(id)
+		}
+	case "douyin":
+		if match := douyinIDPattern.FindStringSubmatch(raw); len(match) > 1 {
+			return "douyin:" + match[1]
+		}
+	case "xiaohongshu":
+		if id, _, _ := xiaohongshuRequestParts(raw); id != "" {
+			return "xiaohongshu:" + id
+		}
+	case "x":
+		if id := twitterStatusID(raw); id != "" {
+			return "x:" + id
+		}
+	case "youtube":
+		if id := youtubeVideoID(raw); id != "" {
+			return "youtube:" + id
+		}
+	}
+	return ""
+}
+
+func youtubeVideoID(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
+	if host == "youtu.be" {
+		return strings.Trim(strings.TrimSpace(parsed.Path), "/")
+	}
+	if id := strings.TrimSpace(parsed.Query().Get("v")); id != "" {
+		return id
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) >= 2 && (parts[0] == "shorts" || parts[0] == "embed") {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
 }
 
 func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequest, raw string) resolverSocialResult {
@@ -180,6 +244,9 @@ func (p *ResolverPlugin) resolveBilibiliMedia(ctx context.Context, req PluginReq
 	result := resolverSocialResult{Handled: true}
 	view, ok := fetchBilibiliView(ctx, raw)
 	if ok {
+		if key := bilibiliResolverResourceKey(view); key != "" {
+			result.ResourceKeys = []string{key}
+		}
 		result.Context = fmt.Sprintf("[Bilibili] %s", strings.TrimSpace(view.Data.Title))
 		if owner := strings.TrimSpace(view.Data.Owner.Name); owner != "" {
 			result.Context += "\nUP主：" + owner
@@ -202,6 +269,14 @@ func (p *ResolverPlugin) resolveBilibiliMedia(ctx context.Context, req PluginReq
 	return p.attachDownloadedVideo(ctx, req, raw, "bilibili", result)
 }
 
+func bilibiliResolverResourceKey(view bilibiliViewResponse) string {
+	bvid := strings.TrimSpace(view.Data.BVID)
+	if bvid == "" {
+		return ""
+	}
+	return "bilibili:" + strings.ToUpper(bvid)
+}
+
 func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {
 	result := resolverSocialResult{Handled: true}
 	detail, ok, status := fetchDouyinMediaDetail(ctx, raw)
@@ -214,6 +289,9 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 		result.Context = "[抖音] 链接已识别，但平台接口解析失败。"
 		recordResolverMediaLog(ctx, req, raw, "douyin", false, "metadata unavailable")
 		return result
+	}
+	if id := strings.TrimSpace(detail.AwemeID); id != "" {
+		result.ResourceKeys = []string{"douyin:" + id}
 	}
 	result.Context = "[抖音] " + strings.TrimSpace(detail.Desc)
 	if result.Context == "[抖音] " {
@@ -255,6 +333,9 @@ func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req Plugin
 		return result
 	}
 	result.Context = xiaohongshuSocialContext(note)
+	if id := firstNonEmpty(strings.TrimSpace(anyString(note["noteId"])), strings.TrimSpace(anyString(note["note_id"])), strings.TrimSpace(anyString(note["id"]))); id != "" {
+		result.ResourceKeys = []string{"xiaohongshu:" + id}
+	}
 	if strings.TrimSpace(anyString(note["type"])) == "normal" {
 		result.ImageURLs = limitStrings(xiaohongshuMediaImageURLs(note), maxImages)
 		recordResolverMediaLog(ctx, req, raw, "xiaohongshu", len(result.ImageURLs) > 0, "")
@@ -276,6 +357,9 @@ func xiaohongshuSocialContext(note map[string]any) string {
 func (p *ResolverPlugin) resolveYTDLPMedia(ctx context.Context, req PluginRequest, raw, platform string) resolverSocialResult {
 	result := resolverSocialResult{Handled: true, Context: "[" + platform + "] 已识别链接"}
 	if info, ok := ytdlpDumpInfo(ctx, raw); ok {
+		if id := strings.TrimSpace(info.ID); id != "" {
+			result.ResourceKeys = []string{resolverPlatformResourcePrefix(platform) + ":" + id}
+		}
 		if title := strings.TrimSpace(info.Title); title != "" {
 			result.Context = "[" + platform + "] " + title
 		}
@@ -313,6 +397,7 @@ func (p *ResolverPlugin) attachDownloadedVideo(ctx context.Context, req PluginRe
 }
 
 type douyinMediaDetail struct {
+	AwemeID   string `json:"aweme_id"`
 	Desc      string `json:"desc"`
 	AwemeType int    `json:"aweme_type"`
 	Video     struct {
@@ -351,6 +436,9 @@ func fetchDouyinMediaDetail(ctx context.Context, raw string) (douyinMediaDetail,
 	}
 	if !fetchResolverJSON(ctx, apiURL, headers, &response) {
 		return douyinMediaDetail{}, false, "request_failed"
+	}
+	if strings.TrimSpace(response.AwemeDetail.AwemeID) == "" {
+		response.AwemeDetail.AwemeID = awemeID
 	}
 	return response.AwemeDetail, true, ""
 }

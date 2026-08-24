@@ -78,20 +78,23 @@ type botTasksResponse struct {
 }
 
 type repositoryWatchCreatePayload struct {
-	Repository          string                         `json:"repository"`
-	Branch              string                         `json:"branch,omitempty"`
-	IntervalSeconds     int64                          `json:"interval_seconds"`
-	WatchCommits        bool                           `json:"watch_commits"`
-	WatchPullRequests   bool                           `json:"watch_pull_requests"`
-	WatchIssues         bool                           `json:"watch_issues"`
-	WatchReleases       bool                           `json:"watch_releases"`
-	WatchStars          bool                           `json:"watch_stars"`
-	ProfileID           string                         `json:"profile_id"`
-	Destination         string                         `json:"destination"`
-	GroupID             string                         `json:"group_id,omitempty"`
-	UserID              string                         `json:"user_id,omitempty"`
-	NotificationEnabled *bool                          `json:"notification_enabled,omitempty"`
-	NotificationTargets []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
+	Repository           string                         `json:"repository"`
+	Branch               string                         `json:"branch,omitempty"`
+	IntervalSeconds      int64                          `json:"interval_seconds"`
+	WatchCommits         bool                           `json:"watch_commits"`
+	WatchPullRequests    bool                           `json:"watch_pull_requests"`
+	WatchIssues          bool                           `json:"watch_issues"`
+	WatchReleases        bool                           `json:"watch_releases"`
+	WatchStars           bool                           `json:"watch_stars"`
+	StarNotifyMode       string                         `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold  int                            `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones []int                          `json:"star_notify_milestones,omitempty"`
+	ProfileID            string                         `json:"profile_id"`
+	Destination          string                         `json:"destination"`
+	GroupID              string                         `json:"group_id,omitempty"`
+	UserID               string                         `json:"user_id,omitempty"`
+	NotificationEnabled  *bool                          `json:"notification_enabled,omitempty"`
+	NotificationTargets  []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
 }
 
 type repositoryWatchTargetPayload struct {
@@ -101,20 +104,23 @@ type repositoryWatchTargetPayload struct {
 }
 
 type repositoryWatchUpdatePayload struct {
-	Repository          string                         `json:"repository,omitempty"`
-	Branch              *string                        `json:"branch,omitempty"`
-	IntervalSeconds     int64                          `json:"interval_seconds,omitempty"`
-	WatchCommits        *bool                          `json:"watch_commits,omitempty"`
-	WatchPullRequests   *bool                          `json:"watch_pull_requests,omitempty"`
-	WatchIssues         *bool                          `json:"watch_issues,omitempty"`
-	WatchReleases       *bool                          `json:"watch_releases,omitempty"`
-	WatchStars          *bool                          `json:"watch_stars,omitempty"`
-	ProfileID           string                         `json:"profile_id"`
-	Destination         string                         `json:"destination"`
-	GroupID             string                         `json:"group_id,omitempty"`
-	UserID              string                         `json:"user_id,omitempty"`
-	NotificationEnabled *bool                          `json:"notification_enabled,omitempty"`
-	NotificationTargets []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
+	Repository           string                         `json:"repository,omitempty"`
+	Branch               *string                        `json:"branch,omitempty"`
+	IntervalSeconds      int64                          `json:"interval_seconds,omitempty"`
+	WatchCommits         *bool                          `json:"watch_commits,omitempty"`
+	WatchPullRequests    *bool                          `json:"watch_pull_requests,omitempty"`
+	WatchIssues          *bool                          `json:"watch_issues,omitempty"`
+	WatchReleases        *bool                          `json:"watch_releases,omitempty"`
+	WatchStars           *bool                          `json:"watch_stars,omitempty"`
+	StarNotifyMode       *string                        `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold  *int                           `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones []int                          `json:"star_notify_milestones,omitempty"`
+	ProfileID            string                         `json:"profile_id"`
+	Destination          string                         `json:"destination"`
+	GroupID              string                         `json:"group_id,omitempty"`
+	UserID               string                         `json:"user_id,omitempty"`
+	NotificationEnabled  *bool                          `json:"notification_enabled,omitempty"`
+	NotificationTargets  []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
 }
 
 type rssWatchCreatePayload struct {
@@ -160,11 +166,15 @@ type botTaskPayload struct {
 	WatchIssues           bool                               `json:"watch_issues,omitempty"`
 	WatchReleases         bool                               `json:"watch_releases,omitempty"`
 	WatchStars            bool                               `json:"watch_stars,omitempty"`
+	StarNotifyMode        string                             `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold   int                                `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones  []int                              `json:"star_notify_milestones,omitempty"`
 	LastCommitSHA         string                             `json:"last_commit_sha,omitempty"`
 	LastPullRequestCursor string                             `json:"last_pull_request_cursor,omitempty"`
 	LastIssueCursor       string                             `json:"last_issue_cursor,omitempty"`
 	LastReleaseTag        string                             `json:"last_release_tag,omitempty"`
 	LastStarCount         int                                `json:"last_star_count,omitempty"`
+	LastNotifiedStarCount int                                `json:"last_notified_star_count,omitempty"`
 	FeedURL               string                             `json:"feed_url,omitempty"`
 	FeedSource            string                             `json:"feed_source,omitempty"`
 	FeedHandle            string                             `json:"feed_handle,omitempty"`
@@ -500,6 +510,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		Repository: payload.Repository, Branch: payload.Branch, Interval: interval,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
 		ContextNamespace:    repositoryWatchContextNamespace(set, profile.ID),
 		NotificationEnabled: notificationEnabled, NotificationTargets: targets,
@@ -534,6 +545,7 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		Repository: payload.Repository, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 	}
 	if deliveryRequested {
 		profile, set, profileErr := h.repositoryWatchProfile(payload.ProfileID)
@@ -847,8 +859,9 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
 		WatchCommits: item.WatchCommits, WatchPullRequests: item.WatchPullRequests,
 		WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
+		StarNotifyMode: item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
 		LastCommitSHA: item.LastCommitSHA, LastPullRequestCursor: item.LastPullRequestCursor,
-		LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount,
+		LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
 		FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
