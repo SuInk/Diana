@@ -24,8 +24,6 @@
       </div>
     </header>
 
-    <BotScopeNotice subject="总览统计" />
-
     <div class="stack">
       <section v-if="setupNeeded" class="setup-callout">
         <span class="setup-callout-icon">
@@ -173,7 +171,6 @@
 </template>
 
 <script setup lang="ts">
-import BotScopeNotice from "../components/BotScopeNotice.vue";
 import { computed, onMounted, ref } from "vue";
 import {
   Activity,
@@ -188,8 +185,9 @@ import {
   Zap
 } from "@lucide/vue";
 import { getConfig, getBotStatus, getStats, startBot, stopBot, type StatsHourBucket } from "../api";
-import { pushStatsSnapshot, pushStatusSnapshot, stream, type BotEvent } from "../stream";
+import { pushStatsSnapshot, pushStatusSnapshot, scopedStats, stream, type BotEvent } from "../stream";
 import { navigate } from "../router";
+import { botScope, matchesBotScope } from "../bot-scope";
 import { formatBytes, formatClock, formatNumber, formatRelative, formatUptime, truncate } from "../format";
 import { displayMessageText, displayChatIdentity } from "../message-display";
 import { toastError, toastSuccess } from "../toast";
@@ -201,7 +199,9 @@ const busy = ref(false);
 const setupNeeded = ref(false);
 
 const status = computed(() => stream.status);
-const stats = computed(() => stream.stats);
+// 总览跟着左上角的机器人开关走：切到哪台，收到、回复、错误的数字就是哪台的。
+// 运行时长、服务器占用这类进程级指标不分机器人，本来就只有一份。
+const stats = computed(() => scopedStats(botScope.value));
 
 // 队列积压和后台子任务并发是排查「机器人怎么不理我」最直接的两个指标，后端一直在
 // 算，前端此前没有读过。积压为 0 时不显示，免得平时多一串没信息量的文字。
@@ -210,7 +210,7 @@ const inboundFoot = computed(() => {
   const pending = status.value?.pending_events ?? 0;
   return pending > 0 ? `${total} · 队列积压 ${formatNumber(pending)}` : total;
 });
-const hourlyBuckets = computed<StatsHourBucket[]>(() => (stream.stats ? [...stream.stats.hourly] : []));
+const hourlyBuckets = computed<StatsHourBucket[]>(() => (stats.value ? [...stats.value.hourly] : []));
 // 进程指标可能因为权限或平台限制采集不到，那时整张卡片退回整机读数。
 const processMetricsReady = computed(() => {
   const server = stats.value?.server;
@@ -218,10 +218,8 @@ const processMetricsReady = computed(() => {
 });
 
 const feed = computed<BotEvent[]>(() => {
-  if (stream.events.length > 0) {
-    return [...stream.events];
-  }
-  return stream.status?.recent_events ? [...stream.status.recent_events] : [];
+  const source = stream.events.length > 0 ? stream.events : (stream.status?.recent_events ?? []);
+  return source.filter((event) => matchesBotScope(event.profile_id));
 });
 
 function eventKindLabel(kind: string): string {

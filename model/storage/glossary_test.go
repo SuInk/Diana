@@ -272,3 +272,52 @@ func TestGlossaryTouchOrdersByUsage(t *testing.T) {
 		t.Fatal("命中时间没有回写")
 	}
 }
+
+// 老库升级：那本所有机器人共用的全局词典归给迁移时的当前配置档，其余机器人从
+// 空本开始——和画像、群配置一样，不复制。
+func TestGlossaryGlobalScopeMigratesToCurrentBot(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "glossary-migrate.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.SaveBotProfiles(ctx, assistant.ProfileSet{
+		ActiveID: "bot-onebot",
+		Profiles: []assistant.BotConfig{{ID: "bot-onebot", Name: "OneBot"}, {ID: "bot-telegram", Name: "Telegram"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, _, err := store.UpsertGlossaryEntry(ctx, assistant.GlossaryUpsertRequest{
+		ScopeKey: assistant.GlossaryScopeGlobal, Term: "老梗", Meaning: "升级前记下的", Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.migrateGlossaryGlobalScopeToBot(); err != nil {
+		t.Fatal(err)
+	}
+
+	owned, err := store.ListGlossaryEntries(ctx, assistant.GlossaryQuery{
+		ScopeKeys: []string{assistant.GlossaryScopeBotPrefix + "bot-onebot"},
+	})
+	if err != nil || len(owned) != 1 || owned[0].Term != "老梗" {
+		t.Fatalf("当前档没有继承共用词典: %+v err=%v", owned, err)
+	}
+	other, err := store.ListGlossaryEntries(ctx, assistant.GlossaryQuery{
+		ScopeKeys: []string{assistant.GlossaryScopeBotPrefix + "bot-telegram"},
+	})
+	if err != nil || len(other) != 0 {
+		t.Fatalf("另一台机器人不该凭空拿到词条: %+v err=%v", other, err)
+	}
+	// 迁移是幂等的：再跑一次不会把已经搬过去的词条重复处理。
+	if err := store.migrateGlossaryGlobalScopeToBot(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.ListGlossaryEntries(ctx, assistant.GlossaryQuery{
+		ScopeKeys: []string{assistant.GlossaryScopeBotPrefix + "bot-onebot"},
+	})
+	if err != nil || len(again) != 1 {
+		t.Fatalf("重复迁移后词条数 = %d err=%v", len(again), err)
+	}
+}

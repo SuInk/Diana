@@ -24,8 +24,6 @@
       </div>
     </header>
 
-    <BotScopeNotice subject="全局词典" />
-
     <section class="card">
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px; gap: 10px">
@@ -163,8 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import BotScopeNotice from "../components/BotScopeNotice.vue";
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ChevronRight, Plus, RefreshCw } from "@lucide/vue";
 import {
   deleteGlossaryEntry,
@@ -178,6 +175,7 @@ import {
   type GlossaryScopeSummary
 } from "../api";
 import { formatRelative, formatTime } from "../format";
+import { botScope } from "../bot-scope";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
@@ -209,8 +207,14 @@ const canSave = computed(() => form.term.trim() !== "" && form.meaning.trim() !=
 // 手机上整个下拉框只剩一串 UUID，多开几个群就没法选了。所以群名/群号排最前，
 // 配置档只在确实有多个时作为后缀出现。
 function scopeLabel(key: string): string {
+  // 升级前那本所有机器人共用的词典。迁移之后通常已经空了，还留着是因为读取仍会
+  // 兜底看它一眼，藏起来会让人找不到没搬走的词条。
   if (key === "global") {
-    return "全局词典";
+    return "全局词典（旧版共用）";
+  }
+  if (key.startsWith("bot:")) {
+    const owner = key.slice("bot:".length);
+    return multipleNamespaces.value ? `全局词典 · ${profileLabel(owner)}` : "全局词典";
   }
   const parts = key.split(":");
   const id = parts[parts.length - 1] ?? "";
@@ -242,6 +246,10 @@ function profileLabel(profileID: string): string {
 const multipleNamespaces = computed(() => {
   const seen = new Set<string>();
   for (const item of scopes.value) {
+    if (item.scope_key.startsWith("bot:")) {
+      seen.add(item.scope_key.slice("bot:".length));
+      continue;
+    }
     const parts = item.scope_key.split(":");
     if (parts.length > 2) {
       seen.add(parts.slice(0, parts.length - 2).join(":"));
@@ -282,7 +290,7 @@ async function loadScopeNames(): Promise<void> {
 async function reload(): Promise<void> {
   loading.value = true;
   try {
-    const response = await listGlossary(scope.value, query.value.trim(), includeDeleted.value);
+    const response = await listGlossary(scope.value, query.value.trim(), includeDeleted.value, botScope.value);
     scopes.value = response.scopes;
     scope.value = response.scope;
     entries.value = response.entries;
@@ -397,6 +405,13 @@ async function restoreEntry(): Promise<void> {
     saving.value = false;
   }
 }
+
+// 换了机器人，作用域清单和全局词典都是另一套；选中的作用域多半属于上一台，
+// 清空让后端重新挑一个默认的。
+watch(botScope, () => {
+  scope.value = "";
+  void reload();
+});
 
 onMounted(() => {
   void loadScopeNames();

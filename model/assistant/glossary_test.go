@@ -432,6 +432,43 @@ func TestGlossaryScopeKeysPreferSessionThenGlobal(t *testing.T) {
 	}
 }
 
+// 每台机器人各有一本全局词典：同一个梗在两台那里可以有不同的记法，写入不该串台。
+func TestGlossaryGlobalScopeIsPerBot(t *testing.T) {
+	cfg := DefaultBotConfig().WithDefaults()
+	qq := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ProfileID: "qq"}
+	tg := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ProfileID: "tg"}
+
+	qqScope := glossaryScopeKeyForWrite(qq, cfg, true, true)
+	tgScope := glossaryScopeKeyForWrite(tg, cfg, true, true)
+	if qqScope != GlossaryScopeBotPrefix+"qq" || tgScope != GlossaryScopeBotPrefix+"tg" {
+		t.Fatalf("owner global write scopes = %q / %q", qqScope, tgScope)
+	}
+	// 拿不到机器人身份时退回升级前那本共用词典，总比把词条写丢好。
+	if got := glossaryScopeKeyForWrite(MessageEvent{Kind: EventKindGroup, GroupID: "123"}, cfg, true, true); got != GlossaryScopeGlobal {
+		t.Fatalf("profileless owner global write scope = %q, want %q", got, GlossaryScopeGlobal)
+	}
+}
+
+// 查词顺序：本会话 → 这台机器人的全局本 → 升级前那本共用的（迁移后通常已空）。
+func TestGlossaryScopeKeysFallBackThroughBotThenLegacyGlobal(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", ProfileID: "qq", ContextNamespace: "qq"}
+	got := glossaryScopeKeys(event)
+	want := []string{"qq:group:123", GlossaryScopeBotPrefix + "qq", GlossaryScopeGlobal}
+	if len(got) != len(want) {
+		t.Fatalf("scope keys = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("scope keys = %#v, want %#v", got, want)
+		}
+	}
+	// 没开平台隔离时会话键没有前缀，两台机器人共用群作用域，但全局本各是各的。
+	shared := glossaryScopeKeys(MessageEvent{Kind: EventKindGroup, GroupID: "123", ProfileID: "tg"})
+	if len(shared) != 3 || shared[0] != "group:123" || shared[1] != GlossaryScopeBotPrefix+"tg" {
+		t.Fatalf("shared session scope keys = %#v", shared)
+	}
+}
+
 // 既没有群号也没有账号的事件不能拼出 "private:" 这种只有前缀的作用域：那不是
 // 一个会话，而是所有匿名事件共用的桶，当成作用域用会把互不相干的上下文串到一起。
 func TestGlossaryScopeRejectsIdentitylessSession(t *testing.T) {

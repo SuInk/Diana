@@ -1264,6 +1264,20 @@ export interface StatsServerSummary {
   storage_metrics_unavailable?: string;
 }
 
+/** 单台机器人的那部分计数，字段名和快照里对应的一致，可以直接覆盖上去。 */
+export interface StatsProfileCounters {
+  total_events: number;
+  handled_events: number;
+  error_events: number;
+  today_events: number;
+  today_handled: number;
+  today_errors: number;
+  by_kind: Record<string, number>;
+  hourly: StatsHourBucket[];
+  avg_reply_ms: number;
+  last_event_at?: string;
+}
+
 export interface StatsSnapshot {
   started_at: string;
   uptime_seconds: number;
@@ -1279,6 +1293,36 @@ export interface StatsSnapshot {
   last_event_at?: string;
   bot: StatsBotSummary;
   server?: StatsServerSummary;
+  /** 每台机器人各自的计数；运行时长、服务器占用这类进程级指标不在里面。 */
+  by_profile?: Record<string, StatsProfileCounters>;
+}
+
+/**
+ * scopeStatsSnapshot 把快照收敛到某台机器人。留空返回原样（全部机器人）；
+ * 选中的机器人还没有任何事件时给一份空计数，而不是退回合计——切过去看到别人的
+ * 数字比看到 0 更容易让人误判。
+ */
+export function scopeStatsSnapshot(snapshot: StatsSnapshot | null, profileID: string): StatsSnapshot | null {
+  if (!snapshot || !profileID) {
+    return snapshot;
+  }
+  const scoped = snapshot.by_profile?.[profileID];
+  if (scoped) {
+    return { ...snapshot, ...scoped };
+  }
+  return {
+    ...snapshot,
+    total_events: 0,
+    handled_events: 0,
+    error_events: 0,
+    today_events: 0,
+    today_handled: 0,
+    today_errors: 0,
+    by_kind: {},
+    hourly: snapshot.hourly.map((bucket) => ({ ...bucket, total: 0, handled: 0, errors: 0 })),
+    avg_reply_ms: 0,
+    last_event_at: undefined
+  };
 }
 
 export interface HealthResponse {
@@ -1552,7 +1596,12 @@ export interface GlossaryEntryInput {
   note?: string;
 }
 
-export function listGlossary(scope = "", query = "", includeDeleted = false): Promise<GlossaryListResponse> {
+export function listGlossary(
+  scope = "",
+  query = "",
+  includeDeleted = false,
+  botProfileID = ""
+): Promise<GlossaryListResponse> {
   const params = new URLSearchParams();
   if (scope) {
     params.set("scope", scope);
@@ -1562,6 +1611,9 @@ export function listGlossary(scope = "", query = "", includeDeleted = false): Pr
   }
   if (includeDeleted) {
     params.set("include_deleted", "true");
+  }
+  if (botProfileID) {
+    params.set("profile", botProfileID);
   }
   const search = params.toString();
   return requestJSON<GlossaryListResponse>(`/api/assistant/glossary${search ? `?${search}` : ""}`);
