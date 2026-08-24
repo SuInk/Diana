@@ -39,7 +39,9 @@ export interface LLMConfig {
   /** 只读回显：当前模型实际生效的窗口与请求上限，以及窗口的来源。 */
   effective_context_window_tokens?: number;
   effective_max_context_tokens?: number;
-  context_window_source?: "user" | "model_list" | "inferred" | "fallback";
+  context_window_source?: "user" | "fallback";
+  /** 只读回显：模型清单里记的窗口，只作参考值，不参与计算。 */
+  catalog_context_window_tokens?: number;
   max_output_tokens?: number;
   timeout_ms?: number;
 }

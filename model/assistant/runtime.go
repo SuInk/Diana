@@ -4765,7 +4765,6 @@ func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Pro
 				log.Printf("chatbot model role skipped incompatible profile: group=%q profile=%q model=%q", role.Group, profile.ID, role.Model)
 				continue
 			}
-			profile.Config = withProviderScopedContextWindow(profile.Config)
 			profile.Config.Model = role.Model
 			candidates = append(candidates, profile)
 		}
@@ -4782,31 +4781,10 @@ func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Pro
 		if supported, known := profileSupportsRoleModel(profile, role.Model); known && !supported {
 			return nil, fmt.Errorf("chatbot: model role profile %q does not support model %q", role.ProfileID, role.Model)
 		}
-		profile.Config = withProviderScopedContextWindow(profile.Config)
 		profile.Config.Model = role.Model
 		return []llm.Profile{profile}, nil
 	}
 	return nil, fmt.Errorf("chatbot: model role profile %q was not found", role.ProfileID)
-}
-
-// withProviderScopedContextWindow 在模型分配覆盖模型之前，把窗口按这套配置本身
-// 定下来。
-//
-// 上下文窗口是配置级的设置：一套 provider 配置一个窗口，用途分配换了模型也不跟着
-// 变。不这样固定的话，窗口会跟着 role.Model 走——同一套配置在对话和识图两档上算出
-// 两个不同的预算，而 WebUI 的 LLM 配置页只显示一个数，页面和运行时对不上。
-//
-// 只写进内存里的这份副本，不落库：落库就等于把一次推断固化成用户设置。
-//
-// 代价是明确的：某个用途绑了小窗口模型时，预算仍按这套配置的窗口算，请求可能超限。
-// 超限会被 IsContextOverflowError 识别并自动收缩重试，成本是多一次请求；真要精确
-// 控制就在这套配置里手填窗口。
-func withProviderScopedContextWindow(cfg llm.ProviderConfig) llm.ProviderConfig {
-	if cfg.ContextWindowTokens > 0 {
-		return cfg
-	}
-	cfg.ContextWindowTokens = cfg.ContextWindowTokensWithDefault()
-	return cfg
 }
 
 func profileSupportsRoleModel(profile llm.Profile, modelID string) (supported bool, known bool) {
