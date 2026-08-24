@@ -6,6 +6,7 @@ package agent
 import (
 	"encoding/json"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -57,6 +58,7 @@ type claimEvidenceLedger struct {
 	claims            map[string]*ClaimTrace
 	covered           []string
 	allowedSources    map[string]string
+	sourceOrder       []string
 	firstPartySources map[string]bool
 	renderedSources   []string
 	rejections        map[string][]string
@@ -130,6 +132,9 @@ func (l *claimEvidenceLedger) observeSearch(output string, runErr error) map[str
 		canonical := canonicalEvidenceURL(raw)
 		if canonical == "" {
 			continue
+		}
+		if l.allowedSources[canonical] == "" {
+			l.sourceOrder = append(l.sourceOrder, canonical)
 		}
 		l.allowedSources[canonical] = strings.TrimSpace(raw)
 	}
@@ -262,6 +267,8 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 	}
 }
 
+// validateFinal 结算提交上来的 claims，并一次报出全部不合格字段。逐个报会让每
+// 修一个问题就多花一轮重试，而每轮重试都要重发整个上下文。
 func (l *claimEvidenceLedger) reject(id, reason string) {
 	if l == nil || strings.TrimSpace(reason) == "" {
 		return
@@ -322,22 +329,29 @@ func (l *claimEvidenceLedger) validateFinal(updates []ClaimUpdate) (string, bool
 		seen[id] = true
 		requestedStatus[id] = update.Status
 	}
+	var issues []string
 	for _, id := range l.order {
 		claim := l.claims[id]
-		if claim == nil || !seen[id] {
-			return "最终动作没有结算 claim " + id, false
-		}
-		if !validClaimStatus(claim.Status) {
-			return "claim " + id + " 的状态无效", false
-		}
-		if requestedStatus[id] != claim.Status {
-			return l.bindingFailure(id, requestedStatus[id]), false
-		}
-		if (claim.Status == ClaimStatusSupported || claim.Status == ClaimStatusConflicting) && len(claim.Evidence) == 0 {
-			return l.bindingFailure(id, claim.Status), false
+		switch {
+		case claim == nil || !seen[id]:
+			issues = append(issues, id+": 未结算")
+		case !validClaimStatus(claim.Status):
+			issues = append(issues, id+": status 无效")
+		case requestedStatus[id] != claim.Status:
+			issues = append(issues, l.bindingFailure(id, requestedStatus[id])+"，已降级为 "+string(claim.Status))
+		case (claim.Status == ClaimStatusSupported || claim.Status == ClaimStatusConflicting) && len(claim.Evidence) == 0:
+			issues = append(issues, l.bindingFailure(id, claim.Status))
 		}
 	}
-	return "", true
+	if len(issues) == 0 {
+		return "", true
+	}
+	return "claims 结算不合格：" + strings.Join(issues, "；"), false
+}
+
+// isActive 报告本轮是否启用了逐主张证据账本。
+func (l *claimEvidenceLedger) isActive() bool {
+	return l != nil && l.active
 }
 
 // bindingFailure 说清楚是哪条证据、因为什么被拒，并给出现在可以引用的来源，
@@ -364,22 +378,90 @@ func (l *claimEvidenceLedger) recordRejectedSearch(input map[string]any, reason 
 	l.stopReason = reason
 }
 
-func (l *claimEvidenceLedger) prompt() string {
+// digest 把账本压成紧凑的状态行。允许的来源和全部枚举现在都写进了工具 schema，
+// 提示词里只留模型仍然需要自己决定的部分，不再每次搜索后重发整本账本 JSON。
+func (l *claimEvidenceLedger) digest() string {
 	if l == nil || !l.active {
 		return ""
 	}
-	payload := map[string]any{
-		"claims":      l.traces(),
-		"stop_reason": l.stopReason,
+	lines := make([]string, 0, len(l.order)+3)
+	lines = append(lines, "【逐主张证据账本，仅供内部校验】")
+	for _, claim := range l.traces() {
+		line := "- " + claim.ID + " [" + string(claim.Status) + "]"
+		if count := len(claim.Evidence); count > 0 {
+			line += " 已绑定证据 " + strconv.Itoa(count)
+		}
+		if statement := strings.TrimSpace(claim.Statement); statement != "" {
+			line += " " + statement
+		}
+		lines = append(lines, line)
+	}
+	if l.stopReason != "" {
+		lines = append(lines, "stop_reason: "+l.stopReason)
 	}
 	if len(l.renderedSources) > 0 {
-		payload["rendered_sources"] = l.renderedSources
+		lines = append(lines, "rendered_sources: "+strings.Join(l.renderedSources, " "))
 	}
 	if l.lastRejectedHash != "" {
-		payload["last_rejected_query_hash"] = l.lastRejectedHash
+		lines = append(lines, "last_rejected_query_hash: "+l.lastRejectedHash)
 	}
-	raw, _ := json.Marshal(payload)
-	return "【逐主张证据账本，仅供内部校验】\n" + string(raw) + "\n仅候选来源不等于事实已获支持。下一次搜索用 claim_updates 结算已有证据，并优先覆盖 insufficient/not_searched；最终 final 动作必须携带完整 claims。证据 URL 必须原样取自 candidate_sources 或 rendered_sources；rendered_sources 是 browser_render 已经直接读到的页面，属于第一方直接证据，可信度高于搜索摘要，不要因为它没有出现在搜索结果里就判成证据不足。relation 仅用 supports/refutes，source_type 仅用 first_party/official_record/primary_reporting/secondary/unknown，distance 仅用 direct/near/secondary，strength 仅用 high/medium/low。content 必须直接回答用户，不得提及 claim ID、证据账本、协议、字段、元数据或内部校验过程；证据校验失败只说明绑定需要修正，不代表已经查到的事实不成立，不得据此改写或推翻正文结论；确实缺证据时只用自然语言限定对应那一句事实，对问题本身的逻辑、措辞和推理仍应直接作答。"
+	lines = append(lines, "候选来源不等于事实已获支持。优先检索 insufficient/not_searched 的 claim；claim ID、证据账本和内部校验过程不得出现在最终回复正文里。")
+	return strings.Join(lines, "\n")
+}
+
+// allowedSourceURLs 按发现顺序返回已检索到的来源。它们会被填进工具 schema 的
+// enum，于是编造出来的来源在解码层就不可能出现，而不是事后拦截再重试。
+func (l *claimEvidenceLedger) allowedSourceURLs() []string {
+	if l == nil {
+		return nil
+	}
+	out := make([]string, 0, len(l.sourceOrder))
+	for _, canonical := range l.sourceOrder {
+		if raw := l.allowedSources[canonical]; raw != "" {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
+// declaredClaimIDs 按声明顺序返回模型已经声明过的 claim id。
+func (l *claimEvidenceLedger) declaredClaimIDs() []string {
+	if l == nil {
+		return nil
+	}
+	return append([]string(nil), l.order...)
+}
+
+// claimEvidenceSchema 描述一条证据。allowedSources 非空时，URL 收窄成检索工具
+// 真实返回过的来源枚举。
+func claimEvidenceSchema(allowedSources []string) map[string]any {
+	return toolObjectSchema([]string{"url", "relation", "source_type", "distance", "strength"}, map[string]any{
+		"url":          toolEnumParam("证据 URL，必须原样取自工具返回的候选来源", allowedSources...),
+		"relation":     toolEnumParam("该来源支持还是反驳这条 claim", "supports", "refutes"),
+		"source_type":  toolEnumParam("来源类型", "first_party", "official_record", "primary_reporting", "secondary", "unknown"),
+		"published_at": toolStringParam("来源发布日期，可选"),
+		"distance":     toolEnumParam("来源与结论的距离", "direct", "near", "secondary"),
+		"strength":     toolEnumParam("证据强度", "high", "medium", "low"),
+	})
+}
+
+// claimDefinitionSchema 描述一条新声明的 claim。
+func claimDefinitionSchema() map[string]any {
+	return toolObjectSchema([]string{"id", "statement"}, map[string]any{
+		"id":        toolStringParam("claim 标识，小写字母、数字、下划线或连字符"),
+		"statement": toolStringParam("待验证的通用主张，不得按品牌或站点硬编码"),
+	})
+}
+
+// claimUpdateSchema 描述一次 claim 结算。已声明的 claim id 和已检索到的来源在
+// 已知时都会被填成枚举。
+func claimUpdateSchema(claimIDs, allowedSources []string) map[string]any {
+	return toolObjectSchema([]string{"id", "status"}, map[string]any{
+		"id":       toolEnumParam("已声明的 claim id", claimIDs...),
+		"status":   toolEnumParam("结算状态；没有检索到证据只能用 insufficient", string(ClaimStatusSupported), string(ClaimStatusConflicting), string(ClaimStatusInsufficient), string(ClaimStatusNotSearched)),
+		"summary":  toolStringParam("该 claim 的结论摘要"),
+		"evidence": toolArrayParam("supported/conflicting 必须给出已检索来源证据", claimEvidenceSchema(allowedSources)),
+	})
 }
 
 func (l *claimEvidenceLedger) metadata() map[string]any {
