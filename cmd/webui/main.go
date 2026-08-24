@@ -249,6 +249,14 @@ func main() {
 	botRuntime.SetUserMemoryStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
 	botRuntime.SetGlossaryStore(sqliteStore)
+	// 版本号只活在构建期注入的变量里，机器人自己看不到就只能按训练记忆编一个。
+	// 「有没有新版本」的判断只该有一份，在更新器那边；机器人问它要结论。
+	botRuntime.SetReleaseStatusProvider(systemHandler)
+	botRuntime.SetBuildInfo(assistant.BuildInfo{
+		Version:   runtimeVersion,
+		BuildType: version.BuildType(buildVersion),
+		StartedAt: time.Now(),
+	})
 	botRuntime.SetRepositoryIssueDraftStore(sqliteStore)
 	if err := botRuntime.SetReplySuppressionStore(ctx, sqliteStore); err != nil {
 		log.Printf("assistant reply suppression load failed: %v", err)
@@ -326,6 +334,9 @@ func main() {
 	})
 	botHandler.SetLocalMediaSharer(localMediaStore)
 	botHandler.SetProfileStore(botProfileStore)
+	// LLM 配置页要标出「这套配置正被哪个机器人的哪个用途、按哪个模型使用」：
+	// 机器人多半用的是模型分配里另选的模型，只按配置默认模型说话会误导。
+	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
 	botHandler.SetSQLiteStore(sqliteStore)
 	logHandler := webui.NewAppLogHandler(sqliteStore)

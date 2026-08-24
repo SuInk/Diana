@@ -38,7 +38,14 @@ func (t *BrowserOpenTool) Name() string {
 }
 
 func (t *BrowserOpenTool) Description() string {
-	return `通过 Chrome DevTools Protocol 打开网页。需要 Chrome 启用 remote debugging。input: {"url":"https://example.com","new_tab":true}`
+	return `通过 Chrome DevTools Protocol 打开网页。需要 Chrome 启用 remote debugging。`
+}
+
+func (t *BrowserOpenTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"url"}, map[string]any{
+		"url":     toolStringParam("要打开的页面地址"),
+		"new_tab": toolBoolParam("是否在新标签页打开，默认沿用当前标签页"),
+	})
 }
 
 func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -70,7 +77,13 @@ func (t *BrowserTextTool) Name() string {
 }
 
 func (t *BrowserTextTool) Description() string {
-	return `读取当前浏览器页面文本。input: {"selector":"CSS 选择器，可选"}`
+	return `读取当前浏览器页面文本。`
+}
+
+func (t *BrowserTextTool) InputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"selector": toolStringParam("CSS 选择器，省略时读取整页文本"),
+	})
 }
 
 func (t *BrowserTextTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -91,7 +104,13 @@ func (t *BrowserClickTool) Name() string {
 }
 
 func (t *BrowserClickTool) Description() string {
-	return `点击当前页面中的元素。input: {"selector":"CSS 选择器"}`
+	return `点击当前页面中的元素。`
+}
+
+func (t *BrowserClickTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"selector"}, map[string]any{
+		"selector": toolStringParam("要点击元素的 CSS 选择器"),
+	})
 }
 
 func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -127,7 +146,16 @@ func (t *BrowserTypeTool) Name() string {
 }
 
 func (t *BrowserTypeTool) Description() string {
-	return `向当前页面元素输入文本。input: {"selector":"CSS 选择器","text":"文本","clear":true,"press_enter":false}`
+	return `向当前页面元素输入文本。`
+}
+
+func (t *BrowserTypeTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"selector", "text"}, map[string]any{
+		"selector":    toolStringParam("目标输入框的 CSS 选择器"),
+		"text":        toolStringParam("要输入的文本"),
+		"clear":       toolBoolParam("输入前是否清空原有内容"),
+		"press_enter": toolBoolParam("输入后是否回车提交"),
+	})
 }
 
 func (t *BrowserTypeTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -180,7 +208,13 @@ func (t *BrowserScreenshotTool) Name() string {
 }
 
 func (t *BrowserScreenshotTool) Description() string {
-	return `保存当前页面截图到 Agent 工作目录。input: {"path":".agent-browser/screenshot.png"}`
+	return `保存当前页面截图到 Agent 工作目录。`
+}
+
+func (t *BrowserScreenshotTool) InputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"path": toolStringParam("工作目录内的相对保存路径，省略时使用默认文件名"),
+	})
 }
 
 func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (string, error) {

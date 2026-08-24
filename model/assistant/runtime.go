@@ -105,6 +105,12 @@ type MessageHistorySearchStore interface {
 	SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error)
 }
 
+// MessageSearchExtraStore 记录「正文之外还能被搜到的文本」。图片描述由后台视觉
+// 调用异步生成，消息早就落库了，只能事后补写到这里，正文列保持原样。
+type MessageSearchExtraStore interface {
+	SaveMessageSearchExtra(ctx context.Context, session, messageID, extra string) error
+}
+
 type MessageHistoryVectorQuery struct {
 	Session       string
 	SessionPrefix string
@@ -263,6 +269,8 @@ type Runtime struct {
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
 	glossary                  GlossaryStore
+	buildInfo                 BuildInfo
+	releaseStatus             ReleaseStatusProvider
 	reminders                 ReminderStore
 	groupConfigs              GroupConfigStore
 	configSaver               ConfigSaver
@@ -302,7 +310,10 @@ type Runtime struct {
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
 	chatInLastReplyAt   map[string]time.Time
-	contextSummaries    map[string]string
+	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
+	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
+	recentClaimSources map[string][]claimSourceRecord
+	contextSummaries   map[string]string
 	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
 	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
 	// 摘要、又以完整原文进入同一个请求。
@@ -506,6 +517,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		history:               map[string][]MessageEvent{},
 		semanticRefCache:      map[string]SemanticReferenceCacheRecord{},
 		chatInLastReplyAt:     map[string]time.Time{},
+		recentClaimSources:    map[string][]claimSourceRecord{},
 		contextSummaries:      map[string]string{},
 		contextSummaryMarks:   map[string]int64{},
 		activeReminders:       map[string]struct{}{},
@@ -1193,6 +1205,54 @@ func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 		out[id] = enabled
 	}
 	return out
+}
+
+// webSearchPluginSettings 读取本次事件生效的联网搜索插件设置，支持按群覆盖。
+func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bool) {
+	if r == nil || r.plugins == nil {
+		return nil, false
+	}
+	_, settings, enabled := r.plugins.PluginWithSettingsForGroup(
+		webSearchPluginID,
+		r.pluginOverridesForEvent(event),
+		r.pluginSettingOverridesForEvent(event),
+	)
+	return settings, enabled
+}
+
+// evidenceLedgerAdvisory 读取联网搜索插件的证据账本开关。关闭后账本仍然结算并留痕，
+// 但不再因为证据绑定失败拦截回复；插件本身没启用时账本也不会激活。
+func (r *Runtime) evidenceLedgerAdvisory(event MessageEvent) bool {
+	settings, enabled := r.webSearchPluginSettings(event)
+	if !enabled {
+		return false
+	}
+	return !settings.Bool(webSearchSettingEvidenceLedger, true)
+}
+
+// replyLinkPolicy 决定联网结论要不要在回复正文里给出 URL。
+func (r *Runtime) replyLinkPolicy(event MessageEvent) string {
+	settings, enabled := r.webSearchPluginSettings(event)
+	if !enabled {
+		return replyLinkPolicyOnRequest
+	}
+	switch strings.TrimSpace(settings.String(webSearchSettingLinkPolicy, replyLinkPolicyOnRequest)) {
+	case replyLinkPolicyAlways:
+		return replyLinkPolicyAlways
+	case replyLinkPolicyNever:
+		return replyLinkPolicyNever
+	default:
+		return replyLinkPolicyOnRequest
+	}
+}
+
+// claimSourceRecallEnabled 决定是否把结论引用的来源留到之后几轮供追问使用。
+func (r *Runtime) claimSourceRecallEnabled(event MessageEvent) bool {
+	settings, enabled := r.webSearchPluginSettings(event)
+	if !enabled {
+		return false
+	}
+	return settings.Bool(webSearchSettingSourceRecall, true)
 }
 
 func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSettingOverrides {
@@ -2756,6 +2816,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaGlossaryTool(r, event, relationship),
+				newDianaVersionTool(r),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
 				newDianaReminderTool(r, event),
@@ -2929,6 +2990,22 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					AtomicText: true,
 				})
 			}
+		}
+		if linkPolicy := r.replyLinkPolicyContext(event); linkPolicy != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    linkPolicy,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
+		if sources := r.claimSourceContext(event); sources != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    sources,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
 		}
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
@@ -3123,8 +3200,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// handles long replies with chunks or merged forwards.
 		replyCfg.MaxReplyChars = 0
 	}
+	// 图片开场白攒在这一轮里：模型自己说了就用模型那句，什么都没说才拿它兜底，
+	// 保证发图前只出现一条文字（见 image_announcement.go）。
+	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
 	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
+		if pending := imageAnnouncements.drain(); pending != "" {
+			// 生成失败也要让用户知道图在画：任务已经受理了。
+			if sendErr := r.send(ctx, event, pending); sendErr != nil {
+				log.Printf("chatbot image announcement fallback failed: %v", sendErr)
+			}
+		}
 		return "", err
 	}
 	// Agent 在循环里读过撤回记录时，把同一个 PluginResponse 合并回本轮：转发卡片、
@@ -3146,6 +3232,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			reply = "为避免继续自动循环，我会暂停响应此账号约 30 分钟。"
 		} else if controlIntent.RefuseCurrent {
 			reply = "这条消息我暂时不想回答，我们换个话题吧。"
+		} else if pending := imageAnnouncements.drain(); pending != "" {
+			// 用户这条消息只是要图，模型没有别的可说——开场白就是这一轮的回复。
+			reply = pending
 		} else {
 			reply = "我这边没有生成有效回复。"
 		}
@@ -3314,14 +3403,15 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// model call from its actual message content so that a text-only planner can
 		// hand the next turn to the configured vision profile.
 		agentCfg := agent.Config{
-			WorkDir:          AgentWorkspaceDir(),
-			MaxSteps:         cfg.AgentMaxSteps,
-			SkillRoots:       cfg.AgentSkillRoots,
-			MCPConfigPath:    cfg.AgentMCPConfigPath,
-			CommandAllowlist: cfg.AgentCommandAllowlist,
-			CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
-			BrowserCDPURL:    cfg.AgentBrowserCDPURL,
-			BrowserTimeoutMS: cfg.AgentBrowserTimeoutMS,
+			WorkDir:                AgentWorkspaceDir(),
+			MaxSteps:               cfg.AgentMaxSteps,
+			SkillRoots:             cfg.AgentSkillRoots,
+			MCPConfigPath:          cfg.AgentMCPConfigPath,
+			CommandAllowlist:       cfg.AgentCommandAllowlist,
+			CommandTimeoutMS:       cfg.AgentCommandTimeoutMS,
+			BrowserCDPURL:          cfg.AgentBrowserCDPURL,
+			BrowserTimeoutMS:       cfg.AgentBrowserTimeoutMS,
+			EvidenceLedgerAdvisory: r.evidenceLedgerAdvisory(event),
 		}
 		registry := preparedRegistry
 		ownsRegistry := false
@@ -3363,6 +3453,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.rememberAgentRunProgress(event, resp)
+		r.rememberClaimSources(event, resp.Claims)
 		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
 	}
 	group := llm.GroupChat
@@ -3438,14 +3529,15 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 	cfg = cfg.WithDefaults()
 	if cfg.AgentEnabled || len(extraTools) > 0 {
 		agentCfg := agent.Config{
-			WorkDir:          AgentWorkspaceDir(),
-			MaxSteps:         cfg.AgentMaxSteps,
-			SkillRoots:       cfg.AgentSkillRoots,
-			MCPConfigPath:    cfg.AgentMCPConfigPath,
-			CommandAllowlist: cfg.AgentCommandAllowlist,
-			CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
-			BrowserCDPURL:    cfg.AgentBrowserCDPURL,
-			BrowserTimeoutMS: cfg.AgentBrowserTimeoutMS,
+			WorkDir:                AgentWorkspaceDir(),
+			MaxSteps:               cfg.AgentMaxSteps,
+			SkillRoots:             cfg.AgentSkillRoots,
+			MCPConfigPath:          cfg.AgentMCPConfigPath,
+			CommandAllowlist:       cfg.AgentCommandAllowlist,
+			CommandTimeoutMS:       cfg.AgentCommandTimeoutMS,
+			BrowserCDPURL:          cfg.AgentBrowserCDPURL,
+			BrowserTimeoutMS:       cfg.AgentBrowserTimeoutMS,
+			EvidenceLedgerAdvisory: r.evidenceLedgerAdvisory(MessageEvent{}),
 		}
 		registry := agent.NewToolRegistry()
 		if cfg.AgentEnabled {
@@ -5227,6 +5319,13 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptToolHistoryImages)
 	}
+	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
+		builder.WriteString("\n" + promptInternalIdentifiers)
+		// 引用被管理员关掉时不教这一手：那是「永不带引用」的明确配置。
+		if replyReferenceMode(cfg) != ReplyDecorationOff {
+			builder.WriteString("\n" + promptQuoteHistoryMessage)
+		}
+	}
 	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
 		tail.WriteString("\n" + promptOwnerRelationshipTarget)
 	}
@@ -5247,6 +5346,12 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)
+	}
+	if agentEnabled && hasTool(dianaRuntimeModelToolName) {
+		builder.WriteString("\n" + promptToolRuntimeModel)
+	}
+	if agentEnabled && hasTool(dianaVersionToolName) {
+		builder.WriteString("\n" + promptToolVersion)
 	}
 	if agentEnabled && hasTool(dianaGlossaryToolName) {
 		builder.WriteString("\n" + promptToolGlossary)
@@ -5280,6 +5385,10 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if event.chatInReply {
 		builder.WriteString("\n" + chatInReplyPrompt)
+	}
+	if eventCarriesImages(event) {
+		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
+		tail.WriteString("\n" + promptImageReply)
 	}
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {
@@ -7135,7 +7244,8 @@ func (r *Runtime) sendWithMessageIDs(ctx context.Context, event MessageEvent, re
 // 处理，只按平台长度兜底。
 func (r *Runtime) sendErrorNoticeWithEvidence(ctx context.Context, event MessageEvent, text string) ([]string, bool, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", true)
+	// 错误提示是对当前这条消息的回应，引用照旧、不额外 @：真正要点名的是订阅推送。
+	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{ReplyToCurrent: true})
 	if err != nil {
 		return nil, false, err
 	}
@@ -7200,6 +7310,20 @@ func generatedReplyTargetsOtherParticipant(event MessageEvent, reply string) boo
 }
 
 func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent, reply string, mentionUserID string, replyToCurrent bool) ([]string, error) {
+	return r.sendDecorated(ctx, event, reply, outboundDecoration{MentionUserID: mentionUserID, ReplyToCurrent: replyToCurrent})
+}
+
+// sendSubscriberNotice 投递提醒、周期查询、RSS 这类「到点了主动找人」的通知：
+// 群里一律 @ 订阅者，不引用任何消息（触发它的那条消息可能是几天前的了）。
+func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
+	_, err := r.sendDecorated(ctx, event, text, outboundDecoration{
+		MentionUserID: strings.TrimSpace(event.UserID),
+		MentionAlways: true,
+	})
+	return err
+}
+
+func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
 	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
@@ -7221,7 +7345,7 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 	if delay := cfg.ReplyStyle.remainingTypingDelay(reply, replyTurnElapsed(ctx)); delay > 0 && !sleepContext(ctx, delay) {
 		return nil, ctx.Err()
 	}
-	return r.deliverChunks(ctx, event, chunks, cfg, mentionUserID, replyToCurrent)
+	return r.deliverChunks(ctx, event, chunks, cfg, decoration)
 }
 
 // sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行
@@ -7234,10 +7358,38 @@ func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text
 
 func (r *Runtime) sendNotificationWithIDs(ctx context.Context, event MessageEvent, text string) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	return r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, "", false)
+	// 订阅推送是主动找人，知道订阅者是谁就 @ 上：这条动态是他订的，不点名的话
+	// 群里刷过去就错过了。目标是纯群（没有记订阅人）时 MentionUserID 为空，自然不 @。
+	return r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
+		MentionUserID: strings.TrimSpace(event.UserID),
+		MentionAlways: true,
+	})
 }
 
-func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks []string, cfg BotConfig, mentionUserID string, replyToCurrent bool) ([]string, error) {
+// outboundDecoration 描述这次投递要不要挂引用和 @。
+//
+// 拆出来是因为「聊天回复」和「主动通知」对 @ 的诉求相反：前者由「群聊 @ 发送者」
+// 开关管，选 auto 时运行时不补、交给模型在正文里自己写；后者是过了很久之后主动
+// 找某个人（提醒到点了、他订的仓库有更新），正文是模板或后台任务生成的，没有模型
+// 帮它写 @，被那个开关连坐的结果就是订阅者在群里永远收不到点名。
+type outboundDecoration struct {
+	// MentionUserID 是要 @ 的人，空表示不 @。私聊投递永远用不上。
+	MentionUserID string
+	// ReplyToCurrent 表示第一条挂上对当前消息的引用。
+	ReplyToCurrent bool
+	// MentionAlways 让 @ 不受「群聊 @ 发送者」开关约束，只用于主动通知。
+	MentionAlways bool
+}
+
+// mentionEnabled 判断本次投递该不该挂 @。
+func (decoration outboundDecoration) mentionEnabled(cfg BotConfig) bool {
+	if strings.TrimSpace(decoration.MentionUserID) == "" {
+		return false
+	}
+	return decoration.MentionAlways || mentionUserMode(cfg) == ReplyDecorationOn
+}
+
+func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks []string, cfg BotConfig, decoration outboundDecoration) ([]string, error) {
 	sentChunks := 0
 	messageIDs := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -7253,11 +7405,11 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 				// 运行时再补一遍就又变成每条都带。
 				// 原消息已撤回时不挂引用：引用一条不存在的消息要么发送失败，
 				// 要么在界面上渲染成怪东西。回复本身照常发出。
-				if replyToCurrent && replyReferenceMode(cfg) == ReplyDecorationOn && !r.inboundTriggerRecalled(event) {
+				if decoration.ReplyToCurrent && replyReferenceMode(cfg) == ReplyDecorationOn && !r.inboundTriggerRecalled(event) {
 					msg.ReplyMessageID = event.MessageID
 				}
-				if mentionUserMode(cfg) == ReplyDecorationOn {
-					msg.MentionUserID = mentionUserID
+				if decoration.mentionEnabled(cfg) {
+					msg.MentionUserID = decoration.MentionUserID
 				}
 			}
 		} else {
@@ -8966,7 +9118,7 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		return
 	}
 
-	err := r.send(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
+	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
 	if err != nil {
 		updated, retryErr := r.rescheduleOneTimeReminder(item.ID, err)
 		if retryErr != nil {
@@ -8993,7 +9145,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
-		return startedAt, r.send(ctx, source, pending)
+		return startedAt, r.sendSubscriberNotice(ctx, source, pending)
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(rssWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
 	plugin, ok := pluginValue.(*RSSWatchPlugin)
@@ -9029,7 +9181,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if err := r.storeRSSWatchProgress(item.ID, change.Snapshot, message); err != nil {
 		return startedAt, err
 	}
-	return startedAt, r.send(ctx, source, message)
+	return startedAt, r.sendSubscriberNotice(ctx, source, message)
 }
 
 func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWatchChange) (rssJudgeDecision, error) {
@@ -9141,7 +9293,7 @@ func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
-		return startedAt, r.send(ctx, source, pending)
+		return startedAt, r.sendSubscriberNotice(ctx, source, pending)
 	}
 
 	r.mu.RLock()
@@ -9172,7 +9324,7 @@ func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (
 	if err := r.storeScheduledQueryPending(item.ID, message); err != nil {
 		return startedAt, err
 	}
-	return startedAt, r.send(ctx, source, message)
+	return startedAt, r.sendSubscriberNotice(ctx, source, message)
 }
 
 func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) (time.Time, error) {
@@ -9283,7 +9435,9 @@ func repositoryWatchDeliveryTargets(item Reminder) []MessageEvent {
 	for _, target := range targetValues {
 		event := MessageEvent{Kind: EventKindPrivate, Platform: target.Platform, ProfileID: target.ProfileID, ContextNamespace: target.ContextNamespace, UserID: target.UserID}
 		if target.GroupID != "" {
-			event.Kind, event.GroupID, event.UserID = EventKindGroup, target.GroupID, ""
+			// UserID 保留：群目标的去重键只看群号（见 messageEventDeliveryKey），
+			// 留着它是为了投递时能 @ 上当初订阅的人。
+			event.Kind, event.GroupID = EventKindGroup, target.GroupID
 		}
 		key := messageEventDeliveryKey(event)
 		if _, ok := seen[key]; ok {

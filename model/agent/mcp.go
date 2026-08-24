@@ -287,17 +287,27 @@ type MCPTool struct {
 func (t *MCPTool) Name() string { return t.modelName }
 
 func (t *MCPTool) Description() string {
-	var parts []string
-	if strings.TrimSpace(t.description) != "" {
-		parts = append(parts, strings.TrimSpace(t.description))
+	description := strings.TrimSpace(t.description)
+	if description == "" {
+		description = "MCP tool"
 	}
-	if len(t.inputSchema) > 0 && string(t.inputSchema) != "null" {
-		parts = append(parts, "input schema: "+string(t.inputSchema))
+	return fmt.Sprintf("MCP server %s tool %s. %s", t.serverName, t.rawName, description)
+}
+
+// InputSchema 把上游 MCP 的 schema 原样转发给 provider。它此前被拼进描述文本，
+// 既没法参与原生约束解码，还会被描述的字数预算截断。
+func (t *MCPTool) InputSchema() map[string]any {
+	if len(t.inputSchema) == 0 || string(t.inputSchema) == "null" {
+		return nil
 	}
-	if len(parts) == 0 {
-		parts = append(parts, "MCP tool")
+	var schema map[string]any
+	if err := json.Unmarshal(t.inputSchema, &schema); err != nil {
+		return nil
 	}
-	return fmt.Sprintf("MCP server %s tool %s. %s", t.serverName, t.rawName, strings.Join(parts, " "))
+	if len(schema) == 0 {
+		return nil
+	}
+	return schema
 }
 
 func (t *MCPTool) Run(ctx context.Context, input map[string]any) (string, error) {
