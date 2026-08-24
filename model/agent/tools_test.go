@@ -200,3 +200,62 @@ func writeTestFile(t *testing.T, root, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestToolDefinitionsCarryRealSchemas(t *testing.T) {
+	registry, err := NewDefaultToolRegistry(Config{WorkDir: t.TempDir(), CommandAllowlist: []string{"echo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := registry.Definitions()
+	if len(definitions) == 0 {
+		t.Fatal("默认注册表没有暴露任何工具")
+	}
+	for _, definition := range definitions {
+		if _, ok := definition.Parameters["properties"].(map[string]any); !ok {
+			t.Fatalf("%s 没有声明参数: %#v", definition.Name, definition.Parameters)
+		}
+		if definition.Parameters["additionalProperties"] != false {
+			t.Fatalf("%s 仍然接受未声明参数: %#v", definition.Name, definition.Parameters)
+		}
+		if strings.Contains(definition.Description, "input: {") {
+			t.Fatalf("%s 的参数契约还写在描述散文里: %s", definition.Name, definition.Description)
+		}
+	}
+}
+
+type verboseTool struct{ countingTool }
+
+func (t *verboseTool) Description() string {
+	return "第一句说明工具用途。" + strings.Repeat("后续是只有工具定义才需要携带的详细行为规则。", 30)
+}
+
+func TestSystemPromptCatalogDoesNotRepeatFullDescriptions(t *testing.T) {
+	registry := NewToolRegistry(&verboseTool{countingTool{name: "verbose"}})
+	catalog := registry.SystemPromptCatalog()
+	full := registry.Descriptions()
+	if len([]rune(catalog)) >= len([]rune(full)) {
+		t.Fatalf("目录没有比完整清单更短: %d vs %d", len([]rune(catalog)), len([]rune(full)))
+	}
+	if !strings.Contains(catalog, "verbose") || !strings.Contains(catalog, "第一句说明工具用途") {
+		t.Fatalf("目录丢掉了工具身份: %s", catalog)
+	}
+	// 权威文本仍然通过工具定义送达模型。
+	definitions := registry.Definitions()
+	if len(definitions) != 1 || definitions[0].Description != (&verboseTool{}).Description() {
+		t.Fatalf("工具定义丢掉了完整描述: %#v", definitions)
+	}
+}
+
+func TestFinishAndSearchRequestStrictDecoding(t *testing.T) {
+	registry := NewToolRegistry(&WebSearchTool{})
+	definitions := (&Runner{registry: registry, cfg: Config{}.WithDefaults()}).turnDefinitions(newClaimEvidenceLedger(), false)
+	strictByName := map[string]bool{}
+	for _, definition := range definitions {
+		strictByName[definition.Name] = definition.Strict
+	}
+	// 这两个是仅有的、一旦结构出错就必然花掉一整轮修复的工具，因此要求供应商
+	// 在解码层约束。
+	if !strictByName[webSearchToolName] || !strictByName[finalizeToolName] {
+		t.Fatalf("strict 标记=%#v", strictByName)
+	}
+}

@@ -73,6 +73,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 		config.MaxOutputTokens = maxOutputTokens
 	}
 	config.Tools = geminiTools(req.Tools)
+	config.ToolConfig = geminiToolConfig(req)
 
 	resp, err := c.client.Models.GenerateContent(ctx, req.Model, geminiContents(messages, req.Tools), config)
 	if err != nil {
@@ -121,6 +122,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan 
 		config.MaxOutputTokens = value
 	}
 	config.Tools = geminiTools(req.Tools)
+	config.ToolConfig = geminiToolConfig(req)
 	iterator := c.client.Models.GenerateContentStream(ctx, req.Model, geminiContents(messages, req.Tools), config)
 	out := make(chan ChatEvent, 4)
 	go func() {
@@ -198,6 +200,19 @@ func geminiTools(definitions []ToolDefinition) []*genai.Tool {
 		})
 	}
 	return []*genai.Tool{{FunctionDeclarations: declarations}}
+}
+
+// geminiToolConfig 在指定 ToolChoice 时把函数调用模式收紧到该工具，Gemini 因此
+// 只能返回这一个函数调用；为空时保持默认的自动选择。
+func geminiToolConfig(req GenerateRequest) *genai.ToolConfig {
+	name := strings.TrimSpace(req.ToolChoice)
+	if len(req.Tools) == 0 || name == "" {
+		return nil
+	}
+	return &genai.ToolConfig{FunctionCallingConfig: &genai.FunctionCallingConfig{
+		Mode:                 genai.FunctionCallingConfigModeAny,
+		AllowedFunctionNames: []string{wireToolName(name)},
+	}}
 }
 
 func geminiToolCalls(response *genai.GenerateContentResponse, definitions []ToolDefinition) []ToolCall {

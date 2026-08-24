@@ -28,7 +28,25 @@ type MCPInstallTool struct {
 func (t *MCPInstallTool) Name() string { return "mcp.install" }
 
 func (t *MCPInstallTool) Description() string {
-	return `安装并连接一个 MCP 服务，持久化后立即注册其工具。stdio 使用 command/args，远程服务使用 url，二者必须二选一；headers/env 可引用 ${ENV_VAR}。首次调用会被拒绝并返回确认码，请把要装的服务讲清楚、等用户原样回复确认码后再重发本次调用。input: {"name":"服务名","command":"npx，可选","args":["-y","package"],"env":{"KEY":"value"},"cwd":"可选","url":"https://host/mcp，可选","headers":{"Authorization":"Bearer ${TOKEN}"},"enabled":true,"startup_timeout_sec":10,"tool_timeout_sec":60,"enabled_tools":[],"disabled_tools":[],"replace":false}`
+	return `安装并连接一个 MCP 服务，持久化后立即注册其工具。stdio 使用 command/args，远程服务使用 url，二者必须二选一；headers/env 可引用 ${ENV_VAR}。首次调用会被拒绝并返回确认码，请把要装的服务讲清楚、等用户原样回复确认码后再重发本次调用。`
+}
+
+func (t *MCPInstallTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"name"}, map[string]any{
+		"name":                toolStringParam("MCP 服务名"),
+		"command":             toolStringParam("stdio 服务的启动命令，与 url 二选一"),
+		"args":                toolStringArrayParam("stdio 服务的启动参数"),
+		"env":                 toolStringMapParam("stdio 服务的环境变量，值可引用 ${ENV_VAR}"),
+		"cwd":                 toolStringParam("stdio 服务的工作目录，可选"),
+		"url":                 toolStringParam("远程 MCP 服务地址，与 command 二选一"),
+		"headers":             toolStringMapParam("远程服务请求头，值可引用 ${ENV_VAR}"),
+		"enabled":             toolBoolParam("安装后是否立即启用，默认启用"),
+		"startup_timeout_sec": toolIntParam("启动握手超时秒数，可选"),
+		"tool_timeout_sec":    toolIntParam("单次工具调用超时秒数，可选"),
+		"enabled_tools":       toolStringArrayParam("只暴露这些工具，留空表示全部"),
+		"disabled_tools":      toolStringArrayParam("屏蔽这些工具"),
+		"replace":             toolBoolParam("同名服务已存在时是否覆盖"),
+	})
 }
 
 func (t *MCPInstallTool) ExplicitUserRequestKind() string { return "mcp" }
@@ -60,7 +78,14 @@ type MCPSetEnabledTool struct {
 func (t *MCPSetEnabledTool) Name() string { return "mcp.set_enabled" }
 
 func (t *MCPSetEnabledTool) Description() string {
-	return `启用或停用一个已配置的 MCP 服务并立即刷新工具。首次调用会被拒绝并返回确认码，等用户原样回复后再重发本次调用。input: {"name":"服务名","enabled":true}`
+	return `启用或停用一个已配置的 MCP 服务并立即刷新工具。首次调用会被拒绝并返回确认码，等用户原样回复后再重发本次调用。`
+}
+
+func (t *MCPSetEnabledTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"name", "enabled"}, map[string]any{
+		"name":    toolStringParam("已配置的 MCP 服务名"),
+		"enabled": toolBoolParam("true 启用，false 停用"),
+	})
 }
 
 func (t *MCPSetEnabledTool) ExplicitUserRequestKind() string { return "mcp" }
@@ -88,7 +113,13 @@ type MCPUninstallTool struct {
 func (t *MCPUninstallTool) Name() string { return "mcp.uninstall" }
 
 func (t *MCPUninstallTool) Description() string {
-	return `卸载一个 MCP 服务：停止当前连接、移除工具并从 MCP 配置中删除。首次调用会被拒绝并返回确认码，等用户原样回复后再重发本次调用。input: {"name":"服务名"}`
+	return `卸载一个 MCP 服务：停止当前连接、移除工具并从 MCP 配置中删除。首次调用会被拒绝并返回确认码，等用户原样回复后再重发本次调用。`
+}
+
+func (t *MCPUninstallTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"name"}, map[string]any{
+		"name": toolStringParam("要卸载的 MCP 服务名"),
+	})
 }
 
 func (t *MCPUninstallTool) ExplicitUserRequestKind() string { return "mcp" }

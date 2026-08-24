@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -34,6 +35,9 @@ type openAICompatibleClient struct {
 	client          openai.Client
 	httpClient      *http.Client
 	imageHTTPClient *http.Client
+	// strictUnsupported 记住这个端点拒绝过严格模式，之后直接按普通 schema 发，
+	// 降级的代价是每个 client 一次请求，不是每轮一次。
+	strictUnsupported atomic.Bool
 }
 
 // newOpenAICompatibleClient 创建 OpenAI-compatible provider 客户端。
@@ -74,18 +78,27 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
-	var response *GenerateResponse
-	var err error
-	switch c.cfg.APIFormatWithDefault() {
-	case APIFormatChatCompletions:
-		response, err = c.generateChatCompletion(ctx, req)
-	default:
-		response, err = c.generateResponse(ctx, req)
+	if c.strictUnsupported.Load() {
+		req = withoutStrictTools(req)
+	}
+	response, err := c.generateForAPIFormat(ctx, req)
+	if err != nil && requestHasStrictTools(req) && strictToolsRejected(err) {
+		// 不是每个 OpenAI 兼容网关都实现了严格模式。降级重发一次，而不是让整
+		// 轮对话失败。
+		c.strictUnsupported.Store(true)
+		response, err = c.generateForAPIFormat(ctx, withoutStrictTools(req))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
 	return response, nil
+}
+
+func (c *openAICompatibleClient) generateForAPIFormat(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
+	if c.cfg.APIFormatWithDefault() == APIFormatChatCompletions {
+		return c.generateChatCompletion(ctx, req)
+	}
+	return c.generateResponse(ctx, req)
 }
 
 // Stream exposes native Chat Completions SSE deltas. Responses and tool-call
@@ -182,6 +195,10 @@ func (c *openAICompatibleClient) Stream(ctx context.Context, req GenerateRequest
 
 func (c *openAICompatibleClient) streamResponses(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
 	req = req.withDefaults(c.cfg)
+	if c.strictUnsupported.Load() {
+		// 流式无法透明重试，因此沿用非流式已经学到的降级结论。
+		req = withoutStrictTools(req)
+	}
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
@@ -204,6 +221,7 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 		params.MaxOutputTokens = param.NewOpt(req.MaxOutputTokens)
 	}
 	params.Tools = openAIResponseTools(req.Tools)
+	params.ToolChoice = openAIResponseToolChoice(req)
 	if len(req.Tools) > 0 {
 		params.ParallelToolCalls = param.NewOpt(false)
 	}
@@ -568,6 +586,7 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 		params.MaxOutputTokens = param.NewOpt(req.MaxOutputTokens)
 	}
 	params.Tools = openAIResponseTools(req.Tools)
+	params.ToolChoice = openAIResponseToolChoice(req)
 	if len(req.Tools) > 0 {
 		params.ParallelToolCalls = param.NewOpt(false)
 	}
@@ -605,6 +624,7 @@ type openAIChatCompletionRequest struct {
 	MaxTokens         int64                         `json:"max_tokens,omitempty"`
 	Stream            bool                          `json:"stream"`
 	Tools             []openAIChatTool              `json:"tools,omitempty"`
+	ToolChoice        any                           `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool                         `json:"parallel_tool_calls,omitempty"`
 }
 
@@ -665,6 +685,7 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 		MaxTokens:       req.MaxOutputTokens,
 		Stream:          len(req.Tools) == 0,
 		Tools:           openAIChatTools(req.Tools),
+		ToolChoice:      openAIChatToolChoice(req),
 	}
 	if len(req.Tools) > 0 {
 		parallel := false
@@ -1964,7 +1985,7 @@ func openAIResponsesOutputItems(output []responses.ResponseOutputItemUnion) []js
 
 func openAIResponseTools(definitions []ToolDefinition) []responses.ToolUnionParam {
 	tools := make([]responses.ToolUnionParam, 0, len(definitions))
-	for _, definition := range definitions {
+	for _, definition := range strictToolDefinitions(definitions) {
 		tools = append(tools, responses.ToolUnionParam{OfFunction: &responses.FunctionToolParam{
 			Name: wireToolName(definition.Name), Description: param.NewOpt(definition.Description), Parameters: definition.Parameters, Strict: param.NewOpt(definition.Strict),
 		}})
@@ -1986,9 +2007,30 @@ func openAIResponseToolCalls(output []responses.ResponseOutputItemUnion, definit
 	return calls
 }
 
+// openAIResponseToolChoice 强制 Responses API 调用指定函数工具；为空保持自动。
+func openAIResponseToolChoice(req GenerateRequest) responses.ResponseNewParamsToolChoiceUnion {
+	name := strings.TrimSpace(req.ToolChoice)
+	if len(req.Tools) == 0 || name == "" {
+		return responses.ResponseNewParamsToolChoiceUnion{}
+	}
+	return responses.ResponseNewParamsToolChoiceUnion{
+		OfFunctionTool: &responses.ToolChoiceFunctionParam{Name: wireToolName(name)},
+	}
+}
+
+// openAIChatToolChoice 生成 Chat Completions 的 tool_choice。第三方兼容网关对该
+// 字段支持不一，因此只在明确指定工具时才发送。
+func openAIChatToolChoice(req GenerateRequest) any {
+	name := strings.TrimSpace(req.ToolChoice)
+	if len(req.Tools) == 0 || name == "" {
+		return nil
+	}
+	return map[string]any{"type": "function", "function": map[string]any{"name": wireToolName(name)}}
+}
+
 func openAIChatTools(definitions []ToolDefinition) []openAIChatTool {
 	tools := make([]openAIChatTool, 0, len(definitions))
-	for _, definition := range definitions {
+	for _, definition := range strictToolDefinitions(definitions) {
 		tools = append(tools, openAIChatTool{Type: "function", Function: openAIChatToolFunction{
 			Name: wireToolName(definition.Name), Description: definition.Description, Parameters: definition.Parameters, Strict: definition.Strict,
 		}})
@@ -2126,6 +2168,26 @@ func openAIRequestOptions(userAgent string, headers map[string]string, capture *
 }
 
 // openAICompatibleError 规范化 OpenAI-compatible 请求错误。
+// openAIRequestError 保留上游状态码以便判断降级，渲染出的文案和原来完全一致。
+type openAIRequestError struct {
+	statusCode int
+	detail     string
+}
+
+func (e *openAIRequestError) Error() string {
+	return "llm: openai-compatible request failed: " + e.detail
+}
+
+// strictToolsRejected 判断这次失败是否可能是网关拒绝严格模式。各家网关只会报成
+// 普通的 schema 校验错误，文案无法可靠匹配，因此按状态码判定；降级只发生一次。
+func strictToolsRejected(err error) bool {
+	var status *openAIRequestError
+	if !errors.As(err, &status) {
+		return false
+	}
+	return status.statusCode == http.StatusBadRequest || status.statusCode == http.StatusUnprocessableEntity
+}
+
 func openAICompatibleError(err error, capture *openAIErrorCapture) error {
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) {
@@ -2138,10 +2200,10 @@ func openAICompatibleError(err error, capture *openAIErrorCapture) error {
 			body = capture.body
 		}
 		// 聚合商错误格式差异很大，统一压成 status/code/type/message/body 便于前端展示。
-		return fmt.Errorf("llm: openai-compatible request failed: %s", formatOpenAIStatusError(statusCode, apiErr.Code, apiErr.Type, apiErr.Message, body))
+		return &openAIRequestError{statusCode: statusCode, detail: formatOpenAIStatusError(statusCode, apiErr.Code, apiErr.Type, apiErr.Message, body)}
 	}
 	if capture != nil && capture.statusCode >= http.StatusBadRequest {
-		return fmt.Errorf("llm: openai-compatible request failed: %s", formatOpenAIStatusError(capture.statusCode, "", "", "", capture.body))
+		return &openAIRequestError{statusCode: capture.statusCode, detail: formatOpenAIStatusError(capture.statusCode, "", "", "", capture.body)}
 	}
 	return err
 }
