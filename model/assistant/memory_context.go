@@ -417,6 +417,11 @@ func structuredMemoryTerms(text string) map[string]struct{} {
 type structuredMemoryQueryAnalysis struct {
 	normalized string
 	terms      map[string]float64
+	// orderedTerms 是 terms 的键按字典序排好的一份副本。打分时必须按它遍历：
+	// 直接 range 一个 map，浮点加法的次序每次都不一样，两条本该同分的记忆会
+	// 在末位比特上分出胜负，MMR 的去重扣分随之落到随机一方——表现为排序用例
+	// 每二十次翻一次脸，看起来像「摘要被歧视」，其实只是加法次序。
+	orderedTerms []string
 }
 
 // structuredMemoryStopTerms 是记忆检索的中文停用词表。
@@ -445,6 +450,11 @@ func analyzeStructuredMemoryQuery(query string) structuredMemoryQueryAnalysis {
 	if len(analysis.terms) == 0 {
 		analysis.terms = weightedStructuredMemoryTerms(query)
 	}
+	analysis.orderedTerms = make([]string, 0, len(analysis.terms))
+	for term := range analysis.terms {
+		analysis.orderedTerms = append(analysis.orderedTerms, term)
+	}
+	sort.Strings(analysis.orderedTerms)
 	return analysis
 }
 
@@ -479,7 +489,8 @@ func structuredMemoryLexicalScore(item StructuredMemoryItem, query structuredMem
 	matchedWeight := 0.0
 	totalWeight := 0.0
 	rawScore := 0.0
-	for term, queryWeight := range query.terms {
+	for _, term := range query.orderedTerms {
+		queryWeight := query.terms[term]
 		idf := math.Log(1 + float64(documentCount+1)/float64(documentFrequency[term]+1))
 		weightedQuery := queryWeight * idf
 		totalWeight += weightedQuery
@@ -619,9 +630,21 @@ func structuredMemorySearchTerms(text string, limit int) []string {
 	return terms
 }
 
+// orderedStructuredMemoryStopTerms 是停用词表排好序的一份键副本。挖词是逐个
+// ReplaceAll 做的，词与词可能互相覆盖（先挖掉短的，长的就不再匹配），所以次序
+// 必须固定，不能跟着 map 的遍历顺序走。
+var orderedStructuredMemoryStopTerms = func() []string {
+	terms := make([]string, 0, len(structuredMemoryStopTerms))
+	for term := range structuredMemoryStopTerms {
+		terms = append(terms, term)
+	}
+	sort.Strings(terms)
+	return terms
+}()
+
 func structuredMemorySemanticText(text string) string {
 	semantic := strings.ToLower(text)
-	for term := range structuredMemoryStopTerms {
+	for _, term := range orderedStructuredMemoryStopTerms {
 		semantic = strings.ReplaceAll(semantic, term, " ")
 	}
 	return semantic
