@@ -262,6 +262,7 @@ type Runtime struct {
 	structuredMemory          StructuredMemoryStore
 	glossary                  GlossaryStore
 	buildInfo                 BuildInfo
+	releaseStatus             ReleaseStatusProvider
 	reminders                 ReminderStore
 	groupConfigs              GroupConfigStore
 	configSaver               ConfigSaver
