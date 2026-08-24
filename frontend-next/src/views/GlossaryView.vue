@@ -24,6 +24,8 @@
       </div>
     </header>
 
+    <BotScopeNotice subject="全局词典" />
+
     <section class="card">
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px; gap: 10px">
@@ -161,6 +163,7 @@
 </template>
 
 <script setup lang="ts">
+import BotScopeNotice from "../components/BotScopeNotice.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import { ChevronRight, Plus, RefreshCw } from "@lucide/vue";
 import {

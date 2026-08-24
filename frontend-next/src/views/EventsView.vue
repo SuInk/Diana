@@ -346,6 +346,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { botScope } from "../bot-scope";
 import type { Component } from "vue";
 import {
   Activity,
@@ -410,6 +411,11 @@ const resultOptions: Array<{ value: AssistantEventResultFilter; label: string }>
 const selectedRange = ref<AssistantEventRange>("24h");
 const selectedResult = ref<AssistantEventResultFilter>("all");
 const selectedGroup = ref("");
+
+// 换了机器人就重新拉：事件按 profile 在服务端过滤，前端筛没有意义（分页会漏）。
+watch(botScope, () => {
+  void load(true);
+});
 const events = ref<AssistantEventDetail[]>([]);
 const response = ref<AssistantEventsResponse | null>(null);
 const page = ref(1);
@@ -589,7 +595,7 @@ async function load(reset: boolean): Promise<void> {
     loadingMore.value = true;
   }
   try {
-    const next = await getAssistantEvents(requestedRange, requestedResult, requestedPage, 50, requestedGroup);
+    const next = await getAssistantEvents(requestedRange, requestedResult, requestedPage, 50, requestedGroup, botScope.value);
     if (generation !== loadGeneration) return;
     response.value = next;
     if (reset) {
@@ -952,7 +958,7 @@ async function syncLiveEvents(): Promise<void> {
     return;
   }
   try {
-    const next = await getAssistantEvents(selectedRange.value, selectedResult.value, 1, 50, selectedGroup.value);
+    const next = await getAssistantEvents(selectedRange.value, selectedResult.value, 1, 50, selectedGroup.value, botScope.value);
     if (currentView.value !== "events" || isReadingBelowTop()) {
       pendingLiveEvents.value = true;
       return;

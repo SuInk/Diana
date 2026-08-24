@@ -43,6 +43,16 @@
         </button>
       </div>
 
+      <div v-if="scopeOptions.length > 1" class="bot-scope">
+        <AppSelect
+          id="app-bot-scope"
+          :model-value="botScope"
+          :options="scopeOptions"
+          aria-label="当前机器人"
+          @update:model-value="setBotScope"
+        />
+      </div>
+
       <nav class="nav-sections" aria-label="主导航">
         <div v-for="(section, index) in sections" :key="section.group?.id ?? `plain-${index}`" class="nav-section">
           <p v-if="section.group" class="nav-group-title">{{ section.group.label }}</p>
@@ -158,10 +168,12 @@ import {
   Wrench
 } from "@lucide/vue";
 import { currentView, navItemForView, navSections, navigate, type ViewID } from "./router";
+import { ALL_PROFILES, botScope, reconcileBotScope, setBotScope } from "./bot-scope";
+import AppSelect from "./components/AppSelect.vue";
 import { startEventStream, stream } from "./stream";
 import { theme } from "./theme";
 import { formatUptime } from "./format";
-import { checkForUpdate, getAuthStatus, getConfig, getHealth, getSystemVersion, logout, type HealthResponse, type SystemVersion } from "./api";
+import { checkForUpdate, getAuthStatus, getBotProfileConfig, getConfig, getHealth, getSystemVersion, logout, type BotProfileConfig, type HealthResponse, type SystemVersion } from "./api";
 import ToastHost from "./components/ToastHost.vue";
 import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
@@ -265,6 +277,31 @@ const viewTitles: Record<ViewID, string> = {
   settings: "设置"
 };
 
+const botProfiles = ref<BotProfileConfig[]>([]);
+
+async function loadBotProfiles(): Promise<void> {
+  try {
+    const config = await getBotProfileConfig();
+    botProfiles.value = config.profiles?.length ? config.profiles : [config];
+    reconcileBotScope(botProfiles.value);
+  } catch {
+    // 取不到配置档时切换器不显示，不影响其它功能。
+  }
+}
+
+// 只有真的有多台机器人时才显示切换器：单机器人部署没有可切的东西，多一个下拉
+// 只是噪声。
+const scopeOptions = computed(() => {
+  if (botProfiles.value.length < 2) {
+    return [];
+  }
+  return [
+    { value: ALL_PROFILES, label: "全部机器人" },
+    ...botProfiles.value
+      .filter((profile) => profile.id)
+      .map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || "未命名机器人", hint: profile.platform }))
+  ];
+});
 const sections = computed(() => navSections());
 
 const viewTitle = computed(() => viewTitles[currentView.value]);
@@ -365,7 +402,8 @@ async function bootApp(): Promise<void> {
   const [healthResult, versionResult, config] = await Promise.all([
     getHealth().catch(() => null),
     getSystemVersion().catch(() => null),
-    getConfig().catch(() => null)
+    getConfig().catch(() => null),
+    loadBotProfiles()
   ]);
   health.value = healthResult;
   systemVersion.value = versionResult;
@@ -400,6 +438,13 @@ function onLoginSuccess(): void {
 }
 
 // 重连即重启：连上之后把版本、运行时长和更新提示一起对齐。
+// 机器人页可能增删配置档，离开时重新取一次，切换器的选项不至于停在旧列表上。
+watch(currentView, (next, previous) => {
+  if (previous === "bot" && next !== "bot") {
+    void loadBotProfiles();
+  }
+});
+
 watch(() => stream.connected, (connected, previous) => {
   if (connected && previous === false && !locked.value && !booting.value) {
     void refreshRuntimeVersion();
