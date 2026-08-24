@@ -1282,3 +1282,94 @@ func TestXiaohongshuUnresolvedStatus(t *testing.T) {
 		})
 	}
 }
+
+// 四个用途都能在聊天里改，而且只动自己那一档。
+func TestDianaLLMConfigToolRebindsEveryModelRole(t *testing.T) {
+	newRuntime := func() (*Runtime, *stubLLMProfileStore) {
+		store := &stubLLMProfileStore{set: llm.ProfileSet{
+			ActiveID: "main",
+			Profiles: []llm.Profile{
+				{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
+					Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "chat-model", ImageModel: "draw-model",
+					Models: []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}, {ID: "route-model"}, {ID: "draw-model"}, {ID: "draw-model-2"}},
+				}},
+			},
+		}}
+		runtime := NewRuntime(BotConfig{
+			OwnerID: "10001",
+			ModelRoles: map[string]ModelRole{
+				"chat":   {ProfileID: "main", Model: "chat-model"},
+				"vision": {ProfileID: "main", Model: "see-model"},
+			},
+		}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
+		runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+			return []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}, {ID: "see-model-pro"}, {ID: "route-model"}, {ID: "draw-model-2"}}, nil
+		})
+		return runtime, store
+	}
+
+	cases := []struct {
+		role      string
+		model     string
+		wantLabel string
+	}{
+		{role: "vision", model: "see-model-pro", wantLabel: "视觉理解"},
+		{role: "intent", model: "route-model", wantLabel: "意图识别"},
+		{role: "image", model: "draw-model-2", wantLabel: "图片生成"},
+		{role: "chat", model: "route-model", wantLabel: "对话"},
+	}
+	for _, item := range cases {
+		runtime, _ := newRuntime()
+		output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+			context.Background(), map[string]any{"operation": "update", "role": item.role, "model": item.model})
+		if err != nil {
+			t.Fatalf("role %s: %v", item.role, err)
+		}
+		if !strings.Contains(output, "已把"+item.wantLabel+"模型换成 "+item.model) {
+			t.Fatalf("role %s output = %q", item.role, output)
+		}
+		roles := normalizeModelRoles(runtime.Config().ModelRoles)
+		if roles[item.role].Model != item.model {
+			t.Fatalf("role %s = %#v", item.role, roles[item.role])
+		}
+		// 只动自己那一档。
+		for _, other := range []struct{ key, model string }{{"chat", "chat-model"}, {"vision", "see-model"}} {
+			if other.key == item.role {
+				continue
+			}
+			if roles[other.key].Model != other.model {
+				t.Fatalf("改 %s 时动了 %s：%#v", item.role, other.key, roles[other.key])
+			}
+		}
+	}
+}
+
+// 没配过任何分配时，改「视觉理解」只写自己那一档，不会顺手给对话也钉一个绑定。
+func TestDianaLLMConfigToolBindsNonChatRoleWithoutTouchingChat(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "main",
+		Profiles: []llm.Profile{{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
+			Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "chat-model",
+			Models: []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}},
+		}}},
+	}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
+	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		return []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}}, nil
+	})
+	if _, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+		context.Background(), map[string]any{"operation": "update", "role": "vision", "model": "see-model"}); err != nil {
+		t.Fatal(err)
+	}
+	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	if roles["vision"].Model != "see-model" {
+		t.Fatalf("vision role = %#v", roles["vision"])
+	}
+	if _, pinned := roles["chat"]; pinned {
+		t.Fatalf("不该顺手给对话钉一个绑定: %#v", roles)
+	}
+	// 对话仍然走激活配置的默认模型。
+	if got := store.Current(); got.Model != "chat-model" {
+		t.Fatalf("provider config changed: %#v", got)
+	}
+}
