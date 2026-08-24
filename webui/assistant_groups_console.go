@@ -50,10 +50,14 @@ func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 // listConsoleGroups 返回机器人已加入的群、已保存群配置与插件清单。
 func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	base := h.runtime.Config()
-	set := h.groupConfigs.Groups()
+	profileID := botProfileScope(c)
+	set := assistant.GroupConfigSet{Groups: h.groupConfigs.Groups().GroupsForProfile(profileID)}
 	refresh := queryBool(c.Query("refresh"))
-	liveGroups, liveAvailable, warning := h.liveConsoleGroups(c.Request.Context(), refresh)
+	liveGroups, liveAvailable, warning := h.consoleGroupSources(c.Request.Context(), profileID, refresh)
 	groups := mergeConsoleGroupItems(base, set, liveGroups)
+	for index := range groups {
+		groups[index].BotProfileID = profileID
+	}
 	for index := range groups {
 		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
 	}
@@ -65,7 +69,48 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	})
 }
 
+// consoleGroupSources 按当前作用域决定群列表从哪来。
+//
+// OneBot 有 get_group_list，问一次就有权威结果。Telegram 的 Bot API 没有「列出我
+// 加入的群」这种接口——机器人只有在群里收到过消息才知道自己在那儿，所以只能从
+// 本地事件历史里聚合。选了「全部机器人」时沿用原来的行为，避免把两个平台的群混
+// 成一份看不出归属的清单。
+func (h *BotHandler) consoleGroupSources(ctx context.Context, profileID string, refresh bool) ([]botAutoGroupInfo, bool, string) {
+	if profileID == "" || h.isOneBotProfile(profileID) {
+		return h.liveConsoleGroups(ctx, refresh)
+	}
+	if h.sqlite == nil {
+		return nil, false, "当前存储不支持按机器人列出群，暂时只显示已保存的群配置"
+	}
+	seen, err := h.sqlite.ListInboundEventGroups(ctx, time.Now().Add(-consoleLocalGroupWindow), profileID)
+	if err != nil || len(seen) == 0 {
+		return nil, false, "这台机器人还没有在任何群里收到过消息，暂时只显示已保存的群配置"
+	}
+	groups := make([]botAutoGroupInfo, 0, len(seen))
+	for _, item := range seen {
+		groups = append(groups, botAutoGroupInfo{GroupID: item.GroupID})
+	}
+	return groups, true, ""
+}
+
+// isOneBotProfile 判断这台机器人是不是 OneBot 平台。
+func (h *BotHandler) isOneBotProfile(profileID string) bool {
+	if h.profiles == nil {
+		return true
+	}
+	for _, profile := range h.profiles.Profiles().Profiles {
+		if strings.TrimSpace(profile.ID) == profileID {
+			return assistant.IsOneBotPlatform(profile.Platform)
+		}
+	}
+	return true
+}
+
 var (
+	// consoleLocalGroupWindow 是「从本地事件推断在哪些群」的回看窗口。太短会漏掉
+	// 冷群，太长会把早就退出的群一直挂在列表上。
+	consoleLocalGroupWindow = 30 * 24 * time.Hour
+
 	consoleLiveGroupTimeout  = 2500 * time.Millisecond
 	consoleLiveGroupCacheTTL = 20 * time.Second
 )
@@ -205,6 +250,8 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 		return
 	}
 	cfg, err := h.sanitizeGroupConfigPayload(payload.Config, groupID)
+	// 群配置按机器人各存一份，保存时必须钉住是给哪一台配的。
+	cfg.BotProfileID = strings.TrimSpace(payload.Config.BotProfileID)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
 		return

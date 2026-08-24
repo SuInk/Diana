@@ -23,8 +23,6 @@
       </div>
     </header>
 
-    <BotScopeNotice subject="群配置" />
-
     <div v-if="loaded">
       <div class="group-list-toolbar">
         <div class="group-list-summary">
@@ -280,8 +278,8 @@
 </template>
 
 <script setup lang="ts">
-import BotScopeNotice from "../components/BotScopeNotice.vue";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { botScope } from "../bot-scope";
 import { Plus, RefreshCw, Save, Search, SlidersHorizontal, Users, WifiOff } from "@lucide/vue";
 import {
   getBotProfileConfig,
@@ -398,7 +396,7 @@ async function load(showFeedback = false): Promise<void> {
   refreshing.value = true;
   try {
     const [response, configAndPlatforms] = await Promise.all([
-      listBotGroups(showFeedback),
+      listBotGroups(showFeedback, botScope.value),
       Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null)
     ]);
     groups.value = response.groups;
@@ -524,7 +522,7 @@ async function toggleGroup(group: BotGroupSummary, event: Event): Promise<void> 
   const enabled = (event.target as HTMLInputElement).checked;
   togglingGroupID.value = group.group_id;
   try {
-    const saved = await saveBotGroup({ ...groupConfigOf(group), enabled });
+    const saved = await saveBotGroup({ ...groupConfigOf(group), bot_profile_id: botScope.value || group.bot_profile_id, enabled });
     upsert(saved.config);
     toastSuccess(enabled ? `群 ${group.group_id} 已启用` : `群 ${group.group_id} 已停用`);
   } catch (error) {
@@ -560,7 +558,7 @@ async function saveEditing(): Promise<void> {
         .map((item) => item.trim())
         .filter((item) => item !== "")
     };
-    const saved = await saveBotGroup(payload);
+    const saved = await saveBotGroup({ ...payload, bot_profile_id: botScope.value || payload.bot_profile_id });
     upsert(saved.config);
     editing.value = null;
     toastSuccess(`群 ${payload.group_id} 配置已保存`);
@@ -584,6 +582,11 @@ function upsert(config: BotGroupConfig): void {
     });
   }
 }
+
+// 换了机器人，群列表和每个群的配置都是另一套。
+watch(botScope, () => {
+  void load();
+});
 
 onMounted(() => load());
 </script>

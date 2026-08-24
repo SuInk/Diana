@@ -459,6 +459,10 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
+	// BotProfileID 指明这份群配置属于哪台机器人。两台机器人可以同时在一个群里，
+	// 各自的触发词、回复频率和人格都该各管各的。空值是升级前的老记录，迁移时会
+	// 归给当时的当前配置档。
+	BotProfileID                 string                 `json:"bot_profile_id,omitempty"`
 	GroupID                      string                 `json:"group_id"`
 	Enabled                      bool                   `json:"enabled"`
 	EnabledSet                   bool                   `json:"enabled_set,omitempty"`
@@ -725,7 +729,37 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 }
 
 // ConfigForGroup 返回指定群配置。
-func (s GroupConfigSet) ConfigForGroup(groupID string) (GroupConfig, bool) {
+// ConfigForGroup 找这台机器人在这个群里的配置。
+//
+// 先按 (机器人, 群) 精确找；找不到再回落到没有机器人标记的老记录——迁移会把它们
+// 填上，这里的回落只是保险，避免迁移之前的一瞬间群配置整体失效。
+func (s GroupConfigSet) ConfigForGroup(botProfileID, groupID string) (GroupConfig, bool) {
+	botProfileID, groupID = strings.TrimSpace(botProfileID), strings.TrimSpace(groupID)
+	var legacy *GroupConfig
+	for index := range s.Groups {
+		cfg := s.Groups[index]
+		if cfg.GroupID != groupID {
+			continue
+		}
+		if strings.TrimSpace(cfg.BotProfileID) == botProfileID {
+			return cfg, true
+		}
+		if strings.TrimSpace(cfg.BotProfileID) == "" && legacy == nil {
+			legacy = &s.Groups[index]
+		}
+	}
+	if legacy != nil {
+		return *legacy, true
+	}
+	return GroupConfig{}, false
+}
+
+// ConfigForGroupAnyProfile 不区分机器人地找这个群的配置，返回排在最前的一份。
+//
+// 只给「还不知道是哪台机器人在问」的入口用——群管理员自助那条链路的会话里目前
+// 没有机器人身份。它保持了改造前的行为；等那条链路把 profile 带上，这个方法就该
+// 从调用点撤掉。
+func (s GroupConfigSet) ConfigForGroupAnyProfile(groupID string) (GroupConfig, bool) {
 	groupID = strings.TrimSpace(groupID)
 	for _, cfg := range s.Groups {
 		if cfg.GroupID == groupID {
@@ -733,6 +767,21 @@ func (s GroupConfigSet) ConfigForGroup(groupID string) (GroupConfig, bool) {
 		}
 	}
 	return GroupConfig{}, false
+}
+
+// GroupsForProfile 返回这台机器人的全部群配置；botProfileID 留空表示不筛。
+func (s GroupConfigSet) GroupsForProfile(botProfileID string) []GroupConfig {
+	botProfileID = strings.TrimSpace(botProfileID)
+	if botProfileID == "" {
+		return append([]GroupConfig(nil), s.Groups...)
+	}
+	out := make([]GroupConfig, 0, len(s.Groups))
+	for _, cfg := range s.Groups {
+		if strings.TrimSpace(cfg.BotProfileID) == botProfileID {
+			out = append(out, cfg)
+		}
+	}
+	return out
 }
 
 // WithDefaults migrates and normalizes all persisted group policies.
@@ -753,7 +802,8 @@ func (s GroupConfigSet) Upsert(cfg GroupConfig, base BotConfig) GroupConfigSet {
 	next := make([]GroupConfig, 0, len(s.Groups)+1)
 	replaced := false
 	for _, existing := range s.Groups {
-		if existing.GroupID == cfg.GroupID {
+		// 同一个群号在不同机器人下是两份配置，只替换属于同一台的那一份。
+		if existing.GroupID == cfg.GroupID && strings.TrimSpace(existing.BotProfileID) == strings.TrimSpace(cfg.BotProfileID) {
 			next = append(next, cfg)
 			replaced = true
 			continue

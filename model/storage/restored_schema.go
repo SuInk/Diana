@@ -276,6 +276,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.migrateUserProfilesToBotScope(); err != nil {
 		return err
 	}
+	if err := s.migrateGroupConfigsToBotScope(); err != nil {
+		return err
+	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
@@ -414,6 +417,35 @@ func (s *SQLiteStore) currentBotProfileID() string {
 		return strings.TrimSpace(current.ID)
 	}
 	return ""
+}
+
+// migrateGroupConfigsToBotScope 给已有群配置补上机器人归属。
+//
+// 群配置存的是一整个 JSON，不是表，所以迁移就是读出来、填上、写回去。和人员画像
+// 一样归给迁移时的当前配置档：这些触发词和回复策略本来就是那台机器人在用的。
+func (s *SQLiteStore) migrateGroupConfigsToBotScope() error {
+	ctx := context.Background()
+	set, ok, err := s.LoadBotGroupConfigs(ctx)
+	if err != nil || !ok || len(set.Groups) == 0 {
+		return err
+	}
+	owner := s.currentBotProfileID()
+	if owner == "" {
+		// 还没配过机器人时不动：留着空归属，等第一台机器人建起来再说，
+		// 免得把配置绑到一个不存在的 ID 上。
+		return nil
+	}
+	changed := false
+	for index := range set.Groups {
+		if strings.TrimSpace(set.Groups[index].BotProfileID) == "" {
+			set.Groups[index].BotProfileID = owner
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.SaveBotGroupConfigs(ctx, set)
 }
 
 func (s *SQLiteStore) backfillRecallNoticeAudits() error {

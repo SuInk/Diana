@@ -649,7 +649,10 @@ type InboundEventGroup struct {
 // ListInboundEventGroups 列出这个时间范围里有事件的群，按事件数从多到少。
 // 筛选器只列真正有数据的群：机器人可能进了几十个群，绝大多数一条事件都没有，
 // 全列出来反而找不到要看的那个。
-func (s *SQLiteStore) ListInboundEventGroups(ctx context.Context, since time.Time) ([]InboundEventGroup, error) {
+// ListInboundEventGroups 列出这段时间里出现过的群。botProfileID 非空时只看那台
+// 机器人见过的群——Telegram 的 Bot API 没有「列出我加入的群」这种接口，控制台
+// 只能靠本地事件推断它在哪些群里。
+func (s *SQLiteStore) ListInboundEventGroups(ctx context.Context, since time.Time, botProfileID string) ([]InboundEventGroup, error) {
 	groups := []InboundEventGroup{}
 	if s == nil || s.db == nil {
 		return groups, nil
@@ -658,13 +661,19 @@ func (s *SQLiteStore) ListInboundEventGroups(ctx context.Context, since time.Tim
 	if !since.IsZero() {
 		sinceUnix = since.Unix()
 	}
+	scopeCondition := ""
+	args := []any{sinceUnix}
+	if botProfileID = strings.TrimSpace(botProfileID); botProfileID != "" {
+		scopeCondition = " AND COALESCE(i.profile_id, '') = ?"
+		args = append(args, botProfileID)
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT i.group_id, COUNT(*)
 FROM inbound_events AS i
-WHERE i.event_time >= ? AND COALESCE(TRIM(i.group_id), '') != ''
+WHERE i.event_time >= ? AND COALESCE(TRIM(i.group_id), '') != ''`+scopeCondition+`
 GROUP BY i.group_id
 ORDER BY COUNT(*) DESC, i.group_id ASC
-`, sinceUnix)
+`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list inbound event groups: %w", err)
 	}
