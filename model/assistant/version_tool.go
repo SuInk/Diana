@@ -42,6 +42,9 @@ type ReleaseStatus struct {
 	UnsupportedReason string
 	// SwitchToReleaseAvailable 表示当前是源码构建，可以显式换成正式 Release 包。
 	SwitchToReleaseAvailable bool
+	// RepositoryURL 是这个项目的开源地址。群里问「你源码在哪」时，不给它就只能
+	// 靠模型编一个像模像样的 GitHub 链接。
+	RepositoryURL string
 }
 
 // ReleaseStatusProvider 让机器人问到「有没有新版本」时拿到真实结论。
@@ -115,6 +118,7 @@ type dianaVersionResult struct {
 	Platform  string `json:"platform,omitempty"`
 	GoVersion string `json:"go_version,omitempty"`
 	// 以下是更新器给出的结论，拿不到时整块为空。
+	RepositoryURL     string `json:"repository_url,omitempty"`
 	DeploymentMode    string `json:"deployment_mode,omitempty"`
 	LatestVersion     string `json:"latest_version,omitempty"`
 	LatestPublishedAt string `json:"latest_published_at,omitempty"`
@@ -126,8 +130,9 @@ type dianaVersionResult struct {
 }
 
 const dianaVersionReplyGuidance = "像回答一句闲聊那样说，别把字段抄成清单：问版本就说版本号，" +
-	"问「多久没更新」再讲更新时间和已经跑了多久，问「有没有新版本」再讲最新版和能不能升。" +
-	"查不到的项直接说不知道，不要编，也不要把系统信息一股脑全倒出来。"
+	"问「多久没更新」再讲更新时间和已经跑了多久，问「有没有新版本」再讲最新版和能不能升，" +
+	"问项目地址就把 repository_url 原样发出来。" +
+	"查不到的项直接说不知道，不要编（链接尤其不能编），也不要把系统信息一股脑全倒出来。"
 
 func newDianaVersionTool(botRuntime *Runtime) *dianaVersionTool {
 	return &dianaVersionTool{runtime: botRuntime}
@@ -137,8 +142,9 @@ func (*dianaVersionTool) Name() string { return dianaVersionToolName }
 
 func (*dianaVersionTool) Description() string {
 	return "读取 Diana 自己的运行时事实：版本号、正式版还是源码构建、这台机器上的更新时间、本次已运行时长、" +
-		"系统和架构，以及最新发布版本、有没有新版本可用、能不能自更新。" +
-		"用户问你是什么版本、什么时候更新的、跑了多久、有没有新版本、跑在什么系统上时调用；不要凭记忆或按历史消息猜。无需参数。"
+		"系统和架构、项目开源地址，以及最新发布版本、有没有新版本可用、能不能自更新。" +
+		"用户问你是什么版本、什么时候更新的、跑了多久、有没有新版本、跑在什么系统上、项目地址或源码在哪时调用；" +
+		"不要凭记忆或按历史消息猜，尤其不要自己编 GitHub 链接。无需参数。"
 }
 
 func (*dianaVersionTool) InputSchema() map[string]any {
@@ -198,6 +204,7 @@ func (t *dianaVersionTool) applyReleaseStatus(ctx context.Context, result *diana
 		result.UpdateState = "查不到最新版本（更新检查失败），只能说说本地这份。"
 		return
 	}
+	result.RepositoryURL = status.RepositoryURL
 	result.DeploymentMode = deploymentModeLabel(status.DeploymentMode)
 	result.LatestVersion = status.LatestVersion
 	if !status.LatestPublishedAt.IsZero() {

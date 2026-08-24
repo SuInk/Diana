@@ -70,6 +70,7 @@ func (s *stubReleaseStatusProvider) ReleaseStatus(context.Context) (ReleaseStatu
 
 func TestDianaVersionToolReportsReleaseStatus(t *testing.T) {
 	provider := &stubReleaseStatusProvider{status: ReleaseStatus{
+		RepositoryURL:     "https://github.com/SuInk/Diana",
 		DeploymentMode:    "release",
 		CurrentVersion:    "v0.8.57",
 		LatestVersion:     "v0.8.58",
@@ -94,6 +95,10 @@ func TestDianaVersionToolReportsReleaseStatus(t *testing.T) {
 	}
 	if result.UpdateState != "有新版本可以更新。" {
 		t.Fatalf("update state = %q", result.UpdateState)
+	}
+	// 「你源码在哪」不给真链接，模型就会编一个像模像样的 GitHub 地址。
+	if result.RepositoryURL != "https://github.com/SuInk/Diana" {
+		t.Fatalf("repository url = %q", result.RepositoryURL)
 	}
 }
 
