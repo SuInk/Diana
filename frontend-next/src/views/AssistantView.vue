@@ -23,9 +23,13 @@
           <PowerOff :size="15" aria-hidden="true" />
           停止
         </button>
+        <!-- 回补会真的去拉 24 小时历史并补处理，属于「会产生后果」的动作，不能用
+             ghost：那是给取消、关闭这类退让动作留的，无边框无底色，夹在红色的停止
+             和绿色的保存之间看起来像是禁用了。默认样式有边框有底色，明确可点，又不
+             跟主动作抢。 -->
         <button
           v-if="status && status.running && isOneBotPlatform"
-          class="btn ghost"
+          class="btn"
           type="button"
           :disabled="busy"
           title="重新拉取最近 24 小时的会话历史，补入错过的消息（已处理过的消息会自动去重）"

@@ -651,7 +651,13 @@ func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
 func (t *BrowserRenderTool) Name() string { return "browser_render" }
 
 func (t *BrowserRenderTool) Description() string {
-	return `在一次性隔离配置的无头 Chrome/Chromium 中渲染公网网页并读取最终 DOM 文本，不使用用户浏览器登录态。input: {"url":"https://example.com"}`
+	return `在一次性隔离配置的无头 Chrome/Chromium 中渲染公网网页并读取最终 DOM 文本，不使用用户浏览器登录态。`
+}
+
+func (t *BrowserRenderTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"url"}, map[string]any{
+		"url": toolStringParam("要渲染的公网页面地址"),
+	})
 }
 
 func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (string, error) {
