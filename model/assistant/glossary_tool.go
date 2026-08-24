@@ -165,12 +165,15 @@ func (t *dianaGlossaryTool) upsert(ctx context.Context, store GlossaryStore, inp
 	if strings.TrimSpace(meaning) == "" {
 		return "", fmt.Errorf("释义不能为空；不知道意思就先别记，别编一个")
 	}
+	cfg := t.runtime.effectiveConfigForEvent(t.event)
+	shared := boolValue(cfg.GlossarySharedScopeEnabled, false)
 	global := toolInputBool(input, "global")
-	if global && !t.relationship.Owner {
+	// 共用一本词典时不存在「全局是特权」这回事：所有词条本来就写进全局。
+	if global && !shared && !t.relationship.Owner {
 		return "", fmt.Errorf("只有主人能写全局词典；这条会记在当前会话里")
 	}
 	entry, created, err := store.UpsertGlossaryEntry(ctx, GlossaryUpsertRequest{
-		ScopeKey:        glossaryScopeKeyForWrite(t.event, global, t.relationship.Owner),
+		ScopeKey:        glossaryScopeKeyForWrite(t.event, cfg, global, t.relationship.Owner),
 		Term:            term,
 		Aliases:         NormalizeGlossaryAliases(term, configToolStringSlice(input, "aliases")),
 		Meaning:         meaning,

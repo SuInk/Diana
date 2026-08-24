@@ -385,3 +385,69 @@ func TestSystemPromptInjectsGlossaryRuleWithTool(t *testing.T) {
 		}
 	}
 }
+
+// 默认按会话隔离：一个群记下的梗只写进这个群的作用域，别的群查不到。
+func TestGlossaryScopeKeyForWriteIsolatesBySessionByDefault(t *testing.T) {
+	cfg := DefaultBotConfig().WithDefaults()
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ContextNamespace: "profile-a"}
+
+	if got := glossaryScopeKeyForWrite(event, cfg, false, false); got != "profile-a:group:123" {
+		t.Fatalf("default write scope = %q", got)
+	}
+	// global 是主人特权：普通成员即使传 global 也只能写本群。
+	if got := glossaryScopeKeyForWrite(event, cfg, true, false); got != "profile-a:group:123" {
+		t.Fatalf("non-owner global write scope = %q", got)
+	}
+	if got := glossaryScopeKeyForWrite(event, cfg, true, true); got != GlossaryScopeGlobal {
+		t.Fatalf("owner global write scope = %q", got)
+	}
+}
+
+// 打开跨群共用之后所有词条都写进全局，不再按群分家。
+func TestGlossaryScopeKeyForWriteSharedAcrossGroups(t *testing.T) {
+	cfg := DefaultBotConfig()
+	cfg.GlossarySharedScopeEnabled = boolPointer(true)
+	cfg = cfg.WithDefaults()
+
+	for _, event := range []MessageEvent{
+		{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ContextNamespace: "profile-a"},
+		{Kind: EventKindGroup, GroupID: "456", UserID: "20002"},
+		{Kind: EventKindPrivate, UserID: "30003"},
+	} {
+		if got := glossaryScopeKeyForWrite(event, cfg, false, false); got != GlossaryScopeGlobal {
+			t.Fatalf("shared write scope for %#v = %q", event, got)
+		}
+	}
+}
+
+// 读取顺序始终是「当前会话优先、global 兜底」：打开开关之前各群记下的词条
+// 不该凭空消失，仍要在自己群里压过全局那条。
+func TestGlossaryScopeKeysPreferSessionThenGlobal(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", ContextNamespace: "profile-a"}
+	if got := glossaryScopeKeys(event); len(got) != 2 || got[0] != "profile-a:group:123" || got[1] != GlossaryScopeGlobal {
+		t.Fatalf("scope keys = %#v", got)
+	}
+	if got := glossaryScopeKeys(MessageEvent{}); len(got) != 1 || got[0] != GlossaryScopeGlobal {
+		t.Fatalf("empty session scope keys = %#v", got)
+	}
+}
+
+// 既没有群号也没有账号的事件不能拼出 "private:" 这种只有前缀的作用域：那不是
+// 一个会话，而是所有匿名事件共用的桶，当成作用域用会把互不相干的上下文串到一起。
+func TestGlossaryScopeRejectsIdentitylessSession(t *testing.T) {
+	empty := MessageEvent{}
+	if got := glossarySessionScope(empty); got != "" {
+		t.Fatalf("identityless session scope = %q, want empty", got)
+	}
+	if got := glossaryScopeKeys(empty); len(got) != 1 || got[0] != GlossaryScopeGlobal {
+		t.Fatalf("scope keys = %#v, want global only", got)
+	}
+	cfg := DefaultBotConfig().WithDefaults()
+	if got := glossaryScopeKeyForWrite(empty, cfg, false, false); got != GlossaryScopeGlobal {
+		t.Fatalf("identityless write scope = %q, want global", got)
+	}
+	// 带命名空间但仍然没有身份，同样不能算一个会话。
+	if got := glossarySessionScope(MessageEvent{ContextNamespace: "profile-a"}); got != "" {
+		t.Fatalf("namespaced identityless scope = %q, want empty", got)
+	}
+}

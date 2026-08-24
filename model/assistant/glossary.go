@@ -179,21 +179,47 @@ func NormalizeGlossaryAliases(term string, aliases []string) []string {
 
 // glossaryScopeKeys 返回一次检索要看的作用域，当前会话在前、global 在后。
 // 顺序即优先级：同一个词在本群和全局都有释义时，本群的那条说了算。
+//
+// 共用一本词典时读取顺序不变：新词条都写进 global，本群作用域里剩下的是打开开关
+// 之前记的，让它在自己群里继续生效比凭空消失更合理。
 func glossaryScopeKeys(event MessageEvent) []string {
-	scope := strings.TrimSpace(sessionKey(event))
-	if scope == "" || scope == GlossaryScopeGlobal {
+	scope := glossarySessionScope(event)
+	if scope == "" {
 		return []string{GlossaryScopeGlobal}
 	}
 	return []string{scope, GlossaryScopeGlobal}
 }
 
-// glossaryScopeKeyForWrite 返回写入用的作用域。global 是主人特权：一个群的内部梗
-// 默认只在这个群里成立。
-func glossaryScopeKeyForWrite(event MessageEvent, global bool, owner bool) string {
+// glossarySessionScope 返回当前会话的作用域键，拿不到有效身份时返回空串。
+//
+// sessionKey 对一个既没有群号也没有账号的事件会拼出 "private:" 这种只有前缀的键。
+// 那不是一个会话，而是一个所有匿名事件共用的桶：当成作用域用，等于把互不相干的
+// 上下文串到一起。这里要求 id 段非空，取不到就退回全局。
+func glossarySessionScope(event MessageEvent) string {
+	scope := strings.TrimSpace(sessionKey(event))
+	if scope == "" || scope == GlossaryScopeGlobal || strings.HasSuffix(scope, ":") {
+		return ""
+	}
+	return scope
+}
+
+// glossaryScopeKeyForWrite 返回写入用的作用域。
+//
+// 默认按会话隔离：一个群的内部梗默认只在这个群里成立，global 是主人特权。
+// 打开「词典跨群共用」之后全部写进 global——这时机器人维护的是一本共用词典，
+// 再按群分家反而会让同一个词在不同群各记一遍。
+func glossaryScopeKeyForWrite(event MessageEvent, cfg BotConfig, global bool, owner bool) string {
+	if boolValue(cfg.GlossarySharedScopeEnabled, false) {
+		return GlossaryScopeGlobal
+	}
 	if global && owner {
 		return GlossaryScopeGlobal
 	}
-	return strings.TrimSpace(sessionKey(event))
+	// 没有有效会话身份时写全局：写进 "private:" 那种共用桶比写全局更糟。
+	if scope := glossarySessionScope(event); scope != "" {
+		return scope
+	}
+	return GlossaryScopeGlobal
 }
 
 // glossaryContext 拿当前消息去撞词典，把命中的词条组装成提示词段落。
