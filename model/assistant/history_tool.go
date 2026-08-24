@@ -340,6 +340,8 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 			item.SenderNameOrID(),
 			historyToolEventText(item),
 			quotedPlainText(item.Quoted),
+			// 纯图片消息正文是空的，图片描述是它唯一能被搜到的内容。
+			t.runtime.messageImageDescriptionText(ctx, item),
 		}, "\n"))
 		if !strings.Contains(searchable, normalizedQuery) {
 			continue
@@ -742,7 +744,15 @@ func truncateChatHistoryText(text string, limit int) string {
 	return string(runes[:limit]) + "..."
 }
 
+// chatHistoryIDNotice 跟着每个结果一起回去。系统提示词里已经有同样的规则，
+// 但模型是在读完这份结果、手里正攥着一串 message_id 的时候动笔的，就近再说
+// 一遍比隔着几千 token 的规则管用。
+const chatHistoryIDNotice = "message_id 只用于继续调用历史工具，不得写进给用户的回复；指认某条消息时用时间、发送者和内容描述。"
+
 func marshalDianaChatHistoryResult(result dianaChatHistoryResult) (string, error) {
+	if strings.TrimSpace(result.Message) != "" {
+		result.Message = strings.TrimSpace(result.Message) + " " + chatHistoryIDNotice
+	}
 	for {
 		body, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {

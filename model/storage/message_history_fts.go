@@ -116,7 +116,7 @@ func ensureMessageHistoryFTS(db *sql.DB) bool {
 	}
 	// token 要在 Go 侧切，触发器做不到，因此写入同步放在 AppendMessageEvent 里。
 	// 这里只补存量：升级到本版本时库里已有的历史都要进索引。
-	rows, err := db.Query(`SELECT e.rowid, COALESCE(e.sender_name, ''), COALESCE(e.user_id, ''), COALESCE(e.text, '')
+	rows, err := db.Query(`SELECT e.rowid, COALESCE(e.sender_name, ''), COALESCE(e.user_id, ''), COALESCE(e.text, ''), COALESCE(e.search_extra, '')
 FROM message_events AS e
 WHERE e.rowid NOT IN (SELECT rowid FROM ` + messageHistoryFTSTable + `)`)
 	if err != nil {
@@ -129,12 +129,12 @@ WHERE e.rowid NOT IN (SELECT rowid FROM ` + messageHistoryFTSTable + `)`)
 	batch := make([]pending, 0, 256)
 	for rows.Next() {
 		var rowID int64
-		var sender, userID, text string
-		if err := rows.Scan(&rowID, &sender, &userID, &text); err != nil {
+		var sender, userID, text, extra string
+		if err := rows.Scan(&rowID, &sender, &userID, &text, &extra); err != nil {
 			_ = rows.Close()
 			return false
 		}
-		batch = append(batch, pending{rowID: rowID, tokens: messageHistoryIndexTokens(sender, userID, text)})
+		batch = append(batch, pending{rowID: rowID, tokens: messageHistoryIndexTokens(sender, userID, text, extra)})
 	}
 	closeErr := rows.Close()
 	if err := rows.Err(); err != nil || closeErr != nil {
@@ -151,7 +151,7 @@ WHERE e.rowid NOT IN (SELECT rowid FROM ` + messageHistoryFTSTable + `)`)
 
 // indexMessageHistoryRow 让某条消息的索引与正表保持一致。
 // AppendMessageEvent 走 upsert，同一条消息会被重复写入，所以先删后插。
-func (s *SQLiteStore) indexMessageHistoryRow(id, sender, userID, text string) {
+func (s *SQLiteStore) indexMessageHistoryRow(id, sender, userID, text, extra string) {
 	if !s.historyFTS {
 		return
 	}
@@ -163,5 +163,5 @@ func (s *SQLiteStore) indexMessageHistoryRow(id, sender, userID, text string) {
 		return
 	}
 	_, _ = s.db.Exec(`INSERT INTO `+messageHistoryFTSTable+`(rowid, search_text) VALUES (?, ?)`,
-		rowID, messageHistoryIndexTokens(sender, userID, text))
+		rowID, messageHistoryIndexTokens(sender, userID, text, extra))
 }
