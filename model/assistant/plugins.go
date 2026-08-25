@@ -247,6 +247,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewRepositoryWatchPlugin(nil),
 		NewRepositoryPublishPlugin(nil),
 		NewRSSWatchPlugin(nil),
+		NewGroupRelationsPlugin(),
 		capabilities,
 	)
 	capabilities.setPluginStateProvider(manager.List)

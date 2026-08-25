@@ -126,6 +126,12 @@ const groups: BotGroupSummary[] = [
 // 都没有，用这张表补上画像里没有的号。
 const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
 
+const demoPersonas = [
+  { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" },
+  { id: "persona-2", name: "技术群管", system_prompt: "你是技术群里那个话不多但每次开口都说到点子上的人。", reply_style: "groupmate", self_reference: "", sentence_enders: "" },
+  { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", reply_style: "concise", self_reference: "", sentence_enders: "" }
+];
+
 const demoUsers: UserMemoryProfile[] = [
   {
     user_id: "100200711", display_name: "青禾", favorability: 62, message_count: 1843, last_seen_at: before(2), updated_at: before(2),
@@ -466,6 +472,52 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       if (name) names[id] = name;
     }
     return json({ names });
+  }
+  if (path === "/api/assistant/personas" && method === "GET") {
+    return json({ personas: demoPersonas, limit: 50 });
+  }
+  if (path === "/api/assistant/personas" && method === "POST") {
+    const persona = { ...(body.persona as Record<string, unknown>) } as (typeof demoPersonas)[number];
+    const index = demoPersonas.findIndex((item) => item.id === persona.id);
+    if (index >= 0) demoPersonas[index] = { ...demoPersonas[index], ...persona };
+    else demoPersonas.unshift({ ...persona, id: `persona-${demoPersonas.length + 1}` });
+    return json({ persona: demoPersonas[index >= 0 ? index : 0], personas: demoPersonas });
+  }
+  if (path === "/api/assistant/personas/import") {
+    const incoming = (body.personas as Array<Record<string, unknown>>) ?? [];
+    let imported = 0;
+    let renamed = 0;
+    let skipped = 0;
+    let dropped = 0;
+    for (const raw of incoming) {
+      const name = String(raw.name ?? "").trim();
+      const persona = {
+        id: `persona-import-${demoPersonas.length + imported + 1}`,
+        name,
+        system_prompt: String(raw.system_prompt ?? ""),
+        reply_style: String(raw.reply_style ?? ""),
+        self_reference: String(raw.self_reference ?? ""),
+        sentence_enders: String(raw.sentence_enders ?? "")
+      };
+      const hasContent = persona.system_prompt || persona.reply_style || persona.self_reference || persona.sentence_enders;
+      if (!name || !hasContent) { dropped++; continue; }
+      const existing = demoPersonas.find((item) => item.name === name);
+      if (existing) {
+        const identical = existing.system_prompt === persona.system_prompt && existing.reply_style === persona.reply_style
+          && existing.self_reference === persona.self_reference && existing.sentence_enders === persona.sentence_enders;
+        if (identical) { skipped++; continue; }
+        persona.name = `${name} (2)`;
+        renamed++;
+      }
+      demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
+      imported++;
+    }
+    return json({ personas: demoPersonas, imported, skipped, renamed, dropped });
+  }
+  if (path === "/api/assistant/personas/delete") {
+    const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
+    if (index >= 0) demoPersonas.splice(index, 1);
+    return json({ personas: demoPersonas });
   }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {

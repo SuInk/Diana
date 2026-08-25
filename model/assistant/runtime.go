@@ -1149,9 +1149,20 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.ReplyStyle != "" {
 		cfg.ReplyStyle = groupCfg.ReplyStyle.Normalized()
 	}
+	// 空串表示这个群不覆盖，沿用机器人级的设置，和 ReplyStyle 同一套语义。
+	if strings.TrimSpace(groupCfg.SelfReference) != "" {
+		cfg.SelfReference = strings.TrimSpace(groupCfg.SelfReference)
+	}
+	if strings.TrimSpace(groupCfg.SentenceEnders) != "" {
+		cfg.SentenceEnders = strings.TrimSpace(groupCfg.SentenceEnders)
+	}
 	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
 	cfg.MaxContextTokens = groupCfg.MaxContextTokens
+	// 群级的历史预算此前只存不用：GroupConfig 里有这个字段、WithDefaults 也从
+	// 机器人配置继承了默认值，却没有一行把它拷回生效配置，于是群组页那个输入框
+	// 填了不生效。
+	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
@@ -2898,9 +2909,23 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaScheduleTool(r, event),
 				newDianaRSSWatchTool(r, event),
 			}
+			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
+			// 无头浏览器。插件停用时模型看不到这个工具。
+			if _, settings, enabled := r.plugins.PluginWithSettings(groupRelationsPluginID, r.pluginOverridesForEvent(event)); enabled {
+				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
+			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
+				}
+			}
+			if pluginValue, watchSettings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, r.pluginOverridesForEvent(event)); enabled {
+				if _, ok := pluginValue.(*RepositoryWatchPlugin); ok {
+					_, publishSettings, _ := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event))
+					managed := repositoryWatchManagedRepositories(event, publishSettings)
+					if relationship.Owner || len(managed) > 0 {
+						extraTools = append(extraTools, newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings))
+					}
 				}
 			}
 			if boolValue(cfg.OwnerLLMConfigEnabled, true) {
@@ -5383,7 +5408,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Message) []llm.Message {
 	cfg := r.effectiveConfigForEvent(event)
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true)) + "\n" + cfg.ReplyStyle.closingAnchor())
+	voice := personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true), voice) + "\n" + cfg.ReplyStyle.closingAnchor())
 	if persona == "" {
 		return messages
 	}
@@ -5439,7 +5465,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		return false
 	}
 	builder.WriteString(cfg.SystemPrompt)
-	appendPromptSection(&builder, cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true)))
+	appendPromptSection(&builder, cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true), personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) {
@@ -5487,6 +5513,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.tasks") {
 		tail.WriteString("\n" + promptTaskList)
+	}
+	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
+		tail.WriteString("\n" + promptTaskRepositoryWatch)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)
@@ -9516,7 +9545,8 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 			Issues: item.WatchIssues, Releases: item.WatchReleases, Stars: item.WatchStars,
 			// 跟评是 diff 唯一的读者。关掉跟评就别拉了，否则每轮白花一次 compare
 			// 加每个 PR 一次 files——这正是当初把 diff 整个摘掉的原因。
-			Diff: r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
+			Diff:              r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
+			PullRequestEvents: item.WatchPullRequestEvents, IssueEvents: item.WatchIssueEvents,
 		},
 		settings,
 	)
@@ -10111,6 +10141,8 @@ func repositoryWatchIssueTimeLabel(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "opened":
 		return "创建于"
+	case "reopened":
+		return "重新打开于"
 	case "closed":
 		return "关闭于"
 	default:
@@ -10122,6 +10154,8 @@ func repositoryWatchIssueTime(issue repositoryWatchIssue) time.Time {
 	switch strings.ToLower(strings.TrimSpace(issue.Status)) {
 	case "opened":
 		return firstNonZeroTime(issue.CreatedAt, issue.UpdatedAt)
+	case "reopened":
+		return firstNonZeroTime(issue.ReopenedAt, issue.UpdatedAt)
 	case "closed":
 		return firstNonZeroTime(issue.ClosedAt, issue.UpdatedAt)
 	default:

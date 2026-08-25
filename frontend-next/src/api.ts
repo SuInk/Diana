@@ -142,6 +142,10 @@ export interface BotProfileConfig {
   system_prompt?: string;
   response_mode?: "quiet" | "standard" | "active" | "custom";
   reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
+  self_reference?: string;
+  /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随表达风格。 */
+  sentence_enders?: string;
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
   /** 回复行为个性化：on 每条都带、off 从不带、auto 交给模型自己判断；缺省等价于 on。 */
@@ -345,6 +349,9 @@ export interface BotGroupConfig {
   response_mode?: "" | "quiet" | "standard" | "active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
   reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  /** 留空时跟随机器人全局设置。 */
+  self_reference?: string;
+  sentence_enders?: string;
   welcome_enabled?: boolean;
   welcome_message?: string;
   max_context_tokens?: number;
@@ -1566,6 +1573,59 @@ export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promis
   return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
 }
 
+export interface Persona {
+  id: string;
+  name: string;
+  system_prompt?: string;
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  self_reference?: string;
+  sentence_enders?: string;
+  updated_at?: string;
+}
+
+export interface PersonaListResponse {
+  personas: Persona[];
+  limit: number;
+}
+
+export function listPersonas(): Promise<PersonaListResponse> {
+  return requestJSON<PersonaListResponse>("/api/assistant/personas");
+}
+
+/** 带 id 是改，不带是新增。返回落库后的那一份和整库。 */
+export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<{ persona: Persona; personas: Persona[] }> {
+  return requestJSON<{ persona: Persona; personas: Persona[] }>("/api/assistant/personas", {
+    method: "POST",
+    body: JSON.stringify({ persona })
+  });
+}
+
+export interface PersonaImportResult {
+  personas: Persona[];
+  imported: number;
+  skipped: number;
+  renamed: number;
+  dropped: number;
+}
+
+/** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */
+export const PERSONA_EXPORT_VERSION = 1;
+
+/** 合并在后端做：一次读改写落一次库，中途失败不会留下「导了一半」的状态。 */
+export function importPersonas(personas: Persona[]): Promise<PersonaImportResult> {
+  return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
+    method: "POST",
+    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, personas })
+  });
+}
+
+export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
+  return requestJSON<{ personas: Persona[] }>("/api/assistant/personas/delete", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
 export interface GlossaryRevision {
   version: number;
   meaning?: string;
@@ -1672,6 +1732,9 @@ export function restoreGlossaryEntry(scope: string, term: string): Promise<Gloss
 }
 
 export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "rss_watch";
+// 空数组表示「全部种类都要」——后端也是这么存的，别把空当成「一条都不要」。
+export type RepositoryWatchPullEvent = "opened" | "updated" | "closed" | "merged";
+export type RepositoryWatchIssueEvent = "opened" | "updated" | "closed" | "reopened";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
 export interface AssistantTask {
@@ -1698,6 +1761,8 @@ export interface AssistantTask {
   repository_branch?: string;
   watch_commits?: boolean;
   watch_pull_requests?: boolean;
+  watch_pull_request_events?: RepositoryWatchPullEvent[];
+  watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues?: boolean;
   watch_releases?: boolean;
   watch_stars?: boolean;
@@ -1736,6 +1801,8 @@ export interface RepositoryWatchInput {
   interval_seconds: number;
   watch_commits: boolean;
   watch_pull_requests: boolean;
+  watch_pull_request_events?: RepositoryWatchPullEvent[];
+  watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues: boolean;
   watch_releases: boolean;
   watch_stars: boolean;
@@ -1809,4 +1876,39 @@ export function deleteRSSWatch(id: string): Promise<void> {
 
 export function getHealth(): Promise<HealthResponse> {
   return requestJSON<HealthResponse>("/api/health");
+}
+
+export interface GroupRelationNode {
+  user_id: string;
+  display_name?: string;
+  messages: number;
+  favorability: number;
+  is_bot?: boolean;
+}
+
+export interface GroupRelationEdge {
+  source: string;
+  target: string;
+  weight: number;
+}
+
+export interface GroupRelationGraph {
+  group_id: string;
+  bot_id?: string;
+  since?: string;
+  messages: number;
+  participants: number;
+  nodes: GroupRelationNode[];
+  edges: GroupRelationEdge[];
+  truncated?: boolean;
+}
+
+export interface GroupRelationResponse {
+  range: AssistantEventRange;
+  graph: GroupRelationGraph;
+}
+
+export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupRelationResponse> {
+  const params = new URLSearchParams({ range });
+  return requestJSON<GroupRelationResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/relations?${params.toString()}`);
 }

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -342,4 +343,72 @@ type fixedMediaSharer struct {
 
 func (s fixedMediaSharer) Share(string, time.Duration) (string, bool) {
 	return s.url, s.url != ""
+}
+
+// TestTaskListCarriesRepositoryWatchStarSettings 盯住列表接口的字段完整性。编辑框是
+// 从列表里读回当前配置的，列表少一个字段，打开就是默认值，再一保存就把真配置覆盖
+// 掉——Star 的通知模式、阈值和里程碑当初就是这么「改了保存不上」的。
+func TestTaskListCarriesRepositoryWatchStarSettings(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "tasks.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Now().Round(time.Second)
+	item := assistant.Reminder{
+		ID: "watch", Kind: assistant.ReminderKindRepositoryWatch, OwnerID: "webui:bot",
+		Repository: "acme/demo", RepositoryBranch: "main", IntervalSeconds: 60, CreatedAt: now,
+		WatchCommits: true, WatchPullRequests: true, WatchIssues: true, WatchReleases: true, WatchStars: true,
+		StarNotifyMode: "milestone", StarNotifyThreshold: 5, StarNotifyMilestones: []int{100, 500, 1000},
+		LastIssueCursor: "2026-08-13T00:00:00Z#7", NotificationEnabled: true,
+	}
+	if err := store.SaveReminders(context.Background(), []assistant.Reminder{item}); err != nil {
+		t.Fatalf("SaveReminders() error = %v", err)
+	}
+
+	handler := restoredControlHandler(&restoredControlChannel{})
+	handler.SetSQLiteStore(store)
+	router := botTestRouter(handler)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/tasks", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload botTasksResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(payload.Items) != 1 {
+		t.Fatalf("tasks = %#v", payload.Items)
+	}
+	got := payload.Items[0]
+	if got.StarNotifyMode != "milestone" || got.StarNotifyThreshold != 5 || !slices.Equal(got.StarNotifyMilestones, []int{100, 500, 1000}) {
+		t.Fatalf("star settings were dropped: mode=%q threshold=%d milestones=%v", got.StarNotifyMode, got.StarNotifyThreshold, got.StarNotifyMilestones)
+	}
+	if !got.WatchIssues || got.LastIssueCursor != "2026-08-13T00:00:00Z#7" {
+		t.Fatalf("issue fields were dropped: %#v", got)
+	}
+}
+
+// TestRepositoryWatchCreateForwardsSelectedEventKinds 确认「只订阅一部分动态」这个
+// 选择能从 WebUI 一路走到 runtime，不会在 payload 里被吃掉。
+func TestRepositoryWatchCreateForwardsSelectedEventKinds(t *testing.T) {
+	base := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := &capturingRepositoryWatchRuntime{Runtime: base}
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	profiles := NewMemoryBotProfileStore(assistant.BotConfig{Platform: assistant.PlatformOneBotV11, Enabled: true})
+	handler.SetProfileStore(profiles)
+	router := botTestRouter(handler)
+	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
+		"repository":"acme/demo","profile_id":%q,"destination":"group","group_id":"123456",
+		"watch_pull_requests":true,"watch_issues":true,
+		"watch_pull_request_events":["opened","merged"],"watch_issue_events":["opened"]
+	}`, profiles.Profiles().ActiveID))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	input := runtime.createInput
+	if !slices.Equal(input.WatchPullRequestEvents, []string{"opened", "merged"}) || !slices.Equal(input.WatchIssueEvents, []string{"opened"}) {
+		t.Fatalf("event kinds were dropped: pull=%v issue=%v", input.WatchPullRequestEvents, input.WatchIssueEvents)
+	}
 }

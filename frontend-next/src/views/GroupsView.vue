@@ -94,10 +94,16 @@
           </p>
           <div class="group-card-foot">
             <span class="muted">{{ group.enabled ? "机器人已启用" : "机器人已停用" }}</span>
-            <button class="btn small" type="button" @click="openEditor(group, group.group_name)">
-              <SlidersHorizontal :size="13" aria-hidden="true" />
-              配置
-            </button>
+            <div class="cluster" style="gap: 8px">
+              <button class="btn small ghost" type="button" @click="openRelations(group, group.group_name)">
+                <Share2 :size="13" aria-hidden="true" />
+                关系图
+              </button>
+              <button class="btn small" type="button" @click="openEditor(group, group.group_name)">
+                <SlidersHorizontal :size="13" aria-hidden="true" />
+                配置
+              </button>
+            </div>
           </div>
         </section>
       </div>
@@ -115,6 +121,31 @@
     </div>
 
     <!-- 群配置编辑弹窗 -->
+    <Modal
+      v-if="relationsGroupID"
+      :title="`${relationsGroupName || `群 ${relationsGroupID}`} · 关系图`"
+      wide
+      @close="closeRelations"
+    >
+      <div class="stack" style="gap: 12px">
+        <div class="segmented" role="radiogroup" aria-label="按时间范围统计关系">
+          <button
+            v-for="option in relationRangeOptions"
+            :key="option.value"
+            type="button"
+            role="radio"
+            :aria-checked="relationsRange === option.value"
+            :class="{ active: relationsRange === option.value }"
+            @click="selectRelationsRange(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+        <p v-if="relationsLoading" class="muted">正在统计…</p>
+        <GroupRelationChart v-else-if="relationsGraph" :graph="relationsGraph" />
+      </div>
+    </Modal>
+
     <Modal v-if="editing" :title="`${editingGroupName || `群 ${editing.group_id}`} · 配置`" wide @close="editing = null">
       <div class="form-grid">
         <div class="field wide">
@@ -280,17 +311,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { botScope } from "../bot-scope";
-import { Plus, RefreshCw, Save, Search, SlidersHorizontal, Users, WifiOff } from "@lucide/vue";
+import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Users, WifiOff } from "@lucide/vue";
 import {
   getBotProfileConfig,
   getBotPlatforms,
   listBotGroups,
   saveBotGroup,
+  getGroupRelations,
   type PluginState,
   type BotGroupConfig,
-  type BotGroupSummary
+  type BotGroupSummary,
+  type AssistantEventRange,
+  type GroupRelationGraph
 } from "../api";
 import EmptyState from "../components/EmptyState.vue";
+import GroupRelationChart from "../components/GroupRelationChart.vue";
 import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
@@ -333,6 +368,53 @@ const liveAvailable = ref(false);
 const syncWarning = ref("");
 const searchQuery = ref("");
 const newGroupID = ref("");
+const relationRangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
+  { value: "24h", label: "24h" },
+  { value: "7d", label: "7d" },
+  { value: "30d", label: "30d" },
+  { value: "all", label: "全部" }
+];
+const relationsGroupID = ref("");
+const relationsGroupName = ref("");
+const relationsRange = ref<AssistantEventRange>("7d");
+const relationsGraph = ref<GroupRelationGraph | null>(null);
+const relationsLoading = ref(false);
+
+function openRelations(group: BotGroupConfig, groupName = ""): void {
+  relationsGroupID.value = group.group_id;
+  relationsGroupName.value = groupName;
+  relationsGraph.value = null;
+  void loadRelations();
+}
+
+function closeRelations(): void {
+  relationsGroupID.value = "";
+  relationsGraph.value = null;
+}
+
+function selectRelationsRange(value: AssistantEventRange): void {
+  if (relationsRange.value === value) return;
+  relationsRange.value = value;
+  relationsGraph.value = null;
+  void loadRelations();
+}
+
+async function loadRelations(): Promise<void> {
+  const groupID = relationsGroupID.value;
+  if (!groupID) return;
+  relationsLoading.value = true;
+  try {
+    const response = await getGroupRelations(groupID, relationsRange.value);
+    // 期间可能已经关掉弹窗或换了群，回来的结果不该覆盖当前状态。
+    if (relationsGroupID.value !== groupID) return;
+    relationsGraph.value = response.graph;
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "关系图加载失败");
+  } finally {
+    relationsLoading.value = false;
+  }
+}
+
 const editing = ref<BotGroupConfig | null>(null);
 const editingGroupName = ref("");
 const triggersDraft = ref("");

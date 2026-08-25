@@ -83,6 +83,8 @@ type repositoryWatchCreatePayload struct {
 	IntervalSeconds      int64                          `json:"interval_seconds"`
 	WatchCommits         bool                           `json:"watch_commits"`
 	WatchPullRequests    bool                           `json:"watch_pull_requests"`
+	PullRequestEvents    []string                       `json:"watch_pull_request_events,omitempty"`
+	IssueEvents          []string                       `json:"watch_issue_events,omitempty"`
 	WatchIssues          bool                           `json:"watch_issues"`
 	WatchReleases        bool                           `json:"watch_releases"`
 	WatchStars           bool                           `json:"watch_stars"`
@@ -109,6 +111,8 @@ type repositoryWatchUpdatePayload struct {
 	IntervalSeconds      int64                          `json:"interval_seconds,omitempty"`
 	WatchCommits         *bool                          `json:"watch_commits,omitempty"`
 	WatchPullRequests    *bool                          `json:"watch_pull_requests,omitempty"`
+	PullRequestEvents    []string                       `json:"watch_pull_request_events,omitempty"`
+	IssueEvents          []string                       `json:"watch_issue_events,omitempty"`
 	WatchIssues          *bool                          `json:"watch_issues,omitempty"`
 	WatchReleases        *bool                          `json:"watch_releases,omitempty"`
 	WatchStars           *bool                          `json:"watch_stars,omitempty"`
@@ -163,6 +167,8 @@ type botTaskPayload struct {
 	RepositoryBranch      string                             `json:"repository_branch,omitempty"`
 	WatchCommits          bool                               `json:"watch_commits,omitempty"`
 	WatchPullRequests     bool                               `json:"watch_pull_requests,omitempty"`
+	PullRequestEvents     []string                           `json:"watch_pull_request_events,omitempty"`
+	IssueEvents           []string                           `json:"watch_issue_events,omitempty"`
 	WatchIssues           bool                               `json:"watch_issues,omitempty"`
 	WatchReleases         bool                               `json:"watch_releases,omitempty"`
 	WatchStars            bool                               `json:"watch_stars,omitempty"`
@@ -411,47 +417,12 @@ func (h *BotHandler) listTasks(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "assistant.tasks.list", err, "", nil)
 		return
 	}
+	// 列表和单条详情必须走同一个映射：手抄两份的结果是列表悄悄漏字段——Star 的
+	// 通知模式、阈值和里程碑就是这么丢的，编辑框读列表，一打开全是默认值，再一保存
+	// 把真配置覆盖掉。
 	out := make([]botTaskPayload, 0, len(items))
 	for _, item := range items {
-		out = append(out, botTaskPayload{
-			ID:                    item.ID,
-			Kind:                  botTaskKind(item),
-			Platform:              item.Platform,
-			ProfileID:             item.ProfileID,
-			OwnerID:               item.OwnerID,
-			GroupID:               item.GroupID,
-			UserID:                item.UserID,
-			Message:               item.Message,
-			Status:                botTaskStatus(item),
-			TriggerAt:             item.TriggerAt,
-			IntervalSeconds:       item.IntervalSeconds,
-			LastRunAt:             item.LastRunAt,
-			CancelledAt:           item.CancelledAt,
-			LastError:             item.LastError,
-			ConsecutiveFailures:   item.ConsecutiveFailures,
-			PendingDelivery:       strings.TrimSpace(item.PendingDelivery) != "",
-			PendingSince:          item.PendingSince,
-			Repository:            item.Repository,
-			RepositoryBranch:      item.RepositoryBranch,
-			WatchCommits:          item.WatchCommits,
-			WatchPullRequests:     item.WatchPullRequests,
-			WatchIssues:           item.WatchIssues,
-			WatchReleases:         item.WatchReleases,
-			WatchStars:            item.WatchStars,
-			LastCommitSHA:         item.LastCommitSHA,
-			LastPullRequestCursor: item.LastPullRequestCursor,
-			LastIssueCursor:       item.LastIssueCursor,
-			LastReleaseTag:        item.LastReleaseTag,
-			LastStarCount:         item.LastStarCount,
-			FeedURL:               item.FeedURL,
-			FeedSource:            item.FeedSource,
-			FeedHandle:            item.FeedHandle,
-			FeedJudgePrompt:       item.FeedJudgePrompt,
-			LastFeedItemID:        item.LastFeedItemID,
-			LastFeedPublishedAt:   item.LastFeedPublishedAt,
-			CreatedAt:             item.CreatedAt,
-			ConsumesQuota:         taskConsumesQuota(item),
-		})
+		out = append(out, botTaskFromReminder(item))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
@@ -510,6 +481,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		Repository: payload.Repository, Branch: payload.Branch, Interval: interval,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
 		ContextNamespace:    repositoryWatchContextNamespace(set, profile.ID),
@@ -545,6 +517,7 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		Repository: payload.Repository, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 	}
 	if deliveryRequested {
@@ -858,10 +831,12 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 		ConsecutiveFailures: item.ConsecutiveFailures, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != "",
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
 		WatchCommits: item.WatchCommits, WatchPullRequests: item.WatchPullRequests,
-		WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
-		StarNotifyMode: item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
+		WatchIssues: item.WatchIssues, WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
+		PullRequestEvents: append([]string(nil), item.WatchPullRequestEvents...),
+		IssueEvents:       append([]string(nil), item.WatchIssueEvents...),
+		StarNotifyMode:    item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
 		LastCommitSHA: item.LastCommitSHA, LastPullRequestCursor: item.LastPullRequestCursor,
-		LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
+		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
 		FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,

@@ -196,20 +196,23 @@ type Reminder struct {
 	RepositoryBranch        string       `json:"repository_branch,omitempty"`
 	WatchCommits            bool         `json:"watch_commits,omitempty"`
 	WatchPullRequests       bool         `json:"watch_pull_requests,omitempty"`
-	WatchIssues             bool         `json:"watch_issues,omitempty"`
-	WatchReleases           bool         `json:"watch_releases,omitempty"`
-	WatchStars              bool         `json:"watch_stars,omitempty"`
-	StarNotifyMode          string       `json:"star_notify_mode,omitempty"`
-	StarNotifyThreshold     int          `json:"star_notify_threshold,omitempty"`
-	StarNotifyMilestones    []int        `json:"star_notify_milestones,omitempty"`
-	LastCommitSHA           string       `json:"last_commit_sha,omitempty"`
-	LastPullRequestCursor   string       `json:"last_pull_request_cursor,omitempty"`
-	LastIssueCursor         string       `json:"last_issue_cursor,omitempty"`
-	LastReleaseTag          string       `json:"last_release_tag,omitempty"`
-	LastStarCount           int          `json:"last_star_count,omitempty"`
-	LastNotifiedStarCount   int          `json:"last_notified_star_count,omitempty"`
-	LastStarEventID         string       `json:"last_star_event_id,omitempty"`
-	LastStarEventAt         time.Time    `json:"last_star_event_at,omitempty"`
+	// WatchPullRequestEvents / WatchIssueEvents 是只想收的动态种类，空表示全要。
+	WatchPullRequestEvents []string  `json:"watch_pull_request_events,omitempty"`
+	WatchIssueEvents       []string  `json:"watch_issue_events,omitempty"`
+	WatchIssues            bool      `json:"watch_issues,omitempty"`
+	WatchReleases          bool      `json:"watch_releases,omitempty"`
+	WatchStars             bool      `json:"watch_stars,omitempty"`
+	StarNotifyMode         string    `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold    int       `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones   []int     `json:"star_notify_milestones,omitempty"`
+	LastCommitSHA          string    `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor  string    `json:"last_pull_request_cursor,omitempty"`
+	LastIssueCursor        string    `json:"last_issue_cursor,omitempty"`
+	LastReleaseTag         string    `json:"last_release_tag,omitempty"`
+	LastStarCount          int       `json:"last_star_count,omitempty"`
+	LastNotifiedStarCount  int       `json:"last_notified_star_count,omitempty"`
+	LastStarEventID        string    `json:"last_star_event_id,omitempty"`
+	LastStarEventAt        time.Time `json:"last_star_event_at,omitempty"`
 	// WatchAnchorsJSON 记录每个投递目标里各 PR/Issue 首次宣布消息的 ID,
 	// 后续同一编号的更新推送引用它,把动态串成一条线。
 	WatchAnchorsJSON    string    `json:"watch_anchors,omitempty"`
@@ -323,6 +326,8 @@ type BotConfig struct {
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
+	SelfReference                string               `json:"self_reference,omitempty"`
+	SentenceEnders               string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
@@ -474,6 +479,8 @@ type GroupConfig struct {
 	SystemPrompt                 string                 `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode           `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle             `json:"reply_style,omitempty"`
+	SelfReference                string                 `json:"self_reference,omitempty"`
+	SentenceEnders               string                 `json:"sentence_enders,omitempty"`
 	WelcomeEnabled               bool                   `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string                 `json:"welcome_message,omitempty"`
 	MaxContextTokens             int64                  `json:"max_context_tokens,omitempty"`
@@ -536,6 +543,8 @@ type ConfigPayload struct {
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
+	SelfReference                string               `json:"self_reference,omitempty"`
+	SentenceEnders               string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
@@ -653,6 +662,8 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if strings.TrimSpace(string(cfg.ReplyStyle)) != "" {
 		cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
 	}
+	cfg.SelfReference = strings.TrimSpace(cfg.SelfReference)
+	cfg.SentenceEnders = strings.TrimSpace(cfg.SentenceEnders)
 	if !cfg.EnabledSet {
 		cfg.Enabled = true
 		cfg.EnabledSet = true
@@ -1098,6 +1109,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ResponseMode = ResponseModeCustom
 	}
 	cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
+	cfg.SelfReference = strings.TrimSpace(cfg.SelfReference)
+	cfg.SentenceEnders = strings.TrimSpace(cfg.SentenceEnders)
 	if strings.TrimSpace(cfg.PromptChineseSlangText) == "" {
 		cfg.PromptChineseSlangText = defaults.PromptChineseSlangText
 	}
@@ -1350,6 +1363,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SystemPrompt:                   cfg.SystemPrompt,
 		ResponseMode:                   cfg.ResponseMode,
 		ReplyStyle:                     cfg.ReplyStyle,
+		SelfReference:                  cfg.SelfReference,
+		SentenceEnders:                 cfg.SentenceEnders,
 		DebugModeEnabled:               cfg.DebugModeEnabled,
 		ReplyReferenceMode:             cfg.ReplyReferenceMode,
 		MentionUserMode:                cfg.MentionUserMode,
@@ -1485,6 +1500,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SystemPrompt:                   payload.SystemPrompt,
 		ResponseMode:                   payload.ResponseMode,
 		ReplyStyle:                     payload.ReplyStyle,
+		SelfReference:                  payload.SelfReference,
+		SentenceEnders:                 payload.SentenceEnders,
 		DebugModeEnabled:               payload.DebugModeEnabled,
 		ReplyReferenceMode:             payload.ReplyReferenceMode,
 		MentionUserMode:                payload.MentionUserMode,
