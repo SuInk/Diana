@@ -187,8 +187,6 @@ export interface BotProfileConfig {
   natural_reply_split_enabled?: boolean;
   /** 最多分几条；分出来超过它就退回粗一档，退到底就整条发。 */
   reply_max_bubbles?: number;
-  /** 超过多少字的段落按句号分条，一句一条；短的不动。 */
-  reply_sentence_split_size?: number;
   direct_reply_chunk_size?: number;
   /** 正文超过多少字改用合并转发卡片。 */
   forward_reply_threshold?: number;

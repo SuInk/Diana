@@ -142,11 +142,6 @@ func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
 			t.Fatalf("短回复被拆开了：%#v", chunks)
 		}
 	}
-	// 起始长度可以调：调到 20 之后同一条短回复就该分开。
-	limits := (chatSplitLimits{SentenceSize: 20}).withDefaults()
-	if chunks := splitChatReply("端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。", limits); len(chunks) != 2 {
-		t.Fatalf("调小起始长度后没有分条：%#v", chunks)
-	}
 }
 
 // 成块的内容（清单、步骤、代码、引用的诗文）整块发，折了行的半句话跟着上一行走。

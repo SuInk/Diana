@@ -343,7 +343,7 @@
                 </label>
                 <span class="hint">
                   按模型排的换行、以及句号边界，把一条回复分成几条发，像真人连发那样。
-                  关掉后只认模型显式写的分条标记，换行和句号都只当排版——下面两项随之失效，
+                  关掉后只认模型显式写的分条标记，换行和句号都只当排版——下面的「最多分几条」随之失效，
                   「分段发送长度」和「合并转发」不受影响。
                 </span>
               </div>
@@ -353,14 +353,6 @@
                 <span class="hint">
                   分出来不超过它就照分；超过就退回粗一档（先不按句号、再不按换行），退到底整条发。
                   再长的交给下面的合并转发。留空按 5。
-                </span>
-              </div>
-              <div class="field">
-                <label for="bot-sentence">按句号分条起始长度</label>
-                <input id="bot-sentence" :disabled="!form.natural_reply_split_enabled" v-model.number="form.reply_sentence_split_size" class="input" inputmode="numeric" placeholder="60" />
-                <span class="hint">
-                  超过这个字数、又没有换行的段落，按句号一句一条分开发。
-                  短的不动——两句话的短回复本来就是一条消息。留空按 60。
                 </span>
               </div>
               <div class="field">
