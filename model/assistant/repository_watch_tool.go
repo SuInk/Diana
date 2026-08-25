@@ -59,6 +59,45 @@ const (
 	maximumStarMilestones      = 100
 )
 
+// PR 和 Issue 各自的动态种类。订阅时可以只挑其中几种：一个只关心「合并了什么」
+// 的群，不需要每条评论都被顶一次。空集合表示全要——老订阅没有这个字段，不能因为
+// 加了开关就把它们静音。
+var (
+	repositoryWatchPullEventKinds  = []string{"opened", "updated", "closed", "merged"}
+	repositoryWatchIssueEventKinds = []string{"opened", "updated", "closed", "reopened"}
+)
+
+func normalizeRepositoryWatchEvents(values []string, allowed []string, label string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if !slices.Contains(allowed, value) {
+			return nil, fmt.Errorf("%s动态种类只能是 %s", label, strings.Join(allowed, "、"))
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) == 0 || len(out) == len(allowed) {
+		// 全选和没选过都存成空：回显时是同一句「全部」，也省掉一次无谓的迁移。
+		return nil, nil
+	}
+	// 按固定顺序存，回显和比较都不受用户勾选顺序影响。
+	sorted := make([]string, 0, len(out))
+	for _, kind := range allowed {
+		if slices.Contains(out, kind) {
+			sorted = append(sorted, kind)
+		}
+	}
+	return sorted, nil
+}
+
 func normalizeStarNotifyMode(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
@@ -101,48 +140,52 @@ func normalizeStarNotifyMilestones(values []int) ([]int, error) {
 }
 
 type RepositoryWatchCreateInput struct {
-	Repository           string
-	Branch               string
-	Interval             time.Duration
-	WatchCommits         bool
-	WatchPullRequests    bool
-	WatchIssues          bool
-	WatchReleases        bool
-	WatchStars           bool
-	StarNotifyMode       string
-	StarNotifyThreshold  int
-	StarNotifyMilestones []int
-	Platform             string
-	ProfileID            string
-	ContextNamespace     string
-	OwnerID              string
-	GroupID              string
-	UserID               string
-	NotificationEnabled  bool
-	NotificationTargets  []ReminderDeliveryTarget
+	Repository             string
+	Branch                 string
+	Interval               time.Duration
+	WatchCommits           bool
+	WatchPullRequests      bool
+	WatchPullRequestEvents []string
+	WatchIssueEvents       []string
+	WatchIssues            bool
+	WatchReleases          bool
+	WatchStars             bool
+	StarNotifyMode         string
+	StarNotifyThreshold    int
+	StarNotifyMilestones   []int
+	Platform               string
+	ProfileID              string
+	ContextNamespace       string
+	OwnerID                string
+	GroupID                string
+	UserID                 string
+	NotificationEnabled    bool
+	NotificationTargets    []ReminderDeliveryTarget
 }
 
 type RepositoryWatchUpdateInput struct {
-	Repository           string
-	Branch               *string
-	Interval             time.Duration
-	WatchCommits         *bool
-	WatchPullRequests    *bool
-	WatchIssues          *bool
-	WatchReleases        *bool
-	WatchStars           *bool
-	StarNotifyMode       *string
-	StarNotifyThreshold  *int
-	StarNotifyMilestones []int
-	Delivery             bool
-	Platform             string
-	ProfileID            string
-	ContextNamespace     string
-	OwnerID              string
-	GroupID              string
-	UserID               string
-	NotificationEnabled  *bool
-	NotificationTargets  []ReminderDeliveryTarget
+	Repository             string
+	Branch                 *string
+	Interval               time.Duration
+	WatchCommits           *bool
+	WatchPullRequests      *bool
+	WatchPullRequestEvents []string
+	WatchIssueEvents       []string
+	WatchIssues            *bool
+	WatchReleases          *bool
+	WatchStars             *bool
+	StarNotifyMode         *string
+	StarNotifyThreshold    *int
+	StarNotifyMilestones   []int
+	Delivery               bool
+	Platform               string
+	ProfileID              string
+	ContextNamespace       string
+	OwnerID                string
+	GroupID                string
+	UserID                 string
+	NotificationEnabled    *bool
+	NotificationTargets    []ReminderDeliveryTarget
 }
 
 func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWatchCreateInput) (Reminder, error) {
@@ -200,7 +243,19 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	if interval > maximumScheduleInterval {
 		return Reminder{}, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
 	}
-	selection := repositoryWatchSelection{Commits: input.WatchCommits, PullRequests: input.WatchPullRequests, Issues: input.WatchIssues, Releases: input.WatchReleases, Stars: input.WatchStars}
+	pullEvents, err := normalizeRepositoryWatchEvents(input.WatchPullRequestEvents, repositoryWatchPullEventKinds, "PR ")
+	if err != nil {
+		return Reminder{}, err
+	}
+	issueEvents, err := normalizeRepositoryWatchEvents(input.WatchIssueEvents, repositoryWatchIssueEventKinds, "Issue ")
+	if err != nil {
+		return Reminder{}, err
+	}
+	selection := repositoryWatchSelection{
+		Commits: input.WatchCommits, PullRequests: input.WatchPullRequests, Issues: input.WatchIssues,
+		Releases: input.WatchReleases, Stars: input.WatchStars,
+		PullRequestEvents: pullEvents, IssueEvents: issueEvents,
+	}
 	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
 		return Reminder{}, fmt.Errorf("Commit、PR、Issue、Release 和 Star 至少启用一项")
 	}
@@ -292,6 +347,12 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	}
 	if input.WatchPullRequests != nil {
 		values["watch_pull_requests"] = *input.WatchPullRequests
+	}
+	if input.WatchPullRequestEvents != nil {
+		values["watch_pull_request_events"] = input.WatchPullRequestEvents
+	}
+	if input.WatchIssueEvents != nil {
+		values["watch_issue_events"] = input.WatchIssueEvents
 	}
 	if input.WatchIssues != nil {
 		values["watch_issues"] = *input.WatchIssues
@@ -393,6 +454,8 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		RepositoryBranch:        branch,
 		WatchCommits:            selection.Commits,
 		WatchPullRequests:       selection.PullRequests,
+		WatchPullRequestEvents:  append([]string(nil), selection.PullRequestEvents...),
+		WatchIssueEvents:        append([]string(nil), selection.IssueEvents...),
 		WatchIssues:             selection.Issues,
 		WatchReleases:           selection.Releases,
 		WatchStars:              selection.Stars,
@@ -511,12 +574,36 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	selection := repositoryWatchSelection{
 		Commits: current.WatchCommits, PullRequests: current.WatchPullRequests,
 		Issues: current.WatchIssues, Releases: current.WatchReleases, Stars: current.WatchStars,
+		PullRequestEvents: append([]string(nil), current.WatchPullRequestEvents...),
+		IssueEvents:       append([]string(nil), current.WatchIssueEvents...),
 	}
 	if value, present := input["watch_commits"].(bool); present {
 		selection.Commits = value
 	}
 	if value, present := input["watch_pull_requests"].(bool); present {
 		selection.PullRequests = value
+	}
+	if value, present := input["watch_pull_request_events"]; present {
+		raw, ok := value.([]string)
+		if !ok {
+			return Reminder{}, fmt.Errorf("PR 动态种类格式无效")
+		}
+		parsed, parseErr := normalizeRepositoryWatchEvents(raw, repositoryWatchPullEventKinds, "PR ")
+		if parseErr != nil {
+			return Reminder{}, parseErr
+		}
+		selection.PullRequestEvents = parsed
+	}
+	if value, present := input["watch_issue_events"]; present {
+		raw, ok := value.([]string)
+		if !ok {
+			return Reminder{}, fmt.Errorf("Issue 动态种类格式无效")
+		}
+		parsed, parseErr := normalizeRepositoryWatchEvents(raw, repositoryWatchIssueEventKinds, "Issue ")
+		if parseErr != nil {
+			return Reminder{}, parseErr
+		}
+		selection.IssueEvents = parsed
 	}
 	if value, present := input["watch_issues"].(bool); present {
 		selection.Issues = value
@@ -615,6 +702,8 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		item.RepositoryBranch = branch
 		item.WatchCommits = selection.Commits
 		item.WatchPullRequests = selection.PullRequests
+		item.WatchPullRequestEvents = append([]string(nil), selection.PullRequestEvents...)
+		item.WatchIssueEvents = append([]string(nil), selection.IssueEvents...)
 		item.WatchIssues = selection.Issues
 		item.WatchReleases = selection.Releases
 		item.WatchStars = selection.Stars
@@ -674,6 +763,23 @@ func (r *Runtime) repositoryWatch(ownerID, id string) (Reminder, error) {
 		}
 	}
 	return Reminder{}, fmt.Errorf("没有找到属于目标用户的仓库更新订阅 %s", id)
+}
+
+// repositoryWatchItems 返回全部仓库订阅，不按 owner 过滤：聊天里改订阅是按仓库
+// 的管理权限判断的，调用方拿到之后自己筛。
+func (r *Runtime) repositoryWatchItems() []Reminder {
+	if r.reminders == nil {
+		return nil
+	}
+	r.reminderMu.Lock()
+	defer r.reminderMu.Unlock()
+	var out []Reminder
+	for _, item := range r.reminders.Reminders() {
+		if reminderIsRepositoryWatch(item) {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func (r *Runtime) mutateRepositoryWatch(ownerID, id string, mutate func(*Reminder) error) (Reminder, error) {

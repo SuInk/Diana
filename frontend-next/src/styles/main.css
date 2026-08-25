@@ -4319,6 +4319,11 @@ a.nav-action {
   margin-top: 10px;
 }
 
+/* 监控内容底下的 Star 设置：不给间距的话标题会贴着上面那排勾选框。 */
+.repository-watch-star-field {
+  margin-top: 12px;
+}
+
 .task-meta,
 .task-facts {
   display: flex;
