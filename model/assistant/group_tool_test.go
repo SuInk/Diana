@@ -167,7 +167,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithOneBotGroupTool(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "群里现在有 3 个人。" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
+	if reply != "群里现在有 3 个人" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	if calls := channel.callsSnapshot(); len(calls) != 1 || calls[0].action != "get_group_member_list" {

@@ -1912,7 +1912,7 @@ func TestRuntimeModelDiscussionNeverMutatesLLMConfigBeforeReply(t *testing.T) {
 			if err != nil {
 				t.Fatalf("replyTo() error = %v", err)
 			}
-			if reply != provider.reply || len(channel.sentSnapshot()) != 1 {
+			if reply != trimChatTrailingPeriod(provider.reply) || len(channel.sentSnapshot()) != 1 {
 				t.Fatalf("reply=%q sent=%#v", reply, channel.sentSnapshot())
 			}
 			if got := provider.requestSnapshot(); len(got.Messages) == 0 {
@@ -2045,7 +2045,7 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 			}
 		}
 	}
-	if reply != "[CQ:at,qq=10002] [CQ:at,qq=10008] 请尽快确认这件事。" {
+	if reply != "[CQ:at,qq=10002] [CQ:at,qq=10008] 请尽快确认这件事" {
 		t.Fatalf("reply = %q", reply)
 	}
 }
@@ -2278,7 +2278,7 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	if reply != "这是一张测试图片。" || len(channel.sent) != 1 {
+	if reply != "这是一张测试图片" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imageBody)
@@ -2323,7 +2323,7 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "三张图片都已读取。" || len(provider.requests) != 2 {
+	if reply != "三张图片都已读取" || len(provider.requests) != 2 {
 		t.Fatalf("reply=%q requests=%d", reply, len(provider.requests))
 	}
 	firstRequest := provider.requests[0]
@@ -2487,7 +2487,7 @@ func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	if reply != "看起来是拍摄角度和光线让表情显得没那么明显。" || len(channel.sent) != 1 {
+	if reply != "看起来是拍摄角度和光线让表情显得没那么明显" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	if len(provider.requests) != 5 || !requestHasImageURL(provider.requests[3], imageURL) {
@@ -2877,7 +2877,7 @@ func TestRuntimeRepliesWhenImageFulfillsRecentBotRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "看到了，截图里的 QQ 版本是 9.9.31。" || len(channel.sent) != 1 {
+	if reply != "看到了，截图里的 QQ 版本是 9.9.31" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	if len(provider.requests) != 4 || !requestHasAnyImage(provider.requests[0]) || !strings.Contains(provider.requests[1].Messages[1].Content, `"current_images":1`) || !requestHasAnyImage(provider.requests[2]) {
@@ -2950,7 +2950,7 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 		return len(channel.sentSnapshot()) == 1
 	})
 	sent := channel.sentSnapshot()
-	if sent[0].Text != "我也插一句。" {
+	if sent[0].Text != "我也插一句" {
 		t.Fatalf("sent = %#v", sent)
 	}
 	attemptsMu.Lock()
@@ -3662,7 +3662,7 @@ func TestRuntimeImageGenerationCommandSendsImage(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool {
 		return runtime.activeSubagentTaskCount() == 0
 	})
-	if reply != "好，我先陪你聊着，图片生成后会自动发来。" || gotModel != "gpt-image-2" {
+	if reply != "好，我先陪你聊着，图片生成后会自动发来" || gotModel != "gpt-image-2" {
 		t.Fatalf("reply=%q model=%q", reply, gotModel)
 	}
 	if len(channel.sent) != 2 || !outgoingMessagesContainTextOnly(channel.sent, reply) || !outgoingMessagesContainImage(channel.sent, sharer.url) {
@@ -3762,7 +3762,7 @@ func TestRuntimeImageGenerationRepliesWhileImageRunsInBackground(t *testing.T) {
 	if runtime.activeSubagentTaskCount() != 1 {
 		t.Fatalf("active tasks = %d", runtime.activeSubagentTaskCount())
 	}
-	if result.reply != "我先把构思发给你：画面会用醒目的几何构图，成图稍后自动跟上。" {
+	if result.reply != "我先把构思发给你：画面会用醒目的几何构图，成图稍后自动跟上" {
 		t.Fatalf("reply = %q", result.reply)
 	}
 	if len(channel.sent) != 1 || channel.sent[0].Text != result.reply || len(channel.sent[0].ImageURLs) != 0 {
@@ -3841,7 +3841,7 @@ func TestRuntimeProactiveImageGenerationSendsImage(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool {
 		return runtime.activeSubagentTaskCount() == 0
 	})
-	if reply != "这个画面挺有意思，我先回你，图好了会接着发。" || !strings.Contains(gotPrompt, "番茄在街机厅玩 maimaiDX") {
+	if reply != "这个画面挺有意思，我先回你，图好了会接着发" || !strings.Contains(gotPrompt, "番茄在街机厅玩 maimaiDX") {
 		t.Fatalf("reply=%q prompt=%q", reply, gotPrompt)
 	}
 	if len(channel.sent) != 2 || !outgoingMessagesContainTextOnly(channel.sent, reply) || !outgoingMessagesContainImage(channel.sent, sharer.url) {
@@ -3933,7 +3933,7 @@ func TestRuntimeImageEditCommandUsesRecentImageAndSendsImage(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool {
 		return runtime.activeSubagentTaskCount() == 0
 	})
-	if reply != "收到，我先回你，编辑后的图片稍后补上。" || gotPath != "/v1/images/edits" || !strings.Contains(gotPrompt, "肤色再深一点") || gotImage != "hello" {
+	if reply != "收到，我先回你，编辑后的图片稍后补上" || gotPath != "/v1/images/edits" || !strings.Contains(gotPrompt, "肤色再深一点") || gotImage != "hello" {
 		t.Fatalf("reply=%q path=%q prompt=%q image=%q", reply, gotPath, gotPrompt, gotImage)
 	}
 	if len(channel.sent) != 2 || !outgoingMessagesContainTextOnly(channel.sent, reply) || !outgoingMessagesContainImage(channel.sent, sharer.url) {

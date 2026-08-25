@@ -354,6 +354,7 @@ type BotConfig struct {
 	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	ReplyBubbleTargetSize        int             `json:"reply_bubble_target_size,omitempty"`
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
@@ -564,6 +565,7 @@ type ConfigPayload struct {
 	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	ReplyBubbleTargetSize        int             `json:"reply_bubble_target_size,omitempty"`
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
@@ -1017,6 +1019,7 @@ func DefaultBotConfig() BotConfig {
 		NaturalInterjectionEnabled:     boolPointer(false),
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
+		ReplyBubbleTargetSize:          replyBubbleTargetRunes,
 		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
 		RecallReplyMode:                RecallReplyModeLLMSummary,
@@ -1165,6 +1168,14 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.DirectReplyChunkSize <= 0 {
 		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
+	}
+	if cfg.ReplyBubbleTargetSize <= 0 {
+		cfg.ReplyBubbleTargetSize = defaults.ReplyBubbleTargetSize
+	}
+	// 自然分条长度是「读着舒服」，硬上限是「最多能有多长」；前者高过后者时它就没有
+	// 意义了（先撞上硬上限，永远轮不到它），压回去比留个不生效的数字清楚。
+	if cfg.ReplyBubbleTargetSize > cfg.DirectReplyChunkSize {
+		cfg.ReplyBubbleTargetSize = cfg.DirectReplyChunkSize
 	}
 	if cfg.ForwardReplyThreshold <= 0 {
 		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
@@ -1362,6 +1373,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ProactiveReplyPrompt:           cfg.ProactiveReplyPrompt,
 		MaxInputChars:                  cfg.MaxInputChars,
 		MaxReplyChars:                  cfg.MaxReplyChars,
+		ReplyBubbleTargetSize:          cfg.ReplyBubbleTargetSize,
 		DirectReplyChunkSize:           cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:          cfg.ForwardReplyThreshold,
 		RecallReplyMode:                cfg.RecallReplyMode,
@@ -1494,6 +1506,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ProactiveReplyPrompt:           payload.ProactiveReplyPrompt,
 		MaxInputChars:                  payload.MaxInputChars,
 		MaxReplyChars:                  payload.MaxReplyChars,
+		ReplyBubbleTargetSize:          payload.ReplyBubbleTargetSize,
 		DirectReplyChunkSize:           payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:          payload.ForwardReplyThreshold,
 		RecallReplyMode:                payload.RecallReplyMode,

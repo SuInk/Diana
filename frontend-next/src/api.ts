@@ -183,6 +183,8 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
+  /** 一条消息读着舒服的长度；超过就在句子边界另起一条。不是硬上限，硬上限是 direct_reply_chunk_size。 */
+  reply_bubble_target_size?: number;
   direct_reply_chunk_size?: number;
   forward_reply_threshold?: number;
   recall_reply_auto_delete_enabled?: boolean;

@@ -60,7 +60,7 @@ func TestLegacySplitMarkerStillSplitsAndNeverLeaks(t *testing.T) {
 // 群里看到的那条「释义一行、常见翻译一行」就该是两条。
 func TestChatReplySplitsShortRepliesOnNaturalLines(t *testing.T) {
 	reply := "assertiveness：坚定自信、敢于明确表达自身需求和立场，同时也尊重他人的能力\n常译为「坚定表达」「自信果断」；它介于 passive（消极退让）和 aggressive（咄咄逼人）之间"
-	chunks := splitChatReply(reply, chatReplyChunkSize)
+	chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes)
 	if len(chunks) != 2 {
 		t.Fatalf("两行回复没有分成两条：%#v", chunks)
 	}
@@ -84,7 +84,7 @@ func TestChatReplyKeepsBlocksTogether(t *testing.T) {
 		{"单行", "端口被占了，先 lsof -i:8080 看看"},
 	}
 	for _, item := range cases {
-		if chunks := splitChatReply(item.reply, chatReplyChunkSize); len(chunks) != 1 {
+		if chunks := splitChatReply(item.reply, chatReplyChunkSize, replyBubbleTargetRunes); len(chunks) != 1 {
 			t.Fatalf("%s 被拆开了：%#v", item.name, chunks)
 		}
 	}
@@ -117,18 +117,20 @@ func promptTeachesSegmentation(prompt string) bool {
 // 都还押在模型的配合上；这一层不依赖任何信号——句号本来就是它自己写出来的边界。
 func TestChatReplyBubblesLongParagraphAtSentenceBoundaries(t *testing.T) {
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
-	chunks := splitChatReply(reply, chatReplyChunkSize)
+	chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes)
 	if len(chunks) < 2 || len(chunks) > replyMaxSentenceBubbles {
 		t.Fatalf("长段落没有分成两三条：%#v", chunks)
 	}
+	// 每条都得是完整句子收尾，不能像长度兜底那样劈在半句上。句号会被 trimChatTrailingPeriod
+	// 去掉，所以补回来再比——问号感叹号是语气，本来就留着。
 	for _, chunk := range chunks {
-		// 每条都必须是完整句子收尾，不能像长度兜底那样劈在半句上。
 		runes := []rune(chunk)
-		if !isSentenceEnd(runes[len(runes)-1]) {
+		if !isSentenceEnd(runes[len(runes)-1]) && !strings.Contains(reply, chunk+"。") {
 			t.Fatalf("这一条断在半句话上：%q", chunk)
 		}
 	}
-	if strings.Join(chunks, "") != reply {
+	// 除了被去掉的句号，内容一个字都不能丢。
+	if strings.ReplaceAll(strings.Join(chunks, ""), "。", "") != strings.ReplaceAll(reply, "。", "") {
 		t.Fatalf("分条前后内容对不上：%#v", chunks)
 	}
 }
@@ -139,7 +141,7 @@ func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
 		"端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。",
 		"辛苦了，早点睡吧。",
 	} {
-		if chunks := splitChatReply(reply, chatReplyChunkSize); len(chunks) != 1 {
+		if chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes); len(chunks) != 1 {
 			t.Fatalf("短回复被拆开了：%#v", chunks)
 		}
 	}
@@ -153,7 +155,7 @@ func TestSentenceSplitRespectsQuotesAndBlocks(t *testing.T) {
 	}
 	// 多行的块（清单、步骤、代码、引用）走到这里就该原样返回。
 	block := "第一步：先看 dmesg。\n第二步：再看 journalctl。\n第三步：最后查内存。\n第四步：都不行就重启。"
-	if got := splitReplySentences(block); len(got) != 1 {
+	if got := splitReplySentences(block, replyBubbleTargetRunes); len(got) != 1 {
 		t.Fatalf("成块的内容被按句子拆开了：%#v", got)
 	}
 }
@@ -167,5 +169,55 @@ func TestLengthFallbackCutsAtChinesePunctuation(t *testing.T) {
 		if !isSentenceEnd(last) && !isClauseBreak(last) {
 			t.Fatalf("兜底切分断在了半个词上：%q", chunk)
 		}
+	}
+}
+
+// 聊天消息不带句号收尾。提示词里早有这条规则，但和分条一样押在模型配合上；
+// 按句子分条之后更显眼——一段话拆三条就有三个句号排在那儿。
+func TestChatReplyDropsTrailingPeriod(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"普通句子", "知道了。", "知道了"},
+		{"逗号分句照旧", "辛苦了，早点睡吧。", "辛苦了，早点睡吧"},
+		{"问号是语气", "真的吗？", "真的吗？"},
+		{"感叹号是语气", "好耶！", "好耶！"},
+		{"省略号是话没说完", "这个嘛……", "这个嘛……"},
+		{"英文句点不碰", "版本是 v1.0.", "版本是 v1.0."},
+		{"域名结尾不碰", "去 example.com.", "去 example.com."},
+		{"引号里的句号不是自己的句读", "他说「我不去。」", "他说「我不去。」"},
+		{"没闭合的引号不动", "他说「我不去。", "他说「我不去。"},
+		{"只有一个句号就别删空了", "。", "。"},
+		{"句中的句号不动", "第一。第二", "第一。第二"},
+	}
+	for _, item := range cases {
+		if got := trimChatTrailingPeriod(item.in); got != item.want {
+			t.Fatalf("%s：%q → %q，want %q", item.name, item.in, got, item.want)
+		}
+	}
+}
+
+// 分条长度可以在控制台改，但不能高过硬上限——高过了就永远轮不到它生效，
+// 留一个不起作用的数字比压回去更容易让人误解。
+func TestReplyBubbleTargetIsConfigurableAndClamped(t *testing.T) {
+	cfg := (BotConfig{ReplyBubbleTargetSize: 30}).WithDefaults()
+	if cfg.ReplyBubbleTargetSize != 30 {
+		t.Fatalf("自定义分条长度被覆盖了：%d", cfg.ReplyBubbleTargetSize)
+	}
+	if got := (BotConfig{}).WithDefaults().ReplyBubbleTargetSize; got != replyBubbleTargetRunes {
+		t.Fatalf("默认分条长度 = %d，want %d", got, replyBubbleTargetRunes)
+	}
+	clamped := (BotConfig{ReplyBubbleTargetSize: 900, DirectReplyChunkSize: 400}).WithDefaults()
+	if clamped.ReplyBubbleTargetSize != 400 {
+		t.Fatalf("分条长度没有被压回硬上限：%d", clamped.ReplyBubbleTargetSize)
+	}
+	// 调小之后同一段话该拆得更碎。
+	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
+	wide := splitChatReply(reply, 400, 200)
+	narrow := splitChatReply(reply, 400, 30)
+	if len(narrow) <= len(wide) {
+		t.Fatalf("调小分条长度没有拆得更碎：wide=%d narrow=%d", len(wide), len(narrow))
 	}
 }
