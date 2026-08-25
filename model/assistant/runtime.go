@@ -9906,6 +9906,8 @@ func repositoryWatchIssueTimeLabel(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "opened":
 		return "创建于"
+	case "reopened":
+		return "重新打开于"
 	case "closed":
 		return "关闭于"
 	default:
@@ -9917,6 +9919,8 @@ func repositoryWatchIssueTime(issue repositoryWatchIssue) time.Time {
 	switch strings.ToLower(strings.TrimSpace(issue.Status)) {
 	case "opened":
 		return firstNonZeroTime(issue.CreatedAt, issue.UpdatedAt)
+	case "reopened":
+		return firstNonZeroTime(issue.ReopenedAt, issue.UpdatedAt)
 	case "closed":
 		return firstNonZeroTime(issue.ClosedAt, issue.UpdatedAt)
 	default:
