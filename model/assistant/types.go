@@ -356,7 +356,6 @@ type BotConfig struct {
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
-	ReplySentenceSplitSize       int             `json:"reply_sentence_split_size,omitempty"`
 	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
@@ -570,7 +569,6 @@ type ConfigPayload struct {
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
-	ReplySentenceSplitSize       int             `json:"reply_sentence_split_size,omitempty"`
 	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
@@ -1026,7 +1024,6 @@ func DefaultBotConfig() BotConfig {
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
 		ReplyMaxBubbles:                replyMaxChatBubbles,
-		ReplySentenceSplitSize:         replySentenceSplitRunes,
 		ForwardReplyChunkThreshold:     forwardReplyChunkCountThreshold,
 		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
@@ -1179,9 +1176,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.ReplyMaxBubbles <= 0 {
 		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
-	}
-	if cfg.ReplySentenceSplitSize <= 0 {
-		cfg.ReplySentenceSplitSize = defaults.ReplySentenceSplitSize
 	}
 	if cfg.ForwardReplyChunkThreshold <= 0 {
 		cfg.ForwardReplyChunkThreshold = defaults.ForwardReplyChunkThreshold
@@ -1384,7 +1378,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxReplyChars:                  cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:       copyBoolPointer(cfg.NaturalReplySplitEnabled),
 		ReplyMaxBubbles:                cfg.ReplyMaxBubbles,
-		ReplySentenceSplitSize:         cfg.ReplySentenceSplitSize,
 		ForwardReplyChunkThreshold:     cfg.ForwardReplyChunkThreshold,
 		DirectReplyChunkSize:           cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:          cfg.ForwardReplyThreshold,
@@ -1520,7 +1513,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxReplyChars:                  payload.MaxReplyChars,
 		NaturalReplySplitEnabled:       copyBoolPointer(payload.NaturalReplySplitEnabled),
 		ReplyMaxBubbles:                payload.ReplyMaxBubbles,
-		ReplySentenceSplitSize:         payload.ReplySentenceSplitSize,
 		ForwardReplyChunkThreshold:     payload.ForwardReplyChunkThreshold,
 		DirectReplyChunkSize:           payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:          payload.ForwardReplyThreshold,

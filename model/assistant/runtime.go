@@ -10446,9 +10446,8 @@ const replyMaxChatBubbles = 5
 // chatSplitLimits 是分条用到的几个阈值。它们全都来自机器人配置，凑成一个结构体
 // 是因为一路往下传五个 int 参数没人认得住哪个是哪个。
 type chatSplitLimits struct {
-	ChunkSize    int // 单条消息的硬上限，撞上了在最近的标点处切开
-	MaxBubbles   int // 分出来最多几条，超了就退回粗一档
-	SentenceSize int // 超过多少字的段落按句号分条，短的不动
+	ChunkSize  int // 单条消息的硬上限，撞上了在最近的标点处切开
+	MaxBubbles int // 分出来最多几条，超了就退回粗一档
 	// MarkerOnly 关掉自然分条：只认模型显式写的 <dianabr>，换行只当排版。
 	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
 	MarkerOnly bool
@@ -10456,10 +10455,9 @@ type chatSplitLimits struct {
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 	return chatSplitLimits{
-		ChunkSize:    cfg.DirectReplyChunkSize,
-		MaxBubbles:   cfg.ReplyMaxBubbles,
-		SentenceSize: cfg.ReplySentenceSplitSize,
-		MarkerOnly:   !boolValue(cfg.NaturalReplySplitEnabled, true),
+		ChunkSize:  cfg.DirectReplyChunkSize,
+		MaxBubbles: cfg.ReplyMaxBubbles,
+		MarkerOnly: !boolValue(cfg.NaturalReplySplitEnabled, true),
 	}
 }
 
@@ -10469,9 +10467,6 @@ func (l chatSplitLimits) withDefaults() chatSplitLimits {
 	}
 	if l.MaxBubbles <= 0 {
 		l.MaxBubbles = replyMaxChatBubbles
-	}
-	if l.SentenceSize <= 0 {
-		l.SentenceSize = replySentenceSplitRunes
 	}
 	return l
 }
@@ -10516,7 +10511,7 @@ func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReply
 		}
 		for _, line := range splitReplyLines(part) {
 			if depth == splitAtSentence {
-				out = append(out, splitLineIntoSentences(line, limits.SentenceSize)...)
+				out = append(out, splitLineIntoSentences(line)...)
 				continue
 			}
 			out = append(out, line)
@@ -10534,12 +10529,9 @@ const replySentenceSplitRunes = 60
 // 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
 // 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界，一个句子就是一次
 // 发言。条数由上层的 MaxBubbles 兜着，分出来太多就整层退回。
-func splitLineIntoSentences(line string, minSize int) []string {
-	if minSize <= 0 {
-		minSize = replySentenceSplitRunes
-	}
+func splitLineIntoSentences(line string) []string {
 	runes := []rune(line)
-	if len(runes) <= minSize {
+	if len(runes) <= replySentenceSplitRunes {
 		return []string{line}
 	}
 	ends := boundaryPositions(runes, isSentenceEnd)
