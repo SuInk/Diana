@@ -106,6 +106,15 @@ const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类�
 // 别输出空行；真要分条有 <dianabr>，语义明确。
 const replyBlankLineRule = "回复里不要出现空行：段落之间用单个换行，不要空一行再写下一段，也不要在小结、清单或链接前面空行。聊天窗口不是文档，空行会显示成一整行空白。"
 
+// replySegmentationRule 同样对所有风格生效，而且必须是内置规则。
+//
+// splitReply 只认 <dianabr>：模型不写这个标记，回复就一定是一整条。而教它写标记的
+// 话此前只存在于两个地方——群友风格的风格提示，和用户可编辑的「纯文本规则」文本框。
+// 前者只对一种风格生效，后者是一份可以被改掉、关掉、或者停留在旧版默认值上的配置：
+// 早期版本的默认文案写的是「都必须放在同一条消息里」，存过一次就一直在提示词里和
+// 分条唱反调。一个投递机制的开关不该挂在用户文案上，所以挪到这里。
+const replySegmentationRule = "回复较长、包含多个意群时（例如先给结论、再讲理由、最后补提醒），在意群边界写 " + notificationSplitMarker + " 拆成两三条消息发出去，像真人连发几条那样，不要把好几段内容挤进同一条消息。一个编号或项目符号列表、一组步骤是一个整体，放在同一条消息里，不要在每个列表项前写 " + notificationSplitMarker + "。"
+
 // replyProportionRule 同样对所有风格生效。联网查证过的回答特别容易写成小评测:
 // 背景、口碑、优缺点、结论、末尾再罗列参考链接——群里随口一句「好看吗」换来
 // 一整屏,读的人只觉得乱。查证是为了答得准,不是为了答得长;链接原文没人点,
@@ -124,6 +133,7 @@ func (style ReplyStyle) prompt() string {
 		style.stylePrompt(),
 		replyEmojiRule,
 		replyBlankLineRule,
+		replySegmentationRule,
 		replyProportionRule,
 		replyTrailingPunctuationRule,
 	}, "\n"))
