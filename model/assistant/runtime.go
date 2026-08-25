@@ -7783,11 +7783,11 @@ const forwardReplyChunkCountThreshold = 5
 
 // shouldUseForwardReply 判断这条回复该不该走合并转发卡片。两个触发条件：
 //
-//	块数  切出 5 块以上——分条的条数上限只管前三档，之后的长度兜底不受限，
+//	块数  切出超过 5 块——分条的条数上限只管前三档，之后的长度兜底不受限，
 //	      用户把「分段发送长度」调小时块数照样上得去
 //	长度  正文超过 ForwardReplyThreshold（默认 900 字）
 func shouldUseForwardReply(reply string, chunks []string, threshold int) bool {
-	if len(chunks) >= forwardReplyChunkCountThreshold {
+	if len(chunks) > forwardReplyChunkCountThreshold {
 		return true
 	}
 	if threshold <= 0 {
@@ -10440,9 +10440,26 @@ func splitChatReply(reply string, chunkSize int, bubbleTarget int) []string {
 	return out
 }
 
-// replyMaxChatBubbles 是分条后允许的条数。超过这个数就不分了：几条小气泡挤在一起
-// 比一条完整的消息更难读。
-const replyMaxChatBubbles = 3
+// 分条按整条回复的长度分档。短回复分成几条是「像真人连发」，长回复分成同样多条
+// 就成了刷屏——同一个条数上限套在两种长度上，总有一头是错的。
+const (
+	// replyShortReplyRunes 是「短回复」的上界。以内的回复最多分三条，超过就整条发：
+	// 这么短的内容分成四条以上，屏幕上全是小气泡，比一条完整的消息更难读。
+	replyShortReplyRunes = 140
+	// replyMaxShortBubbles 是短回复的条数上限。
+	replyMaxShortBubbles = 3
+	// replyMaxLongBubbles 是长回复的条数上限。再多就不是分条能解决的了，交给合并
+	// 转发卡片（见 shouldUseForwardReply）。
+	replyMaxLongBubbles = 5
+)
+
+// replyMaxBubblesFor 返回这条回复允许分成几条。
+func replyMaxBubblesFor(reply string) int {
+	if len([]rune(reply)) < replyShortReplyRunes {
+		return replyMaxShortBubbles
+	}
+	return replyMaxLongBubbles
+}
 
 // chatReplySplitDepth 是分条的精细程度，由细到粗。
 type chatReplySplitDepth int
@@ -10458,8 +10475,9 @@ const (
 // 逐档退让而不是一刀切回整条：三行长文按句子分是六条、超了，但三行本身就是三条，
 // 正好；直接退回整条会把模型分好的三行糊成一个两百多字的气泡。
 func chatReplySegments(reply string, target int) []string {
+	max := replyMaxBubblesFor(reply)
 	for _, depth := range []chatReplySplitDepth{splitAtSentence, splitAtLine, splitAtMarker} {
-		if parts := splitChatReplyAtDepth(reply, target, depth); len(parts) <= replyMaxChatBubbles {
+		if parts := splitChatReplyAtDepth(reply, target, depth); len(parts) <= max {
 			return parts
 		}
 	}
@@ -10467,6 +10485,7 @@ func chatReplySegments(reply string, target int) []string {
 }
 
 func splitChatReplyAtDepth(reply string, target int, depth chatReplySplitDepth) []string {
+	maxBubbles := replyMaxBubblesFor(reply)
 	var out []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(part)
@@ -10483,7 +10502,7 @@ func splitChatReplyAtDepth(reply string, target int, depth chatReplySplitDepth) 
 			continue
 		}
 		for _, line := range lines {
-			out = append(out, balanceLineIntoBubbles(line, target)...)
+			out = append(out, balanceLineIntoBubbles(line, target, maxBubbles)...)
 		}
 	}
 	return out
@@ -10591,7 +10610,7 @@ const replyBubbleTargetRunes = 60
 //
 // 等分而不是「攒够 target 就切」：贪心填满会让最后一条拖着剩下的全部，一句独立的
 // 反问被粘在陈述句后面就是这么来的。
-func balanceLineIntoBubbles(line string, target int) []string {
+func balanceLineIntoBubbles(line string, target, maxBubbles int) []string {
 	runes := []rune(line)
 	if target <= 0 {
 		target = replyBubbleTargetRunes
@@ -10600,8 +10619,8 @@ func balanceLineIntoBubbles(line string, target int) []string {
 	if want < 2 {
 		return []string{line}
 	}
-	if want > replyMaxChatBubbles {
-		want = replyMaxChatBubbles
+	if want > maxBubbles {
+		want = maxBubbles
 	}
 	ends := boundaryPositions(runes, isSentenceEnd)
 	// 句末不够切出这么多份时补上分句标点。中文长句常常一个逗号连到底，一个句号都
