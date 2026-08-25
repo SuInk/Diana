@@ -221,3 +221,27 @@ func TestLivePromptRulesSurviveLongConversation(t *testing.T) {
 		t.Errorf("长对话稀释后空行规则失效：%d/%d", blankViolations, livePromptSamples)
 	}
 }
+
+// 运行时不再自己推断句子边界之后，一条长回复分不分得开只剩「模型肯不肯换行」这一个
+// 杠杆。这条规则因此从「锦上添花」变成了唯一的通路，必须真跑一遍才知道有没有用。
+//
+// 采的是那种明显该分成几段的问题：先说自己懂什么、再说自己的界限、最后反问一句。
+func TestLivePromptBreaksMultiPartRepliesIntoLines(t *testing.T) {
+	client := liveLLMClient(t)
+	replies := liveReplies(t, client, ReplyStyleAssistant, "你能理解亲情吗")
+	violations := 0
+	for i, reply := range replies {
+		// 短回复本来就该是一条，只看确实写长了的那些。
+		if len([]rune(reply)) < 80 {
+			continue
+		}
+		if !strings.Contains(reply, "\n") && !strings.Contains(reply, notificationSplitMarker) {
+			violations++
+			t.Logf("第 %d 条写成了一整段：%q", i+1, reply)
+		}
+	}
+	t.Logf("长回复未分段 %d/%d", violations, len(replies))
+	if violations > 1 {
+		t.Errorf("分条规则形同虚设：%d/%d 条长回复写成了一整段", violations, len(replies))
+	}
+}
