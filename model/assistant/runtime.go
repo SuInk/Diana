@@ -751,6 +751,42 @@ func (r *Runtime) UpdateConfig(ctx context.Context, cfg BotConfig, channel Chann
 	return r.Start(ctx)
 }
 
+// UpdateConfigInPlace applies behavior-only configuration without replacing
+// the channel or restarting inbound workers. Callers must use UpdateConfig
+// when transport settings or worker concurrency change.
+func (r *Runtime) UpdateConfigInPlace(cfg BotConfig) error {
+	cfg = cfg.WithDefaults()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	previous := r.cfg.WithDefaults()
+	r.cfg = cfg
+	r.updatedAt = time.Now()
+	bridge := r.bridge
+	channel := r.channel
+	runCtx := r.runCtx
+	running := r.running
+	r.mu.Unlock()
+
+	applyCJKSegmentConfig(cfg)
+	// Agent registry configuration is part of its cache key. New requests pick
+	// up changed settings automatically; keep old registries alive so an
+	// in-flight Agent run is not interrupted by an unrelated config save.
+	if bridge != nil {
+		previousBridge := bridgeConfigFromBotConfig(previous)
+		nextBridge := bridgeConfigFromBotConfig(cfg)
+		bridge.UpdateConfig(nextBridge, channel)
+		if previousBridge != nextBridge {
+			bridge.Stop()
+			if running && runCtx != nil {
+				bridge.Start(runCtx)
+			}
+		}
+	}
+	return nil
+}
+
 // Config 返回当前机器人配置。
 func (r *Runtime) Config() BotConfig {
 	r.mu.RLock()
