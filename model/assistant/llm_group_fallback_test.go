@@ -4,10 +4,67 @@
 package assistant
 
 import (
+	"context"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
 )
+
+func TestMemoryUsesIntentRoleInsteadOfActiveImageProfile(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		ActiveID: "image-p",
+		Profiles: []llm.Profile{
+			{ID: "chat-p", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-model"}},
+			{ID: "intent-p", Group: llm.GroupIntent, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "intent-model"}},
+			{ID: "image-p", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-image-2"}},
+		},
+	}}
+	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
+		"chat":   {ProfileID: "chat-p", Model: "chat-model"},
+		"intent": {ProfileID: "intent-p", Model: "intent-model"},
+	}}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	selected := ""
+	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		selected = cfg.Model
+		return &capturingLLMProvider{reply: `{}`}, nil
+	})
+	_, err := runtime.runLLMMemoryProvider(context.Background(), func(client LLMProvider) (string, error) {
+		resp, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "extract"}}})
+		if err != nil {
+			return "", err
+		}
+		return resp.Text, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != "intent-model" {
+		t.Fatalf("memory selected %q, want intent-model", selected)
+	}
+}
+
+func TestMemoryWithoutRolesSkipsActiveImageProfile(t *testing.T) {
+	store := &stubLLMProfileStore{set: groupFallbackSet()}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	selected := ""
+	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		selected = cfg.Model
+		return &capturingLLMProvider{reply: `{}`}, nil
+	})
+	_, err := runtime.runLLMMemoryProvider(context.Background(), func(client LLMProvider) (string, error) {
+		resp, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "extract"}}})
+		if err != nil {
+			return "", err
+		}
+		return resp.Text, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != "gpt-chat" {
+		t.Fatalf("memory selected %q, want gpt-chat", selected)
+	}
+}
 
 func groupFallbackRegistry(t *testing.T) *llm.ProviderRegistry {
 	t.Helper()
