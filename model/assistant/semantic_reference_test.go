@@ -208,7 +208,7 @@ func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
 
 	sourceContext := runtime.semanticReferenceContext(context.Background(), event)
 	sourceContext.AttachedImageCount = len(imageURLs)
-	prompt := currentPromptTextWithSemanticContext(event, "读我连发的三张图", sourceContext)
+	prompt := currentPromptTextWithSemanticContext(event, "读我连发的三张图", sourceContext, promptAnnotation{})
 	message := llmMessageFromEventWithImagesForContext(context.Background(), event, prompt, runtime.semanticReferenceImageURLs(context.Background(), event))
 	var actualImages []string
 	for _, part := range message.Parts {
@@ -270,7 +270,7 @@ func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
 			}
 		}
 	}
-	prompt := currentPromptTextWithSemanticContext(event, "总结 Diana 之前哪些回复有误", sourceContext)
+	prompt := currentPromptTextWithSemanticContext(event, "总结 Diana 之前哪些回复有误", sourceContext, promptAnnotation{})
 	if !strings.Contains(prompt, "6 条包含文字") || !strings.Contains(prompt, "逐条核对") || strings.Contains(prompt, "逐张查看") || strings.Contains(prompt, "6 张") {
 		t.Fatalf("text source prompt = %q", prompt)
 	}
@@ -337,7 +337,7 @@ func TestSemanticReferencePromptCountsMixedTextAndAttachedImages(t *testing.T) {
 		RequestedSourceCount: 3,
 		TextSourceCount:      1,
 		AttachedImageCount:   2,
-	})
+	}, promptAnnotation{})
 	for _, want := range []string{"1 条文字来源", "实际附加 2 张", "逐条核对", "逐张查看"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("mixed source prompt missing %q: %s", want, prompt)

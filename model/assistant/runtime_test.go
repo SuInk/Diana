@@ -1926,7 +1926,9 @@ func TestRuntimeModelDiscussionNeverMutatesLLMConfigBeforeReply(t *testing.T) {
 	}
 }
 
-// TestRuntimeKeepsMentionAndGroupTriggerInPrompt 验证群 @ 和触发词会保留给模型，而不是被剥成空输入。
+// TestRuntimeKeepsMentionAndGroupTriggerInPrompt 验证触发词会保留给模型，而不是被剥成空输入。
+// 当前消息交给模型的是原话：机器人自己那个 @ 也留着——用户怎么叫的，模型就该
+// 看到什么。判定「是不是光叫了一声」用的是另一份剥掉 @ 的副本，不影响正文。
 func TestRuntimeKeepsMentionAndGroupTriggerInPrompt(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &capturingLLMProvider{reply: "在呢"}
@@ -1955,8 +1957,15 @@ func TestRuntimeKeepsMentionAndGroupTriggerInPrompt(t *testing.T) {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	got := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "@42 Diana") {
+	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "Diana") {
 		t.Fatalf("last message content = %q", got)
+	}
+	if !strings.Contains(got, "@42") {
+		t.Fatalf("机器人自己的 @ 应当留在原文里：%q", got)
+	}
+	// 「这个 @ 指的是你」由注解点明，正文照旧。
+	if !strings.Contains(got, "那个 @ 指的就是你") {
+		t.Fatalf("没有告诉模型这条消息 @ 了它：%q", got)
 	}
 }
 
@@ -2205,8 +2214,13 @@ func TestRuntimeMentionOnlyUsesFallbackPrompt(t *testing.T) {
 		t.Fatalf("replyTo() error = %v", err)
 	}
 	got := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "@42") || !strings.Contains(got, "有效唤醒") {
+	// 纯 @ 会附上唤醒指引：它明确禁止「我在」这类报到，并要求接住上文；
+	// 原话（那个 @）仍然留在正文里。
+	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "@42") {
 		t.Fatalf("last message content = %q", got)
+	}
+	if !strings.Contains(got, "别回「我在」") {
+		t.Fatalf("纯 @ 没有附上唤醒指引：%q", got)
 	}
 }
 
@@ -2233,7 +2247,8 @@ func TestRuntimeKeepsReplyAndMentionInCurrentPrompt(t *testing.T) {
 		t.Fatalf("replyTo() error = %v", err)
 	}
 	got := provider.request.Messages[len(provider.request.Messages)-1].Content
-	for _, want := range []string{"【当前需要回复的消息】", "[diana-reply:abc]", "@42", "当前消息包含 @ 标记", "当前消息包含引用/回复标记"} {
+	// 引用标记和 @ 都是原话的一部分，一并留着；注解只负责说明它们各指什么。
+	for _, want := range []string{"【当前需要回复的消息】", "[diana-reply:abc]", "@42", "那个 @ 指的就是你", "当前消息包含引用/回复标记"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("last message content = %q, missing %q", got, want)
 		}
