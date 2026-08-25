@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/model/applog"
+
 	"github.com/SuInk/diana/model/agent"
 )
 
@@ -72,6 +74,7 @@ type dianaGroupRelationsResult struct {
 
 func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+		// 私聊里画不了，这个不算故障，不用惊动运行记录。
 		return marshalRelationsResult(dianaGroupRelationsResult{Message: "关系图只能在群聊里画。"}), nil
 	}
 	rangeID := strings.TrimSpace(configToolString(input, "range"))
@@ -81,14 +84,18 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	rangeID = normalizeRelationRange(rangeID)
 	since, ok := relationRangeSince(rangeID, time.Now())
 	if !ok {
-		return marshalRelationsResult(dianaGroupRelationsResult{Message: "统计区间只支持 24h、7d、30d、all。"}), nil
+		result := dianaGroupRelationsResult{Message: "统计区间只支持 24h、7d、30d、all。", Range: rangeID}
+		t.recordRelationsOutcome(ctx, result, "")
+		return marshalRelationsResult(result), nil
 	}
 
 	t.runtime.mu.RLock()
 	store, _ := t.runtime.messageStore.(GroupRelationStore)
 	t.runtime.mu.RUnlock()
 	if store == nil {
-		return marshalRelationsResult(dianaGroupRelationsResult{Message: "这个部署没有消息存储，画不了关系图。"}), nil
+		result := dianaGroupRelationsResult{Message: "这个部署没有消息存储，画不了关系图。", Range: rangeID}
+		t.recordRelationsOutcome(ctx, result, "")
+		return marshalRelationsResult(result), nil
 	}
 
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
@@ -98,7 +105,9 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 		return "", fmt.Errorf("统计关系图失败：%w", err)
 	}
 	if graph.Participants == 0 {
-		return marshalRelationsResult(dianaGroupRelationsResult{Message: "这段时间群里没有发言记录，画不出关系图。", Range: rangeID}), nil
+		result := dianaGroupRelationsResult{Message: "这段时间群里没有发言记录，画不出关系图。", Range: rangeID}
+		t.recordRelationsOutcome(ctx, result, "")
+		return marshalRelationsResult(result), nil
 	}
 
 	title := fmt.Sprintf("群 %s · 关系图", t.event.GroupID)
@@ -111,10 +120,16 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	})
 	if err != nil {
 		// 渲染要靠无头浏览器，部署里没有就明确说出来，别让模型编一句「已发送」。
-		return marshalRelationsResult(dianaGroupRelationsResult{
-			Message: "画不出来：这台机器上没有可用的无头浏览器（关系图靠它把图渲染成图片）。",
-			Range:   rangeID,
-		}), nil
+		// 具体错误进 Detail：是找不到可执行文件、超时，还是浏览器自己报错，
+		// 三种的处理方式完全不同。
+		result := dianaGroupRelationsResult{
+			Message:      "画不出来：这台机器上没有可用的无头浏览器（关系图靠它把图渲染成图片）。",
+			Range:        rangeID,
+			Participants: graph.Participants,
+			Messages:     graph.Messages,
+		}
+		t.recordRelationsOutcome(ctx, result, err.Error())
+		return marshalRelationsResult(result), nil
 	}
 
 	// 内联成 data URI 发出去：出站会把它转成 base64://，不用落盘，也就不用管清理。
@@ -122,13 +137,49 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{ImageURLs: []string{image}})); err != nil {
 		return "", fmt.Errorf("发送关系图失败：%w", err)
 	}
-	return marshalRelationsResult(dianaGroupRelationsResult{
+	result := dianaGroupRelationsResult{
 		OK:           true,
 		Message:      "关系图已经发到群里了。",
 		Range:        rangeID,
 		Participants: graph.Participants,
 		Messages:     graph.Messages,
-	}), nil
+	}
+	t.recordRelationsOutcome(ctx, result, "")
+	return marshalRelationsResult(result), nil
+}
+
+// recordRelationsOutcome 把这次画图的结果写进运行记录。
+//
+// agentRunObserver 已经无条件记下了「工具调用完成」，但这个工具的几种失败——没有
+// 无头浏览器、这段时间没人说话——都是正常返回的 ok:false，在那条记录里和成功长得
+// 一模一样。而「这台机器没装浏览器」正是生产里最可能撞上的那个，看不见就只能靠
+// 群里没出图去猜。
+func (t *dianaGroupRelationsTool) recordRelationsOutcome(ctx context.Context, result dianaGroupRelationsResult, detail string) {
+	writer := t.runtime.appLogWriter()
+	if writer == nil {
+		return
+	}
+	kind, level := applog.KindOperation, applog.LevelInfo
+	if !result.OK {
+		kind, level = applog.KindError, applog.LevelError
+	}
+	logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = writer.AppendLog(logCtx, applog.Entry{
+		Kind:    kind,
+		Level:   level,
+		Action:  "assistant.group_relations",
+		Message: result.Message,
+		Detail:  detail,
+		Actor:   oneBotEventActor(t.event),
+		Target:  t.event.GroupID,
+		Metadata: map[string]any{
+			"group_id":     t.event.GroupID,
+			"range":        result.Range,
+			"participants": result.Participants,
+			"messages":     result.Messages,
+		},
+	})
 }
 
 func marshalRelationsResult(result dianaGroupRelationsResult) string {
