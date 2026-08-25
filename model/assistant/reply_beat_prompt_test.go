@@ -41,7 +41,7 @@ func TestConsecutiveBeatsStayGroupmateOnlyWhileSegmentationIsUniversal(t *testin
 		if strings.Contains(prompt, "两三次独立发言") {
 			t.Fatalf("风格 %s 不该教连发短句", style)
 		}
-		if !strings.Contains(prompt, "意群边界写 "+notificationSplitMarker) {
+		if !promptTeachesSegmentation(prompt) {
 			t.Fatalf("风格 %s 缺少长回答分条规则：\n%s", style, prompt)
 		}
 	}

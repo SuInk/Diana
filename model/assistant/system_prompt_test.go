@@ -37,7 +37,7 @@ func TestEveryReplyStyleTeachesTheSplitMarker(t *testing.T) {
 		ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl, ReplyStyle(""),
 	} {
 		prompt := style.prompt()
-		if !strings.Contains(prompt, "意群边界写 "+notificationSplitMarker) {
+		if !promptTeachesSegmentation(prompt) {
 			t.Fatalf("style %q does not teach the split marker: %q", style, prompt)
 		}
 	}

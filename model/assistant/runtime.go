@@ -7325,7 +7325,7 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
+	chunks := splitChatReply(reply, cfg.DirectReplyChunkSize)
 	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
@@ -8057,7 +8057,7 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 	if _, rest, ok := extractOutgoingReplyMarker(reply); ok {
 		reply = rest
 	}
-	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
+	chunks := splitChatReply(reply, cfg.DirectReplyChunkSize)
 	if len(chunks) == 0 {
 		return "", nil
 	}
@@ -10365,7 +10365,9 @@ func normalizeSplitMarkers(text string) string {
 }
 
 // splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 <dianabr>，
-// 再按长度兜底。发言和通知走的是同一套规则。
+// 再按长度兜底。错误提示和结构化通知走这一套——它们是一条完整的诊断或一张事实
+// 卡片，换行是卡片自己的排版（仓库订阅那张就是紧凑两行），拆开就没法读了。
+// 聊天发言另走 splitChatReply。
 //
 // 空行不是分条信号。模型按 Markdown 习惯用空行做段落间距，运行时却曾把它当成消息
 // 边界——同一个符号两边理解不一样，分条位置就全看模型的排版习惯。提示词已经从源头
@@ -10392,6 +10394,126 @@ func splitReply(reply string, chunkSize int) []string {
 	}
 	return out
 }
+
+// replyNaturalLineMaxLines 是「换行即分条」适用的最大行数。
+//
+// 两三行是「连着说了两三句」，再多就不是连发而是一段结构化内容（清单、步骤、
+// 逐条说明），那种整块发出去才读得下来。
+const replyNaturalLineMaxLines = 3
+
+// replyNaturalLineMinStructuredLines 是判定为清单的最少行数。一行「短标签：内容」
+// 在普通聊天里很常见（「assertiveness：坚定自信……」就是），不该因此堵掉分条；
+// 两行以上同一形状才是真的在列清单。
+const replyNaturalLineMinStructuredLines = 2
+
+// splitChatReply 是聊天发言的分条：在 splitReply 的基础上，把短回复里的单个换行
+// 也当成分条信号。
+//
+// 只认 <dianabr> 的问题是它把分条押在模型愿不愿意写一个内部标记上。模型对这种
+// 元标记的服从度本来就不稳定，而它真正会稳定产出的边界信号是换行——「释义一行、
+// 常见翻译一行」这种两行回复，模型换了行，人也觉得该是两条，却因为没写标记糊成
+// 一个气泡。与其反复加强提示词，不如让运行时认它自然会产生的那个信号。
+//
+// 早先有过一版「空行分条」被删掉，理由是「同一个符号两边理解不一样，分条位置全
+// 看模型的排版习惯」。那条教训这里仍然成立，所以这一版是有界的：只在两三行、且
+// 不像清单、且上一行不是断在半句话上时才认。超出这个范围的换行仍然只是排版。
+// 提示词那侧同步说明了同一套边界（见 replySegmentationRule），两边理解一致。
+func splitChatReply(reply string, chunkSize int) []string {
+	if chunkSize <= 0 {
+		chunkSize = notificationChunkSize
+	}
+	reply = collapseBlankLines(normalizeSplitMarkers(reply))
+	if reply == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		for _, line := range splitReplyNaturalLines(part) {
+			out = append(out, chunkTextByLength(line, chunkSize)...)
+		}
+	}
+	return out
+}
+
+// splitReplyNaturalLines 把一段短回复按换行拆成几次发言；不符合条件时原样返回。
+func splitReplyNaturalLines(part string) []string {
+	lines := make([]string, 0, replyNaturalLineMaxLines)
+	for _, line := range strings.Split(part, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+	if len(lines) < 2 || len(lines) > replyNaturalLineMaxLines {
+		return []string{part}
+	}
+	structured := 0
+	for index, line := range lines {
+		if isStructuredReplyLine(line) {
+			structured++
+			if structured >= replyNaturalLineMinStructuredLines {
+				return []string{part}
+			}
+		}
+		// 上一行断在逗号、顿号上说明这是一句话被折了行，不是说完了一句。
+		if index < len(lines)-1 && endsMidSentence(line) {
+			return []string{part}
+		}
+	}
+	return lines
+}
+
+// endsMidSentence 判断这一行是不是停在半句话上。句号、问号、感叹号不算——那是
+// 一句说完了；聊天里更常见的是整行不带标点收尾（见 replyTrailingPunctuationRule），
+// 同样算说完。
+func endsMidSentence(line string) bool {
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return false
+	}
+	switch runes[len(runes)-1] {
+	case '，', ',', '、', '；', ';', '：', ':', '(', '（', '“', '「':
+		return true
+	}
+	return false
+}
+
+// isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」
+// 这种逐项打分常用的写法。
+func isStructuredReplyLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	runes := []rune(line)
+	switch runes[0] {
+	case '-', '*', '+', '•', '·', '|':
+		return len(runes) > 1 && strings.TrimSpace(string(runes[1:])) != ""
+	}
+	digits := 0
+	for digits < len(runes) && unicode.IsDigit(runes[digits]) {
+		digits++
+	}
+	if digits > 0 && digits < len(runes) {
+		switch runes[digits] {
+		case '.', '、', ')', '）', ':', '：':
+			return strings.TrimSpace(string(runes[digits+1:])) != ""
+		}
+	}
+	// 「变装皇后：+1」这类标签行：冒号靠前，且冒号两侧都有内容。
+	for index, r := range runes {
+		if r != '：' && r != ':' {
+			continue
+		}
+		if index == 0 || index > structuredReplyLabelMaxRunes {
+			return false
+		}
+		return strings.TrimSpace(string(runes[index+1:])) != ""
+	}
+	return false
+}
+
+// structuredReplyLabelMaxRunes 限制标签长度，避免把「今天想说的是：……」这种
+// 正常句子当成清单项。
+const structuredReplyLabelMaxRunes = 12
 
 // collapseBlankLines 把空行当排版收掉，并去掉行尾空白。空行留在气泡里会渲染成
 // 一整行空白：写文档时正常，聊天窗口里很突兀。

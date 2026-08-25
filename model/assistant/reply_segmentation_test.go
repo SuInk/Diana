@@ -20,7 +20,7 @@ func TestStaleConfigStopsSuppressingSegmentation(t *testing.T) {
 	if strings.Contains(prompt, "都必须放在同一条 OneBot v11 消息里") {
 		t.Fatalf("旧版反分条文案还在提示词里：%q", prompt)
 	}
-	if !strings.Contains(prompt, "意群边界写 "+notificationSplitMarker) {
+	if !promptTeachesSegmentation(prompt) {
 		t.Fatalf("提示词里没有分条规则：%q", prompt)
 	}
 
@@ -54,4 +54,61 @@ func TestLegacySplitMarkerStillSplitsAndNeverLeaks(t *testing.T) {
 			}
 		}
 	}
+}
+
+// 换行即分条：模型对 <dianabr> 这种内部标记的服从度不稳定，但它稳定会产出换行。
+// 群里看到的那条「释义一行、常见翻译一行」就该是两条。
+func TestChatReplySplitsShortRepliesOnNaturalLines(t *testing.T) {
+	reply := "assertiveness：坚定自信、敢于明确表达自身需求和立场，同时也尊重他人的能力\n常译为「坚定表达」「自信果断」；它介于 passive（消极退让）和 aggressive（咄咄逼人）之间"
+	chunks := splitChatReply(reply, chatReplyChunkSize)
+	if len(chunks) != 2 {
+		t.Fatalf("两行回复没有分成两条：%#v", chunks)
+	}
+	if !strings.HasPrefix(chunks[0], "assertiveness：") || !strings.HasPrefix(chunks[1], "常译为") {
+		t.Fatalf("分条位置不对：%#v", chunks)
+	}
+}
+
+// 有界才敢认换行：超出这几种情况，换行仍然只是同一条消息里的排版。当年「空行分条」
+// 被删掉就是因为无界——分条位置全看模型的排版习惯。
+func TestChatReplyKeepsBlocksTogether(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply string
+	}{
+		{"编号清单", "1. 先看 dmesg\n2. 再看 journalctl\n3. 最后查内存"},
+		{"项目符号", "- 第一项\n- 第二项"},
+		{"逐项打分", "画面：8 分\n剧情：6 分"},
+		{"超过三行", "第一句\n第二句\n第三句\n第四句"},
+		{"折行的半句话", "端口被占了，\n先看看是谁占着"},
+		{"单行", "端口被占了，先 lsof -i:8080 看看"},
+	}
+	for _, item := range cases {
+		if chunks := splitChatReply(item.reply, chatReplyChunkSize); len(chunks) != 1 {
+			t.Fatalf("%s 被拆开了：%#v", item.name, chunks)
+		}
+	}
+}
+
+// 错误提示和结构化通知不认换行：仓库订阅那张卡片就是紧凑两行，拆开就没法读了。
+func TestNotificationPathIgnoresNaturalLines(t *testing.T) {
+	card := "Diana 有 3 条新提交\nhttps://github.com/SuInk/Diana/commits/main"
+	if chunks := splitReply(card, notificationChunkSize); len(chunks) != 1 {
+		t.Fatalf("通知卡片被拆开了：%#v", chunks)
+	}
+	// 显式标记在通知里仍然分条，这条没变。
+	if chunks := splitReply("事实"+notificationSplitMarker+"跟评", notificationChunkSize); len(chunks) != 2 {
+		t.Fatalf("通知里的显式标记没有分条：%#v", chunks)
+	}
+}
+
+// promptTeachesSegmentation 检查提示词是否把分条契约讲全了：换行会分条、标记也会
+// 分条、清单整块发。断言契约而不是某一句原话，改文案时不用跟着改四处测试。
+func promptTeachesSegmentation(prompt string) bool {
+	for _, want := range []string{"意群边界换行", notificationSplitMarker, "整块发出去"} {
+		if !strings.Contains(prompt, want) {
+			return false
+		}
+	}
+	return true
 }
