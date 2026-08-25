@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,9 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/storage"
+
+	"github.com/gin-gonic/gin"
 )
 
 type consoleGroupListChannel struct {
@@ -350,5 +355,70 @@ func TestConsoleGroupsFallBackToLegacyRecords(t *testing.T) {
 	cfg, ok := set.ConfigForGroup("bot-onebot", "100")
 	if !ok || len(cfg.GroupTriggers) == 0 || cfg.GroupTriggers[0] != "老配置" {
 		t.Fatalf("legacy fallback = %#v ok=%v", cfg, ok)
+	}
+}
+
+// 关系图接口：按群取数、range 参数校验、没有消息存储时明确报错。
+func TestGroupRelationGraphEndpoint(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "relations-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	now := time.Now()
+	for index, seed := range []struct{ userID, name string }{{"1001", "Alice"}, {"1001", "Alice"}, {"1002", "Bob"}} {
+		event := assistant.MessageEvent{
+			Kind: assistant.EventKindGroup, GroupID: "555", UserID: seed.userID,
+			MessageID: fmt.Sprintf("m%d", index), SenderName: seed.name,
+			Time: now.Unix(), ToMe: true, RawMessage: "在吗",
+		}
+		if err := store.AppendMessageEvent(ctx, "group:555", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := &BotHandler{sqlite: store, runtime: assistant.NewRuntime(
+		assistant.BotConfig{BotAccount: "42"}, fakeChannel{}, assistant.NewPluginManager(), nil, nil, nil, nil)}
+	handler.registerConsoleGroupRoutes(router)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups/555/relations?range=24h", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Range string                     `json:"range"`
+		Graph storage.GroupRelationGraph `json:"graph"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Range != "24h" || payload.Graph.GroupID != "555" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	// 配置里的机器人账号要当中心节点：新群还没有机器人自己的发言，光扫历史找不出中心。
+	if payload.Graph.BotID != "42" {
+		t.Fatalf("bot = %q, want 42", payload.Graph.BotID)
+	}
+	if payload.Graph.Messages != 3 || payload.Graph.Participants != 2 {
+		t.Fatalf("messages = %d, participants = %d", payload.Graph.Messages, payload.Graph.Participants)
+	}
+
+	bad := httptest.NewRecorder()
+	router.ServeHTTP(bad, httptest.NewRequest(http.MethodGet, "/api/assistant/groups/555/relations?range=nonsense", nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("非法 range 应当 400，实际 %d", bad.Code)
+	}
+
+	missing := gin.New()
+	(&BotHandler{}).registerConsoleGroupRoutes(missing)
+	unavailable := httptest.NewRecorder()
+	missing.ServeHTTP(unavailable, httptest.NewRequest(http.MethodGet, "/api/assistant/groups/555/relations", nil))
+	if unavailable.Code != http.StatusServiceUnavailable {
+		t.Fatalf("没有消息存储时应当 503，实际 %d", unavailable.Code)
 	}
 }
