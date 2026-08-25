@@ -69,8 +69,8 @@ func TestChatReplySplitsShortRepliesOnNaturalLines(t *testing.T) {
 	}
 }
 
-// 有界才敢认换行：超出这几种情况，换行仍然只是同一条消息里的排版。当年「空行分条」
-// 被删掉就是因为无界——分条位置全看模型的排版习惯。
+// 有界才敢认换行：清单、逐项打分、折了行的半句话，这些里的换行仍然只是排版。
+// 当年「空行分条」被删掉就是因为无界——分条位置全看模型的排版习惯。
 func TestChatReplyKeepsBlocksTogether(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -79,7 +79,6 @@ func TestChatReplyKeepsBlocksTogether(t *testing.T) {
 		{"编号清单", "1. 先看 dmesg\n2. 再看 journalctl\n3. 最后查内存"},
 		{"项目符号", "- 第一项\n- 第二项"},
 		{"逐项打分", "画面：8 分\n剧情：6 分"},
-		{"超过三行", "第一句\n第二句\n第三句\n第四句"},
 		{"折行的半句话", "端口被占了，\n先看看是谁占着"},
 		{"单行", "端口被占了，先 lsof -i:8080 看看"},
 	}
@@ -113,54 +112,47 @@ func promptTeachesSegmentation(prompt string) bool {
 	return true
 }
 
-// 一段没有换行的长回复也要分条。换行分条要模型愿意换行、标记要模型愿意写标记，
-// 都还押在模型的配合上；这一层不依赖任何信号——句号本来就是它自己写出来的边界。
-func TestChatReplyBubblesLongParagraphAtSentenceBoundaries(t *testing.T) {
+// 没有换行的长段落不再按句子分条：分条只认模型给的信号（标记、换行），运行时不再
+// 自己去猜句子边界。超过长度上限才由兜底切开。
+func TestChatReplyKeepsUnbrokenParagraphWhole(t *testing.T) {
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
-	chunks := splitChatReply(reply, chatSplitLimits{})
-	if len(chunks) < 2 || len(chunks) > (chatSplitLimits{}).withDefaults().maxBubblesFor(reply) {
-		t.Fatalf("长段落没有分成两三条：%#v", chunks)
+	if chunks := splitChatReply(reply, chatSplitLimits{}); len(chunks) != 1 {
+		t.Fatalf("没有换行的段落不该被拆开：%#v", chunks)
 	}
-	// 每条都得是完整句子收尾，不能像长度兜底那样劈在半句上。句号会被 trimChatTrailingPeriod
-	// 去掉，所以补回来再比——问号感叹号是语气，本来就留着。
-	for _, chunk := range chunks {
-		runes := []rune(chunk)
-		if !isSentenceEnd(runes[len(runes)-1]) && !strings.Contains(reply, chunk+"。") {
-			t.Fatalf("这一条断在半句话上：%q", chunk)
-		}
-	}
-	// 除了被去掉的句号，内容一个字都不能丢。
-	if strings.ReplaceAll(strings.Join(chunks, ""), "。", "") != strings.ReplaceAll(reply, "。", "") {
-		t.Fatalf("分条前后内容对不上：%#v", chunks)
+	// 同一段话，模型自己换了行就照分。
+	withBreaks := strings.Replace(reply, "。但我", "。\n但我", 1)
+	if chunks := splitChatReply(withBreaks, chatSplitLimits{}); len(chunks) != 2 {
+		t.Fatalf("模型换行了却没分条：%#v", chunks)
 	}
 }
 
-// 短回复里的两句话本来就是一条消息，拆开反而不像人说话——群友风格的示例就是这个。
-func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
-	for _, reply := range []string{
-		"端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。",
-		"辛苦了，早点睡吧。",
-	} {
-		if chunks := splitChatReply(reply, chatSplitLimits{}); len(chunks) != 1 {
-			t.Fatalf("短回复被拆开了：%#v", chunks)
-		}
-	}
-}
-
-// 引号里的句号不是边界，成块的内容也不按句子拆。
-func TestSentenceSplitRespectsQuotesAndBlocks(t *testing.T) {
-	quoted := "他当时就站在门口说「我不去。」然后头也不回地走了，那句话我记了很多年，到现在也没敢问他到底什么意思"
-	if got := boundaryPositions([]rune(quoted), isSentenceEnd); len(got) != 0 {
-		t.Fatalf("引号里的句号被当成了边界：%#v", got)
-	}
-	// 引号外面的句号照常是边界。
-	if got := boundaryPositions([]rune("他说「我不去。」然后走了。后来再没提过"), isSentenceEnd); len(got) != 1 {
-		t.Fatalf("引号外的句号没被认出来：%#v", got)
-	}
-	// 多行的块（清单、步骤、代码、引用）走到这里就该原样返回。
+// 成块的内容（清单、步骤、代码、引用的诗文）整块发，折了行的半句话跟着上一行走。
+func TestChatReplyKeepsStructuredBlocksWhole(t *testing.T) {
 	block := "第一步：先看 dmesg。\n第二步：再看 journalctl。\n第三步：最后查内存。\n第四步：都不行就重启。"
 	if got := splitReplyLines(block); len(got) != 1 {
-		t.Fatalf("成块的内容被按句子拆开了：%#v", got)
+		t.Fatalf("成块的内容被拆开了：%#v", got)
+	}
+}
+
+// 条数上限管的是整条回复：按换行分出来超过上限，就不按换行分，退回只认标记。
+// 不做「超出的并进最后一条」——那会让最后一条拖着个尾巴。
+func TestChatReplyFallsBackToMarkerWhenLinesExceedCap(t *testing.T) {
+	lines := make([]string, 0, 8)
+	for i := 0; i < 8; i++ {
+		lines = append(lines, "第几句话")
+	}
+	many := strings.Join(lines, "\n")
+	if chunks := splitChatReply(many, chatSplitLimits{}); len(chunks) != 1 {
+		t.Fatalf("八行超过上限，应该退回整条发：%#v", chunks)
+	}
+	// 正好到上限就照分。
+	five := strings.Join(lines[:5], "\n")
+	if chunks := splitChatReply(five, chatSplitLimits{}); len(chunks) != 5 {
+		t.Fatalf("五行正好到上限，应该分成五条：%#v", chunks)
+	}
+	// 退回之后模型显式写的标记仍然照做。
+	if chunks := splitChatReply(many+notificationSplitMarker+"补一句", chatSplitLimits{}); len(chunks) != 2 {
+		t.Fatalf("退回之后标记被吞掉了：%#v", chunks)
 	}
 }
 
@@ -176,8 +168,23 @@ func TestLengthFallbackCutsAtChinesePunctuation(t *testing.T) {
 	}
 }
 
-// 聊天消息不带句号收尾。提示词里早有这条规则，但和分条一样押在模型配合上；
-// 按句子分条之后更显眼——一段话拆三条就有三个句号排在那儿。
+// 兜底切分只认全角标点。半角冒号逗号在链接、CQ 码、版本号里到处都是，按它们断句
+// 会把一个链接从中间劈开发出去——加分句兜底时真踩过这个坑。
+func TestLengthFallbackNeverCutsInsideLinksOrCQCodes(t *testing.T) {
+	for _, r := range []rune{':', ',', ';', '.'} {
+		if isClauseBreak(r) || isSentenceEnd(r) {
+			t.Fatalf("半角 %q 不该是断点", string(r))
+		}
+	}
+	cq := "[CQ:record,file=http://127.0.0.1:18080/api/assistant/media/rule-voice]"
+	for _, chunk := range splitChatReply("语音在这里 "+cq, chatSplitLimits{}) {
+		if strings.HasSuffix(chunk, ":") || strings.HasSuffix(chunk, ",") {
+			t.Fatalf("被从半角标点处切开了：%q", chunk)
+		}
+	}
+}
+
+// 聊天消息不带句号收尾。提示词里早有这条规则，但和分条一样押在模型配合上。
 func TestChatReplyDropsTrailingPeriod(t *testing.T) {
 	cases := []struct {
 		name string
@@ -203,151 +210,7 @@ func TestChatReplyDropsTrailingPeriod(t *testing.T) {
 	}
 }
 
-// 分条长度可以在控制台改，但不能高过硬上限——高过了就永远轮不到它生效，
-// 留一个不起作用的数字比压回去更容易让人误解。
-func TestReplyBubbleTargetIsConfigurableAndClamped(t *testing.T) {
-	cfg := (BotConfig{ReplyBubbleTargetSize: 30}).WithDefaults()
-	if cfg.ReplyBubbleTargetSize != 30 {
-		t.Fatalf("自定义分条长度被覆盖了：%d", cfg.ReplyBubbleTargetSize)
-	}
-	if got := (BotConfig{}).WithDefaults().ReplyBubbleTargetSize; got != replyBubbleTargetRunes {
-		t.Fatalf("默认分条长度 = %d，want %d", got, replyBubbleTargetRunes)
-	}
-	clamped := (BotConfig{ReplyBubbleTargetSize: 900, DirectReplyChunkSize: 400}).WithDefaults()
-	if clamped.ReplyBubbleTargetSize != 400 {
-		t.Fatalf("分条长度没有被压回硬上限：%d", clamped.ReplyBubbleTargetSize)
-	}
-	// 调小之后同一段话该拆得更碎。
-	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
-	wide := splitChatReply(reply, chatSplitLimits{ChunkSize: 400, BubbleTarget: 200})
-	narrow := splitChatReply(reply, chatSplitLimits{ChunkSize: 400, BubbleTarget: 30})
-	if len(narrow) <= len(wide) {
-		t.Fatalf("调小分条长度没有拆得更碎：wide=%d narrow=%d", len(wide), len(narrow))
-	}
-}
-
-// 条数上限管的是整条回复，不是每一段。
-//
-// 分条有三层，每层都可能再拆：标记、换行、句子。上限按段算就会相乘——两行各拆三条
-// 是六条，再加个标记能到九条，群里看着就是刷屏。
-func TestChatReplyCapsTotalBubblesAcrossAllLayers(t *testing.T) {
-	long := "第一句话写得足够长用来占位凑够字数好触发按句子分条的门槛。第二句同样长度也要凑够六十个字才会被拆开来发。第三句还是一样长凑够字数触发分条规则生效。"
-	cases := []struct {
-		name  string
-		reply string
-	}{
-		{"两行长文", long + "\n" + long},
-		{"三行长文", long + "\n" + long + "\n" + long},
-		{"两行加显式标记", long + "\n" + long + notificationSplitMarker + long},
-	}
-	for _, item := range cases {
-		got := splitChatReply(item.reply, chatSplitLimits{})
-		if max := (chatSplitLimits{}).withDefaults().maxBubblesFor(item.reply); len(got) > max {
-			t.Fatalf("%s 拆出了 %d 条，上限是 %d：%#v", item.name, len(got), max, got)
-		}
-	}
-}
-
-// 额度紧张时先退让的是「按句子细分」——那是运行时自己加的一层。模型显式写的标记和
-// 换行是它明说要分的，一条都不能被合掉。
-func TestChatReplyNeverMergesWhatTheModelAskedToSplit(t *testing.T) {
-	long := "第一句话写得足够长用来占位凑够字数好触发按句子分条的门槛。第二句同样长度也要凑够六十个字才会被拆开来发。第三句还是一样长凑够字数触发分条规则生效。"
-	// 三行都超过细分门槛，加起来远超上限；三行本身仍然必须各占一条。
-	got := splitChatReply(long+"\n"+long+"\n"+long, chatSplitLimits{})
-	if len(got) < 3 {
-		t.Fatalf("模型写的换行被合掉了：%#v", got)
-	}
-	for _, chunk := range got {
-		if strings.Contains(chunk, "\n") {
-			t.Fatalf("同一条里还留着换行：%q", chunk)
-		}
-	}
-}
-
-// 分条是「要么分好，要么别分」：分不进上限就退回粗一档，不做「超出的并进最后一条」。
-//
-// 逐档退让而不是一刀切回整条——三行长文按句子分是六条、超了，但三行本身正好三条。
-// 直接退回整条会把模型分好的三行糊成一个两百多字的气泡。
-func TestChatReplyFallsBackOneDepthAtATime(t *testing.T) {
-	long := "第一句话写得足够长用来占位凑够字数好触发按句子分条的门槛。第二句同样长度也要凑够六十个字才会被拆开来发。第三句还是一样长凑够字数触发分条规则生效。"
-
-	// 三行都超过细分门槛：按句子分会超上限，退到「只按换行」正好三条。
-	byLine := splitChatReply(long+"\n"+long+"\n"+long, chatSplitLimits{})
-	if len(byLine) != 3 {
-		t.Fatalf("三行长文应该退到按换行分成三条，实际 %d 条", len(byLine))
-	}
-	for _, chunk := range byLine {
-		if strings.Contains(chunk, "\n") {
-			t.Fatalf("按换行分完还留着换行：%q", chunk)
-		}
-	}
-
-	// 四行短句：连按换行都超上限，这时才整条发。
-	whole := splitChatReply("第一句\n第二句\n第三句\n第四句", chatSplitLimits{})
-	if len(whole) != 1 {
-		t.Fatalf("四行应该整条发，实际 %d 条：%#v", len(whole), whole)
-	}
-}
-
-// 长回复按句子等分，不是攒够就切。贪心填满会让最后一条拖着剩下的全部——一句独立的
-// 反问被粘在陈述句后面就是这么来的。
-func TestChatReplyBalancesInsteadOfGreedilyFilling(t *testing.T) {
-	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
-	chunks := splitChatReply(reply, chatSplitLimits{})
-	if len(chunks) != 2 {
-		t.Fatalf("113 字按 60 等分应该是两条，实际 %d 条：%#v", len(chunks), chunks)
-	}
-	// 断点只能落在句末，未必真能均分；要守住的是「不许留小尾巴」——贪心填满的
-	// 失败形态就是最后一条只剩一句反问，或者前面一条吃掉九成。
-	total := 0
-	for _, chunk := range chunks {
-		total += len([]rune(chunk))
-	}
-	for _, chunk := range chunks {
-		if share := len([]rune(chunk)) * 4; share < total {
-			t.Fatalf("有一条短得像尾巴：%q（占比不到四分之一）", chunk)
-		}
-	}
-}
-
-// 中文长句常常一个逗号连到底，一个句号都没有。只认句末的话这种句子永远分不开，
-// 只能等撞上长度上限才被硬切——那才是真正会「看着很挤」的一坨。
-func TestChatReplySplitsCommaOnlyLongSentence(t *testing.T) {
-	line := "这个问题其实要看你想解决的是哪一层，如果只是想让它别再报错，那改配置就够了，但如果是想搞清楚为什么会这样，那得先看日志里那几行堆栈，再回头对一下版本号，因为这个行为在新版里改过一次"
-	chunks := splitChatReply(line, chatSplitLimits{})
-	if len(chunks) < 2 {
-		t.Fatalf("只有逗号的长句没有分条：%#v", chunks)
-	}
-	for _, chunk := range chunks {
-		if n := len([]rune(chunk)); n > len([]rune(line)) {
-			t.Fatalf("分条后反而变长了：%q", chunk)
-		}
-	}
-}
-
-// 分句兜底只认全角标点。半角冒号逗号在链接、CQ 码、版本号里到处都是，按它们断句
-// 会把一个链接劈成两条消息发出去——这是加分句兜底时真踩过的坑。
-func TestChatReplyNeverSplitsInsideLinksOrCQCodes(t *testing.T) {
-	for _, name := range []string{"CQ 码", "链接", "版本号"} {
-		var text string
-		switch name {
-		case "CQ 码":
-			text = "[CQ:record,file=http://127.0.0.1:18080/api/assistant/media/rule-voice-and-more-padding]"
-		case "链接":
-			text = "详情看这个 http://127.0.0.1:18080/api/assistant/media/some-very-long-path-name-here-ok"
-		case "版本号":
-			text = "当前跑的是 v1.2.3-beta.4+build.5678 这个版本，具体差异我等下贴个对比出来给你看看行不行"
-		}
-		for _, chunk := range splitChatReply(text, chatSplitLimits{}) {
-			if strings.HasSuffix(chunk, ":") || strings.HasSuffix(chunk, ",") || strings.HasSuffix(chunk, ".") {
-				t.Fatalf("%s 被从半角标点处切开了：%q", name, chunk)
-			}
-		}
-	}
-}
-
-// 提醒、订阅推送这类「到点了主动找人」的通知走通知的分条，不按句子拆：它们是一条
-// 完整的事实，拆开就成了半句一条。
+// 提醒、订阅推送这类通知走通知的分条：它们是一条完整的事实，拆开就成了半句一条。
 func TestSubscriberNoticeKeepsSentencesTogether(t *testing.T) {
 	notice := "提醒 reminder-fail 本次发送失败，将在 2026-08-25 05:10:29 自动重试（连续失败 1 次）。请检查群是否仍然可达。"
 	if chunks := splitReply(notice, notificationChunkSize); len(chunks) != 1 {
@@ -364,37 +227,32 @@ func TestForwardCardTriggersAboveFiveChunks(t *testing.T) {
 	if !shouldUseForwardReply("abcdef", append(five, "f"), 0, 0) {
 		t.Fatalf("6 块应该走转发卡片")
 	}
-	// 长度条件独立于块数：超过阈值就走卡片。
 	if !shouldUseForwardReply(strings.Repeat("字", 950), []string{"x"}, 900, 0) {
 		t.Fatalf("超过长度阈值应该走转发卡片")
 	}
 }
 
-// 条数上限按整条回复的长度分档。短回复分成几条是「像真人连发」，长回复分成同样多条
-// 就成了刷屏——同一个上限套在两种长度上，总有一头是错的。
-func TestBubbleCapTiersByReplyLength(t *testing.T) {
-	pad := func(n int) string {
-		s := ""
-		for len([]rune(s)) < n {
-			s += "这是一段用来凑字数的话，写得足够长好让它落进对应的档位里。"
-		}
-		return string([]rune(s)[:n])
+// 条数上限和转发阈值都能在控制台改，不是写死的常量。
+func TestSplitLimitsAreConfigurable(t *testing.T) {
+	cfg := (BotConfig{ReplyMaxBubbles: 2, ForwardReplyChunkThreshold: 8}).WithDefaults()
+	limits := chatSplitLimitsFrom(cfg)
+	if limits.MaxBubbles != 2 {
+		t.Fatalf("条数上限没有透传：%#v", limits)
 	}
-	if got := (chatSplitLimits{}).withDefaults().maxBubblesFor(pad(replyShortReplyRunes - 1)); got != replyMaxShortBubbles {
-		t.Fatalf("139 字应该按短回复算，上限 %d，实际 %d", replyMaxShortBubbles, got)
+	if cfg.ForwardReplyChunkThreshold != 8 {
+		t.Fatalf("转发块数阈值没有透传：%d", cfg.ForwardReplyChunkThreshold)
 	}
-	if got := (chatSplitLimits{}).withDefaults().maxBubblesFor(pad(replyShortReplyRunes)); got != replyMaxLongBubbles {
-		t.Fatalf("140 字应该按长回复算，上限 %d，实际 %d", replyMaxLongBubbles, got)
+	// 上限调到 2 之后，三行就超了，退回整条发。
+	if chunks := splitChatReply("第一句\n第二句\n第三句", limits); len(chunks) != 1 {
+		t.Fatalf("上限 2 时三行应该退回整条：%#v", chunks)
 	}
-	// 短回复分不进 3 条就整条发，不是硬塞成 3 条。
-	short := "第一句\n第二句\n第三句\n第四句"
-	if chunks := splitChatReply(short, chatSplitLimits{}); len(chunks) != 1 {
-		t.Fatalf("短回复四行应该整条发：%#v", chunks)
+	// 留空回落默认值。
+	if got := chatSplitLimitsFrom((BotConfig{}).WithDefaults()).MaxBubbles; got != replyMaxChatBubbles {
+		t.Fatalf("默认条数上限 = %d，want %d", got, replyMaxChatBubbles)
 	}
-	// 长回复放宽到 5 条。
-	longReply := pad(380)
-	if chunks := splitChatReply(longReply, chatSplitLimits{}); len(chunks) > replyMaxLongBubbles {
-		t.Fatalf("长回复超过上限：%d 条", len(chunks))
+	six := []string{"a", "b", "c", "d", "e", "f"}
+	if shouldUseForwardReply("abcdef", six, 0, 8) {
+		t.Fatalf("阈值调到 8 之后 6 块不该走转发卡片")
 	}
 }
 
@@ -405,20 +263,12 @@ func TestNaturalSplitCanBeTurnedOff(t *testing.T) {
 	if !off.MarkerOnly {
 		t.Fatal("关掉自然分条后 MarkerOnly 应该为真")
 	}
-	// 换行、句号都只当排版。
-	for _, reply := range []string{
-		"端口被占了\n先 lsof 看看",
-		"懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？",
-	} {
-		if chunks := splitChatReply(reply, off); len(chunks) != 1 {
-			t.Fatalf("关掉之后不该分条：%#v", chunks)
-		}
+	if chunks := splitChatReply("端口被占了\n先 lsof 看看", off); len(chunks) != 1 {
+		t.Fatalf("关掉之后换行不该分条：%#v", chunks)
 	}
-	// 模型显式写的标记仍然照做。
 	if chunks := splitChatReply("结论"+notificationSplitMarker+"理由", off); len(chunks) != 2 {
 		t.Fatalf("显式标记被吞掉了：%#v", chunks)
 	}
-	// 默认是开的，零值也是开的——自然分条是默认行为。
 	if chatSplitLimitsFrom((BotConfig{}).WithDefaults()).MarkerOnly {
 		t.Fatal("默认应该开着自然分条")
 	}
@@ -427,9 +277,8 @@ func TestNaturalSplitCanBeTurnedOff(t *testing.T) {
 	}
 }
 
-// 关掉之后提示词也得改口。投递侧不再按换行分条，提示词却还写着「换行就会分成两三
-// 条」，模型排的版就全落空了——分条位置又变回看模型的排版习惯，正是这条链路翻过车
-// 的那个形状。
+// 关掉之后提示词也得改口。投递侧不再按换行分条、提示词却还写着「换行会分条」的话，
+// 模型排的版就全落空了——分条位置又变回看模型的排版习惯，正是这条链路翻过车的形状。
 func TestPromptFollowsTheNaturalSplitSwitch(t *testing.T) {
 	on := ReplyStyleAssistant.prompt(true)
 	off := ReplyStyleAssistant.prompt(false)
@@ -442,7 +291,6 @@ func TestPromptFollowsTheNaturalSplitSwitch(t *testing.T) {
 	if !strings.Contains(off, "换行不会分条") {
 		t.Fatalf("关掉之后要明说换行只是排版：%q", off)
 	}
-	// 两档都得教标记：那是唯一始终有效的分条方式。
 	for _, prompt := range []string{on, off} {
 		if !strings.Contains(prompt, notificationSplitMarker) {
 			t.Fatalf("提示词没教分条标记：%q", prompt)

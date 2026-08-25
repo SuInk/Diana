@@ -10438,42 +10438,26 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 	return out
 }
 
-// 分条按整条回复的长度分档。短回复分成几条是「像真人连发」，长回复分成同样多条
-// 就成了刷屏——同一个条数上限套在两种长度上，总有一头是错的。
-//
-// 这几个数都是配置项（见 BotConfig），常量只是留空时的默认值。
-const (
-	// replyShortReplyRunes 是「短回复」的上界。以内的回复最多分三条，超过就整条发：
-	// 这么短的内容分成四条以上，屏幕上全是小气泡，比一条完整的消息更难读。
-	replyShortReplyRunes = 140
-	// replyMaxShortBubbles 是短回复的条数上限。
-	replyMaxShortBubbles = 3
-	// replyMaxLongBubbles 是长回复的条数上限。再多就不是分条能解决的了，交给合并
-	// 转发卡片（见 shouldUseForwardReply）。
-	replyMaxLongBubbles = 5
-)
+// replyMaxChatBubbles 是分条后允许的条数。按换行分出来超过这个数就不按换行分了：
+// 几条小气泡挤在一起比一条完整的消息更难读，再多就不是分条能解决的，交给合并转发
+// 卡片（见 shouldUseForwardReply）。这是配置项，常量只是留空时的默认值。
+const replyMaxChatBubbles = 5
 
 // chatSplitLimits 是分条用到的几个阈值。它们全都来自机器人配置，凑成一个结构体
 // 是因为一路往下传五个 int 参数没人认得住哪个是哪个。
 type chatSplitLimits struct {
-	ChunkSize    int // 单条消息的硬上限，撞上了在最近的标点处切开
-	BubbleTarget int // 一条读着舒服的长度，决定一行要不要再分、分成几条
-	ShortReply   int // 短回复与长回复的分界
-	MaxShort     int // 短回复的条数上限，分不进就整条发
-	MaxLong      int // 长回复的条数上限
-	// MarkerOnly 关掉自然分条：只认模型显式写的 <dianabr>，换行和句号都只当排版。
+	ChunkSize  int // 单条消息的硬上限，撞上了在最近的标点处切开
+	MaxBubbles int // 按换行分出来最多几条，超了就不按换行分
+	// MarkerOnly 关掉自然分条：只认模型显式写的 <dianabr>，换行只当排版。
 	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
 	MarkerOnly bool
 }
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 	return chatSplitLimits{
-		ChunkSize:    cfg.DirectReplyChunkSize,
-		BubbleTarget: cfg.ReplyBubbleTargetSize,
-		ShortReply:   cfg.ReplyShortReplySize,
-		MaxShort:     cfg.ReplyMaxShortBubbles,
-		MaxLong:      cfg.ReplyMaxLongBubbles,
-		MarkerOnly:   !boolValue(cfg.NaturalReplySplitEnabled, true),
+		ChunkSize:  cfg.DirectReplyChunkSize,
+		MaxBubbles: cfg.ReplyMaxBubbles,
+		MarkerOnly: !boolValue(cfg.NaturalReplySplitEnabled, true),
 	}
 }
 
@@ -10481,62 +10465,37 @@ func (l chatSplitLimits) withDefaults() chatSplitLimits {
 	if l.ChunkSize <= 0 {
 		l.ChunkSize = notificationChunkSize
 	}
-	if l.BubbleTarget <= 0 {
-		l.BubbleTarget = replyBubbleTargetRunes
-	}
-	if l.ShortReply <= 0 {
-		l.ShortReply = replyShortReplyRunes
-	}
-	if l.MaxShort <= 0 {
-		l.MaxShort = replyMaxShortBubbles
-	}
-	if l.MaxLong <= 0 {
-		l.MaxLong = replyMaxLongBubbles
-	}
-	if l.MaxLong < l.MaxShort {
-		l.MaxLong = l.MaxShort
+	if l.MaxBubbles <= 0 {
+		l.MaxBubbles = replyMaxChatBubbles
 	}
 	return l
-}
-
-// maxBubblesFor 返回这条回复允许分成几条。
-func (l chatSplitLimits) maxBubblesFor(reply string) int {
-	if len([]rune(reply)) < l.ShortReply {
-		return l.MaxShort
-	}
-	return l.MaxLong
 }
 
 // chatReplySplitDepth 是分条的精细程度，由细到粗。
 type chatReplySplitDepth int
 
 const (
-	splitAtSentence chatReplySplitDepth = iota // 标记 + 换行 + 句号
-	splitAtLine                                // 标记 + 换行
-	splitAtMarker                              // 只认标记
+	splitAtLine   chatReplySplitDepth = iota // 标记 + 换行
+	splitAtMarker                            // 只认标记
 )
 
-// chatReplySegments 由细到粗依次尝试，返回第一档不超过条数上限的结果。
+// chatReplySegments 先按换行分，分不进条数上限就退回只认标记。
 //
-// 逐档退让而不是一刀切回整条：三行长文按句子分是六条、超了，但三行本身就是三条，
-// 正好；直接退回整条会把模型分好的三行糊成一个两百多字的气泡。
+// 「要么分好，要么别分」：不做「超出的并进最后一条」，那会让最后一条拖着个尾巴。
+// 退一档而不是一刀切回整条也是同样的道理——但这里只剩两档，退无可退时整条发。
 func chatReplySegments(reply string, limits chatSplitLimits) []string {
 	// 关掉自然分条之后只认标记。模型显式写的 <dianabr> 仍然照做——那是它明说要分，
 	// 关掉的是运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
 	if limits.MarkerOnly {
-		return splitChatReplyAtDepth(reply, limits, splitAtMarker)
+		return splitChatReplyAtDepth(reply, splitAtMarker)
 	}
-	max := limits.maxBubblesFor(reply)
-	for _, depth := range []chatReplySplitDepth{splitAtSentence, splitAtLine, splitAtMarker} {
-		if parts := splitChatReplyAtDepth(reply, limits, depth); len(parts) <= max {
-			return parts
-		}
+	if parts := splitChatReplyAtDepth(reply, splitAtLine); len(parts) <= limits.MaxBubbles {
+		return parts
 	}
-	return []string{reply}
+	return splitChatReplyAtDepth(reply, splitAtMarker)
 }
 
-func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {
-	maxBubbles := limits.maxBubblesFor(reply)
+func splitChatReplyAtDepth(reply string, depth chatReplySplitDepth) []string {
 	var out []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(part)
@@ -10547,14 +10506,7 @@ func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReply
 			out = append(out, part)
 			continue
 		}
-		lines := splitReplyLines(part)
-		if depth == splitAtLine {
-			out = append(out, lines...)
-			continue
-		}
-		for _, line := range lines {
-			out = append(out, balanceLineIntoBubbles(line, limits.BubbleTarget, maxBubbles)...)
-		}
+		out = append(out, splitReplyLines(part)...)
 	}
 	return out
 }
@@ -10650,121 +10602,6 @@ func hasUnclosedQuote(runes []rune) bool {
 		}
 	}
 	return depth > 0
-}
-
-// replyBubbleTargetRunes 是一条聊天消息读着舒服的长度。它决定一行要不要按句子再分，
-// 以及分成几条——不是硬上限，硬上限是 DirectReplyChunkSize，两个数管的不是同一件事。
-const replyBubbleTargetRunes = 60
-
-// balanceLineIntoBubbles 把一行按句子等分。份数取 ceil(长度/目标)，每一刀切在最接近
-// 等分点的句末。
-//
-// 等分而不是「攒够 target 就切」：贪心填满会让最后一条拖着剩下的全部，一句独立的
-// 反问被粘在陈述句后面就是这么来的。
-func balanceLineIntoBubbles(line string, target, maxBubbles int) []string {
-	runes := []rune(line)
-	if target <= 0 {
-		target = replyBubbleTargetRunes
-	}
-	want := (len(runes) + target - 1) / target
-	if want < 2 {
-		return []string{line}
-	}
-	if want > maxBubbles {
-		want = maxBubbles
-	}
-	ends := boundaryPositions(runes, isSentenceEnd)
-	// 句末不够切出这么多份时补上分句标点。中文长句常常一个逗号连到底，一个句号都
-	// 没有——只认句末的话这种句子永远分不开，只能等撞上长度上限才被硬切。优先级和
-	// replyChunkCut 是同一套：句末 > 分句。
-	clauses := boundaryPositions(runes, isClauseBoundary)
-	if len(ends) == 0 && len(clauses) == 0 {
-		return []string{line}
-	}
-	var out []string
-	start := 0
-	for piece := 1; piece < want; piece++ {
-		ideal := len(runes) * piece / want
-		best := nearestBoundary(ends, start, len(runes), ideal)
-		if best < 0 {
-			best = nearestBoundary(clauses, start, len(runes), ideal)
-		}
-		if best < 0 {
-			break
-		}
-		if text := strings.TrimSpace(string(runes[start:best])); text != "" {
-			out = append(out, text)
-		}
-		start = best
-	}
-	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
-		out = append(out, tail)
-	}
-	if len(out) == 0 {
-		return []string{line}
-	}
-	return out
-}
-
-// boundaryPositions 返回每个符合 match 的标点之后的位置。引号括号里的标点不算
-// 边界：「他说「我不去。」然后走了」拆开就散架了；连着的标点（「？！」）算一个。
-func boundaryPositions(runes []rune, match func(rune) bool) []int {
-	var out []int
-	depth := 0
-	for i, r := range runes {
-		switch r {
-		case '「', '『', '（', '(', '【', '《', '“', '[':
-			depth++
-		case '」', '』', '）', ')', '】', '》', '”', ']':
-			if depth > 0 {
-				depth--
-			}
-		}
-		if depth > 0 || !match(r) {
-			continue
-		}
-		if i+1 < len(runes) && match(runes[i+1]) {
-			continue
-		}
-		out = append(out, i+1)
-	}
-	return out
-}
-
-// isClauseBoundary 判断能不能把一句话从这里分成两条消息。
-//
-// 只认全角标点。半角的冒号和逗号在链接、CQ 码、代码和版本号里到处都是——
-// http://127.0.0.1:18080 里有两个冒号，[CQ:record,file=…] 里冒号逗号都有，
-// 按它们断句会把一个链接劈成两条消息发出去。isClauseBreak 收得宽是给长度兜底用的：
-// 那里已经非切不可，切在半角标点上也比拦腰切在字中间强；这里是「要不要分条」，
-// 不确定就别分。
-func isClauseBoundary(r rune) bool {
-	switch r {
-	case '，', '、', '：':
-		return true
-	}
-	return false
-}
-
-// nearestBoundary 返回 (start, limit) 之间最接近 ideal 的断点，没有就返回 -1。
-func nearestBoundary(positions []int, start, limit, ideal int) int {
-	best := -1
-	for _, pos := range positions {
-		if pos <= start || pos >= limit {
-			continue
-		}
-		if best < 0 || absInt(pos-ideal) < absInt(best-ideal) {
-			best = pos
-		}
-	}
-	return best
-}
-
-func absInt(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
 }
 
 // endsMidSentence 判断这一行是不是停在半句话上。句号、问号、感叹号不算——那是
@@ -10916,9 +10753,13 @@ func isSentenceEnd(r rune) bool {
 }
 
 // isClauseBreak 判断是不是分句标点。断在这里读着不算体面，但比拦腰硬切强。
+//
+// 只认全角。半角的冒号和逗号在链接、CQ 码、代码和版本号里到处都是——
+// http://127.0.0.1:18080 有两个冒号，[CQ:record,file=…] 冒号逗号都有——撞上长度
+// 上限时按它们断，会把一个链接从中间劈开发出去。
 func isClauseBreak(r rune) bool {
 	switch r {
-	case '，', '、', ',', ';', '：', ':':
+	case '，', '、', '：':
 		return true
 	}
 	return false
