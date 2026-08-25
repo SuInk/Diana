@@ -20,16 +20,20 @@ import (
 //
 // 真正不能有两份的是「谁和谁算一次互动」，那一份在存储层，两边都从它取数。
 const (
-	relationImageWidth   = 1000
-	relationImageHeight  = 860
-	relationImageMaxSeat = 24
+	relationImageWidth  = 1000
+	relationImageHeight = 860
+	// relationImageDefaultSeats 是没配置时画多少人。位图没有悬停也不能缩放，
+	// 收得比网页版紧。
+	relationImageDefaultSeats = 24
+	relationImageMinSeats     = 6
+	relationImageMaxSeats     = 40
 )
 
 // RenderGroupRelationHTML 把关系图渲染成一张自包含的 HTML，交给无头浏览器截图。
 //
 // 用 HTML+SVG 而不是在 Go 里直接画位图：位图要自己做字体光栅化，中文名字第一个
 // 就过不去；SVG 的文字交给浏览器排版，中文、emoji、生僻字都不用操心。
-func RenderGroupRelationHTML(graph GroupRelationGraph, title string, rangeLabel string) string {
+func RenderGroupRelationHTML(graph GroupRelationGraph, title string, rangeLabel string, maxSeats int) string {
 	var body strings.Builder
 	body.WriteString(`<!doctype html><meta charset="utf-8"><style>
 html,body{margin:0;padding:0;background:#ffffff}
@@ -40,7 +44,7 @@ h1{font-size:30px;margin:32px 40px 4px}
 </style><div class="wrap">`)
 	body.WriteString(`<h1>` + html.EscapeString(strings.TrimSpace(title)) + `</h1>`)
 	body.WriteString(`<p class="sub">` + html.EscapeString(relationSubtitle(graph, rangeLabel)) + `</p>`)
-	body.WriteString(renderGroupRelationSVG(graph))
+	body.WriteString(renderGroupRelationSVG(graph, clampRelationSeats(maxSeats)))
 	body.WriteString(`</div>`)
 	return body.String()
 }
@@ -67,7 +71,7 @@ type relationSeat struct {
 
 // renderGroupRelationSVG 画环形图：机器人在圆心，成员按与它的互动次数从正上方
 // 顺时针铺开。
-func renderGroupRelationSVG(graph GroupRelationGraph) string {
+func renderGroupRelationSVG(graph GroupRelationGraph, maxSeats int) string {
 	const (
 		width        = relationImageWidth
 		height       = relationImageHeight - 110
@@ -77,7 +81,7 @@ func renderGroupRelationSVG(graph GroupRelationGraph) string {
 	ringRadius := math.Min(width, height)/2 - 140
 
 	weights := relationWeightsToBot(graph)
-	seats := relationSeats(graph, weights, centerX, centerY, ringRadius)
+	seats := relationSeats(graph, weights, centerX, centerY, ringRadius, maxSeats)
 
 	var svg strings.Builder
 	fmt.Fprintf(&svg, `<svg width="%d" height="%d" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg">`, width, height, width, height)
@@ -165,7 +169,7 @@ func relationWeightsToBot(graph GroupRelationGraph) map[string]int {
 	return weights
 }
 
-func relationSeats(graph GroupRelationGraph, weights map[string]int, centerX, centerY, ringRadius float64) []relationSeat {
+func relationSeats(graph GroupRelationGraph, weights map[string]int, centerX, centerY, ringRadius float64, maxSeats int) []relationSeat {
 	members := make([]GroupRelationNode, 0, len(graph.Nodes))
 	for _, node := range graph.Nodes {
 		if !node.IsBot {
@@ -179,8 +183,8 @@ func relationSeats(graph GroupRelationGraph, weights map[string]int, centerX, ce
 		return members[left].Messages > members[right].Messages
 	})
 	// 位图没有悬停也不能缩放，人太多就只剩一圈看不清的小字，比网页版收得更紧。
-	if len(members) > relationImageMaxSeat {
-		members = members[:relationImageMaxSeat]
+	if len(members) > maxSeats {
+		members = members[:maxSeats]
 	}
 	if len(members) == 0 {
 		return nil
@@ -253,4 +257,19 @@ func truncateRelationLabel(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit]) + "…"
+}
+
+// clampRelationSeats 把配置里的人数上限收进可画的范围。配置层已经限过一遍，
+// 这里再收一次是因为渲染也可以被直接调用。
+func clampRelationSeats(value int) int {
+	if value <= 0 {
+		return relationImageDefaultSeats
+	}
+	if value < relationImageMinSeats {
+		return relationImageMinSeats
+	}
+	if value > relationImageMaxSeats {
+		return relationImageMaxSeats
+	}
+	return value
 }
