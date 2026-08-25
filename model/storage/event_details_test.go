@@ -912,3 +912,61 @@ VALUES ('evt-legacy', 'group:765205730', 'group', 'bot-a', '765205730', '4949427
 		t.Fatalf("SenderName = %q，老数据的昵称应当仍然兜得住", page.Events[0].SenderName)
 	}
 }
+
+// 就算在界面上只选了其中一台机器人，重复照样发生：筛选本身是生效的（另一台的事件
+// 不会出现），但另一台的画像行仍然会把这条事件扇成两行，其中一行顶着另一台认识的
+// 名字——看起来就像两台都冒出来了。
+//
+// 修之前这个场景返回：[evt-tg/QQ 那台认识的, evt-tg/TG 那台认识的]，而 FilteredTotal=1。
+func TestListInboundEventDetailsUnderBotScopeStaysSingleRow(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-scope.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	stamp := now.Format(time.RFC3339Nano)
+
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES ('bot-qq', '494942782', 'QQ 那台认识的', 0, 0, '[]', ?),
+       ('bot-tg', '494942782', 'TG 那台认识的', 0, 0, '[]', ?)
+`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	add := func(id string, profileID string) {
+		t.Helper()
+		payload, err := json.Marshal(assistant.MessageEvent{Kind: "group", GroupID: "765205730", UserID: "494942782", ProfileID: profileID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority, status, attempts, available_at, outcome, created_at, updated_at)
+VALUES (?, 'group:765205730', 'group', ?, '765205730', '494942782', ?, ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
+`, id, profileID, id, now.Unix(), string(payload), now.Unix(), now.UnixNano(), now.UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("evt-tg", "bot-tg")
+	add("evt-qq", "bot-qq")
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 50, ProfileID: "bot-tg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("只选一台机器人时返回了 %d 条：%+v", len(page.Events), page.Events)
+	}
+	if page.Events[0].ID != "evt-tg" {
+		t.Fatalf("筛选没生效，返回的是 %q", page.Events[0].ID)
+	}
+	if page.Events[0].SenderName != "TG 那台认识的" {
+		t.Fatalf("SenderName = %q，应当是选中那台认识的名字", page.Events[0].SenderName)
+	}
+	if page.FilteredTotal != int64(len(page.Events)) {
+		t.Fatalf("计数 %d 和列表 %d 对不上", page.FilteredTotal, len(page.Events))
+	}
+}
