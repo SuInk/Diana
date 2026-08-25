@@ -813,3 +813,160 @@ VALUES ('legacy', 'group:g1', 'group', 'g1', 'u1', 'legacy', ?, ?, 0, 'done', 0,
 	}
 	_ = store.Close()
 }
+
+// 两台机器人都见过同一个人时，事件列表不能把他的事件列两遍。
+//
+// user_profiles 的主键是 (bot_profile_id, user_id)，同一个 user_id 每台机器人各一行。
+// 列表查询 LEFT JOIN 这张表却只按 user_id 匹配，于是每条事件被乘上这个人的画像行数；
+// 而顶部计数根本不 join，两个数字对不上——界面上就是「已显示 36 / 22」加上重复的行。
+func TestListInboundEventDetailsDoesNotDuplicatePerBotProfile(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-dup.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	stamp := now.Format(time.RFC3339Nano)
+
+	// 同一个 user_id 在两台机器人下各有一份画像，显示名还不一样。
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES ('bot-a', '494942782', 'A 认识的名字', 0, 0, '[]', ?),
+       ('bot-b', '494942782', 'B 认识的名字', 0, 0, '[]', ?)
+`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := json.Marshal(assistant.MessageEvent{
+		Kind: "group", GroupID: "765205730", UserID: "494942782", ProfileID: "bot-a", RawMessage: "[图片]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority, status, attempts, available_at, outcome, created_at, updated_at)
+VALUES ('evt-1', 'group:765205730', 'group', 'bot-a', '765205730', '494942782', '1053190582', ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
+`, now.Unix(), string(payload), now.Unix(), now.UnixNano(), now.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 50, Offset: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("列表返回了 %d 条，应当只有 1 条：%+v", len(page.Events), page.Events)
+	}
+	if page.FilteredTotal != int64(len(page.Events)) {
+		t.Fatalf("计数 %d 和列表 %d 对不上", page.FilteredTotal, len(page.Events))
+	}
+	// 名字要取这条事件所属机器人的那一份，不能串到另一台去。
+	if page.Events[0].SenderName != "A 认识的名字" {
+		t.Fatalf("SenderName = %q，应当用 bot-a 的画像", page.Events[0].SenderName)
+	}
+}
+
+// 多机器人之前写的画像 bot_profile_id 是空串。这次把 join 换成按机器人取，
+// 不能顺手把这些老数据的昵称丢掉——事件带着 profile_id，画像却没有，仍要兜住。
+func TestListInboundEventDetailsFallsBackToLegacyUnscopedProfile(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-legacy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	stamp := now.Format(time.RFC3339Nano)
+
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES ('', '494942782', '老数据里的名字', 0, 0, '[]', ?)
+`, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := json.Marshal(assistant.MessageEvent{
+		Kind: "group", GroupID: "765205730", UserID: "494942782", ProfileID: "bot-a", RawMessage: "[图片]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority, status, attempts, available_at, outcome, created_at, updated_at)
+VALUES ('evt-legacy', 'group:765205730', 'group', 'bot-a', '765205730', '494942782', 'm-1', ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
+`, now.Unix(), string(payload), now.Unix(), now.UnixNano(), now.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 50, Offset: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("列表返回了 %d 条：%+v", len(page.Events), page.Events)
+	}
+	if page.Events[0].SenderName != "老数据里的名字" {
+		t.Fatalf("SenderName = %q，老数据的昵称应当仍然兜得住", page.Events[0].SenderName)
+	}
+}
+
+// 就算在界面上只选了其中一台机器人，重复照样发生：筛选本身是生效的（另一台的事件
+// 不会出现），但另一台的画像行仍然会把这条事件扇成两行，其中一行顶着另一台认识的
+// 名字——看起来就像两台都冒出来了。
+//
+// 修之前这个场景返回：[evt-tg/QQ 那台认识的, evt-tg/TG 那台认识的]，而 FilteredTotal=1。
+func TestListInboundEventDetailsUnderBotScopeStaysSingleRow(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-scope.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	stamp := now.Format(time.RFC3339Nano)
+
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES ('bot-qq', '494942782', 'QQ 那台认识的', 0, 0, '[]', ?),
+       ('bot-tg', '494942782', 'TG 那台认识的', 0, 0, '[]', ?)
+`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	add := func(id string, profileID string) {
+		t.Helper()
+		payload, err := json.Marshal(assistant.MessageEvent{Kind: "group", GroupID: "765205730", UserID: "494942782", ProfileID: profileID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority, status, attempts, available_at, outcome, created_at, updated_at)
+VALUES (?, 'group:765205730', 'group', ?, '765205730', '494942782', ?, ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
+`, id, profileID, id, now.Unix(), string(payload), now.Unix(), now.UnixNano(), now.UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("evt-tg", "bot-tg")
+	add("evt-qq", "bot-qq")
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 50, ProfileID: "bot-tg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("只选一台机器人时返回了 %d 条：%+v", len(page.Events), page.Events)
+	}
+	if page.Events[0].ID != "evt-tg" {
+		t.Fatalf("筛选没生效，返回的是 %q", page.Events[0].ID)
+	}
+	if page.Events[0].SenderName != "TG 那台认识的" {
+		t.Fatalf("SenderName = %q，应当是选中那台认识的名字", page.Events[0].SenderName)
+	}
+	if page.FilteredTotal != int64(len(page.Events)) {
+		t.Fatalf("计数 %d 和列表 %d 对不上", page.FilteredTotal, len(page.Events))
+	}
+}
