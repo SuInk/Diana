@@ -26,8 +26,13 @@ const (
 	repositoryWatchNoReleaseCursor = "__none__"
 	repositoryWatchNoPullCursor    = "__none__"
 	// repositoryWatchDefaultLimit 是每类动态默认列出的条数，同时用作抓取上限。
-	repositoryWatchDefaultLimit  = 10
-	repositoryWatchNoIssueCursor = "__none__"
+	repositoryWatchDefaultLimit = 10
+	// diff 是喂给跟评的参考资料，不是给人读的：文件数和每个 patch 的长度都收得
+	// 比展示用更紧，一条动态的 diff 不该把跟评的上下文预算吃光。
+	repositoryWatchDiffFileLimit   = 12
+	repositoryWatchDiffPatchRunes  = 1200
+	repositoryWatchDiffDigestRunes = 6000
+	repositoryWatchNoIssueCursor   = "__none__"
 )
 
 type RepositoryWatchPlugin struct {
@@ -63,12 +68,16 @@ type repositoryWatchSelection struct {
 	Issues       bool
 	Releases     bool
 	Stars        bool
+	// Diff 只在这一轮确实有人要读 diff 时才置位（目前是跟评）。通知正文从不展示
+	// diff，无条件拉取等于每轮白花一次 compare 加每个 PR 一次 files。
+	Diff bool
 }
 
 type repositoryWatchChange struct {
 	Repository   string                       `json:"repository"`
 	Branch       string                       `json:"branch,omitempty"`
 	Commits      []repositoryWatchCommit      `json:"commits,omitempty"`
+	CommitDiff   *repositoryWatchDiff         `json:"commit_diff,omitempty"`
 	PullRequests []repositoryWatchPullRequest `json:"pull_requests,omitempty"`
 	Issues       []repositoryWatchIssue       `json:"issues,omitempty"`
 	Releases     []repositoryWatchRelease     `json:"releases,omitempty"`
@@ -96,16 +105,18 @@ type repositoryWatchRelease struct {
 }
 
 type repositoryWatchPullRequest struct {
-	Number         int       `json:"number"`
-	Title          string    `json:"title"`
-	Author         string    `json:"author,omitempty"`
-	Status         string    `json:"status"`
-	URL            string    `json:"url,omitempty"`
-	BaseBranch     string    `json:"base_branch,omitempty"`
-	HeadBranch     string    `json:"head_branch,omitempty"`
-	MergeCommitSHA string    `json:"merge_commit_sha,omitempty"`
-	UpdatedAt      time.Time `json:"updated_at,omitempty"`
-	OccurredAt     time.Time `json:"occurred_at,omitempty"`
+	Number         int                       `json:"number"`
+	Title          string                    `json:"title"`
+	Author         string                    `json:"author,omitempty"`
+	Status         string                    `json:"status"`
+	URL            string                    `json:"url,omitempty"`
+	BaseBranch     string                    `json:"base_branch,omitempty"`
+	HeadBranch     string                    `json:"head_branch,omitempty"`
+	MergeCommitSHA string                    `json:"merge_commit_sha,omitempty"`
+	UpdatedAt      time.Time                 `json:"updated_at,omitempty"`
+	OccurredAt     time.Time                 `json:"occurred_at,omitempty"`
+	Files          []repositoryWatchDiffFile `json:"files,omitempty"`
+	FilesTruncated bool                      `json:"files_truncated,omitempty"`
 	// Commits 是本次更新里新推上来的提交；PR 只说「有更新」看不出改了什么，
 	// 点进去才知道，通知里直接列出来省一次跳转。
 	Commits        []repositoryWatchPullCommit `json:"commits,omitempty"`
@@ -132,6 +143,33 @@ type repositoryWatchIssue struct {
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	ClosedAt  time.Time `json:"closed_at,omitempty"`
+}
+
+type repositoryWatchDiff struct {
+	Base           string                    `json:"base,omitempty"`
+	Head           string                    `json:"head,omitempty"`
+	TotalCommits   int                       `json:"total_commits,omitempty"`
+	AheadBy        int                       `json:"ahead_by,omitempty"`
+	Files          []repositoryWatchDiffFile `json:"files,omitempty"`
+	FilesTruncated bool                      `json:"files_truncated,omitempty"`
+}
+
+type repositoryWatchDiffFile struct {
+	Filename  string `json:"filename"`
+	Status    string `json:"status,omitempty"`
+	Additions int    `json:"additions,omitempty"`
+	Deletions int    `json:"deletions,omitempty"`
+	Changes   int    `json:"changes,omitempty"`
+	Patch     string `json:"patch,omitempty"`
+}
+
+type repositoryWatchDiffFilePayload struct {
+	Filename  string `json:"filename"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Changes   int    `json:"changes"`
+	Patch     string `json:"patch"`
 }
 
 type repositoryWatchStarChange struct {
@@ -357,7 +395,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.PullRequests {
-		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, settings)
+		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, selection.Diff, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -404,7 +442,77 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 	if len(change.PullRequests) > 0 && len(change.Commits) > 0 {
 		change.Commits = commitsWithoutPullRequestMerges(change.Commits, change.PullRequests)
 	}
+	// diff 拉取放在最后，且只在这一轮有人要读时才做：拉失败不影响这条动态本身，
+	// 通知照发，跟评退化成只看事实清单。
+	if selection.Diff && len(change.Commits) > 0 && strings.TrimSpace(cursor.CommitSHA) != "" && strings.TrimSpace(change.Snapshot.CommitSHA) != "" {
+		diff, err := p.fetchCommitDiff(ctx, repository, cursor.CommitSHA, change.Snapshot.CommitSHA, settings)
+		if err != nil {
+			diff, err = p.fetchSingleCommitDiff(ctx, repository, change.Snapshot.CommitSHA, settings)
+		}
+		if err == nil {
+			change.CommitDiff = diff
+		}
+	}
 	return change, nil
+}
+
+func (p *RepositoryWatchPlugin) fetchCommitDiff(ctx context.Context, repository, base, head string, settings SettingValues) (*repositoryWatchDiff, error) {
+	var payload struct {
+		TotalCommits int                              `json:"total_commits"`
+		AheadBy      int                              `json:"ahead_by"`
+		Files        []repositoryWatchDiffFilePayload `json:"files"`
+	}
+	path := "/repos/" + repository + "/compare/" + url.PathEscape(strings.TrimSpace(base)) + "..." + url.PathEscape(strings.TrimSpace(head))
+	if err := p.getJSON(ctx, path, settings, &payload); err != nil {
+		return nil, fmt.Errorf("读取 %s commit diff: %w", repository, err)
+	}
+	files, truncated := repositoryWatchDiffFiles(payload.Files, repositoryWatchDiffFileLimit)
+	return &repositoryWatchDiff{
+		Base: strings.TrimSpace(base), Head: strings.TrimSpace(head), TotalCommits: payload.TotalCommits,
+		AheadBy: payload.AheadBy, Files: files, FilesTruncated: truncated,
+	}, nil
+}
+
+// fetchSingleCommitDiff 是 compare 失败时的兜底：强推之后旧游标可能已经不在仓库里，
+// compare 会 404，但最新那个 commit 自己的 diff 还拿得到。
+func (p *RepositoryWatchPlugin) fetchSingleCommitDiff(ctx context.Context, repository, sha string, settings SettingValues) (*repositoryWatchDiff, error) {
+	var payload struct {
+		Files []repositoryWatchDiffFilePayload `json:"files"`
+	}
+	path := "/repos/" + repository + "/commits/" + url.PathEscape(strings.TrimSpace(sha))
+	if err := p.getJSON(ctx, path, settings, &payload); err != nil {
+		return nil, fmt.Errorf("读取 %s commit %s diff: %w", repository, sha, err)
+	}
+	files, truncated := repositoryWatchDiffFiles(payload.Files, repositoryWatchDiffFileLimit)
+	return &repositoryWatchDiff{Head: strings.TrimSpace(sha), TotalCommits: 1, AheadBy: 1, Files: files, FilesTruncated: truncated}, nil
+}
+
+func (p *RepositoryWatchPlugin) fetchPullRequestFiles(ctx context.Context, repository string, number int, settings SettingValues) ([]repositoryWatchDiffFile, bool, error) {
+	var payload []repositoryWatchDiffFilePayload
+	path := fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100", repository, number)
+	if err := p.getJSON(ctx, path, settings, &payload); err != nil {
+		return nil, false, fmt.Errorf("读取 %s PR #%d diff: %w", repository, number, err)
+	}
+	files, truncated := repositoryWatchDiffFiles(payload, repositoryWatchDiffFileLimit)
+	return files, truncated, nil
+}
+
+func repositoryWatchDiffFiles(payload []repositoryWatchDiffFilePayload, limit int) ([]repositoryWatchDiffFile, bool) {
+	if limit <= 0 {
+		limit = repositoryWatchDiffFileLimit
+	}
+	files := make([]repositoryWatchDiffFile, 0, min(limit, len(payload)))
+	for _, item := range payload {
+		if len(files) >= limit {
+			break
+		}
+		files = append(files, repositoryWatchDiffFile{
+			Filename: strings.TrimSpace(item.Filename), Status: strings.TrimSpace(item.Status),
+			Additions: item.Additions, Deletions: item.Deletions, Changes: item.Changes,
+			Patch: truncateRunes(strings.TrimSpace(item.Patch), repositoryWatchDiffPatchRunes),
+		})
+	}
+	return files, len(payload) > limit
 }
 
 func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, branch, cursor string, settings SettingValues) ([]repositoryWatchCommit, string, bool, error) {
@@ -462,7 +570,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	return commits, latest, newCommitCount > limit, nil
 }
 
-func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
+func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, wantDiff bool, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
@@ -535,6 +643,14 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		if err != nil {
 			return nil, "", err
 		}
+		var files []repositoryWatchDiffFile
+		filesTruncated := false
+		if wantDiff {
+			// 拉不到就算了：PR 条目本身照常播报，跟评少一份参考资料而已。
+			if fetched, truncated, fileErr := p.fetchPullRequestFiles(ctx, repository, item.Number, settings); fileErr == nil {
+				files, filesTruncated = fetched, truncated
+			}
+		}
 		result = append(result, repositoryWatchPullRequest{
 			Number:         item.Number,
 			Title:          strings.TrimSpace(item.Title),
@@ -545,6 +661,8 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 			HeadBranch:     strings.TrimSpace(item.Head.Ref),
 			MergeCommitSHA: strings.TrimSpace(item.MergeCommitSHA),
 			UpdatedAt:      item.UpdatedAt, OccurredAt: occurredAt,
+			Files:            files,
+			FilesTruncated:   filesTruncated,
 			Commits:          commits,
 			OmittedCommits:   omittedCommits,
 			RewrittenCommits: rewrittenCommits,
