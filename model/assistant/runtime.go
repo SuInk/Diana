@@ -6694,6 +6694,24 @@ func currentPromptText(event MessageEvent, text string) string {
 	})
 }
 
+// mentionsSomeoneElse 报告这条消息除了 @ 机器人自己，还 @ 了别人。
+// 取不到自己的账号时按「@ 了别人」处理：那句提醒多说一次无害，漏说会让模型
+// 忽略掉真正的回复对象。
+func mentionsSomeoneElse(event MessageEvent) bool {
+	botID := strings.TrimSpace(event.SelfID)
+	for _, segment := range event.Segments {
+		if segment.Type != "at" {
+			continue
+		}
+		qq := strings.TrimSpace(segment.Data["qq"])
+		if qq == "" || qq == botID {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourceContext semanticReferenceContext) string {
 	text = strings.TrimSpace(text)
 	hasAtSegment := eventHasSegmentType(event, "at")
@@ -6709,7 +6727,14 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 		text += "\n\n这条当前消息主要由 @ 或引用组成，没有额外正文，也要把它当成一次有效唤醒并自然回复。"
 	}
 	if hasAtSegment {
-		text += "\n\n当前消息包含 @ 标记，@ 是当前消息的一部分，不要忽略。"
+		// 指向机器人自己的 @ 已经从正文里摘掉了（见 cleanInput），这时再说
+		// 「@ 是当前消息的一部分，不要忽略」就对不上——正文里没有 @ 可看。
+		// 分开说：@ 别人的照旧提醒别漏，@ 自己的只说明「这是在叫你」。
+		if mentionsSomeoneElse(event) {
+			text += "\n\n当前消息包含 @ 标记，@ 是当前消息的一部分，不要忽略。"
+		} else {
+			text += "\n\n这条消息 @ 了你，正文里不会再出现这个 @。"
+		}
 	}
 	if hasReplySegment {
 		text += "\n\n当前消息包含引用/回复标记，引用关系是当前消息的一部分；如果引用内容能从历史参考中看出，可以结合它回复。"
