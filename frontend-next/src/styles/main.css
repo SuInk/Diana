@@ -2475,17 +2475,17 @@ a.nav-action {
   gap: 14px;
 }
 
-/* 瀑布流：用 CSS 多列让卡片按各自高度咬合，短卡片下面不再留空。
-   代价是阅读顺序变成「先竖后横」，插件之间没有先后关系，可以接受。 */
-.plugin-masonry {
-  columns: 320px 4;
-  column-gap: 14px;
-}
-
-.plugin-masonry > .plugin-card {
-  /* 不加会被拆到两列中间断开 */
-  break-inside: avoid;
-  margin-bottom: 14px;
+/* 方块：一行一行往右排，读的顺序和眼睛扫的顺序一致。
+   这里原来是 CSS 多列瀑布流，为的是让卡片按各自高度咬合、短卡片下面不留空；
+   但描述已经被钉死成两行（见 .plugin-card-desc），卡片本来就一般高，咬合没东西
+   可咬，白白把阅读顺序换成了「先竖后横」——找一个插件得竖着扫三趟。
+   同一行里的高度差交给 grid 拉伸，卡片是 column flex，多出来的高度由描述吃掉。 */
+.plugin-tiles {
+  display: grid;
+  /* 每列至少 320px，且最多四列：再宽卡片也没有更多信息可放，
+     只会把名称和右边的开关拉得越来越远。 */
+  grid-template-columns: repeat(auto-fill, minmax(clamp(320px, calc((100% - 3 * 14px) / 4), 100%), 1fr));
+  gap: 14px;
 }
 
 /* 横排：一行一个插件，名称、描述、动作横向排开，密度最高 */
