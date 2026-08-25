@@ -187,8 +187,15 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
+  /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 <dianabr>；缺省等价于开启。 */
+  natural_reply_split_enabled?: boolean;
+  /** 最多分几条；分出来超过它就退回粗一档，退到底就整条发。 */
+  reply_max_bubbles?: number;
   direct_reply_chunk_size?: number;
+  /** 正文超过多少字改用合并转发卡片。 */
   forward_reply_threshold?: number;
+  /** 切出超过多少块改用合并转发卡片。 */
+  forward_reply_chunk_threshold?: number;
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
@@ -626,6 +633,9 @@ function cacheTTL(method: string, url: string): number {
       return 15_000;
     case "/api/assistant/groups":
       return 8_000;
+    // 昵称基本不变，缓存久一点，编辑器里几行私聊对象就不用各打一次请求了。
+    case "/api/assistant/user-names":
+      return 60_000;
     case "/api/assistant/tasks":
       return 3_000;
     case "/api/assistant/status":
@@ -855,11 +865,11 @@ export function generatePersona(
   description: string,
   name?: string,
   current?: string,
-  style?: { reply_style?: string; response_mode?: string }
+  options?: { reply_style?: string; response_mode?: string; profile_id?: string; group?: string; model?: string }
 ): Promise<PersonaGenerateResponse> {
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
-    body: JSON.stringify({ description, name, current, ...(style ?? {}) })
+    body: JSON.stringify({ description, name, current, ...(options ?? {}) })
   });
 }
 
@@ -1271,6 +1281,20 @@ export interface StatsServerSummary {
   storage_metrics_unavailable?: string;
 }
 
+/** 单台机器人的那部分计数，字段名和快照里对应的一致，可以直接覆盖上去。 */
+export interface StatsProfileCounters {
+  total_events: number;
+  handled_events: number;
+  error_events: number;
+  today_events: number;
+  today_handled: number;
+  today_errors: number;
+  by_kind: Record<string, number>;
+  hourly: StatsHourBucket[];
+  avg_reply_ms: number;
+  last_event_at?: string;
+}
+
 export interface StatsSnapshot {
   started_at: string;
   uptime_seconds: number;
@@ -1286,6 +1310,36 @@ export interface StatsSnapshot {
   last_event_at?: string;
   bot: StatsBotSummary;
   server?: StatsServerSummary;
+  /** 每台机器人各自的计数；运行时长、服务器占用这类进程级指标不在里面。 */
+  by_profile?: Record<string, StatsProfileCounters>;
+}
+
+/**
+ * scopeStatsSnapshot 把快照收敛到某台机器人。留空返回原样（全部机器人）；
+ * 选中的机器人还没有任何事件时给一份空计数，而不是退回合计——切过去看到别人的
+ * 数字比看到 0 更容易让人误判。
+ */
+export function scopeStatsSnapshot(snapshot: StatsSnapshot | null, profileID: string): StatsSnapshot | null {
+  if (!snapshot || !profileID) {
+    return snapshot;
+  }
+  const scoped = snapshot.by_profile?.[profileID];
+  if (scoped) {
+    return { ...snapshot, ...scoped };
+  }
+  return {
+    ...snapshot,
+    total_events: 0,
+    handled_events: 0,
+    error_events: 0,
+    today_events: 0,
+    today_handled: 0,
+    today_errors: 0,
+    by_kind: {},
+    hourly: snapshot.hourly.map((bucket) => ({ ...bucket, total: 0, handled: 0, errors: 0 })),
+    avg_reply_ms: 0,
+    last_event_at: undefined
+  };
 }
 
 export interface HealthResponse {
@@ -1396,6 +1450,8 @@ export interface AssistantEventsResponse {
 export interface AssistantEventGroup {
   group_id: string;
   events: number;
+  group_name?: string;
+  avatar_url?: string;
 }
 
 export interface AssistantContextBudgetLayer {
@@ -1556,6 +1612,20 @@ export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
   });
 }
 
+export interface AssistantUserNamesResponse {
+  /** 只包含查到昵称的号；查不到的号不会出现在这里。 */
+  names: Record<string, string>;
+}
+
+/** 把用户 ID 换成昵称，供各处「填个 QQ 号」的输入框回显。 */
+export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promise<AssistantUserNamesResponse> {
+  const params = new URLSearchParams({ ids: userIDs.join(",") });
+  if (profile) {
+    params.set("profile", profile);
+  }
+  return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
+}
+
 export interface GlossaryRevision {
   version: number;
   meaning?: string;
@@ -1612,7 +1682,12 @@ export interface GlossaryEntryInput {
   note?: string;
 }
 
-export function listGlossary(scope = "", query = "", includeDeleted = false): Promise<GlossaryListResponse> {
+export function listGlossary(
+  scope = "",
+  query = "",
+  includeDeleted = false,
+  botProfileID = ""
+): Promise<GlossaryListResponse> {
   const params = new URLSearchParams();
   if (scope) {
     params.set("scope", scope);
@@ -1622,6 +1697,9 @@ export function listGlossary(scope = "", query = "", includeDeleted = false): Pr
   }
   if (includeDeleted) {
     params.set("include_deleted", "true");
+  }
+  if (botProfileID) {
+    params.set("profile", botProfileID);
   }
   const search = params.toString();
   return requestJSON<GlossaryListResponse>(`/api/assistant/glossary${search ? `?${search}` : ""}`);

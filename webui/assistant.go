@@ -79,6 +79,8 @@ type BotHandler struct {
 	installResolverDependency func(context.Context, string) (assistant.ResolverDependencyInstallResult, error)
 	liveGroupMu               sync.Mutex
 	liveGroupCache            liveGroupListCache
+	userNameMu                sync.Mutex
+	userNameCache             map[string]userNameCacheEntry
 }
 
 type BotFeatureFlags struct {
@@ -239,6 +241,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/events/:id/trace", h.eventTrace)
 	router.GET(base+"/events/:id/images/:index", h.eventImage)
 	router.GET(base+"/users", h.listAssistantUsers)
+	router.GET(base+"/user-names", h.lookupAssistantUserNames)
 	router.GET(base+"/users/:id", h.getAssistantUser)
 	h.registerPersonaRoutes(router, base)
 	router.GET(base+"/glossary", h.listGlossary)

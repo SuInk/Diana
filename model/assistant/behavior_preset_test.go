@@ -36,7 +36,7 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 
 func TestReplyStylePromptIsSpecificAndBounded(t *testing.T) {
 	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl} {
-		prompt := style.prompt(personaVoice{})
+		prompt := style.prompt(true, personaVoice{})
 		if prompt == "" || !strings.Contains(prompt, "默认表达风格") {
 			t.Fatalf("style %q prompt = %q", style, prompt)
 		}
@@ -100,7 +100,7 @@ func TestReplyStyleClosingAnchorIsAlwaysPresent(t *testing.T) {
 }
 
 func TestGroupmateReplyStylePromptCarriesExamples(t *testing.T) {
-	prompt := ReplyStyleGroupmate.prompt(personaVoice{})
+	prompt := ReplyStyleGroupmate.prompt(true, personaVoice{})
 	if !strings.Contains(prompt, "示例") || !strings.Contains(prompt, "用户：") {
 		t.Fatalf("groupmate prompt is missing examples: %q", prompt)
 	}
@@ -128,7 +128,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{ReplyStyleGroupmate.prompt(personaVoice{}), ReplyStyleGroupmate.closingAnchor()} {
+	for _, want := range []string{ReplyStyleGroupmate.prompt(true, personaVoice{}), ReplyStyleGroupmate.closingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -329,7 +329,7 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 			t.Fatalf("Normalized(%q) = %q", raw, got)
 		}
 	}
-	prompt := ReplyStyleCatgirl.prompt(personaVoice{})
+	prompt := ReplyStyleCatgirl.prompt(true, personaVoice{})
 	for _, want := range []string{"本喵", "动作描写", "只对主人称", "可爱只体现在语气上"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)
@@ -450,7 +450,7 @@ func TestPersonaVoiceEmptyLeavesStylePromptUntouched(t *testing.T) {
 	if got := (personaVoice{}).prompt(); got != "" {
 		t.Fatalf("empty voice produced %q", got)
 	}
-	if ReplyStyleCatgirl.prompt(personaVoice{}) != ReplyStyleCatgirl.prompt(personaVoiceFrom("  ", " ")) {
+	if ReplyStyleCatgirl.prompt(true, personaVoice{}) != ReplyStyleCatgirl.prompt(true, personaVoiceFrom("  ", " ")) {
 		t.Fatal("空白字段应当和完全没填一样")
 	}
 }

@@ -49,6 +49,7 @@ func (h *BotHandler) listGlossary(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	scopes = h.filterGlossaryScopesForBot(scopes, botProfileScope(c))
 	scope := strings.TrimSpace(c.Query("scope"))
 	if scope == "" && len(scopes) > 0 {
 		scope = scopes[0].ScopeKey
@@ -75,6 +76,47 @@ func (h *BotHandler) listGlossary(c *gin.Context) {
 	}
 	response.Entries = entries
 	c.JSON(http.StatusOK, response)
+}
+
+// filterGlossaryScopesForBot 按控制台选中的机器人裁掉别的机器人的作用域。
+//
+// 作用域键有三种来源：会话键（开了平台上下文隔离时前缀是配置档 ID）、每台机器人
+// 各一本的全局词典（bot:<id>）、以及升级前那本共用的 global。判定方式是「排除法」
+// 而不是「白名单」：只把明确属于别的配置档的键去掉，剩下的都留着。没开隔离时会话键
+// 本来就没有前缀，两台机器人读的是同一份，白名单会把它们全藏起来。
+func (h *BotHandler) filterGlossaryScopesForBot(scopes []storage.GlossaryScopeSummary, botProfileID string) []storage.GlossaryScopeSummary {
+	botProfileID = strings.TrimSpace(botProfileID)
+	if botProfileID == "" || h.profiles == nil {
+		return scopes
+	}
+	others := make([]string, 0, 4)
+	for _, profile := range h.profiles.Profiles().Profiles {
+		id := strings.TrimSpace(profile.ID)
+		if id != "" && id != botProfileID {
+			others = append(others, id)
+		}
+	}
+	if len(others) == 0 {
+		return scopes
+	}
+	filtered := make([]storage.GlossaryScopeSummary, 0, len(scopes))
+	for _, summary := range scopes {
+		if !glossaryScopeOwnedByOther(summary.ScopeKey, others) {
+			filtered = append(filtered, summary)
+		}
+	}
+	return filtered
+}
+
+// glossaryScopeOwnedByOther 判断一个作用域键是否明确属于列出的别的配置档。
+func glossaryScopeOwnedByOther(scopeKey string, others []string) bool {
+	scopeKey = strings.TrimSpace(scopeKey)
+	for _, id := range others {
+		if scopeKey == assistant.GlossaryScopeBotPrefix+id || strings.HasPrefix(scopeKey, id+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // getGlossaryEntry 返回单条词条及修订记录。修订记录是这个页面存在的理由之一：

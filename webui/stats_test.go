@@ -94,7 +94,7 @@ func TestStatsCollectorPrunesOldBuckets(t *testing.T) {
 	collector.Observe(assistant.EventRecord{At: now, Kind: assistant.EventKindGroup, Handled: true})
 
 	collector.mu.Lock()
-	buckets := len(collector.buckets)
+	buckets := len(collector.all.buckets)
 	collector.mu.Unlock()
 	if buckets != 1 {
 		t.Fatalf("buckets = %d, want 1 (72h-old bucket pruned)", buckets)
@@ -194,5 +194,40 @@ func TestStatsHandlerReturnsSnapshotWithBotSummary(t *testing.T) {
 	}
 	if snapshot.Server.StorageTotalBytes == 0 || snapshot.Server.StorageAvailableBytes == 0 {
 		t.Fatalf("Server storage summary = %+v", snapshot.Server)
+	}
+}
+
+// 控制台切到哪台机器人，总览的数字就该是哪台的。运行时长这类进程级指标不分家。
+func TestStatsCollectorSnapshotScopesByProfile(t *testing.T) {
+	now := time.Date(2026, 7, 26, 15, 30, 0, 0, time.Local)
+	collector := NewStatsCollector()
+	collector.now = func() time.Time { return now }
+
+	collector.Observe(assistant.EventRecord{At: now.Add(-time.Hour), Kind: assistant.EventKindGroup, ProfileID: "qq", Handled: true})
+	collector.Observe(assistant.EventRecord{At: now, Kind: assistant.EventKindGroup, ProfileID: "qq"})
+	collector.Observe(assistant.EventRecord{At: now, Kind: assistant.EventKindPrivate, ProfileID: "tg", Handled: true})
+
+	if got := collector.SnapshotForProfile("qq"); got.TotalEvents != 2 || got.HandledEvents != 1 {
+		t.Fatalf("qq snapshot = total:%d handled:%d, want 2/1", got.TotalEvents, got.HandledEvents)
+	}
+	if got := collector.SnapshotForProfile("tg"); got.TotalEvents != 1 || got.ByKind[string(assistant.EventKindPrivate)] != 1 {
+		t.Fatalf("tg snapshot = %#v", got)
+	}
+	if got := collector.Snapshot(); got.TotalEvents != 3 {
+		t.Fatalf("aggregate total = %d, want 3", got.TotalEvents)
+	}
+	// 没记过事件的机器人拿到的是 0，不是退回合计：看到别人的数字更容易误判。
+	unknown := collector.SnapshotForProfile("wechat")
+	if unknown.TotalEvents != 0 || unknown.UptimeSeconds != collector.Snapshot().UptimeSeconds {
+		t.Fatalf("unknown profile snapshot = %#v", unknown)
+	}
+
+	// 广播用的快照要把每台的计数一起带上，前端切换时不必重连。
+	broadcast := collector.SnapshotWithProfiles()
+	if broadcast.TotalEvents != 3 || len(broadcast.ByProfile) != 2 {
+		t.Fatalf("broadcast = total:%d profiles:%d", broadcast.TotalEvents, len(broadcast.ByProfile))
+	}
+	if broadcast.ByProfile["qq"].TotalEvents != 2 || broadcast.ByProfile["tg"].TotalEvents != 1 {
+		t.Fatalf("broadcast by profile = %#v", broadcast.ByProfile)
 	}
 }

@@ -2,6 +2,7 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { reactive, readonly } from "vue";
+import { scopeStatsSnapshot } from "./api";
 import type { BotStatus, StatsSnapshot } from "./api";
 
 export type BotEvent = NonNullable<BotStatus["recent_events"]>[number];
@@ -105,4 +106,14 @@ export function pushStatusSnapshot(status: BotStatus): void {
 
 export function pushStatsSnapshot(stats: StatsSnapshot): void {
   state.stats = stats;
+}
+
+/**
+ * scopedStats 返回收敛到某台机器人的统计快照，profileID 留空表示全部机器人。
+ *
+ * SSE 是一条广播通道，推给每个页签的是同一份带 by_profile 的数据；筛选放在读取
+ * 这一侧，切换机器人时不用重连，也不会有页签互相覆盖。
+ */
+export function scopedStats(profileID: string): StatsSnapshot | null {
+  return scopeStatsSnapshot(state.stats, profileID);
 }

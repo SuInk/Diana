@@ -325,7 +325,8 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 	if len(change.PullRequests) != 1 || change.PullRequests[0].Status != "merged" {
 		t.Fatalf("pull requests=%#v", change.PullRequests)
 	}
-	// 通知里不展示 diff，就不该去拉 diff：compare 和 PR files 都是白花的请求。
+	// 这一轮没有人要读 diff（selection.Diff 未置位），就不该去拉：compare 和
+	// PR files 都是白花的请求。
 	github.mu.Lock()
 	diffCalls, fileCalls := github.diffCalls, github.pullFileCalls
 	github.mu.Unlock()
@@ -768,8 +769,23 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 			t.Fatalf("follow-up prompt missing %q: %#v", want, followUp.Messages)
 		}
 	}
-	// 跟评基于已投递通知，不该拿到原始 payload 和 diff，也不需要工具。
-	for _, unwanted := range []string{"【external_event】", "trust: trusted_service_data", "repository_watch_plugin.go", "+classified", "watch-2"} {
+	// 只看标题写不出具体的话，所以改动清单要进提示词——但必须带着「会话里没人看得到」
+	// 这句框住，否则模型会拿它当已发内容去接话。
+	for _, want := range []string{"会话里没有人看得到它", "model/assistant/repository_watch_plugin.go", "本次新增提交合计改动", "PR #2 的改动"} {
+		if !requestMessagesContain(followUp.Messages, want) {
+			t.Fatalf("follow-up prompt missing diff reference %q: %#v", want, followUp.Messages)
+		}
+	}
+	// 只给文件清单，patch 正文不进提示词。
+	if requestMessagesContain(followUp.Messages, "@@") || requestMessagesContain(followUp.Messages, "+classified") {
+		t.Fatalf("patch body leaked into the follow-up prompt: %#v", followUp.Messages)
+	}
+	// 清单只进提示词，绝不能出现在发出去的正文里。
+	if strings.Contains(sentText, "repository_watch_plugin.go（") || strings.Contains(sentText, "@@") {
+		t.Fatalf("diff leaked into the delivered notification: %q", sentText)
+	}
+	// 原始 payload 和内部 id 照旧不该进提示词，也不需要工具。
+	for _, unwanted := range []string{"【external_event】", "trust: trusted_service_data", "watch-2"} {
 		if requestMessagesContain(followUp.Messages, unwanted) {
 			t.Fatalf("follow-up prompt leaked %q: %#v", unwanted, followUp.Messages)
 		}
@@ -1719,5 +1735,105 @@ func TestRepositoryWatchDeliveryTargetsAreDeduplicated(t *testing.T) {
 	}
 	if targets[0].Kind != EventKindGroup || targets[0].GroupID != "123" || targets[1].Kind != EventKindPrivate || targets[1].UserID != "owner" {
 		t.Fatalf("targets=%#v", targets)
+	}
+}
+
+// diff 只在这一轮确实有人要读时才拉，拉到的内容要能对上真实改动。
+// 通知正文永远不展示 diff，所以这个开关关掉时一次请求都不该发。
+func TestRepositoryWatchFetchesDiffOnlyWhenRequested(t *testing.T) {
+	newServer := func() (*repositoryWatchTestGitHub, *httptest.Server) {
+		github := &repositoryWatchTestGitHub{
+			commits: []map[string]any{
+				repositoryWatchCommitPayload("new-sha", "fix delivery"),
+				repositoryWatchCommitPayload("base-sha", "initial"),
+			},
+			pullRequests: []map[string]any{
+				repositoryWatchPullPayload(2, "add classification", "open", "", "2026-08-14T00:00:00Z"),
+			},
+			pullCommits: map[int][]map[string]any{},
+			pullFiles: map[int][]map[string]any{2: {{
+				"filename": "model/assistant/runtime.go", "status": "modified",
+				"additions": 12, "deletions": 1, "changes": 13, "patch": "@@ -1 +1 @@\n-old\n+classified",
+			}}},
+		}
+		return github, httptest.NewServer(http.HandlerFunc(github.handler))
+	}
+	cursor := repositoryWatchSnapshot{CommitSHA: "base-sha", PullRequestCursor: repositoryWatchPullCursor(time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC), 1)}
+
+	t.Run("关掉时一次都不拉", func(t *testing.T) {
+		github, server := newServer()
+		defer server.Close()
+		plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+		change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor,
+			repositoryWatchSelection{Commits: true, PullRequests: true}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if change.CommitDiff != nil {
+			t.Fatalf("commit diff was fetched while nobody reads it: %#v", change.CommitDiff)
+		}
+		github.mu.Lock()
+		diffCalls, fileCalls := github.diffCalls, github.pullFileCalls
+		github.mu.Unlock()
+		if diffCalls != 0 || fileCalls != 0 {
+			t.Fatalf("unused diff was fetched: compare=%d pull files=%d", diffCalls, fileCalls)
+		}
+		if digest := renderRepositoryWatchDiffDigest(change); digest != "" {
+			t.Fatalf("digest without a diff: %q", digest)
+		}
+	})
+
+	t.Run("打开时拉到并能压成参考资料", func(t *testing.T) {
+		_, server := newServer()
+		defer server.Close()
+		plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+		change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor,
+			repositoryWatchSelection{Commits: true, PullRequests: true, Diff: true}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if change.CommitDiff == nil || len(change.CommitDiff.Files) == 0 {
+			t.Fatalf("commit diff=%#v", change.CommitDiff)
+		}
+		if len(change.PullRequests) != 1 || len(change.PullRequests[0].Files) != 1 {
+			t.Fatalf("pull request files=%#v", change.PullRequests)
+		}
+		digest := renderRepositoryWatchDiffDigest(change)
+		for _, want := range []string{"本次新增提交合计改动", "PR #2 的改动", "model/assistant/runtime.go", "+12 -1"} {
+			if !strings.Contains(digest, want) {
+				t.Fatalf("digest missing %q: %s", want, digest)
+			}
+		}
+		// patch 正文不进提示词：跟评只需要知道动了哪些文件、动了多少。
+		if strings.Contains(digest, "@@") || strings.Contains(digest, "+classified") {
+			t.Fatalf("patch body leaked into the digest: %s", digest)
+		}
+	})
+}
+
+// 参考资料是有预算的：文件多的时候按改动量排序后截断，留下的应当是改动最大的文件，
+// 而不是恰好排在前面的那个；截断了要明说。
+func TestRepositoryWatchDiffDigestIsBudgetedAndRanked(t *testing.T) {
+	change := repositoryWatchChange{CommitDiff: &repositoryWatchDiff{Files: []repositoryWatchDiffFile{
+		{Filename: "docs/tiny.md", Status: "modified", Additions: 1, Deletions: 0, Changes: 1},
+		{Filename: "model/big.go", Status: "modified", Additions: 400, Deletions: 120, Changes: 520},
+	}, FilesTruncated: true}}
+	digest := renderRepositoryWatchDiffDigest(change)
+	if strings.Index(digest, "model/big.go") > strings.Index(digest, "docs/tiny.md") {
+		t.Fatalf("large change was not ranked first: %s", digest)
+	}
+	if !strings.Contains(digest, "（还有更多文件未列出）") {
+		t.Fatalf("truncation was not disclosed: %s", digest)
+	}
+
+	oversized := make([]repositoryWatchDiffFile, 0, 200)
+	for index := 0; index < 200; index++ {
+		oversized = append(oversized, repositoryWatchDiffFile{
+			Filename: fmt.Sprintf("model/some/rather/long/path/file%03d.go", index), Changes: index,
+		})
+	}
+	digest = renderRepositoryWatchDiffDigest(repositoryWatchChange{CommitDiff: &repositoryWatchDiff{Files: oversized}})
+	if got := len([]rune(digest)); got > repositoryWatchDiffDigestRunes+len("...") {
+		t.Fatalf("digest not budgeted: %d runes", got)
 	}
 }

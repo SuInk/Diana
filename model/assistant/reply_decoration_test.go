@@ -208,11 +208,11 @@ func TestOtherSpeakersBeforeIgnoresSelfBotAndStaleTurns(t *testing.T) {
 
 // 冷清和热闹给的是两条不同的规则，不是同一句话加个数字。
 func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
-	quiet := mentionDecorationRule("123456", 0)
+	quiet := mentionDecorationRule("123456", 0, false)
 	if !strings.Contains(quiet, "不用 @") {
 		t.Fatalf("一对一时应当明说不用 @：%s", quiet)
 	}
-	busy := mentionDecorationRule("123456", 3)
+	busy := mentionDecorationRule("123456", 3, false)
 	// 写法要和「群聊真实提及规则」一致，都用平台中立的标记：既不教裸 @数字，
 	// 也不教 OneBot 方言的 CQ 码——Telegram 群里那只会把字面量发出去。
 	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "[diana-at:123456]") {
@@ -363,5 +363,83 @@ func TestMentionPromptDropsSendLayerClausesWhenNothingIsAdded(t *testing.T) {
 	mixed := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOn}.WithDefaults()
 	if !strings.Contains(runtime.replyMentionPrompt(mixed, event, nil), "会取消对触发者的自动引用") {
 		t.Fatal("引用仍为 on 时应当保留取消说明")
+	}
+}
+
+// 机器人上一句就在回这个人时,这一轮是同一段对话的下一句——运行时算得出来,
+// 不该让模型从历史文本里认。
+func TestBotJustAnsweredSenderDetectsFollowUp(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m3", Time: now}
+	history := []MessageEvent{
+		{GroupID: "g", UserID: "1", MessageID: "m1", Time: now - 40},
+		{GroupID: "g", UserID: "bot", MessageID: "m2", Time: now - 20, Outbound: true},
+		event,
+	}
+	if !botJustAnsweredSender(history, event) {
+		t.Fatal("上一条是回这个人的,应当认出是紧接着的下一句")
+	}
+}
+
+func TestBotJustAnsweredSenderRejectsOtherCases(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m9", Time: now}
+
+	cases := map[string][]MessageEvent{
+		// 机器人上一句回的是别人,当前这位没被回过。
+		"answered someone else": {
+			{GroupID: "g", UserID: "2", MessageID: "m1", Time: now - 40},
+			{GroupID: "g", UserID: "bot", MessageID: "m2", Time: now - 20, Outbound: true},
+			event,
+		},
+		// 机器人回完之后别人又说了话,当前这条不再紧挨着那句回复。
+		"someone spoke after the reply": {
+			{GroupID: "g", UserID: "1", MessageID: "m1", Time: now - 60},
+			{GroupID: "g", UserID: "bot", MessageID: "m2", Time: now - 40, Outbound: true},
+			{GroupID: "g", UserID: "3", MessageID: "m3", Time: now - 20},
+			event,
+		},
+		// 隔了太久就是重新起了个话头,不算补充。
+		"stale reply": {
+			{GroupID: "g", UserID: "1", MessageID: "m1", Time: now - int64(botFollowUpWindow.Seconds()) - 60},
+			{GroupID: "g", UserID: "bot", MessageID: "m2", Time: now - int64(botFollowUpWindow.Seconds()) - 1, Outbound: true},
+			event,
+		},
+		// 机器人还没开过口。
+		"no reply yet": {
+			{GroupID: "g", UserID: "1", MessageID: "m1", Time: now - 20},
+			event,
+		},
+	}
+	for name, history := range cases {
+		if botJustAnsweredSender(history, event) {
+			t.Fatalf("%s: 不该判成紧接着的下一句", name)
+		}
+	}
+}
+
+// 刚回过 TA 是唯一答案确定的一档:不该再 @,也不该把上一条讲过的再讲一遍。
+func TestReplyDecorationPromptTellsFollowUpNotToRepeat(t *testing.T) {
+	now := int64(1_700_000_000)
+	cfg := DefaultBotConfig()
+	cfg.MentionUserMode = ReplyDecorationAuto
+	cfg.ReplyReferenceMode = ReplyDecorationAuto
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "3003", Time: now}
+	history := []MessageEvent{
+		// 群里还有别人在说话:没有这一档的话,规则会要求点名 @。
+		{GroupID: "g", UserID: "2", MessageID: "3000", Time: now - 50},
+		{GroupID: "g", UserID: "1", MessageID: "3001", Time: now - 40},
+		{GroupID: "g", UserID: "bot", MessageID: "3002", Time: now - 20, Outbound: true},
+		event,
+	}
+	prompt := replyDecorationPrompt(cfg, event, history)
+	if !strings.Contains(prompt, "接着上一条往下说") || !strings.Contains(prompt, "不要再重讲一遍") {
+		t.Fatalf("应当要求接着上一条说,而不是重讲：%s", prompt)
+	}
+	if !strings.Contains(prompt, "不要 @ 发送者") {
+		t.Fatalf("刚回过 TA 就不该再 @：%s", prompt)
+	}
+	if strings.Contains(prompt, mentionMarkerFor("1")) {
+		t.Fatalf("这一档不该再给出提及标记的写法：%s", prompt)
 	}
 }
