@@ -476,6 +476,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		HTMLURL        string     `json:"html_url"`
 		CreatedAt      time.Time  `json:"created_at"`
 		UpdatedAt      time.Time  `json:"updated_at"`
+		ClosedAt       *time.Time `json:"closed_at"`
 		MergedAt       *time.Time `json:"merged_at"`
 		MergeCommitSHA string     `json:"merge_commit_sha"`
 		User           struct {
@@ -522,6 +523,11 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 			occurredAt = *item.MergedAt
 		case strings.EqualFold(item.State, "closed"):
 			status = "closed"
+			// 关闭时间用 closed_at，不能用 updated_at：PR 关掉之后还能被评论，
+			// 那会把 updated_at 顶到今天，通知就成了「关闭于（刚刚）」。
+			if item.ClosedAt != nil && !item.ClosedAt.IsZero() {
+				occurredAt = *item.ClosedAt
+			}
 		case item.CreatedAt.Equal(item.UpdatedAt):
 			status = "opened"
 			occurredAt = item.CreatedAt

@@ -1721,3 +1721,76 @@ func TestRepositoryWatchDeliveryTargetsAreDeduplicated(t *testing.T) {
 		t.Fatalf("targets=%#v", targets)
 	}
 }
+
+// TestRepositoryWatchPluginReportsOpenedUpdatedAndClosedPullRequests 覆盖 PR 的三种
+// 非合并动态：新建、更新、关闭。关闭那条特意把 updated_at 排在 closed_at 之后，
+// 模拟「PR 关掉之后又被评论」——通知里该报的是关闭时间，不是最后一次被碰的时间。
+func TestRepositoryWatchPluginReportsOpenedUpdatedAndClosedPullRequests(t *testing.T) {
+	pullPayload := func(number int, title, state, createdAt, updatedAt, closedAt string) map[string]any {
+		payload := map[string]any{
+			"number": number, "title": title, "state": state,
+			"html_url":   "https://github.com/acme/demo/pull/" + fmt.Sprint(number),
+			"created_at": createdAt, "updated_at": updatedAt, "merged_at": nil,
+			"user": map[string]any{"login": "diana"},
+			"base": map[string]any{"ref": "main"}, "head": map[string]any{"ref": "feature"},
+		}
+		if closedAt != "" {
+			payload["closed_at"] = closedAt
+		}
+		return payload
+	}
+
+	github := &repositoryWatchTestGitHub{
+		pullRequests: []map[string]any{pullPayload(1, "baseline", "open", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", "")},
+		pullCommits:  map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{PullRequests: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil || baseline.PullRequestCursor == "" {
+		t.Fatalf("baseline=%#v err=%v", baseline, err)
+	}
+
+	github.mu.Lock()
+	github.pullRequests = []map[string]any{
+		pullPayload(4, "关掉不合并", "closed", "2026-08-13T00:00:00Z", "2026-08-16T00:00:00Z", "2026-08-14T00:00:00Z"),
+		pullPayload(3, "又推了一版", "open", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", ""),
+		pullPayload(2, "刚开的", "open", "2026-08-14T12:00:00Z", "2026-08-14T12:00:00Z", ""),
+		pullPayload(1, "baseline", "open", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", ""),
+	}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]repositoryWatchPullRequest{}
+	for _, pullRequest := range change.PullRequests {
+		got[pullRequest.Number] = pullRequest
+	}
+	if len(got) != 3 {
+		t.Fatalf("pull requests=%#v", change.PullRequests)
+	}
+	for number, wantStatus := range map[int]string{2: "opened", 3: "updated", 4: "closed"} {
+		if got[number].Status != wantStatus {
+			t.Fatalf("PR #%d status=%q, want %q", number, got[number].Status, wantStatus)
+		}
+	}
+	wantClosedAt := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	if !got[4].OccurredAt.Equal(wantClosedAt) {
+		t.Fatalf("closed PR occurred at %s, want closed_at %s", got[4].OccurredAt, wantClosedAt)
+	}
+
+	entries := []string{}
+	for _, pullRequest := range change.PullRequests {
+		entries = append(entries, repositoryWatchPullStatusLabel(pullRequest.Status)+"/"+repositoryWatchPullTimeLabel(pullRequest.Status))
+	}
+	for _, want := range []string{"新建/创建于", "更新/更新于", "已关闭/关闭于"} {
+		if !slices.Contains(entries, want) {
+			t.Fatalf("notification labels=%v, want %q", entries, want)
+		}
+	}
+}
