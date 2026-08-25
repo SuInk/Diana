@@ -1732,3 +1732,38 @@ export function deleteRSSWatch(id: string): Promise<void> {
 export function getHealth(): Promise<HealthResponse> {
   return requestJSON<HealthResponse>("/api/health");
 }
+
+export interface GroupRelationNode {
+  user_id: string;
+  display_name?: string;
+  messages: number;
+  favorability: number;
+  is_bot?: boolean;
+}
+
+export interface GroupRelationEdge {
+  source: string;
+  target: string;
+  weight: number;
+}
+
+export interface GroupRelationGraph {
+  group_id: string;
+  bot_id?: string;
+  since?: string;
+  messages: number;
+  participants: number;
+  nodes: GroupRelationNode[];
+  edges: GroupRelationEdge[];
+  truncated?: boolean;
+}
+
+export interface GroupRelationResponse {
+  range: AssistantEventRange;
+  graph: GroupRelationGraph;
+}
+
+export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupRelationResponse> {
+  const params = new URLSearchParams({ range });
+  return requestJSON<GroupRelationResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/relations?${params.toString()}`);
+}

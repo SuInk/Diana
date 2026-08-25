@@ -45,6 +45,35 @@ type consoleGroupSavePayload struct {
 func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 	router.GET("/api/assistant/groups", h.listConsoleGroups)
 	router.POST("/api/assistant/groups", h.saveConsoleGroup)
+	router.GET("/api/assistant/groups/:id/relations", h.groupRelationGraph)
+}
+
+// groupRelationGraph 返回以机器人为中心的群聊关系图。
+func (h *BotHandler) groupRelationGraph(c *gin.Context) {
+	if h.sqlite == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "消息存储未配置"})
+		return
+	}
+	groupID := strings.TrimSpace(c.Param("id"))
+	if groupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少群号"})
+		return
+	}
+	rangeID := strings.TrimSpace(c.DefaultQuery("range", "7d"))
+	since, ok := assistantEventsSince(rangeID, time.Now())
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "range 仅支持 1h、24h、7d、30d、all"})
+		return
+	}
+	// 中心节点优先用配置里的机器人账号：新群可能还没有机器人自己的发言，
+	// 光靠扫历史找不出中心，图就散成一堆互不相干的点。
+	botID := strings.TrimSpace(h.runtime.Config().BotAccount)
+	graph, err := h.sqlite.GroupRelationGraphFor(c.Request.Context(), groupID, since, botID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"range": rangeID, "graph": graph})
 }
 
 // listConsoleGroups 返回机器人已加入的群、已保存群配置与插件清单。
