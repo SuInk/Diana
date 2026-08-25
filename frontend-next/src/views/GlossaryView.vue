@@ -29,11 +29,9 @@
     <section class="card">
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px; gap: 10px">
-          <select v-model="scope" class="input" style="max-width: 320px" @change="reload">
-            <option v-for="item in scopes" :key="item.scope_key" :value="item.scope_key">
-              {{ scopeLabel(item.scope_key) }}（{{ item.active_count }}）
-            </option>
-          </select>
+          <div style="max-width: 320px; flex: 1">
+            <AppSelect :model-value="scope" :options="scopeOptions" aria-label="词典范围" @update:model-value="scope = $event; reload()" />
+          </div>
           <div class="input-group" style="flex: 1; max-width: 320px">
             <input v-model="query" class="input" placeholder="按词条 / 释义搜索…" @keydown.enter="reload" />
           </div>
@@ -180,6 +178,7 @@ import {
 import { formatRelative, formatTime } from "../format";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
+import AppSelect from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 
@@ -208,6 +207,8 @@ const canSave = computed(() => form.term.trim() !== "" && form.meaning.trim() !=
 // 排版顺序很重要：配置档 ID 是个 UUID，放在前面会把真正有用的群号挤出可视范围，
 // 手机上整个下拉框只剩一串 UUID，多开几个群就没法选了。所以群名/群号排最前，
 // 配置档只在确实有多个时作为后缀出现。
+const scopeOptions = computed(() => scopes.value.map((item) => ({ value: item.scope_key, label: `${scopeLabel(item.scope_key)}（${item.active_count}）` })));
+
 function scopeLabel(key: string): string {
   if (key === "global") {
     return "全局词典";
