@@ -112,17 +112,40 @@ func promptTeachesSegmentation(prompt string) bool {
 	return true
 }
 
-// 没有换行的长段落不再按句子分条：分条只认模型给的信号（标记、换行），运行时不再
-// 自己去猜句子边界。超过长度上限才由兜底切开。
-func TestChatReplyKeepsUnbrokenParagraphWhole(t *testing.T) {
+// 没有换行的长段落按句号分条，一句一条。
+//
+// 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
+// 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界。
+func TestChatReplySplitsUnbrokenParagraphBySentence(t *testing.T) {
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
-	if chunks := splitChatReply(reply, chatSplitLimits{}); len(chunks) != 1 {
-		t.Fatalf("没有换行的段落不该被拆开：%#v", chunks)
+	chunks := splitChatReply(reply, chatSplitLimits{})
+	if len(chunks) != 4 {
+		t.Fatalf("四句话应该分成四条：%#v", chunks)
 	}
-	// 同一段话，模型自己换了行就照分。
-	withBreaks := strings.Replace(reply, "。但我", "。\n但我", 1)
-	if chunks := splitChatReply(withBreaks, chatSplitLimits{}); len(chunks) != 2 {
-		t.Fatalf("模型换行了却没分条：%#v", chunks)
+	if !strings.HasPrefix(chunks[1], "但我没有") || chunks[3] != "你怎么突然问这个？" {
+		t.Fatalf("分条位置不对：%#v", chunks)
+	}
+	// 内容一个字都不能丢（除了被去掉的句号）。
+	joined := strings.ReplaceAll(strings.Join(chunks, ""), "。", "")
+	if joined != strings.ReplaceAll(reply, "。", "") {
+		t.Fatalf("分条前后内容对不上：%#v", chunks)
+	}
+}
+
+// 短回复不动：两句话的短回复本来就是一条消息，拆开反而不像人说话。
+func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
+	for _, reply := range []string{
+		"端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。",
+		"辛苦了，早点睡吧。",
+	} {
+		if chunks := splitChatReply(reply, chatSplitLimits{}); len(chunks) != 1 {
+			t.Fatalf("短回复被拆开了：%#v", chunks)
+		}
+	}
+	// 起始长度可以调：调到 20 之后同一条短回复就该分开。
+	limits := (chatSplitLimits{SentenceSize: 20}).withDefaults()
+	if chunks := splitChatReply("端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。", limits); len(chunks) != 2 {
+		t.Fatalf("调小起始长度后没有分条：%#v", chunks)
 	}
 }
 
