@@ -1732,6 +1732,9 @@ export function restoreGlossaryEntry(scope: string, term: string): Promise<Gloss
 }
 
 export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "rss_watch";
+// 空数组表示「全部种类都要」——后端也是这么存的，别把空当成「一条都不要」。
+export type RepositoryWatchPullEvent = "opened" | "updated" | "closed" | "merged";
+export type RepositoryWatchIssueEvent = "opened" | "updated" | "closed" | "reopened";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
 export interface AssistantTask {
@@ -1758,6 +1761,8 @@ export interface AssistantTask {
   repository_branch?: string;
   watch_commits?: boolean;
   watch_pull_requests?: boolean;
+  watch_pull_request_events?: RepositoryWatchPullEvent[];
+  watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues?: boolean;
   watch_releases?: boolean;
   watch_stars?: boolean;
@@ -1796,6 +1801,8 @@ export interface RepositoryWatchInput {
   interval_seconds: number;
   watch_commits: boolean;
   watch_pull_requests: boolean;
+  watch_pull_request_events?: RepositoryWatchPullEvent[];
+  watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues: boolean;
   watch_releases: boolean;
   watch_stars: boolean;

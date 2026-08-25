@@ -2919,6 +2919,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
 				}
 			}
+			if pluginValue, watchSettings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, r.pluginOverridesForEvent(event)); enabled {
+				if _, ok := pluginValue.(*RepositoryWatchPlugin); ok {
+					_, publishSettings, _ := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event))
+					managed := repositoryWatchManagedRepositories(event, publishSettings)
+					if relationship.Owner || len(managed) > 0 {
+						extraTools = append(extraTools, newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings))
+					}
+				}
+			}
 			if boolValue(cfg.OwnerLLMConfigEnabled, true) {
 				extraTools = append(extraTools, newDianaLLMConfigTool(r, event))
 			}
@@ -5504,6 +5513,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.tasks") {
 		tail.WriteString("\n" + promptTaskList)
+	}
+	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
+		tail.WriteString("\n" + promptTaskRepositoryWatch)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)
@@ -9533,7 +9545,8 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 			Issues: item.WatchIssues, Releases: item.WatchReleases, Stars: item.WatchStars,
 			// 跟评是 diff 唯一的读者。关掉跟评就别拉了，否则每轮白花一次 compare
 			// 加每个 PR 一次 files——这正是当初把 diff 整个摘掉的原因。
-			Diff: r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
+			Diff:              r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
+			PullRequestEvents: item.WatchPullRequestEvents, IssueEvents: item.WatchIssueEvents,
 		},
 		settings,
 	)
@@ -10128,6 +10141,8 @@ func repositoryWatchIssueTimeLabel(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "opened":
 		return "创建于"
+	case "reopened":
+		return "重新打开于"
 	case "closed":
 		return "关闭于"
 	default:
@@ -10139,6 +10154,8 @@ func repositoryWatchIssueTime(issue repositoryWatchIssue) time.Time {
 	switch strings.ToLower(strings.TrimSpace(issue.Status)) {
 	case "opened":
 		return firstNonZeroTime(issue.CreatedAt, issue.UpdatedAt)
+	case "reopened":
+		return firstNonZeroTime(issue.ReopenedAt, issue.UpdatedAt)
 	case "closed":
 		return firstNonZeroTime(issue.ClosedAt, issue.UpdatedAt)
 	default:
