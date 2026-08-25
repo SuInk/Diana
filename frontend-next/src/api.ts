@@ -1503,6 +1503,40 @@ export function getAssistantUser(userID: string, profile = ""): Promise<Assistan
   return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}${suffix}`);
 }
 
+export interface Persona {
+  id: string;
+  name: string;
+  system_prompt?: string;
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  self_reference?: string;
+  sentence_enders?: string;
+  updated_at?: string;
+}
+
+export interface PersonaListResponse {
+  personas: Persona[];
+  limit: number;
+}
+
+export function listPersonas(): Promise<PersonaListResponse> {
+  return requestJSON<PersonaListResponse>("/api/assistant/personas");
+}
+
+/** 带 id 是改，不带是新增。返回落库后的那一份和整库。 */
+export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<{ persona: Persona; personas: Persona[] }> {
+  return requestJSON<{ persona: Persona; personas: Persona[] }>("/api/assistant/personas", {
+    method: "POST",
+    body: JSON.stringify({ persona })
+  });
+}
+
+export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
+  return requestJSON<{ personas: Persona[] }>("/api/assistant/personas/delete", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
 export interface GlossaryRevision {
   version: number;
   meaning?: string;
