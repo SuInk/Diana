@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -70,6 +71,18 @@ type repositoryWatchSelection struct {
 	// Diff 只在这一轮确实有人要读 diff 时才置位（目前是跟评）。通知正文从不展示
 	// diff，无条件拉取等于每轮白花一次 compare 加每个 PR 一次 files。
 	Diff bool
+	// PullRequestEvents / IssueEvents 是只想收的动态种类，空表示全要。
+	PullRequestEvents []string
+	IssueEvents       []string
+}
+
+// wants 判断某一类动态要不要报。空集合是「全要」——老订阅没存过这个字段，
+// 不能因为后来加了开关就把它们静音。
+func (s repositoryWatchSelection) wants(kinds []string, status string) bool {
+	if len(kinds) == 0 {
+		return true
+	}
+	return slices.Contains(kinds, strings.ToLower(strings.TrimSpace(status)))
 }
 
 type repositoryWatchChange struct {
@@ -142,6 +155,8 @@ type repositoryWatchIssue struct {
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	ClosedAt  time.Time `json:"closed_at,omitempty"`
+	// ReopenedAt 是最近一次被重新打开的时间；只有这轮真的重开了才填。
+	ReopenedAt time.Time `json:"reopened_at,omitempty"`
 }
 
 type repositoryWatchDiff struct {
@@ -392,7 +407,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.PullRequests {
-		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, selection.Diff, settings)
+		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -404,7 +419,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		change.Commits = p.foldMergedPullRequestCommits(ctx, repository, change.Commits, change.PullRequests, settings)
 	}
 	if selection.Issues {
-		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, settings)
+		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -566,7 +581,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	return commits, latest, newCommitCount > limit, nil
 }
 
-func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, wantDiff bool, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
+func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
@@ -580,6 +595,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		HTMLURL        string     `json:"html_url"`
 		CreatedAt      time.Time  `json:"created_at"`
 		UpdatedAt      time.Time  `json:"updated_at"`
+		ClosedAt       *time.Time `json:"closed_at"`
 		MergedAt       *time.Time `json:"merged_at"`
 		MergeCommitSHA string     `json:"merge_commit_sha"`
 		User           struct {
@@ -626,9 +642,19 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 			occurredAt = *item.MergedAt
 		case strings.EqualFold(item.State, "closed"):
 			status = "closed"
+			// 关闭时间用 closed_at，不能用 updated_at：PR 关掉之后还能被评论，
+			// 那会把 updated_at 顶到今天，通知就成了「关闭于（刚刚）」。
+			if item.ClosedAt != nil && !item.ClosedAt.IsZero() {
+				occurredAt = *item.ClosedAt
+			}
 		case item.CreatedAt.Equal(item.UpdatedAt):
 			status = "opened"
 			occurredAt = item.CreatedAt
+		}
+		if !selection.wants(selection.PullRequestEvents, status) {
+			// 这类动态没订阅：连提交列表都不用拉。被跳过的合并 PR 也就不再替它带来的
+			// 提交挡枪了——真想少看那些提交，把 Commit 一起关掉。
+			continue
 		}
 		// 新建的 PR 列出全部提交，更新的只列这轮新推上来的。
 		since := time.Time{}
@@ -641,7 +667,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		}
 		var files []repositoryWatchDiffFile
 		filesTruncated := false
-		if wantDiff {
+		if selection.Diff {
 			// 拉不到就算了：PR 条目本身照常播报，跟评少一份参考资料而已。
 			if fetched, truncated, fileErr := p.fetchPullRequestFiles(ctx, repository, item.Number, settings); fileErr == nil {
 				files, filesTruncated = fetched, truncated
@@ -837,7 +863,7 @@ func repositoryWatchPullAfterCursor(updatedAt time.Time, number int, cursor stri
 	return updatedAt.After(cursorTime) || updatedAt.Equal(cursorTime) && number > cursorNumber
 }
 
-func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cursor string, settings SettingValues) ([]repositoryWatchIssue, string, error) {
+func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchIssue, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
@@ -876,19 +902,49 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 		return nil, latest, nil
 	}
 	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
+	watermark := repositoryWatchPullCursorTime(cursor)
+	// 事件列表按需拉，而且一轮只拉一次：多数轮询里没有重开过的 issue，不该白花一次请求。
+	var reopenTimesCache map[int]time.Time
+	reopenTimesReady := false
+	reopenTimes := func() map[int]time.Time {
+		if reopenTimesCache == nil {
+			times, err := p.fetchIssueReopenTimes(ctx, repository, settings)
+			if err != nil {
+				reopenTimesCache = map[int]time.Time{}
+			} else {
+				reopenTimesCache, reopenTimesReady = times, true
+			}
+		}
+		return reopenTimesCache
+	}
 	result := make([]repositoryWatchIssue, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
 		if !repositoryWatchPullAfterCursor(item.UpdatedAt, item.Number, cursor) || len(result) >= limit {
 			continue
 		}
 		status := "updated"
+		reopenedAt := time.Time{}
 		switch {
 		case strings.EqualFold(item.State, "closed"):
 			status = "closed"
 		case strings.EqualFold(item.StateReason, "reopened"):
-			status = "reopened"
+			// state_reason 重开之后就一直是 reopened，往后每条评论都会把它带出来。
+			// 只认这个字段的话，一个重开过的 issue 之后所有更新都会报成「重新打开」。
+			// 事件列表能给出真正的重开时间：落在这轮轮询窗口里才算重新打开。
+			if at, ok := reopenTimes()[item.Number]; ok {
+				if at.After(watermark) {
+					status, reopenedAt = "reopened", at
+				}
+			} else if !reopenTimesReady {
+				// 事件列表读不到（没权限、被限流）时退回旧判断：宁可把状态说粗，
+				// 也不能把一次真的重新打开吞成普通更新。
+				status = "reopened"
+			}
 		case item.CreatedAt.Equal(item.UpdatedAt):
 			status = "opened"
+		}
+		if !selection.wants(selection.IssueEvents, status) {
+			continue
 		}
 		closedAt := time.Time{}
 		if item.ClosedAt != nil {
@@ -897,10 +953,35 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 		result = append(result, repositoryWatchIssue{
 			Number: item.Number, Title: strings.TrimSpace(item.Title), Body: truncateRunes(strings.TrimSpace(item.Body), 4000),
 			Author: strings.TrimSpace(item.User.Login), Status: status, URL: strings.TrimSpace(item.HTMLURL),
-			CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt, ClosedAt: closedAt,
+			CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt, ClosedAt: closedAt, ReopenedAt: reopenedAt,
 		})
 	}
 	return result, latest, nil
+}
+
+// fetchIssueReopenTimes 读仓库级 issue 事件列表（新的在前），取出每个 issue 最近一次
+// 被重新打开的时间。仓库级只要一次请求，比逐个 issue 翻时间线便宜得多。
+func (p *RepositoryWatchPlugin) fetchIssueReopenTimes(ctx context.Context, repository string, settings SettingValues) (map[int]time.Time, error) {
+	var payload []struct {
+		Event     string    `json:"event"`
+		CreatedAt time.Time `json:"created_at"`
+		Issue     struct {
+			Number int `json:"number"`
+		} `json:"issue"`
+	}
+	if err := p.getJSON(ctx, "/repos/"+repository+"/issues/events?per_page=100", settings, &payload); err != nil {
+		return nil, fmt.Errorf("读取 %s issue events: %w", repository, err)
+	}
+	times := make(map[int]time.Time, len(payload))
+	for _, event := range payload {
+		if !strings.EqualFold(strings.TrimSpace(event.Event), "reopened") || event.Issue.Number == 0 {
+			continue
+		}
+		if existing, ok := times[event.Issue.Number]; !ok || event.CreatedAt.After(existing) {
+			times[event.Issue.Number] = event.CreatedAt
+		}
+	}
+	return times, nil
 }
 
 func commitsWithoutPullRequestMerges(commits []repositoryWatchCommit, pullRequests []repositoryWatchPullRequest) []repositoryWatchCommit {

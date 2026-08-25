@@ -555,3 +555,27 @@ func TestPromptContextWindowRespectsConfigWithoutLLMStore(t *testing.T) {
 		t.Fatalf("window = %d, want the fallback %d", got, llm.DefaultContextWindowTokens)
 	}
 }
+
+// 群级的历史预算要真的生效。它此前只存不用——GroupConfig 有字段、WithDefaults 也
+// 从机器人配置继承了默认值、群组页也有输入框，却没有一行把它拷进生效配置。
+func TestGroupLevelHistoryBudgetReachesEffectiveConfig(t *testing.T) {
+	base := BotConfig{ResponseMode: ResponseModeStandard, RecentHistoryTokenBudget: 16000}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"thrifty": {GroupID: "thrifty", RecentHistoryTokenBudget: 4000},
+	}})
+
+	cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "thrifty"})
+	if cfg.RecentHistoryTokenBudget != 4000 {
+		t.Fatalf("群级历史预算没生效：%d", cfg.RecentHistoryTokenBudget)
+	}
+	// 预算真的收紧了这一层，而不只是配置字段好看。
+	if got := recentHistoryBudget(128000, cfg); got != 4000 {
+		t.Fatalf("近期历史预算 = %d，want 4000", got)
+	}
+	// 没有单独配置的群跟随机器人。
+	other := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "other"})
+	if other.RecentHistoryTokenBudget != 16000 {
+		t.Fatalf("未配置的群没有跟随机器人：%d", other.RecentHistoryTokenBudget)
+	}
+}

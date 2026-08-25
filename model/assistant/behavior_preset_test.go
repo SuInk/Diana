@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 
 func TestReplyStylePromptIsSpecificAndBounded(t *testing.T) {
 	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl} {
-		prompt := style.prompt(true)
+		prompt := style.prompt(true, personaVoice{})
 		if prompt == "" || !strings.Contains(prompt, "默认表达风格") {
 			t.Fatalf("style %q prompt = %q", style, prompt)
 		}
@@ -99,7 +100,7 @@ func TestReplyStyleClosingAnchorIsAlwaysPresent(t *testing.T) {
 }
 
 func TestGroupmateReplyStylePromptCarriesExamples(t *testing.T) {
-	prompt := ReplyStyleGroupmate.prompt(true)
+	prompt := ReplyStyleGroupmate.prompt(true, personaVoice{})
 	if !strings.Contains(prompt, "示例") || !strings.Contains(prompt, "用户：") {
 		t.Fatalf("groupmate prompt is missing examples: %q", prompt)
 	}
@@ -127,7 +128,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{ReplyStyleGroupmate.prompt(true), ReplyStyleGroupmate.closingAnchor()} {
+	for _, want := range []string{ReplyStyleGroupmate.prompt(true, personaVoice{}), ReplyStyleGroupmate.closingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -328,7 +329,7 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 			t.Fatalf("Normalized(%q) = %q", raw, got)
 		}
 	}
-	prompt := ReplyStyleCatgirl.prompt(true)
+	prompt := ReplyStyleCatgirl.prompt(true, personaVoice{})
 	for _, want := range []string{"本喵", "动作描写", "只对主人称", "可爱只体现在语气上"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)
@@ -387,6 +388,85 @@ func TestReplyStyleDoesNotChangeDeliveryConfig(t *testing.T) {
 			filled.ReplyReferenceMode != ReplyDecorationOff || filled.MentionUserMode != ReplyDecorationOn {
 			t.Fatalf("风格 %s 改动了投递配置：%d/%d %s/%s", style,
 				filled.DirectReplyChunkSize, filled.SendChunkIntervalMS, filled.ReplyReferenceMode, filled.MentionUserMode)
+		}
+	}
+}
+
+// 逗号分隔的候选清单要能解析，中英文逗号都认，并且去重限量。
+func TestParsePersonaEndersAcceptsBothCommas(t *testing.T) {
+	enders := parsePersonaEnders(" 喵, 喵~ ，喵？，，喵…… ,喵~ ")
+	want := []string{"喵", "喵~", "喵？", "喵……"}
+	if len(enders) != len(want) {
+		t.Fatalf("enders = %v, want %v", enders, want)
+	}
+	for index, ender := range want {
+		if enders[index] != ender {
+			t.Fatalf("enders = %v, want %v", enders, want)
+		}
+	}
+
+	raw := make([]string, 0, personaVoiceMaxEnders*2)
+	for index := 0; index < personaVoiceMaxEnders*2; index++ {
+		raw = append(raw, strconv.Itoa(index))
+	}
+	if got := parsePersonaEnders(strings.Join(raw, ",")); len(got) != personaVoiceMaxEnders {
+		t.Fatalf("len = %d, want %d", len(got), personaVoiceMaxEnders)
+	}
+
+	// 填一整段人设进来的不算候选，直接丢掉。
+	if got := parsePersonaEnders(strings.Repeat("喵", personaVoiceMaxRunes+1)); len(got) != 0 {
+		t.Fatalf("overlong ender was accepted: %v", got)
+	}
+}
+
+// 多个候选是让模型按语气挑，不是运行时随机——提示词必须把「按当下语气挑」说出来。
+func TestPersonaVoicePromptAsksModelToPickByTone(t *testing.T) {
+	voice := personaVoiceFrom("本喵", "喵,喵~,喵？")
+	prompt := voice.prompt()
+	if !strings.Contains(prompt, "「本喵」") {
+		t.Fatalf("自称没写进提示词：%s", prompt)
+	}
+	for _, ender := range []string{"「喵」", "「喵~」", "「喵？」"} {
+		if !strings.Contains(prompt, ender) {
+			t.Fatalf("候选 %s 没写进提示词：%s", ender, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "按当下语气挑") {
+		t.Fatalf("没说清楚按语气挑：%s", prompt)
+	}
+	// 和风格描述冲突时要说清楚以谁为准，否则模型会在两套说法之间犹豫。
+	if !strings.Contains(prompt, "以这里为准") {
+		t.Fatalf("没声明覆盖关系：%s", prompt)
+	}
+
+	// 只有一个候选就是固定句尾，不该再说「挑」。
+	if single := personaVoiceFrom("", "喵").prompt(); strings.Contains(single, "按当下语气挑") {
+		t.Fatalf("单个候选不该说挑：%s", single)
+	}
+}
+
+// 两项都留空时一个字都不该加：老配置不受影响，风格自带的说法照旧。
+func TestPersonaVoiceEmptyLeavesStylePromptUntouched(t *testing.T) {
+	if got := (personaVoice{}).prompt(); got != "" {
+		t.Fatalf("empty voice produced %q", got)
+	}
+	if ReplyStyleCatgirl.prompt(true, personaVoice{}) != ReplyStyleCatgirl.prompt(true, personaVoiceFrom("  ", " ")) {
+		t.Fatal("空白字段应当和完全没填一样")
+	}
+}
+
+// 猫娘那档自带的候选要和 WebUI 填进框里的一致，否则用户看到的和实际生效的对不上。
+func TestDefaultPersonaVoiceForCatgirl(t *testing.T) {
+	selfReference, enders := DefaultPersonaVoice(ReplyStyleCatgirl)
+	if selfReference != "我" {
+		t.Fatalf("self reference = %q", selfReference)
+	}
+	if got := parsePersonaEnders(enders); len(got) < 2 {
+		t.Fatalf("猫娘应当给出多个候选：%v", got)
+	}
+	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGroupmate, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise} {
+		if self, ends := DefaultPersonaVoice(style); self != "" || ends != "" {
+			t.Fatalf("%s 不该对自称和句尾有主张：%q %q", style, self, ends)
 		}
 	}
 }

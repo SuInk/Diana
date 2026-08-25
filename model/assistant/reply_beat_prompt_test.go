@@ -15,7 +15,7 @@ import (
 // splitReply 的注释里记着这个坑。所以这条能力只能长在提示词上：告诉群友风格
 // 「连着说的两三句短话本来就是两三次发言」，让它照原契约写 <dianabr>。
 func TestGroupmatePromptTeachesSplitMarker(t *testing.T) {
-	prompt := ReplyStyleGroupmate.prompt(true)
+	prompt := ReplyStyleGroupmate.prompt(true, personaVoice{})
 	if !strings.Contains(prompt, notificationSplitMarker) {
 		t.Fatalf("群友风格没教分条标记 %s：\n%s", notificationSplitMarker, prompt)
 	}
@@ -37,7 +37,7 @@ func TestGroupmatePromptTeachesSplitMarker(t *testing.T) {
 // 那份文案被改掉或停在旧版默认值上，分条就彻底不发生了。
 func TestConsecutiveBeatsStayGroupmateOnlyWhileSegmentationIsUniversal(t *testing.T) {
 	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl} {
-		prompt := style.prompt(true)
+		prompt := style.prompt(true, personaVoice{})
 		if strings.Contains(prompt, "两三次独立发言") {
 			t.Fatalf("风格 %s 不该教连发短句", style)
 		}
