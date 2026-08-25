@@ -2828,6 +2828,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
 				}
 			}
+			if pluginValue, watchSettings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, r.pluginOverridesForEvent(event)); enabled {
+				if _, ok := pluginValue.(*RepositoryWatchPlugin); ok {
+					_, publishSettings, _ := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event))
+					managed := repositoryWatchManagedRepositories(event, publishSettings)
+					if relationship.Owner || len(managed) > 0 {
+						extraTools = append(extraTools, newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings))
+					}
+				}
+			}
 			if boolValue(cfg.OwnerLLMConfigEnabled, true) {
 				extraTools = append(extraTools, newDianaLLMConfigTool(r, event))
 			}
@@ -5343,6 +5352,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.tasks") {
 		tail.WriteString("\n" + promptTaskList)
+	}
+	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
+		tail.WriteString("\n" + promptTaskRepositoryWatch)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)

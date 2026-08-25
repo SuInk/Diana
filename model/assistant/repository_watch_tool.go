@@ -765,6 +765,23 @@ func (r *Runtime) repositoryWatch(ownerID, id string) (Reminder, error) {
 	return Reminder{}, fmt.Errorf("没有找到属于目标用户的仓库更新订阅 %s", id)
 }
 
+// repositoryWatchItems 返回全部仓库订阅，不按 owner 过滤：聊天里改订阅是按仓库
+// 的管理权限判断的，调用方拿到之后自己筛。
+func (r *Runtime) repositoryWatchItems() []Reminder {
+	if r.reminders == nil {
+		return nil
+	}
+	r.reminderMu.Lock()
+	defer r.reminderMu.Unlock()
+	var out []Reminder
+	for _, item := range r.reminders.Reminders() {
+		if reminderIsRepositoryWatch(item) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func (r *Runtime) mutateRepositoryWatch(ownerID, id string, mutate func(*Reminder) error) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
