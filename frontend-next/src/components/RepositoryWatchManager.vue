@@ -85,7 +85,10 @@
               <AppSelect v-model="target.destination" :options="destinationOptions" aria-label="通知对象类型" />
               <AppSelect v-if="target.destination === 'group' && groupOptions.length" :model-value="target.group_id ?? ''" :options="groupOptions" aria-label="通知群聊" @update:model-value="target.group_id = String($event ?? '')" />
               <input v-else-if="target.destination === 'group'" v-model.trim="target.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="通知群号或 Chat ID" />
-              <input v-else v-model.trim="target.user_id" class="input" type="text" placeholder="私聊对象 ID" aria-label="通知私聊对象 ID" />
+              <div v-else class="target-user">
+                <input v-model.trim="target.user_id" class="input" type="text" placeholder="私聊对象 ID" aria-label="通知私聊对象 ID" />
+                <AccountNameHint :user-id="target.user_id" :profile="form.profile_id" />
+              </div>
               <button class="btn small ghost danger icon-only" type="button" title="移除通知对象" aria-label="移除通知对象" @click="removeTarget(index)"><Trash2 :size="14" aria-hidden="true" /></button>
             </div>
             <button class="btn small ghost" type="button" @click="addTarget"><Plus :size="14" aria-hidden="true" />添加通知对象</button>
@@ -103,7 +106,10 @@
                   <AppSelect v-model="member.destination" :options="destinationOptions" :aria-label="`管理人员类型`" />
                   <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`管理人员群聊`" @update:model-value="member.group_id = String($event ?? '')" />
                   <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="管理人员群号或 Chat ID" />
-                  <input v-else v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" aria-label="管理人员私聊用户 ID" />
+                  <div v-else class="target-user">
+                    <input v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" aria-label="管理人员私聊用户 ID" />
+                    <AccountNameHint :user-id="member.user_id" :profile="form.profile_id" />
+                  </div>
                   <button class="btn small ghost danger icon-only" type="button" title="移除管理人员" aria-label="移除管理人员" @click="form.issue_managers.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
                 <button class="btn small ghost" type="button" @click="form.issue_managers.push({ destination: 'private', user_id: '' })"><Plus :size="14" aria-hidden="true" />添加管理人员</button>
@@ -117,7 +123,10 @@
                   <AppSelect v-model="member.destination" :options="destinationOptions" :aria-label="`草稿人类型`" />
                   <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`草稿人群聊`" @update:model-value="member.group_id = String($event ?? '')" />
                   <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="草稿人群号或 Chat ID" />
-                  <input v-else v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" aria-label="草稿人私聊用户 ID" />
+                  <div v-else class="target-user">
+                    <input v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" aria-label="草稿人私聊用户 ID" />
+                    <AccountNameHint :user-id="member.user_id" :profile="form.profile_id" />
+                  </div>
                   <button class="btn small ghost danger icon-only" type="button" title="移除草稿人" aria-label="移除草稿人" @click="form.issue_drafters.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
                 <button class="btn small ghost" type="button" @click="form.issue_drafters.push({ destination: 'group', group_id: '' })"><Plus :size="14" aria-hidden="true" />添加草稿人</button>
@@ -193,6 +202,7 @@ import {
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
+import AccountNameHint from "./AccountNameHint.vue";
 import AppSelect from "./AppSelect.vue";
 
 const props = defineProps<{
