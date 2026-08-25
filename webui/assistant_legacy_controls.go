@@ -411,47 +411,12 @@ func (h *BotHandler) listTasks(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "assistant.tasks.list", err, "", nil)
 		return
 	}
+	// 列表和单条详情必须走同一个映射：手抄两份的结果是列表悄悄漏字段——Star 的
+	// 通知模式、阈值和里程碑就是这么丢的，编辑框读列表，一打开全是默认值，再一保存
+	// 把真配置覆盖掉。
 	out := make([]botTaskPayload, 0, len(items))
 	for _, item := range items {
-		out = append(out, botTaskPayload{
-			ID:                    item.ID,
-			Kind:                  botTaskKind(item),
-			Platform:              item.Platform,
-			ProfileID:             item.ProfileID,
-			OwnerID:               item.OwnerID,
-			GroupID:               item.GroupID,
-			UserID:                item.UserID,
-			Message:               item.Message,
-			Status:                botTaskStatus(item),
-			TriggerAt:             item.TriggerAt,
-			IntervalSeconds:       item.IntervalSeconds,
-			LastRunAt:             item.LastRunAt,
-			CancelledAt:           item.CancelledAt,
-			LastError:             item.LastError,
-			ConsecutiveFailures:   item.ConsecutiveFailures,
-			PendingDelivery:       strings.TrimSpace(item.PendingDelivery) != "",
-			PendingSince:          item.PendingSince,
-			Repository:            item.Repository,
-			RepositoryBranch:      item.RepositoryBranch,
-			WatchCommits:          item.WatchCommits,
-			WatchPullRequests:     item.WatchPullRequests,
-			WatchIssues:           item.WatchIssues,
-			WatchReleases:         item.WatchReleases,
-			WatchStars:            item.WatchStars,
-			LastCommitSHA:         item.LastCommitSHA,
-			LastPullRequestCursor: item.LastPullRequestCursor,
-			LastIssueCursor:       item.LastIssueCursor,
-			LastReleaseTag:        item.LastReleaseTag,
-			LastStarCount:         item.LastStarCount,
-			FeedURL:               item.FeedURL,
-			FeedSource:            item.FeedSource,
-			FeedHandle:            item.FeedHandle,
-			FeedJudgePrompt:       item.FeedJudgePrompt,
-			LastFeedItemID:        item.LastFeedItemID,
-			LastFeedPublishedAt:   item.LastFeedPublishedAt,
-			CreatedAt:             item.CreatedAt,
-			ConsumesQuota:         taskConsumesQuota(item),
-		})
+		out = append(out, botTaskFromReminder(item))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
@@ -858,10 +823,10 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 		ConsecutiveFailures: item.ConsecutiveFailures, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != "",
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
 		WatchCommits: item.WatchCommits, WatchPullRequests: item.WatchPullRequests,
-		WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
+		WatchIssues: item.WatchIssues, WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
 		StarNotifyMode: item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
 		LastCommitSHA: item.LastCommitSHA, LastPullRequestCursor: item.LastPullRequestCursor,
-		LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
+		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
 		FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
