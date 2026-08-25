@@ -119,3 +119,52 @@ func TestCleanInputKeepsNamedMentionsOfOthers(t *testing.T) {
 		t.Fatalf("正文被破坏：%q", got)
 	}
 }
+
+// @ 的注解要和正文对得上：@ 自己的已经从正文摘掉，就不能再说「不要忽略正文里的 @」；
+// @ 了别人的还在正文里，那句提醒要留着。
+func TestMentionAnnotationMatchesWhatIsInTheText(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "3129583166"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	self := MessageEvent{
+		Kind: EventKindGroup, SelfID: "3129583166", GroupID: "g", UserID: "10001", ToMe: true,
+		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "Diana"}}},
+	}
+	got := currentPromptText(self, runtime.cleanInput(self, ""))
+	if !strings.Contains(got, "这条消息 @ 了你") {
+		t.Fatalf("没有告诉模型它被 @ 了：%q", got)
+	}
+	if strings.Contains(got, "@ 是当前消息的一部分") {
+		t.Fatalf("正文里已经没有 @ 了，不该再说「不要忽略」：%q", got)
+	}
+
+	withOther := self
+	withOther.Segments = append(append([]MessageSegment{}, self.Segments...),
+		MessageSegment{Type: "text", Data: map[string]string{"text": " 看看 "}},
+		MessageSegment{Type: "at", Data: map[string]string{"qq": "10002", "name": "老王"}})
+	got = currentPromptText(withOther, runtime.cleanInput(withOther, ""))
+	if !strings.Contains(got, "@ 是当前消息的一部分") {
+		t.Fatalf("@ 了别人时应当保留原来的提醒：%q", got)
+	}
+	if !strings.Contains(got, "老王") {
+		t.Fatalf("别人的 @ 应当留在正文里：%q", got)
+	}
+}
+
+func TestMentionsSomeoneElse(t *testing.T) {
+	bot := "42"
+	onlyBot := MessageEvent{SelfID: bot, Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": bot}}}}
+	if mentionsSomeoneElse(onlyBot) {
+		t.Fatal("只 @ 了自己不该算 @ 了别人")
+	}
+	withOther := MessageEvent{SelfID: bot, Segments: []MessageSegment{
+		{Type: "at", Data: map[string]string{"qq": bot}},
+		{Type: "at", Data: map[string]string{"qq": "10002"}},
+	}}
+	if !mentionsSomeoneElse(withOther) {
+		t.Fatal("@ 了别人没有被认出来")
+	}
+	// 取不到自己的账号时按「@ 了别人」处理：多提醒一次无害，漏掉会让模型忽略回复对象。
+	unknownSelf := MessageEvent{Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": bot}}}}
+	if !mentionsSomeoneElse(unknownSelf) {
+		t.Fatal("不知道自己是谁时应当保守处理")
+	}
+}
