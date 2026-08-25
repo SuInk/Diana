@@ -323,6 +323,8 @@ type BotConfig struct {
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
+	SelfReference                string               `json:"self_reference,omitempty"`
+	SentenceEnders               string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
@@ -474,6 +476,8 @@ type GroupConfig struct {
 	SystemPrompt                 string                 `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode           `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle             `json:"reply_style,omitempty"`
+	SelfReference                string                 `json:"self_reference,omitempty"`
+	SentenceEnders               string                 `json:"sentence_enders,omitempty"`
 	WelcomeEnabled               bool                   `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string                 `json:"welcome_message,omitempty"`
 	MaxContextTokens             int64                  `json:"max_context_tokens,omitempty"`
@@ -536,6 +540,8 @@ type ConfigPayload struct {
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
+	SelfReference                string               `json:"self_reference,omitempty"`
+	SentenceEnders               string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
@@ -653,6 +659,8 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if strings.TrimSpace(string(cfg.ReplyStyle)) != "" {
 		cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
 	}
+	cfg.SelfReference = strings.TrimSpace(cfg.SelfReference)
+	cfg.SentenceEnders = strings.TrimSpace(cfg.SentenceEnders)
 	if !cfg.EnabledSet {
 		cfg.Enabled = true
 		cfg.EnabledSet = true
@@ -1098,6 +1106,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ResponseMode = ResponseModeCustom
 	}
 	cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
+	cfg.SelfReference = strings.TrimSpace(cfg.SelfReference)
+	cfg.SentenceEnders = strings.TrimSpace(cfg.SentenceEnders)
 	if strings.TrimSpace(cfg.PromptChineseSlangText) == "" {
 		cfg.PromptChineseSlangText = defaults.PromptChineseSlangText
 	}
@@ -1350,6 +1360,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SystemPrompt:                   cfg.SystemPrompt,
 		ResponseMode:                   cfg.ResponseMode,
 		ReplyStyle:                     cfg.ReplyStyle,
+		SelfReference:                  cfg.SelfReference,
+		SentenceEnders:                 cfg.SentenceEnders,
 		DebugModeEnabled:               cfg.DebugModeEnabled,
 		ReplyReferenceMode:             cfg.ReplyReferenceMode,
 		MentionUserMode:                cfg.MentionUserMode,
@@ -1485,6 +1497,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SystemPrompt:                   payload.SystemPrompt,
 		ResponseMode:                   payload.ResponseMode,
 		ReplyStyle:                     payload.ReplyStyle,
+		SelfReference:                  payload.SelfReference,
+		SentenceEnders:                 payload.SentenceEnders,
 		DebugModeEnabled:               payload.DebugModeEnabled,
 		ReplyReferenceMode:             payload.ReplyReferenceMode,
 		MentionUserMode:                payload.MentionUserMode,

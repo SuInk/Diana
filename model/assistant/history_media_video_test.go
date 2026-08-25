@@ -984,7 +984,7 @@ func TestRuntimeCachesIncomingVideoThenRoutesFollowupToItsFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "视频里是测试画面。" || len(channel.sent) != 1 {
+	if reply != "视频里是测试画面" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	if len(provider.requests) != 3 || requestImageCount(provider.requests[2]) != 4 {

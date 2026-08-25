@@ -27,6 +27,7 @@ const (
 	llmProfilesKey       = "llm_profiles"
 	llmRegistryKey       = "llm_provider_registry"
 	botProfilesKey       = "bot_profiles"
+	botPersonasKey       = "bot_personas"
 	botGroupConfigKey    = "bot_group_configs"
 	pluginStateKey       = "plugin_states"
 	remindersKey         = "reminders"
@@ -140,6 +141,18 @@ func (s *SQLiteStore) LoadBotProfiles(ctx context.Context) (assistant.ProfileSet
 // SaveBotProfiles 保存 OneBot v11 机器人配置集。
 func (s *SQLiteStore) SaveBotProfiles(ctx context.Context, set assistant.ProfileSet) error {
 	return s.saveJSON(ctx, botProfilesKey, set)
+}
+
+// LoadBotPersonas 读取人设库。
+func (s *SQLiteStore) LoadBotPersonas(ctx context.Context) (assistant.PersonaSet, bool, error) {
+	var set assistant.PersonaSet
+	ok, err := s.loadJSON(ctx, botPersonasKey, &set)
+	return set, ok, err
+}
+
+// SaveBotPersonas 保存人设库。
+func (s *SQLiteStore) SaveBotPersonas(ctx context.Context, set assistant.PersonaSet) error {
+	return s.saveJSON(ctx, botPersonasKey, set)
 }
 
 // LoadBotGroupConfigs 读取 群级机器人配置。

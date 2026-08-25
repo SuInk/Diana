@@ -142,6 +142,10 @@ export interface BotProfileConfig {
   system_prompt?: string;
   response_mode?: "quiet" | "standard" | "active" | "custom";
   reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
+  self_reference?: string;
+  /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随表达风格。 */
+  sentence_enders?: string;
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
   /** 回复行为个性化：on 每条都带、off 从不带、auto 交给模型自己判断；缺省等价于 on。 */
@@ -345,6 +349,9 @@ export interface BotGroupConfig {
   response_mode?: "" | "quiet" | "standard" | "active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
   reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  /** 留空时跟随机器人全局设置。 */
+  self_reference?: string;
+  sentence_enders?: string;
   welcome_enabled?: boolean;
   welcome_message?: string;
   max_context_tokens?: number;
@@ -1564,6 +1571,59 @@ export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promis
     params.set("profile", profile);
   }
   return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
+}
+
+export interface Persona {
+  id: string;
+  name: string;
+  system_prompt?: string;
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  self_reference?: string;
+  sentence_enders?: string;
+  updated_at?: string;
+}
+
+export interface PersonaListResponse {
+  personas: Persona[];
+  limit: number;
+}
+
+export function listPersonas(): Promise<PersonaListResponse> {
+  return requestJSON<PersonaListResponse>("/api/assistant/personas");
+}
+
+/** 带 id 是改，不带是新增。返回落库后的那一份和整库。 */
+export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<{ persona: Persona; personas: Persona[] }> {
+  return requestJSON<{ persona: Persona; personas: Persona[] }>("/api/assistant/personas", {
+    method: "POST",
+    body: JSON.stringify({ persona })
+  });
+}
+
+export interface PersonaImportResult {
+  personas: Persona[];
+  imported: number;
+  skipped: number;
+  renamed: number;
+  dropped: number;
+}
+
+/** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */
+export const PERSONA_EXPORT_VERSION = 1;
+
+/** 合并在后端做：一次读改写落一次库，中途失败不会留下「导了一半」的状态。 */
+export function importPersonas(personas: Persona[]): Promise<PersonaImportResult> {
+  return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
+    method: "POST",
+    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, personas })
+  });
+}
+
+export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
+  return requestJSON<{ personas: Persona[] }>("/api/assistant/personas/delete", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
 }
 
 export interface GlossaryRevision {
