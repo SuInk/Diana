@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/assistant"
 )
 
 // 群聊关系图：以机器人为中心，看这个群里谁在跟谁说话。
@@ -25,40 +27,6 @@ const (
 	// 看不出任何关系；只保留发言最多的这些人，其余并进「其他」计数。
 	groupRelationMaxNodes = 40
 )
-
-// GroupRelationNode 是关系图上的一个人。
-type GroupRelationNode struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name,omitempty"`
-	// Messages 是这段时间内的发言数，决定节点大小。
-	Messages int `json:"messages"`
-	// Favorability 取自用户档案，是全局值而不是本群值——好感度本来就不分群。
-	Favorability int `json:"favorability"`
-	// IsBot 标记中心节点。
-	IsBot bool `json:"is_bot,omitempty"`
-}
-
-// GroupRelationEdge 是一条互动边，无向：Source 恒小于 Target，避免同一对人
-// 出现两条边。
-type GroupRelationEdge struct {
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Weight int    `json:"weight"`
-}
-
-// GroupRelationGraph 是一个群在某段时间内的关系图。
-type GroupRelationGraph struct {
-	GroupID  string     `json:"group_id"`
-	BotID    string     `json:"bot_id,omitempty"`
-	Since    *time.Time `json:"since,omitempty"`
-	Messages int        `json:"messages"`
-	// Participants 是这段时间实际发过言的人数，Nodes 可能因为上限少于它。
-	Participants int                 `json:"participants"`
-	Nodes        []GroupRelationNode `json:"nodes"`
-	Edges        []GroupRelationEdge `json:"edges"`
-	// Truncated 说明扫描撞到了条数上限，图只反映最近这一段。
-	Truncated bool `json:"truncated"`
-}
 
 // relationEventPayload 只取关系图用得上的那几个字段。整条 MessageEvent 解出来
 // 会带上媒体、工具结果这些大字段，扫两万条就是白烧内存。
@@ -78,12 +46,12 @@ type relationEventPayload struct {
 }
 
 // GroupRelationGraphFor 统计一个群的关系图。
-func (s *SQLiteStore) GroupRelationGraphFor(ctx context.Context, groupID string, since time.Time, botID string) (GroupRelationGraph, error) {
-	graph := GroupRelationGraph{
+func (s *SQLiteStore) GroupRelationGraphFor(ctx context.Context, groupID string, since time.Time, botID string) (assistant.GroupRelationGraph, error) {
+	graph := assistant.GroupRelationGraph{
 		GroupID: strings.TrimSpace(groupID),
 		BotID:   strings.TrimSpace(botID),
-		Nodes:   []GroupRelationNode{},
-		Edges:   []GroupRelationEdge{},
+		Nodes:   []assistant.GroupRelationNode{},
+		Edges:   []assistant.GroupRelationEdge{},
 	}
 	if s == nil || s.db == nil || graph.GroupID == "" {
 		return graph, nil
@@ -105,7 +73,7 @@ ORDER BY event_time DESC
 LIMIT ?
 `, graph.GroupID, sinceUnix, groupRelationScanLimit+1)
 	if err != nil {
-		return GroupRelationGraph{}, fmt.Errorf("query group relations: %w", err)
+		return assistant.GroupRelationGraph{}, fmt.Errorf("query group relations: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -127,7 +95,7 @@ LIMIT ?
 	for rows.Next() {
 		var userID, senderName, payload string
 		if err := rows.Scan(&userID, &senderName, &payload); err != nil {
-			return GroupRelationGraph{}, fmt.Errorf("scan group relations: %w", err)
+			return assistant.GroupRelationGraph{}, fmt.Errorf("scan group relations: %w", err)
 		}
 		scanned++
 		if scanned > groupRelationScanLimit {
@@ -169,7 +137,7 @@ LIMIT ?
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return GroupRelationGraph{}, fmt.Errorf("iterate group relations: %w", err)
+		return assistant.GroupRelationGraph{}, fmt.Errorf("iterate group relations: %w", err)
 	}
 
 	graph.Participants = len(messages)
@@ -180,10 +148,10 @@ LIMIT ?
 
 // buildRelationNodes 按发言数取前 N 个人，并补上好感度。中心节点无论发言多少
 // 都要在——它是这张图的原点。
-func (s *SQLiteStore) buildRelationNodes(ctx context.Context, messages map[string]int, names map[string]string, botID string) []GroupRelationNode {
-	nodes := make([]GroupRelationNode, 0, len(messages))
+func (s *SQLiteStore) buildRelationNodes(ctx context.Context, messages map[string]int, names map[string]string, botID string) []assistant.GroupRelationNode {
+	nodes := make([]assistant.GroupRelationNode, 0, len(messages))
 	for userID, count := range messages {
-		nodes = append(nodes, GroupRelationNode{UserID: userID, DisplayName: names[userID], Messages: count, IsBot: userID == botID && botID != ""})
+		nodes = append(nodes, assistant.GroupRelationNode{UserID: userID, DisplayName: names[userID], Messages: count, IsBot: userID == botID && botID != ""})
 	}
 	sort.Slice(nodes, func(left, right int) bool {
 		if nodes[left].IsBot != nodes[right].IsBot {
@@ -203,7 +171,7 @@ func (s *SQLiteStore) buildRelationNodes(ctx context.Context, messages map[strin
 
 // fillRelationFavorability 一次查完这些人的好感度。逐个查会在四十个人的图上
 // 打四十次库。
-func (s *SQLiteStore) fillRelationFavorability(ctx context.Context, nodes []GroupRelationNode) {
+func (s *SQLiteStore) fillRelationFavorability(ctx context.Context, nodes []assistant.GroupRelationNode) {
 	if len(nodes) == 0 {
 		return
 	}
@@ -245,12 +213,12 @@ GROUP BY user_id
 
 // relationEdgesAmong 只保留两端都在图上的边。一端被人数上限截掉之后，那条边
 // 会指向一个画不出来的节点。
-func relationEdgesAmong(nodes []GroupRelationNode, weights map[[2]string]int) []GroupRelationEdge {
+func relationEdgesAmong(nodes []assistant.GroupRelationNode, weights map[[2]string]int) []assistant.GroupRelationEdge {
 	present := make(map[string]struct{}, len(nodes))
 	for _, node := range nodes {
 		present[node.UserID] = struct{}{}
 	}
-	edges := make([]GroupRelationEdge, 0, len(weights))
+	edges := make([]assistant.GroupRelationEdge, 0, len(weights))
 	for pair, weight := range weights {
 		if _, ok := present[pair[0]]; !ok {
 			continue
@@ -258,7 +226,7 @@ func relationEdgesAmong(nodes []GroupRelationNode, weights map[[2]string]int) []
 		if _, ok := present[pair[1]]; !ok {
 			continue
 		}
-		edges = append(edges, GroupRelationEdge{Source: pair[0], Target: pair[1], Weight: weight})
+		edges = append(edges, assistant.GroupRelationEdge{Source: pair[0], Target: pair[1], Weight: weight})
 	}
 	sort.Slice(edges, func(left, right int) bool {
 		if edges[left].Weight == edges[right].Weight {

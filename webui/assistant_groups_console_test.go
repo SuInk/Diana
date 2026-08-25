@@ -391,8 +391,8 @@ func TestGroupRelationGraphEndpoint(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var payload struct {
-		Range string                     `json:"range"`
-		Graph storage.GroupRelationGraph `json:"graph"`
+		Range string                       `json:"range"`
+		Graph assistant.GroupRelationGraph `json:"graph"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
