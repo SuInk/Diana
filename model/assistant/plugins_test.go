@@ -1115,6 +1115,22 @@ func TestFileParserPluginRespectsMaxFileSize(t *testing.T) {
 	}
 }
 
+func TestFileParserPluginPublishesVideoFormatLimit(t *testing.T) {
+	plugin := NewFileParserPlugin(nil)
+	manifest := plugin.Manifest()
+	if manifest.Version != "0.3.2" {
+		t.Fatalf("file parser version = %q", manifest.Version)
+	}
+	manager := NewPluginManager(plugin)
+	_, settings, enabled := manager.PluginWithSettings(fileParserPluginID, nil)
+	if !enabled {
+		t.Fatal("file parser is not enabled")
+	}
+	if got := fileParserVideoMaxBytes(settings); got != 200*1024*1024 {
+		t.Fatalf("default video file limit = %d", got)
+	}
+}
+
 type testPlugin struct{}
 
 type settingsProbePlugin struct {
