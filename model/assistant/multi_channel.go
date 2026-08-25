@@ -87,6 +87,40 @@ func (c *MultiChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) 
 	return nil, binding.Channel.Send(ctx, msg)
 }
 
+// OneBotBinding 返回负责 OneBot 的那条绑定。
+//
+// 「哪台机器人是 OneBot」和「当前激活的是哪台」是两件事。反连监听器是进程内共享的
+// 一个实例，OneBot 和 Telegram 可以同时跑；激活 Telegram 那台之后，OneBot 连接照常
+// 收消息，但它属于哪台机器人不该跟着激活项走。
+func (c *MultiChannel) OneBotBinding() (ChannelBinding, bool) {
+	if c == nil {
+		return ChannelBinding{}, false
+	}
+	for _, binding := range c.bindings {
+		if IsOneBotPlatform(binding.Platform) {
+			return binding, true
+		}
+	}
+	return ChannelBinding{}, false
+}
+
+// bindingForPlatform 找出负责某个平台的那条绑定。
+func (c *MultiChannel) bindingForPlatform(platform string) (ChannelBinding, bool) {
+	if c == nil {
+		return ChannelBinding{}, false
+	}
+	platform = NormalizePlatformID(platform)
+	if IsOneBotPlatform(platform) {
+		return c.OneBotBinding()
+	}
+	for _, binding := range c.bindings {
+		if NormalizePlatformID(binding.Platform) == platform {
+			return binding, true
+		}
+	}
+	return ChannelBinding{}, false
+}
+
 func (c *MultiChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
 	for _, binding := range c.bindings {
 		if IsOneBotPlatform(binding.Platform) {
