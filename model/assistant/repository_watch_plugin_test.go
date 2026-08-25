@@ -37,6 +37,11 @@ type repositoryWatchTestGitHub struct {
 	pullFileCalls int
 	failCommits   bool
 	failReleases  bool
+	issues        []map[string]any
+	issueEvents   []map[string]any
+	issueCalls    int
+	issueEventCal int
+	failIssueEvts bool
 }
 
 func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Request) {
@@ -97,9 +102,24 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		_ = json.NewEncoder(w).Encode(s.releases)
 		return
 	}
+	// 仓库级 issue 事件要排在 star 的 /events 之前：两者路径都以 /events 结尾。
+	if strings.HasSuffix(r.URL.Path, "/issues/events") {
+		s.issueEventCal++
+		if s.failIssueEvts {
+			http.Error(w, `{"message":"issue events unavailable"}`, http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(s.issueEvents)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/events") {
 		s.eventCalls++
 		_ = json.NewEncoder(w).Encode(s.events)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/issues") {
+		s.issueCalls++
+		_ = json.NewEncoder(w).Encode(s.issues)
 		return
 	}
 	if r.URL.Path == "/repos/acme/demo" {
@@ -1792,5 +1812,134 @@ func TestRepositoryWatchPluginReportsOpenedUpdatedAndClosedPullRequests(t *testi
 		if !slices.Contains(entries, want) {
 			t.Fatalf("notification labels=%v, want %q", entries, want)
 		}
+	}
+}
+
+func repositoryWatchIssuePayload(number int, title, state, stateReason, createdAt, updatedAt, closedAt string) map[string]any {
+	payload := map[string]any{
+		"number": number, "title": title, "state": state, "body": "正文",
+		"html_url":   "https://github.com/acme/demo/issues/" + fmt.Sprint(number),
+		"created_at": createdAt, "updated_at": updatedAt,
+		"user": map[string]any{"login": "diana"},
+	}
+	if stateReason != "" {
+		payload["state_reason"] = stateReason
+	}
+	if closedAt != "" {
+		payload["closed_at"] = closedAt
+	}
+	return payload
+}
+
+// TestRepositoryWatchPluginClassifiesIssues 覆盖 Issue 的四种动态：新建、更新、关闭、
+// 重新打开。关闭那条的 updated_at 排在 closed_at 之后，验证报的是关闭时间。
+func TestRepositoryWatchPluginClassifiesIssues(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		issues: []map[string]any{repositoryWatchIssuePayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", "")},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Issues: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", selection, nil)
+	if err != nil || baseline.IssueCursor == "" {
+		t.Fatalf("baseline=%#v err=%v", baseline, err)
+	}
+
+	github.mu.Lock()
+	github.issues = []map[string]any{
+		repositoryWatchIssuePayload(4, "重开了", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", ""),
+		repositoryWatchIssuePayload(3, "关掉了", "closed", "completed", "2026-08-13T00:00:00Z", "2026-08-16T00:00:00Z", "2026-08-14T00:00:00Z"),
+		repositoryWatchIssuePayload(2, "刚开的", "open", "", "2026-08-14T12:00:00Z", "2026-08-14T12:00:00Z", ""),
+		repositoryWatchIssuePayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", ""),
+	}
+	github.issueEvents = []map[string]any{
+		{"event": "reopened", "created_at": "2026-08-15T00:00:00Z", "issue": map[string]any{"number": 4}},
+	}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]repositoryWatchIssue{}
+	for _, issue := range change.Issues {
+		got[issue.Number] = issue
+	}
+	if len(got) != 3 {
+		t.Fatalf("issues=%#v", change.Issues)
+	}
+	for number, wantStatus := range map[int]string{2: "opened", 3: "closed", 4: "reopened"} {
+		if got[number].Status != wantStatus {
+			t.Fatalf("Issue #%d status=%q, want %q", number, got[number].Status, wantStatus)
+		}
+	}
+	wantClosedAt := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	if !repositoryWatchIssueTime(got[3]).Equal(wantClosedAt) {
+		t.Fatalf("closed issue time=%s, want closed_at %s", repositoryWatchIssueTime(got[3]), wantClosedAt)
+	}
+	for status, want := range map[string]string{
+		"opened": "新建/创建于", "updated": "更新/更新于",
+		"closed": "已关闭/关闭于", "reopened": "重新打开/重新打开于",
+	} {
+		if got := repositoryWatchIssueStatusLabel(status) + "/" + repositoryWatchIssueTimeLabel(status); got != want {
+			t.Fatalf("%s 的通知标签是 %q，想要 %q", status, got, want)
+		}
+	}
+}
+
+// TestRepositoryWatchPluginDoesNotRepeatReopenForLaterUpdates 盯住 state_reason 的
+// 粘性：issue 重开之后这个字段一直是 reopened，之后的每条评论都会把它带出来。只看
+// 字段的话，一次重开会让往后所有更新都报成「重新打开」。
+func TestRepositoryWatchPluginDoesNotRepeatReopenForLaterUpdates(t *testing.T) {
+	reopened := repositoryWatchIssuePayload(7, "重开后又被评论", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", "")
+	github := &repositoryWatchTestGitHub{
+		issues:      []map[string]any{reopened},
+		issueEvents: []map[string]any{{"event": "reopened", "created_at": "2026-08-15T00:00:00Z", "issue": map[string]any{"number": 7}}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Issues: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 重开发生在这一轮：该报「重新打开」。
+	github.mu.Lock()
+	github.issues = []map[string]any{repositoryWatchIssuePayload(7, "重开后又被评论", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-16T00:00:00Z", "")}
+	github.issueEvents = []map[string]any{{"event": "reopened", "created_at": "2026-08-16T00:00:00Z", "issue": map[string]any{"number": 7}}}
+	github.mu.Unlock()
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "", baseline, selection, nil)
+	if err != nil || len(change.Issues) != 1 || change.Issues[0].Status != "reopened" {
+		t.Fatalf("issues=%#v err=%v", change.Issues, err)
+	}
+
+	// 下一轮只是被评论，重开事件还是上一轮那条：该报「更新」。
+	next := baseline
+	next.IssueCursor = change.Snapshot.IssueCursor
+	github.mu.Lock()
+	github.issues = []map[string]any{repositoryWatchIssuePayload(7, "重开后又被评论", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-17T00:00:00Z", "")}
+	github.mu.Unlock()
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "", next, selection, nil)
+	if err != nil || len(change.Issues) != 1 {
+		t.Fatalf("issues=%#v err=%v", change.Issues, err)
+	}
+	if change.Issues[0].Status != "updated" {
+		t.Fatalf("issue status=%q, want updated: 重开的状态粘住了", change.Issues[0].Status)
+	}
+
+	// 事件列表读不到时退回旧判断，一次重新打开不能被吞成普通更新。
+	github.mu.Lock()
+	github.failIssueEvts = true
+	github.issues = []map[string]any{repositoryWatchIssuePayload(7, "重开后又被评论", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-18T00:00:00Z", "")}
+	github.mu.Unlock()
+	next.IssueCursor = change.Snapshot.IssueCursor
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "", next, selection, nil)
+	if err != nil || len(change.Issues) != 1 || change.Issues[0].Status != "reopened" {
+		t.Fatalf("fallback issues=%#v err=%v", change.Issues, err)
 	}
 }
