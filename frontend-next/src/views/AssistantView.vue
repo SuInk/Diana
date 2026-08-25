@@ -539,6 +539,44 @@
               </button>
             </div>
             <div class="card-body form-grid">
+              <!-- 人设库是「套用来源」：点一下把下面四项填好，改不改随你，按保存才生效。
+                   它不是活绑定——库里那份之后再改，不会偷偷影响已经保存的机器人。 -->
+              <div class="field wide">
+                <div class="field-head">
+                  <label>人设库</label>
+                  <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
+                    <BookmarkPlus :size="14" aria-hidden="true" />
+                    {{ personaSaverOpen ? "取消" : "存为人设" }}
+                  </button>
+                </div>
+                <div v-if="personaSaverOpen" class="persona-saver">
+                  <input
+                    ref="personaNameInput"
+                    v-model.trim="personaNameDraft"
+                    class="input"
+                    maxlength="40"
+                    placeholder="给这套人设起个名字，例如 猫娘"
+                    @keydown.enter.prevent="storeCurrentPersona"
+                    @keydown.esc="personaSaverOpen = false"
+                  />
+                  <button class="btn primary small" type="button" :disabled="personaLibraryBusy || !personaNameDraft" @click="storeCurrentPersona">
+                    {{ personaSaverExisting ? "覆盖同名人设" : "保存" }}
+                  </button>
+                </div>
+                <div v-if="personaLibrary.length" class="persona-library">
+                  <div v-for="persona in personaLibrary" :key="persona.id" class="persona-chip">
+                    <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :title="personaSummary(persona)" @click="applyPersona(persona)">
+                      <span class="persona-chip-name">{{ persona.name }}</span>
+                      <small class="muted">{{ personaSummary(persona) }}</small>
+                    </button>
+                    <button type="button" class="persona-chip-remove" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
+                      <Trash2 :size="13" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+                <span v-if="!personaLibrary.length" class="hint">还没存过人设。把下面几项调好，点「存为人设」就能收进来，之后一键换回。</span>
+                <span v-else class="hint">点一下套用到下面四项，确认后按保存才生效；库里的改动不会影响已经保存的机器人。</span>
+              </div>
               <div class="field">
                 <label for="bot-reply-style">表达风格</label>
                 <AppSelect
@@ -910,8 +948,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
-import { ArrowLeft, Bot, ChevronRight, Copy, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
+import { ArrowLeft, BookmarkPlus, Bot, ChevronRight, Copy, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -930,7 +968,11 @@ import {
   type BotProfileConfig,
   type BotChannelStatus,
   type BotPlatform,
-  type AliasTriggerMode
+  type AliasTriggerMode,
+  listPersonas,
+  savePersona,
+  deletePersona,
+  type Persona
 } from "../api";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -1136,6 +1178,109 @@ const mentionUserModeOptions: AppSelectOption[] = [
 ];
 
 type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+
+// 人设库。存的是「它是谁、怎么说话」的四项组合，套用是把它们填进下面的表单——
+// 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
+const personaLibrary = ref<Persona[]>([]);
+const personaLibraryBusy = ref(false);
+
+// 四项全空的不值得存：存进去列表里点开也是空的，还占一格。
+const personaHasContent = computed(() => {
+  const current = form.value;
+  if (!current) return false;
+  return Boolean(
+    current.system_prompt?.trim() ||
+      current.self_reference?.trim() ||
+      current.sentence_enders?.trim() ||
+      (current.reply_style && current.reply_style !== "assistant")
+  );
+});
+
+function personaSummary(persona: Persona): string {
+  const parts: string[] = [];
+  const styleLabel = replyStyleOptions.find((option) => option.value === persona.reply_style)?.label;
+  if (styleLabel) parts.push(styleLabel);
+  if (persona.self_reference) parts.push(`自称${persona.self_reference}`);
+  if (persona.sentence_enders) parts.push(persona.sentence_enders.split(/[,，]/)[0].trim());
+  if (!parts.length && persona.system_prompt) parts.push(persona.system_prompt.trim().slice(0, 12));
+  return parts.join(" · ");
+}
+
+async function loadPersonaLibrary(): Promise<void> {
+  try {
+    personaLibrary.value = (await listPersonas()).personas ?? [];
+  } catch {
+    // 人设库读不出来不该挡住整个机器人页：它只是个快捷方式，缺了不影响配置本身。
+    personaLibrary.value = [];
+  }
+}
+
+// 套用只填表单，不写配置：用户看着它改、自己按保存，跟表达风格预设一个路数。
+function applyPersona(persona: Persona): void {
+  if (!form.value) return;
+  form.value.system_prompt = persona.system_prompt ?? "";
+  form.value.reply_style = (persona.reply_style || "assistant") as ReplyStyleKey;
+  form.value.self_reference = persona.self_reference ?? "";
+  form.value.sentence_enders = persona.sentence_enders ?? "";
+  toastSuccess(`已套用「${persona.name}」，确认后记得保存配置`);
+}
+
+const personaSaverOpen = ref(false);
+const personaNameDraft = ref("");
+const personaNameInput = ref<HTMLInputElement | null>(null);
+
+// 同名就是改那一套，不然反复点会存出一串同名的，列表里分不清哪个是哪个。
+const personaSaverExisting = computed(() =>
+  Boolean(personaNameDraft.value && personaLibrary.value.some((persona) => persona.name === personaNameDraft.value))
+);
+
+function togglePersonaSaver(): void {
+  personaSaverOpen.value = !personaSaverOpen.value;
+  if (!personaSaverOpen.value) return;
+  personaNameDraft.value = (form.value?.name ?? "").trim();
+  void nextTick(() => personaNameInput.value?.focus());
+}
+
+async function storeCurrentPersona(): Promise<void> {
+  const current = form.value;
+  const name = personaNameDraft.value.trim();
+  if (!current || !personaHasContent.value || !name) return;
+  const sameName = personaLibrary.value.find((persona) => persona.name === name);
+  personaLibraryBusy.value = true;
+  try {
+    const response = await savePersona({
+      ...(sameName ? { id: sameName.id } : {}),
+      name,
+      system_prompt: current.system_prompt ?? "",
+      reply_style: current.reply_style ?? "assistant",
+      self_reference: current.self_reference ?? "",
+      sentence_enders: current.sentence_enders ?? ""
+    });
+    personaLibrary.value = response.personas ?? [];
+    personaSaverOpen.value = false;
+    personaNameDraft.value = "";
+    toastSuccess(sameName ? `已更新人设「${name}」` : `已存为人设「${name}」`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "人设保存失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
+async function removePersona(persona: Persona): Promise<void> {
+  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份，已经保存到机器人上的配置不受影响。", danger: true, confirmLabel: "删除" }))) {
+    return;
+  }
+  personaLibraryBusy.value = true;
+  try {
+    personaLibrary.value = (await deletePersona(persona.id)).personas ?? [];
+    toastSuccess(`已删除人设「${persona.name}」`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "人设删除失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
 
 // 每个风格自带的自称和句尾候选，和后端 DefaultPersonaVoice 保持一致。
 const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence_enders: string }> = {
@@ -1928,6 +2073,9 @@ onBeforeUnmount(() => {
 
 onMounted(async () => {
   trackHeaderHeight();
+  // 人设库单独拉，不放进下面那组 Promise.all：它只是个快捷方式，
+  // 慢一点或者读不出来都不该拖住机器人配置本身的加载。
+  void loadPersonaLibrary();
   const [platformResult, botConfig, llmConfig] = await Promise.all([
     getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),
     getBotProfileConfig().catch((error: unknown) => {

@@ -240,6 +240,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/events/:id/images/:index", h.eventImage)
 	router.GET(base+"/users", h.listAssistantUsers)
 	router.GET(base+"/users/:id", h.getAssistantUser)
+	h.registerPersonaRoutes(router, base)
 	router.GET(base+"/glossary", h.listGlossary)
 	router.GET(base+"/glossary/entry", h.getGlossaryEntry)
 	router.POST(base+"/glossary", h.saveGlossaryEntry)

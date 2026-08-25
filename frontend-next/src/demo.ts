@@ -121,6 +121,12 @@ const groups: BotGroupSummary[] = [
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
 
+const demoPersonas = [
+  { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" },
+  { id: "persona-2", name: "技术群管", system_prompt: "你是技术群里那个话不多但每次开口都说到点子上的人。", reply_style: "groupmate", self_reference: "", sentence_enders: "" },
+  { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", reply_style: "concise", self_reference: "", sentence_enders: "" }
+];
+
 const demoUsers: UserMemoryProfile[] = [
   {
     user_id: "100200711", display_name: "青禾", favorability: 62, message_count: 1843, last_seen_at: before(2), updated_at: before(2),
@@ -415,6 +421,21 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const matched = demoUsers.filter((user) => !keyword || user.user_id.includes(keyword) || (user.display_name ?? "").includes(keyword));
     const users = matched.map((user) => ({ ...user, memories: undefined, memory_count: user.memories?.length ?? 0 }));
     return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
+  }
+  if (path === "/api/assistant/personas" && method === "GET") {
+    return json({ personas: demoPersonas, limit: 50 });
+  }
+  if (path === "/api/assistant/personas" && method === "POST") {
+    const persona = { ...(body.persona as Record<string, unknown>) } as (typeof demoPersonas)[number];
+    const index = demoPersonas.findIndex((item) => item.id === persona.id);
+    if (index >= 0) demoPersonas[index] = { ...demoPersonas[index], ...persona };
+    else demoPersonas.unshift({ ...persona, id: `persona-${demoPersonas.length + 1}` });
+    return json({ persona: demoPersonas[index >= 0 ? index : 0], personas: demoPersonas });
+  }
+  if (path === "/api/assistant/personas/delete") {
+    const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
+    if (index >= 0) demoPersonas.splice(index, 1);
+    return json({ personas: demoPersonas });
   }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {
