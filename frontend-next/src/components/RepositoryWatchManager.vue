@@ -62,16 +62,16 @@
               <label class="check-item"><input v-model="form.watch_releases" type="checkbox" />Release</label>
               <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
             </div>
-            <div v-if="form.watch_stars" class="field">
+            <div v-if="form.watch_stars" class="field repository-watch-star-field">
               <label for="watch-star-mode">Star 通知模式</label>
-              <select id="watch-star-mode" v-model="form.star_notify_mode" class="input"><option value="growth">累计增长</option><option value="milestone">自定义里程碑</option></select>
+              <AppSelect id="watch-star-mode" :model-value="form.star_notify_mode" :options="starModeOptions" @update:model-value="form.star_notify_mode = $event === 'milestone' ? 'milestone' : 'growth'" />
             </div>
-            <div v-if="form.watch_stars && form.star_notify_mode === 'growth'" class="field">
+            <div v-if="form.watch_stars && form.star_notify_mode === 'growth'" class="field repository-watch-star-field">
               <label for="watch-star-threshold">Star 增长通知阈值</label>
               <input id="watch-star-threshold" v-model.number="form.star_notify_threshold" class="input" type="number" min="1" max="1000000" step="1" />
               <span class="hint">累计新增达到该数量后再通知；默认 1。</span>
             </div>
-            <div v-if="form.watch_stars && form.star_notify_mode === 'milestone'" class="field wide">
+            <div v-if="form.watch_stars && form.star_notify_mode === 'milestone'" class="field wide repository-watch-star-field">
               <label for="watch-star-milestones">Star 里程碑</label>
               <input id="watch-star-milestones" v-model.trim="form.star_milestones_text" class="input" type="text" placeholder="100, 500, 1000" />
               <span class="hint">跨过指定绝对 Star 数时通知；已越过的里程碑不会补发。</span>
@@ -243,6 +243,7 @@ const profileOptions = computed(() => profiles.value.map((profile) => ({ value: 
 const selectedProfile = computed(() => profiles.value.find((profile) => profile.id === form.value.profile_id));
 const groupOptions = computed(() => selectedProfile.value?.platform === "telegram" ? [] : joinedGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || `群 ${group.group_id}`, hint: group.group_name ? group.group_id : undefined })));
 const destinationOptions = [{ value: "private", label: "私聊" }, { value: "group", label: "群聊" }];
+const starModeOptions = [{ value: "growth", label: "累计增长" }, { value: "milestone", label: "自定义里程碑" }];
 
 async function load(): Promise<void> {
   loading.value = true;
