@@ -1152,6 +1152,10 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
 	cfg.MaxContextTokens = groupCfg.MaxContextTokens
+	// 群级的历史预算此前只存不用：GroupConfig 里有这个字段、WithDefaults 也从
+	// 机器人配置继承了默认值，却没有一行把它拷回生效配置，于是群组页那个输入框
+	// 填了不生效。
+	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
@@ -2897,6 +2901,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaReminderTool(r, event),
 				newDianaScheduleTool(r, event),
 				newDianaRSSWatchTool(r, event),
+			}
+			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
+			// 无头浏览器。插件停用时模型看不到这个工具。
+			if _, settings, enabled := r.plugins.PluginWithSettings(groupRelationsPluginID, r.pluginOverridesForEvent(event)); enabled {
+				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
 			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
