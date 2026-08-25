@@ -530,6 +530,12 @@ code {
   color: var(--danger, #e5484d);
 }
 
+/* 宽限期内还没定性成故障，配色跟着收敛，别一断线就满屏告警红。 */
+.backend-down-mark.waiting {
+  background: color-mix(in srgb, var(--muted, #8b8b8b) 16%, transparent);
+  color: var(--muted, #8b8b8b);
+}
+
 .backend-down-detail {
   margin: 0;
   padding: 10px 12px;
