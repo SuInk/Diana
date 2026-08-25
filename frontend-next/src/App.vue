@@ -5,7 +5,14 @@
   <!-- ToastHost 放在分支外：登录页也会 toast（验证码发送失败、配对过期等），
        挂在 app-shell 里的话锁定状态下根本没挂载，那些提示会全部石沉大海。 -->
   <ToastHost />
-  <LoginView v-if="!booting && locked" @success="onLoginSuccess" />
+  <BackendDownView
+    v-if="!booting && backendDown"
+    :message="backendDownDetail"
+    :retrying="backendRetrying"
+    :retry-in-seconds="backendRetryDelay"
+    @retry="retryBackend"
+  />
+  <LoginView v-else-if="!booting && locked" @success="onLoginSuccess" @unreachable="showBackendDown" />
   <div v-else-if="!booting" class="app-shell">
     <transition name="none">
       <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false" />
@@ -179,6 +186,7 @@ import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
 import { channelAccountUnhealthy } from "./channel-status";
 import VersionModal from "./components/VersionModal.vue";
+import BackendDownView from "./views/BackendDownView.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import RecordsView from "./views/RecordsView.vue";
@@ -237,7 +245,15 @@ function syncSidebarMode(event: MediaQueryListEvent): void {
   narrowSidebar.value = event.matches;
   drawerOpen.value = false;
 }
+const BACKEND_RETRY_MIN_SECONDS = 5;
+const BACKEND_RETRY_MAX_SECONDS = 60;
 const locked = ref(false);
+// 后端够不着时整页报错，而不是退回登录页：那样用户会拿着对的密码被告知密码不对。
+const backendDown = ref(false);
+const backendDownDetail = ref("");
+const backendRetrying = ref(false);
+const backendRetryDelay = ref(BACKEND_RETRY_MIN_SECONDS);
+let backendRetryTimer = 0;
 // 鉴权状态未知时两边都不渲染：抢先把主界面铺出来会让它的接口拿一串 401，
 // 那些报错会以 toast 的形式留在随后切出来的登录页上。
 const booting = ref(true);
@@ -452,6 +468,51 @@ watch(() => stream.connected, (connected, previous) => {
   }
 });
 
+function showBackendDown(detail: string): void {
+  backendDownDetail.value = detail;
+  backendDown.value = true;
+  backendRetrying.value = false;
+  scheduleBackendRetry();
+}
+
+function scheduleBackendRetry(): void {
+  window.clearTimeout(backendRetryTimer);
+  backendRetryTimer = window.setTimeout(() => {
+    void retryBackend();
+  }, backendRetryDelay.value * 1000);
+}
+
+// 每失败一次就把等待时间翻倍：后端要是关了一整天，不该让页面一直每几秒敲一次门。
+async function retryBackend(): Promise<void> {
+  window.clearTimeout(backendRetryTimer);
+  backendRetrying.value = true;
+  const reachable = await probeAuthStatus();
+  backendRetrying.value = false;
+  if (reachable) {
+    backendDown.value = false;
+    backendRetryDelay.value = BACKEND_RETRY_MIN_SECONDS;
+    return;
+  }
+  backendRetryDelay.value = Math.min(backendRetryDelay.value * 2, BACKEND_RETRY_MAX_SECONDS);
+  scheduleBackendRetry();
+}
+
+// probeAuthStatus 问一次登录态：连得上就顺手把界面切到该去的地方，返回 false 表示
+// 后端还是够不着。
+async function probeAuthStatus(): Promise<boolean> {
+  try {
+    const auth = await getAuthStatus();
+    locked.value = auth.auth_required && !auth.authenticated;
+    if (!locked.value) {
+      await bootApp();
+    }
+    return true;
+  } catch (err) {
+    backendDownDetail.value = err instanceof Error ? err.message : "连不上 Diana 后端服务";
+    return false;
+  }
+}
+
 onMounted(async () => {
   sidebarMedia.addEventListener("change", syncSidebarMode);
   // 会话失效时任意接口的 401 会广播这个事件，统一切回登录界面。
@@ -461,22 +522,18 @@ onMounted(async () => {
   window.addEventListener("diana:open-version", () => {
     versionOpen.value = true;
   });
-  try {
-    const auth = await getAuthStatus();
-    if (auth.auth_required && !auth.authenticated) {
-      locked.value = true;
-      booting.value = false;
-      return;
-    }
-  } catch {
-    /* 状态接口失败按未开启鉴权处理，避免把用户锁在门外 */
-  }
+  // 这一步既是取登录态，也是探活：它失败就说明后端够不着，再往下走只会渲染一个
+  // 处处报错的空壳界面。
+  const reachable = await probeAuthStatus();
   booting.value = false;
-  await bootApp();
+  if (!reachable) {
+    showBackendDown(backendDownDetail.value);
+  }
 });
 
 onBeforeUnmount(() => {
   sidebarMedia.removeEventListener("change", syncSidebarMode);
   window.clearInterval(updateIndicatorTimer);
+  window.clearTimeout(backendRetryTimer);
 });
 </script>
