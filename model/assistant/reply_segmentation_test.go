@@ -118,7 +118,7 @@ func promptTeachesSegmentation(prompt string) bool {
 func TestChatReplyBubblesLongParagraphAtSentenceBoundaries(t *testing.T) {
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
 	chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes)
-	if len(chunks) < 2 || len(chunks) > replyMaxSentenceBubbles {
+	if len(chunks) < 2 || len(chunks) > replyMaxChatBubbles {
 		t.Fatalf("长段落没有分成两三条：%#v", chunks)
 	}
 	// 每条都得是完整句子收尾，不能像长度兜底那样劈在半句上。句号会被 trimChatTrailingPeriod
@@ -150,12 +150,16 @@ func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
 // 引号里的句号不是边界，成块的内容也不按句子拆。
 func TestSentenceSplitRespectsQuotesAndBlocks(t *testing.T) {
 	quoted := "他当时就站在门口说「我不去。」然后头也不回地走了，那句话我记了很多年，到现在也没敢问他到底什么意思"
-	if got := splitIntoSentences([]rune(quoted)); len(got) != 1 {
+	if got := sentenceEndPositions([]rune(quoted)); len(got) != 0 {
 		t.Fatalf("引号里的句号被当成了边界：%#v", got)
+	}
+	// 引号外面的句号照常是边界。
+	if got := sentenceEndPositions([]rune("他说「我不去。」然后走了。后来再没提过")); len(got) != 1 {
+		t.Fatalf("引号外的句号没被认出来：%#v", got)
 	}
 	// 多行的块（清单、步骤、代码、引用）走到这里就该原样返回。
 	block := "第一步：先看 dmesg。\n第二步：再看 journalctl。\n第三步：最后查内存。\n第四步：都不行就重启。"
-	if got := splitReplySentences(block, replyBubbleTargetRunes, replyMaxSentenceBubbles); len(got) != 1 {
+	if got := splitReplyLines(block); len(got) != 1 {
 		t.Fatalf("成块的内容被按句子拆开了：%#v", got)
 	}
 }
@@ -256,6 +260,52 @@ func TestChatReplyNeverMergesWhatTheModelAskedToSplit(t *testing.T) {
 	for _, chunk := range got {
 		if strings.Contains(chunk, "\n") {
 			t.Fatalf("同一条里还留着换行：%q", chunk)
+		}
+	}
+}
+
+// 分条是「要么分好，要么别分」：分不进上限就退回粗一档，不做「超出的并进最后一条」。
+//
+// 逐档退让而不是一刀切回整条——三行长文按句子分是六条、超了，但三行本身正好三条。
+// 直接退回整条会把模型分好的三行糊成一个两百多字的气泡。
+func TestChatReplyFallsBackOneDepthAtATime(t *testing.T) {
+	long := "第一句话写得足够长用来占位凑够字数好触发按句子分条的门槛。第二句同样长度也要凑够六十个字才会被拆开来发。第三句还是一样长凑够字数触发分条规则生效。"
+
+	// 三行都超过细分门槛：按句子分会超上限，退到「只按换行」正好三条。
+	byLine := splitChatReply(long+"\n"+long+"\n"+long, chatReplyChunkSize, replyBubbleTargetRunes)
+	if len(byLine) != 3 {
+		t.Fatalf("三行长文应该退到按换行分成三条，实际 %d 条", len(byLine))
+	}
+	for _, chunk := range byLine {
+		if strings.Contains(chunk, "\n") {
+			t.Fatalf("按换行分完还留着换行：%q", chunk)
+		}
+	}
+
+	// 四行短句：连按换行都超上限，这时才整条发。
+	whole := splitChatReply("第一句\n第二句\n第三句\n第四句", chatReplyChunkSize, replyBubbleTargetRunes)
+	if len(whole) != 1 {
+		t.Fatalf("四行应该整条发，实际 %d 条：%#v", len(whole), whole)
+	}
+}
+
+// 长回复按句子等分，不是攒够就切。贪心填满会让最后一条拖着剩下的全部——一句独立的
+// 反问被粘在陈述句后面就是这么来的。
+func TestChatReplyBalancesInsteadOfGreedilyFilling(t *testing.T) {
+	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
+	chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes)
+	if len(chunks) != 2 {
+		t.Fatalf("113 字按 60 等分应该是两条，实际 %d 条：%#v", len(chunks), chunks)
+	}
+	// 断点只能落在句末，未必真能均分；要守住的是「不许留小尾巴」——贪心填满的
+	// 失败形态就是最后一条只剩一句反问，或者前面一条吃掉九成。
+	total := 0
+	for _, chunk := range chunks {
+		total += len([]rune(chunk))
+	}
+	for _, chunk := range chunks {
+		if share := len([]rune(chunk)) * 4; share < total {
+			t.Fatalf("有一条短得像尾巴：%q（占比不到四分之一）", chunk)
 		}
 	}
 }
