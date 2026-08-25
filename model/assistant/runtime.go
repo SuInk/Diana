@@ -7329,8 +7329,8 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	chunks := splitChatReply(reply, cfg.DirectReplyChunkSize, cfg.ReplyBubbleTargetSize)
-	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
+	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
+	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -7786,8 +7786,11 @@ const forwardReplyChunkCountThreshold = 5
 //	块数  切出超过 5 块——分条的条数上限只管前三档，之后的长度兜底不受限，
 //	      用户把「分段发送长度」调小时块数照样上得去
 //	长度  正文超过 ForwardReplyThreshold（默认 900 字）
-func shouldUseForwardReply(reply string, chunks []string, threshold int) bool {
-	if len(chunks) > forwardReplyChunkCountThreshold {
+func shouldUseForwardReply(reply string, chunks []string, threshold int, chunkThreshold int) bool {
+	if chunkThreshold <= 0 {
+		chunkThreshold = forwardReplyChunkCountThreshold
+	}
+	if len(chunks) > chunkThreshold {
 		return true
 	}
 	if threshold <= 0 {
@@ -8066,7 +8069,7 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 	if _, rest, ok := extractOutgoingReplyMarker(reply); ok {
 		reply = rest
 	}
-	chunks := splitChatReply(reply, cfg.DirectReplyChunkSize, cfg.ReplyBubbleTargetSize)
+	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
 	if len(chunks) == 0 {
 		return "", nil
 	}
@@ -10419,21 +10422,16 @@ func splitReply(reply string, chunkSize int) []string {
 // 条数由 replyMaxChatBubbles 兜底，而且是「要么分好，要么别分」：分不进上限就退回
 // 粗一档，退到底就整条发。不做「超出的并进最后一条」——那会让最后一条拖着个尾巴，
 // 反问被粘在陈述句后面就是这么来的。
-func splitChatReply(reply string, chunkSize int, bubbleTarget int) []string {
-	if chunkSize <= 0 {
-		chunkSize = notificationChunkSize
-	}
-	if bubbleTarget <= 0 {
-		bubbleTarget = replyBubbleTargetRunes
-	}
+func splitChatReply(reply string, limits chatSplitLimits) []string {
+	limits = limits.withDefaults()
 	reply = collapseBlankLines(normalizeSplitMarkers(reply))
 	if reply == "" {
 		return nil
 	}
 	var out []string
-	for _, segment := range chatReplySegments(reply, bubbleTarget) {
+	for _, segment := range chatReplySegments(reply, limits) {
 		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
-		for _, chunk := range chunkTextByLength(segment, chunkSize) {
+		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
 			out = append(out, trimChatTrailingPeriod(chunk))
 		}
 	}
@@ -10442,6 +10440,8 @@ func splitChatReply(reply string, chunkSize int, bubbleTarget int) []string {
 
 // 分条按整条回复的长度分档。短回复分成几条是「像真人连发」，长回复分成同样多条
 // 就成了刷屏——同一个条数上限套在两种长度上，总有一头是错的。
+//
+// 这几个数都是配置项（见 BotConfig），常量只是留空时的默认值。
 const (
 	// replyShortReplyRunes 是「短回复」的上界。以内的回复最多分三条，超过就整条发：
 	// 这么短的内容分成四条以上，屏幕上全是小气泡，比一条完整的消息更难读。
@@ -10453,12 +10453,54 @@ const (
 	replyMaxLongBubbles = 5
 )
 
-// replyMaxBubblesFor 返回这条回复允许分成几条。
-func replyMaxBubblesFor(reply string) int {
-	if len([]rune(reply)) < replyShortReplyRunes {
-		return replyMaxShortBubbles
+// chatSplitLimits 是分条用到的几个阈值。它们全都来自机器人配置，凑成一个结构体
+// 是因为一路往下传五个 int 参数没人认得住哪个是哪个。
+type chatSplitLimits struct {
+	ChunkSize    int // 单条消息的硬上限，撞上了在最近的标点处切开
+	BubbleTarget int // 一条读着舒服的长度，决定一行要不要再分、分成几条
+	ShortReply   int // 短回复与长回复的分界
+	MaxShort     int // 短回复的条数上限，分不进就整条发
+	MaxLong      int // 长回复的条数上限
+}
+
+func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
+	return chatSplitLimits{
+		ChunkSize:    cfg.DirectReplyChunkSize,
+		BubbleTarget: cfg.ReplyBubbleTargetSize,
+		ShortReply:   cfg.ReplyShortReplySize,
+		MaxShort:     cfg.ReplyMaxShortBubbles,
+		MaxLong:      cfg.ReplyMaxLongBubbles,
 	}
-	return replyMaxLongBubbles
+}
+
+func (l chatSplitLimits) withDefaults() chatSplitLimits {
+	if l.ChunkSize <= 0 {
+		l.ChunkSize = notificationChunkSize
+	}
+	if l.BubbleTarget <= 0 {
+		l.BubbleTarget = replyBubbleTargetRunes
+	}
+	if l.ShortReply <= 0 {
+		l.ShortReply = replyShortReplyRunes
+	}
+	if l.MaxShort <= 0 {
+		l.MaxShort = replyMaxShortBubbles
+	}
+	if l.MaxLong <= 0 {
+		l.MaxLong = replyMaxLongBubbles
+	}
+	if l.MaxLong < l.MaxShort {
+		l.MaxLong = l.MaxShort
+	}
+	return l
+}
+
+// maxBubblesFor 返回这条回复允许分成几条。
+func (l chatSplitLimits) maxBubblesFor(reply string) int {
+	if len([]rune(reply)) < l.ShortReply {
+		return l.MaxShort
+	}
+	return l.MaxLong
 }
 
 // chatReplySplitDepth 是分条的精细程度，由细到粗。
@@ -10474,18 +10516,18 @@ const (
 //
 // 逐档退让而不是一刀切回整条：三行长文按句子分是六条、超了，但三行本身就是三条，
 // 正好；直接退回整条会把模型分好的三行糊成一个两百多字的气泡。
-func chatReplySegments(reply string, target int) []string {
-	max := replyMaxBubblesFor(reply)
+func chatReplySegments(reply string, limits chatSplitLimits) []string {
+	max := limits.maxBubblesFor(reply)
 	for _, depth := range []chatReplySplitDepth{splitAtSentence, splitAtLine, splitAtMarker} {
-		if parts := splitChatReplyAtDepth(reply, target, depth); len(parts) <= max {
+		if parts := splitChatReplyAtDepth(reply, limits, depth); len(parts) <= max {
 			return parts
 		}
 	}
 	return []string{reply}
 }
 
-func splitChatReplyAtDepth(reply string, target int, depth chatReplySplitDepth) []string {
-	maxBubbles := replyMaxBubblesFor(reply)
+func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {
+	maxBubbles := limits.maxBubblesFor(reply)
 	var out []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(part)
@@ -10502,7 +10544,7 @@ func splitChatReplyAtDepth(reply string, target int, depth chatReplySplitDepth) 
 			continue
 		}
 		for _, line := range lines {
-			out = append(out, balanceLineIntoBubbles(line, target, maxBubbles)...)
+			out = append(out, balanceLineIntoBubbles(line, limits.BubbleTarget, maxBubbles)...)
 		}
 	}
 	return out

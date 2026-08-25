@@ -432,8 +432,8 @@ func (r *Runtime) subagentTaskStatuses() []SubagentTaskStatus {
 func (r *Runtime) sendSubagentFollowup(ctx context.Context, event MessageEvent, reply string) error {
 	cfg := r.effectiveConfigForEvent(event)
 	reply = normalizeReply(reply, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true))
-	chunks := splitChatReply(reply, cfg.DirectReplyChunkSize, cfg.ReplyBubbleTargetSize)
-	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
+	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
+	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		return r.sendForwardReply(ctx, event, reply, cfg)
 	}
 	for _, chunk := range chunks {
