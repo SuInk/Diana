@@ -1,7 +1,11 @@
 frontend-next/node_modules/
 .DS_Store
 .tmp-dev/
-.claude/
+# .claude/ 整个忽略，只放行团队共用的 settings.json。
+# 注意是 .claude/* 而不是 .claude/：git 不会进到被忽略的目录里，
+# 目录本身被忽略时后面的 ! 规则根本没机会生效。
+.claude/*
+!.claude/settings.json
 .env
 .env.*
 runtime.env
