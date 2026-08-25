@@ -10446,8 +10446,9 @@ const replyMaxChatBubbles = 5
 // chatSplitLimits 是分条用到的几个阈值。它们全都来自机器人配置，凑成一个结构体
 // 是因为一路往下传五个 int 参数没人认得住哪个是哪个。
 type chatSplitLimits struct {
-	ChunkSize  int // 单条消息的硬上限，撞上了在最近的标点处切开
-	MaxBubbles int // 按换行分出来最多几条，超了就不按换行分
+	ChunkSize    int // 单条消息的硬上限，撞上了在最近的标点处切开
+	MaxBubbles   int // 分出来最多几条，超了就退回粗一档
+	SentenceSize int // 超过多少字的段落按句号分条，短的不动
 	// MarkerOnly 关掉自然分条：只认模型显式写的 <dianabr>，换行只当排版。
 	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
 	MarkerOnly bool
@@ -10455,9 +10456,10 @@ type chatSplitLimits struct {
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 	return chatSplitLimits{
-		ChunkSize:  cfg.DirectReplyChunkSize,
-		MaxBubbles: cfg.ReplyMaxBubbles,
-		MarkerOnly: !boolValue(cfg.NaturalReplySplitEnabled, true),
+		ChunkSize:    cfg.DirectReplyChunkSize,
+		MaxBubbles:   cfg.ReplyMaxBubbles,
+		SentenceSize: cfg.ReplySentenceSplitSize,
+		MarkerOnly:   !boolValue(cfg.NaturalReplySplitEnabled, true),
 	}
 }
 
@@ -10468,6 +10470,9 @@ func (l chatSplitLimits) withDefaults() chatSplitLimits {
 	if l.MaxBubbles <= 0 {
 		l.MaxBubbles = replyMaxChatBubbles
 	}
+	if l.SentenceSize <= 0 {
+		l.SentenceSize = replySentenceSplitRunes
+	}
 	return l
 }
 
@@ -10475,8 +10480,9 @@ func (l chatSplitLimits) withDefaults() chatSplitLimits {
 type chatReplySplitDepth int
 
 const (
-	splitAtLine   chatReplySplitDepth = iota // 标记 + 换行
-	splitAtMarker                            // 只认标记
+	splitAtSentence chatReplySplitDepth = iota // 标记 + 换行 + 句号
+	splitAtLine                                // 标记 + 换行
+	splitAtMarker                              // 只认标记
 )
 
 // chatReplySegments 先按换行分，分不进条数上限就退回只认标记。
@@ -10487,15 +10493,17 @@ func chatReplySegments(reply string, limits chatSplitLimits) []string {
 	// 关掉自然分条之后只认标记。模型显式写的 <dianabr> 仍然照做——那是它明说要分，
 	// 关掉的是运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
 	if limits.MarkerOnly {
-		return splitChatReplyAtDepth(reply, splitAtMarker)
+		return splitChatReplyAtDepth(reply, limits, splitAtMarker)
 	}
-	if parts := splitChatReplyAtDepth(reply, splitAtLine); len(parts) <= limits.MaxBubbles {
-		return parts
+	for _, depth := range []chatReplySplitDepth{splitAtSentence, splitAtLine} {
+		if parts := splitChatReplyAtDepth(reply, limits, depth); len(parts) <= limits.MaxBubbles {
+			return parts
+		}
 	}
-	return splitChatReplyAtDepth(reply, splitAtMarker)
+	return splitChatReplyAtDepth(reply, limits, splitAtMarker)
 }
 
-func splitChatReplyAtDepth(reply string, depth chatReplySplitDepth) []string {
+func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {
 	var out []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(part)
@@ -10506,7 +10514,80 @@ func splitChatReplyAtDepth(reply string, depth chatReplySplitDepth) []string {
 			out = append(out, part)
 			continue
 		}
-		out = append(out, splitReplyLines(part)...)
+		for _, line := range splitReplyLines(part) {
+			if depth == splitAtSentence {
+				out = append(out, splitLineIntoSentences(line, limits.SentenceSize)...)
+				continue
+			}
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// replySentenceSplitRunes 是按句号分条的起始长度。短回复不动：两句话的短回复本来
+// 就是一条消息（「端口被占了。先 lsof 看看是谁占着。」拆开反而不像人说话）。
+const replySentenceSplitRunes = 60
+
+// splitLineIntoSentences 把一行按句号分成几次发言，一句一条。
+//
+// 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
+// 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界，一个句子就是一次
+// 发言。条数由上层的 MaxBubbles 兜着，分出来太多就整层退回。
+func splitLineIntoSentences(line string, minSize int) []string {
+	if minSize <= 0 {
+		minSize = replySentenceSplitRunes
+	}
+	runes := []rune(line)
+	if len(runes) <= minSize {
+		return []string{line}
+	}
+	ends := boundaryPositions(runes, isSentenceEnd)
+	if len(ends) == 0 {
+		return []string{line}
+	}
+	var out []string
+	start := 0
+	for _, end := range ends {
+		if end >= len(runes) {
+			break
+		}
+		if text := strings.TrimSpace(string(runes[start:end])); text != "" {
+			out = append(out, text)
+			start = end
+		}
+	}
+	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
+		out = append(out, tail)
+	}
+	if len(out) < 2 {
+		return []string{line}
+	}
+	return out
+}
+
+// boundaryPositions 返回每个句末标点之后的位置。引号括号里的句号不算边界：
+// 「他说「我不去。」然后走了」拆开就散架了；连着的标点（「？！」）算一个。
+// 方括号一并计入深度，CQ 码不会被从中间切开。
+func boundaryPositions(runes []rune, match func(rune) bool) []int {
+	var out []int
+	depth := 0
+	for i, r := range runes {
+		switch r {
+		case '「', '『', '（', '(', '【', '《', '“', '[':
+			depth++
+		case '」', '』', '）', ')', '】', '》', '”', ']':
+			if depth > 0 {
+				depth--
+			}
+		}
+		if depth > 0 || !match(r) {
+			continue
+		}
+		if i+1 < len(runes) && match(runes[i+1]) {
+			continue
+		}
+		out = append(out, i+1)
 	}
 	return out
 }
