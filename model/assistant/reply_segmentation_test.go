@@ -112,3 +112,60 @@ func promptTeachesSegmentation(prompt string) bool {
 	}
 	return true
 }
+
+// 一段没有换行的长回复也要分条。换行分条要模型愿意换行、标记要模型愿意写标记，
+// 都还押在模型的配合上；这一层不依赖任何信号——句号本来就是它自己写出来的边界。
+func TestChatReplyBubblesLongParagraphAtSentenceBoundaries(t *testing.T) {
+	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
+	chunks := splitChatReply(reply, chatReplyChunkSize)
+	if len(chunks) < 2 || len(chunks) > replyMaxSentenceBubbles {
+		t.Fatalf("长段落没有分成两三条：%#v", chunks)
+	}
+	for _, chunk := range chunks {
+		// 每条都必须是完整句子收尾，不能像长度兜底那样劈在半句上。
+		runes := []rune(chunk)
+		if !isSentenceEnd(runes[len(runes)-1]) {
+			t.Fatalf("这一条断在半句话上：%q", chunk)
+		}
+	}
+	if strings.Join(chunks, "") != reply {
+		t.Fatalf("分条前后内容对不上：%#v", chunks)
+	}
+}
+
+// 短回复里的两句话本来就是一条消息，拆开反而不像人说话——群友风格的示例就是这个。
+func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
+	for _, reply := range []string{
+		"端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。",
+		"辛苦了，早点睡吧。",
+	} {
+		if chunks := splitChatReply(reply, chatReplyChunkSize); len(chunks) != 1 {
+			t.Fatalf("短回复被拆开了：%#v", chunks)
+		}
+	}
+}
+
+// 引号里的句号不是边界，成块的内容也不按句子拆。
+func TestSentenceSplitRespectsQuotesAndBlocks(t *testing.T) {
+	quoted := "他当时就站在门口说「我不去。」然后头也不回地走了，那句话我记了很多年，到现在也没敢问他到底什么意思"
+	if got := splitIntoSentences([]rune(quoted)); len(got) != 1 {
+		t.Fatalf("引号里的句号被当成了边界：%#v", got)
+	}
+	// 多行的块（清单、步骤、代码、引用）走到这里就该原样返回。
+	block := "第一步：先看 dmesg。\n第二步：再看 journalctl。\n第三步：最后查内存。\n第四步：都不行就重启。"
+	if got := splitReplySentences(block); len(got) != 1 {
+		t.Fatalf("成块的内容被按句子拆开了：%#v", got)
+	}
+}
+
+// 长度兜底也要断在标点上。中文没有词间空格，只找换行和空白等于每次都硬切。
+func TestLengthFallbackCutsAtChinesePunctuation(t *testing.T) {
+	long := strings.Repeat("这是一句用来占位的话，长度足够触发兜底切分。", 6)
+	for _, chunk := range chunkTextByLength(long, 60) {
+		runes := []rune(strings.TrimSpace(chunk))
+		last := runes[len(runes)-1]
+		if !isSentenceEnd(last) && !isClauseBreak(last) {
+			t.Fatalf("兜底切分断在了半个词上：%q", chunk)
+		}
+	}
+}
