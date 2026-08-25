@@ -221,7 +221,7 @@ func TestRelationshipQuestionUsesNormalLLMReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(provider.requests) != 2 || reply != "按我们最近的相处来看，现在是朋友；你离下一阶段还差一点稳定互动。" {
+	if len(provider.requests) != 2 || reply != "按我们最近的相处来看，现在是朋友；你离下一阶段还差一点稳定互动" {
 		t.Fatalf("reply=%q requests=%#v", reply, provider.requests)
 	}
 	if !requestMessagesContain(provider.requests[1].Messages, "好感度：60") {

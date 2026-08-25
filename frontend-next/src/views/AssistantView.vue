@@ -337,9 +337,17 @@
                 <input id="bot-maxreply" v-model.number="form.max_reply_chars" class="input" inputmode="numeric" />
               </div>
               <div class="field">
+                <label for="bot-bubble">自然分条长度</label>
+                <input id="bot-bubble" v-model.number="form.reply_bubble_target_size" class="input" inputmode="numeric" placeholder="60" />
+                <span class="hint">
+                  一条消息读着舒服的长度。超过它就在句子边界另起一条，像真人连发几条那样，最多拆三条。
+                  留空按 60；这不是上限，只是「多长该换一条」，真正的上限是下面那项。
+                </span>
+              </div>
+              <div class="field">
                 <label for="bot-chunk">分段发送长度</label>
                 <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" placeholder="400" />
-                <span class="hint">单条聊天消息最多多少字，超出的部分另发一条。留空按 400；表达风格不会改动这一项。</span>
+                <span class="hint">单条聊天消息最多多少字，超出的部分另发一条。这是硬上限，撞上了会在最近的标点处切开。留空按 400；表达风格不会改动这一项。</span>
               </div>
               <div class="field">
                 <label for="bot-history-budget">回复历史 token 预算</label>
