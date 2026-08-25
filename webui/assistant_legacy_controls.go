@@ -211,7 +211,7 @@ func (h *BotHandler) dashboardStats(c *gin.Context) {
 		c.JSON(http.StatusOK, storage.DashboardStats{Server: collectDashboardServerStats(time.Now())})
 		return
 	}
-	stats, err := h.sqlite.DashboardStatsForDay(c.Request.Context(), time.Now())
+	stats, err := h.sqlite.DashboardStatsForDay(c.Request.Context(), time.Now(), botProfileScope(c))
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "assistant.dashboard_stats", err, "dashboard", nil)
 		return
