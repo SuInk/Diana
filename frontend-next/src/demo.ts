@@ -121,6 +121,10 @@ const groups: BotGroupSummary[] = [
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
 
+// 机器人见过的人从画像里取名，没见过的走 OneBot get_stranger_info；演示模式两条路
+// 都没有，用这张表补上画像里没有的号。
+const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
+
 const demoUsers: UserMemoryProfile[] = [
   {
     user_id: "100200711", display_name: "青禾", favorability: 62, message_count: 1843, last_seen_at: before(2), updated_at: before(2),
@@ -415,6 +419,15 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const matched = demoUsers.filter((user) => !keyword || user.user_id.includes(keyword) || (user.display_name ?? "").includes(keyword));
     const users = matched.map((user) => ({ ...user, memories: undefined, memory_count: user.memories?.length ?? 0 }));
     return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
+  }
+  if (path === "/api/assistant/user-names") {
+    const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+    const names: Record<string, string> = {};
+    for (const id of ids) {
+      const name = demoAccountNames[id] ?? demoUsers.find((item) => item.user_id === id)?.display_name ?? "";
+      if (name) names[id] = name;
+    }
+    return json({ names });
   }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {

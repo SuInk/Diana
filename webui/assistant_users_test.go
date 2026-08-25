@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -126,5 +128,61 @@ func TestAssistantUsersNotFoundAndNoStore(t *testing.T) {
 	bare.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d, want 503 when sqlite is missing", rec.Code)
+	}
+}
+
+func TestAssistantUserNamesResolvesFromLocalProfiles(t *testing.T) {
+	ctx := context.Background()
+	store, router := newAssistantUsersTestRouter(t)
+
+	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "10001", SenderName: "小明", MessageID: "m1", RawMessage: "在的", Time: 1_700_000_000,
+	}, assistant.UserMemoryUpdate{}); err != nil {
+		t.Fatal(err)
+	}
+	// 没有 SenderName 的人，画像里的 DisplayName 会退化成用户 ID 本身。
+	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "10002", MessageID: "m2", RawMessage: "嗯", Time: 1_700_000_100,
+	}, assistant.UserMemoryUpdate{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// abc 不是数字直接被丢掉，10002 只有退化名字，10009 从没出现过：三个都不该有昵称。
+	req := httptest.NewRequest(http.MethodGet, "/api/assistant/user-names?ids=10001,10002,10009,abc,10001", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp assistantUserNamesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Names["10001"] != "小明" {
+		t.Fatalf("names[10001]=%q, want 小明", resp.Names["10001"])
+	}
+	if len(resp.Names) != 1 {
+		t.Fatalf("names=%v, want only 10001", resp.Names)
+	}
+}
+
+func TestParseUserNameLookupIDsDedupesAndCaps(t *testing.T) {
+	ids := parseUserNameLookupIDs(" 10001, 10001 ,10002,\n10003\t,abc,, 10004 ")
+	want := []string{"10001", "10002", "10003", "10004"}
+	if len(ids) != len(want) {
+		t.Fatalf("ids=%v, want %v", ids, want)
+	}
+	for index, id := range want {
+		if ids[index] != id {
+			t.Fatalf("ids=%v, want %v", ids, want)
+		}
+	}
+
+	raw := make([]string, 0, userNameLookupLimit*2)
+	for index := 0; index < userNameLookupLimit*2; index++ {
+		raw = append(raw, strconv.Itoa(20000+index))
+	}
+	if got := parseUserNameLookupIDs(strings.Join(raw, ",")); len(got) != userNameLookupLimit {
+		t.Fatalf("len=%d, want %d", len(got), userNameLookupLimit)
 	}
 }

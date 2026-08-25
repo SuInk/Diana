@@ -188,6 +188,7 @@
               inputmode="numeric"
               placeholder="例如 123456789，用于管理指令和私聊登录"
             />
+            <AccountNameHint :user-id="botForm.owner_id" />
             <span class="hint">不需要聊天内管理或配对登录时可以留空。</span>
           </div>
           <div class="field wide">
@@ -275,6 +276,7 @@ import {
 import { stream } from "../stream";
 import { navigate } from "../router";
 import { toastError, toastSuccess } from "../toast";
+import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect from "../components/AppSelect.vue";
 import { detectLLMService, llmServicePresets } from "../llm-presets";
 
