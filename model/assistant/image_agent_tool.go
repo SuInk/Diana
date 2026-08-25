@@ -98,7 +98,28 @@ func (t *dianaImageTool) Description() string {
 	return `异步生成或编辑图片。工具受理后由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。`
 }
 
+// imageAnnouncementSubjectMaxRunes 是开场白里能带上的画面描述长度上限。
+//
+// prompt 交给图片模型时是一段完整、自包含的提示词，经常是几百字的英文加风格堆砌；
+// 原样念给群里比不念更糟。短到像一句话的才当画面描述用，长的宁可只报动作。
+const imageAnnouncementSubjectMaxRunes = 40
+
+// imageAnnouncementSubject 从提示词里取一句能直接念出来的画面描述，取不到就返回空。
+func imageAnnouncementSubject(prompt string) string {
+	subject := strings.TrimSpace(prompt)
+	if index := strings.IndexAny(subject, "\r\n"); index >= 0 {
+		subject = strings.TrimSpace(subject[:index])
+	}
+	if subject == "" || len([]rune(subject)) > imageAnnouncementSubjectMaxRunes {
+		return ""
+	}
+	return subject
+}
+
 // dianaImageStartedMessage 是任务受理后立刻发给用户的那句话。
+//
+// 只报「开始生成图片」不够：用户要等到图发出来才知道理解对没对。能把画面描述念出来
+// 就带上，画歪了对方当场就能喊停。
 func dianaImageStartedMessage(request dianaImageToolRequest, result dianaImageToolResult) string {
 	if !result.OK || result.TaskID == "" {
 		return ""
@@ -112,8 +133,15 @@ func dianaImageStartedMessage(request dianaImageToolRequest, result dianaImageTo
 			action = "逐张编辑图片"
 		}
 	}
+	subject := imageAnnouncementSubject(request.Prompt)
 	if result.Reused {
+		if subject != "" {
+			return fmt.Sprintf("同样的%s任务已经在处理中（%s），完成后我会把结果发出来。", action, subject)
+		}
 		return fmt.Sprintf("同样的%s任务已经在处理中，完成后我会把结果发出来。", action)
+	}
+	if subject != "" {
+		return fmt.Sprintf("开始%s：%s，完成后我会把结果发出来。", action, subject)
 	}
 	return fmt.Sprintf("开始%s，完成后我会把结果发出来。", action)
 }
@@ -508,7 +536,7 @@ func asyncImageReplyInstruction(result dianaImageToolResult) string {
 	}
 	// 明确堵住几种常见的推脱说法：任务其实已经在后台跑了，这时回一句「做不到」或
 	// 「你没有权限」，用户看到的就只剩这句话。
-	return fmt.Sprintf("【本轮图片任务】%s。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」，也不要描述图里长什么样——你还没看到它。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, announced)
+	return fmt.Sprintf("【本轮图片任务】%s。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」。同时要用一句话讲清这次准备画什么（prompt 里的主体、动作、场景），不能只回一句「已受理」「在画了」就完事，用户得知道你要画的是不是他想要的；但只说打算画的内容，不要描述成品的构图、配色、画风细节或图上写了什么——那张图你还没看到。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, announced)
 }
 
 func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent, relationship RelationshipPolicy, operation string, prompt string, caption string) (dianaImageToolResult, error) {
