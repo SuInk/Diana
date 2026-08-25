@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func replyInterruptTestRuntime() *Runtime {
@@ -76,7 +77,7 @@ func TestRecallThenResendAnswersOnlyTheResend(t *testing.T) {
 	if _, err := runtime.sendOutgoingWithResult(gated, original, OutgoingMessage{GroupID: "123456", Text: "旧回复"}); !errors.Is(err, errReplyTriggerSuperseded) {
 		t.Fatalf("the recalled original should yield to the resend, err = %v", err)
 	}
-	if runtime.inboundTriggerSuperseded(resend) {
+	if runtime.inboundTriggerSuperseded(context.Background(), resend) {
 		t.Fatal("the resend must keep its reply")
 	}
 }
@@ -87,16 +88,16 @@ func TestDirectedFollowUpSupersedesPendingReply(t *testing.T) {
 	first := directedGroupMessage("20001", "10001", "帮我看看这个")
 	runtime.noteDirectedInbound(first)
 
-	if runtime.inboundTriggerSuperseded(first) {
+	if runtime.inboundTriggerSuperseded(context.Background(), first) {
 		t.Fatal("the latest directed message must not supersede itself")
 	}
 
 	followUp := directedGroupMessage("20002", "10001", "重点是性能那块")
 	runtime.noteDirectedInbound(followUp)
-	if !runtime.inboundTriggerSuperseded(first) {
+	if !runtime.inboundTriggerSuperseded(context.Background(), first) {
 		t.Fatal("follow-up directed message should supersede the pending reply")
 	}
-	if runtime.inboundTriggerSuperseded(followUp) {
+	if runtime.inboundTriggerSuperseded(context.Background(), followUp) {
 		t.Fatal("the newest directed message must keep its reply")
 	}
 	gated := withReplyTriggerGate(context.Background())
@@ -107,13 +108,14 @@ func TestDirectedFollowUpSupersedesPendingReply(t *testing.T) {
 	// 其他用户的直呼互不影响。
 	otherUser := directedGroupMessage("20003", "10002", "我也问一句")
 	runtime.noteDirectedInbound(otherUser)
-	if runtime.inboundTriggerSuperseded(otherUser) {
+	if runtime.inboundTriggerSuperseded(context.Background(), otherUser) {
 		t.Fatal("messages from a different user must not interfere")
 	}
 }
 
-// 群里没有叫机器人的消息既不登记，也不会因为登记表里有别的直呼被误判取代。
-func TestUndirectedGroupMessageIsNeverSuperseded(t *testing.T) {
+// 主动插话那一轮不会被「本轮开始之前就在登记表里」的直呼误判取代——登记表只记
+// 直呼，光比 ID 会把更早的那条也算成更新的。
+func TestUndirectedGroupMessageIsNotSupersededByEarlierDirected(t *testing.T) {
 	runtime := replyInterruptTestRuntime()
 	undirected := MessageEvent{
 		Kind:       EventKindGroup,
@@ -126,9 +128,55 @@ func TestUndirectedGroupMessageIsNeverSuperseded(t *testing.T) {
 	runtime.noteDirectedInbound(undirected)
 	directed := directedGroupMessage("20002", "10001", "看下这个")
 	runtime.noteDirectedInbound(directed)
-	// 主动插话的触发不是直呼，不参与追发取代。
-	if runtime.inboundTriggerSuperseded(undirected) {
-		t.Fatal("an undirected trigger must not be superseded by the directed registry")
+	// 拿不到本轮起点时一律不取代：分不清那条直呼是本轮之前还是之后来的。
+	if runtime.inboundTriggerSuperseded(context.Background(), undirected) {
+		t.Fatal("an undirected trigger must not be superseded without a turn start")
+	}
+	// 本轮开始于那条直呼之后，说明它是旧的，不该让位。
+	started := withReplyTurnStart(context.Background(), time.Now().Add(time.Second))
+	if runtime.inboundTriggerSuperseded(started, undirected) {
+		t.Fatal("a directed message older than this turn must not supersede it")
+	}
+}
+
+// 前一条随口一说被主动插话接了，人还没说完又直接叫机器人：插话那一轮让位，
+// 由直呼那一轮一并回答，免得连着两条几乎一样的话。
+func TestDirectedMessageSupersedesInFlightProactiveReply(t *testing.T) {
+	runtime := replyInterruptTestRuntime()
+	chatter := MessageEvent{
+		Kind:       EventKindGroup,
+		GroupID:    "123456",
+		UserID:     "10001",
+		MessageID:  "20001",
+		RawMessage: "ollama pro 不是 20 刀一个月嘛",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "ollama pro 不是 20 刀一个月嘛"}}},
+	}
+	// 不是直呼，登记表里不会有它。
+	runtime.noteDirectedInbound(chatter)
+
+	// 插话这一轮已经开始生成，随后这个人直接叫了机器人。
+	turnStart := time.Now().Add(-time.Second)
+	gated := withReplyTurnStart(withReplyTriggerGate(context.Background()), turnStart)
+	runtime.noteDirectedInbound(directedGroupMessage("20002", "10001", "嘉然查下"))
+
+	if !runtime.inboundTriggerSuperseded(gated, chatter) {
+		t.Fatal("an in-flight proactive reply should yield to the directed message that followed it")
+	}
+	if _, err := runtime.sendOutgoingWithResult(gated, chatter, OutgoingMessage{GroupID: "123456", Text: "插话回复"}); !errors.Is(err, errReplyTriggerSuperseded) {
+		t.Fatalf("the proactive reply should be dropped before send, err = %v", err)
+	}
+
+	// 别人的直呼不影响这一轮。
+	other := MessageEvent{
+		Kind:       EventKindGroup,
+		GroupID:    "123456",
+		UserID:     "10009",
+		MessageID:  "20003",
+		RawMessage: "我也说一句",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "我也说一句"}}},
+	}
+	if runtime.inboundTriggerSuperseded(gated, other) {
+		t.Fatal("a directed message from another user must not supersede this turn")
 	}
 }
 
@@ -142,7 +190,7 @@ func TestRecalledFollowUpStillOwnsTheReply(t *testing.T) {
 	runtime.noteDirectedInbound(followUp)
 	runtime.noteRecalledInbound(groupRecallNotice("20002", "10001"))
 
-	if !runtime.inboundTriggerSuperseded(first) {
+	if !runtime.inboundTriggerSuperseded(context.Background(), first) {
 		t.Fatal("first reply must stay superseded by the follow-up")
 	}
 	gated := withReplyTriggerGate(context.Background())
@@ -171,10 +219,10 @@ func TestPrivateFollowUpSupersedesPendingReply(t *testing.T) {
 	}
 	runtime.noteDirectedInbound(first)
 	runtime.noteDirectedInbound(followUp)
-	if !runtime.inboundTriggerSuperseded(first) {
+	if !runtime.inboundTriggerSuperseded(context.Background(), first) {
 		t.Fatal("private follow-up should supersede the pending reply")
 	}
-	if runtime.inboundTriggerSuperseded(followUp) {
+	if runtime.inboundTriggerSuperseded(context.Background(), followUp) {
 		t.Fatal("the newest private message must keep its reply")
 	}
 }

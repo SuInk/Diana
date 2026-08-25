@@ -233,12 +233,6 @@ func sameInboundTransport(current, stored assistant.MessageEvent) bool {
 // ClaimNextInboundEvent atomically leases the highest-priority available event,
 // preserving FIFO order within each priority. Expired processing leases are
 // eligible for recovery by another worker.
-//
-// 同一个人在同一个会话里的连续消息串行处理，哪怕群聊允许三条并发。并发那三条
-// 是留给「群里不同的人各问各的」——一个人问了个慢问题不该把整个群堵住。但同一
-// 个人连发两条时并发就成了错误：第二轮建提示词时第一轮还没发出去，历史里没有
-// 上一句，模型看不到自己正要说什么，于是把同一件事再答一遍，还再 @ 一次。
-// 卡住的租约不算（EXISTS 里同样要求 lease_until 未过期），所以这不会让队列停摆。
 func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, groupConcurrency ...int) (assistant.InboundQueueItem, bool, error) {
 	if s == nil || s.db == nil {
 		return assistant.InboundQueueItem{}, false, errors.New("claim inbound event: sqlite store is not configured")
@@ -268,16 +262,6 @@ WITH candidate AS (
         AND active.status = ?
         AND active.lease_until > ?
     ) < CASE WHEN queued.kind = ? THEN ? ELSE 1 END
-    AND NOT EXISTS (
-      SELECT 1
-      FROM inbound_events AS same_sender
-      WHERE same_sender.session = queued.session
-        AND same_sender.status = ?
-        AND same_sender.lease_until > ?
-        AND queued.user_id IS NOT NULL
-        AND queued.user_id <> ''
-        AND same_sender.user_id = queued.user_id
-    )
   ORDER BY
     queued.priority DESC,
     queued.event_time ASC,
@@ -299,7 +283,6 @@ UPDATE inbound_events
 WHERE id = (SELECT id FROM candidate)
 RETURNING id, session, payload, attempts, priority
 `, inboundStatusPending, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), string(assistant.EventKindGroup), groupLimit,
-		inboundStatusProcessing, now.UnixNano(),
 		inboundStatusProcessing, leaseOwner, leaseUntil.UTC().UnixNano(), now.UnixNano()).Scan(
 		&item.ID, &item.Session, &payload, &item.Attempts, &item.Priority,
 	)

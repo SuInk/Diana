@@ -92,10 +92,12 @@ const botFollowUpWindow = 3 * time.Minute
 // 下一句,不是新开一个话头。
 //
 // 这件事运行时算得出来,别让模型从一段排好序的文本里猜(和 otherSpeakersBefore
-// 同一个理由)。以前连这个前提都不成立:群聊同一会话允许三条并发,第二条消息很
-// 可能在第一条回复还没发出去时就开始生成,历史里根本没有上一句——模型再聪明也
-// 接不上,只能把同一件事再答一遍。现在队列侧把同一个人的连续消息串起来了
-// (见 ClaimNextInboundEvent),这里才拿得到稳定的答案。
+// 同一个理由)。
+//
+// 这一档只管「上一条已经回完了」的情况。上一条还在生成中时历史里本来就没有它,
+// 那属于另一条路:新来的直呼会把还没开口的那一轮打断(inboundTriggerSuperseded),
+// 由新的一轮一并回答,再靠 pendingEarlierMessage 承接前一条。两条路互斥——
+// 历史最新一条是机器人发言才走这里,是同一个人的入站消息才走那里。
 func botJustAnsweredSender(history []MessageEvent, event MessageEvent) bool {
 	senderID := strings.TrimSpace(event.UserID)
 	if senderID == "" {
