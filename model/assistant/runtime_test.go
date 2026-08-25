@@ -1274,7 +1274,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 		t.Fatalf("system prompt missing QQ plain-text guidance: %q", prompt)
 	}
 	// 分条规则来自内置的 replySegmentationRule，不再依赖可编辑的纯文本规则文本框。
-	if !strings.Contains(prompt, "意群边界写 "+notificationSplitMarker) || !strings.Contains(prompt, "不要在每个列表项前写 "+notificationSplitMarker) {
+	if !promptTeachesSegmentation(prompt) {
 		t.Fatalf("system prompt missing reply segmentation guidance: %q", prompt)
 	}
 	if strings.Contains(prompt, "需要分段时直接使用换行") {
