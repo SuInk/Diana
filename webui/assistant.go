@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,10 @@ type BotChannelSetFactory func(assistant.ProfileSet) assistant.Channel
 
 type profileAwareRuntime interface {
 	SetProfiles(assistant.ProfileSet)
+}
+
+type inPlaceConfigRuntime interface {
+	UpdateConfigInPlace(assistant.BotConfig) error
 }
 
 // contextBudgetRuntime 让事件页拿到按群算好的上下文预算分配。做成可选接口而不是
@@ -494,8 +499,12 @@ func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 	if !ok {
 		return fmt.Errorf("assistant profile set is empty")
 	}
+	previous := h.profiles.Profiles().WithDefaults()
 	if runtime, ok := h.runtime.(profileAwareRuntime); ok {
 		runtime.SetProfiles(set)
+	}
+	if runtime, ok := h.runtime.(inPlaceConfigRuntime); ok && !profileSetRequiresReconnect(previous, set) {
+		return runtime.UpdateConfigInPlace(cfg)
 	}
 	// 只在没有配置集工厂时才退回单配置工厂。以前这里两个都调,单配置工厂造出来
 	// 的 channel 直接被丢弃,但它有副作用——OneBot 反连监听器是进程内共享的一个
@@ -509,6 +518,50 @@ func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 		channel = h.newChannel(cfg)
 	}
 	return h.runtime.UpdateConfig(h.ctx, cfg, channel)
+}
+
+type botTransportConfig struct {
+	ID                 string
+	Platform           string
+	OneBotEndpoint     string
+	OneBotAccessToken  string
+	TelegramBotToken   string
+	TelegramAPIBaseURL string
+	TelegramProxyURL   string
+}
+
+func profileSetRequiresReconnect(previous, next assistant.ProfileSet) bool {
+	previous = previous.WithDefaults()
+	next = next.WithDefaults()
+	if previous.PlatformContextsIsolated() != next.PlatformContextsIsolated() {
+		return true
+	}
+	previousRuntime, previousOK := previous.RuntimeConfig()
+	nextRuntime, nextOK := next.RuntimeConfig()
+	if previousOK != nextOK || (previousOK && previousRuntime.MaxBotConcurrency != nextRuntime.MaxBotConcurrency) {
+		return true
+	}
+	return !reflect.DeepEqual(enabledBotTransports(previous), enabledBotTransports(next))
+}
+
+func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
+	transports := make([]botTransportConfig, 0, len(set.Profiles))
+	for _, profile := range set.WithDefaults().Profiles {
+		profile = profile.WithDefaults()
+		if !profile.Enabled {
+			continue
+		}
+		transports = append(transports, botTransportConfig{
+			ID:                 profile.ID,
+			Platform:           profile.Platform,
+			OneBotEndpoint:     profile.OneBotReverseWSEndpoint,
+			OneBotAccessToken:  profile.OneBotAccessToken,
+			TelegramBotToken:   profile.TelegramBotToken,
+			TelegramAPIBaseURL: profile.TelegramAPIBaseURL,
+			TelegramProxyURL:   profile.TelegramProxyURL,
+		})
+	}
+	return transports
 }
 
 // validateTokenLength 校验用户显式填写的 token 长度。
