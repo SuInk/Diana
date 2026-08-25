@@ -1149,6 +1149,13 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.ReplyStyle != "" {
 		cfg.ReplyStyle = groupCfg.ReplyStyle.Normalized()
 	}
+	// 空串表示这个群不覆盖，沿用机器人级的设置，和 ReplyStyle 同一套语义。
+	if strings.TrimSpace(groupCfg.SelfReference) != "" {
+		cfg.SelfReference = strings.TrimSpace(groupCfg.SelfReference)
+	}
+	if strings.TrimSpace(groupCfg.SentenceEnders) != "" {
+		cfg.SentenceEnders = strings.TrimSpace(groupCfg.SentenceEnders)
+	}
 	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
 	cfg.MaxContextTokens = groupCfg.MaxContextTokens
@@ -5239,7 +5246,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Message) []llm.Message {
 	cfg := r.effectiveConfigForEvent(event)
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt() + "\n" + cfg.ReplyStyle.closingAnchor())
+	voice := personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt(voice) + "\n" + cfg.ReplyStyle.closingAnchor())
 	if persona == "" {
 		return messages
 	}
@@ -5295,7 +5303,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		return false
 	}
 	builder.WriteString(cfg.SystemPrompt)
-	appendPromptSection(&builder, cfg.ReplyStyle.prompt())
+	appendPromptSection(&builder, cfg.ReplyStyle.prompt(personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) {

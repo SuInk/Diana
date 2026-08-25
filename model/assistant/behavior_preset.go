@@ -119,14 +119,120 @@ const replyProportionRule = "回复的篇幅要跟随问题的分量：群里随
 // 会连不成句。问号和感叹号也留着：它们承载的是语气而不是句读，删了意思就变了。
 const replyTrailingPunctuationRule = "整条消息的结尾不要用句号或逗号收尾，直接以文字结束；句子中间的标点照常使用。问号和感叹号是语气，该用就用，不受这条限制。"
 
-func (style ReplyStyle) prompt() string {
+func (style ReplyStyle) prompt(voice personaVoice) string {
 	return strings.TrimSpace(strings.Join([]string{
 		style.stylePrompt(),
 		replyEmojiRule,
 		replyBlankLineRule,
 		replyProportionRule,
 		replyTrailingPunctuationRule,
+		voice.prompt(),
 	}, "\n"))
+}
+
+// 自称和句尾语气词：人设里最常想改、又最不该逼人重写整段人设的两项。
+//
+// 句尾语气词写成候选清单（逗号分隔），由模型按当下语气挑。这一条和「运行时算得出来
+// 的别让模型猜」不冲突——「这句话该用哪个喵」不是事实，是语气：喵~ 是开心，喵？是
+// 不确定，喵…… 是为难，喵（ 是心虚。运行时看不出一句还没写出来的话是什么情绪，随机
+// 挑只会把语气打乱。和「写不写 @ 是语气问题」同一类，留给模型。
+//
+// 候选本身自带语气信号（~ ？ …… （），不用再配一张「什么情绪用哪个」的映射表，
+// 模型看得懂；真写了不自带信号的清单（喵,呢,哦），那就按感觉挑，也正是「合适」的意思。
+type personaVoice struct {
+	SelfReference string
+	Enders        []string
+}
+
+const (
+	// personaVoiceMaxEnders 限制候选数量。清单太长模型会挑花，也没人真需要十几个。
+	personaVoiceMaxEnders = 8
+	// personaVoiceMaxRunes 限制单项长度：这两项填的是「本喵」「喵~」这种词，
+	// 不是让人往里塞一段人设。
+	personaVoiceMaxRunes = 16
+)
+
+// parsePersonaEnders 解析逗号分隔的候选清单，中英文逗号都认。
+func parsePersonaEnders(raw string) []string {
+	seen := make(map[string]struct{}, personaVoiceMaxEnders)
+	enders := make([]string, 0, personaVoiceMaxEnders)
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '，' || r == '\n' }) {
+		ender := strings.TrimSpace(part)
+		if ender == "" {
+			continue
+		}
+		if len([]rune(ender)) > personaVoiceMaxRunes {
+			continue
+		}
+		if _, ok := seen[ender]; ok {
+			continue
+		}
+		seen[ender] = struct{}{}
+		enders = append(enders, ender)
+		if len(enders) >= personaVoiceMaxEnders {
+			break
+		}
+	}
+	return enders
+}
+
+func personaVoiceFrom(selfReference string, sentenceEnders string) personaVoice {
+	selfReference = strings.TrimSpace(selfReference)
+	if len([]rune(selfReference)) > personaVoiceMaxRunes {
+		selfReference = ""
+	}
+	return personaVoice{SelfReference: selfReference, Enders: parsePersonaEnders(sentenceEnders)}
+}
+
+func (voice personaVoice) empty() bool {
+	return voice.SelfReference == "" && len(voice.Enders) == 0
+}
+
+// prompt 生成覆盖段。它整段追加在风格描述后面，不去改风格自己那套已经调好的话术——
+// 猫娘那档的句尾规则和示例是逐句试出来的，动它风险远大于收益。冲突交给一句「以这里
+// 为准」解决：位置在后，说法明确，模型不会犹豫。
+func (voice personaVoice) prompt() string {
+	if voice.empty() {
+		return ""
+	}
+	lines := make([]string, 0, 4)
+	if voice.SelfReference != "" {
+		lines = append(lines, "自称用「"+voice.SelfReference+"」。")
+	}
+	switch len(voice.Enders) {
+	case 0:
+	case 1:
+		lines = append(lines, "每句话结尾加「"+voice.Enders[0]+"」。")
+	default:
+		lines = append(lines, "句尾语气词在这几个里按当下语气挑最合的一个："+quotePersonaEnders(voice.Enders)+"。"+
+			"它们的差别就是语气——挑的时候看这句话本身是什么情绪，别每句都用同一个，也别为了轮换硬凑。")
+	}
+	if len(voice.Enders) > 0 {
+		lines = append(lines,
+			"问句、感叹句里语气词放在「？」「！」前面；代码、命令、链接、报错原文照原样写，不要往里面塞语气词。")
+	}
+	lines = append(lines, "以上两项以这里为准：上面的风格描述里如果举了别的自称或句尾写法，按这里的来。")
+	return strings.Join(lines, "\n")
+}
+
+func quotePersonaEnders(enders []string) string {
+	quoted := make([]string, 0, len(enders))
+	for _, ender := range enders {
+		quoted = append(quoted, "「"+ender+"」")
+	}
+	return strings.Join(quoted, "、")
+}
+
+// DefaultPersonaVoice 返回某个风格自带的自称和句尾候选，供 WebUI 在切换风格时把这两个
+// 框填上。填进去而不是运行时暗中套用：填进去用户看得见、能改，暗中套用会得到「框里写着
+// A、发出来是 B」这种既看不见又在生效的状态（clearChatInFineTuning 那里踩过同样的坑）。
+//
+// 留空表示这个风格对自称和句尾没有主张，不是「清空用户填的」。
+func DefaultPersonaVoice(style ReplyStyle) (selfReference string, sentenceEnders string) {
+	if style.Normalized() == ReplyStyleCatgirl {
+		return "我", "喵,喵~,喵？,喵……,喵（"
+	}
+	return "", ""
 }
 
 func (style ReplyStyle) stylePrompt() string {

@@ -142,6 +142,10 @@ export interface BotProfileConfig {
   system_prompt?: string;
   response_mode?: "quiet" | "standard" | "active" | "custom";
   reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
+  self_reference?: string;
+  /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随表达风格。 */
+  sentence_enders?: string;
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
   /** 回复行为个性化：on 每条都带、off 从不带、auto 交给模型自己判断；缺省等价于 on。 */
@@ -338,6 +342,9 @@ export interface BotGroupConfig {
   response_mode?: "" | "quiet" | "standard" | "active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
   reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  /** 留空时跟随机器人全局设置。 */
+  self_reference?: string;
+  sentence_enders?: string;
   welcome_enabled?: boolean;
   welcome_message?: string;
   max_context_tokens?: number;
