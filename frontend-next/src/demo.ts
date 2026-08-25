@@ -449,7 +449,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/events") {
     const result = url.searchParams.get("result") ?? "all";
     const events = demoEvents.filter((event) => result === "all" || (result === "replied" && event.decision === "replied") || (result === "not_replied" && event.decision === "not_replied") || event.decision === result);
-    return json({ range: url.searchParams.get("range") ?? "24h", result, since: before(1440), events, total: 652, filtered_total: result === "all" ? 652 : result === "replied" ? 50 : result === "not_replied" ? 602 : 0, replied: 50, not_replied: 602, pending: 0, errors: 0, llm_calls: 49, input_tokens: 232_773, output_tokens: 10_732, total_tokens: 243_505, page: 1, limit: 50, has_more: false });
+    return json({ range: url.searchParams.get("range") ?? "24h", result, since: before(1440), events, total: 652, filtered_total: result === "all" ? 652 : result === "replied" ? 50 : result === "not_replied" ? 602 : 0, replied: 50, not_replied: 602, pending: 0, errors: 0, llm_calls: 49, input_tokens: 232_773, output_tokens: 10_732, total_tokens: 243_505, page: 1, limit: 50, has_more: false,
+      // 演示里也带上会话筛选器：以前这里没有 groups，下拉框永远只有「全部会话」，
+      // 看不出真实排版。
+      group: url.searchParams.get("group") ?? "",
+      groups: groups.map((group, index) => ({
+        group_id: group.group_id,
+        events: [291, 272, 170, 11][index] ?? 0,
+        group_name: group.group_name,
+        avatar_url: group.avatar_url
+      }))
+    });
   }
   const traceMatch = path.match(/^\/api\/assistant\/events\/([^/]+)\/trace$/);
   if (traceMatch) return json({ event_id: decodeURIComponent(traceMatch[1]), steps: decodeURIComponent(traceMatch[1]) === "demo-event-1" ? trace : [] });

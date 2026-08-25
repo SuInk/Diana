@@ -1389,6 +1389,8 @@ export interface AssistantEventsResponse {
 export interface AssistantEventGroup {
   group_id: string;
   events: number;
+  group_name?: string;
+  avatar_url?: string;
 }
 
 export interface AssistantContextBudgetLayer {
