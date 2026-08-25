@@ -27,9 +27,14 @@ import (
 // 命中会回写使用次数和最后命中时间，长期没人用的词条自然沉底——一本没人维护的
 // 词典和没有词典没区别。
 const (
-	// GlossaryScopeGlobal 是跨会话生效的作用域。主人才写得进去：一个群的内部梗
-	// 默认不该泄漏到别的群，更不该被别人改。
+	// GlossaryScopeGlobal 是升级前那本所有机器人共用的词典。现在每台机器人各有
+	// 一本（见 glossaryGlobalScope），这个键只作为读取兜底保留：迁移会把里面的
+	// 词条搬到当时的当前配置档下，之后不再往这里写。
 	GlossaryScopeGlobal = "global"
+
+	// GlossaryScopeBotPrefix 前缀出来的是「这台机器人的全局词典」。同一个梗在两
+	// 台机器人那里可以有不同的记法，共用一本会让它们互相改对方的释义。
+	GlossaryScopeBotPrefix = "bot:"
 
 	// GlossaryTermMaxRunes 限制词条本身的长度。词典收的是词，不是句子；放开了
 	// 模型会把整段对话当成「词」塞进来。
@@ -177,17 +182,32 @@ func NormalizeGlossaryAliases(term string, aliases []string) []string {
 	return out
 }
 
-// glossaryScopeKeys 返回一次检索要看的作用域，当前会话在前、global 在后。
-// 顺序即优先级：同一个词在本群和全局都有释义时，本群的那条说了算。
-//
-// 共用一本词典时读取顺序不变：新词条都写进 global，本群作用域里剩下的是打开开关
-// 之前记的，让它在自己群里继续生效比凭空消失更合理。
-func glossaryScopeKeys(event MessageEvent) []string {
-	scope := glossarySessionScope(event)
-	if scope == "" {
-		return []string{GlossaryScopeGlobal}
+// glossaryGlobalScope 返回这台机器人的全局词典作用域。拿不到机器人身份时退回
+// 升级前那本共用词典，总比把词条写丢好。
+func glossaryGlobalScope(botProfileID string) string {
+	if botProfileID = strings.TrimSpace(botProfileID); botProfileID != "" {
+		return GlossaryScopeBotPrefix + botProfileID
 	}
-	return []string{scope, GlossaryScopeGlobal}
+	return GlossaryScopeGlobal
+}
+
+// glossaryScopeKeys 是查词时依次生效的作用域：先看这个会话自己的，再看这台机器人
+// 的全局本，最后兜底读升级前那本共用的（迁移之后通常已经空了）。顺序即优先级：
+// 同一个词在本群和全局都有释义时，本群的那条说了算。
+//
+// 共用一本词典时读取顺序不变：新词条都写进机器人全局本，本群作用域里剩下的是打开
+// 开关之前记的，让它在自己群里继续生效比凭空消失更合理。
+func glossaryScopeKeys(event MessageEvent) []string {
+	global := glossaryGlobalScope(event.ProfileID)
+	scopes := make([]string, 0, 3)
+	if scope := glossarySessionScope(event); scope != "" {
+		scopes = append(scopes, scope)
+	}
+	scopes = append(scopes, global)
+	if global != GlossaryScopeGlobal {
+		scopes = append(scopes, GlossaryScopeGlobal)
+	}
+	return scopes
 }
 
 // glossarySessionScope 返回当前会话的作用域键，拿不到有效身份时返回空串。
@@ -210,16 +230,16 @@ func glossarySessionScope(event MessageEvent) string {
 // 再按群分家反而会让同一个词在不同群各记一遍。
 func glossaryScopeKeyForWrite(event MessageEvent, cfg BotConfig, global bool, owner bool) string {
 	if boolValue(cfg.GlossarySharedScopeEnabled, false) {
-		return GlossaryScopeGlobal
+		return glossaryGlobalScope(event.ProfileID)
 	}
 	if global && owner {
-		return GlossaryScopeGlobal
+		return glossaryGlobalScope(event.ProfileID)
 	}
-	// 没有有效会话身份时写全局：写进 "private:" 那种共用桶比写全局更糟。
+	// 没有有效会话身份时写这台机器人的全局本："private:" 那种共用桶更糟。
 	if scope := glossarySessionScope(event); scope != "" {
 		return scope
 	}
-	return GlossaryScopeGlobal
+	return glossaryGlobalScope(event.ProfileID)
 }
 
 // glossaryContext 拿当前消息去撞词典，把命中的词条组装成提示词段落。

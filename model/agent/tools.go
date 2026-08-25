@@ -933,17 +933,27 @@ func (t *ReadFileTool) Name() string {
 
 // Description 返回读文件工具说明。
 func (t *ReadFileTool) Description() string {
-	return `读取 Agent 工作目录内的文本文件。`
+	return `按行读取 Agent 工作目录内的文本文件。默认从第 1 行起读 ` + fmt.Sprint(defaultReadFileLines) +
+		` 行；文件更长时结果里会写明总行数和下一段的 offset，用 offset 继续读，不要指望一次拿到整个文件。`
 }
 
 func (t *ReadFileTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"path"}, map[string]any{
 		"path":      toolStringParam("工作目录内的相对文件路径"),
+		"offset":    toolIntParam("从第几行开始读，1 表示文件开头，可选"),
+		"limit":     toolIntParam("最多读多少行，可选"),
 		"max_bytes": toolIntParam("最大读取字节数，可选"),
 	})
 }
 
-// Run 读取 Agent 工作目录内的文本文件。
+// Run 按行读取 Agent 工作目录内的文本文件。
+//
+// 以前只有 max_bytes、永远从头读：runner 又会把工具结果统一截到 MaxToolOutputChars，
+// 于是一个几千行的文件，模型只看得到开头那几百行，剩下的再也够不着——既浪费了上下文
+// 又没读到东西。改成 offset/limit 的分段读，并在结果里写明总行数和下一段从哪开始。
+//
+// 正文不加行号：Diana 的 Agent 没有按行改文件的工具，行号只会白占预算，
+// 位置信息放表头一行就够，模型据此算下一个 offset。
 func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, error) {
 	rel := stringFromInput(input, "path")
 	if rel == "" {
@@ -965,31 +975,54 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 		// 用户输入只能缩小读取范围，不能突破工具注册时的最大字节限制。
 		maxBytes = t.maxBytes
 	}
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
-	limited := io.LimitReader(file, int64(maxBytes)+1)
-	content, err := io.ReadAll(limited)
-	if err != nil {
-		return "", err
+	lines := splitFileLines(string(data))
+
+	offset := intFromInput(input, "offset", 1)
+	if offset < 1 {
+		offset = 1
 	}
-	truncated := len(content) > maxBytes
-	if truncated {
-		// 多读的 1 字节只用于判断截断，返回内容仍严格不超过 maxBytes。
-		content = content[:maxBytes]
+	limit := intFromInput(input, "limit", defaultReadFileLines)
+	if limit <= 0 || limit > maxReadFileLines {
+		limit = defaultReadFileLines
 	}
-	body, err := json.MarshalIndent(map[string]any{
-		"path":      rel,
-		"size":      info.Size(),
-		"truncated": truncated,
-		"content":   string(content),
-	}, "", "  ")
-	if err != nil {
-		return "", err
+	if offset > len(lines) {
+		return fmt.Sprintf("%s 共 %d 行，offset=%d 已经越过文件末尾。", rel, len(lines), offset), nil
 	}
-	return string(body), nil
+	end := min(offset-1+limit, len(lines))
+	body := strings.Join(lines[offset-1:end], "\n")
+	// 字节上限仍然生效，但它现在是兜底而不是主要手段：一行特别长的文件不该把预算吃光。
+	byteTruncated := false
+	if len(body) > maxBytes {
+		body = string([]rune(body)[:len([]rune(body))*maxBytes/len(body)])
+		byteTruncated = true
+	}
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "%s 第 %d-%d 行（共 %d 行）\n", rel, offset, end, len(lines))
+	if end < len(lines) {
+		fmt.Fprintf(&out, "还有 %d 行未读，用 offset=%d 继续。\n", len(lines)-end, end+1)
+	}
+	if byteTruncated {
+		out.WriteString("这一段超过字节上限，已在中途截断。\n")
+	}
+	out.WriteString("\n")
+	out.WriteString(body)
+	return out.String(), nil
+}
+
+// splitFileLines 按行切分，并去掉结尾空行带来的那一条空记录，
+// 免得「共 N 行」比编辑器里看到的多一行。
+func splitFileLines(content string) []string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 // safePath 将相对路径限制在 Agent 工作目录内。

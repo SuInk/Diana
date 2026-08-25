@@ -15,7 +15,7 @@ import (
 // splitReply 的注释里记着这个坑。所以这条能力只能长在提示词上：告诉群友风格
 // 「连着说的两三句短话本来就是两三次发言」，让它照原契约写 <dianabr>。
 func TestGroupmatePromptTeachesSplitMarker(t *testing.T) {
-	prompt := ReplyStyleGroupmate.prompt(personaVoice{})
+	prompt := ReplyStyleGroupmate.prompt(true, personaVoice{})
 	if !strings.Contains(prompt, notificationSplitMarker) {
 		t.Fatalf("群友风格没教分条标记 %s：\n%s", notificationSplitMarker, prompt)
 	}
@@ -29,11 +29,20 @@ func TestGroupmatePromptTeachesSplitMarker(t *testing.T) {
 	}
 }
 
-// 其余风格不带这条规则：它们本来就是一条消息说完一件事。
-func TestOtherStylesDoNotTeachSplitMarker(t *testing.T) {
+// 「连发短句」只有群友风格教，「长回答按意群分条」所有风格都教。
+//
+// 这两件事都写 <dianabr>，但不是一回事：前者是把一次发言拆成真人那样的两三条短
+// 消息，是语气，属于风格；后者是一段长回答别糊成一个气泡，是投递，跟风格无关。
+// 早先只有群友风格提到过标记，别的风格全靠可编辑的「纯文本规则」文本框兜着——
+// 那份文案被改掉或停在旧版默认值上，分条就彻底不发生了。
+func TestConsecutiveBeatsStayGroupmateOnlyWhileSegmentationIsUniversal(t *testing.T) {
 	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl} {
-		if strings.Contains(style.prompt(personaVoice{}), notificationSplitMarker) {
-			t.Fatalf("风格 %s 不该教分条标记", style)
+		prompt := style.prompt(true, personaVoice{})
+		if strings.Contains(prompt, "两三次独立发言") {
+			t.Fatalf("风格 %s 不该教连发短句", style)
+		}
+		if !promptTeachesSegmentation(prompt) {
+			t.Fatalf("风格 %s 缺少长回答分条规则：\n%s", style, prompt)
 		}
 	}
 }

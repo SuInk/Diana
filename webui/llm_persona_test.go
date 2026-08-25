@@ -69,6 +69,52 @@ func TestPersonaGenerateReturnsPersona(t *testing.T) {
 	}
 }
 
+func TestPersonaGenerateUsesRequestedChatProfile(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{})
+	if err := store.SaveProfiles(llm.ProfileSet{
+		ActiveID: "image-p",
+		Profiles: []llm.Profile{
+			{ID: "chat-p", Name: "对话", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-default", Models: []llm.ModelInfo{{ID: "chat-default"}, {ID: "chat-selected"}}}},
+			{ID: "image-p", Name: "生图", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-image-2"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := &echoPersonaClient{reply: "你是嘉然。"}
+	selected := ""
+	handler := NewLLMConfigHandlerWithFactory(store, func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
+		selected = cfg.Model
+		return client, nil
+	})
+	rec := postPersona(testRouter(handler), `{"description":"自然一点","profile_id":"chat-p","model":"chat-selected"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if selected != "chat-selected" {
+		t.Fatalf("persona selected %q, want chat-selected", selected)
+	}
+}
+
+func TestPersonaGenerateNeverFallsBackToActiveImageProfile(t *testing.T) {
+	set := llm.ProfileSet{
+		ActiveID: "image-p",
+		Profiles: []llm.Profile{
+			{ID: "chat-p", Name: "对话", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-model"}},
+			{ID: "image-p", Name: "生图", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-image-2"}},
+		},
+	}
+	cfg, err := personaProviderConfig(set, personaGeneratePayload{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "chat-model" {
+		t.Fatalf("persona fallback selected %q, want chat-model", cfg.Model)
+	}
+	if _, err := personaProviderConfig(set, personaGeneratePayload{ProfileID: "image-p"}); err == nil {
+		t.Fatal("persona accepted an image-only profile for text generation")
+	}
+}
+
 func TestPersonaGenerateRewritesFromCurrentPersona(t *testing.T) {
 	// 带上现有人设是「改写」而不是「重写」，否则微调一句话就丢掉已经调好的设定。
 	client := &echoPersonaClient{reply: "你是嘉然。"}

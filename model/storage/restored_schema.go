@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS message_events (
   id TEXT PRIMARY KEY,
   session TEXT NOT NULL,
   kind TEXT NOT NULL,
+  profile_id TEXT,
   group_id TEXT,
   user_id TEXT,
   message_id TEXT,
@@ -284,6 +285,12 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addMessageSearchExtraColumn(); err != nil {
 		return err
 	}
+	if err := s.migrateGlossaryGlobalScopeToBot(); err != nil {
+		return err
+	}
+	if err := s.addMessageEventProfileColumn(); err != nil {
+		return err
+	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
@@ -480,6 +487,53 @@ func (s *SQLiteStore) addMessageSearchExtraColumn() error {
 	}
 	_, err = s.db.Exec(`ALTER TABLE message_events ADD COLUMN search_extra TEXT`)
 	return err
+}
+
+// migrateGlossaryGlobalScopeToBot 把那本所有机器人共用的全局词典搬给当前配置档。
+//
+// 同一个梗在两台机器人那里可以有不同的记法，共用一本会让它们互相改对方的释义。
+// 和画像、群配置一样：已有词条归给迁移时的当前档，其余机器人从空本开始。
+func (s *SQLiteStore) migrateGlossaryGlobalScopeToBot() error {
+	owner := s.currentBotProfileID()
+	if owner == "" {
+		return nil
+	}
+	target := assistant.GlossaryScopeBotPrefix + owner
+	// 目标作用域已经有词条时说明迁移跑过了，不重复搬。
+	var existing int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM glossary_entries WHERE scope_key = ?`, target).Scan(&existing); err != nil {
+		return err
+	}
+	if existing > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`UPDATE glossary_entries SET scope_key = ? WHERE scope_key = ?`, target, assistant.GlossaryScopeGlobal); err != nil {
+		return err
+	}
+	return nil
+}
+
+// addMessageEventProfileColumn 给消息表补上机器人维度，供总览按机器人统计。
+// 和事件表同一套做法：补列、从 payload 回填一次、建索引。
+func (s *SQLiteStore) addMessageEventProfileColumn() error {
+	has, err := s.hasColumn("message_events", "profile_id")
+	if err != nil || has {
+		return err
+	}
+	if _, err := s.db.Exec(`ALTER TABLE message_events ADD COLUMN profile_id TEXT`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`
+UPDATE message_events
+SET profile_id = TRIM(COALESCE(json_extract(payload, '$.profile_id'), ''))
+WHERE COALESCE(profile_id, '') = ''
+`); err != nil {
+		log.Printf("storage: backfill message event profile_id skipped: %v", err)
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_message_events_profile_time ON message_events(profile_id, event_time DESC)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *SQLiteStore) backfillRecallNoticeAudits() error {

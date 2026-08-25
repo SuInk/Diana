@@ -304,7 +304,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	if !strings.Contains(submittedPrompt, "#4B0082") || !strings.Contains(submittedPrompt, "#FFD700") {
 		t.Fatalf("submitted prompt = %q", submittedPrompt)
 	}
-	if reply != "文字说明先发给你，图片完成后会自动补上。" {
+	if reply != "文字说明先发给你，图片完成后会自动补上" {
 		t.Fatalf("reply = %q", reply)
 	}
 	sent := channel.sentSnapshot()

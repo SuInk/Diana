@@ -153,7 +153,7 @@ func TestReplyRefusalMarkerOnlyUsesVisibleFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "这条消息我暂时不想回答，我们换个话题吧。" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
+	if reply != "这条消息我暂时不想回答，我们换个话题吧" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
 		t.Fatalf("marker-only reply=%q sent=%#v", reply, channel.sent)
 	}
 	if strings.Contains(reply, replyRefusalMarker) || strings.Contains(reply, "没有生成有效回复") {
@@ -176,7 +176,7 @@ func TestImmediateReplySuppressionMarkerOnlyUsesVisibleFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "为避免继续自动循环，我会暂停响应此账号约 30 分钟。" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
+	if reply != "为避免继续自动循环，我会暂停响应此账号约 30 分钟" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
 		t.Fatalf("marker-only immediate suppression reply=%q sent=%#v", reply, channel.sent)
 	}
 	if strings.Contains(reply, replySuppressionMarker) {

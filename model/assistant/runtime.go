@@ -1285,6 +1285,21 @@ func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSetti
 	return out
 }
 
+func (r *Runtime) withFileParserVideoLimit(ctx context.Context, event MessageEvent) context.Context {
+	settings := SettingValues(nil)
+	if r.plugins != nil {
+		_, effective, enabled := r.plugins.PluginWithSettingsForGroup(
+			fileParserPluginID,
+			r.pluginOverridesForEvent(event),
+			r.pluginSettingOverridesForEvent(event),
+		)
+		if enabled {
+			settings = effective
+		}
+	}
+	return withVideoContextMaxBytes(ctx, fileParserVideoMaxBytes(settings))
+}
+
 // HandleEvent 处理 OneBot 消息或通知事件。
 func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	event = r.bindInboundEventIdentity(event)
@@ -1397,6 +1412,7 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 }
 
 func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
+	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
 	if r.ignoreUnavailableGroupEvent(event) {
@@ -1742,6 +1758,7 @@ func (r *Runtime) observeSelfMessage(ctx context.Context, event MessageEvent) {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return
 	}
+	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.mu.RLock()
 	resolver, _ := r.localMedia.(LocalMediaPathResolver)
 	r.mu.RUnlock()
@@ -2664,6 +2681,7 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 
 // replyTo 执行 owner 命令、插件和 LLM 回复链路。
 func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (string, error) {
+	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
 	cfg := r.effectiveConfigForEvent(event)
@@ -3236,9 +3254,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply == "" {
 		if controlIntent.SuppressCurrentUser {
-			reply = "为避免继续自动循环，我会暂停响应此账号约 30 分钟。"
+			reply = "为避免继续自动循环，我会暂停响应此账号约 30 分钟"
 		} else if controlIntent.RefuseCurrent {
-			reply = "这条消息我暂时不想回答，我们换个话题吧。"
+			reply = "这条消息我暂时不想回答，我们换个话题吧"
 		} else if pending := imageAnnouncements.drain(); pending != "" {
 			// 用户这条消息只是要图，模型没有别的可说——开场白就是这一轮的回复。
 			reply = pending
@@ -3375,6 +3393,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	if !resp.FollowUp {
 		return
 	}
+	ctx = r.withFileParserVideoLimit(ctx, event)
 	// 跟评有自己的时间预算：解析慢一点就把整条回复链路的超时吃光，
 	// 跟着上游 ctx 一起被取消的话，跟评会毫无规律地时有时无。
 	ctx, cancel := detachFollowUpContext(ctx)
@@ -4717,8 +4736,9 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return run(provider)
 		}
-		if normalized := llm.NormalizeProfileGroup(group); normalized != llm.GroupChat {
-			if profiles := set.GroupProfiles(normalized); len(profiles) > 0 {
+		groupKey := llm.NormalizeProfileGroup(group)
+		if groupKey != llm.GroupChat {
+			if profiles := set.GroupProfiles(groupKey); len(profiles) > 0 {
 				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
 				if err != nil {
 					return "", err
@@ -4726,8 +4746,16 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 				return run(provider)
 			}
 		}
-		if current, ok := set.Current(); ok {
-			logUnboundGroupFallback(roles, group, current.ID)
+		// runLLMProviderWithFailover 从激活配置所在的分组取候选，激活的是生图那套时
+		// 聊天调用会拿到一串生图配置。先确认激活配置能接这次调用，接不了就退回本分组。
+		if len(activeProfileForGroup(set, roles, group, groupKey)) == 0 {
+			if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
+				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
+				if err != nil {
+					return "", err
+				}
+				return run(provider)
+			}
 		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
 	}
@@ -4779,10 +4807,13 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 	if registry == nil {
 		return llm.AgentModelConfig{}, false, nil
 	}
-	key := llm.NormalizeProfileGroup(group)
-	if key == llm.GroupChat {
-		key = "chat"
-	}
+	// 分组名和角色名是两套命名空间，别用同一个变量串着走：
+	// 角色键用 "chat"（机器人页那四行就是 chat/vision/intent/image），
+	// 而聊天配置的分组名是 "default"。原先这里把 key 从 "default" 改写成 "chat"
+	// 之后又拿它当分组名去查，结果是查一个根本不存在的分组——「先在同组里找」
+	// 这层保护对聊天调用从来没生效过。角色查找由 modelRoleForGroup 自己归一化，
+	// 这里只需要分组名。
+	groupKey := llm.NormalizeProfileGroup(group)
 	boundRole, hasBoundRole := modelRoleForGroup(roles, group)
 	if role := boundRole; hasBoundRole && role.ProviderID != "" && role.ModelID != "" {
 		return normalizeRegistrySelection(registry, role.ProviderID, role.ModelID), true, nil
@@ -4808,19 +4839,75 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 			}
 		}
 	}
-	if len(profiles) == 0 && key != llm.GroupChat {
-		profiles = llmProfilesInGroup(set, key)
+	// 非聊天用途先在本分组里找。聊天用途不走这一步：默认分组里可能并排放着好几个
+	// 对话 Provider，选哪个是用户在 LLM 配置页用「激活配置」定的，直接取第一个会
+	// 无视这个选择。
+	if len(profiles) == 0 && groupKey != llm.GroupChat {
+		profiles = llmProfilesInGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
-		if current, ok := set.Current(); ok {
-			logUnboundGroupFallback(roles, group, current.ID)
-			profiles = []llm.Profile{current}
-		}
+		profiles = activeProfileForGroup(set, roles, group, groupKey)
+	}
+	// 激活配置跨组（例如激活的是生图那套、这次是聊天调用）时退回本分组。
+	// 上一步已经拒绝了跨组的激活配置，这里补一个同组的，免得直接判成「没有可用配置」。
+	if len(profiles) == 0 {
+		profiles = llmProfilesInGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
 		return llm.AgentModelConfig{}, false, nil
 	}
 	return profileRegistrySelection(registry, profiles[0]), true, nil
+}
+
+// singlePurposeProfileGroup 报告这个分组的模型是不是只能干这一件事。
+//
+// 生图和向量嵌入是单一用途：生图模型接不了文本对话，嵌入模型也接不了。其余分组
+// （默认/视觉/意图）装的都是对话模型，互相顶替是正常的——modelRoleForGroup 本来就
+// 让视觉和意图在没单独绑定时回落到 chat 绑定，一台机器人聊着聊着多出几张图，
+// 用的还该是它绑的那个模型。
+func singlePurposeProfileGroup(group string) bool {
+	switch llm.NormalizeProfileGroup(group) {
+	case llm.GroupImage, llm.GroupEmbedding:
+		return true
+	}
+	return false
+}
+
+// profileGroupServes 报告某个分组的配置能不能接这个用途的调用。
+func profileGroupServes(profileGroup string, wantGroup string) bool {
+	profileGroup = llm.NormalizeProfileGroup(profileGroup)
+	wantGroup = llm.NormalizeProfileGroup(wantGroup)
+	if profileGroup == wantGroup {
+		return true
+	}
+	return !singlePurposeProfileGroup(profileGroup) && !singlePurposeProfileGroup(wantGroup)
+}
+
+// activeProfileForGroup 返回可以用于这个用途的激活配置，接不了这活就不给。
+//
+// 「回落到激活配置」本身是对的——没配模型分配时总得有个兜底，而且视觉、意图回落到
+// 对话配置是正常的。错的是完全不看能力：激活的是生图配置时，一次普通聊天调用会拿
+// gpt-image-2 去发文本请求，日志里 provider 和 model 还都显示「正常」。
+// 宁可往下退回同组配置、甚至报「没有可用配置」，也不要拿一个干不了这活的模型硬接。
+func activeProfileForGroup(set llm.ProfileSet, roles map[string]ModelRole, group string, groupKey string) []llm.Profile {
+	current, ok := set.Current()
+	if !ok {
+		return nil
+	}
+	if !profileGroupServes(current.Group, groupKey) {
+		logUnusableActiveProfileSkipped(groupKey, current.ID, llm.NormalizeProfileGroup(current.Group))
+		return nil
+	}
+	logUnboundGroupFallback(roles, group, current.ID)
+	return []llm.Profile{current}
+}
+
+// logUnusableActiveProfileSkipped 无条件记一条：跟 logUnboundGroupFallback 不同，
+// 这不是「正常回落」，而是「用户选的激活配置干不了这次调用」，任何情况下都该看得见。
+// logUnboundGroupFallback 在没配任何绑定时是静默的，而没配绑定的人恰恰最容易撞上
+// 这一种——那条路的静默只能由这里补上。
+func logUnusableActiveProfileSkipped(wantGroup string, activeID string, activeGroup string) {
+	log.Printf("chatbot llm selection skipped the active profile: a %q call cannot use the active profile %q from the single-purpose group %q", wantGroup, activeID, activeGroup)
 }
 
 func normalizeRegistrySelection(registry *llm.ProviderRegistry, providerID, modelID string) llm.AgentModelConfig {
@@ -5247,7 +5334,7 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	cfg := r.effectiveConfigForEvent(event)
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
 	voice := personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt(voice) + "\n" + cfg.ReplyStyle.closingAnchor())
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true), voice) + "\n" + cfg.ReplyStyle.closingAnchor())
 	if persona == "" {
 		return messages
 	}
@@ -5303,7 +5390,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		return false
 	}
 	builder.WriteString(cfg.SystemPrompt)
-	appendPromptSection(&builder, cfg.ReplyStyle.prompt(personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
+	appendPromptSection(&builder, cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true), personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) {
@@ -7323,8 +7410,12 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 
 // sendSubscriberNotice 投递提醒、周期查询、RSS 这类「到点了主动找人」的通知：
 // 群里一律 @ 订阅者，不引用任何消息（触发它的那条消息可能是几天前的了）。
+//
+// 走通知的分条而不是聊天的：这类推送是一条完整的事实——提醒原文、订阅摘要、
+// 「本次发送失败，将在 X 自动重试」——按句子拆开就成了半句一条，读的人得自己拼。
 func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
-	_, err := r.sendDecorated(ctx, event, text, outboundDecoration{
+	cfg := r.effectiveConfigForEvent(event)
+	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
 		MentionUserID: strings.TrimSpace(event.UserID),
 		MentionAlways: true,
 	})
@@ -7333,8 +7424,8 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
-	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold) {
+	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
+	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -7607,6 +7698,7 @@ func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg
 }
 
 func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source MessageEvent, msg OutgoingMessage, messageID string) {
+	ctx = r.withFileParserVideoLimit(ctx, source)
 	event := r.outgoingHistoryEvent(source, msg)
 	if event.MessageID == "" {
 		return
@@ -7785,14 +7877,22 @@ func appendHistoryImageSegments(segments []MessageSegment, imageURLs []string) [
 
 const forwardReplyChunkCountThreshold = 5
 
-func shouldUseForwardReply(reply string, chunks []string, threshold int) bool {
-	if len(chunks) >= forwardReplyChunkCountThreshold {
+// shouldUseForwardReply 判断这条回复该不该走合并转发卡片。两个触发条件：
+//
+//	块数  切出超过 5 块——分条的条数上限只管前三档，之后的长度兜底不受限，
+//	      用户把「分段发送长度」调小时块数照样上得去
+//	长度  正文超过 ForwardReplyThreshold（默认 900 字）
+func shouldUseForwardReply(reply string, chunks []string, threshold int, chunkThreshold int) bool {
+	if chunkThreshold <= 0 {
+		chunkThreshold = forwardReplyChunkCountThreshold
+	}
+	if len(chunks) > chunkThreshold {
 		return true
 	}
 	if threshold <= 0 {
 		return false
 	}
-	text := strings.TrimSpace(strings.ReplaceAll(reply, notificationSplitMarker, "\n"))
+	text := strings.TrimSpace(strings.ReplaceAll(normalizeSplitMarkers(reply), notificationSplitMarker, "\n"))
 	return len([]rune(text)) > threshold
 }
 
@@ -8065,7 +8165,7 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 	if _, rest, ok := extractOutgoingReplyMarker(reply); ok {
 		reply = rest
 	}
-	chunks := splitReply(reply, cfg.DirectReplyChunkSize)
+	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
 	if len(chunks) == 0 {
 		return "", nil
 	}
@@ -9343,7 +9443,8 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 			return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 		}
 		// 补投成功才轮到跟评：上一轮没送出去，那会儿也没有可评的东西。
-		r.maybeSendRepositoryWatchFollowUp(ctx, item, pending)
+		// 补投走的是上一轮存下的正文，diff 没有一起存，跟评这次只看事实清单。
+		r.maybeSendRepositoryWatchFollowUp(ctx, item, pending, "")
 		return startedAt, nil
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
@@ -9364,6 +9465,9 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		repositoryWatchSelection{
 			Commits: item.WatchCommits, PullRequests: item.WatchPullRequests,
 			Issues: item.WatchIssues, Releases: item.WatchReleases, Stars: item.WatchStars,
+			// 跟评是 diff 唯一的读者。关掉跟评就别拉了，否则每轮白花一次 compare
+			// 加每个 PR 一次 files——这正是当初把 diff 整个摘掉的原因。
+			Diff: r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
 		},
 		settings,
 	)
@@ -9382,7 +9486,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
-	r.maybeSendRepositoryWatchFollowUp(ctx, item, message)
+	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigest(change))
 	return startedAt, nil
 }
 
@@ -9549,7 +9653,7 @@ func (r *Runtime) renderRepositoryWatchMessage(change repositoryWatchChange, set
 // 每个投递目标各自成稿——跟评的门槛是「和这个会话正在聊的事对得上」，
 // 那就得按各自会话的历史来判断，一稿群发既对不上也算不上接话。
 // 跟评失败一律静默跳过，但会写进运行日志。
-func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Reminder, notification string) {
+func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Reminder, notification, reference string) {
 	if strings.TrimSpace(notification) == "" {
 		return
 	}
@@ -9566,7 +9670,7 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 		if ctx.Err() != nil {
 			return
 		}
-		comment := r.followUpComment(ctx, followUpKindRepositoryWatch, target, notification)
+		comment := r.followUpCommentWithReference(ctx, followUpKindRepositoryWatch, target, notification, reference)
 		if comment == "" {
 			continue
 		}
@@ -9574,6 +9678,50 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 			r.recordFollowUpFailure(ctx, followUpKindRepositoryWatch, target, "send", err)
 		}
 	}
+}
+
+// renderRepositoryWatchDiffDigest 把这一轮的 diff 压成给跟评看的参考资料。
+//
+// 通知正文只有标题和链接，模型据此写跟评就只能围着标题措辞打转——标题还常常是过期的。
+// 给它一份「动了哪些文件、各自加删多少行」的清单，它才说得出具体的话。
+//
+// 只要清单，不要 patch 正文：跟评是一句话的感想，读几千字的 diff 正文也用不上，
+// 白占预算。这份资料只进提示词，不进任何发出去的正文。
+func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
+	sections := make([]string, 0, 4)
+	if change.CommitDiff != nil {
+		if body := renderRepositoryWatchDiffFiles(change.CommitDiff.Files, change.CommitDiff.FilesTruncated); body != "" {
+			sections = append(sections, "本次新增提交合计改动：\n"+body)
+		}
+	}
+	for _, pullRequest := range change.PullRequests {
+		body := renderRepositoryWatchDiffFiles(pullRequest.Files, pullRequest.FilesTruncated)
+		if body == "" {
+			continue
+		}
+		sections = append(sections, fmt.Sprintf("PR #%d 的改动：\n%s", pullRequest.Number, body))
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	return truncateRunes(strings.Join(sections, "\n\n"), repositoryWatchDiffDigestRunes)
+}
+
+func renderRepositoryWatchDiffFiles(files []repositoryWatchDiffFile, truncated bool) string {
+	if len(files) == 0 {
+		return ""
+	}
+	ranked := append([]repositoryWatchDiffFile(nil), files...)
+	// 改动量大的排前面：预算被截断时，留下的是这次真正动过的地方。
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].Changes > ranked[j].Changes })
+	lines := make([]string, 0, len(ranked)+1)
+	for _, file := range ranked {
+		lines = append(lines, fmt.Sprintf("- %s（%s +%d -%d）", file.Filename, firstNonEmpty(file.Status, "modified"), file.Additions, file.Deletions))
+	}
+	if truncated {
+		lines = append(lines, "（还有更多文件未列出）")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // composeRepositoryWatchMessage 把标题和变更明细拼成一条通知。
@@ -10163,7 +10311,9 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 	if maxRunes > 0 && len([]rune(reply)) > maxRunes {
 		reply = truncateReplyAtBoundary(reply, maxRunes)
 	}
-	return reply
+	// 收尾的句号在这里就去掉，不留到切分之后：这样返回值、聊天历史、事件详情和群里
+	// 实际收到的是同一份文本。只有分条切出来的中间那几条才需要在切分后再处理一次。
+	return trimChatTrailingPeriod(reply)
 }
 
 // replyBoundaryRunes 是可以安全断句的位置：在这些字符之后收尾，读起来仍然是一句
@@ -10352,10 +10502,30 @@ func chunkOverflowAllowance(chunkSize int) int {
 }
 
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
-const notificationSplitMarker = "<dianabr>"
+// legacyNotificationSplitMarker 是它在 <dianabr> 之前的名字。
+//
+// 这层归一化被「删除全部旧版兼容层」一并清掉过一次，但它兼容的不是旧版代码，是
+// 旧版**数据**：改名那天起，用户自定义过的提示词文案里就一直留着旧标记，而配置
+// 不会随代码升级重写。删掉之后这些实例陷入两头不认——提示词教模型写 <botbr>，
+// 投递侧只认 <dianabr>：模型照做了也不分条，而且旧标记既没被识别也没被清掉，
+// 会原样发进群里让人看见一个 <botbr>。
+const (
+	notificationSplitMarker       = "<dianabr>"
+	legacyNotificationSplitMarker = "<botbr>"
+)
+
+// normalizeSplitMarkers 把旧标记统一成新标记，后续只需按一种写法切分。
+func normalizeSplitMarkers(text string) string {
+	if !strings.Contains(text, legacyNotificationSplitMarker) {
+		return text
+	}
+	return strings.ReplaceAll(text, legacyNotificationSplitMarker, notificationSplitMarker)
+}
 
 // splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 <dianabr>，
-// 再按长度兜底。发言和通知走的是同一套规则。
+// 再按长度兜底。错误提示和结构化通知走这一套——它们是一条完整的诊断或一张事实
+// 卡片，换行是卡片自己的排版（仓库订阅那张就是紧凑两行），拆开就没法读了。
+// 聊天发言另走 splitChatReply。
 //
 // 空行不是分条信号。模型按 Markdown 习惯用空行做段落间距，运行时却曾把它当成消息
 // 边界——同一个符号两边理解不一样，分条位置就全看模型的排版习惯。提示词已经从源头
@@ -10372,7 +10542,7 @@ func splitReply(reply string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = notificationChunkSize
 	}
-	reply = collapseBlankLines(reply)
+	reply = collapseBlankLines(normalizeSplitMarkers(reply))
 	if reply == "" {
 		return nil
 	}
@@ -10382,6 +10552,327 @@ func splitReply(reply string, chunkSize int) []string {
 	}
 	return out
 }
+
+// splitChatReply 是聊天发言的分条：把一条回复切成几次发言。
+//
+// 只认 <dianabr> 的问题是它把分条押在模型愿不愿意写一个内部标记上。模型对这种元
+// 标记的服从度本来就不稳定，而它真正会稳定产出的边界信号是换行和句号。所以运行时
+// 认三种边界，按「谁给的」排序：
+//
+//	标记  模型明说要分       无条件
+//	换行  模型自己排的版     照做
+//	句号  运行时自己推断的   只在这一行明显偏长时才用
+//
+// 条数由 replyMaxChatBubbles 兜底，而且是「要么分好，要么别分」：分不进上限就退回
+// 粗一档，退到底就整条发。不做「超出的并进最后一条」——那会让最后一条拖着个尾巴，
+// 反问被粘在陈述句后面就是这么来的。
+func splitChatReply(reply string, limits chatSplitLimits) []string {
+	limits = limits.withDefaults()
+	reply = collapseBlankLines(normalizeSplitMarkers(reply))
+	if reply == "" {
+		return nil
+	}
+	var out []string
+	for _, segment := range chatReplySegments(reply, limits) {
+		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
+		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
+			out = append(out, trimChatTrailingPeriod(chunk))
+		}
+	}
+	return out
+}
+
+// replyMaxChatBubbles 是分条后允许的条数。按换行分出来超过这个数就不按换行分了：
+// 几条小气泡挤在一起比一条完整的消息更难读，再多就不是分条能解决的，交给合并转发
+// 卡片（见 shouldUseForwardReply）。这是配置项，常量只是留空时的默认值。
+const replyMaxChatBubbles = 5
+
+// chatSplitLimits 是分条用到的几个阈值。它们全都来自机器人配置，凑成一个结构体
+// 是因为一路往下传五个 int 参数没人认得住哪个是哪个。
+type chatSplitLimits struct {
+	ChunkSize  int // 单条消息的硬上限，撞上了在最近的标点处切开
+	MaxBubbles int // 分出来最多几条，超了就退回粗一档
+	// MarkerOnly 关掉自然分条：只认模型显式写的 <dianabr>，换行只当排版。
+	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
+	MarkerOnly bool
+}
+
+func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
+	return chatSplitLimits{
+		ChunkSize:  cfg.DirectReplyChunkSize,
+		MaxBubbles: cfg.ReplyMaxBubbles,
+		MarkerOnly: !boolValue(cfg.NaturalReplySplitEnabled, true),
+	}
+}
+
+func (l chatSplitLimits) withDefaults() chatSplitLimits {
+	if l.ChunkSize <= 0 {
+		l.ChunkSize = notificationChunkSize
+	}
+	if l.MaxBubbles <= 0 {
+		l.MaxBubbles = replyMaxChatBubbles
+	}
+	return l
+}
+
+// chatReplySplitDepth 是分条的精细程度，由细到粗。
+type chatReplySplitDepth int
+
+const (
+	splitAtSentence chatReplySplitDepth = iota // 标记 + 换行 + 句号
+	splitAtLine                                // 标记 + 换行
+	splitAtMarker                              // 只认标记
+)
+
+// chatReplySegments 先按换行分，分不进条数上限就退回只认标记。
+//
+// 「要么分好，要么别分」：不做「超出的并进最后一条」，那会让最后一条拖着个尾巴。
+// 退一档而不是一刀切回整条也是同样的道理——但这里只剩两档，退无可退时整条发。
+func chatReplySegments(reply string, limits chatSplitLimits) []string {
+	// 关掉自然分条之后只认标记。模型显式写的 <dianabr> 仍然照做——那是它明说要分，
+	// 关掉的是运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
+	if limits.MarkerOnly {
+		return splitChatReplyAtDepth(reply, limits, splitAtMarker)
+	}
+	for _, depth := range []chatReplySplitDepth{splitAtSentence, splitAtLine} {
+		if parts := splitChatReplyAtDepth(reply, limits, depth); len(parts) <= limits.MaxBubbles {
+			return parts
+		}
+	}
+	return splitChatReplyAtDepth(reply, limits, splitAtMarker)
+}
+
+func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {
+	var out []string
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if depth == splitAtMarker {
+			out = append(out, part)
+			continue
+		}
+		for _, line := range splitReplyLines(part) {
+			if depth == splitAtSentence {
+				out = append(out, splitLineIntoSentences(line)...)
+				continue
+			}
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// replySentenceSplitRunes 是按句号分条的起始长度。短回复不动：两句话的短回复本来
+// 就是一条消息（「端口被占了。先 lsof 看看是谁占着。」拆开反而不像人说话）。
+const replySentenceSplitRunes = 60
+
+// splitLineIntoSentences 把一行按句号分成几次发言，一句一条。
+//
+// 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
+// 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界，一个句子就是一次
+// 发言。条数由上层的 MaxBubbles 兜着，分出来太多就整层退回。
+func splitLineIntoSentences(line string) []string {
+	runes := []rune(line)
+	if len(runes) <= replySentenceSplitRunes {
+		return []string{line}
+	}
+	ends := boundaryPositions(runes, isSentenceEnd)
+	if len(ends) == 0 {
+		return []string{line}
+	}
+	var out []string
+	start := 0
+	for _, end := range ends {
+		if end >= len(runes) {
+			break
+		}
+		if text := strings.TrimSpace(string(runes[start:end])); text != "" {
+			out = append(out, text)
+			start = end
+		}
+	}
+	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
+		out = append(out, tail)
+	}
+	if len(out) < 2 {
+		return []string{line}
+	}
+	return out
+}
+
+// boundaryPositions 返回每个句末标点之后的位置。引号括号里的句号不算边界：
+// 「他说「我不去。」然后走了」拆开就散架了；连着的标点（「？！」）算一个。
+// 方括号一并计入深度，CQ 码不会被从中间切开。
+func boundaryPositions(runes []rune, match func(rune) bool) []int {
+	var out []int
+	depth := 0
+	for i, r := range runes {
+		switch r {
+		case '「', '『', '（', '(', '【', '《', '“', '[':
+			depth++
+		case '」', '』', '）', ')', '】', '》', '”', ']':
+			if depth > 0 {
+				depth--
+			}
+		}
+		if depth > 0 || !match(r) {
+			continue
+		}
+		if i+1 < len(runes) && match(runes[i+1]) {
+			continue
+		}
+		out = append(out, i+1)
+	}
+	return out
+}
+
+// splitReplyLines 按换行分段。成块的内容（清单、步骤、代码）整块发，折了行的半句
+// 话跟着上一行走——那不是说完了一句，是排版换的行。
+func splitReplyLines(part string) []string {
+	if !strings.Contains(part, "\n") {
+		return []string{part}
+	}
+	if looksStructuredBlock(part) {
+		return []string{part}
+	}
+	var out []string
+	pending := ""
+	for _, line := range strings.Split(part, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if pending != "" {
+			line = pending + "\n" + line
+			pending = ""
+		}
+		if endsMidSentence(line) {
+			pending = line
+			continue
+		}
+		out = append(out, line)
+	}
+	if pending != "" {
+		out = append(out, pending)
+	}
+	if len(out) == 0 {
+		return []string{part}
+	}
+	return out
+}
+
+// looksStructuredBlock 判断这几行是不是一份清单、一组步骤这类整体。两行以上同一
+// 形状才算：一行「短标签：内容」在普通聊天里太常见，不该因此堵掉分条。
+func looksStructuredBlock(text string) bool {
+	structured := 0
+	for _, line := range strings.Split(text, "\n") {
+		if isStructuredReplyLine(strings.TrimSpace(line)) {
+			structured++
+			if structured >= 2 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// trimChatTrailingPeriod 去掉聊天消息末尾那个句号。
+//
+// 提示词里早就有 replyTrailingPunctuationRule 说「结尾不要用句号收尾」，理由是
+// 一条「知道了。」读起来是公事公办的冷淡。但那和分条一样，是押在模型愿不愿意照做
+// 上的；按句子分条之后还更显眼——一段话拆成几条，就有几个句号排在那儿。
+//
+// 只动整条消息最后那一个，而且只动句号：
+//   - 问号和感叹号承载语气，删了意思就变了
+//   - 省略号是话没说完，不是句读
+//   - 英文句点在缩写、域名、版本号里到处都是，v1.0 和 example.com. 分不清，不碰
+//   - 收在引号、括号里的句号属于被引用的内容，不是这条消息自己的句读
+//   - 删完变成空的就不删
+func trimChatTrailingPeriod(text string) string {
+	trimmed := strings.TrimRight(text, " \t")
+	runes := []rune(trimmed)
+	if len(runes) < 2 || runes[len(runes)-1] != '。' {
+		return text
+	}
+	if prev := runes[len(runes)-2]; prev == '…' || prev == '。' {
+		return text
+	}
+	if hasUnclosedQuote(runes) {
+		return text
+	}
+	return string(runes[:len(runes)-1])
+}
+
+// hasUnclosedQuote 判断末尾的标点是不是落在没闭合的引号或括号里。
+func hasUnclosedQuote(runes []rune) bool {
+	depth := 0
+	for _, r := range runes {
+		switch r {
+		case '「', '『', '（', '(', '【', '《', '“':
+			depth++
+		case '」', '』', '）', ')', '】', '》', '”':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return depth > 0
+}
+
+// endsMidSentence 判断这一行是不是停在半句话上。句号、问号、感叹号不算——那是
+// 一句说完了；聊天里更常见的是整行不带标点收尾（见 replyTrailingPunctuationRule），
+// 同样算说完。
+func endsMidSentence(line string) bool {
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return false
+	}
+	switch runes[len(runes)-1] {
+	case '，', ',', '、', '；', ';', '：', ':', '(', '（', '“', '「':
+		return true
+	}
+	return false
+}
+
+// isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」
+// 这种逐项打分常用的写法。
+func isStructuredReplyLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	runes := []rune(line)
+	switch runes[0] {
+	case '-', '*', '+', '•', '·', '|':
+		return len(runes) > 1 && strings.TrimSpace(string(runes[1:])) != ""
+	}
+	digits := 0
+	for digits < len(runes) && unicode.IsDigit(runes[digits]) {
+		digits++
+	}
+	if digits > 0 && digits < len(runes) {
+		switch runes[digits] {
+		case '.', '、', ')', '）', ':', '：':
+			return strings.TrimSpace(string(runes[digits+1:])) != ""
+		}
+	}
+	// 「变装皇后：+1」这类标签行：冒号靠前，且冒号两侧都有内容。
+	for index, r := range runes {
+		if r != '：' && r != ':' {
+			continue
+		}
+		if index == 0 || index > structuredReplyLabelMaxRunes {
+			return false
+		}
+		return strings.TrimSpace(string(runes[index+1:])) != ""
+	}
+	return false
+}
+
+// structuredReplyLabelMaxRunes 限制标签长度，避免把「今天想说的是：……」这种
+// 正常句子当成清单项。
+const structuredReplyLabelMaxRunes = 12
 
 // collapseBlankLines 把空行当排版收掉，并去掉行尾空白。空行留在气泡里会渲染成
 // 一整行空白：写文档时正常，聊天窗口里很突兀。
@@ -10435,15 +10926,58 @@ func chunkTextByLength(text string, chunkSize int) []string {
 // 某行特别长时切出一堆碎条。
 func replyChunkCut(runes []rune, chunkSize int) int {
 	floor := chunkSize / 3
+	// 从后往前找断点，同一优先级取最靠后的那个：换行 > 句末 > 分句 > 空白。
+	//
+	// 只找换行和空白是不够的——中文既没有词间空格，一段纯中文里这两样一个都没有，
+	// 于是每次都退回硬切，把「所以不会」和「冒充自己亲身体验过」劈成两条。标点是
+	// 中文里唯一的断点，必须认。
+	var cuts [3]int
 	for i := chunkSize; i > floor; i-- {
-		if runes[i-1] == '\n' {
-			return i
+		rank := replyCutRank(runes[i-1])
+		if rank > 0 && cuts[rank-1] == 0 {
+			cuts[rank-1] = i
 		}
 	}
-	for i := chunkSize; i > floor; i-- {
-		if unicode.IsSpace(runes[i-1]) {
-			return i
+	for _, cut := range cuts {
+		if cut > 0 {
+			return cut
 		}
 	}
 	return chunkSize
+}
+
+// replyCutRank 给一个字符打断点优先级，0 表示不能在这里断。
+func replyCutRank(r rune) int {
+	switch {
+	case r == '\n':
+		return 1
+	case isSentenceEnd(r):
+		return 2
+	case isClauseBreak(r) || unicode.IsSpace(r):
+		return 3
+	}
+	return 0
+}
+
+// isSentenceEnd 判断是不是句末标点。只认全角的那几个：英文句点在小数、缩写和
+// 域名里到处都是，拿它断句会把 3.5 和 example.com 切开。
+func isSentenceEnd(r rune) bool {
+	switch r {
+	case '。', '！', '？', '…', '；':
+		return true
+	}
+	return false
+}
+
+// isClauseBreak 判断是不是分句标点。断在这里读着不算体面，但比拦腰硬切强。
+//
+// 只认全角。半角的冒号和逗号在链接、CQ 码、代码和版本号里到处都是——
+// http://127.0.0.1:18080 有两个冒号，[CQ:record,file=…] 冒号逗号都有——撞上长度
+// 上限时按它们断，会把一个链接从中间劈开发出去。
+func isClauseBreak(r rune) bool {
+	switch r {
+	case '，', '、', '：':
+		return true
+	}
+	return false
 }

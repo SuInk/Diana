@@ -125,10 +125,20 @@ func (r *Runtime) noteDirectedInbound(event MessageEvent) {
 }
 
 // inboundTriggerSuperseded 报告触发消息是否已被同一用户更新的直呼消息取代。
-// 只有触发消息自己是直呼时比较才有意义：它入站时必然登记过，登记表里出现
-// 别的消息 ID 就说明更新的直呼在它之后到达。主动插话的触发不是直呼，走的
-// 是主动回复自己的取代机制，这里不管。
-func (r *Runtime) inboundTriggerSuperseded(event MessageEvent) bool {
+//
+// 直呼那一轮好判断：它入站时必然登记过，登记表里出现别的消息 ID 就说明更新的
+// 直呼在它之后到达。
+//
+// 主动插话那一轮原先直接跳过，理由是「它走主动回复自己的取代机制」——但那套
+// 机制（proactiveReplyBatchChanged）只认更新的插话候选，认不出直呼。于是漏掉
+// 一整种组合：前一条随口一说被主动插话接了，人还没说完又直接叫机器人，插话
+// 和直呼各回一次，内容还高度重复。群里看到的就是连着两条几乎一样的话。
+//
+// 现在这一种也拦：登记表里只记直呼，所以对插话那一轮光比 ID 不够——那条直呼
+// 可能本来就在它之前。要求它登记在本轮开始生成之后，才是真的「说着说着人家
+// 直接叫我了」。让位之后由直呼那一轮一并回答，pendingEarlierMessage 会让它
+// 明确承接前一条，不会显得前一条被跳过。
+func (r *Runtime) inboundTriggerSuperseded(ctx context.Context, event MessageEvent) bool {
 	key := directedInboundKey(event)
 	messageID := strings.TrimSpace(event.MessageID)
 	if key == "" || messageID == "" {
@@ -140,7 +150,11 @@ func (r *Runtime) inboundTriggerSuperseded(event MessageEvent) bool {
 	if !ok || mark.messageID == messageID || time.Since(mark.at) > replyInterruptRetention {
 		return false
 	}
-	return r.shouldHandleChatTrigger(event, directedInboundText(event))
+	if r.shouldHandleChatTrigger(event, directedInboundText(event)) {
+		return true
+	}
+	turnStart, ok := replyTurnStartFromContext(ctx)
+	return ok && mark.at.After(turnStart)
 }
 
 // interruptedReplyError 返回发送前的打断检查结果；nil 表示放行。
@@ -154,7 +168,7 @@ func (r *Runtime) interruptedReplyError(ctx context.Context, event MessageEvent)
 	if hasExternalSideEffect(ctx) {
 		return nil
 	}
-	if r.inboundTriggerSuperseded(event) {
+	if r.inboundTriggerSuperseded(ctx, event) {
 		return errReplyTriggerSuperseded
 	}
 	return nil

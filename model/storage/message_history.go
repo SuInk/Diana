@@ -48,10 +48,11 @@ func (s *SQLiteStore) AppendMessageEvent(ctx context.Context, session string, ev
 		text = strings.TrimSpace(event.RawMessage)
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO message_events (id, session, kind, profile_id, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   kind=excluded.kind,
+  profile_id=excluded.profile_id,
   group_id=excluded.group_id,
   user_id=excluded.user_id,
   message_id=excluded.message_id,
@@ -60,7 +61,7 @@ ON CONFLICT(id) DO UPDATE SET
   text=excluded.text,
   payload=excluded.payload,
   created_at=excluded.created_at
-`, id, session, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.SenderName, eventTime, text, string(payload), time.Now().UTC().Format(time.RFC3339Nano))
+`, id, session, string(event.Kind), strings.TrimSpace(event.ProfileID), event.GroupID, event.UserID, event.MessageID, event.SenderName, eventTime, text, string(payload), time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return err
 	}

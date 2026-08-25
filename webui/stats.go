@@ -5,6 +5,7 @@ package webui
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,11 +28,9 @@ type hourBucket struct {
 	Errors   int64 `json:"errors"`
 }
 
-// StatsCollector 聚合运行时事件计数；进程启动时可从 SQLite 恢复基线，
-// 之后配置重载继续复用同一个实例。
-type StatsCollector struct {
-	mu          sync.Mutex
-	startedAt   time.Time
+// statsCounters 是一份计数。控制台可以按机器人切换，所以同一批事件要同时记进
+// 「全部机器人」和「这台机器人」两份里，字段抽出来省得写两遍。
+type statsCounters struct {
 	total       int64
 	handled     int64
 	errors      int64
@@ -40,43 +39,109 @@ type StatsCollector struct {
 	lastEventAt time.Time
 	durTotalMS  int64
 	durCount    int64
-	now         func() time.Time
 }
 
-// RestoreDurableBaseline restores counters collected before this process
-// started. Call it before attaching Observe as the runtime event listener.
-func (s *StatsCollector) RestoreDurableBaseline(stats storage.DashboardEventStats) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func newStatsCounters() *statsCounters {
+	return &statsCounters{byKind: map[string]int64{}, buckets: map[int64]*hourBucket{}}
+}
 
-	s.total = stats.TotalEvents
-	s.handled = stats.HandledEvents
-	s.errors = stats.ErrorEvents
-	s.byKind = make(map[string]int64, len(stats.ByKind))
-	for kind, count := range stats.ByKind {
-		s.byKind[kind] = count
+func (c *statsCounters) observe(event assistant.EventRecord, at time.Time, hour int64) {
+	c.total++
+	c.byKind[string(event.Kind)]++
+	bucket, ok := c.buckets[hour]
+	if !ok {
+		bucket = &hourBucket{HourUnix: hour}
+		c.buckets[hour] = bucket
 	}
-	s.buckets = make(map[int64]*hourBucket, len(stats.Hourly))
+	bucket.Total++
+	if event.Handled {
+		c.handled++
+		bucket.Handled++
+	}
+	if event.Error != "" {
+		c.errors++
+		bucket.Errors++
+	}
+	if event.Handled && event.Duration > 0 {
+		c.durTotalMS += event.Duration
+		c.durCount++
+	}
+	if at.After(c.lastEventAt) {
+		c.lastEventAt = at
+	}
+}
+
+// trim 只保留最近 48 小时的分桶，防止长期运行内存无界增长。
+func (c *statsCounters) trim(cutoff int64) {
+	for key := range c.buckets {
+		if key < cutoff {
+			delete(c.buckets, key)
+		}
+	}
+}
+
+func (c *statsCounters) restore(stats storage.DashboardEventStats) {
+	c.total = stats.TotalEvents
+	c.handled = stats.HandledEvents
+	c.errors = stats.ErrorEvents
+	c.byKind = make(map[string]int64, len(stats.ByKind))
+	for kind, count := range stats.ByKind {
+		c.byKind[kind] = count
+	}
+	c.buckets = make(map[int64]*hourBucket, len(stats.Hourly))
 	for _, restored := range stats.Hourly {
 		bucket := restored
-		s.buckets[restored.HourUnix] = &hourBucket{
+		c.buckets[restored.HourUnix] = &hourBucket{
 			HourUnix: bucket.HourUnix,
 			Total:    bucket.Total,
 			Handled:  bucket.Handled,
 			Errors:   bucket.Errors,
 		}
 	}
-	s.lastEventAt = stats.LastEventAt
-	s.durTotalMS = stats.DurationTotalMS
-	s.durCount = stats.DurationCount
+	c.lastEventAt = stats.LastEventAt
+	c.durTotalMS = stats.DurationTotalMS
+	c.durCount = stats.DurationCount
+}
+
+// StatsCollector 聚合运行时事件计数；进程启动时可从 SQLite 恢复基线，
+// 之后配置重载继续复用同一个实例。
+type StatsCollector struct {
+	mu        sync.Mutex
+	startedAt time.Time
+	all       *statsCounters
+	byProfile map[string]*statsCounters
+	now       func() time.Time
+}
+
+// RestoreDurableBaseline restores counters collected before this process
+// started. Call it before attaching Observe as the runtime event listener.
+func (s *StatsCollector) RestoreDurableBaseline(stats storage.DashboardEventStats) {
+	s.RestoreDurableBaselines(map[string]storage.DashboardEventStats{"": stats})
+}
+
+// RestoreDurableBaselines 按机器人恢复基线。键 "" 是全部机器人的合计。
+func (s *StatsCollector) RestoreDurableBaselines(baselines map[string]storage.DashboardEventStats) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.all = newStatsCounters()
+	s.byProfile = map[string]*statsCounters{}
+	for profileID, stats := range baselines {
+		counters := s.all
+		if profileID != "" {
+			counters = newStatsCounters()
+			s.byProfile[profileID] = counters
+		}
+		counters.restore(stats)
+	}
 }
 
 // NewStatsCollector 创建 StatsCollector。
 func NewStatsCollector() *StatsCollector {
 	return &StatsCollector{
 		startedAt: time.Now(),
-		byKind:    map[string]int64{},
-		buckets:   map[int64]*hourBucket{},
+		all:       newStatsCounters(),
+		byProfile: map[string]*statsCounters{},
 		now:       time.Now,
 	}
 }
@@ -91,35 +156,19 @@ func (s *StatsCollector) Observe(event assistant.EventRecord) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.total++
-	s.byKind[string(event.Kind)]++
-	bucket, ok := s.buckets[hour]
-	if !ok {
-		bucket = &hourBucket{HourUnix: hour}
-		s.buckets[hour] = bucket
-	}
-	bucket.Total++
-	if event.Handled {
-		s.handled++
-		bucket.Handled++
-	}
-	if event.Error != "" {
-		s.errors++
-		bucket.Errors++
-	}
-	if event.Handled && event.Duration > 0 {
-		s.durTotalMS += event.Duration
-		s.durCount++
-	}
-	if at.After(s.lastEventAt) {
-		s.lastEventAt = at
-	}
-	// 只保留最近 48 小时的分桶，防止长期运行内存无界增长。
-	cutoff := s.now().Add(-48 * time.Hour).Truncate(time.Hour).Unix()
-	for key := range s.buckets {
-		if key < cutoff {
-			delete(s.buckets, key)
+	targets := []*statsCounters{s.all}
+	if profileID := strings.TrimSpace(event.ProfileID); profileID != "" {
+		counters, ok := s.byProfile[profileID]
+		if !ok {
+			counters = newStatsCounters()
+			s.byProfile[profileID] = counters
 		}
+		targets = append(targets, counters)
+	}
+	cutoff := s.now().Add(-48 * time.Hour).Truncate(time.Hour).Unix()
+	for _, counters := range targets {
+		counters.observe(event, at, hour)
+		counters.trim(cutoff)
 	}
 }
 
@@ -136,47 +185,124 @@ type StatsBotSummary struct {
 	BridgeOK       bool   `json:"bridge_connected"`
 }
 
-// StatsSnapshot 是 GET /api/stats 的响应结构。
-type StatsSnapshot struct {
-	StartedAt     time.Time                    `json:"started_at"`
-	UptimeSeconds int64                        `json:"uptime_seconds"`
-	TotalEvents   int64                        `json:"total_events"`
-	HandledEvents int64                        `json:"handled_events"`
-	ErrorEvents   int64                        `json:"error_events"`
-	TodayEvents   int64                        `json:"today_events"`
-	TodayHandled  int64                        `json:"today_handled"`
-	TodayErrors   int64                        `json:"today_errors"`
-	ByKind        map[string]int64             `json:"by_kind"`
-	Hourly        []hourBucket                 `json:"hourly"`
-	AvgReplyMS    int64                        `json:"avg_reply_ms"`
-	LastEventAt   *time.Time                   `json:"last_event_at,omitempty"`
-	Bot           StatsBotSummary              `json:"bot"`
-	Server        storage.DashboardServerStats `json:"server"`
+// StatsProfileCounters 是单台机器人的那部分计数。字段名和 StatsSnapshot 里对应
+// 的一致：前端按控制台选中的机器人覆盖上去就行，不用另写一套读法。运行时长、
+// 服务器占用这类进程级指标不在里面——它们本来就只有一份。
+type StatsProfileCounters struct {
+	TotalEvents   int64            `json:"total_events"`
+	HandledEvents int64            `json:"handled_events"`
+	ErrorEvents   int64            `json:"error_events"`
+	TodayEvents   int64            `json:"today_events"`
+	TodayHandled  int64            `json:"today_handled"`
+	TodayErrors   int64            `json:"today_errors"`
+	ByKind        map[string]int64 `json:"by_kind"`
+	Hourly        []hourBucket     `json:"hourly"`
+	AvgReplyMS    int64            `json:"avg_reply_ms"`
+	LastEventAt   *time.Time       `json:"last_event_at,omitempty"`
 }
 
-// Snapshot 汇总当前统计数据；hourly 覆盖最近 24 小时并按时间升序补零。
+// StatsSnapshot 是 GET /api/stats 的响应结构。
+type StatsSnapshot struct {
+	StartedAt     time.Time                       `json:"started_at"`
+	UptimeSeconds int64                           `json:"uptime_seconds"`
+	TotalEvents   int64                           `json:"total_events"`
+	HandledEvents int64                           `json:"handled_events"`
+	ErrorEvents   int64                           `json:"error_events"`
+	TodayEvents   int64                           `json:"today_events"`
+	TodayHandled  int64                           `json:"today_handled"`
+	TodayErrors   int64                           `json:"today_errors"`
+	ByKind        map[string]int64                `json:"by_kind"`
+	Hourly        []hourBucket                    `json:"hourly"`
+	AvgReplyMS    int64                           `json:"avg_reply_ms"`
+	LastEventAt   *time.Time                      `json:"last_event_at,omitempty"`
+	Bot           StatsBotSummary                 `json:"bot"`
+	Server        storage.DashboardServerStats    `json:"server"`
+	ByProfile     map[string]StatsProfileCounters `json:"by_profile,omitempty"`
+}
+
+// counters 抽出快照里按机器人分的那部分。
+func (s StatsSnapshot) counters() StatsProfileCounters {
+	return StatsProfileCounters{
+		TotalEvents:   s.TotalEvents,
+		HandledEvents: s.HandledEvents,
+		ErrorEvents:   s.ErrorEvents,
+		TodayEvents:   s.TodayEvents,
+		TodayHandled:  s.TodayHandled,
+		TodayErrors:   s.TodayErrors,
+		ByKind:        s.ByKind,
+		Hourly:        s.Hourly,
+		AvgReplyMS:    s.AvgReplyMS,
+		LastEventAt:   s.LastEventAt,
+	}
+}
+
+// SnapshotWithProfiles 返回合计快照，并在 ByProfile 里附上每台机器人各自的计数。
+//
+// SSE 是一条广播通道，推给所有订阅者的是同一份数据；把每台的计数一起带上，前端
+// 切换机器人时就不用重连或重新拉一次，也不会出现某个页签把别人的实时数字盖掉。
+func (s *StatsCollector) SnapshotWithProfiles() StatsSnapshot {
+	snapshot := s.SnapshotForProfile("")
+	for _, profileID := range s.profileIDs() {
+		if snapshot.ByProfile == nil {
+			snapshot.ByProfile = map[string]StatsProfileCounters{}
+		}
+		snapshot.ByProfile[profileID] = s.SnapshotForProfile(profileID).counters()
+	}
+	return snapshot
+}
+
+// profileIDs 列出已经记过事件的机器人。
+func (s *StatsCollector) profileIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]string, 0, len(s.byProfile))
+	for id := range s.byProfile {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// Snapshot 汇总全部机器人的统计数据。
 func (s *StatsCollector) Snapshot() StatsSnapshot {
+	return s.SnapshotForProfile("")
+}
+
+// SnapshotForProfile 汇总某台机器人的统计数据，botProfileID 留空表示全部机器人；
+// hourly 覆盖最近 24 小时并按时间升序补零。运行时长这类进程级指标不分机器人，
+// 本来就只有一份。
+func (s *StatsCollector) SnapshotForProfile(botProfileID string) StatsSnapshot {
 	now := s.now()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	counters := s.all
+	if botProfileID = strings.TrimSpace(botProfileID); botProfileID != "" {
+		// 这台机器人还没有任何事件时给一份空计数，而不是退回合计：切过去看到别人
+		// 的数字比看到 0 更容易让人误判。
+		if scoped, ok := s.byProfile[botProfileID]; ok {
+			counters = scoped
+		} else {
+			counters = newStatsCounters()
+		}
+	}
+
 	snapshot := StatsSnapshot{
 		StartedAt:     s.startedAt,
 		UptimeSeconds: int64(now.Sub(s.startedAt).Seconds()),
-		TotalEvents:   s.total,
-		HandledEvents: s.handled,
-		ErrorEvents:   s.errors,
+		TotalEvents:   counters.total,
+		HandledEvents: counters.handled,
+		ErrorEvents:   counters.errors,
 		ByKind:        map[string]int64{},
 	}
-	for kind, count := range s.byKind {
+	for kind, count := range counters.byKind {
 		snapshot.ByKind[kind] = count
 	}
-	if s.durCount > 0 {
-		snapshot.AvgReplyMS = s.durTotalMS / s.durCount
+	if counters.durCount > 0 {
+		snapshot.AvgReplyMS = counters.durTotalMS / counters.durCount
 	}
-	if !s.lastEventAt.IsZero() {
-		last := s.lastEventAt
+	if !counters.lastEventAt.IsZero() {
+		last := counters.lastEventAt
 		snapshot.LastEventAt = &last
 	}
 
@@ -184,7 +310,7 @@ func (s *StatsCollector) Snapshot() StatsSnapshot {
 	snapshot.Hourly = make([]hourBucket, 0, 24)
 	for i := 23; i >= 0; i-- {
 		hour := currentHour - int64(i)*3600
-		if bucket, ok := s.buckets[hour]; ok {
+		if bucket, ok := counters.buckets[hour]; ok {
 			snapshot.Hourly = append(snapshot.Hourly, *bucket)
 		} else {
 			snapshot.Hourly = append(snapshot.Hourly, hourBucket{HourUnix: hour})
@@ -192,7 +318,7 @@ func (s *StatsCollector) Snapshot() StatsSnapshot {
 	}
 
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
-	for hour, bucket := range s.buckets {
+	for hour, bucket := range counters.buckets {
 		if hour >= dayStart {
 			snapshot.TodayEvents += bucket.Total
 			snapshot.TodayHandled += bucket.Handled
@@ -225,7 +351,7 @@ func (h *StatsHandler) Register(router gin.IRouter) {
 
 // stats 返回运行统计和机器人状态摘要。
 func (h *StatsHandler) stats(c *gin.Context) {
-	snapshot := h.collector.Snapshot()
+	snapshot := h.collector.SnapshotWithProfiles()
 	snapshot.Server = cachedDashboardServerStats(time.Now(), h.storagePath)
 	if h.runtime != nil {
 		snapshot.Bot = summarizeBotStatus(h.runtime.Status())

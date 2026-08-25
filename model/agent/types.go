@@ -12,9 +12,13 @@ import (
 )
 
 const (
-	DefaultMaxSteps                 = 8
-	DefaultMaxToolOutputChars       = 8000
-	DefaultReadFileMaxBytes         = 64 * 1024
+	DefaultMaxSteps           = 8
+	DefaultMaxToolOutputChars = 8000
+	DefaultReadFileMaxBytes   = 64 * 1024
+	// 读文件默认一次多少行。工具结果统一被截到 MaxToolOutputChars，一次读太多
+	// 只会在截断处白白丢掉，不如让模型按需要翻页。
+	defaultReadFileLines            = 200
+	maxReadFileLines                = 2000
 	DefaultListDirectoryLimit       = 200
 	DefaultSkillsListBudget         = 8000
 	DefaultMCPStartupTimeoutMS      = 10_000

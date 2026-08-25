@@ -20,6 +20,19 @@ func withReplyTurnStart(ctx context.Context, at time.Time) context.Context {
 	return context.WithValue(ctx, replyTurnStartContextKey{}, at)
 }
 
+// replyTurnStartFromContext 返回本轮回复的起点。第二个返回值为 false 时表示这一次
+// 发送不在回复轮次里（通知、后台任务），调用方不能拿零值当时间用。
+func replyTurnStartFromContext(ctx context.Context) (time.Time, bool) {
+	if ctx == nil {
+		return time.Time{}, false
+	}
+	at, ok := ctx.Value(replyTurnStartContextKey{}).(time.Time)
+	if !ok || at.IsZero() {
+		return time.Time{}, false
+	}
+	return at, true
+}
+
 // replyTurnElapsed 返回本轮已经花掉的时间；拿不到起点时返回 0。
 func replyTurnElapsed(ctx context.Context) time.Duration {
 	if ctx == nil {
