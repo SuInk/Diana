@@ -16,8 +16,45 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 		}
 	}
 	// 输出规范仍然会被注入，只是不再由人设承担。
-	if !strings.Contains(defaultPromptPlaintextRules, notificationSplitMarker) {
-		t.Fatalf("plaintext rules should teach the split marker: %q", defaultPromptPlaintextRules)
+	if !strings.Contains(defaultPromptPlaintextRules, "不要使用 Markdown 语法") {
+		t.Fatalf("plaintext rules should still cover Markdown: %q", defaultPromptPlaintextRules)
+	}
+	// 分条归内置规则，不放在可编辑的文本框里：用户改一次、关一次，或者存着旧版
+	// 默认值，分条就再也不会发生。
+	if strings.Contains(defaultPromptPlaintextRules, notificationSplitMarker) {
+		t.Fatalf("plaintext rules should not own the split marker: %q", defaultPromptPlaintextRules)
+	}
+	if !strings.Contains(replySegmentationRule, notificationSplitMarker) {
+		t.Fatalf("built-in segmentation rule should teach the split marker: %q", replySegmentationRule)
+	}
+}
+
+// 分条是投递机制，不能只在某一种表达风格里教：splitReply 只认 <dianabr>，模型
+// 不写标记就一定发成一整条。每种风格的提示词都必须带上这条规则。
+func TestEveryReplyStyleTeachesTheSplitMarker(t *testing.T) {
+	for _, style := range []ReplyStyle{
+		ReplyStyleAssistant, ReplyStyleGroupmate, ReplyStyleGentle,
+		ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl, ReplyStyle(""),
+	} {
+		prompt := style.prompt(true)
+		if !promptTeachesSegmentation(prompt) {
+			t.Fatalf("style %q does not teach the split marker: %q", style, prompt)
+		}
+	}
+}
+
+// 旧版本发出去的默认文案里带着「都必须放在同一条消息里」，存进配置就一直压着
+// 分条；升级时把逐字相同的旧默认值换成新的，用户自己改过的文案不动。
+func TestLegacyPlaintextRulesAreReplacedButCustomTextIsKept(t *testing.T) {
+	for _, legacy := range legacyPromptPlaintextRules {
+		got := BotConfig{PromptPlaintextRulesText: legacy}.WithDefaults().PromptPlaintextRulesText
+		if got != defaultPromptPlaintextRules {
+			t.Fatalf("legacy plaintext rules survived the upgrade: %q", got)
+		}
+	}
+	const custom = "只用短句，不要列点。"
+	if got := (BotConfig{PromptPlaintextRulesText: custom}).WithDefaults().PromptPlaintextRulesText; got != custom {
+		t.Fatalf("custom plaintext rules were overwritten: %q", got)
 	}
 }
 

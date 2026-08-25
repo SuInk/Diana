@@ -354,6 +354,9 @@ type BotConfig struct {
 	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
+	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
@@ -564,6 +567,9 @@ type ConfigPayload struct {
 	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
+	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
@@ -1017,6 +1023,8 @@ func DefaultBotConfig() BotConfig {
 		NaturalInterjectionEnabled:     boolPointer(false),
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
+		ReplyMaxBubbles:                replyMaxChatBubbles,
+		ForwardReplyChunkThreshold:     forwardReplyChunkCountThreshold,
 		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
 		RecallReplyMode:                RecallReplyModeLLMSummary,
@@ -1093,7 +1101,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if strings.TrimSpace(cfg.PromptChineseSlangText) == "" {
 		cfg.PromptChineseSlangText = defaults.PromptChineseSlangText
 	}
-	if strings.TrimSpace(cfg.PromptPlaintextRulesText) == "" {
+	if strings.TrimSpace(cfg.PromptPlaintextRulesText) == "" || isLegacyPromptPlaintextRules(cfg.PromptPlaintextRulesText) {
 		cfg.PromptPlaintextRulesText = defaults.PromptPlaintextRulesText
 	}
 	if strings.TrimSpace(cfg.PromptTimeTemplate) == "" {
@@ -1165,6 +1173,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.DirectReplyChunkSize <= 0 {
 		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
+	}
+	if cfg.ReplyMaxBubbles <= 0 {
+		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
+	}
+	if cfg.ForwardReplyChunkThreshold <= 0 {
+		cfg.ForwardReplyChunkThreshold = defaults.ForwardReplyChunkThreshold
 	}
 	if cfg.ForwardReplyThreshold <= 0 {
 		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
@@ -1362,6 +1376,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ProactiveReplyPrompt:           cfg.ProactiveReplyPrompt,
 		MaxInputChars:                  cfg.MaxInputChars,
 		MaxReplyChars:                  cfg.MaxReplyChars,
+		NaturalReplySplitEnabled:       copyBoolPointer(cfg.NaturalReplySplitEnabled),
+		ReplyMaxBubbles:                cfg.ReplyMaxBubbles,
+		ForwardReplyChunkThreshold:     cfg.ForwardReplyChunkThreshold,
 		DirectReplyChunkSize:           cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:          cfg.ForwardReplyThreshold,
 		RecallReplyMode:                cfg.RecallReplyMode,
@@ -1494,6 +1511,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ProactiveReplyPrompt:           payload.ProactiveReplyPrompt,
 		MaxInputChars:                  payload.MaxInputChars,
 		MaxReplyChars:                  payload.MaxReplyChars,
+		NaturalReplySplitEnabled:       copyBoolPointer(payload.NaturalReplySplitEnabled),
+		ReplyMaxBubbles:                payload.ReplyMaxBubbles,
+		ForwardReplyChunkThreshold:     payload.ForwardReplyChunkThreshold,
 		DirectReplyChunkSize:           payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:          payload.ForwardReplyThreshold,
 		RecallReplyMode:                payload.RecallReplyMode,
@@ -1627,14 +1647,41 @@ const defaultSystemPrompt = "你是 Diana，运行在群聊里的机器人。像
 
 const (
 	defaultPromptChineseSlang = "中文聊天里常有谐音梗、音近字、故意错别字、拼音缩写和圈内称呼；回复前先按上下文理解用户真正想表达的梗，能接梗就自然接，不要把梗当错字生硬纠正，也不要过度解释。在闲聊、叙事、氛围描写和开放式表达中，可以遵循当前人设与用户要求，使用贴合语境的比喻、拟人、意象、节奏感和角色口吻，写出有画面感、有辨识度的句子；风格化表达必须带来新的观察、情绪、观点或笑点，不要只堆形容词、套用网感模板或为了文艺牺牲准确。事实、技术和操作说明仍以清楚准确为先。"
-	// defaultPromptPlaintextRules:长回答按意群分条,像真人连发几条;一个列表
-	// 或一组步骤仍是整体,不许逐项拆散。
-	defaultPromptPlaintextRules      = "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。回复较长、包含多个意群时（例如先给结论、再讲理由、最后补提醒），在意群边界写 " + notificationSplitMarker + " 拆成两三条消息，像真人连发几条那样，不要把好几段内容挤进同一条消息。一个编号或项目符号列表、一组步骤是一个整体，放在同一条消息里，严禁在每个列表项前使用 " + notificationSplitMarker + "。"
+	// defaultPromptPlaintextRules 只管排版：聊天窗口不渲染 Markdown。
+	// 「什么时候分成几条消息发」是投递机制，归 replySegmentationRule 这条内置规则，
+	// 不放在这个可编辑文本框里——挂在用户文案上的开关，改一次就再也没人打开了。
+	defaultPromptPlaintextRules      = "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。"
 	defaultPromptTimeTemplate        = "当前时间：{datetime} {weekday}"
 	defaultPromptGroupSenderTemplate = "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。"
 	defaultPromptImageOnly           = "请分析这张图片，并直接回答用户关于图片的问题。"
 	defaultPromptWakeOnly            = "用户只唤醒了你，请自然回应。"
 )
+
+// legacyPromptPlaintextRules 是这个文本框历史上发过的默认文案。它们都自带一段分条
+// 规则，而其中最早那两版说的是「都必须放在同一条消息里」——存过一次就一直压着分条，
+// 升级也不会自己消失，因为 WithDefaults 只在字段为空时才填默认值。
+//
+// 只认逐字相同的旧默认值：用户自己改过的文案是他的决定，不该被升级悄悄改写。
+// 前端「恢复内置提示词」也曾写入过自己那份副本，所以两侧的旧文案都列在这里。
+var legacyPromptPlaintextRules = []string{
+	// 当前默认值的上一版：分条规则还写在这个文本框里，现在由内置规则接管，留着会重复。
+	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。回复较长、包含多个意群时（例如先给结论、再讲理由、最后补提醒），在意群边界写 " + notificationSplitMarker + " 拆成两三条消息，像真人连发几条那样，不要把好几段内容挤进同一条消息。一个编号或项目符号列表、一组步骤是一个整体，放在同一条消息里，严禁在每个列表项前使用 " + notificationSplitMarker + "。",
+	// 再往前两版：明确要求「都必须放在同一条消息里」，这才是分条彻底失效的那份。
+	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 " + notificationSplitMarker + "。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 " + notificationSplitMarker + "。",
+	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <botbr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <botbr>。",
+	"QQ 消息不渲染 Markdown。QQ 默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 QQ 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <botbr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <botbr>。",
+}
+
+// isLegacyPromptPlaintextRules 判断这段文案是不是某个旧版本发出去的默认值。
+func isLegacyPromptPlaintextRules(text string) bool {
+	text = strings.TrimSpace(text)
+	for _, legacy := range legacyPromptPlaintextRules {
+		if text == legacy {
+			return true
+		}
+	}
+	return false
+}
 
 const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 
