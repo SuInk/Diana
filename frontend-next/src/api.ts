@@ -619,6 +619,9 @@ function cacheTTL(method: string, url: string): number {
       return 15_000;
     case "/api/assistant/groups":
       return 8_000;
+    // 昵称基本不变，缓存久一点，编辑器里几行私聊对象就不用各打一次请求了。
+    case "/api/assistant/user-names":
+      return 60_000;
     case "/api/assistant/tasks":
       return 3_000;
     case "/api/assistant/status":
@@ -1433,6 +1436,8 @@ export interface AssistantEventsResponse {
 export interface AssistantEventGroup {
   group_id: string;
   events: number;
+  group_name?: string;
+  avatar_url?: string;
 }
 
 export interface AssistantContextBudgetLayer {
@@ -1538,6 +1543,20 @@ export function listAssistantUsers(query = "", limit = 50, offset = 0, profile =
 export function getAssistantUser(userID: string, profile = ""): Promise<AssistantUserDetailResponse> {
   const suffix = profile ? `?profile=${encodeURIComponent(profile)}` : "";
   return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}${suffix}`);
+}
+
+export interface AssistantUserNamesResponse {
+  /** 只包含查到昵称的号；查不到的号不会出现在这里。 */
+  names: Record<string, string>;
+}
+
+/** 把用户 ID 换成昵称，供各处「填个 QQ 号」的输入框回显。 */
+export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promise<AssistantUserNamesResponse> {
+  const params = new URLSearchParams({ ids: userIDs.join(",") });
+  if (profile) {
+    params.set("profile", profile);
+  }
+  return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
 }
 
 export interface GlossaryRevision {

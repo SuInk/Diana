@@ -3150,6 +3150,13 @@ a.nav-action {
   align-items: center;
 }
 
+/* 私聊对象那一格要摞一行昵称，撑高的是这一格，同行的下拉和删除按钮仍居中对齐。 */
+.target-user {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
 @media (max-width: 620px) {
   .target-row { grid-template-columns: 1fr auto; }
   .target-row > :nth-child(2) { grid-column: 1 / -1; }

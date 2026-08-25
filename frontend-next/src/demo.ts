@@ -122,6 +122,10 @@ const groups: BotGroupSummary[] = [
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
 
+// 机器人见过的人从画像里取名，没见过的走 OneBot get_stranger_info；演示模式两条路
+// 都没有，用这张表补上画像里没有的号。
+const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
+
 const demoUsers: UserMemoryProfile[] = [
   {
     user_id: "100200711", display_name: "青禾", favorability: 62, message_count: 1843, last_seen_at: before(2), updated_at: before(2),
@@ -454,6 +458,15 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const users = matched.map((user) => ({ ...user, memories: undefined, memory_count: user.memories?.length ?? 0 }));
     return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
   }
+  if (path === "/api/assistant/user-names") {
+    const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+    const names: Record<string, string> = {};
+    for (const id of ids) {
+      const name = demoAccountNames[id] ?? demoUsers.find((item) => item.user_id === id)?.display_name ?? "";
+      if (name) names[id] = name;
+    }
+    return json({ names });
+  }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {
     const user = demoUsers.find((item) => item.user_id === decodeURIComponent(userMatch[1]));
@@ -492,7 +505,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/events") {
     const result = url.searchParams.get("result") ?? "all";
     const events = demoEvents.filter((event) => result === "all" || (result === "replied" && event.decision === "replied") || (result === "not_replied" && event.decision === "not_replied") || event.decision === result);
-    return json({ range: url.searchParams.get("range") ?? "24h", result, since: before(1440), events, total: 652, filtered_total: result === "all" ? 652 : result === "replied" ? 50 : result === "not_replied" ? 602 : 0, replied: 50, not_replied: 602, pending: 0, errors: 0, llm_calls: 49, input_tokens: 232_773, output_tokens: 10_732, total_tokens: 243_505, page: 1, limit: 50, has_more: false });
+    return json({ range: url.searchParams.get("range") ?? "24h", result, since: before(1440), events, total: 652, filtered_total: result === "all" ? 652 : result === "replied" ? 50 : result === "not_replied" ? 602 : 0, replied: 50, not_replied: 602, pending: 0, errors: 0, llm_calls: 49, input_tokens: 232_773, output_tokens: 10_732, total_tokens: 243_505, page: 1, limit: 50, has_more: false,
+      // 演示里也带上会话筛选器：以前这里没有 groups，下拉框永远只有「全部会话」，
+      // 看不出真实排版。
+      group: url.searchParams.get("group") ?? "",
+      groups: groups.map((group, index) => ({
+        group_id: group.group_id,
+        events: [291, 272, 170, 11][index] ?? 0,
+        group_name: group.group_name,
+        avatar_url: group.avatar_url
+      }))
+    });
   }
   const traceMatch = path.match(/^\/api\/assistant\/events\/([^/]+)\/trace$/);
   if (traceMatch) return json({ event_id: decodeURIComponent(traceMatch[1]), steps: decodeURIComponent(traceMatch[1]) === "demo-event-1" ? trace : [] });
