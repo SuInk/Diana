@@ -3157,6 +3157,109 @@ a.nav-action {
   min-width: 0;
 }
 
+/* 人设库是一排可点的卡片：点正文套用，点右上角小叉删除。宽度自适应内容，
+   名字下面那行摘要用来区分「猫娘」和「猫娘 v2」这种。 */
+.persona-library {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.persona-saver {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.persona-saver .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.persona-chip {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.persona-chip:hover {
+  border-color: var(--accent);
+}
+
+.persona-chip-apply {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  padding: 7px 10px;
+  max-width: 220px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.persona-chip-apply:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.persona-chip-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.persona-chip-apply small {
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 导出和删除竖着摞在卡片右侧：横着排会把卡片撑得比名字还宽。 */
+.persona-chip-actions {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
+.persona-chip-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.persona-chip-action + .persona-chip-action {
+  border-top: 1px solid var(--border);
+}
+
+.persona-chip-action:hover {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.persona-chip-action.danger:hover {
+  color: var(--danger, #d2453b);
+}
+
+.persona-chip-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 @media (max-width: 620px) {
   .target-row { grid-template-columns: 1fr auto; }
   .target-row > :nth-child(2) { grid-column: 1 / -1; }

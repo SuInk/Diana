@@ -298,8 +298,8 @@ func TestNaturalSplitCanBeTurnedOff(t *testing.T) {
 // 关掉之后提示词也得改口。投递侧不再按换行分条、提示词却还写着「换行会分条」的话，
 // 模型排的版就全落空了——分条位置又变回看模型的排版习惯，正是这条链路翻过车的形状。
 func TestPromptFollowsTheNaturalSplitSwitch(t *testing.T) {
-	on := ReplyStyleAssistant.prompt(true)
-	off := ReplyStyleAssistant.prompt(false)
+	on := ReplyStyleAssistant.prompt(true, personaVoice{})
+	off := ReplyStyleAssistant.prompt(false, personaVoice{})
 	if !strings.Contains(on, "意群边界换行") {
 		t.Fatalf("开着的时候应该教换行分条：%q", on)
 	}

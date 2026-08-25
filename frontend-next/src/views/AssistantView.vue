@@ -569,15 +569,79 @@
               </button>
             </div>
             <div class="card-body form-grid">
+              <!-- 人设库是「套用来源」：点一下把下面四项填好，改不改随你，按保存才生效。
+                   它不是活绑定——库里那份之后再改，不会偷偷影响已经保存的机器人。 -->
+              <div class="field wide">
+                <div class="field-head">
+                  <label>人设库</label>
+                  <div class="cluster">
+                    <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaLibrary.length" @click="exportPersonaLibrary">
+                      <Download :size="14" aria-hidden="true" />
+                      导出
+                    </button>
+                    <button class="btn small" type="button" :disabled="personaLibraryBusy" @click="personaFileInputClick">
+                      <Upload :size="14" aria-hidden="true" />
+                      导入
+                    </button>
+                    <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
+                      <BookmarkPlus :size="14" aria-hidden="true" />
+                      {{ personaSaverOpen ? "取消" : "存为人设" }}
+                    </button>
+                  </div>
+                </div>
+                <input ref="personaFileInput" type="file" accept="application/json" style="display: none" @change="importPersonaFile" />
+                <div v-if="personaSaverOpen" class="persona-saver">
+                  <input
+                    ref="personaNameInput"
+                    v-model.trim="personaNameDraft"
+                    class="input"
+                    maxlength="40"
+                    placeholder="给这套人设起个名字，例如 猫娘"
+                    @keydown.enter.prevent="storeCurrentPersona"
+                    @keydown.esc="personaSaverOpen = false"
+                  />
+                  <button class="btn primary small" type="button" :disabled="personaLibraryBusy || !personaNameDraft" @click="storeCurrentPersona">
+                    {{ personaSaverExisting ? "覆盖同名人设" : "保存" }}
+                  </button>
+                </div>
+                <div v-if="personaLibrary.length" class="persona-library">
+                  <div v-for="persona in personaLibrary" :key="persona.id" class="persona-chip">
+                    <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :title="personaSummary(persona)" @click="applyPersona(persona)">
+                      <span class="persona-chip-name">{{ persona.name }}</span>
+                      <small class="muted">{{ personaSummary(persona) }}</small>
+                    </button>
+                    <span class="persona-chip-actions">
+                      <button type="button" class="persona-chip-action" :aria-label="`导出人设 ${persona.name}`" :title="`导出人设 ${persona.name}`" @click="exportPersona(persona)">
+                        <Download :size="13" aria-hidden="true" />
+                      </button>
+                      <button type="button" class="persona-chip-action danger" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
+                        <Trash2 :size="13" aria-hidden="true" />
+                      </button>
+                    </span>
+                  </div>
+                </div>
+                <span v-if="!personaLibrary.length" class="hint">还没存过人设。把下面几项调好，点「存为人设」就能收进来，之后一键换回。</span>
+                <span v-else class="hint">点一下套用到下面四项，确认后按保存才生效；库里的改动不会影响已经保存的机器人。</span>
+              </div>
               <div class="field">
                 <label for="bot-reply-style">表达风格</label>
                 <AppSelect
                   id="bot-reply-style"
                   :model-value="form.reply_style ?? 'assistant'"
                   :options="replyStyleOptions"
-                  @update:model-value="(value) => { if (form) form.reply_style = value as 'groupmate' | 'assistant' | 'gentle' | 'lively' | 'concise' | 'catgirl'; }"
+                  @update:model-value="(value) => applyReplyStyle(value as ReplyStyleKey)"
                 />
                 <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
+              </div>
+              <div class="field">
+                <label for="bot-self-reference">自称</label>
+                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随表达风格，例如 我 / 本喵 / 咱" />
+                <span class="hint">机器人怎么称呼自己。</span>
+              </div>
+              <div class="field wide">
+                <label for="bot-sentence-enders">句尾语气词</label>
+                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" placeholder="留空跟随表达风格，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
+                <span class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
               </div>
               <div class="field">
                 <label for="bot-response-mode">回复模式</label>
@@ -930,8 +994,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
-import { ArrowLeft, Bot, ChevronRight, Copy, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
+import { ArrowLeft, BookmarkPlus, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -950,7 +1014,13 @@ import {
   type BotProfileConfig,
   type BotChannelStatus,
   type BotPlatform,
-  type AliasTriggerMode
+  type AliasTriggerMode,
+  listPersonas,
+  savePersona,
+  deletePersona,
+  importPersonas,
+  PERSONA_EXPORT_VERSION,
+  type Persona
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -1155,6 +1225,224 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "off", label: "从不 @" },
   { value: "auto", label: "让模型自己决定" }
 ];
+
+type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+
+// 人设库。存的是「它是谁、怎么说话」的四项组合，套用是把它们填进下面的表单——
+// 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
+const personaLibrary = ref<Persona[]>([]);
+const personaLibraryBusy = ref(false);
+
+// 四项全空的不值得存：存进去列表里点开也是空的，还占一格。
+const personaHasContent = computed(() => {
+  const current = form.value;
+  if (!current) return false;
+  return Boolean(
+    current.system_prompt?.trim() ||
+      current.self_reference?.trim() ||
+      current.sentence_enders?.trim() ||
+      (current.reply_style && current.reply_style !== "assistant")
+  );
+});
+
+function personaSummary(persona: Persona): string {
+  const parts: string[] = [];
+  const styleLabel = replyStyleOptions.find((option) => option.value === persona.reply_style)?.label;
+  if (styleLabel) parts.push(styleLabel);
+  if (persona.self_reference) parts.push(`自称${persona.self_reference}`);
+  if (persona.sentence_enders) parts.push(persona.sentence_enders.split(/[,，]/)[0].trim());
+  if (!parts.length && persona.system_prompt) parts.push(persona.system_prompt.trim().slice(0, 12));
+  return parts.join(" · ");
+}
+
+async function loadPersonaLibrary(): Promise<void> {
+  try {
+    personaLibrary.value = (await listPersonas()).personas ?? [];
+  } catch {
+    // 人设库读不出来不该挡住整个机器人页：它只是个快捷方式，缺了不影响配置本身。
+    personaLibrary.value = [];
+  }
+}
+
+// 套用只填表单，不写配置：用户看着它改、自己按保存，跟表达风格预设一个路数。
+function applyPersona(persona: Persona): void {
+  if (!form.value) return;
+  form.value.system_prompt = persona.system_prompt ?? "";
+  form.value.reply_style = (persona.reply_style || "assistant") as ReplyStyleKey;
+  form.value.self_reference = persona.self_reference ?? "";
+  form.value.sentence_enders = persona.sentence_enders ?? "";
+  toastSuccess(`已套用「${persona.name}」，确认后记得保存配置`);
+}
+
+const personaSaverOpen = ref(false);
+const personaNameDraft = ref("");
+const personaNameInput = ref<HTMLInputElement | null>(null);
+
+// 同名就是改那一套，不然反复点会存出一串同名的，列表里分不清哪个是哪个。
+const personaSaverExisting = computed(() =>
+  Boolean(personaNameDraft.value && personaLibrary.value.some((persona) => persona.name === personaNameDraft.value))
+);
+
+function togglePersonaSaver(): void {
+  personaSaverOpen.value = !personaSaverOpen.value;
+  if (!personaSaverOpen.value) return;
+  personaNameDraft.value = (form.value?.name ?? "").trim();
+  void nextTick(() => personaNameInput.value?.focus());
+}
+
+async function storeCurrentPersona(): Promise<void> {
+  const current = form.value;
+  const name = personaNameDraft.value.trim();
+  if (!current || !personaHasContent.value || !name) return;
+  const sameName = personaLibrary.value.find((persona) => persona.name === name);
+  personaLibraryBusy.value = true;
+  try {
+    const response = await savePersona({
+      ...(sameName ? { id: sameName.id } : {}),
+      name,
+      system_prompt: current.system_prompt ?? "",
+      reply_style: current.reply_style ?? "assistant",
+      self_reference: current.self_reference ?? "",
+      sentence_enders: current.sentence_enders ?? ""
+    });
+    personaLibrary.value = response.personas ?? [];
+    personaSaverOpen.value = false;
+    personaNameDraft.value = "";
+    toastSuccess(sameName ? `已更新人设「${name}」` : `已存为人设「${name}」`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "人设保存失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
+const personaFileInput = ref<HTMLInputElement | null>(null);
+
+function personaFileInputClick(): void {
+  personaFileInput.value?.click();
+}
+
+// 单套和整库导出的是同一种文件（personas 数组里放一个还是放几个而已），
+// 所以单套文件也能直接被导入，不用为它另开一条读取分支。
+// 不导 id 和 updated_at：id 是本机的，导到别处只会撞车（后端也一律重新分配）。
+function personaExportPayload(personas: Persona[]): string {
+  return JSON.stringify(
+    {
+      version: PERSONA_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      personas: personas.map((persona) => ({
+        name: persona.name,
+        system_prompt: persona.system_prompt ?? "",
+        reply_style: persona.reply_style ?? "",
+        self_reference: persona.self_reference ?? "",
+        sentence_enders: persona.sentence_enders ?? ""
+      }))
+    },
+    null,
+    2
+  );
+}
+
+function downloadPersonaFile(fileName: string, content: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+// 人设名是用户随便起的，可能带 / \ : 这类在文件名里非法或有歧义的字符。
+// 中日韩字符本身没问题，所以只挑掉真正危险的那几个，不做整体转拼音。
+function personaFileSlug(name: string): string {
+  const slug = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "").trim();
+  return slug || "persona";
+}
+
+// 导出直接用内存里那份：它就是整库，再跑一趟接口拿不到别的东西。
+function exportPersonaLibrary(): void {
+  downloadPersonaFile(`diana-personas-${new Date().toISOString().slice(0, 10)}.json`, personaExportPayload(personaLibrary.value));
+}
+
+function exportPersona(persona: Persona): void {
+  downloadPersonaFile(`diana-persona-${personaFileSlug(persona.name)}-${new Date().toISOString().slice(0, 10)}.json`, personaExportPayload([persona]));
+}
+
+async function importPersonaFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // 先清掉选中的文件：不清的话连续选同一个文件不会再触发 change。
+  input.value = "";
+  if (!file) return;
+
+  personaLibraryBusy.value = true;
+  try {
+    const parsed = JSON.parse(await file.text()) as unknown;
+    // 导出文件是 {personas: [...]}，但手写或从别处拿到的可能就是个数组，
+    // 甚至是单独一套。三种都收下，没必要为格式挑剔到让人回去改文件。
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as { personas?: unknown }).personas)
+        ? (parsed as { personas: unknown[] }).personas
+        : [parsed];
+    const result = await importPersonas(list as Persona[]);
+    personaLibrary.value = result.personas ?? [];
+    const notes = [`导入 ${result.imported} 套`];
+    if (result.renamed) notes.push(`${result.renamed} 套重名已改名`);
+    if (result.skipped) notes.push(`${result.skipped} 套重复已跳过`);
+    if (result.dropped) notes.push(`${result.dropped} 套无效已忽略`);
+    toastSuccess(notes.join("，"));
+  } catch (error) {
+    toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "人设导入失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
+async function removePersona(persona: Persona): Promise<void> {
+  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份，已经保存到机器人上的配置不受影响。", danger: true, confirmLabel: "删除" }))) {
+    return;
+  }
+  personaLibraryBusy.value = true;
+  try {
+    personaLibrary.value = (await deletePersona(persona.id)).personas ?? [];
+    toastSuccess(`已删除人设「${persona.name}」`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "人设删除失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
+// 每个风格自带的自称和句尾候选，和后端 DefaultPersonaVoice 保持一致。
+const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence_enders: string }> = {
+  groupmate: { self_reference: "", sentence_enders: "" },
+  assistant: { self_reference: "", sentence_enders: "" },
+  gentle: { self_reference: "", sentence_enders: "" },
+  lively: { self_reference: "", sentence_enders: "" },
+  concise: { self_reference: "", sentence_enders: "" },
+  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" }
+};
+
+// 切换风格时把这两个框填上，而不是运行时暗中套用：填进去用户看得见、能改。
+// 只覆盖空的、或还停留在上一个风格默认值的——用户自己改过的不动，否则来回切
+// 两下风格就把人家写的东西冲没了。
+function applyReplyStyle(value: ReplyStyleKey): void {
+  if (!form.value) return;
+  const previous = replyStyleVoices[(form.value.reply_style ?? "assistant") as ReplyStyleKey];
+  const next = replyStyleVoices[value];
+  form.value.reply_style = value;
+  const untouched = (current: string | undefined, wasDefault: string) => {
+    const trimmed = (current ?? "").trim();
+    return trimmed === "" || trimmed === wasDefault;
+  };
+  if (untouched(form.value.self_reference, previous?.self_reference ?? "")) {
+    form.value.self_reference = next.self_reference;
+  }
+  if (untouched(form.value.sentence_enders, previous?.sentence_enders ?? "")) {
+    form.value.sentence_enders = next.sentence_enders;
+  }
+}
 
 const replyStyleOptions: AppSelectOption[] = [
   { value: "groupmate", label: "群友" },
@@ -1609,6 +1897,8 @@ function setForm(config: BotProfileConfig): void {
     natural_interjection_enabled: config.natural_interjection_enabled ?? false,
     response_mode: config.response_mode ?? "custom",
     reply_style: config.reply_style ?? "assistant",
+    self_reference: config.self_reference ?? "",
+    sentence_enders: config.sentence_enders ?? "",
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
     prompt_inject_plaintext_rules: config.prompt_inject_plaintext_rules ?? true,
@@ -1923,6 +2213,9 @@ onBeforeUnmount(() => {
 
 onMounted(async () => {
   trackHeaderHeight();
+  // 人设库单独拉，不放进下面那组 Promise.all：它只是个快捷方式，
+  // 慢一点或者读不出来都不该拖住机器人配置本身的加载。
+  void loadPersonaLibrary();
   const [platformResult, botConfig, llmConfig] = await Promise.all([
     getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),
     getBotProfileConfig().catch((error: unknown) => {
