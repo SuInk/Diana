@@ -354,6 +354,7 @@ type BotConfig struct {
 	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyBubbleTargetSize        int             `json:"reply_bubble_target_size,omitempty"`
 	ReplyShortReplySize          int             `json:"reply_short_reply_size,omitempty"`
 	ReplyMaxShortBubbles         int             `json:"reply_max_short_bubbles,omitempty"`
@@ -569,6 +570,7 @@ type ConfigPayload struct {
 	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyBubbleTargetSize        int             `json:"reply_bubble_target_size,omitempty"`
 	ReplyShortReplySize          int             `json:"reply_short_reply_size,omitempty"`
 	ReplyMaxShortBubbles         int             `json:"reply_max_short_bubbles,omitempty"`
@@ -1401,6 +1403,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ProactiveReplyPrompt:           cfg.ProactiveReplyPrompt,
 		MaxInputChars:                  cfg.MaxInputChars,
 		MaxReplyChars:                  cfg.MaxReplyChars,
+		NaturalReplySplitEnabled:       copyBoolPointer(cfg.NaturalReplySplitEnabled),
 		ReplyBubbleTargetSize:          cfg.ReplyBubbleTargetSize,
 		ReplyShortReplySize:            cfg.ReplyShortReplySize,
 		ReplyMaxShortBubbles:           cfg.ReplyMaxShortBubbles,
@@ -1538,6 +1541,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ProactiveReplyPrompt:           payload.ProactiveReplyPrompt,
 		MaxInputChars:                  payload.MaxInputChars,
 		MaxReplyChars:                  payload.MaxReplyChars,
+		NaturalReplySplitEnabled:       copyBoolPointer(payload.NaturalReplySplitEnabled),
 		ReplyBubbleTargetSize:          payload.ReplyBubbleTargetSize,
 		ReplyShortReplySize:            payload.ReplyShortReplySize,
 		ReplyMaxShortBubbles:           payload.ReplyMaxShortBubbles,

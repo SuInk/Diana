@@ -5239,7 +5239,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Message) []llm.Message {
 	cfg := r.effectiveConfigForEvent(event)
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt() + "\n" + cfg.ReplyStyle.closingAnchor())
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true)) + "\n" + cfg.ReplyStyle.closingAnchor())
 	if persona == "" {
 		return messages
 	}
@@ -5295,7 +5295,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		return false
 	}
 	builder.WriteString(cfg.SystemPrompt)
-	appendPromptSection(&builder, cfg.ReplyStyle.prompt())
+	appendPromptSection(&builder, cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true)))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) {
@@ -10461,6 +10461,9 @@ type chatSplitLimits struct {
 	ShortReply   int // 短回复与长回复的分界
 	MaxShort     int // 短回复的条数上限，分不进就整条发
 	MaxLong      int // 长回复的条数上限
+	// MarkerOnly 关掉自然分条：只认模型显式写的 <dianabr>，换行和句号都只当排版。
+	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
+	MarkerOnly bool
 }
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
@@ -10470,6 +10473,7 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 		ShortReply:   cfg.ReplyShortReplySize,
 		MaxShort:     cfg.ReplyMaxShortBubbles,
 		MaxLong:      cfg.ReplyMaxLongBubbles,
+		MarkerOnly:   !boolValue(cfg.NaturalReplySplitEnabled, true),
 	}
 }
 
@@ -10517,6 +10521,11 @@ const (
 // 逐档退让而不是一刀切回整条：三行长文按句子分是六条、超了，但三行本身就是三条，
 // 正好；直接退回整条会把模型分好的三行糊成一个两百多字的气泡。
 func chatReplySegments(reply string, limits chatSplitLimits) []string {
+	// 关掉自然分条之后只认标记。模型显式写的 <dianabr> 仍然照做——那是它明说要分，
+	// 关掉的是运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
+	if limits.MarkerOnly {
+		return splitChatReplyAtDepth(reply, limits, splitAtMarker)
+	}
 	max := limits.maxBubblesFor(reply)
 	for _, depth := range []chatReplySplitDepth{splitAtSentence, splitAtLine, splitAtMarker} {
 		if parts := splitChatReplyAtDepth(reply, limits, depth); len(parts) <= max {
