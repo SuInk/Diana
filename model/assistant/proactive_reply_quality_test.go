@@ -121,9 +121,21 @@ func TestProactiveReplyQualityPromptJudgesOnlyObservableDimensions(t *testing.T)
 	}
 }
 
+func TestReplySafetyPromptScopesPoliticsToMainlandChina(t *testing.T) {
+	prompt := proactiveReplyQualityPrompt
+	for _, must := range []string{
+		"中国大陆涉政", "中国大陆以外", "美国州总检察长", "传票", "必须放行",
+		"account_risk_reason", "不得自行扩大 politics",
+	} {
+		if !strings.Contains(prompt, must) {
+			t.Fatalf("账号安全提示词缺少 %q: %s", must, prompt)
+		}
+	}
+}
+
 // 账号安全是一票否决：表达质量再高、置信度再高也拦。
 func TestJudgeProactiveReplyRejectsAccountUnsafeContent(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"reason":"口吻自然","account_safe":false,"account_risk":"politics"}`}
+	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"reason":"口吻自然","account_safe":false,"account_risk":"politics","account_risk_reason":"评价中国大陆现实政治人物"}`}
 	runtime := NewRuntime(BotConfig{
 		BotAccount:              "42",
 		ProactiveReplyThreshold: 0.9,
@@ -137,9 +149,26 @@ func TestJudgeProactiveReplyRejectsAccountUnsafeContent(t *testing.T) {
 	if !strings.Contains(err.Error(), "账号安全") || !strings.Contains(err.Error(), "涉政内容") {
 		t.Fatalf("error should name the account-safety reason: %v", err)
 	}
+	if !strings.Contains(err.Error(), "评价中国大陆现实政治人物") || strings.Contains(err.Error(), "口吻自然") {
+		t.Fatalf("error should use the dedicated risk reason, not quality reason: %v", err)
+	}
 	var safetyErr *replyAccountSafetyRejectedError
 	if !errors.As(err, &safetyErr) {
 		t.Fatalf("error type = %T, want a dedicated account-safety error", err)
+	}
+}
+
+func TestReplyAuditParsesDedicatedAccountRiskReason(t *testing.T) {
+	decision, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.95,"reason":"结构清晰","account_safe":false,"account_risk":"politics","account_risk_reason":"涉及中国大陆党政机构评价"}`)
+	if !ok {
+		t.Fatal("decision did not parse")
+	}
+	if decision.AccountRiskReason != "涉及中国大陆党政机构评价" {
+		t.Fatalf("risk reason = %q", decision.AccountRiskReason)
+	}
+	err := accountSafetyError(decision)
+	if err == nil || !strings.Contains(err.Error(), decision.AccountRiskReason) || strings.Contains(err.Error(), decision.Reason) {
+		t.Fatalf("account safety error mixed quality and risk reasons: %v", err)
 	}
 }
 
