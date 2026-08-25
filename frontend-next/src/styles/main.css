@@ -483,6 +483,80 @@ code {
   height: 44px;
 }
 
+/* 后端连不上时的整页报错：沿用登录页的卡片骨架，只是宽一点、左对齐正文。 */
+.backend-down {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+}
+
+.backend-down-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(460px, 100%);
+  padding: 32px 28px;
+  border-radius: var(--radius-lg, 14px);
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 12%);
+}
+
+.backend-down-card h1 {
+  margin: 0;
+  font-size: 20px;
+  text-align: center;
+}
+
+.backend-down-card > .muted {
+  margin: -6px 0 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.backend-down-mark {
+  align-self: center;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger, #e5484d) 14%, transparent);
+  color: var(--danger, #e5484d);
+}
+
+.backend-down-detail {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.backend-down-hints {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.backend-down-countdown {
+  margin: -6px 0 0;
+  text-align: center;
+  font-size: 12.5px;
+}
+
 .password-field {
   position: relative;
 }
