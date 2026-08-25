@@ -10397,29 +10397,19 @@ func splitReply(reply string, chunkSize int) []string {
 	return out
 }
 
-// replyNaturalLineMaxLines 是「换行即分条」适用的最大行数。
+// splitChatReply 是聊天发言的分条：把一条回复切成几次发言。
 //
-// 两三行是「连着说了两三句」，再多就不是连发而是一段结构化内容（清单、步骤、
-// 逐条说明），那种整块发出去才读得下来。
-const replyNaturalLineMaxLines = 3
-
-// replyNaturalLineMinStructuredLines 是判定为清单的最少行数。一行「短标签：内容」
-// 在普通聊天里很常见（「assertiveness：坚定自信……」就是），不该因此堵掉分条；
-// 两行以上同一形状才是真的在列清单。
-const replyNaturalLineMinStructuredLines = 2
-
-// splitChatReply 是聊天发言的分条：在 splitReply 的基础上，把短回复里的单个换行
-// 也当成分条信号。
+// 只认 <dianabr> 的问题是它把分条押在模型愿不愿意写一个内部标记上。模型对这种元
+// 标记的服从度本来就不稳定，而它真正会稳定产出的边界信号是换行和句号。所以运行时
+// 认三种边界，按「谁给的」排序：
 //
-// 只认 <dianabr> 的问题是它把分条押在模型愿不愿意写一个内部标记上。模型对这种
-// 元标记的服从度本来就不稳定，而它真正会稳定产出的边界信号是换行——「释义一行、
-// 常见翻译一行」这种两行回复，模型换了行，人也觉得该是两条，却因为没写标记糊成
-// 一个气泡。与其反复加强提示词，不如让运行时认它自然会产生的那个信号。
+//	标记  模型明说要分       无条件
+//	换行  模型自己排的版     照做
+//	句号  运行时自己推断的   只在这一行明显偏长时才用
 //
-// 早先有过一版「空行分条」被删掉，理由是「同一个符号两边理解不一样，分条位置全
-// 看模型的排版习惯」。那条教训这里仍然成立，所以这一版是有界的：只在两三行、且
-// 不像清单、且上一行不是断在半句话上时才认。超出这个范围的换行仍然只是排版。
-// 提示词那侧同步说明了同一套边界（见 replySegmentationRule），两边理解一致。
+// 条数由 replyMaxChatBubbles 兜底，而且是「要么分好，要么别分」：分不进上限就退回
+// 粗一档，退到底就整条发。不做「超出的并进最后一条」——那会让最后一条拖着个尾巴，
+// 反问被粘在陈述句后面就是这么来的。
 func splitChatReply(reply string, chunkSize int, bubbleTarget int) []string {
 	if chunkSize <= 0 {
 		chunkSize = notificationChunkSize
@@ -10431,58 +10421,133 @@ func splitChatReply(reply string, chunkSize int, bubbleTarget int) []string {
 	if reply == "" {
 		return nil
 	}
-	// 先按模型自己给的信号分段：显式标记和换行。这两样是它明说的，照做。
-	var segments []string
-	for _, part := range strings.Split(reply, notificationSplitMarker) {
-		segments = append(segments, splitReplyNaturalLines(part)...)
-	}
 	var out []string
-	for index, segment := range segments {
-		// 按句子细分是运行时自己加的那一层，额度紧张时先让它退。后面每个段至少还要
-		// 占一条，先把那些额度留出来再看这一段能拆几条。
-		allowance := replyMaxChatBubbles - len(out) - (len(segments) - index - 1)
-		bubbles := []string{segment}
-		if allowance > 1 {
-			bubbles = splitReplySentences(segment, bubbleTarget, allowance)
-		}
-		for _, bubble := range bubbles {
-			// 长度兜底不受条数上限约束：它守的是平台能不能发得出去，不是好不好看。
-			for _, chunk := range chunkTextByLength(bubble, chunkSize) {
-				out = append(out, trimChatTrailingPeriod(chunk))
-			}
+	for _, segment := range chatReplySegments(reply, bubbleTarget) {
+		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
+		for _, chunk := range chunkTextByLength(segment, chunkSize) {
+			out = append(out, trimChatTrailingPeriod(chunk))
 		}
 	}
 	return out
 }
 
-// replyMaxChatBubbles 是一条回复最多拆成几条。
+// replyMaxChatBubbles 是分条后允许的条数。超过这个数就不分了：几条小气泡挤在一起
+// 比一条完整的消息更难读。
+const replyMaxChatBubbles = 3
+
+// chatReplySplitDepth 是分条的精细程度，由细到粗。
+type chatReplySplitDepth int
+
+const (
+	splitAtSentence chatReplySplitDepth = iota // 标记 + 换行 + 句号
+	splitAtLine                                // 标记 + 换行
+	splitAtMarker                              // 只认标记
+)
+
+// chatReplySegments 由细到粗依次尝试，返回第一档不超过条数上限的结果。
 //
-// 分条有三层，每层都可能再拆一次：标记、换行、句子。上限如果按段算就会相乘——
-// 模型写两行、每行拆三条就是六条，再加个标记能到九条，群里看着就是刷屏。所以这个
-// 数管的是整条回复，而且只约束「按句子细分」这一层：标记和换行是模型明说要分的，
-// 照做；细分是运行时自己加的，该退的时候先退它。
-const replyMaxChatBubbles = 4
+// 逐档退让而不是一刀切回整条：三行长文按句子分是六条、超了，但三行本身就是三条，
+// 正好；直接退回整条会把模型分好的三行糊成一个两百多字的气泡。
+func chatReplySegments(reply string, target int) []string {
+	for _, depth := range []chatReplySplitDepth{splitAtSentence, splitAtLine, splitAtMarker} {
+		if parts := splitChatReplyAtDepth(reply, target, depth); len(parts) <= replyMaxChatBubbles {
+			return parts
+		}
+	}
+	return []string{reply}
+}
+
+func splitChatReplyAtDepth(reply string, target int, depth chatReplySplitDepth) []string {
+	var out []string
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if depth == splitAtMarker {
+			out = append(out, part)
+			continue
+		}
+		lines := splitReplyLines(part)
+		if depth == splitAtLine {
+			out = append(out, lines...)
+			continue
+		}
+		for _, line := range lines {
+			out = append(out, balanceLineIntoBubbles(line, target)...)
+		}
+	}
+	return out
+}
+
+// splitReplyLines 按换行分段。成块的内容（清单、步骤、代码）整块发，折了行的半句
+// 话跟着上一行走——那不是说完了一句，是排版换的行。
+func splitReplyLines(part string) []string {
+	if !strings.Contains(part, "\n") {
+		return []string{part}
+	}
+	if looksStructuredBlock(part) {
+		return []string{part}
+	}
+	var out []string
+	pending := ""
+	for _, line := range strings.Split(part, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if pending != "" {
+			line = pending + "\n" + line
+			pending = ""
+		}
+		if endsMidSentence(line) {
+			pending = line
+			continue
+		}
+		out = append(out, line)
+	}
+	if pending != "" {
+		out = append(out, pending)
+	}
+	if len(out) == 0 {
+		return []string{part}
+	}
+	return out
+}
+
+// looksStructuredBlock 判断这几行是不是一份清单、一组步骤这类整体。两行以上同一
+// 形状才算：一行「短标签：内容」在普通聊天里太常见，不该因此堵掉分条。
+func looksStructuredBlock(text string) bool {
+	structured := 0
+	for _, line := range strings.Split(text, "\n") {
+		if isStructuredReplyLine(strings.TrimSpace(line)) {
+			structured++
+			if structured >= 2 {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // trimChatTrailingPeriod 去掉聊天消息末尾那个句号。
 //
 // 提示词里早就有 replyTrailingPunctuationRule 说「结尾不要用句号收尾」，理由是
-// 一条「知道了。」读起来是公事公办的冷淡，真人不这么打字。但那和分条一样，是押在
-// 模型愿不愿意照做上的；按句子分条之后这件事还更显眼了——一段话拆成三条，就有三个
-// 句号排在那儿。
+// 一条「知道了。」读起来是公事公办的冷淡。但那和分条一样，是押在模型愿不愿意照做
+// 上的；按句子分条之后还更显眼——一段话拆成几条，就有几个句号排在那儿。
 //
 // 只动整条消息最后那一个，而且只动句号：
-//   - 问号和感叹号承载语气，删了意思就变了（提示词里同样把它们排除在外）
+//   - 问号和感叹号承载语气，删了意思就变了
 //   - 省略号是话没说完，不是句读
 //   - 英文句点在缩写、域名、版本号里到处都是，v1.0 和 example.com. 分不清，不碰
-//   - 收在引号、括号、代码里的句号属于被引用的内容，不是这条消息自己的句读
-//   - 删完变成空的就不删（一条消息只有一个「。」的情况）
+//   - 收在引号、括号里的句号属于被引用的内容，不是这条消息自己的句读
+//   - 删完变成空的就不删
 func trimChatTrailingPeriod(text string) string {
 	trimmed := strings.TrimRight(text, " \t")
 	runes := []rune(trimmed)
 	if len(runes) < 2 || runes[len(runes)-1] != '。' {
 		return text
 	}
-	// 「……。」这种前面还跟着省略号的，句号删不删都别扭，原样留着。
 	if prev := runes[len(runes)-2]; prev == '…' || prev == '。' {
 		return text
 	}
@@ -10508,77 +10573,66 @@ func hasUnclosedQuote(runes []rune) bool {
 	return depth > 0
 }
 
-// replyBubbleTargetRunes 是一条聊天消息读着舒服的长度。超过这个数就该考虑分条，
-// 而不是等到撞上 DirectReplyChunkSize——那是「一条最多能有多长」的硬上限，两个
-// 数字管的不是同一件事，共用一个会重蹈当年 structuredReplyChunkSize 的覆辙。
+// replyBubbleTargetRunes 是一条聊天消息读着舒服的长度。它决定一行要不要按句子再分，
+// 以及分成几条——不是硬上限，硬上限是 DirectReplyChunkSize，两个数管的不是同一件事。
 const replyBubbleTargetRunes = 60
 
-// replyMaxSentenceBubbles 限制按句子拆出来的条数。提示词说的是「拆成两三条」，
-// 一段话散成五六条就从「像真人连发」变成刷屏了；超出的部分并进最后一条。
-const replyMaxSentenceBubbles = 3
-
-// splitReplySentences 把一整段没有换行的长回复按句子分成两三条。
+// balanceLineIntoBubbles 把一行按句子等分。份数取 ceil(长度/目标)，每一刀切在最接近
+// 等分点的句末。
 //
-// 换行分条要模型愿意换行，<dianabr> 要模型愿意写标记——都还押在模型的配合上。
-// 一段 113 字、四句话、一个换行都没有的回复，三层机制会一起空转，最后糊成一个
-// 宽气泡。所以最后这层不依赖模型给任何信号：句号本来就是它写出来的边界。
-//
-// 只在明显偏长时才动手。短回复里的两句话本来就是一条消息（「端口被占了。先 lsof
-// 看看是谁占着。」），拆开反而不像人说话。
-func splitReplySentences(text string, target int, maxBubbles int) []string {
-	// 带换行的说明它是个成块的东西——清单、步骤、代码、引用的诗文。走到这里意味着
-	// splitReplyNaturalLines 已经判定不该按行拆，那按句子拆更不该。
-	if strings.Contains(text, "\n") {
-		return []string{text}
-	}
-	runes := []rune(strings.TrimSpace(text))
+// 等分而不是「攒够 target 就切」：贪心填满会让最后一条拖着剩下的全部，一句独立的
+// 反问被粘在陈述句后面就是这么来的。
+func balanceLineIntoBubbles(line string, target int) []string {
+	runes := []rune(line)
 	if target <= 0 {
 		target = replyBubbleTargetRunes
 	}
-	if maxBubbles > replyMaxSentenceBubbles {
-		maxBubbles = replyMaxSentenceBubbles
+	want := (len(runes) + target - 1) / target
+	if want < 2 {
+		return []string{line}
 	}
-	if maxBubbles < 2 {
-		return []string{text}
+	if want > replyMaxChatBubbles {
+		want = replyMaxChatBubbles
 	}
-	if len(runes) <= target {
-		return []string{text}
+	ends := sentenceEndPositions(runes)
+	if len(ends) == 0 {
+		return []string{line}
 	}
-	sentences := splitIntoSentences(runes)
-	if len(sentences) < 2 {
-		return []string{text}
-	}
-	bubbles := make([]string, 0, maxBubbles)
-	current := ""
-	for index, sentence := range sentences {
-		// 已经攒到最后一条了，剩下的全并进去，别散成刷屏。
-		if len(bubbles) == maxBubbles-1 {
-			current += strings.Join(sentences[index:], "")
+	var out []string
+	start := 0
+	for piece := 1; piece < want; piece++ {
+		ideal := len(runes) * piece / want
+		best := -1
+		for _, end := range ends {
+			if end <= start || end >= len(runes) {
+				continue
+			}
+			if best < 0 || absInt(end-ideal) < absInt(best-ideal) {
+				best = end
+			}
+		}
+		if best < 0 {
 			break
 		}
-		if current != "" && len([]rune(current+sentence)) > target {
-			bubbles = append(bubbles, current)
-			current = sentence
-			continue
+		if text := strings.TrimSpace(string(runes[start:best])); text != "" {
+			out = append(out, text)
 		}
-		current += sentence
+		start = best
 	}
-	if trimmed := strings.TrimSpace(current); trimmed != "" {
-		bubbles = append(bubbles, trimmed)
+	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
+		out = append(out, tail)
 	}
-	if len(bubbles) < 2 {
-		return []string{text}
+	if len(out) == 0 {
+		return []string{line}
 	}
-	return bubbles
+	return out
 }
 
-// splitIntoSentences 按句末标点切句，标点跟着前一句走。
-//
-// 引号和括号里的句号不算边界：「他说「我不去。」然后就走了」拆开就散架了。
-func splitIntoSentences(runes []rune) []string {
-	var out []string
+// sentenceEndPositions 返回每个句末标点之后的位置。引号括号里的句号不算边界：
+// 「他说「我不去。」然后走了」拆开就散架了；连着的句末标点（「？！」）算一个。
+func sentenceEndPositions(runes []rune) []int {
+	var out []int
 	depth := 0
-	start := 0
 	for i, r := range runes {
 		switch r {
 		case '「', '『', '（', '(', '【', '《', '“':
@@ -10591,46 +10645,19 @@ func splitIntoSentences(runes []rune) []string {
 		if depth > 0 || !isSentenceEnd(r) {
 			continue
 		}
-		// 连着的句末标点（「？！」「……」）算同一个边界。
 		if i+1 < len(runes) && isSentenceEnd(runes[i+1]) {
 			continue
 		}
-		if sentence := strings.TrimSpace(string(runes[start : i+1])); sentence != "" {
-			out = append(out, sentence)
-		}
-		start = i + 1
-	}
-	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
-		out = append(out, tail)
+		out = append(out, i+1)
 	}
 	return out
 }
 
-// splitReplyNaturalLines 把一段短回复按换行拆成几次发言；不符合条件时原样返回。
-func splitReplyNaturalLines(part string) []string {
-	lines := make([]string, 0, replyNaturalLineMaxLines)
-	for _, line := range strings.Split(part, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			lines = append(lines, trimmed)
-		}
+func absInt(n int) int {
+	if n < 0 {
+		return -n
 	}
-	if len(lines) < 2 || len(lines) > replyNaturalLineMaxLines {
-		return []string{part}
-	}
-	structured := 0
-	for index, line := range lines {
-		if isStructuredReplyLine(line) {
-			structured++
-			if structured >= replyNaturalLineMinStructuredLines {
-				return []string{part}
-			}
-		}
-		// 上一行断在逗号、顿号上说明这是一句话被折了行，不是说完了一句。
-		if index < len(lines)-1 && endsMidSentence(line) {
-			return []string{part}
-		}
-	}
-	return lines
+	return n
 }
 
 // endsMidSentence 判断这一行是不是停在半句话上。句号、问号、感叹号不算——那是
