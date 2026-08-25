@@ -261,6 +261,7 @@ import {
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 import { askConfirm } from "../confirm";
+import { markUpdateInstalling } from "../backendState";
 
 const emit = defineEmits<{ close: []; checked: [available: boolean]; versionChanged: [version: SystemVersion] }>();
 
@@ -519,6 +520,9 @@ async function confirmInstall(): Promise<void> {
     installTarget = result.target_commit || target;
     installStartedAt = Date.now();
     installTracking.value = true;
+    // 记一笔「正在升级」：接下来旧进程会退出，页面这边的内存标记撑不过那一下，
+    // 断线期间要靠它把「正在重启」和「后端挂了」区分开。
+    markUpdateInstalling();
     toastSuccess(`已开始安装 ${result.target_commit || target} 并重启`);
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : "安装更新失败";

@@ -654,6 +654,42 @@ function invalidateAPICache(): void {
   responseCache.clear();
 }
 
+// ApiError 把「后端根本没答话」和「后端答了但不同意」分开。两者混在一起时，
+// 后端挂掉会被登录页当成密码错误报出来——用户拿着对的密码被告知密码不对。
+export type ApiErrorKind = "offline" | "server" | "auth" | "request";
+
+export class ApiError extends Error {
+  readonly kind: ApiErrorKind;
+  readonly status: number;
+
+  constructor(message: string, kind: ApiErrorKind, status = 0) {
+    super(message);
+    this.name = "ApiError";
+    this.kind = kind;
+    this.status = status;
+  }
+
+  // unreachable 表示这次请求压根没拿到后端的判断：网络层没通，或者网关替它回了话。
+  // 密码对不对，这种时候没有任何人验证过。
+  get unreachable(): boolean {
+    return this.kind === "offline" || this.kind === "server";
+  }
+}
+
+export function isBackendUnreachable(err: unknown): boolean {
+  return err instanceof ApiError && err.unreachable;
+}
+
+function apiErrorForStatus(status: number, message: string): ApiError {
+  if (status >= 500) {
+    return new ApiError(message || `后端出错（HTTP ${status}）`, "server", status);
+  }
+  if (status === 401 || status === 403) {
+    return new ApiError(message || `HTTP ${status}`, "auth", status);
+  }
+  return new ApiError(message || `HTTP ${status}`, "request", status);
+}
+
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const path = requestPath(url);
@@ -671,20 +707,26 @@ async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   }
 
   const pending = (async () => {
-    const response = await fetch(url, {
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {})
-      },
-      ...init
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          "Content-Type": "application/json",
+          ...(init?.headers ?? {})
+        },
+        ...init
+      });
+    } catch {
+      // fetch 只在网络层失败时抛：服务没起、端口不通、被拦下来了。
+      throw new ApiError("连不上 Diana 后端服务", "offline");
+    }
     const data = (await response.json().catch(() => ({}))) as T & { error?: string; auth_required?: boolean };
     if (!response.ok) {
       // 会话过期或未登录：广播事件让 App 切到登录界面，而不是每个视图各自报错。
       if (response.status === 401 && data.auth_required && !url.startsWith("/api/auth/")) {
         window.dispatchEvent(new CustomEvent("diana:unauthorized"));
       }
-      throw new Error(data.error || `HTTP ${response.status}`);
+      throw apiErrorForStatus(response.status, data.error ?? "");
     }
     if (isMutatingRequest(method, path)) {
       invalidateAPICache();

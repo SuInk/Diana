@@ -86,12 +86,13 @@ import {
   claimOwnerLoginPairing,
   createOwnerLoginPairing,
   getOwnerLoginStatus,
+  isBackendUnreachable,
   login,
   pollOwnerLoginPairing
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 
-const emit = defineEmits<{ success: [] }>();
+const emit = defineEmits<{ success: []; unreachable: [detail: string] }>();
 
 const username = ref("");
 const password = ref("");
@@ -117,6 +118,11 @@ async function submit(): Promise<void> {
     password.value = "";
     emit("success");
   } catch (err) {
+    // 后端没答话时不能报「密码错误」：这次请求根本没人验证过密码。
+    if (isBackendUnreachable(err)) {
+      emit("unreachable", err instanceof Error ? err.message : "连不上 Diana 后端服务");
+      return;
+    }
     error.value = err instanceof Error ? err.message : "登录失败";
   } finally {
     busy.value = false;
