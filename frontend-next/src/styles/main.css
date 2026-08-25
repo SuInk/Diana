@@ -1572,6 +1572,24 @@ a.nav-action {
   gap: 14px;
 }
 
+/* 事件页有七块，按 170px 起排只能放下六块，缓存命中率单独掉到第二行占着一整行的高度。
+   这一组的数字位数比别处多（Token 总量七八位），所以不是把下限调小就完事：
+   列窄了值会被挤断行。下限压到能站七列，同时把这一组的内边距和字号收一档，
+   让最长的那个数字仍旧一行放得下。 */
+.event-stats {
+  /* max() 里的第二项是「七分之一」：卡片正好七块，列数封在 7，
+     宽屏下也不会多留一个空列把最后一块挤得比别人窄。 */
+  grid-template-columns: repeat(auto-fit, minmax(max(140px, calc((100% - 6 * 14px) / 7)), 1fr));
+}
+
+.event-stats .stat-card {
+  padding: 14px 13px;
+}
+
+.event-stats .stat-value {
+  font-size: 21px;
+}
+
 .stat-card {
   padding: 16px 18px;
   display: flex;
