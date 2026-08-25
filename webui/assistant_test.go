@@ -210,6 +210,34 @@ func TestBotHandlerRejectsShortTokens(t *testing.T) {
 	}
 }
 
+func TestProfileSetRequiresReconnectOnlyForTransportChanges(t *testing.T) {
+	base := assistant.NewProfileSet(assistant.BotConfig{
+		Enabled:                 true,
+		Platform:                assistant.PlatformOneBotV11,
+		OneBotReverseWSEndpoint: "ws://127.0.0.1:8080/onebot/v11/ws",
+		OneBotAccessToken:       "0123456789abcdef",
+		SystemPrompt:            "before",
+	})
+
+	behavior := base.WithDefaults()
+	behavior.Profiles[0].SystemPrompt = "after"
+	if profileSetRequiresReconnect(base, behavior) {
+		t.Fatal("behavior-only change requires reconnect")
+	}
+
+	transport := base.WithDefaults()
+	transport.Profiles[0].OneBotAccessToken = "fedcba9876543210"
+	if !profileSetRequiresReconnect(base, transport) {
+		t.Fatal("OneBot token change did not require reconnect")
+	}
+
+	concurrency := base.WithDefaults()
+	concurrency.Profiles[0].MaxBotConcurrency++
+	if !profileSetRequiresReconnect(base, concurrency) {
+		t.Fatal("worker concurrency change did not require restart")
+	}
+}
+
 // TestBotHandlerGroupTestSendsMessage 验证QQ群收发测试会调用当前 channel 发群消息。
 func TestBotHandlerGroupTestSendsMessage(t *testing.T) {
 	channel := &recordingFakeChannel{}
@@ -594,6 +622,7 @@ func TestBotConfigSaveReportsPersistenceFailure(t *testing.T) {
 // 配置集工厂在场时不能再调单配置工厂。单配置工厂造出来的 channel 会被丢弃，
 // 但它有副作用——共享的 OneBot 反连监听器会被「当前激活配置」的 token 覆盖，
 // 而激活的未必是 OneBot 配置档，监听器于是拿着一个对不上任何配置的 token。
+// 行为配置热更新时两个工厂都可以不调用。
 func TestApplyProfileSetDoesNotInvokeSingleChannelFactory(t *testing.T) {
 	cfg := assistant.DefaultBotConfig()
 	runtime := assistant.NewRuntime(cfg, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
@@ -619,8 +648,8 @@ func TestApplyProfileSetDoesNotInvokeSingleChannelFactory(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 	}
-	if setCalls == 0 {
-		t.Fatal("channel set factory was never called")
+	if setCalls > 1 {
+		t.Fatalf("channel set factory called %d times", setCalls)
 	}
 	if singleCalls != 0 {
 		t.Fatalf("single-config factory called %d times, want 0 while a set factory is installed", singleCalls)

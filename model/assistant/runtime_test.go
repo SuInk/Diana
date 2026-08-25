@@ -472,6 +472,39 @@ func TestRuntimeUpdateConfigIgnoresPreviousRunExit(t *testing.T) {
 	waitForSignal(t, second.finished)
 }
 
+func TestRuntimeUpdateConfigInPlaceKeepsChannelConnected(t *testing.T) {
+	channel := newDelayedExitChannel()
+	cfg := BotConfig{Enabled: true, BotAccount: "42", SystemPrompt: "before"}
+	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, channel.started)
+
+	next := cfg
+	next.SystemPrompt = "after"
+	if err := runtime.UpdateConfigInPlace(next); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.Config().SystemPrompt; got != "after" {
+		t.Fatalf("system prompt = %q", got)
+	}
+	select {
+	case <-channel.finished:
+		t.Fatal("behavior-only config update disconnected the channel")
+	default:
+	}
+	if !runtime.Status().Running {
+		t.Fatal("behavior-only config update stopped the runtime")
+	}
+
+	if err := runtime.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	close(channel.release)
+	waitForSignal(t, channel.finished)
+}
+
 func waitForSignal(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
 	select {
