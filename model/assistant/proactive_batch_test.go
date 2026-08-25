@@ -186,7 +186,7 @@ func TestProactiveReplyTurnCombinesThreeMessagesIntoOneReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	if reply != "1+1=2，5+6=11，4+8=12。" {
+	if reply != "1+1=2，5+6=11，4+8=12" {
 		t.Fatalf("reply = %q", reply)
 	}
 	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
@@ -300,7 +300,7 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("sent = %#v, want exactly one merged reply", sent)
 	}
-	if sent[0].ReplyMessageID != second.MessageID || sent[0].Text != "对，后一张是要乐奈，前一条和图片应当合在一起看。" {
+	if sent[0].ReplyMessageID != second.MessageID || sent[0].Text != "对，后一张是要乐奈，前一条和图片应当合在一起看" {
 		t.Fatalf("merged reply = %#v, want reply to the later message", sent[0])
 	}
 	if provider.routeCalls != 2 || provider.replyCalls != 2 {
@@ -447,7 +447,7 @@ func TestProactiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *tes
 	if profile.Favorability != 1 || profile.MessageCount != 1 {
 		t.Fatalf("profile = %#v, want favorability 1 and existing message count 1", profile)
 	}
-	if len(channel.sent) != 1 || channel.sent[0].Text != "可以先检查错误日志里的第一条异常。" {
+	if len(channel.sent) != 1 || channel.sent[0].Text != "可以先检查错误日志里的第一条异常" {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
 	if len(provider.requests) != 5 {

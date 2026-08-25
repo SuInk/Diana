@@ -183,8 +183,15 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
+  /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 <dianabr>；缺省等价于开启。 */
+  natural_reply_split_enabled?: boolean;
+  /** 最多分几条；分出来超过它就退回粗一档，退到底就整条发。 */
+  reply_max_bubbles?: number;
   direct_reply_chunk_size?: number;
+  /** 正文超过多少字改用合并转发卡片。 */
   forward_reply_threshold?: number;
+  /** 切出超过多少块改用合并转发卡片。 */
+  forward_reply_chunk_threshold?: number;
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;

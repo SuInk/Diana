@@ -70,13 +70,17 @@ func TestNormalizeReplyTruncatesAtSentenceBoundary(t *testing.T) {
 	first := strings.Repeat("甲", 19) + "。"
 	reply := first + strings.Repeat("乙", 30) + "。"
 	got := normalizeReply(reply, 30)
-	if got != first {
-		t.Fatalf("reply = %q, want %q", got, first)
+	// 这条测的是「在句尾收束而不是硬切」；收尾那个句号由 normalizeReply 一并去掉，
+	// 聊天消息不带句号收尾（见 trimChatTrailingPeriod）。
+	if want := strings.TrimSuffix(first, "。"); got != want {
+		t.Fatalf("reply = %q, want %q", got, want)
 	}
 	if strings.HasSuffix(got, "...") {
 		t.Fatalf("boundary truncation should not append an ellipsis: %q", got)
 	}
-	if !strings.HasSuffix(got, "。") {
+	// 句号被去掉之后，「没切在半句上」要换个方式验证：截断点后面紧跟的就该是句号，
+	// 说明这一刀正好落在句尾。
+	if !strings.HasPrefix(reply, got+"。") {
 		t.Fatalf("reply was cut mid-sentence: %q", got)
 	}
 	if len([]rune(got)) > 30 {
