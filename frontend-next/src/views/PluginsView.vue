@@ -37,10 +37,10 @@
         <div class="segmented plugin-layout-switch" role="group" aria-label="插件排列方式">
           <button
             type="button"
-            :class="{ active: layout === 'masonry' }"
-            title="瀑布流：卡片按高度紧密咬合"
-            aria-label="瀑布流排列"
-            @click="setLayout('masonry')"
+            :class="{ active: layout === 'tiles' }"
+            title="方块：一行一行往右排"
+            aria-label="方块排列"
+            @click="setLayout('tiles')"
           >
             <LayoutGrid :size="14" aria-hidden="true" />
           </button>
@@ -62,7 +62,7 @@
       </div>
     </header>
 
-    <div v-if="visiblePlugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-masonry'">
+    <div v-if="visiblePlugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'">
       <article
         v-for="plugin in visiblePlugins"
         :key="plugin.manifest.id"
@@ -684,10 +684,12 @@ function pluginDisplayDescription(plugin: PluginState): string {
   return "统一管理 GitHub Token、仓库更新订阅和按仓库的 Issue 能力；草稿与运行记录在设置中的“运行记录”页查看。";
 }
 
-type PluginLayout = "masonry" | "rows";
+type PluginLayout = "tiles" | "rows";
 const LAYOUT_KEY = "dqb-next:plugin-layout";
+// 只认 "rows"，其余一律当方块：早先存的是 "masonry"，同一个档位换了名字，
+// 不值得为它写一次迁移。
 const layout = ref<PluginLayout>(
-  window.localStorage.getItem(LAYOUT_KEY) === "rows" ? "rows" : "masonry"
+  window.localStorage.getItem(LAYOUT_KEY) === "rows" ? "rows" : "tiles"
 );
 
 function setLayout(next: PluginLayout): void {
