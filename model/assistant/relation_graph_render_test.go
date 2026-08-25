@@ -26,7 +26,7 @@ func sampleRelationGraph() GroupRelationGraph {
 }
 
 func TestRenderGroupRelationHTMLIsSelfContained(t *testing.T) {
-	page := RenderGroupRelationHTML(sampleRelationGraph(), "群 555 · 关系图", "最近 7 天")
+	page := RenderGroupRelationHTML(sampleRelationGraph(), "群 555 · 关系图", "最近 7 天", relationImageDefaultSeats)
 	// 沙箱里取不到外部资源，页面必须自包含。查的是真的会发起请求的东西——
 	// SVG 的 xmlns 里也有 http://，那是命名空间标识，不是地址。
 	for _, forbidden := range []string{"<script", "<link", "src=", "@import", "url("} {
@@ -50,7 +50,7 @@ func TestRenderGroupRelationHTMLIsSelfContained(t *testing.T) {
 func TestRenderGroupRelationHTMLEscapesNames(t *testing.T) {
 	graph := sampleRelationGraph()
 	graph.Nodes[1].DisplayName = `<tspan fill="red">x`
-	page := RenderGroupRelationHTML(graph, `群 <b>555</b>`, "")
+	page := RenderGroupRelationHTML(graph, `群 <b>555</b>`, "", relationImageDefaultSeats)
 	if strings.Contains(page, `<tspan fill="red">`) {
 		t.Fatalf("昵称里的标签没有转义：%s", page)
 	}
@@ -76,7 +76,7 @@ func TestRelationCenterLabelKeepsShortNames(t *testing.T) {
 
 // 没有成员时不该画出一个空环，也不该 panic。
 func TestRenderGroupRelationHTMLHandlesEmptyGraph(t *testing.T) {
-	page := RenderGroupRelationHTML(GroupRelationGraph{GroupID: "555"}, "群 555 · 关系图", "最近 7 天")
+	page := RenderGroupRelationHTML(GroupRelationGraph{GroupID: "555"}, "群 555 · 关系图", "最近 7 天", relationImageDefaultSeats)
 	if !strings.Contains(page, "<svg") {
 		t.Fatalf("空图也要有画布：%s", page)
 	}
@@ -100,5 +100,32 @@ func TestRelationRangeParsing(t *testing.T) {
 	}
 	if since, ok := relationRangeSince("24h", now); !ok || now.Sub(since) != 24*time.Hour {
 		t.Fatalf("24h = %v / %v", since, ok)
+	}
+}
+
+// 人数上限来自插件设置，超出可画范围时收回来而不是照单全收。
+func TestClampRelationSeats(t *testing.T) {
+	cases := map[int]int{0: relationImageDefaultSeats, -5: relationImageDefaultSeats, 3: relationImageMinSeats, 99: relationImageMaxSeats, 20: 20}
+	for input, want := range cases {
+		if got := clampRelationSeats(input); got != want {
+			t.Fatalf("clampRelationSeats(%d) = %d, want %d", input, got, want)
+		}
+	}
+}
+
+// 设置里的人数上限要真的少画几个人。
+func TestRenderGroupRelationHTMLHonoursSeatLimit(t *testing.T) {
+	graph := sampleRelationGraph()
+	full := RenderGroupRelationHTML(graph, "t", "", relationImageDefaultSeats)
+	if !strings.Contains(full, "Alice") || !strings.Contains(full, "Bob") {
+		t.Fatalf("默认应当画出全部成员")
+	}
+	// 只留一个座位时，互动最多的 Alice 留下，Bob 被挤掉。
+	trimmed := renderGroupRelationSVG(graph, 1)
+	if !strings.Contains(trimmed, "Alice") {
+		t.Fatalf("互动最多的人应当留下：%s", trimmed)
+	}
+	if strings.Contains(trimmed, "Bob") {
+		t.Fatalf("超出座位的人应当被挤掉：%s", trimmed)
 	}
 }

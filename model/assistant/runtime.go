@@ -2819,7 +2819,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaSubtaskTool(r, event),
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
-				newDianaGroupRelationsTool(r, event),
 				newDianaGlossaryTool(r, event, relationship),
 				newDianaVersionTool(r),
 				newDianaImageTool(r, event, relationship),
@@ -2827,6 +2826,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaReminderTool(r, event),
 				newDianaScheduleTool(r, event),
 				newDianaRSSWatchTool(r, event),
+			}
+			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
+			// 无头浏览器。插件停用时模型看不到这个工具。
+			if _, settings, enabled := r.plugins.PluginWithSettings(groupRelationsPluginID, r.pluginOverridesForEvent(event)); enabled {
+				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
 			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {

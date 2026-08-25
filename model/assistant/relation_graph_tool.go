@@ -27,19 +27,25 @@ type GroupRelationStore interface {
 }
 
 type dianaGroupRelationsTool struct {
-	runtime *Runtime
-	event   MessageEvent
+	runtime  *Runtime
+	event    MessageEvent
+	settings SettingValues
 }
 
-func newDianaGroupRelationsTool(runtime *Runtime, event MessageEvent) agent.Tool {
-	return &dianaGroupRelationsTool{runtime: runtime, event: event}
+func newDianaGroupRelationsTool(runtime *Runtime, event MessageEvent, settings SettingValues) agent.Tool {
+	return &dianaGroupRelationsTool{runtime: runtime, event: event, settings: settings}
+}
+
+// defaultRange 是插件设置里的统计区间；用户说了看多久就听用户的。
+func (t *dianaGroupRelationsTool) defaultRange() string {
+	return normalizeRelationRange(t.settings.String(groupRelationsSettingDefaultRange, "7d"))
 }
 
 func (t *dianaGroupRelationsTool) Name() string { return dianaGroupRelationsToolName }
 
 func (t *dianaGroupRelationsTool) Description() string {
 	return `画一张本群的关系图并直接发到群里：你在正中间，群友按和你的互动次数围一圈，连线粗细是互动次数，圆点大小是发言量。` +
-		`用户想看「群里谁跟谁熟」「关系图」「互动图」这类东西时用它。range 可选 24h、7d、30d、all，默认 7d。` +
+		`用户想看「群里谁跟谁熟」「关系图」「互动图」这类东西时用它。range 可选 24h、7d、30d、all，不填按插件设置里的默认区间。` +
 		`图由运行时发送，你只要在调用后用一句话说明就行，不要描述图里的具体数字——你看不到那张图。`
 }
 
@@ -68,7 +74,11 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
 		return marshalRelationsResult(dianaGroupRelationsResult{Message: "关系图只能在群聊里画。"}), nil
 	}
-	rangeID := normalizeRelationRange(configToolString(input, "range"))
+	rangeID := strings.TrimSpace(configToolString(input, "range"))
+	if rangeID == "" {
+		rangeID = t.defaultRange()
+	}
+	rangeID = normalizeRelationRange(rangeID)
 	since, ok := relationRangeSince(rangeID, time.Now())
 	if !ok {
 		return marshalRelationsResult(dianaGroupRelationsResult{Message: "统计区间只支持 24h、7d、30d、all。"}), nil
@@ -92,7 +102,7 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	}
 
 	title := fmt.Sprintf("群 %s · 关系图", t.event.GroupID)
-	page := RenderGroupRelationHTML(graph, title, relationRangeLabel(rangeID))
+	page := RenderGroupRelationHTML(graph, title, relationRangeLabel(rangeID), t.settings.Int(groupRelationsSettingMaxMembers, relationImageDefaultSeats))
 	png, err := agent.CaptureHTMLScreenshot(ctx, agent.ScreenshotRequest{
 		HTML:    page,
 		Width:   relationImageWidth,
