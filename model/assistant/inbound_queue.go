@@ -1215,7 +1215,10 @@ func (r *Runtime) historyEventFromData(session HistorySession, data map[string]a
 		normalized["group_id"] = session.ID
 	}
 	if strings.TrimSpace(stringFromAny(normalized["self_id"])) == "" {
-		normalized["self_id"] = r.Config().BotAccount
+		// 历史回填拉的是 OneBot 的消息，self_id 要用 OneBot 那台的账号。
+		// 用 r.Config().BotAccount 的话，激活的是 Telegram 那台时补进去的是个
+		// Telegram 账号，这批 QQ 消息就全认错了主人。
+		normalized["self_id"] = r.oneBotBotAccount()
 	}
 	payload, err := json.Marshal(normalized)
 	if err != nil {
@@ -1229,7 +1232,9 @@ func (r *Runtime) historyEventFromData(session HistorySession, data map[string]a
 	if event.Kind == "" {
 		return MessageEvent{}, false
 	}
-	event = r.bindInboundEventIdentity(event)
+	// 这批消息是从 OneBot 的历史接口拉回来的，身份必须绑到 OneBot 那台机器人，
+	// 不能跟着「当前激活配置」走。
+	event = r.bindInboundEventIdentityForPlatform(event, PlatformOneBotV11)
 	if event.MessageSeq == "" {
 		event.MessageSeq = firstNonEmpty(stringFromAny(data["message_seq"]), stringFromAny(data["real_id"]))
 	}

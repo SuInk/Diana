@@ -19,24 +19,30 @@ import (
 )
 
 type repositoryWatchTestGitHub struct {
-	mu            sync.Mutex
-	commits       []map[string]any
-	pullRequests  []map[string]any
-	pullFiles     map[int][]map[string]any
-	releases      []map[string]any
-	starCount     int
-	events        []map[string]any
-	token         string
-	commitCalls   int
-	pullCalls     int
-	releaseCalls  int
-	pullCommits   map[int][]map[string]any
-	starCalls     int
-	eventCalls    int
-	diffCalls     int
-	pullFileCalls int
-	failCommits   bool
-	failReleases  bool
+	mu              sync.Mutex
+	commits         []map[string]any
+	pullRequests    []map[string]any
+	pullFiles       map[int][]map[string]any
+	releases        []map[string]any
+	starCount       int
+	events          []map[string]any
+	token           string
+	commitCalls     int
+	pullCalls       int
+	releaseCalls    int
+	pullCommits     map[int][]map[string]any
+	starCalls       int
+	eventCalls      int
+	diffCalls       int
+	pullFileCalls   int
+	failCommits     bool
+	failReleases    bool
+	issues          []map[string]any
+	issueEvents     []map[string]any
+	issueCalls      int
+	pullCommitCalls int
+	issueEventCal   int
+	failIssueEvts   bool
 }
 
 func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +57,7 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 	if strings.Contains(r.URL.Path, "/pulls/") && strings.HasSuffix(r.URL.Path, "/commits") {
 		var number int
 		_, _ = fmt.Sscanf(r.URL.Path, "/repos/acme/demo/pulls/%d/commits", &number)
+		s.pullCommitCalls++
 		_ = json.NewEncoder(w).Encode(s.pullCommits[number])
 		return
 	}
@@ -97,9 +104,24 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		_ = json.NewEncoder(w).Encode(s.releases)
 		return
 	}
+	// 仓库级 issue 事件要排在 star 的 /events 之前：两者路径都以 /events 结尾。
+	if strings.HasSuffix(r.URL.Path, "/issues/events") {
+		s.issueEventCal++
+		if s.failIssueEvts {
+			http.Error(w, `{"message":"issue events unavailable"}`, http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(s.issueEvents)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/events") {
 		s.eventCalls++
 		_ = json.NewEncoder(w).Encode(s.events)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/issues") {
+		s.issueCalls++
+		_ = json.NewEncoder(w).Encode(s.issues)
 		return
 	}
 	if r.URL.Path == "/repos/acme/demo" {
@@ -1835,5 +1857,305 @@ func TestRepositoryWatchDiffDigestIsBudgetedAndRanked(t *testing.T) {
 	digest = renderRepositoryWatchDiffDigest(repositoryWatchChange{CommitDiff: &repositoryWatchDiff{Files: oversized}})
 	if got := len([]rune(digest)); got > repositoryWatchDiffDigestRunes+len("...") {
 		t.Fatalf("digest not budgeted: %d runes", got)
+	}
+}
+
+// TestRepositoryWatchPluginReportsOpenedUpdatedAndClosedPullRequests 覆盖 PR 的三种
+// 非合并动态：新建、更新、关闭。关闭那条特意把 updated_at 排在 closed_at 之后，
+// 模拟「PR 关掉之后又被评论」——通知里该报的是关闭时间，不是最后一次被碰的时间。
+func TestRepositoryWatchPluginReportsOpenedUpdatedAndClosedPullRequests(t *testing.T) {
+	pullPayload := func(number int, title, state, createdAt, updatedAt, closedAt string) map[string]any {
+		payload := map[string]any{
+			"number": number, "title": title, "state": state,
+			"html_url":   "https://github.com/acme/demo/pull/" + fmt.Sprint(number),
+			"created_at": createdAt, "updated_at": updatedAt, "merged_at": nil,
+			"user": map[string]any{"login": "diana"},
+			"base": map[string]any{"ref": "main"}, "head": map[string]any{"ref": "feature"},
+		}
+		if closedAt != "" {
+			payload["closed_at"] = closedAt
+		}
+		return payload
+	}
+
+	github := &repositoryWatchTestGitHub{
+		pullRequests: []map[string]any{pullPayload(1, "baseline", "open", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", "")},
+		pullCommits:  map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{PullRequests: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil || baseline.PullRequestCursor == "" {
+		t.Fatalf("baseline=%#v err=%v", baseline, err)
+	}
+
+	github.mu.Lock()
+	github.pullRequests = []map[string]any{
+		pullPayload(4, "关掉不合并", "closed", "2026-08-13T00:00:00Z", "2026-08-16T00:00:00Z", "2026-08-14T00:00:00Z"),
+		pullPayload(3, "又推了一版", "open", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", ""),
+		pullPayload(2, "刚开的", "open", "2026-08-14T12:00:00Z", "2026-08-14T12:00:00Z", ""),
+		pullPayload(1, "baseline", "open", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", ""),
+	}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]repositoryWatchPullRequest{}
+	for _, pullRequest := range change.PullRequests {
+		got[pullRequest.Number] = pullRequest
+	}
+	if len(got) != 3 {
+		t.Fatalf("pull requests=%#v", change.PullRequests)
+	}
+	for number, wantStatus := range map[int]string{2: "opened", 3: "updated", 4: "closed"} {
+		if got[number].Status != wantStatus {
+			t.Fatalf("PR #%d status=%q, want %q", number, got[number].Status, wantStatus)
+		}
+	}
+	wantClosedAt := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	if !got[4].OccurredAt.Equal(wantClosedAt) {
+		t.Fatalf("closed PR occurred at %s, want closed_at %s", got[4].OccurredAt, wantClosedAt)
+	}
+
+	entries := []string{}
+	for _, pullRequest := range change.PullRequests {
+		entries = append(entries, repositoryWatchPullStatusLabel(pullRequest.Status)+"/"+repositoryWatchPullTimeLabel(pullRequest.Status))
+	}
+	for _, want := range []string{"新建/创建于", "更新/更新于", "已关闭/关闭于"} {
+		if !slices.Contains(entries, want) {
+			t.Fatalf("notification labels=%v, want %q", entries, want)
+		}
+	}
+}
+
+func repositoryWatchIssuePayload(number int, title, state, stateReason, createdAt, updatedAt, closedAt string) map[string]any {
+	payload := map[string]any{
+		"number": number, "title": title, "state": state, "body": "正文",
+		"html_url":   "https://github.com/acme/demo/issues/" + fmt.Sprint(number),
+		"created_at": createdAt, "updated_at": updatedAt,
+		"user": map[string]any{"login": "diana"},
+	}
+	if stateReason != "" {
+		payload["state_reason"] = stateReason
+	}
+	if closedAt != "" {
+		payload["closed_at"] = closedAt
+	}
+	return payload
+}
+
+// TestRepositoryWatchPluginClassifiesIssues 覆盖 Issue 的四种动态：新建、更新、关闭、
+// 重新打开。关闭那条的 updated_at 排在 closed_at 之后，验证报的是关闭时间。
+func TestRepositoryWatchPluginClassifiesIssues(t *testing.T) {
+	github := &repositoryWatchTestGitHub{
+		issues: []map[string]any{repositoryWatchIssuePayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", "")},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Issues: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", selection, nil)
+	if err != nil || baseline.IssueCursor == "" {
+		t.Fatalf("baseline=%#v err=%v", baseline, err)
+	}
+
+	github.mu.Lock()
+	github.issues = []map[string]any{
+		repositoryWatchIssuePayload(4, "重开了", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", ""),
+		repositoryWatchIssuePayload(3, "关掉了", "closed", "completed", "2026-08-13T00:00:00Z", "2026-08-16T00:00:00Z", "2026-08-14T00:00:00Z"),
+		repositoryWatchIssuePayload(2, "刚开的", "open", "", "2026-08-14T12:00:00Z", "2026-08-14T12:00:00Z", ""),
+		repositoryWatchIssuePayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", ""),
+	}
+	github.issueEvents = []map[string]any{
+		{"event": "reopened", "created_at": "2026-08-15T00:00:00Z", "issue": map[string]any{"number": 4}},
+	}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]repositoryWatchIssue{}
+	for _, issue := range change.Issues {
+		got[issue.Number] = issue
+	}
+	if len(got) != 3 {
+		t.Fatalf("issues=%#v", change.Issues)
+	}
+	for number, wantStatus := range map[int]string{2: "opened", 3: "closed", 4: "reopened"} {
+		if got[number].Status != wantStatus {
+			t.Fatalf("Issue #%d status=%q, want %q", number, got[number].Status, wantStatus)
+		}
+	}
+	wantClosedAt := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	if !repositoryWatchIssueTime(got[3]).Equal(wantClosedAt) {
+		t.Fatalf("closed issue time=%s, want closed_at %s", repositoryWatchIssueTime(got[3]), wantClosedAt)
+	}
+	for status, want := range map[string]string{
+		"opened": "新建/创建于", "updated": "更新/更新于",
+		"closed": "已关闭/关闭于", "reopened": "重新打开/重新打开于",
+	} {
+		if got := repositoryWatchIssueStatusLabel(status) + "/" + repositoryWatchIssueTimeLabel(status); got != want {
+			t.Fatalf("%s 的通知标签是 %q，想要 %q", status, got, want)
+		}
+	}
+}
+
+// TestRepositoryWatchPluginDoesNotRepeatReopenForLaterUpdates 盯住 state_reason 的
+// 粘性：issue 重开之后这个字段一直是 reopened，之后的每条评论都会把它带出来。只看
+// 字段的话，一次重开会让往后所有更新都报成「重新打开」。
+func TestRepositoryWatchPluginDoesNotRepeatReopenForLaterUpdates(t *testing.T) {
+	reopened := repositoryWatchIssuePayload(7, "重开后又被评论", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", "")
+	github := &repositoryWatchTestGitHub{
+		issues:      []map[string]any{reopened},
+		issueEvents: []map[string]any{{"event": "reopened", "created_at": "2026-08-15T00:00:00Z", "issue": map[string]any{"number": 7}}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{Issues: true}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 重开发生在这一轮：该报「重新打开」。
+	github.mu.Lock()
+	github.issues = []map[string]any{repositoryWatchIssuePayload(7, "重开后又被评论", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-16T00:00:00Z", "")}
+	github.issueEvents = []map[string]any{{"event": "reopened", "created_at": "2026-08-16T00:00:00Z", "issue": map[string]any{"number": 7}}}
+	github.mu.Unlock()
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "", baseline, selection, nil)
+	if err != nil || len(change.Issues) != 1 || change.Issues[0].Status != "reopened" {
+		t.Fatalf("issues=%#v err=%v", change.Issues, err)
+	}
+
+	// 下一轮只是被评论，重开事件还是上一轮那条：该报「更新」。
+	next := baseline
+	next.IssueCursor = change.Snapshot.IssueCursor
+	github.mu.Lock()
+	github.issues = []map[string]any{repositoryWatchIssuePayload(7, "重开后又被评论", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-17T00:00:00Z", "")}
+	github.mu.Unlock()
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "", next, selection, nil)
+	if err != nil || len(change.Issues) != 1 {
+		t.Fatalf("issues=%#v err=%v", change.Issues, err)
+	}
+	if change.Issues[0].Status != "updated" {
+		t.Fatalf("issue status=%q, want updated: 重开的状态粘住了", change.Issues[0].Status)
+	}
+
+	// 事件列表读不到时退回旧判断，一次重新打开不能被吞成普通更新。
+	github.mu.Lock()
+	github.failIssueEvts = true
+	github.issues = []map[string]any{repositoryWatchIssuePayload(7, "重开后又被评论", "open", "reopened", "2026-08-13T00:00:00Z", "2026-08-18T00:00:00Z", "")}
+	github.mu.Unlock()
+	next.IssueCursor = change.Snapshot.IssueCursor
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "", next, selection, nil)
+	if err != nil || len(change.Issues) != 1 || change.Issues[0].Status != "reopened" {
+		t.Fatalf("fallback issues=%#v err=%v", change.Issues, err)
+	}
+}
+
+// TestRepositoryWatchPluginHonoursSelectedEventKinds 验证只订阅一部分动态：勾了
+// 「新建 + 已合并」的 PR 订阅不该被每条评论顶一次，Issue 同理。
+func TestRepositoryWatchPluginHonoursSelectedEventKinds(t *testing.T) {
+	pullPayload := func(number int, title, state, createdAt, updatedAt string, merged bool) map[string]any {
+		payload := map[string]any{
+			"number": number, "title": title, "state": state,
+			"html_url":   "https://github.com/acme/demo/pull/" + fmt.Sprint(number),
+			"created_at": createdAt, "updated_at": updatedAt, "merged_at": nil,
+			"user": map[string]any{"login": "diana"},
+			"base": map[string]any{"ref": "main"}, "head": map[string]any{"ref": "feature"},
+		}
+		if merged {
+			payload["merged_at"] = updatedAt
+		}
+		return payload
+	}
+
+	github := &repositoryWatchTestGitHub{
+		pullRequests: []map[string]any{pullPayload(1, "baseline", "open", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", false)},
+		issues:       []map[string]any{repositoryWatchIssuePayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", "")},
+		pullCommits:  map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{
+		PullRequests: true, Issues: true,
+		PullRequestEvents: []string{"opened", "merged"},
+		IssueEvents:       []string{"opened"},
+	}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	github.mu.Lock()
+	github.pullRequests = []map[string]any{
+		pullPayload(4, "合并了", "closed", "2026-08-13T00:00:00Z", "2026-08-16T00:00:00Z", true),
+		pullPayload(3, "只是被评论", "open", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", false),
+		pullPayload(2, "刚开的", "open", "2026-08-14T12:00:00Z", "2026-08-14T12:00:00Z", false),
+		pullPayload(1, "baseline", "open", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", false),
+	}
+	github.issues = []map[string]any{
+		repositoryWatchIssuePayload(3, "只是被评论", "open", "", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", ""),
+		repositoryWatchIssuePayload(2, "刚开的", "open", "", "2026-08-14T12:00:00Z", "2026-08-14T12:00:00Z", ""),
+		repositoryWatchIssuePayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", ""),
+	}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPulls := map[int]string{}
+	for _, pullRequest := range change.PullRequests {
+		gotPulls[pullRequest.Number] = pullRequest.Status
+	}
+	if len(gotPulls) != 2 || gotPulls[2] != "opened" || gotPulls[4] != "merged" {
+		t.Fatalf("pull requests=%#v，只订阅了新建和已合并", change.PullRequests)
+	}
+	if len(change.Issues) != 1 || change.Issues[0].Number != 2 || change.Issues[0].Status != "opened" {
+		t.Fatalf("issues=%#v，只订阅了新建", change.Issues)
+	}
+	// 没订阅的 PR 连提交列表都不该去拉：过滤要发生在花掉这次请求之前。
+	github.mu.Lock()
+	pullCommitCalls := github.pullCommitCalls
+	github.mu.Unlock()
+	if pullCommitCalls != 2 {
+		t.Fatalf("PR 提交列表请求了 %d 次，只该为报出来的两个 PR 各拉一次", pullCommitCalls)
+	}
+
+	// 空集合仍然是「全要」：老订阅没存过这个字段，不能被静音。
+	all := repositoryWatchSelection{PullRequests: true, Issues: true}
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, all, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.PullRequests) != 3 || len(change.Issues) != 2 {
+		t.Fatalf("空集合被当成了「一条都不要」：pulls=%d issues=%d", len(change.PullRequests), len(change.Issues))
+	}
+}
+
+func TestNormalizeRepositoryWatchEvents(t *testing.T) {
+	got, err := normalizeRepositoryWatchEvents([]string{"MERGED", " opened ", "merged"}, repositoryWatchPullEventKinds, "PR ")
+	if err != nil || !slices.Equal(got, []string{"opened", "merged"}) {
+		t.Fatalf("normalize = %v, %v", got, err)
+	}
+	// 全选和没选过存成同一个空集合，回显才不会一个说「全部」一个逐项列。
+	full, err := normalizeRepositoryWatchEvents(repositoryWatchPullEventKinds, repositoryWatchPullEventKinds, "PR ")
+	if err != nil || full != nil {
+		t.Fatalf("full selection = %v, %v", full, err)
+	}
+	if _, err := normalizeRepositoryWatchEvents([]string{"reopened"}, repositoryWatchPullEventKinds, "PR "); err == nil {
+		t.Fatal("PR 没有 reopened 这种动态，应当报错")
 	}
 }

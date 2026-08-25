@@ -122,15 +122,15 @@ const groups: BotGroupSummary[] = [
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
 
+// 机器人见过的人从画像里取名，没见过的走 OneBot get_stranger_info；演示模式两条路
+// 都没有，用这张表补上画像里没有的号。
+const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
+
 const demoPersonas = [
   { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" },
   { id: "persona-2", name: "技术群管", system_prompt: "你是技术群里那个话不多但每次开口都说到点子上的人。", reply_style: "groupmate", self_reference: "", sentence_enders: "" },
   { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", reply_style: "concise", self_reference: "", sentence_enders: "" }
 ];
-
-// 机器人见过的人从画像里取名，没见过的走 OneBot get_stranger_info；演示模式两条路
-// 都没有，用这张表补上画像里没有的号。
-const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
 
 const demoUsers: UserMemoryProfile[] = [
   {
@@ -464,6 +464,15 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const users = matched.map((user) => ({ ...user, memories: undefined, memory_count: user.memories?.length ?? 0 }));
     return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
   }
+  if (path === "/api/assistant/user-names") {
+    const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+    const names: Record<string, string> = {};
+    for (const id of ids) {
+      const name = demoAccountNames[id] ?? demoUsers.find((item) => item.user_id === id)?.display_name ?? "";
+      if (name) names[id] = name;
+    }
+    return json({ names });
+  }
   if (path === "/api/assistant/personas" && method === "GET") {
     return json({ personas: demoPersonas, limit: 50 });
   }
@@ -509,16 +518,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
     if (index >= 0) demoPersonas.splice(index, 1);
     return json({ personas: demoPersonas });
-  }
-
-  if (path === "/api/assistant/user-names") {
-    const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
-    const names: Record<string, string> = {};
-    for (const id of ids) {
-      const name = demoAccountNames[id] ?? demoUsers.find((item) => item.user_id === id)?.display_name ?? "";
-      if (name) names[id] = name;
-    }
-    return json({ names });
   }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {

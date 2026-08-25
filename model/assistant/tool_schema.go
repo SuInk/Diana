@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -59,6 +60,15 @@ func toolStringArrayParam(description string) map[string]any {
 	}
 }
 
+// toolEnumArrayParam 描述取值受限的字符串数组，比如「只收这几种动态」。
+func toolEnumArrayParam(description string, values ...string) map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"description": description,
+		"items":       map[string]any{"type": "string", "enum": values},
+	}
+}
+
 // toolItemsParam 描述批量创建用的 items 数组。
 func toolItemsParam(description string, maxItems int, required []string, properties map[string]any) map[string]any {
 	return map[string]any{
@@ -66,6 +76,34 @@ func toolItemsParam(description string, maxItems int, required []string, propert
 		"description": description,
 		"maxItems":    maxItems,
 		"items":       toolObjectSchema(required, properties),
+	}
+}
+
+// toolStringValues 把模型给的数组读成 []string。模型偶尔会把单个值直接写成字符串
+// 而不是只有一项的数组，这里一并收下——为这个报错只会让它重试一轮。
+func toolStringValues(raw any) ([]string, error) {
+	switch value := raw.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return nil, nil
+		}
+		return []string{value}, nil
+	case []string:
+		return append([]string(nil), value...), nil
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, item := range value {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("数组里只能是字符串")
+			}
+			out = append(out, text)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("需要一个字符串数组")
 	}
 }
 

@@ -59,6 +59,10 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 	if enabled && repositoryPublishEventHasAccess(event, settings) {
 		allowed[dianaRepositoryIssuesToolName] = true
 	}
+	// 管的是仓库订阅，不往仓库里写，所以只认管理人员名单，不看 Issue 写入白名单。
+	if enabled && len(repositoryWatchManagedRepositories(event, settings)) > 0 {
+		allowed[dianaRepositoryWatchToolName] = true
+	}
 	return allowed
 }
 

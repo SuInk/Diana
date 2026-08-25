@@ -1159,6 +1159,10 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
 	cfg.MaxContextTokens = groupCfg.MaxContextTokens
+	// 群级的历史预算此前只存不用：GroupConfig 里有这个字段、WithDefaults 也从
+	// 机器人配置继承了默认值，却没有一行把它拷回生效配置，于是群组页那个输入框
+	// 填了不生效。
+	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
@@ -1378,23 +1382,80 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 
 // bindInboundEventIdentity restores Diana's internal routing identity when a
 // transport event does not carry it. OneBot history responses never contain
-// ProfileID, so reconnect backfill must use the active binding instead of
-// falling back to the legacy unnamespaced conversation.
+// ProfileID, so reconnect backfill has to补一个。
+//
+// 这里绝不能拿「当前激活配置」去补。反连监听器是进程内共享的一个实例，OneBot 和
+// Telegram 同时跑的时候，激活哪一台跟这条消息是从哪个通道进来的没有关系。以前用
+// r.cfg 补，于是保存并激活 Telegram 那台之后触发的一次 OneBot 重连回填，把三十多条
+// 真实 QQ 群消息全部写成了 Telegram：正文带着 CQ 码、QQ 多媒体域名和正数 QQ 群号，
+// 事件页却按 Telegram 分类，真正的 Telegram 群消息反而看不到。
+//
+// 所以按来源平台绑：调用方说清楚这批事件是哪个平台来的，身份就从那个平台的通道绑定
+// 上取。只有激活配置本身就是那个平台时，才用它兜底。
 func (r *Runtime) bindInboundEventIdentity(event MessageEvent) MessageEvent {
+	return r.bindInboundEventIdentityForPlatform(event, "")
+}
+
+// bindInboundEventIdentityForPlatform 按来源平台补身份；sourcePlatform 为空表示
+// 「不知道来源」，此时只能沿用当前激活配置（活跃通道事件本来就自带身份，走不到这里）。
+func (r *Runtime) bindInboundEventIdentityForPlatform(event MessageEvent, sourcePlatform string) MessageEvent {
 	r.mu.RLock()
 	cfg := r.cfg
 	channel := r.channel
 	r.mu.RUnlock()
+
+	profileID := strings.TrimSpace(cfg.ID)
+	platform := NormalizePlatformID(cfg.Platform)
+	if sourcePlatform = NormalizePlatformID(sourcePlatform); sourcePlatform != "" && sourcePlatform != platform {
+		// 激活的不是这个平台：从通道绑定里找真正负责它的那台机器人。找不到就把身份
+		// 留空——宁可事件没有归属，也不要挂到一台根本不在这个平台上的机器人名下。
+		profileID, platform = "", ""
+		if multi, ok := channel.(*MultiChannel); ok {
+			if binding, found := multi.bindingForPlatform(sourcePlatform); found {
+				profileID = strings.TrimSpace(binding.ProfileID)
+				platform = NormalizePlatformID(binding.Platform)
+			}
+		}
+	}
+
 	if strings.TrimSpace(event.ProfileID) == "" {
-		event.ProfileID = strings.TrimSpace(cfg.ID)
+		event.ProfileID = profileID
 	}
 	if strings.TrimSpace(event.Platform) == "" {
-		event.Platform = NormalizePlatformID(cfg.Platform)
+		event.Platform = platform
 	}
 	if multi, ok := channel.(*MultiChannel); ok && multi.isolate && strings.TrimSpace(event.ContextNamespace) == "" {
 		event.ContextNamespace = event.ProfileID
 	}
 	return event
+}
+
+// oneBotBotAccount 返回负责 OneBot 的那台机器人的账号，用于给历史回填补 self_id。
+// 同样不能用 r.Config().BotAccount：激活的是 Telegram 那台时，那是个 Telegram 账号。
+func (r *Runtime) oneBotBotAccount() string {
+	r.mu.RLock()
+	cfg := r.cfg
+	channel := r.channel
+	profileConfigs := r.profileConfigs
+	r.mu.RUnlock()
+	if IsOneBotPlatform(cfg.Platform) {
+		return strings.TrimSpace(cfg.BotAccount)
+	}
+	multi, ok := channel.(*MultiChannel)
+	if !ok {
+		return ""
+	}
+	binding, found := multi.OneBotBinding()
+	if !found {
+		return ""
+	}
+	if profile, ok := profileConfigs[strings.TrimSpace(binding.ProfileID)]; ok {
+		if account := strings.TrimSpace(profile.BotAccount); account != "" {
+			return account
+		}
+	}
+	// 配置里没填账号时用连接上报的 self_id：反连握手带着它，比空着强。
+	return strings.TrimSpace(binding.Channel.Status().SelfID)
 }
 
 func (r *Runtime) recordNoticeEvent(event MessageEvent) {
@@ -2848,9 +2909,23 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaScheduleTool(r, event),
 				newDianaRSSWatchTool(r, event),
 			}
+			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
+			// 无头浏览器。插件停用时模型看不到这个工具。
+			if _, settings, enabled := r.plugins.PluginWithSettings(groupRelationsPluginID, r.pluginOverridesForEvent(event)); enabled {
+				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
+			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
+				}
+			}
+			if pluginValue, watchSettings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, r.pluginOverridesForEvent(event)); enabled {
+				if _, ok := pluginValue.(*RepositoryWatchPlugin); ok {
+					_, publishSettings, _ := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event))
+					managed := repositoryWatchManagedRepositories(event, publishSettings)
+					if relationship.Owner || len(managed) > 0 {
+						extraTools = append(extraTools, newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings))
+					}
 				}
 			}
 			if boolValue(cfg.OwnerLLMConfigEnabled, true) {
@@ -5438,6 +5513,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.tasks") {
 		tail.WriteString("\n" + promptTaskList)
+	}
+	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
+		tail.WriteString("\n" + promptTaskRepositoryWatch)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptTaskNoSubstitute)
@@ -9467,7 +9545,8 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 			Issues: item.WatchIssues, Releases: item.WatchReleases, Stars: item.WatchStars,
 			// 跟评是 diff 唯一的读者。关掉跟评就别拉了，否则每轮白花一次 compare
 			// 加每个 PR 一次 files——这正是当初把 diff 整个摘掉的原因。
-			Diff: r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
+			Diff:              r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
+			PullRequestEvents: item.WatchPullRequestEvents, IssueEvents: item.WatchIssueEvents,
 		},
 		settings,
 	)
@@ -10062,6 +10141,8 @@ func repositoryWatchIssueTimeLabel(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "opened":
 		return "创建于"
+	case "reopened":
+		return "重新打开于"
 	case "closed":
 		return "关闭于"
 	default:
@@ -10073,6 +10154,8 @@ func repositoryWatchIssueTime(issue repositoryWatchIssue) time.Time {
 	switch strings.ToLower(strings.TrimSpace(issue.Status)) {
 	case "opened":
 		return firstNonZeroTime(issue.CreatedAt, issue.UpdatedAt)
+	case "reopened":
+		return firstNonZeroTime(issue.ReopenedAt, issue.UpdatedAt)
 	case "closed":
 		return firstNonZeroTime(issue.ClosedAt, issue.UpdatedAt)
 	default:

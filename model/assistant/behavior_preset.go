@@ -143,10 +143,8 @@ const replyProportionRule = "回复的篇幅要跟随问题的分量：群里随
 // 会连不成句。问号和感叹号也留着：它们承载的是语气而不是句读，删了意思就变了。
 const replyTrailingPunctuationRule = "整条消息的结尾不要用句号或逗号收尾，直接以文字结束；句子中间的标点照常使用。问号和感叹号是语气，该用就用，不受这条限制。"
 
-// prompt 组装这一档风格的完整规则。
-//
-// naturalSplit 决定注入哪一版分条规则：投递侧关掉自然分条时，提示词也必须跟着改口，
-// 否则模型排的版会全部落空。voice 是用户自定义的自称和句尾语气词，留空就整段不加。
+// prompt 组装这一档风格的完整规则。naturalSplit 决定注入哪一版分条规则：投递侧
+// 关掉自然分条时，提示词也必须跟着改口，否则模型排的版会全部落空。
 func (style ReplyStyle) prompt(naturalSplit bool, voice personaVoice) string {
 	segmentation := replySegmentationRule
 	if !naturalSplit {

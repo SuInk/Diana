@@ -21,6 +21,3 @@ logs/*
 !logs/.gitkeep
 data/*
 *.log
-
-# Vite 预打包缓存：本地跑 demo 构建时生成的，不该进仓库。
-.vite/

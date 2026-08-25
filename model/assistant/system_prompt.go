@@ -89,6 +89,8 @@ const (
 	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知时，调用 diana.schedule；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控不走这个工具。"
 	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 diana.rss，judge_prompt 里写清通知条件和回复要求。"
 	promptTaskList     = "查询当前用户的全部提醒和订阅时，必须调用 diana.tasks。"
+	// 订阅是配置，不是记忆：口头答应「以后合并了告诉你」，重启后什么都不剩。
+	promptTaskRepositoryWatch = "用户要求订阅某个 GitHub 仓库的更新，或要改、暂停、删除已有的仓库订阅（包括只收 PR/Issue 的某几种动态、换分支、改检查间隔）时，调用 diana.repository_watch，不要口头答应。"
 	// promptTaskNoSubstitute 防的是模型用「我记住了，到点提醒你」糊弄过去——
 	// 进程重启后这种承诺一律蒸发。
 	promptTaskNoSubstitute = "不得用 run_command、sleep、后台进程或口头承诺代替持久化的提醒工具。"
