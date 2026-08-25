@@ -34,24 +34,40 @@ func TestWakeOnlyPromptForbidsPresenceAnnouncements(t *testing.T) {
 	}
 }
 
-// 纯 @ 的消息才走这条提示词；带了字的照常把原文交给模型。
-func TestCleanInputUsesWakeOnlyPromptOnlyForBareMention(t *testing.T) {
+// 纯 @ 的消息也要把原话交给模型：唤醒指引是注解，不是正文的替身。
+func TestBareMentionKeepsOriginalTextAndAppendsWakeGuidance(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	bare := MessageEvent{
 		Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "10001", ToMe: true,
-		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}},
+		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "42", "name": "Diana"}}},
 	}
-	if got := runtime.cleanInput(bare, ""); got != runtime.Config().PromptWakeOnlyText {
-		t.Fatalf("纯 @ 没有走唤醒提示词：%q", got)
+	clean := runtime.cleanInput(bare, "")
+	if !strings.Contains(clean, "Diana") || !strings.Contains(clean, "@") {
+		t.Fatalf("原话没有留下来：%q", clean)
 	}
+	if clean == runtime.Config().PromptWakeOnlyText {
+		t.Fatalf("正文被唤醒提示词顶替了：%q", clean)
+	}
+	prompt := currentPromptTextWithSemanticContext(bare, clean, semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.Config().PromptWakeOnlyText})
+	if !strings.Contains(prompt, runtime.Config().PromptWakeOnlyText) {
+		t.Fatalf("唤醒指引没有作为注解附上：%q", prompt)
+	}
+	if !strings.Contains(prompt, "Diana") {
+		t.Fatalf("注解之后原话丢了：%q", prompt)
+	}
+
 	spoken := bare
-	spoken.Segments = append(spoken.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": "在干嘛"}})
-	if got := runtime.cleanInput(spoken, ""); !strings.Contains(got, "在干嘛") {
-		t.Fatalf("带内容的消息被换成了唤醒提示词：%q", got)
+	spoken.Segments = append(append([]MessageSegment{}, bare.Segments...), MessageSegment{Type: "text", Data: map[string]string{"text": "在干嘛"}})
+	got := currentPromptTextWithSemanticContext(spoken, runtime.cleanInput(spoken, ""), semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.Config().PromptWakeOnlyText})
+	if !strings.Contains(got, "在干嘛") {
+		t.Fatalf("带内容的消息正文丢了：%q", got)
+	}
+	if strings.Contains(got, runtime.Config().PromptWakeOnlyText) {
+		t.Fatalf("说了话的消息不该附唤醒指引：%q", got)
 	}
 }
 
-// 机器人自己的 @ 是噪声，别人的 @ 是回复对象的线索，不能一起剥掉。
+// 正文原样保留：机器人自己的 @ 和别人的 @ 都在。
 func TestCleanInputKeepsOtherPeopleMentions(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
@@ -64,8 +80,8 @@ func TestCleanInputKeepsOtherPeopleMentions(t *testing.T) {
 		},
 	}
 	got := runtime.cleanInput(event, "")
-	if strings.Contains(got, "42") {
-		t.Fatalf("机器人自己的 @ 没有剥掉：%q", got)
+	if !strings.Contains(got, "42") {
+		t.Fatalf("机器人自己的 @ 被剥掉了：%q", got)
 	}
 	if !strings.Contains(got, "10002") {
 		t.Fatalf("别人的 @ 被误删了：%q", got)
@@ -75,24 +91,20 @@ func TestCleanInputKeepsOtherPeopleMentions(t *testing.T) {
 	}
 }
 
-// at 段带昵称时渲染成「@Diana（3129583166）」。按账号做字符串替换只会挖掉号码，
-// 留下「@Diana（）」的残渣，文本照样不空、唤醒提示词照样不触发——所以要摘段。
-func TestCleanInputDropsNamedBotMention(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotAccount: "3129583166"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+// 判定用的那份副本要真的剥干净：at 段带昵称时渲染成「@Diana（3129583166）」，
+// 按账号做字符串替换只会挖掉号码，留下「@Diana（）」，纯 @ 就判不出来了。
+func TestBotMentionStrippedTextDropsNamedBotMention(t *testing.T) {
 	event := MessageEvent{
 		Kind: EventKindGroup, SelfID: "3129583166", GroupID: "g", UserID: "10001", ToMe: true,
 		Segments: []MessageSegment{
 			{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "Diana"}},
 		},
 	}
-	got := runtime.cleanInput(event, "")
-	if got != runtime.Config().PromptWakeOnlyText {
-		t.Fatalf("带昵称的纯 @ 没有走唤醒提示词：%q", got)
+	if got := botMentionStrippedText(event, "", "3129583166"); got != "" {
+		t.Fatalf("带昵称的 @ 没有摘干净：%q", got)
 	}
-	for _, residue := range []string{"Diana", "（", "@"} {
-		if strings.Contains(got, residue) && !strings.Contains(runtime.Config().PromptWakeOnlyText, residue) {
-			t.Fatalf("留下了残渣 %q：%q", residue, got)
-		}
+	if !bareWakeMention(event, "@Diana（3129583166）", "3129583166", nil) {
+		t.Fatal("带昵称的纯 @ 没有被认成一次唤醒")
 	}
 }
 
@@ -112,16 +124,16 @@ func TestCleanInputKeepsNamedMentionsOfOthers(t *testing.T) {
 	if !strings.Contains(got, "老王") || !strings.Contains(got, "10002") {
 		t.Fatalf("别人的 @ 被删了：%q", got)
 	}
-	if strings.Contains(got, "3129583166") {
-		t.Fatalf("机器人自己的 @ 没删干净：%q", got)
+	if !strings.Contains(got, "Diana") || !strings.Contains(got, "3129583166") {
+		t.Fatalf("机器人自己的 @ 也该留在原文里：%q", got)
 	}
 	if !strings.Contains(got, "看看") || !strings.Contains(got, "那条") {
 		t.Fatalf("正文被破坏：%q", got)
 	}
 }
 
-// @ 的注解要和正文对得上：@ 自己的已经从正文摘掉，就不能再说「不要忽略正文里的 @」；
-// @ 了别人的还在正文里，那句提醒要留着。
+// @ 的注解要和正文对得上：正文里的 @ 指向自己时说「这是在叫你」，
+// 还 @ 了别人时保留「别忽略 @」的提醒。
 func TestMentionAnnotationMatchesWhatIsInTheText(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "3129583166"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	self := MessageEvent{
@@ -129,11 +141,11 @@ func TestMentionAnnotationMatchesWhatIsInTheText(t *testing.T) {
 		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "Diana"}}},
 	}
 	got := currentPromptText(self, runtime.cleanInput(self, ""))
-	if !strings.Contains(got, "这条消息 @ 了你") {
+	if !strings.Contains(got, "那个 @ 指的就是你") {
 		t.Fatalf("没有告诉模型它被 @ 了：%q", got)
 	}
 	if strings.Contains(got, "@ 是当前消息的一部分") {
-		t.Fatalf("正文里已经没有 @ 了，不该再说「不要忽略」：%q", got)
+		t.Fatalf("只 @ 了自己时不该用「别忽略别人」的那句：%q", got)
 	}
 
 	withOther := self
@@ -166,5 +178,52 @@ func TestMentionsSomeoneElse(t *testing.T) {
 	unknownSelf := MessageEvent{Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": bot}}}}
 	if !mentionsSomeoneElse(unknownSelf) {
 		t.Fatal("不知道自己是谁时应当保守处理")
+	}
+}
+
+// 只喊一声名字和只 @ 一下是同一件事，都会招来「在呢」，所以都要附唤醒指引。
+func TestBareTriggerWordAlsoGetsWakeGuidance(t *testing.T) {
+	cfg := BotConfig{BotAccount: "42", GroupTriggers: []string{"Diana"}}.WithDefaults()
+	annotation := promptAnnotation{BotID: "42", WakeGuidance: cfg.PromptWakeOnlyText, TriggerWords: cfg.GroupTriggers}
+	event := MessageEvent{
+		Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "10001", ToMe: true,
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana"}}},
+	}
+	got := currentPromptTextWithSemanticContext(event, "Diana", semanticReferenceContext{}, annotation)
+	if !strings.Contains(got, "Diana") {
+		t.Fatalf("原话丢了：%q", got)
+	}
+	if !strings.Contains(got, cfg.PromptWakeOnlyText) {
+		t.Fatalf("只喊名字没有附唤醒指引：%q", got)
+	}
+
+	// 名字后面接了话就不是「只叫了一声」了。
+	spoken := event
+	spoken.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 帮我看看这个"}}}
+	got = currentPromptTextWithSemanticContext(spoken, "Diana 帮我看看这个", semanticReferenceContext{}, annotation)
+	if strings.Contains(got, cfg.PromptWakeOnlyText) {
+		t.Fatalf("说了话的消息不该附唤醒指引：%q", got)
+	}
+}
+
+// 唤醒指引已经把「这是一次有效唤醒」说清楚了，不要再叠一句泛泛的重复。
+func TestWakeGuidanceReplacesGenericMentionOnlyNotice(t *testing.T) {
+	cfg := BotConfig{BotAccount: "42"}.WithDefaults()
+	annotation := promptAnnotation{BotID: "42", WakeGuidance: cfg.PromptWakeOnlyText}
+	event := MessageEvent{
+		Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "10001", ToMe: true,
+		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}},
+	}
+	got := currentPromptTextWithSemanticContext(event, "@42", semanticReferenceContext{}, annotation)
+	if strings.Contains(got, "主要由 @ 或引用组成") {
+		t.Fatalf("唤醒指引之外还叠了泛泛的那句：%q", got)
+	}
+
+	// 只有引用、没有 @ 的消息走不到唤醒指引，那句仍然要留着。
+	quoted := event
+	quoted.Segments = []MessageSegment{{Type: "reply", Data: map[string]string{"id": "abc"}}}
+	got = currentPromptTextWithSemanticContext(quoted, "[diana-reply:abc]", semanticReferenceContext{}, annotation)
+	if !strings.Contains(got, "主要由 @ 或引用组成") {
+		t.Fatalf("纯引用的消息丢了提示：%q", got)
 	}
 }
