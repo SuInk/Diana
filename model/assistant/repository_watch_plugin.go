@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -63,6 +64,18 @@ type repositoryWatchSelection struct {
 	Issues       bool
 	Releases     bool
 	Stars        bool
+	// PullRequestEvents / IssueEvents 是只想收的动态种类，空表示全要。
+	PullRequestEvents []string
+	IssueEvents       []string
+}
+
+// wants 判断某一类动态要不要报。空集合是「全要」——老订阅没存过这个字段，
+// 不能因为后来加了开关就把它们静音。
+func (s repositoryWatchSelection) wants(kinds []string, status string) bool {
+	if len(kinds) == 0 {
+		return true
+	}
+	return slices.Contains(kinds, strings.ToLower(strings.TrimSpace(status)))
 }
 
 type repositoryWatchChange struct {
@@ -359,7 +372,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.PullRequests {
-		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, settings)
+		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -371,7 +384,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		change.Commits = p.foldMergedPullRequestCommits(ctx, repository, change.Commits, change.PullRequests, settings)
 	}
 	if selection.Issues {
-		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, settings)
+		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -464,7 +477,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	return commits, latest, newCommitCount > limit, nil
 }
 
-func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
+func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
@@ -533,6 +546,11 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		case item.CreatedAt.Equal(item.UpdatedAt):
 			status = "opened"
 			occurredAt = item.CreatedAt
+		}
+		if !selection.wants(selection.PullRequestEvents, status) {
+			// 这类动态没订阅：连提交列表都不用拉。被跳过的合并 PR 也就不再替它带来的
+			// 提交挡枪了——真想少看那些提交，把 Commit 一起关掉。
+			continue
 		}
 		// 新建的 PR 列出全部提交，更新的只列这轮新推上来的。
 		since := time.Time{}
@@ -731,7 +749,7 @@ func repositoryWatchPullAfterCursor(updatedAt time.Time, number int, cursor stri
 	return updatedAt.After(cursorTime) || updatedAt.Equal(cursorTime) && number > cursorNumber
 }
 
-func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cursor string, settings SettingValues) ([]repositoryWatchIssue, string, error) {
+func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchIssue, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
@@ -810,6 +828,9 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 			}
 		case item.CreatedAt.Equal(item.UpdatedAt):
 			status = "opened"
+		}
+		if !selection.wants(selection.IssueEvents, status) {
+			continue
 		}
 		closedAt := time.Time{}
 		if item.ClosedAt != nil {

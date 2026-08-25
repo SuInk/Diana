@@ -83,6 +83,8 @@ type repositoryWatchCreatePayload struct {
 	IntervalSeconds      int64                          `json:"interval_seconds"`
 	WatchCommits         bool                           `json:"watch_commits"`
 	WatchPullRequests    bool                           `json:"watch_pull_requests"`
+	PullRequestEvents    []string                       `json:"watch_pull_request_events,omitempty"`
+	IssueEvents          []string                       `json:"watch_issue_events,omitempty"`
 	WatchIssues          bool                           `json:"watch_issues"`
 	WatchReleases        bool                           `json:"watch_releases"`
 	WatchStars           bool                           `json:"watch_stars"`
@@ -109,6 +111,8 @@ type repositoryWatchUpdatePayload struct {
 	IntervalSeconds      int64                          `json:"interval_seconds,omitempty"`
 	WatchCommits         *bool                          `json:"watch_commits,omitempty"`
 	WatchPullRequests    *bool                          `json:"watch_pull_requests,omitempty"`
+	PullRequestEvents    []string                       `json:"watch_pull_request_events,omitempty"`
+	IssueEvents          []string                       `json:"watch_issue_events,omitempty"`
 	WatchIssues          *bool                          `json:"watch_issues,omitempty"`
 	WatchReleases        *bool                          `json:"watch_releases,omitempty"`
 	WatchStars           *bool                          `json:"watch_stars,omitempty"`
@@ -163,6 +167,8 @@ type botTaskPayload struct {
 	RepositoryBranch      string                             `json:"repository_branch,omitempty"`
 	WatchCommits          bool                               `json:"watch_commits,omitempty"`
 	WatchPullRequests     bool                               `json:"watch_pull_requests,omitempty"`
+	PullRequestEvents     []string                           `json:"watch_pull_request_events,omitempty"`
+	IssueEvents           []string                           `json:"watch_issue_events,omitempty"`
 	WatchIssues           bool                               `json:"watch_issues,omitempty"`
 	WatchReleases         bool                               `json:"watch_releases,omitempty"`
 	WatchStars            bool                               `json:"watch_stars,omitempty"`
@@ -475,6 +481,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		Repository: payload.Repository, Branch: payload.Branch, Interval: interval,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
 		ContextNamespace:    repositoryWatchContextNamespace(set, profile.ID),
@@ -510,6 +517,7 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		Repository: payload.Repository, Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
+		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 	}
 	if deliveryRequested {
@@ -824,7 +832,9 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
 		WatchCommits: item.WatchCommits, WatchPullRequests: item.WatchPullRequests,
 		WatchIssues: item.WatchIssues, WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
-		StarNotifyMode: item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
+		PullRequestEvents: append([]string(nil), item.WatchPullRequestEvents...),
+		IssueEvents:       append([]string(nil), item.WatchIssueEvents...),
+		StarNotifyMode:    item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
 		LastCommitSHA: item.LastCommitSHA, LastPullRequestCursor: item.LastPullRequestCursor,
 		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),

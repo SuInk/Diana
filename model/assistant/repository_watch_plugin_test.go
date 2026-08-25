@@ -19,29 +19,30 @@ import (
 )
 
 type repositoryWatchTestGitHub struct {
-	mu            sync.Mutex
-	commits       []map[string]any
-	pullRequests  []map[string]any
-	pullFiles     map[int][]map[string]any
-	releases      []map[string]any
-	starCount     int
-	events        []map[string]any
-	token         string
-	commitCalls   int
-	pullCalls     int
-	releaseCalls  int
-	pullCommits   map[int][]map[string]any
-	starCalls     int
-	eventCalls    int
-	diffCalls     int
-	pullFileCalls int
-	failCommits   bool
-	failReleases  bool
-	issues        []map[string]any
-	issueEvents   []map[string]any
-	issueCalls    int
-	issueEventCal int
-	failIssueEvts bool
+	mu              sync.Mutex
+	commits         []map[string]any
+	pullRequests    []map[string]any
+	pullFiles       map[int][]map[string]any
+	releases        []map[string]any
+	starCount       int
+	events          []map[string]any
+	token           string
+	commitCalls     int
+	pullCalls       int
+	releaseCalls    int
+	pullCommits     map[int][]map[string]any
+	starCalls       int
+	eventCalls      int
+	diffCalls       int
+	pullFileCalls   int
+	failCommits     bool
+	failReleases    bool
+	issues          []map[string]any
+	issueEvents     []map[string]any
+	issueCalls      int
+	pullCommitCalls int
+	issueEventCal   int
+	failIssueEvts   bool
 }
 
 func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +57,7 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 	if strings.Contains(r.URL.Path, "/pulls/") && strings.HasSuffix(r.URL.Path, "/commits") {
 		var number int
 		_, _ = fmt.Sscanf(r.URL.Path, "/repos/acme/demo/pulls/%d/commits", &number)
+		s.pullCommitCalls++
 		_ = json.NewEncoder(w).Encode(s.pullCommits[number])
 		return
 	}
@@ -1941,5 +1943,103 @@ func TestRepositoryWatchPluginDoesNotRepeatReopenForLaterUpdates(t *testing.T) {
 	change, err = plugin.checkSelected(context.Background(), "acme/demo", "", next, selection, nil)
 	if err != nil || len(change.Issues) != 1 || change.Issues[0].Status != "reopened" {
 		t.Fatalf("fallback issues=%#v err=%v", change.Issues, err)
+	}
+}
+
+// TestRepositoryWatchPluginHonoursSelectedEventKinds 验证只订阅一部分动态：勾了
+// 「新建 + 已合并」的 PR 订阅不该被每条评论顶一次，Issue 同理。
+func TestRepositoryWatchPluginHonoursSelectedEventKinds(t *testing.T) {
+	pullPayload := func(number int, title, state, createdAt, updatedAt string, merged bool) map[string]any {
+		payload := map[string]any{
+			"number": number, "title": title, "state": state,
+			"html_url":   "https://github.com/acme/demo/pull/" + fmt.Sprint(number),
+			"created_at": createdAt, "updated_at": updatedAt, "merged_at": nil,
+			"user": map[string]any{"login": "diana"},
+			"base": map[string]any{"ref": "main"}, "head": map[string]any{"ref": "feature"},
+		}
+		if merged {
+			payload["merged_at"] = updatedAt
+		}
+		return payload
+	}
+
+	github := &repositoryWatchTestGitHub{
+		pullRequests: []map[string]any{pullPayload(1, "baseline", "open", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", false)},
+		issues:       []map[string]any{repositoryWatchIssuePayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", "")},
+		pullCommits:  map[int][]map[string]any{},
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	selection := repositoryWatchSelection{
+		PullRequests: true, Issues: true,
+		PullRequestEvents: []string{"opened", "merged"},
+		IssueEvents:       []string{"opened"},
+	}
+
+	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	github.mu.Lock()
+	github.pullRequests = []map[string]any{
+		pullPayload(4, "合并了", "closed", "2026-08-13T00:00:00Z", "2026-08-16T00:00:00Z", true),
+		pullPayload(3, "只是被评论", "open", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", false),
+		pullPayload(2, "刚开的", "open", "2026-08-14T12:00:00Z", "2026-08-14T12:00:00Z", false),
+		pullPayload(1, "baseline", "open", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", false),
+	}
+	github.issues = []map[string]any{
+		repositoryWatchIssuePayload(3, "只是被评论", "open", "", "2026-08-13T00:00:00Z", "2026-08-15T00:00:00Z", ""),
+		repositoryWatchIssuePayload(2, "刚开的", "open", "", "2026-08-14T12:00:00Z", "2026-08-14T12:00:00Z", ""),
+		repositoryWatchIssuePayload(1, "baseline", "open", "", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z", ""),
+	}
+	github.mu.Unlock()
+
+	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPulls := map[int]string{}
+	for _, pullRequest := range change.PullRequests {
+		gotPulls[pullRequest.Number] = pullRequest.Status
+	}
+	if len(gotPulls) != 2 || gotPulls[2] != "opened" || gotPulls[4] != "merged" {
+		t.Fatalf("pull requests=%#v，只订阅了新建和已合并", change.PullRequests)
+	}
+	if len(change.Issues) != 1 || change.Issues[0].Number != 2 || change.Issues[0].Status != "opened" {
+		t.Fatalf("issues=%#v，只订阅了新建", change.Issues)
+	}
+	// 没订阅的 PR 连提交列表都不该去拉：过滤要发生在花掉这次请求之前。
+	github.mu.Lock()
+	pullCommitCalls := github.pullCommitCalls
+	github.mu.Unlock()
+	if pullCommitCalls != 2 {
+		t.Fatalf("PR 提交列表请求了 %d 次，只该为报出来的两个 PR 各拉一次", pullCommitCalls)
+	}
+
+	// 空集合仍然是「全要」：老订阅没存过这个字段，不能被静音。
+	all := repositoryWatchSelection{PullRequests: true, Issues: true}
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, all, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.PullRequests) != 3 || len(change.Issues) != 2 {
+		t.Fatalf("空集合被当成了「一条都不要」：pulls=%d issues=%d", len(change.PullRequests), len(change.Issues))
+	}
+}
+
+func TestNormalizeRepositoryWatchEvents(t *testing.T) {
+	got, err := normalizeRepositoryWatchEvents([]string{"MERGED", " opened ", "merged"}, repositoryWatchPullEventKinds, "PR ")
+	if err != nil || !slices.Equal(got, []string{"opened", "merged"}) {
+		t.Fatalf("normalize = %v, %v", got, err)
+	}
+	// 全选和没选过存成同一个空集合，回显才不会一个说「全部」一个逐项列。
+	full, err := normalizeRepositoryWatchEvents(repositoryWatchPullEventKinds, repositoryWatchPullEventKinds, "PR ")
+	if err != nil || full != nil {
+		t.Fatalf("full selection = %v, %v", full, err)
+	}
+	if _, err := normalizeRepositoryWatchEvents([]string{"reopened"}, repositoryWatchPullEventKinds, "PR "); err == nil {
+		t.Fatal("PR 没有 reopened 这种动态，应当报错")
 	}
 }
