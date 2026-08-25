@@ -23,6 +23,8 @@ type proactiveReplyQualityDecision struct {
 	AccountSafe bool
 	// AccountRisk 说明命中的风险类别，用于事件详情里解释为什么没发。
 	AccountRisk string
+	// AccountRiskReason 只解释账号风险，不能复用表达质量的正面评价。
+	AccountRiskReason string
 }
 
 type proactiveReplyQualityRejectedError struct {
@@ -78,18 +80,25 @@ const proactiveReplyQualityPrompt = `你是机器人回复的发送前审核器,
 另外单独判断一项账号安全:这条回复发出去会不会让机器人账号被平台处置。
 这一项和表达质量互相独立,判成不安全就一票否决,不看 confidence。只在回复
 「自己说出了」下面这些内容时才算不安全,别人说了什么不算:
-- 涉政:对现实政治人物、政党与政府机构、时政争议、政治事件的评价、立场表达
-  或动员,以及影射这些内容的谐音和梗。单纯提到国家、地名、历史常识不算。
+- 中国大陆涉政:只拦截对中国大陆现实政治人物、中国共产党与党政机构、敏感时政
+  争议或政治事件的评价、立场表达、动员,以及影射这些内容的谐音和梗。单纯提到
+  中国、城市、历史常识、中国企业或技术团队不算。
+- 境外政治与监管允许:中国大陆以外的政治人物、政府机构、选举、司法、监管和
+  执法新闻不属于本审核的 politics。中性报道美国州总检察长、传票、消费者保护
+  调查、欧盟监管或其他国家政策时必须放行,不得因为出现政府或政治词汇就拦截。
 - 露骨性内容:具体的性行为描写、色情内容、性服务信息。日常玩笑、暧昧调侃、
   含糊的成人话题不算。
 - 其他高风险:违法交易、毒品、武器制作、赌博引流、诈骗话术、自残教唆。
-这一项要严格:拿不准就判不安全。表达质量那边可以放行,这边不行。
+只在上述明确范围内判账号风险,不得自行扩大 politics 的地域和主题范围。命中明确
+风险时从严处理;没有命中时放行。表达质量那边仍按前述标准判断。
 
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"should_send":true,"confidence":0.96,"reason":"口吻自然,和原消息对得上","account_safe":true,"account_risk":""}
+{"should_send":true,"confidence":0.96,"reason":"口吻自然,和原消息对得上","account_safe":true,"account_risk":"","account_risk_reason":""}
 
 confidence 必须是 0 到 1 的数字,表示你对「这条回复的表达方式适合发出去」的信心。
-account_safe 为 false 时,account_risk 填命中的类别:politics / explicit / illegal。`
+account_safe 为 false 时,account_risk 填命中的类别:politics / explicit / illegal,
+account_risk_reason 必须单独写清候选回复中触发账号风险的具体内容。reason 只能评价
+表达质量,不得拿它代替账号风险理由。`
 
 func (r *Runtime) judgeProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) error {
 	ctx = withLLMUsagePurpose(ctx, "proactive_reply_quality")
@@ -125,7 +134,7 @@ func accountSafetyError(decision proactiveReplyQualityDecision) error {
 		return nil
 	}
 	risk := accountRiskLabel(decision.AccountRisk)
-	reason := strings.TrimSpace(decision.Reason)
+	reason := strings.TrimSpace(decision.AccountRiskReason)
 	if reason == "" {
 		return &replyAccountSafetyRejectedError{reason: fmt.Sprintf("回复未通过账号安全审核（%s），已保持沉默", risk)}
 	}
@@ -218,11 +227,12 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		return proactiveReplyQualityDecision{}, false
 	}
 	var payload struct {
-		ShouldSend  *bool    `json:"should_send"`
-		Confidence  *float64 `json:"confidence"`
-		Reason      *string  `json:"reason"`
-		AccountSafe *bool    `json:"account_safe"`
-		AccountRisk *string  `json:"account_risk"`
+		ShouldSend        *bool    `json:"should_send"`
+		Confidence        *float64 `json:"confidence"`
+		Reason            *string  `json:"reason"`
+		AccountSafe       *bool    `json:"account_safe"`
+		AccountRisk       *string  `json:"account_risk"`
+		AccountRiskReason *string  `json:"account_risk_reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil || payload.ShouldSend == nil || payload.Confidence == nil {
 		return proactiveReplyQualityDecision{}, false
@@ -239,6 +249,9 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	decision.AccountSafe = payload.AccountSafe == nil || *payload.AccountSafe
 	if payload.AccountRisk != nil {
 		decision.AccountRisk = strings.TrimSpace(*payload.AccountRisk)
+	}
+	if payload.AccountRiskReason != nil {
+		decision.AccountRiskReason = strings.TrimSpace(*payload.AccountRiskReason)
 	}
 	return decision, true
 }
