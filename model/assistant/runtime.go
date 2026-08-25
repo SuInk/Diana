@@ -9356,6 +9356,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		repositoryWatchSelection{
 			Commits: item.WatchCommits, PullRequests: item.WatchPullRequests,
 			Issues: item.WatchIssues, Releases: item.WatchReleases, Stars: item.WatchStars,
+			PullRequestEvents: item.WatchPullRequestEvents, IssueEvents: item.WatchIssueEvents,
 		},
 		settings,
 	)
