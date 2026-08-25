@@ -15,7 +15,7 @@ import (
 // splitReply 的注释里记着这个坑。所以这条能力只能长在提示词上：告诉群友风格
 // 「连着说的两三句短话本来就是两三次发言」，让它照原契约写 <dianabr>。
 func TestGroupmatePromptTeachesSplitMarker(t *testing.T) {
-	prompt := ReplyStyleGroupmate.prompt()
+	prompt := ReplyStyleGroupmate.prompt(personaVoice{})
 	if !strings.Contains(prompt, notificationSplitMarker) {
 		t.Fatalf("群友风格没教分条标记 %s：\n%s", notificationSplitMarker, prompt)
 	}
@@ -32,7 +32,7 @@ func TestGroupmatePromptTeachesSplitMarker(t *testing.T) {
 // 其余风格不带这条规则：它们本来就是一条消息说完一件事。
 func TestOtherStylesDoNotTeachSplitMarker(t *testing.T) {
 	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl} {
-		if strings.Contains(style.prompt(), notificationSplitMarker) {
+		if strings.Contains(style.prompt(personaVoice{}), notificationSplitMarker) {
 			t.Fatalf("风格 %s 不该教分条标记", style)
 		}
 	}

@@ -545,9 +545,19 @@
                   id="bot-reply-style"
                   :model-value="form.reply_style ?? 'assistant'"
                   :options="replyStyleOptions"
-                  @update:model-value="(value) => { if (form) form.reply_style = value as 'groupmate' | 'assistant' | 'gentle' | 'lively' | 'concise' | 'catgirl'; }"
+                  @update:model-value="(value) => applyReplyStyle(value as ReplyStyleKey)"
                 />
                 <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
+              </div>
+              <div class="field">
+                <label for="bot-self-reference">自称</label>
+                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随表达风格，例如 我 / 本喵 / 咱" />
+                <span class="hint">机器人怎么称呼自己。</span>
+              </div>
+              <div class="field wide">
+                <label for="bot-sentence-enders">句尾语气词</label>
+                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" placeholder="留空跟随表达风格，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
+                <span class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
               </div>
               <div class="field">
                 <label for="bot-response-mode">回复模式</label>
@@ -1125,6 +1135,38 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
+type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+
+// 每个风格自带的自称和句尾候选，和后端 DefaultPersonaVoice 保持一致。
+const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence_enders: string }> = {
+  groupmate: { self_reference: "", sentence_enders: "" },
+  assistant: { self_reference: "", sentence_enders: "" },
+  gentle: { self_reference: "", sentence_enders: "" },
+  lively: { self_reference: "", sentence_enders: "" },
+  concise: { self_reference: "", sentence_enders: "" },
+  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" }
+};
+
+// 切换风格时把这两个框填上，而不是运行时暗中套用：填进去用户看得见、能改。
+// 只覆盖空的、或还停留在上一个风格默认值的——用户自己改过的不动，否则来回切
+// 两下风格就把人家写的东西冲没了。
+function applyReplyStyle(value: ReplyStyleKey): void {
+  if (!form.value) return;
+  const previous = replyStyleVoices[(form.value.reply_style ?? "assistant") as ReplyStyleKey];
+  const next = replyStyleVoices[value];
+  form.value.reply_style = value;
+  const untouched = (current: string | undefined, wasDefault: string) => {
+    const trimmed = (current ?? "").trim();
+    return trimmed === "" || trimmed === wasDefault;
+  };
+  if (untouched(form.value.self_reference, previous?.self_reference ?? "")) {
+    form.value.self_reference = next.self_reference;
+  }
+  if (untouched(form.value.sentence_enders, previous?.sentence_enders ?? "")) {
+    form.value.sentence_enders = next.sentence_enders;
+  }
+}
+
 const replyStyleOptions: AppSelectOption[] = [
   { value: "groupmate", label: "群友" },
   { value: "assistant", label: "助手" },
@@ -1577,6 +1619,8 @@ function setForm(config: BotProfileConfig): void {
     natural_interjection_enabled: config.natural_interjection_enabled ?? false,
     response_mode: config.response_mode ?? "custom",
     reply_style: config.reply_style ?? "assistant",
+    self_reference: config.self_reference ?? "",
+    sentence_enders: config.sentence_enders ?? "",
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
     prompt_inject_plaintext_rules: config.prompt_inject_plaintext_rules ?? true,

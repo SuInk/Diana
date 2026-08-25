@@ -57,7 +57,7 @@ func liveLLMClient(t *testing.T) llm.LLMClient {
 // liveReplies 用当前真实的人设与风格提示词采样若干条回复。
 func liveReplies(t *testing.T, client llm.LLMClient, style ReplyStyle, userText string) []string {
 	t.Helper()
-	systemPrompt := defaultSystemPrompt + "\n" + style.prompt() + "\n" + style.closingAnchor()
+	systemPrompt := defaultSystemPrompt + "\n" + style.prompt(personaVoice{}) + "\n" + style.closingAnchor()
 	replies := make([]string, 0, livePromptSamples)
 	for i := 0; i < livePromptSamples; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -186,7 +186,7 @@ func livePaddingTurns(turns int) []llm.Message {
 
 func TestLivePromptRulesSurviveLongConversation(t *testing.T) {
 	client := liveLLMClient(t)
-	systemPrompt := defaultSystemPrompt + "\n" + ReplyStyleGroupmate.prompt() + "\n" + ReplyStyleGroupmate.closingAnchor()
+	systemPrompt := defaultSystemPrompt + "\n" + ReplyStyleGroupmate.prompt(personaVoice{}) + "\n" + ReplyStyleGroupmate.closingAnchor()
 
 	emojiViolations, blankViolations := 0, 0
 	for i := 0; i < livePromptSamples; i++ {
