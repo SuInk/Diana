@@ -345,6 +345,34 @@
                 </span>
               </div>
               <div class="field">
+                <label for="bot-short">短回复分界</label>
+                <input id="bot-short" v-model.number="form.reply_short_reply_size" class="input" inputmode="numeric" placeholder="140" />
+                <span class="hint">
+                  短于它按「短回复」算，最多分下面那么多条；分不进就整条发，不硬塞。
+                  长于它放宽到「长回复」的条数。留空按 140。
+                </span>
+              </div>
+              <div class="field">
+                <label for="bot-maxshort">短回复最多几条</label>
+                <input id="bot-maxshort" v-model.number="form.reply_max_short_bubbles" class="input" inputmode="numeric" placeholder="3" />
+                <span class="hint">这么短的内容分成太多条，屏幕上全是小气泡，比一条完整的消息更难读。留空按 3。</span>
+              </div>
+              <div class="field">
+                <label for="bot-maxlong">长回复最多几条</label>
+                <input id="bot-maxlong" v-model.number="form.reply_max_long_bubbles" class="input" inputmode="numeric" placeholder="5" />
+                <span class="hint">再多就不是分条能解决的了，交给下面的合并转发。不能小于短回复那一档。留空按 5。</span>
+              </div>
+              <div class="field">
+                <label for="bot-forward-len">合并转发字数</label>
+                <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" inputmode="numeric" placeholder="900" />
+                <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。留空按 900；填 0 关掉这条判断。</span>
+              </div>
+              <div class="field">
+                <label for="bot-forward-chunks">合并转发块数</label>
+                <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" inputmode="numeric" placeholder="5" />
+                <span class="hint">切出超过这么多块也改用合并转发卡片。留空按 5，也就是 6 块起。</span>
+              </div>
+              <div class="field">
                 <label for="bot-chunk">分段发送长度</label>
                 <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" placeholder="400" />
                 <span class="hint">单条聊天消息最多多少字，超出的部分另发一条。这是硬上限，撞上了会在最近的标点处切开。留空按 400；表达风格不会改动这一项。</span>

@@ -60,7 +60,7 @@ func TestLegacySplitMarkerStillSplitsAndNeverLeaks(t *testing.T) {
 // 群里看到的那条「释义一行、常见翻译一行」就该是两条。
 func TestChatReplySplitsShortRepliesOnNaturalLines(t *testing.T) {
 	reply := "assertiveness：坚定自信、敢于明确表达自身需求和立场，同时也尊重他人的能力\n常译为「坚定表达」「自信果断」；它介于 passive（消极退让）和 aggressive（咄咄逼人）之间"
-	chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes)
+	chunks := splitChatReply(reply, chatSplitLimits{})
 	if len(chunks) != 2 {
 		t.Fatalf("两行回复没有分成两条：%#v", chunks)
 	}
@@ -84,7 +84,7 @@ func TestChatReplyKeepsBlocksTogether(t *testing.T) {
 		{"单行", "端口被占了，先 lsof -i:8080 看看"},
 	}
 	for _, item := range cases {
-		if chunks := splitChatReply(item.reply, chatReplyChunkSize, replyBubbleTargetRunes); len(chunks) != 1 {
+		if chunks := splitChatReply(item.reply, chatSplitLimits{}); len(chunks) != 1 {
 			t.Fatalf("%s 被拆开了：%#v", item.name, chunks)
 		}
 	}
@@ -117,8 +117,8 @@ func promptTeachesSegmentation(prompt string) bool {
 // 都还押在模型的配合上；这一层不依赖任何信号——句号本来就是它自己写出来的边界。
 func TestChatReplyBubblesLongParagraphAtSentenceBoundaries(t *testing.T) {
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
-	chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes)
-	if len(chunks) < 2 || len(chunks) > replyMaxBubblesFor(reply) {
+	chunks := splitChatReply(reply, chatSplitLimits{})
+	if len(chunks) < 2 || len(chunks) > (chatSplitLimits{}).withDefaults().maxBubblesFor(reply) {
 		t.Fatalf("长段落没有分成两三条：%#v", chunks)
 	}
 	// 每条都得是完整句子收尾，不能像长度兜底那样劈在半句上。句号会被 trimChatTrailingPeriod
@@ -141,7 +141,7 @@ func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
 		"端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。",
 		"辛苦了，早点睡吧。",
 	} {
-		if chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes); len(chunks) != 1 {
+		if chunks := splitChatReply(reply, chatSplitLimits{}); len(chunks) != 1 {
 			t.Fatalf("短回复被拆开了：%#v", chunks)
 		}
 	}
@@ -219,8 +219,8 @@ func TestReplyBubbleTargetIsConfigurableAndClamped(t *testing.T) {
 	}
 	// 调小之后同一段话该拆得更碎。
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
-	wide := splitChatReply(reply, 400, 200)
-	narrow := splitChatReply(reply, 400, 30)
+	wide := splitChatReply(reply, chatSplitLimits{ChunkSize: 400, BubbleTarget: 200})
+	narrow := splitChatReply(reply, chatSplitLimits{ChunkSize: 400, BubbleTarget: 30})
 	if len(narrow) <= len(wide) {
 		t.Fatalf("调小分条长度没有拆得更碎：wide=%d narrow=%d", len(wide), len(narrow))
 	}
@@ -241,8 +241,8 @@ func TestChatReplyCapsTotalBubblesAcrossAllLayers(t *testing.T) {
 		{"两行加显式标记", long + "\n" + long + notificationSplitMarker + long},
 	}
 	for _, item := range cases {
-		got := splitChatReply(item.reply, chatReplyChunkSize, replyBubbleTargetRunes)
-		if max := replyMaxBubblesFor(item.reply); len(got) > max {
+		got := splitChatReply(item.reply, chatSplitLimits{})
+		if max := (chatSplitLimits{}).withDefaults().maxBubblesFor(item.reply); len(got) > max {
 			t.Fatalf("%s 拆出了 %d 条，上限是 %d：%#v", item.name, len(got), max, got)
 		}
 	}
@@ -253,7 +253,7 @@ func TestChatReplyCapsTotalBubblesAcrossAllLayers(t *testing.T) {
 func TestChatReplyNeverMergesWhatTheModelAskedToSplit(t *testing.T) {
 	long := "第一句话写得足够长用来占位凑够字数好触发按句子分条的门槛。第二句同样长度也要凑够六十个字才会被拆开来发。第三句还是一样长凑够字数触发分条规则生效。"
 	// 三行都超过细分门槛，加起来远超上限；三行本身仍然必须各占一条。
-	got := splitChatReply(long+"\n"+long+"\n"+long, chatReplyChunkSize, replyBubbleTargetRunes)
+	got := splitChatReply(long+"\n"+long+"\n"+long, chatSplitLimits{})
 	if len(got) < 3 {
 		t.Fatalf("模型写的换行被合掉了：%#v", got)
 	}
@@ -272,7 +272,7 @@ func TestChatReplyFallsBackOneDepthAtATime(t *testing.T) {
 	long := "第一句话写得足够长用来占位凑够字数好触发按句子分条的门槛。第二句同样长度也要凑够六十个字才会被拆开来发。第三句还是一样长凑够字数触发分条规则生效。"
 
 	// 三行都超过细分门槛：按句子分会超上限，退到「只按换行」正好三条。
-	byLine := splitChatReply(long+"\n"+long+"\n"+long, chatReplyChunkSize, replyBubbleTargetRunes)
+	byLine := splitChatReply(long+"\n"+long+"\n"+long, chatSplitLimits{})
 	if len(byLine) != 3 {
 		t.Fatalf("三行长文应该退到按换行分成三条，实际 %d 条", len(byLine))
 	}
@@ -283,7 +283,7 @@ func TestChatReplyFallsBackOneDepthAtATime(t *testing.T) {
 	}
 
 	// 四行短句：连按换行都超上限，这时才整条发。
-	whole := splitChatReply("第一句\n第二句\n第三句\n第四句", chatReplyChunkSize, replyBubbleTargetRunes)
+	whole := splitChatReply("第一句\n第二句\n第三句\n第四句", chatSplitLimits{})
 	if len(whole) != 1 {
 		t.Fatalf("四行应该整条发，实际 %d 条：%#v", len(whole), whole)
 	}
@@ -293,7 +293,7 @@ func TestChatReplyFallsBackOneDepthAtATime(t *testing.T) {
 // 反问被粘在陈述句后面就是这么来的。
 func TestChatReplyBalancesInsteadOfGreedilyFilling(t *testing.T) {
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
-	chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes)
+	chunks := splitChatReply(reply, chatSplitLimits{})
 	if len(chunks) != 2 {
 		t.Fatalf("113 字按 60 等分应该是两条，实际 %d 条：%#v", len(chunks), chunks)
 	}
@@ -314,7 +314,7 @@ func TestChatReplyBalancesInsteadOfGreedilyFilling(t *testing.T) {
 // 只能等撞上长度上限才被硬切——那才是真正会「看着很挤」的一坨。
 func TestChatReplySplitsCommaOnlyLongSentence(t *testing.T) {
 	line := "这个问题其实要看你想解决的是哪一层，如果只是想让它别再报错，那改配置就够了，但如果是想搞清楚为什么会这样，那得先看日志里那几行堆栈，再回头对一下版本号，因为这个行为在新版里改过一次"
-	chunks := splitChatReply(line, chatReplyChunkSize, replyBubbleTargetRunes)
+	chunks := splitChatReply(line, chatSplitLimits{})
 	if len(chunks) < 2 {
 		t.Fatalf("只有逗号的长句没有分条：%#v", chunks)
 	}
@@ -338,7 +338,7 @@ func TestChatReplyNeverSplitsInsideLinksOrCQCodes(t *testing.T) {
 		case "版本号":
 			text = "当前跑的是 v1.2.3-beta.4+build.5678 这个版本，具体差异我等下贴个对比出来给你看看行不行"
 		}
-		for _, chunk := range splitChatReply(text, chatReplyChunkSize, replyBubbleTargetRunes) {
+		for _, chunk := range splitChatReply(text, chatSplitLimits{}) {
 			if strings.HasSuffix(chunk, ":") || strings.HasSuffix(chunk, ",") || strings.HasSuffix(chunk, ".") {
 				t.Fatalf("%s 被从半角标点处切开了：%q", name, chunk)
 			}
@@ -358,14 +358,14 @@ func TestSubscriberNoticeKeepsSentencesTogether(t *testing.T) {
 // 正好 5 块不走卡片，逐条发；第 6 块才换成合并转发。
 func TestForwardCardTriggersAboveFiveChunks(t *testing.T) {
 	five := []string{"a", "b", "c", "d", "e"}
-	if shouldUseForwardReply("abcde", five, 0) {
+	if shouldUseForwardReply("abcde", five, 0, 0) {
 		t.Fatalf("正好 5 块不该走转发卡片")
 	}
-	if !shouldUseForwardReply("abcdef", append(five, "f"), 0) {
+	if !shouldUseForwardReply("abcdef", append(five, "f"), 0, 0) {
 		t.Fatalf("6 块应该走转发卡片")
 	}
 	// 长度条件独立于块数：超过阈值就走卡片。
-	if !shouldUseForwardReply(strings.Repeat("字", 950), []string{"x"}, 900) {
+	if !shouldUseForwardReply(strings.Repeat("字", 950), []string{"x"}, 900, 0) {
 		t.Fatalf("超过长度阈值应该走转发卡片")
 	}
 }
@@ -380,20 +380,20 @@ func TestBubbleCapTiersByReplyLength(t *testing.T) {
 		}
 		return string([]rune(s)[:n])
 	}
-	if got := replyMaxBubblesFor(pad(replyShortReplyRunes - 1)); got != replyMaxShortBubbles {
+	if got := (chatSplitLimits{}).withDefaults().maxBubblesFor(pad(replyShortReplyRunes - 1)); got != replyMaxShortBubbles {
 		t.Fatalf("139 字应该按短回复算，上限 %d，实际 %d", replyMaxShortBubbles, got)
 	}
-	if got := replyMaxBubblesFor(pad(replyShortReplyRunes)); got != replyMaxLongBubbles {
+	if got := (chatSplitLimits{}).withDefaults().maxBubblesFor(pad(replyShortReplyRunes)); got != replyMaxLongBubbles {
 		t.Fatalf("140 字应该按长回复算，上限 %d，实际 %d", replyMaxLongBubbles, got)
 	}
 	// 短回复分不进 3 条就整条发，不是硬塞成 3 条。
 	short := "第一句\n第二句\n第三句\n第四句"
-	if chunks := splitChatReply(short, chatReplyChunkSize, replyBubbleTargetRunes); len(chunks) != 1 {
+	if chunks := splitChatReply(short, chatSplitLimits{}); len(chunks) != 1 {
 		t.Fatalf("短回复四行应该整条发：%#v", chunks)
 	}
 	// 长回复放宽到 5 条。
 	longReply := pad(380)
-	if chunks := splitChatReply(longReply, chatReplyChunkSize, replyBubbleTargetRunes); len(chunks) > replyMaxLongBubbles {
+	if chunks := splitChatReply(longReply, chatSplitLimits{}); len(chunks) > replyMaxLongBubbles {
 		t.Fatalf("长回复超过上限：%d 条", len(chunks))
 	}
 }

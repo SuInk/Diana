@@ -185,8 +185,17 @@ export interface BotProfileConfig {
   max_reply_chars?: number;
   /** 一条消息读着舒服的长度；超过就在句子边界另起一条。不是硬上限，硬上限是 direct_reply_chunk_size。 */
   reply_bubble_target_size?: number;
+  /** 短回复与长回复的分界，两档各有自己的条数上限。 */
+  reply_short_reply_size?: number;
+  /** 短回复最多分几条；分不进就整条发。 */
+  reply_max_short_bubbles?: number;
+  /** 长回复最多分几条。 */
+  reply_max_long_bubbles?: number;
   direct_reply_chunk_size?: number;
+  /** 正文超过多少字改用合并转发卡片。 */
   forward_reply_threshold?: number;
+  /** 切出超过多少块改用合并转发卡片。 */
+  forward_reply_chunk_threshold?: number;
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
