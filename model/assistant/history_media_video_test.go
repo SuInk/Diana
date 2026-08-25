@@ -697,6 +697,58 @@ func TestRuntimeCachesMP4FileWithoutReplying(t *testing.T) {
 	}
 }
 
+func TestRuntimeVideoFileUsesFileParserFormatLimit(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	videoPath := filepath.Join(t.TempDir(), "large-enough-for-limit-test.mp4")
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=15:duration=3", "-pix_fmt", "yuv420p", videoPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create sample video: %v: %s", err, output)
+	}
+	info, err := os.Stat(videoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() <= 64*1024 {
+		t.Fatalf("sample video too small for setting range: %d", info.Size())
+	}
+
+	plugins := NewDefaultPluginManager()
+	if _, err := plugins.UpdateSettings(fileParserPluginID, map[string]any{
+		fileParserSettingMaxVideoFileBytes: float64(info.Size() - 1),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, plugins, nil, nil, nil, nil)
+	prepare := func(messageID string) MessageEvent {
+		event, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), MessageEvent{
+			Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: messageID,
+			RawMessage: "[文件:large-enough-for-limit-test.mp4]",
+			Segments: []MessageSegment{{Type: "file", Data: map[string]string{
+				"name": "large-enough-for-limit-test.mp4", "file": videoPath,
+			}}},
+		})
+		if handled || outcome != "ignored_video" {
+			t.Fatalf("video file routing changed: handled=%t outcome=%q", handled, outcome)
+		}
+		return event
+	}
+	if frames := cachedVideoFrameURLs(prepare("video-over-limit").Segments); len(frames) != 0 {
+		t.Fatalf("over-limit video unexpectedly produced %d frames", len(frames))
+	}
+
+	if _, err := plugins.UpdateSettings(fileParserPluginID, map[string]any{
+		fileParserSettingMaxVideoFileBytes: float64(info.Size() + 1),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if frames := cachedVideoFrameURLs(prepare("video-within-limit").Segments); len(frames) == 0 {
+		t.Fatal("video within the file parser limit produced no frames")
+	}
+}
+
 func TestRuntimeReplacesUnavailableNapCatVideoPath(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")

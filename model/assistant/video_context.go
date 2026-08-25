@@ -21,19 +21,43 @@ import (
 )
 
 const (
-	maxVideoContextBytes     = 100 << 20
 	minVideoContextFrames    = 4
 	maxVideoContextFrames    = 16
 	videoFrameGrowthInterval = 30.0
 )
 
+type videoContextMaxBytesKey struct{}
+
+func withVideoContextMaxBytes(ctx context.Context, maxBytes int64) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultFileParserMaxVideoBytes
+	}
+	return context.WithValue(ctx, videoContextMaxBytesKey{}, maxBytes)
+}
+
+func videoContextMaxBytes(ctx context.Context) int64 {
+	if ctx != nil {
+		if value, ok := ctx.Value(videoContextMaxBytesKey{}).(int64); ok && value > 0 {
+			return value
+		}
+	}
+	return defaultFileParserMaxVideoBytes
+}
+
 func localVideoPath(value string) string {
+	return localVideoPathWithLimit(value, defaultFileParserMaxVideoBytes)
+}
+
+func localVideoPathWithLimit(value string, maxBytes int64) string {
 	path := strings.TrimSpace(strings.TrimPrefix(value, "file://"))
 	if path == "" || !filepath.IsAbs(path) {
 		return ""
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.IsDir() || info.Size() <= 0 || info.Size() > maxVideoContextBytes {
+	if err != nil || info.IsDir() || info.Size() <= 0 || info.Size() > maxBytes {
 		return ""
 	}
 	resolved, err := filepath.EvalSymlinks(path)
@@ -107,11 +131,12 @@ func materializeVideoContextSource(ctx context.Context, source string, wait time
 		}
 		return path, func() { _ = os.RemoveAll(dir) }
 	}
-	path := waitForLocalMediaPath(ctx, source, wait, maxVideoContextBytes)
+	maxBytes := videoContextMaxBytes(ctx)
+	path := waitForLocalMediaPath(ctx, source, wait, maxBytes)
 	if path == "" {
 		return "", func() {}
 	}
-	path = localVideoPath(path)
+	path = localVideoPathWithLimit(path, maxBytes)
 	return path, func() {}
 }
 
@@ -139,12 +164,16 @@ func downloadVideoContextSource(ctx context.Context, source string) (string, str
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return cleanup(fmt.Errorf("HTTP %d", resp.StatusCode))
 	}
+	maxBytes := videoContextMaxBytes(ctx)
+	if resp.ContentLength > maxBytes {
+		return cleanup(fmt.Errorf("video exceeds file parser limit: %d > %d bytes", resp.ContentLength, maxBytes))
+	}
 	path := filepath.Join(workDir, "source.mp4")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		return cleanup(err)
 	}
-	written, copyErr := io.Copy(file, io.LimitReader(resp.Body, maxVideoContextBytes+1))
+	written, copyErr := io.Copy(file, io.LimitReader(resp.Body, maxBytes+1))
 	closeErr := file.Close()
 	if copyErr != nil {
 		return cleanup(copyErr)
@@ -152,8 +181,8 @@ func downloadVideoContextSource(ctx context.Context, source string) (string, str
 	if closeErr != nil {
 		return cleanup(closeErr)
 	}
-	if written <= 0 || written > maxVideoContextBytes {
-		return cleanup(fmt.Errorf("video size is invalid: %d", written))
+	if written <= 0 || written > maxBytes {
+		return cleanup(fmt.Errorf("video exceeds file parser limit: %d > %d bytes", written, maxBytes))
 	}
 	return path, workDir, nil
 }
@@ -198,7 +227,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) [
 	if err != nil {
 		return nil
 	}
-	stagedPath, err := stageVideoForContext(videoPath, workDir)
+	stagedPath, err := stageVideoForContext(ctx, videoPath, workDir)
 	if err != nil {
 		log.Printf("chatbot video staging failed for %s: %v", filepath.Base(videoPath), err)
 		_ = os.RemoveAll(workDir)
@@ -227,7 +256,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) [
 	return frames
 }
 
-func stageVideoForContext(sourcePath, workDir string) (string, error) {
+func stageVideoForContext(ctx context.Context, sourcePath, workDir string) (string, error) {
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return "", err
@@ -238,7 +267,8 @@ func stageVideoForContext(sourcePath, workDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	written, copyErr := io.Copy(destination, io.LimitReader(source, maxVideoContextBytes+1))
+	maxBytes := videoContextMaxBytes(ctx)
+	written, copyErr := io.Copy(destination, io.LimitReader(source, maxBytes+1))
 	closeErr := destination.Close()
 	if copyErr != nil {
 		return "", copyErr
@@ -246,8 +276,8 @@ func stageVideoForContext(sourcePath, workDir string) (string, error) {
 	if closeErr != nil {
 		return "", closeErr
 	}
-	if written <= 0 || written > maxVideoContextBytes {
-		return "", fmt.Errorf("video size is invalid: %d", written)
+	if written <= 0 || written > maxBytes {
+		return "", fmt.Errorf("video exceeds file parser limit: %d > %d bytes", written, maxBytes)
 	}
 	return destinationPath, nil
 }
