@@ -9575,11 +9575,10 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 // renderRepositoryWatchDiffDigest 把这一轮的 diff 压成给跟评看的参考资料。
 //
 // 通知正文只有标题和链接，模型据此写跟评就只能围着标题措辞打转——标题还常常是过期的。
-// 给它实际改了哪些文件、加删多少行、关键 hunk 长什么样，它才说得出具体的话。
-// 这份资料只进提示词，不进任何发出去的正文。
+// 给它一份「动了哪些文件、各自加删多少行」的清单，它才说得出具体的话。
 //
-// 收得比展示用更紧：文件按改动量排序后各留一段 patch，整体再压一次上限，
-// 一条动态的 diff 不该把跟评的上下文预算吃光。
+// 只要清单，不要 patch 正文：跟评是一句话的感想，读几千字的 diff 正文也用不上，
+// 白占预算。这份资料只进提示词，不进任何发出去的正文。
 func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
 	sections := make([]string, 0, 4)
 	if change.CommitDiff != nil {
@@ -9609,11 +9608,7 @@ func renderRepositoryWatchDiffFiles(files []repositoryWatchDiffFile, truncated b
 	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].Changes > ranked[j].Changes })
 	lines := make([]string, 0, len(ranked)+1)
 	for _, file := range ranked {
-		head := fmt.Sprintf("- %s（%s +%d -%d）", file.Filename, firstNonEmpty(file.Status, "modified"), file.Additions, file.Deletions)
-		if patch := strings.TrimSpace(file.Patch); patch != "" {
-			head += "\n" + patch
-		}
-		lines = append(lines, head)
+		lines = append(lines, fmt.Sprintf("- %s（%s +%d -%d）", file.Filename, firstNonEmpty(file.Status, "modified"), file.Additions, file.Deletions))
 	}
 	if truncated {
 		lines = append(lines, "（还有更多文件未列出）")

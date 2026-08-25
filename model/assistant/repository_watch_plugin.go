@@ -27,11 +27,10 @@ const (
 	repositoryWatchNoPullCursor    = "__none__"
 	// repositoryWatchDefaultLimit 是每类动态默认列出的条数，同时用作抓取上限。
 	repositoryWatchDefaultLimit = 10
-	// diff 是喂给跟评的参考资料，不是给人读的：文件数和每个 patch 的长度都收得
-	// 比展示用更紧，一条动态的 diff 不该把跟评的上下文预算吃光。
+	// 跟评只需要知道「动了哪些文件、动了多少」，patch 正文不进提示词：
+	// 一份 diff 的正文动辄几千字，而跟评只是一句话的感想，读了也用不上。
 	repositoryWatchDiffFileLimit   = 12
-	repositoryWatchDiffPatchRunes  = 1200
-	repositoryWatchDiffDigestRunes = 6000
+	repositoryWatchDiffDigestRunes = 1200
 	repositoryWatchNoIssueCursor   = "__none__"
 )
 
@@ -160,7 +159,6 @@ type repositoryWatchDiffFile struct {
 	Additions int    `json:"additions,omitempty"`
 	Deletions int    `json:"deletions,omitempty"`
 	Changes   int    `json:"changes,omitempty"`
-	Patch     string `json:"patch,omitempty"`
 }
 
 type repositoryWatchDiffFilePayload struct {
@@ -169,7 +167,6 @@ type repositoryWatchDiffFilePayload struct {
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
 	Changes   int    `json:"changes"`
-	Patch     string `json:"patch"`
 }
 
 type repositoryWatchStarChange struct {
@@ -509,7 +506,6 @@ func repositoryWatchDiffFiles(payload []repositoryWatchDiffFilePayload, limit in
 		files = append(files, repositoryWatchDiffFile{
 			Filename: strings.TrimSpace(item.Filename), Status: strings.TrimSpace(item.Status),
 			Additions: item.Additions, Deletions: item.Deletions, Changes: item.Changes,
-			Patch: truncateRunes(strings.TrimSpace(item.Patch), repositoryWatchDiffPatchRunes),
 		})
 	}
 	return files, len(payload) > limit
