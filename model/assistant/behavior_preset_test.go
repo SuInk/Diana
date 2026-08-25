@@ -35,7 +35,7 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 
 func TestReplyStylePromptIsSpecificAndBounded(t *testing.T) {
 	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl} {
-		prompt := style.prompt()
+		prompt := style.prompt(true)
 		if prompt == "" || !strings.Contains(prompt, "默认表达风格") {
 			t.Fatalf("style %q prompt = %q", style, prompt)
 		}
@@ -99,7 +99,7 @@ func TestReplyStyleClosingAnchorIsAlwaysPresent(t *testing.T) {
 }
 
 func TestGroupmateReplyStylePromptCarriesExamples(t *testing.T) {
-	prompt := ReplyStyleGroupmate.prompt()
+	prompt := ReplyStyleGroupmate.prompt(true)
 	if !strings.Contains(prompt, "示例") || !strings.Contains(prompt, "用户：") {
 		t.Fatalf("groupmate prompt is missing examples: %q", prompt)
 	}
@@ -127,7 +127,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{ReplyStyleGroupmate.prompt(), ReplyStyleGroupmate.closingAnchor()} {
+	for _, want := range []string{ReplyStyleGroupmate.prompt(true), ReplyStyleGroupmate.closingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -328,7 +328,7 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 			t.Fatalf("Normalized(%q) = %q", raw, got)
 		}
 	}
-	prompt := ReplyStyleCatgirl.prompt()
+	prompt := ReplyStyleCatgirl.prompt(true)
 	for _, want := range []string{"本喵", "动作描写", "只对主人称", "可爱只体现在语气上"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)

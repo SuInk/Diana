@@ -36,7 +36,7 @@ func TestEveryReplyStyleTeachesTheSplitMarker(t *testing.T) {
 		ReplyStyleAssistant, ReplyStyleGroupmate, ReplyStyleGentle,
 		ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl, ReplyStyle(""),
 	} {
-		prompt := style.prompt()
+		prompt := style.prompt(true)
 		if !promptTeachesSegmentation(prompt) {
 			t.Fatalf("style %q does not teach the split marker: %q", style, prompt)
 		}

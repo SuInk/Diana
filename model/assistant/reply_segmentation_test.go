@@ -397,3 +397,55 @@ func TestBubbleCapTiersByReplyLength(t *testing.T) {
 		t.Fatalf("长回复超过上限：%d 条", len(chunks))
 	}
 }
+
+// 自然分条可以整个关掉。关掉之后只认模型显式写的标记——那是它明说要分，关掉的是
+// 运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
+func TestNaturalSplitCanBeTurnedOff(t *testing.T) {
+	off := chatSplitLimitsFrom((BotConfig{NaturalReplySplitEnabled: boolPointer(false)}).WithDefaults())
+	if !off.MarkerOnly {
+		t.Fatal("关掉自然分条后 MarkerOnly 应该为真")
+	}
+	// 换行、句号都只当排版。
+	for _, reply := range []string{
+		"端口被占了\n先 lsof 看看",
+		"懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？",
+	} {
+		if chunks := splitChatReply(reply, off); len(chunks) != 1 {
+			t.Fatalf("关掉之后不该分条：%#v", chunks)
+		}
+	}
+	// 模型显式写的标记仍然照做。
+	if chunks := splitChatReply("结论"+notificationSplitMarker+"理由", off); len(chunks) != 2 {
+		t.Fatalf("显式标记被吞掉了：%#v", chunks)
+	}
+	// 默认是开的，零值也是开的——自然分条是默认行为。
+	if chatSplitLimitsFrom((BotConfig{}).WithDefaults()).MarkerOnly {
+		t.Fatal("默认应该开着自然分条")
+	}
+	if (chatSplitLimits{}).MarkerOnly {
+		t.Fatal("零值应该等于默认行为")
+	}
+}
+
+// 关掉之后提示词也得改口。投递侧不再按换行分条，提示词却还写着「换行就会分成两三
+// 条」，模型排的版就全落空了——分条位置又变回看模型的排版习惯，正是这条链路翻过车
+// 的那个形状。
+func TestPromptFollowsTheNaturalSplitSwitch(t *testing.T) {
+	on := ReplyStyleAssistant.prompt(true)
+	off := ReplyStyleAssistant.prompt(false)
+	if !strings.Contains(on, "意群边界换行") {
+		t.Fatalf("开着的时候应该教换行分条：%q", on)
+	}
+	if strings.Contains(off, "意群边界换行") {
+		t.Fatalf("关掉之后不该再教换行分条：%q", off)
+	}
+	if !strings.Contains(off, "换行不会分条") {
+		t.Fatalf("关掉之后要明说换行只是排版：%q", off)
+	}
+	// 两档都得教标记：那是唯一始终有效的分条方式。
+	for _, prompt := range []string{on, off} {
+		if !strings.Contains(prompt, notificationSplitMarker) {
+			t.Fatalf("提示词没教分条标记：%q", prompt)
+		}
+	}
+}

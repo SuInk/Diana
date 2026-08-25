@@ -183,6 +183,8 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
+  /** 自然分条：按换行和句子边界自动分成几条发。关掉后只认 <dianabr>；缺省等价于开启。 */
+  natural_reply_split_enabled?: boolean;
   /** 一条消息读着舒服的长度；超过就在句子边界另起一条。不是硬上限，硬上限是 direct_reply_chunk_size。 */
   reply_bubble_target_size?: number;
   /** 短回复与长回复的分界，两档各有自己的条数上限。 */
