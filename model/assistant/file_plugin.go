@@ -24,12 +24,14 @@ import (
 )
 
 const (
-	fileParserPluginID        = "official.file-parser-go"
-	defaultFileParserMaxBytes = 32 * 1024 * 1024
-	defaultFileParserMaxChars = 24000
+	fileParserPluginID             = "official.file-parser-go"
+	defaultFileParserMaxBytes      = 32 * 1024 * 1024
+	defaultFileParserMaxVideoBytes = 200 * 1024 * 1024
+	defaultFileParserMaxChars      = 24000
 
-	fileParserSettingMaxFileBytes = "max_file_bytes"
-	fileParserSettingMaxChars     = "max_chars"
+	fileParserSettingMaxFileBytes      = "max_file_bytes"
+	fileParserSettingMaxVideoFileBytes = "max_video_file_bytes"
+	fileParserSettingMaxChars          = "max_chars"
 )
 
 type FileParserPlugin struct {
@@ -71,18 +73,27 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          fileParserPluginID,
 		Name:        "文件解析",
-		Version:     "0.3.1",
-		Description: "官方内置文件解析插件；支持文本、代码、PDF、Office（docx/xlsx/pptx）、ODF 和 EPUB。PDF 在 macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
+		Version:     "0.3.2",
+		Description: "官方内置文件解析插件；支持文本、代码、PDF、Office（docx/xlsx/pptx）、ODF、EPUB 和视频关键帧。PDF 在 macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "message:read", "file:parse", "llm:multiple", "task:notify"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         fileParserSettingMaxFileBytes,
-				Label:       "最大文件大小",
-				Description: "超过该大小的文件不下载、不解析。",
+				Label:       "文档文件大小上限",
+				Description: "超过该大小的文本、PDF、Office、ODF 和 EPUB 不下载、不解析。",
 				Type:        PluginSettingTypeSize,
 				Default:     defaultFileParserMaxBytes,
+				Min:         settingRange(64 * 1024),
+				Max:         settingRange(256 * 1024 * 1024),
+			},
+			{
+				Key:         fileParserSettingMaxVideoFileBytes,
+				Label:       "视频文件抽帧上限",
+				Description: "超过该大小的视频文件不下载、不抽取关键帧。",
+				Type:        PluginSettingTypeSize,
+				Default:     defaultFileParserMaxVideoBytes,
 				Min:         settingRange(64 * 1024),
 				Max:         settingRange(256 * 1024 * 1024),
 			},
@@ -99,6 +110,10 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 			},
 		},
 	}
+}
+
+func fileParserVideoMaxBytes(settings SettingValues) int64 {
+	return settings.Bytes(fileParserSettingMaxVideoFileBytes, defaultFileParserMaxVideoBytes)
 }
 
 // Handle 解析消息里的文件并生成 LLM 上下文。
