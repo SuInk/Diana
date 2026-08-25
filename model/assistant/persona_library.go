@@ -6,6 +6,7 @@ package assistant
 import (
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -173,3 +174,86 @@ var (
 	errPersonaEmpty        = errors.New("assistant: persona has no content")
 	errPersonaLibraryFull  = errors.New("assistant: persona library is full")
 )
+
+// PersonaImportResult 报告一次导入的去向。三个数加起来等于文件里有效条目的数量,
+// 界面上要能说清楚「导进来几套、跳过几套、改名几套」——只说「导入成功」的话,
+// 用户不会知道有东西被改名了。
+type PersonaImportResult struct {
+	Imported []Persona `json:"imported,omitempty"`
+	// Skipped 是同名且四项完全一样的:同一个文件导两次不该攒出一堆副本。
+	Skipped int `json:"skipped"`
+	// Renamed 是同名但内容不同、被改成「名字 (2)」的。
+	Renamed int `json:"renamed"`
+	// Dropped 是没名字、没内容、或者超出库容量装不下的。
+	Dropped int `json:"dropped"`
+}
+
+// sameContent 比四项正文,不比 ID 和时间:判断「这套是不是已经有了」跟它什么时候
+// 存的、在别人机器上是什么 ID 无关。
+func (persona Persona) sameContent(other Persona) bool {
+	return persona.SystemPrompt == other.SystemPrompt &&
+		persona.ReplyStyle.Normalized() == other.ReplyStyle.Normalized() &&
+		persona.SelfReference == other.SelfReference &&
+		persona.SentenceEnders == other.SentenceEnders
+}
+
+// Import 把外部来的几套人设并进库里。
+//
+// 一律分配新 ID,不复用文件里的:那些 ID 来自别人的机器,撞上本地已有条目就会变成
+// 静默覆盖——导入一个文件把自己调了半天的人设冲掉,是这种功能最不能出的事。
+// 同名冲突改名而不是覆盖,同样为了这个:导入只增不减。
+func (set PersonaSet) Import(incoming []Persona, now time.Time) (PersonaSet, PersonaImportResult) {
+	set = set.WithDefaults()
+	var result PersonaImportResult
+	for _, persona := range incoming {
+		persona = persona.Normalized()
+		persona.ID = uuid.NewString()
+		if persona.Name == "" || persona.Empty() {
+			result.Dropped++
+			continue
+		}
+		if existing, ok := findPersonaByName(set.Personas, persona.Name); ok {
+			if existing.sameContent(persona) {
+				result.Skipped++
+				continue
+			}
+			persona.Name = uniquePersonaName(set.Personas, persona.Name)
+			if persona.Name == "" {
+				result.Dropped++
+				continue
+			}
+			result.Renamed++
+		}
+		if len(set.Personas) >= PersonaLibraryMaxEntries {
+			result.Dropped++
+			continue
+		}
+		persona.UpdatedAt = now
+		set.Personas = append(set.Personas, persona)
+		result.Imported = append(result.Imported, persona)
+	}
+	return set.WithDefaults(), result
+}
+
+func findPersonaByName(personas []Persona, name string) (Persona, bool) {
+	for _, persona := range personas {
+		if persona.Name == name {
+			return persona, true
+		}
+	}
+	return Persona{}, false
+}
+
+// uniquePersonaName 找一个没被占用的「名字 (n)」。名字有长度上限,加后缀前先把
+// 本体裁短,免得裁剪反过来把后缀吃掉、又撞回同一个名字。
+func uniquePersonaName(personas []Persona, name string) string {
+	for index := 2; index < PersonaLibraryMaxEntries+2; index++ {
+		suffix := " (" + strconv.Itoa(index) + ")"
+		base := truncateRunesPlain(name, personaNameMaxRunes-len([]rune(suffix)))
+		candidate := base + suffix
+		if _, taken := findPersonaByName(personas, candidate); !taken {
+			return candidate
+		}
+	}
+	return ""
+}

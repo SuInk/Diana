@@ -432,6 +432,37 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     else demoPersonas.unshift({ ...persona, id: `persona-${demoPersonas.length + 1}` });
     return json({ persona: demoPersonas[index >= 0 ? index : 0], personas: demoPersonas });
   }
+  if (path === "/api/assistant/personas/import") {
+    const incoming = (body.personas as Array<Record<string, unknown>>) ?? [];
+    let imported = 0;
+    let renamed = 0;
+    let skipped = 0;
+    let dropped = 0;
+    for (const raw of incoming) {
+      const name = String(raw.name ?? "").trim();
+      const persona = {
+        id: `persona-import-${demoPersonas.length + imported + 1}`,
+        name,
+        system_prompt: String(raw.system_prompt ?? ""),
+        reply_style: String(raw.reply_style ?? ""),
+        self_reference: String(raw.self_reference ?? ""),
+        sentence_enders: String(raw.sentence_enders ?? "")
+      };
+      const hasContent = persona.system_prompt || persona.reply_style || persona.self_reference || persona.sentence_enders;
+      if (!name || !hasContent) { dropped++; continue; }
+      const existing = demoPersonas.find((item) => item.name === name);
+      if (existing) {
+        const identical = existing.system_prompt === persona.system_prompt && existing.reply_style === persona.reply_style
+          && existing.self_reference === persona.self_reference && existing.sentence_enders === persona.sentence_enders;
+        if (identical) { skipped++; continue; }
+        persona.name = `${name} (2)`;
+        renamed++;
+      }
+      demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
+      imported++;
+    }
+    return json({ personas: demoPersonas, imported, skipped, renamed, dropped });
+  }
   if (path === "/api/assistant/personas/delete") {
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
     if (index >= 0) demoPersonas.splice(index, 1);

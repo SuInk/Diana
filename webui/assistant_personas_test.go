@@ -102,3 +102,50 @@ func TestPersonaLibraryRejectsEmptyPersona(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestPersonaLibraryImportMergesWithoutOverwriting(t *testing.T) {
+	_, router := newAssistantUsersTestRouter(t)
+
+	rec := personaRequest(t, router, http.MethodPost, "/api/assistant/personas", personaSavePayload{
+		Persona: assistant.Persona{Name: "猫娘", SystemPrompt: "我自己调的这一版"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = personaRequest(t, router, http.MethodPost, "/api/assistant/personas/import", personaImportPayload{
+		Version: 1,
+		Personas: []assistant.Persona{
+			{Name: "猫娘", SystemPrompt: "别人机器上的那一版"},
+			{Name: "技术群管", SystemPrompt: "话不多"},
+			{Name: "空壳"},
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var result personaImportResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 2 || result.Renamed != 1 || result.Dropped != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Personas) != 3 {
+		t.Fatalf("library = %#v", result.Personas)
+	}
+	for _, persona := range result.Personas {
+		if persona.Name == "猫娘" && persona.SystemPrompt != "我自己调的这一版" {
+			t.Fatalf("本地那份被覆盖了：%#v", persona)
+		}
+	}
+}
+
+// 空文件要给出明确错误，而不是当成「导入成功 0 套」。
+func TestPersonaLibraryImportRejectsEmptyFile(t *testing.T) {
+	_, router := newAssistantUsersTestRouter(t)
+	rec := personaRequest(t, router, http.MethodPost, "/api/assistant/personas/import", personaImportPayload{Version: 1})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

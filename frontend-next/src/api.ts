@@ -1530,6 +1530,25 @@ export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<{ p
   });
 }
 
+export interface PersonaImportResult {
+  personas: Persona[];
+  imported: number;
+  skipped: number;
+  renamed: number;
+  dropped: number;
+}
+
+/** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */
+export const PERSONA_EXPORT_VERSION = 1;
+
+/** 合并在后端做：一次读改写落一次库，中途失败不会留下「导了一半」的状态。 */
+export function importPersonas(personas: Persona[]): Promise<PersonaImportResult> {
+  return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
+    method: "POST",
+    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, personas })
+  });
+}
+
 export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
   return requestJSON<{ personas: Persona[] }>("/api/assistant/personas/delete", {
     method: "POST",
