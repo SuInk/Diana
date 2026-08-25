@@ -3243,7 +3243,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		contextImageURLs = withoutMessageImageURLs(contextImageURLs, messages)
 	}
 	messageEvent := event
-	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext)
+	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext, promptAnnotation{
+		BotID:        firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
+		WakeGuidance: cfg.PromptWakeOnlyText,
+		TriggerWords: cfg.GroupTriggers,
+	})
 	if directAgentDecision {
 		// 只为「确实没取到原图」的引用来源补一句文字摘要；原图已经附上的不再重复描述，
 		// 否则模型会同时看到图和一句「尚无缓存描述」，自相矛盾。
@@ -5792,19 +5796,53 @@ func chineseWeekday(day time.Weekday) string {
 	return weekdays[day]
 }
 
-// cleanInput 清理机器人 at 和空白后生成模型输入。
+// cleanInput 生成模型输入：正文保持原话，只做判定用的剥离。
+//
+// 曾经这里会把指向机器人自己的 @ 从正文里摘掉，理由是纯 @ 的消息不算空文本、
+// 唤醒提示词永远不生效。代价是模型看到的不再是用户说的那句话——它连自己被
+// 怎么叫的都不知道。判定和呈现分开：剥掉之后的副本只用来回答「这条是不是
+// 光叫了一声」，交给模型的仍然是原文，唤醒指引在注解层附上（见
+// currentPromptTextWithSemanticContext）。
 func (r *Runtime) cleanInput(event MessageEvent, text string) string {
 	cfg := r.effectiveConfigForEvent(event)
+	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
 	// 优先使用 segment 转出的可读文本，保留 @ 和触发词，但不把 CQ 协议码直接交给模型。
-	text = readableEventText(event, text)
-	text = strings.TrimSpace(text)
-	if imageOnlyPrompt(text, event) {
+	original := strings.TrimSpace(readableEventText(event, text))
+	if imageOnlyPrompt(botMentionStrippedText(event, text, botID), event) {
 		return cfg.PromptImageOnlyText
 	}
-	if text == "" {
+	if original == "" {
+		// 连原话都没有（无 segment、RawMessage 也空），没有可保留的东西。
 		return cfg.PromptWakeOnlyText
 	}
-	return text
+	return original
+}
+
+// botMentionStrippedText 返回摘掉机器人自己那个 @ 之后的正文，仅供判定使用。
+//
+// 摘段而不是剥字符串：at 段带了昵称时会渲染成「@Diana（3129583166）」，
+// 按账号做字符串替换只会挖掉号码，留下「@Diana（）」的残渣，文本照样不空。
+// 没有 segment、只能退回 RawMessage 的那条路上还是得按字符串剥。
+func botMentionStrippedText(event MessageEvent, fallback string, botID string) string {
+	stripped := event
+	stripped.Segments = withoutBotMentionSegments(event.Segments, botID)
+	return strings.TrimSpace(stripBotMentions(readableEventText(stripped, fallback), botID))
+}
+
+// withoutBotMentionSegments 摘掉指向机器人自己的 at 段，其余原样保留。
+func withoutBotMentionSegments(segments []MessageSegment, botID string) []MessageSegment {
+	botID = strings.TrimSpace(botID)
+	if botID == "" || len(segments) == 0 {
+		return segments
+	}
+	kept := make([]MessageSegment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.Type == "at" && strings.TrimSpace(segment.Data["qq"]) == botID {
+			continue
+		}
+		kept = append(kept, segment)
+	}
+	return kept
 }
 
 func readableEventText(event MessageEvent, fallback string) string {
@@ -6663,21 +6701,115 @@ func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentT
 func currentPromptText(event MessageEvent, text string) string {
 	return currentPromptTextWithSemanticContext(event, text, semanticReferenceContext{
 		RequestedSourceCount: len(eventSemanticSourceMessageIDs(event)),
-	})
+	}, promptAnnotation{})
 }
 
-func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourceContext semanticReferenceContext) string {
+// mentionsSomeoneElse 报告这条消息除了 @ 机器人自己，还 @ 了别人。
+// 取不到自己的账号时按「@ 了别人」处理：那句提醒多说一次无害，漏说会让模型
+// 忽略掉真正的回复对象。
+// promptAnnotation 是注解层需要、但只有运行时配置才知道的东西。
+// 单独传进来，免得注解层去猜「我是谁」「唤醒该怎么接」。
+type promptAnnotation struct {
+	// BotID 是机器人自己的账号。事件里的 SelfID 不一定有（某些上报路径不带），
+	// 配置里的 BotAccount 是兜底。
+	BotID string
+	// WakeGuidance 是配置里的「只被唤醒」提示词，留空则用内置默认值。
+	WakeGuidance string
+	// TriggerWords 是群里的唤醒词。只喊一声「Diana」和只 @ 一下是同一件事，
+	// 都要走唤醒指引，所以注解层得知道哪些字算「只是在叫你」。
+	TriggerWords []string
+}
+
+func (a promptAnnotation) botID(event MessageEvent) string {
+	return firstNonEmpty(strings.TrimSpace(a.BotID), strings.TrimSpace(event.SelfID))
+}
+
+func (a promptAnnotation) wakeGuidance() string {
+	return firstNonEmpty(strings.TrimSpace(a.WakeGuidance), defaultPromptWakeOnly)
+}
+
+// bareWakeMention 报告这条消息只是叫了一声：要么只有一个指向自己的 @，
+// 要么正文就是一个唤醒词，此外没有正文、没有引用、也没有 @ 别人。
+func bareWakeMention(event MessageEvent, text string, botID string, triggers []string) bool {
+	if eventHasSegmentType(event, "reply") || mentionsSomeoneElseFor(event, botID) {
+		return false
+	}
+	if currentMessageOnlyMentionsOrReplies(event, text) {
+		return eventHasSegmentType(event, "at")
+	}
+	return bareTriggerWord(text, triggers)
+}
+
+// bareTriggerWord 报告整条正文就是一个唤醒词，别的什么都没说。
+func bareTriggerWord(text string, triggers []string) bool {
 	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	for _, trigger := range triggers {
+		trigger = strings.TrimSpace(trigger)
+		if trigger == "" {
+			continue
+		}
+		if strings.EqualFold(text, trigger) {
+			return true
+		}
+	}
+	return false
+}
+
+func mentionsSomeoneElse(event MessageEvent) bool {
+	return mentionsSomeoneElseFor(event, event.SelfID)
+}
+
+func mentionsSomeoneElseFor(event MessageEvent, botID string) bool {
+	botID = strings.TrimSpace(botID)
+	for _, segment := range event.Segments {
+		if segment.Type != "at" {
+			continue
+		}
+		qq := strings.TrimSpace(segment.Data["qq"])
+		if qq == "" || qq == botID {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// currentPromptTextWithSemanticContext 组装交给模型的当前消息。
+//
+// annotation.WakeGuidance 是配置里的「只被唤醒」提示词。它是注解，不是正文替身：
+// 正文永远是用户的原话，这句只在「这条消息除了叫一声什么都没有」时附在后面，
+// 告诉模型该怎么接。
+func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourceContext semanticReferenceContext, annotation promptAnnotation) string {
+	text = strings.TrimSpace(text)
+	botID := annotation.botID(event)
+	wakeGuidanceAttached := false
 	hasAtSegment := eventHasSegmentType(event, "at")
 	hasReplySegment := eventHasSegmentType(event, "reply")
 	if text == "" {
-		text = "用户只唤醒了你，请自然回应。"
+		// 这里曾经又抄了一遍那句「用户只唤醒了你」的字面量，和 cleanInput 用的
+		// 配置项各写各的：改了配置这条路径上不生效，改了默认值这里也不跟着变。
+		// cleanInput 正常情况下已经把空文本换成了配置值，走到这儿说明是别的
+		// 调用路径，至少要和内置默认值保持同一份。
+		text = annotation.wakeGuidance()
+		wakeGuidanceAttached = true
+	} else if bareWakeMention(event, text, botID, annotation.TriggerWords) {
+		// 只是叫了一声：原话照留，接话方式作为注解跟在后面。
+		text += "\n\n" + annotation.wakeGuidance()
+		wakeGuidanceAttached = true
 	}
-	if currentMessageOnlyMentionsOrReplies(event, text) {
+	if currentMessageOnlyMentionsOrReplies(event, text) && !wakeGuidanceAttached {
+		// 唤醒指引已经把「这是一次有效唤醒、该怎么接」说全了，不再补这句泛泛的。
 		text += "\n\n这条当前消息主要由 @ 或引用组成，没有额外正文，也要把它当成一次有效唤醒并自然回复。"
 	}
 	if hasAtSegment {
-		text += "\n\n当前消息包含 @ 标记，@ 是当前消息的一部分，不要忽略。"
+		if mentionsSomeoneElseFor(event, botID) {
+			text += "\n\n当前消息包含 @ 标记，@ 是当前消息的一部分，不要忽略。"
+		} else {
+			text += "\n\n正文里那个 @ 指的就是你，等于有人直接叫了你一声。"
+		}
 	}
 	if hasReplySegment {
 		text += "\n\n当前消息包含引用/回复标记，引用关系是当前消息的一部分；如果引用内容能从历史参考中看出，可以结合它回复。"
