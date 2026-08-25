@@ -5797,6 +5797,11 @@ func (r *Runtime) cleanInput(event MessageEvent, text string) string {
 	cfg := r.effectiveConfigForEvent(event)
 	// 优先使用 segment 转出的可读文本，保留 @ 和触发词，但不把 CQ 协议码直接交给模型。
 	text = readableEventText(event, text)
+	// 机器人自己那个 @ 要剥掉。留着有两个后果：一是每条指名消息都带一段
+	// 「@42」的噪声；二是纯 @ 的消息因此不算空文本，下面那条唤醒提示词永远
+	// 不会生效，模型看到的就是一个光秃秃的 @，只好回一句「我在」。
+	// 别人的 @ 保留——那是回复对象的线索。
+	text = stripBotMentions(text, firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)))
 	text = strings.TrimSpace(text)
 	if imageOnlyPrompt(text, event) {
 		return cfg.PromptImageOnlyText
@@ -6671,7 +6676,11 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	hasAtSegment := eventHasSegmentType(event, "at")
 	hasReplySegment := eventHasSegmentType(event, "reply")
 	if text == "" {
-		text = "用户只唤醒了你，请自然回应。"
+		// 这里曾经又抄了一遍那句「用户只唤醒了你」的字面量，和 cleanInput 用的
+		// 配置项各写各的：改了配置这条路径上不生效，改了默认值这里也不跟着变。
+		// cleanInput 正常情况下已经把空文本换成了配置值，走到这儿说明是别的
+		// 调用路径，至少要和内置默认值保持同一份。
+		text = defaultPromptWakeOnly
 	}
 	if currentMessageOnlyMentionsOrReplies(event, text) {
 		text += "\n\n这条当前消息主要由 @ 或引用组成，没有额外正文，也要把它当成一次有效唤醒并自然回复。"
