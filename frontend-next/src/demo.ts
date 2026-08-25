@@ -14,6 +14,7 @@ import type {
   GlossaryEntry,
   GlossaryScopeSummary,
   ResolverDependency,
+  StatsHourBucket,
   StatsSnapshot,
   UpdateStatus,
   UserFavorabilityChange,
@@ -169,6 +170,18 @@ const demoGlossary: GlossaryEntry[] = [
     id: "glossary-3", scope_key: "group:100200418", term: "手冲", aliases: [],
     meaning: "手冲咖啡，这个群里只指咖啡", usage_count: 6, last_used_at: before(900),
     version: 1, status: "active", created_at: before(5400), updated_at: before(5400), revisions: []
+  },
+  // 全局词典每台机器人各一本：同一个梗在两台那里可以有不同的记法。
+  {
+    id: "glossary-4", scope_key: "bot:bot-onebot", term: "开摆", aliases: ["摆了"],
+    meaning: "放弃挣扎、随它去，群里多用于自嘲进度", usage_count: 18, last_used_at: before(60),
+    version: 1, status: "active", created_at: before(6000), updated_at: before(6000), revisions: []
+  },
+  {
+    id: "glossary-5", scope_key: "bot:bot-telegram", term: "开摆", aliases: [],
+    meaning: "这台机器人上记的是英文频道的用法：give up and chill",
+    usage_count: 4, last_used_at: before(400),
+    version: 1, status: "active", created_at: before(4200), updated_at: before(4200), revisions: []
   }
 ];
 
@@ -194,11 +207,11 @@ const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
 };
 
 export const demoEvents: AssistantEventDetail[] = [
-  { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
-  { id: "demo-event-2", at: before(9), kind: "group", platform: "onebot-v11", group_id: "100200418", user_id: "100200812", sender_name: "栖迟", message_id: "demo-7298", text: "[图片]", handled: false, status: "ignored", outcome: "bot_message_ignored", decision: "not_replied", reason: "识别为其他机器人发送的自动消息；“识别机器人后不回复”已启用，因此未启动视觉模型和主 Agent。", duration_ms: 42, llm_calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-  { id: "demo-event-3", at: before(18), kind: "private", platform: "telegram", user_id: "880024", sender_name: "Demo User", message_id: "demo-tg-114", text: "Zeabur 最近有什么产品更新？", reply: "我检索了官方更新渠道，并按发布时间整理了近期变化；真实服务会在回答中保留来源链接。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "私聊默认响应；问题包含时效性要求，Agent 先调用内置联网搜索再组织答案。", duration_ms: 8200, llm_calls: 2, input_tokens: 2844, output_tokens: 387, total_tokens: 3231, delivery_stage: "acknowledged", outbound_message_id: "demo-tg-out-114" },
-  { id: "demo-event-4", at: before(31), kind: "group", platform: "onebot-v11", group_id: "100200519", user_id: "100200913", sender_name: "星野", message_id: "demo-7220", text: "画一张雨夜城市里的复古电车", reply: "图片已生成并发送。事件明细默认显示缩略图，点击后查看原图。", handled: true, status: "replied", outcome: "image_generated", decision: "replied", reason: "命中群触发词并识别为明确的图片生成请求；调用独立生图模型。", duration_ms: 18400, llm_calls: 1, input_tokens: 1410, output_tokens: 262, total_tokens: 1672, delivery_stage: "acknowledged", outbound_message_id: "demo-out-7220" },
-  { id: "demo-event-5", at: before(47), kind: "group", platform: "onebot-v11", group_id: "100200301", user_id: "100201014", sender_name: "白榆", message_id: "demo-7166", text: "Zeabur 风味是什么", reply: "如果是在说产品界面，通常指偏开发者工具的克制布局：高信息密度、明确状态和较少装饰。", handled: true, status: "replied", outcome: "proactive_replied", decision: "replied", reason: "短句虽未显式 @机器人，但包含可回答的产品语境问题；主动回复判断认为应该参与。", duration_ms: 4900, llm_calls: 2, input_tokens: 1671, output_tokens: 237, total_tokens: 1908, delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7166" }
+  { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
+  { id: "demo-event-2", at: before(9), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200418", user_id: "100200812", sender_name: "栖迟", message_id: "demo-7298", text: "[图片]", handled: false, status: "ignored", outcome: "bot_message_ignored", decision: "not_replied", reason: "识别为其他机器人发送的自动消息；“识别机器人后不回复”已启用，因此未启动视觉模型和主 Agent。", duration_ms: 42, llm_calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+  { id: "demo-event-3", at: before(18), kind: "private", platform: "telegram", profile_id: "bot-telegram", user_id: "880024", sender_name: "Demo User", message_id: "demo-tg-114", text: "Zeabur 最近有什么产品更新？", reply: "我检索了官方更新渠道，并按发布时间整理了近期变化；真实服务会在回答中保留来源链接。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "私聊默认响应；问题包含时效性要求，Agent 先调用内置联网搜索再组织答案。", duration_ms: 8200, llm_calls: 2, input_tokens: 2844, output_tokens: 387, total_tokens: 3231, delivery_stage: "acknowledged", outbound_message_id: "demo-tg-out-114" },
+  { id: "demo-event-4", at: before(31), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200519", user_id: "100200913", sender_name: "星野", message_id: "demo-7220", text: "画一张雨夜城市里的复古电车", reply: "图片已生成并发送。事件明细默认显示缩略图，点击后查看原图。", handled: true, status: "replied", outcome: "image_generated", decision: "replied", reason: "命中群触发词并识别为明确的图片生成请求；调用独立生图模型。", duration_ms: 18400, llm_calls: 1, input_tokens: 1410, output_tokens: 262, total_tokens: 1672, delivery_stage: "acknowledged", outbound_message_id: "demo-out-7220" },
+  { id: "demo-event-5", at: before(47), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100201014", sender_name: "白榆", message_id: "demo-7166", text: "Zeabur 风味是什么", reply: "如果是在说产品界面，通常指偏开发者工具的克制布局：高信息密度、明确状态和较少装饰。", handled: true, status: "replied", outcome: "proactive_replied", decision: "replied", reason: "短句虽未显式 @机器人，但包含可回答的产品语境问题；主动回复判断认为应该参与。", duration_ms: 4900, llm_calls: 2, input_tokens: 1671, output_tokens: 237, total_tokens: 1908, delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7166" }
 ];
 
 const trace: AppLogEntry[] = [
@@ -208,12 +221,37 @@ const trace: AppLogEntry[] = [
   { id: "trace-4", kind: "debug", level: "info", action: "agent_trace", message: "Agent 完成", created_at: before(1), metadata: { phase: "agent_completed", finish_reason: "stop", duration_ms: 6800 } }
 ];
 
+// 演示里两台机器人分掉同一条曲线，切换开关才看得出总览确实跟着变。
+function hourlyBuckets(share: number): StatsHourBucket[] {
+  return demoHourlyTotals.map((total, index) => ({
+    hour_unix: Math.floor((now - (23 - index) * 3_600_000) / 1000),
+    total: Math.round(total * share),
+    handled: Math.round(demoHourlyHandled[index] * share),
+    errors: 0
+  }));
+}
+
+const demoHourlyTotals = [14, 22, 18, 35, 29, 48, 41, 60, 45, 72, 54, 82, 63, 77, 66, 39, 52, 44, 61, 34, 49, 57, 78, 64];
+const demoHourlyHandled = [3, 4, 2, 8, 5, 11, 9, 15, 8, 18, 12, 21, 13, 17, 15, 7, 12, 10, 14, 6, 11, 13, 19, 16];
+
 export const demoStats: StatsSnapshot = {
   started_at: before(3 * 24 * 60 + 8 * 60), uptime_seconds: 288_000, total_events: 12_486, handled_events: 3_218, error_events: 9,
   today_events: 1284, today_handled: 318, today_errors: 0, by_kind: { group: 1108, private: 176 },
-  hourly: Array.from({ length: 24 }, (_, index) => ({ hour_unix: Math.floor((now - (23 - index) * 3_600_000) / 1000), total: [14, 22, 18, 35, 29, 48, 41, 60, 45, 72, 54, 82, 63, 77, 66, 39, 52, 44, 61, 34, 49, 57, 78, 64][index], handled: [3, 4, 2, 8, 5, 11, 9, 15, 8, 18, 12, 21, 13, 17, 15, 7, 12, 10, 14, 6, 11, 13, 19, 16][index], errors: 0 })),
+  hourly: hourlyBuckets(1),
   avg_reply_ms: 5820, last_event_at: demoEvents[0].at,
-  bot: { running: true, connected: true, self_id: "100000001", active_workers: 2, plugins_enabled: 7, plugins_total: 8, bridge_enabled: false, bridge_connected: false }
+  bot: { running: true, connected: true, self_id: "100000001", active_workers: 2, plugins_enabled: 7, plugins_total: 8, bridge_enabled: false, bridge_connected: false },
+  by_profile: {
+    "bot-onebot": {
+      total_events: 9_642, handled_events: 2_480, error_events: 7,
+      today_events: 968, today_handled: 241, today_errors: 0, by_kind: { group: 862, private: 106 },
+      hourly: hourlyBuckets(0.75), avg_reply_ms: 5_240, last_event_at: demoEvents[0].at
+    },
+    "bot-telegram": {
+      total_events: 2_844, handled_events: 738, error_events: 2,
+      today_events: 316, today_handled: 77, today_errors: 0, by_kind: { group: 246, private: 70 },
+      hourly: hourlyBuckets(0.25), avg_reply_ms: 7_480, last_event_at: demoEvents[0].at
+    }
+  }
 };
 
 export const demoStatus: BotStatus = {
@@ -424,7 +462,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
 
   if (path === "/api/assistant/glossary" && method === "GET") {
-    const scopes = demoGlossaryScopes();
+    const profile = url.searchParams.get("profile") ?? "";
+    // 排除法和后端一致：只把明确属于别的机器人的作用域藏起来。
+    const others = assistantConfig.profiles?.map((item) => item.id).filter((id) => id && id !== profile) ?? [];
+    const scopes = demoGlossaryScopes().filter(
+      (item) => !profile || !others.some((id) => item.scope_key === `bot:${id}` || item.scope_key.startsWith(`${id}:`))
+    );
     const scope = url.searchParams.get("scope") || scopes[0]?.scope_key || "";
     const keyword = (url.searchParams.get("q") ?? "").trim();
     const includeDeleted = url.searchParams.get("include_deleted") === "true";

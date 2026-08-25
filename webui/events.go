@@ -133,7 +133,7 @@ func (h *EventStreamHandler) StartWatcher(ctx context.Context, interval time.Dur
 					h.hub.Publish("status", status)
 				}
 				if h.collector != nil && (statusChanged || time.Since(lastStatsAt) >= dashboardServerStatsCacheTTL) {
-					snapshot := h.collector.Snapshot()
+					snapshot := h.collector.SnapshotWithProfiles()
 					snapshot.Bot = summarizeBotStatus(status)
 					snapshot.Server = cachedDashboardServerStats(time.Now(), h.storagePath)
 					h.hub.Publish("stats", snapshot)
@@ -202,7 +202,7 @@ func (h *EventStreamHandler) stream(c *gin.Context) {
 		status := h.runtime.Status()
 		writeSSE(c, flusher, "status", status)
 		if h.collector != nil {
-			snapshot := h.collector.Snapshot()
+			snapshot := h.collector.SnapshotWithProfiles()
 			snapshot.Bot = summarizeBotStatus(status)
 			snapshot.Server = cachedDashboardServerStats(time.Now(), h.storagePath)
 			writeSSE(c, flusher, "stats", snapshot)

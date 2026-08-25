@@ -109,25 +109,37 @@ type DashboardEventStatsBucket struct {
 // deduplicated SQLite records. It runs once during process startup so normal
 // config reloads keep using the same in-memory collector.
 func (s *SQLiteStore) DashboardEventStatsSnapshot(ctx context.Context, now time.Time) (DashboardEventStats, error) {
-	stats := DashboardEventStats{ByKind: map[string]int64{}}
+	baselines, err := s.DashboardEventStatsSnapshotByProfile(ctx, now)
+	if err != nil {
+		return DashboardEventStats{}, err
+	}
+	return baselines[""], nil
+}
+
+// DashboardEventStatsSnapshotByProfile 按机器人拆开基线。键 "" 是全部机器人的
+// 合计，其余键是配置档 ID：控制台切到哪台，恢复出来的历史数字也得跟着切，
+// 否则重启之后那台机器人会顶着别人的历史量。
+func (s *SQLiteStore) DashboardEventStatsSnapshotByProfile(ctx context.Context, now time.Time) (map[string]DashboardEventStats, error) {
+	total := DashboardEventStats{ByKind: map[string]int64{}}
 	if s == nil || s.db == nil {
-		return stats, nil
+		return map[string]DashboardEventStats{"": total}, nil
 	}
 	if now.IsZero() {
 		now = time.Now()
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT kind, event_time, outcome, created_at, completed_at
+SELECT kind, event_time, outcome, created_at, completed_at, profile_id
 FROM (
   SELECT kind, event_time, COALESCE(outcome, '') AS outcome,
-         created_at, COALESCE(completed_at, 0) AS completed_at
+         created_at, COALESCE(completed_at, 0) AS completed_at,
+         TRIM(COALESCE(profile_id, '')) AS profile_id
   FROM inbound_events
   WHERE status = 'done' AND COALESCE(outcome, '') != 'ignored_stale'
 
   UNION ALL
 
-  SELECT m.kind, m.event_time, '', 0, 0
+  SELECT m.kind, m.event_time, '', 0, 0, TRIM(COALESCE(m.profile_id, ''))
   FROM message_events AS m
   LEFT JOIN inbound_events AS i ON i.id = m.id
   WHERE i.id IS NULL
@@ -136,65 +148,103 @@ FROM (
 )
 `)
 	if err != nil {
-		return DashboardEventStats{}, fmt.Errorf("query dashboard event baseline: %w", err)
+		return nil, fmt.Errorf("query dashboard event baseline: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	currentHour := now.Truncate(time.Hour).Unix()
 	cutoffHour := currentHour - 47*int64(time.Hour/time.Second)
-	buckets := map[int64]*DashboardEventStatsBucket{}
+	accumulators := map[string]*dashboardEventAccumulator{"": newDashboardEventAccumulator()}
 	for rows.Next() {
-		var kind, outcome string
+		var kind, outcome, profileID string
 		var eventTime, createdAt, completedAt int64
-		if err := rows.Scan(&kind, &eventTime, &outcome, &createdAt, &completedAt); err != nil {
-			return DashboardEventStats{}, fmt.Errorf("scan dashboard event baseline: %w", err)
+		if err := rows.Scan(&kind, &eventTime, &outcome, &createdAt, &completedAt, &profileID); err != nil {
+			return nil, fmt.Errorf("scan dashboard event baseline: %w", err)
 		}
 
-		stats.TotalEvents++
-		stats.ByKind[kind]++
+		targets := []*dashboardEventAccumulator{accumulators[""]}
+		if profileID = strings.TrimSpace(profileID); profileID != "" {
+			acc := accumulators[profileID]
+			if acc == nil {
+				acc = newDashboardEventAccumulator()
+				accumulators[profileID] = acc
+			}
+			targets = append(targets, acc)
+		}
 		handled := dashboardOutcomeHandled(outcome)
 		failed := outcome == "error_replied"
-		if handled {
-			stats.HandledEvents++
-			if completedAt > createdAt && createdAt > 0 {
-				stats.DurationTotalMS += (completedAt - createdAt) / int64(time.Millisecond)
-				stats.DurationCount++
-			}
-		}
-		if failed {
-			stats.ErrorEvents++
-		}
-
 		at := time.Unix(eventTime, 0).In(now.Location())
-		if at.After(stats.LastEventAt) {
-			stats.LastEventAt = at
-		}
 		hour := at.Truncate(time.Hour).Unix()
-		if hour < cutoffHour || hour > currentHour {
-			continue
-		}
-		bucket := buckets[hour]
-		if bucket == nil {
-			bucket = &DashboardEventStatsBucket{HourUnix: hour}
-			buckets[hour] = bucket
-		}
-		bucket.Total++
-		if handled {
-			bucket.Handled++
-		}
-		if failed {
-			bucket.Errors++
+		inWindow := hour >= cutoffHour && hour <= currentHour
+		for _, acc := range targets {
+			acc.observe(kind, at, hour, inWindow, handled, failed, createdAt, completedAt)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return DashboardEventStats{}, fmt.Errorf("iterate dashboard event baseline: %w", err)
+		return nil, fmt.Errorf("iterate dashboard event baseline: %w", err)
 	}
 
-	stats.Hourly = make([]DashboardEventStatsBucket, 0, len(buckets))
-	for _, bucket := range buckets {
+	baselines := make(map[string]DashboardEventStats, len(accumulators))
+	for key, acc := range accumulators {
+		baselines[key] = acc.snapshot()
+	}
+	return baselines, nil
+}
+
+// dashboardEventAccumulator 把一行基线记录同时累加到「全部」和「某台机器人」两
+// 份计数里，省得为每种作用域各写一遍同样的加法。
+type dashboardEventAccumulator struct {
+	stats   DashboardEventStats
+	buckets map[int64]*DashboardEventStatsBucket
+}
+
+func newDashboardEventAccumulator() *dashboardEventAccumulator {
+	return &dashboardEventAccumulator{
+		stats:   DashboardEventStats{ByKind: map[string]int64{}},
+		buckets: map[int64]*DashboardEventStatsBucket{},
+	}
+}
+
+func (a *dashboardEventAccumulator) observe(kind string, at time.Time, hour int64, inWindow bool, handled bool, failed bool, createdAt int64, completedAt int64) {
+	a.stats.TotalEvents++
+	a.stats.ByKind[kind]++
+	if handled {
+		a.stats.HandledEvents++
+		if completedAt > createdAt && createdAt > 0 {
+			a.stats.DurationTotalMS += (completedAt - createdAt) / int64(time.Millisecond)
+			a.stats.DurationCount++
+		}
+	}
+	if failed {
+		a.stats.ErrorEvents++
+	}
+	if at.After(a.stats.LastEventAt) {
+		a.stats.LastEventAt = at
+	}
+	if !inWindow {
+		return
+	}
+	bucket := a.buckets[hour]
+	if bucket == nil {
+		bucket = &DashboardEventStatsBucket{HourUnix: hour}
+		a.buckets[hour] = bucket
+	}
+	bucket.Total++
+	if handled {
+		bucket.Handled++
+	}
+	if failed {
+		bucket.Errors++
+	}
+}
+
+func (a *dashboardEventAccumulator) snapshot() DashboardEventStats {
+	stats := a.stats
+	stats.Hourly = make([]DashboardEventStatsBucket, 0, len(a.buckets))
+	for _, bucket := range a.buckets {
 		stats.Hourly = append(stats.Hourly, *bucket)
 	}
-	return stats, nil
+	return stats
 }
 
 func dashboardOutcomeHandled(outcome string) bool {
@@ -203,7 +253,9 @@ func dashboardOutcomeHandled(outcome string) bool {
 }
 
 // DashboardStatsForDay 汇总本地当天的消息处理和 API 使用统计。
-func (s *SQLiteStore) DashboardStatsForDay(ctx context.Context, now time.Time) (DashboardStats, error) {
+// DashboardStatsForDay 统计当天数据。botProfileID 非空时只算那台机器人收到和回复
+// 的消息；服务器资源、运行时长这类进程级指标不受作用域影响，本来就只有一份。
+func (s *SQLiteStore) DashboardStatsForDay(ctx context.Context, now time.Time, botProfileID string) (DashboardStats, error) {
 	if s == nil || s.db == nil {
 		return DashboardStats{}, nil
 	}
@@ -224,34 +276,35 @@ func (s *SQLiteStore) DashboardStatsForDay(ctx context.Context, now time.Time) (
 
 	sinceUnix, untilUnix := since.Unix(), until.Unix()
 	sinceNano, untilNano := since.UnixNano(), until.UnixNano()
+	scope, scopeArgs := dashboardProfileScope(botProfileID)
 	if err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM message_events
 WHERE kind IN ('group', 'private')
-  AND event_time >= ? AND event_time < ?
-`, sinceUnix, untilUnix).Scan(&stats.ReceivedMessages); err != nil {
+  AND event_time >= ? AND event_time < ?`+scope+`
+`, append([]any{sinceUnix, untilUnix}, scopeArgs...)...).Scan(&stats.ReceivedMessages); err != nil {
 		return DashboardStats{}, fmt.Errorf("count dashboard messages: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(DISTINCT NULLIF(TRIM(user_id), ''))
 FROM message_events
 WHERE kind IN ('group', 'private')
-  AND event_time >= ? AND event_time < ?
-`, sinceUnix, untilUnix).Scan(&stats.ActiveMembers); err != nil {
+  AND event_time >= ? AND event_time < ?`+scope+`
+`, append([]any{sinceUnix, untilUnix}, scopeArgs...)...).Scan(&stats.ActiveMembers); err != nil {
 		return DashboardStats{}, fmt.Errorf("count dashboard active members: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM inbound_events
 WHERE outcome IN ('replied', 'error_replied')
-  AND completed_at >= ? AND completed_at < ?
-`, sinceNano, untilNano).Scan(&stats.RepliedMessages); err != nil {
+  AND completed_at >= ? AND completed_at < ?`+scope+`
+`, append([]any{sinceNano, untilNano}, scopeArgs...)...).Scan(&stats.RepliedMessages); err != nil {
 		return DashboardStats{}, fmt.Errorf("count dashboard replies: %w", err)
 	}
-	if err := fillDashboardMessageBuckets(ctx, s.db, stats.Hourly, since, until, sinceUnix, untilUnix); err != nil {
+	if err := fillDashboardMessageBuckets(ctx, s.db, stats.Hourly, since, until, sinceUnix, untilUnix, scope, scopeArgs); err != nil {
 		return DashboardStats{}, err
 	}
-	if err := fillDashboardReplyBuckets(ctx, s.db, stats.Hourly, since, until, sinceNano, untilNano); err != nil {
+	if err := fillDashboardReplyBuckets(ctx, s.db, stats.Hourly, since, until, sinceNano, untilNano, scope, scopeArgs); err != nil {
 		return DashboardStats{}, err
 	}
 	if err := s.fillDashboardLogStats(ctx, &stats, since, until); err != nil {
@@ -272,13 +325,13 @@ WHERE outcome IN ('replied', 'error_replied')
 	return stats, nil
 }
 
-func fillDashboardMessageBuckets(ctx context.Context, db *sql.DB, buckets []DashboardStatsBucket, since time.Time, until time.Time, sinceUnix int64, untilUnix int64) error {
+func fillDashboardMessageBuckets(ctx context.Context, db *sql.DB, buckets []DashboardStatsBucket, since time.Time, until time.Time, sinceUnix int64, untilUnix int64, scope string, scopeArgs []any) error {
 	rows, err := db.QueryContext(ctx, `
 SELECT event_time
 FROM message_events
 WHERE kind IN ('group', 'private')
-  AND event_time >= ? AND event_time < ?
-`, sinceUnix, untilUnix)
+  AND event_time >= ? AND event_time < ?`+scope+`
+`, append([]any{sinceUnix, untilUnix}, scopeArgs...)...)
 	if err != nil {
 		return fmt.Errorf("query dashboard message buckets: %w", err)
 	}
@@ -296,13 +349,13 @@ WHERE kind IN ('group', 'private')
 	return rows.Err()
 }
 
-func fillDashboardReplyBuckets(ctx context.Context, db *sql.DB, buckets []DashboardStatsBucket, since time.Time, until time.Time, sinceNano int64, untilNano int64) error {
+func fillDashboardReplyBuckets(ctx context.Context, db *sql.DB, buckets []DashboardStatsBucket, since time.Time, until time.Time, sinceNano int64, untilNano int64, scope string, scopeArgs []any) error {
 	rows, err := db.QueryContext(ctx, `
 SELECT completed_at
 FROM inbound_events
 WHERE outcome IN ('replied', 'error_replied')
-  AND completed_at >= ? AND completed_at < ?
-`, sinceNano, untilNano)
+  AND completed_at >= ? AND completed_at < ?`+scope+`
+`, append([]any{sinceNano, untilNano}, scopeArgs...)...)
 	if err != nil {
 		return fmt.Errorf("query dashboard reply buckets: %w", err)
 	}
@@ -403,4 +456,13 @@ func int64FromAny(value any) int64 {
 	default:
 		return 0
 	}
+}
+
+// dashboardProfileScope 拼出机器人作用域条件。message_events 与 inbound_events
+// 的列名相同，两张表共用这一段。
+func dashboardProfileScope(botProfileID string) (string, []any) {
+	if botProfileID = strings.TrimSpace(botProfileID); botProfileID != "" {
+		return " AND COALESCE(profile_id, '') = ?", []any{botProfileID}
+	}
+	return "", nil
 }

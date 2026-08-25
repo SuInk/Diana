@@ -287,10 +287,10 @@ func main() {
 	// 先恢复持久统计再挂监听器。配置保存或切换只重启机器人连接，
 	// 不会重置这组计数；进程重启也能从去重消息记录恢复基线。
 	statsCollector := webui.NewStatsCollector()
-	if baseline, err := sqliteStore.DashboardEventStatsSnapshot(ctx, time.Now()); err != nil {
+	if baselines, err := sqliteStore.DashboardEventStatsSnapshotByProfile(ctx, time.Now()); err != nil {
 		log.Printf("dashboard stats restore failed: %v", err)
 	} else {
-		statsCollector.RestoreDurableBaseline(baseline)
+		statsCollector.RestoreDurableBaselines(baselines)
 	}
 	eventHub := webui.NewEventHub()
 	botRuntime.SetEventListener(func(event assistant.EventRecord) {
