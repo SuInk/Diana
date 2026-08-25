@@ -7784,7 +7784,7 @@ func shouldUseForwardReply(reply string, chunks []string, threshold int) bool {
 	if threshold <= 0 {
 		return false
 	}
-	text := strings.TrimSpace(strings.ReplaceAll(reply, notificationSplitMarker, "\n"))
+	text := strings.TrimSpace(strings.ReplaceAll(normalizeSplitMarkers(reply), notificationSplitMarker, "\n"))
 	return len([]rune(text)) > threshold
 }
 
@@ -10344,7 +10344,25 @@ func chunkOverflowAllowance(chunkSize int) int {
 }
 
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
-const notificationSplitMarker = "<dianabr>"
+// legacyNotificationSplitMarker 是它在 <dianabr> 之前的名字。
+//
+// 这层归一化被「删除全部旧版兼容层」一并清掉过一次，但它兼容的不是旧版代码，是
+// 旧版**数据**：改名那天起，用户自定义过的提示词文案里就一直留着旧标记，而配置
+// 不会随代码升级重写。删掉之后这些实例陷入两头不认——提示词教模型写 <botbr>，
+// 投递侧只认 <dianabr>：模型照做了也不分条，而且旧标记既没被识别也没被清掉，
+// 会原样发进群里让人看见一个 <botbr>。
+const (
+	notificationSplitMarker       = "<dianabr>"
+	legacyNotificationSplitMarker = "<botbr>"
+)
+
+// normalizeSplitMarkers 把旧标记统一成新标记，后续只需按一种写法切分。
+func normalizeSplitMarkers(text string) string {
+	if !strings.Contains(text, legacyNotificationSplitMarker) {
+		return text
+	}
+	return strings.ReplaceAll(text, legacyNotificationSplitMarker, notificationSplitMarker)
+}
 
 // splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 <dianabr>，
 // 再按长度兜底。发言和通知走的是同一套规则。
@@ -10364,7 +10382,7 @@ func splitReply(reply string, chunkSize int) []string {
 	if chunkSize <= 0 {
 		chunkSize = notificationChunkSize
 	}
-	reply = collapseBlankLines(reply)
+	reply = collapseBlankLines(normalizeSplitMarkers(reply))
 	if reply == "" {
 		return nil
 	}
