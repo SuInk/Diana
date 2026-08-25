@@ -355,10 +355,7 @@ type BotConfig struct {
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
-	ReplyBubbleTargetSize        int             `json:"reply_bubble_target_size,omitempty"`
-	ReplyShortReplySize          int             `json:"reply_short_reply_size,omitempty"`
-	ReplyMaxShortBubbles         int             `json:"reply_max_short_bubbles,omitempty"`
-	ReplyMaxLongBubbles          int             `json:"reply_max_long_bubbles,omitempty"`
+	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
@@ -571,10 +568,7 @@ type ConfigPayload struct {
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
-	ReplyBubbleTargetSize        int             `json:"reply_bubble_target_size,omitempty"`
-	ReplyShortReplySize          int             `json:"reply_short_reply_size,omitempty"`
-	ReplyMaxShortBubbles         int             `json:"reply_max_short_bubbles,omitempty"`
-	ReplyMaxLongBubbles          int             `json:"reply_max_long_bubbles,omitempty"`
+	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
@@ -1029,10 +1023,7 @@ func DefaultBotConfig() BotConfig {
 		NaturalInterjectionEnabled:     boolPointer(false),
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
-		ReplyBubbleTargetSize:          replyBubbleTargetRunes,
-		ReplyShortReplySize:            replyShortReplyRunes,
-		ReplyMaxShortBubbles:           replyMaxShortBubbles,
-		ReplyMaxLongBubbles:            replyMaxLongBubbles,
+		ReplyMaxBubbles:                replyMaxChatBubbles,
 		ForwardReplyChunkThreshold:     forwardReplyChunkCountThreshold,
 		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
@@ -1183,29 +1174,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.DirectReplyChunkSize <= 0 {
 		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
 	}
-	if cfg.ReplyBubbleTargetSize <= 0 {
-		cfg.ReplyBubbleTargetSize = defaults.ReplyBubbleTargetSize
-	}
-	if cfg.ReplyShortReplySize <= 0 {
-		cfg.ReplyShortReplySize = defaults.ReplyShortReplySize
-	}
-	if cfg.ReplyMaxShortBubbles <= 0 {
-		cfg.ReplyMaxShortBubbles = defaults.ReplyMaxShortBubbles
-	}
-	if cfg.ReplyMaxLongBubbles <= 0 {
-		cfg.ReplyMaxLongBubbles = defaults.ReplyMaxLongBubbles
+	if cfg.ReplyMaxBubbles <= 0 {
+		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
 	}
 	if cfg.ForwardReplyChunkThreshold <= 0 {
 		cfg.ForwardReplyChunkThreshold = defaults.ForwardReplyChunkThreshold
-	}
-	// 长回复的条数上限不该比短回复还小：那样长的反而分得更碎，读起来正好反过来。
-	if cfg.ReplyMaxLongBubbles < cfg.ReplyMaxShortBubbles {
-		cfg.ReplyMaxLongBubbles = cfg.ReplyMaxShortBubbles
-	}
-	// 自然分条长度是「读着舒服」，硬上限是「最多能有多长」；前者高过后者时它就没有
-	// 意义了（先撞上硬上限，永远轮不到它），压回去比留个不生效的数字清楚。
-	if cfg.ReplyBubbleTargetSize > cfg.DirectReplyChunkSize {
-		cfg.ReplyBubbleTargetSize = cfg.DirectReplyChunkSize
 	}
 	if cfg.ForwardReplyThreshold <= 0 {
 		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
@@ -1404,10 +1377,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxInputChars:                  cfg.MaxInputChars,
 		MaxReplyChars:                  cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:       copyBoolPointer(cfg.NaturalReplySplitEnabled),
-		ReplyBubbleTargetSize:          cfg.ReplyBubbleTargetSize,
-		ReplyShortReplySize:            cfg.ReplyShortReplySize,
-		ReplyMaxShortBubbles:           cfg.ReplyMaxShortBubbles,
-		ReplyMaxLongBubbles:            cfg.ReplyMaxLongBubbles,
+		ReplyMaxBubbles:                cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:     cfg.ForwardReplyChunkThreshold,
 		DirectReplyChunkSize:           cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:          cfg.ForwardReplyThreshold,
@@ -1542,10 +1512,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxInputChars:                  payload.MaxInputChars,
 		MaxReplyChars:                  payload.MaxReplyChars,
 		NaturalReplySplitEnabled:       copyBoolPointer(payload.NaturalReplySplitEnabled),
-		ReplyBubbleTargetSize:          payload.ReplyBubbleTargetSize,
-		ReplyShortReplySize:            payload.ReplyShortReplySize,
-		ReplyMaxShortBubbles:           payload.ReplyMaxShortBubbles,
-		ReplyMaxLongBubbles:            payload.ReplyMaxLongBubbles,
+		ReplyMaxBubbles:                payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:     payload.ForwardReplyChunkThreshold,
 		DirectReplyChunkSize:           payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:          payload.ForwardReplyThreshold,

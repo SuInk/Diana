@@ -342,36 +342,18 @@
                   <span>自然分条</span>
                 </label>
                 <span class="hint">
-                  按换行和句子边界把一条回复自动分成几条发，像真人连发那样。
-                  关掉后只认模型显式写的分条标记，换行和句号都只当排版——下面四项随之失效，
+                  按模型自己排的换行把一条回复分成几条发，像真人连发那样。
+                  关掉后只认模型显式写的分条标记，换行只当排版——下面的「最多分几条」随之失效，
                   「分段发送长度」和「合并转发」不受影响。
                 </span>
               </div>
               <div class="field">
-                <label for="bot-bubble">自然分条长度</label>
-                <input id="bot-bubble" :disabled="!form.natural_reply_split_enabled" v-model.number="form.reply_bubble_target_size" class="input" inputmode="numeric" placeholder="60" />
+                <label for="bot-maxbubbles">最多分几条</label>
+                <input id="bot-maxbubbles" :disabled="!form.natural_reply_split_enabled" v-model.number="form.reply_max_bubbles" class="input" inputmode="numeric" placeholder="5" />
                 <span class="hint">
-                  一条消息读着舒服的长度。超过它就在句子边界另起一条，像真人连发几条那样，最多拆三条。
-                  留空按 60；这不是上限，只是「多长该换一条」，真正的上限是下面那项。
+                  按换行分出来不超过它就照分，超过就不分、整条发出去——几条小气泡挤在一起比一条完整的消息更难读。
+                  再长的交给下面的合并转发。留空按 5。
                 </span>
-              </div>
-              <div class="field">
-                <label for="bot-short">短回复分界</label>
-                <input id="bot-short" :disabled="!form.natural_reply_split_enabled" v-model.number="form.reply_short_reply_size" class="input" inputmode="numeric" placeholder="140" />
-                <span class="hint">
-                  短于它按「短回复」算，最多分下面那么多条；分不进就整条发，不硬塞。
-                  长于它放宽到「长回复」的条数。留空按 140。
-                </span>
-              </div>
-              <div class="field">
-                <label for="bot-maxshort">短回复最多几条</label>
-                <input id="bot-maxshort" :disabled="!form.natural_reply_split_enabled" v-model.number="form.reply_max_short_bubbles" class="input" inputmode="numeric" placeholder="3" />
-                <span class="hint">这么短的内容分成太多条，屏幕上全是小气泡，比一条完整的消息更难读。留空按 3。</span>
-              </div>
-              <div class="field">
-                <label for="bot-maxlong">长回复最多几条</label>
-                <input id="bot-maxlong" :disabled="!form.natural_reply_split_enabled" v-model.number="form.reply_max_long_bubbles" class="input" inputmode="numeric" placeholder="5" />
-                <span class="hint">再多就不是分条能解决的了，交给下面的合并转发。不能小于短回复那一档。留空按 5。</span>
               </div>
               <div class="field">
                 <label for="bot-forward-len">合并转发字数</label>
