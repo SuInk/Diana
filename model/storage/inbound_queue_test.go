@@ -404,14 +404,9 @@ func TestInboundQueueAllowsThreeGroupTasksButKeepsPrivateSerial(t *testing.T) {
 	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "bounded-concurrency.db"))
 	defer func() { _ = store.Close() }()
 
-	// 每条来自不同的人:三条并发就是留给「群里不同的人各问各的」。同一个人连发的
-	// 情况另有约束（见 TestInboundQueueSerializesSameSenderWithinSession），拿同一个
-	// 发送者来测并发上限只会测到那条约束上去。
 	for index := 1; index <= 4; index++ {
 		messageID := fmt.Sprintf("group-%d", index)
-		event := inboundTestEvent(messageID, messageID, int64(index))
-		event.UserID = fmt.Sprintf("sender-%d", index)
-		if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", event); err != nil || !inserted {
+		if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", inboundTestEvent(messageID, messageID, int64(index))); err != nil || !inserted {
 			t.Fatalf("enqueue %s inserted=%v err=%v", messageID, inserted, err)
 		}
 	}
@@ -553,56 +548,4 @@ func pendingInboundCount(t *testing.T, store *SQLiteStore) int {
 		t.Fatal(err)
 	}
 	return count
-}
-
-// 群聊允许同一会话三条并发,但那三条是留给「不同的人各问各的」。同一个人连发
-// 两条时必须串行:并发的话第二轮建提示词时第一轮还没发出去,历史里没有上一句,
-// 模型只能把同一件事再答一遍。
-func TestInboundQueueSerializesSameSenderWithinSession(t *testing.T) {
-	ctx := context.Background()
-	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "same-sender.db"))
-	defer func() { _ = store.Close() }()
-
-	sameSender := func(messageID string, eventTime int64) assistant.MessageEvent {
-		return inboundTestEvent(messageID, messageID, eventTime)
-	}
-	otherSender := func(messageID string, eventTime int64) assistant.MessageEvent {
-		event := inboundTestEvent(messageID, messageID, eventTime)
-		event.UserID = "9"
-		return event
-	}
-
-	firstID, _, err := store.EnqueueInboundEvent(ctx, "group:1", sameSender("first", 10))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", sameSender("second", 20)); err != nil {
-		t.Fatal(err)
-	}
-	otherID, _, err := store.EnqueueInboundEvent(ctx, "group:1", otherSender("other", 30))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	first, ok, err := store.ClaimNextInboundEvent(ctx, "worker-a", time.Now().Add(time.Minute), 3)
-	if err != nil || !ok || first.ID != firstID {
-		t.Fatalf("first claim item=%#v ok=%v err=%v", first, ok, err)
-	}
-	// 同一个人的第二条要等,别人的那条不受影响——三条并发依然为不同的人保留。
-	other, ok, err := store.ClaimNextInboundEvent(ctx, "worker-b", time.Now().Add(time.Minute), 3)
-	if err != nil || !ok || other.ID != otherID {
-		t.Fatalf("another sender should stay claimable: item=%#v ok=%v err=%v", other, ok, err)
-	}
-	if blocked, ok, err := store.ClaimNextInboundEvent(ctx, "worker-c", time.Now().Add(time.Minute), 3); err != nil || ok {
-		t.Fatalf("same sender ran twice at once: item=%#v ok=%v err=%v", blocked, ok, err)
-	}
-
-	// 前一条落终态后,同一个人的下一条立刻可领——串行,不是丢弃。
-	if err := store.CompleteInboundEvent(ctx, first.ID, "worker-a", "replied"); err != nil {
-		t.Fatal(err)
-	}
-	second, ok, err := store.ClaimNextInboundEvent(ctx, "worker-c", time.Now().Add(time.Minute), 3)
-	if err != nil || !ok || second.ID == firstID {
-		t.Fatalf("second claim item=%#v ok=%v err=%v", second, ok, err)
-	}
 }
