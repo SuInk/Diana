@@ -5795,13 +5795,20 @@ func chineseWeekday(day time.Weekday) string {
 // cleanInput 清理机器人 at 和空白后生成模型输入。
 func (r *Runtime) cleanInput(event MessageEvent, text string) string {
 	cfg := r.effectiveConfigForEvent(event)
-	// 优先使用 segment 转出的可读文本，保留 @ 和触发词，但不把 CQ 协议码直接交给模型。
-	text = readableEventText(event, text)
-	// 机器人自己那个 @ 要剥掉。留着有两个后果：一是每条指名消息都带一段
-	// 「@42」的噪声；二是纯 @ 的消息因此不算空文本，下面那条唤醒提示词永远
-	// 不会生效，模型看到的就是一个光秃秃的 @，只好回一句「我在」。
+	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
+	// 机器人自己那个 @ 要去掉。留着有两个后果：一是每条指名消息都带一段自指的
+	// 噪声；二是纯 @ 的消息因此不算空文本，下面那条唤醒提示词永远不会生效，
+	// 模型看到的就是一个光秃秃的 @，只好回一句「我在」。
 	// 别人的 @ 保留——那是回复对象的线索。
-	text = stripBotMentions(text, firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)))
+	//
+	// 摘段而不是剥字符串：at 段带了昵称时会渲染成「@Diana（3129583166）」，
+	// 按账号做字符串替换只会挖掉号码，留下「@Diana（）」的残渣，文本照样不空。
+	readable := event
+	readable.Segments = withoutBotMentionSegments(event.Segments, botID)
+	// 优先使用 segment 转出的可读文本，保留 @ 和触发词，但不把 CQ 协议码直接交给模型。
+	text = readableEventText(readable, text)
+	// 没有 segment、只能退回 RawMessage 的那条路上还是得按字符串剥。
+	text = stripBotMentions(text, botID)
 	text = strings.TrimSpace(text)
 	if imageOnlyPrompt(text, event) {
 		return cfg.PromptImageOnlyText
@@ -5810,6 +5817,22 @@ func (r *Runtime) cleanInput(event MessageEvent, text string) string {
 		return cfg.PromptWakeOnlyText
 	}
 	return text
+}
+
+// withoutBotMentionSegments 摘掉指向机器人自己的 at 段，其余原样保留。
+func withoutBotMentionSegments(segments []MessageSegment, botID string) []MessageSegment {
+	botID = strings.TrimSpace(botID)
+	if botID == "" || len(segments) == 0 {
+		return segments
+	}
+	kept := make([]MessageSegment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.Type == "at" && strings.TrimSpace(segment.Data["qq"]) == botID {
+			continue
+		}
+		kept = append(kept, segment)
+	}
+	return kept
 }
 
 func readableEventText(event MessageEvent, fallback string) string {

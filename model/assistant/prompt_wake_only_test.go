@@ -74,3 +74,48 @@ func TestCleanInputKeepsOtherPeopleMentions(t *testing.T) {
 		t.Fatalf("正文被破坏：%q", got)
 	}
 }
+
+// at 段带昵称时渲染成「@Diana（3129583166）」。按账号做字符串替换只会挖掉号码，
+// 留下「@Diana（）」的残渣，文本照样不空、唤醒提示词照样不触发——所以要摘段。
+func TestCleanInputDropsNamedBotMention(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "3129583166"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindGroup, SelfID: "3129583166", GroupID: "g", UserID: "10001", ToMe: true,
+		Segments: []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "Diana"}},
+		},
+	}
+	got := runtime.cleanInput(event, "")
+	if got != runtime.Config().PromptWakeOnlyText {
+		t.Fatalf("带昵称的纯 @ 没有走唤醒提示词：%q", got)
+	}
+	for _, residue := range []string{"Diana", "（", "@"} {
+		if strings.Contains(got, residue) && !strings.Contains(runtime.Config().PromptWakeOnlyText, residue) {
+			t.Fatalf("留下了残渣 %q：%q", residue, got)
+		}
+	}
+}
+
+// 别人的 @ 带昵称时要完整保留：那是「在说谁」的线索。
+func TestCleanInputKeepsNamedMentionsOfOthers(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "3129583166"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindGroup, SelfID: "3129583166", GroupID: "g", UserID: "10001", ToMe: true,
+		Segments: []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "Diana"}},
+			{Type: "text", Data: map[string]string{"text": " 看看 "}},
+			{Type: "at", Data: map[string]string{"qq": "10002", "name": "老王"}},
+			{Type: "text", Data: map[string]string{"text": " 那条"}},
+		},
+	}
+	got := runtime.cleanInput(event, "")
+	if !strings.Contains(got, "老王") || !strings.Contains(got, "10002") {
+		t.Fatalf("别人的 @ 被删了：%q", got)
+	}
+	if strings.Contains(got, "3129583166") {
+		t.Fatalf("机器人自己的 @ 没删干净：%q", got)
+	}
+	if !strings.Contains(got, "看看") || !strings.Contains(got, "那条") {
+		t.Fatalf("正文被破坏：%q", got)
+	}
+}
