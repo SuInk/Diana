@@ -118,7 +118,7 @@ func promptTeachesSegmentation(prompt string) bool {
 func TestChatReplyBubblesLongParagraphAtSentenceBoundaries(t *testing.T) {
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
 	chunks := splitChatReply(reply, chatReplyChunkSize, replyBubbleTargetRunes)
-	if len(chunks) < 2 || len(chunks) > replyMaxChatBubbles {
+	if len(chunks) < 2 || len(chunks) > replyMaxBubblesFor(reply) {
 		t.Fatalf("长段落没有分成两三条：%#v", chunks)
 	}
 	// 每条都得是完整句子收尾，不能像长度兜底那样劈在半句上。句号会被 trimChatTrailingPeriod
@@ -242,8 +242,8 @@ func TestChatReplyCapsTotalBubblesAcrossAllLayers(t *testing.T) {
 	}
 	for _, item := range cases {
 		got := splitChatReply(item.reply, chatReplyChunkSize, replyBubbleTargetRunes)
-		if len(got) > replyMaxChatBubbles {
-			t.Fatalf("%s 拆出了 %d 条，上限是 %d：%#v", item.name, len(got), replyMaxChatBubbles, got)
+		if max := replyMaxBubblesFor(item.reply); len(got) > max {
+			t.Fatalf("%s 拆出了 %d 条，上限是 %d：%#v", item.name, len(got), max, got)
 		}
 	}
 }
@@ -352,5 +352,48 @@ func TestSubscriberNoticeKeepsSentencesTogether(t *testing.T) {
 	notice := "提醒 reminder-fail 本次发送失败，将在 2026-08-25 05:10:29 自动重试（连续失败 1 次）。请检查群是否仍然可达。"
 	if chunks := splitReply(notice, notificationChunkSize); len(chunks) != 1 {
 		t.Fatalf("通知被按句子拆开了：%#v", chunks)
+	}
+}
+
+// 正好 5 块不走卡片，逐条发；第 6 块才换成合并转发。
+func TestForwardCardTriggersAboveFiveChunks(t *testing.T) {
+	five := []string{"a", "b", "c", "d", "e"}
+	if shouldUseForwardReply("abcde", five, 0) {
+		t.Fatalf("正好 5 块不该走转发卡片")
+	}
+	if !shouldUseForwardReply("abcdef", append(five, "f"), 0) {
+		t.Fatalf("6 块应该走转发卡片")
+	}
+	// 长度条件独立于块数：超过阈值就走卡片。
+	if !shouldUseForwardReply(strings.Repeat("字", 950), []string{"x"}, 900) {
+		t.Fatalf("超过长度阈值应该走转发卡片")
+	}
+}
+
+// 条数上限按整条回复的长度分档。短回复分成几条是「像真人连发」，长回复分成同样多条
+// 就成了刷屏——同一个上限套在两种长度上，总有一头是错的。
+func TestBubbleCapTiersByReplyLength(t *testing.T) {
+	pad := func(n int) string {
+		s := ""
+		for len([]rune(s)) < n {
+			s += "这是一段用来凑字数的话，写得足够长好让它落进对应的档位里。"
+		}
+		return string([]rune(s)[:n])
+	}
+	if got := replyMaxBubblesFor(pad(replyShortReplyRunes - 1)); got != replyMaxShortBubbles {
+		t.Fatalf("139 字应该按短回复算，上限 %d，实际 %d", replyMaxShortBubbles, got)
+	}
+	if got := replyMaxBubblesFor(pad(replyShortReplyRunes)); got != replyMaxLongBubbles {
+		t.Fatalf("140 字应该按长回复算，上限 %d，实际 %d", replyMaxLongBubbles, got)
+	}
+	// 短回复分不进 3 条就整条发，不是硬塞成 3 条。
+	short := "第一句\n第二句\n第三句\n第四句"
+	if chunks := splitChatReply(short, chatReplyChunkSize, replyBubbleTargetRunes); len(chunks) != 1 {
+		t.Fatalf("短回复四行应该整条发：%#v", chunks)
+	}
+	// 长回复放宽到 5 条。
+	longReply := pad(380)
+	if chunks := splitChatReply(longReply, chatReplyChunkSize, replyBubbleTargetRunes); len(chunks) > replyMaxLongBubbles {
+		t.Fatalf("长回复超过上限：%d 条", len(chunks))
 	}
 }

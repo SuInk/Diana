@@ -1717,7 +1717,8 @@ func TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk(t *testing.T) {
 	}
 }
 
-func TestRuntimeFiveReplyChunksUseForwardMessage(t *testing.T) {
+// 「大于 5 块」才走卡片：正好 5 块仍然逐条发。
+func TestRuntimeMoreThanFiveReplyChunksUseForwardMessage(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
 		Name:                 "Diana",
@@ -1730,7 +1731,7 @@ func TestRuntimeFiveReplyChunksUseForwardMessage(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "abcde")
+	}, "abcdef")
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
@@ -1745,7 +1746,7 @@ func TestRuntimeFiveReplyChunksUseForwardMessage(t *testing.T) {
 		t.Fatalf("api call = %#v", call)
 	}
 	nodes, ok := call.params["messages"].([]map[string]any)
-	if !ok || len(nodes) != forwardReplyChunkCountThreshold {
+	if !ok || len(nodes) != forwardReplyChunkCountThreshold+1 {
 		t.Fatalf("messages = %#v", call.params["messages"])
 	}
 }
