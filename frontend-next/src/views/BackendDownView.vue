@@ -36,9 +36,9 @@
         <RefreshCw :size="15" :class="{ spin: retrying }" aria-hidden="true" />
         {{ retrying ? "正在重试…" : "立即重试" }}
       </button>
-      <!-- 宽限期里是每秒一次，倒计时只会在 1 和 0 之间闪；直接说在重连就够了。 -->
+      <!-- 宽限期里每秒都在悄悄重试，倒计时说的是「数到 0 就整页重载一次」。 -->
       <p class="muted backend-down-countdown">
-        {{ waiting ? "正在自动重连…" : retrying ? "　" : `${countdown} 秒后自动重试` }}
+        {{ waiting ? `${graceLeft} 秒后自动重新加载` : retrying ? "　" : `${countdown} 秒后自动重试` }}
       </p>
     </div>
   </div>
@@ -56,6 +56,8 @@ const props = defineProps<{
   waiting?: boolean;
   // updating 表示这次断线是刚点过的升级造成的，可以直接说清楚在等什么。
   updating?: boolean;
+  // graceLeft 是宽限期剩余秒数，归零时整页重载一次。
+  graceLeft?: number;
 }>();
 const emit = defineEmits<{ retry: [] }>();
 

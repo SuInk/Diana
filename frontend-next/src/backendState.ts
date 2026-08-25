@@ -28,6 +28,31 @@ export function clearUpdateInstalling(): void {
   }
 }
 
+// 宽限期结束时整页重新加载一次：自更新换掉的不只是后端进程，前端产物的文件名也
+// 变了，重新加载才能拿到新版界面。只能来一次——重载之后后端要是还没回来，第二次
+// 重载只会把用户扔进一个刷不完的循环。
+const RELOAD_MARKER_KEY = "diana.backend.autoReloadAt";
+const RELOAD_COOLDOWN_MS = 2 * 60 * 1000;
+
+export function autoReloadAllowed(): boolean {
+  try {
+    const raw = window.sessionStorage.getItem(RELOAD_MARKER_KEY);
+    const last = raw ? Number(raw) : 0;
+    return !Number.isFinite(last) || Date.now() - last > RELOAD_COOLDOWN_MS;
+  } catch {
+    // 读不到就别自动重载：宁可让用户自己点，也不能冒刷新循环的险。
+    return false;
+  }
+}
+
+export function markAutoReloaded(): void {
+  try {
+    window.sessionStorage.setItem(RELOAD_MARKER_KEY, String(Date.now()));
+  } catch {
+    /* 同上 */
+  }
+}
+
 // updateInstallingRecently 判断这次断线是不是刚点过的升级造成的。过期的标记顺手
 // 清掉：一个三天前的升级不该让今天真正的宕机看起来像在升级。
 export function updateInstallingRecently(): boolean {
