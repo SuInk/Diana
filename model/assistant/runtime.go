@@ -1152,6 +1152,10 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
 	cfg.MaxContextTokens = groupCfg.MaxContextTokens
+	// 群级的历史预算此前只存不用：GroupConfig 里有这个字段、WithDefaults 也从
+	// 机器人配置继承了默认值，却没有一行把它拷回生效配置，于是群组页那个输入框
+	// 填了不生效。
+	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
