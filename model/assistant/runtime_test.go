@@ -1270,8 +1270,12 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	if !strings.Contains(prompt, "同一发送者紧邻补发") || !strings.Contains(prompt, "发送一条完整回复") || !strings.Contains(prompt, "不要按历史消息逐条作答") {
 		t.Fatalf("system prompt missing adjacent-message merge guidance: %q", prompt)
 	}
-	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") || !strings.Contains(prompt, "意群边界写 "+notificationSplitMarker) || !strings.Contains(prompt, "严禁在每个列表项前使用 "+notificationSplitMarker) {
+	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") {
 		t.Fatalf("system prompt missing QQ plain-text guidance: %q", prompt)
+	}
+	// 分条规则来自内置的 replySegmentationRule，不再依赖可编辑的纯文本规则文本框。
+	if !strings.Contains(prompt, "意群边界写 "+notificationSplitMarker) || !strings.Contains(prompt, "不要在每个列表项前写 "+notificationSplitMarker) {
+		t.Fatalf("system prompt missing reply segmentation guidance: %q", prompt)
 	}
 	if strings.Contains(prompt, "需要分段时直接使用换行") {
 		t.Fatalf("system prompt still asks the model to split with newlines: %q", prompt)
