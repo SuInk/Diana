@@ -257,6 +257,7 @@
                     inputmode="numeric"
                     :placeholder="isOneBotPlatform ? '例如 123456789，用于管理指令和私聊登录' : 'Telegram 数字用户 ID，用于管理指令'"
                   />
+                  <AccountNameHint :user-id="form.owner_id" :profile="form.id" />
                   <span class="hint">不需要聊天内管理或管理员快速登录时可以留空。</span>
                 </div>
                 <div class="field wide">
@@ -922,6 +923,7 @@ import {
   type BotPlatform,
   type AliasTriggerMode
 } from "../api";
+import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";

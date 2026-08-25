@@ -59,6 +59,7 @@
         <div v-if="!editingTask && form.destination === 'private'" class="field wide">
           <label for="rss-watch-user">私聊对象 ID</label>
           <input id="rss-watch-user" v-model.trim="form.user_id" class="input" type="text" placeholder="账号或 Telegram Chat ID" />
+          <AccountNameHint :user-id="form.user_id" :profile="form.profile_id" />
         </div>
       </div>
       <div class="repository-watch-editor-actions">
@@ -93,6 +94,7 @@ import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
 import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, listBotGroups, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type BotGroupSummary } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
+import AccountNameHint from "./AccountNameHint.vue";
 import AppSelect from "./AppSelect.vue";
 
 const props = defineProps<{ prepareAccess?: () => Promise<void> }>();

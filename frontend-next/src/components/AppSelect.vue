@@ -4,6 +4,7 @@
 <template>
   <div ref="rootRef" class="app-select" :class="{ open }">
     <button :id="id" type="button" class="app-select-trigger" :disabled="disabled" @click="toggle" @keydown="onKeydown">
+      <img v-if="currentAvatar" class="app-select-avatar" :src="currentAvatar" alt="" loading="lazy" @error="hideAvatar" />
       <span class="app-select-value">{{ currentLabel }}</span>
       <ChevronDown :size="14" class="app-select-chevron" aria-hidden="true" />
     </button>
@@ -20,6 +21,7 @@
       >
         <Check v-if="option.value === modelValue" :size="14" aria-hidden="true" />
         <span v-else class="app-select-item-pad" aria-hidden="true"></span>
+        <img v-if="option.avatar && !brokenAvatars.has(option.avatar)" class="app-select-avatar" :src="option.avatar" alt="" loading="lazy" @error="hideAvatar" />
         <span class="app-select-item-label">
           {{ option.label }}
           <small v-if="option.hint" class="muted">{{ option.hint }}</small>
@@ -37,6 +39,8 @@ export interface AppSelectOption {
   value: string;
   label: string;
   hint?: string;
+  /** 可选头像。取不到图时自动隐藏，不留破图占位。 */
+  avatar?: string;
 }
 
 const props = defineProps<{
@@ -51,6 +55,19 @@ const open = ref(false);
 const rootRef = ref<HTMLElement | null>(null);
 
 const currentLabel = computed(() => props.options.find((option) => option.value === props.modelValue)?.label ?? props.modelValue);
+
+// 头像来自外部图床（QQ 的 qlogo 等），加载失败很常见：记下来直接不显示，
+// 让位置塌掉，好过留一个破图图标。
+const brokenAvatars = ref(new Set<string>());
+const currentAvatar = computed(() => {
+  const avatar = props.options.find((option) => option.value === props.modelValue)?.avatar;
+  return avatar && !brokenAvatars.value.has(avatar) ? avatar : "";
+});
+
+function hideAvatar(event: Event): void {
+  const src = (event.target as HTMLImageElement | null)?.src;
+  if (src) brokenAvatars.value = new Set(brokenAvatars.value).add(src);
+}
 
 function toggle(): void {
   open.value = !open.value;
@@ -86,3 +103,15 @@ function onDocumentClick(event: MouseEvent): void {
 onMounted(() => document.addEventListener("mousedown", onDocumentClick));
 onBeforeUnmount(() => document.removeEventListener("mousedown", onDocumentClick));
 </script>
+
+<style scoped>
+/* 头像只是辨识用的小图，不该把行高撑起来。 */
+.app-select-avatar {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-muted);
+}
+</style>

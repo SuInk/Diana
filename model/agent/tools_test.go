@@ -66,7 +66,8 @@ func TestReadFileToolLimitsContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, `"truncated": true`) || !strings.Contains(got, `"content": "abc"`) {
+	// 结果不再包 JSON：字节上限照样生效，截断也照样说明，只是换成一行人话。
+	if !strings.Contains(got, "已在中途截断") || !strings.HasSuffix(got, "abc") {
 		t.Fatalf("unexpected output: %s", got)
 	}
 }

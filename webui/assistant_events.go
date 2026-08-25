@@ -5,6 +5,7 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -47,11 +48,44 @@ type assistantEventsResponse struct {
 	Limit             int                    `json:"limit"`
 	HasMore           bool                   `json:"has_more"`
 	// Group 是当前筛选的群号，Groups 是这个时间范围内可选的群。
-	Group  string                      `json:"group,omitempty"`
-	Groups []storage.InboundEventGroup `json:"groups"`
+	Group  string                    `json:"group,omitempty"`
+	Groups []assistantEventGroupItem `json:"groups"`
 	// ContextBudget 只在筛了具体某个群时给出：预算是按群算的，全部事件混在
 	// 一起没有一个「这个群的预算」可言。
 	ContextBudget *assistant.ContextBudgetBreakdown `json:"context_budget,omitempty"`
+}
+
+// assistantEventGroupItem 在事件数之外补上群名：筛选器只列群号的话，
+// 机器人进了几十个群时根本认不出要看的是哪个。
+type assistantEventGroupItem struct {
+	storage.InboundEventGroup
+	GroupName string `json:"group_name,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+// namedEventGroups 给筛选器里的群补上名字。名字取自控制台已有的那份群列表缓存，
+// 拿不到就只留群号——筛选器少个名字可以忍，为它多打一次 OneBot 请求不值得。
+func (h *BotHandler) namedEventGroups(ctx context.Context, profileID string, groups []storage.InboundEventGroup) []assistantEventGroupItem {
+	items := make([]assistantEventGroupItem, 0, len(groups))
+	names := map[string]string{}
+	if live, _, _ := h.consoleGroupSources(ctx, profileID, false); len(live) > 0 {
+		for _, group := range live {
+			if name := strings.TrimSpace(group.GroupName); name != "" {
+				names[strings.TrimSpace(group.GroupID)] = name
+			}
+		}
+	}
+	for _, group := range groups {
+		groupID := strings.TrimSpace(group.GroupID)
+		items = append(items, assistantEventGroupItem{
+			InboundEventGroup: group,
+			GroupName:         names[groupID],
+			// 头像地址是纯拼接，不需要额外请求；由后端给而不是前端拼，
+			// 免得把 QQ 的地址格式写死在界面里——别的平台不长这样。
+			AvatarURL: assistant.OneBotGroupAvatarURL(groupID),
+		})
+	}
+	return items
 }
 
 type assistantEventTraceResponse struct {
@@ -291,10 +325,10 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Limit:             limit,
 		HasMore:           int64(page*limit) < stored.FilteredTotal,
 		Group:             groupID,
-		Groups:            []storage.InboundEventGroup{},
+		Groups:            []assistantEventGroupItem{},
 	}
 	if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since, botProfileScope(c)); err == nil {
-		response.Groups = groups
+		response.Groups = h.namedEventGroups(c.Request.Context(), botProfileScope(c), groups)
 	} else {
 		// 筛选器列不出来不该让整页打不开：事件本身已经查到了。
 		log.Printf("assistant events: list groups failed: %v", err)
