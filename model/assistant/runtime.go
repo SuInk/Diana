@@ -9335,7 +9335,8 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 			return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 		}
 		// 补投成功才轮到跟评：上一轮没送出去，那会儿也没有可评的东西。
-		r.maybeSendRepositoryWatchFollowUp(ctx, item, pending)
+		// 补投走的是上一轮存下的正文，diff 没有一起存，跟评这次只看事实清单。
+		r.maybeSendRepositoryWatchFollowUp(ctx, item, pending, "")
 		return startedAt, nil
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
@@ -9356,6 +9357,9 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		repositoryWatchSelection{
 			Commits: item.WatchCommits, PullRequests: item.WatchPullRequests,
 			Issues: item.WatchIssues, Releases: item.WatchReleases, Stars: item.WatchStars,
+			// 跟评是 diff 唯一的读者。关掉跟评就别拉了，否则每轮白花一次 compare
+			// 加每个 PR 一次 files——这正是当初把 diff 整个摘掉的原因。
+			Diff: r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
 		},
 		settings,
 	)
@@ -9374,7 +9378,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
-	r.maybeSendRepositoryWatchFollowUp(ctx, item, message)
+	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigest(change))
 	return startedAt, nil
 }
 
@@ -9541,7 +9545,7 @@ func (r *Runtime) renderRepositoryWatchMessage(change repositoryWatchChange, set
 // 每个投递目标各自成稿——跟评的门槛是「和这个会话正在聊的事对得上」，
 // 那就得按各自会话的历史来判断，一稿群发既对不上也算不上接话。
 // 跟评失败一律静默跳过，但会写进运行日志。
-func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Reminder, notification string) {
+func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Reminder, notification, reference string) {
 	if strings.TrimSpace(notification) == "" {
 		return
 	}
@@ -9558,7 +9562,7 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 		if ctx.Err() != nil {
 			return
 		}
-		comment := r.followUpComment(ctx, followUpKindRepositoryWatch, target, notification)
+		comment := r.followUpCommentWithReference(ctx, followUpKindRepositoryWatch, target, notification, reference)
 		if comment == "" {
 			continue
 		}
@@ -9566,6 +9570,55 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 			r.recordFollowUpFailure(ctx, followUpKindRepositoryWatch, target, "send", err)
 		}
 	}
+}
+
+// renderRepositoryWatchDiffDigest 把这一轮的 diff 压成给跟评看的参考资料。
+//
+// 通知正文只有标题和链接，模型据此写跟评就只能围着标题措辞打转——标题还常常是过期的。
+// 给它实际改了哪些文件、加删多少行、关键 hunk 长什么样，它才说得出具体的话。
+// 这份资料只进提示词，不进任何发出去的正文。
+//
+// 收得比展示用更紧：文件按改动量排序后各留一段 patch，整体再压一次上限，
+// 一条动态的 diff 不该把跟评的上下文预算吃光。
+func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
+	sections := make([]string, 0, 4)
+	if change.CommitDiff != nil {
+		if body := renderRepositoryWatchDiffFiles(change.CommitDiff.Files, change.CommitDiff.FilesTruncated); body != "" {
+			sections = append(sections, "本次新增提交合计改动：\n"+body)
+		}
+	}
+	for _, pullRequest := range change.PullRequests {
+		body := renderRepositoryWatchDiffFiles(pullRequest.Files, pullRequest.FilesTruncated)
+		if body == "" {
+			continue
+		}
+		sections = append(sections, fmt.Sprintf("PR #%d 的改动：\n%s", pullRequest.Number, body))
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	return truncateRunes(strings.Join(sections, "\n\n"), repositoryWatchDiffDigestRunes)
+}
+
+func renderRepositoryWatchDiffFiles(files []repositoryWatchDiffFile, truncated bool) string {
+	if len(files) == 0 {
+		return ""
+	}
+	ranked := append([]repositoryWatchDiffFile(nil), files...)
+	// 改动量大的排前面：预算被截断时，留下的是这次真正动过的地方。
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].Changes > ranked[j].Changes })
+	lines := make([]string, 0, len(ranked)+1)
+	for _, file := range ranked {
+		head := fmt.Sprintf("- %s（%s +%d -%d）", file.Filename, firstNonEmpty(file.Status, "modified"), file.Additions, file.Deletions)
+		if patch := strings.TrimSpace(file.Patch); patch != "" {
+			head += "\n" + patch
+		}
+		lines = append(lines, head)
+	}
+	if truncated {
+		lines = append(lines, "（还有更多文件未列出）")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // composeRepositoryWatchMessage 把标题和变更明细拼成一条通知。

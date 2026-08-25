@@ -56,7 +56,7 @@ func TestRepositoryWatchFollowUpJudgesEachTargetSeparately(t *testing.T) {
 		}),
 	}
 
-	runtime.maybeSendRepositoryWatchFollowUp(context.Background(), item, "【仓库动态】SuInk/Diana 合并了 #120")
+	runtime.maybeSendRepositoryWatchFollowUp(context.Background(), item, "【仓库动态】SuInk/Diana 合并了 #120", "")
 
 	if got := len(provider.requestsSnapshot()); got != 2 {
 		t.Fatalf("每个通知目标都应各判定一次，实际请求 %d 次", got)
