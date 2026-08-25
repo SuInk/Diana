@@ -642,3 +642,71 @@ func TestDianaImageToolCombinesSourcesByDefault(t *testing.T) {
 		t.Fatalf("combine 模式应当把两张参考图交给同一次请求：%#v", calls)
 	}
 }
+
+// 开场白只报「开始生成图片」的时候，用户要等到图发出来才知道理解对没对。
+// 提示词短到能念出来就得带上；长提示词是给图片模型看的英文堆砌，念出来更糟。
+func TestDianaImageStartedMessageCarriesSubject(t *testing.T) {
+	ok := dianaImageToolResult{OK: true, TaskID: "img-1"}
+	longPrompt := strings.Repeat("a", imageAnnouncementSubjectMaxRunes+1)
+
+	cases := []struct {
+		name    string
+		request dianaImageToolRequest
+		result  dianaImageToolResult
+		want    string
+	}{
+		{
+			name:    "短提示词念出来",
+			request: dianaImageToolRequest{Operation: "generate", Prompt: "一只戴着草帽的橘猫在海边"},
+			result:  ok,
+			want:    "开始生成图片：一只戴着草帽的橘猫在海边，完成后我会把结果发出来。",
+		},
+		{
+			name:    "只取第一行",
+			request: dianaImageToolRequest{Operation: "generate", Prompt: "赛博朋克风格的东京街头\n\n负面提示：低画质"},
+			result:  ok,
+			want:    "开始生成图片：赛博朋克风格的东京街头，完成后我会把结果发出来。",
+		},
+		{
+			name:    "长提示词退回原来的说法",
+			request: dianaImageToolRequest{Operation: "generate", Prompt: longPrompt},
+			result:  ok,
+			want:    "开始生成图片，完成后我会把结果发出来。",
+		},
+		{
+			name:    "编辑复用同一个任务",
+			request: dianaImageToolRequest{Operation: "edit", Prompt: "把背景换成雪山"},
+			result:  dianaImageToolResult{OK: true, TaskID: "img-1", Reused: true},
+			want:    "同样的编辑图片任务已经在处理中（把背景换成雪山），完成后我会把结果发出来。",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := dianaImageStartedMessage(testCase.request, testCase.result); got != testCase.want {
+				t.Fatalf("开场白 = %q，想要 %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+// 「图还没画出来」这条规则当初连「要画什么」一起禁掉了，开场白就退化成一句
+// 「已受理」。现在两处提示词都必须同时要求：说清准备画什么，但不许描述成品。
+func TestImagePromptsRequireSubjectWithoutClaimingResult(t *testing.T) {
+	prompts := map[string]string{
+		"promptToolImage":            promptToolImage,
+		"asyncImageReplyInstruction": asyncImageReplyInstruction(dianaImageToolResult{OK: true, TaskID: "img-1"}),
+	}
+	for name, prompt := range prompts {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(prompt, "准备画什么") {
+				t.Fatalf("%s 没有要求说清这次准备画什么：%q", name, prompt)
+			}
+			if !strings.Contains(prompt, "不要说成「已经生成好了」") {
+				t.Fatalf("%s 丢了「不许说成画好了」：%q", name, prompt)
+			}
+			if strings.Contains(prompt, "不要描述图里长什么样") {
+				t.Fatalf("%s 仍然一刀切禁掉画面描述：%q", name, prompt)
+			}
+		})
+	}
+}
