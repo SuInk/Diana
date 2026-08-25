@@ -11,6 +11,7 @@
     :retrying="backendRetrying"
     :retry-in-seconds="backendRetryDelay"
     :waiting="backendWaiting"
+    :grace-left="backendGraceLeft"
     :updating="backendUpdating"
     @retry="retryBackend"
   />
@@ -188,7 +189,7 @@ import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
 import { channelAccountUnhealthy } from "./channel-status";
 import VersionModal from "./components/VersionModal.vue";
-import { clearUpdateInstalling, updateInstallingRecently } from "./backendState";
+import { autoReloadAllowed, clearUpdateInstalling, markAutoReloaded, updateInstallingRecently } from "./backendState";
 import BackendDownView from "./views/BackendDownView.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
@@ -248,9 +249,10 @@ function syncSidebarMode(event: MediaQueryListEvent): void {
   narrowSidebar.value = event.matches;
   drawerOpen.value = false;
 }
-// 自更新的空窗实测约 11 秒（安装、旧进程退出、新进程接管），装完还要跑健康检查。
-// 宽限期内按秒重试并且只说「正在连接」，别把一次计划内的重启渲染成故障页。
-const BACKEND_GRACE_SECONDS = 30;
+// 自更新的空窗实测约 11 秒（安装、旧进程退出、新进程接管）。宽限期给 15 秒：
+// 按秒重试、只说「正在连接」，别把一次计划内的重启渲染成故障页。数到 0 还没回来
+// 就整页重载一次——自更新连前端产物一起换了，重载才能拿到新版界面。
+const BACKEND_GRACE_SECONDS = 15;
 const BACKEND_RETRY_MIN_SECONDS = 5;
 const BACKEND_RETRY_MAX_SECONDS = 60;
 const locked = ref(false);
@@ -262,6 +264,8 @@ const backendRetryDelay = ref(1);
 // 宽限期内先按「等它回来」渲染，超时之后才升级成故障页。
 const backendWaiting = ref(true);
 const backendUpdating = ref(false);
+// 宽限期剩余秒数，直接显示成倒计时。
+const backendGraceLeft = ref(BACKEND_GRACE_SECONDS);
 let backendRetryTimer = 0;
 let backendDownSince = 0;
 let versionBeforeOutage = "";
@@ -486,6 +490,7 @@ function showBackendDown(detail: string): void {
   backendWaiting.value = true;
   backendUpdating.value = updateInstallingRecently();
   backendRetryDelay.value = 1;
+  backendGraceLeft.value = BACKEND_GRACE_SECONDS;
   backendDownSince = Date.now();
   versionBeforeOutage = systemVersion.value?.version_label ?? "";
   scheduleBackendRetry();
@@ -518,14 +523,23 @@ async function retryBackend(): Promise<void> {
     versionBeforeOutage = "";
     return;
   }
-  if (Date.now() - backendDownSince < BACKEND_GRACE_SECONDS * 1000) {
+  const elapsed = Math.floor((Date.now() - backendDownSince) / 1000);
+  backendGraceLeft.value = Math.max(BACKEND_GRACE_SECONDS - elapsed, 0);
+  if (backendGraceLeft.value > 0) {
     backendRetryDelay.value = 1;
-  } else {
-    backendWaiting.value = false;
-    backendRetryDelay.value = backendRetryDelay.value < BACKEND_RETRY_MIN_SECONDS
-      ? BACKEND_RETRY_MIN_SECONDS
-      : Math.min(backendRetryDelay.value * 2, BACKEND_RETRY_MAX_SECONDS);
+    scheduleBackendRetry();
+    return;
   }
+  // 倒计时归零：重载一次，顺带把可能已经换过的前端产物一起取新的。
+  if (backendWaiting.value && autoReloadAllowed()) {
+    markAutoReloaded();
+    window.location.reload();
+    return;
+  }
+  backendWaiting.value = false;
+  backendRetryDelay.value = backendRetryDelay.value < BACKEND_RETRY_MIN_SECONDS
+    ? BACKEND_RETRY_MIN_SECONDS
+    : Math.min(backendRetryDelay.value * 2, BACKEND_RETRY_MAX_SECONDS);
   scheduleBackendRetry();
 }
 
