@@ -3216,20 +3216,41 @@ a.nav-action {
   white-space: nowrap;
 }
 
-.persona-chip-remove {
+/* 导出和删除竖着摞在卡片右侧：横着排会把卡片撑得比名字还宽。 */
+.persona-chip-actions {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
+.persona-chip-action {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
   padding: 0 8px;
   border: 0;
-  border-left: 1px solid var(--border);
   background: none;
   color: var(--muted);
   cursor: pointer;
 }
 
-.persona-chip-remove:hover {
-  color: var(--danger, #d2453b);
+.persona-chip-action + .persona-chip-action {
+  border-top: 1px solid var(--border);
+}
+
+.persona-chip-action:hover {
+  color: var(--text);
   background: var(--surface-muted);
+}
+
+.persona-chip-action.danger:hover {
+  color: var(--danger, #d2453b);
+}
+
+.persona-chip-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 @media (max-width: 620px) {

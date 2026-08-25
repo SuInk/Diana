@@ -580,9 +580,14 @@
                       <span class="persona-chip-name">{{ persona.name }}</span>
                       <small class="muted">{{ personaSummary(persona) }}</small>
                     </button>
-                    <button type="button" class="persona-chip-remove" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
-                      <Trash2 :size="13" aria-hidden="true" />
-                    </button>
+                    <span class="persona-chip-actions">
+                      <button type="button" class="persona-chip-action" :aria-label="`导出人设 ${persona.name}`" :title="`导出人设 ${persona.name}`" @click="exportPersona(persona)">
+                        <Download :size="13" aria-hidden="true" />
+                      </button>
+                      <button type="button" class="persona-chip-action danger" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
+                        <Trash2 :size="13" aria-hidden="true" />
+                      </button>
+                    </span>
                   </div>
                 </div>
                 <span v-if="!personaLibrary.length" class="hint">还没存过人设。把下面几项调好，点「存为人设」就能收进来，之后一键换回。</span>
@@ -1286,26 +1291,50 @@ function personaFileInputClick(): void {
   personaFileInput.value?.click();
 }
 
-// 导出直接用内存里那份：它就是整库，再跑一趟接口拿不到别的东西。
-function exportPersonaLibrary(): void {
-  const payload = {
-    version: PERSONA_EXPORT_VERSION,
-    exported_at: new Date().toISOString(),
-    // 不导 id 和 updated_at：id 是本机的，导到别处只会撞车（后端也一律重新分配）。
-    personas: personaLibrary.value.map((persona) => ({
-      name: persona.name,
-      system_prompt: persona.system_prompt ?? "",
-      reply_style: persona.reply_style ?? "",
-      self_reference: persona.self_reference ?? "",
-      sentence_enders: persona.sentence_enders ?? ""
-    }))
-  };
-  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+// 单套和整库导出的是同一种文件（personas 数组里放一个还是放几个而已），
+// 所以单套文件也能直接被导入，不用为它另开一条读取分支。
+// 不导 id 和 updated_at：id 是本机的，导到别处只会撞车（后端也一律重新分配）。
+function personaExportPayload(personas: Persona[]): string {
+  return JSON.stringify(
+    {
+      version: PERSONA_EXPORT_VERSION,
+      exported_at: new Date().toISOString(),
+      personas: personas.map((persona) => ({
+        name: persona.name,
+        system_prompt: persona.system_prompt ?? "",
+        reply_style: persona.reply_style ?? "",
+        self_reference: persona.self_reference ?? "",
+        sentence_enders: persona.sentence_enders ?? ""
+      }))
+    },
+    null,
+    2
+  );
+}
+
+function downloadPersonaFile(fileName: string, content: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = `diana-personas-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+// 人设名是用户随便起的，可能带 / \ : 这类在文件名里非法或有歧义的字符。
+// 中日韩字符本身没问题，所以只挑掉真正危险的那几个，不做整体转拼音。
+function personaFileSlug(name: string): string {
+  const slug = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "").trim();
+  return slug || "persona";
+}
+
+// 导出直接用内存里那份：它就是整库，再跑一趟接口拿不到别的东西。
+function exportPersonaLibrary(): void {
+  downloadPersonaFile(`diana-personas-${new Date().toISOString().slice(0, 10)}.json`, personaExportPayload(personaLibrary.value));
+}
+
+function exportPersona(persona: Persona): void {
+  downloadPersonaFile(`diana-persona-${personaFileSlug(persona.name)}-${new Date().toISOString().slice(0, 10)}.json`, personaExportPayload([persona]));
 }
 
 async function importPersonaFile(event: Event): Promise<void> {
