@@ -10,6 +10,8 @@
     :message="backendDownDetail"
     :retrying="backendRetrying"
     :retry-in-seconds="backendRetryDelay"
+    :waiting="backendWaiting"
+    :updating="backendUpdating"
     @retry="retryBackend"
   />
   <LoginView v-else-if="!booting && locked" @success="onLoginSuccess" @unreachable="showBackendDown" />
@@ -186,6 +188,7 @@ import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
 import { channelAccountUnhealthy } from "./channel-status";
 import VersionModal from "./components/VersionModal.vue";
+import { clearUpdateInstalling, updateInstallingRecently } from "./backendState";
 import BackendDownView from "./views/BackendDownView.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
@@ -245,6 +248,9 @@ function syncSidebarMode(event: MediaQueryListEvent): void {
   narrowSidebar.value = event.matches;
   drawerOpen.value = false;
 }
+// 自更新的空窗实测约 11 秒（安装、旧进程退出、新进程接管），装完还要跑健康检查。
+// 宽限期内按秒重试并且只说「正在连接」，别把一次计划内的重启渲染成故障页。
+const BACKEND_GRACE_SECONDS = 30;
 const BACKEND_RETRY_MIN_SECONDS = 5;
 const BACKEND_RETRY_MAX_SECONDS = 60;
 const locked = ref(false);
@@ -252,8 +258,13 @@ const locked = ref(false);
 const backendDown = ref(false);
 const backendDownDetail = ref("");
 const backendRetrying = ref(false);
-const backendRetryDelay = ref(BACKEND_RETRY_MIN_SECONDS);
+const backendRetryDelay = ref(1);
+// 宽限期内先按「等它回来」渲染，超时之后才升级成故障页。
+const backendWaiting = ref(true);
+const backendUpdating = ref(false);
 let backendRetryTimer = 0;
+let backendDownSince = 0;
+let versionBeforeOutage = "";
 // 鉴权状态未知时两边都不渲染：抢先把主界面铺出来会让它的接口拿一串 401，
 // 那些报错会以 toast 的形式留在随后切出来的登录页上。
 const booting = ref(true);
@@ -472,6 +483,11 @@ function showBackendDown(detail: string): void {
   backendDownDetail.value = detail;
   backendDown.value = true;
   backendRetrying.value = false;
+  backendWaiting.value = true;
+  backendUpdating.value = updateInstallingRecently();
+  backendRetryDelay.value = 1;
+  backendDownSince = Date.now();
+  versionBeforeOutage = systemVersion.value?.version_label ?? "";
   scheduleBackendRetry();
 }
 
@@ -482,7 +498,8 @@ function scheduleBackendRetry(): void {
   }, backendRetryDelay.value * 1000);
 }
 
-// 每失败一次就把等待时间翻倍：后端要是关了一整天，不该让页面一直每几秒敲一次门。
+// 宽限期内每秒敲一次门，好让一次十几秒的升级重启尽快接上；超时之后改成退避，
+// 后端要是关了一整天，不该让页面一直高频重试。
 async function retryBackend(): Promise<void> {
   window.clearTimeout(backendRetryTimer);
   backendRetrying.value = true;
@@ -490,10 +507,25 @@ async function retryBackend(): Promise<void> {
   backendRetrying.value = false;
   if (reachable) {
     backendDown.value = false;
-    backendRetryDelay.value = BACKEND_RETRY_MIN_SECONDS;
+    backendWaiting.value = true;
+    backendUpdating.value = false;
+    clearUpdateInstalling();
+    // 版本变了就说清楚刚才那下是升级重启，而不是让人以为服务出过问题。
+    const now = systemVersion.value?.version_label ?? "";
+    if (versionBeforeOutage && now && now !== versionBeforeOutage) {
+      toastSuccess(`后端已升级到 ${now}，刚才的短暂断线是升级重启`);
+    }
+    versionBeforeOutage = "";
     return;
   }
-  backendRetryDelay.value = Math.min(backendRetryDelay.value * 2, BACKEND_RETRY_MAX_SECONDS);
+  if (Date.now() - backendDownSince < BACKEND_GRACE_SECONDS * 1000) {
+    backendRetryDelay.value = 1;
+  } else {
+    backendWaiting.value = false;
+    backendRetryDelay.value = backendRetryDelay.value < BACKEND_RETRY_MIN_SECONDS
+      ? BACKEND_RETRY_MIN_SECONDS
+      : Math.min(backendRetryDelay.value * 2, BACKEND_RETRY_MAX_SECONDS);
+  }
   scheduleBackendRetry();
 }
 
