@@ -1278,6 +1278,21 @@ func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSetti
 	return out
 }
 
+func (r *Runtime) withFileParserVideoLimit(ctx context.Context, event MessageEvent) context.Context {
+	settings := SettingValues(nil)
+	if r.plugins != nil {
+		_, effective, enabled := r.plugins.PluginWithSettingsForGroup(
+			fileParserPluginID,
+			r.pluginOverridesForEvent(event),
+			r.pluginSettingOverridesForEvent(event),
+		)
+		if enabled {
+			settings = effective
+		}
+	}
+	return withVideoContextMaxBytes(ctx, fileParserVideoMaxBytes(settings))
+}
+
 // HandleEvent 处理 OneBot 消息或通知事件。
 func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	event = r.bindInboundEventIdentity(event)
@@ -1390,6 +1405,7 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 }
 
 func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
+	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
 	if r.ignoreUnavailableGroupEvent(event) {
@@ -1735,6 +1751,7 @@ func (r *Runtime) observeSelfMessage(ctx context.Context, event MessageEvent) {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return
 	}
+	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.mu.RLock()
 	resolver, _ := r.localMedia.(LocalMediaPathResolver)
 	r.mu.RUnlock()
@@ -2657,6 +2674,7 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 
 // replyTo 执行 owner 命令、插件和 LLM 回复链路。
 func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (string, error) {
+	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
 	cfg := r.effectiveConfigForEvent(event)
@@ -3368,6 +3386,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	if !resp.FollowUp {
 		return
 	}
+	ctx = r.withFileParserVideoLimit(ctx, event)
 	// 跟评有自己的时间预算：解析慢一点就把整条回复链路的超时吃光，
 	// 跟着上游 ctx 一起被取消的话，跟评会毫无规律地时有时无。
 	ctx, cancel := detachFollowUpContext(ctx)
@@ -7599,6 +7618,7 @@ func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg
 }
 
 func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source MessageEvent, msg OutgoingMessage, messageID string) {
+	ctx = r.withFileParserVideoLimit(ctx, source)
 	event := r.outgoingHistoryEvent(source, msg)
 	if event.MessageID == "" {
 		return
