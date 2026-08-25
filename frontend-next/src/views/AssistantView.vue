@@ -544,11 +544,22 @@
               <div class="field wide">
                 <div class="field-head">
                   <label>人设库</label>
-                  <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
-                    <BookmarkPlus :size="14" aria-hidden="true" />
-                    {{ personaSaverOpen ? "取消" : "存为人设" }}
-                  </button>
+                  <div class="cluster">
+                    <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaLibrary.length" @click="exportPersonaLibrary">
+                      <Download :size="14" aria-hidden="true" />
+                      导出
+                    </button>
+                    <button class="btn small" type="button" :disabled="personaLibraryBusy" @click="personaFileInputClick">
+                      <Upload :size="14" aria-hidden="true" />
+                      导入
+                    </button>
+                    <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
+                      <BookmarkPlus :size="14" aria-hidden="true" />
+                      {{ personaSaverOpen ? "取消" : "存为人设" }}
+                    </button>
+                  </div>
                 </div>
+                <input ref="personaFileInput" type="file" accept="application/json" style="display: none" @change="importPersonaFile" />
                 <div v-if="personaSaverOpen" class="persona-saver">
                   <input
                     ref="personaNameInput"
@@ -949,7 +960,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
-import { ArrowLeft, BookmarkPlus, Bot, ChevronRight, Copy, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, X } from "@lucide/vue";
+import { ArrowLeft, BookmarkPlus, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -972,6 +983,8 @@ import {
   listPersonas,
   savePersona,
   deletePersona,
+  importPersonas,
+  PERSONA_EXPORT_VERSION,
   type Persona
 } from "../api";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -1262,6 +1275,65 @@ async function storeCurrentPersona(): Promise<void> {
     toastSuccess(sameName ? `已更新人设「${name}」` : `已存为人设「${name}」`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "人设保存失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
+const personaFileInput = ref<HTMLInputElement | null>(null);
+
+function personaFileInputClick(): void {
+  personaFileInput.value?.click();
+}
+
+// 导出直接用内存里那份：它就是整库，再跑一趟接口拿不到别的东西。
+function exportPersonaLibrary(): void {
+  const payload = {
+    version: PERSONA_EXPORT_VERSION,
+    exported_at: new Date().toISOString(),
+    // 不导 id 和 updated_at：id 是本机的，导到别处只会撞车（后端也一律重新分配）。
+    personas: personaLibrary.value.map((persona) => ({
+      name: persona.name,
+      system_prompt: persona.system_prompt ?? "",
+      reply_style: persona.reply_style ?? "",
+      self_reference: persona.self_reference ?? "",
+      sentence_enders: persona.sentence_enders ?? ""
+    }))
+  };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `diana-personas-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importPersonaFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // 先清掉选中的文件：不清的话连续选同一个文件不会再触发 change。
+  input.value = "";
+  if (!file) return;
+
+  personaLibraryBusy.value = true;
+  try {
+    const parsed = JSON.parse(await file.text()) as unknown;
+    // 导出文件是 {personas: [...]}，但手写或从别处拿到的可能就是个数组，
+    // 甚至是单独一套。三种都收下，没必要为格式挑剔到让人回去改文件。
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as { personas?: unknown }).personas)
+        ? (parsed as { personas: unknown[] }).personas
+        : [parsed];
+    const result = await importPersonas(list as Persona[]);
+    personaLibrary.value = result.personas ?? [];
+    const notes = [`导入 ${result.imported} 套`];
+    if (result.renamed) notes.push(`${result.renamed} 套重名已改名`);
+    if (result.skipped) notes.push(`${result.skipped} 套重复已跳过`);
+    if (result.dropped) notes.push(`${result.dropped} 套无效已忽略`);
+    toastSuccess(notes.join("，"));
+  } catch (error) {
+    toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "人设导入失败");
   } finally {
     personaLibraryBusy.value = false;
   }

@@ -30,6 +30,21 @@ type personaDeletePayload struct {
 	ID string `json:"id"`
 }
 
+// personaImportPayload 接的是导出文件的内容。Version 目前只用来在格式变了以后
+// 认出旧文件，现在不参与任何判断——先记下来，比将来无从分辨强。
+type personaImportPayload struct {
+	Version  int                 `json:"version,omitempty"`
+	Personas []assistant.Persona `json:"personas"`
+}
+
+type personaImportResponse struct {
+	Personas []assistant.Persona `json:"personas"`
+	Imported int                 `json:"imported"`
+	Skipped  int                 `json:"skipped"`
+	Renamed  int                 `json:"renamed"`
+	Dropped  int                 `json:"dropped"`
+}
+
 type personaListResponse struct {
 	Personas []assistant.Persona `json:"personas"`
 	Limit    int                 `json:"limit"`
@@ -43,6 +58,7 @@ func (h *BotHandler) registerPersonaRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/personas", h.listPersonas)
 	router.POST(base+"/personas", h.savePersona)
 	router.POST(base+"/personas/delete", h.deletePersona)
+	router.POST(base+"/personas/import", h.importPersonas)
 }
 
 func (h *BotHandler) loadPersonaSet(c *gin.Context) (assistant.PersonaSet, bool) {
@@ -122,4 +138,50 @@ func (h *BotHandler) deletePersona(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"personas": updated.Personas})
 }
 
-var errPersonaStoreUnavailable = errors.New("人设库存储未配置")
+// importPersonas 把导出文件并进库里。合并在这里做而不是前端逐条 POST：一次读改写
+// 落一次库，中途失败不会留下「导了一半」的状态，也省掉 N 次往返。
+func (h *BotHandler) importPersonas(c *gin.Context) {
+	var payload personaImportPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.personas.import", err, "", nil)
+		return
+	}
+	if len(payload.Personas) == 0 {
+		h.writeError(c, http.StatusBadRequest, "assistant.personas.import", errPersonaImportEmpty, "", nil)
+		return
+	}
+	personaLibraryMu.Lock()
+	defer personaLibraryMu.Unlock()
+
+	set, ok := h.loadPersonaSet(c)
+	if !ok {
+		return
+	}
+	updated, result := set.Import(payload.Personas, time.Now())
+	if err := h.sqlite.SaveBotPersonas(c.Request.Context(), updated); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.personas.import", err, "", nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.personas.import", "人设已导入", "", map[string]any{
+		"imported": len(result.Imported),
+		"skipped":  result.Skipped,
+		"renamed":  result.Renamed,
+		"dropped":  result.Dropped,
+	})
+	personas := updated.Personas
+	if personas == nil {
+		personas = []assistant.Persona{}
+	}
+	c.JSON(http.StatusOK, personaImportResponse{
+		Personas: personas,
+		Imported: len(result.Imported),
+		Skipped:  result.Skipped,
+		Renamed:  result.Renamed,
+		Dropped:  result.Dropped,
+	})
+}
+
+var (
+	errPersonaStoreUnavailable = errors.New("人设库存储未配置")
+	errPersonaImportEmpty      = errors.New("文件里没有可导入的人设")
+)
