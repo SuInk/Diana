@@ -231,10 +231,26 @@ WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
 		}
 	}
 
+	// 画像名用标量子查询取，不用 LEFT JOIN。
+	//
+	// user_profiles 的主键是 (bot_profile_id, user_id)：同一个人每台机器人各存一份。
+	// 原先这里 LEFT JOIN 只按 user_id 匹配，两台机器人都见过的人，他的每条事件都会被
+	// 乘上画像行数——列表里同一条事件出现两遍，一次挂 A 认识的名字一次挂 B 的。
+	// 而上面两个计数根本不 join，于是界面显示成「已显示 36 / 22」，显示数比总数还大。
+	//
+	// 补全 join 键也能修，但那还是把「不会重复」寄托在键的假设上——这个 bug 正是
+	// 那个假设漂移造成的。标量子查询在结构上就只能返回一个值，加列、改键都不会再翻倍。
+	// IN (自己那台, '') 加上 ORDER BY 优先自己那台：多机器人之前写的画像 bot_profile_id
+	// 是空串，还能继续兜住，不会因为这次修改丢掉老数据的昵称。
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   i.id, i.event_time, i.kind, COALESCE(i.group_id, ''), COALESCE(i.user_id, ''),
-  COALESCE(NULLIF(TRIM(m.sender_name), ''), NULLIF(TRIM(u.display_name), ''), ''),
+  COALESCE(NULLIF(TRIM(m.sender_name), ''), NULLIF(TRIM((
+    SELECT u.display_name FROM user_profiles AS u
+    WHERE u.user_id = i.user_id AND u.bot_profile_id IN (COALESCE(i.profile_id, ''), '')
+    ORDER BY (u.bot_profile_id = COALESCE(i.profile_id, '')) DESC
+    LIMIT 1
+  )), ''), ''),
   COALESCE(i.message_id, ''), COALESCE(m.text, ''), COALESCE(m.payload, ''),
   i.status, COALESCE(i.outcome, ''), COALESCE(i.decision, ''), COALESCE(i.decision_reason, ''),
   COALESCE(i.reply_text, ''), COALESCE(NULLIF(TRIM(i.processing_error), ''), i.last_error, ''),
@@ -244,7 +260,6 @@ SELECT
   COALESCE(i.created_at, 0), COALESCE(i.completed_at, 0), COALESCE(i.delivery_json, '')
 FROM inbound_events AS i
 LEFT JOIN message_events AS m ON m.id = i.id
-LEFT JOIN user_profiles AS u ON u.user_id = i.user_id
 WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
 ORDER BY i.event_time DESC, i.created_at DESC, i.id DESC
 LIMIT ? OFFSET ?

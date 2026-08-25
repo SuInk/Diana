@@ -3150,6 +3150,13 @@ a.nav-action {
   align-items: center;
 }
 
+/* 私聊对象那一格要摞一行昵称，撑高的是这一格，同行的下拉和删除按钮仍居中对齐。 */
+.target-user {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
 /* 人设库是一排可点的卡片：点正文套用，点右上角小叉删除。宽度自适应内容，
    名字下面那行摘要用来区分「猫娘」和「猫娘 v2」这种。 */
 .persona-library {
@@ -3251,13 +3258,6 @@ a.nav-action {
 .persona-chip-action:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-/* 私聊对象那一格要摞一行昵称，撑高的是这一格，同行的下拉和删除按钮仍居中对齐。 */
-.target-user {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
 }
 
 @media (max-width: 620px) {
@@ -4317,6 +4317,11 @@ a.nav-action {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
+}
+
+/* 监控内容底下的 Star 设置：不给间距的话标题会贴着上面那排勾选框。 */
+.repository-watch-star-field {
+  margin-top: 12px;
 }
 
 .task-meta,

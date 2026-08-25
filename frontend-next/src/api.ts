@@ -1559,6 +1559,20 @@ export function getAssistantUser(userID: string, profile = ""): Promise<Assistan
   return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}${suffix}`);
 }
 
+export interface AssistantUserNamesResponse {
+  /** 只包含查到昵称的号；查不到的号不会出现在这里。 */
+  names: Record<string, string>;
+}
+
+/** 把用户 ID 换成昵称，供各处「填个 QQ 号」的输入框回显。 */
+export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promise<AssistantUserNamesResponse> {
+  const params = new URLSearchParams({ ids: userIDs.join(",") });
+  if (profile) {
+    params.set("profile", profile);
+  }
+  return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
+}
+
 export interface Persona {
   id: string;
   name: string;
@@ -1610,20 +1624,6 @@ export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
     method: "POST",
     body: JSON.stringify({ id })
   });
-}
-
-export interface AssistantUserNamesResponse {
-  /** 只包含查到昵称的号；查不到的号不会出现在这里。 */
-  names: Record<string, string>;
-}
-
-/** 把用户 ID 换成昵称，供各处「填个 QQ 号」的输入框回显。 */
-export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promise<AssistantUserNamesResponse> {
-  const params = new URLSearchParams({ ids: userIDs.join(",") });
-  if (profile) {
-    params.set("profile", profile);
-  }
-  return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
 }
 
 export interface GlossaryRevision {
@@ -1732,6 +1732,9 @@ export function restoreGlossaryEntry(scope: string, term: string): Promise<Gloss
 }
 
 export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "rss_watch";
+// 空数组表示「全部种类都要」——后端也是这么存的，别把空当成「一条都不要」。
+export type RepositoryWatchPullEvent = "opened" | "updated" | "closed" | "merged";
+export type RepositoryWatchIssueEvent = "opened" | "updated" | "closed" | "reopened";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
 export interface AssistantTask {
@@ -1758,6 +1761,8 @@ export interface AssistantTask {
   repository_branch?: string;
   watch_commits?: boolean;
   watch_pull_requests?: boolean;
+  watch_pull_request_events?: RepositoryWatchPullEvent[];
+  watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues?: boolean;
   watch_releases?: boolean;
   watch_stars?: boolean;
@@ -1796,6 +1801,8 @@ export interface RepositoryWatchInput {
   interval_seconds: number;
   watch_commits: boolean;
   watch_pull_requests: boolean;
+  watch_pull_request_events?: RepositoryWatchPullEvent[];
+  watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues: boolean;
   watch_releases: boolean;
   watch_stars: boolean;
@@ -1869,4 +1876,39 @@ export function deleteRSSWatch(id: string): Promise<void> {
 
 export function getHealth(): Promise<HealthResponse> {
   return requestJSON<HealthResponse>("/api/health");
+}
+
+export interface GroupRelationNode {
+  user_id: string;
+  display_name?: string;
+  messages: number;
+  favorability: number;
+  is_bot?: boolean;
+}
+
+export interface GroupRelationEdge {
+  source: string;
+  target: string;
+  weight: number;
+}
+
+export interface GroupRelationGraph {
+  group_id: string;
+  bot_id?: string;
+  since?: string;
+  messages: number;
+  participants: number;
+  nodes: GroupRelationNode[];
+  edges: GroupRelationEdge[];
+  truncated?: boolean;
+}
+
+export interface GroupRelationResponse {
+  range: AssistantEventRange;
+  graph: GroupRelationGraph;
+}
+
+export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupRelationResponse> {
+  const params = new URLSearchParams({ range });
+  return requestJSON<GroupRelationResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/relations?${params.toString()}`);
 }

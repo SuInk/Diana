@@ -373,18 +373,18 @@
               </div>
               <div class="field">
                 <label for="bot-history-budget">回复历史 token 预算</label>
-                <input id="bot-history-budget" v-model.number="form.recent_history_token_budget" class="input" inputmode="numeric" placeholder="16000" />
-                <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条。留空按 16000；同时受模型窗口 55% 约束，填了只会收紧不会放宽。</span>
+                <input id="bot-history-budget" v-model.number="form.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空按 16000" />
+                <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条；同时受模型窗口 55% 约束，填了只会收紧不会放宽。</span>
+              </div>
+              <div class="field">
+                <label for="bot-maxcontext">单次请求上下文上限</label>
+                <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
+                <span class="hint">一次调用最多带多少 token 上下文进去。留空按 LLM 配置档的模型窗口，填了只会收紧不会放宽。</span>
               </div>
               <div class="field">
                 <label for="bot-context">历史查询条数上限</label>
                 <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
                 <span class="hint">意图路由、指代消解和记忆门控这些旁路往回看几条，不影响正式回复的历史长度。</span>
-              </div>
-              <div class="field">
-                <label for="bot-maxcontext">单次请求上下文上限</label>
-                <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型" />
-                <span class="hint">这个机器人单次请求最多用掉多少 token。留空按 LLM 配置档的模型窗口，填了只会收紧不会放宽；调小可以省钱。</span>
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
@@ -518,8 +518,8 @@
               </div>
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
-                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="1200" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。留空按 1200；表达风格不会改动这一项。</span>
+                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。表达风格不会改动这一项。</span>
               </div>
             </div>
           </section>
