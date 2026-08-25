@@ -150,11 +150,11 @@ func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
 // 引号里的句号不是边界，成块的内容也不按句子拆。
 func TestSentenceSplitRespectsQuotesAndBlocks(t *testing.T) {
 	quoted := "他当时就站在门口说「我不去。」然后头也不回地走了，那句话我记了很多年，到现在也没敢问他到底什么意思"
-	if got := sentenceEndPositions([]rune(quoted)); len(got) != 0 {
+	if got := boundaryPositions([]rune(quoted), isSentenceEnd); len(got) != 0 {
 		t.Fatalf("引号里的句号被当成了边界：%#v", got)
 	}
 	// 引号外面的句号照常是边界。
-	if got := sentenceEndPositions([]rune("他说「我不去。」然后走了。后来再没提过")); len(got) != 1 {
+	if got := boundaryPositions([]rune("他说「我不去。」然后走了。后来再没提过"), isSentenceEnd); len(got) != 1 {
 		t.Fatalf("引号外的句号没被认出来：%#v", got)
 	}
 	// 多行的块（清单、步骤、代码、引用）走到这里就该原样返回。
@@ -307,5 +307,50 @@ func TestChatReplyBalancesInsteadOfGreedilyFilling(t *testing.T) {
 		if share := len([]rune(chunk)) * 4; share < total {
 			t.Fatalf("有一条短得像尾巴：%q（占比不到四分之一）", chunk)
 		}
+	}
+}
+
+// 中文长句常常一个逗号连到底，一个句号都没有。只认句末的话这种句子永远分不开，
+// 只能等撞上长度上限才被硬切——那才是真正会「看着很挤」的一坨。
+func TestChatReplySplitsCommaOnlyLongSentence(t *testing.T) {
+	line := "这个问题其实要看你想解决的是哪一层，如果只是想让它别再报错，那改配置就够了，但如果是想搞清楚为什么会这样，那得先看日志里那几行堆栈，再回头对一下版本号，因为这个行为在新版里改过一次"
+	chunks := splitChatReply(line, chatReplyChunkSize, replyBubbleTargetRunes)
+	if len(chunks) < 2 {
+		t.Fatalf("只有逗号的长句没有分条：%#v", chunks)
+	}
+	for _, chunk := range chunks {
+		if n := len([]rune(chunk)); n > len([]rune(line)) {
+			t.Fatalf("分条后反而变长了：%q", chunk)
+		}
+	}
+}
+
+// 分句兜底只认全角标点。半角冒号逗号在链接、CQ 码、版本号里到处都是，按它们断句
+// 会把一个链接劈成两条消息发出去——这是加分句兜底时真踩过的坑。
+func TestChatReplyNeverSplitsInsideLinksOrCQCodes(t *testing.T) {
+	for _, name := range []string{"CQ 码", "链接", "版本号"} {
+		var text string
+		switch name {
+		case "CQ 码":
+			text = "[CQ:record,file=http://127.0.0.1:18080/api/assistant/media/rule-voice-and-more-padding]"
+		case "链接":
+			text = "详情看这个 http://127.0.0.1:18080/api/assistant/media/some-very-long-path-name-here-ok"
+		case "版本号":
+			text = "当前跑的是 v1.2.3-beta.4+build.5678 这个版本，具体差异我等下贴个对比出来给你看看行不行"
+		}
+		for _, chunk := range splitChatReply(text, chatReplyChunkSize, replyBubbleTargetRunes) {
+			if strings.HasSuffix(chunk, ":") || strings.HasSuffix(chunk, ",") || strings.HasSuffix(chunk, ".") {
+				t.Fatalf("%s 被从半角标点处切开了：%q", name, chunk)
+			}
+		}
+	}
+}
+
+// 提醒、订阅推送这类「到点了主动找人」的通知走通知的分条，不按句子拆：它们是一条
+// 完整的事实，拆开就成了半句一条。
+func TestSubscriberNoticeKeepsSentencesTogether(t *testing.T) {
+	notice := "提醒 reminder-fail 本次发送失败，将在 2026-08-25 05:10:29 自动重试（连续失败 1 次）。请检查群是否仍然可达。"
+	if chunks := splitReply(notice, notificationChunkSize); len(chunks) != 1 {
+		t.Fatalf("通知被按句子拆开了：%#v", chunks)
 	}
 }
