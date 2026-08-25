@@ -4710,8 +4710,9 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return run(provider)
 		}
-		if normalized := llm.NormalizeProfileGroup(group); normalized != llm.GroupChat {
-			if profiles := set.GroupProfiles(normalized); len(profiles) > 0 {
+		groupKey := llm.NormalizeProfileGroup(group)
+		if groupKey != llm.GroupChat {
+			if profiles := set.GroupProfiles(groupKey); len(profiles) > 0 {
 				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
 				if err != nil {
 					return "", err
@@ -4719,8 +4720,16 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 				return run(provider)
 			}
 		}
-		if current, ok := set.Current(); ok {
-			logUnboundGroupFallback(roles, group, current.ID)
+		// runLLMProviderWithFailover 从激活配置所在的分组取候选，激活的是生图那套时
+		// 聊天调用会拿到一串生图配置。先确认激活配置能接这次调用，接不了就退回本分组。
+		if len(activeProfileForGroup(set, roles, group, groupKey)) == 0 {
+			if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
+				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
+				if err != nil {
+					return "", err
+				}
+				return run(provider)
+			}
 		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
 	}
@@ -4772,10 +4781,13 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 	if registry == nil {
 		return llm.AgentModelConfig{}, false, nil
 	}
-	key := llm.NormalizeProfileGroup(group)
-	if key == llm.GroupChat {
-		key = "chat"
-	}
+	// 分组名和角色名是两套命名空间，别用同一个变量串着走：
+	// 角色键用 "chat"（机器人页那四行就是 chat/vision/intent/image），
+	// 而聊天配置的分组名是 "default"。原先这里把 key 从 "default" 改写成 "chat"
+	// 之后又拿它当分组名去查，结果是查一个根本不存在的分组——「先在同组里找」
+	// 这层保护对聊天调用从来没生效过。角色查找由 modelRoleForGroup 自己归一化，
+	// 这里只需要分组名。
+	groupKey := llm.NormalizeProfileGroup(group)
 	boundRole, hasBoundRole := modelRoleForGroup(roles, group)
 	if role := boundRole; hasBoundRole && role.ProviderID != "" && role.ModelID != "" {
 		return normalizeRegistrySelection(registry, role.ProviderID, role.ModelID), true, nil
@@ -4801,19 +4813,75 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 			}
 		}
 	}
-	if len(profiles) == 0 && key != llm.GroupChat {
-		profiles = llmProfilesInGroup(set, key)
+	// 非聊天用途先在本分组里找。聊天用途不走这一步：默认分组里可能并排放着好几个
+	// 对话 Provider，选哪个是用户在 LLM 配置页用「激活配置」定的，直接取第一个会
+	// 无视这个选择。
+	if len(profiles) == 0 && groupKey != llm.GroupChat {
+		profiles = llmProfilesInGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
-		if current, ok := set.Current(); ok {
-			logUnboundGroupFallback(roles, group, current.ID)
-			profiles = []llm.Profile{current}
-		}
+		profiles = activeProfileForGroup(set, roles, group, groupKey)
+	}
+	// 激活配置跨组（例如激活的是生图那套、这次是聊天调用）时退回本分组。
+	// 上一步已经拒绝了跨组的激活配置，这里补一个同组的，免得直接判成「没有可用配置」。
+	if len(profiles) == 0 {
+		profiles = llmProfilesInGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
 		return llm.AgentModelConfig{}, false, nil
 	}
 	return profileRegistrySelection(registry, profiles[0]), true, nil
+}
+
+// singlePurposeProfileGroup 报告这个分组的模型是不是只能干这一件事。
+//
+// 生图和向量嵌入是单一用途：生图模型接不了文本对话，嵌入模型也接不了。其余分组
+// （默认/视觉/意图）装的都是对话模型，互相顶替是正常的——modelRoleForGroup 本来就
+// 让视觉和意图在没单独绑定时回落到 chat 绑定，一台机器人聊着聊着多出几张图，
+// 用的还该是它绑的那个模型。
+func singlePurposeProfileGroup(group string) bool {
+	switch llm.NormalizeProfileGroup(group) {
+	case llm.GroupImage, llm.GroupEmbedding:
+		return true
+	}
+	return false
+}
+
+// profileGroupServes 报告某个分组的配置能不能接这个用途的调用。
+func profileGroupServes(profileGroup string, wantGroup string) bool {
+	profileGroup = llm.NormalizeProfileGroup(profileGroup)
+	wantGroup = llm.NormalizeProfileGroup(wantGroup)
+	if profileGroup == wantGroup {
+		return true
+	}
+	return !singlePurposeProfileGroup(profileGroup) && !singlePurposeProfileGroup(wantGroup)
+}
+
+// activeProfileForGroup 返回可以用于这个用途的激活配置，接不了这活就不给。
+//
+// 「回落到激活配置」本身是对的——没配模型分配时总得有个兜底，而且视觉、意图回落到
+// 对话配置是正常的。错的是完全不看能力：激活的是生图配置时，一次普通聊天调用会拿
+// gpt-image-2 去发文本请求，日志里 provider 和 model 还都显示「正常」。
+// 宁可往下退回同组配置、甚至报「没有可用配置」，也不要拿一个干不了这活的模型硬接。
+func activeProfileForGroup(set llm.ProfileSet, roles map[string]ModelRole, group string, groupKey string) []llm.Profile {
+	current, ok := set.Current()
+	if !ok {
+		return nil
+	}
+	if !profileGroupServes(current.Group, groupKey) {
+		logUnusableActiveProfileSkipped(groupKey, current.ID, llm.NormalizeProfileGroup(current.Group))
+		return nil
+	}
+	logUnboundGroupFallback(roles, group, current.ID)
+	return []llm.Profile{current}
+}
+
+// logUnusableActiveProfileSkipped 无条件记一条：跟 logUnboundGroupFallback 不同，
+// 这不是「正常回落」，而是「用户选的激活配置干不了这次调用」，任何情况下都该看得见。
+// logUnboundGroupFallback 在没配任何绑定时是静默的，而没配绑定的人恰恰最容易撞上
+// 这一种——那条路的静默只能由这里补上。
+func logUnusableActiveProfileSkipped(wantGroup string, activeID string, activeGroup string) {
+	log.Printf("chatbot llm selection skipped the active profile: a %q call cannot use the active profile %q from the single-purpose group %q", wantGroup, activeID, activeGroup)
 }
 
 func normalizeRegistrySelection(registry *llm.ProviderRegistry, providerID, modelID string) llm.AgentModelConfig {
