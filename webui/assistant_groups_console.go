@@ -132,7 +132,9 @@ func cloneLiveGroups(groups []botAutoGroupInfo) []botAutoGroupInfo {
 }
 
 func (h *BotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]botAutoGroupInfo, bool, string) {
-	if h == nil {
+	// runtime 也要挡：这里要拿它去调 OneBot，少判一层的话没接机器人时直接空指针。
+	// 群配置页一直有 runtime 所以没暴露过，事件筛选器接进来才踩到。
+	if h == nil || h.runtime == nil {
 		return nil, false, "机器人尚未连接，暂时只显示已保存的群配置"
 	}
 	if !refresh {

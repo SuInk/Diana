@@ -389,7 +389,7 @@ import { stream } from "../stream";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import StatCard from "../components/StatCard.vue";
-import AppSelect from "../components/AppSelect.vue";
+import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 
 const rangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
   { value: "1h", label: "最近 1h" },
@@ -644,17 +644,29 @@ function selectGroup(value: string): void {
 // 群选项跟着时间范围走，只列这段时间里真有事件的群：机器人可能进了几十个群，
 // 绝大多数一条事件都没有，全列出来反而找不到要看的那个。
 const groupOptions = computed(() => {
-  const options = [{ value: "", label: "全部会话" }];
+  const options: AppSelectOption[] = [{ value: "", label: "全部会话" }];
   for (const group of response.value?.groups ?? []) {
-    options.push({ value: group.group_id, label: `群 ${group.group_id}（${formatNumber(group.events)}）` });
+    options.push(groupOption(group.group_id, group.events, group.group_name, group.avatar_url));
   }
   // 选中的群这一轮可能已经没有事件了（换了更短的时间范围），选项要留着，
   // 否则下拉框显示空白、也没法切回去。
   if (selectedGroup.value && !options.some((option) => option.value === selectedGroup.value)) {
-    options.push({ value: selectedGroup.value, label: `群 ${selectedGroup.value}（0）` });
+    options.push(groupOption(selectedGroup.value, 0));
   }
   return options;
 });
+
+// 群名当主标题、群号退到副行：一串纯数字认不出是哪个群，而名字可能重复或为空，
+// 所以号码不能省，只是不该占主位。
+function groupOption(groupID: string, events: number, name?: string, avatar?: string): AppSelectOption {
+  const label = (name ?? "").trim();
+  return {
+    value: groupID,
+    label: label || `群 ${groupID}`,
+    hint: label ? `${groupID} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`,
+    avatar
+  };
+}
 
 const contextBudget = computed(() => response.value?.context_budget ?? null);
 
