@@ -10429,8 +10429,99 @@ func splitChatReply(reply string, chunkSize int) []string {
 	var out []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		for _, line := range splitReplyNaturalLines(part) {
-			out = append(out, chunkTextByLength(line, chunkSize)...)
+			for _, bubble := range splitReplySentences(line) {
+				out = append(out, chunkTextByLength(bubble, chunkSize)...)
+			}
 		}
+	}
+	return out
+}
+
+// replyBubbleTargetRunes 是一条聊天消息读着舒服的长度。超过这个数就该考虑分条，
+// 而不是等到撞上 DirectReplyChunkSize——那是「一条最多能有多长」的硬上限，两个
+// 数字管的不是同一件事，共用一个会重蹈当年 structuredReplyChunkSize 的覆辙。
+const replyBubbleTargetRunes = 60
+
+// replyMaxSentenceBubbles 限制按句子拆出来的条数。提示词说的是「拆成两三条」，
+// 一段话散成五六条就从「像真人连发」变成刷屏了；超出的部分并进最后一条。
+const replyMaxSentenceBubbles = 3
+
+// splitReplySentences 把一整段没有换行的长回复按句子分成两三条。
+//
+// 换行分条要模型愿意换行，<dianabr> 要模型愿意写标记——都还押在模型的配合上。
+// 一段 113 字、四句话、一个换行都没有的回复，三层机制会一起空转，最后糊成一个
+// 宽气泡。所以最后这层不依赖模型给任何信号：句号本来就是它写出来的边界。
+//
+// 只在明显偏长时才动手。短回复里的两句话本来就是一条消息（「端口被占了。先 lsof
+// 看看是谁占着。」），拆开反而不像人说话。
+func splitReplySentences(text string) []string {
+	// 带换行的说明它是个成块的东西——清单、步骤、代码、引用的诗文。走到这里意味着
+	// splitReplyNaturalLines 已经判定不该按行拆，那按句子拆更不该。
+	if strings.Contains(text, "\n") {
+		return []string{text}
+	}
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= replyBubbleTargetRunes {
+		return []string{text}
+	}
+	sentences := splitIntoSentences(runes)
+	if len(sentences) < 2 {
+		return []string{text}
+	}
+	bubbles := make([]string, 0, replyMaxSentenceBubbles)
+	current := ""
+	for index, sentence := range sentences {
+		// 已经攒到最后一条了，剩下的全并进去，别散成刷屏。
+		if len(bubbles) == replyMaxSentenceBubbles-1 {
+			current += strings.Join(sentences[index:], "")
+			break
+		}
+		if current != "" && len([]rune(current+sentence)) > replyBubbleTargetRunes {
+			bubbles = append(bubbles, current)
+			current = sentence
+			continue
+		}
+		current += sentence
+	}
+	if trimmed := strings.TrimSpace(current); trimmed != "" {
+		bubbles = append(bubbles, trimmed)
+	}
+	if len(bubbles) < 2 {
+		return []string{text}
+	}
+	return bubbles
+}
+
+// splitIntoSentences 按句末标点切句，标点跟着前一句走。
+//
+// 引号和括号里的句号不算边界：「他说「我不去。」然后就走了」拆开就散架了。
+func splitIntoSentences(runes []rune) []string {
+	var out []string
+	depth := 0
+	start := 0
+	for i, r := range runes {
+		switch r {
+		case '「', '『', '（', '(', '【', '《', '“':
+			depth++
+		case '」', '』', '）', ')', '】', '》', '”':
+			if depth > 0 {
+				depth--
+			}
+		}
+		if depth > 0 || !isSentenceEnd(r) {
+			continue
+		}
+		// 连着的句末标点（「？！」「……」）算同一个边界。
+		if i+1 < len(runes) && isSentenceEnd(runes[i+1]) {
+			continue
+		}
+		if sentence := strings.TrimSpace(string(runes[start : i+1])); sentence != "" {
+			out = append(out, sentence)
+		}
+		start = i + 1
+	}
+	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
+		out = append(out, tail)
 	}
 	return out
 }
@@ -10567,15 +10658,54 @@ func chunkTextByLength(text string, chunkSize int) []string {
 // 某行特别长时切出一堆碎条。
 func replyChunkCut(runes []rune, chunkSize int) int {
 	floor := chunkSize / 3
+	// 从后往前找断点，同一优先级取最靠后的那个：换行 > 句末 > 分句 > 空白。
+	//
+	// 只找换行和空白是不够的——中文既没有词间空格，一段纯中文里这两样一个都没有，
+	// 于是每次都退回硬切，把「所以不会」和「冒充自己亲身体验过」劈成两条。标点是
+	// 中文里唯一的断点，必须认。
+	var cuts [3]int
 	for i := chunkSize; i > floor; i-- {
-		if runes[i-1] == '\n' {
-			return i
+		rank := replyCutRank(runes[i-1])
+		if rank > 0 && cuts[rank-1] == 0 {
+			cuts[rank-1] = i
 		}
 	}
-	for i := chunkSize; i > floor; i-- {
-		if unicode.IsSpace(runes[i-1]) {
-			return i
+	for _, cut := range cuts {
+		if cut > 0 {
+			return cut
 		}
 	}
 	return chunkSize
+}
+
+// replyCutRank 给一个字符打断点优先级，0 表示不能在这里断。
+func replyCutRank(r rune) int {
+	switch {
+	case r == '\n':
+		return 1
+	case isSentenceEnd(r):
+		return 2
+	case isClauseBreak(r) || unicode.IsSpace(r):
+		return 3
+	}
+	return 0
+}
+
+// isSentenceEnd 判断是不是句末标点。只认全角的那几个：英文句点在小数、缩写和
+// 域名里到处都是，拿它断句会把 3.5 和 example.com 切开。
+func isSentenceEnd(r rune) bool {
+	switch r {
+	case '。', '！', '？', '…', '；':
+		return true
+	}
+	return false
+}
+
+// isClauseBreak 判断是不是分句标点。断在这里读着不算体面，但比拦腰硬切强。
+func isClauseBreak(r rune) bool {
+	switch r {
+	case '，', '、', ',', ';', '：', ':':
+		return true
+	}
+	return false
 }
