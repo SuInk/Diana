@@ -155,7 +155,7 @@ func TestSentenceSplitRespectsQuotesAndBlocks(t *testing.T) {
 	}
 	// 多行的块（清单、步骤、代码、引用）走到这里就该原样返回。
 	block := "第一步：先看 dmesg。\n第二步：再看 journalctl。\n第三步：最后查内存。\n第四步：都不行就重启。"
-	if got := splitReplySentences(block, replyBubbleTargetRunes); len(got) != 1 {
+	if got := splitReplySentences(block, replyBubbleTargetRunes, replyMaxSentenceBubbles); len(got) != 1 {
 		t.Fatalf("成块的内容被按句子拆开了：%#v", got)
 	}
 }
@@ -219,5 +219,43 @@ func TestReplyBubbleTargetIsConfigurableAndClamped(t *testing.T) {
 	narrow := splitChatReply(reply, 400, 30)
 	if len(narrow) <= len(wide) {
 		t.Fatalf("调小分条长度没有拆得更碎：wide=%d narrow=%d", len(wide), len(narrow))
+	}
+}
+
+// 条数上限管的是整条回复，不是每一段。
+//
+// 分条有三层，每层都可能再拆：标记、换行、句子。上限按段算就会相乘——两行各拆三条
+// 是六条，再加个标记能到九条，群里看着就是刷屏。
+func TestChatReplyCapsTotalBubblesAcrossAllLayers(t *testing.T) {
+	long := "第一句话写得足够长用来占位凑够字数好触发按句子分条的门槛。第二句同样长度也要凑够六十个字才会被拆开来发。第三句还是一样长凑够字数触发分条规则生效。"
+	cases := []struct {
+		name  string
+		reply string
+	}{
+		{"两行长文", long + "\n" + long},
+		{"三行长文", long + "\n" + long + "\n" + long},
+		{"两行加显式标记", long + "\n" + long + notificationSplitMarker + long},
+	}
+	for _, item := range cases {
+		got := splitChatReply(item.reply, chatReplyChunkSize, replyBubbleTargetRunes)
+		if len(got) > replyMaxChatBubbles {
+			t.Fatalf("%s 拆出了 %d 条，上限是 %d：%#v", item.name, len(got), replyMaxChatBubbles, got)
+		}
+	}
+}
+
+// 额度紧张时先退让的是「按句子细分」——那是运行时自己加的一层。模型显式写的标记和
+// 换行是它明说要分的，一条都不能被合掉。
+func TestChatReplyNeverMergesWhatTheModelAskedToSplit(t *testing.T) {
+	long := "第一句话写得足够长用来占位凑够字数好触发按句子分条的门槛。第二句同样长度也要凑够六十个字才会被拆开来发。第三句还是一样长凑够字数触发分条规则生效。"
+	// 三行都超过细分门槛，加起来远超上限；三行本身仍然必须各占一条。
+	got := splitChatReply(long+"\n"+long+"\n"+long, chatReplyChunkSize, replyBubbleTargetRunes)
+	if len(got) < 3 {
+		t.Fatalf("模型写的换行被合掉了：%#v", got)
+	}
+	for _, chunk := range got {
+		if strings.Contains(chunk, "\n") {
+			t.Fatalf("同一条里还留着换行：%q", chunk)
+		}
 	}
 }

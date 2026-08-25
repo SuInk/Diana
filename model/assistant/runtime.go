@@ -10431,18 +10431,37 @@ func splitChatReply(reply string, chunkSize int, bubbleTarget int) []string {
 	if reply == "" {
 		return nil
 	}
-	var out []string
+	// 先按模型自己给的信号分段：显式标记和换行。这两样是它明说的，照做。
+	var segments []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
-		for _, line := range splitReplyNaturalLines(part) {
-			for _, bubble := range splitReplySentences(line, bubbleTarget) {
-				for _, chunk := range chunkTextByLength(bubble, chunkSize) {
-					out = append(out, trimChatTrailingPeriod(chunk))
-				}
+		segments = append(segments, splitReplyNaturalLines(part)...)
+	}
+	var out []string
+	for index, segment := range segments {
+		// 按句子细分是运行时自己加的那一层，额度紧张时先让它退。后面每个段至少还要
+		// 占一条，先把那些额度留出来再看这一段能拆几条。
+		allowance := replyMaxChatBubbles - len(out) - (len(segments) - index - 1)
+		bubbles := []string{segment}
+		if allowance > 1 {
+			bubbles = splitReplySentences(segment, bubbleTarget, allowance)
+		}
+		for _, bubble := range bubbles {
+			// 长度兜底不受条数上限约束：它守的是平台能不能发得出去，不是好不好看。
+			for _, chunk := range chunkTextByLength(bubble, chunkSize) {
+				out = append(out, trimChatTrailingPeriod(chunk))
 			}
 		}
 	}
 	return out
 }
+
+// replyMaxChatBubbles 是一条回复最多拆成几条。
+//
+// 分条有三层，每层都可能再拆一次：标记、换行、句子。上限如果按段算就会相乘——
+// 模型写两行、每行拆三条就是六条，再加个标记能到九条，群里看着就是刷屏。所以这个
+// 数管的是整条回复，而且只约束「按句子细分」这一层：标记和换行是模型明说要分的，
+// 照做；细分是运行时自己加的，该退的时候先退它。
+const replyMaxChatBubbles = 4
 
 // trimChatTrailingPeriod 去掉聊天消息末尾那个句号。
 //
@@ -10506,7 +10525,7 @@ const replyMaxSentenceBubbles = 3
 //
 // 只在明显偏长时才动手。短回复里的两句话本来就是一条消息（「端口被占了。先 lsof
 // 看看是谁占着。」），拆开反而不像人说话。
-func splitReplySentences(text string, target int) []string {
+func splitReplySentences(text string, target int, maxBubbles int) []string {
 	// 带换行的说明它是个成块的东西——清单、步骤、代码、引用的诗文。走到这里意味着
 	// splitReplyNaturalLines 已经判定不该按行拆，那按句子拆更不该。
 	if strings.Contains(text, "\n") {
@@ -10516,6 +10535,12 @@ func splitReplySentences(text string, target int) []string {
 	if target <= 0 {
 		target = replyBubbleTargetRunes
 	}
+	if maxBubbles > replyMaxSentenceBubbles {
+		maxBubbles = replyMaxSentenceBubbles
+	}
+	if maxBubbles < 2 {
+		return []string{text}
+	}
 	if len(runes) <= target {
 		return []string{text}
 	}
@@ -10523,11 +10548,11 @@ func splitReplySentences(text string, target int) []string {
 	if len(sentences) < 2 {
 		return []string{text}
 	}
-	bubbles := make([]string, 0, replyMaxSentenceBubbles)
+	bubbles := make([]string, 0, maxBubbles)
 	current := ""
 	for index, sentence := range sentences {
 		// 已经攒到最后一条了，剩下的全并进去，别散成刷屏。
-		if len(bubbles) == replyMaxSentenceBubbles-1 {
+		if len(bubbles) == maxBubbles-1 {
 			current += strings.Join(sentences[index:], "")
 			break
 		}
