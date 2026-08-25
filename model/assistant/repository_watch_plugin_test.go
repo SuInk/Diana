@@ -769,15 +769,19 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 			t.Fatalf("follow-up prompt missing %q: %#v", want, followUp.Messages)
 		}
 	}
-	// 只看标题写不出具体的话，所以 diff 要进提示词——但必须带着「会话里没人看得到」
+	// 只看标题写不出具体的话，所以改动清单要进提示词——但必须带着「会话里没人看得到」
 	// 这句框住，否则模型会拿它当已发内容去接话。
-	for _, want := range []string{"会话里没有人看得到它", "model/assistant/repository_watch_plugin.go", "+classified", "本次新增提交合计改动", "PR #2 的改动"} {
+	for _, want := range []string{"会话里没有人看得到它", "model/assistant/repository_watch_plugin.go", "本次新增提交合计改动", "PR #2 的改动"} {
 		if !requestMessagesContain(followUp.Messages, want) {
 			t.Fatalf("follow-up prompt missing diff reference %q: %#v", want, followUp.Messages)
 		}
 	}
-	// diff 只进提示词，绝不能出现在发出去的正文里。
-	if strings.Contains(sentText, "+classified") || strings.Contains(sentText, "@@") {
+	// 只给文件清单，patch 正文不进提示词。
+	if requestMessagesContain(followUp.Messages, "@@") || requestMessagesContain(followUp.Messages, "+classified") {
+		t.Fatalf("patch body leaked into the follow-up prompt: %#v", followUp.Messages)
+	}
+	// 清单只进提示词，绝不能出现在发出去的正文里。
+	if strings.Contains(sentText, "repository_watch_plugin.go（") || strings.Contains(sentText, "@@") {
 		t.Fatalf("diff leaked into the delivered notification: %q", sentText)
 	}
 	// 原始 payload 和内部 id 照旧不该进提示词，也不需要工具。
@@ -1795,20 +1799,24 @@ func TestRepositoryWatchFetchesDiffOnlyWhenRequested(t *testing.T) {
 			t.Fatalf("pull request files=%#v", change.PullRequests)
 		}
 		digest := renderRepositoryWatchDiffDigest(change)
-		for _, want := range []string{"本次新增提交合计改动", "PR #2 的改动", "model/assistant/runtime.go", "+classified"} {
+		for _, want := range []string{"本次新增提交合计改动", "PR #2 的改动", "model/assistant/runtime.go", "+12 -1"} {
 			if !strings.Contains(digest, want) {
 				t.Fatalf("digest missing %q: %s", want, digest)
 			}
 		}
+		// patch 正文不进提示词：跟评只需要知道动了哪些文件、动了多少。
+		if strings.Contains(digest, "@@") || strings.Contains(digest, "+classified") {
+			t.Fatalf("patch body leaked into the digest: %s", digest)
+		}
 	})
 }
 
-// 每个 patch 和整份参考资料都有上限：一条动态的 diff 不该把跟评的上下文预算吃光。
-// 预算不够时留下的应当是改动量最大的文件，而不是恰好排在前面的那个。
+// 参考资料是有预算的：文件多的时候按改动量排序后截断，留下的应当是改动最大的文件，
+// 而不是恰好排在前面的那个；截断了要明说。
 func TestRepositoryWatchDiffDigestIsBudgetedAndRanked(t *testing.T) {
 	change := repositoryWatchChange{CommitDiff: &repositoryWatchDiff{Files: []repositoryWatchDiffFile{
-		{Filename: "docs/tiny.md", Status: "modified", Additions: 1, Deletions: 0, Changes: 1, Patch: "@@ tiny @@"},
-		{Filename: "model/big.go", Status: "modified", Additions: 400, Deletions: 120, Changes: 520, Patch: "@@ big @@"},
+		{Filename: "docs/tiny.md", Status: "modified", Additions: 1, Deletions: 0, Changes: 1},
+		{Filename: "model/big.go", Status: "modified", Additions: 400, Deletions: 120, Changes: 520},
 	}, FilesTruncated: true}}
 	digest := renderRepositoryWatchDiffDigest(change)
 	if strings.Index(digest, "model/big.go") > strings.Index(digest, "docs/tiny.md") {
@@ -1818,17 +1826,10 @@ func TestRepositoryWatchDiffDigestIsBudgetedAndRanked(t *testing.T) {
 		t.Fatalf("truncation was not disclosed: %s", digest)
 	}
 
-	long := repositoryWatchDiffFilePayload{Filename: "model/huge.go", Status: "modified", Patch: strings.Repeat("x", repositoryWatchDiffPatchRunes*3)}
-	files, _ := repositoryWatchDiffFiles([]repositoryWatchDiffFilePayload{long}, repositoryWatchDiffFileLimit)
-	// truncateRunes 截断后会补一个省略号，所以按「上限加上省略号」比。
-	if got := len([]rune(files[0].Patch)); got > repositoryWatchDiffPatchRunes+len("...") {
-		t.Fatalf("patch not truncated: %d runes", got)
-	}
-	oversized := make([]repositoryWatchDiffFile, 0, 40)
-	for index := 0; index < 40; index++ {
+	oversized := make([]repositoryWatchDiffFile, 0, 200)
+	for index := 0; index < 200; index++ {
 		oversized = append(oversized, repositoryWatchDiffFile{
-			Filename: fmt.Sprintf("model/file%02d.go", index), Changes: index,
-			Patch: strings.Repeat("y", repositoryWatchDiffPatchRunes),
+			Filename: fmt.Sprintf("model/some/rather/long/path/file%03d.go", index), Changes: index,
 		})
 	}
 	digest = renderRepositoryWatchDiffDigest(repositoryWatchChange{CommitDiff: &repositoryWatchDiff{Files: oversized}})
