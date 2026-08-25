@@ -2819,6 +2819,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaSubtaskTool(r, event),
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
+				newDianaGroupRelationsTool(r, event),
 				newDianaGlossaryTool(r, event, relationship),
 				newDianaVersionTool(r),
 				newDianaImageTool(r, event, relationship),
