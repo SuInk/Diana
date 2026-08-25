@@ -582,7 +582,10 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 	r.mu.RUnlock()
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		groups := append(append([]string(nil), memoryProfileGroups...), semanticRouteProfileGroups...)
+		// 记忆是自动文本任务：专用 memory 分组优先，其次使用机器人已经绑定的
+		// intent（未绑定 intent 时 roleBoundProfiles 会回退 chat）。不能直接取
+		// Current，否则激活生图配置时会拿图片模型发送文本 Responses 请求。
+		groups := append([]string(nil), memoryProfileGroups...)
 		seen := map[string]bool{}
 		for _, group := range groups {
 			group = llm.NormalizeProfileGroup(group)
@@ -595,10 +598,33 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
-		if current, ok := set.Current(); ok {
-			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, true, run)
+		profiles, roleErr := r.roleBoundProfiles(set, llm.GroupIntent)
+		if roleErr != nil {
+			return "", roleErr
 		}
-		return "", fmt.Errorf("chatbot: no llm profile is configured")
+		if len(profiles) > 0 {
+			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+		}
+		for _, group := range semanticRouteProfileGroups {
+			group = llm.NormalizeProfileGroup(group)
+			if seen[group] {
+				continue
+			}
+			seen[group] = true
+			if profiles := llmProfilesInGroup(set, group); len(profiles) > 0 {
+				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+			}
+		}
+		r.mu.RLock()
+		roles := normalizeModelRoles(r.cfg.ModelRoles)
+		r.mu.RUnlock()
+		if profiles := activeProfileForGroup(set, roles, llm.GroupIntent, llm.GroupIntent); len(profiles) > 0 {
+			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+		}
+		if profiles := llmProfilesInGroup(set, llm.GroupChat); len(profiles) > 0 {
+			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+		}
+		return "", fmt.Errorf("chatbot: no text-capable llm profile is configured for memory")
 	}
 	if factory == nil {
 		return "", fmt.Errorf("chatbot: llm provider is not configured")

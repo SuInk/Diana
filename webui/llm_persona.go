@@ -23,6 +23,9 @@ type personaGeneratePayload struct {
 	Description string `json:"description"`
 	Name        string `json:"name,omitempty"`
 	Current     string `json:"current,omitempty"`
+	ProfileID   string `json:"profile_id,omitempty"`
+	Group       string `json:"group,omitempty"`
+	Model       string `json:"model,omitempty"`
 	// ReplyStyle 和 ResponseMode 是界面上和人设并列的两个选择。生成时带上它们，
 	// 写出来的人设才会和已经选好的语气、搭话频率是同一个人，而不是各说各的。
 	ReplyStyle   string `json:"reply_style,omitempty"`
@@ -75,7 +78,11 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 		description = string([]rune(description)[:personaGenerateMaxDescription])
 	}
 
-	cfg := h.store.Current()
+	cfg, err := personaProviderConfig(h.store.Profiles(), payload)
+	if err != nil {
+		h.writeError(c, http.StatusUnprocessableEntity, "llm.persona", err, payload.Model, nil)
+		return
+	}
 	client, err := h.newClient(cfg)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "llm.persona", err, cfg.Model, llmLogMetadata(cfg, ""))
@@ -99,6 +106,65 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 	}
 	recordRequestOperation(c, h.logs, "llm.persona", "生成基础人设成功", resp.Model, llmLogMetadata(cfg, ""))
 	c.JSON(http.StatusOK, gin.H{"persona": persona, "model": resp.Model, "provider": resp.Provider, "usage": resp.Usage})
+}
+
+func personaProviderConfig(set llm.ProfileSet, payload personaGeneratePayload) (llm.ProviderConfig, error) {
+	set = set.WithDefaults()
+	var selected llm.Profile
+	if profileID := strings.TrimSpace(payload.ProfileID); profileID != "" {
+		for _, profile := range set.Profiles {
+			if profile.ID == profileID {
+				selected = profile
+				break
+			}
+		}
+		if selected.ID == "" {
+			return llm.ProviderConfig{}, fmt.Errorf("对话 LLM 配置 %q 不存在", profileID)
+		}
+	} else if group := strings.TrimSpace(payload.Group); group != "" {
+		if profiles := set.GroupProfiles(group); len(profiles) > 0 {
+			selected = profiles[0]
+		}
+	} else if current, ok := set.Current(); ok && personaTextProfile(current) {
+		selected = current
+	}
+	if selected.ID == "" {
+		for _, profile := range set.GroupProfiles(llm.GroupChat) {
+			if personaTextProfile(profile) {
+				selected = profile
+				break
+			}
+		}
+	}
+	if selected.ID == "" || !personaTextProfile(selected) {
+		return llm.ProviderConfig{}, fmt.Errorf("没有可用于生成人设的文本 LLM 配置")
+	}
+	cfg := selected.Config.WithDefaults()
+	if model := strings.TrimSpace(payload.Model); model != "" {
+		if len(cfg.Models) > 0 {
+			found := false
+			for _, item := range cfg.Models {
+				if strings.TrimSpace(item.ID) == model {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return llm.ProviderConfig{}, fmt.Errorf("模型 %q 不属于对话 LLM 配置 %q", model, selected.Name)
+			}
+		}
+		cfg.Model = model
+	}
+	return cfg, nil
+}
+
+func personaTextProfile(profile llm.Profile) bool {
+	switch llm.NormalizeProfileGroup(profile.Group) {
+	case llm.GroupImage, llm.GroupEmbedding:
+		return false
+	default:
+		return true
+	}
 }
 
 // personaGenerateUserPrompt 拼接这次的需求。带上现有人设时是「改写」而不是「重写」，

@@ -848,11 +848,11 @@ export function generatePersona(
   description: string,
   name?: string,
   current?: string,
-  style?: { reply_style?: string; response_mode?: string }
+  options?: { reply_style?: string; response_mode?: string; profile_id?: string; group?: string; model?: string }
 ): Promise<PersonaGenerateResponse> {
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
-    body: JSON.stringify({ description, name, current, ...(style ?? {}) })
+    body: JSON.stringify({ description, name, current, ...(options ?? {}) })
   });
 }
 

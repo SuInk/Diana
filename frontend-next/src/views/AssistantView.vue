@@ -1638,9 +1638,13 @@ async function runPersonaGenerate(): Promise<void> {
   personaBusy.value = true;
   try {
     const current = form.value.system_prompt?.trim() || "";
+    const chatRole = roleForm.value.chat;
     const result = await generatePersona(description, form.value.name, current, {
       reply_style: form.value.reply_style,
-      response_mode: form.value.response_mode
+      response_mode: form.value.response_mode,
+      profile_id: chatRole?.profile_id || chatRole?.provider_id,
+      group: chatRole?.group,
+      model: chatRole?.model_id || chatRole?.model
     });
     const persona = result.persona?.trim();
     if (!persona) {
