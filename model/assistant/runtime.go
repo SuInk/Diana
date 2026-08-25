@@ -7315,8 +7315,12 @@ func (r *Runtime) sendWithMessageIDsMode(ctx context.Context, event MessageEvent
 
 // sendSubscriberNotice 投递提醒、周期查询、RSS 这类「到点了主动找人」的通知：
 // 群里一律 @ 订阅者，不引用任何消息（触发它的那条消息可能是几天前的了）。
+//
+// 走通知的分条而不是聊天的：这类推送是一条完整的事实——提醒原文、订阅摘要、
+// 「本次发送失败，将在 X 自动重试」——按句子拆开就成了半句一条，读的人得自己拼。
 func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
-	_, err := r.sendDecorated(ctx, event, text, outboundDecoration{
+	cfg := r.effectiveConfigForEvent(event)
+	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
 		MentionUserID: strings.TrimSpace(event.UserID),
 		MentionAlways: true,
 	})
@@ -7777,6 +7781,11 @@ func appendHistoryImageSegments(segments []MessageSegment, imageURLs []string) [
 
 const forwardReplyChunkCountThreshold = 5
 
+// shouldUseForwardReply 判断这条回复该不该走合并转发卡片。两个触发条件：
+//
+//	块数  切出 5 块以上——分条的条数上限只管前三档，之后的长度兜底不受限，
+//	      用户把「分段发送长度」调小时块数照样上得去
+//	长度  正文超过 ForwardReplyThreshold（默认 900 字）
 func shouldUseForwardReply(reply string, chunks []string, threshold int) bool {
 	if len(chunks) >= forwardReplyChunkCountThreshold {
 		return true
@@ -10594,22 +10603,21 @@ func balanceLineIntoBubbles(line string, target int) []string {
 	if want > replyMaxChatBubbles {
 		want = replyMaxChatBubbles
 	}
-	ends := sentenceEndPositions(runes)
-	if len(ends) == 0 {
+	ends := boundaryPositions(runes, isSentenceEnd)
+	// 句末不够切出这么多份时补上分句标点。中文长句常常一个逗号连到底，一个句号都
+	// 没有——只认句末的话这种句子永远分不开，只能等撞上长度上限才被硬切。优先级和
+	// replyChunkCut 是同一套：句末 > 分句。
+	clauses := boundaryPositions(runes, isClauseBoundary)
+	if len(ends) == 0 && len(clauses) == 0 {
 		return []string{line}
 	}
 	var out []string
 	start := 0
 	for piece := 1; piece < want; piece++ {
 		ideal := len(runes) * piece / want
-		best := -1
-		for _, end := range ends {
-			if end <= start || end >= len(runes) {
-				continue
-			}
-			if best < 0 || absInt(end-ideal) < absInt(best-ideal) {
-				best = end
-			}
+		best := nearestBoundary(ends, start, len(runes), ideal)
+		if best < 0 {
+			best = nearestBoundary(clauses, start, len(runes), ideal)
 		}
 		if best < 0 {
 			break
@@ -10628,29 +10636,58 @@ func balanceLineIntoBubbles(line string, target int) []string {
 	return out
 }
 
-// sentenceEndPositions 返回每个句末标点之后的位置。引号括号里的句号不算边界：
-// 「他说「我不去。」然后走了」拆开就散架了；连着的句末标点（「？！」）算一个。
-func sentenceEndPositions(runes []rune) []int {
+// boundaryPositions 返回每个符合 match 的标点之后的位置。引号括号里的标点不算
+// 边界：「他说「我不去。」然后走了」拆开就散架了；连着的标点（「？！」）算一个。
+func boundaryPositions(runes []rune, match func(rune) bool) []int {
 	var out []int
 	depth := 0
 	for i, r := range runes {
 		switch r {
-		case '「', '『', '（', '(', '【', '《', '“':
+		case '「', '『', '（', '(', '【', '《', '“', '[':
 			depth++
-		case '」', '』', '）', ')', '】', '》', '”':
+		case '」', '』', '）', ')', '】', '》', '”', ']':
 			if depth > 0 {
 				depth--
 			}
 		}
-		if depth > 0 || !isSentenceEnd(r) {
+		if depth > 0 || !match(r) {
 			continue
 		}
-		if i+1 < len(runes) && isSentenceEnd(runes[i+1]) {
+		if i+1 < len(runes) && match(runes[i+1]) {
 			continue
 		}
 		out = append(out, i+1)
 	}
 	return out
+}
+
+// isClauseBoundary 判断能不能把一句话从这里分成两条消息。
+//
+// 只认全角标点。半角的冒号和逗号在链接、CQ 码、代码和版本号里到处都是——
+// http://127.0.0.1:18080 里有两个冒号，[CQ:record,file=…] 里冒号逗号都有，
+// 按它们断句会把一个链接劈成两条消息发出去。isClauseBreak 收得宽是给长度兜底用的：
+// 那里已经非切不可，切在半角标点上也比拦腰切在字中间强；这里是「要不要分条」，
+// 不确定就别分。
+func isClauseBoundary(r rune) bool {
+	switch r {
+	case '，', '、', '：':
+		return true
+	}
+	return false
+}
+
+// nearestBoundary 返回 (start, limit) 之间最接近 ideal 的断点，没有就返回 -1。
+func nearestBoundary(positions []int, start, limit, ideal int) int {
+	best := -1
+	for _, pos := range positions {
+		if pos <= start || pos >= limit {
+			continue
+		}
+		if best < 0 || absInt(pos-ideal) < absInt(best-ideal) {
+			best = pos
+		}
+	}
+	return best
 }
 
 func absInt(n int) int {
