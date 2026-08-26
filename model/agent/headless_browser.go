@@ -215,6 +215,30 @@ func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowse
 	return HeadlessBrowserStatus{Available: true, Path: path, Version: version}
 }
 
+// ProbeHeadlessBrowserRendering 在版本探测之后再完成一次真实的本地截图。
+// --version 只能证明文件能执行，不能发现浏览器启动后卡住、沙箱参数不兼容或无法
+// 产出 PNG。插件依赖页用这个探测，结论才和真正调用时一致。
+func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) HeadlessBrowserStatus {
+	status := ProbeHeadlessBrowser(ctx, configured)
+	if !status.Available {
+		return status
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
+	defer cancel()
+	_, err := CaptureHTMLScreenshot(probeCtx, ScreenshotRequest{
+		HTML:       `<!doctype html><meta charset="utf-8"><title>Diana browser probe</title><body>ok</body>`,
+		Width:      64,
+		Height:     64,
+		Executable: status.Path,
+		Timeout:    headlessBrowserProbeTimeout,
+	})
+	if err != nil {
+		status.Available = false
+		status.Detail = "找到了 " + status.Path + "，但真实截图失败：" + err.Error()
+	}
+	return status
+}
+
 func headlessBrowserProbeDetail(configured string) string {
 	if strings.TrimSpace(configured) != "" {
 		return "配置的浏览器路径不存在：" + strings.TrimSpace(configured)
