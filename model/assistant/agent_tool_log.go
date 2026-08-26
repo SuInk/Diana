@@ -117,13 +117,15 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if runEvent.Phase != agent.RunPhaseModelCompleted {
 			toolOutput := runEvent.ToolOutput
 			toolInput := runEvent.ToolInput
-			if runError != "" && toolOutput == "" {
-				toolOutput = "ERROR: " + runError
-			}
 			if runEvent.Tool == dianaOneBotV11ToolName {
 				toolInput, toolOutput = sanitizeOneBotV11DebugToolCall(toolInput, toolOutput)
 			} else if runEvent.Tool == dianaRepositoryIssuesToolName {
 				toolInput, toolOutput = sanitizeRepositoryIssuesDebugToolCall(toolInput, toolOutput)
+			}
+			// 报错文本要补在脱敏之后：上面那层挡的是工具载荷，而错误信息不是载荷，
+			// 挡掉它只会让追踪里少一行、多一句「输出已省略」。
+			if runError != "" && strings.TrimSpace(toolOutput) == "" {
+				toolOutput = "ERROR: " + runError
 			}
 			r.recordDebugTrace(debugTraceFromContext(ctx), "Agent 调用链更新", map[string]any{
 				"phase":           "agent_" + string(runEvent.Phase),
@@ -153,6 +155,11 @@ func sanitizeOneBotV11DebugToolCall(input map[string]any, output string) (map[st
 		"action":     action,
 		"param_keys": sortedMapKeys(params),
 	}
+	// 还没有输出就别说「输出已省略」。调用开始和调用完成是同一次调用的两条记录，
+	// 开始那条的输出必然是空的，写上占位串会让人以为结果被挡掉了——实际是还没有。
+	if strings.TrimSpace(output) == "" {
+		return redactedInput, ""
+	}
 	return redactedInput, "[OneBot v11 tool output omitted]"
 }
 
@@ -171,25 +178,59 @@ func sanitizeRepositoryIssuesDebugToolCall(input map[string]any, output string) 
 	return redactedInput, repositoryIssueDebugOutcome(output)
 }
 
-// repositoryIssueDebugOutcome 只把结果的状态字段透出到调试追踪。
-// Issue 标题和正文可能含敏感内容，必须挡住；但 ok/outcome/failure_code 和那句
-// 固定失败文案不含任何用户内容，全挡掉的结果是排查时一片空白——写操作被闸门
-// 拒绝时，追踪里连「为什么被拒」都看不到。
+// repositoryIssueDebugBodyRunes 是草稿正文在追踪里露出的长度。够认出这是哪一条，
+// 不至于把整篇正文抄进日志。
+const repositoryIssueDebugBodyRunes = 120
+
+// repositoryIssueDebugMaxItems 限制列出来的条数。一次列几十条 Issue 是常事，全抄
+// 进追踪会把这一步的记录撑得没法读。
+const repositoryIssueDebugMaxItems = 5
+
+// repositoryIssueDebugOutcome 把结果整理成一份能看懂的摘要透出到调试追踪。
+//
+// 这里原先是「除了状态字段全挡」，理由是 Issue 标题和正文可能含敏感内容。但挡到
+// 只剩 outcome 的结果是「共找到 2 条草稿」——看得见有两条，看不出是哪两条，排查
+// 时等于没记。而这整份追踪只在「调试追踪」开着时才存在，那个开关自己的说明就写着
+// 会记录完整模型上下文（聊天历史全在里面）和工具结果；单独把这一个工具挡死，挡不
+// 住任何东西，只是让它比旁边那份上下文更难读。
+//
+// 所以改成给摘要：编号、标题、状态、链接照出，草稿正文截前 120 字并标出总字数，
+// 条数超过 5 条只列前 5 条。
 func repositoryIssueDebugOutcome(output string) string {
+	// 同上：调用开始那条还没有输出，占位串会被误读成「结果被挡掉了」。
+	if strings.TrimSpace(output) == "" {
+		return ""
+	}
 	var result struct {
-		OK                   bool   `json:"ok"`
-		Operation            string `json:"operation"`
-		Outcome              string `json:"outcome"`
-		FailureCode          string `json:"failure_code"`
-		Message              string `json:"message"`
-		RequiresConfirmation bool   `json:"requires_confirmation"`
-		RequiresApproval     bool   `json:"requires_approval"`
-		Idempotent           bool   `json:"idempotent"`
+		OK                   bool                       `json:"ok"`
+		Operation            string                     `json:"operation"`
+		Outcome              string                     `json:"outcome"`
+		FailureCode          string                     `json:"failure_code"`
+		Message              string                     `json:"message"`
+		RequiresConfirmation bool                       `json:"requires_confirmation"`
+		RequiresApproval     bool                       `json:"requires_approval"`
+		Idempotent           bool                       `json:"idempotent"`
+		Issue                *repositoryIssueSummary    `json:"issue"`
+		Items                []repositoryIssueSummary   `json:"items"`
+		Draft                *repositoryIssueDraftView  `json:"draft"`
+		Drafts               []repositoryIssueDraftView `json:"drafts"`
 	}
 	if json.Unmarshal([]byte(output), &result) != nil {
 		return "[repository issue tool output omitted]"
 	}
 	status := map[string]any{"ok": result.OK}
+	if summaries, dropped := repositoryIssueDebugSummaries(result.Items, result.Issue); len(summaries) > 0 {
+		status["items"] = summaries
+		if dropped > 0 {
+			status["items_not_listed"] = dropped
+		}
+	}
+	if drafts, dropped := repositoryIssueDebugDrafts(result.Drafts, result.Draft); len(drafts) > 0 {
+		status["drafts"] = drafts
+		if dropped > 0 {
+			status["drafts_not_listed"] = dropped
+		}
+	}
 	for key, value := range map[string]string{
 		"operation":    result.Operation,
 		"outcome":      result.Outcome,
@@ -216,7 +257,75 @@ func repositoryIssueDebugOutcome(output string) string {
 	if err != nil {
 		return "[repository issue tool output omitted]"
 	}
-	return string(encoded) + " [issue 正文已省略]"
+	return string(encoded)
+}
+
+// repositoryIssueDebugSummaries 摘出已有 Issue 的编号、标题、状态和链接。这些是
+// 仓库里公开的东西，挡它没有意义，而少了标题就认不出是哪一条。
+func repositoryIssueDebugSummaries(items []repositoryIssueSummary, single *repositoryIssueSummary) ([]map[string]any, int) {
+	if single != nil {
+		items = append([]repositoryIssueSummary{*single}, items...)
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		if len(out) >= repositoryIssueDebugMaxItems {
+			break
+		}
+		entry := map[string]any{}
+		if item.Number > 0 {
+			entry["number"] = item.Number
+		}
+		for key, value := range map[string]string{
+			"title": item.Title,
+			"state": item.State,
+			"url":   item.URL,
+		} {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				entry[key] = trimmed
+			}
+		}
+		if len(entry) > 0 {
+			out = append(out, entry)
+		}
+	}
+	return out, max(len(items)-len(out), 0)
+}
+
+// repositoryIssueDebugDrafts 摘出草稿。草稿是从群聊里攒出来的，正文截前 120 字，
+// 另外标出总字数——被截掉多少也是排查时想知道的。
+func repositoryIssueDebugDrafts(drafts []repositoryIssueDraftView, single *repositoryIssueDraftView) ([]map[string]any, int) {
+	if single != nil {
+		drafts = append([]repositoryIssueDraftView{*single}, drafts...)
+	}
+	out := make([]map[string]any, 0, len(drafts))
+	for _, draft := range drafts {
+		if len(out) >= repositoryIssueDebugMaxItems {
+			break
+		}
+		entry := map[string]any{}
+		for key, value := range map[string]string{
+			"id":                draft.ID,
+			"title":             draft.Title,
+			"status":            draft.Status,
+			"operation":         draft.Operation,
+			"confirmation_code": draft.ConfirmationCode,
+		} {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				entry[key] = trimmed
+			}
+		}
+		if draft.IssueNumber > 0 {
+			entry["issue_number"] = draft.IssueNumber
+		}
+		if body := strings.TrimSpace(draft.Body); body != "" {
+			entry["body"] = truncateRunes(body, repositoryIssueDebugBodyRunes)
+			entry["body_chars"] = len([]rune(body))
+		}
+		if len(entry) > 0 {
+			out = append(out, entry)
+		}
+	}
+	return out, max(len(drafts)-len(out), 0)
 }
 
 func formatAgentProgress(event agent.RunEvent) (bar, label string, current, total, percent int) {

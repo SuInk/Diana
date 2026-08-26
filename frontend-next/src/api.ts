@@ -189,6 +189,7 @@ export interface BotProfileConfig {
   max_reply_chars?: number;
   /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 <dianabr>；缺省等价于开启。 */
   natural_reply_split_enabled?: boolean;
+  social_reply_enabled?: boolean;
   /** 最多分几条；分出来超过它就退回粗一档，退到底就整条发。 */
   reply_max_bubbles?: number;
   direct_reply_chunk_size?: number;
@@ -358,6 +359,16 @@ export interface BotGroupConfig {
   recent_history_token_budget?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
+  /** 本群的自然分条开关；不设表示跟随机器人。 */
+  natural_reply_split_enabled?: boolean;
+  /** 本群最多分几条。 */
+  reply_max_bubbles?: number;
+  /** 本群单条聊天消息的字数硬上限。 */
+  direct_reply_chunk_size?: number;
+  /** 本群正文超过多少字改用合并转发卡片。 */
+  forward_reply_threshold?: number;
+  /** 本群切出超过多少块改用合并转发卡片。 */
+  forward_reply_chunk_threshold?: number;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
   /** 本群是否开启自然插话模式。 */

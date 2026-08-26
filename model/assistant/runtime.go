@@ -11,6 +11,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -1204,6 +1205,12 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
+	// 空值在 GroupConfig.WithDefaults 里已经从机器人配置继承过，这里直接拷。
+	cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
+	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
+	cfg.DirectReplyChunkSize = groupCfg.DirectReplyChunkSize
+	cfg.ForwardReplyThreshold = groupCfg.ForwardReplyThreshold
+	cfg.ForwardReplyChunkThreshold = groupCfg.ForwardReplyChunkThreshold
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
 	cfg.ProactiveReplyThreshold = groupCfg.ProactiveReplyThreshold
 	cfg.ChatInEnabled = groupCfg.ChatInEnabled
@@ -1212,6 +1219,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.ChatInChance = groupCfg.ChatInChance
 	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
 	cfg.NaturalInterjectionEnabled = copyBoolPointer(groupCfg.NaturalInterjectionEnabled)
+	cfg.SocialReplyEnabled = copyBoolPointer(groupCfg.SocialReplyEnabled)
 	if groupResponseModeOverridden {
 		cfg.ResponseMode.apply(&cfg)
 	}
@@ -1239,6 +1247,19 @@ func (r *Runtime) groupConfigForEvent(event MessageEvent) (GroupConfig, bool) {
 		return GroupConfig{}, false
 	}
 	return groupCfg.WithDefaults(event.GroupID, base), true
+}
+
+// sandboxedBrowserEnabled 说明这个会话现在能不能起浏览器。
+//
+// 浏览器不是谁想用就自己去起的东西：它是「网页渲染」插件的运行依赖，装没装、装在
+// 哪、缺了怎么一键补，全挂在那个插件名下（见 browserDependencyGroup）。插件被停用
+// 就是「这台机器不许起浏览器」，任何要用浏览器的功能都得认这个开关，否则插件页上
+// 那个关掉的开关是假的。
+func (r *Runtime) sandboxedBrowserEnabled(event MessageEvent) bool {
+	if r == nil || r.plugins == nil {
+		return false
+	}
+	return r.plugins.EnabledWithOverrides(sandboxedBrowserPluginID, r.pluginOverridesForEvent(event))
 }
 
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
@@ -2108,7 +2129,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn),
+			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
 		},
 		routeUserMessage,
 	}
@@ -2548,10 +2569,24 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 	return configured + "\n\n" + runtimeGuard
 }
 
+// socialReplyGuard 是「被点名的社交性搭话也回一句」打开之后追加的规则。
+//
+// 默认提示词第 5 条把「纯情绪反应」和结束性确认一起划进不用回，对助手型机器人是
+// 对的：没人问问题，接一句只是噪音。但陪聊型人设不是这样——群友说一句「笨笨」
+// 「你好可爱」，人设装死才是出戏的那个。线上原话就是这个形状：directed_at_bot
+// 为 true、answerable 为 true，只有 substantive 是 false，于是判成 none。
+//
+// 放行只放这一种：确实是冲着机器人来的。别人之间的闲聊、要机器人闭嘴、以及
+// 已经回过的同一轮，都不在里面——这条不是把闸门拆了，是给闸门开一扇小门。
+const socialReplyGuard = `当前机器人开启了社交性回应：群友直接对机器人打招呼、道别、夸奖、调侃或给出轻微评价（例如“笨笨”“你好可爱”“早”“又胡说八道了”），即使没有具体问题、也没有可核实的新信息，也算需要回应——使用 category=bot_related、directed_at_bot=true、answerable=true、should_reply=true，回一句简短的应答即可，不必找信息量。这一条不放宽其它任何判断：不是对机器人说的话、群友之间的闲聊、要求机器人别再说话或安静的消息，以及同一轮里已经回过的内容，仍然一律保持沉默。`
+
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
-// 器反复给出一个运行时必然拒绝的结论。
-func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings) string {
+// 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
+func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
 	prompt := proactiveReplyRouterSystemPrompt(configured)
+	if social {
+		prompt += "\n\n" + socialReplyGuard
+	}
 	if chatIn.Natural {
 		return prompt + "\n\n当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
 	}
@@ -7023,8 +7058,9 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 	}
 	frames := cachedFrames
 	cleanupFrames := false
+	videoFailure := ""
 	if len(frames) == 0 {
-		frames = extractVideoContextFrames(ctx, videoURLs)
+		frames, videoFailure = extractVideoContextFramesDetailed(ctx, videoURLs, 0)
 		cleanupFrames = true
 	}
 	if cleanupFrames {
@@ -7033,17 +7069,42 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 	if len(videoURLs) > 0 || len(cachedFrames) > 0 {
 		if len(frames) > 0 {
 			if quotedVideo {
-				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。"
+				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。" + videoFrameNarrationRule
 			} else {
-				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。"
+				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。" + videoFrameNarrationRule
 			}
 		} else {
-			text += "\n\n【系统提示】当前视频读取或抽帧失败。不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频；请直接说明暂时无法读取当前视频。"
+			// 原因照实说出来。以前这里只写「读取或抽帧失败」，模型只能照着复述，
+			// 用户得到一句「我暂时读不了这个视频」——既不知道是这台机器没装
+			// ffmpeg、还是视频超了大小上限，也就不知道该找谁修。
+			text += "\n\n【系统提示】当前视频没能读出画面，原因：" + videoFailureReason(videoFailure) +
+				"把这个原因用自己的话告诉用户，别只说一句读不了。" +
+				"不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频。" + videoFrameNarrationRule
 		}
 	}
 	extraImageURLs = append(extraImageURLs, frames...)
 	return llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
 }
+
+// videoFailureReason 补上兜底文案：拿不到具体原因时也不能把这句写成空的，
+// 否则提示词会变成「原因：把这个原因告诉用户」。
+func videoFailureReason(reason string) string {
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		return trimmed + " "
+	}
+	return "未知，日志里也没有更多线索。 "
+}
+
+// videoFrameNarrationRule 管的是怎么把看到的东西说出来，不是怎么看。
+//
+// 视频是抽了几张关键帧交给模型的，提示词也照实说了——那是为了让它别去臆测没覆盖到
+// 的情节和声音。但模型会把这个实现细节原样带进回复：「这帧里是纳西妲主题的等身
+// 人偶」。用户发的是一段视频，不是一叠图片，聊天里没人这么说话。
+//
+// 约束的是措辞，不是依据：只依据画面这条限制仍然写在上面那几句里。
+const videoFrameNarrationRule = "回答时一律称它为「视频」：不要出现「帧」「关键帧」「抽帧」「截图」这类字眼，" +
+	"也不要按第几帧、第几张来叙述。抽帧是内部实现，用户发出来的是一段视频。" +
+	"唯一的例外是对方专门问你「怎么读的视频」这类实现问题，那时候可以照实说是抽了几张画面来看。"
 
 func hasVideoSegment(segments []MessageSegment) bool {
 	for _, segment := range segments {
@@ -10574,8 +10635,9 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 }
 
 // replyBoundaryRunes 是可以安全断句的位置：在这些字符之后收尾，读起来仍然是一句
-// 说完的话，而不是被切到一半。
-const replyBoundaryRunes = "。！？!?…；;\n"
+// 说完的话，而不是被切到一半。分号不算——它表示后面还有并列的半句，收在这里正是
+// 「被切到一半」的样子，和 isSentenceEnd 同一个理由。
+const replyBoundaryRunes = "。！？!?…\n"
 
 // truncateReplyMinBoundaryRatio 决定断句点最少要保留多少内容；低于这个比例说明
 // 长度预算内没有合适的句尾，只能退回硬截断。
@@ -10881,10 +10943,16 @@ const (
 	splitAtMarker                              // 只认标记
 )
 
-// chatReplySegments 先按换行分，分不进条数上限就退回只认标记。
+// chatReplySegments 先按换行分，分不进条数上限就把相邻的短段并起来。
 //
-// 「要么分好，要么别分」：不做「超出的并进最后一条」，那会让最后一条拖着个尾巴。
-// 退一档而不是一刀切回整条也是同样的道理——但这里只剩两档，退无可退时整条发。
+// 「要么分好，要么别分」曾经是这里的规矩：分不进上限就退回只认标记，等于整条发。
+// 它防的是「超出的并进最后一条」——那会让最后一条拖着个大尾巴，反问被粘在陈述句
+// 后面就是这么来的。防的方向对，做法太狠了：上限设 5、模型写了 6 段，得到的是一坨
+// 三百字，比 6 条更难读。用户设「最多 5 条」的本意是别刷屏，不是别分条。
+//
+// 现在超上限时改成合并，但不是往最后一条塞：每次挑「合起来最短」的那对相邻段并掉，
+// 长段因此始终保持独立，被并的都是碎片。模型显式写的 <dianabr> 是硬边界，合并不跨
+// 越它——那是它明说要分开的地方。
 func chatReplySegments(reply string, limits chatSplitLimits) []string {
 	// 关掉自然分条之后只认标记。模型显式写的 <dianabr> 仍然照做——那是它明说要分，
 	// 关掉的是运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
@@ -10896,7 +10964,126 @@ func chatReplySegments(reply string, limits chatSplitLimits) []string {
 			return parts
 		}
 	}
-	return splitChatReplyAtDepth(reply, limits, splitAtMarker)
+	return mergeChatSegmentsToLimit(reply, limits)
+}
+
+// mergeChatSegmentsToLimit 按行分好之后，把相邻的段并到条数上限之内，并且让并出来的
+// 几条长度尽量接近。
+//
+// 「挑最短的那对并掉」也能压进上限，但压出来的结果很难看：长段各自独立、碎段全堆在
+// 一处，八段并成五条会得到一条两百字加四条十来个字。均分才是「最多五条」该有的样子。
+//
+// 合并只在同一个 <dianabr> 块内部进行：块之间是模型明说要断开的地方，跨过去就是把
+// 它的话改了。所以标记块本身多于上限时，就按标记发，允许超——那是模型要求的条数，
+// 不是运行时猜出来的。
+func mergeChatSegmentsToLimit(reply string, limits chatSplitLimits) []string {
+	blocks := make([][]string, 0, 4)
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		blocks = append(blocks, splitReplyLines(part))
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	quotas := allocateBubbleQuota(blocks, limits.MaxBubbles)
+	out := make([]string, 0, limits.MaxBubbles)
+	for index, block := range blocks {
+		out = append(out, balanceSegments(block, quotas[index])...)
+	}
+	return out
+}
+
+// allocateBubbleQuota 把条数名额分给各个 <dianabr> 块。
+//
+// 每块至少一条——块与块之间不能合并，少给了也没法压。剩下的名额一个一个发，每次发给
+// 「当前平均每条最长」的那块：它是眼下最挤的，多一条收益最大。块内段数用完就封顶，
+// 名额转给别人。
+func allocateBubbleQuota(blocks [][]string, limit int) []int {
+	quotas := make([]int, len(blocks))
+	weights := make([]int, len(blocks))
+	for index, block := range blocks {
+		quotas[index] = 1
+		for _, line := range block {
+			weights[index] += len([]rune(line))
+		}
+	}
+	for remaining := limit - len(blocks); remaining > 0; remaining-- {
+		best, bestLoad := -1, 0
+		for index, block := range blocks {
+			if quotas[index] >= len(block) {
+				continue
+			}
+			if load := weights[index] / quotas[index]; best < 0 || load > bestLoad {
+				best, bestLoad = index, load
+			}
+		}
+		if best < 0 {
+			// 每块都已经一段一条，再多的名额没处放。
+			break
+		}
+		quotas[best]++
+	}
+	return quotas
+}
+
+// balanceSegments 把若干段连续地并成 count 条，让最长的那条尽量短。
+//
+// 就是「连续分割数组、最小化最大子段和」那道题：段的顺序不能动（那是话的顺序），
+// 只能选在哪几个缝隙上断开。段数最多几十、条数最多个位数，直接 DP。
+func balanceSegments(lines []string, count int) []string {
+	if count >= len(lines) {
+		return lines
+	}
+	if count <= 1 {
+		return []string{strings.Join(lines, "\n")}
+	}
+
+	lengths := make([]int, len(lines)+1)
+	for index, line := range lines {
+		lengths[index+1] = lengths[index] + len([]rune(line))
+	}
+	span := func(from, to int) int { return lengths[to] - lengths[from] }
+
+	// best[j][i]：前 i 段分成 j 条时，最长那条的最小值。split 记住最后一刀切在哪。
+	const unreachable = math.MaxInt32
+	best := make([][]int, count+1)
+	split := make([][]int, count+1)
+	for j := range best {
+		best[j] = make([]int, len(lines)+1)
+		split[j] = make([]int, len(lines)+1)
+		for i := range best[j] {
+			best[j][i] = unreachable
+		}
+	}
+	best[0][0] = 0
+	for j := 1; j <= count; j++ {
+		for i := j; i <= len(lines); i++ {
+			for cut := j - 1; cut < i; cut++ {
+				if best[j-1][cut] == unreachable {
+					continue
+				}
+				candidate := max(best[j-1][cut], span(cut, i))
+				if candidate < best[j][i] {
+					best[j][i], split[j][i] = candidate, cut
+				}
+			}
+		}
+	}
+
+	cuts := make([]int, count+1)
+	cuts[count] = len(lines)
+	for j := count; j >= 1; j-- {
+		cuts[j-1] = split[j][cuts[j]]
+	}
+	out := make([]string, 0, count)
+	for j := 1; j <= count; j++ {
+		out = append(out, strings.Join(lines[cuts[j-1]:cuts[j]], "\n"))
+	}
+	return out
 }
 
 func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {
@@ -10921,20 +11108,18 @@ func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReply
 	return out
 }
 
-// replySentenceSplitRunes 是按句号分条的起始长度。短回复不动：两句话的短回复本来
-// 就是一条消息（「端口被占了。先 lsof 看看是谁占着。」拆开反而不像人说话）。
-const replySentenceSplitRunes = 60
-
 // splitLineIntoSentences 把一行按句号分成几次发言，一句一条。
 //
 // 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
 // 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界，一个句子就是一次
 // 发言。条数由上层的 MaxBubbles 兜着，分出来太多就整层退回。
+//
+// 这里曾经有个 60 字的起步门槛，短行整条留着。它防的是「端口被占了。先 lsof 看看
+// 是谁占着。」被拆成两条，但那两条本来就是真人会连发的样子；而门槛真正拦下来的是
+// 一批四五十字、两三句话的回复——恰恰是最该分开发的长度。上层的条数上限已经在管
+// 刷屏了，这道门槛只是把短回复排除在外，去掉。
 func splitLineIntoSentences(line string) []string {
 	runes := []rune(line)
-	if len(runes) <= replySentenceSplitRunes {
-		return []string{line}
-	}
 	ends := boundaryPositions(runes, isSentenceEnd)
 	if len(ends) == 0 {
 		return []string{line}
@@ -10996,7 +11181,8 @@ func splitReplyLines(part string) []string {
 	}
 	var out []string
 	pending := ""
-	for _, line := range strings.Split(part, "\n") {
+	lines := strings.Split(part, "\n")
+	for index, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -11005,7 +11191,7 @@ func splitReplyLines(part string) []string {
 			line = pending + "\n" + line
 			pending = ""
 		}
-		if endsMidSentence(line) {
+		if endsMidSentence(line) && !endsWithBracketTone(line, lines[index+1:]) {
 			pending = line
 			continue
 		}
@@ -11091,6 +11277,32 @@ func endsMidSentence(line string) bool {
 		return true
 	}
 	return false
+}
+
+// endsWithBracketTone 判断行尾那个孤零零的「（」是语气词，不是话没说完。
+//
+// 网上用它表示自嘲、心虚、说漏嘴，猫娘那档人设的提示词专门教了这个用法。而
+// endsMidSentence 把行尾的开括号一律当成「这句还没写完」，于是带「（」的那句会被
+// 粘到下一句上——两次独立发言挤进同一个气泡，中间只剩一个换行。
+//
+// 真正的括号插入语不会在开括号后面立刻断行，而且后文一定有个收尾的「）」。所以
+// 后面找不到闭括号时按语气词处理，找得到就还是当没说完。
+func endsWithBracketTone(line string, rest []string) bool {
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return false
+	}
+	switch runes[len(runes)-1] {
+	case '(', '（':
+	default:
+		return false
+	}
+	for _, next := range rest {
+		if strings.ContainsAny(next, "）)") {
+			return false
+		}
+	}
+	return true
 }
 
 // isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」
@@ -11249,9 +11461,14 @@ func replyCutRank(r rune) int {
 
 // isSentenceEnd 判断是不是句末标点。只认全角的那几个：英文句点在小数、缩写和
 // 域名里到处都是，拿它断句会把 3.5 和 example.com 切开。
+//
+// 分号不在其中。中文的分号是句内的并列分隔，「前半句；后半句」是一句话的两半，
+// 按它分条会把后半句单独扔成一条消息，读起来是话说了一半——句末标点管的是「这句
+// 说完了」，分号恰恰表示还没完。它降级到 isClauseBreak：撞上长度上限非切不可时，
+// 分号仍然比拦腰硬切体面。
 func isSentenceEnd(r rune) bool {
 	switch r {
-	case '。', '！', '？', '…', '；':
+	case '。', '！', '？', '…':
 		return true
 	}
 	return false
@@ -11264,7 +11481,7 @@ func isSentenceEnd(r rune) bool {
 // 上限时按它们断，会把一个链接从中间劈开发出去。
 func isClauseBreak(r rune) bool {
 	switch r {
-	case '，', '、', '：':
+	case '，', '、', '：', '；':
 		return true
 	}
 	return false

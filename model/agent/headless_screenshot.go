@@ -53,22 +53,12 @@ func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 		return nil, fmt.Errorf("screenshot: %w", err)
 	}
 
-	root, err := os.MkdirTemp("", "diana-screenshot-")
+	dirs, err := newBrowserSandboxDirs("diana-screenshot-")
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(root)
-	if err := os.Chmod(root, 0o700); err != nil {
-		return nil, err
-	}
-	profileDir := filepath.Join(root, "profile")
-	cacheDir := filepath.Join(root, "cache")
-	crashDir := filepath.Join(root, "crash")
-	for _, dir := range []string{profileDir, cacheDir, crashDir} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, err
-		}
-	}
+	defer dirs.remove()
+	root, profileDir, cacheDir, crashDir := dirs.root, dirs.profile, dirs.cache, dirs.crash
 	pagePath := filepath.Join(root, "page.html")
 	if err := os.WriteFile(pagePath, []byte(req.HTML), 0o600); err != nil {
 		return nil, err
@@ -78,29 +68,22 @@ func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 
-	args := append([]string{
-		"--headless=new",
-		"--screenshot=" + outputPath,
+	// 沙盒加固走和网页渲染同一份底座，这里只追加截图这条路自己的参数。之前这份
+	// 参数是手抄的子集，抄漏了 --host-resolver-rules，等于截图那条路没挡住
+	// localhost 和内网域名。
+	args := append(sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir),
+		"--screenshot="+outputPath,
 		// 窗口尺寸就是出图尺寸；不锁死缩放比例的话，跑在 HiDPI 环境里会出一张
 		// 尺寸对不上的图。
 		fmt.Sprintf("--window-size=%d,%d", req.Width, req.Height),
 		"--force-device-scale-factor=1",
-		"--hide-scrollbars",
-		"--user-data-dir=" + profileDir,
-		"--disk-cache-dir=" + cacheDir,
-		"--crash-dumps-dir=" + crashDir,
+		// 这两个是截图这条路一直带着的，跟 CDP 那条不一样：容器里以 root 跑时
+		// Chrome 的进程沙盒起不来，没有它直接崩。是兼容性取舍，不在这次合并的
+		// 范围里——要改得单独评估哪些部署会因此跑不动。
 		"--no-sandbox",
 		"--disable-gpu",
-		"--disable-extensions",
-		"--disable-background-networking",
-		"--disable-breakpad",
-		"--disable-crash-reporter",
-		"--disable-component-update",
-		"--disable-default-apps",
-		"--disable-notifications",
-		"--no-first-run",
-		"--no-default-browser-check",
-	}, "file://"+pagePath)
+	)
+	args = append(args, "file://"+pagePath)
 
 	command := exec.CommandContext(runCtx, executable, args...)
 	command.Env = sandboxedBrowserEnvironment(os.Environ(), root)
