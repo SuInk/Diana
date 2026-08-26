@@ -82,11 +82,95 @@ func TestAgentCarryoverAccumulatesAndExpires(t *testing.T) {
 	}
 
 	runtime.mu.Lock()
-	stale := runtime.agentCarryovers[sessionKey(event)]
+	stale := runtime.agentCarryovers[agentCarryoverKey(event)]
 	stale.at = time.Now().Add(-agentCarryoverTTL - time.Minute)
-	runtime.agentCarryovers[sessionKey(event)] = stale
+	runtime.agentCarryovers[agentCarryoverKey(event)] = stale
 	runtime.mu.Unlock()
 	if _, ok := runtime.agentCarryoverMessage(event); ok {
 		t.Fatal("过期存档不该再注入")
+	}
+}
+
+// 存档不能跨发言人。群聊的 sessionKey 只有群号,只按会话存的话,
+// Winter 没跑完的那轮会原样进 喵neko 的下一轮:注入正文里带着 Winter 的账号和
+// 「关系等级：主人」,末尾还写着「直接从未完成的部分继续」,模型于是接着办了
+// Winter 的事,还把 Winter 的身份当成了当前发言人的。
+func TestAgentCarryoverDoesNotLeakAcrossSpeakers(t *testing.T) {
+	runtime := carryoverRuntime()
+	winter := MessageEvent{Kind: EventKindGroup, Platform: "onebot", GroupID: "g1", UserID: "winter-uid", MessageID: "m-winter"}
+	neko := MessageEvent{Kind: EventKindGroup, Platform: "onebot", GroupID: "g1", UserID: "neko-uid", MessageID: "m-neko"}
+
+	runtime.rememberAgentRunProgress(winter, &agent.Response{
+		FinishReason: "tool_budget_exhausted",
+		Steps: []agent.Step{
+			{Tool: "diana.glossary", Input: map[string]any{"term": "西格玛男", "actor": "winter-uid"}, Output: "已记下：西格玛男 = 不做舔狗"},
+			{Tool: "diana.relationship", Input: map[string]any{"target_user_id": "winter-uid"}, Output: "关系等级：主人"},
+		},
+	})
+
+	if message, ok := runtime.agentCarryoverMessage(neko); ok {
+		t.Fatalf("同群另一个人不该拿到 Winter 的存档：%s", message.Content)
+	}
+
+	// 同一个人接着说话仍然要拿得到——这才是存档存在的意义。
+	message, ok := runtime.agentCarryoverMessage(winter)
+	if !ok {
+		t.Fatal("Winter 自己的下一轮应当拿到存档")
+	}
+	if !strings.Contains(message.Content, "西格玛男") {
+		t.Fatalf("存档内容不对：%s", message.Content)
+	}
+}
+
+// 一个人做完收口只清自己那份,不该顺手把同群别人的存档也抹掉。
+func TestAgentCarryoverClearIsPerSpeaker(t *testing.T) {
+	runtime := carryoverRuntime()
+	winter := MessageEvent{Kind: EventKindGroup, Platform: "onebot", GroupID: "g1", UserID: "winter-uid"}
+	neko := MessageEvent{Kind: EventKindGroup, Platform: "onebot", GroupID: "g1", UserID: "neko-uid"}
+
+	for _, event := range []MessageEvent{winter, neko} {
+		runtime.rememberAgentRunProgress(event, &agent.Response{
+			FinishReason: "tool_budget_exhausted",
+			Steps:        []agent.Step{{Tool: "lookup", Input: map[string]any{"who": event.UserID}, Output: "半成品"}},
+		})
+	}
+	runtime.rememberAgentRunProgress(neko, &agent.Response{FinishReason: "final"})
+
+	if _, ok := runtime.agentCarryoverMessage(neko); ok {
+		t.Fatal("喵neko 做完了,自己那份该清掉")
+	}
+	if _, ok := runtime.agentCarryoverMessage(winter); !ok {
+		t.Fatal("Winter 那份没做完,不该被别人的收口带走")
+	}
+}
+
+// 认不出发言人时不存档：那等于回到一个人人都命中的公共桶。
+func TestAgentCarryoverSkipsUnattributableSpeaker(t *testing.T) {
+	runtime := carryoverRuntime()
+	anonymous := MessageEvent{Kind: EventKindGroup, Platform: "onebot", GroupID: "g1"}
+	runtime.rememberAgentRunProgress(anonymous, &agent.Response{
+		FinishReason: "tool_budget_exhausted",
+		Steps:        []agent.Step{{Tool: "lookup", Output: "半成品"}},
+	})
+	if _, ok := runtime.agentCarryoverMessage(anonymous); ok {
+		t.Fatal("发言人认不出来时不该存档")
+	}
+	if _, ok := runtime.agentCarryoverMessage(MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "neko-uid"}); ok {
+		t.Fatal("更不该被同群其他人命中")
+	}
+}
+
+// 过期条目在写入时被顺手清掉,不必等那个人再开口。
+func TestAgentCarryoverPrunesExpiredOnWrite(t *testing.T) {
+	carryovers := map[string]agentRunCarryover{
+		"group:g1\x00stale": {entries: []string{"- old() → x"}, at: time.Now().Add(-agentCarryoverTTL - time.Minute)},
+		"group:g1\x00fresh": {entries: []string{"- new() → y"}, at: time.Now()},
+	}
+	pruneExpiredAgentCarryovers(carryovers, time.Now())
+	if _, ok := carryovers["group:g1\x00stale"]; ok {
+		t.Fatal("过期条目该被清掉")
+	}
+	if _, ok := carryovers["group:g1\x00fresh"]; !ok {
+		t.Fatal("没过期的不该被误删")
 	}
 }
