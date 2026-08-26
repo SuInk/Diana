@@ -113,19 +113,24 @@ func TestSaveUpdatePolicyRejectsInvalidMirror(t *testing.T) {
 }
 
 // 测速拿真实的校验清单当样本：几 KB，又确实是更新时要下的东西。
-func TestMirrorTestUsesLatestChecksumAsProbe(t *testing.T) {
+// 测速样本要取安装包本身。校验清单只有几 KB，还没进入稳定传输就读完了，
+// 拿它测出来的是握手耗时不是下载速度——线路一旦是「秒回应答头然后限速」，
+// 用清单测就永远看不出来。
+func TestMirrorTestUsesReleaseArchiveAsProbe(t *testing.T) {
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z","assets":[` +
-			`{"name":"SHA256SUMS","browser_download_url":"https://github.com/SuInk/Diana/releases/download/v1.3.0/SHA256SUMS"}]}]`))
+			`{"name":"SHA256SUMS","browser_download_url":"https://github.com/SuInk/Diana/releases/download/v1.3.0/SHA256SUMS"},` +
+			`{"name":"diana_linux_amd64.tar.gz","browser_download_url":"https://github.com/SuInk/Diana/releases/download/v1.3.0/diana_linux_amd64.tar.gz"}]}]`))
 	}))
 	defer github.Close()
 
 	selector := &recordingMirrorSelector{results: []ghmirror.ProbeResult{
-		{Name: "ghfast.top", BaseURL: "https://ghfast.top", OK: true, LatencyMS: 120},
-		{Name: "直连 GitHub", Direct: true, OK: false, Error: "dial tcp: i/o timeout"},
+		{Name: "ghfast.top", BaseURL: "https://ghfast.top", OK: true, LatencyMS: 120, SpeedKBPS: 90},
+		{Name: "直连 GitHub", Direct: true, OK: true, LatencyMS: 1800, SpeedKBPS: 2400},
 	}}
 	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
 	handler.githubAPIBase = github.URL
+	handler.SetReleasePackageUpdater(&recordingReleasePackageUpdater{expected: "diana_linux_amd64.tar.gz"})
 	handler.SetGitHubMirrorSelector(selector)
 	router := systemUpdateTestRouter(handler)
 
@@ -143,6 +148,31 @@ func TestMirrorTestUsesLatestChecksumAsProbe(t *testing.T) {
 	}
 	if len(response.Mirrors) == 0 {
 		t.Fatal("没有把候选线路一起返回，界面就没法选")
+	}
+	if len(selector.probedAt) != 1 || !strings.HasSuffix(selector.probedAt[0], "/diana_linux_amd64.tar.gz") {
+		t.Fatalf("测速样本 = %#v", selector.probedAt)
+	}
+}
+
+// 这个版本没打出安装包时退回校验清单：只剩连通性可测，总比什么都不测强。
+func TestMirrorTestFallsBackToChecksumProbe(t *testing.T) {
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-08-03T10:00:00Z","assets":[` +
+			`{"name":"SHA256SUMS","browser_download_url":"https://github.com/SuInk/Diana/releases/download/v1.3.0/SHA256SUMS"}]}]`))
+	}))
+	defer github.Close()
+
+	selector := &recordingMirrorSelector{}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.githubAPIBase = github.URL
+	handler.SetReleasePackageUpdater(&recordingReleasePackageUpdater{expected: "diana_linux_amd64.tar.gz"})
+	handler.SetGitHubMirrorSelector(selector)
+	router := systemUpdateTestRouter(handler)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/system/update/mirrors/test", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("mirror test = %d %s", recorder.Code, recorder.Body.String())
 	}
 	if len(selector.probedAt) != 1 || !strings.HasSuffix(selector.probedAt[0], "/SHA256SUMS") {
 		t.Fatalf("测速样本 = %#v", selector.probedAt)

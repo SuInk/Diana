@@ -1166,6 +1166,7 @@ export interface GitHubMirrorProbe {
 	direct?: boolean;
 	ok: boolean;
 	latency_ms?: number;
+	speed_kbps?: number;
 	error?: string;
 }
 
