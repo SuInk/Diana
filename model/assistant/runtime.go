@@ -10903,10 +10903,16 @@ const (
 	splitAtMarker                              // 只认标记
 )
 
-// chatReplySegments 先按换行分，分不进条数上限就退回只认标记。
+// chatReplySegments 先按换行分，分不进条数上限就把相邻的短段并起来。
 //
-// 「要么分好，要么别分」：不做「超出的并进最后一条」，那会让最后一条拖着个尾巴。
-// 退一档而不是一刀切回整条也是同样的道理——但这里只剩两档，退无可退时整条发。
+// 「要么分好，要么别分」曾经是这里的规矩：分不进上限就退回只认标记，等于整条发。
+// 它防的是「超出的并进最后一条」——那会让最后一条拖着个大尾巴，反问被粘在陈述句
+// 后面就是这么来的。防的方向对，做法太狠了：上限设 5、模型写了 6 段，得到的是一坨
+// 三百字，比 6 条更难读。用户设「最多 5 条」的本意是别刷屏，不是别分条。
+//
+// 现在超上限时改成合并，但不是往最后一条塞：每次挑「合起来最短」的那对相邻段并掉，
+// 长段因此始终保持独立，被并的都是碎片。模型显式写的 <dianabr> 是硬边界，合并不跨
+// 越它——那是它明说要分开的地方。
 func chatReplySegments(reply string, limits chatSplitLimits) []string {
 	// 关掉自然分条之后只认标记。模型显式写的 <dianabr> 仍然照做——那是它明说要分，
 	// 关掉的是运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
@@ -10918,7 +10924,60 @@ func chatReplySegments(reply string, limits chatSplitLimits) []string {
 			return parts
 		}
 	}
-	return splitChatReplyAtDepth(reply, limits, splitAtMarker)
+	return mergeChatSegmentsToLimit(reply, limits)
+}
+
+// mergeChatSegmentsToLimit 按行分好之后，把相邻的短段并到不超过条数上限为止。
+//
+// 合并只在同一个 <dianabr> 块内部进行：块与块之间是模型明说要断开的地方，合并跨过去
+// 就是把它的话改了。所以标记块本身多于上限时，就按标记发，允许超——那是模型要求的
+// 条数，不是运行时猜出来的。
+func mergeChatSegmentsToLimit(reply string, limits chatSplitLimits) []string {
+	blocks := make([][]string, 0, 4)
+	total := 0
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		lines := splitReplyLines(part)
+		blocks = append(blocks, lines)
+		total += len(lines)
+	}
+
+	for total > limits.MaxBubbles {
+		blockIndex, lineIndex := shortestAdjacentPair(blocks)
+		if blockIndex < 0 {
+			// 每个块都只剩一段了，再合就要跨过 <dianabr>。停在这里。
+			break
+		}
+		block := blocks[blockIndex]
+		// 并起来的两段本来就是同一条消息里的排版，用换行接回去。
+		merged := append(block[:lineIndex:lineIndex], block[lineIndex]+"\n"+block[lineIndex+1])
+		blocks[blockIndex] = append(merged, block[lineIndex+2:]...)
+		total--
+	}
+
+	out := make([]string, 0, total)
+	for _, block := range blocks {
+		out = append(out, block...)
+	}
+	return out
+}
+
+// shortestAdjacentPair 找出合起来最短的那对相邻段，返回它所在的块和起始下标。
+// 没有任何块还剩两段以上时返回 -1。
+func shortestAdjacentPair(blocks [][]string) (int, int) {
+	bestBlock, bestLine, bestLength := -1, -1, 0
+	for blockIndex, block := range blocks {
+		for lineIndex := 0; lineIndex+1 < len(block); lineIndex++ {
+			length := len([]rune(block[lineIndex])) + len([]rune(block[lineIndex+1]))
+			if bestBlock < 0 || length < bestLength {
+				bestBlock, bestLine, bestLength = blockIndex, lineIndex, length
+			}
+		}
+	}
+	return bestBlock, bestLine
 }
 
 func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {

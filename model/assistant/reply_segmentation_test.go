@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -152,25 +153,29 @@ func TestChatReplyKeepsStructuredBlocksWhole(t *testing.T) {
 	}
 }
 
-// 条数上限管的是整条回复：按换行分出来超过上限，就不按换行分，退回只认标记。
-// 不做「超出的并进最后一条」——那会让最后一条拖着个尾巴。
-func TestChatReplyFallsBackToMarkerWhenLinesExceedCap(t *testing.T) {
+// 条数上限管的是整条回复：按换行分出来超过上限，就把相邻的短段并到上限之内。
+//
+// 这条用例原先断言的是「超上限退回整条发」，理由是不做「超出的并进最后一条」——
+// 那会让最后一条拖着个尾巴。防的方向对，做法太狠：上限 5、模型写 6 段，得到一坨。
+// 现在改成并相邻最短的那对，最后一条不会拖尾巴，长段也保持独立，那条理由仍然成立。
+func TestChatReplyMergesShortLinesWhenTheyExceedCap(t *testing.T) {
 	lines := make([]string, 0, 8)
 	for i := 0; i < 8; i++ {
 		lines = append(lines, "第几句话")
 	}
 	many := strings.Join(lines, "\n")
-	if chunks := splitChatReply(many, chatSplitLimits{}); len(chunks) != 1 {
-		t.Fatalf("八行超过上限，应该退回整条发：%#v", chunks)
+	if chunks := splitChatReply(many, chatSplitLimits{}); len(chunks) != replyMaxChatBubbles {
+		t.Fatalf("八行超过上限，应该并到 %d 条：%#v", replyMaxChatBubbles, chunks)
 	}
-	// 正好到上限就照分。
+	// 正好到上限就照分，一行不并。
 	five := strings.Join(lines[:5], "\n")
 	if chunks := splitChatReply(five, chatSplitLimits{}); len(chunks) != 5 {
 		t.Fatalf("五行正好到上限，应该分成五条：%#v", chunks)
 	}
-	// 退回之后模型显式写的标记仍然照做。
-	if chunks := splitChatReply(many+notificationSplitMarker+"补一句", chatSplitLimits{}); len(chunks) != 2 {
-		t.Fatalf("退回之后标记被吞掉了：%#v", chunks)
+	// 合并之后模型显式写的标记仍然照做，而且不会被并进相邻块。
+	chunks := splitChatReply(many+notificationSplitMarker+"补一句", chatSplitLimits{})
+	if chunks[len(chunks)-1] != "补一句" {
+		t.Fatalf("标记后面那句被并进了前一块：%#v", chunks)
 	}
 }
 
@@ -260,9 +265,9 @@ func TestSplitLimitsAreConfigurable(t *testing.T) {
 	if cfg.ForwardReplyChunkThreshold != 8 {
 		t.Fatalf("转发块数阈值没有透传：%d", cfg.ForwardReplyChunkThreshold)
 	}
-	// 上限调到 2 之后，三行就超了，退回整条发。
-	if chunks := splitChatReply("第一句\n第二句\n第三句", limits); len(chunks) != 1 {
-		t.Fatalf("上限 2 时三行应该退回整条：%#v", chunks)
+	// 上限调到 2 之后，三行就超了，并成两条而不是整条发。
+	if chunks := splitChatReply("第一句\n第二句\n第三句", limits); len(chunks) != 2 {
+		t.Fatalf("上限 2 时三行应该并成两条：%#v", chunks)
 	}
 	// 留空回落默认值。
 	if got := chatSplitLimitsFrom((BotConfig{}).WithDefaults()).MaxBubbles; got != replyMaxChatBubbles {
@@ -342,5 +347,64 @@ func TestTrailingBracketToneStillSplits(t *testing.T) {
 	real := "这个接口有个坑（\n文档里没写）后面会补上"
 	if got := splitChatReply(real, chatSplitLimitsFrom(DefaultBotConfig().WithDefaults())); len(got) != 1 {
 		t.Fatalf("真的括号插入语被拆成了 %d 条：%q", len(got), got)
+	}
+}
+
+// TestOverLimitRepliesMergeInsteadOfCollapsing 超过条数上限时并短段，而不是整条发。
+//
+// 原来的规矩是「要么分好，要么别分」：分不进上限就退回只认标记，等于一坨发出去。
+// 上限设 5、模型写了 6 段，得到的是一整条三百字，比 6 条更难读——用户设「最多 5 条」
+// 的本意是别刷屏，不是别分条。
+func TestOverLimitRepliesMergeInsteadOfCollapsing(t *testing.T) {
+	long := strings.Repeat("这是一段挺长的话", 6)
+	reply := strings.Join([]string{long + "一", long + "二", "短的甲", "短的乙", long + "三", long + "四"}, "\n")
+	limits := chatSplitLimits{ChunkSize: 400, MaxBubbles: 5}
+
+	got := splitChatReply(reply, limits)
+	if len(got) != 5 {
+		t.Fatalf("切成了 %d 条，想要 5 条：%q", len(got), got)
+	}
+	// 被并起来的必须是那两个短的，长段各自独立。
+	merged := "短的甲\n短的乙"
+	if !slices.Contains(got, merged) {
+		t.Fatalf("没有把最短的相邻两段并起来：%q", got)
+	}
+	for _, chunk := range got {
+		if strings.Count(chunk, "这是一段挺长的话") > 6 {
+			t.Fatalf("长段被并到一起了：%q", chunk)
+		}
+	}
+}
+
+// TestMergeNeverCrossesSplitMarker 合并不跨越 <dianabr>：那是模型明说要断开的地方。
+// 标记块本身就多于上限时按标记发，允许超——那是模型要的条数，不是运行时猜的。
+func TestMergeNeverCrossesSplitMarker(t *testing.T) {
+	reply := strings.Join([]string{"第一句", "第二句", "第三句", "第四句", "第五句", "第六句"}, notificationSplitMarker)
+	limits := chatSplitLimits{ChunkSize: 400, MaxBubbles: 3}
+
+	got := splitChatReply(reply, limits)
+	if len(got) != 6 {
+		t.Fatalf("模型显式分的 6 条被合并成了 %d 条：%q", len(got), got)
+	}
+
+	// 块内可以合并，块之间不行：两个标记块各三行，上限 4 时应当各自并成两段。
+	block := "甲一\n甲二\n甲三" + notificationSplitMarker + "乙一\n乙二\n乙三"
+	merged := splitChatReply(block, chatSplitLimits{ChunkSize: 400, MaxBubbles: 4})
+	if len(merged) != 4 {
+		t.Fatalf("块内合并结果是 %d 条：%q", len(merged), merged)
+	}
+	for _, chunk := range merged {
+		if strings.Contains(chunk, "甲") && strings.Contains(chunk, "乙") {
+			t.Fatalf("合并跨过了 <dianabr>：%q", chunk)
+		}
+	}
+}
+
+// TestUnderLimitRepliesKeepEveryLine 没超上限的照旧逐行分，合并这条路不该有副作用。
+func TestUnderLimitRepliesKeepEveryLine(t *testing.T) {
+	reply := "第一段\n第二段\n第三段"
+	got := splitChatReply(reply, chatSplitLimits{ChunkSize: 400, MaxBubbles: 5})
+	if len(got) != 3 {
+		t.Fatalf("切成了 %d 条，想要 3 条：%q", len(got), got)
 	}
 }
