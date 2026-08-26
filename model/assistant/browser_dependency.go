@@ -24,6 +24,8 @@ var (
 
 const browserDependencyName = "chrome"
 
+const relationFontDependencyName = "cjk-font"
+
 // 插件 ID 对外导出，WebUI 要按插件把依赖分组显示。
 const (
 	ResolverPluginID         = resolverPluginID
@@ -53,7 +55,7 @@ func RefreshBrowserDependencies() []ResolverDependency {
 }
 
 func probeBrowserDependencies() []ResolverDependency {
-	status := agent.ProbeHeadlessBrowser(context.Background(), "")
+	status := agent.ProbeHeadlessBrowserRendering(context.Background(), "")
 	dep := ResolverDependency{
 		Name:    browserDependencyName,
 		Purpose: "网页渲染：在一次性沙盒里执行页面 JS 后读取正文",
@@ -108,4 +110,26 @@ func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallRes
 
 func browserDependencyGroup(deps []ResolverDependency) map[string][]ResolverDependency {
 	return map[string][]ResolverDependency{SandboxedBrowserPluginID: deps}
+}
+
+// RelationRenderDependencies 返回关系图两条可替代渲染路径的状态。字体能用时直接
+// 栅格化，字体不能用时浏览器截图兜底；界面会按「至少一条可用」判断整体状态。
+func RelationRenderDependencies(browser []ResolverDependency) []ResolverDependency {
+	fontDep := ResolverDependency{
+		Name:    relationFontDependencyName,
+		Purpose: "直接渲染：读取中文字形并在进程内生成 PNG",
+	}
+	if _, path, err := searchUsableCJKFont(); err == nil {
+		fontDep.Available = true
+		fontDep.Path = path
+		fontDep.Version = "可用"
+	} else {
+		fontDep.Detail = err.Error()
+	}
+	result := []ResolverDependency{fontDep}
+	if dep, ok := resolverDependencyByName(browser, browserDependencyName); ok {
+		dep.Purpose = "浏览器渲染：用真实无头截图生成 PNG"
+		result = append(result, dep)
+	}
+	return result
 }

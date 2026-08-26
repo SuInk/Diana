@@ -701,6 +701,7 @@ func (h *BotHandler) pluginDependencies(c *gin.Context) {
 		"plugins": gin.H{
 			assistant.ResolverPluginID:         resolver,
 			assistant.SandboxedBrowserPluginID: browser,
+			assistant.GroupRelationsPluginID:   assistant.RelationRenderDependencies(browser),
 		},
 	})
 }

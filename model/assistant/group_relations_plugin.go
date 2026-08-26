@@ -20,6 +20,9 @@ const (
 	groupRelationsSettingMaxMembers   = "max_members"
 )
 
+// GroupRelationsPluginID 对外导出，WebUI 用它把字体与浏览器探测挂到正确的插件卡片。
+const GroupRelationsPluginID = groupRelationsPluginID
+
 // GroupRelationsPlugin 声明群聊关系图这项能力。
 type GroupRelationsPlugin struct{}
 
