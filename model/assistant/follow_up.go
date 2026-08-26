@@ -24,6 +24,11 @@ import (
 // 开口就被取消掉了——看起来像"跟评时灵时不灵"，其实是预算被上游吃光了。
 const followUpTimeout = 30 * time.Second
 
+const (
+	followUpReferenceMinRunes = 800
+	followUpReferenceMaxRunes = 7200
+)
+
 type followUpKind string
 
 const (
@@ -113,6 +118,9 @@ func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source
 
 func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followUpKind, source MessageEvent, notice, reference string, pluginResponses ...PluginResponse) string {
 	cfg := r.effectiveConfigForEvent(source)
+	if strings.TrimSpace(reference) != "" {
+		reference = truncateRunes(reference, followUpReferenceRuneBudget(r.promptContextWindowTokens(source, cfg)))
+	}
 	messages := []llm.Message{{
 		Role:     llm.RoleSystem,
 		Content:  r.systemPrompt(source, nil),
@@ -171,6 +179,17 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		return ""
 	}
 	return comment
+}
+
+func followUpReferenceRuneBudget(contextWindowTokens int64) int {
+	budget := int(contextWindowTokens / 10)
+	if budget < followUpReferenceMinRunes {
+		return followUpReferenceMinRunes
+	}
+	if budget > followUpReferenceMaxRunes {
+		return followUpReferenceMaxRunes
+	}
+	return budget
 }
 
 type followUpMediaFrames struct {
