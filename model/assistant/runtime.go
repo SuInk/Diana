@@ -210,6 +210,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "用户直接回复了机器人，语义路由判断应继续回答", true
 	case "replied_proactive", "replied_proactive_batch":
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
+	case "merged_into_reply":
+		return "not_replied", "消息已并入同一用户正在生成的回复，不再单独回答", false
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
 	case "error_replied_content_policy":
@@ -283,6 +285,8 @@ type Runtime struct {
 	replyInterruptMu          sync.Mutex
 	recalledInbound           map[string]time.Time
 	latestDirectedInbound     map[string]directedInboundMark
+	directReplySeq            uint64
+	activeDirectReplies       map[string]*activeDirectReply
 	cancel                    context.CancelFunc
 	runCtx                    context.Context
 	running                   bool
@@ -529,6 +533,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		replyRefusalByUser:    map[string]replyRefusalState{},
 		botReplyLoopByKey:     map[string]botReplyLoopState{},
 		proactiveBatches:      map[string]*proactiveReplyBatch{},
+		activeDirectReplies:   map[string]*activeDirectReply{},
 		proactiveBatchWindow:  defaultProactiveReplyBatchWindow,
 		proactiveBatchMaxWait: defaultProactiveReplyBatchMaxWait,
 		replyBatches:          map[string]*replyBatchGate{},
@@ -1628,6 +1633,13 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// Clear batches left by a runtime started before immediate proactive routing was enabled.
 		r.cancelProactiveReplyBatch(event)
 	}
+	if !handled {
+		if rootMessageID, merged := r.mergeIntoActiveDirectReply(ctx, event, text); merged {
+			event.routingReason = fmt.Sprintf("已并入同一用户正在生成的回复（触发消息 %s），不再单独判断或发送", rootMessageID)
+			r.record(r.decisionEventRecord(event, text, "merged_into_reply"))
+			return finishWithoutReply("merged_into_reply")
+		}
+	}
 	considerProactive, proactiveSkipReason := false, ""
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
@@ -1687,7 +1699,31 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
-	reply, err := r.replyTo(replyCtx, event, text)
+	if successOutcome == "replied" || successOutcome == "replied_direct_followup" {
+		var finish func()
+		replyCtx, finish = r.beginDirectReply(replyCtx, event)
+		defer finish()
+	}
+	var reply string
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		// Two regeneration opportunities cover normal typing bursts. Seal before
+		// the final attempt so an endless stream cannot starve this reply forever;
+		// later messages resume the ordinary routing path.
+		if attempt == 2 {
+			r.sealDirectReply(replyCtx)
+		}
+		attemptCtx := r.directReplyAttemptContext(replyCtx)
+		attemptEvent := event
+		if attempt > 0 {
+			attemptEvent.replyHistoryLoaded = false
+			attemptEvent.replyHistory = nil
+		}
+		reply, err = r.replyTo(attemptCtx, attemptEvent, text)
+		if !errors.Is(err, errDirectReplySupplemented) {
+			break
+		}
+	}
 	record.Duration = time.Since(start).Milliseconds()
 	// 出错也要带上：resolver 可能已经把图发出去了才在后面某步失败，这时事件页
 	// 只写「处理异常」会让人以为什么都没发。
@@ -3222,7 +3258,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 			}
 		}
-		turnCandidates := proactiveReplyTurnFromContext(ctx)
+		turnCandidates := append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
 		for _, candidate := range turnCandidates {
 			if messageID := strings.TrimSpace(candidate.Event.MessageID); messageID != "" && messageID != event.MessageID {
