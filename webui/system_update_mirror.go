@@ -57,8 +57,7 @@ func (h *SystemUpdateHandler) mirrors(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// testMirrors 实测每条线路。样本取当前最新版本的校验清单：它只有几 KB，
-// 又确实是更新时要下的东西，比找一个固定探针文件更能说明问题。
+// testMirrors 实测每条线路。
 func (h *SystemUpdateHandler) testMirrors(c *gin.Context) {
 	if h.mirror == nil {
 		writeError(c, http.StatusServiceUnavailable, errUnavailableMirrorSelector)
@@ -79,10 +78,19 @@ func (h *SystemUpdateHandler) testMirrors(c *gin.Context) {
 }
 
 // mirrorProbeURL 找一个真实的下载地址当测速样本。
+//
+// 优先取安装包本身：测速要真的拉一段数据下来才算得出速率，而校验清单只有
+// 几 KB，还没进入稳定传输就读完了，测出来的其实还是延时。拿不到安装包时才
+// 退回清单——那种情况下只剩连通性可测，总比什么都不测强。
 func (h *SystemUpdateHandler) mirrorProbeURL(ctx context.Context) (string, error) {
 	latest, err := h.latestStableRelease(ctx, "")
 	if err != nil {
 		return "", err
+	}
+	if h.releaseUpdater != nil {
+		if archive, ok := latest.asset(h.releaseUpdater.ExpectedAssetName()); ok && strings.TrimSpace(archive.URL) != "" {
+			return archive.URL, nil
+		}
 	}
 	if checksums, ok := latest.asset("SHA256SUMS"); ok && strings.TrimSpace(checksums.URL) != "" {
 		return checksums.URL, nil

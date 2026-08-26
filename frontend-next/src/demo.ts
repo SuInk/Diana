@@ -311,10 +311,12 @@ const demoMirrors = [
   { name: "gh-proxy.com", base_url: "https://gh-proxy.com" },
   { name: "gh-proxy.net", base_url: "https://gh-proxy.net" }
 ];
+// 演示数据刻意排成「握手最快的那条速度最慢」：这正是只看延时会选错的情形。
 const demoMirrorProbe = [
-  { name: "ghfast.top", base_url: "https://ghfast.top", ok: true, latency_ms: 168 },
-  { name: "gh-proxy.com", base_url: "https://gh-proxy.com", ok: true, latency_ms: 402 },
-  { name: "直连 GitHub", direct: true, ok: false, error: "dial tcp: i/o timeout（演示数据）" }
+  { name: "直连 GitHub", direct: true, ok: true, latency_ms: 1840, speed_kbps: 2360 },
+  { name: "gh-proxy.com", base_url: "https://gh-proxy.com", ok: true, latency_ms: 402, speed_kbps: 1180 },
+  { name: "ghfast.top", base_url: "https://ghfast.top", ok: true, latency_ms: 168, speed_kbps: 74 },
+  { name: "gh-proxy.net", base_url: "https://gh-proxy.net", ok: false, error: "context deadline exceeded（演示数据）" }
 ];
 
 const logs: AppLogEntry[] = [
