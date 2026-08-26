@@ -188,7 +188,7 @@ func followUpPluginMediaMessage(ctx context.Context, media followUpMediaFrames) 
 	}
 	content := "【本次插件刚刚发送的媒体】请实际查看附带画面后再生成跟评；不要声称没有看到画面。"
 	if len(media.videoFrames) > 0 {
-		content = "【本次插件刚刚发送的视频抽样帧】请结合附带画面自然回应。只依据抽样帧，不要臆测未覆盖的情节、声音或台词，也不要声称没有看到画面；正文若含平台提供的总结，以平台总结为准。"
+		content = "【本次插件刚刚发送的视频抽样帧】请结合附带画面自然回应。只依据抽样帧，不要臆测未覆盖的情节、声音或台词，也不要声称没有看到画面；正文若含平台提供的总结，以平台总结为准。" + videoFrameNarrationRule
 	}
 	parts := make([]llm.ContentPart, 0, len(ready)+1)
 	parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: content})

@@ -359,7 +359,7 @@
               <div class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" inputmode="numeric" placeholder="900" />
-                <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。留空按 900；填 0 关掉这条判断。</span>
+                <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。留空或填 0 都按 900；要彻底不用卡片就把表达风格设成群友。</span>
               </div>
               <div class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
@@ -711,6 +711,18 @@
                   <span class="switch-label">自然插话模式</span>
                 </label>
                 <span class="hint">开启后，普通群聊只要模型能生成具体、可靠且有实质内容的回复就可以插话；仍遵守群禁用、成员门槛和响应限制。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.social_reply_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">社交性回应</span>
+                </label>
+                <span class="hint">
+                  群友直接对机器人打招呼、夸奖、调侃或轻微评价（「笨笨」「你好可爱」「早」）时也回一句，
+                  哪怕没有具体问题。陪聊型人设建议开；助手型人设开了只会多出没信息量的应答。
+                  只放行冲着机器人来的那一类：别人之间的闲聊、要机器人安静、同一轮已经回过，仍然沉默。
+                </span>
               </div>
             </div>
           </section>
@@ -1887,6 +1899,7 @@ function setForm(config: BotProfileConfig): void {
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
+    social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     glossary_shared_scope_enabled: config.glossary_shared_scope_enabled ?? false,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
