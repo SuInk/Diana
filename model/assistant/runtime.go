@@ -7065,9 +7065,9 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 	if len(videoURLs) > 0 || len(cachedFrames) > 0 {
 		if len(frames) > 0 {
 			if quotedVideo {
-				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。"
+				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。" + videoFrameNarrationRule
 			} else {
-				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。"
+				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。" + videoFrameNarrationRule
 			}
 		} else {
 			text += "\n\n【系统提示】当前视频读取或抽帧失败。不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频；请直接说明暂时无法读取当前视频。"
@@ -7076,6 +7076,16 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 	extraImageURLs = append(extraImageURLs, frames...)
 	return llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
 }
+
+// videoFrameNarrationRule 管的是怎么把看到的东西说出来，不是怎么看。
+//
+// 视频是抽了几张关键帧交给模型的，提示词也照实说了——那是为了让它别去臆测没覆盖到
+// 的情节和声音。但模型会把这个实现细节原样带进回复：「这帧里是纳西妲主题的等身
+// 人偶」。用户发的是一段视频，不是一叠图片，聊天里没人这么说话。
+//
+// 约束的是措辞，不是依据：只依据画面这条限制仍然写在上面那几句里。
+const videoFrameNarrationRule = "回答时一律称它为「视频」：不要出现「帧」「关键帧」「抽帧」「截图」这类字眼，" +
+	"也不要按第几帧、第几张来叙述。抽帧是内部实现，用户发出来的是一段视频。"
 
 func hasVideoSegment(segments []MessageSegment) bool {
 	for _, segment := range segments {
