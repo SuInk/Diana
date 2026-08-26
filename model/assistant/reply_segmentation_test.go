@@ -315,3 +315,32 @@ func TestPromptFollowsTheNaturalSplitSwitch(t *testing.T) {
 		}
 	}
 }
+
+// TestTrailingBracketToneStillSplits 盯住猫娘那个语气词和分条逻辑的冲突。
+//
+// 猫娘人设专门教了「句尾一个孤零零的『（』」表示自嘲、心虚，而分条这边把行尾的
+// 开括号当成「话没说完」，会把带「（」的那句粘到下一句上——两次独立发言挤进同一个
+// 气泡。线上原话就是这个形状。
+func TestTrailingBracketToneStillSplits(t *testing.T) {
+	reply := "被你这么一问，我确实悄悄给自己打勾了喵（\n又是糖又是温水的，你这夸法甜得我要化掉了喵"
+	got := splitChatReply(reply, chatSplitLimitsFrom(DefaultBotConfig().WithDefaults()))
+	if len(got) != 2 {
+		t.Fatalf("带「（」的两句被并成了 %d 条：%q", len(got), got)
+	}
+	if !strings.HasSuffix(got[0], "（") {
+		t.Fatalf("语气词「（」没留在第一条末尾：%q", got[0])
+	}
+
+	// 半角的一样。
+	half := "我好像说漏嘴了(\n算了当我没说"
+	if got := splitChatReply(half, chatSplitLimitsFrom(DefaultBotConfig().WithDefaults())); len(got) != 2 {
+		t.Fatalf("半角括号语气词被并成了 %d 条：%q", len(got), got)
+	}
+
+	// 反过来：真的括号插入语在开括号后断了行，后文有闭括号，那就还是同一句话，
+	// 不能因为要救语气词把它也拆开。
+	real := "这个接口有个坑（\n文档里没写）后面会补上"
+	if got := splitChatReply(real, chatSplitLimitsFrom(DefaultBotConfig().WithDefaults())); len(got) != 1 {
+		t.Fatalf("真的括号插入语被拆成了 %d 条：%q", len(got), got)
+	}
+}

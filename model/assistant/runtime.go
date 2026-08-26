@@ -10990,7 +10990,8 @@ func splitReplyLines(part string) []string {
 	}
 	var out []string
 	pending := ""
-	for _, line := range strings.Split(part, "\n") {
+	lines := strings.Split(part, "\n")
+	for index, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -10999,7 +11000,7 @@ func splitReplyLines(part string) []string {
 			line = pending + "\n" + line
 			pending = ""
 		}
-		if endsMidSentence(line) {
+		if endsMidSentence(line) && !endsWithBracketTone(line, lines[index+1:]) {
 			pending = line
 			continue
 		}
@@ -11085,6 +11086,32 @@ func endsMidSentence(line string) bool {
 		return true
 	}
 	return false
+}
+
+// endsWithBracketTone 判断行尾那个孤零零的「（」是语气词，不是话没说完。
+//
+// 网上用它表示自嘲、心虚、说漏嘴，猫娘那档人设的提示词专门教了这个用法。而
+// endsMidSentence 把行尾的开括号一律当成「这句还没写完」，于是带「（」的那句会被
+// 粘到下一句上——两次独立发言挤进同一个气泡，中间只剩一个换行。
+//
+// 真正的括号插入语不会在开括号后面立刻断行，而且后文一定有个收尾的「）」。所以
+// 后面找不到闭括号时按语气词处理，找得到就还是当没说完。
+func endsWithBracketTone(line string, rest []string) bool {
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return false
+	}
+	switch runes[len(runes)-1] {
+	case '(', '（':
+	default:
+		return false
+	}
+	for _, next := range rest {
+		if strings.ContainsAny(next, "）)") {
+			return false
+		}
+	}
+	return true
 }
 
 // isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」
