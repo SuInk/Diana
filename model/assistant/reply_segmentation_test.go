@@ -529,3 +529,33 @@ func TestGroupLevelSplitAndForwardOverridesReachEffectiveConfig(t *testing.T) {
 		t.Fatalf("未配置的群合并转发没有跟随机器人：len=%d chunks=%d", other.ForwardReplyThreshold, other.ForwardReplyChunkThreshold)
 	}
 }
+
+// 分号是句内的并列分隔，不是句末。按它分条会把后半句单独扔成一条消息，读起来是
+// 话说了一半。
+func TestSemicolonIsNotASentenceBoundary(t *testing.T) {
+	limits := chatSplitLimits{ChunkSize: 400, MaxBubbles: 5}
+	reply := "这个报错有两种可能：一种是端口真的被别的进程占着，换个端口就能起来；另一种是上一次的实例没有退干净，还挂在那里等超时，得先把它清掉才行"
+	parts := splitChatReply(reply, limits)
+	if len(parts) != 1 {
+		t.Fatalf("分号被当成句末切开了：%#v", parts)
+	}
+
+	// 句号照常分条，这条改动没把整层关掉。
+	period := "端口被别的进程占着，换一个就能起来。先看看到底是谁占的，再决定要不要杀掉它，别上来就 kill 一个自己都不认识的 pid"
+	if got := splitChatReply(period, limits); len(got) != 2 {
+		t.Fatalf("句号分条 = %#v", got)
+	}
+}
+
+// 长度兜底非切不可的时候，分号仍然是个体面的落点——比从词中间拦腰切开强。
+func TestSemicolonStillWorksAsALengthFallbackCut(t *testing.T) {
+	head := strings.Repeat("前半句的内容", 8)
+	tail := strings.Repeat("后半句的内容", 8)
+	parts := chunkTextByLength(head+"；"+tail, 50)
+	if len(parts) < 2 {
+		t.Fatalf("没有切开：%#v", parts)
+	}
+	if !strings.HasSuffix(parts[0], "；") {
+		t.Fatalf("第一段没有断在分号上：%q", parts[0])
+	}
+}

@@ -10603,8 +10603,9 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 }
 
 // replyBoundaryRunes 是可以安全断句的位置：在这些字符之后收尾，读起来仍然是一句
-// 说完的话，而不是被切到一半。
-const replyBoundaryRunes = "。！？!?…；;\n"
+// 说完的话，而不是被切到一半。分号不算——它表示后面还有并列的半句，收在这里正是
+// 「被切到一半」的样子，和 isSentenceEnd 同一个理由。
+const replyBoundaryRunes = "。！？!?…\n"
 
 // truncateReplyMinBoundaryRatio 决定断句点最少要保留多少内容；低于这个比例说明
 // 长度预算内没有合适的句尾，只能退回硬截断。
@@ -11399,9 +11400,14 @@ func replyCutRank(r rune) int {
 
 // isSentenceEnd 判断是不是句末标点。只认全角的那几个：英文句点在小数、缩写和
 // 域名里到处都是，拿它断句会把 3.5 和 example.com 切开。
+//
+// 分号不在其中。中文的分号是句内的并列分隔，「前半句；后半句」是一句话的两半，
+// 按它分条会把后半句单独扔成一条消息，读起来是话说了一半——句末标点管的是「这句
+// 说完了」，分号恰恰表示还没完。它降级到 isClauseBreak：撞上长度上限非切不可时，
+// 分号仍然比拦腰硬切体面。
 func isSentenceEnd(r rune) bool {
 	switch r {
-	case '。', '！', '？', '…', '；':
+	case '。', '！', '？', '…':
 		return true
 	}
 	return false
@@ -11414,7 +11420,7 @@ func isSentenceEnd(r rune) bool {
 // 上限时按它们断，会把一个链接从中间劈开发出去。
 func isClauseBreak(r rune) bool {
 	switch r {
-	case '，', '、', '：':
+	case '，', '、', '：', '；':
 		return true
 	}
 	return false
