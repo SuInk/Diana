@@ -359,7 +359,7 @@
               <div class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" inputmode="numeric" placeholder="900" />
-                <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。留空按 900；填 0 关掉这条判断。</span>
+                <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。留空或填 0 都按 900；要彻底不用卡片就把表达风格设成群友。</span>
               </div>
               <div class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>

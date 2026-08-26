@@ -471,23 +471,30 @@ type GroupConfig struct {
 	// BotProfileID 指明这份群配置属于哪台机器人。两台机器人可以同时在一个群里，
 	// 各自的触发词、回复频率和人格都该各管各的。空值是升级前的老记录，迁移时会
 	// 归给当时的当前配置档。
-	BotProfileID                 string                 `json:"bot_profile_id,omitempty"`
-	GroupID                      string                 `json:"group_id"`
-	Enabled                      bool                   `json:"enabled"`
-	EnabledSet                   bool                   `json:"enabled_set,omitempty"`
-	GroupTriggers                []string               `json:"group_triggers,omitempty"`
-	GroupTriggerMode             AliasTriggerMode       `json:"group_trigger_mode,omitempty"`
-	SystemPrompt                 string                 `json:"system_prompt,omitempty"`
-	ResponseMode                 ResponseMode           `json:"response_mode,omitempty"`
-	ReplyStyle                   ReplyStyle             `json:"reply_style,omitempty"`
-	SelfReference                string                 `json:"self_reference,omitempty"`
-	SentenceEnders               string                 `json:"sentence_enders,omitempty"`
-	WelcomeEnabled               bool                   `json:"welcome_enabled,omitempty"`
-	WelcomeMessage               string                 `json:"welcome_message,omitempty"`
-	MaxContextTokens             int64                  `json:"max_context_tokens,omitempty"`
-	RecentHistoryTokenBudget     int64                  `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit           int                    `json:"recent_context_limit,omitempty"`
-	MaxReplyChars                int                    `json:"max_reply_chars,omitempty"`
+	BotProfileID             string           `json:"bot_profile_id,omitempty"`
+	GroupID                  string           `json:"group_id"`
+	Enabled                  bool             `json:"enabled"`
+	EnabledSet               bool             `json:"enabled_set,omitempty"`
+	GroupTriggers            []string         `json:"group_triggers,omitempty"`
+	GroupTriggerMode         AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	SystemPrompt             string           `json:"system_prompt,omitempty"`
+	ResponseMode             ResponseMode     `json:"response_mode,omitempty"`
+	ReplyStyle               ReplyStyle       `json:"reply_style,omitempty"`
+	SelfReference            string           `json:"self_reference,omitempty"`
+	SentenceEnders           string           `json:"sentence_enders,omitempty"`
+	WelcomeEnabled           bool             `json:"welcome_enabled,omitempty"`
+	WelcomeMessage           string           `json:"welcome_message,omitempty"`
+	MaxContextTokens         int64            `json:"max_context_tokens,omitempty"`
+	RecentHistoryTokenBudget int64            `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit       int              `json:"recent_context_limit,omitempty"`
+	MaxReplyChars            int              `json:"max_reply_chars,omitempty"`
+	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
+	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
+	NaturalReplySplitEnabled     *bool                  `json:"natural_reply_split_enabled,omitempty"`
+	ReplyMaxBubbles              int                    `json:"reply_max_bubbles,omitempty"`
+	DirectReplyChunkSize         int                    `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int                    `json:"forward_reply_threshold,omitempty"`
+	ForwardReplyChunkThreshold   int                    `json:"forward_reply_chunk_threshold,omitempty"`
 	ProactiveReplyChance         float64                `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold      float64                `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled                *bool                  `json:"chat_in_enabled,omitempty"`
@@ -635,6 +642,11 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		RecentHistoryTokenBudget:     base.RecentHistoryTokenBudget,
 		RecentContextLimit:           base.RecentContextLimit,
 		MaxReplyChars:                base.MaxReplyChars,
+		NaturalReplySplitEnabled:     copyBoolPointer(base.NaturalReplySplitEnabled),
+		ReplyMaxBubbles:              base.ReplyMaxBubbles,
+		DirectReplyChunkSize:         base.DirectReplyChunkSize,
+		ForwardReplyThreshold:        base.ForwardReplyThreshold,
+		ForwardReplyChunkThreshold:   base.ForwardReplyChunkThreshold,
 		ProactiveReplyChance:         base.ProactiveReplyChance,
 		ProactiveReplyThreshold:      base.ProactiveReplyThreshold,
 		ChatInEnabled:                base.ChatInEnabled,
@@ -690,6 +702,21 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	}
 	if cfg.MaxReplyChars <= 0 {
 		cfg.MaxReplyChars = defaults.MaxReplyChars
+	}
+	if cfg.NaturalReplySplitEnabled == nil {
+		cfg.NaturalReplySplitEnabled = copyBoolPointer(defaults.NaturalReplySplitEnabled)
+	}
+	if cfg.ReplyMaxBubbles <= 0 {
+		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
+	}
+	if cfg.DirectReplyChunkSize <= 0 {
+		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
+	}
+	if cfg.ForwardReplyThreshold <= 0 {
+		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
+	}
+	if cfg.ForwardReplyChunkThreshold <= 0 {
+		cfg.ForwardReplyChunkThreshold = defaults.ForwardReplyChunkThreshold
 	}
 	if cfg.ProactiveReplyChance <= 0 {
 		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance

@@ -477,3 +477,55 @@ func TestUnderLimitRepliesKeepEveryLine(t *testing.T) {
 		t.Fatalf("切成了 %d 条，想要 3 条：%q", len(got), got)
 	}
 }
+
+// 分条和合并转发此前只有机器人级：GroupConfig 里根本没有这几个字段，群组页也没有
+// 对应的输入框。但群和群的说话节奏不一样，一个技术群里长回复整条读更省事，一个闲
+// 聊群里同样长度得拆开发才不像播报。
+func TestGroupLevelSplitAndForwardOverridesReachEffectiveConfig(t *testing.T) {
+	base := BotConfig{
+		ResponseMode:               ResponseModeStandard,
+		ReplyMaxBubbles:            5,
+		DirectReplyChunkSize:       400,
+		ForwardReplyThreshold:      900,
+		ForwardReplyChunkThreshold: 5,
+	}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"chatty": {
+			GroupID:                    "chatty",
+			NaturalReplySplitEnabled:   boolPointer(false),
+			ReplyMaxBubbles:            2,
+			DirectReplyChunkSize:       120,
+			ForwardReplyThreshold:      300,
+			ForwardReplyChunkThreshold: 3,
+		},
+	}})
+
+	cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "chatty"})
+	if boolValue(cfg.NaturalReplySplitEnabled, true) {
+		t.Fatal("群级自然分条开关没生效")
+	}
+	if cfg.ReplyMaxBubbles != 2 || cfg.DirectReplyChunkSize != 120 {
+		t.Fatalf("群级分条阈值没生效：bubbles=%d chunk=%d", cfg.ReplyMaxBubbles, cfg.DirectReplyChunkSize)
+	}
+	if cfg.ForwardReplyThreshold != 300 || cfg.ForwardReplyChunkThreshold != 3 {
+		t.Fatalf("群级合并转发阈值没生效：len=%d chunks=%d", cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold)
+	}
+	// 配置字段好看不算数，得真的传到分条那一层。
+	limits := chatSplitLimitsFrom(cfg)
+	if !limits.MarkerOnly || limits.MaxBubbles != 2 || limits.ChunkSize != 120 {
+		t.Fatalf("chatSplitLimits = %#v", limits)
+	}
+	if parts := splitChatReply("第一句。\n第二句。\n第三句。", limits); len(parts) != 1 {
+		t.Fatalf("关掉自然分条后仍然分成了 %d 条：%#v", len(parts), parts)
+	}
+
+	// 没有单独配置的群跟随机器人。
+	other := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "other"})
+	if !boolValue(other.NaturalReplySplitEnabled, true) || other.ReplyMaxBubbles != 5 || other.DirectReplyChunkSize != 400 {
+		t.Fatalf("未配置的群没有跟随机器人：%#v", chatSplitLimitsFrom(other))
+	}
+	if other.ForwardReplyThreshold != 900 || other.ForwardReplyChunkThreshold != 5 {
+		t.Fatalf("未配置的群合并转发没有跟随机器人：len=%d chunks=%d", other.ForwardReplyThreshold, other.ForwardReplyChunkThreshold)
+	}
+}
