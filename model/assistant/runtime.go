@@ -9502,11 +9502,11 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 			r.setError(finishErr.Error())
 		}
 		if err != nil && finishErr == nil {
-			var noticeErr error
-			if ctx.Err() == nil {
-				noticeErr = r.notifyReminderFailure(ctx, updated, err)
-			}
-			r.recordReminderRetry(updated, err, noticeErr)
+			r.reportRecurringReminderFailure(ctx, updated, err)
+			return
+		}
+		if err == nil && finishErr == nil {
+			r.deliverRecurringRecoveryNotice(ctx, updated)
 		}
 		return
 	}
@@ -9545,11 +9545,11 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 			r.setError(finishErr.Error())
 		}
 		if err != nil && finishErr == nil {
-			var noticeErr error
-			if ctx.Err() == nil {
-				noticeErr = r.notifyReminderFailure(ctx, updated, err)
-			}
-			r.recordReminderRetry(updated, err, noticeErr)
+			r.reportRecurringReminderFailure(ctx, updated, err)
+			return
+		}
+		if err == nil && finishErr == nil {
+			r.deliverRecurringRecoveryNotice(ctx, updated)
 		}
 		return
 	}
@@ -10494,9 +10494,7 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 		} else {
 			items[index].LastError = ""
 			items[index].ConsecutiveFailures = 0
-			if reminderIsRepositoryWatch(items[index]) {
-				resetRepositoryWatchFailureStateAfterSuccess(&items[index])
-			}
+			resetRecurringFailureStateAfterSuccess(&items[index])
 			items[index].PendingDelivery = ""
 			items[index].PendingSince = time.Time{}
 			items[index].TriggerAt = nextScheduledTrigger(startedAt, time.Duration(items[index].IntervalSeconds)*time.Second, time.Now())
