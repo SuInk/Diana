@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -96,48 +97,97 @@ func extractVideoContextFrames(ctx context.Context, sources []string) []string {
 }
 
 func extractVideoContextFramesAfterReady(ctx context.Context, sources []string, wait time.Duration) []string {
+	frames, _ := extractVideoContextFramesDetailed(ctx, sources, wait)
+	return frames
+}
+
+// extractVideoContextFramesDetailed 除了画面还返回失败原因。
+//
+// 读不到视频时原先只往提示词里写一句「读取或抽帧失败」，模型只能照着复述——用户
+// 得到的是「我暂时读不了这个视频」，既不知道是这台机器没装 ffmpeg，还是视频太大
+// 超了上限，也不知道该找谁修。原因就在手边，一路丢掉了而已。
+//
+// 措辞是给用户看的，所以不提「抽帧」：那是内部实现，只有对方专门问起读取方式时
+// 才有必要说（见 videoFrameNarrationRule）。
+func extractVideoContextFramesDetailed(ctx context.Context, sources []string, wait time.Duration) ([]string, string) {
 	if len(sources) == 0 {
-		return nil
+		return nil, ""
 	}
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		log.Printf("chatbot video context unavailable: ffmpeg not found")
-		return nil
+		return nil, "这台机器上没有安装 ffmpeg，视频读不了；这是部署环境缺组件，不是视频本身的问题。"
 	}
 	out := make([]string, 0, maxVideoContextFrames)
 	seen := map[string]bool{}
+	reason := ""
 	for _, source := range sources {
-		path, cleanup := materializeVideoContextSource(ctx, source, wait)
+		path, cleanup, err := materializeVideoContextSource(ctx, source, wait)
+		if err != nil {
+			reason = firstNonEmpty(reason, err.Error())
+		}
 		if path == "" || seen[path] {
 			cleanup()
 			continue
 		}
 		seen[path] = true
-		frames := extractLocalVideoFrames(ctx, path, maxVideoContextFrames-len(out))
+		frames, frameErr := extractLocalVideoFrames(ctx, path, maxVideoContextFrames-len(out))
 		cleanup()
+		if frameErr != nil {
+			reason = firstNonEmpty(reason, frameErr.Error())
+		}
 		out = append(out, frames...)
 		if len(out) >= maxVideoContextFrames {
 			break
 		}
 	}
-	return out
+	if len(out) > 0 {
+		return out, ""
+	}
+	return nil, firstNonEmpty(reason, "视频没读出可用画面，原因不明。")
 }
 
-func materializeVideoContextSource(ctx context.Context, source string, wait time.Duration) (string, func()) {
+func materializeVideoContextSource(ctx context.Context, source string, wait time.Duration) (string, func(), error) {
+	maxBytes := videoContextMaxBytes(ctx)
 	if remote := normalizedHTTPURL(source); remote != "" {
 		path, dir, err := downloadVideoContextSource(ctx, remote)
 		if err != nil {
 			log.Printf("chatbot video download failed: %v", err)
-			return "", func() {}
+			return "", func() {}, fmt.Errorf("视频下载失败（%s）。", describeVideoContextError(err, maxBytes))
 		}
-		return path, func() { _ = os.RemoveAll(dir) }
+		return path, func() { _ = os.RemoveAll(dir) }, nil
 	}
-	maxBytes := videoContextMaxBytes(ctx)
 	path := waitForLocalMediaPath(ctx, source, wait, maxBytes)
 	if path == "" {
-		return "", func() {}
+		return "", func() {}, fmt.Errorf("视频文件没能在本地就绪，可能还没下载完、已经被清理，或者超过了 %s 的大小上限。", formatVideoContextSize(maxBytes))
 	}
 	path = localVideoPathWithLimit(path, maxBytes)
-	return path, func() {}
+	if path == "" {
+		return "", func() {}, fmt.Errorf("视频文件不可读，或者超过了 %s 的大小上限。", formatVideoContextSize(maxBytes))
+	}
+	return path, func() {}, nil
+}
+
+// describeVideoContextError 把内部错误翻成一句用户看得懂的话。超限是最常见的一种，
+// 单独认出来——「HTTP 404」和「视频太大」对用户来说是完全不同的两件事。
+func describeVideoContextError(err error, maxBytes int64) string {
+	if err == nil {
+		return "原因不明"
+	}
+	text := err.Error()
+	if strings.Contains(text, "exceeds file parser limit") {
+		return "视频超过了 " + formatVideoContextSize(maxBytes) + " 的大小上限"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(text, "timeout") || strings.Contains(text, "Client.Timeout") {
+		return "下载超时"
+	}
+	return text
+}
+
+func formatVideoContextSize(maxBytes int64) string {
+	if maxBytes <= 0 {
+		return "当前"
+	}
+	return fmt.Sprintf("%d MB", maxBytes/(1024*1024))
 }
 
 func downloadVideoContextSource(ctx context.Context, source string) (string, string, error) {
@@ -219,23 +269,24 @@ func rawAbsoluteMediaPath(value string) string {
 	return filepath.Clean(value)
 }
 
-func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) []string {
+func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) ([]string, error) {
 	if limit <= 0 {
-		return nil
+		return nil, nil
 	}
 	workDir, err := os.MkdirTemp("", "diana-video-context-*")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("临时目录建不出来（%v），这是机器上的问题。", err)
 	}
 	stagedPath, err := stageVideoForContext(ctx, videoPath, workDir)
 	if err != nil {
 		log.Printf("chatbot video staging failed for %s: %v", filepath.Base(videoPath), err)
 		_ = os.RemoveAll(workDir)
-		return nil
+		return nil, fmt.Errorf("视频准备失败（%s）。", describeVideoContextError(err, videoContextMaxBytes(ctx)))
 	}
 	duration := probeVideoDuration(ctx, stagedPath)
 	timestamps := videoFrameTimestamps(duration, limit)
 	frames := make([]string, 0, len(timestamps))
+	lastFFmpegError := ""
 	for i, timestamp := range timestamps {
 		framePath := filepath.Join(workDir, fmt.Sprintf("frame-%02d.jpg", i+1))
 		callCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
@@ -244,6 +295,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) [
 		cancel()
 		if runErr != nil {
 			log.Printf("chatbot video frame extraction failed: %v: %s", runErr, strings.TrimSpace(string(output)))
+			lastFFmpegError = strings.TrimSpace(string(output))
 			continue
 		}
 		if info, statErr := os.Stat(framePath); statErr == nil && info.Size() > 0 {
@@ -252,8 +304,14 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) [
 	}
 	if len(frames) == 0 {
 		_ = os.RemoveAll(workDir)
+		// ffmpeg 自己的报错往往就是答案（编码不支持、文件损坏），原样带出去比
+		// 一句「失败了」有用得多；它一个字都没说时才退回泛化文案。
+		if lastFFmpegError != "" {
+			return nil, fmt.Errorf("ffmpeg 读不了这个视频：%s", truncateRunes(lastFFmpegError, 200))
+		}
+		return nil, fmt.Errorf("ffmpeg 没能从这个视频里读出画面，可能是编码不受支持或者文件损坏。")
 	}
-	return frames
+	return frames, nil
 }
 
 func stageVideoForContext(ctx context.Context, sourcePath, workDir string) (string, error) {

@@ -7055,8 +7055,9 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 	}
 	frames := cachedFrames
 	cleanupFrames := false
+	videoFailure := ""
 	if len(frames) == 0 {
-		frames = extractVideoContextFrames(ctx, videoURLs)
+		frames, videoFailure = extractVideoContextFramesDetailed(ctx, videoURLs, 0)
 		cleanupFrames = true
 	}
 	if cleanupFrames {
@@ -7070,11 +7071,25 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。" + videoFrameNarrationRule
 			}
 		} else {
-			text += "\n\n【系统提示】当前视频读取或抽帧失败。不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频；请直接说明暂时无法读取当前视频。"
+			// 原因照实说出来。以前这里只写「读取或抽帧失败」，模型只能照着复述，
+			// 用户得到一句「我暂时读不了这个视频」——既不知道是这台机器没装
+			// ffmpeg、还是视频超了大小上限，也就不知道该找谁修。
+			text += "\n\n【系统提示】当前视频没能读出画面，原因：" + videoFailureReason(videoFailure) +
+				"把这个原因用自己的话告诉用户，别只说一句读不了。" +
+				"不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频。" + videoFrameNarrationRule
 		}
 	}
 	extraImageURLs = append(extraImageURLs, frames...)
 	return llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
+}
+
+// videoFailureReason 补上兜底文案：拿不到具体原因时也不能把这句写成空的，
+// 否则提示词会变成「原因：把这个原因告诉用户」。
+func videoFailureReason(reason string) string {
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		return trimmed + " "
+	}
+	return "未知，日志里也没有更多线索。 "
 }
 
 // videoFrameNarrationRule 管的是怎么把看到的东西说出来，不是怎么看。
@@ -7085,7 +7100,8 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 //
 // 约束的是措辞，不是依据：只依据画面这条限制仍然写在上面那几句里。
 const videoFrameNarrationRule = "回答时一律称它为「视频」：不要出现「帧」「关键帧」「抽帧」「截图」这类字眼，" +
-	"也不要按第几帧、第几张来叙述。抽帧是内部实现，用户发出来的是一段视频。"
+	"也不要按第几帧、第几张来叙述。抽帧是内部实现，用户发出来的是一段视频。" +
+	"唯一的例外是对方专门问你「怎么读的视频」这类实现问题，那时候可以照实说是抽了几张画面来看。"
 
 func hasVideoSegment(segments []MessageSegment) bool {
 	for _, segment := range segments {
