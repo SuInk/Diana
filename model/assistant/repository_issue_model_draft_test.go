@@ -191,3 +191,65 @@ func TestApprovingAnAlreadyAppliedDraftReportsTheTruth(t *testing.T) {
 		}
 	}
 }
+
+// 列草稿只报「共找到 N 条」，用户看完还是不知道拿什么去确认——确认码藏在草稿 ID 的
+// 前六位，指望模型自己截字符串不可靠。待审批的草稿必须自带 confirmation_code。
+func TestListDraftsCarriesConfirmationCode(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+
+	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
+	settings := SettingValues{
+		repositoryPublishSettingToken:      repositoryPublishTestToken,
+		repositoryPublishSettingAllowlist:  "acme/demo",
+		repositoryPublishSettingTimeout:    5,
+		repositoryPublishSettingUserAccess: "owner = acme/demo",
+	}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	toolFor := func(rawMessage string) *dianaRepositoryIssuesTool {
+		return newDianaRepositoryIssuesTool(runtime,
+			MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: rawMessage},
+			plugin, settings)
+	}
+
+	drafted := runRepositoryPublishToolOnce(t, toolFor("帮我给 acme/demo 提个 issue，说转发有问题"), map[string]any{
+		"operation": "create", "repository": "acme/demo",
+		"title": "转发有问题，需要排查", "body": "模型自己组织的正文。",
+	})
+	if drafted.Draft == nil {
+		t.Fatalf("没有生成草稿：%#v", drafted)
+	}
+	code := repositoryIssueConfirmationCode(drafted.Draft.ID)
+	if drafted.Draft.ConfirmationCode != code {
+		t.Fatalf("建草稿时没带确认码：%#v", drafted.Draft)
+	}
+
+	listed := runRepositoryPublishToolOnce(t, toolFor("看看有哪些草稿"), map[string]any{"operation": "list_drafts"})
+	if len(listed.Drafts) != 1 {
+		t.Fatalf("草稿列表 = %#v", listed)
+	}
+	if listed.Drafts[0].ConfirmationCode != code {
+		t.Fatalf("草稿列表里没有确认码：%#v", listed.Drafts[0])
+	}
+	// 光把码放进载荷不够，还得让模型知道要复述它。
+	if !strings.Contains(listed.Message, "confirmation_code") {
+		t.Fatalf("列表文案没有要求复述确认码：%q", listed.Message)
+	}
+
+	// 已经提交过的草稿不再给确认码：报一个码只会让人以为还能确认。
+	approved := runRepositoryPublishToolOnce(t, toolFor("确认 "+code), map[string]any{
+		"operation": "approve", "draft_id": drafted.Draft.ID,
+	})
+	if !approved.OK {
+		t.Fatalf("审批失败：%#v", approved)
+	}
+	done := runRepositoryPublishToolOnce(t, toolFor("看看有哪些草稿"), map[string]any{
+		"operation": "list_drafts", "status": "all",
+	})
+	for _, draft := range done.Drafts {
+		if draft.Status != "pending" && draft.ConfirmationCode != "" {
+			t.Fatalf("已处理的草稿不该带确认码：%#v", draft)
+		}
+	}
+}

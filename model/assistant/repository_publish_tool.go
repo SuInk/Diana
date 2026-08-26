@@ -136,22 +136,26 @@ type repositoryIssueDraftView struct {
 	ID string `json:"id"`
 	// Operation 区分这份草稿要执行的写操作。历史草稿没有这个字段，读取时按
 	// create 处理。
-	Operation     string    `json:"operation,omitempty"`
-	IssueTarget   int       `json:"issue_target,omitempty"`
-	GroupID       string    `json:"group_id"`
-	Repository    string    `json:"repository"`
-	Title         string    `json:"title"`
-	Body          string    `json:"body,omitempty"`
-	Labels        []string  `json:"labels,omitempty"`
-	Assignees     []string  `json:"assignees,omitempty"`
-	Milestone     any       `json:"milestone,omitempty"`
-	State         string    `json:"state,omitempty"`
-	RequesterID   string    `json:"requester_id"`
-	RequesterName string    `json:"requester_name,omitempty"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"created_at"`
-	IssueNumber   int       `json:"issue_number,omitempty"`
-	IssueURL      string    `json:"issue_url,omitempty"`
+	Operation     string   `json:"operation,omitempty"`
+	IssueTarget   int      `json:"issue_target,omitempty"`
+	GroupID       string   `json:"group_id"`
+	Repository    string   `json:"repository"`
+	Title         string   `json:"title"`
+	Body          string   `json:"body,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
+	Assignees     []string `json:"assignees,omitempty"`
+	Milestone     any      `json:"milestone,omitempty"`
+	State         string   `json:"state,omitempty"`
+	RequesterID   string   `json:"requester_id"`
+	RequesterName string   `json:"requester_name,omitempty"`
+	Status        string   `json:"status"`
+	// ConfirmationCode 是这份草稿的确认码，只对还等着审批的草稿给。草稿列表原先只
+	// 有 id，模型要自己去截前六位才能报出确认码——那是让它做字符串运算，不可靠；
+	// 报错了用户照着打也过不了校验。直接给出来。
+	ConfirmationCode string    `json:"confirmation_code,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	IssueNumber      int       `json:"issue_number,omitempty"`
+	IssueURL         string    `json:"issue_url,omitempty"`
 }
 
 type repositoryIssueSummary struct {
@@ -1026,7 +1030,11 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 	}
 	result.OK = true
 	result.Outcome = "listed"
-	result.Message = fmt.Sprintf("共找到 %d 条 Issue 草稿。", len(drafts))
+	// 只报条数等于没报：用户看完列表还是不知道拿什么去确认。待审批的草稿必须连
+	// confirmation_code 一起复述，否则这条链路到列表这一步就断了。
+	result.Message = fmt.Sprintf(
+		"共找到 %d 条 Issue 草稿。逐条把标题和内容复述给用户；待审批的草稿要一并报出它的 confirmation_code，"+
+			"并说明由有权限的人原样回复该确认码才会提交。不要替用户说出确认码。", len(drafts))
 	result.Drafts = make([]repositoryIssueDraftView, 0, len(drafts))
 	for _, draft := range drafts {
 		result.Drafts = append(result.Drafts, *repositoryIssueDraftViewFromDraft(draft))
@@ -1117,8 +1125,18 @@ func repositoryIssueDraftViewFromDraft(draft repositoryIssueDraft) *repositoryIs
 		Milestone:   draft.Input["milestone"],
 		State:       configToolString(draft.Input, "state"),
 		RequesterID: draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
-		IssueNumber: draft.IssueNumber, IssueURL: draft.IssueURL,
+		// 只有待审批的草稿需要确认码：已提交和已取消的草稿再报一个码，只会让人以为
+		// 还能确认。
+		ConfirmationCode: confirmationCodeForPendingDraft(draft),
+		IssueNumber:      draft.IssueNumber, IssueURL: draft.IssueURL,
 	}
+}
+
+func confirmationCodeForPendingDraft(draft repositoryIssueDraft) string {
+	if strings.TrimSpace(draft.Status) != "pending" {
+		return ""
+	}
+	return repositoryIssueConfirmationCode(draft.ID)
 }
 
 func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {

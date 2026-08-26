@@ -304,10 +304,11 @@ func repositoryIssueDebugDrafts(drafts []repositoryIssueDraftView, single *repos
 		}
 		entry := map[string]any{}
 		for key, value := range map[string]string{
-			"id":        draft.ID,
-			"title":     draft.Title,
-			"status":    draft.Status,
-			"operation": draft.Operation,
+			"id":                draft.ID,
+			"title":             draft.Title,
+			"status":            draft.Status,
+			"operation":         draft.Operation,
+			"confirmation_code": draft.ConfirmationCode,
 		} {
 			if trimmed := strings.TrimSpace(value); trimmed != "" {
 				entry[key] = trimmed
