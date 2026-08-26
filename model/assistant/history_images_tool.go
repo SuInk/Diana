@@ -189,7 +189,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		if persistState && historicalImageStateChanged(original, source) {
 			t.runtime.updateHistoricalImageState(source)
 		}
-		t.runtime.enqueueHistoryImageDescriptions(source)
+		t.runtime.enqueueHistoryImageDescriptionsNow(source)
 	}
 
 	if result.Loaded == 0 {
