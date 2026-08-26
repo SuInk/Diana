@@ -305,7 +305,17 @@ const browserDependencies: ResolverDependency[] = [
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
-let updatePolicy = { auto_download: true, auto_install: false };
+let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "auto" };
+const demoMirrors = [
+  { name: "ghfast.top", base_url: "https://ghfast.top" },
+  { name: "gh-proxy.com", base_url: "https://gh-proxy.com" },
+  { name: "gh-proxy.net", base_url: "https://gh-proxy.net" }
+];
+const demoMirrorProbe = [
+  { name: "ghfast.top", base_url: "https://ghfast.top", ok: true, latency_ms: 168 },
+  { name: "gh-proxy.com", base_url: "https://gh-proxy.com", ok: true, latency_ms: 402 },
+  { name: "直连 GitHub", direct: true, ok: false, error: "dial tcp: i/o timeout（演示数据）" }
+];
 
 const logs: AppLogEntry[] = [
   { id: "log-1", kind: "operation", level: "info", action: "message.reply", message: "群聊消息已回复并收到发送回显", actor: "bot-onebot", target: "group:100200301", created_at: before(2) },
@@ -598,9 +608,20 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/system/update/check") return json({ deployment_mode: "release", current_version: "v0.8.6", latest_version: "v0.8.7", latest_published_at: before(30), checked_at: new Date(now).toISOString(), update_available: true, update_supported: true, integrity_mode: "sha256", checksum_available: true, checksum_url: "https://github.com/SuInk/Diana/releases", status: updateStatus, policy: updatePolicy });
   if (path === "/api/system/update/policy" && method === "GET") return json(updatePolicy);
   if (path === "/api/system/update/policy" && method === "PUT") {
-    const next = JSON.parse(String(init?.body ?? "{}")) as { auto_download?: boolean; auto_install?: boolean };
-    updatePolicy = { auto_download: Boolean(next.auto_download || next.auto_install), auto_install: Boolean(next.auto_install) };
+    const next = JSON.parse(String(init?.body ?? "{}")) as { auto_download?: boolean; auto_install?: boolean; github_mirror?: string };
+    updatePolicy = {
+      auto_download: Boolean(next.auto_download || next.auto_install),
+      auto_install: Boolean(next.auto_install),
+      github_mirror: next.github_mirror || "auto"
+    };
     return json(updatePolicy);
+  }
+  // 这两条要排在下面那个 /api/system/update 前缀兜底之前，否则测速会被当成下载。
+  if (path === "/api/system/update/mirrors" && method === "GET") {
+    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors, last_probe: demoMirrorProbe });
+  }
+  if (path === "/api/system/update/mirrors/test") {
+    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors, resolved: "https://ghfast.top", last_probe: demoMirrorProbe });
   }
   if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [{ tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }] });
   if (path.startsWith("/api/system/update") && method === "POST") return json({ status: { ...updateStatus, download_ready: true, downloaded_version: "v0.8.7", downloaded_at: new Date().toISOString() }, fetched: true, updated: false, downloaded: true, output: "演示模式：已模拟完成下载与 SHA-256 校验，未写入任何文件。", at: new Date().toISOString() });

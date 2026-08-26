@@ -15,6 +15,7 @@ import (
 
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/updater"
 
 	"github.com/gin-gonic/gin"
@@ -100,6 +101,7 @@ type SystemUpdateHandler struct {
 	releaseCachePersistMu sync.Mutex
 	releaseCache          persistedReleaseCache
 	releaseFetch          singleflight.Group
+	mirror                GitHubMirrorSelector
 	now                   func() time.Time
 }
 
@@ -129,9 +131,13 @@ func (h *SystemUpdateHandler) SetUpdatePolicyStore(ctx context.Context, store Up
 		return err
 	}
 	if ok {
+		policy = normalizeUpdatePolicy(policy)
 		h.policyMu.Lock()
-		h.policy = normalizeUpdatePolicy(policy)
+		h.policy = policy
 		h.policyMu.Unlock()
+		if h.mirror != nil {
+			h.mirror.SetMode(policy.GitHubMirror)
+		}
 	}
 	return nil
 }
@@ -169,6 +175,8 @@ func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 	router.POST("/api/system/update/download", h.download)
 	router.POST("/api/system/update/install", h.installDownloaded)
 	router.GET("/api/system/update/policy", h.getPolicy)
+	router.GET("/api/system/update/mirrors", h.mirrors)
+	router.POST("/api/system/update/mirrors/test", h.testMirrors)
 	router.PUT("/api/system/update/policy", h.savePolicy)
 	router.POST("/api/system/update/check", h.check)
 	router.POST("/api/system/update/rollback", h.rollback)
@@ -353,7 +361,10 @@ func (h *SystemUpdateHandler) savePolicy(c *gin.Context) {
 	h.policyMu.Lock()
 	h.policy = policy
 	h.policyMu.Unlock()
-	recordRequestOperation(c, h.logs, "system.update.policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall})
+	if h.mirror != nil {
+		h.mirror.SetMode(policy.GitHubMirror)
+	}
+	recordRequestOperation(c, h.logs, "system.update.policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall, "github_mirror": policy.GitHubMirror})
 	c.JSON(http.StatusOK, policy)
 }
 
@@ -367,6 +378,8 @@ func normalizeUpdatePolicy(policy updater.UpdatePolicy) updater.UpdatePolicy {
 	if policy.AutoInstall {
 		policy.AutoDownload = true
 	}
+	// 坏的镜像地址不落库：否则每次下载都会先撞一次 404 再回落。
+	policy.GitHubMirror = ghmirror.NormalizeMode(policy.GitHubMirror)
 	return policy
 }
 
