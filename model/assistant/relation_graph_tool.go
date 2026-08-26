@@ -111,22 +111,33 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	}
 
 	title := fmt.Sprintf("群 %s · 关系图", t.event.GroupID)
-	page := RenderGroupRelationHTML(graph, title, relationRangeLabel(rangeID), t.settings.Int(groupRelationsSettingMaxMembers, relationImageDefaultSeats))
-	png, err := agent.CaptureHTMLScreenshot(ctx, agent.ScreenshotRequest{
-		HTML:    page,
-		Width:   relationImageWidth,
-		Height:  relationImageHeight,
-		Timeout: time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
-	})
-	if err != nil {
-		// 渲染要靠无头浏览器，失败了就明确说出来，别让模型编一句「已发送」。
+	maxSeats := t.settings.Int(groupRelationsSettingMaxMembers, relationImageDefaultSeats)
+	rangeLabel := relationRangeLabel(rangeID)
+
+	// 先在进程里直接画。它不需要浏览器，也就不用等一次冷启动——一台机器上装不装
+	// 得起 Chrome，和有没有中文字体，是两件独立的事，两条路都试才不至于一个环境
+	// 缺件就彻底没图。
+	png, rasterErr := RenderGroupRelationPNG(graph, title, rangeLabel, maxSeats)
+	var browserErr error
+	if rasterErr != nil {
+		page := RenderGroupRelationHTML(graph, title, rangeLabel, maxSeats)
+		png, browserErr = agent.CaptureHTMLScreenshot(ctx, agent.ScreenshotRequest{
+			HTML:    page,
+			Width:   relationImageWidth,
+			Height:  relationImageHeight,
+			Timeout: time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
+		})
+	}
+	if rasterErr != nil && browserErr != nil {
+		// 两条路都断了才算失败，而且要把两边各自卡在哪说清楚——只说一句「画不出来」
+		// 的话，人不知道该去装字体还是装浏览器。
 		result := dianaGroupRelationsResult{
-			Message:      relationRenderFailureMessage(ctx, err),
+			Message:      relationRenderFailureMessage(ctx, rasterErr, browserErr),
 			Range:        rangeID,
 			Participants: graph.Participants,
 			Messages:     graph.Messages,
 		}
-		t.recordRelationsOutcome(ctx, result, err.Error())
+		t.recordRelationsOutcome(ctx, result, fmt.Sprintf("直接渲染：%v；浏览器渲染：%v", rasterErr, browserErr))
 		return marshalRelationsResult(result), nil
 	}
 
@@ -158,19 +169,18 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 //
 // 所以先探一次活：探不到就照实说探测结果，探得到就承认浏览器在、是这次渲染没成，
 // 并把原始错误带上。
-func relationRenderFailureMessage(ctx context.Context, renderErr error) string {
+func relationRenderFailureMessage(ctx context.Context, rasterErr, browserErr error) string {
+	browserDetail := strings.TrimSpace(firstLineOf(browserErr.Error()))
 	if status := agent.ProbeHeadlessBrowser(ctx, ""); !status.Available {
-		detail := strings.TrimSpace(status.Detail)
-		if detail == "" {
-			detail = "没有找到可用的无头浏览器"
+		if detail := strings.TrimSpace(status.Detail); detail != "" {
+			browserDetail = detail
 		}
-		return "画不出来：" + detail + "（关系图靠无头浏览器把图渲染成图片）。"
 	}
-	detail := strings.TrimSpace(firstLineOf(renderErr.Error()))
-	if detail == "" {
-		detail = "浏览器没有产出图片"
+	if browserDetail == "" {
+		browserDetail = "浏览器没有产出图片"
 	}
-	return "画不出来：浏览器是能跑的，但这次渲染没成——" + detail + "。"
+	return fmt.Sprintf("画不出来，两条路都没走通：直接渲染——%s；浏览器渲染——%s。装一个中文字体或一个 Chrome/Chromium 都能救。",
+		firstLineOf(rasterErr.Error()), browserDetail)
 }
 
 // firstLineOf 只取错误的第一行：浏览器的报错常常拖着一整屏堆栈，群里发不下。
