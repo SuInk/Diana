@@ -113,7 +113,7 @@
               <!-- 缺依赖等于这个插件直接不工作，这条得能在一屏插件里被一眼扫到 -->
               <span
                 class="plugin-dependency-count"
-                :class="{ warn: missingDependencyCount(plugin.manifest.id) > 0 }"
+                :class="{ warn: hasDependencyProblem(plugin.manifest.id) }"
               >
                 {{ readyDependencyCount(plugin.manifest.id) }}/{{ dependenciesFor(plugin.manifest.id).length }}
               </span>
@@ -188,11 +188,11 @@
       <details
         v-if="dependenciesFor(settingsTarget.manifest.id).length"
         class="plugin-settings-section-head plugin-settings-collapsible"
-        :open="missingDependencyCount(settingsTarget.manifest.id) > 0"
+        :open="hasDependencyProblem(settingsTarget.manifest.id)"
       >
         <summary>
           <h3>运行依赖</h3>
-          <span class="badge" :class="missingDependencyCount(settingsTarget.manifest.id) > 0 ? 'warn' : 'accent'">
+          <span class="badge" :class="hasDependencyProblem(settingsTarget.manifest.id) ? 'warn' : 'accent'">
             {{ readyDependencyCount(settingsTarget.manifest.id) }}/{{ dependenciesFor(settingsTarget.manifest.id).length }}
           </span>
           <ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" />
@@ -413,6 +413,7 @@ const busyID = ref("");
 
 const resolverPluginID = "official.nonebot-plugin-resolver-go";
 const sandboxedBrowserPluginID = "official.sandboxed-browser-renderer";
+const groupRelationsPluginID = "group_relations";
 const repositoryWatchPluginID = "official.repository-watch";
 const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
@@ -427,7 +428,9 @@ const permissionsTarget = ref<PluginState | null>(null);
 const dependencyHints: Record<string, string> = {
   [resolverPluginID]: "缺少这些命令时，对应平台的解析会失败；可直接在这里安装。",
   [sandboxedBrowserPluginID]:
-    "没有可用的浏览器时，网页渲染会在用到的那一刻才失败；可直接在这里安装。浏览器体积不小，安装会比其它依赖慢一些。"
+    "这里会执行一次真实的本地截图，不再只检查 Chrome 是否安装。浏览器体积不小，安装会比其它依赖慢一些。",
+  [groupRelationsPluginID]:
+    "关系图有直接字体渲染和浏览器截图两条路径；至少一条检测通过即可正常出图。"
 };
 
 function dependenciesFor(pluginID: string): ResolverDependency[] {
@@ -440,6 +443,11 @@ function readyDependencyCount(pluginID: string): number {
 
 function missingDependencyCount(pluginID: string): number {
   return dependenciesFor(pluginID).length - readyDependencyCount(pluginID);
+}
+
+function hasDependencyProblem(pluginID: string): boolean {
+  if (pluginID === groupRelationsPluginID) return readyDependencyCount(pluginID) === 0;
+  return missingDependencyCount(pluginID) > 0;
 }
 
 function dependencyHint(pluginID: string): string {
