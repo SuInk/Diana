@@ -1209,6 +1209,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.ChatInChance = groupCfg.ChatInChance
 	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
 	cfg.NaturalInterjectionEnabled = copyBoolPointer(groupCfg.NaturalInterjectionEnabled)
+	cfg.SocialReplyEnabled = copyBoolPointer(groupCfg.SocialReplyEnabled)
 	if groupResponseModeOverridden {
 		cfg.ResponseMode.apply(&cfg)
 	}
@@ -2105,7 +2106,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn),
+			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
 		},
 		routeUserMessage,
 	}
@@ -2545,10 +2546,24 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 	return configured + "\n\n" + runtimeGuard
 }
 
+// socialReplyGuard 是「被点名的社交性搭话也回一句」打开之后追加的规则。
+//
+// 默认提示词第 5 条把「纯情绪反应」和结束性确认一起划进不用回，对助手型机器人是
+// 对的：没人问问题，接一句只是噪音。但陪聊型人设不是这样——群友说一句「笨笨」
+// 「你好可爱」，人设装死才是出戏的那个。线上原话就是这个形状：directed_at_bot
+// 为 true、answerable 为 true，只有 substantive 是 false，于是判成 none。
+//
+// 放行只放这一种：确实是冲着机器人来的。别人之间的闲聊、要机器人闭嘴、以及
+// 已经回过的同一轮，都不在里面——这条不是把闸门拆了，是给闸门开一扇小门。
+const socialReplyGuard = `当前机器人开启了社交性回应：群友直接对机器人打招呼、道别、夸奖、调侃或给出轻微评价（例如“笨笨”“你好可爱”“早”“又胡说八道了”），即使没有具体问题、也没有可核实的新信息，也算需要回应——使用 category=bot_related、directed_at_bot=true、answerable=true、should_reply=true，回一句简短的应答即可，不必找信息量。这一条不放宽其它任何判断：不是对机器人说的话、群友之间的闲聊、要求机器人别再说话或安静的消息，以及同一轮里已经回过的内容，仍然一律保持沉默。`
+
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
-// 器反复给出一个运行时必然拒绝的结论。
-func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings) string {
+// 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
+func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
 	prompt := proactiveReplyRouterSystemPrompt(configured)
+	if social {
+		prompt += "\n\n" + socialReplyGuard
+	}
 	if chatIn.Natural {
 		return prompt + "\n\n当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
 	}
