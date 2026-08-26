@@ -117,13 +117,15 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if runEvent.Phase != agent.RunPhaseModelCompleted {
 			toolOutput := runEvent.ToolOutput
 			toolInput := runEvent.ToolInput
-			if runError != "" && toolOutput == "" {
-				toolOutput = "ERROR: " + runError
-			}
 			if runEvent.Tool == dianaOneBotV11ToolName {
 				toolInput, toolOutput = sanitizeOneBotV11DebugToolCall(toolInput, toolOutput)
 			} else if runEvent.Tool == dianaRepositoryIssuesToolName {
 				toolInput, toolOutput = sanitizeRepositoryIssuesDebugToolCall(toolInput, toolOutput)
+			}
+			// 报错文本要补在脱敏之后：上面那层挡的是工具载荷，而错误信息不是载荷，
+			// 挡掉它只会让追踪里少一行、多一句「输出已省略」。
+			if runError != "" && strings.TrimSpace(toolOutput) == "" {
+				toolOutput = "ERROR: " + runError
 			}
 			r.recordDebugTrace(debugTraceFromContext(ctx), "Agent 调用链更新", map[string]any{
 				"phase":           "agent_" + string(runEvent.Phase),
@@ -153,6 +155,11 @@ func sanitizeOneBotV11DebugToolCall(input map[string]any, output string) (map[st
 		"action":     action,
 		"param_keys": sortedMapKeys(params),
 	}
+	// 还没有输出就别说「输出已省略」。调用开始和调用完成是同一次调用的两条记录，
+	// 开始那条的输出必然是空的，写上占位串会让人以为结果被挡掉了——实际是还没有。
+	if strings.TrimSpace(output) == "" {
+		return redactedInput, ""
+	}
 	return redactedInput, "[OneBot v11 tool output omitted]"
 }
 
@@ -176,6 +183,10 @@ func sanitizeRepositoryIssuesDebugToolCall(input map[string]any, output string) 
 // 固定失败文案不含任何用户内容，全挡掉的结果是排查时一片空白——写操作被闸门
 // 拒绝时，追踪里连「为什么被拒」都看不到。
 func repositoryIssueDebugOutcome(output string) string {
+	// 同上：调用开始那条还没有输出，占位串会被误读成「结果被挡掉了」。
+	if strings.TrimSpace(output) == "" {
+		return ""
+	}
 	var result struct {
 		OK                   bool   `json:"ok"`
 		Operation            string `json:"operation"`

@@ -203,3 +203,22 @@ func TestRepositoryIssueDebugOutcomeFallsBackOnUnparsableOutput(t *testing.T) {
 		t.Fatalf("解析不了的输出必须整体挡掉，实际 %q", got)
 	}
 }
+
+// 调用开始和调用完成是同一次调用的两条记录，开始那条的工具输出必然是空的。脱敏
+// 层此前不分青红皂白地写上「输出已省略」，界面上就多出一个「工具结果」框，看起来
+// 像结果被挡掉了——实际是还没有结果。
+func TestDebugToolCallSanitizersLeaveMissingOutputEmpty(t *testing.T) {
+	if got := repositoryIssueDebugOutcome(""); got != "" {
+		t.Fatalf("没有输出时不该给占位串：%q", got)
+	}
+	if got := repositoryIssueDebugOutcome("   "); got != "" {
+		t.Fatalf("空白输出不该给占位串：%q", got)
+	}
+	if _, got := sanitizeOneBotV11DebugToolCall(map[string]any{"action": "send_msg"}, ""); got != "" {
+		t.Fatalf("没有输出时不该给占位串：%q", got)
+	}
+	// 真的有输出时照旧挡住。
+	if _, got := sanitizeOneBotV11DebugToolCall(map[string]any{"action": "send_msg"}, `{"ok":true}`); got == "" {
+		t.Fatal("有输出时必须挡住")
+	}
+}
