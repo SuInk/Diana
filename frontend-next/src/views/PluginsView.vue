@@ -521,7 +521,7 @@ const repositoryManagedKeys = new Set([
 ]);
 const githubTokenSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => spec.key === "github_token"));
 // 通知相关的设置按这个顺序排；跟评开关排第一，它是最常被找的那个。
-const githubNotifyKeys = ["ask_agent", "template_header", "summary_commit_limit"];
+const githubNotifyKeys = ["ask_agent", "follow_up_include_patch", "template_header", "summary_commit_limit"];
 const githubGeneralSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key)));
 const githubNotifySpecs = computed<PluginSettingSpec[]>(() =>
   githubNotifyKeys

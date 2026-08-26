@@ -9830,7 +9830,10 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
-	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigest(change))
+	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigestWithPatch(
+		change,
+		settings.Bool(repositoryWatchSettingPatch, false),
+	))
 	return startedAt, nil
 }
 
@@ -10029,9 +10032,13 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 // 通知正文只有标题和链接，模型据此写跟评就只能围着标题措辞打转——标题还常常是过期的。
 // 给它一份「动了哪些文件、各自加删多少行」的清单，它才说得出具体的话。
 //
-// 只要清单，不要 patch 正文：跟评是一句话的感想，读几千字的 diff 正文也用不上，
-// 白占预算。这份资料只进提示词，不进任何发出去的正文。
+// 文件概览始终提供；用户明确允许时，再附经过文件数、hunk 数、字符数和上下文窗口
+// 四层预算裁剪的 patch。参考资料只进提示词，不进任何发出去的正文。
 func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
+	return renderRepositoryWatchDiffDigestWithPatch(change, false)
+}
+
+func renderRepositoryWatchDiffDigestWithPatch(change repositoryWatchChange, includePatch bool) string {
 	sections := make([]string, 0, 4)
 	if change.CommitDiff != nil {
 		if body := renderRepositoryWatchDiffFiles(change.CommitDiff.Files, change.CommitDiff.FilesTruncated); body != "" {
@@ -10048,7 +10055,15 @@ func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
 	if len(sections) == 0 {
 		return ""
 	}
-	return truncateRunes(strings.Join(sections, "\n\n"), repositoryWatchDiffDigestRunes)
+	overview := truncateRunes(strings.Join(sections, "\n\n"), repositoryWatchDiffDigestRunes)
+	if !includePatch {
+		return overview
+	}
+	patch := renderRepositoryWatchPatchDigest(change)
+	if patch == "" {
+		return overview
+	}
+	return overview + "\n\n" + patch
 }
 
 func renderRepositoryWatchDiffFiles(files []repositoryWatchDiffFile, truncated bool) string {
