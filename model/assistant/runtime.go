@@ -3339,9 +3339,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
 		currentText += "\n\n【图片上下文提示】" + notice
 	}
-	currentMessage, currentImagesComplete := llmMessageFromEventWithVideoFramesDetailed(ctx, messageEvent, currentText, contextImageURLs)
-	if !currentImagesComplete {
-		return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more current images could not be encoded")})
+	currentMessage, currentImageFailures := llmMessageFromEventWithVideoFramesDiagnostics(ctx, messageEvent, currentText, contextImageURLs)
+	if len(currentImageFailures) > 0 {
+		return "", newImageMediaUnavailableError(currentImageFailures)
 	}
 	if r.plugins != nil {
 		_, settings, enabled := r.plugins.PluginWithSettings(voiceSTTPluginID, r.pluginOverridesForEvent(event))
@@ -7054,6 +7054,11 @@ func llmMessageFromEventWithVideoFrames(ctx context.Context, event MessageEvent,
 }
 
 func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
+	message, failures := llmMessageFromEventWithVideoFramesDiagnostics(ctx, event, text, extraImageURLs)
+	return message, len(failures) == 0
+}
+
+func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
 	videoURLs := videoSourceCandidates(event.Segments)
 	cachedFrames := cachedVideoFrameURLs(event.Segments)
 	quotedVideo := false
@@ -7090,7 +7095,7 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 		}
 	}
 	extraImageURLs = append(extraImageURLs, frames...)
-	return llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
+	return llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
 }
 
 // videoFailureReason 补上兜底文案：拿不到具体原因时也不能把这句写成空的，
@@ -7140,24 +7145,34 @@ func llmMessageFromEventWithImagesForContext(ctx context.Context, event MessageE
 }
 
 func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
+	message, failures := llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
+	return message, len(failures) == 0
+}
+
+func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
 	text = strings.TrimSpace(text)
 	imageURLs := ImageURLs(event.Segments)
 	if event.Quoted != nil {
 		imageURLs = append(imageURLs, ImageURLs(event.Quoted.Segments)...)
 	}
 	imageURLs = append(imageURLs, extraImageURLs...)
-	var complete bool
-	imageURLs, complete = loadLLMImageURLs(ctx, imageURLs)
-	imageURLs = dedupeStrings(imageURLs)
+	imageGroups, failures := loadLLMImageURLGroupsDetailed(ctx, imageURLs)
+	imageGroups = dedupeLLMImageGroups(imageGroups)
+	sourceImageCount := len(imageGroups)
+	imageURLs = flattenLLMImageGroups(imageGroups)
+	expandedLongImages := len(imageURLs) > sourceImageCount
 	if len(imageURLs) == 0 {
-		return llm.Message{Role: llm.RoleUser, Content: text}, complete
+		return llm.Message{Role: llm.RoleUser, Content: text}, failures
 	}
 	if imageOnlyPrompt(text, event) {
-		if len(imageURLs) == 1 {
+		if sourceImageCount == 1 {
 			text = "用户发送了一张图片，请根据图片内容回答。"
 		} else {
-			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", len(imageURLs))
+			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", sourceImageCount)
 		}
+	}
+	if expandedLongImages {
+		text += "\n\n【长图处理】部分超长图片已按“完整总览 → 沿长边顺序切片”展开；相邻切片有重叠，请按收到顺序阅读并合并重复内容。"
 	}
 	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
 	if text != "" {
@@ -7166,7 +7181,7 @@ func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event 
 	for _, imageURL := range imageURLs {
 		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
 	}
-	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, complete
+	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, failures
 }
 
 func hasKnownResolverPlatformURL(event MessageEvent, text string) bool {
