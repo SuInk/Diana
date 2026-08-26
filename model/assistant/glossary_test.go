@@ -213,6 +213,45 @@ func TestGlossaryContextInjectsMatchedEntries(t *testing.T) {
 	}
 }
 
+func TestProactiveRouterReceivesMatchedGlossaryContext(t *testing.T) {
+	store := newMemoryGlossaryStore()
+	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.98,"category":"needs_response","target_message_id":"m1","turn_message_ids":["m1"],"directed_at_bot":false,"answerable":true,"substantive":true,"requests_response":true,"blocker":"none","reason":"词典说明 zgm 是公开询问在干嘛"}`}
+	runtime := NewRuntime(BotConfig{
+		OwnerID: "10001", BotAccount: "10000", ProactiveReplyThreshold: 0.9, ProactiveReplyChance: 1,
+	}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetGlossaryStore(store)
+	if _, _, err := store.UpsertGlossaryEntry(context.Background(), GlossaryUpsertRequest{
+		ScopeKey: "group:20002", Term: "zgm", Meaning: "在干嘛，用于随口询问对方正在做什么", Now: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	event := glossaryTestEvent("10005", "zgm")
+	if !runtime.shouldHandleProactiveReply(context.Background(), event, "zgm") {
+		t.Fatal("known glossary question was not allowed by proactive routing")
+	}
+	request := provider.requestSnapshot()
+	if len(request.Messages) < 2 {
+		t.Fatalf("router request = %#v", request.Messages)
+	}
+	payload := request.Messages[1].Content
+	for _, want := range []string{`"glossary_context"`, "zgm", "在干嘛"} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("router payload missing %q: %s", want, payload)
+		}
+	}
+	prompt := request.Messages[0].Content
+	for _, want := range []string{"glossary_context", "不能再称它为未解释缩写", "zgm=在干嘛"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("router prompt missing %q: %s", want, prompt)
+		}
+	}
+	if len(store.touched) != 0 {
+		t.Fatalf("routing lookup changed glossary usage counts: %#v", store.touched)
+	}
+}
+
 // 没有存储层时词典整体静默失效，回复照常。
 func TestGlossaryContextEmptyWithoutStore(t *testing.T) {
 	runtime := newGlossaryRuntime(t, nil)
