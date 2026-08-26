@@ -543,8 +543,13 @@
                 />
               </div>
               <div v-if="admissionMode === 'whitelist'" class="field wide">
-                <label for="bot-allowed-groups">工作群白名单（逗号分隔群号）</label>
-                <input id="bot-allowed-groups" v-model="allowedGroupsDraft" class="input" placeholder="123456789,987654321" />
+                <label for="bot-allowed-groups">工作群白名单</label>
+                <IdChipInput
+                  input-id="bot-allowed-groups"
+                  v-model="allowedGroups"
+                  placeholder="填群号后回车"
+                  :resolve-names="resolveGroupNames"
+                />
                 <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
               </div>
               <div class="field wide">
@@ -1020,11 +1025,13 @@ import {
   deletePersona,
   importPersonas,
   PERSONA_EXPORT_VERSION,
-  type Persona
+  type Persona,
+  listBotGroups
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
+import IdChipInput from "../components/IdChipInput.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { pushStatusSnapshot, stream } from "../stream";
 import { askConfirm } from "../confirm";
@@ -1043,7 +1050,7 @@ const tokenDraft = ref("");
 const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const allowlistDraft = ref("");
-const allowedGroupsDraft = ref("");
+const allowedGroups = ref<string[]>([]);
 const telegramTokenDraft = ref("");
 // 三个凭据输入框共用一套「查看」状态：key 是字段名，值表示当前是否明文显示。
 const tokenRevealed = ref<Record<TokenField, boolean>>({
@@ -1907,7 +1914,7 @@ function setForm(config: BotProfileConfig): void {
   };
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
-  allowedGroupsDraft.value = (config.group_admission?.allowed_groups ?? []).join(",");
+  allowedGroups.value = [...(config.group_admission?.allowed_groups ?? [])];
   telegramTokenDraft.value = "";
   tokenDraft.value = "";
   bridgeTokenDraft.value = "";
@@ -1923,6 +1930,29 @@ function setForm(config: BotProfileConfig): void {
 function applyConfig(config: BotProfileConfig): void {
   profileSet.value = config;
   setForm(config);
+}
+
+// 群名只在白名单里有群号时才需要，所以群列表懒加载一次就缓存住：
+// 这个页面平时不该为一个可能不显示的字段多发一次请求。
+// 拿不到（listBotGroups 本来就可能不可用）就退回只显示群号，不报错。
+let groupNamesCache: Promise<Record<string, string>> | null = null;
+
+function resolveGroupNames(ids: string[]): Promise<Record<string, string>> {
+  groupNamesCache ??= listBotGroups().then((response) => {
+    const names: Record<string, string> = {};
+    for (const group of response.groups ?? []) {
+      const name = (group.group_name ?? "").trim();
+      if (group.group_id && name !== "") names[group.group_id] = name;
+    }
+    return names;
+  });
+  return groupNamesCache.then((names) => {
+    const picked: Record<string, string> = {};
+    for (const id of ids) {
+      if (names[id]) picked[id] = names[id];
+    }
+    return picked;
+  });
 }
 
 function splitList(raw: string): string[] {
@@ -2057,7 +2087,7 @@ async function save(): Promise<void> {
         : defaultRecallReplyAutoDeleteDelaySeconds,
       group_admission: {
         mode: admissionMode.value,
-        allowed_groups: splitList(allowedGroupsDraft.value)
+        allowed_groups: [...allowedGroups.value]
       },
       model_roles: modelRoles
     };
