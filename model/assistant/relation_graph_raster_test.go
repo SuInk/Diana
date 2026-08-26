@@ -5,8 +5,11 @@ package assistant
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"image"
 	"image/png"
+	"strings"
 	"testing"
 )
 
@@ -135,5 +138,45 @@ func TestCJKFontRejectsFontsWithoutGlyphs(t *testing.T) {
 	}
 	if !fontHasCJKGlyphs(font) {
 		t.Fatalf("挑中的字体 %s 画不了中文", path)
+	}
+}
+
+// TestRelationGraphRespectsBrowserPlugin 浏览器归「网页渲染」插件管：插件停用了，
+// 关系图不能绕过去自己起一个浏览器。
+//
+// 之前这条路完全不看插件状态——用户在插件页把它关掉，关系图照样起 Chrome，那个
+// 开关就是假的。现在纯 Go 那条路能出图，认这个开关也不至于没图。
+func TestRelationGraphRespectsBrowserPlugin(t *testing.T) {
+	// 空的插件管理器里那个插件没装，等于停用。
+	off := NewRuntime(DefaultBotConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	if off.sandboxedBrowserEnabled(MessageEvent{Kind: EventKindGroup, GroupID: "g"}) {
+		t.Fatal("插件没装却报告浏览器可用")
+	}
+	on := NewRuntime(DefaultBotConfig(), nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	if !on.sandboxedBrowserEnabled(MessageEvent{Kind: EventKindGroup, GroupID: "g"}) {
+		t.Fatal("默认插件集里「网页渲染」应当是启用的")
+	}
+	var nilRuntime *Runtime
+	if nilRuntime.sandboxedBrowserEnabled(MessageEvent{}) {
+		t.Fatal("空 runtime 不该报告浏览器可用")
+	}
+}
+
+// TestRelationRenderFailureMessageNamesTheRealBlocker 失败文案要说对该去修什么。
+func TestRelationRenderFailureMessageNamesTheRealBlocker(t *testing.T) {
+	rasterErr := errors.New("没有找到能画中文的字体文件")
+
+	disabled := relationRenderFailureMessage(context.Background(), false,
+		rasterErr, errors.New("「网页渲染」插件没有启用，不能起浏览器"))
+	if !strings.Contains(disabled, "「网页渲染」") || !strings.Contains(disabled, "插件页") {
+		t.Fatalf("插件关着时没有指向插件页：%s", disabled)
+	}
+	// 插件关着就别提装浏览器：装了也不会被用，那是把人往错的方向指。
+	if strings.Contains(disabled, "装一个中文字体或一个 Chrome") {
+		t.Fatalf("插件关着却让人去装浏览器：%s", disabled)
+	}
+	// 两边的原因都要在，只说一句「画不出来」等于什么都没说。
+	if !strings.Contains(disabled, "没有找到能画中文的字体文件") {
+		t.Fatalf("没有带上直接渲染那条路的原因：%s", disabled)
 	}
 }

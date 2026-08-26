@@ -1239,6 +1239,19 @@ func (r *Runtime) groupConfigForEvent(event MessageEvent) (GroupConfig, bool) {
 	return groupCfg.WithDefaults(event.GroupID, base), true
 }
 
+// sandboxedBrowserEnabled 说明这个会话现在能不能起浏览器。
+//
+// 浏览器不是谁想用就自己去起的东西：它是「网页渲染」插件的运行依赖，装没装、装在
+// 哪、缺了怎么一键补，全挂在那个插件名下（见 browserDependencyGroup）。插件被停用
+// 就是「这台机器不许起浏览器」，任何要用浏览器的功能都得认这个开关，否则插件页上
+// 那个关掉的开关是假的。
+func (r *Runtime) sandboxedBrowserEnabled(event MessageEvent) bool {
+	if r == nil || r.plugins == nil {
+		return false
+	}
+	return r.plugins.EnabledWithOverrides(sandboxedBrowserPluginID, r.pluginOverridesForEvent(event))
+}
+
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
