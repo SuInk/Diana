@@ -119,11 +119,9 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 		Timeout: time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
 	})
 	if err != nil {
-		// 渲染要靠无头浏览器，部署里没有就明确说出来，别让模型编一句「已发送」。
-		// 具体错误进 Detail：是找不到可执行文件、超时，还是浏览器自己报错，
-		// 三种的处理方式完全不同。
+		// 渲染要靠无头浏览器，失败了就明确说出来，别让模型编一句「已发送」。
 		result := dianaGroupRelationsResult{
-			Message:      "画不出来：这台机器上没有可用的无头浏览器（关系图靠它把图渲染成图片）。",
+			Message:      relationRenderFailureMessage(ctx, err),
 			Range:        rangeID,
 			Participants: graph.Participants,
 			Messages:     graph.Messages,
@@ -151,6 +149,40 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 // recordRelationsOutcome 把这次画图的结果写进运行记录。
 //
 // agentRunObserver 已经无条件记下了「工具调用完成」，但这个工具的几种失败——没有
+// relationRenderFailureMessage 按实际卡住的环节说话。
+//
+// 这里原来一律回「这台机器上没有可用的无头浏览器」，可渲染失败有三种方式——找不到
+// 可执行文件、渲染超时、浏览器自己报错——只有第一种才是「没有浏览器」。装了浏览器的
+// 机器上看到那句话，人只会跑去查一个根本没问题的东西，而真正的原因（超时、崩溃、
+// 缺依赖库）还留在事件记录里没人看。
+//
+// 所以先探一次活：探不到就照实说探测结果，探得到就承认浏览器在、是这次渲染没成，
+// 并把原始错误带上。
+func relationRenderFailureMessage(ctx context.Context, renderErr error) string {
+	if status := agent.ProbeHeadlessBrowser(ctx, ""); !status.Available {
+		detail := strings.TrimSpace(status.Detail)
+		if detail == "" {
+			detail = "没有找到可用的无头浏览器"
+		}
+		return "画不出来：" + detail + "（关系图靠无头浏览器把图渲染成图片）。"
+	}
+	detail := strings.TrimSpace(firstLineOf(renderErr.Error()))
+	if detail == "" {
+		detail = "浏览器没有产出图片"
+	}
+	return "画不出来：浏览器是能跑的，但这次渲染没成——" + detail + "。"
+}
+
+// firstLineOf 只取错误的第一行：浏览器的报错常常拖着一整屏堆栈，群里发不下。
+func firstLineOf(value string) string {
+	for _, line := range strings.Split(value, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // 无头浏览器、这段时间没人说话——都是正常返回的 ok:false，在那条记录里和成功长得
 // 一模一样。而「这台机器没装浏览器」正是生产里最可能撞上的那个，看不见就只能靠
 // 群里没出图去猜。

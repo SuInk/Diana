@@ -276,3 +276,43 @@ func writeExecutable(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+// TestHeadlessBrowserExecutableHonoursEnvironment 盯住三条路径认同一份浏览器配置。
+//
+// 环境变量原先只写在 SandboxedBrowserConfig 的默认值里，于是只有网页渲染认得它；
+// 截图和可用性探测走 findHeadlessBrowserExecutable 这条入口，读不到。浏览器装在
+// 非标准路径、靠环境变量指过去的机器上，症状就是网页渲染能用、关系图却报「这台
+// 机器上没有可用的无头浏览器」。
+func TestHeadlessBrowserExecutableHonoursEnvironment(t *testing.T) {
+	fake := filepath.Join(t.TempDir(), "fake-chrome")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho fake\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DIANA_HEADLESS_BROWSER_EXECUTABLE", fake)
+	got, err := findHeadlessBrowserExecutable("")
+	if err != nil || got != fake {
+		t.Fatalf("findHeadlessBrowserExecutable(\"\") = %q, %v，想要 %q", got, err, fake)
+	}
+
+	// 另一个环境变量名同样认。
+	t.Setenv("DIANA_HEADLESS_BROWSER_EXECUTABLE", "")
+	t.Setenv("DIANA_AGENT_BROWSER_EXECUTABLE", fake)
+	if got, err := findHeadlessBrowserExecutable(""); err != nil || got != fake {
+		t.Fatalf("备用环境变量没生效：%q, %v", got, err)
+	}
+
+	// 显式传进来的路径优先：环境变量只是兜底，不能反过来盖掉调用方的选择。
+	other := filepath.Join(t.TempDir(), "explicit-chrome")
+	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := findHeadlessBrowserExecutable(other); err != nil || got != other {
+		t.Fatalf("显式路径被环境变量盖掉了：%q, %v", got, err)
+	}
+
+	// 探测走的是同一个入口，结论必须跟着一致。
+	if status := ProbeHeadlessBrowser(context.Background(), ""); status.Path != fake {
+		t.Fatalf("探测没有认环境变量：%#v", status)
+	}
+}

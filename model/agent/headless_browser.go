@@ -126,12 +126,6 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 }
 
 func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBrowserConfig {
-	if strings.TrimSpace(cfg.Executable) == "" {
-		cfg.Executable = firstNonEmptyString(
-			os.Getenv("DIANA_HEADLESS_BROWSER_EXECUTABLE"),
-			os.Getenv("DIANA_AGENT_BROWSER_EXECUTABLE"),
-		)
-	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_TIMEOUT_MS", defaultHeadlessBrowserTimeout)
 	}
@@ -248,8 +242,20 @@ func firstNonEmptyLine(value string) string {
 	return ""
 }
 
+// findHeadlessBrowserExecutable 解析浏览器可执行文件。三条路径共用它：网页渲染、
+// 截图和可用性探测。
+//
+// 环境变量的兜底必须在这里，不能只写在 SandboxedBrowserConfig 的默认值里——那样
+// 只有网页渲染认得它，截图和探测走的是另一条入口。浏览器装在非标准路径、靠环境
+// 变量指过去的机器上，症状就是网页渲染能用，关系图却报「这台机器上没有浏览器」。
 func findHeadlessBrowserExecutable(configured string) (string, error) {
 	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		configured = firstNonEmptyString(
+			os.Getenv("DIANA_HEADLESS_BROWSER_EXECUTABLE"),
+			os.Getenv("DIANA_AGENT_BROWSER_EXECUTABLE"),
+		)
+	}
 	if configured != "" {
 		if info, err := os.Stat(configured); err == nil && !info.IsDir() {
 			return configured, nil
