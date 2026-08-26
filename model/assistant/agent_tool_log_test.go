@@ -137,7 +137,7 @@ func TestAgentRunObserverRedactsOneBotV11DebugPayload(t *testing.T) {
 	}
 }
 
-func TestAgentRunObserverRedactsRepositoryIssueDebugPayload(t *testing.T) {
+func TestAgentRunObserverRedactsRepositoryIssueRequestPayload(t *testing.T) {
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(BotConfig{DebugModeEnabled: true}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
@@ -155,13 +155,20 @@ func TestAgentRunObserverRedactsRepositoryIssueDebugPayload(t *testing.T) {
 		t.Fatalf("entries = %#v", entries)
 	}
 	operation, debug := entries[0], entries[1]
-	for _, entry := range entries {
-		encoded := fmt.Sprintf("%#v", entry)
-		for _, secret := range []string{"private title", "owner-secret"} {
-			if strings.Contains(encoded, secret) {
-				t.Fatalf("repository issue log leaked %q: %#v", secret, entry)
-			}
-		}
+	// 常规运行日志一直在写，跟「调试追踪」开关无关，它必须一个字都不带。
+	if encoded := fmt.Sprintf("%#v", operation); strings.Contains(encoded, "private title") || strings.Contains(encoded, "owner-secret") {
+		t.Fatalf("常规运行日志泄漏了内容：%#v", operation)
+	}
+	// 调试追踪里工具结果会给摘要（标题在内），但请求参数仍然只留键名：正文和凭据
+	// 都在参数里，那份不能出去。
+	if encoded := fmt.Sprintf("%#v", debug.Metadata["tool_input"]); strings.Contains(encoded, "private title") || strings.Contains(encoded, "owner-secret") {
+		t.Fatalf("调试追踪泄漏了请求参数值：%#v", debug.Metadata["tool_input"])
+	}
+	if strings.Contains(fmt.Sprintf("%#v", debug), "owner-secret") {
+		t.Fatalf("调试追踪泄漏了凭据：%#v", debug)
+	}
+	if !strings.Contains(debug.Metadata["tool_output"].(string), "private title") {
+		t.Fatalf("工具结果摘要里应该看得到标题：%#v", debug.Metadata["tool_output"])
 	}
 	if operation.Detail != "[repository issue tool error omitted]" {
 		t.Fatalf("operation detail = %q", operation.Detail)
@@ -179,22 +186,58 @@ func TestAgentRunObserverRedactsRepositoryIssueDebugPayload(t *testing.T) {
 	if !strings.Contains(output, `"ok":true`) {
 		t.Fatalf("tool_output 里没有状态字段：%q", output)
 	}
-	if !strings.Contains(output, "issue 正文已省略") {
-		t.Fatalf("tool_output 没有标注正文已省略：%q", output)
+	if !strings.Contains(output, `"number":12`) {
+		t.Fatalf("tool_output 里没有条目摘要：%q", output)
 	}
 }
 
 func TestRepositoryIssueDebugOutcomeSurfacesFailureCode(t *testing.T) {
 	// 写操作被闸门拒绝时，追踪里必须看得出是哪一道闸——此前一律只有
 	// 「output omitted」，排查时完全是黑箱。
-	output := repositoryIssueDebugOutcome(`{"ok":false,"operation":"create","failure_code":"explicit_fields_required","message":"创建 Issue 时，当前用户消息必须包含要发布的 title 内容。","issue":{"title":"private title"}}`)
+	output := repositoryIssueDebugOutcome(`{"ok":false,"operation":"create","failure_code":"explicit_fields_required","message":"创建 Issue 时，当前用户消息必须包含要发布的 title 内容。"}`)
 	for _, want := range []string{`"ok":false`, "explicit_fields_required", "必须包含要发布的 title 内容"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("追踪里缺少 %q：%s", want, output)
 		}
 	}
-	if strings.Contains(output, "private title") {
-		t.Fatalf("追踪泄漏了 Issue 标题：%s", output)
+}
+
+// 只报「共找到 2 条草稿」等于没记：看得见有两条，看不出是哪两条。摘要要能认出条目，
+// 正文截断但标出总字数。
+func TestRepositoryIssueDebugOutcomeSummarizesItemsAndDrafts(t *testing.T) {
+	body := strings.Repeat("正文", 200)
+	output := repositoryIssueDebugOutcome(`{"ok":true,"operation":"list_drafts","outcome":"listed","message":"共找到 1 条 Issue 草稿。","drafts":[{"id":"draft-1","title":"分条把反问粘上来了","status":"pending","body":"` + body + `"}]}`)
+	for _, want := range []string{"draft-1", "分条把反问粘上来了", "pending", `"body_chars":400`} {
+		if !strings.Contains(output, want) {
+			t.Errorf("摘要里缺少 %q：%s", want, output)
+		}
+	}
+	// 正文截到 120 字，不是整篇抄进日志。
+	if strings.Contains(output, body) {
+		t.Fatalf("正文没有截断：%s", output)
+	}
+
+	issues := repositoryIssueDebugOutcome(`{"ok":true,"operation":"list","outcome":"listed","items":[{"number":236,"title":"关系图不用浏览器也能画","state":"open","url":"https://example.invalid/236"}]}`)
+	for _, want := range []string{`"number":236`, "关系图不用浏览器也能画", "open", "example.invalid/236"} {
+		if !strings.Contains(issues, want) {
+			t.Errorf("摘要里缺少 %q：%s", want, issues)
+		}
+	}
+}
+
+// 条数多的时候只列前几条，剩下的报个数——一次列几十条 Issue 全抄进去，这一步的
+// 记录就没法读了。
+func TestRepositoryIssueDebugOutcomeCapsListedItems(t *testing.T) {
+	items := make([]string, 0, 9)
+	for index := 1; index <= 9; index++ {
+		items = append(items, fmt.Sprintf(`{"number":%d,"title":"第 %d 条","state":"open"}`, index, index))
+	}
+	output := repositoryIssueDebugOutcome(`{"ok":true,"operation":"list","outcome":"listed","items":[` + strings.Join(items, ",") + `]}`)
+	if !strings.Contains(output, `"items_not_listed":4`) {
+		t.Fatalf("没有报出被省略的条数：%s", output)
+	}
+	if strings.Contains(output, "第 6 条") {
+		t.Fatalf("超出上限的条目仍被列出：%s", output)
 	}
 }
 
