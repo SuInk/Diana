@@ -57,6 +57,20 @@ func detachFollowUpContext(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(context.WithoutCancel(ctx), followUpTimeout)
 }
 
+// sendFollowUp 投递所有由模型生成的自然跟评。插件跟评紧接当前消息，沿用普通聊天
+// 的引用与 @ 规则；仓库订阅跟评是过了一段时间主动找订阅者，只在第一条强制 @，
+// 不引用创建订阅时的旧消息。两类都经 sendDecorated 进入自然分条和回复批次队列。
+func (r *Runtime) sendFollowUp(ctx context.Context, kind followUpKind, event MessageEvent, text string) error {
+	if kind == followUpKindRepositoryWatch {
+		_, err := r.sendDecorated(ctx, event, text, outboundDecoration{
+			MentionUserID: strings.TrimSpace(event.UserID),
+			MentionAlways: true,
+		})
+		return err
+	}
+	return r.send(ctx, event, text)
+}
+
 // followUpInstruction 是两个入口共用的那一段跟评要求。
 //
 // notice 是刚刚实际送达的正文。直接附上正文，不依赖异步历史写回，确保链接
