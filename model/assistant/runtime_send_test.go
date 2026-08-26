@@ -21,6 +21,36 @@ type scriptedChannel struct {
 	apiErr    error
 }
 
+type replyBatchChannel struct {
+	mu        sync.Mutex
+	sent      []string
+	firstSent chan struct{}
+	firstOnce sync.Once
+}
+
+func (*replyBatchChannel) Connect(context.Context, EventHandler) error { return nil }
+func (*replyBatchChannel) Close() error                                { return nil }
+func (*replyBatchChannel) Status() ChannelStatus                       { return ChannelStatus{} }
+func (*replyBatchChannel) CallAPI(context.Context, string, map[string]any) (map[string]any, error) {
+	return nil, nil
+}
+
+func (c *replyBatchChannel) Send(_ context.Context, msg OutgoingMessage) error {
+	c.mu.Lock()
+	c.sent = append(c.sent, msg.Text)
+	c.mu.Unlock()
+	if msg.Text == "A1" {
+		c.firstOnce.Do(func() { close(c.firstSent) })
+	}
+	return nil
+}
+
+func (c *replyBatchChannel) snapshot() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.sent...)
+}
+
 // Connect 封装当前模块的 Connect 逻辑。
 func (*scriptedChannel) Connect(context.Context, EventHandler) error { return nil }
 
@@ -113,6 +143,65 @@ func TestSendOnlyFirstChunkCarriesReplyAndAt(t *testing.T) {
 	}
 	if second.ReplyMessageID != "" || second.MentionUserID != "" {
 		t.Fatalf("second chunk should not @ again: %#v", second)
+	}
+}
+
+func TestReplyBatchesDoNotInterleaveWithinSession(t *testing.T) {
+	channel := &replyBatchChannel{firstSent: make(chan struct{})}
+	runtime := NewRuntime(BotConfig{SendChunkIntervalMS: 50}, channel, NewPluginManager(), nil, nil, nil, nil)
+	eventA := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "a"}
+	eventB := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10002", MessageID: "b"}
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- runtime.send(context.Background(), eventA, "A1"+notificationSplitMarker+"A2")
+	}()
+	<-channel.firstSent
+	go func() {
+		errCh <- runtime.send(context.Background(), eventB, "B1"+notificationSplitMarker+"B2")
+	}()
+	for range 2 {
+		if err := <-errCh; err != nil {
+			t.Fatalf("send() error = %v", err)
+		}
+	}
+
+	if got, want := strings.Join(channel.snapshot(), ","), "A1,A2,B1,B2"; got != want {
+		t.Fatalf("reply batches interleaved: got %s, want %s", got, want)
+	}
+	runtime.replyBatchMu.Lock()
+	defer runtime.replyBatchMu.Unlock()
+	if len(runtime.replyBatches) != 0 {
+		t.Fatalf("completed reply batch gates were not cleaned up: %#v", runtime.replyBatches)
+	}
+}
+
+func TestReplyBatchesRemainConcurrentAcrossSessions(t *testing.T) {
+	channel := &replyBatchChannel{firstSent: make(chan struct{})}
+	runtime := NewRuntime(BotConfig{SendChunkIntervalMS: 200}, channel, NewPluginManager(), nil, nil, nil, nil)
+	eventA := MessageEvent{Kind: EventKindGroup, GroupID: "group-a", UserID: "10001", MessageID: "a"}
+	eventB := MessageEvent{Kind: EventKindGroup, GroupID: "group-b", UserID: "10002", MessageID: "b"}
+
+	aDone := make(chan error, 1)
+	go func() {
+		aDone <- runtime.send(context.Background(), eventA, "A1"+notificationSplitMarker+"A2")
+	}()
+	<-channel.firstSent
+	bDone := make(chan error, 1)
+	go func() {
+		bDone <- runtime.send(context.Background(), eventB, "B1")
+	}()
+
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("second session delivery failed: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("unrelated sessions were serialized behind one global reply batch")
+	}
+	if err := <-aDone; err != nil {
+		t.Fatalf("first session delivery failed: %v", err)
 	}
 }
 
