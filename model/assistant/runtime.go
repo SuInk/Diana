@@ -11076,20 +11076,18 @@ func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReply
 	return out
 }
 
-// replySentenceSplitRunes 是按句号分条的起始长度。短回复不动：两句话的短回复本来
-// 就是一条消息（「端口被占了。先 lsof 看看是谁占着。」拆开反而不像人说话）。
-const replySentenceSplitRunes = 60
-
 // splitLineIntoSentences 把一行按句号分成几次发言，一句一条。
 //
 // 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
 // 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界，一个句子就是一次
 // 发言。条数由上层的 MaxBubbles 兜着，分出来太多就整层退回。
+//
+// 这里曾经有个 60 字的起步门槛，短行整条留着。它防的是「端口被占了。先 lsof 看看
+// 是谁占着。」被拆成两条，但那两条本来就是真人会连发的样子；而门槛真正拦下来的是
+// 一批四五十字、两三句话的回复——恰恰是最该分开发的长度。上层的条数上限已经在管
+// 刷屏了，这道门槛只是把短回复排除在外，去掉。
 func splitLineIntoSentences(line string) []string {
 	runes := []rune(line)
-	if len(runes) <= replySentenceSplitRunes {
-		return []string{line}
-	}
 	ends := boundaryPositions(runes, isSentenceEnd)
 	if len(ends) == 0 {
 		return []string{line}

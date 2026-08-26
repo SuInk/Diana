@@ -132,15 +132,27 @@ func TestChatReplySplitsUnbrokenParagraphBySentence(t *testing.T) {
 	}
 }
 
-// 短回复不动：两句话的短回复本来就是一条消息，拆开反而不像人说话。
-func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
+// 一句话就是一条消息：句子内部的逗号顿号不分条，末尾那个句号也不算边界。
+func TestChatReplyKeepsSingleSentenceRepliesWhole(t *testing.T) {
 	for _, reply := range []string{
-		"端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。",
 		"辛苦了，早点睡吧。",
+		"先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程",
 	} {
 		if chunks := splitChatReply(reply, chatSplitLimits{}); len(chunks) != 1 {
-			t.Fatalf("短回复被拆开了：%#v", chunks)
+			t.Fatalf("单句被拆开了：%#v", chunks)
 		}
+	}
+}
+
+// 按句号分条曾经有个 60 字的起步门槛，短行整条留着。它拦下来的是一批四五十字、
+// 两三句话的回复——恰恰是最该分开发的长度。
+func TestChatReplySplitsShortMultiSentenceReplies(t *testing.T) {
+	chunks := splitChatReply("端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。", chatSplitLimits{})
+	if len(chunks) != 2 {
+		t.Fatalf("两句话应该分成两条：%#v", chunks)
+	}
+	if chunks[0] != "端口被占了" {
+		t.Fatalf("分条位置不对：%#v", chunks)
 	}
 }
 
