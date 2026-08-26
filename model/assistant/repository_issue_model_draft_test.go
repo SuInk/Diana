@@ -224,6 +224,17 @@ func TestListDraftsCarriesConfirmationCode(t *testing.T) {
 	if drafted.Draft.ConfirmationCode != code {
 		t.Fatalf("建草稿时没带确认码：%#v", drafted.Draft)
 	}
+	// 「确认码要发出去」和「确认码只能由用户自己打出来」是两件事。原先合成一句
+	// 「不要替用户说出确认码」，模型可以读成「别把确认码说出来」，于是真的不发，
+	// 管理员无从确认。文案必须明确要求写进回复。
+	if !strings.Contains(drafted.Message, code) || !strings.Contains(drafted.Message, "写进这次回复") {
+		t.Fatalf("建草稿文案没有要求把确认码发出去：%q", drafted.Message)
+	}
+	for _, message := range []string{drafted.Message} {
+		if strings.Contains(message, "不要替用户说出确认码") {
+			t.Fatalf("文案仍然含有会被读成「别说出确认码」的措辞：%q", message)
+		}
+	}
 
 	listed := runRepositoryPublishToolOnce(t, toolFor("看看有哪些草稿"), map[string]any{"operation": "list_drafts"})
 	if len(listed.Drafts) != 1 {
@@ -232,9 +243,12 @@ func TestListDraftsCarriesConfirmationCode(t *testing.T) {
 	if listed.Drafts[0].ConfirmationCode != code {
 		t.Fatalf("草稿列表里没有确认码：%#v", listed.Drafts[0])
 	}
-	// 光把码放进载荷不够，还得让模型知道要复述它。
-	if !strings.Contains(listed.Message, "confirmation_code") {
-		t.Fatalf("列表文案没有要求复述确认码：%q", listed.Message)
+	// 光把码放进载荷不够，还得让模型知道要把它写进回复。
+	if !strings.Contains(listed.Message, "confirmation_code") || !strings.Contains(listed.Message, "原样写进回复") {
+		t.Fatalf("列表文案没有要求把确认码发出去：%q", listed.Message)
+	}
+	if strings.Contains(listed.Message, "不要替用户说出确认码") {
+		t.Fatalf("列表文案仍然含有会被读成「别说出确认码」的措辞：%q", listed.Message)
 	}
 
 	// 已经提交过的草稿不再给确认码：报一个码只会让人以为还能确认。

@@ -216,7 +216,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `搜索和管理 GitHub Issues。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，对方明确同意再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `搜索和管理 GitHub Issues。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -903,9 +903,14 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 	}
 	result.OK = true
 	result.Outcome = "draft_pending"
+	// 这段文案里「确认码要发出去」和「确认码只能由用户自己打出来」是两件事，必须
+	// 分开说清楚。原先写的是「不要替用户说出确认码」——本意是别代替用户完成确认，
+	// 但模型完全可以读成「别把确认码说出来」，于是它真的不发，管理员无从确认，
+	// 整条审批链路就断在这里。
 	result.Message = fmt.Sprintf(
-		"草稿已生成，尚未写入 GitHub。把将要写入的内容原样告诉用户，并请有权限的人回复确认码 %s；"+
-			"收到之后再用 operation=approve 和这个 draft_id 执行。不要替用户说出确认码。",
+		"草稿已生成，尚未写入 GitHub。把将要写入的内容原样告诉用户，并把确认码 %s 单独成行写进这次回复里——"+
+			"不发出来对方就没法确认。然后等有权限的人自己把这个码打出来，收到之后再用 operation=approve "+
+			"和这个 draft_id 执行；在那之前不要调用 approve，也不要当作对方已经确认过。",
 		repositoryIssueConfirmationCode(draft.ID))
 	result.RequiresApproval = true
 	result.Draft = repositoryIssueDraftViewFromDraft(draft)
@@ -1033,8 +1038,9 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 	// 只报条数等于没报：用户看完列表还是不知道拿什么去确认。待审批的草稿必须连
 	// confirmation_code 一起复述，否则这条链路到列表这一步就断了。
 	result.Message = fmt.Sprintf(
-		"共找到 %d 条 Issue 草稿。逐条把标题和内容复述给用户；待审批的草稿要一并报出它的 confirmation_code，"+
-			"并说明由有权限的人原样回复该确认码才会提交。不要替用户说出确认码。", len(drafts))
+		"共找到 %d 条 Issue 草稿。逐条把标题和内容复述给用户；待审批的草稿要把它的 confirmation_code 原样写进回复——"+
+			"不发出来对方就没法确认。说明由有权限的人自己打出该确认码才会提交；在那之前不要调用 approve，"+
+			"也不要当作对方已经确认过。", len(drafts))
 	result.Drafts = make([]repositoryIssueDraftView, 0, len(drafts))
 	for _, draft := range drafts {
 		result.Drafts = append(result.Drafts, *repositoryIssueDraftViewFromDraft(draft))
