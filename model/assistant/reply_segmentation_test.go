@@ -69,6 +69,23 @@ func TestChatReplySplitsShortRepliesOnNaturalLines(t *testing.T) {
 	}
 }
 
+// 行首的提及是投递信息，不是「标签：内容」。它里面那个冒号不能和正文里另一行的
+// 冒号凑成两条结构化行，否则整段会被误判成清单，模型给出的换行也就不再分条。
+func TestChatReplyMentionDoesNotTurnProseIntoStructuredBlock(t *testing.T) {
+	replies := []string{
+		"[diana-at:10002] 你说得对，刚才我没核实就顺着“设备名称不能改”接话了，确实是在传播假消息喵\n" +
+			"这张图已经直接说明设备名称可以改，甚至你都改成“垃圾华为”了喵\n" +
+			"所以正确说法是：HarmonyOS 这里的设备名称能改，不能拿它当作小尾巴或蓝牙设备名是否可改的证据喵",
+		"[CQ:at,qq=10002] 第一层结论\n第二层解释\n所以正确说法是：第三层结论",
+	}
+	for _, reply := range replies {
+		chunks := splitChatReply(reply, chatSplitLimits{})
+		if len(chunks) != 3 {
+			t.Fatalf("带提及的三行普通回复没有自然分条：%#v", chunks)
+		}
+	}
+}
+
 // 有界才敢认换行：清单、逐项打分、折了行的半句话，这些里的换行仍然只是排版。
 // 当年「空行分条」被删掉就是因为无界——分条位置全看模型的排版习惯。
 func TestChatReplyKeepsBlocksTogether(t *testing.T) {
@@ -79,6 +96,7 @@ func TestChatReplyKeepsBlocksTogether(t *testing.T) {
 		{"编号清单", "1. 先看 dmesg\n2. 再看 journalctl\n3. 最后查内存"},
 		{"项目符号", "- 第一项\n- 第二项"},
 		{"逐项打分", "画面：8 分\n剧情：6 分"},
+		{"提及后的逐项打分", "[diana-at:10002] 画面：8 分\n剧情：6 分"},
 		{"折行的半句话", "端口被占了，\n先看看是谁占着"},
 		{"单行", "端口被占了，先 lsof -i:8080 看看"},
 	}

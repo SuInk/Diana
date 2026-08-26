@@ -11090,6 +11090,7 @@ func endsMidSentence(line string) bool {
 // isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」
 // 这种逐项打分常用的写法。
 func isStructuredReplyLine(line string) bool {
+	line = stripLeadingReplyDecorationsForStructure(line)
 	if line == "" {
 		return false
 	}
@@ -11119,6 +11120,36 @@ func isStructuredReplyLine(line string) bool {
 		return strings.TrimSpace(string(runes[index+1:])) != ""
 	}
 	return false
+}
+
+// stripLeadingReplyDecorationsForStructure 去掉行首只负责投递的引用和提及标记。
+// 结构化识别看的是用户最终读到的正文；把 [diana-at:...] 或 [CQ:at,...] 里的冒号
+// 当成「短标签：内容」，会让一段普通的多行回复误判成清单，从而堵掉自然分条。
+func stripLeadingReplyDecorationsForStructure(line string) string {
+	for {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return ""
+		}
+		if _, rest, ok := extractOutgoingReplyMarker(line); ok {
+			line = rest
+			continue
+		}
+		if bounds := dianaMentionMarkerPattern.FindStringIndex(line); bounds != nil && bounds[0] == 0 {
+			line = line[bounds[1]:]
+			continue
+		}
+		if strings.HasPrefix(line, "[CQ:") {
+			if end := strings.IndexByte(line, ']'); end > 4 {
+				segment := parseCQSegment(line[4:end])
+				if segment.Type == "at" || segment.Type == "reply" {
+					line = line[end+1:]
+					continue
+				}
+			}
+		}
+		return line
+	}
 }
 
 // structuredReplyLabelMaxRunes 限制标签长度，避免把「今天想说的是：……」这种
