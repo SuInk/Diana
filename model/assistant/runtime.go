@@ -348,6 +348,8 @@ type Runtime struct {
 	proactiveBatches      map[string]*proactiveReplyBatch
 	proactiveBatchWindow  time.Duration
 	proactiveBatchMaxWait time.Duration
+	replyBatchMu          sync.Mutex
+	replyBatches          map[string]*replyBatchGate
 	unavailableGroupMu    sync.RWMutex
 	unavailableGroups     map[string]unavailableGroupSend
 	outboundDeliveryMu    sync.Mutex
@@ -528,6 +530,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		proactiveBatches:      map[string]*proactiveReplyBatch{},
 		proactiveBatchWindow:  defaultProactiveReplyBatchWindow,
 		proactiveBatchMaxWait: defaultProactiveReplyBatchMaxWait,
+		replyBatches:          map[string]*replyBatchGate{},
 		unavailableGroups:     map[string]unavailableGroupSend{},
 		outboundDeliveries:    map[string]*groupOutboundDelivery{},
 		historyImageDescRun:   map[string]struct{}{},
@@ -7671,6 +7674,9 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
+	releaseBatch := r.lockReplyBatch(event)
+	defer releaseBatch()
+
 	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
