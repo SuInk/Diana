@@ -11,7 +11,7 @@ import (
 )
 
 // 提示词告诉模型「原样复制别名，本地代理会在执行工具前自动恢复真实标识」。以前只
-// 还原了回复正文，别名原封不动地进了工具，提醒工具收到 qq_user_xxx 只能报「必须是
+// 还原了回复正文，别名原封不动地进了工具，提醒工具收到 im_user_xxx 只能报「必须是
 // 有效 QQ 号」。工具参数必须一起还原。
 func TestIdentityPrivacyRestoresToolCallArguments(t *testing.T) {
 	scope := newIdentityPrivacyScope()
