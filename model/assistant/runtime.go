@@ -3568,7 +3568,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	if comment == "" {
 		return
 	}
-	if err := r.send(ctx, event, comment); err != nil {
+	if err := r.sendFollowUp(ctx, followUpKindPlugin, event, comment); err != nil {
 		r.recordFollowUpFailure(ctx, followUpKindPlugin, source, "send", err)
 	}
 }
@@ -7754,17 +7754,6 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 	return err
 }
 
-// sendSubscriberComment 投递订阅事实卡片之后由模型生成的自然跟评。它是聊天发言，
-// 换行和句号要进入自然分条；但它又是过了一段时间主动找订阅者，所以第一条仍要 @，
-// 且不能引用当初创建订阅的旧消息。事实卡片本身继续走 sendNotification。
-func (r *Runtime) sendSubscriberComment(ctx context.Context, event MessageEvent, text string) error {
-	_, err := r.sendDecorated(ctx, event, text, outboundDecoration{
-		MentionUserID: strings.TrimSpace(event.UserID),
-		MentionAlways: true,
-	})
-	return err
-}
-
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
@@ -10029,7 +10018,7 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 		if comment == "" {
 			continue
 		}
-		if err := r.sendSubscriberComment(ctx, target, comment); err != nil {
+		if err := r.sendFollowUp(ctx, followUpKindRepositoryWatch, target, comment); err != nil {
 			r.recordFollowUpFailure(ctx, followUpKindRepositoryWatch, target, "send", err)
 		}
 	}
