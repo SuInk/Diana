@@ -11,6 +11,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -10927,57 +10928,123 @@ func chatReplySegments(reply string, limits chatSplitLimits) []string {
 	return mergeChatSegmentsToLimit(reply, limits)
 }
 
-// mergeChatSegmentsToLimit 按行分好之后，把相邻的短段并到不超过条数上限为止。
+// mergeChatSegmentsToLimit 按行分好之后，把相邻的段并到条数上限之内，并且让并出来的
+// 几条长度尽量接近。
 //
-// 合并只在同一个 <dianabr> 块内部进行：块与块之间是模型明说要断开的地方，合并跨过去
-// 就是把它的话改了。所以标记块本身多于上限时，就按标记发，允许超——那是模型要求的
-// 条数，不是运行时猜出来的。
+// 「挑最短的那对并掉」也能压进上限，但压出来的结果很难看：长段各自独立、碎段全堆在
+// 一处，八段并成五条会得到一条两百字加四条十来个字。均分才是「最多五条」该有的样子。
+//
+// 合并只在同一个 <dianabr> 块内部进行：块之间是模型明说要断开的地方，跨过去就是把
+// 它的话改了。所以标记块本身多于上限时，就按标记发，允许超——那是模型要求的条数，
+// 不是运行时猜出来的。
 func mergeChatSegmentsToLimit(reply string, limits chatSplitLimits) []string {
 	blocks := make([][]string, 0, 4)
-	total := 0
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		lines := splitReplyLines(part)
-		blocks = append(blocks, lines)
-		total += len(lines)
+		blocks = append(blocks, splitReplyLines(part))
+	}
+	if len(blocks) == 0 {
+		return nil
 	}
 
-	for total > limits.MaxBubbles {
-		blockIndex, lineIndex := shortestAdjacentPair(blocks)
-		if blockIndex < 0 {
-			// 每个块都只剩一段了，再合就要跨过 <dianabr>。停在这里。
-			break
-		}
-		block := blocks[blockIndex]
-		// 并起来的两段本来就是同一条消息里的排版，用换行接回去。
-		merged := append(block[:lineIndex:lineIndex], block[lineIndex]+"\n"+block[lineIndex+1])
-		blocks[blockIndex] = append(merged, block[lineIndex+2:]...)
-		total--
-	}
-
-	out := make([]string, 0, total)
-	for _, block := range blocks {
-		out = append(out, block...)
+	quotas := allocateBubbleQuota(blocks, limits.MaxBubbles)
+	out := make([]string, 0, limits.MaxBubbles)
+	for index, block := range blocks {
+		out = append(out, balanceSegments(block, quotas[index])...)
 	}
 	return out
 }
 
-// shortestAdjacentPair 找出合起来最短的那对相邻段，返回它所在的块和起始下标。
-// 没有任何块还剩两段以上时返回 -1。
-func shortestAdjacentPair(blocks [][]string) (int, int) {
-	bestBlock, bestLine, bestLength := -1, -1, 0
-	for blockIndex, block := range blocks {
-		for lineIndex := 0; lineIndex+1 < len(block); lineIndex++ {
-			length := len([]rune(block[lineIndex])) + len([]rune(block[lineIndex+1]))
-			if bestBlock < 0 || length < bestLength {
-				bestBlock, bestLine, bestLength = blockIndex, lineIndex, length
+// allocateBubbleQuota 把条数名额分给各个 <dianabr> 块。
+//
+// 每块至少一条——块与块之间不能合并，少给了也没法压。剩下的名额一个一个发，每次发给
+// 「当前平均每条最长」的那块：它是眼下最挤的，多一条收益最大。块内段数用完就封顶，
+// 名额转给别人。
+func allocateBubbleQuota(blocks [][]string, limit int) []int {
+	quotas := make([]int, len(blocks))
+	weights := make([]int, len(blocks))
+	for index, block := range blocks {
+		quotas[index] = 1
+		for _, line := range block {
+			weights[index] += len([]rune(line))
+		}
+	}
+	for remaining := limit - len(blocks); remaining > 0; remaining-- {
+		best, bestLoad := -1, 0
+		for index, block := range blocks {
+			if quotas[index] >= len(block) {
+				continue
+			}
+			if load := weights[index] / quotas[index]; best < 0 || load > bestLoad {
+				best, bestLoad = index, load
+			}
+		}
+		if best < 0 {
+			// 每块都已经一段一条，再多的名额没处放。
+			break
+		}
+		quotas[best]++
+	}
+	return quotas
+}
+
+// balanceSegments 把若干段连续地并成 count 条，让最长的那条尽量短。
+//
+// 就是「连续分割数组、最小化最大子段和」那道题：段的顺序不能动（那是话的顺序），
+// 只能选在哪几个缝隙上断开。段数最多几十、条数最多个位数，直接 DP。
+func balanceSegments(lines []string, count int) []string {
+	if count >= len(lines) {
+		return lines
+	}
+	if count <= 1 {
+		return []string{strings.Join(lines, "\n")}
+	}
+
+	lengths := make([]int, len(lines)+1)
+	for index, line := range lines {
+		lengths[index+1] = lengths[index] + len([]rune(line))
+	}
+	span := func(from, to int) int { return lengths[to] - lengths[from] }
+
+	// best[j][i]：前 i 段分成 j 条时，最长那条的最小值。split 记住最后一刀切在哪。
+	const unreachable = math.MaxInt32
+	best := make([][]int, count+1)
+	split := make([][]int, count+1)
+	for j := range best {
+		best[j] = make([]int, len(lines)+1)
+		split[j] = make([]int, len(lines)+1)
+		for i := range best[j] {
+			best[j][i] = unreachable
+		}
+	}
+	best[0][0] = 0
+	for j := 1; j <= count; j++ {
+		for i := j; i <= len(lines); i++ {
+			for cut := j - 1; cut < i; cut++ {
+				if best[j-1][cut] == unreachable {
+					continue
+				}
+				candidate := max(best[j-1][cut], span(cut, i))
+				if candidate < best[j][i] {
+					best[j][i], split[j][i] = candidate, cut
+				}
 			}
 		}
 	}
-	return bestBlock, bestLine
+
+	cuts := make([]int, count+1)
+	cuts[count] = len(lines)
+	for j := count; j >= 1; j-- {
+		cuts[j-1] = split[j][cuts[j]]
+	}
+	out := make([]string, 0, count)
+	for j := 1; j <= count; j++ {
+		out = append(out, strings.Join(lines[cuts[j-1]:cuts[j]], "\n"))
+	}
+	return out
 }
 
 func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {

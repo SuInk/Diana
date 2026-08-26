@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"slices"
 	"strings"
 	"testing"
 )
@@ -364,15 +363,85 @@ func TestOverLimitRepliesMergeInsteadOfCollapsing(t *testing.T) {
 	if len(got) != 5 {
 		t.Fatalf("切成了 %d 条，想要 5 条：%q", len(got), got)
 	}
-	// 被并起来的必须是那两个短的，长段各自独立。
-	merged := "短的甲\n短的乙"
-	if !slices.Contains(got, merged) {
-		t.Fatalf("没有把最短的相邻两段并起来：%q", got)
+	// 均分的目标是「最长那条尽量短」。段本身长短悬殊时做不到几条一样长——那是数据
+	// 的性质，不是算法没做好——所以断言的是最优性：暴力枚举所有切法，没有更好的。
+	lines := strings.Split(reply, "\n")
+	if got, want := longestChunkRunes(got), bruteForceMinimalLongest(lines, 5); got != want {
+		t.Fatalf("最长那条是 %d 字，最优解是 %d 字", got, want)
 	}
-	for _, chunk := range got {
-		if strings.Count(chunk, "这是一段挺长的话") > 6 {
-			t.Fatalf("长段被并到一起了：%q", chunk)
+	// 顺序不能动：那是话的顺序。
+	if !strings.HasPrefix(got[0], "这是一段挺长的话") || !strings.HasSuffix(got[len(got)-1], "四") {
+		t.Fatalf("段的顺序被打乱了：%q", got)
+	}
+}
+
+func longestChunkRunes(chunks []string) int {
+	longest := 0
+	for _, chunk := range chunks {
+		if length := len([]rune(chunk)); length > longest {
+			longest = length
 		}
+	}
+	return longest
+}
+
+// bruteForceMinimalLongest 枚举所有把 lines 连续切成 count 段的方式，返回其中
+// 「最长一段」的最小值。段数小的时候够用，专门用来验证 DP 没有偷工。
+func bruteForceMinimalLongest(lines []string, count int) int {
+	best := -1
+	var walk func(start, remaining, longest int)
+	walk = func(start, remaining, longest int) {
+		if remaining == 1 {
+			// 剩下的全归最后一段，中间的换行也要算进长度。
+			length := len([]rune(strings.Join(lines[start:], "\n")))
+			if length > longest {
+				longest = length
+			}
+			if best < 0 || longest < best {
+				best = longest
+			}
+			return
+		}
+		for end := start + 1; end <= len(lines)-remaining+1; end++ {
+			length := len([]rune(strings.Join(lines[start:end], "\n")))
+			next := longest
+			if length > next {
+				next = length
+			}
+			walk(end, remaining-1, next)
+		}
+	}
+	walk(0, count, 0)
+	return best
+}
+
+// TestBalanceSegmentsMinimisesTheLongestBubble 均分的目标是「最长那条尽量短」，
+// 而不是「每条段数一样多」：段本身长短不一，按段数均分照样会分出一条巨长的。
+func TestBalanceSegmentsMinimisesTheLongestBubble(t *testing.T) {
+	lines := []string{"一二三四五六七八九十", "甲", "乙", "丙", "丁"}
+	got := balanceSegments(lines, 2)
+	if len(got) != 2 {
+		t.Fatalf("分成了 %d 条：%q", len(got), got)
+	}
+	// 按段数均分会切成 2+3（10 字 vs 4 字）；按长度均分应当把长的那段单独留一条。
+	if got[0] != "一二三四五六七八九十" {
+		t.Fatalf("长段没有单独成条：%q", got)
+	}
+	if got[1] != "甲\n乙\n丙\n丁" {
+		t.Fatalf("剩下的没有并成一条：%q", got)
+	}
+}
+
+// TestBubbleQuotaFavoursTheCrowdedBlock 名额先保证每块一条，剩下的给最挤的那块。
+func TestBubbleQuotaFavoursTheCrowdedBlock(t *testing.T) {
+	crowded := []string{"很长的一段话很长的一段话", "很长的一段话很长的一段话", "很长的一段话很长的一段话"}
+	small := []string{"短"}
+	quotas := allocateBubbleQuota([][]string{crowded, small}, 4)
+	if quotas[1] != 1 {
+		t.Fatalf("只有一段的块拿了 %d 个名额，应当封顶在 1", quotas[1])
+	}
+	if quotas[0] != 3 {
+		t.Fatalf("拥挤的块只拿到 %d 个名额，剩余名额应当都给它", quotas[0])
 	}
 }
 
