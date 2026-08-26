@@ -161,6 +161,77 @@ LIMIT ?
 	return reversed, nil
 }
 
+// ListRecentStickerEvents provides the sticker plugin's bounded, read-only history view.
+// Shared mode stays inside one context namespace or bot profile. It needs no sticker-specific
+// table because image segments are already durable.
+func (s *SQLiteStore) ListRecentStickerEvents(ctx context.Context, query assistant.StickerHistoryQuery) ([]assistant.MessageEvent, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	query.Session = strings.TrimSpace(query.Session)
+	query.ContextNamespace = strings.TrimSpace(query.ContextNamespace)
+	query.ProfileID = strings.TrimSpace(query.ProfileID)
+	limit := normalizeMessageHistoryLimit(query.Limit)
+	where := "session = ?"
+	args := []any{query.Session}
+	if query.ShareGroups || query.SharePrivate {
+		switch {
+		case query.ContextNamespace != "":
+			where = `session LIKE ? ESCAPE '\'`
+			args = []any{escapeMessageHistoryLike(query.ContextNamespace+":") + "%"}
+		case query.ProfileID != "":
+			where = "profile_id = ?"
+			args = []any{query.ProfileID}
+		default:
+			where = "1 = 1"
+			args = nil
+		}
+		scopeParts := []string{"session = ?"}
+		args = append(args, query.Session)
+		if query.ShareGroups {
+			scopeParts = append(scopeParts, "kind = ?")
+			args = append(args, string(assistant.EventKindGroup))
+		}
+		if query.SharePrivate {
+			scopeParts = append(scopeParts, "kind = ?")
+			args = append(args, string(assistant.EventKindPrivate))
+		}
+		where += " AND (" + strings.Join(scopeParts, " OR ") + ")"
+	}
+	args = append(args, string(assistant.EventKindNotice), limit)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT payload
+FROM message_events
+WHERE `+where+` AND kind != ?
+ORDER BY event_time DESC, created_at DESC, id DESC
+LIMIT ?
+`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	reversed := make([]assistant.MessageEvent, 0, limit)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var event assistant.MessageEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, fmt.Errorf("decode sticker message event: %w", err)
+		}
+		reversed = append(reversed, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
+		reversed[left], reversed[right] = reversed[right], reversed[left]
+	}
+	return reversed, nil
+}
+
 // ListMessageEventsBetween returns the complete persisted timeline inside a
 // semantic time window. Callers are responsible for ranking a bounded set of
 // candidates before sending anything to an LLM.
