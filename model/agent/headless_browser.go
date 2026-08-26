@@ -105,24 +105,13 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 		return RenderedPage{}, err
 	}
 
-	root, err := os.MkdirTemp("", "diana-headless-browser-")
+	dirs, err := newBrowserSandboxDirs("diana-headless-browser-")
 	if err != nil {
 		return RenderedPage{}, err
 	}
-	defer os.RemoveAll(root)
-	if err := os.Chmod(root, 0o700); err != nil {
-		return RenderedPage{}, err
-	}
-	profileDir := filepath.Join(root, "profile")
-	cacheDir := filepath.Join(root, "cache")
-	crashDir := filepath.Join(root, "crash")
-	for _, dir := range []string{profileDir, cacheDir, crashDir} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return RenderedPage{}, err
-		}
-	}
+	defer dirs.remove()
 
-	return b.renderObservable(ctx, executable, root, profileDir, cacheDir, crashDir, rawURL)
+	return b.renderObservable(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, rawURL)
 }
 
 func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBrowserConfig {
@@ -307,11 +296,58 @@ func findHeadlessBrowserExecutable(configured string) (string, error) {
 	return "", errors.New("Chrome/Chromium executable was not found")
 }
 
-func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) []string {
+// sandboxedChromeBaseArgs 是两条渲染路径共用的沙盒加固参数：CDP 那条（网页渲染）
+// 和一次性截图那条（关系图）。
+//
+// 抽出来之前截图自己手抄了一份子集，抄漏的不只是重复代码——它没有
+// --host-resolver-rules，也就是说那条路没有把 localhost 和内网域名挡掉，加固强度
+// 和网页渲染不一样。同一个进程里跑的两个浏览器，沙盒不该有强弱之分。
+//
+// 只放两条路都成立的参数：带模式色彩的（远程调试端口、截图输出、窗口尺寸）留给
+// 各自的调用点追加。
+// browserSandboxDirs 是一次浏览器运行的临时目录组：整棵树只归这次运行，用完删掉。
+// 两条渲染路径都要它，别再各写一遍——目录权限（0700）和清理时机这种事，写错一次
+// 就是一个留在 /tmp 里的可读 profile。
+type browserSandboxDirs struct {
+	root    string
+	profile string
+	cache   string
+	crash   string
+}
+
+func newBrowserSandboxDirs(prefix string) (browserSandboxDirs, error) {
+	root, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		return browserSandboxDirs{}, err
+	}
+	dirs := browserSandboxDirs{
+		root:    root,
+		profile: filepath.Join(root, "profile"),
+		cache:   filepath.Join(root, "cache"),
+		crash:   filepath.Join(root, "crash"),
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		dirs.remove()
+		return browserSandboxDirs{}, err
+	}
+	for _, dir := range []string{dirs.profile, dirs.cache, dirs.crash} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			dirs.remove()
+			return browserSandboxDirs{}, err
+		}
+	}
+	return dirs, nil
+}
+
+func (d browserSandboxDirs) remove() {
+	if d.root != "" {
+		_ = os.RemoveAll(d.root)
+	}
+}
+
+func sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir string) []string {
 	return []string{
 		"--headless=new",
-		"--remote-debugging-address=127.0.0.1",
-		"--remote-debugging-port=0",
 		"--user-data-dir=" + profileDir,
 		"--disk-cache-dir=" + cacheDir,
 		"--crash-dumps-dir=" + crashDir,
@@ -336,9 +372,16 @@ func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBro
 		"--password-store=basic",
 		"--use-mock-keychain",
 		"--hide-scrollbars",
-		"--window-size=1280,960",
 		"--host-resolver-rules=MAP localhost ~NOTFOUND, MAP *.localhost ~NOTFOUND, MAP *.local ~NOTFOUND, MAP host.docker.internal ~NOTFOUND, MAP gateway.docker.internal ~NOTFOUND",
 	}
+}
+
+func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) []string {
+	return append(sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir),
+		"--remote-debugging-address=127.0.0.1",
+		"--remote-debugging-port=0",
+		"--window-size=1280,960",
+	)
 }
 
 func sandboxedBrowserEnvironment(current []string, root string) []string {
