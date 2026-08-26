@@ -267,6 +267,7 @@ const saving = ref(false);
 const busyID = ref("");
 const editing = ref(false);
 const editingTask = ref<AssistantTask | null>(null);
+const editorSnapshot = ref("");
 const form = ref(emptyForm());
 
 const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
@@ -309,7 +310,30 @@ function startCreate(): void {
   form.value = { ...emptyForm(), profile_id: profileID };
   editingTask.value = null;
   editing.value = true;
+  markEditorClean();
 }
+
+// 编辑器里的改动只存在于本地表单，关掉就没了；用打开时的快照判断有没有未保存内容。
+function markEditorClean(): void {
+  editorSnapshot.value = JSON.stringify(form.value);
+}
+
+function editorDirty(): boolean {
+  return editing.value && JSON.stringify(form.value) !== editorSnapshot.value;
+}
+
+async function confirmDiscardEditor(): Promise<boolean> {
+  if (!editorDirty()) return true;
+  return askConfirm({
+    title: "放弃未保存的仓库配置？",
+    message: "这个仓库的通知对象和监控设置还没保存，关闭后会丢失。",
+    confirmLabel: "放弃改动",
+    danger: true,
+  });
+}
+
+// 外层设置弹窗关闭时要把这里的未保存状态算进去，否则从弹窗右上角关掉会静默丢掉编辑器内容。
+defineExpose({ hasUnsavedChanges: editorDirty });
 
 // 凭据下拉：留空表示沿用公共 Token，与后端「未绑定就回落」的行为一致。
 const credentialOptions = computed(() => [
@@ -406,12 +430,15 @@ function startEdit(task: AssistantTask): void {
   const legacyTarget = task.group_id ? [{ destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ destination: "private" as const, user_id: task.user_id }] : [];
   form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? [])], issue_events: [...(task.watch_issue_events ?? [])], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
   editing.value = true;
+  markEditorClean();
 }
 
-function stopEditing(): void {
+async function stopEditing(): Promise<void> {
   if (saving.value) return;
+  if (!(await confirmDiscardEditor())) return;
   editing.value = false;
   editingTask.value = null;
+  editorSnapshot.value = "";
 }
 
 async function save(): Promise<void> {

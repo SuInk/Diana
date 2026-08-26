@@ -107,6 +107,7 @@ const profiles = ref<BotProfileConfig[]>([]);
 const joinedGroups = ref<BotGroupSummary[]>([]);
 const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref(false);
 const editingTask = ref<AssistantTask | null>(null);
+const editorSnapshot = ref("");
 const form = ref(emptyForm());
 const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
 const selectedProfile = computed(() => profiles.value.find((profile) => profile.id === form.value.profile_id));
@@ -120,9 +121,22 @@ async function load(): Promise<void> {
     if (!form.value.profile_id) form.value.profile_id = config.active_profile_id || profiles.value[0]?.id || "";
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅加载失败"); } finally { loading.value = false; }
 }
-function startCreate(): void { const profileID = form.value.profile_id || profiles.value[0]?.id || ""; form.value = { ...emptyForm(), profile_id: profileID }; editingTask.value = null; editing.value = true; }
-function startEdit(task: AssistantTask): void { editingTask.value = task; form.value = { source: task.feed_source ?? "rss", twitter_handle: task.feed_handle ?? "", feed_url: task.feed_url ?? "", judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" }; editing.value = true; }
-function stopEditing(): void { if (saving.value) return; editing.value = false; editingTask.value = null; }
+function startCreate(): void { const profileID = form.value.profile_id || profiles.value[0]?.id || ""; form.value = { ...emptyForm(), profile_id: profileID }; editingTask.value = null; editing.value = true; markEditorClean(); }
+
+// 和仓库编辑器同样的处理：改动只在本地表单里，关掉之前必须问一次。
+function markEditorClean(): void { editorSnapshot.value = JSON.stringify(form.value); }
+
+function editorDirty(): boolean { return editing.value && JSON.stringify(form.value) !== editorSnapshot.value; }
+
+defineExpose({ hasUnsavedChanges: editorDirty });
+function startEdit(task: AssistantTask): void { editingTask.value = task; form.value = { source: task.feed_source ?? "rss", twitter_handle: task.feed_handle ?? "", feed_url: task.feed_url ?? "", judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" }; editing.value = true; markEditorClean(); }
+async function stopEditing(): Promise<void> {
+  if (saving.value) return;
+  if (editorDirty() && !(await askConfirm({ title: "放弃未保存的订阅配置？", message: "这条 RSS 订阅的改动还没保存，关闭后会丢失。", confirmLabel: "放弃改动", danger: true }))) return;
+  editing.value = false;
+  editingTask.value = null;
+  editorSnapshot.value = "";
+}
 async function save(): Promise<void> {
   if (form.value.source === "twitter" && !form.value.twitter_handle) return toastError("请填写 Twitter 用户");
   if (form.value.source === "rss" && !form.value.feed_url) return toastError("请填写 Feed URL");
