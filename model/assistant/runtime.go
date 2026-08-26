@@ -8422,6 +8422,14 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 			return nil, errReplySuppressedBeforeSend
 		}
 	}
+	// 卡片里装的是站外搬进来的正文和昵称，一个字都没经过模型，
+	// auditReplyAccountSafety 看不见它们（见 outbound_forward_gate.go）。
+	//
+	// 放在这里而不是函数开头：上面那个抑制分支会带着新 ctx 重进本函数一次，
+	// 审核写在开头就会为同一张卡片跑两遍模型。
+	if auditErr := r.auditForwardNodesSafety(ctx, event, nodes); auditErr != nil {
+		return nil, auditErr
+	}
 	if err := r.interruptedReplyError(ctx, event); err != nil {
 		return nil, err
 	}
