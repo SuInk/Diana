@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -67,6 +68,30 @@ func TestRepositoryWatchFollowUpJudgesEachTargetSeparately(t *testing.T) {
 	}
 	if sent[0].GroupID != "g2" || sent[0].Text != "这不就是刚才说的那个" {
 		t.Fatalf("跟评发错了目标或内容：%#v", sent[0])
+	}
+}
+
+func TestRepositoryWatchFollowUpUsesNaturalChatSegmentation(t *testing.T) {
+	withFastSendTiming(t)
+	reply := "这次看起来是在把桌面端自动更新整套串起来喵，包含各平台的发布产物、更新提示和安装流程，Linux 还补了专门的应用逻辑喵\n" +
+		"范围不小，合并前最好重点过一遍更新包校验、版本匹配和失败回退这些边界喵"
+	runtime, channel, _ := repositoryWatchFollowUpRuntime(reply)
+	item := Reminder{Kind: ReminderKindRepositoryWatch, GroupID: "g1", UserID: "u1"}
+
+	runtime.maybeSendRepositoryWatchFollowUp(context.Background(), item, "GitHub 动态：SuInk/Diana", "")
+
+	sent := channel.sentSnapshot()
+	if len(sent) != 2 {
+		t.Fatalf("两段仓库跟评没有自然分条：%#v", sent)
+	}
+	if got := []string{sent[0].Text, sent[1].Text}; !reflect.DeepEqual(got, strings.Split(reply, "\n")) {
+		t.Fatalf("分条内容不对：%#v", got)
+	}
+	if sent[0].MentionUserID != "u1" || sent[1].MentionUserID != "" {
+		t.Fatalf("订阅者应只在第一条被 @：%#v", sent)
+	}
+	if sent[0].ReplyMessageID != "" || sent[1].ReplyMessageID != "" {
+		t.Fatalf("仓库跟评不应引用旧消息：%#v", sent)
 	}
 }
 
