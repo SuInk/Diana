@@ -297,6 +297,7 @@
       </div>
       <RepositoryWatchManager
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
+        ref="repositoryWatchRef"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
         :issue-enabled-repositories="issueEnabledRepositories"
@@ -332,6 +333,7 @@
       </div>
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
+        ref="rssWatchRef"
         :prepare-access="saveSettingsForSubscription"
       />
       <template #footer>
@@ -455,6 +457,8 @@ function dependencyHint(pluginID: string): string {
 }
 
 const settingsTarget = ref<PluginState | null>(null);
+const repositoryWatchRef = ref<{ hasUnsavedChanges: () => boolean } | null>(null);
+const rssWatchRef = ref<{ hasUnsavedChanges: () => boolean } | null>(null);
 // 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
 const settingsForm = ref<Record<string, any>>({});
 const repositoryPublishForm = ref<Record<string, any>>({});
@@ -746,6 +750,9 @@ function settingsSnapshot(): string {
 function settingsDirty(): boolean {
   if (Object.keys(credentialTokenDrafts.value).length > 0) return true;
   if (clearSecrets.value.length > 0) return true;
+  // 仓库编辑器的改动不在 settingsForm 里，漏掉它就会从弹窗右上角静默关掉一整屏配置。
+  if (repositoryWatchRef.value?.hasUnsavedChanges()) return true;
+  if (rssWatchRef.value?.hasUnsavedChanges()) return true;
   return settingsSnapshot() !== openedSnapshot.value;
 }
 
