@@ -1140,6 +1140,37 @@ export function installDownloadedSystemUpdate(): Promise<UpdateResult> {
 export interface UpdatePolicy {
 	auto_download: boolean;
 	auto_install: boolean;
+	/** 下载加速策略：auto（实测挑线路）、direct（始终直连）或一条具体的镜像地址。 */
+	github_mirror?: string;
+}
+
+export interface GitHubMirror {
+	name: string;
+	base_url: string;
+}
+
+export interface GitHubMirrorProbe {
+	name: string;
+	base_url?: string;
+	direct?: boolean;
+	ok: boolean;
+	latency_ms?: number;
+	error?: string;
+}
+
+export interface GitHubMirrorStatus {
+	mode: string;
+	mirrors: GitHubMirror[];
+	resolved?: string;
+	last_probe?: GitHubMirrorProbe[];
+}
+
+export function getUpdateMirrors(): Promise<GitHubMirrorStatus> {
+	return requestJSON<GitHubMirrorStatus>("/api/system/update/mirrors");
+}
+
+export function testUpdateMirrors(): Promise<GitHubMirrorStatus> {
+	return requestJSON<GitHubMirrorStatus>("/api/system/update/mirrors/test", { method: "POST" });
 }
 
 export function getUpdatePolicy(): Promise<UpdatePolicy> {
