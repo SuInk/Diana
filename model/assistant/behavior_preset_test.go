@@ -4,9 +4,11 @@
 package assistant
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -191,14 +193,22 @@ func TestDeliverySettingsAreConfigOnly(t *testing.T) {
 	}
 }
 
-func TestReplyStyleGroupmateNeverUsesForwardCard(t *testing.T) {
-	// 合并转发是机器人专属控件，真人不会这么发言。
-	if ReplyStyleGroupmate.allowsForwardReply() {
-		t.Fatal("groupmate style must not fold replies into a forward card")
-	}
-	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise} {
-		if !style.allowsForwardReply() {
-			t.Fatalf("style %q unexpectedly lost forward replies", style)
+// 卡片由阈值决定，跟风格无关。以前群友风格整条分支都被短路，「合并转发字数」
+// 填了不生效，长回复照样一口气刷十几条。
+func TestForwardCardAppliesToEveryStyle(t *testing.T) {
+	long := strings.Repeat("字", 1200)
+	chunks := []string{long}
+	for _, style := range []ReplyStyle{
+		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively,
+		ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl,
+	} {
+		cfg := BotConfig{ReplyStyle: style}.WithDefaults()
+		if !shouldUseForwardReply(long, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+			t.Fatalf("风格 %q 下 1200 字没有触发合并转发", style)
+		}
+		short := strings.Repeat("字", 100)
+		if shouldUseForwardReply(short, []string{short}, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+			t.Fatalf("风格 %q 下 100 字不该触发合并转发", style)
 		}
 	}
 }
@@ -230,9 +240,11 @@ func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
 	if casual.ReplyStyle.Normalized() != ReplyStyleGroupmate {
 		t.Fatalf("group-level style did not take effect: %#v", casual)
 	}
-	// 风格按群生效的是措辞和打字节奏，投递配置不归它管。
-	if casual.ReplyStyle.allowsForwardReply() {
-		t.Fatalf("group-level groupmate style should still refuse forward cards: %#v", casual)
+	// 风格按群生效的是措辞和打字节奏，投递配置不归它管——卡片阈值也一样，
+	// 群级换成群友风格不会把它关掉。
+	long := strings.Repeat("字", 1200)
+	if !shouldUseForwardReply(long, []string{long}, casual.ForwardReplyThreshold, casual.ForwardReplyChunkThreshold) {
+		t.Fatalf("群级群友风格把合并转发关掉了：%#v", casual)
 	}
 }
 
@@ -468,5 +480,51 @@ func TestDefaultPersonaVoiceForCatgirl(t *testing.T) {
 		if self, ends := DefaultPersonaVoice(style); self != "" || ends != "" {
 			t.Fatalf("%s 不该对自称和句尾有主张：%q %q", style, self, ends)
 		}
+	}
+}
+
+// 端到端：群友风格下的长回复现在也折成合并转发卡片，而不是刷一屏。
+//
+// 以前这里发的是十几条普通消息——风格把整条卡片分支短路掉了，「合并转发字数」
+// 填多少都没用。
+func TestRuntimeGroupmateLongReplyUsesForwardCard(t *testing.T) {
+	channel := &recordingChannel{}
+	long := strings.Repeat("刘翔在雅典夺冠那年的事说来话长喵。", 80) // 远超 900 字
+	botRuntime := NewRuntime(BotConfig{
+		GroupTriggers: []string{"Diana"},
+		BotAccount:    "42",
+		ReplyStyle:    ReplyStyleGroupmate,
+	}.WithDefaults(), channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return &capturingLLMProvider{reply: long}, nil
+	})
+
+	event := MessageEvent{
+		Kind:        EventKindGroup,
+		SelfID:      "42",
+		GroupID:     "123456",
+		UserID:      "10001",
+		MessageID:   "long-1",
+		SenderLevel: 40, SenderLevelLabel: "LV40",
+		RawMessage: "Diana 讲讲刘翔",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 讲讲刘翔"}}},
+	}
+	if err := botRuntime.HandleEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	// 等得比群友风格的打字停顿上限（5 秒）还宽：走卡片时会在停顿之前就返回，
+	// 所以正常路径是秒过；等这么久是为了万一退回散装时能数出条数，而不是超时
+	// 了事——「一条没发」和「刷了十几条」是两种完全不同的故障。
+	waitForCondition(t, 10*time.Second, func() bool {
+		return len(channel.callsSnapshot()) > 0 || len(channel.sentSnapshot()) > 0
+	})
+	calls := channel.callsSnapshot()
+	if len(calls) == 0 {
+		t.Fatalf("没有走合并转发，散装发了 %d 条", len(channel.sentSnapshot()))
+	}
+	if calls[0].action != "send_group_forward_msg" {
+		t.Fatalf("动作 = %q，期望 send_group_forward_msg", calls[0].action)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("走了卡片就不该再散装发：%#v", sent)
 	}
 }
