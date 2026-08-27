@@ -91,6 +91,9 @@
                只在例外时标注，第三方插件出现后这里才会有内容。 -->
           <span v-if="!plugin.manifest.official" class="badge warn">第三方</span>
           <span v-if="!plugin.manifest.built_in" class="badge">可卸载</span>
+          <!-- 别的内置插件装好就在跑，这张卡片的开关却是关的。不说一句，
+               看起来就像是它坏了。 -->
+          <span v-if="plugin.manifest.default_disabled" class="badge">默认关闭</span>
           <span class="badge mono">v{{ plugin.manifest.version }}</span>
         </div>
 
@@ -525,7 +528,7 @@ const repositoryManagedKeys = new Set([
 ]);
 const githubTokenSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => spec.key === "github_token"));
 // 通知相关的设置按这个顺序排；跟评开关排第一，它是最常被找的那个。
-const githubNotifyKeys = ["ask_agent", "template_header", "summary_commit_limit"];
+const githubNotifyKeys = ["ask_agent", "follow_up_include_patch", "template_header", "summary_commit_limit"];
 const githubGeneralSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key)));
 const githubNotifySpecs = computed<PluginSettingSpec[]>(() =>
   githubNotifyKeys

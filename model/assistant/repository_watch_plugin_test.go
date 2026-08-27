@@ -1459,7 +1459,7 @@ func TestRepositoryWatchManifestExposesConfigTabSettings(t *testing.T) {
 	for _, spec := range (&RepositoryWatchPlugin{}).Manifest().Settings {
 		specs[spec.Key] = spec
 	}
-	for _, key := range []string{pluginSettingAskAgent, repositoryWatchSettingTemplateHeader, repositoryWatchSettingLimit, repositoryWatchSettingTimeout, repositoryWatchSettingToken} {
+	for _, key := range []string{pluginSettingAskAgent, repositoryWatchSettingPatch, repositoryWatchSettingTemplateHeader, repositoryWatchSettingLimit, repositoryWatchSettingTimeout, repositoryWatchSettingToken} {
 		if _, ok := specs[key]; !ok {
 			t.Fatalf("missing setting spec %q", key)
 		}
