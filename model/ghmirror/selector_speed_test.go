@@ -271,3 +271,53 @@ func (p probeRouter) RoundTrip(req *http.Request) (*http.Response, error) {
 	routed.Header = req.Header.Clone()
 	return http.DefaultTransport.RoundTrip(routed)
 }
+
+// 握手都快到取整成 0 ms 时，直连不该被一次调度抖动踢掉。
+//
+// 这是个真的会发生的情形，不只是测试脆：LatencyMS 取整到毫秒，局域网镜像或者
+// 很近的 CDN 节点会让两条线路都落在 0～1 ms。只用倍数判断的话，0 的 1.5 倍还是
+// 0，直连多花的那 1 ms 就成了「慢一倍多」。
+//
+// 直接喂实测结果给挑选逻辑，不依赖真实计时——这个用例要么永远过要么永远挂，
+// 不能自己也是个偶发。
+func TestDirectSurvivesSubMillisecondJitter(t *testing.T) {
+	cases := []struct {
+		name       string
+		directMS   int64
+		mirrorMS   int64
+		wantDirect bool
+	}{
+		{"都取整成 0", 0, 0, true},
+		{"直连抖了 1 ms", 1, 0, true},
+		{"直连抖了 3 ms", 3, 0, true},
+		{"局域网镜像 vs 直连", 30, 1, true},
+		{"差在宽限之内", 60, 12, true},
+		// 宽限之外才谈倍数：120 > 12+50，且 120 > 12*1.5，镜像确实快得多。
+		{"镜像确实快得多", 120, 12, false},
+		// 宽限之外但倍数之内，仍然优待直连。
+		{"慢一点但没到 1.5 倍", 260, 200, true},
+	}
+	for _, tc := range cases {
+		results := []ProbeResult{
+			{Name: "直连 GitHub", Direct: true, OK: true, LatencyMS: tc.directMS},
+			{Name: "镜像", BaseURL: "https://mirror.invalid", OK: true, LatencyMS: tc.mirrorMS},
+		}
+		base := fastestBase(results)
+		if gotDirect := base == ""; gotDirect != tc.wantDirect {
+			t.Fatalf("%s：直连 %d ms，镜像 %d ms，选中 %q（期望走%s）",
+				tc.name, tc.directMS, tc.mirrorMS, base, map[bool]string{true: "直连", false: "镜像"}[tc.wantDirect])
+		}
+	}
+}
+
+// 有速度可比时不受这个宽限影响：宽限只是握手兜底那条路的补丁。
+func TestLatencySlackDoesNotOverrideMeasuredSpeed(t *testing.T) {
+	results := []ProbeResult{
+		// 直连握手更快，但只有 100 KB/s，离「够快」线还差得远。
+		{Name: "直连 GitHub", Direct: true, OK: true, LatencyMS: 5, SpeedKBPS: 100},
+		{Name: "镜像", BaseURL: "https://mirror.invalid", OK: true, LatencyMS: 40, SpeedKBPS: 800},
+	}
+	if base := fastestBase(results); base != "https://mirror.invalid" {
+		t.Fatalf("镜像快 8 倍，不该因为直连握手快就留在直连：%q", base)
+	}
+}
