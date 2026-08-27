@@ -29,8 +29,11 @@ func (e *imageMediaUnavailableError) Error() string {
 	return fmt.Sprintf("%s: %d image(s): %v", errImageMediaUnavailable, e.count, e.cause)
 }
 
-func (e *imageMediaUnavailableError) Unwrap() error {
-	return errImageMediaUnavailable
+func (e *imageMediaUnavailableError) Unwrap() []error {
+	if e == nil || e.cause == nil {
+		return []error{errImageMediaUnavailable}
+	}
+	return []error{errImageMediaUnavailable, e.cause}
 }
 
 func newImageMediaUnavailableError(failures []error) error {

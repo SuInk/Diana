@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -22,14 +23,15 @@ const (
 	repositoryWatchSettingToken   = "github_token"
 	repositoryWatchSettingTimeout = "timeout_seconds"
 	repositoryWatchSettingLimit   = "summary_commit_limit"
+	repositoryWatchSettingPatch   = "follow_up_include_patch"
 
 	defaultGitHubAPIURL            = "https://api.github.com"
 	repositoryWatchNoReleaseCursor = "__none__"
 	repositoryWatchNoPullCursor    = "__none__"
 	// repositoryWatchDefaultLimit 是每类动态默认列出的条数，同时用作抓取上限。
 	repositoryWatchDefaultLimit = 10
-	// 跟评只需要知道「动了哪些文件、动了多少」，patch 正文不进提示词：
-	// 一份 diff 的正文动辄几千字，而跟评只是一句话的感想，读了也用不上。
+	// 文件概览始终有独立预算；用户明确允许后，patch 另走更严格的文件、hunk 和
+	// 上下文窗口预算，不能拿完整 diff 挤掉会话历史。
 	repositoryWatchDiffFileLimit   = 12
 	repositoryWatchDiffDigestRunes = 1200
 	repositoryWatchNoIssueCursor   = "__none__"
@@ -174,6 +176,7 @@ type repositoryWatchDiffFile struct {
 	Additions int    `json:"additions,omitempty"`
 	Deletions int    `json:"deletions,omitempty"`
 	Changes   int    `json:"changes,omitempty"`
+	Patch     string `json:"patch,omitempty"`
 }
 
 type repositoryWatchDiffFilePayload struct {
@@ -182,6 +185,7 @@ type repositoryWatchDiffFilePayload struct {
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
 	Changes   int    `json:"changes"`
+	Patch     string `json:"patch"`
 }
 
 type repositoryWatchStarChange struct {
@@ -217,7 +221,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryWatchPluginID,
 		Name:        "仓库订阅",
-		Version:     "0.2.0",
+		Version:     "0.2.1",
 		Description: "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。",
 		Official:    true,
 		BuiltIn:     true,
@@ -230,6 +234,13 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 				Description: "事实清单发出去之后，让机器人像群成员那样再顺口说一句反应。它只是感想，不承载「改了什么」——那些以清单为准。关闭后只发送确定性的变更明细。",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
+			},
+			{
+				Key:         repositoryWatchSettingPatch,
+				Label:       "跟评读取受限代码片段",
+				Description: "允许把本轮 PR/Commit 中经过文件数、hunk 数和上下文预算裁剪的 patch 交给 LLM，让跟评能检查具体实现。默认关闭，尤其是私有仓库：开启表示同意将受限代码片段发送给当前 LLM Provider。",
+				Type:        PluginSettingTypeBool,
+				Default:     false,
 			},
 			{
 				Key:         repositoryWatchSettingToken,
@@ -513,14 +524,19 @@ func repositoryWatchDiffFiles(payload []repositoryWatchDiffFilePayload, limit in
 	if limit <= 0 {
 		limit = repositoryWatchDiffFileLimit
 	}
+	ranked := append([]repositoryWatchDiffFilePayload(nil), payload...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return ranked[i].Changes > ranked[j].Changes
+	})
 	files := make([]repositoryWatchDiffFile, 0, min(limit, len(payload)))
-	for _, item := range payload {
+	for _, item := range ranked {
 		if len(files) >= limit {
 			break
 		}
 		files = append(files, repositoryWatchDiffFile{
 			Filename: strings.TrimSpace(item.Filename), Status: strings.TrimSpace(item.Status),
 			Additions: item.Additions, Deletions: item.Deletions, Changes: item.Changes,
+			Patch: strings.TrimSpace(item.Patch),
 		})
 	}
 	return files, len(payload) > limit

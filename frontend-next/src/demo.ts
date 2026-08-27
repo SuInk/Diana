@@ -91,9 +91,10 @@ let plugins: PluginState[] = [
   },
   {
     manifest: {
-      id: "official.repository-watch", name: "仓库订阅", version: "0.2.0", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
+      id: "official.repository-watch", name: "仓库订阅", version: "0.2.1", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读受限 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
       settings: [
         { key: "github_token", label: "GitHub Token", description: "用于私有仓库和提高 API 额度。", type: "string", default: "", secret: true },
+        { key: "follow_up_include_patch", label: "跟评读取受限代码片段", description: "开启后会把经过严格裁剪的 patch 发送给当前 LLM Provider；私有仓库请谨慎开启。", type: "bool", default: false },
         { key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 60, min: 30, max: 86400, unit: "秒" }
       ]
     },
@@ -103,7 +104,8 @@ let plugins: PluginState[] = [
     manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
-  { manifest: { id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: true }
+  { manifest: { id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: true },
+  { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.0", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认关闭。", official: true, built_in: true, default_disabled: true, permissions: ["message:read", "message:send"] }, installed: true, enabled: false }
 ];
 
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`

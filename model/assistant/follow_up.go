@@ -24,6 +24,11 @@ import (
 // 开口就被取消掉了——看起来像"跟评时灵时不灵"，其实是预算被上游吃光了。
 const followUpTimeout = 30 * time.Second
 
+const (
+	followUpReferenceMinRunes = 800
+	followUpReferenceMaxRunes = 7200
+)
+
 type followUpKind string
 
 const (
@@ -50,6 +55,20 @@ func (kind followUpKind) label() string {
 // （身份脱敏状态等），并给它自己的超时。
 func detachFollowUpContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), followUpTimeout)
+}
+
+// sendFollowUp 投递所有由模型生成的自然跟评。插件跟评紧接当前消息，沿用普通聊天
+// 的引用与 @ 规则；仓库订阅跟评是过了一段时间主动找订阅者，只在第一条强制 @，
+// 不引用创建订阅时的旧消息。两类都经 sendDecorated 进入自然分条和回复批次队列。
+func (r *Runtime) sendFollowUp(ctx context.Context, kind followUpKind, event MessageEvent, text string) error {
+	if kind == followUpKindRepositoryWatch {
+		_, err := r.sendDecorated(ctx, event, text, outboundDecoration{
+			MentionUserID: strings.TrimSpace(event.UserID),
+			MentionAlways: true,
+		})
+		return err
+	}
+	return r.send(ctx, event, text)
 }
 
 // followUpInstruction 是两个入口共用的那一段跟评要求。
@@ -99,6 +118,9 @@ func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source
 
 func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followUpKind, source MessageEvent, notice, reference string, pluginResponses ...PluginResponse) string {
 	cfg := r.effectiveConfigForEvent(source)
+	if strings.TrimSpace(reference) != "" {
+		reference = truncateRunes(reference, followUpReferenceRuneBudget(r.promptContextWindowTokens(source, cfg)))
+	}
 	messages := []llm.Message{{
 		Role:     llm.RoleSystem,
 		Content:  r.systemPrompt(source, nil),
@@ -157,6 +179,17 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		return ""
 	}
 	return comment
+}
+
+func followUpReferenceRuneBudget(contextWindowTokens int64) int {
+	budget := int(contextWindowTokens / 10)
+	if budget < followUpReferenceMinRunes {
+		return followUpReferenceMinRunes
+	}
+	if budget > followUpReferenceMaxRunes {
+		return followUpReferenceMaxRunes
+	}
+	return budget
 }
 
 type followUpMediaFrames struct {

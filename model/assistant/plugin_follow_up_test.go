@@ -47,6 +47,25 @@ func TestPluginFollowUpAddsNaturalComment(t *testing.T) {
 	}
 }
 
+func TestPluginFollowUpUsesNaturalChatSegmentation(t *testing.T) {
+	withFastSendTiming(t)
+	reply := "先核对更新包校验和版本匹配喵\n失败时还要确认能够回退到旧版本喵"
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{reply}}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}
+
+	runtime.maybeSendPluginFollowUp(context.Background(), event, PluginResponse{FollowUp: true, Reply: "插件事实内容"})
+
+	waitForCondition(t, time.Second, func() bool { return len(channel.sentSnapshot()) == 2 })
+	sent := channel.sentSnapshot()
+	if len(sent) != 2 || sent[0].Text != "先核对更新包校验和版本匹配喵" || sent[1].Text != "失败时还要确认能够回退到旧版本喵" {
+		t.Fatalf("插件跟评没有按自然意群分条：%#v", sent)
+	}
+}
+
 func TestPluginFollowUpUsesBilibiliVideoFramesAsFallback(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
