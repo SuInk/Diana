@@ -75,7 +75,7 @@ func isStatusCommand(text string) bool {
 // statusCardText 拼出状态卡片。字段拿不到时写「未知」，不猜也不省略——少一行会让
 // 人以为是自己看漏了。
 func statusCardText(info BuildInfo, now time.Time) string {
-	version := strings.TrimSpace(info.Version)
+	version := trimVersionPrefix(info.Version)
 	if version == "" {
 		version = "未知"
 	}
@@ -91,6 +91,21 @@ func statusCardText(info BuildInfo, now time.Time) string {
 		"平台: " + goruntime.GOOS + "-" + goruntime.GOARCH,
 		"运行时长: " + formatStatusUptime(now.Sub(startedAt)),
 	}, "\n")
+}
+
+// trimVersionPrefix 去掉版本号的 v 前缀：卡片上只写数字。
+//
+// 只在 v 后面直接跟数字时才去——那才是 vX.Y.Z 的写法。像 dev 这种非语义化的
+// 版本串原样留着，砍掉首字母只会把它变成看不懂的东西。
+func trimVersionPrefix(version string) string {
+	version = strings.TrimSpace(version)
+	if len(version) < 2 || (version[0] != 'v' && version[0] != 'V') {
+		return version
+	}
+	if version[1] < '0' || version[1] > '9' {
+		return version
+	}
+	return version[1:]
 }
 
 // formatStatusUptime 把时长写成「3天 11小时 51分钟」。
