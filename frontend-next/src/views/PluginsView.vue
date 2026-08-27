@@ -91,6 +91,9 @@
                只在例外时标注，第三方插件出现后这里才会有内容。 -->
           <span v-if="!plugin.manifest.official" class="badge warn">第三方</span>
           <span v-if="!plugin.manifest.built_in" class="badge">可卸载</span>
+          <!-- 别的内置插件装好就在跑，这张卡片的开关却是关的。不说一句，
+               看起来就像是它坏了。 -->
+          <span v-if="plugin.manifest.default_disabled" class="badge">默认关闭</span>
           <span class="badge mono">v{{ plugin.manifest.version }}</span>
         </div>
 
