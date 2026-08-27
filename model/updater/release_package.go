@@ -426,7 +426,9 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 
 	mirrorBase := ""
 	if u.mirror != nil {
-		mirrorBase = u.mirror.Base(ctx, release.Checksums.URL)
+		// 拿安装包地址去挑线路，不是校验清单：清单只有几 KB，读完了也测不出
+		// 速度，选出来的只会是握手最快的那条，未必是下载最快的那条。
+		mirrorBase = u.mirror.Base(ctx, release.Archive.URL)
 	}
 
 	checksumPath := filepath.Join(workRoot, "SHA256SUMS")

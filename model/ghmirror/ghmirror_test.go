@@ -168,7 +168,8 @@ func TestProbeSortsUsableLinesFirst(t *testing.T) {
 }
 
 func newTestSelector(mirrors []Mirror) *Selector {
-	selector := NewSelector(&http.Client{Timeout: 3 * time.Second})
+	// 超时要盖住测速那一段的读取窗口，否则样本还没读完连接就被掐了。
+	selector := NewSelector(&http.Client{Timeout: 8 * time.Second})
 	selector.mirrors = mirrors
 	selector.probeTimeout = 3 * time.Second
 	return selector
