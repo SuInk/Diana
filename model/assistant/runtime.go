@@ -7764,7 +7764,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
