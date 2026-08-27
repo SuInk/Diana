@@ -67,7 +67,7 @@ func TestStatusCommandReply(t *testing.T) {
 	if lines[0] != "Diana 状态" {
 		t.Fatalf("首行 = %q", lines[0])
 	}
-	if lines[1] != "版本: v0.8.68" {
+	if lines[1] != "版本: 0.8.68" {
 		t.Fatalf("版本行 = %q", lines[1])
 	}
 	if want := "平台: " + goruntime.GOOS + "-" + goruntime.GOARCH; lines[2] != want {
@@ -79,6 +79,26 @@ func TestStatusCommandReply(t *testing.T) {
 }
 
 // 没注入版本号时如实说未知，不拿源码基线或者训练记忆糊一个上去。
+// v 前缀只在真的是 vX.Y.Z 时去掉。dev 这类版本串砍掉首字母就成了 ev。
+func TestTrimVersionPrefix(t *testing.T) {
+	cases := map[string]string{
+		"v0.8.68":     "0.8.68",
+		"V0.8.68":     "0.8.68",
+		"v0.8.68-dev": "0.8.68-dev",
+		" v1.0.0 ":    "1.0.0",
+		"0.8.68":      "0.8.68",
+		"dev":         "dev",
+		"version":     "version",
+		"v":           "v",
+		"":            "",
+	}
+	for in, want := range cases {
+		if got := trimVersionPrefix(in); got != want {
+			t.Fatalf("trimVersionPrefix(%q) = %q，期望 %q", in, got, want)
+		}
+	}
+}
+
 func TestStatusCommandReportsUnknownVersion(t *testing.T) {
 	card := statusCardText(BuildInfo{}, time.Now())
 	if !strings.Contains(card, "版本: 未知") {
@@ -233,7 +253,7 @@ func TestRuntimeStatusCommandRepliesWithoutLLM(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("发送次数 = %d：%#v", len(sent), sent)
 	}
-	if !strings.Contains(sent[0].Text, "版本: v0.8.68") || !strings.Contains(sent[0].Text, "运行时长: 3天 11小时 51分钟") {
+	if !strings.Contains(sent[0].Text, "版本: 0.8.68") || !strings.Contains(sent[0].Text, "运行时长: 3天 11小时 51分钟") {
 		t.Fatalf("回复内容 = %q", sent[0].Text)
 	}
 }
