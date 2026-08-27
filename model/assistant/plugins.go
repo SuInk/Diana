@@ -37,9 +37,13 @@ type PluginManifest struct {
 	// Internal 标记已经内化为产品能力的插件：始终启用，且不出现在插件页。
 	// 这类能力是其它功能的前提，暴露成一个可关的开关只会制造「别的插件莫名
 	// 其妙不工作」的排查成本。
-	Internal    bool                `json:"internal,omitempty"`
-	Permissions []string            `json:"permissions,omitempty"`
-	Settings    []PluginSettingSpec `json:"settings,omitempty"`
+	Internal bool `json:"internal,omitempty"`
+	// DefaultDisabled 标记「随包发布但默认不开」的内置插件。内置只说明它跟着
+	// 程序一起装好、不能卸载，不代表所有人都想要它——会自己开口说话的功能尤其
+	// 如此，装完就生效等于替用户做了决定。用户开过一次之后由存下来的状态说了算。
+	DefaultDisabled bool                `json:"default_disabled,omitempty"`
+	Permissions     []string            `json:"permissions,omitempty"`
+	Settings        []PluginSettingSpec `json:"settings,omitempty"`
 }
 
 type PluginState struct {
@@ -102,6 +106,9 @@ type PluginRequest struct {
 	AppLogs                 applog.Writer   `json:"-"`
 	// Settings 由 PluginManager 在调用前注入当前插件的生效设置，直接构造请求时可留空走默认值。
 	Settings SettingValues `json:"-"`
+	// BuildInfo 是这次运行的版本和启动时刻，由运行时在派发前填好。插件拿不到
+	// Runtime，而版本号只活在构建期注入的变量里，不从这里传就只能编一个。
+	BuildInfo BuildInfo `json:"-"`
 }
 
 type PluginResponse struct {
@@ -221,10 +228,11 @@ func NewPluginManager(plugins ...Plugin) *PluginManager {
 		manifest := plugin.Manifest()
 		manager.catalog[manifest.ID] = plugin
 		// 内置插件默认安装并启用，普通插件后续可以通过安装接口改变状态。
+		// 声明了 DefaultDisabled 的内置插件照样装好，但初始是关的。
 		manager.states[manifest.ID] = PluginState{
 			Manifest:  manifest,
 			Installed: manifest.BuiltIn,
-			Enabled:   manifest.BuiltIn,
+			Enabled:   manifest.BuiltIn && !manifest.DefaultDisabled,
 		}
 	}
 	return manager
@@ -249,6 +257,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewRSSWatchPlugin(nil),
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
+		NewStatusCommandPlugin(),
 		capabilities,
 	)
 	capabilities.setPluginStateProvider(manager.List)
@@ -466,7 +475,11 @@ func (m *PluginManager) Restore(states map[string]PluginState) {
 		if current.Manifest.BuiltIn {
 			// 内置插件不能被彻底卸载，但允许用户在 WebUI 里关闭启用状态。
 			current.Installed = true
-			if !savedStateDisabled(states, id) {
+			if _, saved := states[id]; current.Manifest.DefaultDisabled && !saved {
+				// 默认关闭的内置插件没有存过状态，就保持关闭。这里不能套用
+				// 下面那条「没存过 disabled 就打开」——那条的前提是默认开启。
+				current.Enabled = false
+			} else if !current.Manifest.DefaultDisabled && !savedStateDisabled(states, id) {
 				current.Enabled = true
 			}
 		}

@@ -2885,6 +2885,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			LLMStore:                r.llmStore,
 			LLMModelLister:          r.llmModelLister(),
 			AppLogs:                 r.appLogWriter(),
+			BuildInfo:               r.currentBuildInfo(),
 		}
 	}
 	// 模型能不能自己取历史原图，决定了要不要走前置指代解析：能取就给索引让它自己
