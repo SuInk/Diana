@@ -2995,6 +2995,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if _, settings, enabled := r.plugins.PluginWithSettings(groupRelationsPluginID, r.pluginOverridesForEvent(event)); enabled {
 				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
 			}
+			if _, settings, enabled := r.plugins.PluginWithSettings(stickerPluginID, r.pluginOverridesForEvent(event)); enabled {
+				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
+			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
