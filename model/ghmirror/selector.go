@@ -46,6 +46,13 @@ const (
 	// directPreferenceFactor 是直连没到「够快」线时的优待系数：镜像得比直连快
 	// 过这个倍数，才值得把下载交出去。
 	directPreferenceFactor = 1.5
+	// directLatencySlackMS 是比握手时给直连的绝对宽限。
+	//
+	// 倍数在小数值上没有意义：LatencyMS 取整到毫秒，两条线路都快到取整成 0 时，
+	// 1.5 倍还是 0，直连偶然多花 1 ms 就会被判成「慢了一倍多」，下载被交给镜像。
+	// 局域网镜像或者很近的 CDN 节点正是这种情形——一次调度抖动就能把直连随机踢掉。
+	// 所以先看绝对差：差在这个数以内的两条线路，人根本感觉不出来，直连优先。
+	directLatencySlackMS = 50
 
 	probeUserAgent = "diana-release-updater"
 )
@@ -387,7 +394,11 @@ func preferDirect(direct, best ProbeResult) bool {
 		// 直连连样本都拉不动，镜像拉得动：这时候该让镜像上。
 		return false
 	default:
-		// 两条都没测出速度（样本太小），只能按握手快慢判断。
+		// 两条都没测出速度（样本太小），只能按握手快慢判断。差得不多就算直连赢，
+		// 差得多了再谈倍数——只用倍数会在两边都接近 0 ms 时失灵。
+		if direct.LatencyMS <= best.LatencyMS+directLatencySlackMS {
+			return true
+		}
 		return float64(direct.LatencyMS) <= float64(best.LatencyMS)*directPreferenceFactor
 	}
 }
