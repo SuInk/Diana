@@ -3,7 +3,9 @@
 
 <template>
   <Teleport to="body">
-    <div class="modal-backdrop" @click.self="emit('close')">
+    <!-- 遮罩不再关闭弹窗：这些弹窗里几乎都是表单，误点一下外面就丢掉一屏输入。
+         关闭仍然有右上角按钮和 Esc 两条明确的路径。 -->
+    <div class="modal-backdrop">
       <div class="modal" :class="{ wide }" role="dialog" aria-modal="true" :aria-label="title">
         <header class="modal-header">
           <h2>{{ title }}</h2>
@@ -25,6 +27,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from "vue";
 import { X } from "@lucide/vue";
+import { lockBodyScroll, releaseBodyScroll } from "../scrollLock";
 
 defineProps<{ title: string; wide?: boolean }>();
 const emit = defineEmits<{ close: [] }>();
@@ -37,9 +40,11 @@ function onKeydown(event: KeyboardEvent): void {
 
 onMounted(() => {
   document.addEventListener("keydown", onKeydown);
+  lockBodyScroll();
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKeydown);
+  releaseBodyScroll();
 });
 </script>

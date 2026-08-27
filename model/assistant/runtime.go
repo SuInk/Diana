@@ -2885,6 +2885,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			LLMStore:                r.llmStore,
 			LLMModelLister:          r.llmModelLister(),
 			AppLogs:                 r.appLogWriter(),
+			BuildInfo:               r.currentBuildInfo(),
 		}
 	}
 	// 模型能不能自己取历史原图，决定了要不要走前置指代解析：能取就给索引让它自己
@@ -2994,6 +2995,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 无头浏览器。插件停用时模型看不到这个工具。
 			if _, settings, enabled := r.plugins.PluginWithSettings(groupRelationsPluginID, r.pluginOverridesForEvent(event)); enabled {
 				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
+			}
+			if _, settings, enabled := r.plugins.PluginWithSettings(stickerPluginID, r.pluginOverridesForEvent(event)); enabled {
+				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
 			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
@@ -3339,9 +3343,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
 		currentText += "\n\n【图片上下文提示】" + notice
 	}
-	currentMessage, currentImagesComplete := llmMessageFromEventWithVideoFramesDetailed(ctx, messageEvent, currentText, contextImageURLs)
-	if !currentImagesComplete {
-		return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more current images could not be encoded")})
+	currentMessage, currentImageFailures := llmMessageFromEventWithVideoFramesDiagnostics(ctx, messageEvent, currentText, contextImageURLs)
+	if len(currentImageFailures) > 0 {
+		return "", newImageMediaUnavailableError(currentImageFailures)
 	}
 	if r.plugins != nil {
 		_, settings, enabled := r.plugins.PluginWithSettings(voiceSTTPluginID, r.pluginOverridesForEvent(event))
@@ -3568,7 +3572,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	if comment == "" {
 		return
 	}
-	if err := r.send(ctx, event, comment); err != nil {
+	if err := r.sendFollowUp(ctx, followUpKindPlugin, event, comment); err != nil {
 		r.recordFollowUpFailure(ctx, followUpKindPlugin, source, "send", err)
 	}
 }
@@ -7054,6 +7058,11 @@ func llmMessageFromEventWithVideoFrames(ctx context.Context, event MessageEvent,
 }
 
 func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
+	message, failures := llmMessageFromEventWithVideoFramesDiagnostics(ctx, event, text, extraImageURLs)
+	return message, len(failures) == 0
+}
+
+func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
 	videoURLs := videoSourceCandidates(event.Segments)
 	cachedFrames := cachedVideoFrameURLs(event.Segments)
 	quotedVideo := false
@@ -7090,7 +7099,7 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 		}
 	}
 	extraImageURLs = append(extraImageURLs, frames...)
-	return llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
+	return llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
 }
 
 // videoFailureReason 补上兜底文案：拿不到具体原因时也不能把这句写成空的，
@@ -7140,24 +7149,34 @@ func llmMessageFromEventWithImagesForContext(ctx context.Context, event MessageE
 }
 
 func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
+	message, failures := llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
+	return message, len(failures) == 0
+}
+
+func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
 	text = strings.TrimSpace(text)
 	imageURLs := ImageURLs(event.Segments)
 	if event.Quoted != nil {
 		imageURLs = append(imageURLs, ImageURLs(event.Quoted.Segments)...)
 	}
 	imageURLs = append(imageURLs, extraImageURLs...)
-	var complete bool
-	imageURLs, complete = loadLLMImageURLs(ctx, imageURLs)
-	imageURLs = dedupeStrings(imageURLs)
+	imageGroups, failures := loadLLMImageURLGroupsDetailed(ctx, imageURLs)
+	imageGroups = dedupeLLMImageGroups(imageGroups)
+	sourceImageCount := len(imageGroups)
+	imageURLs = flattenLLMImageGroups(imageGroups)
+	expandedLongImages := len(imageURLs) > sourceImageCount
 	if len(imageURLs) == 0 {
-		return llm.Message{Role: llm.RoleUser, Content: text}, complete
+		return llm.Message{Role: llm.RoleUser, Content: text}, failures
 	}
 	if imageOnlyPrompt(text, event) {
-		if len(imageURLs) == 1 {
+		if sourceImageCount == 1 {
 			text = "用户发送了一张图片，请根据图片内容回答。"
 		} else {
-			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", len(imageURLs))
+			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", sourceImageCount)
 		}
+	}
+	if expandedLongImages {
+		text += "\n\n【长图处理】部分超长图片已按“完整总览 → 沿长边顺序切片”展开；相邻切片有重叠，请按收到顺序阅读并合并重复内容。"
 	}
 	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
 	if text != "" {
@@ -7166,7 +7185,7 @@ func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event 
 	for _, imageURL := range imageURLs {
 		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
 	}
-	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, complete
+	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, failures
 }
 
 func hasKnownResolverPlatformURL(event MessageEvent, text string) bool {
@@ -7745,7 +7764,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -9815,7 +9834,10 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
-	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigest(change))
+	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigestWithPatch(
+		change,
+		settings.Bool(repositoryWatchSettingPatch, false),
+	))
 	return startedAt, nil
 }
 
@@ -10003,7 +10025,7 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 		if comment == "" {
 			continue
 		}
-		if err := r.sendNotification(ctx, target, comment); err != nil {
+		if err := r.sendFollowUp(ctx, followUpKindRepositoryWatch, target, comment); err != nil {
 			r.recordFollowUpFailure(ctx, followUpKindRepositoryWatch, target, "send", err)
 		}
 	}
@@ -10014,9 +10036,13 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 // 通知正文只有标题和链接，模型据此写跟评就只能围着标题措辞打转——标题还常常是过期的。
 // 给它一份「动了哪些文件、各自加删多少行」的清单，它才说得出具体的话。
 //
-// 只要清单，不要 patch 正文：跟评是一句话的感想，读几千字的 diff 正文也用不上，
-// 白占预算。这份资料只进提示词，不进任何发出去的正文。
+// 文件概览始终提供；用户明确允许时，再附经过文件数、hunk 数、字符数和上下文窗口
+// 四层预算裁剪的 patch。参考资料只进提示词，不进任何发出去的正文。
 func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
+	return renderRepositoryWatchDiffDigestWithPatch(change, false)
+}
+
+func renderRepositoryWatchDiffDigestWithPatch(change repositoryWatchChange, includePatch bool) string {
 	sections := make([]string, 0, 4)
 	if change.CommitDiff != nil {
 		if body := renderRepositoryWatchDiffFiles(change.CommitDiff.Files, change.CommitDiff.FilesTruncated); body != "" {
@@ -10033,7 +10059,15 @@ func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
 	if len(sections) == 0 {
 		return ""
 	}
-	return truncateRunes(strings.Join(sections, "\n\n"), repositoryWatchDiffDigestRunes)
+	overview := truncateRunes(strings.Join(sections, "\n\n"), repositoryWatchDiffDigestRunes)
+	if !includePatch {
+		return overview
+	}
+	patch := renderRepositoryWatchPatchDigest(change)
+	if patch == "" {
+		return overview
+	}
+	return overview + "\n\n" + patch
 }
 
 func renderRepositoryWatchDiffFiles(files []repositoryWatchDiffFile, truncated bool) string {
