@@ -247,6 +247,7 @@ export interface PluginManifest {
   description: string;
   official: boolean;
   built_in: boolean;
+  default_disabled?: boolean;
   permissions?: string[];
   settings?: PluginSettingSpec[];
 }
