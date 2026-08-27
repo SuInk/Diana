@@ -146,51 +146,53 @@ type rssWatchUpdatePayload struct {
 }
 
 type botTaskPayload struct {
-	ID                    string                             `json:"id"`
-	Kind                  string                             `json:"kind"`
-	Platform              string                             `json:"platform,omitempty"`
-	ProfileID             string                             `json:"profile_id,omitempty"`
-	OwnerID               string                             `json:"owner_id"`
-	GroupID               string                             `json:"group_id,omitempty"`
-	UserID                string                             `json:"user_id,omitempty"`
-	Message               string                             `json:"message"`
-	Status                string                             `json:"status"`
-	TriggerAt             time.Time                          `json:"trigger_at"`
-	IntervalSeconds       int64                              `json:"interval_seconds,omitempty"`
-	LastRunAt             time.Time                          `json:"last_run_at,omitempty"`
-	CancelledAt           time.Time                          `json:"cancelled_at,omitempty"`
-	LastError             string                             `json:"last_error,omitempty"`
-	ConsecutiveFailures   int                                `json:"consecutive_failures,omitempty"`
-	PendingDelivery       bool                               `json:"pending_delivery,omitempty"`
-	PendingSince          time.Time                          `json:"pending_since,omitempty"`
-	Repository            string                             `json:"repository,omitempty"`
-	RepositoryBranch      string                             `json:"repository_branch,omitempty"`
-	WatchCommits          bool                               `json:"watch_commits,omitempty"`
-	WatchPullRequests     bool                               `json:"watch_pull_requests,omitempty"`
-	PullRequestEvents     []string                           `json:"watch_pull_request_events,omitempty"`
-	IssueEvents           []string                           `json:"watch_issue_events,omitempty"`
-	WatchIssues           bool                               `json:"watch_issues,omitempty"`
-	WatchReleases         bool                               `json:"watch_releases,omitempty"`
-	WatchStars            bool                               `json:"watch_stars,omitempty"`
-	StarNotifyMode        string                             `json:"star_notify_mode,omitempty"`
-	StarNotifyThreshold   int                                `json:"star_notify_threshold,omitempty"`
-	StarNotifyMilestones  []int                              `json:"star_notify_milestones,omitempty"`
-	LastCommitSHA         string                             `json:"last_commit_sha,omitempty"`
-	LastPullRequestCursor string                             `json:"last_pull_request_cursor,omitempty"`
-	LastIssueCursor       string                             `json:"last_issue_cursor,omitempty"`
-	LastReleaseTag        string                             `json:"last_release_tag,omitempty"`
-	LastStarCount         int                                `json:"last_star_count,omitempty"`
-	LastNotifiedStarCount int                                `json:"last_notified_star_count,omitempty"`
-	FeedURL               string                             `json:"feed_url,omitempty"`
-	FeedSource            string                             `json:"feed_source,omitempty"`
-	FeedHandle            string                             `json:"feed_handle,omitempty"`
-	FeedJudgePrompt       string                             `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID        string                             `json:"last_feed_item_id,omitempty"`
-	LastFeedPublishedAt   time.Time                          `json:"last_feed_published_at,omitempty"`
-	CreatedAt             time.Time                          `json:"created_at"`
-	ConsumesQuota         bool                               `json:"consumes_quota"`
-	NotificationEnabled   bool                               `json:"notification_enabled,omitempty"`
-	NotificationTargets   []assistant.ReminderDeliveryTarget `json:"notification_targets,omitempty"`
+	ID                    string    `json:"id"`
+	Kind                  string    `json:"kind"`
+	Platform              string    `json:"platform,omitempty"`
+	ProfileID             string    `json:"profile_id,omitempty"`
+	OwnerID               string    `json:"owner_id"`
+	GroupID               string    `json:"group_id,omitempty"`
+	UserID                string    `json:"user_id,omitempty"`
+	Message               string    `json:"message"`
+	Status                string    `json:"status"`
+	TriggerAt             time.Time `json:"trigger_at"`
+	IntervalSeconds       int64     `json:"interval_seconds,omitempty"`
+	LastRunAt             time.Time `json:"last_run_at,omitempty"`
+	CancelledAt           time.Time `json:"cancelled_at,omitempty"`
+	LastError             string    `json:"last_error,omitempty"`
+	ConsecutiveFailures   int       `json:"consecutive_failures,omitempty"`
+	PendingDelivery       bool      `json:"pending_delivery,omitempty"`
+	PendingSince          time.Time `json:"pending_since,omitempty"`
+	Repository            string    `json:"repository,omitempty"`
+	RepositoryBranch      string    `json:"repository_branch,omitempty"`
+	WatchCommits          bool      `json:"watch_commits,omitempty"`
+	WatchPullRequests     bool      `json:"watch_pull_requests,omitempty"`
+	PullRequestEvents     []string  `json:"watch_pull_request_events,omitempty"`
+	IssueEvents           []string  `json:"watch_issue_events,omitempty"`
+	WatchIssues           bool      `json:"watch_issues,omitempty"`
+	WatchReleases         bool      `json:"watch_releases,omitempty"`
+	WatchStars            bool      `json:"watch_stars,omitempty"`
+	StarNotifyMode        string    `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold   int       `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones  []int     `json:"star_notify_milestones,omitempty"`
+	LastCommitSHA         string    `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor string    `json:"last_pull_request_cursor,omitempty"`
+	LastIssueCursor       string    `json:"last_issue_cursor,omitempty"`
+	LastReleaseTag        string    `json:"last_release_tag,omitempty"`
+	LastStarCount         int       `json:"last_star_count,omitempty"`
+	LastNotifiedStarCount int       `json:"last_notified_star_count,omitempty"`
+	FeedURL               string    `json:"feed_url,omitempty"`
+	FeedSource            string    `json:"feed_source,omitempty"`
+	FeedHandle            string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt       string    `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID        string    `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt   time.Time `json:"last_feed_published_at,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	ConsumesQuota         bool      `json:"consumes_quota"`
+	NotificationEnabled   bool      `json:"notification_enabled,omitempty"`
+	// 响应必须和请求用同一个形状：存储层的 ReminderDeliveryTarget 只有 group_id/user_id，
+	// 没有 destination，直接回给前端会让编辑框读不出通知对象类型，一打开全是空行。
+	NotificationTargets []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
 }
 
 type pluginTaskRunner interface {
@@ -844,8 +846,23 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 	}
 }
 
-func reminderDeliveryTargetsForWeb(item assistant.Reminder) []assistant.ReminderDeliveryTarget {
-	return assistant.ReminderDeliveryTargets(item.NotificationTargetsJSON)
+func reminderDeliveryTargetsForWeb(item assistant.Reminder) []repositoryWatchTargetPayload {
+	stored := assistant.ReminderDeliveryTargets(item.NotificationTargetsJSON)
+	if len(stored) == 0 {
+		return nil
+	}
+	targets := make([]repositoryWatchTargetPayload, 0, len(stored))
+	for _, target := range stored {
+		// destination 由实际填了哪个 ID 反推，存储层不额外记一份，避免两处不一致。
+		if groupID := strings.TrimSpace(target.GroupID); groupID != "" {
+			targets = append(targets, repositoryWatchTargetPayload{Destination: "group", GroupID: groupID})
+			continue
+		}
+		if userID := strings.TrimSpace(target.UserID); userID != "" {
+			targets = append(targets, repositoryWatchTargetPayload{Destination: "private", UserID: userID})
+		}
+	}
+	return targets
 }
 
 func repositoryWatchTargetsFromPayload(values []repositoryWatchTargetPayload, profile assistant.BotConfig, set assistant.ProfileSet) []assistant.ReminderDeliveryTarget {
