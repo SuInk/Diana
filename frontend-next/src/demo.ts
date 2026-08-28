@@ -74,6 +74,7 @@ let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
+  { manifest: { id: "official.open-api", name: "对外 API", version: "0.1.0", description: "让 CI、监控这类外部系统凭密钥调用 HTTP 接口向指定会话推送消息；密钥在「设置 → 安全」里管理。", official: true, built_in: true, default_disabled: true, permissions: ["network:http", "message:write"], settings: [{ key: "rate_limit_per_minute", label: "单密钥限流", description: "每把密钥每分钟允许的调用次数，超出返回 429。", type: "number", default: 60, min: 1, max: 600, step: 10, unit: "次/分钟" }] }, installed: true, enabled: false },
   {
     manifest: {
       id: "official.repository-publish", name: "Issue 发布", version: "0.4.0", description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],

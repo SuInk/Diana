@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
@@ -58,14 +57,24 @@ func (p *fakePusher) Status() assistant.RuntimeStatus {
 }
 
 func newOpenAPITestRouter(t *testing.T) (*gin.Engine, *OpenAPIHandler, *memoryAPIKeyStore, *fakePusher) {
+	router, handler, store, pusher, _ := newOpenAPITestRouterWithPlugins(t)
+	return router, handler, store, pusher
+}
+
+func newOpenAPITestRouterWithPlugins(t *testing.T) (*gin.Engine, *OpenAPIHandler, *memoryAPIKeyStore, *fakePusher, *assistant.PluginManager) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	store := &memoryAPIKeyStore{}
 	pusher := &fakePusher{}
-	handler := NewOpenAPIHandler(NewOpenAPIKeyManager(store), pusher)
+	plugins := assistant.NewPluginManager(assistant.NewOpenAPIPlugin())
+	// 插件默认关闭，多数用例测的是「开闸之后」的行为，这里显式打开。
+	if _, err := plugins.SetEnabled(assistant.OpenAPIPluginID, true); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewOpenAPIHandler(NewOpenAPIKeyManager(store), pusher, plugins)
 	router := gin.New()
 	handler.Register(router)
-	return router, handler, store, pusher
+	return router, handler, store, pusher, plugins
 }
 
 func createOpenAPITestKey(t *testing.T, router *gin.Engine, name string) (id, token string) {
@@ -210,10 +219,13 @@ func TestOpenAPIPushReportsDeliveryFailure(t *testing.T) {
 	}
 }
 
-func TestOpenAPIRateLimit(t *testing.T) {
-	router, handler, _, _ := newOpenAPITestRouter(t)
+func TestOpenAPIRateLimitFollowsPluginSetting(t *testing.T) {
+	router, _, _, _, plugins := newOpenAPITestRouterWithPlugins(t)
 	_, token := createOpenAPITestKey(t, router, "ci-notify")
-	handler.limiter = newOpenAPIRateLimiter(2, time.Minute)
+	// 限流上限来自插件设置，改设置立即生效。
+	if _, err := plugins.UpdateSettings(assistant.OpenAPIPluginID, map[string]any{"rate_limit_per_minute": 2}); err != nil {
+		t.Fatal(err)
+	}
 
 	statuses := make([]int, 0, 3)
 	for range 3 {
@@ -225,6 +237,49 @@ func TestOpenAPIRateLimit(t *testing.T) {
 	}
 	if statuses[0] != http.StatusOK || statuses[1] != http.StatusOK || statuses[2] != http.StatusTooManyRequests {
 		t.Fatalf("statuses = %v", statuses)
+	}
+}
+
+// 插件是外部接口的总开关：停用后外部调用一律 403，密钥管理照常可用。
+func TestOpenAPIRejectsWhenPluginDisabled(t *testing.T) {
+	router, _, _, pusher, plugins := newOpenAPITestRouterWithPlugins(t)
+	_, token := createOpenAPITestKey(t, router, "ci-notify")
+	if _, err := plugins.SetEnabled(assistant.OpenAPIPluginID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/openapi/v1/messages", strings.NewReader(`{"user_id":"1","text":"hi"}`)),
+		httptest.NewRequest(http.MethodGet, "/openapi/v1/status", nil),
+	} {
+		request.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("%s %s status = %d, want 403", request.Method, request.URL.Path, recorder.Code)
+		}
+	}
+	if len(pusher.targets) != 0 {
+		t.Fatalf("disabled plugin must not deliver: %#v", pusher.targets)
+	}
+
+	// 密钥管理不受开关影响，主人可以先备好密钥再开闸。
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/openapi/keys", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("key management status = %d, want 200", recorder.Code)
+	}
+}
+
+// 默认插件目录里注册了对外 API 插件，且保持默认关闭。
+func TestOpenAPIPluginRegisteredDefaultDisabled(t *testing.T) {
+	plugins := assistant.NewDefaultPluginManager()
+	state, ok := plugins.Get(assistant.OpenAPIPluginID)
+	if !ok {
+		t.Fatal("open api plugin missing from default catalog")
+	}
+	if !state.Installed || state.Enabled {
+		t.Fatalf("state = installed:%v enabled:%v, want installed and disabled", state.Installed, state.Enabled)
 	}
 }
 

@@ -32,9 +32,6 @@ const (
 	// openAPIKeyPrefixRunes 是列表里展示的明文前缀长度，够辨认、不够重放。
 	openAPIKeyPrefixRunes = 14
 	openAPIKeyNameMaxLen  = 64
-	// openAPIRateLimitPerMinute 是单把密钥每分钟的调用上限。对外推送是
-	// 通知场景，不是消息队列；上限防的是失控脚本刷爆聊天平台的风控。
-	openAPIRateLimitPerMinute = 60
 	// openAPIMaxTextRunes 拦下明显不是通知的超长正文；正常推送远小于它。
 	openAPIMaxTextRunes = 8000
 	openAPIPushTimeout  = 30 * time.Second
@@ -237,10 +234,17 @@ type ExternalMessagePusher interface {
 	Status() assistant.RuntimeStatus
 }
 
+// OpenAPIPluginGate 提供「对外 API」插件的启用状态与生效设置；由
+// *assistant.PluginManager 满足。开关和限流参数都归插件系统管，这个
+// 处理器只在每个外部请求上现查现用。
+type OpenAPIPluginGate interface {
+	PluginWithSettings(id string, overrides map[string]bool) (assistant.Plugin, assistant.SettingValues, bool)
+}
+
 // openAPIRateLimiter 是按密钥的固定窗口限流器。窗口重开即清零，实现最简单，
-// 对「防失控脚本」这个目的足够。
+// 对「防失控脚本」这个目的足够。上限由调用方按插件设置逐次传入，
+// 改设置立即生效，不用重建限流器。
 type openAPIRateLimiter struct {
-	limit  int
 	window time.Duration
 
 	mu      sync.Mutex
@@ -250,9 +254,8 @@ type openAPIRateLimiter struct {
 	nowFunc func() time.Time
 }
 
-func newOpenAPIRateLimiter(limit int, window time.Duration) *openAPIRateLimiter {
+func newOpenAPIRateLimiter(window time.Duration) *openAPIRateLimiter {
 	return &openAPIRateLimiter{
-		limit:   limit,
 		window:  window,
 		starts:  map[string]time.Time{},
 		counts:  map[string]int{},
@@ -261,7 +264,7 @@ func newOpenAPIRateLimiter(limit int, window time.Duration) *openAPIRateLimiter 
 }
 
 // allow 报告这次调用是否放行；拒绝时返回距窗口重开的等待时长。
-func (l *openAPIRateLimiter) allow(key string) (bool, time.Duration) {
+func (l *openAPIRateLimiter) allow(key string, limit int) (bool, time.Duration) {
 	now := l.nowFunc()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -280,7 +283,7 @@ func (l *openAPIRateLimiter) allow(key string) (bool, time.Duration) {
 		l.counts[key] = 1
 		return true, 0
 	}
-	if l.counts[key] >= l.limit {
+	if l.counts[key] >= limit {
 		return false, l.window - now.Sub(start)
 	}
 	l.counts[key]++
@@ -289,19 +292,23 @@ func (l *openAPIRateLimiter) allow(key string) (bool, time.Duration) {
 
 // OpenAPIHandler 暴露对外开放接口：管理端在 /api/openapi 下管密钥（走 WebUI
 // 会话鉴权），外部系统在 /openapi/v1 下用 Bearer 密钥推送消息。
+// 总开关是「对外 API」内置插件：停用后外部调用一律 403，密钥管理不受影响，
+// 主人可以先备好密钥再开闸。
 type OpenAPIHandler struct {
 	manager *OpenAPIKeyManager
 	pusher  ExternalMessagePusher
+	plugins OpenAPIPluginGate
 	logs    AppLogWriter
 	limiter *openAPIRateLimiter
 }
 
 // NewOpenAPIHandler 创建对外开放接口处理器。
-func NewOpenAPIHandler(manager *OpenAPIKeyManager, pusher ExternalMessagePusher) *OpenAPIHandler {
+func NewOpenAPIHandler(manager *OpenAPIKeyManager, pusher ExternalMessagePusher, plugins OpenAPIPluginGate) *OpenAPIHandler {
 	return &OpenAPIHandler{
 		manager: manager,
 		pusher:  pusher,
-		limiter: newOpenAPIRateLimiter(openAPIRateLimitPerMinute, time.Minute),
+		plugins: plugins,
+		limiter: newOpenAPIRateLimiter(time.Minute),
 	}
 }
 
@@ -368,8 +375,14 @@ func (h *OpenAPIHandler) revokeKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"revoked": true})
 }
 
-// authenticateRequest 解析 Authorization: Bearer 头并校验密钥；失败时已写响应。
+// authenticateRequest 依次做插件开关、Bearer 密钥、按插件设置限流三道检查；
+// 失败时已写响应。
 func (h *OpenAPIHandler) authenticateRequest(c *gin.Context) (OpenAPIKeyInfo, bool) {
+	settings, enabled := h.pluginSettings()
+	if !enabled {
+		writeError(c, http.StatusForbidden, errors.New("对外 API 插件未启用，请在控制台「插件」页开启"))
+		return OpenAPIKeyInfo{}, false
+	}
 	header := strings.TrimSpace(c.GetHeader("Authorization"))
 	scheme, token, found := strings.Cut(header, " ")
 	if !found || !strings.EqualFold(strings.TrimSpace(scheme), "Bearer") {
@@ -383,12 +396,22 @@ func (h *OpenAPIHandler) authenticateRequest(c *gin.Context) (OpenAPIKeyInfo, bo
 		writeError(c, http.StatusUnauthorized, errors.New("invalid api key"))
 		return OpenAPIKeyInfo{}, false
 	}
-	if allowed, wait := h.limiter.allow(info.ID); !allowed {
+	if allowed, wait := h.limiter.allow(info.ID, assistant.OpenAPIRateLimitPerMinute(settings)); !allowed {
 		c.Header("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
 		writeError(c, http.StatusTooManyRequests, errors.New("rate limit exceeded"))
 		return OpenAPIKeyInfo{}, false
 	}
 	return info, true
+}
+
+// pluginSettings 返回「对外 API」插件的生效设置与启用状态。没接插件管理器
+// 的直接构造（如测试）按未启用处理——闸门宁可失败关闭。
+func (h *OpenAPIHandler) pluginSettings() (assistant.SettingValues, bool) {
+	if h.plugins == nil {
+		return nil, false
+	}
+	_, settings, ok := h.plugins.PluginWithSettings(assistant.OpenAPIPluginID, nil)
+	return settings, ok
 }
 
 // status 供外部系统探活并发现可投递的通道；只暴露路由所需的最小信息。
