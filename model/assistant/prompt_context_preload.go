@@ -19,8 +19,10 @@ import (
 type promptContextPreload struct {
 	wg sync.WaitGroup
 
-	sessionThread   string
-	memoryContext   string
+	sessionThread string
+	memoryContext string
+	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
+	memoryUsage     contextLayerUsage
 	glossaryContext string
 	mediaIndex      string
 }
@@ -44,7 +46,7 @@ func (r *Runtime) startPromptContextPreload(
 	}()
 	go func() {
 		defer preload.wg.Done()
-		preload.memoryContext = r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
+		preload.memoryContext, preload.memoryUsage = r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
 	}()
 	go func() {
 		defer preload.wg.Done()
@@ -65,4 +67,19 @@ func (p *promptContextPreload) wait() {
 		return
 	}
 	p.wg.Wait()
+}
+
+// layerUsage 汇总各层的自有账。authoritativePluginContext 那条路径上 preload 为
+// nil，此时只有便签那份（也多半是零值），照样要能取。
+func (p *promptContextPreload) layerUsage(extra ...contextLayerUsage) []contextLayerUsage {
+	layers := make([]contextLayerUsage, 0, len(extra)+1)
+	for _, usage := range extra {
+		if usage.Layer != "" {
+			layers = append(layers, usage)
+		}
+	}
+	if p != nil && p.memoryUsage.Layer != "" {
+		layers = append(layers, p.memoryUsage)
+	}
+	return layers
 }
