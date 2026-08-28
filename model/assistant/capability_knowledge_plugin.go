@@ -209,6 +209,7 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:web-search", Title: "实时联网搜索", Content: "可使用 web_search.search 通过有预算的候选查询探索、多 provider 回退和空结果恢复检索实时新闻、IPO 时间、价格和网页资料；支持别名、语言及宽松查询候选，并会返回来源和证据状态供后续核验。", Source: "core", Enabled: true},
 	{ID: "core:browser", Title: "网页浏览与渲染", Content: "可用沙盒无头浏览器执行 JavaScript、跟随跳转、读取动态网页；主人还可使用浏览器和本地工具。", Source: "core", Enabled: true},
 	{ID: "core:media", Title: "图片视频与链接解析", Content: "能理解聊天图片上下文，下载并抽取视频多帧；链接解析插件支持 B站、YouTube、X、小红书、抖音等平台并发送解析结果。", Source: "core", Enabled: true},
+	{ID: "core:image-source", Title: "图片溯源", Content: "图片溯源插件可以查聊天里图片的出处：SauceNAO 覆盖插画和同人图并给出 pixiv/danbooru/twitter 原链，trace.moe 认番剧截图并给出集数和时间点。只能查聊天里已有的图片，图片会上传到对应服务检索。", Source: "core", Enabled: true},
 	{ID: "core:image", Title: "图片生成与编辑", Content: "熟悉等级可生成和编辑图片；可结合群成员头像、用户提供的图片以及 Agent 联网搜索或网页核验后的结果。", Source: "core", Enabled: true, Required: "熟悉"},
 	{ID: "core:voice", Title: "配置音色语音回复", Content: "用户明确要求语音回复、朗读或念出文字时，可调用 diana.tts 通过语音合成插件生成已配置音色并直接发送 语音；普通文字回复不会自动转语音。", Source: "core", Enabled: true},
 	{ID: "core:ocr", Title: "文件与 OCR", Content: "能解析 PDF 和文件；macOS 使用 PDFKit/Vision，本地原生路径不可用时回退 PDFium 与视觉 LLM。", Source: "core", Enabled: true, Required: "熟悉"},

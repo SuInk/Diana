@@ -3000,6 +3000,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if _, settings, enabled := r.plugins.PluginWithSettings(stickerPluginID, r.pluginOverridesForEvent(event)); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
 			}
+			// 图片溯源要把图传给第三方服务，不该是默认动作：插件停用时模型看不到
+			// 这个工具，也就不会「顺手查一下」。
+			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(imageSourcePluginID, r.pluginOverridesForEvent(event)); enabled {
+				if plugin, ok := pluginValue.(*ImageSourcePlugin); ok {
+					extraTools = append(extraTools, newDianaImageSourceTool(r, event, plugin, settings))
+				}
+			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
