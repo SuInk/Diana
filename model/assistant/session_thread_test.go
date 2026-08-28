@@ -20,8 +20,9 @@ func threadRuntime(items []StructuredMemoryItem) (*Runtime, *testStructuredMemor
 
 func TestSessionThreadNoteReturnsCurrentState(t *testing.T) {
 	runtime, _ := threadRuntime([]StructuredMemoryItem{{
-		Key:  ThreadMemoryKey("group:123"),
-		Kind: MemoryKindThread, Topic: "会话状态",
+		ScopeKey: "group:123",
+		Key:      ThreadMemoryKey("group:123"),
+		Kind:     MemoryKindThread, Topic: "会话状态",
 		Content: "正在排查上下文变短，已定位到 16K 被写死，下一步做记忆分层。",
 	}})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m-1"}
@@ -32,15 +33,44 @@ func TestSessionThreadNoteReturnsCurrentState(t *testing.T) {
 	}
 }
 
-func TestSessionThreadNoteIgnoresOtherSessionKeys(t *testing.T) {
+// 落库的 key 是归一化过的：normalizeMemoryKey 丢掉冒号且不补分隔符，
+// "thread.group:123" 变成 "thread.group123"。读取端以前拿未归一化的
+// ThreadMemoryKey 做精确比较，于是线上一条便签都注入不进去。
+func TestSessionThreadNoteFindsNormalizedKey(t *testing.T) {
 	runtime, _ := threadRuntime([]StructuredMemoryItem{{
-		Key:  ThreadMemoryKey("group:999"),
-		Kind: MemoryKindThread, Topic: "会话状态", Content: "别的群的状态",
+		ScopeKey: "group:123",
+		Key:      "thread.group123",
+		Kind:     MemoryKindThread, Topic: "会话状态",
+		Content: "正在排查上下文预算，下一步补层内埋点。",
+	}})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m-1"}
+
+	note := runtime.sessionThreadNote(context.Background(), event)
+	if !strings.Contains(note, "层内埋点") {
+		t.Fatalf("归一化后的 key 取不到便签: %q", note)
+	}
+}
+
+func TestSessionThreadNoteIgnoresOtherSessionKeys(t *testing.T) {
+	runtime, memory := threadRuntime([]StructuredMemoryItem{{
+		ScopeKey: "group:999",
+		Key:      ThreadMemoryKey("group:999"),
+		Kind:     MemoryKindThread, Topic: "会话状态", Content: "别的群的状态",
 	}})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9", MessageID: "m-1"}
 
 	if note := runtime.sessionThreadNote(context.Background(), event); note != "" {
 		t.Fatalf("thread note leaked across sessions: %q", note)
+	}
+	// 去掉 key 比较之后，会话隔离全靠查询的取值范围。默认范围会捎上「本人的
+	// visibility=user 记忆」，对便签毫无用处却能放别的会话进来，必须收窄。
+	if len(memory.queries) == 0 {
+		t.Fatal("没有发出便签查询")
+	}
+	for _, query := range memory.queries {
+		if !query.CurrentSessionOnly {
+			t.Fatalf("便签查询没有限定本会话: %#v", query)
+		}
 	}
 }
 
