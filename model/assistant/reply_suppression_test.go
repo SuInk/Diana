@@ -771,7 +771,6 @@ func TestReplySuppressionExpiresAtThirtyMinuteBoundary(t *testing.T) {
 func TestReplySuppressionNoticeUsesMainModelWithoutMentions(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `为避免机器人互相循环，已暂停响应此账号约 30 分钟。`}
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{
 			{ID: "main", Name: "主聊天", Group: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "main-key", Model: "main-model"}},
 			{ID: "routing", Name: "快速语义判定", Group: "routing", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "routing-key", Model: "routing-model"}},

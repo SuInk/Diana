@@ -11,7 +11,6 @@ import (
 // TestGroupProfilesAndReorder 验证对应功能场景。
 func TestGroupProfilesAndReorder(t *testing.T) {
 	set := ProfileSet{
-		ActiveID: "a",
 		Profiles: []Profile{
 			{ID: "a", Name: "A", Group: "default", Config: ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "k", Model: "m1"}},
 			{ID: "v1", Name: "V1", Group: "vision", Config: ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "k", Model: "v-a"}},
@@ -47,10 +46,12 @@ func TestGroupProfilesAndReorder(t *testing.T) {
 	}
 }
 
-// TestProfileSetActiveGroupProfilesRotatesWithinGroup 验证只在当前分组内按顺序轮换。
-func TestProfileSetActiveGroupProfilesRotatesWithinGroup(t *testing.T) {
+// TestGroupProfilesKeepsListOrder 验证组内候选严格按列表顺序，不受任何隐藏状态影响。
+//
+// 这里原来测的是 ActiveGroupProfiles：从「激活中」那条开始在组内绕圈。那个概念去掉
+// 之后，列表顺序就是唯一的降级顺序——界面上写的「组内顺序即降级优先级」这才是真的。
+func TestGroupProfilesKeepsListOrder(t *testing.T) {
 	set := ProfileSet{
-		ActiveID: "b",
 		Profiles: []Profile{
 			{ID: "a", Name: "A", Group: "chat", Config: ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "key-a", Model: "gp5.5"}},
 			{ID: "b", Name: "B", Group: "chat", Config: ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "key-b", Model: "gp5.5"}},
@@ -59,8 +60,8 @@ func TestProfileSetActiveGroupProfilesRotatesWithinGroup(t *testing.T) {
 		},
 	}
 
-	got := set.ActiveGroupProfiles()
-	want := []string{"b", "d", "a"}
+	got := set.GroupProfiles("chat")
+	want := []string{"a", "b", "d"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
 	}
@@ -71,10 +72,24 @@ func TestProfileSetActiveGroupProfilesRotatesWithinGroup(t *testing.T) {
 	}
 }
 
+// TestFirstProfileIsTheListHead 验证兜底取的是列表第一条，与分组无关。
+func TestFirstProfileIsTheListHead(t *testing.T) {
+	set := ProfileSet{Profiles: []Profile{
+		{ID: "head", Group: "vision", Config: ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "k", Model: "m"}},
+		{ID: "tail", Group: "chat", Config: ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "k", Model: "m"}},
+	}}
+	first, ok := set.FirstProfile()
+	if !ok || first.ID != "head" {
+		t.Fatalf("first = %#v ok=%v", first, ok)
+	}
+	if _, ok := (ProfileSet{}).FirstProfile(); ok {
+		t.Fatal("空配置集不该有兜底配置")
+	}
+}
+
 // TestProfileSetWithDefaultsAssignsDefaultGroup 验证旧配置会进入默认分组。
 func TestProfileSetWithDefaultsAssignsDefaultGroup(t *testing.T) {
 	set := ProfileSet{
-		ActiveID: "a",
 		Profiles: []Profile{
 			{ID: "a", Name: "A", Config: ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "key-a", Model: "gp5.5"}},
 		},

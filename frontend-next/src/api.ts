@@ -17,7 +17,6 @@ export interface LLMConfig {
   group?: string;
   description?: string;
   updated_at?: string;
-  active_profile_id?: string;
   profiles?: LLMConfig[];
   provider: Provider;
   api_style?: "responses" | "chat_completions";
@@ -892,13 +891,6 @@ export function saveConfig(config: LLMConfig): Promise<LLMConfig> {
   });
 }
 
-export function activateConfigProfile(id: string): Promise<LLMConfig> {
-  return requestJSON<LLMConfig>("/api/llm/config/activate", {
-    method: "POST",
-    body: JSON.stringify({ id })
-  });
-}
-
 export function reorderConfigProfiles(ids: string[]): Promise<LLMConfig> {
   return requestJSON<LLMConfig>("/api/llm/config/reorder", {
     method: "POST",
@@ -920,7 +912,7 @@ export function deleteConfigProfile(id: string): Promise<LLMConfig> {
   });
 }
 
-export function importConfigProfiles(payload: Pick<LLMConfig, "active_profile_id" | "profiles">): Promise<LLMConfig> {
+export function importConfigProfiles(payload: Pick<LLMConfig, "profiles">): Promise<LLMConfig> {
   return requestJSON<LLMConfig>("/api/llm/config/import", {
     method: "POST",
     body: JSON.stringify(payload)

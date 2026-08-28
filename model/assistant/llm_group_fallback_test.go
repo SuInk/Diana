@@ -12,7 +12,6 @@ import (
 
 func TestMemoryUsesIntentRoleInsteadOfActiveImageProfile(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "image-p",
 		Profiles: []llm.Profile{
 			{ID: "chat-p", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-model"}},
 			{ID: "intent-p", Group: llm.GroupIntent, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "intent-model"}},
@@ -88,7 +87,6 @@ func groupFallbackRegistry(t *testing.T) *llm.ProviderRegistry {
 // 对话配置在默认分组、生图配置在 image 组，激活的是生图那套。
 func groupFallbackSet() llm.ProfileSet {
 	return llm.ProfileSet{
-		ActiveID: "image-p",
 		Profiles: []llm.Profile{
 			{ID: "chat-p", Name: "对话", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-c", Model: "gpt-chat"}},
 			{ID: "image-p", Name: "生图", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-i", Model: "gpt-image"}},
@@ -111,11 +109,10 @@ func TestChatSelectionNeverFallsBackToCrossGroupActiveProfile(t *testing.T) {
 	}
 }
 
-// 同组的激活配置照旧生效：默认分组里并排放两套时，选哪套仍然由「激活配置」决定，
-// 不能因为这次修复变成永远取第一个。
-func TestChatSelectionStillHonoursActiveProfileWithinGroup(t *testing.T) {
+// 同组里并排放两套时按列表顺序取第一条。这条原来断言的是「由激活配置决定」——
+// 那个隐藏状态会让列表顺序和实跑顺序对不上，去掉之后所见即所得。
+func TestChatSelectionTakesFirstProfileWithinGroup(t *testing.T) {
 	set := llm.ProfileSet{
-		ActiveID: "chat-b",
 		Profiles: []llm.Profile{
 			{ID: "chat-a", Name: "对话A", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-a", Model: "gpt-chat"}},
 			{ID: "chat-b", Name: "对话B", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-b", Model: "gpt-chat"}},
@@ -139,8 +136,8 @@ func TestChatSelectionStillHonoursActiveProfileWithinGroup(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if selection.ProviderID != "chat-b" {
-		t.Fatalf("selection = %+v，同组时应当尊重激活配置", selection)
+	if selection.ProviderID != "chat-a" {
+		t.Fatalf("selection = %+v，同组时应当取列表第一条", selection)
 	}
 }
 
@@ -158,7 +155,6 @@ func TestNonChatSelectionPrefersItsOwnGroup(t *testing.T) {
 // 本分组一套配置都没有时宁可报「没有可用配置」，也不要跨组硬接。
 func TestSelectionReportsNoProfileRatherThanCrossingGroups(t *testing.T) {
 	set := llm.ProfileSet{
-		ActiveID: "image-p",
 		Profiles: []llm.Profile{
 			{ID: "image-p", Name: "生图", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-i", Model: "gpt-image"}},
 		},
@@ -189,8 +185,8 @@ func TestChatProfilesLiveInDefaultGroupNotChatGroup(t *testing.T) {
 
 // 拦的是「干不了这活」，不是「分组不一样」。视觉、意图没单独配置时回落到对话配置
 // 是正常且有用的（大多数对话模型本来就能看图），一刀切按分组拦会把它一起拦掉——
-// 这条测试就是防止以后又收紧成那样。
-func TestVisionStillFallsBackToChatActiveProfile(t *testing.T) {
+// 这条测试就是防止以后又收紧成那样。去掉「激活配置」时就差点又踩一次。
+func TestVisionStillFallsBackToChatProfile(t *testing.T) {
 	registry, err := llm.RegistryFromDocument(llm.ProviderRegistryDocument{
 		Version: 1,
 		Providers: []llm.ProviderDefinition{
@@ -204,7 +200,6 @@ func TestVisionStillFallsBackToChatActiveProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	set := llm.ProfileSet{
-		ActiveID: "chat-p",
 		Profiles: []llm.Profile{
 			{ID: "chat-p", Name: "对话", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-c", Model: "gpt-chat"}},
 		},
@@ -249,5 +244,69 @@ func TestProfileGroupServesOnlyBlocksSinglePurposeGroups(t *testing.T) {
 		if !profileGroupServes(group, group) {
 			t.Fatalf("%s 同组应当可用", group)
 		}
+	}
+}
+
+// 默认分组为空时会拿列表第一条兜底。第一条正好是生图配置的话，不加能力检查就会
+// 拿 gpt-image 去发文本请求——「激活配置」时代踩过这个坑，概念去掉之后兜底这条
+// 路径仍然存在，检查得跟着留下。
+func TestChatFallbackRefusesImageOnlyFirstProfile(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		Profiles: []llm.Profile{
+			{ID: "image-p", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "gpt-image-2"}},
+		},
+	}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	used := ""
+	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		used = cfg.Model
+		return &capturingLLMProvider{reply: "ok"}, nil
+	})
+
+	_, err := runtime.runLLMProviderWithFailover(context.Background(), store, runtime.llmCfgFactory, func(client LLMProvider) (string, error) {
+		resp, genErr := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}})
+		if genErr != nil {
+			return "", genErr
+		}
+		return resp.Text, nil
+	})
+	if err == nil {
+		t.Fatalf("只有生图配置时对话调用应当报错，却用上了 %q", used)
+	}
+	if used != "" {
+		t.Fatalf("对话调用用了生图模型 %q", used)
+	}
+}
+
+// 组内候选严格按列表顺序，不受任何隐藏状态影响。
+func TestChatGroupCandidatesFollowListOrder(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		Profiles: []llm.Profile{
+			{ID: "first", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "model-first"}},
+			{ID: "second", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "model-second"}},
+		},
+	}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	var attempts []string
+	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		attempts = append(attempts, cfg.Model)
+		return &capturingLLMProvider{reply: "ok"}, nil
+	})
+
+	if _, err := runtime.runLLMProviderWithFailover(context.Background(), store, runtime.llmCfgFactory, func(client LLMProvider) (string, error) {
+		resp, genErr := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}})
+		if genErr != nil {
+			return "", genErr
+		}
+		return resp.Text, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) == 0 || attempts[0] != "model-first" {
+		t.Fatalf("首选应当是列表第一条，实际 %#v", attempts)
+	}
+	// 降级不再把「谁成功了」写回配置集：配置集是用户编排的，不该被运行时改。
+	if store.saves != 0 {
+		t.Fatalf("降级不该写回配置集，却保存了 %d 次", store.saves)
 	}
 }
