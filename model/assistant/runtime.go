@@ -2953,6 +2953,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	olderSummary := ""
 	sessionThread := ""
 	summaryRecompressed := false
+	var threadUsage contextLayerUsage
 	var contextPreload *promptContextPreload
 	if !authoritativePluginContext {
 		// contextSummary 只读内存里的压缩摘要，不做 I/O，留在原处：下面的意图路由
@@ -3167,7 +3168,22 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if thread := strings.TrimSpace(sessionThread); thread != "" {
 			const threadPrefix = "【当前会话进行状态，用于接上正在聊的事；不要复述它，也不要直接回复它】\n"
 			threadBudget := sessionThreadBudget(r.promptContextWindowTokens(event, cfg)) - llm.EstimateTextTokens(threadPrefix)
+			// 便签只有一条，没有排序阶段：候选就是它本身，装不下只会被截短。
+			threadUsage = contextLayerUsage{
+				Layer:           "session_thread",
+				Budget:          threadBudget,
+				CandidateItems:  1,
+				CandidateTokens: llm.EstimateTextTokens(thread),
+				RankedItems:     1,
+				RankedTokens:    llm.EstimateTextTokens(thread),
+				Reason:          contextLayerReasonFits,
+			}
 			if thread = fitSessionThreadToBudget(thread, threadBudget); thread != "" {
+				threadUsage.SelectedItems = 1
+				threadUsage.SelectedTokens = llm.EstimateTextTokens(thread)
+				if threadUsage.SelectedTokens < threadUsage.CandidateTokens {
+					threadUsage.Reason = contextLayerReasonBudget
+				}
 				messages = append(messages, llm.Message{
 					Role:       llm.RoleUser,
 					Content:    threadPrefix + thread,
@@ -3379,7 +3395,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 	}
 	messages = append(messages, currentMessage)
-	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed)
+	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed, contextPreload.layerUsage(threadUsage))
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
