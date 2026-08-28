@@ -4886,7 +4886,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
 		profileID, _ := replyRuleLLMProfileID(ctx)
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, group, profileID)
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), group, profileID)
 		if err != nil {
 			return "", err
 		}
@@ -4905,7 +4905,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return "", fmt.Errorf("chatbot: reply rule llm profile %q not found", profileID)
 		}
-		profiles, roleErr := r.roleBoundProfiles(set, group)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -4952,19 +4952,9 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 // 变成 vision，但说话的还是同一台机器人。没有单独绑视觉模型时就该继续用它绑定的
 // 聊天模型，而不是滑到全局激活配置那份和这台机器人无关的配置上——那种切换是静默的，
 // 表现为「聊着聊着换了个模型答话」，而日志里两轮的 provider/model 都是「正常」的。
+// modelRoleForGroup 只按分组找绑定，不看用途。带用途的查找见 modelRoleFor。
 func modelRoleForGroup(roles map[string]ModelRole, group string) (ModelRole, bool) {
-	if len(roles) == 0 {
-		return ModelRole{}, false
-	}
-	key := llm.NormalizeProfileGroup(group)
-	if key == llm.GroupChat {
-		key = "chat"
-	}
-	if role, ok := roles[key]; ok {
-		return role, true
-	}
-	role, ok := roles["chat"]
-	return role, ok
+	return modelRoleFor(roles, "", group)
 }
 
 // logUnboundGroupFallback 记录一次「这台机器人有模型绑定，但这个用途落到了全局激活
@@ -4976,18 +4966,17 @@ func logUnboundGroupFallback(roles map[string]ModelRole, group, profileID string
 	log.Printf("chatbot model role fallback: group=%q has no bound provider, using the active profile %q", llm.NormalizeProfileGroup(group), profileID)
 }
 
-func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSet, roles map[string]ModelRole, group, profileID string) (llm.AgentModelConfig, bool, error) {
+func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSet, roles map[string]ModelRole, purpose, group, profileID string) (llm.AgentModelConfig, bool, error) {
 	if registry == nil {
 		return llm.AgentModelConfig{}, false, nil
 	}
 	// 分组名和角色名是两套命名空间，别用同一个变量串着走：
-	// 角色键用 "chat"（机器人页那四行就是 chat/vision/intent/image），
-	// 而聊天配置的分组名是 "default"。原先这里把 key 从 "default" 改写成 "chat"
-	// 之后又拿它当分组名去查，结果是查一个根本不存在的分组——「先在同组里找」
-	// 这层保护对聊天调用从来没生效过。角色查找由 modelRoleForGroup 自己归一化，
+	// 角色键用 "chat"，而聊天配置的分组名是 "default"。原先这里把 key 从 "default"
+	// 改写成 "chat" 之后又拿它当分组名去查，结果是查一个根本不存在的分组——「先在
+	// 同组里找」这层保护对聊天调用从来没生效过。角色查找由 modelRoleFor 自己归一化，
 	// 这里只需要分组名。
 	groupKey := llm.NormalizeProfileGroup(group)
-	boundRole, hasBoundRole := modelRoleForGroup(roles, group)
+	boundRole, hasBoundRole := modelRoleFor(roles, purpose, group)
 	if role := boundRole; hasBoundRole && role.ProviderID != "" && role.ModelID != "" {
 		return normalizeRegistrySelection(registry, role.ProviderID, role.ModelID), true, nil
 	}
@@ -5065,14 +5054,14 @@ func profileRegistrySelection(registry *llm.ProviderRegistry, profile llm.Profil
 	return normalizeRegistrySelection(registry, profile.ID, config.Model)
 }
 
-func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Profile, error) {
+func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group string) ([]llm.Profile, error) {
 	r.mu.RLock()
 	roles := normalizeModelRoles(r.cfg.ModelRoles)
 	r.mu.RUnlock()
 	if len(roles) == 0 {
 		return nil, nil
 	}
-	role, ok := modelRoleForGroup(roles, group)
+	role, ok := modelRoleFor(roles, purpose, group)
 	if !ok {
 		return nil, nil
 	}
@@ -5294,7 +5283,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		r.mu.RLock()
 		roles := normalizeModelRoles(r.cfg.ModelRoles)
 		r.mu.RUnlock()
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, llm.GroupIntent, "")
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), llm.GroupIntent, "")
 		if err != nil {
 			return "", err
 		}
@@ -5305,7 +5294,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		profiles, roleErr := r.roleBoundProfiles(set, llm.GroupIntent)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
 		if roleErr != nil {
 			return "", roleErr
 		}

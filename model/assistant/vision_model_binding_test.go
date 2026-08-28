@@ -34,7 +34,7 @@ func TestVisionTurnKeepsBoundChatProfile(t *testing.T) {
 	}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
 
 	for _, group := range []string{llm.GroupChat, llm.GroupVision} {
-		profiles, err := runtime.roleBoundProfiles(set, group)
+		profiles, err := runtime.roleBoundProfiles("", set, group)
 		if err != nil {
 			t.Fatalf("group %s: %v", group, err)
 		}
@@ -63,7 +63,7 @@ func TestVisionTurnUsesItsOwnBindingWhenPresent(t *testing.T) {
 		},
 	}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
 
-	profiles, err := runtime.roleBoundProfiles(set, llm.GroupVision)
+	profiles, err := runtime.roleBoundProfiles("", set, llm.GroupVision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestRegistrySelectionFallsBackToBoundChatRole(t *testing.T) {
 	set := visionBindingProfileSet()
 
 	for _, group := range []string{llm.GroupChat, llm.GroupVision} {
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, group, "")
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, "", group, "")
 		if err != nil || !ok {
 			t.Fatalf("group %s: ok=%v err=%v", group, ok, err)
 		}
@@ -124,7 +124,7 @@ func TestRegistrySelectionWithoutRolesFallsBackToFirstChatProfile(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	selection, ok, err := registrySelectionForGroup(registry, visionBindingProfileSet(), nil, llm.GroupVision, "")
+	selection, ok, err := registrySelectionForGroup(registry, visionBindingProfileSet(), nil, "", llm.GroupVision, "")
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}

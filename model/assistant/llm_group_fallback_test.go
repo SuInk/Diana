@@ -97,7 +97,7 @@ func groupFallbackSet() llm.ProfileSet {
 // 激活的是生图配置时，聊天调用不能拿生图模型去发文本请求。
 // 这是原来的实际行为：选到 image-p / gpt-image，而日志里 provider 和 model 都「正常」。
 func TestChatSelectionNeverFallsBackToCrossGroupActiveProfile(t *testing.T) {
-	selection, ok, err := registrySelectionForGroup(groupFallbackRegistry(t), groupFallbackSet(), nil, llm.GroupChat, "")
+	selection, ok, err := registrySelectionForGroup(groupFallbackRegistry(t), groupFallbackSet(), nil, "", llm.GroupChat, "")
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
@@ -132,7 +132,7 @@ func TestChatSelectionTakesFirstProfileWithinGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selection, ok, err := registrySelectionForGroup(registry, set, nil, llm.GroupChat, "")
+	selection, ok, err := registrySelectionForGroup(registry, set, nil, "", llm.GroupChat, "")
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
@@ -143,7 +143,7 @@ func TestChatSelectionTakesFirstProfileWithinGroup(t *testing.T) {
 
 // 非聊天用途仍然先按分组找，不受这次改动影响。
 func TestNonChatSelectionPrefersItsOwnGroup(t *testing.T) {
-	selection, ok, err := registrySelectionForGroup(groupFallbackRegistry(t), groupFallbackSet(), nil, llm.GroupImage, "")
+	selection, ok, err := registrySelectionForGroup(groupFallbackRegistry(t), groupFallbackSet(), nil, "", llm.GroupImage, "")
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
@@ -159,7 +159,7 @@ func TestSelectionReportsNoProfileRatherThanCrossingGroups(t *testing.T) {
 			{ID: "image-p", Name: "生图", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-i", Model: "gpt-image"}},
 		},
 	}
-	selection, ok, err := registrySelectionForGroup(groupFallbackRegistry(t), set, nil, llm.GroupChat, "")
+	selection, ok, err := registrySelectionForGroup(groupFallbackRegistry(t), set, nil, "", llm.GroupChat, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestVisionStillFallsBackToChatProfile(t *testing.T) {
 		},
 	}
 	for _, group := range []string{llm.GroupVision, llm.GroupIntent} {
-		selection, ok, err := registrySelectionForGroup(registry, set, nil, group, "")
+		selection, ok, err := registrySelectionForGroup(registry, set, nil, "", group, "")
 		if err != nil || !ok {
 			t.Fatalf("group %s: ok=%v err=%v", group, ok, err)
 		}

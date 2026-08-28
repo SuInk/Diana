@@ -602,7 +602,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
-		profiles, roleErr := r.roleBoundProfiles(set, llm.GroupIntent)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
 		if roleErr != nil {
 			return "", roleErr
 		}
