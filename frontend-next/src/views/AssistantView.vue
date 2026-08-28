@@ -304,6 +304,61 @@
 
         </div>
 
+        <div v-show="editorTab === 'model'" class="stack">
+          <!-- 聊天内模型管理 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>聊天内模型管理</h2>
+              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
+                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">允许主人在聊天中修改 Provider 和模型</span>
+                </label>
+                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- 模型分配 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>模型分配</h2>
+              <span class="card-sub">按用途选择 Provider 与模型；Provider 在「LLM 配置」页管理</span>
+            </div>
+            <div class="card-body stack" style="gap: 12px">
+              <div class="model-role-row model-role-head" aria-hidden="true">
+                <span>用途</span>
+                <span>Provider / 分组</span>
+                <span>模型</span>
+              </div>
+              <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
+                <span class="model-role-label">{{ role.label }}</span>
+                <AppSelect
+                  :model-value="roleSelectionValue(role.key)"
+                  :options="channelOptionsFor(role.key)"
+                  @update:model-value="(value) => setRoleChannel(role.key, value)"
+                />
+                <AppSelect
+                  :model-value="roleModelValue(role.key)"
+                  :options="modelOptionsFor(role.key)"
+                  @update:model-value="(value) => setRoleModel(role.key, value)"
+                />
+              </div>
+              <p class="muted" style="margin: 0; font-size: 12.5px">
+                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话 Provider 的生图配置。
+              </p>
+            </div>
+          </section>
+
+        </div>
+
         <div v-show="editorTab === 'behavior'" class="stack">
           <!-- 触发与回复 -->
           <section class="card">
@@ -792,61 +847,6 @@
 
         </div>
 
-        <div v-show="editorTab === 'model'" class="stack">
-          <!-- 聊天内模型管理 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>聊天内模型管理</h2>
-              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
-                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改 Provider 和模型</span>
-                </label>
-                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- 模型分配 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>模型分配</h2>
-              <span class="card-sub">按用途选择 Provider 与模型；Provider 在「LLM 配置」页管理</span>
-            </div>
-            <div class="card-body stack" style="gap: 12px">
-              <div class="model-role-row model-role-head" aria-hidden="true">
-                <span>用途</span>
-                <span>Provider / 分组</span>
-                <span>模型</span>
-              </div>
-              <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
-                <span class="model-role-label">{{ role.label }}</span>
-                <AppSelect
-                  :model-value="roleSelectionValue(role.key)"
-                  :options="channelOptionsFor(role.key)"
-                  @update:model-value="(value) => setRoleChannel(role.key, value)"
-                />
-                <AppSelect
-                  :model-value="roleModelValue(role.key)"
-                  :options="modelOptionsFor(role.key)"
-                  @update:model-value="(value) => setRoleModel(role.key, value)"
-                />
-              </div>
-              <p class="muted" style="margin: 0; font-size: 12.5px">
-                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话 Provider 的生图配置。
-              </p>
-            </div>
-          </section>
-
-        </div>
-
         <div v-show="editorTab === 'advanced'" class="stack">
           <!-- Agent -->
           <section class="card">
@@ -1194,11 +1194,15 @@ const isOneBotPlatform = computed(() => {
 
 // 机器人配置项太多（41 个字段），平铺成一列要滚 6 屏。按「配一次就不动」
 // 和「经常调」的区别分区，每区一屏内看完。
+//
+// 顺序按新建一台机器人的配置次序排：先接上通道，再指定模型——没有模型
+// 后面全都跑不起来，所以它排在行为和人设之前。模板里的面板顺序与这里
+// 保持一致，免得读代码时对不上。
 const editorTabs = [
   { key: "access", label: "接入" },
+  { key: "model", label: "模型" },
   { key: "behavior", label: "行为" },
   { key: "persona", label: "人设" },
-  { key: "model", label: "模型" },
   { key: "advanced", label: "高级" }
 ] as const;
 type EditorTab = (typeof editorTabs)[number]["key"];
