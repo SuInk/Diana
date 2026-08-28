@@ -258,6 +258,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
 		NewStatusCommandPlugin(),
+		NewOpenAPIPlugin(),
 		capabilities,
 	)
 	capabilities.setPluginStateProvider(manager.List)

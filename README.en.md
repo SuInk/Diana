@@ -306,6 +306,21 @@ Browser tools need Chrome/Chromium with remote debugging enabled: `chrome --remo
 
 The Go binary cannot load Python NoneBot plugins directly, so run a NoneBot sidecar: install the plugins in a NoneBot2 project, give it an OneBot v11 reverse WebSocket driver, then enable the `NoneBot plugin bridge` on Diana's bot page (default `ws://127.0.0.1:8080/onebot/v11/ws`). Diana forwards OneBot events to the sidecar, and forwards the plugins' `send_msg`, `get_group_info`, and other API calls back to the active OneBot client.
 
+### Outbound API
+
+External systems (CI, monitoring, scripts) can push messages to a chosen conversation over HTTP, using Diana as a notification outlet. It ships as a built-in plugin (`对外 API`) that is **disabled by default**: external calls are only accepted after enabling it on the Plugins page or via the "Settings → Security → Outbound API" card, and disabling it makes them return 403 immediately. API keys are created on that same card; the plaintext is shown exactly once at creation and only its SHA-256 hash is stored. Revocation takes effect immediately, and key management works regardless of the plugin switch, so you can prepare keys before opening the gate. Every call is logged in the Log Centre with `actor` set to `openapi:<key name>`.
+
+```sh
+curl -X POST http://127.0.0.1:18080/openapi/v1/messages \
+  -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"group_id": "123456", "text": "Build #42 passed"}'
+```
+
+- Address the target with `group_id` or `user_id`; a group target that also carries `user_id` mentions that member. On multi-channel deployments add `platform` (e.g. `onebot-v11`, `telegram`) or `profile_id` for routing; with a single enabled channel both can be omitted.
+- `GET /openapi/v1/status` uses the same key for health checks and lists the deliverable channels.
+- Each key is rate-limited to 60 requests per minute by default (adjustable in the plugin settings); exceeding it returns `429` with `Retry-After`. The endpoint only delivers text — it never triggers a model call.
+
 ### Log Centre
 
 The Log Centre page shows persisted operation and error logs: saving or switching LLM configurations, starting and stopping bots, plugin management, and system updates are all recorded with an `actor` (the WebUI defaults to `web:<client IP>`; a gateway can pass `X-Diana-Actor`, `X-Operator`, or `X-Forwarded-User`; in-chat model commands record `qq:<user id>`).

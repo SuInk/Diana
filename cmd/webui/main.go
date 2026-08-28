@@ -414,6 +414,12 @@ func main() {
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
 	napCatLoginHandler.Register(router)
+	// 对外开放接口：/api/openapi 下的密钥管理走上面的会话鉴权，
+	// /openapi/v1 下的推送接口由 Bearer 密钥自行鉴权，总开关是
+	// 「对外 API」内置插件（默认关闭）。
+	openAPIHandler := webui.NewOpenAPIHandler(webui.NewOpenAPIKeyManager(sqliteStore), botRuntime, plugins)
+	openAPIHandler.SetLogStore(sqliteStore)
+	openAPIHandler.Register(router)
 	// 重启复用 SIGTERM 的优雅关停链路：取消根 ctx 让 Serve 返回，再由
 	// main 收尾时判断 restartRequested 原地重启。
 	var restartRequested atomic.Bool

@@ -6,6 +6,7 @@ import type {
   AssistantEventDetail,
   AssistantTask,
   LLMConfig,
+  OpenAPIKey,
   PluginState,
   BotProfileConfig,
   BotGroupSummary,
@@ -73,6 +74,7 @@ let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
+  { manifest: { id: "official.open-api", name: "对外 API", version: "0.1.0", description: "让 CI、监控这类外部系统凭密钥调用 HTTP 接口向指定会话推送消息；密钥在「设置 → 安全」里管理。", official: true, built_in: true, default_disabled: true, permissions: ["network:http", "message:write"], settings: [{ key: "rate_limit_per_minute", label: "单密钥限流", description: "每把密钥每分钟允许的调用次数，超出返回 429。", type: "number", default: 60, min: 1, max: 600, step: 10, unit: "次/分钟" }] }, installed: true, enabled: false },
   {
     manifest: {
       id: "official.repository-publish", name: "Issue 发布", version: "0.4.0", description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
@@ -352,6 +354,10 @@ function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   return llmConfig;
 }
 
+let demoApiKeys: OpenAPIKey[] = [
+  { id: "key-1", name: "ci-notify", prefix: "diana_3fa8c2e1", created_at: before(4320), last_used_at: before(35) }
+];
+
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
@@ -371,6 +377,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ]
     });
   if (path.startsWith("/api/auth/")) return json({ ok: true, username: "demo" });
+  if (path === "/api/openapi/keys" && method === "GET") return json({ keys: demoApiKeys });
+  if (path === "/api/openapi/keys" && method === "POST") {
+    const key: OpenAPIKey = { id: `key-${Date.now()}`, name: String(body.name ?? "未命名"), prefix: "diana_demo0000", created_at: new Date().toISOString() };
+    demoApiKeys = [key, ...demoApiKeys];
+    return json({ key, token: "diana_demo00000000000000000000000000000000000000000000000000000000000000" });
+  }
+  if (path.startsWith("/api/openapi/keys/") && method === "DELETE") {
+    const keyID = decodeURIComponent(path.split("/").pop() ?? "");
+    demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
+    return json({ revoked: true });
+  }
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
 
