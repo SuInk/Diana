@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,8 +37,8 @@ const (
 	musicPluginID = "official.music"
 	musicToolName = "diana.music"
 
-	musicSettingAPIBase     = "api_base"
-	musicSettingCookie      = "music_u_cookie"
+	musicSettingSources     = "enabled_sources"
+	musicSettingPreferred   = "preferred_source"
 	musicSettingBitrate     = "bitrate"
 	musicSettingMaxDuration = "max_duration_seconds"
 	musicSettingMaxMB       = "max_file_mb"
@@ -53,67 +55,42 @@ const (
 )
 
 type MusicPlugin struct {
-	// client 非空时所有请求都用它，测试用 httptest 注入；生产留空，
-	// 对外抓取走 netguard 的公网客户端，只有管理员自己填的 API 地址用普通客户端
-	// ——自建的 NeteaseCloudMusicApi 通常就在 127.0.0.1，被 SSRF 防护挡掉才是错的。
-	client        *http.Client
+	fetcher       *musicFetcher
+	sources       []musicSource
 	commandRunner voiceCommandRunner
-	// officialDetailAPI / officialSearchAPI / officialOuterURL 是官方接口的地址模板。
-	// 做成字段而不是直接写常量，是为了让测试指向本地服务器——否则「自建 API 挂了」
-	// 这条分支只能靠真的去打网易云的线上接口才能验，测试就成了对外部服务的依赖。
-	officialDetailAPI string
-	officialSearchAPI string
-	officialOuterURL  string
 
 	mu     sync.RWMutex
 	sharer LocalMediaSharer
 }
 
 type musicConfig struct {
-	APIBase       string
-	Cookie        string
-	Bitrate       int
-	MaxDuration   time.Duration
-	MaxBytes      int64
-	Timeout       time.Duration
-	SendSongInfo  bool
-	RequestedSong bool
-	OutputDir     string
-	FFmpegPath    string
-	SilkEncoder   string
-	SilkBitrate   int
+	EnabledSources  []string
+	PreferredSource string
+	SourceOptions   map[string]musicSourceOptions
+	Bitrate         int
+	MaxDuration     time.Duration
+	MaxBytes        int64
+	Timeout         time.Duration
+	SendSongInfo    bool
+	RequestedSong   bool
+	OutputDir       string
+	FFmpegPath      string
+	SilkEncoder     string
+	SilkBitrate     int
 }
 
-// song 是一首歌在这里需要知道的全部信息。字段来源见 netease_source.go。
-type song struct {
-	ID       string
-	Name     string
-	Artists  string
-	Album    string
-	Duration time.Duration
+func (c musicConfig) sourceOptions(key string) musicSourceOptions {
+	return c.SourceOptions[key]
 }
 
-// Title 返回「歌名 - 歌手」这种一眼能认出来的说法，拿不到歌手时只留歌名。
-func (s song) Title() string {
-	name := strings.TrimSpace(s.Name)
-	artists := strings.TrimSpace(s.Artists)
-	switch {
-	case name == "" && artists == "":
-		return ""
-	case artists == "":
-		return name
-	case name == "":
-		return artists
-	}
-	return name + " - " + artists
+func (c musicConfig) sourceEnabled(key string) bool {
+	return slices.Contains(c.EnabledSources, key)
 }
 
 func NewMusicPlugin(client *http.Client) *MusicPlugin {
 	return &MusicPlugin{
-		client:            client,
-		officialDetailAPI: neteaseDetailAPI,
-		officialSearchAPI: neteaseSearchAPI,
-		officialOuterURL:  neteaseOuterURL,
+		fetcher: &musicFetcher{client: client},
+		sources: defaultMusicSources(),
 		commandRunner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return exec.CommandContext(ctx, name, args...).CombinedOutput()
 		},
@@ -124,8 +101,8 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.1.0",
-		Description: "群里分享的网易云音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。仅 OneBot v11 支持语音。没有配置自建 API 时只能拿到可试听的歌曲。",
+		Version:     "0.2.0",
+		Description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐、酷狗并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"agent:tool", "network:http", "file:write", "process:execute", "message:read", "message:send"},
@@ -138,19 +115,67 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Description: "开启后模型可以按用户要求搜歌并直接发出语音。关掉只保留链接解析。",
 			},
 			{
-				Key:         musicSettingAPIBase,
-				Label:       "自建 API 地址",
-				Type:        PluginSettingTypeString,
-				Default:     "",
-				Description: "自建 NeteaseCloudMusicApi 的地址，例如 http://127.0.0.1:3000。留空则走官方接口，只能拿到可试听的歌曲。",
+				Key:         musicSettingSources,
+				Label:       "启用曲库",
+				Type:        PluginSettingTypeMultiSelect,
+				Default:     musicSourceKeys(),
+				Options:     musicSourceOptionsList(),
+				Description: "一首歌在这家是会员专享、在那家能试听是常事。勾多几家，一家放不出来就自动换下一家。",
 			},
 			{
-				Key:         musicSettingCookie,
-				Label:       "MUSIC_U Cookie",
+				Key:         musicSettingPreferred,
+				Label:       "点歌优先曲库",
+				Type:        PluginSettingTypeSelect,
+				Default:     "",
+				Options:     append([]PluginSettingOption{{Value: "", Label: "按启用顺序"}}, musicSourceOptionsList()...),
+				Description: "点歌时先问哪家。分享链接始终用链接自己的平台，不受这里影响。",
+			},
+			// 每家的自建接口和 Cookie 分开填：它们的地址格式和凭据形式本来就不一样，
+			// 挤成一个框只会让人不知道该填哪个。
+			{
+				Key:         musicSourceAPIBaseSetting("netease"),
+				Label:       "网易云自建 API 地址",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Description: "自建 NeteaseCloudMusicApi 的地址，例如 http://127.0.0.1:3000。留空走官方接口，只能拿到可试听的歌曲。",
+			},
+			{
+				Key:         musicSourceCookieSetting("netease"),
+				Label:       "网易云 MUSIC_U Cookie",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
-				Description: "登录 Cookie 里的 MUSIC_U，配合自建 API 用于会员音质和受限曲目。",
+				Description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。",
+			},
+			{
+				Key:         musicSourceAPIBaseSetting("qq"),
+				Label:       "QQ 音乐自建 API 地址",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Description: "自建 QQMusicApi 的地址。留空走官方接口，无登录态时多数曲目取不到播放地址。",
+			},
+			{
+				Key:         musicSourceCookieSetting("qq"),
+				Label:       "QQ 音乐 Cookie",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+				Description: "完整的 Cookie 串，用于会员和独家曲目。",
+			},
+			{
+				Key:         musicSourceAPIBaseSetting("kugou"),
+				Label:       "酷狗自建 API 地址",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Description: "自建 KuGouMusicApi 的地址。留空走官方接口。",
+			},
+			{
+				Key:         musicSourceCookieSetting("kugou"),
+				Label:       "酷狗 Cookie",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+				Description: "完整的 Cookie 串。留空时会派生一个设备号，可试听曲目通常够用。",
 			},
 			{
 				Key:     musicSettingBitrate,
@@ -162,7 +187,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 					{Value: "192000", Label: "较高 192k"},
 					{Value: "320000", Label: "极高 320k"},
 				},
-				Description: "只对自建 API 生效；官方外链接口固定返回试听音质。",
+				Description: "只对网易云的自建 API 生效；其余情况由平台自己决定码率。",
 			},
 			{
 				Key:         musicSettingMaxDuration,
@@ -218,7 +243,14 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 // 这里认的是链接形状，不是「用户想不想听歌」那种语义意图——和链接解析同一类判断。
 // 点歌那半边正相反，没有可认的形状，所以交给模型走 diana.music，不在这里猜。
 func (p *MusicPlugin) ShouldHandle(event MessageEvent, text string) bool {
-	return len(neteaseReferences(resolverSourceText(event, text))) > 0
+	// 触发判断用「全部曲库」而不是「启用的曲库」：这里还读不到会话级的插件设置，
+	// 少认一家的代价是那条链接彻底没反应，多认一家的代价只是 Handle 里空跑一次。
+	for _, source := range p.sources {
+		if len(source.References(resolverSourceText(event, text))) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *MusicPlugin) SetLocalMediaSharer(sharer LocalMediaSharer) {
@@ -245,21 +277,17 @@ func (p *MusicPlugin) AgentTools(settings SettingValues) ([]agent.Tool, error) {
 }
 
 func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
-	references := neteaseReferences(resolverSourceText(req.Event, req.Text))
+	cfg := musicConfigFromSettings(req.Settings)
+	references := p.musicReferencesIn(cfg, resolverSourceText(req.Event, req.Text))
 	if len(references) == 0 {
 		return nil, nil
 	}
-	cfg := musicConfigFromSettings(req.Settings)
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
 	// 一条消息里贴了好几首也只发第一首：连着甩出几条语音在群里是刷屏，
 	// 剩下的仍然由链接解析给出标题。
-	songID := p.resolveSongID(ctx, cfg, references[0])
-	if songID == "" {
-		return nil, nil
-	}
-	found, ok := p.fetchSongDetail(ctx, cfg, songID)
+	found, ok := p.songFromReference(ctx, cfg, references[0])
 	if !ok {
 		// 连歌名都拿不到就别抢这条消息，让链接解析去抓标题。
 		return nil, nil
@@ -271,15 +299,75 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 		// 只有 OneBot v11 有 record 段。别的平台硬发 CQ 码会变成一行乱字符。
 		return musicNoticeResponse(found, "当前平台不支持发送语音"), nil
 	}
-	record, err := p.prepareSongVoice(ctx, cfg, found)
+	playable, ok := p.playableSong(ctx, cfg, found)
+	if !ok {
+		return musicNoticeResponse(found, "各家曲库都拿不到可播放的音频，可能是会员或独家曲目"), nil
+	}
+	record, err := p.prepareSongVoice(ctx, cfg, playable)
 	if err != nil {
-		return musicNoticeResponse(found, err.Error()), nil
+		return musicNoticeResponse(playable, err.Error()), nil
 	}
 	return &PluginResponse{
 		Handled: true,
-		Reply:   musicVoiceReply(cfg, found, record),
-		Context: musicSongContext(found, "已作为语音发送"),
+		Reply:   musicVoiceReply(cfg, playable, record),
+		Context: musicSongContext(p, playable, "已作为语音发送"),
 	}, nil
+}
+
+// songFromReference 把一条分享引用变成一首歌。
+func (p *MusicPlugin) songFromReference(ctx context.Context, cfg musicConfig, ref musicReference) (song, bool) {
+	source, ok := p.sourceByKey(ref.Source)
+	if !ok {
+		return song{}, false
+	}
+	songID := source.ResolveSongID(ctx, p.fetcher, cfg, ref)
+	if songID == "" {
+		return song{}, false
+	}
+	return source.SongDetail(ctx, p.fetcher, cfg, songID)
+}
+
+// playableSong 补上播放地址。分享链接那首放不出来时，按歌名去别家再找一遍
+// ——听的人要的是这首歌，不是这条链接来自哪个 App。
+func (p *MusicPlugin) playableSong(ctx context.Context, cfg musicConfig, found song) (song, bool) {
+	if source, ok := p.sourceByKey(found.Source); ok && cfg.sourceEnabled(found.Source) {
+		if playURL := source.PlayableURL(ctx, p.fetcher, cfg, found.ID); playURL != "" {
+			found.PlayURL = playURL
+			return found, true
+		}
+	}
+	title := found.Title()
+	if title == "" {
+		return song{}, false
+	}
+	return p.pickSong(ctx, cfg, title, found.Source)
+}
+
+// pickSong 依次问各家曲库，返回第一首「搜得到而且放得出来」的歌。
+//
+// 只搜到不算数：搜到却拿不到播放地址是会员和独家曲目的常态，那种结果发不出声，
+// 拿它当命中就等于让上层去下载一个空地址。skip 里的曲库刚试过，不必再问一遍。
+func (p *MusicPlugin) pickSong(ctx context.Context, cfg musicConfig, query string, skip ...string) (song, bool) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return song{}, false
+	}
+	for _, source := range p.orderedSources(cfg) {
+		if slices.Contains(skip, source.Key()) {
+			continue
+		}
+		found, ok := source.Search(ctx, p.fetcher, cfg, query)
+		if !ok {
+			continue
+		}
+		playURL := source.PlayableURL(ctx, p.fetcher, cfg, found.ID)
+		if playURL == "" {
+			continue
+		}
+		found.PlayURL = playURL
+		return found, true
+	}
+	return song{}, false
 }
 
 // musicVoiceReply 把歌名和语音拼成一条待分条的回复。
@@ -305,16 +393,15 @@ func musicVoiceUnavailableReason(cfg musicConfig, item song) string {
 	return ""
 }
 
-// prepareSongVoice 把一首歌做成可以直接发出去的 CQ record，取源、下载、转码、
-// 共享都在这里，链接解析和点歌走的是同一条路。
+// prepareSongVoice 把一首歌做成可以直接发出去的 CQ record，下载、转码、共享
+// 都在这里，链接解析和点歌走的是同一条路。
 func (p *MusicPlugin) prepareSongVoice(ctx context.Context, cfg musicConfig, item song) (string, error) {
-	audioURL := p.fetchPlayableURL(ctx, cfg, item.ID)
-	if audioURL == "" {
-		return "", fmt.Errorf("拿不到可播放的音频，可能是会员或独家曲目")
+	if strings.TrimSpace(item.PlayURL) == "" {
+		return "", fmt.Errorf("拿不到可播放的音频")
 	}
-	path, err := p.downloadAudio(ctx, cfg, audioURL)
+	path, err := p.downloadAudio(ctx, cfg, item)
 	if err != nil {
-		log.Printf("music download failed: song=%s: %v", item.ID, err)
+		log.Printf("music download failed: source=%s song=%s: %v", item.Source, item.ID, err)
 		return "", fmt.Errorf("下载音频失败")
 	}
 	if encoded, encodeErr := p.encodeSilkIfConfigured(ctx, cfg, path); encodeErr != nil {
@@ -332,6 +419,43 @@ func (p *MusicPlugin) prepareSongVoice(ctx context.Context, cfg musicConfig, ite
 	return "[CQ:record,file=" + escapeCQParameter(sharedURL) + "]", nil
 }
 
+// downloadAudio 把音频落到本地缓存文件。
+func (p *MusicPlugin) downloadAudio(ctx context.Context, cfg musicConfig, item song) (string, error) {
+	if err := os.MkdirAll(cfg.OutputDir, 0o700); err != nil {
+		return "", fmt.Errorf("创建音乐缓存目录失败: %w", err)
+	}
+	file, err := os.CreateTemp(cfg.OutputDir, "diana-music-*"+musicAudioExt(item.PlayURL))
+	if err != nil {
+		return "", fmt.Errorf("创建音乐缓存文件失败: %w", err)
+	}
+	path := file.Name()
+	if closeErr := file.Close(); closeErr != nil {
+		cleanupLocalMediaFile(path)
+		return "", fmt.Errorf("创建音乐缓存文件失败: %w", closeErr)
+	}
+	headers := map[string]string{"User-Agent": resolverUserAgent}
+	if source, ok := p.sourceByKey(item.Source); ok {
+		headers["Referer"] = source.Referer()
+	}
+	if !p.fetcher.downloadToFile(ctx, cfg, item.PlayURL, path, headers) {
+		cleanupLocalMediaFile(path)
+		return "", fmt.Errorf("下载音频失败")
+	}
+	return path, nil
+}
+
+func musicAudioExt(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ".mp3"
+	}
+	ext := strings.ToLower(filepath.Ext(parsed.Path))
+	if slices.Contains(musicAudioExtensions, ext) {
+		return ext
+	}
+	return ".mp3"
+}
+
 // musicNoticeResponse 在发不出语音时仍然把歌曲信息交出去，
 // 并说清楚为什么没有语音——只丢一条「解析失败」等于让人自己猜。
 func musicNoticeResponse(item song, reason string) *PluginResponse {
@@ -342,14 +466,20 @@ func musicNoticeResponse(item song, reason string) *PluginResponse {
 	return &PluginResponse{
 		Handled: true,
 		Reply:   "🎵 " + title + "（" + reason + "）",
-		Context: musicSongContext(item, reason),
+		Context: "音乐：" + title + "\n  备注：" + reason,
 	}
 }
 
-func musicSongContext(item song, note string) string {
+// musicSongContext 是给模型看的来源标签。带上平台名，模型才知道刚才那条语音
+// 是从哪家放的——分享的是网易云链接、实际从酷狗放出来的情况是存在的。
+func musicSongContext(p *MusicPlugin, item song, note string) string {
 	var builder strings.Builder
-	builder.WriteString("网易云音乐：")
+	builder.WriteString("音乐：")
 	builder.WriteString(item.Title())
+	if source, ok := p.sourceByKey(item.Source); ok {
+		builder.WriteString("\n  来源：")
+		builder.WriteString(source.Label())
+	}
 	if album := strings.TrimSpace(item.Album); album != "" {
 		builder.WriteString("\n  专辑：")
 		builder.WriteString(album)
@@ -380,6 +510,7 @@ type musicToolResult struct {
 	OK       bool   `json:"ok"`
 	Action   string `json:"action"`
 	Song     string `json:"song"`
+	Source   string `json:"source"`
 	CQRecord string `json:"cq_record"`
 	Reply    string `json:"reply"`
 }
@@ -415,9 +546,9 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	found, ok := t.plugin.searchSong(ctx, cfg, query)
+	found, ok := t.plugin.pickSong(ctx, cfg, query)
 	if !ok {
-		return "", fmt.Errorf("没搜到《%s》，换个歌名或补上歌手再试", query)
+		return "", fmt.Errorf("各家曲库都没搜到能放的《%s》，换个歌名或补上歌手再试", query)
 	}
 	if reason := musicVoiceUnavailableReason(cfg, found); reason != "" {
 		return "", fmt.Errorf("《%s》%s", found.Title(), reason)
@@ -430,6 +561,7 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 		OK:       true,
 		Action:   "song_ready",
 		Song:     found.Title(),
+		Source:   found.Source,
 		CQRecord: record,
 		Reply:    musicVoiceReply(cfg, found, record),
 	})
@@ -470,16 +602,17 @@ func musicConfigFromSettings(settings SettingValues) musicConfig {
 		maxDuration = defaultMusicMaxDuration
 	}
 	return musicConfig{
-		APIBase:       strings.TrimRight(strings.TrimSpace(settings.String(musicSettingAPIBase, "")), "/"),
-		Cookie:        strings.TrimSpace(settings.String(musicSettingCookie, "")),
-		Bitrate:       bitrate,
-		MaxDuration:   time.Duration(maxDuration) * time.Second,
-		MaxBytes:      int64(maxMB) << 20,
-		Timeout:       time.Duration(timeout) * time.Second,
-		SendSongInfo:  settings.Bool(musicSettingSendInfo, true),
-		RequestedSong: settings.Bool(musicSettingRequestSong, true),
-		OutputDir:     musicOutputDir(),
-		FFmpegPath:    firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_FFMPEG_PATH")), "ffmpeg"),
+		EnabledSources:  musicEnabledSourcesFromSettings(settings),
+		PreferredSource: musicPreferredSourceFromSettings(settings),
+		SourceOptions:   musicSourceOptionsFromSettings(settings),
+		Bitrate:         bitrate,
+		MaxDuration:     time.Duration(maxDuration) * time.Second,
+		MaxBytes:        int64(maxMB) << 20,
+		Timeout:         time.Duration(timeout) * time.Second,
+		SendSongInfo:    settings.Bool(musicSettingSendInfo, true),
+		RequestedSong:   settings.Bool(musicSettingRequestSong, true),
+		OutputDir:       musicOutputDir(),
+		FFmpegPath:      firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_FFMPEG_PATH")), "ffmpeg"),
 		// Silk 编码器全机器一台就够，默认沿用语音合成插件已经配好的那个，
 		// 不逼用户在两个插件里把同一个路径填两遍。
 		SilkEncoder: firstNonEmpty(
@@ -488,6 +621,68 @@ func musicConfigFromSettings(settings SettingValues) musicConfig {
 		),
 		SilkBitrate: voiceTTSSilkBitrate(),
 	}
+}
+
+// musicSourceKeys 是登记在册的曲库键，顺序就是默认的问询顺序。
+func musicSourceKeys() []string {
+	sources := defaultMusicSources()
+	keys := make([]string, 0, len(sources))
+	for _, source := range sources {
+		keys = append(keys, source.Key())
+	}
+	return keys
+}
+
+func musicSourceOptionsList() []PluginSettingOption {
+	sources := defaultMusicSources()
+	options := make([]PluginSettingOption, 0, len(sources))
+	for _, source := range sources {
+		options = append(options, PluginSettingOption{Value: source.Key(), Label: source.Label()})
+	}
+	return options
+}
+
+func musicSourceAPIBaseSetting(key string) string { return key + "_api_base" }
+func musicSourceCookieSetting(key string) string  { return key + "_cookie" }
+
+// musicEnabledSourcesFromSettings 读勾选的曲库。没配过就是全开——新装一台机器
+// 不该因为「还没勾」而什么都放不出来；勾成空则视为用户明确只留默认那家，
+// 否则整个插件会静默失效，比留一家更难排查。
+func musicEnabledSourcesFromSettings(settings SettingValues) []string {
+	if _, configured := settings[musicSettingSources]; !configured {
+		return musicSourceKeys()
+	}
+	known := musicSourceKeys()
+	enabled := make([]string, 0, len(known))
+	for _, key := range settings.StringSlice(musicSettingSources) {
+		key = strings.TrimSpace(key)
+		if slices.Contains(known, key) && !slices.Contains(enabled, key) {
+			enabled = append(enabled, key)
+		}
+	}
+	if len(enabled) == 0 {
+		return known[:1]
+	}
+	return enabled
+}
+
+func musicPreferredSourceFromSettings(settings SettingValues) string {
+	preferred := strings.TrimSpace(settings.String(musicSettingPreferred, ""))
+	if !slices.Contains(musicSourceKeys(), preferred) {
+		return ""
+	}
+	return preferred
+}
+
+func musicSourceOptionsFromSettings(settings SettingValues) map[string]musicSourceOptions {
+	options := make(map[string]musicSourceOptions, len(musicSourceKeys()))
+	for _, key := range musicSourceKeys() {
+		options[key] = musicSourceOptions{
+			APIBase: strings.TrimRight(strings.TrimSpace(settings.String(musicSourceAPIBaseSetting(key), "")), "/"),
+			Cookie:  strings.TrimSpace(settings.String(musicSourceCookieSetting(key), "")),
+		}
+	}
+	return options
 }
 
 func musicOutputDir() string {
