@@ -91,6 +91,9 @@
                只在例外时标注，第三方插件出现后这里才会有内容。 -->
           <span v-if="!plugin.manifest.official" class="badge warn">第三方</span>
           <span v-if="!plugin.manifest.built_in" class="badge">可卸载</span>
+          <!-- 别的内置插件装好就在跑，这张卡片的开关却是关的。不说一句，
+               看起来就像是它坏了。 -->
+          <span v-if="plugin.manifest.default_disabled" class="badge">默认关闭</span>
           <span class="badge mono">v{{ plugin.manifest.version }}</span>
         </div>
 
@@ -113,7 +116,7 @@
               <!-- 缺依赖等于这个插件直接不工作，这条得能在一屏插件里被一眼扫到 -->
               <span
                 class="plugin-dependency-count"
-                :class="{ warn: missingDependencyCount(plugin.manifest.id) > 0 }"
+                :class="{ warn: hasDependencyProblem(plugin.manifest.id) }"
               >
                 {{ readyDependencyCount(plugin.manifest.id) }}/{{ dependenciesFor(plugin.manifest.id).length }}
               </span>
@@ -188,11 +191,11 @@
       <details
         v-if="dependenciesFor(settingsTarget.manifest.id).length"
         class="plugin-settings-section-head plugin-settings-collapsible"
-        :open="missingDependencyCount(settingsTarget.manifest.id) > 0"
+        :open="hasDependencyProblem(settingsTarget.manifest.id)"
       >
         <summary>
           <h3>运行依赖</h3>
-          <span class="badge" :class="missingDependencyCount(settingsTarget.manifest.id) > 0 ? 'warn' : 'accent'">
+          <span class="badge" :class="hasDependencyProblem(settingsTarget.manifest.id) ? 'warn' : 'accent'">
             {{ readyDependencyCount(settingsTarget.manifest.id) }}/{{ dependenciesFor(settingsTarget.manifest.id).length }}
           </span>
           <ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" />
@@ -297,6 +300,7 @@
       </div>
       <RepositoryWatchManager
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
+        ref="repositoryWatchRef"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
         :issue-enabled-repositories="issueEnabledRepositories"
@@ -332,6 +336,7 @@
       </div>
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
+        ref="rssWatchRef"
         :prepare-access="saveSettingsForSubscription"
       />
       <template #footer>
@@ -413,6 +418,7 @@ const busyID = ref("");
 
 const resolverPluginID = "official.nonebot-plugin-resolver-go";
 const sandboxedBrowserPluginID = "official.sandboxed-browser-renderer";
+const groupRelationsPluginID = "group_relations";
 const repositoryWatchPluginID = "official.repository-watch";
 const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
@@ -427,7 +433,9 @@ const permissionsTarget = ref<PluginState | null>(null);
 const dependencyHints: Record<string, string> = {
   [resolverPluginID]: "缺少这些命令时，对应平台的解析会失败；可直接在这里安装。",
   [sandboxedBrowserPluginID]:
-    "没有可用的浏览器时，网页渲染会在用到的那一刻才失败；可直接在这里安装。浏览器体积不小，安装会比其它依赖慢一些。"
+    "这里会执行一次真实的本地截图，不再只检查 Chrome 是否安装。浏览器体积不小，安装会比其它依赖慢一些。",
+  [groupRelationsPluginID]:
+    "关系图有直接字体渲染和浏览器截图两条路径；至少一条检测通过即可正常出图。"
 };
 
 function dependenciesFor(pluginID: string): ResolverDependency[] {
@@ -442,11 +450,18 @@ function missingDependencyCount(pluginID: string): number {
   return dependenciesFor(pluginID).length - readyDependencyCount(pluginID);
 }
 
+function hasDependencyProblem(pluginID: string): boolean {
+  if (pluginID === groupRelationsPluginID) return readyDependencyCount(pluginID) === 0;
+  return missingDependencyCount(pluginID) > 0;
+}
+
 function dependencyHint(pluginID: string): string {
   return dependencyHints[pluginID] ?? "缺少这些依赖时，这个插件不会正常工作。";
 }
 
 const settingsTarget = ref<PluginState | null>(null);
+const repositoryWatchRef = ref<{ hasUnsavedChanges: () => boolean } | null>(null);
+const rssWatchRef = ref<{ hasUnsavedChanges: () => boolean } | null>(null);
 // 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
 const settingsForm = ref<Record<string, any>>({});
 const repositoryPublishForm = ref<Record<string, any>>({});
@@ -513,7 +528,7 @@ const repositoryManagedKeys = new Set([
 ]);
 const githubTokenSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => spec.key === "github_token"));
 // 通知相关的设置按这个顺序排；跟评开关排第一，它是最常被找的那个。
-const githubNotifyKeys = ["ask_agent", "template_header", "summary_commit_limit"];
+const githubNotifyKeys = ["ask_agent", "follow_up_include_patch", "template_header", "summary_commit_limit"];
 const githubGeneralSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key)));
 const githubNotifySpecs = computed<PluginSettingSpec[]>(() =>
   githubNotifyKeys
@@ -738,6 +753,9 @@ function settingsSnapshot(): string {
 function settingsDirty(): boolean {
   if (Object.keys(credentialTokenDrafts.value).length > 0) return true;
   if (clearSecrets.value.length > 0) return true;
+  // 仓库编辑器的改动不在 settingsForm 里，漏掉它就会从弹窗右上角静默关掉一整屏配置。
+  if (repositoryWatchRef.value?.hasUnsavedChanges()) return true;
+  if (rssWatchRef.value?.hasUnsavedChanges()) return true;
   return settingsSnapshot() !== openedSnapshot.value;
 }
 

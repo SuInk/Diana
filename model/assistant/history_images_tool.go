@@ -176,7 +176,14 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 				})
 				continue
 			}
-			imageParts := highDetailImageParts(ready[0], detail)
+			imageParts := make([]llm.ContentPart, 0, len(ready))
+			if len(ready) == 1 {
+				imageParts = highDetailImageParts(ready[0], detail)
+			} else {
+				for _, imageURL := range ready {
+					imageParts = append(imageParts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: detail})
+				}
+			}
 			parts = append(parts, imageParts...)
 			result.FocusCrops += len(imageParts) - 1
 			result.Loaded++
@@ -189,7 +196,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		if persistState && historicalImageStateChanged(original, source) {
 			t.runtime.updateHistoricalImageState(source)
 		}
-		t.runtime.enqueueHistoryImageDescriptions(source)
+		t.runtime.enqueueHistoryImageDescriptionsNow(source)
 	}
 
 	if result.Loaded == 0 {

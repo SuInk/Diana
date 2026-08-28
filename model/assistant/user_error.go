@@ -28,7 +28,7 @@ func publicChatErrorMessage(err error) string {
 		return "请求处理失败，请稍后重试。"
 	}
 	if errors.Is(err, errImageMediaUnavailable) {
-		return "图片读取失败：原图片地址不可用，OneBot v11 回退也没有取得可读取的本地文件或下载地址。请重新发送图片后再试。"
+		return publicImageMediaErrorMessage(err)
 	}
 	raw := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(raw)
@@ -59,6 +59,33 @@ func publicChatErrorMessage(err error) string {
 		return "上游模型服务暂时没有返回有效内容，请稍后重试。"
 	}
 	return sanitizePublicErrorDetail(raw)
+}
+
+func publicImageMediaErrorMessage(err error) string {
+	raw := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(raw)
+	switch {
+	case errors.Is(err, errLLMImageSourceTooLarge):
+		return "图片处理失败：原图超过 32 MiB 源文件上限。请压缩图片或降低分辨率后重试。"
+	case errors.Is(err, errLLMImageDimensions):
+		return "图片处理失败：图片像素尺寸异常或超过 8000 万像素，无法安全解码。请缩小图片后重试。"
+	case errors.Is(err, errLLMImageDecodeFailed):
+		return "图片处理失败：文件扩展名看起来是图片，但实际编码无法解码。请转换为标准 JPEG、PNG、GIF 或 WebP 后重试。"
+	case errors.Is(err, errLLMImagePayloadTooLarge):
+		return "图片处理失败：尝试 PNG、多档 JPEG 质量并逐级缩小尺寸后，base64 仍超过 4.5 MiB。请手动压缩图片后重试。"
+	case strings.Contains(lower, "status=400"), strings.Contains(lower, "status=401"), strings.Contains(lower, "status=403"), strings.Contains(lower, "status=404"):
+		return "图片读取失败：下载地址已失效或拒绝访问（上游返回 HTTP 4xx），OneBot v11 回退也没有取得可用副本。请重新发送原图后重试。"
+	case strings.Contains(lower, "deadline exceeded"), strings.Contains(lower, "timeout"):
+		return "图片读取失败：下载或读取图片超时。请检查 OneBot v11 连接和网络后重试。"
+	case strings.Contains(lower, "no such file"), strings.Contains(lower, "file does not exist"):
+		return "图片读取失败：本地缓存文件已经不存在，且没有可用下载地址。请重新发送原图后重试。"
+	case strings.Contains(lower, "not an image"), strings.Contains(lower, "unknown format"):
+		return "图片读取失败：取得的内容不是可识别的图片格式。请重新发送标准 JPEG、PNG、GIF 或 WebP 文件。"
+	case strings.Contains(lower, "source is unavailable"), strings.Contains(lower, "contains no image"), strings.Contains(lower, "has no onebot message"):
+		return "图片读取失败：消息中没有可用的本地文件或下载地址，OneBot v11 回退也未返回图片。请重新发送原图后重试。"
+	default:
+		return "图片读取失败，具体原因：" + sanitizePublicErrorDetail(raw) + "。请根据上述原因处理后重试。"
+	}
 }
 
 func sanitizePublicErrorDetail(raw string) string {

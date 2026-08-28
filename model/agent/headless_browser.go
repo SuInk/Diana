@@ -105,33 +105,16 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 		return RenderedPage{}, err
 	}
 
-	root, err := os.MkdirTemp("", "diana-headless-browser-")
+	dirs, err := newBrowserSandboxDirs("diana-headless-browser-")
 	if err != nil {
 		return RenderedPage{}, err
 	}
-	defer os.RemoveAll(root)
-	if err := os.Chmod(root, 0o700); err != nil {
-		return RenderedPage{}, err
-	}
-	profileDir := filepath.Join(root, "profile")
-	cacheDir := filepath.Join(root, "cache")
-	crashDir := filepath.Join(root, "crash")
-	for _, dir := range []string{profileDir, cacheDir, crashDir} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return RenderedPage{}, err
-		}
-	}
+	defer dirs.remove()
 
-	return b.renderObservable(ctx, executable, root, profileDir, cacheDir, crashDir, rawURL)
+	return b.renderObservable(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, rawURL)
 }
 
 func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBrowserConfig {
-	if strings.TrimSpace(cfg.Executable) == "" {
-		cfg.Executable = firstNonEmptyString(
-			os.Getenv("DIANA_HEADLESS_BROWSER_EXECUTABLE"),
-			os.Getenv("DIANA_AGENT_BROWSER_EXECUTABLE"),
-		)
-	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_TIMEOUT_MS", defaultHeadlessBrowserTimeout)
 	}
@@ -232,6 +215,30 @@ func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowse
 	return HeadlessBrowserStatus{Available: true, Path: path, Version: version}
 }
 
+// ProbeHeadlessBrowserRendering 在版本探测之后再完成一次真实的本地截图。
+// --version 只能证明文件能执行，不能发现浏览器启动后卡住、沙箱参数不兼容或无法
+// 产出 PNG。插件依赖页用这个探测，结论才和真正调用时一致。
+func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) HeadlessBrowserStatus {
+	status := ProbeHeadlessBrowser(ctx, configured)
+	if !status.Available {
+		return status
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
+	defer cancel()
+	_, err := CaptureHTMLScreenshot(probeCtx, ScreenshotRequest{
+		HTML:       `<!doctype html><meta charset="utf-8"><title>Diana browser probe</title><body>ok</body>`,
+		Width:      64,
+		Height:     64,
+		Executable: status.Path,
+		Timeout:    headlessBrowserProbeTimeout,
+	})
+	if err != nil {
+		status.Available = false
+		status.Detail = "找到了 " + status.Path + "，但真实截图失败：" + err.Error()
+	}
+	return status
+}
+
 func headlessBrowserProbeDetail(configured string) string {
 	if strings.TrimSpace(configured) != "" {
 		return "配置的浏览器路径不存在：" + strings.TrimSpace(configured)
@@ -248,8 +255,20 @@ func firstNonEmptyLine(value string) string {
 	return ""
 }
 
+// findHeadlessBrowserExecutable 解析浏览器可执行文件。三条路径共用它：网页渲染、
+// 截图和可用性探测。
+//
+// 环境变量的兜底必须在这里，不能只写在 SandboxedBrowserConfig 的默认值里——那样
+// 只有网页渲染认得它，截图和探测走的是另一条入口。浏览器装在非标准路径、靠环境
+// 变量指过去的机器上，症状就是网页渲染能用，关系图却报「这台机器上没有浏览器」。
 func findHeadlessBrowserExecutable(configured string) (string, error) {
 	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		configured = firstNonEmptyString(
+			os.Getenv("DIANA_HEADLESS_BROWSER_EXECUTABLE"),
+			os.Getenv("DIANA_AGENT_BROWSER_EXECUTABLE"),
+		)
+	}
 	if configured != "" {
 		if info, err := os.Stat(configured); err == nil && !info.IsDir() {
 			return configured, nil
@@ -301,11 +320,58 @@ func findHeadlessBrowserExecutable(configured string) (string, error) {
 	return "", errors.New("Chrome/Chromium executable was not found")
 }
 
-func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) []string {
+// sandboxedChromeBaseArgs 是两条渲染路径共用的沙盒加固参数：CDP 那条（网页渲染）
+// 和一次性截图那条（关系图）。
+//
+// 抽出来之前截图自己手抄了一份子集，抄漏的不只是重复代码——它没有
+// --host-resolver-rules，也就是说那条路没有把 localhost 和内网域名挡掉，加固强度
+// 和网页渲染不一样。同一个进程里跑的两个浏览器，沙盒不该有强弱之分。
+//
+// 只放两条路都成立的参数：带模式色彩的（远程调试端口、截图输出、窗口尺寸）留给
+// 各自的调用点追加。
+// browserSandboxDirs 是一次浏览器运行的临时目录组：整棵树只归这次运行，用完删掉。
+// 两条渲染路径都要它，别再各写一遍——目录权限（0700）和清理时机这种事，写错一次
+// 就是一个留在 /tmp 里的可读 profile。
+type browserSandboxDirs struct {
+	root    string
+	profile string
+	cache   string
+	crash   string
+}
+
+func newBrowserSandboxDirs(prefix string) (browserSandboxDirs, error) {
+	root, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		return browserSandboxDirs{}, err
+	}
+	dirs := browserSandboxDirs{
+		root:    root,
+		profile: filepath.Join(root, "profile"),
+		cache:   filepath.Join(root, "cache"),
+		crash:   filepath.Join(root, "crash"),
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		dirs.remove()
+		return browserSandboxDirs{}, err
+	}
+	for _, dir := range []string{dirs.profile, dirs.cache, dirs.crash} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			dirs.remove()
+			return browserSandboxDirs{}, err
+		}
+	}
+	return dirs, nil
+}
+
+func (d browserSandboxDirs) remove() {
+	if d.root != "" {
+		_ = os.RemoveAll(d.root)
+	}
+}
+
+func sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir string) []string {
 	return []string{
 		"--headless=new",
-		"--remote-debugging-address=127.0.0.1",
-		"--remote-debugging-port=0",
 		"--user-data-dir=" + profileDir,
 		"--disk-cache-dir=" + cacheDir,
 		"--crash-dumps-dir=" + crashDir,
@@ -330,9 +396,16 @@ func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBro
 		"--password-store=basic",
 		"--use-mock-keychain",
 		"--hide-scrollbars",
-		"--window-size=1280,960",
 		"--host-resolver-rules=MAP localhost ~NOTFOUND, MAP *.localhost ~NOTFOUND, MAP *.local ~NOTFOUND, MAP host.docker.internal ~NOTFOUND, MAP gateway.docker.internal ~NOTFOUND",
 	}
+}
+
+func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) []string {
+	return append(sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir),
+		"--remote-debugging-address=127.0.0.1",
+		"--remote-debugging-port=0",
+		"--window-size=1280,960",
+	)
 }
 
 func sandboxedBrowserEnvironment(current []string, root string) []string {

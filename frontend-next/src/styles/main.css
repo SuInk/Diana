@@ -1487,6 +1487,8 @@ a.nav-action {
 .modal-body {
   padding: 18px 20px;
   overflow-y: auto;
+  /* 滚到顶/底后不要把滚动继续传给背景页面。 */
+  overscroll-behavior: contain;
 }
 
 .modal-footer {

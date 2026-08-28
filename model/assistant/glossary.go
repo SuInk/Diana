@@ -245,6 +245,14 @@ func glossaryScopeKeyForWrite(event MessageEvent, cfg BotConfig, global bool, ow
 // glossaryContext 拿当前消息去撞词典，把命中的词条组装成提示词段落。
 // 没有存储层、没命中、或者查询失败时一律返回空串：词典是增强，不是前置依赖。
 func (r *Runtime) glossaryContext(ctx context.Context, event MessageEvent, queryText string) string {
+	return r.glossaryContextMatched(ctx, event, queryText, true)
+}
+
+func (r *Runtime) glossaryContextForRouting(ctx context.Context, event MessageEvent, queryText string) string {
+	return r.glossaryContextMatched(ctx, event, queryText, false)
+}
+
+func (r *Runtime) glossaryContextMatched(ctx context.Context, event MessageEvent, queryText string, recordUsage bool) string {
 	store := r.glossaryStore()
 	if store == nil {
 		return ""
@@ -268,7 +276,9 @@ func (r *Runtime) glossaryContext(ctx context.Context, event MessageEvent, query
 	if len(entries) == 0 {
 		return ""
 	}
-	r.touchGlossaryEntries(ctx, store, entries)
+	if recordUsage {
+		r.touchGlossaryEntries(ctx, store, entries)
+	}
 	return formatGlossaryContext(entries)
 }
 

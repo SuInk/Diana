@@ -29,6 +29,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/storage"
 	"github.com/SuInk/diana/model/updater"
@@ -204,8 +205,12 @@ func main() {
 	if err := systemHandler.SetReleaseCacheStore(ctx, sqliteStore); err != nil {
 		log.Printf("load system release cache: %v", err)
 	}
+	// 下载线路选择器由 webui 和 updater 共用：界面上改了策略，下一次下载就按新策略走。
+	mirrorSelector := ghmirror.NewSelector(&http.Client{Timeout: 15 * time.Second})
+	systemHandler.SetGitHubMirrorSelector(mirrorSelector)
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
 		CurrentVersion: runtimeVersion,
+		Mirror:         mirrorSelector,
 		FrontendDir:    frontendDistDir(appCfg.Server.FrontendDist),
 		DatabasePath:   sqliteStore.Path(),
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
@@ -409,6 +414,12 @@ func main() {
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
 	napCatLoginHandler.Register(router)
+	// 对外开放接口：/api/openapi 下的密钥管理走上面的会话鉴权，
+	// /openapi/v1 下的推送接口由 Bearer 密钥自行鉴权，总开关是
+	// 「对外 API」内置插件（默认关闭）。
+	openAPIHandler := webui.NewOpenAPIHandler(webui.NewOpenAPIKeyManager(sqliteStore), botRuntime, plugins)
+	openAPIHandler.SetLogStore(sqliteStore)
+	openAPIHandler.Register(router)
 	// 重启复用 SIGTERM 的优雅关停链路：取消根 ctx 让 Serve 返回，再由
 	// main 收尾时判断 restartRequested 原地重启。
 	var restartRequested atomic.Bool

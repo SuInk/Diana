@@ -3402,8 +3402,10 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool {
 		return len(channel.callsSnapshot()) == 1
 	})
-	if got := llmCalls.Load(); got != 0 {
-		t.Fatalf("llm calls = %d, want 0", got)
+	// 卡片过账号安全审核那一次（见 outbound_forward_gate.go）。
+	// 链接解析本身仍旧不喊模型生成回复——这里数到的 1 次是审核，不是回复。
+	if got := llmCalls.Load(); got != 1 {
+		t.Fatalf("llm calls = %d, want 1 (forward safety audit)", got)
 	}
 	sent := channel.sentSnapshot()
 	if len(sent) != 0 {
@@ -3481,8 +3483,10 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool {
 		return len(channel.callsSnapshot()) == 1
 	})
-	if got := llmCalls.Load(); got != 0 {
-		t.Fatalf("llm calls = %d, want 0", got)
+	// 卡片过账号安全审核那一次（见 outbound_forward_gate.go）。
+	// 链接解析本身仍旧不喊模型生成回复——这里数到的 1 次是审核，不是回复。
+	if got := llmCalls.Load(); got != 1 {
+		t.Fatalf("llm calls = %d, want 1 (forward safety audit)", got)
 	}
 	calls := channel.callsSnapshot()
 	if calls[0].action != "send_private_forward_msg" {
@@ -3546,8 +3550,10 @@ func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool {
 		return len(channel.callsSnapshot()) == 1
 	})
-	if got := llmCalls.Load(); got != 0 {
-		t.Fatalf("llm calls = %d, want 0", got)
+	// 卡片过账号安全审核那一次（见 outbound_forward_gate.go）。
+	// 链接解析本身仍旧不喊模型生成回复——这里数到的 1 次是审核，不是回复。
+	if got := llmCalls.Load(); got != 1 {
+		t.Fatalf("llm calls = %d, want 1 (forward safety audit)", got)
 	}
 	calls := channel.callsSnapshot()
 	if calls[0].action != "send_group_forward_msg" {

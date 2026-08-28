@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -77,8 +78,30 @@ func TestPublicChatErrorMessageMapsContentPolicyRejection(t *testing.T) {
 func TestPublicChatErrorMessageMapsUnavailableImage(t *testing.T) {
 	err := newImageMediaUnavailableError([]error{errors.New("image download failed: status=400")})
 	got := publicChatErrorMessage(err)
-	if got != "图片读取失败：原图片地址不可用，OneBot v11 回退也没有取得可读取的本地文件或下载地址。请重新发送图片后再试。" {
+	if got != "图片读取失败：下载地址已失效或拒绝访问（上游返回 HTTP 4xx），OneBot v11 回退也没有取得可用副本。请重新发送原图后重试。" {
 		t.Fatalf("message = %q", got)
+	}
+}
+
+func TestPublicChatErrorMessageExplainsImageFailures(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w (32 MiB)", errLLMImageSourceTooLarge), "超过 32 MiB"},
+		{fmt.Errorf("%w: invalid checksum", errLLMImageDecodeFailed), "实际编码无法解码"},
+		{fmt.Errorf("%w: 12000x12000", errLLMImageDimensions), "8000 万像素"},
+		{fmt.Errorf("%w (4.5 MiB base64)", errLLMImagePayloadTooLarge), "仍超过 4.5 MiB"},
+		{errors.New("open /private/cache/image.png: no such file or directory"), "本地缓存文件已经不存在"},
+	}
+	for _, test := range tests {
+		got := publicChatErrorMessage(newImageMediaUnavailableError([]error{test.err}))
+		if !strings.Contains(got, test.want) {
+			t.Errorf("message %q does not contain %q", got, test.want)
+		}
+		if strings.Contains(got, "/private/cache") {
+			t.Fatalf("message leaked local path: %q", got)
+		}
 	}
 }
 

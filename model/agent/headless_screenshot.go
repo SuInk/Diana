@@ -4,9 +4,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,22 +55,12 @@ func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 		return nil, fmt.Errorf("screenshot: %w", err)
 	}
 
-	root, err := os.MkdirTemp("", "diana-screenshot-")
+	dirs, err := newBrowserSandboxDirs("diana-screenshot-")
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(root)
-	if err := os.Chmod(root, 0o700); err != nil {
-		return nil, err
-	}
-	profileDir := filepath.Join(root, "profile")
-	cacheDir := filepath.Join(root, "cache")
-	crashDir := filepath.Join(root, "crash")
-	for _, dir := range []string{profileDir, cacheDir, crashDir} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, err
-		}
-	}
+	defer dirs.remove()
+	root, profileDir, cacheDir, crashDir := dirs.root, dirs.profile, dirs.cache, dirs.crash
 	pagePath := filepath.Join(root, "page.html")
 	if err := os.WriteFile(pagePath, []byte(req.HTML), 0o600); err != nil {
 		return nil, err
@@ -78,47 +70,92 @@ func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 
-	args := append([]string{
-		"--headless=new",
-		"--screenshot=" + outputPath,
+	// 沙盒加固走和网页渲染同一份底座，这里只追加截图这条路自己的参数。之前这份
+	// 参数是手抄的子集，抄漏了 --host-resolver-rules，等于截图那条路没挡住
+	// localhost 和内网域名。
+	args := append(sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir),
+		"--screenshot="+outputPath,
 		// 窗口尺寸就是出图尺寸；不锁死缩放比例的话，跑在 HiDPI 环境里会出一张
 		// 尺寸对不上的图。
 		fmt.Sprintf("--window-size=%d,%d", req.Width, req.Height),
 		"--force-device-scale-factor=1",
-		"--hide-scrollbars",
-		"--user-data-dir=" + profileDir,
-		"--disk-cache-dir=" + cacheDir,
-		"--crash-dumps-dir=" + crashDir,
+		// 这两个是截图这条路一直带着的，跟 CDP 那条不一样：容器里以 root 跑时
+		// Chrome 的进程沙盒起不来，没有它直接崩。是兼容性取舍，不在这次合并的
+		// 范围里——要改得单独评估哪些部署会因此跑不动。
 		"--no-sandbox",
 		"--disable-gpu",
-		"--disable-extensions",
-		"--disable-background-networking",
-		"--disable-breakpad",
-		"--disable-crash-reporter",
-		"--disable-component-update",
-		"--disable-default-apps",
-		"--disable-notifications",
-		"--no-first-run",
-		"--no-default-browser-check",
-	}, "file://"+pagePath)
+	)
+	args = append(args, "file://"+pagePath)
 
 	command := exec.CommandContext(runCtx, executable, args...)
 	command.Env = sandboxedBrowserEnvironment(os.Environ(), root)
-	output, err := command.CombinedOutput()
+	diagnosticsPath := filepath.Join(root, "browser.log")
+	diagnostics, err := os.Create(diagnosticsPath)
 	if err != nil {
-		if runCtx.Err() != nil {
-			return nil, fmt.Errorf("screenshot: 渲染超时（%s）", req.Timeout)
-		}
-		return nil, fmt.Errorf("screenshot: %w: %s", err, firstNonEmptyLine(string(output)))
+		return nil, err
 	}
-	info, err := os.Stat(outputPath)
+	defer diagnostics.Close()
+	command.Stdout = diagnostics
+	command.Stderr = diagnostics
+	if err := command.Start(); err != nil {
+		return nil, fmt.Errorf("screenshot: 启动浏览器失败：%w", err)
+	}
+
+	// 部分 macOS Chrome 版本会先写完截图，却因为后台子进程没有收尾而一直不退出。
+	// 旧实现只等 Wait，最后在超时时把已经写好的 PNG 一起丢掉。这里以「文件已完整且
+	// 能解码」为完成信号；拿到图片后结束这次一次性浏览器，不再依赖它自行收尾。
+	waited := make(chan error, 1)
+	go func() { waited <- command.Wait() }()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-waited:
+			if pngBytes, readErr := readCompletedScreenshot(outputPath); readErr == nil {
+				return pngBytes, nil
+			}
+			if err != nil {
+				return nil, fmt.Errorf("screenshot: %w: %s", err, screenshotDiagnostics(diagnosticsPath))
+			}
+			return nil, fmt.Errorf("screenshot: 浏览器没有产出有效图片：%s", screenshotDiagnostics(diagnosticsPath))
+		case <-ticker.C:
+			pngBytes, err := readCompletedScreenshot(outputPath)
+			if err != nil {
+				continue
+			}
+			_ = command.Process.Kill()
+			<-waited
+			return pngBytes, nil
+		case <-runCtx.Done():
+			_ = command.Process.Kill()
+			<-waited
+			if pngBytes, err := readCompletedScreenshot(outputPath); err == nil {
+				return pngBytes, nil
+			}
+			return nil, fmt.Errorf("screenshot: 渲染超时（%s）：%s", req.Timeout, screenshotDiagnostics(diagnosticsPath))
+		}
+	}
+}
+
+func screenshotDiagnostics(path string) string {
+	raw, _ := os.ReadFile(path)
+	return firstNonEmptyLine(string(raw))
+}
+
+func readCompletedScreenshot(path string) ([]byte, error) {
+	info, err := os.Stat(path)
 	if err != nil {
-		// 浏览器退出码是 0 但没出文件：多半是参数被这个版本忽略了，把它的输出
-		// 带上，否则这里只有一句「文件不存在」，查不下去。
-		return nil, fmt.Errorf("screenshot: 浏览器没有产出图片：%s", firstNonEmptyLine(string(output)))
+		return nil, err
 	}
 	if info.Size() > maxScreenshotBytes {
-		return nil, fmt.Errorf("screenshot: 图片 %.1fMB 过大", float64(info.Size())/(1<<20))
+		return nil, fmt.Errorf("图片 %.1fMB 过大", float64(info.Size())/(1<<20))
 	}
-	return os.ReadFile(outputPath)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := png.DecodeConfig(bytes.NewReader(raw)); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }

@@ -6,6 +6,7 @@ import type {
   AssistantEventDetail,
   AssistantTask,
   LLMConfig,
+  OpenAPIKey,
   PluginState,
   BotProfileConfig,
   BotGroupSummary,
@@ -96,6 +97,7 @@ let plugins: PluginState[] = [
     installed: true, enabled: true
   },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
+  { manifest: { id: "official.open-api", name: "对外 API", version: "0.1.0", description: "让 CI、监控这类外部系统凭密钥调用 HTTP 接口向指定会话推送消息；密钥在「设置 → 安全」里管理。", official: true, built_in: true, default_disabled: true, permissions: ["network:http", "message:write"], settings: [{ key: "rate_limit_per_minute", label: "单密钥限流", description: "每把密钥每分钟允许的调用次数，超出返回 429。", type: "number", default: 60, min: 1, max: 600, step: 10, unit: "次/分钟" }] }, installed: true, enabled: false },
   {
     manifest: {
       id: "official.repository-publish", name: "Issue 发布", version: "0.4.0", description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
@@ -114,9 +116,10 @@ let plugins: PluginState[] = [
   },
   {
     manifest: {
-      id: "official.repository-watch", name: "仓库订阅", version: "0.2.0", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
+      id: "official.repository-watch", name: "仓库订阅", version: "0.2.1", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读受限 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
       settings: [
         { key: "github_token", label: "GitHub Token", description: "用于私有仓库和提高 API 额度。", type: "string", default: "", secret: true },
+        { key: "follow_up_include_patch", label: "跟评读取受限代码片段", description: "开启后会把经过严格裁剪的 patch 发送给当前 LLM Provider；私有仓库请谨慎开启。", type: "bool", default: false },
         { key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 60, min: 30, max: 86400, unit: "秒" }
       ]
     },
@@ -126,7 +129,8 @@ let plugins: PluginState[] = [
     manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
-  { manifest: { id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: true }
+  { manifest: { id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: true },
+  { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.0", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认关闭。", official: true, built_in: true, default_disabled: true, permissions: ["message:read", "message:send"] }, installed: true, enabled: false }
 ];
 
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
@@ -328,7 +332,19 @@ const browserDependencies: ResolverDependency[] = [
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
-let updatePolicy = { auto_download: true, auto_install: false };
+let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "auto" };
+const demoMirrors = [
+  { name: "ghfast.top", base_url: "https://ghfast.top" },
+  { name: "gh-proxy.com", base_url: "https://gh-proxy.com" },
+  { name: "gh-proxy.net", base_url: "https://gh-proxy.net" }
+];
+// 演示数据刻意排成「握手最快的那条速度最慢」：这正是只看延时会选错的情形。
+const demoMirrorProbe = [
+  { name: "直连 GitHub", direct: true, ok: true, latency_ms: 1840, speed_kbps: 2360 },
+  { name: "gh-proxy.com", base_url: "https://gh-proxy.com", ok: true, latency_ms: 402, speed_kbps: 1180 },
+  { name: "ghfast.top", base_url: "https://ghfast.top", ok: true, latency_ms: 168, speed_kbps: 74 },
+  { name: "gh-proxy.net", base_url: "https://gh-proxy.net", ok: false, error: "context deadline exceeded（演示数据）" }
+];
 
 const logs: AppLogEntry[] = [
   { id: "log-1", kind: "operation", level: "info", action: "message.reply", message: "群聊消息已回复并收到发送回显", actor: "bot-onebot", target: "group:100200301", created_at: before(2) },
@@ -361,6 +377,10 @@ function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   return llmConfig;
 }
 
+let demoApiKeys: OpenAPIKey[] = [
+  { id: "key-1", name: "ci-notify", prefix: "diana_3fa8c2e1", created_at: before(4320), last_used_at: before(35) }
+];
+
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
@@ -380,6 +400,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ]
     });
   if (path.startsWith("/api/auth/")) return json({ ok: true, username: "demo" });
+  if (path === "/api/openapi/keys" && method === "GET") return json({ keys: demoApiKeys });
+  if (path === "/api/openapi/keys" && method === "POST") {
+    const key: OpenAPIKey = { id: `key-${Date.now()}`, name: String(body.name ?? "未命名"), prefix: "diana_demo0000", created_at: new Date().toISOString() };
+    demoApiKeys = [key, ...demoApiKeys];
+    return json({ key, token: "diana_demo00000000000000000000000000000000000000000000000000000000000000" });
+  }
+  if (path.startsWith("/api/openapi/keys/") && method === "DELETE") {
+    const keyID = decodeURIComponent(path.split("/").pop() ?? "");
+    demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
+    return json({ revoked: true });
+  }
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
 
@@ -621,9 +652,20 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/system/update/check") return json({ deployment_mode: "release", current_version: "v0.8.6", latest_version: "v0.8.7", latest_published_at: before(30), checked_at: new Date(now).toISOString(), update_available: true, update_supported: true, integrity_mode: "sha256", checksum_available: true, checksum_url: "https://github.com/SuInk/Diana/releases", status: updateStatus, policy: updatePolicy });
   if (path === "/api/system/update/policy" && method === "GET") return json(updatePolicy);
   if (path === "/api/system/update/policy" && method === "PUT") {
-    const next = JSON.parse(String(init?.body ?? "{}")) as { auto_download?: boolean; auto_install?: boolean };
-    updatePolicy = { auto_download: Boolean(next.auto_download || next.auto_install), auto_install: Boolean(next.auto_install) };
+    const next = JSON.parse(String(init?.body ?? "{}")) as { auto_download?: boolean; auto_install?: boolean; github_mirror?: string };
+    updatePolicy = {
+      auto_download: Boolean(next.auto_download || next.auto_install),
+      auto_install: Boolean(next.auto_install),
+      github_mirror: next.github_mirror || "auto"
+    };
     return json(updatePolicy);
+  }
+  // 这两条要排在下面那个 /api/system/update 前缀兜底之前，否则测速会被当成下载。
+  if (path === "/api/system/update/mirrors" && method === "GET") {
+    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors, last_probe: demoMirrorProbe });
+  }
+  if (path === "/api/system/update/mirrors/test") {
+    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors, resolved: "https://ghfast.top", last_probe: demoMirrorProbe });
   }
   if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [{ tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }] });
   if (path.startsWith("/api/system/update") && method === "POST") return json({ status: { ...updateStatus, download_ready: true, downloaded_version: "v0.8.7", downloaded_at: new Date().toISOString() }, fetched: true, updated: false, downloaded: true, output: "演示模式：已模拟完成下载与 SHA-256 校验，未写入任何文件。", at: new Date().toISOString() });

@@ -27,8 +27,11 @@ func TestScheduledQueryFailureNotifiesAndSchedulesRetry(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", AgentEnabled: false}, channel, NewPluginManager(), nil, store, nil, nil)
 
+	// 头两次失败只重试、不出声：网络抖一下就往群里吼一嗓子，真出事时没人再看这类消息。
 	runtime.fireDueReminders(context.Background())
-
+	if len(channel.sent) != 0 {
+		t.Fatalf("first failure should stay quiet, sent = %#v", channel.sent)
+	}
 	item := store.items[0]
 	if item.LastRunAt.IsZero() || item.ConsecutiveFailures != 1 || !strings.Contains(item.LastError, "Agent 已禁用") {
 		t.Fatalf("failure state = %#v", item)
@@ -39,16 +42,35 @@ func TestScheduledQueryFailureNotifiesAndSchedulesRetry(t *testing.T) {
 	if item.PendingDelivery != "" || scheduleStatus(item) != "retrying" {
 		t.Fatalf("schedule state = %#v status=%q", item, scheduleStatus(item))
 	}
+
+	store.items[0].TriggerAt = time.Now().Add(-time.Second)
+	runtime.fireDueReminders(context.Background())
+	if len(channel.sent) != 0 {
+		t.Fatalf("second failure should stay quiet, sent = %#v", channel.sent)
+	}
+
+	store.items[0].TriggerAt = time.Now().Add(-time.Second)
+	runtime.fireDueReminders(context.Background())
 	if len(channel.sent) != 1 || channel.sent[0].GroupID != "123456" {
 		t.Fatalf("failure notices = %#v", channel.sent)
 	}
-	for _, want := range []string{"执行失败", "自动重试"} {
+	for _, want := range []string{"连续 3 次", "执行失败", "自动重试"} {
 		if !strings.Contains(channel.sent[0].Text, want) {
 			t.Fatalf("failure notice missing %q: %q", want, channel.sent[0].Text)
 		}
 	}
 	if strings.Contains(channel.sent[0].Text, "query-fail") {
 		t.Fatalf("failure notice leaked subscription id: %q", channel.sent[0].Text)
+	}
+	if store.items[0].FailureAlertedAt.IsZero() {
+		t.Fatalf("alert was delivered but never marked: %#v", store.items[0])
+	}
+
+	// 报过一次就够了，同一轮故障继续失败不再重复打扰。
+	store.items[0].TriggerAt = time.Now().Add(-time.Second)
+	runtime.fireDueReminders(context.Background())
+	if len(channel.sent) != 1 {
+		t.Fatalf("failure alert repeated within one outage: %#v", channel.sent)
 	}
 }
 
@@ -93,8 +115,22 @@ func TestScheduledQuerySendFailurePersistsResultAndRetriesWithoutLLM(t *testing.
 	if len(provider.requests) != 1 {
 		t.Fatalf("initial LLM requests = %d", len(provider.requests))
 	}
+	// 结果已经留住了，第一次发不出去不值得单独告警一次。
+	if notices := channel.attemptTexts(""); len(notices) != 0 {
+		t.Fatalf("first delivery failure should stay quiet: %#v", notices)
+	}
+
+	// 连着第三次还发不出去才出声，而且说清楚结果没丢。
+	for attempt := 2; attempt <= recurringFailureAlertThreshold; attempt++ {
+		time.Sleep(fastOutboundDeliveryPolicy().DropCooldown + 10*time.Millisecond)
+		store.items[0].TriggerAt = time.Now().Add(-time.Second)
+		runtime.fireDueReminders(ctx)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("delivery retries reran LLM: requests=%d", len(provider.requests))
+	}
 	privateNotices := channel.attemptTexts("")
-	if len(privateNotices) != 1 || !strings.Contains(privateNotices[0], "结果发送失败") || !strings.Contains(privateNotices[0], "结果已保留") {
+	if len(privateNotices) != 1 || !strings.Contains(privateNotices[0], "连续 3 次发送失败") || !strings.Contains(privateNotices[0], "结果已保留") {
 		t.Fatalf("private failure notices = %#v", privateNotices)
 	}
 	if strings.Contains(privateNotices[0], "delivery-fail") {
@@ -114,16 +150,32 @@ func TestScheduledQuerySendFailurePersistsResultAndRetriesWithoutLLM(t *testing.
 	if recovered.PendingDelivery != "" || !recovered.PendingSince.IsZero() || recovered.ConsecutiveFailures != 0 || recovered.LastError != "" {
 		t.Fatalf("recovered state = %#v", recovered)
 	}
+	if !recovered.FailureAlertedAt.IsZero() || recovered.RecoveryNoticePending {
+		t.Fatalf("failure alert state survived recovery: %#v", recovered)
+	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("delivery retry reran LLM: requests=%d", len(provider.requests))
 	}
 	groupAttempts := channel.attemptTexts("123456")
-	if len(groupAttempts) < 2 || groupAttempts[len(groupAttempts)-1] != pendingMessage {
-		t.Fatalf("group delivery attempts = %#v, pending=%q", groupAttempts, pendingMessage)
+	if !containsText(groupAttempts, pendingMessage) {
+		t.Fatalf("held result never reached the group: attempts=%#v pending=%q", groupAttempts, pendingMessage)
+	}
+	// 报过警就得说一声好了，否则订阅者只知道坏消息。
+	if len(groupAttempts) == 0 || !strings.Contains(groupAttempts[len(groupAttempts)-1], "已恢复") {
+		t.Fatalf("recovery notice missing: %#v", groupAttempts)
 	}
 	if nextIn := time.Until(recovered.TriggerAt); nextIn < 5*time.Hour+59*time.Minute || nextIn > 6*time.Hour+time.Minute {
 		t.Fatalf("normal schedule did not resume: next in %s", nextIn)
 	}
+}
+
+func containsText(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOneTimeReminderSendFailureRetriesAndNotifies(t *testing.T) {

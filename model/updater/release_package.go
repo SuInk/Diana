@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/model/ghmirror"
 )
 
 var (
@@ -60,10 +62,13 @@ type ReleasePackage struct {
 type UpdatePolicy struct {
 	AutoDownload bool `json:"auto_download"`
 	AutoInstall  bool `json:"auto_install"`
+	// GitHubMirror 是下载加速策略：auto（实测挑线路）、direct（始终直连），
+	// 或者一条具体的镜像地址。空值按 auto 处理，老配置升级上来不用迁移。
+	GitHubMirror string `json:"github_mirror,omitempty"`
 }
 
 func DefaultUpdatePolicy() UpdatePolicy {
-	return UpdatePolicy{AutoDownload: true, AutoInstall: false}
+	return UpdatePolicy{AutoDownload: true, AutoInstall: false, GitHubMirror: ghmirror.ModeAuto}
 }
 
 type pendingReleaseUpdate struct {
@@ -85,12 +90,20 @@ type ReleasePackageOptions struct {
 	HTTPClient     *http.Client
 	Shutdown       func()
 	Disable        bool
+	// Mirror 在直连 GitHub 慢或不通时给下载地址套一层加速前缀；nil 表示始终直连。
+	Mirror MirrorResolver
 
 	// PlatformOS, PlatformArch, and HelperStarter are test seams. Production
 	// callers leave them empty.
 	PlatformOS    string
 	PlatformArch  string
 	HelperStarter func(executable, planPath, logPath string) error
+}
+
+// MirrorResolver 决定这次下载走哪条线路。probeURL 是即将下载的地址，
+// 返回空字符串表示直连。
+type MirrorResolver interface {
+	Base(ctx context.Context, probeURL string) string
 }
 
 // ReleasePackageUpdater downloads and stages complete Release packages. A
@@ -108,6 +121,7 @@ type ReleasePackageUpdater struct {
 	assetName      string
 	binaryName     string
 	httpClient     *http.Client
+	mirror         MirrorResolver
 	shutdown       func()
 	startHelper    func(executable, planPath, logPath string) error
 	supported      bool
@@ -239,6 +253,7 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 		assetName:      ExpectedReleaseAssetName(goos, goarch),
 		binaryName:     binaryName,
 		httpClient:     client,
+		mirror:         options.Mirror,
 		shutdown:       options.Shutdown,
 		startHelper:    starter,
 	}
@@ -409,9 +424,18 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		}
 	}()
 
+	mirrorBase := ""
+	if u.mirror != nil {
+		// 拿安装包地址去挑线路，不是校验清单：清单只有几 KB，读完了也测不出
+		// 速度，选出来的只会是握手最快的那条，未必是下载最快的那条。
+		mirrorBase = u.mirror.Base(ctx, release.Archive.URL)
+	}
+
 	checksumPath := filepath.Join(workRoot, "SHA256SUMS")
 	u.setProgress("checksum", 0, release.Archive.Size)
-	if _, err := downloadReleaseFile(ctx, u.httpClient, release.Checksums.URL, checksumPath, maxChecksumBytes, nil); err != nil {
+	// 校验清单优先直连：它是整个下载的信任锚，而且只有几 KB，加不加速都一样快。
+	// 镜像只是直连不通时的兜底——套了镜像的包也得先对得上这份清单里的摘要。
+	if _, err := downloadReleaseFile(ctx, u.httpClient, checksumSources(release.Checksums.URL, mirrorBase), checksumPath, maxChecksumBytes, nil); err != nil {
 		return Result{}, fmt.Errorf("download SHA256SUMS: %w", err)
 	}
 	manifest, err := os.ReadFile(checksumPath)
@@ -424,7 +448,8 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	}
 	archivePath := filepath.Join(workRoot, u.assetName)
 	u.setProgress("downloading", 0, release.Archive.Size)
-	gotDigest, err := downloadReleaseFile(ctx, u.httpClient, release.Archive.URL, archivePath, maxReleasePackageBytes, func(done, total int64) {
+	// 包体几十上百 MB，这才是加速真正要救的东西：镜像优先，失败再回落直连。
+	gotDigest, err := downloadReleaseFile(ctx, u.httpClient, archiveSources(release.Archive.URL, mirrorBase), archivePath, maxReleasePackageBytes, func(done, total int64) {
 		u.setProgress("downloading", done, total)
 	})
 	if err != nil {
@@ -642,7 +667,53 @@ func startDetachedReleaseHelper(executable, planPath, logPath string) error {
 	return cmd.Process.Release()
 }
 
-func downloadReleaseFile(ctx context.Context, client *http.Client, rawURL, target string, maxBytes int64, progress func(int64, int64)) (string, error) {
+// checksumSources 是校验清单的下载顺序：直连优先，镜像兜底。
+func checksumSources(rawURL, mirrorBase string) []string {
+	return downloadSources(rawURL, mirrorBase, false)
+}
+
+// archiveSources 是发布包的下载顺序：镜像优先，直连兜底。
+func archiveSources(rawURL, mirrorBase string) []string {
+	return downloadSources(rawURL, mirrorBase, true)
+}
+
+func downloadSources(rawURL, mirrorBase string, mirrorFirst bool) []string {
+	mirrored := ghmirror.Rewrite(mirrorBase, rawURL)
+	// 镜像前缀是配置来的，落到这里再验一次协议：加速不能把下载降级成明文。
+	if mirrored == rawURL || !validReleaseDownloadURL(mirrored) {
+		return []string{rawURL}
+	}
+	if mirrorFirst {
+		return []string{mirrored, rawURL}
+	}
+	return []string{rawURL, mirrored}
+}
+
+// downloadReleaseFile 按顺序尝试每条线路，全部失败时返回最后一次的错误。
+// 每次重试前要把上一次留下的半截文件删掉：下面开文件用的是 O_EXCL。
+func downloadReleaseFile(ctx context.Context, client *http.Client, sources []string, target string, maxBytes int64, progress func(int64, int64)) (string, error) {
+	var lastErr error
+	for _, source := range sources {
+		if strings.TrimSpace(source) == "" {
+			continue
+		}
+		digest, err := downloadReleaseFileFrom(ctx, client, source, target, maxBytes, progress)
+		if err == nil {
+			return digest, nil
+		}
+		if ctx.Err() != nil {
+			return "", err
+		}
+		lastErr = err
+		_ = os.Remove(target)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("updater: no download source available")
+	}
+	return "", lastErr
+}
+
+func downloadReleaseFileFrom(ctx context.Context, client *http.Client, rawURL, target string, maxBytes int64, progress func(int64, int64)) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", err
