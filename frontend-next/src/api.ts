@@ -811,6 +811,32 @@ export function revokeOtherAuthSessions(): Promise<{ revoked: number }> {
   return requestJSON<{ revoked: number }>("/api/auth/sessions/revoke-others", { method: "POST" });
 }
 
+export interface OpenAPIKey {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at?: string;
+}
+
+export function listOpenAPIKeys(): Promise<{ keys: OpenAPIKey[] }> {
+  return requestJSON<{ keys: OpenAPIKey[] }>("/api/openapi/keys");
+}
+
+/** 返回值里的 token 是唯一一次能拿到的密钥明文，之后任何接口都查不到。 */
+export function createOpenAPIKey(name: string): Promise<{ key: OpenAPIKey; token: string }> {
+  return requestJSON<{ key: OpenAPIKey; token: string }>("/api/openapi/keys", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+}
+
+export function revokeOpenAPIKey(id: string): Promise<{ revoked: boolean }> {
+  return requestJSON<{ revoked: boolean }>(`/api/openapi/keys/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
 export interface OwnerLoginStatus {
   available: boolean;
 }
