@@ -4916,26 +4916,19 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return run(provider)
 		}
+		// 没有角色绑定就按本次调用的分组取候选，组内顺序即降级顺序。
+		//
+		// 这里以前多绕一道：候选来自「激活配置所在的分组」，所以激活的是生图那套时
+		// 聊天调用会拿到一串生图配置，得先用 activeProfileForGroup 做一次能力检查再
+		// 退回本分组。分组直接由调用方给出之后，那类错配从源头就不成立了。
 		groupKey := llm.NormalizeProfileGroup(group)
-		if groupKey != llm.GroupChat {
-			if profiles := set.GroupProfiles(groupKey); len(profiles) > 0 {
-				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
-				if err != nil {
-					return "", err
-				}
-				return run(provider)
+		if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
+			logUnboundGroupFallback(roles, group, profiles[0].ID)
+			provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
+			if err != nil {
+				return "", err
 			}
-		}
-		// runLLMProviderWithFailover 从激活配置所在的分组取候选，激活的是生图那套时
-		// 聊天调用会拿到一串生图配置。先确认激活配置能接这次调用，接不了就退回本分组。
-		if len(activeProfileForGroup(set, roles, group, groupKey)) == 0 {
-			if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
-				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
-				if err != nil {
-					return "", err
-				}
-				return run(provider)
-			}
+			return run(provider)
 		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
 	}
@@ -5019,23 +5012,18 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 			}
 		}
 	}
-	// 非聊天用途先在本分组里找。聊天用途不走这一步：默认分组里可能并排放着好几个
-	// 对话 Provider，选哪个是用户在 LLM 配置页用「激活配置」定的，直接取第一个会
-	// 无视这个选择。
-	if len(profiles) == 0 && groupKey != llm.GroupChat {
+	// 没有角色绑定就在本分组里按列表顺序取。聊天用途以前不走这一步，因为选哪个
+	// 由「激活配置」定；那个概念去掉之后，聊天和别的用途没有区别了。
+	if len(profiles) == 0 {
 		profiles = llmProfilesInGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
-		profiles = activeProfileForGroup(set, roles, group, groupKey)
-	}
-	// 激活配置跨组（例如激活的是生图那套、这次是聊天调用）时退回本分组。
-	// 上一步已经拒绝了跨组的激活配置，这里补一个同组的，免得直接判成「没有可用配置」。
-	if len(profiles) == 0 {
-		profiles = llmProfilesInGroup(set, groupKey)
+		profiles = fallbackProfilesForGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
 		return llm.AgentModelConfig{}, false, nil
 	}
+	logUnboundGroupFallback(roles, group, profiles[0].ID)
 	return profileRegistrySelection(registry, profiles[0]), true, nil
 }
 
@@ -5061,33 +5049,6 @@ func profileGroupServes(profileGroup string, wantGroup string) bool {
 		return true
 	}
 	return !singlePurposeProfileGroup(profileGroup) && !singlePurposeProfileGroup(wantGroup)
-}
-
-// activeProfileForGroup 返回可以用于这个用途的激活配置，接不了这活就不给。
-//
-// 「回落到激活配置」本身是对的——没配模型分配时总得有个兜底，而且视觉、意图回落到
-// 对话配置是正常的。错的是完全不看能力：激活的是生图配置时，一次普通聊天调用会拿
-// gpt-image-2 去发文本请求，日志里 provider 和 model 还都显示「正常」。
-// 宁可往下退回同组配置、甚至报「没有可用配置」，也不要拿一个干不了这活的模型硬接。
-func activeProfileForGroup(set llm.ProfileSet, roles map[string]ModelRole, group string, groupKey string) []llm.Profile {
-	current, ok := set.Current()
-	if !ok {
-		return nil
-	}
-	if !profileGroupServes(current.Group, groupKey) {
-		logUnusableActiveProfileSkipped(groupKey, current.ID, llm.NormalizeProfileGroup(current.Group))
-		return nil
-	}
-	logUnboundGroupFallback(roles, group, current.ID)
-	return []llm.Profile{current}
-}
-
-// logUnusableActiveProfileSkipped 无条件记一条：跟 logUnboundGroupFallback 不同，
-// 这不是「正常回落」，而是「用户选的激活配置干不了这次调用」，任何情况下都该看得见。
-// logUnboundGroupFallback 在没配任何绑定时是静默的，而没配绑定的人恰恰最容易撞上
-// 这一种——那条路的静默只能由这里补上。
-func logUnusableActiveProfileSkipped(wantGroup string, activeID string, activeGroup string) {
-	log.Printf("chatbot llm selection skipped the active profile: a %q call cannot use the active profile %q from the single-purpose group %q", wantGroup, activeID, activeGroup)
 }
 
 func normalizeRegistrySelection(registry *llm.ProviderRegistry, providerID, modelID string) llm.AgentModelConfig {
@@ -5192,7 +5153,7 @@ func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
 		}
 	}
 	if len(profiles) == 0 {
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			profiles = []llm.Profile{current}
 		}
 	}
@@ -5364,7 +5325,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			}
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, retryTransient, run)
 		}
 		return "", fmt.Errorf("chatbot: no llm profile is configured")
@@ -5377,6 +5338,33 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		return "", err
 	}
 	return run(withTransientLLMRetry(client, retryTransient))
+}
+
+// fallbackProfilesForGroup 在本分组没有配置时跨组挑一批候选，整组返回而不是只取一条，
+// 组内降级才不会丢。
+//
+// 它替代了原来那套「激活配置所在的分组，从激活那条开始绕圈」：分组改由列表第一条决定，
+// 于是同一份配置任何时刻算出来的候选和顺序都一样，也不会被降级写回悄悄改掉。
+//
+// 拦的是「干不了这活」，不是「分组不一样」：视觉、意图没单独配置时用对话配置是正常且
+// 有用的（大多数对话模型本来就能看图），只有生图、嵌入这种单一用途的组才互相拦。少了
+// 这道检查，第一条正好是生图配置时就会拿 gpt-image 去发文本请求，而 provider 和 model
+// 在日志里还都显示「正常」。
+func fallbackProfilesForGroup(set llm.ProfileSet, groupKey string) []llm.Profile {
+	first, ok := set.FirstProfile()
+	if !ok {
+		return nil
+	}
+	if candidates := llmProfilesInGroup(set, llm.GroupChat); len(candidates) > 0 {
+		if profileGroupServes(llm.GroupChat, groupKey) {
+			return candidates
+		}
+		return nil
+	}
+	if !profileGroupServes(first.Group, groupKey) {
+		return nil
+	}
+	return llmProfilesInGroup(set, first.Group)
 }
 
 func llmProfilesInGroup(set llm.ProfileSet, group string) []llm.Profile {
@@ -5409,13 +5397,17 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 		return "", err
 	}
 	set := store.Profiles().WithDefaults()
-	attempts := set.ActiveGroupProfiles()
+	// 候选以前来自「激活配置所在的分组」，且从激活那条开始绕圈；降级成功后还会把
+	// 激活项写回，于是列表顺序和实跑顺序对不上。现在退到默认分组、按列表顺序走，
+	// 默认分组也空了才拿第一条兜底。
+	attempts := llmProfilesInGroup(set, llm.GroupChat)
+	if len(attempts) == 0 {
+		attempts = fallbackProfilesForGroup(set, llm.GroupChat)
+	}
 	if len(attempts) == 0 {
 		return "", fmt.Errorf("chatbot: no llm profile is configured")
 	}
-	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, func(profileID string) {
-		activateLLMProfile(store, profileID)
-	}, true)
+	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, nil, true)
 	if err != nil {
 		return "", err
 	}
@@ -9270,13 +9262,10 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 		return reply, true
 	}
 	switch {
+	// 「lllm 当前」和「lllm 切换」跟着「激活配置」一起去掉了：没有激活项之后，
+	// 「当前用哪个」由本次调用的用途和分组顺序决定，不再是一个能被切换的全局状态。
 	case command == "lllm 列表":
 		return r.renderLLMProfiles(), true
-	case command == "lllm 当前":
-		return r.renderCurrentLLMProfile(), true
-	case strings.HasPrefix(command, "lllm 切换 "):
-		name := strings.TrimSpace(strings.TrimPrefix(command, "lllm 切换 "))
-		return r.switchLLMProfile(name)
 	case command == "群 列表":
 		return r.renderDisabledGroups(), true
 	case strings.HasPrefix(command, "群 禁用 "):
@@ -9341,52 +9330,13 @@ func (r *Runtime) renderLLMProfiles() string {
 	if len(set.Profiles) == 0 {
 		return "当前没有可用的 LLM 配置。"
 	}
-	profiles := append([]llm.Profile(nil), set.Profiles...)
-	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].Name < profiles[j].Name
-	})
-	lines := []string{"LLM 配置列表："}
-	for _, profile := range profiles {
-		prefix := "- "
-		if profile.ID == set.ActiveID {
-			prefix = "* "
-		}
-		lines = append(lines, fmt.Sprintf("%s%s [%s] (%s / %s)", prefix, profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model))
+	// 按列表原顺序输出，不再按名字排序：组内顺序就是降级顺序，排过序的列表会把
+	// 这个含义抹掉。以前用 * 标出激活项，那个概念已经没有了。
+	lines := []string{"LLM 配置列表（组内自上而下即降级顺序）："}
+	for _, profile := range set.Profiles {
+		lines = append(lines, fmt.Sprintf("- %s [%s] (%s / %s)", profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model))
 	}
 	return strings.Join(lines, "\n")
-}
-
-// renderCurrentLLMProfile 渲染当前 LLM 配置档。
-func (r *Runtime) renderCurrentLLMProfile() string {
-	if r.llmStore == nil {
-		return "当前未接入 LLM 配置集。"
-	}
-	profile, ok := r.llmStore.Profiles().Current()
-	if !ok {
-		return "当前没有激活的 LLM 配置。"
-	}
-	return fmt.Sprintf("当前 LLM：%s\n分组：%s\nProvider：%s\nModel：%s", profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model)
-}
-
-// switchLLMProfile 按名称切换 LLM 配置档。
-func (r *Runtime) switchLLMProfile(name string) (string, bool) {
-	if r.llmStore == nil {
-		return "当前未接入 LLM 配置集。", true
-	}
-	set := r.llmStore.Profiles()
-	for _, profile := range set.Profiles {
-		if profile.Name != name {
-			continue
-		}
-		// 只切换 active profile，不修改任何 provider/model 具体参数。
-		set.ActiveID = profile.ID
-		if err := r.llmStore.SaveProfiles(set); err != nil {
-			log.Printf("switch llm profile persist failed: %v", err)
-			return "切换失败：配置没能写入存储。", true
-		}
-		return fmt.Sprintf("已切换到 LLM 配置：%s", profile.Name), true
-	}
-	return "没有找到对应的 LLM 配置。", true
 }
 
 // clearSessionHistory 清空当前会话上下文。

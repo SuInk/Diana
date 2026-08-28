@@ -38,7 +38,6 @@ let llmConfig: LLMConfig = {
   provider: "openai_compatible",
   model: "gpt-5.6",
   api_key_configured: true,
-  active_profile_id: "llm-chat",
   profiles: [
     { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, temperature: 0.7, max_output_tokens: 4096, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "chat", role_label: "对话", model: "gpt-5.4-mini" }] },
     { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000 },
@@ -364,7 +363,6 @@ function bodyOf(init?: RequestInit): Record<string, unknown> {
 function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   const profiles = [...(llmConfig.profiles ?? [])];
   const id = String(body.id ?? "");
-  if (action === "activate") llmConfig.active_profile_id = id;
   if (action === "delete") llmConfig.profiles = profiles.filter((profile) => profile.id !== id);
   if (action === "clone") {
     const source = profiles.find((profile) => profile.id === id);
@@ -422,7 +420,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const saved = { ...incoming, id: incoming.id || `llm-${Date.now()}`, api_key_configured: true, models: incoming.models?.length ? incoming.models : modelCatalog };
     const index = profiles.findIndex((profile) => profile.id === saved.id);
     if (index >= 0) profiles[index] = saved; else profiles.push(saved);
-    llmConfig = { ...llmConfig, profiles, active_profile_id: llmConfig.active_profile_id || saved.id };
+    llmConfig = { ...llmConfig, profiles };
     return json(llmConfig);
   }
   const llmAction = path.match(/^\/api\/llm\/config\/(activate|clone|delete|reorder)$/)?.[1];

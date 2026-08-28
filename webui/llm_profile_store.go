@@ -32,7 +32,7 @@ func NewMemoryLLMProfileStore(cfg llm.ProviderConfig) *MemoryLLMProfileStore {
 func (s *MemoryLLMProfileStore) Current() llm.ProviderConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if profile, ok := s.data.Current(); ok {
+	if profile, ok := s.data.FirstProfile(); ok {
 		return profile.Config.WithDefaults()
 	}
 	return llm.ProviderConfig{}
@@ -103,7 +103,7 @@ func (s *PersistentLLMProfileStore) ProviderRegistry() (*llm.ProviderRegistry, e
 func (s *PersistentLLMProfileStore) Current() llm.ProviderConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if profile, ok := s.data.Current(); ok {
+	if profile, ok := s.data.FirstProfile(); ok {
 		return profile.Config.WithDefaults()
 	}
 	return llm.ProviderConfig{}

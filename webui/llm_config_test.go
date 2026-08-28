@@ -29,7 +29,7 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 	handler := NewLLMConfigHandler(store)
 	router := testRouter(handler)
 
-	postBody := []byte(`{"id":"` + store.Profiles().ActiveID + `","name":"主配置","group":"chat","description":"主力 OpenAI 配置","provider":"openai_compatible","api_key":"new-key-123","models":[{"id":"gpt-test"},{"id":"gpt-vision"}],"model":"gpt-test","image_model":"gpt-image-1-mini","user_agent":"codex-test/1.0","headers":{"X-Relay":"earlyso"},"temperature":0.5,"max_output_tokens":128,"timeout_ms":5000}`)
+	postBody := []byte(`{"id":"` + store.Profiles().Profiles[0].ID + `","name":"主配置","group":"chat","description":"主力 OpenAI 配置","provider":"openai_compatible","api_key":"new-key-123","models":[{"id":"gpt-test"},{"id":"gpt-vision"}],"model":"gpt-test","image_model":"gpt-image-1-mini","user_agent":"codex-test/1.0","headers":{"X-Relay":"earlyso"},"temperature":0.5,"max_output_tokens":128,"timeout_ms":5000}`)
 	postReq := httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(postBody))
 	postRec := httptest.NewRecorder()
 	router.ServeHTTP(postRec, postReq)
@@ -106,7 +106,7 @@ func TestLLMAdvancedConfigRoundTripAndCompactEditorPreservation(t *testing.T) {
 	store := NewMemoryLLMProfileStore(advanced)
 	handler := NewLLMConfigHandler(store)
 	router := testRouter(handler)
-	body := []byte(`{"id":"` + store.Profiles().ActiveID + `","name":"主配置","provider":"openai_compatible","api_style":"chat_completions","model":"gpt-test","base_url":"https://chat.example.test/v1"}`)
+	body := []byte(`{"id":"` + store.Profiles().Profiles[0].ID + `","name":"主配置","provider":"openai_compatible","api_style":"chat_completions","model":"gpt-test","base_url":"https://chat.example.test/v1"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -175,6 +175,20 @@ func TestLLMConfigHandlerExportIncludesAPIKeys(t *testing.T) {
 }
 
 // TestLLMConfigHandlerCreatesNamedProfile 验证对应功能场景。
+// profileByName 按名字取配置。这些用例原来用 store.Current() 取「刚保存的那条」，
+// 靠的是 upsertProfileSet 会把新建的设为激活。「激活配置」去掉之后，新建的配置追加
+// 在列表末尾，不再自动跃到队首——要断言哪条就直接按名字取哪条。
+func profileByName(t *testing.T, set llm.ProfileSet, name string) llm.Profile {
+	t.Helper()
+	for _, profile := range set.Profiles {
+		if profile.Name == name {
+			return profile
+		}
+	}
+	t.Fatalf("配置集里没有名为 %q 的配置: %#v", name, set.Profiles)
+	return llm.Profile{}
+}
+
 func TestLLMConfigHandlerCreatesNamedProfile(t *testing.T) {
 	store := NewMemoryLLMProfileStore(llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible,
@@ -196,9 +210,13 @@ func TestLLMConfigHandlerCreatesNamedProfile(t *testing.T) {
 	if len(profiles.Profiles) != 2 {
 		t.Fatalf("profiles = %#v", profiles)
 	}
-	current, ok := profiles.Current()
-	if !ok || current.Name != "备用 Key" || current.Description != "备用 Anthropic 配置" || current.UpdatedAt.IsZero() || current.Config.Provider != llm.ProviderAnthropic {
-		t.Fatalf("current profile = %#v", current)
+	created := profileByName(t, profiles, "备用 Key")
+	if created.Description != "备用 Anthropic 配置" || created.UpdatedAt.IsZero() || created.Config.Provider != llm.ProviderAnthropic {
+		t.Fatalf("created profile = %#v", created)
+	}
+	// 新建的配置追加在末尾，不该把原有的第一条挤下去。
+	if profiles.Profiles[0].Name == "备用 Key" {
+		t.Fatalf("新建配置跃到了队首: %#v", profiles.Profiles)
 	}
 }
 
@@ -220,42 +238,9 @@ func TestLLMConfigHandlerAppliesProviderDefaults(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	current := store.Current()
-	if current.Provider != llm.ProviderGemini || current.Model != llm.DefaultGeminiModel || current.ImageModel != llm.DefaultImageModel(llm.ProviderGemini) {
-		t.Fatalf("current = %#v", current)
-	}
-}
-
-// TestLLMConfigHandlerActivateProfile 验证对应功能场景。
-func TestLLMConfigHandlerActivateProfile(t *testing.T) {
-	store := NewMemoryLLMProfileStore(llm.ProviderConfig{
-		Provider: llm.ProviderOpenAICompatible,
-		APIKey:   "old-key",
-		Model:    "old-model",
-	})
-	profiles := store.Profiles()
-	profiles.Profiles = append(profiles.Profiles, llm.Profile{
-		ID:   "secondary",
-		Name: "备用",
-		Config: llm.ProviderConfig{
-			Provider: llm.ProviderAnthropic,
-			APIKey:   "anthropic-key",
-			Model:    "claude-sonnet-4-5",
-		},
-	})
-	store.SaveProfiles(profiles)
-	handler := NewLLMConfigHandler(store)
-	router := testRouter(handler)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/llm/config/activate", bytes.NewReader([]byte(`{"id":"secondary"}`)))
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	if got := store.Current(); got.Provider != llm.ProviderAnthropic || got.Model != "claude-sonnet-4-5" {
-		t.Fatalf("current = %#v", got)
+	created := profileByName(t, store.Profiles(), "Gemini").Config
+	if created.Provider != llm.ProviderGemini || created.Model != llm.DefaultGeminiModel || created.ImageModel != llm.DefaultImageModel(llm.ProviderGemini) {
+		t.Fatalf("created = %#v", created)
 	}
 }
 
@@ -302,7 +287,7 @@ func TestLLMConfigHandlerCloneProfile(t *testing.T) {
 	handler := NewLLMConfigHandler(store)
 	router := testRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/llm/config/clone", bytes.NewReader([]byte(`{"id":"`+store.Profiles().ActiveID+`"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/llm/config/clone", bytes.NewReader([]byte(`{"id":"`+store.Profiles().Profiles[0].ID+`"}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -313,12 +298,13 @@ func TestLLMConfigHandlerCloneProfile(t *testing.T) {
 	if len(profiles.Profiles) != 2 {
 		t.Fatalf("profiles = %#v", profiles)
 	}
-	current, _ := profiles.Current()
-	if current.Name == "默认配置" || current.Config.APIKey != "old-key" {
-		t.Fatalf("current = %#v", current)
+	// 副本追加在末尾，不再自动成为激活配置。
+	cloned := profiles.Profiles[len(profiles.Profiles)-1]
+	if cloned.Name == "默认配置" || cloned.Config.APIKey != "old-key" {
+		t.Fatalf("cloned = %#v", cloned)
 	}
-	if current.Config.APIFormat != llm.APIFormatResponses {
-		t.Fatalf("cloned APIFormat = %q, want %q", current.Config.APIFormat, llm.APIFormatResponses)
+	if cloned.Config.APIFormat != llm.APIFormatResponses {
+		t.Fatalf("cloned APIFormat = %q, want %q", cloned.Config.APIFormat, llm.APIFormatResponses)
 	}
 }
 
@@ -332,6 +318,7 @@ func TestLLMConfigHandlerImportProfiles(t *testing.T) {
 	handler := NewLLMConfigHandler(store)
 	router := testRouter(handler)
 
+	// 旧版导出文件里还带着 active_profile_id，导入时应当直接忽略而不是报错。
 	body := []byte(`{
 	  "active_profile_id":"b",
 	  "profiles":[
@@ -346,8 +333,9 @@ func TestLLMConfigHandlerImportProfiles(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	// 导入按文件里的顺序落库，不再由 active_profile_id 决定谁排第一。
 	current := store.Current()
-	if current.Provider != llm.ProviderAnthropic || current.APIKey != "key-b" {
+	if current.Provider != llm.ProviderOpenAICompatible || current.APIKey != "key-a" {
 		t.Fatalf("current = %#v", current)
 	}
 	profiles := store.Profiles()
@@ -436,7 +424,7 @@ func TestLLMConfigHandlerKeepsExistingAPIKeyWhenOmitted(t *testing.T) {
 	handler := NewLLMConfigHandler(store)
 	router := testRouter(handler)
 
-	body := []byte(`{"id":"` + store.Profiles().ActiveID + `","provider":"anthropic","model":"claude-opus-4-6","max_output_tokens":256}`)
+	body := []byte(`{"id":"` + store.Profiles().Profiles[0].ID + `","provider":"anthropic","model":"claude-opus-4-6","max_output_tokens":256}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -500,7 +488,7 @@ func TestLLMConfigHandlerTestEndpointUsesPayloadConfig(t *testing.T) {
 	})
 	router := testRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/llm/test", bytes.NewReader([]byte(`{"message":"hello","id":"`+store.Profiles().ActiveID+`","provider":"openai_compatible","base_url":"https://draft.example/v1","model":"draft-model"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/llm/test", bytes.NewReader([]byte(`{"message":"hello","id":"`+store.Profiles().Profiles[0].ID+`","provider":"openai_compatible","base_url":"https://draft.example/v1","model":"draft-model"}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -525,7 +513,7 @@ func TestLLMConfigHandlerTestEndpointUsesImageGenerationForImageGroup(t *testing
 	})
 	router := testRouter(handler)
 
-	body := []byte(`{"message":"生成一只小猫","id":"` + store.Profiles().ActiveID + `","group":"image","provider":"openai_compatible","model":"selected-image-model"}`)
+	body := []byte(`{"message":"生成一只小猫","id":"` + store.Profiles().Profiles[0].ID + `","group":"image","provider":"openai_compatible","model":"selected-image-model"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/llm/test", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -563,7 +551,7 @@ func TestLLMConfigHandlerModelsEndpointKeepsExistingAPIKey(t *testing.T) {
 	})
 	router := testRouter(handler)
 
-	body := []byte(`{"id":"` + store.Profiles().ActiveID + `","provider":"openai_compatible","base_url":"https://new.example/v1","model":"gp5.5"}`)
+	body := []byte(`{"id":"` + store.Profiles().Profiles[0].ID + `","provider":"openai_compatible","base_url":"https://new.example/v1","model":"gp5.5"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/llm/models", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -659,8 +647,10 @@ func TestLLMConfigHandlerSaveResolvesEmptyModelFromList(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if current := store.Current(); current.Model != "auto-model" || len(current.Models) != 2 || current.Models[1].ID != "other-model" {
-		t.Fatalf("saved config = %#v, want auto-model and complete model list", current)
+	set := store.Profiles()
+	saved := set.Profiles[len(set.Profiles)-1].Config
+	if saved.Model != "auto-model" || len(saved.Models) != 2 || saved.Models[1].ID != "other-model" {
+		t.Fatalf("saved config = %#v, want auto-model and complete model list", saved)
 	}
 }
 
@@ -675,7 +665,7 @@ func TestLLMConfigHandlerLegacySavePreservesModels(t *testing.T) {
 	handler := NewLLMConfigHandler(store)
 	router := testRouter(handler)
 
-	body := []byte(`{"id":"` + store.Profiles().ActiveID + `","provider":"openai_compatible","base_url":"https://saved.example/v1","model":"model-b"}`)
+	body := []byte(`{"id":"` + store.Profiles().Profiles[0].ID + `","provider":"openai_compatible","base_url":"https://saved.example/v1","model":"model-b"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -816,7 +806,6 @@ func (s stubBotProfileSource) Profiles() assistant.ProfileSet { return s.set }
 func TestLLMPayloadListsModelRoleBindings(t *testing.T) {
 	store := NewMemoryLLMProfileStore(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model"})
 	if err := store.SaveProfiles(llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{
 			{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
 				Provider: llm.ProviderOpenAICompatible, APIKey: "sk-test", Model: "big-model",

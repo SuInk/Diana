@@ -716,7 +716,6 @@ func (c *fileResolveChannel) CallAPI(_ context.Context, action string, _ map[str
 // 聊天里换模型改的是机器人的对话模型分配，不是 LLM provider 配置。
 func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{
 			{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
 				Provider: llm.ProviderOpenAICompatible, APIKey: "valid-key", Model: "example-chat-model",
@@ -778,7 +777,6 @@ func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
 // 换家就得换地址和密钥，把当前配置的 provider 字段改掉只会得到一套连不上的配置。
 func TestDianaLLMConfigToolRefusesUnconfiguredProvider(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
 			Provider: llm.ProviderOpenAICompatible, APIKey: "valid-key", Model: "example-chat-model",
 		}}},
@@ -800,7 +798,6 @@ func TestDianaLLMConfigToolRefusesUnconfiguredProvider(t *testing.T) {
 // 只报模型名时，如果它挂在另一套配置下，绑定要跟着换过去。
 func TestDianaLLMConfigToolFollowsModelToItsProfile(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{
 			{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
 				Provider: llm.ProviderOpenAICompatible, APIKey: "k1", Model: "chat-model",
@@ -833,7 +830,6 @@ func TestDianaLLMConfigToolFollowsModelToItsProfile(t *testing.T) {
 func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
-			ActiveID: "main",
 			Profiles: []llm.Profile{
 				{
 					ID:   "main",
@@ -875,7 +871,6 @@ func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 func TestDianaLLMConfigToolRejectsModelOutsideList(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
-			ActiveID: "main",
 			Profiles: []llm.Profile{
 				{
 					ID:   "main",
@@ -906,7 +901,6 @@ func TestDianaLLMConfigToolRejectsModelOutsideList(t *testing.T) {
 func TestDianaLLMConfigToolRejectsNonOwner(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
-			ActiveID: "main",
 			Profiles: []llm.Profile{
 				{ID: "main", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "valid-key", Model: "example-chat-model"}},
 			},
@@ -1310,7 +1304,6 @@ func TestXiaohongshuUnresolvedStatus(t *testing.T) {
 func TestDianaLLMConfigToolRebindsEveryModelRole(t *testing.T) {
 	newRuntime := func() (*Runtime, *stubLLMProfileStore) {
 		store := &stubLLMProfileStore{set: llm.ProfileSet{
-			ActiveID: "main",
 			Profiles: []llm.Profile{
 				{ID: "main", Name: "主配置", Group: "default", Config: llm.ProviderConfig{
 					Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "chat-model", ImageModel: "draw-model",
@@ -1370,7 +1363,6 @@ func TestDianaLLMConfigToolRebindsEveryModelRole(t *testing.T) {
 // 改「视觉理解」只写自己那一档，不会顺手给对话也钉一个绑定。
 func TestDianaLLMConfigToolBindsNonChatRoleWithoutTouchingChat(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{{ID: "main", Name: "主配置", Config: llm.ProviderConfig{
 			Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "chat-model",
 			Models: []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}},

@@ -153,7 +153,7 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 		profiles = llmProfilesInGroup(set, group)
 	}
 	if len(profiles) == 0 {
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			profiles = []llm.Profile{current}
 		}
 	}
