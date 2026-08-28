@@ -73,6 +73,29 @@ let assistantConfig: BotProfileConfig = { ...oneBotProfile, active_profile_id: "
 let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
+  {
+    manifest: {
+      id: "official.music", name: "音乐增强", version: "0.2.0", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐、酷狗并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
+      settings: [
+        { key: "request_song_enabled", label: "允许点歌", type: "bool", default: true, description: "开启后模型可以按用户要求搜歌并直接发出语音。关掉只保留链接解析。" },
+        { key: "enabled_sources", label: "启用曲库", type: "multi_select", default: ["netease", "qq", "kugou"], options: [{ value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }, { value: "kugou", label: "酷狗音乐" }], description: "一首歌在这家是会员专享、在那家能试听是常事。勾多几家，一家放不出来就自动换下一家。" },
+        { key: "preferred_source", label: "点歌优先曲库", type: "select", default: "", options: [{ value: "", label: "按启用顺序" }, { value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }, { value: "kugou", label: "酷狗音乐" }], description: "点歌时先问哪家。分享链接始终用链接自己的平台，不受这里影响。" },
+        { key: "netease_api_base", label: "网易云自建 API 地址", type: "string", default: "", description: "自建 NeteaseCloudMusicApi 的地址，例如 http://127.0.0.1:3000。留空走官方接口，只能拿到可试听的歌曲。" },
+        { key: "netease_cookie", label: "网易云 MUSIC_U Cookie", type: "string", default: "", secret: true, description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。" },
+        { key: "qq_api_base", label: "QQ 音乐自建 API 地址", type: "string", default: "", description: "自建 QQMusicApi 的地址。留空走官方接口，无登录态时多数曲目取不到播放地址。" },
+        { key: "qq_cookie", label: "QQ 音乐 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串，用于会员和独家曲目。" },
+        { key: "kugou_api_base", label: "酷狗自建 API 地址", type: "string", default: "", description: "自建 KuGouMusicApi 的地址。留空走官方接口。" },
+        { key: "kugou_cookie", label: "酷狗 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串。留空时会派生一个设备号，可试听曲目通常够用。" },
+        { key: "bitrate", label: "音质", type: "select", default: "320000", options: [{ value: "128000", label: "标准 128k" }, { value: "192000", label: "较高 192k" }, { value: "320000", label: "极高 320k" }], description: "只对网易云的自建 API 生效；其余情况由平台自己决定码率。" },
+        { key: "max_duration_seconds", label: "最长时长", type: "number", default: 600, min: 30, max: 1800, step: 30, unit: "秒" },
+        { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
+        { key: "timeout_seconds", label: "请求超时", type: "number", default: 45, min: 5, max: 180, step: 5, unit: "秒" },
+        { key: "send_song_info", label: "同时发送歌曲信息", type: "bool", default: true, description: "在语音前补一条「歌名 - 歌手」，否则群里只看到一条不知道是什么的语音。" },
+        { key: "silk_encoder_path", label: "Silk 编码器路径", type: "string", default: "", description: "填了就把音频转成 Tencent Silk 再发。留空沿用语音合成插件的配置。" }
+      ]
+    },
+    installed: true, enabled: true
+  },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   { manifest: { id: "official.open-api", name: "对外 API", version: "0.1.0", description: "让 CI、监控这类外部系统凭密钥调用 HTTP 接口向指定会话推送消息；密钥在「设置 → 安全」里管理。", official: true, built_in: true, default_disabled: true, permissions: ["network:http", "message:write"], settings: [{ key: "rate_limit_per_minute", label: "单密钥限流", description: "每把密钥每分钟允许的调用次数，超出返回 429。", type: "number", default: 60, min: 1, max: 600, step: 10, unit: "次/分钟" }] }, installed: true, enabled: false },
   {
