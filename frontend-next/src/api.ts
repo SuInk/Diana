@@ -24,6 +24,8 @@ export interface LLMConfig {
   api_key?: string;
   api_key_configured?: boolean;
   api_key_preview?: string;
+  /** 指向某个已授权登录的提供商。填了它就用授权令牌，API Key 变成可选的兜底。 */
+  oauth_provider?: string;
   base_url?: string;
   models?: LLMModelInfo[];
   model: string;
@@ -1953,4 +1955,73 @@ export interface GroupRelationResponse {
 export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupRelationResponse> {
   const params = new URLSearchParams({ range });
   return requestJSON<GroupRelationResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/relations?${params.toString()}`);
+}
+
+
+// ---- LLM OAuth 登录 -------------------------------------------------------
+
+export interface LLMOAuthProvider {
+  key: string;
+  label: string;
+  authorize_url: string;
+  token_url: string;
+  client_id?: string;
+  /** 读接口里恒为 "***" 或空，明文永远不回传。 */
+  client_secret?: string;
+  redirect_uri?: string;
+  scopes?: string[];
+  use_pkce?: boolean;
+  token_headers?: Record<string, string>;
+  built_in?: boolean;
+  notes?: string;
+}
+
+export interface LLMOAuthStatus {
+  provider: LLMOAuthProvider;
+  logged_in: boolean;
+  account?: string;
+  obtained_at?: string;
+  expires_at?: string;
+  expired?: boolean;
+  refreshable?: boolean;
+  scope?: string;
+}
+
+export interface LLMOAuthPendingLogin {
+  id: string;
+  provider_key: string;
+  authorize_url: string;
+  redirect_uri?: string;
+  expires_at: string;
+}
+
+export function listOAuthProviders(): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/providers");
+}
+
+export function saveOAuthProvider(provider: LLMOAuthProvider): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/providers", { method: "POST", body: JSON.stringify(provider) });
+}
+
+export function deleteOAuthProvider(provider: string): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/providers/delete", { method: "POST", body: JSON.stringify({ provider }) });
+}
+
+export function startOAuthLogin(provider: string): Promise<{ login: LLMOAuthPendingLogin }> {
+  return requestJSON("/api/llm/oauth/login/start", { method: "POST", body: JSON.stringify({ provider }) });
+}
+
+export function completeOAuthLogin(provider: string, loginId: string, callback: string): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/login/complete", {
+    method: "POST",
+    body: JSON.stringify({ provider, login_id: loginId, callback })
+  });
+}
+
+export function cancelOAuthLogin(loginId: string): Promise<{ ok: boolean }> {
+  return requestJSON("/api/llm/oauth/login/cancel", { method: "POST", body: JSON.stringify({ login_id: loginId }) });
+}
+
+export function logoutOAuthProvider(provider: string): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/logout", { method: "POST", body: JSON.stringify({ provider }) });
 }

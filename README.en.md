@@ -287,6 +287,17 @@ The bot plugins area enables, disables, and configures the official built-in plu
 - **Image text recognition**: runs OCR before images enter the context, using LLM vision transcription, a self-hosted OCR service (PaddleOCR / RapidOCR), or local `tesseract` — the latter two fully offline. Delivery is either "image plus text" or "text only", the latter letting a chat model without vision support handle image messages.
 - **Web search**: installed and enabled by default; it can be disabled and configured but never uninstalled. It is independent of the Agent switch, so local file, command, and browser tools stay closed when the Agent is off.
 
+### OAuth Sign-In
+
+The "Authorized sign-in" section of the LLM page uses OAuth instead of an API key. The console runs on a server and the browser is not necessarily on the same machine, so the callback is not required to land back locally: click "Sign in", complete the authorization in your own browser, then paste the whole callback URL from the address bar back into the console (just the `code` also works). Once signed in, pick the provider under "Credential" on a profile; the token is refreshed before it expires. If the profile also has an API key, a failed refresh falls back to it rather than taking the whole profile down.
+
+Providers are configuration, not hard-coded code: OpenRouter ships built in (its PKCE flow is designed for third-party apps and mints a key you own and can revoke), and anything else can be added under "Custom provider" by filling in the authorize URL, token URL, client ID and scopes — suitable for a self-hosted gateway or any service not shipped here. Both URLs must be https; loopback addresses (`127.0.0.1`) may use http.
+
+> [!NOTE]
+> Providers that require impersonating a first-party client ID to obtain a subscription account's session are not preinstalled. That use goes beyond what the subscription itself licenses, and whether to do it is the operator's own call — it can be entered under "Custom provider" if wanted.
+
+Tokens and client secrets are treated exactly like API keys: read endpoints only return whether a provider is signed in and when it expires; no plaintext ever leaves the server.
+
 ### Built-in Agent
 
 Once enabled, the bot handles messages with a minimal [Pi Agent](https://github.com/earendil-works/pi)-style state and tool loop: plan, call tools, observe, answer. The runtime is native Go, so complete release packages need no extra Node install.
