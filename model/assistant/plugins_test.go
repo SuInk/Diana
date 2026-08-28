@@ -755,7 +755,7 @@ func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
 		t.Fatalf("provider config was rewritten: %#v", got)
 	}
 	// 换完之后实际生效的就是新模型——旧实现在这里仍然是旧模型。
-	profiles, err := runtime.roleBoundProfiles(store.Profiles().WithDefaults(), llm.GroupChat)
+	profiles, err := runtime.roleBoundProfiles("", store.Profiles().WithDefaults(), llm.GroupChat)
 	if err != nil {
 		t.Fatal(err)
 	}

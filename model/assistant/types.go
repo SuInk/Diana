@@ -422,7 +422,6 @@ type ModelRole struct {
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
-	allowed := map[string]bool{"chat": true, "vision": true, "intent": true, "image": true}
 	out := map[string]ModelRole{}
 	for key, role := range roles {
 		key = strings.ToLower(strings.TrimSpace(key))
@@ -441,7 +440,8 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 		if role.Group != "" {
 			role.ProfileID = ""
 		}
-		if allowed[key] && ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != "" {
+		// 可绑定的键从 4 个扩到「5 个分组 + 17 个用途」，见 model_binding.go。
+		if isModelBindingKey(key) && ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != "" {
 			out[key] = role
 		}
 	}
