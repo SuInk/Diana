@@ -136,22 +136,26 @@ type repositoryIssueDraftView struct {
 	ID string `json:"id"`
 	// Operation 区分这份草稿要执行的写操作。历史草稿没有这个字段，读取时按
 	// create 处理。
-	Operation     string    `json:"operation,omitempty"`
-	IssueTarget   int       `json:"issue_target,omitempty"`
-	GroupID       string    `json:"group_id"`
-	Repository    string    `json:"repository"`
-	Title         string    `json:"title"`
-	Body          string    `json:"body,omitempty"`
-	Labels        []string  `json:"labels,omitempty"`
-	Assignees     []string  `json:"assignees,omitempty"`
-	Milestone     any       `json:"milestone,omitempty"`
-	State         string    `json:"state,omitempty"`
-	RequesterID   string    `json:"requester_id"`
-	RequesterName string    `json:"requester_name,omitempty"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"created_at"`
-	IssueNumber   int       `json:"issue_number,omitempty"`
-	IssueURL      string    `json:"issue_url,omitempty"`
+	Operation     string   `json:"operation,omitempty"`
+	IssueTarget   int      `json:"issue_target,omitempty"`
+	GroupID       string   `json:"group_id"`
+	Repository    string   `json:"repository"`
+	Title         string   `json:"title"`
+	Body          string   `json:"body,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
+	Assignees     []string `json:"assignees,omitempty"`
+	Milestone     any      `json:"milestone,omitempty"`
+	State         string   `json:"state,omitempty"`
+	RequesterID   string   `json:"requester_id"`
+	RequesterName string   `json:"requester_name,omitempty"`
+	Status        string   `json:"status"`
+	// ConfirmationCode 是这份草稿的确认码，只对还等着审批的草稿给。草稿列表原先只
+	// 有 id，模型要自己去截前六位才能报出确认码——那是让它做字符串运算，不可靠；
+	// 报错了用户照着打也过不了校验。直接给出来。
+	ConfirmationCode string    `json:"confirmation_code,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	IssueNumber      int       `json:"issue_number,omitempty"`
+	IssueURL         string    `json:"issue_url,omitempty"`
 }
 
 type repositoryIssueSummary struct {
@@ -212,7 +216,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `搜索和管理 GitHub Issues。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，对方明确同意再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `搜索和管理 GitHub Issues。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -899,9 +903,14 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 	}
 	result.OK = true
 	result.Outcome = "draft_pending"
+	// 这段文案里「确认码要发出去」和「确认码只能由用户自己打出来」是两件事，必须
+	// 分开说清楚。原先写的是「不要替用户说出确认码」——本意是别代替用户完成确认，
+	// 但模型完全可以读成「别把确认码说出来」，于是它真的不发，管理员无从确认，
+	// 整条审批链路就断在这里。
 	result.Message = fmt.Sprintf(
-		"草稿已生成，尚未写入 GitHub。把将要写入的内容原样告诉用户，并请有权限的人回复确认码 %s；"+
-			"收到之后再用 operation=approve 和这个 draft_id 执行。不要替用户说出确认码。",
+		"草稿已生成，尚未写入 GitHub。把将要写入的内容原样告诉用户，并把确认码 %s 单独成行写进这次回复里——"+
+			"不发出来对方就没法确认。然后等有权限的人自己把这个码打出来，收到之后再用 operation=approve "+
+			"和这个 draft_id 执行；在那之前不要调用 approve，也不要当作对方已经确认过。",
 		repositoryIssueConfirmationCode(draft.ID))
 	result.RequiresApproval = true
 	result.Draft = repositoryIssueDraftViewFromDraft(draft)
@@ -1026,7 +1035,12 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 	}
 	result.OK = true
 	result.Outcome = "listed"
-	result.Message = fmt.Sprintf("共找到 %d 条 Issue 草稿。", len(drafts))
+	// 只报条数等于没报：用户看完列表还是不知道拿什么去确认。待审批的草稿必须连
+	// confirmation_code 一起复述，否则这条链路到列表这一步就断了。
+	result.Message = fmt.Sprintf(
+		"共找到 %d 条 Issue 草稿。逐条把标题和内容复述给用户；待审批的草稿要把它的 confirmation_code 原样写进回复——"+
+			"不发出来对方就没法确认。说明由有权限的人自己打出该确认码才会提交；在那之前不要调用 approve，"+
+			"也不要当作对方已经确认过。", len(drafts))
 	result.Drafts = make([]repositoryIssueDraftView, 0, len(drafts))
 	for _, draft := range drafts {
 		result.Drafts = append(result.Drafts, *repositoryIssueDraftViewFromDraft(draft))
@@ -1117,8 +1131,18 @@ func repositoryIssueDraftViewFromDraft(draft repositoryIssueDraft) *repositoryIs
 		Milestone:   draft.Input["milestone"],
 		State:       configToolString(draft.Input, "state"),
 		RequesterID: draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
-		IssueNumber: draft.IssueNumber, IssueURL: draft.IssueURL,
+		// 只有待审批的草稿需要确认码：已提交和已取消的草稿再报一个码，只会让人以为
+		// 还能确认。
+		ConfirmationCode: confirmationCodeForPendingDraft(draft),
+		IssueNumber:      draft.IssueNumber, IssueURL: draft.IssueURL,
 	}
+}
+
+func confirmationCodeForPendingDraft(draft repositoryIssueDraft) string {
+	if strings.TrimSpace(draft.Status) != "pending" {
+		return ""
+	}
+	return repositoryIssueConfirmationCode(draft.ID)
 }
 
 func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {

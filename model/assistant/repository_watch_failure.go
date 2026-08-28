@@ -78,14 +78,6 @@ func repositoryWatchFailureShouldAlert(item Reminder) bool {
 		item.FailureAlertedAt.IsZero()
 }
 
-func resetRepositoryWatchFailureStateAfterSuccess(item *Reminder) {
-	hadAcknowledgedAlert := !item.FailureAlertedAt.IsZero()
-	item.LastFailureStage = ""
-	item.LastErrorFingerprint = ""
-	item.FailureAlertedAt = time.Time{}
-	item.RecoveryNoticePending = item.RecoveryNoticePending || hadAcknowledgedAlert
-}
-
 func clearRepositoryWatchFailureState(item *Reminder) {
 	item.LastError = ""
 	item.ConsecutiveFailures = 0

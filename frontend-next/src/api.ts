@@ -189,6 +189,7 @@ export interface BotProfileConfig {
   max_reply_chars?: number;
   /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 <dianabr>；缺省等价于开启。 */
   natural_reply_split_enabled?: boolean;
+  social_reply_enabled?: boolean;
   /** 最多分几条；分出来超过它就退回粗一档，退到底就整条发。 */
   reply_max_bubbles?: number;
   direct_reply_chunk_size?: number;
@@ -246,6 +247,7 @@ export interface PluginManifest {
   description: string;
   official: boolean;
   built_in: boolean;
+  default_disabled?: boolean;
   permissions?: string[];
   settings?: PluginSettingSpec[];
 }
@@ -358,6 +360,16 @@ export interface BotGroupConfig {
   recent_history_token_budget?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
+  /** 本群的自然分条开关；不设表示跟随机器人。 */
+  natural_reply_split_enabled?: boolean;
+  /** 本群最多分几条。 */
+  reply_max_bubbles?: number;
+  /** 本群单条聊天消息的字数硬上限。 */
+  direct_reply_chunk_size?: number;
+  /** 本群正文超过多少字改用合并转发卡片。 */
+  forward_reply_threshold?: number;
+  /** 本群切出超过多少块改用合并转发卡片。 */
+  forward_reply_chunk_threshold?: number;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
   /** 本群是否开启自然插话模式。 */
@@ -799,6 +811,32 @@ export function revokeOtherAuthSessions(): Promise<{ revoked: number }> {
   return requestJSON<{ revoked: number }>("/api/auth/sessions/revoke-others", { method: "POST" });
 }
 
+export interface OpenAPIKey {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at?: string;
+}
+
+export function listOpenAPIKeys(): Promise<{ keys: OpenAPIKey[] }> {
+  return requestJSON<{ keys: OpenAPIKey[] }>("/api/openapi/keys");
+}
+
+/** 返回值里的 token 是唯一一次能拿到的密钥明文，之后任何接口都查不到。 */
+export function createOpenAPIKey(name: string): Promise<{ key: OpenAPIKey; token: string }> {
+  return requestJSON<{ key: OpenAPIKey; token: string }>("/api/openapi/keys", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+}
+
+export function revokeOpenAPIKey(id: string): Promise<{ revoked: boolean }> {
+  return requestJSON<{ revoked: boolean }>(`/api/openapi/keys/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
 export interface OwnerLoginStatus {
   available: boolean;
 }
@@ -1140,6 +1178,38 @@ export function installDownloadedSystemUpdate(): Promise<UpdateResult> {
 export interface UpdatePolicy {
 	auto_download: boolean;
 	auto_install: boolean;
+	/** 下载加速策略：auto（实测挑线路）、direct（始终直连）或一条具体的镜像地址。 */
+	github_mirror?: string;
+}
+
+export interface GitHubMirror {
+	name: string;
+	base_url: string;
+}
+
+export interface GitHubMirrorProbe {
+	name: string;
+	base_url?: string;
+	direct?: boolean;
+	ok: boolean;
+	latency_ms?: number;
+	speed_kbps?: number;
+	error?: string;
+}
+
+export interface GitHubMirrorStatus {
+	mode: string;
+	mirrors: GitHubMirror[];
+	resolved?: string;
+	last_probe?: GitHubMirrorProbe[];
+}
+
+export function getUpdateMirrors(): Promise<GitHubMirrorStatus> {
+	return requestJSON<GitHubMirrorStatus>("/api/system/update/mirrors");
+}
+
+export function testUpdateMirrors(): Promise<GitHubMirrorStatus> {
+	return requestJSON<GitHubMirrorStatus>("/api/system/update/mirrors/test", { method: "POST" });
 }
 
 export function getUpdatePolicy(): Promise<UpdatePolicy> {

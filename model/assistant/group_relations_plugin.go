@@ -20,6 +20,9 @@ const (
 	groupRelationsSettingMaxMembers   = "max_members"
 )
 
+// GroupRelationsPluginID 对外导出，WebUI 用它把字体与浏览器探测挂到正确的插件卡片。
+const GroupRelationsPluginID = groupRelationsPluginID
+
 // GroupRelationsPlugin 声明群聊关系图这项能力。
 type GroupRelationsPlugin struct{}
 
@@ -29,7 +32,7 @@ func (p *GroupRelationsPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          groupRelationsPluginID,
 		Name:        "群聊关系图",
-		Version:     "0.1.0",
+		Version:     "0.1.1",
 		Description: "在群里画一张以机器人为中心的关系图：群友按与它的互动次数围成一圈，连线粗细是互动次数，圆点大小是发言量。数据取自本群的历史消息，不额外记录任何东西。",
 		Official:    true,
 		BuiltIn:     true,

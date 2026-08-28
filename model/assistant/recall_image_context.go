@@ -31,7 +31,22 @@ const (
 	historyImageDescriptionTimeout      = 90 * time.Second
 	historyImageDescriptionRetryBackoff = 10 * time.Minute
 	historyImageDescriptionIdlePoll     = 250 * time.Millisecond
+	// historyImageDescriptionMaxAge 限定「自动补描述」的时间窗。
+	//
+	// 库里有近两万条带图消息，识图是单并发、每张最多等 90 秒。真要顺着回填
+	// 补完，按每张 5 秒算是 26 小时，按超时算是 19 天——而且补的是没人再提起
+	// 的老图。窗口之外的图不自动补，等真被引用时再补。
+	historyImageDescriptionMaxAge = 24 * time.Hour
 )
+
+// withinHistoryImageDescriptionWindow 判断这条消息是否新到值得自动补描述。
+// 没有时间戳的合成事件当作当前消息处理，不因为缺字段被挡掉。
+func withinHistoryImageDescriptionWindow(event MessageEvent, now time.Time) bool {
+	if event.Time <= 0 {
+		return true
+	}
+	return now.Sub(time.Unix(event.Time, 0)) <= historyImageDescriptionMaxAge
+}
 
 type recallImagePosition struct {
 	eventIndex   int
@@ -234,6 +249,17 @@ func (r *Runtime) recallImageDescriptionStore() ImageDescriptionStore {
 // messages and the bounded pending set prevents image bursts from creating an
 // unbounded background workload.
 func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
+	// 自动路径只补近期图片。重连回填会把很久以前的消息重放一遍，每条都排一次
+	// 识图，等于拿单并发去补一整个库——按当前速度是几十小时起步，而这些老图
+	// 绝大多数没人再提起。真被引用时会走 enqueueHistoryImageDescriptionsNow。
+	if !withinHistoryImageDescriptionWindow(event, time.Now()) {
+		return
+	}
+	r.enqueueHistoryImageDescriptionsNow(event)
+}
+
+// enqueueHistoryImageDescriptionsNow 不看时间，用于用户/模型真的在读这张图的路径。
+func (r *Runtime) enqueueHistoryImageDescriptionsNow(event MessageEvent) {
 	if r == nil || r.recallImageDescriptionStore() == nil {
 		return
 	}
@@ -249,14 +275,15 @@ func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
 			if !ok {
 				continue
 			}
-			source := firstImageSource(segment)
-			if source == "" || !r.reserveHistoryImageDescription(hash) {
+			// 排队的任务不能攥着图片本体：单并发下 31 个任务纯粹在等，却各自
+			// 钉住一整条消息。削成「哈希 + 本地路径」再入队（见 history_image_queue.go）。
+			source, retained := queuedImageSourceRetained(segment)
+			if !retained || !r.reserveHistoryImageDescription(hash) {
 				continue
 			}
-			jobEvent := sourceEvent
-			jobEvent.Segments = []MessageSegment{segment}
-			jobEvent.Quoted = nil
-			go r.runHistoryImageDescription(jobEvent, sourceEvent, hash, source)
+			jobEvent := historyImageDescriptionQueueEvent(sourceEvent)
+			jobEvent.Segments = []MessageSegment{stripImageSegmentForQueue(segment)}
+			go r.runHistoryImageDescription(jobEvent, historyImageDescriptionQueueEvent(sourceEvent), hash, source)
 		}
 	}
 }
@@ -368,7 +395,7 @@ func (r *Runtime) runHistoryImageDescription(event, indexEvent MessageEvent, has
 	}
 	r.historyImageDescMu.Unlock()
 	if errors.Is(err, context.Canceled) && (runtimeCtx == nil || runtimeCtx.Err() == nil) {
-		time.AfterFunc(historyImageDescriptionIdlePoll, func() { r.enqueueHistoryImageDescriptions(event) })
+		time.AfterFunc(historyImageDescriptionIdlePoll, func() { r.enqueueHistoryImageDescriptionsNow(event) })
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("chatbot history image description failed: message_id=%s err=%v", event.MessageID, err)

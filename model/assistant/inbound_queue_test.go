@@ -796,6 +796,12 @@ func newMemoryInboundEventStore() *memoryInboundEventStore {
 	return &memoryInboundEventStore{records: map[string]*memoryInboundRecord{}, superseded: map[string]string{}, steps: map[string]string{}}
 }
 
+func (s *memoryInboundEventStore) PeekInboundMediaForTurn(_ context.Context, _, _ string, _ MessageEvent, _ time.Duration) ([]MessageEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]MessageEvent(nil), s.media...), nil
+}
+
 func (s *memoryInboundEventStore) ClaimInboundMediaForTurn(_ context.Context, currentID, _ string, _ MessageEvent, _ time.Duration) ([]MessageEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

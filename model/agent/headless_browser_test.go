@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -274,5 +275,109 @@ func writeExecutable(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestHeadlessBrowserExecutableHonoursEnvironment 盯住三条路径认同一份浏览器配置。
+//
+// 环境变量原先只写在 SandboxedBrowserConfig 的默认值里，于是只有网页渲染认得它；
+// 截图和可用性探测走 findHeadlessBrowserExecutable 这条入口，读不到。浏览器装在
+// 非标准路径、靠环境变量指过去的机器上，症状就是网页渲染能用、关系图却报「这台
+// 机器上没有可用的无头浏览器」。
+func TestHeadlessBrowserExecutableHonoursEnvironment(t *testing.T) {
+	fake := filepath.Join(t.TempDir(), "fake-chrome")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho fake\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DIANA_HEADLESS_BROWSER_EXECUTABLE", fake)
+	got, err := findHeadlessBrowserExecutable("")
+	if err != nil || got != fake {
+		t.Fatalf("findHeadlessBrowserExecutable(\"\") = %q, %v，想要 %q", got, err, fake)
+	}
+
+	// 另一个环境变量名同样认。
+	t.Setenv("DIANA_HEADLESS_BROWSER_EXECUTABLE", "")
+	t.Setenv("DIANA_AGENT_BROWSER_EXECUTABLE", fake)
+	if got, err := findHeadlessBrowserExecutable(""); err != nil || got != fake {
+		t.Fatalf("备用环境变量没生效：%q, %v", got, err)
+	}
+
+	// 显式传进来的路径优先：环境变量只是兜底，不能反过来盖掉调用方的选择。
+	other := filepath.Join(t.TempDir(), "explicit-chrome")
+	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := findHeadlessBrowserExecutable(other); err != nil || got != other {
+		t.Fatalf("显式路径被环境变量盖掉了：%q, %v", got, err)
+	}
+
+	// 探测走的是同一个入口，结论必须跟着一致。
+	if status := ProbeHeadlessBrowser(context.Background(), ""); status.Path != fake {
+		t.Fatalf("探测没有认环境变量：%#v", status)
+	}
+}
+
+// TestBothBrowserPathsShareSandboxHardening 盯住两条渲染路径的沙盒强度一致。
+//
+// 截图那条路原先手抄了一份参数子集，抄漏了 --host-resolver-rules——也就是网页渲染
+// 挡住了 localhost 和内网域名，截图那边没挡。同一个进程里跑的两个浏览器，沙盒不该
+// 有强弱之分。
+func TestBothBrowserPathsShareSandboxHardening(t *testing.T) {
+	base := sandboxedChromeBaseArgs("/tmp/p", "/tmp/c", "/tmp/x")
+	for _, want := range []string{
+		"--headless=new",
+		"--host-resolver-rules=MAP localhost ~NOTFOUND, MAP *.localhost ~NOTFOUND, MAP *.local ~NOTFOUND, MAP host.docker.internal ~NOTFOUND, MAP gateway.docker.internal ~NOTFOUND",
+		"--disable-sync",
+		"--no-pings",
+		"--password-store=basic",
+		"--user-data-dir=/tmp/p",
+	} {
+		if !slices.Contains(base, want) {
+			t.Fatalf("共用底座缺少 %q：%v", want, base)
+		}
+	}
+
+	// 带模式色彩的参数不能混进底座：远程调试端口只属于 CDP 那条路，
+	// 截图那条路开着它等于白起一个调试端口。
+	for _, unwanted := range []string{"--remote-debugging-port=0", "--screenshot=", "--window-size=1280,960"} {
+		for _, arg := range base {
+			if strings.HasPrefix(arg, unwanted) {
+				t.Fatalf("底座里混进了模式专用参数 %q", arg)
+			}
+		}
+	}
+
+	// CDP 那条路是在底座上追加自己的参数，不是另起一份。
+	cdp := sandboxedChromeArgs("/tmp/p", "/tmp/c", "/tmp/x", SandboxedBrowserConfig{})
+	for _, arg := range base {
+		if !slices.Contains(cdp, arg) {
+			t.Fatalf("CDP 参数丢了底座里的 %q", arg)
+		}
+	}
+	if !slices.Contains(cdp, "--remote-debugging-port=0") {
+		t.Fatalf("CDP 参数没有远程调试端口：%v", cdp)
+	}
+}
+
+// TestBrowserSandboxDirsArePrivateAndCleaned 临时目录组两条路共用，权限和清理
+// 写错一次就是一个留在 /tmp 里的可读 profile。
+func TestBrowserSandboxDirsArePrivateAndCleaned(t *testing.T) {
+	dirs, err := newBrowserSandboxDirs("diana-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{dirs.root, dirs.profile, dirs.cache, dirs.crash} {
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			t.Fatalf("%s 没建出来：%v", dir, statErr)
+		}
+		if perm := info.Mode().Perm(); perm != 0o700 {
+			t.Fatalf("%s 权限是 %o，想要 700", dir, perm)
+		}
+	}
+	dirs.remove()
+	if _, err := os.Stat(dirs.root); !os.IsNotExist(err) {
+		t.Fatalf("临时目录没删干净：%v", err)
 	}
 }

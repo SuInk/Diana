@@ -18,9 +18,39 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 别名前缀刻意不带平台名：同一套脱敏要服务 QQ、Telegram 以及以后接入的平台，
-// 叫 qq_ 会让模型以为当前一定是 QQ。im_ 取 instant messaging，平台中立。
-const llmIdentityPrivacyPrompt = `【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；im_owner、im_current_user、im_bot、im_user、im_group、im_message 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:im_message_xxx]、[diana-at:im_user_xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。`
+// identityAliasPrefix 是所有脱敏别名的共同前缀。
+//
+// 刻意不带平台名：同一套脱敏要服务 QQ、Telegram 以及以后接入的平台，叫 qq_ 会让
+// 模型以为当前一定是 QQ。im_ 取 instant messaging，平台中立。
+const identityAliasPrefix = "im_"
+
+// identityAliasRoles 是别名里出现过的全部角色，顺序即提示词里的列举顺序。
+// 除 message 外都来自 normalizeIdentityPrivacyRole 的返回值。
+var identityAliasRoles = []string{"owner", "current_user", "bot", "user", "group", "message"}
+
+// llmIdentityPrivacyPrompt 里的前缀由 identityAliasPrefix 拼出来，不写死。
+//
+// 这里原本是手写的 im_owner、im_message_xxx 一串字面量。前缀从 qq_ 改成 im_ 那次，
+// 提示词跟着改了，散落在别处讲同一件事的注释没跟上，于是照着注释找 bug 的人会被
+// 带到一个已经不存在的前缀上。拼出来之后，改前缀这一处就够了。
+var llmIdentityPrivacyPrompt = "【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；" +
+	identityAliasRoleList() + " 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。" +
+	"调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:" + identityAlias("message") + "xxx]、" +
+	"[diana-at:" + identityAlias("user") + "xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。"
+
+// identityAlias 拼出某个角色的别名前缀，例如 im_message_。
+func identityAlias(role string) string {
+	return identityAliasPrefix + role + "_"
+}
+
+// identityAliasRoleList 把角色前缀连成提示词里那串顿号分隔的列举。
+func identityAliasRoleList() string {
+	parts := make([]string, 0, len(identityAliasRoles))
+	for _, role := range identityAliasRoles {
+		parts = append(parts, identityAliasPrefix+role)
+	}
+	return strings.Join(parts, "、")
+}
 
 var (
 	identityPrivacyJSONIDPattern = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
@@ -33,9 +63,6 @@ var (
 	// 只出现在标记中的那一个（当前发言者）不该漏网。
 	identityPrivacyMentionMarkerPattern = regexp.MustCompile(`\[diana-at:([1-9][0-9]{4,13})\]`)
 )
-
-// identityAliasPrefix 是所有脱敏别名的共同前缀。
-const identityAliasPrefix = "im_"
 
 type identityPrivacyContextKey struct{}
 
@@ -160,7 +187,7 @@ func (p *identityPrivacyProvider) Generate(ctx context.Context, req llm.Generate
 	copyResponse.Text = p.scope.restoreText(response.Text)
 	// 工具参数同样要还原。提示词明确告诉模型「原样复制别名，本地代理会在执行工具前
 	// 自动恢复真实标识」，模型照做了，可这里以前只还原回复正文，别名就原封不动地进了
-	// 工具——提醒工具收到 qq_user_f49c630bf7cf 这种值，只能报「必须是有效 QQ 号」。
+	// 工具——提醒工具收到 im_user_f49c630bf7cf 这种值，只能报「必须是有效账号」。
 	copyResponse.ToolCalls = p.scope.restoreToolCalls(response.ToolCalls)
 	return &copyResponse, nil
 }
@@ -250,7 +277,7 @@ func (s *identityPrivacyScope) register(realID string, role string) string {
 		return alias
 	}
 	sum := sha256.Sum256([]byte(s.salt + "\x00" + role + "\x00" + realID))
-	alias := identityAliasPrefix + role + "_" + hex.EncodeToString(sum[:6])
+	alias := identityAlias(role) + hex.EncodeToString(sum[:6])
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
 	return alias
@@ -300,7 +327,7 @@ func (s *identityPrivacyScope) registerMessageID(realID string) string {
 		return alias
 	}
 	sum := sha256.Sum256([]byte(s.salt + "\x00message\x00" + realID))
-	alias := identityAliasPrefix + "message_" + hex.EncodeToString(sum[:6])
+	alias := identityAlias("message") + hex.EncodeToString(sum[:6])
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
 	return alias

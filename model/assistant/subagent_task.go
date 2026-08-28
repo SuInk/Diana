@@ -205,19 +205,21 @@ func shortSubagentTaskID(kind string) string {
 func subagentStartedMessage(reserved []reservedSubagentTask, duplicates []SubagentTaskStatus) string {
 	if len(reserved) == 0 {
 		if len(duplicates) == 1 {
-			return "同一任务正在后台处理中，完成后我会继续回复。"
+			return "同一任务正在后台处理中，完成后我会继续回复"
 		}
-		return "这些任务已经在后台处理中，完成后我会继续回复。"
+		return "这些任务已经在后台处理中，完成后我会继续回复"
 	}
 	if len(reserved) == 1 {
 		item := reserved[0]
 		message := strings.TrimSpace(item.task.StartedMessage)
 		if message == "" {
-			message = fmt.Sprintf("已启动后台任务：%s。", item.task.Name)
+			message = fmt.Sprintf("已启动后台任务：%s", item.task.Name)
 		}
-		return message + "完成后我会继续回复。"
+		// 用逗号接住，不用句号：一句「任务开始了」是一条通知，不是两次发言，而按
+		// 句号分条会把它拆成两条消息发进群里。
+		return strings.TrimRight(message, "。") + "，完成后我会继续回复"
 	}
-	return fmt.Sprintf("已启动 %d 个后台任务。完成后我会依次回复。", len(reserved))
+	return fmt.Sprintf("已启动 %d 个后台任务，完成后我会依次回复", len(reserved))
 }
 
 func (r *Runtime) subagentRootContext() context.Context {

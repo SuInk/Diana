@@ -120,23 +120,25 @@
       </div>
 
       <div class="field">
-        <label :for="`${idPrefix}-exempt`">{{ allowInherit ? "本群豁免用户" : "豁免用户" }}（逗号分隔{{ accountNoun }}）</label>
-        <input
-          :id="`${idPrefix}-exempt`"
-          class="input"
-          :value="(gate.exempt_users ?? []).join(',')"
-          @input="patch({ exempt_users: listOf($event) })"
+        <label :for="`${idPrefix}-exempt`">{{ allowInherit ? "本群豁免用户" : "豁免用户" }}</label>
+        <IdChipInput
+          :input-id="`${idPrefix}-exempt`"
+          :model-value="gate.exempt_users ?? []"
+          :placeholder="`填${accountNoun.trim()}后回车`"
+          :resolve-names="resolveAccountNames"
+          @update:model-value="patch({ exempt_users: $event })"
         />
         <p class="muted" style="margin-top: 4px">{{ supportsGroupLevel ? "无视等级与时段门槛。" : "无视时段门槛。" }}</p>
       </div>
 
       <div class="field">
-        <label :for="`${idPrefix}-blocked`">{{ allowInherit ? "本群屏蔽账号" : "屏蔽用户" }}（逗号分隔{{ accountNoun }}）</label>
-        <input
-          :id="`${idPrefix}-blocked`"
-          class="input"
-          :value="(gate.blocked_users ?? []).join(',')"
-          @input="patch({ blocked_users: listOf($event) })"
+        <label :for="`${idPrefix}-blocked`">{{ allowInherit ? "本群屏蔽账号" : "屏蔽用户" }}</label>
+        <IdChipInput
+          :input-id="`${idPrefix}-blocked`"
+          :model-value="gate.blocked_users ?? []"
+          :placeholder="`填${accountNoun.trim()}后回车`"
+          :resolve-names="resolveAccountNames"
+          @update:model-value="patch({ blocked_users: $event })"
         />
         <p class="muted" style="margin-top: 4px">{{ allowInherit ? "仅在当前群不回复这些账号。" : "群聊和私聊都不回复。" }}</p>
       </div>
@@ -147,7 +149,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import AppSelect, { type AppSelectOption } from "./AppSelect.vue";
-import type { ReplyGate } from "../api";
+import IdChipInput from "./IdChipInput.vue";
+import { fetchAssistantUserNames, type ReplyGate } from "../api";
 
 const props = defineProps<{
   modelValue?: ReplyGate | null;
@@ -219,10 +222,9 @@ function numberOf(event: Event): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function listOf(event: Event): string[] {
-  return (event.target as HTMLInputElement).value
-    .split(/[,，\s]+/)
-    .map((item) => item.trim())
-    .filter((item) => item !== "");
+// 名字只是回显，profile 留空即当前选中的那台机器人——和其它几处昵称回显一致。
+async function resolveAccountNames(ids: string[]): Promise<Record<string, string>> {
+  const response = await fetchAssistantUserNames(ids);
+  return response.names ?? {};
 }
 </script>

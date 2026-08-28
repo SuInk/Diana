@@ -359,7 +359,7 @@
               <div class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" inputmode="numeric" placeholder="900" />
-                <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。留空按 900；填 0 关掉这条判断。</span>
+                <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。留空或填 0 都按 900。所有表达风格一视同仁，包括群友。</span>
               </div>
               <div class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
@@ -543,8 +543,13 @@
                 />
               </div>
               <div v-if="admissionMode === 'whitelist'" class="field wide">
-                <label for="bot-allowed-groups">工作群白名单（逗号分隔群号）</label>
-                <input id="bot-allowed-groups" v-model="allowedGroupsDraft" class="input" placeholder="123456789,987654321" />
+                <label for="bot-allowed-groups">工作群白名单</label>
+                <IdChipInput
+                  input-id="bot-allowed-groups"
+                  v-model="allowedGroups"
+                  placeholder="填群号后回车"
+                  :resolve-names="resolveGroupNames"
+                />
                 <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
               </div>
               <div class="field wide">
@@ -706,6 +711,18 @@
                   <span class="switch-label">自然插话模式</span>
                 </label>
                 <span class="hint">开启后，普通群聊只要模型能生成具体、可靠且有实质内容的回复就可以插话；仍遵守群禁用、成员门槛和响应限制。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.social_reply_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">社交性回应</span>
+                </label>
+                <span class="hint">
+                  群友直接对机器人打招呼、夸奖、调侃或轻微评价（「笨笨」「你好可爱」「早」）时也回一句，
+                  哪怕没有具体问题。陪聊型人设建议开；助手型人设开了只会多出没信息量的应答。
+                  只放行冲着机器人来的那一类：别人之间的闲聊、要机器人安静、同一轮已经回过，仍然沉默。
+                </span>
               </div>
             </div>
           </section>
@@ -1020,11 +1037,13 @@ import {
   deletePersona,
   importPersonas,
   PERSONA_EXPORT_VERSION,
-  type Persona
+  type Persona,
+  listBotGroups
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
+import IdChipInput from "../components/IdChipInput.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { pushStatusSnapshot, stream } from "../stream";
 import { askConfirm } from "../confirm";
@@ -1043,7 +1062,7 @@ const tokenDraft = ref("");
 const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const allowlistDraft = ref("");
-const allowedGroupsDraft = ref("");
+const allowedGroups = ref<string[]>([]);
 const telegramTokenDraft = ref("");
 // 三个凭据输入框共用一套「查看」状态：key 是字段名，值表示当前是否明文显示。
 const tokenRevealed = ref<Record<TokenField, boolean>>({
@@ -1880,6 +1899,7 @@ function setForm(config: BotProfileConfig): void {
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
+    social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     glossary_shared_scope_enabled: config.glossary_shared_scope_enabled ?? false,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
@@ -1907,7 +1927,7 @@ function setForm(config: BotProfileConfig): void {
   };
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
-  allowedGroupsDraft.value = (config.group_admission?.allowed_groups ?? []).join(",");
+  allowedGroups.value = [...(config.group_admission?.allowed_groups ?? [])];
   telegramTokenDraft.value = "";
   tokenDraft.value = "";
   bridgeTokenDraft.value = "";
@@ -1923,6 +1943,29 @@ function setForm(config: BotProfileConfig): void {
 function applyConfig(config: BotProfileConfig): void {
   profileSet.value = config;
   setForm(config);
+}
+
+// 群名只在白名单里有群号时才需要，所以群列表懒加载一次就缓存住：
+// 这个页面平时不该为一个可能不显示的字段多发一次请求。
+// 拿不到（listBotGroups 本来就可能不可用）就退回只显示群号，不报错。
+let groupNamesCache: Promise<Record<string, string>> | null = null;
+
+function resolveGroupNames(ids: string[]): Promise<Record<string, string>> {
+  groupNamesCache ??= listBotGroups().then((response) => {
+    const names: Record<string, string> = {};
+    for (const group of response.groups ?? []) {
+      const name = (group.group_name ?? "").trim();
+      if (group.group_id && name !== "") names[group.group_id] = name;
+    }
+    return names;
+  });
+  return groupNamesCache.then((names) => {
+    const picked: Record<string, string> = {};
+    for (const id of ids) {
+      if (names[id]) picked[id] = names[id];
+    }
+    return picked;
+  });
 }
 
 function splitList(raw: string): string[] {
@@ -2057,7 +2100,7 @@ async function save(): Promise<void> {
         : defaultRecallReplyAutoDeleteDelaySeconds,
       group_admission: {
         mode: admissionMode.value,
-        allowed_groups: splitList(allowedGroupsDraft.value)
+        allowed_groups: [...allowedGroups.value]
       },
       model_roles: modelRoles
     };
