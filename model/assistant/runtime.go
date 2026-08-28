@@ -6145,6 +6145,14 @@ func (r *Runtime) enrichForwardMessages(ctx context.Context, event MessageEvent)
 	return event
 }
 
+// pendingForwardExpansion 是展开队列里的一条待取转发。parent 只用于渲染出
+// 「谁套着谁」，不参与去重。
+type pendingForwardExpansion struct {
+	id     string
+	parent string
+	depth  int
+}
+
 func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEvent, segments []MessageSegment, rawMessage string) ([]MessageSegment, string) {
 	ids := forwardReferenceIDs(segments)
 	if len(ids) == 0 || r.channel == nil {
@@ -6152,28 +6160,68 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 	}
 	out := append([]MessageSegment(nil), segments...)
 	lines := make([]string, 0, len(ids))
+	// 转发卡片里可以再放转发卡片（转发一整段聊天记录时很常见），内层只给一个
+	// id，内容要再调一次 get_forward_msg 才拿得到。只展开最外层的话，模型看到
+	// 的就只是一个 [聊天记录] 占位，据此什么都判断不了——按队列一路展到底。
+	queue := make([]pendingForwardExpansion, 0, len(ids))
 	for _, id := range ids {
-		if forwardReferenceExpanded(out, id) {
+		queue = append(queue, pendingForwardExpansion{id: id})
+	}
+	seen := make(map[string]struct{}, len(ids))
+	fetched := 0
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+		if _, ok := seen[item.id]; ok {
 			continue
 		}
+		seen[item.id] = struct{}{}
+		// 段上的 expanded 标记和正文里已有的同 id 区块，都说明这条转发在之前
+		// 的处理里已经展开过（同一事件重跑会遇到），不必再花一次调用。
+		if forwardReferenceExpanded(out, item.id) || forwardTextAlreadyExpanded(out, item.id) {
+			continue
+		}
+		if fetched >= maxForwardExpandCount {
+			// 转发能嵌成很深的一棵树，每个节点都是一次 OneBot 调用。到上限就
+			// 停下并留痕，让「内容不全」在日志里看得见，而不是静默截断。
+			r.recordForwardMessageError(ctx, event, item.id,
+				fmt.Errorf("nested forward expansion stopped at %d fetches", maxForwardExpandCount))
+			break
+		}
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		data, err := r.callOneBotAPIForEvent(callCtx, event, "get_forward_msg", map[string]any{"id": id})
+		data, err := r.callOneBotAPIForEvent(callCtx, event, "get_forward_msg", map[string]any{"id": item.id})
 		cancel()
+		fetched++
 		if err != nil {
-			r.recordForwardMessageError(ctx, event, id, err)
+			r.recordForwardMessageError(ctx, event, item.id, err)
 			continue
 		}
 		text := forwardMessageTextFromOneBotData(data)
-		media := forwardMediaSegmentsFromOneBotData(data, id)
+		media := forwardMediaSegmentsFromOneBotData(data, item.id)
 		if text == "" && len(media) == 0 {
-			r.recordForwardMessageError(ctx, event, id, fmt.Errorf("get_forward_msg returned empty message"))
+			r.recordForwardMessageError(ctx, event, item.id, fmt.Errorf("get_forward_msg returned empty message"))
 			continue
 		}
-		if text != "" && !forwardTextAlreadyExpanded(out, id) {
-			lines = append(lines, fmt.Sprintf("【合并转发 %s】\n%s", id, text))
+		if text != "" {
+			// 标记保持「【合并转发 <id>】」开头，嵌套关系写在后面：正文里的
+			// 占位可能只剩 [聊天记录] 这种摘要，不写清楚谁套着谁，模型对不上。
+			header := fmt.Sprintf("【合并转发 %s】", item.id)
+			if item.parent != "" {
+				header += fmt.Sprintf("（嵌套在 %s 内）", item.parent)
+			}
+			lines = append(lines, header+"\n"+text)
 		}
 		out = appendUniqueForwardMedia(out, media)
-		markForwardReferenceExpanded(out, id)
+		markForwardReferenceExpanded(out, item.id)
+		if item.depth >= maxForwardExpandDepth {
+			continue
+		}
+		for _, nested := range nestedForwardReferenceIDs(data) {
+			if _, ok := seen[nested]; ok {
+				continue
+			}
+			queue = append(queue, pendingForwardExpansion{id: nested, parent: item.id, depth: item.depth + 1})
+		}
 	}
 	if len(lines) == 0 {
 		return out, rawMessage
@@ -6282,6 +6330,91 @@ func replyReferenceIDs(segments []MessageSegment) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+const (
+	// maxForwardExpandDepth 限制转发套转发的展开层数，maxForwardExpandCount
+	// 限制一条消息总共能触发多少次 get_forward_msg。两者一起兜住恶意或意外
+	// 的深层嵌套：没有上限时，一张层层嵌套的卡片能把一次入站拖成几十次调用。
+	maxForwardExpandDepth = 3
+	maxForwardExpandCount = 8
+)
+
+// nestedForwardReferenceIDs 从一次 get_forward_msg 的返回里，找出还需要再取一次
+// 才能拿到内容的转发引用。
+//
+// 只认「光给 id、没带内容」的那种：有的实现会把内层转发的消息直接内联进来，
+// 那部分已经被渲染过了，再取一次只会把同样的内容贴第二遍。
+func nestedForwardReferenceIDs(data map[string]any) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	collectNestedForwardIDs(data, 0, &out, seen)
+	return out
+}
+
+func collectNestedForwardIDs(value any, depth int, out *[]string, seen map[string]struct{}) {
+	if value == nil || depth > 6 {
+		return
+	}
+	addID := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		*out = append(*out, id)
+	}
+	addFromSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type != "forward" {
+				continue
+			}
+			addID(firstNonEmpty(segment.Data["id"], segment.Data["resid"], segment.Data["forward_id"]))
+		}
+	}
+	switch item := value.(type) {
+	case []any:
+		for _, entry := range item {
+			collectNestedForwardIDs(entry, depth, out, seen)
+		}
+	case []map[string]any:
+		for _, entry := range item {
+			collectNestedForwardIDs(entry, depth, out, seen)
+		}
+	case []MessageSegment:
+		addFromSegments(item)
+	case string:
+		// 有的实现把消息体给成 CQ 码字符串，内层转发就藏在 [CQ:forward,id=...] 里。
+		addFromSegments(CQToSegments(item))
+	case map[string]any:
+		data, _ := item["data"].(map[string]any)
+		if data == nil {
+			data = map[string]any{}
+		}
+		if strings.EqualFold(stringFromAny(item["type"]), "forward") {
+			inline := firstNonNil(data["content"], data["message"], data["messages"])
+			if inline == nil {
+				addID(firstNonEmpty(
+					stringFromAny(data["id"]),
+					stringFromAny(data["resid"]),
+					stringFromAny(data["forward_id"]),
+				))
+			}
+			collectNestedForwardIDs(inline, depth+1, out, seen)
+			return
+		}
+		// node 段、以及 NapCat 直接返回的完整消息对象，内容都可能挂在这几个键下。
+		for _, container := range []map[string]any{item, data} {
+			for _, key := range []string{"content", "message", "messages", "forward"} {
+				if nested, ok := container[key]; ok {
+					collectNestedForwardIDs(nested, depth+1, out, seen)
+				}
+			}
+		}
+	}
 }
 
 func forwardReferenceIDs(segments []MessageSegment) []string {
