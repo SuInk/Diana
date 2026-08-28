@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,9 +29,9 @@ func TestMusicReferencesAcceptsEveryShareShape(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			refs := neteaseReferences(tc.text)
+			refs := newNeteaseSource().References(tc.text)
 			if len(refs) != 1 || refs[0].SongID != tc.want {
-				t.Fatalf("neteaseReferences(%q) = %#v, want song %s", tc.text, refs, tc.want)
+				t.Fatalf("newNeteaseSource().References(%q) = %#v, want song %s", tc.text, refs, tc.want)
 			}
 		})
 	}
@@ -41,13 +42,13 @@ func TestMusicReferencesIgnoresUnrelatedLinks(t *testing.T) {
 	text := "https://www.bilibili.com/video/BV1xx411c7mD 和 https://music.163.com/artist?id=6452 " +
 		"还有 https://music.163.com/#/playlist?id=7052908 和 https://music.163.com/album?id=34751 " +
 		"以及 https://example.com/song?id=1"
-	if refs := neteaseReferences(text); len(refs) != 0 {
-		t.Fatalf("neteaseReferences() = %#v, want none", refs)
+	if refs := newNeteaseSource().References(text); len(refs) != 0 {
+		t.Fatalf("newNeteaseSource().References() = %#v, want none", refs)
 	}
 }
 
 func TestMusicReferencesKeepsShortLinksForRedirect(t *testing.T) {
-	refs := neteaseReferences("分享单曲 https://163cn.tv/AbCdEf")
+	refs := newNeteaseSource().References("分享单曲 https://163cn.tv/AbCdEf")
 	if len(refs) != 1 || refs[0].SongID != "" || refs[0].ShortURL == "" {
 		t.Fatalf("short link reference = %#v", refs)
 	}
@@ -56,12 +57,12 @@ func TestMusicReferencesKeepsShortLinksForRedirect(t *testing.T) {
 // 歌曲 ID 只能是数字：链接里带的别的东西不该被当成 ID 拿去请求接口。
 func TestMusicNumericIDRejectsNonNumericValues(t *testing.T) {
 	for _, value := range []string{"", "abc", "12a", "0", "00", " 12 3", strings.Repeat("9", 21)} {
-		if got := neteaseNumericID(value); got != "" {
-			t.Fatalf("neteaseNumericID(%q) = %q, want empty", value, got)
+		if got := musicNumericID(value); got != "" {
+			t.Fatalf("musicNumericID(%q) = %q, want empty", value, got)
 		}
 	}
-	if got := neteaseNumericID(" 1974443814 "); got != "1974443814" {
-		t.Fatalf("neteaseNumericID() = %q", got)
+	if got := musicNumericID(" 1974443814 "); got != "1974443814" {
+		t.Fatalf("musicNumericID() = %q", got)
 	}
 }
 
@@ -73,8 +74,8 @@ func TestMusicLooksPlayableRejectsFallbackPages(t *testing.T) {
 		"https://m7.music.126.net/x/y.flac",
 	}
 	for _, raw := range playable {
-		if !neteaseLooksPlayable(raw) {
-			t.Fatalf("neteaseLooksPlayable(%q) = false", raw)
+		if !musicLinkLooksPlayable(raw) {
+			t.Fatalf("musicLinkLooksPlayable(%q) = false", raw)
 		}
 	}
 	rejected := []string{
@@ -84,13 +85,17 @@ func TestMusicLooksPlayableRejectsFallbackPages(t *testing.T) {
 		"not a url at all::",
 	}
 	for _, raw := range rejected {
-		if neteaseLooksPlayable(raw) {
-			t.Fatalf("neteaseLooksPlayable(%q) = true", raw)
+		if musicLinkLooksPlayable(raw) {
+			t.Fatalf("musicLinkLooksPlayable(%q) = true", raw)
 		}
 	}
 }
 
-// musicTestServer 冒充自建 NeteaseCloudMusicApi：详情、播放地址、音频本体。
+// musicTestServer 冒充三家曲库的接口：网易云的详情/搜索/外链，QQ 的搜索/vkey，
+// 酷狗的搜索/播放，外加音频本体。三家的字段名和时长单位各不相同，这正是要测的。
+//
+// 约定：QQ 音乐这边永远搜得到但给不出 purl，模拟「会员专享，无登录态放不了」——
+// 换源那条路要靠它才测得出来。
 func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +127,33 @@ func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Ser
 		case "/official/outer-blocked":
 			// 下架或会员专享时官方不报错，只是把人送到 404 页。
 			http.Redirect(w, r, "http://"+r.Host+"/404", http.StatusFound)
+		case "/qq/search":
+			w.Header().Set("Content-Type", "application/json")
+			if !strings.Contains(r.URL.Query().Get("w"), "雾里") {
+				fmt.Fprint(w, `{"code":0,"data":{"song":{"list":[]}}}`)
+				return
+			}
+			// QQ 的 interval 是秒，不是毫秒。
+			fmt.Fprintf(w, `{"code":0,"data":{"song":{"list":[{"mid":"003RMaRI1iFoYd","name":"雾里","singer":[{"name":"姚六一"}],"album":{"name":"雾里"},"interval":%d}]}}}`, durationMS/1000)
+		case "/qq/vkey":
+			// 无登录态时会员曲目的 purl 是空串——不是报错，是「这家放不了」。
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"req_0":{"data":{"sip":["`+"http://"+r.Host+`/qq/stream/"],"midurlinfo":[{"purl":""}]}}}`)
+		case "/kugou/search":
+			w.Header().Set("Content-Type", "application/json")
+			if !strings.Contains(r.URL.Query().Get("keyword"), "雾里") {
+				fmt.Fprint(w, `{"status":1,"data":{"info":[]}}`)
+				return
+			}
+			// 酷狗搜索的 duration 是秒，播放接口的 timelength 是毫秒。
+			fmt.Fprintf(w, `{"status":1,"data":{"info":[{"hash":"5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5","songname":"雾里","singername":"姚六一","album_name":"雾里","album_id":"7788","duration":%d}]}}`, durationMS/1000)
+		case "/kugou/play":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"status":1,"data":{"play_url":%q,"song_name":"雾里","author_name":"姚六一","album_name":"雾里","timelength":%d}}`,
+				"http://"+r.Host+"/audio/kugou.mp3", durationMS)
+		case "/audio/kugou.mp3":
+			w.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = w.Write(audio)
 		case "/audio/1974443814.mp3":
 			w.Header().Set("Content-Type", "audio/mpeg")
 			_, _ = w.Write(audio)
@@ -133,13 +165,26 @@ func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Ser
 	return server
 }
 
-// newMusicTestPlugin 把官方接口指向测试服务器，任何一条测试都不会去打
-// 网易云的线上接口——否则测试结果取决于外网和那首歌当天上没上架。
+// newMusicTestPlugin 把每家曲库的接口都指向测试服务器，任何一条测试都不会去打
+// 线上接口——否则测试结果取决于外网和那首歌当天上没上架。
 func newMusicTestPlugin(server *httptest.Server) *MusicPlugin {
 	plugin := NewMusicPlugin(server.Client())
-	plugin.officialDetailAPI = server.URL + "/official/detail?ids=%s"
-	plugin.officialSearchAPI = server.URL + "/official/search?s=%s"
-	plugin.officialOuterURL = server.URL + "/official/outer?id=%s"
+	plugin.sources = []musicSource{
+		&neteaseSource{
+			detailAPI: server.URL + "/official/detail?ids=%s",
+			searchAPI: server.URL + "/official/search?s=%s",
+			outerURL:  server.URL + "/official/outer?id=%s",
+		},
+		&qqSource{
+			searchAPI: server.URL + "/qq/search?w=%s",
+			vkeyAPI:   server.URL + "/qq/vkey?data=%s",
+			streamCDN: server.URL + "/qq/stream/",
+		},
+		&kugouSource{
+			searchAPI: server.URL + "/kugou/search?keyword=%s",
+			playAPI:   server.URL + "/kugou/play?hash=%s&album_id=%s&mid=%s",
+		},
+	}
 	return plugin
 }
 
@@ -148,8 +193,8 @@ func musicTestRequest(server *httptest.Server, platform string) PluginRequest {
 		Event: MessageEvent{Platform: platform, Kind: EventKindGroup, GroupID: "123456", UserID: "10001"},
 		Text:  "听听这个 https://music.163.com/song?id=1974443814",
 		Settings: SettingValues{
-			musicSettingAPIBase: server.URL,
-			musicSettingMaxMB:   10,
+			musicSourceAPIBaseSetting("netease"): server.URL,
+			musicSettingMaxMB:                    10,
 		},
 	}
 }
@@ -275,14 +320,15 @@ func TestMusicPluginShouldHandleOnlyOnSongLinks(t *testing.T) {
 
 func TestMusicConfigFallsBackOnInvalidSettings(t *testing.T) {
 	cfg := musicConfigFromSettings(SettingValues{
-		musicSettingAPIBase:     "  http://127.0.0.1:3000/  ",
-		musicSettingBitrate:     "not-a-number",
-		musicSettingMaxMB:       0,
-		musicSettingTimeout:     1,
-		musicSettingMaxDuration: -5,
+		musicSourceAPIBaseSetting("netease"): "  http://127.0.0.1:3000/  ",
+		musicSettingBitrate:                  "not-a-number",
+		musicSettingMaxMB:                    0,
+		musicSettingTimeout:                  1,
+		musicSettingMaxDuration:              -5,
+		musicSettingPreferred:                "spotify",
 	})
-	if cfg.APIBase != "http://127.0.0.1:3000" {
-		t.Fatalf("APIBase = %q", cfg.APIBase)
+	if got := cfg.sourceOptions("netease").APIBase; got != "http://127.0.0.1:3000" {
+		t.Fatalf("netease APIBase = %q", got)
 	}
 	if cfg.Bitrate != defaultMusicBitrate {
 		t.Fatalf("Bitrate = %d", cfg.Bitrate)
@@ -298,6 +344,15 @@ func TestMusicConfigFallsBackOnInvalidSettings(t *testing.T) {
 	}
 	if !cfg.SendSongInfo {
 		t.Fatal("SendSongInfo should default to on")
+	}
+	// 没登记过的曲库名当没填，否则「优先曲库」会指向一家不存在的平台，
+	// 排序结果看起来正常但其实谁都没排到前面。
+	if cfg.PreferredSource != "" {
+		t.Fatalf("PreferredSource = %q, want the unknown value dropped", cfg.PreferredSource)
+	}
+	// 没配过启用曲库就是全开：新装一台机器不该因为「还没勾」而什么都放不出来。
+	if len(cfg.EnabledSources) != len(musicSourceKeys()) {
+		t.Fatalf("EnabledSources = %#v", cfg.EnabledSources)
 	}
 }
 
@@ -320,7 +375,7 @@ func TestMusicPluginUsesOfficialEndpointsWithoutSelfHostedAPI(t *testing.T) {
 	plugin.SetLocalMediaSharer(sharer)
 
 	req := musicTestRequest(server, PlatformOneBotV11)
-	delete(req.Settings, musicSettingAPIBase)
+	delete(req.Settings, musicSourceAPIBaseSetting("netease"))
 
 	resp, err := plugin.Handle(context.Background(), req)
 	if err != nil {
@@ -343,7 +398,7 @@ func TestMusicPluginFallsBackToOfficialWhenSelfHostedAPIIsDown(t *testing.T) {
 
 	req := musicTestRequest(server, PlatformOneBotV11)
 	// 指向同一台测试服务器上一个不存在的前缀，等价于自建实例 404/挂掉。
-	req.Settings[musicSettingAPIBase] = server.URL + "/down"
+	req.Settings[musicSourceAPIBaseSetting("netease")] = server.URL + "/down"
 
 	resp, err := plugin.Handle(context.Background(), req)
 	if err != nil {
@@ -362,12 +417,15 @@ func TestMusicPluginFallsBackToOfficialWhenSelfHostedAPIIsDown(t *testing.T) {
 func TestMusicPluginRefusesTheFallbackPageInsteadOfSendingSilence(t *testing.T) {
 	server := musicTestServer(t, 213000, []byte("audio"))
 	plugin := newMusicTestPlugin(server)
-	plugin.officialOuterURL = server.URL + "/official/outer-blocked?id=%s"
+	plugin.sources[0].(*neteaseSource).outerURL = server.URL + "/official/outer-blocked?id=%s"
+	// 只留网易云：这条测的是「外链落到 404 页要停下」，别让别家把这首歌兜住，
+	// 那样即使 404 判断写错了测试也会过。
+	plugin.sources = plugin.sources[:1]
 	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/netease-token"}
 	plugin.SetLocalMediaSharer(sharer)
 
 	req := musicTestRequest(server, PlatformOneBotV11)
-	delete(req.Settings, musicSettingAPIBase)
+	delete(req.Settings, musicSourceAPIBaseSetting("netease"))
 
 	resp, err := plugin.Handle(context.Background(), req)
 	if err != nil {
@@ -409,8 +467,8 @@ func TestMusicPluginRefusesOversizedAudio(t *testing.T) {
 // musicRequestSettings 是点歌工具用的设置，指向同一台假服务器。
 func musicRequestSettings(server *httptest.Server) SettingValues {
 	return SettingValues{
-		musicSettingAPIBase: server.URL,
-		musicSettingMaxMB:   10,
+		musicSourceAPIBaseSetting("netease"): server.URL,
+		musicSettingMaxMB:                    10,
 	}
 }
 
@@ -585,5 +643,191 @@ func TestMusicRequestToolIsAvailableToOrdinaryMembers(t *testing.T) {
 	}
 	if !allowed[musicToolName] {
 		t.Fatalf("%s is not reachable for ordinary members: %#v", musicToolName, allowed)
+	}
+}
+
+// 多曲库的全部意义就在这一条：一家搜到了却放不出来，自动换下一家。
+// 只判断「搜到没有」的实现会在这里停在 QQ 音乐上，然后下载一个空地址。
+func TestMusicPicksTheFirstSourceThatCanActuallyPlay(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte(strings.Repeat("audio", 512)))
+	plugin := newMusicTestPlugin(server)
+	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/music-token"}
+	plugin.SetLocalMediaSharer(sharer)
+
+	settings := musicRequestSettings(server)
+	// 只留 QQ 和酷狗：QQ 搜得到但给不出 purl，酷狗能放。
+	settings[musicSettingSources] = []string{"qq", "kugou"}
+	tool := musicRequestTool(t, plugin, settings)
+
+	output, err := tool.Run(context.Background(), map[string]any{"query": "雾里"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(sharer.paths) == 1 {
+		t.Cleanup(func() { cleanupLocalMediaFile(sharer.paths[0]) })
+	}
+	if !strings.Contains(output, `"source":"kugou"`) {
+		t.Fatalf("Run() = %q, want the playable source to win over the searchable one", output)
+	}
+}
+
+// 勾掉的曲库一次都不该问：用户关掉酷狗多半是有理由的（怕它的音质、怕它的接口），
+// 「反正只是兜底」不是绕过设置的借口。
+func TestMusicSkipsSourcesThatWereTurnedOff(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte("audio"))
+	plugin := newMusicTestPlugin(server)
+	plugin.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/music-token"})
+
+	settings := musicRequestSettings(server)
+	settings[musicSettingSources] = []string{"qq"}
+	tool := musicRequestTool(t, plugin, settings)
+
+	if output, err := tool.Run(context.Background(), map[string]any{"query": "雾里"}); err == nil {
+		t.Fatalf("Run() = %q, want a miss because kugou was turned off", output)
+	}
+}
+
+// 优先曲库把那一家排到最前面，其余顺序不变。
+func TestMusicPreferredSourceGoesFirst(t *testing.T) {
+	plugin := NewMusicPlugin(nil)
+	cfg := musicConfigFromSettings(SettingValues{musicSettingPreferred: "kugou"})
+	ordered := plugin.orderedSources(cfg)
+	if len(ordered) != 3 || ordered[0].Key() != "kugou" {
+		t.Fatalf("orderedSources() = %v", musicSourceKeysOf(ordered))
+	}
+	if ordered[1].Key() != "netease" || ordered[2].Key() != "qq" {
+		t.Fatalf("preferred source disturbed the rest of the order: %v", musicSourceKeysOf(ordered))
+	}
+
+	// 没设优先曲库时就是登记顺序。
+	plain := plugin.orderedSources(musicConfigFromSettings(SettingValues{}))
+	if got := musicSourceKeysOf(plain); !slices.Equal(got, musicSourceKeys()) {
+		t.Fatalf("orderedSources() = %v, want the registration order %v", got, musicSourceKeys())
+	}
+}
+
+func musicSourceKeysOf(sources []musicSource) []string {
+	keys := make([]string, 0, len(sources))
+	for _, source := range sources {
+		keys = append(keys, source.Key())
+	}
+	return keys
+}
+
+// 分享的是网易云链接、网易云放不了时，按歌名去别家找回来。
+// 听的人要的是这首歌，不是这条链接来自哪个 App。
+func TestMusicLinkFallsBackToAnotherSourceForTheSameSong(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte(strings.Repeat("audio", 512)))
+	plugin := newMusicTestPlugin(server)
+	// 网易云详情还在（歌名认得出来），但外链落到 404 页——会员专享的典型表现。
+	plugin.sources[0].(*neteaseSource).outerURL = server.URL + "/official/outer-blocked?id=%s"
+	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/music-token"}
+	plugin.SetLocalMediaSharer(sharer)
+
+	req := musicTestRequest(server, PlatformOneBotV11)
+	delete(req.Settings, musicSourceAPIBaseSetting("netease"))
+
+	resp, err := plugin.Handle(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if resp == nil || !strings.Contains(resp.Reply, "[CQ:record,") {
+		t.Fatalf("Handle() = %#v, want another source to cover the song", resp)
+	}
+	if len(sharer.paths) == 1 {
+		t.Cleanup(func() { cleanupLocalMediaFile(sharer.paths[0]) })
+	}
+	// 来源标签要说实话：模型得知道这条语音不是从分享的那家放的。
+	if !strings.Contains(resp.Context, "酷狗音乐") {
+		t.Fatalf("context did not name the source it actually played from: %q", resp.Context)
+	}
+}
+
+// 三家的分享链接都得认，而且各自只认自己家的。
+func TestMusicSourcesRecognizeTheirOwnShareLinks(t *testing.T) {
+	cases := []struct {
+		source musicSource
+		text   string
+		songID string
+	}{
+		{newNeteaseSource(), "https://music.163.com/song?id=1974443814", "1974443814"},
+		{newQQSource(), "https://y.qq.com/n/ryqq/songDetail/003RMaRI1iFoYd", "003RMaRI1iFoYd"},
+		{newQQSource(), "https://y.qq.com/n/yqq/song/003RMaRI1iFoYd.html", "003RMaRI1iFoYd"},
+		{newKugouSource(), "https://www.kugou.com/song/#hash=5F9C1D2E3A4B5C6D7E8F90A1B2C3D4E5&album_id=7788",
+			"5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5:7788"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.source.Key()+"/"+tc.songID, func(t *testing.T) {
+			refs := tc.source.References(tc.text)
+			if len(refs) != 1 || refs[0].SongID != tc.songID || refs[0].Source != tc.source.Key() {
+				t.Fatalf("References(%q) = %#v", tc.text, refs)
+			}
+			// 别家不该认领这条链接，否则一条分享会被两家同时处理。
+			for _, other := range defaultMusicSources() {
+				if other.Key() == tc.source.Key() {
+					continue
+				}
+				if refs := other.References(tc.text); len(refs) != 0 {
+					t.Fatalf("%s also claimed %q: %#v", other.Key(), tc.text, refs)
+				}
+			}
+		})
+	}
+}
+
+// 酷狗的 ID 是「hash:album_id」两截。拆错了播放接口就少一个参数，
+// 返回的是试听片段而不是整首歌。
+func TestKugouSongIDCarriesBothHalves(t *testing.T) {
+	hash, albumID := kugouSplitSongID("5F9C1D2E3A4B5C6D7E8F90A1B2C3D4E5:7788")
+	if hash != "5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5" || albumID != "7788" {
+		t.Fatalf("kugouSplitSongID() = %q, %q", hash, albumID)
+	}
+	// 分享链接里没带 album_id 时留空，不能把冒号一起当成 hash。
+	hash, albumID = kugouSplitSongID("5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5:")
+	if hash != "5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5" || albumID != "" {
+		t.Fatalf("kugouSplitSongID() without an album = %q, %q", hash, albumID)
+	}
+	if got := kugouSongIDFromURL("https://www.kugou.com/song/#hash=nothex&album_id=1"); got != "" {
+		t.Fatalf("kugouSongIDFromURL() accepted a non-hash: %q", got)
+	}
+}
+
+// QQ 的 vkey 接口给的是相对 purl，得拼上 sip 才是完整地址；
+// purl 为空是「这家放不了」，不是错误。
+func TestQQPlayableURLJoinsPurlAndReportsEmptyAsUnavailable(t *testing.T) {
+	var purl string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"req_0":{"data":{"sip":["https://cdn.example.invalid/"],"midurlinfo":[{"purl":%q}]}}}`, purl)
+	}))
+	t.Cleanup(server.Close)
+	source := &qqSource{searchAPI: server.URL + "?w=%s", vkeyAPI: server.URL + "?data=%s", streamCDN: "https://fallback.invalid/"}
+	fetcher := &musicFetcher{client: server.Client()}
+	cfg := musicConfigFromSettings(SettingValues{})
+
+	purl = "C400003RMaRI1iFoYd.m4a?guid=1&vkey=abc"
+	if got := source.PlayableURL(context.Background(), fetcher, cfg, "003RMaRI1iFoYd"); got != "https://cdn.example.invalid/"+purl {
+		t.Fatalf("PlayableURL() = %q", got)
+	}
+
+	purl = ""
+	if got := source.PlayableURL(context.Background(), fetcher, cfg, "003RMaRI1iFoYd"); got != "" {
+		t.Fatalf("PlayableURL() = %q, want empty so the next source gets a turn", got)
+	}
+}
+
+// 有的接口回的是 jsonp 或带 BOM 的 text/html。只按 Content-Type 判断会解不出来。
+func TestUnwrapJSONPayloadStripsWrappers(t *testing.T) {
+	cases := map[string]string{
+		`{"code":0}`:                     `{"code":0}`,
+		"\ufeff" + `{"code":0}`:          `{"code":0}`,
+		`callback({"code":0})`:           `{"code":0}`,
+		"  jsonCallback( {\"a\":1} ) \n": `{"a":1}`,
+		`[1,2]`:                          `[1,2]`,
+	}
+	for input, want := range cases {
+		if got := string(unwrapJSONPayload([]byte(input))); got != want {
+			t.Fatalf("unwrapJSONPayload(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
