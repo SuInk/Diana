@@ -302,6 +302,21 @@ Agent 用统一扩展目录管理三类能力：**内置插件**（沿用原有�
 
 Go 主程序不能直接加载 Python NoneBot 插件，可单独运行一个 NoneBot sidecar：在 NoneBot2 项目中装好插件并配置 OneBot v11 反向 WebSocket driver，然后在 Diana 的「OneBot v11 机器人」页启用 `NoneBot 插件桥`，地址默认 `ws://127.0.0.1:8080/onebot/v11/ws`。Diana 会把 OneBot 事件转发给 sidecar，插件调用 `send_msg`、`get_group_info` 等 API 时再转发回当前 OneBot 客户端。
 
+### 对外 API
+
+外部系统（CI、监控、脚本）可以通过 HTTP 接口让机器人把消息推送到指定会话，把 Diana 当作通知出口。它是一个内置插件（`对外 API`），**默认关闭**：在「插件」页或「设置 → 安全 → 对外 API」卡片上启用后外部调用才放行，停用后立即返回 403。密钥同样在该卡片里创建，明文只在创建时显示一次，存储里只保留 SHA-256 哈希；吊销立即生效，密钥管理不受插件开关影响，可以先备好密钥再开闸。每次调用记录进日志中心（`actor` 为 `openapi:<密钥名>`）。
+
+```sh
+curl -X POST http://127.0.0.1:18080/openapi/v1/messages \
+  -H "Authorization: Bearer <密钥>" \
+  -H "Content-Type: application/json" \
+  -d '{"group_id": "123456", "text": "构建 #42 通过"}'
+```
+
+- 目标会话用 `group_id` 或 `user_id` 指定；群聊目标同时带 `user_id` 时会 @ 那个人。多通道部署再带 `platform`（如 `onebot-v11`、`telegram`）或 `profile_id` 指路，只有一条启用通道时可省略。
+- `GET /openapi/v1/status` 用同一密钥探活，返回运行状态与可投递通道列表。
+- 单把密钥默认限流每分钟 60 次，可在插件设置里调整；超限返回 `429` 并带 `Retry-After`。接口只做投递，不触发模型调用。
+
 ### 日志中心
 
 「日志中心」页查看持久化的操作日志和错误日志：LLM 配置保存/切换、机器人启停、插件管理、系统更新等动作都会记录，并带 `actor` 操作人（WebUI 默认 `web:<客户端 IP>`，也可由网关通过 `X-Diana-Actor`、`X-Operator`、`X-Forwarded-User` 传入；聊天内模型配置命令记 `qq:<用户账号>`）。
