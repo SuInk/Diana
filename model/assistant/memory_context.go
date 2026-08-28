@@ -749,20 +749,31 @@ func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) str
 	session := sessionKey(event)
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	items, err := store.ListStructuredMemories(loadCtx, StructuredMemoryQuery{
-		Session:       session,
-		Now:           time.Now(),
+		Session: session,
+		Now:     time.Now(),
+		// 会话唯一，本来就只该有一条；多要几条是为了万一出现重复时按存储层的
+		// importance/confidence 排序确定性地挑一条，而不是看谁先扫到。
 		MaxCandidates: 4,
 		Kinds:         []MemoryKind{MemoryKindThread},
+		// 便签只认本会话。默认的取值范围还会捎上「本人的 visibility=user 记忆」，
+		// 那条通道对便签毫无意义，却能让别的会话的行漏进来。
+		CurrentSessionOnly: true,
 	})
 	cancel()
 	if err != nil {
 		log.Printf("chatbot session thread load failed: %v", err)
 		return ""
 	}
-	key := ThreadMemoryKey(session)
+	// 不能拿 ThreadMemoryKey(session) 来做精确比较：写入侧会过 normalizeMemoryKey，
+	// 它只保留字母数字、把 . - _ 和空白折成 '.'，冒号直接丢掉且不补分隔符。于是
+	// "thread.group:123" 落库变成 "thread.group123"，两边永远对不上，便签一条也
+	// 注入不进去。查询已经按 scope_key + kind=thread 收窄，回来的行必然就是本会话
+	// 的便签，这个比较挡不住任何东西。
+	//
+	// 修的是读取侧不是归一化：改归一化会让已经落库的行全部失联。
 	for _, item := range items {
-		if item.Key == key {
-			return strings.TrimSpace(item.Content)
+		if content := strings.TrimSpace(item.Content); content != "" {
+			return content
 		}
 	}
 	return ""
