@@ -558,6 +558,69 @@
             </div>
           </section>
 
+          <section class="card">
+            <div class="card-header">
+              <h2>自动机器人识别</h2>
+              <span class="badge" :class="form.bot_reply_loop_detection_enabled ? 'accent' : ''">
+                {{ form.bot_reply_loop_detection_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
+                </label>
+                <span class="hint">识别到持续的自动回复时避免机器人互相循环，并在达到阈值后暂停响应该账号。</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <h2>账号安全审核</h2>
+              <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
+                {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">直接回复也做发送前安全审核</span>
+                </label>
+                <span class="hint">
+                  涉政、露骨和其他可能导致账号被处置的内容会被拦下不发。主动回复本来就要过一次审核，安全判断顺带完成，始终生效；
+                  打开这个开关后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <h2>词典作用域</h2>
+              <span class="badge" :class="form.glossary_shared_scope_enabled ? 'accent' : ''">
+                {{ form.glossary_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.glossary_shared_scope_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">所有群共用一本词典</span>
+                </label>
+                <span class="hint">
+                  默认按会话隔离：一个群记下的梗只在这个群生效，别的群查不到。打开后新记的词条一律写进全局词典，所有会话通用。
+                  打开之前各群已经记下的词条不会搬走，仍在自己群里优先生效，可以在「词典」页按作用域逐条改。
+                </span>
+              </div>
+            </div>
+          </section>
+
         </div>
 
         <div v-show="editorTab === 'persona'" class="stack">
@@ -750,68 +813,6 @@
             </div>
           </section>
 
-          <section class="card">
-            <div class="card-header">
-              <h2>自动机器人识别</h2>
-              <span class="badge" :class="form.bot_reply_loop_detection_enabled ? 'accent' : ''">
-                {{ form.bot_reply_loop_detection_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
-                </label>
-                <span class="hint">识别到持续的自动回复时避免机器人互相循环，并在达到阈值后暂停响应该账号。</span>
-              </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2>账号安全审核</h2>
-              <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
-                {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">直接回复也做发送前安全审核</span>
-                </label>
-                <span class="hint">
-                  涉政、露骨和其他可能导致账号被处置的内容会被拦下不发。主动回复本来就要过一次审核，安全判断顺带完成，始终生效；
-                  打开这个开关后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
-                </span>
-              </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2>词典作用域</h2>
-              <span class="badge" :class="form.glossary_shared_scope_enabled ? 'accent' : ''">
-                {{ form.glossary_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.glossary_shared_scope_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">所有群共用一本词典</span>
-                </label>
-                <span class="hint">
-                  默认按会话隔离：一个群记下的梗只在这个群生效，别的群查不到。打开后新记的词条一律写进全局词典，所有会话通用。
-                  打开之前各群已经记下的词条不会搬走，仍在自己群里优先生效，可以在「词典」页按作用域逐条改。
-                </span>
-              </div>
-            </div>
-          </section>
 
           <!-- 模型分配 -->
           <section class="card">
