@@ -6,6 +6,7 @@ import type {
   AssistantEventDetail,
   AssistantTask,
   LLMConfig,
+  OpenAPIKey,
   PluginState,
   BotProfileConfig,
   BotGroupSummary,
@@ -352,6 +353,10 @@ function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   return llmConfig;
 }
 
+let demoApiKeys: OpenAPIKey[] = [
+  { id: "key-1", name: "ci-notify", prefix: "diana_3fa8c2e1", created_at: before(4320), last_used_at: before(35) }
+];
+
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
@@ -371,6 +376,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ]
     });
   if (path.startsWith("/api/auth/")) return json({ ok: true, username: "demo" });
+  if (path === "/api/openapi/keys" && method === "GET") return json({ keys: demoApiKeys });
+  if (path === "/api/openapi/keys" && method === "POST") {
+    const key: OpenAPIKey = { id: `key-${Date.now()}`, name: String(body.name ?? "未命名"), prefix: "diana_demo0000", created_at: new Date().toISOString() };
+    demoApiKeys = [key, ...demoApiKeys];
+    return json({ key, token: "diana_demo00000000000000000000000000000000000000000000000000000000000000" });
+  }
+  if (path.startsWith("/api/openapi/keys/") && method === "DELETE") {
+    const keyID = decodeURIComponent(path.split("/").pop() ?? "");
+    demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
+    return json({ revoked: true });
+  }
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
 
