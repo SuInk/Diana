@@ -72,6 +72,23 @@ let assistantConfig: BotProfileConfig = { ...oneBotProfile, active_profile_id: "
 let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
+  {
+    manifest: {
+      id: "official.music", name: "音乐增强", version: "0.1.0", description: "群里分享的网易云音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。仅 OneBot v11 支持语音。没有配置自建 API 时只能拿到可试听的歌曲。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
+      settings: [
+        { key: "request_song_enabled", label: "允许点歌", type: "bool", default: true, description: "开启后模型可以按用户要求搜歌并直接发出语音。关掉只保留链接解析。" },
+        { key: "api_base", label: "自建 API 地址", type: "string", default: "", description: "自建 NeteaseCloudMusicApi 的地址，例如 http://127.0.0.1:3000。留空则走官方接口，只能拿到可试听的歌曲。" },
+        { key: "music_u_cookie", label: "MUSIC_U Cookie", type: "string", default: "", secret: true, description: "登录 Cookie 里的 MUSIC_U，配合自建 API 用于会员音质和受限曲目。" },
+        { key: "bitrate", label: "音质", type: "select", default: "320000", options: [{ value: "128000", label: "标准 128k" }, { value: "192000", label: "较高 192k" }, { value: "320000", label: "极高 320k" }] },
+        { key: "max_duration_seconds", label: "最长时长", type: "number", default: 600, min: 30, max: 1800, step: 30, unit: "秒" },
+        { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
+        { key: "timeout_seconds", label: "请求超时", type: "number", default: 45, min: 5, max: 180, step: 5, unit: "秒" },
+        { key: "send_song_info", label: "同时发送歌曲信息", type: "bool", default: true, description: "在语音前补一条「歌名 - 歌手」，否则群里只看到一条不知道是什么的语音。" },
+        { key: "silk_encoder_path", label: "Silk 编码器路径", type: "string", default: "", description: "填了就把音频转成 Tencent Silk 再发。留空沿用语音合成插件的配置。" }
+      ]
+    },
+    installed: true, enabled: true
+  },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {
     manifest: {
