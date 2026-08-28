@@ -237,7 +237,8 @@ type ProviderConfig struct {
 type ClientOption func(*clientOptions)
 
 type clientOptions struct {
-	httpClient *http.Client
+	httpClient  *http.Client
+	credentials CredentialSource
 }
 
 // WithHTTPClient 注入自定义 HTTP client。
@@ -278,6 +279,8 @@ func NewClient(cfg ProviderConfig, opts ...ClientOption) (LLMClient, error) {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	// 凭据注入放在 HTTP 层，三家 provider 的 SDK 都不必知道 OAuth 的存在。
+	options.httpClient = httpClientWithCredentials(options.httpClient, options.credentials)
 
 	// 对外统一 LLMClient 接口，内部按 provider 分发到不同 SDK/HTTP 协议。
 	switch cfg.Provider {
