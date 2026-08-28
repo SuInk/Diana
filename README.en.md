@@ -308,7 +308,7 @@ The Go binary cannot load Python NoneBot plugins directly, so run a NoneBot side
 
 ### Outbound API
 
-External systems (CI, monitoring, scripts) can push messages to a chosen conversation over HTTP, using Diana as a notification outlet. Create API keys under "Settings → Security → Outbound API"; the plaintext is shown exactly once at creation and only its SHA-256 hash is stored. Revocation takes effect immediately, and every call is logged in the Log Centre with `actor` set to `openapi:<key name>`.
+External systems (CI, monitoring, scripts) can push messages to a chosen conversation over HTTP, using Diana as a notification outlet. It ships as a built-in plugin (`对外 API`) that is **disabled by default**: external calls are only accepted after enabling it on the Plugins page or via the "Settings → Security → Outbound API" card, and disabling it makes them return 403 immediately. API keys are created on that same card; the plaintext is shown exactly once at creation and only its SHA-256 hash is stored. Revocation takes effect immediately, and key management works regardless of the plugin switch, so you can prepare keys before opening the gate. Every call is logged in the Log Centre with `actor` set to `openapi:<key name>`.
 
 ```sh
 curl -X POST http://127.0.0.1:18080/openapi/v1/messages \
@@ -319,7 +319,7 @@ curl -X POST http://127.0.0.1:18080/openapi/v1/messages \
 
 - Address the target with `group_id` or `user_id`; a group target that also carries `user_id` mentions that member. On multi-channel deployments add `platform` (e.g. `onebot-v11`, `telegram`) or `profile_id` for routing; with a single enabled channel both can be omitted.
 - `GET /openapi/v1/status` uses the same key for health checks and lists the deliverable channels.
-- Each key is rate-limited to 60 requests per minute; exceeding it returns `429` with `Retry-After`. The endpoint only delivers text — it never triggers a model call.
+- Each key is rate-limited to 60 requests per minute by default (adjustable in the plugin settings); exceeding it returns `429` with `Retry-After`. The endpoint only delivers text — it never triggers a model call.
 
 ### Log Centre
 

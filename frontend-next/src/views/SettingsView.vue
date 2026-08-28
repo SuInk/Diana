@@ -144,9 +144,18 @@
           <section class="card">
           <div class="card-header">
             <h2>对外 API</h2>
+            <span class="badge" :class="openAPIPluginEnabled ? 'ok' : 'warn'">{{ openAPIPluginEnabled ? "插件已启用" : "插件未启用" }}</span>
             <span class="card-sub">让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息</span>
           </div>
           <div class="card-body stack">
+            <div class="cluster" style="gap: 8px; align-items: center">
+              <p class="muted" style="margin: 0; font-size: 13px; flex: 1">
+                总开关是「对外 API」内置插件：未启用时外部调用一律 403，密钥可以先备好再开闸；限流等参数在「插件」页调整。
+              </p>
+              <button class="btn small" type="button" :disabled="togglingPlugin || openAPIPlugin === null" @click="toggleOpenAPIPlugin">
+                {{ togglingPlugin ? "处理中…" : openAPIPluginEnabled ? "停用" : "启用" }}
+              </button>
+            </div>
             <p class="muted" style="margin: 0; font-size: 13px">
               携带 <code class="mono">Authorization: Bearer &lt;密钥&gt;</code> 调用
               <code class="mono">POST /openapi/v1/messages</code>，正文里用
@@ -328,6 +337,9 @@ import {
   listOpenAPIKeys,
   createOpenAPIKey,
   revokeOpenAPIKey,
+  listPlugins,
+  setPluginEnabled,
+  type PluginState,
   type OpenAPIKey,
   type AuthSession,
   type HealthResponse,
@@ -373,6 +385,10 @@ const creatingKey = ref(false);
 const newKeyName = ref("");
 const createdToken = ref("");
 const revokingKeyID = ref("");
+const openAPIPlugin = ref<PluginState | null>(null);
+const togglingPlugin = ref(false);
+const openAPIPluginEnabled = computed(() => openAPIPlugin.value?.enabled === true);
+const OPEN_API_PLUGIN_ID = "official.open-api";
 const otherSessionCount = computed(() => sessions.value.filter((item) => !item.current).length);
 const operationRunning = computed(() => updating.value || updateStatus.value?.updating === true);
 // 版本号还没加载出来时留空，不显示占位符。
@@ -465,6 +481,29 @@ async function revokeOthers(): Promise<void> {
     toastError(err instanceof Error ? err.message : "登出其他设备失败");
   } finally {
     revokingID.value = "";
+  }
+}
+
+async function loadOpenAPIPlugin(): Promise<void> {
+  try {
+    const plugins = await listPlugins();
+    openAPIPlugin.value = plugins.find((item) => item.manifest.id === OPEN_API_PLUGIN_ID) ?? null;
+  } catch {
+    /* 拉不到插件状态时按未知处理，开关按钮保持禁用 */
+  }
+}
+
+async function toggleOpenAPIPlugin(): Promise<void> {
+  if (openAPIPlugin.value === null || togglingPlugin.value) return;
+  const next = !openAPIPluginEnabled.value;
+  togglingPlugin.value = true;
+  try {
+    openAPIPlugin.value = await setPluginEnabled(OPEN_API_PLUGIN_ID, next);
+    toastSuccess(next ? "对外 API 已启用" : "对外 API 已停用，外部调用将收到 403");
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "切换对外 API 状态失败");
+  } finally {
+    togglingPlugin.value = false;
   }
 }
 
@@ -649,6 +688,7 @@ onMounted(() => {
   void loadUpdates();
   void loadAuthStatus().then(() => loadSessions());
   void loadApiKeys();
+  void loadOpenAPIPlugin();
   void getHealth()
     .then((result) => {
       health.value = result;
