@@ -1440,7 +1440,7 @@ const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence
   gentle: { self_reference: "", sentence_enders: "" },
   lively: { self_reference: "", sentence_enders: "" },
   concise: { self_reference: "", sentence_enders: "" },
-  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" },
+  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
   // 扮演对句尾语气词没有主张：那属于具体角色，不属于这套说话方式。
   roleplay: { self_reference: "我", sentence_enders: "" }
 };
