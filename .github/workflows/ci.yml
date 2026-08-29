@@ -194,9 +194,11 @@ jobs:
             'Default WebUI port: 18080' \
             'Set DIANA_ADMIN_PASSWORD before first start to choose the administrator password.' \
             'The frontend is included under frontend-next/dist.' \
+            'One-click installations expose `diana uninstall`; this package also includes an uninstall script.' \
             'Future stable Releases can be installed from the WebUI with SHA-256 verification, backup, restart, and health-check rollback.' > "${package_dir}/README.txt"
 
           if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            cp scripts/uninstall.ps1 "${package_dir}/uninstall.ps1"
             printf '%s\n' \
               '@echo off' \
               'set "FRONTEND_DIST=%~dp0frontend-next\dist"' \
@@ -204,6 +206,8 @@ jobs:
               '"%~dp0diana-webui.exe" %*' > "${package_dir}/run.bat"
             (cd release/package && zip -qr "../../dist/${package_name}.zip" "${package_name}")
           else
+            cp scripts/uninstall.sh "${package_dir}/uninstall.sh"
+            chmod +x "${package_dir}/uninstall.sh"
             printf '%s\n' \
               '#!/usr/bin/env sh' \
               'set -eu' \
