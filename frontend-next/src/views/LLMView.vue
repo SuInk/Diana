@@ -91,6 +91,8 @@
         </div>
       </section>
 
+      <LLMOAuthPanel @changed="onOAuthProvidersChanged" />
+
     </div>
 
     <!-- 单配置连通测试弹窗 -->
@@ -162,6 +164,17 @@
           <span class="hint">{{ selectedPreset?.hint }}；请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。</span>
         </div>
         <div class="field wide">
+          <label for="llm-credential-mode">凭据方式</label>
+          <AppSelect
+            id="llm-credential-mode"
+            v-model="credentialMode"
+            :options="credentialModeOptions"
+          />
+          <span class="hint">
+            授权登录的令牌会在过期前自动续期；下拉里只列出「授权登录」区域已经登录过的提供商。
+          </span>
+        </div>
+        <div v-if="credentialMode === 'api_key'" class="field wide">
           <label for="llm-apikey">API Key</label>
           <div class="input-group">
             <input
@@ -178,6 +191,43 @@
             </button>
           </div>
         </div>
+        <template v-else>
+          <div class="field wide">
+            <label for="llm-oauth-provider">授权提供商</label>
+            <AppSelect
+              id="llm-oauth-provider"
+              v-model="form.oauth_provider"
+              :options="oauthProviderOptions"
+              placeholder="选择一个已登录的提供商"
+            />
+            <span v-if="oauthProviderOptions.length === 0" class="hint">
+              还没有登录过任何提供商，先到下面的「授权登录」里登录一次。
+            </span>
+            <span v-else-if="selectedOAuthStatus?.expired && !selectedOAuthStatus?.refreshable" class="hint">
+              这个提供商的登录已过期且无法自动续期，需要重新登录。
+            </span>
+          </div>
+          <!-- 授权登录时 API Key 变成可选兜底：续期失败时还能靠它继续说话，
+               比整个配置档一起哑掉好。 -->
+          <div class="field wide">
+            <label for="llm-apikey">备用 API Key（可选）</label>
+            <div class="input-group">
+              <input
+                id="llm-apikey"
+                v-model="form.api_key"
+                class="input"
+                :type="showKey ? 'text' : 'password'"
+                autocomplete="off"
+                :placeholder="apiKeyPlaceholder"
+              />
+              <button class="btn icon-only" type="button" :aria-label="showKey ? '隐藏 Key' : '显示 Key'" @click="showKey = !showKey">
+                <EyeOff v-if="showKey" :size="14" aria-hidden="true" />
+                <Eye v-else :size="14" aria-hidden="true" />
+              </button>
+            </div>
+            <span class="hint">填了的话，授权令牌续期失败时会自动回落到它。</span>
+          </div>
+        </template>
         <div class="field wide model-config-field">
           <div class="model-sync-row">
             <div class="model-sync-copy">
@@ -312,6 +362,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import LLMOAuthPanel from "../components/LLMOAuthPanel.vue";
 import { ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
 import {
   cloneConfigProfile,
@@ -326,7 +377,8 @@ import {
   testLLMImage,
   type LLMConfig,
   type LLMModelInfo,
-  type Provider
+  type Provider,
+  type LLMOAuthStatus
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
@@ -343,6 +395,7 @@ interface LLMFormState {
   model: string;
   base_url: string;
   api_key: string;
+  oauth_provider: string;
   user_agent: string;
   description: string;
   temperature: string;
@@ -359,6 +412,7 @@ const emptyForm: LLMFormState = {
   model: "",
   base_url: "",
   api_key: "",
+  oauth_provider: "",
   user_agent: "",
   description: "",
   temperature: "",
@@ -417,6 +471,48 @@ const serviceOptions = llmServicePresets.map((preset) => ({
   hint: preset.hint
 }));
 const selectedPreset = computed(() => llmServicePresets.find((preset) => preset.id === selectedService.value));
+// 凭据方式由配置档里有没有绑 OAuth 提供商推导，不额外存一个字段：
+// 多存一个就有「两处不一致」的可能，而这里没有任何信息是推不出来的。
+const credentialMode = computed<"api_key" | "oauth">({
+  get: () => (form.value.oauth_provider ? "oauth" : "api_key"),
+  set: (value) => {
+    if (value === "api_key") {
+      form.value.oauth_provider = "";
+      return;
+    }
+    if (!form.value.oauth_provider) {
+      form.value.oauth_provider = oauthProviderOptions.value[0]?.value ?? "";
+    }
+  }
+});
+
+const credentialModeOptions = [
+  { value: "api_key", label: "API Key" },
+  { value: "oauth", label: "授权登录" }
+];
+
+const oauthStatuses = ref<LLMOAuthStatus[]>([]);
+
+// 只列已经登录过的：没登录的选了也用不了，让它出现在下拉里只会制造一次失败调用。
+const oauthProviderOptions = computed(() =>
+  oauthStatuses.value
+    .filter((status) => status.logged_in)
+    .map((status) => ({ value: status.provider.key, label: status.provider.label }))
+);
+
+const selectedOAuthStatus = computed(() =>
+  oauthStatuses.value.find((status) => status.provider.key === form.value.oauth_provider)
+);
+
+function onOAuthProvidersChanged(next: LLMOAuthStatus[]) {
+  oauthStatuses.value = next;
+  // 绑着的提供商被退出登录或删掉后，把配置档上的引用一起清掉，
+  // 否则这份配置会一直以「还没有登录」失败，而界面上看不出哪里不对。
+  if (form.value.oauth_provider && !next.some((status) => status.provider.key === form.value.oauth_provider && status.logged_in)) {
+    form.value.oauth_provider = "";
+  }
+}
+
 const apiKeyPlaceholder = computed(() => {
   if (!editingConfigured.value) return "粘贴 API Key";
   return editingKeyPreview.value ? `已保存 ${editingKeyPreview.value}，留空则沿用` : "留空表示沿用已保存的 Key";
@@ -564,6 +660,7 @@ function startEdit(profile: LLMConfig): void {
     model: profile.model,
     base_url: profile.base_url ?? "",
     api_key: "",
+    oauth_provider: profile.oauth_provider ?? "",
     user_agent: profile.user_agent ?? "",
     description: profile.description ?? "",
     temperature: profile.temperature === null || profile.temperature === undefined ? "" : String(profile.temperature),
@@ -630,6 +727,7 @@ function formToPayload(): LLMConfig {
     model: form.value.model.trim(),
     base_url: form.value.base_url.trim() || undefined,
     api_key: form.value.api_key.trim() || undefined,
+    oauth_provider: form.value.oauth_provider.trim() || undefined,
     models: modelOptions.value,
     user_agent: form.value.user_agent.trim() || undefined,
     description: form.value.description.trim() || undefined

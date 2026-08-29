@@ -13,6 +13,7 @@ import (
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/model/llmauth"
 
 	"github.com/gin-gonic/gin"
 )
@@ -26,6 +27,8 @@ type LLMConfigHandler struct {
 	// 没有它时这一页只能按配置自己的默认模型说话，而机器人多半用的是模型分配里
 	// 另选的模型——同一个页面上写着一个不生效的窗口，比不写更误导。
 	botProfiles BotModelRoleSource
+	// oauth 为空表示这套部署没启用 OAuth 登录（没有持久化存储时就是如此）。
+	oauth *llmauth.Manager
 }
 
 // BotModelRoleSource 提供各机器人的模型分配。
@@ -112,21 +115,34 @@ const minLLMAPIKeyChars = 8
 var llmModelListTimeout = 8 * time.Second
 
 // NewLLMConfigHandler 创建 LLMConfigHandler 实例。
+//
+// 默认的客户端与模型列表工厂都在调用时才去看 OAuth 管理器：这一页上的「测试」
+// 和「拉取模型」必须和机器人真正发请求时用同一套凭据，否则绑了 OAuth 的配置档
+// 会在这里以「没有 API Key」失败，而实际运行是好的。
 func NewLLMConfigHandler(store LLMProfileStore) *LLMConfigHandler {
-	return NewLLMConfigHandlerWithFactory(store, func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
-		return llm.NewClient(cfg)
-	})
+	handler := &LLMConfigHandler{store: store}
+	handler.newClient = func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
+		return llm.NewClient(cfg, handler.clientOptions(cfg)...)
+	}
+	handler.listModels = func(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		return llm.ListModels(ctx, cfg, handler.clientOptions(cfg)...)
+	}
+	return handler
+}
+
+// clientOptions 按配置档补上 OAuth 凭据；没绑或没启用 OAuth 时返回空。
+func (h *LLMConfigHandler) clientOptions(cfg llm.ProviderConfig) []llm.ClientOption {
+	if h == nil || h.oauth == nil {
+		return nil
+	}
+	return llm.ClientOptionsFor(cfg, h.oauth)
 }
 
 // NewLLMConfigHandlerWithFactory 创建 LLMConfigHandler 实例。
 func NewLLMConfigHandlerWithFactory(store LLMProfileStore, factory LLMClientFactory) *LLMConfigHandler {
-	return &LLMConfigHandler{
-		store:     store,
-		newClient: factory,
-		listModels: func(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
-			return llm.ListModels(ctx, cfg)
-		},
-	}
+	handler := NewLLMConfigHandler(store)
+	handler.newClient = factory
+	return handler
 }
 
 // SetModelListFactory 注入模型列表读取实现。
@@ -155,6 +171,7 @@ func (h *LLMConfigHandler) Register(router gin.IRouter) {
 	router.GET("/api/llm/providers", h.providers)
 	router.POST("/api/llm/providers/models", h.providerModels)
 	router.POST("/api/llm/providers/test", h.providerTest)
+	h.registerOAuthRoutes(router)
 }
 
 // providers exposes the provider/model view used by the new management UI.
