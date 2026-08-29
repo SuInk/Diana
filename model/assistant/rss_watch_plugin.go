@@ -110,7 +110,7 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         rssWatchSettingItemLimit,
 				Label:       "单次判断条目上限",
-				Description: "一次交给 LLM 判断的最新条目数量；Feed 游标仍推进到已读取的最新条目。",
+				Description: "一次交给模型判断的最新条目数量；Feed 游标仍推进到已读取的最新条目。",
 				Type:        PluginSettingTypeNumber,
 				Default:     12,
 				Min:         settingRange(1),

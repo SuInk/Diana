@@ -110,14 +110,14 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-// LoadLLMProfiles 读取 LLM 配置集。
+// LoadLLMProfiles 读取提供商配置集。
 func (s *SQLiteStore) LoadLLMProfiles(ctx context.Context) (llm.ProfileSet, bool, error) {
 	var set llm.ProfileSet
 	ok, err := s.loadJSON(ctx, llmProfilesKey, &set)
 	return set, ok, err
 }
 
-// SaveLLMProfiles 保存 LLM 配置集。
+// SaveLLMProfiles 保存提供商配置集。
 func (s *SQLiteStore) SaveLLMProfiles(ctx context.Context, set llm.ProfileSet) error {
 	return s.saveJSON(ctx, llmProfilesKey, set)
 }

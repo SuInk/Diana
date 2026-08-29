@@ -12,7 +12,7 @@ import "context"
 // 部署方自己定的参数。这些正是插件页的开关和设置在管的事。
 //
 // 插件本身不处理消息——它声明能力和设置，真正干活的是 diana.group_relations 工具，
-// 只在本群启用了这个插件时才注册给模型。仓库里 LLM 配置那个插件也是这个形状。
+// 只在本群启用了这个插件时才注册给模型。仓库里提供商配置那个插件也是这个形状。
 const (
 	groupRelationsPluginID = "group_relations"
 

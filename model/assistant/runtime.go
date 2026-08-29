@@ -2785,7 +2785,7 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "chatbot.proactive_reply_route",
-		Message: "LLM 已完成主动回复判断",
+		Message: "模型已完成主动回复判断",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
@@ -9469,18 +9469,18 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	}
 }
 
-// renderLLMProfiles 渲染 LLM 配置档列表。
+// renderLLMProfiles 渲染提供商配置档列表。
 func (r *Runtime) renderLLMProfiles() string {
 	if r.llmStore == nil {
-		return "当前未接入 LLM 配置集。"
+		return "当前未接入提供商配置集。"
 	}
 	set := r.llmStore.Profiles()
 	if len(set.Profiles) == 0 {
-		return "当前没有可用的 LLM 配置。"
+		return "当前没有可用的提供商配置。"
 	}
 	// 按列表原顺序输出，不再按名字排序：组内顺序就是降级顺序，排过序的列表会把
 	// 这个含义抹掉。以前用 * 标出激活项，那个概念已经没有了。
-	lines := []string{"LLM 配置列表（组内自上而下即降级顺序）："}
+	lines := []string{"提供商配置列表（组内自上而下即降级顺序）："}
 	for _, profile := range set.Profiles {
 		lines = append(lines, fmt.Sprintf("- %s [%s] (%s / %s)", profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model))
 	}

@@ -370,7 +370,7 @@ type BotConfig struct {
 	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
+	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
 	MaxContextTokens int64 `json:"max_context_tokens,omitempty"`
 	// RecentHistoryTokenBudget 限定正式回复提示词里近期聊天历史最多占多少 token。
@@ -390,7 +390,7 @@ type BotConfig struct {
 	// 笔记本占用的内存本来也只有重启才能归还。
 	DictSegmentEnabled *bool `json:"dict_segment_enabled,omitempty"`
 	// 语义检索:消息经 embedding 模型转成向量,检索时按余弦相似度召回并与
-	// 词面结果融合。需要 embedding 分组的 LLM 配置档,默认关。
+	// 词面结果融合。需要 embedding 分组的提供商配置档,默认关。
 	SemanticSearchEnabled      *bool         `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance       float64       `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold    float64       `json:"proactive_reply_threshold,omitempty"`
@@ -596,7 +596,7 @@ type ConfigPayload struct {
 	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
+	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
 	MaxContextTokens           int64       `json:"max_context_tokens,omitempty"`
 	RecentHistoryTokenBudget   int64       `json:"recent_history_token_budget,omitempty"`

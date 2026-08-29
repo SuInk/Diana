@@ -115,7 +115,7 @@ let plugins: PluginState[] = [
   },
   {
     manifest: {
-      id: "official.repository-watch", name: "仓库订阅", version: "0.2.1", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读受限 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
+      id: "official.repository-watch", name: "仓库订阅", version: "0.2.1", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经模型阅读受限 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
       settings: [
         { key: "github_token", label: "GitHub Token", description: "用于私有仓库和提高 API 额度。", type: "string", default: "", secret: true },
         { key: "follow_up_include_patch", label: "跟评读取受限代码片段", description: "开启后会把经过严格裁剪的 patch 发送给当前 LLM Provider；私有仓库请谨慎开启。", type: "bool", default: false },
