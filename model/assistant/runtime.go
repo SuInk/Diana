@@ -3491,13 +3491,18 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if proactiveTriggered {
 		// 主动回复走完整审核：表达质量 + 账号安全。
-		if err := r.judgeProactiveReplyQuality(ctx, event, cleanText, reply, cfg); err != nil {
+		auditIntent, err := r.evaluateProactiveReplyQuality(ctx, event, cleanText, reply, cfg)
+		if err != nil {
 			return "", err
 		}
-	} else if err := r.auditReplyAccountSafety(ctx, event, cleanText, reply, cfg); err != nil {
-		// 直接回复只审账号安全：被点名回答说得平淡不该拦，但涉政和露骨内容
-		// 不管怎么触发，发出去的后果都一样。
-		return "", err
+		controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
+	} else {
+		auditIntent, err := r.evaluateDirectReplyAudit(ctx, event, cleanText, reply, cfg)
+		if err != nil {
+			// 直接回复不以表达质量拦截；账号安全开关启用时仍是一票否决。
+			return "", err
+		}
+		controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
 	}
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
 		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)

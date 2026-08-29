@@ -771,7 +771,7 @@
 
           <section class="card">
             <div class="card-header">
-              <h2>账号安全审核</h2>
+              <h2>发送前审核</h2>
               <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
                 {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
               </span>
@@ -781,11 +781,11 @@
                 <label class="switch">
                   <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">直接回复也做发送前安全审核</span>
+                  <span class="switch-label">直接回复也做统一发送前审核</span>
                 </label>
                 <span class="hint">
-                  涉政、露骨和其他可能导致账号被处置的内容会被拦下不发。主动回复本来就要过一次审核，安全判断顺带完成，始终生效；
-                  打开这个开关后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                  一次审核同时判断内容安全和是否属于明确拒答；主动回复还会使用其中的表达质量结论。涉政、露骨和其他可能导致账号被处置的内容会被拦下不发，
+                  高置信拒答仅在发送成功后累计。打开后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
                 </span>
               </div>
             </div>
