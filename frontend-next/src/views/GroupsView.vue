@@ -225,6 +225,37 @@
           <label for="group-maxreply">回复上限（字符）</label>
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
+        <div class="field wide">
+          <label class="switch">
+            <input v-model="editing.natural_reply_split_enabled" type="checkbox" />
+            <span class="track" aria-hidden="true"></span>
+            <span class="switch-label">本群自然分条</span>
+          </label>
+          <span class="hint">
+            按模型排的换行、以及句号边界，把一条回复分成几条发。关掉后只认模型显式写的分条标记，
+            下面的「最多分几条」随之失效，「分段发送长度」和合并转发不受影响。
+          </span>
+        </div>
+        <div class="field">
+          <label for="group-maxbubbles">最多分几条</label>
+          <input id="group-maxbubbles" :disabled="!editing.natural_reply_split_enabled" v-model.number="editing.reply_max_bubbles" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">分出来超过它就退回粗一档（先不按句号、再不按换行），退到底把相邻段均分成这么多条。</span>
+        </div>
+        <div class="field">
+          <label for="group-chunk">分段发送长度</label>
+          <input id="group-chunk" v-model.number="editing.direct_reply_chunk_size" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">单条聊天消息最多多少字，撞上了会在最近的标点处切开。这是硬上限，不受自然分条开关约束。</span>
+        </div>
+        <div class="field">
+          <label for="group-forward-len">合并转发字数</label>
+          <input id="group-forward-len" v-model.number="editing.forward_reply_threshold" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。</span>
+        </div>
+        <div class="field">
+          <label for="group-forward-chunks">合并转发块数</label>
+          <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">切出超过这么多块也改用合并转发卡片。</span>
+        </div>
         <div v-if="editing.response_mode === 'custom'" class="field">
           <label for="group-proactive-chance">主动回复采样率</label>
           <input id="group-proactive-chance" v-model.number="editing.proactive_reply_chance" class="input" type="number" min="0.05" max="1" step="0.05" />
@@ -422,6 +453,8 @@ const saving = ref(false);
 const togglingGroupID = ref("");
 const defaultRecallReplyAutoDeleteEnabled = ref(false);
 const defaultNaturalInterjectionEnabled = ref(false);
+// 自然分条默认是开的，跟机器人配置那边的缺省一致。
+const defaultNaturalReplySplitEnabled = ref(true);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
@@ -494,10 +527,11 @@ async function load(showFeedback = false): Promise<void> {
     }
     if (configAndPlatforms) {
       const [config, platformList] = configAndPlatforms;
-      const active = config.profiles?.find((item) => item.id === config.active_profile_id) ?? config.profiles?.[0];
+      const active = config.profiles?.[0];
       const current = active ?? config;
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       defaultNaturalInterjectionEnabled.value = current.natural_interjection_enabled ?? false;
+      defaultNaturalReplySplitEnabled.value = current.natural_reply_split_enabled ?? true;
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
@@ -526,6 +560,7 @@ function addGroup(): void {
       enabled: true,
       group_triggers: [],
       natural_interjection_enabled: defaultNaturalInterjectionEnabled.value,
+      natural_reply_split_enabled: defaultNaturalReplySplitEnabled.value,
       recall_reply_auto_delete_enabled: defaultRecallReplyAutoDeleteEnabled.value,
       recall_reply_auto_delete_delay_seconds: defaultRecallReplyAutoDeleteDelay.value,
       plugin_overrides: {},
@@ -541,6 +576,7 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as BotGroupConfig;
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
   config.natural_interjection_enabled ??= defaultNaturalInterjectionEnabled.value;
+  config.natural_reply_split_enabled ??= defaultNaturalReplySplitEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
   config.reply_style ??= "";

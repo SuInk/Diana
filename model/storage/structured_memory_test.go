@@ -434,3 +434,63 @@ func TestStructuredMemoryLexicalScoreWeighsLongTermsOverShortNoise(t *testing.T)
 		t.Fatalf("long-term match must outrank short noise: %#v", items)
 	}
 }
+
+// 便签的 memory_key 在写入时会过 normalizeMemoryKey：冒号既不保留也不折成分隔符，
+// 于是 assistant.ThreadMemoryKey("group:123") 落库变成 "thread.group123"。读取端
+// 曾经拿未归一化的原串做精确比较，导致便签写得进去、一条也读不出来。
+//
+// 这条用例钉住两件事：落库 key 确实和调用方给的不一样，以及按 scope_key + kind
+// 收窄的查询能原样把它取回来——读取端不需要、也不该再比一次 key。
+func TestThreadMemoryKeyIsNormalizedOnWriteAndFoundByScope(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	const session = "group:765205730"
+	threadKey := assistant.ThreadMemoryKey(session)
+	if _, err := store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
+		Session:         session,
+		EventKind:       assistant.EventKindGroup,
+		GroupID:         "765205730",
+		SourceMessageID: "summary:job-1",
+		SourceEventTime: time.Unix(100, 0),
+		Candidates: []assistant.MemoryCandidate{{
+			Action:     assistant.MemoryActionUpsert,
+			Key:        threadKey,
+			Kind:       assistant.MemoryKindThread,
+			Topic:      "会话状态",
+			Content:    "正在排查上下文预算，下一步补层内埋点。",
+			SourceType: assistant.MemorySourceSummary,
+			Confidence: 0.97,
+			Importance: 0.82,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{
+		Session:            session,
+		Now:                time.Now(),
+		MaxCandidates:      4,
+		Kinds:              []assistant.MemoryKind{assistant.MemoryKindThread},
+		CurrentSessionOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("按会话取便签 = %#v", items)
+	}
+	if items[0].Key == threadKey {
+		t.Fatalf("落库 key 居然没被归一化，这条用例的前提没了: %q", items[0].Key)
+	}
+	if items[0].Key != "thread.group765205730" {
+		t.Fatalf("落库 key = %q", items[0].Key)
+	}
+	if !strings.Contains(items[0].Content, "层内埋点") {
+		t.Fatalf("便签内容 = %q", items[0].Content)
+	}
+}

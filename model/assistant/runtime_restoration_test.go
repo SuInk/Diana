@@ -55,7 +55,6 @@ func (p restoredModelProvider) Generate(context.Context, llm.GenerateRequest) (*
 
 func TestRestoredGenerateReplyRoutesVisionGroup(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "chat",
 		Profiles: []llm.Profile{
 			{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "chat-key", Model: "chat-model"}},
 			{ID: "vision", Group: llm.GroupVision, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "vision-key", Model: "vision-model"}},
@@ -80,14 +79,10 @@ func TestRestoredGenerateReplyRoutesVisionGroup(t *testing.T) {
 	if len(used) != 2 || used[0] != "vision-model" || used[1] != "chat-model" {
 		t.Fatalf("used models=%v", used)
 	}
-	if store.set.ActiveID != "chat" {
-		t.Fatalf("vision routing changed active profile to %q", store.set.ActiveID)
-	}
 }
 
 func TestAgentSwitchesFromChatToVisionAfterRichToolResult(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "chat",
 		Profiles: []llm.Profile{
 			{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "chat-key", Model: "chat-model"}},
 			{ID: "vision", Group: llm.GroupVision, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "vision-key", Model: "vision-model"}},
@@ -122,7 +117,6 @@ func TestAgentSwitchesFromChatToVisionAfterRichToolResult(t *testing.T) {
 
 func TestRestoredModelRoleGroupBindingFailsOver(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "primary-a",
 		Profiles: []llm.Profile{
 			{ID: "primary-a", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key-a", Model: "old-a"}},
 			{ID: "primary-b", Group: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key-b", Model: "old-b"}},
@@ -145,9 +139,6 @@ func TestRestoredModelRoleGroupBindingFailsOver(t *testing.T) {
 	}
 	if len(attempts) != 2 || attempts[0] != "key-a/bound-model" || attempts[1] != "key-b/bound-model" {
 		t.Fatalf("attempts=%v", attempts)
-	}
-	if store.set.ActiveID != "primary-a" {
-		t.Fatalf("role routing changed active profile to %q", store.set.ActiveID)
 	}
 }
 
@@ -241,7 +232,6 @@ func TestSingleProfileModelRoleDoesNotFailOverOnModelNotFound(t *testing.T) {
 
 func TestRestoredIntentAndImageRoleBindings(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "chat",
 		Profiles: []llm.Profile{
 			{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "chat-key", Model: "chat-model", ImageModel: "chat-image"}},
 			{ID: "special-a", Group: "special", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "special-a", Model: "old-a", ImageModel: "old-image-a"}},
@@ -351,7 +341,6 @@ func TestRestoredPrivateMessageInterceptorConsumesBeforeChat(t *testing.T) {
 
 func TestRestoredModelRoleProfileBindingsAndVisionFallback(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "chan-a",
 		Profiles: []llm.Profile{
 			{ID: "chan-a", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key-a", Model: "old-default"}},
 			{ID: "chan-b", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key-b"}},
@@ -396,7 +385,6 @@ func TestRestoredModelRoleProfileBindingsAndVisionFallback(t *testing.T) {
 
 func TestRestoredLLMConfigUsesStructuredAgentTool(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{{
 			ID:   "main",
 			Name: "主配置",

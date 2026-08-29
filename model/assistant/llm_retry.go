@@ -29,6 +29,19 @@ func withTransientLLMRetry(provider LLMProvider, enabled bool) LLMProvider {
 	return &transientRetryLLMProvider{provider: provider}
 }
 
+// registryLLMProvider keeps Registry-backed calls on the same retry policy as
+// legacy profile providers. Callers such as one-shot routing can still opt out.
+func registryLLMProvider(registry *llm.ProviderRegistry, selection llm.AgentModelConfig, retryTransient bool) LLMProvider {
+	return withTransientLLMRetry(llm.RegistryClient{Registry: registry, Selection: selection}, retryTransient)
+}
+
+func unwrapTransientLLMRetry(provider LLMProvider) LLMProvider {
+	if wrapped, ok := provider.(*transientRetryLLMProvider); ok && wrapped != nil && wrapped.provider != nil {
+		return wrapped.provider
+	}
+	return provider
+}
+
 func (p *transientRetryLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	return generateWithTransientRetry(ctx, p.provider, req, true)
 }
@@ -261,22 +274,6 @@ func (p *profileFailoverLLMProvider) client(index int) (LLMProvider, error) {
 	p.clientLoaded[index] = true
 	p.clients[index], p.clientErrors[index] = p.factory(p.profiles[index].Config)
 	return p.clients[index], p.clientErrors[index]
-}
-
-func activateLLMProfile(store LLMProfileStore, profileID string) {
-	if store == nil || profileID == "" {
-		return
-	}
-	set := store.Profiles().WithDefaults()
-	if set.ActiveID == profileID {
-		return
-	}
-	set.ActiveID = profileID
-	// 这是失败重试时的自动切换，落库失败不影响本轮已经切好的内存状态，
-	// 但要留日志，否则重启后又切回旧配置会显得莫名其妙。
-	if err := store.SaveProfiles(set); err != nil {
-		log.Printf("persist llm profile failover failed: %v", err)
-	}
 }
 
 // maxContextShrinkRetries 限制收缩次数：128K 起连续减半四次即落到下限，

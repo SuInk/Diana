@@ -143,10 +143,13 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 func reminderFailureNotice(item Reminder, cause error) string {
 	nextAttempt := item.TriggerAt.Format("2006-01-02 15:04:05")
 	if reminderIsRecurring(item) {
+		// 周期订阅攒够连续失败次数才会走到这里，措辞照实说「连续 N 次」，
+		// 不然「本次执行失败」会让人以为刚坏，其实已经坏了几个周期。
+		label := recurringSubscriptionKindLabel(item)
 		if strings.TrimSpace(item.PendingDelivery) != "" {
-			return fmt.Sprintf("定时订阅结果发送失败，结果已保留。将在 %s 自动重试发送（连续失败 %d 次）。", nextAttempt, item.ConsecutiveFailures)
+			return fmt.Sprintf("%s结果连续 %d 次发送失败，结果已保留。将在 %s 自动重试发送。", label, item.ConsecutiveFailures, nextAttempt)
 		}
-		return fmt.Sprintf("定时订阅本次执行失败：%s 将在 %s 自动重试（连续失败 %d 次）。", publicChatErrorMessage(cause), nextAttempt, item.ConsecutiveFailures)
+		return fmt.Sprintf("%s连续 %d 次执行失败：%s 将在 %s 自动重试。", label, item.ConsecutiveFailures, publicChatErrorMessage(cause), nextAttempt)
 	}
 	return fmt.Sprintf("提醒 %s 本次发送失败，将在 %s 自动重试（连续失败 %d 次）。", item.ID, nextAttempt, item.ConsecutiveFailures)
 }

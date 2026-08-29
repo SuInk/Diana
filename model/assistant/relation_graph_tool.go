@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -111,24 +112,39 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	}
 
 	title := fmt.Sprintf("群 %s · 关系图", t.event.GroupID)
-	page := RenderGroupRelationHTML(graph, title, relationRangeLabel(rangeID), t.settings.Int(groupRelationsSettingMaxMembers, relationImageDefaultSeats))
-	png, err := agent.CaptureHTMLScreenshot(ctx, agent.ScreenshotRequest{
-		HTML:    page,
-		Width:   relationImageWidth,
-		Height:  relationImageHeight,
-		Timeout: time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
-	})
-	if err != nil {
-		// 渲染要靠无头浏览器，部署里没有就明确说出来，别让模型编一句「已发送」。
-		// 具体错误进 Detail：是找不到可执行文件、超时，还是浏览器自己报错，
-		// 三种的处理方式完全不同。
+	maxSeats := t.settings.Int(groupRelationsSettingMaxMembers, relationImageDefaultSeats)
+	rangeLabel := relationRangeLabel(rangeID)
+
+	// 先在进程里直接画。它不需要浏览器，也就不用等一次冷启动——一台机器上装不装
+	// 得起 Chrome，和有没有中文字体，是两件独立的事，两条路都试才不至于一个环境
+	// 缺件就彻底没图。
+	png, rasterErr := RenderGroupRelationPNG(graph, title, rangeLabel, maxSeats)
+	var browserErr error
+	if rasterErr != nil {
+		// 浏览器归「网页渲染」插件管：那个插件停用就是不许起浏览器，这里不能绕过去
+		// 自己起一个。停用也不至于没图——纯 Go 那条路不需要浏览器。
+		if !t.runtime.sandboxedBrowserEnabled(t.event) {
+			browserErr = errors.New("「网页渲染」插件没有启用，不能起浏览器")
+		} else {
+			page := RenderGroupRelationHTML(graph, title, rangeLabel, maxSeats)
+			png, browserErr = agent.CaptureHTMLScreenshot(ctx, agent.ScreenshotRequest{
+				HTML:    page,
+				Width:   relationImageWidth,
+				Height:  relationImageHeight,
+				Timeout: time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
+			})
+		}
+	}
+	if rasterErr != nil && browserErr != nil {
+		// 两条路都断了才算失败，而且要把两边各自卡在哪说清楚——只说一句「画不出来」
+		// 的话，人不知道该去装字体还是装浏览器。
 		result := dianaGroupRelationsResult{
-			Message:      "画不出来：这台机器上没有可用的无头浏览器（关系图靠它把图渲染成图片）。",
+			Message:      relationRenderFailureMessage(ctx, t.runtime.sandboxedBrowserEnabled(t.event), rasterErr, browserErr),
 			Range:        rangeID,
 			Participants: graph.Participants,
 			Messages:     graph.Messages,
 		}
-		t.recordRelationsOutcome(ctx, result, err.Error())
+		t.recordRelationsOutcome(ctx, result, fmt.Sprintf("直接渲染：%v；浏览器渲染：%v", rasterErr, browserErr))
 		return marshalRelationsResult(result), nil
 	}
 
@@ -151,6 +167,46 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 // recordRelationsOutcome 把这次画图的结果写进运行记录。
 //
 // agentRunObserver 已经无条件记下了「工具调用完成」，但这个工具的几种失败——没有
+// relationRenderFailureMessage 按实际卡住的环节说话。
+//
+// 这里原来一律回「这台机器上没有可用的无头浏览器」，可渲染失败有三种方式——找不到
+// 可执行文件、渲染超时、浏览器自己报错——只有第一种才是「没有浏览器」。装了浏览器的
+// 机器上看到那句话，人只会跑去查一个根本没问题的东西，而真正的原因（超时、崩溃、
+// 缺依赖库）还留在事件记录里没人看。
+//
+// 所以先探一次活：探不到就照实说探测结果，探得到就承认浏览器在、是这次渲染没成，
+// 并把原始错误带上。
+func relationRenderFailureMessage(ctx context.Context, browserEnabled bool, rasterErr, browserErr error) string {
+	browserDetail := strings.TrimSpace(firstLineOf(browserErr.Error()))
+	// 插件关着的时候不必去探测浏览器：装没装都不影响结论，探出来的那句话反而答非所问。
+	if browserEnabled {
+		if status := agent.ProbeHeadlessBrowser(ctx, ""); !status.Available {
+			if detail := strings.TrimSpace(status.Detail); detail != "" {
+				browserDetail = detail
+			}
+		}
+	}
+	if browserDetail == "" {
+		browserDetail = "浏览器没有产出图片"
+	}
+	fix := "装一个中文字体或一个 Chrome/Chromium 都能救。"
+	if !browserEnabled {
+		fix = "装一个中文字体，或者在插件页把「网页渲染」打开，都能救。"
+	}
+	return fmt.Sprintf("画不出来，两条路都没走通：直接渲染——%s；浏览器渲染——%s。%s",
+		firstLineOf(rasterErr.Error()), browserDetail, fix)
+}
+
+// firstLineOf 只取错误的第一行：浏览器的报错常常拖着一整屏堆栈，群里发不下。
+func firstLineOf(value string) string {
+	for _, line := range strings.Split(value, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // 无头浏览器、这段时间没人说话——都是正常返回的 ok:false，在那条记录里和成功长得
 // 一模一样。而「这台机器没装浏览器」正是生产里最可能撞上的那个，看不见就只能靠
 // 群里没出图去猜。

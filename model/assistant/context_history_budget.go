@@ -148,12 +148,12 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 	// 与真正发请求时的挑选顺序保持一致：角色绑定 → 分组 → 当前激活配置。
 	// 只看角色绑定的话，没配模型角色的部署会一路回落到兜底常量，等于从来没看过
 	// 实际在用的模型窗口。
-	profiles, _ := r.roleBoundProfiles(set, group)
+	profiles, _ := r.roleBoundProfiles("", set, group)
 	if len(profiles) == 0 {
 		profiles = llmProfilesInGroup(set, group)
 	}
 	if len(profiles) == 0 {
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			profiles = []llm.Profile{current}
 		}
 	}
@@ -306,7 +306,7 @@ func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, as
 	return cost
 }
 
-func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext, sources semanticReferenceContext, summaryRecompressed bool) {
+func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext, sources semanticReferenceContext, summaryRecompressed bool, layers []contextLayerUsage) {
 	if !cfg.DebugModeEnabled {
 		return
 	}
@@ -369,13 +369,17 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		"history_earliest_time":     earliest,
 		"history_latest_time":       latest,
 		"summary":                   contextBudgetSummaryTrace(breakdown, sessionThreadBudget(window), summaryRecompressed),
-		"semantic_requested":        semantic.Requested,
-		"semantic_resolved":         semantic.Resolved,
-		"semantic_text_sources":     semantic.TextSources,
-		"semantic_expected_images":  semantic.ExpectedImages,
-		"semantic_attached_images":  sources.AttachedImageCount,
-		"semantic_missing_sources":  sources.MissingSourceCount,
-		"message_id":                event.MessageID,
+		// categories 是各层拼完之后、全局预算再裁一刀的结果；layers 是每层在送进
+		// 全局预算之前自己丢了什么。少了后者，categories 里的 fits_budget 只能说明
+		// 「成品消息没再挨刀」，说明不了层内配额有没有截断候选。
+		"layers":                   contextLayerUsageTrace(layers),
+		"semantic_requested":       semantic.Requested,
+		"semantic_resolved":        semantic.Resolved,
+		"semantic_text_sources":    semantic.TextSources,
+		"semantic_expected_images": semantic.ExpectedImages,
+		"semantic_attached_images": sources.AttachedImageCount,
+		"semantic_missing_sources": sources.MissingSourceCount,
+		"message_id":               event.MessageID,
 	}
 	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()

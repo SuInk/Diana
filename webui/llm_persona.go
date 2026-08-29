@@ -125,7 +125,7 @@ func personaProviderConfig(set llm.ProfileSet, payload personaGeneratePayload) (
 		if profiles := set.GroupProfiles(group); len(profiles) > 0 {
 			selected = profiles[0]
 		}
-	} else if current, ok := set.Current(); ok && personaTextProfile(current) {
+	} else if current, ok := set.FirstProfile(); ok && personaTextProfile(current) {
 		selected = current
 	}
 	if selected.ID == "" {

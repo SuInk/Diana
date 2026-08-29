@@ -234,6 +234,41 @@ func TestHistoryImageDescriptionRunsInBackgroundAndReusesCache(t *testing.T) {
 	}
 }
 
+func TestHistoryVideoFrameDescriptionRunsInBackground(t *testing.T) {
+	imagePath, hash := writeRecallImageFixture(t)
+	store := newRecallImageTestStore()
+	provider := &recallImageVisionProvider{}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMessageHistoryStore(store)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		GroupID:   "group-1",
+		UserID:    "user-1",
+		MessageID: "video-1",
+		Segments: []MessageSegment{
+			{Type: "video", Data: map[string]string{"file": "video.mp4"}},
+			{Type: "image", Data: map[string]string{
+				"cached_file":         imagePath,
+				imageContentSHA256Key: hash,
+				"source_type":         "video_frame",
+			}},
+		},
+	}
+
+	runtime.enqueueHistoryImageDescriptions(event)
+	waitForCondition(t, 2*time.Second, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return strings.Contains(store.descriptions[hash].Description, "命中率为 63%")
+	})
+	lines := runtime.historyImageCachedDescriptions(context.Background(), event)
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "视频关键帧1摘要=") || !strings.Contains(lines[0], "命中率为 63%") {
+		t.Fatalf("video frame summary lines = %#v", lines)
+	}
+}
+
 func TestHistoryImageDescriptionWaitsForVisibleReplyWorker(t *testing.T) {
 	imagePath, hash := writeRecallImageFixture(t)
 	store := newRecallImageTestStore()
