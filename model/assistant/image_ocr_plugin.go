@@ -81,7 +81,7 @@ func NewImageOCRPlugin(client *http.Client) *ImageOCRPlugin {
 func (p *ImageOCRPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.0",
-		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型；对话模型读图上文字能力弱时可作补充。转写可走 LLM 配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。对话模型不支持看图时，可把交付方式改为「仅识别文字」：图片不再交给对话模型，改为 vision 分组的画面描述加 OCR 文字（两者可各自开关，组合或单用）。识别结果按图片内容哈希缓存并落库，同一张图或表情包在不同人、不同群、重启之后都只识别一次。",
+		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型；对话模型读图上文字能力弱时可作补充。转写可走提供商配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。对话模型不支持看图时，可把交付方式改为「仅识别文字」：图片不再交给对话模型，改为 vision 分组的画面描述加 OCR 文字（两者可各自开关，组合或单用）。识别结果按图片内容哈希缓存并落库，同一张图或表情包在不同人、不同群、重启之后都只识别一次。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "llm:generate"},
 		Settings: []PluginSettingSpec{

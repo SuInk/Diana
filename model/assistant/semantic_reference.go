@@ -793,7 +793,7 @@ func (r *Runtime) recordSemanticReference(ctx context.Context, event MessageEven
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "chatbot.semantic_reference",
-		Message: "LLM 已完成上下文指代判断",
+		Message: "模型已完成上下文指代判断",
 		Actor:   oneBotEventActor(event),
 		Target:  messageID,
 		Metadata: map[string]any{
@@ -808,7 +808,7 @@ func (r *Runtime) recordSemanticReference(ctx context.Context, event MessageEven
 	if routeErr != nil {
 		entry.Kind = applog.KindError
 		entry.Level = applog.LevelError
-		entry.Message = "LLM 上下文指代判断失败"
+		entry.Message = "模型上下文指代判断失败"
 		entry.Detail = routeErr.Error()
 	}
 	_ = writer.AppendLog(ctx, entry)

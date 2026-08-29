@@ -29,6 +29,7 @@ const (
 	botReplyLoopAIConfidenceThreshold = 0.90
 	botReplyLoopClassificationTimeout = 20 * time.Second
 	replySuppressionNoticeTimeout     = 60 * time.Second
+	replyRefusalAuditConfidence       = 0.90
 )
 
 var replySuppressionAccountPattern = regexp.MustCompile(`[1-9][0-9]{4,13}`)
@@ -104,8 +105,8 @@ type botReplyLoopClassificationPayload struct {
 }
 
 func consumeReplyControlIntent(reply string) (string, replyControlIntent) {
-	// Explicit control tokens are the protocol boundary. Free-form refusal text
-	// must remain an ordinary uncounted reply.
+	// 保留旧版输出的兼容解码，避免滚动升级期间旧提示生成的标记泄漏。
+	// 新提示明确禁止模型输出这些标记，正常控制结论来自发送前审核。
 	intent := replyControlIntent{
 		RefuseCurrent:       strings.Contains(reply, replyRefusalMarker),
 		SuppressCurrentUser: strings.Contains(reply, replySuppressionMarker),
@@ -499,7 +500,7 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "chatbot.bot_reply_loop_classification",
-		Message: "LLM 已完成 AI 自动回复判断",
+		Message: "模型已完成 AI 自动回复判断",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{

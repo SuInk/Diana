@@ -39,7 +39,7 @@ func (p *SandboxedBrowserRenderPlugin) Manifest() PluginManifest {
 		ID:          sandboxedBrowserPluginID,
 		Name:        "网页渲染",
 		Version:     "0.2.1",
-		Description: "在一次性隔离配置的无头 Chrome/Chromium 中执行 JavaScript，持续检测跳转和 DOM 变化，稳定后把完整页面链作为不可信上下文交给 LLM。",
+		Description: "在一次性隔离配置的无头 Chrome/Chromium 中执行 JavaScript，持续检测跳转和 DOM 变化，稳定后把完整页面链作为不可信上下文交给模型。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"message:read", "network:http", "browser:headless", "sandbox:ephemeral"},

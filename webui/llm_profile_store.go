@@ -23,12 +23,12 @@ type MemoryLLMProfileStore struct {
 	data llm.ProfileSet
 }
 
-// NewMemoryLLMProfileStore 创建内存版 LLM 配置集存储。
+// NewMemoryLLMProfileStore 创建内存版提供商配置集存储。
 func NewMemoryLLMProfileStore(cfg llm.ProviderConfig) *MemoryLLMProfileStore {
 	return &MemoryLLMProfileStore{data: llm.NewProfileSet(cfg)}
 }
 
-// Current 返回内存存储中的当前 LLM 配置。
+// Current 返回内存存储中的当前提供商配置。
 func (s *MemoryLLMProfileStore) Current() llm.ProviderConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -38,14 +38,14 @@ func (s *MemoryLLMProfileStore) Current() llm.ProviderConfig {
 	return llm.ProviderConfig{}
 }
 
-// Profiles 返回内存存储中的 LLM 配置集。
+// Profiles 返回内存存储中的提供商配置集。
 func (s *MemoryLLMProfileStore) Profiles() llm.ProfileSet {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.WithDefaults()
 }
 
-// SaveProfiles 更新内存中的 LLM 配置集。
+// SaveProfiles 更新内存中的提供商配置集。
 func (s *MemoryLLMProfileStore) SaveProfiles(set llm.ProfileSet) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -61,7 +61,7 @@ type PersistentLLMProfileStore struct {
 	ctx      context.Context
 }
 
-// NewPersistentLLMProfileStore 创建 SQLite 持久化版 LLM 配置集存储。
+// NewPersistentLLMProfileStore 创建 SQLite 持久化版提供商配置集存储。
 func NewPersistentLLMProfileStore(ctx context.Context, store *storage.SQLiteStore, fallback llm.ProviderConfig) (*PersistentLLMProfileStore, error) {
 	data := llm.NewProfileSet(fallback)
 	if saved, ok, err := store.LoadLLMProfiles(ctx); err != nil {
@@ -99,7 +99,7 @@ func (s *PersistentLLMProfileStore) ProviderRegistry() (*llm.ProviderRegistry, e
 	return llm.RegistryFromDocument(document)
 }
 
-// Current 返回持久化存储中的当前 LLM 配置。
+// Current 返回持久化存储中的当前提供商配置。
 func (s *PersistentLLMProfileStore) Current() llm.ProviderConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -109,14 +109,14 @@ func (s *PersistentLLMProfileStore) Current() llm.ProviderConfig {
 	return llm.ProviderConfig{}
 }
 
-// Profiles 返回持久化存储中的 LLM 配置集。
+// Profiles 返回持久化存储中的提供商配置集。
 func (s *PersistentLLMProfileStore) Profiles() llm.ProfileSet {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.WithDefaults()
 }
 
-// SaveProfiles 保存 LLM 配置集。
+// SaveProfiles 保存提供商配置集。
 // 落库失败必须往上抛，否则接口回 200、前端提示保存成功，重启后配置又是旧的。
 func (s *PersistentLLMProfileStore) SaveProfiles(set llm.ProfileSet) error {
 	set = set.WithDefaults()

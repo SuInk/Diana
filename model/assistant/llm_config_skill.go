@@ -27,9 +27,9 @@ func NewLLMConfigPlugin() *LLMConfigPlugin {
 func (p *LLMConfigPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          llmConfigPluginID,
-		Name:        "LLM 配置",
+		Name:        "提供商配置",
 		Version:     "0.1.0",
-		Description: "官方内置 LLM 配置能力；自然语言由主 Agent 理解，配置修改仅通过主人专属结构化工具执行。",
+		Description: "官方内置提供商配置能力；自然语言由主 Agent 理解，配置修改仅通过主人专属结构化工具执行。",
 		Official:    true,
 		BuiltIn:     true,
 		// 没有可调项，写操作本身已经被主人身份挡住，摆成开关只是噪音。
@@ -66,8 +66,8 @@ type llmConfigApplyResult struct {
 
 // applyLLMConfigCommand 把「换个模型」落到这台机器人的模型分配上。
 //
-// 改的是 BotConfig.ModelRoles，不是 LLM 配置本身。两者管的是不同的事：provider
-// 的地址、密钥、默认模型属于「这个 provider 怎么连」，归 WebUI 的 LLM 配置页；
+// 改的是 BotConfig.ModelRoles，不是提供商配置本身。两者管的是不同的事：provider
+// 的地址、密钥、默认模型属于「这个 provider 怎么连」，归 WebUI 的「提供商」页；
 // 「这台机器人各个用途分别用哪个模型」属于机器人配置，也就是模型分配。
 //
 // 四个用途都能改：对话、视觉理解、意图识别、图片生成，由 command.Role 指定，
@@ -81,7 +81,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 	store := r.llmStore
 	r.mu.RUnlock()
 	if store == nil {
-		return llmConfigApplyResult{Reply: "当前未接入 LLM 配置集。"}
+		return llmConfigApplyResult{Reply: "当前未接入提供商配置集。"}
 	}
 	if listModels == nil {
 		listModels = defaultLLMModelLister
@@ -96,7 +96,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 
 	boundProfile, boundModel, ok := modelRoleBinding(set, roles, roleKey)
 	if !ok {
-		return llmConfigApplyResult{Reply: "当前没有可用的 LLM 配置。"}
+		return llmConfigApplyResult{Reply: "当前没有可用的提供商配置。"}
 	}
 	oldProvider := boundProfile.Config.Provider
 	oldModel := boundModel
@@ -137,7 +137,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 	if err := r.saveModelRole(botCfg, roles, roleKey, target, model); err != nil {
 		return llmConfigApplyResult{Reply: "更新失败：机器人配置没能保存（" + err.Error() + "）。"}
 	}
-	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s）。改的是机器人模型分配里的这一档，没有动 LLM 配置里的 provider 设置，其余用途各自的分配保持不变。%s%s",
+	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s）。改的是机器人模型分配里的这一档，没有动提供商配置里的 provider 设置，其余用途各自的分配保持不变。%s%s",
 		llmConfigRoleLabel(roleKey), model, target.Name, llmConfigFollowChatNote(roleKey, roles), notes)
 	return result
 }
@@ -311,7 +311,7 @@ func llmConfigOutputTokenNote(cfg llm.ProviderConfig, info llm.ModelInfo) string
 	if info.MaxOutputTokens <= 0 || cfg.MaxOutputTokens <= 0 || cfg.MaxOutputTokens <= info.MaxOutputTokens {
 		return ""
 	}
-	return fmt.Sprintf("提醒：这套配置的最大输出 Token 填的是 %d，超过新模型的 %d，需要在 WebUI 的 LLM 配置里调低。", cfg.MaxOutputTokens, info.MaxOutputTokens)
+	return fmt.Sprintf("提醒：这套配置的最大输出 Token 填的是 %d，超过新模型的 %d，需要在 WebUI 的提供商配置里调低。", cfg.MaxOutputTokens, info.MaxOutputTokens)
 }
 
 // saveModelRole 只改指定用途的绑定，其余用途原样保留。
@@ -348,12 +348,12 @@ func profileInGroup(profile llm.Profile, group string) bool {
 	return llm.NormalizeProfileGroup(profile.Group) == llm.NormalizeProfileGroup(group)
 }
 
-// recordLLMConfigSkillLog 记录聊天修改 LLM 配置的审计日志。
+// recordLLMConfigSkillLog 记录聊天修改提供商配置的审计日志。
 func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmConfigApplyResult, err error) {
 	if req.AppLogs == nil {
 		return
 	}
-	// 聊天修改 LLM 配置会影响运行时行为，所以和 WebUI 配置变更写入同一条审计流。
+	// 聊天修改提供商配置会影响运行时行为，所以和 WebUI 配置变更写入同一条审计流。
 	// 成功算操作日志，被拒绝或失败算错误日志，操作者记录为用户。
 	kind := applog.KindError
 	level := applog.LevelError
@@ -361,7 +361,7 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 	if result.Updated {
 		kind = applog.KindOperation
 		level = applog.LevelInfo
-		message = "聊天修改 LLM 配置成功"
+		message = "聊天修改提供商配置成功"
 	}
 	metadata := map[string]any{
 		"user_id": req.Event.UserID,

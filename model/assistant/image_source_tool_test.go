@@ -238,3 +238,90 @@ func TestImageSourceToolRegisteredOnlyWhenProviderConfigured(t *testing.T) {
 		t.Fatalf("没有可用线路时不该挂溯源工具：%s", unconfigured)
 	}
 }
+
+// 图片是要出网的，超限的就别发：SauceNAO 那边也只会回一个 413，白跑一趟还
+// 消耗当天的免费额度。断言的是「一次都没上传」，不是「报了个错」。
+func TestImageSourceRefusesOversizedUpload(t *testing.T) {
+	var uploaded atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		uploaded.Add(1)
+		_, _ = w.Write([]byte(`{"error":"","result":[]}`))
+	}))
+	defer server.Close()
+
+	plugin := NewImageSourcePlugin(server.Client())
+	plugin.traceMoeEndpoint = server.URL
+	// 1x1 的 PNG 只有几十字节，把上限压到 1 MB 还是拦不住它，所以这里换一张
+	// 一定超限的图：上限设成最小的 1 MB，图片给到 2 MB。
+	big := base64.StdEncoding.EncodeToString(make([]byte, 2*1024*1024))
+	event := imageSourceTestEvent()
+	event.Segments[1].Data["url"] = "data:image/png;base64," + big
+	tool := newImageSourceTestTool(t, plugin, map[string]any{
+		imageSourceSettingSauceNAOEnabled: false,
+		imageSourceSettingTraceMoeEnabled: true,
+		imageSourceSettingMaxUploadMB:     1,
+	}, event, nil)
+
+	payload, err := tool.Run(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := decodeImageSourceResult(t, payload)
+	if result.OK {
+		t.Fatalf("超限的图不该被当成查成功了：%#v", result)
+	}
+	if !strings.Contains(result.Message, "上传上限") {
+		t.Fatalf("没有说明是体积超限：%q", result.Message)
+	}
+	if uploaded.Load() != 0 {
+		t.Fatalf("超限的图仍然上传了 %d 次", uploaded.Load())
+	}
+}
+
+// 接口地址可以改（自建网关、反代），但改错了不能把图片用明文发出去：
+// 非 HTTPS 一律退回官方地址，本机调试除外。
+func TestImageSourceEndpointRefusesPlaintext(t *testing.T) {
+	const official = "https://api.trace.moe/search"
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"留空走官方", "", official},
+		{"HTTPS 自建网关", "https://gateway.example/search", "https://gateway.example/search"},
+		{"本机调试放行", "http://127.0.0.1:8080/search", "http://127.0.0.1:8080/search"},
+		{"明文公网退回官方", "http://gateway.example/search", official},
+		{"地址里带账号密码退回官方", "https://user:pass@gateway.example/search", official},
+		{"根本不是地址退回官方", "gateway.example", official},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := imageSourceEndpoint(tc.raw, official); got != tc.want {
+				t.Fatalf("imageSourceEndpoint(%q) = %q，期望 %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// 换了接口地址等于换了一家服务，上一次的结果不能直接顶上。
+func TestImageSourceCacheKeyFollowsEndpoint(t *testing.T) {
+	base := imageSourceConfig{TraceMoeEnabled: true, MinSimilarity: 60, MaxResults: 3}
+	moved := base
+	moved.TraceMoeURL = "https://gateway.example/search"
+	if imageSourceCacheKey("digest", base) == imageSourceCacheKey("digest", moved) {
+		t.Fatal("换了接口地址之后缓存键没变，旧结果会被直接顶上")
+	}
+}
+
+// 机器人得知道自己有这个能力，否则被问「你能查图片出处吗」只会否认。
+func TestImageSourceIsInCapabilityKnowledge(t *testing.T) {
+	for _, doc := range coreCapabilityDocuments {
+		if doc.ID == "core:image-source" {
+			if !strings.Contains(doc.Content, dianaImageSourceToolName) {
+				t.Fatalf("能力条目没写工具名：%q", doc.Content)
+			}
+			return
+		}
+	}
+	t.Fatal("能力清单里没有图片溯源，机器人不知道自己能干这件事")
+}
