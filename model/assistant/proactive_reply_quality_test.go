@@ -188,6 +188,39 @@ func TestReplyAuditParsesDedicatedAccountRiskReason(t *testing.T) {
 	}
 }
 
+func TestReplyAuditParsesHighConfidenceRefusal(t *testing.T) {
+	decision, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.97,"account_safe":true,"count_refusal":true,"refusal_confidence":0.94,"refusal_reason":"明确拒绝当前请求"}`)
+	if !ok {
+		t.Fatal("decision did not parse")
+	}
+	if !replyControlIntentFromAudit(decision).RefuseCurrent {
+		t.Fatalf("high-confidence refusal was not counted: %#v", decision)
+	}
+	decision.RefusalConfidence = replyRefusalAuditConfidence - 0.01
+	if replyControlIntentFromAudit(decision).RefuseCurrent {
+		t.Fatalf("low-confidence refusal was counted: %#v", decision)
+	}
+}
+
+func TestDirectReplyAuditReturnsRefusalControlWithSafetyResult(t *testing.T) {
+	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"reason":"自然拒绝","account_safe":true,"count_refusal":true,"refusal_confidence":0.98,"refusal_reason":"明确拒绝当前请求"}`}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	cfg := runtime.Config()
+	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
+	intent, err := runtime.evaluateDirectReplyAudit(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "做不到的请求", "这个我不能帮你", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !intent.RefuseCurrent {
+		t.Fatalf("audit intent = %#v", intent)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("combined send audit calls = %d, want 1", len(provider.requests))
+	}
+}
+
 // 模型没返回 account_safe 时按安全处理：缺字段就拦会让机器人集体哑火。
 func TestReplyAuditTreatsMissingAccountSafeAsSafe(t *testing.T) {
 	decision, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.95}`)
