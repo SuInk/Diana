@@ -285,7 +285,7 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addMessageSearchExtraColumn(); err != nil {
 		return err
 	}
-	if err := s.migrateGlossaryGlobalScopeToBot(); err != nil {
+	if err := s.migrateNotebookGlobalScopeToBot(); err != nil {
 		return err
 	}
 	if err := s.addMessageEventProfileColumn(); err != nil {
@@ -294,7 +294,7 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
-	return s.migrateGlossary()
+	return s.migrateNotebook()
 }
 
 // addInboundEventProfileColumn 给事件表补上机器人维度。
@@ -489,25 +489,25 @@ func (s *SQLiteStore) addMessageSearchExtraColumn() error {
 	return err
 }
 
-// migrateGlossaryGlobalScopeToBot 把那本所有机器人共用的全局词典搬给当前配置档。
+// migrateNotebookGlobalScopeToBot 把那本所有机器人共用的全局笔记本搬给当前配置档。
 //
 // 同一个梗在两台机器人那里可以有不同的记法，共用一本会让它们互相改对方的释义。
-// 和画像、群配置一样：已有词条归给迁移时的当前档，其余机器人从空本开始。
-func (s *SQLiteStore) migrateGlossaryGlobalScopeToBot() error {
+// 和画像、群配置一样：已有条目归给迁移时的当前档，其余机器人从空本开始。
+func (s *SQLiteStore) migrateNotebookGlobalScopeToBot() error {
 	owner := s.currentBotProfileID()
 	if owner == "" {
 		return nil
 	}
-	target := assistant.GlossaryScopeBotPrefix + owner
-	// 目标作用域已经有词条时说明迁移跑过了，不重复搬。
+	target := assistant.NotebookScopeBotPrefix + owner
+	// 目标作用域已经有条目时说明迁移跑过了，不重复搬。
 	var existing int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM glossary_entries WHERE scope_key = ?`, target).Scan(&existing); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM notebook_entries WHERE scope_key = ?`, target).Scan(&existing); err != nil {
 		return err
 	}
 	if existing > 0 {
 		return nil
 	}
-	if _, err := s.db.Exec(`UPDATE glossary_entries SET scope_key = ? WHERE scope_key = ?`, target, assistant.GlossaryScopeGlobal); err != nil {
+	if _, err := s.db.Exec(`UPDATE notebook_entries SET scope_key = ? WHERE scope_key = ?`, target, assistant.NotebookScopeGlobal); err != nil {
 		return err
 	}
 	return nil

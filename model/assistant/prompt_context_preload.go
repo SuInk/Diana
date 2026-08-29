@@ -10,7 +10,7 @@ import (
 
 // promptContextPreload 是提示词三个只读上下文层的并发预取结果。
 //
-// 会话线程便签、长期记忆检索、词典命中和窗口外媒体索引都要各自查一次存储层（每次各带 2 秒
+// 会话线程便签、长期记忆检索、笔记本命中和窗口外媒体索引都要各自查一次存储层（每次各带 2 秒
 // 超时），彼此没有依赖，却一直是串行执行的。它们全部发生在 event 被改写完之后，
 // 所以并发是安全的：每条路径都只读，不碰 event。
 //
@@ -23,7 +23,7 @@ type promptContextPreload struct {
 	memoryContext string
 	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
 	memoryUsage     contextLayerUsage
-	glossaryContext string
+	notebookContext string
 	mediaIndex      string
 }
 
@@ -50,7 +50,7 @@ func (r *Runtime) startPromptContextPreload(
 	}()
 	go func() {
 		defer preload.wg.Done()
-		preload.glossaryContext = r.glossaryContext(ctx, event, queryText)
+		preload.notebookContext = r.notebookContext(ctx, event, queryText)
 	}()
 	if wantMediaIndex {
 		preload.wg.Add(1)

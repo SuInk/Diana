@@ -163,8 +163,8 @@ export interface BotProfileConfig {
   bot_reply_loop_detection_enabled?: boolean;
   /** 直接回复是否也做发送前账号安全审核；主动回复始终审核，不受此开关影响。 */
   reply_account_safety_audit_enabled?: boolean;
-  /** 词典是否跨群共用一本；默认按会话隔离。 */
-  glossary_shared_scope_enabled?: boolean;
+  /** 笔记本是否跨群共用一本；默认按会话隔离。 */
+  notebook_shared_scope_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
   prompt_inject_time?: boolean;
   prompt_inject_plaintext_rules?: boolean;
@@ -1732,8 +1732,17 @@ export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
   });
 }
 
-export interface GlossaryRevision {
+/** 笔记类型。后端给出全量清单，前端不自己维护一份。 */
+export type NotebookKind = "term" | "fact" | "preference" | "event" | "todo" | "person";
+
+export interface NotebookKindOption {
+  value: NotebookKind;
+  label: string;
+}
+
+export interface NotebookRevision {
   version: number;
+  kind?: NotebookKind;
   meaning?: string;
   example?: string;
   aliases?: string[];
@@ -1743,9 +1752,11 @@ export interface GlossaryRevision {
   recorded_at: string;
 }
 
-export interface GlossaryEntry {
+export interface NotebookEntry {
   id: string;
   scope_key: string;
+  kind: NotebookKind;
+  /** 标题：词条是那个词本身，其余类型是一句概括。 */
   term: string;
   aliases?: string[];
   meaning: string;
@@ -1762,25 +1773,28 @@ export interface GlossaryEntry {
   created_at: string;
   updated_at: string;
   /** 只有详情接口带修订记录。 */
-  revisions?: GlossaryRevision[];
+  revisions?: NotebookRevision[];
 }
 
-export interface GlossaryScopeSummary {
+export interface NotebookScopeSummary {
   scope_key: string;
   active_count: number;
   deleted_count: number;
   updated_at: string;
 }
 
-export interface GlossaryListResponse {
-  scopes: GlossaryScopeSummary[];
+export interface NotebookListResponse {
+  scopes: NotebookScopeSummary[];
   scope: string;
-  entries: GlossaryEntry[];
+  entries: NotebookEntry[];
   query?: string;
+  kinds: NotebookKindOption[];
+  kind?: string;
 }
 
-export interface GlossaryEntryInput {
+export interface NotebookEntryInput {
   scope: string;
+  kind?: NotebookKind;
   term: string;
   aliases?: string[];
   meaning?: string;
@@ -1788,15 +1802,19 @@ export interface GlossaryEntryInput {
   note?: string;
 }
 
-export function listGlossary(
+export function listNotebook(
   scope = "",
   query = "",
   includeDeleted = false,
-  botProfileID = ""
-): Promise<GlossaryListResponse> {
+  botProfileID = "",
+  kind = ""
+): Promise<NotebookListResponse> {
   const params = new URLSearchParams();
   if (scope) {
     params.set("scope", scope);
+  }
+  if (kind) {
+    params.set("kind", kind);
   }
   if (query) {
     params.set("q", query);
@@ -1808,30 +1826,30 @@ export function listGlossary(
     params.set("profile", botProfileID);
   }
   const search = params.toString();
-  return requestJSON<GlossaryListResponse>(`/api/assistant/glossary${search ? `?${search}` : ""}`);
+  return requestJSON<NotebookListResponse>(`/api/assistant/notebook${search ? `?${search}` : ""}`);
 }
 
-export function getGlossaryEntry(scope: string, term: string): Promise<GlossaryEntry> {
+export function getNotebookEntry(scope: string, term: string): Promise<NotebookEntry> {
   const params = new URLSearchParams({ scope, term });
-  return requestJSON<GlossaryEntry>(`/api/assistant/glossary/entry?${params.toString()}`);
+  return requestJSON<NotebookEntry>(`/api/assistant/notebook/entry?${params.toString()}`);
 }
 
-export function saveGlossaryEntry(input: GlossaryEntryInput): Promise<GlossaryEntry> {
-  return requestJSON<GlossaryEntry>("/api/assistant/glossary", {
+export function saveNotebookEntry(input: NotebookEntryInput): Promise<NotebookEntry> {
+  return requestJSON<NotebookEntry>("/api/assistant/notebook", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
-export function deleteGlossaryEntry(scope: string, term: string, note = ""): Promise<GlossaryEntry> {
-  return requestJSON<GlossaryEntry>("/api/assistant/glossary/delete", {
+export function deleteNotebookEntry(scope: string, term: string, note = ""): Promise<NotebookEntry> {
+  return requestJSON<NotebookEntry>("/api/assistant/notebook/delete", {
     method: "POST",
     body: JSON.stringify({ scope, term, note })
   });
 }
 
-export function restoreGlossaryEntry(scope: string, term: string): Promise<GlossaryEntry> {
-  return requestJSON<GlossaryEntry>("/api/assistant/glossary/restore", {
+export function restoreNotebookEntry(scope: string, term: string): Promise<NotebookEntry> {
+  return requestJSON<NotebookEntry>("/api/assistant/notebook/restore", {
     method: "POST",
     body: JSON.stringify({ scope, term })
   });
