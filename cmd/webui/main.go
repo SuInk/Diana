@@ -353,7 +353,7 @@ func main() {
 	})
 	botHandler.SetLocalMediaSharer(localMediaStore)
 	botHandler.SetProfileStore(botProfileStore)
-	// LLM 配置页要标出「这套配置正被哪个机器人的哪个用途、按哪个模型使用」：
+	// 「提供商」页要标出「这套配置正被哪个机器人的哪个用途、按哪个模型使用」：
 	// 机器人多半用的是模型分配里另选的模型，只按配置默认模型说话会误导。
 	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)

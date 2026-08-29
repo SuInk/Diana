@@ -6,7 +6,7 @@
     <div class="repository-watch-manager-head">
       <div>
         <h3>订阅与判断</h3>
-        <p>发现新条目后先交给 LLM 判断，只有符合规则时才向指定会话发送回复。</p>
+        <p>发现新条目后先交给模型判断，只有符合规则时才向指定会话发送回复。</p>
       </div>
       <button class="btn small primary" type="button" @click="startCreate"><Plus :size="14" aria-hidden="true" />添加订阅</button>
     </div>

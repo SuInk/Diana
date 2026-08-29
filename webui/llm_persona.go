@@ -120,7 +120,7 @@ func personaProviderConfig(set llm.ProfileSet, payload personaGeneratePayload) (
 			}
 		}
 		if selected.ID == "" {
-			return llm.ProviderConfig{}, fmt.Errorf("对话 LLM 配置 %q 不存在", profileID)
+			return llm.ProviderConfig{}, fmt.Errorf("对话提供商配置 %q 不存在", profileID)
 		}
 	} else if group := strings.TrimSpace(payload.Group); group != "" {
 		if profiles := set.GroupProfiles(group); len(profiles) > 0 {
@@ -138,7 +138,7 @@ func personaProviderConfig(set llm.ProfileSet, payload personaGeneratePayload) (
 		}
 	}
 	if selected.ID == "" || !personaTextProfile(selected) {
-		return llm.ProviderConfig{}, fmt.Errorf("没有可用于生成人设的文本 LLM 配置")
+		return llm.ProviderConfig{}, fmt.Errorf("没有可用于生成人设的文本提供商配置")
 	}
 	cfg := selected.Config.WithDefaults()
 	if model := strings.TrimSpace(payload.Model); model != "" {
@@ -151,7 +151,7 @@ func personaProviderConfig(set llm.ProfileSet, payload personaGeneratePayload) (
 				}
 			}
 			if !found {
-				return llm.ProviderConfig{}, fmt.Errorf("模型 %q 不属于对话 LLM 配置 %q", model, selected.Name)
+				return llm.ProviderConfig{}, fmt.Errorf("模型 %q 不属于对话提供商配置 %q", model, selected.Name)
 			}
 		}
 		cfg.Model = model
