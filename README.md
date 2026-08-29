@@ -100,6 +100,11 @@ diana uninstall
 diana logs                 # 最近 100 行
 diana logs --lines 300     # 指定行数
 diana logs -f              # 持续跟随，Ctrl+C 退出
+diana status               # 查看健康状态、版本、地址和运行时间
+diana restart              # 重启一键安装所管理的服务
+diana doctor               # 检查配置、目录、前端资源和服务健康
+diana config path          # 显示当前配置文件路径
+diana config check         # 校验 YAML 及 bot/LLM 配置段
 diana version              # 查看当前版本
 diana help                 # 查看命令帮助
 ```
