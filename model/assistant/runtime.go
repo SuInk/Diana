@@ -271,7 +271,7 @@ type Runtime struct {
 	inboundStore              InboundEventStore
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
-	glossary                  GlossaryStore
+	notebook                  NotebookStore
 	buildInfo                 BuildInfo
 	releaseStatus             ReleaseStatusProvider
 	reminders                 ReminderStore
@@ -421,12 +421,12 @@ func (r *Runtime) SetStructuredMemoryStore(store StructuredMemoryStore) {
 	r.structuredMemory = store
 }
 
-// SetGlossaryStore 注入词典存储。没有它时词典整体静默失效：自动命中查不到、
-// diana.glossary 明确报错，回复本身不受影响。
-func (r *Runtime) SetGlossaryStore(store GlossaryStore) {
+// SetNotebookStore 注入笔记本存储。没有它时笔记本整体静默失效：自动命中查不到、
+// diana.notebook 明确报错，回复本身不受影响。
+func (r *Runtime) SetNotebookStore(store NotebookStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.glossary = store
+	r.notebook = store
 }
 
 // SetRepositoryIssueDraftStore enables restart-safe Issue draft approval.
@@ -2355,7 +2355,7 @@ type proactiveReplyPayload struct {
 	RecentMessages                []proactiveReplyHistoryItem      `json:"recent_messages,omitempty"`
 	Candidates                    []proactiveReplyCandidatePayload `json:"candidates,omitempty"`
 	AvailableReplyTools           []string                         `json:"available_reply_tools,omitempty"`
-	GlossaryContext               string                           `json:"glossary_context,omitempty"`
+	NotebookContext               string                           `json:"notebook_context,omitempty"`
 }
 
 type proactiveReplyCandidatePayload struct {
@@ -2446,7 +2446,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 
 func (r *Runtime) proactiveReplyPayloadWithContext(ctx context.Context, event MessageEvent, text string) proactiveReplyPayload {
 	payload := r.proactiveReplyPayload(event, text)
-	payload.GlossaryContext = r.glossaryContextForRouting(ctx, event, text)
+	payload.NotebookContext = r.notebookContextForRouting(ctx, event, text)
 	return payload
 }
 
@@ -2602,7 +2602,7 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有问号、没有 @ 或没有点名对象而归为 none。glossary_context 是本地词典对当前消息的可信释义；命中时必须按释义理解消息，不能再称它为未解释缩写、私人暗语或 missing_context。若缩写按词典展开后本身是在公开提问或请求（例如 zgm=在干嘛），应按展开后的完整含义判断 requests_response、answerable 和 needs_response。词典命中只解决语义，不代表普通名词必须回复，仍要判断展开后的消息是否确实需要回应。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 放行。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有 glossary_context 没有解释、且无法从其他上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
+	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有问号、没有 @ 或没有点名对象而归为 none。notebook_context 是本地笔记本对当前消息的可信释义；命中时必须按释义理解消息，不能再称它为未解释缩写、私人暗语或 missing_context。若缩写按笔记本展开后本身是在公开提问或请求（例如 zgm=在干嘛），应按展开后的完整含义判断 requests_response、answerable 和 needs_response。笔记本命中只解决语义，不代表普通名词必须回复，仍要判断展开后的消息是否确实需要回应。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 放行。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有 notebook_context 没有解释、且无法从其他上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
 	const expressiveChatInGuard = `风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard
 	configured = strings.TrimSpace(configured)
@@ -3020,7 +3020,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaSubtaskTool(r, event),
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
-				newDianaGlossaryTool(r, event, relationship),
+				newDianaNotebookTool(r, event, relationship),
 				newDianaVersionTool(r),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
@@ -3188,12 +3188,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Priority: llm.MessagePriorityMemory,
 			})
 		}
-		// 词典和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
+		// 笔记本和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
 		// 一起让位给当前消息，而不是互相挤。
-		if glossaryContext := contextPreload.glossaryContext; glossaryContext != "" {
+		if notebookContext := contextPreload.notebookContext; notebookContext != "" {
 			messages = append(messages, llm.Message{
 				Role:       llm.RoleUser,
-				Content:    glossaryContext,
+				Content:    notebookContext,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
@@ -5657,8 +5657,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if agentEnabled && hasTool(dianaVersionToolName) {
 		builder.WriteString("\n" + promptToolVersion)
 	}
-	if agentEnabled && hasTool(dianaGlossaryToolName) {
-		builder.WriteString("\n" + promptToolGlossary)
+	if agentEnabled && hasTool(dianaNotebookToolName) {
+		builder.WriteString("\n" + promptToolNotebook)
 	}
 	if agentEnabled && hasTool("diana.capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)

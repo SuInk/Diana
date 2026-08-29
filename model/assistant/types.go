@@ -342,9 +342,9 @@ type BotConfig struct {
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
-	// GlossarySharedScopeEnabled 让词典跨群共用一本：新词条写进全局作用域，
+	// NotebookSharedScopeEnabled 让笔记本跨群共用一本：新条目写进全局作用域，
 	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
-	GlossarySharedScopeEnabled   *bool           `json:"glossary_shared_scope_enabled,omitempty"`
+	NotebookSharedScopeEnabled   *bool           `json:"notebook_shared_scope_enabled,omitempty"`
 	PromptInjectTime             *bool           `json:"prompt_inject_time,omitempty"`
 	PromptInjectPlaintextRules   *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
 	PromptInjectGroupSender      *bool           `json:"prompt_inject_group_sender,omitempty"`
@@ -386,8 +386,8 @@ type BotConfig struct {
 	LongTermMemoryEnabled    *bool `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled  *bool `json:"cross_group_memory_enabled,omitempty"`
 	// 词典分词要把整个分词词典常驻内存（约 130MB），所以默认关。开启立即生效
-	// （后台加载词典，期间选词退回 n-gram）；关闭要重启进程才真正生效——
-	// 词典占用的内存本来也只有重启才能归还。
+	// （后台加载笔记本，期间选词退回 n-gram）；关闭要重启进程才真正生效——
+	// 笔记本占用的内存本来也只有重启才能归还。
 	DictSegmentEnabled *bool `json:"dict_segment_enabled,omitempty"`
 	// 语义检索:消息经 embedding 模型转成向量,检索时按余弦相似度召回并与
 	// 词面结果融合。需要 embedding 分组的 LLM 配置档,默认关。
@@ -578,9 +578,9 @@ type ConfigPayload struct {
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
-	// GlossarySharedScopeEnabled 让词典跨群共用一本：新词条写进全局作用域，
+	// NotebookSharedScopeEnabled 让笔记本跨群共用一本：新条目写进全局作用域，
 	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
-	GlossarySharedScopeEnabled   *bool           `json:"glossary_shared_scope_enabled,omitempty"`
+	NotebookSharedScopeEnabled   *bool           `json:"notebook_shared_scope_enabled,omitempty"`
 	ProactiveReplyRouterPrompt   string          `json:"proactive_reply_router_prompt,omitempty"`
 	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
@@ -1078,7 +1078,7 @@ func DefaultBotConfig() BotConfig {
 		LLMIdentityMaskingEnabled:      boolPointer(true),
 		BotReplyLoopDetectionEnabled:   boolPointer(true),
 		ReplyAccountSafetyAuditEnabled: boolPointer(false),
-		GlossarySharedScopeEnabled:     boolPointer(false),
+		NotebookSharedScopeEnabled:     boolPointer(false),
 		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
@@ -1245,8 +1245,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ReplyAccountSafetyAuditEnabled == nil {
 		cfg.ReplyAccountSafetyAuditEnabled = boolPointer(false)
 	}
-	if cfg.GlossarySharedScopeEnabled == nil {
-		cfg.GlossarySharedScopeEnabled = boolPointer(false)
+	if cfg.NotebookSharedScopeEnabled == nil {
+		cfg.NotebookSharedScopeEnabled = boolPointer(false)
 	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
@@ -1420,7 +1420,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ModelRoles:                     normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:   copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyAccountSafetyAuditEnabled: copyBoolPointer(cfg.ReplyAccountSafetyAuditEnabled),
-		GlossarySharedScopeEnabled:     copyBoolPointer(cfg.GlossarySharedScopeEnabled),
+		NotebookSharedScopeEnabled:     copyBoolPointer(cfg.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:     cfg.ProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           cfg.ProactiveReplyPrompt,
 		MaxInputChars:                  cfg.MaxInputChars,
@@ -1558,7 +1558,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ModelRoles:                     normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled:   copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyAccountSafetyAuditEnabled: copyBoolPointer(payload.ReplyAccountSafetyAuditEnabled),
-		GlossarySharedScopeEnabled:     copyBoolPointer(payload.GlossarySharedScopeEnabled),
+		NotebookSharedScopeEnabled:     copyBoolPointer(payload.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:     payload.ProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           payload.ProactiveReplyPrompt,
 		MaxInputChars:                  payload.MaxInputChars,
