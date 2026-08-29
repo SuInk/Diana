@@ -75,6 +75,37 @@ Then open `http://127.0.0.1:18080`. The generated administrator account and pass
 
 Default install directory: `~/.local/share/diana` on Linux/macOS, `%LOCALAPPDATA%\Diana` on Windows.
 
+### One-Click Uninstall
+
+Installations created by the one-click installer include an uninstall tool. By default it removes
+the background service and runtime while preserving `config.yaml`, `data/`, `logs/`, and installer
+backups so a later reinstall can reuse them:
+
+```sh
+diana uninstall
+```
+
+```powershell
+diana uninstall
+```
+
+Use `diana uninstall --purge` to permanently remove all configuration, bot data, and logs.
+The uninstaller asks for confirmation again. If the current shell has not refreshed its PATH,
+run `uninstall.sh` or `uninstall.ps1` directly from the installation directory.
+
+### View Logs from the Terminal
+
+```sh
+diana logs                 # Last 100 lines
+diana logs --lines 300     # Select the line count
+diana logs -f              # Follow until Ctrl+C
+diana version              # Print the current version
+diana help                 # Show command help
+```
+
+The command reads `storage.log_path` from `config.yaml`. Pass
+`--config /path/to/config.yaml` when using a custom configuration file.
+
 The install script takes its own parameters through environment variables (installer arguments, not application configuration):
 
 ```sh

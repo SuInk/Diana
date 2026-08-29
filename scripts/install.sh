@@ -147,7 +147,7 @@ backup_dir="$install_dir/.installer/backups/$timestamp"
 mkdir -p "$backup_dir/runtime" "$backup_dir/data"
 
 had_previous=false
-for item in "$binary_name" "$package_name" run.sh frontend-next; do
+for item in "$binary_name" "$package_name" run.sh uninstall.sh frontend-next; do
   if [ -e "$install_dir/$item" ]; then
     had_previous=true
     mv "$install_dir/$item" "$backup_dir/runtime/$item"
@@ -163,6 +163,17 @@ done
 
 cp -R "$package_dir/." "$install_dir/"
 chmod +x "$install_dir/run.sh" "$install_dir/$binary_name"
+if [ -f "$install_dir/uninstall.sh" ]; then
+  chmod +x "$install_dir/uninstall.sh"
+fi
+
+command_dir=""
+if [ -f "$install_dir/uninstall.sh" ]; then
+  # 给交互终端一个稳定命令名。~/.local/bin 不在 PATH 时仍创建链接，并在安装结果里提示。
+  command_dir="$HOME/.local/bin"
+  mkdir -p "$command_dir"
+  ln -sfn "$install_dir/$binary_name" "$command_dir/diana"
+fi
 
 # macOS 按代码签名身份记住授权（麦克风、完全磁盘访问、App 管理都挂在上面）。
 # 裸二进制没有签名，每次更新换一份新的 Mach-O，系统就当成一个全新程序：授权重新
@@ -553,7 +564,7 @@ EOF
 restore_previous() {
   [ "$had_previous" = "true" ] || return 0
   stop_service
-  for item in "$binary_name" "$package_name" run.sh frontend-next; do
+  for item in "$binary_name" "$package_name" run.sh uninstall.sh frontend-next; do
     if [ -e "$backup_dir/runtime/$item" ]; then
       rm -rf -- "$install_dir/$item"
       mv "$backup_dir/runtime/$item" "$install_dir/$item"
@@ -624,6 +635,13 @@ else
 fi
 
 printf 'Installed: %s\n' "$install_dir"
+if [ -n "$command_dir" ]; then
+  printf 'Command:   %s\n' "$command_dir/diana"
+  case ":${PATH:-}:" in
+    *":$command_dir:"*) ;;
+    *) printf 'PATH:      add %s to PATH to run `diana` directly.\n' "$command_dir" ;;
+  esac
+fi
 printf 'Backup:    %s\n' "$backup_dir"
 if [ -n "$generated_password" ]; then
   printf 'Username:  %s\n' "$username"
