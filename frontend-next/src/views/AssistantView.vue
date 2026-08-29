@@ -1245,7 +1245,7 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
 
 // 人设库。存的是「它是谁、怎么说话」的四项组合，套用是把它们填进下面的表单——
 // 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
@@ -1440,7 +1440,9 @@ const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence
   gentle: { self_reference: "", sentence_enders: "" },
   lively: { self_reference: "", sentence_enders: "" },
   concise: { self_reference: "", sentence_enders: "" },
-  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" }
+  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" },
+  // 扮演对句尾语气词没有主张：那属于具体角色，不属于这套说话方式。
+  roleplay: { self_reference: "我", sentence_enders: "" }
 };
 
 // 切换风格时把这两个框填上，而不是运行时暗中套用：填进去用户看得见、能改。
@@ -1469,7 +1471,8 @@ const replyStyleOptions: AppSelectOption[] = [
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
   { value: "concise", label: "简洁" },
-  { value: "catgirl", label: "猫娘" }
+  { value: "catgirl", label: "猫娘" },
+  { value: "roleplay", label: "扮演" }
 ];
 
 const responseModeOptions: AppSelectOption[] = [
