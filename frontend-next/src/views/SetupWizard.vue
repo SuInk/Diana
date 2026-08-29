@@ -28,10 +28,10 @@
       </button>
     </div>
 
-    <!-- 第 1 步：LLM -->
+    <!-- 第 1 步：提供商 -->
     <section v-if="step === 0" class="card">
       <div class="card-header">
-        <h2>配置 LLM Provider</h2>
+        <h2>配置提供商</h2>
         <span v-if="llmConfigured" class="badge ok">已配置</span>
       </div>
       <div class="card-body stack">
@@ -220,7 +220,7 @@
         <div class="checklist">
           <div class="checklist-item" :class="llmConfigured ? 'done' : 'todo'">
             <span class="check-icon"><CheckCircle2 :size="15" aria-hidden="true" /></span>
-            <span class="check-main">LLM 已配置<div class="check-hint">{{ llmSummary }}</div></span>
+            <span class="check-main">提供商已配置<div class="check-hint">{{ llmSummary }}</div></span>
           </div>
           <div class="checklist-item" :class="connected ? 'done' : 'todo'">
             <span class="check-icon"><CheckCircle2 :size="15" aria-hidden="true" /></span>
@@ -236,9 +236,9 @@
             <LayoutGrid :size="15" aria-hidden="true" />
             进入总览
           </button>
-          <button class="btn" type="button" @click="navigate('llm')">
+          <button class="btn" type="button" @click="navigate('provider')">
             <MessageCircle :size="15" aria-hidden="true" />
-            去 LLM 配置再测一次
+            去「提供商」再测一次
           </button>
         </div>
       </div>
@@ -282,7 +282,7 @@ import { detectLLMService, llmServicePresets } from "../llm-presets";
 
 const step = ref(0);
 const busy = ref(false);
-const stepLabels = ["配置 LLM", "接入 OneBot v11", "启动验证"];
+const stepLabels = ["配置提供商", "接入 OneBot v11", "启动验证"];
 const SETUP_COMPLETE_KEY = "dqb-next:setup-completed";
 
 function finishSetup(): void {
@@ -450,7 +450,7 @@ async function saveAndTestLLM(): Promise<void> {
     const result = await testLLM(llmTestMessage.value.trim());
     llmConfigured.value = true;
     llmTestResult.value = `连通成功：${result.text.slice(0, 40)}`;
-    toastSuccess("LLM 配置已保存并连通");
+    toastSuccess("提供商配置已保存并连通");
     llmForm.value.api_key = "";
     step.value = 1;
   } catch (error) {

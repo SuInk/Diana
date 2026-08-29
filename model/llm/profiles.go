@@ -34,7 +34,7 @@ type Profile struct {
 	Config      ProviderConfig `json:"config"`
 }
 
-// ProfileSet 是一组 LLM 配置。列表顺序就是全部语义：组内顺序即降级优先级。
+// ProfileSet 是一组提供商配置。列表顺序就是全部语义：组内顺序即降级优先级。
 //
 // 这里以前还有个 ActiveID（界面上的「激活中」）。它同时决定了默认路径用哪个分组、
 // 降级从哪一条起步，而且降级成功后会被写回，于是列表顺序和实际顺序对不上——UI 写

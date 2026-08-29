@@ -8,7 +8,7 @@ export type ViewID =
   | "events"
   | "tasks"
   | "setup"
-  | "llm"
+  | "provider"
   | "bot"
   | "groups"
   | "users"
@@ -47,7 +47,7 @@ export interface NavItem {
 // 插件、群、人这些日常项，事件（含日志）属于出问题时才翻的记录页，放后面。
 export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
-  { id: "llm", label: "LLM 配置", hint: "Provider 与模型管理", group: "setup" },
+  { id: "provider", label: "提供商", hint: "提供商接入、凭据与模型分组", group: "setup" },
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
   { id: "plugins", label: "插件", hint: "插件安装与设置", group: "setup" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "operate" },
@@ -82,12 +82,19 @@ export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   return sections;
 }
 
-const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "llm", "bot", "groups", "users", "notebook", "plugins", "logs", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "plugins", "logs", "settings"]);
+
+// 旧地址仍要认：这一页的路由标识从 llm 改成 provider，而书签、聊天里贴过的链接
+// 和别人截过的图不会跟着改。认不出就掉回总览，用户会以为页面被删了。
+const renamedViews: Record<string, ViewID> = { llm: "provider" };
 
 function parseHash(): ViewID {
   const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0] ?? "";
   if (validViews.has(raw as ViewID)) {
     return raw as ViewID;
+  }
+  if (renamedViews[raw]) {
+    return renamedViews[raw];
   }
   return "dashboard";
 }

@@ -238,7 +238,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingPatch,
 				Label:       "跟评读取受限代码片段",
-				Description: "允许把本轮 PR/Commit 中经过文件数、hunk 数和上下文预算裁剪的 patch 交给 LLM，让跟评能检查具体实现。默认关闭，尤其是私有仓库：开启表示同意将受限代码片段发送给当前 LLM Provider。",
+				Description: "允许把本轮 PR/Commit 中经过文件数、hunk 数和上下文预算裁剪的 patch 交给模型，让跟评能检查具体实现。默认关闭，尤其是私有仓库：开启表示同意将受限代码片段发送给当前 LLM Provider。",
 				Type:        PluginSettingTypeBool,
 				Default:     false,
 			},

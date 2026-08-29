@@ -379,7 +379,7 @@
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
-                <span class="hint">一次调用最多带多少 token 上下文进去。留空按 LLM 配置档的模型窗口，填了只会收紧不会放宽。</span>
+                <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
               </div>
               <div class="field">
                 <label for="bot-context">历史查询条数上限</label>
@@ -416,7 +416,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">语义检索</span>
                 </label>
-                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在 LLM 配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
+                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在提供商配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
@@ -743,7 +743,7 @@
                 <label class="switch">
                   <input v-model="form.owner_llm_config_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改 Provider 和模型</span>
+                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
                 </label>
                 <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
               </div>
@@ -817,12 +817,12 @@
           <section class="card">
             <div class="card-header">
               <h2>模型分配</h2>
-              <span class="card-sub">按用途选择 Provider 与模型；Provider 在「LLM 配置」页管理</span>
+              <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
             </div>
             <div class="card-body stack" style="gap: 12px">
               <div class="model-role-row model-role-head" aria-hidden="true">
                 <span>用途</span>
-                <span>Provider / 分组</span>
+                <span>提供商 / 分组</span>
                 <span>模型</span>
               </div>
               <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
@@ -839,7 +839,7 @@
                 />
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话 Provider 的生图配置。
+                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话提供商的生图配置。
               </p>
             </div>
           </section>
@@ -1569,10 +1569,10 @@ async function updateContextIsolation(enabled: boolean): Promise<void> {
 // —— 模型分配 ——
 type RoleKey = "chat" | "vision" | "intent" | "image";
 const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
-  { key: "chat", label: "对话", fallbackHint: "使用 LLM 配置页的激活配置" },
+  { key: "chat", label: "对话", fallbackHint: "使用「提供商」页的激活配置" },
   { key: "vision", label: "视觉理解", fallbackHint: "跟随对话模型" },
   { key: "intent", label: "意图识别", fallbackHint: "跟随对话模型" },
-  { key: "image", label: "图片生成", fallbackHint: "跟随对话 Provider 的生图模型" }
+  { key: "image", label: "图片生成", fallbackHint: "跟随对话提供商的生图模型" }
 ];
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>>>({});
@@ -1709,8 +1709,8 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   for (const group of channelGroups()) {
     base.push({
       value: GROUP_PREFIX + group.name,
-      label: `${group.name === "default" ? "默认分组" : group.name}（Provider 分组）`,
-      hint: `${group.count} 个 Provider 按顺序降级`
+      label: `${group.name === "default" ? "默认分组" : group.name}（提供商分组）`,
+      hint: `${group.count} 个提供商按顺序降级`
     });
   }
   for (const channel of llmChannels.value) {
@@ -1796,7 +1796,7 @@ function modelOptionsFor(role: RoleKey): AppSelectOption[] {
         model,
         compatibility,
         profiles.length > 1
-          ? `${providers.length}/${profiles.length} 个 Provider 将参与路由：${providers.join("、")}`
+          ? `${providers.length}/${profiles.length} 个提供商将参与路由：${providers.join("、")}`
           : (model.owned_by || undefined)
       )
     });
@@ -2079,7 +2079,7 @@ async function save(): Promise<void> {
       return;
     }
 		if (!role.provider_id && !role.model_id && !roleModelIsSelectable(row.key, role.model.trim())) {
-      toastError(`${row.label}模型 ${role.model.trim()} 与当前 Provider 配置不兼容，请重新选择`);
+      toastError(`${row.label}模型 ${role.model.trim()} 与当前提供商配置不兼容，请重新选择`);
       return;
     }
   }

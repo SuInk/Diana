@@ -5,8 +5,8 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>LLM 配置</h1>
-        <p>管理 Provider、凭据、分组与可用模型；机器人按用途选择 Provider 和模型</p>
+        <h1>提供商</h1>
+        <p>管理提供商、凭据、分组与可用模型；机器人按用途选择提供商和模型</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" @click="exportProfiles">
@@ -37,7 +37,7 @@
             <div class="group-header">
               <span>{{ groupLabel(section.group) }}</span>
               <span class="muted" style="font-size: 12px">
-                {{ section.items.length }} 个 Provider · {{ sectionModelCount(section.items) }} 个模型 · 顺序即降级优先级
+                {{ section.items.length }} 个提供商 · {{ sectionModelCount(section.items) }} 个模型 · 顺序即降级优先级
               </span>
             </div>
             <div class="row-list">
@@ -87,7 +87,7 @@
             </div>
             </div>
           </div>
-          <EmptyState v-if="profiles.length === 0" title="还没有 LLM 配置" hint="点击右上角「新建配置」开始" />
+          <EmptyState v-if="profiles.length === 0" title="还没有配置档" hint="点击右上角「新建配置」开始" />
         </div>
       </section>
 
@@ -804,7 +804,7 @@ async function remove(profile: LLMConfig): Promise<void> {
     return;
   }
   const ok = await askConfirm({
-    title: "删除 LLM 配置",
+    title: "删除配置档",
     message: `确定删除「${profile.name || profile.model}」吗？此操作不可撤销。`,
     confirmLabel: "删除",
     danger: true
@@ -838,7 +838,7 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
     }
     modelOptions.value = merged;
     if (result.models.length === 0) {
-      toastError("该 Provider 未返回模型列表");
+      toastError("该提供商未返回模型列表");
       return false;
     } else {
       if (selectFirst && !form.value.model.trim()) {
