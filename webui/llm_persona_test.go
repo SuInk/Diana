@@ -72,7 +72,6 @@ func TestPersonaGenerateReturnsPersona(t *testing.T) {
 func TestPersonaGenerateUsesRequestedChatProfile(t *testing.T) {
 	store := NewMemoryLLMProfileStore(llm.ProviderConfig{})
 	if err := store.SaveProfiles(llm.ProfileSet{
-		ActiveID: "image-p",
 		Profiles: []llm.Profile{
 			{ID: "chat-p", Name: "对话", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-default", Models: []llm.ModelInfo{{ID: "chat-default"}, {ID: "chat-selected"}}}},
 			{ID: "image-p", Name: "生图", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-image-2"}},
@@ -97,7 +96,6 @@ func TestPersonaGenerateUsesRequestedChatProfile(t *testing.T) {
 
 func TestPersonaGenerateNeverFallsBackToActiveImageProfile(t *testing.T) {
 	set := llm.ProfileSet{
-		ActiveID: "image-p",
 		Profiles: []llm.Profile{
 			{ID: "chat-p", Name: "对话", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-model"}},
 			{ID: "image-p", Name: "生图", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-image-2"}},

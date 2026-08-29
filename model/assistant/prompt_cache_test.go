@@ -31,6 +31,35 @@ func TestCoarseRelativeTimingIsStableAcrossNearbyTurns(t *testing.T) {
 	}
 }
 
+func TestAgentVideoHistoryLineCarriesCachedFrameDescriptions(t *testing.T) {
+	event := MessageEvent{
+		Time:       1000,
+		SenderName: "轩诺",
+		MessageID:  "video-message-1",
+		Segments: []MessageSegment{
+			{Type: "video", Data: map[string]string{"file": "clip.mp4"}},
+			{Type: "image", Data: map[string]string{"source_type": "video_frame"}},
+		},
+	}
+
+	text := agentImageHistoryPromptTextWithDescriptions(event, 1120, []string{"视频关键帧1摘要=桌面上放着一台笔记本电脑"})
+	for _, want := range []string{
+		"message_id=video-message-1",
+		"video_count=1",
+		"video_frame_count=1",
+		"audio_count=0",
+		"file_count=0",
+		"视频关键帧1摘要=桌面上放着一台笔记本电脑",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("video history line missing %q: %q", want, text)
+		}
+	}
+	if !strings.Contains(text, dianaHistoryImagesToolName) {
+		t.Fatalf("video history must advertise the historical media tool: %q", text)
+	}
+}
+
 func TestAgentImageHistoryLineCarriesCachedDescriptions(t *testing.T) {
 	event := MessageEvent{
 		Time:       1000,
@@ -42,7 +71,7 @@ func TestAgentImageHistoryLineCarriesCachedDescriptions(t *testing.T) {
 	}
 
 	bare := agentImageHistoryPromptTextWithDescriptions(event, 1120, nil)
-	if !strings.Contains(bare, "message_id=image-message-1；image_count=1；当前未附加原图") {
+	if !strings.Contains(bare, "message_id=image-message-1；image_count=1；video_count=0；video_frame_count=0；audio_count=0；file_count=0；当前未附加原图、视频帧或其他媒体原件") {
 		t.Fatalf("bare line = %q", bare)
 	}
 	if strings.Contains(bare, "报纸与干花") || !strings.Contains(bare, dianaHistoryImagesToolName) {
@@ -55,6 +84,40 @@ func TestAgentImageHistoryLineCarriesCachedDescriptions(t *testing.T) {
 	}
 	if !strings.Contains(described, "图片1摘要=报纸与干花拼贴的二次元人物") {
 		t.Fatalf("described line = %q", described)
+	}
+}
+
+func TestAgentHistoryLineCarriesVoiceAndSupportedFileDescriptions(t *testing.T) {
+	event := MessageEvent{
+		MessageID: "media-message-1",
+		Segments: []MessageSegment{
+			{Type: "record", Data: map[string]string{voiceSTTTranscriptKey: "明天下午三点开会"}},
+			{Type: "file", Data: map[string]string{"name": "会议纪要.pdf"}},
+			{Type: "file", Data: map[string]string{"name": "数据.csv", "summary": "本月订单共 42 条"}},
+		},
+	}
+	descriptions := historicalNonImageMediaDescriptions(event.Segments)
+	text := agentImageHistoryPromptTextWithDescriptions(event, 0, descriptions)
+	for _, want := range []string{
+		"audio_count=1",
+		"file_count=2",
+		"语音1转写=明天下午三点开会",
+		"文件1摘要=文件名：会议纪要.pdf；格式：pdf；正文尚未解析",
+		"文件2摘要=文件名：数据.csv；格式：csv；内容摘要：本月订单共 42 条",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("history media line missing %q: %q", want, text)
+		}
+	}
+}
+
+func TestEverySupportedFileFormatGetsHistoryMetadataDescription(t *testing.T) {
+	for extension := range supportedFileExts {
+		name := "fixture" + extension
+		lines := historicalNonImageMediaDescriptions([]MessageSegment{{Type: "file", Data: map[string]string{"name": name}}})
+		if len(lines) != 1 || !strings.Contains(lines[0], "文件名："+name) || !strings.Contains(lines[0], "正文尚未解析") {
+			t.Fatalf("supported file %q description = %#v", extension, lines)
+		}
 	}
 }
 

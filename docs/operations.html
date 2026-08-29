@@ -23,6 +23,7 @@
           <article><h3>控制台 Release 更新</h3><p>后端执行完整 Release 流程，探活失败时恢复旧版本。仅显示按钮而无后端更新器的旧版不能自更新。</p></article>
           <article><h3>Docker / 源码</h3><p>容器由编排系统重建；源码 checkout 重新构建前后端。两者都不在运行进程内替换裸二进制。</p></article>
         </div>
+        <div class="callout"><strong>下载加速</strong><p>直连 GitHub 拉不动时，「版本与更新」里可以选一条公共加速线路：<em>自动</em>会实测直连和各条镜像后挑一条（直连可用就优先直连），也可以固定选一条或强制直连。加速只用于安装包本身——校验清单始终优先直连，版本检查走 GitHub API 不经过镜像，安装前仍然逐字节核对 SHA-256。任何一条线路失败都会自动回落直连。</p></div>
         <pre><code># 一键安装的升级命令与首次安装相同
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
         <div class="callout warn"><strong>更新前</strong><p>确认数据目录和备份目录有足够空间。数据库正在高频写入时，备份需同时保留 WAL/SHM，或先通过应用提供的备份流程生成一致快照。</p></div>

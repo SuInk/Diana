@@ -618,7 +618,7 @@ func (t *dianaChatHistoryTool) items(ctx context.Context, events []MessageEvent)
 		if item.QuotedImageCount > 0 && event.Quoted != nil {
 			item.QuotedImageDescriptions = t.runtime.historyImageCachedSegmentDescriptions(ctx, event.Quoted.Segments)
 		}
-		t.runtime.enqueueHistoryImageDescriptions(event)
+		t.runtime.enqueueHistoryImageDescriptionsNow(event)
 		items = append(items, item)
 	}
 	return items

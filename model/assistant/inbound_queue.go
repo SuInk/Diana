@@ -86,6 +86,9 @@ type InboundEventStore interface {
 // InboundMediaTurnStore atomically assigns adjacent media to a textual turn
 // and exposes the supersession marker to the final outbound send guard.
 type InboundMediaTurnStore interface {
+	// PeekInboundMediaForTurn 只看不动：认领是不可逆的，得先判完「这句话到底
+	// 在指谁」再决定要不要认领。
+	PeekInboundMediaForTurn(ctx context.Context, currentID, session string, event MessageEvent, window time.Duration) ([]MessageEvent, error)
 	ClaimInboundMediaForTurn(ctx context.Context, currentID, session string, event MessageEvent, window time.Duration) ([]MessageEvent, error)
 	InboundEventSuperseded(ctx context.Context, event MessageEvent) (string, bool, error)
 }
@@ -456,15 +459,31 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	mediaTurnStore, _ := r.inboundStore.(InboundMediaTurnStore)
 	r.mu.RUnlock()
 	if mediaTurnStore != nil && !EventHasDirectMediaReference(event) {
-		claimCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		sources, err := mediaTurnStore.ClaimInboundMediaForTurn(claimCtx, item.ID, item.Session, event, InboundMediaMergeWindow)
-		cancel()
+		// 先看有哪些相邻媒体，别急着认领——认领会把媒体自己的任务当场注销，
+		// 判错了收不回来。
+		peekCtx, cancelPeek := context.WithTimeout(ctx, 3*time.Second)
+		candidates, err := mediaTurnStore.PeekInboundMediaForTurn(peekCtx, item.ID, item.Session, event, InboundMediaMergeWindow)
+		cancelPeek()
 		if err != nil {
-			return "", fmt.Errorf("claim inbound media turn: %w", err)
+			return "", fmt.Errorf("peek inbound media turn: %w", err)
 		}
-		if len(sources) > 0 {
-			event = attachInboundTurnMedia(event, sources)
-			r.recordInboundMediaTurn(ctx, item.ID, event, sources)
+		if len(candidates) > 0 {
+			outcome := r.shouldMergeAdjacentMedia(ctx, event, inboundEventPlainText(event), candidates)
+			if outcome.Merge {
+				claimCtx, cancelClaim := context.WithTimeout(ctx, 3*time.Second)
+				sources, claimErr := mediaTurnStore.ClaimInboundMediaForTurn(claimCtx, item.ID, item.Session, event, InboundMediaMergeWindow)
+				cancelClaim()
+				if claimErr != nil {
+					return "", fmt.Errorf("claim inbound media turn: %w", claimErr)
+				}
+				if len(sources) > 0 {
+					event = attachInboundTurnMedia(event, sources)
+					r.recordInboundMediaTurn(ctx, item.ID, event, sources)
+					r.recordInboundMediaReference(ctx, item.ID, event, sources, outcome)
+				}
+			} else {
+				r.recordInboundMediaReference(ctx, item.ID, event, candidates, outcome)
+			}
 		}
 	}
 	// Transcription happens in the durable worker, never on the OneBot ingest
@@ -526,6 +545,21 @@ func EventHasDirectMediaReference(event MessageEvent) bool {
 
 // EventIsMergeableMediaOnly reports media messages that have no independent
 // textual intent and therefore benefit from the short turn-assembly hold.
+// inboundEventPlainText 取这条事件的纯文本，用来判断它在指谁。
+func inboundEventPlainText(event MessageEvent) string {
+	var builder strings.Builder
+	for _, segment := range event.Segments {
+		if segment.Type != "text" {
+			continue
+		}
+		builder.WriteString(segment.Data["text"])
+	}
+	if text := strings.TrimSpace(builder.String()); text != "" {
+		return text
+	}
+	return strings.TrimSpace(event.RawMessage)
+}
+
 func EventIsMergeableMediaOnly(event MessageEvent) bool {
 	hasMedia := false
 	for _, segment := range event.Segments {

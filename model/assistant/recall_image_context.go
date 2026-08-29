@@ -31,7 +31,22 @@ const (
 	historyImageDescriptionTimeout      = 90 * time.Second
 	historyImageDescriptionRetryBackoff = 10 * time.Minute
 	historyImageDescriptionIdlePoll     = 250 * time.Millisecond
+	// historyImageDescriptionMaxAge 限定「自动补描述」的时间窗。
+	//
+	// 库里有近两万条带图消息，识图是单并发、每张最多等 90 秒。真要顺着回填
+	// 补完，按每张 5 秒算是 26 小时，按超时算是 19 天——而且补的是没人再提起
+	// 的老图。窗口之外的图不自动补，等真被引用时再补。
+	historyImageDescriptionMaxAge = 24 * time.Hour
 )
+
+// withinHistoryImageDescriptionWindow 判断这条消息是否新到值得自动补描述。
+// 没有时间戳的合成事件当作当前消息处理，不因为缺字段被挡掉。
+func withinHistoryImageDescriptionWindow(event MessageEvent, now time.Time) bool {
+	if event.Time <= 0 {
+		return true
+	}
+	return now.Sub(time.Unix(event.Time, 0)) <= historyImageDescriptionMaxAge
+}
 
 type recallImagePosition struct {
 	eventIndex   int
@@ -106,6 +121,10 @@ func recallImageFactLines(segments []MessageSegment) []string {
 
 func recallStillImageSegment(segment MessageSegment) bool {
 	return segment.Type == "image" && strings.TrimSpace(segment.Data["source_type"]) != "video_frame"
+}
+
+func historyDescribableImageSegment(segment MessageSegment) bool {
+	return segment.Type == "image"
 }
 
 func cloneRecallEvents(events []MessageEvent) []MessageEvent {
@@ -234,12 +253,23 @@ func (r *Runtime) recallImageDescriptionStore() ImageDescriptionStore {
 // messages and the bounded pending set prevents image bursts from creating an
 // unbounded background workload.
 func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
+	// 自动路径只补近期图片。重连回填会把很久以前的消息重放一遍，每条都排一次
+	// 识图，等于拿单并发去补一整个库——按当前速度是几十小时起步，而这些老图
+	// 绝大多数没人再提起。真被引用时会走 enqueueHistoryImageDescriptionsNow。
+	if !withinHistoryImageDescriptionWindow(event, time.Now()) {
+		return
+	}
+	r.enqueueHistoryImageDescriptionsNow(event)
+}
+
+// enqueueHistoryImageDescriptionsNow 不看时间，用于用户/模型真的在读这张图的路径。
+func (r *Runtime) enqueueHistoryImageDescriptionsNow(event MessageEvent) {
 	if r == nil || r.recallImageDescriptionStore() == nil {
 		return
 	}
 	for _, sourceEvent := range historyImageDescriptionEvents(event) {
 		for _, segment := range sourceEvent.Segments {
-			if !recallStillImageSegment(segment) || strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
+			if !historyDescribableImageSegment(segment) || strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
 				continue
 			}
 			if strings.TrimSpace(segment.Data[recallImageDescriptionKey]) != "" {
@@ -249,14 +279,15 @@ func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
 			if !ok {
 				continue
 			}
-			source := firstImageSource(segment)
-			if source == "" || !r.reserveHistoryImageDescription(hash) {
+			// 排队的任务不能攥着图片本体：单并发下 31 个任务纯粹在等，却各自
+			// 钉住一整条消息。削成「哈希 + 本地路径」再入队（见 history_image_queue.go）。
+			source, retained := queuedImageSourceRetained(segment)
+			if !retained || !r.reserveHistoryImageDescription(hash) {
 				continue
 			}
-			jobEvent := sourceEvent
-			jobEvent.Segments = []MessageSegment{segment}
-			jobEvent.Quoted = nil
-			go r.runHistoryImageDescription(jobEvent, sourceEvent, hash, source)
+			jobEvent := historyImageDescriptionQueueEvent(sourceEvent)
+			jobEvent.Segments = []MessageSegment{stripImageSegmentForQueue(segment)}
+			go r.runHistoryImageDescription(jobEvent, historyImageDescriptionQueueEvent(sourceEvent), hash, source)
 		}
 	}
 }
@@ -368,7 +399,7 @@ func (r *Runtime) runHistoryImageDescription(event, indexEvent MessageEvent, has
 	}
 	r.historyImageDescMu.Unlock()
 	if errors.Is(err, context.Canceled) && (runtimeCtx == nil || runtimeCtx.Err() == nil) {
-		time.AfterFunc(historyImageDescriptionIdlePoll, func() { r.enqueueHistoryImageDescriptions(event) })
+		time.AfterFunc(historyImageDescriptionIdlePoll, func() { r.enqueueHistoryImageDescriptionsNow(event) })
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("chatbot history image description failed: message_id=%s err=%v", event.MessageID, err)
@@ -695,15 +726,24 @@ func (r *Runtime) describeMissingRecallImages(ctx context.Context, event Message
 }
 
 func (r *Runtime) describeRecallImage(ctx context.Context, event MessageEvent, source string) (string, error) {
+	const instruction = "请为这张图片生成可复用的客观中文描述。说明主要人物、物体、场景、界面结构，并完整记录清晰可辨的文字、数字和关键细节。不要回答任何聊天问题，不要推测看不清的内容，不要使用 Markdown，控制在1200字以内。"
+	return r.describeCachedImage(ctx, event, source, "你是 Diana 的图片内容缓存子代理。输出将作为后续聊天和撤回记录的可靠视觉事实。", instruction, "image_description_cache", 1200)
+}
+
+func (r *Runtime) describeStickerImage(ctx context.Context, event MessageEvent, source string) (string, error) {
+	const instruction = "请为这张聊天表情包生成简短中文简介。重点说明发送者借这张图表达的潜台词、复合情绪、说话视角、典型触发场景和清晰可辨的原始文字，而不是只描述构图或画风。不要回答当前聊天问题，不要使用 Markdown，控制在180字以内。"
+	return r.describeCachedImage(ctx, event, source, "你是 Diana 的表情包语义标注器。简介用于按聊天语境检索合适表情，不能编造看不清的文字、角色或梗来源。", instruction, "sticker_description", 400)
+}
+
+func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, source, system, instruction, purpose string, maxOutputTokens int64) (string, error) {
 	readyImages := llmReadyImageURLs(ctx, []string{source})
 	if len(readyImages) == 0 || !strings.HasPrefix(readyImages[0], "data:image/") {
 		return "", fmt.Errorf("cached image is unavailable")
 	}
-	const instruction = "请为这张图片生成可复用的客观中文描述。说明主要人物、物体、场景、界面结构，并完整记录清晰可辨的文字、数字和关键细节。不要回答任何聊天问题，不要推测看不清的内容，不要使用 Markdown，控制在1200字以内。"
 	request := llm.GenerateRequest{
-		MaxOutputTokens: 1200,
+		MaxOutputTokens: maxOutputTokens,
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: "你是 Diana 的图片内容缓存子代理。输出将作为后续聊天和撤回记录的可靠视觉事实。"},
+			{Role: llm.RoleSystem, Content: system},
 			{
 				Role:    llm.RoleUser,
 				Content: instruction,
@@ -714,7 +754,7 @@ func (r *Runtime) describeRecallImage(ctx context.Context, event MessageEvent, s
 			},
 		},
 	}
-	callCtx := withLLMUsagePurpose(withLLMUsageContext(r.withIdentityPrivacyContext(ctx, event, nil), event), "image_description_cache")
+	callCtx := withLLMUsagePurpose(withLLMUsageContext(r.withIdentityPrivacyContext(ctx, event, nil), event), purpose)
 	return r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
 		response, err := client.Generate(callCtx, request)
 		if err != nil {

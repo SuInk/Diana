@@ -60,6 +60,33 @@
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
+      <!-- 国内直连 GitHub 常常卡在几十 KB/s，这里挑一条快的下载线路。 -->
+      <div v-if="releaseSelfUpdate && !sourceBuild" class="mirror-bar">
+        <label class="mirror-field">
+          <span>下载加速</span>
+          <select v-model="mirrorMode" :disabled="savingPolicy" @change="persistPolicy('mirror')">
+            <option value="auto">自动（实测挑最快的线路）</option>
+            <option value="direct">直连 GitHub</option>
+            <option v-for="mirror in mirrors" :key="mirror.base_url" :value="mirror.base_url">{{ mirror.name }}</option>
+          </select>
+        </label>
+        <button class="btn ghost small" type="button" :disabled="testingMirrors" @click="runMirrorTest">
+          <RefreshCw :size="14" aria-hidden="true" />
+          {{ testingMirrors ? "测速中…" : "测速" }}
+        </button>
+        <p class="mirror-hint">测速会真的拉一段安装包下来算速率（只测握手最快的几条），握手快不代表下载快；直连够快就直接走直连。加速只用于下载安装包，校验清单始终直连，安装前都要对上 SHA-256。</p>
+        <ul v-if="mirrorProbe.length" class="mirror-results">
+          <li v-for="result in mirrorProbe" :key="result.name" :class="{ ok: result.ok }">
+            <span class="mirror-name">{{ result.name }}</span>
+            <template v-if="result.ok">
+              <span v-if="result.speed_kbps" class="mono mirror-speed">{{ formatSpeed(result.speed_kbps) }}</span>
+              <span class="mono mirror-latency">{{ result.latency_ms }} ms</span>
+            </template>
+            <span v-else class="mirror-error">{{ result.error || "不可用" }}</span>
+          </li>
+        </ul>
+      </div>
+
       <!-- 开关在左，操作按钮靠右，窄屏自动换行。 -->
       <div class="update-bar">
         <template v-if="releaseSelfUpdate && !sourceBuild">
@@ -249,10 +276,14 @@ import {
   getSystemVersion,
   getUpdateStatus,
   installDownloadedSystemUpdate,
+  getUpdateMirrors,
   pullFromGitHub,
   rollbackSystem,
   saveUpdatePolicy,
+  testUpdateMirrors,
   type ChangelogEntry,
+  type GitHubMirror,
+  type GitHubMirrorProbe,
   type ReleaseEntry,
   type SystemVersion,
   type UpdateCheckResponse,
@@ -278,7 +309,10 @@ const checkError = ref("");
 const checking = ref(false);
 const updating = ref(false);
 const savingPolicy = ref(false);
-const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false });
+const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false, github_mirror: "auto" });
+const mirrors = ref<GitHubMirror[]>([]);
+const mirrorProbe = ref<GitHubMirrorProbe[]>([]);
+const testingMirrors = ref(false);
 const operationError = ref("");
 let statusPollTimer: number | undefined;
 const installTracking = ref(false);
@@ -460,18 +494,58 @@ async function check(notify = true): Promise<void> {
   }
 }
 
-async function persistPolicy(changed: "download" | "install"): Promise<void> {
+// mirrorMode 单独包一层：后端允许空值（按 auto 处理），下拉框需要一个确定的值。
+const mirrorMode = computed({
+  get: () => policy.value.github_mirror || "auto",
+  set: (value: string) => { policy.value.github_mirror = value; }
+});
+
+async function persistPolicy(changed: "download" | "install" | "mirror"): Promise<void> {
   if (changed === "install" && policy.value.auto_install) policy.value.auto_download = true;
   if (changed === "download" && !policy.value.auto_download) policy.value.auto_install = false;
   savingPolicy.value = true;
   try {
     policy.value = await saveUpdatePolicy(policy.value);
-    toastSuccess("自动更新设置已保存");
+    toastSuccess(changed === "mirror" ? "下载加速设置已保存" : "自动更新设置已保存");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存自动更新设置失败");
     await check(false);
   } finally {
     savingPolicy.value = false;
+  }
+}
+
+async function loadMirrors(): Promise<void> {
+  try {
+    const status = await getUpdateMirrors();
+    mirrors.value = status.mirrors ?? [];
+    mirrorProbe.value = status.last_probe ?? [];
+    if (status.mode) policy.value.github_mirror = status.mode;
+  } catch {
+    // 线路列表拿不到不影响更新本身，界面退回只有「自动 / 直连」两项。
+    mirrors.value = [];
+  }
+}
+
+// formatSpeed 把后端的 KiB/s 显示成人能读的速率。0 表示样本太小没测出速度，
+// 那种情况下模板不会走到这里，只显示握手耗时。
+function formatSpeed(kbps: number): string {
+  if (kbps >= 1024) return `${(kbps / 1024).toFixed(1)} MB/s`;
+  return `${kbps} KB/s`;
+}
+
+async function runMirrorTest(): Promise<void> {
+  testingMirrors.value = true;
+  try {
+    const status = await testUpdateMirrors();
+    mirrorProbe.value = status.last_probe ?? [];
+    mirrors.value = status.mirrors ?? mirrors.value;
+    const usable = mirrorProbe.value.filter((item) => item.ok).length;
+    toastSuccess(usable > 0 ? `实测完成，${usable} 条线路可用` : "实测完成，暂时没有可用线路");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "线路测速失败");
+  } finally {
+    testingMirrors.value = false;
   }
 }
 
@@ -742,6 +816,7 @@ async function copyImageTag(tag: string): Promise<void> {
 onMounted(() => {
   void load();
   void check(false);
+  void loadMirrors();
   window.addEventListener("resize", measureNoteOverflow);
   statusPollTimer = window.setInterval(() => {
     if (installTracking.value) {
@@ -871,6 +946,82 @@ a.version-hero-integrity:hover {
 
 .update-hint svg {
   flex: 0 0 auto;
+}
+
+.mirror-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.mirror-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mirror-field select {
+  max-width: 260px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.mirror-hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mirror-results {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.mirror-results li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.mirror-results li.ok {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text);
+}
+
+/* 速度是这里真正要看的数字，握手耗时只是旁证，压暗一档避免抢读。 */
+.mirror-speed {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.mirror-latency {
+  color: var(--text-muted);
+}
+
+.mirror-error {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .policy-toggle {

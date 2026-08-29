@@ -350,7 +350,7 @@ func (r *Runtime) semanticReferenceCandidates(ctx context.Context, event Message
 // 都先问「有没有值得解析的历史媒体」，纯文字会话零额外调用。
 //
 // agent 模式则完全不再跑路由器：窗口外媒体改由 durableMediaIndex 以文字索引进
-// 提示词，模型自己判断要不要用 diana.history_images 取原图。索引是可缓存的静态
+// 提示词，模型自己判断要不要用 diana.history_media 取历史媒体。索引是可缓存的静态
 // 文本，比每条消息一次路由调用便宜，而且模型手里有描述，比路由器按时间顺序猜
 // 更准。工具被关系等级挡掉时没有取图手段，仍然回退到路由器。
 func (r *Runtime) shouldResolveSemanticReference(ctx context.Context, cfg BotConfig, event MessageEvent, agentCanFetchMedia bool) bool {

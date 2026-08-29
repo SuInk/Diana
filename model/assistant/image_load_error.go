@@ -29,8 +29,11 @@ func (e *imageMediaUnavailableError) Error() string {
 	return fmt.Sprintf("%s: %d image(s): %v", errImageMediaUnavailable, e.count, e.cause)
 }
 
-func (e *imageMediaUnavailableError) Unwrap() error {
-	return errImageMediaUnavailable
+func (e *imageMediaUnavailableError) Unwrap() []error {
+	if e == nil || e.cause == nil {
+		return []error{errImageMediaUnavailable}
+	}
+	return []error{errImageMediaUnavailable, e.cause}
 }
 
 func newImageMediaUnavailableError(failures []error) error {
@@ -85,7 +88,7 @@ func (r *Runtime) prepareEventImages(ctx context.Context, event MessageEvent) Me
 
 // prepareCurrentEventImages keeps the current upload strict while leaving
 // quoted historical media lazy. Agent mode can then inspect the quoted source
-// through diana.history_images without a stale quote breaking the whole turn.
+// through diana.history_media without a stale quote breaking the whole turn.
 func (r *Runtime) prepareCurrentEventImages(ctx context.Context, event MessageEvent) MessageEvent {
 	quoted := event.Quoted
 	event.Quoted = nil

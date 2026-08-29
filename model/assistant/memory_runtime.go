@@ -295,14 +295,18 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	threadKey := ThreadMemoryKey(job.Payload.Session)
 	currentThread := ""
 	if items, threadErr := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
-		Session:       job.Payload.Session,
-		Now:           time.Now(),
-		MaxCandidates: 4,
-		Kinds:         []MemoryKind{MemoryKindThread},
+		Session:            job.Payload.Session,
+		Now:                time.Now(),
+		MaxCandidates:      4,
+		Kinds:              []MemoryKind{MemoryKindThread},
+		CurrentSessionOnly: true,
 	}); threadErr == nil {
+		// 同样不按 key 精确比较——理由见 sessionThreadNote。这里对不上的代价更
+		// 隐蔽：currentThread 恒为空，模型每轮都以为「还没有便签」，于是从零重
+		// 写一条只覆盖这一批事件的状态，增量更新从来没真正发生过。
 		for _, item := range items {
-			if item.Key == threadKey {
-				currentThread = strings.TrimSpace(item.Content)
+			if content := strings.TrimSpace(item.Content); content != "" {
+				currentThread = content
 				break
 			}
 		}
@@ -598,7 +602,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
-		profiles, roleErr := r.roleBoundProfiles(set, llm.GroupIntent)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -614,12 +618,6 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			if profiles := llmProfilesInGroup(set, group); len(profiles) > 0 {
 				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
-		}
-		r.mu.RLock()
-		roles := normalizeModelRoles(r.cfg.ModelRoles)
-		r.mu.RUnlock()
-		if profiles := activeProfileForGroup(set, roles, llm.GroupIntent, llm.GroupIntent); len(profiles) > 0 {
-			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 		}
 		if profiles := llmProfilesInGroup(set, llm.GroupChat); len(profiles) > 0 {
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)

@@ -1243,7 +1243,6 @@ func TestMessageHistoryPluginHandlesRecallBeforeCachedMessage(t *testing.T) {
 func TestDianaConfigToolReturnsRedactedBotConfigAndSkills(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
-			ActiveID: "profile-1",
 			Profiles: []llm.Profile{{
 				ID:   "profile-1",
 				Name: "主配置",
@@ -1852,12 +1851,15 @@ func TestRuntimeLongPrivateReplyUsesForwardMessage(t *testing.T) {
 	}
 }
 
-// TestRuntimeOwnerCommandsSwitchProfilesAndClearHistory 验证对应功能场景。
-func TestRuntimeOwnerCommandsSwitchProfilesAndClearHistory(t *testing.T) {
+// TestRuntimeOwnerCommandsListProfilesAndClearHistory 验证 owner 命令。
+//
+// 原来这里还测「lllm 当前」和「lllm 切换」。它们跟着「激活配置」一起去掉了：没有
+// 激活项之后，「当前用哪个」由本次调用的用途和分组顺序决定，不是一个能被切换的
+// 全局状态。
+func TestRuntimeOwnerCommandsListProfilesAndClearHistory(t *testing.T) {
 	reminders := &stubReminderStore{}
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
-			ActiveID: "a",
 			Profiles: []llm.Profile{
 				{ID: "a", Name: "主配置", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "example-chat-model"}},
 				{ID: "b", Name: "备用配置", Config: llm.ProviderConfig{Provider: llm.ProviderAnthropic, Model: "claude-sonnet-4-5"}},
@@ -1867,17 +1869,13 @@ func TestRuntimeOwnerCommandsSwitchProfilesAndClearHistory(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, reminders, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
 
-	reply, handled := runtime.handleOwnerCommand(event, "lllm 当前")
-	if !handled || reply == "" || !strings.Contains(reply, "主配置") {
+	reply, handled := runtime.handleOwnerCommand(event, "lllm 列表")
+	if !handled || !strings.Contains(reply, "主配置") || !strings.Contains(reply, "备用配置") {
 		t.Fatalf("reply=%q handled=%v", reply, handled)
 	}
-
-	reply, handled = runtime.handleOwnerCommand(event, "lllm 切换 备用配置")
-	if !handled || !strings.Contains(reply, "备用配置") {
-		t.Fatalf("reply=%q handled=%v", reply, handled)
-	}
-	if store.set.ActiveID != "b" {
-		t.Fatalf("ActiveID = %q, want b", store.set.ActiveID)
+	// 列表按配置集原顺序输出：组内顺序就是降级顺序，排过序会把这个含义抹掉。
+	if strings.Index(reply, "主配置") > strings.Index(reply, "备用配置") {
+		t.Fatalf("列表没有按配置集顺序输出: %q", reply)
 	}
 
 	runtime.history[sessionKey(event)] = []MessageEvent{{MessageID: "1"}}
@@ -1927,7 +1925,6 @@ func TestRuntimeModelDiscussionNeverMutatesLLMConfigBeforeReply(t *testing.T) {
 			channel := &recordingChannel{}
 			provider := &capturingLLMProvider{reply: "这是模型相关讨论，不会修改 Diana 配置。"}
 			store := &stubLLMProfileStore{set: llm.ProfileSet{
-				ActiveID: "main",
 				Profiles: []llm.Profile{{
 					ID:   "main",
 					Name: "主配置",
@@ -2339,7 +2336,7 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"action":"tool","tool":"diana.history_images","input":{"message_ids":["img-1","img-2","img-3"]}}`,
+		`{"action":"tool","tool":"diana.history_media","input":{"message_ids":["img-1","img-2","img-3"]}}`,
 		`{"action":"final","content":"三张图片都已读取。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -2960,7 +2957,6 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	channel := &recordingChannel{}
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
-			ActiveID: "main",
 			Profiles: []llm.Profile{
 				{ID: "main", Name: "主聊天", Group: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "main-key", Model: "main-model"}},
 				{ID: "routing", Name: "快速语义判定", Group: "routing", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "routing-key", Model: "routing-model"}},
@@ -3013,9 +3009,6 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 		if attemptsSnapshot[i] != wantAttempts[i] {
 			t.Fatalf("attempts = %#v, want %#v", attemptsSnapshot, wantAttempts)
 		}
-	}
-	if store.set.ActiveID != "main" {
-		t.Fatalf("active profile = %q, want main", store.set.ActiveID)
 	}
 }
 
@@ -3402,8 +3395,10 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool {
 		return len(channel.callsSnapshot()) == 1
 	})
-	if got := llmCalls.Load(); got != 0 {
-		t.Fatalf("llm calls = %d, want 0", got)
+	// 卡片过账号安全审核那一次（见 outbound_forward_gate.go）。
+	// 链接解析本身仍旧不喊模型生成回复——这里数到的 1 次是审核，不是回复。
+	if got := llmCalls.Load(); got != 1 {
+		t.Fatalf("llm calls = %d, want 1 (forward safety audit)", got)
 	}
 	sent := channel.sentSnapshot()
 	if len(sent) != 0 {
@@ -3481,8 +3476,10 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool {
 		return len(channel.callsSnapshot()) == 1
 	})
-	if got := llmCalls.Load(); got != 0 {
-		t.Fatalf("llm calls = %d, want 0", got)
+	// 卡片过账号安全审核那一次（见 outbound_forward_gate.go）。
+	// 链接解析本身仍旧不喊模型生成回复——这里数到的 1 次是审核，不是回复。
+	if got := llmCalls.Load(); got != 1 {
+		t.Fatalf("llm calls = %d, want 1 (forward safety audit)", got)
 	}
 	calls := channel.callsSnapshot()
 	if calls[0].action != "send_private_forward_msg" {
@@ -3546,8 +3543,10 @@ func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool {
 		return len(channel.callsSnapshot()) == 1
 	})
-	if got := llmCalls.Load(); got != 0 {
-		t.Fatalf("llm calls = %d, want 0", got)
+	// 卡片过账号安全审核那一次（见 outbound_forward_gate.go）。
+	// 链接解析本身仍旧不喊模型生成回复——这里数到的 1 次是审核，不是回复。
+	if got := llmCalls.Load(); got != 1 {
+		t.Fatalf("llm calls = %d, want 1 (forward safety audit)", got)
 	}
 	calls := channel.callsSnapshot()
 	if calls[0].action != "send_group_forward_msg" {
@@ -4427,7 +4426,6 @@ func TestRuntimeFailsOverLLMProfilesWithinGroup(t *testing.T) {
 	channel := &recordingChannel{}
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
-			ActiveID: "a",
 			Profiles: []llm.Profile{
 				{ID: "a", Name: "账号 1", Group: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key-a", Model: "bad-model"}},
 				{ID: "b", Name: "账号 2", Group: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key-b", Model: "good-model"}},
@@ -4457,9 +4455,6 @@ func TestRuntimeFailsOverLLMProfilesWithinGroup(t *testing.T) {
 	if reply != "备用账号已接管" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
-	if store.set.ActiveID != "b" {
-		t.Fatalf("ActiveID = %q, want b", store.set.ActiveID)
-	}
 	wantAttempts := []string{"bad-model", "bad-model", "good-model"}
 	if len(attempts) != len(wantAttempts) {
 		t.Fatalf("attempts = %#v, want %#v", attempts, wantAttempts)
@@ -4475,7 +4470,6 @@ func TestRuntimeReplyRuleUsesSpecificLLMProfile(t *testing.T) {
 	channel := &recordingChannel{}
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
-			ActiveID: "main",
 			Profiles: []llm.Profile{
 				{ID: "main", Name: "主模型", Group: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key-main", Model: "main-model"}},
 				{ID: "special", Name: "规则模型", Group: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key-special", Model: "special-model"}},
@@ -4526,9 +4520,6 @@ func TestRuntimeReplyRuleUsesSpecificLLMProfile(t *testing.T) {
 		if attempts[i] != want[i] {
 			t.Fatalf("attempts=%#v want %#v", attempts, want)
 		}
-	}
-	if store.set.ActiveID != "main" {
-		t.Fatalf("reply rule should not activate profile globally, ActiveID=%q", store.set.ActiveID)
 	}
 }
 
@@ -4614,11 +4605,14 @@ func TestRuntimeSendsWelcomeOnGroupIncrease(t *testing.T) {
 type stubLLMProfileStore struct {
 	set     llm.ProfileSet
 	saveErr error
+	// saves 记下运行时往配置集写了几次。「激活配置」时代降级成功会把激活项写回，
+	// 现在不该再有任何运行时写入。
+	saves int
 }
 
 // Current 封装当前模块的 Current 逻辑。
 func (s *stubLLMProfileStore) Current() llm.ProviderConfig {
-	profile, _ := s.set.Current()
+	profile, _ := s.set.FirstProfile()
 	return profile.Config
 }
 
@@ -4630,6 +4624,7 @@ func (s *stubLLMProfileStore) Profiles() llm.ProfileSet {
 // SaveProfiles 保存Profiles数据。
 func (s *stubLLMProfileStore) SaveProfiles(set llm.ProfileSet) error {
 	s.set = set
+	s.saves++
 	return s.saveErr
 }
 

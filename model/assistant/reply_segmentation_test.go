@@ -150,15 +150,27 @@ func TestChatReplySplitsUnbrokenParagraphBySentence(t *testing.T) {
 	}
 }
 
-// 短回复不动：两句话的短回复本来就是一条消息，拆开反而不像人说话。
-func TestChatReplyKeepsShortRepliesWhole(t *testing.T) {
+// 一句话就是一条消息：句子内部的逗号顿号不分条，末尾那个句号也不算边界。
+func TestChatReplyKeepsSingleSentenceRepliesWhole(t *testing.T) {
 	for _, reply := range []string{
-		"端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。",
 		"辛苦了，早点睡吧。",
+		"先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程",
 	} {
 		if chunks := splitChatReply(reply, chatSplitLimits{}); len(chunks) != 1 {
-			t.Fatalf("短回复被拆开了：%#v", chunks)
+			t.Fatalf("单句被拆开了：%#v", chunks)
 		}
+	}
+}
+
+// 按句号分条曾经有个 60 字的起步门槛，短行整条留着。它拦下来的是一批四五十字、
+// 两三句话的回复——恰恰是最该分开发的长度。
+func TestChatReplySplitsShortMultiSentenceReplies(t *testing.T) {
+	chunks := splitChatReply("端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。", chatSplitLimits{})
+	if len(chunks) != 2 {
+		t.Fatalf("两句话应该分成两条：%#v", chunks)
+	}
+	if chunks[0] != "端口被占了" {
+		t.Fatalf("分条位置不对：%#v", chunks)
 	}
 }
 
@@ -170,25 +182,29 @@ func TestChatReplyKeepsStructuredBlocksWhole(t *testing.T) {
 	}
 }
 
-// 条数上限管的是整条回复：按换行分出来超过上限，就不按换行分，退回只认标记。
-// 不做「超出的并进最后一条」——那会让最后一条拖着个尾巴。
-func TestChatReplyFallsBackToMarkerWhenLinesExceedCap(t *testing.T) {
+// 条数上限管的是整条回复：按换行分出来超过上限，就把相邻的短段并到上限之内。
+//
+// 这条用例原先断言的是「超上限退回整条发」，理由是不做「超出的并进最后一条」——
+// 那会让最后一条拖着个尾巴。防的方向对，做法太狠：上限 5、模型写 6 段，得到一坨。
+// 现在改成并相邻最短的那对，最后一条不会拖尾巴，长段也保持独立，那条理由仍然成立。
+func TestChatReplyMergesShortLinesWhenTheyExceedCap(t *testing.T) {
 	lines := make([]string, 0, 8)
 	for i := 0; i < 8; i++ {
 		lines = append(lines, "第几句话")
 	}
 	many := strings.Join(lines, "\n")
-	if chunks := splitChatReply(many, chatSplitLimits{}); len(chunks) != 1 {
-		t.Fatalf("八行超过上限，应该退回整条发：%#v", chunks)
+	if chunks := splitChatReply(many, chatSplitLimits{}); len(chunks) != replyMaxChatBubbles {
+		t.Fatalf("八行超过上限，应该并到 %d 条：%#v", replyMaxChatBubbles, chunks)
 	}
-	// 正好到上限就照分。
+	// 正好到上限就照分，一行不并。
 	five := strings.Join(lines[:5], "\n")
 	if chunks := splitChatReply(five, chatSplitLimits{}); len(chunks) != 5 {
 		t.Fatalf("五行正好到上限，应该分成五条：%#v", chunks)
 	}
-	// 退回之后模型显式写的标记仍然照做。
-	if chunks := splitChatReply(many+notificationSplitMarker+"补一句", chatSplitLimits{}); len(chunks) != 2 {
-		t.Fatalf("退回之后标记被吞掉了：%#v", chunks)
+	// 合并之后模型显式写的标记仍然照做，而且不会被并进相邻块。
+	chunks := splitChatReply(many+notificationSplitMarker+"补一句", chatSplitLimits{})
+	if chunks[len(chunks)-1] != "补一句" {
+		t.Fatalf("标记后面那句被并进了前一块：%#v", chunks)
 	}
 }
 
@@ -278,9 +294,9 @@ func TestSplitLimitsAreConfigurable(t *testing.T) {
 	if cfg.ForwardReplyChunkThreshold != 8 {
 		t.Fatalf("转发块数阈值没有透传：%d", cfg.ForwardReplyChunkThreshold)
 	}
-	// 上限调到 2 之后，三行就超了，退回整条发。
-	if chunks := splitChatReply("第一句\n第二句\n第三句", limits); len(chunks) != 1 {
-		t.Fatalf("上限 2 时三行应该退回整条：%#v", chunks)
+	// 上限调到 2 之后，三行就超了，并成两条而不是整条发。
+	if chunks := splitChatReply("第一句\n第二句\n第三句", limits); len(chunks) != 2 {
+		t.Fatalf("上限 2 时三行应该并成两条：%#v", chunks)
 	}
 	// 留空回落默认值。
 	if got := chatSplitLimitsFrom((BotConfig{}).WithDefaults()).MaxBubbles; got != replyMaxChatBubbles {
@@ -331,5 +347,245 @@ func TestPromptFollowsTheNaturalSplitSwitch(t *testing.T) {
 		if !strings.Contains(prompt, notificationSplitMarker) {
 			t.Fatalf("提示词没教分条标记：%q", prompt)
 		}
+	}
+}
+
+// TestTrailingBracketToneStillSplits 盯住猫娘那个语气词和分条逻辑的冲突。
+//
+// 猫娘人设专门教了「句尾一个孤零零的『（』」表示自嘲、心虚，而分条这边把行尾的
+// 开括号当成「话没说完」，会把带「（」的那句粘到下一句上——两次独立发言挤进同一个
+// 气泡。线上原话就是这个形状。
+func TestTrailingBracketToneStillSplits(t *testing.T) {
+	reply := "被你这么一问，我确实悄悄给自己打勾了喵（\n又是糖又是温水的，你这夸法甜得我要化掉了喵"
+	got := splitChatReply(reply, chatSplitLimitsFrom(DefaultBotConfig().WithDefaults()))
+	if len(got) != 2 {
+		t.Fatalf("带「（」的两句被并成了 %d 条：%q", len(got), got)
+	}
+	if !strings.HasSuffix(got[0], "（") {
+		t.Fatalf("语气词「（」没留在第一条末尾：%q", got[0])
+	}
+
+	// 半角的一样。
+	half := "我好像说漏嘴了(\n算了当我没说"
+	if got := splitChatReply(half, chatSplitLimitsFrom(DefaultBotConfig().WithDefaults())); len(got) != 2 {
+		t.Fatalf("半角括号语气词被并成了 %d 条：%q", len(got), got)
+	}
+
+	// 反过来：真的括号插入语在开括号后断了行，后文有闭括号，那就还是同一句话，
+	// 不能因为要救语气词把它也拆开。
+	real := "这个接口有个坑（\n文档里没写）后面会补上"
+	if got := splitChatReply(real, chatSplitLimitsFrom(DefaultBotConfig().WithDefaults())); len(got) != 1 {
+		t.Fatalf("真的括号插入语被拆成了 %d 条：%q", len(got), got)
+	}
+}
+
+// TestOverLimitRepliesMergeInsteadOfCollapsing 超过条数上限时并短段，而不是整条发。
+//
+// 原来的规矩是「要么分好，要么别分」：分不进上限就退回只认标记，等于一坨发出去。
+// 上限设 5、模型写了 6 段，得到的是一整条三百字，比 6 条更难读——用户设「最多 5 条」
+// 的本意是别刷屏，不是别分条。
+func TestOverLimitRepliesMergeInsteadOfCollapsing(t *testing.T) {
+	long := strings.Repeat("这是一段挺长的话", 6)
+	reply := strings.Join([]string{long + "一", long + "二", "短的甲", "短的乙", long + "三", long + "四"}, "\n")
+	limits := chatSplitLimits{ChunkSize: 400, MaxBubbles: 5}
+
+	got := splitChatReply(reply, limits)
+	if len(got) != 5 {
+		t.Fatalf("切成了 %d 条，想要 5 条：%q", len(got), got)
+	}
+	// 均分的目标是「最长那条尽量短」。段本身长短悬殊时做不到几条一样长——那是数据
+	// 的性质，不是算法没做好——所以断言的是最优性：暴力枚举所有切法，没有更好的。
+	lines := strings.Split(reply, "\n")
+	if got, want := longestChunkRunes(got), bruteForceMinimalLongest(lines, 5); got != want {
+		t.Fatalf("最长那条是 %d 字，最优解是 %d 字", got, want)
+	}
+	// 顺序不能动：那是话的顺序。
+	if !strings.HasPrefix(got[0], "这是一段挺长的话") || !strings.HasSuffix(got[len(got)-1], "四") {
+		t.Fatalf("段的顺序被打乱了：%q", got)
+	}
+}
+
+func longestChunkRunes(chunks []string) int {
+	longest := 0
+	for _, chunk := range chunks {
+		if length := len([]rune(chunk)); length > longest {
+			longest = length
+		}
+	}
+	return longest
+}
+
+// bruteForceMinimalLongest 枚举所有把 lines 连续切成 count 段的方式，返回其中
+// 「最长一段」的最小值。段数小的时候够用，专门用来验证 DP 没有偷工。
+func bruteForceMinimalLongest(lines []string, count int) int {
+	best := -1
+	var walk func(start, remaining, longest int)
+	walk = func(start, remaining, longest int) {
+		if remaining == 1 {
+			// 剩下的全归最后一段，中间的换行也要算进长度。
+			length := len([]rune(strings.Join(lines[start:], "\n")))
+			if length > longest {
+				longest = length
+			}
+			if best < 0 || longest < best {
+				best = longest
+			}
+			return
+		}
+		for end := start + 1; end <= len(lines)-remaining+1; end++ {
+			length := len([]rune(strings.Join(lines[start:end], "\n")))
+			next := longest
+			if length > next {
+				next = length
+			}
+			walk(end, remaining-1, next)
+		}
+	}
+	walk(0, count, 0)
+	return best
+}
+
+// TestBalanceSegmentsMinimisesTheLongestBubble 均分的目标是「最长那条尽量短」，
+// 而不是「每条段数一样多」：段本身长短不一，按段数均分照样会分出一条巨长的。
+func TestBalanceSegmentsMinimisesTheLongestBubble(t *testing.T) {
+	lines := []string{"一二三四五六七八九十", "甲", "乙", "丙", "丁"}
+	got := balanceSegments(lines, 2)
+	if len(got) != 2 {
+		t.Fatalf("分成了 %d 条：%q", len(got), got)
+	}
+	// 按段数均分会切成 2+3（10 字 vs 4 字）；按长度均分应当把长的那段单独留一条。
+	if got[0] != "一二三四五六七八九十" {
+		t.Fatalf("长段没有单独成条：%q", got)
+	}
+	if got[1] != "甲\n乙\n丙\n丁" {
+		t.Fatalf("剩下的没有并成一条：%q", got)
+	}
+}
+
+// TestBubbleQuotaFavoursTheCrowdedBlock 名额先保证每块一条，剩下的给最挤的那块。
+func TestBubbleQuotaFavoursTheCrowdedBlock(t *testing.T) {
+	crowded := []string{"很长的一段话很长的一段话", "很长的一段话很长的一段话", "很长的一段话很长的一段话"}
+	small := []string{"短"}
+	quotas := allocateBubbleQuota([][]string{crowded, small}, 4)
+	if quotas[1] != 1 {
+		t.Fatalf("只有一段的块拿了 %d 个名额，应当封顶在 1", quotas[1])
+	}
+	if quotas[0] != 3 {
+		t.Fatalf("拥挤的块只拿到 %d 个名额，剩余名额应当都给它", quotas[0])
+	}
+}
+
+// TestMergeNeverCrossesSplitMarker 合并不跨越 <dianabr>：那是模型明说要断开的地方。
+// 标记块本身就多于上限时按标记发，允许超——那是模型要的条数，不是运行时猜的。
+func TestMergeNeverCrossesSplitMarker(t *testing.T) {
+	reply := strings.Join([]string{"第一句", "第二句", "第三句", "第四句", "第五句", "第六句"}, notificationSplitMarker)
+	limits := chatSplitLimits{ChunkSize: 400, MaxBubbles: 3}
+
+	got := splitChatReply(reply, limits)
+	if len(got) != 6 {
+		t.Fatalf("模型显式分的 6 条被合并成了 %d 条：%q", len(got), got)
+	}
+
+	// 块内可以合并，块之间不行：两个标记块各三行，上限 4 时应当各自并成两段。
+	block := "甲一\n甲二\n甲三" + notificationSplitMarker + "乙一\n乙二\n乙三"
+	merged := splitChatReply(block, chatSplitLimits{ChunkSize: 400, MaxBubbles: 4})
+	if len(merged) != 4 {
+		t.Fatalf("块内合并结果是 %d 条：%q", len(merged), merged)
+	}
+	for _, chunk := range merged {
+		if strings.Contains(chunk, "甲") && strings.Contains(chunk, "乙") {
+			t.Fatalf("合并跨过了 <dianabr>：%q", chunk)
+		}
+	}
+}
+
+// TestUnderLimitRepliesKeepEveryLine 没超上限的照旧逐行分，合并这条路不该有副作用。
+func TestUnderLimitRepliesKeepEveryLine(t *testing.T) {
+	reply := "第一段\n第二段\n第三段"
+	got := splitChatReply(reply, chatSplitLimits{ChunkSize: 400, MaxBubbles: 5})
+	if len(got) != 3 {
+		t.Fatalf("切成了 %d 条，想要 3 条：%q", len(got), got)
+	}
+}
+
+// 分条和合并转发此前只有机器人级：GroupConfig 里根本没有这几个字段，群组页也没有
+// 对应的输入框。但群和群的说话节奏不一样，一个技术群里长回复整条读更省事，一个闲
+// 聊群里同样长度得拆开发才不像播报。
+func TestGroupLevelSplitAndForwardOverridesReachEffectiveConfig(t *testing.T) {
+	base := BotConfig{
+		ResponseMode:               ResponseModeStandard,
+		ReplyMaxBubbles:            5,
+		DirectReplyChunkSize:       400,
+		ForwardReplyThreshold:      900,
+		ForwardReplyChunkThreshold: 5,
+	}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"chatty": {
+			GroupID:                    "chatty",
+			NaturalReplySplitEnabled:   boolPointer(false),
+			ReplyMaxBubbles:            2,
+			DirectReplyChunkSize:       120,
+			ForwardReplyThreshold:      300,
+			ForwardReplyChunkThreshold: 3,
+		},
+	}})
+
+	cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "chatty"})
+	if boolValue(cfg.NaturalReplySplitEnabled, true) {
+		t.Fatal("群级自然分条开关没生效")
+	}
+	if cfg.ReplyMaxBubbles != 2 || cfg.DirectReplyChunkSize != 120 {
+		t.Fatalf("群级分条阈值没生效：bubbles=%d chunk=%d", cfg.ReplyMaxBubbles, cfg.DirectReplyChunkSize)
+	}
+	if cfg.ForwardReplyThreshold != 300 || cfg.ForwardReplyChunkThreshold != 3 {
+		t.Fatalf("群级合并转发阈值没生效：len=%d chunks=%d", cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold)
+	}
+	// 配置字段好看不算数，得真的传到分条那一层。
+	limits := chatSplitLimitsFrom(cfg)
+	if !limits.MarkerOnly || limits.MaxBubbles != 2 || limits.ChunkSize != 120 {
+		t.Fatalf("chatSplitLimits = %#v", limits)
+	}
+	if parts := splitChatReply("第一句。\n第二句。\n第三句。", limits); len(parts) != 1 {
+		t.Fatalf("关掉自然分条后仍然分成了 %d 条：%#v", len(parts), parts)
+	}
+
+	// 没有单独配置的群跟随机器人。
+	other := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "other"})
+	if !boolValue(other.NaturalReplySplitEnabled, true) || other.ReplyMaxBubbles != 5 || other.DirectReplyChunkSize != 400 {
+		t.Fatalf("未配置的群没有跟随机器人：%#v", chatSplitLimitsFrom(other))
+	}
+	if other.ForwardReplyThreshold != 900 || other.ForwardReplyChunkThreshold != 5 {
+		t.Fatalf("未配置的群合并转发没有跟随机器人：len=%d chunks=%d", other.ForwardReplyThreshold, other.ForwardReplyChunkThreshold)
+	}
+}
+
+// 分号是句内的并列分隔，不是句末。按它分条会把后半句单独扔成一条消息，读起来是
+// 话说了一半。
+func TestSemicolonIsNotASentenceBoundary(t *testing.T) {
+	limits := chatSplitLimits{ChunkSize: 400, MaxBubbles: 5}
+	reply := "这个报错有两种可能：一种是端口真的被别的进程占着，换个端口就能起来；另一种是上一次的实例没有退干净，还挂在那里等超时，得先把它清掉才行"
+	parts := splitChatReply(reply, limits)
+	if len(parts) != 1 {
+		t.Fatalf("分号被当成句末切开了：%#v", parts)
+	}
+
+	// 句号照常分条，这条改动没把整层关掉。
+	period := "端口被别的进程占着，换一个就能起来。先看看到底是谁占的，再决定要不要杀掉它，别上来就 kill 一个自己都不认识的 pid"
+	if got := splitChatReply(period, limits); len(got) != 2 {
+		t.Fatalf("句号分条 = %#v", got)
+	}
+}
+
+// 长度兜底非切不可的时候，分号仍然是个体面的落点——比从词中间拦腰切开强。
+func TestSemicolonStillWorksAsALengthFallbackCut(t *testing.T) {
+	head := strings.Repeat("前半句的内容", 8)
+	tail := strings.Repeat("后半句的内容", 8)
+	parts := chunkTextByLength(head+"；"+tail, 50)
+	if len(parts) < 2 {
+		t.Fatalf("没有切开：%#v", parts)
+	}
+	if !strings.HasSuffix(parts[0], "；") {
+		t.Fatalf("第一段没有断在分号上：%q", parts[0])
 	}
 }

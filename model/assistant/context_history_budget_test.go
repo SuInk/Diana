@@ -178,7 +178,11 @@ func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
 	semantic := semanticReferencePromptContext{Requested: 6, Resolved: 6, TextSources: 6}
 	sources := semanticReferenceContext{RequestedSourceCount: 6, ResolvedSourceCount: 6, TextSourceCount: 6, AttachedImageCount: 0, MissingSourceCount: 0}
 
-	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, semantic, sources, false)
+	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, semantic, sources, false, []contextLayerUsage{{
+		Layer: "retrieved_memory", Budget: 2400, CandidateItems: 40, CandidateTokens: 6000,
+		RankedItems: 24, RankedTokens: 3600, SelectedItems: 9, SelectedTokens: 2380,
+		Reason: contextLayerReasonBudget,
+	}})
 
 	entries := logs.entriesSnapshot()
 	if len(entries) != 1 || entries[0].Action != "chatbot.context_budget" {
@@ -188,12 +192,30 @@ func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
 	for _, key := range []string{
 		"effective_context_window", "output_reserve", "safety_reserve", "input_budget",
 		"requested_tokens", "selected_tokens", "dropped_tokens", "over_budget",
-		"categories", "summary", "history_selected_turns", "history_earliest_time",
+		"categories", "layers", "summary", "history_selected_turns", "history_earliest_time",
 		"history_latest_time", "semantic_attached_images", "semantic_missing_sources",
 	} {
 		if _, ok := metadata[key]; !ok {
 			t.Fatalf("budget breakdown missing %q: %+v", key, metadata)
 		}
+	}
+
+	// layers 记的是各层在送进全局预算之前自己丢了什么。categories 只能说明成品
+	// 消息进全局预算后没再挨刀，说明不了层内配额有没有截断候选，两者缺一不可。
+	layers, ok := metadata["layers"].([]map[string]any)
+	if !ok || len(layers) != 1 {
+		t.Fatalf("层内账没上报: %+v", metadata["layers"])
+	}
+	for _, key := range []string{"candidate_tokens", "ranked_tokens", "selected_tokens", "dropped_tokens"} {
+		if _, ok := layers[0][key].(int64); !ok {
+			t.Fatalf("层内账缺 %s: %+v", key, layers[0])
+		}
+	}
+	if layers[0]["layer"] != "retrieved_memory" || layers[0]["dropped_tokens"].(int64) != 3620 {
+		t.Fatalf("层内账 = %+v", layers[0])
+	}
+	if layers[0]["reason_text"] != "本层 token 配额用尽，尾部候选未装入" {
+		t.Fatalf("层内丢弃原因没有可读文案: %+v", layers[0])
 	}
 
 	categories, ok := metadata["categories"].([]map[string]any)
@@ -252,6 +274,7 @@ func TestRecordPromptContextBudgetStaysSilentWithoutDebugMode(t *testing.T) {
 		semanticReferencePromptContext{},
 		semanticReferenceContext{},
 		false,
+		nil,
 	)
 	if entries := logs.entriesSnapshot(); len(entries) != 0 {
 		t.Fatalf("debug mode is off, expected no trace, got %+v", entries)
@@ -368,7 +391,6 @@ func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
 	}
 
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "p1",
 		Profiles: []llm.Profile{{
 			ID:    "p1",
 			Name:  "chat",
@@ -398,7 +420,6 @@ func TestBotContextCapOnlyTightensTheModelWindow(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "1", MessageID: "1"}
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "p1",
 		Profiles: []llm.Profile{{
 			ID: "p1", Name: "chat", Group: llm.GroupChat,
 			Config: llm.ProviderConfig{

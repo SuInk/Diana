@@ -11,6 +11,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -209,6 +210,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "用户直接回复了机器人，语义路由判断应继续回答", true
 	case "replied_proactive", "replied_proactive_batch":
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
+	case "merged_into_reply":
+		return "not_replied", "消息已并入同一用户正在生成的回复，不再单独回答", false
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
 	case "error_replied_content_policy":
@@ -282,6 +285,8 @@ type Runtime struct {
 	replyInterruptMu          sync.Mutex
 	recalledInbound           map[string]time.Time
 	latestDirectedInbound     map[string]directedInboundMark
+	directReplySeq            uint64
+	activeDirectReplies       map[string]*activeDirectReply
 	cancel                    context.CancelFunc
 	runCtx                    context.Context
 	running                   bool
@@ -528,6 +533,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		replyRefusalByUser:    map[string]replyRefusalState{},
 		botReplyLoopByKey:     map[string]botReplyLoopState{},
 		proactiveBatches:      map[string]*proactiveReplyBatch{},
+		activeDirectReplies:   map[string]*activeDirectReply{},
 		proactiveBatchWindow:  defaultProactiveReplyBatchWindow,
 		proactiveBatchMaxWait: defaultProactiveReplyBatchMaxWait,
 		replyBatches:          map[string]*replyBatchGate{},
@@ -1204,6 +1210,12 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
+	// 空值在 GroupConfig.WithDefaults 里已经从机器人配置继承过，这里直接拷。
+	cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
+	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
+	cfg.DirectReplyChunkSize = groupCfg.DirectReplyChunkSize
+	cfg.ForwardReplyThreshold = groupCfg.ForwardReplyThreshold
+	cfg.ForwardReplyChunkThreshold = groupCfg.ForwardReplyChunkThreshold
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
 	cfg.ProactiveReplyThreshold = groupCfg.ProactiveReplyThreshold
 	cfg.ChatInEnabled = groupCfg.ChatInEnabled
@@ -1212,6 +1224,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.ChatInChance = groupCfg.ChatInChance
 	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
 	cfg.NaturalInterjectionEnabled = copyBoolPointer(groupCfg.NaturalInterjectionEnabled)
+	cfg.SocialReplyEnabled = copyBoolPointer(groupCfg.SocialReplyEnabled)
 	if groupResponseModeOverridden {
 		cfg.ResponseMode.apply(&cfg)
 	}
@@ -1239,6 +1252,19 @@ func (r *Runtime) groupConfigForEvent(event MessageEvent) (GroupConfig, bool) {
 		return GroupConfig{}, false
 	}
 	return groupCfg.WithDefaults(event.GroupID, base), true
+}
+
+// sandboxedBrowserEnabled 说明这个会话现在能不能起浏览器。
+//
+// 浏览器不是谁想用就自己去起的东西：它是「网页渲染」插件的运行依赖，装没装、装在
+// 哪、缺了怎么一键补，全挂在那个插件名下（见 browserDependencyGroup）。插件被停用
+// 就是「这台机器不许起浏览器」，任何要用浏览器的功能都得认这个开关，否则插件页上
+// 那个关掉的开关是假的。
+func (r *Runtime) sandboxedBrowserEnabled(event MessageEvent) bool {
+	if r == nil || r.plugins == nil {
+		return false
+	}
+	return r.plugins.EnabledWithOverrides(sandboxedBrowserPluginID, r.pluginOverridesForEvent(event))
 }
 
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
@@ -1607,6 +1633,13 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// Clear batches left by a runtime started before immediate proactive routing was enabled.
 		r.cancelProactiveReplyBatch(event)
 	}
+	if !handled {
+		if rootMessageID, merged := r.mergeIntoActiveDirectReply(ctx, event, text); merged {
+			event.routingReason = fmt.Sprintf("已并入同一用户正在生成的回复（触发消息 %s），不再单独判断或发送", rootMessageID)
+			r.record(r.decisionEventRecord(event, text, "merged_into_reply"))
+			return finishWithoutReply("merged_into_reply")
+		}
+	}
 	considerProactive, proactiveSkipReason := false, ""
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
@@ -1666,7 +1699,31 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
-	reply, err := r.replyTo(replyCtx, event, text)
+	if successOutcome == "replied" || successOutcome == "replied_direct_followup" {
+		var finish func()
+		replyCtx, finish = r.beginDirectReply(replyCtx, event)
+		defer finish()
+	}
+	var reply string
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		// Two regeneration opportunities cover normal typing bursts. Seal before
+		// the final attempt so an endless stream cannot starve this reply forever;
+		// later messages resume the ordinary routing path.
+		if attempt == 2 {
+			r.sealDirectReply(replyCtx)
+		}
+		attemptCtx := r.directReplyAttemptContext(replyCtx)
+		attemptEvent := event
+		if attempt > 0 {
+			attemptEvent.replyHistoryLoaded = false
+			attemptEvent.replyHistory = nil
+		}
+		reply, err = r.replyTo(attemptCtx, attemptEvent, text)
+		if !errors.Is(err, errDirectReplySupplemented) {
+			break
+		}
+	}
 	record.Duration = time.Since(start).Milliseconds()
 	// 出错也要带上：resolver 可能已经把图发出去了才在后面某步失败，这时事件页
 	// 只写「处理异常」会让人以为什么都没发。
@@ -2081,7 +2138,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	chatIn := cfg.chatInSettings()
-	payload := r.proactiveReplyPayload(event, readableEventText(event, text))
+	payload := r.proactiveReplyPayloadWithContext(ctx, event, readableEventText(event, text))
 	for _, candidate := range candidates {
 		payload.Candidates = append(payload.Candidates, proactiveReplyCandidatePayload{
 			MessageID:  strings.TrimSpace(candidate.Event.MessageID),
@@ -2108,7 +2165,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn),
+			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
 		},
 		routeUserMessage,
 	}
@@ -2298,6 +2355,7 @@ type proactiveReplyPayload struct {
 	RecentMessages                []proactiveReplyHistoryItem      `json:"recent_messages,omitempty"`
 	Candidates                    []proactiveReplyCandidatePayload `json:"candidates,omitempty"`
 	AvailableReplyTools           []string                         `json:"available_reply_tools,omitempty"`
+	GlossaryContext               string                           `json:"glossary_context,omitempty"`
 }
 
 type proactiveReplyCandidatePayload struct {
@@ -2383,6 +2441,12 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		}
 		payload.RecentMessages = append(payload.RecentMessages, historyItem)
 	}
+	return payload
+}
+
+func (r *Runtime) proactiveReplyPayloadWithContext(ctx context.Context, event MessageEvent, text string) proactiveReplyPayload {
+	payload := r.proactiveReplyPayload(event, text)
+	payload.GlossaryContext = r.glossaryContextForRouting(ctx, event, text)
 	return payload
 }
 
@@ -2538,7 +2602,7 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有 @ 或没有点名对象而归为 none。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 判断 substantive。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有无法从上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
+	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有问号、没有 @ 或没有点名对象而归为 none。glossary_context 是本地词典对当前消息的可信释义；命中时必须按释义理解消息，不能再称它为未解释缩写、私人暗语或 missing_context。若缩写按词典展开后本身是在公开提问或请求（例如 zgm=在干嘛），应按展开后的完整含义判断 requests_response、answerable 和 needs_response。词典命中只解决语义，不代表普通名词必须回复，仍要判断展开后的消息是否确实需要回应。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 放行。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有 glossary_context 没有解释、且无法从其他上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
 	const expressiveChatInGuard = `风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard
 	configured = strings.TrimSpace(configured)
@@ -2548,10 +2612,24 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 	return configured + "\n\n" + runtimeGuard
 }
 
+// socialReplyGuard 是「被点名的社交性搭话也回一句」打开之后追加的规则。
+//
+// 默认提示词第 5 条把「纯情绪反应」和结束性确认一起划进不用回，对助手型机器人是
+// 对的：没人问问题，接一句只是噪音。但陪聊型人设不是这样——群友说一句「笨笨」
+// 「你好可爱」，人设装死才是出戏的那个。线上原话就是这个形状：directed_at_bot
+// 为 true、answerable 为 true，只有 substantive 是 false，于是判成 none。
+//
+// 放行只放这一种：确实是冲着机器人来的。别人之间的闲聊、要机器人闭嘴、以及
+// 已经回过的同一轮，都不在里面——这条不是把闸门拆了，是给闸门开一扇小门。
+const socialReplyGuard = `当前机器人开启了社交性回应：群友直接对机器人打招呼、道别、夸奖、调侃或给出轻微评价（例如“笨笨”“你好可爱”“早”“又胡说八道了”），即使没有具体问题、也没有可核实的新信息，也算需要回应——使用 category=bot_related、directed_at_bot=true、answerable=true、should_reply=true，回一句简短的应答即可，不必找信息量。这一条不放宽其它任何判断：不是对机器人说的话、群友之间的闲聊、要求机器人别再说话或安静的消息，以及同一轮里已经回过的内容，仍然一律保持沉默。`
+
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
-// 器反复给出一个运行时必然拒绝的结论。
-func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings) string {
+// 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
+func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
 	prompt := proactiveReplyRouterSystemPrompt(configured)
+	if social {
+		prompt += "\n\n" + socialReplyGuard
+	}
 	if chatIn.Natural {
 		return prompt + "\n\n当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
 	}
@@ -2843,6 +2921,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			LLMStore:                r.llmStore,
 			LLMModelLister:          r.llmModelLister(),
 			AppLogs:                 r.appLogWriter(),
+			BuildInfo:               r.currentBuildInfo(),
 		}
 	}
 	// 模型能不能自己取历史原图，决定了要不要走前置指代解析：能取就给索引让它自己
@@ -2910,6 +2989,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	olderSummary := ""
 	sessionThread := ""
 	summaryRecompressed := false
+	var threadUsage contextLayerUsage
 	var contextPreload *promptContextPreload
 	if !authoritativePluginContext {
 		// contextSummary 只读内存里的压缩摘要，不做 I/O，留在原处：下面的意图路由
@@ -2952,6 +3032,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 无头浏览器。插件停用时模型看不到这个工具。
 			if _, settings, enabled := r.plugins.PluginWithSettings(groupRelationsPluginID, r.pluginOverridesForEvent(event)); enabled {
 				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
+			}
+			if _, settings, enabled := r.plugins.PluginWithSettings(stickerPluginID, r.pluginOverridesForEvent(event)); enabled {
+				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
 			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
@@ -3121,7 +3204,22 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if thread := strings.TrimSpace(sessionThread); thread != "" {
 			const threadPrefix = "【当前会话进行状态，用于接上正在聊的事；不要复述它，也不要直接回复它】\n"
 			threadBudget := sessionThreadBudget(r.promptContextWindowTokens(event, cfg)) - llm.EstimateTextTokens(threadPrefix)
+			// 便签只有一条，没有排序阶段：候选就是它本身，装不下只会被截短。
+			threadUsage = contextLayerUsage{
+				Layer:           "session_thread",
+				Budget:          threadBudget,
+				CandidateItems:  1,
+				CandidateTokens: llm.EstimateTextTokens(thread),
+				RankedItems:     1,
+				RankedTokens:    llm.EstimateTextTokens(thread),
+				Reason:          contextLayerReasonFits,
+			}
 			if thread = fitSessionThreadToBudget(thread, threadBudget); thread != "" {
+				threadUsage.SelectedItems = 1
+				threadUsage.SelectedTokens = llm.EstimateTextTokens(thread)
+				if threadUsage.SelectedTokens < threadUsage.CandidateTokens {
+					threadUsage.Reason = contextLayerReasonBudget
+				}
 				messages = append(messages, llm.Message{
 					Role:       llm.RoleUser,
 					Content:    threadPrefix + thread,
@@ -3160,7 +3258,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 			}
 		}
-		turnCandidates := proactiveReplyTurnFromContext(ctx)
+		turnCandidates := append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
 		for _, candidate := range turnCandidates {
 			if messageID := strings.TrimSpace(candidate.Event.MessageID); messageID != "" && messageID != event.MessageID {
@@ -3206,7 +3304,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 						ContextGroup: historyGroup,
 					})
 				}
-				if directAgentDecision && historicalStillImageCount(historyEvent) > 0 {
+				if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
 					messages = append(messages, llm.Message{
 						Role:         llm.RoleUser,
 						Content:      agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent)),
@@ -3217,7 +3315,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				continue
 			}
 			historyText := historyPromptTextAt(historyEvent, event.Time)
-			if directAgentDecision && historicalStillImageCount(historyEvent) > 0 {
+			if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
 				historyText = agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent))
 			}
 			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyText, Priority: historyPriority, ContextGroup: historyGroup}
@@ -3297,9 +3395,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
 		currentText += "\n\n【图片上下文提示】" + notice
 	}
-	currentMessage, currentImagesComplete := llmMessageFromEventWithVideoFramesDetailed(ctx, messageEvent, currentText, contextImageURLs)
-	if !currentImagesComplete {
-		return "", newImageMediaUnavailableError([]error{fmt.Errorf("one or more current images could not be encoded")})
+	currentMessage, currentImageFailures := llmMessageFromEventWithVideoFramesDiagnostics(ctx, messageEvent, currentText, contextImageURLs)
+	if len(currentImageFailures) > 0 {
+		return "", newImageMediaUnavailableError(currentImageFailures)
 	}
 	if r.plugins != nil {
 		_, settings, enabled := r.plugins.PluginWithSettings(voiceSTTPluginID, r.pluginOverridesForEvent(event))
@@ -3333,7 +3431,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 	}
 	messages = append(messages, currentMessage)
-	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed)
+	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed, contextPreload.layerUsage(threadUsage))
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
@@ -3526,7 +3624,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	if comment == "" {
 		return
 	}
-	if err := r.send(ctx, event, comment); err != nil {
+	if err := r.sendFollowUp(ctx, followUpKindPlugin, event, comment); err != nil {
 		r.recordFollowUpFailure(ctx, followUpKindPlugin, source, "send", err)
 	}
 }
@@ -4824,12 +4922,12 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
 		profileID, _ := replyRuleLLMProfileID(ctx)
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, group, profileID)
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), group, profileID)
 		if err != nil {
 			return "", err
 		}
 		if ok {
-			return run(llm.RegistryClient{Registry: registry, Selection: selection})
+			return run(registryLLMProvider(registry, selection, true))
 		}
 	}
 
@@ -4843,7 +4941,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return "", fmt.Errorf("chatbot: reply rule llm profile %q not found", profileID)
 		}
-		profiles, roleErr := r.roleBoundProfiles(set, group)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -4854,26 +4952,19 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return run(provider)
 		}
+		// 没有角色绑定就按本次调用的分组取候选，组内顺序即降级顺序。
+		//
+		// 这里以前多绕一道：候选来自「激活配置所在的分组」，所以激活的是生图那套时
+		// 聊天调用会拿到一串生图配置，得先用 activeProfileForGroup 做一次能力检查再
+		// 退回本分组。分组直接由调用方给出之后，那类错配从源头就不成立了。
 		groupKey := llm.NormalizeProfileGroup(group)
-		if groupKey != llm.GroupChat {
-			if profiles := set.GroupProfiles(groupKey); len(profiles) > 0 {
-				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
-				if err != nil {
-					return "", err
-				}
-				return run(provider)
+		if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
+			logUnboundGroupFallback(roles, group, profiles[0].ID)
+			provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
+			if err != nil {
+				return "", err
 			}
-		}
-		// runLLMProviderWithFailover 从激活配置所在的分组取候选，激活的是生图那套时
-		// 聊天调用会拿到一串生图配置。先确认激活配置能接这次调用，接不了就退回本分组。
-		if len(activeProfileForGroup(set, roles, group, groupKey)) == 0 {
-			if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
-				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
-				if err != nil {
-					return "", err
-				}
-				return run(provider)
-			}
+			return run(provider)
 		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
 	}
@@ -4893,23 +4984,13 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 // modelRoleForGroup 返回某个用途实际绑定的模型角色，没有专门绑定时回落到 chat 绑定。
 //
 // 回落这条是有意的：机器人绑定的是「这台机器人用哪个模型说话」。一轮对话中途多出
-// 几张图（例如 diana.history_images 把历史原图作为附件补进下一轮），用途会从 chat
+// 几张图（例如 diana.history_media 把历史原图作为附件补进下一轮），用途会从 chat
 // 变成 vision，但说话的还是同一台机器人。没有单独绑视觉模型时就该继续用它绑定的
 // 聊天模型，而不是滑到全局激活配置那份和这台机器人无关的配置上——那种切换是静默的，
 // 表现为「聊着聊着换了个模型答话」，而日志里两轮的 provider/model 都是「正常」的。
+// modelRoleForGroup 只按分组找绑定，不看用途。带用途的查找见 modelRoleFor。
 func modelRoleForGroup(roles map[string]ModelRole, group string) (ModelRole, bool) {
-	if len(roles) == 0 {
-		return ModelRole{}, false
-	}
-	key := llm.NormalizeProfileGroup(group)
-	if key == llm.GroupChat {
-		key = "chat"
-	}
-	if role, ok := roles[key]; ok {
-		return role, true
-	}
-	role, ok := roles["chat"]
-	return role, ok
+	return modelRoleFor(roles, "", group)
 }
 
 // logUnboundGroupFallback 记录一次「这台机器人有模型绑定，但这个用途落到了全局激活
@@ -4921,18 +5002,17 @@ func logUnboundGroupFallback(roles map[string]ModelRole, group, profileID string
 	log.Printf("chatbot model role fallback: group=%q has no bound provider, using the active profile %q", llm.NormalizeProfileGroup(group), profileID)
 }
 
-func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSet, roles map[string]ModelRole, group, profileID string) (llm.AgentModelConfig, bool, error) {
+func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSet, roles map[string]ModelRole, purpose, group, profileID string) (llm.AgentModelConfig, bool, error) {
 	if registry == nil {
 		return llm.AgentModelConfig{}, false, nil
 	}
 	// 分组名和角色名是两套命名空间，别用同一个变量串着走：
-	// 角色键用 "chat"（机器人页那四行就是 chat/vision/intent/image），
-	// 而聊天配置的分组名是 "default"。原先这里把 key 从 "default" 改写成 "chat"
-	// 之后又拿它当分组名去查，结果是查一个根本不存在的分组——「先在同组里找」
-	// 这层保护对聊天调用从来没生效过。角色查找由 modelRoleForGroup 自己归一化，
+	// 角色键用 "chat"，而聊天配置的分组名是 "default"。原先这里把 key 从 "default"
+	// 改写成 "chat" 之后又拿它当分组名去查，结果是查一个根本不存在的分组——「先在
+	// 同组里找」这层保护对聊天调用从来没生效过。角色查找由 modelRoleFor 自己归一化，
 	// 这里只需要分组名。
 	groupKey := llm.NormalizeProfileGroup(group)
-	boundRole, hasBoundRole := modelRoleForGroup(roles, group)
+	boundRole, hasBoundRole := modelRoleFor(roles, purpose, group)
 	if role := boundRole; hasBoundRole && role.ProviderID != "" && role.ModelID != "" {
 		return normalizeRegistrySelection(registry, role.ProviderID, role.ModelID), true, nil
 	}
@@ -4957,23 +5037,18 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 			}
 		}
 	}
-	// 非聊天用途先在本分组里找。聊天用途不走这一步：默认分组里可能并排放着好几个
-	// 对话 Provider，选哪个是用户在 LLM 配置页用「激活配置」定的，直接取第一个会
-	// 无视这个选择。
-	if len(profiles) == 0 && groupKey != llm.GroupChat {
+	// 没有角色绑定就在本分组里按列表顺序取。聊天用途以前不走这一步，因为选哪个
+	// 由「激活配置」定；那个概念去掉之后，聊天和别的用途没有区别了。
+	if len(profiles) == 0 {
 		profiles = llmProfilesInGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
-		profiles = activeProfileForGroup(set, roles, group, groupKey)
-	}
-	// 激活配置跨组（例如激活的是生图那套、这次是聊天调用）时退回本分组。
-	// 上一步已经拒绝了跨组的激活配置，这里补一个同组的，免得直接判成「没有可用配置」。
-	if len(profiles) == 0 {
-		profiles = llmProfilesInGroup(set, groupKey)
+		profiles = fallbackProfilesForGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
 		return llm.AgentModelConfig{}, false, nil
 	}
+	logUnboundGroupFallback(roles, group, profiles[0].ID)
 	return profileRegistrySelection(registry, profiles[0]), true, nil
 }
 
@@ -5001,33 +5076,6 @@ func profileGroupServes(profileGroup string, wantGroup string) bool {
 	return !singlePurposeProfileGroup(profileGroup) && !singlePurposeProfileGroup(wantGroup)
 }
 
-// activeProfileForGroup 返回可以用于这个用途的激活配置，接不了这活就不给。
-//
-// 「回落到激活配置」本身是对的——没配模型分配时总得有个兜底，而且视觉、意图回落到
-// 对话配置是正常的。错的是完全不看能力：激活的是生图配置时，一次普通聊天调用会拿
-// gpt-image-2 去发文本请求，日志里 provider 和 model 还都显示「正常」。
-// 宁可往下退回同组配置、甚至报「没有可用配置」，也不要拿一个干不了这活的模型硬接。
-func activeProfileForGroup(set llm.ProfileSet, roles map[string]ModelRole, group string, groupKey string) []llm.Profile {
-	current, ok := set.Current()
-	if !ok {
-		return nil
-	}
-	if !profileGroupServes(current.Group, groupKey) {
-		logUnusableActiveProfileSkipped(groupKey, current.ID, llm.NormalizeProfileGroup(current.Group))
-		return nil
-	}
-	logUnboundGroupFallback(roles, group, current.ID)
-	return []llm.Profile{current}
-}
-
-// logUnusableActiveProfileSkipped 无条件记一条：跟 logUnboundGroupFallback 不同，
-// 这不是「正常回落」，而是「用户选的激活配置干不了这次调用」，任何情况下都该看得见。
-// logUnboundGroupFallback 在没配任何绑定时是静默的，而没配绑定的人恰恰最容易撞上
-// 这一种——那条路的静默只能由这里补上。
-func logUnusableActiveProfileSkipped(wantGroup string, activeID string, activeGroup string) {
-	log.Printf("chatbot llm selection skipped the active profile: a %q call cannot use the active profile %q from the single-purpose group %q", wantGroup, activeID, activeGroup)
-}
-
 func normalizeRegistrySelection(registry *llm.ProviderRegistry, providerID, modelID string) llm.AgentModelConfig {
 	if _, ok := registry.Model(modelID); !ok {
 		if _, ok := registry.Model(providerID + ":" + modelID); ok {
@@ -5042,14 +5090,14 @@ func profileRegistrySelection(registry *llm.ProviderRegistry, profile llm.Profil
 	return normalizeRegistrySelection(registry, profile.ID, config.Model)
 }
 
-func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Profile, error) {
+func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group string) ([]llm.Profile, error) {
 	r.mu.RLock()
 	roles := normalizeModelRoles(r.cfg.ModelRoles)
 	r.mu.RUnlock()
 	if len(roles) == 0 {
 		return nil, nil
 	}
-	role, ok := modelRoleForGroup(roles, group)
+	role, ok := modelRoleFor(roles, purpose, group)
 	if !ok {
 		return nil, nil
 	}
@@ -5130,7 +5178,7 @@ func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
 		}
 	}
 	if len(profiles) == 0 {
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			profiles = []llm.Profile{current}
 		}
 	}
@@ -5271,18 +5319,18 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		r.mu.RLock()
 		roles := normalizeModelRoles(r.cfg.ModelRoles)
 		r.mu.RUnlock()
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, llm.GroupIntent, "")
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), llm.GroupIntent, "")
 		if err != nil {
 			return "", err
 		}
 		if ok {
-			return run(llm.RegistryClient{Registry: registry, Selection: selection})
+			return run(registryLLMProvider(registry, selection, retryTransient))
 		}
 	}
 
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		profiles, roleErr := r.roleBoundProfiles(set, llm.GroupIntent)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -5302,7 +5350,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			}
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, retryTransient, run)
 		}
 		return "", fmt.Errorf("chatbot: no llm profile is configured")
@@ -5315,6 +5363,33 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		return "", err
 	}
 	return run(withTransientLLMRetry(client, retryTransient))
+}
+
+// fallbackProfilesForGroup 在本分组没有配置时跨组挑一批候选，整组返回而不是只取一条，
+// 组内降级才不会丢。
+//
+// 它替代了原来那套「激活配置所在的分组，从激活那条开始绕圈」：分组改由列表第一条决定，
+// 于是同一份配置任何时刻算出来的候选和顺序都一样，也不会被降级写回悄悄改掉。
+//
+// 拦的是「干不了这活」，不是「分组不一样」：视觉、意图没单独配置时用对话配置是正常且
+// 有用的（大多数对话模型本来就能看图），只有生图、嵌入这种单一用途的组才互相拦。少了
+// 这道检查，第一条正好是生图配置时就会拿 gpt-image 去发文本请求，而 provider 和 model
+// 在日志里还都显示「正常」。
+func fallbackProfilesForGroup(set llm.ProfileSet, groupKey string) []llm.Profile {
+	first, ok := set.FirstProfile()
+	if !ok {
+		return nil
+	}
+	if candidates := llmProfilesInGroup(set, llm.GroupChat); len(candidates) > 0 {
+		if profileGroupServes(llm.GroupChat, groupKey) {
+			return candidates
+		}
+		return nil
+	}
+	if !profileGroupServes(first.Group, groupKey) {
+		return nil
+	}
+	return llmProfilesInGroup(set, first.Group)
 }
 
 func llmProfilesInGroup(set llm.ProfileSet, group string) []llm.Profile {
@@ -5347,13 +5422,17 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 		return "", err
 	}
 	set := store.Profiles().WithDefaults()
-	attempts := set.ActiveGroupProfiles()
+	// 候选以前来自「激活配置所在的分组」，且从激活那条开始绕圈；降级成功后还会把
+	// 激活项写回，于是列表顺序和实跑顺序对不上。现在退到默认分组、按列表顺序走，
+	// 默认分组也空了才拿第一条兜底。
+	attempts := llmProfilesInGroup(set, llm.GroupChat)
+	if len(attempts) == 0 {
+		attempts = fallbackProfilesForGroup(set, llm.GroupChat)
+	}
 	if len(attempts) == 0 {
 		return "", fmt.Errorf("chatbot: no llm profile is configured")
 	}
-	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, func(profileID string) {
-		activateLLMProfile(store, profileID)
-	}, true)
+	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, nil, true)
 	if err != nil {
 		return "", err
 	}
@@ -6083,6 +6162,14 @@ func (r *Runtime) enrichForwardMessages(ctx context.Context, event MessageEvent)
 	return event
 }
 
+// pendingForwardExpansion 是展开队列里的一条待取转发。parent 只用于渲染出
+// 「谁套着谁」，不参与去重。
+type pendingForwardExpansion struct {
+	id     string
+	parent string
+	depth  int
+}
+
 func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEvent, segments []MessageSegment, rawMessage string) ([]MessageSegment, string) {
 	ids := forwardReferenceIDs(segments)
 	if len(ids) == 0 || r.channel == nil {
@@ -6090,28 +6177,68 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 	}
 	out := append([]MessageSegment(nil), segments...)
 	lines := make([]string, 0, len(ids))
+	// 转发卡片里可以再放转发卡片（转发一整段聊天记录时很常见），内层只给一个
+	// id，内容要再调一次 get_forward_msg 才拿得到。只展开最外层的话，模型看到
+	// 的就只是一个 [聊天记录] 占位，据此什么都判断不了——按队列一路展到底。
+	queue := make([]pendingForwardExpansion, 0, len(ids))
 	for _, id := range ids {
-		if forwardReferenceExpanded(out, id) {
+		queue = append(queue, pendingForwardExpansion{id: id})
+	}
+	seen := make(map[string]struct{}, len(ids))
+	fetched := 0
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+		if _, ok := seen[item.id]; ok {
 			continue
 		}
+		seen[item.id] = struct{}{}
+		// 段上的 expanded 标记和正文里已有的同 id 区块，都说明这条转发在之前
+		// 的处理里已经展开过（同一事件重跑会遇到），不必再花一次调用。
+		if forwardReferenceExpanded(out, item.id) || forwardTextAlreadyExpanded(out, item.id) {
+			continue
+		}
+		if fetched >= maxForwardExpandCount {
+			// 转发能嵌成很深的一棵树，每个节点都是一次 OneBot 调用。到上限就
+			// 停下并留痕，让「内容不全」在日志里看得见，而不是静默截断。
+			r.recordForwardMessageError(ctx, event, item.id,
+				fmt.Errorf("nested forward expansion stopped at %d fetches", maxForwardExpandCount))
+			break
+		}
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		data, err := r.callOneBotAPIForEvent(callCtx, event, "get_forward_msg", map[string]any{"id": id})
+		data, err := r.callOneBotAPIForEvent(callCtx, event, "get_forward_msg", map[string]any{"id": item.id})
 		cancel()
+		fetched++
 		if err != nil {
-			r.recordForwardMessageError(ctx, event, id, err)
+			r.recordForwardMessageError(ctx, event, item.id, err)
 			continue
 		}
 		text := forwardMessageTextFromOneBotData(data)
-		media := forwardMediaSegmentsFromOneBotData(data, id)
+		media := forwardMediaSegmentsFromOneBotData(data, item.id)
 		if text == "" && len(media) == 0 {
-			r.recordForwardMessageError(ctx, event, id, fmt.Errorf("get_forward_msg returned empty message"))
+			r.recordForwardMessageError(ctx, event, item.id, fmt.Errorf("get_forward_msg returned empty message"))
 			continue
 		}
-		if text != "" && !forwardTextAlreadyExpanded(out, id) {
-			lines = append(lines, fmt.Sprintf("【合并转发 %s】\n%s", id, text))
+		if text != "" {
+			// 标记保持「【合并转发 <id>】」开头，嵌套关系写在后面：正文里的
+			// 占位可能只剩 [聊天记录] 这种摘要，不写清楚谁套着谁，模型对不上。
+			header := fmt.Sprintf("【合并转发 %s】", item.id)
+			if item.parent != "" {
+				header += fmt.Sprintf("（嵌套在 %s 内）", item.parent)
+			}
+			lines = append(lines, header+"\n"+text)
 		}
 		out = appendUniqueForwardMedia(out, media)
-		markForwardReferenceExpanded(out, id)
+		markForwardReferenceExpanded(out, item.id)
+		if item.depth >= maxForwardExpandDepth {
+			continue
+		}
+		for _, nested := range nestedForwardReferenceIDs(data) {
+			if _, ok := seen[nested]; ok {
+				continue
+			}
+			queue = append(queue, pendingForwardExpansion{id: nested, parent: item.id, depth: item.depth + 1})
+		}
 	}
 	if len(lines) == 0 {
 		return out, rawMessage
@@ -6220,6 +6347,91 @@ func replyReferenceIDs(segments []MessageSegment) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+const (
+	// maxForwardExpandDepth 限制转发套转发的展开层数，maxForwardExpandCount
+	// 限制一条消息总共能触发多少次 get_forward_msg。两者一起兜住恶意或意外
+	// 的深层嵌套：没有上限时，一张层层嵌套的卡片能把一次入站拖成几十次调用。
+	maxForwardExpandDepth = 3
+	maxForwardExpandCount = 8
+)
+
+// nestedForwardReferenceIDs 从一次 get_forward_msg 的返回里，找出还需要再取一次
+// 才能拿到内容的转发引用。
+//
+// 只认「光给 id、没带内容」的那种：有的实现会把内层转发的消息直接内联进来，
+// 那部分已经被渲染过了，再取一次只会把同样的内容贴第二遍。
+func nestedForwardReferenceIDs(data map[string]any) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	collectNestedForwardIDs(data, 0, &out, seen)
+	return out
+}
+
+func collectNestedForwardIDs(value any, depth int, out *[]string, seen map[string]struct{}) {
+	if value == nil || depth > 6 {
+		return
+	}
+	addID := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		*out = append(*out, id)
+	}
+	addFromSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type != "forward" {
+				continue
+			}
+			addID(firstNonEmpty(segment.Data["id"], segment.Data["resid"], segment.Data["forward_id"]))
+		}
+	}
+	switch item := value.(type) {
+	case []any:
+		for _, entry := range item {
+			collectNestedForwardIDs(entry, depth, out, seen)
+		}
+	case []map[string]any:
+		for _, entry := range item {
+			collectNestedForwardIDs(entry, depth, out, seen)
+		}
+	case []MessageSegment:
+		addFromSegments(item)
+	case string:
+		// 有的实现把消息体给成 CQ 码字符串，内层转发就藏在 [CQ:forward,id=...] 里。
+		addFromSegments(CQToSegments(item))
+	case map[string]any:
+		data, _ := item["data"].(map[string]any)
+		if data == nil {
+			data = map[string]any{}
+		}
+		if strings.EqualFold(stringFromAny(item["type"]), "forward") {
+			inline := firstNonNil(data["content"], data["message"], data["messages"])
+			if inline == nil {
+				addID(firstNonEmpty(
+					stringFromAny(data["id"]),
+					stringFromAny(data["resid"]),
+					stringFromAny(data["forward_id"]),
+				))
+			}
+			collectNestedForwardIDs(inline, depth+1, out, seen)
+			return
+		}
+		// node 段、以及 NapCat 直接返回的完整消息对象，内容都可能挂在这几个键下。
+		for _, container := range []map[string]any{item, data} {
+			for _, key := range []string{"content", "message", "messages", "forward"} {
+				if nested, ok := container[key]; ok {
+					collectNestedForwardIDs(nested, depth+1, out, seen)
+				}
+			}
+		}
+	}
 }
 
 func forwardReferenceIDs(segments []MessageSegment) []string {
@@ -6647,11 +6859,15 @@ func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string
 	return agentImageHistoryPromptTextWithDescriptions(event, currentTime, nil)
 }
 
-// agentImageHistoryPromptTextWithDescriptions 在图片计数之外附上已缓存的图片描述。
-// 只有计数的占位行会让模型在被追问历史图片时无内容可依，转而编造或退化成寒暄。
+// agentImageHistoryPromptTextWithDescriptions 在媒体计数之外附上已缓存的图片和视频关键帧描述。
+// 只有计数的占位行会让模型在被追问历史媒体时无内容可依，转而编造或退化成寒暄。
 func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime int64, descriptions []string) string {
 	imageCount := historicalStillImageCount(event)
-	if imageCount == 0 {
+	videoCount := historicalVideoCount(event)
+	videoFrameCount := historicalVideoFrameCount(event)
+	audioCount := historicalAudioCount(event)
+	fileCount := historicalFileCount(event)
+	if imageCount+videoCount+videoFrameCount+audioCount+fileCount == 0 {
 		return ""
 	}
 	text := rawMessageWithoutImagePlaceholders(PlainText(event.Segments))
@@ -6670,18 +6886,78 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if text != "" {
 		line += ": " + text
 	}
-	line += fmt.Sprintf("\n【历史图片摘要】message_id=%s；image_count=%d；当前未附加原图。", messageID, imageCount)
+	line += fmt.Sprintf("\n【历史媒体摘要】message_id=%s；image_count=%d；video_count=%d；video_frame_count=%d；audio_count=%d；file_count=%d；当前未附加原图、视频帧或其他媒体原件。", messageID, imageCount, videoCount, videoFrameCount, audioCount, fileCount)
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
-	if messageID != "不可用" {
-		line += fmt.Sprintf("\n需要核对视觉细节时调用 %s，并传入 message_ids=[%q]；涉及多条消息时一次传入全部 ID。", dianaHistoryImagesToolName, messageID)
+	if messageID != "不可用" && imageCount+videoFrameCount > 0 {
+		line += fmt.Sprintf("\n需要核对图片或视频画面细节时调用 %s，并传入 message_ids=[%q]；涉及多条消息时一次传入全部 ID。", dianaHistoryImagesToolName, messageID)
 	}
 	return line
 }
 
 func historicalStillImageCount(event MessageEvent) int {
 	return len(historicalStillImageSegments(event))
+}
+
+func historicalMediaCount(event MessageEvent) int {
+	return historicalStillImageCount(event) + historicalVideoCount(event) + historicalVideoFrameCount(event) + historicalAudioCount(event) + historicalFileCount(event)
+}
+
+func historicalVideoCount(event MessageEvent) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type == "video" || (segment.Type == "file" && videoFileSegment(segment)) {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
+}
+
+func historicalVideoFrameCount(event MessageEvent) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type == "image" && strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame") {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
+}
+
+func historicalAudioCount(event MessageEvent) int {
+	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "record" })
+}
+
+func historicalFileCount(event MessageEvent) int {
+	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "file" })
+}
+
+func historicalSegmentCount(event MessageEvent, matches func(MessageSegment) bool) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if matches(segment) {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
 }
 
 // historyImageCachedDescriptions 只同步读取已有缓存；缺失描述只进入后台队列，
@@ -6699,11 +6975,22 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 	store := r.recallImageDescriptionStore()
 	var lines []string
 	imageIndex := 0
+	videoFrameIndex := 0
 	for _, segment := range segments {
-		if !recallStillImageSegment(segment) {
+		if !historyDescribableImageSegment(segment) {
 			continue
 		}
-		imageIndex++
+		videoFrame := strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame")
+		label := "图片"
+		index := 0
+		if videoFrame {
+			videoFrameIndex++
+			label = "视频关键帧"
+			index = videoFrameIndex
+		} else {
+			imageIndex++
+			index = imageIndex
+		}
 		description := strings.TrimSpace(segment.Data[recallImageDescriptionKey])
 		if description == "" && store != nil {
 			if hash, ok := imageSegmentContentSHA256(segment); ok {
@@ -6715,10 +7002,49 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 			}
 		}
 		if description == "" {
-			lines = append(lines, fmt.Sprintf("图片%d摘要=尚无缓存描述", imageIndex))
+			lines = append(lines, fmt.Sprintf("%s%d摘要=尚无缓存描述", label, index))
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("图片%d摘要=%s", imageIndex, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
+		lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
+	}
+	lines = append(lines, historicalNonImageMediaDescriptions(segments)...)
+	return lines
+}
+
+func historicalNonImageMediaDescriptions(segments []MessageSegment) []string {
+	lines := make([]string, 0)
+	audioIndex, fileIndex := 0, 0
+	for _, segment := range segments {
+		switch segment.Type {
+		case "record":
+			audioIndex++
+			transcript := strings.TrimSpace(segment.Data[voiceSTTTranscriptKey])
+			if transcript == "" {
+				lines = append(lines, fmt.Sprintf("语音%d摘要=尚无可用转写", audioIndex))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("语音%d转写=%s", audioIndex, truncateRunes(strings.Join(strings.Fields(transcript), " "), historyImageDescriptionMaxRunes)))
+		case "file":
+			fileIndex++
+			name := strings.TrimSpace(firstNonEmpty(segment.Data["name"], segment.Data["filename"], segment.Data["fileName"], segment.Data["file"]))
+			if name == "" {
+				name = "未命名文件"
+			}
+			format := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+			if format == "" {
+				format = "未知"
+			}
+			description := strings.TrimSpace(firstNonEmpty(segment.Data["summary"], segment.Data["description"], segment.Data["parsed_text"], segment.Data["content"]))
+			line := fmt.Sprintf("文件%d摘要=文件名：%s；格式：%s", fileIndex, name, format)
+			if description != "" {
+				line += "；内容摘要：" + truncateRunes(strings.Join(strings.Fields(description), " "), historyImageDescriptionMaxRunes)
+			} else if isSupportedFileName(name) {
+				line += "；正文尚未解析"
+			} else {
+				line += "；当前格式不支持正文解析"
+			}
+			lines = append(lines, line)
+		}
 	}
 	return lines
 }
@@ -7012,6 +7338,11 @@ func llmMessageFromEventWithVideoFrames(ctx context.Context, event MessageEvent,
 }
 
 func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
+	message, failures := llmMessageFromEventWithVideoFramesDiagnostics(ctx, event, text, extraImageURLs)
+	return message, len(failures) == 0
+}
+
+func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
 	videoURLs := videoSourceCandidates(event.Segments)
 	cachedFrames := cachedVideoFrameURLs(event.Segments)
 	quotedVideo := false
@@ -7023,8 +7354,9 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 	}
 	frames := cachedFrames
 	cleanupFrames := false
+	videoFailure := ""
 	if len(frames) == 0 {
-		frames = extractVideoContextFrames(ctx, videoURLs)
+		frames, videoFailure = extractVideoContextFramesDetailed(ctx, videoURLs, 0)
 		cleanupFrames = true
 	}
 	if cleanupFrames {
@@ -7033,17 +7365,42 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 	if len(videoURLs) > 0 || len(cachedFrames) > 0 {
 		if len(frames) > 0 {
 			if quotedVideo {
-				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。"
+				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。" + videoFrameNarrationRule
 			} else {
-				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。"
+				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。" + videoFrameNarrationRule
 			}
 		} else {
-			text += "\n\n【系统提示】当前视频读取或抽帧失败。不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频；请直接说明暂时无法读取当前视频。"
+			// 原因照实说出来。以前这里只写「读取或抽帧失败」，模型只能照着复述，
+			// 用户得到一句「我暂时读不了这个视频」——既不知道是这台机器没装
+			// ffmpeg、还是视频超了大小上限，也就不知道该找谁修。
+			text += "\n\n【系统提示】当前视频没能读出画面，原因：" + videoFailureReason(videoFailure) +
+				"把这个原因用自己的话告诉用户，别只说一句读不了。" +
+				"不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频。" + videoFrameNarrationRule
 		}
 	}
 	extraImageURLs = append(extraImageURLs, frames...)
-	return llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
+	return llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
 }
+
+// videoFailureReason 补上兜底文案：拿不到具体原因时也不能把这句写成空的，
+// 否则提示词会变成「原因：把这个原因告诉用户」。
+func videoFailureReason(reason string) string {
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		return trimmed + " "
+	}
+	return "未知，日志里也没有更多线索。 "
+}
+
+// videoFrameNarrationRule 管的是怎么把看到的东西说出来，不是怎么看。
+//
+// 视频是抽了几张关键帧交给模型的，提示词也照实说了——那是为了让它别去臆测没覆盖到
+// 的情节和声音。但模型会把这个实现细节原样带进回复：「这帧里是纳西妲主题的等身
+// 人偶」。用户发的是一段视频，不是一叠图片，聊天里没人这么说话。
+//
+// 约束的是措辞，不是依据：只依据画面这条限制仍然写在上面那几句里。
+const videoFrameNarrationRule = "回答时一律称它为「视频」：不要出现「帧」「关键帧」「抽帧」「截图」这类字眼，" +
+	"也不要按第几帧、第几张来叙述。抽帧是内部实现，用户发出来的是一段视频。" +
+	"唯一的例外是对方专门问你「怎么读的视频」这类实现问题，那时候可以照实说是抽了几张画面来看。"
 
 func hasVideoSegment(segments []MessageSegment) bool {
 	for _, segment := range segments {
@@ -7072,24 +7429,34 @@ func llmMessageFromEventWithImagesForContext(ctx context.Context, event MessageE
 }
 
 func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
+	message, failures := llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
+	return message, len(failures) == 0
+}
+
+func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
 	text = strings.TrimSpace(text)
 	imageURLs := ImageURLs(event.Segments)
 	if event.Quoted != nil {
 		imageURLs = append(imageURLs, ImageURLs(event.Quoted.Segments)...)
 	}
 	imageURLs = append(imageURLs, extraImageURLs...)
-	var complete bool
-	imageURLs, complete = loadLLMImageURLs(ctx, imageURLs)
-	imageURLs = dedupeStrings(imageURLs)
+	imageGroups, failures := loadLLMImageURLGroupsDetailed(ctx, imageURLs)
+	imageGroups = dedupeLLMImageGroups(imageGroups)
+	sourceImageCount := len(imageGroups)
+	imageURLs = flattenLLMImageGroups(imageGroups)
+	expandedLongImages := len(imageURLs) > sourceImageCount
 	if len(imageURLs) == 0 {
-		return llm.Message{Role: llm.RoleUser, Content: text}, complete
+		return llm.Message{Role: llm.RoleUser, Content: text}, failures
 	}
 	if imageOnlyPrompt(text, event) {
-		if len(imageURLs) == 1 {
+		if sourceImageCount == 1 {
 			text = "用户发送了一张图片，请根据图片内容回答。"
 		} else {
-			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", len(imageURLs))
+			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", sourceImageCount)
 		}
+	}
+	if expandedLongImages {
+		text += "\n\n【长图处理】部分超长图片已按“完整总览 → 沿长边顺序切片”展开；相邻切片有重叠，请按收到顺序阅读并合并重复内容。"
 	}
 	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
 	if text != "" {
@@ -7098,7 +7465,7 @@ func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event 
 	for _, imageURL := range imageURLs {
 		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
 	}
-	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, complete
+	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, failures
 }
 
 func hasKnownResolverPlatformURL(event MessageEvent, text string) bool {
@@ -7677,7 +8044,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if cfg.ReplyStyle.allowsForwardReply() && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -8354,6 +8721,14 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 			return nil, errReplySuppressedBeforeSend
 		}
 	}
+	// 卡片里装的是站外搬进来的正文和昵称，一个字都没经过模型，
+	// auditReplyAccountSafety 看不见它们（见 outbound_forward_gate.go）。
+	//
+	// 放在这里而不是函数开头：上面那个抑制分支会带着新 ctx 重进本函数一次，
+	// 审核写在开头就会为同一张卡片跑两遍模型。
+	if auditErr := r.auditForwardNodesSafety(ctx, event, nodes); auditErr != nil {
+		return nil, auditErr
+	}
 	if err := r.interruptedReplyError(ctx, event); err != nil {
 		return nil, err
 	}
@@ -9026,13 +9401,10 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 		return reply, true
 	}
 	switch {
+	// 「lllm 当前」和「lllm 切换」跟着「激活配置」一起去掉了：没有激活项之后，
+	// 「当前用哪个」由本次调用的用途和分组顺序决定，不再是一个能被切换的全局状态。
 	case command == "lllm 列表":
 		return r.renderLLMProfiles(), true
-	case command == "lllm 当前":
-		return r.renderCurrentLLMProfile(), true
-	case strings.HasPrefix(command, "lllm 切换 "):
-		name := strings.TrimSpace(strings.TrimPrefix(command, "lllm 切换 "))
-		return r.switchLLMProfile(name)
 	case command == "群 列表":
 		return r.renderDisabledGroups(), true
 	case strings.HasPrefix(command, "群 禁用 "):
@@ -9097,52 +9469,13 @@ func (r *Runtime) renderLLMProfiles() string {
 	if len(set.Profiles) == 0 {
 		return "当前没有可用的 LLM 配置。"
 	}
-	profiles := append([]llm.Profile(nil), set.Profiles...)
-	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].Name < profiles[j].Name
-	})
-	lines := []string{"LLM 配置列表："}
-	for _, profile := range profiles {
-		prefix := "- "
-		if profile.ID == set.ActiveID {
-			prefix = "* "
-		}
-		lines = append(lines, fmt.Sprintf("%s%s [%s] (%s / %s)", prefix, profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model))
+	// 按列表原顺序输出，不再按名字排序：组内顺序就是降级顺序，排过序的列表会把
+	// 这个含义抹掉。以前用 * 标出激活项，那个概念已经没有了。
+	lines := []string{"LLM 配置列表（组内自上而下即降级顺序）："}
+	for _, profile := range set.Profiles {
+		lines = append(lines, fmt.Sprintf("- %s [%s] (%s / %s)", profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model))
 	}
 	return strings.Join(lines, "\n")
-}
-
-// renderCurrentLLMProfile 渲染当前 LLM 配置档。
-func (r *Runtime) renderCurrentLLMProfile() string {
-	if r.llmStore == nil {
-		return "当前未接入 LLM 配置集。"
-	}
-	profile, ok := r.llmStore.Profiles().Current()
-	if !ok {
-		return "当前没有激活的 LLM 配置。"
-	}
-	return fmt.Sprintf("当前 LLM：%s\n分组：%s\nProvider：%s\nModel：%s", profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model)
-}
-
-// switchLLMProfile 按名称切换 LLM 配置档。
-func (r *Runtime) switchLLMProfile(name string) (string, bool) {
-	if r.llmStore == nil {
-		return "当前未接入 LLM 配置集。", true
-	}
-	set := r.llmStore.Profiles()
-	for _, profile := range set.Profiles {
-		if profile.Name != name {
-			continue
-		}
-		// 只切换 active profile，不修改任何 provider/model 具体参数。
-		set.ActiveID = profile.ID
-		if err := r.llmStore.SaveProfiles(set); err != nil {
-			log.Printf("switch llm profile persist failed: %v", err)
-			return "切换失败：配置没能写入存储。", true
-		}
-		return fmt.Sprintf("已切换到 LLM 配置：%s", profile.Name), true
-	}
-	return "没有找到对应的 LLM 配置。", true
 }
 
 // clearSessionHistory 清空当前会话上下文。
@@ -9426,11 +9759,11 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 			r.setError(finishErr.Error())
 		}
 		if err != nil && finishErr == nil {
-			var noticeErr error
-			if ctx.Err() == nil {
-				noticeErr = r.notifyReminderFailure(ctx, updated, err)
-			}
-			r.recordReminderRetry(updated, err, noticeErr)
+			r.reportRecurringReminderFailure(ctx, updated, err)
+			return
+		}
+		if err == nil && finishErr == nil {
+			r.deliverRecurringRecoveryNotice(ctx, updated)
 		}
 		return
 	}
@@ -9469,11 +9802,11 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 			r.setError(finishErr.Error())
 		}
 		if err != nil && finishErr == nil {
-			var noticeErr error
-			if ctx.Err() == nil {
-				noticeErr = r.notifyReminderFailure(ctx, updated, err)
-			}
-			r.recordReminderRetry(updated, err, noticeErr)
+			r.reportRecurringReminderFailure(ctx, updated, err)
+			return
+		}
+		if err == nil && finishErr == nil {
+			r.deliverRecurringRecoveryNotice(ctx, updated)
 		}
 		return
 	}
@@ -9739,7 +10072,10 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
-	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigest(change))
+	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigestWithPatch(
+		change,
+		settings.Bool(repositoryWatchSettingPatch, false),
+	))
 	return startedAt, nil
 }
 
@@ -9927,7 +10263,7 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 		if comment == "" {
 			continue
 		}
-		if err := r.sendNotification(ctx, target, comment); err != nil {
+		if err := r.sendFollowUp(ctx, followUpKindRepositoryWatch, target, comment); err != nil {
 			r.recordFollowUpFailure(ctx, followUpKindRepositoryWatch, target, "send", err)
 		}
 	}
@@ -9938,9 +10274,13 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 // 通知正文只有标题和链接，模型据此写跟评就只能围着标题措辞打转——标题还常常是过期的。
 // 给它一份「动了哪些文件、各自加删多少行」的清单，它才说得出具体的话。
 //
-// 只要清单，不要 patch 正文：跟评是一句话的感想，读几千字的 diff 正文也用不上，
-// 白占预算。这份资料只进提示词，不进任何发出去的正文。
+// 文件概览始终提供；用户明确允许时，再附经过文件数、hunk 数、字符数和上下文窗口
+// 四层预算裁剪的 patch。参考资料只进提示词，不进任何发出去的正文。
 func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
+	return renderRepositoryWatchDiffDigestWithPatch(change, false)
+}
+
+func renderRepositoryWatchDiffDigestWithPatch(change repositoryWatchChange, includePatch bool) string {
 	sections := make([]string, 0, 4)
 	if change.CommitDiff != nil {
 		if body := renderRepositoryWatchDiffFiles(change.CommitDiff.Files, change.CommitDiff.FilesTruncated); body != "" {
@@ -9957,7 +10297,15 @@ func renderRepositoryWatchDiffDigest(change repositoryWatchChange) string {
 	if len(sections) == 0 {
 		return ""
 	}
-	return truncateRunes(strings.Join(sections, "\n\n"), repositoryWatchDiffDigestRunes)
+	overview := truncateRunes(strings.Join(sections, "\n\n"), repositoryWatchDiffDigestRunes)
+	if !includePatch {
+		return overview
+	}
+	patch := renderRepositoryWatchPatchDigest(change)
+	if patch == "" {
+		return overview
+	}
+	return overview + "\n\n" + patch
 }
 
 func renderRepositoryWatchDiffFiles(files []repositoryWatchDiffFile, truncated bool) string {
@@ -10418,9 +10766,7 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 		} else {
 			items[index].LastError = ""
 			items[index].ConsecutiveFailures = 0
-			if reminderIsRepositoryWatch(items[index]) {
-				resetRepositoryWatchFailureStateAfterSuccess(&items[index])
-			}
+			resetRecurringFailureStateAfterSuccess(&items[index])
 			items[index].PendingDelivery = ""
 			items[index].PendingSince = time.Time{}
 			items[index].TriggerAt = nextScheduledTrigger(startedAt, time.Duration(items[index].IntervalSeconds)*time.Second, time.Now())
@@ -10574,8 +10920,9 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 }
 
 // replyBoundaryRunes 是可以安全断句的位置：在这些字符之后收尾，读起来仍然是一句
-// 说完的话，而不是被切到一半。
-const replyBoundaryRunes = "。！？!?…；;\n"
+// 说完的话，而不是被切到一半。分号不算——它表示后面还有并列的半句，收在这里正是
+// 「被切到一半」的样子，和 isSentenceEnd 同一个理由。
+const replyBoundaryRunes = "。！？!?…\n"
 
 // truncateReplyMinBoundaryRatio 决定断句点最少要保留多少内容；低于这个比例说明
 // 长度预算内没有合适的句尾，只能退回硬截断。
@@ -10881,10 +11228,16 @@ const (
 	splitAtMarker                              // 只认标记
 )
 
-// chatReplySegments 先按换行分，分不进条数上限就退回只认标记。
+// chatReplySegments 先按换行分，分不进条数上限就把相邻的短段并起来。
 //
-// 「要么分好，要么别分」：不做「超出的并进最后一条」，那会让最后一条拖着个尾巴。
-// 退一档而不是一刀切回整条也是同样的道理——但这里只剩两档，退无可退时整条发。
+// 「要么分好，要么别分」曾经是这里的规矩：分不进上限就退回只认标记，等于整条发。
+// 它防的是「超出的并进最后一条」——那会让最后一条拖着个大尾巴，反问被粘在陈述句
+// 后面就是这么来的。防的方向对，做法太狠了：上限设 5、模型写了 6 段，得到的是一坨
+// 三百字，比 6 条更难读。用户设「最多 5 条」的本意是别刷屏，不是别分条。
+//
+// 现在超上限时改成合并，但不是往最后一条塞：每次挑「合起来最短」的那对相邻段并掉，
+// 长段因此始终保持独立，被并的都是碎片。模型显式写的 <dianabr> 是硬边界，合并不跨
+// 越它——那是它明说要分开的地方。
 func chatReplySegments(reply string, limits chatSplitLimits) []string {
 	// 关掉自然分条之后只认标记。模型显式写的 <dianabr> 仍然照做——那是它明说要分，
 	// 关掉的是运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
@@ -10896,7 +11249,126 @@ func chatReplySegments(reply string, limits chatSplitLimits) []string {
 			return parts
 		}
 	}
-	return splitChatReplyAtDepth(reply, limits, splitAtMarker)
+	return mergeChatSegmentsToLimit(reply, limits)
+}
+
+// mergeChatSegmentsToLimit 按行分好之后，把相邻的段并到条数上限之内，并且让并出来的
+// 几条长度尽量接近。
+//
+// 「挑最短的那对并掉」也能压进上限，但压出来的结果很难看：长段各自独立、碎段全堆在
+// 一处，八段并成五条会得到一条两百字加四条十来个字。均分才是「最多五条」该有的样子。
+//
+// 合并只在同一个 <dianabr> 块内部进行：块之间是模型明说要断开的地方，跨过去就是把
+// 它的话改了。所以标记块本身多于上限时，就按标记发，允许超——那是模型要求的条数，
+// 不是运行时猜出来的。
+func mergeChatSegmentsToLimit(reply string, limits chatSplitLimits) []string {
+	blocks := make([][]string, 0, 4)
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		blocks = append(blocks, splitReplyLines(part))
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	quotas := allocateBubbleQuota(blocks, limits.MaxBubbles)
+	out := make([]string, 0, limits.MaxBubbles)
+	for index, block := range blocks {
+		out = append(out, balanceSegments(block, quotas[index])...)
+	}
+	return out
+}
+
+// allocateBubbleQuota 把条数名额分给各个 <dianabr> 块。
+//
+// 每块至少一条——块与块之间不能合并，少给了也没法压。剩下的名额一个一个发，每次发给
+// 「当前平均每条最长」的那块：它是眼下最挤的，多一条收益最大。块内段数用完就封顶，
+// 名额转给别人。
+func allocateBubbleQuota(blocks [][]string, limit int) []int {
+	quotas := make([]int, len(blocks))
+	weights := make([]int, len(blocks))
+	for index, block := range blocks {
+		quotas[index] = 1
+		for _, line := range block {
+			weights[index] += len([]rune(line))
+		}
+	}
+	for remaining := limit - len(blocks); remaining > 0; remaining-- {
+		best, bestLoad := -1, 0
+		for index, block := range blocks {
+			if quotas[index] >= len(block) {
+				continue
+			}
+			if load := weights[index] / quotas[index]; best < 0 || load > bestLoad {
+				best, bestLoad = index, load
+			}
+		}
+		if best < 0 {
+			// 每块都已经一段一条，再多的名额没处放。
+			break
+		}
+		quotas[best]++
+	}
+	return quotas
+}
+
+// balanceSegments 把若干段连续地并成 count 条，让最长的那条尽量短。
+//
+// 就是「连续分割数组、最小化最大子段和」那道题：段的顺序不能动（那是话的顺序），
+// 只能选在哪几个缝隙上断开。段数最多几十、条数最多个位数，直接 DP。
+func balanceSegments(lines []string, count int) []string {
+	if count >= len(lines) {
+		return lines
+	}
+	if count <= 1 {
+		return []string{strings.Join(lines, "\n")}
+	}
+
+	lengths := make([]int, len(lines)+1)
+	for index, line := range lines {
+		lengths[index+1] = lengths[index] + len([]rune(line))
+	}
+	span := func(from, to int) int { return lengths[to] - lengths[from] }
+
+	// best[j][i]：前 i 段分成 j 条时，最长那条的最小值。split 记住最后一刀切在哪。
+	const unreachable = math.MaxInt32
+	best := make([][]int, count+1)
+	split := make([][]int, count+1)
+	for j := range best {
+		best[j] = make([]int, len(lines)+1)
+		split[j] = make([]int, len(lines)+1)
+		for i := range best[j] {
+			best[j][i] = unreachable
+		}
+	}
+	best[0][0] = 0
+	for j := 1; j <= count; j++ {
+		for i := j; i <= len(lines); i++ {
+			for cut := j - 1; cut < i; cut++ {
+				if best[j-1][cut] == unreachable {
+					continue
+				}
+				candidate := max(best[j-1][cut], span(cut, i))
+				if candidate < best[j][i] {
+					best[j][i], split[j][i] = candidate, cut
+				}
+			}
+		}
+	}
+
+	cuts := make([]int, count+1)
+	cuts[count] = len(lines)
+	for j := count; j >= 1; j-- {
+		cuts[j-1] = split[j][cuts[j]]
+	}
+	out := make([]string, 0, count)
+	for j := 1; j <= count; j++ {
+		out = append(out, strings.Join(lines[cuts[j-1]:cuts[j]], "\n"))
+	}
+	return out
 }
 
 func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {
@@ -10921,20 +11393,18 @@ func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReply
 	return out
 }
 
-// replySentenceSplitRunes 是按句号分条的起始长度。短回复不动：两句话的短回复本来
-// 就是一条消息（「端口被占了。先 lsof 看看是谁占着。」拆开反而不像人说话）。
-const replySentenceSplitRunes = 60
-
 // splitLineIntoSentences 把一行按句号分成几次发言，一句一条。
 //
 // 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
 // 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界，一个句子就是一次
 // 发言。条数由上层的 MaxBubbles 兜着，分出来太多就整层退回。
+//
+// 这里曾经有个 60 字的起步门槛，短行整条留着。它防的是「端口被占了。先 lsof 看看
+// 是谁占着。」被拆成两条，但那两条本来就是真人会连发的样子；而门槛真正拦下来的是
+// 一批四五十字、两三句话的回复——恰恰是最该分开发的长度。上层的条数上限已经在管
+// 刷屏了，这道门槛只是把短回复排除在外，去掉。
 func splitLineIntoSentences(line string) []string {
 	runes := []rune(line)
-	if len(runes) <= replySentenceSplitRunes {
-		return []string{line}
-	}
 	ends := boundaryPositions(runes, isSentenceEnd)
 	if len(ends) == 0 {
 		return []string{line}
@@ -10996,7 +11466,8 @@ func splitReplyLines(part string) []string {
 	}
 	var out []string
 	pending := ""
-	for _, line := range strings.Split(part, "\n") {
+	lines := strings.Split(part, "\n")
+	for index, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -11005,7 +11476,7 @@ func splitReplyLines(part string) []string {
 			line = pending + "\n" + line
 			pending = ""
 		}
-		if endsMidSentence(line) {
+		if endsMidSentence(line) && !endsWithBracketTone(line, lines[index+1:]) {
 			pending = line
 			continue
 		}
@@ -11091,6 +11562,32 @@ func endsMidSentence(line string) bool {
 		return true
 	}
 	return false
+}
+
+// endsWithBracketTone 判断行尾那个孤零零的「（」是语气词，不是话没说完。
+//
+// 网上用它表示自嘲、心虚、说漏嘴，猫娘那档人设的提示词专门教了这个用法。而
+// endsMidSentence 把行尾的开括号一律当成「这句还没写完」，于是带「（」的那句会被
+// 粘到下一句上——两次独立发言挤进同一个气泡，中间只剩一个换行。
+//
+// 真正的括号插入语不会在开括号后面立刻断行，而且后文一定有个收尾的「）」。所以
+// 后面找不到闭括号时按语气词处理，找得到就还是当没说完。
+func endsWithBracketTone(line string, rest []string) bool {
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return false
+	}
+	switch runes[len(runes)-1] {
+	case '(', '（':
+	default:
+		return false
+	}
+	for _, next := range rest {
+		if strings.ContainsAny(next, "）)") {
+			return false
+		}
+	}
+	return true
 }
 
 // isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」
@@ -11249,9 +11746,14 @@ func replyCutRank(r rune) int {
 
 // isSentenceEnd 判断是不是句末标点。只认全角的那几个：英文句点在小数、缩写和
 // 域名里到处都是，拿它断句会把 3.5 和 example.com 切开。
+//
+// 分号不在其中。中文的分号是句内的并列分隔，「前半句；后半句」是一句话的两半，
+// 按它分条会把后半句单独扔成一条消息，读起来是话说了一半——句末标点管的是「这句
+// 说完了」，分号恰恰表示还没完。它降级到 isClauseBreak：撞上长度上限非切不可时，
+// 分号仍然比拦腰硬切体面。
 func isSentenceEnd(r rune) bool {
 	switch r {
-	case '。', '！', '？', '…', '；':
+	case '。', '！', '？', '…':
 		return true
 	}
 	return false
@@ -11264,7 +11766,7 @@ func isSentenceEnd(r rune) bool {
 // 上限时按它们断，会把一个链接从中间劈开发出去。
 func isClauseBreak(r rune) bool {
 	switch r {
-	case '，', '、', '：':
+	case '，', '、', '：', '；':
 		return true
 	}
 	return false
