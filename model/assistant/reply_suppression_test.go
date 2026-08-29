@@ -44,7 +44,7 @@ func TestConsumeReplyControlIntent(t *testing.T) {
 	}
 }
 
-func TestReplySuppressionPromptCoversAllMessagesWithVisibleRefusal(t *testing.T) {
+func TestReplySuppressionPromptLeavesAccountControlToSendAudit(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate}, nil)
 	for _, want := range []string{
@@ -52,16 +52,20 @@ func TestReplySuppressionPromptCoversAllMessagesWithVisibleRefusal(t *testing.T)
 		"不限于机器人自动回复",
 		"对方是普通用户还是机器人都可以",
 		"群聊私聊都可以",
-		"非空、简短、自然、用户看得见的拒绝说明",
+		"非空、简短、自然、用户看得见的说明",
 		replyRefusalMarker,
-		"累计 3 次拒答",
-		"同一个非主人账号",
 		replySuppressionMarker,
-		"两个标记不得同时出现",
-		"期间的消息不会在到期后补发",
+		"已停用",
+		"发送前审核和运行时独立决定",
+		"严禁输出",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"累计 3 次拒答", "它会立即触发 30 分钟暂停"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("system prompt still grants account control through %q: %s", forbidden, prompt)
 		}
 	}
 }

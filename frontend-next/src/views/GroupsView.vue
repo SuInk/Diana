@@ -385,7 +385,8 @@ const groupReplyStyleOptions: AppSelectOption[] = [
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
   { value: "concise", label: "简洁" },
-  { value: "catgirl", label: "猫娘" }
+  { value: "catgirl", label: "猫娘" },
+  { value: "roleplay", label: "扮演" }
 ];
 import { toastError, toastSuccess } from "../toast";
 
@@ -478,8 +479,8 @@ function responseModeLabel(mode: BotGroupConfig["response_mode"]): string {
 }
 
 function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
-  return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格", catgirl: "猫娘风格" } as const)[
-    style as "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl"
+  return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格", catgirl: "猫娘风格", roleplay: "扮演风格" } as const)[
+    style as "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay"
   ] ?? "";
 }
 

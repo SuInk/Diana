@@ -379,7 +379,7 @@
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
-                <span class="hint">一次调用最多带多少 token 上下文进去。留空按 LLM 配置档的模型窗口，填了只会收紧不会放宽。</span>
+                <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
               </div>
               <div class="field">
                 <label for="bot-context">历史查询条数上限</label>
@@ -416,7 +416,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">语义检索</span>
                 </label>
-                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在 LLM 配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
+                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在提供商配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
@@ -743,7 +743,7 @@
                 <label class="switch">
                   <input v-model="form.owner_llm_config_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改 Provider 和模型</span>
+                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
                 </label>
                 <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
               </div>
@@ -771,7 +771,7 @@
 
           <section class="card">
             <div class="card-header">
-              <h2>账号安全审核</h2>
+              <h2>发送前审核</h2>
               <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
                 {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
               </span>
@@ -781,11 +781,11 @@
                 <label class="switch">
                   <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">直接回复也做发送前安全审核</span>
+                  <span class="switch-label">直接回复也做统一发送前审核</span>
                 </label>
                 <span class="hint">
-                  涉政、露骨和其他可能导致账号被处置的内容会被拦下不发。主动回复本来就要过一次审核，安全判断顺带完成，始终生效；
-                  打开这个开关后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                  一次审核同时判断内容安全和是否属于明确拒答；主动回复还会使用其中的表达质量结论。涉政、露骨和其他可能导致账号被处置的内容会被拦下不发，
+                  高置信拒答仅在发送成功后累计。打开后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
                 </span>
               </div>
             </div>
@@ -793,21 +793,21 @@
 
           <section class="card">
             <div class="card-header">
-              <h2>词典作用域</h2>
-              <span class="badge" :class="form.glossary_shared_scope_enabled ? 'accent' : ''">
-                {{ form.glossary_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
+              <h2>笔记本作用域</h2>
+              <span class="badge" :class="form.notebook_shared_scope_enabled ? 'accent' : ''">
+                {{ form.notebook_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
               </span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.glossary_shared_scope_enabled" type="checkbox" />
+                  <input v-model="form.notebook_shared_scope_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">所有群共用一本词典</span>
+                  <span class="switch-label">所有群共用一本笔记</span>
                 </label>
                 <span class="hint">
-                  默认按会话隔离：一个群记下的梗只在这个群生效，别的群查不到。打开后新记的词条一律写进全局词典，所有会话通用。
-                  打开之前各群已经记下的词条不会搬走，仍在自己群里优先生效，可以在「词典」页按作用域逐条改。
+                  默认按会话隔离：一个群记下的只在这个群生效，别的群查不到。打开后新记的一律写进全局笔记本，所有会话通用。
+                  打开之前各群已经记下的不会搬走，仍在自己群里优先生效，可以在「笔记本」页按作用域逐条改。
                 </span>
               </div>
             </div>
@@ -817,12 +817,12 @@
           <section class="card">
             <div class="card-header">
               <h2>模型分配</h2>
-              <span class="card-sub">按用途选择 Provider 与模型；Provider 在「LLM 配置」页管理</span>
+              <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
             </div>
             <div class="card-body stack" style="gap: 12px">
               <div class="model-role-row model-role-head" aria-hidden="true">
                 <span>用途</span>
-                <span>Provider / 分组</span>
+                <span>提供商 / 分组</span>
                 <span>模型</span>
               </div>
               <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
@@ -839,7 +839,7 @@
                 />
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话 Provider 的生图配置。
+                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话提供商的生图配置。
               </p>
             </div>
           </section>
@@ -1245,7 +1245,7 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
 
 // 人设库。存的是「它是谁、怎么说话」的四项组合，套用是把它们填进下面的表单——
 // 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
@@ -1440,7 +1440,9 @@ const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence
   gentle: { self_reference: "", sentence_enders: "" },
   lively: { self_reference: "", sentence_enders: "" },
   concise: { self_reference: "", sentence_enders: "" },
-  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" }
+  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
+  // 扮演对句尾语气词没有主张：那属于具体角色，不属于这套说话方式。
+  roleplay: { self_reference: "我", sentence_enders: "" }
 };
 
 // 切换风格时把这两个框填上，而不是运行时暗中套用：填进去用户看得见、能改。
@@ -1469,7 +1471,8 @@ const replyStyleOptions: AppSelectOption[] = [
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
   { value: "concise", label: "简洁" },
-  { value: "catgirl", label: "猫娘" }
+  { value: "catgirl", label: "猫娘" },
+  { value: "roleplay", label: "扮演" }
 ];
 
 const responseModeOptions: AppSelectOption[] = [
@@ -1566,10 +1569,10 @@ async function updateContextIsolation(enabled: boolean): Promise<void> {
 // —— 模型分配 ——
 type RoleKey = "chat" | "vision" | "intent" | "image";
 const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
-  { key: "chat", label: "对话", fallbackHint: "使用 LLM 配置页的激活配置" },
+  { key: "chat", label: "对话", fallbackHint: "使用「提供商」页的激活配置" },
   { key: "vision", label: "视觉理解", fallbackHint: "跟随对话模型" },
   { key: "intent", label: "意图识别", fallbackHint: "跟随对话模型" },
-  { key: "image", label: "图片生成", fallbackHint: "跟随对话 Provider 的生图模型" }
+  { key: "image", label: "图片生成", fallbackHint: "跟随对话提供商的生图模型" }
 ];
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>>>({});
@@ -1706,8 +1709,8 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   for (const group of channelGroups()) {
     base.push({
       value: GROUP_PREFIX + group.name,
-      label: `${group.name === "default" ? "默认分组" : group.name}（Provider 分组）`,
-      hint: `${group.count} 个 Provider 按顺序降级`
+      label: `${group.name === "default" ? "默认分组" : group.name}（提供商分组）`,
+      hint: `${group.count} 个提供商按顺序降级`
     });
   }
   for (const channel of llmChannels.value) {
@@ -1793,7 +1796,7 @@ function modelOptionsFor(role: RoleKey): AppSelectOption[] {
         model,
         compatibility,
         profiles.length > 1
-          ? `${providers.length}/${profiles.length} 个 Provider 将参与路由：${providers.join("、")}`
+          ? `${providers.length}/${profiles.length} 个提供商将参与路由：${providers.join("、")}`
           : (model.owned_by || undefined)
       )
     });
@@ -1901,7 +1904,7 @@ function setForm(config: BotProfileConfig): void {
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
-    glossary_shared_scope_enabled: config.glossary_shared_scope_enabled ?? false,
+    notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? false,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     mention_user_mode: config.mention_user_mode ?? "auto",
@@ -2076,7 +2079,7 @@ async function save(): Promise<void> {
       return;
     }
 		if (!role.provider_id && !role.model_id && !roleModelIsSelectable(row.key, role.model.trim())) {
-      toastError(`${row.label}模型 ${role.model.trim()} 与当前 Provider 配置不兼容，请重新选择`);
+      toastError(`${row.label}模型 ${role.model.trim()} 与当前提供商配置不兼容，请重新选择`);
       return;
     }
   }

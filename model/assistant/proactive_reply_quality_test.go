@@ -121,6 +121,22 @@ func TestProactiveReplyQualityPromptJudgesOnlyObservableDimensions(t *testing.T)
 	}
 }
 
+// 线上真实误杀：一条完整的猫娘口吻回复，末尾是「折磨喵（」——那个「（」是语气词，
+// 审核器按「括号没闭合」判成截断，整条被拦下。截断这一条必须把聊天口语的收尾方式
+// 排除掉，否则风格提示词和审核提示词会互相打架，代价是用户少收到一条回复。
+func TestProactiveReplyQualityPromptDoesNotTreatChatStyleEndingAsTruncation(t *testing.T) {
+	prompt := proactiveReplyQualityPrompt
+	for _, must := range []string{"别把风格当截断", "句末不打句号", "语气词收尾", "不闭合的「(」或「（」", "不算截断"} {
+		if !strings.Contains(prompt, must) {
+			t.Fatalf("截断判据没有排除聊天口语的收尾方式，缺 %q：%s", must, prompt)
+		}
+	}
+	// 真正的截断仍然要判，别把这一条整条删掉。
+	if !strings.Contains(prompt, "结尾停在半句上") {
+		t.Fatalf("提示词不再判截断了：%s", prompt)
+	}
+}
+
 func TestReplySafetyPromptScopesPoliticsToMainlandChina(t *testing.T) {
 	prompt := proactiveReplyQualityPrompt
 	for _, must := range []string{
@@ -169,6 +185,39 @@ func TestReplyAuditParsesDedicatedAccountRiskReason(t *testing.T) {
 	err := accountSafetyError(decision)
 	if err == nil || !strings.Contains(err.Error(), decision.AccountRiskReason) || strings.Contains(err.Error(), decision.Reason) {
 		t.Fatalf("account safety error mixed quality and risk reasons: %v", err)
+	}
+}
+
+func TestReplyAuditParsesHighConfidenceRefusal(t *testing.T) {
+	decision, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.97,"account_safe":true,"count_refusal":true,"refusal_confidence":0.94,"refusal_reason":"明确拒绝当前请求"}`)
+	if !ok {
+		t.Fatal("decision did not parse")
+	}
+	if !replyControlIntentFromAudit(decision).RefuseCurrent {
+		t.Fatalf("high-confidence refusal was not counted: %#v", decision)
+	}
+	decision.RefusalConfidence = replyRefusalAuditConfidence - 0.01
+	if replyControlIntentFromAudit(decision).RefuseCurrent {
+		t.Fatalf("low-confidence refusal was counted: %#v", decision)
+	}
+}
+
+func TestDirectReplyAuditReturnsRefusalControlWithSafetyResult(t *testing.T) {
+	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"reason":"自然拒绝","account_safe":true,"count_refusal":true,"refusal_confidence":0.98,"refusal_reason":"明确拒绝当前请求"}`}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	cfg := runtime.Config()
+	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
+	intent, err := runtime.evaluateDirectReplyAudit(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "做不到的请求", "这个我不能帮你", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !intent.RefuseCurrent {
+		t.Fatalf("audit intent = %#v", intent)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("combined send audit calls = %d, want 1", len(provider.requests))
 	}
 }
 

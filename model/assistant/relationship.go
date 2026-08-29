@@ -110,7 +110,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		// 所以和读历史同级，不需要 owner 权限。
 		dianaSubtaskToolName:   true,
 		"diana.relationship":   true,
-		dianaGlossaryToolName:  true,
+		dianaNotebookToolName:  true,
 		dianaVersionToolName:   true,
 		dianaStickerToolName:   true,
 		"diana.onebot_group":   true,

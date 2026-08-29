@@ -214,7 +214,7 @@ func (r *Runtime) recordRelationshipEvaluation(ctx context.Context, event Messag
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "chatbot.relationship_evaluation",
-		Message: "LLM 已完成关系变化评估",
+		Message: "模型已完成关系变化评估",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{

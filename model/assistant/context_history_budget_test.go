@@ -561,7 +561,7 @@ func TestContextBudgetBreakdownReportsWhichBoundApplies(t *testing.T) {
 	}
 }
 
-// 没有 LLM 配置档时也要认配置里的窗口上限。这条路径以前直接 return 兜底常量，
+// 没有提供商配置档时也要认配置里的窗口上限。这条路径以前直接 return 兜底常量，
 // 机器人和群配的 max_context_tokens 在上面完全不生效。
 func TestPromptContextWindowRespectsConfigWithoutLLMStore(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

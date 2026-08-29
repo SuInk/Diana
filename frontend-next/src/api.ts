@@ -23,6 +23,8 @@ export interface LLMConfig {
   api_key?: string;
   api_key_configured?: boolean;
   api_key_preview?: string;
+  /** 指向某个已授权登录的提供商。填了它就用授权令牌，API Key 变成可选的兜底。 */
+  oauth_provider?: string;
   base_url?: string;
   models?: LLMModelInfo[];
   model: string;
@@ -140,7 +142,7 @@ export interface BotProfileConfig {
   welcome_message?: string;
   system_prompt?: string;
   response_mode?: "quiet" | "standard" | "active" | "custom";
-  reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
   self_reference?: string;
   /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随表达风格。 */
@@ -161,8 +163,8 @@ export interface BotProfileConfig {
   bot_reply_loop_detection_enabled?: boolean;
   /** 直接回复是否也做发送前账号安全审核；主动回复始终审核，不受此开关影响。 */
   reply_account_safety_audit_enabled?: boolean;
-  /** 词典是否跨群共用一本；默认按会话隔离。 */
-  glossary_shared_scope_enabled?: boolean;
+  /** 笔记本是否跨群共用一本；默认按会话隔离。 */
+  notebook_shared_scope_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
   prompt_inject_time?: boolean;
   prompt_inject_plaintext_rules?: boolean;
@@ -349,7 +351,7 @@ export interface BotGroupConfig {
   /** 留空时跟随机器人全局回复模式。 */
   response_mode?: "" | "quiet" | "standard" | "active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
-  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   /** 留空时跟随机器人全局设置。 */
   self_reference?: string;
   sentence_enders?: string;
@@ -1681,7 +1683,7 @@ export interface Persona {
   id: string;
   name: string;
   system_prompt?: string;
-  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   self_reference?: string;
   sentence_enders?: string;
   updated_at?: string;
@@ -1730,8 +1732,17 @@ export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
   });
 }
 
-export interface GlossaryRevision {
+/** 笔记类型。后端给出全量清单，前端不自己维护一份。 */
+export type NotebookKind = "term" | "fact" | "preference" | "event" | "todo" | "person";
+
+export interface NotebookKindOption {
+  value: NotebookKind;
+  label: string;
+}
+
+export interface NotebookRevision {
   version: number;
+  kind?: NotebookKind;
   meaning?: string;
   example?: string;
   aliases?: string[];
@@ -1741,9 +1752,11 @@ export interface GlossaryRevision {
   recorded_at: string;
 }
 
-export interface GlossaryEntry {
+export interface NotebookEntry {
   id: string;
   scope_key: string;
+  kind: NotebookKind;
+  /** 标题：词条是那个词本身，其余类型是一句概括。 */
   term: string;
   aliases?: string[];
   meaning: string;
@@ -1760,25 +1773,28 @@ export interface GlossaryEntry {
   created_at: string;
   updated_at: string;
   /** 只有详情接口带修订记录。 */
-  revisions?: GlossaryRevision[];
+  revisions?: NotebookRevision[];
 }
 
-export interface GlossaryScopeSummary {
+export interface NotebookScopeSummary {
   scope_key: string;
   active_count: number;
   deleted_count: number;
   updated_at: string;
 }
 
-export interface GlossaryListResponse {
-  scopes: GlossaryScopeSummary[];
+export interface NotebookListResponse {
+  scopes: NotebookScopeSummary[];
   scope: string;
-  entries: GlossaryEntry[];
+  entries: NotebookEntry[];
   query?: string;
+  kinds: NotebookKindOption[];
+  kind?: string;
 }
 
-export interface GlossaryEntryInput {
+export interface NotebookEntryInput {
   scope: string;
+  kind?: NotebookKind;
   term: string;
   aliases?: string[];
   meaning?: string;
@@ -1786,15 +1802,19 @@ export interface GlossaryEntryInput {
   note?: string;
 }
 
-export function listGlossary(
+export function listNotebook(
   scope = "",
   query = "",
   includeDeleted = false,
-  botProfileID = ""
-): Promise<GlossaryListResponse> {
+  botProfileID = "",
+  kind = ""
+): Promise<NotebookListResponse> {
   const params = new URLSearchParams();
   if (scope) {
     params.set("scope", scope);
+  }
+  if (kind) {
+    params.set("kind", kind);
   }
   if (query) {
     params.set("q", query);
@@ -1806,30 +1826,30 @@ export function listGlossary(
     params.set("profile", botProfileID);
   }
   const search = params.toString();
-  return requestJSON<GlossaryListResponse>(`/api/assistant/glossary${search ? `?${search}` : ""}`);
+  return requestJSON<NotebookListResponse>(`/api/assistant/notebook${search ? `?${search}` : ""}`);
 }
 
-export function getGlossaryEntry(scope: string, term: string): Promise<GlossaryEntry> {
+export function getNotebookEntry(scope: string, term: string): Promise<NotebookEntry> {
   const params = new URLSearchParams({ scope, term });
-  return requestJSON<GlossaryEntry>(`/api/assistant/glossary/entry?${params.toString()}`);
+  return requestJSON<NotebookEntry>(`/api/assistant/notebook/entry?${params.toString()}`);
 }
 
-export function saveGlossaryEntry(input: GlossaryEntryInput): Promise<GlossaryEntry> {
-  return requestJSON<GlossaryEntry>("/api/assistant/glossary", {
+export function saveNotebookEntry(input: NotebookEntryInput): Promise<NotebookEntry> {
+  return requestJSON<NotebookEntry>("/api/assistant/notebook", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
-export function deleteGlossaryEntry(scope: string, term: string, note = ""): Promise<GlossaryEntry> {
-  return requestJSON<GlossaryEntry>("/api/assistant/glossary/delete", {
+export function deleteNotebookEntry(scope: string, term: string, note = ""): Promise<NotebookEntry> {
+  return requestJSON<NotebookEntry>("/api/assistant/notebook/delete", {
     method: "POST",
     body: JSON.stringify({ scope, term, note })
   });
 }
 
-export function restoreGlossaryEntry(scope: string, term: string): Promise<GlossaryEntry> {
-  return requestJSON<GlossaryEntry>("/api/assistant/glossary/restore", {
+export function restoreNotebookEntry(scope: string, term: string): Promise<NotebookEntry> {
+  return requestJSON<NotebookEntry>("/api/assistant/notebook/restore", {
     method: "POST",
     body: JSON.stringify({ scope, term })
   });
@@ -2015,4 +2035,73 @@ export interface GroupRelationResponse {
 export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupRelationResponse> {
   const params = new URLSearchParams({ range });
   return requestJSON<GroupRelationResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/relations?${params.toString()}`);
+}
+
+
+// ---- LLM OAuth 登录 -------------------------------------------------------
+
+export interface LLMOAuthProvider {
+  key: string;
+  label: string;
+  authorize_url: string;
+  token_url: string;
+  client_id?: string;
+  /** 读接口里恒为 "***" 或空，明文永远不回传。 */
+  client_secret?: string;
+  redirect_uri?: string;
+  scopes?: string[];
+  use_pkce?: boolean;
+  token_headers?: Record<string, string>;
+  built_in?: boolean;
+  notes?: string;
+}
+
+export interface LLMOAuthStatus {
+  provider: LLMOAuthProvider;
+  logged_in: boolean;
+  account?: string;
+  obtained_at?: string;
+  expires_at?: string;
+  expired?: boolean;
+  refreshable?: boolean;
+  scope?: string;
+}
+
+export interface LLMOAuthPendingLogin {
+  id: string;
+  provider_key: string;
+  authorize_url: string;
+  redirect_uri?: string;
+  expires_at: string;
+}
+
+export function listOAuthProviders(): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/providers");
+}
+
+export function saveOAuthProvider(provider: LLMOAuthProvider): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/providers", { method: "POST", body: JSON.stringify(provider) });
+}
+
+export function deleteOAuthProvider(provider: string): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/providers/delete", { method: "POST", body: JSON.stringify({ provider }) });
+}
+
+export function startOAuthLogin(provider: string): Promise<{ login: LLMOAuthPendingLogin }> {
+  return requestJSON("/api/llm/oauth/login/start", { method: "POST", body: JSON.stringify({ provider }) });
+}
+
+export function completeOAuthLogin(provider: string, loginId: string, callback: string): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/login/complete", {
+    method: "POST",
+    body: JSON.stringify({ provider, login_id: loginId, callback })
+  });
+}
+
+export function cancelOAuthLogin(loginId: string): Promise<{ ok: boolean }> {
+  return requestJSON("/api/llm/oauth/login/cancel", { method: "POST", body: JSON.stringify({ login_id: loginId }) });
+}
+
+export function logoutOAuthProvider(provider: string): Promise<{ providers: LLMOAuthStatus[] }> {
+  return requestJSON("/api/llm/oauth/logout", { method: "POST", body: JSON.stringify({ provider }) });
 }
