@@ -16,6 +16,17 @@ type stickerHistoryStore struct {
 	events map[string][]MessageEvent
 }
 
+type stickerAssetTestStore struct {
+	stickerHistoryStore
+	assets []StickerAsset
+	query  StickerHistoryQuery
+}
+
+func (s *stickerAssetTestStore) ListStickerAssets(_ context.Context, query StickerHistoryQuery) ([]StickerAsset, error) {
+	s.query = query
+	return append([]StickerAsset(nil), s.assets...), nil
+}
+
 func (s *stickerHistoryStore) AppendMessageEvent(_ context.Context, session string, event MessageEvent) error {
 	s.events[session] = append(s.events[session], event)
 	return nil
@@ -46,11 +57,69 @@ func (s *stickerHistoryStore) ListRecentStickerEvents(_ context.Context, query S
 
 func TestDefaultPluginManagerIncludesStickerSender(t *testing.T) {
 	state, ok := NewDefaultPluginManager().Get(stickerPluginID)
-	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.1.1" {
+	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.0" {
 		t.Fatalf("sticker plugin state=%#v ok=%v", state, ok)
 	}
 	if len(state.Manifest.Settings) != 5 {
 		t.Fatalf("settings=%#v", state.Manifest.Settings)
+	}
+}
+
+func TestStickerSegmentLabelUsesPlatformMetadata(t *testing.T) {
+	if label, ok := StickerSegmentLabel(MessageSegment{Type: "image", Data: map[string]string{"sub_type": "1"}}); !ok || label != "动画表情" {
+		t.Fatalf("subtype sticker label=%q ok=%v", label, ok)
+	}
+	if label, ok := StickerSegmentLabel(MessageSegment{Type: "image", Data: map[string]string{"summary": "[投降]"}}); !ok || label != "投降" {
+		t.Fatalf("named sticker label=%q ok=%v", label, ok)
+	}
+	if _, ok := StickerSegmentLabel(MessageSegment{Type: "image", Data: map[string]string{"sub_type": "0", "summary": "[图片]"}}); ok {
+		t.Fatal("ordinary image was classified as a sticker")
+	}
+}
+
+func TestStickerToolUsesDurableAssetStoreAndBoundCandidate(t *testing.T) {
+	body := []byte("durable-sticker")
+	path := filepath.Join(t.TempDir(), "durable.gif")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hash := imageBytesSHA256(body)
+	event := MessageEvent{
+		Kind: EventKindPrivate, ContextNamespace: "bot-a", ProfileID: "profile-a",
+		UserID: "user", MessageID: "request",
+	}
+	store := &stickerAssetTestStore{stickerHistoryStore: stickerHistoryStore{events: map[string][]MessageEvent{}}, assets: []StickerAsset{{
+		Session: sessionKey(event), ContextNamespace: "bot-a", ProfileID: "profile-a",
+		Kind: EventKindPrivate, UserID: "user", MessageID: "source", EventTime: 1,
+		Summary: "投降", Path: path, ContentSHA256: hash,
+	}}}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	tool := newDianaStickerTool(runtime, event, SettingValues{
+		stickerSettingHistoryLimit: 100, stickerSettingSearchResults: 3,
+		stickerSettingCrossGroup: true, stickerSettingCrossPrivate: true,
+	})
+
+	output, err := tool.Run(context.Background(), map[string]any{"operation": "search", "query": "认输"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var search stickerToolResult
+	if err := json.Unmarshal([]byte(output), &search); err != nil {
+		t.Fatal(err)
+	}
+	if len(search.Candidates) != 1 || !store.query.ShareGroups || !store.query.SharePrivate || store.query.Session != sessionKey(event) {
+		t.Fatalf("search=%#v query=%#v", search, store.query)
+	}
+	if search.Candidates[0].MessageID != "" {
+		t.Fatalf("source message id leaked: %#v", search.Candidates[0])
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "send", "sticker_id": search.Candidates[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 || len(sent[0].ImageURLs) != 1 || sent[0].ImageURLs[0] != path {
+		t.Fatalf("sent=%#v", sent)
 	}
 }
 
@@ -151,22 +220,29 @@ func TestStickerToolSearchesThenSendsOnlyCurrentConversationSticker(t *testing.T
 	otherPath := filepath.Join(dir, "other.gif")
 	privatePath := filepath.Join(dir, "private.gif")
 	normalPath := filepath.Join(dir, "normal.png")
-	for _, path := range []string{currentPath, otherPath, privatePath, normalPath} {
-		if err := os.WriteFile(path, []byte("image"), 0o600); err != nil {
+	contents := map[string][]byte{
+		currentPath: []byte("current-image"), otherPath: []byte("other-image"),
+		privatePath: []byte("private-image"), normalPath: []byte("normal-image"),
+	}
+	for path, body := range contents {
+		if err := os.WriteFile(path, body, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	currentHash := imageBytesSHA256(contents[currentPath])
+	otherHash := imageBytesSHA256(contents[otherPath])
+	privateHash := imageBytesSHA256(contents[privatePath])
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "request"}
 	store := &stickerHistoryStore{events: map[string][]MessageEvent{
 		sessionKey(event): {
 			{Kind: EventKindGroup, GroupID: "group-1", MessageID: "normal", Time: 1, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[图片]", "cached_file": normalPath}}}},
-			{Kind: EventKindGroup, GroupID: "group-1", MessageID: "sticker", Time: 2, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]", "cached_file": currentPath, imageContentSHA256Key: strings.Repeat("a", 64)}}}},
+			{Kind: EventKindGroup, GroupID: "group-1", MessageID: "sticker", Time: 2, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]", "cached_file": currentPath, imageContentSHA256Key: currentHash}}}},
 		},
 		"group:group-2": {
-			{Kind: EventKindGroup, GroupID: "group-2", MessageID: "private", Time: 3, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]", "cached_file": otherPath, imageContentSHA256Key: strings.Repeat("b", 64)}}}},
+			{Kind: EventKindGroup, GroupID: "group-2", MessageID: "private", Time: 3, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]", "cached_file": otherPath, imageContentSHA256Key: otherHash}}}},
 		},
 		"private:other-user": {
-			{Kind: EventKindPrivate, UserID: "other-user", MessageID: "private-chat", Time: 4, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]", "cached_file": privatePath, imageContentSHA256Key: strings.Repeat("c", 64)}}}},
+			{Kind: EventKindPrivate, UserID: "other-user", MessageID: "private-chat", Time: 4, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]", "cached_file": privatePath, imageContentSHA256Key: privateHash}}}},
 		},
 	}}
 	channel := &recordingChannel{}
@@ -202,7 +278,7 @@ func TestStickerToolSearchesThenSendsOnlyCurrentConversationSticker(t *testing.T
 		t.Fatalf("sent=%#v messages=%#v", sent, messages)
 	}
 
-	output, err = tool.Run(context.Background(), map[string]any{"operation": "send", "sticker_id": strings.Repeat("b", 24)})
+	output, err = tool.Run(context.Background(), map[string]any{"operation": "send", "sticker_id": otherHash[:24]})
 	if err != nil {
 		t.Fatal(err)
 	}
