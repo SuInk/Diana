@@ -499,7 +499,7 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "chatbot.bot_reply_loop_classification",
-		Message: "LLM 已完成 AI 自动回复判断",
+		Message: "模型已完成 AI 自动回复判断",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{

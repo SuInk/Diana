@@ -47,7 +47,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 		return "", fmt.Errorf("diana LLM config: runtime is not configured")
 	}
 	if !t.runtime.relationshipPolicy(ctx, t.event).Owner {
-		return "", fmt.Errorf("只有主人可以修改 LLM 配置")
+		return "", fmt.Errorf("只有主人可以修改提供商配置")
 	}
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 	if operation == "" {
@@ -71,7 +71,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 		command.ProviderSet = true
 	}
 	if t.runtime.llmStore == nil {
-		return "", fmt.Errorf("当前未接入 LLM 配置集")
+		return "", fmt.Errorf("当前未接入提供商配置集")
 	}
 	result := t.runtime.applyLLMConfigCommand(ctx, command, t.runtime.llmModelLister())
 	recordLLMConfigSkillLog(ctx, PluginRequest{

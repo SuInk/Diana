@@ -223,5 +223,5 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:history", Title: "聊天历史引用与撤回", Content: "持久保存 OneBot v11 消息、引用、图片和视频关键帧，重启后不丢；可读取合并转发和撤回记录并结合上下文回复。", Source: "core", Enabled: true},
 	{ID: "core:config", Title: "机器人配置与模型配置", Content: "diana.config 可读取脱敏运行配置、LLM、plugins 和 skills；仅主人可用 diana.llm_config 修改 Diana 自己当前的 provider/model。", Source: "core", Enabled: true, Required: "主人"},
 	{ID: "core:llm-identity-privacy", Title: "LLM 账号标识脱敏", Content: "默认在本地 LLM 边界把账号和群号替换为带角色语义的稳定别名；模型回复和 Agent 工具参数会在本地执行前还原。真实标识仍保留在本地数据库，不影响消息发送、群工具和长期记忆。", Source: "core", Enabled: true},
-	{ID: "core:capabilities", Title: "自身能力知识库 RAG", Content: "diana.capabilities 使用本地稀疏检索，从核心能力和实时插件清单召回相关条目后交给 LLM 回答。", Source: "core", Enabled: true},
+	{ID: "core:capabilities", Title: "自身能力知识库 RAG", Content: "diana.capabilities 使用本地稀疏检索，从核心能力和实时插件清单召回相关条目后交给模型回答。", Source: "core", Enabled: true},
 }

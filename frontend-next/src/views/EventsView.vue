@@ -919,7 +919,7 @@ function traceSummary(step: AppLogEntry): string {
   const metadata = traceMetadata(step);
   const parts: string[] = [];
   if (metadata.purpose) parts.push(`用途：${String(metadata.purpose)}`);
-  if (metadata.provider) parts.push(`Provider：${String(metadata.provider)}`);
+  if (metadata.provider) parts.push(`提供商：${String(metadata.provider)}`);
   if (metadata.model) parts.push(`模型：${String(metadata.model)}`);
   if (metadata.tool) parts.push(`工具：${String(metadata.tool)}`);
   if (metadata.finish_reason) parts.push(`结束原因：${String(metadata.finish_reason)}`);
