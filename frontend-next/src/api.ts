@@ -142,7 +142,7 @@ export interface BotProfileConfig {
   welcome_message?: string;
   system_prompt?: string;
   response_mode?: "quiet" | "standard" | "active" | "custom";
-  reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
   self_reference?: string;
   /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随表达风格。 */
@@ -351,7 +351,7 @@ export interface BotGroupConfig {
   /** 留空时跟随机器人全局回复模式。 */
   response_mode?: "" | "quiet" | "standard" | "active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
-  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   /** 留空时跟随机器人全局设置。 */
   self_reference?: string;
   sentence_enders?: string;
@@ -1683,7 +1683,7 @@ export interface Persona {
   id: string;
   name: string;
   system_prompt?: string;
-  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   self_reference?: string;
   sentence_enders?: string;
   updated_at?: string;
