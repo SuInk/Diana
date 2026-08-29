@@ -481,6 +481,10 @@ func TestDefaultPersonaVoiceForCatgirl(t *testing.T) {
 			t.Fatalf("%s 不该对自称和句尾有主张：%q %q", style, self, ends)
 		}
 	}
+	// 扮演只主张自称：句尾语气词属于具体角色，不属于这套说话方式。
+	if self, ends := DefaultPersonaVoice(ReplyStyleRoleplay); self != "我" || ends != "" {
+		t.Fatalf("扮演的自称和句尾 = %q %q", self, ends)
+	}
 }
 
 // 端到端：群友风格下的长回复现在也折成合并转发卡片，而不是刷一屏。
@@ -526,5 +530,58 @@ func TestRuntimeGroupmateLongReplyUsesForwardCard(t *testing.T) {
 	}
 	if sent := channel.sentSnapshot(); len(sent) != 0 {
 		t.Fatalf("走了卡片就不该再散装发：%#v", sent)
+	}
+}
+
+// 扮演这一档和猫娘正好相反：那边禁止动作描写，这边动作描写就是主体。
+// 要守的是两处刹车——别写成小说、别拿动作顶替正事——
+// 以及它同样没有豁免全局输出规则。
+func TestRoleplayReplyStyleTeachesActionsAndKeepsBrakes(t *testing.T) {
+	for _, raw := range []string{"roleplay", "Roleplay", " roleplay "} {
+		if got := ReplyStyle(raw).Normalized(); got != ReplyStyleRoleplay {
+			t.Fatalf("Normalized(%q) = %q", raw, got)
+		}
+	}
+	prompt := ReplyStyleRoleplay.prompt(true, personaVoice{})
+	// 骨架：括号里的动作 + 台词，动作要短。
+	for _, want := range []string{"（动作或神态）+ 一句台词", "一句话以内", "第三人称叙述"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("扮演提示词缺少写法要点 %q：%q", want, prompt)
+		}
+	}
+	// 三处刹车。
+	for _, want := range []string{"就成小说了", "正事照常办"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("扮演提示词缺少刹车 %q：%q", want, prompt)
+		}
+	}
+	// 以人设为由要求越界是这一档最大的攻击面，次序必须写死。
+	if !strings.Contains(prompt, "规则优先，人设让位") {
+		t.Fatalf("扮演提示词没有写死规则优先：%q", prompt)
+	}
+	// 语气靠示例教，抽象形容词教不会——群友和猫娘两档都是这么写的。
+	if !strings.Contains(prompt, "示例——") || !strings.Contains(prompt, "用户：") {
+		t.Fatalf("扮演提示词没有示例：%q", prompt)
+	}
+	// 全局规则照旧生效：不因为在演就能刷 emoji 或空行。
+	for _, want := range []string{replyEmojiRule, replyBlankLineRule} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("扮演提示词漏掉了全局输出规则：%q", prompt)
+		}
+	}
+	if !strings.Contains(ReplyStyleRoleplay.closingAnchor(), "（动作）") {
+		t.Fatalf("锚点没有把写法拉回来：%q", ReplyStyleRoleplay.closingAnchor())
+	}
+}
+
+// 猫娘禁动作描写、扮演靠动作描写，两档的说法不能互相污染。
+func TestRoleplayAndCatgirlDoNotContradictEachOther(t *testing.T) {
+	catgirl := ReplyStyleCatgirl.prompt(true, personaVoice{})
+	roleplay := ReplyStyleRoleplay.prompt(true, personaVoice{})
+	if strings.Contains(roleplay, "不写动作描写") {
+		t.Fatalf("扮演提示词里混进了猫娘的禁令：%q", roleplay)
+	}
+	if !strings.Contains(catgirl, "不写 *蹭蹭*") {
+		t.Fatalf("猫娘那档的禁令被改掉了：%q", catgirl)
 	}
 }
