@@ -4891,7 +4891,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			return "", err
 		}
 		if ok {
-			return run(llm.RegistryClient{Registry: registry, Selection: selection})
+			return run(registryLLMProvider(registry, selection, true))
 		}
 	}
 
@@ -5338,7 +5338,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			return "", err
 		}
 		if ok {
-			return run(llm.RegistryClient{Registry: registry, Selection: selection})
+			return run(registryLLMProvider(registry, selection, retryTransient))
 		}
 	}
 
