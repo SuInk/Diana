@@ -354,6 +354,9 @@ type Runtime struct {
 	proactiveBatchWindow  time.Duration
 	proactiveBatchMaxWait time.Duration
 	replyBatchMu          sync.Mutex
+	// replyTurns 记「同一个人刚问过」，让紧接着的第二条被当成追问接住而不是重答一遍。
+	replyTurnMu           sync.Mutex
+	replyTurns            map[string]replyTurnRecord
 	replyBatches          map[string]*replyBatchGate
 	unavailableGroupMu    sync.RWMutex
 	unavailableGroups     map[string]unavailableGroupSend
@@ -2858,7 +2861,9 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 }
 
 // replyTo 执行 owner 命令、插件和 LLM 回复链路。
-func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (string, error) {
+// 具名返回值只为了让 defer 拿到这一轮最终说了什么（见 finishReplyTurn），
+// 各处 return 的写法不变。
+func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (reply string, err error) {
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
@@ -2880,6 +2885,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	chatTriggered := r.shouldHandleChat(event, text)
 	resolverTriggered := r.shouldHandleResolver(event, text)
 	proactiveTriggered := event.proactiveReply || len(proactiveReplyTurnFromContext(ctx)) > 0
+	// 同一个人紧接着又说了一条时，把上一轮的痕迹取出来交给提示词，让这一轮当追问
+	// 接住而不是把同一件事重答一遍。登记必须在生成之前：并发的两路要能互相看见。
+	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, time.Now())
+	defer func() { r.finishReplyTurn(event, reply, time.Now()) }()
 	cleanText := r.cleanInput(event, text)
 	if cfg.MaxInputChars > 0 && len([]rune(cleanText)) > cfg.MaxInputChars {
 		cleanText = string([]rune(cleanText)[:cfg.MaxInputChars])
@@ -3188,6 +3197,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Priority: llm.MessagePriorityMemory,
 			})
 		}
+		// 「刚答过同一个人」跟当前消息同级，不跟着历史让位：它约束的是这一轮怎么说，
+		// 被预算挤掉就等于没写——而它要防的恰恰是把上一轮内容重说一遍。
+		if hasPreviousTurn {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    consecutiveReplyContext(previousTurn),
+				Priority:   llm.MessagePriorityPlugin,
+				AtomicText: true,
+			})
+		}
 		// 笔记本和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
 		// 一起让位给当前消息，而不是互相挤。
 		if notebookContext := contextPreload.notebookContext; notebookContext != "" {
@@ -3453,7 +3472,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 图片开场白攒在这一轮里：模型自己说了就用模型那句，什么都没说才拿它兜底，
 	// 保证发图前只出现一条文字（见 image_announcement.go）。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
-	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
+	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		if pending := imageAnnouncements.drain(); pending != "" {
 			// 生成失败也要让用户知道图在画：任务已经受理了。
