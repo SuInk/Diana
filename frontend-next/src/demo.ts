@@ -153,7 +153,7 @@ const groups: BotGroupSummary[] = [
 const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
 
 const demoPersonas = [
-  { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" },
+  { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
   { id: "persona-2", name: "技术群管", system_prompt: "你是技术群里那个话不多但每次开口都说到点子上的人。", reply_style: "groupmate", self_reference: "", sentence_enders: "" },
   { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", reply_style: "concise", self_reference: "", sentence_enders: "" }
 ];

@@ -121,6 +121,22 @@ func TestProactiveReplyQualityPromptJudgesOnlyObservableDimensions(t *testing.T)
 	}
 }
 
+// 线上真实误杀：一条完整的猫娘口吻回复，末尾是「折磨喵（」——那个「（」是语气词，
+// 审核器按「括号没闭合」判成截断，整条被拦下。截断这一条必须把聊天口语的收尾方式
+// 排除掉，否则风格提示词和审核提示词会互相打架，代价是用户少收到一条回复。
+func TestProactiveReplyQualityPromptDoesNotTreatChatStyleEndingAsTruncation(t *testing.T) {
+	prompt := proactiveReplyQualityPrompt
+	for _, must := range []string{"别把风格当截断", "句末不打句号", "语气词收尾", "不闭合的「(」或「（」", "不算截断"} {
+		if !strings.Contains(prompt, must) {
+			t.Fatalf("截断判据没有排除聊天口语的收尾方式，缺 %q：%s", must, prompt)
+		}
+	}
+	// 真正的截断仍然要判，别把这一条整条删掉。
+	if !strings.Contains(prompt, "结尾停在半句上") {
+		t.Fatalf("提示词不再判截断了：%s", prompt)
+	}
+}
+
 func TestReplySafetyPromptScopesPoliticsToMainlandChina(t *testing.T) {
 	prompt := proactiveReplyQualityPrompt
 	for _, must := range []string{

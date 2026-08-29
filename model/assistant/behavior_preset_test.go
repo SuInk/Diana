@@ -369,13 +369,14 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 			t.Fatalf("catgirl example still ends sentences with a full stop: %q", line)
 		}
 	}
-	// 「（」在这里是语气词，不是括号：不写内容、也不配对闭合。不说死的话，模型
-	// 要么把它当成漏字补全，要么往里填动作描写。
-	if !strings.Contains(prompt, "括号里不写任何内容") || !strings.Contains(prompt, "不要补上「）」") {
-		t.Fatalf("catgirl prompt does not pin the bare paren usage: %q", prompt)
+	// 曾经教过「句尾一个孤零零的『（』」当语气词，现在不教了：发送前的审核器把
+	// 「括号没闭合」当成截断特征，整条回复会被判成半截话拦下来。提示词和审核规则
+	// 对着干，最后是用户少收到一条完整回复。
+	if strings.Contains(prompt, "括号里不写任何内容") || strings.Contains(prompt, "喵（") {
+		t.Fatalf("catgirl prompt 又教回了句末空括号：%q", prompt)
 	}
-	if !strings.Contains(prompt, "你：……好像是喵（") {
-		t.Fatalf("catgirl prompt has no worked example of the bare paren: %q", prompt)
+	if !strings.Contains(prompt, "不要自己发明别的收尾符号") {
+		t.Fatalf("catgirl prompt 没有钉住结尾写法：%q", prompt)
 	}
 	// 表达风格换人不代表输出规范换人：emoji、空行、篇幅三条对所有风格生效。
 	for _, want := range []string{replyEmojiRule, replyBlankLineRule, replyProportionRule} {
