@@ -719,6 +719,7 @@ function senderLevelTitle(event: AssistantEventDetail): string {
 
 function decisionLabel(event: AssistantEventDetail): string {
   if (isNoticeEvent(event)) return "已记录";
+  if (event.outcome === "merged_into_reply") return "已并入";
   if (event.decision === "replied" || event.handled) return "已回复";
   if (event.decision === "pending") return "等待处理";
   if (event.decision === "error") return "处理异常";
@@ -727,6 +728,7 @@ function decisionLabel(event: AssistantEventDetail): string {
 
 function decisionClass(event: AssistantEventDetail): string {
   if (isNoticeEvent(event)) return "quiet";
+  if (event.outcome === "merged_into_reply") return "ok";
   if (event.decision === "replied" || event.handled) return "ok";
   if (event.decision === "pending") return "warn";
   if (event.decision === "error") return "err";
@@ -734,6 +736,7 @@ function decisionClass(event: AssistantEventDetail): string {
 }
 
 function decisionIcon(event: AssistantEventDetail): Component {
+  if (event.outcome === "merged_into_reply") return MessageCircleReply;
   if (event.decision === "replied" || event.handled) return CheckCircle2;
   if (event.decision === "pending") return TimerReset;
   if (event.decision === "error") return TriangleAlert;
@@ -741,6 +744,7 @@ function decisionIcon(event: AssistantEventDetail): Component {
 }
 
 function decisionReasonLabel(event: AssistantEventDetail): string {
+  if (event.outcome === "merged_into_reply") return "合并状态";
   if (event.decision === "replied" || event.handled) return "回复原因";
   if (event.decision === "pending") return "当前状态";
   if (event.decision === "error") return "异常原因";

@@ -46,11 +46,102 @@ func (s *stickerHistoryStore) ListRecentStickerEvents(_ context.Context, query S
 
 func TestDefaultPluginManagerIncludesStickerSender(t *testing.T) {
 	state, ok := NewDefaultPluginManager().Get(stickerPluginID)
-	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.1.0" {
+	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.1.1" {
 		t.Fatalf("sticker plugin state=%#v ok=%v", state, ok)
 	}
 	if len(state.Manifest.Settings) != 5 {
 		t.Fatalf("settings=%#v", state.Manifest.Settings)
+	}
+}
+
+func TestStickerToolKeepsCandidatesForSemanticSelectionWithoutLiteralMatch(t *testing.T) {
+	dir := t.TempDir()
+	comfortPath := filepath.Join(dir, "comfort.gif")
+	confusedPath := filepath.Join(dir, "confused.gif")
+	for _, path := range []string{comfortPath, confusedPath} {
+		if err := os.WriteFile(path, []byte("image"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "request"}
+	store := &stickerHistoryStore{events: map[string][]MessageEvent{sessionKey(event): {
+		{Kind: EventKindGroup, GroupID: "group-1", MessageID: "comfort", Time: 1, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[抱抱]", "cached_file": comfortPath}}}},
+		{Kind: EventKindGroup, GroupID: "group-1", MessageID: "confused", Time: 2, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[问号]", "cached_file": confusedPath}}}},
+	}}}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	tool := newDianaStickerTool(runtime, event, SettingValues{stickerSettingSearchResults: 8})
+
+	output, err := tool.Run(context.Background(), map[string]any{"operation": "search", "query": "她今天很难过，安慰一下"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result stickerToolResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Candidates) != 2 || !strings.Contains(result.Message, "按当前语义") {
+		t.Fatalf("semantic candidates=%#v", result)
+	}
+
+	output, err = tool.Run(context.Background(), map[string]any{"operation": "send", "query": "她今天很难过，安慰一下"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, `"action":"not_sent"`) || !strings.Contains(output, "sticker_id") {
+		t.Fatalf("semantic direct send should require search selection: %s", output)
+	}
+}
+
+func TestRankStickerCandidatesPrefersSemanticMatchOverRecency(t *testing.T) {
+	candidates := []stickerCandidate{
+		{ID: "recent", Summary: "动画表情", EventTime: 20},
+		{ID: "semantic", Summary: "抱抱", EventTime: 10, SemanticScore: 80},
+	}
+	rankStickerCandidates(candidates, "她今天很难过，安慰一下")
+	if candidates[0].ID != "semantic" || candidates[0].Score != 80 {
+		t.Fatalf("semantic ranking=%#v", candidates)
+	}
+}
+
+func TestStickerToolAddsAndCachesVisionDescriptionForSearchCandidate(t *testing.T) {
+	imagePath, hash := writeRecallImageFixture(t)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "request"}
+	store := newRecallImageTestStore()
+	store.timeline = []MessageEvent{{
+		Kind: EventKindGroup, GroupID: "group-1", MessageID: "sticker", Time: 1,
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"summary": "[动画表情]", "cached_file": imagePath, imageContentSHA256Key: hash,
+		}}},
+	}}
+	provider := &recallImageVisionProvider{}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMessageHistoryStore(store)
+	tool := newDianaStickerTool(runtime, event, SettingValues{stickerSettingSearchResults: 3})
+
+	search := func() stickerToolResult {
+		output, err := tool.Run(context.Background(), map[string]any{"operation": "search", "query": "看看系统情况"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result stickerToolResult
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := search()
+	if len(first.Candidates) != 1 || !strings.Contains(first.Candidates[0].Description, "命中率为 63%") {
+		t.Fatalf("vision candidate=%#v", first)
+	}
+	if provider.callCount() != 1 || store.saves != 1 {
+		t.Fatalf("vision calls=%d saves=%d", provider.callCount(), store.saves)
+	}
+	second := search()
+	if len(second.Candidates) != 1 || second.Candidates[0].Description == "" || provider.callCount() != 1 {
+		t.Fatalf("cached candidate=%#v calls=%d", second, provider.callCount())
 	}
 }
 
