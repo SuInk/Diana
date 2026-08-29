@@ -412,6 +412,26 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
 
+  // 授权登录：演示模式给出内置提供商的未登录状态，登录流程本身不模拟——
+  // 真去打一次 OAuth 授权页在演示环境里既做不到也不该做。
+  if (path.startsWith("/api/llm/oauth/")) {
+    return json({
+      providers: [
+        {
+          provider: {
+            key: "openrouter",
+            label: "OpenRouter",
+            authorize_url: "https://openrouter.ai/auth",
+            token_url: "https://openrouter.ai/api/v1/auth/keys",
+            use_pkce: true,
+            built_in: true,
+            notes: "OpenRouter 的 PKCE 授权本就是给第三方应用用的，换到的是一把归你所有、可随时吊销的 Key。"
+          },
+          logged_in: false
+        }
+      ]
+    });
+  }
   if (path === "/api/llm/config/export") return json(llmConfig);
   if (path === "/api/llm/config" && method === "GET") return json(llmConfig);
   if (path === "/api/llm/config" && method === "POST") {

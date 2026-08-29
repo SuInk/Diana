@@ -31,6 +31,7 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/model/llmauth"
 	"github.com/SuInk/diana/model/storage"
 	"github.com/SuInk/diana/model/updater"
 	"github.com/SuInk/diana/model/version"
@@ -188,9 +189,17 @@ func main() {
 		}
 		return modelCatalog.Enrich(ctx, cfg, models), nil
 	}
+	// OAuth 登录态和 API Key 同库同待遇，落在同一个 sqlite 上。
+	oauthManager := llmauth.NewManager(webui.NewLLMAuthStore(sqliteStore), nil)
+	if err := oauthManager.Restore(ctx); err != nil {
+		// 读不出来不该拦住启动：没有 OAuth 的配置档照常工作，
+		// 绑了 OAuth 的那些会在调用时给出「还没有登录」，比整个服务起不来好。
+		log.Printf("llm oauth: 读取登录态失败，本次以未登录状态启动: %v", err)
+	}
 	handler := webui.NewLLMConfigHandler(store)
 	handler.SetModelListFactory(modelListFactory)
 	handler.SetLogStore(sqliteStore)
+	handler.SetOAuthManager(oauthManager)
 	systemUpdater, err := newSystemUpdater(appCfg.Update)
 	if err != nil {
 		log.Fatal(err)
@@ -241,12 +250,17 @@ func main() {
 		AccessToken: botCfg.OneBotAccessToken,
 	})
 	channelSetFactory := newBotChannelSetFactory(oneBotServer)
+	// 配置档绑了 OAuth 提供商时，凭据由 oauthManager 现取现续；没绑就和以前一样
+	// 只用配置里的 API Key，连 HTTP 客户端都不会被包一层。
+	newLLMClient := func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
+		return llm.NewClient(cfg, llm.ClientOptionsFor(cfg, oauthManager)...)
+	}
 	botRuntime := assistant.NewRuntime(botCfg, channelSetFactory(botSet), plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
-		return llm.NewClient(store.Current())
+		return newLLMClient(store.Current())
 	})
 	botRuntime.SetProfiles(botSet)
 	botRuntime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (assistant.LLMProvider, error) {
-		return llm.NewClient(cfg)
+		return newLLMClient(cfg)
 	})
 	botRuntime.SetGroupConfigStore(botGroupConfigStore)
 	botRuntime.SetMessageHistoryStore(sqliteStore)
