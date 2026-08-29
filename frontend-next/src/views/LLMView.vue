@@ -5,8 +5,8 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>LLM 配置</h1>
-        <p>管理 Provider、凭据、分组与可用模型；机器人按用途选择 Provider 和模型</p>
+        <h1>提供商</h1>
+        <p>管理提供商、凭据、分组与可用模型；机器人按用途选择提供商和模型</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" @click="exportProfiles">
@@ -37,7 +37,7 @@
             <div class="group-header">
               <span>{{ groupLabel(section.group) }}</span>
               <span class="muted" style="font-size: 12px">
-                {{ section.items.length }} 个 Provider · {{ sectionModelCount(section.items) }} 个模型 · 顺序即降级优先级
+                {{ section.items.length }} 个提供商 · {{ sectionModelCount(section.items) }} 个模型 · 顺序即降级优先级
               </span>
             </div>
             <div class="row-list">
@@ -50,7 +50,6 @@
               <div class="row-main">
                 <div class="row-title">
                   {{ profile.name || profile.model }}
-                  <span v-if="profile.id && profile.id === activeProfileID" class="badge accent" title="没有配「模型分配」的用途会用这套，失败降级也从它开始轮转">激活中</span>
                 </div>
                 <div class="row-sub">
                   {{ providerLabel(profile.provider) }} · 默认 {{ profile.model || "未选择" }} · {{ profileModelCount(profile) }} 个模型
@@ -66,16 +65,6 @@
                     <ChevronDown :size="13" aria-hidden="true" />
                   </button>
                 </span>
-                <button
-                  v-if="profile.id && profile.id !== activeProfileID"
-                  class="btn small ghost"
-                  type="button"
-                  :disabled="busy"
-                  title="设为激活配置"
-                  @click="activate(profile)"
-                >
-                  <CircleCheck :size="13" aria-hidden="true" />
-                </button>
                 <button class="btn small ghost" type="button" title="测试这套配置" @click="openTest(profile)">
                   <Send :size="13" aria-hidden="true" />
                 </button>
@@ -98,9 +87,11 @@
             </div>
             </div>
           </div>
-          <EmptyState v-if="profiles.length === 0" title="还没有 LLM 配置" hint="点击右上角「新建配置」开始" />
+          <EmptyState v-if="profiles.length === 0" title="还没有配置档" hint="点击右上角「新建配置」开始" />
         </div>
       </section>
+
+      <LLMOAuthPanel @changed="onOAuthProvidersChanged" />
 
     </div>
 
@@ -173,6 +164,17 @@
           <span class="hint">{{ selectedPreset?.hint }}；请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。</span>
         </div>
         <div class="field wide">
+          <label for="llm-credential-mode">凭据方式</label>
+          <AppSelect
+            id="llm-credential-mode"
+            v-model="credentialMode"
+            :options="credentialModeOptions"
+          />
+          <span class="hint">
+            授权登录的令牌会在过期前自动续期；下拉里只列出「授权登录」区域已经登录过的提供商。
+          </span>
+        </div>
+        <div v-if="credentialMode === 'api_key'" class="field wide">
           <label for="llm-apikey">API Key</label>
           <div class="input-group">
             <input
@@ -189,6 +191,43 @@
             </button>
           </div>
         </div>
+        <template v-else>
+          <div class="field wide">
+            <label for="llm-oauth-provider">授权提供商</label>
+            <AppSelect
+              id="llm-oauth-provider"
+              v-model="form.oauth_provider"
+              :options="oauthProviderOptions"
+              placeholder="选择一个已登录的提供商"
+            />
+            <span v-if="oauthProviderOptions.length === 0" class="hint">
+              还没有登录过任何提供商，先到下面的「授权登录」里登录一次。
+            </span>
+            <span v-else-if="selectedOAuthStatus?.expired && !selectedOAuthStatus?.refreshable" class="hint">
+              这个提供商的登录已过期且无法自动续期，需要重新登录。
+            </span>
+          </div>
+          <!-- 授权登录时 API Key 变成可选兜底：续期失败时还能靠它继续说话，
+               比整个配置档一起哑掉好。 -->
+          <div class="field wide">
+            <label for="llm-apikey">备用 API Key（可选）</label>
+            <div class="input-group">
+              <input
+                id="llm-apikey"
+                v-model="form.api_key"
+                class="input"
+                :type="showKey ? 'text' : 'password'"
+                autocomplete="off"
+                :placeholder="apiKeyPlaceholder"
+              />
+              <button class="btn icon-only" type="button" :aria-label="showKey ? '隐藏 Key' : '显示 Key'" @click="showKey = !showKey">
+                <EyeOff v-if="showKey" :size="14" aria-hidden="true" />
+                <Eye v-else :size="14" aria-hidden="true" />
+              </button>
+            </div>
+            <span class="hint">填了的话，授权令牌续期失败时会自动回落到它。</span>
+          </div>
+        </template>
         <div class="field wide model-config-field">
           <div class="model-sync-row">
             <div class="model-sync-copy">
@@ -323,9 +362,9 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
+import LLMOAuthPanel from "../components/LLMOAuthPanel.vue";
+import { ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
 import {
-  activateConfigProfile,
   cloneConfigProfile,
   deleteConfigProfile,
   exportConfig,
@@ -338,7 +377,8 @@ import {
   testLLMImage,
   type LLMConfig,
   type LLMModelInfo,
-  type Provider
+  type Provider,
+  type LLMOAuthStatus
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
@@ -355,6 +395,7 @@ interface LLMFormState {
   model: string;
   base_url: string;
   api_key: string;
+  oauth_provider: string;
   user_agent: string;
   description: string;
   temperature: string;
@@ -371,6 +412,7 @@ const emptyForm: LLMFormState = {
   model: "",
   base_url: "",
   api_key: "",
+  oauth_provider: "",
   user_agent: "",
   description: "",
   temperature: "",
@@ -429,6 +471,48 @@ const serviceOptions = llmServicePresets.map((preset) => ({
   hint: preset.hint
 }));
 const selectedPreset = computed(() => llmServicePresets.find((preset) => preset.id === selectedService.value));
+// 凭据方式由配置档里有没有绑 OAuth 提供商推导，不额外存一个字段：
+// 多存一个就有「两处不一致」的可能，而这里没有任何信息是推不出来的。
+const credentialMode = computed<"api_key" | "oauth">({
+  get: () => (form.value.oauth_provider ? "oauth" : "api_key"),
+  set: (value) => {
+    if (value === "api_key") {
+      form.value.oauth_provider = "";
+      return;
+    }
+    if (!form.value.oauth_provider) {
+      form.value.oauth_provider = oauthProviderOptions.value[0]?.value ?? "";
+    }
+  }
+});
+
+const credentialModeOptions = [
+  { value: "api_key", label: "API Key" },
+  { value: "oauth", label: "授权登录" }
+];
+
+const oauthStatuses = ref<LLMOAuthStatus[]>([]);
+
+// 只列已经登录过的：没登录的选了也用不了，让它出现在下拉里只会制造一次失败调用。
+const oauthProviderOptions = computed(() =>
+  oauthStatuses.value
+    .filter((status) => status.logged_in)
+    .map((status) => ({ value: status.provider.key, label: status.provider.label }))
+);
+
+const selectedOAuthStatus = computed(() =>
+  oauthStatuses.value.find((status) => status.provider.key === form.value.oauth_provider)
+);
+
+function onOAuthProvidersChanged(next: LLMOAuthStatus[]) {
+  oauthStatuses.value = next;
+  // 绑着的提供商被退出登录或删掉后，把配置档上的引用一起清掉，
+  // 否则这份配置会一直以「还没有登录」失败，而界面上看不出哪里不对。
+  if (form.value.oauth_provider && !next.some((status) => status.provider.key === form.value.oauth_provider && status.logged_in)) {
+    form.value.oauth_provider = "";
+  }
+}
+
 const apiKeyPlaceholder = computed(() => {
   if (!editingConfigured.value) return "粘贴 API Key";
   return editingKeyPreview.value ? `已保存 ${editingKeyPreview.value}，留空则沿用` : "留空表示沿用已保存的 Key";
@@ -449,25 +533,6 @@ function applyServicePreset(id: string): void {
 
 const profiles = computed<LLMConfig[]>(() => profileSet.value?.profiles ?? []);
 
-// 激活配置一直在起作用，只是前端重构时把入口漏掉了：没有配「模型分配」的用途会用它，
-// 失败降级也从它开始在同组内轮转，而且运行时切换 provider 之后会把它写回去。
-// 有状态、在生效、用户却看不见也改不了，是最难查的那种问题。
-const activeProfileID = computed(() => profileSet.value?.active_profile_id ?? "");
-
-async function activate(profile: LLMConfig): Promise<void> {
-  if (!profile.id) {
-    return;
-  }
-  busy.value = true;
-  try {
-    profileSet.value = await activateConfigProfile(profile.id);
-    toastSuccess(`已激活「${profile.name || profile.model}」`);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "激活失败");
-  } finally {
-    busy.value = false;
-  }
-}
 
 function providerLabel(provider: Provider): string {
   const labels: Record<Provider, string> = {
@@ -595,6 +660,7 @@ function startEdit(profile: LLMConfig): void {
     model: profile.model,
     base_url: profile.base_url ?? "",
     api_key: "",
+    oauth_provider: profile.oauth_provider ?? "",
     user_agent: profile.user_agent ?? "",
     description: profile.description ?? "",
     temperature: profile.temperature === null || profile.temperature === undefined ? "" : String(profile.temperature),
@@ -661,6 +727,7 @@ function formToPayload(): LLMConfig {
     model: form.value.model.trim(),
     base_url: form.value.base_url.trim() || undefined,
     api_key: form.value.api_key.trim() || undefined,
+    oauth_provider: form.value.oauth_provider.trim() || undefined,
     models: modelOptions.value,
     user_agent: form.value.user_agent.trim() || undefined,
     description: form.value.description.trim() || undefined
@@ -705,7 +772,7 @@ async function save(): Promise<void> {
     closeEditor();
     const savedProfile =
       saved.profiles?.find((profile) => profile.id === editingProfileID) ??
-      saved.profiles?.find((profile) => profile.id === saved.active_profile_id) ??
+      saved.profiles?.[0] ??
       saved;
     openTest(savedProfile);
     toastSuccess("配置已保存，请完成连通测试");
@@ -737,7 +804,7 @@ async function remove(profile: LLMConfig): Promise<void> {
     return;
   }
   const ok = await askConfirm({
-    title: "删除 LLM 配置",
+    title: "删除配置档",
     message: `确定删除「${profile.name || profile.model}」吗？此操作不可撤销。`,
     confirmLabel: "删除",
     danger: true
@@ -771,7 +838,7 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
     }
     modelOptions.value = merged;
     if (result.models.length === 0) {
-      toastError("该 Provider 未返回模型列表");
+      toastError("该提供商未返回模型列表");
       return false;
     } else {
       if (selectFirst && !form.value.model.trim()) {
@@ -918,7 +985,6 @@ async function importProfiles(event: Event): Promise<void> {
     const text = await file.text();
     const parsed = JSON.parse(text) as LLMConfig;
     profileSet.value = await importConfigProfiles({
-      active_profile_id: parsed.active_profile_id,
       profiles: parsed.profiles
     });
     toastSuccess("配置已导入");

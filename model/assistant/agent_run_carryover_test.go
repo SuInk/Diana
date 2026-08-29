@@ -103,7 +103,7 @@ func TestAgentCarryoverDoesNotLeakAcrossSpeakers(t *testing.T) {
 	runtime.rememberAgentRunProgress(winter, &agent.Response{
 		FinishReason: "tool_budget_exhausted",
 		Steps: []agent.Step{
-			{Tool: "diana.glossary", Input: map[string]any{"term": "西格玛男", "actor": "winter-uid"}, Output: "已记下：西格玛男 = 不做舔狗"},
+			{Tool: "diana.notebook", Input: map[string]any{"term": "西格玛男", "actor": "winter-uid"}, Output: "已记下：西格玛男 = 不做舔狗"},
 			{Tool: "diana.relationship", Input: map[string]any{"target_user_id": "winter-uid"}, Output: "关系等级：主人"},
 		},
 	})

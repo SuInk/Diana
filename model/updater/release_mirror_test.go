@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -124,3 +125,50 @@ func TestDownloadReleaseFileStopsOnCancel(t *testing.T) {
 		t.Fatalf("取消之后仍然发起了 %d 次请求", attempts)
 	}
 }
+
+// recordingMirrorResolver 记下 Base 拿到的测速样本地址。
+type recordingMirrorResolver struct {
+	probedAt []string
+}
+
+func (r *recordingMirrorResolver) Base(_ context.Context, probeURL string) string {
+	r.probedAt = append(r.probedAt, probeURL)
+	return ""
+}
+
+// 挑线路要拿安装包地址去测。校验清单只有几 KB，读完了也测不出速度，用它挑出来
+// 的只会是握手最快的那条——公共代理恰恰擅长握手快、下载慢。
+func TestMirrorProbesArchiveNotChecksum(t *testing.T) {
+	resolver := &recordingMirrorResolver{}
+	u := &ReleasePackageUpdater{
+		currentVersion: "v0.9.0",
+		installRoot:    t.TempDir(),
+		assetName:      "diana-webui-linux-amd64.tar.gz",
+		supported:      true,
+		httpClient:     &http.Client{Transport: failingTransport{}},
+		mirror:         resolver,
+	}
+	release := ReleasePackage{
+		Tag:       "v1.0.0",
+		Archive:   ReleaseAsset{Name: u.assetName, URL: testArchiveURL},
+		Checksums: ReleaseAsset{Name: "SHA256SUMS", URL: testChecksumURL},
+	}
+	// 下载本身注定失败（传输层直接报错），这里只关心它拿哪个地址去挑线路。
+	if _, err := u.Download(context.Background(), release, false); err == nil {
+		t.Fatal("传输层已经报错，下载不该成功")
+	}
+	if len(resolver.probedAt) != 1 {
+		t.Fatalf("挑线路调用次数 = %d", len(resolver.probedAt))
+	}
+	if resolver.probedAt[0] != testArchiveURL {
+		t.Fatalf("测速样本 = %q，应当是安装包地址", resolver.probedAt[0])
+	}
+}
+
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errTransportDown
+}
+
+var errTransportDown = errors.New("链路不通")

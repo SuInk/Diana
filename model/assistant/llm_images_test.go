@@ -4,10 +4,15 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +20,114 @@ import (
 
 	"github.com/SuInk/diana/model/llm"
 )
+
+func TestNormalizeOversizedLLMImageResizesInsteadOfRejecting(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 3840, 2160))
+	img.Set(0, 0, color.White)
+	var source bytes.Buffer
+	if err := png.Encode(&source, img); err != nil {
+		t.Fatal(err)
+	}
+	// PNG decoders ignore trailing bytes. Padding gives the test a deterministic valid image
+	// above the transport limit without spending time generating incompressible pixel noise.
+	source.Write(make([]byte, maxLLMImageBase64Bytes-source.Len()+1))
+	dataURL, err := normalizeLLMImageBytes(source.Bytes(), "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(dataURL, "data:image/png;base64,") && !strings.HasPrefix(dataURL, "data:image/jpeg;base64,") {
+		t.Fatalf("normalized image type = %q", dataURL[:min(len(dataURL), 64)])
+	}
+	decoded, err := decodeDataURLImage(dataURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := decoded.Bounds()
+	if bounds.Dx() != 2000 || bounds.Dy() != 1125 {
+		t.Fatalf("normalized dimensions = %dx%d", bounds.Dx(), bounds.Dy())
+	}
+	_, encoded, _ := strings.Cut(dataURL, ",")
+	if len(encoded) >= maxLLMImageBase64Bytes {
+		t.Fatalf("normalized image still exceeds model limit")
+	}
+}
+
+func TestNormalizeOversizedLLMImageIntegration(t *testing.T) {
+	path := strings.TrimSpace(os.Getenv("DIANA_LLM_IMAGE_NORMALIZE_INTEGRATION"))
+	if path == "" {
+		t.Skip("set DIANA_LLM_IMAGE_NORMALIZE_INTEGRATION to an image path")
+	}
+	dataURL, err := localImageAsDataURL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeDataURLImage(dataURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("normalized %s to %dx%d, data URL bytes=%d", path, decoded.Bounds().Dx(), decoded.Bounds().Dy(), len(dataURL))
+}
+
+func TestLongImageExpandsToOverviewAndOrderedOverlappingTiles(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 1200, 4500))
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, img); err != nil {
+		t.Fatal(err)
+	}
+	parts, err := normalizeLLMImageParts(encoded.Bytes(), "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 4 {
+		t.Fatalf("parts=%d, want overview plus three tiles", len(parts))
+	}
+	for index, value := range parts[1:] {
+		decoded, err := decodeDataURLImage(value)
+		if err != nil {
+			t.Fatalf("decode tile %d: %v", index, err)
+		}
+		if decoded.Bounds().Dx() != 1200 || decoded.Bounds().Dy() != 1800 {
+			t.Fatalf("tile %d dimensions=%v", index, decoded.Bounds())
+		}
+	}
+
+	message, complete := llmMessageFromEventWithImagesForContextDetailed(context.Background(), MessageEvent{
+		Kind: EventKindPrivate,
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"url": imageBytesAsDataURL(encoded.Bytes(), "image/png"),
+		}}},
+	}, "读取长图", nil)
+	if !complete || len(message.Parts) != 5 {
+		t.Fatalf("message complete=%v parts=%d", complete, len(message.Parts))
+	}
+	if !strings.Contains(message.Content, "完整总览") || !strings.Contains(message.Content, "相邻切片有重叠") {
+		t.Fatalf("message is missing long-image guidance: %q", message.Content)
+	}
+	imageOnly, complete := llmMessageFromEventWithImagesForContextDetailed(context.Background(), MessageEvent{
+		Kind: EventKindPrivate,
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"url": imageBytesAsDataURL(encoded.Bytes(), "image/png"),
+		}}},
+	}, "", nil)
+	if !complete || !strings.Contains(imageOnly.Content, "一张图片") || strings.Contains(imageOnly.Content, "4 张图片") || !strings.Contains(imageOnly.Content, "完整总览") {
+		t.Fatalf("image-only long prompt = %q", imageOnly.Content)
+	}
+}
+
+func TestExtremeLongImageTilesCoverCompleteLongEdge(t *testing.T) {
+	tiles := longImageTileBounds(image.Rect(0, 0, 1000, 20000))
+	if len(tiles) != maxLongImageTiles {
+		t.Fatalf("tiles=%d, want capped %d", len(tiles), maxLongImageTiles)
+	}
+	if tiles[0].Min.Y != 0 || tiles[len(tiles)-1].Max.Y != 20000 {
+		t.Fatalf("tiles do not cover both ends: first=%v last=%v", tiles[0], tiles[len(tiles)-1])
+	}
+	for index := 1; index < len(tiles); index++ {
+		if tiles[index].Min.Y >= tiles[index-1].Max.Y {
+			t.Fatalf("tiles %d and %d do not overlap: %v %v", index-1, index, tiles[index-1], tiles[index])
+		}
+	}
+}
 
 func TestLLMReadyImageURLsLoadsConcurrentlyAndPreservesOrder(t *testing.T) {
 	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")

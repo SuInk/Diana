@@ -91,6 +91,9 @@
                只在例外时标注，第三方插件出现后这里才会有内容。 -->
           <span v-if="!plugin.manifest.official" class="badge warn">第三方</span>
           <span v-if="!plugin.manifest.built_in" class="badge">可卸载</span>
+          <!-- 别的内置插件装好就在跑，这张卡片的开关却是关的。不说一句，
+               看起来就像是它坏了。 -->
+          <span v-if="plugin.manifest.default_disabled" class="badge">默认关闭</span>
           <span class="badge mono">v{{ plugin.manifest.version }}</span>
         </div>
 
@@ -297,6 +300,7 @@
       </div>
       <RepositoryWatchManager
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
+        ref="repositoryWatchRef"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
         :issue-enabled-repositories="issueEnabledRepositories"
@@ -332,6 +336,7 @@
       </div>
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
+        ref="rssWatchRef"
         :prepare-access="saveSettingsForSubscription"
       />
       <template #footer>
@@ -455,6 +460,8 @@ function dependencyHint(pluginID: string): string {
 }
 
 const settingsTarget = ref<PluginState | null>(null);
+const repositoryWatchRef = ref<{ hasUnsavedChanges: () => boolean } | null>(null);
+const rssWatchRef = ref<{ hasUnsavedChanges: () => boolean } | null>(null);
 // 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
 const settingsForm = ref<Record<string, any>>({});
 const repositoryPublishForm = ref<Record<string, any>>({});
@@ -521,7 +528,7 @@ const repositoryManagedKeys = new Set([
 ]);
 const githubTokenSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => spec.key === "github_token"));
 // 通知相关的设置按这个顺序排；跟评开关排第一，它是最常被找的那个。
-const githubNotifyKeys = ["ask_agent", "template_header", "summary_commit_limit"];
+const githubNotifyKeys = ["ask_agent", "follow_up_include_patch", "template_header", "summary_commit_limit"];
 const githubGeneralSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key)));
 const githubNotifySpecs = computed<PluginSettingSpec[]>(() =>
   githubNotifyKeys
@@ -746,6 +753,9 @@ function settingsSnapshot(): string {
 function settingsDirty(): boolean {
   if (Object.keys(credentialTokenDrafts.value).length > 0) return true;
   if (clearSecrets.value.length > 0) return true;
+  // 仓库编辑器的改动不在 settingsForm 里，漏掉它就会从弹窗右上角静默关掉一整屏配置。
+  if (repositoryWatchRef.value?.hasUnsavedChanges()) return true;
+  if (rssWatchRef.value?.hasUnsavedChanges()) return true;
   return settingsSnapshot() !== openedSnapshot.value;
 }
 

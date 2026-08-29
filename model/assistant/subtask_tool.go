@@ -25,7 +25,7 @@ const (
 	subtaskAnswerMaxRunes       = 1200
 )
 
-// subtaskScope 决定子调用走哪个 LLM 配置档分组。名字用意图而不是分组标识，模型
+// subtaskScope 决定子调用走哪个提供商配置档分组。名字用意图而不是分组标识，模型
 // 不需要知道部署侧怎么配的。
 var subtaskScopes = map[string]string{
 	"text":   llm.GroupChat,

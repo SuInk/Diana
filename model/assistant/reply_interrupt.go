@@ -168,6 +168,9 @@ func (r *Runtime) interruptedReplyError(ctx context.Context, event MessageEvent)
 	if hasExternalSideEffect(ctx) {
 		return nil
 	}
+	if r.directReplyHasNewSupplements(ctx) {
+		return errDirectReplySupplemented
+	}
 	if r.inboundTriggerSuperseded(ctx, event) {
 		return errReplyTriggerSuperseded
 	}

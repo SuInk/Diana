@@ -352,9 +352,9 @@ func TestPromptFollowsTheNaturalSplitSwitch(t *testing.T) {
 
 // TestTrailingBracketToneStillSplits 盯住猫娘那个语气词和分条逻辑的冲突。
 //
-// 猫娘人设专门教了「句尾一个孤零零的『（』」表示自嘲、心虚，而分条这边把行尾的
-// 开括号当成「话没说完」，会把带「（」的那句粘到下一句上——两次独立发言挤进同一个
-// 气泡。线上原话就是这个形状。
+// 提示词已经不教「句尾一个孤零零的『（』」了（审核器会把它当截断），但老配置的
+// 句尾候选里还留着，模型自己也会写。分条这边把行尾的开括号当成「话没说完」，会把
+// 带「（」的那句粘到下一句上——两次独立发言挤进同一个气泡。线上原话就是这个形状。
 func TestTrailingBracketToneStillSplits(t *testing.T) {
 	reply := "被你这么一问，我确实悄悄给自己打勾了喵（\n又是糖又是温水的，你这夸法甜得我要化掉了喵"
 	got := splitChatReply(reply, chatSplitLimitsFrom(DefaultBotConfig().WithDefaults()))

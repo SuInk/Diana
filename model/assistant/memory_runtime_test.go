@@ -16,7 +16,6 @@ import (
 
 func TestMemoryGateUsesMemoryProfileAndExistingKeys(t *testing.T) {
 	profiles := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "default",
 		Profiles: []llm.Profile{
 			{ID: "default", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "default", Model: "default-model"}},
 			{ID: "memory", Group: "memory", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "memory", Model: "memory-model"}},
@@ -476,6 +475,9 @@ func (s *testStructuredMemoryStore) ListStructuredMemories(_ context.Context, qu
 		if excluded {
 			continue
 		}
+		if !structuredMemoryFakeInScope(item, query) {
+			continue
+		}
 		items = append(items, item)
 	}
 	return items, nil
@@ -511,7 +513,6 @@ func TestMemoryContextKeepsUserScopedMemoriesWhenCrossGroupIsOff(t *testing.T) {
 
 func TestMemoryGateFetchesRelevantMemoriesBeforeImportantOnes(t *testing.T) {
 	profiles := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "default",
 		Profiles: []llm.Profile{{ID: "default", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "m"}}},
 	}}
 	memory := &testStructuredMemoryStore{}
@@ -562,5 +563,54 @@ func TestMergeStructuredMemoriesDedupesAndKeepsRelevantFirst(t *testing.T) {
 	)
 	if len(merged) != 3 || merged[0].ID != "a" || merged[1].ID != "b" || merged[2].ID != "c" {
 		t.Fatalf("merged = %#v", merged)
+	}
+}
+
+// structuredMemoryFakeInScope 复刻真实存储层的 scope_key 取值范围。假实现以前只
+// 按 kind 过滤，会话隔离完全靠调用方自己比较 key 兜着——这正是「便签 key 落库后
+// 被归一化、读取端再也对不上」能一路活到线上的原因：单测两侧用的都是没归一化的
+// 同一个字符串，永远相等。
+//
+// 没有设 ScopeKey 的条目视为不限会话，保持既有用例不用逐个补字段。
+func structuredMemoryFakeInScope(item StructuredMemoryItem, query StructuredMemoryQuery) bool {
+	scope := strings.TrimSpace(item.ScopeKey)
+	if scope == "" || scope == strings.TrimSpace(query.Session) {
+		return true
+	}
+	if query.CurrentSessionOnly {
+		return false
+	}
+	// 默认取值范围额外捎上「本人的 visibility=user 记忆」。
+	return item.Visibility == MemoryVisibilityUser &&
+		strings.TrimSpace(item.SubjectUserID) == strings.TrimSpace(query.SubjectUserID)
+}
+
+// 摘要任务把「当前便签」一起喂给模型，让它在原有状态上续写而不是重开一条。
+// 读取端以前按未归一化的 key 精确比较，currentThread 恒为空，于是每轮都从零
+// 重写——库里便签一直存在，却永远只覆盖最近这一批事件。
+func TestSummaryMemoryJobFeedsExistingThreadToModel(t *testing.T) {
+	memory := &testStructuredMemoryStore{items: []StructuredMemoryItem{{
+		ID:       "thread-1",
+		ScopeKey: "group:123",
+		// 落库形态：normalizeMemoryKey 已经把冒号吃掉了。
+		Key:  "thread.group123",
+		Kind: MemoryKindThread, Topic: "会话状态",
+		Content: "上一轮的进行状态：正在挑选镜像线路。",
+	}}}
+	provider := &capturingLLMProvider{reply: `{"memories":[{"action":"upsert","key":"thread.group:123","kind":"thread","topic":"会话状态","entity":"Diana","content":"接着聊镜像线路，现在转到记忆分层。","evidence":"较早会话整合","source_type":"summary","confidence":0.97,"importance":0.82,"visibility":"session","sensitive":false,"retention_days":30}]}`}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	events := []MessageEvent{
+		{Kind: EventKindGroup, GroupID: "123", UserID: "a", SenderName: "Alice", MessageID: "m1", Time: 100, Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "记忆要分层"}}}},
+	}
+	if err := runtime.processSummaryMemoryJob(context.Background(), memory, MemoryJob{
+		ID: "summary-job", Payload: MemoryJobPayload{Kind: MemoryJobSummary, Session: "group:123", Events: events},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prompt := provider.request.Messages[len(provider.request.Messages)-1].Content
+	if !strings.Contains(prompt, "正在挑选镜像线路") {
+		t.Fatalf("已有便签没有进入摘要提示词: %s", prompt)
 	}
 }

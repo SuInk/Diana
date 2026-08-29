@@ -79,6 +79,8 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 	for _, opt := range opts {
 		opt(&options)
 	}
+	// 拉模型列表和发请求走同一套凭据，否则「测试连接通了但列不出模型」。
+	options.httpClient = httpClientWithCredentials(options.httpClient, options.credentials)
 
 	switch cfg.Provider {
 	case ProviderOpenAICompatible:
@@ -94,7 +96,8 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 
 // listOpenAICompatibleModels 从 OpenAI-compatible 后端读取模型列表。
 func listOpenAICompatibleModels(ctx context.Context, cfg ProviderConfig, httpClient *http.Client) ([]ModelInfo, error) {
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	// 绑了 OAuth 的配置档没有 API Key 是正常状态，鉴权头在传输层补上。
+	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
 		return nil, ErrMissingAPIKey
 	}
 	baseURL := strings.TrimSpace(cfg.BaseURL)
