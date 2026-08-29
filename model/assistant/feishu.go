@@ -482,14 +482,14 @@ func feishuEventFromCallback(payload []byte, appID string) (MessageEvent, bool) 
 				SenderType string `json:"sender_type"`
 			} `json:"sender"`
 			Message struct {
-				MessageID   string `json:"message_id"`
-				RootID      string `json:"root_id"`
-				ParentID    string `json:"parent_id"`
-				CreateTime  any    `json:"create_time"`
-				ChatID      string `json:"chat_id"`
-				ChatType    string `json:"chat_type"`
-				MessageType string `json:"message_type"`
-				Content     string `json:"content"`
+				MessageID   string          `json:"message_id"`
+				RootID      string          `json:"root_id"`
+				ParentID    string          `json:"parent_id"`
+				CreateTime  any             `json:"create_time"`
+				ChatID      string          `json:"chat_id"`
+				ChatType    string          `json:"chat_type"`
+				MessageType string          `json:"message_type"`
+				Content     string          `json:"content"`
 				Mentions    []feishuMention `json:"mentions"`
 			} `json:"message"`
 		} `json:"event"`
