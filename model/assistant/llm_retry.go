@@ -276,22 +276,6 @@ func (p *profileFailoverLLMProvider) client(index int) (LLMProvider, error) {
 	return p.clients[index], p.clientErrors[index]
 }
 
-func activateLLMProfile(store LLMProfileStore, profileID string) {
-	if store == nil || profileID == "" {
-		return
-	}
-	set := store.Profiles().WithDefaults()
-	if set.ActiveID == profileID {
-		return
-	}
-	set.ActiveID = profileID
-	// 这是失败重试时的自动切换，落库失败不影响本轮已经切好的内存状态，
-	// 但要留日志，否则重启后又切回旧配置会显得莫名其妙。
-	if err := store.SaveProfiles(set); err != nil {
-		log.Printf("persist llm profile failover failed: %v", err)
-	}
-}
-
 // maxContextShrinkRetries 限制收缩次数：128K 起连续减半四次即落到下限，
 // 再多只是拖长这一轮回复的耗时。
 const maxContextShrinkRetries = 4

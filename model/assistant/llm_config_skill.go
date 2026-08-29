@@ -213,7 +213,7 @@ func modelRoleBinding(set llm.ProfileSet, roles map[string]ModelRole, roleKey st
 			return candidates[0], roleModelFromProfile(candidates[0], roleKey), true
 		}
 	}
-	current, ok := set.Current()
+	current, ok := set.FirstProfile()
 	if !ok {
 		return llm.Profile{}, "", false
 	}

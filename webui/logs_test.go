@@ -101,7 +101,7 @@ func TestLLMConfigHandlerWritesAppLogs(t *testing.T) {
 	router := gin.New()
 	handler.Register(router)
 
-	okBody := []byte(`{"id":"` + profileStore.Profiles().ActiveID + `","provider":"openai_compatible","api_key":"new-key-123","model":"gp5.5"}`)
+	okBody := []byte(`{"id":"` + profileStore.Profiles().Profiles[0].ID + `","provider":"openai_compatible","api_key":"new-key-123","model":"gp5.5"}`)
 	okReq := httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(okBody))
 	okReq.Header.Set("X-Diana-Actor", "admin")
 	okRec := httptest.NewRecorder()

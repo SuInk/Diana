@@ -47,7 +47,6 @@ type llmConfigPayload struct {
 	Group            string             `json:"group,omitempty"`
 	Description      string             `json:"description,omitempty"`
 	UpdatedAt        string             `json:"updated_at,omitempty"`
-	ActiveProfileID  string             `json:"active_profile_id,omitempty"`
 	Profiles         []llmConfigPayload `json:"profiles,omitempty"`
 	Provider         llm.Provider       `json:"provider"`
 	APIStyle         llm.APIStyle       `json:"api_style,omitempty"`
@@ -145,7 +144,6 @@ func (h *LLMConfigHandler) Register(router gin.IRouter) {
 	router.GET("/api/llm/config", h.getConfig)
 	router.GET("/api/llm/config/export", h.exportConfig)
 	router.POST("/api/llm/config", h.saveConfig)
-	router.POST("/api/llm/config/activate", h.activateProfile)
 	router.POST("/api/llm/config/clone", h.cloneProfile)
 	router.POST("/api/llm/config/delete", h.deleteProfile)
 	router.POST("/api/llm/config/import", h.importProfiles)
@@ -287,37 +285,11 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 	next := upsertProfileSet(set, payload, cfg)
 	// 落库失败就不能回 200，否则前端提示保存成功、重启后配置又变回旧值。
 	if err := h.store.SaveProfiles(next); err != nil {
-		h.writeError(c, 500, "llm.config.save", err, next.ActiveID, llmLogMetadata(cfg, next.ActiveID))
+		h.writeError(c, 500, "llm.config.save", err, payload.ID, llmLogMetadata(cfg, payload.ID))
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.config.save", "LLM 配置已保存", next.ActiveID, llmLogMetadata(cfg, next.ActiveID))
+	recordRequestOperation(c, h.logs, "llm.config.save", "LLM 配置已保存", payload.ID, llmLogMetadata(cfg, payload.ID))
 	c.JSON(200, h.profileSetPayload(next))
-}
-
-// activateProfile 切换当前激活的 LLM 配置档。
-func (h *LLMConfigHandler) activateProfile(c *gin.Context) {
-	var payload llmConfigPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.profile.activate", err, "", nil)
-		return
-	}
-	targetID := strings.TrimSpace(payload.ID)
-	if targetID == "" {
-		h.writeError(c, 400, "llm.profile.activate", fmt.Errorf("profile id is required"), "", nil)
-		return
-	}
-	set := h.store.Profiles().WithActive(targetID)
-	current, ok := set.Current()
-	if !ok || current.ID != targetID {
-		h.writeError(c, 404, "llm.profile.activate", fmt.Errorf("profile %q not found", targetID), targetID, nil)
-		return
-	}
-	if err := h.store.SaveProfiles(set); err != nil {
-		h.writeError(c, 500, "llm.profile.activate", err, targetID, llmLogMetadata(current.Config, targetID))
-		return
-	}
-	recordRequestOperation(c, h.logs, "llm.profile.activate", "LLM 配置已切换", targetID, llmLogMetadata(current.Config, targetID))
-	c.JSON(200, h.profileSetPayload(set))
 }
 
 // reorderProfiles 按给定 ID 顺序重排配置档；组内顺序即失败降级的优先级。
@@ -381,7 +353,9 @@ func (h *LLMConfigHandler) cloneProfile(c *gin.Context) {
 	}
 	sourceID := strings.TrimSpace(payload.ID)
 	if sourceID == "" {
-		sourceID = h.store.Profiles().ActiveID
+		if first, ok := h.store.Profiles().FirstProfile(); ok {
+			sourceID = first.ID
+		}
 	}
 	set := h.store.Profiles()
 	for _, profile := range set.Profiles {
@@ -407,8 +381,8 @@ func (h *LLMConfigHandler) cloneProfile(c *gin.Context) {
 // importProfiles 导入一组 LLM 配置档。
 func (h *LLMConfigHandler) importProfiles(c *gin.Context) {
 	var payload struct {
-		ActiveProfileID string             `json:"active_profile_id,omitempty"`
-		Profiles        []llmConfigPayload `json:"profiles"`
+		// 导出的旧文件里可能还带着 active_profile_id，解码时直接忽略即可。
+		Profiles []llmConfigPayload `json:"profiles"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, 400, "llm.profile.import", err, "", nil)
@@ -431,7 +405,7 @@ func (h *LLMConfigHandler) importProfiles(c *gin.Context) {
 			h.writeError(c, 400, "llm.profile.import", err, firstNonEmpty(item.ID, item.Name), llmLogMetadata(cfg, item.ID))
 			return
 		}
-		id := firstNonEmpty(strings.TrimSpace(item.ID), llm.NewProfileSet(cfg).ActiveID)
+		id := firstNonEmpty(strings.TrimSpace(item.ID), llm.NewProfileSet(cfg).Profiles[0].ID)
 		if _, ok := seenIDs[id]; ok {
 			h.writeError(c, 400, "llm.profile.import", fmt.Errorf("duplicate profile id %q", id), id, nil)
 			return
@@ -452,15 +426,11 @@ func (h *LLMConfigHandler) importProfiles(c *gin.Context) {
 			Config:      cfg,
 		})
 	}
-	next.ActiveID = firstNonEmpty(payload.ActiveProfileID, next.Profiles[0].ID)
-	if current, ok := next.Current(); !ok || current.ID == "" {
-		next.ActiveID = next.Profiles[0].ID
-	}
 	if err := h.store.SaveProfiles(next); err != nil {
-		h.writeError(c, 500, "llm.profile.import", err, next.ActiveID, map[string]any{"profile_count": len(next.Profiles), "active_profile_id": next.ActiveID})
+		h.writeError(c, 500, "llm.profile.import", err, next.Profiles[0].ID, map[string]any{"profile_count": len(next.Profiles)})
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.profile.import", "LLM 配置已导入", next.ActiveID, map[string]any{"profile_count": len(next.Profiles), "active_profile_id": next.ActiveID})
+	recordRequestOperation(c, h.logs, "llm.profile.import", "LLM 配置已导入", next.Profiles[0].ID, map[string]any{"profile_count": len(next.Profiles)})
 	c.JSON(200, h.profileSetPayload(next))
 }
 
@@ -654,7 +624,7 @@ func payloadFromConfigWithSecrets(cfg llm.ProviderConfig) llmConfigPayload {
 }
 
 // payloadFromProfile 把单个 LLM 配置档转换为前端 payload。
-func payloadFromProfile(profile llm.Profile, activeID string) llmConfigPayload {
+func payloadFromProfile(profile llm.Profile) llmConfigPayload {
 	payload := payloadFromConfig(profile.Config)
 	payload.ID = profile.ID
 	payload.Name = profile.Name
@@ -663,12 +633,11 @@ func payloadFromProfile(profile llm.Profile, activeID string) llmConfigPayload {
 	if !profile.UpdatedAt.IsZero() {
 		payload.UpdatedAt = profile.UpdatedAt.Format(time.RFC3339)
 	}
-	payload.ActiveProfileID = activeID
 	return payload
 }
 
 // payloadFromProfileWithSecrets 把单个配置档转换为包含密钥的 payload。
-func payloadFromProfileWithSecrets(profile llm.Profile, activeID string) llmConfigPayload {
+func payloadFromProfileWithSecrets(profile llm.Profile) llmConfigPayload {
 	payload := payloadFromConfigWithSecrets(profile.Config)
 	payload.ID = profile.ID
 	payload.Name = profile.Name
@@ -677,7 +646,6 @@ func payloadFromProfileWithSecrets(profile llm.Profile, activeID string) llmConf
 	if !profile.UpdatedAt.IsZero() {
 		payload.UpdatedAt = profile.UpdatedAt.Format(time.RFC3339)
 	}
-	payload.ActiveProfileID = activeID
 	return payload
 }
 
@@ -749,28 +717,28 @@ func botRoleBindingsFor(bots assistant.ProfileSet, profileID, group string) []ll
 
 // payloadFromProfileSet 把 LLM 配置集转换为前端安全 payload。
 func payloadFromProfileSet(set llm.ProfileSet) llmConfigPayload {
-	current, ok := set.Current()
+	first, ok := set.FirstProfile()
 	if !ok {
 		return llmConfigPayload{}
 	}
-	payload := payloadFromProfile(current, set.ActiveID)
+	payload := payloadFromProfile(first)
 	payload.Profiles = make([]llmConfigPayload, 0, len(set.Profiles))
 	for _, profile := range set.Profiles {
-		payload.Profiles = append(payload.Profiles, payloadFromProfile(profile, set.ActiveID))
+		payload.Profiles = append(payload.Profiles, payloadFromProfile(profile))
 	}
 	return payload
 }
 
 // payloadFromProfileSetWithSecrets 把配置集转换为包含密钥的导出 payload。
 func payloadFromProfileSetWithSecrets(set llm.ProfileSet) llmConfigPayload {
-	current, ok := set.Current()
+	first, ok := set.FirstProfile()
 	if !ok {
 		return llmConfigPayload{}
 	}
-	payload := payloadFromProfileWithSecrets(current, set.ActiveID)
+	payload := payloadFromProfileWithSecrets(first)
 	payload.Profiles = make([]llmConfigPayload, 0, len(set.Profiles))
 	for _, profile := range set.Profiles {
-		payload.Profiles = append(payload.Profiles, payloadFromProfileWithSecrets(profile, set.ActiveID))
+		payload.Profiles = append(payload.Profiles, payloadFromProfileWithSecrets(profile))
 	}
 	return payload
 }
@@ -849,12 +817,9 @@ func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.Provi
 
 // existingProfileConfig 在配置集中查找 payload 对应的旧配置。
 func existingProfileConfig(set llm.ProfileSet, payload llmConfigPayload) llm.ProviderConfig {
-	// 只有明确指定已有 profile 才能复用其密钥。新建草稿没有 ID，
-	// 不能回退到当前激活配置，否则不同配置会表现得像共享 API Key。
+	// 只有明确指定已有 profile 才能复用其密钥：新建草稿没有 ID 就不复用，
+	// 否则不同配置会表现得像共享 API Key。
 	targetID := strings.TrimSpace(payload.ID)
-	if targetID == "" {
-		targetID = strings.TrimSpace(payload.ActiveProfileID)
-	}
 	if targetID == "" {
 		return llm.ProviderConfig{}
 	}
@@ -880,11 +845,6 @@ func upsertProfileSet(set llm.ProfileSet, payload llmConfigPayload, cfg llm.Prov
 	}
 
 	targetID := strings.TrimSpace(payload.ID)
-	if targetID != "" {
-		targetID = strings.TrimSpace(payload.ID)
-	} else if len(set.Profiles) == 0 {
-		targetID = set.ActiveID
-	}
 
 	for i := range set.Profiles {
 		if set.Profiles[i].ID != targetID {
@@ -897,7 +857,6 @@ func upsertProfileSet(set llm.ProfileSet, payload llmConfigPayload, cfg llm.Prov
 		set.Profiles[i].Description = strings.TrimSpace(payload.Description)
 		set.Profiles[i].UpdatedAt = now
 		set.Profiles[i].Config = cfg
-		set.ActiveID = set.Profiles[i].ID
 		return set
 	}
 
@@ -909,12 +868,11 @@ func upsertProfileSet(set llm.ProfileSet, payload llmConfigPayload, cfg llm.Prov
 		UpdatedAt:   now,
 		Config:      cfg,
 	}
-	// 新建配置如果没有前端传入 ID，就生成稳定 UUID，后续切换/删除都靠它定位。
+	// 新建配置如果没有前端传入 ID，就生成稳定 UUID，后续重排/删除都靠它定位。
 	if newProfile.ID == "" {
-		newProfile.ID = llm.NewProfileSet(cfg).ActiveID
+		newProfile.ID = llm.NewProfileSet(cfg).Profiles[0].ID
 	}
 	set.Profiles = append(set.Profiles, newProfile)
-	set.ActiveID = newProfile.ID
 	return set
 }
 
@@ -945,7 +903,7 @@ func (h *LLMConfigHandler) writeError(c *gin.Context, status int, action string,
 
 // llmLogTarget 封装当前模块的 llmLogTarget 逻辑。
 func llmLogTarget(payload llmConfigPayload) string {
-	return firstNonEmpty(payload.ID, payload.ActiveProfileID, payload.Name, payload.Model)
+	return firstNonEmpty(payload.ID, payload.Name, payload.Model)
 }
 
 // llmLogMetadata 封装当前模块的 llmLogMetadata 逻辑。

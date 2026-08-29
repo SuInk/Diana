@@ -391,7 +391,6 @@ func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
 	}
 
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "p1",
 		Profiles: []llm.Profile{{
 			ID:    "p1",
 			Name:  "chat",
@@ -421,7 +420,6 @@ func TestBotContextCapOnlyTightensTheModelWindow(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "1", MessageID: "1"}
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "p1",
 		Profiles: []llm.Profile{{
 			ID: "p1", Name: "chat", Group: llm.GroupChat,
 			Config: llm.ProviderConfig{
