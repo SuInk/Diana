@@ -157,12 +157,8 @@ const minBotTokenChars = 16
 // NewBotHandler 创建 BotHandler 实例。
 func NewBotHandler(ctx context.Context, runtime BotRuntime) *BotHandler {
 	return NewBotHandlerWithFactory(ctx, runtime, func(cfg assistant.BotConfig) assistant.Channel {
-		if cfg.Platform == assistant.PlatformTelegram {
-			return assistant.NewTelegramChannel(assistant.TelegramConfig{
-				BotToken:   cfg.TelegramBotToken,
-				APIBaseURL: cfg.TelegramAPIBaseURL,
-				ProxyURL:   cfg.TelegramProxyURL,
-			})
+		if channel := assistant.NewChannelForConfig(cfg); channel != nil {
+			return channel
 		}
 		return assistant.NewOneBotReverseServer(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,

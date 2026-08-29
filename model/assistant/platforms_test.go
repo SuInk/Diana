@@ -38,9 +38,6 @@ func TestValidatePlatformRejectsUnknownAdapter(t *testing.T) {
 
 func TestPlatformCategories(t *testing.T) {
 	platforms := SupportedPlatforms()
-	if len(platforms) != 2 {
-		t.Fatalf("SupportedPlatforms() len = %d, want OneBot v11 and Telegram", len(platforms))
-	}
 	byID := map[string]PlatformDefinition{}
 	for _, p := range platforms {
 		byID[p.ID] = p
@@ -56,6 +53,18 @@ func TestPlatformCategories(t *testing.T) {
 	}
 	if IsOneBotPlatform(PlatformTelegram) {
 		t.Fatal("Telegram 不该走 OneBot 适配器")
+	}
+	// 每个平台自成一个分类，WebUI 靠它给机器人列表分组；重名会让两个平台
+	// 的机器人挤进同一组里。
+	seenCategories := map[string]string{}
+	for _, platform := range platforms {
+		if owner, taken := seenCategories[platform.Category]; taken {
+			t.Fatalf("分类 %q 同时被 %q 和 %q 占用", platform.Category, owner, platform.ID)
+		}
+		seenCategories[platform.Category] = platform.ID
+		if IsOneBotPlatform(platform.ID) != (platform.ID == PlatformOneBotV11) {
+			t.Fatalf("%q 的 OneBot 适配器判断不正确", platform.ID)
+		}
 	}
 }
 

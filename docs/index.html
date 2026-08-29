@@ -1,163 +1,475 @@
-<!doctype html>
-<!-- Copyright (c) 2025-now SuInk.
-     Licensed under the Limited Redistribution License in the repository root. -->
-<html lang="zh-CN" data-theme="light">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Diana 是可自托管的多平台 AI 助手：OneBot v11 与 Telegram 同时在线，内置联网搜索、长期记忆、视觉理解与完整事件审计，一条命令即可部署。" />
-    <meta name="theme-color" content="#171418" />
-    <meta property="og:type" content="website" />
-    <meta property="og:title" content="Diana - 可自托管的多平台 AI 助手" />
-    <meta property="og:description" content="OneBot v11 与 Telegram 同时在线，内置联网搜索、长期记忆与完整事件审计。一条命令完成部署，在线体验完整 WebUI。" />
-    <meta property="og:image" content="https://suink.github.io/Diana/assets/diana-webui-overview.png" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <title>Diana - 可自托管的多平台 AI 助手</title>
-    <link rel="icon" href="https://raw.githubusercontent.com/SuInk/Diana/main/frontend-next/public/favicon.svg" />
-    <link rel="stylesheet" href="./styles.css?v=20260820" />
-  </head>
-  <body class="landing-page" data-page="overview">
-    <div data-docs-header></div>
-    <div class="docs-shell">
-      <div data-docs-sidebar></div>
-      <main id="main" class="content">
-        <section class="landing-hero searchable" id="overview" aria-labelledby="landing-title">
-          <div class="landing-hero-copy">
-            <p class="eyebrow">自托管 · OneBot v11 与 Telegram · 完整可观测</p>
-            <h1 id="landing-title">让机器人住进你自己的服务器</h1>
-            <p class="landing-lead">
-              Diana 把对话、视觉、生图、长期记忆、联网搜索和提醒任务组合成一个可以长期运行的多平台 AI 助手。
-              单个二进制启动，数据留在本地 SQLite，每一次回复与不回复都有据可查。
-            </p>
-            <div class="hero-actions">
-              <a class="button primary" href="#quickstart">一键安装</a>
-              <a class="button secondary" href="./demo/">在线演示</a>
-              <a class="button ghost" href="https://github.com/SuInk/Diana">GitHub</a>
-            </div>
-            <ul class="hero-meta">
-              <li>Linux / macOS / Windows</li>
-              <li>OpenAI 兼容 · Gemini · Anthropic</li>
-              <li>无需公网地址</li>
-            </ul>
-          </div>
-          <figure class="landing-shot">
-            <div class="shot-frame">
-              <div class="shot-chrome" aria-hidden="true"><span></span><span></span><span></span><em>Diana 控制台</em></div>
-              <img src="./assets/diana-webui-overview.png" alt="Diana WebUI 总览页面：通道连接状态、今日消息统计、系统资源占用和实时事件流" width="1600" height="1000" loading="eager" />
-            </div>
-            <figcaption>控制台总览：通道状态、消息统计、系统资源与实时事件流。<a href="./demo/">打开在线演示 →</a></figcaption>
-          </figure>
-        </section>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Diana — 可自托管的多平台 AI 助手</title>
+<meta name="description" content="Diana 是用 Go 编写的可自托管多平台 AI 助手：OneBot v11 与 Telegram 同时在线，单二进制部署，数据留在自己的机器上。" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #100d13;
+    --bg-soft: #16121a;
+    --bg-card: #1b161f;
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.15);
+    --text: #ece7ee;
+    --text-dim: #9d92a5;
+    --accent: #d9578d;
+    --accent-soft: rgba(217, 87, 141, 0.12);
+    --radius: 10px;
+    --font: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+  img { max-width: 100%; display: block; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+  .lucide { width: 20px; height: 20px; stroke-width: 1.8; }
 
-        <section class="section landing-facts" aria-label="项目概要">
-          <dl class="fact-grid">
-            <div><dt>单文件部署</dt><dd>Go 二进制自带 WebUI，无需 Node 与运行时依赖</dd></div>
-            <div><dt>双通道并行</dt><dd>OneBot v11 与 Telegram 同时在线，回复回到来源</dd></div>
-            <div><dt>数据在本地</dt><dd>配置、记忆与日志都存放在自己的 SQLite 里</dd></div>
-            <div><dt>决策可回溯</dt><dd>事件中心记录每次回复原因、工具链与 token</dd></div>
-          </dl>
-        </section>
+  /* ---------- nav ---------- */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(16, 13, 19, 0.92);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 28px; height: 58px; }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; }
+  .brand-mark {
+    width: 24px; height: 24px; border-radius: 7px;
+    background: var(--accent);
+    display: grid; place-items: center;
+    font-size: 13px; font-weight: 700; color: #fff;
+  }
+  .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; color: var(--text-dim); }
+  .nav-links a:hover { color: var(--text); }
+  .nav-gh { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+  .nav-gh:hover { color: var(--accent); }
 
-        <section class="section landing-install searchable" id="quickstart">
-          <div class="landing-section-heading">
-            <div><p class="eyebrow">快速开始</p><h2>一条命令，启动 Diana</h2></div>
-            <p>安装器自动识别系统与 CPU 架构，下载完整 Release 包并校验 SHA-256。安装前备份已有数据，切换版本后完成健康检查，失败自动回滚。</p>
-          </div>
-          <div class="landing-install-body" data-tabs-root>
-            <div class="tabs install-tabs" role="tablist" aria-label="安装平台">
-              <button type="button" role="tab" aria-selected="true" data-tab="unix">Linux / macOS</button>
-              <button type="button" role="tab" aria-selected="false" data-tab="windows">Windows</button>
-              <button type="button" role="tab" aria-selected="false" data-tab="docker">Docker</button>
-            </div>
-            <div class="tab-panel" role="tabpanel" data-panel="unix">
-              <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
-            </div>
-            <div class="tab-panel" role="tabpanel" data-panel="windows" hidden>
-              <pre><code>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code></pre>
-            </div>
-            <div class="tab-panel" role="tabpanel" data-panel="docker" hidden>
-              <pre><code>git clone https://github.com/SuInk/Diana.git &amp;&amp; cd Diana
-cp docker-compose.yml docker-compose.local.yml   # 填入 token 与 LLM 配置
-docker compose -f docker-compose.local.yml up -d --build</code></pre>
-            </div>
-          </div>
-          <div class="landing-install-footer">
-            <p>完成后打开 <code>http://127.0.0.1:18080</code>，用终端显示的首次登录凭据进入控制台。重复执行同一条命令即可升级。</p>
-            <a class="button secondary" href="./deploy.html#one-click">部署参数与其他方式</a>
-          </div>
-        </section>
+  /* ---------- hero ---------- */
+  .hero { padding: 88px 0 56px; text-align: center; }
+  h1 { font-size: clamp(30px, 5vw, 44px); font-weight: 700; line-height: 1.3; letter-spacing: 0.01em; }
+  .hero-sub {
+    max-width: 620px; margin: 18px auto 0;
+    font-size: clamp(15px, 2vw, 17px); color: var(--text-dim);
+  }
+  .hero-cta { margin-top: 32px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    border-radius: 8px; padding: 10px 22px;
+    font-size: 15px; font-weight: 500;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #c74a7f; }
+  .btn-ghost { border: 1px solid var(--line-strong); color: var(--text); }
+  .btn-ghost:hover { border-color: var(--accent); }
 
-        <section class="section landing-capabilities searchable" id="capabilities">
-          <div class="landing-section-heading">
-            <div><p class="eyebrow">核心能力</p><h2>消息接入、模型决策和运维状态都能看见</h2></div>
-            <p>能力都在控制台里可配可关，不需要改代码，也不需要为每个功能各装一个插件。</p>
-          </div>
-          <div class="feature-grid landing-feature-grid">
-            <article>
-              <h3>多通道同时在线</h3>
-              <p>OneBot v11 与 Telegram 并行运行，回复回到来源通道；会话和记忆可按需隔离或共享。</p>
-            </article>
-            <article>
-              <h3>模型职责拆分</h3>
-              <p>对话、识图、意图识别和图片生成分别绑定 Provider 与模型，保存前用真实请求验证。</p>
-            </article>
-            <article>
-              <h3>内置联网搜索</h3>
-              <p>联网搜索无需安装插件，面对时效性内容和陌生事实时可以先检索再回答。</p>
-            </article>
-            <article>
-              <h3>看得懂图里的字</h3>
-              <p>图片可同时走视觉模型与 OCR；对话模型不支持看图时，也能只收识别后的文字。</p>
-            </article>
-            <article>
-              <h3>群级回复策略</h3>
-              <p>为每个群独立设置回复时段、屏蔽名单、触发词、人设、等级门槛和工具权限。</p>
-            </article>
-            <article>
-              <h3>长期记忆与检索</h3>
-              <p>近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，控制 token 消耗。</p>
-            </article>
-            <article>
-              <h3>Agent、Skills 与 MCP</h3>
-              <p>内置 Agent 循环可调用文件、命令与浏览器工具，并按需装载 Skills 和 MCP 服务。</p>
-            </article>
-            <article>
-              <h3>完整事件审计</h3>
-              <p>记录为什么回复、为什么不回复、最终结果与 token；调试模式还原上下文和工具调用链。</p>
-            </article>
-          </div>
-        </section>
+  .install-box { margin: 30px auto 0; max-width: 620px; text-align: left; }
+  .install-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+  .install-tab {
+    border: 1px solid transparent; border-radius: 7px;
+    background: transparent; color: var(--text-dim);
+    font-family: var(--font); font-size: 13px;
+    padding: 4px 12px; cursor: pointer;
+  }
+  .install-tab:hover { color: var(--text); }
+  .install-tab.active {
+    color: var(--text);
+    background: var(--bg-card);
+    border-color: var(--line-strong);
+  }
+  .install-line {
+    display: flex; align-items: center;
+    background: var(--bg-card);
+    border: 1px solid var(--line-strong); border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .install-line code {
+    flex: 1; padding: 13px 16px;
+    font-family: var(--mono); font-size: 13px; color: var(--text);
+    white-space: nowrap; overflow-x: auto;
+  }
+  .copy-btn {
+    flex-shrink: 0; border: none; cursor: pointer;
+    background: transparent; color: var(--text-dim);
+    padding: 13px 16px; font-family: var(--font); font-size: 13px;
+    border-left: 1px solid var(--line);
+  }
+  .copy-btn:hover { color: var(--accent); }
+  .hero-note { margin-top: 12px; font-size: 13px; color: var(--text-dim); }
+  .hero-note code { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
 
-        <section class="section landing-docs searchable" id="learn-more">
-          <div class="landing-section-heading">
-            <div><p class="eyebrow">继续了解</p><h2>从部署到排障的完整文档</h2></div>
-          </div>
-          <div class="doc-card-grid">
-            <a class="doc-card" href="./deploy.html">
-              <strong>部署</strong>
-              <span>一键安装、Release 完整包、Docker 与源码构建，以及首次登录流程。</span>
-            </a>
-            <a class="doc-card" href="./configuration.html">
-              <strong>配置</strong>
-              <span>接入 OneBot v11 与 Telegram、分配模型、设置群聊策略与 Agent 工具权限。</span>
-            </a>
-            <a class="doc-card" href="./implementation.html">
-              <strong>实现</strong>
-              <span>系统架构、一条消息的决策链路、记忆分层与媒体和数据存储。</span>
-            </a>
-            <a class="doc-card" href="./operations.html">
-              <strong>运维</strong>
-              <span>版本更新与回滚、日志与备份、常见故障排查和开发发布流程。</span>
-            </a>
-          </div>
-        </section>
+  /* ---------- screenshot ---------- */
+  .shot { padding: 24px 0 8px; }
+  .shot img {
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+  }
+  .shot figcaption { margin-top: 10px; font-size: 13px; color: var(--text-dim); text-align: center; }
 
-        <nav class="page-nav single" aria-label="文档分页">
-          <a href="./deploy.html"><small>下一页</small><strong>部署 →</strong></a>
-        </nav>
-        <div data-docs-footer></div>
-      </main>
+  /* ---------- sections ---------- */
+  section { padding: 72px 0; }
+  .sec-head { max-width: 640px; margin: 0 auto 40px; text-align: center; }
+  h2 { font-size: clamp(22px, 3.5vw, 28px); font-weight: 700; line-height: 1.4; }
+  .sec-head p { margin-top: 10px; color: var(--text-dim); font-size: 15px; }
+
+  /* features */
+  .feat-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .feat {
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px;
+  }
+  .feat-icon {
+    width: 38px; height: 38px; border-radius: 9px;
+    background: var(--accent-soft); color: var(--accent);
+    display: grid; place-items: center;
+    margin-bottom: 14px;
+  }
+  .feat h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+  .feat p { font-size: 14px; color: var(--text-dim); }
+
+  /* quickstart */
+  .qs { background: var(--bg-soft); border-block: 1px solid var(--line); }
+  .qs-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .qs-card {
+    background: var(--bg-card); border: 1px solid var(--line);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  .qs-card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+    font-size: 13.5px; font-weight: 500; color: var(--text-dim);
+  }
+  .qs-card-head .copy-btn { padding: 0; border: none; }
+  .qs-card pre {
+    padding: 16px; overflow-x: auto;
+    font-family: var(--mono); font-size: 13px; line-height: 1.8;
+    color: var(--text);
+  }
+  .qs-card pre .c { color: #6f6379; }
+  .qs-steps { margin-top: 36px; display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  .qs-step h4 { font-size: 15px; margin-bottom: 4px; }
+  .qs-step h4 span { color: var(--accent); font-family: var(--mono); margin-right: 8px; font-size: 13.5px; }
+  .qs-step p { font-size: 13.5px; color: var(--text-dim); }
+  .qs-step code { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+
+  /* channels */
+  .chan-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .chan {
+    display: flex; gap: 16px; align-items: flex-start;
+    background: var(--bg-card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 22px;
+  }
+  .chan-logo {
+    flex-shrink: 0; width: 40px; height: 40px; border-radius: 9px;
+    display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .chan h3 { font-size: 15.5px; margin-bottom: 4px; }
+  .chan p { font-size: 13.5px; color: var(--text-dim); }
+  .chan-note { margin-top: 18px; font-size: 13.5px; color: var(--text-dim); text-align: center; }
+
+  /* docs links */
+  .doc-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .doc-card {
+    background: var(--bg-card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 20px;
+    transition: border-color .15s ease;
+  }
+  .doc-card:hover { border-color: var(--accent); }
+  .doc-card h3 { font-size: 15px; margin-bottom: 6px; display: flex; align-items: center; gap: 9px; }
+  .doc-card h3 .lucide { width: 17px; height: 17px; color: var(--accent); }
+  .doc-card p { font-size: 13.5px; color: var(--text-dim); }
+
+  /* footer */
+  footer { border-top: 1px solid var(--line); padding: 30px 0; font-size: 13.5px; color: var(--text-dim); }
+  .foot-inner { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .foot-links { margin-left: auto; display: flex; gap: 18px; }
+  .foot-links a:hover { color: var(--text); }
+
+  @media (max-width: 640px) {
+    .nav-links a:not(.nav-gh) { display: none; }
+    section { padding: 56px 0; }
+    .hero { padding: 56px 0 40px; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="./index.html"><span class="brand-mark">D</span>Diana</a>
+    <div class="nav-links">
+      <a href="#features">特性</a>
+      <a href="#quickstart">快速开始</a>
+      <a href="./deploy.html">部署</a>
+      <a href="./configuration.html">配置</a>
+      <a href="./operations.html">运维</a>
+      <a href="./demo.html">在线演示</a>
+      <a class="nav-gh" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
     </div>
-    <script src="./app.js?v=20260820" defer></script>
-  </body>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>可自托管的多平台 AI 助手</h1>
+    <p class="hero-sub">
+      Diana 用 Go 编写，编译成单个二进制运行。OneBot v11、Telegram、QQ 官方机器人、
+      钉钉、飞书、企业微信可以同时在线，内置 WebUI、插件系统与 Agent；
+      配置、记忆和日志都存在本机的 SQLite 里，不依赖任何托管服务。
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="#quickstart">快速开始</a>
+      <a class="btn btn-ghost" href="./demo.html">在线演示</a>
+      <a class="btn btn-ghost" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </div>
+    <div class="install-box">
+      <div class="install-tabs">
+        <button class="install-tab" data-os="sh">Linux / macOS</button>
+        <button class="install-tab" data-os="ps">Windows</button>
+      </div>
+      <div class="install-line">
+        <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code>
+        <code id="install-cmd-ps" data-os="ps" hidden>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code>
+        <button class="copy-btn" id="install-copy">复制</button>
+      </div>
+    </div>
+    <p class="hero-note">安装完成后打开 <code>http://127.0.0.1:18080</code>，进行首次配置。</p>
+  </div>
+</header>
+
+<div class="wrap shot">
+  <figure>
+    <img src="./assets/diana-webui-overview.png" alt="Diana 控制台总览：通道状态、消息统计、系统资源与实时事件流" loading="lazy" />
+    <figcaption>控制台总览：通道状态、消息统计、系统资源与实时事件流</figcaption>
+  </figure>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>特性</h2>
+    </div>
+    <div class="feat-grid">
+      <div class="feat">
+        <div class="feat-icon"><i data-lucide="radio"></i></div>
+        <h3>多通道同时在线</h3>
+        <p>六个平台并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-lucide="git-fork"></i></div>
+        <h3>模型职责拆分</h3>
+        <p>对话、视觉理解、意图识别、图片生成分别绑定 Provider 与模型，保存前用真实请求验证。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-lucide="globe"></i></div>
+        <h3>内置联网搜索</h3>
+        <p>无需安装插件，时效性内容先检索再回答；Exa MCP 优先，Tavily 兜底。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-lucide="scan-text"></i></div>
+        <h3>图片文字识别</h3>
+        <p>视觉模型与 OCR 并行工作，对话模型不支持看图也能收到识别后的文字；结果按内容哈希落库，同一张图只识别一次。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-lucide="users"></i></div>
+        <h3>群级回复策略</h3>
+        <p>每个群独立设置回复时段、黑白名单、触发词、人设、群等级门槛和工具权限。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-lucide="brain"></i></div>
+        <h3>长期记忆与检索</h3>
+        <p>近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，控制 token 消耗。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-lucide="bot"></i></div>
+        <h3>内置 Agent</h3>
+        <p>Pi 风格的最小工具循环，可调用文件、命令、浏览器工具，按需装载 Skills 与 MCP 服务。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-lucide="clipboard-list"></i></div>
+        <h3>完整事件审计</h3>
+        <p>每条消息为什么回复、用了哪些工具、花了多少 token，都能在事件中心查到；操作日志区分操作人。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart" class="qs">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>快速开始</h2>
+      <p>安装脚本自动识别系统与架构，下载最新稳定版并核对 SHA256SUMS；升级前备份数据，健康检查失败自动回滚。</p>
+    </div>
+    <div class="qs-grid">
+      <div class="qs-card">
+        <div class="qs-card-head">Linux / macOS<button class="copy-btn" data-copy="cmd-sh">复制</button></div>
+        <pre id="cmd-sh"><span class="c"># 安装与升级用同一条命令</span>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
+      </div>
+      <div class="qs-card">
+        <div class="qs-card-head">Windows PowerShell<button class="copy-btn" data-copy="cmd-ps">复制</button></div>
+        <pre id="cmd-ps"><span class="c"># 安装与升级用同一条命令</span>
+irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</pre>
+      </div>
+    </div>
+    <div class="qs-steps">
+      <div class="qs-step"><h4><span>1</span>执行安装命令</h4><p>生成的管理员账号和密码会显示在终端，并保存在安装目录的 <code>config.yaml</code>。</p></div>
+      <div class="qs-step"><h4><span>2</span>打开控制台</h4><p>访问 <code>127.0.0.1:18080</code>，用终端里显示的管理员账号登录。</p></div>
+      <div class="qs-step"><h4><span>3</span>接入通道与模型</h4><p>在 WebUI 里配置 OneBot / Telegram 通道，为各职责绑定模型。</p></div>
+      <div class="qs-step"><h4><span>4</span>后续升级</h4><p>控制台可直接升级，也可以重复执行安装命令；失败自动恢复。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="channels">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>通道支持</h2>
+    </div>
+    <div class="chan-grid">
+      <div class="chan">
+        <div class="chan-logo"><i data-lucide="message-circle"></i></div>
+        <div>
+          <h3>OneBot v11</h3>
+          <p>对接 NapCat 等 OneBot 实现，支持群聊与私聊，群级策略精细控制回复行为。</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-lucide="send"></i></div>
+        <div>
+          <h3>Telegram</h3>
+          <p>官方 Bot API 长轮询，出站连接，不需要公网地址。</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-lucide="message-square"></i></div>
+        <div>
+          <h3>QQ 官方机器人</h3>
+          <p>QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址。</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-lucide="briefcase"></i></div>
+        <div>
+          <h3>钉钉</h3>
+          <p>Stream 模式出站长连接，同样不需要公网地址或 HTTP 回调。</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-lucide="bird"></i></div>
+        <div>
+          <h3>飞书</h3>
+          <p>事件订阅回调，支持加密推送与签名校验；需要一个公网可达的回调地址。</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-lucide="building-2"></i></div>
+        <div>
+          <h3>企业微信</h3>
+          <p>自建应用回调，按 WXBizMsgCrypt 验签解密；需要一个公网可达的回调地址。</p>
+        </div>
+      </div>
+    </div>
+    <p class="chan-note">
+      前四个平台都是本机主动出站连接，家庭或内网部署可以直接用；
+      飞书和企业微信只能由平台回调，需要把控制台暴露到公网。
+    </p>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>文档</h2>
+    </div>
+    <div class="doc-grid">
+      <a class="doc-card" href="./deploy.html">
+        <h3><i data-lucide="rocket"></i>部署指南</h3>
+        <p>一键安装、Docker、二进制与各平台部署形态。</p>
+      </a>
+      <a class="doc-card" href="./configuration.html">
+        <h3><i data-lucide="settings"></i>配置说明</h3>
+        <p>通道、模型、群策略与 config.yaml 的完整参考。</p>
+      </a>
+      <a class="doc-card" href="./operations.html">
+        <h3><i data-lucide="wrench"></i>运维手册</h3>
+        <p>升级、备份、事件审计与日常维护。</p>
+      </a>
+      <a class="doc-card" href="./implementation.html">
+        <h3><i data-lucide="file-code"></i>实现细节</h3>
+        <p>架构设计、插件系统与 Agent 工具循环的内部实现。</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>Diana · Limited Redistribution License</span>
+    <div class="foot-links">
+      <a href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/SuInk/Diana/releases/latest" target="_blank" rel="noopener">Releases</a>
+      <a href="./demo.html">在线演示</a>
+    </div>
+  </div>
+</footer>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>
+  lucide.createIcons();
+
+  // 首屏安装命令按访客平台切换
+  (() => {
+    const tabs = document.querySelectorAll(".install-tab");
+    const cmds = document.querySelectorAll(".install-line code");
+    const copy = document.getElementById("install-copy");
+    let active = /Win/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? "ps" : "sh";
+    const render = () => {
+      tabs.forEach((t) => t.classList.toggle("active", t.dataset.os === active));
+      cmds.forEach((c) => (c.hidden = c.dataset.os !== active));
+    };
+    tabs.forEach((t) => t.addEventListener("click", () => { active = t.dataset.os; render(); }));
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(document.getElementById("install-cmd-" + active).innerText.trim());
+        copy.textContent = "已复制 ✓";
+        setTimeout(() => (copy.textContent = "复制"), 1600);
+      } catch { /* 剪贴板不可用时静默 */ }
+    });
+    render();
+  })();
+  document.querySelectorAll(".copy-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const el = document.getElementById(btn.dataset.copy);
+      if (!el) return;
+      try {
+        await navigator.clipboard.writeText(el.innerText.replace(/^#.*\n/gm, "").trim());
+        btn.textContent = "已复制 ✓";
+        setTimeout(() => (btn.textContent = "复制"), 1600);
+      } catch { /* 剪贴板不可用时静默 */ }
+    });
+  });
+</script>
+
+</body>
 </html>
