@@ -77,6 +77,36 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 
 默认安装目录：Linux / macOS 为 `~/.local/share/diana`，Windows 为 `%LOCALAPPDATA%\Diana`。
 
+### 一键卸载
+
+一键安装后的目录自带卸载工具。默认只移除后台服务和程序文件，保留
+`config.yaml`、`data/`、`logs/` 与安装备份，之后重新安装可继续使用原数据：
+
+```sh
+diana uninstall
+```
+
+```powershell
+diana uninstall
+```
+
+彻底删除所有配置、机器人数据与日志时使用 `diana uninstall --purge`。该操作不可恢复，
+卸载器会再次要求确认。若终端尚未刷新 PATH，也可以直接运行安装目录内的
+`uninstall.sh` 或 `uninstall.ps1`。
+
+### 终端查看日志
+
+```sh
+diana logs                 # 最近 100 行
+diana logs --lines 300     # 指定行数
+diana logs -f              # 持续跟随，Ctrl+C 退出
+diana version              # 查看当前版本
+diana help                 # 查看命令帮助
+```
+
+命令读取 `config.yaml` 中的 `storage.log_path`；自定义配置文件时可加
+`--config /path/to/config.yaml`。
+
 安装脚本本身用环境变量传参（这些是安装器的参数，不是应用配置）：
 
 ```sh

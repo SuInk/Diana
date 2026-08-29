@@ -117,6 +117,13 @@ func main() {
 		}
 		return
 	}
+	if handled, err := handleCLI(os.Args[1:]); handled {
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "diana: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	appCfg, err := loadAppConfig(resolveConfigPath(os.Args[1:]))
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
