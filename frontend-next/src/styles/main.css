@@ -790,6 +790,12 @@ code {
   transform: rotate(180deg);
 }
 
+.input.invalid,
+.input.invalid:focus {
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
 .btn.danger {
   color: var(--err, #d94848);
   border-color: var(--err, #d94848);
@@ -3592,33 +3598,7 @@ a.nav-action {
   overflow-y: auto;
 }
 
-.request-error {
-  margin-top: 4px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-md);
-  background: var(--accent-soft);
-  color: var(--text);
-  overflow: hidden;
-}
 
-.request-error summary {
-  padding: 10px 12px;
-  color: var(--accent);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.request-error pre {
-  max-height: 240px;
-  margin: 0;
-  padding: 0 12px 12px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--muted);
-  font: 11.5px/1.6 var(--font-mono);
-}
 
 .model-picker-item {
   display: block;
