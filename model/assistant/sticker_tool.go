@@ -6,9 +6,12 @@ package assistant
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -26,6 +29,8 @@ type dianaStickerTool struct {
 	runtime  *Runtime
 	event    MessageEvent
 	settings SettingValues
+	searchMu sync.Mutex
+	searched map[string]stickerCandidate
 }
 
 // StickerHistoryQuery is the storage boundary for the optional cross-conversation library.
@@ -62,7 +67,7 @@ type stickerSearchItem struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	MessageID   string `json:"source_message_id"`
+	MessageID   string `json:"-"`
 	Scope       string `json:"scope"`
 }
 
@@ -76,13 +81,13 @@ type stickerToolResult struct {
 }
 
 func newDianaStickerTool(runtime *Runtime, event MessageEvent, settings SettingValues) *dianaStickerTool {
-	return &dianaStickerTool{runtime: runtime, event: event, settings: settings}
+	return &dianaStickerTool{runtime: runtime, event: event, settings: settings, searched: map[string]stickerCandidate{}}
 }
 
 func (t *dianaStickerTool) Name() string { return dianaStickerToolName }
 
 func (t *dianaStickerTool) Description() string {
-	return `从当前群或私聊历史的表情包库中检索并发送一张表情包。用户明确要“发表情包”、希望用表情回应，或当前语境适合只用表情包回应时使用。` +
+	return `从 Diana 持久表情资产库中检索并发送一张表情包。用户明确要“发表情包”、希望用表情回应，或当前语境适合只用表情包回应时使用。` +
 		`必须先用 operation=search 和语义意图查询候选，再结合候选的名称与图片简介判断哪张最符合当前语境，最后用 operation=send 原样传回 sticker_id。不要只按关键词字面相同选择。` +
 		`发送由工具完成，成功后不要声称还要上传，也不要把候选的 source_message_id 或内部 id 告诉用户。不得把普通历史图片当表情包发送。`
 }
@@ -102,53 +107,54 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 	query := strings.TrimSpace(configToolString(input, "query"))
 	stickerID := strings.TrimSpace(configToolString(input, "sticker_id"))
-	candidates, err := t.candidates(ctx, query)
-	if err != nil {
-		return "", err
-	}
 
 	switch operation {
 	case "search":
+		candidates, err := t.candidates(ctx, query)
+		if err != nil {
+			return "", err
+		}
 		limit := t.settings.Int(stickerSettingSearchResults, 8)
 		if len(candidates) > limit {
 			candidates = candidates[:limit]
 		}
 		t.enrichCandidateDescriptions(ctx, candidates)
 		rankStickerCandidates(candidates, query)
+		t.rememberSearchCandidates(candidates)
 		items := stickerSearchItems(candidates)
 		message := fmt.Sprintf("找到 %d 个当前会话表情包候选；请按当前语义结合名称和图片简介选择，不要求查询词与候选文字完全一致。", len(items))
 		if len(items) == 0 {
-			message = "当前会话的表情包库里没有匹配候选。"
+			message = "本轮没有可用候选；继续正常回应，不要向用户提及内部图库、索引、搜索或工具状态，也不要声称已经发送。"
 		}
 		return marshalStickerResult(stickerToolResult{OK: true, Action: "searched", Message: message, Query: query, Candidates: items})
 	case "send":
 		var selected *stickerCandidate
 		if stickerID != "" {
-			for index := range candidates {
-				if candidates[index].ID == stickerID {
-					selected = &candidates[index]
-					break
-				}
+			if candidate, ok := t.searchedCandidate(stickerID); ok {
+				selected = &candidate
 			}
 			if selected == nil {
-				return marshalStickerResult(stickerToolResult{Action: "not_sent", Message: "这个 sticker_id 不属于当前会话的可用表情包；请重新 search。", Query: query})
+				return marshalStickerResult(stickerToolResult{Action: "not_sent", Message: "这个 sticker_id 不属于本轮搜索候选；请重新 search。", Query: query})
 			}
-		} else if len(candidates) > 0 && (query == "" || candidates[0].Score > 0) {
+		} else {
+			candidates, err := t.candidates(ctx, query)
+			if err != nil {
+				return "", err
+			}
+			if len(candidates) == 0 || (query != "" && candidates[0].Score <= 0) {
+				return marshalStickerResult(stickerToolResult{Action: "not_sent", Message: "没有足够匹配的候选；请先 search 查看简介，再传 sticker_id。本轮不发送表情，也不要向用户解释内部图库或搜索状态。", Query: query})
+			}
 			index := 0
 			if query == "" {
 				index = secureRandomIndex(len(candidates))
 			}
 			selected = &candidates[index]
 		}
-		if selected == nil {
-			message := "当前会话的表情包库里没有可用候选，没有发送。"
-			if query != "" && len(candidates) > 0 {
-				message = "query 没有明确的字面命中；请先 search 查看候选简介，再用 sticker_id 发送，避免按最近顺序误发表情包。"
-			}
-			return marshalStickerResult(stickerToolResult{Action: "not_sent", Message: message, Query: query})
-		}
 		if _, err := os.Stat(selected.Path); err != nil {
 			return "", fmt.Errorf("表情包缓存文件不可用: %w", err)
+		}
+		if selected.Hash != "" && !stickerFileMatchesHash(selected.Path, selected.Hash) {
+			return "", fmt.Errorf("表情包缓存内容校验失败")
 		}
 		if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{ImageURLs: []string{selected.Path}})); err != nil {
 			return "", fmt.Errorf("发送表情包失败: %w", err)
@@ -160,51 +166,141 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 	}
 }
 
+func (t *dianaStickerTool) rememberSearchCandidates(candidates []stickerCandidate) {
+	t.searchMu.Lock()
+	defer t.searchMu.Unlock()
+	t.searched = make(map[string]stickerCandidate, len(candidates))
+	for _, candidate := range candidates {
+		t.searched[candidate.ID] = candidate
+	}
+}
+
+func (t *dianaStickerTool) searchedCandidate(id string) (stickerCandidate, bool) {
+	t.searchMu.Lock()
+	defer t.searchMu.Unlock()
+	candidate, ok := t.searched[strings.TrimSpace(id)]
+	return candidate, ok
+}
+
+func stickerFileMatchesHash(path, expected string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return false
+	}
+	return strings.EqualFold(hex.EncodeToString(digest.Sum(nil)), strings.TrimSpace(expected))
+}
+
 func (t *dianaStickerTool) candidates(ctx context.Context, query string) ([]stickerCandidate, error) {
 	limit := t.settings.Int(stickerSettingHistoryLimit, 1000)
 	shareGroups := t.settings.Bool(stickerSettingCrossGroup, false)
 	sharePrivate := t.settings.Bool(stickerSettingCrossPrivate, false)
+	assetQuery := StickerHistoryQuery{
+		Session:          sessionKey(t.event),
+		ContextNamespace: strings.TrimSpace(t.event.ContextNamespace),
+		ProfileID:        strings.TrimSpace(t.event.ProfileID),
+		ShareGroups:      shareGroups,
+		SharePrivate:     sharePrivate,
+		Limit:            limit,
+	}
 	t.runtime.mu.RLock()
 	store := t.runtime.messageStore
 	inMemory := append([]MessageEvent(nil), t.runtime.history[sessionKey(t.event)]...)
 	t.runtime.mu.RUnlock()
-	events := inMemory
-	if store != nil {
-		var loaded []MessageEvent
-		var err error
-		if stickerStore, ok := store.(StickerHistoryStore); ok {
-			loaded, err = stickerStore.ListRecentStickerEvents(ctx, StickerHistoryQuery{
-				Session:          sessionKey(t.event),
-				ContextNamespace: strings.TrimSpace(t.event.ContextNamespace),
-				ProfileID:        strings.TrimSpace(t.event.ProfileID),
-				ShareGroups:      shareGroups,
-				SharePrivate:     sharePrivate,
-				Limit:            limit,
-			})
-		} else {
-			loaded, err = store.ListRecentMessageEvents(ctx, sessionKey(t.event), limit)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("读取表情包历史失败: %w", err)
-		}
-		events = loaded
-	}
-	if len(events) > limit {
-		events = events[len(events)-limit:]
-	}
-
 	includeGeneric := t.settings.Bool(stickerSettingIncludeGeneric, true)
 	semanticScores := t.semanticCandidateScores(ctx, query, shareGroups)
+	var candidates []stickerCandidate
+	if assetStore, ok := store.(StickerAssetStore); ok {
+		assets, err := assetStore.ListStickerAssets(ctx, assetQuery)
+		if err != nil {
+			return nil, fmt.Errorf("读取表情包资产失败: %w", err)
+		}
+		candidates = stickerCandidatesFromAssets(assets, assetQuery.Session, includeGeneric, semanticScores)
+	} else {
+		events := inMemory
+		if store != nil {
+			var loaded []MessageEvent
+			var err error
+			if stickerStore, ok := store.(StickerHistoryStore); ok {
+				loaded, err = stickerStore.ListRecentStickerEvents(ctx, assetQuery)
+			} else {
+				loaded, err = store.ListRecentMessageEvents(ctx, assetQuery.Session, limit)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("读取表情包历史失败: %w", err)
+			}
+			events = loaded
+		}
+		if len(events) > limit {
+			events = events[len(events)-limit:]
+		}
+		candidates = stickerCandidatesFromEvents(events, assetQuery.Session, includeGeneric, semanticScores)
+	}
+
+	for index := range candidates {
+		if index < maximumStickerDescriptionLookups {
+			lines := t.runtime.historyImageCachedSegmentDescriptions(ctx, []MessageSegment{{Type: "image", Data: map[string]string{
+				"cached_file":         candidates[index].Path,
+				imageContentSHA256Key: candidates[index].Hash,
+			}}})
+			if len(lines) > 0 {
+				candidates[index].Description = strings.TrimSpace(strings.TrimPrefix(lines[0], "图片1摘要="))
+				if candidates[index].Description == "尚无缓存描述" {
+					candidates[index].Description = ""
+				}
+			}
+		}
+	}
+	rankStickerCandidates(candidates, query)
+	return candidates, nil
+}
+
+func stickerCandidatesFromAssets(assets []StickerAsset, currentSession string, includeGeneric bool, semanticScores map[string]int) []stickerCandidate {
+	candidates := make([]stickerCandidate, 0, len(assets))
+	seen := map[string]bool{}
+	for _, asset := range assets {
+		summary := normalizeStickerSummary(asset.Summary)
+		if summary == "" {
+			summary = "动画表情"
+		}
+		if !includeGeneric && summary == "动画表情" {
+			continue
+		}
+		path := normalizedLocalImagePath(asset.Path)
+		hash := strings.ToLower(strings.TrimSpace(asset.ContentSHA256))
+		if path == "" || !validSHA256(hash) || seen[hash] {
+			continue
+		}
+		seen[hash] = true
+		source := MessageEvent{
+			ProfileID: asset.ProfileID, ContextNamespace: asset.ContextNamespace, Kind: asset.Kind,
+			GroupID: asset.GroupID, UserID: asset.UserID, MessageID: asset.MessageID, Time: asset.EventTime,
+			Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+				"summary": asset.Summary, "cached_file": path, "cached_mime": asset.MIME, imageContentSHA256Key: hash,
+			}}},
+		}
+		candidates = append(candidates, stickerCandidate{
+			ID: hash[:24], Summary: summary, Path: path, Hash: hash, MessageID: asset.MessageID, EventTime: asset.EventTime,
+			SemanticScore: semanticScores[stickerCandidateEventKey(source)], SourceEvent: source,
+			SharedGroup:   asset.Kind == EventKindGroup && asset.Session != currentSession,
+			SharedPrivate: asset.Kind == EventKindPrivate && asset.Session != currentSession,
+		})
+	}
+	return candidates
+}
+
+func stickerCandidatesFromEvents(events []MessageEvent, currentSession string, includeGeneric bool, semanticScores map[string]int) []stickerCandidate {
 	seen := map[string]bool{}
 	candidates := make([]stickerCandidate, 0)
 	for eventIndex := len(events) - 1; eventIndex >= 0; eventIndex-- {
 		event := events[eventIndex]
 		for segmentIndex, segment := range event.Segments {
-			if segment.Type != "image" {
-				continue
-			}
-			summary := normalizeStickerSummary(segment.Data["summary"])
-			if summary == "" || summary == "图片" || (!includeGeneric && summary == "动画表情") {
+			summary, ok := StickerSegmentLabel(segment)
+			if !ok || (!includeGeneric && summary == "动画表情") {
 				continue
 			}
 			path := normalizedLocalImagePath(segment.Data["cached_file"])
@@ -230,28 +326,12 @@ func (t *dianaStickerTool) candidates(ctx context.Context, query string) ([]stic
 			candidates = append(candidates, stickerCandidate{
 				ID: id, Summary: summary, Path: path, Hash: hash, MessageID: event.MessageID, EventTime: event.Time,
 				SemanticScore: semanticScores[stickerCandidateEventKey(event)], SourceEvent: event,
-				SharedGroup:   event.Kind == EventKindGroup && sessionKey(event) != sessionKey(t.event),
-				SharedPrivate: event.Kind == EventKindPrivate && sessionKey(event) != sessionKey(t.event),
+				SharedGroup:   event.Kind == EventKindGroup && sessionKey(event) != currentSession,
+				SharedPrivate: event.Kind == EventKindPrivate && sessionKey(event) != currentSession,
 			})
 		}
 	}
-
-	for index := range candidates {
-		if index < maximumStickerDescriptionLookups {
-			lines := t.runtime.historyImageCachedSegmentDescriptions(ctx, []MessageSegment{{Type: "image", Data: map[string]string{
-				"cached_file":         candidates[index].Path,
-				imageContentSHA256Key: candidates[index].Hash,
-			}}})
-			if len(lines) > 0 {
-				candidates[index].Description = strings.TrimSpace(strings.TrimPrefix(lines[0], "图片1摘要="))
-				if candidates[index].Description == "尚无缓存描述" {
-					candidates[index].Description = ""
-				}
-			}
-		}
-	}
-	rankStickerCandidates(candidates, query)
-	return candidates, nil
+	return candidates
 }
 
 func rankStickerCandidates(candidates []stickerCandidate, query string) {
@@ -324,7 +404,7 @@ func (t *dianaStickerTool) enrichCandidateDescriptions(ctx context.Context, cand
 				if strings.TrimSpace(candidate.Description) != "" || candidate.Hash == "" {
 					continue
 				}
-				description, err := t.runtime.describeRecallImage(ctx, t.event, candidate.Path)
+				description, err := t.runtime.describeStickerImage(ctx, t.event, candidate.Path)
 				if err != nil {
 					continue
 				}

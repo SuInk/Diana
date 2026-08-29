@@ -68,6 +68,9 @@ ON CONFLICT(id) DO UPDATE SET
 	// 检索 token 要在 Go 侧切分，触发器做不到，所以写入后同步一次索引。
 	// 同一条消息重复入库时 search_extra 保持原值（图片描述是后到的，不能被覆盖掉）。
 	s.indexMessageHistoryRow(id, event.SenderName, event.UserID, text, s.messageSearchExtra(ctx, id))
+	if err := s.indexStickerAssets(ctx, session, event); err != nil {
+		return fmt.Errorf("index sticker assets: %w", err)
+	}
 	return nil
 }
 
@@ -172,32 +175,41 @@ func (s *SQLiteStore) ListRecentStickerEvents(ctx context.Context, query assista
 	query.ContextNamespace = strings.TrimSpace(query.ContextNamespace)
 	query.ProfileID = strings.TrimSpace(query.ProfileID)
 	limit := normalizeMessageHistoryLimit(query.Limit)
-	where := "session = ?"
-	args := []any{query.Session}
-	if query.ShareGroups || query.SharePrivate {
-		switch {
-		case query.ContextNamespace != "":
-			where = `session LIKE ? ESCAPE '\'`
-			args = []any{escapeMessageHistoryLike(query.ContextNamespace+":") + "%"}
-		case query.ProfileID != "":
-			where = "profile_id = ?"
-			args = []any{query.ProfileID}
-		default:
-			where = "1 = 1"
-			args = nil
-		}
-		scopeParts := []string{"session = ?"}
-		args = append(args, query.Session)
-		if query.ShareGroups {
-			scopeParts = append(scopeParts, "kind = ?")
-			args = append(args, string(assistant.EventKindGroup))
-		}
-		if query.SharePrivate {
-			scopeParts = append(scopeParts, "kind = ?")
-			args = append(args, string(assistant.EventKindPrivate))
-		}
-		where += " AND (" + strings.Join(scopeParts, " OR ") + ")"
+	current, err := s.queryRecentStickerEvents(ctx, "session = ?", []any{query.Session}, limit)
+	if err != nil || (!query.ShareGroups && !query.SharePrivate) {
+		return current, err
 	}
+
+	boundary := ""
+	args := make([]any, 0, 4)
+	switch {
+	case query.ContextNamespace != "":
+		boundary = "session LIKE ? ESCAPE '\\'"
+		args = append(args, escapeMessageHistoryLike(query.ContextNamespace+":")+"%")
+	case query.ProfileID != "":
+		boundary = "profile_id = ?"
+		args = append(args, query.ProfileID)
+	default:
+		return current, nil
+	}
+	args = append(args, query.Session)
+	scopes := make([]string, 0, 2)
+	if query.ShareGroups {
+		scopes = append(scopes, "kind = ?")
+		args = append(args, string(assistant.EventKindGroup))
+	}
+	if query.SharePrivate {
+		scopes = append(scopes, "kind = ?")
+		args = append(args, string(assistant.EventKindPrivate))
+	}
+	shared, err := s.queryRecentStickerEvents(ctx, boundary+" AND session != ? AND ("+strings.Join(scopes, " OR ")+")", args, limit)
+	if err != nil {
+		return nil, err
+	}
+	return append(current, shared...), nil
+}
+
+func (s *SQLiteStore) queryRecentStickerEvents(ctx context.Context, where string, args []any, limit int) ([]assistant.MessageEvent, error) {
 	args = append(args, string(assistant.EventKindNotice), limit)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT payload
@@ -211,7 +223,7 @@ LIMIT ?
 	}
 	defer func() { _ = rows.Close() }()
 
-	reversed := make([]assistant.MessageEvent, 0, limit)
+	events := make([]assistant.MessageEvent, 0, limit)
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
@@ -221,15 +233,15 @@ LIMIT ?
 		if err := json.Unmarshal([]byte(raw), &event); err != nil {
 			return nil, fmt.Errorf("decode sticker message event: %w", err)
 		}
-		reversed = append(reversed, event)
+		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
-		reversed[left], reversed[right] = reversed[right], reversed[left]
+	for left, right := 0, len(events)-1; left < right; left, right = left+1, right-1 {
+		events[left], events[right] = events[right], events[left]
 	}
-	return reversed, nil
+	return events, nil
 }
 
 // ListMessageEventsBetween returns the complete persisted timeline inside a
