@@ -9,7 +9,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// diana.history_images 会把历史原图作为真实附件补进下一轮，于是这一轮的用途从
+// diana.history_media 会把历史原图作为真实附件补进下一轮，于是这一轮的用途从
 // chat 变成 vision。说话的还是同一台机器人，没单独绑视觉模型时就该继续用它绑定的
 // 聊天模型——滑到全局激活配置上是静默换模型，日志里两轮看着都「正常」。
 func visionBindingProfileSet() llm.ProfileSet {
@@ -73,7 +73,7 @@ func TestVisionTurnUsesItsOwnBindingWhenPresent(t *testing.T) {
 }
 
 // 新的 provider 注册表走另一条选路代码。它以前不做 chat 回落，视觉轮次直接落到
-// 全局激活配置——这正是「用完 diana.history_images 之后换了个模型答话」的由来。
+// 全局激活配置——这正是「用完 diana.history_media 之后换了个模型答话」的由来。
 func TestRegistrySelectionFallsBackToBoundChatRole(t *testing.T) {
 	registry, err := llm.RegistryFromDocument(llm.ProviderRegistryDocument{
 		Version: 1,

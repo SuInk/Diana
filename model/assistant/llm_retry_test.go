@@ -36,6 +36,41 @@ type fixedRetryErrorProvider struct {
 	err   error
 }
 
+type retryRegistryAdapter struct {
+	calls     int
+	succeedAt int
+}
+
+func (a *retryRegistryAdapter) Generate(context.Context, llm.ModelDefinition, llm.ChatRequest) (llm.ChatResponse, error) {
+	a.calls++
+	if a.succeedAt > 0 && a.calls >= a.succeedAt {
+		return llm.ChatResponse{Text: "ok"}, nil
+	}
+	return llm.ChatResponse{}, fmt.Errorf("registry request failed: %w", context.DeadlineExceeded)
+}
+
+func (a *retryRegistryAdapter) Stream(context.Context, llm.ModelDefinition, llm.ChatRequest) (<-chan llm.ChatEvent, error) {
+	return nil, fmt.Errorf("unexpected stream call")
+}
+
+func newRetryTestRegistry(t *testing.T, adapter llm.LLMAdapter) (*llm.ProviderRegistry, llm.ProfileSet) {
+	t.Helper()
+	registry := llm.NewProviderRegistry()
+	if err := registry.RegisterProvider(llm.ProviderDefinition{
+		ID: "registry-test", Name: "Registry Test", Protocol: llm.ProtocolOpenAIResponses, Enabled: true,
+	}, adapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterModel(llm.ModelDefinition{
+		ID: "registry-test:model", ProviderID: "registry-test", ModelID: "model", Name: "model",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return registry, llm.ProfileSet{
+		Profiles: []llm.Profile{{ID: "registry-test", Group: llm.GroupChat, Config: llm.ProviderConfig{Model: "model"}}},
+	}
+}
+
 func (p *fixedRetryErrorProvider) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.calls++
 	return nil, p.err
@@ -92,6 +127,61 @@ func TestDefaultTransientLLMRetryStopsAfterOneRetry(t *testing.T) {
 	if provider.calls != 2 {
 		t.Fatalf("calls=%d, want initial request plus one retry", provider.calls)
 	}
+}
+
+func TestRegistryChatRetriesTransientFailure(t *testing.T) {
+	adapter := &retryRegistryAdapter{succeedAt: 2}
+	registry, profiles := newRetryTestRegistry(t, adapter)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: profiles}, nil, nil, nil)
+	runtime.SetLLMProviderRegistry(registry)
+
+	result, err := runtime.runLLMProvider(context.Background(), func(provider LLMProvider) (string, error) {
+		response, generateErr := provider.Generate(context.Background(), llm.GenerateRequest{})
+		if generateErr != nil {
+			return "", generateErr
+		}
+		return response.Text, nil
+	})
+	if err != nil || result != "ok" || adapter.calls != 2 {
+		t.Fatalf("result=%q err=%v calls=%d, want successful retry on second call", result, err, adapter.calls)
+	}
+}
+
+func TestRegistryRouterRetryPolicyHonorsCallerMode(t *testing.T) {
+	t.Run("retry", func(t *testing.T) {
+		adapter := &retryRegistryAdapter{succeedAt: 2}
+		registry, profiles := newRetryTestRegistry(t, adapter)
+		profiles.Profiles[0].Group = llm.GroupIntent
+		runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: profiles}, nil, nil, nil)
+		runtime.SetLLMProviderRegistry(registry)
+
+		result, err := runtime.runLLMRouterProvider(context.Background(), func(provider LLMProvider) (string, error) {
+			response, generateErr := provider.Generate(context.Background(), llm.GenerateRequest{})
+			if generateErr != nil {
+				return "", generateErr
+			}
+			return response.Text, nil
+		})
+		if err != nil || result != "ok" || adapter.calls != 2 {
+			t.Fatalf("result=%q err=%v calls=%d", result, err, adapter.calls)
+		}
+	})
+
+	t.Run("once", func(t *testing.T) {
+		adapter := &retryRegistryAdapter{succeedAt: 2}
+		registry, profiles := newRetryTestRegistry(t, adapter)
+		profiles.Profiles[0].Group = llm.GroupIntent
+		runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: profiles}, nil, nil, nil)
+		runtime.SetLLMProviderRegistry(registry)
+
+		_, err := runtime.runLLMRouterProviderOnce(context.Background(), func(provider LLMProvider) (string, error) {
+			_, generateErr := provider.Generate(context.Background(), llm.GenerateRequest{})
+			return "", generateErr
+		})
+		if !errors.Is(err, context.DeadlineExceeded) || adapter.calls != 1 {
+			t.Fatalf("err=%v calls=%d, want one attempt", err, adapter.calls)
+		}
+	})
 }
 
 func TestEmptyLLMOutputRetriesOnce(t *testing.T) {
