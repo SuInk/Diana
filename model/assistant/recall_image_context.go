@@ -123,6 +123,10 @@ func recallStillImageSegment(segment MessageSegment) bool {
 	return segment.Type == "image" && strings.TrimSpace(segment.Data["source_type"]) != "video_frame"
 }
 
+func historyDescribableImageSegment(segment MessageSegment) bool {
+	return segment.Type == "image"
+}
+
 func cloneRecallEvents(events []MessageEvent) []MessageEvent {
 	out := make([]MessageEvent, len(events))
 	for eventIndex, event := range events {
@@ -265,7 +269,7 @@ func (r *Runtime) enqueueHistoryImageDescriptionsNow(event MessageEvent) {
 	}
 	for _, sourceEvent := range historyImageDescriptionEvents(event) {
 		for _, segment := range sourceEvent.Segments {
-			if !recallStillImageSegment(segment) || strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
+			if !historyDescribableImageSegment(segment) || strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
 				continue
 			}
 			if strings.TrimSpace(segment.Data[recallImageDescriptionKey]) != "" {

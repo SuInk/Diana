@@ -37,7 +37,7 @@ func TestHistoryImagesToolSelectsExactIndexesInSourceOrder(t *testing.T) {
 	output, err := tool.Run(context.Background(), map[string]any{
 		"items": []any{map[string]any{
 			"message_id":    "images-1",
-			"image_indexes": []any{3, 1},
+			"media_indexes": []any{3, 1},
 		}},
 		"detail": "high",
 	})
@@ -53,8 +53,63 @@ func TestHistoryImagesToolSelectsExactIndexesInSourceOrder(t *testing.T) {
 			t.Fatalf("part = %#v", part)
 		}
 	}
-	if !strings.Contains(output, `"image_index":1`) || !strings.Contains(output, `"image_index":3`) || !strings.Contains(output, `"loaded":2`) {
+	if !strings.Contains(output, `"media_index":1`) || !strings.Contains(output, `"media_index":3`) || !strings.Contains(output, `"loaded":2`) {
 		t.Fatalf("output = %s", output)
+	}
+}
+
+func TestHistoryImagesToolLoadsPersistedVideoFrames(t *testing.T) {
+	framePath := filepath.Join(t.TempDir(), "frame.jpg")
+	frameBody := tinyJPEGBytes(t)
+	if err := os.WriteFile(framePath, frameBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{
+		Kind:      EventKindGroup,
+		GroupID:   "group-1",
+		UserID:    "user-1",
+		MessageID: "video-1",
+		Segments: []MessageSegment{
+			{Type: "video", Data: map[string]string{"file": "expired.mp4"}},
+			{Type: "image", Data: map[string]string{"cached_file": framePath, "cached_mime": "image/jpeg", "source_type": "video_frame"}},
+		},
+	})
+
+	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "reader"})
+	output, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"video-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := tool.ToolResultParts(output)
+	want := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(frameBody)
+	if len(parts) != 1 || parts[0].ImageURL != want {
+		t.Fatalf("video frame parts = %#v", parts)
+	}
+	if !strings.Contains(output, `"media_type":"video_frame"`) || !strings.Contains(output, `"loaded":1`) {
+		t.Fatalf("video frame output = %s", output)
+	}
+}
+
+func TestHistoryMediaToolReturnsVoiceAndFileText(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "user-1",
+		MessageID: "documents-1",
+		Segments: []MessageSegment{
+			{Type: "record", Data: map[string]string{voiceSTTTranscriptKey: "明天下午三点开会"}},
+			{Type: "file", Data: map[string]string{"name": "会议纪要.pdf", "summary": "项目周五发布"}},
+		},
+	})
+
+	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "user-1"})
+	output, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"documents-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tool.ToolResultParts(output)) != 0 || !strings.Contains(output, "明天下午三点开会") || !strings.Contains(output, "项目周五发布") {
+		t.Fatalf("history media text output = %s", output)
 	}
 }
 
@@ -292,7 +347,7 @@ func TestHistoryImagesToolOnlyResolvesRequestedIndex(t *testing.T) {
 	runtime.remember(event)
 	tool := newDianaHistoryImagesTool(runtime, event)
 	output, err := tool.Run(context.Background(), map[string]any{
-		"items": []any{map[string]any{"message_id": "two-images", "image_indexes": []any{1}}},
+		"items": []any{map[string]any{"message_id": "two-images", "media_indexes": []any{1}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +369,7 @@ func TestHistoryImagesToolAllFailedErrorIdentifiesSourceImage(t *testing.T) {
 	})
 	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "user-1"})
 	_, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"broken-image"}})
-	if err == nil || !strings.Contains(err.Error(), "message_id=broken-image image_index=1") || !strings.Contains(err.Error(), "原始图片已失效") {
+	if err == nil || !strings.Contains(err.Error(), "message_id=broken-image media_index=1") || !strings.Contains(err.Error(), "原始图片已失效") {
 		t.Fatalf("all-failed diagnostic = %v", err)
 	}
 }
