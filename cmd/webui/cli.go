@@ -31,6 +31,16 @@ func handleCLI(args []string) (bool, error) {
 		_, err := fmt.Fprintln(os.Stdout, runtimeVersion)
 		return true, err
 	}
+	switch args[0] {
+	case "status":
+		return true, runStatusCommand(args[1:], os.Stdout)
+	case "restart":
+		return true, runRestartCommand(args[1:], os.Stdout)
+	case "doctor":
+		return true, runDoctorCommand(args[1:], os.Stdout)
+	case "config":
+		return true, runConfigCommand(args[1:], os.Stdout)
+	}
 	if args[0] == "logs" {
 		return true, runLogsCommand(args[1:], os.Stdout)
 	}
@@ -56,6 +66,10 @@ Usage:
   diana [command]
 
 Commands:
+  status                 Show service health, version, address, and uptime
+  restart                Restart an installer-managed Diana service
+  doctor                 Check configuration, paths, assets, and health
+  config path|check      Locate or validate config.yaml
   logs [--lines N] [-f]  Show or follow the configured Diana log
   uninstall [--purge]    Remove Diana, preserving data unless --purge is used
   version                Print the Diana version
@@ -66,17 +80,9 @@ Run Diana without a command to start the WebUI service.
 }
 
 func uninstallScriptPath() (string, error) {
-	executable, err := os.Executable()
+	root, err := installationRoot()
 	if err != nil {
-		return "", fmt.Errorf("locate Diana executable: %w", err)
-	}
-	executable, err = filepath.EvalSymlinks(executable)
-	if err != nil {
-		return "", fmt.Errorf("resolve Diana executable: %w", err)
-	}
-	root := filepath.Dir(executable)
-	if runtime.GOOS == "darwin" && filepath.Base(root) == "MacOS" && filepath.Base(filepath.Dir(root)) == "Contents" {
-		root = filepath.Dir(filepath.Dir(filepath.Dir(root)))
+		return "", err
 	}
 	name := "uninstall.sh"
 	if runtime.GOOS == "windows" {
@@ -94,6 +100,22 @@ func uninstallScriptPath() (string, error) {
 		return "", fmt.Errorf("uninstall tool is not a regular file: %s", script)
 	}
 	return script, nil
+}
+
+func installationRoot() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate Diana executable: %w", err)
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return "", fmt.Errorf("resolve Diana executable: %w", err)
+	}
+	root := filepath.Dir(executable)
+	if runtime.GOOS == "darwin" && filepath.Base(root) == "MacOS" && filepath.Base(filepath.Dir(root)) == "Contents" {
+		root = filepath.Dir(filepath.Dir(filepath.Dir(root)))
+	}
+	return root, nil
 }
 
 func uninstallCommand(script string, args []string) *exec.Cmd {
