@@ -252,6 +252,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewVoiceSTTPlugin(nil),
 		NewMusicPlugin(nil),
 		NewImageOCRPlugin(nil),
+		NewImageSourcePlugin(nil),
 		NewWebSearchPlugin(nil),
 		NewRepositoryWatchPlugin(nil),
 		NewRepositoryPublishPlugin(nil),

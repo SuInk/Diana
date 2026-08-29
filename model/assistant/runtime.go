@@ -3036,6 +3036,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if _, settings, enabled := r.plugins.PluginWithSettings(stickerPluginID, r.pluginOverridesForEvent(event)); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
 			}
+			// 图片溯源同样按插件开关走：反查要把图片上传给第三方图库，不是每个
+			// 群都愿意，插件停用时模型看不到这个工具。
+			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(imageSourcePluginID, r.pluginOverridesForEvent(event)); enabled {
+				// 一条线路都没配好时不挂这个工具：模型看得到就会去调，然后只能
+				// 回一句「查不了」，白费一轮。
+				if plugin, ok := pluginValue.(*ImageSourcePlugin); ok && imageSourceConfigFromSettings(settings).anyProviderUsable() {
+					extraTools = append(extraTools, newDianaImageSourceTool(r, event, plugin, settings))
+				}
+			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
