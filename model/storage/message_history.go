@@ -68,6 +68,9 @@ ON CONFLICT(id) DO UPDATE SET
 	// 检索 token 要在 Go 侧切分，触发器做不到，所以写入后同步一次索引。
 	// 同一条消息重复入库时 search_extra 保持原值（图片描述是后到的，不能被覆盖掉）。
 	s.indexMessageHistoryRow(id, event.SenderName, event.UserID, text, s.messageSearchExtra(ctx, id))
+	if err := s.indexStickerAssets(ctx, session, event); err != nil {
+		return fmt.Errorf("index sticker assets: %w", err)
+	}
 	return nil
 }
 
@@ -159,6 +162,86 @@ LIMIT ?
 		reversed[i], reversed[j] = reversed[j], reversed[i]
 	}
 	return reversed, nil
+}
+
+// ListRecentStickerEvents provides the sticker plugin's bounded, read-only history view.
+// Shared mode stays inside one context namespace or bot profile. It needs no sticker-specific
+// table because image segments are already durable.
+func (s *SQLiteStore) ListRecentStickerEvents(ctx context.Context, query assistant.StickerHistoryQuery) ([]assistant.MessageEvent, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	query.Session = strings.TrimSpace(query.Session)
+	query.ContextNamespace = strings.TrimSpace(query.ContextNamespace)
+	query.ProfileID = strings.TrimSpace(query.ProfileID)
+	limit := normalizeMessageHistoryLimit(query.Limit)
+	current, err := s.queryRecentStickerEvents(ctx, "session = ?", []any{query.Session}, limit)
+	if err != nil || (!query.ShareGroups && !query.SharePrivate) {
+		return current, err
+	}
+
+	boundary := ""
+	args := make([]any, 0, 4)
+	switch {
+	case query.ContextNamespace != "":
+		boundary = "session LIKE ? ESCAPE '\\'"
+		args = append(args, escapeMessageHistoryLike(query.ContextNamespace+":")+"%")
+	case query.ProfileID != "":
+		boundary = "profile_id = ?"
+		args = append(args, query.ProfileID)
+	default:
+		return current, nil
+	}
+	args = append(args, query.Session)
+	scopes := make([]string, 0, 2)
+	if query.ShareGroups {
+		scopes = append(scopes, "kind = ?")
+		args = append(args, string(assistant.EventKindGroup))
+	}
+	if query.SharePrivate {
+		scopes = append(scopes, "kind = ?")
+		args = append(args, string(assistant.EventKindPrivate))
+	}
+	shared, err := s.queryRecentStickerEvents(ctx, boundary+" AND session != ? AND ("+strings.Join(scopes, " OR ")+")", args, limit)
+	if err != nil {
+		return nil, err
+	}
+	return append(current, shared...), nil
+}
+
+func (s *SQLiteStore) queryRecentStickerEvents(ctx context.Context, where string, args []any, limit int) ([]assistant.MessageEvent, error) {
+	args = append(args, string(assistant.EventKindNotice), limit)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT payload
+FROM message_events
+WHERE `+where+` AND kind != ?
+ORDER BY event_time DESC, created_at DESC, id DESC
+LIMIT ?
+`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	events := make([]assistant.MessageEvent, 0, limit)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var event assistant.MessageEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, fmt.Errorf("decode sticker message event: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for left, right := 0, len(events)-1; left < right; left, right = left+1, right-1 {
+		events[left], events[right] = events[right], events[left]
+	}
+	return events, nil
 }
 
 // ListMessageEventsBetween returns the complete persisted timeline inside a

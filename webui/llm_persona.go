@@ -40,6 +40,7 @@ var personaGenerateStyleHints = map[string]string{
 	"lively":    "语气活泼跳脱，有梗有情绪，但不要吵闹到掩盖信息。",
 	"concise":   "能一句说完就不说两句，砍掉所有寒暄和铺垫。",
 	"catgirl":   "是一只会说话的猫娘，语气轻软亲人，每句话结尾都带「喵」且不打句号；但正事照样答准，不靠卖萌糊弄。",
+	"roleplay":  "和对方演一段面对面的相处：消息是「（动作或神态）+ 台词」，动作一句以内，黏人主动、结尾留钩子；正事照样答准，亲密戏点到为止。",
 }
 
 // personaGenerateModeHints 描述搭话欲望，让人设自己带上这个分寸。
@@ -119,13 +120,13 @@ func personaProviderConfig(set llm.ProfileSet, payload personaGeneratePayload) (
 			}
 		}
 		if selected.ID == "" {
-			return llm.ProviderConfig{}, fmt.Errorf("对话 LLM 配置 %q 不存在", profileID)
+			return llm.ProviderConfig{}, fmt.Errorf("对话提供商配置 %q 不存在", profileID)
 		}
 	} else if group := strings.TrimSpace(payload.Group); group != "" {
 		if profiles := set.GroupProfiles(group); len(profiles) > 0 {
 			selected = profiles[0]
 		}
-	} else if current, ok := set.Current(); ok && personaTextProfile(current) {
+	} else if current, ok := set.FirstProfile(); ok && personaTextProfile(current) {
 		selected = current
 	}
 	if selected.ID == "" {
@@ -137,7 +138,7 @@ func personaProviderConfig(set llm.ProfileSet, payload personaGeneratePayload) (
 		}
 	}
 	if selected.ID == "" || !personaTextProfile(selected) {
-		return llm.ProviderConfig{}, fmt.Errorf("没有可用于生成人设的文本 LLM 配置")
+		return llm.ProviderConfig{}, fmt.Errorf("没有可用于生成人设的文本提供商配置")
 	}
 	cfg := selected.Config.WithDefaults()
 	if model := strings.TrimSpace(payload.Model); model != "" {
@@ -150,7 +151,7 @@ func personaProviderConfig(set llm.ProfileSet, payload personaGeneratePayload) (
 				}
 			}
 			if !found {
-				return llm.ProviderConfig{}, fmt.Errorf("模型 %q 不属于对话 LLM 配置 %q", model, selected.Name)
+				return llm.ProviderConfig{}, fmt.Errorf("模型 %q 不属于对话提供商配置 %q", model, selected.Name)
 			}
 		}
 		cfg.Model = model

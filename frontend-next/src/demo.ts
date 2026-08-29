@@ -6,13 +6,14 @@ import type {
   AssistantEventDetail,
   AssistantTask,
   LLMConfig,
+  OpenAPIKey,
   PluginState,
   BotProfileConfig,
   BotGroupSummary,
   BotPlatform,
   BotStatus,
-  GlossaryEntry,
-  GlossaryScopeSummary,
+  NotebookEntry,
+  NotebookScopeSummary,
   ResolverDependency,
   StatsHourBucket,
   StatsSnapshot,
@@ -37,7 +38,6 @@ let llmConfig: LLMConfig = {
   provider: "openai_compatible",
   model: "gpt-5.6",
   api_key_configured: true,
-  active_profile_id: "llm-chat",
   profiles: [
     { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, temperature: 0.7, max_output_tokens: 4096, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "chat", role_label: "对话", model: "gpt-5.4-mini" }] },
     { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000 },
@@ -72,7 +72,31 @@ let assistantConfig: BotProfileConfig = { ...oneBotProfile, active_profile_id: "
 let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
+  {
+    manifest: {
+      id: "official.music", name: "音乐增强", version: "0.2.0", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐、酷狗并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
+      settings: [
+        { key: "request_song_enabled", label: "允许点歌", type: "bool", default: true, description: "开启后模型可以按用户要求搜歌并直接发出语音。关掉只保留链接解析。" },
+        { key: "enabled_sources", label: "启用曲库", type: "multi_select", default: ["netease", "qq", "kugou"], options: [{ value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }, { value: "kugou", label: "酷狗音乐" }], description: "一首歌在这家是会员专享、在那家能试听是常事。勾多几家，一家放不出来就自动换下一家。" },
+        { key: "preferred_source", label: "点歌优先曲库", type: "select", default: "", options: [{ value: "", label: "按启用顺序" }, { value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }, { value: "kugou", label: "酷狗音乐" }], description: "点歌时先问哪家。分享链接始终用链接自己的平台，不受这里影响。" },
+        { key: "netease_api_base", label: "网易云自建 API 地址", type: "string", default: "", description: "自建 NeteaseCloudMusicApi 的地址，例如 http://127.0.0.1:3000。留空走官方接口，只能拿到可试听的歌曲。" },
+        { key: "netease_cookie", label: "网易云 MUSIC_U Cookie", type: "string", default: "", secret: true, description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。" },
+        { key: "qq_api_base", label: "QQ 音乐自建 API 地址", type: "string", default: "", description: "自建 QQMusicApi 的地址。留空走官方接口，无登录态时多数曲目取不到播放地址。" },
+        { key: "qq_cookie", label: "QQ 音乐 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串，用于会员和独家曲目。" },
+        { key: "kugou_api_base", label: "酷狗自建 API 地址", type: "string", default: "", description: "自建 KuGouMusicApi 的地址。留空走官方接口。" },
+        { key: "kugou_cookie", label: "酷狗 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串。留空时会派生一个设备号，可试听曲目通常够用。" },
+        { key: "bitrate", label: "音质", type: "select", default: "320000", options: [{ value: "128000", label: "标准 128k" }, { value: "192000", label: "较高 192k" }, { value: "320000", label: "极高 320k" }], description: "只对网易云的自建 API 生效；其余情况由平台自己决定码率。" },
+        { key: "max_duration_seconds", label: "最长时长", type: "number", default: 600, min: 30, max: 1800, step: 30, unit: "秒" },
+        { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
+        { key: "timeout_seconds", label: "请求超时", type: "number", default: 45, min: 5, max: 180, step: 5, unit: "秒" },
+        { key: "send_song_info", label: "同时发送歌曲信息", type: "bool", default: true, description: "在语音前补一条「歌名 - 歌手」，否则群里只看到一条不知道是什么的语音。" },
+        { key: "silk_encoder_path", label: "Silk 编码器路径", type: "string", default: "", description: "填了就把音频转成 Tencent Silk 再发。留空沿用语音合成插件的配置。" }
+      ]
+    },
+    installed: true, enabled: true
+  },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
+  { manifest: { id: "official.open-api", name: "对外 API", version: "0.1.0", description: "让 CI、监控这类外部系统凭密钥调用 HTTP 接口向指定会话推送消息；密钥在「设置 → 安全」里管理。", official: true, built_in: true, default_disabled: true, permissions: ["network:http", "message:write"], settings: [{ key: "rate_limit_per_minute", label: "单密钥限流", description: "每把密钥每分钟允许的调用次数，超出返回 429。", type: "number", default: 60, min: 1, max: 600, step: 10, unit: "次/分钟" }] }, installed: true, enabled: false },
   {
     manifest: {
       id: "official.repository-publish", name: "Issue 发布", version: "0.4.0", description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
@@ -91,9 +115,10 @@ let plugins: PluginState[] = [
   },
   {
     manifest: {
-      id: "official.repository-watch", name: "仓库订阅", version: "0.2.0", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经 LLM 阅读 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
+      id: "official.repository-watch", name: "仓库订阅", version: "0.2.1", description: "监控公开或私有 GitHub 仓库的 Commit、PR、Release 与 Star，经模型阅读受限 diff 并总结后通知指定对象。", official: true, built_in: true, permissions: ["网络请求", "任务持久化", "消息发送"],
       settings: [
         { key: "github_token", label: "GitHub Token", description: "用于私有仓库和提高 API 额度。", type: "string", default: "", secret: true },
+        { key: "follow_up_include_patch", label: "跟评读取受限代码片段", description: "开启后会把经过严格裁剪的 patch 发送给当前 LLM Provider；私有仓库请谨慎开启。", type: "bool", default: false },
         { key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 60, min: 30, max: 86400, unit: "秒" }
       ]
     },
@@ -103,7 +128,8 @@ let plugins: PluginState[] = [
     manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
-  { manifest: { id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: true }
+  { manifest: { id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: true },
+  { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.0", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认关闭。", official: true, built_in: true, default_disabled: true, permissions: ["message:read", "message:send"] }, installed: true, enabled: false }
 ];
 
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
@@ -127,7 +153,7 @@ const groups: BotGroupSummary[] = [
 const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
 
 const demoPersonas = [
-  { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" },
+  { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
   { id: "persona-2", name: "技术群管", system_prompt: "你是技术群里那个话不多但每次开口都说到点子上的人。", reply_style: "groupmate", self_reference: "", sentence_enders: "" },
   { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", reply_style: "concise", self_reference: "", sentence_enders: "" }
 ];
@@ -158,10 +184,21 @@ const demoUsers: UserMemoryProfile[] = [
   }
 ];
 
-// 演示模式的词典：机器人自己收下的梗长什么样，比一段说明更说明问题。
-const demoGlossary: GlossaryEntry[] = [
+// 类型清单由后端给出，演示模式照着给一份同样的。
+const demoNotebookKinds = [
+  { value: "term", label: "词条" },
+  { value: "fact", label: "事实" },
+  { value: "preference", label: "偏好" },
+  { value: "event", label: "事件" },
+  { value: "todo", label: "待办" },
+  { value: "person", label: "人物" }
+];
+
+// 演示模式的笔记本：机器人自己记下的东西长什么样，比一段说明更说明问题。
+// 六种类型各给一条，让人一眼看出它不只是本词典。
+const demoNotebook: NotebookEntry[] = [
   {
-    id: "glossary-1", scope_key: "group:100200301", term: "带薪拉屎", aliases: ["DXLS"],
+    id: "notebook-1", scope_key: "group:100200301", kind: "term", term: "带薪拉屎", aliases: ["DXLS"],
     meaning: "上班时间摸鱼，群里用来自嘲，没有恶意", example: "今天带薪拉屎半小时",
     author_name: "青禾", usage_count: 27, last_used_at: before(3), version: 2, status: "active",
     created_at: before(9000), updated_at: before(120),
@@ -171,33 +208,70 @@ const demoGlossary: GlossaryEntry[] = [
     ]
   },
   {
-    id: "glossary-2", scope_key: "group:100200301", term: "鸽", aliases: ["咕咕"],
+    id: "notebook-2", scope_key: "group:100200301", kind: "term", term: "鸽", aliases: ["咕咕"],
     meaning: "放人鸽子、说好的事没做；本群多用于调侃谁又拖了发布",
     author_name: "星野", usage_count: 41, last_used_at: before(20), version: 1, status: "active",
     created_at: before(7200), updated_at: before(7200), revisions: []
   },
   {
-    id: "glossary-3", scope_key: "group:100200418", term: "手冲", aliases: [],
+    id: "notebook-3", scope_key: "group:100200418", kind: "term", term: "手冲", aliases: [],
     meaning: "手冲咖啡，这个群里只指咖啡", usage_count: 6, last_used_at: before(900),
     version: 1, status: "active", created_at: before(5400), updated_at: before(5400), revisions: []
   },
-  // 全局词典每台机器人各一本：同一个梗在两台那里可以有不同的记法。
+  // 全局笔记本每台机器人各一本：同一个梗在两台那里可以有不同的记法。
   {
-    id: "glossary-4", scope_key: "bot:bot-onebot", term: "开摆", aliases: ["摆了"],
+    id: "notebook-4", scope_key: "bot:bot-onebot", kind: "term", term: "开摆", aliases: ["摆了"],
     meaning: "放弃挣扎、随它去，群里多用于自嘲进度", usage_count: 18, last_used_at: before(60),
     version: 1, status: "active", created_at: before(6000), updated_at: before(6000), revisions: []
   },
   {
-    id: "glossary-5", scope_key: "bot:bot-telegram", term: "开摆", aliases: [],
+    id: "notebook-5", scope_key: "bot:bot-telegram", kind: "term", term: "开摆", aliases: [],
     meaning: "这台机器人上记的是英文频道的用法：give up and chill",
     usage_count: 4, last_used_at: before(400),
     version: 1, status: "active", created_at: before(4200), updated_at: before(4200), revisions: []
+  },
+  // 以下几条是词典升级成笔记本之后才记得下的东西：标题不会原样出现在聊天里，
+  // 靠触发词命中。
+  {
+    id: "notebook-6", scope_key: "group:100200301", kind: "fact",
+    term: "群规：晚上十点后不要连续刷屏", aliases: ["群规", "刷屏", "刷频"],
+    meaning: "管理员定的，十点后有事私聊，不在群里连发",
+    author_name: "青禾", usage_count: 12, last_used_at: before(240),
+    version: 1, status: "active", created_at: before(5000), updated_at: before(5000), revisions: []
+  },
+  {
+    id: "notebook-7", scope_key: "group:100200301", kind: "preference",
+    term: "星野不吃香菜", aliases: ["香菜", "星野", "点菜", "聚餐"],
+    meaning: "点外卖和聚餐都要记得备注去香菜，之前踩过两次",
+    author_name: "控制台", usage_count: 8, last_used_at: before(1500),
+    version: 1, status: "active", created_at: before(4800), updated_at: before(4800), revisions: []
+  },
+  {
+    id: "notebook-8", scope_key: "group:100200301", kind: "todo",
+    term: "给群里买周年蛋糕", aliases: ["蛋糕", "周年", "庆祝"],
+    meaning: "答应了这个月底之前订好，还没订",
+    author_name: "青禾", usage_count: 3, last_used_at: before(600),
+    version: 1, status: "active", created_at: before(1200), updated_at: before(1200), revisions: []
+  },
+  {
+    id: "notebook-9", scope_key: "group:100200301", kind: "event",
+    term: "上次线下聚会在 7 月，去了七个人", aliases: ["聚会", "线下", "面基"],
+    meaning: "在城西那家火锅，星野迟到了一小时，这事群里还在拿来调侃",
+    usage_count: 5, last_used_at: before(2400),
+    version: 1, status: "active", created_at: before(3600), updated_at: before(3600), revisions: []
+  },
+  {
+    id: "notebook-10", scope_key: "bot:bot-onebot", kind: "person",
+    term: "青禾是这个群的管理员", aliases: ["青禾", "管理员", "群主"],
+    meaning: "日常管群规和活动，技术问题找他没用，他自己也不写代码",
+    usage_count: 15, last_used_at: before(90),
+    version: 1, status: "active", created_at: before(8000), updated_at: before(8000), revisions: []
   }
 ];
 
-function demoGlossaryScopes(): GlossaryScopeSummary[] {
-  const scopes = new Map<string, GlossaryScopeSummary>();
-  for (const entry of demoGlossary) {
+function demoNotebookScopes(): NotebookScopeSummary[] {
+  const scopes = new Map<string, NotebookScopeSummary>();
+  for (const entry of demoNotebook) {
     const summary = scopes.get(entry.scope_key) ?? { scope_key: entry.scope_key, active_count: 0, deleted_count: 0, updated_at: entry.updated_at };
     if (entry.status === "active") summary.active_count += 1; else summary.deleted_count += 1;
     scopes.set(entry.scope_key, summary);
@@ -311,10 +385,12 @@ const demoMirrors = [
   { name: "gh-proxy.com", base_url: "https://gh-proxy.com" },
   { name: "gh-proxy.net", base_url: "https://gh-proxy.net" }
 ];
+// 演示数据刻意排成「握手最快的那条速度最慢」：这正是只看延时会选错的情形。
 const demoMirrorProbe = [
-  { name: "ghfast.top", base_url: "https://ghfast.top", ok: true, latency_ms: 168 },
-  { name: "gh-proxy.com", base_url: "https://gh-proxy.com", ok: true, latency_ms: 402 },
-  { name: "直连 GitHub", direct: true, ok: false, error: "dial tcp: i/o timeout（演示数据）" }
+  { name: "直连 GitHub", direct: true, ok: true, latency_ms: 1840, speed_kbps: 2360 },
+  { name: "gh-proxy.com", base_url: "https://gh-proxy.com", ok: true, latency_ms: 402, speed_kbps: 1180 },
+  { name: "ghfast.top", base_url: "https://ghfast.top", ok: true, latency_ms: 168, speed_kbps: 74 },
+  { name: "gh-proxy.net", base_url: "https://gh-proxy.net", ok: false, error: "context deadline exceeded（演示数据）" }
 ];
 
 const logs: AppLogEntry[] = [
@@ -335,7 +411,6 @@ function bodyOf(init?: RequestInit): Record<string, unknown> {
 function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   const profiles = [...(llmConfig.profiles ?? [])];
   const id = String(body.id ?? "");
-  if (action === "activate") llmConfig.active_profile_id = id;
   if (action === "delete") llmConfig.profiles = profiles.filter((profile) => profile.id !== id);
   if (action === "clone") {
     const source = profiles.find((profile) => profile.id === id);
@@ -347,6 +422,10 @@ function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   }
   return llmConfig;
 }
+
+let demoApiKeys: OpenAPIKey[] = [
+  { id: "key-1", name: "ci-notify", prefix: "diana_3fa8c2e1", created_at: before(4320), last_used_at: before(35) }
+];
 
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -367,9 +446,40 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ]
     });
   if (path.startsWith("/api/auth/")) return json({ ok: true, username: "demo" });
+  if (path === "/api/openapi/keys" && method === "GET") return json({ keys: demoApiKeys });
+  if (path === "/api/openapi/keys" && method === "POST") {
+    const key: OpenAPIKey = { id: `key-${Date.now()}`, name: String(body.name ?? "未命名"), prefix: "diana_demo0000", created_at: new Date().toISOString() };
+    demoApiKeys = [key, ...demoApiKeys];
+    return json({ key, token: "diana_demo00000000000000000000000000000000000000000000000000000000000000" });
+  }
+  if (path.startsWith("/api/openapi/keys/") && method === "DELETE") {
+    const keyID = decodeURIComponent(path.split("/").pop() ?? "");
+    demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
+    return json({ revoked: true });
+  }
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
 
+  // 授权登录：演示模式给出内置提供商的未登录状态，登录流程本身不模拟——
+  // 真去打一次 OAuth 授权页在演示环境里既做不到也不该做。
+  if (path.startsWith("/api/llm/oauth/")) {
+    return json({
+      providers: [
+        {
+          provider: {
+            key: "openrouter",
+            label: "OpenRouter",
+            authorize_url: "https://openrouter.ai/auth",
+            token_url: "https://openrouter.ai/api/v1/auth/keys",
+            use_pkce: true,
+            built_in: true,
+            notes: "OpenRouter 的 PKCE 授权本就是给第三方应用用的，换到的是一把归你所有、可随时吊销的 Key。"
+          },
+          logged_in: false
+        }
+      ]
+    });
+  }
   if (path === "/api/llm/config/export") return json(llmConfig);
   if (path === "/api/llm/config" && method === "GET") return json(llmConfig);
   if (path === "/api/llm/config" && method === "POST") {
@@ -378,7 +488,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const saved = { ...incoming, id: incoming.id || `llm-${Date.now()}`, api_key_configured: true, models: incoming.models?.length ? incoming.models : modelCatalog };
     const index = profiles.findIndex((profile) => profile.id === saved.id);
     if (index >= 0) profiles[index] = saved; else profiles.push(saved);
-    llmConfig = { ...llmConfig, profiles, active_profile_id: llmConfig.active_profile_id || saved.id };
+    llmConfig = { ...llmConfig, profiles };
     return json(llmConfig);
   }
   const llmAction = path.match(/^\/api\/llm\/config\/(activate|clone|delete|reorder)$/)?.[1];
@@ -536,32 +646,34 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ profile: user, favorability_changes: demoFavorabilityChanges[user.user_id] ?? [] });
   }
 
-  if (path === "/api/assistant/glossary" && method === "GET") {
+  if (path === "/api/assistant/notebook" && method === "GET") {
     const profile = url.searchParams.get("profile") ?? "";
     // 排除法和后端一致：只把明确属于别的机器人的作用域藏起来。
     const others = assistantConfig.profiles?.map((item) => item.id).filter((id) => id && id !== profile) ?? [];
-    const scopes = demoGlossaryScopes().filter(
+    const scopes = demoNotebookScopes().filter(
       (item) => !profile || !others.some((id) => item.scope_key === `bot:${id}` || item.scope_key.startsWith(`${id}:`))
     );
     const scope = url.searchParams.get("scope") || scopes[0]?.scope_key || "";
     const keyword = (url.searchParams.get("q") ?? "").trim();
     const includeDeleted = url.searchParams.get("include_deleted") === "true";
-    const entries = demoGlossary
+    const kind = (url.searchParams.get("kind") ?? "").trim();
+    const entries = demoNotebook
       .filter((entry) => entry.scope_key === scope)
       .filter((entry) => includeDeleted || entry.status === "active")
+      .filter((entry) => !kind || entry.kind === kind)
       .filter((entry) => !keyword || entry.term.includes(keyword) || entry.meaning.includes(keyword))
       .map((entry) => ({ ...entry, revisions: undefined }));
-    return json({ scopes, scope, entries, query: keyword || undefined });
+    return json({ scopes, scope, entries, query: keyword || undefined, kind: kind || undefined, kinds: demoNotebookKinds });
   }
-  if (path === "/api/assistant/glossary/entry") {
+  if (path === "/api/assistant/notebook/entry") {
     const scope = url.searchParams.get("scope") ?? "";
     const term = url.searchParams.get("term") ?? "";
-    const entry = demoGlossary.find((item) => item.scope_key === scope && item.term === term);
-    if (!entry) return json({ error: "词条不存在" }, 404);
+    const entry = demoNotebook.find((item) => item.scope_key === scope && item.term === term);
+    if (!entry) return json({ error: "笔记不存在" }, 404);
     return json(entry);
   }
-  if (path.startsWith("/api/assistant/glossary") && method === "POST") {
-    return json({ error: "演示模式不写入词典；正式部署里这里会新增、修订或作废词条。" }, 403);
+  if (path.startsWith("/api/assistant/notebook") && method === "POST") {
+    return json({ error: "演示模式不写入笔记本；正式部署里这里会新增、修订或作废笔记。" }, 403);
   }
 
   if (path === "/api/assistant/events") {

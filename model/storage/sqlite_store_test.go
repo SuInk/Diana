@@ -39,9 +39,9 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("LoadLLMProfiles() ok=%v err=%v", ok, err)
 	}
-	gotProfile, ok := llmSet.Current()
+	gotProfile, ok := llmSet.FirstProfile()
 	if !ok {
-		t.Fatalf("llm profile set has no current profile: %#v", llmSet)
+		t.Fatalf("llm profile set is empty: %#v", llmSet)
 	}
 	gotLLM := gotProfile.Config
 	if gotLLM.APIKey != "secret-key" || gotLLM.Model != "gp5.5" || gotLLM.UserAgent != "codex-cli/0.142.0" || gotLLM.Headers["X-Relay"] != "earlyso" {
@@ -133,7 +133,6 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 			Model:    "claude-sonnet-4-5",
 		},
 	})
-	profiles.ActiveID = "secondary"
 	if err := store.SaveLLMProfiles(ctx, profiles); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +140,8 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("LoadLLMProfiles() ok=%v err=%v", ok, err)
 	}
-	if gotProfiles.ActiveID != "secondary" || len(gotProfiles.Profiles) != 2 {
+	// 顺序即降级顺序，落库必须原样保留。
+	if len(gotProfiles.Profiles) != 2 || gotProfiles.Profiles[1].ID != "secondary" {
 		t.Fatalf("gotProfiles = %#v", gotProfiles)
 	}
 	if gotProfiles.Profiles[0].Config.Headers["X-Relay"] != "earlyso" || gotProfiles.Profiles[1].Description != "备用配置" || gotProfiles.Profiles[1].UpdatedAt.IsZero() {

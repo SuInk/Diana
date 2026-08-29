@@ -43,18 +43,18 @@ func TestLegacyProfileMigrationPreservesProtocolAndSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, ok := r.Provider(set.ActiveID)
+	provider, ok := r.Provider(set.Profiles[0].ID)
 	if !ok || provider.Protocol != ProtocolOpenAICompletions || provider.APIKey != "secret" {
 		t.Fatalf("provider=%#v", provider)
 	}
-	if active.ProviderID != set.ActiveID || active.ModelID != set.ActiveID+":chat-model" {
+	if active.ProviderID != set.Profiles[0].ID || active.ModelID != set.Profiles[0].ID+":chat-model" {
 		t.Fatalf("active=%#v", active)
 	}
-	model, ok := r.Model(set.ActiveID + ":backup-model")
-	if !ok || model.ProviderID != set.ActiveID || model.ModelID != "backup-model" {
+	model, ok := r.Model(set.Profiles[0].ID + ":backup-model")
+	if !ok || model.ProviderID != set.Profiles[0].ID || model.ModelID != "backup-model" {
 		t.Fatalf("model=%#v", model)
 	}
-	public, _ := r.PublicProvider(set.ActiveID)
+	public, _ := r.PublicProvider(set.Profiles[0].ID)
 	if strings.Contains(public.APIKey, "secret") {
 		t.Fatal("migration public view exposed API key")
 	}
@@ -77,7 +77,7 @@ func TestLegacyProfileMigrationMapsAllProtocols(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			provider, ok := registry.Provider(set.ActiveID)
+			provider, ok := registry.Provider(set.Profiles[0].ID)
 			if !ok || provider.Protocol != test.want {
 				t.Fatalf("provider=%#v, want protocol %q", provider, test.want)
 			}

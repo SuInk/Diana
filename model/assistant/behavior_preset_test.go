@@ -4,9 +4,11 @@
 package assistant
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -191,14 +193,22 @@ func TestDeliverySettingsAreConfigOnly(t *testing.T) {
 	}
 }
 
-func TestReplyStyleGroupmateNeverUsesForwardCard(t *testing.T) {
-	// 合并转发是机器人专属控件，真人不会这么发言。
-	if ReplyStyleGroupmate.allowsForwardReply() {
-		t.Fatal("groupmate style must not fold replies into a forward card")
-	}
-	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise} {
-		if !style.allowsForwardReply() {
-			t.Fatalf("style %q unexpectedly lost forward replies", style)
+// 卡片由阈值决定，跟风格无关。以前群友风格整条分支都被短路，「合并转发字数」
+// 填了不生效，长回复照样一口气刷十几条。
+func TestForwardCardAppliesToEveryStyle(t *testing.T) {
+	long := strings.Repeat("字", 1200)
+	chunks := []string{long}
+	for _, style := range []ReplyStyle{
+		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively,
+		ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl,
+	} {
+		cfg := BotConfig{ReplyStyle: style}.WithDefaults()
+		if !shouldUseForwardReply(long, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+			t.Fatalf("风格 %q 下 1200 字没有触发合并转发", style)
+		}
+		short := strings.Repeat("字", 100)
+		if shouldUseForwardReply(short, []string{short}, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+			t.Fatalf("风格 %q 下 100 字不该触发合并转发", style)
 		}
 	}
 }
@@ -230,9 +240,11 @@ func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
 	if casual.ReplyStyle.Normalized() != ReplyStyleGroupmate {
 		t.Fatalf("group-level style did not take effect: %#v", casual)
 	}
-	// 风格按群生效的是措辞和打字节奏，投递配置不归它管。
-	if casual.ReplyStyle.allowsForwardReply() {
-		t.Fatalf("group-level groupmate style should still refuse forward cards: %#v", casual)
+	// 风格按群生效的是措辞和打字节奏，投递配置不归它管——卡片阈值也一样，
+	// 群级换成群友风格不会把它关掉。
+	long := strings.Repeat("字", 1200)
+	if !shouldUseForwardReply(long, []string{long}, casual.ForwardReplyThreshold, casual.ForwardReplyChunkThreshold) {
+		t.Fatalf("群级群友风格把合并转发关掉了：%#v", casual)
 	}
 }
 
@@ -330,7 +342,7 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 		}
 	}
 	prompt := ReplyStyleCatgirl.prompt(true, personaVoice{})
-	for _, want := range []string{"本喵", "动作描写", "只对主人称", "可爱只体现在语气上"} {
+	for _, want := range []string{"动作描写", "只对主人称", "可爱只体现在语气上"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("catgirl prompt is missing the %q brake: %q", want, prompt)
 		}
@@ -357,13 +369,14 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 			t.Fatalf("catgirl example still ends sentences with a full stop: %q", line)
 		}
 	}
-	// 「（」在这里是语气词，不是括号：不写内容、也不配对闭合。不说死的话，模型
-	// 要么把它当成漏字补全，要么往里填动作描写。
-	if !strings.Contains(prompt, "括号里不写任何内容") || !strings.Contains(prompt, "不要补上「）」") {
-		t.Fatalf("catgirl prompt does not pin the bare paren usage: %q", prompt)
+	// 曾经教过「句尾一个孤零零的『（』」当语气词，现在不教了：发送前的审核器把
+	// 「括号没闭合」当成截断特征，整条回复会被判成半截话拦下来。提示词和审核规则
+	// 对着干，最后是用户少收到一条完整回复。
+	if strings.Contains(prompt, "括号里不写任何内容") || strings.Contains(prompt, "喵（") {
+		t.Fatalf("catgirl prompt 又教回了句末空括号：%q", prompt)
 	}
-	if !strings.Contains(prompt, "你：……好像是喵（") {
-		t.Fatalf("catgirl prompt has no worked example of the bare paren: %q", prompt)
+	if !strings.Contains(prompt, "不要自己发明别的收尾符号") {
+		t.Fatalf("catgirl prompt 没有钉住结尾写法：%q", prompt)
 	}
 	// 表达风格换人不代表输出规范换人：emoji、空行、篇幅三条对所有风格生效。
 	for _, want := range []string{replyEmojiRule, replyBlankLineRule, replyProportionRule} {
@@ -468,5 +481,108 @@ func TestDefaultPersonaVoiceForCatgirl(t *testing.T) {
 		if self, ends := DefaultPersonaVoice(style); self != "" || ends != "" {
 			t.Fatalf("%s 不该对自称和句尾有主张：%q %q", style, self, ends)
 		}
+	}
+	// 扮演只主张自称：句尾语气词属于具体角色，不属于这套说话方式。
+	if self, ends := DefaultPersonaVoice(ReplyStyleRoleplay); self != "我" || ends != "" {
+		t.Fatalf("扮演的自称和句尾 = %q %q", self, ends)
+	}
+}
+
+// 端到端：群友风格下的长回复现在也折成合并转发卡片，而不是刷一屏。
+//
+// 以前这里发的是十几条普通消息——风格把整条卡片分支短路掉了，「合并转发字数」
+// 填多少都没用。
+func TestRuntimeGroupmateLongReplyUsesForwardCard(t *testing.T) {
+	channel := &recordingChannel{}
+	long := strings.Repeat("刘翔在雅典夺冠那年的事说来话长喵。", 80) // 远超 900 字
+	botRuntime := NewRuntime(BotConfig{
+		GroupTriggers: []string{"Diana"},
+		BotAccount:    "42",
+		ReplyStyle:    ReplyStyleGroupmate,
+	}.WithDefaults(), channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return &capturingLLMProvider{reply: long}, nil
+	})
+
+	event := MessageEvent{
+		Kind:        EventKindGroup,
+		SelfID:      "42",
+		GroupID:     "123456",
+		UserID:      "10001",
+		MessageID:   "long-1",
+		SenderLevel: 40, SenderLevelLabel: "LV40",
+		RawMessage: "Diana 讲讲刘翔",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 讲讲刘翔"}}},
+	}
+	if err := botRuntime.HandleEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	// 等得比群友风格的打字停顿上限（5 秒）还宽：走卡片时会在停顿之前就返回，
+	// 所以正常路径是秒过；等这么久是为了万一退回散装时能数出条数，而不是超时
+	// 了事——「一条没发」和「刷了十几条」是两种完全不同的故障。
+	waitForCondition(t, 10*time.Second, func() bool {
+		return len(channel.callsSnapshot()) > 0 || len(channel.sentSnapshot()) > 0
+	})
+	calls := channel.callsSnapshot()
+	if len(calls) == 0 {
+		t.Fatalf("没有走合并转发，散装发了 %d 条", len(channel.sentSnapshot()))
+	}
+	if calls[0].action != "send_group_forward_msg" {
+		t.Fatalf("动作 = %q，期望 send_group_forward_msg", calls[0].action)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("走了卡片就不该再散装发：%#v", sent)
+	}
+}
+
+// 扮演这一档和猫娘正好相反：那边禁止动作描写，这边动作描写就是主体。
+// 要守的是两处刹车——别写成小说、别拿动作顶替正事——
+// 以及它同样没有豁免全局输出规则。
+func TestRoleplayReplyStyleTeachesActionsAndKeepsBrakes(t *testing.T) {
+	for _, raw := range []string{"roleplay", "Roleplay", " roleplay "} {
+		if got := ReplyStyle(raw).Normalized(); got != ReplyStyleRoleplay {
+			t.Fatalf("Normalized(%q) = %q", raw, got)
+		}
+	}
+	prompt := ReplyStyleRoleplay.prompt(true, personaVoice{})
+	// 骨架：括号里的动作 + 台词，动作要短。
+	for _, want := range []string{"（动作或神态）+ 一句台词", "一句话以内", "第三人称叙述"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("扮演提示词缺少写法要点 %q：%q", want, prompt)
+		}
+	}
+	// 三处刹车。
+	for _, want := range []string{"就成小说了", "正事照常办"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("扮演提示词缺少刹车 %q：%q", want, prompt)
+		}
+	}
+	// 以人设为由要求越界是这一档最大的攻击面，次序必须写死。
+	if !strings.Contains(prompt, "规则优先，人设让位") {
+		t.Fatalf("扮演提示词没有写死规则优先：%q", prompt)
+	}
+	// 语气靠示例教，抽象形容词教不会——群友和猫娘两档都是这么写的。
+	if !strings.Contains(prompt, "示例——") || !strings.Contains(prompt, "用户：") {
+		t.Fatalf("扮演提示词没有示例：%q", prompt)
+	}
+	// 全局规则照旧生效：不因为在演就能刷 emoji 或空行。
+	for _, want := range []string{replyEmojiRule, replyBlankLineRule} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("扮演提示词漏掉了全局输出规则：%q", prompt)
+		}
+	}
+	if !strings.Contains(ReplyStyleRoleplay.closingAnchor(), "（动作）") {
+		t.Fatalf("锚点没有把写法拉回来：%q", ReplyStyleRoleplay.closingAnchor())
+	}
+}
+
+// 猫娘禁动作描写、扮演靠动作描写，两档的说法不能互相污染。
+func TestRoleplayAndCatgirlDoNotContradictEachOther(t *testing.T) {
+	catgirl := ReplyStyleCatgirl.prompt(true, personaVoice{})
+	roleplay := ReplyStyleRoleplay.prompt(true, personaVoice{})
+	if strings.Contains(roleplay, "不写动作描写") {
+		t.Fatalf("扮演提示词里混进了猫娘的禁令：%q", roleplay)
+	}
+	if !strings.Contains(catgirl, "不写 *蹭蹭*") {
+		t.Fatalf("猫娘那档的禁令被改掉了：%q", catgirl)
 	}
 }

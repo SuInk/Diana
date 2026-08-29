@@ -394,6 +394,10 @@ func NewProviderRegistryFromProfiles(set ProfileSet) (*ProviderRegistry, AgentMo
 	r := NewProviderRegistry()
 	set = set.WithDefaults()
 	var active AgentModelConfig
+	firstProfileID := ""
+	if len(set.Profiles) > 0 {
+		firstProfileID = strings.TrimSpace(set.Profiles[0].ID)
+	}
 	for _, profile := range set.Profiles {
 		cfg := profile.Config.WithDefaults()
 		providerID := strings.TrimSpace(profile.ID)
@@ -427,14 +431,17 @@ func NewProviderRegistryFromProfiles(set ProfileSet) (*ProviderRegistry, AgentMo
 			if err := r.RegisterModel(model); err != nil {
 				return nil, AgentModelConfig{}, err
 			}
-			if profile.ID == set.ActiveID && modelID == cfg.Model {
+			// 注册表的默认模型取列表里第一个配置的默认模型。以前取的是「激活中」
+			// 那条，而激活项会被降级写回改动，于是同一份配置在不同时刻注册出来的
+			// 默认模型不一样。按列表顺序取是确定的。
+			if profile.ID == firstProfileID && modelID == cfg.Model {
 				active = AgentModelConfig{ProviderID: providerID, ModelID: model.ID}
 			}
 		}
 	}
 	if active.ProviderID == "" {
 		for _, profile := range set.Profiles {
-			if profile.ID == set.ActiveID && profile.Config.Model != "" {
+			if profile.ID == firstProfileID && profile.Config.Model != "" {
 				active = AgentModelConfig{ProviderID: profile.ID, ModelID: profile.ID + ":" + profile.Config.Model}
 				break
 			}

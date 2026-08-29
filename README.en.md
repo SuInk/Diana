@@ -47,8 +47,10 @@ Configuration, memory, and logs live in a local SQLite database — no hosted se
 | **Split model duties** | Chat, vision, intent detection, and image generation each bind their own provider and model, validated with a real request before saving |
 | **Built-in web search** | No plugin to install; the model can search before answering time-sensitive questions. Exa MCP first, Tavily as fallback |
 | **Image text recognition** | Images can go through a vision model and OCR at once (LLM transcription, self-hosted OCR service, or local tesseract). When the chat model has no vision support, it can receive the recognized text only. Results are cached in the database by image content hash, so a repeated image or sticker is only recognized once |
+| **Sticker sending** | Searches stickers already cached in the current group or private conversation; the Agent selects by name and cached image description, then sends through the source channel without mixing conversations |
 | **Per-group policies** | Reply windows, allow/deny lists, trigger words, persona, group level thresholds, and tool permissions per group |
 | **Layered long-term memory** | Recent context, compressed summaries, structured facts, and on-demand history search work in layers to keep token usage down |
+| **Notebook** | Things deliberately written down that have to be right: in-jokes and slang, group rules and agreements, someone's dietary restrictions, a promise not yet kept. Scoped per conversation or globally, every edit keeps a revision record, and deletions are recoverable; matching entries are injected into context automatically and each one can be edited in the console. It divides labour with the automatically extracted structured memory — that side is "remember what was said", this side is "if it is wrong I must be able to fix it" |
 | **Built-in Agent** | A minimal Pi-style tool loop with file, command, and browser tools, loading Skills and MCP servers on demand |
 | **Full event auditing** | Reply reasons, model call chains, tokens, and errors are recorded; operation logs carry the acting operator |
 | **One-click install and self-update** | The installer verifies SHA-256, backs up data, and rolls back automatically when the health check fails; the console can upgrade in place |
@@ -72,6 +74,42 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 Then open `http://127.0.0.1:18080`. The generated administrator account and password are printed to the terminal once and stored in `config.yaml` inside the install directory — keep that file private.
 
 Default install directory: `~/.local/share/diana` on Linux/macOS, `%LOCALAPPDATA%\Diana` on Windows.
+
+### One-Click Uninstall
+
+Installations created by the one-click installer include an uninstall tool. By default it removes
+the background service and runtime while preserving `config.yaml`, `data/`, `logs/`, and installer
+backups so a later reinstall can reuse them:
+
+```sh
+diana uninstall
+```
+
+```powershell
+diana uninstall
+```
+
+Use `diana uninstall --purge` to permanently remove all configuration, bot data, and logs.
+The uninstaller asks for confirmation again. If the current shell has not refreshed its PATH,
+run `uninstall.sh` or `uninstall.ps1` directly from the installation directory.
+
+### View Logs from the Terminal
+
+```sh
+diana logs                 # Last 100 lines
+diana logs --lines 300     # Select the line count
+diana logs -f              # Follow until Ctrl+C
+diana status               # Show health, version, address, and uptime
+diana restart              # Restart the installer-managed service
+diana doctor               # Check config, paths, assets, and service health
+diana config path          # Print the active config path
+diana config check         # Validate YAML and bot/LLM sections
+diana version              # Print the current version
+diana help                 # Show command help
+```
+
+The command reads `storage.log_path` from `config.yaml`. Pass
+`--config /path/to/config.yaml` when using a custom configuration file.
 
 The install script takes its own parameters through environment variables (installer arguments, not application configuration):
 
@@ -284,8 +322,21 @@ The bot plugins area enables, disables, and configures the official built-in plu
 
 - **Link resolution**: resolves and sends images or video from Bilibili, YouTube, X, Xiaohongshu, and Douyin; Zhihu, Weibo, and GitHub only yield title and description. Size, duration, quality, and gallery limits are adjustable. Per-platform cookies, the yt-dlp cookie file, and proxy addresses can be set in the plugin settings and take precedence over the matching environment variables; once saved, read endpoints only report that a credential is configured. The card also probes `yt-dlp`, `ffmpeg`, and `node`, and can install what is missing through a controlled package manager.
 - **File parsing**: handles OneBot file segments and links to text-like files, feeding the content to the LLM as context.
+- **Music**: two features sharing one "turn a song into a voice message" path. **Link resolution** — a music link shared in chat is downloaded and sent as a voice message; NetEase recognizes the web, single-page-app anchor, mobile path and `163cn.tv` short-link forms, QQ Music recognizes `songDetail/<mid>` and short links, Kugou recognizes `#hash=...&album_id=...`, and none of them mistake an artist, album or playlist page for a track. **Song requests** — "put on Dao Xiang", "play me something for winding down" share no common keyword, so instead of a synonym list the model decides for itself through the `diana.music` tool; ordinary members can use it too, and it can be switched off. **Multiple libraries** — NetEase, QQ Music and Kugou sit side by side; pick which are enabled and which is asked first. The test is "found *and* playable", not "found": a track that is members-only on one service is often previewable on another, so a source that cannot return a stream URL simply yields to the next, and a shared link that will not play is looked up by title elsewhere, with the source that actually played recorded in the context given to the model. Each library takes its own self-hosted API base and cookie; with none configured NetEase serves previewable tracks while QQ Music and Kugou availability depends on their endpoints' current policy. Duration, file size, bitrate and whether to announce the song title are all configurable; set a Silk encoder path to transcode to Tencent Silk first, or leave it empty and let the OneBot client convert. Voice only plays correctly on OneBot v11.
+- **Sticker sending**: with the built-in Agent enabled, treats cached images with sticker summaries as candidates while excluding ordinary `[图片]` images. The `diana.sticker` tool searches first and sends only a validated candidate; settings control history size, result count, unnamed `[动画表情]` candidates, and separate opt-in switches for other groups and private chats. Sharing stays inside one bot context namespace and does not expose source group or user IDs to the model.
 - **Image text recognition**: runs OCR before images enter the context, using LLM vision transcription, a self-hosted OCR service (PaddleOCR / RapidOCR), or local `tesseract` — the latter two fully offline. Delivery is either "image plus text" or "text only", the latter letting a chat model without vision support handle image messages.
 - **Web search**: installed and enabled by default; it can be disabled and configured but never uninstalled. It is independent of the Agent switch, so local file, command, and browser tools stay closed when the Agent is off.
+
+### OAuth Sign-In
+
+The "Authorized sign-in" section of the LLM page uses OAuth instead of an API key. The console runs on a server and the browser is not necessarily on the same machine, so the callback is not required to land back locally: click "Sign in", complete the authorization in your own browser, then paste the whole callback URL from the address bar back into the console (just the `code` also works). Once signed in, pick the provider under "Credential" on a profile; the token is refreshed before it expires. If the profile also has an API key, a failed refresh falls back to it rather than taking the whole profile down.
+
+Providers are configuration, not hard-coded code: OpenRouter ships built in (its PKCE flow is designed for third-party apps and mints a key you own and can revoke), and anything else can be added under "Custom provider" by filling in the authorize URL, token URL, client ID and scopes — suitable for a self-hosted gateway or any service not shipped here. Both URLs must be https; loopback addresses (`127.0.0.1`) may use http.
+
+> [!NOTE]
+> Providers that require impersonating a first-party client ID to obtain a subscription account's session are not preinstalled. That use goes beyond what the subscription itself licenses, and whether to do it is the operator's own call — it can be entered under "Custom provider" if wanted.
+
+Tokens and client secrets are treated exactly like API keys: read endpoints only return whether a provider is signed in and when it expires; no plaintext ever leaves the server.
 
 ### Built-in Agent
 
@@ -303,6 +354,21 @@ Browser tools need Chrome/Chromium with remote debugging enabled: `chrome --remo
 ### Third-Party NoneBot Plugins
 
 The Go binary cannot load Python NoneBot plugins directly, so run a NoneBot sidecar: install the plugins in a NoneBot2 project, give it an OneBot v11 reverse WebSocket driver, then enable the `NoneBot plugin bridge` on Diana's bot page (default `ws://127.0.0.1:8080/onebot/v11/ws`). Diana forwards OneBot events to the sidecar, and forwards the plugins' `send_msg`, `get_group_info`, and other API calls back to the active OneBot client.
+
+### Outbound API
+
+External systems (CI, monitoring, scripts) can push messages to a chosen conversation over HTTP, using Diana as a notification outlet. It ships as a built-in plugin (`对外 API`) that is **disabled by default**: external calls are only accepted after enabling it on the Plugins page or via the "Settings → Security → Outbound API" card, and disabling it makes them return 403 immediately. API keys are created on that same card; the plaintext is shown exactly once at creation and only its SHA-256 hash is stored. Revocation takes effect immediately, and key management works regardless of the plugin switch, so you can prepare keys before opening the gate. Every call is logged in the Log Centre with `actor` set to `openapi:<key name>`.
+
+```sh
+curl -X POST http://127.0.0.1:18080/openapi/v1/messages \
+  -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"group_id": "123456", "text": "Build #42 passed"}'
+```
+
+- Address the target with `group_id` or `user_id`; a group target that also carries `user_id` mentions that member. On multi-channel deployments add `platform` (e.g. `onebot-v11`, `telegram`) or `profile_id` for routing; with a single enabled channel both can be omitted.
+- `GET /openapi/v1/status` uses the same key for health checks and lists the deliverable channels.
+- Each key is rate-limited to 60 requests per minute by default (adjustable in the plugin settings); exceeding it returns `429` with `Retry-After`. The endpoint only delivers text — it never triggers a model call.
 
 ### Log Centre
 

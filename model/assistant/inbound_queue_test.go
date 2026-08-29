@@ -613,7 +613,6 @@ func TestRuntimeAssignsInboundPriorities(t *testing.T) {
 
 func TestProactiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "cheap-primary",
 		Profiles: []llm.Profile{
 			{ID: "cheap-primary", Group: "cheap", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "cheap-primary"}},
 		},
@@ -646,7 +645,6 @@ func TestProactiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
 
 func TestMainLLMProviderRetriesTimeoutOnce(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{
 			{ID: "main", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "main"}},
 		},
@@ -794,6 +792,12 @@ type memoryInboundEventStore struct {
 
 func newMemoryInboundEventStore() *memoryInboundEventStore {
 	return &memoryInboundEventStore{records: map[string]*memoryInboundRecord{}, superseded: map[string]string{}, steps: map[string]string{}}
+}
+
+func (s *memoryInboundEventStore) PeekInboundMediaForTurn(_ context.Context, _, _ string, _ MessageEvent, _ time.Duration) ([]MessageEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]MessageEvent(nil), s.media...), nil
 }
 
 func (s *memoryInboundEventStore) ClaimInboundMediaForTurn(_ context.Context, currentID, _ string, _ MessageEvent, _ time.Duration) ([]MessageEvent, error) {

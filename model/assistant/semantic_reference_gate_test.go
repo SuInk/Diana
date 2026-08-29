@@ -105,7 +105,7 @@ func TestDurableMediaIndexListsOutOfWindowMedia(t *testing.T) {
 	if !strings.Contains(index, "message_id=img-old") {
 		t.Fatalf("index missing the out-of-window image: %q", index)
 	}
-	if !strings.Contains(index, "diana.history_images") {
+	if !strings.Contains(index, "diana.history_media") {
 		t.Fatalf("index does not tell the model how to fetch originals: %q", index)
 	}
 	if !strings.Contains(index, "图片×1") {

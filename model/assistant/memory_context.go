@@ -55,10 +55,12 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 		}
 	}
 	policy := RelationshipPolicyFor(profile, cfg.OwnerID, event.UserID)
-	return r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
+	text, _ := r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
+	return text
 }
 
-func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEvent, queryText string, profile UserMemoryProfile, policy RelationshipPolicy) string {
+// memoryContextWithProfile 同时返回本层的自有账，见 contextLayerUsage。
+func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEvent, queryText string, profile UserMemoryProfile, policy RelationshipPolicy) (string, contextLayerUsage) {
 	cfg := r.effectiveConfigForEvent(event)
 	window := r.promptContextWindowTokens(event, cfg)
 	memoryBudget := retrievedMemoryBudget(window) + coreMemoryBudget(window)
@@ -68,14 +70,23 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 			DisplayName: strings.TrimSpace(event.SenderNameOrID()),
 		}
 	}
+	coreOnly := func(reason string) (string, contextLayerUsage) {
+		text := fitUserMemoryCoreToTokenBudget(profile, policy, memoryBudget)
+		return text, contextLayerUsage{
+			Layer:          "retrieved_memory",
+			Budget:         memoryBudget,
+			SelectedTokens: llm.EstimateTextTokens(text),
+			Reason:         reason,
+		}
+	}
 	if !boolValue(cfg.LongTermMemoryEnabled, true) {
-		return fitUserMemoryCoreToTokenBudget(profile, policy, memoryBudget)
+		return coreOnly(contextLayerReasonFits)
 	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()
 	if store == nil {
-		return fitUserMemoryCoreToTokenBudget(profile, policy, memoryBudget)
+		return coreOnly(contextLayerReasonFits)
 	}
 
 	queryText = memoryRetrievalText(event, queryText)
@@ -100,11 +111,23 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	cancel()
 	if err != nil {
 		log.Printf("chatbot structured memory load failed: %v", err)
-		return formatStructuredMemoryContextWithTokenBudget(profile, policy, nil, memoryBudget)
+		text, usage := formatStructuredMemoryContextWithTokenBudget(profile, policy, nil, memoryBudget)
+		return text, usage
 	}
 	ranked := rankStructuredMemories(items, event, queryText, time.Now())
 	r.touchRetrievedMemories(ctx, store, ranked)
-	return formatStructuredMemoryContextWithTokenBudget(profile, policy, ranked, memoryBudget)
+	text, usage := formatStructuredMemoryContextWithTokenBudget(profile, policy, ranked, memoryBudget)
+	// 候选是存储层捞回来的全部，排序阶段（相关性门槛 + MMR 条数上限）先砍一刀，
+	// token 配额再砍一刀。两刀以前都不留痕，于是「记忆没提到某件事」既可能是没
+	// 检索到，也可能是检索到了但没装下，日志里分不出来。
+	usage.CandidateItems = len(items)
+	for _, item := range items {
+		usage.CandidateTokens += llm.EstimateTextTokens(formatStructuredMemoryLine(item))
+	}
+	if usage.Reason == contextLayerReasonFits && len(ranked) < len(items) {
+		usage.Reason = contextLayerReasonRankCap
+	}
+	return text, usage
 }
 
 // touchRetrievedMemories 把命中回写成 last_verified_at。回写失败不影响本轮回复，
@@ -272,10 +295,11 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 func formatStructuredMemoryContext(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem) string {
 	// Preserve the legacy helper for focused tests and callers outside prompt
 	// orchestration. Runtime prompts use the model-derived token budget below.
-	return formatStructuredMemoryContextWithTokenBudget(profile, policy, items, int64(structuredMemoryContextBudget)*2)
+	text, _ := formatStructuredMemoryContextWithTokenBudget(profile, policy, items, int64(structuredMemoryContextBudget)*2)
+	return text
 }
 
-func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) string {
+func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) (string, contextLayerUsage) {
 	var builder strings.Builder
 	displayName := strings.TrimSpace(profile.DisplayName)
 	if displayName == "" {
@@ -321,25 +345,58 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 		}
 		sections[index].items = append(sections[index].items, item)
 	}
+	usage := contextLayerUsage{
+		Layer:       "retrieved_memory",
+		Budget:      tokenBudget,
+		RankedItems: len(items),
+		Reason:      contextLayerReasonFits,
+	}
+	cutAtSection := -1
 sectionsLoop:
-	for _, section := range sections {
+	for sectionIndex, section := range sections {
 		if len(section.items) == 0 {
 			continue
 		}
 		header := "\n" + section.title + "："
 		if llm.EstimateTextTokens(builder.String()+header) > tokenBudget {
+			cutAtSection = sectionIndex
 			break
 		}
 		builder.WriteString(header)
 		for _, item := range section.items {
 			line := formatStructuredMemoryLine(item)
 			if llm.EstimateTextTokens(builder.String()+line) > tokenBudget {
+				cutAtSection = sectionIndex
 				break sectionsLoop
 			}
 			builder.WriteString(line)
+			usage.SelectedItems++
 		}
 	}
-	return strings.TrimSpace(builder.String())
+	// 分段有固定顺序，前面几条长记忆就能让后面整段一条不剩。日志里「这段本来
+	// 就没内容」和「这段被挤掉了」长得一样，必须把被截掉的段名单独记下来。
+	if cutAtSection >= 0 {
+		usage.Reason = contextLayerReasonBudget
+		for _, section := range sections[cutAtSection:] {
+			if len(section.items) > 0 {
+				usage.DroppedSections = append(usage.DroppedSections, section.title)
+			}
+		}
+		if len(usage.DroppedSections) > 1 {
+			usage.Reason = contextLayerReasonSectionCut
+		}
+	}
+	for _, item := range items {
+		usage.RankedTokens += llm.EstimateTextTokens(formatStructuredMemoryLine(item))
+	}
+	// 这里看到的 items 已经是排序后的了，排序前砍掉多少只有调用方知道。先按「候选
+	// 等于排序后」记账，取得到检索总数的调用方再覆盖——否则 dropped 会算成 0，
+	// 明明有候选没装下却显示一条没丢。
+	usage.CandidateItems = usage.RankedItems
+	usage.CandidateTokens = usage.RankedTokens
+	text := strings.TrimSpace(builder.String())
+	usage.SelectedTokens = llm.EstimateTextTokens(text)
+	return text, usage
 }
 
 func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, tokenBudget int64) string {
@@ -692,20 +749,31 @@ func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) str
 	session := sessionKey(event)
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	items, err := store.ListStructuredMemories(loadCtx, StructuredMemoryQuery{
-		Session:       session,
-		Now:           time.Now(),
+		Session: session,
+		Now:     time.Now(),
+		// 会话唯一，本来就只该有一条；多要几条是为了万一出现重复时按存储层的
+		// importance/confidence 排序确定性地挑一条，而不是看谁先扫到。
 		MaxCandidates: 4,
 		Kinds:         []MemoryKind{MemoryKindThread},
+		// 便签只认本会话。默认的取值范围还会捎上「本人的 visibility=user 记忆」，
+		// 那条通道对便签毫无意义，却能让别的会话的行漏进来。
+		CurrentSessionOnly: true,
 	})
 	cancel()
 	if err != nil {
 		log.Printf("chatbot session thread load failed: %v", err)
 		return ""
 	}
-	key := ThreadMemoryKey(session)
+	// 不能拿 ThreadMemoryKey(session) 来做精确比较：写入侧会过 normalizeMemoryKey，
+	// 它只保留字母数字、把 . - _ 和空白折成 '.'，冒号直接丢掉且不补分隔符。于是
+	// "thread.group:123" 落库变成 "thread.group123"，两边永远对不上，便签一条也
+	// 注入不进去。查询已经按 scope_key + kind=thread 收窄，回来的行必然就是本会话
+	// 的便签，这个比较挡不住任何东西。
+	//
+	// 修的是读取侧不是归一化：改归一化会让已经落库的行全部失联。
 	for _, item := range items {
-		if item.Key == key {
-			return strings.TrimSpace(item.Content)
+		if content := strings.TrimSpace(item.Content); content != "" {
+			return content
 		}
 	}
 	return ""

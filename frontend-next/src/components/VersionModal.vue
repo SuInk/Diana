@@ -74,11 +74,14 @@
           <RefreshCw :size="14" aria-hidden="true" />
           {{ testingMirrors ? "测速中…" : "测速" }}
         </button>
-        <p class="mirror-hint">校验清单始终优先直连，加速只用于下载安装包；无论走哪条线路，安装前都要对上 SHA-256。</p>
+        <p class="mirror-hint">测速会真的拉一段安装包下来算速率（只测握手最快的几条），握手快不代表下载快；直连够快就直接走直连。加速只用于下载安装包，校验清单始终直连，安装前都要对上 SHA-256。</p>
         <ul v-if="mirrorProbe.length" class="mirror-results">
           <li v-for="result in mirrorProbe" :key="result.name" :class="{ ok: result.ok }">
             <span class="mirror-name">{{ result.name }}</span>
-            <span v-if="result.ok" class="mono">{{ result.latency_ms }} ms</span>
+            <template v-if="result.ok">
+              <span v-if="result.speed_kbps" class="mono mirror-speed">{{ formatSpeed(result.speed_kbps) }}</span>
+              <span class="mono mirror-latency">{{ result.latency_ms }} ms</span>
+            </template>
             <span v-else class="mirror-error">{{ result.error || "不可用" }}</span>
           </li>
         </ul>
@@ -522,6 +525,13 @@ async function loadMirrors(): Promise<void> {
     // 线路列表拿不到不影响更新本身，界面退回只有「自动 / 直连」两项。
     mirrors.value = [];
   }
+}
+
+// formatSpeed 把后端的 KiB/s 显示成人能读的速率。0 表示样本太小没测出速度，
+// 那种情况下模板不会走到这里，只显示握手耗时。
+function formatSpeed(kbps: number): string {
+  if (kbps >= 1024) return `${(kbps / 1024).toFixed(1)} MB/s`;
+  return `${kbps} KB/s`;
 }
 
 async function runMirrorTest(): Promise<void> {
@@ -995,6 +1005,16 @@ a.version-hero-integrity:hover {
 .mirror-results li.ok {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   color: var(--text);
+}
+
+/* 速度是这里真正要看的数字，握手耗时只是旁证，压暗一档避免抢读。 */
+.mirror-speed {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.mirror-latency {
+  color: var(--text-muted);
 }
 
 .mirror-error {

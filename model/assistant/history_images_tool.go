@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	dianaHistoryImagesToolName      = "diana.history_images"
+	dianaHistoryImagesToolName      = "diana.history_media"
 	maximumHistoryImagesPerToolCall = 8
 )
 
@@ -39,13 +39,15 @@ type dianaHistoryImagesResult struct {
 	FocusCrops int                       `json:"focus_crops,omitempty"`
 	Failed     int                       `json:"failed"`
 	Limited    bool                      `json:"limited,omitempty"`
-	Images     []dianaHistoryImageStatus `json:"images"`
+	Media      []dianaHistoryImageStatus `json:"media"`
+	Text       []string                  `json:"text,omitempty"`
 	Message    string                    `json:"message"`
 }
 
 type dianaHistoryImageStatus struct {
 	MessageID  string `json:"message_id"`
-	ImageIndex int    `json:"image_index,omitempty"`
+	ImageIndex int    `json:"media_index,omitempty"`
+	MediaType  string `json:"media_type,omitempty"`
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 }
@@ -59,18 +61,18 @@ func (t *dianaHistoryImagesTool) Name() string {
 }
 
 func (t *dianaHistoryImagesTool) Description() string {
-	return `读取当前会话历史消息里的原始图片，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认细小文字、比较多张图片或核对视觉细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他图片。`
+	return `读取当前会话历史消息里的原始图片或缓存视频关键帧，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认小字、比较画面或核对视频细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他画面。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"message_ids": toolStringArrayParam("要读取图片的消息 ID；只接受当前会话中真实存在的 message_id，不接受文件路径或 URL。省略 message_ids 和 items 时使用当前引用或语义来源。"),
-		"items": toolItemsParam("需要精确指定某条消息里的第几张图片时改用它，与 message_ids 二选一。",
+		"message_ids": toolStringArrayParam("要读取图片或视频关键帧的消息 ID；只接受当前会话中真实存在的 message_id，不接受文件路径或 URL。省略 message_ids 和 items 时使用当前引用或语义来源。"),
+		"items": toolItemsParam("需要精确指定某条消息里的第几个画面时改用它，与 message_ids 二选一。",
 			maximumHistoryImagesPerToolCall,
 			[]string{"message_id"},
 			map[string]any{
 				"message_id":    toolStringParam("消息 ID。"),
-				"image_indexes": map[string]any{"type": "array", "description": "要读取的图片序号，从 1 开始；省略表示该消息里的全部图片。", "items": map[string]any{"type": "integer", "minimum": 1}},
+				"media_indexes": map[string]any{"type": "array", "description": "要读取的图片或视频关键帧序号，从 1 开始；省略表示该消息里的全部画面。文件与音频无需指定序号。", "items": map[string]any{"type": "integer", "minimum": 1}},
 			}),
 		"detail": toolEnumParam("图片细节档位。auto 由运行时按预算决定；辨认细小文字时用 high。", "auto", "low", "high"),
 	})
@@ -86,7 +88,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		return "", err
 	}
 	detail := normalizeHistoryImageDetail(configToolString(input, "detail"))
-	result := dianaHistoryImagesResult{Images: make([]dianaHistoryImageStatus, 0)}
+	result := dianaHistoryImagesResult{Media: make([]dianaHistoryImageStatus, 0)}
 	parts := make([]llm.ContentPart, 0)
 	attempted := 0
 
@@ -95,7 +97,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		if !found {
 			result.Requested++
 			result.Failed++
-			result.Images = append(result.Images, dianaHistoryImageStatus{
+			result.Media = append(result.Media, dianaHistoryImageStatus{
 				MessageID: selector.MessageID,
 				Status:    "failed",
 				Error:     "当前会话中找不到这条消息",
@@ -104,14 +106,19 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		}
 		original := cloneHistoricalImageEvent(source)
 		source = cloneHistoricalImageEvent(source)
-		images := historicalStillImageRefs(source)
-		if len(images) == 0 {
+		textSegments := append([]MessageSegment(nil), source.Segments...)
+		if source.Quoted != nil {
+			textSegments = append(textSegments, source.Quoted.Segments...)
+		}
+		result.Text = append(result.Text, historicalNonImageMediaDescriptions(textSegments)...)
+		images := historicalToolImageRefs(source)
+		if len(images) == 0 && len(historicalNonImageMediaDescriptions(textSegments)) == 0 {
 			result.Requested++
 			result.Failed++
-			result.Images = append(result.Images, dianaHistoryImageStatus{
+			result.Media = append(result.Media, dianaHistoryImageStatus{
 				MessageID: selector.MessageID,
 				Status:    "failed",
-				Error:     "消息中没有原始图片",
+				Error:     "消息中没有原始图片或缓存视频关键帧",
 			})
 			continue
 		}
@@ -119,7 +126,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		for _, index := range invalid {
 			result.Requested++
 			result.Failed++
-			result.Images = append(result.Images, dianaHistoryImageStatus{
+			result.Media = append(result.Media, dianaHistoryImageStatus{
 				MessageID:  selector.MessageID,
 				ImageIndex: index,
 				Status:     "failed",
@@ -131,7 +138,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			if attempted >= maximumHistoryImagesPerToolCall {
 				result.Limited = true
 				result.Failed++
-				result.Images = append(result.Images, dianaHistoryImageStatus{
+				result.Media = append(result.Media, dianaHistoryImageStatus{
 					MessageID:  selector.MessageID,
 					ImageIndex: index,
 					Status:     "skipped",
@@ -142,11 +149,13 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			attempted++
 			ref := images[index-1]
 			segment := ref.segment
+			mediaType := historicalToolImageMediaType(segment)
 			if strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
 				result.Failed++
-				result.Images = append(result.Images, dianaHistoryImageStatus{
+				result.Media = append(result.Media, dianaHistoryImageStatus{
 					MessageID:  selector.MessageID,
 					ImageIndex: index,
+					MediaType:  mediaType,
 					Status:     "failed",
 					Error:      "原始图片已失效或无法恢复",
 				})
@@ -156,9 +165,10 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			setHistoricalStillImageSegment(&source, ref, segment)
 			if strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
 				result.Failed++
-				result.Images = append(result.Images, dianaHistoryImageStatus{
+				result.Media = append(result.Media, dianaHistoryImageStatus{
 					MessageID:  selector.MessageID,
 					ImageIndex: index,
+					MediaType:  mediaType,
 					Status:     "failed",
 					Error:      "原始图片已失效或无法恢复",
 				})
@@ -168,21 +178,30 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			ready, complete := loadLLMImageURLs(ctx, imageSources)
 			if !complete || len(ready) == 0 {
 				result.Failed++
-				result.Images = append(result.Images, dianaHistoryImageStatus{
+				result.Media = append(result.Media, dianaHistoryImageStatus{
 					MessageID:  selector.MessageID,
 					ImageIndex: index,
+					MediaType:  mediaType,
 					Status:     "failed",
 					Error:      "原始图片读取或编码失败",
 				})
 				continue
 			}
-			imageParts := highDetailImageParts(ready[0], detail)
+			imageParts := make([]llm.ContentPart, 0, len(ready))
+			if len(ready) == 1 {
+				imageParts = highDetailImageParts(ready[0], detail)
+			} else {
+				for _, imageURL := range ready {
+					imageParts = append(imageParts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: detail})
+				}
+			}
 			parts = append(parts, imageParts...)
 			result.FocusCrops += len(imageParts) - 1
 			result.Loaded++
-			result.Images = append(result.Images, dianaHistoryImageStatus{
+			result.Media = append(result.Media, dianaHistoryImageStatus{
 				MessageID:  selector.MessageID,
 				ImageIndex: index,
+				MediaType:  mediaType,
 				Status:     "loaded",
 			})
 		}
@@ -192,11 +211,14 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		t.runtime.enqueueHistoryImageDescriptionsNow(source)
 	}
 
-	if result.Loaded == 0 {
-		return "", fmt.Errorf("历史原图读取失败：请求的图片均不可用（%s）", historyImageFailureSummary(result.Images))
+	if result.Loaded == 0 && len(result.Text) == 0 {
+		return "", fmt.Errorf("历史媒体读取失败：请求的媒体均不可用（%s）", historyImageFailureSummary(result.Media))
 	}
 	result.OK = true
-	result.Message = fmt.Sprintf("已把 %d 张历史原图附加到本次工具观察，请逐张查看后再回答；不要把摘要当成原图细节。", result.Loaded)
+	result.Message = fmt.Sprintf("已读取 %d 张历史图片或视频关键帧和 %d 条文件/语音文字信息。", result.Loaded, len(result.Text))
+	if result.Loaded > 0 {
+		result.Message += " 真实画面已附加到本次工具观察，请逐张查看后再回答；不要把摘要当成真实画面细节。"
+	}
 	if result.FocusCrops > 0 {
 		result.Message += fmt.Sprintf(" 为了保留小人像和小字细节，已另附加 %d 张原图局部裁剪。", result.FocusCrops)
 	}
@@ -246,8 +268,8 @@ func (t *dianaHistoryImagesTool) findSourceEvent(ctx context.Context, messageID 
 
 func mergeFreshHistoricalImagePayload(stored, fresh MessageEvent) MessageEvent {
 	merged := cloneHistoricalImageEvent(stored)
-	storedRefs := historicalStillImageRefs(merged)
-	for imageIndex, freshRef := range historicalStillImageRefs(fresh) {
+	storedRefs := historicalToolImageRefs(merged)
+	for imageIndex, freshRef := range historicalToolImageRefs(fresh) {
 		freshSegment := freshRef.segment
 		if imageIndex >= len(storedRefs) {
 			merged.Segments = append(merged.Segments, freshSegment)
@@ -280,7 +302,7 @@ func mergeFreshHistoricalImagePayload(stored, fresh MessageEvent) MessageEvent {
 func eventWithFreshHistoricalImagePayload(event MessageEvent) MessageEvent {
 	event = cloneHistoricalImageEvent(event)
 	for index, segment := range event.Segments {
-		if !recallStillImageSegment(segment) || (firstImageSource(segment) == "" && strings.TrimSpace(segment.Data["file"]) == "") {
+		if !historyDescribableImageSegment(segment) || (firstImageSource(segment) == "" && strings.TrimSpace(segment.Data["file"]) == "") {
 			continue
 		}
 		data := cloneSegmentData(segment.Data)
@@ -292,7 +314,7 @@ func eventWithFreshHistoricalImagePayload(event MessageEvent) MessageEvent {
 }
 
 func historicalEventHasCurrentImagePayload(event MessageEvent) bool {
-	for _, ref := range historicalStillImageRefs(event) {
+	for _, ref := range historicalToolImageRefs(event) {
 		if firstImageSource(ref.segment) != "" || strings.TrimSpace(ref.segment.Data["file"]) != "" {
 			return true
 		}
@@ -308,7 +330,7 @@ func historyImageFailureSummary(statuses []dianaHistoryImageStatus) string {
 		}
 		label := "message_id=" + status.MessageID
 		if status.ImageIndex > 0 {
-			label += fmt.Sprintf(" image_index=%d", status.ImageIndex)
+			label += fmt.Sprintf(" media_index=%d", status.ImageIndex)
 		}
 		parts = append(parts, label+": "+firstNonEmpty(status.Error, "读取失败"))
 	}
@@ -346,9 +368,9 @@ func historyImageSelectors(input map[string]any, event MessageEvent) ([]historyI
 			if messageID == "" {
 				return nil, fmt.Errorf("items 中的 message_id 不能为空")
 			}
-			indexes, err := positiveIntegerList(item["image_indexes"])
+			indexes, err := positiveIntegerList(item["media_indexes"])
 			if err != nil {
-				return nil, fmt.Errorf("message_id=%s 的 image_indexes: %w", messageID, err)
+				return nil, fmt.Errorf("message_id=%s 的 media_indexes: %w", messageID, err)
 			}
 			selectors = append(selectors, historyImageSelector{MessageID: messageID, ImageIndexes: indexes})
 		}
@@ -358,9 +380,9 @@ func historyImageSelectors(input map[string]any, event MessageEvent) ([]historyI
 			selectors = append(selectors, historyImageSelector{MessageID: messageID})
 		}
 		if messageID := strings.TrimSpace(configToolString(input, "message_id")); messageID != "" {
-			indexes, err := positiveIntegerList(input["image_indexes"])
+			indexes, err := positiveIntegerList(input["media_indexes"])
 			if err != nil {
-				return nil, fmt.Errorf("image_indexes: %w", err)
+				return nil, fmt.Errorf("media_indexes: %w", err)
 			}
 			selectors = append(selectors, historyImageSelector{MessageID: messageID, ImageIndexes: indexes})
 		}
@@ -518,10 +540,18 @@ type historicalStillImageRef struct {
 }
 
 func historicalStillImageRefs(event MessageEvent) []historicalStillImageRef {
+	return historicalImageRefsMatching(event, recallStillImageSegment)
+}
+
+func historicalToolImageRefs(event MessageEvent) []historicalStillImageRef {
+	return historicalImageRefsMatching(event, historyDescribableImageSegment)
+}
+
+func historicalImageRefsMatching(event MessageEvent, matches func(MessageSegment) bool) []historicalStillImageRef {
 	var refs []historicalStillImageRef
 	appendImages := func(items []MessageSegment, quoted bool) {
 		for segmentIndex, segment := range items {
-			if recallStillImageSegment(segment) {
+			if matches(segment) {
 				refs = append(refs, historicalStillImageRef{segment: segment, segmentIndex: segmentIndex, quoted: quoted})
 			}
 		}
@@ -531,6 +561,13 @@ func historicalStillImageRefs(event MessageEvent) []historicalStillImageRef {
 		appendImages(event.Quoted.Segments, true)
 	}
 	return refs
+}
+
+func historicalToolImageMediaType(segment MessageSegment) string {
+	if strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame") {
+		return "video_frame"
+	}
+	return "image"
 }
 
 func (r *Runtime) prepareHistoricalImageSegment(ctx context.Context, event MessageEvent, ref historicalStillImageRef) MessageSegment {

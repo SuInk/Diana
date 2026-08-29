@@ -5,17 +5,18 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>词典</h1>
+        <h1>笔记本</h1>
         <p>
-          机器人自己收下的梗、黑话与内部称呼；这里可以改释义、作废记错的词条。
-          <template v-if="sharedScope">当前跨群共用一本，新词条都记进全局词典。</template>
-          <template v-else>当前按会话隔离，一个群记下的梗只在这个群生效；想共用可在「机器人 → 词典作用域」打开。</template>
+          机器人特意记下来、而且必须准确的东西：梗和黑话、群规和约定、谁的忌口、答应了还没做的事。
+          这里可以改、可以作废，每次改动都留修订记录。随口聊到的内容由「记忆」自动收，不在这一页。
+          <template v-if="sharedScope">当前跨群共用一本，新条目都记进全局笔记本。</template>
+          <template v-else>当前按会话隔离，一个群记下的只在这个群生效；想共用可在「机器人 → 笔记本作用域」打开。</template>
         </p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="scopes.length === 0" @click="openCreate">
           <Plus :size="15" aria-hidden="true" />
-          新增词条
+          新增笔记
         </button>
         <button class="btn ghost" type="button" :disabled="loading" @click="reload">
           <RefreshCw :size="15" aria-hidden="true" />
@@ -28,10 +29,18 @@
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px; gap: 10px">
           <div style="max-width: 320px; flex: 1">
-            <AppSelect :model-value="scope" :options="scopeOptions" aria-label="词典范围" @update:model-value="scope = $event; reload()" />
+            <AppSelect :model-value="scope" :options="scopeOptions" aria-label="笔记本范围" @update:model-value="scope = $event; reload()" />
+          </div>
+          <div style="max-width: 180px">
+            <AppSelect
+              :model-value="kind"
+              :options="kindFilterOptions"
+              aria-label="笔记类型"
+              @update:model-value="kind = $event; reload()"
+            />
           </div>
           <div class="input-group" style="flex: 1; max-width: 320px">
-            <input v-model="query" class="input" placeholder="按词条 / 释义搜索…" @keydown.enter="reload" />
+            <input v-model="query" class="input" placeholder="按标题 / 正文搜索…" @keydown.enter="reload" />
           </div>
           <button class="btn ghost small" type="button" :disabled="loading" @click="reload">搜索</button>
           <label class="cluster" style="gap: 6px; font-size: 12.5px">
@@ -47,12 +56,13 @@
             class="log-row"
             role="button"
             tabindex="0"
-            :aria-label="`查看词条 ${entry.term}`"
+            :aria-label="`查看笔记 ${entry.term}`"
             @click="openDetail(entry)"
             @keydown.enter="openDetail(entry)"
           >
             <div class="log-main">
               <div class="cluster" style="gap: 6px; margin-bottom: 2px">
+                <span class="badge kind">{{ kindLabel(entry.kind) }}</span>
                 <strong>{{ entry.term }}</strong>
                 <span v-for="alias in entry.aliases ?? []" :key="alias" class="badge">{{ alias }}</span>
                 <span v-if="entry.status === 'deleted'" class="badge err">已作废</span>
@@ -69,13 +79,13 @@
         </div>
         <EmptyState
           v-else-if="!loading"
-          :title="scopes.length === 0 ? '词典还是空的' : query ? '没有匹配的词条' : '这本词典还没有条目'"
+          :title="scopes.length === 0 ? '笔记本还是空的' : query ? '没有匹配的笔记' : '这本笔记还没有条目'"
           :description="
             scopes.length === 0
               ? '群里有人解释一个梗、黑话或外号时，机器人会自己把它记下来。'
               : query
                 ? '换个关键词试试。'
-                : '也可以直接点「新增词条」手动教它一个。'
+                : '也可以直接点「新增笔记」手动记一条。'
           "
         />
         <div v-else class="stack">
@@ -88,32 +98,39 @@
     <Modal v-if="editing" :title="editingTitle" wide @close="closeEditor">
       <div class="stack" style="gap: 14px">
         <div class="field">
-          <label for="glossary-term">词条</label>
-          <input id="glossary-term" v-model="form.term" class="input" :disabled="!creating" placeholder="例如：带薪拉屎" />
-          <span v-if="creating" class="hint">词条建好之后不能改名；改名等于换一个词，应当新建。</span>
+          <label for="notebook-kind">类型</label>
+          <AppSelect id="notebook-kind" v-model="form.kind" :options="kindOptions" :disabled="!creating" />
+          <span class="hint">{{ kindHint }}</span>
         </div>
         <div class="field">
-          <label for="glossary-meaning">释义</label>
+          <label for="notebook-term">{{ isTerm ? "词条" : "标题" }}</label>
+          <input id="notebook-term" v-model="form.term" class="input" :disabled="!creating" :placeholder="titlePlaceholder" />
+          <span v-if="creating" class="hint">建好之后不能改标题；改标题等于换一条笔记，应当新建。</span>
+        </div>
+        <div class="field">
+          <label for="notebook-meaning">{{ isTerm ? "释义" : "正文" }}</label>
           <textarea
-            id="glossary-meaning"
+            id="notebook-meaning"
             v-model="form.meaning"
             class="input"
             rows="3"
-            placeholder="它在群里到底指什么，是褒是贬，谁在用"
+            :placeholder="contentPlaceholder"
           ></textarea>
         </div>
         <div class="field">
-          <label for="glossary-aliases">别名</label>
-          <input id="glossary-aliases" v-model="form.aliases" class="input" placeholder="同义的写法或缩写，用逗号分隔" />
-          <span class="hint">别名和词条一样参与自动命中。</span>
+          <label for="notebook-aliases">{{ isTerm ? "别名" : "触发词" }}</label>
+          <input id="notebook-aliases" v-model="form.aliases" class="input" :placeholder="keywordPlaceholder" />
+          <!-- 非词条的标题不会原样出现在聊天里，没有触发词基本命不中。这句必须说清楚，
+               否则用户会记一堆永远想不起来的笔记。 -->
+          <span class="hint">{{ keywordHint }}</span>
         </div>
         <div class="field">
-          <label for="glossary-example">例句</label>
-          <input id="glossary-example" v-model="form.example" class="input" placeholder="可选：一句能体现用法的话" />
+          <label for="notebook-example">例子</label>
+          <input id="notebook-example" v-model="form.example" class="input" placeholder="可选：一句能体现用法或场景的话" />
         </div>
         <div class="field">
-          <label for="glossary-note">修订说明</label>
-          <input id="glossary-note" v-model="form.note" class="input" placeholder="可选：这次改了什么，会记进修订记录" />
+          <label for="notebook-note">修订说明</label>
+          <input id="notebook-note" v-model="form.note" class="input" placeholder="可选：这次改了什么，会记进修订记录" />
         </div>
 
         <div v-if="detail && !creating" class="stack" style="gap: 8px">
@@ -162,15 +179,17 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ChevronRight, Plus, RefreshCw } from "@lucide/vue";
 import {
-  deleteGlossaryEntry,
-  getGlossaryEntry,
+  deleteNotebookEntry,
+  getNotebookEntry,
   getBotProfileConfig,
   listBotGroups,
-  listGlossary,
-  restoreGlossaryEntry,
-  saveGlossaryEntry,
-  type GlossaryEntry,
-  type GlossaryScopeSummary
+  listNotebook,
+  restoreNotebookEntry,
+  saveNotebookEntry,
+  type NotebookEntry,
+  type NotebookScopeSummary,
+  type NotebookKind,
+  type NotebookKindOption
 } from "../api";
 import { formatRelative, formatTime } from "../format";
 import { botScope } from "../bot-scope";
@@ -180,8 +199,8 @@ import AppSelect from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 
-const scopes = ref<GlossaryScopeSummary[]>([]);
-const entries = ref<GlossaryEntry[]>([]);
+const scopes = ref<NotebookScopeSummary[]>([]);
+const entries = ref<NotebookEntry[]>([]);
 const scope = ref("");
 const query = ref("");
 const includeDeleted = ref(false);
@@ -189,14 +208,62 @@ const loading = ref(false);
 const saving = ref(false);
 const editing = ref(false);
 const creating = ref(false);
-const detail = ref<GlossaryEntry | null>(null);
+const detail = ref<NotebookEntry | null>(null);
 const groupNames = ref<Record<string, string>>({});
 const sharedScope = ref(false);
 const profileNames = ref<Record<string, string>>({});
 
-const form = reactive({ term: "", meaning: "", aliases: "", example: "", note: "" });
+const form = reactive({ kind: "term" as NotebookKind, term: "", meaning: "", aliases: "", example: "", note: "" });
 
-const editingTitle = computed(() => (creating.value ? "新增词条" : `词条：${form.term}`));
+// 类型清单跟着后端走。前端自己再维护一份的话，后端加类型时这里必然漏掉。
+const kinds = ref<NotebookKindOption[]>([]);
+const kind = ref("");
+
+const kindOptions = computed(() => kinds.value.map((item) => ({ value: item.value, label: item.label })));
+const kindFilterOptions = computed(() => [{ value: "", label: "全部类型" }, ...kindOptions.value]);
+
+function kindLabel(value: string): string {
+  return kinds.value.find((item) => item.value === value)?.label ?? value ?? "词条";
+}
+
+const isTerm = computed(() => form.kind === "term");
+
+const kindHint = computed(() => {
+  switch (form.kind) {
+    case "fact":
+      return "群规、约定、谁负责什么这类事实。";
+    case "preference":
+      return "某人喜欢什么、忌口什么、别碰什么话题。";
+    case "event":
+      return "发生过的事，日后还会被提起的那种。";
+    case "todo":
+      return "答应了还没做完的事。";
+    case "person":
+      return "这个人是谁、和群里什么关系。";
+    default:
+      return "群里的梗、黑话、缩写、外号。类型建好之后不能改。";
+  }
+});
+
+const titlePlaceholder = computed(() =>
+  isTerm.value ? "例如：带薪拉屎" : "一句概括，例如：群规：晚上十点后不要连续刷屏"
+);
+
+const contentPlaceholder = computed(() =>
+  isTerm.value ? "它在群里到底指什么，是褒是贬，谁在用" : "把这条记清楚，一两句话"
+);
+
+const keywordPlaceholder = computed(() =>
+  isTerm.value ? "同义的写法或缩写，用逗号分隔" : "聊到什么词该想起这条，用逗号分隔"
+);
+
+const keywordHint = computed(() =>
+  isTerm.value
+    ? "别名和词条一样参与自动命中。"
+    : "标题不会原样出现在聊天里，命中全靠触发词——不填的话这条笔记基本想不起来。"
+);
+
+const editingTitle = computed(() => (creating.value ? "新增笔记" : `${kindLabel(form.kind)}：${form.term}`));
 const canSave = computed(() => form.term.trim() !== "" && form.meaning.trim() !== "");
 
 // 作用域键是内部格式（<配置档>:group:123 / <配置档>:private:456 / global），直接
@@ -208,14 +275,14 @@ const canSave = computed(() => form.term.trim() !== "" && form.meaning.trim() !=
 const scopeOptions = computed(() => scopes.value.map((item) => ({ value: item.scope_key, label: `${scopeLabel(item.scope_key)}（${item.active_count}）` })));
 
 function scopeLabel(key: string): string {
-  // 升级前那本所有机器人共用的词典。迁移之后通常已经空了，还留着是因为读取仍会
+  // 升级前那本所有机器人共用的笔记。迁移之后通常已经空了，还留着是因为读取仍会
   // 兜底看它一眼，藏起来会让人找不到没搬走的词条。
   if (key === "global") {
-    return "全局词典（旧版共用）";
+    return "全局笔记本（旧版共用）";
   }
   if (key.startsWith("bot:")) {
     const owner = key.slice("bot:".length);
-    return multipleNamespaces.value ? `全局词典 · ${profileLabel(owner)}` : "全局词典";
+    return multipleNamespaces.value ? `全局笔记本 · ${profileLabel(owner)}` : "全局笔记本";
   }
   const parts = key.split(":");
   const id = parts[parts.length - 1] ?? "";
@@ -259,7 +326,7 @@ const multipleNamespaces = computed(() => {
   return seen.size > 1;
 });
 
-// 群名和配置档名都是为了让下拉框可读，取不到就退回 ID，不阻塞词典本身。
+// 群名和配置档名都是为了让下拉框可读，取不到就退回 ID，不阻塞笔记本本身。
 async function loadScopeNames(): Promise<void> {
   try {
     const response = await listBotGroups();
@@ -271,11 +338,11 @@ async function loadScopeNames(): Promise<void> {
     }
     groupNames.value = names;
   } catch {
-    // 群列表拿不到不影响词典，标签退回群号。
+    // 群列表拿不到不影响笔记本，标签退回群号。
   }
   try {
     const config = await getBotProfileConfig();
-    sharedScope.value = config.glossary_shared_scope_enabled ?? false;
+    sharedScope.value = config.notebook_shared_scope_enabled ?? false;
     const names: Record<string, string> = {};
     for (const profile of config.profiles ?? []) {
       if (profile.id && profile.name) {
@@ -291,18 +358,20 @@ async function loadScopeNames(): Promise<void> {
 async function reload(): Promise<void> {
   loading.value = true;
   try {
-    const response = await listGlossary(scope.value, query.value.trim(), includeDeleted.value, botScope.value);
+    const response = await listNotebook(scope.value, query.value.trim(), includeDeleted.value, botScope.value, kind.value);
     scopes.value = response.scopes;
     scope.value = response.scope;
     entries.value = response.entries;
+    kinds.value = response.kinds ?? [];
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "加载词典失败");
+    toastError(error instanceof Error ? error.message : "加载笔记本失败");
   } finally {
     loading.value = false;
   }
 }
 
-function resetForm(entry: GlossaryEntry | null): void {
+function resetForm(entry: NotebookEntry | null): void {
+  form.kind = (entry?.kind ?? "term") as NotebookKind;
   form.term = entry?.term ?? "";
   form.meaning = entry?.meaning ?? "";
   form.aliases = (entry?.aliases ?? []).join("，");
@@ -317,14 +386,14 @@ function openCreate(): void {
   resetForm(null);
 }
 
-async function openDetail(entry: GlossaryEntry): Promise<void> {
+async function openDetail(entry: NotebookEntry): Promise<void> {
   creating.value = false;
   editing.value = true;
   detail.value = entry;
   resetForm(entry);
   try {
-    // 列表不带修订记录，详情才带：翻词典时最想知道的就是「什么时候被改成现在这个意思的」。
-    detail.value = await getGlossaryEntry(entry.scope_key, entry.term);
+    // 列表不带修订记录，详情才带：翻笔记时最想知道的就是「什么时候被改成现在这个意思的」。
+    detail.value = await getNotebookEntry(entry.scope_key, entry.term);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "加载词条详情失败");
   }
@@ -346,8 +415,9 @@ function parsedAliases(): string[] {
 async function save(): Promise<void> {
   saving.value = true;
   try {
-    await saveGlossaryEntry({
+    await saveNotebookEntry({
       scope: detail.value?.scope_key || scope.value,
+      kind: form.kind,
       term: form.term.trim(),
       aliases: parsedAliases(),
       meaning: form.meaning.trim(),
@@ -379,7 +449,7 @@ async function removeEntry(): Promise<void> {
   }
   saving.value = true;
   try {
-    await deleteGlossaryEntry(detail.value.scope_key, detail.value.term, form.note.trim());
+    await deleteNotebookEntry(detail.value.scope_key, detail.value.term, form.note.trim());
     toastSuccess("词条已作废");
     closeEditor();
     await reload();
@@ -396,7 +466,7 @@ async function restoreEntry(): Promise<void> {
   }
   saving.value = true;
   try {
-    await restoreGlossaryEntry(detail.value.scope_key, detail.value.term);
+    await restoreNotebookEntry(detail.value.scope_key, detail.value.term);
     toastSuccess("词条已恢复");
     closeEditor();
     await reload();
@@ -407,7 +477,7 @@ async function restoreEntry(): Promise<void> {
   }
 }
 
-// 换了机器人，作用域清单和全局词典都是另一套；选中的作用域多半属于上一台，
+// 换了机器人，作用域清单和全局笔记本都是另一套；选中的作用域多半属于上一台，
 // 清空让后端重新挑一个默认的。
 watch(botScope, () => {
   scope.value = "";
@@ -419,3 +489,14 @@ onMounted(() => {
   void reload();
 });
 </script>
+
+<style scoped>
+/* 类型标记要和触发词一眼分得开：它们挨在一起，同样的样式会让人把类型当成又一个
+   触发词，而这两者的含义完全不同。 */
+.badge.kind {
+  background: var(--accent-soft, rgba(0, 0, 0, 0.05));
+  border-color: transparent;
+  color: var(--accent, inherit);
+  font-weight: 600;
+}
+</style>

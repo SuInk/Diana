@@ -359,9 +359,9 @@ type BotConfig struct {
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
-	// GlossarySharedScopeEnabled 让词典跨群共用一本：新词条写进全局作用域，
+	// NotebookSharedScopeEnabled 让笔记本跨群共用一本：新条目写进全局作用域，
 	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
-	GlossarySharedScopeEnabled   *bool           `json:"glossary_shared_scope_enabled,omitempty"`
+	NotebookSharedScopeEnabled   *bool           `json:"notebook_shared_scope_enabled,omitempty"`
 	PromptInjectTime             *bool           `json:"prompt_inject_time,omitempty"`
 	PromptInjectPlaintextRules   *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
 	PromptInjectGroupSender      *bool           `json:"prompt_inject_group_sender,omitempty"`
@@ -387,7 +387,7 @@ type BotConfig struct {
 	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
+	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
 	MaxContextTokens int64 `json:"max_context_tokens,omitempty"`
 	// RecentHistoryTokenBudget 限定正式回复提示词里近期聊天历史最多占多少 token。
@@ -403,11 +403,11 @@ type BotConfig struct {
 	LongTermMemoryEnabled    *bool `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled  *bool `json:"cross_group_memory_enabled,omitempty"`
 	// 词典分词要把整个分词词典常驻内存（约 130MB），所以默认关。开启立即生效
-	// （后台加载词典，期间选词退回 n-gram）；关闭要重启进程才真正生效——
-	// 词典占用的内存本来也只有重启才能归还。
+	// （后台加载笔记本，期间选词退回 n-gram）；关闭要重启进程才真正生效——
+	// 笔记本占用的内存本来也只有重启才能归还。
 	DictSegmentEnabled *bool `json:"dict_segment_enabled,omitempty"`
 	// 语义检索:消息经 embedding 模型转成向量,检索时按余弦相似度召回并与
-	// 词面结果融合。需要 embedding 分组的 LLM 配置档,默认关。
+	// 词面结果融合。需要 embedding 分组的提供商配置档,默认关。
 	SemanticSearchEnabled      *bool         `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance       float64       `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold    float64       `json:"proactive_reply_threshold,omitempty"`
@@ -439,7 +439,6 @@ type ModelRole struct {
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
-	allowed := map[string]bool{"chat": true, "vision": true, "intent": true, "image": true}
 	out := map[string]ModelRole{}
 	for key, role := range roles {
 		key = strings.ToLower(strings.TrimSpace(key))
@@ -458,7 +457,8 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 		if role.Group != "" {
 			role.ProfileID = ""
 		}
-		if allowed[key] && ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != "" {
+		// 可绑定的键从 4 个扩到「5 个分组 + 17 个用途」，见 model_binding.go。
+		if isModelBindingKey(key) && ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != "" {
 			out[key] = role
 		}
 	}
@@ -621,9 +621,9 @@ type ConfigPayload struct {
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
-	// GlossarySharedScopeEnabled 让词典跨群共用一本：新词条写进全局作用域，
+	// NotebookSharedScopeEnabled 让笔记本跨群共用一本：新条目写进全局作用域，
 	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
-	GlossarySharedScopeEnabled   *bool           `json:"glossary_shared_scope_enabled,omitempty"`
+	NotebookSharedScopeEnabled   *bool           `json:"notebook_shared_scope_enabled,omitempty"`
 	ProactiveReplyRouterPrompt   string          `json:"proactive_reply_router_prompt,omitempty"`
 	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
 	MaxInputChars                int             `json:"max_input_chars,omitempty"`
@@ -639,7 +639,7 @@ type ConfigPayload struct {
 	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示不额外限制，跟随 LLM 配置档的窗口。它只能收紧不能放宽：配置档说
+	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
 	MaxContextTokens           int64       `json:"max_context_tokens,omitempty"`
 	RecentHistoryTokenBudget   int64       `json:"recent_history_token_budget,omitempty"`
@@ -1129,7 +1129,7 @@ func DefaultBotConfig() BotConfig {
 		LLMIdentityMaskingEnabled:      boolPointer(true),
 		BotReplyLoopDetectionEnabled:   boolPointer(true),
 		ReplyAccountSafetyAuditEnabled: boolPointer(false),
-		GlossarySharedScopeEnabled:     boolPointer(false),
+		NotebookSharedScopeEnabled:     boolPointer(false),
 		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
@@ -1296,8 +1296,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ReplyAccountSafetyAuditEnabled == nil {
 		cfg.ReplyAccountSafetyAuditEnabled = boolPointer(false)
 	}
-	if cfg.GlossarySharedScopeEnabled == nil {
-		cfg.GlossarySharedScopeEnabled = boolPointer(false)
+	if cfg.NotebookSharedScopeEnabled == nil {
+		cfg.NotebookSharedScopeEnabled = boolPointer(false)
 	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
@@ -1538,7 +1538,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ModelRoles:                     normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:   copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyAccountSafetyAuditEnabled: copyBoolPointer(cfg.ReplyAccountSafetyAuditEnabled),
-		GlossarySharedScopeEnabled:     copyBoolPointer(cfg.GlossarySharedScopeEnabled),
+		NotebookSharedScopeEnabled:     copyBoolPointer(cfg.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:     cfg.ProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           cfg.ProactiveReplyPrompt,
 		MaxInputChars:                  cfg.MaxInputChars,
@@ -1700,7 +1700,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ModelRoles:                     normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled:   copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyAccountSafetyAuditEnabled: copyBoolPointer(payload.ReplyAccountSafetyAuditEnabled),
-		GlossarySharedScopeEnabled:     copyBoolPointer(payload.GlossarySharedScopeEnabled),
+		NotebookSharedScopeEnabled:     copyBoolPointer(payload.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:     payload.ProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           payload.ProactiveReplyPrompt,
 		MaxInputChars:                  payload.MaxInputChars,
