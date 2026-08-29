@@ -213,7 +213,7 @@ const viewComponents: Record<ViewID, Component> = {
   plugins: PluginsView,
   groups: GroupsView,
   users: MemoryView,
-  glossary: MemoryView,
+  notebook: MemoryView,
   logs: RecordsView,
   settings: SettingsView
 };
@@ -303,7 +303,7 @@ const viewTitles: Record<ViewID, string> = {
   plugins: "插件",
   groups: "群管理",
   users: "记忆",
-  glossary: "记忆",
+  notebook: "记忆",
   logs: "运行记录",
   settings: "设置"
 };
@@ -337,7 +337,7 @@ const sections = computed(() => navSections());
 
 const viewTitle = computed(() => viewTitles[currentView.value]);
 
-// 日志之于「记录」、词典之于「记忆」都是页内的一档，停在那一档时侧边栏要继续
+// 日志之于「记录」、笔记本之于「记忆」都是页内的一档，停在那一档时侧边栏要继续
 // 亮着它所属的那一项，别让人以为自己掉出了导航。归属关系写在 navItems 的 covers
 // 里，这里不再逐个视图硬编码。
 function isActiveNav(id: ViewID): boolean {

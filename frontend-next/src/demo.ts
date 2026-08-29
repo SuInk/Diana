@@ -12,8 +12,8 @@ import type {
   BotGroupSummary,
   BotPlatform,
   BotStatus,
-  GlossaryEntry,
-  GlossaryScopeSummary,
+  NotebookEntry,
+  NotebookScopeSummary,
   ResolverDependency,
   StatsHourBucket,
   StatsSnapshot,
@@ -184,10 +184,21 @@ const demoUsers: UserMemoryProfile[] = [
   }
 ];
 
-// 演示模式的词典：机器人自己收下的梗长什么样，比一段说明更说明问题。
-const demoGlossary: GlossaryEntry[] = [
+// 类型清单由后端给出，演示模式照着给一份同样的。
+const demoNotebookKinds = [
+  { value: "term", label: "词条" },
+  { value: "fact", label: "事实" },
+  { value: "preference", label: "偏好" },
+  { value: "event", label: "事件" },
+  { value: "todo", label: "待办" },
+  { value: "person", label: "人物" }
+];
+
+// 演示模式的笔记本：机器人自己记下的东西长什么样，比一段说明更说明问题。
+// 六种类型各给一条，让人一眼看出它不只是本词典。
+const demoNotebook: NotebookEntry[] = [
   {
-    id: "glossary-1", scope_key: "group:100200301", term: "带薪拉屎", aliases: ["DXLS"],
+    id: "notebook-1", scope_key: "group:100200301", kind: "term", term: "带薪拉屎", aliases: ["DXLS"],
     meaning: "上班时间摸鱼，群里用来自嘲，没有恶意", example: "今天带薪拉屎半小时",
     author_name: "青禾", usage_count: 27, last_used_at: before(3), version: 2, status: "active",
     created_at: before(9000), updated_at: before(120),
@@ -197,33 +208,70 @@ const demoGlossary: GlossaryEntry[] = [
     ]
   },
   {
-    id: "glossary-2", scope_key: "group:100200301", term: "鸽", aliases: ["咕咕"],
+    id: "notebook-2", scope_key: "group:100200301", kind: "term", term: "鸽", aliases: ["咕咕"],
     meaning: "放人鸽子、说好的事没做；本群多用于调侃谁又拖了发布",
     author_name: "星野", usage_count: 41, last_used_at: before(20), version: 1, status: "active",
     created_at: before(7200), updated_at: before(7200), revisions: []
   },
   {
-    id: "glossary-3", scope_key: "group:100200418", term: "手冲", aliases: [],
+    id: "notebook-3", scope_key: "group:100200418", kind: "term", term: "手冲", aliases: [],
     meaning: "手冲咖啡，这个群里只指咖啡", usage_count: 6, last_used_at: before(900),
     version: 1, status: "active", created_at: before(5400), updated_at: before(5400), revisions: []
   },
-  // 全局词典每台机器人各一本：同一个梗在两台那里可以有不同的记法。
+  // 全局笔记本每台机器人各一本：同一个梗在两台那里可以有不同的记法。
   {
-    id: "glossary-4", scope_key: "bot:bot-onebot", term: "开摆", aliases: ["摆了"],
+    id: "notebook-4", scope_key: "bot:bot-onebot", kind: "term", term: "开摆", aliases: ["摆了"],
     meaning: "放弃挣扎、随它去，群里多用于自嘲进度", usage_count: 18, last_used_at: before(60),
     version: 1, status: "active", created_at: before(6000), updated_at: before(6000), revisions: []
   },
   {
-    id: "glossary-5", scope_key: "bot:bot-telegram", term: "开摆", aliases: [],
+    id: "notebook-5", scope_key: "bot:bot-telegram", kind: "term", term: "开摆", aliases: [],
     meaning: "这台机器人上记的是英文频道的用法：give up and chill",
     usage_count: 4, last_used_at: before(400),
     version: 1, status: "active", created_at: before(4200), updated_at: before(4200), revisions: []
+  },
+  // 以下几条是词典升级成笔记本之后才记得下的东西：标题不会原样出现在聊天里，
+  // 靠触发词命中。
+  {
+    id: "notebook-6", scope_key: "group:100200301", kind: "fact",
+    term: "群规：晚上十点后不要连续刷屏", aliases: ["群规", "刷屏", "刷频"],
+    meaning: "管理员定的，十点后有事私聊，不在群里连发",
+    author_name: "青禾", usage_count: 12, last_used_at: before(240),
+    version: 1, status: "active", created_at: before(5000), updated_at: before(5000), revisions: []
+  },
+  {
+    id: "notebook-7", scope_key: "group:100200301", kind: "preference",
+    term: "星野不吃香菜", aliases: ["香菜", "星野", "点菜", "聚餐"],
+    meaning: "点外卖和聚餐都要记得备注去香菜，之前踩过两次",
+    author_name: "控制台", usage_count: 8, last_used_at: before(1500),
+    version: 1, status: "active", created_at: before(4800), updated_at: before(4800), revisions: []
+  },
+  {
+    id: "notebook-8", scope_key: "group:100200301", kind: "todo",
+    term: "给群里买周年蛋糕", aliases: ["蛋糕", "周年", "庆祝"],
+    meaning: "答应了这个月底之前订好，还没订",
+    author_name: "青禾", usage_count: 3, last_used_at: before(600),
+    version: 1, status: "active", created_at: before(1200), updated_at: before(1200), revisions: []
+  },
+  {
+    id: "notebook-9", scope_key: "group:100200301", kind: "event",
+    term: "上次线下聚会在 7 月，去了七个人", aliases: ["聚会", "线下", "面基"],
+    meaning: "在城西那家火锅，星野迟到了一小时，这事群里还在拿来调侃",
+    usage_count: 5, last_used_at: before(2400),
+    version: 1, status: "active", created_at: before(3600), updated_at: before(3600), revisions: []
+  },
+  {
+    id: "notebook-10", scope_key: "bot:bot-onebot", kind: "person",
+    term: "青禾是这个群的管理员", aliases: ["青禾", "管理员", "群主"],
+    meaning: "日常管群规和活动，技术问题找他没用，他自己也不写代码",
+    usage_count: 15, last_used_at: before(90),
+    version: 1, status: "active", created_at: before(8000), updated_at: before(8000), revisions: []
   }
 ];
 
-function demoGlossaryScopes(): GlossaryScopeSummary[] {
-  const scopes = new Map<string, GlossaryScopeSummary>();
-  for (const entry of demoGlossary) {
+function demoNotebookScopes(): NotebookScopeSummary[] {
+  const scopes = new Map<string, NotebookScopeSummary>();
+  for (const entry of demoNotebook) {
     const summary = scopes.get(entry.scope_key) ?? { scope_key: entry.scope_key, active_count: 0, deleted_count: 0, updated_at: entry.updated_at };
     if (entry.status === "active") summary.active_count += 1; else summary.deleted_count += 1;
     scopes.set(entry.scope_key, summary);
@@ -578,32 +626,34 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ profile: user, favorability_changes: demoFavorabilityChanges[user.user_id] ?? [] });
   }
 
-  if (path === "/api/assistant/glossary" && method === "GET") {
+  if (path === "/api/assistant/notebook" && method === "GET") {
     const profile = url.searchParams.get("profile") ?? "";
     // 排除法和后端一致：只把明确属于别的机器人的作用域藏起来。
     const others = assistantConfig.profiles?.map((item) => item.id).filter((id) => id && id !== profile) ?? [];
-    const scopes = demoGlossaryScopes().filter(
+    const scopes = demoNotebookScopes().filter(
       (item) => !profile || !others.some((id) => item.scope_key === `bot:${id}` || item.scope_key.startsWith(`${id}:`))
     );
     const scope = url.searchParams.get("scope") || scopes[0]?.scope_key || "";
     const keyword = (url.searchParams.get("q") ?? "").trim();
     const includeDeleted = url.searchParams.get("include_deleted") === "true";
-    const entries = demoGlossary
+    const kind = (url.searchParams.get("kind") ?? "").trim();
+    const entries = demoNotebook
       .filter((entry) => entry.scope_key === scope)
       .filter((entry) => includeDeleted || entry.status === "active")
+      .filter((entry) => !kind || entry.kind === kind)
       .filter((entry) => !keyword || entry.term.includes(keyword) || entry.meaning.includes(keyword))
       .map((entry) => ({ ...entry, revisions: undefined }));
-    return json({ scopes, scope, entries, query: keyword || undefined });
+    return json({ scopes, scope, entries, query: keyword || undefined, kind: kind || undefined, kinds: demoNotebookKinds });
   }
-  if (path === "/api/assistant/glossary/entry") {
+  if (path === "/api/assistant/notebook/entry") {
     const scope = url.searchParams.get("scope") ?? "";
     const term = url.searchParams.get("term") ?? "";
-    const entry = demoGlossary.find((item) => item.scope_key === scope && item.term === term);
-    if (!entry) return json({ error: "词条不存在" }, 404);
+    const entry = demoNotebook.find((item) => item.scope_key === scope && item.term === term);
+    if (!entry) return json({ error: "笔记不存在" }, 404);
     return json(entry);
   }
-  if (path.startsWith("/api/assistant/glossary") && method === "POST") {
-    return json({ error: "演示模式不写入词典；正式部署里这里会新增、修订或作废词条。" }, 403);
+  if (path.startsWith("/api/assistant/notebook") && method === "POST") {
+    return json({ error: "演示模式不写入笔记本；正式部署里这里会新增、修订或作废笔记。" }, 403);
   }
 
   if (path === "/api/assistant/events") {

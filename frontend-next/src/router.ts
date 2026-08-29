@@ -12,7 +12,7 @@ export type ViewID =
   | "bot"
   | "groups"
   | "users"
-  | "glossary"
+  | "notebook"
   | "plugins"
   | "logs"
   | "settings";
@@ -51,7 +51,7 @@ export const navItems: NavItem[] = [
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
   { id: "plugins", label: "插件", hint: "插件安装与设置", group: "setup" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "operate" },
-  { id: "users", label: "记忆", hint: "机器人记住的人与词", group: "operate", covers: ["glossary"] },
+  { id: "users", label: "记忆", hint: "机器人记住的人和事", group: "operate", covers: ["notebook"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
   { id: "events", label: "记录", hint: "消息处理、回复决策与运行日志", group: "operate", covers: ["logs"] },
   { id: "settings", label: "设置", hint: "主题与系统更新" }
@@ -82,7 +82,7 @@ export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   return sections;
 }
 
-const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "llm", "bot", "groups", "users", "glossary", "plugins", "logs", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "llm", "bot", "groups", "users", "notebook", "plugins", "logs", "settings"]);
 
 function parseHash(): ViewID {
   const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0] ?? "";
