@@ -29,6 +29,19 @@ func withTransientLLMRetry(provider LLMProvider, enabled bool) LLMProvider {
 	return &transientRetryLLMProvider{provider: provider}
 }
 
+// registryLLMProvider keeps Registry-backed calls on the same retry policy as
+// legacy profile providers. Callers such as one-shot routing can still opt out.
+func registryLLMProvider(registry *llm.ProviderRegistry, selection llm.AgentModelConfig, retryTransient bool) LLMProvider {
+	return withTransientLLMRetry(llm.RegistryClient{Registry: registry, Selection: selection}, retryTransient)
+}
+
+func unwrapTransientLLMRetry(provider LLMProvider) LLMProvider {
+	if wrapped, ok := provider.(*transientRetryLLMProvider); ok && wrapped != nil && wrapped.provider != nil {
+		return wrapped.provider
+	}
+	return provider
+}
+
 func (p *transientRetryLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	return generateWithTransientRetry(ctx, p.provider, req, true)
 }

@@ -24,8 +24,8 @@ func (p *StickerPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          stickerPluginID,
 		Name:        "表情包发送",
-		Version:     "0.1.0",
-		Description: "启用内置 Agent 后，从当前群或私聊历史中检索已经缓存的表情包；Agent 先查看候选名称与描述，再选择一张发送。不会跨会话搬运图片。",
+		Version:     "0.1.1",
+		Description: "启用内置 Agent 后，从当前群或私聊历史中检索已经缓存的表情包；Agent 按当前语义查看候选名称与图片简介，再选择一张发送。支持识图时会为缺少简介的候选按需补充简介。不会跨会话搬运图片。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"message:read", "message:send"},
