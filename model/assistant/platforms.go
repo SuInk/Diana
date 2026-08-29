@@ -9,17 +9,17 @@ import (
 )
 
 const (
-	PlatformOneBotV11 = "onebot-v11"
-	PlatformTelegram  = "telegram"
+	PlatformOneBotV11  = "onebot-v11"
+	PlatformTelegram   = "telegram"
 	PlatformQQOfficial = "qq-official"
 	PlatformDingTalk   = "dingtalk"
 	PlatformFeishu     = "feishu"
 	PlatformWeCom      = "wecom"
 
-	ProtocolOneBotV11    = "onebot-v11-reverse-ws"
-	ProtocolTelegramBot  = "telegram-bot-api"
-	ProtocolQQOfficialWS = "qq-official-gateway-ws"
-	ProtocolDingTalkWS   = "dingtalk-stream-ws"
+	ProtocolOneBotV11     = "onebot-v11-reverse-ws"
+	ProtocolTelegramBot   = "telegram-bot-api"
+	ProtocolQQOfficialWS  = "qq-official-gateway-ws"
+	ProtocolDingTalkWS    = "dingtalk-stream-ws"
 	ProtocolFeishuWebhook = "feishu-event-callback"
 	ProtocolWeComWebhook  = "wecom-event-callback"
 
