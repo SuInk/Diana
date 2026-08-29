@@ -99,6 +99,11 @@ run `uninstall.sh` or `uninstall.ps1` directly from the installation directory.
 diana logs                 # Last 100 lines
 diana logs --lines 300     # Select the line count
 diana logs -f              # Follow until Ctrl+C
+diana status               # Show health, version, address, and uptime
+diana restart              # Restart the installer-managed service
+diana doctor               # Check config, paths, assets, and service health
+diana config path          # Print the active config path
+diana config check         # Validate YAML and bot/LLM sections
 diana version              # Print the current version
 diana help                 # Show command help
 ```
