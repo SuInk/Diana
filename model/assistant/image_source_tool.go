@@ -91,6 +91,14 @@ func (t *dianaImageSourceTool) Run(ctx context.Context, input map[string]any) (s
 		}), nil
 	}
 
+	if limit := cfg.maxUploadBytes(); int64(len(image)) > limit {
+		return marshalImageSourceResult(dianaImageSourceResult{
+			MessageID: resolvedID,
+			Message: fmt.Sprintf("这张图 %.1f MB，超过了 %d MB 的上传上限，没有发去反查。",
+				float64(len(image))/(1024*1024), cfg.MaxUploadMB),
+		}), nil
+	}
+
 	searchCtx, cancel := context.WithTimeout(ctx, cfg.timeout())
 	defer cancel()
 	matches, notes := t.plugin.search(searchCtx, cfg, image)
@@ -222,6 +230,8 @@ func imageSourceCacheKey(digest string, cfg imageSourceConfig) string {
 		fmt.Sprintf("%v", cfg.TraceMoeEnabled),
 		fmt.Sprintf("%.0f", cfg.MinSimilarity),
 		fmt.Sprintf("%d", cfg.MaxResults),
+		cfg.SauceNAOURL,
+		cfg.TraceMoeURL,
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])
