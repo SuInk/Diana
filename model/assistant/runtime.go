@@ -210,6 +210,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "用户直接回复了机器人，语义路由判断应继续回答", true
 	case "replied_proactive", "replied_proactive_batch":
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
+	case "merged_into_reply":
+		return "not_replied", "消息已并入同一用户正在生成的回复，不再单独回答", false
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
 	case "error_replied_content_policy":
@@ -283,6 +285,8 @@ type Runtime struct {
 	replyInterruptMu          sync.Mutex
 	recalledInbound           map[string]time.Time
 	latestDirectedInbound     map[string]directedInboundMark
+	directReplySeq            uint64
+	activeDirectReplies       map[string]*activeDirectReply
 	cancel                    context.CancelFunc
 	runCtx                    context.Context
 	running                   bool
@@ -529,6 +533,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		replyRefusalByUser:    map[string]replyRefusalState{},
 		botReplyLoopByKey:     map[string]botReplyLoopState{},
 		proactiveBatches:      map[string]*proactiveReplyBatch{},
+		activeDirectReplies:   map[string]*activeDirectReply{},
 		proactiveBatchWindow:  defaultProactiveReplyBatchWindow,
 		proactiveBatchMaxWait: defaultProactiveReplyBatchMaxWait,
 		replyBatches:          map[string]*replyBatchGate{},
@@ -1628,6 +1633,13 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// Clear batches left by a runtime started before immediate proactive routing was enabled.
 		r.cancelProactiveReplyBatch(event)
 	}
+	if !handled {
+		if rootMessageID, merged := r.mergeIntoActiveDirectReply(ctx, event, text); merged {
+			event.routingReason = fmt.Sprintf("已并入同一用户正在生成的回复（触发消息 %s），不再单独判断或发送", rootMessageID)
+			r.record(r.decisionEventRecord(event, text, "merged_into_reply"))
+			return finishWithoutReply("merged_into_reply")
+		}
+	}
 	considerProactive, proactiveSkipReason := false, ""
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
@@ -1687,7 +1699,31 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
-	reply, err := r.replyTo(replyCtx, event, text)
+	if successOutcome == "replied" || successOutcome == "replied_direct_followup" {
+		var finish func()
+		replyCtx, finish = r.beginDirectReply(replyCtx, event)
+		defer finish()
+	}
+	var reply string
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		// Two regeneration opportunities cover normal typing bursts. Seal before
+		// the final attempt so an endless stream cannot starve this reply forever;
+		// later messages resume the ordinary routing path.
+		if attempt == 2 {
+			r.sealDirectReply(replyCtx)
+		}
+		attemptCtx := r.directReplyAttemptContext(replyCtx)
+		attemptEvent := event
+		if attempt > 0 {
+			attemptEvent.replyHistoryLoaded = false
+			attemptEvent.replyHistory = nil
+		}
+		reply, err = r.replyTo(attemptCtx, attemptEvent, text)
+		if !errors.Is(err, errDirectReplySupplemented) {
+			break
+		}
+	}
 	record.Duration = time.Since(start).Milliseconds()
 	// 出错也要带上：resolver 可能已经把图发出去了才在后面某步失败，这时事件页
 	// 只写「处理异常」会让人以为什么都没发。
@@ -3222,7 +3258,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 			}
 		}
-		turnCandidates := proactiveReplyTurnFromContext(ctx)
+		turnCandidates := append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
 		for _, candidate := range turnCandidates {
 			if messageID := strings.TrimSpace(candidate.Event.MessageID); messageID != "" && messageID != event.MessageID {
@@ -3268,7 +3304,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 						ContextGroup: historyGroup,
 					})
 				}
-				if directAgentDecision && historicalStillImageCount(historyEvent) > 0 {
+				if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
 					messages = append(messages, llm.Message{
 						Role:         llm.RoleUser,
 						Content:      agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent)),
@@ -3279,7 +3315,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				continue
 			}
 			historyText := historyPromptTextAt(historyEvent, event.Time)
-			if directAgentDecision && historicalStillImageCount(historyEvent) > 0 {
+			if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
 				historyText = agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent))
 			}
 			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyText, Priority: historyPriority, ContextGroup: historyGroup}
@@ -4891,7 +4927,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			return "", err
 		}
 		if ok {
-			return run(llm.RegistryClient{Registry: registry, Selection: selection})
+			return run(registryLLMProvider(registry, selection, true))
 		}
 	}
 
@@ -4948,7 +4984,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 // modelRoleForGroup 返回某个用途实际绑定的模型角色，没有专门绑定时回落到 chat 绑定。
 //
 // 回落这条是有意的：机器人绑定的是「这台机器人用哪个模型说话」。一轮对话中途多出
-// 几张图（例如 diana.history_images 把历史原图作为附件补进下一轮），用途会从 chat
+// 几张图（例如 diana.history_media 把历史原图作为附件补进下一轮），用途会从 chat
 // 变成 vision，但说话的还是同一台机器人。没有单独绑视觉模型时就该继续用它绑定的
 // 聊天模型，而不是滑到全局激活配置那份和这台机器人无关的配置上——那种切换是静默的，
 // 表现为「聊着聊着换了个模型答话」，而日志里两轮的 provider/model 都是「正常」的。
@@ -5288,7 +5324,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			return "", err
 		}
 		if ok {
-			return run(llm.RegistryClient{Registry: registry, Selection: selection})
+			return run(registryLLMProvider(registry, selection, retryTransient))
 		}
 	}
 
@@ -6823,11 +6859,15 @@ func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string
 	return agentImageHistoryPromptTextWithDescriptions(event, currentTime, nil)
 }
 
-// agentImageHistoryPromptTextWithDescriptions 在图片计数之外附上已缓存的图片描述。
-// 只有计数的占位行会让模型在被追问历史图片时无内容可依，转而编造或退化成寒暄。
+// agentImageHistoryPromptTextWithDescriptions 在媒体计数之外附上已缓存的图片和视频关键帧描述。
+// 只有计数的占位行会让模型在被追问历史媒体时无内容可依，转而编造或退化成寒暄。
 func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime int64, descriptions []string) string {
 	imageCount := historicalStillImageCount(event)
-	if imageCount == 0 {
+	videoCount := historicalVideoCount(event)
+	videoFrameCount := historicalVideoFrameCount(event)
+	audioCount := historicalAudioCount(event)
+	fileCount := historicalFileCount(event)
+	if imageCount+videoCount+videoFrameCount+audioCount+fileCount == 0 {
 		return ""
 	}
 	text := rawMessageWithoutImagePlaceholders(PlainText(event.Segments))
@@ -6846,18 +6886,78 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if text != "" {
 		line += ": " + text
 	}
-	line += fmt.Sprintf("\n【历史图片摘要】message_id=%s；image_count=%d；当前未附加原图。", messageID, imageCount)
+	line += fmt.Sprintf("\n【历史媒体摘要】message_id=%s；image_count=%d；video_count=%d；video_frame_count=%d；audio_count=%d；file_count=%d；当前未附加原图、视频帧或其他媒体原件。", messageID, imageCount, videoCount, videoFrameCount, audioCount, fileCount)
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
-	if messageID != "不可用" {
-		line += fmt.Sprintf("\n需要核对视觉细节时调用 %s，并传入 message_ids=[%q]；涉及多条消息时一次传入全部 ID。", dianaHistoryImagesToolName, messageID)
+	if messageID != "不可用" && imageCount+videoFrameCount > 0 {
+		line += fmt.Sprintf("\n需要核对图片或视频画面细节时调用 %s，并传入 message_ids=[%q]；涉及多条消息时一次传入全部 ID。", dianaHistoryImagesToolName, messageID)
 	}
 	return line
 }
 
 func historicalStillImageCount(event MessageEvent) int {
 	return len(historicalStillImageSegments(event))
+}
+
+func historicalMediaCount(event MessageEvent) int {
+	return historicalStillImageCount(event) + historicalVideoCount(event) + historicalVideoFrameCount(event) + historicalAudioCount(event) + historicalFileCount(event)
+}
+
+func historicalVideoCount(event MessageEvent) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type == "video" || (segment.Type == "file" && videoFileSegment(segment)) {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
+}
+
+func historicalVideoFrameCount(event MessageEvent) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type == "image" && strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame") {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
+}
+
+func historicalAudioCount(event MessageEvent) int {
+	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "record" })
+}
+
+func historicalFileCount(event MessageEvent) int {
+	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "file" })
+}
+
+func historicalSegmentCount(event MessageEvent, matches func(MessageSegment) bool) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if matches(segment) {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
 }
 
 // historyImageCachedDescriptions 只同步读取已有缓存；缺失描述只进入后台队列，
@@ -6875,11 +6975,22 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 	store := r.recallImageDescriptionStore()
 	var lines []string
 	imageIndex := 0
+	videoFrameIndex := 0
 	for _, segment := range segments {
-		if !recallStillImageSegment(segment) {
+		if !historyDescribableImageSegment(segment) {
 			continue
 		}
-		imageIndex++
+		videoFrame := strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame")
+		label := "图片"
+		index := 0
+		if videoFrame {
+			videoFrameIndex++
+			label = "视频关键帧"
+			index = videoFrameIndex
+		} else {
+			imageIndex++
+			index = imageIndex
+		}
 		description := strings.TrimSpace(segment.Data[recallImageDescriptionKey])
 		if description == "" && store != nil {
 			if hash, ok := imageSegmentContentSHA256(segment); ok {
@@ -6891,10 +7002,49 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 			}
 		}
 		if description == "" {
-			lines = append(lines, fmt.Sprintf("图片%d摘要=尚无缓存描述", imageIndex))
+			lines = append(lines, fmt.Sprintf("%s%d摘要=尚无缓存描述", label, index))
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("图片%d摘要=%s", imageIndex, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
+		lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
+	}
+	lines = append(lines, historicalNonImageMediaDescriptions(segments)...)
+	return lines
+}
+
+func historicalNonImageMediaDescriptions(segments []MessageSegment) []string {
+	lines := make([]string, 0)
+	audioIndex, fileIndex := 0, 0
+	for _, segment := range segments {
+		switch segment.Type {
+		case "record":
+			audioIndex++
+			transcript := strings.TrimSpace(segment.Data[voiceSTTTranscriptKey])
+			if transcript == "" {
+				lines = append(lines, fmt.Sprintf("语音%d摘要=尚无可用转写", audioIndex))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("语音%d转写=%s", audioIndex, truncateRunes(strings.Join(strings.Fields(transcript), " "), historyImageDescriptionMaxRunes)))
+		case "file":
+			fileIndex++
+			name := strings.TrimSpace(firstNonEmpty(segment.Data["name"], segment.Data["filename"], segment.Data["fileName"], segment.Data["file"]))
+			if name == "" {
+				name = "未命名文件"
+			}
+			format := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+			if format == "" {
+				format = "未知"
+			}
+			description := strings.TrimSpace(firstNonEmpty(segment.Data["summary"], segment.Data["description"], segment.Data["parsed_text"], segment.Data["content"]))
+			line := fmt.Sprintf("文件%d摘要=文件名：%s；格式：%s", fileIndex, name, format)
+			if description != "" {
+				line += "；内容摘要：" + truncateRunes(strings.Join(strings.Fields(description), " "), historyImageDescriptionMaxRunes)
+			} else if isSupportedFileName(name) {
+				line += "；正文尚未解析"
+			} else {
+				line += "；当前格式不支持正文解析"
+			}
+			lines = append(lines, line)
+		}
 	}
 	return lines
 }

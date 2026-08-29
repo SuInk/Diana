@@ -12,11 +12,14 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
 	dianaStickerToolName             = "diana.sticker"
 	maximumStickerDescriptionLookups = 128
+	stickerDescriptionWorkers        = 3
 )
 
 type dianaStickerTool struct {
@@ -49,6 +52,8 @@ type stickerCandidate struct {
 	MessageID     string
 	EventTime     int64
 	Score         int
+	SemanticScore int
+	SourceEvent   MessageEvent
 	SharedGroup   bool
 	SharedPrivate bool
 }
@@ -78,14 +83,14 @@ func (t *dianaStickerTool) Name() string { return dianaStickerToolName }
 
 func (t *dianaStickerTool) Description() string {
 	return `从当前群或私聊历史的表情包库中检索并发送一张表情包。用户明确要“发表情包”、希望用表情回应，或当前语境适合只用表情包回应时使用。` +
-		`通常先 operation=search 查看候选的 id、名称和图片描述，再 operation=send 传 sticker_id；用户已经说清楚情绪或表情名时也可直接 send 并传 query。` +
+		`必须先用 operation=search 和语义意图查询候选，再结合候选的名称与图片简介判断哪张最符合当前语境，最后用 operation=send 原样传回 sticker_id。不要只按关键词字面相同选择。` +
 		`发送由工具完成，成功后不要声称还要上传，也不要把候选的 source_message_id 或内部 id 告诉用户。不得把普通历史图片当表情包发送。`
 }
 
 func (t *dianaStickerTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation":  toolEnumParam("search 只返回候选；send 发送一张。", "search", "send"),
-		"query":      toolStringParam("想表达的情绪、动作或表情名称，例如“无语”“开心”“投降”。search 可留空查看最近候选；send 未提供 sticker_id 时按 query 选择。"),
+		"query":      toolStringParam("search 的语义意图，例如“安慰一下对方”“对离谱发言表示无语”“开心庆祝”；可留空查看最近候选。旧调用可在 send 时传明确表情名称，但语义选图应先 search。"),
 		"sticker_id": toolStringParam("search 返回的候选 id。只能原样使用本轮当前会话检索得到的 id。"),
 	})
 }
@@ -108,8 +113,10 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 		if len(candidates) > limit {
 			candidates = candidates[:limit]
 		}
+		t.enrichCandidateDescriptions(ctx, candidates)
+		rankStickerCandidates(candidates, query)
 		items := stickerSearchItems(candidates)
-		message := fmt.Sprintf("找到 %d 个当前会话表情包候选；请结合名称和描述选择。", len(items))
+		message := fmt.Sprintf("找到 %d 个当前会话表情包候选；请按当前语义结合名称和图片简介选择，不要求查询词与候选文字完全一致。", len(items))
 		if len(items) == 0 {
 			message = "当前会话的表情包库里没有匹配候选。"
 		}
@@ -126,7 +133,7 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 			if selected == nil {
 				return marshalStickerResult(stickerToolResult{Action: "not_sent", Message: "这个 sticker_id 不属于当前会话的可用表情包；请重新 search。", Query: query})
 			}
-		} else if len(candidates) > 0 {
+		} else if len(candidates) > 0 && (query == "" || candidates[0].Score > 0) {
 			index := 0
 			if query == "" {
 				index = secureRandomIndex(len(candidates))
@@ -134,7 +141,11 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 			selected = &candidates[index]
 		}
 		if selected == nil {
-			return marshalStickerResult(stickerToolResult{Action: "not_sent", Message: "当前会话的表情包库里没有匹配候选，没有发送。", Query: query})
+			message := "当前会话的表情包库里没有可用候选，没有发送。"
+			if query != "" && len(candidates) > 0 {
+				message = "query 没有明确的字面命中；请先 search 查看候选简介，再用 sticker_id 发送，避免按最近顺序误发表情包。"
+			}
+			return marshalStickerResult(stickerToolResult{Action: "not_sent", Message: message, Query: query})
 		}
 		if _, err := os.Stat(selected.Path); err != nil {
 			return "", fmt.Errorf("表情包缓存文件不可用: %w", err)
@@ -183,6 +194,7 @@ func (t *dianaStickerTool) candidates(ctx context.Context, query string) ([]stic
 	}
 
 	includeGeneric := t.settings.Bool(stickerSettingIncludeGeneric, true)
+	semanticScores := t.semanticCandidateScores(ctx, query, shareGroups)
 	seen := map[string]bool{}
 	candidates := make([]stickerCandidate, 0)
 	for eventIndex := len(events) - 1; eventIndex >= 0; eventIndex-- {
@@ -217,23 +229,14 @@ func (t *dianaStickerTool) candidates(ctx context.Context, query string) ([]stic
 			}
 			candidates = append(candidates, stickerCandidate{
 				ID: id, Summary: summary, Path: path, Hash: hash, MessageID: event.MessageID, EventTime: event.Time,
+				SemanticScore: semanticScores[stickerCandidateEventKey(event)], SourceEvent: event,
 				SharedGroup:   event.Kind == EventKindGroup && sessionKey(event) != sessionKey(t.event),
 				SharedPrivate: event.Kind == EventKindPrivate && sessionKey(event) != sessionKey(t.event),
 			})
 		}
 	}
 
-	queryLower := strings.ToLower(strings.TrimSpace(query))
 	for index := range candidates {
-		summary := strings.ToLower(candidates[index].Summary)
-		if queryLower != "" {
-			switch {
-			case summary == queryLower:
-				candidates[index].Score += 100
-			case strings.Contains(summary, queryLower) || strings.Contains(queryLower, summary):
-				candidates[index].Score += 60
-			}
-		}
 		if index < maximumStickerDescriptionLookups {
 			lines := t.runtime.historyImageCachedSegmentDescriptions(ctx, []MessageSegment{{Type: "image", Data: map[string]string{
 				"cached_file":         candidates[index].Path,
@@ -246,18 +249,28 @@ func (t *dianaStickerTool) candidates(ctx context.Context, query string) ([]stic
 				}
 			}
 		}
-		if queryLower != "" && strings.Contains(strings.ToLower(candidates[index].Description), queryLower) {
+	}
+	rankStickerCandidates(candidates, query)
+	return candidates, nil
+}
+
+func rankStickerCandidates(candidates []stickerCandidate, query string) {
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	for index := range candidates {
+		candidates[index].Score = candidates[index].SemanticScore
+		if queryLower == "" {
+			continue
+		}
+		summary := strings.ToLower(candidates[index].Summary)
+		switch {
+		case summary == queryLower:
+			candidates[index].Score += 100
+		case strings.Contains(summary, queryLower) || strings.Contains(queryLower, summary):
+			candidates[index].Score += 60
+		}
+		if strings.Contains(strings.ToLower(candidates[index].Description), queryLower) {
 			candidates[index].Score += 30
 		}
-	}
-	if queryLower != "" {
-		filtered := candidates[:0]
-		for _, candidate := range candidates {
-			if candidate.Score > 0 {
-				filtered = append(filtered, candidate)
-			}
-		}
-		candidates = filtered
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].Score != candidates[j].Score {
@@ -265,7 +278,74 @@ func (t *dianaStickerTool) candidates(ctx context.Context, query string) ([]stic
 		}
 		return candidates[i].EventTime > candidates[j].EventTime
 	})
-	return candidates, nil
+}
+
+func (t *dianaStickerTool) semanticCandidateScores(ctx context.Context, query string, shareGroups bool) map[string]int {
+	scores := map[string]int{}
+	if strings.TrimSpace(query) == "" {
+		return scores
+	}
+	crossGroups := shareGroups && t.event.Kind == EventKindGroup
+	for rank, event := range t.runtime.semanticSearchEvents(ctx, t.event, query, 0, time.Now().Unix(), crossGroups) {
+		// Keep exact sticker-name matches stronger while making semantic neighbors
+		// outrank merely recent candidates.
+		score := 80 - rank
+		if score < 40 {
+			score = 40
+		}
+		scores[stickerCandidateEventKey(event)] = score
+	}
+	return scores
+}
+
+func stickerCandidateEventKey(event MessageEvent) string {
+	return sessionKey(event) + "\x00" + strings.TrimSpace(event.MessageID)
+}
+
+// enrichCandidateDescriptions only touches the bounded result set returned to the
+// Agent. Cached descriptions stay free; missing ones use the existing vision route
+// and are persisted by image hash so later searches do not call the model again.
+func (t *dianaStickerTool) enrichCandidateDescriptions(ctx context.Context, candidates []stickerCandidate) {
+	if len(candidates) == 0 || t.runtime.recallImageDescriptionStore() == nil {
+		return
+	}
+	jobs := make(chan int)
+	workerCount := stickerDescriptionWorkers
+	if workerCount > len(candidates) {
+		workerCount = len(candidates)
+	}
+	var workers sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				candidate := &candidates[index]
+				if strings.TrimSpace(candidate.Description) != "" || candidate.Hash == "" {
+					continue
+				}
+				description, err := t.runtime.describeRecallImage(ctx, t.event, candidate.Path)
+				if err != nil {
+					continue
+				}
+				candidate.Description = compactRecallImageDescription(description)
+				t.runtime.saveRecallImageDescription(&recallImageTarget{
+					contentSHA256:     candidate.Hash,
+					description:       candidate.Description,
+					descriptionSource: "vision",
+					sourceMessageIDs:  []string{candidate.MessageID},
+				}, candidate.SourceEvent)
+				t.runtime.refreshMessageImageSearchText(ctx, candidate.SourceEvent)
+			}
+		}()
+	}
+	for index := range candidates {
+		if strings.TrimSpace(candidates[index].Description) == "" && candidates[index].Hash != "" {
+			jobs <- index
+		}
+	}
+	close(jobs)
+	workers.Wait()
 }
 
 func normalizeStickerSummary(value string) string {

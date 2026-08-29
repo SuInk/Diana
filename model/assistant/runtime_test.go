@@ -2336,7 +2336,7 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"action":"tool","tool":"diana.history_images","input":{"message_ids":["img-1","img-2","img-3"]}}`,
+		`{"action":"tool","tool":"diana.history_media","input":{"message_ids":["img-1","img-2","img-3"]}}`,
 		`{"action":"final","content":"三张图片都已读取。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {

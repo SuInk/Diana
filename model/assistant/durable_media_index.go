@@ -20,7 +20,7 @@ const (
 // durableMediaIndex 列出已经掉出历史窗口、模型看不到的媒体消息。
 //
 // 它取代了 agent 模式下的前置指代路由：模型看得到「有哪些图、分别是什么」之后，
-// 需要原图时自己调 diana.history_images 传 message_id 即可。索引只带描述不带
+// 需要媒体原件时自己调 diana.history_media 传 message_id 即可。索引只带描述不带
 // bytes，所以每条只有几十 token；而路由器是一次完整的 LLM 调用，且那道门只看
 // 「有没有旧媒体」不看「这句话像不像指代」，在发过图的群里对每条消息都会触发。
 //
@@ -60,7 +60,7 @@ func (r *Runtime) durableMediaIndex(ctx context.Context, event MessageEvent) str
 		lines[left], lines[right] = lines[right], lines[left]
 	}
 	return "【更早的图片与文件索引，已不在上面的聊天记录里】\n" +
-		"需要看原图或核对细节时调用 diana.history_images 并传入对应 message_id；" +
+		"需要核对历史媒体时调用 diana.history_media 并传入对应 message_id；" +
 		"下面的描述是机器识别的概要，可能有误，不要当成原文逐字引用。\n" +
 		strings.Join(lines, "\n")
 }
