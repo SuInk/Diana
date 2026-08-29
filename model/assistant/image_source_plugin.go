@@ -34,6 +34,9 @@ const (
 	imageSourceSettingMaxResults      = "max_results"
 	imageSourceSettingTimeout         = "timeout_seconds"
 	imageSourceSettingPrivateEnabled  = "private_enabled"
+	imageSourceSettingSauceNAOURL     = "saucenao_url"
+	imageSourceSettingTraceMoeURL     = "tracemoe_url"
+	imageSourceSettingMaxUploadMB     = "max_upload_mb"
 
 	imageSourceProviderSauceNAO = "saucenao"
 	imageSourceProviderTraceMoe = "trace.moe"
@@ -92,6 +95,9 @@ func (p *ImageSourcePlugin) Manifest() PluginManifest {
 			{Key: imageSourceSettingMaxResults, Label: "返回结果条数上限", Type: PluginSettingTypeNumber, Default: 3, Min: settingRange(1), Max: settingRange(8), Step: 1},
 			{Key: imageSourceSettingTimeout, Label: "单次反查超时", Type: PluginSettingTypeNumber, Default: 20, Min: settingRange(5), Max: settingRange(60), Step: 5, Unit: "秒"},
 			{Key: imageSourceSettingPrivateEnabled, Label: "私聊也允许反查", Type: PluginSettingTypeBool, Default: true},
+			{Key: imageSourceSettingMaxUploadMB, Label: "上传大小上限", Description: "超过这个大小的图片不上传检索。SauceNAO 自身的上限是 15 MB。", Type: PluginSettingTypeNumber, Default: 8, Min: settingRange(1), Max: settingRange(15), Step: 1, Unit: "MB"},
+			{Key: imageSourceSettingSauceNAOURL, Label: "SauceNAO 接口地址", Description: "留空用官方地址。只接受 HTTPS，本机调试可用 localhost 的 HTTP。", Type: PluginSettingTypeString, Default: ""},
+			{Key: imageSourceSettingTraceMoeURL, Label: "trace.moe 接口地址", Description: "留空用官方地址。只接受 HTTPS，本机调试可用 localhost 的 HTTP。", Type: PluginSettingTypeString, Default: ""},
 		},
 	}
 }
@@ -108,6 +114,10 @@ type imageSourceConfig struct {
 	MaxResults      int
 	Timeout         time.Duration
 	PrivateEnabled  bool
+	// 自建网关或反代时改这两个地址；留空走官方。
+	SauceNAOURL string
+	TraceMoeURL string
+	MaxUploadMB int
 }
 
 func imageSourceConfigFromSettings(v SettingValues) imageSourceConfig {
@@ -119,7 +129,42 @@ func imageSourceConfigFromSettings(v SettingValues) imageSourceConfig {
 		MaxResults:      v.Int(imageSourceSettingMaxResults, 3),
 		Timeout:         time.Duration(v.Int(imageSourceSettingTimeout, 20)) * time.Second,
 		PrivateEnabled:  v.Bool(imageSourceSettingPrivateEnabled, true),
+		SauceNAOURL:     strings.TrimSpace(v.String(imageSourceSettingSauceNAOURL, "")),
+		TraceMoeURL:     strings.TrimSpace(v.String(imageSourceSettingTraceMoeURL, "")),
+		MaxUploadMB:     v.Int(imageSourceSettingMaxUploadMB, 8),
 	}
+}
+
+// maxUploadBytes 是「愿意往第三方图库传多大的图」的上限。图片是要出网的，
+// 传之前就该按体积拦一道：超限的图 SauceNAO 那边也只会回一个 413，白跑一趟
+// 还消耗当天的免费额度。
+func (cfg imageSourceConfig) maxUploadBytes() int64 {
+	mb := cfg.MaxUploadMB
+	if mb <= 0 {
+		mb = 8
+	}
+	return int64(mb) * 1024 * 1024
+}
+
+// imageSourceEndpoint 和联网搜索用同一条规矩：只放 HTTPS，本机 HTTP 留给调试。
+// 配歪了就退回官方地址，而不是拿一个明文地址把图片发出去。
+func imageSourceEndpoint(raw, fallback string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil {
+		return fallback
+	}
+	if parsed.Scheme == "https" {
+		return raw
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if parsed.Scheme == "http" && (host == "127.0.0.1" || host == "localhost" || host == "::1") {
+		return raw
+	}
+	return fallback
 }
 
 // saucenaoUsable 表示 SauceNAO 这条线真的能用。开了但没填 Key 等于没开——
@@ -204,7 +249,8 @@ func filterImageSourceMatches(matches []ImageSourceMatch, cfg imageSourceConfig)
 // searchSauceNAO 走 SauceNAO 的 JSON 接口。图片直接上传，不传 URL：聊天平台
 // 的图床地址常常带鉴权、会过期，或者干脆挡住境外访问。
 func (p *ImageSourcePlugin) searchSauceNAO(ctx context.Context, cfg imageSourceConfig, image []byte) ([]ImageSourceMatch, error) {
-	return p.searchSauceNAOAt(ctx, firstNonEmpty(p.saucenaoEndpoint, defaultSauceNAOEndpoint), cfg, image)
+	endpoint := firstNonEmpty(p.saucenaoEndpoint, defaultSauceNAOEndpoint)
+	return p.searchSauceNAOAt(ctx, imageSourceEndpoint(cfg.SauceNAOURL, endpoint), cfg, image)
 }
 
 func (p *ImageSourcePlugin) searchSauceNAOAt(ctx context.Context, endpoint string, cfg imageSourceConfig, image []byte) ([]ImageSourceMatch, error) {
@@ -332,7 +378,8 @@ func saucenaoExternalURLs(data map[string]any) []string {
 
 // searchTraceMoe 走 trace.moe：整张图片作为请求体上传，它按帧比对番剧。
 func (p *ImageSourcePlugin) searchTraceMoe(ctx context.Context, cfg imageSourceConfig, image []byte) ([]ImageSourceMatch, error) {
-	return p.searchTraceMoeAt(ctx, firstNonEmpty(p.traceMoeEndpoint, defaultTraceMoeEndpoint), cfg, image)
+	endpoint := firstNonEmpty(p.traceMoeEndpoint, defaultTraceMoeEndpoint)
+	return p.searchTraceMoeAt(ctx, imageSourceEndpoint(cfg.TraceMoeURL, endpoint), cfg, image)
 }
 
 func (p *ImageSourcePlugin) searchTraceMoeAt(ctx context.Context, base string, cfg imageSourceConfig, image []byte) ([]ImageSourceMatch, error) {
