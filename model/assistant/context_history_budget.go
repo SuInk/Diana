@@ -148,12 +148,12 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 	// 与真正发请求时的挑选顺序保持一致：角色绑定 → 分组 → 当前激活配置。
 	// 只看角色绑定的话，没配模型角色的部署会一路回落到兜底常量，等于从来没看过
 	// 实际在用的模型窗口。
-	profiles, _ := r.roleBoundProfiles(set, group)
+	profiles, _ := r.roleBoundProfiles("", set, group)
 	if len(profiles) == 0 {
 		profiles = llmProfilesInGroup(set, group)
 	}
 	if len(profiles) == 0 {
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			profiles = []llm.Profile{current}
 		}
 	}

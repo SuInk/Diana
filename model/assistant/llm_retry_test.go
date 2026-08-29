@@ -67,7 +67,6 @@ func newRetryTestRegistry(t *testing.T, adapter llm.LLMAdapter) (*llm.ProviderRe
 		t.Fatal(err)
 	}
 	return registry, llm.ProfileSet{
-		ActiveID: "registry-test",
 		Profiles: []llm.Profile{{ID: "registry-test", Group: llm.GroupChat, Config: llm.ProviderConfig{Model: "model"}}},
 	}
 }
@@ -223,7 +222,6 @@ func TestClassifiedNoTextErrorsSkipSameProfileRetry(t *testing.T) {
 
 func TestRoutingEmptyOutputRetriesThenFailsOverWithinGroup(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{
 			{ID: "main", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "main-model"}},
 			{ID: "routing-a", Group: "routing", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "routing-a"}},
@@ -267,9 +265,6 @@ func TestRoutingEmptyOutputRetriesThenFailsOverWithinGroup(t *testing.T) {
 	}
 	if got, want := strings.Join(configuredModels, ","), "routing-a,routing-b"; got != want {
 		t.Fatalf("configured models=%q, want %q", got, want)
-	}
-	if store.set.ActiveID != "main" {
-		t.Fatalf("routing failover changed active chat profile to %q", store.set.ActiveID)
 	}
 }
 
@@ -433,7 +428,6 @@ func (p *retryPreservationProvider) Generate(_ context.Context, req llm.Generate
 
 func TestAgentTransientRetryPreservesCompletedToolResults(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{{
 			ID:     "main",
 			Group:  "default",

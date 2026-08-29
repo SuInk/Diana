@@ -14,7 +14,6 @@ import (
 // 聊天模型——滑到全局激活配置上是静默换模型，日志里两轮看着都「正常」。
 func visionBindingProfileSet() llm.ProfileSet {
 	return llm.ProfileSet{
-		ActiveID: "global-active",
 		Profiles: []llm.Profile{
 			{ID: "bot-chat", Name: "机器人绑定", Group: "default", Config: llm.ProviderConfig{
 				Provider: llm.ProviderOpenAICompatible, APIKey: "sk-bot", Model: "bound-chat-model",
@@ -35,7 +34,7 @@ func TestVisionTurnKeepsBoundChatProfile(t *testing.T) {
 	}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
 
 	for _, group := range []string{llm.GroupChat, llm.GroupVision} {
-		profiles, err := runtime.roleBoundProfiles(set, group)
+		profiles, err := runtime.roleBoundProfiles("", set, group)
 		if err != nil {
 			t.Fatalf("group %s: %v", group, err)
 		}
@@ -64,7 +63,7 @@ func TestVisionTurnUsesItsOwnBindingWhenPresent(t *testing.T) {
 		},
 	}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
 
-	profiles, err := runtime.roleBoundProfiles(set, llm.GroupVision)
+	profiles, err := runtime.roleBoundProfiles("", set, llm.GroupVision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +95,7 @@ func TestRegistrySelectionFallsBackToBoundChatRole(t *testing.T) {
 	set := visionBindingProfileSet()
 
 	for _, group := range []string{llm.GroupChat, llm.GroupVision} {
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, group, "")
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, "", group, "")
 		if err != nil || !ok {
 			t.Fatalf("group %s: ok=%v err=%v", group, ok, err)
 		}
@@ -106,25 +105,30 @@ func TestRegistrySelectionFallsBackToBoundChatRole(t *testing.T) {
 	}
 }
 
-// 没有任何绑定时行为不变：仍然按分组、最后按全局激活配置选。
-func TestRegistrySelectionWithoutRolesKeepsGroupThenActive(t *testing.T) {
+// 没有任何绑定时：先按分组找，本组没有就跨组回落到对话分组，取列表第一条。
+//
+// 这里原来断言的是「回落到全局激活配置」。「激活中」去掉之后，同组里选谁只由列表
+// 顺序决定——界面上写的「组内顺序即降级优先级」这才是真的。
+func TestRegistrySelectionWithoutRolesFallsBackToFirstChatProfile(t *testing.T) {
 	registry, err := llm.RegistryFromDocument(llm.ProviderRegistryDocument{
 		Version: 1,
 		Providers: []llm.ProviderDefinition{
-			{ID: "global-active", Name: "全局激活", Protocol: llm.ProtocolOpenAIResponses, BaseURL: "https://example.invalid/v1", APIKey: "sk-active", Enabled: true},
+			{ID: "bot-chat", Name: "机器人绑定", Protocol: llm.ProtocolOpenAIResponses, BaseURL: "https://example.invalid/v1", APIKey: "sk-bot", Enabled: true},
+			{ID: "global-active", Name: "第二条", Protocol: llm.ProtocolOpenAIResponses, BaseURL: "https://example.invalid/v1", APIKey: "sk-active", Enabled: true},
 		},
 		Models: []llm.ModelDefinition{
+			{ID: "bot-chat:bound-chat-model", ProviderID: "bot-chat", ModelID: "bound-chat-model", Name: "bound-chat-model"},
 			{ID: "global-active:active-model", ProviderID: "global-active", ModelID: "active-model", Name: "active-model"},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	selection, ok, err := registrySelectionForGroup(registry, visionBindingProfileSet(), nil, llm.GroupVision, "")
+	selection, ok, err := registrySelectionForGroup(registry, visionBindingProfileSet(), nil, "", llm.GroupVision, "")
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if selection.ProviderID != "global-active" {
-		t.Fatalf("selection = %+v", selection)
+	if selection.ProviderID != "bot-chat" {
+		t.Fatalf("selection = %+v，应当取对话分组列表里的第一条", selection)
 	}
 }

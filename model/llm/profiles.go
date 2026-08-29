@@ -34,8 +34,13 @@ type Profile struct {
 	Config      ProviderConfig `json:"config"`
 }
 
+// ProfileSet 是一组 LLM 配置。列表顺序就是全部语义：组内顺序即降级优先级。
+//
+// 这里以前还有个 ActiveID（界面上的「激活中」）。它同时决定了默认路径用哪个分组、
+// 降级从哪一条起步，而且降级成功后会被写回，于是列表顺序和实际顺序对不上——UI 写
+// 着「顺序即降级优先级」，实跑却是从激活项开始绕圈。一个会自己动、又和显示矛盾的
+// 隐藏状态，不如没有：现在一律按列表顺序，所见即所得。
 type ProfileSet struct {
-	ActiveID string    `json:"active_id"`
 	Profiles []Profile `json:"profiles"`
 }
 
@@ -48,10 +53,7 @@ func NewProfileSet(cfg ProviderConfig) ProfileSet {
 		UpdatedAt: time.Now(),
 		Config:    cfg.WithDefaults(),
 	}
-	return ProfileSet{
-		ActiveID: profile.ID,
-		Profiles: []Profile{profile},
-	}
+	return ProfileSet{Profiles: []Profile{profile}}
 }
 
 // NormalizeProfileName 规范化配置档名称。
@@ -70,51 +72,18 @@ func NormalizeProfileGroup(group string) string {
 	return DefaultProfileGroup
 }
 
-// Current 返回配置集当前激活的 profile。
-func (s ProfileSet) Current() (Profile, bool) {
-	for _, profile := range s.Profiles {
-		if profile.ID == s.ActiveID {
-			profile.Config = profile.Config.WithDefaults()
-			profile.Group = NormalizeProfileGroup(profile.Group)
-			return profile, true
-		}
-	}
+// FirstProfile 返回列表里的第一个配置，用作「什么都没配时总得有一个」的兜底。
+//
+// 它替代了原来的 Current()：兜底本来就该是确定的，不该取决于一个会被降级写回改动
+// 的隐藏字段。
+func (s ProfileSet) FirstProfile() (Profile, bool) {
 	if len(s.Profiles) == 0 {
 		return Profile{}, false
 	}
-	// active_id 丢失或失效时退回第一个配置，避免旧/坏数据导致页面完全不可用。
 	profile := s.Profiles[0]
 	profile.Config = profile.Config.WithDefaults()
 	profile.Group = NormalizeProfileGroup(profile.Group)
 	return profile, true
-}
-
-// ActiveGroupProfiles 返回从当前配置开始、同分组内按顺序轮换的配置列表。
-func (s ProfileSet) ActiveGroupProfiles() []Profile {
-	s = s.WithDefaults()
-	current, ok := s.Current()
-	if !ok {
-		return nil
-	}
-	group := NormalizeProfileGroup(current.Group)
-	currentIndex := 0
-	for i, profile := range s.Profiles {
-		if profile.ID == current.ID {
-			currentIndex = i
-			break
-		}
-	}
-	out := make([]Profile, 0, len(s.Profiles))
-	for offset := 0; offset < len(s.Profiles); offset++ {
-		profile := s.Profiles[(currentIndex+offset)%len(s.Profiles)]
-		if NormalizeProfileGroup(profile.Group) != group {
-			continue
-		}
-		profile.Group = NormalizeProfileGroup(profile.Group)
-		profile.Config = profile.Config.WithDefaults()
-		out = append(out, profile)
-	}
-	return out
 }
 
 // GroupProfiles 返回指定分组内按列表顺序排列的配置；组内顺序即降级优先级。
@@ -164,18 +133,6 @@ func slicesSortStableByIndex(profiles []Profile, index map[string]int) {
 	}
 }
 
-// WithActive 返回切换 active_id 后的配置集。
-func (s ProfileSet) WithActive(id string) ProfileSet {
-	id = strings.TrimSpace(id)
-	for _, profile := range s.Profiles {
-		if profile.ID == id {
-			s.ActiveID = id
-			return s
-		}
-	}
-	return s
-}
-
 // Delete 从配置集中删除指定 profile。
 func (s ProfileSet) Delete(id string) ProfileSet {
 	id = strings.TrimSpace(id)
@@ -190,13 +147,6 @@ func (s ProfileSet) Delete(id string) ProfileSet {
 		next = append(next, profile)
 	}
 	s.Profiles = next
-	if len(s.Profiles) == 0 {
-		s.ActiveID = ""
-		return s
-	}
-	if s.ActiveID == id {
-		s.ActiveID = s.Profiles[0].ID
-	}
 	return s
 }
 
@@ -225,17 +175,5 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 		s.Profiles[i].Description = strings.TrimSpace(s.Profiles[i].Description)
 		s.Profiles[i].Config = s.Profiles[i].Config.WithDefaults()
 	}
-	if len(s.Profiles) == 0 {
-		s.ActiveID = ""
-		return s
-	}
-	s.ActiveID = strings.TrimSpace(s.ActiveID)
-	for _, profile := range s.Profiles {
-		if profile.ID == s.ActiveID {
-			return s
-		}
-	}
-	// active_id 找不到时自动激活第一个配置，保证配置集始终有可用当前项。
-	s.ActiveID = s.Profiles[0].ID
 	return s
 }

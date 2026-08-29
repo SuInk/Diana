@@ -16,7 +16,6 @@ import (
 
 func TestMemoryGateUsesMemoryProfileAndExistingKeys(t *testing.T) {
 	profiles := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "default",
 		Profiles: []llm.Profile{
 			{ID: "default", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "default", Model: "default-model"}},
 			{ID: "memory", Group: "memory", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "memory", Model: "memory-model"}},
@@ -514,7 +513,6 @@ func TestMemoryContextKeepsUserScopedMemoriesWhenCrossGroupIsOff(t *testing.T) {
 
 func TestMemoryGateFetchesRelevantMemoriesBeforeImportantOnes(t *testing.T) {
 	profiles := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "default",
 		Profiles: []llm.Profile{{ID: "default", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "m"}}},
 	}}
 	memory := &testStructuredMemoryStore{}

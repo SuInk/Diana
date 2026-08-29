@@ -297,7 +297,7 @@ async function load(): Promise<void> {
     watches.value = tasks.items.filter((task) => task.kind === "repository_watch");
     profiles.value = config.profiles?.length ? config.profiles : [config];
     joinedGroups.value = groups.groups;
-    if (!form.value.profile_id) form.value.profile_id = config.active_profile_id || profiles.value[0]?.id || "";
+    if (!form.value.profile_id) form.value.profile_id = profiles.value[0]?.id || "";
   } catch (error) {
     toastError(error instanceof Error ? error.message : "仓库订阅加载失败");
   } finally {

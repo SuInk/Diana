@@ -50,7 +50,6 @@
               <div class="row-main">
                 <div class="row-title">
                   {{ profile.name || profile.model }}
-                  <span v-if="profile.id && profile.id === activeProfileID" class="badge accent" title="没有配「模型分配」的用途会用这套，失败降级也从它开始轮转">激活中</span>
                 </div>
                 <div class="row-sub">
                   {{ providerLabel(profile.provider) }} · 默认 {{ profile.model || "未选择" }} · {{ profileModelCount(profile) }} 个模型
@@ -66,16 +65,6 @@
                     <ChevronDown :size="13" aria-hidden="true" />
                   </button>
                 </span>
-                <button
-                  v-if="profile.id && profile.id !== activeProfileID"
-                  class="btn small ghost"
-                  type="button"
-                  :disabled="busy"
-                  title="设为激活配置"
-                  @click="activate(profile)"
-                >
-                  <CircleCheck :size="13" aria-hidden="true" />
-                </button>
                 <button class="btn small ghost" type="button" title="测试这套配置" @click="openTest(profile)">
                   <Send :size="13" aria-hidden="true" />
                 </button>
@@ -323,9 +312,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
+import { ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
 import {
-  activateConfigProfile,
   cloneConfigProfile,
   deleteConfigProfile,
   exportConfig,
@@ -449,25 +437,6 @@ function applyServicePreset(id: string): void {
 
 const profiles = computed<LLMConfig[]>(() => profileSet.value?.profiles ?? []);
 
-// 激活配置一直在起作用，只是前端重构时把入口漏掉了：没有配「模型分配」的用途会用它，
-// 失败降级也从它开始在同组内轮转，而且运行时切换 provider 之后会把它写回去。
-// 有状态、在生效、用户却看不见也改不了，是最难查的那种问题。
-const activeProfileID = computed(() => profileSet.value?.active_profile_id ?? "");
-
-async function activate(profile: LLMConfig): Promise<void> {
-  if (!profile.id) {
-    return;
-  }
-  busy.value = true;
-  try {
-    profileSet.value = await activateConfigProfile(profile.id);
-    toastSuccess(`已激活「${profile.name || profile.model}」`);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "激活失败");
-  } finally {
-    busy.value = false;
-  }
-}
 
 function providerLabel(provider: Provider): string {
   const labels: Record<Provider, string> = {
@@ -705,7 +674,7 @@ async function save(): Promise<void> {
     closeEditor();
     const savedProfile =
       saved.profiles?.find((profile) => profile.id === editingProfileID) ??
-      saved.profiles?.find((profile) => profile.id === saved.active_profile_id) ??
+      saved.profiles?.[0] ??
       saved;
     openTest(savedProfile);
     toastSuccess("配置已保存，请完成连通测试");
@@ -918,7 +887,6 @@ async function importProfiles(event: Event): Promise<void> {
     const text = await file.text();
     const parsed = JSON.parse(text) as LLMConfig;
     profileSet.value = await importConfigProfiles({
-      active_profile_id: parsed.active_profile_id,
       profiles: parsed.profiles
     });
     toastSuccess("配置已导入");

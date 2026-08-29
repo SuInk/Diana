@@ -49,7 +49,6 @@ func TestSemanticReferenceCanSelectAnotherUsersOldVideo(t *testing.T) {
 
 func TestSemanticReferenceUsesRoutingProfile(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{
 			{ID: "main", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "main-model"}},
 			{ID: "routing", Group: "routing", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "routing-model"}},

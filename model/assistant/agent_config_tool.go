@@ -124,7 +124,6 @@ type dianaAgentConfigSnapshot struct {
 }
 
 type dianaLLMSnapshot struct {
-	ActiveID string            `json:"active_id,omitempty"`
 	Profiles []dianaLLMProfile `json:"profiles,omitempty"`
 }
 
@@ -133,7 +132,6 @@ type dianaLLMProfile struct {
 	Name                string        `json:"name,omitempty"`
 	Group               string        `json:"group,omitempty"`
 	Description         string        `json:"description,omitempty"`
-	Active              bool          `json:"active"`
 	Provider            llm.Provider  `json:"provider,omitempty"`
 	APIKeyConfigured    bool          `json:"api_key_configured"`
 	BaseURL             string        `json:"base_url,omitempty"`
@@ -349,7 +347,7 @@ func (r *Runtime) dianaLLMSnapshot() dianaLLMSnapshot {
 		return dianaLLMSnapshot{}
 	}
 	set := r.llmStore.Profiles().WithDefaults()
-	out := dianaLLMSnapshot{ActiveID: set.ActiveID, Profiles: make([]dianaLLMProfile, 0, len(set.Profiles))}
+	out := dianaLLMSnapshot{Profiles: make([]dianaLLMProfile, 0, len(set.Profiles))}
 	for _, profile := range set.Profiles {
 		cfg := profile.Config.WithDefaults()
 		headers := cfg.NormalizedHeaders()
@@ -363,7 +361,6 @@ func (r *Runtime) dianaLLMSnapshot() dianaLLMSnapshot {
 			Name:             profile.Name,
 			Group:            llm.NormalizeProfileGroup(profile.Group),
 			Description:      profile.Description,
-			Active:           profile.ID == set.ActiveID,
 			Provider:         cfg.Provider,
 			APIKeyConfigured: strings.TrimSpace(cfg.APIKey) != "",
 			BaseURL:          cfg.BaseURL,

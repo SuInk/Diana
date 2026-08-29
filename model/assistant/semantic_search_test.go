@@ -54,7 +54,6 @@ func semanticTestEvent(at int64, messageID, text string) MessageEvent {
 func newSemanticRuntime(t *testing.T, enabled bool, store MessageHistoryStore, embeds *int) *Runtime {
 	t.Helper()
 	profiles := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "chat",
 		Profiles: []llm.Profile{
 			{ID: "chat", Name: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-x", APIKey: "k"}},
 			{ID: "embed", Name: "embed", Group: llm.GroupEmbedding, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "embed-v1", APIKey: "k"}},
