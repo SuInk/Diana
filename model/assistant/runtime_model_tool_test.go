@@ -41,6 +41,32 @@ func TestRuntimeModelToolReadsActualProfileSelection(t *testing.T) {
 	}
 }
 
+func TestRuntimeModelToolReadsRegistrySelectionThroughRetryWrapper(t *testing.T) {
+	registry := llm.NewProviderRegistry()
+	adapter := &retryRegistryAdapter{succeedAt: 1}
+	if err := registry.RegisterProvider(llm.ProviderDefinition{
+		ID: "sub2api", Name: "Sub2API", Protocol: llm.ProtocolOpenAIResponses, Enabled: true,
+	}, adapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterModel(llm.ModelDefinition{
+		ID: "sub2api:gpt-test", ProviderID: "sub2api", ModelID: "gpt-test", Name: "gpt-test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	selected := registryLLMProvider(registry, llm.AgentModelConfig{ProviderID: "sub2api", ModelID: "sub2api:gpt-test"}, true)
+	provider := &runtimeAgentLLMProvider{providers: map[string]LLMProvider{llm.GroupChat: selected}, lastGroup: llm.GroupChat}
+	result, err := newDianaRuntimeModelTool(provider).Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"provider":"sub2api"`, `"config_name":"Sub2API"`, `"model_id":"gpt-test"`, `"group":"default"`} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("result %q does not contain %q", result, want)
+		}
+	}
+}
+
 func TestRuntimeModelToolIsSemanticToolWithoutPromptMatching(t *testing.T) {
 	tool := newDianaRuntimeModelTool(nil)
 	if tool.Name() != dianaRuntimeModelToolName || !strings.Contains(tool.Description(), "用户询问") {
