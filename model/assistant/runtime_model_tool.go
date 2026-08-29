@@ -95,6 +95,7 @@ func (p *runtimeAgentLLMProvider) currentModelIdentity() (dianaRuntimeModelResul
 	if provider == nil {
 		return dianaRuntimeModelResult{}, fmt.Errorf("当前模型尚未完成首次调用")
 	}
+	provider = unwrapTransientLLMRetry(provider)
 	switch client := provider.(type) {
 	case llm.RegistryClient:
 		model, ok := client.Registry.Model(client.Selection.ModelID)
