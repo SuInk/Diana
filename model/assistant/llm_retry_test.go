@@ -67,7 +67,6 @@ func newRetryTestRegistry(t *testing.T, adapter llm.LLMAdapter) (*llm.ProviderRe
 		t.Fatal(err)
 	}
 	return registry, llm.ProfileSet{
-		ActiveID: "registry-test",
 		Profiles: []llm.Profile{{ID: "registry-test", Group: llm.GroupChat, Config: llm.ProviderConfig{Model: "model"}}},
 	}
 }
