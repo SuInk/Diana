@@ -408,6 +408,8 @@ export interface BotGroupConfig {
   proactive_reply_threshold?: number;
   /** 本群是否开启自然插话模式。 */
   natural_interjection_enabled?: boolean;
+  /** 本群是否开启社交性回应；不设表示跟随机器人。 */
+  social_reply_enabled?: boolean;
   minimum_reply_member_level?: number;
   /** 查看撤回消息后的回复是否自动撤回。 */
   recall_reply_auto_delete_enabled?: boolean;
