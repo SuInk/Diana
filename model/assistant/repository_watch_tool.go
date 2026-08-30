@@ -529,6 +529,7 @@ func (r *Runtime) cancelRepositoryWatch(ownerID, id string) (Reminder, error) {
 		}
 		item.CancelledAt = time.Now()
 		item.PendingDelivery = ""
+		item.PendingDeliveryReference = ""
 		item.PendingSince = time.Time{}
 		clearRepositoryWatchFailureState(item)
 		return nil
@@ -740,6 +741,7 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		}
 		item.TriggerAt = time.Now().Add(time.Duration(item.IntervalSeconds) * time.Second)
 		item.PendingDelivery = ""
+		item.PendingDeliveryReference = ""
 		item.PendingSince = time.Time{}
 		item.LastError = ""
 		item.ConsecutiveFailures = 0

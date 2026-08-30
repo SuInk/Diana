@@ -89,6 +89,7 @@ func (s repositoryWatchSelection) wants(kinds []string, status string) bool {
 
 type repositoryWatchChange struct {
 	Repository   string                       `json:"repository"`
+	Description  string                       `json:"description,omitempty"`
 	Branch       string                       `json:"branch,omitempty"`
 	Commits      []repositoryWatchCommit      `json:"commits,omitempty"`
 	CommitDiff   *repositoryWatchDiff         `json:"commit_diff,omitempty"`
@@ -121,6 +122,7 @@ type repositoryWatchRelease struct {
 type repositoryWatchPullRequest struct {
 	Number         int                       `json:"number"`
 	Title          string                    `json:"title"`
+	Body           string                    `json:"body,omitempty"`
 	Author         string                    `json:"author,omitempty"`
 	Status         string                    `json:"status"`
 	URL            string                    `json:"url,omitempty"`
@@ -221,7 +223,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryWatchPluginID,
 		Name:        "仓库订阅",
-		Version:     "0.2.2",
+		Version:     "0.2.3",
 		Description: "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。",
 		Official:    true,
 		BuiltIn:     true,
@@ -476,7 +478,24 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 			change.CommitDiff = diff
 		}
 	}
+	// 跟评需要知道仓库本身是做什么的。只在确实有动态且开启跟评时读取，
+	// 避免每个空轮询都额外消耗一次 GitHub API 请求。
+	if selection.Diff && (len(change.Commits) > 0 || len(change.PullRequests) > 0 || len(change.Issues) > 0 || len(change.Releases) > 0 || change.Stars != nil) {
+		if description, err := p.fetchRepositoryDescription(ctx, repository, settings); err == nil {
+			change.Description = description
+		}
+	}
 	return change, nil
+}
+
+func (p *RepositoryWatchPlugin) fetchRepositoryDescription(ctx context.Context, repository string, settings SettingValues) (string, error) {
+	var payload struct {
+		Description string `json:"description"`
+	}
+	if err := p.getJSON(ctx, "/repos/"+repository, settings, &payload); err != nil {
+		return "", fmt.Errorf("读取 %s 仓库简介: %w", repository, err)
+	}
+	return truncateRunes(strings.TrimSpace(payload.Description), 1000), nil
 }
 
 func (p *RepositoryWatchPlugin) fetchCommitDiff(ctx context.Context, repository, base, head string, settings SettingValues) (*repositoryWatchDiff, error) {
@@ -607,6 +626,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 	var payload []struct {
 		Number         int        `json:"number"`
 		Title          string     `json:"title"`
+		Body           string     `json:"body"`
 		State          string     `json:"state"`
 		HTMLURL        string     `json:"html_url"`
 		CreatedAt      time.Time  `json:"created_at"`
@@ -692,6 +712,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		result = append(result, repositoryWatchPullRequest{
 			Number:         item.Number,
 			Title:          strings.TrimSpace(item.Title),
+			Body:           truncateRunes(strings.TrimSpace(item.Body), 4000),
 			Author:         strings.TrimSpace(item.User.Login),
 			Status:         status,
 			URL:            strings.TrimSpace(item.HTMLURL),
