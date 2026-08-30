@@ -199,9 +199,9 @@ func TestRecalledFollowUpStillOwnsTheReply(t *testing.T) {
 	}
 }
 
-// 私聊里每条消息都算直呼：快速连发两条时旧回复放弃，由新一轮串行处理时
-// 结合两条消息一起回答。
-func TestPrivateFollowUpSupersedesPendingReply(t *testing.T) {
+// 私聊队列按会话串行：追发消息不丢掉已经生成的第一条回复。第一条发出后
+// 进入历史，第二轮再参考它继续回答。
+func TestPrivateFollowUpKeepsPendingReply(t *testing.T) {
 	runtime := replyInterruptTestRuntime()
 	first := MessageEvent{
 		Kind:       EventKindPrivate,
@@ -219,10 +219,14 @@ func TestPrivateFollowUpSupersedesPendingReply(t *testing.T) {
 	}
 	runtime.noteDirectedInbound(first)
 	runtime.noteDirectedInbound(followUp)
-	if !runtime.inboundTriggerSuperseded(context.Background(), first) {
-		t.Fatal("private follow-up should supersede the pending reply")
+	if runtime.inboundTriggerSuperseded(context.Background(), first) {
+		t.Fatal("private follow-up must not discard the pending reply")
 	}
 	if runtime.inboundTriggerSuperseded(context.Background(), followUp) {
 		t.Fatal("the newest private message must keep its reply")
+	}
+	gated := withReplyTriggerGate(context.Background())
+	if err := runtime.interruptedReplyError(gated, first); err != nil {
+		t.Fatalf("pending private reply should still be delivered: %v", err)
 	}
 }

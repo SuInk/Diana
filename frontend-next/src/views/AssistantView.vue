@@ -896,6 +896,14 @@
                 <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
               </div>
               <div class="field">
+                <label class="switch">
+                  <input v-model="form.action_description_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">动作描写</span>
+                </label>
+                <span class="hint">保留当前人设和表达风格，只在台词前后自然穿插括号动作。</span>
+              </div>
+              <div class="field">
                 <label for="bot-self-reference">自称</label>
                 <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随表达风格，例如 我 / 本喵 / 咱" />
                 <span class="hint">机器人怎么称呼自己。</span>
@@ -1421,14 +1429,14 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
 
-// 人设库。存的是「它是谁、怎么说话」的四项组合，套用是把它们填进下面的表单——
+// 人设库。存的是「它是谁、怎么说话」的配置组合，套用是把它们填进下面的表单——
 // 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
 const personaLibrary = ref<Persona[]>([]);
 const personaLibraryBusy = ref(false);
 
-// 四项全空的不值得存：存进去列表里点开也是空的，还占一格。
+// 所有内容项全空的不值得存：存进去列表里点开也是空的，还占一格。
 const personaHasContent = computed(() => {
   const current = form.value;
   if (!current) return false;
@@ -1437,6 +1445,7 @@ const personaHasContent = computed(() => {
       current.self_reference?.trim() ||
       current.sentence_enders?.trim() ||
       (current.reply_style && current.reply_style !== "assistant")
+      || current.action_description_enabled
   );
 });
 
@@ -1444,6 +1453,7 @@ function personaSummary(persona: Persona): string {
   const parts: string[] = [];
   const styleLabel = replyStyleOptions.find((option) => option.value === persona.reply_style)?.label;
   if (styleLabel) parts.push(styleLabel);
+  if (persona.action_description_enabled) parts.push("动作描写");
   if (persona.self_reference) parts.push(`自称${persona.self_reference}`);
   if (persona.sentence_enders) parts.push(persona.sentence_enders.split(/[,，]/)[0].trim());
   if (!parts.length && persona.system_prompt) parts.push(persona.system_prompt.trim().slice(0, 12));
@@ -1464,6 +1474,7 @@ function applyPersona(persona: Persona): void {
   if (!form.value) return;
   form.value.system_prompt = persona.system_prompt ?? "";
   form.value.reply_style = (persona.reply_style || "assistant") as ReplyStyleKey;
+  form.value.action_description_enabled = persona.action_description_enabled ?? false;
   form.value.self_reference = persona.self_reference ?? "";
   form.value.sentence_enders = persona.sentence_enders ?? "";
   toastSuccess(`已套用「${persona.name}」，确认后记得保存配置`);
@@ -1497,6 +1508,7 @@ async function storeCurrentPersona(): Promise<void> {
       name,
       system_prompt: current.system_prompt ?? "",
       reply_style: current.reply_style ?? "assistant",
+      action_description_enabled: current.action_description_enabled ?? false,
       self_reference: current.self_reference ?? "",
       sentence_enders: current.sentence_enders ?? ""
     });
@@ -1529,6 +1541,7 @@ function personaExportPayload(personas: Persona[]): string {
         name: persona.name,
         system_prompt: persona.system_prompt ?? "",
         reply_style: persona.reply_style ?? "",
+        action_description_enabled: persona.action_description_enabled ?? false,
         self_reference: persona.self_reference ?? "",
         sentence_enders: persona.sentence_enders ?? ""
       }))
@@ -1616,9 +1629,7 @@ const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence
   gentle: { self_reference: "", sentence_enders: "" },
   lively: { self_reference: "", sentence_enders: "" },
   concise: { self_reference: "", sentence_enders: "" },
-  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
-  // 扮演对句尾语气词没有主张：那属于具体角色，不属于这套说话方式。
-  roleplay: { self_reference: "我", sentence_enders: "" }
+  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" }
 };
 
 // 切换风格时把这两个框填上，而不是运行时暗中套用：填进去用户看得见、能改。
@@ -1647,8 +1658,7 @@ const replyStyleOptions: AppSelectOption[] = [
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
   { value: "concise", label: "简洁" },
-  { value: "catgirl", label: "猫娘" },
-  { value: "roleplay", label: "扮演" }
+  { value: "catgirl", label: "猫娘" }
 ];
 
 const responseModeOptions: AppSelectOption[] = [
@@ -2096,6 +2106,7 @@ function setForm(config: BotProfileConfig): void {
     natural_interjection_enabled: config.natural_interjection_enabled ?? false,
     response_mode: config.response_mode ?? "custom",
     reply_style: config.reply_style ?? "assistant",
+    action_description_enabled: config.action_description_enabled ?? false,
     self_reference: config.self_reference ?? "",
     sentence_enders: config.sentence_enders ?? "",
     group_trigger_mode: config.group_trigger_mode ?? "smart",
