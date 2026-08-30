@@ -608,3 +608,39 @@ func TestLegacyRoleplayConfigMigratesToAssistantWithActions(t *testing.T) {
 		t.Fatal("旧扮演风格没有迁移为动作描写开关")
 	}
 }
+
+// 社交性回应可以按群覆盖：没设的群继承机器人级开关，设了的群以自己的为准。
+//
+// 「没设就继承」这一条尤其要钉住：合并是无条件拷贝 groupCfg 的值，
+// 靠 GroupConfig.WithDefaults 先把空值从机器人配置填上。哪天那一步被绕过，
+// 存量群配置（这个字段是 nil）会把全局已经打开的社交性回应悄悄顶成关闭。
+func TestGroupSocialReplyOverridesAndInherits(t *testing.T) {
+	base := BotConfig{SocialReplyEnabled: boolPointer(true)}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"off":     {GroupID: "off", SocialReplyEnabled: boolPointer(false)},
+		"on":      {GroupID: "on", SocialReplyEnabled: boolPointer(true)},
+		"inherit": {GroupID: "inherit"},
+	}})
+
+	for groupID, want := range map[string]bool{"off": false, "on": true, "inherit": true} {
+		cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: groupID})
+		if got := boolValue(cfg.SocialReplyEnabled, false); got != want {
+			t.Fatalf("群 %q 的社交性回应 = %v，期望 %v", groupID, got, want)
+		}
+	}
+
+	// 机器人级关闭时，单个群仍然可以自己打开。
+	off := BotConfig{SocialReplyEnabled: boolPointer(false)}.WithDefaults()
+	runtimeOff := NewRuntime(off, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtimeOff.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"on":      {GroupID: "on", SocialReplyEnabled: boolPointer(true)},
+		"inherit": {GroupID: "inherit"},
+	}})
+	for groupID, want := range map[string]bool{"on": true, "inherit": false} {
+		cfg := runtimeOff.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: groupID})
+		if got := boolValue(cfg.SocialReplyEnabled, false); got != want {
+			t.Fatalf("机器人级关闭时群 %q 的社交性回应 = %v，期望 %v", groupID, got, want)
+		}
+	}
+}

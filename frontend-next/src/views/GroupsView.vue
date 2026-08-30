@@ -80,6 +80,7 @@
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
             <span v-if="group.configured && group.natural_interjection_enabled" class="badge accent">自然插话</span>
+            <span v-if="group.configured && group.social_reply_enabled" class="badge accent">社交性回应</span>
             <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
               回复 {{ group.reply_gate.active_start }}–{{ group.reply_gate.active_end }}
             </span>
@@ -283,6 +284,17 @@
         </div>
         <div class="field wide">
           <label class="switch">
+            <input v-model="editing.social_reply_enabled" type="checkbox" />
+            <span class="track" aria-hidden="true"></span>
+            <span class="switch-label">本群社交性回应</span>
+          </label>
+          <span class="hint">
+            群友直接对机器人打招呼、夸奖、调侃或轻微评价（「笨笨」「你好可爱」「早」）时也回一句，哪怕没有具体问题。
+            只放行冲着机器人来的那一类：别人之间的闲聊、要机器人安静、同一轮已经回过，仍然沉默。
+          </span>
+        </div>
+        <div class="field wide">
+          <label class="switch">
             <input v-model="editing.recall_reply_auto_delete_enabled" type="checkbox" />
             <span class="track" aria-hidden="true"></span>
             <span class="switch-label">本群查看撤回消息后自动撤回回复</span>
@@ -470,6 +482,7 @@ const defaultRecallReplyAutoDeleteEnabled = ref(false);
 const defaultNaturalInterjectionEnabled = ref(false);
 // 自然分条默认是开的，跟机器人配置那边的缺省一致。
 const defaultNaturalReplySplitEnabled = ref(true);
+const defaultSocialReplyEnabled = ref(false);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
@@ -547,6 +560,7 @@ async function load(showFeedback = false): Promise<void> {
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       defaultNaturalInterjectionEnabled.value = current.natural_interjection_enabled ?? false;
       defaultNaturalReplySplitEnabled.value = current.natural_reply_split_enabled ?? true;
+      defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
@@ -576,6 +590,7 @@ function addGroup(): void {
       group_triggers: [],
       natural_interjection_enabled: defaultNaturalInterjectionEnabled.value,
       natural_reply_split_enabled: defaultNaturalReplySplitEnabled.value,
+      social_reply_enabled: defaultSocialReplyEnabled.value,
       recall_reply_auto_delete_enabled: defaultRecallReplyAutoDeleteEnabled.value,
       recall_reply_auto_delete_delay_seconds: defaultRecallReplyAutoDeleteDelay.value,
       plugin_overrides: {},
@@ -592,6 +607,7 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
   config.natural_interjection_enabled ??= defaultNaturalInterjectionEnabled.value;
   config.natural_reply_split_enabled ??= defaultNaturalReplySplitEnabled.value;
+  config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
   config.reply_style ??= "";
