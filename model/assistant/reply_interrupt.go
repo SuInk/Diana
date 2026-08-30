@@ -10,10 +10,12 @@ import (
 	"time"
 )
 
-// 回复打断：同一用户在回复还没开口时又发来一条明确叫机器人的消息（补充、
-// 修正，或撤回后的重发），旧回复在首条消息发出之前放弃，由新消息那一轮结合
-// 上下文一并回答，避免同一个问题新旧各回一次。私聊队列按会话串行，新一轮
-// 生成时必然能看到前一条还没被回应的消息。
+// 回复打断：群聊中同一用户在回复还没开口时又发来一条明确叫机器人的消息
+// （补充、修正，或撤回后的重发），旧回复在首条消息发出之前放弃，由新消息
+// 那一轮结合上下文一并回答，避免群里连着发出高度重复的回复。
+//
+// 私聊不做这种取代：队列本来就按会话串行，先让已经生成的回复落地，下一轮再从
+// 对话历史里参考它。这样不会为了追发消息丢掉已有结果，又重新生成一遍。
 //
 // 撤回本身不取消回复：用户只撤回没重发时机器人照常回答（产品决策——撤回的
 // 话往往正是想被看到的那句）。撤回登记只有一个用途：回复一条已撤回的消息时
@@ -139,6 +141,9 @@ func (r *Runtime) noteDirectedInbound(event MessageEvent) {
 // 直接叫我了」。让位之后由直呼那一轮一并回答，pendingEarlierMessage 会让它
 // 明确承接前一条，不会显得前一条被跳过。
 func (r *Runtime) inboundTriggerSuperseded(ctx context.Context, event MessageEvent) bool {
+	if event.Kind == EventKindPrivate {
+		return false
+	}
 	key := directedInboundKey(event)
 	messageID := strings.TrimSpace(event.MessageID)
 	if key == "" || messageID == "" {
