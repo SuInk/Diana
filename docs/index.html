@@ -291,7 +291,14 @@
 
 <div class="wrap shot">
   <figure>
-    <img src="./assets/diana-webui-overview.png" alt="Diana 控制台总览：通道状态、消息统计、系统资源与实时事件流" loading="lazy" />
+    <!-- 截图跟着主题走。浅色页面配深色截图会很突兀，而 <picture> 的
+         prefers-color-scheme 只认系统偏好，认不出这里的手动切换，所以换 src。 -->
+    <img
+      id="console-shot"
+      src="./assets/diana-webui-overview.png"
+      alt="Diana 控制台总览：通道状态、消息统计、系统资源与实时事件流"
+      width="1600" height="1000" loading="lazy"
+    />
     <figcaption>控制台总览：通道状态、消息统计、系统资源与实时事件流</figcaption>
   </figure>
 </div>
@@ -502,11 +509,16 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
       light: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>')
     };
     const labels = { system: "跟随系统", dark: "深色", light: "浅色" };
-    window.DianaTheme.subscribe((preference) => {
+    const shot = document.getElementById("console-shot");
+    window.DianaTheme.subscribe((preference, resolved) => {
       icon.innerHTML = glyphs[preference];
       const text = `主题：${labels[preference]}（点击切换）`;
       button.setAttribute("title", text);
       button.setAttribute("aria-label", text);
+      shot.src =
+        resolved === "light"
+          ? "./assets/diana-webui-overview-light.png"
+          : "./assets/diana-webui-overview.png";
     });
     button.addEventListener("click", () => window.DianaTheme.cycle());
   })();
