@@ -18,7 +18,7 @@ const pages = [
     title: "配置",
     file: "configuration.html",
     sections: [
-      ["channels", "QQ 与 Telegram", "OneBot NapCat Bot API 多通道 隔离"],
+      ["channels", "平台接入", "OneBot NapCat Telegram QQ 钉钉 飞书 企业微信 回调 多通道 隔离"],
       ["models", "模型与视觉", "LLM Provider 生图 OCR token 超时"],
       ["groups", "群聊策略", "群管理 回复时间 屏蔽 QQ 触发词"],
       ["agent", "Agent 与工具", "联网搜索 MCP Skills 提醒 订阅"],

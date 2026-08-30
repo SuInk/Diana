@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Diana — 可自托管的多平台 AI 助手</title>
-<meta name="description" content="Diana 是用 Go 编写的可自托管多平台 AI 助手：OneBot v11 与 Telegram 同时在线，单二进制部署，数据留在自己的机器上。" />
+<meta name="description" content="Diana 是用 Go 编写的可自托管多平台 AI 助手：OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书与企业微信同时在线，单二进制部署，数据留在自己的机器上。" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -269,7 +269,12 @@
       配置、记忆和日志都存在本机的 SQLite 里，不依赖任何托管服务。
     </p>
     <div class="hero-cta">
-      <a class="btn btn-primary" href="#quickstart">快速开始</a>
+      <!-- 首页本身就是快速开始，再放一个跳到本页锚点的按钮是绕圈；
+           首屏该给的是「去哪看细节」和「先看看效果」。 -->
+      <a class="btn btn-primary" href="./deploy.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H5.5A1.5 1.5 0 0 1 4 17z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 0 20 17z"/></svg>
+        查看文档
+      </a>
       <a class="btn btn-ghost" href="./demo.html">在线演示</a>
       <a class="btn btn-ghost" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
