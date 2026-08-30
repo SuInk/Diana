@@ -412,11 +412,18 @@ func TestBotPlatforms(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode platforms: %v", err)
 	}
-	if len(body.Platforms) != 2 {
-		t.Fatalf("platforms = %#v, want OneBot v11 and Telegram", body.Platforms)
+	if len(body.Platforms) != len(assistant.SupportedPlatforms()) {
+		t.Fatalf("platforms = %#v, want the full registry", body.Platforms)
 	}
+	// OneBot 排在最前：它是本项目最主要的接入方式，新建机器人时该是默认项。
 	if body.Platforms[0].ID != assistant.PlatformOneBotV11 || body.Platforms[0].Name != "OneBot v11" {
 		t.Fatalf("OneBot platform = %#v", body.Platforms[0])
+	}
+	// 回调型平台必须把路径一起发给前端，用户要拿它去对方后台填回调地址。
+	for _, platform := range body.Platforms {
+		if platform.Inbound == assistant.InboundCallback && platform.CallbackPath == "" {
+			t.Fatalf("callback platform %q exposed without its callback path", platform.ID)
+		}
 	}
 	for _, platform := range body.Platforms {
 		if platform.ID == "napcat" || platform.ID == "lagrange" || platform.ID == "go-cqhttp" {

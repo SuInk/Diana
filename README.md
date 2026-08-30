@@ -2,7 +2,7 @@
 
 # Diana
 
-**可自托管的多平台 AI 助手 —— OneBot v11 与 Telegram 同时在线，数据留在自己的机器上。**
+**可自托管的多平台 AI 助手 —— OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书、企业微信同时在线，数据留在自己的机器上。**
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
@@ -35,7 +35,7 @@
 
 ## 这是什么
 
-Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、平台适配层、Gin WebUI 和插件系统，编译成单个二进制运行。当前自带 OneBot v11 和 Telegram 两类通道，WebUI 可以管理多个机器人配置、模型分配、群聊策略、插件与内置 Agent。
+Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、平台适配层、Gin WebUI 和插件系统，编译成单个二进制运行。当前自带 OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书和企业微信六类通道，WebUI 可以管理多个机器人配置、模型分配、群聊策略、插件与内置 Agent。
 
 配置、记忆、日志都存在本机的 SQLite 里，不依赖任何托管服务；每条消息为什么回复、为什么不回复、用了哪些工具、花了多少 token，都能在事件中心查到。
 
@@ -43,7 +43,7 @@ Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、�
 
 | | |
 | --- | --- |
-| **多通道同时在线** | OneBot v11 与 Telegram 并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享 |
+| **多通道同时在线** | OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书、企业微信并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享 |
 | **模型职责拆分** | 对话、视觉理解、意图识别、图片生成分别绑定 Provider 与模型，保存前用真实请求验证 |
 | **内置联网搜索** | 无需安装插件，面对时效性内容可以先检索再回答；Exa MCP 优先，Tavily 兜底 |
 | **图片文字识别** | 图片可同时走视觉模型与 OCR（LLM 转写 / 自托管 OCR 服务 / 本地 tesseract）；对话模型不支持看图时也能只收识别后的文字。识别结果按图片内容哈希落库，同一张图或表情包只识别一次 |
@@ -266,18 +266,43 @@ llm:
 
 ## 通道支持
 
-| 分类 | 平台 | 接入方式 |
+| 平台 | 接入方式 | 需要公网地址 |
 | --- | --- | --- |
-| OneBot v11 | OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana（NapCat、Lagrange.Core、go-cqhttp 等同属这一类） |
-| Telegram | Telegram Bot API | 官方长轮询，由 Diana 主动出站连接，不需要公网地址和 webhook |
+| OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana（NapCat、Lagrange.Core、go-cqhttp 等同属这一类） | 否 |
+| Telegram | 官方 Bot API 长轮询，由 Diana 主动出站连接 | 否 |
+| QQ 官方机器人 | QQ 开放平台 WebSocket 网关，由 Diana 主动出站连接 | 否 |
+| 钉钉 | Stream 模式，由 Diana 主动出站建立长连接 | 否 |
+| 飞书 | 事件订阅回调，由飞书 POST 到 Diana | **是** |
+| 企业微信 | 自建应用回调，由企业微信 POST 到 Diana | **是** |
 
-所有启用的配置会同时在线。Telegram 只需要 BotFather 给的 Bot Token；国内网络通常还要在机器人页填代理地址，部署了本地 Bot API server 可填自建地址绕过 50MB 上传限制。
+所有启用的配置会同时在线。凭据都在「机器人」页按平台填写，保存后留空表示沿用已存的那份。
 
-两个平台的能力差异：
+### 各平台需要的凭据
 
-- **群等级门槛只对 OneBot v11 生效**。Telegram 没有群等级概念，准入设置里不显示该项。
-- **语音消息、@某人** 依赖 OneBot 的 CQ 码，Telegram 上自然降级：正文照发，但不会 @ 到人。
+- **Telegram**：BotFather 给的 Bot Token。国内网络通常还要填代理地址；部署了本地 Bot API server 可填自建地址绕过 50MB 上传限制。
+- **QQ 官方机器人**：开放平台的 AppID 与 AppSecret。机器人未上架时可勾选沙箱环境联调。
+- **钉钉**：开放平台应用的 Client ID 与 Client Secret。回复优先走会话自带的 sessionWebhook，不消耗主动推送额度。
+- **飞书**：自建应用的 App ID、App Secret，以及事件订阅页的 Verification Token；后台开了加密推送时还要填 Encrypt Key。
+- **企业微信**：企业 ID、AgentId、应用 Secret，以及「接收消息」配置里的 Token 和 EncodingAESKey——后两项缺一个就只能发不能收。
+
+### 回调地址
+
+飞书和企业微信只能由平台把事件 POST 过来，需要把 Diana 暴露到公网。机器人页会显示要填到对方后台的地址：
+
+```
+https://<你的公网域名>/api/channels/feishu/callback
+https://<你的公网域名>/api/channels/wecom/callback
+```
+
+同一平台配了多个机器人时在地址后加配置档 ID 区分（`/api/channels/feishu/callback/<profile-id>`）。这两条路径不走 WebUI 登录鉴权，改由平台各自的规范验签：企业微信按 `msg_signature` 校验并用 WXBizMsgCrypt 解密、核对报文里的企业 ID；飞书核对 Verification Token，配了 Encrypt Key 时还会验 `X-Lark-Signature` 并解密。
+
+### 平台能力差异
+
+- **群等级门槛只对 OneBot v11 生效**。其余平台没有群等级概念，准入设置里不显示该项。
+- **语音消息、@某人** 依赖 OneBot 的 CQ 码，其他平台上自然降级：正文照发，但不会 @ 到人。
 - **本地媒体**：OneBot 侧由接入端拉取 Diana 的 `/media/resolver` 地址；Telegram 拉不到本机地址，改为直接 multipart 上传。
+- **只收到点名消息**：QQ 官方机器人和钉钉的平台侧只推送 @ 了机器人的群消息，拿不到全部群消息，因此自然插话类功能在这两个平台上不生效。
+- **富媒体接收**：飞书、企业微信、钉钉目前只处理文本消息，图片和文件给的是下载凭据，需要另换取。
 
 ## 访问安全
 
@@ -295,7 +320,7 @@ WebUI 从首次启动起强制登录，本机和公网访问同一套规则。�
 > [!IMPORTANT]
 > 按来源计数依赖真实客户端 IP。Diana 默认不信任任何反向代理，套了反代之后所有请求的来源地址都会变成反代自己。**公网部署请务必设置 `DIANA_TRUSTED_PROXIES`**（逗号分隔的 IP 或 CIDR），声明后才会解析 `X-Forwarded-For`。会话 cookie 未设 Secure 以兼容内网 HTTP，公网部署请套 HTTPS 反向代理。
 
-豁免路径：登录及快速登录端点、`/api/health`（监控探活）、`/onebot/*`（由 OneBot access token 单独鉴权）、群管理页（自有验证码流程）。
+豁免路径：登录及快速登录端点、`/api/health`（监控探活）、`/onebot/*`（由 OneBot access token 单独鉴权）、`/api/channels/*`（飞书与企业微信的事件回调，按各平台规范验签）、群管理页（自有验证码流程）。
 
 ## 能力与扩展
 
