@@ -37,6 +37,14 @@ type Provider struct {
 	UsePKCE bool `json:"use_pkce"`
 	// TokenHeaders 是拿这家的令牌发模型请求时要额外带的头。
 	TokenHeaders map[string]string `json:"token_headers,omitempty"`
+	// TokenHeader / TokenScheme 决定令牌本身写进哪个头、加不加前缀。
+	//
+	// 留空是 Authorization + Bearer，绝大多数提供商都是这样。但不能写死：
+	// Anthropic 收到 Authorization 里的 OAuth 令牌会回 401「OAuth authentication
+	// is currently not supported.」，它要求令牌放在 x-api-key 里、且不带前缀。
+	// 这种事只有各家自己说了算，所以做成配置项。
+	TokenHeader string `json:"token_header,omitempty"`
+	TokenScheme string `json:"token_scheme,omitempty"`
 	// BuiltIn 标记内置提供商，控制台里不允许删除或改地址。
 	BuiltIn bool `json:"built_in,omitempty"`
 	// Notes 是控制台上给用户看的一句说明。
@@ -72,6 +80,8 @@ func (p Provider) Normalize() (Provider, error) {
 	p.ClientID = strings.TrimSpace(p.ClientID)
 	p.ClientSecret = strings.TrimSpace(p.ClientSecret)
 	p.RedirectURI = strings.TrimSpace(p.RedirectURI)
+	p.TokenHeader = strings.TrimSpace(p.TokenHeader)
+	p.TokenScheme = strings.TrimSpace(p.TokenScheme)
 	p.Notes = strings.TrimSpace(p.Notes)
 	if p.Key == "" {
 		return Provider{}, fmt.Errorf("llmauth: 提供商标识不能为空")
@@ -89,6 +99,30 @@ func (p Provider) Normalize() (Provider, error) {
 		if _, err := url.Parse(p.RedirectURI); err != nil {
 			return Provider{}, fmt.Errorf("llmauth: 回调地址无效: %w", err)
 		}
+	}
+	if err := requireHeaderName("令牌请求头", p.TokenHeader); err != nil {
+		return Provider{}, err
+	}
+	if strings.ContainsAny(p.TokenScheme, " \t\r\n") {
+		return Provider{}, fmt.Errorf("llmauth: 令牌前缀不能含空白字符")
+	}
+	if len(p.TokenHeaders) > 0 {
+		headers := make(map[string]string, len(p.TokenHeaders))
+		for name, value := range p.TokenHeaders {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if err := requireHeaderName("附加请求头", name); err != nil {
+				return Provider{}, err
+			}
+			value = strings.TrimSpace(value)
+			if strings.ContainsAny(value, "\r\n") {
+				return Provider{}, fmt.Errorf("llmauth: 附加请求头 %q 的值不能含换行", name)
+			}
+			headers[name] = value
+		}
+		p.TokenHeaders = headers
 	}
 	scopes := make([]string, 0, len(p.Scopes))
 	for _, scope := range p.Scopes {
@@ -129,6 +163,22 @@ func requireHTTPSURL(label, raw string) error {
 		return nil
 	}
 	return fmt.Errorf("llmauth: %s必须是 https（本机回环地址除外）", label)
+}
+
+// requireHeaderName 校验用户填的请求头名字。留空表示用默认值，不算错。
+//
+// 头名字直接拼进请求里，含空格或冒号的值会把这一行撕成两行——那是请求头注入，
+// 而这一行里带的正是令牌。
+func requireHeaderName(label, name string) error {
+	if name == "" {
+		return nil
+	}
+	for _, r := range name {
+		if r <= ' ' || r >= 0x7f || strings.ContainsRune(":()<>@,;\\\"/[]?={}", r) {
+			return fmt.Errorf("llmauth: %s名不合法: %q", label, name)
+		}
+	}
+	return nil
 }
 
 // isLoopbackHost 判断主机名是不是本机回环。

@@ -41,10 +41,10 @@ func doThroughCredentials(t *testing.T, source CredentialSource, seed func(*http
 func TestCredentialTransportSwapsAPIKeyForBearer(t *testing.T) {
 	source := CredentialSourceFunc(func(context.Context) (Credential, error) {
 		return Credential{
-			Kind:                 CredentialKindOAuth,
-			Token:                "oauth-token",
-			Headers:              map[string]string{"Anthropic-Beta": "oauth"},
-			SuppressAPIKeyHeader: true,
+			Kind:                CredentialKindOAuth,
+			Token:               "oauth-token",
+			Headers:             map[string]string{"Anthropic-Beta": "oauth"},
+			ReplaceProviderAuth: true,
 		}, nil
 	})
 	header := doThroughCredentials(t, source, func(req *http.Request) {
@@ -94,7 +94,7 @@ func TestCredentialTransportFallsThroughWhenResolutionFails(t *testing.T) {
 // RoundTripper 不允许改传入的请求。改了的话重试会带上上一次的头。
 func TestCredentialTransportDoesNotMutateTheIncomingRequest(t *testing.T) {
 	source := CredentialSourceFunc(func(context.Context) (Credential, error) {
-		return Credential{Kind: CredentialKindOAuth, Token: "oauth-token", SuppressAPIKeyHeader: true}, nil
+		return Credential{Kind: CredentialKindOAuth, Token: "oauth-token", ReplaceProviderAuth: true}, nil
 	})
 	recorder := &recordingTransport{}
 	client := httpClientWithCredentials(&http.Client{Transport: recorder}, source)
@@ -132,7 +132,7 @@ func TestNewClientAppliesTheCredentialSource(t *testing.T) {
 		BaseURL:  server.URL,
 		Model:    "gpt-test",
 	}, WithHTTPClient(server.Client()), WithCredentialSource(CredentialSourceFunc(func(context.Context) (Credential, error) {
-		return Credential{Kind: CredentialKindOAuth, Token: "oauth-token", SuppressAPIKeyHeader: true}, nil
+		return Credential{Kind: CredentialKindOAuth, Token: "oauth-token", ReplaceProviderAuth: true}, nil
 	})))
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
@@ -166,5 +166,52 @@ func TestCachedCredentialSourceResolvesOncePerValidity(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("resolutions after Invalidate = %d, want 2", calls)
+	}
+}
+
+// 「OAuth 令牌一定走 Authorization: Bearer」是错的：Anthropic 对 Bearer 里的
+// OAuth 令牌回 401，要求换成 x-api-key 且不带前缀。凭据能指定落点，并且要把
+// SDK 自己写上的另一个鉴权头摘掉。
+func TestCredentialTransportHonoursACustomTokenHeader(t *testing.T) {
+	source := CredentialSourceFunc(func(context.Context) (Credential, error) {
+		return Credential{
+			Kind:                CredentialKindOAuth,
+			Token:               "oauth-token",
+			TokenHeader:         "x-api-key",
+			ReplaceProviderAuth: true,
+		}, nil
+	})
+	header := doThroughCredentials(t, source, func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer sk-configured")
+		req.Header.Set("X-Api-Key", "sk-configured")
+	})
+	if got := header.Get("X-Api-Key"); got != "oauth-token" {
+		t.Fatalf("X-Api-Key = %q, want the bare OAuth token", got)
+	}
+	if got := header.Get("Authorization"); got != "" {
+		t.Fatalf("Authorization survived alongside the token header: %q", got)
+	}
+}
+
+// 自定义前缀照发；落点是自定义头时不该被默认成 Bearer。
+func TestCredentialAuthHeaderDefaults(t *testing.T) {
+	cases := []struct {
+		name       string
+		credential Credential
+		wantName   string
+		wantValue  string
+	}{
+		{"默认", Credential{Token: "t"}, "Authorization", "Bearer t"},
+		{"自定义头不加前缀", Credential{Token: "t", TokenHeader: "X-Api-Key"}, "X-Api-Key", "t"},
+		{"显式前缀", Credential{Token: "t", TokenHeader: "X-Auth", TokenScheme: "Token"}, "X-Auth", "Token t"},
+		{"空令牌", Credential{}, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name, value := tc.credential.AuthHeader()
+			if name != tc.wantName || value != tc.wantValue {
+				t.Fatalf("AuthHeader() = %q, %q; want %q, %q", name, value, tc.wantName, tc.wantValue)
+			}
+		})
 	}
 }
