@@ -203,6 +203,9 @@ code {
   padding: 1px 5px; border-radius: 4px;
   background: var(--bg-inset); color: var(--text);
   border: 1px solid var(--line);
+  /* 行内 code 常是 URL 或路径这类长串，默认不换行会把窄容器（比如对照卡片
+     里的 dd）撑破并被裁掉。pre 里的代码另有横向滚动，下面单独排除。 */
+  overflow-wrap: anywhere;
 }
 
 pre {
@@ -217,6 +220,7 @@ pre code {
   padding: 0; border: none; background: none;
   font-size: 13px; line-height: 1.75; color: var(--text);
   white-space: pre;
+  overflow-wrap: normal;
 }
 
 .copy-button {
