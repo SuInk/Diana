@@ -1,0 +1,97 @@
+<!doctype html>
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="How Diana works inside: module ownership, the message pipeline, memory and recall, media handling and storage." />
+    <meta name="theme-color" content="#100d13" />
+    <title>Diana docs — Internals</title>
+    <link rel="alternate" hreflang="zh" href="../implementation.html" />
+    <link rel="alternate" hreflang="en" href="./implementation.html" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../styles.css?v=20260842" />
+    <script src="../theme.js?v=20260842"></script>
+  </head>
+  <body data-page="implementation">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">Internals</p><h1>How messages, models, tools and memory fit together</h1><p class="lead">Platform adapters only send and normalise. The assistant runtime owns the decisions, models and tools run inside explicit permissions, and SQLite holds recoverable state.</p></header>
+
+      <section class="section searchable" id="architecture">
+        <div class="section-heading"><p class="eyebrow">Architecture</p><h2>Core modules and who owns what</h2></div>
+        <div class="architecture" role="img" aria-label="Diana architecture diagram">
+          <div class="arch-row sources"><div><strong>OneBot v11</strong><span>reverse WebSocket</span></div><div><strong>Telegram / QQ / DingTalk</strong><span>outbound connections</span></div><div><strong>Feishu / WeCom</strong><span>platform callbacks</span></div><div><strong>Console</strong><span>REST + SSE</span></div></div>
+          <div class="arch-arrow" aria-hidden="true">↓</div>
+          <div class="arch-core"><strong>Assistant Runtime</strong><span>event normalisation · group policy · reply routing · concurrency · replying to the source channel</span></div>
+          <div class="arch-arrow" aria-hidden="true">↓</div>
+          <div class="arch-row"><div><strong>LLM</strong><span>providers and role routing</span></div><div><strong>Agent</strong><span>tools, MCP, skills</span></div><div><strong>Memory</strong><span>history, summaries, long-term facts</span></div><div><strong>Plugins</strong><span>search, parsing, OCR, voice</span></div></div>
+          <div class="arch-arrow" aria-hidden="true">↓</div>
+          <div class="arch-row"><div><strong>SQLite</strong><span>configuration and durable state</span></div><div><strong>Media</strong><span>originals and history cache</span></div><div><strong>App logs</strong><span>operations and call chains</span></div></div>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Directory</th><th>Responsibility</th></tr></thead><tbody>
+          <tr><td><code>cmd/webui/</code></td><td>Process entry point, environment assembly, SQLite and runtime dependency injection.</td></tr>
+          <tr><td><code>model/assistant/</code></td><td>Message events, channels, reply decisions, agent, media, memory and tasks.</td></tr>
+          <tr><td><code>model/llm/</code></td><td>Unified requests, provider adapters, model catalogue, token budget and retries.</td></tr>
+          <tr><td><code>model/storage/</code></td><td>Schema and persistence for configuration, messages, events, memory and tasks.</td></tr>
+          <tr><td><code>webui/</code></td><td>Gin API, authentication, configuration, events, updates and SSE.</td></tr>
+          <tr><td><code>frontend-next/</code></td><td>The Vue 3 admin console.</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section class="section searchable" id="message-flow">
+        <div class="section-heading"><p class="eyebrow">Pipeline</p><h2>How one message decides between replying and staying quiet</h2></div>
+        <ol class="timeline">
+          <li><strong>Receive and normalise</strong><p>The platform adapter turns text, mentions, quotes, images, files and sender details into a single <code>MessageEvent</code>.</p></li>
+          <li><strong>Enrich and cache</strong><p>Quotes, forwards and media references are resolved, and short-lived platform images are written into the local history media cache.</p></li>
+          <li><strong>Deterministic gates</strong><p>Checks whether the bot and group are enabled, the reply window, muted users, member level and bot-to-bot suppression.</p></li>
+          <li><strong>Trigger detection</strong><p>Direct messages are handled directly; groups look for explicit mentions, quotes, trigger words and plugin commands. An explicit mention outranks a quote.</p></li>
+          <li><strong>Semantic routing for unprompted replies</strong><p>Ordinary group messages that were not directly triggered are judged immediately by the intent model, waiting at most 60 seconds so nothing queues forever.</p></li>
+          <li><strong>Assemble context</strong><p>Combines the system prompt, relationships, long-term memory, recent history, images and tool evidence, trimmed to the token budget.</p></li>
+          <li><strong>Model and tool loop</strong><p>Selects the chat or vision role; the agent runs the permitted tools and records every step.</p></li>
+          <li><strong>Send and audit</strong><p>The reply goes back to the source channel, and the detailed reason, send result, latency and tokens are all persisted.</p></li>
+        </ol>
+      </section>
+
+      <section class="section searchable" id="memory">
+        <div class="section-heading"><p class="eyebrow">Memory</p><h2>Long histories are not stuffed into every request</h2></div>
+        <div class="memory-layers">
+          <article><span>01</span><h3>Recent context</h3><p>Keeps the latest messages of the current session, serving quotes, follow-ups and continuous conversation first.</p></article>
+          <article><span>02</span><h3>Compacted summaries</h3><p>Once history passes a threshold, topics, conclusions and open items are distilled to cut repeated tokens.</p></article>
+          <article><span>03</span><h3>Long-term facts</h3><p>Stable facts, preferences and relationships are extracted asynchronously with their source, confidence and update time.</p></article>
+          <article><span>04</span><h3>Retrieval on demand</h3><p>Searchable by time, keyword, user, group and platform; cross-group and cross-channel access are gated by separate switches.</p></article>
+        </div>
+        <p>Retrieval narrows with structured filters first, then ranks by textual relevance and time decay, and finally passes the model only the matching evidence. Summaries are not recomputed when configuration reloads — they expire only when the input history changes or the summary version is bumped.</p>
+      </section>
+
+      <section class="section searchable" id="media">
+        <div class="section-heading"><p class="eyebrow">Multimodal</p><h2>Originals, OCR and history descriptions each have a job</h2></div>
+        <div class="flow-strip"><span>platform media reference</span><b>→</b><span>download and verify</span><b>→</b><span>original cache</span><b>→</b><span>vision model / OCR</span><b>→</b><span>answer and description cache</span></div>
+        <ul class="check-list">
+          <li>Ordinary images are converted into whatever the provider accepts; the media layer does not shrink originals unconditionally.</li>
+          <li>Text-heavy screenshots use both a high-detail vision input and OCR evidence.</li>
+          <li>History image descriptions are cached by content SHA-256 and algorithm version.</li>
+          <li>Image count and vision tokens are budgeted so base64 history cannot grow without bound.</li>
+          <li>Video contributes a limited number of context frames, and temporary files are cleaned up afterwards.</li>
+        </ul>
+      </section>
+
+      <section class="section searchable" id="storage">
+        <div class="section-heading"><p class="eyebrow">Storage</p><h2>One SQLite database plus a manageable media cache</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>Data</th><th>Default location</th><th>Backup requirement</th></tr></thead><tbody>
+          <tr><td>Configuration, credentials, sessions, messages, memory, tasks</td><td><code>data/diana.db</code></td><td>Must be backed up, keeping the main database consistent with WAL/SHM.</td></tr>
+          <tr><td>Inbound media</td><td><code>data/media</code></td><td>Can be evicted by size; back it up when historical image recognition matters.</td></tr>
+          <tr><td>Runtime logs</td><td><code>logs/diana.log</code></td><td>Rotate regularly; never publish platform events or debug context.</td></tr>
+          <tr><td>Install and update backups</td><td><code>.installer/backups</code>, <code>.diana-updates</code></td><td>Keep the last known-good version and the evidence needed to restore it.</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <nav class="page-nav" aria-label="Pagination"><a href="./configuration.html"><small>Previous</small><strong>← Configure</strong></a><a href="./operations.html"><small>Next</small><strong>Operate →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="../app.js?v=20260842" defer></script>
+  </body>
+</html>

@@ -1,18 +1,20 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Diana — 可自托管的多平台 AI 助手</title>
-<meta name="description" content="Diana 是用 Go 编写的可自托管多平台 AI 助手：OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书与企业微信同时在线，单二进制部署，数据留在自己的机器上。" />
+<title>Diana — Self-hosted multi-platform AI assistant</title>
+<meta name="description" content="Diana is a self-hosted multi-platform AI assistant written in Go: OneBot v11, Telegram, QQ official bots, DingTalk, Feishu and WeCom online at once, a single binary, and your data stays on your own machine." />
+<link rel="alternate" hreflang="zh" href="../index.html" />
+<link rel="alternate" hreflang="en" href="./index.html" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-<link rel="alternate" hreflang="zh" href="./index.html" />
-<link rel="alternate" hreflang="en" href="./en/index.html" />
 <meta name="theme-color" content="#100d13" />
-<script src="./theme.js?v=20260842"></script>
-<link rel="stylesheet" href="./landing.css?v=20260842" />
+<script src="../theme.js?v=20260842"></script>
+<link rel="stylesheet" href="../landing.css?v=20260842" />
 </head>
 <body>
 
@@ -20,14 +22,12 @@
   <div class="wrap nav-inner">
     <a class="brand" href="./index.html"><span class="brand-mark">D</span>Diana</a>
     <div class="nav-links">
-      <!-- 顶栏只留图标入口。特性/快速开始就在下面一屏内，锚点链接是多余的；
-           在线演示首屏按钮里已经有了。 -->
-      <a class="nav-icon" href="./deploy.html" title="查看文档" aria-label="查看文档">
+      <a class="nav-icon" href="./deploy.html" title="Documentation" aria-label="Documentation">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H5.5A1.5 1.5 0 0 1 4 17z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 0 20 17z"/></svg>
-        文档
+        Docs
       </a>
-      <a class="nav-icon lang-pill" href="./en/index.html" title="Switch to English" aria-label="Switch to English"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>EN</a>
-      <a class="nav-icon" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库">
+      <a class="nav-icon lang-pill" href="../index.html" title="切换到中文" aria-label="切换到中文"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>中文</a>
+      <a class="nav-icon" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener" title="GitHub repository" aria-label="GitHub repository">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         GitHub
       </a>
@@ -38,26 +38,24 @@
 
 <header class="hero">
   <div class="wrap">
-    <h1>可自托管的多平台 AI 助手</h1>
+    <h1>A self-hosted multi-platform AI assistant</h1>
     <p class="hero-sub">
-      Diana 用 Go 编写，编译成单个二进制运行。OneBot v11、Telegram、QQ 官方机器人、
-      钉钉、飞书、企业微信可以同时在线，内置 WebUI、插件系统与 Agent；
-      配置、记忆和日志都存在本机的 SQLite 里，不依赖任何托管服务。
+      Diana is written in Go and compiles to a single binary. OneBot v11, Telegram, QQ official bots,
+      DingTalk, Feishu and WeCom can all be online at once, with a built-in web console, plugin system
+      and agent. Configuration, memory and logs live in SQLite on your own machine — no hosted service involved.
     </p>
     <div class="hero-cta">
-      <!-- 一个明确的主操作（安装）+ 三个次要入口。成熟项目的首屏基本都是这个
-           结构：主操作填色、其余描边，权重一眼可分。 -->
       <a class="btn btn-primary" href="#quickstart">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-        快速开始
+        Get started
       </a>
       <a class="btn btn-ghost" href="./deploy.html">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H5.5A1.5 1.5 0 0 1 4 17z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 0 20 17z"/></svg>
-        查看文档
+        Documentation
       </a>
-      <a class="btn btn-ghost" href="./demo.html">
+      <a class="btn btn-ghost" href="../demo/">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5z"/></svg>
-        在线演示
+        Live demo
       </a>
       <a class="btn btn-ghost" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
@@ -73,80 +71,77 @@
       <div class="install-line">
         <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code>
         <code id="install-cmd-ps" data-os="ps" hidden>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code>
-        <!-- 首屏这条是速用式，只为「先跑起来」；生产部署建议用下面「快速开始」里的完整命令。 -->
+        <!-- The hero command is the quick-try form; for production use the fuller command in Quick start below. -->
         <code id="install-cmd-docker" data-os="docker" hidden>docker run -d --name diana -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</code>
-        <button class="copy-btn" id="install-copy">复制</button>
+        <button class="copy-btn" id="install-copy">Copy</button>
       </div>
     </div>
-    <p class="hero-note">安装完成后打开 <code>http://127.0.0.1:18080</code>，进行首次配置。</p>
+    <p class="hero-note">Once it finishes, open <code>http://127.0.0.1:18080</code> to run the first-time setup.</p>
   </div>
 </header>
 
 <div class="wrap shot">
   <figure>
-    <!-- 截图跟着主题走。浅色页面配深色截图会很突兀，而 <picture> 的
-         prefers-color-scheme 只认系统偏好，认不出这里的手动切换，所以换 src。 -->
     <img
       id="console-shot"
-      src="./assets/diana-webui-overview.png"
-      alt="Diana 控制台总览：通道状态、消息统计、系统资源与实时事件流"
+      src="../assets/diana-webui-overview.png"
+      alt="Diana console overview: channel status, message statistics, system resources and the live event feed"
       width="1600" height="1000" loading="lazy"
     />
-    <figcaption>控制台总览：通道状态、消息统计、系统资源与实时事件流</figcaption>
+    <figcaption>Console overview: channel status, message statistics, system resources and the live event feed</figcaption>
   </figure>
 </div>
 
 <section id="features">
   <div class="wrap">
     <div class="sec-head">
-      <h2>特性</h2>
+      <h2>Features</h2>
     </div>
     <div class="feat-grid">
-      <!-- 自托管排第一：它是选它而不选托管服务的唯一理由。 -->
       <div class="feat">
         <div class="feat-icon"><i data-lucide="hard-drive"></i></div>
-        <h3>完全自托管</h3>
-        <p>编译成单个二进制，配置、记忆、日志全部落在本机的 SQLite；不回传任何数据，也不依赖任何托管服务。</p>
+        <h3>Fully self-hosted</h3>
+        <p>A single compiled binary. Configuration, memory and logs all live in SQLite on your machine; nothing is reported home and no hosted service is required.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-lucide="radio"></i></div>
-        <h3>多通道同时在线</h3>
-        <p>六个平台并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享。</p>
+        <h3>Six platforms at once</h3>
+        <p>All enabled bots run in parallel and replies, images and reminders always return to the channel they came from. Conversation context can be isolated per channel or shared.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-lucide="git-fork"></i></div>
-        <h3>模型职责拆分</h3>
-        <p>对话、视觉理解、意图识别、图片生成分别绑定 Provider 与模型，保存前用真实请求验证。</p>
+        <h3>Per-role model routing</h3>
+        <p>Chat, vision, intent detection and image generation each bind to their own provider and model, verified with a real request before the configuration is saved.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-lucide="globe"></i></div>
-        <h3>内置联网搜索</h3>
-        <p>无需安装插件，时效性内容先检索再回答；Exa MCP 优先，Tavily 兜底。</p>
+        <h3>Built-in web search</h3>
+        <p>No plugin to install. Time-sensitive questions are researched before they are answered — Exa MCP first, Tavily as the fallback.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-lucide="scan-text"></i></div>
-        <h3>图片文字识别</h3>
-        <p>视觉模型与 OCR 并行工作，对话模型不支持看图也能收到识别后的文字；结果按内容哈希落库，同一张图只识别一次。</p>
+        <h3>Text recognition in images</h3>
+        <p>Vision models and OCR work side by side, so even a chat model without image support still receives the recognised text. Results are keyed by content hash, so the same image is only read once.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-lucide="users"></i></div>
-        <h3>群级回复策略</h3>
-        <p>每个群独立设置回复时段、黑白名单、触发词、人设、群等级门槛和工具权限。</p>
+        <h3>Per-group reply policy</h3>
+        <p>Every group gets its own reply window, allow and deny lists, trigger words, persona, member-level threshold and tool permissions.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-lucide="brain"></i></div>
-        <h3>长期记忆与检索</h3>
-        <p>近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，控制 token 消耗。</p>
+        <h3>Long-term memory and recall</h3>
+        <p>Recent context, compacted summaries, structured facts and long-history retrieval work in layers to keep token usage in check.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-lucide="bot"></i></div>
-        <h3>内置 Agent</h3>
-        <p>Pi 风格的最小工具循环，可调用文件、命令、浏览器工具，按需装载 Skills 与 MCP 服务。</p>
+        <h3>Built-in agent</h3>
+        <p>A minimal Pi-style tool loop with file, shell and browser tools, loading skills and MCP servers on demand.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-lucide="clipboard-list"></i></div>
-        <h3>完整事件审计</h3>
-        <p>每条消息为什么回复、用了哪些工具、花了多少 token，都能在事件中心查到；操作日志区分操作人。</p>
+        <h3>Full event audit</h3>
+        <p>Why each message was answered, which tools ran and how many tokens it cost are all recorded in the event centre; the operation log identifies who did what.</p>
       </div>
     </div>
   </div>
@@ -155,23 +150,23 @@
 <section id="quickstart" class="qs">
   <div class="wrap">
     <div class="sec-head">
-      <h2>快速开始</h2>
-      <p>安装脚本自动识别系统与架构，下载最新稳定版并核对 SHA256SUMS；升级前备份数据，健康检查失败自动回滚。</p>
+      <h2>Quick start</h2>
+      <p>The installer detects your OS and architecture, downloads the latest stable build and verifies it against SHA256SUMS. Upgrades back up your data first and roll back automatically if the health check fails.</p>
     </div>
     <div class="qs-grid">
       <div class="qs-card">
-        <div class="qs-card-head">Linux / macOS<button class="copy-btn" data-copy="cmd-sh">复制</button></div>
-        <pre id="cmd-sh"><span class="c"># 安装与升级用同一条命令</span>
+        <div class="qs-card-head">Linux / macOS<button class="copy-btn" data-copy="cmd-sh">Copy</button></div>
+        <pre id="cmd-sh"><span class="c"># the same command installs and upgrades</span>
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
       </div>
       <div class="qs-card">
-        <div class="qs-card-head">Windows PowerShell<button class="copy-btn" data-copy="cmd-ps">复制</button></div>
-        <pre id="cmd-ps"><span class="c"># 安装与升级用同一条命令</span>
+        <div class="qs-card-head">Windows PowerShell<button class="copy-btn" data-copy="cmd-ps">Copy</button></div>
+        <pre id="cmd-ps"><span class="c"># the same command installs and upgrades</span>
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</pre>
       </div>
       <div class="qs-card">
-        <div class="qs-card-head">Docker<button class="copy-btn" data-copy="cmd-docker">复制</button></div>
-        <pre id="cmd-docker"><span class="c"># 预构建镜像，不必克隆仓库</span>
+        <div class="qs-card-head">Docker<button class="copy-btn" data-copy="cmd-docker">Copy</button></div>
+        <pre id="cmd-docker"><span class="c"># prebuilt image, no need to clone the repo</span>
 docker run -d --name diana --restart unless-stopped \
   -p 18080:18080 \
   -v "$PWD/data:/app/data" \
@@ -180,10 +175,10 @@ docker run -d --name diana --restart unless-stopped \
       </div>
     </div>
     <div class="qs-steps">
-      <div class="qs-step"><h4><span>1</span>执行安装命令</h4><p>生成的管理员账号和密码会显示在终端，并保存在安装目录的 <code>config.yaml</code>。</p></div>
-      <div class="qs-step"><h4><span>2</span>打开控制台</h4><p>访问 <code>127.0.0.1:18080</code>，用终端里显示的管理员账号登录。</p></div>
-      <div class="qs-step"><h4><span>3</span>接入通道与模型</h4><p>在 WebUI 里按平台填写凭据，六个通道可同时启用，并为各职责绑定模型。</p></div>
-      <div class="qs-step"><h4><span>4</span>后续升级</h4><p>控制台可直接升级，也可以重复执行安装命令；失败自动恢复。</p></div>
+      <div class="qs-step"><h4><span>1</span>Run the installer</h4><p>The generated admin username and password are printed to the terminal and saved to <code>config.yaml</code> in the install directory.</p></div>
+      <div class="qs-step"><h4><span>2</span>Open the console</h4><p>Visit <code>127.0.0.1:18080</code> and sign in with the admin account shown in the terminal.</p></div>
+      <div class="qs-step"><h4><span>3</span>Connect channels and models</h4><p>Fill in the credentials for each platform in the web console — all six channels can run at once — and bind a model to each role.</p></div>
+      <div class="qs-step"><h4><span>4</span>Upgrading later</h4><p>Upgrade from the console, or simply run the install command again; a failed upgrade restores itself.</p></div>
     </div>
   </div>
 </section>
@@ -191,55 +186,55 @@ docker run -d --name diana --restart unless-stopped \
 <section id="channels">
   <div class="wrap">
     <div class="sec-head">
-      <h2>通道支持</h2>
+      <h2>Supported platforms</h2>
     </div>
     <div class="chan-grid">
       <div class="chan">
         <div class="chan-logo"><i data-lucide="message-circle"></i></div>
         <div>
           <h3>OneBot v11</h3>
-          <p>对接 NapCat 等 OneBot 实现，支持群聊与私聊，群级策略精细控制回复行为。</p>
+          <p>Works with NapCat and other OneBot implementations, in groups and direct messages, with per-group policy over how it replies.</p>
         </div>
       </div>
       <div class="chan">
         <div class="chan-logo"><i data-lucide="send"></i></div>
         <div>
           <h3>Telegram</h3>
-          <p>官方 Bot API 长轮询，出站连接，不需要公网地址。</p>
+          <p>Official Bot API long polling. Outbound only, so no public address is needed.</p>
         </div>
       </div>
       <div class="chan">
         <div class="chan-logo"><i data-lucide="message-square"></i></div>
         <div>
-          <h3>QQ 官方机器人</h3>
-          <p>QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址。</p>
+          <h3>QQ official bot</h3>
+          <p>QQ Open Platform WebSocket gateway. Outbound connection, no public address needed.</p>
         </div>
       </div>
       <div class="chan">
         <div class="chan-logo"><i data-lucide="briefcase"></i></div>
         <div>
-          <h3>钉钉</h3>
-          <p>Stream 模式出站长连接，同样不需要公网地址或 HTTP 回调。</p>
+          <h3>DingTalk</h3>
+          <p>Stream mode over an outbound connection — again no public address and no HTTP callback to configure.</p>
         </div>
       </div>
       <div class="chan">
         <div class="chan-logo"><i data-lucide="bird"></i></div>
         <div>
-          <h3>飞书</h3>
-          <p>事件订阅回调，支持加密推送与签名校验；需要一个公网可达的回调地址。</p>
+          <h3>Feishu / Lark</h3>
+          <p>Event subscription callbacks with encrypted delivery and signature checks; needs a publicly reachable callback URL.</p>
         </div>
       </div>
       <div class="chan">
         <div class="chan-logo"><i data-lucide="building-2"></i></div>
         <div>
-          <h3>企业微信</h3>
-          <p>自建应用回调，按 WXBizMsgCrypt 验签解密；需要一个公网可达的回调地址。</p>
+          <h3>WeCom</h3>
+          <p>Custom-app callbacks verified and decrypted with WXBizMsgCrypt; needs a publicly reachable callback URL.</p>
         </div>
       </div>
     </div>
     <p class="chan-note">
-      前四个平台都是本机主动出站连接，家庭或内网部署可以直接用；
-      飞书和企业微信只能由平台回调，需要把控制台暴露到公网。
+      The first four connect outbound from your machine, so a home or internal network works as-is.
+      Feishu and WeCom can only push events to you, so the console has to be reachable from the internet.
     </p>
   </div>
 </section>
@@ -247,24 +242,24 @@ docker run -d --name diana --restart unless-stopped \
 <section id="docs">
   <div class="wrap">
     <div class="sec-head">
-      <h2>文档</h2>
+      <h2>Documentation</h2>
     </div>
     <div class="doc-grid">
       <a class="doc-card" href="./deploy.html">
-        <h3><i data-lucide="rocket"></i>部署指南</h3>
-        <p>一键安装、Docker、二进制与各平台部署形态。</p>
+        <h3><i data-lucide="rocket"></i>Deploy</h3>
+        <p>One-line install, Docker, binaries and every deployment shape.</p>
       </a>
       <a class="doc-card" href="./configuration.html">
-        <h3><i data-lucide="settings"></i>配置说明</h3>
-        <p>通道、模型、群策略与 config.yaml 的完整参考。</p>
+        <h3><i data-lucide="settings"></i>Configure</h3>
+        <p>Channels, models, group policy and the full config.yaml reference.</p>
       </a>
       <a class="doc-card" href="./operations.html">
-        <h3><i data-lucide="wrench"></i>运维手册</h3>
-        <p>升级、备份、事件审计与日常维护。</p>
+        <h3><i data-lucide="wrench"></i>Operate</h3>
+        <p>Upgrades, backups, event auditing and day-to-day maintenance.</p>
       </a>
       <a class="doc-card" href="./implementation.html">
-        <h3><i data-lucide="file-code"></i>实现细节</h3>
-        <p>架构设计、插件系统与 Agent 工具循环的内部实现。</p>
+        <h3><i data-lucide="file-code"></i>Internals</h3>
+        <p>Architecture, the plugin system and how the agent tool loop works.</p>
       </a>
     </div>
   </div>
@@ -276,13 +271,13 @@ docker run -d --name diana --restart unless-stopped \
     <div class="foot-links">
       <a href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/SuInk/Diana/releases/latest" target="_blank" rel="noopener">Releases</a>
-      <a href="./demo.html">在线演示</a>
+      <a href="../demo/">Live demo</a>
     </div>
   </div>
 </footer>
 
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-<script src="./landing.js?v=20260842"></script>
+<script src="../landing.js?v=20260842"></script>
 
 </body>
 </html>
