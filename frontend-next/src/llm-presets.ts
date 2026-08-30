@@ -175,3 +175,44 @@ export function detectLLMService(baseURL?: string, provider?: Provider): string 
 export function defaultPresetForProvider(provider: Provider): LLMServicePreset | undefined {
   return presetsForProvider(provider)[0];
 }
+
+/** 一次 Provider 请求失败时，该标红哪个输入框。空串表示怪不到具体某一个。 */
+export type LLMErrorField = "api_key" | "base_url" | "";
+
+/**
+ * 从报错文本里判断是哪个字段填错了。
+ *
+ * 报错本身要照原样给用户看（后端会带上请求地址、状态码和响应片段，那是排查的
+ * 全部线索），这里只多做一件事：把光标该回到哪一格标出来。「llm: missing api key」
+ * 这种报错读起来清楚，但用户仍然得自己在一屏表单里找是哪一格空着。
+ *
+ * 认不出来就返回空串，不猜——标错了格子比不标更误导。
+ */
+export function llmErrorField(message: string): LLMErrorField {
+  const text = (message ?? "").toLowerCase();
+  if (!text) return "";
+  // 鉴权类：401/403 和各家「key 不对」的说法。
+  if (
+    text.includes("missing api key") ||
+    text.includes("invalid_api_key") ||
+    text.includes("incorrect api key") ||
+    text.includes("invalid api key") ||
+    text.includes("unauthorized") ||
+    text.includes("状态：401") ||
+    text.includes("状态：403")
+  ) {
+    return "api_key";
+  }
+  // 地址类：地址本身不合法，或者压根没连上、连上了但那个路径不存在。
+  if (
+    text.includes("invalid base url") ||
+    text.includes("no such host") ||
+    text.includes("connection refused") ||
+    text.includes("dial tcp") ||
+    text.includes("状态：404") ||
+    text.includes("响应无法解析")
+  ) {
+    return "base_url";
+  }
+  return "";
+}

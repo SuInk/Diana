@@ -11,8 +11,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=20260830" />
-    <script src="./theme.js?v=20260830"></script>
+    <link rel="stylesheet" href="./styles.css?v=20260842" />
+    <script src="./theme.js?v=20260842"></script>
   </head>
   <body data-page="configuration">
     <div data-docs-header></div>
@@ -20,7 +20,21 @@
       <header class="page-intro"><p class="eyebrow">配置</p><h1>通道、模型与群聊策略</h1><p class="lead">先建立稳定的模型连接，再分配模型职责和平台通道，最后按群收敛触发、时间、用户与工具边界。</p></header>
 
       <section class="section searchable" id="channels">
-        <div class="section-heading"><p class="eyebrow">平台接入</p><h2>OneBot v11 与 Telegram 可以同时在线</h2></div>
+        <div class="section-heading"><p class="eyebrow">平台接入</p><h2>六个平台可以同时在线</h2></div>
+        <p>所有启用的机器人配置会并行运行，回复始终回到来源通道。凭据在「机器人」页按平台填写；密钥字段留空表示沿用已保存的那份，填写才覆盖。</p>
+
+        <h3>接入方式决定部署形态</h3>
+        <p>真正影响部署的不是平台本身，而是消息怎么进来。前四个平台由 Diana 主动出站建立连接，家庭宽带或内网也能直接用；飞书和企业微信只能由平台把事件 POST 过来，必须有一个公网可达的 HTTPS 地址。</p>
+        <div class="table-wrap"><table><thead><tr><th>平台</th><th>接入方式</th><th>需要公网地址</th></tr></thead><tbody>
+          <tr><td>OneBot v11</td><td>反向 WebSocket，由适配器连到 Diana</td><td>否</td></tr>
+          <tr><td>Telegram</td><td>Bot API 长轮询，Diana 主动出站</td><td>否</td></tr>
+          <tr><td>QQ 官方机器人</td><td>开放平台 WebSocket 网关，Diana 主动出站</td><td>否</td></tr>
+          <tr><td>钉钉</td><td>Stream 模式长连接，Diana 主动出站</td><td>否</td></tr>
+          <tr><td>飞书</td><td>事件订阅回调，由飞书 POST 过来</td><td><strong>是</strong></td></tr>
+          <tr><td>企业微信</td><td>自建应用回调，由企业微信 POST 过来</td><td><strong>是</strong></td></tr>
+        </tbody></table></div>
+
+        <h3>各平台需要的凭据</h3>
         <div class="comparison">
           <article><h3>OneBot v11</h3><dl>
             <div><dt>适配器</dt><dd>NapCat、Lagrange.Core、go-cqhttp</dd></div>
@@ -34,9 +48,50 @@
             <div><dt>公网</dt><dd>不需要 webhook 或公网入口</dd></div>
             <div><dt>网络</dt><dd>支持代理和自建 Bot API 地址</dd></div>
           </dl></article>
+          <article><h3>QQ 官方机器人</h3><dl>
+            <div><dt>凭据</dt><dd>开放平台的 AppID 与 AppSecret</dd></div>
+            <div><dt>连接</dt><dd>换取 access token 后连网关 WebSocket</dd></div>
+            <div><dt>沙箱</dt><dd>机器人未上架时可勾选沙箱环境联调</dd></div>
+            <div><dt>范围</dt><dd>只能收到 @ 了机器人的群消息</dd></div>
+          </dl></article>
+          <article><h3>钉钉</h3><dl>
+            <div><dt>凭据</dt><dd>应用的 Client ID 与 Client Secret</dd></div>
+            <div><dt>连接</dt><dd>Stream 模式，不必在后台配 HTTP 回调</dd></div>
+            <div><dt>回复</dt><dd>优先走会话的 sessionWebhook，不占推送额度</dd></div>
+            <div><dt>范围</dt><dd>只能收到 @ 了机器人的群消息</dd></div>
+          </dl></article>
+          <article><h3>飞书</h3><dl>
+            <div><dt>凭据</dt><dd>自建应用的 App ID 与 App Secret</dd></div>
+            <div><dt>验签</dt><dd>事件订阅页的 Verification Token</dd></div>
+            <div><dt>加密</dt><dd>后台开了加密推送时填 Encrypt Key</dd></div>
+            <div><dt>地址</dt><dd>Lark 国际版填 <code>open.larksuite.com</code></dd></div>
+          </dl></article>
+          <article><h3>企业微信</h3><dl>
+            <div><dt>凭据</dt><dd>企业 ID、AgentId、应用 Secret</dd></div>
+            <div><dt>验签</dt><dd>「接收消息」里的 Token 与 EncodingAESKey</dd></div>
+            <div><dt>必填</dt><dd>后两项缺一个就只能发不能收</dd></div>
+            <div><dt>格式</dt><dd>AgentId 必须是纯数字</dd></div>
+          </dl></article>
         </div>
+
+        <h3 id="callbacks">回调地址</h3>
+        <p>飞书和企业微信要把下面的地址填到各自后台的事件接收配置里。<code>HOST</code> 必须是平台服务器能访问到的公网地址，并且是 HTTPS。</p>
+        <pre><code>https://HOST/api/channels/feishu/callback
+https://HOST/api/channels/wecom/callback</code></pre>
+        <p>同一平台配置了多个机器人时，在地址后面加配置档 ID 区分，例如 <code>/api/channels/feishu/callback/&lt;profile-id&gt;</code>；只有一个时用上面的短地址即可。</p>
+        <div class="callout"><strong>这两条路径不走 WebUI 登录</strong><p>平台服务器带不了登录会话，所以它们由各自的规范验签：企业微信校验 <code>msg_signature</code>、按 WXBizMsgCrypt 解密并核对报文里的企业 ID；飞书核对 Verification Token，配了 Encrypt Key 时还会验 <code>X-Lark-Signature</code> 并解密。回调地址本身是公开信息，不能当凭据用，所以验签凭据请务必填写。</p></div>
+
+        <h3>平台能力差异</h3>
+        <ul class="check-list">
+          <li><strong>群等级门槛只对 OneBot v11 生效</strong>。其余平台没有群等级概念，准入设置里不显示该项。</li>
+          <li><strong>语音消息和 @某人</strong>依赖 OneBot 的 CQ 码，其他平台上自然降级：正文照发，但不会 @ 到人。</li>
+          <li><strong>本地媒体</strong>在 OneBot 侧由适配器拉取 Diana 的 <code>/media/resolver</code> 地址；Telegram 拉不到本机地址，改为直接 multipart 上传。</li>
+          <li><strong>QQ 官方机器人和钉钉只会收到点名消息</strong>。平台侧只推送 @ 了机器人的群消息，拿不到全部群消息，因此自然插话、群聊氛围感知这类功能在这两个平台上不会触发。</li>
+          <li><strong>飞书、企业微信和钉钉目前只处理文本消息</strong>。图片和文件在这几家给的是下载凭据，需要另外换取，暂未接入。</li>
+        </ul>
+
         <h3>多通道上下文</h3>
-        <p>每个机器人保存独立的平台、账号、主人、人设和模型分配。OneBot v11 与 Telegram 同时运行时，回复始终回到来源通道。默认隔离会话与记忆；关闭隔离后可共享允许跨通道使用的长期事实，但不会改变发送路由。</p>
+        <p>每个机器人保存独立的平台、账号、主人、人设和模型分配。多个平台同时运行时，回复始终回到来源通道。默认隔离会话与记忆；关闭隔离后可共享允许跨通道使用的长期事实，但不会改变发送路由。</p>
       </section>
 
       <section class="section searchable" id="models">
@@ -101,6 +156,6 @@
       <nav class="page-nav" aria-label="文档分页"><a href="./deploy.html"><small>上一页</small><strong>← 部署</strong></a><a href="./implementation.html"><small>下一页</small><strong>实现 →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
-    <script src="./app.js?v=20260816" defer></script>
+    <script src="./app.js?v=20260842" defer></script>
   </body>
 </html>

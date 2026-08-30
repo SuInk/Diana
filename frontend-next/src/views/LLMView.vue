@@ -173,7 +173,10 @@
             id="llm-baseurl"
             v-model="form.base_url"
             class="input mono"
+            :class="{ invalid: invalidField === 'base_url' }"
+            :aria-invalid="invalidField === 'base_url'"
             :placeholder="supportsAPIStyle ? 'https://api.example.com/v1' : '留空使用官方地址'"
+            @input="clearInvalid('base_url')"
           />
           <span class="hint">
             {{ selectedPreset?.hint }}；{{
@@ -201,9 +204,12 @@
               id="llm-apikey"
               v-model="form.api_key"
               class="input"
+              :class="{ invalid: invalidField === 'api_key' }"
+              :aria-invalid="invalidField === 'api_key'"
               :type="showKey ? 'text' : 'password'"
               autocomplete="off"
               :placeholder="apiKeyPlaceholder"
+              @input="clearInvalid('api_key')"
             />
             <button class="btn icon-only" type="button" :aria-label="showKey ? '隐藏 Key' : '显示 Key'" @click="showKey = !showKey">
               <EyeOff v-if="showKey" :size="14" aria-hidden="true" />
@@ -279,10 +285,6 @@
               </span>
             </div>
           </div>
-          <details v-if="modelsError" class="request-error" open>
-            <summary>模型列表获取失败，查看完整错误</summary>
-            <pre>{{ modelsError }}</pre>
-          </details>
           <div class="model-default-field">
             <label for="llm-model">默认模型（可选）</label>
             <div ref="modelFieldRef" class="model-picker-anchor">
@@ -402,9 +404,11 @@ import EmptyState from "../components/EmptyState.vue";
 import {
   defaultPresetForProvider,
   detectLLMService,
+  llmErrorField,
   llmProviderKinds,
   llmServicePresets,
-  presetsForProvider
+  presetsForProvider,
+  type LLMErrorField
 } from "../llm-presets";
 
 interface LLMFormState {
@@ -455,7 +459,16 @@ const selectedService = ref("openai");
 const modelOptions = ref<LLMModelInfo[]>([]);
 const manualModelDraft = ref("");
 const modelsLoading = ref(false);
-const modelsError = ref("");
+// invalidField 记的是「这次失败该回去改哪一格」，由报错文本推出来（见 llmErrorField）。
+const invalidField = ref<LLMErrorField>("");
+
+// 一开始改那一格就把标红撤掉：红框是「这里要改」的提示，人动手了它就该让位，
+// 一直挂着会变成「改完了还在报错」的错觉。
+function clearInvalid(field: LLMErrorField): void {
+  if (invalidField.value === field) {
+    invalidField.value = "";
+  }
+}
 const modelPickerOpen = ref(false);
 const modelFieldRef = ref<HTMLElement | null>(null);
 const importInput = ref<HTMLInputElement | null>(null);
@@ -563,7 +576,7 @@ function applyServicePreset(id: string): void {
   form.value.base_url = preset.baseURL;
   form.value.model = preset.model;
   modelOptions.value = [];
-  modelsError.value = "";
+  invalidField.value = "";
   modelPickerOpen.value = false;
 }
 
@@ -593,7 +606,7 @@ function startCreate(): void {
   selectedService.value = "openai";
   applyServicePreset("openai");
   modelOptions.value = [];
-  modelsError.value = "";
+  invalidField.value = "";
   editorOpen.value = true;
 }
 
@@ -710,7 +723,7 @@ function startEdit(profile: LLMConfig): void {
   credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
   selectedService.value = detectLLMService(profile.base_url, profile.provider);
   modelOptions.value = [...(profile.models ?? [])];
-  modelsError.value = "";
+  invalidField.value = "";
   editorOpen.value = true;
 }
 
@@ -865,7 +878,7 @@ async function remove(profile: LLMConfig): Promise<void> {
 
 async function loadModels(selectFirst: boolean): Promise<boolean> {
   if (modelsLoading.value) return false;
-  modelsError.value = "";
+  invalidField.value = "";
   modelsLoading.value = true;
   try {
     const payload = formToPayload();
@@ -889,8 +902,11 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
     }
     return true;
   } catch (error) {
-    modelsError.value = error instanceof Error ? error.message : "拉取模型失败";
-    toastError("模型列表获取失败，完整信息已显示在模型字段下方");
+    // 报错原文直接进 toast：后端带着请求地址、状态码和响应片段，那是排查的全部
+    // 线索，摘成一句「获取失败」等于把它扔了。同时把该回去改的那一格标红。
+    const message = error instanceof Error ? error.message : "拉取模型失败";
+    invalidField.value = llmErrorField(message);
+    toastError(message);
     return false;
   } finally {
     modelsLoading.value = false;

@@ -1,0 +1,158 @@
+<!doctype html>
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Configure Diana: platform channels, models and vision, per-group reply policy, agent tools and the security boundary." />
+    <meta name="theme-color" content="#100d13" />
+    <title>Diana docs — Configure</title>
+    <link rel="alternate" hreflang="zh" href="../configuration.html" />
+    <link rel="alternate" hreflang="en" href="./configuration.html" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../styles.css?v=20260842" />
+    <script src="../theme.js?v=20260842"></script>
+  </head>
+  <body data-page="configuration">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">Configure</p><h1>Channels, models and group policy</h1><p class="lead">Establish a working model connection first, then assign model roles and platform channels, and finally narrow triggers, hours, users and tool boundaries per group.</p></header>
+
+      <section class="section searchable" id="channels">
+        <div class="section-heading"><p class="eyebrow">Platforms</p><h2>Six platforms can be online at once</h2></div>
+        <p>Every enabled bot profile runs in parallel, and replies always return to the channel they came from. Credentials are entered per platform on the Bots page; leaving a secret field blank keeps the stored value, and filling it in replaces it.</p>
+
+        <h3>How messages arrive decides your deployment</h3>
+        <p>What actually shapes deployment is not the platform itself but how messages reach you. The first four connect outbound from Diana, so a home connection or an internal network works as-is. Feishu and WeCom can only POST events to you, which means a publicly reachable HTTPS address.</p>
+        <div class="table-wrap"><table><thead><tr><th>Platform</th><th>How it connects</th><th>Public address</th></tr></thead><tbody>
+          <tr><td>OneBot v11</td><td>Reverse WebSocket, the adapter connects to Diana</td><td>No</td></tr>
+          <tr><td>Telegram</td><td>Bot API long polling, outbound from Diana</td><td>No</td></tr>
+          <tr><td>QQ official bot</td><td>Open Platform WebSocket gateway, outbound from Diana</td><td>No</td></tr>
+          <tr><td>DingTalk</td><td>Stream mode connection, outbound from Diana</td><td>No</td></tr>
+          <tr><td>Feishu / Lark</td><td>Event subscription callback, pushed to Diana</td><td><strong>Yes</strong></td></tr>
+          <tr><td>WeCom</td><td>Custom-app callback, pushed to Diana</td><td><strong>Yes</strong></td></tr>
+        </tbody></table></div>
+
+        <h3>Credentials per platform</h3>
+        <div class="comparison">
+          <article><h3>OneBot v11</h3><dl>
+            <div><dt>Adapters</dt><dd>NapCat, Lagrange.Core, go-cqhttp</dd></div>
+            <div><dt>Connection</dt><dd>The adapter dials Diana's reverse WebSocket</dd></div>
+            <div><dt>Address</dt><dd><code>ws://HOST:18080/onebot/v11/ws</code></dd></div>
+            <div><dt>Features</dt><dd>Group lists, CQ codes, quotes, group files, local media</dd></div>
+          </dl></article>
+          <article><h3>Telegram</h3><dl>
+            <div><dt>Credential</dt><dd>Bot token from BotFather</dd></div>
+            <div><dt>Connection</dt><dd>Outbound long polling over the Bot API</dd></div>
+            <div><dt>Public</dt><dd>No webhook or public entry point needed</dd></div>
+            <div><dt>Network</dt><dd>Supports a proxy and a self-hosted Bot API</dd></div>
+          </dl></article>
+          <article><h3>QQ official bot</h3><dl>
+            <div><dt>Credentials</dt><dd>AppID and AppSecret from the Open Platform</dd></div>
+            <div><dt>Connection</dt><dd>Exchanges an access token, then dials the gateway</dd></div>
+            <div><dt>Sandbox</dt><dd>Available for bots that are not published yet</dd></div>
+            <div><dt>Scope</dt><dd>Only group messages that mention the bot</dd></div>
+          </dl></article>
+          <article><h3>DingTalk</h3><dl>
+            <div><dt>Credentials</dt><dd>Client ID and Client Secret of the app</dd></div>
+            <div><dt>Connection</dt><dd>Stream mode; no HTTP callback to configure</dd></div>
+            <div><dt>Replies</dt><dd>Prefers the session webhook, which costs no quota</dd></div>
+            <div><dt>Scope</dt><dd>Only group messages that mention the bot</dd></div>
+          </dl></article>
+          <article><h3>Feishu / Lark</h3><dl>
+            <div><dt>Credentials</dt><dd>App ID and App Secret of the custom app</dd></div>
+            <div><dt>Verification</dt><dd>Verification Token from the event subscription page</dd></div>
+            <div><dt>Encryption</dt><dd>Encrypt Key, when encrypted delivery is enabled</dd></div>
+            <div><dt>Endpoint</dt><dd>Lark uses <code>open.larksuite.com</code></dd></div>
+          </dl></article>
+          <article><h3>WeCom</h3><dl>
+            <div><dt>Credentials</dt><dd>Corp ID, AgentId and app Secret</dd></div>
+            <div><dt>Verification</dt><dd>Token and EncodingAESKey from "receive messages"</dd></div>
+            <div><dt>Required</dt><dd>Without both, it can send but not receive</dd></div>
+            <div><dt>Format</dt><dd>AgentId must be numeric</dd></div>
+          </dl></article>
+        </div>
+
+        <h3 id="callbacks">Callback URLs</h3>
+        <p>Feishu and WeCom need the addresses below entered in their own consoles. <code>HOST</code> must be reachable from the platform's servers, over HTTPS.</p>
+        <pre><code>https://HOST/api/channels/feishu/callback
+https://HOST/api/channels/wecom/callback</code></pre>
+        <p>With more than one bot on the same platform, append the profile id to tell them apart, for example <code>/api/channels/feishu/callback/&lt;profile-id&gt;</code>. With a single bot the short address is enough.</p>
+        <div class="callout"><strong>These paths bypass console login</strong><p>Platform servers cannot carry your session, so each is verified by its own scheme instead: WeCom checks <code>msg_signature</code>, decrypts with WXBizMsgCrypt and confirms the corp id inside the payload; Feishu checks the Verification Token and, when an Encrypt Key is set, also verifies <code>X-Lark-Signature</code> before decrypting. The callback URL itself is public information and is not a credential, so do fill in the verification secrets.</p></div>
+
+        <h3>Platform differences</h3>
+        <ul class="check-list">
+          <li><strong>Member-level thresholds only apply to OneBot v11.</strong> Other platforms have no such concept and the option is hidden for them.</li>
+          <li><strong>Voice messages and mentions</strong> rely on OneBot CQ codes and degrade gracefully elsewhere: the text is still sent, but nobody is pinged.</li>
+          <li><strong>Local media</strong> is fetched by the adapter from Diana's <code>/media/resolver</code> on OneBot; Telegram cannot reach a local address, so files are uploaded directly as multipart instead.</li>
+          <li><strong>QQ official bots and DingTalk only deliver messages that mention the bot.</strong> Neither platform exposes the full group feed, so unprompted participation never triggers there.</li>
+          <li><strong>Feishu, WeCom and DingTalk currently handle text only.</strong> Images and files arrive as download credentials that have to be exchanged separately, which is not wired up yet.</li>
+        </ul>
+
+        <h3>Context across channels</h3>
+        <p>Each bot keeps its own platform, account, owner, persona and model assignments. With several platforms running, replies always go back to the source channel. Sessions and memory are isolated by default; turning isolation off shares long-term facts that are allowed to cross channels, without changing where messages are sent.</p>
+      </section>
+
+      <section class="section searchable" id="models">
+        <div class="section-heading"><p class="eyebrow">Models</p><h2>Sync the model list before setting a default</h2></div>
+        <p>A provider holds the base URL, API key and protocol. The top of the page syncs the model catalogue from the server and the bottom picks a default; the bot configuration then binds each role to a specific model.</p>
+        <div class="table-wrap"><table><thead><tr><th>Role</th><th>Used for</th><th>How to test it</th></tr></thead><tbody>
+          <tr><td>Chat</td><td>Final replies and agent reasoning</td><td>Check phrasing, tool calls and long context.</td></tr>
+          <tr><td>Vision</td><td>Photos, screenshots, historical images</td><td>Send a real image and check small-text OCR, UI structure and multi-image relations.</td></tr>
+          <tr><td>Intent</td><td>Unprompted replies, suppression, relationship checks</td><td>Check latency, stable structured output and edge cases.</td></tr>
+          <tr><td>Image generation</td><td>Text-to-image and image editing</td><td>It must actually return an image — a text-only connectivity check is not enough.</td></tr>
+        </tbody></table></div>
+        <div class="callout"><strong>On by default</strong><p>"Detect other bots and stay quiet" is enabled by default to stop bots talking to each other in a loop. Turn it off only when you have a concrete reason.</p></div>
+        <h3>Context and timeouts</h3>
+        <pre><code>llm:
+  context_window_tokens: 65536
+  max_context_tokens: 65536
+  max_output_tokens: 2048
+  timeout: 60000ms</code></pre>
+        <p>Images consume vision tokens too. When vision quality is poor, first confirm that the role really is bound to a vision model, that the original image made it into the request, and that images were not dropped by count or token budget — before raising the detail level or the context ceiling.</p>
+      </section>
+
+      <section class="section searchable" id="groups">
+        <div class="section-heading"><p class="eyebrow">Group policy</p><h2>Configured per group, as actually joined</h2></div>
+        <p>Group management syncs every group the bot has joined through the OneBot <code>get_group_list</code> call, not just the ones with local configuration. It falls back to the groups stored in SQLite only when the connection is unavailable.</p>
+        <div class="tool-grid">
+          <article><h3>Enabled state</h3><p>Stopping one group does not affect other groups or direct messages.</p></article>
+          <article><h3>Triggers and unprompted replies</h3><p>Explicit mentions, quotes, trigger words and semantic routing are evaluated in layers; an explicit mention outranks a quote.</p></article>
+          <article><h3>Reply hours</h3><p>Same-day and overnight windows with IANA time zones. This is group policy and never enters the model prompt.</p></article>
+          <article><h3>Muted accounts</h3><p>The list applies to the current group only, not to the same user elsewhere or in direct messages.</p></article>
+          <article><h3>Persona and context</h3><p>Group-level prompts, history depth and reply length can override the bot defaults.</p></article>
+          <article><h3>Tool overrides</h3><p>Each group can follow the global setting, or force a specific tool or plugin on or off.</p></article>
+        </div>
+      </section>
+
+      <section class="section searchable" id="agent">
+        <div class="section-heading"><p class="eyebrow">Agent</p><h2>The model only sees what this situation allows</h2></div>
+        <p>The agent runner feeds structured tool results back to the model until it produces a final reply or hits the step limit. The tool registry narrows by platform, relationship permissions, group configuration and feature state.</p>
+        <div class="tool-grid">
+          <article><h3>Built-in web search</h3><p>Web search ships with Diana and cannot be installed or removed. The model is told to search first for time-sensitive questions, fact checks, unfamiliar entities and recommendations.</p></article>
+          <article><h3>Reminders and feeds</h3><p>One-off and recurring tasks share the same persistence; the console shows the schedule, next run, source and status.</p></article>
+          <article><h3>MCP and skills</h3><p>External extensions are discovered from configuration and constrained by working directory, allow lists, permissions and timeouts.</p></article>
+          <article><h3>Image tools</h3><p>Recognition, generation and editing are authorised separately; image generation is health-checked with a real generation request.</p></article>
+        </div>
+      </section>
+
+      <section class="section searchable" id="security">
+        <div class="section-heading"><p class="eyebrow">Security</p><h2>A public deployment needs HTTPS and origin limits</h2></div>
+        <ul class="check-list">
+          <li>The console protects the API with a login session — change the initial administrator password immediately.</li>
+          <li>Configure a separate OneBot access token and keep both ends of the reverse WebSocket in sync.</li>
+          <li>Keep <code>config.yaml</code>, model API keys, bot tokens and platform cookies out of Git.</li>
+          <li>Debug mode records full context and tool arguments; enable it briefly and only in trusted environments.</li>
+          <li>Put the public entry point behind an HTTPS reverse proxy and restrict who can reach the admin surface.</li>
+        </ul>
+      </section>
+
+      <nav class="page-nav" aria-label="Pagination"><a href="./deploy.html"><small>Previous</small><strong>← Deploy</strong></a><a href="./implementation.html"><small>Next</small><strong>Internals →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="../app.js?v=20260842" defer></script>
+  </body>
+</html>

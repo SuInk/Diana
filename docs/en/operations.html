@@ -1,0 +1,96 @@
+<!doctype html>
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Operating Diana: updates and rollback, health checks, logs and backups, troubleshooting and the release process." />
+    <meta name="theme-color" content="#100d13" />
+    <title>Diana docs — Operate</title>
+    <link rel="alternate" hreflang="zh" href="../operations.html" />
+    <link rel="alternate" hreflang="en" href="./operations.html" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../styles.css?v=20260842" />
+    <script src="../theme.js?v=20260842"></script>
+  </head>
+  <body data-page="operations">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">Operate</p><h1>Updates, backups and finding faults</h1><p class="lead">Update notices are strictly separated from applying updates, running state is judged by the health check, and any restore is built on a backup you can verify.</p></header>
+
+      <section class="section searchable" id="updates">
+        <div class="section-heading"><p class="eyebrow">Updates</p><h2>It tells you, it does not update itself</h2></div>
+        <p>When the console finds a new version it shows nothing more than a small marker. The update runs only after an administrator clicks it, reads the release notes and confirms — there is no background download and no automatic switch.</p>
+        <div class="update-paths">
+          <div><strong>Installed with the script</strong><p>Run the install command again. It downloads the matching archive, verifies SHA-256, backs up the database and running files, switches, restarts and health-checks.</p></div>
+          <div><strong>Release update from the console</strong><p>The backend runs the full release flow and restores the previous version if the probe fails. Older builds that show the button without a backend updater cannot self-update.</p></div>
+          <div><strong>Docker or source</strong><p>Containers are recreated by your orchestrator; from source you check out and rebuild both halves. Neither replaces a bare binary inside the running process.</p></div>
+        </div>
+        <h3>Download acceleration</h3>
+        <p>When GitHub is slow to reach directly, the "Version and updates" page offers public mirror routes. <strong>Auto</strong> measures the direct connection and each mirror and picks one, preferring the direct route when it works; you can also pin a mirror or force direct. Acceleration applies to the package only — the checksum manifest is always fetched directly, version checks go through the GitHub API without a mirror, and SHA-256 is still verified byte for byte before installing. Any route that fails falls back to a direct download.</p>
+        <pre><code># upgrading with the install script is the same command as installing
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
+        <div class="callout warn"><strong>Before updating</strong><p>Make sure the data and backup directories have room. If the database is being written to heavily, keep WAL/SHM alongside the backup, or take a consistent snapshot through the application's own backup flow first.</p></div>
+        <div class="callout"><strong>When a service manager owns the process</strong><p>launchd's <code>KeepAlive</code> and systemd's <code>Restart=</code> bring the service straight back up after it exits. Once the updater notices it is supervised, it stops starting a new instance itself and instead asks the manager to restart it after the files are swapped (<code>launchctl kickstart -k</code> or <code>systemctl restart</code>). The manager then stops the old and starts the new in sequence, so two instances never fight over the same port and the later one does not die with <code>address already in use</code>. The install script writes <code>DIANA_SERVICE_MANAGER</code>, <code>DIANA_SERVICE_LABEL</code> and <code>DIANA_SERVICE_DOMAIN</code> into the service environment; a hand-rolled deployment can set them itself, or set <code>DIANA_SERVICE_MANAGER=none</code> to let the updater handle its own restart.</p></div>
+      </section>
+
+      <section class="section searchable" id="operations">
+        <div class="section-heading"><p class="eyebrow">Day to day</p><h2>Health checks, logs and backups</h2></div>
+        <div class="ops-grid">
+          <div><strong>Health check</strong><code>GET /api/health</code><span>No login required; use it for process and orchestration probes.</span></div>
+          <div><strong>Login state</strong><code>GET /api/auth/status</code><span>Confirms the admin session and whether this is a first start.</span></div>
+          <div><strong>Live events</strong><code>GET /api/events/stream</code><span>The frontend should fall back to polling when SSE drops.</span></div>
+          <div><strong>Install logs</strong><code>logs/</code><span>Service output and startup failures.</span></div>
+          <div><strong>Application log</strong><code>logs/diana.log</code><span>Filterable and downloadable from the console.</span></div>
+          <div><strong>SQLite</strong><code>data/diana.db</code><span>The main store for configuration, messages, memory, tasks and audit.</span></div>
+        </div>
+        <h3>A backup schedule worth following</h3>
+        <div class="table-wrap"><table><thead><tr><th>Scope</th><th>Frequency</th><th>Retention</th></tr></thead><tbody>
+          <tr><td>Consistent SQLite snapshot</td><td>Daily, and before every update</td><td>At least 7 daily and 4 weekly copies.</td></tr>
+          <tr><td>Runtime configuration and secrets</td><td>After every configuration change</td><td>Stored encrypted, with read access restricted.</td></tr>
+          <tr><td>Historical media</td><td>As the workload requires</td><td>Balance capacity eviction against privacy retention.</td></tr>
+          <tr><td>Restore drill</td><td>Monthly</td><td>Record how long it took and anything that was missing.</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section class="section searchable" id="troubleshooting">
+        <div class="section-heading"><p class="eyebrow">Troubleshooting</p><h2>Read the event reason first, the model chain second</h2></div>
+        <div class="faq">
+          <div><h3>The bot is online but silent in a group</h3><p>Read the deterministic reason from the event detail: group enabled, reply window, muted account, member level, bot suppression, explicit mention, trigger word and the unprompted-reply result. Then turn on debug mode and check the context and structured judgement the model actually received.</p></div>
+          <div><h3>Quoting the bot and mentioning it still gets ignored</h3><p>The running version must include the routing rule where an explicit mention outranks a quote. The OneBot event should carry an at segment; the backend detects the explicit mention first, and only a quote without a mention goes to semantic evaluation.</p></div>
+          <div><h3>The vision model cannot read a screenshot or small text</h3><p>Confirm the vision role is bound to a model you tested with a real image, that the original was not downscaled, and that the image was not dropped by the token budget. Text-heavy images should use both OCR and the original as evidence.</p></div>
+          <div><h3>Group management shows not found, or groups are missing</h3><p>Check the OneBot connection and the <code>get_group_list</code> response. While connected it should list every group the bot has joined; it falls back to local configuration only when the connection is unavailable.</p></div>
+          <div><h3>Unprompted-reply candidates stay pending forever</h3><p>Candidates should go straight to semantic evaluation and write a definite result within 60 seconds. Getting stuck usually means the intent model timed out, the queue consumer is not running, or the running version predates the current logic.</p></div>
+          <div><h3>The health check fails after an update</h3><p>Check for a port conflict, database permissions, the frontend directory and the binary architecture. Installer backups live in <code>.installer/backups</code>; console update backups live in <code>.diana-updates</code>.</p></div>
+        </div>
+      </section>
+
+      <section class="section searchable" id="development">
+        <div class="section-heading"><p class="eyebrow">Development</p><h2>Local checks and the CI bar</h2></div>
+        <pre><code># Go and formatting
+gofmt -l .
+git diff --check
+go test ./...
+
+# production frontend build
+cd frontend-next
+npm ci
+npm run build
+
+# preview the docs
+cd ..
+python3 -m http.server 4173 --directory docs</code></pre>
+        <p>CI covers Linux amd64/arm64, Darwin amd64/arm64, Windows amd64 and Docker. Releases are tagged from the merged default branch, and each one produces full archives, bare binaries and <code>SHA256SUMS</code>. Release notes must state what changed, any compatibility impact, how it was verified and anything to watch when upgrading.</p>
+        <h3>GitHub Pages</h3>
+        <p>The site lives in <code>docs/</code> with no build step. When the docs or the install script change on the default branch, GitHub Actions uploads the static artifact and deploys Pages.</p>
+      </section>
+
+      <nav class="page-nav" aria-label="Pagination"><a href="./implementation.html"><small>Previous</small><strong>← Internals</strong></a><a href="./index.html"><small>Next</small><strong>Overview →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="../app.js?v=20260842" defer></script>
+  </body>
+</html>

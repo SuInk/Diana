@@ -5,6 +5,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/SuInk/diana/model/llm"
@@ -12,14 +13,18 @@ import (
 
 const finalizeToolName = "agent.finalize"
 
-// finalizeToolDefinition 构造本轮的结构化收尾工具。面向用户的正文留在普通文本
-// 里，只有运行时必须解析的元数据走工具调用，于是结构由供应商的解码语法保证，
-// 而不是靠 Runner 事后修复手写 JSON。
+// errEmptyFinalize 标记协议修复重试耗尽后，模型收尾时仍未给出任何正文的失败。
+// 上层按运行失败处理：事件中心记 failed，不再发送「没有生成有效回复」类兜底文案。
+var errEmptyFinalize = errors.New("empty_finalize: 模型收尾时未提供任何正文")
+
+// finalizeToolDefinition 构造本轮的结构化收尾工具。content 必填：部分供应商在调用
+// 工具的同一轮里不会输出普通文本，正文若允许留在信封之外，就会出现完全为空的
+// 收尾（见 errEmptyFinalize）。Runner 解码时仍接受写在调用之外的正文作为兼容。
 func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.ToolDefinition {
 	properties := map[string]any{
-		"content": toolStringParam("给用户看的最终自然语言回复。如果已经把完整回复写在普通文本里，可以省略。"),
+		"content": toolStringParam("给用户看的最终自然语言回复，必填且不能为空。不要写成 JSON，也不要出现内部协议字段。"),
 	}
-	var required []string
+	required := []string{"content"}
 	if imagePending {
 		properties["task_state"] = toolEnumParam("异步图片任务仍在后台处理时固定填 pending", imageTaskPendingState)
 		required = append(required, "task_state")
