@@ -25,6 +25,11 @@ type proactiveReplyQualityDecision struct {
 	AccountRisk string
 	// AccountRiskReason 只解释账号风险，不能复用表达质量的正面评价。
 	AccountRiskReason string
+	// CountRefusal 只表示候选回复明确拒绝了当前请求。它不等于质量差、安全拦截、
+	// 能力不足或要求澄清；只有高置信结论才会在发送成功后进入累计窗口。
+	CountRefusal      bool
+	RefusalConfidence float64
+	RefusalReason     string
 }
 
 type proactiveReplyQualityRejectedError struct {
@@ -69,7 +74,10 @@ const proactiveReplyQualityPrompt = `你是机器人回复的发送前审核器,
 只按下面这些看得见的维度判断:
 - 说话方式:是不是自然的聊天口吻;有没有客服腔、说教味、过度正式或浮夸表演。
 - 是否答非所问:回复和原消息完全对不上号才算,只是展开了新角度不算。
-- 是否被截断:结尾停在半句上、括号或引号没闭合。
+- 是否被截断:结尾停在半句上,话说到一半没了。
+  注意别把风格当截断:句末不打句号、以「喵」「呢」这类语气词收尾、末尾带一个
+  不闭合的「(」或「（」都是聊天里的语气写法,不算截断;正文里成对使用的括号
+  和引号没闭合才算。
 - 是否空洞:通篇套话、正确的废话、没有任何实际内容。
 - 是否是不必要的插话:原消息根本没在跟人交流、或明显不需要任何人接话。
 
@@ -92,16 +100,26 @@ const proactiveReplyQualityPrompt = `你是机器人回复的发送前审核器,
 只在上述明确范围内判账号风险,不得自行扩大 politics 的地域和主题范围。命中明确
 风险时从严处理;没有命中时放行。表达质量那边仍按前述标准判断。
 
+最后独立判断候选回复是否是对当前请求的明确拒答:
+- count_refusal=true 仅限回复明确表示不愿、不能因边界原因满足当前请求,并给出拒绝说明。
+- 正常回答、部分回答、追问澄清、说明能力或权限、工具失败、安全审核拦截、结束话题、
+  暂时没有结果和内部故障提示都必须为 false。
+- 只判断这一次回复,不要决定累计次数、暂停账号或机器人循环。
+
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"should_send":true,"confidence":0.96,"reason":"口吻自然,和原消息对得上","account_safe":true,"account_risk":"","account_risk_reason":""}
+{"should_send":true,"confidence":0.96,"reason":"口吻自然,和原消息对得上","account_safe":true,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求"}
 
 confidence 必须是 0 到 1 的数字,表示你对「这条回复的表达方式适合发出去」的信心。
 account_safe 为 false 时,account_risk 填命中的类别:politics / explicit / illegal,
 account_risk_reason 必须单独写清候选回复中触发账号风险的具体内容。reason 只能评价
-表达质量,不得拿它代替账号风险理由。`
+表达质量,不得拿它代替账号风险理由。refusal_confidence 必须是 0 到 1 的数字。`
 
-func (r *Runtime) judgeProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) error {
-	ctx = withLLMUsagePurpose(ctx, "proactive_reply_quality")
+func replyControlIntentFromAudit(decision proactiveReplyQualityDecision) replyControlIntent {
+	return replyControlIntent{RefuseCurrent: decision.CountRefusal && decision.RefusalConfidence >= replyRefusalAuditConfidence}
+}
+
+func (r *Runtime) evaluateProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) (replyControlIntent, error) {
+	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
 	threshold := cfg.ProactiveReplyThreshold
 	if event.chatInReply {
 		threshold = cfg.chatInSettings().Threshold
@@ -112,20 +130,25 @@ func (r *Runtime) judgeProactiveReplyQuality(ctx context.Context, event MessageE
 
 	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg)
 	if err != nil {
-		return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
+		return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
 	}
-	// 账号安全先判：它是一票否决，不看置信度，也和表达质量的阈值无关。
+	intent := replyControlIntentFromAudit(decision)
 	if err := accountSafetyError(decision); err != nil {
-		return err
+		return replyControlIntent{}, err
 	}
 	if !decision.ShouldSend || decision.Confidence < threshold {
 		reason := strings.TrimSpace(decision.Reason)
 		if reason == "" {
 			reason = "回复准确度不足"
 		}
-		return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核：%s（置信度 %.0f%%，阈值 %.0f%%）", reason, decision.Confidence*100, threshold*100)}
+		return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核：%s（置信度 %.0f%%，阈值 %.0f%%）", reason, decision.Confidence*100, threshold*100)}
 	}
-	return nil
+	return intent, nil
+}
+
+func (r *Runtime) judgeProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) error {
+	_, err := r.evaluateProactiveReplyQuality(ctx, event, input, reply, cfg)
+	return err
 }
 
 // accountSafetyError 把审核结论里的账号安全一项转成错误。
@@ -199,17 +222,23 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 // 权衡，不替他决定。
 //
 // 审核失败按放行处理：模型不可用时让机器人集体哑火，比偶尔漏放一条更糟。
-func (r *Runtime) auditReplyAccountSafety(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) error {
+func (r *Runtime) evaluateDirectReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) (replyControlIntent, error) {
 	if !boolValue(cfg.ReplyAccountSafetyAuditEnabled, false) || strings.TrimSpace(reply) == "" {
-		return nil
+		return replyControlIntent{}, nil
 	}
-	ctx = withLLMUsagePurpose(ctx, "reply_account_safety")
+	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
 	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg)
 	if err != nil {
-		log.Printf("chatbot reply account safety audit skipped: %v", err)
-		return nil
+		log.Printf("chatbot direct reply audit skipped: %v", err)
+		return replyControlIntent{}, nil
 	}
-	return accountSafetyError(decision)
+	intent := replyControlIntentFromAudit(decision)
+	return intent, accountSafetyError(decision)
+}
+
+func (r *Runtime) auditReplyAccountSafety(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) error {
+	_, err := r.evaluateDirectReplyAudit(ctx, event, input, reply, cfg)
+	return err
 }
 
 func proactiveReplyQualityTimeout(cfg BotConfig) time.Duration {
@@ -233,6 +262,9 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		AccountSafe       *bool    `json:"account_safe"`
 		AccountRisk       *string  `json:"account_risk"`
 		AccountRiskReason *string  `json:"account_risk_reason"`
+		CountRefusal      *bool    `json:"count_refusal"`
+		RefusalConfidence *float64 `json:"refusal_confidence"`
+		RefusalReason     *string  `json:"refusal_reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil || payload.ShouldSend == nil || payload.Confidence == nil {
 		return proactiveReplyQualityDecision{}, false
@@ -252,6 +284,15 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	}
 	if payload.AccountRiskReason != nil {
 		decision.AccountRiskReason = strings.TrimSpace(*payload.AccountRiskReason)
+	}
+	if payload.CountRefusal != nil {
+		decision.CountRefusal = *payload.CountRefusal
+	}
+	if payload.RefusalConfidence != nil && *payload.RefusalConfidence >= 0 && *payload.RefusalConfidence <= 1 {
+		decision.RefusalConfidence = *payload.RefusalConfidence
+	}
+	if payload.RefusalReason != nil {
+		decision.RefusalReason = strings.TrimSpace(*payload.RefusalReason)
 	}
 	return decision, true
 }

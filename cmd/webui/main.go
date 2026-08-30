@@ -31,6 +31,7 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/model/llmauth"
 	"github.com/SuInk/diana/model/storage"
 	"github.com/SuInk/diana/model/updater"
 	"github.com/SuInk/diana/model/version"
@@ -82,12 +83,8 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer) func(a
 					AccessToken: profile.OneBotAccessToken,
 				})
 				channel = oneBotServer
-			} else if profile.Platform == assistant.PlatformTelegram {
-				channel = assistant.NewTelegramChannel(assistant.TelegramConfig{
-					BotToken:   profile.TelegramBotToken,
-					APIBaseURL: profile.TelegramAPIBaseURL,
-					ProxyURL:   profile.TelegramProxyURL,
-				})
+			} else {
+				channel = assistant.NewChannelForConfig(profile)
 			}
 			if channel != nil {
 				bindings = append(bindings, assistant.ChannelBinding{
@@ -112,6 +109,13 @@ func main() {
 	if len(os.Args) == 3 && os.Args[1] == updater.InternalReleaseApplyCommand {
 		if err := updater.RunReleaseApplyHelper(os.Args[2]); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "release update failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := handleCLI(os.Args[1:]); handled {
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "diana: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -188,9 +192,17 @@ func main() {
 		}
 		return modelCatalog.Enrich(ctx, cfg, models), nil
 	}
+	// OAuth 登录态和 API Key 同库同待遇，落在同一个 sqlite 上。
+	oauthManager := llmauth.NewManager(webui.NewLLMAuthStore(sqliteStore), nil)
+	if err := oauthManager.Restore(ctx); err != nil {
+		// 读不出来不该拦住启动：没有 OAuth 的配置档照常工作，
+		// 绑了 OAuth 的那些会在调用时给出「还没有登录」，比整个服务起不来好。
+		log.Printf("llm oauth: 读取登录态失败，本次以未登录状态启动: %v", err)
+	}
 	handler := webui.NewLLMConfigHandler(store)
 	handler.SetModelListFactory(modelListFactory)
 	handler.SetLogStore(sqliteStore)
+	handler.SetOAuthManager(oauthManager)
 	systemUpdater, err := newSystemUpdater(appCfg.Update)
 	if err != nil {
 		log.Fatal(err)
@@ -241,19 +253,24 @@ func main() {
 		AccessToken: botCfg.OneBotAccessToken,
 	})
 	channelSetFactory := newBotChannelSetFactory(oneBotServer)
+	// 配置档绑了 OAuth 提供商时，凭据由 oauthManager 现取现续；没绑就和以前一样
+	// 只用配置里的 API Key，连 HTTP 客户端都不会被包一层。
+	newLLMClient := func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
+		return llm.NewClient(cfg, llm.ClientOptionsFor(cfg, oauthManager)...)
+	}
 	botRuntime := assistant.NewRuntime(botCfg, channelSetFactory(botSet), plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
-		return llm.NewClient(store.Current())
+		return newLLMClient(store.Current())
 	})
 	botRuntime.SetProfiles(botSet)
 	botRuntime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (assistant.LLMProvider, error) {
-		return llm.NewClient(cfg)
+		return newLLMClient(cfg)
 	})
 	botRuntime.SetGroupConfigStore(botGroupConfigStore)
 	botRuntime.SetMessageHistoryStore(sqliteStore)
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
-	botRuntime.SetGlossaryStore(sqliteStore)
+	botRuntime.SetNotebookStore(sqliteStore)
 	// 版本号只活在构建期注入的变量里，机器人自己看不到就只能按训练记忆编一个。
 	// 「有没有新版本」的判断只该有一份，在更新器那边；机器人问它要结论。
 	botRuntime.SetReleaseStatusProvider(systemHandler)
@@ -313,19 +330,12 @@ func main() {
 		}
 	}
 	botHandler := webui.NewBotHandlerWithFactory(ctx, botRuntime, func(cfg assistant.BotConfig) assistant.Channel {
-		if cfg.Platform == assistant.PlatformTelegram {
-			return assistant.NewTelegramChannel(assistant.TelegramConfig{
-				BotToken:   cfg.TelegramBotToken,
-				APIBaseURL: cfg.TelegramAPIBaseURL,
-				ProxyURL:   cfg.TelegramProxyURL,
-			})
-		}
 		// 这里必须和 channelSetFactory 用同一个平台判断。以前是「不是 Telegram
 		// 就当 OneBot」,平台字段一旦不是已注册的 OneBot 平台,两边判断就分叉:
 		// 这条路径拿它的(往往是空的)token 覆盖了共享监听器,配置集那条路径又不
 		// 认它、不会把 token 写回去,监听器就此停在一个谁都对不上的 token 上。
 		if !assistant.IsOneBotPlatform(cfg.Platform) {
-			return nil
+			return assistant.NewChannelForConfig(cfg)
 		}
 		oneBotServer.SetConfig(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,
@@ -339,7 +349,7 @@ func main() {
 	})
 	botHandler.SetLocalMediaSharer(localMediaStore)
 	botHandler.SetProfileStore(botProfileStore)
-	// LLM 配置页要标出「这套配置正被哪个机器人的哪个用途、按哪个模型使用」：
+	// 「提供商」页要标出「这套配置正被哪个机器人的哪个用途、按哪个模型使用」：
 	// 机器人多半用的是模型分配里另选的模型，只按配置默认模型说话会误导。
 	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
@@ -414,6 +424,7 @@ func main() {
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
 	napCatLoginHandler.Register(router)
+	webui.NewChannelCallbackHandler().Register(router)
 	// 对外开放接口：/api/openapi 下的密钥管理走上面的会话鉴权，
 	// /openapi/v1 下的推送接口由 Bearer 密钥自行鉴权，总开关是
 	// 「对外 API」内置插件（默认关闭）。

@@ -55,6 +55,7 @@ type releaseUpdateState struct {
 	TargetVersion  string    `json:"target_version"`
 	Previous       string    `json:"previous_version,omitempty"`
 	Status         string    `json:"status"`
+	FailureCount   int       `json:"failure_count,omitempty"`
 	BackupRoot     string    `json:"backup_root,omitempty"`
 	DatabaseBackup string    `json:"database_backup,omitempty"`
 	Error          string    `json:"error,omitempty"`
@@ -222,6 +223,11 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 	if err := hooks.waitForParent(plan.ParentPID, 45*time.Second); err != nil {
 		return fmt.Errorf("wait for old Diana process: %w", err)
 	}
+	backupsRoot := filepath.Dir(plan.BackupRoot)
+	// 本次备份也计入保留上限。先腾出一个位置，避免连续失败时在创建
+	// 第四份数据库副本的过程中才耗尽磁盘；退出时再覆盖所有失败路径。
+	pruneReleaseBackups(backupsRoot, 2)
+	defer pruneReleaseBackups(backupsRoot, 3)
 	if err := os.MkdirAll(plan.BackupRoot, 0o700); err != nil {
 		return restartPreviousRelease(plan, hooks, fmt.Errorf("create update backup: %w", err), "")
 	}
@@ -269,7 +275,6 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 			DatabaseBackup: databaseBackup,
 			At:             time.Now(),
 		})
-		pruneReleaseBackups(filepath.Dir(plan.BackupRoot), 3)
 		_ = os.RemoveAll(plan.WorkRoot)
 		return nil
 	}
@@ -541,6 +546,19 @@ func validReleaseHealthURL(raw string) bool {
 }
 
 func writeReleaseState(plan releaseApplyPlan, state releaseUpdateState) error {
+	previous, ok := readReleaseState(plan.InstallRoot)
+	sameTarget := ok && previous.TargetVersion == state.TargetVersion
+	switch state.Status {
+	case "failed", "rolled_back":
+		state.FailureCount = 1
+		if sameTarget {
+			state.FailureCount += previous.FailureCount
+		}
+	case "downloaded":
+		if sameTarget {
+			state.FailureCount = previous.FailureCount
+		}
+	}
 	return writePrivateJSON(filepath.Join(plan.InstallRoot, ".diana-updates", "last-update.json"), state)
 }
 

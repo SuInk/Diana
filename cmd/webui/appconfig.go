@@ -182,7 +182,7 @@ func (c appConfig) botSeedConfig(defaultEndpoint string) (assistant.BotConfig, b
 	return assistant.ConfigFromPayload(payload, base).WithDefaults(), true, nil
 }
 
-// llmSeedConfig 返回首启播种用的 LLM 配置。
+// llmSeedConfig 返回首启播种用的提供商配置。
 func (c appConfig) llmSeedConfig() (llm.ProviderConfig, bool, error) {
 	if c.LLM.IsZero() {
 		return llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible}.WithDefaults(), false, nil

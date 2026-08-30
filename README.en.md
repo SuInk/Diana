@@ -50,6 +50,7 @@ Configuration, memory, and logs live in a local SQLite database — no hosted se
 | **Sticker sending** | Searches stickers already cached in the current group or private conversation; the Agent selects by name and cached image description, then sends through the source channel without mixing conversations |
 | **Per-group policies** | Reply windows, allow/deny lists, trigger words, persona, group level thresholds, and tool permissions per group |
 | **Layered long-term memory** | Recent context, compressed summaries, structured facts, and on-demand history search work in layers to keep token usage down |
+| **Notebook** | Things deliberately written down that have to be right: in-jokes and slang, group rules and agreements, someone's dietary restrictions, a promise not yet kept. Scoped per conversation or globally, every edit keeps a revision record, and deletions are recoverable; matching entries are injected into context automatically and each one can be edited in the console. It divides labour with the automatically extracted structured memory — that side is "remember what was said", this side is "if it is wrong I must be able to fix it" |
 | **Built-in Agent** | A minimal Pi-style tool loop with file, command, and browser tools, loading Skills and MCP servers on demand |
 | **Full event auditing** | Reply reasons, model call chains, tokens, and errors are recorded; operation logs carry the acting operator |
 | **One-click install and self-update** | The installer verifies SHA-256, backs up data, and rolls back automatically when the health check fails; the console can upgrade in place |
@@ -73,6 +74,42 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 Then open `http://127.0.0.1:18080`. The generated administrator account and password are printed to the terminal once and stored in `config.yaml` inside the install directory — keep that file private.
 
 Default install directory: `~/.local/share/diana` on Linux/macOS, `%LOCALAPPDATA%\Diana` on Windows.
+
+### One-Click Uninstall
+
+Installations created by the one-click installer include an uninstall tool. By default it removes
+the background service and runtime while preserving `config.yaml`, `data/`, `logs/`, and installer
+backups so a later reinstall can reuse them:
+
+```sh
+diana uninstall
+```
+
+```powershell
+diana uninstall
+```
+
+Use `diana uninstall --purge` to permanently remove all configuration, bot data, and logs.
+The uninstaller asks for confirmation again. If the current shell has not refreshed its PATH,
+run `uninstall.sh` or `uninstall.ps1` directly from the installation directory.
+
+### View Logs from the Terminal
+
+```sh
+diana logs                 # Last 100 lines
+diana logs --lines 300     # Select the line count
+diana logs -f              # Follow until Ctrl+C
+diana status               # Show health, version, address, and uptime
+diana restart              # Restart the installer-managed service
+diana doctor               # Check config, paths, assets, and service health
+diana config path          # Print the active config path
+diana config check         # Validate YAML and bot/LLM sections
+diana version              # Print the current version
+diana help                 # Show command help
+```
+
+The command reads `storage.log_path` from `config.yaml`. Pass
+`--config /path/to/config.yaml` when using a custom configuration file.
 
 The install script takes its own parameters through environment variables (installer arguments, not application configuration):
 
@@ -289,6 +326,17 @@ The bot plugins area enables, disables, and configures the official built-in plu
 - **Sticker sending**: with the built-in Agent enabled, treats cached images with sticker summaries as candidates while excluding ordinary `[图片]` images. The `diana.sticker` tool searches first and sends only a validated candidate; settings control history size, result count, unnamed `[动画表情]` candidates, and separate opt-in switches for other groups and private chats. Sharing stays inside one bot context namespace and does not expose source group or user IDs to the model.
 - **Image text recognition**: runs OCR before images enter the context, using LLM vision transcription, a self-hosted OCR service (PaddleOCR / RapidOCR), or local `tesseract` — the latter two fully offline. Delivery is either "image plus text" or "text only", the latter letting a chat model without vision support handle image messages.
 - **Web search**: installed and enabled by default; it can be disabled and configured but never uninstalled. It is independent of the Agent switch, so local file, command, and browser tools stay closed when the Agent is off.
+
+### OAuth Sign-In
+
+The "Authorized sign-in" section of the LLM page uses OAuth instead of an API key. The console runs on a server and the browser is not necessarily on the same machine, so the callback is not required to land back locally: click "Sign in", complete the authorization in your own browser, then paste the whole callback URL from the address bar back into the console (just the `code` also works). Once signed in, pick the provider under "Credential" on a profile; the token is refreshed before it expires. If the profile also has an API key, a failed refresh falls back to it rather than taking the whole profile down.
+
+Providers are configuration, not hard-coded code: OpenRouter ships built in (its PKCE flow is designed for third-party apps and mints a key you own and can revoke), and anything else can be added under "Custom provider" by filling in the authorize URL, token URL, client ID and scopes — suitable for a self-hosted gateway or any service not shipped here. Both URLs must be https; loopback addresses (`127.0.0.1`) may use http.
+
+> [!NOTE]
+> Providers that require impersonating a first-party client ID to obtain a subscription account's session are not preinstalled. That use goes beyond what the subscription itself licenses, and whether to do it is the operator's own call — it can be entered under "Custom provider" if wanted.
+
+Tokens and client secrets are treated exactly like API keys: read endpoints only return whether a provider is signed in and when it expires; no plaintext ever leaves the server.
 
 ### Built-in Agent
 

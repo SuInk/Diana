@@ -44,7 +44,6 @@ func TestRelationshipEvaluationDecisionValidation(t *testing.T) {
 func TestRelationshipEvaluationUsesRouterSemantics(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_update":false,"delta":0,"confidence":0.98,"reason":"消息在讨论计分规则，并非攻击机器人"}`}
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		ActiveID: "main",
 		Profiles: []llm.Profile{
 			{ID: "main", Name: "主聊天", Group: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "main-key", Model: "main-model"}},
 			{ID: "routing", Name: "快速语义判定", Group: "routing", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "routing-key", Model: "routing-model"}},
