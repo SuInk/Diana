@@ -336,6 +336,21 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 				continue
 			}
+			// 空收尾是协议错误：既没有 content，工具调用之外也没有正文。直接按
+			// final 结束会让下游把空回复兜底成无意义文案发出去，必须让模型重试。
+			// 图片任务 pending 的空收尾除外——运行时会用图片开场白兜底。
+			if action.Content == "" && !imageTaskFinalIsPending(action) {
+				protocolRepairs++
+				reason := "agent.finalize 没有携带任何正文"
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请重新调用 agent.finalize，把给用户看的完整回复写进 content，不能为空。"})
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
 			return finish(action.Content, "final"), nil
 		}
 		if action.Action != "tool" {
@@ -572,6 +587,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}
+		// 收尾阶段是空正文的最后一次重试机会：仍然为空就按协议错误失败，
+		// 让事件中心记下 empty_finalize，而不是把空文本交给下游兜底发送。
+		// 图片任务 pending 时除外——运行时会用图片开场白兜底。
+		if action.Content == "" && !imageTaskQueued {
+			return fail(fmt.Errorf("%w（finish_reason=%s）", errEmptyFinalize, finishReason))
+		}
 		return finish(action.Content, finishReason), nil
 	}
 	if action, ok := parseAction(finalText); ok && action.Action == "final" {
@@ -581,12 +602,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}
+		if action.Content == "" && !imageTaskQueued {
+			return fail(fmt.Errorf("%w（finish_reason=%s）", errEmptyFinalize, finishReason))
+		}
 		return finish(action.Content, finishReason), nil
 	}
 	if imageTaskQueued {
 		return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 	}
 	if !looksLikeAgentAction(finalText) {
+		if finalText == "" {
+			return fail(fmt.Errorf("%w（finish_reason=%s）", errEmptyFinalize, finishReason))
+		}
 		return finish(finalText, finishReason), nil
 	}
 	lastText = finalText
@@ -843,7 +870,7 @@ func (r *Runner) systemPrompt() string {
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
-		"不再需要工具时调用 agent.finalize 结束本轮：面向用户的正文直接写成普通文本，工具参数只放 task_state、claims 这类元数据；只有在无法于同一轮既输出文本又调用工具时，才把正文写进 content。正文不要写成 JSON，也不要出现协议字段。",
+		"不再需要工具时调用 agent.finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state、claims 这类元数据按需一并携带。正文不要写成 JSON，也不要出现协议字段。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 		"可用工具（完整说明和参数以请求中的工具定义为准）：\n" + r.registry.SystemPromptCatalog(),
 	}
