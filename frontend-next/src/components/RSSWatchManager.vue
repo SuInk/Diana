@@ -6,7 +6,7 @@
     <div class="repository-watch-manager-head">
       <div>
         <h3>订阅与判断</h3>
-        <p>发现新条目后先交给 LLM 判断，只有符合规则时才向指定会话发送回复。</p>
+        <p>发现新条目后先交给模型判断，只有符合规则时才向指定会话发送回复。</p>
       </div>
       <button class="btn small primary" type="button" @click="startCreate"><Plus :size="14" aria-hidden="true" />添加订阅</button>
     </div>
@@ -118,7 +118,7 @@ async function load(): Promise<void> {
   try {
     const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups().catch(() => ({ groups: [] }))]);
     watches.value = tasks.items.filter((task) => task.kind === "rss_watch"); profiles.value = config.profiles?.length ? config.profiles : [config]; joinedGroups.value = groups.groups;
-    if (!form.value.profile_id) form.value.profile_id = config.active_profile_id || profiles.value[0]?.id || "";
+    if (!form.value.profile_id) form.value.profile_id = profiles.value[0]?.id || "";
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅加载失败"); } finally { loading.value = false; }
 }
 function startCreate(): void { const profileID = form.value.profile_id || profiles.value[0]?.id || ""; form.value = { ...emptyForm(), profile_id: profileID }; editingTask.value = null; editing.value = true; markEditorClean(); }

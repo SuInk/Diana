@@ -2,7 +2,7 @@
 
 # Diana
 
-**可自托管的多平台 AI 助手 —— OneBot v11 与 Telegram 同时在线，数据留在自己的机器上。**
+**可自托管的多平台 AI 助手 —— OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书、企业微信同时在线，数据留在自己的机器上。**
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
@@ -35,7 +35,7 @@
 
 ## 这是什么
 
-Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、平台适配层、Gin WebUI 和插件系统，编译成单个二进制运行。当前自带 OneBot v11 和 Telegram 两类通道，WebUI 可以管理多个机器人配置、模型分配、群聊策略、插件与内置 Agent。
+Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、平台适配层、Gin WebUI 和插件系统，编译成单个二进制运行。当前自带 OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书和企业微信六类通道，WebUI 可以管理多个机器人配置、模型分配、群聊策略、插件与内置 Agent。
 
 配置、记忆、日志都存在本机的 SQLite 里，不依赖任何托管服务；每条消息为什么回复、为什么不回复、用了哪些工具、花了多少 token，都能在事件中心查到。
 
@@ -43,13 +43,14 @@ Diana 是一个用 Go 写的多平台 AI 助手服务：内置 LLM 兼容层、�
 
 | | |
 | --- | --- |
-| **多通道同时在线** | OneBot v11 与 Telegram 并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享 |
+| **多通道同时在线** | OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书、企业微信并行运行，回复、图片和提醒始终回到来源通道；会话上下文可按配置隔离或共享 |
 | **模型职责拆分** | 对话、视觉理解、意图识别、图片生成分别绑定 Provider 与模型，保存前用真实请求验证 |
 | **内置联网搜索** | 无需安装插件，面对时效性内容可以先检索再回答；Exa MCP 优先，Tavily 兜底 |
 | **图片文字识别** | 图片可同时走视觉模型与 OCR（LLM 转写 / 自托管 OCR 服务 / 本地 tesseract）；对话模型不支持看图时也能只收识别后的文字。识别结果按图片内容哈希落库，同一张图或表情包只识别一次 |
 | **表情包发送** | 从当前群或私聊已经缓存的表情包中检索，Agent 先按名称与图片描述选择，再通过来源通道发送；候选不会跨会话混用 |
 | **群级回复策略** | 每个群独立设置回复时段、黑白名单、触发词、人设、群等级门槛和工具权限 |
 | **长期记忆与检索** | 近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，控制 token 消耗 |
+| **笔记本** | 特意记下来、而且必须准确的东西：梗和黑话、群规和约定、谁的忌口、答应了还没做的事。按会话或全局归属，每次改动留修订记录，删了能恢复；聊到就自动注入上下文，也能在控制台逐条改。与自动抽取的结构化记忆分工：那边是「说过就记住」，这边是「记错了要能改」 |
 | **内置 Agent** | Pi 风格的最小工具循环，可调用文件、命令、浏览器工具，并按需装载 Skills 与 MCP 服务 |
 | **完整事件审计** | 记录回复原因、模型调用链、token 与错误；操作日志区分操作人 |
 | **一键安装与自更新** | 安装器校验 SHA-256、备份数据、健康检查失败自动回滚；控制台可直接升级 |
@@ -75,6 +76,41 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 完成后打开 `http://127.0.0.1:18080`。首次生成的管理员账号和密码会显示在终端，并保存在安装目录的 `config.yaml`——请妥善保存，不要公开该文件。
 
 默认安装目录：Linux / macOS 为 `~/.local/share/diana`，Windows 为 `%LOCALAPPDATA%\Diana`。
+
+### 一键卸载
+
+一键安装后的目录自带卸载工具。默认只移除后台服务和程序文件，保留
+`config.yaml`、`data/`、`logs/` 与安装备份，之后重新安装可继续使用原数据：
+
+```sh
+diana uninstall
+```
+
+```powershell
+diana uninstall
+```
+
+彻底删除所有配置、机器人数据与日志时使用 `diana uninstall --purge`。该操作不可恢复，
+卸载器会再次要求确认。若终端尚未刷新 PATH，也可以直接运行安装目录内的
+`uninstall.sh` 或 `uninstall.ps1`。
+
+### 终端查看日志
+
+```sh
+diana logs                 # 最近 100 行
+diana logs --lines 300     # 指定行数
+diana logs -f              # 持续跟随，Ctrl+C 退出
+diana status               # 查看健康状态、版本、地址和运行时间
+diana restart              # 重启一键安装所管理的服务
+diana doctor               # 检查配置、目录、前端资源和服务健康
+diana config path          # 显示当前配置文件路径
+diana config check         # 校验 YAML 及 bot/LLM 配置段
+diana version              # 查看当前版本
+diana help                 # 查看命令帮助
+```
+
+命令读取 `config.yaml` 中的 `storage.log_path`；自定义配置文件时可加
+`--config /path/to/config.yaml`。
 
 安装脚本本身用环境变量传参（这些是安装器的参数，不是应用配置）：
 
@@ -230,18 +266,43 @@ llm:
 
 ## 通道支持
 
-| 分类 | 平台 | 接入方式 |
+| 平台 | 接入方式 | 需要公网地址 |
 | --- | --- | --- |
-| OneBot v11 | OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana（NapCat、Lagrange.Core、go-cqhttp 等同属这一类） |
-| Telegram | Telegram Bot API | 官方长轮询，由 Diana 主动出站连接，不需要公网地址和 webhook |
+| OneBot v11 | 反向 WebSocket，由 OneBot v11 客户端连到 Diana（NapCat、Lagrange.Core、go-cqhttp 等同属这一类） | 否 |
+| Telegram | 官方 Bot API 长轮询，由 Diana 主动出站连接 | 否 |
+| QQ 官方机器人 | QQ 开放平台 WebSocket 网关，由 Diana 主动出站连接 | 否 |
+| 钉钉 | Stream 模式，由 Diana 主动出站建立长连接 | 否 |
+| 飞书 | 事件订阅回调，由飞书 POST 到 Diana | **是** |
+| 企业微信 | 自建应用回调，由企业微信 POST 到 Diana | **是** |
 
-所有启用的配置会同时在线。Telegram 只需要 BotFather 给的 Bot Token；国内网络通常还要在机器人页填代理地址，部署了本地 Bot API server 可填自建地址绕过 50MB 上传限制。
+所有启用的配置会同时在线。凭据都在「机器人」页按平台填写，保存后留空表示沿用已存的那份。
 
-两个平台的能力差异：
+### 各平台需要的凭据
 
-- **群等级门槛只对 OneBot v11 生效**。Telegram 没有群等级概念，准入设置里不显示该项。
-- **语音消息、@某人** 依赖 OneBot 的 CQ 码，Telegram 上自然降级：正文照发，但不会 @ 到人。
+- **Telegram**：BotFather 给的 Bot Token。国内网络通常还要填代理地址；部署了本地 Bot API server 可填自建地址绕过 50MB 上传限制。
+- **QQ 官方机器人**：开放平台的 AppID 与 AppSecret。机器人未上架时可勾选沙箱环境联调。
+- **钉钉**：开放平台应用的 Client ID 与 Client Secret。回复优先走会话自带的 sessionWebhook，不消耗主动推送额度。
+- **飞书**：自建应用的 App ID、App Secret，以及事件订阅页的 Verification Token；后台开了加密推送时还要填 Encrypt Key。
+- **企业微信**：企业 ID、AgentId、应用 Secret，以及「接收消息」配置里的 Token 和 EncodingAESKey——后两项缺一个就只能发不能收。
+
+### 回调地址
+
+飞书和企业微信只能由平台把事件 POST 过来，需要把 Diana 暴露到公网。机器人页会显示要填到对方后台的地址：
+
+```
+https://<你的公网域名>/api/channels/feishu/callback
+https://<你的公网域名>/api/channels/wecom/callback
+```
+
+同一平台配了多个机器人时在地址后加配置档 ID 区分（`/api/channels/feishu/callback/<profile-id>`）。这两条路径不走 WebUI 登录鉴权，改由平台各自的规范验签：企业微信按 `msg_signature` 校验并用 WXBizMsgCrypt 解密、核对报文里的企业 ID；飞书核对 Verification Token，配了 Encrypt Key 时还会验 `X-Lark-Signature` 并解密。
+
+### 平台能力差异
+
+- **群等级门槛只对 OneBot v11 生效**。其余平台没有群等级概念，准入设置里不显示该项。
+- **语音消息、@某人** 依赖 OneBot 的 CQ 码，其他平台上自然降级：正文照发，但不会 @ 到人。
 - **本地媒体**：OneBot 侧由接入端拉取 Diana 的 `/media/resolver` 地址；Telegram 拉不到本机地址，改为直接 multipart 上传。
+- **只收到点名消息**：QQ 官方机器人和钉钉的平台侧只推送 @ 了机器人的群消息，拿不到全部群消息，因此自然插话类功能在这两个平台上不生效。
+- **富媒体接收**：飞书、企业微信、钉钉目前只处理文本消息，图片和文件给的是下载凭据，需要另换取。
 
 ## 访问安全
 
@@ -259,7 +320,7 @@ WebUI 从首次启动起强制登录，本机和公网访问同一套规则。�
 > [!IMPORTANT]
 > 按来源计数依赖真实客户端 IP。Diana 默认不信任任何反向代理，套了反代之后所有请求的来源地址都会变成反代自己。**公网部署请务必设置 `DIANA_TRUSTED_PROXIES`**（逗号分隔的 IP 或 CIDR），声明后才会解析 `X-Forwarded-For`。会话 cookie 未设 Secure 以兼容内网 HTTP，公网部署请套 HTTPS 反向代理。
 
-豁免路径：登录及快速登录端点、`/api/health`（监控探活）、`/onebot/*`（由 OneBot access token 单独鉴权）、群管理页（自有验证码流程）。
+豁免路径：登录及快速登录端点、`/api/health`（监控探活）、`/onebot/*`（由 OneBot access token 单独鉴权）、`/api/channels/*`（飞书与企业微信的事件回调，按各平台规范验签）、群管理页（自有验证码流程）。
 
 ## 能力与扩展
 
@@ -285,6 +346,17 @@ WebUI 从首次启动起强制登录，本机和公网访问同一套规则。�
 - **表情包发送**：启用内置 Agent 后，把历史里带表情摘要的缓存图片作为候选，排除普通 `[图片]`。Agent 通过 `diana.sticker` 先搜索候选、再发送选中的表情包；插件可配置扫描历史数量、候选返回数量、是否收录未命名的 `[动画表情]`，以及两个默认关闭的共享开关。跨群与跨私聊可分别启用，范围始终限制在同一机器人会话命名空间，不向模型暴露来源群号或用户号。
 - **图片文字识别**：图片进上下文前先做一次 OCR，可选 LLM 视觉转写、自托管 OCR 服务（PaddleOCR / RapidOCR）或本地 `tesseract`，后两者完全离线。交付方式可选「图片 + 文字」或「仅文字」——后者让不支持多模态的对话模型也能处理图片消息。
 - **联网搜索**：默认安装并启用，可停用和配置但不能卸载。独立于内置 Agent 开关，未开 Agent 时不会同时开放本地文件、命令或浏览器工具。
+
+### 授权登录（OAuth）
+
+LLM 配置页的「授权登录」区域用 OAuth 代替 API Key。控制台跑在服务器上、浏览器未必和它同机，所以回调不强求落回本机：点「登录」后在自己的浏览器里完成授权，把地址栏里那条回调地址整条粘回来即可（只粘其中的 `code` 也认）。登录后在配置档的「凭据方式」里选中对应提供商，令牌会在过期前自动续期；同时填了 API Key 的话，续期失败时会自动回落到它，不至于整个配置档一起哑掉。
+
+提供商是配置项而不是写死的代码：内置 OpenRouter（它的 PKCE 授权本就是给第三方应用用的，换到的是一把归你所有、可随时吊销的 Key），其余可以在「自定义提供商」里填授权地址、令牌地址、Client ID 和 Scope 自行接入，适合自建网关或本项目没有内置的服务。授权地址和令牌地址必须是 https，本机回环地址（`127.0.0.1`）可以用 http。
+
+> [!NOTE]
+> 发行版不预置那些需要冒用第一方客户端 Client ID 才能拿到订阅账号登录态的提供商。那类用法超出订阅本身的授权范围，是否使用属于部署者自己的判断——需要的话可以在「自定义提供商」里自行填写。
+
+令牌与 Client Secret 和 API Key 同库同待遇：读接口只回传「是否已登录」「何时过期」，明文一个字节都不出去。
 
 ### 内置 Agent
 

@@ -343,6 +343,7 @@ func (u *ReleasePackageUpdater) Status(context.Context) (Status, error) {
 		status.LastUpdateStatus = state.Status
 		status.LastUpdateVersion = state.TargetVersion
 		status.LastUpdateError = state.Error
+		status.LastUpdateFailures = state.FailureCount
 		status.LastUpdateText = state.Status
 		if state.TargetVersion != "" {
 			status.LastUpdateText += ": " + state.TargetVersion

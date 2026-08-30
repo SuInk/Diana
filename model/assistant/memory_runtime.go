@@ -602,7 +602,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
-		profiles, roleErr := r.roleBoundProfiles(set, llm.GroupIntent)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -618,12 +618,6 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			if profiles := llmProfilesInGroup(set, group); len(profiles) > 0 {
 				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
-		}
-		r.mu.RLock()
-		roles := normalizeModelRoles(r.cfg.ModelRoles)
-		r.mu.RUnlock()
-		if profiles := activeProfileForGroup(set, roles, llm.GroupIntent, llm.GroupIntent); len(profiles) > 0 {
-			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 		}
 		if profiles := llmProfilesInGroup(set, llm.GroupChat); len(profiles) > 0 {
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)

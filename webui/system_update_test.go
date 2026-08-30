@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -556,6 +557,41 @@ func TestAutoUpdateDownloadsByDefaultAndInstallsOnlyWhenEnabled(t *testing.T) {
 	handler.runAutoUpdate(context.Background())
 	if !releaseUpdater.installed {
 		t.Fatal("automatic install was not started after it was explicitly enabled")
+	}
+}
+
+func TestAutoUpdateStopsRetryingFailedReleaseButAllowsNewerRelease(t *testing.T) {
+	const assetName = "diana-webui-darwin-arm64.tar.gz"
+	latestTag := "v1.3.0"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `[{"tag_name":%q,"published_at":"2026-08-03T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":%q,"browser_download_url":"https://example.test/package.tar.gz"}]}]`, latestTag, assetName)
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		status: updater.Status{
+			NearestTag: "v1.2.3", RunningCommit: "v1.2.3", ApplySupported: true,
+			LastUpdateVersion: "v1.3.0", LastUpdateFailures: 3,
+		},
+		expected: assetName,
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.githubAPIBase = github.URL
+	handler.policy = updater.UpdatePolicy{AutoDownload: true, AutoInstall: true}
+
+	handler.runAutoUpdate(context.Background())
+	if releaseUpdater.downloaded || releaseUpdater.installed {
+		t.Fatalf("blocked release was retried: %#v", releaseUpdater)
+	}
+
+	latestTag = "v1.4.0"
+	handler.releaseCacheMu.Lock()
+	handler.releaseCache = persistedReleaseCache{}
+	handler.releaseCacheMu.Unlock()
+	handler.runAutoUpdate(context.Background())
+	if !releaseUpdater.downloaded || !releaseUpdater.installed {
+		t.Fatalf("newer release was blocked: %#v", releaseUpdater)
 	}
 }
 

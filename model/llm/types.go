@@ -213,8 +213,11 @@ type ImageGenerateResponse struct {
 }
 
 type ProviderConfig struct {
-	Provider            Provider          `json:"provider"`
-	APIKey              string            `json:"api_key,omitempty"`
+	Provider Provider `json:"provider"`
+	APIKey   string   `json:"api_key,omitempty"`
+	// OAuthProvider 指向 model/llmauth 里某个已登录的提供商。填了它就用授权登录
+	// 的令牌，此时 APIKey 可以留空——但填了也不浪费：续期失败时它是兜底。
+	OAuthProvider       string            `json:"oauth_provider,omitempty"`
 	BaseURL             string            `json:"base_url,omitempty"`
 	APIFormat           APIFormat         `json:"api_format,omitempty"`
 	APIStyle            APIStyle          `json:"api_style,omitempty"`
@@ -237,7 +240,8 @@ type ProviderConfig struct {
 type ClientOption func(*clientOptions)
 
 type clientOptions struct {
-	httpClient *http.Client
+	httpClient  *http.Client
+	credentials CredentialSource
 }
 
 // WithHTTPClient 注入自定义 HTTP client。
@@ -278,6 +282,8 @@ func NewClient(cfg ProviderConfig, opts ...ClientOption) (LLMClient, error) {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	// 凭据注入放在 HTTP 层，三家 provider 的 SDK 都不必知道 OAuth 的存在。
+	options.httpClient = httpClientWithCredentials(options.httpClient, options.credentials)
 
 	// 对外统一 LLMClient 接口，内部按 provider 分发到不同 SDK/HTTP 协议。
 	switch cfg.Provider {
@@ -323,6 +329,7 @@ func (cfg ProviderConfig) Validate() error {
 	// Validate 会先规整空白，避免前端输入带空格导致 provider/model 比较失败。
 	cfg.Provider = Provider(strings.TrimSpace(string(cfg.Provider)))
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	cfg.OAuthProvider = strings.ToLower(strings.TrimSpace(cfg.OAuthProvider))
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
 	cfg.APIFormat = APIFormat(strings.TrimSpace(string(cfg.APIFormat)))
 	cfg.APIStyle = APIStyle(strings.TrimSpace(string(cfg.APIStyle)))
@@ -348,7 +355,8 @@ func (cfg ProviderConfig) Validate() error {
 	} else if cfg.APIFormat != "" {
 		return fmt.Errorf("llm: api_format is only supported for provider %q", ProviderOpenAICompatible)
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	// 用 OAuth 登录的配置档没有 API Key 是正常状态，别在这里拦下来。
+	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
 		return ErrMissingAPIKey
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
@@ -437,6 +445,7 @@ func (format APIFormat) Supported() bool {
 // WithDefaults 补齐 provider 配置默认值。
 func (cfg ProviderConfig) WithDefaults() ProviderConfig {
 	// WithDefaults 只补配置默认值，不校验密钥；这样 WebUI 可以展示未填 key 的草稿配置。
+	cfg.OAuthProvider = strings.ToLower(strings.TrimSpace(cfg.OAuthProvider))
 	cfg.Provider = Provider(strings.TrimSpace(string(cfg.Provider)))
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)

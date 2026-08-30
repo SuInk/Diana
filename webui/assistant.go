@@ -157,12 +157,8 @@ const minBotTokenChars = 16
 // NewBotHandler 创建 BotHandler 实例。
 func NewBotHandler(ctx context.Context, runtime BotRuntime) *BotHandler {
 	return NewBotHandlerWithFactory(ctx, runtime, func(cfg assistant.BotConfig) assistant.Channel {
-		if cfg.Platform == assistant.PlatformTelegram {
-			return assistant.NewTelegramChannel(assistant.TelegramConfig{
-				BotToken:   cfg.TelegramBotToken,
-				APIBaseURL: cfg.TelegramAPIBaseURL,
-				ProxyURL:   cfg.TelegramProxyURL,
-			})
+		if channel := assistant.NewChannelForConfig(cfg); channel != nil {
+			return channel
 		}
 		return assistant.NewOneBotReverseServer(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,
@@ -249,11 +245,11 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/user-names", h.lookupAssistantUserNames)
 	router.GET(base+"/users/:id", h.getAssistantUser)
 	h.registerPersonaRoutes(router, base)
-	router.GET(base+"/glossary", h.listGlossary)
-	router.GET(base+"/glossary/entry", h.getGlossaryEntry)
-	router.POST(base+"/glossary", h.saveGlossaryEntry)
-	router.POST(base+"/glossary/delete", h.deleteGlossaryEntry)
-	router.POST(base+"/glossary/restore", h.restoreGlossaryEntry)
+	router.GET(base+"/notebook", h.listNotebook)
+	router.GET(base+"/notebook/entry", h.getNotebookEntry)
+	router.POST(base+"/notebook", h.saveNotebookEntry)
+	router.POST(base+"/notebook/delete", h.deleteNotebookEntry)
+	router.POST(base+"/notebook/restore", h.restoreNotebookEntry)
 	router.GET(base+"/tasks", h.listTasks)
 	router.POST(base+"/tasks/repository-watches", h.createRepositoryWatch)
 	router.PUT(base+"/tasks/repository-watches/:id", h.updateRepositoryWatch)

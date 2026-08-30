@@ -210,6 +210,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "用户直接回复了机器人，语义路由判断应继续回答", true
 	case "replied_proactive", "replied_proactive_batch":
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
+	case "merged_into_reply":
+		return "not_replied", "消息已并入同一用户正在生成的回复，不再单独回答", false
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
 	case "error_replied_content_policy":
@@ -269,7 +271,7 @@ type Runtime struct {
 	inboundStore              InboundEventStore
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
-	glossary                  GlossaryStore
+	notebook                  NotebookStore
 	buildInfo                 BuildInfo
 	releaseStatus             ReleaseStatusProvider
 	reminders                 ReminderStore
@@ -283,6 +285,8 @@ type Runtime struct {
 	replyInterruptMu          sync.Mutex
 	recalledInbound           map[string]time.Time
 	latestDirectedInbound     map[string]directedInboundMark
+	directReplySeq            uint64
+	activeDirectReplies       map[string]*activeDirectReply
 	cancel                    context.CancelFunc
 	runCtx                    context.Context
 	running                   bool
@@ -350,6 +354,9 @@ type Runtime struct {
 	proactiveBatchWindow  time.Duration
 	proactiveBatchMaxWait time.Duration
 	replyBatchMu          sync.Mutex
+	// replyTurns 记「同一个人刚问过」，让紧接着的第二条被当成追问接住而不是重答一遍。
+	replyTurnMu           sync.Mutex
+	replyTurns            map[string]replyTurnRecord
 	replyBatches          map[string]*replyBatchGate
 	unavailableGroupMu    sync.RWMutex
 	unavailableGroups     map[string]unavailableGroupSend
@@ -417,12 +424,12 @@ func (r *Runtime) SetStructuredMemoryStore(store StructuredMemoryStore) {
 	r.structuredMemory = store
 }
 
-// SetGlossaryStore 注入词典存储。没有它时词典整体静默失效：自动命中查不到、
-// diana.glossary 明确报错，回复本身不受影响。
-func (r *Runtime) SetGlossaryStore(store GlossaryStore) {
+// SetNotebookStore 注入笔记本存储。没有它时笔记本整体静默失效：自动命中查不到、
+// diana.notebook 明确报错，回复本身不受影响。
+func (r *Runtime) SetNotebookStore(store NotebookStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.glossary = store
+	r.notebook = store
 }
 
 // SetRepositoryIssueDraftStore enables restart-safe Issue draft approval.
@@ -529,6 +536,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		replyRefusalByUser:    map[string]replyRefusalState{},
 		botReplyLoopByKey:     map[string]botReplyLoopState{},
 		proactiveBatches:      map[string]*proactiveReplyBatch{},
+		activeDirectReplies:   map[string]*activeDirectReply{},
 		proactiveBatchWindow:  defaultProactiveReplyBatchWindow,
 		proactiveBatchMaxWait: defaultProactiveReplyBatchMaxWait,
 		replyBatches:          map[string]*replyBatchGate{},
@@ -1628,6 +1636,13 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// Clear batches left by a runtime started before immediate proactive routing was enabled.
 		r.cancelProactiveReplyBatch(event)
 	}
+	if !handled {
+		if rootMessageID, merged := r.mergeIntoActiveDirectReply(ctx, event, text); merged {
+			event.routingReason = fmt.Sprintf("已并入同一用户正在生成的回复（触发消息 %s），不再单独判断或发送", rootMessageID)
+			r.record(r.decisionEventRecord(event, text, "merged_into_reply"))
+			return finishWithoutReply("merged_into_reply")
+		}
+	}
 	considerProactive, proactiveSkipReason := false, ""
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
@@ -1687,7 +1702,31 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
-	reply, err := r.replyTo(replyCtx, event, text)
+	if successOutcome == "replied" || successOutcome == "replied_direct_followup" {
+		var finish func()
+		replyCtx, finish = r.beginDirectReply(replyCtx, event)
+		defer finish()
+	}
+	var reply string
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		// Two regeneration opportunities cover normal typing bursts. Seal before
+		// the final attempt so an endless stream cannot starve this reply forever;
+		// later messages resume the ordinary routing path.
+		if attempt == 2 {
+			r.sealDirectReply(replyCtx)
+		}
+		attemptCtx := r.directReplyAttemptContext(replyCtx)
+		attemptEvent := event
+		if attempt > 0 {
+			attemptEvent.replyHistoryLoaded = false
+			attemptEvent.replyHistory = nil
+		}
+		reply, err = r.replyTo(attemptCtx, attemptEvent, text)
+		if !errors.Is(err, errDirectReplySupplemented) {
+			break
+		}
+	}
 	record.Duration = time.Since(start).Milliseconds()
 	// 出错也要带上：resolver 可能已经把图发出去了才在后面某步失败，这时事件页
 	// 只写「处理异常」会让人以为什么都没发。
@@ -2319,7 +2358,7 @@ type proactiveReplyPayload struct {
 	RecentMessages                []proactiveReplyHistoryItem      `json:"recent_messages,omitempty"`
 	Candidates                    []proactiveReplyCandidatePayload `json:"candidates,omitempty"`
 	AvailableReplyTools           []string                         `json:"available_reply_tools,omitempty"`
-	GlossaryContext               string                           `json:"glossary_context,omitempty"`
+	NotebookContext               string                           `json:"notebook_context,omitempty"`
 }
 
 type proactiveReplyCandidatePayload struct {
@@ -2410,7 +2449,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 
 func (r *Runtime) proactiveReplyPayloadWithContext(ctx context.Context, event MessageEvent, text string) proactiveReplyPayload {
 	payload := r.proactiveReplyPayload(event, text)
-	payload.GlossaryContext = r.glossaryContextForRouting(ctx, event, text)
+	payload.NotebookContext = r.notebookContextForRouting(ctx, event, text)
 	return payload
 }
 
@@ -2566,7 +2605,7 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有问号、没有 @ 或没有点名对象而归为 none。glossary_context 是本地词典对当前消息的可信释义；命中时必须按释义理解消息，不能再称它为未解释缩写、私人暗语或 missing_context。若缩写按词典展开后本身是在公开提问或请求（例如 zgm=在干嘛），应按展开后的完整含义判断 requests_response、answerable 和 needs_response。词典命中只解决语义，不代表普通名词必须回复，仍要判断展开后的消息是否确实需要回应。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 放行。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有 glossary_context 没有解释、且无法从其他上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
+	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有问号、没有 @ 或没有点名对象而归为 none。notebook_context 是本地笔记本对当前消息的可信释义；命中时必须按释义理解消息，不能再称它为未解释缩写、私人暗语或 missing_context。若缩写按笔记本展开后本身是在公开提问或请求（例如 zgm=在干嘛），应按展开后的完整含义判断 requests_response、answerable 和 needs_response。笔记本命中只解决语义，不代表普通名词必须回复，仍要判断展开后的消息是否确实需要回应。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 放行。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有 notebook_context 没有解释、且无法从其他上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
 	const expressiveChatInGuard = `风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard
 	configured = strings.TrimSpace(configured)
@@ -2749,7 +2788,7 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "chatbot.proactive_reply_route",
-		Message: "LLM 已完成主动回复判断",
+		Message: "模型已完成主动回复判断",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
@@ -2822,7 +2861,9 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 }
 
 // replyTo 执行 owner 命令、插件和 LLM 回复链路。
-func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (string, error) {
+// 具名返回值只为了让 defer 拿到这一轮最终说了什么（见 finishReplyTurn），
+// 各处 return 的写法不变。
+func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (reply string, err error) {
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
@@ -2844,6 +2885,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	chatTriggered := r.shouldHandleChat(event, text)
 	resolverTriggered := r.shouldHandleResolver(event, text)
 	proactiveTriggered := event.proactiveReply || len(proactiveReplyTurnFromContext(ctx)) > 0
+	// 同一个人紧接着又说了一条时，把上一轮的痕迹取出来交给提示词，让这一轮当追问
+	// 接住而不是把同一件事重答一遍。登记必须在生成之前：并发的两路要能互相看见。
+	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, time.Now())
+	defer func() { r.finishReplyTurn(event, reply, time.Now()) }()
 	cleanText := r.cleanInput(event, text)
 	if cfg.MaxInputChars > 0 && len([]rune(cleanText)) > cfg.MaxInputChars {
 		cleanText = string([]rune(cleanText)[:cfg.MaxInputChars])
@@ -2984,7 +3029,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaSubtaskTool(r, event),
 				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
-				newDianaGlossaryTool(r, event, relationship),
+				newDianaNotebookTool(r, event, relationship),
 				newDianaVersionTool(r),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
@@ -2999,6 +3044,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if _, settings, enabled := r.plugins.PluginWithSettings(stickerPluginID, r.pluginOverridesForEvent(event)); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
+			}
+			// 图片溯源同样按插件开关走：反查要把图片上传给第三方图库，不是每个
+			// 群都愿意，插件停用时模型看不到这个工具。
+			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(imageSourcePluginID, r.pluginOverridesForEvent(event)); enabled {
+				// 一条线路都没配好时不挂这个工具：模型看得到就会去调，然后只能
+				// 回一句「查不了」，白费一轮。
+				if plugin, ok := pluginValue.(*ImageSourcePlugin); ok && imageSourceConfigFromSettings(settings).anyProviderUsable() {
+					extraTools = append(extraTools, newDianaImageSourceTool(r, event, plugin, settings))
+				}
 			}
 			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
@@ -3143,12 +3197,22 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Priority: llm.MessagePriorityMemory,
 			})
 		}
-		// 词典和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
-		// 一起让位给当前消息，而不是互相挤。
-		if glossaryContext := contextPreload.glossaryContext; glossaryContext != "" {
+		// 「刚答过同一个人」跟当前消息同级，不跟着历史让位：它约束的是这一轮怎么说，
+		// 被预算挤掉就等于没写——而它要防的恰恰是把上一轮内容重说一遍。
+		if hasPreviousTurn {
 			messages = append(messages, llm.Message{
 				Role:       llm.RoleUser,
-				Content:    glossaryContext,
+				Content:    consecutiveReplyContext(previousTurn),
+				Priority:   llm.MessagePriorityPlugin,
+				AtomicText: true,
+			})
+		}
+		// 笔记本和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
+		// 一起让位给当前消息，而不是互相挤。
+		if notebookContext := contextPreload.notebookContext; notebookContext != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    notebookContext,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
@@ -3222,7 +3286,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 			}
 		}
-		turnCandidates := proactiveReplyTurnFromContext(ctx)
+		turnCandidates := append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
 		for _, candidate := range turnCandidates {
 			if messageID := strings.TrimSpace(candidate.Event.MessageID); messageID != "" && messageID != event.MessageID {
@@ -3268,7 +3332,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 						ContextGroup: historyGroup,
 					})
 				}
-				if directAgentDecision && historicalStillImageCount(historyEvent) > 0 {
+				if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
 					messages = append(messages, llm.Message{
 						Role:         llm.RoleUser,
 						Content:      agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent)),
@@ -3279,7 +3343,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				continue
 			}
 			historyText := historyPromptTextAt(historyEvent, event.Time)
-			if directAgentDecision && historicalStillImageCount(historyEvent) > 0 {
+			if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
 				historyText = agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent))
 			}
 			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyText, Priority: historyPriority, ContextGroup: historyGroup}
@@ -3408,7 +3472,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 图片开场白攒在这一轮里：模型自己说了就用模型那句，什么都没说才拿它兜底，
 	// 保证发图前只出现一条文字（见 image_announcement.go）。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
-	reply, err := r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
+	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		if pending := imageAnnouncements.drain(); pending != "" {
 			// 生成失败也要让用户知道图在画：任务已经受理了。
@@ -3446,13 +3510,18 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if proactiveTriggered {
 		// 主动回复走完整审核：表达质量 + 账号安全。
-		if err := r.judgeProactiveReplyQuality(ctx, event, cleanText, reply, cfg); err != nil {
+		auditIntent, err := r.evaluateProactiveReplyQuality(ctx, event, cleanText, reply, cfg)
+		if err != nil {
 			return "", err
 		}
-	} else if err := r.auditReplyAccountSafety(ctx, event, cleanText, reply, cfg); err != nil {
-		// 直接回复只审账号安全：被点名回答说得平淡不该拦，但涉政和露骨内容
-		// 不管怎么触发，发出去的后果都一样。
-		return "", err
+		controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
+	} else {
+		auditIntent, err := r.evaluateDirectReplyAudit(ctx, event, cleanText, reply, cfg)
+		if err != nil {
+			// 直接回复不以表达质量拦截；账号安全开关启用时仍是一票否决。
+			return "", err
+		}
+		controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
 	}
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
 		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)
@@ -4886,12 +4955,12 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
 		profileID, _ := replyRuleLLMProfileID(ctx)
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, group, profileID)
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), group, profileID)
 		if err != nil {
 			return "", err
 		}
 		if ok {
-			return run(llm.RegistryClient{Registry: registry, Selection: selection})
+			return run(registryLLMProvider(registry, selection, true))
 		}
 	}
 
@@ -4905,7 +4974,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return "", fmt.Errorf("chatbot: reply rule llm profile %q not found", profileID)
 		}
-		profiles, roleErr := r.roleBoundProfiles(set, group)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -4916,26 +4985,19 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return run(provider)
 		}
+		// 没有角色绑定就按本次调用的分组取候选，组内顺序即降级顺序。
+		//
+		// 这里以前多绕一道：候选来自「激活配置所在的分组」，所以激活的是生图那套时
+		// 聊天调用会拿到一串生图配置，得先用 activeProfileForGroup 做一次能力检查再
+		// 退回本分组。分组直接由调用方给出之后，那类错配从源头就不成立了。
 		groupKey := llm.NormalizeProfileGroup(group)
-		if groupKey != llm.GroupChat {
-			if profiles := set.GroupProfiles(groupKey); len(profiles) > 0 {
-				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
-				if err != nil {
-					return "", err
-				}
-				return run(provider)
+		if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
+			logUnboundGroupFallback(roles, group, profiles[0].ID)
+			provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
+			if err != nil {
+				return "", err
 			}
-		}
-		// runLLMProviderWithFailover 从激活配置所在的分组取候选，激活的是生图那套时
-		// 聊天调用会拿到一串生图配置。先确认激活配置能接这次调用，接不了就退回本分组。
-		if len(activeProfileForGroup(set, roles, group, groupKey)) == 0 {
-			if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
-				provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
-				if err != nil {
-					return "", err
-				}
-				return run(provider)
-			}
+			return run(provider)
 		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
 	}
@@ -4955,23 +5017,13 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 // modelRoleForGroup 返回某个用途实际绑定的模型角色，没有专门绑定时回落到 chat 绑定。
 //
 // 回落这条是有意的：机器人绑定的是「这台机器人用哪个模型说话」。一轮对话中途多出
-// 几张图（例如 diana.history_images 把历史原图作为附件补进下一轮），用途会从 chat
+// 几张图（例如 diana.history_media 把历史原图作为附件补进下一轮），用途会从 chat
 // 变成 vision，但说话的还是同一台机器人。没有单独绑视觉模型时就该继续用它绑定的
 // 聊天模型，而不是滑到全局激活配置那份和这台机器人无关的配置上——那种切换是静默的，
 // 表现为「聊着聊着换了个模型答话」，而日志里两轮的 provider/model 都是「正常」的。
+// modelRoleForGroup 只按分组找绑定，不看用途。带用途的查找见 modelRoleFor。
 func modelRoleForGroup(roles map[string]ModelRole, group string) (ModelRole, bool) {
-	if len(roles) == 0 {
-		return ModelRole{}, false
-	}
-	key := llm.NormalizeProfileGroup(group)
-	if key == llm.GroupChat {
-		key = "chat"
-	}
-	if role, ok := roles[key]; ok {
-		return role, true
-	}
-	role, ok := roles["chat"]
-	return role, ok
+	return modelRoleFor(roles, "", group)
 }
 
 // logUnboundGroupFallback 记录一次「这台机器人有模型绑定，但这个用途落到了全局激活
@@ -4983,18 +5035,17 @@ func logUnboundGroupFallback(roles map[string]ModelRole, group, profileID string
 	log.Printf("chatbot model role fallback: group=%q has no bound provider, using the active profile %q", llm.NormalizeProfileGroup(group), profileID)
 }
 
-func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSet, roles map[string]ModelRole, group, profileID string) (llm.AgentModelConfig, bool, error) {
+func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSet, roles map[string]ModelRole, purpose, group, profileID string) (llm.AgentModelConfig, bool, error) {
 	if registry == nil {
 		return llm.AgentModelConfig{}, false, nil
 	}
 	// 分组名和角色名是两套命名空间，别用同一个变量串着走：
-	// 角色键用 "chat"（机器人页那四行就是 chat/vision/intent/image），
-	// 而聊天配置的分组名是 "default"。原先这里把 key 从 "default" 改写成 "chat"
-	// 之后又拿它当分组名去查，结果是查一个根本不存在的分组——「先在同组里找」
-	// 这层保护对聊天调用从来没生效过。角色查找由 modelRoleForGroup 自己归一化，
+	// 角色键用 "chat"，而聊天配置的分组名是 "default"。原先这里把 key 从 "default"
+	// 改写成 "chat" 之后又拿它当分组名去查，结果是查一个根本不存在的分组——「先在
+	// 同组里找」这层保护对聊天调用从来没生效过。角色查找由 modelRoleFor 自己归一化，
 	// 这里只需要分组名。
 	groupKey := llm.NormalizeProfileGroup(group)
-	boundRole, hasBoundRole := modelRoleForGroup(roles, group)
+	boundRole, hasBoundRole := modelRoleFor(roles, purpose, group)
 	if role := boundRole; hasBoundRole && role.ProviderID != "" && role.ModelID != "" {
 		return normalizeRegistrySelection(registry, role.ProviderID, role.ModelID), true, nil
 	}
@@ -5019,23 +5070,18 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 			}
 		}
 	}
-	// 非聊天用途先在本分组里找。聊天用途不走这一步：默认分组里可能并排放着好几个
-	// 对话 Provider，选哪个是用户在 LLM 配置页用「激活配置」定的，直接取第一个会
-	// 无视这个选择。
-	if len(profiles) == 0 && groupKey != llm.GroupChat {
+	// 没有角色绑定就在本分组里按列表顺序取。聊天用途以前不走这一步，因为选哪个
+	// 由「激活配置」定；那个概念去掉之后，聊天和别的用途没有区别了。
+	if len(profiles) == 0 {
 		profiles = llmProfilesInGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
-		profiles = activeProfileForGroup(set, roles, group, groupKey)
-	}
-	// 激活配置跨组（例如激活的是生图那套、这次是聊天调用）时退回本分组。
-	// 上一步已经拒绝了跨组的激活配置，这里补一个同组的，免得直接判成「没有可用配置」。
-	if len(profiles) == 0 {
-		profiles = llmProfilesInGroup(set, groupKey)
+		profiles = fallbackProfilesForGroup(set, groupKey)
 	}
 	if len(profiles) == 0 {
 		return llm.AgentModelConfig{}, false, nil
 	}
+	logUnboundGroupFallback(roles, group, profiles[0].ID)
 	return profileRegistrySelection(registry, profiles[0]), true, nil
 }
 
@@ -5063,33 +5109,6 @@ func profileGroupServes(profileGroup string, wantGroup string) bool {
 	return !singlePurposeProfileGroup(profileGroup) && !singlePurposeProfileGroup(wantGroup)
 }
 
-// activeProfileForGroup 返回可以用于这个用途的激活配置，接不了这活就不给。
-//
-// 「回落到激活配置」本身是对的——没配模型分配时总得有个兜底，而且视觉、意图回落到
-// 对话配置是正常的。错的是完全不看能力：激活的是生图配置时，一次普通聊天调用会拿
-// gpt-image-2 去发文本请求，日志里 provider 和 model 还都显示「正常」。
-// 宁可往下退回同组配置、甚至报「没有可用配置」，也不要拿一个干不了这活的模型硬接。
-func activeProfileForGroup(set llm.ProfileSet, roles map[string]ModelRole, group string, groupKey string) []llm.Profile {
-	current, ok := set.Current()
-	if !ok {
-		return nil
-	}
-	if !profileGroupServes(current.Group, groupKey) {
-		logUnusableActiveProfileSkipped(groupKey, current.ID, llm.NormalizeProfileGroup(current.Group))
-		return nil
-	}
-	logUnboundGroupFallback(roles, group, current.ID)
-	return []llm.Profile{current}
-}
-
-// logUnusableActiveProfileSkipped 无条件记一条：跟 logUnboundGroupFallback 不同，
-// 这不是「正常回落」，而是「用户选的激活配置干不了这次调用」，任何情况下都该看得见。
-// logUnboundGroupFallback 在没配任何绑定时是静默的，而没配绑定的人恰恰最容易撞上
-// 这一种——那条路的静默只能由这里补上。
-func logUnusableActiveProfileSkipped(wantGroup string, activeID string, activeGroup string) {
-	log.Printf("chatbot llm selection skipped the active profile: a %q call cannot use the active profile %q from the single-purpose group %q", wantGroup, activeID, activeGroup)
-}
-
 func normalizeRegistrySelection(registry *llm.ProviderRegistry, providerID, modelID string) llm.AgentModelConfig {
 	if _, ok := registry.Model(modelID); !ok {
 		if _, ok := registry.Model(providerID + ":" + modelID); ok {
@@ -5104,14 +5123,14 @@ func profileRegistrySelection(registry *llm.ProviderRegistry, profile llm.Profil
 	return normalizeRegistrySelection(registry, profile.ID, config.Model)
 }
 
-func (r *Runtime) roleBoundProfiles(set llm.ProfileSet, group string) ([]llm.Profile, error) {
+func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group string) ([]llm.Profile, error) {
 	r.mu.RLock()
 	roles := normalizeModelRoles(r.cfg.ModelRoles)
 	r.mu.RUnlock()
 	if len(roles) == 0 {
 		return nil, nil
 	}
-	role, ok := modelRoleForGroup(roles, group)
+	role, ok := modelRoleFor(roles, purpose, group)
 	if !ok {
 		return nil, nil
 	}
@@ -5192,7 +5211,7 @@ func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
 		}
 	}
 	if len(profiles) == 0 {
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			profiles = []llm.Profile{current}
 		}
 	}
@@ -5333,18 +5352,18 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		r.mu.RLock()
 		roles := normalizeModelRoles(r.cfg.ModelRoles)
 		r.mu.RUnlock()
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, llm.GroupIntent, "")
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), llm.GroupIntent, "")
 		if err != nil {
 			return "", err
 		}
 		if ok {
-			return run(llm.RegistryClient{Registry: registry, Selection: selection})
+			return run(registryLLMProvider(registry, selection, retryTransient))
 		}
 	}
 
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		profiles, roleErr := r.roleBoundProfiles(set, llm.GroupIntent)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -5364,7 +5383,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			}
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
-		if current, ok := set.Current(); ok {
+		if current, ok := set.FirstProfile(); ok {
 			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, retryTransient, run)
 		}
 		return "", fmt.Errorf("chatbot: no llm profile is configured")
@@ -5377,6 +5396,33 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		return "", err
 	}
 	return run(withTransientLLMRetry(client, retryTransient))
+}
+
+// fallbackProfilesForGroup 在本分组没有配置时跨组挑一批候选，整组返回而不是只取一条，
+// 组内降级才不会丢。
+//
+// 它替代了原来那套「激活配置所在的分组，从激活那条开始绕圈」：分组改由列表第一条决定，
+// 于是同一份配置任何时刻算出来的候选和顺序都一样，也不会被降级写回悄悄改掉。
+//
+// 拦的是「干不了这活」，不是「分组不一样」：视觉、意图没单独配置时用对话配置是正常且
+// 有用的（大多数对话模型本来就能看图），只有生图、嵌入这种单一用途的组才互相拦。少了
+// 这道检查，第一条正好是生图配置时就会拿 gpt-image 去发文本请求，而 provider 和 model
+// 在日志里还都显示「正常」。
+func fallbackProfilesForGroup(set llm.ProfileSet, groupKey string) []llm.Profile {
+	first, ok := set.FirstProfile()
+	if !ok {
+		return nil
+	}
+	if candidates := llmProfilesInGroup(set, llm.GroupChat); len(candidates) > 0 {
+		if profileGroupServes(llm.GroupChat, groupKey) {
+			return candidates
+		}
+		return nil
+	}
+	if !profileGroupServes(first.Group, groupKey) {
+		return nil
+	}
+	return llmProfilesInGroup(set, first.Group)
 }
 
 func llmProfilesInGroup(set llm.ProfileSet, group string) []llm.Profile {
@@ -5409,13 +5455,17 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 		return "", err
 	}
 	set := store.Profiles().WithDefaults()
-	attempts := set.ActiveGroupProfiles()
+	// 候选以前来自「激活配置所在的分组」，且从激活那条开始绕圈；降级成功后还会把
+	// 激活项写回，于是列表顺序和实跑顺序对不上。现在退到默认分组、按列表顺序走，
+	// 默认分组也空了才拿第一条兜底。
+	attempts := llmProfilesInGroup(set, llm.GroupChat)
+	if len(attempts) == 0 {
+		attempts = fallbackProfilesForGroup(set, llm.GroupChat)
+	}
 	if len(attempts) == 0 {
 		return "", fmt.Errorf("chatbot: no llm profile is configured")
 	}
-	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, func(profileID string) {
-		activateLLMProfile(store, profileID)
-	}, true)
+	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, nil, true)
 	if err != nil {
 		return "", err
 	}
@@ -5631,8 +5681,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if agentEnabled && hasTool(dianaVersionToolName) {
 		builder.WriteString("\n" + promptToolVersion)
 	}
-	if agentEnabled && hasTool(dianaGlossaryToolName) {
-		builder.WriteString("\n" + promptToolGlossary)
+	if agentEnabled && hasTool(dianaNotebookToolName) {
+		builder.WriteString("\n" + promptToolNotebook)
 	}
 	if agentEnabled && hasTool("diana.capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)
@@ -6842,11 +6892,15 @@ func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string
 	return agentImageHistoryPromptTextWithDescriptions(event, currentTime, nil)
 }
 
-// agentImageHistoryPromptTextWithDescriptions 在图片计数之外附上已缓存的图片描述。
-// 只有计数的占位行会让模型在被追问历史图片时无内容可依，转而编造或退化成寒暄。
+// agentImageHistoryPromptTextWithDescriptions 在媒体计数之外附上已缓存的图片和视频关键帧描述。
+// 只有计数的占位行会让模型在被追问历史媒体时无内容可依，转而编造或退化成寒暄。
 func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime int64, descriptions []string) string {
 	imageCount := historicalStillImageCount(event)
-	if imageCount == 0 {
+	videoCount := historicalVideoCount(event)
+	videoFrameCount := historicalVideoFrameCount(event)
+	audioCount := historicalAudioCount(event)
+	fileCount := historicalFileCount(event)
+	if imageCount+videoCount+videoFrameCount+audioCount+fileCount == 0 {
 		return ""
 	}
 	text := rawMessageWithoutImagePlaceholders(PlainText(event.Segments))
@@ -6865,18 +6919,78 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if text != "" {
 		line += ": " + text
 	}
-	line += fmt.Sprintf("\n【历史图片摘要】message_id=%s；image_count=%d；当前未附加原图。", messageID, imageCount)
+	line += fmt.Sprintf("\n【历史媒体摘要】message_id=%s；image_count=%d；video_count=%d；video_frame_count=%d；audio_count=%d；file_count=%d；当前未附加原图、视频帧或其他媒体原件。", messageID, imageCount, videoCount, videoFrameCount, audioCount, fileCount)
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
-	if messageID != "不可用" {
-		line += fmt.Sprintf("\n需要核对视觉细节时调用 %s，并传入 message_ids=[%q]；涉及多条消息时一次传入全部 ID。", dianaHistoryImagesToolName, messageID)
+	if messageID != "不可用" && imageCount+videoFrameCount > 0 {
+		line += fmt.Sprintf("\n需要核对图片或视频画面细节时调用 %s，并传入 message_ids=[%q]；涉及多条消息时一次传入全部 ID。", dianaHistoryImagesToolName, messageID)
 	}
 	return line
 }
 
 func historicalStillImageCount(event MessageEvent) int {
 	return len(historicalStillImageSegments(event))
+}
+
+func historicalMediaCount(event MessageEvent) int {
+	return historicalStillImageCount(event) + historicalVideoCount(event) + historicalVideoFrameCount(event) + historicalAudioCount(event) + historicalFileCount(event)
+}
+
+func historicalVideoCount(event MessageEvent) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type == "video" || (segment.Type == "file" && videoFileSegment(segment)) {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
+}
+
+func historicalVideoFrameCount(event MessageEvent) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type == "image" && strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame") {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
+}
+
+func historicalAudioCount(event MessageEvent) int {
+	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "record" })
+}
+
+func historicalFileCount(event MessageEvent) int {
+	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "file" })
+}
+
+func historicalSegmentCount(event MessageEvent, matches func(MessageSegment) bool) int {
+	count := 0
+	countSegments := func(segments []MessageSegment) {
+		for _, segment := range segments {
+			if matches(segment) {
+				count++
+			}
+		}
+	}
+	countSegments(event.Segments)
+	if event.Quoted != nil {
+		countSegments(event.Quoted.Segments)
+	}
+	return count
 }
 
 // historyImageCachedDescriptions 只同步读取已有缓存；缺失描述只进入后台队列，
@@ -6894,11 +7008,22 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 	store := r.recallImageDescriptionStore()
 	var lines []string
 	imageIndex := 0
+	videoFrameIndex := 0
 	for _, segment := range segments {
-		if !recallStillImageSegment(segment) {
+		if !historyDescribableImageSegment(segment) {
 			continue
 		}
-		imageIndex++
+		videoFrame := strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame")
+		label := "图片"
+		index := 0
+		if videoFrame {
+			videoFrameIndex++
+			label = "视频关键帧"
+			index = videoFrameIndex
+		} else {
+			imageIndex++
+			index = imageIndex
+		}
 		description := strings.TrimSpace(segment.Data[recallImageDescriptionKey])
 		if description == "" && store != nil {
 			if hash, ok := imageSegmentContentSHA256(segment); ok {
@@ -6910,10 +7035,49 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 			}
 		}
 		if description == "" {
-			lines = append(lines, fmt.Sprintf("图片%d摘要=尚无缓存描述", imageIndex))
+			lines = append(lines, fmt.Sprintf("%s%d摘要=尚无缓存描述", label, index))
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("图片%d摘要=%s", imageIndex, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
+		lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
+	}
+	lines = append(lines, historicalNonImageMediaDescriptions(segments)...)
+	return lines
+}
+
+func historicalNonImageMediaDescriptions(segments []MessageSegment) []string {
+	lines := make([]string, 0)
+	audioIndex, fileIndex := 0, 0
+	for _, segment := range segments {
+		switch segment.Type {
+		case "record":
+			audioIndex++
+			transcript := strings.TrimSpace(segment.Data[voiceSTTTranscriptKey])
+			if transcript == "" {
+				lines = append(lines, fmt.Sprintf("语音%d摘要=尚无可用转写", audioIndex))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("语音%d转写=%s", audioIndex, truncateRunes(strings.Join(strings.Fields(transcript), " "), historyImageDescriptionMaxRunes)))
+		case "file":
+			fileIndex++
+			name := strings.TrimSpace(firstNonEmpty(segment.Data["name"], segment.Data["filename"], segment.Data["fileName"], segment.Data["file"]))
+			if name == "" {
+				name = "未命名文件"
+			}
+			format := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+			if format == "" {
+				format = "未知"
+			}
+			description := strings.TrimSpace(firstNonEmpty(segment.Data["summary"], segment.Data["description"], segment.Data["parsed_text"], segment.Data["content"]))
+			line := fmt.Sprintf("文件%d摘要=文件名：%s；格式：%s", fileIndex, name, format)
+			if description != "" {
+				line += "；内容摘要：" + truncateRunes(strings.Join(strings.Fields(description), " "), historyImageDescriptionMaxRunes)
+			} else if isSupportedFileName(name) {
+				line += "；正文尚未解析"
+			} else {
+				line += "；当前格式不支持正文解析"
+			}
+			lines = append(lines, line)
+		}
 	}
 	return lines
 }
@@ -9270,13 +9434,10 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 		return reply, true
 	}
 	switch {
+	// 「lllm 当前」和「lllm 切换」跟着「激活配置」一起去掉了：没有激活项之后，
+	// 「当前用哪个」由本次调用的用途和分组顺序决定，不再是一个能被切换的全局状态。
 	case command == "lllm 列表":
 		return r.renderLLMProfiles(), true
-	case command == "lllm 当前":
-		return r.renderCurrentLLMProfile(), true
-	case strings.HasPrefix(command, "lllm 切换 "):
-		name := strings.TrimSpace(strings.TrimPrefix(command, "lllm 切换 "))
-		return r.switchLLMProfile(name)
 	case command == "群 列表":
 		return r.renderDisabledGroups(), true
 	case strings.HasPrefix(command, "群 禁用 "):
@@ -9332,61 +9493,22 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	}
 }
 
-// renderLLMProfiles 渲染 LLM 配置档列表。
+// renderLLMProfiles 渲染提供商配置档列表。
 func (r *Runtime) renderLLMProfiles() string {
 	if r.llmStore == nil {
-		return "当前未接入 LLM 配置集。"
+		return "当前未接入提供商配置集。"
 	}
 	set := r.llmStore.Profiles()
 	if len(set.Profiles) == 0 {
-		return "当前没有可用的 LLM 配置。"
+		return "当前没有可用的提供商配置。"
 	}
-	profiles := append([]llm.Profile(nil), set.Profiles...)
-	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].Name < profiles[j].Name
-	})
-	lines := []string{"LLM 配置列表："}
-	for _, profile := range profiles {
-		prefix := "- "
-		if profile.ID == set.ActiveID {
-			prefix = "* "
-		}
-		lines = append(lines, fmt.Sprintf("%s%s [%s] (%s / %s)", prefix, profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model))
+	// 按列表原顺序输出，不再按名字排序：组内顺序就是降级顺序，排过序的列表会把
+	// 这个含义抹掉。以前用 * 标出激活项，那个概念已经没有了。
+	lines := []string{"提供商配置列表（组内自上而下即降级顺序）："}
+	for _, profile := range set.Profiles {
+		lines = append(lines, fmt.Sprintf("- %s [%s] (%s / %s)", profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model))
 	}
 	return strings.Join(lines, "\n")
-}
-
-// renderCurrentLLMProfile 渲染当前 LLM 配置档。
-func (r *Runtime) renderCurrentLLMProfile() string {
-	if r.llmStore == nil {
-		return "当前未接入 LLM 配置集。"
-	}
-	profile, ok := r.llmStore.Profiles().Current()
-	if !ok {
-		return "当前没有激活的 LLM 配置。"
-	}
-	return fmt.Sprintf("当前 LLM：%s\n分组：%s\nProvider：%s\nModel：%s", profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model)
-}
-
-// switchLLMProfile 按名称切换 LLM 配置档。
-func (r *Runtime) switchLLMProfile(name string) (string, bool) {
-	if r.llmStore == nil {
-		return "当前未接入 LLM 配置集。", true
-	}
-	set := r.llmStore.Profiles()
-	for _, profile := range set.Profiles {
-		if profile.Name != name {
-			continue
-		}
-		// 只切换 active profile，不修改任何 provider/model 具体参数。
-		set.ActiveID = profile.ID
-		if err := r.llmStore.SaveProfiles(set); err != nil {
-			log.Printf("switch llm profile persist failed: %v", err)
-			return "切换失败：配置没能写入存储。", true
-		}
-		return fmt.Sprintf("已切换到 LLM 配置：%s", profile.Name), true
-	}
-	return "没有找到对应的 LLM 配置。", true
 }
 
 // clearSessionHistory 清空当前会话上下文。

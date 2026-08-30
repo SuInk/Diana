@@ -17,6 +17,7 @@ import (
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/model/llmauth"
 	"github.com/SuInk/diana/model/updater"
 
 	_ "modernc.org/sqlite"
@@ -26,6 +27,7 @@ const (
 	defaultDatabasePath  = "data/diana.db"
 	llmProfilesKey       = "llm_profiles"
 	llmRegistryKey       = "llm_provider_registry"
+	llmAuthKey           = "llm_oauth"
 	botProfilesKey       = "bot_profiles"
 	botPersonasKey       = "bot_personas"
 	botGroupConfigKey    = "bot_group_configs"
@@ -108,14 +110,14 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-// LoadLLMProfiles 读取 LLM 配置集。
+// LoadLLMProfiles 读取提供商配置集。
 func (s *SQLiteStore) LoadLLMProfiles(ctx context.Context) (llm.ProfileSet, bool, error) {
 	var set llm.ProfileSet
 	ok, err := s.loadJSON(ctx, llmProfilesKey, &set)
 	return set, ok, err
 }
 
-// SaveLLMProfiles 保存 LLM 配置集。
+// SaveLLMProfiles 保存提供商配置集。
 func (s *SQLiteStore) SaveLLMProfiles(ctx context.Context, set llm.ProfileSet) error {
 	return s.saveJSON(ctx, llmProfilesKey, set)
 }
@@ -130,6 +132,22 @@ func (s *SQLiteStore) LoadLLMProviderRegistry(ctx context.Context) (llm.Provider
 // SaveLLMProviderRegistry persists the provider/model document.
 func (s *SQLiteStore) SaveLLMProviderRegistry(ctx context.Context, document llm.ProviderRegistryDocument) error {
 	return s.saveJSON(ctx, llmRegistryKey, document)
+}
+
+// LoadLLMAuth 读取 OAuth 提供商与令牌。
+//
+// 和 API Key 同库同待遇：这份文档里是明文凭据，任何对外接口都必须先脱敏再返回。
+func (s *SQLiteStore) LoadLLMAuth(ctx context.Context) (llmauth.Document, error) {
+	var document llmauth.Document
+	if _, err := s.loadJSON(ctx, llmAuthKey, &document); err != nil {
+		return llmauth.Document{}, err
+	}
+	return document, nil
+}
+
+// SaveLLMAuth 保存 OAuth 提供商与令牌。
+func (s *SQLiteStore) SaveLLMAuth(ctx context.Context, document llmauth.Document) error {
+	return s.saveJSON(ctx, llmAuthKey, document)
 }
 
 // LoadBotProfiles 读取 OneBot v11 机器人配置集。
@@ -340,6 +358,9 @@ CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, t
 		return err
 	}
 	if err := s.migrateRestoredFeatures(); err != nil {
+		return err
+	}
+	if err := s.ensureStickerAssets(); err != nil {
 		return err
 	}
 	s.historyFTS = ensureMessageHistoryFTS(s.db)

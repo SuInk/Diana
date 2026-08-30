@@ -32,36 +32,37 @@ var (
 )
 
 type Status struct {
-	Root              string    `json:"root"`
-	Branch            string    `json:"branch,omitempty"`
-	RemoteName        string    `json:"remote_name,omitempty"`
-	RemoteURL         string    `json:"remote_url,omitempty"`
-	HeadCommit        string    `json:"head_commit,omitempty"`
-	HeadSubject       string    `json:"head_subject,omitempty"`
-	RunningCommit     string    `json:"running_commit,omitempty"`
-	NearestTag        string    `json:"nearest_tag,omitempty"`
-	CommitsSinceTag   int       `json:"commits_since_tag,omitempty"`
-	Dirty             bool      `json:"dirty"`
-	Ahead             int       `json:"ahead,omitempty"`
-	Behind            int       `json:"behind,omitempty"`
-	Upstream          string    `json:"upstream,omitempty"`
-	Updating          bool      `json:"updating"`
-	ApplySupported    bool      `json:"apply_supported"`
-	UpdateAvailable   bool      `json:"update_available"`
-	RestartRequired   bool      `json:"restart_required"`
-	DownloadReady     bool      `json:"download_ready"`
-	DownloadedVersion string    `json:"downloaded_version,omitempty"`
-	DownloadedAt      time.Time `json:"downloaded_at,omitempty"`
-	UpdatePhase       string    `json:"update_phase,omitempty"`
-	DownloadPercent   int       `json:"download_percent,omitempty"`
-	DownloadedBytes   int64     `json:"downloaded_bytes,omitempty"`
-	DownloadTotal     int64     `json:"download_total,omitempty"`
-	LastFetchedAt     time.Time `json:"last_fetched_at,omitempty"`
-	LastUpdateAt      time.Time `json:"last_update_at,omitempty"`
-	LastUpdateText    string    `json:"last_update_text,omitempty"`
-	LastUpdateStatus  string    `json:"last_update_status,omitempty"`
-	LastUpdateVersion string    `json:"last_update_version,omitempty"`
-	LastUpdateError   string    `json:"last_update_error,omitempty"`
+	Root               string    `json:"root"`
+	Branch             string    `json:"branch,omitempty"`
+	RemoteName         string    `json:"remote_name,omitempty"`
+	RemoteURL          string    `json:"remote_url,omitempty"`
+	HeadCommit         string    `json:"head_commit,omitempty"`
+	HeadSubject        string    `json:"head_subject,omitempty"`
+	RunningCommit      string    `json:"running_commit,omitempty"`
+	NearestTag         string    `json:"nearest_tag,omitempty"`
+	CommitsSinceTag    int       `json:"commits_since_tag,omitempty"`
+	Dirty              bool      `json:"dirty"`
+	Ahead              int       `json:"ahead,omitempty"`
+	Behind             int       `json:"behind,omitempty"`
+	Upstream           string    `json:"upstream,omitempty"`
+	Updating           bool      `json:"updating"`
+	ApplySupported     bool      `json:"apply_supported"`
+	UpdateAvailable    bool      `json:"update_available"`
+	RestartRequired    bool      `json:"restart_required"`
+	DownloadReady      bool      `json:"download_ready"`
+	DownloadedVersion  string    `json:"downloaded_version,omitempty"`
+	DownloadedAt       time.Time `json:"downloaded_at,omitempty"`
+	UpdatePhase        string    `json:"update_phase,omitempty"`
+	DownloadPercent    int       `json:"download_percent,omitempty"`
+	DownloadedBytes    int64     `json:"downloaded_bytes,omitempty"`
+	DownloadTotal      int64     `json:"download_total,omitempty"`
+	LastFetchedAt      time.Time `json:"last_fetched_at,omitempty"`
+	LastUpdateAt       time.Time `json:"last_update_at,omitempty"`
+	LastUpdateText     string    `json:"last_update_text,omitempty"`
+	LastUpdateStatus   string    `json:"last_update_status,omitempty"`
+	LastUpdateVersion  string    `json:"last_update_version,omitempty"`
+	LastUpdateError    string    `json:"last_update_error,omitempty"`
+	LastUpdateFailures int       `json:"last_update_failures,omitempty"`
 }
 
 func (s Status) VersionLabel() string {

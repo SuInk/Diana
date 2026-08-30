@@ -190,31 +190,18 @@
                 </div>
                 <span class="hint">填写接入端实际可访问的地址；自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
               </div>
-              <template v-else>
-                <div class="field">
-                  <label for="bot-tg-token">Bot Token</label>
-                  <div class="input-group">
-                    <input
-                      id="bot-tg-token"
-                      v-model="telegramTokenDraft"
-                      class="input"
-                      :type="tokenRevealed.telegram_bot_token ? 'text' : 'password'"
-                      autocomplete="off"
-                      :placeholder="form.telegram_bot_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '从 @BotFather 获取'"
-                    />
-                    <button
-                      class="btn icon-only"
-                      type="button"
-                      :disabled="tokenRevealBusy === 'telegram_bot_token'"
-                      :aria-label="tokenRevealed.telegram_bot_token ? '隐藏 Token' : '查看 Token'"
-                      @click="toggleTokenReveal('telegram_bot_token')"
-                    >
-                      <EyeOff v-if="tokenRevealed.telegram_bot_token" :size="14" aria-hidden="true" />
-                      <Eye v-else :size="14" aria-hidden="true" />
-                    </button>
-                  </div>
-                  <span class="hint">Telegram 用长轮询出站连接，不需要公网地址，也不用配置 webhook。</span>
-                </div>
+              <template v-else-if="currentPlatform === 'telegram'">
+                <SecretField
+                  id="bot-tg-token"
+                  v-model="telegramTokenDraft"
+                  label="Bot Token"
+                  placeholder="从 @BotFather 获取"
+                  hint="Telegram 用长轮询出站连接，不需要公网地址，也不用配置 webhook。"
+                  :configured="form.telegram_bot_token_configured"
+                  :revealed="tokenRevealed.telegram_bot_token"
+                  :busy="tokenRevealBusy === 'telegram_bot_token'"
+                  @toggle-reveal="toggleTokenReveal('telegram_bot_token')"
+                />
                 <div class="field">
                   <label for="bot-tg-proxy">代理地址（可选）</label>
                   <input
@@ -238,6 +225,158 @@
                   <span class="hint">部署了本地 Bot API server 时填写，可绕过 50MB 上传限制。</span>
                 </div>
               </template>
+
+              <template v-else-if="currentPlatform === 'qq-official'">
+                <div class="field">
+                  <label for="bot-qq-appid">AppID</label>
+                  <input id="bot-qq-appid" v-model="form.qq_app_id" class="input mono" placeholder="QQ 开放平台的机器人 AppID" autocomplete="off" />
+                  <span class="hint">在 q.qq.com 的机器人管理后台「开发设置」里查看。</span>
+                </div>
+                <SecretField
+                  id="bot-qq-secret"
+                  v-model="qqSecretDraft"
+                  label="AppSecret"
+                  placeholder="开发设置里的机器人密钥"
+                  hint="出站 WebSocket 网关接入，不需要公网地址；平台只会推送 @ 机器人的群消息。"
+                  :configured="form.qq_app_secret_configured"
+                  :revealed="tokenRevealed.qq_app_secret"
+                  :busy="tokenRevealBusy === 'qq_app_secret'"
+                  @toggle-reveal="toggleTokenReveal('qq_app_secret')"
+                />
+                <label class="check">
+                  <input v-model="form.qq_sandbox" type="checkbox" />
+                  <span>使用沙箱环境</span>
+                </label>
+                <span class="hint">机器人尚未发布上架时勾选，走沙箱接口联调。</span>
+              </template>
+
+              <template v-else-if="currentPlatform === 'dingtalk'">
+                <div class="field">
+                  <label for="bot-ding-id">Client ID</label>
+                  <input id="bot-ding-id" v-model="form.dingtalk_client_id" class="input mono" placeholder="应用的 AppKey / Client ID" autocomplete="off" />
+                  <span class="hint">钉钉开放平台的应用凭证页可以看到。</span>
+                </div>
+                <SecretField
+                  id="bot-ding-secret"
+                  v-model="dingTalkSecretDraft"
+                  label="Client Secret"
+                  placeholder="应用的 AppSecret / Client Secret"
+                  hint="用 Stream 模式出站长连接接入，不需要公网地址，也不用在后台配 HTTP 回调。"
+                  :configured="form.dingtalk_client_secret_configured"
+                  :revealed="tokenRevealed.dingtalk_client_secret"
+                  :busy="tokenRevealBusy === 'dingtalk_client_secret'"
+                  @toggle-reveal="toggleTokenReveal('dingtalk_client_secret')"
+                />
+                <div class="field">
+                  <label for="bot-ding-robot">机器人 RobotCode（可选）</label>
+                  <input id="bot-ding-robot" v-model="form.dingtalk_robot_code" class="input mono" placeholder="留空则与 Client ID 相同" autocomplete="off" />
+                  <span class="hint">企业内部机器人单独分配了 robotCode 时才需要填。</span>
+                </div>
+              </template>
+
+              <template v-else-if="currentPlatform === 'feishu'">
+                <div class="field">
+                  <label for="bot-feishu-appid">App ID</label>
+                  <input id="bot-feishu-appid" v-model="form.feishu_app_id" class="input mono" placeholder="cli_ 开头的自建应用 App ID" autocomplete="off" />
+                  <span class="hint">飞书开放平台的「凭证与基础信息」页。</span>
+                </div>
+                <SecretField
+                  id="bot-feishu-secret"
+                  v-model="feishuSecretDraft"
+                  label="App Secret"
+                  placeholder="自建应用的 App Secret"
+                  :configured="form.feishu_app_secret_configured"
+                  :revealed="tokenRevealed.feishu_app_secret"
+                  :busy="tokenRevealBusy === 'feishu_app_secret'"
+                  @toggle-reveal="toggleTokenReveal('feishu_app_secret')"
+                />
+                <SecretField
+                  id="bot-feishu-verify"
+                  v-model="feishuVerificationDraft"
+                  label="Verification Token"
+                  placeholder="事件订阅页的 Verification Token"
+                  hint="用于核验回调来源。强烈建议填写——回调地址本身是公开的，不能当凭据用。"
+                  :configured="form.feishu_verification_token_configured"
+                  :revealed="tokenRevealed.feishu_verification_token"
+                  :busy="tokenRevealBusy === 'feishu_verification_token'"
+                  @toggle-reveal="toggleTokenReveal('feishu_verification_token')"
+                />
+                <SecretField
+                  id="bot-feishu-encrypt"
+                  v-model="feishuEncryptDraft"
+                  label="Encrypt Key（可选）"
+                  placeholder="后台开启了加密推送才填"
+                  hint="填了这里就必须在飞书后台同步开启加密推送，否则明文回调会被拒绝。"
+                  :configured="form.feishu_encrypt_key_configured"
+                  :revealed="tokenRevealed.feishu_encrypt_key"
+                  :busy="tokenRevealBusy === 'feishu_encrypt_key'"
+                  @toggle-reveal="toggleTokenReveal('feishu_encrypt_key')"
+                />
+                <div class="field">
+                  <label for="bot-feishu-base">开放平台地址</label>
+                  <input id="bot-feishu-base" v-model="form.feishu_api_base_url" class="input mono" placeholder="留空使用 https://open.feishu.cn" autocomplete="off" />
+                  <span class="hint">Lark 国际版填 https://open.larksuite.com。</span>
+                </div>
+              </template>
+
+              <template v-else-if="currentPlatform === 'wecom'">
+                <div class="field">
+                  <label for="bot-wecom-corp">企业 ID</label>
+                  <input id="bot-wecom-corp" v-model="form.wecom_corp_id" class="input mono" placeholder="ww 开头的 CorpID" autocomplete="off" />
+                  <span class="hint">企业微信管理后台「我的企业」页底部。</span>
+                </div>
+                <div class="field">
+                  <label for="bot-wecom-agent">AgentId</label>
+                  <input id="bot-wecom-agent" v-model="form.wecom_agent_id" class="input mono" placeholder="自建应用的 AgentId，纯数字" autocomplete="off" />
+                  <span class="hint">在「应用管理」里打开自建应用即可看到。</span>
+                </div>
+                <SecretField
+                  id="bot-wecom-secret"
+                  v-model="weComSecretDraft"
+                  label="应用 Secret"
+                  placeholder="自建应用的 Secret"
+                  :configured="form.wecom_secret_configured"
+                  :revealed="tokenRevealed.wecom_secret"
+                  :busy="tokenRevealBusy === 'wecom_secret'"
+                  @toggle-reveal="toggleTokenReveal('wecom_secret')"
+                />
+                <SecretField
+                  id="bot-wecom-token"
+                  v-model="weComTokenDraft"
+                  label="Token"
+                  placeholder="「接收消息」配置里的 Token"
+                  :configured="form.wecom_token_configured"
+                  :revealed="tokenRevealed.wecom_token"
+                  :busy="tokenRevealBusy === 'wecom_token'"
+                  @toggle-reveal="toggleTokenReveal('wecom_token')"
+                />
+                <SecretField
+                  id="bot-wecom-aes"
+                  v-model="weComAESDraft"
+                  label="EncodingAESKey"
+                  placeholder="43 位的 EncodingAESKey"
+                  hint="Token 和 EncodingAESKey 用于回调验签和解密，缺一个就只能发不能收。"
+                  :configured="form.wecom_encoding_aes_key_configured"
+                  :revealed="tokenRevealed.wecom_encoding_aes_key"
+                  :busy="tokenRevealBusy === 'wecom_encoding_aes_key'"
+                  @toggle-reveal="toggleTokenReveal('wecom_encoding_aes_key')"
+                />
+              </template>
+
+              <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
+              <div v-if="callbackURL" class="field">
+                <label for="bot-callback-url">回调地址</label>
+                <div class="input-group">
+                  <input id="bot-callback-url" class="input mono" :value="callbackURL" readonly />
+                  <button class="btn icon-only" type="button" aria-label="复制回调地址" @click="copyCallbackURL">
+                    <Copy :size="14" aria-hidden="true" />
+                  </button>
+                </div>
+                <span class="hint">
+                  填到该平台后台的事件接收配置里。这里按你当前访问控制台的地址拼出，
+                  必须换成平台服务器能访问到的公网 HTTPS 地址才收得到消息。
+                </span>
+              </div>
               <div class="form-grid">
                 <div class="field wide">
                   <label>接入平台</label>
@@ -318,7 +457,7 @@
                 <label class="switch">
                   <input v-model="form.owner_llm_config_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改 Provider 和模型</span>
+                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
                 </label>
                 <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
               </div>
@@ -330,12 +469,12 @@
           <section class="card">
             <div class="card-header">
               <h2>模型分配</h2>
-              <span class="card-sub">按用途选择 Provider 与模型；Provider 在「LLM 配置」页管理</span>
+              <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
             </div>
             <div class="card-body stack" style="gap: 12px">
               <div class="model-role-row model-role-head" aria-hidden="true">
                 <span>用途</span>
-                <span>Provider / 分组</span>
+                <span>提供商 / 分组</span>
                 <span>模型</span>
               </div>
               <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
@@ -352,7 +491,7 @@
                 />
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话 Provider 的生图配置。
+                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话提供商的生图配置。
               </p>
             </div>
           </section>
@@ -434,7 +573,7 @@
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
-                <span class="hint">一次调用最多带多少 token 上下文进去。留空按 LLM 配置档的模型窗口，填了只会收紧不会放宽。</span>
+                <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
               </div>
               <div class="field">
                 <label for="bot-context">历史查询条数上限</label>
@@ -471,7 +610,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">语义检索</span>
                 </label>
-                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在 LLM 配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
+                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在提供商配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
@@ -634,7 +773,7 @@
 
           <section class="card">
             <div class="card-header">
-              <h2>账号安全审核</h2>
+              <h2>发送前审核</h2>
               <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
                 {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
               </span>
@@ -644,11 +783,11 @@
                 <label class="switch">
                   <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">直接回复也做发送前安全审核</span>
+                  <span class="switch-label">直接回复也做统一发送前审核</span>
                 </label>
                 <span class="hint">
-                  涉政、露骨和其他可能导致账号被处置的内容会被拦下不发。主动回复本来就要过一次审核，安全判断顺带完成，始终生效；
-                  打开这个开关后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                  一次审核同时判断内容安全和是否属于明确拒答；主动回复还会使用其中的表达质量结论。涉政、露骨和其他可能导致账号被处置的内容会被拦下不发，
+                  高置信拒答仅在发送成功后累计。打开后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
                 </span>
               </div>
             </div>
@@ -656,21 +795,21 @@
 
           <section class="card">
             <div class="card-header">
-              <h2>词典作用域</h2>
-              <span class="badge" :class="form.glossary_shared_scope_enabled ? 'accent' : ''">
-                {{ form.glossary_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
+              <h2>笔记本作用域</h2>
+              <span class="badge" :class="form.notebook_shared_scope_enabled ? 'accent' : ''">
+                {{ form.notebook_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
               </span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.glossary_shared_scope_enabled" type="checkbox" />
+                  <input v-model="form.notebook_shared_scope_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">所有群共用一本词典</span>
+                  <span class="switch-label">所有群共用一本笔记</span>
                 </label>
                 <span class="hint">
-                  默认按会话隔离：一个群记下的梗只在这个群生效，别的群查不到。打开后新记的词条一律写进全局词典，所有会话通用。
-                  打开之前各群已经记下的词条不会搬走，仍在自己群里优先生效，可以在「词典」页按作用域逐条改。
+                  默认按会话隔离：一个群记下的只在这个群生效，别的群查不到。打开后新记的一律写进全局笔记本，所有会话通用。
+                  打开之前各群已经记下的不会搬走，仍在自己群里优先生效，可以在「笔记本」页按作用域逐条改。
                 </span>
               </div>
             </div>
@@ -1046,6 +1185,7 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
+import SecretField from "../components/SecretField.vue";
 import { pushStatusSnapshot, stream } from "../stream";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
@@ -1065,51 +1205,56 @@ const triggersDraft = ref("");
 const allowlistDraft = ref("");
 const allowedGroups = ref<string[]>([]);
 const telegramTokenDraft = ref("");
-// 三个凭据输入框共用一套「查看」状态：key 是字段名，值表示当前是否明文显示。
-const tokenRevealed = ref<Record<TokenField, boolean>>({
-  onebot_access_token: false,
-  telegram_bot_token: false,
-  nonebot_bridge_token: false
-});
+const qqSecretDraft = ref("");
+const dingTalkSecretDraft = ref("");
+const feishuSecretDraft = ref("");
+const feishuVerificationDraft = ref("");
+const feishuEncryptDraft = ref("");
+const weComSecretDraft = ref("");
+const weComTokenDraft = ref("");
+const weComAESDraft = ref("");
+
+// 每个平台的凭据都走同一套「留空沿用、点开才取明文」的流程，差别只有草稿变量。
+// 后端的字段名有固定规律（<字段> 和 <字段>_configured），所以这里只登记草稿，
+// 读取和判断都按约定推导——否则每加一个平台都要在三个 switch 里各补一遍。
+const tokenDrafts = {
+  onebot_access_token: tokenDraft,
+  telegram_bot_token: telegramTokenDraft,
+  nonebot_bridge_token: bridgeTokenDraft,
+  qq_app_secret: qqSecretDraft,
+  dingtalk_client_secret: dingTalkSecretDraft,
+  feishu_app_secret: feishuSecretDraft,
+  feishu_verification_token: feishuVerificationDraft,
+  feishu_encrypt_key: feishuEncryptDraft,
+  wecom_secret: weComSecretDraft,
+  wecom_token: weComTokenDraft,
+  wecom_encoding_aes_key: weComAESDraft
+} satisfies Record<string, Ref<string>>;
+
+type TokenField = keyof typeof tokenDrafts;
+
+const emptyRevealState = (): Record<TokenField, boolean> =>
+  Object.fromEntries(Object.keys(tokenDrafts).map((key) => [key, false])) as Record<TokenField, boolean>;
+
+// 凭据输入框共用一套「查看」状态：key 是字段名，值表示当前是否明文显示。
+const tokenRevealed = ref<Record<TokenField, boolean>>(emptyRevealState());
 const tokenRevealBusy = ref<TokenField | "">("");
 
-type TokenField = "onebot_access_token" | "telegram_bot_token" | "nonebot_bridge_token";
-
 function tokenDraftRef(field: TokenField): Ref<string> {
-  switch (field) {
-    case "telegram_bot_token":
-      return telegramTokenDraft;
-    case "nonebot_bridge_token":
-      return bridgeTokenDraft;
-    default:
-      return tokenDraft;
-  }
+  return tokenDrafts[field];
+}
+
+/** 按后端的命名约定读取任意字段，配合上面的 tokenDrafts 表使用。 */
+function readField(config: BotProfileConfig | null, key: string): unknown {
+  return config ? (config as unknown as Record<string, unknown>)[key] : undefined;
 }
 
 function tokenConfigured(field: TokenField): boolean {
-  const current = form.value;
-  if (!current) {
-    return false;
-  }
-  switch (field) {
-    case "telegram_bot_token":
-      return Boolean(current.telegram_bot_token_configured);
-    case "nonebot_bridge_token":
-      return Boolean(current.nonebot_bridge_token_configured);
-    default:
-      return Boolean(current.onebot_access_token_configured);
-  }
+  return Boolean(readField(form.value, `${field}_configured`));
 }
 
 function tokenValue(config: BotProfileConfig, field: TokenField): string {
-  switch (field) {
-    case "telegram_bot_token":
-      return config.telegram_bot_token ?? "";
-    case "nonebot_bridge_token":
-      return config.nonebot_bridge_token ?? "";
-    default:
-      return config.onebot_access_token ?? "";
-  }
+  return (readField(config, field) as string | undefined) ?? "";
 }
 
 // 点「查看」才去后端要一次真实凭据：草稿是空的说明用户没改过,值只在服务端,
@@ -1192,6 +1337,32 @@ const isOneBotPlatform = computed(() => {
   return def ? def.protocol.startsWith("onebot") : true;
 });
 
+/** 当前平台的 ID，用于在接入区按平台切换凭据表单。 */
+const currentPlatform = computed(() => form.value?.platform ?? "");
+
+/**
+ * 回调型平台要把这个地址填到对方后台。
+ *
+ * 用浏览器当前的 origin 拼：用户是从哪个地址访问控制台的，多半也就是外部能
+ * 访问到的那个地址。内网访问时拼出来的是内网地址，所以旁边要提示必须公网可达。
+ */
+const callbackURL = computed(() => {
+  const path = platformDefinition(currentPlatform.value)?.callback_path ?? "";
+  if (!path) return "";
+  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  return origin ? `${origin}${path}` : path;
+});
+
+async function copyCallbackURL(): Promise<void> {
+  if (!callbackURL.value) return;
+  try {
+    await navigator.clipboard.writeText(callbackURL.value);
+    toastSuccess("回调地址已复制");
+  } catch {
+    toastError("复制失败，请手动选中地址");
+  }
+}
+
 // 机器人配置项太多（41 个字段），平铺成一列要滚 6 屏。按「配一次就不动」
 // 和「经常调」的区别分区，每区一屏内看完。
 //
@@ -1250,7 +1421,7 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
 
 // 人设库。存的是「它是谁、怎么说话」的四项组合，套用是把它们填进下面的表单——
 // 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
@@ -1445,7 +1616,9 @@ const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence
   gentle: { self_reference: "", sentence_enders: "" },
   lively: { self_reference: "", sentence_enders: "" },
   concise: { self_reference: "", sentence_enders: "" },
-  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……,喵（" }
+  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
+  // 扮演对句尾语气词没有主张：那属于具体角色，不属于这套说话方式。
+  roleplay: { self_reference: "我", sentence_enders: "" }
 };
 
 // 切换风格时把这两个框填上，而不是运行时暗中套用：填进去用户看得见、能改。
@@ -1474,7 +1647,8 @@ const replyStyleOptions: AppSelectOption[] = [
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
   { value: "concise", label: "简洁" },
-  { value: "catgirl", label: "猫娘" }
+  { value: "catgirl", label: "猫娘" },
+  { value: "roleplay", label: "扮演" }
 ];
 
 const responseModeOptions: AppSelectOption[] = [
@@ -1571,10 +1745,10 @@ async function updateContextIsolation(enabled: boolean): Promise<void> {
 // —— 模型分配 ——
 type RoleKey = "chat" | "vision" | "intent" | "image";
 const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
-  { key: "chat", label: "对话", fallbackHint: "使用 LLM 配置页的激活配置" },
+  { key: "chat", label: "对话", fallbackHint: "使用「提供商」页的激活配置" },
   { key: "vision", label: "视觉理解", fallbackHint: "跟随对话模型" },
   { key: "intent", label: "意图识别", fallbackHint: "跟随对话模型" },
-  { key: "image", label: "图片生成", fallbackHint: "跟随对话 Provider 的生图模型" }
+  { key: "image", label: "图片生成", fallbackHint: "跟随对话提供商的生图模型" }
 ];
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>>>({});
@@ -1711,8 +1885,8 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   for (const group of channelGroups()) {
     base.push({
       value: GROUP_PREFIX + group.name,
-      label: `${group.name === "default" ? "默认分组" : group.name}（Provider 分组）`,
-      hint: `${group.count} 个 Provider 按顺序降级`
+      label: `${group.name === "default" ? "默认分组" : group.name}（提供商分组）`,
+      hint: `${group.count} 个提供商按顺序降级`
     });
   }
   for (const channel of llmChannels.value) {
@@ -1798,7 +1972,7 @@ function modelOptionsFor(role: RoleKey): AppSelectOption[] {
         model,
         compatibility,
         profiles.length > 1
-          ? `${providers.length}/${profiles.length} 个 Provider 将参与路由：${providers.join("、")}`
+          ? `${providers.length}/${profiles.length} 个提供商将参与路由：${providers.join("、")}`
           : (model.owned_by || undefined)
       )
     });
@@ -1906,7 +2080,7 @@ function setForm(config: BotProfileConfig): void {
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
-    glossary_shared_scope_enabled: config.glossary_shared_scope_enabled ?? false,
+    notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? false,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     mention_user_mode: config.mention_user_mode ?? "auto",
@@ -1933,11 +2107,11 @@ function setForm(config: BotProfileConfig): void {
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
   allowedGroups.value = [...(config.group_admission?.allowed_groups ?? [])];
-  telegramTokenDraft.value = "";
-  tokenDraft.value = "";
-  bridgeTokenDraft.value = "";
+  for (const draft of Object.values(tokenDrafts)) {
+    draft.value = "";
+  }
   // 换一个配置档就得重新索取，别把上一档的明文状态带过来。
-  tokenRevealed.value = { onebot_access_token: false, telegram_bot_token: false, nonebot_bridge_token: false };
+  tokenRevealed.value = emptyRevealState();
   const roles: typeof roleForm.value = {};
   for (const [key, role] of Object.entries(config.model_roles ?? {})) {
 		roles[key as RoleKey] = { profile_id: role.profile_id, group: role.group, model: role.model, provider_id: role.provider_id, model_id: role.model_id };
@@ -2081,7 +2255,7 @@ async function save(): Promise<void> {
       return;
     }
 		if (!role.provider_id && !role.model_id && !roleModelIsSelectable(row.key, role.model.trim())) {
-      toastError(`${row.label}模型 ${role.model.trim()} 与当前 Provider 配置不兼容，请重新选择`);
+      toastError(`${row.label}模型 ${role.model.trim()} 与当前提供商配置不兼容，请重新选择`);
       return;
     }
   }
@@ -2093,13 +2267,16 @@ async function save(): Promise<void> {
 			modelRoles[key] = { profile_id: role.profile_id, group: role.group, model: role.model.trim(), provider_id: role.provider_id, model_id: role.model_id };
       }
     }
+    // 草稿为空表示「没改过」，字段留空提交，后端会沿用已存的那份；填了才覆盖。
+    const secrets: Record<string, string | undefined> = {};
+    for (const [field, draft] of Object.entries(tokenDrafts)) {
+      secrets[field] = draft.value.trim() || undefined;
+    }
     const payload: BotProfileConfig = {
       ...current,
+      ...secrets,
       group_triggers: splitList(triggersDraft.value),
       agent_command_allowlist: splitList(allowlistDraft.value),
-      onebot_access_token: tokenDraft.value.trim() || undefined,
-      nonebot_bridge_token: bridgeTokenDraft.value.trim() || undefined,
-      telegram_bot_token: telegramTokenDraft.value.trim() || undefined,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
         : defaultRecallReplyAutoDeleteDelaySeconds,

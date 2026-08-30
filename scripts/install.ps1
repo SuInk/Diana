@@ -186,7 +186,7 @@ try {
     New-Item -ItemType Directory -Force -Path $runtimeBackup, $dataBackup | Out-Null
 
     $hadPrevious = $false
-    foreach ($item in @($binaryName, "$packageName.exe", "run.bat", "frontend-next")) {
+    foreach ($item in @($binaryName, "$packageName.exe", "run.bat", "uninstall.ps1", "frontend-next")) {
         $current = Join-Path $installDir $item
         if (Test-Path $current) {
             $hadPrevious = $true
@@ -244,6 +244,12 @@ try {
     }
     Set-Content -Encoding ASCII -Path (Join-Path $installDir ".installed-version") -Value $version
 
+    $commandDir = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
+    $commandShim = Join-Path $commandDir "diana.cmd"
+    if ((Test-Path $commandDir) -and (Test-Path (Join-Path $installDir "uninstall.ps1"))) {
+        "@echo off`r`n`"$installDir\$binaryName`" %*" | Set-Content -Encoding ASCII $commandShim
+    }
+
     if ($startAfterInstall) {
         Write-Host "==> Start -> enforcing one Diana instance"
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
@@ -277,7 +283,7 @@ try {
         if (-not $healthy) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             if ($hadPrevious) {
-                foreach ($item in @($binaryName, "$packageName.exe", "run.bat", "frontend-next")) {
+                foreach ($item in @($binaryName, "$packageName.exe", "run.bat", "uninstall.ps1", "frontend-next")) {
                     $current = Join-Path $installDir $item
                     $backup = Join-Path $runtimeBackup $item
                     if (Test-Path $current) { Remove-Item -Recurse -Force $current }
@@ -320,6 +326,7 @@ try {
     }
 
     Write-Host "Installed: $installDir"
+    if (Test-Path $commandShim) { Write-Host "Command:   diana" }
     Write-Host "Backup:    $backupDir"
     if ($generatedPassword) {
         Write-Host "Username:  $username"
