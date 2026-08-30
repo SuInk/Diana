@@ -199,11 +199,11 @@ document.querySelector("[data-docs-header]").innerHTML = `
       ${pages.map((page) => `<a href="./${page.file}"${page === currentPage ? ' aria-current="page"' : ""}>${page.title}</a>`).join("")}
     </nav>
     <nav class="top-links" aria-label="${t.links}">
-      <a href="${homeHref}" title="${t.home}">${icons.home}${t.home}</a>
-      <a href="${demoHref}" title="${t.demo}">${icons.play}${t.demo}</a>
-      <a class="lang-switch" href="${altHref(currentFile)}" title="${t.langSwitchLabel}" aria-label="${t.langSwitchLabel}">${icons.languages}${t.langSwitch}</a>
-      <a href="https://github.com/SuInk/Diana" aria-label="${t.github}" title="${t.github}">${icons.github}GitHub</a>
-      <button class="icon-button theme-item" type="button" data-theme-toggle><span data-theme-icon aria-hidden="true"></span><span data-theme-text></span></button>
+      <a href="${homeHref}" title="${t.home}">${icons.home}<span class="nav-label">${t.home}</span></a>
+      <a href="${demoHref}" title="${t.demo}">${icons.play}<span class="nav-label">${t.demo}</span></a>
+      <a class="lang-switch" href="${altHref(currentFile)}" title="${t.langSwitchLabel}" aria-label="${t.langSwitchLabel}">${icons.languages}<span class="nav-label">${t.langSwitch}</span></a>
+      <a href="https://github.com/SuInk/Diana" aria-label="${t.github}" title="${t.github}">${icons.github}<span class="nav-label">GitHub</span></a>
+      <button class="icon-button theme-item" type="button" data-theme-toggle><span data-theme-icon aria-hidden="true"></span><span class="nav-label" data-theme-text></span></button>
     </nav>
   </header>`;
 
