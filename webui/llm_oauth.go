@@ -54,6 +54,8 @@ type oauthProviderPayload struct {
 	RedirectURI  string            `json:"redirect_uri"`
 	Scopes       []string          `json:"scopes"`
 	TokenHeaders map[string]string `json:"token_headers"`
+	TokenHeader  string            `json:"token_header"`
+	TokenScheme  string            `json:"token_scheme"`
 	Notes        string            `json:"notes"`
 }
 
@@ -91,6 +93,8 @@ func (h *LLMConfigHandler) oauthSaveProvider(c *gin.Context) {
 		RedirectURI:  payload.RedirectURI,
 		Scopes:       payload.Scopes,
 		TokenHeaders: payload.TokenHeaders,
+		TokenHeader:  payload.TokenHeader,
+		TokenScheme:  payload.TokenScheme,
 		Notes:        payload.Notes,
 	}
 	// 读接口把 client secret 脱敏成 ***，原样提交回来时视为「没改」，

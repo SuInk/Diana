@@ -323,10 +323,12 @@ func (m *Manager) Credential(ctx context.Context, key string) (llm.Credential, e
 		token = refreshed
 	}
 	return llm.Credential{
-		Kind:                 llm.CredentialKindOAuth,
-		Token:                token.AccessToken,
-		Headers:              provider.TokenHeaders,
-		SuppressAPIKeyHeader: true,
+		Kind:                llm.CredentialKindOAuth,
+		Token:               token.AccessToken,
+		TokenHeader:         provider.TokenHeader,
+		TokenScheme:         provider.TokenScheme,
+		Headers:             provider.TokenHeaders,
+		ReplaceProviderAuth: true,
 	}, nil
 }
 
