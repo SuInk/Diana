@@ -104,6 +104,11 @@ https://HOST/api/channels/wecom/callback</code></pre>
           <tr><td>图片生成</td><td>文生图与图片编辑</td><td>必须实际生成并返回图片，不能只测文本连通性。</td></tr>
         </tbody></table></div>
         <div class="callout recommended"><strong>默认启用</strong><p>“识别机器人并自动不回复”默认打开，用于避免机器人之间循环对话；有明确业务需要时再关闭。</p></div>
+        <h3>授权登录（OAuth）</h3>
+        <p>配置档的“凭据方式”可以用 OAuth 代替 API Key。控制台常跑在服务器上、浏览器未必同机，所以回调不强求落回本机：点“登录”后在自己的浏览器里完成授权，把地址栏那条回调地址整条粘回来即可（只粘其中的 <code>code</code> 也认）。令牌在过期前自动续期；同时填了 API Key 的话，续期失败会回落到它，不至于整个配置档一起哑掉。</p>
+        <p>提供商是配置而不是代码。内置 OpenRouter，其余在“自定义提供商”里填授权地址、令牌地址、Client ID 和 Scope 自行接入，适合自建网关或未内置的服务。两个地址必须是 https，本机回环地址（<code>127.0.0.1</code>）可以用 http。</p>
+        <p>拿到令牌之后怎么带给模型接口，同样是配置项。默认 <code>Authorization: Bearer &lt;token&gt;</code> 适用于绝大多数提供商；个别家不吃这一套——Anthropic 收到 <code>Authorization</code> 里的 OAuth 令牌会直接回 401“OAuth authentication is currently not supported.”，它要求令牌放在 <code>x-api-key</code> 里且不带前缀。所以自定义提供商的“高级”里可以指定令牌请求头、令牌前缀和一组附加请求头。换用非默认落点时，各家 SDK 自己写上的鉴权头会被摘掉，避免同一个请求带两种鉴权。</p>
+        <div class="callout"><strong>不预置需要冒用第一方 Client ID 的提供商</strong><p>那类用法要向授权服务器谎报客户端身份，也超出消费级订阅本身的授权范围，是否使用属于部署者自己的判断；需要的话可以在“自定义提供商”里自行填写。</p></div>
         <h3>上下文与超时</h3>
         <pre><code>llm:
   context_window_tokens: 65536

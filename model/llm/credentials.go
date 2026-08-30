@@ -31,20 +31,42 @@ const (
 type Credential struct {
 	Kind  CredentialKind
 	Token string
+	// TokenHeader 指定令牌写进哪个请求头，留空表示 Authorization。
+	//
+	// 「OAuth 令牌一定走 Authorization: Bearer」是个想当然的假设，而且是错的：
+	// Anthropic 对 Bearer 里的 OAuth 令牌直接回 401「OAuth authentication is
+	// currently not supported.」，它要的是把令牌放进 x-api-key。这类差异只有
+	// 提供商自己说了算，所以由配置决定，不由这一层猜。
+	TokenHeader string
+	// TokenScheme 是令牌前面的鉴权方案名。留空时：写 Authorization 用 Bearer，
+	// 写别的头则不加前缀——自定义鉴权头几乎都是直接放裸令牌。
+	TokenScheme string
 	// Headers 是这种凭据附带的请求头。OAuth 往往要求额外的标记头，
-	// 而且要求不要再发 API Key 那个头，所以由凭据自己带，不写死在适配器里。
+	// 所以由凭据自己带，不写死在适配器里。
 	Headers map[string]string
-	// SuppressAPIKeyHeader 让适配器跳过它默认的 API Key 头。
+	// ReplaceProviderAuth 让传输层摘掉 SDK 自己写上的鉴权头（放令牌的那个除外）。
 	// 同时发两种鉴权头的请求会被一部分网关直接拒掉。
-	SuppressAPIKeyHeader bool
+	ReplaceProviderAuth bool
 }
 
-// Bearer 返回 Authorization 头该有的值。
-func (c Credential) Bearer() string {
-	if strings.TrimSpace(c.Token) == "" {
-		return ""
+// AuthHeader 返回令牌该写进哪个头、写成什么值。令牌为空时返回空名字。
+func (c Credential) AuthHeader() (string, string) {
+	token := strings.TrimSpace(c.Token)
+	if token == "" {
+		return "", ""
 	}
-	return "Bearer " + c.Token
+	name := strings.TrimSpace(c.TokenHeader)
+	if name == "" {
+		name = "Authorization"
+	}
+	scheme := strings.TrimSpace(c.TokenScheme)
+	if scheme == "" && strings.EqualFold(name, "Authorization") {
+		scheme = "Bearer"
+	}
+	if scheme == "" {
+		return name, token
+	}
+	return name, scheme + " " + token
 }
 
 // CredentialSource 在每次请求前解析出可用凭据。实现必须并发安全。
@@ -137,10 +159,10 @@ type credentialTransport struct {
 	source CredentialSource
 }
 
-// apiKeyHeaders 是各家 SDK 自己会写上的鉴权头。用 OAuth 时必须把它们摘掉：
-// 同时带着 API Key 和 Bearer 的请求会被一部分网关直接拒掉，而那种 400
-// 的报错信息通常不会说是因为鉴权头重复。
-var apiKeyHeaders = []string{"X-Api-Key", "X-Goog-Api-Key"}
+// providerAuthHeaders 是各家 SDK 自己会写上的鉴权头。用 OAuth 时必须把它们摘掉：
+// 同时带着 API Key 和 OAuth 令牌的请求会被一部分网关直接拒掉，而那种 400
+// 的报错信息通常不会说是因为鉴权头重复。放令牌的那个头当然要留下。
+var providerAuthHeaders = []string{"Authorization", "X-Api-Key", "X-Goog-Api-Key"}
 
 func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := t.base
@@ -156,12 +178,19 @@ func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		// 这条路径覆盖「配置档只填了 API Key」和「续期失败但仍配了 API Key」两种情况。
 		return base.RoundTrip(req)
 	}
+	name, value := credential.AuthHeader()
+	if name == "" {
+		return base.RoundTrip(req)
+	}
 	// RoundTripper 不允许改传入的请求，按 http.RoundTripper 的约定先浅拷贝。
 	cloned := req.Clone(req.Context())
-	cloned.Header.Set("Authorization", credential.Bearer())
-	if credential.SuppressAPIKeyHeader {
-		for _, name := range apiKeyHeaders {
-			cloned.Header.Del(name)
+	cloned.Header.Set(name, value)
+	if credential.ReplaceProviderAuth {
+		for _, header := range providerAuthHeaders {
+			if strings.EqualFold(header, name) {
+				continue
+			}
+			cloned.Header.Del(header)
 		}
 	}
 	for name, value := range credential.Headers {

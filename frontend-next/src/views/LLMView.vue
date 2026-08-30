@@ -91,8 +91,6 @@
         </div>
       </section>
 
-      <LLMOAuthPanel @changed="onOAuthProvidersChanged" />
-
     </div>
 
     <!-- 单配置连通测试弹窗 -->
@@ -196,7 +194,7 @@
             :options="credentialModeOptions"
           />
           <span class="hint">
-            授权登录的令牌会在过期前自动续期；下拉里只列出「授权登录」区域已经登录过的提供商。
+            授权登录的令牌会在过期前自动续期。没登录过的提供商可以在下面直接登录，登录完自动选中。
           </span>
         </div>
         <div v-if="credentialMode === 'api_key'" class="field wide">
@@ -221,18 +219,12 @@
         </div>
         <template v-else>
           <div class="field wide">
-            <label for="llm-oauth-provider">授权提供商</label>
-            <AppSelect
-              id="llm-oauth-provider"
-              v-model="form.oauth_provider"
-              :options="oauthProviderOptions"
-              placeholder="选择一个已登录的提供商"
-            />
-            <span v-if="oauthProviderOptions.length === 0" class="hint">
-              还没有登录过任何提供商，先到下面的「授权登录」里登录一次。
-            </span>
-            <span v-else-if="selectedOAuthStatus?.expired && !selectedOAuthStatus?.refreshable" class="hint">
-              这个提供商的登录已过期且无法自动续期，需要重新登录。
+            <label>授权提供商</label>
+            <!-- 选凭据和拿凭据是同一件事的两步，所以登录就在这儿做完，
+                 不用关掉弹窗跑到别处再回来。 -->
+            <LLMOAuthPicker v-model="form.oauth_provider" @changed="onOAuthProvidersChanged" />
+            <span v-if="selectedOAuthStatus?.expired && !selectedOAuthStatus?.refreshable" class="hint">
+              这个提供商的登录已过期且无法自动续期，点「重新登录」再走一次。
             </span>
           </div>
           <!-- 授权登录时 API Key 变成可选兜底：续期失败时还能靠它继续说话，
@@ -385,9 +377,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import LLMOAuthPanel from "../components/LLMOAuthPanel.vue";
-import { ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import LLMOAuthPicker from "../components/LLMOAuthPicker.vue";
+import { ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
 import {
   cloneConfigProfile,
   deleteConfigProfile,
@@ -536,32 +528,26 @@ const serviceOptions = computed(() =>
 const selectedPreset = computed(() => llmServicePresets.find((preset) => preset.id === selectedService.value));
 // 凭据方式由配置档里有没有绑 OAuth 提供商推导，不额外存一个字段：
 // 多存一个就有「两处不一致」的可能，而这里没有任何信息是推不出来的。
-const credentialMode = computed<"api_key" | "oauth">({
-  get: () => (form.value.oauth_provider ? "oauth" : "api_key"),
-  set: (value) => {
-    if (value === "api_key") {
-      form.value.oauth_provider = "";
-      return;
-    }
-    if (!form.value.oauth_provider) {
-      form.value.oauth_provider = oauthProviderOptions.value[0]?.value ?? "";
-    }
-  }
-});
+// 凭据方式是独立状态，不从 oauth_provider 反推。
+//
+// 反推过一版，是错的：登录现在就在这张表单里做，而人得先切到「授权登录」才看得到
+// 登录入口——反推的话没登录过就永远切不过去，等于把入口锁在了它自己后面。
+const credentialMode = ref<"api_key" | "oauth">("api_key");
 
 const credentialModeOptions = [
   { value: "api_key", label: "API Key" },
   { value: "oauth", label: "授权登录" }
 ];
 
-const oauthStatuses = ref<LLMOAuthStatus[]>([]);
+// 切回 API Key 时解除绑定：留着绑定会让保存出去的配置仍然走授权登录，
+// 界面上却显示着 API Key。
+watch(credentialMode, (mode) => {
+  if (mode === "api_key") {
+    form.value.oauth_provider = "";
+  }
+});
 
-// 只列已经登录过的：没登录的选了也用不了，让它出现在下拉里只会制造一次失败调用。
-const oauthProviderOptions = computed(() =>
-  oauthStatuses.value
-    .filter((status) => status.logged_in)
-    .map((status) => ({ value: status.provider.key, label: status.provider.label }))
-);
+const oauthStatuses = ref<LLMOAuthStatus[]>([]);
 
 const selectedOAuthStatus = computed(() =>
   oauthStatuses.value.find((status) => status.provider.key === form.value.oauth_provider)
@@ -616,6 +602,7 @@ function startCreate(): void {
   editingKeyPreview.value = "";
   editingProfile.value = null;
   form.value = { ...emptyForm };
+  credentialMode.value = "api_key";
   selectedService.value = "openai";
   applyServicePreset("openai");
   modelOptions.value = [];
@@ -732,6 +719,8 @@ function startEdit(profile: LLMConfig): void {
     max_context_tokens: profile.max_context_tokens ? String(profile.max_context_tokens) : "",
     max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : ""
   };
+  // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
+  credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
   selectedService.value = detectLLMService(profile.base_url, profile.provider);
   modelOptions.value = [...(profile.models ?? [])];
   invalidField.value = "";

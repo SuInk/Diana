@@ -339,11 +339,12 @@ func TestManagerCredentialShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Credential() error = %v", err)
 	}
-	if credential.Kind != llm.CredentialKindOAuth || credential.Bearer() != "Bearer at-1" {
-		t.Fatalf("credential = %#v", credential)
+	name, value := credential.AuthHeader()
+	if credential.Kind != llm.CredentialKindOAuth || name != "Authorization" || value != "Bearer at-1" {
+		t.Fatalf("credential = %#v (%s: %s)", credential, name, value)
 	}
-	if !credential.SuppressAPIKeyHeader {
-		t.Fatal("OAuth credential did not ask to drop the API key header")
+	if !credential.ReplaceProviderAuth {
+		t.Fatal("OAuth credential did not ask to drop the provider's own auth header")
 	}
 	if credential.Headers["X-Example-Beta"] != "on" {
 		t.Fatalf("provider headers were dropped: %#v", credential.Headers)
