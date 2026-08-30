@@ -55,7 +55,7 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 	if allowed == nil || r == nil || r.plugins == nil {
 		return allowed
 	}
-	_, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event))
+	_, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event)
 	if enabled && repositoryPublishEventHasAccess(event, settings) {
 		allowed[dianaRepositoryIssuesToolName] = true
 	}

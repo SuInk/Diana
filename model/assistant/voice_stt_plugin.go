@@ -122,7 +122,7 @@ func (r *Runtime) prepareIncomingVoice(ctx context.Context, event MessageEvent) 
 	if (!hasRecordSegment(event.Segments) && (event.Quoted == nil || !hasRecordSegment(event.Quoted.Segments))) || r.plugins == nil {
 		return event
 	}
-	pluginValue, settings, enabled := r.plugins.PluginWithSettings(voiceSTTPluginID, r.pluginOverridesForEvent(event))
+	pluginValue, settings, enabled := r.pluginWithSettingsForEvent(voiceSTTPluginID, event)
 	plugin, ok := pluginValue.(*VoiceSTTPlugin)
 	if !enabled || !ok {
 		return event
