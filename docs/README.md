@@ -10,13 +10,20 @@ Pages:
 - `implementation.html`: architecture, message flow, memory, media, and storage
 - `operations.html`: updates, backup, troubleshooting, and development
 - `demo/`: the real `frontend-next` WebUI built in demo mode with local mock API data
+- `en/`: the English site — same five pages, sharing the stylesheets and scripts above
+- `landing.css` / `landing.js`: shared by both landing pages
+- `styles.css` / `app.js` / `theme.js`: shared by all documentation pages, in both languages
+
+Pages link to each other without a file extension (`/deploy`, not `/deploy.html`); GitHub Pages
+resolves those to the matching `.html`. A local preview therefore needs a server that does the
+same — `python3 -m http.server` returns 404 for them.
 
 Preview locally from the repository root:
 
 ```sh
-python3 -m http.server 4173 --directory docs
+npx serve docs
 ```
 
-Then open `http://127.0.0.1:4173`.
+Then open the address it prints.
 
 The deployment workflow is `.github/workflows/pages.yml`.
