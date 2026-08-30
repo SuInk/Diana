@@ -2126,7 +2126,7 @@ func (t *dianaRepositoryIssuesTool) watchSettings() SettingValues {
 	if t == nil || t.runtime == nil || t.runtime.plugins == nil {
 		return nil
 	}
-	_, settings, enabled := t.runtime.plugins.PluginWithSettings(repositoryWatchPluginID, t.runtime.pluginOverridesForEvent(t.event))
+	_, settings, enabled := t.runtime.pluginWithSettingsForEvent(repositoryWatchPluginID, t.event)
 	if !enabled {
 		return nil
 	}

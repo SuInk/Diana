@@ -256,7 +256,7 @@ func (r *Runtime) imageOCRActiveConfig(event MessageEvent) (*ImageOCRPlugin, ima
 	if r.plugins == nil {
 		return nil, imageOCRConfig{}, false
 	}
-	pluginValue, settings, enabled := r.plugins.PluginWithSettings(imageOCRPluginID, r.pluginOverridesForEvent(event))
+	pluginValue, settings, enabled := r.pluginWithSettingsForEvent(imageOCRPluginID, event)
 	plugin, ok := pluginValue.(*ImageOCRPlugin)
 	if !enabled || !ok {
 		return nil, imageOCRConfig{}, false
