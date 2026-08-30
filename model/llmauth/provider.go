@@ -45,11 +45,28 @@ type Provider struct {
 	// 这种事只有各家自己说了算，所以做成配置项。
 	TokenHeader string `json:"token_header,omitempty"`
 	TokenScheme string `json:"token_scheme,omitempty"`
+	// TokenRequestFormat 是换令牌时请求体的编码方式，留空即 form。
+	TokenRequestFormat TokenRequestFormat `json:"token_request_format,omitempty"`
 	// BuiltIn 标记内置提供商，控制台里不允许删除或改地址。
 	BuiltIn bool `json:"built_in,omitempty"`
 	// Notes 是控制台上给用户看的一句说明。
 	Notes string `json:"notes,omitempty"`
 }
+
+// TokenRequestFormat 决定换令牌时请求体怎么编码。
+//
+// RFC 6749 §4.1.3 规定令牌接口用 application/x-www-form-urlencoded，所以那是默认值。
+// JSON 是各家自己额外支持的方言：OpenRouter 的换 Key 接口只收 JSON，而严格按规范
+// 实现的服务器只收 form，收到 JSON 会回一个「参数缺失」——那种报错不会说是整包没
+// 解析出来，排查方向会被带到 client_id 上去。所以做成每家自己声明。
+type TokenRequestFormat string
+
+const (
+	// TokenRequestForm 是 RFC 6749 规定的格式，也是默认值。
+	TokenRequestForm TokenRequestFormat = "form"
+	// TokenRequestJSON 给那些只收 JSON 的提供商。
+	TokenRequestJSON TokenRequestFormat = "json"
+)
 
 // builtinProviders 是随发行版附带的提供商。
 //
@@ -66,7 +83,9 @@ func builtinProviders() []Provider {
 			RedirectURI:  "",
 			UsePKCE:      true,
 			BuiltIn:      true,
-			Notes:        "OpenRouter 的 PKCE 授权本就是给第三方应用用的，换到的是一把归你所有、可随时吊销的 Key。",
+			// OpenRouter 这个接口不是标准令牌端点，文档里写死了 application/json。
+			TokenRequestFormat: TokenRequestJSON,
+			Notes:              "OpenRouter 的 PKCE 授权本就是给第三方应用用的，换到的是一把归你所有、可随时吊销的 Key。",
 		},
 	}
 }
@@ -99,6 +118,13 @@ func (p Provider) Normalize() (Provider, error) {
 		if _, err := url.Parse(p.RedirectURI); err != nil {
 			return Provider{}, fmt.Errorf("llmauth: 回调地址无效: %w", err)
 		}
+	}
+	switch p.TokenRequestFormat = TokenRequestFormat(strings.ToLower(strings.TrimSpace(string(p.TokenRequestFormat)))); p.TokenRequestFormat {
+	case "":
+		p.TokenRequestFormat = TokenRequestForm
+	case TokenRequestForm, TokenRequestJSON:
+	default:
+		return Provider{}, fmt.Errorf("llmauth: 令牌请求格式只能是 form 或 json，收到 %q", p.TokenRequestFormat)
 	}
 	if err := requireHeaderName("令牌请求头", p.TokenHeader); err != nil {
 		return Provider{}, err
