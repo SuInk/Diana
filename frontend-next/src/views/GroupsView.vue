@@ -198,6 +198,15 @@
             @update:model-value="(value) => { if (editing) editing.reply_style = value as typeof editing.reply_style; }"
           />
         </div>
+        <div class="field">
+          <label for="group-action-description">动作描写</label>
+          <AppSelect
+            id="group-action-description"
+            :model-value="editing.action_description_enabled === undefined ? '' : editing.action_description_enabled ? 'on' : 'off'"
+            :options="groupActionDescriptionOptions"
+            @update:model-value="(value) => { if (editing) editing.action_description_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+        </div>
         <div class="field wide">
           <label class="switch">
             <input v-model="editing.welcome_enabled" type="checkbox" />
@@ -385,8 +394,13 @@ const groupReplyStyleOptions: AppSelectOption[] = [
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
   { value: "concise", label: "简洁" },
-  { value: "catgirl", label: "猫娘" },
-  { value: "roleplay", label: "扮演" }
+  { value: "catgirl", label: "猫娘" }
+];
+
+const groupActionDescriptionOptions: AppSelectOption[] = [
+  { value: "", label: "跟随全局" },
+  { value: "on", label: "开启" },
+  { value: "off", label: "关闭" }
 ];
 import { toastError, toastSuccess } from "../toast";
 

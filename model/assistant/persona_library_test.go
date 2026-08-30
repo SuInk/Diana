@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+func TestLegacyRoleplayPersonaMigratesToAssistantWithActions(t *testing.T) {
+	persona := (Persona{Name: "旧扮演", ReplyStyle: ReplyStyleRoleplay}).Normalized()
+	if persona.ReplyStyle != ReplyStyleAssistant {
+		t.Fatalf("旧人设迁移后的表达风格 = %q", persona.ReplyStyle)
+	}
+	if !boolValue(persona.ActionDescriptionEnabled, false) {
+		t.Fatal("旧人设没有迁移为动作描写开关")
+	}
+}
+
 func TestPersonaSetSaveAddsAndUpdates(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	var set PersonaSet

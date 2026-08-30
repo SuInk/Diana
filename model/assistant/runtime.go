@@ -1197,6 +1197,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.ReplyStyle != "" {
 		cfg.ReplyStyle = groupCfg.ReplyStyle.Normalized()
 	}
+	if groupCfg.ActionDescriptionEnabled != nil {
+		cfg.ActionDescriptionEnabled = copyBoolPointer(groupCfg.ActionDescriptionEnabled)
+	}
 	// 空串表示这个群不覆盖，沿用机器人级的设置，和 ReplyStyle 同一套语义。
 	if strings.TrimSpace(groupCfg.SelfReference) != "" {
 		cfg.SelfReference = strings.TrimSpace(groupCfg.SelfReference)
@@ -5564,7 +5567,8 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	cfg := r.effectiveConfigForEvent(event)
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
 	voice := personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true), voice) + "\n" + cfg.ReplyStyle.closingAnchor())
+	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true), voice) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + cfg.ReplyStyle.closingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
 	if persona == "" {
 		return messages
 	}
@@ -5621,6 +5625,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	builder.WriteString(cfg.SystemPrompt)
 	appendPromptSection(&builder, cfg.ReplyStyle.prompt(boolValue(cfg.NaturalReplySplitEnabled, true), personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
+	appendPromptSection(&builder, actionDescriptionPrompt(boolValue(cfg.ActionDescriptionEnabled, false)))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) {
@@ -5745,6 +5750,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&builder, cfg.ReplyStyle.closingAnchor())
+	appendPromptSection(&builder, actionDescriptionClosingAnchor(boolValue(cfg.ActionDescriptionEnabled, false)))
 	return builder.String()
 }
 
