@@ -333,6 +333,14 @@ func TestMigrateRenamesLegacyGlossaryTables(t *testing.T) {
 	}
 	// 造一个笔记本时代的库：三张 glossary_* 表，各放一行。
 	if _, err := db.Exec(`
+CREATE TABLE app_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO app_state (key, value)
+VALUES ('bot_profiles', '{"active_id":"bot-onebot","profiles":[{"id":"bot-onebot","name":"OneBot"}]}');
+
 CREATE TABLE glossary_entries (
   id TEXT PRIMARY KEY, scope_key TEXT NOT NULL, term TEXT NOT NULL, normalized_term TEXT NOT NULL,
   meaning TEXT NOT NULL, example TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',

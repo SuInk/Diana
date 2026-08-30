@@ -285,6 +285,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addMessageSearchExtraColumn(); err != nil {
 		return err
 	}
+	if err := s.migrateNotebook(); err != nil {
+		return err
+	}
 	if err := s.migrateNotebookGlobalScopeToBot(); err != nil {
 		return err
 	}
@@ -294,7 +297,7 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
-	return s.migrateNotebook()
+	return nil
 }
 
 // addInboundEventProfileColumn 给事件表补上机器人维度。
