@@ -286,18 +286,37 @@ func (f *Flow) Refresh(ctx context.Context, provider Provider, token Token) (Tok
 	return refreshed, nil
 }
 
+// encodeTokenRequest 按提供商声明的格式打包换令牌的请求体。
+//
+// 响应无论哪种格式都按 JSON 解析：RFC 6749 §5.1 规定令牌响应就是 JSON，
+// 这一头没有方言。
+func encodeTokenRequest(format TokenRequestFormat, payload map[string]string) (string, string, error) {
+	if format == TokenRequestJSON {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return "", "", err
+		}
+		return string(body), "application/json", nil
+	}
+	values := make(url.Values, len(payload))
+	for name, value := range payload {
+		values.Set(name, value)
+	}
+	return values.Encode(), "application/x-www-form-urlencoded", nil
+}
+
 func (f *Flow) postToken(ctx context.Context, provider Provider, payload map[string]string) (Token, error) {
-	body, err := json.Marshal(payload)
+	body, contentType, err := encodeTokenRequest(provider.TokenRequestFormat, payload)
 	if err != nil {
 		return Token{}, err
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, tokenRequestTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, provider.TokenURL, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, provider.TokenURL, strings.NewReader(body))
 	if err != nil {
 		return Token{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	resp, err := f.tokenClient(provider.TokenURL).Do(req)
 	if err != nil {

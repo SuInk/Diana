@@ -138,15 +138,26 @@ func TestFlowCompleteRejectsExpiredLogin(t *testing.T) {
 // tokenTestServer 记录换令牌请求并按脚本回应。
 type tokenTestServer struct {
 	*httptest.Server
-	requests []map[string]string
+	requests     []map[string]string
+	contentTypes []string
 }
 
+// newTokenTestServer 按 Content-Type 解请求体，两种编码都认——真的服务器也只能这么做。
 func newTokenTestServer(t *testing.T, respond func(form map[string]string) (int, string)) *tokenTestServer {
 	t.Helper()
 	server := &tokenTestServer{}
 	server.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		contentType := r.Header.Get("Content-Type")
+		server.contentTypes = append(server.contentTypes, contentType)
+		body := map[string]string{}
+		if strings.HasPrefix(contentType, "application/json") {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		} else {
+			_ = r.ParseForm()
+			for name := range r.PostForm {
+				body[name] = r.PostForm.Get(name)
+			}
+		}
 		server.requests = append(server.requests, body)
 		status, payload := respond(body)
 		w.Header().Set("Content-Type", "application/json")
@@ -543,4 +554,79 @@ func TestManagerLogoutClearsTheToken(t *testing.T) {
 		t.Fatal("logging out twice should say there is nothing to log out of")
 	}
 	_ = fmt.Sprint()
+}
+
+// 默认按 RFC 6749 发 form；声明了 json 的才发 json。这条走完整条链路，
+// 而不是只测编码函数——两者之间还隔着一个「谁来填这个字段」。
+func TestFlowSendsTheDeclaredTokenRequestFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		format      TokenRequestFormat
+		wantType    string
+		wantGrant   string
+		description string
+	}{
+		{name: "默认 form", format: "", wantType: "application/x-www-form-urlencoded", wantGrant: "authorization_code"},
+		{name: "声明 json", format: TokenRequestJSON, wantType: "application/json", wantGrant: "authorization_code"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newTokenTestServer(t, func(map[string]string) (int, string) {
+				return http.StatusOK, `{"access_token":"at-1"}`
+			})
+			flow := NewFlow(server.Client())
+			provider := testProvider(server.URL)
+			provider.TokenRequestFormat = tc.format
+			provider, err := provider.Normalize()
+			if err != nil {
+				t.Fatalf("Normalize() error = %v", err)
+			}
+			login, err := flow.Start(provider)
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			if _, err := flow.Complete(context.Background(), provider, login.ID, "abc123"); err != nil {
+				t.Fatalf("Complete() error = %v", err)
+			}
+			if len(server.contentTypes) != 1 || server.contentTypes[0] != tc.wantType {
+				t.Fatalf("content types = %#v, want %q", server.contentTypes, tc.wantType)
+			}
+			// 编码换了，参数本身不能跟着丢——这才是服务器实际读到的东西。
+			got := server.requests[0]
+			if got["grant_type"] != tc.wantGrant || got["code"] != "abc123" || got["code_verifier"] == "" {
+				t.Fatalf("token request = %#v", got)
+			}
+		})
+	}
+}
+
+// 这个字段是后加的。已经存下来的提供商是在只发 JSON 的版本上配通的，
+// 翻默认值不能把它们一起翻掉。
+func TestRestoreKeepsStoredProvidersOnJSON(t *testing.T) {
+	store := &memoryAuthStore{}
+	stored := testProvider("https://token.example.invalid/token")
+	stored.TokenRequestFormat = ""
+	store.doc.CustomProviders = []Provider{stored}
+
+	manager := NewManager(store, nil)
+	if err := manager.Restore(context.Background()); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	provider, ok := manager.Provider("example")
+	if !ok {
+		t.Fatal("the stored provider did not come back")
+	}
+	if provider.TokenRequestFormat != TokenRequestJSON {
+		t.Fatalf("stored provider format = %q, want json", provider.TokenRequestFormat)
+	}
+
+	// 反过来，新建的走的是规范默认值。
+	added := testProvider("https://token.example.invalid/token2")
+	added.Key = "added-later"
+	fresh, err := manager.SaveCustomProvider(context.Background(), added)
+	if err != nil {
+		t.Fatalf("SaveCustomProvider() error = %v", err)
+	}
+	if fresh.TokenRequestFormat != TokenRequestForm {
+		t.Fatalf("new provider format = %q, want form", fresh.TokenRequestFormat)
+	}
 }

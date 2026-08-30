@@ -14,6 +14,8 @@
 import { computed, onMounted, ref } from "vue";
 import { ExternalLink, KeyRound, LogOut, Plus, RefreshCw, Trash2 } from "@lucide/vue";
 
+import AppSelect from "./AppSelect.vue";
+
 import {
   cancelOAuthLogin,
   completeOAuthLogin,
@@ -70,6 +72,14 @@ function formatHeaders(headers?: Record<string, string>): string {
 }
 
 const busy = computed(() => loading.value || completing.value || editorSaving.value);
+
+// AppSelect 要一个确定的值，而 token_request_format 是可选字段：留空即 form。
+const tokenRequestFormat = computed<"form" | "json">({
+  get: () => (editor.value.token_request_format === "json" ? "json" : "form"),
+  set: (value) => {
+    editor.value.token_request_format = value;
+  }
+});
 
 function apply(next: LLMOAuthStatus[]) {
   statuses.value = next;
@@ -151,7 +161,10 @@ function openEditor(status?: LLMOAuthStatus) {
   scopeDraft.value = (status?.provider.scopes ?? []).join(" ");
   headersDraft.value = formatHeaders(status?.provider.token_headers);
   // 已经填过这几项的，展开时就摊开给人看，免得改完别处一保存把它们当成没设过。
-  advancedOpen.value = Boolean(editor.value.token_header || editor.value.token_scheme || headersDraft.value);
+  advancedOpen.value = Boolean(
+    editor.value.token_header || editor.value.token_scheme || headersDraft.value ||
+    (editor.value.token_request_format && editor.value.token_request_format !== "form")
+  );
   editorOpen.value = true;
 }
 
@@ -322,6 +335,21 @@ onMounted(refresh);
             <label for="oauth-token-scheme">令牌前缀（可选）</label>
             <input id="oauth-token-scheme" v-model="editor.token_scheme" class="input mono" placeholder="Bearer" autocomplete="off" />
             <span class="hint">留空时：写 Authorization 用 Bearer，写其它头则不加前缀。</span>
+          </div>
+          <div class="field">
+            <label for="oauth-token-format">换令牌的请求格式</label>
+            <AppSelect
+              id="oauth-token-format"
+              v-model="tokenRequestFormat"
+              :options="[
+                { value: 'form', label: 'form-encoded（RFC 6749，默认）' },
+                { value: 'json', label: 'JSON' }
+              ]"
+            />
+            <span class="hint">
+              规范规定令牌接口用 form-encoded，绝大多数提供商按这个来。JSON 是部分服务自己的方言——
+              发错格式那边通常只回一句「参数缺失」，不会说是整包没解析出来。
+            </span>
           </div>
           <div class="field">
             <label for="oauth-token-headers">附加请求头（可选）</label>
