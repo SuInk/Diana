@@ -22,7 +22,7 @@
     --accent: #d9578d;
     --accent-hover: #c74a7f;
     --accent-soft: rgba(217, 87, 141, 0.12);
-    --nav-bg: rgba(16, 13, 19, 0.92);
+    --nav-bg: #100d13;
     --code-comment: #6f6379;
     --radius: 10px;
     --font: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
@@ -41,7 +41,7 @@
     --accent: #c83f76;
     --accent-hover: #b13567;
     --accent-soft: rgba(200, 63, 118, 0.09);
-    --nav-bg: rgba(255, 255, 255, 0.92);
+    --nav-bg: #ffffff;
     --code-comment: #948b9d;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -233,7 +233,6 @@
   .foot-links a:hover { color: var(--text); }
 
   @media (max-width: 640px) {
-    .nav-links a:not(.nav-icon) { display: none; }
     section { padding: 56px 0; }
     .hero { padding: 56px 0 40px; }
   }
@@ -245,11 +244,8 @@
   <div class="wrap nav-inner">
     <a class="brand" href="./index.html"><span class="brand-mark">D</span>Diana</a>
     <div class="nav-links">
-      <a href="#features">特性</a>
-      <a href="#quickstart">快速开始</a>
-      <a href="./demo.html">在线演示</a>
-      <!-- 部署/配置/运维三项收进文档入口：它们本来就是文档站的分页，
-           平铺在这里既挤，也让人以为是落地页自己的锚点。 -->
+      <!-- 顶栏只留图标入口。特性/快速开始就在下面一屏内，锚点链接是多余的；
+           在线演示首屏按钮里已经有了。 -->
       <a class="nav-icon" href="./deploy.html" title="查看文档" aria-label="查看文档">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H5.5A1.5 1.5 0 0 1 4 17z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 0 20 17z"/></svg>
         文档
