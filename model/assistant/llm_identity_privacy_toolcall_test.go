@@ -4,11 +4,40 @@
 package assistant
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
 )
+
+// 插件跟评沿用入站阶段的脱敏作用域，但插件会先发出一张新的外层卡片。跟评入口
+// 必须刷新同一个作用域，否则模型看到的卡片别名无法恢复为可引用的数字 ID。
+func TestPluginFollowUpRefreshesExistingIdentityPrivacyScope(t *testing.T) {
+	provider := &sequenceLLMProvider{replies: []string{"SKIP"}}
+	runtime := NewRuntime(
+		BotConfig{LLMIdentityMaskingEnabled: boolPointer(true)},
+		nilChannel{}, NewPluginManager(), nil, nil, nil,
+		func() (LLMProvider, error) { return provider, nil },
+	)
+	source := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "10002"}
+	ctx := runtime.withIdentityPrivacyContext(context.Background(), source, nil)
+	scope := identityPrivacyScopeFromContext(ctx)
+
+	// 模拟解析器发送完成后，历史中新出现的外层合并转发卡片。
+	source.replyHistoryLoaded = true
+	source.replyHistory = []MessageEvent{{
+		Kind: EventKindGroup, GroupID: source.GroupID, UserID: "42", MessageID: "816825089", botReply: "解析结果",
+	}}
+	runtime.followUpComment(ctx, followUpKindPlugin, source, "解析结果")
+
+	scope.mu.Lock()
+	alias := scope.realToAlias["816825089"]
+	scope.mu.Unlock()
+	if !strings.HasPrefix(alias, identityAlias("message")) {
+		t.Fatalf("follow-up did not register the newly delivered card: alias=%q", alias)
+	}
+}
 
 // 提示词告诉模型「原样复制别名，本地代理会在执行工具前自动恢复真实标识」。以前只
 // 还原了回复正文，别名原封不动地进了工具，提醒工具收到 im_user_xxx 只能报「必须是
