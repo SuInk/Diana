@@ -76,7 +76,11 @@ cd diana-webui-darwin-arm64
         <div class="section-heading"><p class="eyebrow">Docker</p><h2>Container deployment</h2></div>
         <div class="callout"><strong>Persistence</strong><p>You must mount <code>/app/data</code> and <code>/app/logs</code>, or rebuilding the container loses the SQLite database and your credentials.</p></div>
         <p>The published image means you do not have to clone the repository:</p>
-        <pre><code>docker run -d --name diana -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</code></pre>
+        <pre><code>docker run -d --name diana --restart unless-stopped \
+  -p 18080:18080 \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  ghcr.io/suink/diana:latest</code></pre>
         <p>To build from the repository instead, or to run NapCat alongside it, use compose:</p>
         <pre><code>git clone https://github.com/SuInk/Diana.git
 cd Diana

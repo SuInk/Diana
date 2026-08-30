@@ -71,6 +71,7 @@
       <div class="install-line">
         <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code>
         <code id="install-cmd-ps" data-os="ps" hidden>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code>
+        <!-- The hero command is the quick-try form; for production use the fuller command in Quick start below. -->
         <code id="install-cmd-docker" data-os="docker" hidden>docker run -d --name diana -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</code>
         <button class="copy-btn" id="install-copy">Copy</button>
       </div>
@@ -165,8 +166,12 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
       </div>
       <div class="qs-card">
         <div class="qs-card-head">Docker<button class="copy-btn" data-copy="cmd-docker">Copy</button></div>
-        <pre id="cmd-docker"><span class="c"># published image, no need to clone the repo</span>
-docker run -d --name diana -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</pre>
+        <pre id="cmd-docker"><span class="c"># prebuilt image, no need to clone the repo</span>
+docker run -d --name diana --restart unless-stopped \
+  -p 18080:18080 \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  ghcr.io/suink/diana:latest</pre>
       </div>
     </div>
     <div class="qs-steps">
