@@ -11,8 +11,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=20260830" />
-    <script src="./theme.js?v=20260830"></script>
+    <link rel="stylesheet" href="./styles.css?v=20260842" />
+    <script src="./theme.js?v=20260842"></script>
   </head>
   <body data-page="implementation">
     <div data-docs-header></div>
@@ -22,7 +22,7 @@
       <section class="section searchable" id="architecture">
         <div class="section-heading"><p class="eyebrow">架构</p><h2>核心模块与所有权边界</h2></div>
         <div class="architecture" role="img" aria-label="Diana 系统架构图">
-          <div class="arch-row sources"><div><strong>OneBot v11</strong><span>OneBot V11 WS</span></div><div><strong>Telegram</strong><span>Bot API polling</span></div><div><strong>WebUI</strong><span>REST + SSE</span></div></div>
+          <div class="arch-row sources"><div><strong>OneBot v11</strong><span>反向 WebSocket</span></div><div><strong>Telegram / QQ / 钉钉</strong><span>出站长连接与长轮询</span></div><div><strong>飞书 / 企业微信</strong><span>平台回调</span></div><div><strong>WebUI</strong><span>REST + SSE</span></div></div>
           <div class="arch-arrow" aria-hidden="true">↓</div>
           <div class="arch-core"><strong>Assistant Runtime</strong><span>事件归一化 · 群级策略 · 回复路由 · 并发控制 · 来源通道回发</span></div>
           <div class="arch-arrow" aria-hidden="true">↓</div>
@@ -90,6 +90,6 @@
       <nav class="page-nav" aria-label="文档分页"><a href="./configuration.html"><small>上一页</small><strong>← 配置</strong></a><a href="./operations.html"><small>下一页</small><strong>运维 →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
-    <script src="./app.js?v=20260816" defer></script>
+    <script src="./app.js?v=20260842" defer></script>
   </body>
 </html>

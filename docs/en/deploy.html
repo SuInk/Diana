@@ -1,0 +1,124 @@
+<!doctype html>
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Diana deployment guide: one-line install, release archives, Docker and building from source." />
+    <meta name="theme-color" content="#100d13" />
+    <title>Diana docs — Deploy</title>
+    <link rel="alternate" hreflang="zh" href="../deploy.html" />
+    <link rel="alternate" hreflang="en" href="./deploy.html" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../styles.css?v=20260842" />
+    <script src="../theme.js?v=20260842"></script>
+  </head>
+  <body data-page="deploy">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">Deploy</p><h1>Let the installer hand you a running service</h1><p class="lead">A normal deployment does not involve picking files off the releases page. One script handles platform detection, downloading the full archive, verifying SHA-256, backing up your data, installing the service and checking that it came up.</p></header>
+
+      <section class="section searchable" id="one-click">
+        <div class="section-heading"><p class="eyebrow">Recommended</p><h2>One command to install or upgrade</h2></div>
+        <div class="tabs install-tabs" data-tabs-root role="tablist" aria-label="Operating system">
+          <button type="button" role="tab" aria-selected="true" data-tab="unix">Linux / macOS</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="windows">Windows</button>
+        </div>
+        <div class="tab-panel" role="tabpanel" data-panel="unix">
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
+          <p>Supports Linux amd64/arm64 and macOS on both Intel and Apple Silicon. On Linux it installs as a <code>systemd --user</code> service and on macOS as a LaunchAgent; where no service manager is available it falls back to a background process.</p>
+        </div>
+        <div class="tab-panel" role="tabpanel" data-panel="windows" hidden>
+          <pre><code>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code></pre>
+          <p>Supports Windows amd64. The script downloads the zip with PowerShell, verifies SHA-256, backs up the previous version and starts it in the background.</p>
+        </div>
+        <ol class="steps compact">
+          <li><span>1</span><div><h3>Detect the platform</h3><p>Picks the right full archive for your OS and CPU, and refuses platforms it does not support.</p></div></li>
+          <li><span>2</span><div><h3>Download and verify</h3><p>Fetches the release's <code>SHA256SUMS</code> alongside it and only extracts once the checksum matches.</p></div></li>
+          <li><span>3</span><div><h3>Back up, then switch</h3><p>Backs up the database, WAL/SHM files, frontend, old binary and launch script, keeping any existing <code>config.yaml</code>.</p></div></li>
+          <li><span>4</span><div><h3>Start and probe</h3><p>Polls <code>/api/health</code> for up to 45 seconds. On Unix a failed upgrade restores the previous set of files.</p></div></li>
+        </ol>
+      </section>
+
+      <section class="section searchable" id="installer-options">
+        <div class="section-heading"><p class="eyebrow">Options</p><h2>Control the install with environment variables</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead><tbody>
+          <tr><td><code>DIANA_INSTALL_DIR</code></td><td>Unix: <code>~/.local/share/diana</code><br />Windows: <code>%LOCALAPPDATA%\Diana</code></td><td>Where the program, data, logs and backups live.</td></tr>
+          <tr><td><code>DIANA_VERSION</code></td><td><code>latest</code></td><td>Pin a version such as <code>v0.4.2</code>; defaults to the newest stable release.</td></tr>
+          <tr><td><code>DIANA_PORT</code></td><td><code>18080</code></td><td>Console port written into <code>config.yaml</code> on first install.</td></tr>
+          <tr><td><code>DIANA_ADMIN_USERNAME</code></td><td><code>diana#admin</code></td><td>Administrator username created on first install.</td></tr>
+          <tr><td><code>DIANA_ADMIN_PASSWORD</code></td><td>random 32 hex characters</td><td>Administrator password created on first install.</td></tr>
+          <tr><td><code>DIANA_START_AFTER_INSTALL</code></td><td><code>true</code></td><td>Set to <code>false</code> to install and verify without starting.</td></tr>
+        </tbody></table></div>
+        <pre><code># install a pinned version into a custom directory
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  DIANA_VERSION=v0.4.2 \
+  DIANA_INSTALL_DIR=/opt/diana-user \
+  DIANA_PORT=18081 \
+  sh</code></pre>
+        <div class="callout warn"><strong>About variables and pipes</strong><p>With <code>curl | sh</code> the variables belong on the <code>sh</code> side: <code>curl ... | DIANA_VERSION=v0.4.2 sh</code>. You can also download the script first and run it with the variables set.</p></div>
+      </section>
+
+      <section class="section searchable" id="manual-release">
+        <div class="section-heading"><p class="eyebrow">Alternative</p><h2>Install a full release archive by hand</h2></div>
+        <p>For offline environments or where changes need manual approval, download the archive matching your platform — the <code>.tar.gz</code> or <code>.zip</code> plus the <code>SHA256SUMS</code> from the same release. Do not download the bare binary for normal use: it does not contain the web console.</p>
+        <pre><code># macOS Apple Silicon example
+shasum -a 256 diana-webui-darwin-arm64.tar.gz
+tar -xzf diana-webui-darwin-arm64.tar.gz
+cd diana-webui-darwin-arm64
+./run.sh</code></pre>
+      </section>
+
+      <section class="section searchable" id="docker">
+        <div class="section-heading"><p class="eyebrow">Docker</p><h2>Container deployment</h2></div>
+        <div class="callout"><strong>Persistence</strong><p>You must mount <code>/app/data</code> and <code>/app/logs</code>, or rebuilding the container loses the SQLite database and your credentials.</p></div>
+        <p>The published image means you do not have to clone the repository:</p>
+        <pre><code>docker run -d --name diana --restart unless-stopped \
+  -p 18080:18080 \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  ghcr.io/suink/diana:latest</code></pre>
+        <p>To build from the repository instead, or to run NapCat alongside it, use compose:</p>
+        <pre><code>git clone https://github.com/SuInk/Diana.git
+cd Diana
+docker compose up -d --build
+docker compose logs -f diana</code></pre>
+        <p>When NapCat and Diana are separate containers, the reverse WebSocket must use the container service name, for example <code>ws://diana:18080/onebot/v11/ws</code> — writing <code>127.0.0.1</code> points NapCat at its own container.</p>
+      </section>
+
+      <section class="section searchable" id="source">
+        <div class="section-heading"><p class="eyebrow">Development</p><h2>Build from source</h2></div>
+        <div class="requirements">
+          <div>Go 1.26.5</div>
+          <div>Node.js 22</div>
+          <div>npm</div>
+          <div>Git</div>
+        </div>
+        <pre><code>git clone https://github.com/SuInk/Diana.git
+cd Diana
+go mod download
+cd frontend-next &amp;&amp; npm ci &amp;&amp; npm run build &amp;&amp; cd ..
+mkdir -p dist
+go build -trimpath -o dist/diana-webui ./cmd/webui
+FRONTEND_DIST=frontend-next/dist ./dist/diana-webui</code></pre>
+      </section>
+
+      <section class="section searchable" id="first-run">
+        <div class="section-heading"><p class="eyebrow">First login</p><h2>Configure models first, then connect a channel</h2></div>
+        <ol class="steps">
+          <li><span>1</span><div><h3>Sign in</h3><p>The administrator credentials are printed once to the terminal on first start and stored in <code>config.yaml</code>. Change the password after signing in.</p></div></li>
+          <li><span>2</span><div><h3>Configure models</h3><p>Sync the model list first, then set the default model; test chat, vision, intent detection and image generation separately.</p></div></li>
+          <li><span>3</span><div><h3>Connect a bot</h3><p>Fill in the credentials for each platform on the Bots page — all six can be enabled at once — and choose whether context is isolated between channels.</p></div></li>
+          <li><span>4</span><div><h3>Check the events</h3><p>Send a test message and confirm the decision reason, tool results and token counts in the event detail view.</p></div></li>
+        </ol>
+      </section>
+
+      <nav class="page-nav" aria-label="Pagination"><a href="./index.html"><small>Previous</small><strong>← Overview</strong></a><a href="./configuration.html"><small>Next</small><strong>Configure →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="../app.js?v=20260842" defer></script>
+  </body>
+</html>
