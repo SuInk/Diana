@@ -37,7 +37,7 @@ const content = {
     pages: [
       {
         title: "部署",
-        file: "deploy.html",
+        file: "deploy",
         sections: [
           ["one-click", "一键安装", "部署 更新 SHA-256 校验 备份 健康检查"],
           ["installer-options", "安装参数", "环境变量 版本 端口 管理员"],
@@ -49,7 +49,7 @@ const content = {
       },
       {
         title: "配置",
-        file: "configuration.html",
+        file: "configuration",
         sections: [
           ["channels", "平台接入", "OneBot NapCat Telegram QQ 钉钉 飞书 企业微信 回调 多通道 隔离"],
           ["models", "模型与视觉", "LLM Provider 生图 OCR token 超时"],
@@ -60,7 +60,7 @@ const content = {
       },
       {
         title: "实现",
-        file: "implementation.html",
+        file: "implementation",
         sections: [
           ["architecture", "系统架构", "Go Gin Vue SQLite 模块"],
           ["message-flow", "消息调用链", "回复 不回复 原因 工具 上下文"],
@@ -71,7 +71,7 @@ const content = {
       },
       {
         title: "运维",
-        file: "operations.html",
+        file: "operations",
         sections: [
           ["updates", "更新与回滚", "小黄点 Release 手动更新 备份 健康检查"],
           ["operations", "运行与备份", "日志 SSE SQLite systemd launchd"],
@@ -112,7 +112,7 @@ const content = {
     pages: [
       {
         title: "Deploy",
-        file: "deploy.html",
+        file: "deploy",
         sections: [
           ["one-click", "One-line install", "deploy update SHA-256 checksum backup health check"],
           ["installer-options", "Installer options", "environment variables version port admin"],
@@ -124,7 +124,7 @@ const content = {
       },
       {
         title: "Configure",
-        file: "configuration.html",
+        file: "configuration",
         sections: [
           ["channels", "Platforms", "OneBot NapCat Telegram QQ DingTalk Feishu WeCom callback isolation"],
           ["models", "Models and vision", "LLM provider image OCR token timeout"],
@@ -135,7 +135,7 @@ const content = {
       },
       {
         title: "Internals",
-        file: "implementation.html",
+        file: "implementation",
         sections: [
           ["architecture", "Architecture", "Go Gin Vue SQLite modules"],
           ["message-flow", "Message pipeline", "reply skip reason tools context"],
@@ -146,7 +146,7 @@ const content = {
       },
       {
         title: "Operate",
-        file: "operations.html",
+        file: "operations",
         sections: [
           ["updates", "Updates and rollback", "release manual update backup health check"],
           ["operations", "Running and backups", "logs SSE SQLite systemd launchd"],
@@ -161,12 +161,18 @@ const content = {
 const t = content[lang];
 const pages = t.pages;
 // 中文站在 docs/ 根，英文站在 docs/en/：回首页和演示的相对路径不同。
-const homeHref = lang === "en" ? "./index.html" : "./index.html";
-const demoHref = lang === "en" ? "../demo/" : "./demo/";
+const homeHref = "./";
+const demoHref = lang === "en" ? "../demo" : "./demo";
 // 语言切换停在同一篇文档上，而不是一律弹回首页。
-const altHref = (file) => (lang === "en" ? `../${file}` : `./en/${file}`);
+const altHref = (file) => {
+  const target = pages.some((page) => page.file === file) ? file : "";
+  return lang === "en" ? `../${target}` : `./en/${target}`;
+};
 
-const currentFile = window.location.pathname.split("/").pop() || "index.html";
+// 线上是无扩展名地址（GitHub Pages 会把 /deploy 解析到 deploy.html），本地用
+// python 的静态服务器时又可能带着 .html，两种都要认得出来。
+const pageName = (path) => (path.split("/").pop() || "").replace(/\.html$/, "");
+const currentFile = pageName(window.location.pathname);
 const currentPage = pages.find((page) => page.file === currentFile) || pages[0];
 
 const icons = {
@@ -310,7 +316,7 @@ const localSections = [...document.querySelectorAll(".searchable[id]")];
 function updateActiveLink(id) {
   navLinks.forEach((link) => {
     const url = new URL(link.href);
-    link.classList.toggle("active", url.pathname.endsWith(currentPage.file) && url.hash === `#${id}`);
+    link.classList.toggle("active", pageName(url.pathname) === currentPage.file && url.hash === `#${id}`);
   });
 }
 

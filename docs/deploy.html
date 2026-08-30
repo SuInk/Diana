@@ -4,7 +4,8 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Diana 一键部署、Release、Docker 与源码部署指南。" />
     <meta name="theme-color" content="#100d13" />
     <title>Diana 文档 - 部署</title>
@@ -73,6 +74,14 @@ cd diana-webui-darwin-arm64
       <section class="section searchable" id="docker">
         <div class="section-heading"><p class="eyebrow">Docker</p><h2>容器部署</h2></div>
         <div class="callout"><strong>持久化</strong><p>必须挂载 <code>/app/data</code> 和 <code>/app/logs</code>，否则重建容器会丢失 SQLite 配置与凭据。</p></div>
+        <p>镜像随每个版本发布，不必克隆仓库再本地构建：</p>
+        <pre><code>docker run -d --name diana --restart unless-stopped \
+  -p 18080:18080 \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  ghcr.io/suink/diana:latest</code></pre>
+        <p>管理员账号密码用 <code>docker logs diana</code> 查看。想预置配置做无人值守部署，把改好的 <code>config.yaml</code> 以只读方式挂到 <code>/app/config.yaml</code>。升级拉新镜像重建容器即可，数据都在挂出来的 <code>data/</code> 里。</p>
+        <p>需要本地构建，或者要和 NapCat 一起编排时，用仓库里的 compose：</p>
         <pre><code>git clone https://github.com/SuInk/Diana.git
 cd Diana
 docker compose up -d --build
@@ -102,7 +111,7 @@ FRONTEND_DIST=frontend-next/dist ./dist/diana-webui</code></pre>
         </ol>
       </section>
 
-      <nav class="page-nav" aria-label="文档分页"><a href="./index.html"><small>上一页</small><strong>← 概览</strong></a><a href="./configuration.html"><small>下一页</small><strong>配置 →</strong></a></nav>
+      <nav class="page-nav" aria-label="文档分页"><a href="./"><small>上一页</small><strong>← 概览</strong></a><a href="./configuration"><small>下一页</small><strong>配置 →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
     <script src="./app.js?v=20260842" defer></script>
