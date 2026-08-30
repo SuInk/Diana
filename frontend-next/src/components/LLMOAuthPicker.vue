@@ -46,9 +46,27 @@ const editorOpen = ref(false);
 const editorSaving = ref(false);
 const editor = ref<LLMOAuthProvider>(emptyProvider());
 const scopeDraft = ref("");
+const headersDraft = ref("");
+const advancedOpen = ref(false);
 
 function emptyProvider(): LLMOAuthProvider {
   return { key: "", label: "", authorize_url: "", token_url: "", client_id: "", client_secret: "", redirect_uri: "", scopes: [] };
+}
+
+// 附加请求头在界面上是「一行一条 Name: value」，比一堆动态增删的输入框好填也好读。
+function parseHeaders(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const at = line.indexOf(":");
+    if (at <= 0) continue;
+    const name = line.slice(0, at).trim();
+    if (name) out[name] = line.slice(at + 1).trim();
+  }
+  return out;
+}
+
+function formatHeaders(headers?: Record<string, string>): string {
+  return Object.entries(headers ?? {}).map(([name, value]) => `${name}: ${value}`).join("\n");
 }
 
 const busy = computed(() => loading.value || completing.value || editorSaving.value);
@@ -131,6 +149,9 @@ async function logout(status: LLMOAuthStatus) {
 function openEditor(status?: LLMOAuthStatus) {
   editor.value = status ? { ...status.provider } : emptyProvider();
   scopeDraft.value = (status?.provider.scopes ?? []).join(" ");
+  headersDraft.value = formatHeaders(status?.provider.token_headers);
+  // 已经填过这几项的，展开时就摊开给人看，免得改完别处一保存把它们当成没设过。
+  advancedOpen.value = Boolean(editor.value.token_header || editor.value.token_scheme || headersDraft.value);
   editorOpen.value = true;
 }
 
@@ -140,7 +161,8 @@ async function saveProvider() {
   try {
     const response = await saveOAuthProvider({
       ...editor.value,
-      scopes: scopeDraft.value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)
+      scopes: scopeDraft.value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean),
+      token_headers: parseHeaders(headersDraft.value)
     });
     apply(response.providers ?? []);
     editorOpen.value = false;
@@ -282,6 +304,37 @@ onMounted(refresh);
           <label for="oauth-scopes">Scope（可选）</label>
           <input id="oauth-scopes" v-model="scopeDraft" class="input mono" placeholder="多个用空格分隔" autocomplete="off" />
         </div>
+        <!-- 令牌怎么带给模型接口。默认那套（Authorization: Bearer）适用于绝大多数
+             提供商，但不是全部：Anthropic 收到 Authorization 里的 OAuth 令牌会直接
+             回 401，它要求放进 x-api-key。所以留一组显式开关，而不是写死。 -->
+        <div class="oauth-advanced">
+          <button class="btn small ghost" type="button" @click="advancedOpen = !advancedOpen">
+            {{ advancedOpen ? "收起高级选项" : "高级：令牌怎么带给模型接口" }}
+          </button>
+        </div>
+        <template v-if="advancedOpen">
+          <div class="field">
+            <label for="oauth-token-header">令牌请求头（可选）</label>
+            <input id="oauth-token-header" v-model="editor.token_header" class="input mono" placeholder="Authorization" autocomplete="off" />
+            <span class="hint">留空即 Authorization。个别提供商要求换个头，例如 Anthropic 的 OAuth 令牌要放在 x-api-key。</span>
+          </div>
+          <div class="field">
+            <label for="oauth-token-scheme">令牌前缀（可选）</label>
+            <input id="oauth-token-scheme" v-model="editor.token_scheme" class="input mono" placeholder="Bearer" autocomplete="off" />
+            <span class="hint">留空时：写 Authorization 用 Bearer，写其它头则不加前缀。</span>
+          </div>
+          <div class="field">
+            <label for="oauth-token-headers">附加请求头（可选）</label>
+            <textarea
+              id="oauth-token-headers"
+              v-model="headersDraft"
+              class="input mono"
+              rows="3"
+              placeholder="一行一条，形如&#10;anthropic-beta: oauth-2025-04-20"
+            ></textarea>
+            <span class="hint">拿这家的令牌发模型请求时一起带上。</span>
+          </div>
+        </template>
         <div class="cluster" style="gap: 8px">
           <button class="btn small primary" type="button" :disabled="editorSaving" @click="saveProvider">
             {{ editorSaving ? "保存中…" : "保存提供商" }}

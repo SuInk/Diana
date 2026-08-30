@@ -32,7 +32,9 @@ const (
 	// 给够时间；但不能不过期——待完成的授权里存着 verifier。
 	pendingLoginTTL = 15 * time.Minute
 	// refreshSkew 是提前续期的余量。卡着过期时间续期，会在请求正在路上时失效。
-	refreshSkew = 2 * time.Minute
+	// 五分钟是这类客户端的常见取值：一轮长对话里工具调用能连着跑好几分钟，
+	// 余量小于这个跨度，就会有请求在半路上撞到过期。
+	refreshSkew = 5 * time.Minute
 
 	tokenRequestTimeout = 30 * time.Second
 )
