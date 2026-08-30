@@ -83,12 +83,8 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer) func(a
 					AccessToken: profile.OneBotAccessToken,
 				})
 				channel = oneBotServer
-			} else if profile.Platform == assistant.PlatformTelegram {
-				channel = assistant.NewTelegramChannel(assistant.TelegramConfig{
-					BotToken:   profile.TelegramBotToken,
-					APIBaseURL: profile.TelegramAPIBaseURL,
-					ProxyURL:   profile.TelegramProxyURL,
-				})
+			} else {
+				channel = assistant.NewChannelForConfig(profile)
 			}
 			if channel != nil {
 				bindings = append(bindings, assistant.ChannelBinding{
@@ -334,19 +330,12 @@ func main() {
 		}
 	}
 	botHandler := webui.NewBotHandlerWithFactory(ctx, botRuntime, func(cfg assistant.BotConfig) assistant.Channel {
-		if cfg.Platform == assistant.PlatformTelegram {
-			return assistant.NewTelegramChannel(assistant.TelegramConfig{
-				BotToken:   cfg.TelegramBotToken,
-				APIBaseURL: cfg.TelegramAPIBaseURL,
-				ProxyURL:   cfg.TelegramProxyURL,
-			})
-		}
 		// 这里必须和 channelSetFactory 用同一个平台判断。以前是「不是 Telegram
 		// 就当 OneBot」,平台字段一旦不是已注册的 OneBot 平台,两边判断就分叉:
 		// 这条路径拿它的(往往是空的)token 覆盖了共享监听器,配置集那条路径又不
 		// 认它、不会把 token 写回去,监听器就此停在一个谁都对不上的 token 上。
 		if !assistant.IsOneBotPlatform(cfg.Platform) {
-			return nil
+			return assistant.NewChannelForConfig(cfg)
 		}
 		oneBotServer.SetConfig(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,
@@ -435,6 +424,7 @@ func main() {
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
 	napCatLoginHandler.Register(router)
+	webui.NewChannelCallbackHandler().Register(router)
 	// 对外开放接口：/api/openapi 下的密钥管理走上面的会话鉴权，
 	// /openapi/v1 下的推送接口由 Bearer 密钥自行鉴权，总开关是
 	// 「对外 API」内置插件（默认关闭）。
