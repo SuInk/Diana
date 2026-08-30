@@ -70,7 +70,15 @@
           </div>
           <div class="field wide">
             <label for="wizard-baseurl">API 地址</label>
-            <input id="wizard-baseurl" v-model="llmForm.base_url" class="input mono" placeholder="https://api.example.com/v1" />
+            <input
+              id="wizard-baseurl"
+              v-model="llmForm.base_url"
+              class="input mono"
+              :class="{ invalid: invalidField === 'base_url' }"
+              :aria-invalid="invalidField === 'base_url'"
+              placeholder="https://api.example.com/v1"
+              @input="clearInvalid('base_url')"
+            />
             <span class="hint">{{ selectedPreset?.hint }}；请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。</span>
           </div>
           <div class="field wide">
@@ -79,9 +87,12 @@
               id="wizard-apikey"
               v-model="llmForm.api_key"
               class="input"
+              :class="{ invalid: invalidField === 'api_key' }"
+              :aria-invalid="invalidField === 'api_key'"
               type="password"
               :placeholder="llmConfigured ? '留空表示沿用已保存的 Key' : '粘贴你的 API Key'"
               autocomplete="off"
+              @input="clearInvalid('api_key')"
             />
             <span class="hint">Key 只保存在本机 SQLite，不会上传到其他服务。</span>
           </div>
@@ -97,10 +108,6 @@
                 {{ modelsLoading ? "同步中…" : "同步模型列表" }}
               </button>
             </div>
-            <details v-if="modelsError" class="request-error" open>
-              <summary>模型列表获取失败，查看完整错误</summary>
-              <pre>{{ modelsError }}</pre>
-            </details>
             <div class="model-default-field">
               <label for="wizard-model">默认模型</label>
               <div class="model-picker-anchor">
@@ -292,9 +299,11 @@ import AppSelect from "../components/AppSelect.vue";
 import {
   defaultPresetForProvider,
   detectLLMService,
+  llmErrorField,
   llmProviderKinds,
   llmServicePresets,
-  presetsForProvider
+  presetsForProvider,
+  type LLMErrorField
 } from "../llm-presets";
 
 const step = ref(0);
@@ -316,7 +325,13 @@ const savedLLM = ref<LLMConfig | null>(null);
 const savedBot = ref<BotProfileConfig | null>(null);
 const modelOptions = ref<LLMModelInfo[]>([]);
 const modelsLoading = ref(false);
-const modelsError = ref("");
+const invalidField = ref<LLMErrorField>("");
+
+function clearInvalid(field: LLMErrorField): void {
+  if (invalidField.value === field) {
+    invalidField.value = "";
+  }
+}
 const modelPickerOpen = ref(false);
 
 const llmForm = ref<{ provider: Provider; api_style: "responses" | "chat_completions" | ""; model: string; base_url: string; api_key: string }>({
@@ -372,7 +387,7 @@ function applyServicePreset(id: string): void {
   llmForm.value.base_url = preset.baseURL;
   llmForm.value.model = preset.model;
   modelOptions.value = [];
-  modelsError.value = "";
+  invalidField.value = "";
   modelPickerOpen.value = false;
 }
 
@@ -391,7 +406,7 @@ function pickModel(id: string): void {
 
 async function loadModels(selectFirst: boolean): Promise<boolean> {
   if (modelsLoading.value) return false;
-  modelsError.value = "";
+  invalidField.value = "";
   modelsLoading.value = true;
   try {
     const result = await listLLMModels({
@@ -413,8 +428,10 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
     modelPickerOpen.value = !selectFirst;
     return true;
   } catch (error) {
-    modelsError.value = error instanceof Error ? error.message : "拉取模型列表失败";
-    toastError("模型列表获取失败，完整信息已显示在模型字段下方");
+    // 和 LLM 配置页一致：报错原文进 toast，该回去改的那一格标红。
+    const message = error instanceof Error ? error.message : "拉取模型列表失败";
+    invalidField.value = llmErrorField(message);
+    toastError(message);
     return false;
   } finally {
     modelsLoading.value = false;
