@@ -1286,16 +1286,26 @@ func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 	return out
 }
 
-// webSearchPluginSettings 读取本次事件生效的联网搜索插件设置，支持按群覆盖。
-func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bool) {
+// pluginWithSettingsForEvent 取插件本体和「这个会话真正生效」的设置。
+//
+// 群级覆盖有两半：开关（启用/停用）和参数。它们在群管理页上是同一张卡片，在
+// 代码里却是两个入参——只传开关的那个重载（PluginWithSettings）会让参数覆盖
+// 静默失效：界面能填、能存、能显示，就是不生效。这个坑踩过一次，所以运行时
+// 一律走这个函数，别再直接调 PluginWithSettings。
+func (r *Runtime) pluginWithSettingsForEvent(id string, event MessageEvent) (Plugin, SettingValues, bool) {
 	if r == nil || r.plugins == nil {
-		return nil, false
+		return nil, nil, false
 	}
-	_, settings, enabled := r.plugins.PluginWithSettingsForGroup(
-		webSearchPluginID,
+	return r.plugins.PluginWithSettingsForGroup(
+		id,
 		r.pluginOverridesForEvent(event),
 		r.pluginSettingOverridesForEvent(event),
 	)
+}
+
+// webSearchPluginSettings 读取本次事件生效的联网搜索插件设置，支持按群覆盖。
+func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bool) {
+	_, settings, enabled := r.pluginWithSettingsForEvent(webSearchPluginID, event)
 	return settings, enabled
 }
 
@@ -3039,29 +3049,29 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
 			// 无头浏览器。插件停用时模型看不到这个工具。
-			if _, settings, enabled := r.plugins.PluginWithSettings(groupRelationsPluginID, r.pluginOverridesForEvent(event)); enabled {
+			if _, settings, enabled := r.pluginWithSettingsForEvent(groupRelationsPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
 			}
-			if _, settings, enabled := r.plugins.PluginWithSettings(stickerPluginID, r.pluginOverridesForEvent(event)); enabled {
+			if _, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
 			}
 			// 图片溯源同样按插件开关走：反查要把图片上传给第三方图库，不是每个
 			// 群都愿意，插件停用时模型看不到这个工具。
-			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(imageSourcePluginID, r.pluginOverridesForEvent(event)); enabled {
+			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(imageSourcePluginID, event); enabled {
 				// 一条线路都没配好时不挂这个工具：模型看得到就会去调，然后只能
 				// 回一句「查不了」，白费一轮。
 				if plugin, ok := pluginValue.(*ImageSourcePlugin); ok && imageSourceConfigFromSettings(settings).anyProviderUsable() {
 					extraTools = append(extraTools, newDianaImageSourceTool(r, event, plugin, settings))
 				}
 			}
-			if pluginValue, settings, enabled := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event)); enabled {
+			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
 				}
 			}
-			if pluginValue, watchSettings, enabled := r.plugins.PluginWithSettings(repositoryWatchPluginID, r.pluginOverridesForEvent(event)); enabled {
+			if pluginValue, watchSettings, enabled := r.pluginWithSettingsForEvent(repositoryWatchPluginID, event); enabled {
 				if _, ok := pluginValue.(*RepositoryWatchPlugin); ok {
-					_, publishSettings, _ := r.plugins.PluginWithSettings(repositoryPublishPluginID, r.pluginOverridesForEvent(event))
+					_, publishSettings, _ := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event)
 					managed := repositoryWatchManagedRepositories(event, publishSettings)
 					if relationship.Owner || len(managed) > 0 {
 						extraTools = append(extraTools, newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings))
@@ -3428,7 +3438,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return "", newImageMediaUnavailableError(currentImageFailures)
 	}
 	if r.plugins != nil {
-		_, settings, enabled := r.plugins.PluginWithSettings(voiceSTTPluginID, r.pluginOverridesForEvent(event))
+		_, settings, enabled := r.pluginWithSettingsForEvent(voiceSTTPluginID, event)
 		if enabled {
 			voiceParts, notice := r.voiceSourceAnalysisParts(ctx, messageEvent, cleanText, voiceSTTConfigFromSettings(settings))
 			if notice != "" {
