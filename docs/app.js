@@ -3,15 +3,6 @@
 
 const pages = [
   {
-    title: "概览",
-    file: "index.html",
-    sections: [
-      ["overview", "产品介绍", "Diana AI 助手 QQ Telegram"],
-      ["quickstart", "快速开始", "一键 安装 部署 curl PowerShell"],
-      ["capabilities", "核心能力", "联网 搜索 多通道 模型 事件 token"],
-    ],
-  },
-  {
     title: "部署",
     file: "deploy.html",
     sections: [
@@ -60,21 +51,30 @@ const pages = [
 const currentFile = window.location.pathname.split("/").pop() || "index.html";
 const currentPage = pages.find((page) => page.file === currentFile) || pages[0];
 
+const icons = {
+  menu: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
+  home: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
+  play: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5z"/></svg>',
+  github: '<svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>',
+  sun: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  moon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>'
+};
+
 document.querySelector("[data-docs-header]").innerHTML = `
   <a class="skip-link" href="#main">跳到正文</a>
   <header class="topbar">
-    <button class="icon-button menu-button" type="button" aria-label="打开目录" title="打开目录" data-menu-toggle><span aria-hidden="true">☰</span></button>
-    <a class="brand" href="./index.html" aria-label="Diana 文档首页">
+    <button class="icon-button menu-button" type="button" aria-label="打开目录" title="打开目录" data-menu-toggle>${icons.menu}</button>
+    <a class="brand" href="./index.html" aria-label="Diana 首页">
       <span class="brand-mark" aria-hidden="true">D</span><span><strong>Diana</strong><small>文档</small></span>
     </a>
     <nav class="page-tabs" aria-label="文档页面">
       ${pages.map((page) => `<a href="./${page.file}"${page === currentPage ? ' aria-current="page"' : ""}>${page.title}</a>`).join("")}
     </nav>
     <nav class="top-links" aria-label="外部链接">
-      <a href="https://github.com/SuInk/Diana/releases/latest">下载</a>
-      <a href="./demo/">在线演示</a>
-      <a href="https://github.com/SuInk/Diana">GitHub</a>
-      <button class="icon-button" type="button" aria-label="切换明暗主题" title="切换明暗主题" data-theme-toggle><span data-theme-icon aria-hidden="true">☾</span></button>
+      <a href="./index.html" title="返回首页">${icons.home}首页</a>
+      <a href="./demo/" title="在线演示">${icons.play}演示</a>
+      <a class="icon-link" href="https://github.com/SuInk/Diana" aria-label="GitHub 仓库" title="GitHub 仓库">${icons.github}</a>
+      <button class="icon-button" type="button" aria-label="切换明暗主题" title="切换明暗主题" data-theme-toggle><span data-theme-icon aria-hidden="true"></span></button>
     </nav>
   </header>`;
 
@@ -124,15 +124,17 @@ menuToggle.addEventListener("click", () => setSidebarOpen(!sidebar.classList.con
 sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
 nav.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => setSidebarOpen(false)));
 
+// 默认跟落地页一样是暗色，不跟随系统：系统是浅色时会出现「深色首页 → 浅色文档」
+// 的割裂，而且 HTML 里预置的 data-theme 会被 JS 翻一次，白闪一下。
+// 想要浅色的人点一下开关，选择会记住。
 const savedTheme = window.localStorage.getItem("diana-docs-theme");
-const preferredDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
 function setTheme(theme) {
   root.dataset.theme = theme;
-  themeIcon.textContent = theme === "dark" ? "☼" : "☾";
+  themeIcon.innerHTML = theme === "dark" ? icons.sun : icons.moon;
 }
 
-setTheme(savedTheme === "dark" || (!savedTheme && preferredDark) ? "dark" : "light");
+setTheme(savedTheme === "light" ? "light" : "dark");
 themeToggle.addEventListener("click", () => {
   const next = root.dataset.theme === "dark" ? "light" : "dark";
   setTheme(next);
