@@ -138,6 +138,16 @@
           <span class="hint">同分组的渠道自动轮换降级；机器人页可把用途绑到整个分组。</span>
         </div>
         <div class="field">
+          <label for="llm-provider-kind">接入类型</label>
+          <AppSelect
+            id="llm-provider-kind"
+            :model-value="form.provider"
+            :options="providerKindOptions"
+            @update:model-value="applyProviderKind"
+          />
+          <span class="hint">{{ currentProviderKind.hint }}。</span>
+        </div>
+        <div class="field">
           <label for="llm-service">服务平台</label>
           <AppSelect
             id="llm-service"
@@ -146,7 +156,8 @@
             @update:model-value="applyServicePreset"
           />
         </div>
-        <div class="field">
+        <!-- 接口模式只对 OpenAI 兼容接口有意义；原生协议带上它会被后端拒绝。 -->
+        <div v-if="supportsAPIStyle" class="field">
           <label for="llm-api-style">接口模式</label>
           <AppSelect
             id="llm-api-style"
@@ -160,8 +171,19 @@
         </div>
         <div class="field wide">
           <label for="llm-baseurl">API 地址</label>
-          <input id="llm-baseurl" v-model="form.base_url" class="input mono" placeholder="https://api.example.com/v1" />
-          <span class="hint">{{ selectedPreset?.hint }}；请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。</span>
+          <input
+            id="llm-baseurl"
+            v-model="form.base_url"
+            class="input mono"
+            :placeholder="supportsAPIStyle ? 'https://api.example.com/v1' : '留空使用官方地址'"
+          />
+          <span class="hint">
+            {{ selectedPreset?.hint }}；{{
+              supportsAPIStyle
+                ? "请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。"
+                : "原生协议留空即走官方地址，只有走代理或自建网关时才需要填。"
+            }}
+          </span>
         </div>
         <div class="field wide">
           <label for="llm-credential-mode">凭据方式</label>
@@ -385,12 +407,18 @@ import { toastError, toastSuccess } from "../toast";
 import Modal from "../components/Modal.vue";
 import AppSelect from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
-import { detectLLMService, llmServicePresets } from "../llm-presets";
+import {
+  defaultPresetForProvider,
+  detectLLMService,
+  llmProviderKinds,
+  llmServicePresets,
+  presetsForProvider
+} from "../llm-presets";
 
 interface LLMFormState {
   name: string;
   provider: Provider;
-  api_style: "responses" | "chat_completions";
+  api_style: "responses" | "chat_completions" | "";
   group: string;
   model: string;
   base_url: string;
@@ -465,11 +493,33 @@ const testReply = ref("");
 const testUsage = ref("");
 const testImages = ref<string[]>([]);
 const isImageTest = computed(() => testTarget.value !== null && groupOf(testTarget.value) === "image");
-const serviceOptions = llmServicePresets.map((preset) => ({
-  value: preset.id,
-  label: preset.label,
-  hint: preset.hint
+const providerKindOptions = llmProviderKinds.map((kind) => ({
+  value: kind.id,
+  label: kind.label,
+  hint: kind.hint
 }));
+
+const currentProviderKind = computed(() =>
+  llmProviderKinds.find((kind) => kind.id === form.value.provider) ?? llmProviderKinds[0]
+);
+
+/** 接口模式只对 OpenAI 兼容接口有意义，原生协议带上它会被后端拒绝。 */
+const supportsAPIStyle = computed(() => currentProviderKind.value.supportsAPIStyle);
+
+/** 切换接入类型：落到该类型的第一个服务商，把协议专属字段一并归位。 */
+function applyProviderKind(provider: string): void {
+  const preset = defaultPresetForProvider(provider as Provider);
+  if (!preset) return;
+  applyServicePreset(preset.id);
+}
+
+const serviceOptions = computed(() =>
+  presetsForProvider(form.value.provider).map((preset) => ({
+    value: preset.id,
+    label: preset.label,
+    hint: preset.hint
+  }))
+);
 const selectedPreset = computed(() => llmServicePresets.find((preset) => preset.id === selectedService.value));
 // 凭据方式由配置档里有没有绑 OAuth 提供商推导，不额外存一个字段：
 // 多存一个就有「两处不一致」的可能，而这里没有任何信息是推不出来的。
@@ -655,7 +705,8 @@ function startEdit(profile: LLMConfig): void {
   form.value = {
     name: profile.name ?? "",
     provider: profile.provider,
-    api_style: profile.api_style ?? "responses",
+    // 原生协议没有接口模式，补默认值会在保存时被后端拒绝。
+    api_style: profile.provider === "openai_compatible" ? (profile.api_style ?? "responses") : "",
     group: profile.group === "default" ? "" : (profile.group ?? ""),
     model: profile.model,
     base_url: profile.base_url ?? "",
@@ -668,7 +719,7 @@ function startEdit(profile: LLMConfig): void {
     max_context_tokens: profile.max_context_tokens ? String(profile.max_context_tokens) : "",
     max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : ""
   };
-  selectedService.value = detectLLMService(profile.base_url);
+  selectedService.value = detectLLMService(profile.base_url, profile.provider);
   modelOptions.value = [...(profile.models ?? [])];
   modelsError.value = "";
   editorOpen.value = true;
@@ -722,7 +773,7 @@ function formToPayload(): LLMConfig {
     id: editingID.value,
     name: form.value.name.trim() || undefined,
     provider: form.value.provider,
-    api_style: form.value.api_style,
+    api_style: form.value.provider === "openai_compatible" ? (form.value.api_style || undefined) : undefined,
     group: form.value.group.trim() || "default",
     model: form.value.model.trim(),
     base_url: form.value.base_url.trim() || undefined,

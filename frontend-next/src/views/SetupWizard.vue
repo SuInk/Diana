@@ -37,6 +37,16 @@
       <div class="card-body stack">
         <div class="form-grid">
           <div class="field">
+            <label for="wizard-provider-kind">接入类型</label>
+            <AppSelect
+              id="wizard-provider-kind"
+              :model-value="llmForm.provider"
+              :options="providerKindOptions"
+              @update:model-value="applyProviderKind"
+            />
+            <span class="hint">{{ currentProviderKind.hint }}。</span>
+          </div>
+          <div class="field">
             <label for="wizard-service">服务平台</label>
             <AppSelect
               id="wizard-service"
@@ -45,7 +55,8 @@
               @update:model-value="applyServicePreset"
             />
           </div>
-          <div class="field">
+          <!-- 接口模式只对 OpenAI 兼容接口有意义；原生协议带上它会被后端拒绝。 -->
+          <div v-if="supportsAPIStyle" class="field">
             <label for="wizard-api-style">接口模式</label>
             <AppSelect
               id="wizard-api-style"
@@ -278,7 +289,13 @@ import { navigate } from "../router";
 import { toastError, toastSuccess } from "../toast";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect from "../components/AppSelect.vue";
-import { detectLLMService, llmServicePresets } from "../llm-presets";
+import {
+  defaultPresetForProvider,
+  detectLLMService,
+  llmProviderKinds,
+  llmServicePresets,
+  presetsForProvider
+} from "../llm-presets";
 
 const step = ref(0);
 const busy = ref(false);
@@ -302,7 +319,7 @@ const modelsLoading = ref(false);
 const modelsError = ref("");
 const modelPickerOpen = ref(false);
 
-const llmForm = ref<{ provider: Provider; api_style: "responses" | "chat_completions"; model: string; base_url: string; api_key: string }>({
+const llmForm = ref<{ provider: Provider; api_style: "responses" | "chat_completions" | ""; model: string; base_url: string; api_key: string }>({
   provider: "openai_compatible",
   api_style: "responses",
   model: "",
@@ -310,11 +327,32 @@ const llmForm = ref<{ provider: Provider; api_style: "responses" | "chat_complet
   api_key: ""
 });
 
-const serviceOptions = llmServicePresets.map((preset) => ({
-  value: preset.id,
-  label: preset.label,
-  hint: preset.hint
+const providerKindOptions = llmProviderKinds.map((kind) => ({
+  value: kind.id,
+  label: kind.label,
+  hint: kind.hint
 }));
+
+const currentProviderKind = computed(() =>
+  llmProviderKinds.find((kind) => kind.id === llmForm.value.provider) ?? llmProviderKinds[0]
+);
+
+/** 接口模式只对 OpenAI 兼容接口有意义，原生协议带上它会被后端拒绝。 */
+const supportsAPIStyle = computed(() => currentProviderKind.value.supportsAPIStyle);
+
+const serviceOptions = computed(() =>
+  presetsForProvider(llmForm.value.provider).map((preset) => ({
+    value: preset.id,
+    label: preset.label,
+    hint: preset.hint
+  }))
+);
+
+/** 切换接入类型：落到该类型的第一个服务商，把协议专属字段一并归位。 */
+function applyProviderKind(provider: string): void {
+  const preset = defaultPresetForProvider(provider as Provider);
+  if (preset) applyServicePreset(preset.id);
+}
 const selectedPreset = computed(() => llmServicePresets.find((preset) => preset.id === selectedService.value));
 const filteredModels = computed(() => {
   const keyword = llmForm.value.model.trim().toLowerCase();
@@ -359,7 +397,7 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
     const result = await listLLMModels({
       id: savedLLM.value?.id,
       provider: llmForm.value.provider,
-      api_style: llmForm.value.api_style,
+      api_style: llmForm.value.provider === "openai_compatible" ? (llmForm.value.api_style || undefined) : undefined,
       base_url: llmForm.value.base_url.trim() || undefined,
       api_key: llmForm.value.api_key.trim() || undefined,
       model: llmForm.value.model.trim()
@@ -439,7 +477,7 @@ async function saveAndTestLLM(): Promise<void> {
     const payload: LLMConfig = {
       id: savedLLM.value?.id,
       provider: llmForm.value.provider,
-      api_style: llmForm.value.api_style,
+      api_style: llmForm.value.provider === "openai_compatible" ? (llmForm.value.api_style || undefined) : undefined,
       model: llmForm.value.model.trim(),
       models: modelOptions.value,
       base_url: llmForm.value.base_url.trim() || undefined,
@@ -496,10 +534,11 @@ onMounted(async () => {
     llmConfigured.value = Boolean(llm.api_key_configured);
     tokenConfigured.value = Boolean(bot.onebot_access_token_configured);
     llmForm.value.provider = llm.provider;
-    llmForm.value.api_style = llm.api_style ?? "responses";
+    // 原生协议没有接口模式，补默认值会在保存时被后端拒绝。
+    llmForm.value.api_style = llm.provider === "openai_compatible" ? (llm.api_style ?? "responses") : "";
     llmForm.value.model = llm.model;
     llmForm.value.base_url = llm.base_url ?? "";
-    selectedService.value = detectLLMService(llm.base_url);
+    selectedService.value = detectLLMService(llm.base_url, llm.provider);
     botForm.value.onebot_reverse_ws_endpoint =
       bot.onebot_reverse_ws_endpoint || `ws://${window.location.host}/onebot/v11/ws`;
     // 10001 was used by early demo data and should not appear as a real default.
