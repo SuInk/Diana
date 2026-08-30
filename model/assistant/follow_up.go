@@ -118,6 +118,7 @@ func (r *Runtime) followUpComment(ctx context.Context, kind followUpKind, source
 
 func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followUpKind, source MessageEvent, notice, reference string, pluginResponses ...PluginResponse) string {
 	cfg := r.effectiveConfigForEvent(source)
+	history := r.contextHistory(source)
 	if strings.TrimSpace(reference) != "" {
 		reference = truncateRunes(reference, followUpReferenceRuneBudget(r.promptContextWindowTokens(source, cfg)))
 	}
@@ -130,7 +131,7 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: clockPrompt, Priority: llm.MessagePrioritySystem})
 	}
 	botID := firstNonEmpty(cfg.BotAccount, source.SelfID)
-	for _, historyEvent := range r.contextHistory(source) {
+	for _, historyEvent := range history {
 		content := strings.TrimSpace(historyPlainText(historyEvent))
 		if content == "" {
 			continue
@@ -152,11 +153,11 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		Content:  followUpInstructionWithReference(notice, reference),
 	})
 
-	// 仓库订阅的 ctx 来自定时轮询，没有经过 replyTo，脱敏状态要在这里补上，
-	// 否则真实账号和群号会原样进模型。
-	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
-		ctx = r.withIdentityPrivacyContext(ctx, source, r.contextHistory(source))
-	}
+	// 插件内容已经在跟评前送达，history 里可能比入站阶段多出一条外层卡片。
+	// 即使 ctx 已有脱敏作用域也要重新登记最新历史，否则模型复制卡片的
+	// im_message_* 别名时无法恢复成真实 message_id，引用标记就会失效。
+	// 仓库订阅的 ctx 来自定时轮询，这里也同时负责首次建立脱敏状态。
+	ctx = r.withIdentityPrivacyContext(ctx, source, history)
 	group := llm.GroupChat
 	if messagesContainImages(messages) {
 		group = llm.GroupVision
