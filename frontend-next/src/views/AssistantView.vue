@@ -443,6 +443,61 @@
 
         </div>
 
+        <div v-show="editorTab === 'model'" class="stack">
+          <!-- 聊天内模型管理 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>聊天内模型管理</h2>
+              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
+                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
+                </label>
+                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- 模型分配 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>模型分配</h2>
+              <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
+            </div>
+            <div class="card-body stack" style="gap: 12px">
+              <div class="model-role-row model-role-head" aria-hidden="true">
+                <span>用途</span>
+                <span>提供商 / 分组</span>
+                <span>模型</span>
+              </div>
+              <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
+                <span class="model-role-label">{{ role.label }}</span>
+                <AppSelect
+                  :model-value="roleSelectionValue(role.key)"
+                  :options="channelOptionsFor(role.key)"
+                  @update:model-value="(value) => setRoleChannel(role.key, value)"
+                />
+                <AppSelect
+                  :model-value="roleModelValue(role.key)"
+                  :options="modelOptionsFor(role.key)"
+                  @update:model-value="(value) => setRoleModel(role.key, value)"
+                />
+              </div>
+              <p class="muted" style="margin: 0; font-size: 12.5px">
+                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话提供商的生图配置。
+              </p>
+            </div>
+          </section>
+
+        </div>
+
         <div v-show="editorTab === 'behavior'" class="stack">
           <!-- 触发与回复 -->
           <section class="card">
@@ -697,6 +752,69 @@
             </div>
           </section>
 
+          <section class="card">
+            <div class="card-header">
+              <h2>自动机器人识别</h2>
+              <span class="badge" :class="form.bot_reply_loop_detection_enabled ? 'accent' : ''">
+                {{ form.bot_reply_loop_detection_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
+                </label>
+                <span class="hint">识别到持续的自动回复时避免机器人互相循环，并在达到阈值后暂停响应该账号。</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <h2>发送前审核</h2>
+              <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
+                {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">直接回复也做统一发送前审核</span>
+                </label>
+                <span class="hint">
+                  一次审核同时判断内容安全和是否属于明确拒答；主动回复还会使用其中的表达质量结论。涉政、露骨和其他可能导致账号被处置的内容会被拦下不发，
+                  高置信拒答仅在发送成功后累计。打开后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <h2>笔记本作用域</h2>
+              <span class="badge" :class="form.notebook_shared_scope_enabled ? 'accent' : ''">
+                {{ form.notebook_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.notebook_shared_scope_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">所有群共用一本笔记</span>
+                </label>
+                <span class="hint">
+                  默认按会话隔离：一个群记下的只在这个群生效，别的群查不到。打开后新记的一律写进全局笔记本，所有会话通用。
+                  打开之前各群已经记下的不会搬走，仍在自己群里优先生效，可以在「笔记本」页按作用域逐条改。
+                </span>
+              </div>
+            </div>
+          </section>
+
         </div>
 
         <div v-show="editorTab === 'persona'" class="stack">
@@ -863,123 +981,6 @@
                   只放行冲着机器人来的那一类：别人之间的闲聊、要机器人安静、同一轮已经回过，仍然沉默。
                 </span>
               </div>
-            </div>
-          </section>
-
-        </div>
-
-        <div v-show="editorTab === 'model'" class="stack">
-          <!-- 聊天内模型管理 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>聊天内模型管理</h2>
-              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
-                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
-                </label>
-                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
-              </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2>自动机器人识别</h2>
-              <span class="badge" :class="form.bot_reply_loop_detection_enabled ? 'accent' : ''">
-                {{ form.bot_reply_loop_detection_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
-                </label>
-                <span class="hint">识别到持续的自动回复时避免机器人互相循环，并在达到阈值后暂停响应该账号。</span>
-              </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2>发送前审核</h2>
-              <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
-                {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">直接回复也做统一发送前审核</span>
-                </label>
-                <span class="hint">
-                  一次审核同时判断内容安全和是否属于明确拒答；主动回复还会使用其中的表达质量结论。涉政、露骨和其他可能导致账号被处置的内容会被拦下不发，
-                  高置信拒答仅在发送成功后累计。打开后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
-                </span>
-              </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2>笔记本作用域</h2>
-              <span class="badge" :class="form.notebook_shared_scope_enabled ? 'accent' : ''">
-                {{ form.notebook_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.notebook_shared_scope_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">所有群共用一本笔记</span>
-                </label>
-                <span class="hint">
-                  默认按会话隔离：一个群记下的只在这个群生效，别的群查不到。打开后新记的一律写进全局笔记本，所有会话通用。
-                  打开之前各群已经记下的不会搬走，仍在自己群里优先生效，可以在「笔记本」页按作用域逐条改。
-                </span>
-              </div>
-            </div>
-          </section>
-
-          <!-- 模型分配 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>模型分配</h2>
-              <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
-            </div>
-            <div class="card-body stack" style="gap: 12px">
-              <div class="model-role-row model-role-head" aria-hidden="true">
-                <span>用途</span>
-                <span>提供商 / 分组</span>
-                <span>模型</span>
-              </div>
-              <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
-                <span class="model-role-label">{{ role.label }}</span>
-                <AppSelect
-                  :model-value="roleSelectionValue(role.key)"
-                  :options="channelOptionsFor(role.key)"
-                  @update:model-value="(value) => setRoleChannel(role.key, value)"
-                />
-                <AppSelect
-                  :model-value="roleModelValue(role.key)"
-                  :options="modelOptionsFor(role.key)"
-                  @update:model-value="(value) => setRoleModel(role.key, value)"
-                />
-              </div>
-              <p class="muted" style="margin: 0; font-size: 12.5px">
-                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话提供商的生图配置。
-              </p>
             </div>
           </section>
 
@@ -1364,11 +1365,15 @@ async function copyCallbackURL(): Promise<void> {
 
 // 机器人配置项太多（41 个字段），平铺成一列要滚 6 屏。按「配一次就不动」
 // 和「经常调」的区别分区，每区一屏内看完。
+//
+// 顺序按新建一台机器人的配置次序排：先接上通道，再指定模型——没有模型
+// 后面全都跑不起来，所以它排在行为和人设之前。模板里的面板顺序与这里
+// 保持一致，免得读代码时对不上。
 const editorTabs = [
   { key: "access", label: "接入" },
+  { key: "model", label: "模型" },
   { key: "behavior", label: "行为" },
   { key: "persona", label: "人设" },
-  { key: "model", label: "模型" },
   { key: "advanced", label: "高级" }
 ] as const;
 type EditorTab = (typeof editorTabs)[number]["key"];
