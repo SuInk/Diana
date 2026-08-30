@@ -10076,9 +10076,8 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		if err := r.sendRepositoryWatch(ctx, item, pending); err != nil {
 			return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 		}
-		// 补投成功才轮到跟评：上一轮没送出去，那会儿也没有可评的东西。
-		// 补投走的是上一轮存下的正文，diff 没有一起存，跟评这次只看事实清单。
-		r.maybeSendRepositoryWatchFollowUp(ctx, item, pending, "")
+		// 补投成功才轮到跟评；参考资料和通知一起持久化，不能在重试时退化成只看标题。
+		r.maybeSendRepositoryWatchFollowUp(ctx, item, pending, item.PendingDeliveryReference)
 		return startedAt, nil
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
@@ -10111,20 +10110,18 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	}
 	change = applyRepositoryStarNotifyThreshold(item, change)
 	if len(change.Commits) == 0 && len(change.PullRequests) == 0 && len(change.Issues) == 0 && len(change.Releases) == 0 && change.Stars == nil {
-		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, r.storeRepositoryWatchProgress(item.ID, change.Snapshot, ""))
+		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, r.storeRepositoryWatchProgress(item.ID, change.Snapshot, "", ""))
 	}
 	message := r.renderRepositoryWatchMessage(change, settings)
-	if err := r.storeRepositoryWatchProgress(item.ID, change.Snapshot, message); err != nil {
+	reference := renderRepositoryWatchReferenceWithPatch(change, settings.Bool(repositoryWatchSettingPatch, false))
+	if err := r.storeRepositoryWatchProgress(item.ID, change.Snapshot, message, reference); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, err)
 	}
 	if err := r.sendRepositoryWatchChange(ctx, item, message, &change); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
-	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, renderRepositoryWatchDiffDigestWithPatch(
-		change,
-		settings.Bool(repositoryWatchSettingPatch, false),
-	))
+	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, reference)
 	return startedAt, nil
 }
 
@@ -10355,6 +10352,34 @@ func renderRepositoryWatchDiffDigestWithPatch(change repositoryWatchChange, incl
 		return overview
 	}
 	return overview + "\n\n" + patch
+}
+
+// renderRepositoryWatchReferenceWithPatch 汇总只给跟评模型看的资料。
+// 群里的事实通知保持简洁；仓库简介、Issue/Release 正文和代码改动在这里补齐。
+func renderRepositoryWatchReferenceWithPatch(change repositoryWatchChange, includePatch bool) string {
+	sections := make([]string, 0, 4)
+	if description := strings.TrimSpace(change.Description); description != "" {
+		sections = append(sections, "仓库简介：\n"+description)
+	}
+	for _, pullRequest := range change.PullRequests {
+		if body := strings.TrimSpace(pullRequest.Body); body != "" {
+			sections = append(sections, fmt.Sprintf("PR #%d 描述：\n%s", pullRequest.Number, body))
+		}
+	}
+	for _, issue := range change.Issues {
+		if body := strings.TrimSpace(issue.Body); body != "" {
+			sections = append(sections, fmt.Sprintf("Issue #%d 正文：\n%s", issue.Number, body))
+		}
+	}
+	for _, release := range change.Releases {
+		if body := strings.TrimSpace(release.Body); body != "" {
+			sections = append(sections, fmt.Sprintf("Release %s 更新说明：\n%s", firstNonEmpty(strings.TrimSpace(release.Tag), strings.TrimSpace(release.Name)), body))
+		}
+	}
+	if diff := renderRepositoryWatchDiffDigestWithPatch(change, includePatch); diff != "" {
+		sections = append(sections, diff)
+	}
+	return strings.TrimSpace(strings.Join(sections, "\n\n"))
 }
 
 func renderRepositoryWatchDiffFiles(files []repositoryWatchDiffFile, truncated bool) string {
@@ -10743,7 +10768,7 @@ func firstNonZeroTime(values ...time.Time) time.Time {
 	return time.Time{}
 }
 
-func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWatchSnapshot, pending string) error {
+func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWatchSnapshot, pending, reference string) error {
 	if r.reminders == nil {
 		return fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -10776,10 +10801,12 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 			item.LastNotifiedStarCount = snapshot.StarNotifiedCount
 		}
 		item.PendingDelivery = strings.TrimSpace(pending)
+		item.PendingDeliveryReference = strings.TrimSpace(reference)
 		if item.PendingDelivery != "" {
 			item.PendingSince = time.Now()
 		} else {
 			item.PendingSince = time.Time{}
+			item.PendingDeliveryReference = ""
 		}
 		if err := r.reminders.SaveReminders(items); err != nil {
 			return fmt.Errorf("保存仓库更新订阅游标: %w", err)
@@ -10817,6 +10844,7 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 			items[index].ConsecutiveFailures = 0
 			resetRecurringFailureStateAfterSuccess(&items[index])
 			items[index].PendingDelivery = ""
+			items[index].PendingDeliveryReference = ""
 			items[index].PendingSince = time.Time{}
 			items[index].TriggerAt = nextScheduledTrigger(startedAt, time.Duration(items[index].IntervalSeconds)*time.Second, time.Now())
 		}
