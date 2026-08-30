@@ -75,20 +75,19 @@
   }
   .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; color: var(--text-dim); }
   .nav-links a:hover { color: var(--text); }
+  /* 三项统一成同高的盒子：带文字的和纯图标的行高不同，不固定 height 就会
+     出现 35 / 25 / 32 三种高度，视觉上顶不齐。 */
   .nav-icon {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 10px; border-radius: 7px;
-    color: var(--text);
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 10px; border-radius: 7px;
+    border: none; background: transparent;
+    font-family: var(--font); font-size: 14px;
+    color: var(--text); cursor: pointer;
   }
   .nav-icon:hover { color: var(--accent); background: var(--accent-soft); }
-  .theme-btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 32px; height: 32px; padding: 0;
-    border: none; border-radius: 7px;
-    background: transparent; color: var(--text);
-    cursor: pointer;
-  }
-  .theme-btn:hover { color: var(--accent); background: var(--accent-soft); }
+  /* 纯图标项按正方形排，和带文字那项左右留白一致。 */
+  .nav-icon.icon-only { width: 32px; padding: 0; }
+  .nav-icon svg { display: block; flex-shrink: 0; }
 
   /* ---------- hero ---------- */
   .hero { padding: 88px 0 56px; text-align: center; }
@@ -97,10 +96,10 @@
     max-width: 620px; margin: 18px auto 0;
     font-size: clamp(15px, 2vw, 17px); color: var(--text-dim);
   }
-  .hero-cta { margin-top: 32px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .hero-cta { margin-top: 32px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
-    border-radius: 8px; padding: 10px 22px;
+    border-radius: 8px; padding: 10px 18px;
     font-size: 15px; font-weight: 500;
     transition: background .15s ease, border-color .15s ease;
   }
@@ -109,7 +108,9 @@
   .btn-ghost { border: 1px solid var(--line-strong); color: var(--text); }
   .btn-ghost:hover { border-color: var(--accent); }
 
-  .install-box { margin: 30px auto 0; max-width: 620px; text-align: left; }
+  /* 宽度按最长的那条命令定：docker 那条渲染出来 750px，加上复制按钮 59px，
+     820px 才放得下，留点余量取 840。窄于这个宽度时仍可横向滚动。 */
+  .install-box { margin: 30px auto 0; max-width: 840px; text-align: left; }
   .install-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
   .install-tab {
     border: 1px solid transparent; border-radius: 7px;
@@ -177,7 +178,7 @@
 
   /* quickstart */
   .qs { background: var(--bg-soft); border-block: 1px solid var(--line); }
-  .qs-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .qs-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
   .qs-card {
     background: var(--bg-card); border: 1px solid var(--line);
     border-radius: var(--radius); overflow: hidden;
@@ -189,9 +190,12 @@
   }
   .qs-card-head .copy-btn { padding: 0; border: none; }
   .qs-card pre {
-    padding: 16px; overflow-x: auto;
-    font-family: var(--mono); font-size: 13px; line-height: 1.8;
+    padding: 16px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.8;
     color: var(--text);
+    /* 卡片放不下整条命令时折行显示。原来是 overflow-x:auto，滚动条不可见，
+       看起来就是被切掉——加了第三张卡之后每张更窄，问题会更明显。 */
+    white-space: pre-wrap; overflow-wrap: anywhere;
   }
   .qs-card pre .c { color: var(--code-comment); }
   .qs-steps { margin-top: 36px; display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
@@ -252,10 +256,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H5.5A1.5 1.5 0 0 1 4 17z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 0 20 17z"/></svg>
         文档
       </a>
-      <a class="nav-icon" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      <a class="nav-icon icon-only" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
       </a>
-      <button class="theme-btn nav-icon" type="button" data-theme-toggle><span data-theme-icon aria-hidden="true"></span></button>
+      <button class="nav-icon icon-only" type="button" data-theme-toggle><span data-theme-icon aria-hidden="true"></span></button>
     </div>
   </div>
 </nav>
@@ -269,13 +273,20 @@
       配置、记忆和日志都存在本机的 SQLite 里，不依赖任何托管服务。
     </p>
     <div class="hero-cta">
-      <!-- 首页本身就是快速开始，再放一个跳到本页锚点的按钮是绕圈；
-           首屏该给的是「去哪看细节」和「先看看效果」。 -->
-      <a class="btn btn-primary" href="./deploy.html">
+      <!-- 一个明确的主操作（安装）+ 三个次要入口。成熟项目的首屏基本都是这个
+           结构：主操作填色、其余描边，权重一眼可分。 -->
+      <a class="btn btn-primary" href="#quickstart">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        快速开始
+      </a>
+      <a class="btn btn-ghost" href="./deploy.html">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H5.5A1.5 1.5 0 0 1 4 17z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 0 20 17z"/></svg>
         查看文档
       </a>
-      <a class="btn btn-ghost" href="./demo.html">在线演示</a>
+      <a class="btn btn-ghost" href="./demo.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5z"/></svg>
+        在线演示
+      </a>
       <a class="btn btn-ghost" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         GitHub
@@ -285,10 +296,12 @@
       <div class="install-tabs">
         <button class="install-tab" data-os="sh">Linux / macOS</button>
         <button class="install-tab" data-os="ps">Windows</button>
+        <button class="install-tab" data-os="docker">Docker</button>
       </div>
       <div class="install-line">
         <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code>
         <code id="install-cmd-ps" data-os="ps" hidden>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code>
+        <code id="install-cmd-docker" data-os="docker" hidden>docker run -d --name diana -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</code>
         <button class="copy-btn" id="install-copy">复制</button>
       </div>
     </div>
@@ -377,11 +390,16 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
         <pre id="cmd-ps"><span class="c"># 安装与升级用同一条命令</span>
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</pre>
       </div>
+      <div class="qs-card">
+        <div class="qs-card-head">Docker<button class="copy-btn" data-copy="cmd-docker">复制</button></div>
+        <pre id="cmd-docker"><span class="c"># 用已发布的镜像，不必克隆仓库</span>
+docker run -d --name diana -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</pre>
+      </div>
     </div>
     <div class="qs-steps">
       <div class="qs-step"><h4><span>1</span>执行安装命令</h4><p>生成的管理员账号和密码会显示在终端，并保存在安装目录的 <code>config.yaml</code>。</p></div>
       <div class="qs-step"><h4><span>2</span>打开控制台</h4><p>访问 <code>127.0.0.1:18080</code>，用终端里显示的管理员账号登录。</p></div>
-      <div class="qs-step"><h4><span>3</span>接入通道与模型</h4><p>在 WebUI 里配置 OneBot / Telegram 通道，为各职责绑定模型。</p></div>
+      <div class="qs-step"><h4><span>3</span>接入通道与模型</h4><p>在 WebUI 里按平台填写凭据，六个通道可同时启用，并为各职责绑定模型。</p></div>
       <div class="qs-step"><h4><span>4</span>后续升级</h4><p>控制台可直接升级，也可以重复执行安装命令；失败自动恢复。</p></div>
     </div>
   </div>
