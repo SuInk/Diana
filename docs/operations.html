@@ -4,7 +4,8 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Diana 更新、备份、故障排查和开发发布手册。" />
     <meta name="theme-color" content="#100d13" />
     <title>Diana 文档 - 运维</title>
@@ -77,15 +78,15 @@ cd frontend-next
 npm ci
 npm run build
 
-# 文档预览
+# 文档预览（站点用无扩展名地址，需要支持 clean URL 的服务器）
 cd ..
-python3 -m http.server 4173 --directory docs</code></pre>
+npx serve docs</code></pre>
         <p>CI 覆盖 Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker。版本发布从已合并的默认分支打标签，Release 同时生成完整包、裸二进制和 <code>SHA256SUMS</code>。Release 说明必须写清更新点、兼容影响、验证方式与升级注意事项。</p>
         <h3>GitHub Pages</h3>
-        <p>站点位于 <code>docs/</code>，没有构建时依赖。默认分支的文档或一键脚本更新后，GitHub Actions 上传静态 artifact 并部署 Pages。</p>
+        <p>站点位于 <code>docs/</code>，没有构建时依赖。默认分支的文档或一键脚本更新后，GitHub Actions 上传静态 artifact 并部署 Pages。页面之间用无扩展名地址（<code>/deploy</code> 而不是 <code>/deploy.html</code>），GitHub Pages 会自动解析到对应的 <code>.html</code>；本地预览要用支持这一行为的服务器，<code>python3 -m http.server</code> 会 404。</p>
       </section>
 
-      <nav class="page-nav" aria-label="文档分页"><a href="./implementation.html"><small>上一页</small><strong>← 实现</strong></a><span></span></nav>
+      <nav class="page-nav" aria-label="文档分页"><a href="./implementation"><small>上一页</small><strong>← 实现</strong></a><span></span></nav>
       <div data-docs-footer></div>
     </main></div>
     <script src="./app.js?v=20260842" defer></script>

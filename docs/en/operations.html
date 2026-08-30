@@ -4,12 +4,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Operating Diana: updates and rollback, health checks, logs and backups, troubleshooting and the release process." />
     <meta name="theme-color" content="#100d13" />
     <title>Diana docs — Operate</title>
-    <link rel="alternate" hreflang="zh" href="../operations.html" />
-    <link rel="alternate" hreflang="en" href="./operations.html" />
+    <link rel="alternate" hreflang="zh" href="../operations" />
+    <link rel="alternate" hreflang="en" href="./operations" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -80,15 +81,15 @@ cd frontend-next
 npm ci
 npm run build
 
-# preview the docs
+# preview the docs (the site uses clean URLs, so the server must support them)
 cd ..
-python3 -m http.server 4173 --directory docs</code></pre>
+npx serve docs</code></pre>
         <p>CI covers Linux amd64/arm64, Darwin amd64/arm64, Windows amd64 and Docker. Releases are tagged from the merged default branch, and each one produces full archives, bare binaries and <code>SHA256SUMS</code>. Release notes must state what changed, any compatibility impact, how it was verified and anything to watch when upgrading.</p>
         <h3>GitHub Pages</h3>
-        <p>The site lives in <code>docs/</code> with no build step. When the docs or the install script change on the default branch, GitHub Actions uploads the static artifact and deploys Pages.</p>
+        <p>The site lives in <code>docs/</code> with no build step. When the docs or the install script change on the default branch, GitHub Actions uploads the static artifact and deploys Pages. Pages link to each other without a file extension (<code>/deploy</code> rather than <code>/deploy.html</code>) and GitHub Pages resolves those to the matching <code>.html</code>; a local preview needs a server that does the same, as <code>python3 -m http.server</code> returns 404 for them.</p>
       </section>
 
-      <nav class="page-nav" aria-label="Pagination"><a href="./implementation.html"><small>Previous</small><strong>← Internals</strong></a><a href="./index.html"><small>Next</small><strong>Overview →</strong></a></nav>
+      <nav class="page-nav" aria-label="Pagination"><a href="./implementation"><small>Previous</small><strong>← Internals</strong></a><a href="./"><small>Next</small><strong>Overview →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
     <script src="../app.js?v=20260842" defer></script>
