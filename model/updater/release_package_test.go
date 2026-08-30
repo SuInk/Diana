@@ -297,6 +297,10 @@ func TestApplyReleasePlanBacksUpAndSwitchesHealthyPackage(t *testing.T) {
 
 func TestApplyReleasePlanRestoresPackageAndDatabaseAfterFailedHealthCheck(t *testing.T) {
 	plan := releaseApplyFixture(t)
+	backupsRoot := filepath.Dir(plan.BackupRoot)
+	for _, name := range []string{"20260101-old", "20260201-old", "20260301-old", "20260401-old"} {
+		writeUpdaterTestFile(t, filepath.Join(backupsRoot, name, "database", "diana.db"), name, 0o600)
+	}
 	processes := []*fakeReleaseProcess{{}, {}}
 	launches := 0
 	healthChecks := 0
@@ -332,6 +336,21 @@ func TestApplyReleasePlanRestoresPackageAndDatabaseAfterFailedHealthCheck(t *tes
 	state, ok := readReleaseState(plan.InstallRoot)
 	if !ok || state.Status != "rolled_back" || !strings.Contains(state.Error, "new version unhealthy") {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
+	}
+	entries, err := os.ReadDir(backupsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("backup count = %d, want 3", len(entries))
+	}
+	for _, name := range []string{"20260101-old", "20260201-old"} {
+		if _, err := os.Stat(filepath.Join(backupsRoot, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("old backup %s was not pruned: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(plan.BackupRoot); err != nil {
+		t.Fatalf("current rollback backup missing: %v", err)
 	}
 }
 
