@@ -265,8 +265,11 @@ func TestRunnerFinalizesAfterToolBudgetExhausted(t *testing.T) {
 	}
 }
 
-func TestRunnerDoesNotLeakEmptyFinalEnvelope(t *testing.T) {
-	client := &scriptedClient{responses: []string{`{"action":"final","content":""}`}}
+func TestRunnerRepairsEmptyFinalize(t *testing.T) {
+	client := &scriptedClient{responses: []string{
+		`{"action":"final","content":""}`,
+		`{"action":"final","content":"补上正文了"}`,
+	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry())
 	if err != nil {
 		t.Fatal(err)
@@ -275,8 +278,40 @@ func TestRunnerDoesNotLeakEmptyFinalEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Text != "" {
+	if resp.Text != "补上正文了" {
 		t.Fatalf("Text = %q", resp.Text)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(client.requests))
+	}
+	repairSeen := false
+	for _, msg := range client.requests[1].Messages {
+		if strings.Contains(msg.Content, "没有携带任何正文") {
+			repairSeen = true
+			break
+		}
+	}
+	if !repairSeen {
+		t.Fatal("repair prompt for empty finalize was not sent back to the model")
+	}
+}
+
+func TestRunnerFailsWithEmptyFinalizeAfterRepairsExhausted(t *testing.T) {
+	// 默认修复预算 3 次；收尾阶段是最后一次机会，仍为空则按协议错误失败，
+	// 不能返回空文本让下游兜底发送。
+	client := &scriptedClient{responses: []string{
+		`{"action":"final","content":""}`,
+		`{"action":"final","content":""}`,
+		`{"action":"final","content":""}`,
+		`{"action":"final","content":""}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "你好"}}})
+	if !errors.Is(err, errEmptyFinalize) {
+		t.Fatalf("err = %v, want errEmptyFinalize", err)
 	}
 }
 
