@@ -354,6 +354,30 @@ func TestApplyReleasePlanRestoresPackageAndDatabaseAfterFailedHealthCheck(t *tes
 	}
 }
 
+func TestReleaseFailureCountPersistsForSameTargetAndResetsForNewTarget(t *testing.T) {
+	plan := releaseApplyFixture(t)
+	failed := releaseUpdateState{TargetVersion: "v0.5.0", Status: "rolled_back", At: time.Now()}
+	for want := 1; want <= 3; want++ {
+		if err := writeReleaseState(plan, failed); err != nil {
+			t.Fatal(err)
+		}
+		state, ok := readReleaseState(plan.InstallRoot)
+		if !ok || state.FailureCount != want {
+			t.Fatalf("failure %d state = %#v, ok = %v", want, state, ok)
+		}
+		if err := writeReleaseState(plan, releaseUpdateState{TargetVersion: "v0.5.0", Status: "downloaded", At: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeReleaseState(plan, releaseUpdateState{TargetVersion: "v0.6.0", Status: "downloaded", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := readReleaseState(plan.InstallRoot)
+	if !ok || state.FailureCount != 0 {
+		t.Fatalf("new target state = %#v, ok = %v", state, ok)
+	}
+}
+
 func TestApplyReleasePlanRestartsOldVersionWhenUpdatedProcessCannotLaunch(t *testing.T) {
 	plan := releaseApplyFixture(t)
 	oldProcess := &fakeReleaseProcess{}

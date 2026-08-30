@@ -648,6 +648,24 @@ func (h *SystemUpdateHandler) runAutoUpdate(ctx context.Context) {
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
+	if policy.AutoInstall {
+		latest, latestErr := h.latestStableRelease(runCtx, "")
+		status, statusErr := h.releaseUpdater.Status(runCtx)
+		if latestErr != nil {
+			h.recordBackgroundUpdate("system.update.auto_install", "检查自动安装熔断状态失败", latestErr, nil)
+			return
+		}
+		if statusErr != nil {
+			h.recordBackgroundUpdate("system.update.auto_install", "读取自动安装熔断状态失败", statusErr, nil)
+			return
+		}
+		if status.LastUpdateVersion == latest.Tag && status.LastUpdateFailures >= 3 {
+			h.recordBackgroundUpdate("system.update.auto_install_blocked", "本版本连续安装失败 3 次，已停止自动重试", nil, map[string]any{
+				"target": latest.Tag, "failure_count": status.LastUpdateFailures,
+			})
+			return
+		}
+	}
 	result, err := h.downloadLatestRelease(runCtx, false)
 	if err != nil {
 		h.recordBackgroundUpdate("system.update.auto_download", "自动下载更新失败", err, nil)
