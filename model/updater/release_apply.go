@@ -55,6 +55,7 @@ type releaseUpdateState struct {
 	TargetVersion  string    `json:"target_version"`
 	Previous       string    `json:"previous_version,omitempty"`
 	Status         string    `json:"status"`
+	FailureCount   int       `json:"failure_count,omitempty"`
 	BackupRoot     string    `json:"backup_root,omitempty"`
 	DatabaseBackup string    `json:"database_backup,omitempty"`
 	Error          string    `json:"error,omitempty"`
@@ -545,6 +546,19 @@ func validReleaseHealthURL(raw string) bool {
 }
 
 func writeReleaseState(plan releaseApplyPlan, state releaseUpdateState) error {
+	previous, ok := readReleaseState(plan.InstallRoot)
+	sameTarget := ok && previous.TargetVersion == state.TargetVersion
+	switch state.Status {
+	case "failed", "rolled_back":
+		state.FailureCount = 1
+		if sameTarget {
+			state.FailureCount += previous.FailureCount
+		}
+	case "downloaded":
+		if sameTarget {
+			state.FailureCount = previous.FailureCount
+		}
+	}
 	return writePrivateJSON(filepath.Join(plan.InstallRoot, ".diana-updates", "last-update.json"), state)
 }
 
