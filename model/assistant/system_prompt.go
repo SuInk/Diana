@@ -89,7 +89,7 @@ const (
 	promptOwnerRelationshipTarget = "当前发言者是主人：要求设置或增减别人的好感度时，必须调用 diana.relationship 的 set/adjust 并传对目标用户，不要把目标写成主人自己。"
 	promptOwnerTaskTarget         = "当前发言者是主人：要求查看、创建、修改、取消或删除别人的提醒与订阅时，必须在任务工具里传 target_user_id，不要把目标写成主人自己。"
 
-	promptTaskReminder = "用户要求过一段时间提醒一次时，调用 diana.reminder；取消或删除单项提醒也用它。"
+	promptTaskReminder = "用户要求过一段时间提醒一次时，调用 diana.reminder 并传 delay；用户指定今晚七点、明天下午三点等绝对时间点时传 at（RFC3339），不要把绝对时间换算成 delay；取消或删除单项提醒也用它。"
 	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知时，调用 diana.schedule；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控不走这个工具。"
 	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 diana.rss，judge_prompt 里写清通知条件和回复要求。"
 	promptTaskList     = "查询当前用户的全部提醒和订阅时，必须调用 diana.tasks。"

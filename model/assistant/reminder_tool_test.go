@@ -78,6 +78,72 @@ func TestDianaReminderToolCreatesAtMostFivePerCall(t *testing.T) {
 	}
 }
 
+func TestDianaReminderToolAcceptsAbsoluteTriggerTime(t *testing.T) {
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	tool := newDianaReminderTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001", Time: time.Now().Add(-24 * time.Hour).Unix()})
+	want := time.Now().Add(2 * time.Hour).Truncate(time.Second)
+	raw, err := tool.Run(context.Background(), map[string]any{
+		"operation": "create",
+		"at":        want.Format(time.RFC3339),
+		"message":   "绝对时间提醒",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaReminderResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Reminder == nil || len(store.items) != 1 {
+		t.Fatalf("result=%#v items=%#v", result, store.items)
+	}
+	if delta := store.items[0].TriggerAt.Sub(want); delta < -time.Second || delta > time.Second {
+		t.Fatalf("trigger=%s want=%s delta=%s", store.items[0].TriggerAt, want, delta)
+	}
+}
+
+func TestDianaReminderToolRejectsMixedTargets(t *testing.T) {
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	tool := newDianaReminderTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"})
+	_, err := tool.Run(context.Background(), map[string]any{
+		"operation": "create",
+		"delay":     "1m",
+		"at":        time.Now().Add(time.Hour).Format(time.RFC3339),
+		"message":   "冲突",
+	})
+	if err == nil || !strings.Contains(err.Error(), "只能二选一") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestDianaReminderToolWarnsWhenTargetAlreadyPassed(t *testing.T) {
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	tool := newDianaReminderTool(runtime, MessageEvent{
+		Kind: EventKindPrivate, UserID: "10001", Time: time.Now().Add(-2 * time.Hour).Unix(),
+	})
+	raw, err := tool.Run(context.Background(), map[string]any{
+		"operation": "create",
+		"delay":     "1m",
+		"message":   "已过期目标",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaReminderResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || len(result.Warnings) != 1 || !strings.Contains(result.Message, "警告") || len(store.items) != 1 {
+		t.Fatalf("result=%#v items=%#v", result, store.items)
+	}
+	if remaining := time.Until(store.items[0].TriggerAt); remaining > time.Second {
+		t.Fatalf("expired target was not made immediate: remaining=%s", remaining)
+	}
+}
+
 func TestDianaReminderBatchUsesRemainingQuota(t *testing.T) {
 	store := &stubReminderStore{}
 	for index := 0; index < 14; index++ {
