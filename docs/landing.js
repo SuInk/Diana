@@ -21,7 +21,7 @@ const t = {
 // 图片只有一份，放在 docs/assets/；英文页在 docs/en/ 下，要往上一级取。
 const assetBase = lang === "en" ? "../" : "./";
 
-  lucide.createIcons();
+  window.DianaIcons.render();
 
   // 首屏安装命令按访客平台切换
   (() => {
@@ -47,13 +47,10 @@ const assetBase = lang === "en" ? "../" : "./";
   (() => {
     const button = document.querySelector("[data-theme-toggle]");
     const icon = document.querySelector("[data-theme-icon]");
-    const svg = (path, extra = "") =>
-      `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${path}${extra}</svg>`;
     const glyphs = {
-      // 跟随系统画成月牙加光芒：既不是纯月也不是纯日，一眼看出是「两者都跟」。
-      system: svg('<path d="M16 14.6A7.6 7.6 0 0 1 8.4 7a7.6 7.6 0 1 0 7.6 7.6z"/><path d="M18.4 3.1v1.8M21.8 4.6l-1.3 1.3M23.2 8.2h-1.8"/>'),
-      dark: svg('<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>'),
-      light: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>')
+      system: window.DianaIcons.svg("sun-moon", 18),
+      dark: window.DianaIcons.svg("moon", 18),
+      light: window.DianaIcons.svg("sun", 18),
     };
     const labels = t.themeLabels;
     const shot = document.getElementById("console-shot");

@@ -49,7 +49,8 @@
      只有 max-width 会把宽度压到容器宽、高度却仍按属性值走，比例就崩了。 */
   img { max-width: 100%; height: auto; display: block; }
   .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
-  .lucide { width: 20px; height: 20px; stroke-width: 1.8; }
+  /* 尺寸与线宽都由 icons.js 按 data-size 生成，这里不再覆盖——
+     stroke-width 写死会让不同尺寸的图标粗细不一。 */
 
   /* ---------- nav ---------- */
   .nav {
@@ -233,7 +234,7 @@
   }
   .doc-card:hover { border-color: var(--accent); }
   .doc-card h3 { font-size: 15px; margin-bottom: 6px; display: flex; align-items: center; gap: 9px; }
-  .doc-card h3 .lucide { width: 17px; height: 17px; color: var(--accent); }
+  .doc-card h3 svg { color: var(--accent); }
   .doc-card p { font-size: 13.5px; color: var(--text-dim); }
 
   /* footer */
