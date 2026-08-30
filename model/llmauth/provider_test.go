@@ -53,3 +53,82 @@ func TestNormalizeRejectsHeaderInjection(t *testing.T) {
 		})
 	}
 }
+
+// 换令牌的请求体格式：默认是 RFC 6749 规定的 form，只认 form 和 json。
+func TestNormalizeTokenRequestFormat(t *testing.T) {
+	base := Provider{
+		Key:          "example",
+		AuthorizeURL: "https://example.invalid/authorize",
+		TokenURL:     "https://example.invalid/token",
+	}
+	for _, tc := range []struct {
+		in   TokenRequestFormat
+		want TokenRequestFormat
+	}{
+		{"", TokenRequestForm},
+		{"  JSON ", TokenRequestJSON},
+		{"form", TokenRequestForm},
+	} {
+		provider := base
+		provider.TokenRequestFormat = tc.in
+		normalized, err := provider.Normalize()
+		if err != nil {
+			t.Fatalf("Normalize(%q) error = %v", tc.in, err)
+		}
+		if normalized.TokenRequestFormat != tc.want {
+			t.Fatalf("Normalize(%q) = %q, want %q", tc.in, normalized.TokenRequestFormat, tc.want)
+		}
+	}
+	provider := base
+	provider.TokenRequestFormat = "xml"
+	if _, err := provider.Normalize(); err == nil {
+		t.Fatal("Normalize() accepted an unknown token request format")
+	}
+}
+
+// 内置的 OpenRouter 走的不是标准令牌端点，它的文档写死了 application/json。
+func TestOpenRouterKeepsJSONTokenRequests(t *testing.T) {
+	for _, provider := range builtinProviders() {
+		if provider.Key != "openrouter" {
+			continue
+		}
+		normalized, err := provider.Normalize()
+		if err != nil {
+			t.Fatalf("Normalize() error = %v", err)
+		}
+		if normalized.TokenRequestFormat != TokenRequestJSON {
+			t.Fatalf("OpenRouter token request format = %q, want json", normalized.TokenRequestFormat)
+		}
+		return
+	}
+	t.Fatal("OpenRouter is no longer a built-in provider")
+}
+
+// 请求体按声明的格式打包，form 是默认。
+func TestEncodeTokenRequest(t *testing.T) {
+	payload := map[string]string{"grant_type": "authorization_code", "code": "a b&c"}
+
+	body, contentType, err := encodeTokenRequest(TokenRequestForm, payload)
+	if err != nil {
+		t.Fatalf("encodeTokenRequest() error = %v", err)
+	}
+	if contentType != "application/x-www-form-urlencoded" {
+		t.Fatalf("form content type = %q", contentType)
+	}
+	// url.Values.Encode 按键名排序，所以这里可以整串比对，顺带确认转义。
+	if body != "code=a+b%26c&grant_type=authorization_code" {
+		t.Fatalf("form body = %q", body)
+	}
+
+	body, contentType, err = encodeTokenRequest(TokenRequestJSON, payload)
+	if err != nil {
+		t.Fatalf("encodeTokenRequest() error = %v", err)
+	}
+	if contentType != "application/json" {
+		t.Fatalf("json content type = %q", contentType)
+	}
+	// encoding/json 会把 & 转义成 \u0026，这里照实比对，免得下次有人「修好」它。
+	if body != `{"code":"a b\u0026c","grant_type":"authorization_code"}` {
+		t.Fatalf("json body = %q", body)
+	}
+}

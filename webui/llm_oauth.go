@@ -56,7 +56,9 @@ type oauthProviderPayload struct {
 	TokenHeaders map[string]string `json:"token_headers"`
 	TokenHeader  string            `json:"token_header"`
 	TokenScheme  string            `json:"token_scheme"`
-	Notes        string            `json:"notes"`
+	// TokenRequestFormat 是 "form" 或 "json"，留空即 form。
+	TokenRequestFormat string `json:"token_request_format"`
+	Notes              string `json:"notes"`
 }
 
 type oauthLoginPayload struct {
@@ -95,7 +97,10 @@ func (h *LLMConfigHandler) oauthSaveProvider(c *gin.Context) {
 		TokenHeaders: payload.TokenHeaders,
 		TokenHeader:  payload.TokenHeader,
 		TokenScheme:  payload.TokenScheme,
-		Notes:        payload.Notes,
+
+		TokenRequestFormat: llmauth.TokenRequestFormat(payload.TokenRequestFormat),
+
+		Notes: payload.Notes,
 	}
 	// 读接口把 client secret 脱敏成 ***，原样提交回来时视为「没改」，
 	// 否则用户只改了个 scope 就会把 secret 冲成三个星号。
