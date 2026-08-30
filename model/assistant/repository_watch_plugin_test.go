@@ -126,7 +126,7 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 	}
 	if r.URL.Path == "/repos/acme/demo" {
 		s.starCalls++
-		_ = json.NewEncoder(w).Encode(map[string]any{"stargazers_count": s.starCount, "html_url": "https://github.com/acme/demo"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"stargazers_count": s.starCount, "html_url": "https://github.com/acme/demo", "description": "A repository used to test delivery behavior."})
 		return
 	}
 	http.NotFound(w, r)
@@ -189,7 +189,7 @@ func repositoryWatchPullPayload(number int, title, state, mergeSHA, updatedAt st
 		state = "closed"
 	}
 	return map[string]any{
-		"number": number, "title": title, "state": state,
+		"number": number, "title": title, "body": "PR 的设计说明", "state": state,
 		"html_url":   "https://github.com/acme/demo/pull/" + fmt.Sprint(number),
 		"created_at": "2026-08-13T00:00:00Z", "updated_at": updatedAt, "merged_at": mergedAt,
 		"merge_commit_sha": mergeSHA, "user": map[string]any{"login": "diana"},
@@ -793,7 +793,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 	}
 	// 只看标题写不出具体的话，所以改动清单要进提示词——但必须带着「会话里没人看得到」
 	// 这句框住，否则模型会拿它当已发内容去接话。
-	for _, want := range []string{"会话里没有人看得到它", "model/assistant/repository_watch_plugin.go", "本次新增提交合计改动", "PR #2 的改动"} {
+	for _, want := range []string{"会话里没有人看得到它", "A repository used to test delivery behavior.", "PR #2 描述", "PR 的设计说明", "Release v1.1.0 更新说明", "完整更新说明", "model/assistant/repository_watch_plugin.go", "本次新增提交合计改动", "PR #2 的改动"} {
 		if !requestMessagesContain(followUp.Messages, want) {
 			t.Fatalf("follow-up prompt missing diff reference %q: %#v", want, followUp.Messages)
 		}
@@ -838,7 +838,7 @@ func TestRuntimeRepositoryWatchRetriesStoredNotificationAndCommentsOnlyAfterDeli
 	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(plugin), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
 	runtime.fireDueReminders(context.Background())
 	// 第一轮连事实卡片都没送出去，没有可评的东西，不该有任何模型调用。
-	if len(provider.requestsSnapshot()) != 0 || store.items[0].PendingDelivery == "" || store.items[0].LastCommitSHA != "new-sha" || store.items[0].ConsecutiveFailures != 1 {
+	if len(provider.requestsSnapshot()) != 0 || store.items[0].PendingDelivery == "" || store.items[0].PendingDeliveryReference == "" || store.items[0].LastCommitSHA != "new-sha" || store.items[0].ConsecutiveFailures != 1 {
 		t.Fatalf("requests=%d item=%#v", len(provider.requestsSnapshot()), store.items[0])
 	}
 
@@ -847,6 +847,15 @@ func TestRuntimeRepositoryWatchRetriesStoredNotificationAndCommentsOnlyAfterDeli
 	// 补投成功之后才轮到跟评，而且补投用的是存下来的原文，不重新渲染。
 	if len(provider.requestsSnapshot()) != 1 || store.items[0].PendingDelivery != "" || store.items[0].ConsecutiveFailures != 0 {
 		t.Fatalf("requests=%d item=%#v", len(provider.requestsSnapshot()), store.items[0])
+	}
+	if store.items[0].PendingDeliveryReference != "" {
+		t.Fatalf("pending reference was not cleared: %#v", store.items[0])
+	}
+	requests := provider.requestsSnapshot()
+	for _, want := range []string{"A repository used to test delivery behavior.", "model/assistant/runtime.go", "本次新增提交合计改动"} {
+		if !requestMessagesContain(requests[0].Messages, want) {
+			t.Fatalf("retried follow-up lost %q: %#v", want, requests[0].Messages)
+		}
 	}
 	github.mu.Lock()
 	defer github.mu.Unlock()
@@ -1857,6 +1866,20 @@ func TestRepositoryWatchDiffDigestIsBudgetedAndRanked(t *testing.T) {
 	digest = renderRepositoryWatchDiffDigest(repositoryWatchChange{CommitDiff: &repositoryWatchDiff{Files: oversized}})
 	if got := len([]rune(digest)); got > repositoryWatchDiffDigestRunes+len("...") {
 		t.Fatalf("digest not budgeted: %d runes", got)
+	}
+}
+
+func TestRepositoryWatchReferenceIncludesIssueAndReleaseBodies(t *testing.T) {
+	reference := renderRepositoryWatchReferenceWithPatch(repositoryWatchChange{
+		Description:  "机器人服务仓库",
+		PullRequests: []repositoryWatchPullRequest{{Number: 8, Body: "PR 的实现目标"}},
+		Issues:       []repositoryWatchIssue{{Number: 12, Body: "Issue 的完整复现步骤"}},
+		Releases:     []repositoryWatchRelease{{Tag: "v1.2.3", Body: "本次修复了消息重复发送"}},
+	}, false)
+	for _, want := range []string{"仓库简介", "机器人服务仓库", "PR #8 描述", "PR 的实现目标", "Issue #12 正文", "完整复现步骤", "Release v1.2.3 更新说明", "消息重复发送"} {
+		if !strings.Contains(reference, want) {
+			t.Fatalf("reference missing %q: %s", want, reference)
+		}
 	}
 }
 

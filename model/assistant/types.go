@@ -192,11 +192,14 @@ type Reminder struct {
 	FailureAlertedAt        time.Time    `json:"failure_alerted_at,omitempty"`
 	RecoveryNoticePending   bool         `json:"recovery_notice_pending,omitempty"`
 	PendingDelivery         string       `json:"pending_delivery,omitempty"`
-	PendingSince            time.Time    `json:"pending_since,omitempty"`
-	Repository              string       `json:"repository,omitempty"`
-	RepositoryBranch        string       `json:"repository_branch,omitempty"`
-	WatchCommits            bool         `json:"watch_commits,omitempty"`
-	WatchPullRequests       bool         `json:"watch_pull_requests,omitempty"`
+	// PendingDeliveryReference 是仓库通知补投成功后生成跟评所需的私有参考资料。
+	// 它不发送到会话，只避免投递失败后丢失仓库简介、正文和 diff。
+	PendingDeliveryReference string    `json:"pending_delivery_reference,omitempty"`
+	PendingSince             time.Time `json:"pending_since,omitempty"`
+	Repository               string    `json:"repository,omitempty"`
+	RepositoryBranch         string    `json:"repository_branch,omitempty"`
+	WatchCommits             bool      `json:"watch_commits,omitempty"`
+	WatchPullRequests        bool      `json:"watch_pull_requests,omitempty"`
 	// WatchPullRequestEvents / WatchIssueEvents 是只想收的动态种类，空表示全要。
 	WatchPullRequestEvents []string  `json:"watch_pull_request_events,omitempty"`
 	WatchIssueEvents       []string  `json:"watch_issue_events,omitempty"`
