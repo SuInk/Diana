@@ -173,6 +173,7 @@ export interface BotProfileConfig {
   system_prompt?: string;
   response_mode?: "quiet" | "standard" | "active" | "custom";
   reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  action_description_enabled?: boolean;
   /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
   self_reference?: string;
   /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随表达风格。 */
@@ -382,6 +383,8 @@ export interface BotGroupConfig {
   response_mode?: "" | "quiet" | "standard" | "active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
   reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  /** 本群是否穿插括号动作；不设表示跟随机器人。 */
+  action_description_enabled?: boolean;
   /** 留空时跟随机器人全局设置。 */
   self_reference?: string;
   sentence_enders?: string;
@@ -1718,6 +1721,7 @@ export interface Persona {
   name: string;
   system_prompt?: string;
   reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  action_description_enabled?: boolean;
   self_reference?: string;
   sentence_enders?: string;
   updated_at?: string;

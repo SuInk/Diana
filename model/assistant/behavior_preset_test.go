@@ -544,8 +544,8 @@ func TestRoleplayReplyStyleTeachesActionsAndKeepsBrakes(t *testing.T) {
 		}
 	}
 	prompt := ReplyStyleRoleplay.prompt(true, personaVoice{})
-	// 骨架：括号里的动作 + 台词，动作要短。
-	for _, want := range []string{"（动作或神态）+ 一句台词", "一句话以内", "第三人称叙述"} {
+	// 骨架：括号动作可在台词间自然穿插多次，每处都要短。
+	for _, want := range []string{"台词前、中间或结尾", "不必只写一处", "每处一句话以内", "第三人称叙述"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("扮演提示词缺少写法要点 %q：%q", want, prompt)
 		}
@@ -570,7 +570,7 @@ func TestRoleplayReplyStyleTeachesActionsAndKeepsBrakes(t *testing.T) {
 			t.Fatalf("扮演提示词漏掉了全局输出规则：%q", prompt)
 		}
 	}
-	if !strings.Contains(ReplyStyleRoleplay.closingAnchor(), "（动作）") {
+	if !strings.Contains(ReplyStyleRoleplay.closingAnchor(), "一处或多处") {
 		t.Fatalf("锚点没有把写法拉回来：%q", ReplyStyleRoleplay.closingAnchor())
 	}
 }
@@ -584,5 +584,27 @@ func TestRoleplayAndCatgirlDoNotContradictEachOther(t *testing.T) {
 	}
 	if !strings.Contains(catgirl, "不写 *蹭蹭*") {
 		t.Fatalf("猫娘那档的禁令被改掉了：%q", catgirl)
+	}
+}
+
+func TestActionDescriptionIsAnIndependentPersonaPreservingLayer(t *testing.T) {
+	combined := actionDescriptionPrompt(true) + "\n" + actionDescriptionClosingAnchor(true)
+	for _, want := range []string{"原有人设和表达风格", "不必只写一处", "台词前、中间或结尾", "不额外变得黏人或亲密"} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("动作描写提示缺少 %q：%q", want, combined)
+		}
+	}
+	if got := actionDescriptionPrompt(false); got != "" {
+		t.Fatalf("关闭动作描写后仍注入了提示：%q", got)
+	}
+}
+
+func TestLegacyRoleplayConfigMigratesToAssistantWithActions(t *testing.T) {
+	cfg := (BotConfig{ReplyStyle: ReplyStyleRoleplay}).WithDefaults()
+	if cfg.ReplyStyle != ReplyStyleAssistant {
+		t.Fatalf("旧扮演风格迁移后的表达风格 = %q", cfg.ReplyStyle)
+	}
+	if !boolValue(cfg.ActionDescriptionEnabled, false) {
+		t.Fatal("旧扮演风格没有迁移为动作描写开关")
 	}
 }

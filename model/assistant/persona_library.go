@@ -37,13 +37,14 @@ const (
 
 // Persona 是一套具名人设。
 type Persona struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	SystemPrompt   string     `json:"system_prompt,omitempty"`
-	ReplyStyle     ReplyStyle `json:"reply_style,omitempty"`
-	SelfReference  string     `json:"self_reference,omitempty"`
-	SentenceEnders string     `json:"sentence_enders,omitempty"`
-	UpdatedAt      time.Time  `json:"updated_at,omitempty"`
+	ID                       string     `json:"id"`
+	Name                     string     `json:"name"`
+	SystemPrompt             string     `json:"system_prompt,omitempty"`
+	ReplyStyle               ReplyStyle `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled *bool      `json:"action_description_enabled,omitempty"`
+	SelfReference            string     `json:"self_reference,omitempty"`
+	SentenceEnders           string     `json:"sentence_enders,omitempty"`
+	UpdatedAt                time.Time  `json:"updated_at,omitempty"`
 }
 
 // PersonaSet 是整个人设库。
@@ -59,6 +60,12 @@ func (persona Persona) Normalized() Persona {
 	}
 	persona.Name = truncateRunesPlain(strings.TrimSpace(persona.Name), personaNameMaxRunes)
 	persona.SystemPrompt = truncateRunesPlain(strings.TrimSpace(persona.SystemPrompt), personaPromptMaxRunes)
+	if strings.EqualFold(strings.TrimSpace(string(persona.ReplyStyle)), string(ReplyStyleRoleplay)) {
+		persona.ReplyStyle = ReplyStyleAssistant
+		if persona.ActionDescriptionEnabled == nil {
+			persona.ActionDescriptionEnabled = boolPointer(true)
+		}
+	}
 	if strings.TrimSpace(string(persona.ReplyStyle)) != "" {
 		persona.ReplyStyle = persona.ReplyStyle.Normalized()
 	}
@@ -71,6 +78,7 @@ func (persona Persona) Normalized() Persona {
 func (persona Persona) Empty() bool {
 	return strings.TrimSpace(persona.SystemPrompt) == "" &&
 		strings.TrimSpace(string(persona.ReplyStyle)) == "" &&
+		persona.ActionDescriptionEnabled == nil &&
 		strings.TrimSpace(persona.SelfReference) == "" &&
 		strings.TrimSpace(persona.SentenceEnders) == ""
 }
@@ -193,6 +201,7 @@ type PersonaImportResult struct {
 func (persona Persona) sameContent(other Persona) bool {
 	return persona.SystemPrompt == other.SystemPrompt &&
 		persona.ReplyStyle.Normalized() == other.ReplyStyle.Normalized() &&
+		boolValue(persona.ActionDescriptionEnabled, false) == boolValue(other.ActionDescriptionEnabled, false) &&
 		persona.SelfReference == other.SelfReference &&
 		persona.SentenceEnders == other.SentenceEnders
 }

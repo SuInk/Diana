@@ -343,6 +343,7 @@ type BotConfig struct {
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled     *bool                `json:"action_description_enabled,omitempty"`
 	SelfReference                string               `json:"self_reference,omitempty"`
 	SentenceEnders               string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
@@ -497,6 +498,7 @@ type GroupConfig struct {
 	SystemPrompt             string           `json:"system_prompt,omitempty"`
 	ResponseMode             ResponseMode     `json:"response_mode,omitempty"`
 	ReplyStyle               ReplyStyle       `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled *bool            `json:"action_description_enabled,omitempty"`
 	SelfReference            string           `json:"self_reference,omitempty"`
 	SentenceEnders           string           `json:"sentence_enders,omitempty"`
 	WelcomeEnabled           bool             `json:"welcome_enabled,omitempty"`
@@ -595,6 +597,7 @@ type ConfigPayload struct {
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
 	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled     *bool                `json:"action_description_enabled,omitempty"`
 	SelfReference                string               `json:"self_reference,omitempty"`
 	SentenceEnders               string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
@@ -679,6 +682,7 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		EnabledSet:                   true,
 		GroupTriggers:                append([]string(nil), base.GroupTriggers...),
 		GroupTriggerMode:             base.GroupTriggerMode,
+		ActionDescriptionEnabled:     copyBoolPointer(base.ActionDescriptionEnabled),
 		WelcomeEnabled:               base.WelcomeEnabled,
 		WelcomeMessage:               base.WelcomeMessage,
 		MaxContextTokens:             base.MaxContextTokens,
@@ -710,6 +714,12 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
 func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig {
 	defaults := DefaultGroupConfig(groupID, base)
+	if strings.EqualFold(strings.TrimSpace(string(cfg.ReplyStyle)), string(ReplyStyleRoleplay)) {
+		cfg.ReplyStyle = ReplyStyleAssistant
+		if cfg.ActionDescriptionEnabled == nil {
+			cfg.ActionDescriptionEnabled = boolPointer(true)
+		}
+	}
 	cfg.GroupID = strings.TrimSpace(cfg.GroupID)
 	if cfg.GroupID == "" {
 		cfg.GroupID = defaults.GroupID
@@ -1100,6 +1110,7 @@ func DefaultBotConfig() BotConfig {
 		SystemPrompt:              defaultSystemPrompt,
 		ResponseMode:              ResponseModeStandard,
 		ReplyStyle:                ReplyStyleAssistant,
+		ActionDescriptionEnabled:  boolPointer(false),
 		PromptChineseSlangText:    defaultPromptChineseSlang,
 		PromptPlaintextRulesText:  defaultPromptPlaintextRules,
 		PromptTimeTemplate:        defaultPromptTimeTemplate,
@@ -1159,6 +1170,13 @@ func DefaultBotConfig() BotConfig {
 func (cfg BotConfig) WithDefaults() BotConfig {
 	defaults := DefaultBotConfig()
 	hasResponseMode := strings.TrimSpace(string(cfg.ResponseMode)) != ""
+	legacyRoleplay := strings.EqualFold(strings.TrimSpace(string(cfg.ReplyStyle)), string(ReplyStyleRoleplay))
+	if legacyRoleplay {
+		cfg.ReplyStyle = ReplyStyleAssistant
+		if cfg.ActionDescriptionEnabled == nil {
+			cfg.ActionDescriptionEnabled = boolPointer(true)
+		}
+	}
 	// WithDefaults 会补齐运行所需的安全默认值，同时清理重复触发词/禁用群。
 	cfg.Name = NormalizeProfileName(cfg.Name)
 	cfg.Platform = NormalizePlatformID(cfg.Platform)
@@ -1194,6 +1212,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ResponseMode = ResponseModeCustom
 	}
 	cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
+	if cfg.ActionDescriptionEnabled == nil {
+		cfg.ActionDescriptionEnabled = copyBoolPointer(defaults.ActionDescriptionEnabled)
+	}
 	cfg.SelfReference = strings.TrimSpace(cfg.SelfReference)
 	cfg.SentenceEnders = strings.TrimSpace(cfg.SentenceEnders)
 	if strings.TrimSpace(cfg.PromptChineseSlangText) == "" {
@@ -1515,6 +1536,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SystemPrompt:                      cfg.SystemPrompt,
 		ResponseMode:                      cfg.ResponseMode,
 		ReplyStyle:                        cfg.ReplyStyle,
+		ActionDescriptionEnabled:          copyBoolPointer(cfg.ActionDescriptionEnabled),
 		SelfReference:                     cfg.SelfReference,
 		SentenceEnders:                    cfg.SentenceEnders,
 		DebugModeEnabled:                  cfg.DebugModeEnabled,
@@ -1677,6 +1699,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SystemPrompt:                   payload.SystemPrompt,
 		ResponseMode:                   payload.ResponseMode,
 		ReplyStyle:                     payload.ReplyStyle,
+		ActionDescriptionEnabled:       copyBoolPointer(payload.ActionDescriptionEnabled),
 		SelfReference:                  payload.SelfReference,
 		SentenceEnders:                 payload.SentenceEnders,
 		DebugModeEnabled:               payload.DebugModeEnabled,

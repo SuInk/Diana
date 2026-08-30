@@ -15,10 +15,10 @@ import (
 // 「创建成功却提示失败」。
 func TestInterruptedReplySkipsSupersedeAfterExternalSideEffect(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
-	event := MessageEvent{Kind: EventKindPrivate, UserID: "u1", MessageID: "m1"}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1", RawMessage: "[CQ:at,qq=42] 帮我创建"}
 	// 同一个人随后又发来一条，旧回复本应被打断。
 	runtime.noteDirectedInbound(event)
-	runtime.noteDirectedInbound(MessageEvent{Kind: EventKindPrivate, UserID: "u1", MessageID: "m2"})
+	runtime.noteDirectedInbound(MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m2", RawMessage: "[CQ:at,qq=42] 补充一下"})
 
 	ctx := withExternalSideEffectLedger(withReplyTriggerGate(context.Background()))
 	if err := runtime.interruptedReplyError(ctx, event); !errors.Is(err, errReplyTriggerSuperseded) {
