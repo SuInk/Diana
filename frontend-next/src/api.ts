@@ -122,6 +122,36 @@ export interface BotProfileConfig {
   telegram_bot_token_configured?: boolean;
   telegram_api_base_url?: string;
   telegram_proxy_url?: string;
+  /** QQ 开放平台机器人，出站 WebSocket 网关。 */
+  qq_app_id?: string;
+  qq_app_secret?: string;
+  qq_app_secret_configured?: boolean;
+  qq_sandbox?: boolean;
+  /** 钉钉 Stream 模式，出站长连接。 */
+  dingtalk_client_id?: string;
+  dingtalk_client_secret?: string;
+  dingtalk_client_secret_configured?: boolean;
+  dingtalk_robot_code?: string;
+  /** 飞书事件订阅，需要公网回调地址。 */
+  feishu_app_id?: string;
+  feishu_app_secret?: string;
+  feishu_app_secret_configured?: boolean;
+  feishu_verification_token?: string;
+  feishu_verification_token_configured?: boolean;
+  feishu_encrypt_key?: string;
+  feishu_encrypt_key_configured?: boolean;
+  feishu_api_base_url?: string;
+  /** 企业微信应用回调，需要公网回调地址。 */
+  wecom_corp_id?: string;
+  wecom_agent_id?: string;
+  wecom_secret?: string;
+  wecom_secret_configured?: boolean;
+  wecom_token?: string;
+  wecom_token_configured?: boolean;
+  wecom_encoding_aes_key?: string;
+  wecom_encoding_aes_key_configured?: boolean;
+  /** 回调型平台要填到对方后台的路径，只读。 */
+  callback_path?: string;
   nonebot_bridge_enabled?: boolean;
   nonebot_bridge_endpoint?: string;
   nonebot_bridge_token?: string;
@@ -602,6 +632,10 @@ export interface BotPlatform {
   category: string;
   category_label: string;
   description?: string;
+  /** 消息入站方式：反连、出站长连接，或平台回调。 */
+  inbound?: "reverse_ws" | "outbound" | "callback";
+  /** inbound 为 callback 时，要填到对方后台的回调路径。 */
+  callback_path?: string;
 }
 
 const inflightRequests = new Map<string, Promise<unknown>>();
