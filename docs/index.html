@@ -53,7 +53,9 @@
     -webkit-font-smoothing: antialiased;
   }
   a { color: inherit; text-decoration: none; }
-  img { max-width: 100%; display: block; }
+  /* height:auto 不能省：img 上写了 width/height 属性（避免加载时回流），
+     只有 max-width 会把宽度压到容器宽、高度却仍按属性值走，比例就崩了。 */
+  img { max-width: 100%; height: auto; display: block; }
   .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
   .lucide { width: 20px; height: 20px; stroke-width: 1.8; }
 
