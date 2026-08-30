@@ -57,6 +57,7 @@ const icons = {
   play: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5z"/></svg>',
   github: '<svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>',
   sun: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  monitor: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
   moon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>'
 };
 
@@ -74,7 +75,7 @@ document.querySelector("[data-docs-header]").innerHTML = `
       <a href="./index.html" title="返回首页">${icons.home}首页</a>
       <a href="./demo/" title="在线演示">${icons.play}演示</a>
       <a class="icon-link" href="https://github.com/SuInk/Diana" aria-label="GitHub 仓库" title="GitHub 仓库">${icons.github}</a>
-      <button class="icon-button" type="button" aria-label="切换明暗主题" title="切换明暗主题" data-theme-toggle><span data-theme-icon aria-hidden="true"></span></button>
+      <button class="icon-button" type="button" data-theme-toggle><span data-theme-icon aria-hidden="true"></span></button>
     </nav>
   </header>`;
 
@@ -104,7 +105,6 @@ document.querySelector("[data-docs-footer]").innerHTML = `
     </div>
   </footer>`;
 
-const root = document.documentElement;
 const sidebar = document.querySelector("[data-sidebar]");
 const sidebarBackdrop = document.querySelector("[data-sidebar-backdrop]");
 const menuToggle = document.querySelector("[data-menu-toggle]");
@@ -124,22 +124,19 @@ menuToggle.addEventListener("click", () => setSidebarOpen(!sidebar.classList.con
 sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
 nav.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => setSidebarOpen(false)));
 
-// 默认跟落地页一样是暗色，不跟随系统：系统是浅色时会出现「深色首页 → 浅色文档」
-// 的割裂，而且 HTML 里预置的 data-theme 会被 JS 翻一次，白闪一下。
-// 想要浅色的人点一下开关，选择会记住。
-const savedTheme = window.localStorage.getItem("diana-docs-theme");
+// 主题偏好由 theme.js 统一管理（它在 <head> 里已经把 data-theme 定好了，
+// 这里只负责把按钮和当前偏好对上）。三态循环：跟随系统 → 深色 → 浅色。
+const themeLabels = { system: "跟随系统", dark: "深色", light: "浅色" };
+const themeIcons = { system: icons.monitor, dark: icons.moon, light: icons.sun };
 
-function setTheme(theme) {
-  root.dataset.theme = theme;
-  themeIcon.innerHTML = theme === "dark" ? icons.sun : icons.moon;
-}
-
-setTheme(savedTheme === "light" ? "light" : "dark");
-themeToggle.addEventListener("click", () => {
-  const next = root.dataset.theme === "dark" ? "light" : "dark";
-  setTheme(next);
-  window.localStorage.setItem("diana-docs-theme", next);
+window.DianaTheme.subscribe((preference) => {
+  themeIcon.innerHTML = themeIcons[preference];
+  const label = `主题：${themeLabels[preference]}（点击切换）`;
+  themeToggle.setAttribute("title", label);
+  themeToggle.setAttribute("aria-label", label);
 });
+
+themeToggle.addEventListener("click", () => window.DianaTheme.cycle());
 
 document.querySelectorAll("[data-tab]").forEach((button) => {
   button.addEventListener("click", () => {
