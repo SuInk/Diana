@@ -28,6 +28,7 @@ type dianaReminderResult struct {
 	OK       bool            `json:"ok"`
 	Action   string          `json:"action"`
 	Message  string          `json:"message,omitempty"`
+	Warnings []string        `json:"warnings,omitempty"`
 	Reminder *dianaReminder  `json:"reminder,omitempty"`
 	Items    []dianaReminder `json:"items,omitempty"`
 }
@@ -58,21 +59,24 @@ func (t *dianaReminderTool) Description() string {
 	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒时必须使用此工具；周期性查询或定期订阅改用 diana.schedule，仓库更新订阅只能在 WebUI 管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
 }
 
-// InputSchema 声明参数契约。delay 只认 Go 时长写法，用户给的是「明天下午三点」
-// 这类绝对时间时必须由模型按运行时时钟自己换算——这条写在字段说明里，模型在
-// 填参数时就能看到，不用等 Go 侧拒绝后再返工。
+// InputSchema 声明参数契约。相对时间使用 delay，绝对时间使用 at，避免模型把
+// 按当前时间算出的延时再叠加到回补消息的原始时间上。
 func (t *dianaReminderTool) InputSchema() map[string]any {
 	item := map[string]any{
-		"delay":   toolStringParam("触发前等待的时长，只接受 Go 时长写法：30s、5m、2h、36h（可组合成 1h30m）。用户给的是绝对时间（明天下午三点、下周五 17:00）时，先按运行时提供的当前时间换算成时长再填，不要原样写日期。最长 " + maximumReminderDelay.String() + "。"),
-		"message": toolStringParam("到点要发出的提醒内容，最多 " + itoa(maximumReminderMessageRunes) + " 个字符。"),
+		"delay":      toolStringParam("相对当前消息的等待时长，只接受 Go 时长写法：30s、5m、2h、36h（可组合成 1h30m）。仅用于‘过一段时间后’；与 at/trigger_at 二选一。最长 " + maximumReminderDelay.String() + "。"),
+		"at":         toolStringParam("绝对触发时间，使用 RFC3339（例如 2026-08-30T19:00:00+08:00）。用户指定‘今晚七点’、‘明天下午三点’等时间点时直接传目标时间，不要换算成 delay。与 delay 二选一。"),
+		"trigger_at": toolStringParam("at 的兼容别名：绝对触发时间，使用 RFC3339。与 delay 二选一。"),
+		"message":    toolStringParam("到点要发出的提醒内容，最多 " + itoa(maximumReminderMessageRunes) + " 个字符。"),
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
 			"create", "list", "update", "cancel", "delete"),
-		"delay":   item["delay"],
-		"message": item["message"],
-		"items": toolItemsParam("一次创建多个提醒；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。剩余额度不足时按顺序创建到额度上限。",
-			maximumTasksPerToolCall, []string{"delay", "message"}, item),
+		"delay":      item["delay"],
+		"at":         item["at"],
+		"trigger_at": item["trigger_at"],
+		"message":    item["message"],
+		"items": toolItemsParam("一次创建多个提醒；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。每项的 delay 与 at/trigger_at 二选一；剩余额度不足时按顺序创建到额度上限。",
+			maximumTasksPerToolCall, []string{"message"}, item),
 		"id":             toolStringParam("要操作的提醒 ID；update、cancel、delete 必填，可先用 list 查到。"),
 		"target_user_id": toolStringParam("代其他用户管理时的目标账号，仅机器人主人可用；创建仍占目标用户的额度。"),
 	})
@@ -99,7 +103,7 @@ func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (stri
 		if err != nil {
 			return "", err
 		}
-		items, err := t.runtime.addOneTimeReminders(targetEvent, requests)
+		items, warnings, err := t.runtime.addOneTimeReminders(targetEvent, requests)
 		if err != nil {
 			return "", err
 		}
@@ -108,10 +112,14 @@ func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (stri
 			message = fmt.Sprintf("本次请求 %d 个一次性提醒，按剩余额度创建了 %d 个。", len(requests), len(items))
 		}
 		result := dianaReminderResult{
-			OK:      true,
-			Action:  "created",
-			Message: message,
-			Items:   make([]dianaReminder, 0, len(items)),
+			OK:       true,
+			Action:   "created",
+			Message:  message,
+			Warnings: warnings,
+			Items:    make([]dianaReminder, 0, len(items)),
+		}
+		if len(warnings) > 0 {
+			result.Message += " 警告：" + strings.Join(warnings, "；")
 		}
 		for _, item := range items {
 			result.Items = append(result.Items, *reminderForTool(item))
@@ -185,8 +193,9 @@ func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (stri
 }
 
 type reminderCreateRequest struct {
-	Delay   time.Duration
-	Message string
+	Delay     time.Duration
+	TriggerAt *time.Time
+	Message   string
 }
 
 func parseReminderCreateRequests(input map[string]any) ([]reminderCreateRequest, error) {
@@ -199,7 +208,7 @@ func parseReminderCreateRequests(input map[string]any) ([]reminderCreateRequest,
 	}
 	requests := make([]reminderCreateRequest, 0, len(batch))
 	for index, item := range batch {
-		delay, err := parseReminderDelay(configToolString(item, "delay"))
+		delay, triggerAt, err := parseReminderTarget(item)
 		if err != nil {
 			return nil, fmt.Errorf("第 %d 个提醒: %w", index+1, err)
 		}
@@ -210,9 +219,40 @@ func parseReminderCreateRequests(input map[string]any) ([]reminderCreateRequest,
 		if len([]rune(message)) > maximumReminderMessageRunes {
 			return nil, fmt.Errorf("第 %d 个提醒内容不能超过 %d 个字符", index+1, maximumReminderMessageRunes)
 		}
-		requests = append(requests, reminderCreateRequest{Delay: delay, Message: message})
+		requests = append(requests, reminderCreateRequest{Delay: delay, TriggerAt: triggerAt, Message: message})
 	}
 	return requests, nil
+}
+
+func parseReminderTarget(input map[string]any) (time.Duration, *time.Time, error) {
+	rawDelay := strings.TrimSpace(configToolString(input, "delay"))
+	rawAt := strings.TrimSpace(configToolString(input, "at"))
+	if rawAt == "" {
+		rawAt = strings.TrimSpace(configToolString(input, "trigger_at"))
+	}
+	if rawDelay != "" && rawAt != "" {
+		return 0, nil, fmt.Errorf("delay 与 at/trigger_at 只能二选一")
+	}
+	if rawAt != "" {
+		at, err := parseReminderAt(rawAt)
+		if err != nil {
+			return 0, nil, err
+		}
+		return 0, &at, nil
+	}
+	if rawDelay == "" {
+		return 0, nil, fmt.Errorf("必须提供 delay 或 at/trigger_at")
+	}
+	delay, err := parseReminderDelay(rawDelay)
+	return delay, nil, err
+}
+
+func parseReminderAt(raw string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("绝对触发时间格式不正确，请使用 RFC3339，例如 2026-08-30T19:00:00+08:00")
+	}
+	return parsed, nil
 }
 
 func toolBatchItems(input map[string]any) ([]map[string]any, bool, error) {
@@ -257,27 +297,27 @@ func parseReminderDelay(raw string) (time.Duration, error) {
 }
 
 func (r *Runtime) addOneTimeReminder(event MessageEvent, delay time.Duration, message string) (Reminder, error) {
-	items, err := r.addOneTimeReminders(event, []reminderCreateRequest{{Delay: delay, Message: message}})
+	items, _, err := r.addOneTimeReminders(event, []reminderCreateRequest{{Delay: delay, Message: message}})
 	if err != nil {
 		return Reminder{}, err
 	}
 	return items[0], nil
 }
 
-func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCreateRequest) ([]Reminder, error) {
+func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCreateRequest) ([]Reminder, []string, error) {
 	if r.reminders == nil {
-		return nil, fmt.Errorf("当前未启用提醒功能")
+		return nil, nil, fmt.Errorf("当前未启用提醒功能")
 	}
 	if len(requests) == 0 {
-		return nil, fmt.Errorf("至少需要一个提醒")
+		return nil, nil, fmt.Errorf("至少需要一个提醒")
 	}
 	if len(requests) > maximumTasksPerToolCall {
-		return nil, fmt.Errorf("一次最多创建 %d 个任务", maximumTasksPerToolCall)
+		return nil, nil, fmt.Errorf("一次最多创建 %d 个任务", maximumTasksPerToolCall)
 	}
 	policy := r.relationshipPolicy(context.Background(), event)
 	limit := policy.personalScheduleLimit()
 	if limit == 0 {
-		return nil, fmt.Errorf("当前关系等级为“%s”，没有个人提醒权限", policy.Name)
+		return nil, nil, fmt.Errorf("当前关系等级为“%s”，没有个人提醒权限", policy.Name)
 	}
 
 	r.reminderMu.Lock()
@@ -291,7 +331,7 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 	}
 	remaining := limit - count
 	if remaining <= 0 {
-		return nil, fmt.Errorf("当前关系等级最多创建 %d 个一次性提醒，额度已满", limit)
+		return nil, nil, fmt.Errorf("当前关系等级最多创建 %d 个一次性提醒，额度已满", limit)
 	}
 	if len(requests) > remaining {
 		requests = requests[:remaining]
@@ -305,16 +345,24 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 		}
 	}
 	created := make([]Reminder, 0, len(requests))
+	warnings := make([]string, 0)
 	for index, request := range requests {
 		message := strings.TrimSpace(request.Message)
-		if request.Delay <= 0 || request.Delay > maximumReminderDelay {
-			return nil, fmt.Errorf("第 %d 个提醒时长无效", index+1)
+		if request.TriggerAt == nil && (request.Delay <= 0 || request.Delay > maximumReminderDelay) {
+			return nil, nil, fmt.Errorf("第 %d 个提醒时长无效", index+1)
 		}
 		if message == "" || len([]rune(message)) > maximumReminderMessageRunes {
-			return nil, fmt.Errorf("第 %d 个提醒内容无效", index+1)
+			return nil, nil, fmt.Errorf("第 %d 个提醒内容无效", index+1)
 		}
 		triggerAt := requestedAt.Add(request.Delay)
-		if triggerAt.Before(now) {
+		if request.TriggerAt != nil {
+			triggerAt = *request.TriggerAt
+			if !triggerAt.After(now) {
+				warnings = append(warnings, fmt.Sprintf("第 %d 个提醒的目标时间 %s 已过去，任务仍已创建并立即执行", index+1, triggerAt.Format(time.RFC3339)))
+				triggerAt = now
+			}
+		} else if triggerAt.Before(now) {
+			warnings = append(warnings, fmt.Sprintf("第 %d 个提醒的目标时间 %s 已过去，任务仍已创建并立即执行", index+1, triggerAt.Format(time.RFC3339)))
 			triggerAt = now
 		}
 		created = append(created, Reminder{
@@ -332,9 +380,9 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 		})
 	}
 	if err := r.reminders.SaveReminders(append(items, created...)); err != nil {
-		return nil, fmt.Errorf("保存提醒失败: %w", err)
+		return nil, nil, fmt.Errorf("保存提醒失败: %w", err)
 	}
-	return created, nil
+	return created, warnings, nil
 }
 
 func (r *Runtime) oneTimeReminders(ownerID string) []Reminder {
@@ -410,14 +458,28 @@ func (r *Runtime) updateOneTimeReminder(ownerID string, id string, input map[str
 		return Reminder{}, fmt.Errorf("当前未启用提醒功能")
 	}
 	rawDelay := strings.TrimSpace(configToolString(input, "delay"))
+	rawAt := strings.TrimSpace(configToolString(input, "at"))
+	if rawAt == "" {
+		rawAt = strings.TrimSpace(configToolString(input, "trigger_at"))
+	}
 	message := strings.TrimSpace(configToolString(input, "message"))
-	if rawDelay == "" && message == "" {
-		return Reminder{}, fmt.Errorf("修改提醒时至少提供 delay 或 message")
+	if rawDelay == "" && rawAt == "" && message == "" {
+		return Reminder{}, fmt.Errorf("修改提醒时至少提供 delay、at 或 message")
+	}
+	if rawDelay != "" && rawAt != "" {
+		return Reminder{}, fmt.Errorf("delay 与 at/trigger_at 只能二选一")
 	}
 	var delay time.Duration
 	var err error
 	if rawDelay != "" {
 		delay, err = parseReminderDelay(rawDelay)
+		if err != nil {
+			return Reminder{}, err
+		}
+	}
+	var triggerAt time.Time
+	if rawAt != "" {
+		triggerAt, err = parseReminderAt(rawAt)
 		if err != nil {
 			return Reminder{}, err
 		}
@@ -438,6 +500,9 @@ func (r *Runtime) updateOneTimeReminder(ownerID string, id string, input map[str
 		}
 		if rawDelay != "" {
 			item.TriggerAt = time.Now().Add(delay)
+		}
+		if rawAt != "" {
+			item.TriggerAt = triggerAt
 		}
 		if message != "" {
 			item.Message = message
