@@ -62,6 +62,12 @@ func (m *Manager) Restore(ctx context.Context) error {
 	}
 	custom := make([]Provider, 0, len(doc.CustomProviders))
 	for _, provider := range doc.CustomProviders {
+		if provider.TokenRequestFormat == "" {
+			// 这个字段是后加的，默认值是 form。但存下来的那些是在只发 JSON 的
+			// 版本上配好并跑通的，把它们一起翻成 form 会让本来能用的配置突然
+			// 换不到令牌。已经存在的按原样继续，新建的才按规范走。
+			provider.TokenRequestFormat = TokenRequestJSON
+		}
 		normalized, err := provider.Normalize()
 		if err != nil {
 			// 一条坏数据不该让整页打不开，跳过并留痕。

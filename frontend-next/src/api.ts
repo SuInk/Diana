@@ -2090,6 +2090,8 @@ export interface LLMOAuthProvider {
   token_header?: string;
   /** 令牌前缀；留空时 Authorization 用 Bearer，其它头不加前缀。 */
   token_scheme?: string;
+  /** 换令牌时请求体的编码方式；留空即 form（RFC 6749 规定的格式）。 */
+  token_request_format?: "form" | "json";
   built_in?: boolean;
   notes?: string;
 }

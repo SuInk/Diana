@@ -108,6 +108,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
         <p>配置档的“凭据方式”可以用 OAuth 代替 API Key。控制台常跑在服务器上、浏览器未必同机，所以回调不强求落回本机：点“登录”后在自己的浏览器里完成授权，把地址栏那条回调地址整条粘回来即可（只粘其中的 <code>code</code> 也认）。令牌在过期前自动续期；同时填了 API Key 的话，续期失败会回落到它，不至于整个配置档一起哑掉。</p>
         <p>提供商是配置而不是代码。内置 OpenRouter，其余在“自定义提供商”里填授权地址、令牌地址、Client ID 和 Scope 自行接入，适合自建网关或未内置的服务。两个地址必须是 https，本机回环地址（<code>127.0.0.1</code>）可以用 http。</p>
         <p>拿到令牌之后怎么带给模型接口，同样是配置项。默认 <code>Authorization: Bearer &lt;token&gt;</code> 适用于绝大多数提供商；个别家不吃这一套——Anthropic 收到 <code>Authorization</code> 里的 OAuth 令牌会直接回 401“OAuth authentication is currently not supported.”，它要求令牌放在 <code>x-api-key</code> 里且不带前缀。所以自定义提供商的“高级”里可以指定令牌请求头、令牌前缀和一组附加请求头。换用非默认落点时，各家 SDK 自己写上的鉴权头会被摘掉，避免同一个请求带两种鉴权。</p>
+        <p>换令牌那一步的<strong>请求体格式</strong>同样在“高级”里选。RFC 6749 §4.1.3 规定令牌接口用 <code>application/x-www-form-urlencoded</code>，所以那是默认值；JSON 是部分服务自己的方言，内置的 OpenRouter 就只收 JSON。发错格式时对方通常只回一句“参数缺失”，不会说是整包没解析出来，排查方向容易被带到 Client ID 上去。<strong>在这个选项出现之前存下来的自定义提供商会继续按 JSON 发</strong>，免得本来配通的配置突然换不到令牌；新建的按规范走 form。</p>
         <div class="callout"><strong>不预置需要冒用第一方 Client ID 的提供商</strong><p>那类用法要向授权服务器谎报客户端身份，也超出消费级订阅本身的授权范围，是否使用属于部署者自己的判断；需要的话可以在“自定义提供商”里自行填写。</p></div>
         <h3>上下文与超时</h3>
         <pre><code>llm:
