@@ -100,24 +100,34 @@ img { max-width: 100%; height: auto; display: block; }
 .page-tabs a[aria-current="page"] { color: var(--text); background: var(--accent-soft); }
 
 .top-links { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+/* 固定高度：带文字的项受行高影响会长到 35px，和 32px 的按钮排在一起顶不齐。 */
 .top-links a {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 10px; border-radius: 7px;
+  height: 32px; padding: 0 10px; border-radius: 7px;
+  border: 1px solid transparent;
   font-size: 14px; color: var(--text-dim);
 }
+/* 选择器要覆盖 button，不能只写 a：主题按钮是 button，它的图标拿不到这条
+   规则就会掉回基线对齐，比同排其他图标高出约 1.7px。 */
+/* 18px 而不是 16：这些描边图标的墨迹只占 viewBox 的 3/4，按 16px 画出来的
+   实际高度约 12px，配 14px 的汉字（满格）会显得矮一截、像没对齐。 */
+.top-links svg { display: block; flex-shrink: 0; width: 18px; height: 18px; }
+.top-links [data-theme-icon] { display: inline-flex; align-items: center; }
 .top-links a:hover { color: var(--text); background: var(--bg-soft); text-decoration: none; }
 
-/* 语言切换做成小方块，和右侧图标一排等高。 */
-.lang-switch {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 32px; height: 32px; padding: 0 8px;
-  border: 1px solid var(--line-strong); border-radius: 7px;
-  font-size: 12.5px; color: var(--text-dim);
+/* 语言切换跟同排其他项一样不带常驻边框：一排无边框的项里只有它有框，
+   看起来就像没对齐。 */
+.lang-switch { gap: 6px; }
+
+/* 主题项文字会在三种模式间变，给个下限免得每次点完整排都往左右跳。 */
+.icon-button.theme-item {
+  width: auto; min-width: 100px; gap: 7px;
+  padding: 0 10px;
+  font-size: 13.5px;
 }
-.lang-switch:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
 
 .icon-button {
-  display: grid; place-items: center;
+  display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px;
   border: 1px solid transparent; border-radius: 8px;
   background: transparent; color: var(--text-dim);
