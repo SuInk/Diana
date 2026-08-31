@@ -258,7 +258,10 @@ type EventListener func(EventRecord)
 type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 
 type Runtime struct {
-	mu                        sync.RWMutex
+	mu sync.RWMutex
+	// promptCacheProbe 记住每个会话上一次请求的分段指纹，用来定位前缀缓存在哪里断的。
+	// 自带锁，不受 mu 保护。
+	promptCacheProbe          promptCacheProbeStore
 	cfg                       BotConfig
 	profileConfigs            map[string]BotConfig
 	channel                   Channel
@@ -4937,6 +4940,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	return r.runRawLLMProviderForGroup(ctx, group, run)
 }
@@ -4950,6 +4954,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	_, _ = run(provider)
 	if wrapped == nil {
@@ -5354,6 +5359,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withDebugTraceRun(ctx, run)
+	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
