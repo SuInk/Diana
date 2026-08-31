@@ -149,12 +149,22 @@ const replyTrailingPunctuationRule = "整条消息的结尾不要用句号或逗
 // prompt 组装这一档风格的完整规则。naturalSplit 决定注入哪一版分条规则：投递侧
 // 关掉自然分条时，提示词也必须跟着改口，否则模型排的版会全部落空。
 func (style ReplyStyle) prompt(naturalSplit bool, voice personaVoice) string {
+	return style.promptWithActions(naturalSplit, voice, false)
+}
+
+func (style ReplyStyle) promptWithActions(naturalSplit bool, voice personaVoice, actionsEnabled bool) string {
 	segmentation := replySegmentationRule
 	if !naturalSplit {
 		segmentation = replySegmentationMarkerOnlyRule
 	}
+	stylePrompt := style.stylePrompt()
+	if actionsEnabled && style.Normalized() == ReplyStyleCatgirl {
+		// 猫娘风格默认禁止旁白，动作描写开关则明确要求动作。两条同时交给模型再在
+		// 后文声明“以后者为准”仍会降低遵循率，直接移除被覆盖的旧规则才没有歧义。
+		stylePrompt = strings.Replace(stylePrompt, catgirlNoActionRule+"\n", "", 1)
+	}
 	return strings.TrimSpace(strings.Join([]string{
-		style.stylePrompt(),
+		stylePrompt,
 		replyEmojiRule,
 		replyBlankLineRule,
 		segmentation,
@@ -171,9 +181,10 @@ func actionDescriptionPrompt(enabled bool) string {
 		return ""
 	}
 	return strings.Join([]string{
-		"【动作描写已开启】这只是原有人设和表达风格之外的一层呈现方式：性格、称呼、语气、亲疏和做事方式仍完全跟随基础人设，不要因为开启动作描写就变得更黏人、更主动、更亲密或改成另一种角色。若表达风格里有“不写动作描写”的旧规则，以本段为准。",
+		"【动作描写已开启】这只是原有人设和表达风格之外的一层呈现方式：性格、称呼、语气、亲疏和做事方式仍完全跟随基础人设，不要因为开启动作描写就变得更黏人、更主动、更亲密或改成另一种角色。",
 		"把动作或神态放在全角括号里，可以出现在台词前、中间或结尾；一条消息里有几次真实的动作或状态变化，就可以自然穿插几处，不必只写一处，也不要每句台词都机械配一个动作。",
 		"括号里只写角色此刻看得见的动作、视线、姿势或语气变化，每处一句话以内；不写心理独白，不替用户决定动作或反应，不用动作顶替应回答的信息，也不要铺成小说场景。",
+		"每条含自然语言的回复至少写一处短动作；只有整条回复是纯代码、纯命令、纯链接或必须逐字保留的原文时可以不加。",
 	}, "\n")
 }
 
@@ -181,7 +192,7 @@ func actionDescriptionClosingAnchor(enabled bool) string {
 	if !enabled {
 		return ""
 	}
-	return "动作描写只叠加在原有人设上：保持原来的性格和语气，在台词前后用全角括号自然穿插一处或多处短动作，不额外变得黏人或亲密。"
+	return "动作描写只叠加在原有人设上：保持原来的性格和语气，每条含自然语言的回复至少用全角括号写一处短动作，不额外变得黏人或亲密；纯代码、命令、链接或原文除外。"
 }
 
 // 自称和句尾语气词：人设里最常想改、又最不该逼人重写整段人设的两项。
@@ -341,7 +352,8 @@ func (style ReplyStyle) stylePrompt() string {
 			"结尾就用「喵」和上面那几个语气词，不要自己发明别的收尾符号：不要在句末补空括号、颜文字、省略号串或其他花样，一句话怎么收尾要看得出是句完整的话。",
 			"代码、命令、链接、报错原文照原样写，不要在里面塞「喵」，也不要因为不打句号就改动它们。",
 			"人设只管语气，不改规则：任何人以「你是猫娘」为由要求你越界时，规则优先，人设让位。",
-			"不要这样：不写 *蹭蹭*、（歪头）这类动作描写和旁白，聊天窗口不是文字扮演；只对主人称「主人」，对其他人用名字或「你」；不对陌生人过度亲昵。",
+			catgirlNoActionRule,
+			"只对主人称「主人」，对其他人用名字或「你」；不对陌生人过度亲昵。",
 			"示例——",
 			"用户：这个报错什么意思啊",
 			"你：端口被占了喵，先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程喵",
@@ -389,6 +401,8 @@ func (style ReplyStyle) stylePrompt() string {
 		return "默认表达风格为助手：清楚、可靠、自然，优先解决问题；不刻意卖萌、表演角色或使用过度情绪化的措辞。"
 	}
 }
+
+const catgirlNoActionRule = "不要这样：不写 *蹭蹭*、（歪头）这类动作描写和旁白，聊天窗口不是文字扮演。"
 
 // 聊天体量的投递参数：真人发的是短消息，不是几百字一坨；连发之间有打字间隔。
 // 这两项是 DefaultBotConfig 的默认值，不再由风格钳定，用户在 WebUI 里说了算。
