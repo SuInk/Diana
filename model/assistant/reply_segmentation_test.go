@@ -69,6 +69,14 @@ func TestChatReplySplitsShortRepliesOnNaturalLines(t *testing.T) {
 	}
 }
 
+func TestChatReplyDoesNotTreatOccasionalLabelsAsStructuredBlock(t *testing.T) {
+	reply := "单颗在 2 到 5 元之间比较合理喵\n像刚才看到的活动价，折合单颗大约 2.3 元，性价比就非常划算喵\n网购活动或者量贩平价款：2 到 3 元/个最合适喵\n品牌日常价或线下烘焙店：3 到 5 元/个很正常喵\n如果是高级手作或者精品烘焙，6 到 9 元/个也有喵"
+	chunks := splitChatReply(reply, chatSplitLimits{})
+	if len(chunks) != 5 {
+		t.Fatalf("普通解释中偶尔出现标签行时仍应自然分条：%#v", chunks)
+	}
+}
+
 // 行首的提及是投递信息，不是「标签：内容」。它里面那个冒号不能和正文里另一行的
 // 冒号凑成两条结构化行，否则整段会被误判成清单，模型给出的换行也就不再分条。
 func TestChatReplyMentionDoesNotTurnProseIntoStructuredBlock(t *testing.T) {
