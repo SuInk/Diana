@@ -3587,6 +3587,11 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	if r.plugins == nil {
 		return "", nil
 	}
+	// 摘掉回复闸门：那道闸门的含义是「这次发送是模型对这条消息的回复」，
+	// 追发时丢掉回复是安全的——新的一轮会把两条一起答。解析结果不是回复，
+	// 它是这一轮独有的内容，新的一轮既不会重新解析，模型也拿不到视频信息，
+	// 丢了就永久没有了。后台插件任务用 rootCtx 发送，同样不带这道闸门。
+	ctx = withoutReplyTriggerGate(ctx)
 	resp, err := r.plugins.RunOneWithGroupOverrides(ctx, resolverPluginID, PluginRequest{
 		Event:          event,
 		Text:           text,
