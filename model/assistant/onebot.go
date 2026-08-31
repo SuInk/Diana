@@ -400,7 +400,9 @@ func (c *OneBotChannel) handleFrame(ctx context.Context, handler EventHandler, d
 
 // resolveCall 根据 echo 唤醒等待中的 API 调用。
 func (c *OneBotChannel) resolveCall(envelope oneBotEnvelope) {
-	value, ok := c.pending.Load(envelope.Echo)
+	// 和反向连接一样，API 响应不能阻塞唯一的 WebSocket 读循环。原子移除 echo 后
+	// 非阻塞投递，重复响应或调用方超时都只会丢掉这一帧，不会让后续事件断流。
+	value, ok := c.pending.LoadAndDelete(envelope.Echo)
 	if !ok {
 		return
 	}
@@ -408,19 +410,23 @@ func (c *OneBotChannel) resolveCall(envelope oneBotEnvelope) {
 	if !ok {
 		return
 	}
-	if envelopeStatusOK(envelope) {
-		resultCh <- callResult{data: oneBotDataMap(envelope.Data)}
-		return
+	result := callResult{data: oneBotDataMap(envelope.Data)}
+	if !envelopeStatusOK(envelope) {
+		// 不同 OneBot 实现错误字段不一致，尽量取 wording/message/body，最后再拼状态码。
+		message := envelope.Wording
+		if message == "" {
+			message = oneBotErrorMessage(envelope)
+		}
+		if message == "" {
+			message = fmt.Sprintf("onebot api failed: status=%s retcode=%d", envelopeStatusText(envelope.Status), envelope.RetCode)
+		}
+		result = callResult{err: errors.New(message)}
 	}
-	// 不同 OneBot 实现错误字段不一致，尽量取 wording/message/body，最后再拼状态码。
-	message := envelope.Wording
-	if message == "" {
-		message = oneBotErrorMessage(envelope)
+	select {
+	case resultCh <- result:
+	default:
+		// 通道已满说明调用方已经拿到结果或不再等待；丢弃重复/过期响应。
 	}
-	if message == "" {
-		message = fmt.Sprintf("onebot api failed: status=%s retcode=%d", envelopeStatusText(envelope.Status), envelope.RetCode)
-	}
-	resultCh <- callResult{err: errors.New(message)}
 }
 
 func oneBotDataMap(data any) map[string]any {
