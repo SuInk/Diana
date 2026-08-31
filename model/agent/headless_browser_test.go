@@ -381,3 +381,51 @@ func TestBrowserSandboxDirsArePrivateAndCleaned(t *testing.T) {
 		t.Fatalf("临时目录没删干净：%v", err)
 	}
 }
+
+// TestBrowserIdentityIsPlatformConsistent 盯住 UA 里的平台段跟着 GOOS 走。
+//
+// 写死一个平台的话，Linux 上跑的浏览器会一边用 UA 说自己是 macOS，一边通过
+// UA Client Hints 报 sec-ch-ua-platform: Linux——--user-agent 不会连带改客户端
+// 提示。这种自相矛盾比默认的 HeadlessChrome 更容易被认出来。
+func TestBrowserIdentityIsPlatformConsistent(t *testing.T) {
+	for goos, want := range map[string]string{
+		"darwin":  "Macintosh; Intel Mac OS X 10_15_7",
+		"linux":   "X11; Linux x86_64",
+		"windows": "Windows NT 10.0; Win64; x64",
+		"freebsd": "X11; Linux x86_64",
+	} {
+		ua := chromeUserAgent(goos)
+		if !strings.Contains(ua, "("+want+")") {
+			t.Fatalf("%s 的 UA 平台段不对：%s", goos, ua)
+		}
+		if strings.Contains(ua, "Headless") {
+			t.Fatalf("%s 的 UA 里还留着 Headless：%s", goos, ua)
+		}
+		if !strings.Contains(ua, "Chrome/"+chromeUAVersion+" Safari/537.36") {
+			t.Fatalf("%s 的 UA 版本段不对：%s", goos, ua)
+		}
+	}
+}
+
+// TestSandboxedArgsCarryBrowserIdentity 盯住浏览器那条路真的把身份带上了。
+//
+// 之前的状态是：HTTP 抓取伪装成真实浏览器，浏览器自己反而不装——UA 里写着
+// HeadlessChrome，navigator.webdriver 是 true。同一个站点走两条路看到两个访客，
+// 于是 HTTP 拿得到内容、渲染却撞登录墙。
+func TestSandboxedArgsCarryBrowserIdentity(t *testing.T) {
+	base := sandboxedChromeBaseArgs("/tmp/p", "/tmp/c", "/tmp/x")
+	for _, want := range []string{
+		"--user-agent=" + BrowserUserAgent,
+		"--disable-blink-features=AutomationControlled",
+		"--accept-lang=" + BrowserAcceptLanguage,
+		"--lang=zh-CN",
+	} {
+		if !slices.Contains(base, want) {
+			t.Fatalf("底座缺少 %q：%v", want, base)
+		}
+	}
+	// 身份属于底座，不是某一条路自己加的：截图那条路也要一样。
+	if !strings.Contains(BrowserUserAgent, "Chrome/") || strings.Contains(BrowserUserAgent, "Headless") {
+		t.Fatalf("对外 UA 不是一台正常的桌面浏览器：%s", BrowserUserAgent)
+	}
+}
