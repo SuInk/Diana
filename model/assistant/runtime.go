@@ -5736,6 +5736,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	if agentEnabled && hasTool("diana.relationship") {
 		builder.WriteString("\n" + promptToolRelationshipList)
 		builder.WriteString("\n" + promptToolRelationshipQuery)
+		builder.WriteString("\n" + promptToolRelationshipPortrait)
 	}
 	if agentEnabled && hasTool(dianaImageToolName) {
 		builder.WriteString("\n" + promptToolImage)
@@ -9102,11 +9103,18 @@ func (r *Runtime) updateUserMemory(event MessageEvent, favorabilityDelta int) (U
 	return r.writeUserMemory(event, UserMemoryUpdate{FavorabilityDelta: favorabilityDelta})
 }
 
-func (r *Runtime) applyEvaluatedUserFavorabilityDelta(event MessageEvent, favorabilityDelta int, reason string) (UserMemoryProfile, bool) {
+// applyEvaluatedRelationshipUpdate 落库一次后台评估的结果：好感度增减和这一轮
+// 观察到的画像。两者一起写，因为它们出自同一次评估——分两次写就是同一条消息在
+// 档案上留下两次修改。
+//
+// Administrative=true：评估是回复之后的后台动作，不是一次新的互动，不该再加一
+// 次互动次数——那一次在回复时已经记过了。
+func (r *Runtime) applyEvaluatedRelationshipUpdate(event MessageEvent, favorabilityDelta int, reason string, traits []UserPortraitTrait) (UserMemoryProfile, bool) {
 	return r.writeUserMemory(event, UserMemoryUpdate{
 		FavorabilityDelta:        favorabilityDelta,
 		FavorabilityChangeSource: "interaction",
 		FavorabilityChangeReason: strings.TrimSpace(reason),
+		PortraitTraits:           traits,
 		Administrative:           true,
 	})
 }
@@ -9194,6 +9202,10 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	// 的特权复述出去。能力问题由 diana.capabilities 负责。
 	builder.WriteString("\n互动次数：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
+	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
+		builder.WriteString("\n人员画像（只在自然相关时用上，不要主动背出来，也不要拿来向别人介绍这个人）：")
+		builder.WriteString(lines)
+	}
 	if len(profile.Memories) > 0 {
 		builder.WriteString("\n最近记忆：")
 		memories := profile.Memories

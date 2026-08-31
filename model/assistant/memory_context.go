@@ -323,6 +323,13 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 	// 本等级的特权。能力问题由 diana.capabilities 负责。
 	builder.WriteString("；累计互动：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
+	// 画像和好感度、关系等级一样属于固定核心：它答的是「这个人是谁」，被预算
+	// 挤掉的话机器人只能退回泛泛而谈。条数由 portraitFieldSpecs 的容量封顶，长
+	// 度可控，不参与下面各段的裁剪。
+	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
+		builder.WriteString("\n人员画像（只在自然相关时用上，不要主动背出来，也不要拿来向别人介绍这个人）：")
+		builder.WriteString(lines)
+	}
 
 	sections := []struct {
 		title string
@@ -414,6 +421,12 @@ func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy Relationsh
 	}
 	core.Memories = nil
 	text := formatUserMemoryContext(core, policy)
+	if llm.EstimateTextTokens(text) <= tokenBudget {
+		return text
+	}
+	// 画像比最近说过的话更值钱，所以排在它们后面才被丢掉。
+	core.Portrait = nil
+	text = formatUserMemoryContext(core, policy)
 	if llm.EstimateTextTokens(text) <= tokenBudget {
 		return text
 	}
