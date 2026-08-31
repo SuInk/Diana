@@ -422,7 +422,10 @@ func (s *OneBotReverseServer) updateAccountStatus(raw any) {
 
 // resolveCall 根据 echo 处理反向 API 调用结果。
 func (s *OneBotReverseServer) resolveCall(envelope oneBotEnvelope) {
-	value, ok := s.pending.Load(envelope.Echo)
+	// 响应只消费一次。调用方可能正好超时并放弃等待，也可能遇到实现端重复回同一
+	// echo；如果这里阻塞写 resultCh，整个 WebSocket 读循环就会永久停住，TCP 看着
+	// 仍是 ESTABLISHED，后续消息却全部堆在接收缓冲里。
+	value, ok := s.pending.LoadAndDelete(envelope.Echo)
 	if !ok {
 		return
 	}
@@ -430,11 +433,15 @@ func (s *OneBotReverseServer) resolveCall(envelope oneBotEnvelope) {
 	if !ok {
 		return
 	}
+	result := callResult{err: errors.New(oneBotErrorMessage(envelope))}
 	if envelopeStatusOK(envelope) {
-		resultCh <- callResult{data: oneBotDataMap(envelope.Data)}
-		return
+		result = callResult{data: oneBotDataMap(envelope.Data)}
 	}
-	resultCh <- callResult{err: errors.New(oneBotErrorMessage(envelope))}
+	select {
+	case resultCh <- result:
+	default:
+		// 通道已满说明调用方已经拿到结果或不再等待；丢弃重复/过期响应。
+	}
 }
 
 // setStatus 更新反向 OneBot server 状态。
