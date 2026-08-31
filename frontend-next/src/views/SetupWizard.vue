@@ -100,55 +100,40 @@
             <div class="model-sync-row">
               <div class="model-sync-copy">
                 <span class="model-sync-title">模型列表</span>
-                <span v-if="modelOptions.length > 0" class="hint">已同步 {{ modelOptions.length }} 个可用模型。</span>
-                <span v-else class="hint">填写 API Key 后，从服务同步可用模型。</span>
+                <span v-if="modelOptions.length > 0" class="hint">当前有 {{ modelOptions.length }} 个模型，可同步刷新或手动补充。</span>
+                <span v-else class="hint">填写 API Key 后从服务同步，也可以直接手填模型 ID。</span>
               </div>
               <button class="btn" type="button" :disabled="modelsLoading" @click="loadModels(false)">
                 <RefreshCw :size="14" aria-hidden="true" />
                 {{ modelsLoading ? "同步中…" : "同步模型列表" }}
               </button>
             </div>
-            <div class="model-default-field">
-              <label for="wizard-model">默认模型</label>
-              <div class="model-picker-anchor">
+            <!-- 中转和自建 endpoint 常常不实现 /models，同步会直接失败。首次配置
+                 卡在这里就一步都走不下去，所以手填这条路必须有。 -->
+            <div class="model-manual">
+              <div class="input-group">
                 <input
                   id="wizard-model"
-                  v-model="llmForm.model"
+                  v-model="manualModelDraft"
                   class="input"
-                  placeholder="填写默认模型 ID，或从已同步列表中选择"
+                  placeholder="手动添加模型 ID，多个用逗号或换行分隔"
                   autocomplete="off"
-                  @focus="openModelPicker"
-                  @input="openModelPicker"
-                  @keydown.esc.stop="modelPickerOpen = false"
+                  @keydown.enter.prevent="addManualModels"
                 />
-                <div v-if="modelPickerOpen && modelOptions.length > 0" class="model-picker">
-                  <div class="model-picker-meta">
-                    <span>
-                      共 {{ modelOptions.length }} 个模型<template v-if="llmForm.model.trim() && filteredModels.length < modelOptions.length"
-                        >，匹配 {{ filteredModels.length }} 个</template
-                      >
-                    </span>
-                    <button class="btn ghost small" type="button" @click="modelPickerOpen = false">收起</button>
-                  </div>
-                  <p v-if="llmForm.model.trim() && filteredModels.length === 0" class="model-picker-empty">
-                    没有包含「{{ llmForm.model.trim() }}」的模型，已显示全部
-                  </p>
-                  <ul class="model-picker-list">
-                    <li v-for="model in displayModels" :key="model.id">
-                      <button
-                        type="button"
-                        class="model-picker-item"
-                        :class="{ active: model.id === llmForm.model }"
-                        @mousedown.prevent="pickModel(model.id)"
-                      >
-                        {{ model.id }}
-                      </button>
-                    </li>
-                  </ul>
-                </div>
+                <button class="btn" type="button" :disabled="manualModelDraft.trim() === ''" @click="addManualModels">
+                  <Plus :size="14" aria-hidden="true" />
+                  添加
+                </button>
               </div>
-              <span v-if="modelOptions.length > 0" class="hint">输入可筛选同步结果；留空保存时采用列表第一项。</span>
-              <span v-else class="hint">也可以直接填写服务支持的模型 ID。</span>
+              <div v-if="modelOptions.length > 0" class="model-chips">
+                <span v-for="model in modelOptions" :key="model.id" class="model-chip">
+                  <span class="model-chip-id">{{ model.id }}</span>
+                  <button type="button" class="model-chip-remove" :title="`移除 ${model.id}`" @click="removeModel(model.id)">
+                    <X :size="12" aria-hidden="true" />
+                  </button>
+                </span>
+              </div>
+              <span class="hint">列表第一项就是这一步用来测试连通的模型；之后在提供商页还能继续增删。</span>
             </div>
           </div>
           <div class="field wide">
@@ -277,7 +262,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { CheckCircle2, ChevronLeft, ChevronRight, Copy, LayoutGrid, MessageCircle, Power, RefreshCw, Zap } from "@lucide/vue";
+import { CheckCircle2, ChevronLeft, ChevronRight, Copy, LayoutGrid, MessageCircle, Plus, Power, RefreshCw, X, Zap } from "@lucide/vue";
 import {
   getConfig,
   getBotProfileConfig,
@@ -332,12 +317,11 @@ function clearInvalid(field: LLMErrorField): void {
     invalidField.value = "";
   }
 }
-const modelPickerOpen = ref(false);
+const manualModelDraft = ref("");
 
-const llmForm = ref<{ provider: Provider; api_style: "responses" | "chat_completions" | ""; model: string; base_url: string; api_key: string }>({
+const llmForm = ref<{ provider: Provider; api_style: "responses" | "chat_completions" | ""; base_url: string; api_key: string }>({
   provider: "openai_compatible",
   api_style: "responses",
-  model: "",
   base_url: "https://api.openai.com/v1",
   api_key: ""
 });
@@ -369,14 +353,6 @@ function applyProviderKind(provider: string): void {
   if (preset) applyServicePreset(preset.id);
 }
 const selectedPreset = computed(() => llmServicePresets.find((preset) => preset.id === selectedService.value));
-const filteredModels = computed(() => {
-  const keyword = llmForm.value.model.trim().toLowerCase();
-  if (!keyword || modelOptions.value.some((model) => model.id.toLowerCase() === keyword)) {
-    return modelOptions.value;
-  }
-  return modelOptions.value.filter((model) => model.id.toLowerCase().includes(keyword));
-});
-const displayModels = computed(() => filteredModels.value.length > 0 ? filteredModels.value : modelOptions.value);
 
 function applyServicePreset(id: string): void {
   const preset = llmServicePresets.find((item) => item.id === id);
@@ -385,23 +361,27 @@ function applyServicePreset(id: string): void {
   llmForm.value.provider = preset.provider;
   llmForm.value.api_style = preset.apiStyle;
   llmForm.value.base_url = preset.baseURL;
-  llmForm.value.model = preset.model;
-  modelOptions.value = [];
+  // 预设自带的模型直接当列表第一项：换服务平台时它就是最合理的起点，
+  // 用户不满意可以删掉再手填。
+  modelOptions.value = preset.model ? [{ id: preset.model }] : [];
+  manualModelDraft.value = "";
   invalidField.value = "";
-  modelPickerOpen.value = false;
 }
 
-function openModelPicker(): void {
-  if (modelOptions.value.length > 0) {
-    modelPickerOpen.value = true;
-  } else if (!llmForm.value.model.trim() && (llmForm.value.api_key.trim() || llmConfigured.value)) {
-    void loadModels(false);
+/** 手填模型：同步不可用时（中转、自建网关常见）这是唯一的入口。 */
+function addManualModels(): void {
+  const existing = new Set(modelOptions.value.map((model) => model.id));
+  for (const raw of manualModelDraft.value.split(/[,，\n]/)) {
+    const id = raw.trim();
+    if (id === "" || existing.has(id)) continue;
+    existing.add(id);
+    modelOptions.value.push({ id });
   }
+  manualModelDraft.value = "";
 }
 
-function pickModel(id: string): void {
-  llmForm.value.model = id;
-  modelPickerOpen.value = false;
+function removeModel(id: string): void {
+  modelOptions.value = modelOptions.value.filter((model) => model.id !== id);
 }
 
 async function loadModels(selectFirst: boolean): Promise<boolean> {
@@ -415,17 +395,15 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
       api_style: llmForm.value.provider === "openai_compatible" ? (llmForm.value.api_style || undefined) : undefined,
       base_url: llmForm.value.base_url.trim() || undefined,
       api_key: llmForm.value.api_key.trim() || undefined,
-      model: llmForm.value.model.trim()
+      model: modelOptions.value[0]?.id ?? ""
     });
-    modelOptions.value = result.models;
     if (result.models.length === 0) {
       toastError("服务平台没有返回可用模型");
       return false;
     }
-    if (selectFirst && !llmForm.value.model.trim()) {
-      llmForm.value.model = result.models[0].id;
-    }
-    modelPickerOpen.value = !selectFirst;
+    // 合并而不是覆盖：手填进来的模型（中转站上同步不到的那些）不能被一次同步冲掉。
+    const fetched = new Set(result.models.map((model) => model.id));
+    modelOptions.value = [...result.models, ...modelOptions.value.filter((model) => !fetched.has(model.id))];
     return true;
   } catch (error) {
     // 和 LLM 配置页一致：报错原文进 toast，该回去改的那一格标红。
@@ -484,7 +462,8 @@ async function copyEndpoint(): Promise<void> {
 }
 
 async function saveAndTestLLM(): Promise<void> {
-  if (!llmForm.value.model.trim()) {
+  // 一个模型都没有就没得测。同步不通的话上面还能手填，这里只兜同步这一条。
+  if (modelOptions.value.length === 0) {
     const resolved = await loadModels(true);
     if (!resolved) return;
   }
@@ -495,7 +474,9 @@ async function saveAndTestLLM(): Promise<void> {
       id: savedLLM.value?.id,
       provider: llmForm.value.provider,
       api_style: llmForm.value.provider === "openai_compatible" ? (llmForm.value.api_style || undefined) : undefined,
-      model: llmForm.value.model.trim(),
+      // 兜底模型跟着列表走，和提供商页一致：这一格不再单独让人填，
+      // 填出来的值不在列表里时，兜底会指向一套配置里根本没有的模型。
+      model: modelOptions.value[0]?.id ?? "",
       models: modelOptions.value,
       base_url: llmForm.value.base_url.trim() || undefined,
       api_key: llmForm.value.api_key.trim() || undefined
@@ -553,8 +534,10 @@ onMounted(async () => {
     llmForm.value.provider = llm.provider;
     // 原生协议没有接口模式，补默认值会在保存时被后端拒绝。
     llmForm.value.api_style = llm.provider === "openai_compatible" ? (llm.api_style ?? "responses") : "";
-    llmForm.value.model = llm.model;
     llmForm.value.base_url = llm.base_url ?? "";
+    // 已经配过的实例重进向导时，模型列表要回填出来——它现在是这一步唯一的
+    // 模型来源，空着的话会看起来像配置丢了。老配置可能只存了单个 model。
+    modelOptions.value = llm.models?.length ? [...llm.models] : llm.model ? [{ id: llm.model }] : [];
     selectedService.value = detectLLMService(llm.base_url, llm.provider);
     botForm.value.onebot_reverse_ws_endpoint =
       bot.onebot_reverse_ws_endpoint || `ws://${window.location.host}/onebot/v11/ws`;
