@@ -22,7 +22,7 @@ const (
 	semanticReferenceQuotedLookahead      = 30 * time.Minute
 	semanticReferenceMediaCandidateLimit  = 48
 	semanticReferenceRecentCandidateLimit = 20
-	semanticReferenceQuoteContextRadius   = 8
+	semanticReferenceQuoteContextRadius   = 10
 	semanticReferenceNearbyContextRadius  = 3
 	semanticReferenceCacheTTL             = 10 * time.Minute
 	// semanticReferenceMinimumConfidence 是采纳指代结论的最低置信度。
