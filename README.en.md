@@ -122,6 +122,7 @@ These ship with the binary — toggle and configure them in the console, no plug
 - **Song requests** — "play Sunny Day" gets you a voice message; NetEase Cloud Music, QQ Music, and Kugou are tried in turn.
 - **Stickers** — picks a fitting sticker from the ones it has seen in the chat.
 - **Image understanding** — vision model + OCR (fully offline local options available), so even text-only models can "see" images.
+- **Rendered images** — tables, flowcharts, and sequence diagrams that plain text mangles get rendered to a picture when the model judges it worth it (Markdown / Mermaid / SVG; needs the headless browser from the "web rendering" plugin).
 - **Memory & notebook** — layered memory keeps token costs down; important things (group rules, dietary restrictions, promises) go into a notebook that's auditable, editable, and recoverable.
 - **Per-group policies** — reply hours, allow/deny lists, persona, and tool permissions, configured per group.
 - **Built-in agent** — a minimal tool loop with file, command, and browser tools; loads Skills and MCP servers on demand.
