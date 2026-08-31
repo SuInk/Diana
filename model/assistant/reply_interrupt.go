@@ -53,6 +53,15 @@ func replyTriggerGateEnabled(ctx context.Context) bool {
 	return enabled
 }
 
+// withoutReplyTriggerGate 摘掉闸门，用于这一轮里「不是模型回复」的发送。
+//
+// 闸门只覆盖模型对某条入站消息的回复：那种输出被追发取代是安全的，新的一轮
+// 会把前后两条一起答。插件直接投递的内容不满足这个前提，丢了不会有人补上，
+// 所以它不该带着这道闸门。后台插件任务用 rootCtx 发送，天然就没有它。
+func withoutReplyTriggerGate(ctx context.Context) context.Context {
+	return context.WithValue(ctx, replyTriggerGateContextKey{}, false)
+}
+
 // recalledInboundKey 以会话加消息 ID 定位一条入站消息。撤回通知的 Kind 是
 // notice，但 sessionKey 只看群号/用户号，能和原消息落到同一个键上。
 func recalledInboundKey(event MessageEvent) string {
