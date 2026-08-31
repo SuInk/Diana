@@ -52,10 +52,15 @@ func buildRenderPage(format, content, title string) (string, error) {
 		heading = `<h1 class="render-title">` + html.EscapeString(trimmed) + `</h1>`
 	}
 	script := ""
+	rootClass := "render-root"
 	if format == renderFormatMermaid {
 		script = "<script>" + mermaidBundle + "</script>\n<script>" + mermaidBootstrap + "</script>"
+		// mermaid 是先读容器宽度再排版的。.render-root 是 inline-block，
+		// 排版之前它只有 min-width 那么宽，甘特图这类横向铺开的图会被压成
+		// 一团重叠的标签。给 mermaid 页面一个固定宽度的画布，让它有地方铺。
+		rootClass += " render-root-mermaid"
 	}
-	return fmt.Sprintf(renderPageTemplate, renderPageCSS, heading, body, script), nil
+	return fmt.Sprintf(renderPageTemplate, renderPageCSS, rootClass, heading, body, script), nil
 }
 
 func renderPageBody(format, content string) (string, error) {
@@ -149,7 +154,7 @@ const renderFontStack = `"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Sou
 
 const renderPageTemplate = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><style>%s</style></head>
-<body><div class="render-root" id="render-root">%s%s</div>%s</body></html>`
+<body><div class="%s" id="render-root">%s%s</div>%s</body></html>`
 
 const renderPageCSS = `
 :root { color-scheme: light; }
@@ -163,6 +168,10 @@ body {
   line-height: 1.65;
 }
 .render-root { display: inline-block; min-width: 320px; padding: 28px 32px; }
+/* 见 buildRenderPage：mermaid 要先有宽度才能排版，不能等 inline-block 收缩。 */
+.render-root-mermaid { display: block; width: 1000px; }
+.render-root-mermaid .mermaid { width: 100%; }
+.render-root-mermaid svg { max-width: 100%; height: auto; }
 .render-title { margin: 0 0 18px; font-size: 20px; font-weight: 600; }
 h1, h2, h3, h4 { margin: 20px 0 10px; font-weight: 600; line-height: 1.3; }
 h1 { font-size: 22px; } h2 { font-size: 19px; } h3 { font-size: 17px; } h4 { font-size: 15px; }

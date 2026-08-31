@@ -239,3 +239,32 @@ func TestRenderToolRejectsBadInputBeforeRendering(t *testing.T) {
 		})
 	}
 }
+
+// mermaid 是先读容器宽度再排版的。.render-root 是 inline-block，排版之前
+// 它只有 min-width 那么宽，甘特图这类横向铺开的图会被压成一团重叠的标签。
+// 所以 mermaid 页面必须带上固定宽度的画布类。
+func TestBuildRenderPageGivesMermaidLayoutWidth(t *testing.T) {
+	mermaidPage, err := buildRenderPage(renderFormatMermaid, "gantt\n  title 排期\n  dateFormat YYYY-MM-DD\n  section A\n  任务 :a1, 2026-09-01, 3d", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mermaidPage, "render-root-mermaid") {
+		t.Fatal("mermaid 页面没有带上固定宽度的画布类")
+	}
+	if !strings.Contains(mermaidPage, ".render-root-mermaid { display: block;") {
+		t.Fatal("画布类没有脱离 inline-block")
+	}
+	// 另外两种靠 inline-block 收缩到内容宽度，裁白才有意义，不该被撑开。
+	for _, tc := range []struct{ name, format, content string }{
+		{"markdown", renderFormatMarkdown, "文字"},
+		{"svg", renderFormatSVG, `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>`},
+	} {
+		page, err := buildRenderPage(tc.format, tc.content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(page, `class="render-root render-root-mermaid"`) {
+			t.Fatalf("%s 页面不该被撑成固定宽度", tc.name)
+		}
+	}
+}
