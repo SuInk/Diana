@@ -11575,19 +11575,23 @@ func splitReplyLines(part string) []string {
 	return out
 }
 
-// looksStructuredBlock 判断这几行是不是一份清单、一组步骤这类整体。两行以上同一
-// 形状才算：一行「短标签：内容」在普通聊天里太常见，不该因此堵掉分条。
+// looksStructuredBlock 判断这几行是不是一份清单、一组步骤这类整体。结构化行需要
+// 占多数才算：少量「短标签：内容」在普通聊天里太常见，不该因此堵掉分条。
 func looksStructuredBlock(text string) bool {
 	structured := 0
+	total := 0
 	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		total++
 		if isStructuredReplyLine(strings.TrimSpace(line)) {
 			structured++
-			if structured >= 2 {
-				return true
-			}
 		}
 	}
-	return false
+	// 偶尔出现两行「标签：内容」不代表整段是清单。要求结构化行占多数，
+	// 这样普通解释里的少量冒号仍能按换行自然分条。
+	return structured >= 2 && structured*2 >= total
 }
 
 // trimChatTrailingPeriod 去掉聊天消息末尾那个句号。
