@@ -3049,6 +3049,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaReminderTool(r, event),
 				newDianaScheduleTool(r, event),
 				newDianaRSSWatchTool(r, event),
+				newDianaRenderTool(r, event),
 			}
 			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
 			// 无头浏览器。插件停用时模型看不到这个工具。
