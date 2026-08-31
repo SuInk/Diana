@@ -34,6 +34,13 @@ type ScreenshotRequest struct {
 	// Executable 为空时按环境变量和常见路径查找，和页面渲染那条路一致。
 	Executable string
 	Timeout    time.Duration
+	// VirtualTimeBudget 让浏览器在拍照前把脚本跑完。
+	//
+	// 纯 HTML/CSS 的页面（关系图就是）加载完就定型了，拍照时机不敏感。但页面里
+	// 有脚本要画东西时（比如 mermaid 是异步生成 SVG 的），--screenshot 可能在
+	// 脚本跑完之前就拍了，出一张空白图。虚拟时间让浏览器把这段时间快进掉，
+	// 到点再拍，既不用真等，也不会拍早。为零表示不启用，保持既有行为。
+	VirtualTimeBudget time.Duration
 }
 
 // CaptureHTMLScreenshot 渲染 HTML 并返回 PNG 字节。
@@ -85,6 +92,9 @@ func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 		"--no-sandbox",
 		"--disable-gpu",
 	)
+	if req.VirtualTimeBudget > 0 {
+		args = append(args, fmt.Sprintf("--virtual-time-budget=%d", req.VirtualTimeBudget.Milliseconds()))
+	}
 	args = append(args, "file://"+pagePath)
 
 	command := exec.CommandContext(runCtx, executable, args...)

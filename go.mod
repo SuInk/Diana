@@ -21,6 +21,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tetratelabs/wazero v1.12.0
+	github.com/yuin/goldmark v1.8.5
 	go.yaml.in/yaml/v4 v4.0.0-rc.2
 	golang.org/x/image v0.45.0
 	golang.org/x/net v0.55.0
