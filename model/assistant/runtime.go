@@ -5723,7 +5723,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n" + promptToolTTS)
 	}
 	builder.WriteString("\n" + promptLongTermMemory)
-	builder.WriteString("\n" + promptRefusal)
+	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy))
 	builder.WriteString("\n" + promptCurrentMessage)
 	builder.WriteString("\n" + promptAdjacentSupplement)
 	if boolValue(cfg.PromptInjectPlaintextRules, true) {
