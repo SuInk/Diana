@@ -243,7 +243,44 @@
   .foot-links { margin-left: auto; display: flex; gap: 18px; }
   .foot-links a:hover { color: var(--text); }
 
+  /* ---------- 移动端 ---------- */
   @media (max-width: 640px) {
+    /* 四项带文字在 375px 下排不下（实测整页被撑到 456px），窄屏收成纯图标：
+       含义由 title / aria-label 保留，四个入口一个都不少。 */
+    .nav-label { display: none; }
+    .nav-icon,
+    .nav-icon.icon-only,
+    .nav-icon.lang-pill,
+    .nav-icon.theme-item {
+      width: 40px; min-width: 40px; height: 40px; padding: 0;
+      justify-content: center;
+    }
+    .nav-inner { gap: 12px; height: 54px; }
+    .nav-links { gap: 2px; }
+
+    /* 触控目标放到 40px 以上：安装标签原来 29px、复制按钮 19px、页脚链接 24px，
+       手指点不准。 */
+    .install-tab { min-height: 40px; padding: 9px 14px; }
+    .install-line .copy-btn { min-height: 44px; padding: 0 16px; }
+    .qs-card-head { padding: 6px 14px; }
+    .qs-card-head .copy-btn { min-height: 40px; padding: 0 6px; }
+    .brand { min-height: 40px; }
+    .foot-links { gap: 4px; }
+    .foot-links a { display: inline-flex; align-items: center; min-height: 40px; padding: 0 8px; }
+
+    /* 首屏按钮在窄屏各占一行更好按，也不会挤成两行半。 */
+    .hero-cta { gap: 8px; }
+    .btn { padding: 11px 18px; }
+
+    /* 手机上 85 个字符怎么都放不下一行，与其横向截断（滚动条还未必看得见），
+       不如折行显示完整命令。桌面端仍保持不折行。 */
+    .install-line { align-items: flex-start; }
+    .install-line code { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .install-line .copy-btn { align-self: stretch; }
+
+    /* 标题在 375px 下 30px 会把最后一个字挤到单独一行。 */
+    h1 { font-size: clamp(26px, 7.2vw, 34px); }
+
     section { padding: 56px 0; }
     .hero { padding: 56px 0 40px; }
   }
