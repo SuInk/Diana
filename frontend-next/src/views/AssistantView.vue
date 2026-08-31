@@ -790,6 +790,21 @@
                   高置信拒答仅在发送成功后累计。打开后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
                 </span>
               </div>
+              <div class="field wide">
+                <label for="bot-refusal-strategy">拒答话术</label>
+                <AppSelect
+                  id="bot-refusal-strategy"
+                  :model-value="form.refusal_strategy ?? 'smart'"
+                  :options="refusalStrategyOptions"
+                  @update:model-value="(value) => { if (form) form.refusal_strategy = value as RefusalStrategy; }"
+                />
+                <span class="hint">
+                  机器人决定不正面回答时说什么。说明为什么不能答，本身可能就是那句会出事的话——
+                  一句「这个话题涉及敏感政治，我不方便讲」把触发点原样复述了一遍，风险比闭嘴还大。
+                  除「说明原因」外的档位都不会点名或影射触发拒答的具体内容。
+                  连续拒答 3 次后暂停响应该账号 30 分钟，这一条不受本项影响。
+                </span>
+              </div>
             </div>
           </section>
 
@@ -1180,6 +1195,7 @@ import {
   type BotChannelStatus,
   type BotPlatform,
   type AliasTriggerMode,
+  type RefusalStrategy,
   listPersonas,
   savePersona,
   deletePersona,
@@ -1415,6 +1431,15 @@ const triggerModeOptions: AppSelectOption[] = [
   { value: "smart", label: "智能（推荐）" },
   { value: "strict", label: "严格" },
   { value: "loose", label: "宽松" }
+];
+
+// 拒答话术。默认「智能」：什么时候能绕开、什么时候原因本身不能说，是看语境的
+// 判断，固定档位在群里连着触发几次会很假。
+const refusalStrategyOptions: AppSelectOption[] = [
+  { value: "smart", label: "智能（推荐）", hint: "先试着改写，改不动再按原因性质决定说不说" },
+  { value: "rewrite", label: "尽量改写", hint: "优先绕开，实在不行才模糊拒答" },
+  { value: "explain", label: "说明原因", hint: "把不能答的原因直接讲清楚" },
+  { value: "vague", label: "模糊拒答", hint: "一律带过，任何情况都不交代原因" }
 ];
 
 const replyReferenceModeOptions: AppSelectOption[] = [
@@ -2110,6 +2135,7 @@ function setForm(config: BotProfileConfig): void {
     self_reference: config.self_reference ?? "",
     sentence_enders: config.sentence_enders ?? "",
     group_trigger_mode: config.group_trigger_mode ?? "smart",
+    refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
     prompt_inject_plaintext_rules: config.prompt_inject_plaintext_rules ?? true,
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,

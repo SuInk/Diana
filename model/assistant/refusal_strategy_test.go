@@ -17,15 +17,16 @@ import (
 
 // TestRefusalPromptKeepsEscalationLadder 盯住四档拒答阶梯都还在，顺序没乱。
 func TestRefusalPromptKeepsEscalationLadder(t *testing.T) {
+	// ④「不要完全不出声」搬进了四档共用的尾巴（promptRefusalTail），不在这条
+	// 阶梯里——它对每一档都成立，由 TestRefusalPromptLeavesSilenceToRuntime 盯着。
 	ladder := []string{
 		"①先试着把话改成能发的",
 		"②改不动就看是什么性质",
 		"③如果不能答的原因本身敏感",
-		"④不要完全不出声",
 	}
 	previous := -1
 	for _, step := range ladder {
-		index := strings.Index(promptRefusal, step)
+		index := strings.Index(refusalStrategyPrompt(RefusalStrategySmart), step)
 		if index < 0 {
 			t.Fatalf("拒答提示词缺少这一档：%s", step)
 		}
@@ -34,7 +35,7 @@ func TestRefusalPromptKeepsEscalationLadder(t *testing.T) {
 		}
 		previous = index
 	}
-	if !strings.Contains(promptRefusal, "能停在前一档就不要往后走") {
+	if !strings.Contains(refusalStrategyPrompt(RefusalStrategySmart), "能停在前一档就不要往后走") {
 		t.Fatal("拒答提示词没有说明这是一条阶梯，模型会把四档当并列选项")
 	}
 }
@@ -49,7 +50,7 @@ func TestRefusalPromptForbidsNamingSensitiveTrigger(t *testing.T) {
 		"不要解释「因为涉及什么所以不能说」",
 		"那句解释本身就是风险",
 	} {
-		if !strings.Contains(promptRefusal, want) {
+		if !strings.Contains(refusalStrategyPrompt(RefusalStrategySmart), want) {
 			t.Fatalf("拒答提示词丢了这条约束：%s", want)
 		}
 	}
@@ -60,10 +61,10 @@ func TestRefusalPromptForbidsNamingSensitiveTrigger(t *testing.T) {
 // 累计拒答到阈值后暂停响应是运行时的事（见 reply_suppression.go）。让模型也能
 // 自己决定沉默，就有两套互相看不见的静默逻辑，事件记录上分不清是谁干的。
 func TestRefusalPromptLeavesSilenceToRuntime(t *testing.T) {
-	if !strings.Contains(promptRefusal, "连续拒答多次后是否暂停响应由运行时自己决定") {
+	if !strings.Contains(refusalStrategyPrompt(RefusalStrategySmart), "连续拒答多次后是否暂停响应由运行时自己决定") {
 		t.Fatal("拒答提示词没有把暂停响应的决定权划给运行时")
 	}
-	if !strings.Contains(promptRefusal, "你不能直接触发") {
+	if !strings.Contains(refusalStrategyPrompt(RefusalStrategySmart), "你不能直接触发") {
 		t.Fatal("拒答提示词没有禁止模型自己触发账号处置")
 	}
 }
@@ -95,5 +96,91 @@ func TestRefusalPromptIsInjectedIntoSystemPrompt(t *testing.T) {
 	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}, nil)
 	if !strings.Contains(prompt, "①先试着把话改成能发的") {
 		t.Fatal("系统提示词里没有拒答阶梯")
+	}
+}
+
+// TestRefusalStrategyNormalizesUnknownToSmart 盯住空值和脏值都落到智能档。
+//
+// 存量配置里这个字段是空的，归一化要是漏了，拒答规则整段拼不出来——不是报错，
+// 是系统提示词里静悄悄少一段，线上表现为拒答行为退回没有任何约束的状态。
+func TestRefusalStrategyNormalizesUnknownToSmart(t *testing.T) {
+	for _, input := range []RefusalStrategy{"", "nope", "SMART"} {
+		if got := normalizeRefusalStrategy(input); got != RefusalStrategySmart {
+			t.Fatalf("normalizeRefusalStrategy(%q) = %q，应该退回智能档", input, got)
+		}
+	}
+	if DefaultBotConfig().RefusalStrategy != RefusalStrategySmart {
+		t.Fatal("默认配置的拒答策略不是智能档")
+	}
+	// 空值经过 WithDefaults 也要补成智能档：存量配置就是这条路进来的。
+	if got := (BotConfig{}).WithDefaults().RefusalStrategy; got != RefusalStrategySmart {
+		t.Fatalf("WithDefaults 后的拒答策略 = %q", got)
+	}
+}
+
+// TestEachRefusalStrategyProducesItsOwnRule 盯住四档真的不一样。
+//
+// 每档都要带上共用的头尾，各自的正文互不相同。少了这条，某一档写错常量指向
+// 另一档也不会有人发现——两个档位表现一样，配置形同虚设。
+func TestEachRefusalStrategyProducesItsOwnRule(t *testing.T) {
+	bodies := map[RefusalStrategy]string{
+		RefusalStrategySmart:   "①先试着把话改成能发的",
+		RefusalStrategyRewrite: "优先把话改成能发的",
+		RefusalStrategyExplain: "直接把原因说清楚",
+		RefusalStrategyVague:   "任何情况下都不要交代原因",
+	}
+	seen := map[string]RefusalStrategy{}
+	for strategy, marker := range bodies {
+		prompt := refusalStrategyPrompt(strategy)
+		if !strings.Contains(prompt, marker) {
+			t.Fatalf("%q 档没有自己的正文，缺少 %q", strategy, marker)
+		}
+		if !strings.Contains(prompt, "拒绝回答任何一条消息") || !strings.Contains(prompt, "不要完全不出声") {
+			t.Fatalf("%q 档丢了共用的头或尾", strategy)
+		}
+		if other, dup := seen[prompt]; dup {
+			t.Fatalf("%q 和 %q 拼出来的规则一模一样", strategy, other)
+		}
+		seen[prompt] = strategy
+	}
+}
+
+// TestNonExplainStrategiesNeverNameTheTrigger 是这次配置化最不能破的一条。
+//
+// 「说明原因」是用户明确选的，说了就说了。除它以外的三档都必须带着「不要复述、
+// 点名或影射」——智能档会走到模糊拒答，改写档兜底也是模糊拒答，模糊档更不用说。
+func TestNonExplainStrategiesNeverNameTheTrigger(t *testing.T) {
+	for _, strategy := range []RefusalStrategy{RefusalStrategySmart, RefusalStrategyRewrite, RefusalStrategyVague} {
+		prompt := refusalStrategyPrompt(strategy)
+		for _, want := range []string{
+			"不要复述、点名或影射触发拒答的具体内容",
+			"不要解释「因为涉及什么所以不能说」",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("%q 档缺少约束：%s", strategy, want)
+			}
+		}
+	}
+}
+
+// TestSystemPromptFollowsConfiguredRefusalStrategy 确认配置真的传到了提示词里。
+//
+// 常量拼得再对，runtime 那边只有一行 WriteString；写死成某一档不会有编译错误，
+// 表现是 WebUI 上怎么选都没用。
+func TestSystemPromptFollowsConfiguredRefusalStrategy(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
+	for strategy, marker := range map[RefusalStrategy]string{
+		RefusalStrategyExplain: "直接把原因说清楚",
+		RefusalStrategyVague:   "任何情况下都不要交代原因",
+	} {
+		cfg := BotConfig{RefusalStrategy: strategy}.WithDefaults()
+		runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		prompt := runtime.systemPrompt(event, nil)
+		if !strings.Contains(prompt, marker) {
+			t.Fatalf("系统提示词没有跟随 %q 档", strategy)
+		}
+		if strategy != RefusalStrategySmart && strings.Contains(prompt, "①先试着把话改成能发的") {
+			t.Fatalf("%q 档的提示词里混进了智能档的阶梯", strategy)
+		}
 	}
 }
