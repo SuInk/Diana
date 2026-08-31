@@ -230,3 +230,47 @@ func TestPrivateFollowUpKeepsPendingReply(t *testing.T) {
 		t.Fatalf("pending private reply should still be delivered: %v", err)
 	}
 }
+
+// 链接解析的投递不该被追发打断。
+//
+// 闸门的含义是「这次发送是模型对这条消息的回复」，那种输出被取代是安全的：
+// 新的一轮会把前后两条一起答。解析结果不满足这个前提——新来的那一轮自己没带
+// 链接、不会触发解析，模型也拿不到视频信息，卡片丢了就再也不会出现。所以它
+// 摘掉闸门发送，和后台插件任务用 rootCtx 发送是同一个做法。
+func TestResolverDeliveryIsNotSupersededByFollowUp(t *testing.T) {
+	runtime := replyInterruptTestRuntime()
+	link := directedGroupMessage("20001", "10001", "https://www.bilibili.com/video/BV1M64y1a7zh/")
+	runtime.noteDirectedInbound(link)
+
+	followUp := directedGroupMessage("20002", "10001", "这个怎么样")
+	runtime.noteDirectedInbound(followUp)
+	if !runtime.inboundTriggerSuperseded(context.Background(), link) {
+		t.Fatal("前置条件：追发应当取代待发的普通回复")
+	}
+
+	// 普通回复被取代是对的。
+	gated := withReplyTriggerGate(context.Background())
+	if _, err := runtime.sendOutgoingWithResult(gated, link, OutgoingMessage{GroupID: "123456", Text: "普通回复"}); !errors.Is(err, errReplyTriggerSuperseded) {
+		t.Fatalf("普通回复应当被取代，err = %v", err)
+	}
+
+	// 解析投递必须照发。
+	resolverCtx := withoutReplyTriggerGate(gated)
+	if err := runtime.interruptedReplyError(resolverCtx, link); err != nil {
+		t.Fatalf("解析投递不该被追发打断: %v", err)
+	}
+	if _, err := runtime.sendOutgoingWithResult(resolverCtx, link, OutgoingMessage{
+		GroupID: "123456", Text: "【标题】…", ImageURLs: []string{"https://example.invalid/cover.jpg"},
+	}); err != nil {
+		t.Fatalf("解析结果应当照常发出: %v", err)
+	}
+	// 解析卡片实际多走合并转发这条路，它是另一个发送入口，同样不能被拦。
+	nodes := []map[string]any{{"type": "node", "data": map[string]any{"content": "【标题】…"}}}
+	if _, err := runtime.sendForwardNodesWithResult(resolverCtx, link, nodes); err != nil {
+		t.Fatalf("合并转发形式的解析结果也应当照常发出: %v", err)
+	}
+	// 没有解析标记时，合并转发仍然照常被追发取代。
+	if _, err := runtime.sendForwardNodesWithResult(gated, link, nodes); !errors.Is(err, errReplyTriggerSuperseded) {
+		t.Fatalf("普通的合并转发回复应当被取代，err = %v", err)
+	}
+}
