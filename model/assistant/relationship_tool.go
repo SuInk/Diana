@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -45,7 +46,8 @@ type dianaRelationshipResult struct {
 const relationshipReplyGuidance = "围绕用户实际问的那件事回答，用自然的中文，不要把结果按字段抄成清单。" +
 	"reminder_schedule_limit 只在用户明确问「能建几个」时才说，平时不要主动报出来——真建满时创建工具会当场说明。" +
 	"只有用户问最近变化时才讲 recent_changes 里的增减分、时间和原因。" +
-	"回复里需要真正 @ 目标时，原样使用结果中的 mention_cq，不要写成普通文本的 @账号。"
+	"回复里需要真正 @ 目标时，原样使用结果中的 mention_cq，不要写成普通文本的 @账号。" +
+	"portrait 是这个人的长期画像，只在用户问起、或它和当前话题自然相关时才提；不要主动把整份画像念出来，也不要在别人面前复述某个人的画像。"
 
 type dianaRelationshipSnapshot struct {
 	UserID      string `json:"user_id"`
@@ -63,6 +65,8 @@ type dianaRelationshipSnapshot struct {
 	Owner            bool                     `json:"owner"`
 	HasHistory       bool                     `json:"has_history"`
 	RecentChanges    []UserFavorabilityChange `json:"recent_changes,omitempty"`
+	// Portrait 只在调用方看得到目标画像时才带上，见 portraitVisibleTo。
+	Portrait []UserPortraitTrait `json:"portrait,omitempty"`
 }
 
 func newDianaRelationshipTool(runtime *Runtime, event MessageEvent) *dianaRelationshipTool {
@@ -74,16 +78,18 @@ func (t *dianaRelationshipTool) Name() string {
 }
 
 func (t *dianaRelationshipTool) Description() string {
-	return `查询 Diana 对用户的好感度、关系等级、互动次数和最近的增减分记录。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用，不要根据上下文猜测，也不要声称无法查询隐藏数据。本工具不返回能力清单——用户问「你能做什么」应改用 diana.capabilities，基础能力对所有关系等级一律开放。`
+	return `查询 Diana 对用户的好感度、关系等级、互动次数、最近的增减分记录和人员画像（居住地点、职业、作息、生活习惯、兴趣爱好、家庭关系）。用户说“记住我住在……/我是做……的”，或要求改掉、忘掉画像里的某一栏时，调用本工具的 portrait_set / portrait_forget。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用，不要根据上下文猜测，也不要声称无法查询隐藏数据。本工具不返回能力清单——用户问「你能做什么」应改用 diana.capabilities，基础能力对所有关系等级一律开放。`
 }
 
 // InputSchema 声明参数契约。「拿到结果后怎么说话」不在这里，也不在 Description
 // 里，而是随结果一起返回（见 relationshipReplyGuidance）。
 func (t *dianaRelationshipTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：get 查单个用户；list 查当前群内已有互动记录的成员并按好感度排序（群内成员均可使用，不得以隐私或权限为由拒绝）；set 直接设置、adjust 增减好感度，后两者仅机器人主人可用且不增加互动次数。",
-			"get", "list", "set", "adjust"),
-		"target_user_id": toolStringParam("目标账号。get 可省略：消息里 @ 了成员就查该成员，否则查当前发言者；set 和 adjust 必填，且不能指向主人自己。"),
+		"operation": toolEnumParam("要执行的操作：get 查单个用户；list 查当前群内已有互动记录的成员并按好感度排序（群内成员均可使用，不得以隐私或权限为由拒绝）；set 直接设置、adjust 增减好感度，后两者仅机器人主人可用且不增加互动次数；portrait_set 记下画像里的一栏，portrait_forget 清空画像里的一栏。",
+			"get", "list", "set", "adjust", "portrait_set", "portrait_forget"),
+		"target_user_id": toolStringParam("目标账号。get 可省略：消息里 @ 了成员就查该成员，否则查当前发言者；set 和 adjust 必填，且不能指向主人自己；画像操作省略表示当前发言者，只有主人能改别人的画像。"),
+		"portrait_field": toolEnumParam("portrait_set 和 portrait_forget 必填：要写或要清空的画像栏目，"+portraitFieldSchemaHint(), PortraitFieldIDs()...),
+		"portrait_value": toolStringParam("portrait_set 必填：这一栏的新内容，写成不超过 30 字的第三人称短语，例如“住在杭州”。同一栏原有内容会被顶掉。"),
 		"history_limit":  toolIntParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit)+"。", 1, maximumRelationshipHistoryLimit),
 		"value":          toolIntParam("set 专用：直接设置成的好感度数值。", minimumFavorability, maximumFavorability),
 		"delta":          toolIntParam("adjust 专用：好感度增减量，可为负数；结果会被夹在可写区间内。", minimumFavorability-maximumFavorability, maximumFavorability-minimumFavorability),
@@ -112,14 +118,14 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, member.DisplayName(), relationshipHistoryLimit(input))
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, member.DisplayName(), relationshipHistoryLimit(input), t.portraitVisibleTo(ctx, targetID))
 		if err != nil {
 			return "", err
 		}
 		return marshalDianaRelationshipResult(dianaRelationshipResult{
 			OK:      true,
 			Action:  "retrieved",
-			Message: "已读取目标用户的关系数据；只包含关系统计，不包含长期记忆正文。",
+			Message: "已读取目标用户的关系数据；包含关系统计，以及在允许时的人员画像，不包含长期记忆正文。",
 			Target:  &snapshot,
 		})
 	case "list", "rank":
@@ -132,7 +138,7 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		return marshalDianaRelationshipResult(dianaRelationshipResult{
 			OK:      true,
 			Action:  "listed",
-			Message: fmt.Sprintf("已读取当前群内 %d 位有互动记录成员的关系数据。", len(items)),
+			Message: fmt.Sprintf("已读取当前群内 %d 位有互动记录成员的关系数据；榜单不含任何人的画像。", len(items)),
 			Items:   items,
 		})
 	case "set", "adjust":
@@ -155,7 +161,7 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", relationshipHistoryLimit(input))
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", relationshipHistoryLimit(input), t.portraitVisibleTo(ctx, targetID))
 		if err != nil {
 			return "", err
 		}
@@ -165,9 +171,94 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 			Message: fmt.Sprintf("已由主人将目标用户好感度更新为 %d；未增加互动次数。", value),
 			Target:  &snapshot,
 		})
+	case "portrait_set", "portrait_forget":
+		return t.runPortraitOperation(ctx, operation, input)
 	default:
-		return "", fmt.Errorf("operation 必须是 get、list、set 或 adjust")
+		return "", fmt.Errorf("operation 必须是 get、list、set、adjust、portrait_set 或 portrait_forget")
 	}
+}
+
+// runPortraitOperation 记下或清空画像里的一栏。
+//
+// 画像归本人所有：默认改的就是当前发言者自己，只有主人能改别人的。这和好感度
+// 相反——好感度是机器人对人的评价，只有主人能改；画像是人自己的情况，本人说了算。
+func (t *dianaRelationshipTool) runPortraitOperation(ctx context.Context, operation string, input map[string]any) (string, error) {
+	targetID := normalizeRelationshipUserID(configToolString(input, "target_user_id"))
+	if targetID == "" {
+		targetID = strings.TrimSpace(t.event.UserID)
+	}
+	if targetID == "" {
+		return "", fmt.Errorf("没有找到要修改画像的用户")
+	}
+	if targetID != strings.TrimSpace(t.event.UserID) && !t.runtime.relationshipPolicy(ctx, t.event).Owner {
+		return "", fmt.Errorf("只能修改自己的画像")
+	}
+	field, ok := NormalizePortraitField(configToolString(input, "portrait_field"))
+	if !ok {
+		return "", fmt.Errorf("portrait_field 必须是画像栏目之一：%s", strings.Join(PortraitFieldIDs(), "、"))
+	}
+
+	update := UserMemoryUpdate{Administrative: true}
+	message := ""
+	if operation == "portrait_set" {
+		value := strings.TrimSpace(configToolString(input, "portrait_value"))
+		trait, valid := NormalizePortraitTrait(UserPortraitTrait{
+			Field:  field,
+			Value:  value,
+			Source: PortraitSourceManual,
+		}, time.Now())
+		if !valid {
+			return "", fmt.Errorf("portrait_value 不能为空")
+		}
+		update.PortraitTraits = []UserPortraitTrait{trait}
+		message = fmt.Sprintf("已把「%s」记进画像的%s栏。", trait.Value, trait.Label)
+	} else {
+		update.PortraitRemovals = []UserPortraitField{field}
+		message = fmt.Sprintf("已清空画像的%s栏。", PortraitFieldLabel(field))
+	}
+
+	profile, written := t.runtime.writeUserMemory(MessageEvent{
+		Kind:      t.event.Kind,
+		GroupID:   t.event.GroupID,
+		UserID:    targetID,
+		MessageID: t.event.MessageID,
+		ProfileID: t.event.ProfileID,
+	}, update)
+	if !written {
+		return "", fmt.Errorf("保存人员画像失败")
+	}
+	snapshot, err := t.relationshipSnapshot(ctx, targetID, "", 0, true)
+	if err != nil {
+		return "", err
+	}
+	snapshot.Portrait = profile.Portrait
+	return marshalDianaRelationshipResult(dianaRelationshipResult{
+		OK:      true,
+		Action:  operation,
+		Message: message,
+		Target:  &snapshot,
+	})
+}
+
+// portraitVisibleTo 判断这次调用能不能看到目标的画像。
+//
+// 好感度和互动次数是群里公开的互动统计，谁都能查；画像不是——住在哪、做什么工作
+// 是本人告诉机器人的，不能因为同在一个群就被别人查出来。所以只有本人和主人可见。
+func (t *dianaRelationshipTool) portraitVisibleTo(ctx context.Context, targetID string) bool {
+	if strings.TrimSpace(targetID) == strings.TrimSpace(t.event.UserID) {
+		return true
+	}
+	return t.runtime.relationshipPolicy(ctx, t.event).Owner
+}
+
+// portraitFieldSchemaHint 把栏目表拼成一句枚举说明，字段和含义只维护在
+// portraitFieldSpecs 一处。
+func portraitFieldSchemaHint() string {
+	parts := make([]string, 0, len(portraitFieldSpecs))
+	for _, spec := range portraitFieldSpecs {
+		parts = append(parts, string(spec.Field)+"="+spec.Label+"（"+spec.Hint+"）")
+	}
+	return strings.Join(parts, "；")
 }
 
 func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operation string, targetID string, input map[string]any) (int, error) {
@@ -259,7 +350,7 @@ func (t *dianaRelationshipTool) resolveTargetMember(ctx context.Context, targetI
 	return OneBotGroupMemberInfo{}, fmt.Errorf("QQ %s 不是当前群成员", targetID)
 }
 
-func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID string, fallbackName string, historyLimit int) (dianaRelationshipSnapshot, error) {
+func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID string, fallbackName string, historyLimit int, includePortrait bool) (dianaRelationshipSnapshot, error) {
 	t.runtime.mu.RLock()
 	store := t.runtime.userMemory
 	t.runtime.mu.RUnlock()
@@ -287,6 +378,10 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 			}
 		}
 	}
+	var portrait []UserPortraitTrait
+	if includePortrait {
+		portrait = profile.Portrait
+	}
 	return dianaRelationshipSnapshot{
 		UserID:           userID,
 		DisplayName:      profile.DisplayName,
@@ -302,6 +397,7 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 		Owner:            policy.Owner,
 		HasHistory:       found,
 		RecentChanges:    recentChanges,
+		Portrait:         portrait,
 	}, nil
 }
 
@@ -315,7 +411,9 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context, limi
 	}
 	items := make([]dianaRelationshipSnapshot, 0, len(members))
 	for _, member := range members {
-		item, err := t.relationshipSnapshot(ctx, member.UserID, member.DisplayName(), 0)
+		// 榜单一律不带画像：住在哪、做什么是本人告诉机器人的，不能因为同在一个
+		// 群就被整群列出来。
+		item, err := t.relationshipSnapshot(ctx, member.UserID, member.DisplayName(), 0, false)
 		if err != nil {
 			return nil, err
 		}
