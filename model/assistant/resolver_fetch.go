@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // 知乎、小红书这类站点对明显的机器人 UA 会直接返回登录墙或空壳页面，
@@ -18,9 +20,11 @@ import (
 // 链接预览使用真实浏览器请求头是 IM 机器人（Slack/Discord unfurl 等）的通行做法；
 // 配合结果缓存压低请求频率，本身就是最有效的防风控手段。
 
-const (
-	resolverUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+// resolverUserAgent 和无头浏览器那条路共用同一个身份，见 agent.BrowserUserAgent。
+// 两条路各写一份的时候，浏览器那条报的是 HeadlessChrome，同一个站会看到两个访客。
+var resolverUserAgent = agent.BrowserUserAgent
 
+const (
 	// 抓取成功缓存 10 分钟，失败短缓存 2 分钟，同一链接被连续刷时不重复请求。
 	resolverCacheTTL        = 10 * time.Minute
 	resolverCacheFailureTTL = 2 * time.Minute
