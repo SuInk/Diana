@@ -589,13 +589,42 @@ func TestRoleplayAndCatgirlDoNotContradictEachOther(t *testing.T) {
 
 func TestActionDescriptionIsAnIndependentPersonaPreservingLayer(t *testing.T) {
 	combined := actionDescriptionPrompt(true) + "\n" + actionDescriptionClosingAnchor(true)
-	for _, want := range []string{"原有人设和表达风格", "不必只写一处", "台词前、中间或结尾", "不额外变得黏人或亲密"} {
+	for _, want := range []string{"原有人设和表达风格", "不必只写一处", "台词前、中间或结尾", "不额外变得黏人或亲密", "每条含自然语言的回复至少"} {
 		if !strings.Contains(combined, want) {
 			t.Fatalf("动作描写提示缺少 %q：%q", want, combined)
 		}
 	}
 	if got := actionDescriptionPrompt(false); got != "" {
 		t.Fatalf("关闭动作描写后仍注入了提示：%q", got)
+	}
+}
+
+func TestCatgirlActionDescriptionToggleProducesUnambiguousPrompt(t *testing.T) {
+	withoutActions := ReplyStyleCatgirl.promptWithActions(true, personaVoice{}, false)
+	if !strings.Contains(withoutActions, catgirlNoActionRule) {
+		t.Fatalf("关闭动作描写时猫娘风格没有禁止旁白：%q", withoutActions)
+	}
+
+	withActions := ReplyStyleCatgirl.promptWithActions(true, personaVoice{}, true) + "\n" +
+		actionDescriptionPrompt(true) + "\n" + actionDescriptionClosingAnchor(true)
+	if strings.Contains(withActions, catgirlNoActionRule) {
+		t.Fatalf("开启动作描写后仍保留了冲突的禁止规则：%q", withActions)
+	}
+	if !strings.Contains(withActions, "每条含自然语言的回复至少") {
+		t.Fatalf("开启动作描写后没有逐条约束：%q", withActions)
+	}
+}
+
+func TestCatgirlSystemPromptEndsWithMandatoryActionAnchor(t *testing.T) {
+	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl, ActionDescriptionEnabled: boolPointer(true)}.WithDefaults()
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, nil)
+	anchor := actionDescriptionClosingAnchor(true)
+	if !strings.HasSuffix(prompt, anchor) {
+		t.Fatalf("最终提示词没有以动作描写锚点收尾：%q", prompt)
+	}
+	if strings.Contains(prompt, catgirlNoActionRule) {
+		t.Fatalf("最终提示词同时要求并禁止动作描写：%q", prompt)
 	}
 }
 
