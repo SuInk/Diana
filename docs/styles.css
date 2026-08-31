@@ -464,9 +464,33 @@ tbody tr:last-child td { border-bottom: none; }
 }
 
 @media (max-width: 600px) {
-  .top-links a:not(.icon-link) { display: none; }
+  /* 之前这里是 .top-links a:not(.icon-link) { display:none }，给纯图标时代写的。
+     后来每项都加了文字、去掉了 icon-link，这条就把首页/演示/语言切换/GitHub
+     全隐藏了——移动端连语言都切不了。改成只藏文字、留下图标。 */
+  .nav-label { display: none; }
+  .top-links { gap: 2px; }
+  .top-links a,
+  .top-links .icon-button,
+  .top-links .icon-button.theme-item,
+  .top-links .lang-switch {
+    width: 40px; min-width: 40px; height: 40px; padding: 0;
+    justify-content: center;
+  }
+  .brand { min-height: 40px; }
   .brand small { display: none; }
   .content { padding: 24px 0 56px; }
+  .topbar { gap: 10px; padding: 0 14px; }
+  /* 页脚与页内导航的链接在窄屏也要够大。 */
+  .footer > div:last-child { gap: 4px; }
+  .footer a, .page-nav a {
+    display: inline-flex; align-items: center;
+    min-height: 40px; padding: 0 8px;
+  }
+  .sidebar-nav a { min-height: 40px; display: flex; align-items: center; }
+  .tabs button { min-height: 40px; }
+  /* 代码块的复制按钮在触屏上没有 hover，常驻显示才点得到。 */
+  pre .copy-button { min-height: 40px; padding: 0 12px; opacity: 1; }
+  .menu-button { width: 40px; height: 40px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
