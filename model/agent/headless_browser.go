@@ -396,6 +396,14 @@ func sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir string) []string {
 		"--password-store=basic",
 		"--use-mock-keychain",
 		"--hide-scrollbars",
+		// 对外只有一个身份：跟 HTTP 抓取那条路共用同一个 UA 和语言偏好。不设的话
+		// UA 里直接写着 HeadlessChrome，同一个站两条路会看到两个访客。
+		"--user-agent=" + BrowserUserAgent,
+		"--lang=zh-CN",
+		"--accept-lang=" + BrowserAcceptLanguage,
+		// 关掉 Blink 的自动化标记，navigator.webdriver 才不会是 true。这是页面里
+		// 一行 JS 就能读到的字段，UA 改了它没改等于没改。
+		"--disable-blink-features=AutomationControlled",
 		"--host-resolver-rules=MAP localhost ~NOTFOUND, MAP *.localhost ~NOTFOUND, MAP *.local ~NOTFOUND, MAP host.docker.internal ~NOTFOUND, MAP gateway.docker.internal ~NOTFOUND",
 	}
 }
