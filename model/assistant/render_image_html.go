@@ -132,12 +132,45 @@ func sanitizeRenderSVG(source string) (string, error) {
 
 // mermaidBootstrap 用 strict 安全级别初始化：禁掉 click 指令，标签里的 HTML
 // 也会被转义，模型写进图里的文字不会变成可执行的东西。
+//
+// 甘特图在没有显式 tickInterval 时会按天画横轴。四周左右的排期会因此塞进
+// 近 30 个完整日期，哪怕画布够宽也一定重叠。渲染完成后按实际文字宽度隐藏
+// 相撞的标签；只隐藏文字、不删网格线，也不改模型提供的日期和任务数据。
 var mermaidBootstrap = `mermaid.initialize(` + mustJSON(map[string]any{
-	"startOnLoad":   true,
+	"startOnLoad":   false,
 	"securityLevel": "strict",
 	"theme":         "neutral",
 	"fontFamily":    renderFontStack,
-}) + `);`
+}) + `);
+function thinOverlappingGanttTicks() {
+  document.querySelectorAll('.mermaid svg .grid').forEach(function (grid) {
+    var labels = Array.from(grid.querySelectorAll('.tick text')).filter(function (label) {
+      return label.getClientRects().length > 0;
+    });
+    if (labels.length < 2) return;
+
+    var gap = 8;
+    var lastRight = -Infinity;
+    labels.forEach(function (label, index) {
+      var box = label.getBoundingClientRect();
+      var isLast = index === labels.length - 1;
+      if (box.left < lastRight + gap && !isLast) {
+        label.style.display = 'none';
+        return;
+      }
+      if (isLast && box.left < lastRight + gap) {
+        for (var previous = index - 1; previous >= 0; previous--) {
+          if (labels[previous].style.display !== 'none') {
+            labels[previous].style.display = 'none';
+            break;
+          }
+        }
+      }
+      lastRight = box.right;
+    });
+  });
+}
+mermaid.run().then(thinOverlappingGanttTicks);`
 
 func mustJSON(value any) string {
 	encoded, err := json.Marshal(value)

@@ -254,6 +254,12 @@ func TestBuildRenderPageGivesMermaidLayoutWidth(t *testing.T) {
 	if !strings.Contains(mermaidPage, ".render-root-mermaid { display: block;") {
 		t.Fatal("画布类没有脱离 inline-block")
 	}
+	if !strings.Contains(mermaidPage, "thinOverlappingGanttTicks") {
+		t.Fatal("mermaid 页面没有在渲染后处理重叠的甘特图横轴标签")
+	}
+	if !strings.Contains(mermaidPage, `"startOnLoad":false`) {
+		t.Fatal("mermaid 必须由 bootstrap 主动渲染，才能在完成后整理横轴标签")
+	}
 	// 另外两种靠 inline-block 收缩到内容宽度，裁白才有意义，不该被撑开。
 	for _, tc := range []struct{ name, format, content string }{
 		{"markdown", renderFormatMarkdown, "文字"},
