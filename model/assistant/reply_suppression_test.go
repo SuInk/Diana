@@ -52,7 +52,9 @@ func TestReplySuppressionPromptLeavesAccountControlToSendAudit(t *testing.T) {
 		"不限于机器人自动回复",
 		"对方是普通用户还是机器人都可以",
 		"群聊私聊都可以",
-		"非空、简短、自然、用户看得见的说明",
+		// 措辞从「说明」改成了「话」：拒答阶梯的第③档明确要求不解释原因，
+		// 再叫它「说明」会和那一档打架。这条断言要保的是「必须出声」，没变。
+		"非空、简短、自然、用户看得见的话",
 		replyRefusalMarker,
 		replySuppressionMarker,
 		"已停用",

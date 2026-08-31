@@ -36,6 +36,34 @@ const (
 	maximumRecallReplyTTLSeconds = 60 * 60
 )
 
+// RefusalStrategy 决定机器人决定不正面回答时怎么说。
+//
+// 这一档单独拿出来配，是因为「说明为什么不能答」本身可能就是那句会出事的话：
+// 群里一句「这个话题涉及敏感政治，我不方便讲」把触发点原样复述了一遍，风险比
+// 闭嘴还大。不同部署对这件事的容忍度差很多，不该由一份提示词替所有人定死。
+type RefusalStrategy string
+
+const (
+	// RefusalStrategySmart 让模型按四档阶梯自己判断：能改写就改写，改不动看
+	// 原因性质决定说不说。默认值——大多数时候它比一刀切的档位说得更自然。
+	RefusalStrategySmart RefusalStrategy = "smart"
+	// RefusalStrategyRewrite 要求尽量绕开，只有实在无从下手时才拒绝。
+	RefusalStrategyRewrite RefusalStrategy = "rewrite"
+	// RefusalStrategyExplain 是旧行为：拒绝时把原因说清楚。
+	RefusalStrategyExplain RefusalStrategy = "explain"
+	// RefusalStrategyVague 一律模糊带过，任何情况下都不交代原因。
+	RefusalStrategyVague RefusalStrategy = "vague"
+)
+
+func normalizeRefusalStrategy(strategy RefusalStrategy) RefusalStrategy {
+	switch strategy {
+	case RefusalStrategySmart, RefusalStrategyRewrite, RefusalStrategyExplain, RefusalStrategyVague:
+		return strategy
+	default:
+		return RefusalStrategySmart
+	}
+}
+
 func normalizeRecallReplyMode(mode RecallReplyMode) RecallReplyMode {
 	switch mode {
 	case RecallReplyModeLLMSummary, RecallReplyModeOriginalForward:
@@ -387,6 +415,7 @@ type BotConfig struct {
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy              RefusalStrategy `json:"refusal_strategy,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
@@ -641,6 +670,7 @@ type ConfigPayload struct {
 	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy              RefusalStrategy `json:"refusal_strategy,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
@@ -1138,6 +1168,7 @@ func DefaultBotConfig() BotConfig {
 		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
 		RecallReplyMode:                RecallReplyModeLLMSummary,
+		RefusalStrategy:                RefusalStrategySmart,
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
 		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      boolPointer(true),
@@ -1306,6 +1337,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
 	}
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
+	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
 	if cfg.RecallReplyAutoDeleteEnabled == nil {
 		cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(defaults.RecallReplyAutoDeleteEnabled)
 	}
@@ -1575,6 +1607,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		DirectReplyChunkSize:              cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:             cfg.ForwardReplyThreshold,
 		RecallReplyMode:                   cfg.RecallReplyMode,
+		RefusalStrategy:                   cfg.RefusalStrategy,
 		RecallReplyAutoDeleteEnabled:      copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:             cfg.RecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:         copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
@@ -1738,6 +1771,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		DirectReplyChunkSize:           payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:          payload.ForwardReplyThreshold,
 		RecallReplyMode:                payload.RecallReplyMode,
+		RefusalStrategy:                payload.RefusalStrategy,
 		RecallReplyAutoDeleteEnabled:   copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:          payload.RecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      copyBoolPointer(payload.LLMIdentityMaskingEnabled),

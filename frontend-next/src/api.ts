@@ -104,6 +104,9 @@ export interface LLMProviderCatalog {
 /** 群聊触发称呼的匹配松紧。loose 出现即触发；smart 在明显是谈论机器人时放行给插话判定；strict 还要求称呼位于句首或句尾。 */
 export type AliasTriggerMode = "loose" | "smart" | "strict";
 
+/** 拒答话术：决定机器人不正面回答时说什么。见后端 RefusalStrategy。 */
+export type RefusalStrategy = "smart" | "rewrite" | "explain" | "vague";
+
 export interface BotProfileConfig {
   id?: string;
   name?: string;
@@ -163,6 +166,8 @@ export interface BotProfileConfig {
   group_triggers?: string[];
   /** 触发称呼的匹配松紧；不设等同 smart。 */
   group_trigger_mode?: AliasTriggerMode;
+  /** 拒答话术；不设等同 smart（由模型按语境判断说不说原因）。 */
+  refusal_strategy?: RefusalStrategy;
   disabled_groups?: string[];
   /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
   group_admission?: GroupAdmission;
