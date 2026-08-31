@@ -17,8 +17,10 @@ const (
 	dianaChatHistoryToolName       = "diana.chat_history"
 	defaultChatHistoryRecentLimit  = 20
 	maximumChatHistoryResultLimit  = 50
-	defaultChatHistoryBefore       = 4
-	defaultChatHistoryAfter        = 2
+	defaultChatHistoryBefore       = 10
+	defaultChatHistoryAfter        = 10
+	defaultChatHistorySearchBefore = 10
+	defaultChatHistorySearchAfter  = 10
 	maximumChatHistoryAroundRadius = 10
 	defaultChatHistorySearchHours  = 24
 	maximumChatHistorySearchHours  = 24 * 365 * 100
@@ -53,22 +55,24 @@ type dianaChatHistoryResult struct {
 }
 
 type dianaChatHistoryItem struct {
-	MessageID               string   `json:"message_id,omitempty"`
-	Time                    int64    `json:"event_time,omitempty"`
-	LocalTime               string   `json:"local_time,omitempty"`
-	Sender                  string   `json:"sender"`
-	Text                    string   `json:"text,omitempty"`
-	ContentTypes            []string `json:"content_types,omitempty"`
-	ImageCount              int      `json:"image_count,omitempty"`
-	ImageDescriptions       []string `json:"image_descriptions,omitempty"`
-	VideoCount              int      `json:"video_count,omitempty"`
-	FileCount               int      `json:"file_count,omitempty"`
-	QuotedMessageID         string   `json:"quoted_message_id,omitempty"`
-	QuotedSender            string   `json:"quoted_sender,omitempty"`
-	QuotedText              string   `json:"quoted_text,omitempty"`
-	QuotedImageCount        int      `json:"quoted_image_count,omitempty"`
-	QuotedImageDescriptions []string `json:"quoted_image_descriptions,omitempty"`
-	GroupID                 string   `json:"group_id,omitempty"`
+	MessageID               string                 `json:"message_id,omitempty"`
+	Time                    int64                  `json:"event_time,omitempty"`
+	LocalTime               string                 `json:"local_time,omitempty"`
+	Sender                  string                 `json:"sender"`
+	Text                    string                 `json:"text,omitempty"`
+	ContentTypes            []string               `json:"content_types,omitempty"`
+	ImageCount              int                    `json:"image_count,omitempty"`
+	ImageDescriptions       []string               `json:"image_descriptions,omitempty"`
+	VideoCount              int                    `json:"video_count,omitempty"`
+	FileCount               int                    `json:"file_count,omitempty"`
+	QuotedMessageID         string                 `json:"quoted_message_id,omitempty"`
+	QuotedSender            string                 `json:"quoted_sender,omitempty"`
+	QuotedText              string                 `json:"quoted_text,omitempty"`
+	QuotedImageCount        int                    `json:"quoted_image_count,omitempty"`
+	QuotedImageDescriptions []string               `json:"quoted_image_descriptions,omitempty"`
+	GroupID                 string                 `json:"group_id,omitempty"`
+	ContextBefore           []dianaChatHistoryItem `json:"context_before,omitempty"`
+	ContextAfter            []dianaChatHistoryItem `json:"context_after,omitempty"`
 }
 
 // withRecallSink 绑定本轮的撤回响应收集器。只有正式回复路径需要它：读到撤回记录后
@@ -141,6 +145,8 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；range 按时间段完整列出消息，用户要求总结或回顾某个时间段（「昨天 12 点到 17 点」）时用它，不要改用 search 猜关键词；search 按关键词检索；recalls 读本群最近 24 小时被撤回的消息，用户想知道谁撤回了什么时用它。",
 			"around", "recent", "range", "search", "recalls"),
 		"message_id":   toolStringParam("around 可选：以哪条消息为中心；省略时以当前消息为中心。"),
+		"before":       toolIntParam("around 可选：读取锚点之前多少条消息。", 0, maximumChatHistoryAroundRadius),
+		"after":        toolIntParam("around 可选：读取锚点之后多少条消息。", 0, maximumChatHistoryAroundRadius),
 		"query":        toolStringParam("search 必填：检索关键词。"),
 		"from_time":    toolStringParam(`range 与 search 的起始时间。接受 Unix 秒，也接受本地时间字符串 "2006-01-02 15:04" 或 "2006-01-02"。range 一次读不完时结果会给出 next_from_time，用它继续读完整个时间段再总结。`),
 		"through_time": toolStringParam(`range 与 search 的结束时间，写法同 from_time。`),
@@ -321,9 +327,13 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		if crossGroup {
 			label = "同一机器人的所有群"
 		}
+		items := t.items(ctx, matched)
+		if !crossGroup {
+			items = t.searchItemsWithContext(ctx, matched, items)
+		}
 		return dianaChatHistoryResult{
 			OK: true, Action: "search", Message: "已在" + label + "的本地持久化记录中完成检索，结果按时间从新到旧排列。",
-			Query: query, Items: t.items(ctx, matched), Total: total, Limited: total > len(matched),
+			Query: query, Items: items, Total: total, Limited: total > len(matched),
 		}, nil
 	}
 	if crossGroup {
@@ -354,15 +364,59 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 			matched = append(matched, item)
 		}
 	}
+	items := t.attachSearchContext(ctx, t.items(ctx, matched), matched, timeline)
 	return dianaChatHistoryResult{
 		OK:      true,
 		Action:  "search",
 		Message: "已在当前会话的本地持久化记录中完成检索，结果按时间从新到旧排列。",
 		Query:   query,
-		Items:   t.items(ctx, matched),
+		Items:   items,
 		Total:   total,
 		Limited: total > len(matched),
 	}, nil
+}
+
+// searchItemsWithContext 给当前会话的关键词命中补上紧邻对话。关键词往往只出现在
+// 问句里，真正的答案会在后面几条（例如「什么酒店」后回答「维也纳」）；只返回
+// 命中行会让模型误判聊天记录里没有答案。
+func (t *dianaChatHistoryTool) searchItemsWithContext(ctx context.Context, matched []MessageEvent, items []dianaChatHistoryItem) []dianaChatHistoryItem {
+	for index, match := range matched {
+		if index >= len(items) || match.Time <= 0 || strings.TrimSpace(match.MessageID) == "" {
+			continue
+		}
+		timeline, err := t.timeline(ctx, match.Time-int64((15*time.Minute)/time.Second), match.Time+int64((15*time.Minute)/time.Second))
+		if err != nil {
+			continue
+		}
+		items[index] = t.attachSearchContext(ctx, items[index:index+1], matched[index:index+1], timeline)[0]
+	}
+	return items
+}
+
+func (t *dianaChatHistoryTool) attachSearchContext(
+	ctx context.Context,
+	items []dianaChatHistoryItem,
+	matched []MessageEvent,
+	timeline []MessageEvent,
+) []dianaChatHistoryItem {
+	positions := make(map[string]int, len(timeline))
+	for index := range timeline {
+		positions[strings.TrimSpace(timeline[index].MessageID)] = index
+	}
+	for index := range items {
+		if index >= len(matched) {
+			break
+		}
+		position, ok := positions[strings.TrimSpace(matched[index].MessageID)]
+		if !ok {
+			continue
+		}
+		left := max(0, position-defaultChatHistorySearchBefore)
+		right := min(len(timeline), position+defaultChatHistorySearchAfter+1)
+		items[index].ContextBefore = t.items(ctx, timeline[left:position])
+		items[index].ContextAfter = t.items(ctx, timeline[position+1:right])
+	}
+	return items
 }
 
 // window 按时间段完整列出当前会话的消息。search 只能按关键词命中，回答

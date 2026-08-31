@@ -38,6 +38,48 @@ func TestDianaChatHistoryToolRecentKeepsNewestEventsWhenMemoryExceedsLimit(t *te
 	}
 }
 
+func TestDianaChatHistoryToolSearchIncludesNearbyAnswerWithoutQueryKeyword(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newSemanticTimelineStore()
+	runtime.SetMessageHistoryStore(store)
+	base := time.Date(2026, 8, 22, 12, 46, 45, 0, time.Local).Unix()
+	for _, event := range []MessageEvent{
+		chatHistoryTextEvent(base, "owner", "主人", "praise", "这酒店洗衣服务真不错，我一放门口就知道我要洗衣服"),
+		chatHistoryTextEvent(base+12, "owner", "主人", "comparison", "全季都没这服务"),
+		chatHistoryTextEvent(base+31, "friend", "群友", "question", "什么酒店"),
+		chatHistoryTextEvent(base+275, "owner", "主人", "answer", "维也纳"),
+	} {
+		runtime.remember(event)
+	}
+
+	raw, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(
+		context.Background(),
+		map[string]any{"operation": "search", "query": "酒店", "all_time": true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("search items = %#v", result.Items)
+	}
+	var praise dianaChatHistoryItem
+	for _, item := range result.Items {
+		if item.MessageID == "praise" {
+			praise = item
+		}
+	}
+	if got := strings.Join(historyMessageIDsFromItems(praise.ContextAfter), ","); got != "comparison,question,answer" {
+		t.Fatalf("context after = %q, want comparison,question,answer", got)
+	}
+	if praise.ContextAfter[2].Text != "维也纳" {
+		t.Fatalf("nearby answer = %#v", praise.ContextAfter)
+	}
+}
+
 func TestMergeMessageHistoryKeepsChronologicalNewestWindow(t *testing.T) {
 	event := func(at int64, id string) MessageEvent {
 		return chatHistoryTextEvent(at, "alice", "Alice", id, id)
