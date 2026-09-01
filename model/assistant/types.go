@@ -438,9 +438,9 @@ type BotConfig struct {
 	ContextSummaryThreshold  int   `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled    *bool `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled  *bool `json:"cross_group_memory_enabled,omitempty"`
-	// WorldTreeEnabled 控制这台机器人要不要带上世界树（世界观设定库）。树是
+	// WorldBookEnabled 控制这台机器人要不要带上世界书（世界观设定库）。树是
 	// 全局一棵，这里只决定用不用；树是空的时候开着也不注入任何内容，所以默认开。
-	WorldTreeEnabled *bool `json:"world_tree_enabled,omitempty"`
+	WorldBookEnabled *bool `json:"world_book_enabled,omitempty"`
 	// RomanceEnabled 是人机恋（恋爱模式）的总开关。开着时用户才能和机器人确立
 	// 恋人关系。默认关闭：机器人愿不愿意谈恋爱是部署者该亲手做的决定，不该在
 	// 升级后突然发生。
@@ -696,7 +696,7 @@ type ConfigPayload struct {
 	ContextSummaryThreshold    int         `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled      *bool       `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled    *bool       `json:"cross_group_memory_enabled,omitempty"`
-	WorldTreeEnabled           *bool       `json:"world_tree_enabled,omitempty"`
+	WorldBookEnabled           *bool       `json:"world_book_enabled,omitempty"`
 	RomanceEnabled             *bool       `json:"romance_enabled,omitempty"`
 	DictSegmentEnabled         *bool       `json:"dict_segment_enabled,omitempty"`
 	SemanticSearchEnabled      *bool       `json:"semantic_search_enabled,omitempty"`
@@ -1199,7 +1199,7 @@ func DefaultBotConfig() BotConfig {
 		ContextSummaryThreshold: 100,
 		LongTermMemoryEnabled:   boolPointer(true),
 		CrossGroupMemoryEnabled: boolPointer(false),
-		WorldTreeEnabled:        boolPointer(true),
+		WorldBookEnabled:        boolPointer(true),
 		RomanceEnabled:          boolPointer(false),
 		DictSegmentEnabled:      boolPointer(false),
 		SemanticSearchEnabled:   boolPointer(false),
@@ -1400,8 +1400,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.CrossGroupMemoryEnabled == nil {
 		cfg.CrossGroupMemoryEnabled = boolPointer(false)
 	}
-	if cfg.WorldTreeEnabled == nil {
-		cfg.WorldTreeEnabled = boolPointer(true)
+	if cfg.WorldBookEnabled == nil {
+		cfg.WorldBookEnabled = boolPointer(true)
 	}
 	if cfg.RomanceEnabled == nil {
 		cfg.RomanceEnabled = boolPointer(false)
@@ -1645,7 +1645,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ContextSummaryThreshold:           cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:             copyBoolPointer(cfg.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:           copyBoolPointer(cfg.CrossGroupMemoryEnabled),
-		WorldTreeEnabled:                  copyBoolPointer(cfg.WorldTreeEnabled),
+		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
 		DictSegmentEnabled:                copyBoolPointer(cfg.DictSegmentEnabled),
 		SemanticSearchEnabled:             copyBoolPointer(cfg.SemanticSearchEnabled),
@@ -1812,7 +1812,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ContextSummaryThreshold:        payload.ContextSummaryThreshold,
 		LongTermMemoryEnabled:          copyBoolPointer(payload.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:        copyBoolPointer(payload.CrossGroupMemoryEnabled),
-		WorldTreeEnabled:               copyBoolPointer(payload.WorldTreeEnabled),
+		WorldBookEnabled:               copyBoolPointer(payload.WorldBookEnabled),
 		RomanceEnabled:                 copyBoolPointer(payload.RomanceEnabled),
 		DictSegmentEnabled:             copyBoolPointer(payload.DictSegmentEnabled),
 		SemanticSearchEnabled:          copyBoolPointer(payload.SemanticSearchEnabled),

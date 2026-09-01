@@ -5,8 +5,11 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,7 +18,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// 世界树：机器人的世界观设定库。人设正文回答「它是谁、怎么说话」，世界树回答
+// 世界书：机器人的世界观设定库。人设正文回答「它是谁、怎么说话」，世界书回答
 // 「它活在什么样的世界里」——城市叫什么、群里公认的虚构设定、它的身世背景，
 // 这些东西塞进人设正文会把几百字的说话方式说明淹没在几千字的设定集里，而且
 // 全部常驻等于每条消息都为整本设定集付 token。
@@ -26,27 +29,27 @@ import (
 //（某条街道的细节、某段往事的展开）。
 //
 // 树是全局一棵，不挂在单个机器人配置上：世界观描述的是「这套部署共同生活的
-// 世界」，和人设库一样是素材库。要不要用它由每台机器人的 world_tree_enabled
+// 世界」，和人设库一样是素材库。要不要用它由每台机器人的 world_book_enabled
 // 决定。
 
-// WorldTreeMaxNodes 限制节点总数。这是给人整理的设定集，不是数据表。
-const WorldTreeMaxNodes = 200
+// WorldBookMaxNodes 限制节点总数。这是给人整理的设定集，不是数据表。
+const WorldBookMaxNodes = 200
 
 const (
-	worldTreeTitleMaxRunes   = 60
-	worldTreeContentMaxRunes = 1200
-	worldTreeKeywordMaxRunes = 24
-	worldTreeMaxKeywords     = 16
-	// worldTreeMatchedNodeLimit 限制一轮最多注入几条触发式设定。命中十几条时
+	worldBookTitleMaxRunes   = 60
+	worldBookContentMaxRunes = 1200
+	worldBookKeywordMaxRunes = 24
+	worldBookMaxKeywords     = 16
+	// worldBookMatchedNodeLimit 限制一轮最多注入几条触发式设定。命中十几条时
 	// 该反省的是关键词配得太宽，不是把它们全塞进提示词。
-	worldTreeMatchedNodeLimit = 8
-	// worldTreeContextTokenBudget 是整段世界观上下文的 token 上限。常驻设定
+	worldBookMatchedNodeLimit = 8
+	// worldBookContextTokenBudget 是整段世界观上下文的 token 上限。常驻设定
 	// 优先，触发式设定填剩下的空间。
-	worldTreeContextTokenBudget = 1200
+	worldBookContextTokenBudget = 1200
 )
 
-// WorldTreeNode 是一条世界观设定。
-type WorldTreeNode struct {
+// WorldBookNode 是一条世界观设定。
+type WorldBookNode struct {
 	ID       string `json:"id"`
 	ParentID string `json:"parent_id,omitempty"`
 	Title    string `json:"title"`
@@ -60,31 +63,31 @@ type WorldTreeNode struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
-// WorldTree 是整棵世界观设定树。节点顺序就是同级之间的展示与注入顺序。
-type WorldTree struct {
-	Nodes []WorldTreeNode `json:"nodes"`
+// WorldBook 是整棵世界观设定树。节点顺序就是同级之间的展示与注入顺序。
+type WorldBook struct {
+	Nodes []WorldBookNode `json:"nodes"`
 }
 
 // Normalized 清洗单个节点：补 ID、裁长度、去掉空触发词。
-func (node WorldTreeNode) Normalized() WorldTreeNode {
+func (node WorldBookNode) Normalized() WorldBookNode {
 	node.ID = strings.TrimSpace(node.ID)
 	if node.ID == "" {
 		node.ID = uuid.NewString()
 	}
 	node.ParentID = strings.TrimSpace(node.ParentID)
-	node.Title = truncateRunesPlain(strings.TrimSpace(node.Title), worldTreeTitleMaxRunes)
-	node.Content = truncateRunesPlain(strings.TrimSpace(node.Content), worldTreeContentMaxRunes)
+	node.Title = truncateRunesPlain(strings.TrimSpace(node.Title), worldBookTitleMaxRunes)
+	node.Content = truncateRunesPlain(strings.TrimSpace(node.Content), worldBookContentMaxRunes)
 	keywords := make([]string, 0, len(node.Keywords))
 	seen := map[string]bool{}
 	for _, keyword := range node.Keywords {
-		keyword = truncateRunesPlain(strings.TrimSpace(keyword), worldTreeKeywordMaxRunes)
+		keyword = truncateRunesPlain(strings.TrimSpace(keyword), worldBookKeywordMaxRunes)
 		lower := strings.ToLower(keyword)
 		if keyword == "" || seen[lower] {
 			continue
 		}
 		seen[lower] = true
 		keywords = append(keywords, keyword)
-		if len(keywords) >= worldTreeMaxKeywords {
+		if len(keywords) >= worldBookMaxKeywords {
 			break
 		}
 	}
@@ -96,12 +99,12 @@ func (node WorldTreeNode) Normalized() WorldTreeNode {
 }
 
 // enabled 报告节点自身是否启用；祖先是否启用由遍历负责。
-func (node WorldTreeNode) enabled() bool {
+func (node WorldBookNode) enabled() bool {
 	return boolValue(node.Enabled, true)
 }
 
 // injectable 报告节点自身有没有可注入的内容。只有标题的节点是目录，不算。
-func (node WorldTreeNode) injectable() bool {
+func (node WorldBookNode) injectable() bool {
 	return strings.TrimSpace(node.Content) != "" && (node.AlwaysOn || len(node.Keywords) > 0)
 }
 
@@ -109,9 +112,9 @@ func (node WorldTreeNode) injectable() bool {
 //
 // 不按更新时间排序：树的同级顺序是用户摆出来的章节顺序，注入和展示都按它来，
 // 「刚改过的跳到最前面」在设定集里只会打乱叙事。
-func (tree WorldTree) WithDefaults() WorldTree {
+func (tree WorldBook) WithDefaults() WorldBook {
 	seen := make(map[string]struct{}, len(tree.Nodes))
-	nodes := make([]WorldTreeNode, 0, len(tree.Nodes))
+	nodes := make([]WorldBookNode, 0, len(tree.Nodes))
 	for _, node := range tree.Nodes {
 		node = node.Normalized()
 		if node.Title == "" {
@@ -123,8 +126,8 @@ func (tree WorldTree) WithDefaults() WorldTree {
 		seen[node.ID] = struct{}{}
 		nodes = append(nodes, node)
 	}
-	if len(nodes) > WorldTreeMaxNodes {
-		nodes = nodes[:WorldTreeMaxNodes]
+	if len(nodes) > WorldBookMaxNodes {
+		nodes = nodes[:WorldBookMaxNodes]
 	}
 	byID := make(map[string]int, len(nodes))
 	for index, node := range nodes {
@@ -155,14 +158,14 @@ func (tree WorldTree) WithDefaults() WorldTree {
 			parent = nodes[parentIndex].ParentID
 		}
 	}
-	return WorldTree{Nodes: nodes}
+	return WorldBook{Nodes: nodes}
 }
 
 // Save 新增或更新一个节点，返回落库后的那一份。
-func (tree WorldTree) Save(node WorldTreeNode, now time.Time) (WorldTree, WorldTreeNode, error) {
+func (tree WorldBook) Save(node WorldBookNode, now time.Time) (WorldBook, WorldBookNode, error) {
 	node = node.Normalized()
 	if node.Title == "" {
-		return tree, WorldTreeNode{}, errWorldTreeTitleRequired
+		return tree, WorldBookNode{}, errWorldBookTitleRequired
 	}
 	node.UpdatedAt = now
 	for index := range tree.Nodes {
@@ -173,8 +176,8 @@ func (tree WorldTree) Save(node WorldTreeNode, now time.Time) (WorldTree, WorldT
 			return normalized, saved, nil
 		}
 	}
-	if len(tree.Nodes) >= WorldTreeMaxNodes {
-		return tree, WorldTreeNode{}, errWorldTreeFull
+	if len(tree.Nodes) >= WorldBookMaxNodes {
+		return tree, WorldBookNode{}, errWorldBookFull
 	}
 	tree.Nodes = append(tree.Nodes, node)
 	normalized := tree.WithDefaults()
@@ -184,7 +187,7 @@ func (tree WorldTree) Save(node WorldTreeNode, now time.Time) (WorldTree, WorldT
 
 // Delete 删掉一个节点，把它的子节点接到它的父节点上。级联删除整个子树太容易
 // 一下清掉半本设定集；提级保留内容，用户真想删一章就逐个删。找不到不算错。
-func (tree WorldTree) Delete(id string) WorldTree {
+func (tree WorldBook) Delete(id string) WorldBook {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return tree.WithDefaults()
@@ -193,7 +196,7 @@ func (tree WorldTree) Delete(id string) WorldTree {
 	if node, ok := tree.Find(id); ok {
 		parentID = node.ParentID
 	}
-	nodes := make([]WorldTreeNode, 0, len(tree.Nodes))
+	nodes := make([]WorldBookNode, 0, len(tree.Nodes))
 	for _, node := range tree.Nodes {
 		if node.ID == id {
 			continue
@@ -203,42 +206,42 @@ func (tree WorldTree) Delete(id string) WorldTree {
 		}
 		nodes = append(nodes, node)
 	}
-	return WorldTree{Nodes: nodes}.WithDefaults()
+	return WorldBook{Nodes: nodes}.WithDefaults()
 }
 
 // Find 按 ID 取一个节点。
-func (tree WorldTree) Find(id string) (WorldTreeNode, bool) {
+func (tree WorldBook) Find(id string) (WorldBookNode, bool) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return WorldTreeNode{}, false
+		return WorldBookNode{}, false
 	}
 	for _, node := range tree.Nodes {
 		if node.ID == id {
 			return node, true
 		}
 	}
-	return WorldTreeNode{}, false
+	return WorldBookNode{}, false
 }
 
-// WorldTreeRow 是深度优先展开后的一行，带层级和标题路径，给界面和提示词共用。
-type WorldTreeRow struct {
-	Node  WorldTreeNode
+// WorldBookRow 是深度优先展开后的一行，带层级和标题路径，给界面和提示词共用。
+type WorldBookRow struct {
+	Node  WorldBookNode
 	Depth int
 	// Path 是从根到本节点的标题链，不含本节点自己。
 	Path []string
 }
 
 // OrderedRows 按深度优先展开整棵树，同级保持节点的原始顺序。
-func (tree WorldTree) OrderedRows() []WorldTreeRow {
-	children := map[string][]WorldTreeNode{}
+func (tree WorldBook) OrderedRows() []WorldBookRow {
+	children := map[string][]WorldBookNode{}
 	for _, node := range tree.Nodes {
 		children[node.ParentID] = append(children[node.ParentID], node)
 	}
-	rows := make([]WorldTreeRow, 0, len(tree.Nodes))
+	rows := make([]WorldBookRow, 0, len(tree.Nodes))
 	var walk func(parentID string, depth int, path []string)
 	walk = func(parentID string, depth int, path []string) {
 		for _, node := range children[parentID] {
-			rows = append(rows, WorldTreeRow{Node: node, Depth: depth, Path: append([]string(nil), path...)})
+			rows = append(rows, WorldBookRow{Node: node, Depth: depth, Path: append([]string(nil), path...)})
 			walk(node.ID, depth+1, append(path, node.Title))
 		}
 	}
@@ -246,8 +249,116 @@ func (tree WorldTree) OrderedRows() []WorldTreeRow {
 	return rows
 }
 
-// WorldTreeImportResult 报告一次导入的去向，口径与人设导入一致。
-type WorldTreeImportResult struct {
+// ---- SillyTavern 世界书兼容 ----
+
+// sillyTavernWorldBookEntry 兼容两种来源的字段名：SillyTavern 世界书文件用
+// key/comment/order/disable，角色卡 V2 的 character_book 用
+// keys/name/insertion_order/enabled。两套各认各的，同一条里混着写也能收。
+type sillyTavernWorldBookEntry struct {
+	UID            *int     `json:"uid,omitempty"`
+	Key            []string `json:"key,omitempty"`
+	Keys           []string `json:"keys,omitempty"`
+	Comment        string   `json:"comment,omitempty"`
+	Name           string   `json:"name,omitempty"`
+	Content        string   `json:"content"`
+	Constant       bool     `json:"constant,omitempty"`
+	Disable        bool     `json:"disable,omitempty"`
+	Enabled        *bool    `json:"enabled,omitempty"`
+	Order          *int     `json:"order,omitempty"`
+	InsertionOrder *int     `json:"insertion_order,omitempty"`
+}
+
+// WorldBookNodesFromSillyTavern 把 SillyTavern 世界书的 entries 转成本地节点。
+//
+// 接受两种形状：世界书文件的对象（键是序号）和角色卡 character_book 的数组。
+// 只搬语义对得上的字段：常驻（蓝灯）对 constant，触发词（绿灯）对 key/keys，
+// 标题对 comment/name（缺了退回第一个触发词、再退回内容开头），停用对
+// disable/enabled。secondary keys、递归、概率、插入位置这些字段在这里没有
+// 对应概念，静默忽略——注入行为由本地规则决定，不假装还原酒馆的扫描器。
+// ST 没有树，转出来的节点全在根上。返回 false 表示这段 JSON 不是能认的 entries。
+func WorldBookNodesFromSillyTavern(raw json.RawMessage) ([]WorldBookNode, bool) {
+	type ordered struct {
+		entry sillyTavernWorldBookEntry
+		// order 是文件里声明的排序，tie 是没声明时的兜底（uid 或数组下标）。
+		order int
+		tie   int
+	}
+	entries := make([]ordered, 0, 16)
+	appendEntry := func(entry sillyTavernWorldBookEntry, tie int) {
+		order := 1 << 30
+		if entry.Order != nil {
+			order = *entry.Order
+		} else if entry.InsertionOrder != nil {
+			order = *entry.InsertionOrder
+		}
+		if entry.UID != nil {
+			tie = *entry.UID
+		}
+		entries = append(entries, ordered{entry: entry, order: order, tie: tie})
+	}
+
+	var asMap map[string]sillyTavernWorldBookEntry
+	if err := json.Unmarshal(raw, &asMap); err == nil && len(asMap) > 0 {
+		keys := make([]string, 0, len(asMap))
+		for key := range asMap {
+			keys = append(keys, key)
+		}
+		// 对象的键是 "0"、"1" 这样的序号字符串，按数值排才是文件里的顺序。
+		sort.Slice(keys, func(i, j int) bool {
+			left, leftErr := strconv.Atoi(keys[i])
+			right, rightErr := strconv.Atoi(keys[j])
+			if leftErr == nil && rightErr == nil {
+				return left < right
+			}
+			return keys[i] < keys[j]
+		})
+		for index, key := range keys {
+			appendEntry(asMap[key], index)
+		}
+	} else {
+		var asList []sillyTavernWorldBookEntry
+		if err := json.Unmarshal(raw, &asList); err != nil || len(asList) == 0 {
+			return nil, false
+		}
+		for index, entry := range asList {
+			appendEntry(entry, index)
+		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].order != entries[j].order {
+			return entries[i].order < entries[j].order
+		}
+		return entries[i].tie < entries[j].tie
+	})
+
+	nodes := make([]WorldBookNode, 0, len(entries))
+	for _, item := range entries {
+		entry := item.entry
+		keywords := entry.Key
+		if len(keywords) == 0 {
+			keywords = entry.Keys
+		}
+		title := strings.TrimSpace(firstNonEmpty(entry.Comment, entry.Name))
+		if title == "" && len(keywords) > 0 {
+			title = strings.TrimSpace(keywords[0])
+		}
+		if title == "" {
+			title = truncateRunesPlain(strings.TrimSpace(entry.Content), 16)
+		}
+		enabled := !entry.Disable && (entry.Enabled == nil || *entry.Enabled)
+		nodes = append(nodes, WorldBookNode{
+			Title:    title,
+			Content:  strings.TrimSpace(entry.Content),
+			Keywords: keywords,
+			AlwaysOn: entry.Constant,
+			Enabled:  boolPointer(enabled),
+		})
+	}
+	return nodes, true
+}
+
+// WorldBookImportResult 报告一次导入的去向，口径与人设导入一致。
+type WorldBookImportResult struct {
 	Imported int `json:"imported"`
 	// Dropped 是没标题或超出容量装不下的。
 	Dropped int `json:"dropped"`
@@ -258,11 +369,11 @@ type WorldTreeImportResult struct {
 // 一律分配新 ID，不复用文件里的：那些 ID 来自别人的机器，撞上本地条目就是静默
 // 覆盖。文件内部的父子引用按新旧 ID 对照重连；引用了文件外的父节点就提到根——
 // 导入只增不减，不去猜本地哪个节点算它爹。
-func (tree WorldTree) Import(incoming []WorldTreeNode, now time.Time) (WorldTree, WorldTreeImportResult) {
+func (tree WorldBook) Import(incoming []WorldBookNode, now time.Time) (WorldBook, WorldBookImportResult) {
 	tree = tree.WithDefaults()
-	var result WorldTreeImportResult
+	var result WorldBookImportResult
 	idMap := make(map[string]string, len(incoming))
-	accepted := make([]WorldTreeNode, 0, len(incoming))
+	accepted := make([]WorldBookNode, 0, len(incoming))
 	for _, node := range incoming {
 		oldID := strings.TrimSpace(node.ID)
 		node = node.Normalized()
@@ -270,7 +381,7 @@ func (tree WorldTree) Import(incoming []WorldTreeNode, now time.Time) (WorldTree
 			result.Dropped++
 			continue
 		}
-		if len(tree.Nodes)+len(accepted) >= WorldTreeMaxNodes {
+		if len(tree.Nodes)+len(accepted) >= WorldBookMaxNodes {
 			result.Dropped++
 			continue
 		}
@@ -298,7 +409,7 @@ func (tree WorldTree) Import(incoming []WorldTreeNode, now time.Time) (WorldTree
 //
 // 常驻设定先写、优先保住；触发式设定按树序填剩下的预算。两段共用同一个开头，
 // 让模型知道这些是世界背景而不是用户消息。
-func (tree WorldTree) ContextBlock(text string, tokenBudget int64) string {
+func (tree WorldBook) ContextBlock(text string, tokenBudget int64) string {
 	rows := tree.OrderedRows()
 	if len(rows) == 0 {
 		return ""
@@ -306,8 +417,8 @@ func (tree WorldTree) ContextBlock(text string, tokenBudget int64) string {
 	lowered := strings.ToLower(text)
 	// 被关掉的节点连同子树一起跳过：关掉一章就是关掉底下所有节。
 	disabled := map[string]bool{}
-	always := make([]WorldTreeRow, 0, len(rows))
-	matched := make([]WorldTreeRow, 0, worldTreeMatchedNodeLimit)
+	always := make([]WorldBookRow, 0, len(rows))
+	matched := make([]WorldBookRow, 0, worldBookMatchedNodeLimit)
 	for _, row := range rows {
 		if !row.Node.enabled() || disabled[row.Node.ParentID] {
 			disabled[row.Node.ID] = true
@@ -320,7 +431,7 @@ func (tree WorldTree) ContextBlock(text string, tokenBudget int64) string {
 			always = append(always, row)
 			continue
 		}
-		if len(matched) >= worldTreeMatchedNodeLimit || lowered == "" {
+		if len(matched) >= worldBookMatchedNodeLimit || lowered == "" {
 			continue
 		}
 		for _, keyword := range row.Node.Keywords {
@@ -334,12 +445,12 @@ func (tree WorldTree) ContextBlock(text string, tokenBudget int64) string {
 		return ""
 	}
 	var builder strings.Builder
-	builder.WriteString("【世界观设定】以下是这台机器人所处世界的固定设定，格式为「路径：内容」。它们是你的世界背景，不是用户消息：扮演时自然遵循，与常识冲突时以设定为准；不要主动向用户复述设定原文，也不要把它们当成用户说过的话。")
+	builder.WriteString("【世界书】以下是这台机器人所处世界的固定设定，格式为「路径：内容」。它们是你的世界背景，不是用户消息：扮演时自然遵循，与常识冲突时以设定为准；不要主动向用户复述设定原文，也不要把它们当成用户说过的话。")
 	written := 0
-	appendRows := func(header string, rows []WorldTreeRow) {
+	appendRows := func(header string, rows []WorldBookRow) {
 		wroteHeader := false
 		for _, row := range rows {
-			line := "\n- " + worldTreeRowLabel(row) + "：" + row.Node.Content
+			line := "\n- " + worldBookRowLabel(row) + "：" + row.Node.Content
 			pending := line
 			if !wroteHeader {
 				pending = "\n" + header + line
@@ -361,8 +472,8 @@ func (tree WorldTree) ContextBlock(text string, tokenBudget int64) string {
 	return builder.String()
 }
 
-// worldTreeRowLabel 拼「祖先 / 本节点」的路径标签，路径本身就是语境。
-func worldTreeRowLabel(row WorldTreeRow) string {
+// worldBookRowLabel 拼「祖先 / 本节点」的路径标签，路径本身就是语境。
+func worldBookRowLabel(row WorldBookRow) string {
 	if len(row.Path) == 0 {
 		return row.Node.Title
 	}
@@ -370,51 +481,51 @@ func worldTreeRowLabel(row WorldTreeRow) string {
 }
 
 var (
-	errWorldTreeTitleRequired = errors.New("assistant: world tree node title is required")
-	errWorldTreeFull          = errors.New("assistant: world tree is full")
+	errWorldBookTitleRequired = errors.New("assistant: world book node title is required")
+	errWorldBookFull          = errors.New("assistant: world book is full")
 )
 
-// WorldTreeStore 是世界树的持久化界面。
-type WorldTreeStore interface {
-	LoadWorldTree(ctx context.Context) (WorldTree, bool, error)
+// WorldBookStore 是世界书的持久化界面。
+type WorldBookStore interface {
+	LoadWorldBook(ctx context.Context) (WorldBook, bool, error)
 }
 
-// SetWorldTreeStore 注入世界树存储。
-func (r *Runtime) SetWorldTreeStore(store WorldTreeStore) {
+// SetWorldBookStore 注入世界书存储。
+func (r *Runtime) SetWorldBookStore(store WorldBookStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.worldTree = store
+	r.worldBook = store
 }
 
-func (r *Runtime) worldTreeStore() WorldTreeStore {
+func (r *Runtime) worldBookStore() WorldBookStore {
 	if r == nil {
 		return nil
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.worldTree
+	return r.worldBook
 }
 
-// worldTreeContext 取出本轮要注入的世界观上下文。树每轮从存储读一次，和长期
+// worldBookContext 取出本轮要注入的世界观上下文。树每轮从存储读一次，和长期
 // 记忆同一个量级；读失败按没有设定处理，聊天不因设定集故障中断。
-func (r *Runtime) worldTreeContext(ctx context.Context, event MessageEvent, queryText string) string {
-	store := r.worldTreeStore()
+func (r *Runtime) worldBookContext(ctx context.Context, event MessageEvent, queryText string) string {
+	store := r.worldBookStore()
 	if store == nil {
 		return ""
 	}
 	cfg := r.effectiveConfigForEvent(event)
-	if !boolValue(cfg.WorldTreeEnabled, true) {
+	if !boolValue(cfg.WorldBookEnabled, true) {
 		return ""
 	}
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	tree, ok, err := store.LoadWorldTree(loadCtx)
+	tree, ok, err := store.LoadWorldBook(loadCtx)
 	cancel()
 	if err != nil {
-		log.Printf("chatbot world tree load failed: %v", err)
+		log.Printf("chatbot world book load failed: %v", err)
 		return ""
 	}
 	if !ok {
 		return ""
 	}
-	return tree.WithDefaults().ContextBlock(memoryRetrievalText(event, queryText), worldTreeContextTokenBudget)
+	return tree.WithDefaults().ContextBlock(memoryRetrievalText(event, queryText), worldBookContextTokenBudget)
 }

@@ -30,7 +30,7 @@ const (
 	llmAuthKey           = "llm_oauth"
 	botProfilesKey       = "bot_profiles"
 	botPersonasKey       = "bot_personas"
-	botWorldTreeKey      = "bot_world_tree"
+	botWorldBookKey      = "bot_world_book"
 	botGroupConfigKey    = "bot_group_configs"
 	pluginStateKey       = "plugin_states"
 	remindersKey         = "reminders"
@@ -175,16 +175,16 @@ func (s *SQLiteStore) SaveBotPersonas(ctx context.Context, set assistant.Persona
 	return s.saveJSON(ctx, botPersonasKey, set)
 }
 
-// LoadWorldTree 读取世界树（世界观设定库）。
-func (s *SQLiteStore) LoadWorldTree(ctx context.Context) (assistant.WorldTree, bool, error) {
-	var tree assistant.WorldTree
-	ok, err := s.loadJSON(ctx, botWorldTreeKey, &tree)
+// LoadWorldBook 读取世界书（世界观设定库）。
+func (s *SQLiteStore) LoadWorldBook(ctx context.Context) (assistant.WorldBook, bool, error) {
+	var tree assistant.WorldBook
+	ok, err := s.loadJSON(ctx, botWorldBookKey, &tree)
 	return tree, ok, err
 }
 
-// SaveWorldTree 保存世界树。
-func (s *SQLiteStore) SaveWorldTree(ctx context.Context, tree assistant.WorldTree) error {
-	return s.saveJSON(ctx, botWorldTreeKey, tree)
+// SaveWorldBook 保存世界书。
+func (s *SQLiteStore) SaveWorldBook(ctx context.Context, tree assistant.WorldBook) error {
+	return s.saveJSON(ctx, botWorldBookKey, tree)
 }
 
 // LoadBotGroupConfigs 读取 群级机器人配置。

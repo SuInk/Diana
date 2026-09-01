@@ -1018,48 +1018,48 @@
             </div>
           </section>
 
-          <!-- 世界树：世界观设定库。树是全局一棵、所有机器人共用，这里编辑；
+          <!-- 世界书：世界观设定库。树是全局一棵、所有机器人共用，这里编辑；
                当前机器人用不用它由卡片里的开关决定（跟配置一起保存）。 -->
           <section class="card">
             <div class="card-header">
               <div>
-                <h2>世界树</h2>
+                <h2>世界书</h2>
                 <span class="card-sub">机器人所处世界的设定集：常驻设定每轮都带上，触发式设定聊到才出现</span>
               </div>
               <div class="cluster">
-                <button class="btn small" type="button" :disabled="worldTreeBusy || !worldTreeNodes.length" @click="exportWorldTree">
+                <button class="btn small" type="button" :disabled="worldBookBusy || !worldBookNodes.length" @click="exportWorldBook">
                   <Download :size="14" aria-hidden="true" />
                   导出
                 </button>
-                <button class="btn small" type="button" :disabled="worldTreeBusy" @click="worldTreeFileInputClick">
+                <button class="btn small" type="button" :disabled="worldBookBusy" @click="worldBookFileInputClick">
                   <Upload :size="14" aria-hidden="true" />
                   导入
                 </button>
-                <button class="btn small" type="button" :disabled="worldTreeBusy" @click="openWorldTreeEditor()">
+                <button class="btn small" type="button" :disabled="worldBookBusy" @click="openWorldBookEditor()">
                   <Plus :size="14" aria-hidden="true" />
                   新增设定
                 </button>
               </div>
             </div>
             <div class="card-body form-grid">
-              <input ref="worldTreeFileInput" type="file" accept="application/json" style="display: none" @change="importWorldTreeFile" />
+              <input ref="worldBookFileInput" type="file" accept="application/json" style="display: none" @change="importWorldBookFile" />
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.world_tree_enabled" type="checkbox" />
+                  <input v-model="form.world_book_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">这台机器人使用世界树</span>
+                  <span class="switch-label">这台机器人使用世界书</span>
                 </label>
-                <span class="hint">树是全局一棵，节点在下面增删改（立即生效）；这个开关只管当前机器人用不用，随配置一起保存。树是空的时开着也不注入任何内容。</span>
+                <span class="hint">世界书是全局一本、所有机器人共用，条目在下面增删改（立即生效）；这个开关只管当前机器人用不用，随配置一起保存。书是空的时开着也不注入任何内容。导入认三种文件：本机导出的 JSON、SillyTavern 世界书、角色卡（自动识别 character_book）。</span>
               </div>
-              <div v-if="worldTreeRows.length" class="field wide">
-                <div class="world-tree-list">
-                  <div v-for="row in worldTreeRows" :key="row.node.id" class="world-tree-row" :style="{ paddingLeft: `${row.depth * 18}px` }">
-                    <button type="button" class="world-tree-title" :title="row.node.content || row.node.title" @click="openWorldTreeEditor(row.node)">
-                      <strong :class="{ muted: worldTreeRowDisabled(row) }">{{ row.node.title }}</strong>
-                      <small class="muted">{{ worldTreeNodeSummary(row) }}</small>
+              <div v-if="worldBookRows.length" class="field wide">
+                <div class="world-book-list">
+                  <div v-for="row in worldBookRows" :key="row.node.id" class="world-book-row" :style="{ paddingLeft: `${row.depth * 18}px` }">
+                    <button type="button" class="world-book-title" :title="row.node.content || row.node.title" @click="openWorldBookEditor(row.node)">
+                      <strong :class="{ muted: worldBookRowDisabled(row) }">{{ row.node.title }}</strong>
+                      <small class="muted">{{ worldBookNodeSummary(row) }}</small>
                     </button>
                     <span class="cluster">
-                      <button type="button" class="persona-chip-action danger" :disabled="worldTreeBusy" :aria-label="`删除设定 ${row.node.title}`" :title="`删除设定 ${row.node.title}`" @click="removeWorldTreeNode(row.node)">
+                      <button type="button" class="persona-chip-action danger" :disabled="worldBookBusy" :aria-label="`删除设定 ${row.node.title}`" :title="`删除设定 ${row.node.title}`" @click="removeWorldBookNode(row.node)">
                         <Trash2 :size="14" aria-hidden="true" />
                       </button>
                     </span>
@@ -1067,47 +1067,47 @@
                 </div>
                 <span class="hint">点标题编辑。删除一个节点时，它的子节点会接到它的父节点上，不会连坐。</span>
               </div>
-              <span v-else class="hint">还没有设定。「常驻」的写世界的骨架（住在哪座城市、和群里公认的虚构背景）；带触发词的写细节，聊到相关话题才注入，不浪费上下文。</span>
-              <template v-if="worldTreeEditorOpen">
+              <span v-else class="hint">还没有条目。「常驻」的（酒馆里的蓝灯）写世界的骨架；带触发词的（绿灯）写细节，聊到相关话题才注入，不浪费上下文。手上有 SillyTavern 世界书或角色卡的话，直接点「导入」。</span>
+              <template v-if="worldBookEditorOpen">
                 <div class="field">
-                  <label for="world-tree-title">标题</label>
-                  <input id="world-tree-title" v-model.trim="worldTreeDraft.title" class="input" placeholder="例如 枝江 / 港口" />
+                  <label for="world-book-title">标题</label>
+                  <input id="world-book-title" v-model.trim="worldBookDraft.title" class="input" placeholder="例如 枝江 / 港口" />
                 </div>
                 <div class="field">
                   <label>父节点</label>
                   <AppSelect
-                    :model-value="worldTreeDraft.parent_id ?? ''"
-                    :options="worldTreeParentOptions"
-                    @update:model-value="(value) => { worldTreeDraft.parent_id = value; }"
+                    :model-value="worldBookDraft.parent_id ?? ''"
+                    :options="worldBookParentOptions"
+                    @update:model-value="(value) => { worldBookDraft.parent_id = value; }"
                   />
                   <span class="hint">路径会作为语境一起注入，例如「枝江 / 港口：……」。</span>
                 </div>
                 <div class="field wide">
-                  <label for="world-tree-content">设定内容</label>
-                  <textarea id="world-tree-content" v-model="worldTreeDraft.content" class="textarea" rows="3" placeholder="只有标题没有内容的节点当目录用，自身不注入。"></textarea>
+                  <label for="world-book-content">设定内容</label>
+                  <textarea id="world-book-content" v-model="worldBookDraft.content" class="textarea" rows="3" placeholder="只有标题没有内容的节点当目录用，自身不注入。"></textarea>
                 </div>
                 <div class="field">
-                  <label for="world-tree-keywords">触发词（逗号分隔）</label>
-                  <input id="world-tree-keywords" v-model="worldTreeKeywordsDraft" class="input" placeholder="港口,码头" />
+                  <label for="world-book-keywords">触发词（逗号分隔）</label>
+                  <input id="world-book-keywords" v-model="worldBookKeywordsDraft" class="input" placeholder="港口,码头" />
                   <span class="hint">最近对话里出现任意一个就注入本条；常驻节点不需要填。</span>
                 </div>
                 <div class="field">
                   <label class="switch">
-                    <input v-model="worldTreeDraft.always_on" type="checkbox" />
+                    <input v-model="worldBookDraft.always_on" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">常驻注入</span>
                   </label>
                   <label class="switch">
-                    <input v-model="worldTreeDraftEnabled" type="checkbox" />
+                    <input v-model="worldBookDraftEnabled" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">启用（关掉时整个子树都不注入）</span>
                   </label>
                 </div>
                 <div class="field wide cluster">
-                  <button class="btn primary small" type="button" :disabled="worldTreeBusy || !worldTreeDraft.title" @click="storeWorldTreeNode">
-                    {{ worldTreeDraft.id ? "保存修改" : "添加设定" }}
+                  <button class="btn primary small" type="button" :disabled="worldBookBusy || !worldBookDraft.title" @click="storeWorldBookNode">
+                    {{ worldBookDraft.id ? "保存修改" : "添加设定" }}
                   </button>
-                  <button class="btn small" type="button" :disabled="worldTreeBusy" @click="worldTreeEditorOpen = false">取消</button>
+                  <button class="btn small" type="button" :disabled="worldBookBusy" @click="worldBookEditorOpen = false">取消</button>
                 </div>
               </template>
             </div>
@@ -1333,12 +1333,14 @@ import {
   importPersonas,
   PERSONA_EXPORT_VERSION,
   type Persona,
-  listWorldTree,
-  saveWorldTreeNode,
-  deleteWorldTreeNode,
-  importWorldTree,
-  WORLD_TREE_EXPORT_VERSION,
-  type WorldTreeNode,
+  listWorldBook,
+  saveWorldBookNode,
+  deleteWorldBookNode,
+  importWorldBook,
+  importWorldBookSillyTavern,
+  WORLD_BOOK_EXPORT_VERSION,
+  type WorldBookNode,
+  type WorldBookImportResult,
   listBotGroups
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
@@ -1789,32 +1791,32 @@ async function removePersona(persona: Persona): Promise<void> {
   }
 }
 
-// ---- 世界树（世界观设定库） ----
-// 树是全局一棵，节点的增删改立即落库；world_tree_enabled 才是跟着机器人配置走的。
+// ---- 世界书（世界观设定库） ----
+// 树是全局一棵，节点的增删改立即落库；world_book_enabled 才是跟着机器人配置走的。
 
-const worldTreeNodes = ref<WorldTreeNode[]>([]);
-const worldTreeBusy = ref(false);
-const worldTreeEditorOpen = ref(false);
-const worldTreeDraft = ref<WorldTreeNode>({ id: "", title: "" });
-const worldTreeKeywordsDraft = ref("");
-const worldTreeDraftEnabled = ref(true);
-const worldTreeFileInput = ref<HTMLInputElement | null>(null);
+const worldBookNodes = ref<WorldBookNode[]>([]);
+const worldBookBusy = ref(false);
+const worldBookEditorOpen = ref(false);
+const worldBookDraft = ref<WorldBookNode>({ id: "", title: "" });
+const worldBookKeywordsDraft = ref("");
+const worldBookDraftEnabled = ref(true);
+const worldBookFileInput = ref<HTMLInputElement | null>(null);
 
-interface WorldTreeRow {
-  node: WorldTreeNode;
+interface WorldBookRow {
+  node: WorldBookNode;
   depth: number;
   path: string[];
 }
 
 // 深度优先展开，和后端注入顺序一致；悬空父节点当根处理，后端下次保存会修正。
-const worldTreeRows = computed<WorldTreeRow[]>(() => {
-  const byParent = new Map<string, WorldTreeNode[]>();
-  const ids = new Set(worldTreeNodes.value.map((node) => node.id));
-  for (const node of worldTreeNodes.value) {
+const worldBookRows = computed<WorldBookRow[]>(() => {
+  const byParent = new Map<string, WorldBookNode[]>();
+  const ids = new Set(worldBookNodes.value.map((node) => node.id));
+  for (const node of worldBookNodes.value) {
     const parent = node.parent_id && ids.has(node.parent_id) ? node.parent_id : "";
     byParent.set(parent, [...(byParent.get(parent) ?? []), node]);
   }
-  const rows: WorldTreeRow[] = [];
+  const rows: WorldBookRow[] = [];
   const walk = (parent: string, depth: number, path: string[]): void => {
     for (const node of byParent.get(parent) ?? []) {
       rows.push({ node, depth, path });
@@ -1826,26 +1828,26 @@ const worldTreeRows = computed<WorldTreeRow[]>(() => {
 });
 
 // 父节点候选不能选自己和自己的后代，不然一保存就成了环。
-const worldTreeParentOptions = computed<AppSelectOption[]>(() => {
-  const editingID = worldTreeDraft.value.id;
+const worldBookParentOptions = computed<AppSelectOption[]>(() => {
+  const editingID = worldBookDraft.value.id;
   const excluded = new Set<string>();
   if (editingID) {
     excluded.add(editingID);
-    for (const row of worldTreeRows.value) {
+    for (const row of worldBookRows.value) {
       if (row.node.parent_id && excluded.has(row.node.parent_id)) excluded.add(row.node.id);
     }
   }
   return [
     { value: "", label: "（根）" },
-    ...worldTreeRows.value
+    ...worldBookRows.value
       .filter((row) => !excluded.has(row.node.id))
       .map((row) => ({ value: row.node.id, label: `${"　".repeat(row.depth)}${row.node.title}` }))
   ];
 });
 
-function worldTreeRowDisabled(row: WorldTreeRow): boolean {
+function worldBookRowDisabled(row: WorldBookRow): boolean {
   if (row.node.enabled === false) return true;
-  const byID = new Map(worldTreeNodes.value.map((node) => [node.id, node]));
+  const byID = new Map(worldBookNodes.value.map((node) => [node.id, node]));
   let parent = row.node.parent_id;
   while (parent) {
     const node = byID.get(parent);
@@ -1856,10 +1858,10 @@ function worldTreeRowDisabled(row: WorldTreeRow): boolean {
   return false;
 }
 
-function worldTreeNodeSummary(row: WorldTreeRow): string {
+function worldBookNodeSummary(row: WorldBookRow): string {
   const parts: string[] = [];
   if (row.node.enabled === false) parts.push("已停用");
-  else if (worldTreeRowDisabled(row)) parts.push("随父级停用");
+  else if (worldBookRowDisabled(row)) parts.push("随父级停用");
   if (row.node.always_on) parts.push("常驻");
   else if (row.node.keywords?.length) parts.push(`触发：${row.node.keywords.join("、")}`);
   else if (row.node.content?.trim()) parts.push("未设注入方式，仅作目录");
@@ -1867,75 +1869,75 @@ function worldTreeNodeSummary(row: WorldTreeRow): string {
   return parts.join(" · ");
 }
 
-async function loadWorldTree(): Promise<void> {
+async function loadWorldBook(): Promise<void> {
   try {
-    worldTreeNodes.value = (await listWorldTree()).nodes ?? [];
+    worldBookNodes.value = (await listWorldBook()).nodes ?? [];
   } catch {
-    // 世界树读不出来不该挡住机器人页：没有设定集机器人照样聊天。
-    worldTreeNodes.value = [];
+    // 世界书读不出来不该挡住机器人页：没有设定集机器人照样聊天。
+    worldBookNodes.value = [];
   }
 }
 
-function openWorldTreeEditor(node?: WorldTreeNode): void {
-  worldTreeDraft.value = node
+function openWorldBookEditor(node?: WorldBookNode): void {
+  worldBookDraft.value = node
     ? { ...node }
     : { id: "", title: "", parent_id: "", content: "", always_on: false };
-  worldTreeKeywordsDraft.value = (node?.keywords ?? []).join(",");
-  worldTreeDraftEnabled.value = node?.enabled !== false;
-  worldTreeEditorOpen.value = true;
+  worldBookKeywordsDraft.value = (node?.keywords ?? []).join(",");
+  worldBookDraftEnabled.value = node?.enabled !== false;
+  worldBookEditorOpen.value = true;
 }
 
-async function storeWorldTreeNode(): Promise<void> {
-  const draft = worldTreeDraft.value;
+async function storeWorldBookNode(): Promise<void> {
+  const draft = worldBookDraft.value;
   if (!draft.title.trim()) return;
-  worldTreeBusy.value = true;
+  worldBookBusy.value = true;
   try {
-    const response = await saveWorldTreeNode({
+    const response = await saveWorldBookNode({
       ...(draft.id ? { id: draft.id } : {}),
       parent_id: draft.parent_id || "",
       title: draft.title,
       content: draft.content ?? "",
-      keywords: worldTreeKeywordsDraft.value.split(/[,，]/).map((keyword) => keyword.trim()).filter(Boolean),
+      keywords: worldBookKeywordsDraft.value.split(/[,，]/).map((keyword) => keyword.trim()).filter(Boolean),
       always_on: draft.always_on ?? false,
-      enabled: worldTreeDraftEnabled.value
+      enabled: worldBookDraftEnabled.value
     });
-    worldTreeNodes.value = response.nodes ?? [];
-    worldTreeEditorOpen.value = false;
+    worldBookNodes.value = response.nodes ?? [];
+    worldBookEditorOpen.value = false;
     toastSuccess(draft.id ? `已更新设定「${response.node.title}」` : `已添加设定「${response.node.title}」`);
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "世界树保存失败");
+    toastError(error instanceof Error ? error.message : "世界书保存失败");
   } finally {
-    worldTreeBusy.value = false;
+    worldBookBusy.value = false;
   }
 }
 
-async function removeWorldTreeNode(node: WorldTreeNode): Promise<void> {
+async function removeWorldBookNode(node: WorldBookNode): Promise<void> {
   if (!(await askConfirm({ title: `删除设定「${node.title}」？`, message: "它的子节点会接到它的父节点上，不会一起删掉。", danger: true, confirmLabel: "删除" }))) {
     return;
   }
-  worldTreeBusy.value = true;
+  worldBookBusy.value = true;
   try {
-    worldTreeNodes.value = (await deleteWorldTreeNode(node.id)).nodes ?? [];
+    worldBookNodes.value = (await deleteWorldBookNode(node.id)).nodes ?? [];
     toastSuccess(`已删除设定「${node.title}」`);
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "世界树删除失败");
+    toastError(error instanceof Error ? error.message : "世界书删除失败");
   } finally {
-    worldTreeBusy.value = false;
+    worldBookBusy.value = false;
   }
 }
 
-function worldTreeFileInputClick(): void {
-  worldTreeFileInput.value?.click();
+function worldBookFileInputClick(): void {
+  worldBookFileInput.value?.click();
 }
 
 // 不导 id 和 updated_at 的原值给人看，但父子引用要靠 id 重建，所以原样带上；
 // 后端导入时会统一换新 ID 并按文件内的对照重连。
-function exportWorldTree(): void {
+function exportWorldBook(): void {
   const content = JSON.stringify(
     {
-      version: WORLD_TREE_EXPORT_VERSION,
+      version: WORLD_BOOK_EXPORT_VERSION,
       exported_at: new Date().toISOString(),
-      nodes: worldTreeNodes.value.map((node) => ({
+      nodes: worldBookNodes.value.map((node) => ({
         id: node.id,
         parent_id: node.parent_id ?? "",
         title: node.title,
@@ -1948,32 +1950,44 @@ function exportWorldTree(): void {
     null,
     2
   );
-  downloadPersonaFile(`diana-world-tree-${new Date().toISOString().slice(0, 10)}.json`, content);
+  downloadPersonaFile(`diana-world-book-${new Date().toISOString().slice(0, 10)}.json`, content);
 }
 
-async function importWorldTreeFile(event: Event): Promise<void> {
+async function importWorldBookFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = "";
   if (!file) return;
 
-  worldTreeBusy.value = true;
+  worldBookBusy.value = true;
   try {
     const parsed = JSON.parse(await file.text()) as unknown;
-    const list = Array.isArray(parsed)
-      ? parsed
-      : Array.isArray((parsed as { nodes?: unknown }).nodes)
-        ? (parsed as { nodes: unknown[] }).nodes
-        : [parsed];
-    const result = await importWorldTree(list as WorldTreeNode[]);
-    worldTreeNodes.value = result.nodes ?? [];
+    // SillyTavern 的三种文件都认：世界书文件顶层是 entries 对象，角色卡把
+    // 条目埋在 data.character_book.entries 或 character_book.entries 里。
+    // 认出来就把 entries 原样交给后端转换，规则只维护一份。
+    const record = (parsed ?? {}) as Record<string, any>;
+    const stEntries = !Array.isArray(parsed)
+      ? record.entries ?? record.data?.character_book?.entries ?? record.character_book?.entries
+      : undefined;
+    let result: WorldBookImportResult;
+    if (stEntries && typeof stEntries === "object") {
+      result = await importWorldBookSillyTavern(stEntries);
+    } else {
+      const list = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(record.nodes)
+          ? (record.nodes as unknown[])
+          : [parsed];
+      result = await importWorldBook(list as WorldBookNode[]);
+    }
+    worldBookNodes.value = result.nodes ?? [];
     const notes = [`导入 ${result.imported} 条设定`];
     if (result.dropped) notes.push(`${result.dropped} 条无效已忽略`);
     toastSuccess(notes.join("，"));
   } catch (error) {
-    toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "世界树导入失败");
+    toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "世界书导入失败");
   } finally {
-    worldTreeBusy.value = false;
+    worldBookBusy.value = false;
   }
 }
 
@@ -2457,7 +2471,7 @@ function setForm(config: BotProfileConfig): void {
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,
     debug_mode_enabled: config.debug_mode_enabled ?? false,
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
-    world_tree_enabled: config.world_tree_enabled ?? true,
+    world_book_enabled: config.world_book_enabled ?? true,
     romance_enabled: config.romance_enabled ?? false,
     dict_segment_enabled: config.dict_segment_enabled ?? false,
     semantic_search_enabled: config.semantic_search_enabled ?? false,
@@ -2810,10 +2824,10 @@ onBeforeUnmount(() => {
 
 onMounted(async () => {
   trackHeaderHeight();
-  // 人设库和世界树单独拉，不放进下面那组 Promise.all：它们只是素材库，
+  // 人设库和世界书单独拉，不放进下面那组 Promise.all：它们只是素材库，
   // 慢一点或者读不出来都不该拖住机器人配置本身的加载。
   void loadPersonaLibrary();
-  void loadWorldTree();
+  void loadWorldBook();
   const [platformResult, botConfig, llmConfig] = await Promise.all([
     getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),
     getBotProfileConfig().catch((error: unknown) => {

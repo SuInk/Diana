@@ -3366,8 +3366,8 @@ a.nav-action {
   opacity: 0.5;
 }
 
-/* 世界树列表：一行一个节点，缩进表达层级。 */
-.world-tree-list {
+/* 世界书列表：一行一个节点，缩进表达层级。 */
+.world-book-list {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -3376,7 +3376,7 @@ a.nav-action {
   overflow: hidden;
 }
 
-.world-tree-row {
+.world-book-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3384,11 +3384,11 @@ a.nav-action {
   padding-right: 6px;
 }
 
-.world-tree-row + .world-tree-row {
+.world-book-row + .world-book-row {
   border-top: 1px solid var(--border);
 }
 
-.world-tree-title {
+.world-book-title {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -3404,15 +3404,15 @@ a.nav-action {
   cursor: pointer;
 }
 
-.world-tree-title:hover strong {
+.world-book-title:hover strong {
   color: var(--accent);
 }
 
-.world-tree-title strong {
+.world-book-title strong {
   font-size: 13px;
 }
 
-.world-tree-title small {
+.world-book-title small {
   font-size: 11px;
   max-width: 100%;
   overflow: hidden;

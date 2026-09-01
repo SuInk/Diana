@@ -53,7 +53,7 @@ const oneBotProfile: BotProfileConfig = {
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
-  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_tree_enabled: true, romance_enabled: false, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
+  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-5.6" }, vision: { profile_id: "llm-vision", model: "gpt-5.6" },
@@ -160,8 +160,8 @@ const demoPersonas = [
   { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", reply_style: "concise", self_reference: "", sentence_enders: "" }
 ];
 
-// 世界树的演示数据：一条常驻骨架加一条触发式细节，让树形和两种注入方式都看得到。
-const demoWorldTree = [
+// 世界书的演示数据：一条常驻骨架加一条触发式细节，让树形和两种注入方式都看得到。
+const demoWorldBook = [
   { id: "world-1", parent_id: "", title: "枝江", content: "故事发生在虚构城市枝江，机器人就住在群主的服务器上。", keywords: [], always_on: true, enabled: true },
   { id: "world-2", parent_id: "world-1", title: "港口", content: "枝江港常年有雾，群友们约好雾散了一起去钓鱼。", keywords: ["港口", "码头", "钓鱼"], always_on: false, enabled: true }
 ];
@@ -681,25 +681,40 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     if (index >= 0) demoPersonas.splice(index, 1);
     return json({ personas: demoPersonas });
   }
-  if (path === "/api/assistant/world-tree" && method === "GET") {
-    return json({ nodes: demoWorldTree, limit: 200 });
+  if (path === "/api/assistant/world-book" && method === "GET") {
+    return json({ nodes: demoWorldBook, limit: 200 });
   }
-  if (path === "/api/assistant/world-tree" && method === "POST") {
-    const node = { ...(body.node as Record<string, unknown>) } as (typeof demoWorldTree)[number];
-    const index = demoWorldTree.findIndex((item) => item.id === node.id);
-    if (index >= 0) demoWorldTree[index] = { ...demoWorldTree[index], ...node };
-    else demoWorldTree.push({ ...node, id: `world-${demoWorldTree.length + 1}` });
-    return json({ node: demoWorldTree[index >= 0 ? index : demoWorldTree.length - 1], nodes: demoWorldTree });
+  if (path === "/api/assistant/world-book" && method === "POST") {
+    const node = { ...(body.node as Record<string, unknown>) } as (typeof demoWorldBook)[number];
+    const index = demoWorldBook.findIndex((item) => item.id === node.id);
+    if (index >= 0) demoWorldBook[index] = { ...demoWorldBook[index], ...node };
+    else demoWorldBook.push({ ...node, id: `world-${demoWorldBook.length + 1}` });
+    return json({ node: demoWorldBook[index >= 0 ? index : demoWorldBook.length - 1], nodes: demoWorldBook });
   }
-  if (path === "/api/assistant/world-tree/import") {
-    const incoming = (body.nodes as Array<Record<string, unknown>>) ?? [];
+  if (path === "/api/assistant/world-book/import") {
+    // 和后端一致：SillyTavern 的 entries（对象或数组）也认，字段就地折算。
+    let incoming = (body.nodes as Array<Record<string, unknown>>) ?? [];
+    const entries = body.entries as Record<string, Record<string, unknown>> | Array<Record<string, unknown>> | undefined;
+    if (!incoming.length && entries && typeof entries === "object") {
+      const list = Array.isArray(entries) ? entries : Object.values(entries);
+      incoming = list.map((entry) => {
+        const keywords = (Array.isArray(entry.key) ? entry.key : Array.isArray(entry.keys) ? entry.keys : []).map(String);
+        return {
+          title: String(entry.comment ?? entry.name ?? "").trim() || keywords[0] || String(entry.content ?? "").slice(0, 16),
+          content: String(entry.content ?? ""),
+          keywords,
+          always_on: Boolean(entry.constant),
+          enabled: !entry.disable && entry.enabled !== false
+        };
+      });
+    }
     let imported = 0;
     let dropped = 0;
     for (const raw of incoming) {
       const title = String(raw.title ?? "").trim();
       if (!title) { dropped++; continue; }
-      demoWorldTree.push({
-        id: `world-import-${demoWorldTree.length + 1}`,
+      demoWorldBook.push({
+        id: `world-import-${demoWorldBook.length + 1}`,
         parent_id: "",
         title,
         content: String(raw.content ?? ""),
@@ -709,17 +724,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       });
       imported++;
     }
-    return json({ nodes: demoWorldTree, imported, dropped });
+    return json({ nodes: demoWorldBook, imported, dropped });
   }
-  if (path === "/api/assistant/world-tree/delete") {
-    const index = demoWorldTree.findIndex((item) => item.id === String(body.id ?? ""));
+  if (path === "/api/assistant/world-book/delete") {
+    const index = demoWorldBook.findIndex((item) => item.id === String(body.id ?? ""));
     if (index >= 0) {
-      const removed = demoWorldTree.splice(index, 1)[0];
-      for (const node of demoWorldTree) {
+      const removed = demoWorldBook.splice(index, 1)[0];
+      for (const node of demoWorldBook) {
         if (node.parent_id === removed.id) node.parent_id = removed.parent_id;
       }
     }
-    return json({ nodes: demoWorldTree });
+    return json({ nodes: demoWorldBook });
   }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {
