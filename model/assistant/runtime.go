@@ -9204,7 +9204,7 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	builder.WriteString("\n互动次数：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
-		builder.WriteString("\n人员画像（只在自然相关时用上，不要主动背出来，也不要拿来向别人介绍这个人）：")
+		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)
 	}
 	if len(profile.Memories) > 0 {

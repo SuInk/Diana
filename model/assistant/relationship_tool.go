@@ -47,7 +47,7 @@ const relationshipReplyGuidance = "围绕用户实际问的那件事回答，用
 	"reminder_schedule_limit 只在用户明确问「能建几个」时才说，平时不要主动报出来——真建满时创建工具会当场说明。" +
 	"只有用户问最近变化时才讲 recent_changes 里的增减分、时间和原因。" +
 	"回复里需要真正 @ 目标时，原样使用结果中的 mention_cq，不要写成普通文本的 @账号。" +
-	"portrait 是这个人的长期画像，只在用户问起、或它和当前话题自然相关时才提；不要主动把整份画像念出来，也不要在别人面前复述某个人的画像。"
+	"portrait 是这个人的长期画像，群里谁都查得到，被问到就照实说；但只在用户问起、或它和当前话题自然相关时才提，不要主动把整份画像念出来。"
 
 type dianaRelationshipSnapshot struct {
 	UserID      string `json:"user_id"`
@@ -67,7 +67,8 @@ type dianaRelationshipSnapshot struct {
 	Owner         bool                     `json:"bot_owner"`
 	HasHistory    bool                     `json:"has_history"`
 	RecentChanges []UserFavorabilityChange `json:"recent_changes,omitempty"`
-	// Portrait 只在调用方看得到目标画像时才带上，见 portraitVisibleTo。
+	// Portrait 和好感度一样是群里公开的：谁都查得到别人的。写画像仍然要权限，
+	// 见 runPortraitOperation。榜单不带它，那是体积考虑，不是可见性。
 	Portrait []UserPortraitTrait `json:"portrait,omitempty"`
 }
 
@@ -120,14 +121,14 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, member.DisplayName(), relationshipHistoryLimit(input), t.portraitVisibleTo(ctx, targetID))
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, member.DisplayName(), relationshipHistoryLimit(input), true)
 		if err != nil {
 			return "", err
 		}
 		return marshalDianaRelationshipResult(dianaRelationshipResult{
 			OK:      true,
 			Action:  "retrieved",
-			Message: "已读取目标用户的关系数据；包含关系统计，以及在允许时的人员画像，不包含长期记忆正文。",
+			Message: "已读取目标用户的关系数据；包含关系统计和人员画像，不包含长期记忆正文。",
 			Target:  &snapshot,
 		})
 	case "list", "rank":
@@ -140,7 +141,7 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		return marshalDianaRelationshipResult(dianaRelationshipResult{
 			OK:      true,
 			Action:  "listed",
-			Message: fmt.Sprintf("已读取当前群内 %d 位有互动记录成员的关系数据；榜单不含任何人的画像。", len(items)),
+			Message: fmt.Sprintf("已读取当前群内 %d 位有互动记录成员的关系数据；榜单只有统计，要看某个人的画像用 operation=get 单查。", len(items)),
 			Items:   items,
 		})
 	case "set", "adjust":
@@ -166,7 +167,7 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", relationshipHistoryLimit(input), t.portraitVisibleTo(ctx, targetID))
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", relationshipHistoryLimit(input), true)
 		if err != nil {
 			return "", err
 		}
@@ -243,17 +244,6 @@ func (t *dianaRelationshipTool) runPortraitOperation(ctx context.Context, operat
 		Message: message,
 		Target:  &snapshot,
 	})
-}
-
-// portraitVisibleTo 判断这次调用能不能看到目标的画像。
-//
-// 好感度和互动次数是群里公开的互动统计，谁都能查；画像不是——住在哪、做什么工作
-// 是本人告诉机器人的，不能因为同在一个群就被别人查出来。所以只有本人和主人可见。
-func (t *dianaRelationshipTool) portraitVisibleTo(ctx context.Context, targetID string) bool {
-	if strings.TrimSpace(targetID) == strings.TrimSpace(t.event.UserID) {
-		return true
-	}
-	return t.runtime.relationshipPolicy(ctx, t.event).Owner
 }
 
 // portraitFieldSchemaHint 把栏目表拼成一句枚举说明，字段和含义只维护在
@@ -355,6 +345,7 @@ func (t *dianaRelationshipTool) resolveTargetMember(ctx context.Context, targetI
 	return OneBotGroupMemberInfo{}, fmt.Errorf("QQ %s 不是当前群成员", targetID)
 }
 
+// includePortrait 只管这次要不要把画像塞进结果，与权限无关——画像谁都能看。
 func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID string, fallbackName string, historyLimit int, includePortrait bool) (dianaRelationshipSnapshot, error) {
 	t.runtime.mu.RLock()
 	store := t.runtime.userMemory
@@ -416,8 +407,9 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context, limi
 	}
 	items := make([]dianaRelationshipSnapshot, 0, len(members))
 	for _, member := range members {
-		// 榜单一律不带画像：住在哪、做什么是本人告诉机器人的，不能因为同在一个
-		// 群就被整群列出来。
+		// 榜单不带画像，理由是体积不是权限：一次最多列 50 人，每人七栏画像会把
+		// 结果撑到十几 KB，而「谁好感度最高」根本用不到。要看某个人的画像，
+		// 用 operation=get 单查，那条路谁都走得通。
 		item, err := t.relationshipSnapshot(ctx, member.UserID, member.DisplayName(), 0, false)
 		if err != nil {
 			return nil, err

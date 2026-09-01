@@ -220,9 +220,9 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	}
 }
 
-// 画像归本人所有：同群的普通成员查别人只拿得到公开的互动统计，拿不到住在哪、
-// 做什么工作。
-func TestDianaRelationshipToolHidesPortraitFromOtherMembers(t *testing.T) {
+// 画像和好感度一样是群里公开的：普通成员查别人也拿得到。榜单不带画像是体积
+// 考虑，不是权限——那条路对主人同样不带。
+func TestDianaRelationshipToolSharesPortraitWithGroupMembers(t *testing.T) {
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["10005"] = UserMemoryProfile{
 		UserID:       "10005",
@@ -256,28 +256,29 @@ func TestDianaRelationshipToolHidesPortraitFromOtherMembers(t *testing.T) {
 	if result.Target == nil || result.Target.Favorability != 30 {
 		t.Fatalf("public relationship data should still be readable: %#v", result.Target)
 	}
-	if len(result.Target.Portrait) != 0 || strings.Contains(raw, "住在杭州") {
-		t.Fatalf("portrait leaked to another member: %s", raw)
+	if len(result.Target.Portrait) != 1 || !strings.Contains(raw, "住在杭州") {
+		t.Fatalf("an ordinary member should be able to read another member's portrait: %s", raw)
 	}
 
-	// 榜单同样不带画像，哪怕调用的是主人：整群列出来的东西不该包含个人情况。
+	// 榜单不带画像：一次最多 50 人，七栏画像会把结果撑爆，而排行用不到它。
+	// 这条对主人同样成立，所以它不是权限。
 	ownerEvent := MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20002", UserID: "10001"}
 	listRaw, err := newDianaRelationshipTool(runtime, ownerEvent).Run(context.Background(), map[string]any{"operation": "list"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(listRaw, "住在杭州") {
-		t.Fatalf("portrait leaked into the group ranking: %s", listRaw)
+		t.Fatalf("the ranking should stay statistics-only: %s", listRaw)
 	}
 
-	// 本人和主人查得到。
+	// 本人和主人自然也查得到。
 	selfEvent := MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20002", UserID: "10005"}
 	selfRaw, err := newDianaRelationshipTool(runtime, selfEvent).Run(context.Background(), map[string]any{"operation": "get"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(selfRaw, "住在杭州") {
-		t.Fatalf("owner of the portrait cannot read it: %s", selfRaw)
+		t.Fatalf("the person themselves cannot read their own portrait: %s", selfRaw)
 	}
 	ownerRaw, err := newDianaRelationshipTool(runtime, ownerEvent).Run(context.Background(), map[string]any{
 		"operation": "get", "target_user_id": "10005",
