@@ -133,6 +133,63 @@ https://HOST/api/channels/wecom/callback</code></pre>
         </div>
       </section>
 
+      <section class="section searchable" id="persona-portability">
+        <div class="section-heading"><p class="eyebrow">人设可移植</p><h2>人设是一个可以手写的 JSON 文件</h2></div>
+        <p>人设库把「它是谁、怎么说话」存成具名的几套，随时切换。整库和单套都能导出成同一种文件，也都能被导入回来 —— 换机器、备份、或者把调好的人设发给别人，都是这一个文件。</p>
+        <p>库是<strong>套用来源，不是活绑定</strong>：选一套就把那几个字段填进机器人表单，之后跑的是表单里的值。改库里那份不会偷偷改变已经配好的机器人。</p>
+
+        <h3>文件长这样</h3>
+        <pre><code>{
+  "version": 1,
+  "personas": [
+    {
+      "name": "然然",
+      "system_prompt": "你叫嘉然，大家喊你然然。你不是助手，是这个群里的一员。",
+      "reply_style": "human",
+      "action_description_enabled": false,
+      "self_reference": "我",
+      "sentence_enders": ""
+    }
+  ]
+}</code></pre>
+        <p>导入接受三种形状，不用为格式回去改文件：完整的 <code>{"personas": [...]}</code>、光一个数组 <code>[...]</code>、或者单独一套 <code>{...}</code>。文件里没有 ID 和时间戳 —— 那些是本机状态，导入时一律重新分配。</p>
+
+        <div class="table-wrap"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody>
+          <tr><td><code>name</code></td><td>是</td><td>库里显示的名字，最多 40 字。</td></tr>
+          <tr><td><code>system_prompt</code></td><td>否</td><td>基础人设正文，最多 4000 字。</td></tr>
+          <tr><td><code>reply_style</code></td><td>否</td><td>表达风格，见下表。留空表示这套人设不指定风格。</td></tr>
+          <tr><td><code>action_description_enabled</code></td><td>否</td><td>是否在台词前后穿插括号动作，默认 <code>false</code>。</td></tr>
+          <tr><td><code>self_reference</code></td><td>否</td><td>机器人怎么称呼自己，例如 <code>我</code>、<code>本喵</code>。</td></tr>
+          <tr><td><code>sentence_enders</code></td><td>否</td><td>句尾语气词候选，逗号分隔。填多个是候选，模型按当下语气挑。</td></tr>
+        </tbody></table></div>
+
+        <h3>reply_style 的合法值</h3>
+        <div class="table-wrap"><table><thead><tr><th>值</th><th>风格</th></tr></thead><tbody>
+          <tr><td><code>groupmate</code></td><td>群友 —— 群里一个熟悉的普通朋友，语气中性</td></tr>
+          <tr><td><code>human</code></td><td>真人感 —— 一个具体的人在跟你说话，情绪外放、会黏人</td></tr>
+          <tr><td><code>assistant</code></td><td>助手 —— 默认值</td></tr>
+          <tr><td><code>gentle</code></td><td>温柔</td></tr>
+          <tr><td><code>lively</code></td><td>活泼</td></tr>
+          <tr><td><code>concise</code></td><td>简洁</td></tr>
+          <tr><td><code>catgirl</code></td><td>猫娘</td></tr>
+          <tr><td><code>roleplay</code></td><td>扮演 —— 界面上是「动作描写」开关，导入时会转成 <code>assistant</code> 加 <code>action_description_enabled: true</code></td></tr>
+        </tbody></table></div>
+        <p>写了别的值不会导入失败：那几套会按「助手」导进来，界面上会单独提示是哪个词没认出来，方便手写文件时排查拼写。</p>
+
+        <h3>导入只增不减</h3>
+        <ul class="check-list">
+          <li>同名但内容不同 → 改成「名字 (2)」，不覆盖你已经调好的那套。</li>
+          <li>同名且六项完全一样 → 跳过，同一个文件导两次不会攒出副本。</li>
+          <li>没名字、没内容、或者库满了（上限 50 套）→ 忽略。</li>
+          <li>导入结果会分别报出这几个数，不只说「导入成功」。</li>
+        </ul>
+
+        <h3>不在文件里的东西</h3>
+        <p>回复模式（搭话频率）、语气跟随时段、拒答话术、模型分配都不在人设文件里。它们描述的是「这台机器人在这个群里怎么运行」，跟它是谁无关 —— 同一套人设放在办公群和水群，本来就该有不同的搭话频率。</p>
+
+        <p>仓库里有几个手写的示例文件可以直接导入：<code>examples/personas/</code>。</p>
+      </section>
+
       <section class="section searchable" id="agent">
         <div class="section-heading"><p class="eyebrow">Agent 与工具</p><h2>模型只看到当前场景允许的能力</h2></div>
         <p>Agent 运行器将结构化工具结果送回模型，直到得到最终回复或达到步数上限。工具注册表根据平台、关系权限、群配置和功能状态收敛。</p>

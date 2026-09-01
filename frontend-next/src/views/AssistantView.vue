@@ -1636,6 +1636,11 @@ async function importPersonaFile(event: Event): Promise<void> {
     if (result.skipped) notes.push(`${result.skipped} 套重复已跳过`);
     if (result.dropped) notes.push(`${result.dropped} 套无效已忽略`);
     toastSuccess(notes.join("，"));
+    // 认不出来的风格单独说：它不算失败，导入照常成功，但那几套的语气会退回
+    // 「助手」。混在上面那串数字里说，用户不会注意到自己拼错了。
+    if (result.unknown_styles?.length) {
+      toastError(`表达风格无法识别，已按「助手」导入：${result.unknown_styles.join("、")}`);
+    }
   } catch (error) {
     toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "人设导入失败");
   } finally {

@@ -43,6 +43,9 @@ type personaImportResponse struct {
 	Skipped  int                 `json:"skipped"`
 	Renamed  int                 `json:"renamed"`
 	Dropped  int                 `json:"dropped"`
+	// UnknownStyles 让手写或跨版本的人设文件可排查：拼错的风格会被静默退回
+	// 「助手」，不点名的话用户只会看到「导入成功」而语气完全不对。
+	UnknownStyles []string `json:"unknown_styles,omitempty"`
 }
 
 type personaListResponse struct {
@@ -163,21 +166,23 @@ func (h *BotHandler) importPersonas(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.personas.import", "人设已导入", "", map[string]any{
-		"imported": len(result.Imported),
-		"skipped":  result.Skipped,
-		"renamed":  result.Renamed,
-		"dropped":  result.Dropped,
+		"imported":       len(result.Imported),
+		"skipped":        result.Skipped,
+		"renamed":        result.Renamed,
+		"dropped":        result.Dropped,
+		"unknown_styles": result.UnknownStyles,
 	})
 	personas := updated.Personas
 	if personas == nil {
 		personas = []assistant.Persona{}
 	}
 	c.JSON(http.StatusOK, personaImportResponse{
-		Personas: personas,
-		Imported: len(result.Imported),
-		Skipped:  result.Skipped,
-		Renamed:  result.Renamed,
-		Dropped:  result.Dropped,
+		Personas:      personas,
+		Imported:      len(result.Imported),
+		Skipped:       result.Skipped,
+		Renamed:       result.Renamed,
+		Dropped:       result.Dropped,
+		UnknownStyles: result.UnknownStyles,
 	})
 }
 

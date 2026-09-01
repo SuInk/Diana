@@ -101,6 +101,34 @@ func (style ReplyStyle) Normalized() ReplyStyle {
 	}
 }
 
+// KnownReplyStyles 列出这一版认识的全部表达风格，供文档和导入校验引用。
+// 顺序与 WebUI 下拉一致，不含 roleplay——那一档在界面上是「动作描写」开关。
+func KnownReplyStyles() []ReplyStyle {
+	return []ReplyStyle{
+		ReplyStyleGroupmate,
+		ReplyStyleHuman,
+		ReplyStyleAssistant,
+		ReplyStyleGentle,
+		ReplyStyleLively,
+		ReplyStyleConcise,
+		ReplyStyleCatgirl,
+		ReplyStyleRoleplay,
+	}
+}
+
+// knownReplyStyle 判断这个字面值是不是本版本认识的风格。
+//
+// 不能拿 Normalized() 判断：它对认不出来的值一律返回「助手」，于是
+// 「assistant」和「随便写的」看起来一模一样。
+func knownReplyStyle(raw string) bool {
+	for _, style := range KnownReplyStyles() {
+		if strings.EqualFold(strings.TrimSpace(raw), string(style)) {
+			return true
+		}
+	}
+	return false
+}
+
 // replyEmojiRule 对所有表达风格生效。模型不加约束就爱往回复里塞 emoji，而
 // 提示词此前没有任何一条管这件事——群友风格里只有「颜文字最多一个」，那说的是
 // (╹◡╹) 这类字符拼的表情，模型不会认为它管得着 😂。
