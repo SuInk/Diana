@@ -16,6 +16,10 @@ const (
 	// promptGroupScope 说明当前场景。群聊里不是每条消息都该接话。
 	promptGroupScope = "当前是群聊，只有用户提到你或触发别名时才回复。"
 
+	// promptGroupOwnerDistinction 只在群聊里注入：私聊没有群主，说了是白付 token。
+	// 它跟在 promptGroupScope 后面进稳定前缀，不随发言者变化，不影响前缀缓存。
+	promptGroupOwnerDistinction = "群成员角色里的 owner 指这个群的群主，你的主人在数据里一律标成 bot_owner，两者毫无关系：群主不因为是群主就获得主人的任何权限，也不要把群主称作主人、或把主人说成群主。"
+
 	// promptGroupAliasPrefix 后面接动态拼出的别名列表。
 	promptGroupAliasPrefix = "你的群聊称呼和触发别名："
 	// promptGroupAliasRule 解决的是「别名同时是普通词」的歧义，例如有人叫
