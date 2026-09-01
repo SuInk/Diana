@@ -393,32 +393,35 @@ type BotConfig struct {
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跨群共用一本：新条目写进全局作用域，
 	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
-	NotebookSharedScopeEnabled   *bool           `json:"notebook_shared_scope_enabled,omitempty"`
-	PromptInjectTime             *bool           `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules   *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender      *bool           `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint       *bool           `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText       string          `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText     string          `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate           string          `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate    string          `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText          string          `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText           string          `json:"prompt_wake_only_text,omitempty"`
-	ProactiveReplyRouterPrompt   string          `json:"proactive_reply_router_prompt,omitempty"`
-	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars                int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
-	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
-	SocialReplyEnabled           *bool           `json:"social_reply_enabled,omitempty"`
-	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
-	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
-	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RefusalStrategy              RefusalStrategy `json:"refusal_strategy,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
+	NotebookSharedScopeEnabled *bool           `json:"notebook_shared_scope_enabled,omitempty"`
+	PromptInjectTime           *bool           `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender    *bool           `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint     *bool           `json:"prompt_chinese_slang_hint,omitempty"`
+	PromptChineseSlangText     string          `json:"prompt_chinese_slang_text,omitempty"`
+	PromptPlaintextRulesText   string          `json:"prompt_plaintext_rules_text,omitempty"`
+	PromptTimeTemplate         string          `json:"prompt_time_template,omitempty"`
+	PromptGroupSenderTemplate  string          `json:"prompt_group_sender_template,omitempty"`
+	PromptImageOnlyText        string          `json:"prompt_image_only_text,omitempty"`
+	PromptWakeOnlyText         string          `json:"prompt_wake_only_text,omitempty"`
+	ProactiveReplyRouterPrompt string          `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyPrompt       string          `json:"proactive_reply_prompt,omitempty"`
+	MaxInputChars              int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
+	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
+	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
+	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold      int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode            RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
+	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
+	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
+	DaypartToneEnabled           *bool `json:"daypart_tone_enabled,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -658,22 +661,25 @@ type ConfigPayload struct {
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跨群共用一本：新条目写进全局作用域，
 	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
-	NotebookSharedScopeEnabled   *bool           `json:"notebook_shared_scope_enabled,omitempty"`
-	ProactiveReplyRouterPrompt   string          `json:"proactive_reply_router_prompt,omitempty"`
-	ProactiveReplyPrompt         string          `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars                int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
-	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
-	SocialReplyEnabled           *bool           `json:"social_reply_enabled,omitempty"`
-	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
-	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
-	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RefusalStrategy              RefusalStrategy `json:"refusal_strategy,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool           `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool           `json:"llm_identity_masking_enabled,omitempty"`
+	NotebookSharedScopeEnabled *bool           `json:"notebook_shared_scope_enabled,omitempty"`
+	ProactiveReplyRouterPrompt string          `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyPrompt       string          `json:"proactive_reply_prompt,omitempty"`
+	MaxInputChars              int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
+	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
+	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
+	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold      int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode            RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
+	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
+	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
+	DaypartToneEnabled           *bool `json:"daypart_tone_enabled,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -1169,6 +1175,7 @@ func DefaultBotConfig() BotConfig {
 		ForwardReplyThreshold:          900,
 		RecallReplyMode:                RecallReplyModeLLMSummary,
 		RefusalStrategy:                RefusalStrategySmart,
+		DaypartToneEnabled:             boolPointer(false),
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
 		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      boolPointer(true),
@@ -1338,6 +1345,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
 	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
+	if cfg.DaypartToneEnabled == nil {
+		cfg.DaypartToneEnabled = copyBoolPointer(defaults.DaypartToneEnabled)
+	}
 	if cfg.RecallReplyAutoDeleteEnabled == nil {
 		cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(defaults.RecallReplyAutoDeleteEnabled)
 	}
@@ -1608,6 +1618,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ForwardReplyThreshold:             cfg.ForwardReplyThreshold,
 		RecallReplyMode:                   cfg.RecallReplyMode,
 		RefusalStrategy:                   cfg.RefusalStrategy,
+		DaypartToneEnabled:                copyBoolPointer(cfg.DaypartToneEnabled),
 		RecallReplyAutoDeleteEnabled:      copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:             cfg.RecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:         copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
@@ -1772,6 +1783,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ForwardReplyThreshold:          payload.ForwardReplyThreshold,
 		RecallReplyMode:                payload.RecallReplyMode,
 		RefusalStrategy:                payload.RefusalStrategy,
+		DaypartToneEnabled:             copyBoolPointer(payload.DaypartToneEnabled),
 		RecallReplyAutoDeleteEnabled:   copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:          payload.RecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      copyBoolPointer(payload.LLMIdentityMaskingEnabled),

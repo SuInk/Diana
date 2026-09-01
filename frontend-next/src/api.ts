@@ -168,6 +168,8 @@ export interface BotProfileConfig {
   group_trigger_mode?: AliasTriggerMode;
   /** 拒答话术；不设等同 smart（由模型按语境判断说不说原因）。 */
   refusal_strategy?: RefusalStrategy;
+  /** 语气跟随一天的时间变化（深夜话少、清早迷糊、晚上松弛）；不设等同关闭。 */
+  daypart_tone_enabled?: boolean;
   disabled_groups?: string[];
   /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
   group_admission?: GroupAdmission;
