@@ -17,6 +17,8 @@ type UserMemoryUpdate struct {
 	// 两者都只在给出时才动画像，普通的一次互动不会碰它。
 	PortraitTraits   []UserPortraitTrait `json:"portrait_traits,omitempty"`
 	PortraitRemovals []UserPortraitField `json:"portrait_removals,omitempty"`
+	// SetRomance 只在给出时才动恋爱关系状态；确立和解除都走它。
+	SetRomance *UserRomanceState `json:"set_romance,omitempty"`
 }
 
 type UserFavorabilityChange struct {
@@ -41,9 +43,11 @@ type UserMemoryProfile struct {
 	Memories     []UserMemoryItem `json:"memories,omitempty"`
 	// Portrait 是这个人的画像：住在哪、做什么、有什么生活习惯。它和 Memories
 	// 的分工是「这个人是谁」对「这个人说过什么」。
-	Portrait   []UserPortraitTrait `json:"portrait,omitempty"`
-	LastSeenAt time.Time           `json:"last_seen_at,omitempty"`
-	UpdatedAt  time.Time           `json:"updated_at,omitempty"`
+	Portrait []UserPortraitTrait `json:"portrait,omitempty"`
+	// Romance 是与机器人的恋爱关系状态（人机恋），没谈过就是 nil。
+	Romance    *UserRomanceState `json:"romance,omitempty"`
+	LastSeenAt time.Time         `json:"last_seen_at,omitempty"`
+	UpdatedAt  time.Time         `json:"updated_at,omitempty"`
 }
 
 type UserMemoryItem struct {

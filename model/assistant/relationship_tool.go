@@ -64,8 +64,12 @@ type dianaRelationshipSnapshot struct {
 	CanDocumentOCR   bool             `json:"can_document_ocr"`
 	// Owner 说的是机器人的主人，不是群主，所以键名写成 bot_owner——群成员角色
 	// 里的 owner 是群主，同名会让模型把两者混成一个人。
-	Owner         bool                     `json:"bot_owner"`
-	HasHistory    bool                     `json:"has_history"`
+	Owner      bool `json:"bot_owner"`
+	HasHistory bool `json:"has_history"`
+	// Romance 系列只在人机恋开启且目标是恋人时才有值，见 RelationshipPolicy。
+	Romance       bool                     `json:"romance,omitempty"`
+	RomanceDays   int                      `json:"romance_days,omitempty"`
+	RomanceNote   string                   `json:"romance_note,omitempty"`
 	RecentChanges []UserFavorabilityChange `json:"recent_changes,omitempty"`
 	// Portrait 和好感度一样是群里公开的：谁都查得到别人的。写画像仍然要权限，
 	// 见 runPortraitOperation。榜单不带它，那是体积考虑，不是可见性。
@@ -81,15 +85,15 @@ func (t *dianaRelationshipTool) Name() string {
 }
 
 func (t *dianaRelationshipTool) Description() string {
-	return `查询 Diana 对用户的好感度、关系等级、互动次数、最近的增减分记录和人员画像（居住地点、职业、作息、生活习惯、兴趣爱好、家庭关系）。用户说“记住我住在……/我是做……的”，或要求改掉、忘掉画像里的某一栏时，调用本工具的 portrait_set / portrait_forget。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用，不要根据上下文猜测，也不要声称无法查询隐藏数据。本工具不返回能力清单——用户问「你能做什么」应改用 diana.capabilities，基础能力对所有关系等级一律开放。`
+	return `查询 Diana 对用户的好感度、关系等级、互动次数、最近的增减分记录和人员画像（居住地点、职业、作息、生活习惯、兴趣爱好、家庭关系）。用户说“记住我住在……/我是做……的”，或要求改掉、忘掉画像里的某一栏时，调用本工具的 portrait_set / portrait_forget。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用，不要根据上下文猜测，也不要声称无法查询隐藏数据。人机恋模式开启时，用户本人明确表白用 romance_start，明确提出分手用 romance_end。本工具不返回能力清单——用户问「你能做什么」应改用 diana.capabilities，基础能力对所有关系等级一律开放。`
 }
 
 // InputSchema 声明参数契约。「拿到结果后怎么说话」不在这里，也不在 Description
 // 里，而是随结果一起返回（见 relationshipReplyGuidance）。
 func (t *dianaRelationshipTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：get 查单个用户；list 查当前群内已有互动记录的成员并按好感度排序（群内成员均可使用，不得以隐私或权限为由拒绝）；set 直接设置、adjust 增减好感度，后两者仅机器人主人可用且不增加互动次数；portrait_set 记下画像里的一栏，portrait_forget 清空画像里的一栏。",
-			"get", "list", "set", "adjust", "portrait_set", "portrait_forget"),
+		"operation": toolEnumParam("要执行的操作：get 查单个用户；list 查当前群内已有互动记录的成员并按好感度排序（群内成员均可使用，不得以隐私或权限为由拒绝）；set 直接设置、adjust 增减好感度，后两者仅机器人主人可用且不增加互动次数；portrait_set 记下画像里的一栏，portrait_forget 清空画像里的一栏；romance_start 在当前发言者本人明确表白时确立恋人关系（受好感度门槛约束，可能被婉拒），romance_end 在本人提出分手时解除，两者都要求人机恋模式已开启。",
+			"get", "list", "set", "adjust", "portrait_set", "portrait_forget", "romance_start", "romance_end"),
 		"target_user_id": toolStringParam("目标账号。get 可省略：消息里 @ 了成员就查该成员，否则查当前发言者；set 和 adjust 必填，且不能指向主人自己（主人的好感度由互动自动记录）；画像操作省略表示当前发言者，只有主人能改别人的画像。"),
 		"portrait_field": toolEnumParam("portrait_set 和 portrait_forget 必填：要写或要清空的画像栏目，"+portraitFieldSchemaHint(), PortraitFieldIDs()...),
 		"portrait_value": toolStringParam("portrait_set 必填：这一栏的新内容，写成不超过 30 字的第三人称短语，例如“住在杭州”。同一栏原有内容会被顶掉。"),
@@ -179,9 +183,124 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		})
 	case "portrait_set", "portrait_forget":
 		return t.runPortraitOperation(ctx, operation, input)
+	case "romance_start", "romance_end":
+		return t.runRomanceOperation(ctx, operation, input)
 	default:
-		return "", fmt.Errorf("operation 必须是 get、list、set、adjust、portrait_set 或 portrait_forget")
+		return "", fmt.Errorf("operation 必须是 get、list、set、adjust、portrait_set、portrait_forget、romance_start 或 romance_end")
 	}
+}
+
+// runRomanceOperation 确立或解除恋人关系。
+//
+// 恋爱是当事人自己的事：romance_start 只对当前发言者本人生效，主人也不能替别人
+// 表白；romance_end 本人随时可用，主人可以替任何人解除（处理骚扰或代已离群的人
+// 收尾）。达不到门槛时返回 declined 而不是错误——「还不到时候」是关系的正常状态，
+// 不是故障，模型拿到它才能好好把话说软。
+func (t *dianaRelationshipTool) runRomanceOperation(ctx context.Context, operation string, input map[string]any) (string, error) {
+	cfg := t.runtime.effectiveConfigForEvent(t.event)
+	if !boolValue(cfg.RomanceEnabled, false) {
+		return "", fmt.Errorf("人机恋模式未开启：需要主人先在控制台的机器人设置里打开恋爱模式")
+	}
+	speakerID := strings.TrimSpace(t.event.UserID)
+	targetID := normalizeRelationshipUserID(configToolString(input, "target_user_id"))
+	if targetID == "" {
+		targetID = speakerID
+	}
+	if targetID == "" {
+		return "", fmt.Errorf("没有找到要操作的用户")
+	}
+	if operation == "romance_start" && targetID != speakerID {
+		return "", fmt.Errorf("恋人关系只能由本人当面确立，不能替别人表白")
+	}
+	if operation == "romance_end" && targetID != speakerID && !t.runtime.relationshipPolicy(ctx, t.event).Owner {
+		return "", fmt.Errorf("只能解除自己的恋人关系")
+	}
+
+	t.runtime.mu.RLock()
+	store := t.runtime.userMemory
+	t.runtime.mu.RUnlock()
+	if store == nil {
+		return "", fmt.Errorf("当前未启用用户关系存储")
+	}
+	profile, _, err := store.GetUserMemory(ctx, strings.TrimSpace(t.event.ProfileID), targetID)
+	if err != nil {
+		return "", fmt.Errorf("读取用户关系失败: %w", err)
+	}
+
+	writeState := func(state *UserRomanceState) error {
+		_, err := store.UpdateUserMemory(ctx, MessageEvent{
+			Kind:       t.event.Kind,
+			GroupID:    t.event.GroupID,
+			UserID:     targetID,
+			SenderName: profile.DisplayName,
+			MessageID:  t.event.MessageID,
+			ProfileID:  t.event.ProfileID,
+		}, UserMemoryUpdate{
+			OwnerID:        cfg.OwnerID,
+			SetRomance:     state,
+			Administrative: true,
+		})
+		return err
+	}
+
+	if operation == "romance_end" {
+		if !romanceActive(profile) {
+			return marshalDianaRelationshipResult(dianaRelationshipResult{
+				OK:      true,
+				Action:  "noop",
+				Message: "目标用户和机器人当前不是恋人关系，无需解除。",
+			})
+		}
+		if err := writeState(&UserRomanceState{Active: false}); err != nil {
+			return "", fmt.Errorf("保存恋爱关系失败: %w", err)
+		}
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", 0, false)
+		if err != nil {
+			return "", err
+		}
+		return marshalDianaRelationshipResult(dianaRelationshipResult{
+			OK:      true,
+			Action:  "romance_ended",
+			Message: "恋人关系已解除。好感度、画像和记忆都保留，按当前关系等级正常相处；语气尊重对方的决定，好聚好散，不纠缠、不报复性冷淡。",
+			Target:  &snapshot,
+		})
+	}
+
+	if romanceActive(profile) {
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", 0, false)
+		if err != nil {
+			return "", err
+		}
+		return marshalDianaRelationshipResult(dianaRelationshipResult{
+			OK:      true,
+			Action:  "noop",
+			Message: "你们已经是恋人了，不需要再确立一次；可以顺着这份心意回应对方。",
+			Target:  &snapshot,
+		})
+	}
+	// 主人身份免门槛没有道理：恋爱看的是相处，不是权限。门槛对谁都一样。
+	if profile.Favorability < romanceStartMinFavorability || profile.MessageCount < romanceStartMinMessages {
+		return marshalDianaRelationshipResult(dianaRelationshipResult{
+			OK:     true,
+			Action: "declined",
+			Message: fmt.Sprintf(
+				"机器人婉拒了这次表白：当前好感度 %d、累计互动 %d 次，还没到确立恋人关系的门槛（好感度 %d 且互动 %d 次以上）。用自己的语气温柔地把话说软：说明现在还想再多相处、多了解一下，不要报出具体数字和门槛，不要嘲讽，也不要把话说死。",
+				profile.Favorability, profile.MessageCount, romanceStartMinFavorability, romanceStartMinMessages),
+		})
+	}
+	if err := writeState(&UserRomanceState{Active: true, Since: time.Now().UTC(), StartedBy: "user"}); err != nil {
+		return "", fmt.Errorf("保存恋爱关系失败: %w", err)
+	}
+	snapshot, err := t.relationshipSnapshot(ctx, targetID, "", 0, false)
+	if err != nil {
+		return "", err
+	}
+	return marshalDianaRelationshipResult(dianaRelationshipResult{
+		OK:      true,
+		Action:  "romance_started",
+		Message: "恋人关系已确立，从现在开始记纪念日。用自己的语气自然地答应下来；关系只改变语气和相处方式，不改变任何权限。",
+		Target:  &snapshot,
+	})
 }
 
 // runPortraitOperation 记下或清空画像里的一栏。
@@ -364,7 +483,7 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 	if strings.TrimSpace(profile.DisplayName) == "" {
 		profile.DisplayName = firstNonEmpty(strings.TrimSpace(fallbackName), relationshipEventDisplayName(t.event, userID), userID)
 	}
-	policy := RelationshipPolicyFor(profile, t.runtime.effectiveConfigForEvent(t.event).OwnerID, userID)
+	policy := RelationshipPolicyForConfig(t.runtime.effectiveConfigForEvent(t.event), profile, userID)
 	var recentChanges []UserFavorabilityChange
 	if historyLimit > 0 {
 		if historyStore, ok := store.(UserFavorabilityHistoryStore); ok {
@@ -392,6 +511,9 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 		CanDocumentOCR:   policy.AllowDocumentOCR,
 		Owner:            policy.Owner,
 		HasHistory:       found,
+		Romance:          policy.Romance,
+		RomanceDays:      policy.RomanceDays,
+		RomanceNote:      policy.RomanceNote,
 		RecentChanges:    recentChanges,
 		Portrait:         portrait,
 	}, nil

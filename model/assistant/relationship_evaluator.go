@@ -102,10 +102,13 @@ func knownPortraitForEvaluation(traits []UserPortraitTrait) []relationshipKnownP
 }
 
 type relationshipEvaluationPayload struct {
-	Message                       proactiveReplyPayload       `json:"message"`
-	CurrentScore                  int                         `json:"current_score"`
-	CurrentTier                   string                      `json:"current_tier"`
-	MessageCount                  int                         `json:"message_count"`
+	Message      proactiveReplyPayload `json:"message"`
+	CurrentScore int                   `json:"current_score"`
+	CurrentTier  string                `json:"current_tier"`
+	MessageCount int                   `json:"message_count"`
+	// RomanceActive 让评估器知道双方已是恋人：亲密表达在恋人之间是日常，不该
+	// 每句都当成「关系变化」加分。
+	RomanceActive                 bool                        `json:"romance_active,omitempty"`
 	NaturalInteractionGainEnabled bool                        `json:"natural_interaction_gain_enabled"`
 	NaturalInteractionThreshold   int                         `json:"natural_interaction_threshold"`
 	PortraitFields                []PortraitFieldSpec         `json:"portrait_fields"`
@@ -118,12 +121,13 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 		return relationshipEvaluationDecision{}, UserMemoryProfile{}, false
 	}
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
-	policy := RelationshipPolicyFor(profile, r.effectiveConfigForEvent(event).OwnerID, event.UserID)
+	policy := RelationshipPolicyForConfig(r.effectiveConfigForEvent(event), profile, event.UserID)
 	payload := relationshipEvaluationPayload{
 		Message:                       r.proactiveReplyPayload(event, r.cleanInput(event, text)),
 		CurrentScore:                  profile.Favorability,
 		CurrentTier:                   policy.Name,
 		MessageCount:                  profile.MessageCount,
+		RomanceActive:                 policy.Romance,
 		NaturalInteractionGainEnabled: profile.Favorability < naturalInteractionFavorabilityThreshold,
 		NaturalInteractionThreshold:   naturalInteractionFavorabilityThreshold,
 		PortraitFields:                PortraitFieldSpecs(),
@@ -145,7 +149,7 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 3. 当 natural_interaction_gain_enabled=true 时，当前仍处于自然熟悉阶段。一次真实、有内容且面向机器人的普通闲聊、提问或任务互动，默认应 should_update=true、delta=1，表示相处带来的轻微熟悉；不能仅以“普通提问”“功能请求”或“任务指令”为理由判为 0。纯 @、只有称呼、无实质内容、重复或近似重复消息、刷屏、自动回复、故障反馈，以及明显只为刷分的互动仍为 0。必须理解语义判断，不得用关键词计分。
 4. 当 natural_interaction_gain_enabled=false 时，普通提问、任务请求、唤醒和闲聊默认 delta=0，不能因为 @ 机器人或机器人会回复就加分。
 5. 无论是否处于自然熟悉阶段，当前发言者对机器人表达清晰且有上下文支撑的善意、感谢、信任、关心或持续亲近时可以加分；明确针对机器人的轻视、攻击、骚扰、威胁或恶意时应减分。
-6. 玩笑、昵称和亲密调侃必须结合双方最近语境判断；拿不准时不更新。混合表达要按整体含义判断，严重威胁不能因同时出现亲密表达而加分。
+6. 玩笑、昵称和亲密调侃必须结合双方最近语境判断；拿不准时不更新。混合表达要按整体含义判断，严重威胁不能因同时出现亲密表达而加分。当 romance_active=true 时双方已是恋人：日常的亲昵、情话和恋人间的称呼是常态，默认不加分，只有明显超出日常的关心、付出或伤害才算关系变化。
 7. delta 只能是 -3、-2、-1、0、1、2、3。自然熟悉阶段的普通互动只能用 1；其他轻微变化用 1，明确变化用 2，极强且罕见的变化用 3。confidence 是对关系变化判断的置信度，范围 0 到 1。
 8. 机器人的主人不是特例：他的关系等级由身份决定，不受分数影响，但好感度照样按上面几条如实评估，该加就加、该减就减，不要因为对方是主人就一律判 0 或一律加分。
 

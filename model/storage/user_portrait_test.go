@@ -148,6 +148,9 @@ VALUES ('bot', 'u1', '老用户', 42, 7, '[]', '', '2026-08-24T00:00:00Z')`); er
 	if err := store.addUserProfilePortraitColumn(); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.addUserProfileRomanceColumn(); err != nil {
+		t.Fatal(err)
+	}
 	// 幂等：升级过的库再启动一次不该报错。
 	if err := store.addUserProfilePortraitColumn(); err != nil {
 		t.Fatal(err)

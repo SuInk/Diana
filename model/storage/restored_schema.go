@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   message_count INTEGER NOT NULL,
   memories TEXT NOT NULL,
   portrait TEXT NOT NULL DEFAULT '',
+  romance TEXT NOT NULL DEFAULT '',
   last_seen_at TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (bot_profile_id, user_id)
@@ -315,6 +316,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addUserProfilePortraitColumn(); err != nil {
 		return err
 	}
+	if err := s.addUserProfileRomanceColumn(); err != nil {
+		return err
+	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
@@ -360,6 +364,19 @@ func (s *SQLiteStore) addUserProfilePortraitColumn() error {
 		return err
 	}
 	_, err = s.db.Exec(`ALTER TABLE user_profiles ADD COLUMN portrait TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+// addUserProfileRomanceColumn 给人员档案表补上恋爱关系列。
+//
+// 人机恋是新功能，老库里没有这一列。补列即可，不回填：升级前没人和机器人谈过
+// 恋爱，空着就是事实。
+func (s *SQLiteStore) addUserProfileRomanceColumn() error {
+	has, err := s.hasColumn("user_profiles", "romance")
+	if err != nil || has {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE user_profiles ADD COLUMN romance TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 

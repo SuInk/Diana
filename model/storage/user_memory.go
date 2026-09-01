@@ -66,6 +66,19 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 		}
 		profile.Portrait = assistant.MergePortraitTraits(profile.Portrait, update.PortraitTraits, time.Now())
 	}
+	if update.SetRomance != nil {
+		if update.SetRomance.Active {
+			state := *update.SetRomance
+			if state.Since.IsZero() {
+				state.Since = time.Now().UTC()
+			}
+			profile.Romance = &state
+		} else {
+			// 分手就清掉整条状态：关系结束了，不留一条「曾经在一起」的记录挂在
+			// 档案上被反复注入。相处的事实仍在好感度和记忆里。
+			profile.Romance = nil
+		}
+	}
 	if !update.Administrative {
 		profile.MessageCount++
 		profile.LastSeenAt = userMemoryEventTime(event)
@@ -83,6 +96,10 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
+	romance, err := marshalUserRomance(profile.Romance)
+	if err != nil {
+		return assistant.UserMemoryProfile{}, err
+	}
 	lastSeen := ""
 	if !profile.LastSeenAt.IsZero() {
 		lastSeen = profile.LastSeenAt.UTC().Format(time.RFC3339Nano)
@@ -93,17 +110,18 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	}
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(bot_profile_id, user_id) DO UPDATE SET
   display_name=excluded.display_name,
   favorability=excluded.favorability,
   message_count=excluded.message_count,
   memories=excluded.memories,
   portrait=excluded.portrait,
+  romance=excluded.romance,
   last_seen_at=excluded.last_seen_at,
   updated_at=excluded.updated_at
-`, botProfileID, profile.UserID, profile.DisplayName, profile.Favorability, profile.MessageCount, string(memories), portrait, lastSeen, profile.UpdatedAt.Format(time.RFC3339Nano))
+`, botProfileID, profile.UserID, profile.DisplayName, profile.Favorability, profile.MessageCount, string(memories), portrait, romance, lastSeen, profile.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
@@ -221,7 +239,7 @@ func (s *SQLiteStore) ListUserMemories(ctx context.Context, botProfileID, query 
 		return nil, 0, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at
+SELECT user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
 FROM user_profiles`+where+`
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?
@@ -235,9 +253,9 @@ LIMIT ? OFFSET ?
 		var profile assistant.UserMemoryProfile
 		var displayName sql.NullString
 		var memoriesRaw string
-		var portraitRaw sql.NullString
+		var portraitRaw, romanceRaw sql.NullString
 		var lastSeenRaw, updatedRaw sql.NullString
-		if err := rows.Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &lastSeenRaw, &updatedRaw); err != nil {
+		if err := rows.Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &romanceRaw, &lastSeenRaw, &updatedRaw); err != nil {
 			return nil, 0, err
 		}
 		profile.DisplayName = displayName.String
@@ -247,6 +265,9 @@ LIMIT ? OFFSET ?
 			}
 		}
 		if profile.Portrait, err = unmarshalUserPortrait(portraitRaw); err != nil {
+			return nil, 0, err
+		}
+		if profile.Romance, err = unmarshalUserRomance(romanceRaw); err != nil {
 			return nil, 0, err
 		}
 		profile.LastSeenAt = parseUserProfileTime(lastSeenRaw)
@@ -276,17 +297,17 @@ func (s *SQLiteStore) GetUserMemory(ctx context.Context, botProfileID, userID st
 	}
 	var displayName sql.NullString
 	var memoriesRaw string
-	var portraitRaw sql.NullString
+	var portraitRaw, romanceRaw sql.NullString
 	var lastSeenRaw sql.NullString
 	var updatedRaw sql.NullString
 	scopeCondition, scopeArgs := userProfileScopeCondition(botProfileID)
 	err := s.db.QueryRowContext(ctx, `
-SELECT user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at
+SELECT user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
 FROM user_profiles
 WHERE user_id = ?`+scopeCondition+`
 ORDER BY updated_at DESC
 LIMIT 1
-`, append([]any{userID}, scopeArgs...)...).Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &lastSeenRaw, &updatedRaw)
+`, append([]any{userID}, scopeArgs...)...).Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &romanceRaw, &lastSeenRaw, &updatedRaw)
 	if err == sql.ErrNoRows {
 		return assistant.UserMemoryProfile{}, false, nil
 	}
@@ -300,6 +321,9 @@ LIMIT 1
 		}
 	}
 	if profile.Portrait, err = unmarshalUserPortrait(portraitRaw); err != nil {
+		return assistant.UserMemoryProfile{}, false, err
+	}
+	if profile.Romance, err = unmarshalUserRomance(romanceRaw); err != nil {
 		return assistant.UserMemoryProfile{}, false, err
 	}
 	profile.LastSeenAt = parseUserProfileTime(lastSeenRaw)
@@ -329,6 +353,29 @@ func unmarshalUserPortrait(raw sql.NullString) ([]assistant.UserPortraitTrait, e
 		return nil, err
 	}
 	return traits, nil
+}
+
+// marshalUserRomance 把恋爱状态写成 JSON。没谈过恋爱存空串，和画像一个道理。
+func marshalUserRomance(state *assistant.UserRomanceState) (string, error) {
+	if state == nil || !state.Active {
+		return "", nil
+	}
+	body, err := json.Marshal(state)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func unmarshalUserRomance(raw sql.NullString) (*assistant.UserRomanceState, error) {
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return nil, nil
+	}
+	var state assistant.UserRomanceState
+	if err := json.Unmarshal([]byte(raw.String), &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
 }
 
 func userMemoryEventTime(event assistant.MessageEvent) time.Time {

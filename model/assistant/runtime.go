@@ -276,6 +276,7 @@ type Runtime struct {
 	structuredMemory          StructuredMemoryStore
 	threadStates              ThreadStateStore
 	notebook                  NotebookStore
+	worldTree                 WorldTreeStore
 	buildInfo                 BuildInfo
 	releaseStatus             ReleaseStatusProvider
 	reminders                 ReminderStore
@@ -2927,7 +2928,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if !event.userProfileLoaded {
 		userProfile, _ = r.loadUserMemoryProfile(ctx, event)
 	}
-	relationship := RelationshipPolicyFor(userProfile, cfg.OwnerID, event.UserID)
+	relationship := RelationshipPolicyForConfig(cfg, userProfile, event.UserID)
 	event = r.enrichRecentTextReference(ctx, event, cleanText, replyHistory)
 	overrides := r.pluginOverridesForEvent(event)
 	settingOverrides := r.pluginSettingOverridesForEvent(event)
@@ -3233,6 +3234,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Role:       llm.RoleUser,
 				Content:    consecutiveReplyContext(previousTurn),
 				Priority:   llm.MessagePriorityPlugin,
+				AtomicText: true,
+			})
+		}
+		// 世界观设定和长期记忆同级：都是「理解这条消息所需的背景」。常驻设定在
+		// 同一棵树不变时逐轮稳定，触发式设定随消息变化，和检索记忆的易变程度一致。
+		if worldTreeContext := contextPreload.worldTreeContext; worldTreeContext != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    worldTreeContext,
+				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
 		}
@@ -5739,6 +5750,11 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n" + promptToolRelationshipList)
 		builder.WriteString("\n" + promptToolRelationshipQuery)
 		builder.WriteString("\n" + promptToolRelationshipPortrait)
+		// 恋爱模式的规则跟着配置走：同一台机器人整段稳定，不影响前缀缓存。
+		// 关着时一个字不注入——模型不知道有这回事，被表白就按普通关系自然回应。
+		if boolValue(cfg.RomanceEnabled, false) {
+			builder.WriteString("\n" + promptToolRelationshipRomance)
+		}
 	}
 	if agentEnabled && hasTool(dianaImageToolName) {
 		builder.WriteString("\n" + promptToolImage)
@@ -9151,7 +9167,7 @@ func (r *Runtime) userMemoryContext(ctx context.Context, event MessageEvent) str
 	if !ok {
 		return ""
 	}
-	policy := RelationshipPolicyFor(profile, r.effectiveConfigForEvent(event).OwnerID, event.UserID)
+	policy := RelationshipPolicyForConfig(r.effectiveConfigForEvent(event), profile, event.UserID)
 	return formatUserMemoryContext(profile, policy)
 }
 
@@ -9207,6 +9223,10 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	// 的特权复述出去。能力问题由 diana.capabilities 负责。
 	builder.WriteString("\n互动次数：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
+	if line := romanceContextLine(policy); line != "" {
+		builder.WriteString("\n")
+		builder.WriteString(line)
+	}
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
 		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)
