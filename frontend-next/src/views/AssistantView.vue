@@ -919,6 +919,17 @@
                 <span class="hint">保留当前人设和表达风格，只在台词前后自然穿插括号动作。</span>
               </div>
               <div class="field">
+                <label class="switch">
+                  <input v-model="form.daypart_tone_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">语气跟随时段</span>
+                </label>
+                <span class="hint">
+                  深夜话少、句子更短、反应慢半拍；清早刚醒有点迷糊；晚上更松弛爱闲聊。白天是基线，不额外注入。
+                  只调精力和节奏，不改口癖和身份，对所有表达风格生效。时区取「准入控制」里回复时段那一份。
+                </span>
+              </div>
+              <div class="field">
                 <label for="bot-self-reference">自称</label>
                 <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随表达风格，例如 我 / 本喵 / 咱" />
                 <span class="hint">机器人怎么称呼自己。</span>
@@ -1625,6 +1636,11 @@ async function importPersonaFile(event: Event): Promise<void> {
     if (result.skipped) notes.push(`${result.skipped} 套重复已跳过`);
     if (result.dropped) notes.push(`${result.dropped} 套无效已忽略`);
     toastSuccess(notes.join("，"));
+    // 认不出来的风格单独说：它不算失败，导入照常成功，但那几套的语气会退回
+    // 「助手」。混在上面那串数字里说，用户不会注意到自己拼错了。
+    if (result.unknown_styles?.length) {
+      toastError(`表达风格无法识别，已按「助手」导入：${result.unknown_styles.join("、")}`);
+    }
   } catch (error) {
     toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "人设导入失败");
   } finally {
@@ -1679,6 +1695,7 @@ function applyReplyStyle(value: ReplyStyleKey): void {
 
 const replyStyleOptions: AppSelectOption[] = [
   { value: "groupmate", label: "群友" },
+  { value: "human", label: "真人感" },
   { value: "assistant", label: "助手" },
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
@@ -2132,6 +2149,7 @@ function setForm(config: BotProfileConfig): void {
     response_mode: config.response_mode ?? "custom",
     reply_style: config.reply_style ?? "assistant",
     action_description_enabled: config.action_description_enabled ?? false,
+    daypart_tone_enabled: config.daypart_tone_enabled ?? false,
     self_reference: config.self_reference ?? "",
     sentence_enders: config.sentence_enders ?? "",
     group_trigger_mode: config.group_trigger_mode ?? "smart",
