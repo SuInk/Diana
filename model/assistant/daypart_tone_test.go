@@ -85,14 +85,16 @@ func TestDaypartToneUsesReplyGateTimezone(t *testing.T) {
 func TestSystemPromptCarriesDaypartTone(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
 	midnight := time.Date(2026, 3, 1, 2, 0, 0, 0, time.UTC)
+	// 固定机器人时区，避免测试结果跟运行测试的机器所在时区一起变化。
+	replyGate := &ReplyGate{Timezone: "UTC"}
 
-	on := NewRuntime(BotConfig{DaypartToneEnabled: boolPointer(true)}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	on := NewRuntime(BotConfig{DaypartToneEnabled: boolPointer(true), ReplyGate: replyGate}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	on.now = func() time.Time { return midnight }
 	if prompt := on.systemPrompt(event, nil); !strings.Contains(prompt, "现在是深夜") {
 		t.Fatal("打开开关后系统提示词里没有深夜语气")
 	}
 
-	off := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	off := NewRuntime(BotConfig{ReplyGate: replyGate}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	off.now = func() time.Time { return midnight }
 	if prompt := off.systemPrompt(event, nil); strings.Contains(prompt, "现在是深夜") {
 		t.Fatal("开关关着却注入了深夜语气")
