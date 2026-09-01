@@ -220,6 +220,8 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:notebook", Title: "笔记本与梗记忆", Content: "通过 diana.notebook 维护群里的梗、黑话、缩写和内部称呼：记下新说法、更新变了的释义、作废不再成立的条目，删错了还能恢复。当前消息里出现已收录的说法时，释义会自动进入回复上下文。", Source: "core", Enabled: true},
 	{ID: "core:thread-state", Title: "私有多轮任务状态", Content: "通过 diana.thread_state 保存 Diana 自己为当前用户和会话创建的短期私有状态，例如猜谜目标、临时计划和表单进度。状态会跨消息和进程重启恢复，完成、取消或超时后清理，不写入用户长期记忆，也不会出现在公开回复和调试追踪里。", Source: "core", Enabled: true},
 	{ID: "core:relationship", Title: "记忆好感度与权限", Content: "通过 diana.relationship 查询用户长期互动、好感度、关系等级和权限；主人可设置或增减其他人的好感度。", Source: "core", Enabled: true},
+	{ID: "core:world-tree", Title: "世界树世界观设定", Content: "世界树是主人在控制台维护的世界观设定集：设定按树状章节组织，常驻设定每轮进入上下文，带触发词的设定在聊到相关话题时注入。它定义机器人所处的世界背景，由每台机器人的配置决定用不用；设定内容不会主动复述给用户。", Source: "core", Enabled: true},
+	{ID: "core:romance", Title: "人机恋恋爱模式", Content: "主人在控制台开启恋爱模式后，用户本人认真表白时可通过 diana.relationship 的 romance_start 确立恋人关系，好感度和相处时长不够会被温柔婉拒；romance_end 随时可以分手。确立后语气按恋人来、记纪念日，但不解锁任何权限。开关默认关闭，关闭时机器人不参与恋爱话题的确立。", Source: "core", Enabled: true},
 	{ID: "core:tasks", Title: "提醒与周期订阅", Content: "通过 diana.reminder、diana.schedule、diana.rss 和 diana.tasks 创建、查询、修改、取消和删除提醒、周期查询及 RSS/Twitter 条件订阅；GitHub 仓库更新订阅在 WebUI 管理。", Source: "core", Enabled: true},
 	{ID: "core:history", Title: "聊天历史引用与撤回", Content: "持久保存 OneBot v11 消息、引用、图片和视频关键帧，重启后不丢；可读取合并转发和撤回记录并结合上下文回复。", Source: "core", Enabled: true},
 	{ID: "core:config", Title: "机器人配置与模型配置", Content: "diana.config 可读取脱敏运行配置、LLM、plugins 和 skills；仅主人可用 diana.llm_config 修改 Diana 自己当前的 provider/model。", Source: "core", Enabled: true, Required: "主人"},

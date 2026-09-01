@@ -192,6 +192,13 @@ https://HOST/api/channels/wecom/callback</code></pre>
         <p>The repository ships hand-written examples you can import directly: <code>examples/personas/</code>.</p>
       </section>
 
+      <section class="section searchable" id="world-tree-romance">
+        <div class="section-heading"><p class="eyebrow">World and relationships</p><h2>World tree and AI romance</h2></div>
+        <p>The <strong>world tree</strong> is the lore book of the world your bot lives in, maintained under Bots → Persona → World tree. Entries are organised as chapters on a tree, and the path itself becomes context ("Zhijiang / Harbor: …"). Each node declares how it is injected: <strong>always-on</strong> entries ride along on every turn and describe the skeleton of the world; entries with <strong>trigger keywords</strong> only enter the context when recent conversation touches them, so details never waste tokens. Title-only nodes act as folders and inject nothing; disabling a chapter disables everything under it.</p>
+        <p>There is one tree shared by all bots; each bot's own switch decides whether it uses it (on by default — an empty tree injects nothing anyway). The whole tree exports to JSON and imports back; parent-child links are rebuilt from the references inside the file, and like persona files, IDs are machine-local state and are reassigned on import.</p>
+        <p><strong>AI romance</strong> is off by default and is enabled by the owner on the same page. With it on, when a user sincerely confesses, the bot decides based on favorability and time spent together — not enough and it declines gently, without quoting numbers. Once established it keeps anniversaries and speaks like a partner; if favorability drops too low the couple enters a cold war. The user can break up at any time, and the owner can dissolve any pairing; breaking up clears neither favorability nor the portrait. Being partners changes tone and manner only — it unlocks no permissions, and the bot never courts users on its own. With the switch off the bot does not know the feature exists and responds to confessions as an ordinary acquaintance would.</p>
+      </section>
+
       <section class="section searchable" id="agent">
         <div class="section-heading"><p class="eyebrow">Agent</p><h2>The model only sees what this situation allows</h2></div>
         <p>The agent runner feeds structured tool results back to the model until it produces a final reply or hits the step limit. The tool registry narrows by platform, relationship permissions, group configuration and feature state.</p>

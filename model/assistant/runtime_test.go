@@ -4791,6 +4791,17 @@ func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event Messag
 		}
 		profile.Portrait = MergePortraitTraits(profile.Portrait, update.PortraitTraits, time.Now())
 	}
+	if update.SetRomance != nil {
+		if update.SetRomance.Active {
+			state := *update.SetRomance
+			if state.Since.IsZero() {
+				state.Since = time.Now().UTC()
+			}
+			profile.Romance = &state
+		} else {
+			profile.Romance = nil
+		}
+	}
 	if profile.Favorability != before {
 		source := strings.TrimSpace(update.FavorabilityChangeSource)
 		if source == "" {

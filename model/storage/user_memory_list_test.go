@@ -155,6 +155,10 @@ VALUES ('u1', '老用户', 42, 7, '[]', '', '2026-08-24T00:00:00Z')`); err != ni
 	if err := store.migrateUserProfilesToBotScope(); err != nil {
 		t.Fatal(err)
 	}
+	// 真实启动顺序里恋爱列的补列跑在作用域迁移之后，这里照做。
+	if err := store.addUserProfileRomanceColumn(); err != nil {
+		t.Fatal(err)
+	}
 
 	owned, ok, err := store.GetUserMemory(ctx, "bot-onebot", "u1")
 	if err != nil || !ok || owned.Favorability != 42 {

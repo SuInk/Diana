@@ -245,6 +245,10 @@ export interface BotProfileConfig {
   long_term_memory_enabled?: boolean;
   /** 允许在同一机器人下检索其他群的非敏感记忆和聊天历史；缺省关闭。 */
   cross_group_memory_enabled?: boolean;
+  /** 这台机器人要不要带上世界树（世界观设定库）；缺省开启，树为空时开着也不注入。 */
+  world_tree_enabled?: boolean;
+  /** 人机恋（恋爱模式）总开关；缺省关闭。 */
+  romance_enabled?: boolean;
   dict_segment_enabled?: boolean;
   semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;
@@ -1676,6 +1680,14 @@ export interface PortraitFieldSpec {
   capacity: number;
 }
 
+/** 与机器人的恋爱关系状态（人机恋）；没谈过就是缺省。 */
+export interface UserRomanceState {
+  active: boolean;
+  /** 确立关系的时间，纪念日从它算。 */
+  since?: string;
+  started_by?: string;
+}
+
 export interface UserMemoryProfile {
   user_id: string;
   display_name?: string;
@@ -1683,6 +1695,7 @@ export interface UserMemoryProfile {
   message_count: number;
   memories?: UserMemoryItem[];
   portrait?: UserPortraitTrait[];
+  romance?: UserRomanceState;
   /** 列表接口不带记忆和画像正文，只带条数；详情接口带完整内容。 */
   memory_count?: number;
   portrait_count?: number;
@@ -1801,6 +1814,62 @@ export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
   return requestJSON<{ personas: Persona[] }>("/api/assistant/personas/delete", {
     method: "POST",
     body: JSON.stringify({ id })
+  });
+}
+
+/** 世界树的一条世界观设定。树是全局一棵，parent_id 挂父节点，空表示根。 */
+export interface WorldTreeNode {
+  id: string;
+  parent_id?: string;
+  title: string;
+  content?: string;
+  /** 触发词：最近对话里出现任意一个就注入本条。 */
+  keywords?: string[];
+  /** 常驻：每轮都注入，不看触发词。 */
+  always_on?: boolean;
+  /** 关掉后整个子树都不注入；缺省启用。 */
+  enabled?: boolean;
+  updated_at?: string;
+}
+
+export interface WorldTreeListResponse {
+  nodes: WorldTreeNode[];
+  limit: number;
+}
+
+export function listWorldTree(): Promise<WorldTreeListResponse> {
+  return requestJSON<WorldTreeListResponse>("/api/assistant/world-tree");
+}
+
+/** 带 id 是改，不带是新增。返回落库后的那一份和整棵树。 */
+export function saveWorldTreeNode(node: WorldTreeNode | Omit<WorldTreeNode, "id">): Promise<{ node: WorldTreeNode; nodes: WorldTreeNode[] }> {
+  return requestJSON<{ node: WorldTreeNode; nodes: WorldTreeNode[] }>("/api/assistant/world-tree", {
+    method: "POST",
+    body: JSON.stringify({ node })
+  });
+}
+
+/** 删掉一个节点，它的子节点会接到它的父节点上。 */
+export function deleteWorldTreeNode(id: string): Promise<{ nodes: WorldTreeNode[] }> {
+  return requestJSON<{ nodes: WorldTreeNode[] }>("/api/assistant/world-tree/delete", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export interface WorldTreeImportResult {
+  nodes: WorldTreeNode[];
+  imported: number;
+  dropped: number;
+}
+
+/** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */
+export const WORLD_TREE_EXPORT_VERSION = 1;
+
+export function importWorldTree(nodes: WorldTreeNode[]): Promise<WorldTreeImportResult> {
+  return requestJSON<WorldTreeImportResult>("/api/assistant/world-tree/import", {
+    method: "POST",
+    body: JSON.stringify({ version: WORLD_TREE_EXPORT_VERSION, nodes })
   });
 }
 
