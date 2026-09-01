@@ -274,6 +274,7 @@ type Runtime struct {
 	inboundStore              InboundEventStore
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
+	threadStates              ThreadStateStore
 	notebook                  NotebookStore
 	buildInfo                 BuildInfo
 	releaseStatus             ReleaseStatusProvider
@@ -3054,6 +3055,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaRSSWatchTool(r, event),
 				newDianaRenderTool(r, event),
 			}
+			if r.threadStateStore() != nil {
+				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
+			}
 			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
 			// 无头浏览器。插件停用时模型看不到这个工具。
 			if _, settings, enabled := r.pluginWithSettingsForEvent(groupRelationsPluginID, event); enabled {
@@ -3200,6 +3204,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if !authoritativePluginContext {
 		contextPreload.wait()
+		if threadState := strings.TrimSpace(contextPreload.threadState); threadState != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    threadState,
+				Priority:   llm.MessagePriorityPlugin,
+				AtomicText: true,
+			})
+		}
 		// 结构化记忆接管后 contextSummary 恒为空，这条通道一直空转。改由会话线程
 		// 便签填上：被裁掉的历史不该只剩离散事实点，叙事线索也要有人接。两者互斥，
 		// 没有存储层的部署仍然走旧的流水摘要。
@@ -5711,6 +5723,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && hasTool(dianaNotebookToolName) {
 		builder.WriteString("\n" + promptToolNotebook)
+	}
+	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
+		builder.WriteString("\n" + promptToolThreadState)
 	}
 	if agentEnabled && hasTool("diana.capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)

@@ -20,6 +20,7 @@ type promptContextPreload struct {
 	wg sync.WaitGroup
 
 	sessionThread string
+	threadState   string
 	memoryContext string
 	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
 	memoryUsage     contextLayerUsage
@@ -39,10 +40,14 @@ func (r *Runtime) startPromptContextPreload(
 ) *promptContextPreload {
 	preload := &promptContextPreload{}
 
-	preload.wg.Add(3)
+	preload.wg.Add(4)
 	go func() {
 		defer preload.wg.Done()
 		preload.sessionThread = r.sessionThreadNote(ctx, event)
+	}()
+	go func() {
+		defer preload.wg.Done()
+		preload.threadState = r.privateThreadStateContext(ctx, event)
 	}()
 	go func() {
 		defer preload.wg.Done()
