@@ -276,7 +276,7 @@ type Runtime struct {
 	structuredMemory          StructuredMemoryStore
 	threadStates              ThreadStateStore
 	notebook                  NotebookStore
-	worldTree                 WorldTreeStore
+	worldBook                 WorldBookStore
 	buildInfo                 BuildInfo
 	releaseStatus             ReleaseStatusProvider
 	reminders                 ReminderStore
@@ -3239,10 +3239,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 世界观设定和长期记忆同级：都是「理解这条消息所需的背景」。常驻设定在
 		// 同一棵树不变时逐轮稳定，触发式设定随消息变化，和检索记忆的易变程度一致。
-		if worldTreeContext := contextPreload.worldTreeContext; worldTreeContext != "" {
+		if worldBookContext := contextPreload.worldBookContext; worldBookContext != "" {
 			messages = append(messages, llm.Message{
 				Role:       llm.RoleUser,
-				Content:    worldTreeContext,
+				Content:    worldBookContext,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})

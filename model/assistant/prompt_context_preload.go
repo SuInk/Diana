@@ -25,7 +25,7 @@ type promptContextPreload struct {
 	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
 	memoryUsage      contextLayerUsage
 	notebookContext  string
-	worldTreeContext string
+	worldBookContext string
 	mediaIndex       string
 }
 
@@ -60,7 +60,7 @@ func (r *Runtime) startPromptContextPreload(
 	}()
 	go func() {
 		defer preload.wg.Done()
-		preload.worldTreeContext = r.worldTreeContext(ctx, event, queryText)
+		preload.worldBookContext = r.worldBookContext(ctx, event, queryText)
 	}()
 	if wantMediaIndex {
 		preload.wg.Add(1)

@@ -245,8 +245,8 @@ export interface BotProfileConfig {
   long_term_memory_enabled?: boolean;
   /** 允许在同一机器人下检索其他群的非敏感记忆和聊天历史；缺省关闭。 */
   cross_group_memory_enabled?: boolean;
-  /** 这台机器人要不要带上世界树（世界观设定库）；缺省开启，树为空时开着也不注入。 */
-  world_tree_enabled?: boolean;
+  /** 这台机器人要不要带上世界书（世界观设定库）；缺省开启，树为空时开着也不注入。 */
+  world_book_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
   dict_segment_enabled?: boolean;
@@ -1817,8 +1817,8 @@ export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
   });
 }
 
-/** 世界树的一条世界观设定。树是全局一棵，parent_id 挂父节点，空表示根。 */
-export interface WorldTreeNode {
+/** 世界书的一条世界观设定。树是全局一棵，parent_id 挂父节点，空表示根。 */
+export interface WorldBookNode {
   id: string;
   parent_id?: string;
   title: string;
@@ -1832,44 +1832,52 @@ export interface WorldTreeNode {
   updated_at?: string;
 }
 
-export interface WorldTreeListResponse {
-  nodes: WorldTreeNode[];
+export interface WorldBookListResponse {
+  nodes: WorldBookNode[];
   limit: number;
 }
 
-export function listWorldTree(): Promise<WorldTreeListResponse> {
-  return requestJSON<WorldTreeListResponse>("/api/assistant/world-tree");
+export function listWorldBook(): Promise<WorldBookListResponse> {
+  return requestJSON<WorldBookListResponse>("/api/assistant/world-book");
 }
 
 /** 带 id 是改，不带是新增。返回落库后的那一份和整棵树。 */
-export function saveWorldTreeNode(node: WorldTreeNode | Omit<WorldTreeNode, "id">): Promise<{ node: WorldTreeNode; nodes: WorldTreeNode[] }> {
-  return requestJSON<{ node: WorldTreeNode; nodes: WorldTreeNode[] }>("/api/assistant/world-tree", {
+export function saveWorldBookNode(node: WorldBookNode | Omit<WorldBookNode, "id">): Promise<{ node: WorldBookNode; nodes: WorldBookNode[] }> {
+  return requestJSON<{ node: WorldBookNode; nodes: WorldBookNode[] }>("/api/assistant/world-book", {
     method: "POST",
     body: JSON.stringify({ node })
   });
 }
 
 /** 删掉一个节点，它的子节点会接到它的父节点上。 */
-export function deleteWorldTreeNode(id: string): Promise<{ nodes: WorldTreeNode[] }> {
-  return requestJSON<{ nodes: WorldTreeNode[] }>("/api/assistant/world-tree/delete", {
+export function deleteWorldBookNode(id: string): Promise<{ nodes: WorldBookNode[] }> {
+  return requestJSON<{ nodes: WorldBookNode[] }>("/api/assistant/world-book/delete", {
     method: "POST",
     body: JSON.stringify({ id })
   });
 }
 
-export interface WorldTreeImportResult {
-  nodes: WorldTreeNode[];
+export interface WorldBookImportResult {
+  nodes: WorldBookNode[];
   imported: number;
   dropped: number;
 }
 
 /** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */
-export const WORLD_TREE_EXPORT_VERSION = 1;
+export const WORLD_BOOK_EXPORT_VERSION = 1;
 
-export function importWorldTree(nodes: WorldTreeNode[]): Promise<WorldTreeImportResult> {
-  return requestJSON<WorldTreeImportResult>("/api/assistant/world-tree/import", {
+export function importWorldBook(nodes: WorldBookNode[]): Promise<WorldBookImportResult> {
+  return requestJSON<WorldBookImportResult>("/api/assistant/world-book/import", {
     method: "POST",
-    body: JSON.stringify({ version: WORLD_TREE_EXPORT_VERSION, nodes })
+    body: JSON.stringify({ version: WORLD_BOOK_EXPORT_VERSION, nodes })
+  });
+}
+
+/** 导入 SillyTavern 世界书/角色卡 character_book 的原始 entries；转换在后端做，规则只维护一份。 */
+export function importWorldBookSillyTavern(entries: unknown): Promise<WorldBookImportResult> {
+  return requestJSON<WorldBookImportResult>("/api/assistant/world-book/import", {
+    method: "POST",
+    body: JSON.stringify({ entries })
   });
 }
 

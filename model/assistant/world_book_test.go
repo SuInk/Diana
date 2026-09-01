@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -11,11 +12,11 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestWorldTreeSaveAddsAndUpdates(t *testing.T) {
+func TestWorldBookSaveAddsAndUpdates(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	var tree WorldTree
+	var tree WorldBook
 
-	tree, saved, err := tree.Save(WorldTreeNode{Title: " 枝江 ", Content: "故事发生在虚构城市枝江。", AlwaysOn: true}, now)
+	tree, saved, err := tree.Save(WorldBookNode{Title: " 枝江 ", Content: "故事发生在虚构城市枝江。", AlwaysOn: true}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func TestWorldTreeSaveAddsAndUpdates(t *testing.T) {
 	}
 
 	// 带同一个 ID 是改，不是再加一条。
-	tree, updated, err := tree.Save(WorldTreeNode{ID: saved.ID, Title: "枝江", Content: "枝江靠海。", AlwaysOn: true}, now.Add(time.Minute))
+	tree, updated, err := tree.Save(WorldBookNode{ID: saved.ID, Title: "枝江", Content: "枝江靠海。", AlwaysOn: true}, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,20 +39,20 @@ func TestWorldTreeSaveAddsAndUpdates(t *testing.T) {
 		t.Fatalf("updated = %#v", updated)
 	}
 
-	if _, _, err := tree.Save(WorldTreeNode{Content: "有正文但没标题"}, now); err == nil {
+	if _, _, err := tree.Save(WorldBookNode{Content: "有正文但没标题"}, now); err == nil {
 		t.Fatal("titleless node was accepted")
 	}
 }
 
-func TestWorldTreeWithDefaultsBreaksCyclesAndDanglingParents(t *testing.T) {
-	tree := WorldTree{Nodes: []WorldTreeNode{
+func TestWorldBookWithDefaultsBreaksCyclesAndDanglingParents(t *testing.T) {
+	tree := WorldBook{Nodes: []WorldBookNode{
 		{ID: "a", ParentID: "b", Title: "甲"},
 		{ID: "b", ParentID: "a", Title: "乙"},
 		{ID: "c", ParentID: "missing", Title: "丙"},
 		{ID: "d", ParentID: "d", Title: "丁"},
 	}}.WithDefaults()
 	// 环上至少要断开一处；悬空和自指父节点必须提回根。
-	byID := map[string]WorldTreeNode{}
+	byID := map[string]WorldBookNode{}
 	for _, node := range tree.Nodes {
 		byID[node.ID] = node
 	}
@@ -67,8 +68,8 @@ func TestWorldTreeWithDefaultsBreaksCyclesAndDanglingParents(t *testing.T) {
 	}
 }
 
-func TestWorldTreeDeleteReparentsChildren(t *testing.T) {
-	tree := WorldTree{Nodes: []WorldTreeNode{
+func TestWorldBookDeleteReparentsChildren(t *testing.T) {
+	tree := WorldBook{Nodes: []WorldBookNode{
 		{ID: "root", Title: "世界"},
 		{ID: "chapter", ParentID: "root", Title: "枝江"},
 		{ID: "leaf", ParentID: "chapter", Title: "港口", Content: "枝江港常年有雾。", Keywords: []string{"港口"}},
@@ -88,10 +89,10 @@ func TestWorldTreeDeleteReparentsChildren(t *testing.T) {
 	}
 }
 
-func TestWorldTreeImportRemapsParentReferences(t *testing.T) {
+func TestWorldBookImportRemapsParentReferences(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	var tree WorldTree
-	tree, result := tree.Import([]WorldTreeNode{
+	var tree WorldBook
+	tree, result := tree.Import([]WorldBookNode{
 		{ID: "file-root", Title: "世界", Content: "总纲", AlwaysOn: true},
 		{ID: "file-child", ParentID: "file-root", Title: "枝江", Content: "城市设定", Keywords: []string{"枝江"}},
 		{ParentID: "not-in-file", Title: "孤儿"},
@@ -104,7 +105,7 @@ func TestWorldTreeImportRemapsParentReferences(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("rows = %#v", rows)
 	}
-	var child WorldTreeNode
+	var child WorldBookNode
 	orphanIsRoot := false
 	for _, node := range tree.Nodes {
 		switch node.Title {
@@ -127,15 +128,15 @@ func TestWorldTreeImportRemapsParentReferences(t *testing.T) {
 	}
 }
 
-func TestWorldTreeContextBlockInjectsAlwaysOnAndMatched(t *testing.T) {
-	tree := WorldTree{Nodes: []WorldTreeNode{
+func TestWorldBookContextBlockInjectsAlwaysOnAndMatched(t *testing.T) {
+	tree := WorldBook{Nodes: []WorldBookNode{
 		{ID: "world", Title: "世界", Content: "故事发生在虚构城市枝江。", AlwaysOn: true},
 		{ID: "port", ParentID: "world", Title: "港口", Content: "枝江港常年有雾。", Keywords: []string{"港口", "码头"}},
 		{ID: "tower", ParentID: "world", Title: "钟楼", Content: "钟楼午夜会自己敲钟。", Keywords: []string{"钟楼"}},
 		{ID: "menu", ParentID: "world", Title: "目录"},
 	}}.WithDefaults()
 
-	block := tree.ContextBlock("明天去码头钓鱼", worldTreeContextTokenBudget)
+	block := tree.ContextBlock("明天去码头钓鱼", worldBookContextTokenBudget)
 	if !strings.Contains(block, "常驻设定") || !strings.Contains(block, "枝江") {
 		t.Fatalf("always-on entry missing: %q", block)
 	}
@@ -150,7 +151,7 @@ func TestWorldTreeContextBlockInjectsAlwaysOnAndMatched(t *testing.T) {
 	}
 
 	// 没命中触发词时只剩常驻段。
-	quiet := tree.ContextBlock("随便聊聊", worldTreeContextTokenBudget)
+	quiet := tree.ContextBlock("随便聊聊", worldBookContextTokenBudget)
 	if strings.Contains(quiet, "相关的设定") {
 		t.Fatalf("matched section rendered without hits: %q", quiet)
 	}
@@ -159,14 +160,14 @@ func TestWorldTreeContextBlockInjectsAlwaysOnAndMatched(t *testing.T) {
 	}
 }
 
-func TestWorldTreeContextBlockDisabledChapterSkipsSubtree(t *testing.T) {
+func TestWorldBookContextBlockDisabledChapterSkipsSubtree(t *testing.T) {
 	off := boolPointer(false)
-	tree := WorldTree{Nodes: []WorldTreeNode{
+	tree := WorldBook{Nodes: []WorldBookNode{
 		{ID: "chapter", Title: "旧设定", Enabled: off},
 		{ID: "leaf", ParentID: "chapter", Title: "细节", Content: "已废弃的设定。", AlwaysOn: true},
 		{ID: "alive", Title: "现行", Content: "仍然生效的设定。", AlwaysOn: true},
 	}}.WithDefaults()
-	block := tree.ContextBlock("", worldTreeContextTokenBudget)
+	block := tree.ContextBlock("", worldBookContextTokenBudget)
 	if strings.Contains(block, "已废弃") {
 		t.Fatalf("disabled subtree injected: %q", block)
 	}
@@ -175,9 +176,9 @@ func TestWorldTreeContextBlockDisabledChapterSkipsSubtree(t *testing.T) {
 	}
 }
 
-func TestWorldTreeContextBlockHonorsTokenBudget(t *testing.T) {
+func TestWorldBookContextBlockHonorsTokenBudget(t *testing.T) {
 	long := strings.Repeat("设定内容很长。", 40)
-	tree := WorldTree{Nodes: []WorldTreeNode{
+	tree := WorldBook{Nodes: []WorldBookNode{
 		{ID: "a", Title: "甲", Content: long, AlwaysOn: true},
 		{ID: "b", Title: "乙", Content: long, AlwaysOn: true},
 		{ID: "c", Title: "丙", Content: long, AlwaysOn: true},
@@ -198,13 +199,75 @@ func TestWorldTreeContextBlockHonorsTokenBudget(t *testing.T) {
 	}
 }
 
-func TestWorldTreeContextBlockEmptyTree(t *testing.T) {
-	if got := (WorldTree{}).ContextBlock("枝江", worldTreeContextTokenBudget); got != "" {
+func TestWorldBookContextBlockEmptyTree(t *testing.T) {
+	if got := (WorldBook{}).ContextBlock("枝江", worldBookContextTokenBudget); got != "" {
 		t.Fatalf("empty tree produced context: %q", got)
 	}
 	// 只有目录节点、没有可注入内容时同样安静。
-	tree := WorldTree{Nodes: []WorldTreeNode{{ID: "menu", Title: "目录"}}}.WithDefaults()
-	if got := tree.ContextBlock("目录", worldTreeContextTokenBudget); got != "" {
+	tree := WorldBook{Nodes: []WorldBookNode{{ID: "menu", Title: "目录"}}}.WithDefaults()
+	if got := tree.ContextBlock("目录", worldBookContextTokenBudget); got != "" {
 		t.Fatalf("catalog-only tree produced context: %q", got)
+	}
+}
+
+func TestWorldBookNodesFromSillyTavernMapFormat(t *testing.T) {
+	raw := json.RawMessage(`{
+		"1": {"uid": 1, "key": ["港口", "码头"], "comment": "港口", "content": "枝江港常年有雾。", "order": 200},
+		"0": {"uid": 0, "key": [], "comment": "世界", "content": "故事发生在虚构城市枝江。", "constant": true, "order": 100},
+		"2": {"uid": 2, "key": ["旧城"], "content": "已废弃的设定。", "order": 300, "disable": true}
+	}`)
+	nodes, ok := WorldBookNodesFromSillyTavern(raw)
+	if !ok || len(nodes) != 3 {
+		t.Fatalf("ok=%v nodes=%#v", ok, nodes)
+	}
+	// 按 order 排序，蓝灯 constant 对常驻，disable 对停用。
+	if nodes[0].Title != "世界" || !nodes[0].AlwaysOn {
+		t.Fatalf("first = %#v", nodes[0])
+	}
+	if nodes[1].Title != "港口" || nodes[1].AlwaysOn || len(nodes[1].Keywords) != 2 {
+		t.Fatalf("second = %#v", nodes[1])
+	}
+	// 没写 comment 的条目退回第一个触发词当标题。
+	if nodes[2].Title != "旧城" || boolValue(nodes[2].Enabled, true) {
+		t.Fatalf("third = %#v", nodes[2])
+	}
+
+	// 转出来的节点要能整批导进书里。
+	tree, result := WorldBook{}.Import(nodes, time.Unix(1_700_000_000, 0))
+	if result.Imported != 3 || len(tree.Nodes) != 3 {
+		t.Fatalf("import result = %#v", result)
+	}
+	block := tree.ContextBlock("去码头看看", worldBookContextTokenBudget)
+	if !strings.Contains(block, "枝江") || !strings.Contains(block, "常年有雾") {
+		t.Fatalf("block = %q", block)
+	}
+	if strings.Contains(block, "已废弃") {
+		t.Fatalf("disabled entry injected: %q", block)
+	}
+}
+
+func TestWorldBookNodesFromSillyTavernCharacterBook(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"keys": ["钟楼"], "name": "钟楼", "content": "钟楼午夜会自己敲钟。", "insertion_order": 2, "enabled": true},
+		{"keys": [], "content": "总纲设定。", "constant": true, "insertion_order": 1}
+	]`)
+	nodes, ok := WorldBookNodesFromSillyTavern(raw)
+	if !ok || len(nodes) != 2 {
+		t.Fatalf("ok=%v nodes=%#v", ok, nodes)
+	}
+	// 角色卡条目没有 comment/name 时退回内容开头当标题。
+	if nodes[0].Title != "总纲设定。" || !nodes[0].AlwaysOn {
+		t.Fatalf("first = %#v", nodes[0])
+	}
+	if nodes[1].Title != "钟楼" || nodes[1].Keywords[0] != "钟楼" {
+		t.Fatalf("second = %#v", nodes[1])
+	}
+}
+
+func TestWorldBookNodesFromSillyTavernRejectsUnknownShapes(t *testing.T) {
+	for _, raw := range []string{`"entries"`, `[]`, `{}`, `123`, `{"foo": "bar"}`} {
+		if nodes, ok := WorldBookNodesFromSillyTavern(json.RawMessage(raw)); ok {
+			t.Fatalf("raw %s was accepted: %#v", raw, nodes)
+		}
 	}
 }
