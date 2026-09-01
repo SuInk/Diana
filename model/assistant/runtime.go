@@ -5602,7 +5602,8 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
 	voice := personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.promptWithActions(boolValue(cfg.NaturalReplySplitEnabled, true), voice, actionsEnabled) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + cfg.ReplyStyle.closingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
+	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.promptWithActions(boolValue(cfg.NaturalReplySplitEnabled, true), voice, actionsEnabled) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + cfg.ReplyStyle.closingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
 	if persona == "" {
 		return messages
 	}
@@ -5785,6 +5786,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 			appendPromptSection(&builder, promptMatchedAliasPrefix+matched+promptMatchedAliasRule)
 		}
 	}
+	// 时段语气紧挨着锚点注入，理由和锚点一样：这两条都是「怎么说」，离生成越近
+	// 越管用。关掉时返回空串，appendPromptSection 会跳过。
+	appendPromptSection(&builder, dayPartToneForConfig(cfg, r.clock()))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&builder, cfg.ReplyStyle.closingAnchor())
