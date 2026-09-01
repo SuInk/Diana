@@ -219,12 +219,9 @@ func (c *memberCache) refreshAsync(event MessageEvent) {
 		}
 		info := memberInfo{
 			Level: parseGroupLevel(data["level"]),
-			Role:  strings.ToLower(strings.TrimSpace(fmt.Sprint(data["role"]))),
+			Role:  string(NormalizeGroupRole(fmt.Sprint(data["role"]))),
 			Title: strings.TrimSpace(fmt.Sprint(data["title"])),
 			At:    c.clock(),
-		}
-		if info.Role == "<nil>" {
-			info.Role = ""
 		}
 		if info.Title == "<nil>" {
 			info.Title = ""

@@ -1012,7 +1012,7 @@ func oneBotGroupMemberInfoFromData(groupID string, data map[string]any) OneBotGr
 		UserID:    userID,
 		Nickname:  stringFromAny(data["nickname"]),
 		Card:      stringFromAny(data["card"]),
-		Role:      stringFromAny(data["role"]),
+		Role:      string(NormalizeGroupRole(stringFromAny(data["role"]))),
 		Title:     firstNonEmpty(stringFromAny(data["title"]), stringFromAny(data["special_title"])),
 		Sex:       stringFromAny(data["sex"]),
 		Age:       intFromAny(data["age"]),

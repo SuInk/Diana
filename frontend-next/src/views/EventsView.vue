@@ -560,15 +560,27 @@ function isRecallEvent(event: AssistantEventDetail): boolean {
   return event.sub_type === "group_recall" || event.sub_type === "friend_recall";
 }
 
+// 身份取值现在是平台无关的 group_*（后端 GroupRole）。老库里的事件仍存着各平台
+// 的原始说法，所以两套键都要认，否则历史记录会退化成显示英文原文。
+const groupRoleLabels: Record<string, string> = {
+  group_owner: "群主",
+  group_admin: "管理员",
+  group_member: "群成员",
+  owner: "群主",
+  admin: "管理员",
+  member: "群成员",
+  creator: "群主",
+  administrator: "管理员"
+};
+
 function recallRoleLabel(role?: string): string {
+  const key = (role ?? "").trim();
   const labels: Record<string, string> = {
-    owner: "群主",
-    admin: "管理员",
-    member: "群成员",
+    ...groupRoleLabels,
     bot: "机器人",
     history_backfill: "断线回补"
   };
-  return labels[(role ?? "").trim()] ?? (role ?? "").trim();
+  return labels[key] ?? key;
 }
 
 function recallActorText(event: AssistantEventDetail): string {
@@ -696,7 +708,7 @@ function eventKindLabel(kind: string): string {
   return labels[kind] ?? kind;
 }
 
-const senderRoleLabels: Record<string, string> = { owner: "群主", admin: "管理员", member: "成员" };
+// 与 recallRoleLabel 共用一份映射，别再各写一套。
 
 // 群等级：优先显示平台给的等级名（「冒泡」「潜水」这类），没有就显示数字等级。
 // 回复门槛按等级卡人，排查「这条为什么没回」时要能直接看到当时的等级。
@@ -713,7 +725,7 @@ function senderLevelTitle(event: AssistantEventDetail): string {
   const label = event.sender_level_label?.trim();
   if (label) parts.push(label);
   const role = event.sender_role?.trim();
-  if (role) parts.push(senderRoleLabels[role] ?? role);
+  if (role) parts.push(groupRoleLabels[role] ?? role);
   return parts.join(" · ");
 }
 
