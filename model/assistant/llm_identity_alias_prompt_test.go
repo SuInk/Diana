@@ -11,11 +11,13 @@ import (
 	"testing"
 )
 
-// 拼出来的提示词必须和手写那版逐字一致：这次改的是「怎么得到这段文字」，
-// 不是「说什么」。模型侧的行为不该跟着动。
+// 提示词按角色表拼出来，这里逐字钉住结果，防止改拼接逻辑时不小心改了措辞。
+//
+// 角色表里主人那一档从 owner 改成了 bot_owner（群成员角色里的 owner 是群主，
+// 同名会让模型把主人当成群主），所以这段列举跟着变了一个词——那是有意的。
 func TestIdentityPrivacyPromptRendersUnchanged(t *testing.T) {
 	const want = "【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。" +
-		"相同别名始终表示同一对象；im_owner、im_current_user、im_bot、im_user、im_group、im_message 前缀保留角色语义。" +
+		"相同别名始终表示同一对象；im_bot_owner、im_current_user、im_bot、im_user、im_group、im_message 前缀保留角色语义。" +
 		"理解对话时按角色和昵称判断，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——" +
 		"包括 [diana-reply:im_message_xxx]、[diana-at:im_user_xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。"
 	if llmIdentityPrivacyPrompt != want {

@@ -5668,6 +5668,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if event.Kind == EventKindGroup {
 		builder.WriteString("\n" + promptGroupScope)
+		builder.WriteString("\n" + promptGroupOwnerDistinction)
 		if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
 			builder.WriteString("\n" + promptGroupAliasPrefix + aliases + promptGroupAliasRule)
 		}

@@ -26,7 +26,11 @@ const identityAliasPrefix = "im_"
 
 // identityAliasRoles 是别名里出现过的全部角色，顺序即提示词里的列举顺序。
 // 除 message 外都来自 normalizeIdentityPrivacyRole 的返回值。
-var identityAliasRoles = []string{"owner", "current_user", "bot", "user", "group", "message"}
+//
+// 主人这一档叫 bot_owner 而不是 owner：群成员角色里的 owner 是群主，两个词撞在
+// 一起，模型看到 im_owner_xxx 就会把机器人的主人说成群主。加上 bot_ 之后，光秃
+// 秃的 owner 就只剩群主一个意思。
+var identityAliasRoles = []string{"bot_owner", "current_user", "bot", "user", "group", "message"}
 
 // llmIdentityPrivacyPrompt 里的前缀由 identityAliasPrefix 拼出来，不写死。
 //
@@ -135,7 +139,7 @@ func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageE
 		scope = newIdentityPrivacyScope()
 		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
-	scope.register(cfg.OwnerID, "owner")
+	scope.register(cfg.OwnerID, "bot_owner")
 	scope.register(firstNonEmpty(cfg.BotAccount, event.SelfID), "bot")
 	scope.register(event.UserID, "current_user")
 	scope.register(event.GroupID, "group")
@@ -285,8 +289,8 @@ func (s *identityPrivacyScope) register(realID string, role string) string {
 
 func normalizeIdentityPrivacyRole(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
-	case "owner":
-		return "owner"
+	case "owner", "bot_owner":
+		return "bot_owner"
 	case "current", "current_user", "sender":
 		return "current_user"
 	case "bot", "self":
@@ -440,7 +444,7 @@ func (s *identityPrivacyScope) discoverStructuredIDs(text string) {
 		if strings.Contains(key, "group_id") {
 			role = "group"
 		} else if key == "owner_id" {
-			role = "owner"
+			role = "bot_owner"
 		} else if key == "bot_qq" || key == "self_id" {
 			role = "bot"
 		}
