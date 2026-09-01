@@ -86,3 +86,33 @@ func TestHumanStyleVoiceLeavesEndersOpen(t *testing.T) {
 		t.Fatalf("真人感档不该钉死句尾语气词，却给了 %q", enders)
 	}
 }
+
+// TestHumanStyleGivesConcreteMessageLength 每条消息的长度要给具体数字。
+//
+// 抽象的「句子短」教不会长度——猫娘那一档的注释已经写过同一个教训：语气靠具体的
+// 词和示例教，形容词教不会。这里的数字说的是「每一条」，不是「这一轮总共」。
+func TestHumanStyleGivesConcreteMessageLength(t *testing.T) {
+	human := ReplyStyleHuman.stylePrompt()
+	if !strings.Contains(human, "十几个字") {
+		t.Fatal("真人感档没有给出每条消息的具体长度")
+	}
+	// 必须写明这是「每条」而不是「总共」：MaxReplyChars 截的是整条回复，
+	// 两个概念混起来会让模型把一轮压成一句。
+	if !strings.Contains(human, "这说的是每一条的长度，不是这一轮总共能说多少") {
+		t.Fatal("没有区分「每条长度」和「单轮总量」，模型会把一轮压成一句")
+	}
+}
+
+// TestHumanStyleExemptsSubstantiveAnswers 正事不受长度限制。
+//
+// 「一条十几个字」和「正事照常答准」直接冲突：一段报错分析、一段命令，十几个字
+// 写不完。不明写豁免的话，模型只有两条路——砍短答案，或者把代码切碎，两种都更糟。
+func TestHumanStyleExemptsSubstantiveAnswers(t *testing.T) {
+	human := ReplyStyleHuman.stylePrompt()
+	if !strings.Contains(human, "正事不受这条限制") {
+		t.Fatal("没有把正事从长度限制里豁免出去")
+	}
+	if !strings.Contains(human, "代码、命令和报错原文照原样整块给出") {
+		t.Fatal("没有保护代码和报错原文不被切碎")
+	}
+}
