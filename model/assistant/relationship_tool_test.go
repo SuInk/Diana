@@ -147,8 +147,10 @@ func TestDianaRelationshipOwnerCanSetAndAdjustOthersFavorability(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "只有主人") {
 		t.Fatalf("non-owner error=%v", err)
 	}
+	// 主人的好感度现在也照常记录，但只由互动攒出来：自己填的数不叫记录，而且
+	// 「给他加 5 分」被认成主人自己时正好在这里兜住。
 	_, err = ownerTool.Run(context.Background(), map[string]any{"operation": "set", "target_user_id": "10001", "value": 0})
-	if err == nil || !strings.Contains(err.Error(), "不能修改主人") {
+	if err == nil || !strings.Contains(err.Error(), "不能自己给自己设置") {
 		t.Fatalf("owner self error=%v", err)
 	}
 }

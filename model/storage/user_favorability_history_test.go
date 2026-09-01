@@ -93,3 +93,51 @@ func TestSQLiteStoreDoesNotRecordOwnerProfileInitializationAsChange(t *testing.T
 		t.Fatalf("owner initialization changes=%#v", changes)
 	}
 }
+
+// 主人的好感度是真账：从满信任起步，之后照样能涨能跌，跌破起始分也照实记下来。
+// 等级由身份决定，所以分数掉下去不会把主人降级。
+func TestSQLiteStoreRecordsOwnerFavorabilityBothWays(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "owner-score.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	event := assistant.MessageEvent{UserID: "10001"}
+	created, err := store.UpdateUserMemory(ctx, event, assistant.UserMemoryUpdate{OwnerID: "10001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Favorability != 100 {
+		t.Fatalf("owner should start at full trust: %#v", created)
+	}
+
+	for index := 0; index < 4; index++ {
+		if _, err := store.UpdateUserMemory(ctx, event, assistant.UserMemoryUpdate{
+			OwnerID:                  "10001",
+			FavorabilityDelta:        -3,
+			FavorabilityChangeSource: "interaction",
+			FavorabilityChangeReason: "主人在骂我",
+			Administrative:           true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile, _, err := store.GetUserMemory(ctx, "", "10001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Favorability != 88 {
+		t.Fatalf("owner favorability should fall below the starting score: %#v", profile)
+	}
+
+	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10001", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 建档那一次不算变更，只有后面四次减分入账。
+	if len(changes) != 4 || changes[0].After != 88 || changes[0].Delta != -3 {
+		t.Fatalf("owner change history = %#v", changes)
+	}
+}

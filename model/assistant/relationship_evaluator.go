@@ -102,17 +102,14 @@ func knownPortraitForEvaluation(traits []UserPortraitTrait) []relationshipKnownP
 }
 
 type relationshipEvaluationPayload struct {
-	Message                       proactiveReplyPayload `json:"message"`
-	CurrentScore                  int                   `json:"current_score"`
-	CurrentTier                   string                `json:"current_tier"`
-	MessageCount                  int                   `json:"message_count"`
-	NaturalInteractionGainEnabled bool                  `json:"natural_interaction_gain_enabled"`
-	NaturalInteractionThreshold   int                   `json:"natural_interaction_threshold"`
-	// FavorabilityLocked 表示这个人的好感度不参与评估（当前只有主人如此）。
-	// 画像照常评估：主人也是个人，住在哪、做什么同样值得记住。
-	FavorabilityLocked bool                        `json:"favorability_locked"`
-	PortraitFields     []PortraitFieldSpec         `json:"portrait_fields"`
-	KnownPortrait      []relationshipKnownPortrait `json:"known_portrait,omitempty"`
+	Message                       proactiveReplyPayload       `json:"message"`
+	CurrentScore                  int                         `json:"current_score"`
+	CurrentTier                   string                      `json:"current_tier"`
+	MessageCount                  int                         `json:"message_count"`
+	NaturalInteractionGainEnabled bool                        `json:"natural_interaction_gain_enabled"`
+	NaturalInteractionThreshold   int                         `json:"natural_interaction_threshold"`
+	PortraitFields                []PortraitFieldSpec         `json:"portrait_fields"`
+	KnownPortrait                 []relationshipKnownPortrait `json:"known_portrait,omitempty"`
 }
 
 func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageEvent, text string, handled bool) (relationshipEvaluationDecision, UserMemoryProfile, bool) {
@@ -122,15 +119,13 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	}
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
 	policy := RelationshipPolicyFor(profile, r.effectiveConfigForEvent(event).OwnerID, event.UserID)
-	locked := policy.Owner
 	payload := relationshipEvaluationPayload{
 		Message:                       r.proactiveReplyPayload(event, r.cleanInput(event, text)),
 		CurrentScore:                  profile.Favorability,
 		CurrentTier:                   policy.Name,
 		MessageCount:                  profile.MessageCount,
-		NaturalInteractionGainEnabled: !locked && profile.Favorability < naturalInteractionFavorabilityThreshold,
+		NaturalInteractionGainEnabled: profile.Favorability < naturalInteractionFavorabilityThreshold,
 		NaturalInteractionThreshold:   naturalInteractionFavorabilityThreshold,
-		FavorabilityLocked:            locked,
 		PortraitFields:                PortraitFieldSpecs(),
 		KnownPortrait:                 knownPortraitForEvaluation(profile.Portrait),
 	}
@@ -152,7 +147,7 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 5. 无论是否处于自然熟悉阶段，当前发言者对机器人表达清晰且有上下文支撑的善意、感谢、信任、关心或持续亲近时可以加分；明确针对机器人的轻视、攻击、骚扰、威胁或恶意时应减分。
 6. 玩笑、昵称和亲密调侃必须结合双方最近语境判断；拿不准时不更新。混合表达要按整体含义判断，严重威胁不能因同时出现亲密表达而加分。
 7. delta 只能是 -3、-2、-1、0、1、2、3。自然熟悉阶段的普通互动只能用 1；其他轻微变化用 1，明确变化用 2，极强且罕见的变化用 3。confidence 是对关系变化判断的置信度，范围 0 到 1。
-8. 当 favorability_locked=true 时，这个人的好感度固定，必须 should_update=false、delta=0；画像仍要照常评估。
+8. 机器人的主人不是特例：他的关系等级由身份决定，不受分数影响，但好感度照样按上面几条如实评估，该加就加、该减就减，不要因为对方是主人就一律判 0 或一律加分。
 
 同时维护当前发言者的人员画像（portrait）：
 9. portrait 只记这个人身上长期稳定的情况，字段取值和含义见 portrait_fields。一次性的行程、当下的心情和身体状况、临时安排、别人的情况、机器人自己的设定都不记。
@@ -185,20 +180,14 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 		r.recordRelationshipEvaluationError(ctx, event, fmt.Errorf("invalid relationship evaluation response"))
 		return relationshipEvaluationDecision{}, profile, false
 	}
-	if locked {
-		// 提示词已经说了主人的分不动，但模型偶尔照给不误。这里兜住，免得主人
-		// 的固定分被后台评估悄悄改掉。
-		decision.ShouldUpdate = false
-		decision.Delta = 0
-	}
 	return decision, profile, true
 }
 
 // relationshipEvaluationAvailable 判断这一轮要不要跑后台评估。
 //
-// 主人以前在这里就被挡掉，因为他的好感度是固定的。加上画像之后不能再挡：画像和
-// 好感度共用这一次调用，挡掉等于机器人对自己主人一无所知。主人的分由
-// evaluateRelationshipUpdate 里的 favorability_locked 兜住。
+// 主人以前在这里就被整个挡掉，理由是他的好感度反正固定。现在主人的好感度和画像
+// 都照常记录——等级仍由身份决定，分数只是如实反映最近处得怎么样——所以不再有
+// 身份上的例外。
 func (r *Runtime) relationshipEvaluationAvailable(event MessageEvent) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

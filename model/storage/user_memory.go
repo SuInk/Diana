@@ -15,11 +15,14 @@ import (
 
 const (
 	defaultUserFavorability = 0
-	ownerUserFavorability   = 100
-	minUserFavorability     = -100
-	maxUserFavorability     = 200
-	maxUserMemoryItems      = 20
-	maxUserMemoryTextRunes  = 180
+	// ownerUserFavorability 是主人的起始分，不是下限：主人一上来就是满信任，
+	// 但之后照样按互动记录涨落。等级由身份决定（见 RelationshipPolicyFor），
+	// 所以分数掉下来也不会把主人降级，只是如实反映最近处得怎么样。
+	ownerUserFavorability  = 100
+	minUserFavorability    = -100
+	maxUserFavorability    = 200
+	maxUserMemoryItems     = 20
+	maxUserMemoryTextRunes = 180
 )
 
 // UpdateUserMemory updates one user's long-term profile without calling the LLM.
@@ -40,26 +43,22 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
+	ownerID := strings.TrimSpace(update.OwnerID)
 	if !ok {
 		profile = assistant.UserMemoryProfile{
 			UserID:       userID,
-			Favorability: defaultUserFavorability,
+			Favorability: initialUserFavorability(ownerID, userID),
 			Memories:     []assistant.UserMemoryItem{},
 		}
-	}
-
-	ownerID := strings.TrimSpace(update.OwnerID)
-	if ownerID != "" && ownerID == userID && profile.Favorability < ownerUserFavorability {
-		profile.Favorability = ownerUserFavorability
 	}
 	previousFavorability := profile.Favorability
 	if name := strings.TrimSpace(event.SenderName); name != "" {
 		profile.DisplayName = name
 	}
 	if update.SetFavorability != nil {
-		profile.Favorability = clampUserFavorability(*update.SetFavorability, ownerID, userID)
+		profile.Favorability = clampUserFavorability(*update.SetFavorability)
 	} else {
-		profile.Favorability = clampUserFavorability(profile.Favorability+clampUserFavorabilityDelta(update.FavorabilityDelta), ownerID, userID)
+		profile.Favorability = clampUserFavorability(profile.Favorability + clampUserFavorabilityDelta(update.FavorabilityDelta))
 	}
 	if len(update.PortraitRemovals) > 0 || len(update.PortraitTraits) > 0 {
 		for _, field := range update.PortraitRemovals {
@@ -396,13 +395,20 @@ func clampUserFavorabilityDelta(delta int) int {
 	return delta
 }
 
-func clampUserFavorability(value int, ownerID string, userID string) int {
-	minValue := minUserFavorability
+// initialUserFavorability 给新建的档案定起始分。主人从满信任起步，其余人从零
+// 开始；这只发生在建档那一次，之后主人和别人走同一套涨落规则。
+func initialUserFavorability(ownerID, userID string) int {
 	if ownerID != "" && ownerID == userID {
-		minValue = ownerUserFavorability
+		return ownerUserFavorability
 	}
-	if value < minValue {
-		return minValue
+	return defaultUserFavorability
+}
+
+// clampUserFavorability 把分数夹进可写区间。主人没有专属下限——他的等级由身份
+// 决定，分数只是「最近处得怎么样」的如实记录，托底反而会把真实的疏远抹平。
+func clampUserFavorability(value int) int {
+	if value < minUserFavorability {
+		return minUserFavorability
 	}
 	if value > maxUserFavorability {
 		return maxUserFavorability
