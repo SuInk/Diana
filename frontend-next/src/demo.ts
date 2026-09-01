@@ -154,6 +154,8 @@ const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
 
 const demoPersonas = [
   { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
+  // 演示站要能让人看到「真人感」这一档，否则它在下拉里存在、库里却没有样例。
+  { id: "persona-4", name: "然然", system_prompt: "你叫嘉然，大家喊你然然。你不是助手，是这个群里的一员。心情好的时候话很多，被冷落了会直说。正事上照样靠谱。", reply_style: "human", self_reference: "我", sentence_enders: "" },
   { id: "persona-2", name: "技术群管", system_prompt: "你是技术群里那个话不多但每次开口都说到点子上的人。", reply_style: "groupmate", self_reference: "", sentence_enders: "" },
   { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", reply_style: "concise", self_reference: "", sentence_enders: "" }
 ];
@@ -609,6 +611,10 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     let renamed = 0;
     let skipped = 0;
     let dropped = 0;
+    // 和后端一致：认不出来的风格要点名，否则演示站上手写一个人设文件试导入，
+    // 拼错了也只会看到「导入成功」。
+    const knownStyles = new Set(["groupmate", "human", "assistant", "gentle", "lively", "concise", "catgirl", "roleplay"]);
+    const unknownStyles: string[] = [];
     for (const raw of incoming) {
       const name = String(raw.name ?? "").trim();
       const persona = {
@@ -619,6 +625,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         self_reference: String(raw.self_reference ?? ""),
         sentence_enders: String(raw.sentence_enders ?? "")
       };
+      const style = persona.reply_style.trim();
+      if (style && !knownStyles.has(style.toLowerCase()) && !unknownStyles.includes(style)) unknownStyles.push(style);
       const hasContent = persona.system_prompt || persona.reply_style || persona.self_reference || persona.sentence_enders;
       if (!name || !hasContent) { dropped++; continue; }
       const existing = demoPersonas.find((item) => item.name === name);
@@ -632,7 +640,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
       imported++;
     }
-    return json({ personas: demoPersonas, imported, skipped, renamed, dropped });
+    return json({ personas: demoPersonas, imported, skipped, renamed, dropped, unknown_styles: unknownStyles });
   }
   if (path === "/api/assistant/personas/delete") {
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));

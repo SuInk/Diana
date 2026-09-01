@@ -168,6 +168,8 @@ export interface BotProfileConfig {
   group_trigger_mode?: AliasTriggerMode;
   /** 拒答话术；不设等同 smart（由模型按语境判断说不说原因）。 */
   refusal_strategy?: RefusalStrategy;
+  /** 语气跟随一天的时间变化（深夜话少、清早迷糊、晚上松弛）；不设等同关闭。 */
+  daypart_tone_enabled?: boolean;
   disabled_groups?: string[];
   /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
   group_admission?: GroupAdmission;
@@ -1757,6 +1759,8 @@ export interface PersonaImportResult {
   skipped: number;
   renamed: number;
   dropped: number;
+  /** 文件里写了但这一版不认识的表达风格；它们会被退回「助手」。 */
+  unknown_styles?: string[];
 }
 
 /** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */

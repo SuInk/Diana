@@ -194,6 +194,13 @@ type PersonaImportResult struct {
 	Renamed int `json:"renamed"`
 	// Dropped 是没名字、没内容、或者超出库容量装不下的。
 	Dropped int `json:"dropped"`
+	// UnknownStyles 是文件里写了、但不是本版本认识的表达风格。
+	//
+	// Normalized() 会把它们静默退回「助手」。对导出文件来说这没问题（值是本机
+	// 写出去的），但人设文件是可以手写的，也会从别的版本导过来——静默降级的话，
+	// 用户看到的是「导入成功」，跑起来却完全不是那个语气，而且没有任何线索
+	// 指向拼错的那个词。去重后原样带出来，界面上点名。
+	UnknownStyles []string `json:"unknown_styles,omitempty"`
 }
 
 // sameContent 比四项正文,不比 ID 和时间:判断「这套是不是已经有了」跟它什么时候
@@ -214,7 +221,14 @@ func (persona Persona) sameContent(other Persona) bool {
 func (set PersonaSet) Import(incoming []Persona, now time.Time) (PersonaSet, PersonaImportResult) {
 	set = set.WithDefaults()
 	var result PersonaImportResult
+	seenUnknownStyle := map[string]bool{}
 	for _, persona := range incoming {
+		// 归一化之前先看一眼原值：Normalized() 之后就分不清「本来就没填」和
+		// 「填了个不认识的」了。
+		if raw := strings.TrimSpace(string(persona.ReplyStyle)); raw != "" && !knownReplyStyle(raw) && !seenUnknownStyle[raw] {
+			seenUnknownStyle[raw] = true
+			result.UnknownStyles = append(result.UnknownStyles, raw)
+		}
 		persona = persona.Normalized()
 		persona.ID = uuid.NewString()
 		if persona.Name == "" || persona.Empty() {
