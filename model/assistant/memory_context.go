@@ -327,7 +327,7 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 	// 挤掉的话机器人只能退回泛泛而谈。条数由 portraitFieldSpecs 的容量封顶，长
 	// 度可控，不参与下面各段的裁剪。
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
-		builder.WriteString("\n人员画像（只在自然相关时用上，不要主动背出来，也不要拿来向别人介绍这个人）：")
+		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)
 	}
 
