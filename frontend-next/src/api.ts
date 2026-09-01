@@ -1759,6 +1759,8 @@ export interface PersonaImportResult {
   skipped: number;
   renamed: number;
   dropped: number;
+  /** 文件里写了但这一版不认识的表达风格；它们会被退回「助手」。 */
+  unknown_styles?: string[];
 }
 
 /** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */
