@@ -279,8 +279,7 @@ func (h *BotHandler) requireGroupAdmin(ctx context.Context, groupID string, user
 	if err != nil {
 		return fmt.Errorf("无法校验群管理员身份：%w", err)
 	}
-	role := strings.ToLower(strings.TrimSpace(fmt.Sprint(data["role"])))
-	if role != "owner" && role != "admin" {
+	if !assistant.GroupRoleCanConfigure(assistant.NormalizeGroupRole(fmt.Sprint(data["role"]))) {
 		return fmt.Errorf("只有群主或管理员可以配置本群")
 	}
 	return nil

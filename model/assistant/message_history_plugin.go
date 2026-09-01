@@ -485,15 +485,12 @@ func recallConclusionText(record MessageEvent) string {
 }
 
 func recallOperatorRoleText(record MessageEvent) string {
-	switch strings.ToLower(strings.TrimSpace(record.OperatorRole)) {
-	case historyBackfillOperatorRole:
+	if strings.EqualFold(strings.TrimSpace(record.OperatorRole), historyBackfillOperatorRole) {
 		return "断线回补（操作者未知）"
-	case "owner":
-		return "群主"
-	case "admin":
-		return "管理员"
-	case "member":
-		return "群成员"
+	}
+	// 走归一化再取文案：老库里存的是各平台的原始说法，读回来要照样认得出。
+	if label := GroupRoleLabel(NormalizeGroupRole(record.OperatorRole)); label != "" {
+		return label
 	}
 	if record.OperatorID == "" {
 		return "未知"

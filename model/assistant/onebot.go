@@ -544,7 +544,7 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 		RawMessage:       rawMessage,
 		Segments:         segments,
 		SenderName:       envelope.Sender.Card,
-		SenderRole:       strings.ToLower(strings.TrimSpace(envelope.Sender.Role)),
+		SenderRole:       string(NormalizeGroupRole(envelope.Sender.Role)),
 		SenderLevel:      parseGroupLevel(envelope.Sender.Level),
 		SenderLevelLabel: strings.TrimSpace(stringFromAny(envelope.Sender.Level)),
 		SenderTitle:      strings.TrimSpace(envelope.Sender.Title),

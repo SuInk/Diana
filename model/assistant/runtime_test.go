@@ -4785,6 +4785,12 @@ func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event Messag
 			profile.Memories = append(profile.Memories, UserMemoryItem{Text: text})
 		}
 	}
+	if len(update.PortraitRemovals) > 0 || len(update.PortraitTraits) > 0 {
+		for _, field := range update.PortraitRemovals {
+			profile.Portrait, _ = RemovePortraitField(profile.Portrait, field)
+		}
+		profile.Portrait = MergePortraitTraits(profile.Portrait, update.PortraitTraits, time.Now())
+	}
 	if profile.Favorability != before {
 		source := strings.TrimSpace(update.FavorabilityChangeSource)
 		if source == "" {

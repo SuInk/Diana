@@ -221,7 +221,8 @@ func TestMessageEventFromEnvelopeKeepsSenderRoleAndLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 	event := messageEventFromEnvelope(envelope)
-	if event.SenderRole != "admin" || event.SenderLevel != 69 || event.SenderLevelLabel != "LV69" {
+	// OneBot 的 admin 在入站时就折成平台无关的 group_admin。
+	if event.SenderRole != string(GroupRoleAdmin) || event.SenderLevel != 69 || event.SenderLevelLabel != "LV69" {
 		t.Fatalf("event sender policy fields = role %q level %d label %q", event.SenderRole, event.SenderLevel, event.SenderLevelLabel)
 	}
 	if level, ok := parseOneBotGroupLevel(event.SenderLevel); !ok || level != 69 {

@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   favorability INTEGER NOT NULL,
   message_count INTEGER NOT NULL,
   memories TEXT NOT NULL,
+  portrait TEXT NOT NULL DEFAULT '',
   last_seen_at TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (bot_profile_id, user_id)
@@ -311,6 +312,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addMessageEventProfileColumn(); err != nil {
 		return err
 	}
+	if err := s.addUserProfilePortraitColumn(); err != nil {
+		return err
+	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
@@ -343,6 +347,20 @@ WHERE COALESCE(profile_id, '') = ''
 		return err
 	}
 	return nil
+}
+
+// addUserProfilePortraitColumn 给人员画像表补上画像列。
+//
+// 老库里这张表只有好感度、互动次数和最近说过的话；画像（住在哪、做什么、什么
+// 生活习惯）是新加的一栏。补列即可，不需要回填：画像只能从后续对话里攒，凭历史
+// 消息硬猜等于给每个人编一份没人说过的资料。
+func (s *SQLiteStore) addUserProfilePortraitColumn() error {
+	has, err := s.hasColumn("user_profiles", "portrait")
+	if err != nil || has {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE user_profiles ADD COLUMN portrait TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 // hasColumn 判断表里有没有这一列，用于幂等地补列。
@@ -417,15 +435,18 @@ CREATE TABLE IF NOT EXISTS user_profiles_scoped (
   favorability INTEGER NOT NULL,
   message_count INTEGER NOT NULL,
   memories TEXT NOT NULL,
+  portrait TEXT NOT NULL DEFAULT '',
   last_seen_at TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (bot_profile_id, user_id)
 )`); err != nil {
 		return err
 	}
+	// 画像列不从老表里取：能走到这一步的库比画像还老，那一列根本不存在。新表
+	// 直接建成当前形状，后面的 addUserProfilePortraitColumn 就是个空操作。
 	if _, err := tx.Exec(`
-INSERT OR REPLACE INTO user_profiles_scoped (bot_profile_id, user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at)
-SELECT ?, user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at FROM user_profiles
+INSERT OR REPLACE INTO user_profiles_scoped (bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at)
+SELECT ?, user_id, display_name, favorability, message_count, memories, '', last_seen_at, updated_at FROM user_profiles
 `, owner); err != nil {
 		return err
 	}

@@ -529,7 +529,7 @@ func dingTalkEventFromCallback(data []byte, selfID string) (MessageEvent, string
 		ToMe:       true,
 	}
 	if callback.IsAdmin {
-		event.SenderRole = "admin"
+		event.SenderRole = string(GroupRoleAdmin)
 	}
 	if callback.ConversationType == "2" {
 		event.Kind = EventKindGroup

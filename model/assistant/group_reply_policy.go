@@ -23,19 +23,6 @@ type groupReplyLevelDecision struct {
 	LookupErr error
 }
 
-func normalizeOneBotGroupRole(role string) string {
-	return strings.ToLower(strings.TrimSpace(role))
-}
-
-func oneBotGroupRoleCanConfigure(role string) bool {
-	switch normalizeOneBotGroupRole(role) {
-	case "owner", "admin":
-		return true
-	default:
-		return false
-	}
-}
-
 func parseOneBotGroupLevel(value any) (int, bool) {
 	if value == nil {
 		return 0, false
@@ -109,18 +96,18 @@ func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (st
 	if ownerID := strings.TrimSpace(cfg.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(event.UserID) {
 		return "bot_owner", nil
 	}
-	if role := normalizeOneBotGroupRole(event.SenderRole); oneBotGroupRoleCanConfigure(role) {
-		return role, nil
+	if role := NormalizeGroupRole(event.SenderRole); GroupRoleCanConfigure(role) {
+		return string(role), nil
 	}
 	member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID)
 	if err != nil {
 		return "", fmt.Errorf("无法校验当前群权限: %w", err)
 	}
-	role := normalizeOneBotGroupRole(member.Role)
-	if !oneBotGroupRoleCanConfigure(role) {
-		return role, fmt.Errorf("只有机器人主人、群主或群管理员可以配置本群")
+	role := NormalizeGroupRole(member.Role)
+	if !GroupRoleCanConfigure(role) {
+		return string(role), fmt.Errorf("只有机器人主人、群主或群管理员可以配置本群")
 	}
-	return role, nil
+	return string(role), nil
 }
 
 func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event MessageEvent) (bool, groupReplyLevelDecision) {
@@ -135,18 +122,19 @@ func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event
 		return false, decision
 	}
 	if ownerID := strings.TrimSpace(cfg.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(event.UserID) {
-		decision.Role = "bot_owner"
+		// 主人和群主是两回事，这里借关系等级那个常量，两处永远说同一个词。
+		decision.Role = string(RelationshipOwner)
 		decision.Reason = "privileged_role"
 		return false, decision
 	}
 
-	decision.Role = normalizeOneBotGroupRole(event.SenderRole)
+	decision.Role = string(NormalizeGroupRole(event.SenderRole))
 	levelValue := any(event.SenderLevel)
 	if strings.TrimSpace(event.SenderLevelLabel) != "" {
 		levelValue = event.SenderLevelLabel
 	}
 	decision.Level, decision.LevelSet = parseOneBotGroupLevel(levelValue)
-	if oneBotGroupRoleCanConfigure(decision.Role) {
+	if GroupRoleCanConfigure(GroupRole(decision.Role)) {
 		decision.Reason = "privileged_role"
 		return false, decision
 	}
@@ -157,9 +145,9 @@ func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event
 			decision.Reason = "member_lookup_failed"
 			return true, decision
 		}
-		decision.Role = normalizeOneBotGroupRole(member.Role)
+		decision.Role = string(NormalizeGroupRole(member.Role))
 		decision.Level, decision.LevelSet = parseOneBotGroupLevel(member.Level)
-		if oneBotGroupRoleCanConfigure(decision.Role) {
+		if GroupRoleCanConfigure(GroupRole(decision.Role)) {
 			decision.Reason = "privileged_role"
 			return false, decision
 		}

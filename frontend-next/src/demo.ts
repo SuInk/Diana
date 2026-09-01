@@ -163,6 +163,12 @@ const demoPersonas = [
 const demoUsers: UserMemoryProfile[] = [
   {
     user_id: "100200711", display_name: "青禾", favorability: 62, message_count: 1843, last_seen_at: before(2), updated_at: before(2),
+    portrait: [
+      { field: "residence", label: "居住地点", value: "住在杭州", source: "stated", updated_at: before(1400) },
+      { field: "occupation", label: "职业", value: "做后端开发", source: "stated", updated_at: before(2600) },
+      { field: "routine", label: "作息", value: "习惯下午集中处理事务", source: "inferred", updated_at: before(1400) },
+      { field: "habit", label: "生活习惯", value: "每天手冲一杯咖啡，不加糖", source: "stated", updated_at: before(4300) }
+    ],
     memories: [
       { text: "在做 Diana 的发布流程改造，经常问仓库最近的变更", source: "group", group_id: "100200301", at: before(2) },
       { text: "习惯下午提交周报，让机器人 15:30 提醒", source: "group", group_id: "100200301", at: before(1400) },
@@ -171,6 +177,10 @@ const demoUsers: UserMemoryProfile[] = [
   },
   {
     user_id: "100200913", display_name: "星野", favorability: 35, message_count: 622, last_seen_at: before(31), updated_at: before(31),
+    portrait: [
+      { field: "occupation", label: "职业", value: "在做视觉设计", source: "inferred", updated_at: before(2100) },
+      { field: "interest", label: "兴趣爱好", value: "喜欢复古电车和胶片质感", source: "stated", updated_at: before(2100) }
+    ],
     memories: [
       { text: "经常在设计群让机器人画复古电车和雨夜街景", source: "group", group_id: "100200519", at: before(31) },
       { text: "偏好冷色调和胶片质感的画面", source: "group", group_id: "100200519", at: before(2100) }
@@ -184,6 +194,17 @@ const demoUsers: UserMemoryProfile[] = [
     user_id: "100200888", display_name: "路人甲", favorability: -8, message_count: 96, last_seen_at: before(3000), updated_at: before(3000),
     memories: [{ text: "多次刷屏广告链接，已被设计群屏蔽", source: "group", group_id: "100200519", at: before(3000) }]
   }
+];
+
+// 画像栏目表由后端给出，演示模式照着给一份同样的。
+const demoPortraitFields = [
+  { field: "residence", label: "居住地点", hint: "常住的城市或地区，不要记具体门牌地址", capacity: 1 },
+  { field: "occupation", label: "职业", hint: "职业、行业或在读身份", capacity: 1 },
+  { field: "routine", label: "作息", hint: "长期的起居和活跃时段", capacity: 1 },
+  { field: "habit", label: "生活习惯", hint: "饮食、运动、通勤等稳定的生活方式", capacity: 4 },
+  { field: "interest", label: "兴趣爱好", hint: "长期的爱好、常玩的游戏、追的领域", capacity: 4 },
+  { field: "relation", label: "家庭与关系", hint: "同住的家人、宠物等稳定关系", capacity: 3 },
+  { field: "other", label: "其他", hint: "上面几栏装不下、但确实稳定的个人情况", capacity: 4 }
 ];
 
 // 类型清单由后端给出，演示模式照着给一份同样的。
@@ -583,7 +604,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/users") {
     const keyword = (url.searchParams.get("q") ?? "").trim();
     const matched = demoUsers.filter((user) => !keyword || user.user_id.includes(keyword) || (user.display_name ?? "").includes(keyword));
-    const users = matched.map((user) => ({ ...user, memories: undefined, memory_count: user.memories?.length ?? 0 }));
+    const users = matched.map((user) => ({
+      ...user,
+      memories: undefined,
+      portrait: undefined,
+      memory_count: user.memories?.length ?? 0,
+      portrait_count: user.portrait?.length ?? 0
+    }));
     return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
   }
   if (path === "/api/assistant/user-names") {
@@ -651,7 +678,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (userMatch) {
     const user = demoUsers.find((item) => item.user_id === decodeURIComponent(userMatch[1]));
     if (!user) return json({ error: "人员不存在或还没有画像记录" }, 404);
-    return json({ profile: user, favorability_changes: demoFavorabilityChanges[user.user_id] ?? [] });
+    return json({
+      profile: user,
+      favorability_changes: demoFavorabilityChanges[user.user_id] ?? [],
+      portrait_fields: demoPortraitFields
+    });
   }
 
   if (path === "/api/assistant/notebook" && method === "GET") {

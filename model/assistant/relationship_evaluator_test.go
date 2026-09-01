@@ -236,3 +236,120 @@ func requestMessagesContain(messages []llm.Message, want string) bool {
 	}
 	return false
 }
+
+func TestRelationshipEvaluationParsesPortraitObservations(t *testing.T) {
+	raw := `{"should_update":false,"delta":0,"confidence":0.95,"reason":"闲聊","portrait":[
+	  {"field":"residence","value":"住在杭州","evidence":"我在杭州","source":"stated","confidence":0.98},
+	  {"field":"occupation","value":"做后端开发","source":"inferred","confidence":0.6},
+	  {"field":"habit","value":"习惯早睡","source":"inferred","confidence":0.92}
+	]}`
+	decision, ok := parseRelationshipEvaluationDecision(raw)
+	if !ok {
+		t.Fatal("decision with portrait should parse")
+	}
+	traits := decision.portraitTraits(time.Now())
+	if len(traits) != 2 {
+		t.Fatalf("traits = %#v, want the low-confidence inference dropped", traits)
+	}
+	if traits[0].Field != PortraitFieldResidence || traits[0].Label != "居住地点" {
+		t.Fatalf("first trait = %#v", traits[0])
+	}
+	if traits[1].Field != PortraitFieldHabit {
+		t.Fatalf("second trait = %#v", traits[1])
+	}
+}
+
+// 老提示词和不听话的小模型不给 portrait 字段照样算有效：漏一条画像，不该连好感度
+// 一起判为无效。
+func TestRelationshipEvaluationWithoutPortraitStaysValid(t *testing.T) {
+	decision, ok := parseRelationshipEvaluationDecision(`{"should_update":true,"delta":1,"confidence":0.96,"reason":"真实互动"}`)
+	if !ok || decision.effectiveDelta() != 1 || len(decision.portraitTraits(time.Now())) != 0 {
+		t.Fatalf("decision=%#v ok=%v", decision, ok)
+	}
+}
+
+// 主人以前根本不进评估，理由是他的分反正固定。现在好感度和画像都照常记录：
+// 等级仍由身份决定，分数只是如实反映最近处得怎么样。
+func TestRelationshipEvaluationScoresOwnerLikeAnyoneElse(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"should_update":true,"delta":3,"confidence":0.99,"reason":"主人夸了我","portrait":[{"field":"occupation","value":"做后端开发","evidence":"我平时写 Go","source":"stated","confidence":0.97}]}`}
+	memory := newMemoryUserMemoryStore()
+	memory.profiles["owner"] = UserMemoryProfile{UserID: "owner", Favorability: 100, MessageCount: 40}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetUserMemoryStore(memory)
+	event := MessageEvent{
+		Kind:       EventKindPrivate,
+		UserID:     "owner",
+		MessageID:  "message",
+		SenderName: "主人",
+		RawMessage: "我平时写 Go",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "我平时写 Go"}}},
+	}
+
+	decision, _, evaluated := runtime.evaluateRelationshipUpdate(context.Background(), event, PlainText(event.Segments), true)
+	if !evaluated {
+		t.Fatal("owner messages must be evaluated too")
+	}
+	if decision.effectiveDelta() != 3 {
+		t.Fatalf("owner favorability should move like anyone else: %#v", decision)
+	}
+	if traits := decision.portraitTraits(time.Now()); len(traits) != 1 || traits[0].Field != PortraitFieldOccupation {
+		t.Fatalf("owner portrait = %#v", decision.portraitTraits(time.Now()))
+	}
+	if requestMessagesContain(provider.request.Messages, "favorability_locked") {
+		t.Fatalf("the locked-score payload field should be gone: %#v", provider.request.Messages)
+	}
+	if !requestMessagesContain(provider.request.Messages, `"field":"residence"`) {
+		t.Fatalf("payload did not carry the portrait field table: %#v", provider.request.Messages)
+	}
+}
+
+// 主人的分能降下来，等级不跟着掉——等级看身份，分数看相处。
+func TestRuntimeAppliesOwnerFavorabilityDrop(t *testing.T) {
+	memory := newMemoryUserMemoryStore()
+	memory.profiles["owner"] = UserMemoryProfile{UserID: "owner", Favorability: 100, MessageCount: 40}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetUserMemoryStore(memory)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", SenderName: "主人"}
+
+	profile, ok := runtime.applyEvaluatedRelationshipUpdate(event, -3, "主人在骂我", nil)
+	if !ok || profile.Favorability != 97 {
+		t.Fatalf("owner favorability = %#v ok=%v", profile, ok)
+	}
+	if policy := RelationshipPolicyFor(profile, "owner", "owner"); policy.Tier != RelationshipOwner || policy.Score != 97 {
+		t.Fatalf("owner tier must not follow the score: %#v", policy)
+	}
+}
+
+// 已经记下的画像要喂回给模型，否则同一件事每轮都会被重新上报一遍。
+func TestRelationshipEvaluationSendsKnownPortrait(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"should_update":false,"delta":0,"confidence":0.95,"reason":"闲聊","portrait":[]}`}
+	memory := newMemoryUserMemoryStore()
+	memory.profiles["user"] = UserMemoryProfile{
+		UserID:       "user",
+		Favorability: 30,
+		MessageCount: 20,
+		Portrait: []UserPortraitTrait{
+			{Field: PortraitFieldResidence, Label: "居住地点", Value: "住在杭州", Source: PortraitSourceStated},
+		},
+	}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetUserMemoryStore(memory)
+	event := MessageEvent{
+		Kind:       EventKindPrivate,
+		UserID:     "user",
+		MessageID:  "message",
+		SenderName: "Alice",
+		RawMessage: "今天天气不错",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "今天天气不错"}}},
+	}
+	if _, _, evaluated := runtime.evaluateRelationshipUpdate(context.Background(), event, PlainText(event.Segments), true); !evaluated {
+		t.Fatal("evaluation did not run")
+	}
+	if !requestMessagesContain(provider.request.Messages, `"known_portrait"`) || !requestMessagesContain(provider.request.Messages, "住在杭州") {
+		t.Fatalf("known portrait missing from payload: %#v", provider.request.Messages)
+	}
+}

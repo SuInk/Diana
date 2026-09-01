@@ -15,7 +15,8 @@ import (
 
 type assistantUserSummary struct {
 	assistant.UserMemoryProfile
-	MemoryCount int `json:"memory_count"`
+	MemoryCount   int `json:"memory_count"`
+	PortraitCount int `json:"portrait_count"`
 }
 
 type assistantUsersResponse struct {
@@ -29,6 +30,9 @@ type assistantUsersResponse struct {
 type assistantUserDetailResponse struct {
 	Profile             assistant.UserMemoryProfile        `json:"profile"`
 	FavorabilityChanges []assistant.UserFavorabilityChange `json:"favorability_changes"`
+	// PortraitFields 是画像的栏目表，控制台按它排版并显示空栏，不必自己再抄一份
+	// 字段到中文的映射。
+	PortraitFields []assistant.PortraitFieldSpec `json:"portrait_fields"`
 }
 
 // listAssistantUsers 返回机器人记住的人员画像列表，供控制台人员管理使用。
@@ -47,9 +51,14 @@ func (h *BotHandler) listAssistantUsers(c *gin.Context) {
 	}
 	users := make([]assistantUserSummary, 0, len(profiles))
 	for _, profile := range profiles {
-		summary := assistantUserSummary{UserMemoryProfile: profile, MemoryCount: len(profile.Memories)}
+		summary := assistantUserSummary{
+			UserMemoryProfile: profile,
+			MemoryCount:       len(profile.Memories),
+			PortraitCount:     len(profile.Portrait),
+		}
 		// 列表只要条数，正文放在详情接口，避免人员多时响应过大。
 		summary.Memories = nil
+		summary.Portrait = nil
 		users = append(users, summary)
 	}
 	c.JSON(http.StatusOK, assistantUsersResponse{
@@ -88,9 +97,13 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 	if profile.Memories == nil {
 		profile.Memories = []assistant.UserMemoryItem{}
 	}
+	if profile.Portrait == nil {
+		profile.Portrait = []assistant.UserPortraitTrait{}
+	}
 	c.JSON(http.StatusOK, assistantUserDetailResponse{
 		Profile:             profile,
 		FavorabilityChanges: changes,
+		PortraitFields:      assistant.PortraitFieldSpecs(),
 	})
 }
 

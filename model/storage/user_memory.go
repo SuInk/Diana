@@ -15,11 +15,14 @@ import (
 
 const (
 	defaultUserFavorability = 0
-	ownerUserFavorability   = 100
-	minUserFavorability     = -100
-	maxUserFavorability     = 200
-	maxUserMemoryItems      = 20
-	maxUserMemoryTextRunes  = 180
+	// ownerUserFavorability 是主人的起始分，不是下限：主人一上来就是满信任，
+	// 但之后照样按互动记录涨落。等级由身份决定（见 RelationshipPolicyFor），
+	// 所以分数掉下来也不会把主人降级，只是如实反映最近处得怎么样。
+	ownerUserFavorability  = 100
+	minUserFavorability    = -100
+	maxUserFavorability    = 200
+	maxUserMemoryItems     = 20
+	maxUserMemoryTextRunes = 180
 )
 
 // UpdateUserMemory updates one user's long-term profile without calling the LLM.
@@ -40,26 +43,28 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
+	ownerID := strings.TrimSpace(update.OwnerID)
 	if !ok {
 		profile = assistant.UserMemoryProfile{
 			UserID:       userID,
-			Favorability: defaultUserFavorability,
+			Favorability: initialUserFavorability(ownerID, userID),
 			Memories:     []assistant.UserMemoryItem{},
 		}
-	}
-
-	ownerID := strings.TrimSpace(update.OwnerID)
-	if ownerID != "" && ownerID == userID && profile.Favorability < ownerUserFavorability {
-		profile.Favorability = ownerUserFavorability
 	}
 	previousFavorability := profile.Favorability
 	if name := strings.TrimSpace(event.SenderName); name != "" {
 		profile.DisplayName = name
 	}
 	if update.SetFavorability != nil {
-		profile.Favorability = clampUserFavorability(*update.SetFavorability, ownerID, userID)
+		profile.Favorability = clampUserFavorability(*update.SetFavorability)
 	} else {
-		profile.Favorability = clampUserFavorability(profile.Favorability+clampUserFavorabilityDelta(update.FavorabilityDelta), ownerID, userID)
+		profile.Favorability = clampUserFavorability(profile.Favorability + clampUserFavorabilityDelta(update.FavorabilityDelta))
+	}
+	if len(update.PortraitRemovals) > 0 || len(update.PortraitTraits) > 0 {
+		for _, field := range update.PortraitRemovals {
+			profile.Portrait, _ = assistant.RemovePortraitField(profile.Portrait, field)
+		}
+		profile.Portrait = assistant.MergePortraitTraits(profile.Portrait, update.PortraitTraits, time.Now())
 	}
 	if !update.Administrative {
 		profile.MessageCount++
@@ -74,6 +79,10 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
+	portrait, err := marshalUserPortrait(profile.Portrait)
+	if err != nil {
+		return assistant.UserMemoryProfile{}, err
+	}
 	lastSeen := ""
 	if !profile.LastSeenAt.IsZero() {
 		lastSeen = profile.LastSeenAt.UTC().Format(time.RFC3339Nano)
@@ -84,16 +93,17 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	}
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(bot_profile_id, user_id) DO UPDATE SET
   display_name=excluded.display_name,
   favorability=excluded.favorability,
   message_count=excluded.message_count,
   memories=excluded.memories,
+  portrait=excluded.portrait,
   last_seen_at=excluded.last_seen_at,
   updated_at=excluded.updated_at
-`, botProfileID, profile.UserID, profile.DisplayName, profile.Favorability, profile.MessageCount, string(memories), lastSeen, profile.UpdatedAt.Format(time.RFC3339Nano))
+`, botProfileID, profile.UserID, profile.DisplayName, profile.Favorability, profile.MessageCount, string(memories), portrait, lastSeen, profile.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
@@ -211,7 +221,7 @@ func (s *SQLiteStore) ListUserMemories(ctx context.Context, botProfileID, query 
 		return nil, 0, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at
+SELECT user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at
 FROM user_profiles`+where+`
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?
@@ -225,8 +235,9 @@ LIMIT ? OFFSET ?
 		var profile assistant.UserMemoryProfile
 		var displayName sql.NullString
 		var memoriesRaw string
+		var portraitRaw sql.NullString
 		var lastSeenRaw, updatedRaw sql.NullString
-		if err := rows.Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &lastSeenRaw, &updatedRaw); err != nil {
+		if err := rows.Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &lastSeenRaw, &updatedRaw); err != nil {
 			return nil, 0, err
 		}
 		profile.DisplayName = displayName.String
@@ -234,6 +245,9 @@ LIMIT ? OFFSET ?
 			if err := json.Unmarshal([]byte(memoriesRaw), &profile.Memories); err != nil {
 				return nil, 0, err
 			}
+		}
+		if profile.Portrait, err = unmarshalUserPortrait(portraitRaw); err != nil {
+			return nil, 0, err
 		}
 		profile.LastSeenAt = parseUserProfileTime(lastSeenRaw)
 		profile.UpdatedAt = parseUserProfileTime(updatedRaw)
@@ -262,16 +276,17 @@ func (s *SQLiteStore) GetUserMemory(ctx context.Context, botProfileID, userID st
 	}
 	var displayName sql.NullString
 	var memoriesRaw string
+	var portraitRaw sql.NullString
 	var lastSeenRaw sql.NullString
 	var updatedRaw sql.NullString
 	scopeCondition, scopeArgs := userProfileScopeCondition(botProfileID)
 	err := s.db.QueryRowContext(ctx, `
-SELECT user_id, display_name, favorability, message_count, memories, last_seen_at, updated_at
+SELECT user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at
 FROM user_profiles
 WHERE user_id = ?`+scopeCondition+`
 ORDER BY updated_at DESC
 LIMIT 1
-`, append([]any{userID}, scopeArgs...)...).Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &lastSeenRaw, &updatedRaw)
+`, append([]any{userID}, scopeArgs...)...).Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &lastSeenRaw, &updatedRaw)
 	if err == sql.ErrNoRows {
 		return assistant.UserMemoryProfile{}, false, nil
 	}
@@ -284,9 +299,36 @@ LIMIT 1
 			return assistant.UserMemoryProfile{}, false, err
 		}
 	}
+	if profile.Portrait, err = unmarshalUserPortrait(portraitRaw); err != nil {
+		return assistant.UserMemoryProfile{}, false, err
+	}
 	profile.LastSeenAt = parseUserProfileTime(lastSeenRaw)
 	profile.UpdatedAt = parseUserProfileTime(updatedRaw)
 	return profile, true, nil
+}
+
+// marshalUserPortrait 把画像写成 JSON。空画像存成空串而不是 "null"，让控制台和
+// 老库里那些还没攒出画像的行长得一样。
+func marshalUserPortrait(traits []assistant.UserPortraitTrait) (string, error) {
+	if len(traits) == 0 {
+		return "", nil
+	}
+	body, err := json.Marshal(traits)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func unmarshalUserPortrait(raw sql.NullString) ([]assistant.UserPortraitTrait, error) {
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return nil, nil
+	}
+	var traits []assistant.UserPortraitTrait
+	if err := json.Unmarshal([]byte(raw.String), &traits); err != nil {
+		return nil, err
+	}
+	return traits, nil
 }
 
 func userMemoryEventTime(event assistant.MessageEvent) time.Time {
@@ -353,13 +395,20 @@ func clampUserFavorabilityDelta(delta int) int {
 	return delta
 }
 
-func clampUserFavorability(value int, ownerID string, userID string) int {
-	minValue := minUserFavorability
+// initialUserFavorability 给新建的档案定起始分。主人从满信任起步，其余人从零
+// 开始；这只发生在建档那一次，之后主人和别人走同一套涨落规则。
+func initialUserFavorability(ownerID, userID string) int {
 	if ownerID != "" && ownerID == userID {
-		minValue = ownerUserFavorability
+		return ownerUserFavorability
 	}
-	if value < minValue {
-		return minValue
+	return defaultUserFavorability
+}
+
+// clampUserFavorability 把分数夹进可写区间。主人没有专属下限——他的等级由身份
+// 决定，分数只是「最近处得怎么样」的如实记录，托底反而会把真实的疏远抹平。
+func clampUserFavorability(value int) int {
+	if value < minUserFavorability {
+		return minUserFavorability
 	}
 	if value > maxUserFavorability {
 		return maxUserFavorability

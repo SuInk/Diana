@@ -13,12 +13,14 @@ import (
 type RelationshipTier string
 
 const (
-	RelationshipHostile       RelationshipTier = "hostile"
-	RelationshipAcquaintance  RelationshipTier = "acquaintance"
-	RelationshipFamiliar      RelationshipTier = "familiar"
-	RelationshipFriend        RelationshipTier = "friend"
-	RelationshipTrusted       RelationshipTier = "trusted"
-	RelationshipOwner         RelationshipTier = "owner"
+	RelationshipHostile      RelationshipTier = "hostile"
+	RelationshipAcquaintance RelationshipTier = "acquaintance"
+	RelationshipFamiliar     RelationshipTier = "familiar"
+	RelationshipFriend       RelationshipTier = "friend"
+	RelationshipTrusted      RelationshipTier = "trusted"
+	// RelationshipOwner 的值是 bot_owner 而不是 owner：群成员角色里的 owner 指
+	// 群主，两个词撞在一起时模型会把机器人的主人当成群主。
+	RelationshipOwner         RelationshipTier = "bot_owner"
 	relationshipImageTierName                  = "熟悉"
 )
 
@@ -28,7 +30,7 @@ type RelationshipPolicy struct {
 	Tone                  string           `json:"tone"`
 	Score                 int              `json:"score"`
 	MessageCount          int              `json:"message_count"`
-	Owner                 bool             `json:"owner"`
+	Owner                 bool             `json:"bot_owner"`
 	AllowImageGeneration  bool             `json:"allow_image_generation"`
 	AllowImageEditing     bool             `json:"allow_image_editing"`
 	AllowDocumentOCR      bool             `json:"allow_document_ocr"`
