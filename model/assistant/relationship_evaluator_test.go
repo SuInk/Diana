@@ -268,8 +268,9 @@ func TestRelationshipEvaluationWithoutPortraitStaysValid(t *testing.T) {
 	}
 }
 
-// 主人以前根本不进评估，加上画像后要进，但那次评估不能动他固定的好感度。
-func TestRelationshipEvaluationRunsForOwnerWithLockedScore(t *testing.T) {
+// 主人以前根本不进评估，理由是他的分反正固定。现在好感度和画像都照常记录：
+// 等级仍由身份决定，分数只是如实反映最近处得怎么样。
+func TestRelationshipEvaluationScoresOwnerLikeAnyoneElse(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_update":true,"delta":3,"confidence":0.99,"reason":"主人夸了我","portrait":[{"field":"occupation","value":"做后端开发","evidence":"我平时写 Go","source":"stated","confidence":0.97}]}`}
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["owner"] = UserMemoryProfile{UserID: "owner", Favorability: 100, MessageCount: 40}
@@ -288,19 +289,36 @@ func TestRelationshipEvaluationRunsForOwnerWithLockedScore(t *testing.T) {
 
 	decision, _, evaluated := runtime.evaluateRelationshipUpdate(context.Background(), event, PlainText(event.Segments), true)
 	if !evaluated {
-		t.Fatal("owner messages must still be evaluated so the owner gets a portrait")
+		t.Fatal("owner messages must be evaluated too")
 	}
-	if decision.effectiveDelta() != 0 {
-		t.Fatalf("owner favorability must stay locked: %#v", decision)
+	if decision.effectiveDelta() != 3 {
+		t.Fatalf("owner favorability should move like anyone else: %#v", decision)
 	}
 	if traits := decision.portraitTraits(time.Now()); len(traits) != 1 || traits[0].Field != PortraitFieldOccupation {
 		t.Fatalf("owner portrait = %#v", decision.portraitTraits(time.Now()))
 	}
-	if !requestMessagesContain(provider.request.Messages, `"favorability_locked":true`) {
-		t.Fatalf("payload did not tell the model the score is locked: %#v", provider.request.Messages)
+	if requestMessagesContain(provider.request.Messages, "favorability_locked") {
+		t.Fatalf("the locked-score payload field should be gone: %#v", provider.request.Messages)
 	}
 	if !requestMessagesContain(provider.request.Messages, `"field":"residence"`) {
 		t.Fatalf("payload did not carry the portrait field table: %#v", provider.request.Messages)
+	}
+}
+
+// 主人的分能降下来，等级不跟着掉——等级看身份，分数看相处。
+func TestRuntimeAppliesOwnerFavorabilityDrop(t *testing.T) {
+	memory := newMemoryUserMemoryStore()
+	memory.profiles["owner"] = UserMemoryProfile{UserID: "owner", Favorability: 100, MessageCount: 40}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetUserMemoryStore(memory)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", SenderName: "主人"}
+
+	profile, ok := runtime.applyEvaluatedRelationshipUpdate(event, -3, "主人在骂我", nil)
+	if !ok || profile.Favorability != 97 {
+		t.Fatalf("owner favorability = %#v ok=%v", profile, ok)
+	}
+	if policy := RelationshipPolicyFor(profile, "owner", "owner"); policy.Tier != RelationshipOwner || policy.Score != 97 {
+		t.Fatalf("owner tier must not follow the score: %#v", policy)
 	}
 }
 
