@@ -16,8 +16,12 @@ import (
 // "owner": true，就顺理成章地把机器人的主人说成群主。现在主人一律叫 bot_owner，
 // 光秃秃的 owner 只剩群主一个意思。
 func TestBotOwnerLabelsNeverCollideWithGroupOwnerRole(t *testing.T) {
-	// 群成员角色的取值来自 OneBot，改不了，只能让主人这边让开。
-	groupRoles := map[string]bool{"owner": true, "admin": true, "member": true}
+	// 各平台原始说法在入站时已经折成 group_*（见 NormalizeGroupRole），但主人的
+	// 标签仍然不能撞上任何一边——库里、日志里、第三方样例里都还有裸值。
+	groupRoles := map[string]bool{
+		"owner": true, "admin": true, "member": true, "creator": true, "administrator": true,
+		string(GroupRoleOwner): true, string(GroupRoleAdmin): true, string(GroupRoleMember): true,
+	}
 
 	if groupRoles[string(RelationshipOwner)] {
 		t.Fatalf("关系等级 %q 和群成员角色撞名了", RelationshipOwner)
@@ -61,5 +65,60 @@ func TestGroupPromptExplainsBotOwnerDistinction(t *testing.T) {
 	private := MessageEvent{Kind: EventKindPrivate, UserID: "1"}
 	if prompt := runtime.systemPromptWithRelationshipAndAgentTools(private, nil, false, relationship, true, nil); strings.Contains(prompt, promptGroupOwnerDistinction) {
 		t.Fatalf("私聊不该注入群主区分说明: %q", prompt)
+	}
+}
+
+// 群里的身份必须是平台无关的一套词：各平台的原始说法在入站时就折过来，模型和
+// 控制台永远只见到 group_* 这一套。
+func TestGroupRoleVocabularyIsPlatformNeutral(t *testing.T) {
+	tests := []struct {
+		platform string
+		raw      string
+		want     GroupRole
+	}{
+		{platform: "OneBot v11", raw: "owner", want: GroupRoleOwner},
+		{platform: "OneBot v11", raw: "admin", want: GroupRoleAdmin},
+		{platform: "OneBot v11", raw: "member", want: GroupRoleMember},
+		{platform: "Telegram", raw: "creator", want: GroupRoleOwner},
+		{platform: "Telegram", raw: "administrator", want: GroupRoleAdmin},
+		// 被禁言但人还在群里，身份上仍是普通成员。
+		{platform: "Telegram", raw: "restricted", want: GroupRoleMember},
+		// 已经不在群里的不是一种身份。
+		{platform: "Telegram", raw: "kicked", want: ""},
+		{platform: "Telegram", raw: "left", want: ""},
+		{platform: "大小写和空白", raw: "  OWNER ", want: GroupRoleOwner},
+		// 自己的输出要能原样读回来：老库里的事件存的是归一化之前的值。
+		{platform: "已归一化", raw: "group_owner", want: GroupRoleOwner},
+		{platform: "已归一化", raw: "group_member", want: GroupRoleMember},
+		{platform: "未知", raw: "whatever", want: ""},
+		{platform: "空", raw: "", want: ""},
+	}
+	for _, test := range tests {
+		if got := NormalizeGroupRole(test.raw); got != test.want {
+			t.Errorf("%s 的 %q 归一化成 %q，应该是 %q", test.platform, test.raw, got, test.want)
+		}
+	}
+
+	// 取值里不能出现平台名，也不能和主人撞名。
+	for _, role := range []GroupRole{GroupRoleOwner, GroupRoleAdmin, GroupRoleMember} {
+		if !strings.HasPrefix(string(role), "group_") {
+			t.Errorf("身份取值 %q 没带 group_ 前缀，和主人的 %s 分不开", role, RelationshipOwner)
+		}
+		for _, platform := range []string{"qq", "onebot", "telegram", "dingtalk", "feishu", "wecom"} {
+			if strings.Contains(string(role), platform) {
+				t.Errorf("身份取值 %q 里带了平台名 %q", role, platform)
+			}
+		}
+	}
+
+	if !GroupRoleCanConfigure(GroupRoleOwner) || !GroupRoleCanConfigure(GroupRoleAdmin) {
+		t.Error("群主和管理员都应该能配置本群")
+	}
+	if GroupRoleCanConfigure(GroupRoleMember) || GroupRoleCanConfigure("") {
+		t.Error("普通成员和未知身份不该能配置本群")
+	}
+	// 主人不是群身份：他的权限走身份判断，不该从这条路径混进来。
+	if GroupRoleCanConfigure(GroupRole(RelationshipOwner)) {
+		t.Errorf("%s 被当成了群身份", RelationshipOwner)
 	}
 }

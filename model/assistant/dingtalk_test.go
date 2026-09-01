@@ -27,8 +27,9 @@ func TestDingTalkEventFromCallbackGroupMessage(t *testing.T) {
 	if event.RawMessage != "帮我查下天气" {
 		t.Fatalf("text = %q, surrounding whitespace was not trimmed", event.RawMessage)
 	}
-	if event.SenderRole != "admin" {
-		t.Fatalf("role = %q, want admin", event.SenderRole)
+	// 入站就归一化：钉钉只给一个 isAdmin，落到事件里要和别的平台说同一个词。
+	if event.SenderRole != string(GroupRoleAdmin) {
+		t.Fatalf("role = %q, want %s", event.SenderRole, GroupRoleAdmin)
 	}
 	if event.Time != 1700000000 {
 		t.Fatalf("time = %d, want 1700000000 (milliseconds should fold to seconds)", event.Time)
