@@ -56,7 +56,7 @@ func (p *CapabilityKnowledgePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          capabilityKnowledgePluginID,
 		Name:        "能力知识库",
-		Version:     "0.1.0",
+		Version:     "0.1.1",
 		Description: "索引 Diana 核心能力和实时插件清单，通过本地稀疏检索向 Agent 提供与问题相关的能力说明。",
 		Official:    true,
 		BuiltIn:     true,
@@ -218,6 +218,7 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:runtime-model", Title: "自己在用什么模型", Content: "通过 diana.runtime_model 读出本轮实际生效的模型 ID、Provider 名称、接口协议和模型分组（对话/视觉理解等）；同一次对话里换了用途也会跟着变。它只读不改；主人要换模型时由 diana.llm_config 改模型分配里的对话、视觉理解、意图识别或图片生成四档之一。", Source: "core", Enabled: true},
 	{ID: "core:version", Title: "自己的版本与更新状态", Content: "通过 diana.version 报出当前版本号、是正式发布版还是源码构建、这台机器上这个版本什么时候装上的、本次运行了多久、跑在什么系统架构上，以及项目的开源地址、最新发布版本、有没有新版本可用、这台机器能不能自更新。", Source: "core", Enabled: true},
 	{ID: "core:notebook", Title: "笔记本与梗记忆", Content: "通过 diana.notebook 维护群里的梗、黑话、缩写和内部称呼：记下新说法、更新变了的释义、作废不再成立的条目，删错了还能恢复。当前消息里出现已收录的说法时，释义会自动进入回复上下文。", Source: "core", Enabled: true},
+	{ID: "core:thread-state", Title: "私有多轮任务状态", Content: "通过 diana.thread_state 保存 Diana 自己为当前用户和会话创建的短期私有状态，例如猜谜目标、临时计划和表单进度。状态会跨消息和进程重启恢复，完成、取消或超时后清理，不写入用户长期记忆，也不会出现在公开回复和调试追踪里。", Source: "core", Enabled: true},
 	{ID: "core:relationship", Title: "记忆好感度与权限", Content: "通过 diana.relationship 查询用户长期互动、好感度、关系等级和权限；主人可设置或增减其他人的好感度。", Source: "core", Enabled: true},
 	{ID: "core:tasks", Title: "提醒与周期订阅", Content: "通过 diana.reminder、diana.schedule、diana.rss 和 diana.tasks 创建、查询、修改、取消和删除提醒、周期查询及 RSS/Twitter 条件订阅；GitHub 仓库更新订阅在 WebUI 管理。", Source: "core", Enabled: true},
 	{ID: "core:history", Title: "聊天历史引用与撤回", Content: "持久保存 OneBot v11 消息、引用、图片和视频关键帧，重启后不丢；可读取合并转发和撤回记录并结合上下文回复。", Source: "core", Enabled: true},

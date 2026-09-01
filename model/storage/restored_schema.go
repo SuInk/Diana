@@ -165,6 +165,21 @@ CREATE TABLE IF NOT EXISTS memory_jobs (
   completed_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS thread_states (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  session TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  task_kind TEXT NOT NULL,
+  state_json TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled', 'expired')),
+  source_message_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS outbound_delivery_steps (
   turn_id TEXT NOT NULL,
   step_key TEXT NOT NULL,
@@ -261,6 +276,8 @@ CREATE INDEX IF NOT EXISTS idx_memory_items_scope_active ON memory_items(scope_k
 CREATE INDEX IF NOT EXISTS idx_memory_sources_message ON memory_sources(source_session, source_message_id);
 CREATE INDEX IF NOT EXISTS idx_memory_jobs_claim ON memory_jobs(status, available_at, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_memory_jobs_lease ON memory_jobs(status, lease_until);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_states_active_scope ON thread_states(profile_id, session, user_id, task_kind) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_thread_states_active_expiry ON thread_states(status, expires_at, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_claim_time ON inbound_events(status, available_at, event_time, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_lease ON inbound_events(status, lease_until);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_session_lease ON inbound_events(status, session, lease_until);

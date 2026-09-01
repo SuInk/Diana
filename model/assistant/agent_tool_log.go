@@ -121,6 +121,8 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				toolInput, toolOutput = sanitizeOneBotV11DebugToolCall(toolInput, toolOutput)
 			} else if runEvent.Tool == dianaRepositoryIssuesToolName {
 				toolInput, toolOutput = sanitizeRepositoryIssuesDebugToolCall(toolInput, toolOutput)
+			} else if runEvent.Tool == dianaThreadStateToolName {
+				toolInput, toolOutput = sanitizeThreadStateDebugToolCall(toolInput, toolOutput)
 			}
 			// 报错文本要补在脱敏之后：上面那层挡的是工具载荷，而错误信息不是载荷，
 			// 挡掉它只会让追踪里少一行、多一句「输出已省略」。
@@ -146,6 +148,21 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		log.Printf("chatbot agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
 			runEvent.TraceID, progressBar, progressLabel, runEvent.Phase, runEvent.ModelTurn, runEvent.Tool, runEvent.DurationMS)
 	}
+}
+
+func sanitizeThreadStateDebugToolCall(input map[string]any, output string) (map[string]any, string) {
+	redacted := map[string]any{
+		"operation":  strings.TrimSpace(configToolString(input, "operation")),
+		"task_kind":  strings.TrimSpace(configToolString(input, "task_kind")),
+		"input_keys": sortedMapKeys(input),
+	}
+	if version := threadStateInputInt(input, "expected_version"); version > 0 {
+		redacted["expected_version"] = version
+	}
+	if strings.TrimSpace(output) == "" {
+		return redacted, ""
+	}
+	return redacted, "[private thread state tool output omitted]"
 }
 
 func sanitizeOneBotV11DebugToolCall(input map[string]any, output string) (map[string]any, string) {
