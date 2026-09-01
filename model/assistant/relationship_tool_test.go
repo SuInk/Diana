@@ -147,8 +147,10 @@ func TestDianaRelationshipOwnerCanSetAndAdjustOthersFavorability(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "只有主人") {
 		t.Fatalf("non-owner error=%v", err)
 	}
+	// 主人的好感度现在也照常记录，但只由互动攒出来：自己填的数不叫记录，而且
+	// 「给他加 5 分」被认成主人自己时正好在这里兜住。
 	_, err = ownerTool.Run(context.Background(), map[string]any{"operation": "set", "target_user_id": "10001", "value": 0})
-	if err == nil || !strings.Contains(err.Error(), "不能修改主人") {
+	if err == nil || !strings.Contains(err.Error(), "不能自己给自己设置") {
 		t.Fatalf("owner self error=%v", err)
 	}
 }
@@ -215,5 +217,123 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 		if requestMessagesContain(provider.requests[1].Messages, unwanted) {
 			t.Fatalf("relationship guidance still mandates a field dump (%q)", unwanted)
 		}
+	}
+}
+
+// 画像和好感度一样是群里公开的：普通成员查别人也拿得到。榜单不带画像是体积
+// 考虑，不是权限——那条路对主人同样不带。
+func TestDianaRelationshipToolSharesPortraitWithGroupMembers(t *testing.T) {
+	memory := newMemoryUserMemoryStore()
+	memory.profiles["10005"] = UserMemoryProfile{
+		UserID:       "10005",
+		DisplayName:  "Alice",
+		Favorability: 30,
+		MessageCount: 40,
+		Portrait: []UserPortraitTrait{
+			{Field: PortraitFieldResidence, Label: "居住地点", Value: "住在杭州", Source: PortraitSourceStated},
+		},
+	}
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_group_member_info": {"group_id": 20002, "user_id": 10005, "nickname": "Alice", "role": "member"},
+		"get_group_member_list": {"members": []any{
+			map[string]any{"group_id": "20002", "user_id": "10005", "nickname": "Alice"},
+		}},
+	}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "10000"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetUserMemoryStore(memory)
+
+	strangerEvent := MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20002", UserID: "10009"}
+	raw, err := newDianaRelationshipTool(runtime, strangerEvent).Run(context.Background(), map[string]any{
+		"operation": "get", "target_user_id": "10005",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaRelationshipResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Target == nil || result.Target.Favorability != 30 {
+		t.Fatalf("public relationship data should still be readable: %#v", result.Target)
+	}
+	if len(result.Target.Portrait) != 1 || !strings.Contains(raw, "住在杭州") {
+		t.Fatalf("an ordinary member should be able to read another member's portrait: %s", raw)
+	}
+
+	// 榜单不带画像：一次最多 50 人，七栏画像会把结果撑爆，而排行用不到它。
+	// 这条对主人同样成立，所以它不是权限。
+	ownerEvent := MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20002", UserID: "10001"}
+	listRaw, err := newDianaRelationshipTool(runtime, ownerEvent).Run(context.Background(), map[string]any{"operation": "list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(listRaw, "住在杭州") {
+		t.Fatalf("the ranking should stay statistics-only: %s", listRaw)
+	}
+
+	// 本人和主人自然也查得到。
+	selfEvent := MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20002", UserID: "10005"}
+	selfRaw, err := newDianaRelationshipTool(runtime, selfEvent).Run(context.Background(), map[string]any{"operation": "get"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(selfRaw, "住在杭州") {
+		t.Fatalf("the person themselves cannot read their own portrait: %s", selfRaw)
+	}
+	ownerRaw, err := newDianaRelationshipTool(runtime, ownerEvent).Run(context.Background(), map[string]any{
+		"operation": "get", "target_user_id": "10005",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ownerRaw, "住在杭州") {
+		t.Fatalf("bot owner cannot read a member portrait: %s", ownerRaw)
+	}
+}
+
+func TestDianaRelationshipToolRecordsAndForgetsPortrait(t *testing.T) {
+	memory := newMemoryUserMemoryStore()
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "10000"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetUserMemoryStore(memory)
+	event := MessageEvent{Kind: EventKindPrivate, SelfID: "10000", UserID: "10005", SenderName: "Alice"}
+	tool := newDianaRelationshipTool(runtime, event)
+
+	if _, err := tool.Run(context.Background(), map[string]any{
+		"operation": "portrait_set", "portrait_field": "occupation", "portrait_value": "做后端开发",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored := memory.profiles["10005"].Portrait
+	if len(stored) != 1 || stored[0].Field != PortraitFieldOccupation || stored[0].Source != PortraitSourceManual {
+		t.Fatalf("portrait was not recorded: %#v", stored)
+	}
+	// 当面记下的画像不算一次新的互动，互动次数不该被它顶上去。
+	if memory.profiles["10005"].MessageCount != 0 {
+		t.Fatalf("portrait write bumped the interaction count: %#v", memory.profiles["10005"])
+	}
+
+	if _, err := tool.Run(context.Background(), map[string]any{
+		"operation": "portrait_forget", "portrait_field": "occupation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(memory.profiles["10005"].Portrait) != 0 {
+		t.Fatalf("portrait was not cleared: %#v", memory.profiles["10005"].Portrait)
+	}
+
+	// 别人的画像只有主人能改。
+	if _, err := tool.Run(context.Background(), map[string]any{
+		"operation": "portrait_set", "target_user_id": "10006", "portrait_field": "residence", "portrait_value": "住在上海",
+	}); err == nil {
+		t.Fatal("a member must not be able to edit someone else's portrait")
+	}
+	ownerTool := newDianaRelationshipTool(runtime, MessageEvent{Kind: EventKindPrivate, SelfID: "10000", UserID: "10001"})
+	if _, err := ownerTool.Run(context.Background(), map[string]any{
+		"operation": "portrait_set", "target_user_id": "10006", "portrait_field": "residence", "portrait_value": "住在上海",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(memory.profiles["10006"].Portrait) != 1 {
+		t.Fatalf("owner edit did not land: %#v", memory.profiles["10006"])
 	}
 }

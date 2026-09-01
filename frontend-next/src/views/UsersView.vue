@@ -33,7 +33,7 @@
             class="log-row user-row"
             role="button"
             tabindex="0"
-            :aria-label="`查看 ${user.display_name || user.user_id} 的长期记忆`"
+            :aria-label="`查看 ${user.display_name || user.user_id} 的画像与长期记忆`"
             @click="openDetail(user)"
             @keydown.enter="openDetail(user)"
           >
@@ -44,7 +44,7 @@
                 <span class="badge" :class="favorabilityClass(user.favorability)">好感 {{ user.favorability }}</span>
               </div>
               <p class="log-detail">
-                记忆 {{ user.memory_count ?? 0 }} 条 · 消息 {{ formatNumber(user.message_count) }} 条
+                画像 {{ user.portrait_count ?? 0 }} 条 · 记忆 {{ user.memory_count ?? 0 }} 条 · 消息 {{ formatNumber(user.message_count) }} 条
                 <template v-if="user.last_seen_at"> · 最近活跃 {{ formatRelative(user.last_seen_at) }}</template>
               </p>
             </div>
@@ -81,6 +81,26 @@
             最近活跃 {{ formatTime(detail.profile.last_seen_at) }}
           </span>
         </div>
+
+        <section>
+          <h3 class="detail-section-title">人员画像（{{ detail.profile.portrait?.length ?? 0 }} 条）</h3>
+          <div v-if="portraitGroups.length > 0" class="portrait-table">
+            <div v-for="group in portraitGroups" :key="group.field" class="portrait-row">
+              <span class="portrait-label">{{ group.label }}</span>
+              <div class="portrait-values">
+                <span v-for="(trait, index) in group.traits" :key="index" class="portrait-value">
+                  {{ trait.value }}
+                  <span v-if="trait.source === 'inferred'" class="badge" title="机器人根据聊天推断，不是本人明说">推断</span>
+                </span>
+              </div>
+            </div>
+          </div>
+          <EmptyState
+            v-else
+            title="还没有画像"
+            description="聊天里提到居住地点、职业、作息、生活习惯这类长期情况时，会被记进这里。"
+          />
+        </section>
 
         <section>
           <h3 class="detail-section-title">长期记忆（{{ detail.profile.memories?.length ?? 0 }} 条）</h3>
@@ -131,7 +151,8 @@ import {
   getAssistantUser,
   listAssistantUsers,
   type AssistantUserDetailResponse,
-  type UserMemoryProfile
+  type UserMemoryProfile,
+  type UserPortraitTrait
 } from "../api";
 import { formatNumber, formatRelative, formatTime } from "../format";
 import { toastError } from "../toast";
@@ -150,10 +171,26 @@ const detail = ref<AssistantUserDetailResponse | null>(null);
 const detailLoading = ref(false);
 
 const hasMore = computed(() => users.value.length < total.value);
+
+// 画像按后端给的栏目顺序排，空栏不显示：一整列「暂无」比没有更难读。
+const portraitGroups = computed<{ field: string; label: string; traits: UserPortraitTrait[] }[]>(() => {
+  const traits = detail.value?.profile.portrait ?? [];
+  if (traits.length === 0) return [];
+  const specs = detail.value?.portrait_fields ?? [];
+  const order = specs.length > 0 ? specs : traits.map((trait) => ({ field: trait.field, label: trait.label }));
+  const groups: { field: string; label: string; traits: UserPortraitTrait[] }[] = [];
+  for (const spec of order) {
+    const matched = traits.filter((trait) => trait.field === spec.field);
+    if (matched.length > 0) {
+      groups.push({ field: spec.field, label: spec.label, traits: matched });
+    }
+  }
+  return groups;
+});
 const detailTitle = computed(() => {
   if (!selected.value) return "";
   const name = selected.value.display_name || selected.value.user_id;
-  return `${name} 的长期记忆`;
+  return `${name} 的画像与记忆`;
 });
 
 async function fetchUsers(offset: number): Promise<void> {
@@ -248,6 +285,39 @@ onMounted(() => {
   font-size: 13px;
   margin: 0 0 8px;
   color: var(--text-secondary);
+}
+
+.portrait-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.portrait-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.portrait-label {
+  flex: 0 0 76px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.portrait-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.portrait-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .memory-item {

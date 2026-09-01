@@ -13,6 +13,10 @@ type UserMemoryUpdate struct {
 	FavorabilityChangeReason   string `json:"favorability_change_reason,omitempty"`
 	FavorabilityChangeOperator string `json:"favorability_change_operator,omitempty"`
 	Administrative             bool   `json:"administrative,omitempty"`
+	// PortraitTraits 是本次要并进画像的观察，PortraitRemovals 是要清空的栏目。
+	// 两者都只在给出时才动画像，普通的一次互动不会碰它。
+	PortraitTraits   []UserPortraitTrait `json:"portrait_traits,omitempty"`
+	PortraitRemovals []UserPortraitField `json:"portrait_removals,omitempty"`
 }
 
 type UserFavorabilityChange struct {
@@ -35,8 +39,11 @@ type UserMemoryProfile struct {
 	Favorability int              `json:"favorability"`
 	MessageCount int              `json:"message_count"`
 	Memories     []UserMemoryItem `json:"memories,omitempty"`
-	LastSeenAt   time.Time        `json:"last_seen_at,omitempty"`
-	UpdatedAt    time.Time        `json:"updated_at,omitempty"`
+	// Portrait 是这个人的画像：住在哪、做什么、有什么生活习惯。它和 Memories
+	// 的分工是「这个人是谁」对「这个人说过什么」。
+	Portrait   []UserPortraitTrait `json:"portrait,omitempty"`
+	LastSeenAt time.Time           `json:"last_seen_at,omitempty"`
+	UpdatedAt  time.Time           `json:"updated_at,omitempty"`
 }
 
 type UserMemoryItem struct {

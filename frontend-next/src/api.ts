@@ -1656,14 +1656,36 @@ export interface UserMemoryItem {
   at?: string;
 }
 
+/** 人员画像里的一条：这个人住在哪、做什么、有什么生活习惯。 */
+export interface UserPortraitTrait {
+  field: string;
+  label: string;
+  value: string;
+  evidence?: string;
+  confidence?: number;
+  /** stated 是本人明说的，inferred 是机器人据上下文推断的，manual 是当面记下的。 */
+  source?: string;
+  updated_at?: string;
+}
+
+/** 画像栏目表，由后端给出，前端不再自己抄一份字段到中文的映射。 */
+export interface PortraitFieldSpec {
+  field: string;
+  label: string;
+  hint: string;
+  capacity: number;
+}
+
 export interface UserMemoryProfile {
   user_id: string;
   display_name?: string;
   favorability: number;
   message_count: number;
   memories?: UserMemoryItem[];
-  /** 列表接口不带记忆正文，只带条数；详情接口带完整 memories。 */
+  portrait?: UserPortraitTrait[];
+  /** 列表接口不带记忆和画像正文，只带条数；详情接口带完整内容。 */
   memory_count?: number;
+  portrait_count?: number;
   last_seen_at?: string;
   updated_at?: string;
 }
@@ -1693,6 +1715,7 @@ export interface AssistantUsersResponse {
 export interface AssistantUserDetailResponse {
   profile: UserMemoryProfile;
   favorability_changes: UserFavorabilityChange[];
+  portrait_fields: PortraitFieldSpec[];
 }
 
 export function listAssistantUsers(query = "", limit = 50, offset = 0, profile = ""): Promise<AssistantUsersResponse> {
