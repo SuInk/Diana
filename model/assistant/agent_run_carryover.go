@@ -79,7 +79,7 @@ func agentRunUnfinished(reason string) bool {
 func agentCarryoverEntries(steps []agent.Step) []string {
 	entries := make([]string, 0, len(steps))
 	for _, step := range steps {
-		if step.Skipped || strings.TrimSpace(step.Tool) == "" {
+		if step.Skipped || strings.TrimSpace(step.Tool) == "" || step.Tool == dianaThreadStateToolName {
 			continue
 		}
 		keys := make([]string, 0, len(step.Input))

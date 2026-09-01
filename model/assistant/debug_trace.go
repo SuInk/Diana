@@ -108,7 +108,10 @@ func sanitizeDebugGenerateRequest(req llm.GenerateRequest) llm.GenerateRequest {
 		cloned.Messages[index] = message
 		if oneBotV11DebugProtocolMessage(message) {
 			cloned.Messages[index].Content = "[OneBot v11 Agent protocol payload omitted]"
+		} else if privateThreadStateDebugMessage(message) {
+			cloned.Messages[index].Content = "[private thread state payload omitted]"
 		}
+		cloned.Messages[index].ToolCalls = sanitizeDebugThreadStateToolCalls(message.ToolCalls)
 		cloned.Messages[index].Parts = append([]llm.ContentPart(nil), message.Parts...)
 		for partIndex := range cloned.Messages[index].Parts {
 			part := &cloned.Messages[index].Parts[partIndex]
@@ -125,10 +128,68 @@ func sanitizeDebugGenerateResponse(req llm.GenerateRequest, response *llm.Genera
 		return nil
 	}
 	cloned := *response
+	cloned.ToolCalls = sanitizeDebugThreadStateToolCalls(response.ToolCalls)
+	if responseContainsThreadStateToolCall(response) || strings.Contains(cloned.Text, dianaThreadStateToolName) {
+		cloned.Text = "[private thread state model payload omitted]"
+	}
 	if strings.Contains(cloned.Text, dianaOneBotV11ToolName) || requestContainsOneBotV11DebugProtocol(req) {
 		cloned.Text = "[OneBot v11 model payload omitted]"
 	}
 	return &cloned
+}
+
+func privateThreadStateDebugMessage(message llm.Message) bool {
+	if message.ToolName == dianaThreadStateToolName || strings.Contains(message.Content, privateThreadStateMarker) {
+		return true
+	}
+	if strings.Contains(message.Content, dianaThreadStateToolName) && (message.Role == llm.RoleAssistant || message.Role == llm.RoleTool) {
+		return true
+	}
+	for _, call := range message.ToolCalls {
+		if call.Name == dianaThreadStateToolName {
+			return true
+		}
+	}
+	return false
+}
+
+func responseContainsThreadStateToolCall(response *llm.GenerateResponse) bool {
+	if response == nil {
+		return false
+	}
+	for _, call := range response.ToolCalls {
+		if call.Name == dianaThreadStateToolName {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeDebugThreadStateToolCalls(calls []llm.ToolCall) []llm.ToolCall {
+	cloned := make([]llm.ToolCall, len(calls))
+	for index, call := range calls {
+		cloned[index] = call
+		if call.Name != dianaThreadStateToolName {
+			cloned[index].Arguments = cloneStringAnyMap(call.Arguments)
+			continue
+		}
+		cloned[index].Arguments = map[string]any{
+			"operation": strings.TrimSpace(configToolString(call.Arguments, "operation")),
+			"task_kind": strings.TrimSpace(configToolString(call.Arguments, "task_kind")),
+		}
+	}
+	return cloned
+}
+
+func cloneStringAnyMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
 }
 
 func requestContainsOneBotV11DebugProtocol(req llm.GenerateRequest) bool {

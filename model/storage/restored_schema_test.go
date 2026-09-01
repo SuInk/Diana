@@ -72,3 +72,17 @@ INSERT INTO memory_items (
 		t.Fatalf("thread kind rejected by schema: %v", err)
 	}
 }
+
+func TestThreadStatesSchemaIsPrivateAndVersioned(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "thread-state-schema.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	for _, name := range []string{"thread_states", "idx_thread_states_active_scope", "idx_thread_states_active_expiry"} {
+		var found string
+		if err := store.db.QueryRow(`SELECT name FROM sqlite_master WHERE name = ?`, name).Scan(&found); err != nil {
+			t.Fatalf("schema object %q missing: %v", name, err)
+		}
+	}
+}
