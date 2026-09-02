@@ -4,7 +4,10 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 )
 
@@ -47,6 +50,41 @@ type UserRomanceState struct {
 // romanceActive 报告这份档案当前是否处于恋人关系。
 func romanceActive(profile UserMemoryProfile) bool {
 	return profile.Romance != nil && profile.Romance.Active
+}
+
+// currentRomancePartner 找这台机器人当前的恋人（excludeUserID 之外的）。
+//
+// 恋爱是单偶的：同一时间只有一位。这个约束靠确立时扫一遍档案来守——恋人通常
+// 是零或一个，扫描代价可以忽略。存储不支持列表（测试里的简化实现）或扫描出错
+// 时返回 false：查不了全局宁可放行，也不拿故障当理由误拒别人的表白。
+func (r *Runtime) currentRomancePartner(ctx context.Context, profileID, excludeUserID string) (UserMemoryProfile, bool) {
+	r.mu.RLock()
+	store := r.userMemory
+	r.mu.RUnlock()
+	lister, ok := store.(UserMemoryListStore)
+	if !ok {
+		return UserMemoryProfile{}, false
+	}
+	excludeUserID = strings.TrimSpace(excludeUserID)
+	scanned := 0
+	for offset := 0; scanned < romanceGreetingScanLimit; {
+		profiles, _, err := lister.ListUserMemories(ctx, strings.TrimSpace(profileID), "", 100, offset)
+		if err != nil {
+			log.Printf("chatbot romance partner scan failed: %v", err)
+			return UserMemoryProfile{}, false
+		}
+		if len(profiles) == 0 {
+			return UserMemoryProfile{}, false
+		}
+		for _, profile := range profiles {
+			scanned++
+			if romanceActive(profile) && strings.TrimSpace(profile.UserID) != excludeUserID {
+				return profile, true
+			}
+		}
+		offset += len(profiles)
+	}
+	return UserMemoryProfile{}, false
 }
 
 // applyRomancePolicy 把恋人状态叠加到已经算好的关系策略上。
