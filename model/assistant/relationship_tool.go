@@ -92,7 +92,7 @@ func (t *dianaRelationshipTool) Description() string {
 // 里，而是随结果一起返回（见 relationshipReplyGuidance）。
 func (t *dianaRelationshipTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：get 查单个用户；list 查当前群内已有互动记录的成员并按好感度排序（群内成员均可使用，不得以隐私或权限为由拒绝）；set 直接设置、adjust 增减好感度，后两者仅机器人主人可用且不增加互动次数；portrait_set 记下画像里的一栏，portrait_forget 清空画像里的一栏；romance_start 在当前发言者本人明确表白时确立恋人关系（受好感度门槛约束，可能被婉拒），romance_end 在本人提出分手时解除，两者都要求人机恋模式已开启。",
+		"operation": toolEnumParam("要执行的操作：get 查单个用户；list 查当前群内已有互动记录的成员并按好感度排序（群内成员均可使用，不得以隐私或权限为由拒绝）；set 直接设置、adjust 增减好感度，后两者仅机器人主人可用且不增加互动次数；portrait_set 记下画像里的一栏，portrait_forget 清空画像里的一栏；romance_start 在当前发言者本人明确表白时确立恋人关系（单偶：已有恋人或好感度不够都会被婉拒），romance_end 在本人提出分手时解除，两者都要求人机恋模式已开启。",
 			"get", "list", "set", "adjust", "portrait_set", "portrait_forget", "romance_start", "romance_end"),
 		"target_user_id": toolStringParam("目标账号。get 可省略：消息里 @ 了成员就查该成员，否则查当前发言者；set 和 adjust 必填，且不能指向主人自己（主人的好感度由互动自动记录）；画像操作省略表示当前发言者，只有主人能改别人的画像。"),
 		"portrait_field": toolEnumParam("portrait_set 和 portrait_forget 必填：要写或要清空的画像栏目，"+portraitFieldSchemaHint(), PortraitFieldIDs()...),
@@ -276,6 +276,17 @@ func (t *dianaRelationshipTool) runRomanceOperation(ctx context.Context, operati
 			Action:  "noop",
 			Message: "你们已经是恋人了，不需要再确立一次；可以顺着这份心意回应对方。",
 			Target:  &snapshot,
+		})
+	}
+	// 恋爱是单偶的：已经有恋人时，任何人的表白都被婉拒，好感度再高也一样。
+	// 这个理由比门槛更根本，所以排在门槛之前——拒绝的原因要说真话。
+	if _, taken := t.runtime.currentRomancePartner(ctx, t.event.ProfileID, targetID); taken {
+		return marshalDianaRelationshipResult(dianaRelationshipResult{
+			OK:     true,
+			Action: "declined",
+			Message: "机器人婉拒了这次表白：它已经有确立关系的恋人了，同一时间只会有一位。" +
+				"用自己的语气温柔而明确地拒绝：可以说明自己已经有喜欢的人，不要透露对方是谁，" +
+				"不要嘲讽，也不要留下模糊的希望；对方可以继续做重要的朋友。",
 		})
 	}
 	// 主人身份免门槛没有道理：恋爱看的是相处，不是权限。门槛对谁都一样。

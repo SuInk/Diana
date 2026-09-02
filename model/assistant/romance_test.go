@@ -174,6 +174,50 @@ func TestRomanceStartRequiresGateAndThreshold(t *testing.T) {
 	}
 }
 
+func TestRomanceStartIsMonogamous(t *testing.T) {
+	memory := newMemoryUserMemoryStore()
+	// 10005 已是恋人；10006 条件完全够，但机器人已经有对象了。
+	memory.profiles["10005"] = romanceProfile(90, 100, time.Now().AddDate(0, -2, 0))
+	memory.profiles["10006"] = UserMemoryProfile{UserID: "10006", Favorability: 120, MessageCount: 200}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", RomanceEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetUserMemoryStore(memory)
+
+	suitor := newDianaRelationshipTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10006"})
+	raw, err := suitor.Run(context.Background(), map[string]any{"operation": "romance_start"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaRelationshipResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || result.Action != "declined" || !strings.Contains(result.Message, "已经有") {
+		t.Fatalf("result = %#v", result)
+	}
+	// 不透露现任是谁，也不落任何状态。
+	if strings.Contains(result.Message, "10005") {
+		t.Fatalf("partner identity leaked: %q", result.Message)
+	}
+	if memory.profiles["10006"].Romance != nil {
+		t.Fatal("declined confession wrote state")
+	}
+
+	// 现任分手之后，同样的表白就能成。
+	if _, err := newDianaRelationshipTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10005"}).Run(context.Background(), map[string]any{"operation": "romance_end"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = suitor.Run(context.Background(), map[string]any{"operation": "romance_start"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != "romance_started" || memory.profiles["10006"].Romance == nil {
+		t.Fatalf("post-breakup confession failed: %#v", result)
+	}
+}
+
 func TestRomanceStartOnlyForCurrentSpeaker(t *testing.T) {
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["10005"] = UserMemoryProfile{UserID: "10005", Favorability: 80, MessageCount: 60}
