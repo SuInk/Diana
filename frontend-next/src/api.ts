@@ -454,6 +454,10 @@ export interface ReplyGate {
   level_unknown_policy?: "allow" | "deny";
   exempt_users?: string[];
   blocked_users?: string[];
+  /** 人员准入模式；whitelist 表示只回 allowed_users 里的人，缺省等同 blacklist。 */
+  user_admission?: "blacklist" | "whitelist";
+  /** 仅 whitelist 模式生效。 */
+  allowed_users?: string[];
   active_hours_enabled?: boolean;
   /** HH:MM；结束早于开始表示跨夜。 */
   active_start?: string;

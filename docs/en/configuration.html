@@ -129,7 +129,8 @@ https://HOST/api/channels/wecom/callback</code></pre>
           <article><h3>Enabled state</h3><p>Stopping one group does not affect other groups or direct messages.</p></article>
           <article><h3>Triggers and unprompted replies</h3><p>Explicit mentions, quotes, trigger words and semantic routing are evaluated in layers; an explicit mention outranks a quote.</p></article>
           <article><h3>Reply hours</h3><p>Same-day and overnight windows with IANA time zones. This is group policy and never enters the model prompt.</p></article>
-          <article><h3>Muted accounts</h3><p>The list applies to the current group only, not to the same user elsewhere or in direct messages.</p></article>
+          <article><h3>Member admission</h3><p>Blacklist (default) replies to everyone but the muted accounts; whitelist replies only to the listed accounts and sends nothing at all to the rest, not even the quiet-hours notice. The owner is exempt from the whitelist.</p></article>
+          <article><h3>Muted accounts</h3><p>The group list and the global list are a union: adding someone here never drops the global mute list. Level and hours, by contrast, are taken over wholesale by "set reply rules for this group".</p></article>
           <article><h3>Persona and context</h3><p>Group-level prompts, history depth and reply length can override the bot defaults.</p></article>
           <article><h3>Tool overrides</h3><p>Each group can follow the global setting, or force a specific tool or plugin on or off.</p></article>
         </div>
