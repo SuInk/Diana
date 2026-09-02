@@ -866,7 +866,7 @@
                     </button>
                   </div>
                 </div>
-                <input ref="personaFileInput" type="file" accept="application/json" style="display: none" @change="importPersonaFile" />
+                <input ref="personaFileInput" type="file" accept="application/json,.json,image/png,.png" style="display: none" @change="importPersonaFile" />
                 <div v-if="personaSaverOpen" class="persona-saver">
                   <input
                     ref="personaNameInput"
@@ -897,7 +897,7 @@
                     </span>
                   </div>
                 </div>
-                <span v-if="!personaLibrary.length" class="hint">还没存过人设。把下面几项调好，点「存为人设」就能收进来，之后一键换回。</span>
+                <span v-if="!personaLibrary.length" class="hint">还没存过人设。把下面几项调好，点「存为人设」就能收进来，之后一键换回。「导入」还认 SillyTavern 角色卡（.json 或内嵌卡的 .png）：卡的设定拼成人设，内嵌世界书顺路并进世界书。</span>
                 <span v-else class="hint">点一下套用到下面四项，确认后按保存才生效；库里的改动不会影响已经保存的机器人。</span>
               </div>
               <div class="field">
@@ -1090,6 +1090,11 @@
                   <label for="world-book-keywords">触发词（逗号分隔）</label>
                   <input id="world-book-keywords" v-model="worldBookKeywordsDraft" class="input" placeholder="港口,码头" />
                   <span class="hint">最近对话里出现任意一个就注入本条；常驻节点不需要填。</span>
+                </div>
+                <div class="field">
+                  <label for="world-book-secondary">副触发词（可选，逗号分隔）</label>
+                  <input id="world-book-secondary" v-model="worldBookSecondaryDraft" class="input" placeholder="枝江" />
+                  <span class="hint">填了之后主词命中还要求任一副词也在场才注入，用来收窄太宽的主词（酒馆的 AND ANY）。</span>
                 </div>
                 <div class="field">
                   <label class="switch">
@@ -1331,6 +1336,7 @@ import {
   savePersona,
   deletePersona,
   importPersonas,
+  importCharacterCard,
   PERSONA_EXPORT_VERSION,
   type Persona,
   listWorldBook,
@@ -1740,6 +1746,42 @@ function exportPersona(persona: Persona): void {
   downloadPersonaFile(`diana-persona-${personaFileSlug(persona.name)}-${new Date().toISOString().slice(0, 10)}.json`, personaExportPayload([persona]));
 }
 
+// fileToBase64 读出文件的 base64 正文。走 dataURL 再剥前缀：对二进制 PNG 和
+// UTF-8 JSON 一视同仁，不用自己分块喂 btoa。
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
+    reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+// looksLikeCharacterCard 判断一段 JSON 是不是 SillyTavern 角色卡：有 spec 标记、
+// 或带着卡特有的字段（first_mes / mes_example / data.name）。人设文件和世界书
+// 文件都没有这些。
+function looksLikeCharacterCard(parsed: unknown): boolean {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const record = parsed as Record<string, any>;
+  if (typeof record.spec === "string" && record.spec.startsWith("chara_card")) return true;
+  if (record.first_mes !== undefined || record.mes_example !== undefined) return true;
+  return Boolean(record.data && typeof record.data === "object" && typeof record.data.name === "string");
+}
+
+async function importCharacterCardFile(file: File): Promise<void> {
+  const result = await importCharacterCard(await fileToBase64(file));
+  personaLibrary.value = result.personas ?? [];
+  if (result.nodes?.length) {
+    worldBookNodes.value = result.nodes;
+  }
+  const notes: string[] = [];
+  if (result.persona) notes.push(`已导入角色卡「${result.persona.name}」为人设${result.renamed ? "（重名已改名）" : ""}`);
+  else if (result.skipped) notes.push("这张卡的人设已经在库里，跳过");
+  if (result.book_imported) notes.push(`世界书并入 ${result.book_imported} 条${result.book_name ? `（${result.book_name}）` : ""}`);
+  if (result.book_dropped) notes.push(`${result.book_dropped} 条无效已忽略`);
+  toastSuccess(notes.join("，") || "角色卡已处理");
+}
+
 async function importPersonaFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -1749,7 +1791,16 @@ async function importPersonaFile(event: Event): Promise<void> {
 
   personaLibraryBusy.value = true;
   try {
+    // PNG 一定是内嵌卡，直接走角色卡通道；JSON 先解析再看长相。
+    if (file.type === "image/png" || file.name.toLowerCase().endsWith(".png")) {
+      await importCharacterCardFile(file);
+      return;
+    }
     const parsed = JSON.parse(await file.text()) as unknown;
+    if (looksLikeCharacterCard(parsed)) {
+      await importCharacterCardFile(file);
+      return;
+    }
     // 导出文件是 {personas: [...]}，但手写或从别处拿到的可能就是个数组，
     // 甚至是单独一套。三种都收下，没必要为格式挑剔到让人回去改文件。
     const list = Array.isArray(parsed)
@@ -1799,6 +1850,7 @@ const worldBookBusy = ref(false);
 const worldBookEditorOpen = ref(false);
 const worldBookDraft = ref<WorldBookNode>({ id: "", title: "" });
 const worldBookKeywordsDraft = ref("");
+const worldBookSecondaryDraft = ref("");
 const worldBookDraftEnabled = ref(true);
 const worldBookFileInput = ref<HTMLInputElement | null>(null);
 
@@ -1863,7 +1915,10 @@ function worldBookNodeSummary(row: WorldBookRow): string {
   if (row.node.enabled === false) parts.push("已停用");
   else if (worldBookRowDisabled(row)) parts.push("随父级停用");
   if (row.node.always_on) parts.push("常驻");
-  else if (row.node.keywords?.length) parts.push(`触发：${row.node.keywords.join("、")}`);
+  else if (row.node.keywords?.length) {
+    parts.push(`触发：${row.node.keywords.join("、")}`);
+    if (row.node.secondary_keywords?.length) parts.push(`且需：${row.node.secondary_keywords.join("、")}`);
+  }
   else if (row.node.content?.trim()) parts.push("未设注入方式，仅作目录");
   else parts.push("目录");
   return parts.join(" · ");
@@ -1883,6 +1938,7 @@ function openWorldBookEditor(node?: WorldBookNode): void {
     ? { ...node }
     : { id: "", title: "", parent_id: "", content: "", always_on: false };
   worldBookKeywordsDraft.value = (node?.keywords ?? []).join(",");
+  worldBookSecondaryDraft.value = (node?.secondary_keywords ?? []).join(",");
   worldBookDraftEnabled.value = node?.enabled !== false;
   worldBookEditorOpen.value = true;
 }
@@ -1898,6 +1954,7 @@ async function storeWorldBookNode(): Promise<void> {
       title: draft.title,
       content: draft.content ?? "",
       keywords: worldBookKeywordsDraft.value.split(/[,，]/).map((keyword) => keyword.trim()).filter(Boolean),
+      secondary_keywords: worldBookSecondaryDraft.value.split(/[,，]/).map((keyword) => keyword.trim()).filter(Boolean),
       always_on: draft.always_on ?? false,
       enabled: worldBookDraftEnabled.value
     });
@@ -1943,6 +2000,7 @@ function exportWorldBook(): void {
         title: node.title,
         content: node.content ?? "",
         keywords: node.keywords ?? [],
+        secondary_keywords: node.secondary_keywords ?? [],
         always_on: node.always_on ?? false,
         enabled: node.enabled !== false
       }))

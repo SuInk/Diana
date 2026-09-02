@@ -19,7 +19,8 @@ import type {
   StatsSnapshot,
   UpdateStatus,
   UserFavorabilityChange,
-  UserMemoryProfile
+  UserMemoryProfile,
+  WorldBookNode
 } from "./api";
 
 export const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
@@ -161,7 +162,7 @@ const demoPersonas = [
 ];
 
 // 世界书的演示数据：一条常驻骨架加一条触发式细节，让树形和两种注入方式都看得到。
-const demoWorldBook = [
+const demoWorldBook: WorldBookNode[] = [
   { id: "world-1", parent_id: "", title: "枝江", content: "故事发生在虚构城市枝江，机器人就住在群主的服务器上。", keywords: [], always_on: true, enabled: true },
   { id: "world-2", parent_id: "world-1", title: "港口", content: "枝江港常年有雾，群友们约好雾散了一起去钓鱼。", keywords: ["港口", "码头", "钓鱼"], always_on: false, enabled: true }
 ];
@@ -681,11 +682,57 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     if (index >= 0) demoPersonas.splice(index, 1);
     return json({ personas: demoPersonas });
   }
+  if (path === "/api/assistant/personas/import-card") {
+    // 演示模式只解 JSON 卡；PNG 卡要真实后端的块扫描。
+    try {
+      const parsed = JSON.parse(atob(String(body.card_base64 ?? ""))) as Record<string, any>;
+      const data = (parsed.data && typeof parsed.data === "object" ? parsed.data : parsed) as Record<string, any>;
+      const name = String(data.name ?? "").trim();
+      if (!name && !String(data.description ?? "").trim()) throw new Error("empty card");
+      const persona = {
+        id: `persona-card-${demoPersonas.length + 1}`,
+        name: name || "未命名角色",
+        system_prompt: [`你是${name || "未命名角色"}。`, String(data.description ?? ""), String(data.personality ?? "")].filter(Boolean).join("\n"),
+        reply_style: "",
+        self_reference: "",
+        sentence_enders: ""
+      };
+      demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
+      let bookImported = 0;
+      const entries = data.character_book?.entries;
+      const entryList = Array.isArray(entries) ? entries : entries && typeof entries === "object" ? Object.values(entries) : [];
+      for (const entry of entryList as Array<Record<string, any>>) {
+        const keywords = (Array.isArray(entry.key) ? entry.key : Array.isArray(entry.keys) ? entry.keys : []).map(String);
+        demoWorldBook.push({
+          id: `world-card-${demoWorldBook.length + 1}`,
+          parent_id: "",
+          title: String(entry.comment ?? entry.name ?? "").trim() || keywords[0] || String(entry.content ?? "").slice(0, 16),
+          content: String(entry.content ?? ""),
+          keywords,
+          always_on: Boolean(entry.constant),
+          enabled: !entry.disable && entry.enabled !== false
+        });
+        bookImported++;
+      }
+      return json({
+        persona,
+        personas: demoPersonas,
+        skipped: 0,
+        renamed: 0,
+        book_name: String(data.character_book?.name ?? ""),
+        book_imported: bookImported,
+        book_dropped: 0,
+        nodes: bookImported ? demoWorldBook : undefined
+      });
+    } catch {
+      return json({ error: "演示模式只支持 JSON 角色卡；PNG 内嵌卡请在真实部署里导入" }, 400);
+    }
+  }
   if (path === "/api/assistant/world-book" && method === "GET") {
     return json({ nodes: demoWorldBook, limit: 200 });
   }
   if (path === "/api/assistant/world-book" && method === "POST") {
-    const node = { ...(body.node as Record<string, unknown>) } as (typeof demoWorldBook)[number];
+    const node = { ...(body.node as Record<string, unknown>) } as unknown as WorldBookNode;
     const index = demoWorldBook.findIndex((item) => item.id === node.id);
     if (index >= 0) demoWorldBook[index] = { ...demoWorldBook[index], ...node };
     else demoWorldBook.push({ ...node, id: `world-${demoWorldBook.length + 1}` });
@@ -699,10 +746,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       const list = Array.isArray(entries) ? entries : Object.values(entries);
       incoming = list.map((entry) => {
         const keywords = (Array.isArray(entry.key) ? entry.key : Array.isArray(entry.keys) ? entry.keys : []).map(String);
+        const secondary = (Array.isArray(entry.keysecondary) ? entry.keysecondary : Array.isArray(entry.secondary_keys) ? entry.secondary_keys : []).map(String);
         return {
           title: String(entry.comment ?? entry.name ?? "").trim() || keywords[0] || String(entry.content ?? "").slice(0, 16),
           content: String(entry.content ?? ""),
           keywords,
+          secondary_keywords: entry.selectiveLogic && Number(entry.selectiveLogic) !== 0 ? [] : secondary,
           always_on: Boolean(entry.constant),
           enabled: !entry.disable && entry.enabled !== false
         };

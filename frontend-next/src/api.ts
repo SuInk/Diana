@@ -1825,6 +1825,8 @@ export interface WorldBookNode {
   content?: string;
   /** 触发词：最近对话里出现任意一个就注入本条。 */
   keywords?: string[];
+  /** 副触发词（AND 逻辑）：填了之后主词命中还要求任一副词在场才注入。 */
+  secondary_keywords?: string[];
   /** 常驻：每轮都注入，不看触发词。 */
   always_on?: boolean;
   /** 关掉后整个子树都不注入；缺省启用。 */
@@ -1878,6 +1880,26 @@ export function importWorldBookSillyTavern(entries: unknown): Promise<WorldBookI
   return requestJSON<WorldBookImportResult>("/api/assistant/world-book/import", {
     method: "POST",
     body: JSON.stringify({ entries })
+  });
+}
+
+export interface CharacterCardImportResult {
+  /** 导入后的那套人设；同名同内容被跳过时为空。 */
+  persona?: Persona;
+  personas: Persona[];
+  skipped: number;
+  renamed: number;
+  book_name?: string;
+  book_imported: number;
+  book_dropped: number;
+  nodes?: WorldBookNode[];
+}
+
+/** 导入 SillyTavern 角色卡（JSON 或 PNG 内嵌卡的原始字节，base64 递交）：人设进人设库，内嵌世界书并进世界书。 */
+export function importCharacterCard(cardBase64: string): Promise<CharacterCardImportResult> {
+  return requestJSON<CharacterCardImportResult>("/api/assistant/personas/import-card", {
+    method: "POST",
+    body: JSON.stringify({ card_base64: cardBase64 })
   });
 }
 
