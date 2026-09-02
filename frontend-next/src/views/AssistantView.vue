@@ -1118,6 +1118,48 @@
             </div>
           </section>
 
+          <!-- 拟人化：情绪、表达学习、戳一戳。都是「更像一个人」的可选行为，默认全关。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>拟人化</h2>
+                <span class="card-sub">情绪、群内口癖和戳一戳——让它更像群里的一个人</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.mood_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">情绪系统</span>
+                </label>
+                <span class="hint">
+                  心情随相处涨落：被夸了变开心（语气轻快、爱接梗），被骂了会低落（话少、蔫），几小时没人惹它就回到平静。
+                  复用关系评估的结果，不多花一次模型调用；只影响语气，不影响回答质量，重启后回到平静。
+                </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.expression_learning_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">表达学习</span>
+                </label>
+                <span class="hint">
+                  按群统计大家常说的短句和口癖（至少两个人说过、次数够多才算），当作说话风格参考注入，让它越来越像这个群的人。
+                  半个月没人说的自动过气。注意：这会把群成员的原话喂进提示词，注入时会标注为不可信参考。
+                </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.poke_reply_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">戳一戳回应</span>
+                </label>
+                <span class="hint">被戳一戳时按人设和关系亲疏回一句短的（仅 OneBot 平台）。同一个人 90 秒内连戳只回第一下。</span>
+              </div>
+            </div>
+          </section>
+
           <!-- 人机恋：总开关归部署者。开着时用户才能对机器人表白；确立与否还要看好感度门槛。 -->
           <section class="card">
             <div class="card-header">
@@ -1136,8 +1178,8 @@
                 </label>
                 <span class="hint">
                   开启后，用户本人认真表白时机器人才会考虑答应：好感度和相处时长要先到位，不够会被温柔婉拒。
-                  确立后记纪念日、语气按恋人来，好感度掉太低会进入冷战；本人随时可以提出分手，主人也能替任何人解除。
-                  恋人关系只改变语气和相处方式，不解锁任何权限；机器人不会主动向用户求爱。关闭时机器人完全不知道有这个功能。
+                  确立后记纪念日、语气按恋人来，好感度掉太低会进入冷战；整月和周年当天的白天，它还会主动私聊一句纪念日祝福（每天至多一条）。
+                  本人随时可以提出分手，主人也能替任何人解除。恋人关系只改变语气和相处方式，不解锁任何权限；机器人不会主动向用户求爱。关闭时机器人完全不知道有这个功能。
                 </span>
               </div>
             </div>
@@ -2531,6 +2573,9 @@ function setForm(config: BotProfileConfig): void {
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
     romance_enabled: config.romance_enabled ?? false,
+    mood_enabled: config.mood_enabled ?? false,
+    poke_reply_enabled: config.poke_reply_enabled ?? false,
+    expression_learning_enabled: config.expression_learning_enabled ?? false,
     dict_segment_enabled: config.dict_segment_enabled ?? false,
     semantic_search_enabled: config.semantic_search_enabled ?? false,
     natural_interjection_enabled: config.natural_interjection_enabled ?? false,

@@ -69,6 +69,19 @@ CREATE TABLE IF NOT EXISTS voice_transcripts (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS group_expressions (
+  scope_key TEXT NOT NULL,
+  phrase TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  user_count INTEGER NOT NULL DEFAULT 0,
+  last_user_id TEXT NOT NULL DEFAULT '',
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  PRIMARY KEY (scope_key, phrase)
+);
+CREATE INDEX IF NOT EXISTS idx_group_expressions_scope_seen
+  ON group_expressions(scope_key, last_seen_at DESC);
+
 CREATE TABLE IF NOT EXISTS semantic_reference_cache (
   cache_key TEXT PRIMARY KEY,
   message_ids TEXT NOT NULL,

@@ -502,6 +502,11 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 	if envelope.PostType == "notice" {
 		// notice 没有正文，只保留群/用户/子类型供欢迎语等逻辑判断。
 		subType := firstNonEmpty(envelope.NoticeType, envelope.SubType)
+		// notify 类通知的有效子类型在 sub_type 里（poke/lucky_king/honor），
+		// notice_type 只是一层壳；不展开的话戳一戳和抢红包王长得一模一样。
+		if subType == "notify" && strings.TrimSpace(envelope.SubType) != "" {
+			subType = envelope.SubType
+		}
 		messageID := firstNonEmpty(stringifyID(envelope.MessageID), stringifyID(envelope.TargetID))
 		return MessageEvent{
 			Kind:        EventKindNotice,
@@ -509,6 +514,7 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 			Time:        envelope.Time,
 			SelfID:      stringifyID(envelope.SelfID),
 			UserID:      stringifyID(envelope.UserID),
+			TargetID:    stringifyID(envelope.TargetID),
 			OperatorID:  stringifyID(envelope.OperatorID),
 			GroupID:     stringifyID(envelope.GroupID),
 			MessageID:   messageID,

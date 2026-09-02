@@ -92,15 +92,17 @@ type ImageDescriptionRecord struct {
 }
 
 type MessageEvent struct {
-	Platform         string           `json:"platform,omitempty"`
-	ProfileID        string           `json:"profile_id,omitempty"`
-	ContextNamespace string           `json:"context_namespace,omitempty"`
-	Kind             EventKind        `json:"kind"`
-	SubType          string           `json:"sub_type,omitempty"`
-	Time             int64            `json:"time,omitempty"`
-	OriginalTime     int64            `json:"original_time,omitempty"`
-	SelfID           string           `json:"self_id,omitempty"`
-	UserID           string           `json:"user_id,omitempty"`
+	Platform         string    `json:"platform,omitempty"`
+	ProfileID        string    `json:"profile_id,omitempty"`
+	ContextNamespace string    `json:"context_namespace,omitempty"`
+	Kind             EventKind `json:"kind"`
+	SubType          string    `json:"sub_type,omitempty"`
+	Time             int64     `json:"time,omitempty"`
+	OriginalTime     int64     `json:"original_time,omitempty"`
+	SelfID           string    `json:"self_id,omitempty"`
+	UserID           string    `json:"user_id,omitempty"`
+	// TargetID 目前只有 poke 通知在用：被戳的是谁。
+	TargetID         string           `json:"target_id,omitempty"`
 	OperatorID       string           `json:"operator_id,omitempty"`
 	OperatorName     string           `json:"operator_name,omitempty"`
 	OperatorRole     string           `json:"operator_role,omitempty"`
@@ -445,6 +447,14 @@ type BotConfig struct {
 	// 恋人关系。默认关闭：机器人愿不愿意谈恋爱是部署者该亲手做的决定，不该在
 	// 升级后突然发生。
 	RomanceEnabled *bool `json:"romance_enabled,omitempty"`
+	// MoodEnabled 让机器人有随相处涨落、随时间回落的心情，只影响语气。
+	// 默认关闭：可感知的行为变化不该在升级后突然发生。
+	MoodEnabled *bool `json:"mood_enabled,omitempty"`
+	// PokeReplyEnabled 让机器人在被戳一戳时回一句（OneBot poke 通知）。默认关闭。
+	PokeReplyEnabled *bool `json:"poke_reply_enabled,omitempty"`
+	// ExpressionLearningEnabled 让机器人按群收集高频短表达和口癖，作为说话风格
+	// 参考注入。默认关闭：它会把群成员的原话喂进提示词，开不开由部署者决定。
+	ExpressionLearningEnabled *bool `json:"expression_learning_enabled,omitempty"`
 	// 词典分词要把整个分词词典常驻内存（约 130MB），所以默认关。开启立即生效
 	// （后台加载笔记本，期间选词退回 n-gram）；关闭要重启进程才真正生效——
 	// 笔记本占用的内存本来也只有重启才能归还。
@@ -698,6 +708,9 @@ type ConfigPayload struct {
 	CrossGroupMemoryEnabled    *bool       `json:"cross_group_memory_enabled,omitempty"`
 	WorldBookEnabled           *bool       `json:"world_book_enabled,omitempty"`
 	RomanceEnabled             *bool       `json:"romance_enabled,omitempty"`
+	MoodEnabled                *bool       `json:"mood_enabled,omitempty"`
+	PokeReplyEnabled           *bool       `json:"poke_reply_enabled,omitempty"`
+	ExpressionLearningEnabled  *bool       `json:"expression_learning_enabled,omitempty"`
 	DictSegmentEnabled         *bool       `json:"dict_segment_enabled,omitempty"`
 	SemanticSearchEnabled      *bool       `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance       float64     `json:"proactive_reply_chance,omitempty"`
@@ -1195,26 +1208,29 @@ func DefaultBotConfig() BotConfig {
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
-		RecentContextLimit:      40,
-		ContextSummaryThreshold: 100,
-		LongTermMemoryEnabled:   boolPointer(true),
-		CrossGroupMemoryEnabled: boolPointer(false),
-		WorldBookEnabled:        boolPointer(true),
-		RomanceEnabled:          boolPointer(false),
-		DictSegmentEnabled:      boolPointer(false),
-		SemanticSearchEnabled:   boolPointer(false),
-		ProactiveReplyChance:    defaultProactiveReplyChance,
-		ProactiveReplyThreshold: defaultProactiveReplyThreshold,
-		ReplyRules:              []ReplyRule{},
-		MaxBotConcurrency:       8,
-		RequestTimeout:          180 * time.Second,
-		AgentEnabled:            true,
-		AgentMaxSteps:           agent.DefaultMaxSteps,
-		AgentSkillRoots:         []string{},
-		AgentCommandAllowlist:   []string{},
-		AgentCommandTimeoutMS:   agent.DefaultCommandTimeoutMS,
-		AgentBrowserCDPURL:      "http://127.0.0.1:9222",
-		AgentBrowserTimeoutMS:   agent.DefaultBrowserTimeoutMS,
+		RecentContextLimit:        40,
+		ContextSummaryThreshold:   100,
+		LongTermMemoryEnabled:     boolPointer(true),
+		CrossGroupMemoryEnabled:   boolPointer(false),
+		WorldBookEnabled:          boolPointer(true),
+		RomanceEnabled:            boolPointer(false),
+		MoodEnabled:               boolPointer(false),
+		PokeReplyEnabled:          boolPointer(false),
+		ExpressionLearningEnabled: boolPointer(false),
+		DictSegmentEnabled:        boolPointer(false),
+		SemanticSearchEnabled:     boolPointer(false),
+		ProactiveReplyChance:      defaultProactiveReplyChance,
+		ProactiveReplyThreshold:   defaultProactiveReplyThreshold,
+		ReplyRules:                []ReplyRule{},
+		MaxBotConcurrency:         8,
+		RequestTimeout:            180 * time.Second,
+		AgentEnabled:              true,
+		AgentMaxSteps:             agent.DefaultMaxSteps,
+		AgentSkillRoots:           []string{},
+		AgentCommandAllowlist:     []string{},
+		AgentCommandTimeoutMS:     agent.DefaultCommandTimeoutMS,
+		AgentBrowserCDPURL:        "http://127.0.0.1:9222",
+		AgentBrowserTimeoutMS:     agent.DefaultBrowserTimeoutMS,
 	}
 }
 
@@ -1405,6 +1421,15 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.RomanceEnabled == nil {
 		cfg.RomanceEnabled = boolPointer(false)
+	}
+	if cfg.MoodEnabled == nil {
+		cfg.MoodEnabled = boolPointer(false)
+	}
+	if cfg.PokeReplyEnabled == nil {
+		cfg.PokeReplyEnabled = boolPointer(false)
+	}
+	if cfg.ExpressionLearningEnabled == nil {
+		cfg.ExpressionLearningEnabled = boolPointer(false)
 	}
 	if cfg.DictSegmentEnabled == nil {
 		cfg.DictSegmentEnabled = boolPointer(false)
@@ -1647,6 +1672,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		CrossGroupMemoryEnabled:           copyBoolPointer(cfg.CrossGroupMemoryEnabled),
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
+		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
+		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
+		ExpressionLearningEnabled:         copyBoolPointer(cfg.ExpressionLearningEnabled),
 		DictSegmentEnabled:                copyBoolPointer(cfg.DictSegmentEnabled),
 		SemanticSearchEnabled:             copyBoolPointer(cfg.SemanticSearchEnabled),
 		ProactiveReplyChance:              cfg.ProactiveReplyChance,
@@ -1814,6 +1842,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		CrossGroupMemoryEnabled:        copyBoolPointer(payload.CrossGroupMemoryEnabled),
 		WorldBookEnabled:               copyBoolPointer(payload.WorldBookEnabled),
 		RomanceEnabled:                 copyBoolPointer(payload.RomanceEnabled),
+		MoodEnabled:                    copyBoolPointer(payload.MoodEnabled),
+		PokeReplyEnabled:               copyBoolPointer(payload.PokeReplyEnabled),
+		ExpressionLearningEnabled:      copyBoolPointer(payload.ExpressionLearningEnabled),
 		DictSegmentEnabled:             copyBoolPointer(payload.DictSegmentEnabled),
 		SemanticSearchEnabled:          copyBoolPointer(payload.SemanticSearchEnabled),
 		ProactiveReplyChance:           payload.ProactiveReplyChance,
