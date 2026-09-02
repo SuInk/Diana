@@ -83,9 +83,14 @@ type usageAccountingLLMProvider struct {
 func (p *usageAccountingLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	// 墙钟时间在这里量而不是在各个调用点：装饰器已经包住了每一次调用，量的范围
 	// 和记账的范围天然一致。放到调用点去量，新增一条调用路径就会漏一次。
+	//
+	// TTFT 由更内层的流式装饰器填进 collector：它才看得到 token 一个个到达。
+	// 没开流式、或者底层退化成非流式时，collector 给 0，这一项就不记。
+	ctx, collector := withTTFTCollector(ctx)
 	started := time.Now()
 	response, err := p.provider.Generate(ctx, req)
 	elapsed := time.Since(started)
+	ttft := collector.ttft(started)
 	if response == nil {
 		return response, err
 	}
@@ -93,7 +98,7 @@ func (p *usageAccountingLLMProvider) Generate(ctx context.Context, req llm.Gener
 	if purpose == "" {
 		purpose = debugModelPurpose(req)
 	}
-	p.runtime.recordLLMUsage(ctx, p.state.event, response.Provider, response.Model, response.Usage, purpose, elapsed)
+	p.runtime.recordLLMUsage(ctx, p.state.event, response.Provider, response.Model, response.Usage, purpose, elapsed, ttft)
 	return response, err
 }
 

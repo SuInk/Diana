@@ -256,7 +256,7 @@
                   Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="eventCacheHitText(event)"> / {{ eventCacheHitText(event) }}</template>）
                 </span>
                 <span v-if="event.output_tokens_per_second">
-                  {{ event.output_tokens_per_second.toFixed(1) }} tok/s（模型耗时 {{ formatDurationMS(event.llm_duration_ms || 0) }}）
+                  {{ event.output_tokens_per_second.toFixed(1) }} tok/s（模型耗时 {{ formatDurationMS(event.llm_duration_ms || 0) }}<template v-if="event.ttft_calls"> / 首 token {{ formatDurationMS(event.avg_ttft_ms || 0) }}</template>）
                 </span>
               </div>
 
@@ -460,7 +460,9 @@ const summary = computed(() => ({
   total_tokens: response.value?.total_tokens ?? 0,
   cached_input_tokens: response.value?.cached_input_tokens ?? 0,
   llm_duration_ms: response.value?.llm_duration_ms ?? 0,
-  output_tokens_per_second: response.value?.output_tokens_per_second ?? 0
+  output_tokens_per_second: response.value?.output_tokens_per_second ?? 0,
+  avg_ttft_ms: response.value?.avg_ttft_ms ?? 0,
+  ttft_calls: response.value?.ttft_calls ?? 0
 }));
 const hasMore = computed(() => response.value?.has_more ?? false);
 const filteredTotal = computed(() => response.value?.filtered_total ?? summary.value.total);
@@ -489,7 +491,13 @@ const throughputText = computed(() => {
 
 const throughputFoot = computed(() => {
   if (summary.value.llm_duration_ms <= 0) return "当前范围没有模型调用";
-  return `模型耗时 ${formatDurationMS(summary.value.llm_duration_ms)} · 输出 ${formatNumber(summary.value.output_tokens)} token`;
+  const base = `模型耗时 ${formatDurationMS(summary.value.llm_duration_ms)} · 输出 ${formatNumber(summary.value.output_tokens)} token`;
+  // TTFT 只有开了流式、且底层没退化成非流式时才有样本；没样本就不提，
+  // 免得显示成「首 token 0ms」这种看着正常实际是缺数据的东西。
+  if (summary.value.ttft_calls > 0) {
+    return `${base} · 首 token ${formatDurationMS(summary.value.avg_ttft_ms)}`;
+  }
+  return base;
 });
 
 // 毫秒转成人读得懂的长度。跨度可能从几百毫秒到几小时（一个范围的累计耗时）。
