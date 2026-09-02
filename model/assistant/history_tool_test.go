@@ -480,6 +480,36 @@ func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
 	}
 }
 
+func TestDianaChatHistoryToolOverviewCoversEntireLargeWindow(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
+	base := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local).Unix()
+	for index := 0; index < 120; index++ {
+		runtime.remember(chatHistoryTextEvent(base+int64(index)*600, "alice", "Alice", fmt.Sprintf("m%d", index), fmt.Sprintf("第 %d 段发生的事", index)))
+	}
+
+	raw, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(
+		context.Background(), map[string]any{
+			"operation": "overview", "from_time": base, "through_time": base + 119*600, "limit": 12,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != "overview" || result.Total != 120 || !result.Limited || len(result.Items) != 12 {
+		t.Fatalf("overview = %#v", result)
+	}
+	if result.Items[0].MessageID != "m0" || result.Items[len(result.Items)-1].MessageID != "m119" {
+		t.Fatalf("overview did not span the full window: %q ... %q", result.Items[0].MessageID, result.Items[len(result.Items)-1].MessageID)
+	}
+	if result.NextFromTime != 0 || !strings.Contains(result.Message, "开头、中段和结尾") {
+		t.Fatalf("overview paging/message = %#v", result)
+	}
+}
+
 // 时间段真的没消息时要说清是「没记录」，而不是让模型以为工具坏了或去编内容。
 func TestDianaChatHistoryToolRangeReportsEmptyWindow(t *testing.T) {
 	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

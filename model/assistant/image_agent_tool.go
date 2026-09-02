@@ -325,7 +325,14 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	result := dianaImageToolResult{OK: true, Queued: true, Action: request.Operation, Caption: request.Caption}
 	if len(reservation.reserved) > 0 {
 		result.TaskID = reservation.reserved[0].id
-		t.runtime.startPluginTaskReservation(reservation)
+		if sink := imageAnnouncementSinkFrom(ctx); sink != nil {
+			sink.deferTask(
+				func() { t.runtime.startPluginTaskReservation(reservation) },
+				func() { t.runtime.cancelPluginTaskReservation(reservation) },
+			)
+		} else {
+			t.runtime.startPluginTaskReservation(reservation)
+		}
 		return result, nil
 	}
 	if len(reservation.duplicates) > 0 {

@@ -14,18 +14,21 @@ import (
 )
 
 const (
-	dianaChatHistoryToolName       = "diana.chat_history"
-	defaultChatHistoryRecentLimit  = 20
-	maximumChatHistoryResultLimit  = 50
-	defaultChatHistoryBefore       = 10
-	defaultChatHistoryAfter        = 10
-	defaultChatHistorySearchBefore = 10
-	defaultChatHistorySearchAfter  = 10
-	maximumChatHistoryAroundRadius = 10
-	defaultChatHistorySearchHours  = 24
-	maximumChatHistorySearchHours  = 24 * 365 * 100
-	defaultChatHistoryRangeLimit   = 60
-	maximumChatHistoryRangeLimit   = 200
+	dianaChatHistoryToolName        = "diana.chat_history"
+	defaultChatHistoryRecentLimit   = 20
+	maximumChatHistoryResultLimit   = 50
+	defaultChatHistoryBefore        = 10
+	defaultChatHistoryAfter         = 10
+	defaultChatHistorySearchBefore  = 10
+	defaultChatHistorySearchAfter   = 10
+	maximumChatHistoryAroundRadius  = 10
+	defaultChatHistorySearchHours   = 24
+	maximumChatHistorySearchHours   = 24 * 365 * 100
+	defaultChatHistoryRangeLimit    = 60
+	maximumChatHistoryRangeLimit    = 200
+	defaultChatHistoryOverviewLimit = 24
+	maximumChatHistoryOverviewLimit = 40
+	chatHistoryOverviewTextRunes    = 140
 	// range 自己先按预算裁剪，好把「还没读完、从哪接着读」写进结果里；留一点
 	// 余量给这两个字段本身。
 	chatHistoryRangeReserveRunes  = 320
@@ -145,8 +148,8 @@ func (t *dianaChatHistoryTool) Description() string {
 // 比在散文里列一遍内联 JSON 更不容易看漏。
 func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；range 按时间段完整列出消息，用户要求总结或回顾某个时间段（「昨天 12 点到 17 点」）时用它，不要改用 search 猜关键词；search 按关键词检索；recalls 读本群最近 24 小时被撤回的消息，用户想知道谁撤回了什么时用它。",
-			"around", "recent", "range", "search", "recalls"),
+		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；overview 均匀抽取整个时间段的代表消息，用户要求总结或回顾一天/数小时且消息很多时优先使用；range 按时间段逐条精确列出，适合核对细节，没读完需分页；search 按关键词检索；recalls 读本群最近 24 小时被撤回的消息。",
+			"around", "recent", "overview", "range", "search", "recalls"),
 		"message_id":   toolStringParam("around 可选：以哪条消息为中心；省略时以当前消息为中心。"),
 		"before":       toolIntParam("around 可选：读取锚点之前多少条消息。", 0, maximumChatHistoryAroundRadius),
 		"after":        toolIntParam("around 可选：读取锚点之后多少条消息。", 0, maximumChatHistoryAroundRadius),
@@ -182,6 +185,8 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		result, err = t.around(ctx, input)
 	case "recent", "list":
 		result, err = t.recent(ctx, input)
+	case "overview", "summary", "digest":
+		result, err = t.overview(ctx, input)
 	case "range", "timeline", "between", "window":
 		result, err = t.window(ctx, input)
 	case "search", "find":
@@ -189,7 +194,7 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 	case "recalls", "recall":
 		result, err = t.recalls(ctx)
 	default:
-		return "", fmt.Errorf("operation 必须是 around、recent、range、search 或 recalls")
+		return "", fmt.Errorf("operation 必须是 around、recent、overview、range、search 或 recalls")
 	}
 	if err != nil {
 		return "", err
@@ -198,6 +203,62 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		result.Message = strings.TrimSpace(result.Message) + " " + t.idNotice()
 	}
 	return marshalDianaChatHistoryResult(result)
+}
+
+// overview 用固定数量的均匀样本覆盖整个时间窗。它不是逐条记录，而是给“昨天发生
+// 了什么”这类概括问题一张完整地图，避免 range 从零点开始分页、上下文先被前半夜
+// 填满，模型还没翻到下午就被迫总结。
+func (t *dianaChatHistoryTool) overview(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
+	fromTime, throughTime := t.resolveWindow(input)
+	if fromTime > throughTime {
+		fromTime, throughTime = throughTime, fromTime
+	}
+	timeline, err := t.timeline(ctx, fromTime, throughTime)
+	if err != nil {
+		return dianaChatHistoryResult{}, err
+	}
+	total := len(timeline)
+	if total == 0 {
+		return dianaChatHistoryResult{
+			OK: true, Action: "overview", Window: chatHistoryWindowLabel(fromTime, throughTime),
+			Message: "这个时间段在本地记录里没有消息，可能当时没人说话，或机器人那会儿不在这个会话里；不要凭空编造内容。",
+			Items:   []dianaChatHistoryItem{},
+		}, nil
+	}
+	limit := chatHistoryPositiveInt(input, "limit", defaultChatHistoryOverviewLimit, maximumChatHistoryOverviewLimit)
+	sampled := evenlySampleChatHistory(timeline, limit)
+	items := t.items(ctx, sampled)
+	for index := range items {
+		items[index].Text = truncateChatHistoryText(items[index].Text, chatHistoryOverviewTextRunes)
+		items[index].QuotedText = truncateChatHistoryText(items[index].QuotedText, chatHistoryOverviewTextRunes/2)
+		items[index].ImageDescriptions = nil
+		items[index].QuotedImageDescriptions = nil
+	}
+	return dianaChatHistoryResult{
+		OK: true, Action: "overview", Window: chatHistoryWindowLabel(fromTime, throughTime),
+		Message: fmt.Sprintf("已从整个时间段的 %d 条记录中按时间均匀抽取 %d 条代表消息，样本覆盖开头、中段和结尾，可据此概括全天；这是概览而非完整逐条清单，需要核对具体说法时再用 range 或 search。", total, len(items)),
+		Items:   items, Total: total, Limited: total > len(items),
+	}, nil
+}
+
+func evenlySampleChatHistory(events []MessageEvent, limit int) []MessageEvent {
+	if limit <= 0 || len(events) <= limit {
+		return append([]MessageEvent(nil), events...)
+	}
+	if limit == 1 {
+		return []MessageEvent{events[len(events)-1]}
+	}
+	sampled := make([]MessageEvent, 0, limit)
+	lastIndex := -1
+	for index := 0; index < limit; index++ {
+		position := index * (len(events) - 1) / (limit - 1)
+		if position == lastIndex {
+			continue
+		}
+		sampled = append(sampled, events[position])
+		lastIndex = position
+	}
+	return sampled
 }
 
 func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
@@ -460,7 +521,7 @@ func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any)
 		if last := items[len(items)-1]; last.Time > 0 {
 			result.NextFromTime = last.Time + 1
 		}
-		result.Message = fmt.Sprintf("已按时间从旧到新读取该时间段的前 %d 条（共 %d 条）。用 next_from_time 作为 from_time 继续读完剩下的再总结，不要只凭这一批下结论。", len(items), total)
+		result.Message = fmt.Sprintf("已按时间从旧到新读取该时间段的前 %d 条（共 %d 条）。若要逐条核对，用 next_from_time 作为 from_time 继续读；若目标是概括整个时间段，改用 overview 一次覆盖开头、中段和结尾，不要只凭这一批下结论。", len(items), total)
 	default:
 		result.Message = "已按时间从旧到新读取该时间段的全部本地记录。"
 	}

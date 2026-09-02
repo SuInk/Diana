@@ -3805,6 +3805,11 @@ func TestRuntimeImageGenerationRepliesWhileImageRunsInBackground(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("image request did not start")
 	}
+	// 后台任务只有在主回复成功发送后才能开始。旧实现先启动任务，编辑请求若立即
+	// 失败，用户会先看到失败通知，再看到“在画了”。
+	if sent := channel.sentSnapshot(); len(sent) != 1 || sent[0].Text == "" || len(sent[0].ImageURLs) != 0 {
+		t.Fatalf("image task started before the main reply was sent: %#v", sent)
+	}
 	var result replyResult
 	select {
 	case result = <-replyDone:
@@ -3833,6 +3838,43 @@ func TestRuntimeImageGenerationRepliesWhileImageRunsInBackground(t *testing.T) {
 	}
 	if len(channel.sent) != 2 || channel.sent[1].Text != "图片生成完成。" || len(channel.sent[1].ImageURLs) != 1 || channel.sent[1].ImageURLs[0] != sharer.url {
 		t.Fatalf("messages sent after image completion = %#v", channel.sent)
+	}
+}
+
+func TestRuntimeImmediateImageFailureFollowsMainReply(t *testing.T) {
+	channel := &recordingChannel{}
+	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible, APIKey: "secret", BaseURL: "https://example.test/v1",
+		Model: "gpt-test", ImageModel: "gpt-image-2",
+	})}
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"action":"edit_image","prompt":"把他画成室内自拍"}`,
+		"（抬爪比了个取景框）在画了，我会做一张室内日常感的半身自拍照",
+	}}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
+	memory := newMemoryUserMemoryStore()
+	memory.profiles["10001"] = UserMemoryProfile{UserID: "10001", Favorability: 20, MessageCount: 10}
+	runtime.SetUserMemoryStore(memory)
+	runtime.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) { return provider, nil })
+
+	reply, err := runtime.replyTo(context.Background(), MessageEvent{
+		Kind: EventKindPrivate, UserID: "10001", MessageID: "missing-edit-source",
+		RawMessage: "生成一张他的自拍照",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "生成一张他的自拍照"}}},
+	}, "生成一张他的自拍照")
+	if err != nil {
+		t.Fatalf("replyTo() error = %v", err)
+	}
+	waitForCondition(t, 2*time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
+	sent := channel.sentSnapshot()
+	if len(sent) != 2 {
+		t.Fatalf("sent = %#v", sent)
+	}
+	if sent[0].Text != reply || !strings.Contains(sent[0].Text, "在画了") {
+		t.Fatalf("main reply was not sent first: %#v", sent)
+	}
+	if !strings.Contains(sent[1].Text, "图片编辑") || !strings.Contains(sent[1].Text, "没有找到可编辑的图片") {
+		t.Fatalf("failure notification = %#v", sent[1])
 	}
 }
 
