@@ -44,3 +44,29 @@ func TestTokenTotalsRateHandlesLegacyRows(t *testing.T) {
 		t.Fatal("速率算出了 Inf/NaN，JSON 序列化会失败")
 	}
 }
+
+// TestTTFTAverageIgnoresCallsWithoutSamples 没有 TTFT 的调用不能当 0 参与平均。
+//
+// 没开流式、或底层退化成非流式的调用不写 ttft_ms。把它们算成 0 会把均值稀释成
+// 一个假的小数字——看起来首 token 特别快，实际只是大部分调用没有样本。
+func TestTTFTAverageIgnoresCallsWithoutSamples(t *testing.T) {
+	var totals inboundEventTokenTotals
+	totals.add(inboundEventTokenTotals{LLMCalls: 1, TTFTSumMS: 400, TTFTCalls: 1})
+	totals.add(inboundEventTokenTotals{LLMCalls: 1}) // 没有样本
+	totals.add(inboundEventTokenTotals{LLMCalls: 1}) // 没有样本
+
+	if totals.TTFTCalls != 1 {
+		t.Fatalf("样本数 = %d，只有一次调用带了 TTFT", totals.TTFTCalls)
+	}
+	if got := totals.avgTTFTMS(); got != 400 {
+		t.Fatalf("TTFT 均值 = %v，应为 400（不是 400/3）", got)
+	}
+}
+
+// TestTTFTAverageWithoutAnySample 一个样本都没有时给 0，界面据此不显示这一项。
+func TestTTFTAverageWithoutAnySample(t *testing.T) {
+	totals := inboundEventTokenTotals{LLMCalls: 5, OutputTokens: 900, DurationMS: 3000}
+	if got := totals.avgTTFTMS(); got != 0 {
+		t.Fatalf("没有样本时 TTFT 均值 = %v，应为 0", got)
+	}
+}
