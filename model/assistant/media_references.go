@@ -652,7 +652,10 @@ func mediaSegmentsMatch(left, right MessageSegment) bool {
 		return false
 	}
 	if left.Type == "image" && (left.Data["source_type"] == "video_frame" || right.Data["source_type"] == "video_frame") {
-		return left.Data["source_type"] == right.Data["source_type"] && left.Data["frame_index"] == right.Data["frame_index"]
+		return left.Data["source_type"] == right.Data["source_type"] &&
+			left.Data["frame_index"] == right.Data["frame_index"] &&
+			left.Data["video_index"] == right.Data["video_index"] &&
+			left.Data["source_message_id"] == right.Data["source_message_id"]
 	}
 	for _, key := range []string{"file_id", "id", "fid", "file", "name", "filename", "url"} {
 		leftValue := strings.TrimSpace(left.Data[key])
