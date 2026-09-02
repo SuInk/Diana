@@ -271,3 +271,46 @@ func TestWorldBookNodesFromSillyTavernRejectsUnknownShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestWorldBookSecondaryKeywordsAndLogic(t *testing.T) {
+	tree := WorldBook{Nodes: []WorldBookNode{
+		{ID: "dragon", Title: "枝江龙", Content: "枝江的龙住在港口灯塔里。", Keywords: []string{"龙"}, SecondaryKeywords: []string{"枝江", "灯塔"}},
+	}}.WithDefaults()
+
+	// 主词命中但副词不在场：不注入。
+	if block := tree.ContextBlock("你玩过龙腾世纪吗", worldBookContextTokenBudget); block != "" {
+		t.Fatalf("secondary miss injected: %q", block)
+	}
+	// 主词和任一副词同时在场：注入。
+	if block := tree.ContextBlock("枝江有龙吗", worldBookContextTokenBudget); !strings.Contains(block, "灯塔") {
+		t.Fatalf("secondary hit not injected: %q", block)
+	}
+	// 只有副词、没有主词：不注入。
+	if block := tree.ContextBlock("枝江天气怎么样", worldBookContextTokenBudget); block != "" {
+		t.Fatalf("secondary alone injected: %q", block)
+	}
+
+	// 没有主词的副词在归一化时被清掉，不留永远沉默的触发配置。
+	node := (WorldBookNode{Title: "孤儿副词", SecondaryKeywords: []string{"枝江"}}).Normalized()
+	if node.SecondaryKeywords != nil {
+		t.Fatalf("secondary without primary survived: %#v", node)
+	}
+}
+
+func TestWorldBookNodesFromSillyTavernSecondaryKeys(t *testing.T) {
+	raw := json.RawMessage(`{
+		"0": {"uid": 0, "key": ["龙"], "keysecondary": ["枝江"], "selectiveLogic": 0, "comment": "枝江龙", "content": "住在灯塔里。", "order": 1},
+		"1": {"uid": 1, "key": ["猫"], "keysecondary": ["狗"], "selectiveLogic": 2, "comment": "排除逻辑", "content": "NOT ANY 条目。", "order": 2}
+	}`)
+	nodes, ok := WorldBookNodesFromSillyTavern(raw)
+	if !ok || len(nodes) != 2 {
+		t.Fatalf("ok=%v nodes=%#v", ok, nodes)
+	}
+	if len(nodes[0].SecondaryKeywords) != 1 || nodes[0].SecondaryKeywords[0] != "枝江" {
+		t.Fatalf("AND ANY secondary not mapped: %#v", nodes[0])
+	}
+	// NOT ANY 语义相反，硬搬会把排除当要求：退回只看主词。
+	if nodes[1].SecondaryKeywords != nil {
+		t.Fatalf("NOT ANY secondary mapped: %#v", nodes[1])
+	}
+}

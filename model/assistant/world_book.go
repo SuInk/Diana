@@ -57,7 +57,11 @@ type WorldBookNode struct {
 	// Keywords 是触发词：最近对话里出现任意一个就注入本条。AlwaysOn 的节点
 	// 不看触发词，每轮都注入。两者都没有的节点只当目录用，自身不进提示词。
 	Keywords []string `json:"keywords,omitempty"`
-	AlwaysOn bool     `json:"always_on,omitempty"`
+	// SecondaryKeywords 是副触发词（酒馆世界书的 keysecondary，AND ANY 逻辑）：
+	// 填了之后，除了主触发词命中，还要求任意一个副词也在场才注入。用来收窄
+	// 太宽的主词，比如主词「龙」配副词「枝江」，聊别处的龙就不触发。
+	SecondaryKeywords []string `json:"secondary_keywords,omitempty"`
+	AlwaysOn          bool     `json:"always_on,omitempty"`
 	// Enabled 为 false 时整个子树都不注入：关掉一章就是关掉底下所有节。
 	Enabled   *bool     `json:"enabled,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
@@ -77,9 +81,21 @@ func (node WorldBookNode) Normalized() WorldBookNode {
 	node.ParentID = strings.TrimSpace(node.ParentID)
 	node.Title = truncateRunesPlain(strings.TrimSpace(node.Title), worldBookTitleMaxRunes)
 	node.Content = truncateRunesPlain(strings.TrimSpace(node.Content), worldBookContentMaxRunes)
-	keywords := make([]string, 0, len(node.Keywords))
+	node.Keywords = normalizeWorldBookKeywords(node.Keywords)
+	node.SecondaryKeywords = normalizeWorldBookKeywords(node.SecondaryKeywords)
+	// 副词只在有主词时才有意义：没有主词的「AND」左边是空集，永远不触发，
+	// 留着只会让条目看起来配了触发却永远沉默。
+	if len(node.Keywords) == 0 {
+		node.SecondaryKeywords = nil
+	}
+	return node
+}
+
+// normalizeWorldBookKeywords 清洗一组触发词：裁长度、去空白、按小写去重、封顶。
+func normalizeWorldBookKeywords(raw []string) []string {
+	keywords := make([]string, 0, len(raw))
 	seen := map[string]bool{}
-	for _, keyword := range node.Keywords {
+	for _, keyword := range raw {
 		keyword = truncateRunesPlain(strings.TrimSpace(keyword), worldBookKeywordMaxRunes)
 		lower := strings.ToLower(keyword)
 		if keyword == "" || seen[lower] {
@@ -92,10 +108,9 @@ func (node WorldBookNode) Normalized() WorldBookNode {
 		}
 	}
 	if len(keywords) == 0 {
-		keywords = nil
+		return nil
 	}
-	node.Keywords = keywords
-	return node
+	return keywords
 }
 
 // enabled 报告节点自身是否启用；祖先是否启用由遍历负责。
@@ -258,6 +273,9 @@ type sillyTavernWorldBookEntry struct {
 	UID            *int     `json:"uid,omitempty"`
 	Key            []string `json:"key,omitempty"`
 	Keys           []string `json:"keys,omitempty"`
+	KeySecondary   []string `json:"keysecondary,omitempty"`
+	SecondaryKeys  []string `json:"secondary_keys,omitempty"`
+	SelectiveLogic *int     `json:"selectiveLogic,omitempty"`
 	Comment        string   `json:"comment,omitempty"`
 	Name           string   `json:"name,omitempty"`
 	Content        string   `json:"content"`
@@ -338,6 +356,16 @@ func WorldBookNodesFromSillyTavern(raw json.RawMessage) ([]WorldBookNode, bool) 
 		if len(keywords) == 0 {
 			keywords = entry.Keys
 		}
+		// 副词只在 AND ANY（selectiveLogic 0，也是缺省值）下语义一致才搬。
+		// 其他逻辑（NOT ANY / NOT ALL / AND ALL）在这里没有对应实现，硬搬会把
+		// 「排除」当成「要求」，比丢掉更糟——那几种就退回只看主词。
+		secondary := entry.KeySecondary
+		if len(secondary) == 0 {
+			secondary = entry.SecondaryKeys
+		}
+		if entry.SelectiveLogic != nil && *entry.SelectiveLogic != 0 {
+			secondary = nil
+		}
 		title := strings.TrimSpace(firstNonEmpty(entry.Comment, entry.Name))
 		if title == "" && len(keywords) > 0 {
 			title = strings.TrimSpace(keywords[0])
@@ -347,11 +375,12 @@ func WorldBookNodesFromSillyTavern(raw json.RawMessage) ([]WorldBookNode, bool) 
 		}
 		enabled := !entry.Disable && (entry.Enabled == nil || *entry.Enabled)
 		nodes = append(nodes, WorldBookNode{
-			Title:    title,
-			Content:  strings.TrimSpace(entry.Content),
-			Keywords: keywords,
-			AlwaysOn: entry.Constant,
-			Enabled:  boolPointer(enabled),
+			Title:             title,
+			Content:           strings.TrimSpace(entry.Content),
+			Keywords:          keywords,
+			SecondaryKeywords: secondary,
+			AlwaysOn:          entry.Constant,
+			Enabled:           boolPointer(enabled),
 		})
 	}
 	return nodes, true
@@ -434,11 +463,8 @@ func (tree WorldBook) ContextBlock(text string, tokenBudget int64) string {
 		if len(matched) >= worldBookMatchedNodeLimit || lowered == "" {
 			continue
 		}
-		for _, keyword := range row.Node.Keywords {
-			if strings.Contains(lowered, strings.ToLower(keyword)) {
-				matched = append(matched, row)
-				break
-			}
+		if worldBookNodeTriggered(row.Node, lowered) {
+			matched = append(matched, row)
 		}
 	}
 	if len(always) == 0 && len(matched) == 0 {
@@ -470,6 +496,24 @@ func (tree WorldBook) ContextBlock(text string, tokenBudget int64) string {
 		return ""
 	}
 	return builder.String()
+}
+
+// worldBookNodeTriggered 判断触发式节点这一轮该不该注入：任意主触发词命中；
+// 配了副触发词时，还要求任意一个副词也在场（AND ANY）。
+func worldBookNodeTriggered(node WorldBookNode, lowered string) bool {
+	if !worldBookAnyKeywordHit(node.Keywords, lowered) {
+		return false
+	}
+	return len(node.SecondaryKeywords) == 0 || worldBookAnyKeywordHit(node.SecondaryKeywords, lowered)
+}
+
+func worldBookAnyKeywordHit(keywords []string, lowered string) bool {
+	for _, keyword := range keywords {
+		if strings.Contains(lowered, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
 }
 
 // worldBookRowLabel 拼「祖先 / 本节点」的路径标签，路径本身就是语境。
