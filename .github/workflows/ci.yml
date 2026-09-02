@@ -292,6 +292,25 @@ jobs:
         working-directory: release
         run: sha256sum diana-* > SHA256SUMS
 
+      - name: Generate static update manifest
+        working-directory: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          assets='[]'
+          for file in diana-* SHA256SUMS; do
+            assets=$(jq --arg name "$file" --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${file}" --argjson size "$(stat -c %s "$file")" '. + [{name: $name, url: $url, size: $size}]' <<<"$assets")
+          done
+          jq -n \
+            --arg tag "$RELEASE_TAG" \
+            --arg name "Diana $RELEASE_TAG" \
+            --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson assets "$assets" \
+            '{schema: 1, releases: [{tag: $tag, name: $name, date: $date, url: $url, checksum_available: true, checksum_url: ($assets[] | select(.name == "SHA256SUMS") | .url), assets: $assets}]}' \
+            > latest.json
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

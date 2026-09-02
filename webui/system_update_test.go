@@ -765,6 +765,55 @@ func TestReleaseCacheHonorsRateLimitResetAndReturnsStaleData(t *testing.T) {
 	}
 }
 
+func TestReleaseCacheUsesTokenAndETag(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	var calls atomic.Int32
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Errorf("Authorization = %q", got)
+		}
+		if calls.Add(1) == 1 {
+			w.Header().Set("ETag", `"release-v1"`)
+			_, _ = w.Write([]byte(`[{"tag_name":"v1.3.0","published_at":"2026-09-01T10:00:00Z"}]`))
+			return
+		}
+		if got := r.Header.Get("If-None-Match"); got != `"release-v1"` {
+			t.Errorf("If-None-Match = %q", got)
+		}
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer github.Close()
+
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{})
+	handler.githubAPIBase = github.URL
+	handler.githubToken = "test-token"
+	handler.now = func() time.Time { return now }
+	if release, err := handler.latestStableRelease(context.Background(), ""); err != nil || release.Tag != "v1.3.0" {
+		t.Fatalf("initial release = %#v, %v", release, err)
+	}
+	now = now.Add(releaseCacheTTL + time.Second)
+	if release, err := handler.latestStableRelease(context.Background(), ""); err != nil || release.Tag != "v1.3.0" {
+		t.Fatalf("304 release = %#v, %v", release, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestStaticReleaseManifestFallback(t *testing.T) {
+	manifest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"releases":[{"tag":"v1.5.0","checksum_available":true,"assets":[{"name":"SHA256SUMS","url":"https://example.test/SHA256SUMS","size":12}]}]}`))
+	}))
+	defer manifest.Close()
+
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{})
+	handler.githubAPIBase = "http://127.0.0.1:1"
+	handler.staticReleaseURL = manifest.URL
+	if release, err := handler.latestStableRelease(context.Background(), ""); err != nil || release.Tag != "v1.5.0" {
+		t.Fatalf("fallback release = %#v, %v", release, err)
+	}
+}
+
 func TestSystemUpdateHandlerGitCheckUsesLatestReleaseInsteadOfBranchBehind(t *testing.T) {
 	github := releaseTestServer(t, "v0.4.0")
 	defer github.Close()
