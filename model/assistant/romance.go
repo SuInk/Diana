@@ -39,6 +39,9 @@ type UserRomanceState struct {
 	Since time.Time `json:"since,omitempty"`
 	// StartedBy 记录关系怎么来的：user 是本人表白，owner 是主人在控制台里设的。
 	StartedBy string `json:"started_by,omitempty"`
+	// LastGreetedOn 是上一次纪念日主动问候发出的本地日期（YYYY-MM-DD），
+	// 防止轮询和重启把同一天的祝福发成两遍。
+	LastGreetedOn string `json:"last_greeted_on,omitempty"`
 }
 
 // romanceActive 报告这份档案当前是否处于恋人关系。

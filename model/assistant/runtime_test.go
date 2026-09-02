@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -4836,6 +4837,28 @@ func (s *memoryUserMemoryStore) ListUserFavorabilityChanges(_ context.Context, _
 func (s *memoryUserMemoryStore) GetUserMemory(_ context.Context, _, userID string) (UserMemoryProfile, bool, error) {
 	profile, ok := s.profiles[userID]
 	return profile, ok, nil
+}
+
+// ListUserMemories 让纪念日轮询这类扫描逻辑也能用内存实现测。分页语义从简：
+// offset 之后按 user_id 顺序给一页。
+func (s *memoryUserMemoryStore) ListUserMemories(_ context.Context, _, _ string, limit, offset int) ([]UserMemoryProfile, int, error) {
+	ids := make([]string, 0, len(s.profiles))
+	for id := range s.profiles {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	profiles := make([]UserMemoryProfile, 0, len(ids))
+	for _, id := range ids {
+		profiles = append(profiles, s.profiles[id])
+	}
+	if offset >= len(profiles) {
+		return nil, len(ids), nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(profiles) {
+		end = len(profiles)
+	}
+	return profiles[offset:end], len(ids), nil
 }
 
 // Connect 封装当前模块的 Connect 逻辑。

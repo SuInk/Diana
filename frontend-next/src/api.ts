@@ -249,6 +249,12 @@ export interface BotProfileConfig {
   world_book_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
+  /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
+  mood_enabled?: boolean;
+  /** 被戳一戳时回一句（OneBot）；缺省关闭。 */
+  poke_reply_enabled?: boolean;
+  /** 表达学习：按群收集高频短表达当风格参考；缺省关闭。 */
+  expression_learning_enabled?: boolean;
   dict_segment_enabled?: boolean;
   semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;

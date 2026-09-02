@@ -230,6 +230,9 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 		}
 		after, stored := before, true
 		delta := evaluation.effectiveDelta()
+		// 心情顺着同一次评估走：加分的相处让它开心，减分的让它蔫。评估失败或
+		// 判 0 时不动，也就不会阻止情绪自然回落。
+		r.bumpMood(event.ProfileID, delta, time.Now())
 		traits := evaluation.portraitTraits(time.Now())
 		if delta != 0 || len(traits) > 0 {
 			after, stored = r.applyEvaluatedRelationshipUpdate(event, delta, evaluation.Reason, traits)
