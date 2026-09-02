@@ -1153,6 +1153,26 @@ export function updatePluginSettings(
   });
 }
 
+export interface MusicConnectionStatus {
+  source: string;
+  label: string;
+  search_ok: boolean;
+  playable: boolean;
+  api_configured: boolean;
+  cookie_configured: boolean;
+  message: string;
+}
+
+export function testMusicConnections(
+  settings: Record<string, unknown>,
+  clearSecrets: string[] = []
+): Promise<{ sources: MusicConnectionStatus[] }> {
+  return requestJSON<{ sources: MusicConnectionStatus[] }>("/api/assistant/plugins/music/test", {
+    method: "POST",
+    body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+  });
+}
+
 export function createRepositoryIssue(input: RepositoryIssueCreateInput): Promise<RepositoryIssueCreateResult> {
   return requestJSON<RepositoryIssueCreateResult>("/api/assistant/plugins/repository-publish/issues", {
     method: "POST",

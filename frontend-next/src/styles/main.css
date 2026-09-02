@@ -3159,6 +3159,70 @@ a.nav-action {
   margin-top: 12px;
 }
 
+.music-platform-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.music-platform-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.music-platform-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.music-platform-head h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.music-platform-head .badge {
+  max-width: 58%;
+  white-space: normal;
+  text-align: right;
+}
+
+.music-platform-guide,
+.music-credential-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.music-credential-hint {
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+
+.music-test-button {
+  margin-top: 14px;
+}
+
+@media (max-width: 980px) {
+  .music-platform-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .music-platform-head .badge {
+    max-width: 65%;
+  }
+}
+
 .repository-watch-manager {
   margin-top: 22px;
   padding-top: 20px;

@@ -63,6 +63,56 @@ type MusicPlugin struct {
 	sharer LocalMediaSharer
 }
 
+// MusicConnectionStatus is safe to return to the settings page. It reports
+// capability and configuration state without ever echoing credentials.
+type MusicConnectionStatus struct {
+	Source           string `json:"source"`
+	Label            string `json:"label"`
+	SearchOK         bool   `json:"search_ok"`
+	Playable         bool   `json:"playable"`
+	APIConfigured    bool   `json:"api_configured"`
+	CookieConfigured bool   `json:"cookie_configured"`
+	Message          string `json:"message"`
+}
+
+// TestConnections performs one small real query per source. It deliberately
+// stops after resolving a playable URL and does not download the audio file.
+func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValues) []MusicConnectionStatus {
+	cfg := musicConfigFromSettings(settings)
+	results := make([]MusicConnectionStatus, 0, len(p.sources))
+	for _, source := range p.sources {
+		options := cfg.sourceOptions(source.Key())
+		status := MusicConnectionStatus{
+			Source:           source.Key(),
+			Label:            source.Label(),
+			APIConfigured:    strings.TrimSpace(options.APIBase) != "",
+			CookieConfigured: strings.TrimSpace(options.Cookie) != "",
+		}
+		if !cfg.sourceEnabled(source.Key()) {
+			status.Message = "当前未启用"
+			results = append(results, status)
+			continue
+		}
+		testCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		found, ok := source.Search(testCtx, p.fetcher, cfg, "晴天 周杰伦")
+		status.SearchOK = ok
+		if ok {
+			status.Playable = source.PlayableURL(testCtx, p.fetcher, cfg, found.ID) != ""
+		}
+		cancel()
+		switch {
+		case status.Playable:
+			status.Message = "搜索与播放地址获取正常"
+		case status.SearchOK:
+			status.Message = "搜索正常，但未取得播放地址；会员凭据可能缺失或失效"
+		default:
+			status.Message = "曲库请求失败，请检查 API 地址和网络"
+		}
+		results = append(results, status)
+	}
+	return results
+}
+
 type musicConfig struct {
 	EnabledSources  []string
 	PreferredSource string
