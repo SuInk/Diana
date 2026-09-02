@@ -88,7 +88,7 @@ func TestMessageHistoryPluginUsesRecent24HoursOldestFirst(t *testing.T) {
 	}
 }
 
-func TestRecallReplyModeDefaultsToLLMSummary(t *testing.T) {
+func TestRecallReplyModeDefaultsToOriginalForward(t *testing.T) {
 	responses := applyRecallReplyMode([]PluginResponse{{
 		Handled:          true,
 		Context:          "完整撤回时间线",
@@ -101,8 +101,8 @@ func TestRecallReplyModeDefaultsToLLMSummary(t *testing.T) {
 		t.Fatalf("responses = %#v", responses)
 	}
 	got := responses[0]
-	if got.Context != "完整撤回时间线" || got.Reply != "" || got.Forward || got.NestedForward || len(got.ForwardMessages) != 0 {
-		t.Fatalf("default recall response still forwards originals: %#v", got)
+	if got.Context != "完整撤回时间线" || got.Reply != "" || !got.Forward || !got.NestedForward || len(got.ForwardMessages) != 1 {
+		t.Fatalf("default recall response did not forward originals: %#v", got)
 	}
 }
 

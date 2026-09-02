@@ -115,14 +115,17 @@ func (t *dianaChatHistoryTool) recalls(ctx context.Context) (dianaChatHistoryRes
 		}, nil
 	}
 	items := t.items(ctx, t.runtime.enrichRecallImageDescriptions(ctx, t.event, recalls))
+	message := fmt.Sprintf("已读取本群最近 24 小时的 %d 条撤回记录；你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。", len(items))
+	if normalizeRecallReplyMode(t.runtime.effectiveConfigForEvent(t.event).RecallReplyMode) == RecallReplyModeOriginalForward {
+		message = fmt.Sprintf("已读取本群最近 24 小时的 %d 条撤回记录，原文将在本轮回复时另行以合并转发卡片发出；你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。", len(items))
+	}
 	return dianaChatHistoryResult{
-		OK:     true,
-		Action: "recalls",
-		Message: fmt.Sprintf("已读取本群最近 24 小时的 %d 条撤回记录，原文会另行以合并转发卡片发出；"+
-			"你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。", len(items)),
-		Window: chatHistoryWindowLabel(referenceTime-int64(recallDefaultWindow/time.Second), referenceTime),
-		Items:  items,
-		Total:  len(items),
+		OK:      true,
+		Action:  "recalls",
+		Message: message,
+		Window:  chatHistoryWindowLabel(referenceTime-int64(recallDefaultWindow/time.Second), referenceTime),
+		Items:   items,
+		Total:   len(items),
 	}, nil
 }
 

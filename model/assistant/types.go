@@ -69,7 +69,7 @@ func normalizeRecallReplyMode(mode RecallReplyMode) RecallReplyMode {
 	case RecallReplyModeLLMSummary, RecallReplyModeOriginalForward:
 		return mode
 	default:
-		return RecallReplyModeLLMSummary
+		return RecallReplyModeOriginalForward
 	}
 }
 
@@ -1195,7 +1195,7 @@ func DefaultBotConfig() BotConfig {
 		ForwardReplyChunkThreshold:     forwardReplyChunkCountThreshold,
 		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          900,
-		RecallReplyMode:                RecallReplyModeLLMSummary,
+		RecallReplyMode:                RecallReplyModeOriginalForward,
 		RefusalStrategy:                RefusalStrategySmart,
 		DaypartToneEnabled:             boolPointer(false),
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
