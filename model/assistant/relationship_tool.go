@@ -45,7 +45,7 @@ type dianaRelationshipResult struct {
 // relationshipReplyGuidance 约束模型怎么把这份数据说出来。
 const relationshipReplyGuidance = "围绕用户实际问的那件事回答，用自然的中文，不要把结果按字段抄成清单。" +
 	"reminder_schedule_limit 只在用户明确问「能建几个」时才说，平时不要主动报出来——真建满时创建工具会当场说明。" +
-	"只有用户问最近变化时才讲 recent_changes 里的增减分、时间和原因。" +
+	"recent_changes 是最近几次增减分，回答好感度时默认顺带说一下：用一两句自然的话交代最近是涨是跌、大概什么时候、因为什么，不要逐条列成清单；没有记录就一个字都不提。用户追问细节时再把每一条的时间和原因说清楚。" +
 	"回复里需要真正 @ 目标时，原样使用结果中的 mention_cq，不要写成普通文本的 @账号。" +
 	"portrait 是这个人的长期画像，群里谁都查得到，被问到就照实说；但只在用户问起、或它和当前话题自然相关时才提，不要主动把整份画像念出来。"
 
