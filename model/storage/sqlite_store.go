@@ -40,6 +40,7 @@ const (
 	webuiSessionsKey     = "webui_sessions"
 	webuiAPIKeysKey      = "webui_api_keys"
 	releaseCacheKey      = "system_release_cache"
+	updateGitHubTokenKey = "system_update_github_token"
 	inboundRecoveryKey   = "bot_inbound_recovery_checkpoint"
 )
 
@@ -325,6 +326,18 @@ func (s *SQLiteStore) SaveReleaseCache(ctx context.Context, payload []byte) erro
 		return errors.New("invalid system release cache JSON")
 	}
 	return s.saveJSON(ctx, releaseCacheKey, json.RawMessage(payload))
+}
+
+// LoadUpdateGitHubToken loads the optional token used only for GitHub update metadata requests.
+func (s *SQLiteStore) LoadUpdateGitHubToken(ctx context.Context) (string, bool, error) {
+	var token string
+	ok, err := s.loadJSON(ctx, updateGitHubTokenKey, &token)
+	return token, ok, err
+}
+
+// SaveUpdateGitHubToken persists the optional GitHub update token.
+func (s *SQLiteStore) SaveUpdateGitHubToken(ctx context.Context, token string) error {
+	return s.saveJSON(ctx, updateGitHubTokenKey, strings.TrimSpace(token))
 }
 
 // LoadInboundRecoveryCheckpoint returns the latest instant when the channel

@@ -62,6 +62,12 @@ type githubRateLimitError struct {
 	ResetAt    time.Time
 }
 
+type githubReleaseFetchResult struct {
+	Releases    []ReleaseEntry
+	ETag        string
+	NotModified bool
+}
+
 func (e *githubRateLimitError) Error() string {
 	if e == nil || e.ResetAt.IsZero() {
 		return "GitHub API 限流，请稍后再试"
@@ -83,7 +89,7 @@ func githubRateLimitFromResponse(resp *http.Response) error {
 }
 
 // fetchGitHubReleases 拉取仓库最近的 Release 列表；没有 Release 时返回空切片。
-func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owner, repo string, limit int) ([]ReleaseEntry, error) {
+func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owner, repo string, limit int, token, etag string) (githubReleaseFetchResult, error) {
 	if limit <= 0 || limit > 30 {
 		limit = 10
 	}
@@ -93,20 +99,29 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=%d", strings.TrimRight(apiBase, "/"), owner, repo, limit)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return githubReleaseFetchResult{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "diana-webui")
+	if token = strings.TrimSpace(token); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if etag = strings.TrimSpace(etag); etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return githubReleaseFetchResult{}, err
 	}
 	defer resp.Body.Close()
 	if rateLimitErr := githubRateLimitFromResponse(resp); rateLimitErr != nil {
-		return nil, rateLimitErr
+		return githubReleaseFetchResult{}, rateLimitErr
+	}
+	if resp.StatusCode == http.StatusNotModified {
+		return githubReleaseFetchResult{ETag: resp.Header.Get("ETag"), NotModified: true}, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("GitHub API HTTP %d", resp.StatusCode)
+		return githubReleaseFetchResult{}, fmt.Errorf("GitHub API HTTP %d", resp.StatusCode)
 	}
 	var raw []struct {
 		TagName     string    `json:"tag_name"`
@@ -123,7 +138,7 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 		} `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, err
+		return githubReleaseFetchResult{}, err
 	}
 	entries := make([]ReleaseEntry, 0, len(raw))
 	for _, item := range raw {
@@ -154,7 +169,7 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 			Assets:            assets,
 		})
 	}
-	return entries, nil
+	return githubReleaseFetchResult{Releases: entries, ETag: resp.Header.Get("ETag")}, nil
 }
 
 // changelogCache 缓存 GitHub 更新日志响应，避免频繁触碰未鉴权接口的限流。

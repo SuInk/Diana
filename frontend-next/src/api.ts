@@ -1236,6 +1236,22 @@ export interface UpdatePolicy {
 	github_mirror?: string;
 }
 
+export interface UpdateGitHubTokenStatus {
+	configured: boolean;
+	source?: "stored" | "environment" | "";
+}
+
+export function getUpdateGitHubToken(): Promise<UpdateGitHubTokenStatus> {
+	return requestJSON<UpdateGitHubTokenStatus>("/api/system/update/github-token");
+}
+
+export function saveUpdateGitHubToken(token: string, clear = false): Promise<UpdateGitHubTokenStatus> {
+	return requestJSON<UpdateGitHubTokenStatus>("/api/system/update/github-token", {
+		method: "PUT",
+		body: JSON.stringify({ token, clear })
+	});
+}
+
 export interface GitHubMirror {
 	name: string;
 	base_url: string;
