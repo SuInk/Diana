@@ -65,38 +65,65 @@ func cacheVideoFrames(ctx context.Context, targetKind, groupID, userID, messageI
 	if len(segments) == 0 || hasCachedVideoFrames(segments) {
 		return segments
 	}
-	videoURLs := videoSourceCandidates(segments)
-	if len(videoURLs) == 0 {
-		return segments
+	videoSegments := make([]MessageSegment, 0, 1)
+	for _, segment := range segments {
+		if segment.Type == "video" && len(videoSourceCandidates([]MessageSegment{segment})) > 0 {
+			videoSegments = append(videoSegments, segment)
+		}
 	}
-	frames := extractVideoContextFramesAfterReady(ctx, videoURLs, historyMediaReadyTimeout)
-	defer cleanupVideoContextFrames(frames)
-	if len(frames) == 0 {
-		log.Printf("chatbot video history cache produced no frames: message_id=%s", messageID)
-		return segments
+	if len(videoSegments) == 0 {
+		// QQ 也会把 mp4 作为 file 段投递。它没有合并转发节点元数据，但仍要维持
+		// 原有的视频理解能力；按解析出的每个源构造独立媒体项即可。
+		for _, source := range videoSourceCandidates(segments) {
+			videoSegments = append(videoSegments, MessageSegment{Type: "video", Data: map[string]string{"url": source}})
+		}
+		if len(videoSegments) == 0 {
+			return segments
+		}
 	}
 	out := append([]MessageSegment(nil), segments...)
-	for i, frame := range frames {
-		body, err := os.ReadFile(frame)
-		if err != nil {
-			continue
-		}
-		source := fmt.Sprintf("video-frame:%d:%s", i, firstNonEmpty(videoURLs...))
-		path, err := writeHistoryImage(targetKind, groupID, userID, messageID, source, body, "image/jpeg")
-		if err != nil {
-			continue
-		}
-		out = append(out, MessageSegment{
-			Type: "image",
-			Data: map[string]string{
+	frameCount := 0
+	for videoIndex, video := range videoSegments {
+		videoURLs := videoSourceCandidates([]MessageSegment{video})
+		frames := extractVideoContextFramesAfterReady(ctx, videoURLs, historyMediaReadyTimeout)
+		defer cleanupVideoContextFrames(frames)
+		for frameIndex, frame := range frames {
+			if frameCount >= maxVideoContextFrames {
+				break
+			}
+			body, err := os.ReadFile(frame)
+			if err != nil {
+				continue
+			}
+			source := fmt.Sprintf("video-frame:%d:%d:%s", videoIndex, frameIndex, firstNonEmpty(videoURLs...))
+			path, err := writeHistoryImage(targetKind, groupID, userID, messageID, source, body, "image/jpeg")
+			if err != nil {
+				continue
+			}
+			data := map[string]string{
 				"cached_file":         path,
 				"cached_mime":         "image/jpeg",
 				"cached_size":         fmt.Sprint(len(body)),
 				imageContentSHA256Key: imageBytesSHA256(body),
 				"source_type":         "video_frame",
-				"frame_index":         fmt.Sprint(i),
-			},
-		})
+				"frame_index":         fmt.Sprint(frameIndex),
+				"video_index":         fmt.Sprint(videoIndex),
+			}
+			for _, key := range []string{"forward_id", "source_message_id", "source_group_id", "source_user_id", "forward_sender_name"} {
+				if value := strings.TrimSpace(video.Data[key]); value != "" {
+					data[key] = value
+				}
+			}
+			out = append(out, MessageSegment{Type: "image", Data: data})
+			frameCount++
+		}
+		if frameCount >= maxVideoContextFrames {
+			break
+		}
+	}
+	if frameCount == 0 {
+		log.Printf("chatbot video history cache produced no frames: message_id=%s", messageID)
+		return segments
 	}
 	log.Printf("chatbot video history cached: message_id=%s frames=%d", messageID, len(cachedVideoFrameURLs(out)))
 	return out

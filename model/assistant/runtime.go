@@ -2624,7 +2624,8 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 func proactiveReplyRouterSystemPrompt(configured string) string {
 	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有问号、没有 @ 或没有点名对象而归为 none。notebook_context 是本地笔记本对当前消息的可信释义；命中时必须按释义理解消息，不能再称它为未解释缩写、私人暗语或 missing_context。若缩写按笔记本展开后本身是在公开提问或请求（例如 zgm=在干嘛），应按展开后的完整含义判断 requests_response、answerable 和 needs_response。笔记本命中只解决语义，不代表普通名词必须回复，仍要判断展开后的消息是否确实需要回应。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 放行。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有 notebook_context 没有解释、且无法从其他上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
 	const expressiveChatInGuard = `风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
-	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard
+	const forwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
+	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
 		return runtimeGuard
@@ -7447,6 +7448,10 @@ func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event Me
 	}
 	if len(videoURLs) > 0 || len(cachedFrames) > 0 {
 		if len(frames) > 0 {
+			text += "\n\n【媒体读取事实】系统已成功读取并附加当前消息中的视频画面；不得声称媒体为空、未加载、不可见、工具不可用或读取失败。若画面本身难以辨认，只能如实说明无法从已看到的画面确认具体内容。"
+			if manifest := forwardVideoFrameManifest(event); manifest != "" {
+				text += "\n【合并转发媒体节点】" + manifest + "转发中的文字和视频是独立节点；除非节点归属明确，不得声称某句文字出现在某个视频里。"
+			}
 			if quotedVideo {
 				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。" + videoFrameNarrationRule
 			} else {
@@ -7484,6 +7489,46 @@ func videoFailureReason(reason string) string {
 const videoFrameNarrationRule = "回答时一律称它为「视频」：不要出现「帧」「关键帧」「抽帧」「截图」这类字眼，" +
 	"也不要按第几帧、第几张来叙述。抽帧是内部实现，用户发出来的是一段视频。" +
 	"唯一的例外是对方专门问你「怎么读的视频」这类实现问题，那时候可以照实说是抽了几张画面来看。"
+
+func forwardVideoFrameManifest(event MessageEvent) string {
+	segments := event.Segments
+	if event.Quoted != nil {
+		segments = append(append([]MessageSegment(nil), segments...), event.Quoted.Segments...)
+	}
+	type source struct {
+		name, messageID string
+		frames          int
+	}
+	order := make([]string, 0, 2)
+	sources := map[string]*source{}
+	for _, segment := range segments {
+		if segment.Type != "image" || segment.Data["source_type"] != "video_frame" || strings.TrimSpace(segment.Data["forward_id"]) == "" {
+			continue
+		}
+		key := strings.Join([]string{segment.Data["forward_id"], segment.Data["source_message_id"], segment.Data["video_index"]}, "\x00")
+		if sources[key] == nil {
+			order = append(order, key)
+			sources[key] = &source{name: strings.TrimSpace(segment.Data["forward_sender_name"]), messageID: strings.TrimSpace(segment.Data["source_message_id"])}
+		}
+		sources[key].frames++
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	var lines []string
+	for index, key := range order {
+		item := sources[key]
+		label := fmt.Sprintf("视频节点 %d", index+1)
+		if item.name != "" {
+			label += "，发送者 " + item.name
+		}
+		if item.messageID != "" {
+			label += "，源消息 " + item.messageID
+		}
+		lines = append(lines, fmt.Sprintf("%s，已附加 %d 张画面。", label, item.frames))
+	}
+	return "\n" + strings.Join(lines, "\n") + "\n"
+}
 
 func hasVideoSegment(segments []MessageSegment) bool {
 	for _, segment := range segments {
