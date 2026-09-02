@@ -1026,6 +1026,12 @@ func TestRuntimeEnrichesQuotedForwardMediaAndCachesVideoFrames(t *testing.T) {
 	if len(channel.calls) != 1 || channel.calls[0].action != "get_forward_msg" {
 		t.Fatalf("OneBot calls = %#v", channel.calls)
 	}
+	if !strings.Contains(message.Content, "系统已成功读取") || !strings.Contains(message.Content, "发送者 Alice") || !strings.Contains(message.Content, "源消息 30001") {
+		t.Fatalf("forward video source manifest missing: %q", message.Content)
+	}
+	if !strings.Contains(message.Content, "不得声称某句文字出现在某个视频里") {
+		t.Fatalf("forward text/video grounding guard missing: %q", message.Content)
+	}
 }
 
 func TestRuntimeResolvesForwardVideoUsingSourceMetadata(t *testing.T) {

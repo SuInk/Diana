@@ -24,6 +24,15 @@ func TestVideoFrameNarrationRuleKeepsFramesOutOfTheReply(t *testing.T) {
 	}
 }
 
+func TestForwardedContentDoesNotTriggerUnsolicitedCorrection(t *testing.T) {
+	prompt := proactiveReplyRouterSystemPrompt("")
+	for _, want := range []string{"合并转发里的文字", "不得仅因转发内部出现危险", "保持 should_reply=false"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("主动回复提示缺少 %q：%s", want, prompt)
+		}
+	}
+}
+
 // 读不到视频时原先只写一句「读取或抽帧失败」，模型只能照着复述，用户不知道是这台
 // 机器没装 ffmpeg 还是视频太大。原因就在手边，不该丢掉。
 func TestVideoContextFailureNamesTheReason(t *testing.T) {
