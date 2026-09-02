@@ -111,6 +111,58 @@ func (s *qqSource) headers(cfg musicConfig) map[string]string {
 	return headers
 }
 
+// qqUINFromCookie 读取 QQ 音乐登录态里的账号。只把 Cookie 原样塞进请求头还
+// 不够：vkey 的请求体也必须带同一个 uin，否则服务端会按游客处理，会员歌曲
+// 仍然返回空 purl。
+func qqUINFromCookie(raw string) string {
+	values := musicCookieValues(raw)
+	for _, key := range []string{"uin", "qqmusic_uin", "musicid", "strmusicid"} {
+		value := strings.TrimSpace(values[key])
+		value = strings.TrimPrefix(value, "o")
+		if musicNumericID(value) != "" {
+			return value
+		}
+	}
+	return "0"
+}
+
+func qqVkeyRequest(songID, rawCookie string) ([]byte, error) {
+	uin := qqUINFromCookie(rawCookie)
+	if uin == "0" {
+		// 游客请求保留已经验证过的旧接口；新接口在无登录态时更容易直接
+		// 返回空 purl。只有 Cookie 里能取到真实账号时才走会员请求。
+		return json.Marshal(map[string]any{
+			"req_0": map[string]any{
+				"module": "vkey.GetVkeyServer",
+				"method": "CgiGetVkey",
+				"param": map[string]any{
+					"guid": qqGuid(songID), "songmid": []string{songID}, "songtype": []int{0},
+					"uin": "0", "loginflag": 1, "platform": "20",
+				},
+			},
+			"comm": map[string]any{"uin": 0, "format": "json", "ct": 24, "cv": 0},
+		})
+	}
+	return json.Marshal(map[string]any{
+		"req_0": map[string]any{
+			"module": "music.vkey.GetVkey",
+			"method": "UrlGetVkey",
+			"param": map[string]any{
+				"guid":           qqGuid(songID),
+				"songmid":        []string{songID},
+				"songtype":       []int{0},
+				"filename":       []string{"M500" + songID + songID + ".mp3"},
+				"uin":            uin,
+				"loginflag":      1,
+				"platform":       "23",
+				"h5queryversion": 1,
+				"quality":        "M500",
+			},
+		},
+		"comm": map[string]any{"uin": uin, "format": "json", "ct": 24, "cv": 0},
+	})
+}
+
 func (s *qqSource) ResolveSongID(ctx context.Context, f *musicFetcher, cfg musicConfig, ref musicReference) string {
 	if ref.SongID != "" {
 		return ref.SongID
@@ -246,21 +298,7 @@ func (s *qqSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg musicCo
 			}
 		}
 	}
-	request, err := json.Marshal(map[string]any{
-		"req_0": map[string]any{
-			"module": "vkey.GetVkeyServer",
-			"method": "CgiGetVkey",
-			"param": map[string]any{
-				"guid":      qqGuid(songID),
-				"songmid":   []string{songID},
-				"songtype":  []int{0},
-				"uin":       "0",
-				"loginflag": 1,
-				"platform":  "20",
-			},
-		},
-		"comm": map[string]any{"uin": 0, "format": "json", "ct": 24, "cv": 0},
-	})
+	request, err := qqVkeyRequest(songID, cfg.sourceOptions(s.Key()).Cookie)
 	if err != nil {
 		return ""
 	}

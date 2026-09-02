@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -542,6 +543,22 @@ func TestMusicRequestToolReportsAMiss(t *testing.T) {
 	}
 }
 
+func TestMusicRequestToolReportsAFoundButRestrictedSong(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte("audio"))
+	plugin := newMusicTestPlugin(server)
+	settings := musicRequestSettings(server)
+	settings[musicSettingSources] = []string{"qq"}
+	tool := musicRequestTool(t, plugin, settings)
+
+	output, err := tool.Run(context.Background(), map[string]any{"query": "雾里"})
+	if err == nil {
+		t.Fatalf("Run() = %q, want a restricted-song error", output)
+	}
+	if !strings.Contains(err.Error(), "会员 Cookie") || strings.Contains(err.Error(), "没搜到") {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
 func TestMusicRequestToolRejectsAnEmptyQuery(t *testing.T) {
 	server := musicTestServer(t, 213000, []byte("audio"))
 	plugin := newMusicTestPlugin(server)
@@ -789,6 +806,66 @@ func TestKugouSongIDCarriesBothHalves(t *testing.T) {
 	}
 	if got := kugouSongIDFromURL("https://www.kugou.com/song/#hash=nothex&album_id=1"); got != "" {
 		t.Fatalf("kugouSongIDFromURL() accepted a non-hash: %q", got)
+	}
+}
+
+// 酷狗当前的 songsearch 接口把结果放在 data.lists，字段名也从旧接口的
+// snake_case 换成了 PascalCase。线上切换接口后必须两套都能读，自建 API
+// 仍可能继续返回旧结构。
+func TestKugouCurrentSearchResponse(t *testing.T) {
+	var payload kugouSearchResponse
+	if err := json.Unmarshal([]byte(`{"status":1,"data":{"lists":[{"FileHash":"14CA89AF03747467CFC5BEF8A94DB5DB","SongName":"群青","SingerName":"YOASOBI","AlbumName":"群青","AlbumID":"38936024","Duration":248}]}}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	entries := payload.entries()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	entry := entries[0]
+	if entry.Hash != "14CA89AF03747467CFC5BEF8A94DB5DB" || entry.SongName != "群青" || entry.SingerName != "YOASOBI" || entry.AlbumID != "38936024" || entry.Duration != 248 {
+		t.Fatalf("entry = %#v", entry)
+	}
+}
+
+func TestQQVkeyRequestUsesCookieIdentity(t *testing.T) {
+	payload, err := qqVkeyRequest("003RMaRI1iFoYd", "foo=bar; uin=o123456; qm_keyst=secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Req0 struct {
+			Module string `json:"module"`
+			Method string `json:"method"`
+			Param  struct {
+				UIN      string   `json:"uin"`
+				Filename []string `json:"filename"`
+			} `json:"param"`
+		} `json:"req_0"`
+		Comm struct {
+			UIN string `json:"uin"`
+		} `json:"comm"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Req0.Module != "music.vkey.GetVkey" || decoded.Req0.Method != "UrlGetVkey" {
+		t.Fatalf("request route = %s/%s", decoded.Req0.Module, decoded.Req0.Method)
+	}
+	if decoded.Req0.Param.UIN != "123456" || decoded.Comm.UIN != "123456" {
+		t.Fatalf("request uin = %q / %q", decoded.Req0.Param.UIN, decoded.Comm.UIN)
+	}
+	if len(decoded.Req0.Param.Filename) != 1 || !strings.HasPrefix(decoded.Req0.Param.Filename[0], "M500") {
+		t.Fatalf("request filename = %#v", decoded.Req0.Param.Filename)
+	}
+}
+
+func TestKugouCredentialsUseAuthorizationHeader(t *testing.T) {
+	cookie := "token=token-value;userid=42;dfid=device-value"
+	headers := newKugouSource().headers(musicConfig{SourceOptions: map[string]musicSourceOptions{
+		"kugou": {Cookie: cookie},
+	}})
+	if headers["Cookie"] != cookie || headers["Authorization"] != cookie {
+		t.Fatalf("headers = %#v", headers)
 	}
 }
 

@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -87,6 +88,21 @@ type musicSourceOptions struct {
 	Cookie  string
 }
 
+func musicCookieValues(raw string) map[string]string {
+	values := map[string]string{}
+	for _, part := range strings.Split(raw, ";") {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key != "" {
+			values[key] = strings.TrimSpace(value)
+		}
+	}
+	return values
+}
+
 // musicFetcher 收拢所有曲库共用的取数动作：挑客户端、取 JSON、跟跳转、下载。
 type musicFetcher struct {
 	// client 非空时所有请求都用它，测试用 httptest 注入；生产留空，
@@ -94,6 +110,27 @@ type musicFetcher struct {
 	// ——自建服务通常就在 127.0.0.1，被 SSRF 防护挡掉才是错的。
 	client *http.Client
 }
+
+type musicDiagnosticsKey struct{}
+
+type musicDiagnostics struct {
+	failures []string
+}
+
+func withMusicDiagnostics(ctx context.Context) (context.Context, *musicDiagnostics) {
+	diagnostics := &musicDiagnostics{}
+	return context.WithValue(ctx, musicDiagnosticsKey{}, diagnostics), diagnostics
+}
+
+func recordMusicFailure(ctx context.Context, format string, args ...any) {
+	diagnostics, _ := ctx.Value(musicDiagnosticsKey{}).(*musicDiagnostics)
+	if diagnostics == nil {
+		return
+	}
+	diagnostics.failures = append(diagnostics.failures, fmt.Sprintf(format, args...))
+}
+
+func (d *musicDiagnostics) failed() bool { return d != nil && len(d.failures) > 0 }
 
 func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool) *http.Client {
 	if f != nil && f.client != nil {
@@ -108,6 +145,7 @@ func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool) *http.Client {
 func (f *musicFetcher) request(ctx context.Context, cfg musicConfig, endpoint string, guarded bool, headers map[string]string) (*http.Response, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
+		recordMusicFailure(ctx, "创建请求失败：%v", err)
 		return nil, false
 	}
 	applyBrowserHeaders(req, "")
@@ -117,10 +155,12 @@ func (f *musicFetcher) request(ctx context.Context, cfg musicConfig, endpoint st
 	resp, err := f.httpClient(cfg, guarded).Do(req)
 	if err != nil {
 		log.Printf("music request failed for %s: %v", redactURLQuery(endpoint), err)
+		recordMusicFailure(ctx, "请求 %s 失败：%v", redactURLQuery(endpoint), err)
 		return nil, false
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		log.Printf("music bad status for %s: %s", redactURLQuery(endpoint), resp.Status)
+		recordMusicFailure(ctx, "请求 %s 返回 %s", redactURLQuery(endpoint), resp.Status)
 		resp.Body.Close()
 		return nil, false
 	}
@@ -137,10 +177,12 @@ func (f *musicFetcher) fetchJSON(ctx context.Context, cfg musicConfig, endpoint 
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil || len(body) == 0 {
+		recordMusicFailure(ctx, "读取 %s 返回失败：%v", redactURLQuery(endpoint), err)
 		return false
 	}
 	if err := json.Unmarshal(unwrapJSONPayload(body), target); err != nil {
 		log.Printf("music parse failed for %s: %v", redactURLQuery(endpoint), err)
+		recordMusicFailure(ctx, "解析 %s 返回失败：%v", redactURLQuery(endpoint), err)
 		return false
 	}
 	return true
