@@ -245,6 +245,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/user-names", h.lookupAssistantUserNames)
 	router.GET(base+"/users/:id", h.getAssistantUser)
 	h.registerPersonaRoutes(router, base)
+	h.registerCharacterCardRoutes(router, base)
+	h.registerWorldBookRoutes(router, base)
 	router.GET(base+"/notebook", h.listNotebook)
 	router.GET(base+"/notebook/entry", h.getNotebookEntry)
 	router.POST(base+"/notebook", h.saveNotebookEntry)

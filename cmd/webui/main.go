@@ -272,6 +272,8 @@ func main() {
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
 	botRuntime.SetThreadStateStore(sqliteStore)
 	botRuntime.SetNotebookStore(sqliteStore)
+	botRuntime.SetWorldBookStore(sqliteStore)
+	botRuntime.SetExpressionStyleStore(sqliteStore)
 	// 版本号只活在构建期注入的变量里，机器人自己看不到就只能按训练记忆编一个。
 	// 「有没有新版本」的判断只该有一份，在更新器那边；机器人问它要结论。
 	botRuntime.SetReleaseStatusProvider(systemHandler)

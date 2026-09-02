@@ -42,6 +42,7 @@
                 <strong>{{ user.display_name || "（未记录昵称）" }}</strong>
                 <span class="muted mono" style="font-size: 11.5px">{{ user.user_id }}</span>
                 <span class="badge" :class="favorabilityClass(user.favorability)">好感 {{ user.favorability }}</span>
+                <span v-if="user.romance?.active" class="badge accent">恋人</span>
               </div>
               <p class="log-detail">
                 画像 {{ user.portrait_count ?? 0 }} 条 · 记忆 {{ user.memory_count ?? 0 }} 条 · 消息 {{ formatNumber(user.message_count) }} 条
@@ -76,6 +77,7 @@
       <div v-else-if="detail" class="stack" style="gap: 16px">
         <div class="cluster" style="gap: 8px">
           <span class="badge" :class="favorabilityClass(detail.profile.favorability)">好感度 {{ detail.profile.favorability }}</span>
+          <span v-if="detail.profile.romance?.active" class="badge accent" :title="detail.profile.romance.since ? `确立于 ${formatTime(detail.profile.romance.since)}` : undefined">恋人</span>
           <span class="badge">消息 {{ formatNumber(detail.profile.message_count) }} 条</span>
           <span v-if="detail.profile.last_seen_at" class="muted" style="font-size: 12.5px">
             最近活跃 {{ formatTime(detail.profile.last_seen_at) }}

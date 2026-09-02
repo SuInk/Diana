@@ -23,9 +23,11 @@ type promptContextPreload struct {
 	threadState   string
 	memoryContext string
 	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
-	memoryUsage     contextLayerUsage
-	notebookContext string
-	mediaIndex      string
+	memoryUsage       contextLayerUsage
+	notebookContext   string
+	worldBookContext  string
+	expressionContext string
+	mediaIndex        string
 }
 
 // startPromptContextPreload 并发预取几层只读上下文。调用方必须在使用结果前调用
@@ -40,7 +42,7 @@ func (r *Runtime) startPromptContextPreload(
 ) *promptContextPreload {
 	preload := &promptContextPreload{}
 
-	preload.wg.Add(4)
+	preload.wg.Add(6)
 	go func() {
 		defer preload.wg.Done()
 		preload.sessionThread = r.sessionThreadNote(ctx, event)
@@ -56,6 +58,14 @@ func (r *Runtime) startPromptContextPreload(
 	go func() {
 		defer preload.wg.Done()
 		preload.notebookContext = r.notebookContext(ctx, event, queryText)
+	}()
+	go func() {
+		defer preload.wg.Done()
+		preload.worldBookContext = r.worldBookContext(ctx, event, queryText)
+	}()
+	go func() {
+		defer preload.wg.Done()
+		preload.expressionContext = r.expressionStyleContext(ctx, event)
 	}()
 	if wantMediaIndex {
 		preload.wg.Add(1)

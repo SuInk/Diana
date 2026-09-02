@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "id": "world",
+      "parent_id": "",
+      "title": "世界",
+      "content": "故事发生在虚构城市枝江。你就住在群主的服务器上，群里的人都知道这一点。",
+      "keywords": [],
+      "always_on": true,
+      "enabled": true
+    },
+    {
+      "id": "harbor",
+      "parent_id": "world",
+      "title": "港口",
+      "content": "枝江港常年有雾，群友们约好雾散了一起去钓鱼，但雾从来没有散过。",
+      "keywords": ["港口", "码头", "钓鱼"],
+      "always_on": false,
+      "enabled": true
+    },
+    {
+      "id": "clock-tower",
+      "parent_id": "world",
+      "title": "钟楼",
+      "content": "老城区的钟楼午夜会自己敲一下，本地人习以为常，游客会被吓一跳。",
+      "keywords": ["钟楼", "老城区"],
+      "always_on": false,
+      "enabled": true
+    }
+  ]
+}
