@@ -276,6 +276,12 @@ type Runtime struct {
 	structuredMemory          StructuredMemoryStore
 	threadStates              ThreadStateStore
 	notebook                  NotebookStore
+	worldBook                 WorldBookStore
+	expressionStyles          ExpressionStyleStore
+	moodMu                    sync.Mutex
+	moods                     map[string]*moodState
+	pokeMu                    sync.Mutex
+	pokeLastReply             map[string]time.Time
 	buildInfo                 BuildInfo
 	releaseStatus             ReleaseStatusProvider
 	reminders                 ReminderStore
@@ -665,6 +671,7 @@ func (r *Runtime) Start(parent context.Context) error {
 	go func() {
 		// 提醒循环、NoneBot 桥接和 OneBot 主连接共享同一个启动生命周期。
 		go r.runReminderLoop(ctx)
+		go r.runRomanceGreetingLoop(ctx)
 		go r.runInboundCoordinator(ctx, leaseOwner, cfg.MaxBotConcurrency, releaseStaleLeases, inboundDone)
 		go r.runMemoryCoordinator(ctx, leaseOwner+"-memory", releaseStaleLeases, memoryDone)
 		r.bridge.Start(ctx)
@@ -1596,6 +1603,8 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		loopCandidate, shouldClassifyLoop = r.botReplyLoopCandidate(event, text)
 	}
 	r.remember(event)
+	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
+	r.observeGroupExpression(event, text)
 	history := r.contextHistory(event)
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
@@ -2927,7 +2936,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if !event.userProfileLoaded {
 		userProfile, _ = r.loadUserMemoryProfile(ctx, event)
 	}
-	relationship := RelationshipPolicyFor(userProfile, cfg.OwnerID, event.UserID)
+	relationship := RelationshipPolicyForConfig(cfg, userProfile, event.UserID)
 	event = r.enrichRecentTextReference(ctx, event, cleanText, replyHistory)
 	overrides := r.pluginOverridesForEvent(event)
 	settingOverrides := r.pluginSettingOverridesForEvent(event)
@@ -3233,6 +3242,25 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Role:       llm.RoleUser,
 				Content:    consecutiveReplyContext(previousTurn),
 				Priority:   llm.MessagePriorityPlugin,
+				AtomicText: true,
+			})
+		}
+		// 世界观设定和长期记忆同级：都是「理解这条消息所需的背景」。常驻设定在
+		// 同一棵树不变时逐轮稳定，触发式设定随消息变化，和检索记忆的易变程度一致。
+		if worldBookContext := contextPreload.worldBookContext; worldBookContext != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    worldBookContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
+		// 群常用表达是风格参考，和记忆同级注入；没攒够门槛时它是空串，零开销。
+		if expressionContext := contextPreload.expressionContext; expressionContext != "" {
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    expressionContext,
+				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
 		}
@@ -5603,7 +5631,8 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	voice := personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.promptWithActions(boolValue(cfg.NaturalReplySplitEnabled, true), voice, actionsEnabled) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + cfg.ReplyStyle.closingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
+	// 心情同理——主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.promptWithActions(boolValue(cfg.NaturalReplySplitEnabled, true), voice, actionsEnabled) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + cfg.ReplyStyle.closingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
 	if persona == "" {
 		return messages
 	}
@@ -5739,6 +5768,11 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n" + promptToolRelationshipList)
 		builder.WriteString("\n" + promptToolRelationshipQuery)
 		builder.WriteString("\n" + promptToolRelationshipPortrait)
+		// 恋爱模式的规则跟着配置走：同一台机器人整段稳定，不影响前缀缓存。
+		// 关着时一个字不注入——模型不知道有这回事，被表白就按普通关系自然回应。
+		if boolValue(cfg.RomanceEnabled, false) {
+			builder.WriteString("\n" + promptToolRelationshipRomance)
+		}
 	}
 	if agentEnabled && hasTool(dianaImageToolName) {
 		builder.WriteString("\n" + promptToolImage)
@@ -5791,6 +5825,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	// 时段语气紧挨着锚点注入，理由和锚点一样：这两条都是「怎么说」，离生成越近
 	// 越管用。关掉时返回空串，appendPromptSection 会跳过。
 	appendPromptSection(&builder, dayPartToneForConfig(cfg, r.clock()))
+	// 心情语气和时段语气同一批：都描述「此刻怎么说」，几小时才变一档，
+	// 不会打散前缀缓存。
+	appendPromptSection(&builder, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&builder, cfg.ReplyStyle.closingAnchor())
@@ -8970,6 +9007,9 @@ func (r *Runtime) recordRecallReplyDelete(event MessageEvent, messageID string, 
 
 // handleNotice 处理群通知事件。
 func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
+	if event.SubType == "poke" {
+		return r.handlePokeNotice(ctx, event)
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	if !cfg.WelcomeEnabled {
 		return nil
@@ -9151,7 +9191,7 @@ func (r *Runtime) userMemoryContext(ctx context.Context, event MessageEvent) str
 	if !ok {
 		return ""
 	}
-	policy := RelationshipPolicyFor(profile, r.effectiveConfigForEvent(event).OwnerID, event.UserID)
+	policy := RelationshipPolicyForConfig(r.effectiveConfigForEvent(event), profile, event.UserID)
 	return formatUserMemoryContext(profile, policy)
 }
 
@@ -9207,6 +9247,10 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	// 的特权复述出去。能力问题由 diana.capabilities 负责。
 	builder.WriteString("\n互动次数：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
+	if line := romanceContextLine(policy); line != "" {
+		builder.WriteString("\n")
+		builder.WriteString(line)
+	}
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
 		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)

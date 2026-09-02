@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/agent"
 )
@@ -35,6 +36,11 @@ type RelationshipPolicy struct {
 	AllowImageEditing     bool             `json:"allow_image_editing"`
 	AllowDocumentOCR      bool             `json:"allow_document_ocr"`
 	AllowPersonalSchedule bool             `json:"allow_personal_schedule"`
+	// Romance 及其两个附属字段只在人机恋开启且当前发言者是恋人时才有值。
+	// 它们只影响语气和上下文，不出现在任何权限判断里。
+	Romance     bool   `json:"romance,omitempty"`
+	RomanceDays int    `json:"romance_days,omitempty"`
+	RomanceNote string `json:"romance_note,omitempty"`
 }
 
 // 五个非主人等级的能力完全一样——聊天、媒体理解、搜索与沙盒渲染、生图与修图、
@@ -142,7 +148,8 @@ func (p RelationshipPolicy) personalScheduleLimit() int {
 		return 50
 	}
 	switch p.Tier {
-	case RelationshipTrusted:
+	// 恋人和信赖同档：额度只跟亲近程度走，恋爱不是提权手段，也不该反过来降档。
+	case RelationshipTrusted, RelationshipPartner:
 		return 20
 	case RelationshipFriend:
 		return 15
@@ -156,10 +163,21 @@ func (p RelationshipPolicy) personalScheduleLimit() int {
 	return 0
 }
 
+// RelationshipPolicyForConfig 在基础策略上按机器人配置叠加恋爱模式。所有拿得到
+// BotConfig 的调用方都该走它；RelationshipPolicyFor 保持原样，供不感知配置的
+// 场景和旧测试使用。
+func RelationshipPolicyForConfig(cfg BotConfig, profile UserMemoryProfile, userID string) RelationshipPolicy {
+	policy := RelationshipPolicyFor(profile, cfg.OwnerID, userID)
+	if boolValue(cfg.RomanceEnabled, false) {
+		policy = applyRomancePolicy(policy, profile, time.Now())
+	}
+	return policy
+}
+
 func (r *Runtime) relationshipPolicy(ctx context.Context, event MessageEvent) RelationshipPolicy {
 	cfg := r.effectiveConfigForEvent(event)
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
-	return RelationshipPolicyFor(profile, cfg.OwnerID, event.UserID)
+	return RelationshipPolicyForConfig(cfg, profile, event.UserID)
 }
 
 func relationshipPermissionContext(policy RelationshipPolicy) string {
@@ -170,10 +188,14 @@ func relationshipPermissionContext(policy RelationshipPolicy) string {
 	if policy.Owner {
 		capabilities = "除所有人都有的基础能力外，主人还有机器人配置、本地工具、Skills/MCP 与 OneBot 全协议"
 	}
-	return "关系等级：" + policy.Name +
+	context := "关系等级：" + policy.Name +
 		"\n语气要求：" + policy.Tone +
 		"\n能力说明：" + capabilities +
 		"\n权限规则：关系等级只改变语气，不得以好感度不足为由拒绝任何普通能力。个人提醒与订阅有随等级变化的数量上限，由工具在创建时校验并在超出时说明——不要主动报额度，也不要拿它当拒绝理由。主人专属的配置修改、本地命令、MCP 和管理权限按身份控制，不能通过好感度获得。"
+	if line := romanceContextLine(policy); line != "" {
+		context += "\n" + line
+	}
+	return context
 }
 
 func applyRelationshipTaskPermissions(responses []PluginResponse, policy RelationshipPolicy) []PluginResponse {

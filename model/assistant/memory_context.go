@@ -54,7 +54,7 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 			DisplayName: strings.TrimSpace(event.SenderNameOrID()),
 		}
 	}
-	policy := RelationshipPolicyFor(profile, cfg.OwnerID, event.UserID)
+	policy := RelationshipPolicyForConfig(cfg, profile, event.UserID)
 	text, _ := r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
 	return text
 }
@@ -323,6 +323,10 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 	// 本等级的特权。能力问题由 diana.capabilities 负责。
 	builder.WriteString("；累计互动：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
+	if line := romanceContextLine(policy); line != "" {
+		builder.WriteString("\n")
+		builder.WriteString(line)
+	}
 	// 画像和好感度、关系等级一样属于固定核心：它答的是「这个人是谁」，被预算
 	// 挤掉的话机器人只能退回泛泛而谈。条数由 portraitFieldSpecs 的容量封顶，长
 	// 度可控，不参与下面各段的裁剪。

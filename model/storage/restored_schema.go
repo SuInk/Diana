@@ -69,6 +69,19 @@ CREATE TABLE IF NOT EXISTS voice_transcripts (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS group_expressions (
+  scope_key TEXT NOT NULL,
+  phrase TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  user_count INTEGER NOT NULL DEFAULT 0,
+  last_user_id TEXT NOT NULL DEFAULT '',
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  PRIMARY KEY (scope_key, phrase)
+);
+CREATE INDEX IF NOT EXISTS idx_group_expressions_scope_seen
+  ON group_expressions(scope_key, last_seen_at DESC);
+
 CREATE TABLE IF NOT EXISTS semantic_reference_cache (
   cache_key TEXT PRIMARY KEY,
   message_ids TEXT NOT NULL,
@@ -87,6 +100,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   message_count INTEGER NOT NULL,
   memories TEXT NOT NULL,
   portrait TEXT NOT NULL DEFAULT '',
+  romance TEXT NOT NULL DEFAULT '',
   last_seen_at TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (bot_profile_id, user_id)
@@ -315,6 +329,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addUserProfilePortraitColumn(); err != nil {
 		return err
 	}
+	if err := s.addUserProfileRomanceColumn(); err != nil {
+		return err
+	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
@@ -360,6 +377,19 @@ func (s *SQLiteStore) addUserProfilePortraitColumn() error {
 		return err
 	}
 	_, err = s.db.Exec(`ALTER TABLE user_profiles ADD COLUMN portrait TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+// addUserProfileRomanceColumn 给人员档案表补上恋爱关系列。
+//
+// 人机恋是新功能，老库里没有这一列。补列即可，不回填：升级前没人和机器人谈过
+// 恋爱，空着就是事实。
+func (s *SQLiteStore) addUserProfileRomanceColumn() error {
+	has, err := s.hasColumn("user_profiles", "romance")
+	if err != nil || has {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE user_profiles ADD COLUMN romance TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 

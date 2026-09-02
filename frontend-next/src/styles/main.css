@@ -3366,6 +3366,60 @@ a.nav-action {
   opacity: 0.5;
 }
 
+/* 世界书列表：一行一个节点，缩进表达层级。 */
+.world-book-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.world-book-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 6px;
+}
+
+.world-book-row + .world-book-row {
+  border-top: 1px solid var(--border);
+}
+
+.world-book-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.world-book-title:hover strong {
+  color: var(--accent);
+}
+
+.world-book-title strong {
+  font-size: 13px;
+}
+
+.world-book-title small {
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 620px) {
   .target-row { grid-template-columns: 1fr auto; }
   .target-row > :nth-child(2) { grid-column: 1 / -1; }

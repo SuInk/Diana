@@ -19,7 +19,8 @@ import type {
   StatsSnapshot,
   UpdateStatus,
   UserFavorabilityChange,
-  UserMemoryProfile
+  UserMemoryProfile,
+  WorldBookNode
 } from "./api";
 
 export const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
@@ -53,7 +54,7 @@ const oneBotProfile: BotProfileConfig = {
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
-  long_term_memory_enabled: true, cross_group_memory_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
+  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-5.6" }, vision: { profile_id: "llm-vision", model: "gpt-5.6" },
@@ -160,9 +161,16 @@ const demoPersonas = [
   { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", reply_style: "concise", self_reference: "", sentence_enders: "" }
 ];
 
+// 世界书的演示数据：一条常驻骨架加一条触发式细节，让树形和两种注入方式都看得到。
+const demoWorldBook: WorldBookNode[] = [
+  { id: "world-1", parent_id: "", title: "枝江", content: "故事发生在虚构城市枝江，机器人就住在群主的服务器上。", keywords: [], always_on: true, enabled: true },
+  { id: "world-2", parent_id: "world-1", title: "港口", content: "枝江港常年有雾，群友们约好雾散了一起去钓鱼。", keywords: ["港口", "码头", "钓鱼"], always_on: false, enabled: true }
+];
+
 const demoUsers: UserMemoryProfile[] = [
   {
     user_id: "100200711", display_name: "青禾", favorability: 62, message_count: 1843, last_seen_at: before(2), updated_at: before(2),
+    romance: { active: true, since: before(64000), started_by: "user" },
     portrait: [
       { field: "residence", label: "居住地点", value: "住在杭州", source: "stated", updated_at: before(1400) },
       { field: "occupation", label: "职业", value: "做后端开发", source: "stated", updated_at: before(2600) },
@@ -673,6 +681,109 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
     if (index >= 0) demoPersonas.splice(index, 1);
     return json({ personas: demoPersonas });
+  }
+  if (path === "/api/assistant/personas/import-card") {
+    // 演示模式只解 JSON 卡；PNG 卡要真实后端的块扫描。
+    try {
+      const parsed = JSON.parse(atob(String(body.card_base64 ?? ""))) as Record<string, any>;
+      const data = (parsed.data && typeof parsed.data === "object" ? parsed.data : parsed) as Record<string, any>;
+      const name = String(data.name ?? "").trim();
+      if (!name && !String(data.description ?? "").trim()) throw new Error("empty card");
+      const persona = {
+        id: `persona-card-${demoPersonas.length + 1}`,
+        name: name || "未命名角色",
+        system_prompt: [`你是${name || "未命名角色"}。`, String(data.description ?? ""), String(data.personality ?? "")].filter(Boolean).join("\n"),
+        reply_style: "",
+        self_reference: "",
+        sentence_enders: ""
+      };
+      demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
+      let bookImported = 0;
+      const entries = data.character_book?.entries;
+      const entryList = Array.isArray(entries) ? entries : entries && typeof entries === "object" ? Object.values(entries) : [];
+      for (const entry of entryList as Array<Record<string, any>>) {
+        const keywords = (Array.isArray(entry.key) ? entry.key : Array.isArray(entry.keys) ? entry.keys : []).map(String);
+        demoWorldBook.push({
+          id: `world-card-${demoWorldBook.length + 1}`,
+          parent_id: "",
+          title: String(entry.comment ?? entry.name ?? "").trim() || keywords[0] || String(entry.content ?? "").slice(0, 16),
+          content: String(entry.content ?? ""),
+          keywords,
+          always_on: Boolean(entry.constant),
+          enabled: !entry.disable && entry.enabled !== false
+        });
+        bookImported++;
+      }
+      return json({
+        persona,
+        personas: demoPersonas,
+        skipped: 0,
+        renamed: 0,
+        book_name: String(data.character_book?.name ?? ""),
+        book_imported: bookImported,
+        book_dropped: 0,
+        nodes: bookImported ? demoWorldBook : undefined
+      });
+    } catch {
+      return json({ error: "演示模式只支持 JSON 角色卡；PNG 内嵌卡请在真实部署里导入" }, 400);
+    }
+  }
+  if (path === "/api/assistant/world-book" && method === "GET") {
+    return json({ nodes: demoWorldBook, limit: 200 });
+  }
+  if (path === "/api/assistant/world-book" && method === "POST") {
+    const node = { ...(body.node as Record<string, unknown>) } as unknown as WorldBookNode;
+    const index = demoWorldBook.findIndex((item) => item.id === node.id);
+    if (index >= 0) demoWorldBook[index] = { ...demoWorldBook[index], ...node };
+    else demoWorldBook.push({ ...node, id: `world-${demoWorldBook.length + 1}` });
+    return json({ node: demoWorldBook[index >= 0 ? index : demoWorldBook.length - 1], nodes: demoWorldBook });
+  }
+  if (path === "/api/assistant/world-book/import") {
+    // 和后端一致：SillyTavern 的 entries（对象或数组）也认，字段就地折算。
+    let incoming = (body.nodes as Array<Record<string, unknown>>) ?? [];
+    const entries = body.entries as Record<string, Record<string, unknown>> | Array<Record<string, unknown>> | undefined;
+    if (!incoming.length && entries && typeof entries === "object") {
+      const list = Array.isArray(entries) ? entries : Object.values(entries);
+      incoming = list.map((entry) => {
+        const keywords = (Array.isArray(entry.key) ? entry.key : Array.isArray(entry.keys) ? entry.keys : []).map(String);
+        const secondary = (Array.isArray(entry.keysecondary) ? entry.keysecondary : Array.isArray(entry.secondary_keys) ? entry.secondary_keys : []).map(String);
+        return {
+          title: String(entry.comment ?? entry.name ?? "").trim() || keywords[0] || String(entry.content ?? "").slice(0, 16),
+          content: String(entry.content ?? ""),
+          keywords,
+          secondary_keywords: entry.selectiveLogic && Number(entry.selectiveLogic) !== 0 ? [] : secondary,
+          always_on: Boolean(entry.constant),
+          enabled: !entry.disable && entry.enabled !== false
+        };
+      });
+    }
+    let imported = 0;
+    let dropped = 0;
+    for (const raw of incoming) {
+      const title = String(raw.title ?? "").trim();
+      if (!title) { dropped++; continue; }
+      demoWorldBook.push({
+        id: `world-import-${demoWorldBook.length + 1}`,
+        parent_id: "",
+        title,
+        content: String(raw.content ?? ""),
+        keywords: Array.isArray(raw.keywords) ? raw.keywords.map(String) : [],
+        always_on: Boolean(raw.always_on),
+        enabled: raw.enabled !== false
+      });
+      imported++;
+    }
+    return json({ nodes: demoWorldBook, imported, dropped });
+  }
+  if (path === "/api/assistant/world-book/delete") {
+    const index = demoWorldBook.findIndex((item) => item.id === String(body.id ?? ""));
+    if (index >= 0) {
+      const removed = demoWorldBook.splice(index, 1)[0];
+      for (const node of demoWorldBook) {
+        if (node.parent_id === removed.id) node.parent_id = removed.parent_id;
+      }
+    }
+    return json({ nodes: demoWorldBook });
   }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {
