@@ -1248,7 +1248,11 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
 	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
 	if groupCfg.ReplyGate != nil {
-		cfg.ReplyGate = groupCfg.ReplyGate.Clone()
+		// 门槛整份用群里的（界面上那个「为本群单独设置回复规则」开关就是这个意思），
+		// 但名单要并上机器人级的：否则任何一个群开了自定义门禁，全局黑名单在那个
+		// 群就静默失效——被全局屏蔽的账号重新能触发机器人，而群设置页只显示本群
+		// 填的那一条，看不出来。
+		cfg.ReplyGate = groupCfg.ReplyGate.MergedWith(cfg.ReplyGate)
 	}
 	return cfg
 }
@@ -11129,6 +11133,11 @@ func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent,
 	if ownerID != "" && event.UserID == ownerID && gate.OwnerBypassEnabled() {
 		return
 	}
+	// 白名单外的人连静默提示都不该收到：那句话本身会告诉对方「机器人在这儿、
+	// 只是现在不说话」，而白名单的意思是这个群里根本不该理他。
+	if !gate.IsAllowedUser(event.UserID) {
+		return
+	}
 	if r.isUserDisabled(event.UserID) || gate.IsBlocked(event.UserID) || gate.IsExempt(event.UserID) {
 		return
 	}
@@ -11159,6 +11168,12 @@ func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
 		return true
 	}
 	if gate.IsBlocked(event.UserID) {
+		return false
+	}
+	// 白名单在豁免之前判：豁免的语义是「绕过等级和时段门槛」，不是「绕过准入」。
+	// 放在豁免之后的话，一个既在豁免名单又不在白名单里的人会被放行，那就等于
+	// 白名单可以被豁免名单绕开。
+	if !gate.IsAllowedUser(event.UserID) {
 		return false
 	}
 	if gate.IsExempt(event.UserID) {
