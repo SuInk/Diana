@@ -4470,6 +4470,26 @@ func TestRuntimeImageEditNamedMemberAvatarComesFromModelSelection(t *testing.T) 
 	}
 }
 
+func TestRuntimeImageEditPrivateAvatarAllowsExplicitAccountOnly(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "10001",
+		MessageID: "edit-private-avatar",
+		Segments: []MessageSegment{
+			{Type: "text", Data: map[string]string{"text": "2980652655 生成一张他的自拍照"}},
+		},
+	}
+
+	sources := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "2980652655"})
+	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("2980652655") {
+		t.Fatalf("sources = %#v", sources)
+	}
+	if extra := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "99999"}); len(extra) != 0 {
+		t.Fatalf("unmentioned identity source produced %#v", extra)
+	}
+}
+
 // TestRuntimeFailsOverLLMProfilesWithinGroup 验证账号失效时只在当前分组内轮换到下一个配置。
 func TestRuntimeFailsOverLLMProfilesWithinGroup(t *testing.T) {
 	channel := &recordingChannel{}

@@ -5,8 +5,11 @@ package assistant
 
 import (
 	"context"
+	"regexp"
 	"strings"
 )
+
+var explicitQQAccountPattern = regexp.MustCompile(`[1-9][0-9]{4,13}`)
 
 // 图片编辑要用到的头像来源。
 //
@@ -85,6 +88,19 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 	reachable := map[string]bool{}
 	for _, userID := range mentionedUserIDs(event.Segments) {
 		reachable[strings.TrimSpace(userID)] = true
+	}
+	// 私聊没有群成员名单可供核验，但用户在当前消息里明确写出的 QQ 号同样是
+	// 结构化、可审计的身份指向。只放行消息中逐字出现的号码，避免模型凭空选择
+	// 一个不相关账号；群聊仍以真实成员名单为准。
+	if event.Kind == EventKindPrivate {
+		for _, segment := range event.Segments {
+			if segment.Type != "text" {
+				continue
+			}
+			for _, userID := range explicitQQAccountPattern.FindAllString(segment.Data["text"], -1) {
+				reachable[userID] = true
+			}
+		}
 	}
 	if event.Quoted != nil {
 		if userID := strings.TrimSpace(event.Quoted.UserID); userID != "" {
