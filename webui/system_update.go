@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,8 @@ const (
 )
 
 var errInvalidUpdateVersion = errors.New("更新版本号无效")
+
+type releaseRefreshContextKey struct{}
 
 type systemUpdateCheckResponse struct {
 	DeploymentMode    string `json:"deployment_mode"`
@@ -74,6 +77,11 @@ type UpdatePolicyStore interface {
 	SaveUpdatePolicy(context.Context, updater.UpdatePolicy) error
 }
 
+type UpdateGitHubTokenStore interface {
+	LoadUpdateGitHubToken(context.Context) (string, bool, error)
+	SaveUpdateGitHubToken(context.Context, string) error
+}
+
 type SystemUpdater interface {
 	Status(context.Context) (updater.Status, error)
 	Check(context.Context) (updater.Status, error)
@@ -94,6 +102,10 @@ type SystemUpdateHandler struct {
 	policyStore           UpdatePolicyStore
 	policyMu              sync.RWMutex
 	policy                updater.UpdatePolicy
+	githubTokenStore      UpdateGitHubTokenStore
+	githubTokenMu         sync.RWMutex
+	githubToken           string
+	staticReleaseURL      string
 	autoUpdateMu          sync.Mutex
 	updateSchedulerOnce   sync.Once
 	releaseCacheStore     ReleaseCacheStore
@@ -114,15 +126,24 @@ func (h *SystemUpdateHandler) SetReleasePackageUpdater(releaseUpdater ReleasePac
 // NewSystemUpdateHandler 创建系统更新接口处理器。
 func NewSystemUpdateHandler(systemUpdater SystemUpdater) *SystemUpdateHandler {
 	return &SystemUpdateHandler{
-		updater:    systemUpdater,
-		buildType:  buildTypeRelease,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		policy:     updater.DefaultUpdatePolicy(),
+		updater:          systemUpdater,
+		buildType:        buildTypeRelease,
+		httpClient:       &http.Client{Timeout: 10 * time.Second},
+		policy:           updater.DefaultUpdatePolicy(),
+		staticReleaseURL: "https://github.com/SuInk/Diana/releases/latest/download/latest.json",
 	}
 }
 
 func (h *SystemUpdateHandler) SetUpdatePolicyStore(ctx context.Context, store UpdatePolicyStore) error {
 	h.policyStore = store
+	if tokenStore, ok := store.(UpdateGitHubTokenStore); ok {
+		h.githubTokenStore = tokenStore
+		if token, found, tokenErr := tokenStore.LoadUpdateGitHubToken(ctx); tokenErr != nil {
+			return tokenErr
+		} else if found {
+			h.githubToken = strings.TrimSpace(token)
+		}
+	}
 	if store == nil {
 		return nil
 	}
@@ -178,6 +199,8 @@ func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 	router.GET("/api/system/update/mirrors", h.mirrors)
 	router.POST("/api/system/update/mirrors/test", h.testMirrors)
 	router.PUT("/api/system/update/policy", h.savePolicy)
+	router.GET("/api/system/update/github-token", h.getGitHubToken)
+	router.PUT("/api/system/update/github-token", h.saveGitHubToken)
 	router.POST("/api/system/update/check", h.check)
 	router.POST("/api/system/update/rollback", h.rollback)
 	router.GET("/api/system/update/changelog", h.changelogList)
@@ -246,7 +269,9 @@ type releaseCheckFailure struct {
 }
 
 func (h *SystemUpdateHandler) check(c *gin.Context) {
-	response, failure := h.runReleaseCheck(c.Request.Context())
+	// 明确点击“检查更新”才强制验证；请求标记不会破坏旧缓存和 ETag。
+	ctx := context.WithValue(c.Request.Context(), releaseRefreshContextKey{}, true)
+	response, failure := h.runReleaseCheck(ctx)
 	if failure != nil {
 		if failure.updateError {
 			h.writeUpdateError(c, "system.update.check", failure.err)
@@ -255,6 +280,9 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 		writeError(c, failure.status, failure.err)
 		return
 	}
+	h.changelog.mu.Lock()
+	h.changelog.fetchedAt = time.Time{}
+	h.changelog.mu.Unlock()
 	c.JSON(http.StatusOK, response)
 }
 
@@ -372,6 +400,62 @@ func (h *SystemUpdateHandler) currentPolicy() updater.UpdatePolicy {
 	h.policyMu.RLock()
 	defer h.policyMu.RUnlock()
 	return h.policy
+}
+
+func (h *SystemUpdateHandler) currentGitHubToken() string {
+	if token := strings.TrimSpace(os.Getenv("DIANA_GITHUB_TOKEN")); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		return token
+	}
+	h.githubTokenMu.RLock()
+	defer h.githubTokenMu.RUnlock()
+	return strings.TrimSpace(h.githubToken)
+}
+
+func (h *SystemUpdateHandler) getGitHubToken(c *gin.Context) {
+	configured := h.currentGitHubToken() != ""
+	source := ""
+	if strings.TrimSpace(os.Getenv("DIANA_GITHUB_TOKEN")) != "" || strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) != "" {
+		source = "environment"
+	} else if configured {
+		source = "stored"
+	}
+	c.JSON(http.StatusOK, gin.H{"configured": configured, "source": source})
+}
+
+func (h *SystemUpdateHandler) saveGitHubToken(c *gin.Context) {
+	var request struct {
+		Token string `json:"token"`
+		Clear bool   `json:"clear"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	token := strings.TrimSpace(request.Token)
+	if request.Clear {
+		token = ""
+	}
+	if h.githubTokenStore == nil {
+		writeError(c, http.StatusServiceUnavailable, errors.New("GitHub Token 存储不可用"))
+		return
+	}
+	if err := h.githubTokenStore.SaveUpdateGitHubToken(c.Request.Context(), token); err != nil {
+		h.writeUpdateError(c, "system.update.github_token", err)
+		return
+	}
+	h.githubTokenMu.Lock()
+	h.githubToken = token
+	h.githubTokenMu.Unlock()
+	// Token 变化后允许立即重新验证，旧 Release 数据仍保留作失败兜底。
+	h.releaseCacheMu.Lock()
+	h.releaseCache.RateLimitResetAt = time.Time{}
+	h.releaseCache.FetchedAt = time.Time{}
+	h.releaseCacheMu.Unlock()
+	recordRequestOperation(c, h.logs, "system.update.github_token", "GitHub 更新凭据已保存", "", map[string]any{"configured": token != ""})
+	h.getGitHubToken(c)
 }
 
 func normalizeUpdatePolicy(policy updater.UpdatePolicy) updater.UpdatePolicy {
@@ -892,7 +976,30 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 	h.changelog.mu.Unlock()
 
 	payload := gin.H{"repo": owner + "/" + repo}
-	releases, err := h.githubReleases(c.Request.Context(), owner, repo, 10)
+	cacheKeyReleases := fmt.Sprintf("%s/%s?per_page=%d", strings.TrimSpace(owner), strings.TrimSpace(repo), 10)
+	releases, cached := h.cachedReleases(cacheKeyReleases, h.currentTime(), true)
+	if !cached {
+		h.releaseCacheMu.RLock()
+		shared := h.releaseCache
+		h.releaseCacheMu.RUnlock()
+		prefix := strings.TrimSpace(owner) + "/" + strings.TrimSpace(repo) + "?"
+		if strings.HasPrefix(shared.Key, prefix) && !shared.FetchedAt.IsZero() {
+			releases = releaseEntriesFromCache(shared.Releases)
+			if len(releases) > 10 {
+				releases = releases[:10]
+			}
+			cached = true
+		}
+	}
+	var err error
+	if !cached && strings.TrimSpace(h.githubAPIBase) != "" {
+		releases, err = h.githubReleases(c.Request.Context(), owner, repo, 10)
+	} else if !cached && strings.EqualFold(owner, defaultReleaseOwner) && strings.EqualFold(repo, defaultReleaseRepo) {
+		releases, err = h.fetchStaticReleaseManifest(c.Request.Context())
+	}
+	if !cached && len(releases) == 0 && err == nil {
+		err = errors.New("尚无版本历史缓存，请点击检查更新")
+	}
 	if err == nil && len(releases) > 0 {
 		payload["kind"] = "releases"
 		payload["releases"] = releases

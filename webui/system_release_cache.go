@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -22,6 +23,7 @@ type ReleaseCacheStore interface {
 
 type persistedReleaseCache struct {
 	Key              string                  `json:"key,omitempty"`
+	ETag             string                  `json:"etag,omitempty"`
 	Releases         []persistedReleaseEntry `json:"releases,omitempty"`
 	FetchedAt        time.Time               `json:"fetched_at,omitempty"`
 	RateLimitResetAt time.Time               `json:"rate_limit_reset_at,omitempty"`
@@ -107,25 +109,40 @@ func (h *SystemUpdateHandler) githubReleases(ctx context.Context, owner, repo st
 		limit = 10
 	}
 	key := fmt.Sprintf("%s/%s?per_page=%d", strings.TrimSpace(owner), strings.TrimSpace(repo), limit)
+	force, _ := ctx.Value(releaseRefreshContextKey{}).(bool)
 	now := h.currentTime()
-	if releases, ok := h.cachedReleases(key, now, false); ok {
+	if releases, ok := h.cachedReleases(key, now, false); ok && !force {
 		return releases, nil
 	}
 	if resetAt, limited := h.activeGitHubRateLimit(now); limited {
 		if releases, ok := h.cachedReleases(key, now, true); ok {
 			return releases, nil
 		}
+		if strings.EqualFold(owner, defaultReleaseOwner) && strings.EqualFold(repo, defaultReleaseRepo) {
+			if fallback, err := h.fetchStaticReleaseManifest(ctx); err == nil && len(fallback) > 0 {
+				return fallback, nil
+			}
+		}
 		return nil, &githubRateLimitError{StatusCode: 403, ResetAt: resetAt}
 	}
 
-	result := h.releaseFetch.DoChan(key, func() (any, error) {
+	flightKey := key
+	if force {
+		flightKey += "#refresh"
+	}
+	result := h.releaseFetch.DoChan(flightKey, func() (any, error) {
 		now := h.currentTime()
-		if releases, ok := h.cachedReleases(key, now, false); ok {
+		if releases, ok := h.cachedReleases(key, now, false); ok && !force {
 			return releases, nil
 		}
 		if resetAt, limited := h.activeGitHubRateLimit(now); limited {
 			if releases, ok := h.cachedReleases(key, now, true); ok {
 				return releases, nil
+			}
+			if strings.EqualFold(owner, defaultReleaseOwner) && strings.EqualFold(repo, defaultReleaseRepo) {
+				if fallback, err := h.fetchStaticReleaseManifest(ctx); err == nil && len(fallback) > 0 {
+					return fallback, nil
+				}
 			}
 			return nil, &githubRateLimitError{StatusCode: 403, ResetAt: resetAt}
 		}
@@ -136,7 +153,13 @@ func (h *SystemUpdateHandler) githubReleases(ctx context.Context, owner, repo st
 		}
 		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
 		defer cancel()
-		releases, err := fetchGitHubReleases(fetchCtx, h.httpClient, h.githubAPIBase, owner, repo, limit)
+		h.releaseCacheMu.RLock()
+		etag := ""
+		if h.releaseCache.Key == key {
+			etag = h.releaseCache.ETag
+		}
+		h.releaseCacheMu.RUnlock()
+		fetched, err := fetchGitHubReleases(fetchCtx, h.httpClient, h.githubAPIBase, owner, repo, limit, h.currentGitHubToken(), etag)
 		if err != nil {
 			var rateLimitErr *githubRateLimitError
 			if errors.As(err, &rateLimitErr) {
@@ -145,10 +168,30 @@ func (h *SystemUpdateHandler) githubReleases(ctx context.Context, owner, repo st
 					return stale, nil
 				}
 			}
+			if strings.EqualFold(owner, defaultReleaseOwner) && strings.EqualFold(repo, defaultReleaseRepo) {
+				if fallback, fallbackErr := h.fetchStaticReleaseManifest(fetchCtx); fallbackErr == nil && len(fallback) > 0 {
+					h.saveReleaseCache(fetchCtx, persistedReleaseCache{Key: key, Releases: releaseCacheEntries(fallback), FetchedAt: now})
+					return fallback, nil
+				}
+			}
 			return nil, err
 		}
+		if fetched.NotModified {
+			h.releaseCacheMu.RLock()
+			cached := h.releaseCache
+			h.releaseCacheMu.RUnlock()
+			cached.FetchedAt = now
+			if fetched.ETag != "" {
+				cached.ETag = fetched.ETag
+			}
+			cached.RateLimitResetAt = time.Time{}
+			h.saveReleaseCache(fetchCtx, cached)
+			return releaseEntriesFromCache(cached.Releases), nil
+		}
+		releases := fetched.Releases
 		h.saveReleaseCache(fetchCtx, persistedReleaseCache{
 			Key:       key,
+			ETag:      fetched.ETag,
 			Releases:  releaseCacheEntries(releases),
 			FetchedAt: now,
 		})
@@ -168,6 +211,34 @@ func (h *SystemUpdateHandler) githubReleases(ctx context.Context, owner, repo st
 		}
 		return cloneReleaseEntries(releases), nil
 	}
+}
+
+func (h *SystemUpdateHandler) fetchStaticReleaseManifest(ctx context.Context) ([]ReleaseEntry, error) {
+	url := strings.TrimSpace(h.staticReleaseURL)
+	if url == "" {
+		return nil, errors.New("静态 Release 清单未配置")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "diana-webui")
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("静态 Release 清单 HTTP %d", resp.StatusCode)
+	}
+	var manifest struct {
+		Releases []persistedReleaseEntry `json:"releases"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return nil, err
+	}
+	return releaseEntriesFromCache(manifest.Releases), nil
 }
 
 func (h *SystemUpdateHandler) cachedReleases(key string, now time.Time, allowStale bool) ([]ReleaseEntry, bool) {
