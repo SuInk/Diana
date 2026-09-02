@@ -908,3 +908,21 @@ func TestUnwrapJSONPayloadStripsWrappers(t *testing.T) {
 		}
 	}
 }
+
+func TestMusicConnectionTestReportsSearchAndPlayback(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte("audio"))
+	plugin := NewMusicPlugin(server.Client())
+	settings := musicRequestSettings(server)
+	settings[musicSettingSources] = []string{"netease"}
+
+	results := plugin.TestConnections(context.Background(), settings)
+	if len(results) != 3 {
+		t.Fatalf("TestConnections() returned %d sources, want 3", len(results))
+	}
+	if !results[0].SearchOK || !results[0].Playable {
+		t.Fatalf("netease connection result = %#v", results[0])
+	}
+	if results[1].Message != "当前未启用" || results[2].Message != "当前未启用" {
+		t.Fatalf("disabled source results = %#v", results[1:])
+	}
+}
