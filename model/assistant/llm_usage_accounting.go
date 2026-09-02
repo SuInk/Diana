@@ -5,7 +5,9 @@ package assistant
 
 import (
 	"context"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -79,7 +81,11 @@ type usageAccountingLLMProvider struct {
 }
 
 func (p *usageAccountingLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	// 墙钟时间在这里量而不是在各个调用点：装饰器已经包住了每一次调用，量的范围
+	// 和记账的范围天然一致。放到调用点去量，新增一条调用路径就会漏一次。
+	started := time.Now()
 	response, err := p.provider.Generate(ctx, req)
+	elapsed := time.Since(started)
 	if response == nil {
 		return response, err
 	}
@@ -87,6 +93,20 @@ func (p *usageAccountingLLMProvider) Generate(ctx context.Context, req llm.Gener
 	if purpose == "" {
 		purpose = debugModelPurpose(req)
 	}
-	p.runtime.recordLLMUsage(ctx, p.state.event, response.Provider, response.Model, response.Usage, purpose)
+	p.runtime.recordLLMUsage(ctx, p.state.event, response.Provider, response.Model, response.Usage, purpose, elapsed)
 	return response, err
+}
+
+// TokensPerSecond 是输出 token 的生成速率，保留两位小数。
+//
+// 用输出 token 而不是总 token：输入是一次性喂进去的，把它算进速率会让长上下文的
+// 调用看起来「很快」，而那恰恰是慢的那一类。
+//
+// 聚合时必须先把 token 和耗时分别加总再算，不能把每次调用的速率平均——一次 2000
+// token 的生成和一次 5 token 的分类，两个速率平均出来没有任何物理意义。
+func TokensPerSecond(outputTokens int64, duration time.Duration) float64 {
+	if outputTokens <= 0 || duration <= 0 {
+		return 0
+	}
+	return math.Round(float64(outputTokens)/duration.Seconds()*100) / 100
 }

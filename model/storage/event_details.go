@@ -29,35 +29,41 @@ type InboundEventDetail struct {
 	SenderRole string    `json:"sender_role,omitempty"`
 	// SenderLevel 是发言者的群等级。回复门槛按等级卡人，排查「为什么这条没回」
 	// 时得能直接看到当时的等级，而不是回群里翻资料卡。
-	SenderLevel       int                 `json:"sender_level,omitempty"`
-	SenderLevelLabel  string              `json:"sender_level_label,omitempty"`
-	SubType           string              `json:"sub_type,omitempty"`
-	OriginalTime      *time.Time          `json:"original_time,omitempty"`
-	OperatorID        string              `json:"operator_id,omitempty"`
-	OperatorName      string              `json:"operator_name,omitempty"`
-	OperatorRole      string              `json:"operator_role,omitempty"`
-	MessageID         string              `json:"message_id,omitempty"`
-	Text              string              `json:"text,omitempty"`
-	Status            string              `json:"status"`
-	Outcome           string              `json:"outcome,omitempty"`
-	Decision          string              `json:"decision,omitempty"`
-	Reason            string              `json:"reason,omitempty"`
-	Reply             string              `json:"reply,omitempty"`
-	Error             string              `json:"error,omitempty"`
-	DurationMS        int64               `json:"duration_ms,omitempty"`
-	DeliveryStage     string              `json:"delivery_stage,omitempty"`
-	OutboundMessageID string              `json:"outbound_message_id,omitempty"`
-	ReplyGeneratedAt  *time.Time          `json:"reply_generated_at,omitempty"`
-	SendAttemptedAt   *time.Time          `json:"send_attempted_at,omitempty"`
-	SendAckedAt       *time.Time          `json:"send_acked_at,omitempty"`
-	SelfEchoAt        *time.Time          `json:"self_echo_at,omitempty"`
-	DeliveryError     string              `json:"delivery_error,omitempty"`
-	LLMCalls          int64               `json:"llm_calls,omitempty"`
-	InputTokens       int64               `json:"input_tokens,omitempty"`
-	OutputTokens      int64               `json:"output_tokens,omitempty"`
-	TotalTokens       int64               `json:"total_tokens,omitempty"`
-	CachedInputTokens int64               `json:"cached_input_tokens,omitempty"`
-	Images            []InboundEventImage `json:"images,omitempty"`
+	SenderLevel       int        `json:"sender_level,omitempty"`
+	SenderLevelLabel  string     `json:"sender_level_label,omitempty"`
+	SubType           string     `json:"sub_type,omitempty"`
+	OriginalTime      *time.Time `json:"original_time,omitempty"`
+	OperatorID        string     `json:"operator_id,omitempty"`
+	OperatorName      string     `json:"operator_name,omitempty"`
+	OperatorRole      string     `json:"operator_role,omitempty"`
+	MessageID         string     `json:"message_id,omitempty"`
+	Text              string     `json:"text,omitempty"`
+	Status            string     `json:"status"`
+	Outcome           string     `json:"outcome,omitempty"`
+	Decision          string     `json:"decision,omitempty"`
+	Reason            string     `json:"reason,omitempty"`
+	Reply             string     `json:"reply,omitempty"`
+	Error             string     `json:"error,omitempty"`
+	DurationMS        int64      `json:"duration_ms,omitempty"`
+	DeliveryStage     string     `json:"delivery_stage,omitempty"`
+	OutboundMessageID string     `json:"outbound_message_id,omitempty"`
+	ReplyGeneratedAt  *time.Time `json:"reply_generated_at,omitempty"`
+	SendAttemptedAt   *time.Time `json:"send_attempted_at,omitempty"`
+	SendAckedAt       *time.Time `json:"send_acked_at,omitempty"`
+	SelfEchoAt        *time.Time `json:"self_echo_at,omitempty"`
+	DeliveryError     string     `json:"delivery_error,omitempty"`
+	LLMCalls          int64      `json:"llm_calls,omitempty"`
+	InputTokens       int64      `json:"input_tokens,omitempty"`
+	OutputTokens      int64      `json:"output_tokens,omitempty"`
+	TotalTokens       int64      `json:"total_tokens,omitempty"`
+	CachedInputTokens int64      `json:"cached_input_tokens,omitempty"`
+	// LLMDurationMS 是这条消息所有模型调用的墙钟耗时之和，和上面的 DurationMS
+	// （整条消息的处理耗时）不是一回事：后者还包含插件、发送和等待。
+	LLMDurationMS int64 `json:"llm_duration_ms,omitempty"`
+	// OutputTokensPerSecond 由 OutputTokens 和 LLMDurationMS 算出，不是各次调用
+	// 速率的平均——那个数没有物理意义。
+	OutputTokensPerSecond float64             `json:"output_tokens_per_second,omitempty"`
+	Images                []InboundEventImage `json:"images,omitempty"`
 	// Subtasks 是这条消息触发的后台子任务（生成图片、文档 OCR 等）。图片是任务跑完
 	// 之后异步发出去的，事件详情里只有一句文字回复时看不出它从哪来。
 	Subtasks []assistant.InboundEventSubtask `json:"subtasks,omitempty"`
@@ -89,6 +95,9 @@ type InboundEventDetailPage struct {
 	OutputTokens      int64
 	TotalTokens       int64
 	CachedInputTokens int64
+	// LLMDurationMS/OutputTokensPerSecond 与单条事件同义，范围是整个筛选窗口。
+	LLMDurationMS         int64
+	OutputTokensPerSecond float64
 }
 
 // InboundEventResultFilter limits event detail rows without changing the
@@ -365,6 +374,8 @@ LIMIT ? OFFSET ?
 	page.OutputTokens = usage.OutputTokens
 	page.TotalTokens = usage.TotalTokens
 	page.CachedInputTokens = usage.CachedInputTokens
+	page.LLMDurationMS = usage.DurationMS
+	page.OutputTokensPerSecond = usage.tokensPerSecond()
 	for index := range page.Events {
 		if eventUsage, found := usageByMessage[strings.TrimSpace(page.Events[index].MessageID)]; found {
 			page.Events[index].LLMCalls = eventUsage.LLMCalls
@@ -372,6 +383,8 @@ LIMIT ? OFFSET ?
 			page.Events[index].OutputTokens = eventUsage.OutputTokens
 			page.Events[index].TotalTokens = eventUsage.TotalTokens
 			page.Events[index].CachedInputTokens = eventUsage.CachedInputTokens
+			page.Events[index].LLMDurationMS = eventUsage.DurationMS
+			page.Events[index].OutputTokensPerSecond = eventUsage.tokensPerSecond()
 		}
 	}
 	return page, nil
@@ -572,6 +585,12 @@ type inboundEventTokenTotals struct {
 	OutputTokens      int64
 	TotalTokens       int64
 	CachedInputTokens int64
+	DurationMS        int64
+}
+
+// tokensPerSecond 先把 token 和耗时分别加总再算，不平均每次调用的速率。
+func (t inboundEventTokenTotals) tokensPerSecond() float64 {
+	return assistant.TokensPerSecond(t.OutputTokens, time.Duration(t.DurationMS)*time.Millisecond)
 }
 
 // groupID 非空时只统计这个群的用量：顶部的 token 统计必须和下面列出的事件同范围，
@@ -619,6 +638,8 @@ WHERE created_at >= ? AND action IN ('chatbot.llm_usage', 'assistant.llm_usage')
 			OutputTokens:      outputTokens,
 			TotalTokens:       totalTokens,
 			CachedInputTokens: int64FromAny(meta["cached_input_tokens"]),
+			// 老日志没有这个字段，取出来是 0，聚合后速率自然为 0 而不是错的数。
+			DurationMS: int64FromAny(meta["duration_ms"]),
 		}
 		total.add(current)
 		messageID := strings.TrimSpace(target.String)
@@ -647,6 +668,7 @@ func (t *inboundEventTokenTotals) add(other inboundEventTokenTotals) {
 	t.OutputTokens += other.OutputTokens
 	t.TotalTokens += other.TotalTokens
 	t.CachedInputTokens += other.CachedInputTokens
+	t.DurationMS += other.DurationMS
 }
 
 // metadataGroupID 取用量日志里记的群号。私聊那条是空的，按群筛选时自然不匹配。

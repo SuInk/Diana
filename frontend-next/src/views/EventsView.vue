@@ -130,6 +130,9 @@
         <StatCard label="Token 总量" :value="formatNumber(summary.total_tokens)" :foot="tokenBreakdown">
           <template #icon><Sigma :size="14" aria-hidden="true" /></template>
         </StatCard>
+        <StatCard label="生成速率" :value="throughputText" :foot="throughputFoot">
+          <template #icon><Gauge :size="14" aria-hidden="true" /></template>
+        </StatCard>
         <StatCard label="缓存命中率" :value="cacheHitRateText" :foot="cacheHitFoot">
           <template #icon><DatabaseZap :size="14" aria-hidden="true" /></template>
         </StatCard>
@@ -252,6 +255,9 @@
                 <span v-if="event.total_tokens">
                   Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="eventCacheHitText(event)"> / {{ eventCacheHitText(event) }}</template>）
                 </span>
+                <span v-if="event.output_tokens_per_second">
+                  {{ event.output_tokens_per_second.toFixed(1) }} tok/s（模型耗时 {{ formatDurationMS(event.llm_duration_ms || 0) }}）
+                </span>
               </div>
 
               <div v-if="!isNoticeEvent(event)" class="event-debug-trace">
@@ -356,6 +362,7 @@ import {
   ChevronDown,
   Clock3,
   DatabaseZap,
+  Gauge,
   Filter,
   ImageOff,
   LoaderCircle,
@@ -451,7 +458,9 @@ const summary = computed(() => ({
   input_tokens: response.value?.input_tokens ?? 0,
   output_tokens: response.value?.output_tokens ?? 0,
   total_tokens: response.value?.total_tokens ?? 0,
-  cached_input_tokens: response.value?.cached_input_tokens ?? 0
+  cached_input_tokens: response.value?.cached_input_tokens ?? 0,
+  llm_duration_ms: response.value?.llm_duration_ms ?? 0,
+  output_tokens_per_second: response.value?.output_tokens_per_second ?? 0
 }));
 const hasMore = computed(() => response.value?.has_more ?? false);
 const filteredTotal = computed(() => response.value?.filtered_total ?? summary.value.total);
@@ -470,6 +479,29 @@ const replyRate = computed(() => {
 const tokenBreakdown = computed(() =>
   `输入 ${formatNumber(summary.value.input_tokens)} / 输出 ${formatNumber(summary.value.output_tokens)} · ${formatNumber(summary.value.llm_calls)} 次调用`
 );
+
+// 速率算的是输出 token / 模型墙钟耗时。这里不叫 TTFT——回复链路走的是非流式
+// Generate，整份回复一次到达，没有「首 token」这个时刻可测。
+const throughputText = computed(() => {
+  if (summary.value.output_tokens_per_second <= 0) return "—";
+  return `${summary.value.output_tokens_per_second.toFixed(1)} tok/s`;
+});
+
+const throughputFoot = computed(() => {
+  if (summary.value.llm_duration_ms <= 0) return "当前范围没有模型调用";
+  return `模型耗时 ${formatDurationMS(summary.value.llm_duration_ms)} · 输出 ${formatNumber(summary.value.output_tokens)} token`;
+});
+
+// 毫秒转成人读得懂的长度。跨度可能从几百毫秒到几小时（一个范围的累计耗时）。
+function formatDurationMS(ms: number): string {
+  if (ms <= 0) return "0s";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${Math.round(seconds % 60)}s`;
+  return `${Math.floor(minutes / 60)}h${minutes % 60}m`;
+}
 
 // 命中的部分本来就算在输入 token 里，不是额外的量，所以分母是输入而不是总量。
 // 供应商按缓存命中打折计价，这个比例直接对应省下来的钱。
