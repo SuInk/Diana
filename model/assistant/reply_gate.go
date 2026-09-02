@@ -15,6 +15,16 @@ const (
 	GroupAdmissionWhitelist = "whitelist"
 )
 
+// 人员准入模式。空串等同 blacklist，老配置行为完全不变。
+//
+// 和「豁免用户」不是一回事：豁免是绕过等级和时段门槛，人仍然要过黑名单；
+// 白名单是「只回这几个人」，名单外的一律不回，跟门槛无关。两个概念叠在同一个
+// 名单上会永远说不清，所以单独给一个模式。
+const (
+	UserAdmissionBlacklist = "blacklist"
+	UserAdmissionWhitelist = "whitelist"
+)
+
 // 等级查不到时的策略。默认 allow（fail-open）。
 const (
 	LevelUnknownAllow = "allow"
@@ -32,9 +42,13 @@ type GroupAdmission struct {
 
 // ReplyGate 决定满足什么条件才回复，可全局配置并按群整体覆盖。
 //
-// 按群覆盖是整体替换而不是逐字段合并：和现有 SystemPrompt「非空即覆盖」
-// 的风格一致，界面上一个「跟随全局 / 自定义」开关就能讲清楚；逐字段合并
-// 会产生「时段是自己的、等级是全局的」这类难以表达的中间态。
+// 门槛类（等级、时段、时区、主人豁免）按群整体替换，不逐字段合并：界面上一个
+// 「跟随全局 / 自定义」开关就能讲清楚，逐字段合并会产生「时段是自己的、等级是
+// 全局的」这类难以表达的中间态。
+//
+// 名单类（豁免、屏蔽、白名单）是例外，走并集。整体替换在这里会变成「想在本群
+// 多屏蔽一个人，就得接管整份门禁，全局黑名单在这个群静默失效」——方向是越配越
+// 松，而且界面上只显示本群填的那一条，看不出全局那份没了。见 mergeUserLists。
 type ReplyGate struct {
 	// MinGroupLevel 是 群等级门槛（按群内活跃度累积），0 表示不限。
 	// 注意这不是账号等级（太阳月亮星星），后者 OneBot 协议拿不到。
@@ -44,6 +58,11 @@ type ReplyGate struct {
 	// ExemptUsers 无视等级与时段门槛；BlockedUsers 始终不回。
 	ExemptUsers  []string `json:"exempt_users,omitempty"`
 	BlockedUsers []string `json:"blocked_users,omitempty"`
+	// UserAdmission 为 whitelist 时只回 AllowedUsers 里的人，名单外一律不回。
+	// 空串等同 blacklist（默认），只按 BlockedUsers 拦。
+	UserAdmission string `json:"user_admission,omitempty"`
+	// AllowedUsers 仅 whitelist 模式生效。
+	AllowedUsers []string `json:"allowed_users,omitempty"`
 
 	ActiveHoursEnabled bool `json:"active_hours_enabled,omitempty"`
 	// ActiveStart/ActiveEnd 为 24 小时制 HH:MM。End 小于 Start 表示跨夜，
@@ -98,6 +117,10 @@ func (g ReplyGate) WithDefaults() ReplyGate {
 	}
 	g.ExemptUsers = cleanStrings(g.ExemptUsers)
 	g.BlockedUsers = cleanStrings(g.BlockedUsers)
+	g.AllowedUsers = cleanStrings(g.AllowedUsers)
+	if g.UserAdmission = strings.TrimSpace(strings.ToLower(g.UserAdmission)); g.UserAdmission != UserAdmissionWhitelist {
+		g.UserAdmission = UserAdmissionBlacklist
+	}
 	g.ActiveStart = strings.TrimSpace(g.ActiveStart)
 	g.ActiveEnd = strings.TrimSpace(g.ActiveEnd)
 	g.Timezone = strings.TrimSpace(g.Timezone)
@@ -122,6 +145,7 @@ func (g *ReplyGate) Clone() *ReplyGate {
 	copied := *g
 	copied.ExemptUsers = append([]string(nil), g.ExemptUsers...)
 	copied.BlockedUsers = append([]string(nil), g.BlockedUsers...)
+	copied.AllowedUsers = append([]string(nil), g.AllowedUsers...)
 	if g.OwnerBypass != nil {
 		bypass := *g.OwnerBypass
 		copied.OwnerBypass = &bypass
@@ -132,6 +156,73 @@ func (g *ReplyGate) Clone() *ReplyGate {
 // IsBlocked 判断用户是否在黑名单里。
 func (g ReplyGate) IsBlocked(userID string) bool {
 	return containsString(g.BlockedUsers, strings.TrimSpace(userID))
+}
+
+// WhitelistEnabled 报告这份门禁是不是「只回名单里的人」。
+func (g ReplyGate) WhitelistEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(g.UserAdmission), UserAdmissionWhitelist)
+}
+
+// IsAllowedUser 判断用户是否在白名单里。非白名单模式下恒为 true。
+func (g ReplyGate) IsAllowedUser(userID string) bool {
+	if !g.WhitelistEnabled() {
+		return true
+	}
+	return containsString(g.AllowedUsers, strings.TrimSpace(userID))
+}
+
+// mergeUserLists 把上一层的名单并进来，不改门槛。
+//
+// 三个名单都是并集：本群配置表达的是「在全局基础上再加几个」，不是「换一份」。
+// 反过来做的话，任何一个群只要开了自定义门禁，全局黑名单在那个群就失效——
+// 一个被全局屏蔽的账号会重新能触发机器人，而界面上完全看不出来。
+//
+// 白名单模式取「任一层开启即开启」：这一项越严越安全，某一层要求只回指定的人，
+// 就不该被另一层放开。
+func (g ReplyGate) mergeUserLists(parent *ReplyGate) ReplyGate {
+	if parent == nil {
+		return g
+	}
+	g.ExemptUsers = unionStrings(g.ExemptUsers, parent.ExemptUsers)
+	g.BlockedUsers = unionStrings(g.BlockedUsers, parent.BlockedUsers)
+	g.AllowedUsers = unionStrings(g.AllowedUsers, parent.AllowedUsers)
+	if parent.WhitelistEnabled() {
+		g.UserAdmission = UserAdmissionWhitelist
+	}
+	return g
+}
+
+// MergedWith 返回「门槛用自己的、名单并上上一层」的一份门禁。
+func (g ReplyGate) MergedWith(parent *ReplyGate) *ReplyGate {
+	merged := g.Clone()
+	if merged == nil {
+		return nil
+	}
+	result := merged.mergeUserLists(parent)
+	return &result
+}
+
+// unionStrings 合并两个名单并去重，保持先来后到的顺序。
+func unionStrings(primary, extra []string) []string {
+	seen := make(map[string]struct{}, len(primary)+len(extra))
+	out := make([]string, 0, len(primary)+len(extra))
+	for _, list := range [][]string{primary, extra} {
+		for _, item := range list {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			seen[item] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // IsExempt 判断用户是否豁免等级与时段门槛。

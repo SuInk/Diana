@@ -127,7 +127,8 @@ https://HOST/api/channels/wecom/callback</code></pre>
           <div><strong>启用状态</strong><span>单独停止某个群，不影响其他群或私聊。</span></div>
           <div><strong>触发与主动回复</strong><span>显式 @、引用、触发词和主动回复语义路由分层判断；显式 @ 优先于引用。</span></div>
           <div><strong>回复时间</strong><span>支持同日、跨夜时间段和 IANA 时区；这属于群策略，不写入模型提示。</span></div>
-          <div><strong>屏蔽账号</strong><span>名单只影响当前群，不影响同一用户在其他群或私聊中的消息。</span></div>
+          <div><strong>人员准入</strong><span>黑名单（默认）除屏蔽账号外都回；白名单只回名单里的人，名单外连静默提示都不发。主人不受白名单限制。</span></div>
+          <div><strong>屏蔽账号</strong><span>本群名单和全局名单是并集：在这里加人不会让全局屏蔽名单失效。等级和时段则由「为本群单独设置回复规则」整份接管。</span></div>
           <div><strong>人设与上下文</strong><span>群级提示、历史条数和回复长度可以覆盖机器人默认值。</span></div>
           <div><strong>工具覆盖</strong><span>每个群可跟随全局、强制开启或强制关闭具体工具和插件。</span></div>
         </div>

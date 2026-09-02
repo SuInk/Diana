@@ -9,7 +9,7 @@
         <span class="track" aria-hidden="true"></span>
         <span class="switch-label">为本群单独设置回复规则</span>
       </label>
-      <p class="muted" style="margin-top: 4px">关闭时跟随全局回复时间与用户屏蔽设置。</p>
+      <p class="muted" style="margin-top: 4px">关闭时完全跟随全局。打开后等级和时段由本群说了算，但三个用户名单始终是全局加本群的并集——不会因为在这里配了东西就把全局屏蔽名单丢掉。</p>
     </div>
 
     <div v-if="!allowInherit || custom" class="form-grid">
@@ -119,6 +119,34 @@
         <p class="muted" style="margin-top: 4px">建议保持开启，否则配置写错时你自己也会被挡在门外。</p>
       </div>
 
+      <div class="field wide">
+        <label :for="`${idPrefix}-user-admission`">{{ allowInherit ? "本群人员准入" : "人员准入" }}</label>
+        <AppSelect
+          :id="`${idPrefix}-user-admission`"
+          :model-value="gate.user_admission ?? 'blacklist'"
+          :options="userAdmissionOptions"
+          @update:model-value="patch({ user_admission: $event as 'blacklist' | 'whitelist' })"
+        />
+        <p class="muted" style="margin-top: 4px">
+          白名单是「只回名单里的人」，和下面的豁免不是一回事——豁免只是绕过{{ supportsGroupLevel ? "等级和时段" : "时段" }}门槛，人仍然要先过准入。
+          主人不受白名单限制。
+        </p>
+      </div>
+
+      <div v-if="(gate.user_admission ?? 'blacklist') === 'whitelist'" class="field wide">
+        <label :for="`${idPrefix}-allowed`">{{ allowInherit ? "本群白名单" : "白名单" }}</label>
+        <IdChipInput
+          :input-id="`${idPrefix}-allowed`"
+          :model-value="gate.allowed_users ?? []"
+          :placeholder="`填${accountNoun.trim()}后回车`"
+          :resolve-names="resolveAccountNames"
+          @update:model-value="patch({ allowed_users: $event })"
+        />
+        <p class="muted" style="margin-top: 4px">
+          只回这些账号，名单外一律不回，连静默提示也不发。留空等于谁都不回。
+        </p>
+      </div>
+
       <div class="field">
         <label :for="`${idPrefix}-exempt`">{{ allowInherit ? "本群豁免用户" : "豁免用户" }}</label>
         <IdChipInput
@@ -140,7 +168,7 @@
           :resolve-names="resolveAccountNames"
           @update:model-value="patch({ blocked_users: $event })"
         />
-        <p class="muted" style="margin-top: 4px">{{ allowInherit ? "仅在当前群不回复这些账号。" : "群聊和私聊都不回复。" }}</p>
+        <p class="muted" style="margin-top: 4px">{{ allowInherit ? "在全局屏蔽名单之外，本群额外不回复这些账号。" : "群聊和私聊都不回复。" }}</p>
       </div>
     </div>
   </div>
@@ -167,6 +195,11 @@ const emit = defineEmits<{ "update:modelValue": [ReplyGate | null] }>();
 
 // 账号在不同平台叫法不同，文案跟着平台走。
 const accountNoun = computed(() => (props.supportsGroupLevel ? " 账号" : "用户 ID"));
+
+const userAdmissionOptions: AppSelectOption[] = [
+  { value: "blacklist", label: "黑名单（默认）", hint: "除屏蔽账号外都回" },
+  { value: "whitelist", label: "白名单", hint: "只回白名单里的人" }
+];
 
 const unknownPolicyOptions: AppSelectOption[] = [
   { value: "allow", label: "放行（推荐）", hint: "读不到等级时不拦截" },
