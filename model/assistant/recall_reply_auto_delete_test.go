@@ -13,7 +13,7 @@ import (
 
 func TestRecallReplyAutoDeleteConfigDefaultsDisabledAndCanBeEnabled(t *testing.T) {
 	defaults := (BotConfig{}).WithDefaults()
-	if defaults.RecallReplyMode != RecallReplyModeLLMSummary {
+	if defaults.RecallReplyMode != RecallReplyModeOriginalForward {
 		t.Fatalf("default recall reply mode = %q", defaults.RecallReplyMode)
 	}
 	if defaults.RecallReplyAutoDeleteEnabled == nil || *defaults.RecallReplyAutoDeleteEnabled {
