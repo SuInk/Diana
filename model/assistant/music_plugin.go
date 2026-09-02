@@ -101,7 +101,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.2.0",
+		Version:     "0.2.1",
 		Description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐、酷狗并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。",
 		Official:    true,
 		BuiltIn:     true,
@@ -175,7 +175,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
-				Description: "完整的 Cookie 串。留空时会派生一个设备号，可试听曲目通常够用。",
+				Description: "完整 Cookie（建议包含 token、userid、dfid）。会员曲目需配合自建 KuGouMusicApi；留空只能尝试公开试听。",
 			},
 			{
 				Key:     musicSettingBitrate,
@@ -348,10 +348,18 @@ func (p *MusicPlugin) playableSong(ctx context.Context, cfg musicConfig, found s
 // 只搜到不算数：搜到却拿不到播放地址是会员和独家曲目的常态，那种结果发不出声，
 // 拿它当命中就等于让上层去下载一个空地址。skip 里的曲库刚试过，不必再问一遍。
 func (p *MusicPlugin) pickSong(ctx context.Context, cfg musicConfig, query string, skip ...string) (song, bool) {
+	found, ok, _ := p.pickSongWithStatus(ctx, cfg, query, skip...)
+	return found, ok
+}
+
+// pickSongWithStatus 额外报告是否至少有一家搜到了歌曲。这样工具能区分
+// 「歌名确实没有匹配」和「搜到了，但所有平台都因会员/版权拿不到播放地址」。
+func (p *MusicPlugin) pickSongWithStatus(ctx context.Context, cfg musicConfig, query string, skip ...string) (song, bool, bool) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return song{}, false
+		return song{}, false, false
 	}
+	matched := false
 	for _, source := range p.orderedSources(cfg) {
 		if slices.Contains(skip, source.Key()) {
 			continue
@@ -360,14 +368,15 @@ func (p *MusicPlugin) pickSong(ctx context.Context, cfg musicConfig, query strin
 		if !ok {
 			continue
 		}
+		matched = true
 		playURL := source.PlayableURL(ctx, p.fetcher, cfg, found.ID)
 		if playURL == "" {
 			continue
 		}
 		found.PlayURL = playURL
-		return found, true
+		return found, true, true
 	}
-	return song{}, false
+	return song{}, false, matched
 }
 
 // musicVoiceReply 把歌名和语音拼成一条待分条的回复。
@@ -518,7 +527,7 @@ type musicToolResult struct {
 func (t *dianaMusicTool) Name() string { return musicToolName }
 
 func (t *dianaMusicTool) Description() string {
-	return `按歌名或歌手搜索网易云音乐，把匹配到的那首下载成一条语音直接发出去（点歌）。仅当用户要求放歌、点歌、来一首，或指名要听某首歌时调用；只是聊到某首歌、讨论音乐话题、问歌词或歌手信息时严禁调用。调用后工具会直接完成本次回复，不要再发送重复文字。语音只在 QQ（OneBot v11）上能正常播放。input: {"query":"搜索词，尽量写成「歌名 歌手」，例如「稻香 周杰伦」"}`
+	return `按歌名或歌手依次搜索已启用的网易云、QQ 音乐和酷狗曲库，把第一首可播放的匹配歌曲下载成语音直接发出去（点歌）。仅当用户要求放歌、点歌、来一首，或指名要听某首歌时调用；只是聊到某首歌、讨论音乐话题、问歌词或歌手信息时严禁调用。调用后工具会直接完成本次回复，不要再发送重复文字。语音只在 QQ（OneBot v11）上能正常播放。input: {"query":"搜索词，尽量写成「歌名 歌手」，例如「稻香 周杰伦」"}`
 }
 
 func (t *dianaMusicTool) InputSchema() map[string]any {
@@ -546,8 +555,15 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	found, ok := t.plugin.pickSong(ctx, cfg, query)
+	ctx, diagnostics := withMusicDiagnostics(ctx)
+	found, ok, matched := t.plugin.pickSongWithStatus(ctx, cfg, query)
 	if !ok {
+		if matched {
+			return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；可能需要对应平台的有效会员 Cookie，或该曲目受版权/地区限制", query)
+		}
+		if diagnostics.failed() {
+			return "", fmt.Errorf("搜索《%s》时曲库请求异常，请稍后重试或检查曲库配置", query)
+		}
 		return "", fmt.Errorf("各家曲库都没搜到能放的《%s》，换个歌名或补上歌手再试", query)
 	}
 	if reason := musicVoiceUnavailableReason(cfg, found); reason != "" {
