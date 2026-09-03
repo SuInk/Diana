@@ -261,3 +261,27 @@ func TestResolveConfigPathPrefersExplicitFlag(t *testing.T) {
 		t.Fatalf("path = %q", got)
 	}
 }
+
+func TestConfigPathNearExecutableFollowsSymlink(t *testing.T) {
+	installDir := t.TempDir()
+	commandDir := t.TempDir()
+	executable := filepath.Join(installDir, "diana")
+	configPath := filepath.Join(installDir, defaultConfigFileName)
+	commandPath := filepath.Join(commandDir, "diana")
+	if err := os.WriteFile(executable, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("server: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, commandPath); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configPathNearExecutable(commandPath); got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
