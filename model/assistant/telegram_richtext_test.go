@@ -212,10 +212,13 @@ func TestTelegramRichTextLeavesPlainTextAlone(t *testing.T) {
 
 // 默认值随平台走：能渲染的保留标记，不能渲染的降级。
 func TestMarkdownToPlainDefaultsByPlatform(t *testing.T) {
-	if markdownToPlainForConfig(BotConfig{Platform: PlatformTelegram}) {
-		t.Fatal("Telegram 默认应当保留 Markdown")
+	for _, platform := range []string{PlatformTelegram, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+		if markdownToPlainForConfig(BotConfig{Platform: platform}) {
+			t.Fatalf("%s 出站发富文本，默认应当保留 Markdown", platform)
+		}
 	}
-	for _, platform := range []string{PlatformOneBotV11, PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+	// OneBot 和 QQ 官方的出站只有纯文本消息类型，留着标记就会以字面量漏出去。
+	for _, platform := range []string{PlatformOneBotV11, PlatformQQOfficial} {
 		if !markdownToPlainForConfig(BotConfig{Platform: platform}) {
 			t.Fatalf("%s 只发纯文本，默认应当降级", platform)
 		}
@@ -239,5 +242,66 @@ func TestPlatformSupportsRichText(t *testing.T) {
 	}
 	if PlatformSupportsRichText("unknown-platform") {
 		t.Fatal("未知平台应当按不支持处理")
+	}
+}
+
+// Telegram 没有表格 entity，转成等宽块是唯一还能让列对齐的表达。
+func TestTelegramRichTextRendersTableAsMonospace(t *testing.T) {
+	text, entities := telegramRichText("看这个：\n| 平台 | 状态 |\n|------|------|\n| 钉钉 | 待办 |", nil)
+	if strings.Contains(text, "|") || strings.Contains(text, "---") {
+		t.Fatalf("表格标记没清干净：%q", text)
+	}
+	pre, ok := findEntity(entities, "pre")
+	if !ok {
+		t.Fatalf("表格没渲染成等宽块：%#v", entities)
+	}
+	block := entityAt(t, text, pre)
+	for _, cell := range []string{"平台", "状态", "钉钉", "待办"} {
+		if !strings.Contains(block, cell) {
+			t.Fatalf("单元格 %q 丢了：%q", cell, block)
+		}
+	}
+}
+
+// 中文占两格。按 rune 数补空格的话，中文列会整体偏左，表格就不成表格了。
+func TestRenderTableBlockAlignsWideRunes(t *testing.T) {
+	block := renderTableBlock([][]string{{"平台", "x"}, {"ab", "y"}})
+	lines := strings.Split(block, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("表格行数不对：%q", block)
+	}
+	// 「平台」占 4 格，「ab」占 2 格，后者要补两个空格才能和第二列对齐。
+	if displayWidth(lines[0]) != displayWidth(lines[2]) {
+		t.Fatalf("两行宽度不一致：%q(%d) vs %q(%d)", lines[0], displayWidth(lines[0]), lines[2], displayWidth(lines[2]))
+	}
+}
+
+// 随手写的竖线不是表格：少了分隔行就不该被吞掉。
+func TestTelegramRichTextIgnoresPipesWithoutSeparator(t *testing.T) {
+	source := "今天 | 明天 | 后天"
+	text, entities := telegramRichText(source, nil)
+	if text != source || len(entities) != 0 {
+		t.Fatalf("普通竖线被当成表格了：%q %#v", text, entities)
+	}
+}
+
+// [ ] 和 [x] 在聊天窗口里就是一对方括号，看不出是勾选框。
+func TestTelegramRichTextRendersTaskList(t *testing.T) {
+	text, _ := telegramRichText("- [x] 写转换器\n- [ ] 改适配器", nil)
+	if !strings.Contains(text, "☑ 写转换器") || !strings.Contains(text, "☐ 改适配器") {
+		t.Fatalf("待办框没转换：%q", text)
+	}
+	if strings.Contains(text, "[") {
+		t.Fatalf("方括号没清干净：%q", text)
+	}
+}
+
+// 嵌套层级靠符号区分：只留缩进的话在手机上几乎看不出来。
+func TestTelegramRichTextMarksNestedListDepth(t *testing.T) {
+	text, _ := telegramRichText("- 第一层\n  - 第二层\n    - 第三层", nil)
+	for _, want := range []string{"• 第一层", "◦ 第二层", "▪ 第三层"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("缺少 %q：%q", want, text)
+		}
 	}
 }
