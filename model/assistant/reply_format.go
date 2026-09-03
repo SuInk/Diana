@@ -58,3 +58,18 @@ func markdownToPlain(text string) string {
 	text = mdExtraBlankPattern.ReplaceAllString(text, "\n\n")
 	return text
 }
+
+// markdownToPlainForConfig 决定这台机器人要不要把 Markdown 降级成纯文本。
+//
+// 默认值随平台走：能渲染富文本的平台（目前只有 Telegram，它的适配器会把 Markdown
+// 转成 entities）默认保留标记，其余平台默认降级——QQ、钉钉、飞书、企业微信的出站
+// 都是纯文本消息类型，留着 ** 和 # 只会以字面量漏进聊天窗口。
+//
+// 用户在配置里显式设过就以设置为准：有人偏好在 Telegram 里也看纯文本，也有人自建的
+// OneBot 客户端能渲染 Markdown，这两种都得让得出来。
+func markdownToPlainForConfig(cfg BotConfig) bool {
+	if cfg.MarkdownToPlain != nil {
+		return *cfg.MarkdownToPlain
+	}
+	return !PlatformSupportsRichText(cfg.Platform)
+}
