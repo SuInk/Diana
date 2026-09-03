@@ -301,6 +301,7 @@ fi
 
 command_dir=""
 command_path_hint=""
+service_control_granted=false
 
 # 用户级安装的 ~/.local/bin 不一定在 PATH 里（root 的 .profile 没有那段，zsh 或
 # 定制过 rc 的用户也没有）。只在安装结尾打一行提示的话，提示会被后续输出刷走，
@@ -592,8 +593,10 @@ printf '%s\n' "$version" >"$install_dir/.installed-version"
 printf '%s\n' "$install_scope" >"$install_dir/.install-scope"
 printf '%s\n' "$service_user" >"$install_dir/.service-user"
 
-if [ "$os" = "darwin" ] && [ "$install_scope" = "system" ] && [ "$service_uid" != "0" ]; then
-  # 运行用户必须能写数据库、日志和自更新暂存目录；系统级的命令入口仍由 root 管理。
+if [ "$install_scope" = "system" ] && [ "$service_uid" != "0" ]; then
+  # 运行用户必须能写数据库、日志和自更新暂存目录，也要读得到 config.yaml——否则
+  # diana logs / status / config check 这些只读命令也得 sudo。系统级的命令入口
+  # （/usr/local/bin/diana）仍由 root 管理，不在这个目录里。
   chown -R "$service_uid" "$install_dir"
 fi
 
@@ -670,8 +673,47 @@ print_startup_diagnostics() {
   [ "$found" = "true" ] || printf '%s\n' "No startup log was written." >&2
 }
 
+# 系统服务的启停归 root，但让人为了 diana restart 反复输密码没有必要：装的时候
+# 已经验证过一次身份，这里把「这一个服务的这几个动作」免密授权给发起安装的用户。
+# 白名单只列全路径的固定命令，不放行 systemctl 本身，也不涉及其他 unit。
+grant_service_control_to_installer() {
+  [ "$service_user" != "root" ] || return 0
+  [ -d /etc/sudoers.d ] || return 0
+  systemctl_path=$(command -v systemctl) || return 0
+  sudoers_file=/etc/sudoers.d/diana
+  tmp_sudoers="$sudoers_file.tmp.$$"
+  {
+    printf '# Managed by the Diana installer. Removed by `diana uninstall`.\n'
+    printf '# Lets %s control the Diana service without a password prompt.\n' "$service_user"
+    printf '%s ALL=(root) NOPASSWD: %s restart diana.service, %s start diana.service, %s stop diana.service, %s status diana.service\n' \
+      "$service_user" "$systemctl_path" "$systemctl_path" "$systemctl_path" "$systemctl_path"
+  } >"$tmp_sudoers" 2>/dev/null || return 0
+  chmod 0440 "$tmp_sudoers" 2>/dev/null || true
+  # 语法错误的 sudoers 会让整台机器无法 sudo，务必先校验再就位。
+  if command -v visudo >/dev/null 2>&1 && ! visudo -cqf "$tmp_sudoers" >/dev/null 2>&1; then
+    rm -f -- "$tmp_sudoers"
+    return 0
+  fi
+  if mv -f "$tmp_sudoers" "$sudoers_file" 2>/dev/null; then
+    service_control_granted=true
+  else
+    rm -f -- "$tmp_sudoers"
+  fi
+}
+
 start_service() {
   if [ "$os" = "linux" ] && [ "$install_scope" = "system" ] && command -v systemctl >/dev/null 2>&1; then
+    # 用 sudo 装的话，服务就以发起安装的那个人的身份跑，别留在 root 下：控制台
+    # 对外提供服务，内置 Agent 还能执行命令和读写文件，没有理由给它 root。
+    # macOS 早就是这个语义（LaunchAgent 归桌面用户），这里对齐。
+    # 直接以 root 登录安装时没有别的身份可用，保持 root 运行。
+    service_unit_identity=""
+    if [ "$service_uid" != "0" ]; then
+      service_unit_identity="User=$service_user"
+      service_group=$(id -gn "$service_user" 2>/dev/null || true)
+      [ -n "$service_group" ] && service_unit_identity="$service_unit_identity
+Group=$service_group"
+    fi
     cat >/etc/systemd/system/diana.service <<EOF
 [Unit]
 Description=Diana AI Assistant
@@ -683,7 +725,8 @@ WorkingDirectory=$install_dir
 ExecStart=$install_dir/start-installed.sh
 Restart=on-failure
 RestartSec=3
-Environment=HOME=$HOME
+$service_unit_identity
+Environment=HOME=$service_home
 Environment=DIANA_SERVICE_MANAGER=systemd
 Environment=DIANA_SERVICE_LABEL=diana.service
 Environment=DIANA_SERVICE_DOMAIN=system
@@ -695,6 +738,7 @@ EOF
     systemctl enable --now diana.service >/dev/null
     systemctl restart diana.service
     service_kind="systemd system service"
+    grant_service_control_to_installer
     return
   fi
 
@@ -817,6 +861,9 @@ if [ "$start_after_install" = "true" ]; then
   fi
   info "Diana is healthy at http://$health_host:$port"
   printf 'Service: %s\n' "$service_kind"
+  if [ "$service_control_granted" = true ]; then
+    printf 'Control:   %s may run `diana restart` without a password (/etc/sudoers.d/diana).\n' "$service_user"
+  fi
   case "$host" in
     127.0.0.1|localhost|::1)
       # 装在服务器上却只绑回环,是「装完打不开」的头号原因。默认不改,
