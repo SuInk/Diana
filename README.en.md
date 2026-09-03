@@ -76,7 +76,21 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 > $env:DIANA_HOST="0.0.0.0"; irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 > ```
 >
-> Already installed? Re-run the command with `DIANA_HOST` to change the binding. Once exposed, always put an HTTPS reverse proxy in front and open the port in your firewall — the console has admin privileges; don't leave it naked on the public internet.
+> Already installed? Two options: re-run the install command with `DIANA_HOST` (which also upgrades you), or edit the config file to set `server.host` to `0.0.0.0` and restart:
+>
+> ```sh
+> # Linux / macOS (editing the config of a system install needs sudo; diana restart handles service privileges itself)
+> sudo vim "$(diana config path)"
+> diana restart
+> ```
+>
+> ```powershell
+> # Windows PowerShell
+> notepad (diana config path)
+> diana restart
+> ```
+>
+> Once exposed, always put an HTTPS reverse proxy in front and open the port in your firewall — the console has admin privileges; don't leave it naked on the public internet.
 
 <details>
 <summary>Docker details / manual download / building from source</summary>
