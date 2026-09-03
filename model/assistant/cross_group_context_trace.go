@@ -80,7 +80,7 @@ func (r *Runtime) recordCrossGroupContextTrace(event MessageEvent, trace crossGr
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     applog.KindDebug,
 		Level:    applog.LevelInfo,
-		Action:   "chatbot.cross_group_context",
+		Action:   "diana.cross_group_context",
 		Message:  message,
 		Metadata: metadata,
 	})

@@ -484,7 +484,7 @@ func (r *Runtime) persistSubagentTask(item reservedSubagentTask, phase string, p
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := store.SaveInboundEventSubtask(ctx, record); err != nil {
-		log.Printf("chatbot subagent task persist failed: %v", err)
+		log.Printf("diana subagent task persist failed: %v", err)
 	}
 }
 
@@ -498,7 +498,7 @@ func (r *Runtime) recordSubagentTaskLog(ctx context.Context, item reservedSubage
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "chatbot.subagent_task",
+		Action:  "diana.subagent_task",
 		Message: message,
 		Detail:  detail,
 		Actor:   oneBotEventActor(item.event),

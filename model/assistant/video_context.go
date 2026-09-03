@@ -114,7 +114,7 @@ func extractVideoContextFramesDetailed(ctx context.Context, sources []string, wa
 		return nil, ""
 	}
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		log.Printf("chatbot video context unavailable: ffmpeg not found")
+		log.Printf("diana video context unavailable: ffmpeg not found")
 		return nil, "这台机器上没有安装 ffmpeg，视频读不了；这是部署环境缺组件，不是视频本身的问题。"
 	}
 	out := make([]string, 0, maxVideoContextFrames)
@@ -151,7 +151,7 @@ func materializeVideoContextSource(ctx context.Context, source string, wait time
 	if remote := normalizedHTTPURL(source); remote != "" {
 		path, dir, err := downloadVideoContextSource(ctx, remote)
 		if err != nil {
-			log.Printf("chatbot video download failed: %v", err)
+			log.Printf("diana video download failed: %v", err)
 			return "", func() {}, fmt.Errorf("视频下载失败（%s）。", describeVideoContextError(err, maxBytes))
 		}
 		return path, func() { _ = os.RemoveAll(dir) }, nil
@@ -279,7 +279,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) (
 	}
 	stagedPath, err := stageVideoForContext(ctx, videoPath, workDir)
 	if err != nil {
-		log.Printf("chatbot video staging failed for %s: %v", filepath.Base(videoPath), err)
+		log.Printf("diana video staging failed for %s: %v", filepath.Base(videoPath), err)
 		_ = os.RemoveAll(workDir)
 		return nil, fmt.Errorf("视频准备失败（%s）。", describeVideoContextError(err, videoContextMaxBytes(ctx)))
 	}
@@ -294,7 +294,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) (
 		output, runErr := cmd.CombinedOutput()
 		cancel()
 		if runErr != nil {
-			log.Printf("chatbot video frame extraction failed: %v: %s", runErr, strings.TrimSpace(string(output)))
+			log.Printf("diana video frame extraction failed: %v: %s", runErr, strings.TrimSpace(string(output)))
 			lastFFmpegError = strings.TrimSpace(string(output))
 			continue
 		}

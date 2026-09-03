@@ -122,10 +122,10 @@ func cacheVideoFrames(ctx context.Context, targetKind, groupID, userID, messageI
 		}
 	}
 	if frameCount == 0 {
-		log.Printf("chatbot video history cache produced no frames: message_id=%s", messageID)
+		log.Printf("diana video history cache produced no frames: message_id=%s", messageID)
 		return segments
 	}
-	log.Printf("chatbot video history cached: message_id=%s frames=%d", messageID, len(cachedVideoFrameURLs(out)))
+	log.Printf("diana video history cached: message_id=%s frames=%d", messageID, len(cachedVideoFrameURLs(out)))
 	return out
 }
 

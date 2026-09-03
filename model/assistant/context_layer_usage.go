@@ -20,7 +20,7 @@ const (
 
 // contextLayerUsage 是某一层在进入全局预算之前的自有账。
 //
-// 没有它的话，chatbot.context_budget 里的 reason 只能证明「拼成的这条消息进
+// 没有它的话，diana.context_budget 里的 reason 只能证明「拼成的这条消息进
 // 128K 全局预算后没再挨刀」，证明不了层内配额有没有截断候选——各层在送进全局
 // 预算之前就已经按自己的配额裁剪并拼成一条成品消息了。
 type contextLayerUsage struct {

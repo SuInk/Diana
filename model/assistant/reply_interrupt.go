@@ -32,7 +32,7 @@ const (
 	replyInterruptPruneThreshold = 256
 )
 
-var errReplyTriggerSuperseded = errors.New("chatbot: reply trigger superseded by a newer directed message")
+var errReplyTriggerSuperseded = errors.New("diana: reply trigger superseded by a newer directed message")
 
 // directedInboundMark 记录一个会话里某用户最近一条明确叫机器人的消息。
 type directedInboundMark struct {

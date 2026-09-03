@@ -518,7 +518,7 @@ func TestRepositoryIssueCreateSanitizesAndSendsOptionalFields(t *testing.T) {
 	}
 	// 写操作现在分两步：先落草稿，用户打出确认码后执行，所以审计也是两条。
 	entries := logs.entriesSnapshot()
-	if len(entries) != 2 || entries[0].Action != "chatbot.repository_issue" || entries[1].Action != "chatbot.repository_issue" {
+	if len(entries) != 2 || entries[0].Action != "diana.repository_issue" || entries[1].Action != "diana.repository_issue" {
 		t.Fatalf("audit entries=%#v", entries)
 	}
 	if entries[0].Metadata["outcome"] != "draft_pending" || entries[1].Metadata["outcome"] != "created" {

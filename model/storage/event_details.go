@@ -625,10 +625,11 @@ func (s *SQLiteStore) inboundEventTokenUsage(ctx context.Context, since time.Tim
 	if !since.IsZero() {
 		sinceText = since.UTC().Format(time.RFC3339Nano)
 	}
+	// 三个名字都要认：动作名改过两轮，少列一个就会让那段时间的用量统计凭空归零。
 	rows, err := s.db.QueryContext(ctx, `
 SELECT target, metadata
 FROM app_logs
-WHERE created_at >= ? AND action IN ('chatbot.llm_usage', 'assistant.llm_usage')
+WHERE created_at >= ? AND action IN ('diana.llm_usage', 'chatbot.llm_usage', 'assistant.llm_usage')
 `, sinceText)
 	if err != nil {
 		return nil, inboundEventTokenTotals{}, fmt.Errorf("query event token usage: %w", err)

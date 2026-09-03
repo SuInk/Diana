@@ -139,7 +139,7 @@ func (r *Runtime) recordImageLoadError(ctx context.Context, event MessageEvent, 
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.image.load",
+		Action:  "diana.image.load",
 		Message: "图片读取失败",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),

@@ -34,7 +34,7 @@ const (
 
 var replySuppressionAccountPattern = regexp.MustCompile(`[1-9][0-9]{4,13}`)
 
-var errReplySuppressedBeforeSend = errors.New("chatbot: reply suppressed before send")
+var errReplySuppressedBeforeSend = errors.New("diana: reply suppressed before send")
 
 type replySuppressionSendGuardKey struct{}
 
@@ -243,7 +243,7 @@ func (r *Runtime) activateReplySuppressionWithinOutboundGate(event MessageEvent,
 	r.replySuppressMu.Unlock()
 	r.resetBotReplyLoopUser(userID)
 	r.resetReplyRefusalUser(userID)
-	r.recordReplySuppression(event, item, "chatbot.response_suppression.activated", "已限制该用户触发机器人回复", persistErr)
+	r.recordReplySuppression(event, item, "diana.response_suppression.activated", "已限制该用户触发机器人回复", persistErr)
 	return item, true
 }
 
@@ -303,7 +303,7 @@ func (r *Runtime) clearReplySuppression(event MessageEvent, userID string) (Repl
 	r.resetBotReplyLoopUser(userID)
 	r.resetReplyRefusalUser(userID)
 	if ok {
-		r.recordReplySuppression(event, item, "chatbot.response_suppression.released", "主人已解除用户响应限制", persistErr)
+		r.recordReplySuppression(event, item, "diana.response_suppression.released", "主人已解除用户响应限制", persistErr)
 	}
 	return item, ok
 }
@@ -499,7 +499,7 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.bot_reply_loop_classification",
+		Action:  "diana.bot_reply_loop_classification",
 		Message: "模型已完成 AI 自动回复判断",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -847,7 +847,7 @@ func (r *Runtime) recordReplySuppression(event MessageEvent, item ReplySuppressi
 }
 
 func (r *Runtime) recordReplySuppressionBlocked(event MessageEvent, item ReplySuppression) {
-	r.recordReplySuppression(event, item, "chatbot.response_suppression.blocked", "响应限制已拦截用户消息", nil)
+	r.recordReplySuppression(event, item, "diana.response_suppression.blocked", "响应限制已拦截用户消息", nil)
 }
 
 func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySuppression, llmGenerated bool, generationErr, sendErr error) {
@@ -855,13 +855,13 @@ func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySup
 	if writer == nil {
 		return
 	}
-	action := "chatbot.response_suppression.notice_sent"
+	action := "diana.response_suppression.notice_sent"
 	message := "响应限制提示已发送"
 	kind := applog.KindOperation
 	level := applog.LevelInfo
 	detail := ""
 	if sendErr != nil {
-		action = "chatbot.response_suppression.notice_failed"
+		action = "diana.response_suppression.notice_failed"
 		message = "响应限制提示发送失败"
 		kind = applog.KindError
 		level = applog.LevelError
