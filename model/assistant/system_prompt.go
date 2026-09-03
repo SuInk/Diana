@@ -43,6 +43,8 @@ const (
 
 	promptToolOneBotV11 = "只有用户明确要求读取 OneBot v11 实时信息或执行协议操作时才调用 diana.onebot_v11。主人可用全部动作，普通成员只能用后端固定的只读白名单。被拒绝后不得换别的工具绕过，也不得在没有成功结果时声称已完成。"
 
+	promptToolOneBotRequests = "diana.onebot_requests 只处理已经由 OneBot 上报并持久化的好友请求、成员入群申请和机器人群邀请。主人要求查看时先 list；明确说同意或拒绝某个请求时再 approve/reject，只有一条待处理请求且上下文明确时也要先 list 取得真实编号。不得猜 flag、不得用 diana.onebot_v11 绕过审批记录、不得在没有工具成功结果时声称已处理。"
+
 	// promptInternalIdentifiers 防的是把内部标识念给用户：模型找到历史消息后，
 	// 很自然地把 message_id 当成「定位这条消息的凭据」报出来，聊天里读起来像
 	// 调试输出，用户也用不上——那串数字在客户端里根本没法用来跳转。
