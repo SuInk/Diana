@@ -4570,7 +4570,7 @@ func (r *Runtime) recordImageOperation(ctx context.Context, event MessageEvent, 
 	})
 }
 
-func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provider llm.Provider, model string, usage llm.Usage, purpose string) {
+func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provider llm.Provider, model string, usage llm.Usage, purpose string, duration time.Duration) {
 	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
@@ -4599,6 +4599,11 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 			"output_tokens":       usage.OutputTokens,
 			"total_tokens":        usage.TotalTokens,
 			"cached_input_tokens": usage.CachedInputTokens,
+			// duration_ms 是这一次调用的墙钟耗时，tokens_per_second 是它的输出速率。
+			// 事件详情里的 duration_ms 说的是整条消息的处理耗时，两者不是一回事，
+			// 所以聚合到事件上时那个字段叫 llm_duration_ms。
+			"duration_ms":       duration.Milliseconds(),
+			"tokens_per_second": TokensPerSecond(usage.OutputTokens, duration),
 		},
 	})
 }

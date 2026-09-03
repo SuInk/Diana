@@ -1586,6 +1586,10 @@ export interface AssistantEventDetail extends BotEvent {
   output_tokens?: number;
   total_tokens?: number;
   cached_input_tokens?: number;
+  /** 这条消息所有模型调用的墙钟耗时之和；和 duration_ms（整条消息的处理耗时）不同。 */
+  llm_duration_ms?: number;
+  /** 输出 token 速率，由 output_tokens 和 llm_duration_ms 算出。 */
+  output_tokens_per_second?: number;
   decision: "replied" | "not_replied" | "pending" | "error" | string;
   reason: string;
   delivery_stage?: "generated" | "send_attempted" | "acknowledged" | "echo_persisted" | "failed" | string;
@@ -1642,6 +1646,8 @@ export interface AssistantEventsResponse {
   output_tokens: number;
   total_tokens: number;
   cached_input_tokens: number;
+  llm_duration_ms: number;
+  output_tokens_per_second: number;
   page: number;
   limit: number;
   has_more: boolean;
