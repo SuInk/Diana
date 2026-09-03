@@ -130,14 +130,19 @@ func TestPromptCacheProbeIgnoresLocalOrchestrationFields(t *testing.T) {
 }
 
 // 不同用途（意图路由 / 主回复）的提示词天然不同，必须各记各的，否则每次都报分叉。
-func TestPromptCacheProbeKeysByPurpose(t *testing.T) {
+// 工具集同理：真机上主人拿到 44 个工具、普通成员 21 个，这是两条并存的缓存前缀，
+// 互相比较必然报「从头就不同」，而两条线各自都在正常复用。
+func TestPromptCacheProbeKeysByPurposeAndToolSet(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"}
-	if promptCacheProbeKey(event, "chat") == promptCacheProbeKey(event, "intent") {
+	if promptCacheProbeKey(event, "chat", "t1") == promptCacheProbeKey(event, "intent", "t1") {
 		t.Fatal("不同用途应当得到不同的键")
 	}
 	other := MessageEvent{Kind: EventKindGroup, GroupID: "456", UserID: "10001"}
-	if promptCacheProbeKey(event, "chat") == promptCacheProbeKey(other, "chat") {
+	if promptCacheProbeKey(event, "chat", "t1") == promptCacheProbeKey(other, "chat", "t1") {
 		t.Fatal("不同会话应当得到不同的键")
+	}
+	if promptCacheProbeKey(event, "chat", "owner-tools") == promptCacheProbeKey(event, "chat", "member-tools") {
+		t.Fatal("不同工具集应当得到不同的键")
 	}
 }
 
