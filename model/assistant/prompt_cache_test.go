@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestCoarseRelativeTimingIsStableAcrossNearbyTurns(t *testing.T) {
@@ -65,6 +67,54 @@ func TestHistoryLineIsByteStableAcrossTurns(t *testing.T) {
 	}, 1100, nil)
 	if !strings.HasPrefix(media, "[历史 ") || strings.Contains(media, "距当前") {
 		t.Fatalf("media history line = %q", media)
+	}
+}
+
+// 真机跑一轮 QQ 群聊时发现：探针把所有 system 消息合成一段，于是每条消息都报
+// 「system 分叉、可复用前缀 0 字节」，而实际缓存命中率有九成。开头的 system 才是
+// 稳定段，靠后的（发言者尾部、实时时钟）本来就每轮变，要按位置进消息序列。
+func TestPromptCacheProbeIgnoresExpectedTailChurn(t *testing.T) {
+	build := func(clock string) llm.GenerateRequest {
+		return llm.GenerateRequest{Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: "稳定人设与规则"},
+			{Role: llm.RoleUser, Content: "[历史 2026-09-03 10:00:00] 小林: 旧问题"},
+			{Role: llm.RoleAssistant, Content: "旧回复", CacheBreakpoint: true},
+			{Role: llm.RoleSystem, Content: "关系等级：熟悉"},
+			{Role: llm.RoleSystem, Content: clock},
+			{Role: llm.RoleUser, Content: "【当前需要回复的消息】新问题"},
+		}}
+	}
+	first := observePromptCachePayload(build("当前运行时钟：10:00:00"))
+	second := observePromptCachePayload(build("当前运行时钟：10:00:31"))
+	if first.SystemHash != second.SystemHash {
+		t.Fatalf("leading system must stay stable across turns")
+	}
+	if first.StableBoundary != 1 {
+		t.Fatalf("stable boundary = %d, want the marked history message", first.StableBoundary)
+	}
+	divergence := comparePromptCachePayload(first, second)
+	if divergence.Segment != "messages" || divergence.MessageIndex <= first.StableBoundary {
+		t.Fatalf("tail churn must be reported after the stable boundary: %#v", divergence)
+	}
+	if !divergence.Expected(first) {
+		t.Fatalf("tail churn must not be logged as a cache problem: %#v", divergence)
+	}
+	if divergence.ReusablePrefixBytes <= 0 {
+		t.Fatalf("reusable prefix must cover the stable head and history: %#v", divergence)
+	}
+
+	// 真正的前缀断裂仍然要报：历史被改写时命中率是真的会掉。
+	broken := build("当前运行时钟：10:00:31")
+	broken.Messages[1].Content = "[历史 2026-09-03 10:00:00] 小林: 改写过的旧问题"
+	real := comparePromptCachePayload(first, observePromptCachePayload(broken))
+	if real.Segment != "messages" || real.MessageIndex != 0 || real.Expected(first) {
+		t.Fatalf("a real history rewrite must still be reported: %#v", real)
+	}
+	// 头部变了同样要报。
+	headChanged := build("当前运行时钟：10:00:31")
+	headChanged.Messages[0].Content = "换了人设"
+	if got := comparePromptCachePayload(first, observePromptCachePayload(headChanged)); got.Segment != "system" || got.Expected(first) {
+		t.Fatalf("a system head change must still be reported: %#v", got)
 	}
 }
 
