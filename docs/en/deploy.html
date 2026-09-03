@@ -29,7 +29,7 @@
           <button type="button" role="tab" aria-selected="false" data-tab="windows">Windows</button>
         </div>
         <div class="tab-panel" role="tabpanel" data-panel="unix">
-          <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh</code></pre>
           <p>Supports Linux amd64/arm64 and macOS on both Intel and Apple Silicon. On Linux it installs as a <code>systemd --user</code> service and on macOS as a LaunchAgent; where no service manager is available it falls back to a background process.</p>
         </div>
         <div class="tab-panel" role="tabpanel" data-panel="windows" hidden>
@@ -47,7 +47,8 @@
       <section class="section searchable" id="installer-options">
         <div class="section-heading"><p class="eyebrow">Options</p><h2>Control the install with environment variables</h2></div>
         <div class="table-wrap"><table><thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead><tbody>
-          <tr><td><code>DIANA_INSTALL_DIR</code></td><td>Unix: <code>~/.local/share/diana</code><br />Windows: <code>%LOCALAPPDATA%\Diana</code></td><td>Where the program, data, logs and backups live.</td></tr>
+          <tr><td><code>DIANA_INSTALL_SCOPE</code></td><td><code>auto</code></td><td>Unix recommends a sudo system install in <code>/opt/diana</code>; set <code>user</code> to install only for the current user.</td></tr>
+          <tr><td><code>DIANA_INSTALL_DIR</code></td><td>system: <code>/opt/diana</code><br />user: <code>~/.local/share/diana</code><br />Windows: <code>%LOCALAPPDATA%\Diana</code></td><td>Explicit program, data, logs and backups directory.</td></tr>
           <tr><td><code>DIANA_VERSION</code></td><td><code>latest</code></td><td>Pin a version such as <code>v0.4.2</code>; defaults to the newest stable release.</td></tr>
           <tr><td><code>DIANA_PORT</code></td><td><code>18080</code></td><td>Console port written into <code>config.yaml</code> on first install.</td></tr>
           <tr><td><code>DIANA_ADMIN_USERNAME</code></td><td><code>diana#admin</code></td><td>Administrator username created on first install.</td></tr>
@@ -56,11 +57,12 @@
         </tbody></table></div>
         <pre><code># install a pinned version into a custom directory
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
+  sudo env \
   DIANA_VERSION=v0.4.2 \
   DIANA_INSTALL_DIR=/opt/diana-user \
   DIANA_PORT=18081 \
   sh</code></pre>
-        <div class="callout warn"><strong>About variables and pipes</strong><p>With <code>curl | sh</code> the variables belong on the <code>sh</code> side: <code>curl ... | DIANA_VERSION=v0.4.2 sh</code>. You can also download the script first and run it with the variables set.</p></div>
+        <div class="callout warn"><strong>About variables and pipes</strong><p>With sudo, pass variables to the installer through <code>sudo env</code>. Without sudo access, explicitly use <code>DIANA_INSTALL_SCOPE=user sh</code> for a current-user installation.</p></div>
       </section>
 
       <section class="section searchable" id="manual-release">

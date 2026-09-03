@@ -36,8 +36,10 @@ It's built for people who want to run their own bot:
 
 ```sh
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh
 ```
+
+The recommended sudo installation uses the fixed `/opt/diana` directory and creates `/usr/local/bin/diana`. Without sudo access, run the command without sudo; the installer asks before falling back to a current-user installation, or set `DIANA_INSTALL_SCOPE=user` explicitly.
 
 ```powershell
 # Windows PowerShell
@@ -67,7 +69,7 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 > **Installing on a server?** Diana only listens on localhost by default. To reach the console from another machine, set `DIANA_HOST` at install time:
 >
 > ```sh
-> curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | DIANA_HOST=0.0.0.0 sh
+> curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo env DIANA_HOST=0.0.0.0 sh
 > ```
 >
 > ```powershell

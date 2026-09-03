@@ -36,8 +36,10 @@
 
 ```sh
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh
 ```
+
+推荐使用 sudo 固定安装到 `/opt/diana`，并创建 `/usr/local/bin/diana`。没有 sudo 权限时，去掉 sudo 运行；安装器会询问是否改为仅安装给当前用户，也可显式传入 `DIANA_INSTALL_SCOPE=user`。
 
 ```powershell
 # Windows PowerShell
@@ -67,7 +69,7 @@ docker run -d --name diana --restart unless-stopped \
 > **装在服务器上？** 默认只监听本机，要从别的机器打开控制台，安装时带上 `DIANA_HOST`：
 >
 > ```sh
-> curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | DIANA_HOST=0.0.0.0 sh
+> curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo env DIANA_HOST=0.0.0.0 sh
 > ```
 >
 > ```powershell

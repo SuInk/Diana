@@ -30,6 +30,27 @@ case "$install_dir" in
   ""|/|"$HOME") printf 'Unsafe Diana install directory: %s\n' "$install_dir" >&2; exit 1 ;;
 esac
 
+install_scope=$(cat "$install_dir/.install-scope" 2>/dev/null || printf 'user')
+service_user=$(cat "$install_dir/.service-user" 2>/dev/null || id -un)
+if [ "$install_scope" = "system" ] && [ "$(id -u)" -ne 0 ]; then
+  printf 'System Diana installation requires sudo to uninstall: sudo %s' "$0" >&2
+  [ "$purge" = true ] && printf ' --purge' >&2
+  [ "$assume_yes" = true ] && printf ' --yes' >&2
+  printf '\n' >&2
+  exit 1
+fi
+
+service_uid=$(id -u "$service_user" 2>/dev/null || id -u)
+service_home=$HOME
+if [ "$service_user" != "$(id -un)" ]; then
+  if [ "$(uname -s)" = "Darwin" ] && command -v dscl >/dev/null 2>&1; then
+    service_home=$(dscl . -read "/Users/$service_user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+  elif command -v getent >/dev/null 2>&1; then
+    service_home=$(getent passwd "$service_user" | awk -F: '{print $6}')
+  fi
+  [ -n "$service_home" ] || service_home=$HOME
+fi
+
 if [ "$assume_yes" != true ]; then
   if [ "$purge" = true ]; then
     prompt="Remove Diana and permanently delete all data in $install_dir? [y/N] "
@@ -41,8 +62,8 @@ if [ "$assume_yes" != true ]; then
   case "$answer" in y|Y|yes|YES) ;; *) printf 'Cancelled.\n'; exit 0 ;; esac
 fi
 
-uid=$(id -u)
-plist="$HOME/Library/LaunchAgents/com.suink.diana.plist"
+uid=$service_uid
+plist="$service_home/Library/LaunchAgents/com.suink.diana.plist"
 if [ -f "$plist" ] && grep -F "$install_dir" "$plist" >/dev/null 2>&1; then
   if command -v launchctl >/dev/null 2>&1; then
     launchctl bootout "gui/$uid/com.suink.diana" >/dev/null 2>&1 || true
@@ -50,7 +71,15 @@ if [ -f "$plist" ] && grep -F "$install_dir" "$plist" >/dev/null 2>&1; then
   rm -f -- "$plist"
 fi
 
-unit="$HOME/.config/systemd/user/diana.service"
+if [ "$install_scope" = "system" ] && [ -f /etc/systemd/system/diana.service ] && grep -F "$install_dir" /etc/systemd/system/diana.service >/dev/null 2>&1; then
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now diana.service >/dev/null 2>&1 || true
+  fi
+  rm -f -- /etc/systemd/system/diana.service
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+unit="$service_home/.config/systemd/user/diana.service"
 if [ -f "$unit" ] && grep -F "$install_dir" "$unit" >/dev/null 2>&1; then
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user disable --now diana.service >/dev/null 2>&1 || true
@@ -71,7 +100,11 @@ if [ -f "$pid_file" ]; then
   esac
 fi
 
-command_link="$HOME/.local/bin/diana"
+if [ "$install_scope" = "system" ]; then
+  command_link="/usr/local/bin/diana"
+else
+  command_link="$service_home/.local/bin/diana"
+fi
 if [ -L "$command_link" ]; then
   link_target=$(readlink "$command_link" 2>/dev/null || true)
   case "$link_target" in "$install_dir/"*) rm -f -- "$command_link" ;; esac
@@ -94,6 +127,8 @@ for item in \
   uninstall.ps1 .installed-version .diana.pid .diana-updates; do
   rm -rf -- "$install_dir/$item"
 done
+
+rm -f -- "$install_dir/.install-scope" "$install_dir/.service-user" "$install_dir/.migrated-from"
 
 # Remove this script last. POSIX systems keep the opened script readable until exit.
 rm -f -- "$install_dir/uninstall.sh"
