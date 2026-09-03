@@ -516,6 +516,33 @@ func TestUnderLimitRepliesKeepEveryLine(t *testing.T) {
 	}
 }
 
+// 合并转发已经把所有节点收进一张卡片，不需要再按普通气泡的条数上限合并。模型写了
+// 几个自然段，卡片里就保留几个节点。
+func TestForwardReplyKeepsNaturalLinesBeyondBubbleLimit(t *testing.T) {
+	reply := "第一段\n第二段\n第三段\n第四段\n第五段\n第六段"
+	limits := chatSplitLimits{ChunkSize: 400, MaxBubbles: 2}
+
+	got := splitForwardReply(reply, limits)
+	if len(got) != 6 {
+		t.Fatalf("合并转发把 6 行压成了 %d 个节点：%q", len(got), got)
+	}
+	for index, want := range strings.Split(reply, "\n") {
+		if got[index] != want {
+			t.Fatalf("节点 %d = %q，want %q", index, got[index], want)
+		}
+	}
+}
+
+func TestForwardReplyRespectsNaturalSplitSwitch(t *testing.T) {
+	off := chatSplitLimits{ChunkSize: 400, MaxBubbles: 2, MarkerOnly: true}
+	if got := splitForwardReply("第一段\n第二段\n第三段", off); len(got) != 1 {
+		t.Fatalf("关闭自然分条后换行生成了 %d 个节点：%q", len(got), got)
+	}
+	if got := splitForwardReply("第一段"+notificationSplitMarker+"第二段", off); len(got) != 2 {
+		t.Fatalf("关闭自然分条后显式标记没有生成两个节点：%q", got)
+	}
+}
+
 // 分条和合并转发此前只有机器人级：GroupConfig 里根本没有这几个字段，群组页也没有
 // 对应的输入框。但群和群的说话节奏不一样，一个技术群里长回复整条读更省事，一个闲
 // 聊群里同样长度得拆开发才不像播报。
