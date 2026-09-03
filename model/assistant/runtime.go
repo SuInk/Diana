@@ -41,11 +41,14 @@ type replyRuleContextKey struct{}
 const (
 	proactiveReplyRouteConcurrency = 8
 	relationshipEvalConcurrency    = 4
-	semanticRouteTimeout           = 20 * time.Second
-	llmTransientRetryDelay         = 700 * time.Millisecond
-	llmTransientMaxRetries         = 1
-	proactiveReplyRouteBudget      = 60 * time.Second
-	replyRuleRouteBudget           = 15 * time.Second
+	// botReplyLoopCheckConcurrency 限制回复后空转复盘的并发。它不在用户感知的
+	// 路径上，攒着不如丢掉：满了就跳过这一轮，晚一条消息发现循环没有关系。
+	botReplyLoopCheckConcurrency = 2
+	semanticRouteTimeout         = 20 * time.Second
+	llmTransientRetryDelay       = 700 * time.Millisecond
+	llmTransientMaxRetries       = 1
+	proactiveReplyRouteBudget    = 60 * time.Second
+	replyRuleRouteBudget         = 15 * time.Second
 )
 
 type LLMProfileStore interface {
@@ -319,6 +322,8 @@ type Runtime struct {
 	proactiveRouteSem   chan struct{}
 	relationshipEvalSem chan struct{}
 	relationshipEvalWG  sync.WaitGroup
+	botReplyLoopSem     chan struct{}
+	botReplyLoopWG      sync.WaitGroup
 	history             map[string][]MessageEvent
 	semanticRefCache    map[string]SemanticReferenceCacheRecord
 	agentCarryovers     map[string]agentRunCarryover
@@ -537,6 +542,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		sem:                   make(chan struct{}, cfg.MaxBotConcurrency),
 		proactiveRouteSem:     make(chan struct{}, proactiveReplyRouteConcurrency),
 		relationshipEvalSem:   make(chan struct{}, relationshipEvalConcurrency),
+		botReplyLoopSem:       make(chan struct{}, botReplyLoopCheckConcurrency),
 		history:               map[string][]MessageEvent{},
 		semanticRefCache:      map[string]SemanticReferenceCacheRecord{},
 		chatInLastReplyAt:     map[string]time.Time{},
@@ -1607,11 +1613,9 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		text = event.RawMessage
 	}
 	now := time.Now()
+	// 这里只做本地状态检查：暂停期是否还在。判断「要不要进入暂停」的那次模型调用
+	// 已经挪到回复之后（见 enqueueBotReplyLoopCheck），不再占用户感知的延迟。
 	restriction, blocked := r.activeReplySuppression(event, now)
-	loopCandidate, shouldClassifyLoop := botReplyLoopCandidate{}, false
-	if !blocked && boolValue(r.effectiveConfigForEvent(event).BotReplyLoopDetectionEnabled, true) {
-		loopCandidate, shouldClassifyLoop = r.botReplyLoopCandidate(event, text)
-	}
 	r.remember(event)
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
 	r.observeGroupExpression(event, text)
@@ -1634,29 +1638,12 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		r.record(r.decisionEventRecord(event, text, "ignored_response_suppression"))
 		return finishWithoutReply("ignored_response_suppression")
 	}
-	if shouldClassifyLoop {
-		decision, raw, classifyErr := r.classifyBotReplyLoopMessage(ctx, event, text, loopCandidate, history)
-		hitCount, loopReason, loopDetected := 0, "", false
-		if classifyErr == nil {
-			hitCount, loopReason, loopDetected = r.registerBotReplyLoopDecision(event, loopCandidate, decision, now)
-		}
-		r.recordBotReplyLoopClassification(ctx, event, loopCandidate, decision, hitCount, raw, classifyErr)
-		if loopDetected {
-			restriction, activated := r.activateReplySuppression(event, loopReason, now)
-			if activated {
-				r.recordReplySuppressionBlocked(event, restriction)
-				r.sendReplySuppressionActivationNotice(ctx, event, restriction)
-			}
-			r.updateUserMemory(event, 0)
-			r.record(r.decisionEventRecord(event, text, "ignored_ai_reply_loop"))
-			return finishWithoutReply("ignored_ai_reply_loop")
-		}
-		if concurrentRestriction, concurrentlyBlocked := r.activeReplySuppression(event, time.Now()); concurrentlyBlocked {
-			r.updateUserMemory(event, 0)
-			r.recordReplySuppressionBlocked(event, concurrentRestriction)
-			r.record(r.decisionEventRecord(event, text, "ignored_response_suppression"))
-			return finishWithoutReply("ignored_response_suppression")
-		}
+	// 上一条消息的复盘是异步的，可能刚好在这中间把暂停开出来，这里再确认一次。
+	if concurrentRestriction, concurrentlyBlocked := r.activeReplySuppression(event, time.Now()); concurrentlyBlocked {
+		r.updateUserMemory(event, 0)
+		r.recordReplySuppressionBlocked(event, concurrentRestriction)
+		r.record(r.decisionEventRecord(event, text, "ignored_response_suppression"))
+		return finishWithoutReply("ignored_response_suppression")
 	}
 	if videoOnlyMessage(event, text) {
 		r.updateUserMemory(event, 0)
@@ -1882,6 +1869,8 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		r.markChatInReplied(event)
 	}
 	r.enqueueRelationshipEvaluation(event, text)
+	// 回复已经发出去了，现在回过头看这一来一回是不是在空转（见 enqueueBotReplyLoopCheck）。
+	r.enqueueBotReplyLoopCheck(event, text, reply)
 	return successOutcome, nil
 }
 

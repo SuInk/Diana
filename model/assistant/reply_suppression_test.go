@@ -612,13 +612,12 @@ func TestReplySuppressionPersistsAcrossRuntimeRestart(t *testing.T) {
 	}
 }
 
-func TestBotReplyLoopSuppressesThirdAIClassifiedMessageAcrossLowFrequency(t *testing.T) {
+// 复盘在回复之后进行：回够三条才暂停，第四条才被拦下。
+func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"automated_ai_reply":true,"confidence":0.97,"reason":"模板化助手自动回应"}`,
-		`{"should_reply":false,"confidence":0.99,"category":"none","directed_at_bot":true,"answerable":false,"reason":"只是待命式自动回应，没有需要可靠回答的问题"}`,
-		`{"automated_ai_reply":true,"confidence":0.96,"reason":"延续相同助手人格"}`,
-		`{"should_reply":false,"confidence":0.99,"category":"none","directed_at_bot":true,"answerable":false,"reason":"只是确认不会循环，不需要继续回复"}`,
-		`{"automated_ai_reply":true,"confidence":0.98,"reason":"继续自动回应机器人"}`,
+		`{"automated_ai_reply":true,"meaningless_loop":false,"confidence":0.97,"reason":"模板化助手自动回应"}`,
+		`{"automated_ai_reply":true,"meaningless_loop":false,"confidence":0.96,"reason":"延续相同助手人格"}`,
+		`{"automated_ai_reply":true,"meaningless_loop":false,"confidence":0.98,"reason":"继续自动回应机器人"}`,
 		`为避免机器人互相循环，已暂停响应此账号约 30 分钟，期间不再接续消息。`,
 	}}
 	channel := &recordingChannel{}
@@ -632,16 +631,7 @@ func TestBotReplyLoopSuppressesThirdAIClassifiedMessageAcrossLowFrequency(t *tes
 		"Diana保持静默是明智的选择，本喵会继续待命～",
 	}
 	for i, text := range texts {
-		handled, outcome := prepareBotReplyLoopRound(t, runtime, "ai-loop", "20002", i, start.Add(time.Duration(i)*10*time.Minute), 2*time.Minute, text)
-		if i < botReplyLoopThreshold-1 {
-			if handled || outcome != "ignored" {
-				t.Fatalf("round %d handled=%v outcome=%q, want semantic silence", i+1, handled, outcome)
-			}
-			continue
-		}
-		if handled || outcome != "ignored_ai_reply_loop" {
-			t.Fatalf("threshold round handled=%v outcome=%q", handled, outcome)
-		}
+		runBotReplyLoopReview(t, runtime, "ai-loop", "20002", i, start.Add(time.Duration(i)*10*time.Minute), 2*time.Minute, text, "好的，我在的")
 	}
 	item, active := runtime.activeReplySuppression(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "20002"}, time.Now())
 	if !active {
@@ -650,9 +640,13 @@ func TestBotReplyLoopSuppressesThirdAIClassifiedMessageAcrossLowFrequency(t *tes
 	if !strings.Contains(item.Reason, "累计 3 次高置信度自动 AI 回复") {
 		t.Fatalf("suppression reason = %q", item.Reason)
 	}
-	wantRequests := botReplyLoopThreshold + (botReplyLoopThreshold - 1) + 1
-	if len(provider.requests) != wantRequests {
-		t.Fatalf("LLM requests = %d, want %d classifiers, answerability routes, and one notice", len(provider.requests), wantRequests)
+	// 三次复盘加一次暂停通知，没有别的调用：判断不再抢在回复之前跑。
+	if len(provider.requests) != botReplyLoopThreshold+1 {
+		t.Fatalf("LLM requests = %d, want %d reviews and one notice", len(provider.requests), botReplyLoopThreshold+1)
+	}
+	// 复盘请求必须带上机器人自己刚发的那条回复——这是判断空转的关键证据。
+	if !strings.Contains(requestTextContent(provider.requests[0]), `"bot_reply_text":"好的，我在的"`) {
+		t.Fatalf("review payload missing the bot reply: %q", requestTextContent(provider.requests[0]))
 	}
 	if len(channel.sent) != 1 {
 		t.Fatalf("suppression notices = %#v", channel.sent)
@@ -661,12 +655,50 @@ func TestBotReplyLoopSuppressesThirdAIClassifiedMessageAcrossLowFrequency(t *tes
 	if notice.ReplyMessageID != "" || notice.MentionUserID != "" || !strings.Contains(notice.Text, "为避免机器人互相循环") || !strings.Contains(notice.Text, "暂停响应此账号") || !strings.Contains(notice.Text, "约 30 分钟") {
 		t.Fatalf("suppression notice = %#v", notice)
 	}
+	// 暂停已经生效，下一条进来时由本地状态直接拦掉，不再走模型。
 	handled, outcome := prepareBotReplyLoopRound(t, runtime, "ai-loop", "20002", 3, time.Now(), time.Minute, "收到，我继续待命")
 	if handled || outcome != "ignored_response_suppression" {
 		t.Fatalf("suppressed follow-up handled=%v outcome=%q", handled, outcome)
 	}
 	if len(channel.sent) != 1 {
 		t.Fatalf("suppression notice repeated: %#v", channel.sent)
+	}
+}
+
+// 空转复盘绝不能跑在回复之前：那条路径上每多一次模型调用，用户就多等一次。
+func TestBotReplyLoopReviewStaysOffTheReplyCriticalPath(t *testing.T) {
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"should_reply":false,"confidence":0.99,"category":"none","directed_at_bot":true,"answerable":false,"reason":"不需要回复"}`,
+	}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	prepareBotReplyLoopRound(t, runtime, "critical-path", "20002", 0, time.Now().Add(-time.Minute), time.Minute, "喵～本喵一直在待命～")
+	for _, request := range provider.requestsSnapshot() {
+		if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "空转复盘器") {
+			t.Fatal("空转复盘不该出现在回复前的关键路径上")
+		}
+	}
+}
+
+// 对方不是机器人，但这一来一回已经空转：同样要计数。
+func TestBotReplyLoopCountsMeaninglessExchanges(t *testing.T) {
+	decision := botReplyLoopAIDecision{MeaninglessLoop: true, Confidence: 0.95, Reason: "双方都只是在应付"}
+	if !decision.counts() {
+		t.Fatal("高置信度的空转判定应当计数")
+	}
+	low := botReplyLoopAIDecision{MeaninglessLoop: true, Confidence: 0.5}
+	if low.counts() {
+		t.Fatal("低置信度不该计数")
+	}
+	parsed, ok := parseBotReplyLoopAIDecision(`{"automated_ai_reply":false,"meaningless_loop":true,"confidence":0.93,"reason":"互相复读"}`)
+	if !ok || !parsed.MeaninglessLoop || parsed.AutomatedAIReply {
+		t.Fatalf("parsed = %#v ok=%v", parsed, ok)
+	}
+	// 旧提示词只给两个字段，升级期间必须仍然可解。
+	legacy, ok := parseBotReplyLoopAIDecision(`{"automated_ai_reply":true,"confidence":0.95,"reason":"旧版输出"}`)
+	if !ok || legacy.MeaninglessLoop || !legacy.counts() {
+		t.Fatalf("legacy = %#v ok=%v", legacy, ok)
 	}
 }
 
@@ -682,13 +714,11 @@ func TestBotReplyLoopDetectionCanBeDisabled(t *testing.T) {
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	handled, outcome := prepareBotReplyLoopRound(t, runtime, "disabled-loop", "20002", 0, time.Now().Add(-time.Minute), time.Minute, "收到，我会继续自动回复")
-	if handled || outcome != "ignored" {
-		t.Fatalf("handled=%v outcome=%q, want ordinary routing result", handled, outcome)
-	}
-	requests := provider.requestsSnapshot()
-	if len(requests) != 1 || len(requests[0].Messages) == 0 || strings.Contains(requests[0].Messages[0].Content, "反机器人循环分类器") {
-		t.Fatalf("disabled detection reached the classifier: %#v", requests)
+	runBotReplyLoopReview(t, runtime, "disabled-loop", "20002", 0, time.Now().Add(-time.Minute), time.Minute, "收到，我会继续自动回复", "好的")
+	for _, request := range provider.requestsSnapshot() {
+		if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "空转复盘器") {
+			t.Fatalf("disabled detection reached the classifier: %#v", request)
+		}
 	}
 	if _, active := runtime.activeReplySuppression(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "20002"}, time.Now()); active {
 		t.Fatal("disabled detection activated reply suppression")
@@ -698,25 +728,21 @@ func TestBotReplyLoopDetectionCanBeDisabled(t *testing.T) {
 func TestBotReplyLoopDoesNotCountHumanClassifiedMessages(t *testing.T) {
 	provider := &sequenceLLMProvider{}
 	for i := 0; i < botReplyLoopThreshold+2; i++ {
-		provider.replies = append(provider.replies, `{"automated_ai_reply":false,"confidence":0.99,"reason":"普通真人连续聊天"}`)
-		provider.replies = append(provider.replies, `{"should_reply":true,"confidence":0.97,"category":"bot_related","directed_at_bot":true,"answerable":true,"reason":"真人在继续追问可回答的问题"}`)
+		provider.replies = append(provider.replies, `{"automated_ai_reply":false,"meaningless_loop":false,"confidence":0.99,"reason":"普通真人连续聊天"}`)
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	start := time.Now().Add(-20 * time.Minute).Truncate(time.Second)
 	for i := 0; i < botReplyLoopThreshold+2; i++ {
-		handled, outcome := prepareBotReplyLoopRound(t, runtime, "human", "20002", i, start.Add(time.Duration(i)*4*time.Minute), time.Minute, fmt.Sprintf("这是普通真人回复 %d", i))
-		if !handled || outcome != "replied_proactive" {
-			t.Fatalf("human message %d handled=%v outcome=%q", i, handled, outcome)
-		}
+		runBotReplyLoopReview(t, runtime, "human", "20002", i, start.Add(time.Duration(i)*4*time.Minute), time.Minute,
+			fmt.Sprintf("这是普通真人回复 %d", i), fmt.Sprintf("这是机器人的第 %d 条回答", i))
 	}
 	if _, active := runtime.activeReplySuppression(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "20002"}, time.Now()); active {
 		t.Fatal("human-classified messages were incorrectly suppressed")
 	}
-	wantRequests := (botReplyLoopThreshold + 2) * 2
-	if len(provider.requests) != wantRequests {
-		t.Fatalf("classifier and route requests = %d, want %d", len(provider.requests), wantRequests)
+	if len(provider.requests) != botReplyLoopThreshold+2 {
+		t.Fatalf("review requests = %d, want %d", len(provider.requests), botReplyLoopThreshold+2)
 	}
 }
 
@@ -842,6 +868,36 @@ func TestParseBotReplyLoopAIDecision(t *testing.T) {
 	decision, ok = parseBotReplyLoopAIDecision(`{"automated_ai_reply":true,"confidence":0.89,"reason":"证据不足"}`)
 	if !ok || decision.counts() {
 		t.Fatalf("low-confidence decision=%#v ok=%v", decision, ok)
+	}
+}
+
+// runBotReplyLoopReview 模拟「机器人已经回复完，回过头复盘这一来一回」。
+// 复盘是异步的，等它跑完再断言。
+func runBotReplyLoopReview(t *testing.T, runtime *Runtime, prefix, userID string, index int, botAt time.Time, replyDelay time.Duration, text, reply string) {
+	t.Helper()
+	event := botReplyLoopEvent(runtime, prefix, userID, index, botAt, replyDelay, text)
+	<-runtime.enqueueBotReplyLoopCheck(event, text, reply)
+}
+
+func botReplyLoopEvent(runtime *Runtime, prefix, userID string, index int, botAt time.Time, replyDelay time.Duration, text string) MessageEvent {
+	botMessageID := fmt.Sprintf("%s-bot-%d", prefix, index)
+	runtime.remember(MessageEvent{
+		Kind: EventKindGroup, GroupID: "123456", UserID: "42", SelfID: "42",
+		MessageID: botMessageID, Time: botAt.Unix(), RawMessage: "Diana reply",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana reply"}}},
+	})
+	return MessageEvent{
+		Kind: EventKindGroup, GroupID: "123456", UserID: userID, SelfID: "42",
+		MessageID: fmt.Sprintf("%s-user-%d", prefix, index), Time: botAt.Add(replyDelay).Unix(),
+		ToMe: true, RawMessage: "[CQ:reply,id=" + botMessageID + "] " + text,
+		Segments: []MessageSegment{
+			{Type: "reply", Data: map[string]string{"id": botMessageID}},
+			{Type: "text", Data: map[string]string{"text": " " + text}},
+		},
+		Quoted: &QuotedMessage{
+			MessageID: botMessageID, UserID: "42", GroupID: "123456", RawMessage: "Diana reply",
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana reply"}}},
+		},
 	}
 }
 
