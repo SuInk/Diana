@@ -166,9 +166,6 @@ func youtubeVideoID(raw string) string {
 }
 
 func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequest, raw string) resolverSocialResult {
-	if !twitterResolverRequestAllowed(ctx, req) {
-		return resolverSocialResult{Suppressed: true}
-	}
 	if p.videoDownloader != nil && p.twitterPostFetcher == nil && p.twitterMediaDownloader == nil {
 		result := resolverSocialResult{Handled: true, Context: fmt.Sprintf("%s识别：小蓝鸟学习版", resolverNickname())}
 		return p.attachDownloadedVideo(ctx, req, raw, "x", result)
