@@ -24,7 +24,8 @@ import (
 
 type assistantEventDetail struct {
 	storage.InboundEventDetail
-	Handled bool `json:"handled"`
+	Handled   bool   `json:"handled"`
+	GroupName string `json:"group_name,omitempty"`
 }
 
 type assistantEventsResponse struct {
@@ -249,6 +250,12 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		}
 	}
 	events := make([]assistantEventDetail, 0, len(stored.Events))
+	groupNames := map[string]string{}
+	if live, _, _ := h.consoleGroupSources(c.Request.Context(), profileID, false); len(live) > 0 {
+		for _, group := range live {
+			groupNames[strings.TrimSpace(group.GroupID)] = strings.TrimSpace(group.GroupName)
+		}
+	}
 	for _, item := range stored.Events {
 		decision, reason, handled := assistant.DescribeEventOutcome(item.Outcome)
 		unconfirmedErrorReply := item.Outcome == "error_replied" && item.DeliveryStage != string(assistant.OutboundDeliveryAcknowledged) && item.DeliveryStage != string(assistant.OutboundDeliveryEchoPersisted)
@@ -282,6 +289,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		detail := assistantEventDetail{
 			InboundEventDetail: item,
 			Handled:            handled,
+			GroupName:          groupNames[strings.TrimSpace(item.GroupID)],
 		}
 		if live, found := recent[assistantEventKey(item.Kind, item.GroupID, item.UserID, item.MessageID)]; found {
 			if detail.Platform == "" {

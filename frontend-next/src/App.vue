@@ -315,6 +315,7 @@ async function loadBotProfiles(): Promise<void> {
     const config = await getBotProfileConfig();
     botProfiles.value = config.profiles?.length ? config.profiles : [config];
     reconcileBotScope(botProfiles.value);
+    ensureConcreteGroupScope();
   } catch {
     // 取不到配置档时切换器不显示，不影响其它功能。
   }
@@ -327,12 +328,18 @@ const scopeOptions = computed(() => {
     return [];
   }
   return [
-    { value: ALL_PROFILES, label: "全部机器人" },
+    ...(currentView.value === "groups" ? [] : [{ value: ALL_PROFILES, label: "全部机器人" }]),
     ...botProfiles.value
       .filter((profile) => profile.id)
       .map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || "未命名机器人", hint: profile.platform }))
   ];
 });
+
+function ensureConcreteGroupScope(): void {
+  if (currentView.value !== "groups" || botScope.value !== ALL_PROFILES) return;
+  const first = botProfiles.value.find((profile) => profile.id)?.id;
+  if (first) setBotScope(first);
+}
 const sections = computed(() => navSections());
 
 const viewTitle = computed(() => viewTitles[currentView.value]);
@@ -471,6 +478,7 @@ function onLoginSuccess(): void {
 // 重连即重启：连上之后把版本、运行时长和更新提示一起对齐。
 // 机器人页可能增删配置档，离开时重新取一次，切换器的选项不至于停在旧列表上。
 watch(currentView, (next, previous) => {
+  if (next === "groups") ensureConcreteGroupScope();
   if (previous === "bot" && next !== "bot") {
     void loadBotProfiles();
   }

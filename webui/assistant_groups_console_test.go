@@ -253,9 +253,36 @@ func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
 	if response.Config.NaturalInterjectionEnabled == nil || !*response.Config.NaturalInterjectionEnabled || response.Config.RecallReplyAutoDeleteEnabled == nil || !*response.Config.RecallReplyAutoDeleteEnabled || response.Config.RecallReplyTTLSeconds != 90 {
 		t.Fatalf("response config = %#v", response.Config)
 	}
-	saved, ok := store.ConfigForGroup("", "50005")
+	saved, ok := store.ConfigForGroup(response.Config.BotProfileID, "50005")
 	if !ok || saved.NaturalInterjectionEnabled == nil || !*saved.NaturalInterjectionEnabled || saved.RecallReplyAutoDeleteEnabled == nil || !*saved.RecallReplyAutoDeleteEnabled || saved.RecallReplyTTLSeconds != 90 {
 		t.Fatalf("saved config = %#v, ok = %v", saved, ok)
+	}
+}
+
+func TestConsoleGroupsRejectsAllBotScopeWhenMultipleProfilesExist(t *testing.T) {
+	base := assistant.DefaultBotConfig()
+	runtime := assistant.NewRuntime(base, consoleGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandler(context.Background(), runtime)
+	profiles := NewMemoryBotProfileStore(base)
+	set := profiles.Profiles()
+	second := base
+	second.ID = "second-bot"
+	second.Name = "第二台机器人"
+	set.Profiles = append(set.Profiles, second)
+	if err := profiles.SaveProfiles(set); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetProfileStore(profiles)
+	handler.SetGroupConfigStore(NewMemoryBotGroupConfigStore())
+	router := botTestRouter(handler)
+
+	body := `{"config":{"group_id":"50007","enabled":true}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "具体机器人") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -306,7 +333,8 @@ func TestConsoleGroupsValidatesPluginSettingOverrides(t *testing.T) {
 		t.Fatalf("secret status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	saved, ok := store.ConfigForGroup("", "50006")
+	profileID := handler.profiles.Profiles().Profiles[0].ID
+	saved, ok := store.ConfigForGroup(profileID, "50006")
 	if !ok || saved.PluginSettingOverrides["official.nonebot-plugin-resolver-go"]["max_links"] != float64(8) {
 		t.Fatalf("saved = %#v, ok = %v", saved, ok)
 	}
@@ -319,7 +347,7 @@ func TestConsoleGroupsValidatesPluginSettingOverrides(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reset status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	saved, ok = store.ConfigForGroup("", "50006")
+	saved, ok = store.ConfigForGroup(profileID, "50006")
 	if !ok || len(saved.PluginSettingOverrides) != 0 {
 		t.Fatalf("reset saved = %#v, ok = %v", saved, ok)
 	}

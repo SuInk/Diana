@@ -525,6 +525,23 @@ func (s *SQLiteStore) migrateGroupConfigsToBotScope() error {
 			changed = true
 		}
 	}
+	// 老控制台可能在专属记录之外又写出一条空作用域记录。补归属后按
+	// (机器人, 群) 去重，保留更新时间最新的一份，确保用户最后一次保存真正生效。
+	deduplicated := make([]assistant.GroupConfig, 0, len(set.Groups))
+	positions := make(map[string]int, len(set.Groups))
+	for _, cfg := range set.Groups {
+		key := strings.TrimSpace(cfg.BotProfileID) + "\x00" + strings.TrimSpace(cfg.GroupID)
+		if position, exists := positions[key]; exists {
+			changed = true
+			if !cfg.UpdatedAt.Before(deduplicated[position].UpdatedAt) {
+				deduplicated[position] = cfg
+			}
+			continue
+		}
+		positions[key] = len(deduplicated)
+		deduplicated = append(deduplicated, cfg)
+	}
+	set.Groups = deduplicated
 	if !changed {
 		return nil
 	}
