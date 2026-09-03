@@ -157,11 +157,58 @@ func (h *BotHandler) localConsoleGroups(ctx context.Context, profileID string) (
 	for _, item := range seen {
 		groups = append(groups, botAutoGroupInfo{
 			GroupID:   item.GroupID,
-			GroupName: item.GroupName,
+			GroupName: h.resolveGroupName(ctx, item.BotProfileID, item.GroupID, item.GroupName),
 			QQAvatar:  h.isOneBotProfile(item.BotProfileID),
 		})
 	}
 	return groups, true, ""
+}
+
+// resolveGroupName 拿这个群此刻的名字。
+//
+// 事件 payload 里的名字只是「上次见到它时叫什么」：升级前收到的消息压根没记名字，
+// 群改名之后也要等下一条消息才会更新。Telegram 的 getChat 只要有群号就能问到当前
+// 名称，所以优先用它，问不到再退回事件里的旧名字。
+//
+// 结果按群缓存一段时间：群名很少变，而群管理页一次会列出几十个群，不缓存的话每次
+// 打开页面都要挨个打一遍平台接口。
+func (h *BotHandler) resolveGroupName(ctx context.Context, profileID, groupID, fallback string) string {
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" || h.isOneBotProfile(profileID) {
+		return fallback
+	}
+	provider, ok := h.runtime.(groupInfoRuntime)
+	if !ok {
+		return fallback
+	}
+	cacheKey := strings.TrimSpace(profileID) + "\x00" + groupID
+	h.groupNameMu.Lock()
+	cached, ok := h.groupNameCache[cacheKey]
+	h.groupNameMu.Unlock()
+	if ok && time.Since(cached.fetchedAt) < consoleGroupNameCacheTTL {
+		if cached.name != "" {
+			return cached.name
+		}
+		return fallback
+	}
+	callCtx, cancel := context.WithTimeout(ctx, consoleGroupNameTimeout)
+	defer cancel()
+	name := ""
+	if info, found := provider.GroupInfoForProfile(callCtx, profileID, groupID); found {
+		name = strings.TrimSpace(info.GroupName)
+	}
+	h.groupNameMu.Lock()
+	if h.groupNameCache == nil {
+		h.groupNameCache = map[string]groupNameCacheEntry{}
+	}
+	// 查不到也记一笔：机器人可能已经退群，或者这个平台不支持查询。不缓存空结果的话
+	// 每次刷新都会为同一个群重试一遍。
+	h.groupNameCache[cacheKey] = groupNameCacheEntry{name: name, fetchedAt: time.Now()}
+	h.groupNameMu.Unlock()
+	if name != "" {
+		return name
+	}
+	return fallback
 }
 
 // isOneBotProfile 判断这台机器人是不是 OneBot 平台。
@@ -184,7 +231,16 @@ var (
 
 	consoleLiveGroupTimeout  = 2500 * time.Millisecond
 	consoleLiveGroupCacheTTL = 20 * time.Second
+
+	// 群名很少变，缓存久一点；单个查询不值得让整页等太久。
+	consoleGroupNameCacheTTL = 10 * time.Minute
+	consoleGroupNameTimeout  = 1500 * time.Millisecond
 )
+
+type groupNameCacheEntry struct {
+	name      string
+	fetchedAt time.Time
+}
 
 type liveGroupListCache struct {
 	groups    []botAutoGroupInfo
