@@ -21,7 +21,7 @@ import (
 // 只有这个文件需要知道它是两截。
 
 const (
-	kugouSearchAPI = "https://mobilecdn.kugou.com/api/v3/search/song?format=json&showtype=1&page=1&pagesize=5&keyword=%s"
+	kugouSearchAPI = "https://songsearch.kugou.com/song_search_v2?platform=WebFilter&page=1&pagesize=5&keyword=%s"
 	kugouPlayAPI   = "https://www.kugou.com/yy/index.php?r=play/getdata&hash=%s&album_id=%s&mid=%s"
 	kugouReferer   = "https://www.kugou.com/"
 )
@@ -95,6 +95,9 @@ func (s *kugouSource) headers(cfg musicConfig) map[string]string {
 	// 用户填了自己的 Cookie 就用他的，没填就派生一个稳定值。
 	if cookie := cfg.sourceOptions(s.Key()).Cookie; cookie != "" {
 		headers["Cookie"] = cookie
+		// KuGouMusicApi 支持用 Authorization 传 token/userid/dfid，避免把
+		// 凭据放进查询串。官方接口忽略这个头，不影响无自建服务的请求。
+		headers["Authorization"] = cookie
 	}
 	return headers
 }
@@ -124,15 +127,44 @@ func (s *kugouSource) ResolveSongID(ctx context.Context, f *musicFetcher, cfg mu
 type kugouSearchResponse struct {
 	Status int `json:"status"`
 	Data   struct {
-		Info []struct {
-			Hash       string `json:"hash"`
-			SongName   string `json:"songname"`
-			SingerName string `json:"singername"`
-			AlbumName  string `json:"album_name"`
-			AlbumID    string `json:"album_id"`
-			Duration   int64  `json:"duration"`
-		} `json:"info"`
+		// Info 是旧 mobilecdn 接口和自建兼容接口的结构；Lists 是当前
+		// songsearch 接口的结构。保留两套是为了不破坏用户已有的 APIBase。
+		Info  []kugouLegacySearchEntry `json:"info"`
+		Lists []kugouSearchEntry       `json:"lists"`
 	} `json:"data"`
+}
+
+type kugouLegacySearchEntry struct {
+	Hash       string `json:"hash"`
+	SongName   string `json:"songname"`
+	SingerName string `json:"singername"`
+	AlbumName  string `json:"album_name"`
+	AlbumID    string `json:"album_id"`
+	Duration   int64  `json:"duration"`
+}
+
+type kugouSearchEntry struct {
+	Hash       string `json:"FileHash"`
+	SongName   string `json:"SongName"`
+	SingerName string `json:"SingerName"`
+	AlbumName  string `json:"AlbumName"`
+	AlbumID    string `json:"AlbumID"`
+	Duration   int64  `json:"Duration"`
+}
+
+func (r kugouSearchResponse) entries() []kugouSearchEntry {
+	entries := append([]kugouSearchEntry(nil), r.Data.Lists...)
+	for _, legacy := range r.Data.Info {
+		entries = append(entries, kugouSearchEntry{
+			Hash:       legacy.Hash,
+			SongName:   legacy.SongName,
+			SingerName: legacy.SingerName,
+			AlbumName:  legacy.AlbumName,
+			AlbumID:    legacy.AlbumID,
+			Duration:   legacy.Duration,
+		})
+	}
+	return entries
 }
 
 type kugouPlayResponse struct {
@@ -158,7 +190,7 @@ func (s *kugouSource) Search(ctx context.Context, f *musicFetcher, cfg musicConf
 	if !f.fetchJSON(ctx, cfg, endpoint, guarded, s.headers(cfg), &payload) {
 		return song{}, false
 	}
-	for _, entry := range payload.Data.Info {
+	for _, entry := range payload.entries() {
 		hash := strings.ToLower(strings.TrimSpace(entry.Hash))
 		if hash == "" {
 			continue
