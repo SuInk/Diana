@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,6 +47,43 @@ func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 	router.GET("/api/assistant/groups", h.listConsoleGroups)
 	router.POST("/api/assistant/groups", h.saveConsoleGroup)
 	router.GET("/api/assistant/groups/:id/relations", h.groupRelationGraph)
+	router.GET("/api/assistant/groups/:id/avatar", h.groupAvatar)
+}
+
+// groupAvatar 把群头像从平台取回来再转发给控制台。
+//
+// 之所以要代理：Telegram 的文件地址形如 /file/bot<token>/<path>，Bot Token 就在
+// URL 里，直接交给浏览器等于把凭据发出去。这条路由在 /api 下面，本身受登录会话
+// 保护，头像字节由服务端取回后转发，Token 始终留在进程内。
+func (h *BotHandler) groupAvatar(c *gin.Context) {
+	groupID := strings.TrimSpace(c.Param("id"))
+	if groupID == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	provider, ok := h.runtime.(groupAvatarRuntime)
+	if !ok {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	profileID := strings.TrimSpace(c.Query("bot_profile_id"))
+	ctx, cancel := context.WithTimeout(c.Request.Context(), consoleGroupAvatarTimeout)
+	defer cancel()
+	avatar, found := provider.GroupAvatarForProfile(ctx, profileID, groupID)
+	if !found {
+		// 没有头像、机器人已退群、平台不支持——对前端都是一回事：显示占位图。
+		c.Status(http.StatusNotFound)
+		return
+	}
+	contentType := strings.TrimSpace(avatar.ContentType)
+	// 只转发真正的图片，避免把平台返回的任意内容当图片喂给浏览器。
+	if !strings.HasPrefix(contentType, "image/") {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	// 群头像几乎不变，让浏览器自己缓存，别让列表每次刷新都回源。
+	c.Header("Cache-Control", "private, max-age=3600")
+	c.Data(http.StatusOK, contentType, avatar.Data)
 }
 
 // groupRelationGraph 返回以机器人为中心的群聊关系图。
@@ -156,9 +194,10 @@ func (h *BotHandler) localConsoleGroups(ctx context.Context, profileID string) (
 	groups := make([]botAutoGroupInfo, 0, len(seen))
 	for _, item := range seen {
 		groups = append(groups, botAutoGroupInfo{
-			GroupID:   item.GroupID,
-			GroupName: h.resolveGroupName(ctx, item.BotProfileID, item.GroupID, item.GroupName),
-			QQAvatar:  h.isOneBotProfile(item.BotProfileID),
+			GroupID:      item.GroupID,
+			GroupName:    h.resolveGroupName(ctx, item.BotProfileID, item.GroupID, item.GroupName),
+			QQAvatar:     h.isOneBotProfile(item.BotProfileID),
+			BotProfileID: item.BotProfileID,
 		})
 	}
 	return groups, true, ""
@@ -235,11 +274,27 @@ var (
 	// 群名很少变，缓存久一点；单个查询不值得让整页等太久。
 	consoleGroupNameCacheTTL = 10 * time.Minute
 	consoleGroupNameTimeout  = 1500 * time.Millisecond
+	// 头像要多走一次文件下载，给的时间比查群名宽一些。
+	consoleGroupAvatarTimeout = 5 * time.Second
 )
 
 type groupNameCacheEntry struct {
 	name      string
 	fetchedAt time.Time
+}
+
+// consoleGroupAvatarURL 拼出走本机代理的群头像地址。取不到头像时这条地址回 404，
+// 前端按图片加载失败处理，显示占位图即可。
+func consoleGroupAvatarURL(groupID, profileID string) string {
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		return ""
+	}
+	avatarURL := "/api/assistant/groups/" + url.PathEscape(groupID) + "/avatar"
+	if profileID = strings.TrimSpace(profileID); profileID != "" {
+		avatarURL += "?bot_profile_id=" + url.QueryEscape(profileID)
+	}
+	return avatarURL
 }
 
 type liveGroupListCache struct {
@@ -337,6 +392,8 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		avatarURL := ""
 		if live.QQAvatar {
 			avatarURL = assistant.OneBotGroupAvatarURL(groupID)
+		} else {
+			avatarURL = consoleGroupAvatarURL(groupID, live.BotProfileID)
 		}
 		items = append(items, consoleGroupItem{
 			GroupConfig:    cfg.WithDefaults(groupID, base),
@@ -354,6 +411,8 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		avatarURL := ""
 		if qqAvatar == nil || qqAvatar(strings.TrimSpace(cfg.BotProfileID)) {
 			avatarURL = assistant.OneBotGroupAvatarURL(groupID)
+		} else {
+			avatarURL = consoleGroupAvatarURL(groupID, cfg.BotProfileID)
 		}
 		items = append(items, consoleGroupItem{
 			GroupConfig: cfg,
