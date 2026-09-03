@@ -169,7 +169,7 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		if llmErr != nil {
 			return "", llmErr
 		}
-		return normalizeReply(llmResp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReply(llmResp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	})
 	if err != nil {
 		r.recordFollowUpFailure(ctx, kind, source, "generate", err)
@@ -246,7 +246,7 @@ func (r *Runtime) recordFollowUpFailure(ctx context.Context, kind followUpKind, 
 	if err == nil {
 		return
 	}
-	log.Printf("chatbot %s follow-up %s failed: %v", kind, stage, err)
+	log.Printf("diana %s follow-up %s failed: %v", kind, stage, err)
 	writer := r.appLogWriter()
 	if writer == nil {
 		return

@@ -679,7 +679,7 @@ func (r *Runtime) Start(parent context.Context) error {
 		err := r.channel.Connect(ctx, r.HandleEvent)
 		if err != nil && ctx.Err() == nil {
 			r.setError(err.Error())
-			log.Printf("chatbot runtime stopped: %v", err)
+			log.Printf("diana runtime stopped: %v", err)
 		}
 		r.mu.Lock()
 		if r.runGeneration == runGeneration {
@@ -715,14 +715,14 @@ func (r *Runtime) Stop() error {
 		select {
 		case <-inboundDone:
 		case <-time.After(5 * time.Second):
-			log.Printf("chatbot inbound workers did not stop within 5s; their leases will expire safely")
+			log.Printf("diana inbound workers did not stop within 5s; their leases will expire safely")
 		}
 	}
 	if memoryDone != nil {
 		select {
 		case <-memoryDone:
 		case <-time.After(5 * time.Second):
-			log.Printf("chatbot memory workers did not stop within 5s; their leases will expire safely")
+			log.Printf("diana memory workers did not stop within 5s; their leases will expire safely")
 		}
 	}
 	r.closeAgentRegistryCache()
@@ -822,14 +822,14 @@ func (r *Runtime) Config() BotConfig {
 func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
 	action = strings.TrimSpace(action)
 	if action == "" {
-		return nil, fmt.Errorf("chatbot: onebot action is required")
+		return nil, fmt.Errorf("diana: onebot action is required")
 	}
 	r.mu.RLock()
 	cfg := r.cfg
 	channel := r.channel
 	r.mu.RUnlock()
 	if channel == nil {
-		return nil, fmt.Errorf("chatbot: channel is not configured")
+		return nil, fmt.Errorf("diana: channel is not configured")
 	}
 	if _, multi := channel.(*MultiChannel); multi && IsOneBotPlatform(cfg.Platform) {
 		return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, action, params)
@@ -841,13 +841,13 @@ func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[s
 // produced the message. This matters when one Runtime serves multiple bots.
 func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent, action string, params map[string]any) (map[string]any, error) {
 	if r == nil {
-		return nil, fmt.Errorf("chatbot: runtime is not configured")
+		return nil, fmt.Errorf("diana: runtime is not configured")
 	}
 	r.mu.RLock()
 	channel := r.channel
 	r.mu.RUnlock()
 	if channel == nil {
-		return nil, fmt.Errorf("chatbot: channel is not configured")
+		return nil, fmt.Errorf("diana: channel is not configured")
 	}
 	if multi, ok := channel.(*MultiChannel); ok {
 		binding, err := multi.bindingFor(event.ProfileID, event.Platform)
@@ -855,7 +855,7 @@ func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent,
 			return nil, err
 		}
 		if !IsOneBotPlatform(binding.Platform) {
-			return nil, fmt.Errorf("chatbot: profile %q is not a OneBot platform", binding.ProfileID)
+			return nil, fmt.Errorf("diana: profile %q is not a OneBot platform", binding.ProfileID)
 		}
 		return binding.Channel.CallAPI(ctx, action, params)
 	}
@@ -920,7 +920,7 @@ func (r *Runtime) getGroupInfoForEvent(ctx context.Context, event MessageEvent, 
 func (r *Runtime) getGroupInfo(ctx context.Context, groupID string, call oneBotAPICaller) (OneBotGroupInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
-		return OneBotGroupInfo{}, fmt.Errorf("chatbot: group id is required")
+		return OneBotGroupInfo{}, fmt.Errorf("diana: group id is required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
@@ -948,7 +948,7 @@ func (r *Runtime) getGroupMemberInfo(ctx context.Context, groupID string, userID
 	groupID = strings.TrimSpace(groupID)
 	userID = strings.TrimSpace(userID)
 	if groupID == "" || userID == "" {
-		return OneBotGroupMemberInfo{}, fmt.Errorf("chatbot: group id and user id are required")
+		return OneBotGroupMemberInfo{}, fmt.Errorf("diana: group id and user id are required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
@@ -976,7 +976,7 @@ func (r *Runtime) getGroupMemberListForEvent(ctx context.Context, event MessageE
 func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call oneBotAPICaller) ([]OneBotGroupMemberInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
-		return nil, fmt.Errorf("chatbot: group id is required")
+		return nil, fmt.Errorf("diana: group id is required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
@@ -1078,14 +1078,14 @@ func (r *Runtime) SendGroupMessage(ctx context.Context, groupID string, text str
 	groupID = strings.TrimSpace(groupID)
 	text = strings.TrimSpace(text)
 	if groupID == "" {
-		return nil, fmt.Errorf("chatbot: group id is required")
+		return nil, fmt.Errorf("diana: group id is required")
 	}
 	if text == "" {
-		return nil, fmt.Errorf("chatbot: message is required")
+		return nil, fmt.Errorf("diana: message is required")
 	}
 	parsedGroupID, err := strconv.ParseInt(groupID, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("chatbot: invalid group id %q", groupID)
+		return nil, fmt.Errorf("diana: invalid group id %q", groupID)
 	}
 	event := MessageEvent{Kind: EventKindGroup, GroupID: groupID}
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
@@ -1568,7 +1568,7 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := store.RecordNoticeEvent(ctx, sessionKey(event), withoutReplyRuntimeState(event)); err != nil {
-		log.Printf("chatbot notice audit persist failed: %v", err)
+		log.Printf("diana notice audit persist failed: %v", err)
 	}
 }
 
@@ -1987,7 +1987,7 @@ func (r *Runtime) recordInboundSelfEcho(event MessageEvent) {
 	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := store.RecordInboundEventSelfEcho(auditCtx, event.MessageID, observedAt); err != nil {
-		log.Printf("chatbot persist outbound self echo failed: %v", err)
+		log.Printf("diana persist outbound self echo failed: %v", err)
 	}
 }
 
@@ -2797,7 +2797,7 @@ func (r *Runtime) recordProactiveReplyRouteError(ctx context.Context, event Mess
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.proactive_reply_route",
+		Action:  "diana.proactive_reply_route",
 		Message: "主动回复判断失败，已保持沉默",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -2817,7 +2817,7 @@ func (r *Runtime) recordProactiveReplyRouteFallback(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.proactive_reply_route_fallback",
+		Action:  "diana.proactive_reply_route_fallback",
 		Message: "主动回复路由超时，明确公开问题已降级进入回复流程",
 		Detail:  routeErr.Error(),
 		Actor:   oneBotEventActor(event),
@@ -2837,7 +2837,7 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.proactive_reply_route",
+		Action:  "diana.proactive_reply_route",
 		Message: "模型已完成主动回复判断",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -2872,7 +2872,7 @@ func (r *Runtime) recordProactiveReplySuperseded(ctx context.Context, event Mess
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.proactive_reply_superseded",
+		Action:  "diana.proactive_reply_superseded",
 		Message: "检测到新的候选消息，旧主动回复候选将交由 LLM 合并重判",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -3564,7 +3564,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if pending := imageAnnouncements.drain(); pending != "" {
 			// 生成失败也要让用户知道图在画：任务已经受理了。
 			if sendErr := r.send(ctx, event, pending); sendErr != nil {
-				log.Printf("chatbot image announcement fallback failed: %v", sendErr)
+				log.Printf("diana image announcement fallback failed: %v", sendErr)
 			} else {
 				imageAnnouncements.startPending()
 			}
@@ -3688,7 +3688,7 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	hasMedia := len(resp.ImageURLs) > 0 || len(resp.VideoURLs) > 0 || len(resp.ForwardMessages) > 0
 	if reply == "" && !hasMedia {
 		// 插件触发了却什么都没提取到，这是诊断信息，不该当成发言播报到群里。
-		log.Printf("chatbot resolver produced no sendable content: message_id=%s", event.MessageID)
+		log.Printf("diana resolver produced no sendable content: message_id=%s", event.MessageID)
 		return "", nil
 	}
 	reservation, duplicate := r.reserveResolverDelivery(event, resp.ResolverResourceKeys)
@@ -3825,7 +3825,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Claims)
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -3837,7 +3837,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if err != nil {
 			return "", err
 		}
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	})
 }
 
@@ -3855,7 +3855,7 @@ func newRuntimeAgentLLMProvider(runtime *Runtime, ctx context.Context) *runtimeA
 
 func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	if p == nil || p.runtime == nil {
-		return nil, fmt.Errorf("chatbot: runtime agent llm provider is not configured")
+		return nil, fmt.Errorf("diana: runtime agent llm provider is not configured")
 	}
 	group := llm.GroupChat
 	if messagesContainImages(req.Messages) || messagesContainAudio(req.Messages) {
@@ -3888,7 +3888,7 @@ func (p *runtimeAgentLLMProvider) providerForGroup(group string) (LLMProvider, e
 		return nil, err
 	}
 	if provider == nil {
-		return nil, fmt.Errorf("chatbot: no llm provider is configured for group %q", group)
+		return nil, fmt.Errorf("diana: no llm provider is configured for group %q", group)
 	}
 	p.providers[group] = provider
 	return provider, nil
@@ -3936,7 +3936,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		if err != nil {
 			return "", err
 		}
-		return normalizeReply(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReply(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -3947,7 +3947,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		if err != nil {
 			return "", err
 		}
-		return normalizeReply(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReply(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	})
 }
 
@@ -4150,7 +4150,7 @@ func (r *Runtime) recordReplyRuleRouteError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:     applog.KindError,
 		Level:    applog.LevelError,
-		Action:   "chatbot.reply_rule.route",
+		Action:   "diana.reply_rule.route",
 		Message:  "回复规则判断失败，已使用默认回复策略",
 		Detail:   err.Error(),
 		Actor:    oneBotEventActor(event),
@@ -4167,7 +4167,7 @@ func (r *Runtime) recordReplyRuleRoute(ctx context.Context, event MessageEvent, 
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.reply_rule.route",
+		Action:  "diana.reply_rule.route",
 		Message: "回复规则判断已完成",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -4195,7 +4195,7 @@ func (r *Runtime) recordReplyRuleError(ctx context.Context, event MessageEvent, 
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.reply_rule.apply",
+		Action:  "diana.reply_rule.apply",
 		Message: "回复规则执行失败，已回退文字回复",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -4513,7 +4513,7 @@ func (r *Runtime) recordVisualIntentError(ctx context.Context, event MessageEven
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.visual_intent",
+		Action:  "diana.visual_intent",
 		Message: "图片功能意图判断失败，已回退普通聊天",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -4533,7 +4533,7 @@ func (r *Runtime) recordVisualIntentDecision(ctx context.Context, event MessageE
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.visual_intent",
+		Action:  "diana.visual_intent",
 		Message: "图片功能意图已命中",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -4584,7 +4584,7 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.llm_usage",
+		Action:  "diana.llm_usage",
 		Message: "LLM 调用用量已记录",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -5081,7 +5081,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 					return runLLMProviderProfileAttempts(ctx, []llm.Profile{profile}, cfgFactory, true, run)
 				}
 			}
-			return "", fmt.Errorf("chatbot: reply rule llm profile %q not found", profileID)
+			return "", fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
 		}
 		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group)
 		if roleErr != nil {
@@ -5111,7 +5111,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
 	}
 	if factory == nil {
-		return "", fmt.Errorf("chatbot: llm provider is not configured")
+		return "", fmt.Errorf("diana: llm provider is not configured")
 	}
 	client, err := factory()
 	if err != nil {
@@ -5141,7 +5141,7 @@ func logUnboundGroupFallback(roles map[string]ModelRole, group, profileID string
 	if len(roles) == 0 {
 		return
 	}
-	log.Printf("chatbot model role fallback: group=%q has no bound provider, using the active profile %q", llm.NormalizeProfileGroup(group), profileID)
+	log.Printf("diana model role fallback: group=%q has no bound provider, using the active profile %q", llm.NormalizeProfileGroup(group), profileID)
 }
 
 func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSet, roles map[string]ModelRole, purpose, group, profileID string) (llm.AgentModelConfig, bool, error) {
@@ -5164,7 +5164,7 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 				return profileRegistrySelection(registry, profile), true, nil
 			}
 		}
-		return llm.AgentModelConfig{}, false, fmt.Errorf("chatbot: reply rule llm profile %q not found", profileID)
+		return llm.AgentModelConfig{}, false, fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
 	}
 	var profiles []llm.Profile
 	if role := boundRole; hasBoundRole {
@@ -5246,7 +5246,7 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 	if role.Group != "" {
 		profiles := set.GroupProfiles(role.Group)
 		if len(profiles) == 0 {
-			return nil, fmt.Errorf("chatbot: model role group %q has no configured provider", role.Group)
+			return nil, fmt.Errorf("diana: model role group %q has no configured provider", role.Group)
 		}
 		candidates := make([]llm.Profile, 0, len(profiles))
 		skipped := make([]string, 0, len(profiles))
@@ -5254,14 +5254,14 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 			profile.Config = profile.Config.WithDefaults()
 			if supported, known := profileSupportsRoleModel(profile, role.Model); known && !supported {
 				skipped = append(skipped, profile.ID)
-				log.Printf("chatbot model role skipped incompatible profile: group=%q profile=%q model=%q", role.Group, profile.ID, role.Model)
+				log.Printf("diana model role skipped incompatible profile: group=%q profile=%q model=%q", role.Group, profile.ID, role.Model)
 				continue
 			}
 			profile.Config.Model = role.Model
 			candidates = append(candidates, profile)
 		}
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("chatbot: model role group %q has no provider supporting model %q (incompatible profiles: %s)", role.Group, role.Model, strings.Join(skipped, ", "))
+			return nil, fmt.Errorf("diana: model role group %q has no provider supporting model %q (incompatible profiles: %s)", role.Group, role.Model, strings.Join(skipped, ", "))
 		}
 		return candidates, nil
 	}
@@ -5271,12 +5271,12 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 		}
 		profile.Config = profile.Config.WithDefaults()
 		if supported, known := profileSupportsRoleModel(profile, role.Model); known && !supported {
-			return nil, fmt.Errorf("chatbot: model role profile %q does not support model %q", role.ProfileID, role.Model)
+			return nil, fmt.Errorf("diana: model role profile %q does not support model %q", role.ProfileID, role.Model)
 		}
 		profile.Config.Model = role.Model
 		return []llm.Profile{profile}, nil
 	}
-	return nil, fmt.Errorf("chatbot: model role profile %q was not found", role.ProfileID)
+	return nil, fmt.Errorf("diana: model role profile %q was not found", role.ProfileID)
 }
 
 func profileSupportsRoleModel(profile llm.Profile, modelID string) (supported bool, known bool) {
@@ -5338,7 +5338,7 @@ func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
 func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGenerateRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
 	configs := r.imageProviderConfigs()
 	if len(configs) == 0 {
-		return nil, llm.ProviderConfig{}, fmt.Errorf("chatbot: llm profile store is not configured")
+		return nil, llm.ProviderConfig{}, fmt.Errorf("diana: llm profile store is not configured")
 	}
 	var lastErr error
 	for _, cfg := range configs {
@@ -5359,7 +5359,7 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
 	configs := r.imageProviderConfigs()
 	if len(configs) == 0 {
-		return nil, llm.ProviderConfig{}, fmt.Errorf("chatbot: llm profile store is not configured")
+		return nil, llm.ProviderConfig{}, fmt.Errorf("diana: llm profile store is not configured")
 	}
 	var lastErr error
 	for _, cfg := range configs {
@@ -5496,10 +5496,10 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		if current, ok := set.FirstProfile(); ok {
 			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, retryTransient, run)
 		}
-		return "", fmt.Errorf("chatbot: no llm profile is configured")
+		return "", fmt.Errorf("diana: no llm profile is configured")
 	}
 	if factory == nil {
-		return "", fmt.Errorf("chatbot: llm provider is not configured")
+		return "", fmt.Errorf("diana: llm provider is not configured")
 	}
 	client, err := factory()
 	if err != nil {
@@ -5573,7 +5573,7 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 		attempts = fallbackProfilesForGroup(set, llm.GroupChat)
 	}
 	if len(attempts) == 0 {
-		return "", fmt.Errorf("chatbot: no llm profile is configured")
+		return "", fmt.Errorf("diana: no llm profile is configured")
 	}
 	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, nil, true)
 	if err != nil {
@@ -6300,7 +6300,7 @@ func (r *Runtime) recordReplyReferenceError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.reply_reference.get_msg",
+		Action:  "diana.reply_reference.get_msg",
 		Message: "引用消息读取失败",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -6484,7 +6484,7 @@ func (r *Runtime) recordForwardMessageError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.forward.get_forward_msg",
+		Action:  "diana.forward.get_forward_msg",
 		Message: "合并转发读取失败",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -7165,7 +7165,7 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 				if record, found, err := store.GetImageDescription(ctx, hash); err == nil && found {
 					description = strings.TrimSpace(record.Description)
 				} else if err != nil {
-					log.Printf("chatbot history image description cache load failed: %v", err)
+					log.Printf("diana history image description cache load failed: %v", err)
 				}
 			}
 		}
@@ -7794,11 +7794,11 @@ func (r *Runtime) sendPluginResponse(ctx context.Context, event MessageEvent, re
 	for _, value := range resp.VideoURLs {
 		if path := localMediaPath(value); path != "" {
 			if sharer == nil {
-				return fmt.Errorf("chatbot: local media sharing is not configured")
+				return fmt.Errorf("diana: local media sharing is not configured")
 			}
 			sharedURL, ok := sharer.Share(path, resolverLocalMediaTTL)
 			if !ok {
-				return fmt.Errorf("chatbot: cannot share downloaded media %q", filepath.Base(path))
+				return fmt.Errorf("diana: cannot share downloaded media %q", filepath.Base(path))
 			}
 			videoURLs = append(videoURLs, sharedURL)
 			localPaths = append(localPaths, path)
@@ -7832,7 +7832,7 @@ func (r *Runtime) sendPluginResponse(ctx context.Context, event MessageEvent, re
 
 func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse, cfg BotConfig) error {
 	if r.channel == nil {
-		return fmt.Errorf("chatbot: channel is not configured")
+		return fmt.Errorf("diana: channel is not configured")
 	}
 	messages := append([]OutgoingMessage(nil), resp.ForwardMessages...)
 	if len(messages) == 0 {
@@ -7879,7 +7879,7 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			// resolver result is still delivered instead of losing the whole turn.
 			// 兜底散装是「合并转发看起来没生效」的唯一入口，必须留痕，否则用户
 			// 只看到刷屏、日志里什么都查不到。
-			log.Printf("chatbot resolver merged forward failed, delivered %d messages separately: %v", len(forwardMessages), err)
+			log.Printf("diana resolver merged forward failed, delivered %d messages separately: %v", len(forwardMessages), err)
 			if directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages); directErr != nil {
 				return errors.Join(err, directErr)
 			}
@@ -8114,7 +8114,7 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 
 func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEvent, upload resolverVideoUpload) error {
 	if r.channel == nil {
-		return fmt.Errorf("chatbot: channel is not configured")
+		return fmt.Errorf("diana: channel is not configured")
 	}
 	file := upload.Path
 	// 桥可能运行在容器或另一台机器上，宿主机路径对它不可见；能生成共享
@@ -8130,14 +8130,14 @@ func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEven
 	if event.Kind == EventKindGroup {
 		groupID, err := strconv.ParseInt(event.GroupID, 10, 64)
 		if err != nil {
-			return fmt.Errorf("chatbot: invalid group id %q", event.GroupID)
+			return fmt.Errorf("diana: invalid group id %q", event.GroupID)
 		}
 		action = "upload_group_file"
 		params["group_id"] = groupID
 	} else {
 		userID, err := strconv.ParseInt(event.UserID, 10, 64)
 		if err != nil {
-			return fmt.Errorf("chatbot: invalid user id %q", event.UserID)
+			return fmt.Errorf("diana: invalid user id %q", event.UserID)
 		}
 		params["user_id"] = userID
 	}
@@ -8401,7 +8401,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		return result, err
 	}
 	if r.channel == nil {
-		return nil, fmt.Errorf("chatbot: channel is not configured")
+		return nil, fmt.Errorf("diana: channel is not configured")
 	}
 	if replySuppressionSendGuardEnabled(ctx) {
 		if restriction, blocked := r.activeReplySuppression(event, time.Now()); blocked {
@@ -8486,7 +8486,7 @@ func (r *Runtime) recordInboundDelivery(event MessageEvent, stage OutboundDelive
 	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := store.RecordInboundEventDelivery(auditCtx, event, stage, outboundMessageID, detail); err != nil {
-		log.Printf("chatbot persist outbound delivery stage failed: %v", err)
+		log.Printf("diana persist outbound delivery stage failed: %v", err)
 	}
 }
 
@@ -8507,7 +8507,7 @@ func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage,
 		channel := r.channel
 		r.mu.RUnlock()
 		if channel == nil {
-			return nil, fmt.Errorf("chatbot: channel is not configured")
+			return nil, fmt.Errorf("diana: channel is not configured")
 		}
 		var result map[string]any
 		if resultChannel, ok := channel.(ResultChannel); ok {
@@ -8522,7 +8522,7 @@ func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage,
 			return nil, lastErr
 		}
 	}
-	return nil, fmt.Errorf("chatbot: send failed after %d attempts: %w", attempts, lastErr)
+	return nil, fmt.Errorf("diana: send failed after %d attempts: %w", attempts, lastErr)
 }
 
 func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg OutgoingMessage) {
@@ -8733,11 +8733,11 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 		return "", blockedErr
 	}
 	if r.channel == nil {
-		return "", fmt.Errorf("chatbot: channel is not configured")
+		return "", fmt.Errorf("diana: channel is not configured")
 	}
 	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(r.channel.Status().SelfID))
 	if selfID == "" {
-		return "", fmt.Errorf("chatbot: missing self id for resolver forward")
+		return "", fmt.Errorf("diana: missing self id for resolver forward")
 	}
 	// 本地图片路径先换成共享 URL:转发节点里的路径桥端拿去自行下载,
 	// 宿主机临时路径它读不到。
@@ -8759,11 +8759,11 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 		}
 		// 有的实现（如 SnowLuma）能直发媒体，却无法在合并转发节点里重建图片
 		// 元素。这时退回暂存方式，用真实消息 ID 组装。
-		log.Printf("chatbot resolver forward: custom nodes rejected, falling back to staged message ids: %v", err)
+		log.Printf("diana resolver forward: custom nodes rejected, falling back to staged message ids: %v", err)
 	}
 	selfUIN, err := strconv.ParseInt(selfID, 10, 64)
 	if err != nil {
-		return "", fmt.Errorf("chatbot: invalid self id %q", selfID)
+		return "", fmt.Errorf("diana: invalid self id %q", selfID)
 	}
 	messageIDs := make([]string, 0, len(messages))
 	for _, msg := range messages {
@@ -8777,11 +8777,11 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 			})
 		})
 		if err != nil {
-			return "", fmt.Errorf("chatbot: forward staging failed (send_private_msg to self): %w", err)
+			return "", fmt.Errorf("diana: forward staging failed (send_private_msg to self): %w", err)
 		}
 		messageID := apiMessageID(result)
 		if messageID == "" {
-			return "", fmt.Errorf("chatbot: forward staging did not return message_id: %#v", result)
+			return "", fmt.Errorf("diana: forward staging did not return message_id: %#v", result)
 		}
 		messageIDs = append(messageIDs, messageID)
 	}
@@ -8793,15 +8793,15 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 
 func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse, summary string, cfg BotConfig) ([]string, error) {
 	if r.channel == nil {
-		return nil, fmt.Errorf("chatbot: channel is not configured")
+		return nil, fmt.Errorf("diana: channel is not configured")
 	}
 	selfID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(r.channel.Status().SelfID))
 	if selfID == "" {
-		return nil, fmt.Errorf("chatbot: missing self id for nested forward")
+		return nil, fmt.Errorf("diana: missing self id for nested forward")
 	}
 	innerNodes := buildCustomForwardNodes(resp.ForwardMessages, cfg.Name, selfID)
 	if len(innerNodes) == 0 {
-		return nil, fmt.Errorf("chatbot: recall forward has no original message nodes")
+		return nil, fmt.Errorf("diana: recall forward has no original message nodes")
 	}
 	summaryNodes := buildCustomForwardNodes([]OutgoingMessage{{
 		Text:        strings.TrimSpace(summary),
@@ -8818,21 +8818,21 @@ func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event Mes
 		if errors.Is(err, errGroupSendUnavailable) {
 			return nil, err
 		}
-		log.Printf("chatbot recall forward with media failed, retrying as text: %v", err)
+		log.Printf("diana recall forward with media failed, retrying as text: %v", err)
 		fallbackNodes := append(summaryNodes, buildCustomForwardNodes(recallForwardTextFallback(resp.ForwardMessages), cfg.Name, selfID)...)
 		outerResult, err = r.sendForwardNodesWithResult(ctx, event, fallbackNodes)
 		if err != nil {
-			log.Printf("chatbot recall text forward failed, sending summary only: %v", err)
+			log.Printf("diana recall text forward failed, sending summary only: %v", err)
 			messageIDs, directErr := r.sendWithMessageIDs(ctx, event, strings.TrimSpace(summary))
 			if directErr != nil {
-				return nil, errors.Join(fmt.Errorf("chatbot: send recall forward: %w", err), directErr)
+				return nil, errors.Join(fmt.Errorf("diana: send recall forward: %w", err), directErr)
 			}
 			return messageIDs, nil
 		}
 	}
 	messageID := apiMessageID(outerResult)
 	if messageID == "" {
-		log.Printf("chatbot recall forward cannot schedule cleanup: missing message_id")
+		log.Printf("diana recall forward cannot schedule cleanup: missing message_id")
 	}
 	r.rememberOutgoingWithMessageID(ctx, event, OutgoingMessage{Text: strings.TrimSpace(summary)}, messageID)
 	return []string{messageID}, nil
@@ -8955,14 +8955,14 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	if event.Kind == EventKindGroup {
 		groupID, err := strconv.ParseInt(event.GroupID, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("chatbot: invalid group id %q", event.GroupID)
+			return nil, fmt.Errorf("diana: invalid group id %q", event.GroupID)
 		}
 		action = "send_group_forward_msg"
 		params["group_id"] = groupID
 	} else {
 		userID, err := strconv.ParseInt(event.UserID, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("chatbot: invalid user id %q", event.UserID)
+			return nil, fmt.Errorf("diana: invalid user id %q", event.UserID)
 		}
 		params["user_id"] = userID
 	}
@@ -9071,7 +9071,7 @@ func (r *Runtime) scheduleMessageDeletes(event MessageEvent, messageIDs []string
 func (r *Runtime) recordRecallReplyDelete(event MessageEvent, messageID string, delay time.Duration, deleteErr error) {
 	writer := r.appLogWriter()
 	if deleteErr != nil {
-		log.Printf("chatbot recall disclosure auto-delete failed: message_id=%s: %v", messageID, deleteErr)
+		log.Printf("diana recall disclosure auto-delete failed: message_id=%s: %v", messageID, deleteErr)
 	}
 	if writer == nil {
 		return
@@ -9079,7 +9079,7 @@ func (r *Runtime) recordRecallReplyDelete(event MessageEvent, messageID string, 
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.recall_reply.auto_delete",
+		Action:  "diana.recall_reply.auto_delete",
 		Message: "撤回记录回复已自动撤回",
 		Actor:   oneBotEventActor(event),
 		Target:  messageID,
@@ -9216,7 +9216,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := store.AppendMessageEvent(ctx, sessionKey(event), event); err != nil {
-		log.Printf("chatbot message history persist failed: %v", err)
+		log.Printf("diana message history persist failed: %v", err)
 		return
 	}
 	// 语义检索开着的话,落库后把消息投给后台向量化。非阻塞,失败只丢这一条。
@@ -9273,7 +9273,7 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	update.OwnerID = cfg.OwnerID
 	profile, err := store.UpdateUserMemory(ctx, event, update)
 	if err != nil {
-		log.Printf("chatbot user memory update failed: %v", err)
+		log.Printf("diana user memory update failed: %v", err)
 		return UserMemoryProfile{}, false
 	}
 	return profile, true
@@ -9303,7 +9303,7 @@ func (r *Runtime) loadUserMemoryProfile(ctx context.Context, event MessageEvent)
 	defer cancel()
 	profile, ok, err := store.GetUserMemory(loadCtx, strings.TrimSpace(event.ProfileID), userID)
 	if err != nil {
-		log.Printf("chatbot user memory load failed: %v", err)
+		log.Printf("diana user memory load failed: %v", err)
 		return UserMemoryProfile{UserID: userID, DisplayName: event.SenderNameOrID()}, false
 	}
 	if !ok {
@@ -9408,7 +9408,7 @@ func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, Mes
 	defer cancel()
 	stored, err := store.ListRecentMessageEvents(ctx, session, limit)
 	if err != nil {
-		log.Printf("chatbot message history load failed: %v", err)
+		log.Printf("diana message history load failed: %v", err)
 		return memory, store
 	}
 	return mergeMessageHistory(memory, stored, limit), store
@@ -9429,7 +9429,7 @@ func (r *Runtime) recallHistory(event MessageEvent) []MessageEvent {
 	defer cancel()
 	events, err := recallStore.ListGroupRecallEvents(ctx, event.GroupID)
 	if err != nil {
-		log.Printf("chatbot recall history load failed: %v", err)
+		log.Printf("diana recall history load failed: %v", err)
 		return nil
 	}
 	return events
@@ -9451,7 +9451,7 @@ func (r *Runtime) enrichRecallNotice(ctx context.Context, event MessageEvent) Me
 		record, found, err = lookup.FindMessageEvent(loadCtx, sessionKey(event), event.MessageID)
 		cancel()
 		if err != nil {
-			log.Printf("chatbot recalled message load failed: %v", err)
+			log.Printf("diana recalled message load failed: %v", err)
 		}
 	}
 	if !found && r.channel != nil {
@@ -9459,7 +9459,7 @@ func (r *Runtime) enrichRecallNotice(ctx context.Context, event MessageEvent) Me
 		data, callErr := r.callOneBotAPIForEvent(callCtx, event, "get_msg", map[string]any{"message_id": oneBotMessageIDParam(event.MessageID)})
 		callCancel()
 		if callErr != nil {
-			log.Printf("chatbot recalled message get_msg failed: message_id=%s: %v", event.MessageID, callErr)
+			log.Printf("diana recalled message get_msg failed: message_id=%s: %v", event.MessageID, callErr)
 		} else {
 			session := HistorySession{Kind: EventKindPrivate, ID: event.UserID}
 			if event.GroupID != "" {
@@ -9576,7 +9576,7 @@ func (r *Runtime) record(record EventRecord) {
 	if auditStore, ok := inboundStore.(InboundEventAuditStore); ok && strings.TrimSpace(record.MessageID) != "" {
 		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if err := auditStore.RecordInboundEventAudit(auditCtx, record); err != nil {
-			log.Printf("chatbot persist inbound event reason failed: %v", err)
+			log.Printf("diana persist inbound event reason failed: %v", err)
 		}
 		cancel()
 	}
@@ -11442,6 +11442,9 @@ func splitReply(reply string, chunkSize int) []string {
 // 反问被粘在陈述句后面就是这么来的。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
 	limits = limits.withDefaults()
+	// 围栏先摘出去再分条：分条和长度兜底都按行/按字数切，会把 ``` 切进不同气泡。
+	// 摘成占位符走完整条管线，最后再填回来。
+	reply, fences := maskFencedCodeBlocks(reply)
 	reply = collapseBlankLines(normalizeSplitMarkers(reply))
 	if reply == "" {
 		return nil
@@ -11453,7 +11456,7 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 			out = append(out, trimChatTrailingPeriod(chunk))
 		}
 	}
-	return out
+	return restoreFencedCodeBlocks(out, fences, limits.ChunkSize)
 }
 
 // replyMaxChatBubbles 是分条后允许的条数。按换行分出来超过这个数就不按换行分了：

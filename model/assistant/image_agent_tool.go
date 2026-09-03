@@ -212,7 +212,7 @@ func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string,
 			sink.offer(announcement)
 		} else if sendErr := t.runtime.send(ctx, t.event, announcement); sendErr != nil {
 			// 开场白发不出去不影响任务本身，只记一笔。
-			log.Printf("chatbot image task announcement failed: %v", sendErr)
+			log.Printf("diana image task announcement failed: %v", sendErr)
 		} else {
 			result.Announced = true
 		}
@@ -256,7 +256,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 		return dianaImageToolRequest{}, fmt.Errorf("operation 必须是 generate 或 edit")
 	}
 	if t.runtime.llmStore == nil {
-		return dianaImageToolRequest{}, fmt.Errorf("chatbot: llm profile store is not configured")
+		return dianaImageToolRequest{}, fmt.Errorf("diana: llm profile store is not configured")
 	}
 	caption := strings.TrimSpace(configToolString(input, "caption"))
 	if len([]rune(caption)) > 200 {
@@ -385,7 +385,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		}
 		cfg = usedCfg
 		images = resp.Images
-		action = "chatbot.image.generate"
+		action = "diana.image.generate"
 		message = "Agent 图片生成已完成"
 	case "edit":
 		sources := t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
@@ -478,14 +478,14 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 			images = append(images, resp.Images...)
 		}
 		if streamed > 0 && len(images) == 0 {
-			t.runtime.recordImageOperation(ctx, t.event, "chatbot.image.edit", "Agent 图片编辑已完成", prompt, submittedPrompt, cfg.ImageModelWithDefault(), streamed, sourceCount)
+			t.runtime.recordImageOperation(ctx, t.event, "diana.image.edit", "Agent 图片编辑已完成", prompt, submittedPrompt, cfg.ImageModelWithDefault(), streamed, sourceCount)
 			note := ""
 			if failed > 0 || dropped > 0 {
 				note = dianaImageResultCaption("", 0, dropped, failed)
 			}
 			return dianaImageTaskOutput{Delivered: true, Caption: note}, nil
 		}
-		action = "chatbot.image.edit"
+		action = "diana.image.edit"
 		message = "Agent 图片编辑已完成"
 	}
 	if len(images) == 0 {

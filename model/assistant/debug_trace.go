@@ -93,7 +93,7 @@ func (r *Runtime) recordDebugTrace(state *debugTraceState, message string, metad
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     applog.KindDebug,
 		Level:    applog.LevelInfo,
-		Action:   "chatbot.debug_trace",
+		Action:   "diana.debug_trace",
 		Message:  message,
 		Actor:    oneBotEventActor(state.event),
 		Target:   strings.TrimSpace(state.event.MessageID),

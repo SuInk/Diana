@@ -107,7 +107,7 @@ func (r *Runtime) auditForwardNodesSafety(ctx context.Context, event MessageEven
 	ctx = withLLMUsagePurpose(ctx, "forward_content_safety")
 	decision, err := r.runReplyAudit(ctx, event, readableEventText(event, event.RawMessage), text, cfg)
 	if err != nil {
-		log.Printf("chatbot forward content safety audit skipped: %v", err)
+		log.Printf("diana forward content safety audit skipped: %v", err)
 		return nil
 	}
 	return accountSafetyError(decision)

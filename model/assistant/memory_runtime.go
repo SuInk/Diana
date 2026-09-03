@@ -79,7 +79,7 @@ func (r *Runtime) runMemoryCoordinator(ctx context.Context, leaseOwner string, r
 	if releaseStale {
 		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := store.ReleaseMemoryJobLeases(releaseCtx, ""); err != nil {
-			log.Printf("chatbot memory stale lease recovery failed: %v", err)
+			log.Printf("diana memory stale lease recovery failed: %v", err)
 		}
 		cancel()
 	}
@@ -96,7 +96,7 @@ func (r *Runtime) runMemoryCoordinator(ctx context.Context, leaseOwner string, r
 	workers.Wait()
 	releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := store.ReleaseMemoryJobLeases(releaseCtx, leaseOwner); err != nil {
-		log.Printf("chatbot memory lease release failed: %v", err)
+		log.Printf("diana memory lease release failed: %v", err)
 	}
 	cancel()
 }
@@ -116,19 +116,19 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			job, ok, err := store.ClaimNextMemoryJob(claimCtx, leaseOwner, time.Now().Add(memoryLeaseDuration))
 			cancel()
 			if err != nil {
-				log.Printf("chatbot memory job claim failed: %v", err)
+				log.Printf("diana memory job claim failed: %v", err)
 				break
 			}
 			if !ok {
 				break
 			}
 			if memoryJobAttemptsExhausted(job.Attempts) {
-				log.Printf("chatbot memory job abandoned after %d attempts: id=%s", job.Attempts-1, job.ID)
+				log.Printf("diana memory job abandoned after %d attempts: id=%s", job.Attempts-1, job.ID)
 				commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				err = store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner)
 				commitCancel()
 				if err != nil {
-					log.Printf("chatbot memory job state update failed: %v", err)
+					log.Printf("diana memory job state update failed: %v", err)
 				}
 				continue
 			}
@@ -145,7 +145,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			}
 			commitCancel()
 			if err != nil {
-				log.Printf("chatbot memory job state update failed: %v", err)
+				log.Printf("diana memory job state update failed: %v", err)
 			}
 		}
 	}
@@ -535,7 +535,7 @@ func (r *Runtime) enqueueEventMemory(event MessageEvent, text string) {
 	})
 	cancel()
 	if err != nil {
-		log.Printf("chatbot memory event enqueue failed: %v", err)
+		log.Printf("diana memory event enqueue failed: %v", err)
 		return
 	}
 	if inserted {
@@ -562,7 +562,7 @@ func (r *Runtime) enqueueContextSummary(session string, events []MessageEvent) {
 	})
 	cancel()
 	if err != nil {
-		log.Printf("chatbot memory summary enqueue failed: %v", err)
+		log.Printf("diana memory summary enqueue failed: %v", err)
 		return
 	}
 	if inserted {
@@ -622,10 +622,10 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 		if profiles := llmProfilesInGroup(set, llm.GroupChat); len(profiles) > 0 {
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 		}
-		return "", fmt.Errorf("chatbot: no text-capable llm profile is configured for memory")
+		return "", fmt.Errorf("diana: no text-capable llm profile is configured for memory")
 	}
 	if factory == nil {
-		return "", fmt.Errorf("chatbot: llm provider is not configured")
+		return "", fmt.Errorf("diana: llm provider is not configured")
 	}
 	client, err := factory()
 	if err != nil {

@@ -433,7 +433,7 @@ func (r *Runtime) subagentTaskStatuses() []SubagentTaskStatus {
 
 func (r *Runtime) sendSubagentFollowup(ctx context.Context, event MessageEvent, reply string) error {
 	cfg := r.effectiveConfigForEvent(event)
-	reply = normalizeReply(reply, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true))
+	reply = normalizeReply(reply, cfg.MaxReplyChars, markdownToPlainForConfig(cfg))
 	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
 	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		return r.sendForwardReply(ctx, event, reply, cfg)
@@ -484,7 +484,7 @@ func (r *Runtime) persistSubagentTask(item reservedSubagentTask, phase string, p
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := store.SaveInboundEventSubtask(ctx, record); err != nil {
-		log.Printf("chatbot subagent task persist failed: %v", err)
+		log.Printf("diana subagent task persist failed: %v", err)
 	}
 }
 
@@ -498,7 +498,7 @@ func (r *Runtime) recordSubagentTaskLog(ctx context.Context, item reservedSubage
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "chatbot.subagent_task",
+		Action:  "diana.subagent_task",
 		Message: message,
 		Detail:  detail,
 		Actor:   oneBotEventActor(item.event),

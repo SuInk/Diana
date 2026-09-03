@@ -199,7 +199,7 @@ func (r *Runtime) judgeMediaReference(ctx context.Context, event MessageEvent, t
 	return decision, nil
 }
 
-var errMediaReferenceUnparsable = errors.New("chatbot: media reference decision is not valid JSON")
+var errMediaReferenceUnparsable = errors.New("diana: media reference decision is not valid JSON")
 
 // parseMediaReferenceDecision 和语义指代那边同一个口径：容忍代码围栏和前后废话，
 // 只取最外层的那对花括号。
@@ -307,7 +307,7 @@ func (r *Runtime) recordInboundMediaReference(ctx context.Context, turnID string
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.inbound.media_reference",
+		Action:  "diana.inbound.media_reference",
 		Message: message,
 		Actor:   oneBotEventActor(event),
 		Target:  strings.TrimSpace(event.MessageID),

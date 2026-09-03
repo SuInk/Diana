@@ -110,7 +110,7 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	})
 	cancel()
 	if err != nil {
-		log.Printf("chatbot structured memory load failed: %v", err)
+		log.Printf("diana structured memory load failed: %v", err)
 		text, usage := formatStructuredMemoryContextWithTokenBudget(profile, policy, nil, memoryBudget)
 		return text, usage
 	}
@@ -151,7 +151,7 @@ func (r *Runtime) touchRetrievedMemories(ctx context.Context, store StructuredMe
 		touchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
 		if err := toucher.TouchStructuredMemories(touchCtx, ids, now); err != nil {
-			log.Printf("chatbot structured memory touch failed: %v", err)
+			log.Printf("diana structured memory touch failed: %v", err)
 		}
 	}()
 }
@@ -778,7 +778,7 @@ func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) str
 	})
 	cancel()
 	if err != nil {
-		log.Printf("chatbot session thread load failed: %v", err)
+		log.Printf("diana session thread load failed: %v", err)
 		return ""
 	}
 	// 不能拿 ThreadMemoryKey(session) 来做精确比较：写入侧会过 normalizeMemoryKey，

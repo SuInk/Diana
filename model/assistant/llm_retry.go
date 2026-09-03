@@ -59,7 +59,7 @@ func generateWithTransientRetryTimeout(ctx context.Context, provider LLMProvider
 // share the caller deadline, so cancellation is respected and never reset.
 func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider, req llm.GenerateRequest, enabled bool, requestTimeout time.Duration, maxRetries int, retryDelay time.Duration) (*llm.GenerateResponse, error) {
 	if provider == nil {
-		return nil, fmt.Errorf("chatbot: llm provider is not configured")
+		return nil, fmt.Errorf("diana: llm provider is not configured")
 	}
 	if manager, ok := provider.(llmAttemptTimeoutManager); ok && manager.ManagesAttemptTimeout() {
 		requestTimeout = 0
@@ -94,7 +94,7 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 			if !ok || shrinkAttempts >= maxContextShrinkRetries {
 				return resp, err
 			}
-			log.Printf("chatbot llm context overflow, retrying with max_context_tokens=%d", shrunk.MaxContextTokens)
+			log.Printf("diana llm context overflow, retrying with max_context_tokens=%d", shrunk.MaxContextTokens)
 			req = shrunk
 			shrinkAttempts++
 			attempt--
@@ -209,10 +209,10 @@ func newProfileFailoverLLMProvider(
 	wrapGroupError bool,
 ) (*profileFailoverLLMProvider, error) {
 	if len(profiles) == 0 {
-		return nil, fmt.Errorf("chatbot: no llm profile is configured")
+		return nil, fmt.Errorf("diana: no llm profile is configured")
 	}
 	if factory == nil {
-		return nil, fmt.Errorf("chatbot: llm provider factory is not configured")
+		return nil, fmt.Errorf("diana: llm provider factory is not configured")
 	}
 	group := llm.NormalizeProfileGroup(profiles[0].Group)
 	return &profileFailoverLLMProvider{
@@ -262,7 +262,7 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 		lastErr = fmt.Errorf("unknown llm profile error")
 	}
 	if p.wrapGroupError && len(p.profiles) > 1 {
-		return nil, fmt.Errorf("chatbot: llm profiles in group %q are unavailable: %w", p.group, lastErr)
+		return nil, fmt.Errorf("diana: llm profiles in group %q are unavailable: %w", p.group, lastErr)
 	}
 	return nil, lastErr
 }
