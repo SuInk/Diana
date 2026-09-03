@@ -810,6 +810,7 @@ func firstNonEmptyString(values ...string) string {
 
 func openAIChatCompletionMessages(messages []Message, definitions []ToolDefinition) []openAIChatCompletionMessage {
 	out := make([]openAIChatCompletionMessage, 0, len(messages))
+	messages = inlineTrailingSystemMessages(messages)
 	for _, message := range messages {
 		converted := openAIChatCompletionMessage{
 			Role:       openAIChatCompletionRole(message.Role),
@@ -1923,7 +1924,7 @@ func repairResponsesFunctionPairs(messages []Message) []Message {
 }
 
 func openAIResponsesInput(messages []Message, definitions []ToolDefinition) responses.ResponseInputParam {
-	messages = repairResponsesFunctionPairs(messages)
+	messages = inlineTrailingSystemMessages(repairResponsesFunctionPairs(messages))
 	out := make(responses.ResponseInputParam, 0, len(messages))
 	for _, msg := range messages {
 		if msg.Role == RoleAssistant && len(msg.ResponsesOutput) > 0 {
