@@ -334,11 +334,11 @@ func notebookSessionScope(event MessageEvent) string {
 
 // notebookScopeKeyForWrite 返回写入用的作用域。
 //
-// 默认按会话隔离：一个群的内部梗默认只在这个群里成立，global 是主人特权。
-// 打开「笔记本跨群共用」之后全部写进 global——这时机器人维护的是一本共用笔记本，
-// 再按群分家反而会让同一个词在不同群各记一遍。
+// 默认笔记本跟随机器人：群聊私聊都写进这台机器人的全局本——机器人维护的是一本
+// 自己的笔记，按群分家会让同一个词在不同群各记一遍。关掉「跟随机器人」之后才按
+// 会话隔离：一个群的内部梗只在这个群里成立，global 变成主人特权。
 func notebookScopeKeyForWrite(event MessageEvent, cfg BotConfig, global bool, owner bool) string {
-	if boolValue(cfg.NotebookSharedScopeEnabled, false) {
+	if boolValue(cfg.NotebookSharedScopeEnabled, true) {
 		return notebookGlobalScope(event.ProfileID)
 	}
 	if global && owner {
