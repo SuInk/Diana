@@ -76,17 +76,29 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 > $env:DIANA_HOST="0.0.0.0"; irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 > ```
 >
-> Already installed? Two options: re-run the install command with `DIANA_HOST` (which also upgrades you), or edit the config file to set `server.host` to `0.0.0.0` and restart:
+> Already installed? Two options: re-run the install command with `DIANA_HOST` (which also upgrades you), or edit the config file to set `server.host` to `0.0.0.0` and restart.
+>
+> First edit the config (a system install's config file is owned by root, hence sudo):
 >
 > ```sh
-> # Linux / macOS (editing the config of a system install needs sudo; diana restart handles service privileges itself)
 > sudo vim "$(diana config path)"
-> diana restart
 > ```
 >
 > ```powershell
-> # Windows PowerShell
 > notepad (diana config path)
+> ```
+>
+> Find the `server:` block near the top of the file and change the `host` line from `127.0.0.1` to `0.0.0.0` (two-space indent, leave the other lines alone):
+>
+> ```yaml
+> server:
+>   host: 0.0.0.0
+>   port: "18080"
+> ```
+>
+> Then restart — `diana restart` handles service privileges itself:
+>
+> ```sh
 > diana restart
 > ```
 >
