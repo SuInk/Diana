@@ -218,6 +218,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "上游模型拒绝了高风险内容，机器人已发送安全错误说明", true
 	case "error_send_unconfirmed":
 		return "error", "回复生成失败；错误说明已发起发送，但没有收到可核验的发送 ACK", false
+	case "error_notice_merged":
+		return "error", "回复生成失败；该会话正处于连续失败中，这条并入稍后的一条汇总说明，不单独发错误提示", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
 	case "ignored_member_level":
@@ -366,7 +368,13 @@ type Runtime struct {
 	proactiveBatches      map[string]*proactiveReplyBatch
 	proactiveBatchWindow  time.Duration
 	proactiveBatchMaxWait time.Duration
-	replyBatchMu          sync.Mutex
+	// 连续失败时的错误提示节流状态，见 error_notice_burst.go。
+	errorNoticeMu          sync.Mutex
+	errorNoticeBursts      map[string]*errorNoticeBurst
+	errorNoticeQuiet       time.Duration
+	errorNoticeMaxWait     time.Duration
+	errorNoticeFreshWindow time.Duration
+	replyBatchMu           sync.Mutex
 	// replyTurns 记「同一个人刚问过」，让紧接着的第二条被当成追问接住而不是重答一遍。
 	replyTurnMu           sync.Mutex
 	replyTurns            map[string]replyTurnRecord
@@ -523,51 +531,55 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	// 词典分词按配置启用;加载要几秒,后台预热,别让第一条消息扛这个延迟。
 	applyCJKSegmentConfig(cfg)
 	runtime := &Runtime{
-		cfg:                   cfg,
-		profileConfigs:        map[string]BotConfig{cfg.ID: cfg},
-		channel:               channel,
-		bridge:                NewNoneBotBridge(bridgeConfigFromBotConfig(cfg), channel),
-		plugins:               plugins,
-		llmStore:              llmStore,
-		modelLister:           defaultLLMModelLister,
-		reminders:             reminders,
-		configSaver:           configSaver,
-		llmFactory:            llmFactory,
-		updatedAt:             time.Now(),
-		sem:                   make(chan struct{}, cfg.MaxBotConcurrency),
-		proactiveRouteSem:     make(chan struct{}, proactiveReplyRouteConcurrency),
-		relationshipEvalSem:   make(chan struct{}, relationshipEvalConcurrency),
-		history:               map[string][]MessageEvent{},
-		semanticRefCache:      map[string]SemanticReferenceCacheRecord{},
-		chatInLastReplyAt:     map[string]time.Time{},
-		recentClaimSources:    map[string][]claimSourceRecord{},
-		contextSummaries:      map[string]string{},
-		contextSummaryMarks:   map[string]int64{},
-		activeReminders:       map[string]struct{}{},
-		replySuppressByUser:   map[string]ReplySuppression{},
-		replyOutboundGates:    map[string]*replySuppressionOutboundGate{},
-		replyRefusalByUser:    map[string]replyRefusalState{},
-		botReplyLoopByKey:     map[string]botReplyLoopState{},
-		proactiveBatches:      map[string]*proactiveReplyBatch{},
-		activeDirectReplies:   map[string]*activeDirectReply{},
-		proactiveBatchWindow:  defaultProactiveReplyBatchWindow,
-		proactiveBatchMaxWait: defaultProactiveReplyBatchMaxWait,
-		replyBatches:          map[string]*replyBatchGate{},
-		unavailableGroups:     map[string]unavailableGroupSend{},
-		outboundDeliveries:    map[string]*groupOutboundDelivery{},
-		historyImageDescRun:   map[string]struct{}{},
-		historyImageDescReady: map[string]struct{}{},
-		historyImageDescRetry: map[string]time.Time{},
-		historyImageDescSem:   make(chan struct{}, 1),
-		agentRegistryCache:    map[string]*agent.ToolRegistry{},
-		quietNotices:          map[string]time.Time{},
-		resolverDeliveries:    map[string]resolverDeliveryReservation{},
-		inboundWake:           make(chan struct{}, 1),
-		inboundManualBackfill: make(chan time.Duration, 1),
-		memoryWake:            make(chan struct{}, 1),
-		subagentTasks:         map[string]activeSubagentTask{},
-		subagentSem:           make(chan struct{}, defaultSubagentTaskConcurrency),
-		subagentLLMSem:        make(chan struct{}, subagentLLMConcurrency(cfg.MaxBotConcurrency)),
+		cfg:                    cfg,
+		profileConfigs:         map[string]BotConfig{cfg.ID: cfg},
+		channel:                channel,
+		bridge:                 NewNoneBotBridge(bridgeConfigFromBotConfig(cfg), channel),
+		plugins:                plugins,
+		llmStore:               llmStore,
+		modelLister:            defaultLLMModelLister,
+		reminders:              reminders,
+		configSaver:            configSaver,
+		llmFactory:             llmFactory,
+		updatedAt:              time.Now(),
+		sem:                    make(chan struct{}, cfg.MaxBotConcurrency),
+		proactiveRouteSem:      make(chan struct{}, proactiveReplyRouteConcurrency),
+		relationshipEvalSem:    make(chan struct{}, relationshipEvalConcurrency),
+		history:                map[string][]MessageEvent{},
+		semanticRefCache:       map[string]SemanticReferenceCacheRecord{},
+		chatInLastReplyAt:      map[string]time.Time{},
+		recentClaimSources:     map[string][]claimSourceRecord{},
+		contextSummaries:       map[string]string{},
+		contextSummaryMarks:    map[string]int64{},
+		activeReminders:        map[string]struct{}{},
+		replySuppressByUser:    map[string]ReplySuppression{},
+		replyOutboundGates:     map[string]*replySuppressionOutboundGate{},
+		replyRefusalByUser:     map[string]replyRefusalState{},
+		botReplyLoopByKey:      map[string]botReplyLoopState{},
+		proactiveBatches:       map[string]*proactiveReplyBatch{},
+		activeDirectReplies:    map[string]*activeDirectReply{},
+		proactiveBatchWindow:   defaultProactiveReplyBatchWindow,
+		proactiveBatchMaxWait:  defaultProactiveReplyBatchMaxWait,
+		errorNoticeBursts:      map[string]*errorNoticeBurst{},
+		errorNoticeQuiet:       defaultErrorNoticeBurstQuiet,
+		errorNoticeMaxWait:     defaultErrorNoticeBurstMaxWait,
+		errorNoticeFreshWindow: defaultErrorNoticeFreshWindow,
+		replyBatches:           map[string]*replyBatchGate{},
+		unavailableGroups:      map[string]unavailableGroupSend{},
+		outboundDeliveries:     map[string]*groupOutboundDelivery{},
+		historyImageDescRun:    map[string]struct{}{},
+		historyImageDescReady:  map[string]struct{}{},
+		historyImageDescRetry:  map[string]time.Time{},
+		historyImageDescSem:    make(chan struct{}, 1),
+		agentRegistryCache:     map[string]*agent.ToolRegistry{},
+		quietNotices:           map[string]time.Time{},
+		resolverDeliveries:     map[string]resolverDeliveryReservation{},
+		inboundWake:            make(chan struct{}, 1),
+		inboundManualBackfill:  make(chan time.Duration, 1),
+		memoryWake:             make(chan struct{}, 1),
+		subagentTasks:          map[string]activeSubagentTask{},
+		subagentSem:            make(chan struct{}, defaultSubagentTaskConcurrency),
+		subagentLLMSem:         make(chan struct{}, subagentLLMConcurrency(cfg.MaxBotConcurrency)),
 	}
 	runtime.members = newMemberCacheForEvent(runtime.callOneBotAPIForEvent)
 	return runtime
@@ -708,6 +720,7 @@ func (r *Runtime) Stop() error {
 		cancel()
 	}
 	r.clearProactiveReplyBatches()
+	r.clearErrorNoticeBursts()
 	if r.bridge != nil {
 		r.bridge.Stop()
 	}
@@ -1826,8 +1839,17 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "", ctx.Err()
 		}
-		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, "出错了："+publicChatErrorMessage(err))
+		publicDetail := publicChatErrorMessage(err)
+		// 同一会话正在连续失败时，这条并进稍后那条汇总，不再单独刷一遍报错。
+		if !r.claimErrorNotice(event, publicDetail) {
+			setEventRecordOutcome(&record, "error_notice_merged")
+			r.record(record)
+			return "error_notice_merged", nil
+		}
+		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, "出错了："+publicDetail)
 		if sendErr != nil {
+			// 这条提示自己也没发出去，本轮就不算已经交代过，留给汇总兜底。
+			r.noteErrorNoticeSendFailed(event, publicDetail)
 			if errors.Is(sendErr, errReplySuppressedBeforeSend) {
 				setEventRecordOutcome(&record, "ignored_response_suppression")
 				record.Error = ""
