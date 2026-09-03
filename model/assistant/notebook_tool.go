@@ -70,7 +70,7 @@ func (t *dianaNotebookTool) InputSchema() map[string]any {
 		"kind": toolEnumParam("upsert 可选，默认 term：term 梗/黑话/缩写/外号；fact 群规、约定、谁负责什么；preference 喜好与忌口；event 发生过的事；todo 答应了还没做的事；person 某个人是谁。",
 			notebookKindValues()...),
 		"term":            toolStringParam("标题。term 类型填那个词本身；其余类型填一句概括，例如「群规：十点后不刷屏」。get、upsert、delete、restore 必填。"),
-		"meaning":         toolStringParam("upsert 必填：这条笔记的正文，一两句话说清楚。term 类型写清是褒是贬、谁在用。"),
+		"meaning":         toolStringParam("upsert 必填：这条笔记的正文，一两句话说清楚。term 类型写清是褒是贬、谁在用。条目已存在而你不是主人、也不是当初记它的人时，这段会作为「补充说法」并存，不会覆盖原释义。"),
 		"aliases":         toolStringArrayParam("可选：触发词，出现在对话里就会想起这条笔记。term 类型填这个词的其它写法；其余类型填这条笔记该被什么话题勾起来——标题不会原样出现在聊天里，没有触发词的笔记基本命不中。"),
 		"example":         toolStringParam("可选：一句能体现用法或场景的例子。"),
 		"note":            toolStringParam("upsert 和 delete 可选：这次改动或作废的原因，会记进修订记录。"),
@@ -180,19 +180,82 @@ func (t *dianaNotebookTool) upsert(ctx context.Context, store NotebookStore, inp
 	if global && !shared && !t.relationship.Owner {
 		return "", fmt.Errorf("只有主人能写全局笔记；这条会记在当前会话里")
 	}
+	now := time.Now()
+	editorUserID := strings.TrimSpace(t.event.UserID)
+	editorName := strings.TrimSpace(t.event.SenderNameOrID())
+	aliases := configToolStringSlice(input, "aliases")
+	example := TruncateNotebookText(configToolString(input, "example"), NotebookExampleMaxRunes)
+	note := TruncateNotebookText(configToolString(input, "note"), NotebookNoteMaxRunes)
+
+	// 先找有没有这一条：已存在就原地修订，不管它当初记在哪个作用域。否则「跟随机器人」
+	// 之后修订一条老的会话条目会在全局本另起一条，读取时旧条目仍然优先，改了等于没改。
+	existingScope, existing, found, err := t.findActiveEntry(ctx, store, term)
+	if err != nil {
+		return "", err
+	}
+	settles := t.relationship.Owner || !found || existing.AuthorUserID == "" || existing.AuthorUserID == editorUserID
+	if found && !settles {
+		// 不是主人也不是当初记它的人：不覆盖，作为补充说法并存（见 mergeNotebookSupplement）。
+		merged := mergeNotebookSupplement(existing.Meaning, editorName, meaning, now)
+		if merged == existing.Meaning && len(mergeNotebookAliases(existing.Term, existing.Aliases, aliases)) == len(existing.Aliases) {
+			return marshalDianaNotebookResult(dianaNotebookResult{
+				OK:      true,
+				Action:  "unchanged",
+				Message: "「" + existing.Term + "」已经有同样的说法，没有改动。",
+				Scope:   existingScope,
+				Entry:   &existing,
+			})
+		}
+		entry, _, err := store.UpsertNotebookEntry(ctx, NotebookUpsertRequest{
+			ScopeKey:        existingScope,
+			Kind:            existing.Kind,
+			Term:            existing.Term,
+			Aliases:         mergeNotebookAliases(existing.Term, existing.Aliases, aliases),
+			Meaning:         merged,
+			Example:         firstNonEmpty(strings.TrimSpace(existing.Example), example),
+			Note:            TruncateNotebookText(joinPromptSections("补充说法，未覆盖原释义", note), NotebookNoteMaxRunes),
+			EditorUserID:    editorUserID,
+			EditorName:      editorName,
+			SourceSession:   sessionKey(t.event),
+			SourceMessageID: strings.TrimSpace(t.event.MessageID),
+			Now:             now,
+		})
+		if err != nil {
+			return "", err
+		}
+		author := strings.TrimSpace(existing.AuthorName)
+		if author == "" {
+			author = "别人"
+		}
+		return marshalDianaNotebookResult(dianaNotebookResult{
+			OK:      true,
+			Action:  "supplemented",
+			Message: "「" + entry.Term + "」已有释义（" + author + " 记的），这次的说法记为补充说法并存，没有覆盖原释义。回复时两种说法都可以提，说清各是谁的用法；主人或当初记它的人确认后才会改成主释义。",
+			Scope:   entry.ScopeKey,
+			Entry:   &entry,
+		})
+	}
+
+	scope := existingScope
+	if !found {
+		scope, err = notebookScopeKeyForWrite(t.event, cfg, global, t.relationship.Owner)
+		if err != nil {
+			return "", err
+		}
+	}
 	entry, created, err := store.UpsertNotebookEntry(ctx, NotebookUpsertRequest{
-		ScopeKey:        notebookScopeKeyForWrite(t.event, cfg, global, t.relationship.Owner),
+		ScopeKey:        scope,
 		Kind:            kind,
 		Term:            term,
-		Aliases:         NormalizeNotebookAliases(term, configToolStringSlice(input, "aliases")),
+		Aliases:         NormalizeNotebookAliases(term, aliases),
 		Meaning:         meaning,
-		Example:         TruncateNotebookText(configToolString(input, "example"), NotebookExampleMaxRunes),
-		Note:            TruncateNotebookText(configToolString(input, "note"), NotebookNoteMaxRunes),
-		EditorUserID:    strings.TrimSpace(t.event.UserID),
-		EditorName:      strings.TrimSpace(t.event.SenderNameOrID()),
+		Example:         example,
+		Note:            note,
+		EditorUserID:    editorUserID,
+		EditorName:      editorName,
 		SourceSession:   sessionKey(t.event),
 		SourceMessageID: strings.TrimSpace(t.event.MessageID),
-		Now:             time.Now(),
+		Now:             now,
 	})
 	if err != nil {
 		return "", err
@@ -208,6 +271,20 @@ func (t *dianaNotebookTool) upsert(ctx context.Context, store NotebookStore, inp
 		Scope:   entry.ScopeKey,
 		Entry:   &entry,
 	})
+}
+
+// findActiveEntry 按读取顺序找这个标题现有的活跃条目。
+func (t *dianaNotebookTool) findActiveEntry(ctx context.Context, store NotebookStore, term string) (string, NotebookEntry, bool, error) {
+	for _, scope := range notebookScopeKeys(t.event) {
+		entry, found, err := store.NotebookEntryDetail(ctx, scope, term)
+		if err != nil {
+			return "", NotebookEntry{}, false, err
+		}
+		if found && entry.Status != NotebookStatusDeleted {
+			return scope, entry, true, nil
+		}
+	}
+	return "", NotebookEntry{}, false, nil
 }
 
 func (t *dianaNotebookTool) delete(ctx context.Context, store NotebookStore, input map[string]any) (string, error) {

@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sort"
 	"strings"
@@ -332,23 +333,137 @@ func notebookSessionScope(event MessageEvent) string {
 	return scope
 }
 
+// errNotebookBotIdentityMissing 表示这次写入落不到任何一台机器人名下。
+//
+// 升级前那本所有机器人共用的 global 只作为读取兜底保留；往里写等于把这台机器人
+// 学到的梗记到别的机器人头上，还会在多实例下互相改。宁可报错让模型如实说没记住，
+// 也不要悄悄写进一本谁都不该再写的旧本子。
+var errNotebookBotIdentityMissing = errors.New("无法确定当前机器人身份（配置档 ID 为空），这条没有写入笔记本")
+
 // notebookScopeKeyForWrite 返回写入用的作用域。
 //
 // 默认笔记本跟随机器人：群聊私聊都写进这台机器人的全局本——机器人维护的是一本
 // 自己的笔记，按群分家会让同一个词在不同群各记一遍。关掉「跟随机器人」之后才按
 // 会话隔离：一个群的内部梗只在这个群里成立，global 变成主人特权。
-func notebookScopeKeyForWrite(event MessageEvent, cfg BotConfig, global bool, owner bool) string {
-	if boolValue(cfg.NotebookSharedScopeEnabled, true) {
-		return notebookGlobalScope(event.ProfileID)
+//
+// 任何会落到升级前共用 global 的写入都报错（见 errNotebookBotIdentityMissing）。
+func notebookScopeKeyForWrite(event MessageEvent, cfg BotConfig, global bool, owner bool) (string, error) {
+	scope := ""
+	switch {
+	case boolValue(cfg.NotebookSharedScopeEnabled, true):
+		scope = notebookGlobalScope(event.ProfileID)
+	case global && owner:
+		scope = notebookGlobalScope(event.ProfileID)
+	case notebookSessionScope(event) != "":
+		scope = notebookSessionScope(event)
+	default:
+		// 没有有效会话身份时写这台机器人的全局本："private:" 那种共用桶更糟。
+		scope = notebookGlobalScope(event.ProfileID)
 	}
-	if global && owner {
-		return notebookGlobalScope(event.ProfileID)
+	if scope == NotebookScopeGlobal {
+		return "", errNotebookBotIdentityMissing
 	}
-	// 没有有效会话身份时写这台机器人的全局本："private:" 那种共用桶更糟。
-	if scope := notebookSessionScope(event); scope != "" {
-		return scope
+	return scope, nil
+}
+
+// 一条笔记的正文由「主释义」和至多几条「补充说法」组成，补充说法跟在主释义后面：
+//
+//	带薪拉屎的缩写 补充说法（小明，2026-09-03）：也有人用来指开会摸鱼
+//
+// 正文经 TruncateNotebookText 后只有单行（空白全部折成空格），所以补充说法靠固定
+// 前缀定位而不是靠换行。
+//
+// 这是「有人说不对」时的合并策略。以前谁说一句「不是这个意思」，模型就整条覆盖：
+// 一个群里的一句话能把另一个群教会它的释义抹掉，笔记本跟随机器人之后尤其如此。
+// 现在只有主人和当初记它的人能改主释义；别人的纠正和另一个群的不同用法都作为补充
+// 说法并存，回复时两种都能提，主人或原记录者看到后再拍板。
+const (
+	notebookSupplementPrefix = "补充说法（"
+	// notebookMaxSupplements 限制并存的补充说法条数。超过三条说明这个词本身就是
+	// 各说各话，再往上堆只会把正文撑爆，最老的一条让位。
+	notebookMaxSupplements = 3
+)
+
+type notebookSupplement struct {
+	Editor string
+	Date   string
+	Text   string
+}
+
+func (s notebookSupplement) line() string {
+	return notebookSupplementPrefix + s.Editor + "，" + s.Date + "）：" + s.Text
+}
+
+// splitNotebookMeaning 把正文拆成主释义和补充说法。解析不出「（谁，日期）：」头部的
+// 片段原样留在主释义里，不丢内容。
+func splitNotebookMeaning(meaning string) (string, []notebookSupplement) {
+	segments := strings.Split(strings.TrimSpace(meaning), notebookSupplementPrefix)
+	primary := strings.TrimSpace(segments[0])
+	var supplements []notebookSupplement
+	for _, segment := range segments[1:] {
+		head, text, ok := strings.Cut(segment, "）：")
+		editor, date, dated := strings.Cut(head, "，")
+		if !ok || !dated || strings.TrimSpace(text) == "" || strings.ContainsAny(head, "（）") {
+			primary = strings.TrimSpace(primary + " " + notebookSupplementPrefix + segment)
+			continue
+		}
+		supplements = append(supplements, notebookSupplement{Editor: strings.TrimSpace(editor), Date: strings.TrimSpace(date), Text: strings.TrimSpace(text)})
 	}
-	return notebookGlobalScope(event.ProfileID)
+	return primary, supplements
+}
+
+func joinNotebookMeaning(primary string, supplements []notebookSupplement) string {
+	parts := []string{strings.TrimSpace(primary)}
+	for _, supplement := range supplements {
+		parts = append(parts, supplement.line())
+	}
+	return strings.Join(parts, " ")
+}
+
+// mergeNotebookSupplement 把一条来自非记录者的说法并进现有正文，返回合并后的正文；
+// 说法和主释义或已有补充完全一样时原样返回，表示不需要改动。
+//
+// 同一个人再说一次只更新他自己那条；条数和总长度超限时先丢最老的补充说法，
+// 主释义永远保留。
+func mergeNotebookSupplement(existing string, editorName string, text string, now time.Time) string {
+	primary, supplements := splitNotebookMeaning(existing)
+	text = strings.TrimSpace(text)
+	editorName = strings.TrimSpace(editorName)
+	if editorName == "" {
+		editorName = "群友"
+	}
+	if strings.EqualFold(strings.TrimSpace(primary), text) {
+		return existing
+	}
+	kept := supplements[:0:0]
+	for _, supplement := range supplements {
+		if supplement.Editor == editorName {
+			if strings.EqualFold(supplement.Text, text) {
+				return existing
+			}
+			continue
+		}
+		if strings.EqualFold(supplement.Text, text) {
+			// 别人已经这么说过：不重复记，第二个人的认同体现在原条目上就够了。
+			return existing
+		}
+		kept = append(kept, supplement)
+	}
+	kept = append(kept, notebookSupplement{Editor: editorName, Date: now.Format("2006-01-02"), Text: text})
+	for len(kept) > notebookMaxSupplements {
+		kept = kept[1:]
+	}
+	merged := joinNotebookMeaning(primary, kept)
+	for len([]rune(merged)) > NotebookContentMaxRunes && len(kept) > 1 {
+		kept = kept[1:]
+		merged = joinNotebookMeaning(primary, kept)
+	}
+	return TruncateNotebookText(merged, NotebookContentMaxRunes)
+}
+
+// mergeNotebookAliases 取并集，保留原有顺序。
+func mergeNotebookAliases(term string, existing []string, added []string) []string {
+	return NormalizeNotebookAliases(term, append(append([]string(nil), existing...), added...))
 }
 
 // notebookContext 拿当前消息去撞笔记本，把命中的条目组装成提示词段落。
