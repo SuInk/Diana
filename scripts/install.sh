@@ -555,8 +555,10 @@ printf '%s\n' "$version" >"$install_dir/.installed-version"
 printf '%s\n' "$install_scope" >"$install_dir/.install-scope"
 printf '%s\n' "$service_user" >"$install_dir/.service-user"
 
-if [ "$os" = "darwin" ] && [ "$install_scope" = "system" ] && [ "$service_uid" != "0" ]; then
-  # 运行用户必须能写数据库、日志和自更新暂存目录；系统级的命令入口仍由 root 管理。
+if [ "$install_scope" = "system" ] && [ "$service_uid" != "0" ]; then
+  # 运行用户必须能写数据库、日志和自更新暂存目录，也要读得到 config.yaml——否则
+  # diana logs / status / config check 这些只读命令也得 sudo。系统级的命令入口
+  # （/usr/local/bin/diana）仍由 root 管理，不在这个目录里。
   chown -R "$service_uid" "$install_dir"
 fi
 
@@ -663,6 +665,17 @@ grant_service_control_to_installer() {
 
 start_service() {
   if [ "$os" = "linux" ] && [ "$install_scope" = "system" ] && command -v systemctl >/dev/null 2>&1; then
+    # 用 sudo 装的话，服务就以发起安装的那个人的身份跑，别留在 root 下：控制台
+    # 对外提供服务，内置 Agent 还能执行命令和读写文件，没有理由给它 root。
+    # macOS 早就是这个语义（LaunchAgent 归桌面用户），这里对齐。
+    # 直接以 root 登录安装时没有别的身份可用，保持 root 运行。
+    service_unit_identity=""
+    if [ "$service_uid" != "0" ]; then
+      service_unit_identity="User=$service_user"
+      service_group=$(id -gn "$service_user" 2>/dev/null || true)
+      [ -n "$service_group" ] && service_unit_identity="$service_unit_identity
+Group=$service_group"
+    fi
     cat >/etc/systemd/system/diana.service <<EOF
 [Unit]
 Description=Diana AI Assistant
@@ -674,7 +687,8 @@ WorkingDirectory=$install_dir
 ExecStart=$install_dir/start-installed.sh
 Restart=on-failure
 RestartSec=3
-Environment=HOME=$HOME
+$service_unit_identity
+Environment=HOME=$service_home
 Environment=DIANA_SERVICE_MANAGER=systemd
 Environment=DIANA_SERVICE_LABEL=diana.service
 Environment=DIANA_SERVICE_DOMAIN=system
