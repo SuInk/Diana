@@ -250,11 +250,14 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 				return resp, nil
 			}
 		}
+		// 降级判定看的是原始错误：身份标注只是给人看的，不该影响该不该换配置档。
+		failover := shouldFailoverLLMError(err)
+		err = annotateLLMProviderAttempt(err, p.profiles[index], req)
 		lastErr = err
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		if !shouldFailoverLLMError(err) {
+		if !failover {
 			return nil, err
 		}
 	}
