@@ -262,6 +262,31 @@ if [ -f "$install_dir/uninstall.sh" ]; then
 fi
 
 command_dir=""
+command_path_hint=""
+
+# 用户级安装的 ~/.local/bin 不一定在 PATH 里（root 的 .profile 没有那段，zsh 或
+# 定制过 rc 的用户也没有）。只在安装结尾打一行提示的话，提示会被后续输出刷走，
+# 用户的第一条 diana 命令就是 command not found——检测到缺失就把 export 幂等
+# 追加进按 $SHELL 选择的 rc，重跑安装不重复追加，写不进去再退回提示。
+ensure_command_dir_on_path() {
+  case ":${PATH:-}:" in *":$command_dir:"*) return 0 ;; esac
+  path_marker='# added by Diana installer'
+  case "${SHELL:-}" in
+    */zsh)  rc_file="$HOME/.zshrc" ;;
+    */bash) rc_file="$HOME/.bashrc" ;;
+    *)      rc_file="$HOME/.profile" ;;
+  esac
+  if [ -f "$rc_file" ] && grep -Fq "$path_marker" "$rc_file" 2>/dev/null; then
+    command_path_hint="restart your shell (or run \`. $rc_file\`) to use \`diana\` directly."
+    return 0
+  fi
+  if printf '\nexport PATH="$HOME/.local/bin:$PATH" %s\n' "$path_marker" >>"$rc_file" 2>/dev/null; then
+    command_path_hint="added $command_dir to PATH in $rc_file — restart your shell (or run \`. $rc_file\`) to use \`diana\` directly."
+  else
+    command_path_hint="add $command_dir to PATH to run \`diana\` directly."
+  fi
+}
+
 if [ -f "$install_dir/uninstall.sh" ]; then
   # 系统安装提供所有登录用户都能找到的稳定命令；无权限模式才落在当前用户目录。
   if [ "$install_scope" = "system" ]; then
@@ -271,6 +296,9 @@ if [ -f "$install_dir/uninstall.sh" ]; then
   fi
   mkdir -p "$command_dir"
   ln -sfn "$install_dir/$binary_name" "$command_dir/diana"
+  if [ "$install_scope" != "system" ]; then
+    ensure_command_dir_on_path
+  fi
 fi
 
 # macOS 按代码签名身份记住授权（麦克风、完全磁盘访问、App 管理都挂在上面）。
@@ -774,10 +802,9 @@ fi
 printf 'Installed: %s\n' "$install_dir"
 if [ -n "$command_dir" ]; then
   printf 'Command:   %s\n' "$command_dir/diana"
-  case ":${PATH:-}:" in
-    *":$command_dir:"*) ;;
-    *) printf 'PATH:      add %s to PATH to run `diana` directly.\n' "$command_dir" ;;
-  esac
+  if [ -n "$command_path_hint" ]; then
+    printf 'PATH:      %s\n' "$command_path_hint"
+  fi
 fi
 printf 'Backup:    %s\n' "$backup_dir"
 if [ -n "$generated_password" ]; then
