@@ -49,10 +49,7 @@ func (r *Runtime) handlePokeNotice(ctx context.Context, event MessageEvent) erro
 	if userID == "" || targetID == "" || !selfIDs[targetID] || selfIDs[userID] {
 		return nil
 	}
-	if event.GroupID != "" && r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
-		return nil
-	}
-	if r.isUserDisabled(userID) {
+	if !r.admitsNotice(cfg, event) {
 		return nil
 	}
 	if !r.claimPokeReply(event.ProfileID, userID, time.Now()) {
