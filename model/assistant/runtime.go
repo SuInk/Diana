@@ -41,14 +41,11 @@ type replyRuleContextKey struct{}
 const (
 	proactiveReplyRouteConcurrency = 8
 	relationshipEvalConcurrency    = 4
-	// botReplyLoopCheckConcurrency 限制回复后空转复盘的并发。它不在用户感知的
-	// 路径上，攒着不如丢掉：满了就跳过这一轮，晚一条消息发现循环没有关系。
-	botReplyLoopCheckConcurrency = 2
-	semanticRouteTimeout         = 20 * time.Second
-	llmTransientRetryDelay       = 700 * time.Millisecond
-	llmTransientMaxRetries       = 1
-	proactiveReplyRouteBudget    = 60 * time.Second
-	replyRuleRouteBudget         = 15 * time.Second
+	semanticRouteTimeout           = 20 * time.Second
+	llmTransientRetryDelay         = 700 * time.Millisecond
+	llmTransientMaxRetries         = 1
+	proactiveReplyRouteBudget      = 60 * time.Second
+	replyRuleRouteBudget           = 15 * time.Second
 )
 
 type LLMProfileStore interface {
@@ -228,7 +225,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_response_suppression":
 		return "not_replied", "该用户处于临时响应限制期，消息被回复抑制规则拦截", false
 	case "ignored_ai_reply_loop":
-		return "not_replied", "识别到其他机器人的自动回复，为避免循环接续而停止回答", false
+		return "not_replied", "发送前审核认定这一来一回已在空转（对方是自动回复，或双方都只在应付没有内容），为避免继续接茬而没有发送", false
 	case "ignored_no_natural_reply":
 		return "not_replied", "自然插话的最终生成没有得到有效回复，已保持静默", false
 	case "ignored_proactive_reply_quality":
@@ -322,8 +319,6 @@ type Runtime struct {
 	proactiveRouteSem   chan struct{}
 	relationshipEvalSem chan struct{}
 	relationshipEvalWG  sync.WaitGroup
-	botReplyLoopSem     chan struct{}
-	botReplyLoopWG      sync.WaitGroup
 	history             map[string][]MessageEvent
 	semanticRefCache    map[string]SemanticReferenceCacheRecord
 	agentCarryovers     map[string]agentRunCarryover
@@ -542,7 +537,6 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		sem:                   make(chan struct{}, cfg.MaxBotConcurrency),
 		proactiveRouteSem:     make(chan struct{}, proactiveReplyRouteConcurrency),
 		relationshipEvalSem:   make(chan struct{}, relationshipEvalConcurrency),
-		botReplyLoopSem:       make(chan struct{}, botReplyLoopCheckConcurrency),
 		history:               map[string][]MessageEvent{},
 		semanticRefCache:      map[string]SemanticReferenceCacheRecord{},
 		chatInLastReplyAt:     map[string]time.Time{},
@@ -1765,6 +1759,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "ignored_response_suppression", nil
 		}
+		if errors.Is(err, errReplyLoopDetected) {
+			// 发送前审核认定在空转且累计到阈值：这条不发，暂停已同时生效。
+			setEventRecordOutcome(&record, "ignored_ai_reply_loop")
+			record.Error = ""
+			r.record(record)
+			return "ignored_ai_reply_loop", nil
+		}
 		if errors.Is(err, errReplyTriggerSuperseded) {
 			setEventRecordOutcome(&record, "superseded_follow_up")
 			record.Reason = "同一用户随后又发来直呼消息，由新消息一并回答"
@@ -1869,8 +1870,6 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		r.markChatInReplied(event)
 	}
 	r.enqueueRelationshipEvaluation(event, text)
-	// 回复已经发出去了，现在回过头看这一来一回是不是在空转（见 enqueueBotReplyLoopCheck）。
-	r.enqueueBotReplyLoopCheck(event, text, reply)
 	return successOutcome, nil
 }
 

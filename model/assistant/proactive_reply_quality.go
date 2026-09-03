@@ -30,6 +30,23 @@ type proactiveReplyQualityDecision struct {
 	CountRefusal      bool
 	RefusalConfidence float64
 	RefusalReason     string
+	// ReplyLoop* 是同一次审核顺带做的空转判断：这一来一回是不是在为没有内容的
+	// 消息反复接茬。它单独占一次模型调用不值得——审核本来就拿着「原消息 + 待发
+	// 回复」这对输入，正是判断空转需要的证据。
+	ReplyLoopAutomatedAI bool
+	ReplyLoopMeaningless bool
+	ReplyLoopConfidence  float64
+	ReplyLoopReason      string
+}
+
+// loopDecision 把审核结论里的空转部分转成计数器认识的形状。
+func (decision proactiveReplyQualityDecision) loopDecision() botReplyLoopAIDecision {
+	return botReplyLoopAIDecision{
+		AutomatedAIReply: decision.ReplyLoopAutomatedAI,
+		MeaninglessLoop:  decision.ReplyLoopMeaningless,
+		Confidence:       decision.ReplyLoopConfidence,
+		Reason:           decision.ReplyLoopReason,
+	}
 }
 
 type proactiveReplyQualityRejectedError struct {
@@ -109,20 +126,41 @@ const proactiveReplyQualityPrompt = `你是机器人回复的发送前审核器,
   安全审核拦截、结束话题、暂时没有结果和内部故障提示都必须为 false。
 - 只判断这一次回复,不要决定累计次数、暂停账号或机器人循环。
 
+再单独判断一项空转:机器人是不是在为没有内容的消息反复接茬。只有请求里带了
+recent_same_sender_messages 或 recent_bot_replies 时才判这一项,没带就两个都填 false。
+这两组近期消息只服务于这一项判断,不得用它们去判事实真伪、表达质量或账号安全。
+
+reply_loop_automated_ai —— 对方很可能是另一个 AI 机器人在自动回应。
+- 引用、@、点名机器人或回复很快都只是触发背景,绝不能单独作为 AI 证据。
+- 只用于高置信场景:文本像助手在对上一条逐项回应,带模板化确认、规则复述、
+  持续提供帮助或待命表述,且同一发送者近期多次保持相似的助手人格和应答结构。
+- 真人的简短问答、吐槽、争论、玩梗、角色扮演、口癖、表情、正常连续聊天、
+  手动粘贴一段文字都判 false。文字通顺、很长、使用「喵」或「收到」本身不是证据。
+
+reply_loop_meaningless —— 对方未必是机器人,但这一来一回已经空转。
+- 必须同时满足:当前消息没有实质内容(纯附和、纯复读、只有称呼或标点、机械重复
+  上一条),候选回复也只是接了句同样没有内容的话,并且两组近期消息显示这个模式
+  已经重复了好几轮。
+- 只重复一两次不算。对方在问问题、给信息、表达情绪、玩梗、闲聊有来有回一律 false。
+  真人闲聊本来就允许没有信息量,只有明显机械空转时才判 true。
+- 拿不准一律 false。这一项判成 true 会让机器人暂停响应该账号一段时间,宁可漏放。
+
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"should_send":true,"confidence":0.96,"reason":"口吻自然,和原消息对得上","account_safe":true,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求"}
+{"should_send":true,"confidence":0.96,"reason":"口吻自然,和原消息对得上","account_safe":true,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"真人在正常追问"}
 
 confidence 必须是 0 到 1 的数字,表示你对「这条回复的表达方式适合发出去」的信心。
 account_safe 为 false 时,account_risk 填命中的类别:politics / explicit / illegal,
 account_risk_reason 必须单独写清候选回复中触发账号风险的具体内容。reason 只能评价
-表达质量,不得拿它代替账号风险理由。refusal_confidence 必须是 0 到 1 的数字。`
+表达质量,不得拿它代替账号风险理由。refusal_confidence 必须是 0 到 1 的数字。
+reply_loop_confidence 必须是 0 到 1 的数字;两项空转都为 false 时,它表示你对
+「这是正常对话」的把握。reply_loop_reason 只解释空转判断。`
 
 func replyControlIntentFromAudit(decision proactiveReplyQualityDecision) replyControlIntent {
 	return replyControlIntent{RefuseCurrent: decision.CountRefusal && decision.RefusalConfidence >= replyRefusalAuditConfidence}
 }
 
-func (r *Runtime) evaluateProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) (replyControlIntent, error) {
-	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
+// proactiveQualityError 判断主动插话的表达质量是否够格发出去。
+func (r *Runtime) proactiveQualityError(event MessageEvent, decision proactiveReplyQualityDecision, cfg BotConfig) error {
 	threshold := cfg.ProactiveReplyThreshold
 	if event.chatInReply {
 		threshold = cfg.chatInSettings().Threshold
@@ -130,23 +168,18 @@ func (r *Runtime) evaluateProactiveReplyQuality(ctx context.Context, event Messa
 	if threshold <= 0 || threshold > 1 {
 		threshold = defaultProactiveReplyThreshold
 	}
+	if decision.ShouldSend && decision.Confidence >= threshold {
+		return nil
+	}
+	reason := strings.TrimSpace(decision.Reason)
+	if reason == "" {
+		reason = "回复准确度不足"
+	}
+	return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核：%s（置信度 %.0f%%，阈值 %.0f%%）", reason, decision.Confidence*100, threshold*100)}
+}
 
-	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg)
-	if err != nil {
-		return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
-	}
-	intent := replyControlIntentFromAudit(decision)
-	if err := accountSafetyError(decision); err != nil {
-		return replyControlIntent{}, err
-	}
-	if !decision.ShouldSend || decision.Confidence < threshold {
-		reason := strings.TrimSpace(decision.Reason)
-		if reason == "" {
-			reason = "回复准确度不足"
-		}
-		return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核：%s（置信度 %.0f%%，阈值 %.0f%%）", reason, decision.Confidence*100, threshold*100)}
-	}
-	return intent, nil
+func (r *Runtime) evaluateProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) (replyControlIntent, error) {
+	return r.auditReplyBeforeSend(ctx, event, input, reply, cfg, true)
 }
 
 func (r *Runtime) judgeProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) error {
@@ -182,11 +215,20 @@ func accountRiskLabel(risk string) string {
 
 // runReplyAudit 做一次审核调用，同时拿回表达质量和账号安全两个结论。
 // 两者共用一次模型调用：主动回复本来就要审一次，直接回复只额外多这一次。
-func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) (proactiveReplyQualityDecision, error) {
-	payload, err := json.Marshal(map[string]any{
+func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, evidence botReplyLoopEvidence) (proactiveReplyQualityDecision, error) {
+	fields := map[string]any{
 		"original_message": strings.TrimSpace(readableEventText(event, input)),
 		"candidate_reply":  strings.TrimSpace(reply),
-	})
+	}
+	// 空转证据只在需要判这一项时才带上：不需要的时候多塞几条历史，既浪费 token，
+	// 也给了审核器拿历史去否定回复的机会（提示词开头那段说明就是为此写的）。
+	if len(evidence.RecentSameSenderMessages) > 0 {
+		fields["recent_same_sender_messages"] = evidence.RecentSameSenderMessages
+	}
+	if len(evidence.RecentBotReplies) > 0 {
+		fields["recent_bot_replies"] = evidence.RecentBotReplies
+	}
+	payload, err := json.Marshal(fields)
 	if err != nil {
 		return proactiveReplyQualityDecision{}, fmt.Errorf("编码审核上下文: %w", err)
 	}
@@ -214,34 +256,113 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	return decision, nil
 }
 
-// auditReplyAccountSafety 只判账号安全，用在直接回复这条路径上。
+// evaluateDirectReplyAudit 是直接回复这条路径上的发送前审核。
 //
-// 表达质量只对主动回复有意义——用户 @ 了机器人，回复得平淡些也该发出去。但账号
-// 安全和触发方式无关：一条涉政或露骨的回复，不管是主动插话还是被点名回答，发出
-// 去的后果一样。
-//
-// 默认关闭：主动回复那条路径上审核本来就要跑一次，安全判断是顺带的；直接回复
-// 没有这次调用，打开就是每条回复多一次快模型往返。开不开由用户按自己的风险
-// 权衡，不替他决定。
-//
-// 审核失败按放行处理：模型不可用时让机器人集体哑火，比偶尔漏放一条更糟。
+// 表达质量只对主动回复有意义——用户 @ 了机器人，回复得平淡些也该发出去；账号
+// 安全和触发方式无关，由开关决定；空转判断默认开启。三项现在共用同一次调用，
+// 详见 auditReplyBeforeSend。
 func (r *Runtime) evaluateDirectReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) (replyControlIntent, error) {
-	if !boolValue(cfg.ReplyAccountSafetyAuditEnabled, false) || strings.TrimSpace(reply) == "" {
-		return replyControlIntent{}, nil
-	}
-	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
-	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg)
-	if err != nil {
-		log.Printf("chatbot direct reply audit skipped: %v", err)
-		return replyControlIntent{}, nil
-	}
-	intent := replyControlIntentFromAudit(decision)
-	return intent, accountSafetyError(decision)
+	return r.auditReplyBeforeSend(ctx, event, input, reply, cfg, false)
 }
 
 func (r *Runtime) auditReplyAccountSafety(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) error {
-	_, err := r.evaluateDirectReplyAudit(ctx, event, input, reply, cfg)
+	_, err := r.auditReplyBeforeSend(ctx, event, input, reply, cfg, false)
 	return err
+}
+
+// replyAuditNeed 说明这一轮发送前需要哪几项判断。
+//
+// 三项判断共用同一次模型调用：它们要的输入都是「原消息 + 待发回复」。只要其中
+// 一项需要就跑这一次，一项都不需要就完全跳过。以前空转判断自己占一次调用，
+// 真机实测约 2500 毫秒——同一对输入付两次钱，没有道理。
+type replyAuditNeed struct {
+	// Quality 只对主动插话有意义：用户点名问的问题，回复平淡些也该发出去。
+	Quality bool
+	// AccountSafety 和触发方式无关，由配置开关决定。
+	AccountSafety bool
+	// Loop 是空转判断，默认开启，只在这条消息够得上循环候选时才需要。
+	Loop      bool
+	candidate botReplyLoopCandidate
+}
+
+func (need replyAuditNeed) any() bool {
+	return need.Quality || need.AccountSafety || need.Loop
+}
+
+func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig, proactive bool) replyAuditNeed {
+	need := replyAuditNeed{
+		Quality:       proactive,
+		AccountSafety: boolValue(cfg.ReplyAccountSafetyAuditEnabled, false),
+	}
+	if !boolValue(cfg.BotReplyLoopDetectionEnabled, true) {
+		return need
+	}
+	// 已经在暂停期里就不用再判：这条本来也走不到发送。
+	if _, blocked := r.activeReplySuppression(event, time.Now()); blocked {
+		return need
+	}
+	need.candidate, need.Loop = r.botReplyLoopCandidate(event, input)
+	return need
+}
+
+// auditReplyBeforeSend 是发送前的唯一一次审核：表达质量、账号安全、拒答计数和
+// 空转判断都由它一次做完。
+//
+// 审核失败按放行处理：模型不可用时让机器人集体哑火，比偶尔漏放一条更糟。主动
+// 插话是例外——那条路径本来就以「拿不准就别说」为准，失败即沉默。
+func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) (replyControlIntent, error) {
+	if strings.TrimSpace(reply) == "" {
+		return replyControlIntent{}, nil
+	}
+	need := r.replyAuditNeed(event, input, cfg, proactive)
+	if !need.any() {
+		return replyControlIntent{}, nil
+	}
+	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
+	evidence := botReplyLoopEvidence{}
+	if need.Loop {
+		evidence = r.collectBotReplyLoopEvidence(event, r.contextHistory(event))
+	}
+	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg, evidence)
+	if err != nil {
+		if need.Quality {
+			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
+		}
+		log.Printf("chatbot reply audit skipped: %v", err)
+		return replyControlIntent{}, nil
+	}
+	intent := replyControlIntentFromAudit(decision)
+	if need.Loop {
+		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision); loopErr != nil {
+			return intent, loopErr
+		}
+	}
+	if safetyErr := accountSafetyError(decision); safetyErr != nil {
+		return intent, safetyErr
+	}
+	if need.Quality {
+		if qualityErr := r.proactiveQualityError(event, decision, cfg); qualityErr != nil {
+			return intent, qualityErr
+		}
+	}
+	return intent, nil
+}
+
+// applyReplyLoopVerdict 把这一轮的空转结论并进计数器。够阈值时当场开启暂停并
+// 拦下这条回复——判断发生在发送之前，所以第一条空转回复就不会发出去。
+func (r *Runtime) applyReplyLoopVerdict(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision proactiveReplyQualityDecision) error {
+	now := time.Now()
+	hitCount, loopReason, detected := r.registerBotReplyLoopDecision(event, candidate, decision.loopDecision(), now)
+	r.recordBotReplyLoopClassification(ctx, event, candidate, decision.loopDecision(), hitCount, decision.ReplyLoopReason, nil)
+	if !detected {
+		return nil
+	}
+	restriction, activated := r.activateReplySuppression(event, loopReason, now)
+	if activated {
+		r.recordReplySuppressionBlocked(event, restriction)
+		r.sendReplySuppressionActivationNotice(ctx, event, restriction)
+	}
+	return errReplyLoopDetected
 }
 
 func proactiveReplyQualityTimeout(cfg BotConfig) time.Duration {
@@ -268,6 +389,12 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		CountRefusal      *bool    `json:"count_refusal"`
 		RefusalConfidence *float64 `json:"refusal_confidence"`
 		RefusalReason     *string  `json:"refusal_reason"`
+		// 空转三项是后加的，缺省当「没有空转」：升级期间旧提示词生成的回答
+		// 仍然可解，不至于整条审核结论作废。
+		ReplyLoopAutomatedAI *bool    `json:"reply_loop_automated_ai"`
+		ReplyLoopMeaningless *bool    `json:"reply_loop_meaningless"`
+		ReplyLoopConfidence  *float64 `json:"reply_loop_confidence"`
+		ReplyLoopReason      *string  `json:"reply_loop_reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil || payload.ShouldSend == nil || payload.Confidence == nil {
 		return proactiveReplyQualityDecision{}, false
@@ -296,6 +423,14 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	}
 	if payload.RefusalReason != nil {
 		decision.RefusalReason = strings.TrimSpace(*payload.RefusalReason)
+	}
+	decision.ReplyLoopAutomatedAI = payload.ReplyLoopAutomatedAI != nil && *payload.ReplyLoopAutomatedAI
+	decision.ReplyLoopMeaningless = payload.ReplyLoopMeaningless != nil && *payload.ReplyLoopMeaningless
+	if payload.ReplyLoopConfidence != nil && *payload.ReplyLoopConfidence >= 0 && *payload.ReplyLoopConfidence <= 1 {
+		decision.ReplyLoopConfidence = *payload.ReplyLoopConfidence
+	}
+	if payload.ReplyLoopReason != nil {
+		decision.ReplyLoopReason = strings.TrimSpace(*payload.ReplyLoopReason)
 	}
 	return decision, true
 }

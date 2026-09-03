@@ -5091,9 +5091,12 @@ func cloneGenerateRequestForTest(req llm.GenerateRequest) llm.GenerateRequest {
 }
 
 type sequenceLLMProvider struct {
-	mu       sync.Mutex
-	replies  []string
-	requests []llm.GenerateRequest
+	mu sync.Mutex
+	// replies 是普通调用（意图路由、正文生成等）的脚本。
+	replies []string
+	// auditReplies 是发送前审核的脚本，为空时审核自动放行。
+	auditReplies []string
+	requests     []llm.GenerateRequest
 }
 
 func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
@@ -5102,6 +5105,13 @@ func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	p.requests = append(p.requests, req)
 	for _, message := range req.Messages {
 		if strings.Contains(message.Content, "should_send") {
+			// 发送前审核默认自动放行，不消耗 replies——绝大多数用例不关心它。
+			// 需要控制审核结论（例如空转判断）的用例填 auditReplies。
+			if len(p.auditReplies) > 0 {
+				reply := p.auditReplies[0]
+				p.auditReplies = p.auditReplies[1:]
+				return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: reply}, nil
+			}
 			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 		}
 	}
