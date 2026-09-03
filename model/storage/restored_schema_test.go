@@ -86,3 +86,17 @@ func TestThreadStatesSchemaIsPrivateAndVersioned(t *testing.T) {
 		}
 	}
 }
+
+func TestOneBotRequestsSchemaPersistsPendingDecisions(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "onebot-request-schema.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	for _, name := range []string{"onebot_requests", "idx_onebot_requests_identity", "idx_onebot_requests_profile_status_time"} {
+		var found string
+		if err := store.db.QueryRow(`SELECT name FROM sqlite_master WHERE name = ?`, name).Scan(&found); err != nil {
+			t.Fatalf("schema object %q missing: %v", name, err)
+		}
+	}
+}

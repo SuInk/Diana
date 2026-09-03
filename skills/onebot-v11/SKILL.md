@@ -45,6 +45,16 @@ Examples:
 - Owner renames a group: `{"action":"set_group_name","params":{"group_id":123456,"group_name":"New name"}}`
 - Owner invokes an extension: `{"action":"get_group_msg_history","params":{"group_id":123456,"message_seq":0,"count":20}}`
 
+## Friend and Group Requests
+
+OneBot request events are persisted separately from ordinary messages. Use `diana.onebot_requests` instead of asking the user for a request `flag` or calling the raw approval action directly.
+
+- `list` returns pending friend requests, member join applications, and invitations for the bot to join a group.
+- `approve` and `reject` require the request ID from the owner notification or a fresh `list` result.
+- Only the configured bot owner may approve or reject requests.
+- Never expose, request, log, or repeat the underlying OneBot `flag`; the request tool resolves it internally.
+- A request already marked approved or rejected is terminal and must not be submitted again.
+
 ## Result Handling
 
 - `ok: true` means the adapter returned successfully; inspect `data` for protocol-level details.
