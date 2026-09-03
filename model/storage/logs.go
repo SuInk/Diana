@@ -137,6 +137,13 @@ func normalizeLogEntry(entry AppLogEntry) AppLogEntry {
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
 	}
+	// created_at 以 RFC3339 文本入库，而查询是拿字符串做范围比较的（见
+	// dashboardLogStats、listInboundEventTokenUsage），所以必须统一时区：带 +08:00
+	// 偏移写进去的那一行，和按 UTC 拼出来的边界做字典序比较时日期和小时位根本对不上，
+	// 于是那条日志在仪表盘和用量统计里凭空消失。调用方传本地时间是很自然的写法
+	// （webui/system_update.go 就传 time.Now()），所以在这里兜住，而不是指望每个
+	// 调用方都记得写 .UTC()。
+	entry.CreatedAt = entry.CreatedAt.UTC()
 	return entry
 }
 
