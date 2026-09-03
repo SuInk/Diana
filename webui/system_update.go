@@ -509,6 +509,25 @@ func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, updater.ErrReleaseUpdateUnsupported)
 		return
 	}
+	status, err := h.releaseUpdater.Status(c.Request.Context())
+	if err != nil {
+		h.writeUpdateError(c, "system.update.install", err)
+		return
+	}
+	latest, err := h.latestStableRelease(c.Request.Context(), "")
+	if err != nil {
+		h.writeUpdateError(c, "system.update.install", err)
+		return
+	}
+	if !downloadReadyForRelease(status, latest.Tag) {
+		downloaded := strings.TrimSpace(status.DownloadedVersion)
+		if downloaded != "" && !strings.EqualFold(downloaded, latest.Tag) {
+			writeError(c, http.StatusConflict, fmt.Errorf("已下载版本 %s 已过期，最新版本是 %s，请先重新下载", downloaded, latest.Tag))
+			return
+		}
+		writeError(c, http.StatusConflict, errors.New("没有可安装的最新版本，请先下载并校验"))
+		return
+	}
 	result, err := h.releaseUpdater.InstallDownloaded(c.Request.Context())
 	if err != nil {
 		h.writeUpdateError(c, "system.update.install", err)
@@ -789,6 +808,10 @@ func releaseOperationInProgressResult(status updater.Status, target string) upda
 		Output:       "Release update operation is already in progress.",
 		At:           time.Now(),
 	}
+}
+
+func downloadReadyForRelease(status updater.Status, target string) bool {
+	return status.DownloadReady && strings.TrimSpace(status.DownloadedVersion) != "" && strings.EqualFold(strings.TrimSpace(status.DownloadedVersion), strings.TrimSpace(target))
 }
 
 func releaseApplyPending(status updater.Status, gitAvailable bool) bool {
