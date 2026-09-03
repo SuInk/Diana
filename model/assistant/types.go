@@ -108,6 +108,7 @@ type MessageEvent struct {
 	OperatorName     string           `json:"operator_name,omitempty"`
 	OperatorRole     string           `json:"operator_role,omitempty"`
 	GroupID          string           `json:"group_id,omitempty"`
+	MessageThreadID  string           `json:"message_thread_id,omitempty"`
 	MessageID        string           `json:"message_id,omitempty"`
 	MessageSeq       string           `json:"message_seq,omitempty"`
 	MessageType      string           `json:"message_type,omitempty"`
@@ -172,17 +173,18 @@ type QuotedMessage struct {
 }
 
 type OutgoingMessage struct {
-	Platform       string
-	ProfileID      string
-	GroupID        string
-	UserID         string
-	Text           string
-	Segments       []MessageSegment
-	ImageURLs      []string
-	VideoURLs      []string
-	ImagesFirst    bool
-	ReplyMessageID string
-	MentionUserID  string
+	Platform        string
+	ProfileID       string
+	GroupID         string
+	MessageThreadID string
+	UserID          string
+	Text            string
+	Segments        []MessageSegment
+	ImageURLs       []string
+	VideoURLs       []string
+	ImagesFirst     bool
+	ReplyMessageID  string
+	MentionUserID   string
 	// MentionNames 是正文里 [diana-at:ID] 标记要显示的昵称，按 id 索引。
 	// Telegram 的 text_mention 需要一段可见文字，光有 id 显示不出来；查不到
 	// 的 id 退回显示 @<id>。OneBot 不需要它——那边 at 段自己会渲染。

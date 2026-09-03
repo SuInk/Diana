@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -155,6 +156,7 @@ func (c *TelegramChannel) pollLoop(ctx context.Context) {
 				return
 			}
 			c.setStatus(false, c.Status().SelfID, err.Error())
+			log.Printf("telegram: getUpdates failed: %v", err)
 			select {
 			case <-ctx.Done():
 				return
@@ -177,7 +179,7 @@ func (c *TelegramChannel) fetchUpdates(ctx context.Context) ([]telegramUpdate, e
 	params := map[string]any{
 		"timeout": telegramPollTimeoutSeconds,
 		// 只订阅消息类更新，避免拉回大量无关事件。
-		"allowed_updates": []string{"message", "edited_message", "channel_post"},
+		"allowed_updates": []string{"message", "edited_message", "channel_post", "edited_channel_post"},
 	}
 	c.mu.RLock()
 	offset := c.offset
@@ -213,6 +215,9 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 		message = update.ChannelPost
 	}
 	if message == nil {
+		message = update.EditedChannelPost
+	}
+	if message == nil {
 		return
 	}
 	c.mu.RLock()
@@ -227,7 +232,10 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 	if event.Kind == "" {
 		return
 	}
-	_ = handler(ctx, event)
+	event = c.resolveIncomingMedia(ctx, event, message)
+	if err := handler(ctx, event); err != nil {
+		log.Printf("telegram: handle update failed: update_id=%d chat_id=%s message_id=%s err=%v", update.UpdateID, event.GroupID, event.MessageID, err)
+	}
 }
 
 // Send 把统一的出站消息翻译成 Bot API 调用。
@@ -251,6 +259,9 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 			// 统一发纯文本：机器人回复里的 * # ` 等符号不该被当成格式标记。
 			"disable_web_page_preview": true,
 		}
+		if threadID := strings.TrimSpace(msg.MessageThreadID); threadID != "" {
+			params["message_thread_id"] = threadID
+		}
 		// entities 和 parse_mode 是两条路，只传 entities 不会把正文当 Markdown 解析。
 		if entities := telegramMentionEntities(mentions); len(entities) > 0 {
 			params["entities"] = entities
@@ -266,12 +277,12 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 	}
 
 	for _, image := range msg.ImageURLs {
-		if err := c.sendMedia(ctx, chatID, "sendPhoto", "photo", image); err != nil {
+		if err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendPhoto", "photo", image); err != nil {
 			return err
 		}
 	}
 	for _, video := range msg.VideoURLs {
-		if err := c.sendMedia(ctx, chatID, "sendVideo", "video", video); err != nil {
+		if err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendVideo", "video", video); err != nil {
 			return err
 		}
 	}
@@ -280,14 +291,18 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 
 // sendMedia 发送单个媒体。远程 URL 直接交给 Telegram 去拉，本地文件走
 // multipart 上传——Telegram 拉不到我们本机的 /media/resolver 地址。
-func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, method, field, source string) error {
+func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, method, field, source string) error {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return nil
 	}
 	path := telegramLocalPath(source)
 	if path == "" {
-		_, err := c.CallAPI(ctx, method, map[string]any{"chat_id": chatID, field: source})
+		params := map[string]any{"chat_id": chatID, field: source}
+		if threadID = strings.TrimSpace(threadID); threadID != "" {
+			params["message_thread_id"] = threadID
+		}
+		_, err := c.CallAPI(ctx, method, params)
 		return err
 	}
 	info, err := os.Stat(path)
@@ -297,7 +312,7 @@ func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, method, field, 
 	if info.Size() > telegramMaxUploadBytes {
 		return fmt.Errorf("telegram: 媒体 %.1fMB 超过 Bot API 50MB 上传限制", float64(info.Size())/(1<<20))
 	}
-	return c.uploadMedia(ctx, method, chatID, field, path)
+	return c.uploadMedia(ctx, method, chatID, threadID, field, path)
 }
 
 // telegramLocalPath 判断出站地址是否指向本机文件；不是则返回空串。
@@ -317,7 +332,7 @@ func telegramLocalPath(source string) string {
 	return ""
 }
 
-func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, field, path string) error {
+func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, threadID, field, path string) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("telegram: open media: %w", err)
@@ -328,6 +343,11 @@ func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, field
 	writer := multipart.NewWriter(body)
 	if err := writer.WriteField("chat_id", chatID); err != nil {
 		return err
+	}
+	if threadID = strings.TrimSpace(threadID); threadID != "" {
+		if err := writer.WriteField("message_thread_id", threadID); err != nil {
+			return err
+		}
 	}
 	part, err := writer.CreateFormFile(field, filepath.Base(path))
 	if err != nil {
@@ -473,23 +493,31 @@ func (c *TelegramChannel) Close() error {
 // —— Bot API 数据结构（只保留用得到的字段） ——
 
 type telegramUpdate struct {
-	UpdateID      int64            `json:"update_id"`
-	Message       *telegramMessage `json:"message,omitempty"`
-	EditedMessage *telegramMessage `json:"edited_message,omitempty"`
-	ChannelPost   *telegramMessage `json:"channel_post,omitempty"`
+	UpdateID          int64            `json:"update_id"`
+	Message           *telegramMessage `json:"message,omitempty"`
+	EditedMessage     *telegramMessage `json:"edited_message,omitempty"`
+	ChannelPost       *telegramMessage `json:"channel_post,omitempty"`
+	EditedChannelPost *telegramMessage `json:"edited_channel_post,omitempty"`
 }
 
 type telegramMessage struct {
-	MessageID      int64            `json:"message_id"`
-	Date           int64            `json:"date"`
-	Text           string           `json:"text"`
-	Caption        string           `json:"caption"`
-	From           *telegramUser    `json:"from"`
-	Chat           *telegramChat    `json:"chat"`
-	NewChatMembers []telegramUser   `json:"new_chat_members,omitempty"`
-	ReplyTo        *telegramMessage `json:"reply_to_message"`
-	Entities       []telegramEntity `json:"entities"`
-	Photo          []telegramPhoto  `json:"photo"`
+	MessageID       int64            `json:"message_id"`
+	MessageThreadID int64            `json:"message_thread_id,omitempty"`
+	Date            int64            `json:"date"`
+	Text            string           `json:"text"`
+	Caption         string           `json:"caption"`
+	From            *telegramUser    `json:"from"`
+	Chat            *telegramChat    `json:"chat"`
+	NewChatMembers  []telegramUser   `json:"new_chat_members,omitempty"`
+	ReplyTo         *telegramMessage `json:"reply_to_message"`
+	Entities        []telegramEntity `json:"entities"`
+	CaptionEntities []telegramEntity `json:"caption_entities"`
+	Photo           []telegramPhoto  `json:"photo"`
+	Video           *telegramFile    `json:"video,omitempty"`
+	Animation       *telegramFile    `json:"animation,omitempty"`
+	Audio           *telegramFile    `json:"audio,omitempty"`
+	Voice           *telegramFile    `json:"voice,omitempty"`
+	Document        *telegramFile    `json:"document,omitempty"`
 }
 
 type telegramUser struct {
@@ -514,7 +542,15 @@ type telegramEntity struct {
 }
 
 type telegramPhoto struct {
-	FileID string `json:"file_id"`
+	FileID   string `json:"file_id"`
+	FileSize int64  `json:"file_size,omitempty"`
+}
+
+type telegramFile struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	FileSize int64  `json:"file_size,omitempty"`
 }
 
 // telegramMessageToEvent 把 Bot API 消息映射成统一事件。
@@ -546,8 +582,10 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 	}
 
 	text := msg.Text
+	entities := msg.Entities
 	if text == "" {
 		text = msg.Caption
+		entities = msg.CaptionEntities
 	}
 
 	// 回复关系落成与 OneBot 同一种 reply 段，模型看到的引用标记因此跨平台一致。
@@ -559,13 +597,31 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		})
 	}
 	segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": text}})
+	if len(msg.Photo) > 0 {
+		photo := msg.Photo[len(msg.Photo)-1]
+		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{"file_id": photo.FileID, "file_size": strconv.FormatInt(photo.FileSize, 10)}})
+	}
+	appendFile := func(kind string, media *telegramFile) {
+		if media == nil || strings.TrimSpace(media.FileID) == "" {
+			return
+		}
+		segments = append(segments, MessageSegment{Type: kind, Data: map[string]string{
+			"file_id": media.FileID, "name": media.FileName, "mime": media.MimeType, "file_size": strconv.FormatInt(media.FileSize, 10),
+		}})
+	}
+	appendFile("video", msg.Video)
+	appendFile("video", msg.Animation)
+	appendFile("record", msg.Voice)
+	appendFile("record", msg.Audio)
+	appendFile("file", msg.Document)
 
 	event := MessageEvent{
-		Time:       msg.Date,
-		SelfID:     selfID,
-		MessageID:  strconv.FormatInt(msg.MessageID, 10),
-		RawMessage: text,
-		Segments:   segments,
+		Time:            msg.Date,
+		SelfID:          selfID,
+		MessageID:       strconv.FormatInt(msg.MessageID, 10),
+		MessageThreadID: telegramOptionalID(msg.MessageThreadID),
+		RawMessage:      text,
+		Segments:        segments,
 	}
 
 	switch msg.Chat.Type {
@@ -589,9 +645,84 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 	if event.Kind == EventKindPrivate {
 		event.ToMe = true
 	} else {
-		event.ToMe = telegramMentionsBot(text, msg.Entities, selfID, botUsername)
+		event.ToMe = telegramMentionsBot(text, entities, selfID, botUsername)
 	}
 	return event
+}
+
+func telegramOptionalID(value int64) string {
+	if value == 0 {
+		return ""
+	}
+	return strconv.FormatInt(value, 10)
+}
+
+func (c *TelegramChannel) resolveIncomingMedia(ctx context.Context, event MessageEvent, msg *telegramMessage) MessageEvent {
+	for index, segment := range event.Segments {
+		fileID := strings.TrimSpace(segment.Data["file_id"])
+		if fileID == "" || (segment.Type != "image" && segment.Type != "video" && segment.Type != "record" && segment.Type != "file") {
+			continue
+		}
+		path, err := c.downloadIncomingFile(ctx, event, segment)
+		if err != nil {
+			log.Printf("telegram: download incoming media failed: chat_id=%s message_id=%s type=%s err=%v", event.GroupID, event.MessageID, segment.Type, err)
+			continue
+		}
+		data := cloneSegmentData(segment.Data)
+		data["cached_file"] = path
+		data["file"] = path
+		event.Segments[index].Data = data
+	}
+	return event
+}
+
+func (c *TelegramChannel) downloadIncomingFile(ctx context.Context, event MessageEvent, segment MessageSegment) (string, error) {
+	fileID := strings.TrimSpace(segment.Data["file_id"])
+	result, err := c.CallAPI(ctx, "getFile", map[string]any{"file_id": fileID})
+	if err != nil {
+		return "", err
+	}
+	remotePath := strings.TrimSpace(stringFromAny(result["file_path"]))
+	if remotePath == "" {
+		return "", fmt.Errorf("getFile returned no file_path")
+	}
+	c.mu.RLock()
+	cfg := c.cfg
+	client := c.client
+	c.mu.RUnlock()
+	base := strings.TrimRight(strings.TrimSpace(cfg.APIBaseURL), "/")
+	if base == "" {
+		base = telegramDefaultAPIBase
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	downloadURL := base + "/file/bot" + strings.TrimSpace(cfg.BotToken) + "/" + strings.TrimLeft(remotePath, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("file download HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, telegramMaxUploadBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) == 0 || len(body) > telegramMaxUploadBytes {
+		return "", fmt.Errorf("downloaded media size is invalid")
+	}
+	return writeTelegramHistoryMedia(event, segment, remotePath, body)
+}
+
+func writeTelegramHistoryMedia(event MessageEvent, segment MessageSegment, remotePath string, body []byte) (string, error) {
+	category := map[string]string{"image": "image", "video": "video", "record": "audio", "file": "file"}[segment.Type]
+	return writeHistoryMedia(historyMediaWriteRequest{Platform: PlatformTelegram, EventTime: event.Time, TargetKind: string(event.Kind), GroupID: event.GroupID, UserID: event.UserID, MessageID: event.MessageID, Category: category, Source: segment.Data["file_id"], FileName: filepath.Base(firstNonEmpty(segment.Data["name"], remotePath, "media")), Body: body, ContentType: segment.Data["mime"]})
 }
 
 // telegramMentionsBot 判断消息是否 @ 了本机器人。

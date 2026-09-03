@@ -40,11 +40,11 @@ func cacheMessageEventImages(ctx context.Context, event MessageEvent) MessageEve
 
 func cacheMessageEventImagesDetailed(ctx context.Context, event MessageEvent) (MessageEvent, []error) {
 	var failures []error
-	event.Segments, failures = cacheImageSegmentsDetailed(ctx, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
+	event.Segments, failures = cacheImageSegmentsDetailed(ctx, event.Platform, event.Time, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
 	if event.Quoted != nil {
 		quoted := *event.Quoted
 		var quotedFailures []error
-		quoted.Segments, quotedFailures = cacheImageSegmentsDetailed(ctx, "quoted", firstNonEmpty(quoted.GroupID, event.GroupID), firstNonEmpty(quoted.UserID, event.UserID), quoted.MessageID, quoted.Segments)
+		quoted.Segments, quotedFailures = cacheImageSegmentsDetailed(ctx, event.Platform, event.Time, "quoted", firstNonEmpty(quoted.GroupID, event.GroupID), firstNonEmpty(quoted.UserID, event.UserID), quoted.MessageID, quoted.Segments)
 		failures = append(failures, quotedFailures...)
 		event.Quoted = &quoted
 	}
@@ -52,16 +52,16 @@ func cacheMessageEventImagesDetailed(ctx context.Context, event MessageEvent) (M
 }
 
 func cacheMessageEventVideos(ctx context.Context, event MessageEvent) MessageEvent {
-	event.Segments = cacheVideoFrames(ctx, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
+	event.Segments = cacheVideoFrames(ctx, event.Platform, event.Time, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
 	if event.Quoted != nil {
 		quoted := *event.Quoted
-		quoted.Segments = cacheVideoFrames(ctx, "quoted", firstNonEmpty(quoted.GroupID, event.GroupID), firstNonEmpty(quoted.UserID, event.UserID), quoted.MessageID, quoted.Segments)
+		quoted.Segments = cacheVideoFrames(ctx, event.Platform, event.Time, "quoted", firstNonEmpty(quoted.GroupID, event.GroupID), firstNonEmpty(quoted.UserID, event.UserID), quoted.MessageID, quoted.Segments)
 		event.Quoted = &quoted
 	}
 	return event
 }
 
-func cacheVideoFrames(ctx context.Context, targetKind, groupID, userID, messageID string, segments []MessageSegment) []MessageSegment {
+func cacheVideoFrames(ctx context.Context, platform string, eventTime int64, targetKind, groupID, userID, messageID string, segments []MessageSegment) []MessageSegment {
 	if len(segments) == 0 || hasCachedVideoFrames(segments) {
 		return segments
 	}
@@ -96,7 +96,7 @@ func cacheVideoFrames(ctx context.Context, targetKind, groupID, userID, messageI
 				continue
 			}
 			source := fmt.Sprintf("video-frame:%d:%d:%s", videoIndex, frameIndex, firstNonEmpty(videoURLs...))
-			path, err := writeHistoryImage(targetKind, groupID, userID, messageID, source, body, "image/jpeg")
+			path, err := writeHistoryImage(platform, eventTime, targetKind, groupID, userID, messageID, source, body, "image/jpeg")
 			if err != nil {
 				continue
 			}
@@ -151,12 +151,12 @@ func cachedVideoFrameURLs(segments []MessageSegment) []string {
 	return out
 }
 
-func cacheImageSegments(ctx context.Context, targetKind, groupID, userID, messageID string, segments []MessageSegment) []MessageSegment {
-	out, _ := cacheImageSegmentsDetailed(ctx, targetKind, groupID, userID, messageID, segments)
+func cacheImageSegments(ctx context.Context, platform string, eventTime int64, targetKind, groupID, userID, messageID string, segments []MessageSegment) []MessageSegment {
+	out, _ := cacheImageSegmentsDetailed(ctx, platform, eventTime, targetKind, groupID, userID, messageID, segments)
 	return out
 }
 
-func cacheImageSegmentsDetailed(ctx context.Context, targetKind, groupID, userID, messageID string, segments []MessageSegment) ([]MessageSegment, []error) {
+func cacheImageSegmentsDetailed(ctx context.Context, platform string, eventTime int64, targetKind, groupID, userID, messageID string, segments []MessageSegment) ([]MessageSegment, []error) {
 	if len(segments) == 0 {
 		return segments, nil
 	}
@@ -193,7 +193,7 @@ func cacheImageSegmentsDetailed(ctx context.Context, targetKind, groupID, userID
 				sourceErrors = append(sourceErrors, err)
 				continue
 			}
-			path, err := writeHistoryImage(targetKind, groupID, userID, messageID, source, body, contentType)
+			path, err := writeHistoryImage(platform, eventTime, targetKind, groupID, userID, messageID, source, body, contentType)
 			if err != nil {
 				sourceErrors = append(sourceErrors, err)
 				continue
@@ -230,7 +230,7 @@ func imageSegmentHasInlineData(segment MessageSegment) bool {
 	return false
 }
 
-func persistInlineImageSegments(targetKind, groupID, userID, messageID string, segments []MessageSegment) ([]MessageSegment, []error) {
+func persistInlineImageSegments(platform string, eventTime int64, targetKind, groupID, userID, messageID string, segments []MessageSegment) ([]MessageSegment, []error) {
 	out := append([]MessageSegment(nil), segments...)
 	var failures []error
 	for index, segment := range out {
@@ -250,7 +250,7 @@ func persistInlineImageSegments(targetKind, groupID, userID, messageID string, s
 		body, contentType, err := decodeInlineHistoryImage(source)
 		if err == nil {
 			var path string
-			path, err = writeHistoryImage(targetKind, groupID, userID, messageID, source, body, contentType)
+			path, err = writeHistoryImage(platform, eventTime, targetKind, groupID, userID, messageID, source, body, contentType)
 			if err == nil {
 				data := cloneSegmentData(segment.Data)
 				data["cached_file"] = path
@@ -518,24 +518,8 @@ func decodeInlineHistoryImage(source string) ([]byte, string, error) {
 	return body, contentType, nil
 }
 
-func writeHistoryImage(targetKind, groupID, userID, messageID, source string, body []byte, contentType string) (string, error) {
-	baseDir, err := historyMediaDir()
-	if err != nil {
-		return "", err
-	}
-	session := historyMediaSession(targetKind, groupID, userID)
-	messageID = safeHistoryPart(firstNonEmpty(messageID, "no-message"))
-	hash := sha256.Sum256([]byte(session + ":" + messageID + ":" + source))
-	name := hex.EncodeToString(hash[:])[:16] + imageExtension(contentType, body)
-	dir := filepath.Join(baseDir, session, messageID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, body, 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
+func writeHistoryImage(platform string, eventTime int64, targetKind, groupID, userID, messageID, source string, body []byte, contentType string) (string, error) {
+	return writeHistoryMedia(historyMediaWriteRequest{Platform: platform, EventTime: eventTime, TargetKind: targetKind, GroupID: groupID, UserID: userID, MessageID: messageID, Category: "image", Source: source, Body: body, ContentType: contentType})
 }
 
 func historyMediaDir() (string, error) {
