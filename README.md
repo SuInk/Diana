@@ -88,6 +88,14 @@ docker run -d --name diana --restart unless-stopped \
 > notepad (diana config path)
 > ```
 >
+> 找到文件开头的 `server:` 段，把 `host` 那一行从 `127.0.0.1` 改成 `0.0.0.0`（缩进两格，别动其他行）：
+>
+> ```yaml
+> server:
+>   host: 0.0.0.0
+>   port: "18080"
+> ```
+>
 > 改完重启，`diana restart` 会自行处理服务权限：
 >
 > ```sh

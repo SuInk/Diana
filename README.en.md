@@ -88,6 +88,14 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 > notepad (diana config path)
 > ```
 >
+> Find the `server:` block near the top of the file and change the `host` line from `127.0.0.1` to `0.0.0.0` (two-space indent, leave the other lines alone):
+>
+> ```yaml
+> server:
+>   host: 0.0.0.0
+>   port: "18080"
+> ```
+>
 > Then restart — `diana restart` handles service privileges itself:
 >
 > ```sh
