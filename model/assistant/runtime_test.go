@@ -2587,7 +2587,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 			t.Fatalf("proactive router prompt missing %q", want)
 		}
 	}
-	if len(logs.entries) != 1 || logs.entries[0].Action != "chatbot.proactive_reply_route" {
+	if len(logs.entries) != 1 || logs.entries[0].Action != "diana.proactive_reply_route" {
 		t.Fatalf("route logs = %#v", logs.entries)
 	}
 	metadata := logs.entries[0].Metadata
@@ -3442,7 +3442,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		t.Fatalf("history missing bot resolver reply: %#v", history)
 	}
 	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "chatbot.resolver.video_download" {
+	if len(entries) != 1 || entries[0].Action != "diana.resolver.video_download" {
 		t.Fatalf("resolver logs = %#v", entries)
 	}
 }
@@ -4339,7 +4339,7 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 	runtime.recordImageOperation(
 		context.Background(),
 		MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456", MessageID: "789"},
-		"chatbot.image.edit",
+		"diana.image.edit",
 		"图片编辑已发送",
 		"只修改背景",
 		"只修改背景\n\n群聊上下文：\n当前发送者：Alice (456)，头像：https://example.test/avatar.png",

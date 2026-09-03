@@ -27,7 +27,7 @@ func (p *usageCountingProvider) Generate(context.Context, llm.GenerateRequest) (
 func usageEntriesFor(logs *captureAppLogs, messageID string) []map[string]any {
 	out := make([]map[string]any, 0)
 	for _, entry := range logs.entriesSnapshot() {
-		if entry.Action != "chatbot.llm_usage" || entry.Target != messageID {
+		if entry.Action != "diana.llm_usage" || entry.Target != messageID {
 			continue
 		}
 		out = append(out, entry.Metadata)

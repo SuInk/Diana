@@ -275,7 +275,7 @@ func recordBrowserRenderLog(ctx context.Context, req PluginRequest, rawURL strin
 	entry := applog.Entry{
 		Kind:     applog.KindOperation,
 		Level:    applog.LevelInfo,
-		Action:   "chatbot.browser_render",
+		Action:   "diana.browser_render",
 		Message:  "沙盒无头浏览器已渲染网页",
 		Actor:    oneBotEventActor(req.Event),
 		Target:   rawURL,

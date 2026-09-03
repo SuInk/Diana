@@ -265,7 +265,7 @@ func (r *Runtime) recordOneBotV11Action(event MessageEvent, action, access strin
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "chatbot.onebot_v11.action",
+		Action:  "diana.onebot_v11.action",
 		Message: message,
 		Detail:  detail,
 		Actor:   oneBotEventActor(event),

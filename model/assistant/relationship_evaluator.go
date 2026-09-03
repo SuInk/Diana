@@ -307,7 +307,7 @@ func (r *Runtime) recordRelationshipEvaluation(ctx context.Context, event Messag
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.relationship_evaluation",
+		Action:  "diana.relationship_evaluation",
 		Message: "模型已完成关系与画像评估",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -333,7 +333,7 @@ func (r *Runtime) recordRelationshipEvaluationError(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.relationship_evaluation",
+		Action:  "diana.relationship_evaluation",
 		Message: "关系与画像语义评估失败，本条不改变好感度和画像",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
