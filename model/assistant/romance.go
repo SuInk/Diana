@@ -70,7 +70,7 @@ func (r *Runtime) currentRomancePartner(ctx context.Context, profileID, excludeU
 	for offset := 0; scanned < romanceGreetingScanLimit; {
 		profiles, _, err := lister.ListUserMemories(ctx, strings.TrimSpace(profileID), "", 100, offset)
 		if err != nil {
-			log.Printf("chatbot romance partner scan failed: %v", err)
+			log.Printf("diana romance partner scan failed: %v", err)
 			return UserMemoryProfile{}, false
 		}
 		if len(profiles) == 0 {

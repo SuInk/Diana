@@ -324,12 +324,12 @@ func (p *RepositoryWatchPlugin) MergeSecretSetting(key, previous, submitted stri
 	current := parseRepositoryCredentialTokens(previous)
 	var updates map[string]*string
 	if err := json.Unmarshal([]byte(submitted), &updates); err != nil {
-		return "", fmt.Errorf("chatbot: invalid credential token update")
+		return "", fmt.Errorf("diana: invalid credential token update")
 	}
 	for rawID, token := range updates {
 		id := strings.TrimSpace(rawID)
 		if id == "" {
-			return "", fmt.Errorf("chatbot: invalid credential token update")
+			return "", fmt.Errorf("diana: invalid credential token update")
 		}
 		if token == nil || strings.TrimSpace(*token) == "" {
 			delete(current, id)

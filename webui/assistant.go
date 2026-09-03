@@ -344,7 +344,7 @@ func (h *BotHandler) saveConfig(c *gin.Context) {
 	next := upsertBotProfileSet(set, payload, cfg)
 	current, ok := next.Current()
 	if !ok {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", fmt.Errorf("chatbot profile set is empty"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "assistant.config.save", fmt.Errorf("diana profile set is empty"), "", nil)
 		return
 	}
 	// 当前激活机器人配置发生变化时，运行时要同步切换并按需重启连接。
@@ -417,7 +417,7 @@ func (h *BotHandler) cloneProfile(c *gin.Context) {
 		next := upsertBotProfileSet(set, assistant.ConfigPayload{Name: cloned.Name}, cloned)
 		current, ok := next.Current()
 		if !ok {
-			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("chatbot profile set is empty"), "", nil)
+			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("diana profile set is empty"), "", nil)
 			return
 		}
 		if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
@@ -459,7 +459,7 @@ func (h *BotHandler) deleteProfile(c *gin.Context) {
 	}
 	current, ok := next.Current()
 	if !ok {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", fmt.Errorf("chatbot profile set is empty"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", fmt.Errorf("diana profile set is empty"), "", nil)
 		return
 	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {

@@ -188,7 +188,7 @@ func (r *Runtime) recordGroupReplyLevelIgnored(ctx context.Context, event Messag
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.group_reply_level_filter",
+		Action:  "diana.group_reply_level_filter",
 		Message: "成员未达到本群回复等级要求，已跳过回复判断",
 		Detail:  detail,
 		Actor:   oneBotEventActor(event),
@@ -213,7 +213,7 @@ func (r *Runtime) recordGroupReplyPolicyChanged(ctx context.Context, event Messa
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.group_reply_policy_config",
+		Action:  "diana.group_reply_policy_config",
 		Message: "群级回复策略已通过聊天更新",
 		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,

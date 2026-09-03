@@ -162,7 +162,7 @@ func (r *Runtime) recordReminderRetryAttempt(item Reminder, cause error, noticeE
 	detail := cause.Error()
 	if noticeErr != nil {
 		detail += "\n失败通知发送失败：" + noticeErr.Error()
-		log.Printf("chatbot reminder failure notice could not be delivered: id=%s: %v", item.ID, noticeErr)
+		log.Printf("diana reminder failure notice could not be delivered: id=%s: %v", item.ID, noticeErr)
 	}
 	writer := r.appLogWriter()
 	if writer == nil {
@@ -174,7 +174,7 @@ func (r *Runtime) recordReminderRetryAttempt(item Reminder, cause error, noticeE
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.reminder.retry_scheduled",
+		Action:  "diana.reminder.retry_scheduled",
 		Message: "提醒或订阅执行失败，已安排自动重试",
 		Detail:  detail,
 		Actor:   item.OwnerID,

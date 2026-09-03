@@ -151,9 +151,9 @@ type streamingFailedError struct{ reason string }
 
 func (e *streamingFailedError) Error() string {
 	if e == nil || strings.TrimSpace(e.reason) == "" {
-		return "chatbot: llm stream failed"
+		return "diana: llm stream failed"
 	}
-	return "chatbot: llm stream failed: " + e.reason
+	return "diana: llm stream failed: " + e.reason
 }
 
 // withLLMStreamingRun 把流式包在最内层。关掉时原样返回，不进链。

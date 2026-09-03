@@ -575,7 +575,7 @@ func recordResolverVideoLog(ctx context.Context, req PluginRequest, raw, videoPa
 	_ = req.AppLogs.AppendLog(ctx, applog.Entry{
 		Kind:     applog.KindOperation,
 		Level:    applog.LevelInfo,
-		Action:   "chatbot.resolver.video_download",
+		Action:   "diana.resolver.video_download",
 		Message:  "链接解析插件已下载视频",
 		Actor:    oneBotEventActor(req.Event),
 		Target:   raw,

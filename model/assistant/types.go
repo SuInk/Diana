@@ -1008,11 +1008,11 @@ type ProfileSet struct {
 }
 
 var (
-	ErrMissingOneBotEndpoint  = errors.New("chatbot: onebot reverse websocket endpoint is required")
+	ErrMissingOneBotEndpoint  = errors.New("diana: onebot reverse websocket endpoint is required")
 	ErrMissingTelegramToken   = errors.New("assistant: telegram bot token is required")
 	ErrInvalidTelegramAPIBase = errors.New("assistant: telegram api base url must be http(s)")
-	ErrInvalidOneBotEndpoint  = errors.New("chatbot: onebot reverse websocket endpoint must use ws or wss and include a host")
-	ErrBotDisabled            = errors.New("chatbot: bot is disabled")
+	ErrInvalidOneBotEndpoint  = errors.New("diana: onebot reverse websocket endpoint must use ws or wss and include a host")
+	ErrBotDisabled            = errors.New("diana: bot is disabled")
 
 	ErrMissingQQCredentials       = errors.New("assistant: qq official bot app id and app secret are required")
 	ErrMissingDingTalkCredentials = errors.New("assistant: dingtalk client id and client secret are required")

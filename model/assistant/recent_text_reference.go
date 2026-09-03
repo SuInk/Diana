@@ -307,7 +307,7 @@ func (r *Runtime) recordRecentTextReference(ctx context.Context, event MessageEv
 	logCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	_ = writer.AppendLog(logCtx, applog.Entry{
-		Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "chatbot.text_reference.resolved",
+		Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "diana.text_reference.resolved",
 		Message: "当前消息文本指代已完成确定性解析", Metadata: metadata,
 	})
 }
