@@ -422,7 +422,13 @@ type BotConfig struct {
 	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
 	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
 	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
-	DaypartToneEnabled           *bool `json:"daypart_tone_enabled,omitempty"`
+	DaypartToneEnabled *bool `json:"daypart_tone_enabled,omitempty"`
+	// LLMStreamingEnabled 让模型调用走流式，用来量真实的 TTFT（首 token 时间）。
+	// 回复仍然是攒齐了再发，聊天窗口里看不出区别。
+	//
+	// 默认关闭：流式在这个项目里一直是没被走过的代码路径，把主回复链路切上去
+	// 要用户自己选。任何一步失败都会退回非流式，不影响回复发不发得出去。
+	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
@@ -695,7 +701,13 @@ type ConfigPayload struct {
 	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
 	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
 	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
-	DaypartToneEnabled           *bool `json:"daypart_tone_enabled,omitempty"`
+	DaypartToneEnabled *bool `json:"daypart_tone_enabled,omitempty"`
+	// LLMStreamingEnabled 让模型调用走流式，用来量真实的 TTFT（首 token 时间）。
+	// 回复仍然是攒齐了再发，聊天窗口里看不出区别。
+	//
+	// 默认关闭：流式在这个项目里一直是没被走过的代码路径，把主回复链路切上去
+	// 要用户自己选。任何一步失败都会退回非流式，不影响回复发不发得出去。
+	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
@@ -1200,6 +1212,7 @@ func DefaultBotConfig() BotConfig {
 		RecallReplyMode:                RecallReplyModeOriginalForward,
 		RefusalStrategy:                RefusalStrategySmart,
 		DaypartToneEnabled:             boolPointer(false),
+		LLMStreamingEnabled:            boolPointer(false),
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
 		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      boolPointer(true),
@@ -1376,6 +1389,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
 	if cfg.DaypartToneEnabled == nil {
 		cfg.DaypartToneEnabled = copyBoolPointer(defaults.DaypartToneEnabled)
+	}
+	if cfg.LLMStreamingEnabled == nil {
+		cfg.LLMStreamingEnabled = copyBoolPointer(defaults.LLMStreamingEnabled)
 	}
 	if cfg.RecallReplyAutoDeleteEnabled == nil {
 		cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(defaults.RecallReplyAutoDeleteEnabled)
@@ -1663,6 +1679,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		RecallReplyMode:                   cfg.RecallReplyMode,
 		RefusalStrategy:                   cfg.RefusalStrategy,
 		DaypartToneEnabled:                copyBoolPointer(cfg.DaypartToneEnabled),
+		LLMStreamingEnabled:               copyBoolPointer(cfg.LLMStreamingEnabled),
 		RecallReplyAutoDeleteEnabled:      copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:             cfg.RecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:         copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
@@ -1833,6 +1850,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		RecallReplyMode:                payload.RecallReplyMode,
 		RefusalStrategy:                payload.RefusalStrategy,
 		DaypartToneEnabled:             copyBoolPointer(payload.DaypartToneEnabled),
+		LLMStreamingEnabled:            copyBoolPointer(payload.LLMStreamingEnabled),
 		RecallReplyAutoDeleteEnabled:   copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:          payload.RecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      copyBoolPointer(payload.LLMIdentityMaskingEnabled),

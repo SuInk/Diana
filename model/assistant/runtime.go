@@ -4570,7 +4570,7 @@ func (r *Runtime) recordImageOperation(ctx context.Context, event MessageEvent, 
 	})
 }
 
-func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provider llm.Provider, model string, usage llm.Usage, purpose string, duration time.Duration) {
+func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provider llm.Provider, model string, usage llm.Usage, purpose string, duration time.Duration, ttft time.Duration) {
 	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
@@ -4581,7 +4581,7 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	if writer == nil {
 		return
 	}
-	_ = writer.AppendLog(ctx, applog.Entry{
+	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "chatbot.llm_usage",
@@ -4605,7 +4605,13 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 			"duration_ms":       duration.Milliseconds(),
 			"tokens_per_second": TokensPerSecond(usage.OutputTokens, duration),
 		},
-	})
+	}
+	// TTFT 只有流式跑通时才有。为 0 时整个键不写：写一个 0 进去，聚合那边分不清
+	// 「没开流式」和「首 token 真的是 0 毫秒」。
+	if ttft > 0 {
+		entry.Metadata["ttft_ms"] = ttft.Milliseconds()
+	}
+	_ = writer.AppendLog(ctx, entry)
 }
 
 func (r *Runtime) enrichImagePromptWithChatContext(ctx context.Context, event MessageEvent, prompt string) string {

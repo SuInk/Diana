@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -62,8 +63,12 @@ type InboundEventDetail struct {
 	LLMDurationMS int64 `json:"llm_duration_ms,omitempty"`
 	// OutputTokensPerSecond 由 OutputTokens 和 LLMDurationMS 算出，不是各次调用
 	// 速率的平均——那个数没有物理意义。
-	OutputTokensPerSecond float64             `json:"output_tokens_per_second,omitempty"`
-	Images                []InboundEventImage `json:"images,omitempty"`
+	OutputTokensPerSecond float64 `json:"output_tokens_per_second,omitempty"`
+	// AvgTTFTMS 是首 token 时延的均值，只统计真正流式跑通的那些调用；
+	// TTFTCalls 是其中的调用数，为 0 说明这段范围里没有可信的 TTFT 样本。
+	AvgTTFTMS float64             `json:"avg_ttft_ms,omitempty"`
+	TTFTCalls int64               `json:"ttft_calls,omitempty"`
+	Images    []InboundEventImage `json:"images,omitempty"`
 	// Subtasks 是这条消息触发的后台子任务（生成图片、文档 OCR 等）。图片是任务跑完
 	// 之后异步发出去的，事件详情里只有一句文字回复时看不出它从哪来。
 	Subtasks []assistant.InboundEventSubtask `json:"subtasks,omitempty"`
@@ -98,6 +103,8 @@ type InboundEventDetailPage struct {
 	// LLMDurationMS/OutputTokensPerSecond 与单条事件同义，范围是整个筛选窗口。
 	LLMDurationMS         int64
 	OutputTokensPerSecond float64
+	AvgTTFTMS             float64
+	TTFTCalls             int64
 }
 
 // InboundEventResultFilter limits event detail rows without changing the
@@ -376,6 +383,8 @@ LIMIT ? OFFSET ?
 	page.CachedInputTokens = usage.CachedInputTokens
 	page.LLMDurationMS = usage.DurationMS
 	page.OutputTokensPerSecond = usage.tokensPerSecond()
+	page.AvgTTFTMS = usage.avgTTFTMS()
+	page.TTFTCalls = usage.TTFTCalls
 	for index := range page.Events {
 		if eventUsage, found := usageByMessage[strings.TrimSpace(page.Events[index].MessageID)]; found {
 			page.Events[index].LLMCalls = eventUsage.LLMCalls
@@ -385,6 +394,8 @@ LIMIT ? OFFSET ?
 			page.Events[index].CachedInputTokens = eventUsage.CachedInputTokens
 			page.Events[index].LLMDurationMS = eventUsage.DurationMS
 			page.Events[index].OutputTokensPerSecond = eventUsage.tokensPerSecond()
+			page.Events[index].AvgTTFTMS = eventUsage.avgTTFTMS()
+			page.Events[index].TTFTCalls = eventUsage.TTFTCalls
 		}
 	}
 	return page, nil
@@ -586,6 +597,18 @@ type inboundEventTokenTotals struct {
 	TotalTokens       int64
 	CachedInputTokens int64
 	DurationMS        int64
+	// TTFTSumMS/TTFTCalls 只累计有 ttft_ms 的调用。没开流式、或者底层退化成非
+	// 流式的调用不带这个键，不能拿它们当 0 参与平均——那会把均值稀释成假的。
+	TTFTSumMS int64
+	TTFTCalls int64
+}
+
+// avgTTFTMS 是有样本的那些调用的均值。没有样本时返回 0。
+func (t inboundEventTokenTotals) avgTTFTMS() float64 {
+	if t.TTFTCalls <= 0 {
+		return 0
+	}
+	return math.Round(float64(t.TTFTSumMS)/float64(t.TTFTCalls)*10) / 10
 }
 
 // tokensPerSecond 先把 token 和耗时分别加总再算，不平均每次调用的速率。
@@ -641,6 +664,12 @@ WHERE created_at >= ? AND action IN ('chatbot.llm_usage', 'assistant.llm_usage')
 			// 老日志没有这个字段，取出来是 0，聚合后速率自然为 0 而不是错的数。
 			DurationMS: int64FromAny(meta["duration_ms"]),
 		}
+		// ttft_ms 只有流式跑通时才写。没有这个键就不计入样本数——拿它们当 0
+		// 参与平均会把均值稀释成一个假的小数字。
+		if ttft := int64FromAny(meta["ttft_ms"]); ttft > 0 {
+			current.TTFTSumMS = ttft
+			current.TTFTCalls = 1
+		}
 		total.add(current)
 		messageID := strings.TrimSpace(target.String)
 		if messageID == "" {
@@ -669,6 +698,8 @@ func (t *inboundEventTokenTotals) add(other inboundEventTokenTotals) {
 	t.TotalTokens += other.TotalTokens
 	t.CachedInputTokens += other.CachedInputTokens
 	t.DurationMS += other.DurationMS
+	t.TTFTSumMS += other.TTFTSumMS
+	t.TTFTCalls += other.TTFTCalls
 }
 
 // metadataGroupID 取用量日志里记的群号。私聊那条是空的，按群筛选时自然不匹配。

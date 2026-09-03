@@ -49,9 +49,12 @@ type assistantEventsResponse struct {
 	// OutputTokensPerSecond 由它和输出 token 算出，不是各次调用速率的平均。
 	LLMDurationMS         int64   `json:"llm_duration_ms"`
 	OutputTokensPerSecond float64 `json:"output_tokens_per_second"`
-	Page                  int     `json:"page"`
-	Limit                 int     `json:"limit"`
-	HasMore               bool    `json:"has_more"`
+	// AvgTTFTMS 只统计流式跑通的调用；TTFTCalls 为 0 表示这段范围没有可信样本。
+	AvgTTFTMS float64 `json:"avg_ttft_ms"`
+	TTFTCalls int64   `json:"ttft_calls"`
+	Page      int     `json:"page"`
+	Limit     int     `json:"limit"`
+	HasMore   bool    `json:"has_more"`
 	// Group 是当前筛选的群号，Groups 是这个时间范围内可选的群。
 	Group  string                    `json:"group,omitempty"`
 	Groups []assistantEventGroupItem `json:"groups"`
@@ -336,6 +339,8 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 
 		LLMDurationMS:         stored.LLMDurationMS,
 		OutputTokensPerSecond: stored.OutputTokensPerSecond,
+		AvgTTFTMS:             stored.AvgTTFTMS,
+		TTFTCalls:             stored.TTFTCalls,
 
 		Page:    page,
 		Limit:   limit,
