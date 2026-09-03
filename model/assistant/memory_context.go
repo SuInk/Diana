@@ -317,16 +317,12 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 	builder.WriteString(strconv.Itoa(profile.Favorability))
 	builder.WriteString("；关系等级：")
 	builder.WriteString(policy.Name)
-	builder.WriteString("；语气：")
-	builder.WriteString(policy.Tone)
 	// 不再列「已授权能力」：那份清单每个等级都一样，摆进上下文只会被复述成
-	// 本等级的特权。能力问题由 diana.capabilities 负责。
+	// 本等级的特权。能力问题由 diana.capabilities 负责。语气要求和恋爱关系同理
+	// 不在这里重复，它们由 relationshipPermissionContext 放在系统尾部（见
+	// formatUserMemoryContext 上的说明）。
 	builder.WriteString("；累计互动：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
-	if line := romanceContextLine(policy); line != "" {
-		builder.WriteString("\n")
-		builder.WriteString(line)
-	}
 	// 画像和好感度、关系等级一样属于固定核心：它答的是「这个人是谁」，被预算
 	// 挤掉的话机器人只能退回泛泛而谈。条数由 portraitFieldSpecs 的容量封顶，长
 	// 度可控，不参与下面各段的裁剪。
@@ -434,12 +430,9 @@ func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy Relationsh
 	if llm.EstimateTextTokens(text) <= tokenBudget {
 		return text
 	}
-	// Relationship, favorability and interaction count are the fixed core. A very
-	// small configured window may still require omitting the verbose tone as a
-	// dedicated degradation.
-	compactPolicy := policy
-	compactPolicy.Tone = ""
-	return formatUserMemoryContext(core, compactPolicy)
+	// Relationship, favorability and interaction count are the fixed core; the
+	// verbose tone lives in the system tail, so there is nothing left to shed.
+	return text
 }
 
 func formatStructuredMemoryLine(item StructuredMemoryItem) string {

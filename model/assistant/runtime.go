@@ -5870,6 +5870,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool("diana.tts") {
 		builder.WriteString("\n" + promptToolTTS)
 	}
+	builder.WriteString("\n" + promptRelationshipTierRules)
 	builder.WriteString("\n" + promptLongTermMemory)
 	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy))
 	builder.WriteString("\n" + promptCurrentMessage)
@@ -9434,16 +9435,14 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	builder.WriteString(strconv.Itoa(profile.Favorability))
 	builder.WriteString("\n关系等级：")
 	builder.WriteString(policy.Name)
-	builder.WriteString("\n语气要求：")
-	builder.WriteString(policy.Tone)
 	// 不再列「已授权能力」：那份清单每个等级都一样，摆在这里只会被当成本等级
 	// 的特权复述出去。能力问题由 diana.capabilities 负责。
+	//
+	// 语气要求和恋爱关系也不在这里重复：它们由 relationshipPermissionContext 放在
+	// 紧挨生成的系统尾部，那份优先级更高、不会被预算裁掉。两处各写一遍既浪费
+	// token，改了一处还会自相矛盾。
 	builder.WriteString("\n互动次数：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
-	if line := romanceContextLine(policy); line != "" {
-		builder.WriteString("\n")
-		builder.WriteString(line)
-	}
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
 		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)
