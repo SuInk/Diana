@@ -72,6 +72,12 @@
                 <span>{{ option.label }}</span>
               </label>
             </div>
+            <PlatformLevelRulesField
+              v-else-if="spec.type === 'platform_level_rules'"
+              :spec="spec"
+              :model-value="settingValue(spec)"
+              @update:model-value="setValue(spec.key, $event)"
+            />
             <input
               v-else
               :id="controlID(spec)"
@@ -95,6 +101,7 @@ import { ChevronDown, SlidersHorizontal } from "@lucide/vue";
 import type { PluginSettingSpec, PluginState } from "../api";
 import AppSelect from "./AppSelect.vue";
 import PluginSizeInput from "./PluginSizeInput.vue";
+import PlatformLevelRulesField from "./PlatformLevelRulesField.vue";
 
 const props = defineProps<{
   plugin: PluginState;
@@ -178,6 +185,9 @@ function displayValue(spec: PluginSettingSpec): string {
   }
   if (spec.type === "select") {
     return spec.options?.find((option) => option.value === value)?.label ?? String(value ?? "");
+  }
+  if (spec.type === "platform_level_rules") {
+    return Array.isArray(value) ? `${value.length} 条规则` : "无";
   }
   const text = String(value ?? "");
   return text ? `${text}${spec.unit ? ` ${spec.unit}` : ""}` : "空";

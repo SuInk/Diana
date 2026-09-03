@@ -951,6 +951,19 @@ func TestPluginManagerUpdateSettingsValidatesAndClamps(t *testing.T) {
 	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{"enabled_platforms": []any{"douyin", "netflix"}}); err == nil {
 		t.Fatal("unknown platform option accepted")
 	}
+	rules := []any{map[string]any{
+		"platform": "youtube", "minimum_level": float64(25), "unknown_policy": LevelUnknownAllow,
+		"owner_bypass": true, "mention_bypass": true, "enabled": true,
+	}}
+	if state, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingPlatformLevelRules: rules}); err != nil {
+		t.Fatalf("platform rules UpdateSettings() error = %v", err)
+	} else if got, ok := state.Settings[resolverSettingPlatformLevelRules].([]map[string]any); !ok || len(got) != 1 {
+		t.Fatalf("platform rules = %#v", state.Settings[resolverSettingPlatformLevelRules])
+	}
+	invalidRules := []any{map[string]any{"platform": "netflix", "minimum_level": 1, "unknown_policy": LevelUnknownDeny}}
+	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingPlatformLevelRules: invalidRules}); err == nil {
+		t.Fatal("invalid platform rule accepted")
+	}
 	if _, err := manager.UpdateSettings("missing", map[string]any{"a": 1}); err == nil {
 		t.Fatal("missing plugin accepted")
 	}

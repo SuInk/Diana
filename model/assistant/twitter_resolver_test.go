@@ -161,7 +161,6 @@ func TestResolverTwitterBuildsCaptionedMixedForwardWithMultipleVideos(t *testing
 }
 
 func TestTwitterResolverRequiresGroupLevel40ByDefault(t *testing.T) {
-	t.Setenv("DIANA_TWITTER_MIN_GROUP_LEVEL", "")
 	for _, test := range []struct {
 		name    string
 		level   string
@@ -219,7 +218,6 @@ func (c *twitterLevelLookupChannel) CallAPI(_ context.Context, action string, _ 
 }
 
 func TestTwitterResolverLooksUpMissingGroupLevel(t *testing.T) {
-	t.Setenv("DIANA_TWITTER_MIN_GROUP_LEVEL", "40")
 	channel := &twitterLevelLookupChannel{level: "LV69"}
 	plugin := NewResolverPlugin(nil)
 	plugin.twitterPostFetcher = func(context.Context, string) (twitterPost, bool) {
@@ -238,8 +236,79 @@ func TestTwitterResolverLooksUpMissingGroupLevel(t *testing.T) {
 	}
 }
 
+func TestTwitterResolverPersistedSettingOverridesDefault(t *testing.T) {
+	plugin := NewResolverPlugin(nil)
+	plugin.twitterPostFetcher = func(context.Context, string) (twitterPost, bool) {
+		return twitterPost{Text: "正文"}, true
+	}
+	resp, err := plugin.Handle(context.Background(), PluginRequest{
+		Text:  "https://x.com/example/status/123456",
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "member", SenderLevel: 40, SenderLevelLabel: "40"},
+		Settings: SettingValues{resolverSettingPlatformLevelRules: []map[string]any{{
+			"platform": "x", "minimum_level": 40, "unknown_policy": LevelUnknownDeny,
+			"owner_bypass": true, "mention_bypass": false, "enabled": true,
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("persisted setting should override the default threshold")
+	}
+}
+
+func TestTwitterResolverWebUICanDisableGroupLevelGate(t *testing.T) {
+	plugin := NewResolverPlugin(nil)
+	plugin.twitterPostFetcher = func(context.Context, string) (twitterPost, bool) {
+		return twitterPost{Text: "正文"}, true
+	}
+	resp, err := plugin.Handle(context.Background(), PluginRequest{
+		Text:  "https://x.com/example/status/123456",
+		Event: MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "member"},
+		Settings: SettingValues{resolverSettingPlatformLevelRules: []map[string]any{{
+			"platform": "x", "minimum_level": 0, "unknown_policy": LevelUnknownDeny,
+			"owner_bypass": true, "mention_bypass": false, "enabled": true,
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("zero threshold should disable the X group-level gate")
+	}
+}
+
+func TestResolverPlatformLevelRuleAppliesToOtherPlatforms(t *testing.T) {
+	settings := SettingValues{resolverSettingPlatformLevelRules: []map[string]any{{
+		"platform": "bilibili", "minimum_level": 20, "unknown_policy": LevelUnknownDeny,
+		"owner_bypass": true, "mention_bypass": false, "enabled": true,
+	}}}
+	low := PluginRequest{Event: MessageEvent{Kind: EventKindGroup, UserID: "member", SenderLevel: 19}, Settings: settings}
+	if resolverPlatformRequestAllowed(context.Background(), low, "bilibili") {
+		t.Fatal("member below the Bilibili rule should be rejected")
+	}
+	high := low
+	high.Event.SenderLevel = 20
+	if !resolverPlatformRequestAllowed(context.Background(), high, "bilibili") {
+		t.Fatal("member at the Bilibili boundary should be allowed")
+	}
+	if !resolverPlatformRequestAllowed(context.Background(), low, "youtube") {
+		t.Fatal("unmatched platforms should remain unrestricted")
+	}
+}
+
+func TestResolverPlatformLevelRulesDoNotGateNonOneBotGroups(t *testing.T) {
+	settings := SettingValues{resolverSettingPlatformLevelRules: []map[string]any{{
+		"platform": "x", "minimum_level": 100, "unknown_policy": LevelUnknownDeny,
+		"owner_bypass": true, "mention_bypass": false, "enabled": true,
+	}}}
+	req := PluginRequest{Event: MessageEvent{Kind: EventKindGroup, Platform: PlatformTelegram, UserID: "member"}, Settings: settings}
+	if !resolverPlatformRequestAllowed(context.Background(), req, "x") {
+		t.Fatal("non-OneBot groups must not be gated by QQ member levels")
+	}
+}
+
 func TestRuntimeLowLevelTwitterMentionIsSilentWithoutLLM(t *testing.T) {
-	t.Setenv("DIANA_TWITTER_MIN_GROUP_LEVEL", "40")
 	metadataFetches := 0
 	plugin := NewResolverPlugin(nil)
 	plugin.twitterPostFetcher = func(context.Context, string) (twitterPost, bool) {
