@@ -6,7 +6,8 @@
 set -eu
 
 repo="${DIANA_REPOSITORY:-SuInk/Diana}"
-install_dir="${DIANA_INSTALL_DIR:-$HOME/.local/share/diana}"
+install_scope="${DIANA_INSTALL_SCOPE:-auto}"
+install_dir="${DIANA_INSTALL_DIR:-}"
 version="${DIANA_VERSION:-latest}"
 port="${DIANA_PORT:-18080}"
 # 默认只绑回环:WebUI 是带管理权限的控制台,装完就对公网敞开不是合理默认。
@@ -19,6 +20,60 @@ host_explicit=false
 # 安装器不可能把所有可选配置都做成参数,给一个统一入口。
 extra_config_file="${DIANA_CONFIG_FILE:-}"
 start_after_install="${DIANA_START_AFTER_INSTALL:-true}"
+
+case "$install_scope" in
+  auto|system|user) ;;
+  *) printf 'Diana installer: DIANA_INSTALL_SCOPE must be auto, system, or user\n' >&2; exit 1 ;;
+esac
+
+if [ "$install_scope" = "user" ] && [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  printf '%s\n' 'Diana user installation must be run without sudo.' >&2
+  exit 1
+fi
+
+tty_available=false
+if [ -e /dev/tty ] && ( : </dev/tty ) 2>/dev/null; then
+  tty_available=true
+fi
+
+if [ -z "$install_dir" ]; then
+  if [ "$(id -u)" -eq 0 ]; then
+    install_scope=system
+    install_dir=/opt/diana
+  elif [ "$install_scope" = "system" ]; then
+    printf '%s\n' 'Diana recommends a fixed system installation in /opt/diana.' >&2
+    printf '%s\n' 'Run the installer again with sudo, or set DIANA_INSTALL_SCOPE=user.' >&2
+    exit 1
+  elif [ "$install_scope" = "user" ]; then
+    install_dir="$HOME/.local/share/diana"
+  elif [ "$tty_available" = "true" ]; then
+    printf '%s\n' 'Diana recommends a fixed system installation in /opt/diana.' >/dev/tty
+    printf '%s\n' 'Re-run this command with sudo for the recommended installation.' >/dev/tty
+    printf 'Install only for the current user instead? [y/N] ' >/dev/tty
+    IFS= read -r install_answer </dev/tty || install_answer=""
+    case "$install_answer" in
+      y|Y|yes|YES)
+        install_scope=user
+        install_dir="$HOME/.local/share/diana"
+        ;;
+      *)
+        printf '%s\n' 'Cancelled. Re-run with sudo for the recommended system installation.' >&2
+        exit 1
+        ;;
+    esac
+  else
+    printf '%s\n' 'Diana recommends a fixed system installation in /opt/diana.' >&2
+    printf '%s\n' 'Re-run with sudo, or set DIANA_INSTALL_SCOPE=user for a user-only installation.' >&2
+    exit 1
+  fi
+elif [ "$install_scope" = "auto" ]; then
+  install_scope=custom
+fi
+
+if [ "$install_scope" = "system" ] && [ "$(id -u)" -ne 0 ]; then
+  printf '%s\n' 'Diana system installation requires sudo.' >&2
+  exit 1
+fi
 
 fail() {
   printf 'Diana installer: %s\n' "$*" >&2
@@ -83,6 +138,25 @@ case "$os_name" in
   *) fail "unsupported operating system: $os_name" ;;
 esac
 
+# sudo 只负责把程序放进固定目录；桌面服务仍归发起安装的用户运行，避免 macOS
+# 的浏览器、麦克风和 NapCat 被丢进没有 GUI 会话的 root 环境。
+service_user=$(id -un)
+service_uid=$(id -u)
+service_home=$HOME
+if [ "$install_scope" = "system" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  service_user=$SUDO_USER
+  service_uid=$(id -u "$service_user")
+  if [ "$os" = "darwin" ] && command -v dscl >/dev/null 2>&1; then
+    service_home=$(dscl . -read "/Users/$service_user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+  elif command -v getent >/dev/null 2>&1; then
+    service_home=$(getent passwd "$service_user" | awk -F: '{print $6}')
+  fi
+  [ -n "$service_home" ] || service_home=$HOME
+fi
+if [ "$os" = "darwin" ] && [ "$install_scope" = "system" ] && [ "$service_uid" = "0" ]; then
+  fail "macOS system installation must be started with sudo from the desktop user, not from a root login"
+fi
+
 machine=$(uname -m)
 case "$machine" in
   x86_64|amd64) arch="amd64" ;;
@@ -141,7 +215,27 @@ package_dir="$stage_dir/$package_name"
 [ -x "$package_dir/$binary_name" ] || fail "release package does not contain $binary_name"
 [ -f "$package_dir/frontend-next/dist/index.html" ] || fail "release package does not contain the WebUI"
 
+legacy_install_dir="$service_home/.local/share/diana"
+new_system_install=false
+if [ "$install_scope" = "system" ] && [ ! -e "$install_dir/.installed-version" ] && [ -e "$legacy_install_dir/.installed-version" ]; then
+  new_system_install=true
+fi
+
 mkdir -p "$install_dir" "$install_dir/data" "$install_dir/logs" "$install_dir/.installer/backups"
+if [ "$new_system_install" = "true" ]; then
+  info "Migration → copying configuration and data from $legacy_install_dir"
+  for item in config.yaml runtime.env; do
+    if [ -e "$legacy_install_dir/$item" ] && [ ! -e "$install_dir/$item" ]; then
+      cp -R "$legacy_install_dir/$item" "$install_dir/$item"
+    fi
+  done
+  for item in data logs; do
+    if [ -d "$legacy_install_dir/$item" ]; then
+      cp -R "$legacy_install_dir/$item/." "$install_dir/$item/"
+    fi
+  done
+  printf '%s\n' "$legacy_install_dir" >"$install_dir/.migrated-from"
+fi
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
 backup_dir="$install_dir/.installer/backups/$timestamp"
 mkdir -p "$backup_dir/runtime" "$backup_dir/data"
@@ -169,8 +263,12 @@ fi
 
 command_dir=""
 if [ -f "$install_dir/uninstall.sh" ]; then
-  # 给交互终端一个稳定命令名。~/.local/bin 不在 PATH 时仍创建链接，并在安装结果里提示。
-  command_dir="$HOME/.local/bin"
+  # 系统安装提供所有登录用户都能找到的稳定命令；无权限模式才落在当前用户目录。
+  if [ "$install_scope" = "system" ]; then
+    command_dir="/usr/local/bin"
+  else
+    command_dir="$HOME/.local/bin"
+  fi
   mkdir -p "$command_dir"
   ln -sfn "$install_dir/$binary_name" "$command_dir/diana"
 fi
@@ -425,6 +523,13 @@ EOF
 fi
 chmod +x "$install_dir/start-installed.sh"
 printf '%s\n' "$version" >"$install_dir/.installed-version"
+printf '%s\n' "$install_scope" >"$install_dir/.install-scope"
+printf '%s\n' "$service_user" >"$install_dir/.service-user"
+
+if [ "$os" = "darwin" ] && [ "$install_scope" = "system" ] && [ "$service_uid" != "0" ]; then
+  # 运行用户必须能写数据库、日志和自更新暂存目录；系统级的命令入口仍由 root 管理。
+  chown -R "$service_uid" "$install_dir"
+fi
 
 start_fallback() {
   if [ -f "$install_dir/.diana.pid" ]; then
@@ -439,11 +544,13 @@ start_fallback() {
 }
 
 stop_service() {
-  if [ "$os" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
+  if [ "$os" = "linux" ] && [ "$install_scope" = "system" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl stop diana.service >/dev/null 2>&1 || true
+  elif [ "$os" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
     systemctl --user stop diana.service >/dev/null 2>&1 || true
   fi
   if [ "$os" = "darwin" ] && command -v launchctl >/dev/null 2>&1; then
-    launchctl bootout "gui/$(id -u)/com.suink.diana" >/dev/null 2>&1 || true
+    launchctl bootout "gui/$service_uid/com.suink.diana" >/dev/null 2>&1 || true
   fi
   if [ -f "$install_dir/.diana.pid" ]; then
     old_pid=$(cat "$install_dir/.diana.pid" 2>/dev/null || true)
@@ -498,6 +605,33 @@ print_startup_diagnostics() {
 }
 
 start_service() {
+  if [ "$os" = "linux" ] && [ "$install_scope" = "system" ] && command -v systemctl >/dev/null 2>&1; then
+    cat >/etc/systemd/system/diana.service <<EOF
+[Unit]
+Description=Diana AI Assistant
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$install_dir
+ExecStart=$install_dir/start-installed.sh
+Restart=on-failure
+RestartSec=3
+Environment=HOME=$HOME
+Environment=DIANA_SERVICE_MANAGER=systemd
+Environment=DIANA_SERVICE_LABEL=diana.service
+Environment=DIANA_SERVICE_DOMAIN=system
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now diana.service >/dev/null
+    systemctl restart diana.service
+    service_kind="systemd system service"
+    return
+  fi
+
   if [ "$os" = "linux" ] && command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
     unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
     mkdir -p "$unit_dir"
@@ -528,7 +662,7 @@ EOF
   fi
 
   if [ "$os" = "darwin" ] && command -v launchctl >/dev/null 2>&1; then
-    launch_agents="$HOME/Library/LaunchAgents"
+    launch_agents="$service_home/Library/LaunchAgents"
     plist="$launch_agents/com.suink.diana.plist"
     mkdir -p "$launch_agents"
     cat >"$plist" <<EOF
@@ -544,15 +678,18 @@ EOF
   <key>EnvironmentVariables</key><dict>
     <key>DIANA_SERVICE_MANAGER</key><string>launchd</string>
     <key>DIANA_SERVICE_LABEL</key><string>com.suink.diana</string>
-    <key>DIANA_SERVICE_DOMAIN</key><string>gui/$(id -u)</string>
+    <key>DIANA_SERVICE_DOMAIN</key><string>gui/$service_uid</string>
   </dict>
   <key>StandardOutPath</key><string>$install_dir/logs/launchd.log</string>
   <key>StandardErrorPath</key><string>$install_dir/logs/launchd-error.log</string>
 </dict></plist>
 EOF
-    launchctl bootout "gui/$(id -u)/com.suink.diana" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$(id -u)" "$plist"
-    launchctl kickstart -k "gui/$(id -u)/com.suink.diana"
+    if [ "$install_scope" = "system" ] && [ "$service_uid" != "0" ]; then
+      chown -R "$service_uid" "$launch_agents"
+    fi
+    launchctl bootout "gui/$service_uid/com.suink.diana" >/dev/null 2>&1 || true
+    launchctl bootstrap "gui/$service_uid" "$plist"
+    launchctl kickstart -k "gui/$service_uid/com.suink.diana"
     service_kind="launchd user service"
     return
   fi
