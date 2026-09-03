@@ -379,7 +379,7 @@ func (r *Runtime) notebookContextMatched(ctx context.Context, event MessageEvent
 	})
 	cancel()
 	if err != nil {
-		log.Printf("chatbot notebook lookup failed: %v", err)
+		log.Printf("diana notebook lookup failed: %v", err)
 		return ""
 	}
 	if len(entries) == 0 {
@@ -416,7 +416,7 @@ func (r *Runtime) touchNotebookEntries(ctx context.Context, store NotebookStore,
 		touchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notebookLookupTimeout)
 		defer cancel()
 		if err := store.TouchNotebookEntries(touchCtx, ids, now); err != nil {
-			log.Printf("chatbot notebook touch failed: %v", err)
+			log.Printf("diana notebook touch failed: %v", err)
 		}
 	}()
 }

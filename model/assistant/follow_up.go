@@ -246,7 +246,7 @@ func (r *Runtime) recordFollowUpFailure(ctx context.Context, kind followUpKind, 
 	if err == nil {
 		return
 	}
-	log.Printf("chatbot %s follow-up %s failed: %v", kind, stage, err)
+	log.Printf("diana %s follow-up %s failed: %v", kind, stage, err)
 	writer := r.appLogWriter()
 	if writer == nil {
 		return

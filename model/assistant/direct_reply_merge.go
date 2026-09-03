@@ -13,7 +13,7 @@ import (
 
 const directReplyMergeRetention = 2 * time.Minute
 
-var errDirectReplySupplemented = errors.New("chatbot: direct reply received a same-turn supplement")
+var errDirectReplySupplemented = errors.New("diana: direct reply received a same-turn supplement")
 
 type activeDirectReply struct {
 	token       uint64
@@ -143,7 +143,7 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	if store != nil {
 		mergeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		if err := store.RecordInboundEventReplyMerge(mergeCtx, event, rootTurnID); err != nil {
-			log.Printf("chatbot record inbound reply merge failed: %v", err)
+			log.Printf("diana record inbound reply merge failed: %v", err)
 		}
 		cancel()
 	}

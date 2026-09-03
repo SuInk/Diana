@@ -232,7 +232,7 @@ func (r *Runtime) evaluateDirectReplyAudit(ctx context.Context, event MessageEve
 	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
 	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg)
 	if err != nil {
-		log.Printf("chatbot direct reply audit skipped: %v", err)
+		log.Printf("diana direct reply audit skipped: %v", err)
 		return replyControlIntent{}, nil
 	}
 	intent := replyControlIntentFromAudit(decision)

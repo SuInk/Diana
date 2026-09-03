@@ -24,7 +24,7 @@ func crossGroupTraceRuntime(t *testing.T, debug bool) (*Runtime, *captureAppLogs
 func crossGroupTraceEntry(t *testing.T, logs *captureAppLogs) map[string]any {
 	t.Helper()
 	for _, entry := range logs.entriesSnapshot() {
-		if entry.Action == "chatbot.cross_group_context" {
+		if entry.Action == "diana.cross_group_context" {
 			return entry.Metadata
 		}
 	}
@@ -80,7 +80,7 @@ func TestCrossGroupTraceStaysSilentWithoutDebugMode(t *testing.T) {
 	runtime, logs, _ := crossGroupTraceRuntime(t, false)
 	runtime.contextHistory(crossGroupProbeEvent())
 	for _, entry := range logs.entriesSnapshot() {
-		if entry.Action == "chatbot.cross_group_context" {
+		if entry.Action == "diana.cross_group_context" {
 			t.Fatalf("未开调试模式却写了追踪日志：%#v", entry)
 		}
 	}

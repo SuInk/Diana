@@ -285,7 +285,7 @@ func TestResolverPluginDownloadsPlatformVideo(t *testing.T) {
 	if len(resp.ForwardMessages[1].VideoURLs) != 1 || resp.ForwardMessages[1].VideoURLs[0] != "/tmp/diana-test-video.mp4" {
 		t.Fatalf("video node = %#v", resp.ForwardMessages[1])
 	}
-	if len(logs.entries) != 1 || logs.entries[0].Action != "chatbot.resolver.video_download" || logs.entries[0].Kind != applog.KindOperation {
+	if len(logs.entries) != 1 || logs.entries[0].Action != "diana.resolver.video_download" || logs.entries[0].Kind != applog.KindOperation {
 		t.Fatalf("logs = %#v", logs.entries)
 	}
 }

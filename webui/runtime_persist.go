@@ -26,6 +26,6 @@ func (p *RuntimePersistor) SaveBotConfig(cfg assistant.BotConfig) {
 	// 这是机器人 owner 指令的轻量落盘通道，失败不阻塞聊天响应；
 	// 但至少要留一行日志，否则改完配置重启又变回去时没有任何线索。
 	if err := p.store.SaveCurrentConfig(cfg); err != nil {
-		log.Printf("persist chatbot runtime config failed: %v", err)
+		log.Printf("persist diana runtime config failed: %v", err)
 	}
 }
